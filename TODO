@@ -1,0 +1,17 @@
+SurfOS todo list:
+
+4/24/04: console.c - surf_console does not seem to accept changes to txtColor
+4/25/04: keyboard.c - constant interruptd during high-outputting causes fault or something (FIXED 5/23/04)
+4/25/04: console.c - cannot kprintf inside a timer isr (FIXED 5/23/04)
+4/25/04: console.c - More than 3 consoles gives odd output
+5/23/04: console.c - clearScreen when repeated twice doesnt do it the second time (FIXED 5/23/04)
+5/23/04: console.c - after backspacing a string, the attribute byte doesnt seem to clear.. its whitish
+6/11/04: task.c - getNewRegs() the default esp is stored in an unsafe place
+6/17/04: task.c - Be SURE to CHANGE where the stacks are stored!! it works now.. but bad.
+6/18/04: task.c - Get better method of determining new PID
+6/19/04: panic.c - Excessive exceptioned killings of processes cause system to hang (FIXED 6/23/04)
+6/23/04: task.c - The stacks of processes are a 8KB block of mem, and esp is in the middle
+                        This needs to be fixed.
+6/23/04: panic.c - Same as above.. but shell GPF loops when about 60,000 processes kill.
+6/23/04: kalloc.c - Need to join adjacent blocks on kfree()
+6/24/04: kalloc.c - if kalloc(1024) is issued before a 'test' process creation, the sys hangs

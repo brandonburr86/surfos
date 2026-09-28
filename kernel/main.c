@@ -1,0 +1,45 @@
+/*
+SurfOS Main C Entry
+--------------------
+File: main.c    Date: Prior to 4/23/04
+--------------------
+(C)2004 Brandon Burr
+*/
+
+#include <surfos/console.h>
+#include <blibc_common.h>
+#include <surfos/kernel.h>
+#include <surfos/panic.h>
+#include <surfos/timer.h>
+#include <surfos/keyboard.h>
+#include <surfos/interrupt.h>
+#include <surfos/gdt.h>
+#include <mm/memory.h>
+#include <surfos/task.h>
+
+#include <sys/driver.h>
+
+void kmain(u_long magic, u_long addr);
+
+void kmain(u_long magic, u_long addr) {
+
+    /* Begin C Kernel */
+    init_gdt(); //setup GDT
+    init_mem();
+    init_console(); kprintf("Booting SurfOS Kernel.....\n\n");
+    run_memcheck(); //check for enough ram..
+
+    init_interrupt(); //interrupt subsystem
+    init_task(); //setup multitasking
+
+    init_keyboard(); //get keyboard ready
+
+    init_drivers(); //some driver stuff :P
+
+    init_timer(); //start timer and go!!
+
+    for(;;) { //the idle task
+        asm("hlt");
+    }
+    return; /* End C Kernel */
+}
