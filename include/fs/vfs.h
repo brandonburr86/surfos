@@ -178,5 +178,6 @@ const char *strerror(int err);
 
 /* file system modules register themselves here (called by init_fs) */
 void tarfs_init(void);
+void fatfs_init(void);
 
 #endif

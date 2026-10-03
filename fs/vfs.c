@@ -533,6 +533,7 @@ void init_fs(void) {
     init_bcache();
     vfs_register(&rootfs_type);
     tarfs_init();
+    fatfs_init();
     r = vfs_mount(NULL, "/", "rootfs");
     if(r) { kprintf("*rootfs: %s\n", strerror(r)); return; }
     for(d = bdev_first(); d; d = d->next) {

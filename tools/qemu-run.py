@@ -41,9 +41,12 @@ SMOKE = [
     ('mount',   ['rd0', '/initrd', 'tarfs']),
     ('ls /initrd', ['etc/', 'motd']),
     ('cat /initrd/motd', ['Welcome to SurfOS']),
+    ('ls /hda1', ['DOCS/', 'README', 'motd']),
+    ('cat /hda1/DOCS/README.md', ['SurfOS']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('selftest', ['SELFTEST PASS']),
+    ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
@@ -51,7 +54,7 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 class Qemu:
     def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
-                 disk=None, initrd=None):
+                 disk=None, initrd=None, disk_inplace=False):
         # UNIX socket paths are limited to 108 bytes, so keep the work directory short
         base = tempfile.gettempdir()
         if len(base) > 50 and os.path.isdir('/tmp'):
@@ -62,8 +65,15 @@ class Qemu:
         boot = ['-cdrom', os.path.abspath(iso), '-boot', 'd'] if iso else ['-kernel', os.path.abspath(kernel)]
         if initrd and not iso:
             boot += ['-initrd', os.path.abspath(initrd)]      # a Multiboot module: the ramdisk rd0
+        self.disk = None
         if disk:
-            boot += ['-drive', f'file={os.path.abspath(disk)},format=raw,if=ide,index=0,media=disk']  # primary master: hda
+            # the guest writes to the disk, so work on a copy unless asked not to
+            if disk_inplace:
+                self.disk = os.path.abspath(disk)
+            else:
+                self.disk = os.path.join(self.workdir, 'disk.img')
+                shutil.copyfile(disk, self.disk)
+            boot += ['-drive', f'file={self.disk},format=raw,if=ide,index=0,media=disk']  # primary master: hda
         cmd = [qemu, '-m', str(mem)] + boot + [
                '-display', 'none', '-no-reboot', '-no-shutdown',
                '-monitor', f'unix:{self.mon_path},server,nowait',
@@ -209,16 +219,38 @@ class Qemu:
         regs = self.monitor('info registers', 0.3)
         return '\n'.join(l for l in regs.splitlines() if l.startswith(('EIP', 'EAX', 'ESP', 'CR0', 'CR2')))
 
+    def shutdown(self):
+        """stop QEMU (the disk image is complete once it has exited)"""
+        if self.proc.poll() is None:
+            try:
+                self.monitor('quit', 0.1)
+            except Exception:
+                pass
+            try:
+                self.proc.wait(3)
+            except Exception:
+                self.proc.kill()
+
     def close(self):
-        try:
-            self.monitor('quit', 0.1)
-        except Exception:
-            pass
-        try:
-            self.proc.wait(3)
-        except Exception:
-            self.proc.kill()
+        self.shutdown()
         shutil.rmtree(self.workdir, ignore_errors=True)
+
+
+def host_checks(q):
+    """after the guest has run: read what it wrote to the disk with the host's mtools"""
+    if not q.disk or not shutil.which('mcopy'):
+        return []
+    q.shutdown()
+    with open(q.disk, 'rb') as f:
+        mbr = f.read(512)
+    start = int.from_bytes(mbr[454:458], 'little') * 512     # partition 1
+    env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
+    try:
+        out = subprocess.run(['mcopy', '-i', f'{q.disk}@@{start}', '::/SELFTEST.TXT', '-'],
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
+    except Exception as e:
+        out = str(e).encode()
+    return [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')]
 
 
 def tail(text, n=40):
@@ -247,6 +279,7 @@ def main():
     ap.add_argument('--iso', help='boot this ISO (GRUB) instead of -kernel')
     ap.add_argument('--disk', help='raw disk image for the primary IDE master (hda)')
     ap.add_argument('--initrd', help='file to load as a Multiboot module (ramdisk rd0)')
+    ap.add_argument('--disk-inplace', action='store_true', help='let the guest modify --disk itself instead of a copy')
     ap.add_argument('--qemu', default='qemu-system-i386')
     ap.add_argument('--mem', default='64')
     ap.add_argument('--extra', default='', help='extra QEMU arguments')
@@ -260,7 +293,7 @@ def main():
     ap.add_argument('--wait', type=float, default=4, help='with --screen: seconds to wait for boot')
     a = ap.parse_args()
 
-    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd)
+    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace)
     try:
         if a.test:
             results = run_smoke(q, a.boot_timeout)
@@ -272,6 +305,13 @@ def main():
                 print('\n---- VGA screen ----\n' + q.screen())
                 print('\n---- CPU ----\n' + q.registers())
                 print(f'\nSMOKE TEST FAILED: {len(failed)} of {len(results)} checks')
+                return 1
+            extra = host_checks(q)          # needs QEMU stopped, so only after the dumps above
+            for name, ok in extra:
+                print(('PASS ' if ok else 'FAIL ') + name)
+            results += extra
+            if any(not ok for _, ok in extra):
+                print(f'\nSMOKE TEST FAILED: {sum(not ok for _, ok in extra)} of {len(results)} checks')
                 return 1
             print(f'\nSMOKE TEST PASSED: {len(results)} checks')
             return 0

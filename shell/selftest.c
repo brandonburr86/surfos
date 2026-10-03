@@ -284,12 +284,64 @@ static void test_fs(void) {
     check(vfs_normalize("/", "a//b/./c/../d/", path, sizeof(path)) == 0 && !strcmp(path, "/a/b/d"), "path normalization: slashes and dots");
 }
 
+static void test_fat(void) {
+    struct file *f;
+    struct stat st;
+    struct dirent de;
+    u8 *w, *rb;
+    u_int i;
+    int r, n = 0;
+
+    if(vfs_stat("/hda1", &st) != 0) { printf("  skip FAT (no /hda1 mounted)\n"); return; }
+    w = (u8 *)kalloc(10240);
+    rb = (u8 *)kalloc(10240);
+    if(!w || !rb) { check(false, "FAT test buffers"); kfree(w); kfree(rb); return; }
+    for(i = 0; i < 10240; i++) w[i] = (u8)(i * 13 + (i >> 8));
+
+    r = vfs_open("/hda1/selftest.bin", O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r == 0) { r = vfs_write(f, w, 10240); vfs_close(f); }
+    check(r == 10240, "write 10 KB to /hda1/selftest.bin (ten clusters)");
+    r = vfs_open("/hda1/selftest.bin", O_RDONLY, &f);
+    if(r == 0) { memset(rb, 0, 10240); r = vfs_read(f, rb, 10240); vfs_close(f); }
+    check(r == 10240 && !memcmp(w, rb, 10240), "read it back identically");
+    r = vfs_open("/hda1/selftest.bin", O_WRONLY | O_APPEND, &f);
+    if(r == 0) { r = vfs_write(f, "tail", 4); vfs_close(f); }
+    check(r == 4 && vfs_stat("/hda1/selftest.bin", &st) == 0 && st.size == 10244, "O_APPEND grows it to 10244 bytes");
+    r = vfs_open("/hda1/selftest.bin", O_RDONLY, &f);
+    if(r == 0) { vfs_lseek(f, 10240, SEEK_SET); r = vfs_read(f, rb, 64); vfs_close(f); }
+    check(r == 4 && !memcmp(rb, "tail", 4), "lseek to the end and read the appended tail");
+    r = vfs_open("/hda1/selftest.bin", O_WRONLY | O_TRUNC, &f);
+    if(r == 0) vfs_close(f);
+    check(r == 0 && vfs_stat("/hda1/selftest.bin", &st) == 0 && st.size == 0, "O_TRUNC empties it");
+    check(vfs_unlink("/hda1/selftest.bin") == 0 && vfs_stat("/hda1/selftest.bin", &st) == -ENOENT, "unlink removes it");
+
+    vfs_unlink("/hda1/tdir/a long file name.txt");             /* leftovers of an interrupted run */
+    vfs_rmdir("/hda1/tdir");
+    check(vfs_mkdir("/hda1/tdir") == 0, "mkdir /hda1/tdir");
+    check(vfs_mkdir("/hda1/tdir") == -EEXIST, "mkdir again is EEXIST");
+    r = vfs_open("/hda1/tdir/a long file name.txt", O_WRONLY | O_CREAT, &f);
+    if(r == 0) { vfs_write(f, "x", 1); vfs_close(f); }
+    check(r == 0 && vfs_stat("/hda1/tdir/A LONG FILE NAME.TXT", &st) == 0 && st.size == 1, "long name created, lookup is case-insensitive");
+    check(vfs_rmdir("/hda1/tdir") == -ENOTEMPTY, "rmdir of a non-empty directory is ENOTEMPTY");
+    r = vfs_open("/hda1/tdir", O_RDONLY | O_DIRECTORY, &f);
+    if(r == 0) { while(vfs_readdir(f, &de) == 0) n++; vfs_close(f); }
+    check(r == 0 && n == 1 && !strcmp(de.name, "a long file name.txt"), "readdir of tdir shows the one file");
+    check(vfs_unlink("/hda1/tdir/a long file name.txt") == 0 && vfs_rmdir("/hda1/tdir") == 0, "unlink and rmdir clean up");
+
+    r = vfs_open("/hda1/SELFTEST.TXT", O_WRONLY | O_CREAT | O_TRUNC, &f);   /* the host checks this after the run */
+    if(r == 0) { r = vfs_write(f, "SurfOS wrote this file.\n", 24); vfs_close(f); }
+    check(r == 24, "SELFTEST.TXT written for the host to read with mtools");
+    kfree(w);
+    kfree(rb);
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
     check(heaptest() == 0, "heap");
     test_bdev();
     test_fs();
+    test_fat();
     test_tasks();
     test_sleep();
     test_timers();
