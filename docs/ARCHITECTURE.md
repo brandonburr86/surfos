@@ -20,7 +20,7 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | Memory | Identity map of the low 16 MB, demand-paged kernel heaps above 2.5 GB |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task |
-| Devices | VGA text console (3 virtual consoles), PS/2 keyboard, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), PCI bus 0 scan, 3Com 3c905B NIC (no protocol stack) |
+| Devices | VGA text console (3 virtual consoles) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), PCI bus 0 scan, 3Com 3c905B NIC (no protocol stack) |
 | libc | `blibc`: printf, puts/gets, getch, strlen/strcmp/strcpy/strchr, memcpy/memset, ctype, CMOS time |
 | User interface | Ring-0 debug shell with about 20 commands |
 
@@ -55,7 +55,8 @@ not in the repository. Treat those files as the least "original" code.
 GRUB / qemu -kernel
   -> start (boot/boot.S:9)        16 KB stack in .bss, pushes Multiboot magic + info pointer
   -> kmain (kernel/main.c:24)     both arguments are ignored
-       init_gdt()                 writes a 256-entry GDT at physical 0x6000, reloads DS/ES/SS/FS/GS (CS is NOT reloaded)
+       init_serial()              programs COM1 (115200 8N1); from here on every kprintf also goes to the serial port
+       init_gdt()                 writes a 256-entry GDT at physical 0x6000, far-jumps to reload CS, reloads the data segments
        init_mem()                 memprobe() sizes RAM by writing a magic value every 4 KB from 8 MB up;
                                   init_paging() builds the page tables and turns paging on
        init_console()             VGA text mode, 3 virtual consoles, console 0 active
@@ -63,13 +64,19 @@ GRUB / qemu -kernel
        init_interrupt()           PIC remap, exception vectors 0-18, turf for IRQ masking, IRQ1-14 stubs, STI
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
-       init_drivers()             parport -> dma -> floppy -> pci -> 3c905b attach
+       init_drivers()             serial IRQ 4 -> parport -> dma -> floppy -> pci -> 3c905b attach
        init_timer()               PIT 100 Hz, IRQ0 = timerISR
        for(;;) hlt                this loop IS the idle task; the first tick saves its ESP into task 0
 ```
 
-The messages printed by `init_gdt()` never appear: the console is initialised two
-calls later and `kputch()` drops output while `conActive` is NULL (**verified**).
+The messages printed by `init_gdt()` and `init_mem()` only appear on the serial
+console: the video console is initialised after them and `kputch()` has nowhere else
+to put output while `conActive` is NULL. (On `master` they were lost entirely.)
+
+CS reload: the Multiboot specification leaves the code selector undefined. QEMU's
+built-in loader enters with CS=0x08, GRUB 2 with CS=0x10. The far jump in `init_gdt()`
+is what makes the GRUB ISO boot (**verified**: without it the first `iret` after a page
+fault raised a general protection fault).
 
 ## 4. Memory map
 
@@ -145,7 +152,13 @@ the read-back and the kernel decides it has 3 GB (**verified**, see audit).
 * `console.c` keeps three `surf_console` buffers plus `conVideo` for 0xB8000.
   Output goes to the task's console and, if that console is active, to video memory.
   `kprintf()` prints in yellow to the active console, `printf()` (blibc) to the
-  current task's console in its colour.
+  current task's console in its colour. Every character funnels through `kputch()`,
+  including `puts()`/`cputs()`.
+* Serial console (`driver/serial.c`): `kputch()` mirrors everything written to the
+  active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
+  clear becomes an ANSI clear), and IRQ 4 pushes received bytes into the keyboard
+  queue (CR to newline, DEL to backspace, escape sequences dropped). `qemu -nographic`
+  therefore gives a complete terminal session; `tools/qemu-run.py` drives it.
 * F1-F3 switch consoles from inside the keyboard ISR, but `schedule()` sets
   `conActive = curTask->con` on every switch, so the display is left showing the
   new console while input and output continue on console 0 (**verified**: F2 blanks
@@ -153,8 +166,10 @@ the read-back and the kernel decides it has 3 GB (**verified**, see audit).
 * Keyboard: scan-code set 1 table for 0x00-0x58, shift handled, caps lock only
   toggles the LED, extended (E0) keys not decoded. The ISR also spawns tasks on
   F5/F6/F9/F12 and toggles the floppy motor on F7/F8 (debug hooks).
-* Input is a 255-byte queue; `getch()` spins on it (busy wait) and clears the queue
-  on entry, so type-ahead is lost.
+* Input is a 255-byte queue shared by the keyboard and the serial port; `getch()`
+  spins on it (busy wait). On `master` it also emptied the queue on entry, which lost
+  every character that arrived while the previous one was being handled; `ai-dev`
+  removed that, so pasted and serial input survive.
 
 ## 8. Drivers
 
@@ -162,6 +177,7 @@ the read-back and the kernel decides it has 3 GB (**verified**, see audit).
 |---|---|---|
 | PIT timer | `kernel/timer.c` | Works, 100 Hz, `getticks()` |
 | PS/2 keyboard | `kernel/keyboard.c` | Works for ASCII input |
+| Serial console | `driver/serial.c` | COM1, 115200 8N1, polled TX, IRQ 4 RX. Mirrors the active console and feeds input to the key queue. Added on `ai-dev` |
 | VGA text | `kernel/console.c` | Works, console switching half broken |
 | CMOS RTC | `lib/blibc/time.c` | Reads BCD time; the shell `time` command is commented out |
 | Parallel port | `driver/parport.c`, `shell/parport.c` | Status readout works in QEMU. Its IRQ 7 handler is `reboot()` |
@@ -189,9 +205,11 @@ Commands and their **verified** behaviour under QEMU:
 
 ## 10. Build system
 
-Each directory has a Makefile that partially links its objects into one `.o`;
-`kernel/Makefile` links everything with `ld -Ttext 0x100000` and no linker script.
-The suffix rules are written `.c.o: $(CC) ...` on one line, which GNU make treats as
-a prerequisite list, so the built-in rules do the actual compiling. The flags date
-from GCC 3.x (`-fwritable-strings`) and the whole thing is for a 32-bit host. See
-`docs/ROADMAP.md` Phase 0 for what a 2026 toolchain needs.
+One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
+their GCC 3 flags were removed on `ai-dev`; `master` still has them). Objects and the
+kernel go to `build/O<level>/`; `make O=2` builds an optimised kernel next to the
+default `-O0 -g` one. `linker.ld` places the Multiboot header first and discards the
+sections a 2026 toolchain adds. Targets: `all`, `run` (QEMU, serial console on the
+terminal), `run-vga`, `test` (headless smoke test through `tools/qemu-run.py`),
+`test-all` (-O0 and -O2), `debug` (gdb stub), `iso` (GRUB image), `run-iso`, `clean`.
+See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags.

@@ -5,6 +5,17 @@ building and booting the tree under QEMU with a current toolchain. Items marked
 **verified** were reproduced; the rest are from reading. IDs (A, M, T, I, C, D, H)
 are referenced by `docs/ROADMAP.md`.
 
+## Status on `ai-dev`
+
+Closed by the Phase 0 / serial-console commits: **A1, A2, A3, A4, A5, A6, A8, A12**
+(build system, flags, linker script, the compile errors, the -O2 memprobe miscompile),
+**A7** (worked around with `-fgnu89-inline`; the `inline` definitions themselves are
+unchanged), **C5** (`getch()` no longer discards pending input), the CS-reload half of
+**I9** (far jump after `lgdt`; GRUB 2 enters with CS=0x10 and the kernel used to fault
+on the first `iret`), and the console backspace that erased the wrong cell (it was not
+an audit item; `kputch()` stepped the cursor back twice). Everything else below is
+still open.
+
 ## What was verified under QEMU
 
 Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with
@@ -89,7 +100,7 @@ Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with
 | I6 | `kernel/panic.c:119-142` | `panic()` prints with interrupts off, kills the task, then `sti` + `yield()` with `curTask == NULL` (T8) | Window for a BUG halt |
 | I7 | `kernel/panic.c:153` | Register dump labels `swapCount` as the pid and omits EIP's symbol, CR2, EFLAGS, the error code and any backtrace | Hard to debug faults |
 | I8 | `kernel/gdt.c:84` | `for(lv0 = 3; lv0 < 256; lv0++)` blanks entries 3 and 4 right after writing the ring-3 descriptors | User selectors 0x1B/0x23 are null; `die` faults (**verified**). `getNewRegs()` also uses DS=0x43 (index 8) for ring 3 |
-| I9 | `kernel/gdt.c` | No TSS and no `ltr`; CS is never reloaded with a far jump after `lgdt` (relies on GRUB's CS=0x08 matching); code limit is 0xF0FFF pages, not 4 GB | Ring 3 cannot work; the GDT works by coincidence |
+| I9 | `kernel/gdt.c` | No TSS and no `ltr`; CS was never reloaded with a far jump after `lgdt` (QEMU's loader enters with CS=0x08, GRUB 2 with CS=0x10, so the GRUB boot faulted on the first `iret`; fixed on `ai-dev`); code limit is 0xF0FFF pages, not 4 GB | Ring 3 cannot work |
 | I10 | `kernel/timer.c:29` | The timer uses a trap gate (IF stays set) and relies on the stub's `cli` | Inconsistent with the interrupt gates used elsewhere |
 | I11 | `kernel/interrupt.c:215`, `kernel/sys.c` | `irq_delay(100)` is 10,000 `nop`s; `sysbeep`, `sleep`, `parSendByte` all busy-wait | No calibrated delay primitive |
 

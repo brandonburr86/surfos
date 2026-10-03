@@ -35,10 +35,16 @@ It has no blocking I/O, no safe critical sections, a leaky allocator, exception
 stubs that mis-handle error codes, no working block device, no filesystem, no user
 mode, and a NIC driver for a card QEMU cannot emulate. Full detail in the audit.
 
-## 3. Phase 0: toolchain and development loop (tested in this session)
+## 3. Phase 0: toolchain and development loop (done on `ai-dev`)
 
 Goal: `git clone && make && make run` works on a 2026 Linux box, and an AI session
 can see the screen without a human.
+
+**Status: done.** The top-level `Makefile`, `linker.ld`, `boot/grub.cfg`,
+`tools/qemu-run.py` and the four source fixes are on `ai-dev`; `make test-all` passes
+at -O0 and -O2, and the GRUB ISO boots to the shell. The serial console (K4) landed in
+the same series because the smoke test is built on it. What follows is the recipe as
+implemented, kept for reference.
 
 ### 3.1 Compiler and linker flags
 
@@ -92,11 +98,11 @@ first 8 KB (it ends up at file offset 4100).
 
 * `make` builds `surfos.bin` with one top-level Makefile and real pattern rules (A8).
 * `make run`: `qemu-system-i386 -m 64 -kernel surfos.bin` (add `-serial stdio` after K4).
-* `make test`: boots headless and checks the screen. The harness used in this
-  session starts QEMU with `-display none -monitor unix:...`, waits, issues
-  `pmemsave 0xb8000 4000 screen.bin` through the monitor, and reads every other byte
-  of the file as text; keys are injected with `sendkey`. About 80 lines of Python.
-  Once K4 exists, assert on serial output instead and keep the screen dump as a fallback.
+* `make test`: boots headless and talks to the shell over the serial console
+  (`tools/qemu-run.py --test`): waits for the prompt, runs `tick`, `memstat`, `ps`,
+  `help`, `test`, checks their output and that no panic text appeared. The same tool
+  dumps the VGA text screen through the monitor (`pmemsave 0xb8000 4000`) and types on
+  the PS/2 keyboard (`sendkey`), so it still works when the serial path is broken.
 * `make iso` (optional): `grub-mkrescue` image for real hardware and other emulators.
 * `make debug`: `qemu -s -S` plus `gdb surfos.bin -ex 'target remote :1234'`.
 * `.gitignore` for `*.o`, `surfos.bin`, `*.iso`, `*.log`.
@@ -145,6 +151,10 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `demo` -> 1 shows a backtrace through `demoException` and the shell comes back.
 
 **K4. Serial console and early printk** - size S - no deps
+
+* **Status: done on `ai-dev`** (`driver/serial.c`): COM1 at 115200 8N1, polled TX,
+  IRQ 4 RX into the keyboard queue, `kputch()` mirror including the early boot log.
+  Still open from the list below: the Multiboot command line and a real `term` command.
 
 * 16550 UART driver on COM1 (8N1, 115200), polled TX, IRQ 4 RX; `kprintf` mirrors
   to serial from the first line (before paging is even enabled, serial needs no
@@ -354,7 +364,7 @@ Each module: why, what exists, what to build, how to prove it, size
 
 | Milestone | Modules | Done when |
 |---|---|---|
-| **M0 Builds and boots** | Phase 0 | `make test` passes at -O0 and -O2 on a fresh clone |
+| **M0 Builds and boots** (done) | Phase 0, K4 | `make test` passes at -O0 and -O2 on a fresh clone |
 | **M1 Solid ground** | K4, K1, K2, K5, K3, T1, H1 (first pass) | Every CPU exception produces a register dump and backtrace; no vector reboots or triple-faults the machine; the shell survives its own crash; boot log on serial; CI green |
 | **M2 Kernel services** | M1, M2, M3, S1, S2, S3, U1 | NULL dereferences fault; `heaptest` and the task churn test pass; `getch` and `sleep` block instead of spinning; `date`, `uptime`, `dmesg`, `ps` with states |
 | **M3 Devices** | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
@@ -390,7 +400,6 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-Commit Phase 0 (flags, linker script, the four source fixes, `make run`/`make test`)
-on this branch; the exact changes above were built and booted in this session.
-Then start M1 with K4 (serial console), because everything after it is easier to
-debug once the kernel can talk to a terminal.
+M0 is done and the kernel talks to a terminal. Start M1 with K1 (trap and interrupt
+framework), then K2, K5, K3 and T1's `selftest` command; the smoke test in
+`tools/qemu-run.py` is where each module's acceptance check goes.
