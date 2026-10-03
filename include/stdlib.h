@@ -12,6 +12,9 @@ File: stdlib.h  Date: Prior to 4/23/04
 
 #include <surfos/types.h>
 
-void itoa (char *buf, u_int base, u_int d); //lives in kernel/console.c
+long strtol(const char *s, char **end, int base);
+unsigned long strtoul(const char *s, char **end, int base);
+int atoi(const char *s);
+int abs(int v);
 
 #endif

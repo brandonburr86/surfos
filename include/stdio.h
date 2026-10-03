@@ -11,12 +11,17 @@ File: stdio.h   Date: Prior to 4/23/04
 #define _STDIO_H
 
 #include <surfos/types.h>
+#include <stdarg.h>
 
 #ifndef NULL
 #define NULL ((void *)0)
 #endif
 
-void printf(const char *format, ...);
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
+int snprintf(char *buf, size_t size, const char *fmt, ...);
+int sprintf(char *buf, const char *fmt, ...);
+int vprintf(const char *format, va_list ap);
+int printf(const char *format, ...);
 
 u_char getc(); //reads the key buffer, doesn't wait
 

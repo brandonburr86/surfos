@@ -10,9 +10,6 @@ File: memory.h  Date: Prior to 4/23/04
 #ifndef _MEMORY_H
 #define _MEMORY_H
 
-#include <surfos/types.h>
-
-void *memcpy(void *dest, const void *src, size_t count);
-void *memset(void *dest, int val, size_t count);
+#include <string.h> /* memcpy() and friends live there now */
 
 #endif

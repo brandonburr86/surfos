@@ -25,6 +25,19 @@ typedef unsigned char u_char;
 typedef unsigned long u_long;
 typedef unsigned int u_int;
 
+/* fixed-width names (10/2026) */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long long u64;
+typedef signed char i8;
+typedef short i16;
+typedef int i32;
+typedef long long i64;
+typedef unsigned long uintptr_t;
+typedef long intptr_t;
+typedef int ssize_t;
+
 #define offsetof(type, member) __builtin_offsetof(type, member)
 /********************/
 

@@ -2,51 +2,27 @@
 SurfOS - printf()
 Infamous printf!!!
 (C)2004 Brandon Burr
+
+Since 10/2026 a thin layer over vsnprintf() (roadmap K5): the output goes through
+putch() to the current task's console, and from there to the serial mirror.
 */
 
 #include <blibc_common.h>
-void printf (const char *format, ...)
-{
-  char **arg = (char **) &format;
-  int c;
-  char buf[20];
+#include <stdarg.h>
 
-  arg++;
+int vprintf(const char *format, va_list ap) {
+    char buf[512];
+    char *p;
+    int n = vsnprintf(buf, sizeof(buf), format, ap);
+    for(p = buf; *p; p++) putch(*p);
+    return n;
+}
 
-  while ((c = *format++) != 0)
-    {
-      if (c != '%')
-        putch(c);
-      else
-        {
-          char *p;
-
-          c = *format++;
-          switch (c)
-            {
-        case 'i':
-            case 'd':
-            case 'u':
-            case 'x':
-              itoa (buf, c, *((int *) arg++));
-              p = buf;
-              goto string;
-              break;
-
-            case 's':
-              p = *arg++;
-              if (! p)
-                p = "(null)";
-
-            string:
-              while (*p)
-                putch(*p++);
-              break;
-
-            default:
-              putch(*((int *) arg++));
-              break;
-            }
-        }
-    }
+int printf(const char *format, ...) {
+    va_list ap;
+    int n;
+    va_start(ap, format);
+    n = vprintf(format, ap);
+    va_end(ap);
+    return n;
 }

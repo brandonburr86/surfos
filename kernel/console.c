@@ -17,6 +17,7 @@ File: console.c Date: Prior to 4/23/04
 #include <mm/kalloc.h>
 
 #include <blibc_common.h>
+#include <stdarg.h>
 
 /* Initial consoles */
 surf_console conArray[NUM_CONSOLES]; //array of available consoles
@@ -163,39 +164,6 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
    KCRIT_LEAVE
 }
 
-void itoa (char *buf, u_int base, u_int d) {
-  char *p = buf;
-  char *p1, *p2;
-  unsigned int ud = d;
-  int divisor = 10;
-
-  if (base == 'd' && d < 0) {
-      *p++ = '-';
-      buf++;
-      ud = -d;
-  } else if (base == 'x')
-    divisor = 16;
-
-  do {
-      int remainder = ud % divisor;
-      *p++ = (remainder < 10) ? remainder + '0' : remainder + 'a' - 10;
-  } while (ud /= divisor);
-
-
-  *p = 0; //null terminate
-
-
-  p1 = buf;
-  p2 = p - 1;
-  while (p1 < p2) {
-      char tmp = *p1;
-      *p1 = *p2;
-      *p2 = tmp;
-      p1++;
-      p2--;
-  }
-}
-
 /* write one character cell at the console's cursor, without moving the cursor */
 static void putcell(surf_console *con, TEXTCOLOR color, int c) {
     u_int off = (con->loc.x + con->loc.y * COLUMNS) * 2;
@@ -250,73 +218,21 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
 }
 
 void kprintf(const char *format, ...) {
-  char **arg = (char **) &format;
-  int c;
-  char buf[20];
-
-  arg++;
-
-  while ((c = *format++) != 0) {
-    if (c != '%') {
-    kputch(conActive,KERN_TXT_COLOR,c);
-   } else {
-    char *p;
-      c = *format++;
-      switch (c) {
-        case 'i':
-         case 'd':
-         case 'u':
-         case 'x':
-           itoa (buf, c, *((int *) arg++));
-           p = buf;
-           goto string;
-           break;
-         case 's':
-           p = *arg++;
-           if(!p) p = "(null)";
-string:
-              while(*p) kputch(conActive,KERN_TXT_COLOR,*p++);
-              break;
-         default:
-           kputch(conActive,KERN_TXT_COLOR, *((int *) arg++));
-           break;
-      }
-    }
-  }
+  char buf[512];
+  char *p;
+  va_list ap;
+  va_start(ap, format);
+  vsnprintf(buf, sizeof(buf), format, ap);
+  va_end(ap);
+  for(p = buf; *p; p++) kputch(conActive, KERN_TXT_COLOR, *p);
 }
 
 void kcprintf(surf_console *con, const char *format, ...) {
-  char **arg = (char **) &format;
-  int c;
-  char buf[20];
-
-  arg++;
-
-  while ((c = *format++) != 0) {
-    if (c != '%') {
-    kputch(con,KERN_TXT_COLOR,c);
-   } else {
-    char *p;
-      c = *format++;
-      switch (c) {
-        case 'i':
-         case 'd':
-         case 'u':
-         case 'x':
-           itoa (buf, c, *((int *) arg++));
-           p = buf;
-           goto string;
-           break;
-         case 's':
-           p = *arg++;
-           if(!p) p = "(null)";
-string:
-              while(*p) kputch(con,KERN_TXT_COLOR,*p++);
-              break;
-         default:
-           kputch(con,KERN_TXT_COLOR, *((int *) arg++));
-           break;
-      }
-    }
-  }
+  char buf[512];
+  char *p;
+  va_list ap;
+  va_start(ap, format);
+  vsnprintf(buf, sizeof(buf), format, ap);
+  va_end(ap);
+  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
 }

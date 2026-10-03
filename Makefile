@@ -7,6 +7,7 @@
 #   make run-vga      same with a VGA window (needs a display); serial on the terminal
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
+#   make unittest     host-side unit tests for blibc (formatter, strings)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make clean
@@ -26,6 +27,9 @@ GRUB_MKRESCUE = grub-mkrescue
 
 QEMUMEM   ?= 64
 QEMUFLAGS ?=
+
+# V=1 shows the full commands
+Q = $(if $(V),,@)
 
 # Freestanding 32-bit code: no PIE, no stack protector, no CET, no SSE, no unwind tables.
 # -fgnu89-inline keeps the 2004 "inline" definitions visible to other files (audit A7).
@@ -53,21 +57,25 @@ DEPS       = $(OBJS:.o=.d)
 all: $(KERNEL)
 
 $(KERNEL): $(OBJS) linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(OBJS)
-	$(NM) -n $@ > $(BUILD)/surfos.sym
+	@echo "LD   $@"
+	$(Q)$(LD) $(LDFLAGS) -o $@ $(OBJS)
+	$(Q)$(NM) -n $@ > $(BUILD)/surfos.sym
 	@echo "built $@ ($$(stat -c %s $@) bytes, -O$(O))"
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo "CC   $<"
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: %.S
 	@mkdir -p $(dir $@)
-	$(CC) $(ASFLAGS) -c $< -o $@
+	@echo "AS   $<"
+	$(Q)$(CC) $(ASFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: %.asm
 	@mkdir -p $(dir $@)
-	$(NASM) $(NASMFLAGS) -MD $(@:.o=.d) $< -o $@
+	@echo "NASM $<"
+	$(Q)$(NASM) $(NASMFLAGS) -MD $(@:.o=.d) $< -o $@
 
 # -no-reboot makes a triple fault (or the shell's "reboot" command) end the emulator
 # instead of looping through the boot log forever.
@@ -101,11 +109,31 @@ $(ISO): $(KERNEL) boot/grub.cfg
 run-iso: $(ISO)
 	$(QEMU) -m $(QEMUMEM) -cdrom $(ISO) -boot d -nographic -no-reboot $(QEMUFLAGS)
 
+# host-side unit tests for the pure parts of blibc (formatter, strings), see tests/host/
+HOSTCC    ?= gcc
+# -m32 when the host can link 32-bit programs (libc6-dev-i386), so long is 32 bits like in the kernel
+HOST32    := $(shell echo 'int main(void){return 0;}' | $(HOSTCC) -m32 -x c - -o /dev/null 2>/dev/null && echo -m32)
+HOSTFLAGS ?= $(HOST32) -O1 -g -Wall
+HOSTLIB_SRC = lib/blibc/vsnprintf.c lib/blibc/string.c lib/blibc/memory.c lib/blibc/stdlib.c lib/blibc/ctype.c
+HOSTLIB_OBJ = $(HOSTLIB_SRC:lib/blibc/%.c=$(BUILD)/host/%.o)
+
+$(BUILD)/host/%.o: lib/blibc/%.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -ffreestanding -fno-builtin -nostdinc -Iinclude -include tests/host/surf_names.h -c $< -o $@
+
+$(BUILD)/host/test_blibc: tests/host/test_blibc.c $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc
+	$(BUILD)/host/test_blibc
+
 clean:
 	rm -rf build
 
 help:
 	@sed -n '2,13p' Makefile
 
-.PHONY: all run run-vga test test-all debug iso run-iso clean help
+.PHONY: all run run-vga test test-all unittest debug iso run-iso clean help
 -include $(DEPS)

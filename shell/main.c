@@ -171,6 +171,7 @@ void demoStrcmp() {
     printf("Enter another string: ");
     gets(str2);
     result=strcmp(str1,str2);
+    result = result < 0 ? -1 : (result > 0 ? 1 : 0);
     switch(result) {
         case -1:
             printf("\nThe first string is less than the second string!\n\n");
