@@ -43,8 +43,9 @@ void init_serial(void) {
 void serial_putc(char c) {
     u_int spins;
     if(!serial_up) return;
-    /* bounded wait: a missing UART reads 0xFF (so this passes at once), a dead one must not hang us */
-    for(spins = 0; spins < 65536; spins++) {
+    /* bounded wait: a missing UART reads 0xFF (so this passes at once); a stalled one (QEMU with
+       nobody reading the other end) must not hang the kernel, only slow its console down */
+    for(spins = 0; spins < 8192; spins++) {
         if(inb(uart + UART_LSR) & LSR_THR_EMPTY) break;
     }
     outb(uart + UART_RBR, c);

@@ -76,6 +76,12 @@ class Qemu:
     def alive(self):
         return self.proc.poll() is None
 
+    def wait(self, seconds):
+        """sleep while draining the serial port, so QEMU never back-pressures the UART"""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            self.pump(0.1)
+
     def qemu_output(self):
         if self.proc.poll() is None:
             return ''
@@ -179,6 +185,7 @@ class Qemu:
                 key = keymap.get(tok)
             if key:
                 self.monitor('sendkey ' + key, 0.05)
+                self.pump(0)
 
     def registers(self):
         regs = self.monitor('info registers', 0.3)
@@ -261,10 +268,10 @@ def main():
             print(q.text())
             return 0 if q.alive() else 1
         if a.screen:
-            time.sleep(a.wait)
+            q.wait(a.wait)
             if a.keys:
                 q.sendkeys(a.keys)
-                time.sleep(1.5)
+                q.wait(1.5)
             print(q.screen())
             print('\n---- CPU ----\n' + q.registers())
             return 0
