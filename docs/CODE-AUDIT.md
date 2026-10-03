@@ -35,6 +35,7 @@ card code is untestable without hardware). Roadmap D2 added the block layer, ram
 ATA and MBR drivers on top. Still open: **T12** (turf is unused but still in the tree),
 **D1** (floppy transfers), **D2** (the ISA DMA page math; the floppy is the only user),
 **D5** (parallel port register addressing), **H1, H3**.
+Milestone M4 added roadmap F1 (VFS, block cache, tarfs, FAT); no audit items are involved.
 
 ## What was verified under QEMU
 

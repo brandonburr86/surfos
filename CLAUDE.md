@@ -35,9 +35,10 @@ boot/      Multiboot entry (boot.S), grub.cfg for the ISO
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), console, tty, keyboard, timer, panic
 mm/        physical page stack, paging, kernel heap (kalloc), 1:1 DMA heap (palloc)
 driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), parallel port, DMA, floppy, 3c905B NIC
+fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 shell/     the ring-0 shell and demos
-include/   surfos/ kernel headers, mm/, sys/ driver headers, net/, libc headers
+include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness, mkimage.py (disk image and initrd)
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md

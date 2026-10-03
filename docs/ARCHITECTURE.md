@@ -23,7 +23,8 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task |
 | Devices | VGA text console (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions, 3Com 3c905B NIC (no protocol stack) |
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
-| User interface | Ring-0 debug shell with about 20 commands |
+| Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write); 128-block write-back cache |
+| User interface | Ring-0 debug shell with about 50 commands |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
 the shell calls itself v0.008.
@@ -40,7 +41,8 @@ kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch
 mm/          memory.c (init + page stack push/pop), paging.c (memprobe, page tables, page-fault handler),
              kalloc.c (kernel heap, best-fit free list), palloc.c (1:1 "physical" heap for DMA)
 lib/blibc/   chars.c printf.c strings.c string.c memory.c ctype.c time.c
-shell/       main.c (the shell + demos), parport.c (lpstat)
+shell/       main.c (the shell), demos.c, selftest.c, parport.c (lpstat)
+fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, mbr.c, parport.c, dma/, floppy/, net/3c905b/
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
@@ -74,6 +76,7 @@ GRUB / qemu -kernel
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
        init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata
+       init_fs()                  block cache, rootfs on /, the first tar ramdisk on /initrd, every FAT volume on /<device>
        init_timer()               PIT 100 Hz, IRQ0 = timerISR
        for(;;) hlt                this loop IS the idle task; the first tick saves its ESP into task 0
 ```
@@ -223,7 +226,32 @@ The test disk (`build/images/test.img`: MBR, FAT16 partition at block 2048 built
 `tools/mkimage.py` with mtools) and the initrd (`build/images/initrd.tar` from `rootfs/`)
 are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a module.
 
-## 9. The shell (`shell/main.c`)
+## 9. File systems (`fs/`)
+
+* `include/fs/vfs.h`: a **vnode** is a file or directory handed out by a file system
+  (reference counted, `vget()`/`vput()`, released through `ops->release`); a
+  **superblock** is a mounted instance with its device, root vnode and a mutex that
+  serializes metadata updates; a **file** is a vnode plus position and open flags.
+  Errors are negative errno values (`strerror()`); open flags and `SEEK_*` use the
+  Linux numbers so a user libc can share them.
+* Path resolution (`fs/vfs.c`): `vfs_normalize()` turns cwd + path into an absolute
+  path without `.`/`..`; the mount with the longest matching prefix owns it and the
+  rest is walked one component at a time through `lookup()`. `/` is a built-in file
+  system whose entries are the mount points. Each task has a `cwd` and an `NR_OPEN`
+  descriptor table (`fd_install()`, `fd_get()`, closed when the task is reaped).
+* `fs/bcache.c`: 128 cached blocks, LRU, write-back. `bsync()` runs when a written
+  file is closed, after `mkdir`/`unlink`/`rmdir`, on `sync` and at `umount`.
+* `fs/tarfs.c`: a ustar archive on a block device, read-only; the tree is built at
+  mount time (GNU long names supported), data is read through the cache.
+* `fs/fat.c`: FAT12/16/32 by cluster count, VFAT long names on read and write,
+  8.3 generation with `~N` tails, cluster allocation with zeroing, directory growth,
+  `.`/`..` for new directories, CMOS time stamps. Verified against mtools: files
+  written by SurfOS are read back by `mcopy` in the smoke test.
+* `init_fs()` mounts the first tar ramdisk on `/initrd` and every FAT volume on
+  `/<device>` (`/hda1`). Shell: `ls cat cd pwd stat cp write mkdir rm rmdir mount
+  umount sync`, and `hexdump` on files.
+
+## 10. The shell (`shell/main.c`)
 
 **ai-dev**: a command table with argument splitting; `help` is generated from it.
 
@@ -236,7 +264,7 @@ are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a mod
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
 
-## 10. Build system
+## 11. Build system
 
 One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
 their GCC 3 flags were removed on `ai-dev`; `master` still has them). Objects and the
