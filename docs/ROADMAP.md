@@ -367,7 +367,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M0 Builds and boots** (done) | Phase 0, K4 | `make test` passes at -O0 and -O2 on a fresh clone |
 | **M1 Solid ground** (done) | K4, K1, K2, K5, K3, T1, H1 (first pass) | Every CPU exception produces a register dump and backtrace; no vector reboots or triple-faults the machine; the shell survives its own crash; boot log on serial; CI green |
 | **M2 Kernel services** (done) | M1, M2, M3, S1, S2, S3, U1 | NULL dereferences fault; `heaptest` and the task churn test pass; `getch` and `sleep` block instead of spinning; `date`, `uptime`, `dmesg`, `ps` with states |
-| **M3 Devices** | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
+| **M3 Devices** (done) | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
 | **M4 Files** | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
 | **M5 Processes** | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
 | **M6 Network** | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
@@ -400,6 +400,7 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M0, M1 and M2 are done. Next is M3: C1 (per-console ttys with a line editor), C2
-(full keyboard decoding), D1 (driver model, full PCI enumeration, `lspci`), D2 (block
-layer with a ramdisk from a Multiboot module, ATA PIO and MBR partitions).
+M0 to M3 are done. Next is M4: F1, a small VFS with a tar file system for the initrd
+(`rd0`) and FAT12/16/32 (read, then write) for `hda1`, with `ls`, `cat`, `cd`, `pwd`,
+`hexdump`, `cp`, `mkdir`, `rm` in the shell and a self test that writes a file the host
+can read back with `mcopy`.

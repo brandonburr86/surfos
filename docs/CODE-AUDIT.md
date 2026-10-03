@@ -25,8 +25,16 @@ M11, M12, M13** (new allocator, Multiboot map, VMM API, fault policy, page 0 unm
 time slices, deferred stack free, per-task critical sections, console no longer forced
 on switch, debug task hooks removed, idle only when nothing is runnable), **I11**
 (calibrated delays), **C8** (RTC modes and century), **D2** in part (`dma_alloc`).
-Still open: **T12** (turf is unused but still in the tree), **C1, C2, C4, C6, C9**
-(console and keyboard: milestone M3), **D1, D3, D4, D5, D6**, **H1, H3**.
+Closed by milestone M3 (devices): **C1, C2, C4, C6, C9** (ttys with a line editor and
+history, console switching that sticks, full keyboard decoding, bounded `gets()`, four
+consoles), **T9** (the input queue is filled under `irq_save()` and read the same way),
+**T11** (no task creation or floppy hooks in the keyboard ISR), **D3** (full PCI
+enumeration, BAR sizing with decoding off, device matching), **D6** (driver table with
+status), **D4** in part (the 3c905B probes through `pci_find_device()`; the rest of the
+card code is untestable without hardware). Roadmap D2 added the block layer, ramdisk,
+ATA and MBR drivers on top. Still open: **T12** (turf is unused but still in the tree),
+**D1** (floppy transfers), **D2** (the ISA DMA page math; the floppy is the only user),
+**D5** (parallel port register addressing), **H1, H3**.
 
 ## What was verified under QEMU
 

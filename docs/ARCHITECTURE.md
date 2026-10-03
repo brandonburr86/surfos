@@ -21,8 +21,8 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | Memory | Identity map of the low 16 MB, demand-paged kernel heaps above 2.5 GB |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task |
-| Devices | VGA text console (3 virtual consoles) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), PCI bus 0 scan, 3Com 3c905B NIC (no protocol stack) |
-| libc | `blibc`: printf, puts/gets, getch, strlen/strcmp/strcpy/strchr, memcpy/memset, ctype, CMOS time |
+| Devices | VGA text console (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions, 3Com 3c905B NIC (no protocol stack) |
+| libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | User interface | Ring-0 debug shell with about 20 commands |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
@@ -35,14 +35,18 @@ boot/        boot.S (Multiboot header + entry), multiboot.h
 kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch, IRQ chains),
              traps.asm (256 entry stubs), task.c (scheduler), timer.c (PIT), panic.c (exceptions, panic),
              ksym.c (symbol lookup, backtraces), klog.c (kernel log), console.c (VGA + kprintf),
-             keyboard.c, sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks)
+             tty.c (input queues, line editor, console switching), keyboard.c (scan codes, LEDs),
+             sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks)
 mm/          memory.c (init + page stack push/pop), paging.c (memprobe, page tables, page-fault handler),
              kalloc.c (kernel heap, best-fit free list), palloc.c (1:1 "physical" heap for DMA)
 lib/blibc/   chars.c printf.c strings.c string.c memory.c ctype.c time.c
 shell/       main.c (the shell + demos), parport.c (lpstat)
-driver/      drivers.c (init order), pci.c, parport.c, dma/, floppy/, net/3c905b/, PCIDATA.H (unused table)
+driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
+             ramdisk.c, ata.c, mbr.c, parport.c, dma/, floppy/, net/3c905b/
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
-tools/       qemu-run.py (headless QEMU harness), gensyms.py (symbol table for backtraces)
+tools/       qemu-run.py (headless QEMU harness), gensyms.py (symbol table for backtraces),
+             mkimage.py (test disk image and initrd)
+rootfs/      packed into build/images/initrd.tar, the Multiboot module behind rd0
 tests/host/  unit tests for blibc, built with the host compiler (make unittest)
 ```
 
@@ -62,12 +66,14 @@ GRUB / qemu -kernel
        init_gdt()                 writes a 256-entry GDT at physical 0x6000, far-jumps to reload CS, reloads the data segments
        init_mem()                 memprobe() sizes RAM by writing a magic value every 4 KB from 8 MB up;
                                   init_paging() builds the page tables and turns paging on
-       init_console()             VGA text mode, 3 virtual consoles, console 0 active
+       init_console()             VGA text mode, 4 virtual consoles, console 0 active
+       init_tty()                 one tty per console (input ring, readers' wait queue, history)
        run_memcheck()             halts below 32 MB
-       init_interrupt()           PIC remap, exception vectors 0-18, turf for IRQ masking, IRQ1-14 stubs, STI
+       init_interrupt()           IDT with 256 stubs, PIC remap, exception handlers
+       init_delay()               calibrates udelay()/mdelay() on PIT channel 2 (no interrupts needed)
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
-       init_drivers()             serial IRQ 4 -> parport -> dma -> floppy -> pci -> 3c905b attach
+       init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata
        init_timer()               PIT 100 Hz, IRQ0 = timerISR
        for(;;) hlt                this loop IS the idle task; the first tick saves its ESP into task 0
 ```
@@ -166,43 +172,56 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 
 ## 7. Console and input
 
-* `console.c` keeps three `surf_console` buffers plus `conVideo` for 0xB8000.
+* `console.c` keeps four `surf_console` buffers plus `conVideo` for 0xB8000.
   Output goes to the task's console and, if that console is active, to video memory.
-  `kprintf()` prints in yellow to the active console, `printf()` (blibc) to the
-  current task's console in its colour. Every character funnels through `kputch()`,
-  including `puts()`/`cputs()`.
+  Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
+  from task context, `kprintf()` print on the calling task's console (`kprintf()`
+  in yellow, boot code and interrupt handlers on the active console), so a shell
+  on console 3 sees its own `ps` and its own fault report.
 * Serial console (`driver/serial.c`): `kputch()` mirrors everything written to the
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
-  clear becomes an ANSI clear), and IRQ 4 pushes received bytes into the keyboard
-  queue (CR to newline, DEL to backspace, escape sequences dropped). `qemu -nographic`
-  therefore gives a complete terminal session; `tools/qemu-run.py` drives it.
-* F1-F3 switch consoles from inside the keyboard ISR, but `schedule()` sets
-  `conActive = curTask->con` on every switch, so the display is left showing the
-  new console while input and output continue on console 0 (**verified**: F2 blanks
-  the screen and it stays blank).
-* Keyboard: scan-code set 1 table for 0x00-0x58, shift handled, caps lock only
-  toggles the LED, extended (E0) keys not decoded. The ISR also spawns tasks on
-  F5/F6/F9/F12 and toggles the floppy motor on F7/F8 (debug hooks).
-* Input is a 255-byte queue shared by the keyboard and the serial port; `getch()`
-  blocks on a wait queue that both interrupts wake (**ai-dev**; `master` spun and
-  emptied the queue on entry, losing type-ahead).
+  clear becomes an ANSI clear). IRQ 4 feeds received bytes to the active tty (CR to
+  newline, DEL to backspace, `ESC [ A/B/C/D/H/F` to the arrow/Home/End key codes).
+  `qemu -nographic` therefore gives a complete terminal session; `tools/qemu-run.py`
+  drives it. After a console switch the serial terminal is cleared and repainted
+  from the new console's buffer.
+* `kernel/tty.c` (roadmap C1): one `struct tty` per console with a 256-byte input
+  ring filled by the keyboard and serial ISRs under `irq_save()`, a wait queue for
+  readers (`tty_getc()` blocks, `tty_trygetc()` polls), and a line discipline
+  `tty_readline()` with echo, backspace, Ctrl-U, Ctrl-C and an eight-line history on
+  the Up/Down keys. `gets()`/`cgets()` and the shell read through it; `getch()`
+  blocks on the task's own tty. `tty_switch(n)` makes console n active, repaints
+  the VGA screen and the serial terminal; F1-F4 call it from the keyboard handler.
+* Keyboard (`kernel/keyboard.c`, roadmap C2): scan-code set 1 with the E0 prefix
+  (arrows, Home/End, PgUp/PgDn, Insert/Delete), shift, caps lock on letters, num
+  lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots.
+  Special keys arrive in the tty as codes above 0x80 (`include/surfos/keyboard.h`).
+  The ISR does nothing but decode and queue; the 2004 debug hooks are gone.
 
 ## 8. Drivers
 
 | Driver | Files | State |
 |---|---|---|
 | PIT timer | `kernel/timer.c` | Works, 100 Hz, `getticks()` |
-| PS/2 keyboard | `kernel/keyboard.c` | Works for ASCII input |
-| Serial console | `driver/serial.c` | COM1, 115200 8N1, polled TX, IRQ 4 RX. Mirrors the active console and feeds input to the key queue. Added on `ai-dev` |
-| VGA text | `kernel/console.c` | Works, console switching half broken |
+| PS/2 keyboard | `kernel/keyboard.c` | Full set-1 decoding with E0 keys, lock keys and LEDs; feeds the active tty |
+| Serial console | `driver/serial.c` | COM1, 115200 8N1, polled TX, IRQ 4 RX. Mirrors the active console, decodes arrow-key escapes, feeds the active tty. Added on `ai-dev` |
+| VGA text | `kernel/console.c`, `kernel/tty.c` | Four consoles, switching with F1-F4 (VGA and serial repaint) |
 | CMOS RTC | `lib/blibc/time.c` | Reads BCD time; the shell `time` command is commented out |
 | Parallel port | `driver/parport.c`, `shell/parport.c` | Status readout works in QEMU. Its IRQ 7 handler is `reboot()` |
 | ISA DMA | `driver/dma/` | Register helpers only. `DMAComplete()`, `dma_alloc()`, `dma_xfer()` are broken |
 | Floppy | `driver/floppy/floppy.c` | Detects drive type, resets controller, takes IRQ 6. Read/write path never worked (no DMA start, wrong arg counts, inverted timeout). Needs 3 prototype fixes to compile today |
-| PCI | `driver/pci.c` (reconstructed) | Config mechanism 1, bus 0, function 0 only, BAR sizing, enables IO/MEM/bus-master. **Verified** in QEMU: finds i440FX, PIIX3, VGA and the default e1000 NIC |
+| PCI | `driver/pci.c`, `driver/pci_names.c`, `driver/PCIDATA.H` | Config mechanism 1; every bus behind a bridge, every function; class, IRQ line/pin, BARs sized with decoding off; `pci_find_device()`, `pci_find_class()`, `pci_enable_device()`; vendor/device/class names from the 2003 id tables (`lspci`). **Verified** in QEMU: i440FX, PIIX3, PIIX4 PM, VGA, 82540EM |
+| Block layer | `driver/bdev.c`, `include/sys/bdev.h` | Named 512-byte block devices with read/write ops; partitions translate to their parent; range checks and per-device counters (`lsblk`, `hexdump`) |
+| Ramdisk | `driver/ramdisk.c` | Every Multiboot module is a writable ramdisk `rd0`, `rd1`, ... (`qemu -initrd`, GRUB `module`); modules above 16 MB are mapped with `ioremap()` |
+| ATA | `driver/ata.c` | Polled PIO, LBA28, both legacy channels, IDENTIFY, cache flush after writes, a mutex per channel; disks are `hda`-`hdd`, ATAPI devices are reported and skipped |
+| MBR | `driver/mbr.c` | The four primary partitions of each disk become `hda1`-`hda4` with their type |
 | 3c905B NIC | `driver/net/3c905b/` | Martin's "alpha" driver: EEPROM MAC read, MII, TX/RX descriptor rings in `palloc` memory, interrupt handler with debug prints, `iface` abstraction (`SnagPackets`/`SendPackets`/`Setting`). Registers the parallel-port ISR as its IRQ handler (debug leftover). QEMU does not emulate this card, so it is untestable there |
 
-Driver init order is fixed in `driver/drivers.c` (reconstructed file).
+`driver/drivers.c` is a table of `{name, init, status}` run in order by `init_drivers()`;
+`init` returns 0 (present), 1 (absent) or an error, and `drivers` prints the result.
+The test disk (`build/images/test.img`: MBR, FAT16 partition at block 2048 built by
+`tools/mkimage.py` with mtools) and the initrd (`build/images/initrd.tar` from `rootfs/`)
+are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a module.
 
 ## 9. The shell (`shell/main.c`)
 
