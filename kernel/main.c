@@ -47,8 +47,7 @@ void kmain(u_long magic, u_long addr) {
 
     init_timer(); //start timer and go!!
 
-    for(;;) { //the idle task
-        reap_tasks(); //free dead tasks, restart dead shells
+    for(;;) { //the idle task: init (pid 1) reaps and restarts, this only waits for interrupts
         asm volatile("hlt");
     }
     return; /* End C Kernel */

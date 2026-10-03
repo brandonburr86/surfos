@@ -33,4 +33,9 @@ u_long getticks();
 
 u_long *timer_tick(struct trapframe *tf); /* IRQ 0: called by the interrupt dispatcher */
 
+/* calibrated busy waits for drivers; tasks should sleep_ms() instead */
+void udelay(u_long us);
+void mdelay(u_long ms);
+u_long delay_loops_per_ms(void);
+
 #endif

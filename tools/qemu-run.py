@@ -28,7 +28,7 @@ PROMPT = 'SurfOS*>'
 SMOKE = [
     ('tick',    ['Ticks:']),
     ('memstat', ['Physical memory:', 'Free physical pages:']),
-    ('ps',      ["'Shell 0'", "'Kernel Idle Task'"]),
+    ('ps',      ['Kernel Idle Task', 'init', 'Shell 0']),
     ('help',    ['SurfOS ring0 Debug Shell']),
     ('test',    ['linear is using physical']),
     ('dmesg',   ['Booting SurfOS Kernel']),

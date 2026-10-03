@@ -536,6 +536,12 @@ void parseCommand(const char line[]) {
     }
 }
 
+/* the shell task body (started by init for each console) */
+void shell() {
+    do_banner();
+    startShell();
+}
+
 void startShell() {
     char line[255];
     memset(line,0,255);

@@ -17,3 +17,6 @@ redo:
     cmp bx,0FFC0h
     jl redo
     ret
+
+; tell the linker this object needs no executable stack
+SECTION .note.GNU-stack noalloc noexec nowrite progbits

@@ -71,3 +71,6 @@ isr_stub_table:
     dd isr%+v
 %assign v v+1
 %endrep
+
+; tell the linker this object needs no executable stack
+SECTION .note.GNU-stack noalloc noexec nowrite progbits

@@ -10,6 +10,7 @@
 #include <surfos/keyboard.h>
 #include <surfos/irq.h>
 #include <surfos/console.h>
+#include <surfos/task.h>
 
 /* pulse the reset line through the keyboard controller */
 void reset() {
@@ -27,9 +28,9 @@ void do_banner(void) {
     printf("\n");
 }
 
+/* milliseconds, despite the 2004 parameter name; a task sleeps, boot code and ISRs spin */
 void sleep(u_long usec) {
-  u_long startTick=getticks();
-  while(getticks()<(startTick+USEC_TO_TICKS(usec)));
+  sleep_ms(usec);
 }
 
 void halt() {
