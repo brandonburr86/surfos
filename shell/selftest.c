@@ -16,6 +16,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/klog.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
+#include <surfos/process.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -335,6 +336,38 @@ static void test_fat(void) {
     kfree(rb);
 }
 
+static int run_and_wait(const char *path, int argc, char **argv) {
+    int pid = process_spawn(path, argc, argv, curTask->con, 0), status = -99;
+    if(pid < 0) return pid;
+    if(task_wait(pid, &status) != pid) return -98;
+    return status;
+}
+
+static void test_user(void) {
+    char *hello[] = { "hello", "one", "two" };
+    char *crash_null[] = { "crash", "null" };
+    char *crash_kernel[] = { "crash", "kernel" };
+    char *crash_cli[] = { "crash", "cli" };
+    char *crash_int40[] = { "crash", "int40" };
+    char *crash_efault[] = { "crash", "efault" };
+    char *crash_stack[] = { "crash", "stack" };
+    char *motd[] = { "motd" };
+    struct stat st;
+    u_int before = task_count();
+
+    if(vfs_stat("/initrd/bin/hello", &st) != 0) { printf("  skip user programs (no /initrd/bin/hello)\n"); return; }
+    check(run_and_wait("/initrd/bin/hello", 3, hello) == 42, "hello runs in ring 3 and exits with 42");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_null) == -1, "a NULL write kills only that process");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_kernel) == -1, "a write to kernel memory kills the process");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_cli) == -1, "cli in user mode kills the process");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_int40) == -1, "int 0x40 from user mode kills the process");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_efault) == 0, "a kernel pointer in a system call is EFAULT, not a crash");
+    check(run_and_wait("/initrd/bin/crash", 2, crash_stack) == 0, "the user stack grows on demand");
+    check(run_and_wait("/initrd/motd", 1, motd) == 127, "a file that is not an ELF exits 127");
+    check(run_and_wait("/initrd/bin/nothing", 1, motd) == -ENOENT, "a missing program is ENOENT");
+    check(task_count() == before, "every process was reaped");
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
@@ -342,6 +375,7 @@ int run_selftest(void) {
     test_bdev();
     test_fs();
     test_fat();
+    test_user();
     test_tasks();
     test_sleep();
     test_timers();

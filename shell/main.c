@@ -22,6 +22,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
+#include <surfos/process.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -135,6 +136,37 @@ static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
 static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+
+/**** processes ****/
+
+/* "hello" means /initrd/bin/hello unless the name has a slash in it */
+static void program_path(const char *name, char *path, size_t size) {
+    if(strchr(name, '/')) strlcpy(path, name, size);
+    else snprintf(path, size, "/initrd/bin/%s", name);
+}
+
+static void run_program(int argc, char **argv, bool background) {
+    char path[VFS_PATH_MAX];
+    int pid, status = 0;
+    program_path(argv[0], path, sizeof(path));
+    pid = process_spawn(path, argc, argv, curTask->con, background ? TF_DETACHED : 0);
+    if(pid < 0) { printf("    %s: %s\n", argv[0], strerror(pid)); return; }
+    if(background) { printf("    [pid %d started]\n", pid); return; }
+    if(task_wait(pid, &status) == pid) {
+        if(status == -1) printf("    [pid %d killed]\n", pid);
+        else printf("    [pid %d exit status %d]\n", pid, status);
+    }
+}
+
+static void cmd_run(int argc, char **argv) {
+    if(argc < 2) { printf("    usage: run <program> [args...]   (a name in /initrd/bin or a path)\n"); return; }
+    run_program(argc - 1, argv + 1, false);
+}
+
+static void cmd_spawn(int argc, char **argv) {
+    if(argc < 2) { printf("    usage: spawn <program> [args...]   (runs in the background)\n"); return; }
+    run_program(argc - 1, argv + 1, true);
+}
 
 /**** files ****/
 
@@ -422,6 +454,8 @@ static const struct command commands[] = {
     { "rm",        "<file>...", "delete files", cmd_rm },
     { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir },
     { "sync",      "",          "write cached blocks to the disks", cmd_sync },
+    { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },
+    { "spawn",     "<prog> [args]", "run a user program in the background", cmd_spawn },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },
@@ -460,6 +494,12 @@ void parseCommand(char *line) {
             commands[i].fn(argc, argv);
             return;
         }
+    }
+    {   /* not built in: a user program in /initrd/bin? */
+        char path[VFS_PATH_MAX];
+        struct stat st;
+        program_path(argv[0], path, sizeof(path));
+        if(vfs_stat(path, &st) == 0 && st.type == VN_FILE) { run_program(argc, argv, false); return; }
     }
     printf("    Invalid command: %s (try help)\n", argv[0]);
 }

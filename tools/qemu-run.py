@@ -45,6 +45,15 @@ SMOKE = [
     ('cat /hda1/DOCS/README.md', ['SurfOS']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
+    ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
+    ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
+    ('crash cli', ['killed by "General Protection Fault', 'killed]']),
+    ('crash efault', ['= -14', 'exit status 0']),
+    ('count 3 10', ['counted to 3']),
+    ('ls /dev', ['console', 'null']),
+    ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
+                    ('cat /initrd/etc/version', ['SurfOS 0.007', '$ ']),
+                    ('exit 3', ['exit status 3'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]
@@ -261,9 +270,15 @@ def tail(text, n=40):
 def run_smoke(q, boot_timeout):
     results = [('boot to prompt (serial)', q.expect(PROMPT, boot_timeout))]
     if results[0][1]:
-        for cmd, expects in SMOKE:
+        for entry in SMOKE:
+            cmd, expects = entry[0], entry[1]
+            follow = entry[2] if len(entry) > 2 else []      # (line, expects) pairs typed after cmd
             q.send(cmd + '\n')
-            ok = all(q.expect(e, 10) for e in expects) and q.expect(PROMPT, 10)
+            ok = all(q.expect(e, 10) for e in expects)
+            for line, exp in follow:
+                q.send(line + '\n')
+                ok = ok and all(q.expect(e, 10) for e in exp)
+            ok = ok and q.expect(PROMPT, 10)
             results.append((cmd, ok))
     q.pump(0.5)
     text = q.text()
