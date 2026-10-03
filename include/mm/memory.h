@@ -60,7 +60,7 @@ extern u_long  PMEM_END;
 #define PDIR_SIZE 1024 //1KB
 #define PTBL_SIZE 0x400000 //4MB Page table
 
-#define PDIR_START 0x9C000
+/* the page directory is a page-aligned array in mm/paging.c (it was at 0x9C000) */
 #define PTBL_START 0x200000//9D000
 
 //free page stack

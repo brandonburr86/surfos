@@ -12,33 +12,29 @@ Copyright (C)2004 Brandon Burr
 
 volatile u_long sysTick;
 
-void timerISR();
-
 void init_timer() {
-  u_long hertz = CPU_FREQ/HZ;
+    u_long divisor = CPU_FREQ/HZ;
     kprintf("\nTimer Initialization\n");
-    kprintf("*Enable Timer\n");
+    kprintf("*PIT channel 0: %i Hz\n", HZ);
 
-    outb(0x36, 0x43);
-  outb(0x40,hertz & 0xff);
-  outb(0x40,hertz >> 8);
+    /* The 2004 code wrote the command byte to port 0x36 (arguments swapped), so the PIT
+       stayed in whatever mode the BIOS left and only the divisor took effect. */
+    outb(0x43, 0x36);               /* channel 0, lobyte/hibyte, mode 3 (square wave) */
+    outb(0x40, divisor & 0xff);
+    outb(0x40, divisor >> 8);
 
     sysTick=0;
 
-    kprintf("*Load ISR for IRQ0\n");
-    _set_idt_trap(32,(u_int*)timerISR);
-    kprintf("*Enable IRQ0\n");
+    kprintf("*Enable IRQ0\n*DONE\n"); /* print first: the first tick hands the CPU to the shell */
     _enable_irq(IRQ_TIMER);
 }
 
 u_long getticks() {
-    u_long ticks=0;
-    ticks=sysTick;
-    return ticks;
+    return sysTick;
 }
 
-
-inline u_long *timer_handler(u_long *esp) {
+/* Every tick: account time, then let the scheduler choose the frame to resume. */
+u_long *timer_tick(struct trapframe *tf) {
     sysTick++;
-    return schedule(esp);
+    return schedule(tf);
 }

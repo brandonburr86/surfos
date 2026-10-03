@@ -12,6 +12,8 @@ File: task.c    Date: 6/10/04
 #include <mm/kalloc.h>
 #include <surfos/interrupt.h>
 #include <surfos/system.h>
+#include <surfos/gdt.h>
+#include <surfos/trap.h>
 
 #include <blibc_common.h>
 
@@ -222,27 +224,24 @@ u_int getPID() {
     return PID++;
 }
 
-/* Very important function. This sets up a new stack frame for a process. Dont change any of
-the values here unless you know what you are doing!!!
-THIS RETURNS AN INVALID ESP!!! MUST CHANGE ESP!!!*/
-surf_regs *getNewRegs(surf_regs *nReg, u_int pl, u_long eip) {
-    char *stack = (char*)kalloc(STACK_SIZE+60);
-    if(!nReg || !stack) return NULL;
-    memset(stack,0,STACK_SIZE+60);
-
-    memset(nReg,0,sizeof(surf_regs));
-    if(pl==0) {
-      nReg->cs = 0x8;
-      nReg->ds = nReg->es = nReg->fs = nReg->gs = 0x10;
-      nReg->eflags = DEF_EFLAGS_0;
-    } else if(pl==3) {
-      nReg->cs = 0x1B;
-      nReg->ds = nReg->es = nReg->fs = nReg->gs = 0x43;
-      nReg->eflags = DEF_EFLAGS_3;
+/* Build the first trap frame of a task at the top of its stack, so that "returning"
+from a trap into it starts task_stublet() with the right segments and flags. The frame
+has no useresp/ss for a ring-0 task because iret does not pop them within ring 0. */
+static struct trapframe *build_initial_frame(u_char *stack_top, u_int ring, u_long eip) {
+    u_int size = (ring == USER) ? sizeof(struct trapframe) : TRAPFRAME_KERNEL_SIZE;
+    struct trapframe *tf = (struct trapframe*)(stack_top - size);
+    memset(tf, 0, size);
+    tf->eip = eip;
+    if(ring == USER) {
+        tf->cs = USER_CS;
+        tf->ds = tf->es = tf->fs = tf->gs = tf->ss = USER_DS;
+        tf->eflags = DEF_EFLAGS_3;
+    } else {
+        tf->cs = KERNEL_CS;
+        tf->ds = tf->es = tf->fs = tf->gs = KERNEL_DS;
+        tf->eflags = DEF_EFLAGS_0;
     }
-    nReg->esp = nReg->ebp = (u_int)stack; //TODO: Put this in a SAFER location!
-    nReg->eip = eip;
-    return nReg;
+    return tf;
 }
 
 /* This is the head honcho. A new process is created by setting up a stack frame for it,
@@ -251,24 +250,19 @@ is saved.. so the task stublet can call it. EIP is not called directly. */
 surf_task *new_task(char *name, surf_console *con, u_int ring, prio_level prio, u_long *eip) {
     static bool isIdle=true;
     surf_task *nTask = (surf_task*)kalloc(sizeof(surf_task));
-    surf_regs nRegs;
     char *pName = (char*)kalloc(strlen(name)+1);
-    if(!nTask || !pName) return NULL; //problems
+    u_char *stack = (u_char*)kalloc(KSTACK_SIZE);
+    if(!nTask || !pName || !stack) return NULL; //problems
 
-    memset(nTask,0,sizeof(nTask));
-    memset(&nRegs,0,sizeof(nRegs));
-
-    getNewRegs(&nRegs, ring, (u_int)task_stublet); //new stack frame
+    memset(nTask,0,sizeof(*nTask));
+    memset(stack,0,KSTACK_SIZE);
 
     nTask->pid = getPID(); //new process ID
 
-    nTask->stackmem = (u_int*)nRegs.esp; //save the buffer so we can kfree it later
-    nRegs.esp+=STACK_SIZE; //move ESP to the top of the buffer
-    nTask->esp = (u_int*)nRegs.esp; //save ESP!
-    memcpy((u_char*)nTask->esp,(u_char*)&nRegs,sizeof(surf_regs)); //do the stack frame copy
+    nTask->stackmem = (u_long*)stack; //save the buffer so we can kfree it later
+    nTask->esp = (u_long*)build_initial_frame(stack + KSTACK_SIZE, ring, (u_long)task_stublet);
 
     nTask->name = pName; strcpy(nTask->name,name);
-    *(nTask->name + (strlen(name)+1)) = 0; //null terminated
 
     nTask->prio = prio;
     nTask->status = TS_RUNNABLE;
@@ -340,33 +334,6 @@ void yield() {
     asm("int $0x40"); //  :)
 }
 
-/* This is a useful function. Inside an interrupt, you want exceptions to be for the kernel..
-    not for the process that was interrupted. However a more stable solution.. thats not the
-    best in design. This function just switches between the current processes stack pointer and
-    the kernel's stack pointer. This is also so the interrupt doesnt use the processes stack.
-*/
-u_long *switch_int_task(u_long *curESP) {
-    static surf_task *cur=NULL;
-    static u_int i=0;
-    //kprintf("Switching from %s (0x%x)\n",curTask->name,curESP);
-    if(!curTask) {
-        kprintf("switch_int_task: null current task\n");
-        BUG();
-    }
-
-    curTask->esp = curESP;
-    if(i) { //inside a kernel interrupt
-        curTask=cur;
-        i=0;
-    } else { //outside a kernel interrupt
-        cur=curTask;
-        curTask=idleTask;
-        i=1;
-    }
-    //kprintf("Switching to %s (0x%x)\n",curTask->name,curTask->esp);
-    return curTask->esp;
-}
-
 void print_tasks() {
     int i=0;
     surf_task *tmp;
@@ -402,6 +369,11 @@ void makePlOrder() {
 
 }
 
+/* yield() arrives here through int 0x40: just reschedule */
+static u_long *yield_trap(struct trapframe *tf) {
+    return schedule(tf);
+}
+
 /* Do some housecleaning.. and set up the initial tasks. The first curTask must be the idle task
     because the curTask's ESP will be written over by the first timer interrupt. */
 void init_task() {
@@ -420,7 +392,7 @@ void init_task() {
     //priority ordering
     makePlOrder();
 
-    _set_idt_int(0x40,(u_int*)task_yield); //interrupt for yield()
+    trap_set_handler(T_YIELD, yield_trap); //interrupt for yield()
 
     /*
         REMEMBER: the default current task will have its
@@ -437,7 +409,7 @@ void init_task() {
     the new processes ESP. This lends it to be called stack swapping... :/
     This also decrements the timers of sleeping functions.
 */
-u_long *schedule(u_long *curESP) {
+u_long *schedule(struct trapframe *tf) {
     surf_task *slpTmp;
     slpTmp=tqActive[PL_SLEEPING]->first;
 
@@ -449,7 +421,7 @@ u_long *schedule(u_long *curESP) {
 
     if(curTask) { //else current task was deleted
 
-        curTask->esp = curESP; //save the current ESP
+        curTask->esp = (u_long*)tf; //save the current ESP
         curTask->swapCount++;
 
         if(inKernCritSect>0) return curTask->esp;
@@ -471,10 +443,10 @@ u_long *schedule(u_long *curESP) {
     leave the critical section, the integer is decremented. The scheduler is ONLY allowed
     to task switch if that integer is 0. This allows for nesting of critical sections.
 */
-inline void kcritical_enter() { //Enter a kernel Critical Section. Prevent task switch
+void kcritical_enter() { //Enter a kernel Critical Section. Prevent task switch
     inKernCritSect++;
 }
 
-inline void kcritical_leave() { //Leave a kernel Critical Section. Allow task switch
+void kcritical_leave() { //Leave a kernel Critical Section. Allow task switch
     inKernCritSect--;
 }

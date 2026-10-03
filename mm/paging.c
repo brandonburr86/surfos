@@ -9,6 +9,7 @@ Copyright (C)2004 Brandon Burr
 #include <surfos/task.h>
 #include <surfos/system.h>
 #include <mm/paging.h>
+#include <surfos/trap.h>
 #include <blibc_common.h>
 
 /*
@@ -19,7 +20,8 @@ Copyright (C)2004 Brandon Burr
     page stack holds the complete stack for all the possible free physical page addresses
  */
 
-u_long *page_directory = (u_long*)PDIR_START;
+static u_long pd_storage[1024] __attribute__((aligned(4096))); /* used to live at 0x9C000, inside the EBDA on some machines */
+u_long *page_directory = pd_storage;
 u_long *page_table = (u_long*)PTBL_START;
 u_long *page_stack = (u_long*)PSTK_START;
 
@@ -161,12 +163,13 @@ inline void map_page(u_long *page, u_long address) {
  an area of memory is accessed that is not mapped. For the kernel this is simple.. just map the page, no
   questions asked..
  */
-void exPageFault() {
+u_long *page_fault_trap(struct trapframe *tf) {
     u_long cr2=0;
 
-    asm("movl %%cr2, %0" :"=a"(cr2)); //cr2 holds the faulted memory address
+    asm volatile("movl %%cr2, %0" :"=r"(cr2)); //cr2 holds the faulted memory address
 
     map_page(mm_pop_page(),cr2); // map a free page to the faulted address
+    return (u_long*)tf;
 }
 
 

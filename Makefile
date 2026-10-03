@@ -45,7 +45,7 @@ SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c)
              $(wildcard shell/*.c) $(wildcard driver/*.c) $(wildcard driver/dma/*.c) \
              $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c)
 # kernel/setjmp.asm is a dead pre-Multiboot entry stub and is not built.
-SRC_ASM    = kernel/assem.asm driver/dma/dma-asm.asm
+SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
 DEPS       = $(OBJS:.o=.d)

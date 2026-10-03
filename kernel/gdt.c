@@ -1,131 +1,106 @@
 /*
 SurfOS GDT Handler
 --------------------
-File: gdt.c Date: Prior to 4/23/04
+File: gdt.c Date: Prior to 4/23/04, rebuilt 10/2026 (roadmap K2)
 --------------------
 (C)2004 Brandon Burr
+
+The 2004 version built the table at physical 0x6000 through a bitfield struct and
+blanked the ring-3 entries again by accident (audit I8). The table and the TSS are
+now ordinary kernel data: null, kernel code/data, user code/data, one TSS.
 */
 
 #include <surfos/gdt.h>
 #include <surfos/console.h>
+#include <blibc_common.h>
 
+struct gdt_entry {
+    u_short limit_low;
+    u_short base_low;
+    u_char  base_mid;
+    u_char  access;
+    u_char  gran;      /* limit 19:16 in the low nibble, flags in the high nibble */
+    u_char  base_high;
+} __attribute__((packed));
+
+struct gdt_ptr {
+    u_short limit;
+    u_long  base;
+} __attribute__((packed));
+
+struct tss_entry {
+    u_long prev_tss;
+    u_long esp0, ss0;
+    u_long esp1, ss1;
+    u_long esp2, ss2;
+    u_long cr3, eip, eflags;
+    u_long eax, ecx, edx, ebx, esp, ebp, esi, edi;
+    u_long es, cs, ss, ds, fs, gs;
+    u_long ldt;
+    u_short trap, iomap_base;
+} __attribute__((packed));
+
+/* access byte: present | DPL | S | type */
+#define ACC_KCODE 0x9A  /* present, ring 0, code, readable */
+#define ACC_KDATA 0x92  /* present, ring 0, data, writable */
+#define ACC_UCODE 0xFA  /* present, ring 3, code, readable */
+#define ACC_UDATA 0xF2  /* present, ring 3, data, writable */
+#define ACC_TSS   0x89  /* present, ring 0, 32-bit TSS (available) */
+#define FLAG_4K32 0xC   /* 4 KB granularity, 32-bit segment */
+
+static struct gdt_entry gdt[GDT_ENTRIES] __attribute__((aligned(8)));
+static struct tss_entry tss __attribute__((aligned(16)));
+
+static void gdt_set(int i, u_long base, u_long limit, u_char access, u_char flags) {
+    gdt[i].limit_low = limit & 0xFFFF;
+    gdt[i].base_low  = base & 0xFFFF;
+    gdt[i].base_mid  = (base >> 16) & 0xFF;
+    gdt[i].access    = access;
+    gdt[i].gran      = ((limit >> 16) & 0x0F) | ((flags & 0x0F) << 4);
+    gdt[i].base_high = (base >> 24) & 0xFF;
+}
 
 void init_gdt() {
-    gdt_st_t gdt_temp;
-    int lv0;
+    struct gdt_ptr gdtr;
 
     kprintf("GDT Initialization\n");
-    gdt_temp.seg_limit_low      = 0x0FFF;//0x0FFF   //Code Descriptor
-    gdt_temp.base_low       = 0x0000;
-    gdt_temp.base_mid       = 0x00;
-    gdt_temp.seg_type       = 0xA;
-    gdt_temp.seg_desc_type      = CODE_DATA;
-    gdt_temp.dpl            = GDT_RING0;
-    gdt_temp.present        = GDT_PRESENT;
-    gdt_temp.seg_limit_high     = 0xFF;  //0xFFFFFFFF
-    gdt_temp.gran_def_op        = GDO;
-    gdt_temp.base_high      = 0x00;
+    gdt_set(0, 0, 0, 0, 0);                              /* null descriptor */
+    gdt_set(1, 0, 0xFFFFF, ACC_KCODE, FLAG_4K32);       /* 0x08 kernel code, 4 GB flat */
+    gdt_set(2, 0, 0xFFFFF, ACC_KDATA, FLAG_4K32);       /* 0x10 kernel data */
+    gdt_set(3, 0, 0xFFFFF, ACC_UCODE, FLAG_4K32);       /* 0x1B user code */
+    gdt_set(4, 0, 0xFFFFF, ACC_UDATA, FLAG_4K32);       /* 0x23 user data */
 
-    make_gdt_entry(&gdt_temp, 1);           //Make Second entry (Code descriptor)
-
-    gdt_temp.seg_limit_low      = 0x0FFFF;  //Data Descriptor
-    gdt_temp.base_low       = 0x0000;
-    gdt_temp.base_mid       = 0x00;
-    gdt_temp.seg_type       = 0x2;
-    gdt_temp.seg_desc_type      = CODE_DATA;
-    gdt_temp.dpl            = GDT_RING0;
-    gdt_temp.present        = GDT_PRESENT;
-    gdt_temp.seg_limit_high     = 0xFF;//0x0;
-    gdt_temp.gran_def_op        = GDO;
-    gdt_temp.base_high      = 0x00;
-
-    make_gdt_entry(&gdt_temp, 2);           //Make Third entry (Data descriptor)
-
-
-    gdt_temp.seg_limit_low      = 0x0FFF;//0x0FFF   //Code Descriptor
-    gdt_temp.base_low       = 0x0000;
-    gdt_temp.base_mid       = 0x00;
-    gdt_temp.seg_type       = 0xA;
-    gdt_temp.seg_desc_type      = CODE_DATA;
-    gdt_temp.dpl            = GDT_RING3;
-    gdt_temp.present        = GDT_PRESENT;
-    gdt_temp.seg_limit_high     = 0xFF;  //0xFFFFFFFF
-    gdt_temp.gran_def_op        = GDO;
-    gdt_temp.base_high      = 0x00;
-
-    make_gdt_entry(&gdt_temp, 3);           //Make Second entry (Code descriptor)
-
-    gdt_temp.seg_limit_low      = 0x0FFFF;  //Data Descriptor
-    gdt_temp.base_low       = 0x0000;
-    gdt_temp.base_mid       = 0x00;
-    gdt_temp.seg_type       = 0x2;
-    gdt_temp.seg_desc_type      = CODE_DATA;
-    gdt_temp.dpl            = GDT_RING3;
-    gdt_temp.present        = GDT_PRESENT;
-    gdt_temp.seg_limit_high     = 0xFF;//0x0;
-    gdt_temp.gran_def_op        = GDO;
-    gdt_temp.base_high      = 0x00;
-
-    make_gdt_entry(&gdt_temp, 4);           //Make Third entry (Data descriptor)
-
-    gdt_temp.seg_limit_low      = 0;        //Null descriptor
-    gdt_temp.base_low       = 0;
-    gdt_temp.base_mid       = 0;
-    gdt_temp.seg_type       = 0;
-    gdt_temp.seg_desc_type      = 0;
-    gdt_temp.dpl            = 0;
-    gdt_temp.present        = 0;
-    gdt_temp.seg_limit_high     = 0;
-    gdt_temp.gran_def_op        = 0;
-    gdt_temp.base_high      = 0;
-
-    make_gdt_entry(&gdt_temp, 0);           //Make first entry (Null descriptor)
-
-    for(lv0 = 3; lv0 < 256; lv0++) {            //Make other 253 entries empty
-        make_gdt_entry(&gdt_temp, lv0);
-    }
+    memset(&tss, 0, sizeof(tss));
+    tss.ss0 = KERNEL_DS;
+    tss.esp0 = 0;                                       /* set per task once ring 3 exists */
+    tss.iomap_base = sizeof(tss);                       /* no I/O permission bitmap */
+    gdt_set(5, (u_long)&tss, sizeof(tss) - 1, ACC_TSS, 0); /* 0x28 */
     kprintf("*GDT Populated\n");
 
-    load_gdtr();
-    kprintf("*GDT Loaded\n");
+    gdtr.limit = sizeof(gdt) - 1;
+    gdtr.base = (u_long)gdt;
+    asm volatile("lgdt %0" : : "m"(gdtr));
 
-    /* Reload CS with a far jump. Until this the CPU runs on the boot loader's cached code
-       descriptor: QEMU's -kernel loader happens to use 0x08, GRUB 2 uses 0x10, which is a
-       data segment in this GDT, so the first iret would fault (audit I9). */
-    asm volatile("ljmp $0x08, $1f\n1:");
+    /* Reload CS with a far jump, then the data segments. Until this the CPU runs on the
+       boot loader's cached code descriptor: QEMU's -kernel loader happens to use 0x08,
+       GRUB 2 uses 0x10, which is a data segment here, so the first iret would fault. */
+    asm volatile("ljmp %0, $1f\n"
+                 "1:\n"
+                 "mov %1, %%ax\n"
+                 "mov %%ax, %%ds\n"
+                 "mov %%ax, %%es\n"
+                 "mov %%ax, %%fs\n"
+                 "mov %%ax, %%gs\n"
+                 "mov %%ax, %%ss\n"
+                 : : "i"(KERNEL_CS), "i"(KERNEL_DS) : "eax", "memory");
+    kprintf("*GDT Loaded, segment registers initialized\n");
 
-    asm("mov $0x0010, %ax");
-    asm("mov %ax, %ds");
-    asm("mov %ax, %ss");
-    asm("mov %ax, %es");
-    asm("mov %ax, %gs");
-    asm("mov %ax, %fs");
-    kprintf("*Segment registers initialized\n");
+    asm volatile("ltr %%ax" : : "a"((u_short)TSS_SEL));
+    kprintf("*TSS Loaded\n");
 
     kprintf("*DONE\n\n");
 }
 
-void make_gdt_entry(gdt_st_t *gdt_new, int gdt_num) {
-    gdt_st_t *gdt_entry = (gdt_st_t*) GDT_BASE + gdt_num;
-
-    gdt_entry -> seg_limit_low  = gdt_new -> seg_limit_low;
-    gdt_entry -> base_low       = gdt_new -> base_low;
-    gdt_entry -> base_mid       = gdt_new -> base_mid;
-    gdt_entry -> seg_type       = gdt_new -> seg_type;
-    gdt_entry -> seg_desc_type  = gdt_new -> seg_desc_type;
-    gdt_entry -> dpl        = gdt_new -> dpl;
-    gdt_entry -> present        = gdt_new -> present;
-    gdt_entry -> seg_limit_high     = gdt_new -> seg_limit_high;
-    gdt_entry -> gran_def_op    = gdt_new -> gran_def_op;
-    gdt_entry -> base_high      = gdt_new -> base_high;
-}
-
-void load_gdtr() {
-    gdtr_st_t gdtr;
-
-    gdtr.gdt_length = (u_short) 256 * 8;
-    gdtr.gdt_base_low = (u_short) GDT_BASE_LOW;
-    gdtr.gdt_base_high = (u_short) GDT_BASE_HIGH;
-
-    asm volatile("lgdt %0": :"m" (gdtr));
+void tss_set_kernel_stack(u_long esp0) {
+    tss.esp0 = esp0;
 }

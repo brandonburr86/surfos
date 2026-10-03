@@ -256,11 +256,10 @@ int alphaInterrupt(unsigned int irq, void * param)
         kprintf("OUT(0x%x)",status);
     }
     kprintf("HARD:OUT\n");
-    return;
+    return 0;
 }
 
 
-extern FuncIRQHandler parPortISR();
 /* alphaSetup -
 Called once at startup, allocates buffers ect.. */
 struct iface * alphaSetup(struct pci_dev * ppci)
@@ -386,7 +385,7 @@ struct iface * alphaSetup(struct pci_dev * ppci)
     //kprintf("NET:add irq handler(%d, 0x%x, 0x%x)\n",pcard->pci->irq, (FuncIRQHandler)&alphaInterrupt,(void *)pcard);
     //add_irq_handler(pcard->pci->irq,(FuncIRQHandler)&alphaInterrupt,(void *)pcard);
     // enable irq(ppci->irq); /* pointless (done by adding a handler) */
-    add_irq_handler(pcard->pci->irq,(FuncIRQHandler)&parPortISR,(void *)0);
+    add_irq_handler(pcard->pci->irq,(FuncIRQHandler)&alphaInterrupt,(void *)pcard);
     gcard = pcard;
     gface = interface;
 

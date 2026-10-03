@@ -126,8 +126,11 @@ u_int getParPortAddr() {
     return port;
 }
 
-FuncIRQHandler parPortISR() {
-    reboot();
+u_long parport_irqs; /* IRQ 7 is also where spurious PIC interrupts used to land: the 2004 handler rebooted (audit I5) */
+
+int parPortISR(u_int irq, void *param) {
+    parport_irqs++;
+    return 0;
 }
 
 void init_parport() {
@@ -136,5 +139,5 @@ void init_parport() {
     PAR0_BASE = getParPortAddr();
     if(PAR0) parSetInit(PAR0,true);
     kprintf("*DONE\n");
-    add_irq_handler(IRQ_PRINTER,(FuncIRQHandler)parPortISR,0);
+    add_irq_handler(IRQ_PRINTER, parPortISR, 0);
 }

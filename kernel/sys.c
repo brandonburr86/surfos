@@ -8,8 +8,15 @@
 #include <surfos/info.h>
 #include <surfos/timer.h>
 #include <surfos/keyboard.h>
+#include <surfos/irq.h>
 
-extern void reset();
+/* pulse the reset line through the keyboard controller */
+void reset() {
+    irq_disable();
+    while(inb(0x64) & 0x02);
+    outb(0x64, 0xFE);
+    for(;;) asm volatile("hlt");
+}
 
 void do_banner(void) {
     cputs(LRED_TXT,"\n\nPhrite's SurfOS\n");
@@ -25,8 +32,8 @@ void sleep(u_long usec) {
 }
 
 void halt() {
-    asm("cli");
-    asm("hlt");
+    irq_disable();
+    for(;;) asm volatile("hlt");
 }
 
 void sysbeep(u_long frequency, u_long duration) {
