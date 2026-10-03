@@ -12,6 +12,8 @@ go through the QEMU monitor (pmemsave / sendkey), so they keep working when the
 serial path itself is what is broken.
 """
 import argparse
+import http.server
+import threading
 import os
 import re
 import select
@@ -48,6 +50,10 @@ SMOKE = [
     ('dhcp',    ['lease 10.0.2.15', 'inet 10.0.2.15', 'gateway 10.0.2.2']),
     ('ping 10.0.2.2 2', ['64 bytes from 10.0.2.2', '2 packets transmitted, 2 received']),
     ('arp',     ['10.0.2.2']),
+    ('httpget 10.0.2.2 {http} /smoke', ['200 OK', 'SurfOS HTTP test OK: /smoke', 'bytes received']),
+    ('tcpecho 7', ['tcpecho server started']),
+    ('@host-echo', []),
+    ('netstat', ['tcpecho: connection from 10.0.2.2', 'tcpecho: closed, 39 bytes echoed', 'tcp  LISTEN']),
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
@@ -60,13 +66,15 @@ SMOKE = [
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]
+# steps that legitimately take longer than the 10 s default
+TIMEOUTS = {'selftest': 120}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 
 class Qemu:
     def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
-                 disk=None, initrd=None, disk_inplace=False):
+                 disk=None, initrd=None, disk_inplace=False, net=True):
         # UNIX socket paths are limited to 108 bytes, so keep the work directory short
         base = tempfile.gettempdir()
         if len(base) > 50 and os.path.isdir('/tmp'):
@@ -86,6 +94,20 @@ class Qemu:
                 self.disk = os.path.join(self.workdir, 'disk.img')
                 shutil.copyfile(disk, self.disk)
             boot += ['-drive', f'file={self.disk},format=raw,if=ide,index=0,media=disk']  # primary master: hda
+        # user-mode network: 10.0.2.0/24, gateway 10.0.2.2; the host reaches guest port 7 through a
+        # forwarded port, and the guest reaches a small HTTP server on the host (10.0.2.2) whose port
+        # travels on the kernel command line
+        self.ports = {}
+        self.http = None
+        if net:
+            self.ports['echo'] = free_port()
+            self.ports['http'] = free_port()
+            boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7",
+                     '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
+            if not iso:
+                boot += ['-append', f"httpport={self.ports['http']}"]
+            self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
+            threading.Thread(target=self.http.serve_forever, daemon=True).start()
         cmd = [qemu, '-m', str(mem)] + boot + [
                '-display', 'none', '-no-reboot', '-no-shutdown',
                '-monitor', f'unix:{self.mon_path},server,nowait',
@@ -245,7 +267,56 @@ class Qemu:
 
     def close(self):
         self.shutdown()
+        if self.http:
+            self.http.shutdown()
         shutil.rmtree(self.workdir, ignore_errors=True)
+
+
+def free_port():
+    s = socket.socket()
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class TestHandler(http.server.BaseHTTPRequestHandler):
+    """what the guest's httpget and self test fetch"""
+    def do_GET(self):
+        body = f'SurfOS HTTP test OK: {self.path}\n'.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def host_echo_check(q):
+    """connect through the forwarded port to the guest's tcpecho server"""
+    port = q.ports.get('echo')
+    if not port:
+        return ('host reaches the guest TCP echo server', False)
+    msg = b'surfos echo test over a forwarded port\n'
+    got = b''
+    for attempt in range(10):
+        try:
+            s = socket.create_connection(('127.0.0.1', port), timeout=3)
+            s.settimeout(5)
+            s.sendall(msg)
+            while len(got) < len(msg):
+                d = s.recv(1024)
+                if not d:
+                    break
+                got += d
+            s.close()
+            break
+        except OSError:
+            time.sleep(0.3)
+    time.sleep(0.5)                 # let the guest print that the connection closed
+    return ('host reaches the guest TCP echo server', got == msg)
 
 
 def host_checks(q):
@@ -276,12 +347,17 @@ def run_smoke(q, boot_timeout):
         for entry in SMOKE:
             cmd, expects = entry[0], entry[1]
             follow = entry[2] if len(entry) > 2 else []      # (line, expects) pairs typed after cmd
+            if cmd == '@host-echo':                          # a step the host performs while the guest runs
+                results.append(host_echo_check(q))
+                continue
+            cmd = cmd.format(**q.ports) if q.ports else cmd
+            limit = TIMEOUTS.get(cmd.split()[0], 10)
             q.send(cmd + '\n')
-            ok = all(q.expect(e, 10) for e in expects)
+            ok = all(q.expect(e, limit) for e in expects)
             for line, exp in follow:
                 q.send(line + '\n')
-                ok = ok and all(q.expect(e, 10) for e in exp)
-            ok = ok and q.expect(PROMPT, 10)
+                ok = ok and all(q.expect(e, limit) for e in exp)
+            ok = ok and q.expect(PROMPT, limit)
             results.append((cmd, ok))
     q.pump(0.5)
     text = q.text()
@@ -298,6 +374,7 @@ def main():
     ap.add_argument('--disk', help='raw disk image for the primary IDE master (hda)')
     ap.add_argument('--initrd', help='file to load as a Multiboot module (ramdisk rd0)')
     ap.add_argument('--disk-inplace', action='store_true', help='let the guest modify --disk itself instead of a copy')
+    ap.add_argument('--no-net', action='store_true', help='no user-mode network, port forward or HTTP server')
     ap.add_argument('--qemu', default='qemu-system-i386')
     ap.add_argument('--mem', default='64')
     ap.add_argument('--extra', default='', help='extra QEMU arguments')
@@ -311,7 +388,7 @@ def main():
     ap.add_argument('--wait', type=float, default=4, help='with --screen: seconds to wait for boot')
     a = ap.parse_args()
 
-    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace)
+    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace, not a.no_net)
     try:
         if a.test:
             results = run_smoke(q, a.boot_timeout)

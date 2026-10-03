@@ -201,6 +201,63 @@ static void cmd_ping(int argc, char **argv) {
     printf("    %d packets transmitted, %d received, %d%% packet loss\n", count, got, count ? (count - got) * 100 / count : 0);
 }
 
+static void tcpecho_thread(void *arg) {
+    u16 port = (u16)(u_long)arg;
+    struct tcp_socket *l = tcp_listen(port), *c;
+    char buf[1024], a[16];
+    if(!l) { printf("tcpecho: port %u is busy\n", port); return; }
+    printf("tcpecho: listening on port %u\n", port);
+    for(;;) {
+        u16 rp;
+        u_long total = 0;
+        int n;
+        c = tcp_accept(l, 3600000);
+        if(!c) continue;
+        printf("tcpecho: connection from %s:%u\n", ipfmt(tcp_peer(c, &rp), a), rp);
+        while((n = tcp_recv(c, buf, sizeof(buf), 60000)) > 0) {
+            if(tcp_send(c, buf, n) != n) break;
+            total += n;
+        }
+        tcp_close(c);
+        printf("tcpecho: closed, %lu bytes echoed\n", total);
+    }
+}
+
+static void cmd_tcpecho(int argc, char **argv) {
+    u16 port = argc > 1 ? (u16)strtoul(argv[1], NULL, 10) : 7;
+    kthread_create("tcpecho", tcpecho_thread, (void *)(u_long)port, PL_NORMAL, TF_DETACHED);
+    printf("    tcpecho server started on port %u (background task)\n", port);
+}
+
+static void cmd_httpget(int argc, char **argv) {
+    ipaddr_t ip;
+    struct tcp_socket *s;
+    const char *path = argc > 3 ? argv[3] : "/";
+    char req[300], buf[513], a[16];
+    u_long total = 0, t0, shown = 0;
+    u16 port;
+    int n;
+    if(argc < 3) { printf("    usage: httpget <host> <port> [path]\n"); return; }
+    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    httpget: cannot resolve %s\n", argv[1]); return; }
+    port = (u16)strtoul(argv[2], NULL, 10);
+    t0 = getticks();
+    s = tcp_connect(ip, port, 5000);
+    if(!s) { printf("    httpget: connection to %s:%u failed\n", ipfmt(ip, a), port); return; }
+    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: SurfOS/0.007\r\nConnection: close\r\n\r\n", path, argv[1]);
+    if(tcp_send(s, req, strlen(req)) != (int)strlen(req)) { printf("    httpget: send failed\n"); tcp_close(s); return; }
+    while((n = tcp_recv(s, buf, sizeof(buf) - 1, 10000)) > 0) {
+        int i;
+        total += n;
+        for(i = 0; i < n && shown < 4096; i++, shown++) {
+            u_char c = (u_char)buf[i];
+            if(c == '\n' || c == '\t' || (c >= 32 && c < 127)) printf("%c", c);
+            else if(c != '\r') printf(".");
+        }
+    }
+    tcp_close(s);
+    printf("\n    %lu bytes received in %lu ms%s\n", total, (getticks() - t0) * (1000 / HZ), n < 0 ? " (timed out)" : "");
+}
+
 static void cmd_netstat(int argc, char **argv) {
     netdev_print();
     udp_print();
@@ -528,6 +585,8 @@ static const struct command commands[] = {
     { "arp",       "",          "the ARP table", cmd_arp },
     { "dhcp",      "[if]",      "get an address lease", cmd_dhcp },
     { "nslookup",  "<name>",    "resolve a host name", cmd_nslookup },
+    { "tcpecho",   "[port]",    "start a TCP echo server (port 7)", cmd_tcpecho },
+    { "httpget",   "<host> <port> [path]", "fetch a page over TCP", cmd_httpget },
     { "ping",      "<ip> [n]",  "ICMP echo", cmd_ping },
     { "netstat",   "",          "interfaces and sockets", cmd_netstat },
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },

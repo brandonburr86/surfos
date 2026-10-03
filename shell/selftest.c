@@ -21,6 +21,8 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <net/eth.h>
 #include <net/ip.h>
 #include <net/dhcp.h>
+#include <net/tcp.h>
+#include <surfos/multiboot.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -372,6 +374,34 @@ static void test_user(void) {
     check(task_count() == before, "every process was reaped");
 }
 
+static void test_tcp(void) {
+    const char *p = strstr(bootinfo.cmdline, "httpport=");
+    struct tcp_socket *s;
+    char buf[1024];
+    int n, total = 0, got_body = 0, got_status = 0;
+    u_long t0 = getticks();
+
+    if(!netdev_default() || !netdev_default()->ip) { printf("  skip TCP (no address)\n"); return; }
+    s = tcp_connect(IP4(10, 0, 2, 2), 1, 3000);
+    check(s == NULL && getticks() - t0 < 2 * HZ, "connecting to a closed port is refused promptly");
+    if(s) tcp_close(s);
+    if(!p) { printf("  skip HTTP (no httpport= on the command line)\n"); return; }
+    s = tcp_connect(IP4(10, 0, 2, 2), (u16)strtoul(p + 9, NULL, 10), 5000);
+    check(s != NULL, "TCP connect to the host's HTTP server through QEMU");
+    if(!s) return;
+    n = tcp_send(s, "GET /selftest HTTP/1.0\r\nHost: 10.0.2.2\r\n\r\n", 42);
+    check(n == 42, "the request is sent");
+    while((n = tcp_recv(s, buf, sizeof(buf) - 1, 5000)) > 0) {
+        buf[n] = 0;
+        if(strstr(buf, "200 OK")) got_status = 1;
+        if(strstr(buf, "SurfOS HTTP test OK")) got_body = 1;
+        total += n;
+    }
+    check(n == 0, "the server closes the connection (recv returns 0)");
+    check(got_status && got_body, "HTTP status line and body received");
+    tcp_close(s);
+}
+
 static void test_net(void) {
     struct netdev *dev = netdev_default();
     const struct arp_entry *e;
@@ -402,6 +432,7 @@ static void test_net(void) {
     check(rtt == 0 && dev->ip == IP4(10, 0, 2, 15) && dev->gateway == IP4(10, 0, 2, 2) && dev->dns == IP4(10, 0, 2, 3),
           "DHCP lease: 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3");
     check(icmp_ping(IP4(10, 0, 2, 2), 0x5f60, 1, 56, 2000, NULL) >= 0, "ping works on the leased address");
+    test_tcp();
     printf("        (%s: %lu frames in, %lu out)\n", ipfmt(dev->ip, a), dev->rx_packets, dev->tx_packets);
 }
 

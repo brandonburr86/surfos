@@ -185,7 +185,9 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     strlcpy(t->cwd, (curTask && curTask->cwd[0]) ? curTask->cwd : "/", sizeof(t->cwd));
     t->stack_top = (u_long)t->stackmem + KSTACK_SIZE;
     t->esp = (u_long *)build_initial_frame(t->stackmem + KSTACK_SIZE, ring, (u_long)task_stublet);
-    t->parent = curTask;
+    /* a detached task is init's from the start: nobody else may wait for it, and a shell running
+       a background server must not see it as a child in task_wait(WAIT_ANY) */
+    t->parent = ((flags & TF_DETACHED) && init_task_ptr) ? init_task_ptr : curTask;
     t->state = TS_READY;
 
     irqf = irq_save();
