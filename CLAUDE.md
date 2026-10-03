@@ -62,3 +62,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md
 * The screen dump works even when the serial console does not.
 * `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
   `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.
+* Kernel APIs: `kthread_create()`/`task_exit()`/`task_wait()`/`sleep_ms()` (task.h),
+  `wait_on()`/`wake_up()` (wait.h), `mutex_t`/`semaphore_t`/`event_t` (sync.h),
+  `ktimer_start()` (ktimer.h), `kalloc()`/`kcalloc()`/`kfree()`/`kalloc_dma()`
+  (mm/kalloc.h), `vmm_map()`/`pmm_alloc()` (mm/paging.h, mm/pmm.h). The scheduler
+  runs only in trap context; never call `schedule()` directly.
+* Every kernel stack must be fully mapped (task_alloc pre-faults it): a page fault on
+  the stack itself is a double fault.
+* `selftest` in the shell (shell/selftest.c) is where kernel-level tests go; add a
+  check there and a line to `SMOKE` in tools/qemu-run.py for new features.

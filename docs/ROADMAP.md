@@ -177,7 +177,7 @@ Each module: why, what exists, what to build, how to prove it, size
 
 ### Memory
 
-**M1. Physical memory manager v2** (M7, M8, A6) - size M - no deps
+**M1. Physical memory manager v2** (M7, M8, A6) - size M - no deps - **done on `ai-dev`**
 
 * Use the Multiboot `mem_upper` and `mmap` passed to `kmain`; reserve the kernel
   image (`__kernel_end`), page tables, page stack, the 1:1 DMA region and anything
@@ -187,7 +187,7 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `memstat` matches QEMU's `-m` within a few hundred KB at `-m 32`, `64`,
   `512`; boot with `-m 3072` no longer claims 3 GB of 1:1 heap.
 
-**M2. Virtual memory API** (M6, M13) - size M - deps M1
+**M2. Virtual memory API** (M6, M13) - size M - deps M1 - **done on `ai-dev`**
 
 * `vmm_map(virt, phys, flags)`, `vmm_unmap`, `vmm_get_phys` (replaces
   `mm_lookup_linear`), `invlpg`; page 0 unmapped so NULL dereferences fault; the
@@ -197,7 +197,7 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `*(int*)0 = 1` in the shell produces a page-fault panic with a backtrace;
   a recursion test hits the guard page instead of corrupting the heap.
 
-**M3. Kernel heap v2** (M1-M5, M11, M12, T5) - size M - deps M2 (soft)
+**M3. Kernel heap v2** (M1-M5, M11, M12, T5) - size M - deps M2 (soft) - **done on `ai-dev`**
 
 * One allocator: block headers with size and magic, free list with splitting and
   coalescing (or a simple slab for common sizes plus a first-fit large pool),
@@ -210,7 +210,7 @@ Each module: why, what exists, what to build, how to prove it, size
 
 ### Scheduling and time
 
-**S1. Scheduler v2** (T1, T4, T6, T7, T13) - size L - deps K1
+**S1. Scheduler v2** (T1, T4, T6, T7, T13) - size L - deps K1 - **done on `ai-dev`**
 
 * Explicit task states (READY, RUNNING, BLOCKED, SLEEPING, ZOMBIE), a time slice
   per priority instead of a switch on every tick, the idle task `hlt`s only when
@@ -223,7 +223,7 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `ps` shows state and CPU time; a tight loop at LOW cannot starve a HIGH
   shell; 10,000 `kthread_create`/exit cycles leak nothing.
 
-**S2. Blocking and synchronization** (T2, T3, T9, T12) - size M - deps S1
+**S2. Blocking and synchronization** (T2, T3, T9, T12) - size M - deps S1 - **done on `ai-dev`**
 
 * Wait queues (`wait_on(queue)`, `wake_up(queue)`), `sleep_ms` that blocks,
   mutexes with owner tracking, counting semaphores, a one-shot event, all built on
@@ -233,7 +233,7 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: idle CPU use of the booted system under QEMU drops to near zero
   (`top` on the host); a producer/consumer test with two kthreads passes.
 
-**S3. Timers and time** (I11, C8) - size S - deps S2
+**S3. Timers and time** (I11, C8) - size S - deps S2 - **done on `ai-dev`**
 
 * Monotonic milliseconds from the tick, `uptime`, kernel timers (one-shot and
   periodic callbacks run from the tick or a timer kthread), RTC date and time with
@@ -337,7 +337,7 @@ Each module: why, what exists, what to build, how to prove it, size
 
 ### Shell, tests, hygiene
 
-**U1. Shell v2** - size S-M - deps K5 (then grows with every module)
+**U1. Shell v2** - size S-M - deps K5 (then grows with every module) - **done on `ai-dev`**
 
 * A command table (`{name, help, fn(argc, argv)}`) with argument parsing,
   generated `help`, history, a `selftest` command that runs every module's
@@ -366,7 +366,7 @@ Each module: why, what exists, what to build, how to prove it, size
 |---|---|---|
 | **M0 Builds and boots** (done) | Phase 0, K4 | `make test` passes at -O0 and -O2 on a fresh clone |
 | **M1 Solid ground** (done) | K4, K1, K2, K5, K3, T1, H1 (first pass) | Every CPU exception produces a register dump and backtrace; no vector reboots or triple-faults the machine; the shell survives its own crash; boot log on serial; CI green |
-| **M2 Kernel services** | M1, M2, M3, S1, S2, S3, U1 | NULL dereferences fault; `heaptest` and the task churn test pass; `getch` and `sleep` block instead of spinning; `date`, `uptime`, `dmesg`, `ps` with states |
+| **M2 Kernel services** (done) | M1, M2, M3, S1, S2, S3, U1 | NULL dereferences fault; `heaptest` and the task churn test pass; `getch` and `sleep` block instead of spinning; `date`, `uptime`, `dmesg`, `ps` with states |
 | **M3 Devices** | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
 | **M4 Files** | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
 | **M5 Processes** | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
@@ -400,8 +400,6 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M0 and M1 are done. Next is M2: M1 (Multiboot memory map), M2 (VMM API, NULL page
-unmapped), M3 (heap v2), S1 (scheduler v2 with states and an init task), S2 (wait
-queues, blocking getch and sleep), S3 (timers, date), U1 (command-table shell with
-`selftest`); the smoke test in `tools/qemu-run.py` is where each module's acceptance
-check goes.
+M0, M1 and M2 are done. Next is M3: C1 (per-console ttys with a line editor), C2
+(full keyboard decoding), D1 (driver model, full PCI enumeration, `lspci`), D2 (block
+layer with a ramdisk from a Multiboot module, ATA PIO and MBR partitions).

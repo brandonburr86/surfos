@@ -83,61 +83,56 @@ fault raised a general protection fault).
 
 ## 4. Memory map
 
-Physical and virtual addresses are the same for the first 16 MB (`setupSurfKAS`,
-`mm/paging.c:120`). Everything is defined in `include/mm/memory.h` and
-`include/sys/dma.h`.
+Physical and virtual addresses are the same for the first 16 MB. Everything is
+defined in `include/mm/memory.h` and `include/sys/dma.h`.
 
 | Range | Use | Notes |
 |---|---|---|
-| 0x00000000 - 0x000FFFFF | BIOS/real-mode area | Page 0 is mapped, so NULL dereferences silently read the IVT |
-| 0x00006000 - 0x000067FF | GDT (256 x 8 bytes) on `master` | **ai-dev**: a 6-entry table in kernel .data (`kernel/gdt.c`) |
-| 0x00006800 - 0x00006FFF | IDT (256 x 8 bytes) on `master` | **ai-dev**: an array in .bss, all 256 vectors populated |
-| 0x00008000 - 0x00047FFF | ISA DMA bounce heap (`dma-mm.c`) | 4 x 64 KB, allocator is broken (see audit) |
-| 0x0009C000 - 0x0009CFFF | Page directory on `master` | **ai-dev**: a page-aligned array in .bss |
-| 0x00100000 - ~0x00122000 | Kernel image | .text, .rodata, .data, .ksyms (symbol table), .bss (16 KB boot stack lives in .bss) |
-| 0x00200000 - 0x005FFFFF | Page tables | 4 MB = 1024 tables, covers the whole 4 GB |
-| 0x00600000 - 0x009FFFFF | Free-page stack | 4 MB of frame addresses, popped top-down |
-| 0x00A00000 - 0x00EFFFFF | `palloc()` heap | 1:1 mapped, meant for DMA descriptors |
-| 0x00F00000 - PMEM_END | Free page frames | Pushed onto the stack at boot |
-| 0xA0000000 - 0xAFFFF000 | Allocation-descriptor heap (`asbrk`) | Demand paged |
-| 0xB0000000 - 0xB0F00000 | Kernel heap (`ksbrk` / `kalloc`) | Demand paged, 15 MB hard limit |
+| 0x00000000 - 0x000FFFFF | BIOS/real-mode area | **ai-dev** unmaps page 0 after driver init, so NULL dereferences fault |
+| 0x00008000 - 0x00047FFF | ISA DMA bounce buffers (`dma-mm.c`) | 4 x 64 KB slots |
+| 0x00100000 - ~0x00125000 | Kernel image | .text, .rodata, .data, .ksyms (symbol table), .bss (16 KB boot stack, GDT, IDT, page directory) |
+| 0x00200000 - 0x005FFFFF | Page tables | 4 MB = 1024 tables, covers the whole 4 GB; every directory entry points here from boot |
+| 0x00600000 - 0x009FFFFF | Free-frame stack | 4 MB of frame addresses, popped top-down (`mm/pmm.c`) |
+| 0x00A00000 - 0x00EFFFFF | DMA heap | `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
+| 0x00F00000 - end of RAM | Free page frames | From the Multiboot memory map, minus loaded modules |
+| 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
 
-Demand paging (`exPageFault`, `mm/paging.c:163`) maps any faulting address to the
-next free frame with no checks at all. **Verified**: a normal boot takes four page
-faults (one descriptor page, three heap pages).
-
-`memprobe()` ignores the Multiboot memory map and finds RAM by writing to it. It
-only works because the loop is compiled without optimisation; at -O2 GCC removes
-the read-back and the kernel decides it has 3 GB (**verified**, see audit).
+**ai-dev**: `mm/pmm.c` builds the frame stack from the Multiboot map that
+`kernel/multiboot.c` copies at boot (on `master`, `memprobe()` wrote a magic value to
+every page from 8 MB up). `mm/paging.c` offers `vmm_map`/`vmm_unmap`/`vmm_get_phys`;
+the page fault handler maps kernel-heap pages on demand and reports every other fault
+with address and cause. `mm/kalloc.c` is a first-fit allocator with 16-byte headers,
+splitting, merging in both directions, poisoning and bad-pointer panics, instantiated
+twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` churns it.
 
 ## 5. Tasks and scheduling (`kernel/task.c`)
 
-* A task is `surf_task` (`include/surfos/task.h`): name, pid, priority, console,
-  status, saved ESP, stack buffer, sleep countdown, entry function, flags, list links.
-* Six doubly linked queues, one per `prio_level`: FIFO, HIGH, NORMAL, LOW, SLEEPING,
-  REMOVE. `getNextTask()` walks the fixed pattern `F H N L, F H N H, ...`
-  (`makePlOrder`) and returns the head of the chosen queue, so HIGH tasks get
-  roughly twice the turns of LOW tasks and FIFO tasks run until they finish.
+**ai-dev** rewrote the scheduler; the 2004 classes and pick order survive.
+
+* A task is `surf_task` (`include/surfos/task.h`): name, pid, class, state, flags,
+  console, saved frame, 16 KB kernel stack, parent, exit code, wake time, list links,
+  slice and accounting. States: READY (on a run queue), RUNNING, BLOCKED (on a wait
+  queue), SLEEPING (on the sleep list), DEAD (a zombie until collected).
+* Four run queues, FIFO/HIGH/NORMAL/LOW, picked in the order `F H N L, F H N H`.
+  Slices are 4/2/1 ticks for HIGH/NORMAL/LOW; FIFO tasks run until they block. A task
+  made ready in a better class preempts at the next tick. The idle task (pid 0, the
+  boot context) runs only when nothing else can and executes `hlt`.
 * Context switch is pure stack swapping. Every trap builds a `struct trapframe`
-  (`include/surfos/trap.h`); on the timer tick and on `yield()` (`int 0x40`) the
-  dispatcher calls `schedule(tf)`, which saves the frame address in the task and
-  returns the next task's frame, and `trap_common` resumes that one. **ai-dev**
-  replaced the hand-written `timerISR`/`task_yield` stubs with this.
-* `new_task()` kallocs a 16 KB stack and builds the first trap frame at its top
-  (`build_initial_frame`) so that returning into it starts `task_stublet()`, which
-  calls the entry function and then kills the task. Ring 3 frames are built but
-  user mode does not work until P1 adds a kernel stack per task and page tables.
-* Every tick is a potential switch: there is no time slice counter. `schedule()`
-  also walks the SLEEPING queue subtracting 10 ms per tick (with the T1 bug).
-* Critical sections (`KCRIT_ENTER`/`KCRIT_LEAVE`) only bump a counter that stops
-  `schedule()` from switching; `irq_save()`/`irq_restore()` (`include/surfos/irq.h`)
-  are for data an interrupt handler also touches.
-* Interrupt handlers run on the current task's stack (**ai-dev**; `master` switched
-  to the idle task's stack with `switch_int_task()`).
-* Dying: `kill_task()` moves the task to the REMOVE queue and marks it `TS_DEAD`;
-  the idle task's loop calls `reap_tasks()`, which frees it once it is not running
-  and starts a new shell on the console of a dead shell (`TF_SHELL`). On `master`
-  the stack was freed while the task still ran on it and a dead shell was gone for good.
+  (`include/surfos/trap.h`); the timer tick and `yield()` (`int 0x40`) call
+  `schedule(tf)`, which saves the frame address in the outgoing task and returns the
+  incoming task's frame. `schedule()` never runs outside trap context.
+* Blocking: `wait_prepare()`/`wait_on()`/`wake_up()` (`kernel/wait.c`), mutexes,
+  semaphores and events (`kernel/sync.c`), `sleep_ms()`, kernel timers
+  (`kernel/ktimer.c`). `getch()` blocks on the keyboard wait queue.
+* Lifetime: `kthread_create()` makes a child of the caller; `task_exit()` or
+  `kill_task()` turns a task into a zombie and `task_wait()` in the parent frees it;
+  init (pid 1) collects detached and orphaned tasks and restarts a shell when one
+  dies. Nothing frees a stack that may still be running, and every kernel stack is
+  pre-faulted at creation (a stack page fault would double-fault).
+* `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
+  preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
+* `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
+  `uptime`, `selftest` exercise the machinery.
 
 ## 6. Interrupts and exceptions
 
@@ -189,9 +184,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   toggles the LED, extended (E0) keys not decoded. The ISR also spawns tasks on
   F5/F6/F9/F12 and toggles the floppy motor on F7/F8 (debug hooks).
 * Input is a 255-byte queue shared by the keyboard and the serial port; `getch()`
-  spins on it (busy wait). On `master` it also emptied the queue on entry, which lost
-  every character that arrived while the previous one was being handled; `ai-dev`
-  removed that, so pasted and serial input survive.
+  blocks on a wait queue that both interrupts wake (**ai-dev**; `master` spun and
+  emptied the queue on entry, losing type-ahead).
 
 ## 8. Drivers
 
@@ -212,17 +206,15 @@ Driver init order is fixed in `driver/drivers.c` (reconstructed file).
 
 ## 9. The shell (`shell/main.c`)
 
-Commands and their **verified** behaviour under QEMU:
+**ai-dev**: a command table with argument splitting; `help` is generated from it.
 
 | Command | Result |
 |---|---|
-| `help`, `clear`, `tick`, `ps`, `memstat`, `lpstat`, `kalloc`, `pl`, `test` | Work |
-| `funky` | Spawns a NORMAL-priority task that plays a tune through the PC speaker; `ps` shows three tasks |
-| `demo` -> 1 -> 1..7 | Raises `int 1..7` in the shell task; the shell is killed ("Process ('Shell 0':1) killed by ...") and the machine idles |
-| `die` | Creates a ring-3 task; it dies immediately with a General Protection Fault |
-| `hanoi`, `beep` | Work (not re-verified) |
-| `term`, `time` | Stubs, bodies commented out |
-| `inter` | Pokes the NIC through a global that is NULL without a 3c905B: will fault |
+| `help`, `clear`, `echo`, `tick`, `uptime`, `date`, `ps`, `kill`, `sleep`, `memstat`, `dmesg`, `irqstat`, `bootinfo`, `lpstat`, `test` | Work |
+| `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
+| `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task; the first three kill it and init restarts it, the last is reported and ignored |
+| `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
+| `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
 
 ## 10. Build system

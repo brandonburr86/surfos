@@ -19,7 +19,14 @@ user descriptors kept, TSS loaded, CS reloaded), **M9** (GDT, IDT and page direc
 in kernel memory), **T5, T6, T7, T8** (name overflow, deferred stack free through the
 reaper, shell respawn, no `sti` with a null task), **H2, H4, H5, H6** (dead code,
 file headers, REBUILD-NOTES.md, CI). **I10** is moot (all gates are interrupt gates).
-Everything else below is still open; M2 takes the memory and scheduler items.
+Closed by milestone M2 (memory, scheduler, shell): **M1, M2, M3, M4, M5, M6, M7, M8,
+M11, M12, M13** (new allocator, Multiboot map, VMM API, fault policy, page 0 unmapped),
+**T1, T2, T3, T4, T6, T9, T10, T11, T13** (sleep list, blocking sleep and getch,
+time slices, deferred stack free, per-task critical sections, console no longer forced
+on switch, debug task hooks removed, idle only when nothing is runnable), **I11**
+(calibrated delays), **C8** (RTC modes and century), **D2** in part (`dma_alloc`).
+Still open: **T12** (turf is unused but still in the tree), **C1, C2, C4, C6, C9**
+(console and keyboard: milestone M3), **D1, D3, D4, D5, D6**, **H1, H3**.
 
 ## What was verified under QEMU
 
