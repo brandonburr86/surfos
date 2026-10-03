@@ -14,5 +14,6 @@ inline void *mm_pop_page();
 inline void mm_push_page(void *page);
 
 u_long *page_fault_trap(struct trapframe *tf);
+bool vmm_is_mapped(u_long addr);
 
 #endif

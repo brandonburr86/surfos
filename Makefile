@@ -56,9 +56,33 @@ DEPS       = $(OBJS:.o=.d)
 
 all: $(KERNEL)
 
-$(KERNEL): $(OBJS) linker.ld
+# The kernel is linked twice: pass 1 with an empty symbol table to learn the addresses,
+# pass 2 with the real table (tools/gensyms.py) for backtraces. .ksyms sits after the
+# code in linker.ld, so no text address changes between the passes.
+STAGE1   = $(BUILD)/surfos.stage1
+KSYMS0_C = $(BUILD)/ksyms0.c
+KSYMS_C  = $(BUILD)/ksyms.c
+
+$(KSYMS0_C): tools/gensyms.py
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) tools/gensyms.py < /dev/null > $@
+
+$(STAGE1): $(OBJS) $(BUILD)/ksyms0.o linker.ld
+	@echo "LD   $@ (pass 1)"
+	$(Q)$(LD) $(LDFLAGS) -o $@ $(OBJS) $(BUILD)/ksyms0.o
+
+$(KSYMS_C): $(STAGE1) tools/gensyms.py
+	$(Q)$(NM) -n $(STAGE1) | $(PYTHON) tools/gensyms.py > $@
+
+$(BUILD)/ksyms0.o: $(KSYMS0_C)
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ksyms.o: $(KSYMS_C)
+	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+
+$(KERNEL): $(OBJS) $(BUILD)/ksyms.o linker.ld
 	@echo "LD   $@"
-	$(Q)$(LD) $(LDFLAGS) -o $@ $(OBJS)
+	$(Q)$(LD) $(LDFLAGS) -o $@ $(OBJS) $(BUILD)/ksyms.o
 	$(Q)$(NM) -n $@ > $(BUILD)/surfos.sym
 	@echo "built $@ ($$(stat -c %s $@) bytes, -O$(O))"
 

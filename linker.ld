@@ -29,6 +29,12 @@ SECTIONS
         *(.data .data.*)
     }
 
+    /* kernel symbol table (tools/gensyms.py), after everything whose address it records */
+    .ksyms ALIGN(4096) :
+    {
+        *(.ksyms)
+    }
+
     .bss ALIGN(4096) :
     {
         __bss_start = .;

@@ -42,7 +42,8 @@ void kmain(u_long magic, u_long addr) {
     init_timer(); //start timer and go!!
 
     for(;;) { //the idle task
-        asm("hlt");
+        reap_tasks(); //free dead tasks, restart dead shells
+        asm volatile("hlt");
     }
     return; /* End C Kernel */
 }

@@ -23,7 +23,7 @@ struct trapframe {
     u_long errcode;                                        /* CPU error code, or 0 */
     u_long eip, cs, eflags;                                /* pushed by the CPU */
     u_long useresp, ss;                                    /* only when coming from ring 3 */
-} __attribute__((packed));
+}; /* all members are 32 bits, so the layout is exact without packing */
 
 /* size of the frame the CPU pops on iret back to ring 0 (no useresp/ss) */
 #define TRAPFRAME_KERNEL_SIZE offsetof(struct trapframe, useresp)

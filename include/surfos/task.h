@@ -25,12 +25,15 @@ File: task.h    Date: 6/10/04, trapframe since 10/2026
 
 typedef void(*task_stub) (void);
 
+#define TF_SHELL 0x1 /* a shell: the reaper starts a new one on its console when it dies */
+
 /* A task's saved registers are its struct trapframe at the top of its stack (trap.h). */
 
 typedef enum {
     TS_FIFO = 1,
     TS_RUNNABLE = 2, //runnable means the task can be run normally
     TS_SLEEPING = 3, //sleeping means the task is sleeping for so many ms
+    TS_DEAD = 4,     //killed or finished, waiting on the removal queue for the reaper
 } task_status;
 
 
@@ -53,6 +56,7 @@ typedef struct surf_task {
     u_long *esp, *stackmem;
     u_int timeleft; //milliseconds left... multiple of 10
     task_stub start_func;
+    u_int flags;    //TF_*
 
     struct surf_task *prev, *next;
 } surf_task;
@@ -93,6 +97,7 @@ inline surf_task *getNextTask();
 void print_tasks() ;
 void makePlOrder();
 u_long *schedule(struct trapframe *tf);
-inline void flush_remove_queue();
+void reap_tasks();
+void shell();
 
 #endif

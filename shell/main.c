@@ -17,6 +17,7 @@ SurfOS ring0 Shell (v0.001)
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
+#include <surfos/klog.h>
 
 #include <sys/parport.h>
 
@@ -430,6 +431,7 @@ void invokeHelp() {
     printf("    memstat (display memory statistics)\n");
     printf("    demo   (demonstration of some of the capabilities of SurfOS)\n");
     printf("    hanoi  (Computes the Towers of Hanoi algoritm)\n");
+    printf("    dmesg  (kernel log)\n");
     printf("    crashdiv/crashgp/crashint (raise a divide error / protection fault / unused vector)\n");
     printf("    help   (this menu)\n");
     printf("    -------------------------------\n");
@@ -530,6 +532,8 @@ void parseCommand(const char line[]) {
         //time t time;
         //get time(&time);
         //printf("The current time is: %i:%i:%i\n",time.hour,time.minute, time.second);
+    } else if(!strcmp(line,"dmesg")) {
+        klog_dump();
     } else if(!strcmp(line,"crashdiv")) { //exercise the trap framework: real exceptions in this task
         volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
         printf("%i\n", one/zero);

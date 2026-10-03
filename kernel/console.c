@@ -13,6 +13,7 @@ File: console.c Date: Prior to 4/23/04
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <sys/serial.h>
+#include <surfos/klog.h>
 
 #include <mm/kalloc.h>
 
@@ -224,6 +225,7 @@ void kprintf(const char *format, ...) {
   va_start(ap, format);
   vsnprintf(buf, sizeof(buf), format, ap);
   va_end(ap);
+  klog_write(buf);
   for(p = buf; *p; p++) kputch(conActive, KERN_TXT_COLOR, *p);
 }
 

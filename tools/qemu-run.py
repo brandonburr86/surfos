@@ -31,9 +31,11 @@ SMOKE = [
     ('ps',      ["'Shell 0'", "'Kernel Idle Task'"]),
     ('help',    ['SurfOS ring0 Debug Shell']),
     ('test',    ['linear is using physical']),
+    ('dmesg',   ['Booting SurfOS Kernel']),
+    ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
 ]
 # anything that means the kernel fell over
-BAD = ['Kernel Wipeout', "Woah.. this ain't", 'killed by', 'SYSTEM HALTED', 'HALTING']
+BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 
 class Qemu:

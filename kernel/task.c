@@ -143,14 +143,26 @@ inline void requeue_task(surf_task *task) { // :) simple
     enqueue_task(task);
 }
 
-/* This is a quick and simple function to wipe clean all the tasks in the removal queue. */
-inline void flush_remove_queue() {
+/* Free the tasks on the removal queue. Called from the idle task, which is never one of
+   them, so a task may kill itself and stay on its stack until the scheduler leaves it
+   (the 2004 code freed the stack it was still standing on). A dead shell is replaced. */
+void reap_tasks() {
+    surf_task *ntmp, *tmp;
     KCRIT_ENTER
-    surf_task *ntmp, *tmp = tqActive[PL_REMOVE]->first;
+    tmp = tqActive[PL_REMOVE]->first;
     while(tmp) {
         ntmp = tmp->next;
-        delete_task(tmp);
-        tmp=ntmp;
+        if(tmp != curTask) {
+            u_int flags = tmp->flags;
+            surf_console *con = tmp->con;
+            delete_task(tmp);
+            if(flags & TF_SHELL) {
+                surf_task *t = new_task("Shell 0", con, KERNEL, PL_HIGH, (u_long*)shell);
+                if(t) t->flags |= TF_SHELL;
+                kprintf("init: restarted the shell\n");
+            }
+        }
+        tmp = ntmp;
     }
     KCRIT_LEAVE
 }
@@ -286,13 +298,17 @@ surf_task *new_task(char *name, surf_console *con, u_int ring, prio_level prio, 
 /* Quite a simple function.. just checking to see if the idle task was killed.. if not then
     proceed. */
 void kill_task(surf_task *task) {
+    if(!task) return;
     KCRIT_ENTER
     if(task->pid == 0) {
         kprintf("FATAL: Kernel Idle Task Killed\n");
         kprintf("HALTING\n");
         halt();
     }
-    delete_task(task);
+    if(task->prio != PL_REMOVE) { //off the run queues now, freed by reap_tasks() later
+        task->status = TS_DEAD;
+        set_task_prio(task, PL_REMOVE);
+    }
     KCRIT_LEAVE
 }
 
@@ -402,7 +418,10 @@ void init_task() {
 
     curTask = new_task("Kernel Idle Task",&conArray[0],KERNEL,PL_LOW,NULL);
 
-    new_task("Shell 0",&conArray[0],KERNEL,PL_HIGH,(u_long*)shell);
+    {
+        surf_task *sh = new_task("Shell 0",&conArray[0],KERNEL,PL_HIGH,(u_long*)shell);
+        if(sh) sh->flags |= TF_SHELL;
+    }
 }
 
 /* Ahh... sexy. The infamous schedule(). This inputs the current proceses ESP, and outputs
@@ -424,10 +443,13 @@ u_long *schedule(struct trapframe *tf) {
         curTask->esp = (u_long*)tf; //save the current ESP
         curTask->swapCount++;
 
-        if(inKernCritSect>0) return curTask->esp;
-        if(curTask->prio == PL_FIFO) return curTask->esp; //in a FIFO task
-
-        requeue_task(curTask); //send current task to end of queue
+        if(curTask->status == TS_DEAD) {
+            inKernCritSect = 0; //whatever it was doing died with it
+        } else {
+            if(inKernCritSect>0) return curTask->esp;
+            if(curTask->prio == PL_FIFO) return curTask->esp; //in a FIFO task
+            requeue_task(curTask); //send current task to end of queue
+        }
    }
 
     while((curTask=getNextTask()) == NULL); //lets hope there are tasks! (or hang)

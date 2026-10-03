@@ -20,8 +20,10 @@ handler is a kernel wipeout.
 #include <surfos/irq.h>
 #include <surfos/task.h>
 #include <mm/paging.h>
+#include <surfos/ksym.h>
 
 #include <blibc_common.h>
+#include <stdarg.h>
 
 void dump_trapframe(struct trapframe *tf) {
     u_long cr2;
@@ -46,13 +48,16 @@ static u_long *trap_exception(struct trapframe *tf) {
         irq_disable();
         kprintf("\nKernel Wipeout: %s\n", name);
         dump_trapframe(tf);
+        backtrace(tf->ebp, tf->eip);
+        kprintf("\nSYSTEM HALTED\n");
         halt();
     }
 
     printf("\nProcess (\'%s\':%i) killed by \"%s\" (vector %i, error 0x%x, eip 0x%x)\n",
            curTask->name, curTask->pid, name, tf->vector, tf->errcode, tf->eip);
+    backtrace(tf->ebp, tf->eip);
 
-    kill_task(curTask);
+    kill_task(curTask); //it stays on its stack until the idle task reaps it
     return schedule(tf); //switch to the next task
 }
 
@@ -70,15 +75,28 @@ void init_exceptions() {
     kprintf("*Exceptions loaded\n");
 }
 
-void panic(const char *msg) {
+void panic(const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    u_long ebp;
+
     irq_disable();
-    kprintf("\nKernel panic: %s\n", msg);
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    kprintf("\nKernel panic: %s\n", buf);
+    if(curTask) kprintf("task '%s' (pid %i), in_irq %i\n", curTask->name, curTask->pid, in_irq);
+    asm volatile("movl %%ebp, %0" : "=r"(ebp));
+    backtrace(ebp, 0);
     kprintf("\nSYSTEM HALTED\n");
     halt();
 }
 
+void panic_at(const char *file, int line, const char *what) {
+    panic("%s:%i: %s", file, line, what);
+}
+
 void BUG() {
-    kprintf("Woah.. this ain't supposdta happen.. a bug!\n");
-    kprintf("\nSYSTEM HALTED\n");
-    halt();
+    panic("Woah.. this ain't supposdta happen.. a bug!");
 }

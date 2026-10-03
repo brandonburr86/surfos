@@ -173,6 +173,13 @@ u_long *page_fault_trap(struct trapframe *tf) {
 }
 
 
+/* Is a linear address backed by a present page? The backtrace checks every frame with this
+   so a corrupt frame pointer cannot fault inside a panic. */
+bool vmm_is_mapped(u_long addr) {
+    if(!(page_directory[addr >> 22] & 1)) return false;
+    return (page_table[addr >> 12] & 1) ? true : false;
+}
+
 /*
     Quite a redundant function if i do say so myself.
     /me wonders why I put this in here.
