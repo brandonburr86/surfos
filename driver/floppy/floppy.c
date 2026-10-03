@@ -1,7 +1,7 @@
 /*
-SurfOS Parallel Port Driver
+SurfOS Floppy Driver
 --------------------
-File: parport.c Date: 7/10/04
+File: floppy.c  Date: 7/10/04
 --------------------
 (C)2004 Brandon Burr
 */

@@ -1,7 +1,7 @@
 /*
 SurfOS Keyboard Handler
 ----------------------
-File: template.h    Date: 4/23/04
+File: keyboard.h    Date: 4/23/04
 ----------------------
 (C)2004 Brandon Burr
 */

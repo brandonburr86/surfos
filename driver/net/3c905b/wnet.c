@@ -17,7 +17,6 @@
 /* PROTOTYPES, HEADERS AND EXTERNAL VARIABLES */
 #include <surfos/types.h>
 
-#include <surfos/interrupts.h>
 #include <surfos/interrupt.h>
 #include <mm/memory.h>
 

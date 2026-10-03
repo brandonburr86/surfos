@@ -26,11 +26,6 @@ File: info.h    Date: 4/23/04
 #define STATUS_C 0x0C
 #define STATUS_D 0x0D
 
-/*int cmos read(u_char);
-bool cmos busy();
-int bcd2bin(u_char);*/
-
-void printInfo();
-void parseCPUID(char *VendorSign, unsigned long MaxEAX);
+/* cmos_read(), cmos_busy() and bcd2bin() live in lib/blibc/time.c (time.h) */
 
 #endif

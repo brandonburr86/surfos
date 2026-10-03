@@ -1,7 +1,7 @@
 /*
 SurfOS Exception Prototypes
 ---------------------------
-File: panic.h   Date: 4/23/04, rebuilt 10/2026 (roadmap K1)
+File: panic.h   Date: 4/23/04, rebuilt 10/2026 (roadmap K1, K3)
 ---------------------------
 (C)2004 Brandon Burr
 */

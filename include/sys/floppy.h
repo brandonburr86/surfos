@@ -1,7 +1,7 @@
 /*
 SurfOS Floppy driver Header
 ----------------------
-File: driver.h  Date: 7/10/04
+File: floppy.h  Date: 7/10/04
 ----------------------
 (C)2004 Brandon Burr
 */

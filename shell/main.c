@@ -238,46 +238,6 @@ void invokeDemo() {
 
 }
 
-#define sz 1024
-void runTest() {
-    //char *str;
-    //printf("Starting memory speed test pretr(1)...");
-    char *memory[2000];
-  u_long startTick,endTick,diff,i,j;
-  startTick=getticks();
-  for(j=0;j<1000;j++) {
-  for(i=0;i<2000;i++) {
-        memory[i]=(char*)kalloc(3);
-  }
-  for(i=0;i<500;i++) {
-        kfree(memory[i]);
-  }
-  for(i=0;i<250;i++) {
-        memory[i]=kalloc(3);
-  }
-  for(i=1000;i<2000;i++) {
-        kfree(memory[i]);
-  }
-  }
-  print_lst_count();
-  //for(i=0;
-        //kprintf("Allocating %i bytes to memory address 0x%x\n",i*50,memory[i]);
-
-  endTick=getticks();
-  diff=endTick-startTick;
-  printf("\nOperation took %i milliseconds\n",TICKS_TO_USEC(diff));
-
-
-    /*for(;;) {
-        str=getpage();
-        if(!str) {
-            printf("Out of memory!\n");
-            return;
-        }
-    }*/
-}
-
-
 void getFunky(int tempo)
 {
 
@@ -453,9 +413,6 @@ void nt() {
     kprintf("exiting\n");
 }
 
-void runTest2() {
-    asm("int3");
-}
 void d1() {
     int i=0;
     for(i=0;i<4;i++) {
@@ -475,12 +432,6 @@ void d2() {
     asm("jmpl *(%eax)");
 }
 
-void recurse() {
-top:
-    //new task("recurse",conActive,KERNEL,PL_LOW,(u_int*)recurse);
-    goto top;
-}
-
 void parseCommand(const char line[]) {
     if(!strlen(line)) return; /* no command entered */
     if(!strcmp(line,"help")) {
@@ -496,8 +447,8 @@ void parseCommand(const char line[]) {
         //invokeRS232Term(0);
     } else if(!strcmp(line,"funky")) {
         new_task("funky",conActive,KERNEL, PL_NORMAL,(u_int*)funky);
-    } else if(!strcmp(line,"die")) {
-        new_task("recurse",conActive,USER, PL_NORMAL,(u_int*)recurse);
+    } else if(!strcmp(line,"die")) { //a ring-3 task: faults until P1 exists
+        new_task("ring3",conActive,USER, PL_NORMAL,(u_int*)funky);
     } else if(!strcmp(line,"pl")) {
         print_lst_count();
     } else if(!strcmp(line,"demo")) {
@@ -505,10 +456,6 @@ void parseCommand(const char line[]) {
     } else if(!strcmp(line,"hanoi")) {
         runHanoi();
     } else if(!strcmp(line,"test")) {
-        /*for(i=0;i<600000000;i++) {
-            new task("tester",conActive,KERNEL,PL_NORMAL,(u_int*)runTest2);
-            sleep(30);
-        }*/
         void *tmp = palloc(1024);
         void *tmp2= mm_lookup_linear(tmp);
         kprintf("0x%x linear is using physical 0x%x\n",tmp,tmp2);
@@ -521,10 +468,7 @@ void parseCommand(const char line[]) {
         printMemInfo();
     } else if(!strcmp(line,"kalloc")) {
         kalloc(1024);
-    } /*else if(!strcmp(line,"kalloca")) {
-        char *ptr;
-        for(;;) { ptr = kalloc(1024), memset(ptr,65,1024); }
-    }*/ else if(!strcmp(line,"ps")) {
+    } else if(!strcmp(line,"ps")) {
         print_tasks();
     } else if(!strcmp(line,"inter")) {
         fake_inter();
