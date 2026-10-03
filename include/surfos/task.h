@@ -52,6 +52,7 @@ typedef enum {
 #define NUM_PRIO 4
 
 struct surf_task;
+struct tty;
 
 /* a task is on at most one of these: a run queue, the sleep list, a wait queue or the zombies */
 struct task_list {
@@ -66,6 +67,7 @@ typedef struct surf_task {
     task_state state;
     u_int flags;
     surf_console *con;
+    struct tty *tty;            /* where getch()/gets() read from */
 
     u_long *esp;                /* saved trap frame while not running */
     u_char *stackmem;           /* kernel stack (NULL for the idle task: it uses the boot stack) */
@@ -107,6 +109,7 @@ void task_make_ready(surf_task *t);
 
 /* creation and lifetime */
 surf_task *kthread_create(const char *name, kthread_fn fn, void *arg, prio_level prio, u_int flags);
+surf_task *kthread_create_on(const char *name, surf_console *con, kthread_fn fn, void *arg, prio_level prio, u_int flags);
 surf_task *new_task(char *name, surf_console *con, u_int ring, prio_level prio, u_long *eip); /* 2004 API: a detached task */
 void task_exit(int code) __attribute__((noreturn));
 #define WAIT_ANY ((u_long)-1)

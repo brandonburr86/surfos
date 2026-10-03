@@ -9,34 +9,24 @@ SurfOS blibc - getch(), getchar(), putch(), putchar()
 #include <surfos/types.h>
 #include <blibc_common.h>
 #include <surfos/task.h>
-#include <surfos/wait.h>
-#include <surfos/irq.h>
-#include <surfos/interrupt.h>
+#include <surfos/tty.h>
 
 extern surf_task *curTask;
 extern surf_console conVideo;
 
-u_char getc() { /*reads buffer*/
-    return pop_key_queue();
+static struct tty *my_tty(void) {
+    return (curTask && curTask->tty) ? curTask->tty : tty_active;
 }
 
-u_char getch() { /*blocks until a key arrives*/
-    u_char tmp;
+u_char getc() { /*reads the queue, does not wait*/
+    int c = tty_trygetc(my_tty());
+    return c < 0 ? 0 : (u_char)c;
+}
+
+u_char getch() { /*blocks until a usable key arrives*/
     for(;;) {
-        u_long flags = irq_save();
-        tmp = pop_key_queue();
-        if(!tmp) {
-            if(curTask && curTask != idle_task && !in_interrupt()) {
-                wait_prepare(&kbd_wq);   /* enqueued before interrupts come back: no lost wakeup */
-                irq_restore(flags);
-                yield();
-            } else {
-                irq_restore(flags);      /* boot code: nothing to switch to */
-            }
-            continue;
-        }
-        irq_restore(flags);
-        if(isprint(tmp) || tmp == 0x08 || tmp == '\n' || tmp == '\t') return tmp;
+        int c = tty_getc(my_tty());
+        if(isprint(c) || c == 0x08 || c == '\n' || c == '\t') return (u_char)c;
     }
 }
 

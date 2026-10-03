@@ -221,12 +221,16 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
 void kprintf(const char *format, ...) {
   char buf[512];
   char *p;
+  surf_console *con;
   va_list ap;
   va_start(ap, format);
   vsnprintf(buf, sizeof(buf), format, ap);
   va_end(ap);
   klog_write(buf);
-  for(p = buf; *p; p++) kputch(conActive, KERN_TXT_COLOR, *p);
+  /* a task's kernel messages (ps, lspci, a fault report) belong on that task's console;
+     boot code and interrupt handlers print on whatever console is showing */
+  con = (curTask && curTask->con && !in_interrupt()) ? curTask->con : conActive;
+  for(p = buf; *p; p++) kputch(con, KERN_TXT_COLOR, *p);
 }
 
 void kcprintf(surf_console *con, const char *format, ...) {

@@ -22,7 +22,7 @@ File: console.h Date: Prior than 4/23/04
 #define KERN_TXT_COLOR YELLOW_TXT //sets the output color for kernel messages
 
 /* Virtual Console memory allocation*/
-#define NUM_CONSOLES 3 //sets the default number of consoles
+#define NUM_CONSOLES 4 //F1..F4; each has a shell and a tty
 #define VMEM_SIZE 4000 //each virtual console is 4000 bytes
 #define CONSOLE_BASE 0xC000000//0x800 //start storing the first console @
 //0x800 /***********************************/

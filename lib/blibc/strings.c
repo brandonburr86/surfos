@@ -4,66 +4,48 @@ SurfOS blibc - string functions puts(), cputs();
 
 #include <surfos/types.h>
 #include <surfos/console.h>
+#include <surfos/task.h>
+#include <surfos/tty.h>
 
 #include <blibc_common.h>
 
 extern surf_console *conActive;
 extern surf_console conVideo;
 
+/* the console this task prints on (the active one before there are tasks) */
+static surf_console *my_con(void) {
+    return (curTask && curTask->con) ? curTask->con : conActive;
+}
+
 void puts(char *s) { /* same path as putch(), so the serial mirror and scrolling agree */
+    surf_console *con = my_con();
     int i;
-    if(!conActive || !s) return;
-    for(i=0; s[i] && i<1024; i++) kputch(conActive, conActive->txtColor, s[i]);
+    if(!con || !s) return;
+    for(i=0; s[i] && i<1024; i++) kputch(con, con->txtColor, s[i]);
 }
 
 void cputs(u_char atr, char *str) {
-    TEXTCOLOR tmp=conActive->txtColor;
-    conActive->txtColor=atr;
+    surf_console *con = my_con();
+    TEXTCOLOR tmp;
+    if(!con) return;
+    tmp = con->txtColor;
+    con->txtColor = atr;
     puts(str);
-    conActive->txtColor = tmp;
+    con->txtColor = tmp;
 }
 
-extern surf_console *conActive;
-
-char *gets(char *str) { //single tasking version of gets()
-    surf_console *startCon=conActive; //so different console's dont interlap
-    int i=0;
-    int chPrint=0;
-    char chEnd='\n';
-    char tmp;
-    for(i=0;;i++) {
-        tmp=getch();
-
-        if(tmp==0 || conActive!=startCon) { //null or not on same console, skip
-            i--;
-            continue;
-        }
-        if(tmp=='\b') {
-            if(chPrint>0) {
-                chPrint--;
-                putch(tmp);
-            }
-            if(i>0) i-=2;
-            continue;
-        } else {
-            putch(tmp);
-            if(tmp==chEnd) {
-                *(str+i)=0;
-                break;
-            } else {
-                *(str+i)=tmp;
-                chPrint++;
-            }
-        }
-    }
+char *gets(char *str) { /* a line from this task's tty, with editing and history; 255 bytes at most */
+    struct tty *t = (curTask && curTask->tty) ? curTask->tty : tty_active;
+    tty_readline(t, str, 255);
     return str;
 }
 
 char *cgets(int color,char *str) {
+    surf_console *con = my_con();
     char *ptr;
-    TEXTCOLOR tmp=conActive->txtColor;
-    conActive->txtColor=color;
-    ptr=gets(str);
-    conActive->txtColor=tmp;
+    TEXTCOLOR tmp = con->txtColor;
+    con->txtColor = color;
+    ptr = gets(str);
+    con->txtColor = tmp;
     return ptr;
 }

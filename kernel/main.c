@@ -20,6 +20,7 @@ File: main.c    Date: Prior to 4/23/04
 #include <sys/driver.h>
 #include <sys/serial.h>
 #include <surfos/multiboot.h>
+#include <surfos/tty.h>
 #include <mm/paging.h>
 
 void kmain(u_long magic, u_long addr);
@@ -32,7 +33,7 @@ void kmain(u_long magic, u_long addr) {
     init_gdt(); //setup GDT
     mb_init(magic, addr); //copy the boot loader's memory map and modules while they are addressable
     init_mem();
-    init_console(); kprintf("Booting SurfOS Kernel.....\n\n");
+    init_console(); init_tty(); kprintf("Booting SurfOS Kernel.....\n\n");
     mb_print();
     run_memcheck(); //check for enough ram..
 

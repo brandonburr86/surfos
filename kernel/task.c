@@ -20,6 +20,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #include <surfos/ktimer.h>
 #include <surfos/wait.h>
 #include <surfos/multiboot.h>
+#include <surfos/tty.h>
 
 #include <blibc_common.h>
 
@@ -178,6 +179,7 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     t->prio = prio;
     t->flags = flags | (ring == USER ? TF_USER : 0);
     t->con = con;
+    t->tty = tty_for_console(con);
     t->stack_top = (u_long)t->stackmem + KSTACK_SIZE;
     t->esp = (u_long *)build_initial_frame(t->stackmem + KSTACK_SIZE, ring, (u_long)task_stublet);
     t->parent = curTask;
@@ -190,17 +192,32 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     else all_tasks = t;
     all_tasks_tail = t;
     ntasks++;
-    task_make_ready(t);
     irq_restore(irqf);
     return t;
 }
 
-surf_task *kthread_create(const char *name, kthread_fn fn, void *arg, prio_level prio, u_int flags) {
-    surf_task *t = task_alloc(name, prio, flags | TF_KTHREAD, conActive ? conActive : &conArray[0], KERNEL);
+/* hand a fully set up task to the scheduler */
+static void task_start(surf_task *t) {
+    u_long irqf = irq_save();
+    task_make_ready(t);
+    irq_restore(irqf);
+}
+
+/* A kernel thread on a given console: it must not run before con and tty are set,
+   which is why task_alloc() does not queue it. */
+surf_task *kthread_create_on(const char *name, surf_console *con, kthread_fn fn, void *arg, prio_level prio, u_int flags) {
+    surf_task *t = task_alloc(name, prio, flags | TF_KTHREAD, con ? con : &conArray[0], KERNEL);
     if(!t) return NULL;
     t->entry = fn;
     t->arg = arg;
+    task_start(t);
     return t;
+}
+
+/* A kernel thread that prints where its creator prints */
+surf_task *kthread_create(const char *name, kthread_fn fn, void *arg, prio_level prio, u_int flags) {
+    surf_console *con = (curTask && curTask->con) ? curTask->con : (conActive ? conActive : &conArray[0]);
+    return kthread_create_on(name, con, fn, arg, prio, flags);
 }
 
 /* The 2004 interface: a detached task whose body takes no argument */
@@ -209,6 +226,7 @@ surf_task *new_task(char *name, surf_console *con, u_int ring, prio_level prio, 
     if(!t) return NULL;
     t->entry = (kthread_fn)eip;
     t->arg = NULL;
+    task_start(t);
     return t;
 }
 
@@ -402,12 +420,14 @@ static u_long *yield_trap(struct trapframe *tf) {
 /**** init: the first task, parent of everything that has no parent ****/
 
 static void spawn_shell(surf_console *con) {
-    surf_task *t = kthread_create("Shell 0", (kthread_fn)shell, NULL, PL_HIGH, TF_SHELL);
-    if(t) t->con = con;
+    char name[TASK_NAME_LEN];
+    snprintf(name, sizeof(name), "Shell %i", (int)(con - conArray));
+    kthread_create_on(name, con, (kthread_fn)shell, NULL, PL_HIGH, TF_SHELL);
 }
 
 static void init_main(void *arg) {
-    spawn_shell(&conArray[0]);
+    int i;
+    for(i = 0; i < NUM_CONSOLES; i++) spawn_shell(&conArray[i]); /* F1..F4 */
     for(;;) {
         int status;
         u_int flags = 0;
@@ -445,6 +465,7 @@ void init_task() {
     idle_task->prio = PL_LOW;
     idle_task->state = TS_RUNNING;
     idle_task->con = &conArray[0];
+    idle_task->tty = tty_for_console(&conArray[0]);
     idle_task->stack_top = (u_long)stack + 0x4000;
     idle_task->all_next = NULL;
     all_tasks = all_tasks_tail = idle_task;

@@ -14,6 +14,7 @@ terminal: qemu -nographic, or a null-modem cable on real hardware.
 #include <surfos/console.h>
 #include <surfos/interrupt.h>
 #include <surfos/keyboard.h>
+#include <surfos/tty.h>
 #include <sys/serial.h>
 
 #define UART_RBR  0 /* receive buffer (read) / transmit holding register (write) */
@@ -83,7 +84,7 @@ void serial_console_clear(void) {
     sequences (arrow keys etc.) are swallowed until there is something to do with them.
 */
 int serial_isr(u_int irq, void *param) {
-    static int esc = 0; /* 0 = normal, 1 = got ESC, 2 = inside ESC [ ... or ESC O ... */
+    static int esc = 0; /* 0 = normal, 1 = got ESC, 2 = inside ESC [ or ESC O */
     u_char c;
 
     while(inb(uart + UART_LSR) & LSR_DATA_READY) {
@@ -93,13 +94,24 @@ int serial_isr(u_int irq, void *param) {
             continue;
         }
         if(esc == 2) {
-            if(c >= 0x40 && c <= 0x7E) esc = 0; /* final byte of the sequence */
+            if(c >= 0x40 && c <= 0x7E) { /* final byte: arrows and friends become key codes */
+                esc = 0;
+                switch(c) {
+                case 'A': tty_input(tty_active, UP); break;
+                case 'B': tty_input(tty_active, DOWN); break;
+                case 'C': tty_input(tty_active, RT); break;
+                case 'D': tty_input(tty_active, LEFT); break;
+                case 'H': tty_input(tty_active, HOME); break;
+                case 'F': tty_input(tty_active, END); break;
+                default: break;
+                }
+            }
             continue;
         }
         if(c == 0x1B) { esc = 1; continue; }
         if(c == '\r') c = '\n';
         if(c == 0x7F) c = 0x08;
-        push_key_queue(c);
+        tty_input(tty_active, c);
     }
     return 0;
 }
