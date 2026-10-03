@@ -17,6 +17,9 @@ File: task.h    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #define DEF_EFLAGS_3 0x3202  /* the same with IOPL 3 */
 #define KSTACK_SIZE 0x4000   /* 16 KB kernel stack per task */
 #define TASK_NAME_LEN 32
+#define TASK_CWD_LEN 256
+#define NR_OPEN 16
+struct file;
 
 #define KERNEL 0
 #define USER 3
@@ -68,6 +71,8 @@ typedef struct surf_task {
     u_int flags;
     surf_console *con;
     struct tty *tty;            /* where getch()/gets() read from */
+    char cwd[TASK_CWD_LEN];     /* current directory, absolute and normalized ("/" when empty) */
+    struct file *files[NR_OPEN]; /* open file descriptors (fs/vfs.c) */
 
     u_long *esp;                /* saved trap frame while not running */
     u_char *stackmem;           /* kernel stack (NULL for the idle task: it uses the boot stack) */

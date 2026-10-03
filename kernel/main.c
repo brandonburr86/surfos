@@ -21,6 +21,7 @@ File: main.c    Date: Prior to 4/23/04
 #include <sys/serial.h>
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
+#include <fs/vfs.h>
 #include <mm/paging.h>
 
 void kmain(u_long magic, u_long addr);
@@ -44,6 +45,8 @@ void kmain(u_long magic, u_long addr) {
     init_keyboard(); //get keyboard ready
 
     init_drivers(); //some driver stuff :P
+
+    init_fs(); //mount the initrd and whatever the disks hold
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 

@@ -21,6 +21,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #include <surfos/wait.h>
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
+#include <fs/vfs.h>
 
 #include <blibc_common.h>
 
@@ -180,6 +181,7 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     t->flags = flags | (ring == USER ? TF_USER : 0);
     t->con = con;
     t->tty = tty_for_console(con);
+    strlcpy(t->cwd, (curTask && curTask->cwd[0]) ? curTask->cwd : "/", sizeof(t->cwd));
     t->stack_top = (u_long)t->stackmem + KSTACK_SIZE;
     t->esp = (u_long *)build_initial_frame(t->stackmem + KSTACK_SIZE, ring, (u_long)task_stublet);
     t->parent = curTask;
@@ -293,6 +295,7 @@ static void reap(surf_task *t) {
     }
     ntasks--;
     irq_restore(flags);
+    fd_close_all(t);                /* in the waiter's context: closing may write a file system */
     kfree(t->stackmem);
     kfree(t);
 }

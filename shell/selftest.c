@@ -15,6 +15,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/timer.h>
 #include <surfos/klog.h>
 #include <sys/bdev.h>
+#include <fs/vfs.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -258,11 +259,37 @@ static void test_bdev(void) {
     kfree(b);
 }
 
+static void test_fs(void) {
+    struct file *f;
+    struct stat st;
+    struct dirent de;
+    char buf[64], path[VFS_PATH_MAX];
+    int r, n = 0;
+
+    if(vfs_stat("/initrd", &st) != 0) { printf("  skip file systems (no initrd mounted)\n"); return; }
+    r = vfs_open("/initrd/motd", O_RDONLY, &f);
+    if(r == 0) {
+        r = vfs_read(f, buf, 17);
+        vfs_close(f);
+    }
+    check(r == 17 && !memcmp(buf, "Welcome to SurfOS", 17), "read /initrd/motd through the VFS");
+    check(vfs_stat("/initrd/etc/version", &st) == 0 && st.type == VN_FILE && st.size == 22, "stat /initrd/etc/version: 22-byte file");
+    check(vfs_stat("/initrd/etc", &st) == 0 && st.type == VN_DIR, "/initrd/etc is a directory");
+    check(vfs_open("/initrd/nothing", O_RDONLY, &f) == -ENOENT, "missing file is ENOENT");
+    check(vfs_open("/initrd/motd", O_WRONLY, &f) == -EROFS, "writing the initrd is EROFS");
+    r = vfs_open("/initrd", O_RDONLY | O_DIRECTORY, &f);
+    if(r == 0) { while(vfs_readdir(f, &de) == 0) n++; vfs_close(f); }
+    check(r == 0 && n >= 3, "readdir /initrd lists at least 3 entries");
+    check(vfs_normalize("/initrd/etc", "../motd", path, sizeof(path)) == 0 && !strcmp(path, "/initrd/motd"), "path normalization with ..");
+    check(vfs_normalize("/", "a//b/./c/../d/", path, sizeof(path)) == 0 && !strcmp(path, "/a/b/d"), "path normalization: slashes and dots");
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
     check(heaptest() == 0, "heap");
     test_bdev();
+    test_fs();
     test_tasks();
     test_sleep();
     test_timers();

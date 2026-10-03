@@ -20,6 +20,8 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <sys/pci.h>
 #include <sys/driver.h>
 #include <sys/bdev.h>
+#include <fs/vfs.h>
+#include <fs/bcache.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -134,6 +136,187 @@ static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
 static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
 
+/**** files ****/
+
+/* seconds since 1970 as "2026-10-03 16:11:00" (Howard Hinnant's civil-from-days) */
+static void fmt_time(u32 t, char *buf, size_t size) {
+    u32 days = t / 86400, rem = t % 86400;
+    i32 z = (i32)days + 719468, era = (z >= 0 ? z : z - 146096) / 146097;
+    u32 doe = (u32)(z - era * 146097);
+    u32 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    i32 y = (i32)yoe + era * 400;
+    u32 doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
+    u32 d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9;
+    if(m <= 2) y++;
+    if(!t) { strlcpy(buf, "-", size); return; }
+    snprintf(buf, size, "%04d-%02u-%02u %02u:%02u:%02u", y, m, d, rem / 3600, (rem / 60) % 60, rem % 60);
+}
+
+static void cmd_ls(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : ".";
+    struct file *f;
+    struct dirent de;
+    struct stat st;
+    char when[24];
+    u_int n = 0;
+    u_long total = 0;
+    int r = vfs_stat(path, &st);
+    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return; }
+    if(st.type != VN_DIR) {
+        fmt_time(st.mtime, when, sizeof(when));
+        printf("    - %8lu  %s  %s\n", (u_long)st.size, when, path);
+        return;
+    }
+    r = vfs_open(path, O_RDONLY | O_DIRECTORY, &f);
+    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return; }
+    while((r = vfs_readdir(f, &de)) == 0) {
+        fmt_time(de.mtime, when, sizeof(when));
+        printf("    %c %8lu  %-19s  %s%s\n", de.type == VN_DIR ? 'd' : '-', (u_long)de.size, when, de.name, de.type == VN_DIR ? "/" : "");
+        n++;
+        total += de.size;
+    }
+    if(r < 0) printf("    ls: %s\n", strerror(r));
+    vfs_close(f);
+    printf("    %u entries, %lu bytes\n", n, total);
+}
+
+static void cmd_cat(int argc, char **argv) {
+    int i;
+    if(argc < 2) { printf("    usage: cat <file>...\n"); return; }
+    for(i = 1; i < argc; i++) {
+        struct file *f;
+        char buf[256];
+        int r = vfs_open(argv[i], O_RDONLY, &f), last = '\n';
+        if(r) { printf("    cat: %s: %s\n", argv[i], strerror(r)); continue; }
+        while((r = vfs_read(f, buf, sizeof(buf))) > 0) {
+            int j;
+            for(j = 0; j < r; j++) {
+                u_char c = (u_char)buf[j];
+                if(c == '\n' || c == '\t' || (c >= 32 && c < 127)) printf("%c", c);
+                else if(c != '\r') printf(".");
+                last = c;
+            }
+        }
+        if(r < 0) printf("\n    cat: %s: %s", argv[i], strerror(r));
+        if(last != '\n') printf("\n");
+        vfs_close(f);
+    }
+}
+
+static void cmd_cd(int argc, char **argv) {
+    int r = vfs_chdir(argc > 1 ? argv[1] : "/");
+    if(r) printf("    cd: %s: %s\n", argc > 1 ? argv[1] : "/", strerror(r));
+}
+
+static void cmd_pwd(int argc, char **argv) { printf("    %s\n", vfs_getcwd()); }
+
+static void cmd_stat(int argc, char **argv) {
+    struct stat st;
+    char when[24];
+    int r;
+    if(argc < 2) { printf("    usage: stat <path>\n"); return; }
+    r = vfs_stat(argv[1], &st);
+    if(r) { printf("    stat: %s: %s\n", argv[1], strerror(r)); return; }
+    fmt_time(st.mtime, when, sizeof(when));
+    printf("    %s: %s, %lu bytes, modified %s, inode %lu on %s (%s)\n", argv[1], st.type == VN_DIR ? "directory" : "file",
+           (u_long)st.size, when, (u_long)st.ino, st.dev[0] ? st.dev : "none", st.fs);
+}
+
+static void cmd_mount(int argc, char **argv) {
+    const struct mount *m;
+    int r;
+    if(argc == 1) {
+        for(m = vfs_mounts(); m; m = m->next)
+            printf("    %-6s on %-12s type %s%s\n", m->sb->dev ? m->sb->dev->name : "none", m->path, m->sb->type->name, m->sb->readonly ? " (ro)" : "");
+        return;
+    }
+    if(argc < 3) { printf("    usage: mount [<device> <path> [type]]\n"); return; }
+    {
+        struct bdev *d = bdev_find(argv[1]);
+        if(!d) { printf("    mount: no block device '%s'\n", argv[1]); return; }
+        r = vfs_mount(d, argv[2], argc > 3 ? argv[3] : NULL);
+        if(r) printf("    mount: %s\n", strerror(r));
+    }
+}
+
+static void cmd_umount(int argc, char **argv) {
+    int r;
+    if(argc < 2) { printf("    usage: umount <path>\n"); return; }
+    r = vfs_umount(argv[1]);
+    if(r) printf("    umount: %s: %s\n", argv[1], strerror(r));
+}
+
+static void cmd_sync(int argc, char **argv) {
+    u_long h, m, w;
+    int r = vfs_sync();
+    bcache_stats(&h, &m, &w);
+    printf("    %s; block cache: %lu hits, %lu misses, %lu blocks written\n", r ? strerror(r) : "synced", h, m, w);
+}
+
+static void cmd_mkdir(int argc, char **argv) {
+    int r;
+    if(argc < 2) { printf("    usage: mkdir <dir>\n"); return; }
+    r = vfs_mkdir(argv[1]);
+    if(r) printf("    mkdir: %s: %s\n", argv[1], strerror(r));
+}
+
+static void cmd_rm(int argc, char **argv) {
+    int i;
+    if(argc < 2) { printf("    usage: rm <file>...\n"); return; }
+    for(i = 1; i < argc; i++) {
+        int r = vfs_unlink(argv[i]);
+        if(r) printf("    rm: %s: %s\n", argv[i], strerror(r));
+    }
+}
+
+static void cmd_rmdir(int argc, char **argv) {
+    int r;
+    if(argc < 2) { printf("    usage: rmdir <dir>\n"); return; }
+    r = vfs_rmdir(argv[1]);
+    if(r) printf("    rmdir: %s: %s\n", argv[1], strerror(r));
+}
+
+/* write <file> words...: the words, space separated, plus a newline (there is no shell redirection) */
+static void cmd_write(int argc, char **argv) {
+    struct file *f;
+    int r, i;
+    if(argc < 3) { printf("    usage: write <file> <text>...\n"); return; }
+    r = vfs_open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r) { printf("    write: %s: %s\n", argv[1], strerror(r)); return; }
+    for(i = 2; i < argc && r >= 0; i++) {
+        r = vfs_write(f, argv[i], strlen(argv[i]));
+        if(r >= 0) r = vfs_write(f, i + 1 < argc ? " " : "\n", 1);
+    }
+    if(r < 0) printf("    write: %s\n", strerror(r));
+    r = vfs_close(f);
+    if(r) printf("    write: close: %s\n", strerror(r));
+}
+
+static void cmd_cp(int argc, char **argv) {
+    struct file *in, *out;
+    char *buf;
+    u_long total = 0;
+    int r, w;
+    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return; }
+    r = vfs_open(argv[1], O_RDONLY, &in);
+    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return; }
+    r = vfs_open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, &out);
+    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return; }
+    buf = (char *)kalloc(4096);
+    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return; }
+    while((r = vfs_read(in, buf, 4096)) > 0) {
+        w = vfs_write(out, buf, r);
+        if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
+        total += r;
+    }
+    if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
+    kfree(buf);
+    vfs_close(in);
+    r = vfs_close(out);
+    if(r) printf("    cp: close: %s\n", strerror(r));
+    else if(r == 0) printf("    %lu bytes copied\n", total);
+}
+
 static void cmd_hexdump(int argc, char **argv) {
     struct bdev *d;
     u_long lba, nblk, i, j;
@@ -141,7 +324,27 @@ static void cmd_hexdump(int argc, char **argv) {
     int rc;
     if(argc < 2) { printf("    usage: hexdump <device> [block] [count]   (lsblk lists the devices)\n"); return; }
     d = bdev_find(argv[1]);
-    if(!d) { printf("    no block device '%s'\n", argv[1]); return; }
+    if(!d) {                                            /* not a device: a file, 512 bytes at an offset */
+        struct file *f;
+        u_long off = argc > 2 ? strtoul(argv[2], NULL, 0) : 0;
+        int r = vfs_open(argv[1], O_RDONLY, &f);
+        if(r) { printf("    no block device or file '%s' (%s)\n", argv[1], strerror(r)); return; }
+        buf = (u8 *)kalloc(512);
+        if(!buf) { vfs_close(f); return; }
+        vfs_lseek(f, (i32)off, SEEK_SET);
+        r = vfs_read(f, buf, 512);
+        for(i = 0; (int)i < r; i += 16) {
+            printf("%08lx  ", off + i);
+            for(j = 0; j < 16; j++) { if(i + j < (u_long)r) printf("%02x%s", buf[i + j], j == 7 ? "  " : " "); else printf("   %s", j == 7 ? " " : ""); }
+            printf(" |");
+            for(j = 0; j < 16 && i + j < (u_long)r; j++) printf("%c", (buf[i + j] >= 32 && buf[i + j] < 127) ? buf[i + j] : '.');
+            printf("|\n");
+        }
+        if(r < 0) printf("    read failed: %s\n", strerror(r));
+        kfree(buf);
+        vfs_close(f);
+        return;
+    }
     lba = argc > 2 ? strtoul(argv[2], NULL, 0) : 0;
     nblk = argc > 3 ? strtoul(argv[3], NULL, 0) : 1;
     if(nblk < 1 || nblk > 8) { printf("    1 to 8 blocks at a time\n"); return; }
@@ -206,6 +409,19 @@ static const struct command commands[] = {
     { "drivers",   "",          "driver init status", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
+    { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
+    { "umount",    "<path>",    "unmount", cmd_umount },
+    { "ls",        "[path]",    "list a directory", cmd_ls },
+    { "cat",       "<file>...", "print files", cmd_cat },
+    { "cd",        "[dir]",     "change the current directory", cmd_cd },
+    { "pwd",       "",          "print the current directory", cmd_pwd },
+    { "stat",      "<path>",    "size, time and location of a file", cmd_stat },
+    { "cp",        "<src> <dst>", "copy a file", cmd_cp },
+    { "write",     "<file> <text>...", "create a file with one line of text", cmd_write },
+    { "mkdir",     "<dir>",     "create a directory", cmd_mkdir },
+    { "rm",        "<file>...", "delete files", cmd_rm },
+    { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir },
+    { "sync",      "",          "write cached blocks to the disks", cmd_sync },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },

@@ -54,7 +54,7 @@ LDFLAGS    = -m elf_i386 -nostdlib -T linker.ld
 # boot.o must come first so the Multiboot header lands inside the first 8 KB of the image.
 SRC_S      = boot/boot.S
 SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c) \
-             $(wildcard shell/*.c) $(wildcard driver/*.c) $(wildcard driver/dma/*.c) \
+             $(wildcard shell/*.c) $(wildcard fs/*.c) $(wildcard driver/*.c) $(wildcard driver/dma/*.c) \
              $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c)
 # kernel/setjmp.asm is a dead pre-Multiboot entry stub and is not built.
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
