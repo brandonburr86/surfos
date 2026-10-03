@@ -4,7 +4,8 @@ This is a map of the kernel as it exists on `master`, written for people and AI
 sessions that are about to extend it. Everything marked **verified** was observed
 by building the tree with GCC 13 / binutils 2.42 / NASM 2.16 and booting it under
 QEMU 8.2 (`qemu-system-i386 -m 64 -kernel surfos.bin`). Everything else comes from
-reading the source. Line numbers refer to the files on `master` at commit `cd518b5`.
+reading the source. Line numbers refer to the files on `master` at commit `cd518b5`; paragraphs marked
+**ai-dev** describe what the development branch has changed since.
 
 ## 1. What SurfOS is
 
@@ -31,16 +32,18 @@ the shell calls itself v0.008.
 
 ```
 boot/        boot.S (Multiboot header + entry), multiboot.h
-kernel/      main.c (kmain), gdt.c, interrupt.c (PIC/IDT/IRQ chains), assem.asm (all ISR stubs, port I/O),
-             task.c (scheduler), timer.c (PIT), panic.c (exceptions), console.c (VGA + kprintf),
-             keyboard.c, sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks),
-             setjmp.asm (DEAD: an old pre-Multiboot entry stub, not linked)
+kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch, IRQ chains),
+             traps.asm (256 entry stubs), task.c (scheduler), timer.c (PIT), panic.c (exceptions, panic),
+             ksym.c (symbol lookup, backtraces), klog.c (kernel log), console.c (VGA + kprintf),
+             keyboard.c, sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks)
 mm/          memory.c (init + page stack push/pop), paging.c (memprobe, page tables, page-fault handler),
              kalloc.c (kernel heap, best-fit free list), palloc.c (1:1 "physical" heap for DMA)
 lib/blibc/   chars.c printf.c strings.c string.c memory.c ctype.c time.c
 shell/       main.c (the shell + demos), parport.c (lpstat)
 driver/      drivers.c (init order), pci.c, parport.c, dma/, floppy/, net/3c905b/, PCIDATA.H (unused table)
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
+tools/       qemu-run.py (headless QEMU harness), gensyms.py (symbol table for backtraces)
+tests/host/  unit tests for blibc, built with the host compiler (make unittest)
 ```
 
 Thirteen files carry the comment `Rebuilt 9/28/2026 - not in the printout, see
@@ -87,11 +90,11 @@ Physical and virtual addresses are the same for the first 16 MB (`setupSurfKAS`,
 | Range | Use | Notes |
 |---|---|---|
 | 0x00000000 - 0x000FFFFF | BIOS/real-mode area | Page 0 is mapped, so NULL dereferences silently read the IVT |
-| 0x00006000 - 0x000067FF | GDT (256 x 8 bytes) | Hard-coded in `include/surfos/gdt.h` |
-| 0x00006800 - 0x00006FFF | IDT (256 x 8 bytes) | Never zeroed; unused vectors contain whatever was there |
+| 0x00006000 - 0x000067FF | GDT (256 x 8 bytes) on `master` | **ai-dev**: a 6-entry table in kernel .data (`kernel/gdt.c`) |
+| 0x00006800 - 0x00006FFF | IDT (256 x 8 bytes) on `master` | **ai-dev**: an array in .bss, all 256 vectors populated |
 | 0x00008000 - 0x00047FFF | ISA DMA bounce heap (`dma-mm.c`) | 4 x 64 KB, allocator is broken (see audit) |
-| 0x0009C000 - 0x0009CFFF | Page directory | Inside the EBDA zone on many real machines |
-| 0x00100000 - ~0x00116000 | Kernel image | .text, .rodata, .data, .bss (16 KB boot stack lives in .bss) |
+| 0x0009C000 - 0x0009CFFF | Page directory on `master` | **ai-dev**: a page-aligned array in .bss |
+| 0x00100000 - ~0x00122000 | Kernel image | .text, .rodata, .data, .ksyms (symbol table), .bss (16 KB boot stack lives in .bss) |
 | 0x00200000 - 0x005FFFFF | Page tables | 4 MB = 1024 tables, covers the whole 4 GB |
 | 0x00600000 - 0x009FFFFF | Free-page stack | 4 MB of frame addresses, popped top-down |
 | 0x00A00000 - 0x00EFFFFF | `palloc()` heap | 1:1 mapped, meant for DMA descriptors |
@@ -109,43 +112,62 @@ the read-back and the kernel decides it has 3 GB (**verified**, see audit).
 
 ## 5. Tasks and scheduling (`kernel/task.c`)
 
-* A task is `surf_task` (`include/surfos/task.h:51`): name, pid, priority, console,
-  status, saved ESP, stack buffer, sleep countdown, entry function, list links.
+* A task is `surf_task` (`include/surfos/task.h`): name, pid, priority, console,
+  status, saved ESP, stack buffer, sleep countdown, entry function, flags, list links.
 * Six doubly linked queues, one per `prio_level`: FIFO, HIGH, NORMAL, LOW, SLEEPING,
   REMOVE. `getNextTask()` walks the fixed pattern `F H N L, F H N H, ...`
-  (`makePlOrder`, line 392) and returns the head of the chosen queue, so HIGH tasks
-  get roughly twice the turns of LOW tasks and FIFO tasks run until they finish.
-* Context switch is pure stack swapping. `timerISR` (`kernel/assem.asm:144`) pushes
-  segment registers and `pusha`, calls `timer_handler(esp)` which calls
-  `schedule(esp)`, then loads the returned ESP and `iret`s. `yield()` is `int 0x40`
-  through the identical `task_yield` stub. The saved frame layout is `surf_regs`.
-* `new_task()` (line 251) kallocs a 4 KB + 60 byte stack, builds a fake interrupt
-  frame at its top that "returns" into `task_stublet()`, which calls the entry
-  function and then kills the task. Ring is 0 or 3 but ring 3 does not work (no TSS).
+  (`makePlOrder`) and returns the head of the chosen queue, so HIGH tasks get
+  roughly twice the turns of LOW tasks and FIFO tasks run until they finish.
+* Context switch is pure stack swapping. Every trap builds a `struct trapframe`
+  (`include/surfos/trap.h`); on the timer tick and on `yield()` (`int 0x40`) the
+  dispatcher calls `schedule(tf)`, which saves the frame address in the task and
+  returns the next task's frame, and `trap_common` resumes that one. **ai-dev**
+  replaced the hand-written `timerISR`/`task_yield` stubs with this.
+* `new_task()` kallocs a 16 KB stack and builds the first trap frame at its top
+  (`build_initial_frame`) so that returning into it starts `task_stublet()`, which
+  calls the entry function and then kills the task. Ring 3 frames are built but
+  user mode does not work until P1 adds a kernel stack per task and page tables.
 * Every tick is a potential switch: there is no time slice counter. `schedule()`
-  also walks the SLEEPING queue subtracting 10 ms per tick.
+  also walks the SLEEPING queue subtracting 10 ms per tick (with the T1 bug).
 * Critical sections (`KCRIT_ENTER`/`KCRIT_LEAVE`) only bump a counter that stops
-  `schedule()` from switching; they do not disable interrupts.
-* IRQ handlers (other than the timer) run on the idle task's stack: `isrIRQ` calls
-  `switch_int_task()` before and after `handleIRQ()` (`kernel/assem.asm:240`).
-* If the shell task dies (exception, or its function returns) nothing restarts it;
-  the system idles forever (**verified** with the exception demo).
+  `schedule()` from switching; `irq_save()`/`irq_restore()` (`include/surfos/irq.h`)
+  are for data an interrupt handler also touches.
+* Interrupt handlers run on the current task's stack (**ai-dev**; `master` switched
+  to the idle task's stack with `switch_int_task()`).
+* Dying: `kill_task()` moves the task to the REMOVE queue and marks it `TS_DEAD`;
+  the idle task's loop calls `reap_tasks()`, which frees it once it is not running
+  and starts a new shell on the console of a dead shell (`TF_SHELL`). On `master`
+  the stack was freed while the task still ran on it and a dead shell was gone for good.
 
 ## 6. Interrupts and exceptions
 
-* `init_interrupt()` (`kernel/interrupt.c:53`) remaps the PICs to 0x20/0x28, masks
-  everything, enables the cascade, and installs one NASM stub per IRQ 1-14 from a
-  macro-generated table (`isrStartIRQ`, `kernel/assem.asm:230`). Each stub pushes
-  its IRQ number and jumps to a common body that calls `handleIRQ(n)`.
-* `handleIRQ()` walks a linked list of `sIRQHandler` per IRQ (shared IRQs, add /
-  remove / enable / disable, `kernel/interrupt.c:224-322`) and sends a specific EOI.
-* Masking is wrapped in Martin McCormick's "turf" reader/writer rules so that a
-  driver can hold an IRQ disabled across a critical block (`include/surfos/interrupt.h:103`).
-* Exceptions 0-18 have individual stubs `ex0..ex18` that call `exDivZero()` etc.
-  (`kernel/panic.c`). Each handler calls `panic(curTask, msg)`: if the task is pid 0
-  the kernel prints a register dump and halts, otherwise the task is killed and the
-  scheduler moves on. The page fault (14) is the exception: it is the demand pager.
-* IRQ 0 bypasses the chain (`timerISR`), and vector 0x40 is `yield`.
+**ai-dev** (`kernel/traps.asm`, `kernel/interrupt.c`, `kernel/panic.c`):
+
+* One stub per vector pushes an error code (the CPU's for #DF #TS #NP #SS #GP #PF
+  #AC #CP, otherwise 0) and the vector number; `trap_common` saves the registers,
+  loads the kernel data segments, calls `trap_dispatch(tf)` and resumes whatever
+  frame it returns. Handlers are registered with `trap_set_handler(vector, fn)`.
+* Vectors 0-31 go to `trap_exception()`: a kernel wipeout (register dump,
+  backtrace, halt) if there is no current task, the idle task is current, or we are
+  inside an interrupt handler; otherwise the task is killed with a one-line reason
+  and a backtrace, and the scheduler moves on. The page fault (14) is the demand
+  pager in `mm/paging.c`. Vectors nobody installed are reported and ignored.
+* IRQ 0-15 (0x20-0x2F) run the shared handler chains (`add_irq_handler()`,
+  `del_irq_handler()`, enable/disable), count into `irq_count[]`, send a specific
+  EOI, and for IRQ 0 hand the frame to `timer_tick()` and the scheduler. IRQ 7 and
+  15 are checked against the in-service register first; spurious ones are counted
+  and not acknowledged. IRQ masking is under `irq_save()`.
+* `init_interrupt()` populates all 256 IDT entries (int 0x80 with DPL 3 for the
+  future syscall gate), remaps the PICs to 0x20/0x28 and enables the cascade.
+* Backtraces: `tools/gensyms.py` turns the link map into a `.ksyms` table (the
+  kernel is linked twice; the table sits after the code so nothing moves) and
+  `kernel/ksym.c` walks the frame-pointer chain, checking each frame against the
+  page tables first. `panic(fmt, ...)`, `BUG_ON()`, `ASSERT()` print a backtrace
+  and halt. Everything `kprintf()` prints is also kept in a 16 KB ring (`dmesg`).
+* Shell commands `crashdiv`, `crashgp`, `crashint` exercise the three paths.
+
+On `master` the same area was 18 hand-written stubs with error-code mismatches,
+an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 
 ## 7. Console and input
 
