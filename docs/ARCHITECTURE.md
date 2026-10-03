@@ -16,15 +16,16 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 |---|---|
 | CPU mode | 32-bit protected mode, paging on, single CPU, no FPU init |
 | Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB |
-| Kernel style | Monolithic, everything in ring 0 (shell included) |
-| Segmentation | Flat: code 0x08, data 0x10 (ring-3 selectors exist but are broken, see audit) |
-| Memory | Identity map of the low 16 MB, demand-paged kernel heaps above 2.5 GB |
+| Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80` |
+| Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack |
+| Memory | Identity map of the low 16 MB, demand-paged kernel heap at 0xB0000000, a page directory per process with the user range 0x40000000-0x7FFFFFFF |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task |
 | Devices | VGA text console (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions, 3Com 3c905B NIC (no protocol stack) |
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write); 128-block write-back cache |
-| User interface | Ring-0 debug shell with about 50 commands |
+| Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 21 system calls, a user libc (`user/libsurf`) and a user-mode shell |
+| User interface | Ring-0 debug shell with about 50 commands; `run`/`spawn`, or type a program's name |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
 the shell calls itself v0.008.
@@ -37,12 +38,14 @@ kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch
              traps.asm (256 entry stubs), task.c (scheduler), timer.c (PIT), panic.c (exceptions, panic),
              ksym.c (symbol lookup, backtraces), klog.c (kernel log), console.c (VGA + kprintf),
              tty.c (input queues, line editor, console switching), keyboard.c (scan codes, LEDs),
+             process.c (spawn, ELF loader, entering ring 3), syscall.c (int 0x80 dispatch),
              sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks)
-mm/          memory.c (init + page stack push/pop), paging.c (memprobe, page tables, page-fault handler),
-             kalloc.c (kernel heap, best-fit free list), palloc.c (1:1 "physical" heap for DMA)
+mm/          memory.c (init), pmm.c (frame stack), paging.c (page tables, page-fault handler, ioremap),
+             kalloc.c (kernel and DMA heaps), uvm.c (per-process address spaces)
 lib/blibc/   chars.c printf.c strings.c string.c memory.c ctype.c time.c
 shell/       main.c (the shell), demos.c, selftest.c, parport.c (lpstat)
-fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c
+fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, devfs.c (/dev)
+user/        user.ld, libsurf/ (crt0.S, syscalls.c), include/surf.h, bin/ (hello crash cat ls count sh)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, mbr.c, parport.c, dma/, floppy/, net/3c905b/
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
@@ -76,7 +79,8 @@ GRUB / qemu -kernel
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
        init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata
-       init_fs()                  block cache, rootfs on /, the first tar ramdisk on /initrd, every FAT volume on /<device>
+       init_fs()                  block cache, rootfs on /, /dev, the first tar ramdisk on /initrd, every FAT volume on /<device>
+       init_syscalls()            int 0x80 handler
        init_timer()               PIT 100 Hz, IRQ0 = timerISR
        for(;;) hlt                this loop IS the idle task; the first tick saves its ESP into task 0
 ```
@@ -104,7 +108,9 @@ defined in `include/mm/memory.h` and `include/sys/dma.h`.
 | 0x00600000 - 0x009FFFFF | Free-frame stack | 4 MB of frame addresses, popped top-down (`mm/pmm.c`) |
 | 0x00A00000 - 0x00EFFFFF | DMA heap | `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
 | 0x00F00000 - end of RAM | Free page frames | From the Multiboot memory map, minus loaded modules |
+| 0x40000000 - 0x7FFFFFFF | User range (per process) | ELF image from 0x40000000, sbrk heap above it, stack growing down from 0x80000000 (up to 4 MB); `mm/uvm.c` |
 | 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
+| 0xC0000000 - 0xCFFFFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
 
 **ai-dev**: `mm/pmm.c` builds the frame stack from the Multiboot map that
 `kernel/multiboot.c` copies at boot (on `master`, `memprobe()` wrote a magic value to
@@ -251,7 +257,43 @@ are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a mod
   `/<device>` (`/hda1`). Shell: `ls cat cd pwd stat cp write mkdir rm rmdir mount
   umount sync`, and `hexdump` on files.
 
-## 10. The shell (`shell/main.c`)
+## 10. Processes and system calls
+
+* **Address spaces** (`mm/uvm.c`): a process has its own page directory. The kernel
+  half is a copy of the kernel directory's entries, so the kernel page tables (and
+  everything mapped into them later, heap pages included) are shared; the user range
+  0x40000000-0x7FFFFFFF is built from per-process page tables kept in kernel heap
+  pages. User frames come from `pmm_alloc()` and are zeroed through their user
+  mapping, which is why a process builds its own image inside its own task.
+  `schedule()` reloads CR3 only when the next task belongs to another address space;
+  kernel threads run in whichever directory is loaded. The user stack grows from a
+  page fault (`uvm_grow_stack()`, up to 4 MB below 0x80000000), `sbrk()` grows a heap
+  above the image, and `reap()` frees everything.
+* **Spawn** (`kernel/process.c`): `process_spawn(path, argc, argv, con, flags)`
+  copies the arguments into kernel memory and starts a task whose first job is to
+  create the address space, switch to it, map and read the ELF `PT_LOAD` segments to
+  their addresses, put the strings, `argv[]`, `argc` and `argv` on the user stack, open
+  `/dev/console` as descriptors 0-2 and `iret` to ring 3 (`enter_user()`). A load
+  failure ends the task with exit code 127; the pid is returned at once and `wait`
+  collects the exit code. Exceptions in ring 3 kill only that process
+  (`trap_fatal()` prints ", user mode" and skips the kernel backtrace).
+* **System calls** (`kernel/syscall.c`, numbers in `include/surfos/syscall.h`):
+  `int 0x80`, number in eax, arguments in ebx/ecx/edx, result in eax, negative values
+  are -errno. The handler enables interrupts and runs as ordinary task code (it may
+  block in the VFS or sleep). Every user pointer is checked against the address space
+  first (`uvm_check()`, which also grows the stack under a buffer that was never
+  touched), so a bad pointer is EFAULT and never a kernel page fault with a lock held.
+  Calls: exit write read open close lseek readdir stat chdir getcwd mkdir unlink rmdir
+  getpid sleep yield spawn wait sbrk uptime kill.
+* **User space** (`user/`): `user.ld` links static ELF executables at 0x40000000,
+  `crt0.S` passes argc/argv to `main()`, `libsurf` wraps the system calls and adds
+  `printf` (over `write`), `readline`, a bump `malloc` on `sbrk` and `strerror`; the
+  string, memory, ctype and formatting code is `lib/blibc` compiled a second time.
+  Programs: `hello`, `crash` (NULL write, kernel write, cli, hlt, in, int 0x40, EFAULT,
+  deep recursion, divide by zero), `cat`, `ls`, `count`, `sh` (a user shell that spawns
+  from `/initrd/bin` and waits). They live in the initrd under `/bin`.
+
+## 11. The shell (`shell/main.c`)
 
 **ai-dev**: a command table with argument splitting; `help` is generated from it.
 
@@ -264,7 +306,7 @@ are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a mod
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
 
-## 11. Build system
+## 12. Build system
 
 One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
 their GCC 3 flags were removed on `ai-dev`; `master` still has them). Objects and the

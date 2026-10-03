@@ -18,7 +18,8 @@ make test-all     # the smoke test at -O0 and -O2
 make unittest     # blibc formatter/string tests on the host
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
-make images       # build/images/test.img (MBR + FAT16 partition) and initrd.tar (from rootfs/); run/test attach them
+make images       # build/images/test.img (MBR + FAT16 partition) and initrd.tar (rootfs/ + the user programs); run/test attach them
+make user         # just the user programs, build/O0/user/bin/
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --shell ps memstat     # ad hoc commands
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --disk build/images/test.img --initrd build/images/initrd.tar --shell lsblk
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n'  # VGA text dump
@@ -32,10 +33,11 @@ shell command or a kernel feature that the shell can exercise.
 
 ```
 boot/      Multiboot entry (boot.S), grub.cfg for the ISO
-kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), console, tty, keyboard, timer, panic
-mm/        physical page stack, paging, kernel heap (kalloc), 1:1 DMA heap (palloc)
+kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic
+mm/        physical page stack, paging, kernel heap (kalloc), 1:1 DMA heap, uvm.c (per-process address spaces)
 driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), parallel port, DMA, floppy, 3c905B NIC
-fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32
+fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32, devfs
+user/      user programs: user.ld, libsurf (crt0, syscall wrappers), include/surf.h, bin/*.c (built into the initrd's /bin)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 shell/     the ring-0 shell and demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
