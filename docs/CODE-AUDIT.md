@@ -7,14 +7,19 @@ are referenced by `docs/ROADMAP.md`.
 
 ## Status on `ai-dev`
 
-Closed by the Phase 0 / serial-console commits: **A1, A2, A3, A4, A5, A6, A8, A12**
+Closed by Phase 0 and the serial console: **A1, A2, A3, A4, A5, A6, A8, A12**
 (build system, flags, linker script, the compile errors, the -O2 memprobe miscompile),
-**A7** (worked around with `-fgnu89-inline`; the `inline` definitions themselves are
-unchanged), **C5** (`getch()` no longer discards pending input), the CS-reload half of
-**I9** (far jump after `lgdt`; GRUB 2 enters with CS=0x10 and the kernel used to fault
-on the first `iret`), and the console backspace that erased the wrong cell (it was not
-an audit item; `kputch()` stepped the cursor back twice). Everything else below is
-still open.
+**A7** (worked around with `-fgnu89-inline`), **C5** (`getch()` no longer discards
+pending input), and the console backspace that erased the wrong cell.
+
+Closed by milestone M1 (traps, GDT, libc, panic, hygiene): **A9, A10, A11, C3, C7**
+(vsnprintf, standard strings), **I1, I2, I3, I4, I5, I7, I8, I9** (one stub per vector,
+no EOI from exceptions, IRQ 15, full IDT, no reboot on IRQ 7, dumps with backtraces,
+user descriptors kept, TSS loaded, CS reloaded), **M9** (GDT, IDT and page directory
+in kernel memory), **T5, T6, T7, T8** (name overflow, deferred stack free through the
+reaper, shell respawn, no `sti` with a null task), **H2, H4, H5, H6** (dead code,
+file headers, REBUILD-NOTES.md, CI). **I10** is moot (all gates are interrupt gates).
+Everything else below is still open; M2 takes the memory and scheduler items.
 
 ## What was verified under QEMU
 

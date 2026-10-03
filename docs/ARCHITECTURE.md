@@ -230,8 +230,11 @@ Commands and their **verified** behaviour under QEMU:
 One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
 their GCC 3 flags were removed on `ai-dev`; `master` still has them). Objects and the
 kernel go to `build/O<level>/`; `make O=2` builds an optimised kernel next to the
-default `-O0 -g` one. `linker.ld` places the Multiboot header first and discards the
-sections a 2026 toolchain adds. Targets: `all`, `run` (QEMU, serial console on the
-terminal), `run-vga`, `test` (headless smoke test through `tools/qemu-run.py`),
-`test-all` (-O0 and -O2), `debug` (gdb stub), `iso` (GRUB image), `run-iso`, `clean`.
+default `-O0 -g` one. `linker.ld` places the Multiboot header first, the `.ksyms`
+symbol table after the data, and discards the sections a 2026 toolchain adds. The
+kernel is linked twice so the symbol table can hold the final addresses. Targets:
+`all`, `run` (QEMU, serial console on the terminal), `run-vga`, `test` (headless
+smoke test through `tools/qemu-run.py`), `test-all` (-O0 and -O2), `unittest`
+(blibc on the host), `debug` (gdb stub), `iso` (GRUB image), `run-iso`, `clean`.
+`.github/workflows/ci.yml` runs the unit tests, the smoke tests and the ISO build.
 See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags.

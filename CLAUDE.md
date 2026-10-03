@@ -15,6 +15,7 @@ make              # build/O0/surfos.bin (O=2 for an optimised build)
 make run          # boot in QEMU on this terminal over the serial console; Ctrl-A x quits
 make test         # headless boot + smoke test over the serial console; exit code 0 = pass
 make test-all     # the smoke test at -O0 and -O2
+make unittest     # blibc formatter/string tests on the host
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --shell ps memstat     # ad hoc commands
@@ -55,5 +56,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md
 
 * `tools/qemu-run.py --int-log file.log ...` records every interrupt and exception
   QEMU delivers (`-d int`); `grep "v=0d"` finds general protection faults.
-* `build/O<level>/surfos.sym` is the sorted symbol table; look up a faulting EIP there.
+* A killed task or a panic prints a symbolized backtrace; `build/O<level>/surfos.sym`
+  is the sorted symbol table for anything else. `dmesg` in the shell shows the kernel log.
+* Shell commands `crashdiv`, `crashgp`, `crashint` raise real exceptions on purpose.
 * The screen dump works even when the serial console does not.
+* `panic()`, `BUG_ON()`, `ASSERT()` are in `include/surfos/panic.h`; `irq_save()` /
+  `irq_restore()` in `include/surfos/irq.h` for anything an ISR touches.

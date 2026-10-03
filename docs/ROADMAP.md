@@ -118,7 +118,7 @@ Each module: why, what exists, what to build, how to prove it, size
 
 ### Kernel core
 
-**K1. Trap and interrupt framework v2** (I1-I6, I10, T8) - size M - no deps
+**K1. Trap and interrupt framework v2** (I1-I6, I10, T8) - size M - no deps - **done on `ai-dev`**
 
 * Build: one macro-generated set of 256 entry stubs that push a vector number and a
   real or dummy error code, a single `struct trapframe` (vector, error code, all
@@ -133,7 +133,7 @@ Each module: why, what exists, what to build, how to prove it, size
   from the shell gives "unexpected trap 0x50" instead of a reboot; a forced spurious
   IRQ 7 is logged, not acted on.
 
-**K2. Descriptor tables** (I8, I9, M9) - size S - no deps
+**K2. Descriptor tables** (I8, I9, M9) - size S - no deps - **done on `ai-dev`** (TSS loaded; esp0 is set per task in P1)
 
 * GDT and IDT become arrays in kernel `.data`, limits 0xFFFFF, far jump to reload
   CS, the user descriptors stop being blanked, a TSS slot is reserved (filled by P1),
@@ -141,7 +141,7 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `die` fails with "no TSS" semantics only after P1 (it must still not take
   the kernel down); boot still works under QEMU and `grub-mkrescue` on real hardware.
 
-**K3. Panic and diagnostics** (I7, T7) - size M - deps K1, K4
+**K3. Panic and diagnostics** (I7, T7) - size M - deps K1, K4 - **done on `ai-dev`** (the shell is respawned by the reaper; the init task proper comes with S1)
 
 * Register dump with CR2, EFLAGS, error code and vector; symbolized EIP and a
   frame-pointer backtrace from a symbol table generated at link time
@@ -164,7 +164,7 @@ Each module: why, what exists, what to build, how to prove it, size
   `-serial stdio` turns the kernel into a text program.
 * Prove: `make run` shows the boot log in the terminal; `make test` asserts on it.
 
-**K5. printf and libc** (A11, C2, C3, C7) - size M - no deps
+**K5. printf and libc** (A11, C2, C3, C7) - size M - no deps - **done on `ai-dev`**
 
 * `vsnprintf` on `__builtin_va_list` with `%c %s %d %i %u %x %X %p %lu %ld %%`,
   width, zero padding, left-justify; `kprintf`, `printf`, `kcprintf`, `snprintf`
@@ -344,7 +344,7 @@ Each module: why, what exists, what to build, how to prove it, size
   self-test and prints `SELFTEST PASS` or the failures; new commands arrive with
   their modules (`lspci dmesg uptime date free kill heaptest ls cat ping`).
 
-**T1. Test and CI harness** - size S - deps Phase 0, K4
+**T1. Test and CI harness** - size S - deps Phase 0, K4 - **done on `ai-dev`** except the `selftest` command (comes with U1)
 
 * `make test` boots QEMU headless, drives the serial console, runs `selftest` and
   greps for PASS; host-side unit tests for pure code (lists, allocator, printf,
@@ -352,7 +352,7 @@ Each module: why, what exists, what to build, how to prove it, size
   (`apt-get install nasm qemu-system-x86`, `make test`) so every push to this
   branch is boot-tested.
 
-**H1. Code hygiene** (H1-H6, A9, A10) - size S, ongoing
+**H1. Code hygiene** (H1-H6, A9, A10) - size S, ongoing - **first pass done on `ai-dev`**
 
 * Delete dead code, fix the copy-pasted file headers, split `assem.asm` into
   `io.asm`/`traps.asm`/`switch.asm`, remove `static` prototypes from headers, add
@@ -365,7 +365,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | Milestone | Modules | Done when |
 |---|---|---|
 | **M0 Builds and boots** (done) | Phase 0, K4 | `make test` passes at -O0 and -O2 on a fresh clone |
-| **M1 Solid ground** | K4, K1, K2, K5, K3, T1, H1 (first pass) | Every CPU exception produces a register dump and backtrace; no vector reboots or triple-faults the machine; the shell survives its own crash; boot log on serial; CI green |
+| **M1 Solid ground** (done) | K4, K1, K2, K5, K3, T1, H1 (first pass) | Every CPU exception produces a register dump and backtrace; no vector reboots or triple-faults the machine; the shell survives its own crash; boot log on serial; CI green |
 | **M2 Kernel services** | M1, M2, M3, S1, S2, S3, U1 | NULL dereferences fault; `heaptest` and the task churn test pass; `getch` and `sleep` block instead of spinning; `date`, `uptime`, `dmesg`, `ps` with states |
 | **M3 Devices** | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
 | **M4 Files** | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
@@ -400,6 +400,8 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M0 is done and the kernel talks to a terminal. Start M1 with K1 (trap and interrupt
-framework), then K2, K5, K3 and T1's `selftest` command; the smoke test in
-`tools/qemu-run.py` is where each module's acceptance check goes.
+M0 and M1 are done. Next is M2: M1 (Multiboot memory map), M2 (VMM API, NULL page
+unmapped), M3 (heap v2), S1 (scheduler v2 with states and an init task), S2 (wait
+queues, blocking getch and sleep), S3 (timers, date), U1 (command-table shell with
+`selftest`); the smoke test in `tools/qemu-run.py` is where each module's acceptance
+check goes.
