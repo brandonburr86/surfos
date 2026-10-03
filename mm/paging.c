@@ -57,7 +57,7 @@ void init_paging() {
 }
 
 void vmm_map(u_long virt, u_long phys, u_long flags) {
-    page_table[virt >> 12] = (phys & PTE_FRAME) | (flags & (PTE_W | PTE_U)) | PTE_P;
+    page_table[virt >> 12] = (phys & PTE_FRAME) | (flags & (PTE_W | PTE_U | PTE_PWT | PTE_PCD)) | PTE_P;
     invlpg(virt);
 }
 
@@ -102,4 +102,19 @@ u_long *page_fault_trap(struct trapframe *tf) {
                       (err & PF_PRESENT) ? "protection violation on" : "access to unmapped page,",
                       (err & PF_WRITE) ? "write" : "read",
                       (err & PF_USER) ? " from user mode" : "");
+}
+
+/* Map physical memory that is not in the identity-mapped first 16 MB: device registers
+   (uncached) or a boot module. Addresses come from a bump pointer in the IOMAP window and
+   are never given back; drivers map once at init. */
+static u_long iomap_next = IOMAP_START;
+
+void *ioremap(u_long phys, u_long size, bool cached) {
+    u_long off = phys & (PAGE_SIZE - 1), base = phys - off;
+    u_long len = PAGE_ALIGN_UP(size + off), virt, i;
+    if(!size || iomap_next + len > IOMAP_END || iomap_next + len < iomap_next) return NULL;
+    virt = iomap_next;
+    iomap_next += len;
+    for(i = 0; i < len; i += PAGE_SIZE) vmm_map(virt + i, base + i, PTE_W | (cached ? 0 : (PTE_PCD | PTE_PWT)));
+    return (void *)(virt + off);
 }

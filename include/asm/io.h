@@ -47,6 +47,15 @@ static inline void io_wait(void) {
     outb(0x80, 0);
 }
 
+/* repeated 16-bit port I/O: ATA data transfers */
+static inline void insw(u_short port, void *buf, u_int count) {
+    asm volatile("rep insw" : "+D"(buf), "+c"(count) : "d"(port) : "memory");
+}
+
+static inline void outsw(u_short port, const void *buf, u_int count) {
+    asm volatile("rep outsw" : "+S"(buf), "+c"(count) : "d"(port));
+}
+
 #define inl ind
 #define outl outd
 

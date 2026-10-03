@@ -19,6 +19,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <sys/serial.h>
 #include <sys/pci.h>
 #include <sys/driver.h>
+#include <sys/bdev.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -131,6 +132,33 @@ static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
+static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+
+static void cmd_hexdump(int argc, char **argv) {
+    struct bdev *d;
+    u_long lba, nblk, i, j;
+    u8 *buf;
+    int rc;
+    if(argc < 2) { printf("    usage: hexdump <device> [block] [count]   (lsblk lists the devices)\n"); return; }
+    d = bdev_find(argv[1]);
+    if(!d) { printf("    no block device '%s'\n", argv[1]); return; }
+    lba = argc > 2 ? strtoul(argv[2], NULL, 0) : 0;
+    nblk = argc > 3 ? strtoul(argv[3], NULL, 0) : 1;
+    if(nblk < 1 || nblk > 8) { printf("    1 to 8 blocks at a time\n"); return; }
+    buf = (u8 *)kalloc(nblk * d->block_size);
+    if(!buf) { printf("    out of memory\n"); return; }
+    rc = bdev_read(d, lba, nblk, buf);
+    if(rc) printf("    read of %s block %lu failed (%i)\n", d->name, lba, rc);
+    else for(i = 0; i < nblk * d->block_size; i += 16) {
+        printf("%08lx  ", lba * d->block_size + i);
+        for(j = 0; j < 16; j++) printf("%02x%s", buf[i + j], j == 7 ? "  " : " ");
+        printf(" |");
+        for(j = 0; j < 16; j++) printf("%c", (buf[i + j] >= 32 && buf[i + j] < 127) ? buf[i + j] : '.');
+        printf("|\n");
+    }
+    kfree(buf);
+}
+
 static void cmd_test(int argc, char **argv) {
     void *tmp = palloc(1024);
     void *tmp2 = mm_lookup_linear(tmp);
@@ -177,6 +205,8 @@ static const struct command commands[] = {
     { "lspci",     "",          "PCI devices with names", cmd_lspci },
     { "drivers",   "",          "driver init status", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
+    { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
+    { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },
     { "funky",     "",          "play a tune in a new task", cmd_funky },

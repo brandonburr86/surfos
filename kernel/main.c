@@ -38,6 +38,7 @@ void kmain(u_long magic, u_long addr) {
     run_memcheck(); //check for enough ram..
 
     init_interrupt(); //interrupt subsystem
+    init_delay(); //udelay() for the drivers; the PIT needs no interrupts for this
     init_task(); //setup multitasking
 
     init_keyboard(); //get keyboard ready

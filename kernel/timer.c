@@ -65,6 +65,11 @@ u_long delay_loops_per_ms(void) {
     return loops_per_ms;
 }
 
+void init_delay() {
+    calibrate_delay();
+    kprintf("\nDelay calibration\n*%lu delay loops per ms\n*DONE\n", loops_per_ms);
+}
+
 void init_timer() {
     u_long divisor = CPU_FREQ/HZ;
     kprintf("\nTimer Initialization\n");
@@ -78,8 +83,6 @@ void init_timer() {
 
     sysTick=0;
 
-    calibrate_delay();
-    kprintf("*%lu delay loops per ms\n", loops_per_ms);
     kprintf("*Enable IRQ0\n*DONE\n");
     _enable_irq(IRQ_TIMER);                  /* from here on the scheduler runs */
 }

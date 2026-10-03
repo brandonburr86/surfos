@@ -36,6 +36,8 @@ SMOKE = [
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
+    ('lsblk',   ['rd0', 'hda', 'hda1']),
+    ('hexdump hda 0', ['55 aa']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('selftest', ['SELFTEST PASS']),
@@ -45,7 +47,8 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 
 class Qemu:
-    def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None):
+    def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
+                 disk=None, initrd=None):
         # UNIX socket paths are limited to 108 bytes, so keep the work directory short
         base = tempfile.gettempdir()
         if len(base) > 50 and os.path.isdir('/tmp'):
@@ -54,6 +57,10 @@ class Qemu:
         self.mon_path = os.path.join(self.workdir, 'mon.sock')
         self.ser_path = os.path.join(self.workdir, 'ser.sock')
         boot = ['-cdrom', os.path.abspath(iso), '-boot', 'd'] if iso else ['-kernel', os.path.abspath(kernel)]
+        if initrd and not iso:
+            boot += ['-initrd', os.path.abspath(initrd)]      # a Multiboot module: the ramdisk rd0
+        if disk:
+            boot += ['-drive', f'file={os.path.abspath(disk)},format=raw,if=ide,index=0,media=disk']  # primary master: hda
         cmd = [qemu, '-m', str(mem)] + boot + [
                '-display', 'none', '-no-reboot', '-no-shutdown',
                '-monitor', f'unix:{self.mon_path},server,nowait',
@@ -235,6 +242,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--kernel', default='build/O0/surfos.bin')
     ap.add_argument('--iso', help='boot this ISO (GRUB) instead of -kernel')
+    ap.add_argument('--disk', help='raw disk image for the primary IDE master (hda)')
+    ap.add_argument('--initrd', help='file to load as a Multiboot module (ramdisk rd0)')
     ap.add_argument('--qemu', default='qemu-system-i386')
     ap.add_argument('--mem', default='64')
     ap.add_argument('--extra', default='', help='extra QEMU arguments')
@@ -248,7 +257,7 @@ def main():
     ap.add_argument('--wait', type=float, default=4, help='with --screen: seconds to wait for boot')
     a = ap.parse_args()
 
-    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso)
+    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd)
     try:
         if a.test:
             results = run_smoke(q, a.boot_timeout)

@@ -1,0 +1,4 @@
+Welcome to SurfOS.
+
+This file lives on the initial RAM disk (rd0), a tar archive that the boot
+loader hands to the kernel as a Multiboot module.

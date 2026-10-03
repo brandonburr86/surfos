@@ -44,6 +44,10 @@ Virtual only:
 #define KHEAP_START 0xB0000000
 #define KHEAP_END   0xC0000000   /* 256 MB of virtual room; RAM is the real limit */
 
+/* ioremap(): device registers and boot modules that are not in the first 16 MB */
+#define IOMAP_START 0xC0000000
+#define IOMAP_END   0xD0000000
+
 /* physical DMA heap (1:1) */
 #define PHEAP_START 0xA00000     /* 10 MB */
 #define PHEAP_END   0xF00000     /* 15 MB */

@@ -14,6 +14,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/ktimer.h>
 #include <surfos/timer.h>
 #include <surfos/klog.h>
+#include <sys/bdev.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -222,10 +223,46 @@ static void test_libc(void) {
     check(klog_length() > 0, "kernel log has the boot messages");
 }
 
+static void test_bdev(void) {
+    struct bdev *rd = bdev_find("rd0"), *hd = bdev_find("hda"), *p;
+    u8 *a, *b;
+    int rc;
+    if(!bdev_count()) { printf("  skip block devices (none attached)\n"); return; }
+    a = (u8 *)kalloc(512);
+    b = (u8 *)kalloc(512);
+    if(!a || !b) { check(false, "block test buffers"); kfree(a); kfree(b); return; }
+    if(rd && rd->nblocks >= 2) {
+        u32 last = rd->nblocks - 1;
+        u_int i;
+        rc = bdev_read(rd, last, 1, a);                     /* keep the real contents */
+        for(i = 0; i < 512; i++) b[i] = (u8)(i * 7 + 3);
+        rc |= bdev_write(rd, last, 1, b);
+        memset(b, 0, 512);
+        rc |= bdev_read(rd, last, 1, b);
+        for(i = 0; i < 512 && b[i] == (u8)(i * 7 + 3); i++);
+        check(rc == 0 && i == 512, "ramdisk block write/read round trip");
+        bdev_write(rd, last, 1, a);
+    }
+    check(bdev_read(rd ? rd : bdev_first(), 0xFFFFFFF0UL, 1, a) == -1, "read past the end is refused");
+    if(hd) {
+        rc = bdev_read(hd, 0, 1, a);
+        check(rc == 0 && a[510] == 0x55 && a[511] == 0xAA, "hda block 0 carries an MBR signature");
+        p = bdev_find("hda1");
+        if(p) {
+            rc = bdev_read(p, 0, 1, a);
+            rc |= bdev_read(hd, p->start, 1, b);
+            check(rc == 0 && !memcmp(a, b, 512) && a[510] == 0x55 && a[511] == 0xAA, "hda1 block 0 is hda's partition start and a boot sector");
+        }
+    }
+    kfree(a);
+    kfree(b);
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
     check(heaptest() == 0, "heap");
+    test_bdev();
     test_tasks();
     test_sleep();
     test_timers();

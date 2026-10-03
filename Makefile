@@ -10,12 +10,18 @@
 #   make unittest     host-side unit tests for blibc (formatter, strings)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
+#   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
 #   make clean
 
 O         ?= 0
 BUILD     ?= build/O$(O)
 KERNEL     = $(BUILD)/surfos.bin
 ISO        = $(BUILD)/surfos.iso
+IMAGES     = build/images
+DISKIMG    = $(IMAGES)/test.img
+INITRD     = $(IMAGES)/initrd.tar
+DISK_FILES = README rootfs/motd docs/README.md
+ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null)
 
 CC         = gcc
 LD         = ld
@@ -27,6 +33,8 @@ GRUB_MKRESCUE = grub-mkrescue
 
 QEMUMEM   ?= 64
 QEMUFLAGS ?=
+# the test disk on the primary IDE master and the initrd as a Multiboot module (see tools/mkimage.py)
+QEMUDISK   = -drive file=$(DISKIMG),format=raw,if=ide,index=0,media=disk -initrd $(INITRD)
 
 # V=1 shows the full commands
 Q = $(if $(V),,@)
@@ -103,35 +111,50 @@ $(BUILD)/%.o: %.asm
 
 # -no-reboot makes a triple fault (or the shell's "reboot" command) end the emulator
 # instead of looping through the boot log forever.
-run: $(KERNEL)
-	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) -nographic -no-reboot $(QEMUFLAGS)
+run: $(KERNEL) images
+	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) $(QEMUDISK) -nographic -no-reboot $(QEMUFLAGS)
 
-run-vga: $(KERNEL)
-	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) -serial stdio -no-reboot $(QEMUFLAGS)
+run-vga: $(KERNEL) images
+	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) $(QEMUDISK) -serial stdio -no-reboot $(QEMUFLAGS)
 
-test: $(KERNEL)
-	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --mem $(QEMUMEM) --test
+test: $(KERNEL) images
+	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --mem $(QEMUMEM) --disk $(DISKIMG) --initrd $(INITRD) --test
 
 test-all:
 	$(MAKE) O=0 test
 	$(MAKE) O=2 test
 
-debug: $(KERNEL)
+debug: $(KERNEL) images
 	@echo "in another terminal: gdb $(KERNEL) -ex 'target remote :1234'"
-	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) -nographic -no-reboot -s -S $(QEMUFLAGS)
+	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) $(QEMUDISK) -nographic -no-reboot -s -S $(QEMUFLAGS)
 
 iso: $(ISO)
 
-$(ISO): $(KERNEL) boot/grub.cfg
+$(ISO): $(KERNEL) boot/grub.cfg $(INITRD)
 	rm -rf $(BUILD)/iso
 	mkdir -p $(BUILD)/iso/boot/grub
 	cp $(KERNEL) $(BUILD)/iso/boot/surfos.bin
+	cp $(INITRD) $(BUILD)/iso/boot/initrd.tar
 	cp boot/grub.cfg $(BUILD)/iso/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(BUILD)/iso 2>&1 | grep -v "^xorriso" || true
 	@test -s $@ && echo "built $@" || { echo "grub-mkrescue failed (is grub-pc-bin installed?)"; rm -f $@; exit 1; }
 
-run-iso: $(ISO)
-	$(QEMU) -m $(QEMUMEM) -cdrom $(ISO) -boot d -nographic -no-reboot $(QEMUFLAGS)
+run-iso: $(ISO) $(DISKIMG)
+	$(QEMU) -m $(QEMUMEM) -cdrom $(ISO) -boot d -drive file=$(DISKIMG),format=raw,if=ide,index=0,media=disk -nographic -no-reboot $(QEMUFLAGS)
+
+# ---- images -------------------------------------------------------------------------------
+images: $(DISKIMG) $(INITRD)
+
+$(IMAGES):
+	$(Q)mkdir -p $@
+
+$(INITRD): $(ROOTFS_FILES) tools/mkimage.py | $(IMAGES)
+	@echo "IMG  $@"
+	$(Q)$(PYTHON) tools/mkimage.py initrd $@ rootfs
+
+$(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
+	@echo "IMG  $@"
+	$(Q)$(PYTHON) tools/mkimage.py disk $@ 16 $(DISK_FILES)
 
 # host-side unit tests for the pure parts of blibc (formatter, strings), see tests/host/
 HOSTCC    ?= gcc
@@ -159,5 +182,5 @@ clean:
 help:
 	@sed -n '2,13p' Makefile
 
-.PHONY: all run run-vga test test-all unittest debug iso run-iso clean help
+.PHONY: all run run-vga test test-all unittest debug iso run-iso images clean help
 -include $(DEPS)

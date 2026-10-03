@@ -28,6 +28,7 @@ File: timer.h   Date: Prior to 4/23/04
 #define USEC_TO_TICKS(usec)  ((usec)>=(HZ/10)?(usec)/(HZ/10):0)
 
 /********************/
+void init_delay();  /* calibrate udelay()/mdelay(); needs only the PIT */
 void init_timer();
 u_long getticks();
 

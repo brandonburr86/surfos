@@ -15,6 +15,7 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 #include <sys/parport.h>
 #include <sys/pci.h>
 #include <sys/serial.h>
+#include <sys/bdev.h>
 #include <blibc_common.h>
 
 extern int net_3c905b_init(void);
@@ -32,6 +33,8 @@ static struct driver drivers[] = {
     { "floppy",  drv_floppy, 0 },
     { "pci",     drv_pci, 0 },
     { "3c905b",  net_3c905b_init, 0 }, /* no point looking for a network card without PCI devices: it checks */
+    { "ramdisk", init_ramdisk, 0 },    /* block devices: boot modules first, so they are rd0.. in module order */
+    { "ata",     init_ata, 0 },
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 
