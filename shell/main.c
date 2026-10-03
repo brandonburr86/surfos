@@ -23,6 +23,10 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <surfos/process.h>
+#include <net/net.h>
+#include <net/eth.h>
+#include <net/ip.h>
+#include <net/tcp.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -136,6 +140,54 @@ static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
 static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+
+/**** network ****/
+
+static void cmd_ifconfig(int argc, char **argv) {
+    struct netdev *dev;
+    ipaddr_t ip, mask, gw = 0, dns = 0;
+    if(argc == 1) { netdev_print(); return; }
+    dev = netdev_find(argv[1]);
+    if(!dev) { printf("    no interface '%s'\n", argv[1]); return; }
+    if(argc < 4 || !ip_parse(argv[2], &ip) || !ip_parse(argv[3], &mask) || (argc > 4 && !ip_parse(argv[4], &gw)) ||
+       (argc > 5 && !ip_parse(argv[5], &dns))) {
+        printf("    usage: ifconfig <if> <address> <netmask> [gateway] [dns]\n");
+        return;
+    }
+    mutex_lock(&net_lock);
+    dev->ip = ip;
+    dev->netmask = mask;
+    dev->gateway = gw;
+    if(dns) dev->dns = dns;
+    arp_announce(dev);
+    mutex_unlock(&net_lock);
+    netdev_print();
+}
+
+static void cmd_arp(int argc, char **argv) { arp_print(); }
+
+static void cmd_ping(int argc, char **argv) {
+    ipaddr_t ip;
+    char a[16];
+    int count = argc > 2 ? atoi(argv[2]) : 4, seq, got = 0, rtt;
+    u8 ttl = 0;
+    if(argc < 2 || !ip_parse(argv[1], &ip)) { printf("    usage: ping <address> [count]\n"); return; }
+    if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return; }
+    printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
+    for(seq = 1; seq <= count; seq++) {
+        rtt = icmp_ping(ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
+        if(rtt >= 0) { got++; printf("    64 bytes from %s: icmp_seq=%d ttl=%u time=%d ms\n", a, seq, ttl, rtt); }
+        else printf("    request timeout for icmp_seq %d\n", seq);
+        if(seq < count) sleep_ms(rtt > 0 && rtt < 1000 ? 1000 - rtt : 1000);
+    }
+    printf("    %d packets transmitted, %d received, %d%% packet loss\n", count, got, count ? (count - got) * 100 / count : 0);
+}
+
+static void cmd_netstat(int argc, char **argv) {
+    netdev_print();
+    udp_print();
+    tcp_print();
+}
 
 /**** processes ****/
 
@@ -454,6 +506,10 @@ static const struct command commands[] = {
     { "rm",        "<file>...", "delete files", cmd_rm },
     { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir },
     { "sync",      "",          "write cached blocks to the disks", cmd_sync },
+    { "ifconfig",  "[if ip mask [gw] [dns]]", "show or set the network configuration", cmd_ifconfig },
+    { "arp",       "",          "the ARP table", cmd_arp },
+    { "ping",      "<ip> [n]",  "ICMP echo", cmd_ping },
+    { "netstat",   "",          "interfaces and sockets", cmd_netstat },
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },
     { "spawn",     "<prog> [args]", "run a user program in the background", cmd_spawn },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },

@@ -19,6 +19,7 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 #include <blibc_common.h>
 
 extern int net_3c905b_init(void);
+int init_e1000(void);
 
 static int drv_serial(void) { init_serial_irq(); return 0; }
 static int drv_parport(void) { init_parport(); return PAR0 ? 0 : 1; }
@@ -35,6 +36,7 @@ static struct driver drivers[] = {
     { "3c905b",  net_3c905b_init, 0 }, /* no point looking for a network card without PCI devices: it checks */
     { "ramdisk", init_ramdisk, 0 },    /* block devices: boot modules first, so they are rd0.. in module order */
     { "ata",     init_ata, 0 },
+    { "e1000",   init_e1000, 0 },      /* QEMU's default NIC */
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 

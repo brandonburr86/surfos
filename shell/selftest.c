@@ -17,6 +17,9 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <surfos/process.h>
+#include <net/net.h>
+#include <net/eth.h>
+#include <net/ip.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -368,6 +371,32 @@ static void test_user(void) {
     check(task_count() == before, "every process was reaped");
 }
 
+static void test_net(void) {
+    struct netdev *dev = netdev_default();
+    const struct arp_entry *e;
+    int i, rtt = -1, ok = 0;
+    char a[16];
+
+    if(!dev) { printf("  skip network (no interface)\n"); return; }
+    if(!dev->ip) {                                   /* QEMU's user network: 10.0.2.0/24, gateway 10.0.2.2 */
+        mutex_lock(&net_lock);
+        dev->ip = IP4(10, 0, 2, 15);
+        dev->netmask = IP4(255, 255, 255, 0);
+        dev->gateway = IP4(10, 0, 2, 2);
+        dev->dns = IP4(10, 0, 2, 3);
+        arp_announce(dev);
+        mutex_unlock(&net_lock);
+    }
+    for(i = 1; i <= 3; i++) {
+        rtt = icmp_ping(IP4(10, 0, 2, 2), 0x5f5f, (u16)i, 56, 2000, NULL);
+        if(rtt >= 0) ok++;
+    }
+    check(ok >= 1, "ping 10.0.2.2 (QEMU's gateway) is answered");
+    for(e = arp_table(), i = 0; i < ARP_TABLE_SIZE; i++) if(e[i].valid && e[i].resolved && e[i].ip == IP4(10, 0, 2, 2)) break;
+    check(i < ARP_TABLE_SIZE, "the gateway's MAC is in the ARP table");
+    printf("        (%s: %lu frames in, %lu out)\n", ipfmt(dev->ip, a), dev->rx_packets, dev->tx_packets);
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
@@ -376,6 +405,7 @@ int run_selftest(void) {
     test_fs();
     test_fat();
     test_user();
+    test_net();
     test_tasks();
     test_sleep();
     test_timers();
