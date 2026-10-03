@@ -17,6 +17,7 @@ SurfOS ring0 Shell (v0.001)
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
+#include <mm/paging.h>
 #include <surfos/klog.h>
 
 #include <sys/parport.h>
@@ -377,6 +378,46 @@ sysbeep(2093,250*x);//C
 }
 
 
+/* Random allocate/free with a byte pattern per block, then everything freed and the
+   heap walked and compared with the starting point. */
+void heaptest() {
+    enum { SLOTS = 192, ROUNDS = 20000 };
+    static void *ptrs[SLOTS];
+    static u_int sizes[SLOTS];
+    struct heap_stats before, after;
+    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
+
+    memset(ptrs, 0, sizeof(ptrs));
+    kheap_stats(&before);
+    srand(getticks() + 7);
+    for(r = 0; r < ROUNDS; r++) {
+        i = rand() % SLOTS;
+        if(ptrs[i]) {
+            u_char *p = ptrs[i];
+            u_int k;
+            for(k = 0; k < sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
+            kfree(ptrs[i]);
+            ptrs[i] = NULL;
+            frees++; live--;
+        } else {
+            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
+            u_char *p = kalloc(sz);
+            u_int k;
+            if(!p) { bad++; continue; }
+            for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
+            ptrs[i] = p; sizes[i] = sz;
+            allocs++; live++;
+            if(live > maxlive) maxlive = live;
+        }
+    }
+    for(i = 0; i < SLOTS; i++) if(ptrs[i]) { kfree(ptrs[i]); ptrs[i] = NULL; frees++; }
+    kheap_stats(&after);
+    if(!kheap_check()) bad++;
+    if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
+    printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
+           allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
+}
+
 void invokeHelp() {
     printf("\n    SurfOS ring0 Debug Shell v0.008\n");
     printf("    -------------------------------\n");
@@ -392,6 +433,8 @@ void invokeHelp() {
     printf("    demo   (demonstration of some of the capabilities of SurfOS)\n");
     printf("    hanoi  (Computes the Towers of Hanoi algoritm)\n");
     printf("    dmesg  (kernel log)\n");
+    printf("    heaptest (random allocations with checksums, then verify the heap)\n");
+    printf("    crashnull (write through a NULL pointer)\n");
     printf("    crashdiv/crashgp/crashint (raise a divide error / protection fault / unused vector)\n");
     printf("    help   (this menu)\n");
     printf("    -------------------------------\n");
@@ -449,8 +492,6 @@ void parseCommand(const char line[]) {
         new_task("funky",conActive,KERNEL, PL_NORMAL,(u_int*)funky);
     } else if(!strcmp(line,"die")) { //a ring-3 task: faults until P1 exists
         new_task("ring3",conActive,USER, PL_NORMAL,(u_int*)funky);
-    } else if(!strcmp(line,"pl")) {
-        print_lst_count();
     } else if(!strcmp(line,"demo")) {
         invokeDemo();
     } else if(!strcmp(line,"hanoi")) {
@@ -476,6 +517,10 @@ void parseCommand(const char line[]) {
         //time t time;
         //get time(&time);
         //printf("The current time is: %i:%i:%i\n",time.hour,time.minute, time.second);
+    } else if(!strcmp(line,"heaptest")) {
+        heaptest();
+    } else if(!strcmp(line,"crashnull")) {
+        *(volatile int *)0 = 1; //page 0 is unmapped, so this is a page fault with an error code
     } else if(!strcmp(line,"dmesg")) {
         klog_dump();
     } else if(!strcmp(line,"crashdiv")) { //exercise the trap framework: real exceptions in this task

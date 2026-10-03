@@ -1,7 +1,6 @@
 /* boot.S - bootstrap the kernel */
 
-     #define ASM     1
-     #include "multiboot.h"
+     #include <surfos/multiboot.h>
 
              .text
 
@@ -31,7 +30,7 @@
 
      multiboot_entry:
              /* Initialize the stack pointer. */
-             movl    $(stack + STACK_SIZE), %esp
+             movl    $(stack + BOOT_STACK_SIZE), %esp
 
              /* Reset EFLAGS. */
              pushl   $0
@@ -55,7 +54,7 @@
              .asciz  "System Halted."
 
              /* Our stack area. */
-             .comm   stack, STACK_SIZE
+             .comm   stack, BOOT_STACK_SIZE
 
 /*.data
 _edata:*/

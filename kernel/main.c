@@ -19,6 +19,8 @@ File: main.c    Date: Prior to 4/23/04
 
 #include <sys/driver.h>
 #include <sys/serial.h>
+#include <surfos/multiboot.h>
+#include <mm/paging.h>
 
 void kmain(u_long magic, u_long addr);
 
@@ -28,8 +30,10 @@ void kmain(u_long magic, u_long addr) {
     init_serial(); //COM1 needs no memory, so the whole boot log reaches a terminal
     kprintf("SurfOS: serial console on COM1 (115200 8N1)\n");
     init_gdt(); //setup GDT
+    mb_init(magic, addr); //copy the boot loader's memory map and modules while they are addressable
     init_mem();
     init_console(); kprintf("Booting SurfOS Kernel.....\n\n");
+    mb_print();
     run_memcheck(); //check for enough ram..
 
     init_interrupt(); //interrupt subsystem
@@ -38,6 +42,8 @@ void kmain(u_long magic, u_long addr) {
     init_keyboard(); //get keyboard ready
 
     init_drivers(); //some driver stuff :P
+
+    vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 
     init_timer(); //start timer and go!!
 

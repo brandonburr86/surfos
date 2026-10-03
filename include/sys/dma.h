@@ -22,10 +22,6 @@ typedef struct {
 #define DHEAP_START 0x8000
 #define DHEAP_END 0x48000//this spans 256K... 4 * 64K
 
-extern struct surf_alloc_desc *dmaList; //linked list for DMA allocation
-extern struct surf_alloc_desc *dmaDList; //linked list for DMA deallocation
-
-
 void init_dma();
 u_int dma_stuff(u_int port);
 void dma_xfer(int chan, char *data, int size, bool write);
@@ -33,7 +29,6 @@ void dma_xfer(int chan, char *data, int size, bool write);
 /* dma-mm.c: 64 KB bounce buffers below 1 MB */
 void *dma_alloc();
 void dma_free(void *mem);
-void *dmabrk();
 
 void LoadPageAndOffset(DMA_block *blk, char *data);
 void StartDMA(u_char DMA_channel, DMA_block *blk, u_char mode);

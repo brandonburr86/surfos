@@ -17,4 +17,8 @@ unsigned long strtoul(const char *s, char **end, int base);
 int atoi(const char *s);
 int abs(int v);
 
+#define RAND_MAX 0x7fffffff
+int rand(void);
+void srand(u_int seed);
+
 #endif

@@ -9,6 +9,7 @@
 #include <surfos/timer.h>
 #include <surfos/keyboard.h>
 #include <surfos/irq.h>
+#include <surfos/console.h>
 
 /* pulse the reset line through the keyboard controller */
 void reset() {

@@ -16,6 +16,7 @@ File: keyboard.c    Date: Prior to 4/23/04
 #include <surfos/task.h>
 
 #include <surfos/kernel.h>
+#include <sys/floppy.h>
 #include <blibc_common.h>
 
 u_char led_status =0x02;

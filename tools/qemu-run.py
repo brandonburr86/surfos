@@ -33,6 +33,8 @@ SMOKE = [
     ('test',    ['linear is using physical']),
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
+    ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
+    ('heaptest', ['HEAPTEST PASS']),
 ]
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']

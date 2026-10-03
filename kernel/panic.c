@@ -40,25 +40,36 @@ void dump_trapframe(struct trapframe *tf) {
     kprintf("\n");
 }
 
-/* Exceptions 0-31 (the page fault has its own handler in mm/paging.c) */
-static u_long *trap_exception(struct trapframe *tf) {
-    const char *name = trap_name(tf->vector);
+/* The fault policy, 2004 style: kill the task that did it and move on, unless it was
+   the idle task, an interrupt handler, or there is no task yet: then nothing sane is
+   left to run and the kernel stops with a dump. */
+u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
+    char why[160];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(why, sizeof(why), fmt, ap);
+    va_end(ap);
 
     if(!curTask || curTask->pid == 0 || in_interrupt()) { //a kernel exception.. beadd
         irq_disable();
-        kprintf("\nKernel Wipeout: %s\n", name);
+        kprintf("\nKernel Wipeout: %s\n", why);
         dump_trapframe(tf);
         backtrace(tf->ebp, tf->eip);
         kprintf("\nSYSTEM HALTED\n");
         halt();
     }
 
-    printf("\nProcess (\'%s\':%i) killed by \"%s\" (vector %i, error 0x%x, eip 0x%x)\n",
-           curTask->name, curTask->pid, name, tf->vector, tf->errcode, tf->eip);
+    printf("\nProcess (\'%s\':%i) killed by \"%s\" (eip 0x%x)\n", curTask->name, curTask->pid, why, tf->eip);
     backtrace(tf->ebp, tf->eip);
 
     kill_task(curTask); //it stays on its stack until the idle task reaps it
     return schedule(tf); //switch to the next task
+}
+
+/* Exceptions 0-31 (the page fault has its own handler in mm/paging.c) */
+static u_long *trap_exception(struct trapframe *tf) {
+    return trap_fatal(tf, "%s (vector %i, error 0x%x)", trap_name(tf->vector), tf->vector, tf->errcode);
 }
 
 /* int n for an n nobody installed, or a stray interrupt: say so and carry on */

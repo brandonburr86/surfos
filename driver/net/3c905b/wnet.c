@@ -18,7 +18,10 @@
 #include <surfos/types.h>
 
 #include <surfos/interrupt.h>
+#include <surfos/console.h>
 #include <mm/memory.h>
+#include <mm/paging.h>
+#include <mm/kalloc.h>
 
 #include <sys/pci.h>
 #include <asm/io.h>

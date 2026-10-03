@@ -1,80 +1,39 @@
 /*
 SurfOS DMA Driver memory manager
 --------------------
-File: dma-mm.c  Date: 7/14/04
+File: dma-mm.c  Date: 7/14/04, rewritten 10/2026
 --------------------
 (C)2004 Brandon Burr
+
+Four 64 KB bounce buffers below 1 MB for the 8237 ISA DMA controller, which can only
+address 16 MB and cannot cross a 64 KB boundary. The 2004 version was a copy of
+kalloc() that dereferenced NULL on its first call (audit M12).
 */
 
 #include <surfos/types.h>
-#include <mm/memory.h>
-#include <mm/paging.h>
-#include <surfos/task.h>
-#include <mm/kalloc.h>
+#include <surfos/irq.h>
 #include <sys/dma.h>
-#include <surfos/system.h>
 
-void *dma_alloc();
-void dma_free(void *mem);
-void *dmabrk();
+#define DMA_SLOTS ((DHEAP_END - DHEAP_START) / DMASIZE)
 
-struct surf_alloc_desc *dmaList; //linked list for DMA allocation
-struct surf_alloc_desc *dmaDList; //linked list for DMA deallocation
-
+static bool dma_slot_used[DMA_SLOTS];
 
 void *dma_alloc() {
-    KCRIT_ENTER
-    struct surf_alloc_desc *cur = dmaDList;
-
-    while(!cur) cur = cur->next;
-
-    if(cur) {
-            cur = delAllocItem(&dmaDList,&dmaList,cur->address);
-            KCRIT_LEAVE
-            if(!cur) return NULL;
-            return (void*)(cur->address);
+    u_long flags = irq_save();
+    u_int i;
+    for(i = 0; i < DMA_SLOTS; i++) {
+        if(!dma_slot_used[i]) {
+            dma_slot_used[i] = true;
+            irq_restore(flags);
+            return (void *)(DHEAP_START + i * DMASIZE);
+        }
     }
-
-    //nothing found. allocate from the heap;
-    struct surf_alloc_desc *ret = asbrk(sizeof(struct surf_alloc_desc));
-    ret->address = (u_long)dmabrk();
-
-    ret->size = DMASIZE;
-    addAllocItem(&dmaList, ret);
-    kprintf("allocated %i bytes at memory 0x%x\n",DMASIZE,ret->address);
-    KCRIT_LEAVE
-    return (void*)(ret->address);
+    irq_restore(flags);
+    return NULL;
 }
 
 void dma_free(void *mem) {
-    KCRIT_ENTER
-    struct surf_alloc_desc *cur = dmaList;
-    while(cur) {
-        if(cur->address == (u_long)mem) { //look for the descriptor in the alloc list
-            delAllocItem(&dmaList, &dmaDList, cur->address);
-            KCRIT_LEAVE
-            return;
-        }
-        cur = cur->next;
-    }
-    KCRIT_LEAVE
-    //couldnt find it, error
-    kprintf("dma_free: invalid memory address\n");
-}
-
-//allocates from the physical DMA heap.. basically same as ksbrk()
-void *dmabrk() {
-    KCRIT_ENTER
-    static u_char *dmaHeap = (u_char*)DHEAP_START;
-    if(dmaHeap>=(u_char*)DHEAP_END) {
-        kprintf("Fatal: DMA 1:1 Address Space Depleted!\n\nHALTING");
-        halt();
-        KCRIT_LEAVE
-        return NULL;
-    }
-
-    void *ret = dmaHeap;
-    dmaHeap += DMASIZE;
-    KCRIT_LEAVE
-    return ret;
+    u_long i = ((u_long)mem - DHEAP_START) / DMASIZE;
+    if((u_long)mem < DHEAP_START || i >= DMA_SLOTS || ((u_long)mem % DMASIZE)) return;
+    dma_slot_used[i] = false;
 }

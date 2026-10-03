@@ -14,6 +14,7 @@ File: panic.h   Date: 4/23/04, rebuilt 10/2026 (roadmap K1, K3)
 
 void init_exceptions(void);                      /* install the handlers for vectors 0-31 */
 u_long *trap_unexpected(struct trapframe *tf);   /* a vector nobody claimed */
+u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...); /* kill the task, or wipe out */
 void dump_trapframe(struct trapframe *tf);
 void panic(const char *fmt, ...);                /* print, backtrace, halt */
 void panic_at(const char *file, int line, const char *what);

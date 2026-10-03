@@ -123,7 +123,5 @@ u_int DMAComplete(u_char DMA_channel) {
 
 void init_dma() {
     kprintf("*Initializing DMA\n");
-    dmaList=0;
-    dmaDList=0;
     kprintf("*DONE\n");
 }

@@ -49,3 +49,19 @@ int atoi(const char *s) {
 int abs(int v) {
     return v < 0 ? -v : v;
 }
+
+/* xorshift32: small, fast, good enough for tests and randomised backoff */
+static u32 rand_state = 2463534242u;
+
+int rand(void) {
+    u32 x = rand_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rand_state = x;
+    return (int)(x & RAND_MAX);
+}
+
+void srand(u_int seed) {
+    rand_state = seed ? seed : 2463534242u;
+}
