@@ -10,54 +10,10 @@ SurfOS blibc - string functions puts(), cputs();
 extern surf_console *conActive;
 extern surf_console conVideo;
 
-void puts(char *s) {
-
+void puts(char *s) { /* same path as putch(), so the serial mirror and scrolling agree */
     int i;
-    int c;
-    if(!conActive) return;
-
-    for(i=0;i<1024;i++)   {
-    if(s[i]=='\0') break;
-    c = s[i];
-        switch (c) {
-        case '\n':
-        {
-        conActive->loc.x = 0;
-
-        if (++conActive->loc.y >= LINES) {
-            sscroll(conActive);
-            conActive->loc.y--;
-        }
-
-        if (++conVideo.loc.y >= LINES) {
-            syncVideoConsole(false);
-            conVideo.loc.y--;
-        }
-        }
-        break;
-    default:
-        if(c>=32 && c<=126)
-        {
-        *(conActive->vmem + (conActive->loc.x + conActive->loc.y * COLUMNS) * 2) = c & 0xFF;
-        *(conActive->vmem + (conActive->loc.x + conActive->loc.y * COLUMNS) * 2 + 1) = conActive->txtColor;
-
-        *(conVideo.vmem + (conVideo.loc.x + conVideo.loc.y * COLUMNS) * 2) = c & 0xFF;
-        *(conVideo.vmem + (conVideo.loc.x + conVideo.loc.y * COLUMNS) * 2 + 1) = conActive->txtColor;
-
-        if (++conActive->loc.x >= COLUMNS) {
-            conActive->loc.x = 0;
-            if (++conActive->loc.y >= LINES) {
-            sscroll(conActive);
-            conActive->loc.y--;
-            }
-        }
-        syncVideoConsole(false);
-                }
-        break;
-    }
-    }
-    //syncVideoConsole(false);
-    return;
+    if(!conActive || !s) return;
+    for(i=0; s[i] && i<1024; i++) kputch(conActive, conActive->txtColor, s[i]);
 }
 
 void cputs(u_char atr, char *str) {

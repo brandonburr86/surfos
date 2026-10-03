@@ -12,6 +12,7 @@ File: console.c Date: Prior to 4/23/04
 #include <surfos/keyboard.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
+#include <sys/serial.h>
 
 #include <mm/kalloc.h>
 
@@ -87,7 +88,10 @@ void clearConsole(surf_console *con) { //re-initializes a console
   con->loc.x = 0;
   con->loc.y = 0;
   setpos(con);
-  if(isConsoleActive(con)) syncVideoConsole(true);
+  if(isConsoleActive(con)) {
+      syncVideoConsole(true);
+      serial_console_clear();
+  }
 }
 
 void clearScreen() {
@@ -192,7 +196,23 @@ void itoa (char *buf, u_int base, u_int d) {
   }
 }
 
+/* write one character cell at the console's cursor, without moving the cursor */
+static void putcell(surf_console *con, TEXTCOLOR color, int c) {
+    u_int off = (con->loc.x + con->loc.y * COLUMNS) * 2;
+    KCRIT_ENTER
+    *(con->vmem + off) = c & 0xFF;
+    *(con->vmem + off + 1) = color;
+    if(isConsoleActive(con)) {
+        *(conVideo.vmem + off) = c & 0xFF;
+        *(conVideo.vmem + off + 1) = color;
+    }
+    KCRIT_LEAVE
+}
+
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
+    /* The serial console shows whatever the active console shows, plus anything
+       printed before the video console exists (con == NULL during early boot). */
+    if(!con || con == conActive) serial_console_putc(c);
     if(!con) return;
     switch (c) {
     case '\n':
@@ -204,21 +224,16 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         syncVideoConsole(false);
         break;
     case 0x08:
-        if(--con->loc.x >= COLUMNS) {
-            con->loc.x=0;
-        } else {
+        /* erase the cell just typed and stay there (the 2004 code stepped back twice) */
+        if(con->loc.x > 0) {
             con->loc.x--;
-            kputch(con,con->txtColor,' ');
+            putcell(con, color, ' ');
         }
         syncVideoConsole(false);
         break;
     default:
         if(c>=32 && c<=126) {
-            KCRIT_ENTER
-            *(con->vmem + (con->loc.x + con->loc.y * COLUMNS) * 2) = c & 0xFF;
-            *(con->vmem + (con->loc.x + con->loc.y * COLUMNS) * 2 + 1) = color;
-            KCRIT_LEAVE
-
+            putcell(con, color, c);
             if(++con->loc.x >= COLUMNS) {
                 con->loc.x = 0;
                 if (++con->loc.y >= LINES) {
@@ -226,13 +241,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
                     con->loc.y--;
                 }
             }
-            if(isConsoleActive(con)) {
-                KCRIT_ENTER
-                *(conVideo.vmem + (conVideo.loc.x + conVideo.loc.y * COLUMNS) * 2) = c & 0xFF;
-                *(conVideo.vmem + (conVideo.loc.x + conVideo.loc.y * COLUMNS) * 2 + 1) = color;
-                KCRIT_LEAVE
-                syncVideoConsole(false);
-            }
+            if(isConsoleActive(con)) syncVideoConsole(false);
         }
         break;
     }

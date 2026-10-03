@@ -18,12 +18,15 @@ File: main.c    Date: Prior to 4/23/04
 #include <surfos/task.h>
 
 #include <sys/driver.h>
+#include <sys/serial.h>
 
 void kmain(u_long magic, u_long addr);
 
 void kmain(u_long magic, u_long addr) {
 
     /* Begin C Kernel */
+    init_serial(); //COM1 needs no memory, so the whole boot log reaches a terminal
+    kprintf("SurfOS: serial console on COM1 (115200 8N1)\n");
     init_gdt(); //setup GDT
     init_mem();
     init_console(); kprintf("Booting SurfOS Kernel.....\n\n");

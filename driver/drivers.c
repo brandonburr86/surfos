@@ -14,10 +14,12 @@ File: drivers.c Date: 4/23/04
 #include <sys/floppy.h>
 #include <sys/parport.h>
 #include <sys/pci.h>
+#include <sys/serial.h>
 
 extern void *net_3c905b_attach(void *p);
 
 void init_drivers() {
+    init_serial_irq(); //serial input (needs the task system, hence not in init_serial)
     init_parport();
 
     init_dma(); //the floppy driver needs DMA, so do it first

@@ -19,7 +19,8 @@ u_char getc() { /*reads buffer*/
 
 u_char getch() { /*pauses and reads*/
     u_char tmp=0;
-    clear_key_queue();
+    /* (the queue used to be cleared here, which lost every character that arrived
+        while the previous one was being handled: fatal for pasted or serial input) */
     while(tmp==0) {
         tmp=getc();
         if(!isprint(tmp) && tmp != 0x08 && tmp != '\n' && tmp != '\t') tmp=0;
