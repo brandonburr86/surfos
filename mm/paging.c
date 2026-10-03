@@ -17,6 +17,8 @@ the BIOS data area, so a NULL dereference faults (audit M6).
 #include <mm/pmm.h>
 #include <mm/paging.h>
 #include <surfos/trap.h>
+#include <surfos/task.h>
+#include <mm/uvm.h>
 #include <blibc_common.h>
 
 static u_long pd_storage[1024] __attribute__((aligned(4096))); /* used to live at 0x9C000, inside the EBDA on some machines */
@@ -96,6 +98,11 @@ u_long *page_fault_trap(struct trapframe *tf) {
         if(!frame) panic("out of memory: no frame for kernel heap page 0x%08lx", PAGE_ALIGN_DOWN(cr2));
         vmm_map(PAGE_ALIGN_DOWN(cr2), frame, PTE_W);
         return (u_long*)tf;
+    }
+
+    if(curTask && curTask->uvm && !(err & PF_PRESENT) && cr2 >= USER_START && cr2 < USER_END &&
+       uvm_grow_stack(curTask->uvm, cr2) == 0) {
+        return (u_long*)tf;                       /* the user stack grew by a page */
     }
 
     return trap_fatal(tf, "Page Fault at 0x%08lx: %s %s%s", cr2,

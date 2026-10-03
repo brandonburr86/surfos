@@ -22,6 +22,7 @@ File: main.c    Date: Prior to 4/23/04
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
 #include <fs/vfs.h>
+#include <surfos/process.h>
 #include <mm/paging.h>
 
 void kmain(u_long magic, u_long addr);
@@ -47,6 +48,7 @@ void kmain(u_long magic, u_long addr) {
     init_drivers(); //some driver stuff :P
 
     init_fs(); //mount the initrd and whatever the disks hold
+    init_syscalls(); //int 0x80 for user programs
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 

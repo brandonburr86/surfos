@@ -302,8 +302,8 @@ int vfs_stat(const char *path, struct stat *st) {
     st->size = v->size;
     st->mtime = v->mtime;
     st->ino = v->ino;
-    st->fs = v->sb->type->name;
-    st->dev = v->sb->dev ? v->sb->dev->name : "";
+    strlcpy(st->fs, v->sb->type->name, sizeof(st->fs));
+    strlcpy(st->dev, v->sb->dev ? v->sb->dev->name : "", sizeof(st->dev));
     vput(v);
     return 0;
 }
@@ -503,7 +503,10 @@ const char *strerror(int err) {
     case ENOENT: return "No such file or directory";
     case EIO: return "I/O error";
     case EBADF: return "Bad file descriptor";
+    case E2BIG: return "Argument list too long";
     case ENOMEM: return "Out of memory";
+    case EFAULT: return "Bad address";
+    case ERANGE: return "Result too large";
     case EACCES: return "Permission denied";
     case EBUSY: return "Device or resource busy";
     case EEXIST: return "File exists";
@@ -534,8 +537,11 @@ void init_fs(void) {
     vfs_register(&rootfs_type);
     tarfs_init();
     fatfs_init();
+    devfs_init();
     r = vfs_mount(NULL, "/", "rootfs");
     if(r) { kprintf("*rootfs: %s\n", strerror(r)); return; }
+    r = vfs_mount(NULL, "/dev", "devfs");
+    if(r) kprintf("*devfs: %s\n", strerror(r));
     for(d = bdev_first(); d; d = d->next) {
         const struct fs_type *t = probe_type(d);
         char path[VFS_PATH_MAX];

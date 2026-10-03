@@ -22,6 +22,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
 #include <fs/vfs.h>
+#include <mm/uvm.h>
 
 #include <blibc_common.h>
 
@@ -296,6 +297,7 @@ static void reap(surf_task *t) {
     ntasks--;
     irq_restore(flags);
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
+    if(t->uvm) uvm_destroy(t->uvm);
     kfree(t->stackmem);
     kfree(t);
 }
@@ -392,6 +394,7 @@ u_long *schedule(struct trapframe *tf) {
         next->switches++;
         curTask = next;
         tss_set_kernel_stack(next->stack_top);
+        if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
     }
     return next->esp;
 }

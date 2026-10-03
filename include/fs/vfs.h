@@ -25,7 +25,9 @@ Every call returns 0 or a negative errno value.
 #define ENOENT        2
 #define EIO           5
 #define EBADF         9
+#define E2BIG         7
 #define ENOMEM       12
+#define EFAULT       14
 #define EACCES       13
 #define EBUSY        16
 #define EEXIST       17
@@ -40,6 +42,7 @@ Every call returns 0 or a negative errno value.
 #define ENAMETOOLONG 36
 #define ENOSYS       38
 #define ENOTEMPTY    39
+#define ERANGE       34
 
 /* open flags (Linux values) */
 #define O_RDONLY    0x0000
@@ -71,13 +74,13 @@ struct dirent {
     u32 mtime;                  /* seconds since 1970 */
 };
 
-struct stat {
+struct stat {                   /* also the layout user programs see */
     int type;
     u32 size;
     u32 mtime;
     u32 ino;
-    const char *fs;             /* file system type name */
-    const char *dev;            /* block device name, "" for none */
+    char fs[8];                 /* file system type name */
+    char dev[16];               /* block device name, "" for none */
 };
 
 struct vnode_ops {
@@ -179,5 +182,6 @@ const char *strerror(int err);
 /* file system modules register themselves here (called by init_fs) */
 void tarfs_init(void);
 void fatfs_init(void);
+void devfs_init(void);
 
 #endif

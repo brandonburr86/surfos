@@ -20,6 +20,7 @@ File: task.h    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #define TASK_CWD_LEN 256
 #define NR_OPEN 16
 struct file;
+struct uvm;
 
 #define KERNEL 0
 #define USER 3
@@ -73,6 +74,7 @@ typedef struct surf_task {
     struct tty *tty;            /* where getch()/gets() read from */
     char cwd[TASK_CWD_LEN];     /* current directory, absolute and normalized ("/" when empty) */
     struct file *files[NR_OPEN]; /* open file descriptors (fs/vfs.c) */
+    struct uvm *uvm;            /* user address space (mm/uvm.c), NULL for kernel threads */
 
     u_long *esp;                /* saved trap frame while not running */
     u_char *stackmem;           /* kernel stack (NULL for the idle task: it uses the boot stack) */

@@ -60,8 +60,9 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
         halt();
     }
 
-    printf("\nProcess (\'%s\':%i) killed by \"%s\" (eip 0x%x)\n", curTask->name, curTask->pid, why, tf->eip);
-    backtrace(tf->ebp, tf->eip);
+    printf("\nProcess (\'%s\':%i) killed by \"%s\" (eip 0x%x%s)\n", curTask->name, curTask->pid, why, tf->eip,
+           (tf->cs & 3) ? ", user mode" : "");
+    if(!(tf->cs & 3)) backtrace(tf->ebp, tf->eip);     /* a user stack holds no kernel frames */
 
     kill_task(curTask); //it stays on its stack until the idle task reaps it
     return schedule(tf); //switch to the next task
