@@ -35,6 +35,7 @@ SMOKE = [
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
     ('heaptest', ['HEAPTEST PASS']),
+    ('lspci',   ['Ethernet', '82540EM']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('selftest', ['SELFTEST PASS']),

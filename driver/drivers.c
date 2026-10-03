@@ -1,7 +1,7 @@
 /*
 SurfOS Driver Initialization
 --------------------
-File: drivers.c Date: 4/23/04
+File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 --------------------
 (C)2004 Brandon Burr
 */
@@ -15,17 +15,42 @@ File: drivers.c Date: 4/23/04
 #include <sys/parport.h>
 #include <sys/pci.h>
 #include <sys/serial.h>
+#include <blibc_common.h>
 
-extern void *net_3c905b_attach(void *p);
+extern int net_3c905b_init(void);
+
+static int drv_serial(void) { init_serial_irq(); return 0; }
+static int drv_parport(void) { init_parport(); return PAR0 ? 0 : 1; }
+static int drv_dma(void) { init_dma(); return 0; }
+static int drv_floppy(void) { init_floppy(); return 0; }
+static int drv_pci(void) { return init_pci(); }
+
+static struct driver drivers[] = {
+    { "serial",  drv_serial, 0 },     /* serial input; needs the task system, hence not in init_serial() */
+    { "parport", drv_parport, 0 },
+    { "dma",     drv_dma, 0 },        /* the floppy driver needs DMA, so do it first */
+    { "floppy",  drv_floppy, 0 },
+    { "pci",     drv_pci, 0 },
+    { "3c905b",  net_3c905b_init, 0 }, /* no point looking for a network card without PCI devices: it checks */
+};
+#define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 
 void init_drivers() {
-    init_serial_irq(); //serial input (needs the task system, hence not in init_serial)
-    init_parport();
+    u_int i;
+    for(i = 0; i < NDRIVERS; i++) {
+        drivers[i].status = drivers[i].init();
+    }
+    kprintf("\nDrivers:");
+    for(i = 0; i < NDRIVERS; i++) {
+        kprintf(" %s%s", drivers[i].name, drivers[i].status == 0 ? "" : (drivers[i].status > 0 ? "(absent)" : "(FAILED)"));
+    }
+    kprintf("\n");
+}
 
-    init_dma(); //the floppy driver needs DMA, so do it first
-    init_floppy();
-
-    if(init_pci()) { //no point looking for a network card without PCI devices
-        net_3c905b_attach(0);
+void print_drivers() {
+    u_int i;
+    printf("    driver    status\n");
+    for(i = 0; i < NDRIVERS; i++) {
+        printf("    %-9s %s\n", drivers[i].name, drivers[i].status == 0 ? "ok" : (drivers[i].status > 0 ? "not present" : "failed"));
     }
 }

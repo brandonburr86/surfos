@@ -17,6 +17,8 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <surfos/ktimer.h>
 #include <sys/parport.h>
 #include <sys/serial.h>
+#include <sys/pci.h>
+#include <sys/driver.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -124,6 +126,8 @@ static void cmd_irqstat(int argc, char **argv) {
 }
 
 static void cmd_bootinfo(int argc, char **argv) { mb_print(); }
+static void cmd_lspci(int argc, char **argv) { pci_print(); }
+static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
@@ -170,6 +174,8 @@ static const struct command commands[] = {
     { "dmesg",     "",          "kernel log", cmd_dmesg },
     { "irqstat",   "",          "interrupt counts", cmd_irqstat },
     { "bootinfo",  "",          "what the boot loader passed", cmd_bootinfo },
+    { "lspci",     "",          "PCI devices with names", cmd_lspci },
+    { "drivers",   "",          "driver init status", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },
@@ -213,6 +219,8 @@ void parseCommand(char *line) {
 }
 
 /* the shell task body (started by init for each console) */
+void startShell(void);
+
 void shell() {
     do_banner();
     startShell();

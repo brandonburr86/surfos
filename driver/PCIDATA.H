@@ -1,4 +1,4 @@
-#if 0
+/*
 
 ADDED TO SURFOS ON 7/1/04
 
@@ -20,7 +20,7 @@ a few have provided the majority of the input and deserve special mention:
    Jurgen ("Josh") Thelen
    William H. Avery III at Altitech
    Sergei Shtylyov of Brain-dead Software in Russia
-//#endif
+*/
 
 //  NOTE that the 0xFFFF of 0xFF entries at the end of some tables below are
 //  not properly list terminators, but are actually the printable definitions
@@ -2450,7 +2450,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x15D1, 0x0001, "TC11IB", "TriCore 32-bit Single-chip Microctrlr" } ,
     { 0x15D1, 0x0003, "PEB 20544 E v1.1", "6 Port Optimized Comm Ctrlr (SPOCC)" } ,
     { 0x15D1, 0x0004, "PEB 3454 E v1.1", "TE3-SPICCE 6 Port Integrated Comm Ctrlr" } ,
-    { 0x15D7, RS56, "hcf", "" } ,
     { 0x15D8, 0x9001, "", "" } ,
     { 0x15E2, 0x0500, "", "Internet PhoneJack PCI Card" } ,
     { 0xEACE, 0x3100, "DAG 3.10", "OC-3/OC-12" } ,
@@ -3253,7 +3252,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x1033, 0x00E7, "uPD72873", "IEEE1394 OHCI 1.1 2-port PHY-Link Ctrlr" } ,
     { 0x1033, 0x00F2, "uPD72874", "IEEE1394 OHCI 1.1 3-port PHY-Link Ctrlr" } ,
     { 0x1036, 0x0000, "TMC-18C30", "Fast SCSI" } ,
-    { 0x1039, &#65296;, "", "" } ,
     { 0x1039, 0, "", "" } ,
     { 0x1039, 0x0001, "SiS 530", "Virtual PCI-to-PCI bridge (AGP)" } ,
     { 0x1039, 0x0002, "6202", "Virtual PCI to PCI Bridge (AGP)" } ,
@@ -3516,7 +3514,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x104E, 0x0317, "OTI-64317", "" } ,
     { 0x104E, 0x0611, "OTI-610", "" } ,
     { 0x104F, 0x104F, "iatca8392", "Multi I/O" } ,
-    { 0x1050, 0x 6692, "W6692/92A/92CF", "PCI BusISDN S/T-Controller" } ,
     { 0x1050, 0x0000, "004005-34c8c8", "Ethernet Controller (NE2000 compatible)" } ,
     { 0x1050, 0x0001, "W83769F", "Ethernet Adapter" } ,
     { 0x1050, 0x0105, "W82C105", "Ethernet Adapter" } ,
@@ -3561,7 +3558,7 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x1057, 0x4803, "Hawk", "" } ,
     { 0x1057, 0x4806, "CPX8216", "" } ,
     { 0x1057, 0x4809, "CPX8216T", "HotSwap Controller" } ,
-    { 0x1057, 0x5600, "WDM\MOT8888", "PCI Speakerphone/Data,Fax  Modem" } ,
+    { 0x1057, 0x5600, "WDM\\MOT8888", "PCI Speakerphone/Data,Fax  Modem" } ,
     { 0x1057, 0x5602, "SM56", "PCI Modem" } ,
     { 0x1057, 0x5608, "SM56", "PCI Fax Voice Modem" } ,
     { 0x1057, 0x5803, "MPC5200", "32-Bit Embedded PowerPC Processor" } ,
@@ -3721,7 +3718,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x14F1, 0x1F15, "", "HCF Data/Fax/Voice (Worldwide)" } ,
     { 0x14F1, 0x2003, "", "SoftK56 Winmodem" } ,
     { 0x14F1, 0x2004, "2F00", "SoftK56 RemoteTAM Winmodem" } ,
-    { 0x14F1, 0x2004 (Obtained fro, "CX11252-11(Printed on Chip)", "Softk56 Data Fax Voice Speakerphone CARP" } ,
     { 0x14F1, 0x2005, "CX11252-11", "SoftK56 Speakerphone Winmodem" } ,
     { 0x14F1, 0x2006, "", "SoftK56 Speakerphone Winmodem" } ,
     { 0x14F1, 0x2013, "8850155D", "SoftK56 Winmodem/HSF GENERIC" } ,
@@ -3887,7 +3883,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x1448, 0x0001, "ADAT/EDIT", "Audio Editing" } ,
     { 0x134A, 0x0001, "F01 2ASV17184.1", "Domex DMX 3191 PCI SCSI Controller" } ,
     { 0x134A, 0x0002, "", "Domex DMX3192U/3194UP SCSI Adapter" } ,
-    { 0x134A, 0x3510A, "DTC50C18", "scsi" } ,
     { 0x144A, 0x7230, "", "" } ,
     { 0x144A, 0x7248, "PCI-7248", "" } ,
     { 0x144A, 0x7250, "PCI-7250", "PLX PCI9052" } ,
@@ -4108,7 +4103,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x1078, 0x0401, "ZFMicro", "Power Management Controller" } ,
     { 0x1078, 0x0402, "ZFMicro", "IDE Controller" } ,
     { 0x1078, 0x0403, "ZFMicro", "Expansion Bus" } ,
-    { 0x1079, 0d01, "", "" } ,
     { 0x544C, 0x0350, "", "" } ,
     { 0x107D, 0x0000, "P86C850", "Graphic GLU-Logic" } ,
     { 0x107E, 0x0001, "FLIPPER", "FRED Local Bus I/F to PCI Peripheral" } ,
@@ -4709,7 +4703,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x10DF, 0x1AE5, "LP6000", "Fibre Channel Host Adapter" } ,
     { 0x10DF, 0xF700, "LP7000", "Fibre Channel Host Adapter" } ,
     { 0x10DF, 0xF800, "LP8000", "Fibre Channel Host Adapter" } ,
-    { 0x10DF, 0xf9001, "1", "FC HBA" } ,
     { 0x10E1, 0x0391, "TRM-S1040", "" } ,
     { 0x10E1, 0x690C, "DC-690c", "" } ,
     { 0x10E1, 0xDC20, "DC-290", "EIDE Controller" } ,
@@ -5645,7 +5638,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x11C1, 0x5811, "FW322/323", "1394A PCI PHY/Link Open Host Ctrlr I/F" } ,
     { 0x11C1, 0xAB20, "WaveLAN", "PCI Wireless LAN Adapter" } ,
     { 0x11C1, 7121, "", "" } ,
-    { 0x11C1, fsu 00, "", "" } ,
     { 0x11C6, 0x3001, "1", "VM-1200 Opto Unit Controller" } ,
     { 0x11C8, 0x0658, "PSB 32", "32 bit , 33 Mhz PCI-SCI Bridge" } ,
     { 0x11C8, 0xD665, "PSB64", "64 bit , 33 Mhz PCI-SCI Bridge" } ,
@@ -5656,7 +5648,6 @@ PCI_DEVTABLE    PciDevTable [] =
     { 0x11CB, 0x4000, "SUPI-1", "XIO/SIO Host" } ,
     { 0x11CB, 0x8000, "T225", "Bridge RIO Host" } ,
     { 0x11D1, 0x01F7, "VxP524", "PCI Video Processor" } ,
-    { 0x11D1, VXP520, "", "" } ,
     { 0x11D4, 0x1535, "ADSP-21535", "Blackfin DSP PCI Bus Interface" } ,
     { 0x11D4, 0x1805, "62412-51", "erl3227a-0.8" } ,
     { 0x11D4, 0x1889, "AD1889", "Sound Chip" } ,
@@ -5833,4 +5824,3 @@ char *  PciDevSelFlags [] =
 #define PCI_DEVSELFLAGS_LEN (sizeof(PciDevSelFlags)/sizeof(char *))
 
 
-#endif

@@ -7,6 +7,7 @@ File: 3c905b.c  Date: 7/2/04
 */
 
 #include <surfos/types.h>
+#include <blibc_common.h>
 #include <surfos/console.h>
 
 #include <net/ethernet.h>
@@ -17,38 +18,33 @@ File: 3c905b.c  Date: 7/2/04
 #define DEVICE_3C905B 0x9055
 #define VENDOR_3C905B 0x10b7
 
-struct pci_dev ** pci_array;
 struct iface * iface_array[32];
 u_int iface_count=0;
 
+struct iface *alphaSetup(struct pci_dev *pci);
+
 int init_3c905b() {
-    int j,i=0;
+    struct pci_dev *d = NULL;
+    int j;
 
-   pci_array = pci;
-
-    for(i=0;i<32;i++)  {
-        if(pci_array[i]->vendor == VENDOR_3C905B && pci_array[i]->device == DEVICE_3C905B) {
-            iface_array[iface_count++] = alphaSetup(pci_array[i]);
-            if(!iface_array[iface_count-1]) {
-                    kprintf("Setup failed.\n");
-                    return;
-         }
-            kprintf("+NET: 3Com 3C905B detected: MAC =");
-         for(j=0;j<6;j++) kprintf("%c%x", (j ? ':' : ' '), ((struct sAlphaCard*)(iface_array[iface_count-1]->driver_struct))->MacAddress[j]);
-           kprintf("\n");
-           iface_array[iface_count-1]->Setting(iface_array[iface_count-1], 1, 0); /*enable */
-      }
+    while((d = pci_find_device(VENDOR_3C905B, DEVICE_3C905B, d)) != NULL && iface_count < 32) {
+        iface_array[iface_count++] = alphaSetup(d);
+        if(!iface_array[iface_count-1]) {
+            kprintf("Setup failed.\n");
+            iface_count--;
+            return -1;
+        }
+        kprintf("+NET: 3Com 3C905B detected: MAC =");
+        for(j=0;j<6;j++) kprintf("%c%02x", (j ? ':' : ' '), ((struct sAlphaCard*)(iface_array[iface_count-1]->driver_struct))->MacAddress[j]);
+        kprintf("\n");
+        iface_array[iface_count-1]->Setting(iface_array[iface_count-1], 1, 0); /*enable */
     }
+    return iface_count ? 0 : 1;
 }
 
-int net_3c905b_probe() {
-}
-
-void *net_3c905b_attach(void *p) {
-    init_3c905b();
-}
-
-void *net_3c905b_detach(void *p) {
+/* driver table entry */
+int net_3c905b_init(void) {
+    return init_3c905b();
 }
 
 u_long net_3c905b_entropy() {

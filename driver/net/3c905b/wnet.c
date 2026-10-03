@@ -31,6 +31,10 @@
 
 #include <blibc_common.h>
 
+#define PCI_USES_IO 1
+#define PCI_ADDR0 (0x10<<0)
+#define PCI_IOTYPE (PCI_USES_IO | PCI_ADDR0)
+
 char mii_preamble_required = 0; //mdio preamble : some need.
 
 /* END PROTOTYPES, HEADERS AND EXTERNAL VARIABLES */
@@ -83,7 +87,7 @@ int alphaInterrupt(unsigned int irq, void * param)
     struct sAlphaCard * pcard;
     pcard = (struct sAlphaCard *) param;
 
-    unsigned long ioaddr = pcard->pci->begin[0];
+    unsigned long ioaddr = pcard->pci->bar[0];
     unsigned int cur_packet; /* used as a temp indexing variable to reffer to a packet */
     unsigned int intAck;
     unsigned int status;
@@ -268,7 +272,7 @@ struct iface * alphaSetup(struct pci_dev * ppci)
 {
     struct iface * interface;           /* returned by this function */
     struct sAlphaCard * pcard;          /* internal structure used by driver */
-    unsigned long ioaddr = ppci->begin[0];              /* used for io */
+    unsigned long ioaddr = ppci->bar[0];              /* used for io */
     register unsigned int i;    /* used mostly for loop index and temp storage */
     unsigned char * pRingBase;  /* the base of the block of memory used for upload (rx) and download (tx) descriptors */
     unsigned char * pPacketMemBase; /* Base address for packet structures */
@@ -370,14 +374,14 @@ struct iface * alphaSetup(struct pci_dev * ppci)
     }
 
     /* FIX LATENCY */
-    cpciLatency = pci_config_read_byte(pcard->pci->dev, PCI_LATENCY_TIMER);
+    cpciLatency = pci_dev_read8(pcard->pci, PCI_LATENCY_TIMER);
     cNewLatency = (PCI_IOTYPE & 1) ? 248 : 32;
 
     if (cpciLatency < cNewLatency)
     {
         //kprintf("NET(%d): Latency too low, changing from %d to %d\n",
             //pcard->pci->dev, cpciLatency, cNewLatency);
-            pci_config_write_byte(pcard->pci->dev, PCI_LATENCY_TIMER, cNewLatency);
+            pci_dev_write8(pcard->pci, PCI_LATENCY_TIMER, cNewLatency);
     }
 
     alphaQueryCard(pcard);
@@ -404,7 +408,7 @@ void alphaSelectXmit(struct sAlphaCard * pcard)
     long phyx;
     unsigned int i;
     int reset_opts;
-    unsigned long ioaddr = pcard->pci->begin[0];
+    unsigned long ioaddr = pcard->pci->bar[0];
 
     //kprintf("Activating tranceiver...");
 
@@ -550,7 +554,7 @@ int alphaQueryCard(struct sAlphaCard * pcard)
     unsigned int i;
     unsigned short eeprom[0x40];
     unsigned short checksum;
-    unsigned long ioaddr = pcard->pci->begin[0];
+    unsigned long ioaddr = pcard->pci->bar[0];
 
 
   /* EEPROM Query */
@@ -624,7 +628,7 @@ ENABLE_INTERRUPTS
 int alphaSetting(struct iface * interface, int iSetting, void * param)
 {
     struct sAlphaCard * pcard = ((struct sAlphaCard *)(interface->driver_struct));
-    unsigned long ioaddr =  pcard->pci->begin[0];
+    unsigned long ioaddr =  pcard->pci->bar[0];
 
     int i;
 
@@ -734,7 +738,7 @@ int alphaSetting(struct iface * interface, int iSetting, void * param)
 int alphaGetPackets(struct iface * interface, struct sPacket ** packets, unsigned int * count)
 {
     struct sAlphaCard * pcard = ((struct sAlphaCard *)(interface->driver_struct));
-    unsigned long ioaddr =  pcard->pci->begin[0];
+    unsigned long ioaddr =  pcard->pci->bar[0];
     unsigned int cur_packet;
     unsigned int our_count = 0;
 
@@ -770,7 +774,7 @@ int alphaGetPackets(struct iface * interface, struct sPacket ** packets, unsigne
 int alphaSendPackets(struct iface * interface, struct sPacket ** packets, unsigned int * count)
 {
     struct sAlphaCard * pcard = ((struct sAlphaCard *)(interface->driver_struct));
-    unsigned long ioaddr =  pcard->pci->begin[0];
+    unsigned long ioaddr =  pcard->pci->bar[0];
     unsigned int cur_packet;
     struct down_desc * pDesc, * pPrevDesc;
 
@@ -930,7 +934,7 @@ void mdio_write(long ioaddr, int phy_id, int location, int value)
 void set_media_type(struct sAlphaCard * pcard)
 {
 
-    long ioaddr = pcard->pci->begin[0];
+    long ioaddr = pcard->pci->bar[0];
     long i_cfg;
     int mii_reg1, mii_reg5;
 
@@ -970,6 +974,6 @@ void set_media_type(struct sAlphaCard * pcard)
 }
 
 void fake_inter() {
-    u_long ioaddr = gcard->pci->begin[0];
+    u_long ioaddr = gcard->pci->bar[0];
     outw(ioaddr + CommandReg, FakeIntr);
 }
