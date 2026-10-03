@@ -89,6 +89,11 @@ void init_gdt() {
     load_gdtr();
     kprintf("*GDT Loaded\n");
 
+    /* Reload CS with a far jump. Until this the CPU runs on the boot loader's cached code
+       descriptor: QEMU's -kernel loader happens to use 0x08, GRUB 2 uses 0x10, which is a
+       data segment in this GDT, so the first iret would fault (audit I9). */
+    asm volatile("ljmp $0x08, $1f\n1:");
+
     asm("mov $0x0010, %ax");
     asm("mov %ax, %ds");
     asm("mov %ax, %ss");
@@ -122,5 +127,5 @@ void load_gdtr() {
     gdtr.gdt_base_low = (u_short) GDT_BASE_LOW;
     gdtr.gdt_base_high = (u_short) GDT_BASE_HIGH;
 
-    asm("lgdt (%0)": :"p" (&gdtr));
+    asm volatile("lgdt %0": :"m" (gdtr));
 }

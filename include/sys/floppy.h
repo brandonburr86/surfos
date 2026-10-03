@@ -142,6 +142,9 @@ Rate    DiskCapacity    Size    DriveCapacity
 
 bool fd_read_block(int block,u_char *blockbuff);
 bool fd_write_block(int block,u_char *blockbuff);
+bool fd_rw(u_int drive, int block,u_char *blockbuff,bool read);
+bool fd_seek(u_int drive, int track);
+void fd_recalibrate(u_int drive);
 
 void block2hts(int block,int *head,int *track,int *sector);
 

@@ -38,8 +38,9 @@ u_long memprobe() {
     #define PADDR_LIMIT 0xBFFFFFFF
     #define MEMPROBE_MAGIC 0x5A5AA5A5
 
-    u_long *m,i,j,temp;
-   m = (u_long *)0;
+    volatile u_long *m; /* volatile: the read-back below is the whole point (audit A6) */
+    u_long i,j,temp;
+    m = (volatile u_long *)0;
     i = 0x200000;//0x40000
 
     temp = m[i];    // save copy of what we will be modifying
@@ -148,8 +149,8 @@ inline void map_page(u_long *page, u_long address) {
     pd=&page_directory[iDir]; //wierd.... for some time i think this worked w/o a '&'??
 
     //set the page directory entry
-    *pd = (u_long)pTmp = (u_long)((u_long)page_table + (iDir << 12));
-    *pd = *pd | 3;
+    pTmp = (u_long*)((u_long)page_table + (iDir << 12));
+    *pd = (u_long)pTmp | 3;
 
     //set the page table entry
     *(pTmp+=iTbl) = (u_long)page | 3;

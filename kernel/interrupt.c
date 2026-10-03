@@ -123,7 +123,7 @@ void _set_idt_entry(int num, u_int address, u_short selector, u_char opt) {
 }
 
 void load_idtr(struct sIDTMaster *IDTMaster) {
-    asm volatile("lidt (%0) ": :"p" (IDTMaster));
+    asm volatile("lidt %0": :"m" (*IDTMaster));
 }
 
 void _disable_irq_enter_turf(unsigned int irq) {

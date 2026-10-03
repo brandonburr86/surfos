@@ -1,0 +1,11 @@
+# build output (make puts everything under build/O<level>/)
+build/
+*.o
+*.d
+*.bin
+*.iso
+*.sym
+# emulator and test leftovers
+*.log
+*.sock
+__pycache__/

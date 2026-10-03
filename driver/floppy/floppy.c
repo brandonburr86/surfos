@@ -14,6 +14,8 @@ File: parport.c Date: 7/10/04
 #include <surfos/system.h>
 #include <asm/io.h>
 #include <sys/floppy.h>
+#include <sys/dma.h>
+#include <blibc_common.h>
 
 FD_TYPE fd[2];
 
@@ -43,12 +45,12 @@ void block2hts(int block,int *head,int *track,int *sector) {
 
 /* read block (blockbuff is 512 byte buffer) */
 bool fd_read_block(int block,u_char *blockbuff) {
-   return fd_rw(block,blockbuff,true);
+   return fd_rw(FD0,block,blockbuff,true);
 }
 
 /* write block (blockbuff is 512 byte buffer) */
 bool fd_write_block(int block,u_char *blockbuff) {
-   return fd_rw(block,blockbuff,false);
+   return fd_rw(FD0,block,blockbuff,false);
 }
 
 /*
@@ -76,7 +78,7 @@ bool fd_rw(u_int drive, int block,u_char *blockbuff,bool read) {
       /* check for diskchange */
       if (inb(FD_DIR) & 0x80) {
          dchange = true;
-         fd_seek(1);  /* clear "disk change" status */
+         fd_seek(drive,1);  /* clear "disk change" status */
          fd_recalibrate(drive);
          fd_set_motor(drive,OFF);
          return false;
