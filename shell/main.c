@@ -27,6 +27,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <net/eth.h>
 #include <net/ip.h>
 #include <net/tcp.h>
+#include <net/dhcp.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
@@ -166,13 +167,30 @@ static void cmd_ifconfig(int argc, char **argv) {
 
 static void cmd_arp(int argc, char **argv) { arp_print(); }
 
+static void cmd_dhcp(int argc, char **argv) {
+    struct netdev *dev = argc > 1 ? netdev_find(argv[1]) : netdev_default();
+    if(!dev) { printf("    no interface\n"); return; }
+    if(dhcp_configure(dev, 8000) == 0) netdev_print();
+    else printf("    dhcp: no lease\n");
+}
+
+static void cmd_nslookup(int argc, char **argv) {
+    ipaddr_t ip;
+    char a[16];
+    if(argc < 2) { printf("    usage: nslookup <name>\n"); return; }
+    if(!netdev_default() || !netdev_default()->dns) { printf("    no DNS server configured (ifconfig ... dns, or dhcp)\n"); return; }
+    if(dns_resolve(argv[1], &ip, 3000) == 0) printf("    %s has address %s\n", argv[1], ipfmt(ip, a));
+    else printf("    %s: not found\n", argv[1]);
+}
+
 static void cmd_ping(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
     int count = argc > 2 ? atoi(argv[2]) : 4, seq, got = 0, rtt;
     u8 ttl = 0;
-    if(argc < 2 || !ip_parse(argv[1], &ip)) { printf("    usage: ping <address> [count]\n"); return; }
+    if(argc < 2) { printf("    usage: ping <address|name> [count]\n"); return; }
     if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return; }
+    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return; }
     printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
     for(seq = 1; seq <= count; seq++) {
         rtt = icmp_ping(ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
@@ -508,6 +526,8 @@ static const struct command commands[] = {
     { "sync",      "",          "write cached blocks to the disks", cmd_sync },
     { "ifconfig",  "[if ip mask [gw] [dns]]", "show or set the network configuration", cmd_ifconfig },
     { "arp",       "",          "the ARP table", cmd_arp },
+    { "dhcp",      "[if]",      "get an address lease", cmd_dhcp },
+    { "nslookup",  "<name>",    "resolve a host name", cmd_nslookup },
     { "ping",      "<ip> [n]",  "ICMP echo", cmd_ping },
     { "netstat",   "",          "interfaces and sockets", cmd_netstat },
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },

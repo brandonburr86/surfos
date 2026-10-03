@@ -20,6 +20,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <net/net.h>
 #include <net/eth.h>
 #include <net/ip.h>
+#include <net/dhcp.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -394,6 +395,13 @@ static void test_net(void) {
     check(ok >= 1, "ping 10.0.2.2 (QEMU's gateway) is answered");
     for(e = arp_table(), i = 0; i < ARP_TABLE_SIZE; i++) if(e[i].valid && e[i].resolved && e[i].ip == IP4(10, 0, 2, 2)) break;
     check(i < ARP_TABLE_SIZE, "the gateway's MAC is in the ARP table");
+    mutex_lock(&net_lock);
+    dev->ip = dev->netmask = dev->gateway = dev->dns = 0;    /* start over through DHCP */
+    mutex_unlock(&net_lock);
+    rtt = dhcp_configure(dev, 8000);
+    check(rtt == 0 && dev->ip == IP4(10, 0, 2, 15) && dev->gateway == IP4(10, 0, 2, 2) && dev->dns == IP4(10, 0, 2, 3),
+          "DHCP lease: 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3");
+    check(icmp_ping(IP4(10, 0, 2, 2), 0x5f60, 1, 56, 2000, NULL) >= 0, "ping works on the leased address");
     printf("        (%s: %lu frames in, %lu out)\n", ipfmt(dev->ip, a), dev->rx_packets, dev->tx_packets);
 }
 
