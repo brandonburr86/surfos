@@ -9,6 +9,9 @@ SurfOS blibc - getch(), getchar(), putch(), putchar()
 #include <surfos/types.h>
 #include <blibc_common.h>
 #include <surfos/task.h>
+#include <surfos/wait.h>
+#include <surfos/irq.h>
+#include <surfos/interrupt.h>
 
 extern surf_task *curTask;
 extern surf_console conVideo;
@@ -17,15 +20,24 @@ u_char getc() { /*reads buffer*/
     return pop_key_queue();
 }
 
-u_char getch() { /*pauses and reads*/
-    u_char tmp=0;
-    /* (the queue used to be cleared here, which lost every character that arrived
-        while the previous one was being handled: fatal for pasted or serial input) */
-    while(tmp==0) {
-        tmp=getc();
-        if(!isprint(tmp) && tmp != 0x08 && tmp != '\n' && tmp != '\t') tmp=0;
+u_char getch() { /*blocks until a key arrives*/
+    u_char tmp;
+    for(;;) {
+        u_long flags = irq_save();
+        tmp = pop_key_queue();
+        if(!tmp) {
+            if(curTask && curTask != idle_task && !in_interrupt()) {
+                wait_prepare(&kbd_wq);   /* enqueued before interrupts come back: no lost wakeup */
+                irq_restore(flags);
+                yield();
+            } else {
+                irq_restore(flags);      /* boot code: nothing to switch to */
+            }
+            continue;
+        }
+        irq_restore(flags);
+        if(isprint(tmp) || tmp == 0x08 || tmp == '\n' || tmp == '\t') return tmp;
     }
-    return tmp;
 }
 
 u_char getchar() {

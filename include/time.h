@@ -20,7 +20,7 @@ typedef struct {
     u_int day; //day of the week
     u_int date; //day of the month
     u_int month;
-    u_int year; //last two digits
+    u_int year; //four digits
 } time_t;
 
 int cmos_read(u_char reg);

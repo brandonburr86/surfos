@@ -11,6 +11,9 @@ File: keyboard.h    Date: 4/23/04
 
 #include <surfos/types.h>
 #include <surfos/interrupt.h>
+#include <surfos/wait.h>
+
+extern wait_queue_t kbd_wq; /* tasks blocked in getch() */
 
 #define F1     0x80
 #define F2    (F1 + 1)

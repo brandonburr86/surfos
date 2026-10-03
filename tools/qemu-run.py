@@ -35,6 +35,9 @@ SMOKE = [
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
     ('heaptest', ['HEAPTEST PASS']),
+    ('uptime',  ['tasks']),
+    ('date',    ['CMOS clock']),
+    ('selftest', ['SELFTEST PASS']),
 ]
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']

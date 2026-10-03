@@ -28,6 +28,7 @@ u_char kbd_status=0;
 
 u_char keyQueue[KEY_QUEUE_LEN];
 u_int kqPos;
+wait_queue_t kbd_wq = WAIT_QUEUE_INIT;
 
 void keybISR();
 void timerISR();
@@ -126,6 +127,7 @@ void push_key_queue(u_char ch) {
     keyQueue[kqPos]=ch;
     kqPos++;
     KCRIT_LEAVE
+    wake_up(&kbd_wq);
 }
 
 void shiftQueueLeft() {
@@ -202,7 +204,6 @@ FuncIRQHandler keyboard_handler() {
     return NULL;
 }
 
-extern void nt(),d1(),d2(),funky();
 
 u_char map_scancode(int code) {
     u_int converted;
@@ -260,10 +261,7 @@ u_char map_scancode(int code) {
          }*/
 
           if(converted==F12) new_task("reboot",&conArray[0],KERNEL,PL_FIFO,(u_long*)reboot);
-         if(converted==F9) new_task("nt",&conArray[0],KERNEL,PL_LOW,(u_long*)nt);
 
-         if(converted==F5) new_task("d1",&conArray[0],KERNEL,PL_LOW,(u_long*)d1);
-         if(converted==F6) new_task("d2",&conArray[0],KERNEL,PL_LOW,(u_long*)d2);
          if(converted==F7) fd_set_motor(0,1);
          if(converted==F8) fd_set_motor(0,0);
          prev=converted;

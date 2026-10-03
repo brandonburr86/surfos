@@ -31,14 +31,33 @@ int bcd2bin(u_char bcd) {
 }
 
 void get_time(time_t *time) {
+    int status_b, century;
     if(!time) return;
     while(cmos_busy()); //wait for the update to finish
 
-    time->second = bcd2bin(cmos_read(SECOND));
-    time->minute = bcd2bin(cmos_read(MINUTE));
-    time->hour   = bcd2bin(cmos_read(HOUR));
-    time->day    = bcd2bin(cmos_read(DAY));
-    time->date   = bcd2bin(cmos_read(DATE));
-    time->month  = bcd2bin(cmos_read(MONTH));
-    time->year   = bcd2bin(cmos_read(YEAR));
+    status_b = cmos_read(STATUS_B);
+    time->second = cmos_read(SECOND);
+    time->minute = cmos_read(MINUTE);
+    time->hour   = cmos_read(HOUR);
+    time->day    = cmos_read(DAY);
+    time->date   = cmos_read(DATE);
+    time->month  = cmos_read(MONTH);
+    time->year   = cmos_read(YEAR);
+    century      = cmos_read(0x32); /* the ACPI century byte; 0 when the firmware has none */
+
+    if(!(status_b & 0x04)) { /* BCD unless bit 2 says binary */
+        int pm = time->hour & 0x80;
+        time->second = bcd2bin(time->second);
+        time->minute = bcd2bin(time->minute);
+        time->hour   = bcd2bin(time->hour & 0x7F) | pm;
+        time->day    = bcd2bin(time->day);
+        time->date   = bcd2bin(time->date);
+        time->month  = bcd2bin(time->month);
+        time->year   = bcd2bin(time->year);
+        century      = bcd2bin(century);
+    }
+    if(!(status_b & 0x02) && (time->hour & 0x80)) { /* 12-hour clock with PM set */
+        time->hour = ((time->hour & 0x7F) + 12) % 24;
+    }
+    time->year += (century >= 19 && century <= 21) ? century * 100 : 2000;
 }

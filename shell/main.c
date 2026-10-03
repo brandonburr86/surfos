@@ -1,539 +1,215 @@
 /*
-SurfOS ring0 Shell (v0.001)
-(C)2004 Brandon Burr
+SurfOS ring0 Shell (v0.002)
+(C)2004 Brandon Burr, command table 10/2026 (roadmap U1)
+
+A line is split into words; the first one selects a command from the table below,
+the rest arrive as argv. `help` is generated from the same table.
 */
 
 #include <blibc_common.h>
+#include <stdarg.h>
 
 #include <asm/io.h>
 #include <surfos/keyboard.h>
 #include <surfos/types.h>
 #include <surfos/kernel.h>
 #include <surfos/timer.h>
+#include <surfos/ktimer.h>
 #include <sys/parport.h>
+#include <sys/serial.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
+#include <surfos/klog.h>
+#include <surfos/interrupt.h>
+#include <surfos/multiboot.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
-#include <surfos/klog.h>
+#include <mm/pmm.h>
 
-#include <sys/parport.h>
-
-void fake_inter();
-void parseCommand(const char line[]);
-void startShell();
-void invokeHelp();
-void invokeDemo();
-void invokeRS232Term(int doSend);
-void demoException();
-void demoStrcmp();
-void demoColor();
+#include "shell.h"
 
 char *prompt = "SurfOS*> ";
 
-#define COM1 0x3F8
-  /* COM1 0x3F8                        */
-  /* COM2 0x2F8                */
-  /* COM3 0x3E8                */
-  /* COM4 0x2E8                */
+static const struct command commands[];
+static u_int ncommands;
 
-void invokeRS232Term(int doSend) {
-    char chIn, chOut;
-    chOut=chIn=(char)0;
+/**** small commands ****/
 
-    outb(COM1+1, 0); /* turn off interrupts */
-
-    /*comm settings*/
-    outb(COM1+3, 0x80); /* set DLAB on*/
-    outb(COM1+0, 0x0C); /* 9600bps - baud rate low latch byte*/
-                  /* Default 0x03 =  38,400 BPS */
-                  /*         0x01 = 115,200 BPS */
-                  /*         0x02 =  57,600 BPS */
-                  /*         0x06 =  19,200 BPS */
-                  /*         0x0C =   9,600 BPS */
-                  /*         0x18 =   4,800 BPS */
-                  /*         0x30 =   2,400 BPS */
-    outb(COM1+1, 0x00); /* set baud rate high latch byte*/
-    outb(COM1+3, 0x03); /* 8-N-1 */
-    outb(COM1+2, 0xC7); /* FIFO control register*/
-    outb(COM1+4, 0x0B); /* turn on dtr,rts, out2*/
-
-    printf("\n\nSurfOS RS-232 Communication (COM1)\n");
-    printf("Press Escape to Exit Terminal\n");
-    printf("--------------------------------------\n\n");
-
-    do {
-        chIn =inb(COM1+5); /* new char? */
-
-        if(chIn & 1) { /* read in from port*/
-            chIn=inb(COM1);
-            putch(chIn);
-        }
-
-        /*if(kb hit()) {
-            chOut = getc();
-            if(doSend) outb(COM1,chOut);
-            putch(chOut);
-        }*/
-
-    } while(chOut != 27); /* break on escape */
-    putch('\n');
-}
-
-void dohanoi(int N, int from, int to, int use) {
-    if (N > 0) {
-        dohanoi(N-1, from, use, to);
-        printf ("move %d --> %d\n", from, to);
-        dohanoi(N-1, use, to, from);
-    }
-}
-
-void runHanoi() {
-    int n,from,to,use;
-    char ch;
-    clearScreen();
-    n=0;
-    from=1;
-    to=3;
-    use=2;
-    cputs(RED_TXT, "SurfOS Towers of Hanoi Calculator\n");
-    cputs(BLUE_TXT,"---------------------------------\n");
-    do {
-        printf("\nHanoi Number# ");
-        ch=getchar();
-        printf("\n");
-        n=ch-'0';
-        if(isdigit(ch)) dohanoi(n,from,to,use);
-    } while(n!=0);
-
-}
-void demoBeep() {
-    u_long freq,dur;
-    printf("\n Beeping @ 2000 hertz for 1000 ms\n");
-    freq=2000;
-    dur=1000;
-    sysbeep(freq,dur);
-}
-
-void demoException() {
-    char ch;
-    clearScreen();
-    cputs(YELLOW_TXT,"                       [ SurfOS Exception Handler Demo ]\n");
-    printf("           Press (1-7) to invoke that exception, or press 'q' to quit. \n");
-    printf(" -----------------------------------------------------------------------------\n");
-    do {
-        cputs(GREEN_TXT,"\nInvoke exception: ");
-        ch=(char)0;
-        ch=getch();
-        printf("\n");
-        switch(ch) {
-            case 'q':
+static void cmd_help(int argc, char **argv) {
+    u_int i;
+    if(argc > 1) {
+        for(i = 0; i < ncommands; i++) {
+            if(!strcmp(commands[i].name, argv[1])) {
+                printf("    %s %s\n    %s\n", commands[i].name, commands[i].args, commands[i].help);
                 return;
-                break;
-            case '1':
-                asm("int $01");
-                break;
-            case '2':
-                asm("int $02");
-                break;
-            case '3':
-                asm("int $03");
-                break;
-            case '4':
-                asm("int $04");
-                break;
-            case '5':
-                asm("int $05");
-                break;
-            case '6':
-                asm("int $06");
-                break;
-            case '7':
-                asm("int $07");
-                break;
-
-        }
-
-    } while(1);
-}
-
-void demoStrcmp() {
-    char str1[255];
-    char str2[255];
-    int result;
-    memset(str1,0,255);
-    memset(str2,0,255);
-
-    clearScreen();
-    printf("Enter a string: ");
-    gets(str1);
-    printf("Enter another string: ");
-    gets(str2);
-    result=strcmp(str1,str2);
-    result = result < 0 ? -1 : (result > 0 ? 1 : 0);
-    switch(result) {
-        case -1:
-            printf("\nThe first string is less than the second string!\n\n");
-            break;
-        case 0:
-            printf("\nThe strings are equal!\n");
-            break;
-        case 1:
-            printf("\nThe first string is greater than the second string\n\n");
-            break;
-        default:
-            printf("\nSomething is funky\n\n");
-    }
-    printf("Press any key to continue...");
-    getch();
-}
-
-void demoColor() {
-    char i=1;
-    clearScreen();
-    putch('\n');
-    for(i=1;i<16;i++) {
-        cputs(i,"Welcome to SurfOS!!!\n");
-    }
-    printf("Press any key to continue...");
-    getch();
-}
-
-void invokeDemo() {
-    char choice;
-    int skip=false;
-    do {
-        do {
-            if(skip==false) {
-                clearScreen();
-                cputs(RED_TXT,"\nSurfOS Demonstration Menu\n");
-                printf("- - - - - - - - - - - - - -\n");
-                printf("1) Exception Handling\n");
-                printf("2) String comparison\n");
-                printf("3) Colorful console\n");
-                printf("q) Quit\n");
             }
-            skip=false;
-            choice=getchar();
-            putch('\n');
-            if(choice=='q') break;
-            if(choice<'1' || choice>'3') { skip=true; putch('\b'); continue; }
-
-            switch(choice) {
-            case '1':
-                demoException();
-                break;
-            case '2':
-                demoStrcmp();
-                break;
-            case '3':
-                demoColor();
-                break;
-            }
-        } while(1);
-    } while(choice!='q');
-    putch('\n');
-
-}
-
-void getFunky(int tempo)
-{
-
-float x = ((float)tempo / (float)10);
-
-sysbeep(2093,250*x);//C
-            sleep(50*x);
-
-            sysbeep(2093,250*x);//C
-            sleep(50*x);
-
-            sysbeep(1865,250*x);//A#
-            sleep(50*x);
-
-            sysbeep(2093,250*x);//C
-
-            sleep(250*x);//1*8 rest
-
-            sysbeep(1568,500*x);//G
-            sleep(50*x);
-
-            sysbeep(1568,250*x);//G
-            sleep(50*x);
-
-            sysbeep(2093,250*x);//C
-            sleep(50*x);
-
-            sysbeep(2794,250*x);//F
-            sleep(50*x);
-
-            sysbeep(2637,250*x);//E
-            sleep(50*x);
-
-            sysbeep(2093,250*x);//E
-            sleep(50*x);
-
-        sleep(5000*x);
-
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(1865,250*x);//A#
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-
-        sleep(250*x);//1*8 rest
-
-        sysbeep(1568,500*x);//G
-        sleep(50*x);
-
-        sysbeep(1568,250*x);//G
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(2794,250*x);//F
-        sleep(50*x);
-
-        sysbeep(2637,250*x);//E
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//E
-        sleep(50*x);
-
-        sleep(5000*x);
-
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
-
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
-
-    sysbeep(1396,250*x);//F
-    sleep(50*x);
-
-    sysbeep(1568,250*x);//G
-
-    sleep(250*x);//1*8 rest
-
-    sysbeep(1175,500*x);//d
-    sleep(50*x);
-
-    sysbeep(1175,250*x);//d
-    sleep(50*x);
-
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
-
-    sysbeep(2093, 250*x);//c
-    sleep(50*x);
-
-    sysbeep(1976, 250*x);//b
-    sleep(50*x);
-
-    sysbeep(1568,250*x);//G
-    sleep(50*x);
-
-    sleep(5000*x);
-
-    sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(1865,250*x);//A#
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-
-        sleep(250*x);//1*8 rest
-
-        sysbeep(1568,500*x);//G
-        sleep(50*x);
-
-        sysbeep(1568,250*x);//G
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//C
-        sleep(50*x);
-
-        sysbeep(2794,250*x);//F
-        sleep(50*x);
-
-        sysbeep(2637,250*x);//E
-        sleep(50*x);
-
-        sysbeep(2093,250*x);//E
-        sleep(50*x);
-
-
-}
-
-
-/* Random allocate/free with a byte pattern per block, then everything freed and the
-   heap walked and compared with the starting point. */
-void heaptest() {
-    enum { SLOTS = 192, ROUNDS = 20000 };
-    static void *ptrs[SLOTS];
-    static u_int sizes[SLOTS];
-    struct heap_stats before, after;
-    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
-
-    memset(ptrs, 0, sizeof(ptrs));
-    kheap_stats(&before);
-    srand(getticks() + 7);
-    for(r = 0; r < ROUNDS; r++) {
-        i = rand() % SLOTS;
-        if(ptrs[i]) {
-            u_char *p = ptrs[i];
-            u_int k;
-            for(k = 0; k < sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
-            kfree(ptrs[i]);
-            ptrs[i] = NULL;
-            frees++; live--;
-        } else {
-            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
-            u_char *p = kalloc(sz);
-            u_int k;
-            if(!p) { bad++; continue; }
-            for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
-            ptrs[i] = p; sizes[i] = sz;
-            allocs++; live++;
-            if(live > maxlive) maxlive = live;
         }
+        printf("    no such command: %s\n", argv[1]);
+        return;
     }
-    for(i = 0; i < SLOTS; i++) if(ptrs[i]) { kfree(ptrs[i]); ptrs[i] = NULL; frees++; }
-    kheap_stats(&after);
-    if(!kheap_check()) bad++;
-    if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
-    printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
-           allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
-}
-
-void invokeHelp() {
-    printf("\n    SurfOS ring0 Debug Shell v0.008\n");
+    printf("\n    SurfOS ring0 Debug Shell v0.009\n");
     printf("    -------------------------------\n");
-    printf("    beep   (beeps w/ user given params)\n");
-    printf("    funky  (gets down and funky)\n");
-    printf("    clear  (clears the active console)\n");
-    printf("    term   (opens up a terminal on COM1 with 9600-8-N-1 settings)\n");
-    printf("    reboot (reboot the machine)\n");
-    printf("    ps     (list processes)\n");
-    printf("    tick   (print the tick count)\n");
-    printf("    lpstat (display status of the parallel port)\n");
-    printf("    memstat (display memory statistics)\n");
-    printf("    demo   (demonstration of some of the capabilities of SurfOS)\n");
-    printf("    hanoi  (Computes the Towers of Hanoi algoritm)\n");
-    printf("    dmesg  (kernel log)\n");
-    printf("    heaptest (random allocations with checksums, then verify the heap)\n");
-    printf("    crashnull (write through a NULL pointer)\n");
-    printf("    crashdiv/crashgp/crashint (raise a divide error / protection fault / unused vector)\n");
-    printf("    help   (this menu)\n");
+    for(i = 0; i < ncommands; i++) {
+        printf("    %-9s %-14s %s\n", commands[i].name, commands[i].args, commands[i].help);
+    }
     printf("    -------------------------------\n");
     printf("    (C)2004 Brandon Burr.\n\n");
 }
 
-void funky() {
-    getFunky(10);
+static void cmd_clear(int argc, char **argv) { clearScreen(); }
+
+static void cmd_echo(int argc, char **argv) {
+    int i;
+    for(i = 1; i < argc; i++) printf("%s%s", argv[i], i + 1 < argc ? " " : "");
+    printf("\n");
 }
 
-extern surf_task *curTask;
-
-void nt() {
-    int i=0;
-    for(i=0;i<3;i++) {
-        printf("pid: %i esp=0x%x\n",curTask->pid,curTask->esp);
-        sleep(500);
-    }
-    kprintf("exiting\n");
+static void cmd_reboot(int argc, char **argv) {
+    printf("\n    Please wait... rebooting...");
+    reboot();
 }
 
-void d1() {
-    int i=0;
-    for(i=0;i<4;i++) {
-        printf("crasher1\n",curTask->pid,curTask->esp);
-        sleep(250);
-    }
-    asm("int3");
+static void cmd_tick(int argc, char **argv) {
+    printf("\n    Ticks: %lu\n\n", getticks());
 }
 
-void d2() {
-    int i=0;
-    for(i=0;i<3;i++) {
-        printf("crasher1\n",curTask->pid,curTask->esp);
-        sleep(250);
-    }
-    asm("movl $0,%eax");
-    asm("jmpl *(%eax)");
+static void cmd_uptime(int argc, char **argv) {
+    u_long ms = uptime_ms();
+    printf("    up %lu.%02lu s (%lu ticks at %i Hz), %u tasks, %u timers pending\n",
+           ms / 1000, (ms % 1000) / 10, getticks(), HZ, task_count(), ktimers_count());
 }
 
-void parseCommand(const char line[]) {
-    if(!strlen(line)) return; /* no command entered */
-    if(!strcmp(line,"help")) {
-        invokeHelp();
-    } else if(!strcmp(line,"clear")) {
-        clearScreen();
-    } else if(!strcmp(line,"reboot")) {
-        printf("\n    Please wait... rebooting...");
-        reboot();
-    } else if(!strcmp(line,"beep")) {
-        demoBeep();
-    } else if(!strcmp(line,"term")) {
-        //invokeRS232Term(0);
-    } else if(!strcmp(line,"funky")) {
-        new_task("funky",conActive,KERNEL, PL_NORMAL,(u_int*)funky);
-    } else if(!strcmp(line,"die")) { //a ring-3 task: faults until P1 exists
-        new_task("ring3",conActive,USER, PL_NORMAL,(u_int*)funky);
-    } else if(!strcmp(line,"demo")) {
-        invokeDemo();
-    } else if(!strcmp(line,"hanoi")) {
-        runHanoi();
-    } else if(!strcmp(line,"test")) {
-        void *tmp = palloc(1024);
-        void *tmp2= mm_lookup_linear(tmp);
-        kprintf("0x%x linear is using physical 0x%x\n",tmp,tmp2);
-        pfree(tmp);
-    } else if(!strcmp(line,"tick")) {
-        printf("\n    Ticks: %i\n\n",getticks());
-    } else if(!strcmp(line,"lpstat")) {
-        printParStatus();
-    } else if(!strcmp(line,"memstat")) {
-        printMemInfo();
-    } else if(!strcmp(line,"kalloc")) {
-        kalloc(1024);
-    } else if(!strcmp(line,"ps")) {
-        print_tasks();
-    } else if(!strcmp(line,"inter")) {
-        fake_inter();
-    } else if(!strcmp(line,"time")) {
-        //time t time;
-        //get time(&time);
-        //printf("The current time is: %i:%i:%i\n",time.hour,time.minute, time.second);
-    } else if(!strcmp(line,"heaptest")) {
-        heaptest();
-    } else if(!strcmp(line,"crashnull")) {
-        *(volatile int *)0 = 1; //page 0 is unmapped, so this is a page fault with an error code
-    } else if(!strcmp(line,"dmesg")) {
-        klog_dump();
-    } else if(!strcmp(line,"crashdiv")) { //exercise the trap framework: real exceptions in this task
-        volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
-        printf("%i\n", one/zero);
-    } else if(!strcmp(line,"crashgp")) {
-        asm volatile("mov %0, %%ds" :: "r"(0x1234));
-    } else if(!strcmp(line,"crashint")) {
-        asm volatile("int $0x50");
-        printf("    int 0x50 returned\n");
-    } else {
-        printf("    Invalid command.\n");
+static void cmd_date(int argc, char **argv) {
+    time_t t;
+    get_time(&t);
+    printf("    %04u-%02u-%02u %02u:%02u:%02u (CMOS clock)\n", t.year, t.month, t.date, t.hour, t.minute, t.second);
+}
+
+static void cmd_sleep(int argc, char **argv) {
+    u_long ms = argc > 1 ? strtoul(argv[1], NULL, 10) : 1000;
+    u_long t0 = getticks();
+    sleep_ms(ms);
+    printf("    slept %lu ms (%lu ticks)\n", ms, getticks() - t0);
+}
+
+static void cmd_ps(int argc, char **argv) { print_tasks(); }
+
+static void cmd_kill(int argc, char **argv) {
+    surf_task *t;
+    u_long pid;
+    if(argc < 2) { printf("    usage: kill <pid>\n"); return; }
+    pid = strtoul(argv[1], NULL, 10);
+    t = task_find(pid);
+    if(!t) { printf("    no task with pid %lu\n", pid); return; }
+    if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return; }
+    printf("    killing '%s' (pid %lu)\n", t->name, pid);
+    kill_task(t);
+    if(t == curTask) yield();
+}
+
+static void cmd_memstat(int argc, char **argv) { printMemInfo(); }
+
+static void cmd_heaptest(int argc, char **argv) { heaptest(); }
+
+static void cmd_dmesg(int argc, char **argv) { klog_dump(); }
+
+static void cmd_irqstat(int argc, char **argv) {
+    int i;
+    printf("    IRQ  count\n");
+    for(i = 0; i < NR_IRQS; i++) if(irq_count[i]) printf("    %3i  %lu\n", i, irq_count[i]);
+    printf("    spurious: %lu\n", spurious_irq_count);
+}
+
+static void cmd_bootinfo(int argc, char **argv) { mb_print(); }
+
+static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
+
+static void cmd_test(int argc, char **argv) {
+    void *tmp = palloc(1024);
+    void *tmp2 = mm_lookup_linear(tmp);
+    printf("0x%lx linear is using physical 0x%lx\n", (u_long)tmp, (u_long)tmp2);
+    pfree(tmp);
+}
+
+static void cmd_beep(int argc, char **argv) { demoBeep(); }
+static void cmd_funky(int argc, char **argv) { new_task("funky", conActive, KERNEL, PL_NORMAL, (u_long*)funky); }
+static void cmd_die(int argc, char **argv) { new_task("ring3", conActive, USER, PL_NORMAL, (u_long*)funky); } /* a ring-3 task: faults until P1 exists */
+static void cmd_demo(int argc, char **argv) { invokeDemo(); }
+static void cmd_hanoi(int argc, char **argv) { runHanoi(); }
+
+static void cmd_selftest(int argc, char **argv) { run_selftest(); }
+
+/* exercise the trap framework: real exceptions in this task */
+static void cmd_crashdiv(int argc, char **argv) {
+    volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
+    printf("%i\n", one/zero);
+}
+static void cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); }
+static void cmd_crashint(int argc, char **argv) {
+    asm volatile("int $0x50");
+    printf("    int 0x50 returned\n");
+}
+static void cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; } /* page 0 is unmapped */
+
+static const struct command commands[] = {
+    { "help",      "[command]", "this menu, or one command in detail", cmd_help },
+    { "clear",     "",          "clear the active console", cmd_clear },
+    { "echo",      "words...",  "print the arguments", cmd_echo },
+    { "ps",        "",          "list tasks", cmd_ps },
+    { "kill",      "<pid>",     "kill a task", cmd_kill },
+    { "sleep",     "[ms]",      "sleep this shell for a while", cmd_sleep },
+    { "tick",      "",          "print the tick count", cmd_tick },
+    { "uptime",    "",          "time since boot", cmd_uptime },
+    { "date",      "",          "CMOS clock", cmd_date },
+    { "memstat",   "",          "memory statistics", cmd_memstat },
+    { "heaptest",  "",          "random allocations with patterns, then verify the heap", cmd_heaptest },
+    { "selftest",  "",          "run the kernel self tests", cmd_selftest },
+    { "dmesg",     "",          "kernel log", cmd_dmesg },
+    { "irqstat",   "",          "interrupt counts", cmd_irqstat },
+    { "bootinfo",  "",          "what the boot loader passed", cmd_bootinfo },
+    { "lpstat",    "",          "parallel port status", cmd_lpstat },
+    { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
+    { "beep",      "",          "beep the PC speaker", cmd_beep },
+    { "funky",     "",          "play a tune in a new task", cmd_funky },
+    { "die",       "",          "start a ring-3 task (faults until user mode exists)", cmd_die },
+    { "demo",      "",          "the 2004 demonstration menu", cmd_demo },
+    { "hanoi",     "",          "Towers of Hanoi", cmd_hanoi },
+    { "crashdiv",  "",          "divide by zero in this shell", cmd_crashdiv },
+    { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
+    { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
+    { "crashint",  "",          "raise an unused vector", cmd_crashint },
+    { "reboot",    "",          "reboot the machine", cmd_reboot },
+};
+
+/**** line handling ****/
+
+static int split_args(char *line, char **argv) {
+    int argc = 0;
+    char *save;
+    char *tok = strtok_r(line, " \t", &save);
+    while(tok && argc < SHELL_MAX_ARGS) {
+        argv[argc++] = tok;
+        tok = strtok_r(NULL, " \t", &save);
     }
+    return argc;
+}
+
+void parseCommand(char *line) {
+    char *argv[SHELL_MAX_ARGS];
+    int argc = split_args(line, argv);
+    u_int i;
+
+    if(!argc) return; /* no command entered */
+    for(i = 0; i < ncommands; i++) {
+        if(!strcmp(commands[i].name, argv[0])) {
+            commands[i].fn(argc, argv);
+            return;
+        }
+    }
+    printf("    Invalid command: %s (try help)\n", argv[0]);
 }
 
 /* the shell task body (started by init for each console) */
@@ -543,12 +219,12 @@ void shell() {
 }
 
 void startShell() {
-    char line[255];
-    memset(line,0,255);
+    char line[SHELL_LINE_LEN];
+    ncommands = sizeof(commands) / sizeof(commands[0]);
     for(;;) {
-        cputs(LBLUE_TXT,prompt);
-        memset(line,0,255);
-        cgets(TEAL_TXT,line);
+        cputs(LBLUE_TXT, prompt);
+        memset(line, 0, sizeof(line));
+        cgets(TEAL_TXT, line);
         parseCommand(line);
     }
 }
