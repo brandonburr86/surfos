@@ -595,7 +595,7 @@ static const struct command commands[] = {
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },
     { "funky",     "",          "play a tune in a new task", cmd_funky },
-    { "die",       "",          "start a ring-3 task (faults until user mode exists)", cmd_die },
+    { "die",       "",          "start a ring-3 task at a kernel address (killed at once: processes use run)", cmd_die },
     { "demo",      "",          "the 2004 demonstration menu", cmd_demo },
     { "hanoi",     "",          "Towers of Hanoi", cmd_hanoi },
     { "crashdiv",  "",          "divide by zero in this shell", cmd_crashdiv },

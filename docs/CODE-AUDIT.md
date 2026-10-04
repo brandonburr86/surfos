@@ -37,7 +37,9 @@ ATA and MBR drivers on top. Still open: **T12** (turf is unused but still in the
 **D5** (parallel port register addressing), **H1, H3**.
 Milestone M4 added roadmap F1 (VFS, block cache, tarfs, FAT) and milestone M5 roadmap P1 and
 P2 (user address spaces, system calls, ELF loader, user programs); the ring-3 descriptors
-and TSS from **I8, I9** now carry real processes.
+and TSS from **I8, I9** now carry real processes. Milestone M6 added roadmap N1 and N2 (e1000,
+the IPv4 stack with TCP, DHCP and DNS); **D4** stays open for the 3c905B code itself, which
+QEMU cannot exercise.
 
 ## What was verified under QEMU
 

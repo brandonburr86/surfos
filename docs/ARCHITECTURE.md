@@ -25,6 +25,7 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write); 128-block write-back cache |
 | Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 21 system calls, a user libc (`user/libsurf`) and a user-mode shell |
+| Network | e1000 driver; Ethernet, ARP, IPv4, ICMP, UDP, TCP, a DHCP client and a DNS resolver in a kernel thread; `ifconfig arp ping dhcp nslookup tcpecho httpget netstat` |
 | User interface | Ring-0 debug shell with about 50 commands; `run`/`spawn`, or type a program's name |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
@@ -45,9 +46,10 @@ mm/          memory.c (init), pmm.c (frame stack), paging.c (page tables, page-f
 lib/blibc/   chars.c printf.c strings.c string.c memory.c ctype.c time.c
 shell/       main.c (the shell), demos.c, selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, devfs.c (/dev)
+net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c
 user/        user.ld, libsurf/ (crt0.S, syscalls.c), include/surf.h, bin/ (hello crash cat ls count sh)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
-             ramdisk.c, ata.c, mbr.c, parport.c, dma/, floppy/, net/3c905b/
+             ramdisk.c, ata.c, mbr.c, net/e1000.c, parport.c, dma/, floppy/, net/3c905b/ (2004, unwired)
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
 tools/       qemu-run.py (headless QEMU harness), gensyms.py (symbol table for backtraces),
              mkimage.py (test disk image and initrd)
@@ -78,7 +80,8 @@ GRUB / qemu -kernel
        init_delay()               calibrates udelay()/mdelay() on PIT channel 2 (no interrupts needed)
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
-       init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata
+       init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata, e1000
+       init_net()                 the "net" kernel thread (frames queue up until the scheduler starts)
        init_fs()                  block cache, rootfs on /, /dev, the first tar ramdisk on /initrd, every FAT volume on /<device>
        init_syscalls()            int 0x80 handler
        init_timer()               PIT 100 Hz, IRQ0 = timerISR
@@ -224,7 +227,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 | Ramdisk | `driver/ramdisk.c` | Every Multiboot module is a writable ramdisk `rd0`, `rd1`, ... (`qemu -initrd`, GRUB `module`); modules above 16 MB are mapped with `ioremap()` |
 | ATA | `driver/ata.c` | Polled PIO, LBA28, both legacy channels, IDENTIFY, cache flush after writes, a mutex per channel; disks are `hda`-`hdd`, ATAPI devices are reported and skipped |
 | MBR | `driver/mbr.c` | The four primary partitions of each disk become `hda1`-`hda4` with their type |
-| 3c905B NIC | `driver/net/3c905b/` | Martin's "alpha" driver: EEPROM MAC read, MII, TX/RX descriptor rings in `palloc` memory, interrupt handler with debug prints, `iface` abstraction (`SnagPackets`/`SendPackets`/`Setting`). Registers the parallel-port ISR as its IRQ handler (debug leftover). QEMU does not emulate this card, so it is untestable there |
+| e1000 NIC | `driver/net/e1000.c` | Intel 82540EM (QEMU's default): MMIO through `ioremap()`, 32-entry receive and transmit rings in the DMA heap, MAC from the EEPROM, receive interrupts, transmit completion polled. QEMU holds frames for one second after RCTL is written, so the first reply after boot is late |
+| 3c905B NIC | `driver/net/3c905b/` | Martin's "alpha" driver: EEPROM MAC read, MII, TX/RX descriptor rings in `palloc` memory, interrupt handler with debug prints, `iface` abstraction (`SnagPackets`/`SendPackets`/`Setting`). Probes through `pci_find_device()`; not wired to the new stack (QEMU does not emulate the card) |
 
 `driver/drivers.c` is a table of `{name, init, status}` run in order by `init_drivers()`;
 `init` returns 0 (present), 1 (absent) or an error, and `drivers` prints the result.
@@ -293,7 +297,40 @@ are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a mod
   deep recursion, divide by zero), `cat`, `ls`, `count`, `sh` (a user shell that spawns
   from `/initrd/bin` and waits). They live in the initrd under `/bin`.
 
-## 11. The shell (`shell/main.c`)
+## 11. Network (`net/`)
+
+* **Devices and buffers** (`include/net/net.h`, `net/netbuf.c`): `struct netdev` has
+  the MAC, the IPv4 configuration (address, netmask, gateway, DNS), counters and a
+  `send` operation; `struct netbuf` is one frame with 64 bytes of headroom so each
+  layer prepends its header (`netbuf_push`) or strips it (`netbuf_pull`). Drivers call
+  `netdev_rx()` from their interrupt handler; frames queue up for the **net thread**,
+  which runs every protocol under `net_lock` and ticks every 100 ms for ARP retries,
+  ageing and TCP retransmission. API calls from other tasks take `net_lock` too and
+  wait on events with the lock released.
+* **Ethernet and ARP** (`eth.c`, `arp.c`): a 16-entry ARP table that answers requests,
+  parks one frame per unresolved address and sends it when the reply arrives (three
+  retries a second apart, entries age out after ten minutes); a gratuitous ARP
+  announces a new address.
+* **IPv4 and ICMP** (`ip.c`, `icmp.c`): header, checksum, don't-fragment, routing
+  through the gateway for other subnets, no fragments or options; echo requests are
+  answered in place and `icmp_ping()` waits for one reply at a time.
+* **UDP** (`udp.c`): eight kernel sockets with a receive queue each
+  (`udp_open/sendto/recvfrom/close`).
+* **TCP** (`tcp.c`): active and passive open, in-order receive into an 8 KB window,
+  an 8 KB send buffer retransmitted on a one-second timer (eight tries, backing off to
+  four seconds), FIN in both directions with CLOSING, LAST_ACK and a two-second
+  TIME_WAIT, RST in and out. No congestion control, out-of-order queueing or window
+  scaling. Eight sockets; `tcp_connect/listen/accept/send/recv/close`.
+* **DHCP and DNS** (`dhcp.c`, `dns.c`): DISCOVER/OFFER/REQUEST/ACK on port 68 applies
+  address, netmask, router and DNS server (the lease is reported, not renewed); one A
+  query with name compression on the answer.
+* **Shell**: `ifconfig [if ip mask [gw] [dns]]`, `arp`, `ping <ip|name> [n]`, `dhcp`,
+  `nslookup`, `tcpecho [port]` (a server task), `httpget <host> <port> [path]`,
+  `netstat`. Under QEMU's user network the gateway is 10.0.2.2, DHCP gives 10.0.2.15,
+  DNS is 10.0.2.3; the harness forwards a host port to guest port 7 and runs an HTTP
+  server whose port reaches the kernel as `httpport=` on the command line.
+
+## 12. The shell (`shell/main.c`)
 
 **ai-dev**: a command table with argument splitting; `help` is generated from it.
 
@@ -306,7 +343,7 @@ are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a mod
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
 
-## 12. Build system
+## 13. Build system
 
 One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
 their GCC 3 flags were removed on `ai-dev`; `master` still has them). Objects and the

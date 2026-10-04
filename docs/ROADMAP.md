@@ -370,7 +370,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M3 Devices** (done) | C1, C2, D1, D2 | Virtual consoles work; `lspci` with names; ramdisk and ATA sectors readable |
 | **M4 Files** (done) | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
 | **M5 Processes** (done) | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
-| **M6 Network** | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
+| **M6 Network** (done) | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -400,8 +400,8 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M0 to M5 are done. Next is M6: N1 (an e1000 driver for the NIC QEMU provides, with
-interrupt-driven receive and transmit rings in DMA memory, behind a small network
-device interface) and N2 (Ethernet, ARP, IPv4, ICMP, UDP, a DHCP client and DNS, then
-TCP; `ifconfig`, `arp`, `ping`, `dhcp`, `nslookup` in the shell; proven against QEMU's
-user-mode network, 10.0.2.2).
+All six milestones are done. What remains is polish and the items the catalog left open:
+a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control
+and out-of-order queueing, the floppy transfer path (D1/D2), the parallel-port register
+fix (D5), wrapping the 3c905B driver behind `struct netdev`, retiring turf (T12), and
+the user shell as the default shell on one console.

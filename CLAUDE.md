@@ -22,6 +22,7 @@ make images       # build/images/test.img (MBR + FAT16 partition) and initrd.tar
 make user         # just the user programs, build/O0/user/bin/
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --shell ps memstat     # ad hoc commands
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --disk build/images/test.img --initrd build/images/initrd.tar --shell lsblk
+# the harness gives QEMU a user-mode network (gateway 10.0.2.2) with a port forward to guest port 7 and a host HTTP server (httpport= on the kernel command line)
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n'  # VGA text dump
 ```
 
@@ -35,8 +36,9 @@ shell command or a kernel feature that the shell can exercise.
 boot/      Multiboot entry (boot.S), grub.cfg for the ISO
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic
 mm/        physical page stack, paging, kernel heap (kalloc), 1:1 DMA heap, uvm.c (per-process address spaces)
-driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), parallel port, DMA, floppy, 3c905B NIC
+driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC
 fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32, devfs
+net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS resolver
 user/      user programs: user.ld, libsurf (crt0, syscall wrappers), include/surf.h, bin/*.c (built into the initrd's /bin)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 shell/     the ring-0 shell and demos
