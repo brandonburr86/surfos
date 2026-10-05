@@ -60,7 +60,7 @@ ASFLAGS    = -m32 -ffreestanding -nostdlib -fno-pie -g -Iinclude -MMD -MP
 NASMFLAGS  = -felf32 -g -F dwarf
 LDFLAGS    = -m elf_i386 -nostdlib -T linker.ld
 
-# boot.o must come first so the Multiboot header lands inside the first 8 KB of the image.
+# boot.o must come first so the Multiboot headers land inside the first 8 KB of the image.
 SRC_S      = boot/boot.S
 SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c) \
              $(wildcard shell/*.c) $(wildcard fs/*.c) $(wildcard net/*.c) $(wildcard driver/*.c) $(wildcard driver/net/*.c) $(wildcard driver/dma/*.c) \
@@ -206,8 +206,21 @@ $(BUILD)/host/test_blibc: tests/host/test_blibc.c $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc
+# kernel code with no hardware access, tested the same way: the Multiboot 2 parser and the
+# free-frame arithmetic. The tests see SurfOS headers, as the kernel does.
+HOSTKERN_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iinclude -include tests/host/surf_names.h -MMD -MP
+$(BUILD)/host/kernel/%.o: %.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -c $< -o $@
+
+$(BUILD)/host/test_bootinfo: tests/host/test_bootinfo.c $(BUILD)/host/kernel/kernel/multiboot2.o $(BUILD)/host/kernel/mm/memrange.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_blibc
+	$(BUILD)/host/test_bootinfo
 
 clean:
 	rm -rf build
@@ -216,4 +229,4 @@ help:
 	@sed -n '2,13p' Makefile
 
 .PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help
--include $(DEPS)
+-include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d)
