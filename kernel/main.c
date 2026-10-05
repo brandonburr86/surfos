@@ -25,8 +25,20 @@ File: main.c    Date: Prior to 4/23/04
 #include <surfos/process.h>
 #include <net/net.h>
 #include <mm/paging.h>
+#include <surfos/cpu.h>
+#include <surfos/system.h>
 
 void kmain(u_long magic, u_long addr);
+
+/* Multiboot 2 is the UEFI path: the block is all the kernel knows about the firmware's
+   memory. Without a valid block and its memory map no RAM is known to be free, so stop
+   before pmm_init() writes anything (only a serial port can show this). */
+static void require_memory_map(void) {
+    if(bootinfo.protocol != 2 || (bootinfo.valid && bootinfo.nregions)) return;
+    kprintf("\nBOOT PROBLEM: %s, so no memory is known to be free. SYSTEM HALTED\n",
+            bootinfo.valid ? "the Multiboot 2 information has no memory map" : "the Multiboot 2 information was rejected");
+    halt();
+}
 
 void kmain(u_long magic, u_long addr) {
 
@@ -35,10 +47,13 @@ void kmain(u_long magic, u_long addr) {
     kprintf("SurfOS: serial console on COM1 (115200 8N1)\n");
     init_gdt(); //setup GDT
     mb_init(magic, addr); //copy the boot loader's memory map and modules while they are addressable
+    require_memory_map(); //Multiboot 2 without a usable map: stop before any memory is written
+    init_cpu(); //CPUID; 4 MB pages and write-combining for a framebuffer
     init_mem();
     init_console(); init_tty(); kprintf("Booting SurfOS Kernel.....\n\n");
     mb_print();
     run_memcheck(); //check for enough ram..
+    init_himem(); //RAM above 4 GB, if any: the way a framebuffer up there is reached
 
     init_interrupt(); //interrupt subsystem
     init_delay(); //udelay() for the drivers; the PIT needs no interrupts for this

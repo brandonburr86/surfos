@@ -3,7 +3,8 @@ SurfOS kernel memory allocation
 Copyright (C)2004 Brandon Burr, heap v2 10/2026 (roadmap M3)
 
 Two heaps built on the same code: the kernel heap at KHEAP_START (pages appear on first
-touch) and the DMA heap in the 1:1 mapped 10-15 MB area. Each block has a 16 byte header
+touch) and the DMA heap, a 1:1 mapped arena pmm_init() places in free RAM (it was the
+fixed 10-15 MB area until the USB boot work). Each block has a 16 byte header
 with a magic word, its payload size and the previous block's size, so neighbours can be
 merged in both directions; free blocks keep their list links in the payload. First fit,
 splitting, 16 byte alignment, poisoning on free, and a bad pointer panics instead of
@@ -48,7 +49,7 @@ struct heap {
 };
 
 static struct heap kheap = { "kernel", 1, KHEAP_START, KHEAP_END, KHEAP_START, NULL, NULL, 0, 0, 0, 0, 0 };
-static struct heap dmaheap = { "dma", 2, PHEAP_START, PHEAP_END, PHEAP_START, NULL, NULL, 0, 0, 0, 0, 0 };
+static struct heap dmaheap = { "dma", 2, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, 0 };  /* the arena's address is set by heap_init() */
 
 static inline struct hblock *hdr_of(void *payload) { return (struct hblock *)((u_long)payload - HEAP_HDR); }
 static inline void *payload_of(struct hblock *b) { return (void *)((u_long)b + HEAP_HDR); }
@@ -268,5 +269,6 @@ bool kheap_check(void) { return heap_check(&kheap) && heap_check(&dmaheap); }
 
 void heap_init(void) {
     kheap.brk = kheap.start; kheap.free_list = NULL; kheap.last = NULL;
+    dmaheap.start = PHEAP_START; dmaheap.limit = PHEAP_END;      /* placed by pmm_init(), mapped 1:1 */
     dmaheap.brk = dmaheap.start; dmaheap.free_list = NULL; dmaheap.last = NULL;
 }

@@ -34,6 +34,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <surfos/klog.h>
 #include <surfos/interrupt.h>
 #include <surfos/multiboot.h>
+#include <surfos/cpu.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -137,6 +138,15 @@ static void cmd_irqstat(int argc, char **argv) {
 static void cmd_bootinfo(int argc, char **argv) { mb_print(); }
 static void cmd_lspci(int argc, char **argv) { pci_print(); }
 static void cmd_drivers(int argc, char **argv) { print_drivers(); }
+static void cmd_cpuinfo(int argc, char **argv) { cpu_print(); }
+
+static void cmd_himem(int argc, char **argv) {
+    char wrote[40], got[40];
+    u64 phys;
+    int r = himem_test(wrote, got, sizeof(wrote), &phys);
+    if(r < 0) { printf("    no RAM above 4 GB is mapped (none in the memory map, or no PSE-36)\n"); return; }
+    printf("    himem: wrote \"%s\" at physical 0x%llx, read back \"%s\": %s\n", wrote, phys, got, r ? "MISMATCH" : "ok");
+}
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
@@ -564,6 +574,8 @@ static const struct command commands[] = {
     { "dmesg",     "",          "kernel log", cmd_dmesg },
     { "irqstat",   "",          "interrupt counts", cmd_irqstat },
     { "bootinfo",  "",          "what the boot loader passed", cmd_bootinfo },
+    { "cpuinfo",   "",          "processor model and features", cmd_cpuinfo },
+    { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
     { "lspci",     "",          "PCI devices with names", cmd_lspci },
     { "drivers",   "",          "driver init status", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },

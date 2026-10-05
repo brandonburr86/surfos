@@ -16,6 +16,10 @@
 #define PTE_PCD 0x010 /* cache disabled: device memory */
 #define PTE_A 0x020   /* accessed */
 #define PTE_D 0x040   /* dirty */
+#define PTE_PAT 0x080 /* in a page table entry: PAT index bit 2 (write-combining, see kernel/cpu.c) */
+#define PTE_PS 0x080  /* in a directory entry: a 4 MB page (CR4.PSE) */
+#define PDE_PAT 0x1000          /* PAT index bit 2 of a 4 MB page */
+#define PDE_PS36_MASK 0x1FE000  /* physical address bits 32-39 of a 4 MB page (PSE-36) */
 #define PTE_FRAME 0xFFFFF000
 
 /* page fault error code bits */
@@ -35,6 +39,8 @@ u_long vmm_get_phys(u_long virt);                      /* 0 when not mapped */
 bool vmm_is_mapped(u_long virt);
 void *mm_lookup_linear(void *linear);                  /* 2004 name: linear to physical */
 void *ioremap(u_long phys, u_long size, bool cached);  /* map device memory or a module; never unmapped */
+void *vmm_temp_map(u64 phys, u_long len);              /* read-only view of firmware data below 4 GB, replaced by the next call */
+void *vmm_map_large(u64 phys, u64 size, bool wc, const char **why); /* boot only; above 4 GB through PSE-36 4 MB pages */
 
 u_long *page_fault_trap(struct trapframe *tf);
 

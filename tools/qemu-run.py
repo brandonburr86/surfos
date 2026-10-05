@@ -47,6 +47,8 @@ SMOKE = [
     ('cat /hda1/DOCS/README.md', ['SurfOS']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
+    ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
+    ('himem',   ['no RAM above 4 GB']),
     ('dhcp',    ['lease 10.0.2.15', 'inet 10.0.2.15', 'gateway 10.0.2.2']),
     ('ping 10.0.2.2 2', ['64 bytes from 10.0.2.2', '2 packets transmitted, 2 received']),
     ('arp',     ['10.0.2.2']),
