@@ -38,6 +38,7 @@ SMOKE = [
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
+    ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
     ('lsblk',   ['rd0', 'hda', 'hda1']),
     ('hexdump hda 0', ['55 aa']),
     ('mount',   ['rd0', '/initrd', 'tarfs']),
@@ -48,7 +49,7 @@ SMOKE = [
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
-    ('drivers', ['parport   ok', 'console   VGA text mode', 'timer     PIT channel 0']),
+    ('drivers', ['parport   ok', 'usb       not present', 'console   VGA text mode', 'timer     PIT channel 0']),
     ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('himem',   ['no RAM above 4 GB']),

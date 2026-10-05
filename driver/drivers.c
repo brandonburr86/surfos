@@ -8,6 +8,8 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 10/5/26 (USB boot): with profile=laptop the ISA devices a modern laptop does not have
 (parallel port, 8237 DMA, floppy, legacy IDE ports) are skipped rather than probed, and
 `drivers` also says what the console, the timer and the keyboard ended up being.
+10/5/26 (USB networking): "usb" starts the xHCI controllers and sets up what is plugged
+in, after e1000 so that QEMU's NIC stays eth0 where both exist.
 */
 //Rebuilt 9/28/2026 - not in the printout, see REBUILD-NOTES.md
 
@@ -24,6 +26,7 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 #include <sys/pci.h>
 #include <sys/serial.h>
 #include <sys/bdev.h>
+#include <sys/usb.h>
 #include <blibc_common.h>
 
 extern int net_3c905b_init(void);
@@ -49,6 +52,7 @@ static struct driver drivers[] = {
     { "ramdisk", init_ramdisk, 0, 0 },        /* block devices: boot modules first, so they are rd0.. in module order */
     { "ata",     init_ata, 0, LEGACY },
     { "e1000",   init_e1000, 0, 0 },          /* QEMU's default NIC */
+    { "usb",     init_usb, 0, 0 },            /* xHCI controllers and what is plugged into them */
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 
@@ -84,4 +88,5 @@ void print_drivers() {
     printf("    timer     %s\n", timer_describe(buf, sizeof(buf)));
     printf("    keyboard  %s\n", keyboard_describe(buf, sizeof(buf)));
     printf("    apic      %s\n", apic_describe(buf, sizeof(buf)));
+    printf("    usb       %s\n", usb_describe(buf, sizeof(buf)));
 }

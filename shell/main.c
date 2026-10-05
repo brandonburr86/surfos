@@ -18,6 +18,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <sys/parport.h>
 #include <sys/serial.h>
 #include <sys/pci.h>
+#include <sys/usb.h>
 #include <sys/driver.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
@@ -142,6 +143,7 @@ static void cmd_bootinfo(int argc, char **argv) {
     printf("  screen: %s\n", console_describe(buf, sizeof(buf)));
 }
 static void cmd_lspci(int argc, char **argv) { pci_print(); }
+static void cmd_lsusb(int argc, char **argv) { usb_print(); }
 static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 static void cmd_cpuinfo(int argc, char **argv) { cpu_print(); }
 static void cmd_acpi(int argc, char **argv) { acpi_print(); }
@@ -584,6 +586,7 @@ static const struct command commands[] = {
     { "acpi",      "",          "firmware ACPI tables (profile=laptop)", cmd_acpi },
     { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
     { "lspci",     "",          "PCI devices with names", cmd_lspci },
+    { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },

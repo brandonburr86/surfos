@@ -20,6 +20,7 @@ File: pci.h Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 #define  PCI_COMMAND_IO     0x1
 #define  PCI_COMMAND_MEMORY 0x2
 #define  PCI_COMMAND_MASTER 0x4
+#define  PCI_COMMAND_INTX_DISABLE 0x400
 #define PCI_STATUS          0x06
 #define PCI_REVISION_ID     0x08
 #define PCI_CLASS_PROG      0x09
@@ -50,6 +51,9 @@ File: pci.h Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 #define PCI_CLASS_NETWORK   0x02
 #define PCI_CLASS_STORAGE   0x01
 #define PCI_CLASS_DISPLAY   0x03
+#define PCI_CLASS_SERIAL    0x0c
+#define PCI_SUBCLASS_USB    0x03
+#define PCI_PROGIF_XHCI     0x30
 
 struct pci_dev {
     u8 bus, slot, func;

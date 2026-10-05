@@ -7,7 +7,7 @@
 #   make run-vga      same with a VGA window (needs a display); serial on the terminal
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
-#   make unittest     host-side unit tests for blibc (formatter, strings)
+#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
@@ -66,7 +66,7 @@ LDFLAGS    = -m elf_i386 -nostdlib -T linker.ld
 SRC_S      = boot/boot.S
 SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c) \
              $(wildcard shell/*.c) $(wildcard fs/*.c) $(wildcard net/*.c) $(wildcard driver/*.c) $(wildcard driver/net/*.c) $(wildcard driver/dma/*.c) \
-             $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c)
+             $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c) $(wildcard driver/usb/*.c)
 # kernel/setjmp.asm is a dead pre-Multiboot entry stub and is not built.
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
@@ -242,7 +242,8 @@ $(BUILD)/host/test_blibc: tests/host/test_blibc.c $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
 # kernel code with no hardware access, tested the same way: the Multiboot 2 parser, the free-frame
-# arithmetic and the framebuffer renderer. The tests see SurfOS headers, as the kernel does.
+# arithmetic, the framebuffer renderer and the USB descriptor/NCM parser. The tests see SurfOS
+# headers, as the kernel does.
 HOSTKERN_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iinclude -include tests/host/surf_names.h -MMD -MP
 $(BUILD)/host/kernel/%.o: %.c tests/host/surf_names.h
 	@mkdir -p $(dir $@)
@@ -257,10 +258,15 @@ $(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kern
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer
+$(BUILD)/host/test_usb: tests/host/test_usb.c $(BUILD)/host/kernel/driver/usb/usbdesc.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
+	$(BUILD)/host/test_usb
 
 clean:
 	rm -rf build

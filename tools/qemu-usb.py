@@ -58,7 +58,9 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kerne
 PORTABLE = [
     ('help', ['SurfOS ring0 Debug Shell', '(C)2004 Brandon Burr.']),
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
-    ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'console   framebuffer', 'keyboard  8042']),
+    ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
+                 'keyboard  8042', 'usb       1 xHCI controller']),
+    ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> no driver']),       # the stick, at 5 Gbit/s
     ('tick', ['Ticks:']),
     ('ps', ['Kernel Idle Task', 'init', 'Shell 0']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
@@ -71,7 +73,7 @@ PORTABLE = [
     ('heaptest', ['HEAPTEST PASS']),
     ('acpi', ['FADT', 'MADT', 'I/O APIC']),
     ('cpuinfo', ['physical address bits', '4 MB pages on']),
-    ('selftest', ['skip FAT', 'skip network', 'SELFTEST PASS']),
+    ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),
 ]
 TIMEOUTS = {'selftest': 180, 'heaptest': 60}
 

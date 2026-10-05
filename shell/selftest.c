@@ -24,6 +24,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <net/tcp.h>
 #include <surfos/multiboot.h>
 #include <mm/kalloc.h>
+#include <sys/usb.h>
 #include "shell.h"
 
 static int fails;
@@ -436,6 +437,14 @@ static void test_net(void) {
     printf("        (%s: %lu frames in, %lu out)\n", ipfmt(dev->ip, a), dev->rx_packets, dev->tx_packets);
 }
 
+/* 10/5/26: endpoint 0 of a USB device must work again after a request it stalled */
+static void test_usb(void) {
+    int r = usb_stall_test();
+    if(r == USB_ENODEV) { printf("  skip USB (no device that stalls a bad request)\n"); return; }
+    check(r == 0, "USB: endpoint 0 works again after a stalled request");
+    if(r) printf("        (%s)\n", usb_strerror(r));
+}
+
 int run_selftest(void) {
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
@@ -445,6 +454,7 @@ int run_selftest(void) {
     test_fat();
     test_user();
     test_net();
+    test_usb();
     test_tasks();
     test_sleep();
     test_timers();
