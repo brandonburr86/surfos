@@ -14,14 +14,14 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 
 | Property | Value |
 |---|---|
-| CPU mode | 32-bit protected mode, paging on, single CPU, no FPU init |
-| Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB |
+| CPU mode | 32-bit protected mode, paging on, single CPU; **ai-dev**: CR0/CR4 set explicitly, x87 initialised |
+| Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB; **ai-dev**: also Multiboot 2 (GRUB on UEFI, the USB image, section 14) |
 | Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80` |
 | Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack |
 | Memory | Identity map of the low 16 MB, demand-paged kernel heap at 0xB0000000, a page directory per process with the user range 0x40000000-0x7FFFFFFF |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
-| Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task |
-| Devices | VGA text console (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions, 3Com 3c905B NIC (no protocol stack) |
+| Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task; **ai-dev** `profile=laptop`: the 8259s reach the CPU through the local APIC (virtual wire), whose timer is the fallback tick |
+| Devices | VGA text console, or **ai-dev** a framebuffer console on UEFI (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console when there is one, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions, 3Com 3c905B NIC (no protocol stack) |
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write); 128-block write-back cache |
 | Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 21 system calls, a user libc (`user/libsurf`) and a user-mode shell |
@@ -92,6 +92,16 @@ The messages printed by `init_gdt()` and `init_mem()` only appear on the serial
 console: the video console is initialised after them and `kputch()` has nowhere else
 to put output while `conActive` is NULL. (On `master` they were lost entirely.)
 
+**ai-dev** (USB boot, 10/2026): `kmain()` now reads, in order: `init_serial()` (probes
+COM1 first), `init_gdt()`, `mb_init()` (Multiboot 1 or 2 by the magic number),
+`init_cpu()` (CPUID, CR0/CR4, 4 MB pages, PAT), `init_mem()` (arenas from the memory map,
+section 4), `init_console()` (VGA text, or the framebuffer), `console_replay_log()` (the
+lines above, from the kernel log, onto the new screen), `mb_print()`, a check of the boot
+information, `run_memcheck()`, `init_himem()`; with `profile=laptop` `init_acpi()` and,
+after `init_interrupt()`, `init_apic()`; then as above, ending with `init_timer()` and
+`timer_confirm()`, which waits up to 100 ms for the first tick (on a laptop it starts the
+local APIC timer when the PIT's never comes, otherwise it stops with a message).
+
 CS reload: the Multiboot specification leaves the code selector undefined. QEMU's
 built-in loader enters with CS=0x08, GRUB 2 with CS=0x10. The far jump in `init_gdt()`
 is what makes the GRUB ISO boot (**verified**: without it the first `iret` after a page
@@ -106,14 +116,23 @@ defined in `include/mm/memory.h` and `include/sys/dma.h`.
 |---|---|---|
 | 0x00000000 - 0x000FFFFF | BIOS/real-mode area | **ai-dev** unmaps page 0 after driver init, so NULL dereferences fault |
 | 0x00008000 - 0x00047FFF | ISA DMA bounce buffers (`dma-mm.c`) | 4 x 64 KB slots |
-| 0x00100000 - ~0x00125000 | Kernel image | .text, .rodata, .data, .ksyms (symbol table), .bss (16 KB boot stack, GDT, IDT, page directory) |
-| 0x00200000 - 0x005FFFFF | Page tables | 4 MB = 1024 tables, covers the whole 4 GB; every directory entry points here from boot |
-| 0x00600000 - 0x009FFFFF | Free-frame stack | 4 MB of frame addresses, popped top-down (`mm/pmm.c`) |
-| 0x00A00000 - 0x00EFFFFF | DMA heap | `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
-| 0x00F00000 - end of RAM | Free page frames | From the Multiboot memory map, minus loaded modules |
+| 0x00100000 - ~0x00190000 | Kernel image | .text, .rodata, .data, .ksyms (symbol table), .bss (16 KB boot stack, GDT, IDT, page directory) |
+| placed at boot (**ai-dev**) | Page tables | 4 MB = 1024 tables, covers the whole 4 GB; every directory entry points here from boot |
+| placed at boot (**ai-dev**) | Free-frame stack | 4 bytes per frame of the memory map, popped top-down (`mm/pmm.c`) |
+| placed at boot (**ai-dev**) | DMA heap | 5 MB, `kalloc_dma()`, 1:1 mapped, for anything a device reads or writes |
+| the rest of RAM below 4 GB | Free page frames | From the memory map, minus the reserved ranges (low memory and the kernel, modules, framebuffer, arenas) |
 | 0x40000000 - 0x7FFFFFFF | User range (per process) | ELF image from 0x40000000, sbrk heap above it, stack growing down from 0x80000000 (up to 4 MB); `mm/uvm.c` |
 | 0xB0000000 - 0xBFFFFFFF | Kernel heap (`kalloc()`) | Pages mapped on first touch by the page fault handler |
-| 0xC0000000 - 0xCFFFFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
+| 0xC0000000 - 0xCFFDFFFF | `ioremap()` window | Device registers (uncached) and boot modules above 16 MB |
+| 0xCFFE0000 - 0xCFFFFFFF | `vmm_temp_map()` (**ai-dev**) | One read-only view of a firmware table at a time (ACPI) |
+| 0xD0000000 - 0xDFFFFFFF | `vmm_map_large()` (**ai-dev**) | The framebuffer (write-combining) and 4 MB of RAM above 4 GB for `himem`: 4 KB pages below 4 GB, PSE-36 4 MB pages above |
+
+**ai-dev** (USB boot): the page tables, the frame stack and the DMA heap used to be fixed at
+2-15 MB. That was always free under QEMU's loader, but OVMF keeps ACPI NVS data at 8-9 MB
+and GRUB on UEFI may put the initrd anywhere. `pmm_init()` now puts each arena in the
+lowest free stretch of available RAM between 1 MB and 1 GB and identity-maps it; the
+kernel image and every module are checked against the map. RAM totals are 64-bit
+(`memstat` reports RAM above 4 GB, which only the frame allocator cannot use).
 
 **ai-dev**: `mm/pmm.c` builds the frame stack from the Multiboot map that
 `kernel/multiboot.c` copies at boot (on `master`, `memprobe()` wrote a magic value to
@@ -186,6 +205,11 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 
 * `console.c` keeps four `surf_console` buffers plus `conVideo` for 0xB8000.
   Output goes to the task's console and, if that console is active, to video memory.
+  **ai-dev**: when the boot loader leaves a linear framebuffer (UEFI), `conVideo` is a
+  buffer in RAM and `driver/framebuffer.c` draws the cells that changed into the
+  framebuffer with an 8x16 font (`driver/font8x16.c`, Spleen), scaled by a whole number and
+  centred, with a software cursor; `driver/fbcore.c` is the renderer, tested on the host.
+  On such a boot 0xB8000 and the CRTC ports are never touched.
   Every character funnels through `kputch()`. `printf()`, `puts()`, `cputs()` and,
   from task context, `kprintf()` print on the calling task's console (`kprintf()`
   in yellow, boot code and interrupt handlers on the active console), so a shell
@@ -232,6 +256,10 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 
 `driver/drivers.c` is a table of `{name, init, status}` run in order by `init_drivers()`;
 `init` returns 0 (present), 1 (absent) or an error, and `drivers` prints the result.
+**ai-dev**: with `profile=laptop` the ISA entries (parport, dma, floppy, ata) are skipped,
+and `drivers` also prints the console, serial, timer, keyboard and APIC that were chosen.
+The parallel port reads its address from the BIOS data area as a 16-bit word and accepts
+only 0x378/0x278/0x3BC (UEFI leaves that area with arbitrary contents).
 The test disk (`build/images/test.img`: MBR, FAT16 partition at block 2048 built by
 `tools/mkimage.py` with mtools) and the initrd (`build/images/initrd.tar` from `rootfs/`)
 are attached by `make run`/`make test`; the GRUB ISO carries the initrd as a module.
@@ -356,3 +384,58 @@ smoke test through `tools/qemu-run.py`), `test-all` (-O0 and -O2), `unittest`
 (blibc on the host), `debug` (gdb stub), `iso` (GRUB image), `run-iso`, `clean`.
 `.github/workflows/ci.yml` runs the unit tests, the smoke tests and the ISO build.
 See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags.
+**ai-dev**: `usb-image` and `test-usb` (section 14), `test-mkusb`; CI runs them too.
+
+## 14. UEFI laptop boot (ai-dev, October 2026)
+
+The USB image boots SurfOS on a UEFI PC, the Lenovo IdeaPad 3 15IIL05 in particular
+(`docs/USB-BOOT.md`, hardware record in `docs/hardware/`):
+
+```
+firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
+  -> \EFI\BOOT\BOOTX64.EFI   standalone GRUB 2 for x86_64 UEFI; its built-in bootstrap
+                             (boot/grub-usb-bootstrap.cfg) finds the partition it came from
+  -> /boot/grub/grub.cfg     (boot/grub-usb.cfg) multiboot2 /boot/surfos.bin profile=laptop,
+                             module2 /boot/initrd.tar
+  -> kmain(0x36D76289, info) boot services exited, 32-bit protected mode, paging off
+```
+
+* **Multiboot 2.** `boot/boot.S` carries both headers (Multiboot 1 at file offset 0x1004,
+  Multiboot 2 at 0x1010); the Multiboot 2 header asks for a linear framebuffer in the
+  firmware's current mode, preferably 32 bits per pixel, and page-aligned modules. No EFI
+  tags: GRUB exits boot services and enters like Multiboot 1. `kernel/multiboot2.c` checks
+  every tag against the block's size (the envelope is checked first, at most 256 KB) and
+  rejects truncated, misaligned, oversized or unterminated data as a whole
+  (`tests/host/test_bootinfo.c`). The memory map holds 512 entries and fails rather than
+  dropping any; more than 8 modules are counted and reported. A rejected block, or one
+  without a memory map, stops the boot before any memory is written (`require_memory_map()`;
+  without a framebuffer only a serial port can say why).
+* **CPU state.** Multiboot 2 leaves CR0/CR4 undefined and OVMF hands over CR0.WP set.
+  `init_cpu()` sets CR0 to PE, MP, ET, NE (x87 `fninit`) and clears the CR4 bits that
+  would change behaviour (SMEP, SMAP, PVI, PCIDE, PGE, …), then sets PSE and makes PAT
+  entry 4 write-combining.
+* **profile=laptop.** `kernel/acpi.c` reads the FADT, MADT and HPET tables (checksums and
+  lengths checked; the root pointer comes from GRUB, or the BIOS area on a BIOS machine).
+  `kernel/apic.c` puts the local APIC in virtual wire mode (LINT0 ExtINT, LINT1 NMI; xAPIC
+  or x2APIC), masks every I/O APIC input and acknowledges interrupts the firmware left in
+  service. `kernel/timer.c` calibrates its delays on the first clock it sees counting (PIT
+  channel 2, ACPI PM timer, HPET; the HPET's legacy routing is switched off so IRQ 0 is the
+  PIT's) and `timer_confirm()` falls back to the local APIC timer (vector 0x30) when the
+  PIT's tick never arrives. `kernel/keyboard.c` rewrites the 8042's command byte (IRQ 1,
+  set-1 translation, mouse off) with bounded waits and also polls it on every tick; the
+  IRQ handler checks the status register first, so no byte is taken twice. Only the
+  initrd is mounted. Debug words: `timer=lapic`, `kbd=poll`, `kbd=irq`, `clock=pmtmr`,
+  `clock=hpet`.
+* **The framebuffer lock.** Whoever draws holds a busy flag and cannot be preempted until
+  it lets go (a task killed while drawing would keep it, and the screen would freeze);
+  a task killed by an exception gives it back, and `panic()` and the wipeout path take
+  the screen over so their report is drawn.
+* **Bounded probes everywhere.** COM1 is probed through its scratch register and its
+  receive loop is bounded; the CMOS update wait, the reset path (ACPI reset register,
+  0xCF9, the 8042, then a triple fault) and every 8042 wait are bounded.
+* **Testing.** `tools/qemu-usb.py` boots the image file itself under OVMF with fresh
+  firmware variables from an emulated xHCI USB stick, without serial if asked, types on
+  the PS/2 keyboard through the monitor and reads the framebuffer back cell by cell
+  against the font. Seven scenarios: serial, keyboard-only at 4 GB, 6 GB with `himem`
+  checked through the monitor, the troubleshooting entry, no PIT, and images missing
+  their initrd or kernel.

@@ -41,6 +41,19 @@ and TSS from **I8, I9** now carry real processes. Milestone M6 added roadmap N1 
 the IPv4 stack with TCP, DHCP and DNS); **D4** stays open for the 3c905B code itself, which
 QEMU cannot exercise.
 
+Found and fixed by the USB boot work (milestone M7, October 2026), all of them harmless
+under QEMU's loader and dangerous on a UEFI PC:
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| U1 | `include/mm/memory.h` | page tables, frame stack and DMA heap fixed at 2-15 MB without asking the memory map; OVMF keeps ACPI NVS at 8-9 MB, GRUB may put modules there | `pmm_init()` places them in available RAM, reserved explicitly (`mm/memrange.c`, host-tested) |
+| U2 | `mm/pmm.c` | RAM total summed into a 32-bit `u_long` (a region above 4 GB wrapped) | 64-bit totals, RAM above 4 GB reported separately |
+| U3 | `driver/parport.c` | LPT1 address read as 32 bits from the BIOS data area and trusted; on OVMF it read 0x1f055913, and init then wrote to I/O port 0x5913 | 16-bit read, only 0x378/0x278/0x3BC accepted; skipped with `profile=laptop` |
+| U4 | `driver/serial.c` | the receive loop ran while the line status had bit 0 set: an absent UART reads 0xFF, an endless loop in the ISR | COM1 probed (scratch register), loop bounded |
+| U5 | `kernel/sys.c`, `lib/blibc/time.c` | `while(inb(0x64) & 2)` and `while(cmos_busy())` never end on a machine without the device | bounded; reset also tries the ACPI reset register, 0xCF9 and a triple fault |
+| U6 | `kernel/cpu.c` (new) | CR0/CR4 inherited from the boot loader: GRUB on OVMF hands over CR0.WP set, and firmware may set SMAP or PVI | both registers set explicitly at boot, the originals shown by `cpuinfo` |
+| U7 | `kernel/keyboard.c` | the ISR read port 0x60 whatever the status said | reads only when a keyboard byte is waiting, so polling and the IRQ never take one twice |
+
 ## What was verified under QEMU
 
 Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with

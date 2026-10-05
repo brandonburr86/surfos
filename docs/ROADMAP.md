@@ -9,9 +9,12 @@ order. It builds on `docs/ARCHITECTURE.md` (what exists) and `docs/CODE-AUDIT.md
 
 Keep, because they are the architecture:
 
-* 32-bit x86, protected mode, single CPU, Multiboot 1 / GRUB boot, ELF kernel at 1 MB.
+* 32-bit x86, protected mode, single CPU, Multiboot 1 / GRUB boot, ELF kernel at 1 MB
+  (and, since M7, Multiboot 2 for GRUB on UEFI).
 * One monolithic kernel: drivers, scheduler, filesystems and (for now) the shell all in ring 0.
-* Flat segmentation (code 0x08 / data 0x10), 8259 PICs, PIT timer, VGA text console.
+* Flat segmentation (code 0x08 / data 0x10), 8259 PICs, PIT timer, VGA text console (since
+  M7, on a UEFI PC: the 8259s through the local APIC, its timer when the PIT does not tick,
+  and a framebuffer text console).
 * Software stack-switching scheduler with priority run queues, `yield` via `int 0x40`.
 * Identity-mapped low memory, demand-paged kernel heaps, NASM stubs + C.
 * `blibc` as the in-tree libc, the shell as the primary user interface.
@@ -19,6 +22,13 @@ Keep, because they are the architecture:
 
 Out of scope until this plan is done: x86-64, SMP/APIC, UEFI, a microkernel split,
 a higher-half kernel, a GUI, porting an external libc.
+
+Widened in October 2026 for milestone M7, the laptop port
+(`docs/superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md`): booting from
+UEFI through GRUB and Multiboot 2, a framebuffer text console, reading the ACPI tables
+the platform needs, and the boot CPU's local APIC (virtual wire mode, and its timer as
+the fallback tick) are in scope. Still out of scope: x86-64, SMP, I/O APIC interrupt
+routing, a UEFI loader of our own, Secure Boot signing.
 
 Working rules for every change on this branch:
 
@@ -371,6 +381,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M4 Files** (done) | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
 | **M5 Processes** (done) | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
 | **M6 Network** (done) | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
+| **M7 Laptop USB boot** (emulation done, hardware pending) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick (7 scenarios); the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -400,7 +411,13 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-All six milestones are done. What remains is polish and the items the catalog left open:
+M7: run the USB image on the IdeaPad itself and fill in `docs/hardware/ideapad-3-15iil05.md`.
+After that, in the order the laptop needs them (each its own milestone): a USB HID keyboard
+over xHCI (only if the built-in keyboard does not work through the 8042), AHCI or NVMe
+for the internal disk (identify the controller first, add GPT partitions), USB mass storage,
+and the actual Wi-Fi chip.
+
+The six earlier milestones are done. What remains there is polish and the items the catalog left open:
 a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control
 and out-of-order queueing, the floppy transfer path (D1/D2), the parallel-port register
 fix (D5), wrapping the 3c905B driver behind `struct netdev`, retiring turf (T12), and

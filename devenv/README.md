@@ -8,8 +8,10 @@ other host features that cannot be used in this freestanding kernel.
 This image uses Debian bookworm with GCC multilib on `linux/amd64`, producing ELF32
 x86 kernels. Docker emulates amd64 on Apple Silicon. The host blibc tests contain
 x86 inline assembly too, so they must run in the x86 container rather than on an
-ARM host. The image includes Python 3, mtools for the disk image, and QEMU for the test
-suite. No host compiler installation or Documents bind mount is required.
+ARM host. The image includes Python 3, mtools for the disk images, QEMU for the test
+suite, and GRUB's EFI files and OVMF for the USB image. No host compiler installation
+or Documents bind mount is required. The source revision recorded in the USB image's
+manifest is passed in from the host's git (the container's copy has no `.git`).
 
 ```sh
 ./devenv/build.sh             # kernel, user programs, test disk and initrd
@@ -22,6 +24,21 @@ O=2 ./devenv/run.sh           # run the optimized kernel
 ./devenv/build.sh test-all   # complete QEMU suite at O0 and O2 inside Docker
 ./devenv/build.sh clean      # successful even though no kernel remains
 ```
+
+The USB image for UEFI PCs (`docs/USB-BOOT.md`):
+
+```sh
+./devenv/build-usb.sh         # build/usb/surfos-ideapad-15iil05.img (+ .sha256, build-manifest.json), O=2
+O=0 ./devenv/build-usb.sh     # the same with the debug build
+./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from an emulated USB stick: 7 scenarios
+./devenv/test-usb.sh --screen # just boot it without a serial port and print the screen
+./devenv/run-usb.sh           # boot a copy of it in a QEMU window to try it by hand
+```
+
+`build-usb.sh` runs `make usb-image` in the container (GRUB 2.06's x86_64-efi files,
+grub-mkstandalone and mtools are in the image) and copies the result to `build/usb/` with
+its checksum verified. The test and run scripts need `qemu-system-x86_64` and its EDK2
+firmware on the host (Homebrew's `qemu` ships both). None of them writes to a disk device.
 
 Docker Desktop must be running, and the invoking process must have access to its
 socket. Host `run.sh` and `boottest.sh` require `qemu-system-i386` on PATH.

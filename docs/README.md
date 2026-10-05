@@ -5,9 +5,12 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, and booting SurfOS on the Lenovo IdeaPad 3 15IIL05 |
+| [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
+| [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 
 ## Building and running
 
@@ -16,17 +19,22 @@ make              # build/O0/surfos.bin  (make O=2 for an optimised build)
 make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quits)
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
+make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
+make test-usb     # boot that image under QEMU + OVMF from an emulated USB stick
 ```
 
 Needs `gcc` with 32-bit support, `binutils`, `nasm`, `qemu-system-x86` and `python3`.
 `CLAUDE.md` at the repository root has the longer version plus the conventions.
 For macOS or a containerized build, use [devenv](../devenv/README.md):
 `./devenv/build.sh` builds the kernel and boot images with modern GCC multilib;
-`./devenv/run.sh` boots the exported files with host QEMU.
+`./devenv/run.sh` boots the exported files with host QEMU; `./devenv/build-usb.sh` builds
+the USB image and `./devenv/test-usb.sh` / `./devenv/run-usb.sh` boot it with host QEMU.
 
 Status in one paragraph: the kernel builds with a 2026 toolchain, boots to its shell
 under QEMU (`-kernel` and GRUB ISO) and can be driven entirely over the serial console.
 Multitasking, demand paging, the PIT, keyboard, VGA console, PCI scan and most shell
-commands work. Nothing blocks, the allocator leaks, several exception vectors mishandle
-error codes, user mode and storage never worked, and the only NIC driver targets a card
-QEMU does not emulate. The roadmap starts from there.
+commands work, as do user programs, FAT and an IPv4 stack on QEMU's e1000. Since
+milestone M7 it also boots from a USB drive on a UEFI PC: under OVMF from an emulated
+USB stick it reaches the shell on a framebuffer console with the PS/2 keyboard and no
+serial port, with or without a PIT. The boot on the Lenovo IdeaPad itself is still to be
+tested.
