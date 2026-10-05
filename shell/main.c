@@ -135,7 +135,11 @@ static void cmd_irqstat(int argc, char **argv) {
     printf("    spurious: %lu\n", spurious_irq_count);
 }
 
-static void cmd_bootinfo(int argc, char **argv) { mb_print(); }
+static void cmd_bootinfo(int argc, char **argv) {
+    char buf[160];
+    mb_print();
+    printf("  screen: %s\n", console_describe(buf, sizeof(buf)));
+}
 static void cmd_lspci(int argc, char **argv) { pci_print(); }
 static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 static void cmd_cpuinfo(int argc, char **argv) { cpu_print(); }

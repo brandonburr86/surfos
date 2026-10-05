@@ -12,7 +12,9 @@ File: console.c Date: Prior to 4/23/04
 #include <surfos/keyboard.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
+#include <surfos/multiboot.h>
 #include <sys/serial.h>
+#include <sys/framebuffer.h>
 #include <surfos/klog.h>
 
 #include <mm/kalloc.h>
@@ -26,12 +28,24 @@ surf_console conVideo; //the console mapped to the actual video memory
 surf_console *conActive; //the pointer to the active console
 /********************/
 
+/* The screen (10/5/26, USB boot): VGA text memory at 0xB8000, or, when the boot loader
+   left a framebuffer, a buffer in RAM that driver/framebuffer.c draws from. A UEFI boot
+   without a usable framebuffer has no screen at all (VIDEO_NONE): 0xB8000 and the CRTC
+   ports are never touched there, only the serial port shows anything. */
+enum { VIDEO_VGA, VIDEO_FB, VIDEO_NONE };
+static int video = VIDEO_VGA;
+static u_char video_ram[VMEM_SIZE];
+static bool mirror_serial = true;
+
 void init_console(void) {
     int i=0;
     if(NUM_CONSOLES<1) return;
 
     //init the video console
-    conVideo.vmem = (u_char*)VMEM_ADDR; //normally 0xB8000
+    if(framebuffer_init() == 0) video = VIDEO_FB;
+    else if(bootinfo.efi) video = VIDEO_NONE;
+    conVideo.vmem = video == VIDEO_VGA ? (u_char*)VMEM_ADDR : video_ram; //normally 0xB8000
+    if(video == VIDEO_FB) framebuffer_bind(video_ram);
     conVideo.txtColor=TEAL_TXT; //for posterity
     clearConsole((surf_console*)&conVideo);
     setPoint((surf_point*)&conVideo.loc,0,0);
@@ -45,8 +59,28 @@ void init_console(void) {
     }
 
     conActive = (surf_console*)&conArray[0]; //set active console to first.*/
+    if(video == VIDEO_FB) framebuffer_present();
 
     return;
+}
+
+/* what the screen is, for bootinfo and drivers */
+const char *console_describe(char *buf, size_t size) {
+    if(video == VIDEO_FB) return framebuffer_describe(buf, size);
+    if(video == VIDEO_VGA) {
+        strlcpy(buf, "VGA text mode at 0xB8000", size);
+        return buf;
+    }
+    framebuffer_describe(buf, size);            /* "none (why)" */
+    return buf;
+}
+
+/* Show the boot messages printed before there was a screen (they are in the kernel
+   log; the serial port had them as they happened, so it does not get them twice). */
+void console_replay_log(void) {
+    mirror_serial = false;
+    klog_dump();
+    mirror_serial = true;
 }
 
 void syncVideoConsole(bool memcopy) {
@@ -58,6 +92,7 @@ void syncVideoConsole(bool memcopy) {
     setpos(con);
     if(memcopy) memcpy(conVideo.vmem,con->vmem,VMEM_SIZE);
     KCRIT_LEAVE
+    if(memcopy && video == VIDEO_FB) framebuffer_present();
 }
 
 bool isConsoleActive(surf_console *con) {
@@ -138,6 +173,8 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
     if(isConsoleActive(con)==false) return;
     tX=con->loc.x;
     tY=con->loc.y;
+    if(video == VIDEO_FB) { framebuffer_set_cursor(tX, tY); return; } //a drawn cursor; no CRTC on a framebuffer
+    if(video == VIDEO_NONE) return;
     KCRIT_ENTER
     asm("mov $0, %ebx");
     asm("mov (%0), %%bl" :: "m"(tX));
@@ -174,6 +211,7 @@ static void putcell(surf_console *con, TEXTCOLOR color, int c) {
     if(isConsoleActive(con)) {
         *(conVideo.vmem + off) = c & 0xFF;
         *(conVideo.vmem + off + 1) = color;
+        if(video == VIDEO_FB) framebuffer_draw_cell(con->loc.x, con->loc.y, c & 0xFF, color);
     }
     KCRIT_LEAVE
 }
@@ -181,7 +219,7 @@ static void putcell(surf_console *con, TEXTCOLOR color, int c) {
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
-    if(!con || con == conActive) serial_console_putc(c);
+    if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
     if(!con) return;
     switch (c) {
     case '\n':

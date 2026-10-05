@@ -53,6 +53,10 @@ void switchConsole(u_int conNum);
 
 void syncVideoConsole(bool);
 
+/* 10/5/26 (USB boot): VGA text or the framebuffer, see kernel/console.c */
+const char *console_describe(char *buf, size_t size);
+void console_replay_log(void);   /* the early boot messages, on a screen that did not exist yet */
+
 extern surf_console *conActive;
 extern surf_console conArray[];
 

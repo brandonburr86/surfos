@@ -27,6 +27,8 @@ File: main.c    Date: Prior to 4/23/04
 #include <mm/paging.h>
 #include <surfos/cpu.h>
 #include <surfos/system.h>
+#include <mm/pmm.h>
+#include <sys/framebuffer.h>
 
 void kmain(u_long magic, u_long addr);
 
@@ -40,6 +42,20 @@ static void require_memory_map(void) {
     halt();
 }
 
+/* What the boot loader passed, checked now that there is a screen to say it on. */
+static void check_boot(void) {
+    char buf[160];
+    if(bootinfo.error) kprintf("\nBOOT PROBLEM: the Multiboot 2 information was rejected (%s)\n", mb2_strerror(bootinfo.error));
+    if(pmm_problem()) kprintf("\nBOOT PROBLEM: %s\n", pmm_problem());
+    if(!bootinfo.laptop) return;
+    if(!bootinfo.efi) kprintf("\nprofile=laptop without UEFI: fine for testing under QEMU, but this is not the USB boot\n");
+    if(bootinfo.efi && bootinfo.efi_bs) {
+        kprintf("\nBOOT PROBLEM: the boot loader left the firmware's boot services running\n");
+    }
+    if(bootinfo.efi && !framebuffer_active())
+        kprintf("\nBOOT PROBLEM: no usable screen: %s (only a serial port can show this)\n", console_describe(buf, sizeof(buf)));
+}
+
 void kmain(u_long magic, u_long addr) {
 
     /* Begin C Kernel */
@@ -50,8 +66,11 @@ void kmain(u_long magic, u_long addr) {
     require_memory_map(); //Multiboot 2 without a usable map: stop before any memory is written
     init_cpu(); //CPUID; 4 MB pages and write-combining for a framebuffer
     init_mem();
-    init_console(); init_tty(); kprintf("Booting SurfOS Kernel.....\n\n");
+    init_console(); init_tty();
+    console_replay_log(); //the lines above, which only the serial port and the kernel log saw
+    kprintf("Booting SurfOS Kernel.....\n\n");
     mb_print();
+    check_boot();
     run_memcheck(); //check for enough ram..
     init_himem(); //RAM above 4 GB, if any: the way a framebuffer up there is reached
 

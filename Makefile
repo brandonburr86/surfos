@@ -206,8 +206,8 @@ $(BUILD)/host/test_blibc: tests/host/test_blibc.c $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
-# kernel code with no hardware access, tested the same way: the Multiboot 2 parser and the
-# free-frame arithmetic. The tests see SurfOS headers, as the kernel does.
+# kernel code with no hardware access, tested the same way: the Multiboot 2 parser, the free-frame
+# arithmetic and the framebuffer renderer. The tests see SurfOS headers, as the kernel does.
 HOSTKERN_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iinclude -include tests/host/surf_names.h -MMD -MP
 $(BUILD)/host/kernel/%.o: %.c tests/host/surf_names.h
 	@mkdir -p $(dir $@)
@@ -218,9 +218,14 @@ $(BUILD)/host/test_bootinfo: tests/host/test_bootinfo.c $(BUILD)/host/kernel/ker
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo
+$(BUILD)/host/test_framebuffer: tests/host/test_framebuffer.c $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
+	$(BUILD)/host/test_framebuffer
 
 clean:
 	rm -rf build
