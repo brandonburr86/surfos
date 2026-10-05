@@ -76,7 +76,7 @@ IDE disk, no network card. GRUB 2.06-13+deb12u2 (Debian), mtools 4.0.32.
 | `make unittest` | blibc 45, boot information 50, framebuffer 39 checks: all pass |
 | `make test-mkusb` | 8 tests pass (GPT CRCs, layout, files, manifest, refusals, failure keeps the old image) |
 | `make test-all` | 42/42 at -O0 and -O2 (the Multiboot 1 path is unchanged) |
-| `make test-usb` (`tools/qemu-usb.py --test`) | 90/90 checks at -O0 and 90/90 at -O2, 7 cold boots each: serial (512 MB), keyboard-only without a serial port (4 GB), high memory (6 GB), troubleshooting entry, no PIT, image without initrd, image without kernel |
+| `make test-usb` (`tools/qemu-usb.py --test`) | 91/91 checks at -O0 and 91/91 at -O2, 7 cold boots each: serial (512 MB), keyboard-only without a serial port (4 GB), high memory (6 GB), troubleshooting entry, no PIT, image without initrd, image without kernel |
 | `tools/qemu-run.py --test` with host QEMU | 46/46 at -O0 and -O2 (the five new commands included) |
 
 The tests keep their transcripts and screenshots in `build/usb-test/` (not in git).

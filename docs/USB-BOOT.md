@@ -2,14 +2,16 @@
 
 SurfOS can boot on a real UEFI PC from a USB flash drive. The target is the Lenovo
 IdeaPad 3 15IIL05 (machine type 81WE, 10th-generation Core i3). The drive holds its
-own boot loader, kernel and programs. Nothing is installed on the laptop, its internal
-disk is never touched, and pulling the drive out and restarting brings the laptop back
-to its normal operating system.
+own boot loader, kernel and programs, and SurfOS runs directly on the laptop's
+processor, screen and keyboard: there is no emulator on the drive. QEMU appears only on
+the build machine, where it tests the image before it reaches real hardware (step 2).
+Nothing is installed on the laptop, its internal disk is never touched, and pulling the
+drive out and restarting brings the laptop back to its normal operating system.
 
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| UEFI + USB boot under emulation | done | `make test-usb`: 7 cold boots under OVMF, 90 checks, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 7 cold boots under OVMF, 91 checks, at -O0 and -O2 |
 | Boot on the physical IdeaPad | **pending: needs your test on the laptop** | record it in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 
 ## What is on the drive
