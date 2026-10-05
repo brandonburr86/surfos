@@ -40,7 +40,11 @@ bool vmm_is_mapped(u_long virt);
 void *mm_lookup_linear(void *linear);                  /* 2004 name: linear to physical */
 void *ioremap(u_long phys, u_long size, bool cached);  /* map device memory or a module; never unmapped */
 void *vmm_temp_map(u64 phys, u_long len);              /* read-only view of firmware data below 4 GB, replaced by the next call */
-void *vmm_map_large(u64 phys, u64 size, bool wc, const char **why); /* boot only; above 4 GB through PSE-36 4 MB pages */
+#define VMM_CACHED 0   /* vmm_map_large() modes: RAM */
+#define VMM_WC     1   /* a framebuffer: write-combining (uncached without PAT) */
+#define VMM_UC     2   /* device registers */
+void *vmm_map_large(u64 phys, u64 size, int mode, const char **why); /* boot only; above 4 GB through PSE-36 4 MB pages */
+void *ioremap64(u64 phys, u_long size, const char **why);             /* device registers, also above 4 GB; boot only */
 
 u_long *page_fault_trap(struct trapframe *tf);
 

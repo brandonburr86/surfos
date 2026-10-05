@@ -44,7 +44,7 @@ void init_himem(void) {
         u64 start = r->base > 0x100000000ULL ? r->base : 0x100000000ULL, end = r->base + r->len;
         start = (start + 0x3FFFFF) & ~0x3FFFFFULL;
         if(r->type != MB_MEMORY_AVAILABLE || end < start + 0x400000) continue;
-        himem_virt = (volatile char *)vmm_map_large(start, 0x400000, false, &why);
+        himem_virt = (volatile char *)vmm_map_large(start, 0x400000, VMM_CACHED, &why);
         if(!himem_virt) {
             kprintf("*RAM above 4 GB at 0x%llx cannot be mapped: %s\n", start, why);
             return;

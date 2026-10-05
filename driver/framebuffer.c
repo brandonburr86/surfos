@@ -57,7 +57,7 @@ int framebuffer_init(void) {
     m.blue_pos = bootinfo.fb.blue_pos;   m.blue_size = bootinfo.fb.blue_size;
     why = fb_check_mode(&m, &bytes);
     if(why) { why_not = why; return -1; }
-    virt = (u8 *)vmm_map_large(m.addr, bytes, true, &why);
+    virt = (u8 *)vmm_map_large(m.addr, bytes, VMM_WC, &why);
     if(!virt) { why_not = why; return -1; }
 
     fb_setup(&fbs, virt, &m);

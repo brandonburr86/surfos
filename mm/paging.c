@@ -10,7 +10,8 @@ drivers have read the BIOS data area, so a NULL dereference faults (audit M6).
 
 10/5/26 (USB boot): a reusable window for reading firmware tables, and a framebuffer
 window that uses 4 MB pages with PSE-36 when the firmware put the framebuffer above
-4 GB, where 32-bit page tables cannot point.
+4 GB, where 32-bit page tables cannot point. The same window maps device registers
+above 4 GB uncached (ioremap64(): a 64-bit BAR, like the laptop's USB controller).
 */
 
 #include <surfos/types.h>
@@ -171,15 +172,15 @@ void *vmm_temp_map(u64 phys, u_long len) {
     return (void *)(TMPMAP_START + off);
 }
 
-/* Map a framebuffer (wc: write-combining when PAT allows it, else uncached) or RAM (cached)
-   into the BIGMAP window, which hands out 4 MB-aligned slots and never takes them back.
-   Below 4 GB with 4 KB pages. Above 4 GB 32-bit page tables cannot reach, but a 4 MB page
-   can with PSE-36 (physical bits 32-39 in PDE bits 13-20), up to MAXPHYADDR. Done at boot,
-   before any process copies the kernel's page directory. NULL and a reason when the range
-   cannot be mapped. */
+/* Map a framebuffer (VMM_WC: write-combining when PAT allows it, else uncached), RAM
+   (VMM_CACHED) or device registers (VMM_UC) into the BIGMAP window, which hands out 4 MB-aligned
+   slots and never takes them back. Below 4 GB with 4 KB pages. Above 4 GB 32-bit page tables
+   cannot reach, but a 4 MB page can with PSE-36 (physical bits 32-39 in PDE bits 13-20), up to
+   MAXPHYADDR. Done at boot, before any process copies the kernel's page directory. NULL and a
+   reason when the range cannot be mapped. */
 static u_long bigmap_next = BIGMAP_START;
 
-void *vmm_map_large(u64 phys, u64 size, bool wc, const char **why) {
+void *vmm_map_large(u64 phys, u64 size, int mode, const char **why) {
     u64 end = phys + size, base, len, i;
     u_long off, virt = bigmap_next, room = BIGMAP_END - bigmap_next;
     const char *dummy;
@@ -187,14 +188,18 @@ void *vmm_map_large(u64 phys, u64 size, bool wc, const char **why) {
     if(!size || end < phys) { *why = "empty or wrapping range"; return NULL; }
 
     if(end <= 0x100000000ULL) {
-        u_long flags = PTE_W | (wc ? (cpu.pat_wc ? PTE_PAT : (PTE_PCD | PTE_PWT)) : 0);
+        u_long flags = PTE_W;
+        if(mode == VMM_WC) flags |= cpu.pat_wc ? PTE_PAT : (PTE_PCD | PTE_PWT);
+        else if(mode == VMM_UC) flags |= PTE_PCD | PTE_PWT;
         off = (u_long)phys & (PAGE_SIZE - 1);
         base = phys - off;
         len = (size + off + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
         if(len > room) { *why = "larger than the space left in the mapping window"; return NULL; }
         for(i = 0; i < len; i += PAGE_SIZE) vmm_map(virt + (u_long)i, (u_long)(base + i), flags);
     } else {
-        u_long flags = PTE_PS | PTE_P | PTE_W | (wc ? (cpu.pat_wc ? PDE_PAT : (PTE_PCD | PTE_PWT)) : 0);
+        u_long flags = PTE_PS | PTE_P | PTE_W;
+        if(mode == VMM_WC) flags |= cpu.pat_wc ? PDE_PAT : (PTE_PCD | PTE_PWT);
+        else if(mode == VMM_UC) flags |= PTE_PCD | PTE_PWT;
         if(!cpu.pse_on || !cpu.pse36) { *why = "above 4 GB, and the CPU has no PSE-36 4 MB pages"; return NULL; }
         if(end > (1ULL << (cpu.phys_bits < 40 ? cpu.phys_bits : 40))) { *why = "beyond the CPU's physical address width"; return NULL; }
         off = (u_long)(phys & (LARGE_PAGE - 1));
@@ -209,4 +214,18 @@ void *vmm_map_large(u64 phys, u64 size, bool wc, const char **why) {
     }
     bigmap_next += (u_long)((len + LARGE_PAGE - 1) & ~(u64)(LARGE_PAGE - 1));
     return (void *)(virt + off);
+}
+
+/* Device registers anywhere in the physical address space, uncached: through ioremap()
+   below 4 GB, through a PSE-36 page above (where a 64-bit BAR may be placed). */
+void *ioremap64(u64 phys, u_long size, const char **why) {
+    const char *dummy;
+    if(!why) why = &dummy;
+    if(!size || phys + size < phys) { *why = "empty or wrapping range"; return NULL; }
+    if(phys + size <= 0x100000000ULL) {
+        void *p = ioremap((u_long)phys, size, false);
+        if(!p) *why = "no room left in the I/O mapping window";
+        return p;
+    }
+    return vmm_map_large(phys, size, VMM_UC, why);
 }
