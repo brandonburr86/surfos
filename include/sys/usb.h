@@ -215,6 +215,7 @@ struct usb_driver {
     void (*service)(struct usb_device *dev);   /* from the usb thread, at least once a second */
 };
 
+extern const struct usb_driver usbnet_driver;
 
 /* device layer (driver/usb/usb.c) */
 int init_usb(void);                            /* the driver table entry: controllers, then the ports */

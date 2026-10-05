@@ -31,7 +31,7 @@ usb=off on the kernel command line leaves the controllers alone.
 #define MAX_TRIES 3                /* enumeration attempts before a port is left alone until replugged */
 
 /* the class drivers, asked in order; the list ends with NULL */
-static const struct usb_driver *const usb_drivers[] = { NULL };
+static const struct usb_driver *const usb_drivers[] = { &usbnet_driver, NULL };
 
 static struct usb_hc *hcs;
 static event_t usb_event;

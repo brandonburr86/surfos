@@ -52,7 +52,7 @@ static struct driver drivers[] = {
     { "ramdisk", init_ramdisk, 0, 0 },        /* block devices: boot modules first, so they are rd0.. in module order */
     { "ata",     init_ata, 0, LEGACY },
     { "e1000",   init_e1000, 0, 0 },          /* QEMU's default NIC */
-    { "usb",     init_usb, 0, 0 },            /* xHCI controllers and what is plugged into them */
+    { "usb",     init_usb, 0, 0 },            /* xHCI, then USB Ethernet adapters (CDC ECM/NCM) */
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 

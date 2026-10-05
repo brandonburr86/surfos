@@ -403,6 +403,22 @@ static void test_tcp(void) {
     tcp_close(s);
 }
 
+/* 10/5/26 (USB networking): any other network, a USB adapter on the laptop for example,
+   gets only the checks that hold everywhere: a lease with a gateway, and the gateway
+   answering a ping or at least ARP */
+static void test_net_other(struct netdev *dev) {
+    const struct arp_entry *e;
+    char a[16], g[16];
+    int i, ok = 0;
+    check(dev->ip && dev->netmask && dev->gateway, "an address, netmask and gateway (DHCP or ifconfig)");
+    for(i = 1; i <= 3 && !ok && dev->gateway; i++) if(icmp_ping(dev->gateway, 0x5f61, (u16)i, 56, 2000, NULL) >= 0) ok = 1;
+    for(e = arp_table(), i = 0; !ok && dev->gateway && i < ARP_TABLE_SIZE; i++)
+        if(e[i].valid && e[i].resolved && e[i].ip == dev->gateway) ok = 1;
+    check(ok, "the gateway answers (a ping, or at least ARP)");
+    printf("        (%s: %s, gateway %s, %lu frames in, %lu out; QEMU-only checks skipped)\n", dev->name,
+           ipfmt(dev->ip, a), ipfmt(dev->gateway, g), dev->rx_packets, dev->tx_packets);
+}
+
 static void test_net(void) {
     struct netdev *dev = netdev_default();
     const struct arp_entry *e;
@@ -410,6 +426,18 @@ static void test_net(void) {
     char a[16];
 
     if(!dev) { printf("  skip network (no interface)\n"); return; }
+    if(!dev->link_up) { printf("  skip network (%s: no link)\n", dev->name); return; }
+    if(!dev->ip) {
+        /* which network is this? A lease from QEMU's comes with gateway 10.0.2.2; then the
+           configuration is dropped again so the checks below start from nothing as always */
+        if(dhcp_configure(dev, 8000) == 0 && dev->gateway != IP4(10, 0, 2, 2)) { test_net_other(dev); return; }
+        mutex_lock(&net_lock);
+        dev->ip = dev->netmask = dev->gateway = dev->dns = 0;
+        mutex_unlock(&net_lock);
+    } else if(dev->gateway != IP4(10, 0, 2, 2)) {
+        test_net_other(dev);
+        return;
+    }
     if(!dev->ip) {                                   /* QEMU's user network: 10.0.2.0/24, gateway 10.0.2.2 */
         mutex_lock(&net_lock);
         dev->ip = IP4(10, 0, 2, 15);

@@ -16,7 +16,7 @@ using the same scale and centring as driver/fbcore.c. That is how the keyboard-o
 (no serial port at all, like the laptop) is driven: keys go in through the emulated
 PS/2 keyboard (monitor sendkey), text comes out of the framebuffer.
 
---test boots the image seven times, each a cold boot with fresh firmware variables:
+--test boots the image eight times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), console switching
@@ -27,6 +27,11 @@ PS/2 keyboard (monitor sendkey), text comes out of the framebuffer.
              timer ticks and polled keystrokes arrive
   no-pit     a machine without an 8254 (a chipset can gate its clock): the delays are
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
+  usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
+             controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
+             this host (a small page and 1 MB), the self test's network checks, then the
+             adapter unplugged and plugged in again through the monitor, and finally a
+             different adapter on another network (192.168.76.0/24) in its place
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -35,6 +40,7 @@ screenshots as PNG, results.json) goes to --output-dir.
 """
 import argparse
 import collections
+import http.server
 import glob
 import hashlib
 import json
@@ -46,6 +52,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 
@@ -252,7 +259,7 @@ NAMED.update({f'f{i}': f'f{i}' for i in range(1, 13)})
 
 
 class Vm:
-    def __init__(self, name, args, image, firmware, mem='512', serial=True, outdir=None, machine='q35'):
+    def __init__(self, name, args, image, firmware, mem='512', serial=True, outdir=None, machine='q35', extra=()):
         self.name, self.args, self.serial_on = name, args, serial
         base = '/tmp' if os.path.isdir('/tmp') else tempfile.gettempdir()      # short: UNIX socket paths
         self.work = tempfile.mkdtemp(prefix='surfos-usb-', dir=base)
@@ -272,7 +279,7 @@ class Vm:
                '-monitor', f'unix:{self.mon_path},server,nowait']
         cmd += (['-chardev', f'socket,id=ser0,path={ser_path},server=on,wait=off', '-serial', 'chardev:ser0']
                 if serial else ['-serial', 'none'])
-        cmd += args.extra.split()
+        cmd += list(extra) + args.extra.split()
         self.cmd = cmd
         self.proc = subprocess.Popen(cmd, cwd=self.work, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT)
@@ -596,6 +603,106 @@ def scenario_nopit(args, image, firmware, outdir):
     return results
 
 
+BIG_BODY = b''.join(b'SurfOS USB network test: line %05d of 16384, 64 bytes each....\n' % i for i in range(16384))
+assert len(BIG_BODY) == 1 << 20                # the large download: 1 MB
+
+
+class HttpHandler(http.server.BaseHTTPRequestHandler):
+    """what the guest fetches with httpget: a line naming the path, or BIG_BODY"""
+    def do_GET(self):
+        if self.path == '/big':
+            body = BIG_BODY
+        else:
+            body = f'SurfOS HTTP test OK: {self.path}\n'.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def run_cmd(vm, cmd, expects, timeout=30):
+    start = len(vm.transcript)
+    vm.send(cmd + '\n')
+    ok = all(vm.expect(e, timeout) for e in expects) and vm.expect(PROMPT, timeout)
+    return ok, vm.transcript[start:].decode(errors='replace')
+
+
+USBNET_DEV = 'usb-net,bus=xhci.0,netdev=n0,id=usbnet0,mac=52:54:00:12:34:56'
+# a second adapter on another network (not QEMU's 10.0.2.0/24), plugged in later
+USBNET_OTHER = 'usb-net,bus=xhci.0,netdev=n1,id=usbnet1,mac=52:54:00:65:43:21'
+
+
+def scenario_usbnet(args, image, firmware, outdir):
+    results = []
+    httpd = http.server.HTTPServer(('127.0.0.1', 0), HttpHandler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
+            extra=['-netdev', 'user,id=n0', '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV])
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            boot = vm.text()
+            results.append(('the adapter is set up at boot as eth0 (CDC ECM)',
+                            re.search(r'\+USB: port \d+: 0525:a4a2 .*: eth0, cdc-ecm, MAC 52:54:00:12:34:56', boot) is not None))
+            for cmd, expects in [('lsusb', ['QEMU USB HARDDRIVE', 'RNDIS/QEMU USB Network Device', '-> eth0, cdc-ecm']),
+                                 ('ifconfig', ['eth0: 52:54:00:12:34:56, link up']),
+                                 ('dhcp', ['lease 10.0.2.15', 'gateway 10.0.2.2', 'dns 10.0.2.3']),
+                                 ('ping 10.0.2.2 3', ['3 packets transmitted, 3 received']),
+                                 (f'httpget 10.0.2.2 {port} /usbnet', ['200 OK', 'SurfOS HTTP test OK: /usbnet', 'bytes received'])]:
+                ok, _ = run_cmd(vm, cmd, expects)
+                results.append((cmd.replace(str(port), '<port>'), ok))
+            ok, out = run_cmd(vm, f'httpget 10.0.2.2 {port} /big', ['line 00000 of 16384', 'bytes received'], timeout=120)
+            m = re.search(r'(\d+) bytes received in (\d+) ms(.*)', out)
+            got = int(m.group(1)) if m else 0
+            if m:
+                ms = max(int(m.group(2)), 1)
+                print(f'      ({got} bytes in {ms} ms: {got / ms:.0f} KB/s)', flush=True)
+            # the body and the response header: at least the body, and the end of the body seen
+            results.append(('1 MB over HTTP arrives complete', ok and m is not None and got > len(BIG_BODY)
+                            and 'timed out' not in m.group(3)))
+            ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
+            results.append(('selftest, with its network checks on the USB adapter', ok))
+            # unplugged: the port reports it, eth0 stays but has no link
+            vm.mon.cmd('device_del usbnet0')
+            ok = vm.expect('unplugged (eth0, cdc-ecm', 20)
+            results.append(('unplugging the adapter is noticed', ok))
+            ok, _ = run_cmd(vm, 'ifconfig', ['eth0: 52:54:00:12:34:56, link down'])
+            results.append(('eth0 remains, link down', ok))
+            # plugged in again: the same name, and with the same MAC the same address
+            vm.mon.cmd('device_add ' + USBNET_DEV)
+            ok = vm.expect('eth0, cdc-ecm, MAC 52:54:00:12:34:56', 30)
+            results.append(('plugged in again, it is eth0 again', ok))
+            vm.expect('eth0: link up', 10)
+            ok, _ = run_cmd(vm, 'ifconfig', ['link up', 'inet 10.0.2.15'])
+            results.append(('and keeps its address', ok))
+            ok, _ = run_cmd(vm, 'ping 10.0.2.2 2', ['2 packets transmitted, 2 received'])
+            results.append(('ping after plugging it in again', ok))
+            # another adapter on another network: it becomes eth0 with the old address dropped,
+            # and the self test checks what holds on any network
+            vm.mon.cmd('device_del usbnet0')
+            vm.expect('unplugged (eth0, cdc-ecm', 20)
+            vm.mon.cmd('device_add ' + USBNET_OTHER)
+            ok = vm.expect('eth0, cdc-ecm, MAC 52:54:00:65:43:21', 30)
+            results.append(('a different adapter becomes eth0', ok))
+            vm.expect('eth0: link up', 10)
+            ok, _ = run_cmd(vm, 'ifconfig', ['eth0: 52:54:00:65:43:21', 'inet 0.0.0.0'])
+            results.append(('without the previous adapter\'s address', ok))
+            ok, _ = run_cmd(vm, 'dhcp', ['lease 192.168.76.15', 'gateway 192.168.76.2'])
+            results.append(('dhcp on the other network', ok))
+            ok, _ = run_cmd(vm, 'selftest', ['ok   the gateway answers', 'QEMU-only checks skipped', 'SELFTEST PASS'],
+                            timeout=180)
+            results.append(('selftest on a network that is not QEMU\'s default', ok))
+        check_bad(vm, results, vm.text())
+    finally:
+        vm.close()
+        httpd.shutdown()
+    return results
+
+
 def load_mkusb():
     import importlib.util
     spec = importlib.util.spec_from_file_location('mkusb', os.path.join(REPO, 'tools', 'mkusb.py'))
@@ -630,7 +737,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'highmem': scenario_highmem,
-             'fallback': scenario_fallback, 'no-pit': scenario_nopit,
+             'fallback': scenario_fallback, 'no-pit': scenario_nopit, 'usbnet': scenario_usbnet,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -733,7 +840,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'highmem', 'fallback', 'no-pit', 'no-initrd', 'no-kernel']:
+    for name in a.scenario or ['serial', 'keyboard', 'highmem', 'fallback', 'no-pit', 'usbnet', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)
