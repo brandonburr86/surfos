@@ -41,11 +41,17 @@ DEFAULT_TARGETS=()
 if [ "${#TARGETS[@]}" -eq 0 ]; then
     DEFAULT_TARGETS=(all images)
 fi
+# The volume has no .git, so the source revision for the USB image manifest comes from here.
+REV="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+DIRTY=unknown
+if git -C "$ROOT" rev-parse --git-dir > /dev/null 2>&1; then
+    if [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then DIRTY=no; else DIRTY=yes; fi
+fi
 mkdir -p "$(dirname "$LOG")" "$(dirname "$OUT")"
 set +e
 docker run --rm --platform "$PLATFORM" -v "$VOLUME":/surfos -w /surfos "$IMAGE" \
     make \
-    O="$LEVEL" ${DEFAULT_TARGETS[@]+"${DEFAULT_TARGETS[@]}"} "$@" 2>&1 | tee "$LOG"
+    O="$LEVEL" SURFOS_REV="$REV" SURFOS_DIRTY="$DIRTY" ${DEFAULT_TARGETS[@]+"${DEFAULT_TARGETS[@]}"} "$@" 2>&1 | tee "$LOG"
 STATUS=$?
 set -e
 if [ "$STATUS" -ne 0 ]; then
@@ -67,6 +73,11 @@ fi
 rm -rf "$OUT"
 mv "$STAGE" "$OUT"
 trap - EXIT
+for target in ${TARGETS[@]+"${TARGETS[@]}"}; do
+    if [ "$target" = usb-image ] && [ -s "$OUT/build/usb/surfos-ideapad-15iil05.img" ]; then
+        echo "USB image: $OUT/build/usb/surfos-ideapad-15iil05.img"
+    fi
+done
 if [ -s "$OUT/$BUILD_DIR/surfos.bin" ]; then
     echo "Kernel: $OUT/$BUILD_DIR/surfos.bin ($(wc -c < "$OUT/$BUILD_DIR/surfos.bin" | tr -d ' ') bytes)"
 else

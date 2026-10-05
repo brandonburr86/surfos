@@ -11,6 +11,8 @@
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
+#   make usb-image    build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
+#   make test-usb     boot that exact image under QEMU + OVMF from an emulated USB stick and test it
 #   make clean
 
 O         ?= 0
@@ -189,6 +191,39 @@ $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)$(PYTHON) tools/mkimage.py disk $@ 16 $(DISK_FILES)
 
+# ---- USB boot image for UEFI PCs (docs/USB-BOOT.md) ---------------------------------------
+# The image carries this level's kernel and an initrd of this level's user programs; the shared
+# build/images/initrd.tar is whichever level was built last, so it is not used here.
+USB_DIR      = build/usb
+USB_IMAGE    = $(USB_DIR)/surfos-ideapad-15iil05.img
+USB_INITRD   = $(BUILD)/initrd.tar
+USB_TESTDIR  = build/usb-test/O$(O)
+GRUB_FILE    = grub-file
+QEMU64       = qemu-system-x86_64
+# devenv/build.sh passes these in: the Docker copy of the tree has no .git
+SURFOS_REV   ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+SURFOS_DIRTY ?= $(shell git rev-parse --git-dir >/dev/null 2>&1 && { test -z "$$(git status --porcelain 2>/dev/null)" && echo no || echo yes; } || echo unknown)
+OVMF_ARGS    = $(if $(OVMF_CODE),--ovmf-code $(OVMF_CODE)) $(if $(OVMF_VARS),--ovmf-vars $(OVMF_VARS))
+
+$(USB_INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py
+	@echo "IMG  $@"
+	$(Q)rm -rf $(BUILD)/initrd && mkdir -p $(BUILD)/initrd/bin && cp -r rootfs/. $(BUILD)/initrd/ && cp $(USER_BINS) $(BUILD)/initrd/bin/
+	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(BUILD)/initrd
+
+usb-image: $(KERNEL) $(USB_INITRD) boot/grub-usb.cfg boot/grub-usb-bootstrap.cfg tools/mkusb.py
+	@mkdir -p $(USB_DIR)
+	$(Q)$(GRUB_FILE) --is-x86-multiboot $(KERNEL) && $(GRUB_FILE) --is-x86-multiboot2 $(KERNEL) \
+		|| { echo "$(KERNEL): grub-file does not find both Multiboot headers"; exit 1; }
+	$(PYTHON) tools/mkusb.py --kernel $(KERNEL) --initrd $(USB_INITRD) --output $(USB_IMAGE) \
+		--optimization O$(O) --source-rev $(SURFOS_REV) --source-dirty $(SURFOS_DIRTY)
+
+# boots the image file itself (no -kernel): OVMF with fresh variables, xHCI + usb-storage
+test-usb: usb-image
+	$(PYTHON) tools/qemu-usb.py --qemu $(QEMU64) --image $(USB_IMAGE) --output-dir $(USB_TESTDIR) $(OVMF_ARGS) --test
+
+test-mkusb:
+	$(PYTHON) -m unittest discover -s tests -p test_mkusb.py -v
+
 # host-side unit tests for the pure parts of blibc (formatter, strings), see tests/host/
 HOSTCC    ?= gcc
 # -m32 when the host can link 32-bit programs (libc6-dev-i386), so long is 32 bits like in the kernel
@@ -231,7 +266,7 @@ clean:
 	rm -rf build
 
 help:
-	@sed -n '2,13p' Makefile
+	@sed -n '2,15p' Makefile
 
-.PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help
+.PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d)

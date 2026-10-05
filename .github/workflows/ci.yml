@@ -1,5 +1,6 @@
 # Boot-test every push: build at -O0 and -O2, run the serial smoke test under QEMU,
-# run the host unit tests, and make sure the GRUB ISO still builds.
+# run the host unit tests, make sure the GRUB ISO still builds, and build the USB image
+# for UEFI PCs and boot that exact image under OVMF from an emulated USB stick.
 name: ci
 
 on:
@@ -9,19 +10,22 @@ on:
 jobs:
   build-and-boot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain and QEMU
+      - name: Install toolchain, QEMU, GRUB and OVMF
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
-            grub-pc-bin grub-common xorriso mtools
+            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf
 
       - name: Unit tests (host)
         run: make unittest
+
+      - name: USB image builder tests
+        run: make test-mkusb
 
       - name: Build and smoke test at -O0 and -O2
         run: make test-all
@@ -29,7 +33,13 @@ jobs:
       - name: GRUB ISO
         run: make iso
 
-      - name: Keep the kernels and ISO
+      - name: USB image and UEFI boot tests at -O0
+        run: make O=0 test-usb USB_TESTDIR=build/usb-test/O0
+
+      - name: USB image and UEFI boot tests at -O2
+        run: make O=2 test-usb USB_TESTDIR=build/usb-test/O2
+
+      - name: Keep the kernels, the ISO, the USB image and the test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -39,4 +49,6 @@ jobs:
             build/O2/surfos.bin
             build/O0/surfos.iso
             build/O0/surfos.sym
+            build/usb/
+            build/usb-test/
           if-no-files-found: ignore
