@@ -74,7 +74,7 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 class Qemu:
     def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
-                 disk=None, initrd=None, disk_inplace=False, net=True):
+                 disk=None, initrd=None, disk_inplace=False, net=True, append=''):
         # UNIX socket paths are limited to 108 bytes, so keep the work directory short
         base = tempfile.gettempdir()
         if len(base) > 50 and os.path.isdir('/tmp'):
@@ -84,7 +84,11 @@ class Qemu:
         self.ser_path = os.path.join(self.workdir, 'ser.sock')
         boot = ['-cdrom', os.path.abspath(iso), '-boot', 'd'] if iso else ['-kernel', os.path.abspath(kernel)]
         if initrd and not iso:
-            boot += ['-initrd', os.path.abspath(initrd)]      # a Multiboot module: the ramdisk rd0
+            # a Multiboot module: the ramdisk rd0. QEMU splits -initrd at spaces (module arguments),
+            # so a project path such as "SurfOS Restoration Project" needs a copy with a plain name.
+            shutil.copyfile(initrd, os.path.join(self.workdir, 'initrd.tar'))
+            boot += ['-initrd', 'initrd.tar']
+        cmdline = append.split()
         self.disk = None
         if disk:
             # the guest writes to the disk, so work on a copy unless asked not to
@@ -104,10 +108,11 @@ class Qemu:
             self.ports['http'] = free_port()
             boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7",
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
-            if not iso:
-                boot += ['-append', f"httpport={self.ports['http']}"]
+            cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
             threading.Thread(target=self.http.serve_forever, daemon=True).start()
+        if cmdline and not iso:
+            boot += ['-append', ' '.join(cmdline)]
         cmd = [qemu, '-m', str(mem)] + boot + [
                '-display', 'none', '-no-reboot', '-no-shutdown',
                '-monitor', f'unix:{self.mon_path},server,nowait',
@@ -378,6 +383,7 @@ def main():
     ap.add_argument('--qemu', default='qemu-system-i386')
     ap.add_argument('--mem', default='64')
     ap.add_argument('--extra', default='', help='extra QEMU arguments')
+    ap.add_argument('--append', default='', help='kernel command line words (for example profile=laptop)')
     ap.add_argument('--int-log', help='write the QEMU interrupt/exception log here (-d int)')
     ap.add_argument('--boot-timeout', type=float, default=20)
     mode = ap.add_mutually_exclusive_group(required=True)
@@ -388,7 +394,8 @@ def main():
     ap.add_argument('--wait', type=float, default=4, help='with --screen: seconds to wait for boot')
     a = ap.parse_args()
 
-    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace, not a.no_net)
+    q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace, not a.no_net,
+             a.append)
     try:
         if a.test:
             results = run_smoke(q, a.boot_timeout)
