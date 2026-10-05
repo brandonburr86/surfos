@@ -11,8 +11,9 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 7 cold boots under OVMF, 91 checks, at -O0 and -O2 |
-| Boot on the physical IdeaPad | **pending: needs your test on the laptop** | record it in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
+| The same image tested under emulation | done | `make test-usb`: 8 cold boots under OVMF, 117 checks, at -O0 and -O2 |
+| Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
+| Wired network through a USB Ethernet adapter | done under emulation; **pending on the laptop** (needs an adapter) | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
 
 ## What is on the drive
 
@@ -169,14 +170,66 @@ Type at the `SurfOS*>` prompt:
 | `cat /initrd/etc/version` | `SurfOS 0.007 (ai-dev)` |
 | `run hello a b` | a ring-3 program, `exit status 42` |
 | `count 3 10`, `spawn count 20 500` | user programs, one in the background |
-| `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (disk and network tests are skipped) |
+| `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (the disk tests are skipped, and the network tests without an adapter and a cable) |
+| `lsusb` | the USB controller and what is plugged in: the SurfOS drive itself, the webcam, Bluetooth |
 | F1 to F4 | four consoles, each with its own shell |
 
 Please record the results, and photos of the screen, in
 [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md). The output of `cpuinfo`,
-`acpi`, `drivers`, `bootinfo` and `lspci` answers most of its open questions.
+`acpi`, `drivers`, `bootinfo`, `lspci` and `lsusb` answers most of its open questions.
 
-## 8. When something goes wrong
+## 8. Networking: a USB Ethernet adapter
+
+The IdeaPad 3 15IIL05 has no Ethernet socket (Lenovo's specification: "No onboard
+Ethernet"), and its only network hardware is the Wi-Fi card, which SurfOS has no driver
+for. SurfOS reaches a wired network through a **USB-to-Ethernet adapter** in one of the
+laptop's USB ports. Its USB stack drives the laptop's USB 3 controller (xHCI) and any
+adapter that speaks one of the two standard USB networking classes, **CDC ECM** or **CDC
+NCM**.
+
+**What to buy.** The safest choice is an adapter built on the **Realtek RTL8153** chip
+(USB 3.0, gigabit). These are the most common USB-A gigabit adapters, and besides
+Realtek's own protocol they offer a standard CDC Ethernet (ECM) mode, which SurfOS uses.
+The TP-Link UE300 is one. Look for "RTL8153" on the product page or the box. Also fine,
+but not yet tried on hardware: adapters that list CDC ECM or NCM support (for example the
+2.5 gigabit Realtek RTL8156, which uses NCM). Avoid these:
+
+* Adapters that speak only a vendor protocol. Many ASIX adapters (AX88179, AX88772) do.
+  `lsusb` then shows the adapter with `no driver`.
+* Docks and multi-port dongles (USB hub + Ethernet + card reader + …). SurfOS has no
+  hub support yet, so the adapter inside such a dongle is not seen. Use a single-purpose
+  adapter, plugged straight into the laptop.
+* A USB-C-only adapter. This laptop has USB-A ports, so it would need a converter.
+
+Any of the three USB ports works. The USB 3 ports run the adapter at 5 Gbit/s, the USB 2
+port at 480 Mbit/s; SurfOS itself manages a few megabytes per second either way.
+
+**Using it.** Plug in the adapter and an Ethernet cable from your router or switch,
+before or after starting SurfOS, then:
+
+| Command | Expect |
+|---|---|
+| `lsusb` | the adapter, ending in `-> eth0, cdc-ecm, MAC …` |
+| `ifconfig` | `eth0: …, link up` (`link down` until the cable is plugged in) |
+| `dhcp` | `dhcp: eth0: lease 192.168.… from …`: an address, netmask, gateway and DNS server from your router |
+| `ping 192.168.1.1` (your router) | replies |
+| `ping example.com` | the name looked up through the DNS server, then replies |
+| `httpget example.com 80 /` | a web page over TCP |
+| `selftest` | `SELFTEST PASS`; on your network it checks the lease and that the gateway answers (the rest of its network checks need QEMU's network and are skipped) |
+
+On a network without DHCP, set the address by hand:
+`ifconfig eth0 192.168.1.50 255.255.255.0 192.168.1.1 192.168.1.1` (address, netmask,
+gateway, DNS server).
+
+When the adapter is unplugged, `eth0` stays (with `link down`). Plugged back in, it
+is `eth0` again, and with the same adapter it keeps its address, so no new `dhcp` is
+needed. A different adapter also becomes `eth0`, but needs `dhcp` again.
+
+The GRUB menu has an entry **SurfOS (USB controller off: no USB network adapter)**. It
+boots without touching the USB controller, in case the USB driver ever gets in the way
+on the laptop.
+
+## 9. When something goes wrong
 
 | What you see | What it means, what to do |
 |---|---|
@@ -185,7 +238,13 @@ Please record the results, and photos of the screen, in
 | GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). |
 | GRUB's menu, then a blank screen | The kernel could not use the firmware's framebuffer. Photograph the GRUB screen and note the panel resolution; report it. |
 | The boot log stops, or ends with `SYSTEM HALTED` or a line starting `BOOT PROBLEM` | Photograph the screen and report it: those lines name what failed. |
-| The prompt appears but keys do nothing | Restart and choose the troubleshooting entry. USB keyboards are not supported (no USB stack yet), so use the built-in keyboard. |
+| The prompt appears but keys do nothing | Restart and choose the troubleshooting entry. USB keyboards are not supported (the USB stack drives network adapters only), so use the built-in keyboard. |
+| The boot stops at a line starting `+xHCI` or `+USB` | Restart and choose "SurfOS (USB controller off)". Please report the last lines on the screen. |
+| `lsusb` does not list the adapter | Try another port, and plug the adapter straight into the laptop (not through a hub or a dock). A line `(connected, not set up)` or `+USB: port …: … failed` means the adapter did not answer: unplug it, wait two seconds, plug it in again. |
+| `lsusb` lists the adapter with `no driver` | It speaks only its maker's protocol: use an RTL8153 or another CDC ECM/NCM adapter. |
+| `ifconfig` says `link down` | Check the cable and that the other end (router, switch) is on: the adapter reports the link it sees. |
+| `dhcp: eth0: no offer` | Nothing on that network hands out addresses: set one by hand (section 8). |
+| `ping` by address works, by name does not | No DNS server is set: `dhcp` sets one, or give it as the last `ifconfig` value. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
 
@@ -197,12 +256,13 @@ power button.
 | Works on the laptop (verified under emulation) | Not supported yet |
 |---|---|
 | UEFI boot from USB, GRUB, Multiboot 2 | Secure Boot (GRUB is unsigned) |
-| Framebuffer console, 80x25 cells, VGA colours, 4 consoles | USB devices after boot: keyboards, mice, storage |
+| Framebuffer console, 80x25 cells, VGA colours, 4 consoles | USB keyboards, mice and storage; USB hubs and docks |
 | Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | The touchpad |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
 | Delays calibrated on the PIT, the ACPI PM timer or the HPET | Wi-Fi, Bluetooth, sound, battery, suspend, ACPI power-off |
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |
-| Ramdisk initrd, user programs, system calls, the CMOS clock, reboot | Networking: the laptop has no supported network card |
+| Ramdisk initrd, user programs, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
+| The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | |
 
 ## How it works
 
@@ -220,6 +280,13 @@ power button.
   with the I/O APICs masked, the 8042 set up again and polled, ISA devices skipped, only
   the initrd mounted, and a timer that must prove it ticks. Without the word on the command
   line (QEMU's `-kernel`, the GRUB ISO) the kernel boots as before.
+* **USB** (`driver/usb/`). The xHCI driver takes the controller over from the firmware and
+  resets it. It polls the controller's event ring on every timer tick instead of waiting
+  for its interrupt, which on this laptop could not reach the processor anyway. The device
+  layer sets up whatever is plugged into the laptop's ports, at boot and whenever a port
+  changes, and picks the first configuration a driver wants. For an RTL8153 that is its
+  CDC Ethernet configuration, not Realtek's own. The CDC ECM/NCM driver turns the adapter
+  into `eth0` for the existing network stack.
 
 The design is in [ARCHITECTURE.md](ARCHITECTURE.md) section 14 and the original brief in
 [superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md).

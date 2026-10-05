@@ -17,9 +17,9 @@ make              # build/O0/surfos.bin (O=2 for an optimised build)
 make run          # boot in QEMU on this terminal over the serial console; Ctrl-A x quits
 make test         # headless boot + smoke test over the serial console; exit code 0 = pass
 make test-all     # the smoke test at -O0 and -O2
-make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer
+make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer, USB/NCM parsing
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from an emulated USB stick: 7 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from an emulated USB stick: 8 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
@@ -32,10 +32,11 @@ python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n' 
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append profile=laptop --shell drivers acpi
 python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --shell drivers   # UEFI boot, serial
 python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --screen --keys 'help\n'  # no serial: keyboard + framebuffer
+python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --extra '-netdev user,id=n0 -device usb-net,bus=xhci.0,netdev=n0' --shell lsusb dhcp 'ping 10.0.2.2'  # a USB Ethernet adapter
 ```
 
 Every change must build with `make` and pass `make test-all` before it is committed;
-a change to the boot path, memory setup, console, timer, keyboard or anything
+a change to the boot path, memory setup, console, timer, keyboard, the USB stack or anything
 `profile=laptop` touches must also pass `make test-usb` (at -O0 and -O2) and `make unittest`.
 Add a smoke-test step in `tools/qemu-run.py` (the `SMOKE` table) when you add a
 shell command or a kernel feature that the shell can exercise, and a check in
@@ -50,6 +51,8 @@ kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
 driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console; fonts/ has the Spleen source and licence)
+           usb/: xhci.c (USB 3 host controller, polled), usb.c (enumeration, the usb thread, lsusb),
+           usbnet.c (CDC ECM/NCM Ethernet adapters as eth0), usbdesc.c (descriptor and NCM parsing, host-tested)
 fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32, devfs
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS resolver
 user/      user programs: user.ld, libsurf (crt0, syscall wrappers), include/surf.h, bin/*.c (built into the initrd's /bin)
@@ -57,7 +60,7 @@ lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 shell/     the ring-0 shell and demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness, mkimage.py (disk image and initrd), mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py
-tests/     host/ unit tests (blibc, boot information, framebuffer), test_mkusb.py, test_devenv.py
+tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing), test_mkusb.py, test_devenv.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
@@ -69,7 +72,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   monolithic, Multiboot 1, 8259 PIC + PIT, software task switching. The laptop port
   (milestone M7) widened it: Multiboot 2 from GRUB on UEFI, a framebuffer console, the
   ACPI tables and the boot CPU's local APIC (virtual wire, its timer as a fallback) are
-  in scope; x86-64, SMP and I/O APIC routing are not.
+  in scope; x86-64, SMP and I/O APIC routing are not. The USB stack (milestone M8) polls the
+  xHCI event ring from a kernel timer rather than relying on the controller's interrupt.
 * Two profiles: without `profile=laptop` on the kernel command line (QEMU `-kernel`, the
   GRUB ISO) the boot must stay exactly as it was; `profile=laptop` (the USB image) is real
   UEFI hardware. Every hardware wait is bounded and a missing legacy device is a normal
@@ -105,4 +109,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
 * On the laptop (or under OVMF): `bootinfo`, `drivers`, `cpuinfo`, `acpi`, `memstat` say
   what the firmware handed over and which console, timer and keyboard path was chosen.
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
-  `clock=pmtmr`, `clock=hpet`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+  `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+* USB: `lsusb` lists the controller and every device with what drives it; `+USB:` lines in
+  `dmesg` record plugging and errors. Endpoint 0 transfers are synchronous and belong to
+  the usb thread (or boot); bulk/interrupt `done` callbacks run in the timer interrupt.
+  QEMU's `device_del`/`device_add` on the monitor unplug and plug a USB device.

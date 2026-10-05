@@ -345,6 +345,18 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `ping 10.0.2.2` (QEMU's gateway) gets replies; the host can ping the
   guest through a port forward; `dhcp` obtains 10.0.2.15.
 
+**N3. USB Ethernet for the laptop** (done on `ai-dev`, emulation) - size L - deps N2, M7
+
+* The IdeaPad has no Ethernet socket: an xHCI host controller driver (polled, root
+  ports only), USB enumeration with configuration choice, and a CDC ECM/NCM class
+  driver presenting a `struct netdev`; Realtek RTL8153 adapters through their CDC
+  Ethernet configuration. Unplug and replug keep the interface name (and the address
+  with the same adapter). `lsusb`, `usb=off`.
+* Prove: under OVMF, QEMU's usb-net on qemu-xhci is eth0 at boot; `dhcp`, `ping`,
+  `httpget` (1 MB) and `selftest` pass over it; unplugging and plugging it in through the
+  QEMU monitor works (`make test-usb`, scenario `usbnet`); NCM's transfer blocks are
+  host-tested. On the laptop: the same with an RTL8153 adapter.
+
 ### Shell, tests, hygiene
 
 **U1. Shell v2** - size S-M - deps K5 (then grows with every module) - **done on `ai-dev`**
@@ -381,7 +393,8 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M4 Files** (done) | F1 | `ls`/`cat` on an initrd and on a FAT disk image; FAT write verified from the host |
 | **M5 Processes** (done) | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
 | **M6 Network** (done) | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
-| **M7 Laptop USB boot** (emulation done, hardware pending) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick (7 scenarios); the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
+| **M7 Laptop USB boot** (done: the owner booted it on the laptop, 2026-10-05; the hardware record is still to be filled in) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick; the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
+| **M8 Laptop network** (emulation done, hardware pending: needs a USB Ethernet adapter) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -411,11 +424,13 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M7: run the USB image on the IdeaPad itself and fill in `docs/hardware/ideapad-3-15iil05.md`.
-After that, in the order the laptop needs them (each its own milestone): a USB HID keyboard
-over xHCI (only if the built-in keyboard does not work through the 8042), AHCI or NVMe
-for the internal disk (identify the controller first, add GPT partitions), USB mass storage,
-and the actual Wi-Fi chip.
+M8: plug an RTL8153 (or other CDC ECM/NCM) adapter into the IdeaPad, follow
+`docs/USB-BOOT.md` section 8 and record the results in `docs/hardware/ideapad-3-15iil05.md`
+(M7's table for the boot itself is still open as well). After that, in the order the laptop
+needs them (each its own milestone): USB hub support (docks and multi-port dongles), the
+controller's interrupt through MSI (lower latency than the 10 ms poll), USB mass storage
+and a USB HID keyboard on the same stack, AHCI or NVMe for the internal disk (identify the
+controller first, add GPT partitions), and the actual Wi-Fi chip.
 
 The six earlier milestones are done. What remains there is polish and the items the catalog left open:
 a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control

@@ -5,10 +5,10 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, and booting SurfOS on the Lenovo IdeaPad 3 15IIL05 |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, and networking it through a USB Ethernet adapter |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 
@@ -36,5 +36,6 @@ Multitasking, demand paging, the PIT, keyboard, VGA console, PCI scan and most s
 commands work, as do user programs, FAT and an IPv4 stack on QEMU's e1000. Since
 milestone M7 it also boots from a USB drive on a UEFI PC: under OVMF from an emulated
 USB stick it reaches the shell on a framebuffer console with the PS/2 keyboard and no
-serial port, with or without a PIT. The boot on the Lenovo IdeaPad itself is still to be
-tested.
+serial port, with or without a PIT, and the owner has booted it on the Lenovo IdeaPad.
+Since M8 it drives the laptop's USB 3 controller and USB Ethernet adapters (CDC ECM/NCM,
+such as RTL8153 ones), tested under emulation; on the laptop that still needs an adapter.

@@ -49,7 +49,8 @@ fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, 
 net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c
 user/        user.ld, libsurf/ (crt0.S, syscalls.c), include/surf.h, bin/ (hello crash cat ls count sh)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
-             ramdisk.c, ata.c, mbr.c, net/e1000.c, parport.c, dma/, floppy/, net/3c905b/ (2004, unwired)
+             ramdisk.c, ata.c, mbr.c, net/e1000.c, parport.c, dma/, floppy/, net/3c905b/ (2004, unwired),
+             usb/ (xhci.c, usb.c, usbnet.c, usbdesc.c: the USB stack, section 15)
 include/     surfos/ (kernel headers), mm/, sys/ (driver headers), net/, asm/io.h, blibc headers
 tools/       qemu-run.py (headless QEMU harness), gensyms.py (symbol table for backtraces),
              mkimage.py (test disk image and initrd)
@@ -80,7 +81,8 @@ GRUB / qemu -kernel
        init_delay()               calibrates udelay()/mdelay() on PIT channel 2 (no interrupts needed)
        init_task()                6 run queues, int 0x40 = yield, idle task (pid 0), "Shell 0" task (pid 1)
        init_keyboard()            IRQ1 handler
-       init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata, e1000
+       init_drivers()             the driver table: serial IRQ 4, parport, dma, floppy, pci, 3c905b, ramdisk, ata, e1000,
+                                  usb (ai-dev: xHCI controllers and the USB devices plugged in)
        init_net()                 the "net" kernel thread (frames queue up until the scheduler starts)
        init_fs()                  block cache, rootfs on /, /dev, the first tar ramdisk on /initrd, every FAT volume on /<device>
        init_syscalls()            int 0x80 handler
@@ -252,6 +254,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 | ATA | `driver/ata.c` | Polled PIO, LBA28, both legacy channels, IDENTIFY, cache flush after writes, a mutex per channel; disks are `hda`-`hdd`, ATAPI devices are reported and skipped |
 | MBR | `driver/mbr.c` | The four primary partitions of each disk become `hda1`-`hda4` with their type |
 | e1000 NIC | `driver/net/e1000.c` | Intel 82540EM (QEMU's default): MMIO through `ioremap()`, 32-entry receive and transmit rings in the DMA heap, MAC from the EEPROM, receive interrupts, transmit completion polled. QEMU holds frames for one second after RCTL is written, so the first reply after boot is late |
+| xHCI USB | `driver/usb/xhci.c`, `driver/usb/usb.c` | **ai-dev**: the USB 3 host controller (PCI 0c03, interface 30), polled; root hub ports, enumeration at boot and on every port change, `lsusb` (section 15) |
+| USB Ethernet | `driver/usb/usbnet.c`, `driver/usb/usbdesc.c` | **ai-dev**: CDC ECM and NCM adapters (RTL8153 through its CDC Ethernet configuration, QEMU's usb-net) as `eth0`, `eth1`, ... (section 15) |
 | 3c905B NIC | `driver/net/3c905b/` | Martin's "alpha" driver: EEPROM MAC read, MII, TX/RX descriptor rings in `palloc` memory, interrupt handler with debug prints, `iface` abstraction (`SnagPackets`/`SendPackets`/`Setting`). Probes through `pci_find_device()`; not wired to the new stack (QEMU does not emulate the card) |
 
 `driver/drivers.c` is a table of `{name, init, status}` run in order by `init_drivers()`;
@@ -436,6 +440,87 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
 * **Testing.** `tools/qemu-usb.py` boots the image file itself under OVMF with fresh
   firmware variables from an emulated xHCI USB stick, without serial if asked, types on
   the PS/2 keyboard through the monitor and reads the framebuffer back cell by cell
-  against the font. Seven scenarios: serial, keyboard-only at 4 GB, 6 GB with `himem`
-  checked through the monitor, the troubleshooting entry, no PIT, and images missing
-  their initrd or kernel.
+  against the font. Eight scenarios: serial, keyboard-only at 4 GB, 6 GB with `himem`
+  checked through the monitor, the troubleshooting entry, no PIT, a USB Ethernet adapter
+  (section 15), and images missing their initrd or kernel.
+
+## 15. USB networking (ai-dev, October 2026)
+
+The IdeaPad has no Ethernet socket, so the laptop reaches a wired network through a USB
+Ethernet adapter (`docs/USB-BOOT.md` section 8). Four files in `driver/usb/`, API in
+`include/sys/usb.h`:
+
+```
+init_drivers() -> "usb" (init_usb, driver/usb/usb.c)
+  xhci_probe()          every PCI 0c03/30 function: map, take over, reset, rings, run
+  port_check() per port connected? -> xhci_port_enable() -> enumerate() -> choose_driver()
+                                      (reset)              (slot, address,   (first configuration
+                                                            descriptors)      a driver matches)
+  kthread "usb"         every port change event, at least once a second: unplug / plug,
+                        endpoint recovery, the drivers' service hooks (link messages)
+usbnet_attach()         endpoints, SET_CONFIGURATION, (NCM parameters), SET_INTERFACE,
+                        MAC string, packet filter, a netdev -> eth0
+```
+
+* **The controller** (`xhci.c`): the xHCI 1.2 model with one command ring, one event ring
+  (interrupter 0) and a transfer ring per endpoint, one 4 KB segment each with a link TRB.
+  The device context array, the input and output contexts (32 or 64 bytes, CSZ) and the
+  scratchpad pages the controller asks for all live in the 1:1 DMA heap, aligned so that
+  nothing crosses a 64 KB boundary. Before the reset the firmware is asked to hand the
+  controller over (USB legacy support capability, SMIs off); the supported-protocol
+  capabilities say which root ports are USB 2 and which USB 3. The registers come from a
+  64-bit BAR, mapped by `ioremap64()`: below 4 GB with uncached 4 KB pages, above 4 GB
+  (where OVMF and Ice Lake firmware put it) with an uncached PSE-36 4 MB page.
+* **No interrupts.** The controller's interrupter is left disabled. A periodic kernel
+  timer polls the event ring on every tick (10 ms), with interrupts off. So do whoever
+  waits for a command or a control transfer, and the network driver when it runs out of
+  transmit buffers. The I/O APIC stays masked on the laptop, and an 8259 route for the
+  controller is not guaranteed, so polling works where an interrupt might not. The cost
+  is up to 10 ms of extra latency (ping times of 10-20 ms) and a few MB/s.
+* **Waiting.** Commands and control transfers are synchronous. During boot, as the idle
+  task before the timer runs, they busy-wait (`udelay`). In a task they sleep a tick
+  between polls (`usb_can_sleep()`). Every wait is bounded: a command that does not
+  complete in 5 s marks the controller failed, and its devices are then dropped. A
+  control transfer that times out or stalls has endpoint 0 stopped (Stop or Reset
+  Endpoint) and moved past it (Set TR Dequeue Pointer).
+* **Bulk and interrupt transfers** (`struct usb_xfer`, `usb_submit()`): one TRB each,
+  interrupt on completion and on a short packet. The `done` callback runs from the poll
+  with interrupts off. An error that halts an endpoint (stall, babble, transaction error)
+  is left to the usb thread: Reset Endpoint, Set TR Dequeue past the failed transfer,
+  CLEAR_FEATURE(ENDPOINT_HALT) after a stall, then whatever is still queued runs again.
+* **Devices** (`usb.c`): USB 2 ports are reset, USB 3 ports train their links themselves
+  (a warm reset if not within a second). Then Enable Slot and Address Device, the device
+  descriptor in two steps (endpoint 0's packet size first), the strings, and each
+  configuration in turn until a driver's `match()` accepts one. Unplugging sets
+  `dev->gone` under `irq_save`, disables the slot (no more callbacks after that), and only
+  then calls the driver's `detach()`. Hubs are not supported (they are listed as such);
+  isochronous endpoints and streams are not used.
+* **The adapter** (`usbnet.c`, parsing in `usbdesc.c`). CDC ECM puts one frame in one bulk
+  transfer: sixteen 2 KB receive transfers stay queued and are handed to `netdev_rx()` and
+  resubmitted from the poll. A frame to send is copied into one of sixteen transmit
+  buffers. One that fills its last packet exactly gets a byte of padding, so it ends in a
+  short packet (as Linux does). CDC NCM packs frames into 16-bit transfer blocks: four
+  receive blocks of up to 16 KB (SET_NTB_INPUT_SIZE), one frame per transmitted block.
+  The notification endpoint gives the link state (`NETWORK_CONNECTION`) and its speed.
+  The MAC address is the adapter's own (the iMACAddress string), because the adapter only
+  passes frames sent to it. Each adapter is a `struct usbnet` with a netdev registered
+  once: unplugged it stays with `link down`, and the next adapter to arrive takes it,
+  keeping the address configuration only if it has the same MAC address.
+* **Configuration choice.** An RTL8153 offers Realtek's vendor protocol as configuration 1
+  and CDC Ethernet as configuration 2. QEMU's usb-net offers RNDIS first and ECM second.
+  Taking the first configuration a driver matches selects ECM in both cases, and NCM when
+  a device has no ECM.
+* **Tests.** `tests/host/test_usb.c` runs `usbdesc.c` against QEMU's descriptors and ones
+  shaped like an RTL8153 (SuperSpeed companions) and an NCM adapter, and against NTB16
+  blocks built and taken apart, malformed ones included. NCM has no QEMU device, so these
+  tests are its only coverage before hardware. `tools/qemu-usb.py`'s `usbnet` scenario
+  covers the rest under OVMF: boot, DHCP, ping, HTTP (1 MB), the self test, and unplug
+  and replug through the QEMU monitor (the same adapter, then a different one on another
+  subnet). `selftest` on a network other than QEMU's checks only the lease and the gateway;
+  it also sends a USB device a request it must stall (GET_STATUS of interface 0xee) and
+  then checks that endpoint 0 still answers, which is the only test of that recovery.
+* **Limits.** No hubs, so docks and multi-port dongles do not work; no USB keyboards,
+  mice or storage yet (the layer is ready for class drivers: add one to `usb_drivers[]`
+  in `usb.c`); no vendor-protocol adapters (ASIX); the IP stack still routes everything
+  through the first netdev. `usb=off` on the command line (a GRUB menu entry) leaves the
+  controller alone.

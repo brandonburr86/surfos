@@ -23,8 +23,8 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Panel | 15.6", 1366x768 or 1920x1080 | **unknown**: `bootinfo` shows the framebuffer mode |
 | Memory | DDR4-2666, soldered plus one SO-DIMM | **unknown**: `memstat` |
 | Storage | SATA 2.5" and/or PCIe NVMe M.2 | **unknown**: `lspci` (class 01); SurfOS never touches it |
-| Networking | no Ethernet; Wi-Fi varies | not used by SurfOS |
-| USB | one USB 2.0, two USB 3.2 Gen 1 | **record which port was used** |
+| Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | Wi-Fi not used by SurfOS; wired network through a **USB Ethernet adapter** (CDC ECM/NCM, e.g. RTL8153): **record the adapter and its `lsusb` line** |
+| USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
 | Keyboard | built-in, behind the embedded controller | **unknown**: `drivers` shows whether the 8042 answered |
 | Touchpad | Precision TouchPad (I2C HID on this generation) | not used by SurfOS |
 | Firmware | UEFI | **record**: Secure Boot setting, any CSM option, firmware version |
@@ -49,6 +49,13 @@ chosen automatically, and each fallback was exercised under QEMU.
 | The firmware's CR0/CR4 (OVMF hands over CR0.WP set) | CR0 and CR4 set explicitly; the originals are shown by `cpuinfo` | every UEFI boot |
 | COM1 | probed (scratch register); absent is the normal case | `keyboard` (no serial port at all) |
 | The FADT's 8042 flag (QEMU's says no 8042 although there is one) | recorded only; the probe decides | laptop profile under `-kernel` |
+| Where the USB controller's registers are (a 64-bit BAR; Ice Lake firmware often puts it above 4 GB) | mapped uncached, through a PSE-36 4 MB page above 4 GB (`ioremap64()`) | OVMF puts QEMU's xHCI at 0xc000000000: every UEFI boot |
+| Whether the firmware still owns the USB controller (legacy USB support) | the xHCI ownership handshake (up to 1 s), USB SMIs off; on a timeout the controller is taken anyway, with a message | not exercised: QEMU's xHCI has no legacy-support capability |
+| Whether the controller's interrupt reaches the CPU (the I/O APIC is masked) | not needed: the event ring is polled on every tick | every test |
+| Context size, scratchpad pages, port power switches, USB 2/3 port numbering | read from the capability registers and the supported-protocol capability | QEMU: 32-byte contexts, no scratchpad, USB 3 ports first; Intel's 64-byte contexts and scratchpad only on the laptop |
+| How long the adapter's USB 3 link takes to train | up to 1 s, then a warm reset; a device that appears later is set up by the `usb` thread | QEMU's USB 3 ports come up at once (not exercised) |
+| What else is on the USB ports (webcam, Bluetooth, the SurfOS drive) | each is given an address and named; none gets a driver; hubs are reported as not supported | the SurfOS drive itself in every UEFI test |
+| Which network adapter, and which configuration it offers | the first configuration with a CDC ECM function, else NCM (an RTL8153's second configuration) | QEMU's usb-net (RNDIS first, ECM second) in `usbnet`; RTL8153- and NCM-shaped descriptors in `tests/host/test_usb.c` |
 
 ## Evidence
 
@@ -81,9 +88,27 @@ IDE disk, no network card. GRUB 2.06-13+deb12u2 (Debian), mtools 4.0.32.
 
 The tests keep their transcripts and screenshots in `build/usb-test/` (not in git).
 
-### Physical laptop: pending
+### Emulator results for USB networking (2026-10-05)
 
-**Native Lenovo validation has not happened yet.** Nothing above was run on the laptop.
+The same firmware and machine, plus QEMU's `usb-net` (CDC ECM and RNDIS, full speed) on
+the xHCI controller next to the stick, on QEMU's user network.
+
+| Check | Result |
+|---|---|
+| `make unittest` | blibc 45, boot information 50, framebuffer 39, USB 57 checks: all pass |
+| `make test-all` | 48/48 at -O0 and -O2 (`lsusb` added; no USB controller there) |
+| `make test-usb` | 117/117 at -O0 and -O2, 8 cold boots each: the seven above, plus `usbnet` (adapter at boot, DHCP, ping, HTTP, 1 MB at 2-3 MB/s, self test, unplug, plug back in with the address kept, a second adapter on 192.168.76.0/24) |
+
+The xHCI driver met QEMU's controller (1b36:000d) with its registers above 4 GB, a
+SuperSpeed storage device and a full-speed network device. Intel's controller differs
+(64-byte contexts, scratchpad pages, the firmware handshake, slower USB 3 links): those
+paths are written to the specification but only the laptop can exercise them.
+
+### Physical laptop
+
+**2026-10-05: the owner reports that the USB image boots SurfOS on the laptop.** No
+details were recorded yet. Networking has not been tried on the laptop (it needs a USB
+Ethernet adapter, docs/USB-BOOT.md section 8).
 Please fill in a copy of this table for each boot (photos of the screen help most):
 
 | Field | Value |
@@ -108,6 +133,12 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | Three cold boots: all the same? | |
 | Normal operating system boots afterwards without the stick? | |
 | Anything else on screen (`BOOT PROBLEM`, `Unexpected trap`, warnings) | |
+| `lsusb` (the controller line, and each device) | |
+| Network adapter: make, model, chip (box or product page) | |
+| `lsusb` line of the adapter, the `+USB: port …` boot line | |
+| `ifconfig` with the cable in; `dhcp`; `ping` the router; `ping example.com` | |
+| `httpget example.com 80 /`; `selftest` | |
+| Adapter unplugged and plugged in again: messages, `ifconfig`, `ping` | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,
