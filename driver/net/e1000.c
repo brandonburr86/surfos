@@ -173,6 +173,11 @@ static int e1000_attach(struct pci_dev *pci) {
     u8 *ring;
 
     if(!e) return -1;
+    if(pci->bar_hi[0]) {                       /* 10/2026: a 64-bit BAR above 4 GB cannot be mapped without PAE */
+        kprintf("+E1000: %02x:%02x.%x registers above 4 GB, not used\n", pci->bus, pci->slot, pci->func);
+        kfree(e);
+        return -1;
+    }
     e->pci = pci;
     pci_enable_device(pci);                    /* memory decoding and bus mastering */
     e->regs = (volatile u32 *)ioremap(pci->bar[0], pci->bar_size[0] ? pci->bar_size[0] : 0x20000, false);

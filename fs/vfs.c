@@ -13,6 +13,7 @@ entries are the mount points below it.
 #include <surfos/task.h>
 #include <surfos/sync.h>
 #include <surfos/irq.h>
+#include <surfos/multiboot.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
@@ -547,6 +548,10 @@ void init_fs(void) {
         char path[VFS_PATH_MAX];
         if(!t) continue;
         if(!strcmp(t->name, "tarfs") && !have_initrd) { strcpy(path, "/initrd"); have_initrd = true; }
+        else if(bootinfo.laptop) {               /* native hardware: never write a disk nobody asked for */
+            kprintf("+VFS: %s (%s) not mounted (profile=laptop mounts only the initrd; use mount)\n", d->name, t->name);
+            continue;
+        }
         else snprintf(path, sizeof(path), "/%s", d->name);
         r = vfs_mount(d, path, t->name);
         if(r) kprintf("+VFS: %s on %s (%s): %s\n", d->name, path, t->name, strerror(r));

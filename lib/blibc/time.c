@@ -32,8 +32,9 @@ int bcd2bin(u_char bcd) {
 
 void get_time(time_t *time) {
     int status_b, century;
+    long spins;
     if(!time) return;
-    while(cmos_busy()); //wait for the update to finish
+    for(spins = 0; spins < 200000 && cmos_busy(); spins++); //wait for the update to finish (bounded since 10/2026: a missing RTC reads busy forever)
 
     status_b = cmos_read(STATUS_B);
     time->second = cmos_read(SECOND);

@@ -109,13 +109,15 @@ bool parGetStrobe(PARPORT port) {
 }
 
 u_int getParPortAddr() {
-    u_int *addr;
+    u_short *addr; //10/2026: the BIOS keeps 16-bit port numbers here (LPT2 follows at 0x40A)
     u_int port;
     int i;
 
-    addr = (u_int *)0x00000408;
+    addr = (u_short *)0x00000408;
     for(i=0;i<1;i++) { //just one for now
         port=*addr;
+        //10/2026: UEFI firmware leaves whatever in the BIOS data area: only trust the LPT addresses
+        if(port!=0x378 && port!=0x278 && port!=0x3BC) port=0;
         if(port==0) {
             kprintf("*No Par%i Detected\n",i);
         } else {

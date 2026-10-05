@@ -7,6 +7,10 @@ Output: everything written to the active console is mirrored here, plus the kern
 messages printed before the video console exists (they used to be lost).
 Input: received bytes go into the keyboard queue, so the shell can be driven from a
 terminal: qemu -nographic, or a null-modem cable on real hardware.
+
+10/5/26 (USB boot): most laptops have no COM1. The UART is probed (an absent one
+reads 0xFF, a 16550 keeps what is written to its scratch register) and, if missing,
+never touched again; the receive loop is bounded either way.
 */
 
 #include <surfos/types.h>
@@ -23,6 +27,7 @@ terminal: qemu -nographic, or a null-modem cable on real hardware.
 #define UART_LCR  3 /* line control */
 #define UART_MCR  4 /* modem control */
 #define UART_LSR  5 /* line status */
+#define UART_SCR  7 /* scratch */
 
 #define LSR_DATA_READY 0x01
 #define LSR_THR_EMPTY  0x20
@@ -30,7 +35,20 @@ terminal: qemu -nographic, or a null-modem cable on real hardware.
 static u_int uart = SERIAL_COM1;
 static bool serial_up = false;
 
+static bool uart_present(void) {
+    if(inb(uart + UART_LSR) == 0xFF) return false;           /* nothing on the bus */
+    outb(uart + UART_SCR, 0x5A);
+    if(inb(uart + UART_SCR) != 0x5A) return false;
+    outb(uart + UART_SCR, 0xA5);
+    return inb(uart + UART_SCR) == 0xA5;
+}
+
+bool serial_present(void) {
+    return serial_up;
+}
+
 void init_serial(void) {
+    if(!uart_present()) return;                  /* no COM1: the console is the screen alone */
     outb(uart + UART_IER, 0x00);                 /* no interrupts until init_serial_irq() */
     outb(uart + UART_LCR, 0x80);                 /* DLAB on: the next two writes set the divisor */
     outb(uart + UART_RBR, SERIAL_DIVISOR & 0xFF);
@@ -85,9 +103,12 @@ void serial_console_clear(void) {
 */
 int serial_isr(u_int irq, void *param) {
     static int esc = 0; /* 0 = normal, 1 = got ESC, 2 = inside ESC [ or ESC O */
-    u_char c;
+    u_char c, lsr;
+    int n;
 
-    while(inb(uart + UART_LSR) & LSR_DATA_READY) {
+    for(n = 0; n < 256; n++) {                  /* at most a FIFO's worth or so per interrupt */
+        lsr = inb(uart + UART_LSR);
+        if(lsr == 0xFF || !(lsr & LSR_DATA_READY)) break;
         c = inb(uart + UART_RBR);
         if(esc == 1) {
             esc = (c == '[' || c == 'O') ? 2 : 0;
@@ -116,10 +137,15 @@ int serial_isr(u_int irq, void *param) {
     return 0;
 }
 
-void init_serial_irq(void) {
+int init_serial_irq(void) {
     kprintf("\nSerial Console\n");
+    if(!serial_up) {
+        kprintf("*no UART at 0x%x\n", uart);
+        return 1;
+    }
     kprintf("*COM1 at 0x%x, %i 8N1, IRQ %i\n", uart, SERIAL_BAUD, SERIAL_IRQ_COM1);
     add_irq_handler(SERIAL_IRQ_COM1, serial_isr, 0);
     outb(uart + UART_IER, 0x01);                 /* received-data-available interrupt */
     kprintf("*DONE\n");
+    return 0;
 }

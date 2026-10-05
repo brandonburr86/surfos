@@ -11,12 +11,35 @@
 #include <surfos/irq.h>
 #include <surfos/console.h>
 #include <surfos/task.h>
+#include <surfos/acpi.h>
+#include <mm/paging.h>
 
-/* pulse the reset line through the keyboard controller */
+/* Reset the machine. 2004: pulse the reset line through the keyboard controller. Since
+   10/5/26 (USB boot) that is the third try: first the reset register the ACPI tables name
+   (laptops), then the reset control register at 0xCF9 (Intel chipsets, QEMU), and if the
+   machine is still running, a triple fault. Every wait is bounded. */
 void reset() {
+    u_long i;
     irq_disable();
-    while(inb(0x64) & 0x02);
+    if(acpi.reset_ok && acpi.reset_reg.space == 1) {
+        outb((u_short)acpi.reset_reg.addr, acpi.reset_value);
+        mdelay(100);
+    } else if(acpi.reset_ok && acpi.reset_reg.space == 0 && acpi.reset_reg.addr < 0x100000000ULL) {
+        volatile u_char *r = (volatile u_char *)ioremap((u_long)acpi.reset_reg.addr, 1, false);
+        if(r) *r = acpi.reset_value;
+        mdelay(100);
+    }
+    outb(0xCF9, 0x02);
+    udelay(50);
+    outb(0xCF9, 0x06);
+    mdelay(100);
+    for(i = 0; i < 100000 && (inb(0x64) & 0x02); i++);
     outb(0x64, 0xFE);
+    mdelay(100);
+    {   /* an IDT with no entries: the next interrupt is a triple fault, which resets */
+        struct { u_short limit; u_long base; } __attribute__((packed)) none = { 0, 0 };
+        asm volatile("lidt %0\n\tint3" : : "m"(none));
+    }
     for(;;) asm volatile("hlt");
 }
 

@@ -16,7 +16,10 @@ struct driver {
     const char *name;
     int (*init)(void);
     int status;             /* filled in by init_drivers() */
+    u_int flags;            /* 1: a legacy ISA device, skipped with profile=laptop */
 };
+
+#define DRV_SKIPPED 2       /* status: not probed in this profile */
 
 void init_drivers(void);
 void print_drivers(void);

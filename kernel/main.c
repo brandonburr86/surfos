@@ -4,6 +4,13 @@ SurfOS Main C Entry
 File: main.c    Date: Prior to 4/23/04
 --------------------
 (C)2004 Brandon Burr
+
+10/5/26 (USB boot): two profiles. Under QEMU's loader or the GRUB ISO (the default,
+"emulator") the boot is what it was. With profile=laptop on the command line (the USB
+image's GRUB menu passes it) the kernel expects real UEFI hardware: it reads the ACPI
+tables, routes the 8259s through the local APIC, sets up the 8042 and polls it, skips
+the ISA devices such a machine does not have, mounts only the initrd, and makes sure
+the timer really ticks. The screen is the boot loader's framebuffer when there is one.
 */
 
 #include <surfos/console.h>
@@ -19,16 +26,18 @@ File: main.c    Date: Prior to 4/23/04
 
 #include <sys/driver.h>
 #include <sys/serial.h>
+#include <sys/framebuffer.h>
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
 #include <fs/vfs.h>
 #include <surfos/process.h>
 #include <net/net.h>
 #include <mm/paging.h>
-#include <surfos/cpu.h>
-#include <surfos/system.h>
 #include <mm/pmm.h>
-#include <sys/framebuffer.h>
+#include <surfos/cpu.h>
+#include <surfos/acpi.h>
+#include <surfos/apic.h>
+#include <surfos/system.h>
 
 void kmain(u_long magic, u_long addr);
 
@@ -59,8 +68,8 @@ static void check_boot(void) {
 void kmain(u_long magic, u_long addr) {
 
     /* Begin C Kernel */
-    init_serial(); //COM1 needs no memory, so the whole boot log reaches a terminal
-    kprintf("SurfOS: serial console on COM1 (115200 8N1)\n");
+    init_serial(); //COM1 needs no memory, so the whole boot log reaches a terminal (if there is a COM1)
+    kprintf(serial_present() ? "SurfOS: serial console on COM1 (115200 8N1)\n" : "SurfOS: no serial port\n");
     init_gdt(); //setup GDT
     mb_init(magic, addr); //copy the boot loader's memory map and modules while they are addressable
     require_memory_map(); //Multiboot 2 without a usable map: stop before any memory is written
@@ -74,8 +83,10 @@ void kmain(u_long magic, u_long addr) {
     run_memcheck(); //check for enough ram..
     init_himem(); //RAM above 4 GB, if any: the way a framebuffer up there is reached
 
+    if(bootinfo.laptop) init_acpi(); //firmware tables: legacy devices, timers, interrupt controllers
     init_interrupt(); //interrupt subsystem
-    init_delay(); //udelay() for the drivers; the PIT needs no interrupts for this
+    if(bootinfo.laptop) init_apic(); //8259s through the local APIC's LINT0, I/O APICs masked
+    init_delay(); //udelay() for the drivers, calibrated on whatever clock counts
     init_task(); //setup multitasking
 
     init_keyboard(); //get keyboard ready
@@ -89,6 +100,7 @@ void kmain(u_long magic, u_long addr) {
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 
     init_timer(); //start timer and go!!
+    timer_confirm(); //no tick means nothing would ever run: try the local APIC timer, or say so
 
     for(;;) { //the idle task: init (pid 1) reaps and restarts, this only waits for interrupts
         asm volatile("hlt");

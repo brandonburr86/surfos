@@ -35,6 +35,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <surfos/interrupt.h>
 #include <surfos/multiboot.h>
 #include <surfos/cpu.h>
+#include <surfos/acpi.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -143,6 +144,7 @@ static void cmd_bootinfo(int argc, char **argv) {
 static void cmd_lspci(int argc, char **argv) { pci_print(); }
 static void cmd_drivers(int argc, char **argv) { print_drivers(); }
 static void cmd_cpuinfo(int argc, char **argv) { cpu_print(); }
+static void cmd_acpi(int argc, char **argv) { acpi_print(); }
 
 static void cmd_himem(int argc, char **argv) {
     char wrote[40], got[40];
@@ -579,9 +581,10 @@ static const struct command commands[] = {
     { "irqstat",   "",          "interrupt counts", cmd_irqstat },
     { "bootinfo",  "",          "what the boot loader passed", cmd_bootinfo },
     { "cpuinfo",   "",          "processor model and features", cmd_cpuinfo },
+    { "acpi",      "",          "firmware ACPI tables (profile=laptop)", cmd_acpi },
     { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
     { "lspci",     "",          "PCI devices with names", cmd_lspci },
-    { "drivers",   "",          "driver init status", cmd_drivers },
+    { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },

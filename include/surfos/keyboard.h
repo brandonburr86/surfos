@@ -45,6 +45,8 @@ File: keyboard.h    Date: 4/23/04, rebuilt 10/2026 (roadmap C2)
 
 void init_keyboard(void);
 int keyboard_handler(u_int irq, void *param);
+void keyboard_poll(void);       /* from the timer tick; does nothing unless profile=laptop turned polling on */
+const char *keyboard_describe(char *buf, size_t size);
 
 int testLED(u_char ledStatus);
 void switchLED(u_char ledStatus);

@@ -28,8 +28,10 @@ File: timer.h   Date: Prior to 4/23/04
 #define USEC_TO_TICKS(usec)  ((usec)>=(HZ/10)?(usec)/(HZ/10):0)
 
 /********************/
-void init_delay();  /* calibrate udelay()/mdelay(); needs only the PIT */
+void init_delay();  /* calibrate udelay()/mdelay() on the PIT, or (profile=laptop) the PM timer or HPET */
 void init_timer();
+void timer_confirm(void);   /* the tick must arrive; on a laptop the local APIC timer is the fallback */
+const char *timer_describe(char *buf, size_t size);
 u_long getticks();
 
 u_long *timer_tick(struct trapframe *tf); /* IRQ 0: called by the interrupt dispatcher */

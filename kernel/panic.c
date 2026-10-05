@@ -19,6 +19,8 @@ handler is a kernel wipeout.
 #include <surfos/trap.h>
 #include <surfos/irq.h>
 #include <surfos/task.h>
+#include <surfos/apic.h>
+#include <sys/framebuffer.h>
 #include <mm/paging.h>
 #include <surfos/ksym.h>
 
@@ -53,6 +55,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
 
     if(!curTask || curTask->pid == 0 || in_interrupt()) { //a kernel exception.. beadd
         irq_disable();
+        framebuffer_panic(); //whoever was drawing will not finish: the report must reach the screen
         kprintf("\nKernel Wipeout: %s\n", why);
         dump_trapframe(tf);
         backtrace(tf->ebp, tf->eip);
@@ -64,6 +67,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
            (tf->cs & 3) ? ", user mode" : "");
     if(!(tf->cs & 3)) backtrace(tf->ebp, tf->eip);     /* a user stack holds no kernel frames */
 
+    framebuffer_task_died(curTask); //it may have been drawing (a framebuffer console)
     kill_task(curTask); //it stays on its stack until the idle task reaps it
     return schedule(tf); //switch to the next task
 }
@@ -73,10 +77,14 @@ static u_long *trap_exception(struct trapframe *tf) {
     return trap_fatal(tf, "%s (vector %i, error 0x%x)", trap_name(tf->vector), tf->vector, tf->errcode);
 }
 
-/* int n for an n nobody installed, or a stray interrupt: say so and carry on */
+/* int n for an n nobody installed, or a stray interrupt: say so and carry on. With the
+   local APIC on (profile=laptop) a stray one may be a device's message-signalled interrupt
+   that the firmware left enabled: acknowledging it keeps the lower vectors flowing (an EOI
+   with nothing in service does nothing). */
 u_long *trap_unexpected(struct trapframe *tf) {
     kprintf("\nUnexpected trap: vector 0x%x (%s), error 0x%x, eip 0x%x, ignored\n",
             tf->vector, trap_name(tf->vector), tf->errcode, tf->eip);
+    if(tf->vector >= 32) apic_eoi();   /* ring 3 cannot raise these with int n (DPL 0 gates fault) */
     return (u_long*)tf;
 }
 
@@ -93,6 +101,7 @@ void panic(const char *fmt, ...) {
     u_long ebp;
 
     irq_disable();
+    framebuffer_panic(); //a panic must be visible on a framebuffer console too
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);

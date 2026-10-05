@@ -18,8 +18,9 @@ File: serial.h  Date: 10/3/26
 #define SERIAL_BAUD      115200
 #define SERIAL_DIVISOR   (115200 / SERIAL_BAUD)
 
-void init_serial(void);      /* program the UART; needs nothing else, call it first */
-void init_serial_irq(void);  /* hook IRQ 4 so received bytes become keystrokes; needs init_task() */
+void init_serial(void);      /* program the UART if there is one; needs nothing else, call it first */
+int init_serial_irq(void);   /* hook IRQ 4 so received bytes become keystrokes; needs init_task(); 1: no UART */
+bool serial_present(void);
 
 void serial_putc(char c);
 void serial_puts(const char *s);

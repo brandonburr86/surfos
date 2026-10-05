@@ -13,6 +13,7 @@ reconstructed 2004 scanner did bus 0, function 0 only (audit D3).
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/irq.h>
+#include <surfos/multiboot.h>
 #include <asm/io.h>
 #include <mm/kalloc.h>
 #include <sys/pci.h>
@@ -100,10 +101,28 @@ static void size_bars(struct pci_dev *d, int nbars) {
             mask = probe & PCI_BASE_ADDRESS_MEM_MASK;
             d->bar[i] = orig & PCI_BASE_ADDRESS_MEM_MASK;
             d->bar_size[i] = mask ? (~mask + 1) : 0;
-            if((orig & PCI_BASE_ADDRESS_MEM_TYPE_MASK) == PCI_BASE_ADDRESS_MEM_TYPE_64) i++; /* the upper half follows; not sized */
+            if((orig & PCI_BASE_ADDRESS_MEM_TYPE_MASK) == PCI_BASE_ADDRESS_MEM_TYPE_64 && i + 1 < nbars) {
+                d->bar_hi[i] = pci_dev_read32(d, reg + 4);   /* the upper half follows; not sized */
+                i++;
+            }
         }
     }
     pci_dev_write16(d, PCI_COMMAND, cmd);
+}
+
+/* the addresses only, sizes unknown (0): for a device whose decoding must not stop */
+static void read_bars(struct pci_dev *d, int nbars) {
+    int i;
+    for(i = 0; i < nbars; i++) {
+        u32 v = pci_dev_read32(d, PCI_BASE_ADDRESS_0 + i * 4);
+        d->bar_io[i] = (v & PCI_BASE_ADDRESS_SPACE_IO) ? true : false;
+        d->bar[i] = v & (d->bar_io[i] ? PCI_BASE_ADDRESS_IO_MASK : PCI_BASE_ADDRESS_MEM_MASK);
+        d->bar_size[i] = 0;
+        if(!d->bar_io[i] && (v & PCI_BASE_ADDRESS_MEM_TYPE_MASK) == PCI_BASE_ADDRESS_MEM_TYPE_64 && i + 1 < nbars) {
+            d->bar_hi[i] = pci_dev_read32(d, PCI_BASE_ADDRESS_0 + (i + 1) * 4);
+            i++;
+        }
+    }
 }
 
 static void scan_bus(u8 bus);
@@ -126,7 +145,10 @@ static void add_function(u8 bus, u8 slot, u8 func) {
     if(d->header_type == PCI_HEADER_TYPE_NORMAL) {
         d->subsys_vendor = pci_read16(bus, slot, func, PCI_SUBSYSTEM_VENDOR_ID);
         d->subsys_id = pci_read16(bus, slot, func, PCI_SUBSYSTEM_ID);
-        size_bars(d, 6);
+        /* 10/5/26: sizing turns the decoders off for a moment; on a laptop the display
+           controller's BAR is the console's framebuffer, so it is left alone there */
+        if(bootinfo.laptop && d->class_code == PCI_CLASS_DISPLAY) read_bars(d, 6);
+        else size_bars(d, 6);
     } else if(d->header_type == PCI_HEADER_TYPE_BRIDGE) {
         size_bars(d, 2);
     }
@@ -199,9 +221,11 @@ void pci_print(void) {
         if(d->irq_pin) kprintf(" irq %u", d->irq);
         kprintf("\n");
         for(i = 0; i < 6; i++) {
-            if(!d->bar_size[i]) continue;
-            kprintf("        BAR%i %s 0x%08x [", i, d->bar_io[i] ? "io " : "mem", d->bar[i]);
-            print_size(d->bar_size[i]);
+            if(!d->bar_size[i] && !d->bar_hi[i] && !(d->bar[i] && !d->bar_io[i] && d->class_code == PCI_CLASS_DISPLAY)) continue;
+            if(d->bar_hi[i]) kprintf("        BAR%i mem 0x%x%08x [", i, d->bar_hi[i], d->bar[i]);
+            else kprintf("        BAR%i %s 0x%08x [", i, d->bar_io[i] ? "io " : "mem", d->bar[i]);
+            if(d->bar_size[i]) print_size(d->bar_size[i]);
+            else kprintf("size not probed");
             kprintf("]\n");
         }
     }

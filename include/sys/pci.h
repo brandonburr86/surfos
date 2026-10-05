@@ -49,6 +49,7 @@ File: pci.h Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 #define PCI_SUBCLASS_PCI_BRIDGE 0x04
 #define PCI_CLASS_NETWORK   0x02
 #define PCI_CLASS_STORAGE   0x01
+#define PCI_CLASS_DISPLAY   0x03
 
 struct pci_dev {
     u8 bus, slot, func;
@@ -56,6 +57,7 @@ struct pci_dev {
     u8 class_code, subclass, prog_if, revision, header_type;
     u8 irq, irq_pin;
     u32 bar[6];         /* base address with the type bits masked off */
+    u32 bar_hi[6];      /* upper half of a 64-bit memory BAR (10/2026): nonzero means above 4 GB */
     u32 bar_size[6];    /* 0 when the BAR is not implemented */
     bool bar_io[6];
     u16 subsys_vendor, subsys_id;
