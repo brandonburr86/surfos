@@ -20,6 +20,9 @@ make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 
 Needs `gcc` with 32-bit support, `binutils`, `nasm`, `qemu-system-x86` and `python3`.
 `CLAUDE.md` at the repository root has the longer version plus the conventions.
+For macOS or a containerized build, use [devenv](../devenv/README.md):
+`./devenv/build.sh` builds the kernel and boot images with modern GCC multilib;
+`./devenv/run.sh` boots the exported files with host QEMU.
 
 Status in one paragraph: the kernel builds with a 2026 toolchain, boots to its shell
 under QEMU (`-kernel` and GRUB ISO) and can be driven entirely over the serial console.
