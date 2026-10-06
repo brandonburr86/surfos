@@ -507,10 +507,12 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
     the serial terminal). Space or any other key shows another screenful, Enter one more
     row; q, Q or Esc drops what the paged tasks print until paging ends or the terminal is
     read. A task waits only where it may: in task context, with interrupts on, outside
-    KCRIT_ENTER, holding no mutex, and not in raw mode; elsewhere the rows are counted and
-    the question comes at the next row where it may. What other tasks print (the usb
-    thread's +USB: lines, interrupt handlers) takes rows but never waits and is never
-    dropped, and captured output (console_capture_begin) never reaches the pager.
+    KCRIT_ENTER, holding no mutex, not in raw mode, and while no other task waits to read
+    the terminal (a paged task in the background must not take the shell's keys);
+    elsewhere the rows are counted and the question comes at the next row where it may.
+    What other tasks print (the usb thread's +USB: lines, interrupt handlers) takes rows
+    but never waits and is never dropped, and captured output (console_capture_begin)
+    never reaches the pager.
 */
 #define PAGE_ASK_ATTR 0x70              /* the question: black on light grey, inverse video */
 
@@ -587,6 +589,7 @@ static void page_ask(surf_console *con) {
    Before a paged task's byte draws on, or starts, the row after a screenful, the task
    waits at the question first, where it may. */
 static int page_hold(surf_console *con, u_char b) {
+    struct tty *t;
     if(in_interrupt() || !curTask || curTask == idle_task || con->page_asker || !console_paging(con))
         return 0;
     if(con->page_drop) return 1;
@@ -594,7 +597,8 @@ static int page_hold(surf_console *con, u_char b) {
         return 0;                                       /* draws nothing, or not yet */
     if(con->wrap ? con->page_rows + 2 < LINES : !con->page_fresh || con->page_rows + 1 < LINES)
         return 0;                                       /* the screenful is not full yet */
-    if(!irqs_enabled() || curTask->crit || curTask->mutexes || tty_for_console(con)->raw)
+    t = tty_for_console(con);
+    if(!irqs_enabled() || curTask->crit || curTask->mutexes || t->raw || wq_count(&t->readers))
         return 0;                                       /* no waiting here: at the next row */
     page_ask(con);
     return con->page_drop;
