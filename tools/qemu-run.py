@@ -25,6 +25,8 @@ import tempfile
 import time
 
 PROMPT = 'SurfOS*>'
+# fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
+CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
 
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
@@ -39,7 +41,27 @@ SMOKE = [
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
-    ('lsblk',   ['rd0', 'hda', 'hda1']),
+    ('lsblk',   ['rd0', 'ram', 'mounted', 'hda', 'ata', 'disk mbr', 'internal: never formatted', 'hda1', 'part mbr FAT16', 'mounted']),
+    ('lsblk -s', ['READ', 'rd0', 'hda1']),
+    # fdisk on the scratch ramdisk rd1; a step's third item answers its question
+    ('fdisk hda new mbr', ['hda will not be changed', 'not a USB drive']),    # an internal disk
+    ('fdisk rd0 new mbr', ['rd0 will not be changed', 'mounted']),             # the initrd, on /initrd
+    ('fdisk rd1', ['rd1: scratch.img, 64M', 'no partition table', 'fdisk and mkfs may change rd1']),
+    ('fdisk rd1 new mbr', ['change: a new, empty MBR', CONFIRM_RD1], [('rd1', ['written, flushed and verified', 'no partitions'])]),
+    ('fdisk rd1 add', ['change: add partition 1: blocks 2048-131071', CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (63M)'])]),
+    ('lsblk', ['rd1', 'disk mbr', 'rd1p1', 'part mbr FAT32 LBA']),
+    ('fdisk rd1', ['MBR partition table', 'rd1p1', '2048', '131071', '0c FAT32 LBA', 'free: none']),
+    ('fdisk rd1p1 new gpt', ['rd1p1 is a partition']),
+    ('fdisk rd1 delete 1', [CONFIRM_RD1], [('rd1', ['verified', 'no partitions'])]),
+    ('fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['Cancelled'])]),         # a wrong answer writes nothing
+    ('fdisk rd1', ['MBR partition table']),
+    ('fdisk rd1 new gpt', [CONFIRM_RD1], [('rd1', ['verified'])]),
+    ('fdisk rd1 add 16M', ['add partition 1: blocks 2048-34815', CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (16M)'])]),
+    ('fdisk rd1 add', [CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (16M), rd1p2 (46M)'])]),
+    ('fdisk rd1 type 2 linux', [CONFIRM_RD1], [('rd1', ['verified'])]),
+    ('lsblk', ['rd1', 'disk gpt', 'rd1p1', 'part gpt basic data', 'SurfOS data', 'rd1p2', 'part gpt Linux']),
+    ('fdisk rd1', ['GPT partition table, usable blocks 34-131038', 'rd1p1', 'Microsoft basic data', 'SurfOS data',
+                   'rd1p2', 'Linux filesystem', 'free: none']),
     ('hexdump hda 0', ['55 aa']),
     ('mount',   ['rd0', '/initrd', 'tarfs']),
     ('ls /initrd', ['etc/', 'motd']),

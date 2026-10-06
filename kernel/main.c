@@ -85,6 +85,7 @@ void kmain(u_long magic, u_long addr) {
 
     if(bootinfo.laptop) init_acpi(); //firmware tables: legacy devices, timers, interrupt controllers
     init_interrupt(); //interrupt subsystem
+    init_console_grid(); //a framebuffer's whole text grid: its buffers come from the kernel heap, usable from here
     if(bootinfo.laptop) init_apic(); //8259s through the local APIC's LINT0, I/O APICs masked
     init_delay(); //udelay() for the drivers, calibrated on whatever clock counts
     init_task(); //setup multitasking

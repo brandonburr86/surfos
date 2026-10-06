@@ -13,6 +13,8 @@ framebuffer and keeps the screen in step with the console.
 10/5/26: more text, same letters. The scale is still the largest one at which 80x25
 cells fit, but the grid grows to fill the screen (1920x1080: 120x33 at scale 2), up
 to FB_MAX_COLS x FB_MAX_ROWS; the pixels left over are split evenly as a margin.
+Until the kernel heap works the screen shows the top left 80x25 of that grid (from
+the console's static buffer); framebuffer_grow() then takes the whole of it.
 */
 
 #ifndef _SYS_FRAMEBUFFER_H
@@ -59,8 +61,9 @@ void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr,
 
 /* framebuffer.c: the console's screen */
 int framebuffer_init(void);     /* 0 when the boot loader's framebuffer is mapped and cleared */
-void framebuffer_grid(u_int *cols, u_int *rows);   /* its text grid (after framebuffer_init) */
-void framebuffer_bind(const u8 *cells);   /* the cols x rows x 2 char/attribute buffer the screen shows */
+void framebuffer_bind(const u8 *cells);   /* the 80x25x2 char/attribute buffer the screen shows at first */
+void framebuffer_grid(u_int *cols, u_int *rows);   /* the whole grid the mode holds (after framebuffer_init) */
+int framebuffer_grow(const u8 *cells);    /* show that whole grid from this cols x rows x 2 buffer; kernel heap; -1: no memory */
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color);
 void framebuffer_present(void); /* redraw every cell that differs from the buffer */
 void framebuffer_set_cursor(u32 col, u32 row);

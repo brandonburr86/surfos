@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test boots the image nine times, each a cold boot with fresh firmware variables:
+--test boots the image ten times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -38,6 +38,10 @@ comes out of the framebuffer.
              this host (a small page and 1 MB), the self test's network checks, then the
              adapter unplugged and plugged in again through the monitor, and finally a
              different adapter on another network (192.168.76.0/24) in its place
+  usbdisk    a second emulated USB stick (a copy of the QEMU test disk: MBR + FAT16) next to the
+             boot stick: it becomes usb1, is mounted by hand, read and written, unplugged while
+             mounted (I/O errors, no crash, umount still works), plugged in again, and what was
+             written is still there (and in the image file, checked here afterwards)
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -73,7 +77,7 @@ PORTABLE = [
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
     ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
                  'keyboard  8042', 'usb       1 xHCI controller']),
-    ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> no driver']),       # the stick, at 5 Gbit/s
+    ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> usb0 (256 MB)']),   # the stick, at 5 Gbit/s, as a disk
     ('tick', ['Ticks:']),
     ('ps', ['Kernel Idle Task', 'init', 'Shell 0']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
@@ -796,6 +800,84 @@ def scenario_usbnet(args, image, firmware, outdir):
     return results
 
 
+DATA_STICK = 'usb-storage,bus=xhci.0,drive=data,removable=on,id=stick1'
+
+
+def data_stick_args(path):
+    """a second USB stick; -blockdev so the image survives device_del and can be plugged in again"""
+    return ['-blockdev', f'driver=file,filename={path},node-name=datafile',
+            '-blockdev', 'driver=raw,file=datafile,node-name=data', '-device', DATA_STICK]
+
+
+def scenario_usbdisk(args, image, firmware, outdir):
+    results = []
+    test_img = os.path.join(REPO, 'build', 'docker', 'build', 'images', 'test.img')
+    if not os.path.isfile(test_img):
+        test_img = os.path.join(REPO, 'build', 'images', 'test.img')
+    if not os.path.isfile(test_img):
+        return [('the QEMU test disk image exists (make images)', False)]
+    tmpd = tempfile.mkdtemp(prefix='surfos-stick-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'stick.img')
+    shutil.copyfile(test_img, stick)
+    vm = Vm('usbdisk', args, image, firmware, mem='512', serial=True, outdir=outdir, extra=data_stick_args(stick))
+    note = 'written by SurfOS to a USB stick'
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            boot = vm.text()
+            results.append(('the second stick is the disk usb1 with partition usb1p1',
+                            '+USB: usb1: QEMU QEMU HARDDISK, 16 MB' in boot and '+PART: usb1p1: MBR partition 1' in boot))
+            results.append(('the boot stick is recognised as the SurfOS boot drive',
+                            '+PART: usb0 is the SurfOS boot drive' in boot))
+            results.append(('the boot does not mount a USB drive by itself',
+                            not re.search(r'\+VFS: usb\S* mounted', boot)))
+            ok, _ = run_cmd(vm, 'fdisk usb0 new mbr', ['the SurfOS boot drive'])
+            results.append(('fdisk refuses the boot drive', ok))
+            for cmd, expects in [('lsblk', ['usb0', 'boot drive: protected', 'usb1', 'usb1p1']),
+                                 ('mount usb1p1 /stick', ['+FAT16: usb1p1']),
+                                 ('ls /stick', ['DOCS/', 'README']),
+                                 ('cat /stick/README', ['Welcome to the SurfOS Source Code']),
+                                 ('cp /stick/hello /stick/HELLO2', []),
+                                 (f'write /stick/NOTE.TXT {note}', []),
+                                 ('cat /stick/NOTE.TXT', [note]),
+                                 ('umount /stick', []),
+                                 ('mount usb1p1 /stick', ['+FAT16: usb1p1']),
+                                 ('cat /stick/NOTE.TXT', [note])]:
+                ok, _ = run_cmd(vm, cmd, expects)
+                results.append((cmd, ok))
+            # the copy has the original's size (which depends on the build)
+            ok1, a = run_cmd(vm, 'stat /stick/hello', ['bytes'])
+            ok2, b = run_cmd(vm, 'stat /stick/HELLO2', ['bytes'])
+            sa, sb = re.search(r'file, (\d+) bytes', a), re.search(r'file, (\d+) bytes', b)
+            results.append(('the copy on the stick is as long as the original', ok1 and ok2 and sa and sb
+                            and sa.group(1) == sb.group(1)))
+            # pulled out while mounted: errors, not a crash; umount still works
+            vm.mon.cmd('device_del stick1')
+            ok = vm.expect('+USB: usb1: unplugged', 20) and vm.expect('unplugged (usb1', 20)   # the port's line comes last
+            results.append(('unplugging the stick is noticed', ok))
+            ok, out = run_cmd(vm, 'ls /stick', [])
+            results.append(('a mounted file system on the unplugged stick fails cleanly', ok and 'DOCS/' not in out))
+            ok, _ = run_cmd(vm, 'umount /stick', [])
+            results.append(('and can still be unmounted', ok))
+            ok, out = run_cmd(vm, 'lsblk', ['usb0'])
+            results.append(('usb1 is gone from lsblk', ok and not re.search(r'^\s*usb1(p\d+)?\s', out, re.M)))
+            # plugged in again: the same name, the data is still there. The port's status line comes
+            # after the partition scan, so usb1p1 exists by then.
+            vm.mon.cmd('device_add ' + DATA_STICK)
+            ok = vm.expect('+USB: usb1: QEMU QEMU HARDDISK', 30) and vm.expect(': usb1 (16 MB)', 30)
+            results.append(('plugged in again it is usb1 again', ok))
+            ok, _ = run_cmd(vm, 'mount usb1p1 /stick', ['+FAT16: usb1p1'])
+            ok2, _ = run_cmd(vm, 'cat /stick/NOTE.TXT', [note])
+            results.append(('and what was written is still there', ok and ok2))
+            run_cmd(vm, 'umount /stick', [])
+        check_bad(vm, results, vm.text())
+    finally:
+        vm.close()
+    data = open(stick, 'rb').read()
+    results.append(('the stick image holds the written file', note.encode() in data and b'NOTE    TXT' in data))
+    shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def load_mkusb():
     import importlib.util
     spec = importlib.util.spec_from_file_location('mkusb', os.path.join(REPO, 'tools', 'mkusb.py'))
@@ -831,7 +913,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'no-pit': scenario_nopit,
-             'usbnet': scenario_usbnet,
+             'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -934,8 +1016,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'no-initrd',
-                               'no-kernel']:
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'usbdisk',
+                               'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)

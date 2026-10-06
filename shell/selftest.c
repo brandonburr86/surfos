@@ -15,6 +15,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/timer.h>
 #include <surfos/klog.h>
 #include <sys/bdev.h>
+#include <sys/part.h>
 #include <fs/vfs.h>
 #include <surfos/process.h>
 #include <net/net.h>
@@ -265,8 +266,82 @@ static void test_bdev(void) {
             check(rc == 0 && !memcmp(a, b, 512) && a[510] == 0x55 && a[511] == 0xAA, "hda1 block 0 is hda's partition start and a boot sector");
         }
     }
+    if(rd && vfs_bdev_busy(rd)) check(bdev_rescan(rd) == -EBUSY, "a rescan of a mounted disk is refused");
     kfree(a);
     kfree(b);
+}
+
+/* 10/5/26: the boot drive check on the scratch ramdisk rd1. An MBR partition holding a FAT32
+   volume labelled SURFOSUSB makes the disk "the SurfOS boot drive", which fdisk and mkfs refuse;
+   the two blocks written are put back and the table read again afterwards. */
+static void test_boot_drive(void) {
+    struct bdev *rd = bdev_find("rd1"), *p;
+    u8 *save, *b;
+    int r1, r2, rc;
+    if(!rd || strcmp(rd->model, "scratch.img") || rd->nblocks < 4096 || bdev_may_format(rd, NULL, 0) != 0) {
+        printf("  skip boot drive check (no free scratch ramdisk rd1)\n");
+        return;
+    }
+    save = (u8 *)kalloc(1024);
+    b = (u8 *)kcalloc(1, 512);
+    if(!save || !b) { check(false, "boot drive test buffers"); kfree(save); kfree(b); return; }
+    rc = bdev_read(rd, 0, 1, save) | bdev_read(rd, 2048, 1, save + 512);
+    b[446 + 4] = 0x0C;                                  /* partition 1: FAT32 LBA, blocks 2048-4095 */
+    b[446 + 9] = 0x08;
+    b[446 + 13] = 0x08;
+    b[510] = 0x55; b[511] = 0xAA;
+    rc |= bdev_write(rd, 0, 1, b);
+    memset(b, 0, 512);                                  /* its boot sector: just enough BPB for the label */
+    b[0] = 0xEB; b[1] = 0x58; b[2] = 0x90;
+    b[12] = 2; b[13] = 1; b[14] = 32; b[16] = 2;
+    b[66] = 0x29;
+    memcpy(b + 71, "SURFOSUSB  ", 11);
+    b[510] = 0x55; b[511] = 0xAA;
+    rc |= bdev_write(rd, 2048, 1, b);
+    r1 = bdev_rescan(rd);
+    p = bdev_find("rd1p1");
+    check(rc == 0 && r1 == 1 && p && p->parent == rd && rd->protect == bdev_boot_drive && p->protect == bdev_boot_drive,
+          "a SURFOSUSB volume marks its disk and partition as the boot drive");
+    check(bdev_may_format(rd, NULL, 0) != 0 && (!p || bdev_may_format(p, NULL, 0) != 0), "the boot drive may not be formatted");
+    rc = bdev_write(rd, 0, 1, save) | bdev_write(rd, 2048, 1, save + 512);
+    r2 = bdev_rescan(rd);
+    check(rc == 0 && r2 >= 0 && !rd->protect && (!p || p->gone), "put back: not the boot drive; the old rd1p1 is gone");
+    kfree(save);
+    kfree(b);
+}
+
+/* 10/5/26: fdisk's writer asks the safety rule again, and writes nothing when the disk no longer
+   reads as the table the change was planned from (plans are made, never carried out here) */
+static void test_part_commit(void) {
+    struct bdev *rd = bdev_find("rd1"), *hd = bdev_find("hda");
+    struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
+    u8 *b0 = (u8 *)kalloc(512), *b1 = (u8 *)kalloc(512);
+    struct part_plan plan;
+    struct part_io io;
+    char err[120];
+    plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
+    if(!t || !b0 || !b1 || !plan.buf) { check(false, "part_commit test buffers"); goto out; }
+    if(hd) {
+        part_io_init(&io, hd, false);
+        io.note = NULL;
+        check(part_read(&io, hd->nblocks, t) == 0 && part_plan_new(&io, hd->nblocks, PART_SCHEME_GPT, &plan, err, sizeof(err)) == 0 &&
+              bdev_read(hd, 0, 1, b0) == 0 && part_commit(hd, t, &plan, err, sizeof(err)) == -1 && strstr(err, "not a USB drive") &&
+              bdev_read(hd, 0, 1, b1) == 0 && !memcmp(b0, b1, 512), "fdisk's writer refuses an internal disk and leaves it alone");
+    }
+    if(rd && !strcmp(rd->model, "scratch.img") && bdev_may_format(rd, NULL, 0) == 0) {
+        part_io_init(&io, rd, false);
+        io.note = NULL;
+        check(part_read(&io, rd->nblocks, t) == 0 && part_plan_new(&io, rd->nblocks, PART_SCHEME_MBR, &plan, err, sizeof(err)) == 0,
+              "a plan for the scratch disk");
+        t->nblocks--;                                   /* as if the disk read differently now */
+        check(bdev_read(rd, 0, 1, b0) == 0 && part_commit(rd, t, &plan, err, sizeof(err)) == -1 && strstr(err, "changed since") &&
+              bdev_read(rd, 0, 1, b1) == 0 && !memcmp(b0, b1, 512), "fdisk's writer writes nothing when the table changed");
+    } else printf("  skip fdisk's writer on rd1 (no free scratch ramdisk)\n");
+out:
+    kfree(plan.buf);
+    kfree(b0);
+    kfree(b1);
+    kfree(t);
 }
 
 static void test_fs(void) {
@@ -479,31 +554,38 @@ static void set_raw_and_exit(void *arg) {     /* and never turns it off, nor the
     raw_was_set = raw_was_set && t->con->inverse && t->con->cursor_off;
 }
 
-/* escape sequences on a console that is never shown (no screen, no serial port) */
-static surf_console ansi_con;
+/* escape sequences on a console that is never shown (no screen, no serial port), with
+   cells for the screen's grid */
+static surf_console *ansi_con;
 
 static void ansi_put(const char *s) {
-    while(*s) kputch(&ansi_con, WHITE_TXT, *s++);
+    while(*s) kputch(ansi_con, WHITE_TXT, *s++);
 }
 
 /* the text at x,y, and its attribute unless attr is -1 */
 static bool ansi_at(u_int x, u_int y, const char *s, int attr) {
     for(; *s; s++, x++) {
-        u_char *cell = ansi_con.vmem + (y * COLUMNS + x) * 2;
+        u_char *cell = ansi_con->vmem + (y * COLUMNS + x) * 2;
         if(cell[0] != (u_char)*s || (attr >= 0 && cell[1] != attr)) return false;
     }
     return true;
 }
 
 static bool ansi_cursor(u_int x, u_int y) {
-    return ansi_con.loc.x == x && ansi_con.loc.y == y;
+    return ansi_con->loc.x == x && ansi_con->loc.y == y;
 }
 
 static void test_ansi(void) {
     u_int i;
-    ansi_con.vmem = ansi_con.memBuf;
-    ansi_con.txtColor = WHITE_TXT;
-    clearConsole(&ansi_con);
+    ansi_con = (surf_console *)kcalloc(1, sizeof(surf_console));
+    if(ansi_con) ansi_con->vmem = (u_char *)kalloc(COLUMNS * LINES * 2);
+    if(!ansi_con || !ansi_con->vmem) {
+        check(false, "console: memory for the escape sequence tests");
+        if(ansi_con) kfree(ansi_con);
+        return;
+    }
+    ansi_con->txtColor = WHITE_TXT;
+    clearConsole(ansi_con);
     ansi_put("first\033[3;5Hxy");
     check(ansi_at(0, 0, "first", 0x07) && ansi_at(4, 2, "xy", 0x07) && ansi_cursor(6, 2), "console: ESC[row;colH");
     ansi_put("\033[7mI\033[0mN\033[1;31mR\033[44mB\033[m.");
@@ -521,13 +603,13 @@ static void test_ansi(void) {
     ansi_put("\033[H\033[5n\033[?1049h\033(B\033]0;a title\007\033[38;5;196m\033[ q\033[?7;9rok");
     check(ansi_at(0, 0, "ok ", 0x07), "console: other sequences are dropped whole");
     ansi_put("\033[?25l");
-    check(ansi_con.cursor_off && ansi_con.ansi_owner == curTask, "console: ESC[?25l hides the cursor");
+    check(ansi_con->cursor_off && ansi_con->ansi_owner == curTask, "console: ESC[?25l hides the cursor");
     ansi_put("\033[?25h");
-    check(!ansi_con.cursor_off && !ansi_con.ansi_owner, "console: ESC[?25h shows it");
+    check(!ansi_con->cursor_off && !ansi_con->ansi_owner, "console: ESC[?25h shows it");
     /* a full line: the cursor waits in the last column; "\r\n" is one line, "\n" alone wraps first as it always did */
     ansi_put("\033[H");
     for(i = 0; i < COLUMNS; i++) ansi_put("a");
-    check(ansi_cursor(COLUMNS - 1, 0) && ansi_con.wrap, "console: the cursor stays in the last column");
+    check(ansi_cursor(COLUMNS - 1, 0) && ansi_con->wrap, "console: the cursor stays in the last column");
     ansi_put("\r\n");
     for(i = 0; i < COLUMNS; i++) ansi_put("b");
     ansi_put("\n");
@@ -538,7 +620,9 @@ static void test_ansi(void) {
     ansi_put("d\b\b");
     check(ansi_at(COLUMNS - 1, 0, " ", -1) && ansi_at(0, 1, " ", -1) && ansi_cursor(COLUMNS - 1, 0),
           "console: backspace erases back across the end of a line");
-    console_reset_ansi(&ansi_con);
+    kfree(ansi_con->vmem);
+    kfree(ansi_con);
+    ansi_con = NULL;
 }
 
 /* raw mode on this shell's own terminal: nothing is typed, the keys are made up here */
@@ -578,6 +662,8 @@ int run_selftest(void) {
     printf("\nSurfOS self test\n----------------\n");
     check(heaptest() == 0, "heap");
     test_bdev();
+    test_boot_drive();
+    test_part_commit();
     test_fs();
     test_fat();
     test_user();

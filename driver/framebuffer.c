@@ -8,14 +8,17 @@ instead of VGA text mode. kernel/console.c keeps writing its char/attribute cell
 into a buffer in RAM; this draws the cells that changed, so scrolling and console
 switches repaint from that buffer and never read the framebuffer back. The cursor is
 drawn in software as an underline. 10/5/26: the grid is whatever fb_setup() made of
-the mode (120x33 on a 1920x1080 panel); kernel/console.c asks for it at boot.
+the mode (120x33 on a 1920x1080 panel). It starts as the top left 80x25 of that, drawn
+from the console's static buffer; once the kernel heap works, framebuffer_grow() takes
+the whole grid (kernel/console.c, init_console_grid()).
 
 Console output also comes from interrupt handlers, so drawing is guarded by a busy
 flag: whoever finds the screen busy marks it dirty and the drawer goes round again.
 The drawer cannot be preempted while it holds the flag (a task killed in the middle
 of drawing would otherwise keep it, and the screen would never change again), and a
 panic, or a task dying of an exception while it draws, takes the screen back.
-Nothing here allocates memory, so the screen works before the kernel heap does.
+Nothing here allocates memory before framebuffer_grow(), so the screen works before
+the kernel heap does.
 */
 
 #include <surfos/types.h>
@@ -24,6 +27,7 @@ Nothing here allocates memory, so the screen works before the kernel heap does.
 #include <surfos/cpu.h>
 #include <surfos/task.h>
 #include <mm/paging.h>
+#include <mm/kalloc.h>
 #include <sys/framebuffer.h>
 #include <blibc_common.h>
 
@@ -31,11 +35,13 @@ Nothing here allocates memory, so the screen works before the kernel heap does.
 #define SHOWN_UNKNOWN 0xFFFFFFFF
 #define NO_CURSOR 0xFFFFFFFF
 
-static struct fb_surface fbs;
+static struct fb_surface fbs;               /* fbs.cols x fbs.rows: the grid drawn now */
 static bool ready;
+static u32 full_cols, full_rows;            /* the grid fb_setup() found room for */
 static u32 ncells;                          /* fbs.cols * fbs.rows */
 static const u8 *cells;                     /* the console's video buffer */
-static u32 shown[FB_MAX_COLS * FB_MAX_ROWS]; /* char | attr << 8 | SHOWN_CURSOR, as drawn */
+static u32 shown_boot[80 * 25];             /* char | attr << 8 | SHOWN_CURSOR, as drawn: 80x25 at first, */
+static u32 *shown = shown_boot;             /* then the whole grid's, from the kernel heap */
 static u32 cursor = NO_CURSOR;              /* cell index; off screen until set */
 static volatile int busy, dirty;
 static surf_task *owner;                    /* the task that holds busy (or was interrupted holding it) */
@@ -64,6 +70,10 @@ int framebuffer_init(void) {
     if(!virt) { why_not = why; return -1; }
 
     fb_setup(&fbs, virt, &m);
+    full_cols = fbs.cols;
+    full_rows = fbs.rows;
+    fbs.cols = 80;                                            /* the console's 80x25 to begin with, */
+    fbs.rows = 25;                                            /* where the whole grid will start */
     ncells = fbs.cols * fbs.rows;
     fb_fill(&fbs, 0, 0, m.width, m.height, fbs.palette[0]);   /* whatever GRUB left goes, margins too */
     for(i = 0; i < ncells; i++) shown[i] = 0x0700;            /* a cleared cell: NUL on light grey */
@@ -72,8 +82,29 @@ int framebuffer_init(void) {
 }
 
 void framebuffer_grid(u_int *cols, u_int *rows) {
-    *cols = fbs.cols;
-    *rows = fbs.rows;
+    *cols = full_cols;
+    *rows = full_rows;
+}
+
+/* The whole grid, drawn from a buffer of that size (init_console_grid() fills it). Every
+   cell is drawn again with the next present. Nobody else draws yet at that point of the
+   boot, but the screen must not be busy. */
+int framebuffer_grow(const u8 *buffer) {
+    u32 i, n = full_cols * full_rows, *all;
+    u_long flags;
+    if(!ready || busy) return -1;
+    all = (u32 *)kalloc(n * sizeof(u32));
+    if(!all) return -1;
+    for(i = 0; i < n; i++) all[i] = SHOWN_UNKNOWN;
+    flags = irq_save();
+    shown = all;
+    cells = buffer;
+    fbs.cols = full_cols;
+    fbs.rows = full_rows;
+    ncells = n;
+    cursor = NO_CURSOR;
+    irq_restore(flags);
+    return 0;
 }
 
 bool framebuffer_active(void) {

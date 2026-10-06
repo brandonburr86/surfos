@@ -189,7 +189,10 @@ static void cmd_ansi(int argc, char **argv) {
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
-static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+static void cmd_lsblk(int argc, char **argv) {
+    if(argc > 1 && !strcmp(argv[1], "-s")) bdev_print_io();
+    else bdev_print();
+}
 
 /**** network ****/
 
@@ -525,6 +528,33 @@ static void cmd_cp(int argc, char **argv) {
     else if(r == 0) printf("    %lu bytes copied\n", total);
 }
 
+/* 10/5/26: how fast a disk reads (nothing is written): 64 KB requests through the block layer */
+static void cmd_readbench(int argc, char **argv) {
+    struct bdev *d;
+    u_long mb, blocks, done = 0, t0, ms;
+    u8 *buf;
+    if(argc < 2) { printf("    usage: readbench <device> [MB]   (reads only; lsblk lists the devices)\n"); return; }
+    d = bdev_find(argv[1]);
+    if(!d) { printf("    no block device '%s'\n", argv[1]); return; }
+    mb = argc > 2 ? strtoul(argv[2], NULL, 0) : 8;
+    blocks = mb * 2048;
+    if(blocks > d->nblocks) blocks = d->nblocks;
+    buf = (u8 *)kalloc(65536);
+    if(!buf) return;
+    t0 = getticks();
+    while(done < blocks) {
+        u_long n = blocks - done > 128 ? 128 : blocks - done;
+        int r = bdev_read(d, (u32)done, (u32)n, buf);
+        if(r) { printf("    read of block %lu failed (%i)\n", done, r); break; }
+        done += n;
+    }
+    ms = (getticks() - t0) * (1000 / HZ);
+    printf("    %lu KB from %s in %lu ms", done / 2, d->name, ms);
+    if(ms) printf(": %lu KB/s", (done / 2) * 1000 / ms);
+    printf("\n");
+    kfree(buf);
+}
+
 static void cmd_hexdump(int argc, char **argv) {
     struct bdev *d;
     u_long lba, nblk, i, j;
@@ -622,7 +652,8 @@ static const struct command commands[] = {
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys },
     { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
-    { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
+    { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
+    { "fdisk",     "<disk> [cmd]", "partition tables: new mbr|gpt, add, delete, type", cmd_fdisk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
     { "ls",        "[path]",    "list a directory", cmd_ls },
@@ -647,6 +678,7 @@ static const struct command commands[] = {
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },
     { "spawn",     "<prog> [args]", "run a user program in the background", cmd_spawn },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
+    { "readbench", "<dev> [MB]", "read speed of a block device (reads only)", cmd_readbench },
     { "test",      "",          "DMA heap allocation and physical lookup", cmd_test },
     { "beep",      "",          "beep the PC speaker", cmd_beep },
     { "funky",     "",          "play a tune in a new task", cmd_funky },
