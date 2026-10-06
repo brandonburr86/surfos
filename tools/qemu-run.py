@@ -295,12 +295,13 @@ SMOKE = [
     ('run ptytest hangup', ['the master is closed', 'count is gone', "count's exit status -1 (killed)",
                             'is free again', 'PTYTEST hangup PASS', 'exit status 0']),
     # 10/6/26 (the review): the hangup's kill waits for a kernel command however long; a kernel thread started in a
-    # session is on F1
+    # session is on F1; a second session starts clean
     ('run ptytest hangup-call', ['still there', 'the kernel log says the kill waited', 'PTYTEST hangup-call PASS',
                                  'exit status 0']),
     ('@pty-tcpecho', []),
-    ('run ptytest poll', ['timed out after', 'POLLNVAL', '(POLLIN | POLLHUP)', 'killed: gone after', 'PTYTEST poll PASS',
-                          'exit status 0']),
+    ('run ptytest reuse', ['line mode, and only its own keys', 'opened again: 80x24', 'PTYTEST reuse PASS', 'exit status 0']),
+    ('run ptytest poll', ['timed out after', 'POLLNVAL', 'POLLHUP at once', '(POLLIN | POLLHUP)', 'killed: gone after',
+                          'PTYTEST poll PASS', 'exit status 0']),
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
     ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
     ('@kmsg', []),

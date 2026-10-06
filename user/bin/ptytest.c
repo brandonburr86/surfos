@@ -33,10 +33,14 @@ ptytest hangup-call       the master closed 300 ms into `sleep -u 4000` (a kerne
 ptytest tcpecho [PORT]    `tcpecho PORT` (2323) in a session: its kernel thread is on F1,
                           the session ends with `exit`, the thread lives on, and nothing it
                           prints is in the session
+ptytest reuse             a second session on the same master: line mode again (the first
+                          set raw mode) and none of the keys written in between; the pty
+                          opened again is 80x24
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
-                          (POLLIN), after the end (POLLIN and POLLHUP); a closed descriptor
-                          (POLLNVAL); a negative one (skipped); too many (EINVAL); the
-                          console; and a kill cuts a poll() with no timeout short at once
+                          (POLLIN), after the end (POLLIN and POLLHUP); spawnpty of no
+                          program (POLLHUP at once); a closed descriptor (POLLNVAL); a
+                          negative one (skipped); too many (EINVAL); the console; and a kill
+                          cuts a poll() with no timeout short at once
 ptytest ps                procinfo(): every task
 ptytest detach            a child that detaches: init is its parent, PROC_DETACHED, and
                           wait() finds it is no child of this process any more
@@ -500,6 +504,16 @@ static int mode_poll(void) {
     if(poll(p, 2, 0) != 1 || p[0].revents != POLLNVAL || p[1].revents != 0) return fail("POLLNVAL, or a negative fd");
     printf("ptytest: a closed descriptor: POLLNVAL; a negative one: skipped\n");
     if(poll(p, POLL_MAX + 1, 0) != -1 || errno != EINVAL) return fail("more than POLL_MAX descriptors were taken");
+    if(spawnpty("/initrd/bin/no-such-program", NULL, m) != -1 || errno != ENOENT) return fail("spawnpty of nothing");
+    p[0].fd = m;
+    p[0].events = POLLIN;
+    t0 = uptime();
+    if(poll(p, 1, 2000) != 1 || p[0].revents != (POLLIN | POLLHUP) || uptime() - t0 > 500 || read(m, out, 1) != 0)
+        return fail("a session that could not start is not over at once");
+    printf("ptytest: spawnpty of no program: ENOENT, and POLLIN | POLLHUP at once\n");
+    close(m);
+    m = openpty();
+    if(m < 0) return fail("openpty");
     pid = spawnpty("/initrd/bin/hello", argv, m);
     if(pid < 0) return fail("spawnpty hello");
     p[0].fd = m;
@@ -508,6 +522,7 @@ static int mode_poll(void) {
     printf("ptytest: the session printed: revents 0x%x\n", p[0].revents);
     if(read_until(m, NULL, 0, 10000) != 1) return fail("the session did not end");
     wait(pid, &st);
+    p[0].fd = m;
     p[0].events = POLLIN;
     if(poll(p, 1, 1000) != 1 || p[0].revents != (POLLIN | POLLHUP)) return fail("no POLLIN | POLLHUP after the end");
     printf("ptytest: after the end and the last read: revents 0x%x (POLLIN | POLLHUP)\n", p[0].revents);
@@ -528,6 +543,48 @@ static int mode_poll(void) {
     printf("ptytest: a process in poll() with no timeout, killed: gone after %u ms\n", took);
     if(took > 1000) return fail("the kill did not cut poll() short");
     return pass();
+}
+
+/* a second session on the same master starts clean: the keys written after the first one ended
+   are gone, and the first one's raw mode with it; a pty opened again is 80x24 */
+static int mode_reuse(void) {
+    char *raw[] = { "ptytest", "rawexit", NULL }, *ask[] = { "pagetest", "ask", "0", NULL };
+    char *size[] = { "pagetest", "size", NULL };
+    int m, pid, st, n;
+    m = openpty();
+    if(m < 0) return fail("openpty");
+    n = ptyctl(m, PTY_INDEX, 0);
+    ptyctl(m, PTY_SETSIZE, (100 << 16) | 30);
+    pid = spawnpty("/initrd/bin/ptytest", raw, m);
+    if(pid < 0 || read_until(m, NULL, 0, 5000) != 1) return fail("the first session");
+    wait(pid, &st);
+    type(m, "stale\r");                                 /* after its end: nobody's keys */
+    outlen = 0;
+    out[0] = 0;
+    pid = spawnpty("/initrd/bin/pagetest", ask, m);
+    if(pid < 0 || read_until(m, "pagetest question: ", 0, 5000) != 1) return fail("the second session asks nothing");
+    type(m, "fresh\r");
+    if(read_until(m, NULL, 0, 5000) != 1) return fail("the second session did not end (still raw?)");
+    wait(pid, &st);
+    if(!strstr(out, "pagetest answer: fresh\n")) return fail("the second session read stale keys");
+    printf("ptytest: a second session on the same master: line mode, and only its own keys\n");
+    close(m);
+    m = openpty();
+    if(m < 0 || ptyctl(m, PTY_INDEX, 0) != n) return fail("pty not free again");
+    outlen = 0;
+    out[0] = 0;
+    pid = spawnpty("/initrd/bin/pagetest", size, m);
+    if(pid < 0 || read_until(m, NULL, 0, 5000) != 1) return fail("pagetest size");
+    wait(pid, &st);
+    close(m);
+    if(!strstr(out, "TTY_GETSIZE 80x24")) return fail("a pty opened again is not 80x24");
+    printf("ptytest: pty %d opened again: 80x24\n", n);
+    return pass();
+}
+
+/* ptytest reuse's first session: raw mode on, and gone */
+static int mode_rawexit(void) {
+    return ttyctl(TTY_RAW, 1) < 0;
 }
 
 /* ptytest poll's child: a poll() on a fresh pty that nothing ends (but a kill) */
@@ -617,6 +674,8 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "hangup")) return mode_hangup();
     if(!strcmp(mode, "hangup-call")) return mode_hangup_call();
     if(!strcmp(mode, "tcpecho")) return mode_tcpecho(argc, argv);
+    if(!strcmp(mode, "reuse")) return mode_reuse();
+    if(!strcmp(mode, "rawexit")) return mode_rawexit();
     if(!strcmp(mode, "flood")) return mode_flood();
     if(!strcmp(mode, "poll")) return mode_poll();
     if(!strcmp(mode, "pollwait")) return mode_pollwait();
@@ -625,6 +684,6 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
     fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
-                    "       tcpecho [PORT] | poll | ps | detach | kmsg\n");
+                    "       tcpecho [PORT] | reuse | poll | ps | detach | kmsg\n");
     return 2;
 }

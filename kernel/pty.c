@@ -313,6 +313,7 @@ int sys_openpty(void) {
 int sys_spawnpty(const char *path, char *const argv[], int masterfd) {
     char *kargv[SPAWN_MAX_ARGS];
     struct pty *p;
+    struct tty *t;
     u_long flags;
     int argc, r;
     r = master_of(masterfd, &p);
@@ -320,20 +321,28 @@ int sys_spawnpty(const char *path, char *const argv[], int masterfd) {
     if(!user_str(path)) return -EFAULT;
     argc = user_argv(path, argv, kargv);
     if(argc < 0) return argc;
+    t = pty_tty(p);
     flags = irq_save();
-    p->started = 1;                                     /* before it can run, and end */
-    p->ended = 0;
+    if(!task_count_tty(t)) {                            /* a new session on a pty nobody is on starts clean: */
+        tty_flush(t);                                   /* keys written after the last one ended are not its */
+        p->in_esc = 0;
+    }
     irq_restore(flags);
     r = process_spawn_files(path, argc, kargv, pty_con(p), 0, NULL);
-    if(r < 0) {
-        flags = irq_save();
-        if(!task_count_tty(pty_tty(p)) && !p->ended) {  /* nothing runs on it: an empty session, over */
-            p->ended = 1;
-            wake_up_all(&p->readers);
-            poll_wake();
-        }
-        irq_restore(flags);
+    /* It has begun now that its task exists, not before: the last task of an earlier session that
+       ends meanwhile does not end this one. Begun or not, a pty nobody is on has ended (a program that
+       could not be started, or one that is over already): the master reads 0, POLLHUP. */
+    flags = irq_save();
+    if(r >= 0 || !p->started) {
+        p->started = 1;
+        p->ended = 0;
     }
+    if(!task_count_tty(t) && !p->ended) {
+        p->ended = 1;
+        wake_up_all(&p->readers);
+        poll_wake();
+    }
+    irq_restore(flags);
     return r;
 }
 
