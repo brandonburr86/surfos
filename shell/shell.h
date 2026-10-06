@@ -32,4 +32,13 @@ int run_selftest(void);     /* 0 = all pass */
 /* fdisk.c */
 void cmd_fdisk(int argc, char **argv);
 
+/* fscmd.c: file system commands (10/5/26) */
+void cmd_mount(int argc, char **argv);
+void cmd_umount(int argc, char **argv);
+void cmd_eject(int argc, char **argv);
+void cmd_df(int argc, char **argv);
+void cmd_mv(int argc, char **argv);
+void cmd_mkfs(int argc, char **argv);
+void cmd_fsbench(int argc, char **argv);
+
 #endif

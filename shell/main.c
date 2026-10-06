@@ -433,30 +433,6 @@ static void cmd_stat(int argc, char **argv) {
            (u_long)st.size, when, (u_long)st.ino, st.dev[0] ? st.dev : "none", st.fs);
 }
 
-static void cmd_mount(int argc, char **argv) {
-    const struct mount *m;
-    int r;
-    if(argc == 1) {
-        for(m = vfs_mounts(); m; m = m->next)
-            printf("    %-6s on %-12s type %s%s\n", m->sb->dev ? m->sb->dev->name : "none", m->path, m->sb->type->name, m->sb->readonly ? " (ro)" : "");
-        return;
-    }
-    if(argc < 3) { printf("    usage: mount [<device> <path> [type]]\n"); return; }
-    {
-        struct bdev *d = bdev_find(argv[1]);
-        if(!d) { printf("    mount: no block device '%s'\n", argv[1]); return; }
-        r = vfs_mount(d, argv[2], argc > 3 ? argv[3] : NULL);
-        if(r) printf("    mount: %s\n", strerror(r));
-    }
-}
-
-static void cmd_umount(int argc, char **argv) {
-    int r;
-    if(argc < 2) { printf("    usage: umount <path>\n"); return; }
-    r = vfs_umount(argv[1]);
-    if(r) printf("    umount: %s: %s\n", argv[1], strerror(r));
-}
-
 static void cmd_sync(int argc, char **argv) {
     u_long h, m, w;
     int r = vfs_sync();
@@ -654,19 +630,24 @@ static const struct command commands[] = {
     { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
     { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
     { "fdisk",     "<disk> [cmd]", "partition tables: new mbr|gpt, add, delete, type", cmd_fdisk },
-    { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
-    { "umount",    "<path>",    "unmount", cmd_umount },
+    { "mount",     "[-r] [dev [path]]", "list mounts, or mount a block device (-r: read-only)", cmd_mount },
+    { "umount",    "<path|dev>", "unmount", cmd_umount },
+    { "eject",     "<disk>",    "unmount all of a disk and flush it: safe to pull out", cmd_eject },
+    { "df",        "",          "size, use and free space of mounted volumes", cmd_df },
+    { "mkfs",      "[-t fat16|fat32] <dev> [label]", "make a FAT file system (asks first)", cmd_mkfs },
     { "ls",        "[path]",    "list a directory", cmd_ls },
     { "cat",       "<file>...", "print files", cmd_cat },
     { "cd",        "[dir]",     "change the current directory", cmd_cd },
     { "pwd",       "",          "print the current directory", cmd_pwd },
     { "stat",      "<path>",    "size, time and location of a file", cmd_stat },
     { "cp",        "<src> <dst>", "copy a file", cmd_cp },
+    { "mv",        "<from> <to>", "rename or move a file or directory", cmd_mv },
     { "write",     "<file> <text>...", "create a file with one line of text", cmd_write },
     { "mkdir",     "<dir>",     "create a directory", cmd_mkdir },
     { "rm",        "<file>...", "delete files", cmd_rm },
     { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir },
     { "sync",      "",          "write cached blocks to the disks", cmd_sync },
+    { "fsbench",   "<dir> [MB]", "time writing and reading a file", cmd_fsbench },
     { "ifconfig",  "[if ip mask [gw] [dns]]", "show or set the network configuration", cmd_ifconfig },
     { "arp",       "",          "the ARP table", cmd_arp },
     { "dhcp",      "[if]",      "get an address lease", cmd_dhcp },

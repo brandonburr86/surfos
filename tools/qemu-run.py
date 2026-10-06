@@ -28,6 +28,12 @@ PROMPT = 'SurfOS*>'
 # fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
 CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
 
+
+def answered(cmd, question, answer, expects):
+    """a step whose command asks first (mkfs): wait for the question, type the answer, then expect"""
+    return (cmd, [question], [(answer, expects)])
+
+
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
     ('tick',    ['Ticks:']),
@@ -68,6 +74,65 @@ SMOKE = [
     ('cat /initrd/motd', ['Welcome to SurfOS']),
     ('ls /hda1', ['DOCS/', 'README', 'motd']),
     ('cat /hda1/DOCS/README.md', ['SurfOS']),
+    # 10/5/26 (USB storage): on the GPT fdisk left on rd1, FAT16 on rd1p1 and FAT32 (forced) on rd1p2,
+    # used, remounted and ejected; then the whole disk as one volume, and the refusals
+    answered('mkfs rd1p1 TESTVOL', 'Type rd1p1 to erase rd1p1 (16 MB) and create a FAT16 file system: ', 'rd1p1',
+             ['rd1p1: FAT16, 2048-byte clusters', 'label TESTVOL']),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL', 'read-write']),
+    ('write /scratch/hello.txt Hello from SurfOS', []),
+    ('cp /initrd/motd /scratch/motd', ['bytes copied']),
+    ('write /scratch/a-much-longer-file-name.text long names work', []),
+    ('mkdir /scratch/docs', []),
+    ('mv /scratch/hello.txt /scratch/docs', []),
+    ('mv /scratch/docs /scratch/papers', []),
+    ('ls /scratch/papers', ['hello.txt', '1 entries']),
+    ('ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
+    ('df', ['rd1p1   fat16', '/scratch', 'TESTVOL']),
+    ('fsbench /scratch 4', ['read, 64 KB pieces:', 'fsbench: ok']),
+    ('cd /scratch/papers', []),
+    ('umount rd1p1', ['/scratch is busy: it holds the current directory']),
+    ('cd /', []),
+    ('umount rd1p1', []),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL']),
+    ('cat /scratch/papers/hello.txt', ['Hello from SurfOS']),
+    ('cat /scratch/a-much-longer-file-name.text', ['long names work']),
+    ('cat /scratch/motd', ['Welcome to SurfOS']),
+    ('umount /scratch', []),
+    ('mount -r rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL', 'read-only']),
+    ('write /scratch/new.txt nope', ['Read-only file system']),
+    ('mount rd1p2', ['rd1p2: no file system found']),
+    ('umount /scratch', []),
+    ('mkfs -t fat32 rd1p2 BIG32', ["the partition's type (Linux) becomes basic data", 'Type rd1p2 to erase rd1p2 ('],
+     [('rd1p2', ['rd1p2: FAT32, 512-byte clusters', '(1 MiB aligned)', 'label BIG32', 'rd1p2: partition type: basic data'])]),
+    ('lsblk', ['rd1p2', 'part gpt basic data']),
+    ('mount rd1p2', ['rd1p2 on /rd1p2: fat32, label BIG32']),
+    ('mount rd1p2 /again', ['rd1p2 is mounted already']),
+    ('mount rd1 /whole', ['rd1 is mounted already, or its disk or a partition of it is']),
+    ('write /rd1p2/fat32.txt FAT32 works', []),
+    ('mkdir /rd1p2/dir', []),
+    ('mv /rd1p2/fat32.txt /rd1p2/dir/renamed.txt', []),
+    ('cat /rd1p2/dir/renamed.txt', ['FAT32 works']),
+    ('df', ['rd1p2   fat32', '/rd1p2', 'BIG32']),
+    ('eject rd1', ['/rd1p2 unmounted', 'rd1: safe to remove']),
+    ('mount rd1p2', ['(FSInfo)', 'rd1p2 on /rd1p2: fat32, label BIG32']),     # cleanly unmounted: FSInfo is trusted
+    ('cat /rd1p2/dir/renamed.txt', ['FAT32 works']),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16']),
+    ('eject rd1p1', ['/rd1p2 unmounted', '/scratch unmounted', 'rd1: safe to remove']),   # the whole disk goes
+    ('mkfs rd1 WHOLE', ['its partitions, which will be gone: rd1p1 rd1p2', 'Type rd1 to erase rd1 (64 MB) and create a FAT16'],
+     [('rd1', ['rd1: FAT16', 'label WHOLE', 'rd1 was read again: no partitions now'])]),
+    ('mount rd1p1', ["no block device 'rd1p1'"]),
+    ('mount rd1 /whole', ['rd1 on /whole: fat16, label WHOLE']),
+    ('write /whole/x.txt a whole-disk volume', []),
+    ('cat /whole/x.txt', ['a whole-disk volume']),
+    ('eject rd1', ['/whole unmounted', 'rd1: safe to remove']),
+    ('fdisk rd1 new mbr', [CONFIRM_RD1], [('rd1', ['verified'])]),                  # an MBR partition of type 0c,
+    ('fdisk rd1 add 32M', [CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (32M)'])]),  # small enough for FAT16
+    ('mkfs rd1p1', ["the partition's type (FAT32 LBA) becomes 0e FAT16 LBA", 'Type rd1p1 to erase rd1p1 (32 MB)'],
+     [('rd1p1', ['rd1p1: FAT16', 'rd1p1: partition type: FAT16 LBA'])]),
+    ('lsblk', ['rd1p1', 'part mbr FAT16 LBA']),
+    ('mkfs hda1', ['mkfs: hda1: it is not a USB drive']),
+    ('mkfs rd0', ['mkfs: rd0: it, its disk or one of its partitions is mounted']),
+    answered('mkfs rd1', 'Type rd1 to erase rd1', 'rd2', ['Cancelled']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
@@ -149,9 +214,10 @@ SMOKE = [
      [(b'\x1b[F!\x13', ['Wrote 2 lines']),
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
+    ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60}
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
@@ -469,9 +535,35 @@ def host_checks(q):
                                   env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
         except Exception as e:
             return str(e).encode()
-    return [('FAT file written by the self test is readable with mtools', read('SELFTEST.TXT') == b'SurfOS wrote this file.\n'),
-            ('the files the editor saved are exact, line ends included (mtools)',
-             read('NOTE.TXT') == b'Alpha one!\nBeta 2\nGamma three\n' and read('CRLF.TXT') == b'first!\r\nsecond\r\n')]
+    results = [('FAT file written by the self test is readable with mtools', read('SELFTEST.TXT') == b'SurfOS wrote this file.\n'),
+               ('the files the editor saved are exact, line ends included (mtools)',
+                read('NOTE.TXT') == b'Alpha one!\nBeta 2\nGamma three\n' and read('CRLF.TXT') == b'first!\r\nsecond\r\n')]
+    try:                                                    # the UTF-8 name the self test made, through mtools' UTF-16
+        out = subprocess.run(['mdir', '-i', f'{q.disk}@@{start}', '::/'], env=dict(env, LC_ALL='C.UTF-8'),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
+    except Exception as e:
+        out = str(e).encode()
+    results.append(('mtools lists the UTF-8 name caf\u00e9.txt', 'caf\u00e9.txt'.encode() in out))
+    return results + fsck_check(q.disk, start, int.from_bytes(mbr[458:462], 'little') * 512)
+
+
+def fsck_check(disk, start, size):
+    """fsck.fat (dosfstools) on a copy of the partition: what SurfOS wrote must be consistent"""
+    if not shutil.which('fsck.fat') or not size:
+        return []
+    part = os.path.join(os.path.dirname(disk), 'part.img')
+    with open(disk, 'rb') as f, open(part, 'wb') as o:
+        f.seek(start)
+        o.write(f.read(size))
+    try:
+        r = subprocess.run(['fsck.fat', '-n', part], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        ok = r.returncode == 0
+        if not ok:
+            print(r.stdout.decode(errors='replace'))
+    except Exception as e:
+        print(e)
+        ok = False
+    return [('fsck.fat finds the FAT volume SurfOS wrote consistent', ok)]
 
 
 def tail(text, n=40):

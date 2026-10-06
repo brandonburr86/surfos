@@ -17,6 +17,8 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
+#include <fs/fat.h>
+#include <fs/bcache.h>
 #include <surfos/process.h>
 #include <net/net.h>
 #include <net/eth.h>
@@ -420,6 +422,281 @@ static void test_fat(void) {
     kfree(rb);
 }
 
+/* 10/5/26: a small file with the given contents (0 or -errno) */
+static int put_file(const char *path, const char *text) {
+    struct file *f;
+    int r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r) return r;
+    r = vfs_write(f, text, strlen(text));
+    vfs_close(f);
+    return r == (int)strlen(text) ? 0 : (r < 0 ? r : -EIO);
+}
+
+/* does the file hold exactly text? */
+static bool file_is(const char *path, const char *text) {
+    struct file *f;
+    char buf[64];
+    int r = vfs_open(path, O_RDONLY, &f);
+    if(r) return false;
+    r = vfs_read(f, buf, sizeof(buf));
+    vfs_close(f);
+    return r == (int)strlen(text) && !memcmp(buf, text, r);
+}
+
+/* 10/5/26 (USB storage): rename on FAT. The tree it leaves (/hda1/RENAMED/moved/...) is what
+   the host's fsck.fat checks after the run, the ".." of a moved directory included. */
+/* 10/5/26 (USB storage): statfs counts clusters as they are used and freed; a read-write
+   mount has cleared FAT[1]'s clean-shutdown bit (umount sets it again: the host's fsck.fat
+   checks that after the smoke test) */
+static void test_fat_statfs(void) {
+    struct statfs a, b;
+    struct stat st;
+    struct bdev *d = bdev_find("hda1");
+    u8 *blk;
+    int r;
+
+    if(vfs_stat("/hda1", &st) != 0 || !d) return;
+    r = vfs_statfs("/hda1/DOCS", &a);
+    check(r == 0 && a.unit == 1024 && a.units > 15000 && a.free_units > 0 && a.free_units < a.units && !strcmp(a.fs, "fat16") &&
+          !strcmp(a.label, "SURFOS") && !strcmp(a.dev, "hda1") && !strcmp(a.path, "/hda1"), "statfs /hda1: FAT16, 1 KB clusters, label SURFOS");
+    blk = (u8 *)kcalloc(1, 10240);
+    if(!blk) { check(false, "statfs test buffer"); return; }
+    r = put_file("/hda1/statfs.bin", "");
+    if(r == 0) {
+        struct file *f;
+        r = vfs_open("/hda1/statfs.bin", O_WRONLY, &f);
+        if(r == 0) { r = vfs_write(f, blk, 10240) == 10240 ? 0 : -EIO; vfs_close(f); }
+    }
+    check(r == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units + 10 == a.free_units, "a 10 KB file takes 10 clusters");
+    check(vfs_unlink("/hda1/statfs.bin") == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units == a.free_units, "unlink gives them back");
+    r = put_file("/hda1/grow.txt", "abc");
+    if(r == 0) {                                     /* ftruncate past the end: zeros, as POSIX says */
+        struct file *f;
+        r = vfs_open("/hda1/grow.txt", O_RDWR, &f);
+        if(r == 0) {
+            u_int i;
+            r = vfs_ftruncate(f, 5000);
+            memset(blk, 0xEE, 5000);
+            if(r == 0 && vfs_read(f, blk, 5000) != 5000) r = -EIO;
+            for(i = 3; r == 0 && i < 5000; i++) if(blk[i]) r = -EIO;
+            if(r == 0 && memcmp(blk, "abc", 3)) r = -EIO;
+            if(r == 0) r = vfs_ftruncate(f, 2);
+            vfs_close(f);
+        }
+    }
+    check(r == 0 && vfs_stat("/hda1/grow.txt", &st) == 0 && st.size == 2 && vfs_unlink("/hda1/grow.txt") == 0,
+          "ftruncate grows a file with zeros and shrinks it again");
+    r = bdev_read(d, 0, 1, blk);
+    if(r == 0) r = bdev_read(d, blk[14] | (blk[15] << 8), 1, blk);        /* the first sector of the FAT */
+    check(r == 0 && !(blk[3] & 0x80), "mounted read-write: FAT[1] says not cleanly unmounted");
+    kfree(blk);
+}
+
+/* is name an entry of the directory dir? */
+static bool dir_lists(const char *dir, const char *name) {
+    struct file *f;
+    struct dirent de;
+    bool found = false;
+    if(vfs_open(dir, O_RDONLY | O_DIRECTORY, &f) != 0) return false;
+    while(!found && vfs_readdir(f, &de) == 0) found = !strcmp(de.name, name);
+    vfs_close(f);
+    return found;
+}
+
+/* 10/5/26 (USB storage): UTF-8 names. /hda1/café.txt stays for the host to list with mtools;
+   the macOS names (AppleDouble files, .DS_Store) are ordinary entries. */
+static void test_fat_utf8(void) {
+    static const char cafe[] = "/hda1/caf\xc3\xa9.txt";               /* café.txt */
+    static const char smile[] = "/hda1/\xf0\x9f\x98\x80 smile.txt";  /* U+1F600: a surrogate pair on the disk */
+    struct stat st;
+    struct file *f;
+
+    if(vfs_stat("/hda1", &st) != 0) return;
+    vfs_unlink(cafe);
+    check(put_file(cafe, "caf\xc3\xa9\n") == 0 && file_is("/hda1/CAF\xc3\xa9.TXT", "caf\xc3\xa9\n") &&
+          vfs_stat("/hda1/caf\xc3\x89.txt", &st) == -ENOENT && dir_lists("/hda1", "caf\xc3\xa9.txt"),
+          "a UTF-8 name: listed as written, ASCII letters folded only");
+    check(put_file(smile, ":)") == 0 && dir_lists("/hda1", smile + 6) && vfs_unlink(smile) == 0, "a character beyond U+FFFF");
+    check(vfs_open("/hda1/bad\xc3(.txt", O_WRONLY | O_CREAT, &f) == -EINVAL && vfs_open("/hda1/bad\xc0\xaf.txt", O_WRONLY | O_CREAT, &f) == -EINVAL,
+          "malformed UTF-8 is refused");
+    check(put_file("/hda1/._caf\xc3\xa9.txt", "AppleDouble") == 0 && put_file("/hda1/.DS_Store", "Bud1") == 0 &&
+          vfs_mkdir("/hda1/.fseventsd") == 0 && dir_lists("/hda1", "._caf\xc3\xa9.txt") && dir_lists("/hda1", ".DS_Store") &&
+          file_is("/hda1/.ds_store", "Bud1") && vfs_unlink("/hda1/._caf\xc3\xa9.txt") == 0 && vfs_unlink("/hda1/.DS_Store") == 0 &&
+          vfs_rmdir("/hda1/.fseventsd") == 0, "macOS's ._ files, .DS_Store and .fseventsd");
+}
+
+/* 10/5/26 (USB storage): the block cache with several users at once. Three tasks write and
+   check files of their own on /hda1 (their closes sync outside the volume's lock, so blocks
+   are written back while others hold them) while a fourth keeps reading the initrd. */
+static volatile int conc_bad;
+
+static void conc_pattern(u8 *p, u32 n, u32 seed) {
+    u32 i;
+    for(i = 0; i < n; i++) p[i] = (u8)(seed * 31 + i * 7 + (i >> 9));
+}
+
+static void conc_fat(void *arg) {
+    u32 id = (u32)(u_long)arg, round, k;
+    char path[32];
+    u8 *w = (u8 *)kalloc(8192), *rb = (u8 *)kalloc(8192);
+    if(!w || !rb) { conc_bad++; kfree(w); kfree(rb); return; }
+    snprintf(path, sizeof(path), "/hda1/conc%u.bin", (u_int)id);
+    for(round = 0; round < 6; round++) {
+        struct file *f;
+        int bad = 0;
+        if(vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f) != 0) { conc_bad++; continue; }
+        for(k = 0; k < 5; k++) {
+            u32 n = k == 4 ? 1000 : 8192;
+            conc_pattern(w, 8192, id * 100 + round * 10 + k);
+            if(vfs_write(f, w, n) != (int)n) bad = 1;
+        }
+        vfs_close(f);
+        if(vfs_open(path, O_RDONLY, &f) != 0) { conc_bad++; continue; }
+        for(k = 0; k < 5; k++) {
+            u32 n = k == 4 ? 1000 : 8192;
+            conc_pattern(w, 8192, id * 100 + round * 10 + k);
+            if(vfs_read(f, rb, n) != (int)n || memcmp(w, rb, n)) bad = 1;
+        }
+        vfs_close(f);
+        if(bad) conc_bad++;
+    }
+    vfs_unlink(path);
+    kfree(w);
+    kfree(rb);
+}
+
+static void conc_initrd(void *arg) {
+    u8 *a = (u8 *)kalloc(4096), *b = (u8 *)kalloc(4096);
+    int i, n0 = -1;
+    if(!a || !b) { conc_bad++; kfree(a); kfree(b); return; }
+    for(i = 0; i < 40; i++) {
+        struct file *f;
+        int n = vfs_open("/initrd/bin/hello", O_RDONLY, &f);
+        if(n == 0) { n = vfs_read(f, i ? b : a, 4096); vfs_close(f); }
+        if(!i) n0 = n;
+        else if(n != n0 || memcmp(a, b, n)) conc_bad++;
+        yield();
+    }
+    kfree(a);
+    kfree(b);
+}
+
+static void test_fat_concurrent(void) {
+    surf_task *t[4];
+    struct stat st;
+    int i, status;
+    if(vfs_stat("/hda1", &st) != 0 || vfs_stat("/initrd/bin/hello", &st) != 0) return;
+    conc_bad = 0;
+    for(i = 0; i < 3; i++) t[i] = kthread_create("fatconc", conc_fat, (void *)(u_long)i, PL_NORMAL, 0);
+    t[3] = kthread_create("rdconc", conc_initrd, NULL, PL_NORMAL, 0);
+    for(i = 0; i < 4; i++) if(t[i]) task_wait(t[i]->pid, &status);
+    check(t[0] && t[1] && t[2] && t[3] && !conc_bad, "three tasks write and check FAT files while a fourth reads the initrd");
+}
+
+/* 10/5/26 (USB storage): a FAT volume whose device goes away while it is mounted and a file
+   is open, as when a USB stick is pulled. The device is a RAM disk of the test's own (never
+   registered, so nothing else can see it). */
+#define UNPLUG_BLOCKS 8192                           /* 4 MB: FAT16 with 512-byte clusters */
+
+static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
+    return 0;
+}
+
+static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
+    memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
+    return 0;
+}
+
+static const struct bdev_ops ram_ops = { ram_read, ram_write, NULL };
+
+static struct bdev *ram_disk(u8 *mem) {
+    struct bdev *d = (struct bdev *)kcalloc(1, sizeof(struct bdev));
+    if(!d) return NULL;
+    strlcpy(d->name, "stick9", sizeof(d->name));
+    strlcpy(d->model, "self test RAM", sizeof(d->model));
+    d->block_size = 512;
+    d->nblocks = UNPLUG_BLOCKS;
+    d->bus = BDEV_BUS_RAM;
+    d->removable = true;
+    d->ops = &ram_ops;
+    d->priv = mem;
+    return d;
+}
+
+static void test_fat_unplug(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL, *d2 = NULL;
+    struct statfs sf;
+    struct stat st;
+    struct file *f = NULL;
+    struct vnode *v;
+    char msg[160];
+    int r;
+
+    if(!d) { check(false, "unplug test: 4 MB of memory"); kfree(mem); return; }
+    r = fat_mkfs(d, "UNPLUG", 0, msg, sizeof(msg));
+    check(r == 0 && vfs_mount_flags(d, "/selftest-stick", "fat", 0) == 0, "mkfs and mount a 4 MB RAM stick");
+    if(r || vfs_stat("/selftest-stick", &st) != 0) { kfree(d); kfree(mem); return; }
+    r = put_file("/selftest-stick/kept.txt", "written before");
+    if(r == 0) r = vfs_open("/selftest-stick/open.txt", O_WRONLY | O_CREAT, &f);
+    if(r == 0) r = vfs_write(f, "x", 1) == 1 ? 0 : -EIO;
+    check(r == 0 && (mem[512 + 3] & 0x80) == 0, "files written, FAT[1] says in use");
+    bdev_unregister(d);                              /* pulled out */
+    check(f && vfs_write(f, "y", 1) == -EIO && vfs_stat("/selftest-stick/kept.txt", &st) == -EIO &&
+          vfs_lookup("/selftest-stick/kept.txt", &v) == -EIO && vfs_mkdir("/selftest-stick/d") == -EIO &&
+          vfs_rename("/selftest-stick/kept.txt", "/selftest-stick/k2.txt") == -EIO && vfs_statfs("/selftest-stick", &sf) == -EIO,
+          "unplugged: write, stat, open, mkdir, rename and statfs fail with EIO");
+    check(vfs_umount("/selftest-stick") == -EBUSY, "umount waits for the open file");
+    if(f) vfs_close(f);
+    check(vfs_umount("/selftest-stick") == 0, "then it unmounts, writing nothing");
+    d2 = ram_disk(mem);                              /* plugged in again */
+    r = d2 ? vfs_mount_flags(d2, "/selftest-stick", "fat", MNT_RDONLY) : -ENOMEM;
+    check(r == 0 && file_is("/selftest-stick/kept.txt", "written before") && (mem[512 + 3] & 0x80) == 0,
+          "plugged in again: the file written before is there, the volume says not cleanly unmounted");
+    if(r == 0) vfs_umount("/selftest-stick");
+    if(d2) { binvalidate(d2); kfree(d2); }
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+static void test_fat_rename(void) {
+    struct stat st;
+    struct file *f;
+    int r;
+
+    if(vfs_stat("/hda1", &st) != 0) return;
+    vfs_unlink("/hda1/RENAMED/moved/a much longer name.txt");      /* leftovers of an earlier run */
+    vfs_unlink("/hda1/RENAMED/moved/opened.txt");
+    vfs_rmdir("/hda1/RENAMED/moved");
+    vfs_rmdir("/hda1/RENAMED");
+    check(put_file("/hda1/rn_a.txt", "alpha") == 0 && vfs_rename("/hda1/rn_a.txt", "/hda1/rn_b.txt") == 0 &&
+          vfs_stat("/hda1/rn_a.txt", &st) == -ENOENT && file_is("/hda1/rn_b.txt", "alpha"), "rename a file in its directory");
+    check(vfs_mkdir("/hda1/rn_dir") == 0 && vfs_rename("/hda1/rn_b.txt", "/hda1/rn_dir/a much longer name.txt") == 0 &&
+          file_is("/hda1/rn_dir/A MUCH LONGER NAME.TXT", "alpha"), "move it into a directory under a long name");
+    check(put_file("/hda1/rn_c.txt", "gamma") == 0 && vfs_rename("/hda1/rn_c.txt", "/hda1/rn_dir/a much longer name.txt") == 0 &&
+          file_is("/hda1/rn_dir/a much longer name.txt", "gamma") && vfs_stat("/hda1/rn_c.txt", &st) == -ENOENT,
+          "rename replaces an existing file");
+    check(vfs_rename("/hda1/rn_dir", "/hda1/rn_dir/sub") == -EINVAL, "a directory cannot move into itself");
+    check(vfs_mkdir("/hda1/rn_full") == 0 && put_file("/hda1/rn_full/x", "x") == 0 &&
+          vfs_rename("/hda1/rn_dir", "/hda1/rn_full") == -ENOTEMPTY && put_file("/hda1/rn_d.txt", "d") == 0 &&
+          vfs_rename("/hda1/rn_d.txt", "/hda1/rn_full") == -EISDIR, "no rename onto a non-empty directory or a file onto a directory");
+    vfs_unlink("/hda1/rn_full/x");
+    vfs_unlink("/hda1/rn_d.txt");
+    r = vfs_open("/hda1/rn_dir/opened.txt", O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r == 0) {                                     /* an open file follows its entry */
+        vfs_write(f, "12345", 5);
+        r = vfs_rename("/hda1/rn_dir", "/hda1/rn_full");             /* an empty directory is replaced */
+        if(r == 0) r = vfs_write(f, "678", 3) == 3 ? 0 : -EIO;
+        vfs_close(f);
+    }
+    check(r == 0 && vfs_stat("/hda1/rn_full/opened.txt", &st) == 0 && st.size == 8 && vfs_stat("/hda1/rn_dir", &st) == -ENOENT,
+          "move a directory over an empty one while a file in it is open");
+    check(vfs_mkdir("/hda1/RENAMED") == 0 && vfs_rename("/hda1/rn_full", "/hda1/RENAMED/moved") == 0 &&
+          file_is("/hda1/RENAMED/moved/a much longer name.txt", "gamma"), "move a directory into another one");
+}
+
 static int run_and_wait(const char *path, int argc, char **argv) {
     int pid = process_spawn(path, argc, argv, curTask->con, 0), status = -99;
     if(pid < 0) return pid;
@@ -666,6 +943,11 @@ int run_selftest(void) {
     test_part_commit();
     test_fs();
     test_fat();
+    test_fat_rename();
+    test_fat_statfs();
+    test_fat_utf8();
+    test_fat_concurrent();
+    test_fat_unplug();
     test_user();
     test_net();
     test_usb();

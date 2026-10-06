@@ -6,6 +6,10 @@ File: vfs.c     Date: 10/3/26 (roadmap F1)
 Mount table, path resolution, open files and the per-task descriptor table.
 See include/fs/vfs.h. The root ("/") is a built-in file system whose only
 entries are the mount points below it.
+
+10/5/26 (USB storage): umount refuses a mount whose vnodes are in use (an
+open file, an open directory, the current directory of the task asking)
+instead of freeing it under them; vfs_busy() says who.
 */
 
 #include <surfos/types.h>
@@ -23,16 +27,21 @@ entries are the mount points below it.
 static const struct fs_type *fs_types;
 static struct mount *mounts;
 static mutex_t mount_lock = MUTEX_INIT("mounts");
+static struct file *open_files;             /* 10/5/26: every open file, for vfs_busy() */
 
 /**** vnodes ****/
 
 struct vnode *vnode_alloc(struct superblock *sb, const struct vnode_ops *ops, int type) {
     struct vnode *v = (struct vnode *)kcalloc(1, sizeof(struct vnode));
+    u_long flags;
     if(!v) return NULL;
     v->sb = sb;
     v->ops = ops;
     v->type = type;
     v->refs = 1;
+    flags = irq_save();
+    if(sb) sb->nvnodes++;
+    irq_restore(flags);
     return v;
 }
 
@@ -51,8 +60,12 @@ void vput(struct vnode *v) {
     last = (--v->refs == 0);
     irq_restore(flags);
     if(last) {
+        struct superblock *sb = v->sb;
         if(v->ops && v->ops->release) v->ops->release(v);
         kfree(v);
+        flags = irq_save();
+        if(sb && sb->nvnodes) sb->nvnodes--;
+        irq_restore(flags);
     }
 }
 
@@ -134,6 +147,7 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
     for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) return -EBUSY;
+    if(dev && vfs_bdev_busy(dev)) return -EBUSY;    /* 10/5/26: two mounts of one device would each think they own it */
 
     sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
     m = (struct mount *)kcalloc(1, sizeof(struct mount));
@@ -157,6 +171,48 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     return 0;
 }
 
+/* what keeps the mount m from going away (holds mount_lock): an open file (who opened it),
+   other vnodes, or the current directory of the task asking; NULL when nothing does */
+static const char *in_use(const struct mount *m, char *why, size_t size) {
+    const struct superblock *sb = m->sb;
+    const struct file *f;
+    size_t l = strlen(m->path);
+    const char *cwd = vfs_getcwd();
+    u_int files = 0;
+    u_long flags = irq_save();
+    for(f = open_files; f; f = f->onext) {
+        if(f->v->sb != sb) continue;
+        if(!files++ && why) snprintf(why, size, "%s (pid %lu) has a file or directory open there", f->owner, f->pid);
+    }
+    irq_restore(flags);
+    if(files > 1 && why) {
+        size_t n = strlen(why);
+        snprintf(why + n, size - n, ", %u open in all", files);
+    }
+    if(files) return why ? why : "";
+    if(sb->nvnodes > 1 || sb->root->refs > 1) {
+        if(why) snprintf(why, size, "a command or program is using it right now");
+        return why ? why : "";
+    }
+    if(l > 1 && !strncmp(cwd, m->path, l) && (cwd[l] == '/' || cwd[l] == 0)) {
+        if(why) snprintf(why, size, "it holds the current directory, %s (cd / first)", cwd);
+        return why ? why : "";
+    }
+    return NULL;
+}
+
+int vfs_busy(const char *path, char *why, size_t size) {
+    struct mount *m;
+    char abs[VFS_PATH_MAX];
+    int r = vfs_normalize("/", path, abs, sizeof(abs));
+    if(r) return r;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) break;
+    r = !m ? -ENOENT : in_use(m, why, size) ? -EBUSY : 0;
+    mutex_unlock(&mount_lock);
+    return r;
+}
+
 int vfs_umount(const char *path) {
     struct mount *m, **pp;
     struct superblock *sb;
@@ -167,7 +223,7 @@ int vfs_umount(const char *path) {
     mutex_lock(&mount_lock);
     for(pp = &mounts; (m = *pp) != NULL; pp = &m->next) if(!strcmp(m->path, abs)) break;
     if(!m) { mutex_unlock(&mount_lock); return -ENOENT; }
-    if(m->sb->root->refs > 1) { mutex_unlock(&mount_lock); return -EBUSY; }   /* open files or a cwd */
+    if(in_use(m, NULL, 0)) { mutex_unlock(&mount_lock); return -EBUSY; }   /* open files, a cwd: vfs_busy says which */
     *pp = m->next;
     mutex_unlock(&mount_lock);
     sb = m->sb;
@@ -212,6 +268,11 @@ bool vfs_bdev_busy(struct bdev *d) {
     }
     mutex_unlock(&mount_lock);
     return busy;
+}
+
+const char *vfs_probe(struct bdev *dev) {
+    const struct fs_type *t = dev ? probe_type(dev) : NULL;
+    return t ? t->name : NULL;
 }
 
 int vfs_sync(void) {
@@ -399,14 +460,35 @@ int vfs_open(const char *path, int flags, struct file **out) {
     f->v = v;
     f->flags = flags;
     f->refs = 1;
+    if(curTask) {
+        f->pid = curTask->pid;
+        strlcpy(f->owner, curTask->name, sizeof(f->owner));
+    }
+    {
+        u_long fl = irq_save();
+        f->onext = open_files;
+        if(open_files) open_files->oprev = f;
+        open_files = f;
+        irq_restore(fl);
+    }
     *out = f;
     return 0;
 }
 
 int vfs_close(struct file *f) {
     struct superblock *sb;
+    u_long fl;
+    bool last;
     if(!f) return -EBADF;
-    if(--f->refs) return 0;
+    fl = irq_save();                                /* tasks share files (spawnfd): the count is atomic */
+    last = --f->refs == 0;
+    if(last) {
+        if(f->oprev) f->oprev->onext = f->onext;
+        else open_files = f->onext;
+        if(f->onext) f->onext->oprev = f->oprev;
+    }
+    irq_restore(fl);
+    if(!last) return 0;
     sb = f->v->sb;
     if((f->flags & O_ACCMODE) != O_RDONLY) {      /* a written file reaches the disk when it is closed */
         if(sb->ops && sb->ops->sync) sb->ops->sync(sb);

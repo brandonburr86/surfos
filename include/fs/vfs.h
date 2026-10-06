@@ -12,7 +12,9 @@ Every call returns 0 or a negative errno value.
 
 10/5/26 (USB storage): rename, statfs, ftruncate, fsync, read-only mounts, and
 vfs_bdev_busy() for the destructive tools' safety rule. A mount holds its block
-device (bdev_get) until it is unmounted.
+device (bdev_get) until it is unmounted. A superblock counts its live vnodes
+and the VFS keeps a list of open files with the task that opened each, so
+umount refuses a mount that is in use and can say who uses it (vfs_busy).
 */
 
 #ifndef _FS_VFS_H
@@ -138,6 +140,7 @@ struct superblock {
     void *priv;
     bool readonly;
     mutex_t lock;               /* file systems serialize their metadata updates with this */
+    u_int nvnodes;              /* 10/5/26: vnodes alive, the root included */
 };
 
 struct fs_type {
@@ -158,6 +161,9 @@ struct file {
     u32 pos;
     int flags;
     u_int refs;
+    u_long pid;                 /* 10/5/26: who opened it (0: before tasks), for umount's "busy" */
+    char owner[16];
+    struct file *onext, *oprev; /* every open file */
 };
 
 /* vnodes */
@@ -172,6 +178,8 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fsty
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
+int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
+const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
 bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
 int vfs_sync(void);
 const struct mount *vfs_mounts(void);
