@@ -110,7 +110,7 @@ static void deliver(u_char c) {
         tty_switch(c - F1);
         return;
     }
-    tty_input(tty_active, c);
+    tty_key(tty_active, c);                     /* raw mode turns special keys into escape sequences */
 }
 
 static void handle_e0(u_char code) {
@@ -119,7 +119,7 @@ static void handle_e0(u_char code) {
     switch(code) {
     case 0x1D: ctrl = !brk; return;           /* right control */
     case 0x38: alt = !brk; return;            /* right alt */
-    case 0x1C: if(!brk) deliver('\n'); return; /* keypad enter */
+    case 0x1C: if(!brk) deliver(tty_active->raw ? '\r' : '\n'); return; /* keypad enter */
     case 0x35: if(!brk) deliver('/'); return;  /* keypad / */
     case 0x47: if(!brk) deliver(HOME); return;
     case 0x48: if(!brk) deliver(UP); return;
@@ -176,6 +176,8 @@ static void keyboard_byte(u_char code) {
         if(c >= '@' && c <= '_') c &= 0x1F;     /* Ctrl-C = 3, Ctrl-U = 21, ... */
         else return;
     }
+    if(tty_active->raw && (code == 0x0E || code == 0x1C))
+        c = code == 0x0E ? 0x7F : '\r';         /* raw mode: Backspace and Enter as a terminal sends them */
     deliver(c);
 }
 

@@ -26,18 +26,8 @@ static const struct vnode_ops dev_vops;
 static int dev_read(struct vnode *v, u32 off, void *buf, u32 len) {
     switch(v->ino) {
     case DEV_CONSOLE:
-    case DEV_TTY: {
-        struct tty *t = (curTask && curTask->tty) ? curTask->tty : tty_active;
-        char line[TTY_LINE_MAX];
-        int n;
-        if(!len) return 0;
-        n = tty_readline(t, line, sizeof(line));          /* cooked: a line with its newline */
-        if(n < 0) return n;
-        line[n++] = '\n';
-        if((u32)n > len) n = (int)len;
-        memcpy(buf, line, n);
-        return n;
-    }
+    case DEV_TTY:                                            /* a line, or in raw mode the keys (tty.c) */
+        return tty_read((curTask && curTask->tty) ? curTask->tty : tty_active, (char *)buf, len);
     case DEV_ZERO: memset(buf, 0, len); return (int)len;
     default: return 0;                                       /* null: end of file */
     }
