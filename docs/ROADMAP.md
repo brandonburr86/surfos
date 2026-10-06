@@ -486,7 +486,8 @@ After that, in the order the laptop needs them (each its own milestone): USB hub
 support (docks and multi-port dongles), the controller's interrupt through MSI (lower
 latency than the 10 ms poll), a USB HID keyboard on the same stack, AHCI or NVMe for the
 internal disk (identify the controller first; the block layer refuses to format internal
-disks, and that rule stays), and the actual Wi-Fi chip.
+disks, and that rule stays), and the actual Wi-Fi chip (tabled by the owner on
+2026-10-06; what it needs first is in `docs/WIFI-PLANNING.md`).
 
 The six earlier milestones are done. What remains there is polish and the items the catalog left open:
 a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control
