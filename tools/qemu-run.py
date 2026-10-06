@@ -938,6 +938,140 @@ def surfsh_corner_check(q):
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
 
 
+# ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------
+TN_IAC, TN_DONT, TN_DO, TN_WONT, TN_WILL, TN_SB, TN_SE = 255, 254, 253, 252, 251, 250, 240
+TO_ECHO, TO_SGA, TO_NAWS = 1, 3, 31
+
+
+class Telnet:
+    """A telnet client for the tests that answers as a terminal's client does (RFC 854, 1143): it lets the
+    server echo and suppress go-ahead (DO), suppresses go-ahead itself and tells its window size when asked
+    (WILL, then NAWS), and refuses anything else once. What the session printed is kept in self.data with
+    the IAC sequences taken out (IAC IAC is the byte 255); self.raw has everything as it came. Return is
+    sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
+
+    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10):
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.cols, self.rows = cols, rows
+        self.raw, self.data = b'', b''
+        self.cursor, self.more_at, self.auto_more = 0, 0, True
+        self.closed = False
+        self.state, self.verb, self.sb = 'data', 0, b''
+        self.agreed = set()                     # (side, option): ('him', 1) the server echoes, ('us', 31) NAWS ...
+
+    def _out(self, b):
+        try:
+            self.sock.sendall(b)
+        except OSError:
+            self.closed = True
+
+    def _option(self, verb, opt):
+        side = 'him' if verb in (TN_WILL, TN_WONT) else 'us'
+        if verb in (TN_WILL, TN_DO):
+            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else (TO_SGA, TO_NAWS))
+            if (side, opt) in self.agreed:
+                return                          # nothing changes: nothing to say
+            if not wanted:
+                self._out(bytes([TN_IAC, TN_DONT if verb == TN_WILL else TN_WONT, opt]))
+                return
+            self.agreed.add((side, opt))
+            self._out(bytes([TN_IAC, TN_DO if verb == TN_WILL else TN_WILL, opt]))
+            if side == 'us' and opt == TO_NAWS:
+                self.resize(self.cols, self.rows)
+        elif (side, opt) in self.agreed:        # WONT or DONT for something on: agreed off
+            self.agreed.discard((side, opt))
+            self._out(bytes([TN_IAC, TN_DONT if verb == TN_WONT else TN_WONT, opt]))
+
+    def resize(self, cols, rows):
+        """a new window size (NAWS), as a terminal's client sends it when its window changes"""
+        self.cols, self.rows = cols, rows
+        size = bytes([cols >> 8, cols & 255, rows >> 8, rows & 255]).replace(b'\xff', b'\xff\xff')
+        self._out(bytes([TN_IAC, TN_SB, TO_NAWS]) + size + bytes([TN_IAC, TN_SE]))
+
+    def _feed(self, chunk):
+        for c in chunk:
+            if self.state == 'data':
+                if c == TN_IAC:
+                    self.state = 'iac'
+                else:
+                    self.data += bytes([c])
+            elif self.state == 'iac':
+                self.state = 'data'
+                if c == TN_IAC:
+                    self.data += b'\xff'
+                elif c in (TN_WILL, TN_WONT, TN_DO, TN_DONT):
+                    self.state, self.verb = 'option', c
+                elif c == TN_SB:
+                    self.state, self.sb = 'sb', b''
+            elif self.state == 'option':
+                self.state = 'data'
+                self._option(self.verb, c)
+            elif self.state == 'sb':
+                self.state = 'sb-iac' if c == TN_IAC else 'sb'
+            elif self.state == 'sb-iac':
+                self.state = 'data' if c == TN_SE else 'sb'
+
+    def pump(self, timeout=0.1):
+        if self.closed:
+            time.sleep(timeout)
+            return
+        r, _, _ = select.select([self.sock], [], [], timeout)
+        if not r:
+            return
+        try:
+            chunk = self.sock.recv(65536)
+        except OSError:
+            chunk = b''
+        if not chunk:
+            self.closed = True
+            return
+        self.raw += chunk
+        self._feed(chunk)
+        while self.auto_more:                   # the pager's question: Space, as the console harness answers it
+            i = self.data.find(MORE, self.more_at)
+            if i < 0:
+                break
+            self.more_at = i + len(MORE)
+            self._out(b' ')
+
+    def expect(self, needle, timeout=10):
+        """wait for needle (a string, or a compiled bytes pattern) in what the session printed, after the last match"""
+        deadline = time.time() + timeout
+        while True:
+            if isinstance(needle, re.Pattern):
+                m = needle.search(self.data, self.cursor)
+                if m:
+                    self.cursor = m.end()
+                    return True
+            else:
+                i = self.data.find(needle.encode(), self.cursor)
+                if i >= 0:
+                    self.cursor = i + len(needle.encode())
+                    return True
+            if time.time() > deadline or self.closed:
+                return False
+            self.pump(0.1)
+
+    def send(self, keys):
+        """keys as typed: a string (a newline is Return, sent as CR NUL; 0xff doubled) or bytes as they are"""
+        if isinstance(keys, str):
+            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', b'\r\0')
+        self._out(keys)
+
+    def wait_closed(self, timeout=10):
+        deadline = time.time() + timeout
+        while not self.closed and time.time() < deadline:
+            self.pump(0.1)
+        return self.closed
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        self.closed = True
+
+
 def host_checks(q):
     """after the guest has run: read what it wrote to the disk with the host's mtools"""
     if not q.disk or not shutil.which('mcopy'):
