@@ -7,7 +7,8 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 
 10/6/26 (surfsh): init starts the user shell on every console, and the ring-0 shell
 when that cannot be (see init_main()).
-10/6/26: a kill waits for the end of the call its task is in (task.h).
+10/6/26: a kill waits for the end of the call its task is in (task.h), and Ctrl+C
+reaches the job in the foreground (task_interrupt_job()).
 */
 
 #include <surfos/types.h>
@@ -319,7 +320,9 @@ static void wake_intr(surf_task *t) {
 
 /* 10/6/26: the kill that waits (task.h). Outside a call (a program running its own code, a
    kernel thread) it comes at once, as it always did; inside one the task is marked, its
-   wait cut short where that may be, and the call ends it (task_call_leave()). */
+   wait cut short where that may be, and the call ends it (task_call_leave()). Also from
+   an interrupt handler (Ctrl+C): a current task killed at once is switched away from
+   before the handler returns (irq_dispatch(), sched_tick()). */
 void kill_task(surf_task *t) {
     u_long flags;
     if(!t) return;
@@ -362,16 +365,64 @@ void task_call_enter(u_int what) {
     irq_restore(flags);
 }
 
-/* ... and ends. Once the task is in no call, a kill that waited for it comes: task_exit(-1),
-   in the task's own context, which closes its files. */
-void task_call_leave(u_int what) {
+/* ... and ends. 1 when Ctrl+C cut a kernel command short. Once the task is in no call, a
+   kill that waited for it comes: task_exit(-1), in the task's own context, which closes
+   its files. */
+int task_call_leave(u_int what) {
     u_long flags = irq_save();
+    int cut = (what & TC_COMMAND) && (curTask->intr & TI_INT);
     curTask->in_call &= ~what;
-    if(!curTask->in_call && (curTask->intr & TI_KILL)) {
-        irq_restore(flags);
-        task_exit(-1);
+    if(what & TC_COMMAND) curTask->intr &= ~TI_INT;
+    if(!curTask->in_call) {
+        if(curTask->intr & TI_KILL) {
+            irq_restore(flags);
+            task_exit(-1);
+        }
+        curTask->intr = 0;
     }
     irq_restore(flags);
+    return cut;
+}
+
+/* is t in owner's job: owner itself, or a program it started in the foreground, or one such a
+   program started (TF_FOREGROUND all the way up)? Interrupts off. */
+static bool in_job(surf_task *t, surf_task *owner) {
+    int depth;
+    for(depth = 0; t && depth < 64; t = t->parent, depth++) {
+        if(t == owner) return true;
+        if(!(t->flags & TF_FOREGROUND)) return false;
+    }
+    return false;
+}
+
+/* 10/6/26: Ctrl+C on a terminal whose pager owner is owner, in line mode (tty.c), interrupts
+   off. The job is the owner and the programs of its foreground. A kernel command one of
+   them runs in its own task is cut short (TI_INT: its waits end, its status is 130); of the
+   others, the innermost programs are killed, those with no program of the job of their
+   own: a shell waiting for its program lives on, and the owner always does. 1 when
+   anything was reached. */
+int task_interrupt_job(surf_task *owner) {
+    surf_task *job[32], *t;
+    int n = 0, i, j, hit = 0;
+    if(!owner || owner->state == TS_DEAD) return 0;
+    for(t = all_tasks; t && n < 32; t = t->all_next)
+        if(t->state != TS_DEAD && in_job(t, owner)) job[n++] = t;
+    for(i = 0; i < n; i++) {
+        t = job[i];
+        if(t->in_call & TC_COMMAND) {
+            t->intr |= TI_INT;
+            wake_intr(t);
+            hit = 1;
+            continue;
+        }
+        if(t == owner) continue;
+        for(j = 0; j < n && job[j]->parent != t; j++);
+        if(j < n) continue;                         /* it waits for a program of its own */
+        t->intr |= TI_INT;                          /* its line editor says ^C (tty.c) */
+        kill_task(t);
+        hit = 1;
+    }
+    return hit;
 }
 
 static void reap(surf_task *t) {
@@ -441,7 +492,7 @@ static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **co
                 irq_restore(flags);
                 return -1;
             }
-            wait_prepare_intr(&zombie_wq);
+            wait_prepare_intr(&zombie_wq);              /* Ctrl+C wakes it too: it waits on */
         } else {
             wait_prepare(&zombie_wq);
         }
@@ -483,7 +534,7 @@ void sleep_ms(u_long ms) {
     yield();
 }
 
-/* 10/6/26: a sleep that a kill cuts short (sleep, ping's pause, SYS_sleep) */
+/* 10/6/26: a sleep that a kill or Ctrl+C cuts short (sleep, ping's pause, SYS_sleep) */
 int sleep_intr(u_long ms) {
     u_long flags;
     if(!curTask || curTask == idle_task || in_interrupt()) {

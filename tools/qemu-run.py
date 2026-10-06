@@ -272,6 +272,8 @@ SMOKE = [
     ('run kcmdtest kills /hda1 10.0.2.2', ['cp /dev/tty', 'KCMDTEST PASS', 'exit status 0']),
     ('umount /hda1', []),
     ('mount hda1 /hda1', ['hda1 on /hda1: fat16']),
+    # Ctrl+C on the serial line: a kernel command surfsh runs (ping) is cut short, a program (count) killed
+    ('@ctrl-c', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
@@ -280,7 +282,14 @@ SMOKE = [
     # /initrd/bin/surfsh, a recovery console (?) at once with init's line; a surfsh that ends at once (hello: 42):
     # started again twice, then the recovery console; one that is not an executable: the recovery console at once;
     # one that runs (sh): an exit after 2 s with status 3 is said, with 0 not, a kill is said ('@sleep n' waits)
+    # 10/6/26: Ctrl+C there cuts a command short with status 130: a sleep, and a program it runs (killed)
     ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')]),
+                                                          (b'sleep 10000\r', []), ('@sleep 2', []),
+                                                          (b'\x03', ['sleep cut short', surf_prompt(b'bin', b'#')]),
+                                                          ('echo status $?', ['status 130']),
+                                                          (b'count 100 100\r', [' 5 ']),
+                                                          (b'\x03', ['killed]', surf_prompt(b'bin', b'#')]),
+                                                          ('echo status $?', ['status 130']),
                                                           ('crashgp', ['General Protection Fault', 'init: restarted the shell',
                                                                        surf_prompt(b'SURF', b'#')])],
      ['recovery console']),
@@ -864,6 +873,30 @@ def kcmd_echo_check(q):
     return ('a kernel command with its output on a file: the typed answer is shown, and not kept in the file', ok)
 
 
+# 10/6/26: surfsh's prompt after a command that failed: the state character ! (shell/prompt.c)
+FAILED_PROMPT = re.compile(rb'(?:\xe2\x89\x8b|~)' + _SGR + rb'!' + _SGR + rb'>')
+
+
+def ctrl_c_check(q):
+    """10/6/26 (the kill that waits): Ctrl+C on the serial line while surfsh runs a kernel command in its own task
+    (ping) cuts the command short: its summary, then surfsh's prompt saying it failed (status 130); while surfsh
+    waits for a program (count), the program is killed: [pid n killed], the prompt saying so; surfsh lives on"""
+    q.send('ping 10.0.2.2 100\n')
+    ok = q.expect('icmp_seq=2', 15)
+    if ok:
+        q.ser.sendall(b'\x03')
+        ok = q.expect('packets transmitted', 10) and q.expect(FAILED_PROMPT, 10)
+    if ok:
+        q.send('count 100 100\n')
+        ok = q.expect(' 5 ', 15)
+    if ok:
+        q.ser.sendall(b'\x03')
+        ok = q.expect('killed]', 10) and q.expect(FAILED_PROMPT, 10)
+    q.send('echo surfsh lives on\n')
+    ok = q.expect('surfsh lives on\r\n', 10) and q.expect(PROMPT, 10) and ok
+    return ('Ctrl+C: a ping surfsh runs is cut short, a program it waits for is killed, surfsh lives on', ok)
+
+
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
 CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
@@ -937,7 +970,8 @@ def initrd_with(src, dst, name, data):
 def boot_step(reboot, entry, timeout):
     """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
-    that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'."""
+    that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'; bytes are sent
+    as they are, with no newline and no prompt waited for after them (Ctrl+C, a command that runs on)."""
     cmd, expects, follow, absent = entry
     try:
         q2 = reboot(cmd.split()[1:])
@@ -949,6 +983,10 @@ def boot_step(reboot, entry, timeout):
         for line, exp in follow:
             if callable(line):
                 line = line(q2)
+            if isinstance(line, bytes):
+                q2.ser.sendall(line)
+                ok = ok and all(q2.expect(e, 10) for e in exp)
+                continue
             if line.startswith('@sleep '):
                 q2.wait(float(line.split()[1]))
                 continue
@@ -987,6 +1025,9 @@ def run_smoke(q, boot_timeout, reboot=None):
                 continue
             if cmd in CONSOLE_CHECKS:
                 results.append(CONSOLE_CHECKS[cmd](q))
+                continue
+            if cmd == '@ctrl-c':                             # 10/6/26: the kill that waits
+                results.append(ctrl_c_check(q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))

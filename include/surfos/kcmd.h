@@ -18,9 +18,11 @@ done, with a note at the end when the rest was cut; a failed write makes a succe
 otherwise to the caller's console, paged when the caller asked for paging (TTY_PAGE,
 surfos/tty.h). Its questions (fdisk's and mkfs's) are asked and answered on the caller's
 console, also with a redirection, and so is a fault report; the commands that read the
-keyboard as they go (rawkeys, demo, hanoi) refuse a redirection (2). A kill of the
-caller waits for the command to end, 2 seconds at most (surfos/task.h in the kernel):
-its waits end (a question, a sleep, a ping) and it lets go of what it holds.
+keyboard as they go (rawkeys, demo, hanoi) refuse a redirection (2). Ctrl+C typed on the
+caller's console while the caller pages the command (the terminal in line mode) cuts the
+command short: its waits end (a question, a sleep, a ping), the caller lives on, and the
+status is KCMD_INTERRUPTED. A kill of the caller waits for the command to end, 2 seconds
+at most (surfos/task.h in the kernel).
 
 SYS_kcmdinfo (int index, struct kcmd_info *out) copies entry index (0, 1, ...) of the
 command table, for help and for Tab completion; -ENOENT after the last one.
@@ -35,6 +37,7 @@ This header uses no SurfOS types: user programs reach it through user/include/su
 #define KCMD_ARGS_MAX    48
 #define KCMD_HELP_MAX    112
 #define KCMD_CAPTURE_MAX (256 * 1024)  /* a redirected command's output that is kept; the rest is cut */
+#define KCMD_INTERRUPTED 130           /* the status of a command Ctrl+C cut short (128 + 2, as other shells have it) */
 
 struct kcmd_info {
     char name[KCMD_NAME_MAX];       /* NUL-terminated, cut to fit */

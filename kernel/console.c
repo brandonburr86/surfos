@@ -545,8 +545,8 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
     The other order is taken care of too: a task that starts to wait for a key calls the
     question off (tty_getc()), and so does the end of paging or its owner (TTY_PAGE 0, the
     owner's end, another owner); the asker then goes on as after Space, without a key.
-    A task whose call is cut short (a kill waits for its end: surfos/task.h) waits
-    nowhere here; at the question when that happens, it drops the rest as after q.
+    A task whose call is cut short (a kill waits for its end, or Ctrl+C: surfos/task.h)
+    waits nowhere here; at the question when that happens, it drops the rest as after q.
 
     While the question is up, another paged task that may wait waits for the answer (on
     the tty's page_waiters); anyone else who prints there, a task or an interrupt handler
@@ -664,7 +664,7 @@ int console_paging(surf_console *con) {
 }
 
 /* may the current task wait here (for a key, or for another task's question)? 10/6/26: not
-   when its call is cut short (a kill waits for its end: surfos/task.h) */
+   when its call is cut short (a kill waits for its end, or Ctrl+C: surfos/task.h) */
 static int page_may_wait(struct tty *t) {
     return irqs_enabled() && !curTask->crit && !curTask->mutexes && !t->raw && !curTask->intr;
 }
@@ -691,7 +691,7 @@ static void page_ask(surf_console *con, struct tty *t) {
     irq_restore(flags);
     wake_up_all(&t->page_waiters);
     if(key == 'q' || key == 'Q' || key == 0x1B || key == 0x03 || (key < 0 && curTask->intr))
-        con->page_drop = 1;                                /* q, Esc, Ctrl-C; 10/6/26: killed there */
+        con->page_drop = 1;                                /* q, Esc, Ctrl-C; 10/6/26: killed or interrupted there */
     else con->page_rows = (key == '\n' || key == '\r') ? LINES - 2 : 0;
 }
 
@@ -707,7 +707,7 @@ static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
     while(con->page_asker && con->page_asker != curTask && page_may_wait(t)) {
         flags = irq_save();
         if(con->page_asker) {
-            wait_prepare_intr(&t->page_waiters);        /* 10/6/26: a kill ends the wait */
+            wait_prepare_intr(&t->page_waiters);        /* 10/6/26: a kill or Ctrl+C ends the wait */
             irq_restore(flags);
             yield();
         } else {

@@ -6,7 +6,7 @@ File: sync.c    Date: 10/3/26 (roadmap S2)
 10/6/26: a task counts the mutexes it holds (surf_task.mutexes). The console's pager
 (TTY_PAGE, kernel/console.c) makes a task wait for a key only when it holds none, so a
 lock is never kept while somebody reads a screenful. An event's timed wait may be cut
-short by a kill (wait_on_timeout()); a mutex, a semaphore and an untimed
+short by a kill or Ctrl+C (wait_on_timeout()); a mutex, a semaphore and an untimed
 event wait are never cut short: their callers cannot do without what they wait for.
 */
 

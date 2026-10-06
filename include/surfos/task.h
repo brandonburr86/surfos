@@ -35,6 +35,8 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_KTHREAD  0x4
 #define TF_USER     0x8  /* runs in ring 3 (roadmap P1) */
 #define TF_LOADED   0x10 /* 10/6/26: a process whose program was loaded and started (process.c) */
+#define TF_FOREGROUND 0x20 /* 10/6/26: a process started by a task its console's pager covers (TTY_PAGE):
+                              a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
 
@@ -46,11 +48,14 @@ typedef void (*kthread_fn)(void *arg);
     the wait for a child); the call gives up along its own error paths, lets go of what it
     holds, and the task ends where the call does (task_call_leave(): task_exit(-1)). A call
     that has not ended KILL_WAIT_MS later is killed at once, as every kill was before, and
-    the kernel log says so.
+    the kernel log says so. Ctrl+C on a terminal (tty.c) marks a kernel command run by the
+    pager's owner TI_INT instead: its waits are cut short the same way, its task lives on,
+    and its status is KCMD_INTERRUPTED (130, surfos/kcmd.h).
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
 #define TI_KILL     0x1  /* intr: killed; it ends at the end of its call */
+#define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -159,14 +164,15 @@ int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the current task */
-void task_call_leave(u_int what);  /* it ends: a kill that waited comes now (no return) */
+int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
+int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
 surf_task *task_find(u_long pid);
 u_int task_count(void);
 
 void yield(void);
 void sleep_ms(u_long ms);
-int sleep_intr(u_long ms);       /* 10/6/26: sleep_ms() that a kill cuts short: 0, or -EINTR then */
+int sleep_intr(u_long ms);       /* 10/6/26: sleep_ms() that a kill or Ctrl+C cuts short: 0, or -EINTR then */
 
 /* scheduler entry points, trap context only */
 u_long *schedule(struct trapframe *tf);

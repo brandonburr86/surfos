@@ -8,8 +8,8 @@ the bytes a terminal sends. It ends with the task that set it.
 10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8,
 TTY_CAPS says what the console draws, and TTY_PAGE pages a task's output (the pager
 itself is in console.c: it counts the rows and asks; here is who is paged).
-10/6/26: a read gives up when the reader's call is cut short (a kill waits for its end:
-surfos/task.h).
+10/6/26: a read gives up when the reader's call is cut short (a kill waits for its end,
+or Ctrl+C: surfos/task.h), and Ctrl+C in line mode interrupts the job in the foreground.
 */
 
 #include <surfos/types.h>
@@ -51,6 +51,13 @@ struct tty *tty_for_console(surf_console *con) {
 void tty_input(struct tty *t, u_char c) {
     u_long flags = irq_save();
     u_int next = (t->in_head + 1) % TTY_INPUT_SIZE;
+    /* 10/6/26: Ctrl+C in line mode while the pager's owner has a job in the foreground (a
+       command it runs, the programs it started): the job is interrupted (task.c) and the key
+       goes no further. With nothing to interrupt it is a key as before (tty_readline()). */
+    if(c == 0x03 && !t->raw && t->con->page_owner && task_interrupt_job(t->con->page_owner)) {
+        irq_restore(flags);
+        return;
+    }
     if(next == t->in_tail) {
         t->dropped++;
     } else {
@@ -200,8 +207,9 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
     for(;;) {
         int c = tty_getc(t);
 
-        if(c < 0) {     /* 10/6/26: the call is cut short: no line */
-            if(len) echo(t, '\n');
+        if(c < 0) {     /* 10/6/26: the call is cut short: no line. Ctrl+C says so, as below */
+            if(curTask->intr & TI_INT) { echo(t, '^'); echo(t, 'C'); echo(t, '\n'); }
+            else if(len) echo(t, '\n');
             buf[0] = 0;
             return -1;
         }
@@ -251,7 +259,7 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
    Raw mode: whatever keys are queued, at least one (it waits for that one), up to len.
-   10/6/26: -EINTR when the reader's call is cut short (a kill). */
+   10/6/26: -EINTR when the reader's call is cut short (a kill, Ctrl+C). */
 int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;

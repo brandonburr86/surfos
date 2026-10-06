@@ -30,7 +30,7 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 /* errno values (the numbers Linux uses, so a user libc can share them later) */
 #define ENOENT        2
 #ifndef EINTR
-#define EINTR         4         /* 10/6/26: a wait cut short by a kill (surfos/wait.h) */
+#define EINTR         4         /* 10/6/26: a wait cut short by a kill or Ctrl+C (surfos/wait.h) */
 #endif
 #define EIO           5
 #define EBADF         9

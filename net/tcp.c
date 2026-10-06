@@ -12,7 +12,7 @@ of send and receive buffer. Everything runs under net_lock; the API waits
 on the socket's event with the lock released.
 
 10/6/26: a wait gives up like a timeout when the caller's call is cut short (a
-kill waits for its end: surfos/task.h).
+kill waits for its end, or Ctrl+C: surfos/task.h).
 */
 
 #include <surfos/types.h>

@@ -28,6 +28,9 @@ MM - July 2nd update:
     + IDT lives in kernel memory and every vector is populated
     + Spurious IRQ 7/15 detection, EOI only for real IRQs, IRQ 15 installed
     + Masking under irq_save() instead of the turf descriptors
+
+10/6/26: a handler that killed the task it interrupted (Ctrl+C from the keyboard or
+the serial port, kernel/tty.c) gets the next task run before it returns.
 */
 
 #include <asm/io.h>
@@ -39,6 +42,7 @@ MM - July 2nd update:
 #include <surfos/panic.h>
 #include <surfos/gdt.h>
 #include <surfos/timer.h>
+#include <surfos/task.h>
 #include <mm/kalloc.h>
 #include <blibc_common.h>
 
@@ -150,6 +154,7 @@ static u_long *irq_dispatch(struct trapframe *tf) {
     pic_eoi(irq);
 
     if(irq == IRQ_TIMER) return timer_tick(tf); /* the scheduler may hand back another task */
+    if(curTask && curTask->state == TS_DEAD) return schedule(tf);   /* 10/6/26: Ctrl+C killed the program it interrupted */
     return (u_long*)tf;
 }
 

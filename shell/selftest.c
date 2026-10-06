@@ -12,10 +12,10 @@ names on /hda1, /selftest-stick, the scratch ramdisk rd1), a second run would
 re-initialise a semaphore or an event the first one waits on, and two heaptests freed
 each other's blocks. So one runs at a time, and a second is refused (status 1).
 
-10/6/26: a kill of the task running it waits for the self test to end (surfos/task.h):
-the test under way finishes, waiting for its helper tasks, its waits cut short (its
-checks may fail then), no other starts, and SELFTEST STOPPED says so; the self test
-lets go of its claim on the way out as always.
+10/6/26: a kill of the task running it waits for the self test to end (surfos/task.h),
+and so does Ctrl+C: the test under way finishes, waiting for its helper tasks, its
+waits cut short (its checks may fail then), no other starts, and SELFTEST STOPPED
+says so; the self test lets go of its claim on the way out as always.
 */
 
 #include <blibc_common.h>
@@ -101,7 +101,7 @@ static int heap_round(void) {
     }
     kheap_stats(&before);
     srand(getticks() + 7);
-    for(r = 0; r < ROUNDS && !task_interrupted(); r++) {      /* 10/6/26: a kill: fewer rounds */
+    for(r = 0; r < ROUNDS && !task_interrupted(); r++) {      /* 10/6/26: a kill or Ctrl+C: fewer rounds */
         i = rand() % SLOTS;
         if(s->ptrs[i]) {
             u_char *p = s->ptrs[i];
@@ -1005,7 +1005,7 @@ static void test_usb(void) {
     if(r) printf("        (%s)\n", usb_strerror(r));
 }
 
-/* 10/6/26: in this order; after a kill no other starts (each one waits for its helpers) */
+/* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks,
@@ -1020,7 +1020,7 @@ int run_selftest(void) {
     check(heap_round() == 0, "heap");
     check(heaptest() == 1, "a heaptest while the self test runs is refused");
     for(i = 0; i < sizeof(tests) / sizeof(tests[0]) && !task_interrupted(); i++) tests[i]();
-    if(task_interrupted()) printf("SELFTEST STOPPED (cut short by a kill after %u of %u tests)\n\n", i, (u_int)(sizeof(tests) / sizeof(tests[0])));
+    if(task_interrupted()) printf("SELFTEST STOPPED (cut short by a kill or Ctrl+C after %u of %u tests)\n\n", i, (u_int)(sizeof(tests) / sizeof(tests[0])));
     else printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
     unclaim();
     return fails || task_interrupted();

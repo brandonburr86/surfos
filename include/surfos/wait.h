@@ -10,7 +10,7 @@ interrupt handler; wait_on() may not.
     while(!condition) wait_on(&q);        in a task
     condition = true; wake_up(&q);        in the ISR or another task
 
-10/6/26: a wait may also be one that a kill cuts short (task.h: the
+10/6/26: a wait may also be one that a kill or Ctrl+C cuts short (task.h: the
 kill that waits for the end of a call). Such a waiter is queued with
 wait_prepare_intr(), looks at task_interrupted() before it waits and after it
 is woken, and gives up then; whoever cuts it short wakes it (task.c).

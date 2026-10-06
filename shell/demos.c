@@ -5,7 +5,7 @@ SurfOS ring0 Shell - the 2004 demonstrations
 Moved out of main.c in 10/2026; the code is the original. 10/6/26: they clear the
 console of the task that runs them, which is not always the one that shows (the user
 shell runs them through SYS_kcmd on any console), and the menus that wait for a key
-leave when the wait is cut short (a kill of their task: surfos/task.h).
+leave when the wait is cut short (a kill of their task, Ctrl+C: surfos/task.h).
 */
 
 #include <blibc_common.h>

@@ -3,7 +3,7 @@ SurfOS Wait Queues
 --------------------
 File: wait.c    Date: 10/3/26 (roadmap S2)
 --------------------
-10/6/26: waits that a kill cuts short (wait.h, task.h).
+10/6/26: waits that a kill or Ctrl+C cuts short (wait.h, task.h).
 */
 
 #include <surfos/types.h>
@@ -29,7 +29,7 @@ void wait_prepare(wait_queue_t *q) {
     task_list_append(q, curTask);
 }
 
-/* 10/6/26: kill_task() wakes a task queued this way (task.c) */
+/* 10/6/26: kill_task() and Ctrl+C wake a task queued this way (task.c) */
 void wait_prepare_intr(wait_queue_t *q) {
     wait_prepare(q);
     curTask->wait_intr = 1;
@@ -50,7 +50,7 @@ static void wait_timeout_fn(void *arg) {
     }
 }
 
-/* 10/6/26: one that may be cut short (a kill), and its timer is the task's wait_timer while it
+/* 10/6/26: one that may be cut short (a kill, Ctrl+C), and its timer is the task's wait_timer while it
    waits: a task killed at once in the middle of it takes the timer off the list as it dies (task.c),
    since the timer lives on the stack that goes with the task */
 int wait_on_timeout(wait_queue_t *q, u_long ms) {

@@ -15,9 +15,9 @@ shell, surfsh, runs these commands in its own task through SYS_kcmd and lists th
 through SYS_kcmdinfo (kernel/syscall.c, surfos/kcmd.h): shell_run_command() and
 shell_command_info() below.
 
-10/6/26: a command is a call (surfos/task.h): a kill of its task waits for its end. What
-waits for the user (a question, a key, a sleep, a ping) gives up then (task_interrupted()),
-along its usual way out.
+10/6/26: a command is a call (surfos/task.h): a kill of its task waits for its end, and
+Ctrl+C cuts it short (status 130). What waits for the user (a question, a key, a sleep,
+a ping) gives up when that happens (task_interrupted()), along its usual way out.
 */
 
 #include <blibc_common.h>
@@ -68,7 +68,7 @@ static const u_int ncommands;           /* both defined after the commands */
 
 /* 10/6/26: a question, seen and answered on this task's console even while a kernel command
    run by the user shell has its output kept for a file (SYS_kcmd: console_capture_begin()).
-   A kill while it waits leaves the answer empty: no question is answered so. */
+   A kill or Ctrl+C while it waits leaves the answer empty: no question is answered so. */
 void shell_ask(const char *question, char *answer, size_t size) {
     struct kcapture *kept = curTask->kcap;
     struct tty *tty = curTask->tty ? curTask->tty : tty_active;
@@ -76,7 +76,7 @@ void shell_ask(const char *question, char *answer, size_t size) {
     if(console_paging(curTask->con)) console_page_new(curTask->con);   /* seen after q too, from a new screenful */
     printf("%s", question);
     memset(answer, 0, size);
-    if(tty_readline(tty, answer, size) < 0) printf("\n");   /* 10/6/26: killed: the line ends */
+    if(tty_readline(tty, answer, size) < 0 && !(curTask->intr & TI_INT)) printf("\n");   /* killed: the line ends */
     if(kept) console_capture_begin(kept);
 }
 
@@ -149,13 +149,13 @@ static bool number_arg(const char *s, u_long *out) {
     return !*end;
 }
 
-/* 10/6/26: a kill cuts the sleep short. -u sleeps as a driver's delay does, where nothing cuts
+/* 10/6/26: a kill or Ctrl+C cuts the sleep short. -u sleeps as a driver's delay does, where nothing cuts
    it short: a kill then comes at once after its 2 seconds (surfos/task.h shows that in the kernel log) */
 static int cmd_sleep(int argc, char **argv) {
     u_long ms = 1000, t0;
     int plain = argc > 1 && !strcmp(argv[1], "-u"), r = 0;
     if(argc > 2 + plain || (argc == 2 + plain && !number_arg(argv[1 + plain], &ms))) {
-        printf("    usage: sleep [-u] [ms]   (milliseconds, 1000 when not given; -u: not cut short by a kill)\n");
+        printf("    usage: sleep [-u] [ms]   (milliseconds, 1000 when not given; -u: not cut short by a kill or Ctrl+C)\n");
         return CMD_USAGE;
     }
     t0 = getticks();
@@ -304,8 +304,8 @@ static int cmd_nslookup(int argc, char **argv) {
     return CMD_OK;
 }
 
-/* any reply is a success, as ping has it elsewhere. 10/6/26: a kill ends it at once, with the count of
-   what was sent */
+/* any reply is a success, as ping has it elsewhere. 10/6/26: Ctrl+C or a kill ends it at once, with the
+   count of what was sent */
 static int cmd_ping(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
@@ -904,7 +904,7 @@ void shell(void *why) {
 }
 
 /* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful.
-   A line is a call (surfos/task.h): a kill of this shell waits for its end. */
+   A line is a call (surfos/task.h): a kill of this shell waits for its end, Ctrl+C cuts it short (130). */
 void startShell(int diagnostic) {
     char line[SHELL_LINE_LEN];
     int status = 0;
@@ -916,6 +916,6 @@ void startShell(int diagnostic) {
         tty_ctl(curTask->tty, TTY_PAGE, 1);
         status = parseCommand(line, status);
         tty_ctl(curTask->tty, TTY_PAGE, 0);
-        task_call_leave(TC_COMMAND);    /* a kill that waited ends this shell here */
+        if(task_call_leave(TC_COMMAND)) status = KCMD_INTERRUPTED;    /* a kill that waited ends this shell here */
     }
 }

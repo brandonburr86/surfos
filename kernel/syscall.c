@@ -21,7 +21,7 @@ written there afterwards, with a note when it did not all fit.
 
 10/6/26: a task is inside a call from its int 0x80 until it returns to user mode
 (TC_SYSCALL), and a kernel command is a call of its own (TC_COMMAND): a kill waits
-for the call's end, then the task ends (task.h).
+for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short.
 */
 
 #include <surfos/types.h>
@@ -381,9 +381,9 @@ static int sys_kcmd(char *const argv[]) {
         cap.cut = 0;
         console_capture_begin(&cap);
     }
-    task_call_enter(TC_COMMAND);                         /* 10/6/26 */
+    task_call_enter(TC_COMMAND);                         /* 10/6/26: Ctrl+C cuts it short */
     r = shell_run_command(argc, kargv);
-    task_call_leave(TC_COMMAND);
+    if(task_call_leave(TC_COMMAND)) r = KCMD_INTERRUPTED;
     if(call.capture) {
         console_capture_end();
         w = write_all(call.out, cap.buf, cap.len);
