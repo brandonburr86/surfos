@@ -204,6 +204,15 @@ SMOKE = [
     ('@pager-space', []),
     ('@pager-enter-q', []),
     ('@pager-keys', []),
+    # after q, a question the program asks before it reads still shows, and so does its crash report
+    ('@pager-q-ask', []),
+    ('@pager-q-crash', []),
+    # a job in the background that turned paging on does not keep the shell's next command from being paged
+    ('@pager-background', []),
+    # what is typed for a kernel command whose output goes to a file is shown, and is not in the file
+    ('@kcmd-echo', []),
+    # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
+    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
@@ -737,9 +746,89 @@ def pager_keys_check(q):
     return ('pager on the PS/2 keyboard: --More-- in inverse video on the last row, Space, Enter, q', ok)
 
 
+def pager_quit_ask_check(q):
+    """q at --More--, then the program asks and reads (pagetest ask): its question still shows, the last line
+    q dropped, and what it prints after the answer shows too"""
+    q.auto_more = False
+    try:
+        start = len(q.transcript)
+        q.send('pagetest ask 30\n')
+        ok = q.expect('--More--', 20)
+        if ok:
+            q.send('q')
+            ok = q.expect('pagetest question: ', 20)
+        if ok:
+            q.send('yes\n')
+            ok = q.expect('pagetest answer: yes', 20) and q.expect('PAGETEST DONE', 10) and q.expect(PROMPT, 10)
+        out = q.transcript[start:].decode(errors='replace')
+        ok = ok and 'pagetest line 024' in out and 'pagetest line 025' not in out
+    finally:
+        q.more_at, q.auto_more = len(q.transcript), True
+    return ('pager: after q, the question a program asks before it reads still shows', ok)
+
+
+def pager_quit_crash_check(q):
+    """q at --More--, then the program crashes (pagetest crash): the kernel's report still shows"""
+    q.auto_more = False
+    try:
+        start = len(q.transcript)
+        q.send('pagetest crash 30\n')
+        ok = q.expect('--More--', 20)
+        if ok:
+            q.send('q')
+            ok = q.expect('killed by "Page Fault', 20) and q.expect(PROMPT, 10)
+        ok = ok and 'pagetest line 025' not in q.transcript[start:].decode(errors='replace')
+    finally:
+        q.more_at, q.auto_more = len(q.transcript), True
+    return ('pager: after q, a crash report still shows', ok)
+
+
+def pager_background_check(q):
+    """a program in the background holds the pager (pagetest hold, started with &): the shell's next command is
+    paged all the same, the shell takes the pager over; the job ends, and is collected with the next program"""
+    q.send('pagetest hold 4000 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    if ok:
+        start = len(q.transcript)
+        q.send('pagetest 30\n')
+        ok = q.expect('PAGETEST DONE', 20) and q.expect(PROMPT, 10)
+        parts = q.transcript[start:].decode(errors='replace').split(MORE.decode())
+        ok = ok and [pagetest_lines(p) for p in parts] == [list(range(1, 25)), list(range(25, 31))]
+    ok = ok and q.expect('PAGETEST HELD', 15)
+    if ok:
+        q.send('pagetest caps\n')
+        ok = q.expect('] done', 10) and q.expect(PROMPT, 10)
+    return ('pager: a command after a background job that holds the pager is paged all the same', ok)
+
+
+def kcmd_echo_check(q):
+    """typed input's echo is shown and never kept with a kernel command's output (kcmdtest run: the 2004 demo with
+    its output on a file; its string comparison, answered on the console, reads two lines)"""
+    q.send('kcmdtest run /hda1/ECHO.TXT demo\n')
+    ok = q.expect('\x1b[2J', 10)                            # the menu: the screen cleared, the text kept
+    for keys, shows in (('2', '\x1b[2J'), ('first-typed\r', 'first-typed'), ('second-typed\r', 'second-typed'),
+                        (' ', '\x1b[2J')):
+        if ok:
+            q.send(keys)
+            ok = q.expect(shows, 10)
+    if ok:
+        q.send('q')
+        ok = q.expect('kcmdtest: demo: status 0', 10) and q.expect(PROMPT, 10)
+    if ok:
+        start = len(q.transcript)
+        q.send('cat /hda1/ECHO.TXT\n')
+        ok = q.expect('Enter a string: Enter another string: ', 10) and q.expect('first string is less', 10) and \
+            q.expect(PROMPT, 10) and b'typed' not in q.transcript[start:]
+    q.send('rm /hda1/ECHO.TXT\n')
+    ok = q.expect(PROMPT, 10) and ok
+    return ('a kernel command with its output on a file: typed lines are shown, and not kept in the file', ok)
+
+
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
 CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
-                  '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check}
+                  '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
+                  '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
+                  '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}
 
 
 def host_checks(q):

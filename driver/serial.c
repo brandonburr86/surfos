@@ -108,6 +108,7 @@ void serial_console_clear(void) {
     CR becomes newline and DEL becomes backspace so terminals behave; ANSI escape
     sequences (arrow keys etc.) are swallowed until there is something to do with them.
     10/5/26: a tty in raw mode (tty.h) gets the bytes as the terminal sent them.
+    10/6/26: at the pager's question (--More--) an Esc reaches it, as on the keyboard.
 */
 int serial_isr(u_int irq, void *param) {
     static int esc = 0; /* 0 = normal, 1 = got ESC, 2 = inside ESC [ or ESC O */
@@ -142,7 +143,13 @@ int serial_isr(u_int irq, void *param) {
             }
             continue;
         }
-        if(c == 0x1B) { esc = 1; continue; }
+        if(c == 0x1B) {
+            /* 10/6/26: a lone Esc answers the pager's question (it drops the rest); the rest of a
+               sequence that follows (an arrow key) is still swallowed */
+            if(tty_active->con->page_asker) tty_input(tty_active, 0x1B);
+            esc = 1;
+            continue;
+        }
         if(c == '\r') c = '\n';
         if(c == 0x7F) c = 0x08;
         tty_input(tty_active, c);

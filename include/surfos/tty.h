@@ -31,6 +31,7 @@ struct tty {
     u_long dropped;                     /* input bytes lost to a full queue */
     volatile int raw;                   /* TTY_RAW (tty_ctl): read by the keyboard and serial ISRs */
     struct surf_task *raw_owner;        /* the task that set it; raw mode ends with that task */
+    wait_queue_t page_waiters;          /* 10/6/26: paged tasks waiting while another one is at --More-- */
 };
 
 extern struct tty ttys[NUM_CONSOLES];
@@ -42,6 +43,7 @@ struct tty *tty_for_console(surf_console *con);
 /* input side (interrupt handlers call tty_input) */
 void tty_input(struct tty *t, u_char c);
 int tty_getc(struct tty *t);            /* blocks; 0-255 */
+int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the pager: -1 once *cancel is set */
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */
 void tty_flush(struct tty *t);
 
@@ -66,17 +68,25 @@ void tty_switch(int index);
    descended from it is paged; the caller owns the pager of this terminal. After a
    screenful (the console's rows less one) the console shows TTY_MORE in inverse video on
    the next row, the last one of a full screen, and waits for a key: Space (or any other
-   key) shows the next screenful, Enter one more line, q, Q or Esc drops the rest until
-   paging ends. The pause happens only where a task may wait (task context, interrupts on,
-   no KCRIT_ENTER, no mutex held), never in raw mode, and not while another task waits to
-   read the terminal; elsewhere it comes at the next row where it may. Other tasks' output
-   (kernel threads, interrupt handlers) and captured output are never paged. Reading from
-   the terminal starts a new screenful and shows again what q dropped. TTY_PAGE 0 from the
-   owner ends paging, and so does the owner's end. A task that is paged already stays
-   paged: TTY_PAGE 1 or 0 from it only ends a drop (a nested shell starts or ends a
-   command). Another task gets EBUSY while the pager is in use. The user shell pages every
-   command it runs, the kernel's shell its own commands. Kernel code: kernel/console.c
-   (the rows, the question) and kernel/tty.c (who is paged).
+   key) shows the next screenful, Enter one more line; q, Q, Esc or Ctrl-C drops the rest
+   (an arrow key from a serial terminal begins with Esc, so it does too). The pause
+   happens only where a task may wait (task context, interrupts on, no KCRIT_ENTER, no
+   mutex held), never in raw mode, and not while another task waits to read the terminal;
+   elsewhere it comes at the next row where it may. A task that starts to read calls the
+   question off, and so do the end of paging and its owner's end: the asker goes on as
+   after Space. While the question is up, other paged tasks wait for the answer; anyone
+   else who prints (kernel threads, interrupt handlers: never paged, nor captured output)
+   takes it away until their next newline. Reading from the terminal, raw mode on or off
+   and clearing the screen (ESC[2J) start a new screenful. A drop ends with paging, when a
+   paged task reads (what it printed since its last newline, its question, is shown then)
+   and when one ends (its crash report shows); nothing else of the dropped output comes
+   back. TTY_PAGE 0 from the owner ends paging, and so does the owner's end; an ancestor of
+   the owner (a shell whose background job turned paging on) takes it over. For a task
+   that is paged already (a program the user shell started) TTY_PAGE 1 and 0 only start a
+   new screenful and end a drop: it stays paged while its shell pages. Any other task gets
+   EBUSY while the pager is in use. The user shell pages every command it runs, the
+   kernel's shell its own commands. Kernel code: kernel/console.c (the rows, the
+   question) and kernel/tty.c (who is paged).
    TTY_CAPS: TTY_CAP_* flags. TTY_CAP_UTF8: the console draws UTF-8 text: ASCII, the
    characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
    mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. It is left out

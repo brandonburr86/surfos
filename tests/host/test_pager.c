@@ -1,0 +1,666 @@
+/* Host-side test of the console and the pager (10/6/26): the real kernel/console.c,
+   kernel/tty.c and driver/cp437.c, built for the host with tests/host/pager_bridge.c in
+   place of the rest of the kernel. Every SurfOS task of a scenario is a thread here, and
+   only one runs at a time: run() hands the CPU to a task with something to do, and it
+   comes back when the task is done or blocks (yield()); resume() lets a blocked task go on.
+   So a task can wait at --More-- while others print, read or end, in any order.
+   Covered: the screenful and the question (rows, wraps, the keys, the screen and the
+   serial port), where a task may not wait, readers, UTF-8 per writer, TTY_CAPS. Run by
+   `make unittest`. */
+#include <pthread.h>
+#include <setjmp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* tasks (tests/host/pager_bridge.c): init's children are the shell and the usb thread; the
+   shell's are a command (CHILD, which has GRAND) and a background job (BG) */
+enum { IDLE, INIT, SHELL, CHILD, GRAND, BG, USB, NT };
+#define TTY_RAW  1
+#define TTY_PAGE 3
+#define TTY_CAPS 4
+
+/* pager_bridge.c */
+void sim_init(int ascii);
+void sim_cur(int task);
+int sim_task(void);
+void sim_print(const char *s, int len);
+void sim_kprintf_line(const char *s);
+int sim_ttyctl(int op, unsigned arg);
+void sim_input(int c);
+void sim_key(int c);
+int sim_getc(void);
+int sim_readline(char *buf, int size);
+int sim_lines(void);
+int sim_cols(void);
+void sim_row(int r, char *out, int *attr0);
+unsigned char sim_cell(int x, int y);
+void sim_cursor(int *x, int *y);
+int sim_serial(char *out, int max);
+void sim_page(int *rows, int *drop, int *asker, int *owner);
+void sim_task_gone(int task);
+void sim_set_if(int on);
+void sim_set_in_irq(int n);
+void sim_set_mutexes(int task, int n);
+void sim_set_crit(int task, int n);
+int sim_on_list(int task);
+int sim_readers(void);
+int sim_raw(void);
+void sim_capture(int on);
+const char *sim_captured(void);
+
+static int failures, checks;
+
+static void dump(void);
+
+static void check(int ok, const char *what) {
+    checks++;
+    if(!ok) {
+        failures++;
+        printf("FAIL: %s\n", what);
+        if(getenv("PAGER_DEBUG")) dump();
+    }
+}
+
+/**** the tasks as threads: one runs at a time ****/
+
+enum { FREE, RUNNING, BLOCKED, DONE };
+static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
+static int running = -1;                    /* the task that has the CPU; -1 the test */
+static struct {
+    pthread_t th;
+    int state, abort;
+    void (*work)(int, int);
+    int a, b;
+    jmp_buf top;
+} task[NT];
+
+void emu_fail(const char *why) {
+    printf("FAIL: %s (task %d)\n", why, sim_task());
+    exit(1);
+}
+
+static void *task_main(void *arg) {
+    int id = (int)(long)arg;
+    pthread_mutex_lock(&mu);
+    for(;;) {
+        while(running != id) pthread_cond_wait(&cv, &mu);
+        task[id].state = RUNNING;
+        pthread_mutex_unlock(&mu);
+        sim_cur(id);
+        if(!setjmp(task[id].top)) task[id].work(task[id].a, task[id].b);
+        pthread_mutex_lock(&mu);
+        task[id].state = DONE;
+        task[id].abort = 0;
+        running = -1;
+        pthread_cond_broadcast(&cv);
+    }
+    return NULL;
+}
+
+/* yield() in pager_bridge.c: task id blocks, the test has the CPU until it resumes it */
+void emu_block(int id) {
+    if(id < 0 || !pthread_equal(pthread_self(), task[id].th)) emu_fail("a block outside a task's thread");
+    pthread_mutex_lock(&mu);
+    task[id].state = BLOCKED;
+    running = -1;
+    pthread_cond_broadcast(&cv);
+    while(running != id) pthread_cond_wait(&cv, &mu);
+    task[id].state = RUNNING;
+    if(task[id].abort) {
+        pthread_mutex_unlock(&mu);
+        longjmp(task[id].top, 1);
+    }
+    pthread_mutex_unlock(&mu);
+    sim_cur(id);
+}
+
+static int cpu_to(int id) {
+    int st;
+    pthread_mutex_lock(&mu);
+    running = id;
+    pthread_cond_broadcast(&cv);
+    while(running != -1) pthread_cond_wait(&cv, &mu);
+    st = task[id].state;
+    pthread_mutex_unlock(&mu);
+    return st;
+}
+
+/* task id does work(a, b); DONE, or BLOCKED where it waits */
+static int run(int id, void (*work)(int, int), int a, int b) {
+    if(task[id].state == BLOCKED) emu_fail("run: the task is blocked");
+    task[id].work = work;
+    task[id].a = a;
+    task[id].b = b;
+    return cpu_to(id);
+}
+
+/* a blocked task that was woken goes on */
+static int resume(int id) {
+    if(task[id].state != BLOCKED) emu_fail("resume: the task is not blocked");
+    if(sim_on_list(id)) emu_fail("resume: the task was not woken");
+    return cpu_to(id);
+}
+
+static void reset(int ascii) {
+    int i;
+    for(i = 0; i < NT; i++) {
+        if(task[i].state == BLOCKED) {
+            task[i].abort = 1;
+            cpu_to(i);
+        }
+        task[i].state = FREE;
+    }
+    sim_init(ascii);
+}
+
+/**** what the tasks do ****/
+
+static void w_page(int on, int unused) { (void)unused; sim_ttyctl(TTY_PAGE, (unsigned)on); }
+static void w_raw(int on, int unused) { (void)unused; sim_ttyctl(TTY_RAW, (unsigned)on); }
+
+static void w_lines(int from, int to) {
+    char buf[32];
+    int i;
+    for(i = from; i <= to; i++) {
+        int n = snprintf(buf, sizeof(buf), "line %03d\n", i);
+        sim_print(buf, n);
+    }
+}
+
+static const char *say_text;
+static void w_say(int unused, int unused2) { (void)unused; (void)unused2; sim_print(say_text, (int)strlen(say_text)); }
+static void say(int id, const char *s) { say_text = s; run(id, w_say, 0, 0); }
+
+static int got_key;
+static void w_getc(int unused, int unused2) { (void)unused; (void)unused2; got_key = sim_getc(); }
+
+/**** looking at the screen ****/
+
+static void row(int r, char *out) { sim_row(r, out, NULL); }
+
+static int screen_has(const char *s) {
+    char r[256];
+    int i;
+    for(i = 0; i < sim_lines(); i++) {
+        row(i, r);
+        if(strstr(r, s)) return 1;
+    }
+    return 0;
+}
+
+/* rows 0..23 are "line from" .. "line from+23" and the question is on row 24 in inverse video */
+static int asking_after(int last) {
+    char r[256], want[32];
+    int i, attr;
+    sim_row(24, r, &attr);
+    if(strncmp(r, "--More--", 8) || attr != 0x70) return 0;
+    for(i = 0; i < 24; i++) {
+        row(i, r);
+        snprintf(want, sizeof(want), "line %03d", last - 23 + i);
+        if(strcmp(r, want)) return 0;
+    }
+    return 1;
+}
+
+static void page_state(int *rows, int *drop, int *asker, int *owner) { sim_page(rows, drop, asker, owner); }
+
+/* PAGER_DEBUG=1: the screen and the pager's state with every failure */
+static void dump(void) {
+    char r[256];
+    int i, x, y, rows, drop, a, o;
+    for(i = 0; i < sim_lines(); i++) {
+        row(i, r);
+        printf("    %2d|%s\n", i, r);
+    }
+    sim_cursor(&x, &y);
+    sim_page(&rows, &drop, &a, &o);
+    printf("    cursor %d,%d  rows %d drop %d asker %d owner %d readers %d\n", x, y, rows, drop, a, o, sim_readers());
+}
+
+static int asker(void) { int r, d, a, o; page_state(&r, &d, &a, &o); return a; }
+static int dropping(void) { int r, d, a, o; page_state(&r, &d, &a, &o); return d; }
+static int owner(void) { int r, d, a, o; page_state(&r, &d, &a, &o); return o; }
+
+/* the shell turns paging on and its command (CHILD) prints lines from..to */
+static int paged_lines(int from, int to) {
+    run(SHELL, w_page, 1, 0);
+    return run(CHILD, w_lines, from, to);
+}
+
+/**** scenarios ****/
+
+static void t_screenful(void) {
+    char ser[4096];
+    int st;
+    reset(0);
+    st = paged_lines(1, 24);
+    check(st == DONE && asker() < 0, "24 lines at 80x25 fit: no question");
+    run(SHELL, w_page, 0, 0);
+    say(SHELL, "SURF > ");
+    check(asker() < 0 && owner() < 0, "the prompt after TTY_PAGE 0 does not ask either");
+
+    reset(0);
+    sim_serial(ser, sizeof(ser));
+    st = paged_lines(1, 60);
+    check(st == BLOCKED && asker() == CHILD && asking_after(24), "60 lines: --More-- after 24, on the last row in inverse video");
+    sim_serial(ser, sizeof(ser));
+    check(strstr(ser, "line 024\r\n\r\033[7m--More-- (Space: next page, Enter: next line, q: skip the rest)\033[27m") != NULL,
+          "the serial terminal gets the question in inverse video (ESC[7m .. ESC[27m) after a CR");
+    sim_input(' ');
+    st = resume(CHILD);
+    sim_serial(ser, sizeof(ser));
+    check(st == BLOCKED && asking_after(48), "Space: the next 24 lines, then the question again");
+    check(!strncmp(ser, "\r\033[K", 4) && strstr(ser, "line 025") == ser + 4, "the terminal: CR ESC[K takes the question away");
+    sim_input('\r');
+    st = resume(CHILD);
+    check(st == BLOCKED && asking_after(49), "Enter: one more line");
+    sim_input('\n');
+    st = resume(CHILD);
+    check(st == BLOCKED && asking_after(50), "\\n is Enter too");
+    sim_input('x');
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 060") && asker() < 0, "any other key: the next screenful (and the rest fits)");
+}
+
+static void t_quit(void) {
+    static const int keys[] = { 'q', 'Q', 0x1B, 0x03 };
+    char what[96];
+    unsigned i;
+    int st;
+    for(i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        reset(0);
+        st = paged_lines(1, 30);
+        if(st == BLOCKED) {
+            sim_input(keys[i]);
+            st = resume(CHILD);
+        }
+        snprintf(what, sizeof(what), "key 0x%02x at --More--: the rest is dropped, the row is as before", keys[i]);
+        check(st == DONE && dropping() && !screen_has("line 025") && !screen_has("--More--") && screen_has("line 024"), what);
+    }
+    run(SHELL, w_page, 0, 0);
+    say(SHELL, "SURF > ");
+    check(!dropping() && screen_has("SURF >"), "TTY_PAGE 0 from the owner ends the drop with paging");
+}
+
+static void t_wrap(void) {
+    char l80[81], ser[4096];
+    int i, st, x, y;
+    reset(0);
+    memset(l80, 'x', 80);
+    l80[80] = 0;
+    run(SHELL, w_page, 1, 0);
+    for(i = 0; i < 12; i++) {
+        say(CHILD, l80);
+        say(CHILD, "\n");
+    }
+    check(asker() < 0, "12 lines of exactly 80 columns, each with the empty row after it: 24 rows, no question");
+    say_text = "y";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == BLOCKED, "the 25th row asks first");
+    sim_input(' ');
+    resume(CHILD);
+
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    run(CHILD, w_lines, 1, 23);
+    say(CHILD, l80);                        /* the 24th row is full, the wrap pending */
+    sim_serial(ser, sizeof(ser));
+    say_text = "z";
+    st = run(CHILD, w_say, 0, 0);
+    sim_serial(ser, sizeof(ser));
+    check(st == BLOCKED && !strncmp(ser, "\r\n\r\033[7m--More--", 15),
+          "a full row with the wrap pending: the question goes on the next row (CR LF first on the terminal)");
+    sim_input(' ');
+    resume(CHILD);
+    sim_cursor(&x, &y);
+    check(sim_cell(0, 24) == 'z' && x == 1 && y == 24, "and the character goes where the question was");
+}
+
+/* nowhere to wait: no question, the rows counted; the next row where it may asks */
+static void t_no_waiting(void) {
+    static const char *const why[] = { "interrupts off", "KCRIT_ENTER", "a mutex held", "raw mode", "an interrupt handler" };
+    char what[128];
+    int k, st;
+    for(k = 0; k < 5; k++) {
+        reset(0);
+        run(SHELL, w_page, 1, 0);
+        if(k == 3) run(CHILD, w_raw, 1, 0);
+        if(k == 0) sim_set_if(0);
+        if(k == 1) sim_set_crit(CHILD, 1);
+        if(k == 2) sim_set_mutexes(CHILD, 1);
+        if(k == 4) sim_set_in_irq(1);
+        st = run(CHILD, w_lines, 1, 30);
+        snprintf(what, sizeof(what), "%s: no question, the output goes on", why[k]);
+        check(st == DONE && asker() < 0 && screen_has("line 030"), what);
+        sim_set_if(1);
+        sim_set_crit(CHILD, 0);
+        sim_set_mutexes(CHILD, 0);
+        sim_set_in_irq(0);
+        if(k == 3) run(CHILD, w_raw, 0, 0);
+        if(k == 3) continue;                /* raw mode off starts a new screenful */
+        st = run(CHILD, w_lines, 31, 31);
+        snprintf(what, sizeof(what), "%s, then not: the next row asks at once", why[k]);
+        check(st == BLOCKED, what);
+    }
+}
+
+static void t_reader_first(void) {
+    int st;
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    st = run(BG, w_getc, 0, 0);             /* someone waits for a key on the terminal */
+    check(st == BLOCKED && sim_readers() == 1, "a task waits to read the terminal");
+    st = run(CHILD, w_lines, 1, 40);
+    check(st == DONE && asker() < 0, "while another task waits to read, nobody asks: the output goes on");
+    sim_input('k');
+    resume(BG);
+    check(got_key == 'k', "and the reader gets its key");
+}
+
+static void t_capture(void) {
+    int st;
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    sim_capture(1);                         /* (the shell's output kept for a file) */
+    st = run(SHELL, w_lines, 1, 40);
+    sim_capture(0);
+    check(st == DONE && asker() < 0 && strstr(sim_captured(), "line 040") && !screen_has("line 001"),
+          "captured output is never paged, and never shown");
+}
+
+static void t_interrupt_rows(void) {
+    int rows, drop, a, o;
+    reset(0);
+    paged_lines(1, 20);
+    sim_set_in_irq(1);
+    sim_kprintf_line("an interrupt handler says hi\n");
+    sim_set_in_irq(0);
+    page_state(&rows, &drop, &a, &o);
+    check(rows == 21 && a < 0, "an interrupt handler's line takes a row of the screenful and never waits");
+}
+
+static void t_owner(void) {
+    int st;
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    check(owner() == SHELL, "TTY_PAGE 1: the caller owns the pager");
+    run(USB, w_page, 1, 0);
+    check(owner() == SHELL, "a task that is not the owner's descendant cannot take it (EBUSY)");
+    sim_task_gone(SHELL);
+    check(owner() < 0, "the owner's end ends paging");
+    reset(0);
+    run(SHELL, w_page, 1, 0);
+    st = run(CHILD, w_lines, 1, 30);
+    check(st == BLOCKED && asker() == CHILD, "a descendant of the owner is paged");
+}
+
+static void t_utf8_writers(void) {
+    char r[256];
+    reset(0);
+    say(SHELL, "\xE2\x96");                 /* the first two bytes of ▸ */
+    say(USB, "ab");                         /* another task in between */
+    say(SHELL, "\xB8");
+    sim_set_in_irq(1);                      /* and an interrupt handler with its own half character */
+    sim_print("\xC3", 1);
+    sim_set_in_irq(0);
+    say(SHELL, "!");
+    sim_set_in_irq(1);
+    sim_print("\xA9", 1);
+    sim_set_in_irq(0);
+    row(0, r);
+    check(!strcmp(r, "ab\x10!\x82"), "UTF-8 per writer: ▸ split by another task and é split by an interrupt both come out whole");
+}
+
+/* the other order: a task that starts to wait for a key calls the question off */
+static void t_question_then_reader(void) {
+    int st;
+    reset(0);
+    st = paged_lines(1, 30);
+    check(st == BLOCKED && asker() == CHILD, "a command waits at --More--");
+    st = run(BG, w_getc, 0, 0);             /* then the shell, say, waits for a key at its prompt */
+    check(st == BLOCKED && sim_readers() == 1 && !sim_on_list(CHILD), "a reader comes: the question is called off");
+    st = resume(CHILD);
+    check(st == DONE && asker() < 0 && !screen_has("--More--") && screen_has("line 030"),
+          "the asker goes on as after Space, and with the reader there it does not ask again");
+    sim_input('k');
+    resume(BG);
+    check(got_key == 'k', "the next key is the reader's");
+}
+
+/* paging ends, or its owner: a descendant's question is called off */
+static void t_question_owner_gone(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    run(SHELL, w_page, 0, 0);               /* the shell's command ended: TTY_PAGE 0 */
+    check(!sim_on_list(CHILD), "TTY_PAGE 0 from the owner calls a descendant's question off");
+    say(SHELL, "SURF > ");
+    check(!screen_has("--More--") && screen_has("SURF >"), "the prompt after it is not glued to the question");
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 030") && !screen_has("--More--"), "and the background task goes on, unpaged");
+
+    reset(0);
+    paged_lines(1, 30);
+    sim_task_gone(SHELL);
+    check(!sim_on_list(CHILD) && owner() < 0, "the owner's end calls the question off");
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 030"), "and the asker goes on");
+}
+
+/* while one task is at the question, another paged one waits for the answer */
+static void t_waiting_for_the_answer(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    st = run(GRAND, w_lines, 101, 130);
+    check(st == BLOCKED && asking_after(24), "a paged grandchild waits while its parent is at --More--; the question stays");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && !sim_on_list(GRAND), "after Space the asker goes on, and the waiting task is woken");
+    st = resume(GRAND);
+    check(st == BLOCKED && asker() == GRAND && screen_has("line 118") && !screen_has("line 119"),
+          "then it prints, paged with the rest: it asks in its turn");
+    sim_input(' ');
+    st = resume(GRAND);
+    check(st == DONE && screen_has("line 130"), "and finishes");
+}
+
+/* anyone else who prints takes the question away; it comes back after their newline */
+static void t_question_gives_way(void) {
+    char r[256], ser[4096];
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    sim_serial(ser, sizeof(ser));
+    say(USB, "+USB: port 3: unplugged\n");
+    sim_serial(ser, sizeof(ser));
+    row(23, r);
+    check(!strcmp(r, "+USB: port 3: unplugged") && !strncmp(ser, "\r\033[K+USB: port 3: unplugged\r\n\r\033[7m--More--", 41),
+          "another task's line: the question gives way (CR ESC[K), then comes back on the next row");
+    sim_row(24, r, &st);
+    check(!strncmp(r, "--More--", 8) && st == 0x70, "the question is on the last row again");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && !screen_has("--More--") && screen_has("line 030"), "Space: the asker goes on");
+
+    reset(0);
+    paged_lines(1, 30);
+    sim_set_in_irq(1);
+    sim_kprintf_line("an interrupt handler's line\n");
+    sim_set_in_irq(0);
+    row(23, r);
+    check(!strcmp(r, "an interrupt handler's line") && asker() == CHILD && sim_cell(0, 24) == '-',
+          "an interrupt handler's line: the same");
+
+    reset(0);
+    paged_lines(1, 30);
+    st = run(GRAND, w_lines, 101, 102);     /* waiting for the answer */
+    sim_task_gone(CHILD);                   /* the asker is killed */
+    check(asker() < 0 && !screen_has("--More--") && !sim_on_list(GRAND), "an asker killed at the question takes it away, and wakes who waited");
+    run(SHELL, w_page, 0, 0);
+    say(SHELL, "[pid 3 killed]\n");
+    row(23, r);
+    check(!strcmp(r, "[pid 3 killed]"), "the next line goes where the question was");
+    st = resume(GRAND);
+    check(st == DONE && screen_has("line 102"), "and the waiting task prints");
+}
+
+/* after q: what a program prints before it reads, its question, still shows; so does its
+   crash report */
+static void t_drop_question(void) {
+    char ser[4096];
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    say(CHILD, "line 031\n    Type rd1 to write it: ");
+    check(dropping() && !screen_has("line 031") && !screen_has("Type rd1"), "after q the command's next lines are dropped");
+    sim_serial(ser, sizeof(ser));
+    st = run(CHILD, w_getc, 0, 0);
+    sim_serial(ser, sizeof(ser));
+    check(st == BLOCKED && screen_has("    Type rd1 to write it:") && !screen_has("line 031") && !dropping() &&
+          !strcmp(ser, "    Type rd1 to write it: "),
+          "when it reads, the drop ends and its question shows: the last line q dropped (on the terminal too)");
+    sim_input('y');
+    resume(CHILD);
+    say(CHILD, "written\n");
+    check(got_key == 'y' && screen_has("written"), "and what it prints after the answer shows");
+}
+
+static void w_crash(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_set_if(0);                          /* trap_fatal(): an interrupt gate, */
+    sim_task_gone(sim_task());              /* tty_task_gone() first, */
+    sim_print("Process ('crash':3) killed by \"Page Fault\"\n", 44);   /* then the report */
+    sim_set_if(1);
+}
+
+static void t_drop_crash(void) {
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    run(CHILD, w_crash, 0, 0);
+    check(screen_has("killed by \"Page Fault\"") && !dropping(), "after q, a paged program's crash report still shows");
+}
+
+/* TTY_PAGE from a task that is paged already (a nested shell): a new screenful */
+static void t_nested(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 24);                     /* the nested shell's command filled the screen exactly */
+    run(CHILD, w_page, 0, 0);               /* the nested shell: its command ended */
+    say_text = "SURF > ";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == DONE && asker() < 0 && screen_has("SURF >") && owner() == SHELL,
+          "a nested TTY_PAGE 0 starts a new screenful: its prompt after an exact fit does not ask");
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    run(GRAND, w_page, 1, 0);               /* a program the command starts turns paging on */
+    say(GRAND, "grand\n");
+    check(owner() == SHELL && screen_has("grand"), "and ends a drop, while the pager stays its owner's");
+}
+
+/* a shell whose background job turned paging on takes the pager for its next command */
+static void t_takeover(void) {
+    int st;
+    reset(0);
+    run(BG, w_page, 1, 0);                  /* the job, while the shell waits at its prompt */
+    check(owner() == BG, "a background job takes the free pager");
+    st = run(SHELL, w_page, 1, 0);
+    check(owner() == SHELL, "the shell, its parent, takes it over for its command (no EBUSY)");
+    st = run(CHILD, w_lines, 1, 30);
+    check(st == BLOCKED && asker() == CHILD, "and the command is paged");
+    sim_input(' ');
+    resume(CHILD);
+    run(USB, w_page, 1, 0);
+    check(owner() == SHELL, "a task that is no ancestor still cannot take it");
+}
+
+/* an empty screen, or the end of raw mode: a new screenful */
+static void t_new_screenful(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 20);
+    say(CHILD, "\033[2J\033[H");
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "ESC[2J ESC[H: 24 more lines fit the empty screen");
+    st = run(CHILD, w_lines, 125, 125);
+    check(st == BLOCKED, "the 25th asks");
+    reset(0);
+    paged_lines(1, 20);
+    say(CHILD, "\033[H\033[J");
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "ESC[H ESC[J: the same");
+    reset(0);
+    paged_lines(1, 20);
+    run(CHILD, w_raw, 1, 0);
+    run(CHILD, w_raw, 0, 0);
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "after raw mode: a new screenful");
+}
+
+/* the echo of what is typed goes to the screen even while the output is kept for a file */
+static char line_got[64];
+static void w_readline_kept(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_capture(1);
+    sim_print("Enter a string: ", 16);
+    sim_readline(line_got, sizeof(line_got));
+    sim_print("thanks\n", 7);
+    sim_capture(0);
+}
+
+static void t_echo_not_kept(void) {
+    int st;
+    reset(0);
+    sim_input('h');
+    sim_input('i');
+    sim_input('\n');
+    st = run(CHILD, w_readline_kept, 0, 0);
+    check(st == DONE && !strcmp(line_got, "hi") && !strcmp(sim_captured(), "Enter a string: thanks\n") && screen_has("hi") &&
+          !screen_has("Enter"), "a kept output gets the command's output; the typed line's echo is shown, not kept");
+}
+
+static void t_caps(void) {
+    reset(0);
+    check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
+    reset(1);
+    check(sim_ttyctl(TTY_CAPS, 0) == 2, "TTY_CAPS with `ascii` on the command line: colour only");
+}
+
+int main(void) {
+    int i;
+    for(i = 0; i < NT; i++) pthread_create(&task[i].th, NULL, task_main, (void *)(long)i);
+    t_screenful();
+    t_quit();
+    t_wrap();
+    t_no_waiting();
+    t_reader_first();
+    t_capture();
+    t_interrupt_rows();
+    t_owner();
+    t_utf8_writers();
+    t_question_then_reader();
+    t_question_owner_gone();
+    t_waiting_for_the_answer();
+    t_question_gives_way();
+    t_drop_question();
+    t_drop_crash();
+    t_nested();
+    t_takeover();
+    t_new_screenful();
+    t_echo_not_kept();
+    t_caps();
+    reset(0);
+    printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
+    exit(failures ? 1 : 0);
+    return 0;
+}

@@ -68,6 +68,7 @@ void shell_ask(const char *question, char *answer, size_t size) {
     struct kcapture *kept = curTask->kcap;
     struct tty *tty = curTask->tty ? curTask->tty : tty_active;
     console_capture_end();
+    if(console_paging(curTask->con)) console_page_new(curTask->con);   /* seen after q too, from a new screenful */
     printf("%s", question);
     memset(answer, 0, size);
     tty_readline(tty, answer, size);

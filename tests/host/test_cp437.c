@@ -100,6 +100,9 @@ static void test_tables(void) {
     check(latin == 55, "55 of Latin-1's 96 characters from U+00A0 are in the set");
     check(cp437_from_unicode(0x03B2) == 0xE1 && cp437_from_unicode(0x03BC) == 0xE6 && cp437_from_unicode(0x2126) == 0xEA,
           "β, μ and the ohm sign share ß, µ and Ω");
+    check(cp437_from_unicode(0x2018) == '\'' && cp437_from_unicode(0x2019) == '\'' && cp437_from_unicode(0x201C) == '"' &&
+          cp437_from_unicode(0x201D) == '"' && cp437_from_unicode(0x2013) == '-' && cp437_from_unicode(0x2014) == '-',
+          "the quotes ‘ ’ “ ” and the dashes – — are drawn as ' \" -");
     check(cp437_from_unicode(0) == 0 && cp437_from_unicode(0x01) < 0 && cp437_from_unicode(0x1F) < 0 &&
           cp437_from_unicode(0x7F) < 0 && cp437_from_unicode(0x80) < 0 && cp437_from_unicode(0x9F) < 0,
           "control characters have no place (they are never drawn)");
@@ -123,6 +126,7 @@ static void test_decoder(void) {
     EXPECT("\xF0\x9F\x98\x80", "?", "4 bytes: U+1F600 is outside the set: ?");
     EXPECT("\xF4\x8F\xBF\xBF", "?", "4 bytes: U+10FFFF, the last character: ?");
     EXPECT("\xE2\x82\xAC\xC4\xB4\xE6\x97\xA5\xC2\x85\xEF\xBF\xBD", "?????", "outside the set: € Ĵ 日 a C1 control, U+FFFD");
+    EXPECT("\xE2\x80\x9Cit\xE2\x80\x99s\xE2\x80\x9D \xE2\x80\x94 ok", "\"it's\" - ok", "UTF-8 text with “it’s” and —");
     EXPECT("\xED\x9F\xBF", "?", "U+D7FF, just below the surrogates, is a character: ?");
 
     /* not UTF-8: the bytes are the code page 437 characters they are */
@@ -159,6 +163,37 @@ static void test_decoder(void) {
     check(last == UTF8_OUT_MAX && n == 4, "a 4-byte sequence cut short at its end gives UTF8_OUT_MAX cells at once");
     n = decode(&d, "\xC3\xA9", 2, cells, &last);
     check(n == 1 && cells[0] == 0x82 && d.have == 0, "and the decoder is clean afterwards");
+}
+
+/* 10/6/26: states no byte sequence leaves behind (two writers once shared a decoder, and one
+   could find another's finished 4-byte character still counted as held): the decoder starts
+   afresh and never writes past UTF8_OUT_MAX cells */
+static void test_bad_states(void) {
+    static const struct { u8 have, need; const char *what; } bad[] = {
+        { 4, 4, "4 of 4 bytes held" }, { 3, 2, "more held than the sequence's length" },
+        { 1, 0, "a length of 0" }, { 2, 7, "a length above 4" }, { 255, 255, "garbage" },
+    };
+    struct utf8_dec d;
+    u8 out[UTF8_OUT_MAX + 4];
+    char what[96];
+    unsigned i;
+    int n, k, ok;
+    for(i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        memset(&d, 0, sizeof(d));
+        memset(d.b, 0xF0, sizeof(d.b));
+        d.have = bad[i].have;
+        d.need = bad[i].need;
+        memset(out, 0xEE, sizeof(out));
+        n = utf8_feed(&d, 'a', out);
+        for(ok = 1, k = UTF8_OUT_MAX; k < (int)sizeof(out); k++) if(out[k] != 0xEE) ok = 0;
+        snprintf(what, sizeof(what), "decoder with %s: 'a' alone comes out, nothing past UTF8_OUT_MAX", bad[i].what);
+        check(ok && n == 1 && out[0] == 'a' && d.have == 0, what);
+    }
+    memset(&d, 0, sizeof(d));
+    d.have = 4; d.need = 4;
+    n = utf8_feed(&d, 0xC3, out);
+    n += utf8_feed(&d, 0xA9, out + n);
+    check(n == 1 && out[0] == 0x82, "and it decodes the next character as usual");
 }
 
 /**** the framebuffer font (driver/font8x16.c, tools/bdf2c.py) ****/
@@ -230,6 +265,7 @@ static void test_font(void) {
 int main(void) {
     test_tables();
     test_decoder();
+    test_bad_states();
     test_font();
     printf("%s: %d checks, %d failures\n", failures ? "CP437 UNIT TESTS FAILED" : "CP437 UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);

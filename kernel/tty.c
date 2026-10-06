@@ -33,6 +33,7 @@ void init_tty(void) {
         ttys[i].index = i;
         ttys[i].con = &conArray[i];
         wq_init(&ttys[i].readers);
+        wq_init(&ttys[i].page_waiters);
     }
     tty_active = &ttys[0];
 }
@@ -90,8 +91,9 @@ void tty_key(struct tty *t, u_char c) {
     tty_input(t, c);
 }
 
-/* 10/6/26: a key read from the terminal means the user has seen the screen: the pager
-   (console.c) starts a new screenful, and shows again what it dropped after q */
+/* 10/6/26: reading the terminal means the user sees the screen: the pager (console.c) starts
+   a new screenful, and when the reader's own output was being dropped after q, it shows the
+   last line it dropped, the question the reader asks perhaps, and drops no more */
 int tty_trygetc(struct tty *t) {
     u_long flags = irq_save();
     int c = -1;
@@ -105,6 +107,7 @@ int tty_trygetc(struct tty *t) {
 }
 
 int tty_getc(struct tty *t) {
+    console_page_read(t->con);
     for(;;) {
         u_long flags = irq_save();
         if(t->in_tail != t->in_head) {
@@ -115,11 +118,40 @@ int tty_getc(struct tty *t) {
             return c;
         }
         if(curTask && curTask != idle_task && !in_interrupt()) {
+            /* 10/6/26: a task at the pager's question (console.c) goes on without a key: the
+               keys are this reader's now */
+            if(t->con->page_asker && t->con->page_asker != curTask) console_page_call_off(t->con);
             wait_prepare(&t->readers);   /* enqueued before interrupts come back: no lost wakeup */
             irq_restore(flags);
             yield();
         } else {
             irq_restore(flags);          /* boot code or an ISR: nothing to switch to */
+        }
+    }
+}
+
+/* 10/6/26: the pager's question (console.c): a key, or -1 once *cancel is set. Whoever sets
+   it wakes this task (console_page_call_off()). It is no read of the terminal: the
+   screenful is the pager's own business. */
+int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
+    for(;;) {
+        u_long flags = irq_save();
+        if(*cancel) {
+            irq_restore(flags);
+            return -1;
+        }
+        if(t->in_tail != t->in_head) {
+            int c = t->inq[t->in_tail];
+            t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+            irq_restore(flags);
+            return c;
+        }
+        if(curTask && curTask != idle_task && !in_interrupt()) {
+            wait_prepare(&t->readers);
+            irq_restore(flags);
+            yield();
+        } else {
+            irq_restore(flags);
         }
     }
 }
@@ -133,7 +165,7 @@ void tty_flush(struct tty *t) {
 /**** line discipline ****/
 
 static void echo(struct tty *t, int c) {
-    kputch(t->con, t->con->txtColor, c);
+    console_echo(t->con, t->con->txtColor, c);      /* 10/6/26: never into a kept output (console.c) */
 }
 
 static void erase(struct tty *t, size_t n) {
@@ -300,19 +332,23 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 /* 10/6/26: TTY_PAGE (tty.h). Paging belongs to the task that turned it on, its owner: what
    the owner and the tasks descended from it print on this terminal is paged until the
    owner turns it off or ends (tty_task_gone). TTY_PAGE 1 again from the owner starts a new
-   screenful. A task that is paged already, a program the owner started, keeps being paged
-   whatever it asks: TTY_PAGE 1 and 0 change nothing for it except that output dropped
-   after q shows again (a program of its own starts, or one has ended), so a nested shell
-   is seen. Any other task cannot take the pager while it is in use: EBUSY. */
+   screenful. An ancestor of the owner takes the pager over (a shell whose job in the
+   background turned paging on, and which runs a command now). A task that is paged
+   already, a program the owner started, keeps being paged whatever it asks: TTY_PAGE 1
+   and 0 start a new screenful for it and end a drop (a program of its own starts, or one
+   has ended), so a nested shell's prompt is seen and never asked about. Any other task
+   cannot take the pager while it is in use: EBUSY, and its TTY_PAGE 0 changes nothing. */
 static int tty_page(struct tty *t, int on) {
     surf_console *con = t->con;
-    int r = 0;
+    struct surf_task *o;
+    int r = 0, depth;
     u_long flags = irq_save();
-    if(!con->page_owner || con->page_owner == curTask) {
+    for(o = con->page_owner, depth = 0; o && o != curTask && depth < 64; o = o->parent, depth++);
+    if(!con->page_owner || o == curTask) {              /* free, its own, or an ancestor's to take over */
         if(on) console_page_start(con, curTask);
         else if(con->page_owner) console_page_start(con, NULL);
     } else if(console_paging(con)) {
-        con->page_drop = 0;
+        console_page_new(con);
     } else if(on) {
         r = -16;                                  /* EBUSY */
     }
@@ -332,7 +368,10 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);
-        if(arg) console_page_read(t->con);        /* 10/6/26: a full-screen program is never paged, nor dropped */
+        /* 10/6/26: a full-screen program is never paged nor dropped (raw mode on reads, as far as
+           the pager is concerned); after it, a new screenful */
+        if(arg) console_page_read(t->con);
+        else console_page_new(t->con);
         return 0;
     }
     return -22;                                   /* EINVAL */
