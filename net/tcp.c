@@ -48,6 +48,11 @@ sends what fits after a second. The window offered never shrinks and grows only
 by a segment at least, and a read tells the other end only when that lets it
 send again, or when the window grew by two segments. A client that keeps its
 window small costs a segment now and then, not a stream of tiny ones.
+
+10/6/26 (the same tests): a connection whose FIN the other end has acknowledged
+and that nobody reads for (TIME_WAIT, an orphan in FIN_WAIT_2) gives its 16 KB
+of buffers back at once: what lingers there, the other end gone with a network
+unplugged say, holds its slot only, and the heap does not change when it ends.
 */
 
 #include <surfos/types.h>
@@ -190,6 +195,15 @@ static void sock_free(struct tcp_socket *s) {
     s->used = false;
 }
 
+/* 10/6/26: the other end has acknowledged our FIN (all our data) and nobody reads for s: it sends
+   nothing more and keeps nothing it receives, so its buffers go; its sequence numbers stay */
+static void drop_buffers(struct tcp_socket *s) {
+    kfree(s->txbuf);
+    kfree(s->rxbuf);
+    s->txbuf = s->rxbuf = NULL;
+    s->tx_len = s->rx_len = 0;
+}
+
 static bool port_in_use(u16 port) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) if(socks[i].used && socks[i].local_port == port) return true;
@@ -217,6 +231,7 @@ static u16 ephemeral_port(void) {
 static void set_state(struct tcp_socket *s, int state) {
     s->state = state;
     if(state == ESTABLISHED) s->synced = true;
+    if(state == TIME_WAIT || (state == FIN_WAIT_2 && s->orphan)) drop_buffers(s);   /* 10/6/26 */
     if(s->orphan) s->orphan_at = getticks();             /* 10/6/26: progress */
     notify(s);
 }
@@ -908,6 +923,7 @@ static int start_close(struct tcp_socket *s) {
 static void make_orphan(struct tcp_socket *s) {
     s->orphan = true;
     s->orphan_at = getticks();
+    if(s->state == FIN_WAIT_2) drop_buffers(s);          /* 10/6/26: nothing to send, nobody to read */
 }
 
 int tcp_close(struct tcp_socket *s) {
