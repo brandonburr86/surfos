@@ -294,7 +294,10 @@ SMOKE = [
     ('run ptytest flood', ['lines 1-1000, all of them, in order', 'PTYTEST flood PASS', 'exit status 0']),
     ('run ptytest hangup', ['the master is closed', 'count is gone', "count's exit status -1 (killed)",
                             'is free again', 'PTYTEST hangup PASS', 'exit status 0']),
-    # 10/6/26 (the review): a kernel thread started in a session is on F1
+    # 10/6/26 (the review): the hangup's kill waits for a kernel command however long; a kernel thread started in a
+    # session is on F1
+    ('run ptytest hangup-call', ['still there', 'the kernel log says the kill waited', 'PTYTEST hangup-call PASS',
+                                 'exit status 0']),
     ('@pty-tcpecho', []),
     ('run ptytest poll', ['timed out after', 'POLLNVAL', '(POLLIN | POLLHUP)', 'killed: gone after', 'PTYTEST poll PASS',
                           'exit status 0']),

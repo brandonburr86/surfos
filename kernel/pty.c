@@ -19,9 +19,11 @@ A pty's life: free; opened (its tty and console as new, 80x24); a session: SYS_s
 starts a program on it, and every task whose terminal it is belongs to the session (what
 those programs start, too); the session ends when no task has the pty as its terminal
 any more (the master reads what is left, then 0); the master is closed: the hangup, every
-task still on the pty gets the kill that waits for the end of its call, and what they
-print goes nowhere; free again once the master is closed and no task is left on it. Only
-processes are ever on a pty: a kernel thread started from a session is on F1 (task_alloc()).
+task still on the pty gets the kill that waits for the end of its call, however long the
+call takes (TI_HANGUP, surfos/task.h: a client going away never kills a kernel command
+holding a lock), and what they print goes nowhere; free again once the master is closed and
+no task is left on it. Only processes are ever on a pty: a kernel thread started from a
+session is on F1 (task_alloc()).
 
 Output: a writer that may wait (console.c says when) waits while the buffer is full, and
 gives up when its call is cut short (a kill, the hangup, Ctrl+C); the bytes of one that
@@ -225,9 +227,9 @@ static int master_poll(struct vnode *v, struct file *f) {
 }
 
 /* The last descriptor of the master is closed: the hangup. The tasks on the pty get the kill that
-   waits for the end of their call (their waits for keys, for room, at the pager end at once); what
-   they print from now on is dropped, and reads of the pty end; the pty is free once the last of them
-   is gone (pty_task_gone()), or now when none is left. */
+   waits for the end of their call, however long (task_kill_tty(); their waits for keys, for room, at
+   the pager end at once); what they print from now on is dropped, and reads of the pty end; the pty
+   is free once the last of them is gone (pty_task_gone()), or now when none is left. */
 static void master_release(struct vnode *v) {
     struct pty *p = (struct pty *)v->priv;
     struct tty *t = pty_tty(p);

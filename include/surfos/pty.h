@@ -29,7 +29,8 @@ On the pty, TTY_GETSIZE answers what PTY_SETSIZE set (80x24 at first), TTY_CAPS 
 TTY_CAP_UTF8 | TTY_CAP_COLOR, and TTY_RAW and TTY_PAGE work as on a console (the pager
 counts the rows that PTY_SETSIZE set). Closing the last master descriptor hangs up:
 every task whose terminal is the pty is killed (the kill that waits for the end of a
-system call), its reads end, and the pty is free again once they are gone.
+system call, however long it takes: a kernel command is never killed in the middle), its
+reads end, and the pty is free again once they are gone.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/pty.h.
 */

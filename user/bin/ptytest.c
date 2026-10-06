@@ -26,6 +26,10 @@ ptytest flood             `pagetest 1000` on an 80x1024 pty, read only after a s
 ptytest hangup            `count 1000 100` on a pty; the master closed after the first
                           numbers: the process is gone at once (procinfo), killed, and the
                           pty is free again
+ptytest hangup-call       the master closed 300 ms into `sleep -u 4000` (a kernel command
+                          surfsh runs, which looks at nothing): no kill at once after the
+                          kill's 2 s, the task ends with the command, and the kernel log
+                          (dmesg through kcmd(), on a file of /hda1) says it waited
 ptytest tcpecho [PORT]    `tcpecho PORT` (2323) in a session: its kernel thread is on F1,
                           the session ends with `exit`, the thread lives on, and nothing it
                           prints is in the session
@@ -363,6 +367,72 @@ static int mode_hangup(void) {
     return pass();
 }
 
+/* the kernel log, as dmesg prints it (through kcmd(), its output on a file of /hda1), into out; its length or -1 */
+static int kernel_log(void) {
+    char *argv[] = { "dmesg", NULL };
+    const char *file = "/hda1/PTYKLOG.TXT";
+    int fd, n;
+    fflush(stdout);
+    fd = open(file, O_WRONLY | O_CREAT | O_TRUNC);
+    if(fd < 0) return -1;
+    if(dup2(1, 9) < 0) {                                /* the console, kept aside */
+        close(fd);
+        return -1;
+    }
+    dup2(fd, 1);
+    kcmd(argv);
+    dup2(9, 1);
+    close(9);
+    close(fd);
+    fd = open(file, O_RDONLY);
+    if(fd < 0) return -1;
+    outlen = 0;
+    while(outlen < (int)sizeof(out) - 1 && (n = (int)read(fd, out + outlen, sizeof(out) - 1 - outlen)) > 0) outlen += n;
+    out[outlen] = 0;
+    close(fd);
+    unlink(file);
+    return outlen;
+}
+
+/* the hangup during a kernel command that looks at nothing for 4 s (sleep -u): no kill at once after
+   the kill's 2 s, the command ends first, then the task; the kernel log says it waited */
+static int mode_hangup_call(void) {
+    char *argv[] = { "surfsh", NULL };
+    char want[64];
+    struct procinfo pi;
+    unsigned int t0, alive = 0, took;
+    int m, pid, st = -99, at, gone = 0;
+    m = start("/initrd/bin/surfsh", argv, (80 << 16) | 1024, &pid);
+    if(m < 0) return fail("surfsh did not start");
+    if(read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "sleep -u 4000\r");
+    if(read_until(m, "sleep -u 4000", at, 10000) != 1) return fail("sleep -u 4000 was not typed");
+    msleep(300);
+    t0 = uptime();
+    close(m);                                           /* the hangup, 300 ms into 4 s that look at nothing */
+    while(uptime() - t0 < 8000) {
+        if(!find_task(pid, &pi) || pi.state == PROC_DEAD) {
+            gone = 1;
+            break;
+        }
+        alive = uptime() - t0;
+        msleep(20);
+    }
+    took = uptime() - t0;
+    if(!gone) return fail("surfsh still runs 8 s after the hangup");
+    printf("ptytest: surfsh, in `sleep -u 4000` at the hangup, still there %u ms after it, gone after %u ms\n", alive, took);
+    if(alive < 2500) return fail("surfsh was killed in its kernel command (the kill's 2 s)");
+    if(wait(pid, &st) != pid || st != -1) return fail("surfsh was not killed at the end of its call");
+    if(kernel_log() <= 0) return fail("cannot read the kernel log");
+    snprintf(want, sizeof(want), "(pid %d) is still in its kernel command", pid);
+    if(!strstr(out, want)) return fail("the kernel log does not say that the hangup's kill waits");
+    snprintf(want, sizeof(want), "(pid %d) did not end its", pid);
+    if(strstr(out, want)) return fail("the kernel log has a kill at once");
+    printf("ptytest: the kernel log says the kill waited for the command; no kill at once\n");
+    return pass();
+}
+
 /* a kernel thread started in a session (tcpecho) is not part of it: on F1, the session ends with
    exit, the thread lives on after the hangup, and nothing it prints is in the session */
 static int mode_tcpecho(int argc, char **argv) {
@@ -545,6 +615,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "size")) return mode_size(argc, argv);
     if(!strcmp(mode, "pager")) return mode_pager();
     if(!strcmp(mode, "hangup")) return mode_hangup();
+    if(!strcmp(mode, "hangup-call")) return mode_hangup_call();
     if(!strcmp(mode, "tcpecho")) return mode_tcpecho(argc, argv);
     if(!strcmp(mode, "flood")) return mode_flood();
     if(!strcmp(mode, "poll")) return mode_poll();
@@ -553,7 +624,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach")) return mode_detach();
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
-    fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | tcpecho [PORT] |\n"
-                    "       poll | ps | detach | kmsg\n");
+    fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
+                    "       tcpecho [PORT] | poll | ps | detach | kmsg\n");
     return 2;
 }
