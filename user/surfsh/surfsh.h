@@ -10,14 +10,15 @@ docs/superpowers/plans/2026-10-06-surfsh.md). surfsh is a ring-3 program in
     main.c      the start (-l: the banner), the settings and /initrd/etc/surfsh.conf, the loop
     editor.c    the line editor in raw mode: keys, long lines that wrap, the history
     complete.c  Tab completion: command names and paths
-    parse.c     a line becomes commands: words, quotes, < > >>, &, ;, #
+    parse.c     a line becomes commands: words, quotes, $?, < > >>, &, ;, #
     run.c       running a command: surfsh's own, then the kernel's (kcmd), then programs
     builtins.c  cd, pwd, echo, exit, help, history, set
 
 Statuses: 0 success; 1 a command failed; 2 a line or a command used the wrong
 way; 126 a program that could not be started; 127 no such command; 137 a
 program the kernel killed (128 + 9, as for SIGKILL on Unix). A kernel command
-answers its own 0, 1 or 2. Anything but 0 makes the prompt's wave ≋!.
+answers its own 0, 1 or 2, and run the program's. Anything but 0 makes the
+prompt's wave ≋!, and $? on the next command's line is the number.
 */
 
 #ifndef _SURFSH_H
@@ -32,7 +33,8 @@ answers its own 0, 1 or 2. Anything but 0 makes the prompt's wave ≋!.
 #define LINE_LIMIT      1023        /* bytes of one line; the editor refuses a longer one */
 #define HIST_MAX        128         /* lines the history keeps */
 #define MAX_WORDS       32          /* words of one command, its name included (SPAWN_MAX_ARGS) */
-#define MAX_CMDS        32          /* commands on one line, between ; and & */
+#define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
+#define WORDS_SIZE      (6 * (LINE_LIMIT + 1))  /* a command's words: any line's, with $? at its longest */
 
 #define STATUS_FAIL     1
 #define STATUS_USAGE    2
@@ -69,6 +71,7 @@ int display_cols(const char *s, int n);   /* the columns of n bytes of UTF-8: on
 /* A line typed at the prompt, without its line end: its length; -1 at the end of the input
    (Ctrl-D on an empty line); -2 when it was longer than LINE_LIMIT and is refused. */
 int edit_line(char *buf, int size);
+void edit_fresh_row(void);          /* the cursor at the start of a fresh row, as before a prompt */
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 
@@ -91,9 +94,10 @@ int complete(char *line, int *len, int *pos, int limit, struct cands *list);
 void cands_free(struct cands *c);
 
 /* names in columns that fit width, sorted down the columns as ls does; each row starts with
-   indent and ends with eol, and put() writes the pieces */
+   indent and ends with eol, and put() writes the pieces. columns_rows(): the rows it takes. */
 void columns(char *const *names, int n, int width, const char *indent, const char *eol,
              void (*put)(const char *s, int len));
+int columns_rows(char *const *names, int n, int width, int indent);
 
 /**** parse.c: a line becomes commands ****/
 
@@ -104,23 +108,23 @@ struct command {
     char *out;                      /* > file or >> file, NULL for none */
     int append;                     /* >> */
     int bg;                         /* & after it */
+    char words[WORDS_SIZE];         /* where argv, in and out point */
 };
 
-struct parsed {
-    struct command cmd[MAX_CMDS];
-    int ncmd;                       /* 0 for a blank line or a comment */
-    char words[2 * (LINE_LIMIT + 1)];
-};
-
-/* 0 and the commands, or -1 with a message in err */
-int parse_line(const char *line, struct parsed *out, char *err, int errsize);
-int needs_quotes(const char *s);    /* a word that parse_line would split or change */
+/* The next command of a line from *line on, with $? as status: 1 and the command (*line is
+   then past it and its ; or &), 0 when only blanks or a comment are left, -1 with a message
+   in err. parse_check(): the whole line, before any of it runs: 0, or -1 and err. */
+int parse_next(const char **line, int status, struct command *c, char *err, int errsize);
+int parse_check(const char *line, char *err, int errsize);
+int needs_quotes(const char *s);    /* a word that the parser would split or change */
 
 /**** run.c: running commands ****/
 
 void run_init(void);                /* the kernel's command table, the saved descriptor 1 */
 int run_line(const char *line);     /* every command of the line: the last one's status
                                        (last_status for a blank line) */
+void run_collect(int fresh);        /* background programs that ended: reported (fresh: from a
+                                       fresh row on the console), before each prompt */
 int kcmd_count(void);
 const struct kcmd_info *kcmd_entry(int i);
 const struct kcmd_info *kcmd_find(const char *name);

@@ -13,11 +13,15 @@ arrive as they were sent.
 Keys: Left, Right, Home, End (also ^A, ^E), Backspace, Delete; ^U clears the line,
 ^K deletes to its end, ^W the word before the cursor; Up and Down go through the
 history (HIST_MAX lines, no line twice in a row); Tab completes (complete.c), and a
-second Tab in a row lists the choices; ^L clears the screen, ^C drops the line for a
-fresh prompt, ^D on an empty line leaves the shell (otherwise it deletes). Enter is
+second Tab in a row lists the choices (asking first when they would not fit on the
+screen: the list is written in raw mode, where the pager does not stop); ^L clears
+the screen, ^C drops the line for a fresh prompt, ^D on an empty line leaves the
+shell (otherwise it deletes). A terminal's escape sequences are read to their final
+byte, so one the editor does not know leaves nothing in the line. Enter is
 '\r' from a keyboard or a terminal and '\n' from a test harness (CR LF counts once).
 Typed text is teal. A line longer than LINE_LIMIT bytes takes no more characters and
-is refused with Enter, so a cut-off command never runs. Keys that arrive together
+is refused with Enter, so a cut-off command never runs; once something is deleted,
+the line on the screen is what runs again. Keys that arrive together
 (a paste) are all handled before the screen is written, so the editor keeps up with
 the console's input queue (256 bytes; a faster paste over the serial line loses
 bytes in the kernel). Keys typed after Enter are dropped, as the console drops what
@@ -29,11 +33,16 @@ that state: whenever the prompt or the line ends exactly at the end of a row it
 writes CR LF, and the cursor is at the start of the next row. Its position is kept as
 a count of columns from the prompt's start (the row is that over the width), and it
 moves only with CR, ESC[nA, ESC[nB and ESC[nC. A change in the middle of the line
-moves back to the first changed character, erases to the end of the screen (ESC[J)
-and writes the rest of the line again; the prompt itself is written once per line
-(again only after ^L or a list of choices). Before a prompt the cursor goes to the
-start of a fresh row without leaving an empty one: a row of spaces up to the edge
-and a CR do that wherever the last command left the cursor.
+moves back to the first changed character and writes the rest of the line again;
+when the line got shorter, blanks go over the cells it no longer needs, and over
+nothing else: what lies below the line (a program's drawing, ansi's corner) stays,
+unless the line grows over it, as on any terminal. The prompt itself is written once
+per line (again only after ^L, ^C or a list of choices). Before a prompt the cursor
+goes to the start of a fresh row without leaving an empty one: a row of spaces up to
+the edge, a CR and ESC[K do that wherever the last command left the cursor, and clear
+the prompt's own row. The colours are reset and the cursor shown first: a kernel
+command runs in this task, and what it leaves (inverse video, a hidden cursor) is not
+undone by the end of a task.
 */
 
 #include "surfsh.h"
@@ -97,6 +106,7 @@ static int colour;                      /* prompt.color, where the console has c
 static char prompt[PROMPT_MAX];
 static int pcols;                       /* the columns of the prompt */
 static int cur;                         /* the cursor: columns from the prompt's start */
+static int drawn;                       /* where the prompt and the line on the screen end, likewise */
 
 static int is_cont(int c) {
     return ((unsigned char)c & 0xC0) == 0x80;
@@ -119,14 +129,23 @@ static int next_char(int p) {
     return p;
 }
 
+static int rows = 25;                   /* the terminal's rows */
+
+/* the terminal's size and whether to colour, once per line */
+static void screen_setup(void) {
+    int size = ttyctl(TTY_GETSIZE, 0);
+    width = size > 0 ? (size >> 16) & 0xffff : 80;
+    rows = size > 0 ? size & 0xffff : 25;
+    if(width < 8) width = 8;
+    if(width > 1024) width = 1024;
+    if(rows < 2) rows = 2;
+    colour = use_color();
+}
+
+/* the prompt for this line (screen_setup() first) */
 static void make_prompt(void) {
     struct prompt_ctx c;
     char cwd[PATH_MAX];
-    int size = ttyctl(TTY_GETSIZE, 0);
-    width = size > 0 ? (size >> 16) & 0xffff : 80;
-    if(width < 8) width = 8;
-    if(width > 1024) width = 1024;
-    colour = use_color();
     memset(&c, 0, sizeof(c));
     c.cwd = getcwd(cwd, sizeof(cwd)) ? cwd : NULL;
     c.last_status = last_status;
@@ -155,34 +174,55 @@ static void past_edge(int end) {
     if(end % width == 0) put("\r\n", 2);
 }
 
-/* the line from byte from on is written again, the rest of the screen erased, the cursor put at pos */
+/* Blanks over the cells the line had from the cursor on before, up to column old (where it
+   ended): those only. A blank in the last column of a row leaves the console's pending wrap,
+   so a CR takes the cursor back to the start of that row. */
+static void blank_to(int old) {
+    int n;
+    if(old <= cur) return;
+    for(n = old - cur; n > 0; n--) put(" ", 1);
+    cur = old;
+    if(old % width == 0) {
+        put("\r", 1);
+        cur = old - width;
+    }
+}
+
+/* the line from byte from on is written again, the cells it no longer needs blanked, the cursor put at pos */
 static void redraw(int from) {
+    int end = col_of(len);
     move_to(col_of(from));
     if(colour) puts_(SGR_TYPED);
-    puts_("\033[J");
     put(line + from, len - from);
-    if(len > from) past_edge(col_of(len));
+    if(len > from) past_edge(end);
+    blank_to(drawn);
+    drawn = end;
     move_to(col_of(pos));
 }
 
-/* the prompt and the line, with the cursor at the start of a row */
+/* the prompt (made already) and the line, from the start of a row that fresh_row() cleared */
 static void draw_all(void) {
-    make_prompt();
     puts_(prompt);
     past_edge(pcols);
     if(colour) puts_(SGR_TYPED);
-    puts_("\033[J");
     put(line, len);
-    if(len) past_edge(col_of(len));
+    drawn = col_of(len);
+    if(len) past_edge(drawn);
     move_to(col_of(pos));
 }
 
-/* the start of a fresh row, wherever the last output left the cursor (see the top) */
+/* the start of a fresh, empty row, wherever the last output left the cursor (see the top) */
 static void fresh_row(void) {
     int i;
-    if(colour) puts_(SGR_RESET);
+    puts_("\033[0m\033[?25h");
     for(i = 0; i < width; i++) put(" ", 1);
-    put("\r", 1);
+    puts_("\r\033[K");
+}
+
+void edit_fresh_row(void) {
+    screen_setup();
+    fresh_row();
+    flush_out();
 }
 
 /* the cursor after the line, and the next row: the line is done */
@@ -215,16 +255,29 @@ static int next_byte(void) {
     return inbuf[inpos++];
 }
 
-/* the rest of ESC [ or ESC O: digits, then the final character */
+/* The rest of ESC [ or ESC O: parameter and intermediate bytes (0x20-0x3F) up to the
+   final byte (0x40-0x7E). The first parameter is the key's number (ESC[3~, and ESC[3;5~
+   with Ctrl held: the key is what counts). A private sequence (ESC[?...) or one with
+   intermediate bytes is no key; another byte ends the sequence and is a key again. */
 static int sequence(void) {
-    int c, num = 0;
+    int c, num = 0, first = 1, other = 0;
     for(;;) {
         c = next_byte();
         if(c < 0) return KEY_EOF;
-        if(c >= '0' && c <= '9') { num = num * 10 + (c - '0'); continue; }
-        if(c == ';') { num = 0; continue; }         /* modifiers (ESC[1;5C): the key is what counts */
-        break;
+        if(c < 0x20 || c > 0x7E) {
+            inpos--;
+            return KEY_NONE;
+        }
+        if(c >= 0x40) break;                        /* the final byte */
+        if(c >= '0' && c <= '9') {
+            if(first && num < 1000) num = num * 10 + (c - '0');
+        } else if(c == ';' || c == ':') {
+            first = 0;
+        } else {
+            other = 1;                              /* < = > ? or an intermediate byte */
+        }
     }
+    if(other) return KEY_NONE;
     switch(c) {
     case 'A': return KEY_UP;
     case 'B': return KEY_DOWN;
@@ -276,6 +329,7 @@ static void insert(const char *s, int n) {
     if(pos == len) {                            /* at the end: just write it */
         put(s, n);
         past_edge(cur + display_cols(s, n));
+        drawn = cur;
     } else {
         redraw(pos - n);
     }
@@ -303,6 +357,7 @@ static void delete_range(int a, int b) {
     memmove(line + a, line + b, (size_t)(len - b));
     len -= b - a;
     pos = a;
+    too_long = 0;                               /* what runs is the line as it shows now */
     redraw(a);
 }
 
@@ -358,9 +413,10 @@ static void history_go(int to) {
 
 /**** Tab ****/
 
+/* the choices of a second Tab, under the line; then the prompt and the line again */
 static void list_choices(struct cands *c) {
     char **names = malloc((size_t)c->n * sizeof(char *));
-    int i, n = 0;
+    int i, n = 0, shown;
     if(!names) return;
     for(i = 0; i < c->n; i++) {
         char *s = malloc(strlen(c->v[i].name) + 2);
@@ -369,10 +425,21 @@ static void list_choices(struct cands *c) {
         if(c->v[i].dir) strcat(s, "/");
         names[n++] = s;
     }
+    shown = n;
     leave_line(NULL);
-    columns(names, n, width, "", "\r\n", put);
+    if(columns_rows(names, n, width, 0) > rows - 2) {   /* more than a screen: as bash, ask first */
+        char ask[64];
+        int key;
+        snprintf(ask, sizeof(ask), "Display all %d possibilities? (y or n)", n);
+        puts_(ask);
+        key = get_key();
+        put("\r\n", 2);
+        if(key != 'y' && key != 'Y' && key != ' ') shown = 0;
+    }
+    columns(names, shown, width, "", "\r\n", put);
     for(i = 0; i < n; i++) free(names[i]);
     free(names);
+    fresh_row();
     draw_all();
 }
 
@@ -392,6 +459,7 @@ static int after_cr;                    /* the last key was CR: an LF right afte
 /* without raw mode: the prompt, and a line as the kernel's line discipline edits it */
 static int plain_line(char *buf, int size) {
     int n;
+    screen_setup();
     make_prompt();
     fputs(prompt, stdout);
     n = readline(buf, (size_t)size);
@@ -408,6 +476,7 @@ int edit_line(char *buf, int size) {
     limit = size - 1 < LINE_LIMIT ? size - 1 : LINE_LIMIT;
     len = pos = too_long = 0;
     hist_pos = hist_count;
+    screen_setup();
     make_prompt();
     fresh_row();
     draw_all();
@@ -442,6 +511,7 @@ int edit_line(char *buf, int size) {
             leave_line("^C");
             len = pos = too_long = 0;
             hist_pos = hist_count;
+            fresh_row();
             draw_all();
             break;
         case CTRL('a'):

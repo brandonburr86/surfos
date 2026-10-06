@@ -6,15 +6,19 @@ File: main.c    Date: 10/6/26
 surfsh [-l]: the SurfOS shell. init starts it with -l on every console (F1 to F4)
 and again when it ends; typed at a prompt, it starts a shell inside the shell.
 
--l prints the banner as the kernel's do_banner() does (include/surfos/version.h):
-"Brandon Burr's SurfOS" and "Version 1.0 on an x86, 2004-2026" in light red, the
-version and the years in orange. Then the settings come from /initrd/etc/surfsh.conf
-when it exists: "key = value" lines, # comments, the keys of the set command. The
-shell starts in the directory it was started in ("/" when init starts it).
+The settings come from /initrd/etc/surfsh.conf when it exists: "key = value"
+lines, # comments, the keys of the set command. Then -l prints the banner as the
+kernel's do_banner() does (include/surfos/version.h): "Brandon Burr's SurfOS" and
+"Version 1.0 on an x86, 2004-2026" in light red, the version and the years in
+orange (no colours with prompt.color off). The shell starts in the directory it
+was started in ("/" when init starts it).
 
 On the console the line is typed in the line editor (editor.c); with any other
 input (surfsh < file) the lines are read and run without a prompt. Either way
 the shell ends with exit, at the end of the input or with Ctrl-D on an empty line.
+Before each prompt (each line of a file) the programs that ran in the background
+and ended are reported. The exit status is kept in 0-255, as on Unix: init takes
+-1 for a shell that was killed.
 */
 
 #include "surfsh.h"
@@ -134,7 +138,7 @@ static void read_conf(const char *path) {
 
 /* the kernel's banner (kernel/sys.c, do_banner) with the same strings, light red and orange */
 static void banner(void) {
-    int colour = console_caps() & TTY_CAP_COLOR;
+    int colour = use_color();
     printf("\n%s%s's %s\nVersion %s%s%s on an x86, %s%s\n%s",
            colour ? SGR_LRED : "", SURFOS_AUTHOR, SURFOS_NAME,
            colour ? SGR_ORANGE : "", SURFOS_VERSION, colour ? SGR_LRED : "",
@@ -162,12 +166,14 @@ static void read_lines(void) {
         }
         if(n && buf[n - 1] == '\r') buf[--n] = 0;
         last_status = run_line(buf);
+        run_collect(0);
     }
 }
 
 int main(int argc, char **argv) {
     static char line[LINE_LIMIT + 1];
     int i, login = 0;
+    setvbuf(stdout, NULL, _IOLBF, 0);               /* line by line, wherever descriptor 1 goes later */
     for(i = 1; i < argc; i++) {
         if(!strcmp(argv[i], "-l")) login = 1;
         else {
@@ -175,15 +181,17 @@ int main(int argc, char **argv) {
             return STATUS_USAGE;
         }
     }
-    if(login) banner();
     read_conf(SURFSH_CONF);
+    if(login) banner();
     run_init();
     if(!isatty(0) || !isatty(1)) {
         read_lines();
-        return exit_requested ? exit_code : last_status;
+        return (exit_requested ? exit_code : last_status) & 0xff;
     }
     while(!exit_requested) {
-        int n = edit_line(line, sizeof(line));
+        int n;
+        run_collect(1);                             /* the background programs that ended */
+        n = edit_line(line, sizeof(line));
         if(n == -1) break;                          /* Ctrl-D, or no more input */
         if(n == -2) {
             fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);
@@ -195,5 +203,5 @@ int main(int argc, char **argv) {
         last_status = run_line(line);
     }
     fflush(stdout);
-    return exit_requested ? exit_code : 0;
+    return exit_requested ? exit_code & 0xff : 0;
 }

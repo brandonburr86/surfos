@@ -19,7 +19,8 @@ One candidate is completed, with "/" after a directory and a space after anythin
 else. Several are completed as far as they agree; when they agree on nothing more,
 the editor lists them on a second Tab. A name with a blank or a special character
 in it is completed inside double quotes (left open after a directory, so the next
-Tab can go on), as is any word that was begun with a quote.
+Tab can go on), as is any word that was begun with a quote; a " \ or $ in it gets
+a backslash there, so "$?" in a file's name stays itself.
 */
 
 #include "surfsh.h"
@@ -191,7 +192,7 @@ static int write_word(char *out, int size, const char *value, const char *suffix
     }
     for(s = value; *s; s++) {
         if(n + 2 >= size) return -1;
-        if(quote && (*s == '"' || *s == '\\')) out[n++] = '\\';
+        if(quote && (*s == '"' || *s == '\\' || *s == '$')) out[n++] = '\\';
         out[n++] = *s;
     }
     for(s = suffix; *s; s++) {
@@ -260,20 +261,30 @@ int complete(char *line, int *len, int *pos, int limit, struct cands *list) {
 
 /**** lists ****/
 
-void columns(char *const *names, int n, int width, const char *indent, const char *eol,
-             void (*put)(const char *s, int len)) {
-    int i, r, k, maxw = 0, colw, ncols, nrows, ind = (int)strlen(indent);
+/* how names are laid out: the column width (*colw) and the rows; the last column never
+   reaches the edge of the terminal */
+static int layout(char *const *names, int n, int width, int ind, int *colw) {
+    int i, maxw = 0, ncols;
     for(i = 0; i < n; i++) {
         int w = display_cols(names[i], (int)strlen(names[i]));
         if(w > maxw) maxw = w;
     }
-    colw = maxw + 2;
-    /* the last column never reaches the edge of the terminal */
-    ncols = width - 1 - ind - maxw >= 0 ? (width - 1 - ind - maxw) / colw + 1 : 1;
-    nrows = (n + ncols - 1) / ncols;
+    *colw = maxw + 2;
+    ncols = width - 1 - ind - maxw >= 0 ? (width - 1 - ind - maxw) / *colw + 1 : 1;
+    return (n + ncols - 1) / ncols;
+}
+
+int columns_rows(char *const *names, int n, int width, int indent) {
+    int colw;
+    return layout(names, n, width, indent, &colw);
+}
+
+void columns(char *const *names, int n, int width, const char *indent, const char *eol,
+             void (*put)(const char *s, int len)) {
+    int r, k, colw, ind = (int)strlen(indent), nrows = layout(names, n, width, ind, &colw);
     for(r = 0; r < nrows; r++) {
         put(indent, ind);
-        for(k = 0; k < ncols; k++) {
+        for(k = 0; ; k++) {                     /* down the columns: entry k * nrows + r */
             int at = k * nrows + r, pad;
             if(at >= n) break;
             put(names[at], (int)strlen(names[at]));

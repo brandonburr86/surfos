@@ -42,6 +42,7 @@ FILE *fopen(const char *path, const char *mode);    /* r w a r+ w+ a+ (b ignored
 FILE *fdopen(int fd, const char *mode);
 int fclose(FILE *f);
 int fflush(FILE *f);                                /* NULL: every stream */
+int fpurge(FILE *f);                                /* 10/6/26: what is buffered is dropped, the error cleared */
 int setvbuf(FILE *f, char *buf, int mode, size_t size);
 void setbuf(FILE *f, char *buf);
 

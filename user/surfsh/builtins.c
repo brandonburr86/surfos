@@ -11,10 +11,11 @@ redirected like a program's (run.c puts the file on descriptor 1).
     cd [dir]          no dir: /; "cd -": the previous directory (printed)
     pwd               the current directory
     echo [-n] [-e]    the words; -n: no newline; -e: \n \r \t \\ are the characters they name
-    exit [n]          leave with status n, 0 when it is not given
+    exit [n]          leave with status n (0-255, n & 255 as on Unix), 0 when it is not given
     help [command]    this shell's commands, the kernel's, the programs; or one of them
     history           the lines typed before, oldest first
-    set [key [value]] the settings (main.c); "set key = value" as surfsh.conf writes it
+    set [key [value]] the settings (main.c); also "set key = value" and "set key=value",
+                      as surfsh.conf writes them
 */
 
 #include "surfsh.h"
@@ -35,7 +36,7 @@ const struct builtin builtins[] = {
     { "history", "",              "the lines typed before (Up and Down recall them)", b_history },
     { "set",     "[key [value]]", "show or change the settings (set alone: all)", b_set },
     { "help",    "[command]",     "this list, or one command", b_help },
-    { "exit",    "[n]",           "leave surfsh with status n (0 when not given)", b_exit },
+    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit },
 };
 const int nbuiltins = sizeof(builtins) / sizeof(builtins[0]);
 
@@ -64,6 +65,10 @@ static int b_cd(int argc, char **argv) {
         }
         dir = oldpwd;
         back = 1;
+    }
+    if(strlen(dir) > WORD_LIMIT) {              /* the kernel would answer EFAULT */
+        fprintf(stderr, "surfsh: cd: a path of %u bytes: paths have at most %d\n", (unsigned)strlen(dir), WORD_LIMIT);
+        return STATUS_USAGE;
     }
     if(!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
     if(chdir(dir) < 0) {
@@ -114,12 +119,7 @@ static int b_echo(int argc, char **argv) {
         if(i < argc - 1) putchar(' ');
     }
     if(newline) putchar('\n');
-    if(fflush(stdout)) {                    /* a redirected echo on a full disk */
-        clearerr(stdout);
-        fprintf(stderr, "surfsh: echo: %s\n", strerror(errno));
-        return STATUS_FAIL;
-    }
-    return 0;
+    return 0;                               /* what a full disk does not take: run.c says so */
 }
 
 /**** exit, history, set ****/
@@ -139,7 +139,7 @@ static int b_exit(int argc, char **argv) {
         }
     }
     exit_requested = 1;                     /* the main loop ends after this command */
-    exit_code = (int)n;
+    exit_code = (int)(n & 0xff);            /* 0-255: init takes -1 for a shell that was killed */
     return 0;
 }
 
@@ -152,20 +152,30 @@ static int b_history(int argc, char **argv) {
     return history_print();
 }
 
+/* set, set key, set key value; with an = the words are "key = value" as surfsh.conf has them */
 static int b_set(int argc, char **argv) {
-    char why[120];
-    const char *value = argc == 3 ? argv[2] : argc == 4 && !strcmp(argv[2], "=") ? argv[3] : NULL;
+    char why[120], text[LINE_LIMIT + 1] = "", *key = argv[1], *value = argc == 3 ? argv[2] : NULL, *eq, *p;
+    int i;
     if(argc == 1) return settings_show(NULL), 0;
-    if(argc == 2) {
+    for(i = 1; i < argc; i++) {
+        strlcat(text, argv[i], sizeof(text));
+        if(i < argc - 1) strlcat(text, " ", sizeof(text));
+    }
+    if((eq = strchr(text, '='))) {
+        for(p = eq; p > text && (p[-1] == ' ' || p[-1] == '\t'); p--);
+        *p = 0;
+        for(value = eq + 1; *value == ' ' || *value == '\t'; value++);
+        key = text;
+    } else if(argc == 2) {
         if(settings_show(argv[1]) == 0) return 0;
         fprintf(stderr, "surfsh: set: no setting called %s (set alone lists them)\n", argv[1]);
         return STATUS_USAGE;
     }
-    if(!value) {
-        fprintf(stderr, "usage: set [key [value]]\n");
+    if(!value || !*key) {
+        fprintf(stderr, "usage: set [key [value]]   (or set key = value)\n");
         return STATUS_USAGE;
     }
-    if(settings_apply(argv[1], value, why, sizeof(why))) {
+    if(settings_apply(key, value, why, sizeof(why))) {
         fprintf(stderr, "surfsh: set: %s\n", why);
         return STATUS_USAGE;
     }
@@ -254,30 +264,34 @@ static int b_help(int argc, char **argv) {
         size = ttyctl(TTY_GETSIZE, 0);
         width = size > 0 ? (size >> 16) & 0xffff : 80;
         columns(names, n, width, "    ", "\n", put_stdout);
-        if(example) printf("    * a command of the same name runs first; %s/%s runs the program\n", PROGRAM_DIR, example);
+        if(example) printf("    * a command of this name runs first; %s/%s runs the program\n", PROGRAM_DIR, example);
         for(i = 0; i < n; i++) free(names[i]);
         free(names);
     }
     cands_free(&progs);
 
-    printf("\n    A line: words with blanks between them. \"double\" or 'single' quotes keep blanks\n"
-           "    and the characters below in a word, and a \\ keeps the character after it.\n"
+    printf("\n    A line: words with blanks between them. \"double\" or 'single' quotes keep\n"
+           "    blanks and the characters below in a word; a \\ keeps the next character.\n"
            "      cmd < file     the program reads the file\n"
            "      cmd > file     what cmd prints goes into the file, which starts empty\n"
            "      cmd >> file    ... is added at the end of the file\n"
-           "      cmd &          the program runs in the background\n"
+           "      cmd &          the program runs in the background; the first prompt\n"
+           "                     after it has ended says how it ended\n"
            "      cmd1 ; cmd2    one after the other\n"
            "      # comment      the rest of the line is not read\n"
-           "    There is no $ and no *: no variables and no wildcards, every word is as typed.\n"
-           "    Which command runs: surfsh's own, then the kernel's, then a program in %s;\n"
-           "    a name with a / is the path of a program.\n", PROGRAM_DIR);
-    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the line,\n"
-           "    ^K deletes to its end, ^W the word before the cursor; Up and Down: the history;\n"
-           "    Tab completes a command or a path, a second Tab lists the choices; ^L clears\n"
-           "    the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n");
-    printf("\n    The prompt shows the current directory and the wave; a ! after the wave says\n"
-           "    that the last command failed. set changes how it looks; %s\n"
-           "    is read at the start.\n", SURFSH_CONF);
+           "      $?             the status of the command before, as a number (also in\n"
+           "                     double quotes; '$?' is just the two characters)\n"
+           "    $? is the one expansion: no variables and no wildcards, * is just a star.\n"
+           "    Which command runs: surfsh's own, then the kernel's, then a program in\n"
+           "    %s; a name with a / is the path of a program.\n", PROGRAM_DIR);
+    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
+           "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
+           "    the history; Tab completes a command or a path, a second Tab lists the\n"
+           "    choices; ^L clears the screen, ^C drops the line, ^D on an empty line\n"
+           "    leaves surfsh.\n");
+    printf("\n    The prompt shows the current directory and the wave; a ! after the wave\n"
+           "    says that the last command failed. set changes how it looks;\n"
+           "    %s is read at the start.\n", SURFSH_CONF);
     printf("%s\n    (C)%s %s.\n\n", rule, SURFOS_YEARS, SURFOS_AUTHOR);
     return 0;
 }
