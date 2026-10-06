@@ -304,6 +304,25 @@ Each module: why, what exists, what to build, how to prove it, size
 * Prove: `cat /initrd/motd` and `ls /hda1` work; a file written by SurfOS is
   readable by `mdir`/`mcopy` on the host.
 
+**F2. Files on a USB stick** (done on `ai-dev`, emulation) - size XL - deps F1, P2, N3
+
+* Persistent storage on the laptop, whose internal disk SurfOS never touches: a USB
+  mass-storage driver (Bulk-Only Transport, SCSI, error recovery, unplugging while
+  mounted) on the xHCI stack of N3; a block layer that knows each device's bus and
+  refuses to repartition or format anything but USB drives and ramdisks, and never the
+  SurfOS boot drive; MBR and GPT tables (`lsblk`, `fdisk`, MBR by default); FAT32 that
+  macOS accepts (`mkfs`, rename, FSInfo, the clean-shutdown bit, UTF-8 long names) and
+  `mount [-r]`, `umount`, `eject`, `df`, all by hand; system calls 22-31, `libsurf` (a
+  small C library with POSIX `errno`), file programs, `sh` with redirection and `edit`, a
+  nano-like editor; a console grid that fills the screen, with raw mode and ANSI
+  sequences for the editor.
+* Prove: under OVMF, a blank 1 GB stick is partitioned and formatted by SurfOS, written
+  through the C library, `sh` and the editor, ejected, and then passes macOS `fsck_msdos`
+  and Linux `fsck.fat` with the files reading back on the host; a stick made by
+  `mkfs.fat` with long, accented and macOS-style names reads in SurfOS; the boot drive is
+  refused and mounts read-only (`make test-usb`, scenarios `usbdisk` and `storage`). On
+  the laptop: the same with a real stick, read afterwards on the Mac.
+
 ### Processes
 
 **P1. User mode and syscalls** (I8, I9) - size L - deps K1, K2, M2, S1
@@ -395,6 +414,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M6 Network** (done) | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
 | **M7 Laptop USB boot** (done: the owner booted it on the laptop, 2026-10-05; the hardware record is still to be filled in) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick; the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
 | **M8 Laptop network** (done: the owner reports the network works on the laptop, 2026-10-05; details still to be recorded) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
+| **M9 Files on a stick** (done under emulation, 2026-10-06; pending on the laptop) | F2 | `make test-usb` scenarios `usbdisk` and `storage` pass at -O0 and -O2; on the laptop a USB stick is partitioned, formatted, written with `edit`, ejected, and its files read on the Mac (`docs/USB-BOOT.md` section 9) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -414,9 +434,10 @@ plan, with the catalog IDs that build each one:
 | `kernel/sched/` | tasks, run queues, wait queues, locks | S1, S2 |
 | `mm/` | frames, VMM, heap | M1, M2, M3 |
 | `dev/` (was `driver/`) | driver model, PCI, serial, keyboard, console/tty, ATA, ramdisk, NIC | D1, D2, K4, C1, C2, N1 |
-| `fs/` | VFS, initrd, FAT | F1 |
+| `fs/` | VFS, initrd, FAT, mkfs | F1, F2 |
 | `net/` | ARP, IP, ICMP, UDP, DHCP, TCP | N2 |
 | `proc/` | syscalls, ELF loader, user memory | P1, P2 |
+| `user/` | `libsurf` (crt0, C library), programs, `sh`, `edit` | P2, F2 |
 | `lib/blibc/` | formatter, strings, user crt0 | K5, P2 |
 | `shell/` | command table, selftest | U1 |
 | `tools/`, `tests/` | QEMU runner, host unit tests, CI | T1 |
@@ -426,11 +447,22 @@ plan, with the catalog IDs that build each one:
 
 M7 and M8 are reported working on the IdeaPad; their tables in
 `docs/hardware/ideapad-3-15iil05.md` (adapter model, `lsusb`, `dhcp`, `ping` output) are
-still to be filled in. After that, in the order the laptop
-needs them (each its own milestone): USB hub support (docks and multi-port dongles), the
-controller's interrupt through MSI (lower latency than the 10 ms poll), USB mass storage
-and a USB HID keyboard on the same stack, AHCI or NVMe for the internal disk (identify the
-controller first, add GPT partitions), and the actual Wi-Fi chip.
+still to be filled in. M9 is done under emulation and waits for a USB stick on the
+laptop (`docs/USB-BOOT.md` section 9, the storage rows of the hardware record).
+
+The storage work left these open, smallest first: the busy check of `umount` and `eject`
+sees only the asking task's current directory (it should look at every task's);
+UTF-8 on the console, so names with accents can be shown and typed (they are stored
+correctly); `fdisk add` of logical partitions; one cache identity for a disk and its
+partitions (today a block reached both ways is cached twice); FAT12 in `mkfs`; exFAT,
+which larger sticks are sold with (deferred by the owner, October 2026); floating point in
+`printf`; and a 64-bit `time_t` before 2038.
+
+After that, in the order the laptop needs them (each its own milestone): USB hub
+support (docks and multi-port dongles), the controller's interrupt through MSI (lower
+latency than the 10 ms poll), a USB HID keyboard on the same stack, AHCI or NVMe for the
+internal disk (identify the controller first; the block layer refuses to format internal
+disks, and that rule stays), and the actual Wi-Fi chip.
 
 The six earlier milestones are done. What remains there is polish and the items the catalog left open:
 a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control

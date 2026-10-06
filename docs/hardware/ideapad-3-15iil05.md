@@ -22,7 +22,7 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Graphics | Intel UHD Graphics (in the CPU) | **unknown**: `lspci` (class 03) |
 | Panel | 15.6", 1366x768 or 1920x1080 | **unknown**: `bootinfo` shows the framebuffer mode |
 | Memory | DDR4-2666, soldered plus one SO-DIMM | **unknown**: `memstat` |
-| Storage | SATA 2.5" and/or PCIe NVMe M.2 | **unknown**: `lspci` (class 01); SurfOS never touches it |
+| Storage | SATA 2.5" and/or PCIe NVMe M.2 | **unknown**: `lspci` (class 01); SurfOS has no driver for it and never touches it. Files go on a USB stick (**record its make, model and size**) |
 | Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | Wi-Fi not used by SurfOS; wired network through a **USB Ethernet adapter** (CDC ECM/NCM, e.g. RTL8153): **record the adapter and its `lsusb` line** |
 | USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
 | Keyboard | built-in, behind the embedded controller | **unknown**: `drivers` shows whether the 8042 answered |
@@ -56,6 +56,11 @@ chosen automatically, and each fallback was exercised under QEMU.
 | How long the adapter's USB 3 link takes to train | up to 1 s, then a warm reset; a device that appears later is set up by the `usb` thread | QEMU's USB 3 ports come up at once (not exercised) |
 | What else is on the USB ports (webcam, Bluetooth, the SurfOS drive) | each is given an address and named; none gets a driver; hubs are reported as not supported | the SurfOS drive itself in every UEFI test |
 | Which network adapter, and which configuration it offers | the first configuration with a CDC ECM function, else NCM (an RTL8153's second configuration) | QEMU's usb-net (RNDIS first, ECM second) in `usbnet`; RTL8153- and NCM-shaped descriptors in `tests/host/test_usb.c` |
+| Which USB stick, and how well it follows the SCSI commands | the common subset (INQUIRY, TEST UNIT READY, READ CAPACITY 10 then 16, READ/WRITE 10, MODE SENSE for the write-protect switch, SYNCHRONIZE CACHE); a failed command is followed by REQUEST SENSE, a stuck stick gets a Bulk-Only reset and endpoint resets; a stick that is not ready yet is asked ten times over a second, then every two seconds by the `usb` thread | QEMU's usb-storage (`usbdisk`, `storage`); the error paths by code review only |
+| The stick's sector size | 512-byte sectors only; any other size is refused with a `+USB:` message, never misread | not exercised: QEMU's sticks have 512-byte sectors |
+| Which USB port the firmware numbers first, so which drive is usb0 | the SurfOS drive is recognised by its volume label SURFOSUSB, never by its number; `fdisk` and `mkfs` refuse it and it mounts read-only | every UEFI test; `storage` (the refusals, the read-only mount) |
+| Whether SurfOS can reach an internal disk | no AHCI or NVMe driver, so not on this laptop; an ATA disk, where one is found, is `internal: never formatted` | `make test-all`: QEMU's IDE disk is refused by `fdisk` and `mkfs` |
+| A stick pulled out while mounted | the device is marked gone and its blocks are dropped; its mounts stay until `umount`; the next mount warns that it was not unmounted cleanly | `usbdisk`: unplugged while mounted, plugged in again |
 
 ## Evidence
 
@@ -104,6 +109,24 @@ SuperSpeed storage device and a full-speed network device. Intel's controller di
 (64-byte contexts, scratchpad pages, the firmware handshake, slower USB 3 links): those
 paths are written to the specification but only the laptop can exercise them.
 
+### Emulator results for USB storage (2026-10-06)
+
+The same firmware and machine with two more sticks on the xHCI controller: a blank 1 GB
+one and a 64 MB FAT32 one made by `mkfs.fat` and `mcopy` (long, accented and
+macOS-style names, three folders deep, a 1 MB file). Host checks: macOS 15.1.1
+`fsck_msdos -n` through `hdiutil attach -nomount -readonly`, `fsck.fat -n` from dosfstools
+4.2 (Debian, in the devenv container), and the FAT32 reader of `tools/mkusb.py`.
+
+| Check | Result |
+|---|---|
+| `make unittest` | blibc 45, boot information 50, framebuffer 51, USB 57, partitions 143, partition tools 33, C library 195, mkfs 115 checks: all pass |
+| `make test-all` | 140/140 at -O0 and -O2 (lsblk, fdisk, mkfs, mount, eject and the user programs on QEMU's IDE disk and a scratch ramdisk) |
+| `make test-usb` | 202/202 at -O0 and -O2, 11 cold boots each: the eight above, plus `fullhd` (1920x1080: a 120x33 grid, lines past 80 columns, the ANSI sequences the editor draws with, F1/F2), `usbdisk` (a FAT16 stick at boot and plugged in later, unplugged while mounted) and `storage` (39 checks: the boot drive refused and mounted read-only; the foreign stick read; the blank stick partitioned, formatted, written through `fstest`, `sh`, `mv` and the editor, ejected; then `fsck_msdos` and `fsck.fat` find no errors on either stick and the files read back on the host) |
+
+QEMU's sticks answer every command at once and never stall. Real flash drives are slower,
+some answer "not ready" for a while after being plugged in, and a few get commands wrong:
+only the laptop can show how a given stick behaves.
+
 ### Physical laptop
 
 **2026-10-05: the owner reports that the USB image boots SurfOS on the laptop.** No
@@ -143,6 +166,14 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | `ifconfig` with the cable in; `dhcp`; `ping` the router; `ping example.com` | |
 | `httpget example.com 80 /`; `selftest` | |
 | Adapter unplugged and plugged in again: messages, `ifconfig`, `ping` | |
+| Text on the screen: the `bootinfo` framebuffer line (`… text at scale …`); does it fill the screen? | |
+| USB stick: make, model, size; its `+USB: usbN: …` line; `lsblk` | |
+| `fdisk usbN new mbr`, `fdisk usbN add`, `mkfs usbNp1 LABEL`: output | |
+| `mount usbNp1 /data`, `run fstest /data`, `df` | |
+| `edit /data/notes.txt`: typing, arrows, Ctrl+S, Ctrl+Q; `cat /data/notes.txt` | |
+| `readbench usbN 16` and `fsbench /data 16`: the speeds | |
+| `eject usbN`; then on the Mac: the files there? *Disk Utility* → *First Aid* result | |
+| A file written on the Mac, read in SurfOS after `mount` | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,

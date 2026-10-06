@@ -5,6 +5,14 @@ IdeaPad 3 15IIL05 from a USB drive and reaches the network through a USB Etherne
 adapter. This brief adds stateful files: a second USB drive (a data stick, never the
 boot drive) holds a FAT32 file system that both SurfOS and macOS can read and write.
 
+**Status, 2026-10-06:** phases 1 to 5 are done on `ai-dev` and pass under emulation
+(`make test-usb` scenarios `usbdisk` and `storage`, with macOS `fsck_msdos` and `fsck.fat`
+checking the sticks); the test on the laptop is pending. The user guide is
+[USB-BOOT.md section 9](../../USB-BOOT.md#9-files-on-a-usb-stick), the design
+[ARCHITECTURE.md section 16](../../ARCHITECTURE.md). The device names below were written
+before the code: drives are named in the order they are found, so with the boot drive as
+`usb0` (as in the tests) a data stick is `usb1`.
+
 ## Decisions (the owner's)
 
 | Question | Decision |
