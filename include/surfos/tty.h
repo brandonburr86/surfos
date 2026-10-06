@@ -55,6 +55,7 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the p
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */
 void tty_flush(struct tty *t);
 u_int tty_room(struct tty *t);          /* 10/6/26: how many more keys the input queue takes */
+int tty_queued(struct tty *t);          /* 10/6/26: a key is waiting to be read (poll) */
 
 /* line discipline: echo, backspace, Ctrl-U, Ctrl-C, Up/Down history; returns the length.
    10/6/26: -1 and an empty line when the reader's call is cut short (surfos/task.h) */

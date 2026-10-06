@@ -59,6 +59,7 @@ int pty_out(surf_console *con, const char *s, u_int n, int how) {
     return 1;
 }
 void pty_task_gone(struct surf_task *task) { (void)task; }
+void poll_wake(void) {}
 
 int framebuffer_init(void) { return 0; }
 void framebuffer_bind(const u8 *cells) { (void)cells; }

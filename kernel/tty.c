@@ -30,6 +30,7 @@ console switching stay with F1-F4.
 #include <sys/serial.h>
 #include <sys/cp437.h>
 #include <surfos/proc.h>
+#include <fs/vfs.h>
 #include <blibc_common.h>
 
 struct tty ttys[NUM_TTYS];      /* 10/6/26: F1-F4, then the pseudo-terminals' */
@@ -93,6 +94,7 @@ void tty_input(struct tty *t, u_char c) {
     }
     irq_restore(flags);
     wake_up(&t->readers);
+    poll_wake();                        /* 10/6/26: poll() on the console (fs/devfs.c) */
 }
 
 /* several bytes that belong together (an escape sequence): all of them or none */
@@ -109,6 +111,7 @@ static void input_seq(struct tty *t, const char *s) {
     }
     irq_restore(flags);
     wake_up(&t->readers);
+    poll_wake();
 }
 
 /* 10/6/26: a byte from a terminal at the other end of a line: the serial port (driver/serial.c),
@@ -243,6 +246,11 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
 /* 10/6/26: how many more keys the input queue takes (a pty's master waits for room, kernel/pty.c) */
 u_int tty_room(struct tty *t) {
     return (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
+}
+
+/* 10/6/26: is a key waiting to be read? (poll() on the console, fs/devfs.c) */
+int tty_queued(struct tty *t) {
+    return t->in_head != t->in_tail;
 }
 
 void tty_flush(struct tty *t) {

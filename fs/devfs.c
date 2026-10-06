@@ -8,12 +8,15 @@ so a program's descriptors 0, 1 and 2 are ordinary open files.
 
 10/6/26: devfs_is_console() tells a kernel command run by the user shell
 (SYS_kcmd) whether descriptor 1 is the console or a redirection.
+10/6/26: poll() (surfos/poll.h): the console is ready to read when its tty
+has a key queued; the others are always ready.
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/task.h>
 #include <surfos/tty.h>
+#include <surfos/poll.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
@@ -72,7 +75,15 @@ static int dev_readdir(struct vnode *dir, u_int index, struct dirent *de) {
     return 0;
 }
 
-static const struct vnode_ops dev_vops = { dev_lookup, dev_readdir, dev_read, dev_write, NULL, NULL, NULL, NULL };
+/* 10/6/26: the console (the polling task's tty) has keys queued, or not; the rest are always ready */
+static int dev_poll(struct vnode *v, struct file *f) {
+    (void)f;
+    if(v->ino == DEV_CONSOLE || v->ino == DEV_TTY)
+        return (tty_queued((curTask && curTask->tty) ? curTask->tty : tty_active) ? POLLIN : 0) | POLLOUT;
+    return POLLIN | POLLOUT;
+}
+
+static const struct vnode_ops dev_vops = { dev_lookup, dev_readdir, dev_read, dev_write, NULL, NULL, NULL, NULL, NULL, dev_poll };
 
 /* is f /dev/console or /dev/tty (the calling task's console)? */
 bool devfs_is_console(const struct file *f) {
