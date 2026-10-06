@@ -89,17 +89,21 @@ static void exit_with_arg(void *arg) {
 }
 
 static void test_tasks(void) {
-    u_int before = task_count(), i, collected = 0;
+    u_int before = task_count(), i, n, collected = 0, others = task_child_count();
+    u_long pids[64];
     int status = 0;
     surf_task *t;
 
-    for(i = 0; i < 64; i++) {
-        t = kthread_create("churn", exit_with_arg, (void *)(u_long)i, PL_NORMAL, 0);
+    /* 10/6/26: the user shell runs this in its own task, which may have programs of its own in
+       the background: wait for these children by pid, never for any */
+    for(n = 0; n < 64; n++) {
+        t = kthread_create("churn", exit_with_arg, (void *)(u_long)n, PL_NORMAL, 0);
         if(!t) break;
+        pids[n] = t->pid;
     }
-    check(i == 64, "64 kthreads created");
-    for(i = 0; i < 64; i++) {
-        if(task_wait(WAIT_ANY, &status) < 0) break;
+    check(n == 64, "64 kthreads created");
+    for(i = 0; i < n; i++) {
+        if(task_wait(pids[i], &status) < 0) break;
         collected++;
     }
     check(collected == 64, "all 64 collected by task_wait");
@@ -112,7 +116,8 @@ static void test_tasks(void) {
     } else {
         check(false, "exit code 42 reaches task_wait");
     }
-    check(task_wait(WAIT_ANY, &status) == -1, "task_wait with no children returns -1");
+    if(!others) check(task_wait(WAIT_ANY, &status) == -1, "task_wait with no children returns -1");
+    else check(task_child_count() == others, "the caller's own children are left alone");
 }
 
 /**** sleep and timers ****/

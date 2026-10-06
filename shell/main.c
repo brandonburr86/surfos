@@ -467,7 +467,7 @@ static int cmd_cat(int argc, char **argv) {
             int j;
             for(j = 0; j < r; j++) {
                 u_char c = (u_char)buf[j];
-                if(c == '\n' || c == '\t' || (c >= 32 && c < 127)) printf("%c", c);
+                if(c == '\n' || c == '\t' || (c >= 32 && c < 127) || c >= 0x80) printf("%c", c);  /* 10/6/26: UTF-8 too */
                 else if(c != '\r') printf(".");
                 last = c;
             }
