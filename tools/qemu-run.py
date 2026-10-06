@@ -950,8 +950,14 @@ class Telnet:
     the IAC sequences taken out (IAC IAC is the byte 255); self.raw has everything as it came. Return is
     sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
 
-    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10):
-        self.sock = socket.create_connection((host, port), timeout=timeout)
+    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
+        if rcvbuf:                              # a small window, for a client that stops reading
+            self.sock = socket.socket()
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            self.sock.settimeout(timeout)
+            self.sock.connect((host, port))
+        else:
+            self.sock = socket.create_connection((host, port), timeout=timeout)
         self.cols, self.rows = cols, rows
         self.raw, self.data = b'', b''
         self.cursor, self.more_at, self.auto_more = 0, 0, True
