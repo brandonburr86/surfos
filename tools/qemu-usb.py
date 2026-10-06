@@ -75,7 +75,17 @@ import zlib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FONT_C = os.path.join(REPO, 'driver', 'font8x16.c')
-PROMPT = 'SurfOS*>'
+# The shell's prompt: the ring-0 shell's "SurfOS*> " of old, or the SurfOS prompt (10/6/26,
+# shell/prompt.c): breadcrumbs, the wave (~ in ASCII), a state character, "> ", with colour
+# sequences in between when the shell colours it. The space after ">" is not required: a
+# console repainted on the serial terminal (F1-F4) ends its rows at their last character. Vm.expect() takes the compiled pattern;
+# PROMPT_TEXT finds it in text without escape sequences, PROMPT_ROW at the end of a screen row.
+_SGR = rb'(?:\x1b\[[0-9;]*m)*'
+PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR + rb'>')
+PROMPT_TEXT = re.compile(r'SurfOS\*>|(?:\u224b|~)[!#@?]?>')
+PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>)$')
+# the pager's question after a screenful (TTY_MORE in include/surfos/tty.h): answered with Space
+MORE = b'--More--'
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kernel panic', 'BOOT PROBLEM']
 
 # (command, strings that must appear before the next prompt) - over the serial console
@@ -312,6 +322,7 @@ class Vm:
                                      stderr=subprocess.STDOUT)
         self.mon = Monitor(self.mon_path, self.proc)
         self.ser, self.transcript, self.cursor = None, b'', 0
+        self.more_at, self.auto_more = 0, True
         if serial:
             self.ser = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.ser.connect(ser_path)
@@ -330,20 +341,37 @@ class Vm:
                 d = self.ser.recv(65536)
                 if d:
                     self.transcript += d
+                    self.answer_more()
             except BlockingIOError:
                 pass
+
+    def answer_more(self):
+        """the pager waits for a key after a screenful: Space, unless a test turned this off"""
+        while self.auto_more:
+            i = self.transcript.find(MORE, self.more_at)
+            if i < 0:
+                return
+            self.more_at = i + len(MORE)
+            self.ser.sendall(b' ')
 
     def text(self):
         return strip_ansi(self.transcript.decode(errors='replace').replace('\r', ''))
 
     def expect(self, needle, timeout):
-        n = needle.encode()
+        """wait for needle (a string, or a compiled bytes pattern such as PROMPT) after the last match"""
         deadline = time.time() + timeout
         while True:
-            i = self.transcript.find(n, self.cursor)
-            if i >= 0:
-                self.cursor = i + len(n)
-                return True
+            if isinstance(needle, re.Pattern):
+                m = needle.search(self.transcript, self.cursor)
+                if m:
+                    self.cursor = m.end()
+                    return True
+            else:
+                n = needle.encode()
+                i = self.transcript.find(n, self.cursor)
+                if i >= 0:
+                    self.cursor = i + len(n)
+                    return True
             if time.time() > deadline or self.proc.poll() is not None:
                 return False
             self.pump(0.1)
@@ -433,12 +461,16 @@ def ansi_ok(scr):
             scr.colours[(9, 3)] == (YELLOW, BLUE))
 
 
+def ends_prompt(row):
+    return PROMPT_ROW.search(row.rstrip()) is not None
+
+
 def prompt_on(scr):
-    return any(r.rstrip().endswith(PROMPT) for r in scr.rows)
+    return any(ends_prompt(r) for r in scr.rows)
 
 
 def last_prompt_row(scr):
-    rows = [i for i, r in enumerate(scr.rows) if r.rstrip().endswith(PROMPT)]
+    rows = [i for i, r in enumerate(scr.rows) if ends_prompt(r)]
     return rows[-1] if rows else -1
 
 
@@ -514,7 +546,8 @@ def scenario_serial(args, image, firmware, outdir):
         if boot_serial(vm, results, args.boot_timeout):
             vm.pump(1)
             scr = vm.screen('boot.png')
-            serial_boot = vm.text()[:vm.text().find(PROMPT) + len(PROMPT)]
+            m = PROMPT_TEXT.search(vm.text())
+            serial_boot = vm.text()[:m.end()] if m else vm.text()
             results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
             # the last boot lines on the serial port must be the last ones on the screen too
             want = [l.strip() for l in serial_boot.splitlines() if l.strip()][-6:]
@@ -549,7 +582,7 @@ def scenario_keyboard(args, image, firmware, outdir):
 
             def done(s):
                 text = s.text()
-                return all(e in text for e in expects) and last_prompt_row(s) >= 0 and s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT) and text != before.text()
+                return all(e in text for e in expects) and last_prompt_row(s) >= 0 and ends_prompt(s.rows[last_prompt_row(s)]) and text != before.text()
             got = vm.wait_screen(done, 60, interval=0.5)
             results.append((f'keyboard: {keys.strip()!r} shows {expects}', got is not None))
         # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them, F5 nothing
@@ -558,7 +591,7 @@ def scenario_keyboard(args, image, firmware, outdir):
         if ok:
             vm.keys('<up><bs>\n<f5>xq')
             ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 78 71' in s.text() and
-                                s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT), 30, interval=0.5) is not None
+                                ends_prompt(s.rows[last_prompt_row(s)]), 30, interval=0.5) is not None
         results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter', ok))
         # console switching: F2 shows another shell, F1 comes back
         vm.keys('<f2>')
@@ -590,7 +623,7 @@ def scenario_fullhd(args, image, firmware, outdir):
             extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
 
     def at_prompt(s):
-        return last_prompt_row(s) >= 0 and s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT)
+        return last_prompt_row(s) >= 0 and ends_prompt(s.rows[last_prompt_row(s)])
 
     def typed(keys, test, timeout=60):
         vm.keys(keys)
@@ -604,7 +637,7 @@ def scenario_fullhd(args, image, firmware, outdir):
         vm.screen('boot.png')
         results.append(('1920x1080: 120x33 cells at scale 2, 12-pixel margins above and below, the prompt at the left edge',
                         (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 2, 120, 33, 0, 12)
-                        and scr.rows[last_prompt_row(scr)].startswith(PROMPT)))
+                        and not scr.rows[last_prompt_row(scr)].startswith(' ')))
         got = typed('bootinfo\n', lambda s: '120x33 text at scale 2' in s.text())
         results.append(('bootinfo: framebuffer 1920x1080, 120x33 text at scale 2', got is not None))
         # a line longer than 80 columns: typed past the end of the row (the line editor wraps it),
@@ -1093,7 +1126,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
             ok = vm.expect(message, args.boot_timeout)
             results.append((f'without {path} the boot stops with "{message}"', ok))
             vm.pump(3)
-            results.append(('and SurfOS does not start', PROMPT not in vm.text()))
+            results.append(('and SurfOS does not start', not PROMPT_TEXT.search(vm.text())))
             vm.screen('grub-error.png')
         finally:
             vm.close()

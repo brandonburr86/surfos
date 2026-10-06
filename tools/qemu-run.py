@@ -24,7 +24,14 @@ import sys
 import tempfile
 import time
 
-PROMPT = 'SurfOS*>'
+# The shell's prompt: the ring-0 shell's "SurfOS*> " of old, or the SurfOS prompt (10/6/26,
+# shell/prompt.c): breadcrumbs, the wave (~ in ASCII), a state character, "> ", with colour
+# sequences in between when the shell colours it. The space after ">" is not required: a
+# console repainted on the serial terminal (F1-F4) ends its rows at their last character. expect() takes the compiled pattern.
+_SGR = rb'(?:\x1b\[[0-9;]*m)*'
+PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR + rb'>')
+# the pager's question after a screenful (TTY_MORE in include/surfos/tty.h): answered with Space
+MORE = b'--More--'
 # fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
 CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
 
@@ -285,6 +292,7 @@ class Qemu:
         self.ser.setblocking(False)
         self.transcript = b''
         self.cursor = 0
+        self.more_at, self.auto_more = 0, True
 
     def _connect(self, path, timeout=10):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -325,16 +333,33 @@ class Qemu:
                 return
             if data:
                 self.transcript += data
+                self.answer_more()
+
+    def answer_more(self):
+        """the pager waits for a key after a screenful: Space, unless a test turned this off"""
+        while self.auto_more:
+            i = self.transcript.find(MORE, self.more_at)
+            if i < 0:
+                return
+            self.more_at = i + len(MORE)
+            self.ser.sendall(b' ')
 
     def expect(self, text, timeout=10):
-        """wait until text shows up in serial output after the previous match"""
-        needle = text.encode()
+        """wait until text (a string, or a compiled bytes pattern such as PROMPT) shows up in
+        serial output after the previous match"""
         deadline = time.time() + timeout
         while True:
-            i = self.transcript.find(needle, self.cursor)
-            if i >= 0:
-                self.cursor = i + len(needle)
-                return True
+            if isinstance(text, re.Pattern):
+                m = text.search(self.transcript, self.cursor)
+                if m:
+                    self.cursor = m.end()
+                    return True
+            else:
+                needle = text.encode()
+                i = self.transcript.find(needle, self.cursor)
+                if i >= 0:
+                    self.cursor = i + len(needle)
+                    return True
             if time.time() > deadline or not self.alive():
                 return False
             self.pump(0.1)
