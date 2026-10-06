@@ -166,6 +166,15 @@ static void mutex_worker(void *arg) {
 static void test_mutex_fn(void) {
     surf_task *a, *b;
     int status;
+    u_int held = curTask->mutexes;      /* 10/6/26: the count the pager asks (kernel/sync.c) */
+    bool ok;
+    mutex_lock(&test_mutex);
+    ok = curTask->mutexes == held + 1;
+    ok = ok && !mutex_trylock(&test_mutex) && curTask->mutexes == held + 1;
+    mutex_unlock(&test_mutex);
+    ok = ok && curTask->mutexes == held && mutex_trylock(&test_mutex) && curTask->mutexes == held + 1;
+    mutex_unlock(&test_mutex);
+    check(ok && curTask->mutexes == held, "a task counts its mutexes: lock, a failed trylock, trylock, unlock");
     shared_counter = 0;
     a = kthread_create("mutexA", mutex_worker, NULL, PL_NORMAL, 0);
     b = kthread_create("mutexB", mutex_worker, NULL, PL_NORMAL, 0);
