@@ -33,6 +33,7 @@ void init_tty(void) {
         ttys[i].index = i;
         ttys[i].con = &conArray[i];
         wq_init(&ttys[i].readers);
+        wq_init(&ttys[i].page_waiters);
     }
     tty_active = &ttys[0];
 }
@@ -115,11 +116,40 @@ int tty_getc(struct tty *t) {
             return c;
         }
         if(curTask && curTask != idle_task && !in_interrupt()) {
+            /* 10/6/26: a task at the pager's question (console.c) goes on without a key: the
+               keys are this reader's now */
+            if(t->con->page_asker && t->con->page_asker != curTask) console_page_call_off(t->con);
             wait_prepare(&t->readers);   /* enqueued before interrupts come back: no lost wakeup */
             irq_restore(flags);
             yield();
         } else {
             irq_restore(flags);          /* boot code or an ISR: nothing to switch to */
+        }
+    }
+}
+
+/* 10/6/26: the pager's question (console.c): a key, or -1 once *cancel is set. Whoever sets
+   it wakes this task (console_page_call_off()). It is no read of the terminal: the
+   screenful is the pager's own business. */
+int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
+    for(;;) {
+        u_long flags = irq_save();
+        if(*cancel) {
+            irq_restore(flags);
+            return -1;
+        }
+        if(t->in_tail != t->in_head) {
+            int c = t->inq[t->in_tail];
+            t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+            irq_restore(flags);
+            return c;
+        }
+        if(curTask && curTask != idle_task && !in_interrupt()) {
+            wait_prepare(&t->readers);
+            irq_restore(flags);
+            yield();
+        } else {
+            irq_restore(flags);
         }
     }
 }

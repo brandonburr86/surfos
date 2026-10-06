@@ -40,6 +40,7 @@ typedef struct surf_point {
 } surf_point;
 
 #define ESC_PARAMS 8
+#define PAGE_ASK_MAX 64             /* 10/6/26: the cells the pager's question covers, at most (TTY_MORE is 63) */
 
 typedef struct surf_console {
     TEXTCOLOR txtColor;
@@ -58,10 +59,14 @@ typedef struct surf_console {
     struct surf_task *ansi_owner; /* who changed the colours or hid the cursor; reset when it ends */
     /* 10/6/26: the pager (TTY_PAGE, tty.h); all zero is "not paging" */
     struct surf_task *page_owner; /* the task that asked: what it and its descendants print is paged */
-    struct surf_task *page_asker; /* the task waiting at the question, while it is shown */
+    struct surf_task *page_asker; /* the task waiting at the question */
     u_int page_rows;            /* rows started since this screenful began */
     u_char page_fresh;          /* nothing drawn on the cursor's row since it started */
     u_char page_drop;           /* q: what the paged tasks print is dropped */
+    u_char page_cancel;         /* the asker's wait is called off: paging ended or changed hands, or another task reads */
+    u_char page_shown;          /* the question is on the screen, at the start of row page_y */
+    u_char page_y, page_len;
+    u_char page_saved[2 * PAGE_ASK_MAX];  /* the cells it covers */
 } surf_console;
 
 void sscroll(surf_console *con);
@@ -105,6 +110,7 @@ void console_capture_end(void);
 void console_page_start(surf_console *con, struct surf_task *owner);  /* a new screenful; NULL ends paging */
 void console_page_read(surf_console *con);   /* the terminal was read: a new screenful, nothing dropped */
 int console_paging(surf_console *con);       /* is what the current task prints there paged? */
+void console_page_call_off(surf_console *con);  /* interrupts off: the task at the question goes on without a key */
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */
 
 extern surf_console *conActive;

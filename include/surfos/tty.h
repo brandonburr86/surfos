@@ -31,6 +31,7 @@ struct tty {
     u_long dropped;                     /* input bytes lost to a full queue */
     volatile int raw;                   /* TTY_RAW (tty_ctl): read by the keyboard and serial ISRs */
     struct surf_task *raw_owner;        /* the task that set it; raw mode ends with that task */
+    wait_queue_t page_waiters;          /* 10/6/26: paged tasks waiting while another one is at --More-- */
 };
 
 extern struct tty ttys[NUM_CONSOLES];
@@ -42,6 +43,7 @@ struct tty *tty_for_console(surf_console *con);
 /* input side (interrupt handlers call tty_input) */
 void tty_input(struct tty *t, u_char c);
 int tty_getc(struct tty *t);            /* blocks; 0-255 */
+int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the pager: -1 once *cancel is set */
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */
 void tty_flush(struct tty *t);
 

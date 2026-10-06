@@ -413,6 +413,100 @@ static void t_utf8_writers(void) {
     check(!strcmp(r, "ab\x10!\x82"), "UTF-8 per writer: ▸ split by another task and é split by an interrupt both come out whole");
 }
 
+/* the other order: a task that starts to wait for a key calls the question off */
+static void t_question_then_reader(void) {
+    int st;
+    reset(0);
+    st = paged_lines(1, 30);
+    check(st == BLOCKED && asker() == CHILD, "a command waits at --More--");
+    st = run(BG, w_getc, 0, 0);             /* then the shell, say, waits for a key at its prompt */
+    check(st == BLOCKED && sim_readers() == 1 && !sim_on_list(CHILD), "a reader comes: the question is called off");
+    st = resume(CHILD);
+    check(st == DONE && asker() < 0 && !screen_has("--More--") && screen_has("line 030"),
+          "the asker goes on as after Space, and with the reader there it does not ask again");
+    sim_input('k');
+    resume(BG);
+    check(got_key == 'k', "the next key is the reader's");
+}
+
+/* paging ends, or its owner: a descendant's question is called off */
+static void t_question_owner_gone(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    run(SHELL, w_page, 0, 0);               /* the shell's command ended: TTY_PAGE 0 */
+    check(!sim_on_list(CHILD), "TTY_PAGE 0 from the owner calls a descendant's question off");
+    say(SHELL, "SURF > ");
+    check(!screen_has("--More--") && screen_has("SURF >"), "the prompt after it is not glued to the question");
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 030") && !screen_has("--More--"), "and the background task goes on, unpaged");
+
+    reset(0);
+    paged_lines(1, 30);
+    sim_task_gone(SHELL);
+    check(!sim_on_list(CHILD) && owner() < 0, "the owner's end calls the question off");
+    st = resume(CHILD);
+    check(st == DONE && screen_has("line 030"), "and the asker goes on");
+}
+
+/* while one task is at the question, another paged one waits for the answer */
+static void t_waiting_for_the_answer(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    st = run(GRAND, w_lines, 101, 130);
+    check(st == BLOCKED && asking_after(24), "a paged grandchild waits while its parent is at --More--; the question stays");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && !sim_on_list(GRAND), "after Space the asker goes on, and the waiting task is woken");
+    st = resume(GRAND);
+    check(st == BLOCKED && asker() == GRAND && screen_has("line 118") && !screen_has("line 119"),
+          "then it prints, paged with the rest: it asks in its turn");
+    sim_input(' ');
+    st = resume(GRAND);
+    check(st == DONE && screen_has("line 130"), "and finishes");
+}
+
+/* anyone else who prints takes the question away; it comes back after their newline */
+static void t_question_gives_way(void) {
+    char r[256], ser[4096];
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    sim_serial(ser, sizeof(ser));
+    say(USB, "+USB: port 3: unplugged\n");
+    sim_serial(ser, sizeof(ser));
+    row(23, r);
+    check(!strcmp(r, "+USB: port 3: unplugged") && !strncmp(ser, "\r\033[K+USB: port 3: unplugged\r\n\r\033[7m--More--", 41),
+          "another task's line: the question gives way (CR ESC[K), then comes back on the next row");
+    sim_row(24, r, &st);
+    check(!strncmp(r, "--More--", 8) && st == 0x70, "the question is on the last row again");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && !screen_has("--More--") && screen_has("line 030"), "Space: the asker goes on");
+
+    reset(0);
+    paged_lines(1, 30);
+    sim_set_in_irq(1);
+    sim_kprintf_line("an interrupt handler's line\n");
+    sim_set_in_irq(0);
+    row(23, r);
+    check(!strcmp(r, "an interrupt handler's line") && asker() == CHILD && sim_cell(0, 24) == '-',
+          "an interrupt handler's line: the same");
+
+    reset(0);
+    paged_lines(1, 30);
+    st = run(GRAND, w_lines, 101, 102);     /* waiting for the answer */
+    sim_task_gone(CHILD);                   /* the asker is killed */
+    check(asker() < 0 && !screen_has("--More--") && !sim_on_list(GRAND), "an asker killed at the question takes it away, and wakes who waited");
+    run(SHELL, w_page, 0, 0);
+    say(SHELL, "[pid 3 killed]\n");
+    row(23, r);
+    check(!strcmp(r, "[pid 3 killed]"), "the next line goes where the question was");
+    st = resume(GRAND);
+    check(st == DONE && screen_has("line 102"), "and the waiting task prints");
+}
+
 static void t_caps(void) {
     reset(0);
     check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
@@ -432,6 +526,10 @@ int main(void) {
     t_interrupt_rows();
     t_owner();
     t_utf8_writers();
+    t_question_then_reader();
+    t_question_owner_gone();
+    t_waiting_for_the_answer();
+    t_question_gives_way();
     t_caps();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
