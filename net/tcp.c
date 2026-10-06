@@ -24,6 +24,12 @@ its FIN and finishes on its own (an orphan, given 30 seconds at most). Whatever
 changes what a socket is ready for also wakes poll() (poll_wake()). A listening
 socket conflicts only with another listening one on its port, so a server can
 listen again while its old connections finish.
+
+10/6/26 (review of the above): a connection that dies during its handshake
+leaves its listener's backlog at once, and a SYN finding the backlog full takes
+the place of a half-open one (a SYN scan or flood cannot make a listener deaf).
+A FIN behind data that did not fit is not taken; segments are cut to the other
+end's MSS.
 */
 
 #include <surfos/types.h>
@@ -42,8 +48,10 @@ listen again while its old connections finish.
 #define TCP_SOCKETS 16                  /* 10/6/26: 8 before the telnet server */
 #define TCP_BUF 8192
 #define TCP_MSS 1460
+#define TCP_MIN_MSS 64                  /* 10/6/26: the smallest MSS of the other end's taken */
 #define TCP_RTO (HZ)                    /* ticks */
 #define TCP_MAX_RETRIES 8
+#define TCP_SYNACK_RETRIES 4            /* 10/6/26: a half-open connection gives up after about 10 s */
 #define TCP_TIME_WAIT (2 * HZ)
 #define TCP_BACKLOG 4
 #define TCP_ORPHAN_LIFE (30 * HZ)       /* 10/6/26: a closed socket still finishing is reset after this */
@@ -59,6 +67,8 @@ struct tcp_socket {
     bool used, orphan;                  /* orphan: closed by the application, finishing on its own */
     bool synced;                        /* 10/6/26: it reached ESTABLISHED (accept() hands it out then) */
     u_long orphan_at;                   /* 10/6/26: when it became an orphan */
+    struct tcp_socket *listener;        /* 10/6/26: whose backlog it waits in, until accept() takes it */
+    u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
     int state;
     ipaddr_t remote_ip;
     u16 local_port, remote_port;
@@ -109,6 +119,7 @@ static struct tcp_socket *sock_new(bool buffers, int *err) {
         }
         s->used = true;
         s->state = CLOSED;
+        s->mss = TCP_MSS;
         event_init(&s->ev);
         return s;
     }
@@ -158,11 +169,31 @@ static void set_state(struct tcp_socket *s, int state) {
     notify(s);
 }
 
+/* 10/6/26: c leaves its listener's backlog (accepted, or dead) */
+static void backlog_remove(struct tcp_socket *c) {
+    struct tcp_socket *l = c->listener;
+    u_int i, j;
+    c->listener = NULL;
+    if(!l) return;
+    for(i = 0; i < l->backlog_n; i++) {
+        if(l->backlog[i] != c) continue;
+        for(j = i + 1; j < l->backlog_n; j++) l->backlog[j - 1] = l->backlog[j];
+        l->backlog_n--;
+        return;
+    }
+}
+
+/* The connection is over, err says why. 10/6/26: one that died during its handshake, still in a
+   listener's backlog, goes at once (nobody accepts it, and the listener needs the room), and so
+   does an orphan; the caller does not touch s after that. */
 static void fail(struct tcp_socket *s, int err) {
     s->error = err;
     s->rto_at = 0;
     set_state(s, CLOSED);
-    if(s->orphan) sock_free(s);
+    if(s->listener && !s->synced) {
+        backlog_remove(s);
+        sock_free(s);
+    } else if(s->orphan) sock_free(s);
 }
 
 /**** segments ****/
@@ -195,6 +226,21 @@ static u16 window(struct tcp_socket *s) {
     return (u16)(TCP_BUF - s->rx_len);
 }
 
+/* 10/6/26: the MSS option of a SYN or SYN-ACK, at least TCP_MIN_MSS and at most ours; ours without one */
+static u16 peer_mss(const struct tcp_hdr *th, u_int hlen) {
+    const u8 *o = (const u8 *)(th + 1), *end = (const u8 *)th + hlen;
+    while(o < end && *o != 0) {                          /* 0: the end of the options */
+        if(*o == 1) { o++; continue; }                   /* no-op */
+        if(o + 1 >= end || o[1] < 2 || o + o[1] > end) break;
+        if(o[0] == 2 && o[1] == 4) {
+            u16 m = (u16)((o[2] << 8) | o[3]);
+            return m < TCP_MIN_MSS ? TCP_MIN_MSS : m > TCP_MSS ? TCP_MSS : m;
+        }
+        o += o[1];
+    }
+    return TCP_MSS;
+}
+
 static void send_ack(struct tcp_socket *s) {
     send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
     s->tx_segs++;
@@ -209,7 +255,7 @@ static void tcp_output(struct tcp_socket *s) {
     u32 in_flight = s->snd_nxt - s->snd_una;
     while(in_flight < s->tx_len) {
         u_int chunk = s->tx_len - in_flight, room = s->snd_wnd > in_flight ? s->snd_wnd - in_flight : 0;
-        if(chunk > TCP_MSS) chunk = TCP_MSS;
+        if(chunk > s->mss) chunk = s->mss;
         if(chunk > room) chunk = room;
         if(!chunk) break;
         if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
@@ -231,7 +277,7 @@ static void tcp_output(struct tcp_socket *s) {
 /* the oldest unacknowledged segment again (or the SYN / FIN) */
 static void retransmit(struct tcp_socket *s) {
     s->retrans++;
-    if(++s->retries > TCP_MAX_RETRIES) { fail(s, -ETIMEDOUT); return; }
+    if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) { fail(s, -ETIMEDOUT); return; }
     s->rto_at = getticks() + TCP_RTO * (s->retries < 4 ? s->retries : 4);
     switch(s->state) {
     case SYN_SENT:
@@ -242,7 +288,7 @@ static void retransmit(struct tcp_socket *s) {
         break;
     default:
         if(s->tx_len) {
-            u_int chunk = s->tx_len > TCP_MSS ? TCP_MSS : s->tx_len;
+            u_int chunk = s->tx_len > s->mss ? s->mss : s->tx_len;
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s), s->txbuf, chunk, false);
         } else if(s->fin_sent) {
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
@@ -313,7 +359,17 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
 
     if(s->state == LISTEN) {
         struct tcp_socket *c;
-        if(!(flags & TCP_SYN) || (flags & (TCP_ACK | TCP_RST)) || s->backlog_n >= TCP_BACKLOG) { netbuf_free(nb); return; }
+        u_int i;
+        if(!(flags & TCP_SYN) || (flags & (TCP_ACK | TCP_RST))) { netbuf_free(nb); return; }
+        /* 10/6/26: a full backlog makes room by dropping the oldest half-open connection: a real client
+           finishes its handshake in a round trip, so only a scan or a flood loses its place */
+        for(i = 0; s->backlog_n >= TCP_BACKLOG && i < s->backlog_n; i++) {
+            if(s->backlog[i]->synced) continue;
+            c = s->backlog[i];
+            backlog_remove(c);
+            sock_free(c);
+        }
+        if(s->backlog_n >= TCP_BACKLOG) { netbuf_free(nb); return; }
         c = sock_alloc();
         if(!c) { netbuf_free(nb); return; }
         c->local_port = s->local_port;
@@ -325,8 +381,11 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         c->snd_una = c->iss;
         c->snd_nxt = c->iss + 1;
         c->snd_wnd = ntohs(th->win);
+        c->mss = peer_mss(th, hlen);
         c->state = SYN_RCVD;
-        s->backlog[s->backlog_n++] = c;
+        c->listener = s;
+        s->backlog[s->backlog_n] = c;
+        s->backlog_n++;
         send_segment(c->remote_ip, c->local_port, c->remote_port, c->iss, c->rcv_nxt, TCP_SYN | TCP_ACK, window(c), NULL, 0, true);
         c->tx_segs++;
         arm_rto(c);
@@ -347,6 +406,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
             s->rcv_nxt = seq + 1;
             s->snd_una = ack;
             s->snd_wnd = ntohs(th->win);
+            s->mss = peer_mss(th, hlen);
             s->rto_at = 0;
             set_state(s, ESTABLISHED);
             send_ack(s);
@@ -375,10 +435,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         s->snd_una = ack;
         s->rto_at = 0;
         set_state(s, ESTABLISHED);
-        {   /* tell the listener there is a connection to accept */
-            int i;
-            for(i = 0; i < TCP_SOCKETS; i++) if(socks[i].used && socks[i].state == LISTEN && socks[i].local_port == s->local_port) notify(&socks[i]);
-        }
+        if(s->listener) notify(s->listener);             /* a connection to accept */
     }
 
     s->snd_wnd = ntohs(th->win);
@@ -388,7 +445,10 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         s->rcv_nxt += datalen;                           /* 10/6/26: nobody reads it any more: taken and dropped */
     } else if(datalen && (s->state == ESTABLISHED || s->state == FIN_WAIT_1 || s->state == FIN_WAIT_2)) {
         u_int room = TCP_BUF - s->rx_len;
-        if(datalen > room) datalen = room;
+        if(datalen > room) {                             /* 10/6/26: the rest comes again, the FIN with it */
+            datalen = room;
+            flags &= (u8)~TCP_FIN;
+        }
         memcpy(s->rxbuf + s->rx_len, data, datalen);
         s->rx_len += datalen;
         s->rcv_nxt += datalen;
@@ -484,11 +544,12 @@ static int no_route(ipaddr_t dst) {
 
 /* 10/6/26: the active open, with the reason it failed: -ENETUNREACH, -ENFILE, -ENOMEM,
    -ECONNREFUSED (a reset answered), -EHOSTUNREACH (the next hop never answered ARP),
-   -ETIMEDOUT (no answer within timeout_ms, or the SYN's retries ran out), -EINTR (cut short) */
+   -ETIMEDOUT (no answer within timeout_ms, or the SYN's retries ran out), -EINTR (cut short).
+   A connection that was made is handed out even when the other end has sent its data and closed,
+   or reset it, before this task ran again: read() says so. */
 int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out) {
     struct tcp_socket *s;
     int err = 0;
-    bool ok;
     *out = NULL;
     if(!dst || !dport) return -EINVAL;
     mutex_lock(&net_lock);
@@ -506,8 +567,8 @@ int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out
     send_segment(dst, s->local_port, dport, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
     s->tx_segs++;
     arm_rto(s);
-    ok = WAIT_FOR(s, s->state != SYN_SENT, timeout_ms);
-    if(!ok || s->state != ESTABLISHED) {
+    WAIT_FOR(s, s->state != SYN_SENT, timeout_ms);
+    if(!s->synced) {
         err = s->state == SYN_SENT ? (task_interrupted() ? -EINTR : -ETIMEDOUT) : (s->error ? s->error : -ECONNREFUSED);
         sock_free(s);
         mutex_unlock(&net_lock);
@@ -544,28 +605,23 @@ struct tcp_socket *tcp_listen(u16 port) {
 }
 
 /* the first connection in l's backlog that finished its handshake (it may have been closed or reset
-   since: read() says so), taken out of the backlog; the ones that died during the handshake go.
-   Under net_lock. */
+   since: read() says so), taken out of the backlog. 10/6/26: those that die during the handshake
+   leave it at once (fail()). Under net_lock. */
 static struct tcp_socket *backlog_take(struct tcp_socket *l) {
-    struct tcp_socket *c = NULL;
-    u_int i, j;
+    u_int i;
     for(i = 0; i < l->backlog_n; i++) {
-        struct tcp_socket *b = l->backlog[i];
-        if(b->synced) c = b;
-        else if(b->state != CLOSED) continue;
-        else sock_free(b);                               /* died during the handshake */
-        for(j = i + 1; j < l->backlog_n; j++) l->backlog[j - 1] = l->backlog[j];
-        l->backlog_n--;
-        if(c) break;
-        i--;
+        struct tcp_socket *c = l->backlog[i];
+        if(!c->synced) continue;
+        backlog_remove(c);
+        return c;
     }
-    return c;
+    return NULL;
 }
 
-/* something for backlog_take() to do; with only, a connection to hand out (poll()'s POLLIN) */
-static bool backlog_ready(const struct tcp_socket *l, bool only) {
+/* a connection to hand out (accept() does not wait; poll() says POLLIN) */
+static bool backlog_ready(const struct tcp_socket *l) {
     u_int i;
-    for(i = 0; i < l->backlog_n; i++) if(l->backlog[i]->synced || (!only && l->backlog[i]->state == CLOSED)) return true;
+    for(i = 0; i < l->backlog_n; i++) if(l->backlog[i]->synced) return true;
     return false;
 }
 
@@ -577,7 +633,7 @@ int tcp_accept_next(struct tcp_socket *l, u_long timeout_ms, struct tcp_socket *
     mutex_lock(&net_lock);
     if(l->state != LISTEN) err = -EINVAL;
     while(!err && !(c = backlog_take(l))) {
-        if(!WAIT_FOR(l, backlog_ready(l, false), timeout_ms)) err = task_interrupted() ? -EINTR : -ETIMEDOUT;
+        if(!WAIT_FOR(l, backlog_ready(l), timeout_ms)) err = task_interrupted() ? -EINTR : -ETIMEDOUT;
     }
     mutex_unlock(&net_lock);
     *out = c;
@@ -716,23 +772,25 @@ void tcp_release(struct tcp_socket *s) {
         for(i = 0; i < s->backlog_n; i++) abort_conn(s->backlog[i]);
         s->backlog_n = 0;
         sock_free(s);
-    } else if(!start_close(s)) {
-        if(s->state == CLOSED) sock_free(s);
-        else make_orphan(s);
-    }
+    } else if(!start_close(s)) make_orphan(s);
     mutex_unlock(&net_lock);
 }
 
-/* 10/6/26: what poll() reports for s (surfos/poll.h). It takes no lock and never waits (poll() may
-   look with interrupts off); the sockets are a static table, and every change wakes poll(), which
-   looks again. */
+/* 10/6/26: what poll() reports for s (surfos/poll.h). poll() asks with interrupts on and no lock
+   held; net_lock keeps the backlog and the buffers still while it looks. Every change wakes poll(),
+   which looks again. */
 int tcp_poll(struct tcp_socket *s) {
-    int st = s->state, ev = 0;
-    if(st == LISTEN) return backlog_ready(s, true) ? POLLIN : 0;
-    if(s->rx_len || s->peer_fin || st == CLOSED) ev |= POLLIN;
-    if(can_send(s) && s->tx_len < TCP_BUF) ev |= POLLOUT;
-    if(s->peer_fin || st == CLOSED) ev |= POLLHUP;
-    if(s->error) ev |= POLLERR;
+    int ev = 0;
+    mutex_lock(&net_lock);
+    if(s->state == LISTEN) {
+        if(backlog_ready(s)) ev = POLLIN;
+    } else {
+        if(s->rx_len || s->peer_fin || s->state == CLOSED) ev |= POLLIN;
+        if(can_send(s) && s->tx_len < TCP_BUF) ev |= POLLOUT;
+        if(s->peer_fin || s->state == CLOSED) ev |= POLLHUP;
+        if(s->error) ev |= POLLERR;
+    }
+    mutex_unlock(&net_lock);
     return ev;
 }
 

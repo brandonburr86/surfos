@@ -52,7 +52,7 @@ int tcp_accept_next(struct tcp_socket *l, u_long timeout_ms, struct tcp_socket *
 int tcp_read(struct tcp_socket *s, void *buf, u_int len);     /* read(): bytes, 0 at the end; waits */
 int tcp_write(struct tcp_socket *s, const void *data, u_int len); /* write(): every byte queued; waits */
 void tcp_release(struct tcp_socket *s);    /* the last descriptor closed: FIN, or stop listening; never waits */
-int tcp_poll(struct tcp_socket *s);        /* POLLIN POLLOUT POLLHUP POLLERR (surfos/poll.h); never waits */
+int tcp_poll(struct tcp_socket *s);        /* POLLIN POLLOUT POLLHUP POLLERR (surfos/poll.h); takes net_lock */
 bool tcp_listening(const struct tcp_socket *s);
 
 #endif
