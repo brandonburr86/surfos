@@ -440,15 +440,17 @@ class Qemu:
                 self.disk = os.path.join(self.workdir, 'disk.img')
                 shutil.copyfile(disk, self.disk)
             boot += ['-drive', f'file={self.disk},format=raw,if=ide,index=0,media=disk']  # primary master: hda
-        # user-mode network: 10.0.2.0/24, gateway 10.0.2.2; the host reaches guest port 7 through a
-        # forwarded port, and the guest reaches a small HTTP server on the host (10.0.2.2) whose port
-        # travels on the kernel command line
+        # user-mode network: 10.0.2.0/24, gateway 10.0.2.2; the host reaches guest ports 7 and
+        # (10/6/26, the telnet server) 23 through forwarded ports, and the guest reaches a small HTTP
+        # server on the host (10.0.2.2) whose port travels on the kernel command line
         self.ports = {}
         self.http = None
         if net:
             self.ports['echo'] = free_port()
+            self.ports['telnet'] = free_port()
             self.ports['http'] = free_port()
-            boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7",
+            boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23",
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
             cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
