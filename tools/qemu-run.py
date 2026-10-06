@@ -430,6 +430,24 @@ SMOKE = [
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
+    # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
+    # client (Telnet, below). Not running at first; on; on again (running already, status 1); a port that is none
+    # (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
+    # off ending both, on again; four, and a fifth refused; telnetd off typed in a session; on while nettest has the
+    # port; off when not running (status 1); the server's log.
+    ('telnetd', ['telnetd: not running (telnetd on starts it)']),
+    ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
+    ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
+    ('run telnetd on 65536', ['telnetd: 65536 is no port (1-65535)', 'exit status 2']),
+    ('@telnet-session', []),
+    ('@telnet-two', []),
+    ('@telnet-full', []),
+    ('@telnet-off-inside', []),
+    ('@telnet-port-busy', []),
+    ('run telnetd off', ['telnetd: not running', 'exit status 1']),
+    ('dmesg', ['telnetd: listening on port 23', 'telnetd: session 1 from 10.0.2.2:', 'telnetd: session 1 ended (the shell',
+               'telnetd: stopped (2 sessions ended)', 'refused: 4 sessions are open', 'ended (the client left)',
+               'telnetd: stopped (1 session ended)']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -1003,19 +1021,45 @@ class Telnet:
     sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
 
     def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
-        if rcvbuf:                              # a small window, for a client that stops reading
-            self.sock = socket.socket()
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
-            self.sock.settimeout(timeout)
-            self.sock.connect((host, port))
-        else:
-            self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock = self._connect(host, port, timeout, rcvbuf)
         self.cols, self.rows = cols, rows
         self.raw, self.data = b'', b''
         self.cursor, self.more_at, self.auto_more = 0, 0, True
         self.closed = False
         self.state, self.verb, self.sb = 'data', 0, b''
         self.agreed = set()                     # (side, option): ('him', 1) the server echoes, ('us', 31) NAWS ...
+
+    @staticmethod
+    def _connect(host, port, timeout, rcvbuf):
+        """the connection; QEMU's forwarded port accepts at once and closes again while nothing listens in the
+        guest, so until timeout, one that ends before the server has said anything is tried again. rcvbuf: a
+        small window, for a client that stops reading"""
+        deadline = time.time() + timeout
+        while True:
+            s = socket.socket()
+            if rcvbuf:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            s.settimeout(timeout)
+            try:
+                s.connect((host, port))
+            except OSError:
+                s.close()
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.2)
+                continue
+            s.settimeout(1)
+            try:
+                alive = s.recv(1, socket.MSG_PEEK) != b''
+            except socket.timeout:
+                alive = True                    # open and quiet so far: the server's opening is on its way
+            except OSError:
+                alive = False                   # reset
+            if alive or time.time() > deadline:
+                s.settimeout(timeout)
+                return s
+            s.close()
+            time.sleep(0.2)
 
     def _out(self, b):
         try:
@@ -1122,12 +1166,149 @@ class Telnet:
             self.pump(0.1)
         return self.closed
 
+    def leave(self, timeout=10):
+        """the client goes: its FIN, then the server's close once the session has ended (True)"""
+        try:
+            self.sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        return self.wait_closed(timeout)
+
     def close(self):
         try:
             self.sock.close()
         except OSError:
             pass
         self.closed = True
+
+
+TELNET_ROOT = shown('SURF \u224b> ')          # a session's prompt in /
+
+
+def telnet_no_sessions(q, timeout=20):
+    """True once telnetd status on the console says that the server runs with no session left"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        start = len(q.transcript)
+        q.send('telnetd status\n')
+        if not q.expect(PROMPT, 10):
+            return False
+        if 'running (pid' in q.transcript[start:].decode(errors='replace') and \
+           ', 0 sessions' in q.transcript[start:].decode(errors='replace'):
+            return True
+        q.wait(0.5)
+    return False
+
+
+def telnet_session_check(q):
+    """one session through the forwarded port 23 (telnetd on came before): the banner, the prompt, a command, cd
+    and the breadcrumbs, Tab, help paged (the client answers --More--), Ctrl+C killing a running count, exit, and
+    the server closing the connection"""
+    t = Telnet(q.ports['telnet'])
+    try:
+        ok = t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)
+        steps = [('pwd\n', ['\r\n/\r\n', TELNET_ROOT]),
+                 ('cd /initrd/bin\n', [shown('initrd \u25b8 bin \u224b> ')]),
+                 ('ech\ttelnet-tab\n', ['\r\ntelnet-tab\r\n', shown('bin \u224b> ')]),
+                 ('help\n', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--',
+                             '(C)2004-2026 Brandon Burr.', shown('bin \u224b> ')]),
+                 ('count 100 100\n', [' 5 ']),
+                 (b'\x03', ['killed]', FAILED_PROMPT])]
+        for keys, expects in steps:
+            if not ok:
+                break
+            t.send(keys)
+            ok = all(t.expect(e, 20) for e in expects)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a session: banner, prompt, a command, cd, Tab, help paged, Ctrl+C, exit closes it', ok)
+
+
+def telnet_two_check(q):
+    """two sessions at once, each with its own shell; telnetd status on the console lists both; telnetd off ends
+    them (both connections close); telnetd on again"""
+    a, b = Telnet(q.ports['telnet']), Telnet(q.ports['telnet'])
+    try:
+        ok = a.expect(TELNET_ROOT, 15) and b.expect(TELNET_ROOT, 15)
+        if ok:
+            a.send('echo from-a\n')
+            b.send('echo from-b\n')
+            ok = a.expect('\r\nfrom-a\r\n') and b.expect('\r\nfrom-b\r\n')
+            ok = ok and b'from-b' not in a.data and b'from-a' not in b.data
+        q.send('telnetd status\n')
+        ok = ok and q.expect('telnetd: running (pid') and q.expect('2 sessions:') and q.expect('surfsh (pid') \
+            and q.expect('surfsh (pid') and q.expect(PROMPT)
+        q.send('telnetd off\n')
+        ok = ok and q.expect('telnetd: stopped (2 sessions ended)', 15) and q.expect(PROMPT)
+        ok = ok and a.wait_closed(10) and b.wait_closed(10)
+        q.send('telnetd on\n')
+        ok = ok and q.expect('telnetd: listening on 10.0.2.15 port 23') and q.expect(PROMPT)
+    finally:
+        a.close()
+        b.close()
+    return ('telnet: two sessions at once, telnetd status lists them, off ends both, on again', ok)
+
+
+def telnet_full_check(q):
+    """four sessions at once, a fifth connection told so and closed; the four end when their clients go"""
+    clients, fifth = [], None
+    try:
+        ok = True
+        for _ in range(4):
+            t = Telnet(q.ports['telnet'])
+            clients.append(t)
+            ok = ok and t.expect(TELNET_ROOT, 15)
+        fifth = Telnet(q.ports['telnet'])
+        ok = ok and fifth.expect('4 sessions are open already', 10) and fifth.wait_closed(10)
+        for t in clients:
+            ok = t.leave(10) and ok
+        ok = ok and telnet_no_sessions(q)
+    finally:
+        for t in clients + ([fifth] if fifth else []):
+            t.close()
+    return ('telnet: four sessions at once, a fifth refused; they end when their clients go', ok)
+
+
+def telnet_off_inside_check(q):
+    """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
+    closes); on the console the server is not running any more"""
+    t = Telnet(q.ports['telnet'])
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t.send('telnetd off\n')
+            ok = t.wait_closed(15)
+    finally:
+        t.close()
+    q.send('telnetd\n')
+    ok = q.expect('telnetd: not running (telnetd on starts it)', 10) and q.expect(PROMPT, 10) and ok
+    return ('telnet: telnetd off typed in a session stops the server and ends the session', ok)
+
+
+def telnet_port_busy_check(q):
+    """telnetd on while another program listens on port 23 (nettest echo 23 1 &): the port is in use (status 1), and
+    no server is left behind; the host's connection to nettest then lets it end"""
+    q.send('nettest echo 23 1 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    q.send('run telnetd on\n')
+    ok = q.expect('telnetd: port 23 is in use', 10) and q.expect('exit status 1', 10) and q.expect(PROMPT, 10) and ok
+    q.send('telnetd\n')
+    ok = q.expect('telnetd: not running', 10) and q.expect(PROMPT, 10) and ok
+    s = guest_connection(q) if ok else None
+    if s:
+        s.close()
+    ok = ok and s is not None and q.expect('0 bytes echoed', 10)
+    q.send('telnetd\n')                     # surfsh collects nettest from the background
+    ok = q.expect(PROMPT, 10) and ok
+    return ('telnet: telnetd on while nettest has port 23: in use, and no server left', ok)
+
+
+CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
+                       '@telnet-full': telnet_full_check, '@telnet-off-inside': telnet_off_inside_check,
+                       '@telnet-port-busy': telnet_port_busy_check})
 
 
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
