@@ -111,7 +111,7 @@ int cmd_mkfs(int argc, char **argv) {
     struct fat_layout l;
     struct part_kind kind;
     struct bdev *d, *p;
-    char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1];
+    char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1], question[160];
     const char *label, *t;
     int bits = 0, i = 1, parts = 0;
     bool retype;
@@ -145,9 +145,8 @@ int cmd_mkfs(int argc, char **argv) {
     retype = type_to_set(d, l.bits, &kind);
     if(retype) printf("    the partition's type (%s) becomes %s\n", d->type_name ? d->type_name : "unknown",
                       d->scheme == PART_SCHEME_GPT ? "basic data" : l.bits == 32 ? "0c FAT32 LBA" : "0e FAT16 LBA");
-    printf("    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
-    memset(line, 0, sizeof(line));
-    gets(line);
+    snprintf(question, sizeof(question), "    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
+    shell_ask(question, line, sizeof(line));                 /* on the console, also when the output goes to a file */
     if(strcmp(line, d->name)) { printf("    Cancelled\n"); return CMD_FAIL; }
     if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return CMD_FAIL; }
     printf("    %s: %s\n", d->name, msg);

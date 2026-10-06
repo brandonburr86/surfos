@@ -140,5 +140,9 @@ void print_tasks(void);
 char *plNumToName(prio_level prio);
 const char *task_state_name(task_state s);
 void shell(void);                /* the ring-0 shell task body (shell/main.c) */
+/* 10/6/26: its commands for the user shell (SYS_kcmd, SYS_kcmdinfo: surfos/kcmd.h) */
+struct kcmd_info;
+int shell_run_command(int argc, char **argv);             /* in the calling task: the status, or -ENOENT */
+int shell_command_info(int index, struct kcmd_info *out); /* entry index of the table; -ENOENT after the last */
 
 #endif

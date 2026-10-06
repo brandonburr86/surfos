@@ -9,7 +9,10 @@ the rest arrive as argv. `help` is generated from the same table.
 2 a usage error. A word $? is the status of the previous command (`echo $?`); a line
 that is no command is 127, and a program run by its name gives its exit status.
 The prompt is the SurfOS prompt (shell/prompt.c): this shell has system privileges,
-so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE).
+so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE). The user
+shell, surfsh, runs these commands in its own task through SYS_kcmd and lists them
+through SYS_kcmdinfo (kernel/syscall.c, surfos/kcmd.h): shell_run_command() and
+shell_command_info() below.
 */
 
 #include <blibc_common.h>
@@ -46,6 +49,7 @@ so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE).
 #include <surfos/acpi.h>
 #include <surfos/version.h>
 #include <surfos/prompt.h>
+#include <surfos/kcmd.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -56,6 +60,23 @@ so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE).
 
 static const struct command commands[];
 static const u_int ncommands;           /* both defined after the commands */
+
+/* 10/6/26: a question, seen and answered on this task's console even while a kernel command
+   run by the user shell has its output kept for a file (SYS_kcmd: console_capture_begin()) */
+void shell_ask(const char *question, char *answer, size_t size) {
+    struct kcapture *kept = curTask->kcap;
+    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    console_capture_end();
+    printf("%s", question);
+    memset(answer, 0, size);
+    tty_readline(tty, answer, size);
+    if(kept) console_capture_begin(kept);
+}
+
+/* 10/6/26: a fault report belongs on the screen, also when the output was going to a file */
+static void report_on_screen(void) {
+    console_capture_end();
+}
 
 /**** small commands ****/
 
@@ -366,12 +387,15 @@ static void program_path(const char *name, char *path, size_t size) {
 }
 
 /* 10/6/26: the status of a program in the foreground is its exit status, CMD_FAIL when it
-   could not start or was killed (a status below 0 would read as an error number) */
+   could not start or was killed (a status below 0 would read as an error number). A process
+   running this as a kernel command (the user shell, SYS_kcmd) is the program's parent and
+   passes its descriptors 0, 1 and 2 on: `run hello > out.txt` puts hello's output in the file.
+   A program in the background stays detached (init collects it), wherever spawn ran. */
 static int run_program(int argc, char **argv, bool background) {
     char path[VFS_PATH_MAX];
     int pid, status = 0;
     program_path(argv[0], path, sizeof(path));
-    pid = process_spawn(path, argc, argv, curTask->con, background ? TF_DETACHED : 0);
+    pid = process_spawn_files(path, argc, argv, curTask->con, background ? TF_DETACHED : 0, curTask->uvm ? curTask->files : NULL);
     if(pid < 0) { printf("    %s: %s\n", argv[0], strerror(pid)); return CMD_FAIL; }
     if(background) { printf("    [pid %d started]\n", pid); return CMD_OK; }
     if(task_wait(pid, &status) != pid) return CMD_FAIL;
@@ -654,16 +678,18 @@ static int cmd_selftest(int argc, char **argv) { return run_selftest() ? CMD_FAI
    three that fault is never seen) */
 static int cmd_crashdiv(int argc, char **argv) {
     volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
+    report_on_screen();
     printf("%i\n", one/zero);
     return CMD_FAIL;
 }
-static int cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
+static int cmd_crashgp(int argc, char **argv) { report_on_screen(); asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
 static int cmd_crashint(int argc, char **argv) {
+    report_on_screen();
     asm volatile("int $0x50");
     printf("    int 0x50 returned\n");
     return CMD_OK;
 }
-static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
+static int cmd_crashnull(int argc, char **argv) { report_on_screen(); *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
@@ -754,19 +780,39 @@ static int split_args(char *line, char **argv, int last, char *status, size_t si
     return argc;
 }
 
-/* run one line; its status (shell.h), or last again for an empty line */
-int parseCommand(char *line, int last) {
-    char *argv[SHELL_MAX_ARGS], status[12];
-    int argc = split_args(line, argv, last, status, sizeof(status));
+/* 10/6/26: run the command argv[0] in the calling task; its status, -ENOENT when there is no
+   such command. This shell's lines and the user shell's SYS_kcmd come here. */
+int shell_run_command(int argc, char **argv) {
     u_int i;
-
-    if(!argc) return last; /* no command entered */
+    if(argc < 1 || !argv[0]) return -ENOENT;
     for(i = 0; i < ncommands; i++) {
         if(!strcmp(commands[i].name, argv[0])) {
             int r = commands[i].fn(argc, argv);
-            return r < 0 ? CMD_FAIL : r;
+            return r < 0 ? CMD_FAIL : r;       /* below 0 a status would read as an error number */
         }
     }
+    return -ENOENT;
+}
+
+/* 10/6/26: entry index of the table, for help and Tab completion in the user shell
+   (SYS_kcmdinfo); 0, or -ENOENT after the last one */
+int shell_command_info(int index, struct kcmd_info *out) {
+    if(index < 0 || (u_int)index >= ncommands) return -ENOENT;
+    memset(out, 0, sizeof(*out));                    /* nothing of the kernel's stack goes along */
+    strlcpy(out->name, commands[index].name, sizeof(out->name));
+    strlcpy(out->args, commands[index].args, sizeof(out->args));
+    strlcpy(out->help, commands[index].help, sizeof(out->help));
+    return 0;
+}
+
+/* run one line; its status (shell.h), or last again for an empty line */
+int parseCommand(char *line, int last) {
+    char *argv[SHELL_MAX_ARGS], status[12];
+    int argc = split_args(line, argv, last, status, sizeof(status)), r;
+
+    if(!argc) return last; /* no command entered */
+    r = shell_run_command(argc, argv);
+    if(r != -ENOENT) return r;
     {   /* not built in: a user program in /initrd/bin? */
         char path[VFS_PATH_MAX];
         struct stat st;

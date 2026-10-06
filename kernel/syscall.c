@@ -9,6 +9,15 @@ costs the program -EFAULT and never the kernel a page fault with a lock held.
 
 10/5/26 (files on USB storage, the editor): rename, fstat, ftruncate, fsync,
 sync, statfs, dup2, time, ttyctl and spawnfd (calls 22-31).
+
+10/6/26 (the user shell, surfsh): kcmd and kcmdinfo (calls 32 and 33) run and
+list the kernel's shell commands (surfos/kcmd.h). A command runs in the calling
+task, as it would in the ring-0 shell: it prints on the caller's console and asks
+its questions there, cd moves the caller, run starts the program as the caller's
+child (spawn's are detached, init's), a crash command kills the caller, and the
+background tasks of funky and tcpecho are detached too. When the caller's
+descriptor 1 is a file, the output is kept in memory while the command runs and
+written there afterwards, with a note when it did not all fit.
 */
 
 #include <surfos/types.h>
@@ -20,8 +29,10 @@ sync, statfs, dup2, time, ttyctl and spawnfd (calls 22-31).
 #include <surfos/process.h>
 #include <surfos/tty.h>
 #include <surfos/irq.h>
+#include <surfos/kcmd.h>
 #include <sys/bdev.h>
 #include <mm/uvm.h>
+#include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <time.h>
 #include <blibc_common.h>
@@ -32,6 +43,7 @@ sync, statfs, dup2, time, ttyctl and spawnfd (calls 22-31).
 typedef char stat_layout_is_fixed[sizeof(struct stat) == 40 ? 1 : -1];
 typedef char statfs_layout_is_fixed[sizeof(struct statfs) == 116 ? 1 : -1];
 typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
+typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
 
 static bool ustr(const char *s) {
     return uvm_check_str(curTask->uvm, s, ARG_STR_MAX);
@@ -215,6 +227,150 @@ static int sys_time(void) {
     return (int)((u32)days_from_civil((i32)t.year, t.month, t.date) * 86400 + t.hour * 3600 + t.minute * 60 + t.second);
 }
 
+/**** 10/6/26: the kernel's shell commands (surfos/kcmd.h) ****/
+
+/* What a kernel command running in a task's system call holds. A command can end its task
+   (crashgp, kill of the caller itself, any fault in it): then reap() hands the task to
+   kcmd_task_gone() and these are released all the same. The record is on the task's kernel
+   stack, which stays until the task is reaped; a task runs one command at a time. */
+struct kcmd_call {
+    surf_task *task;
+    char *args;                 /* argv[] and its strings in one block */
+    char *capture;              /* KCMD_CAPTURE_MAX bytes for a redirection, or NULL */
+    struct file *out;           /* descriptor 1's file while it is captured for (a reference) */
+    struct kcmd_call *next;
+};
+static struct kcmd_call *kcmd_calls;
+
+static void kcmd_release(struct kcmd_call *c) {
+    if(c->out) vfs_close(c->out);
+    kfree(c->capture);
+    kfree(c->args);
+    c->out = NULL;
+    c->capture = c->args = NULL;
+}
+
+void kcmd_task_gone(surf_task *t) {
+    struct kcmd_call **pp, *c = NULL;
+    u_long flags = irq_save();
+    for(pp = &kcmd_calls; *pp; pp = &(*pp)->next) {
+        if((*pp)->task == t) { c = *pp; *pp = c->next; break; }
+    }
+    irq_restore(flags);
+    if(c) kcmd_release(c);
+}
+
+static void kcmd_forget(struct kcmd_call *c) {
+    struct kcmd_call **pp;
+    u_long flags = irq_save();
+    for(pp = &kcmd_calls; *pp; pp = &(*pp)->next) {
+        if(*pp == c) { *pp = c->next; break; }
+    }
+    irq_restore(flags);
+}
+
+/* is name one of the commands? (before memory is set aside for its output) */
+static bool kcmd_exists(const char *name) {
+    struct kcmd_info info;
+    int i;
+    for(i = 0; shell_command_info(i, &info) == 0; i++) if(!strcmp(info.name, name)) return true;
+    return false;
+}
+
+static int write_all(struct file *f, const char *p, u32 len) {
+    while(len) {
+        int n = vfs_write(f, p, len);
+        if(n <= 0) return n < 0 ? n : -EIO;
+        p += n;
+        len -= (u32)n;
+    }
+    return 0;
+}
+
+/* argv is checked as user_argv() checks it and copied, strings and all: a command may write
+   into its arguments (strtok), and user memory is not the kernel's to keep */
+static int sys_kcmd(char *const argv[]) {
+    struct kcmd_call call;
+    struct kcapture cap;
+    char **kargv, *p, *end, note[120];
+    u_long bytes = 0;
+    int argc = 0, i, r, w = 0;
+
+    if(!argv) return -EINVAL;
+    for(;;) {
+        if(!ubuf(argv + argc, sizeof(char *), false)) return -EFAULT;
+        if(!argv[argc]) break;
+        if(!ustr(argv[argc])) return -EFAULT;
+        if(argc == SPAWN_MAX_ARGS) return -E2BIG;
+        bytes += strlen(argv[argc]) + 1;
+        argc++;
+    }
+    if(!argc) return -EINVAL;
+    memset(&call, 0, sizeof(call));
+    call.task = curTask;
+    call.args = (char *)kalloc((argc + 1) * sizeof(char *) + bytes);
+    if(!call.args) return -ENOMEM;
+    kargv = (char **)call.args;
+    p = call.args + (argc + 1) * sizeof(char *);
+    end = p + bytes;
+    for(i = 0; i < argc; i++) {
+        kargv[i] = p;
+        strlcpy(p, argv[i], end - p);
+        p += strlen(p) + 1;
+    }
+    kargv[argc] = NULL;
+
+    if(!kcmd_exists(kargv[0])) { kfree(call.args); return -ENOENT; }
+    call.out = fd_get(1);
+    if(call.out && !devfs_is_console(call.out)) {            /* a redirection: keep the output, write it afterwards */
+        call.capture = (char *)kalloc(KCMD_CAPTURE_MAX);
+        if(!call.capture) { kfree(call.args); return -ENOMEM; }
+        {
+            u_long flags = irq_save();                      /* the count is shared with other tasks' descriptors */
+            call.out->refs++;
+            irq_restore(flags);
+        }
+        cap.buf = call.capture;
+        cap.len = 0;
+        cap.size = KCMD_CAPTURE_MAX;
+        cap.cut = 0;
+    } else call.out = NULL;
+    {
+        u_long flags = irq_save();
+        call.next = kcmd_calls;
+        kcmd_calls = &call;
+        irq_restore(flags);
+    }
+
+    if(call.capture) console_capture_begin(&cap);
+    r = shell_run_command(argc, kargv);
+    if(call.capture) {
+        console_capture_end();
+        w = write_all(call.out, cap.buf, cap.len);
+        if(!w && cap.cut) {                                  /* the note says what was left out */
+            snprintf(note, sizeof(note), "%s[%s: the output was cut here: %lu more bytes did not fit in %u KB]\n",
+                     cap.len && cap.buf[cap.len - 1] != '\n' ? "\n" : "", kargv[0], cap.cut, (u_int)(KCMD_CAPTURE_MAX / 1024));
+            w = write_all(call.out, note, strlen(note));
+        }
+        if(w) {
+            printf("    %s: its output could not be written to descriptor 1: %s\n", kargv[0], strerror(w));
+            if(r == 0) r = 1;                                /* the command worked; keeping what it said did not */
+        }
+    }
+    kcmd_forget(&call);
+    kcmd_release(&call);
+    return r;
+}
+
+static int sys_kcmdinfo(int index, struct kcmd_info *out) {
+    struct kcmd_info k;
+    int r;
+    if(!ubuf(out, sizeof(*out), true)) return -EFAULT;
+    r = shell_command_info(index, &k);
+    if(r == 0) memcpy(out, &k, sizeof(k));
+    return r;
+}
+
 static u_long *syscall_trap(struct trapframe *tf) {
     u_long n = tf->eax, a = tf->ebx, b = tf->ecx, c = tf->edx;
     int r;
@@ -256,8 +412,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_time:    r = sys_time(); break;
     case SYS_ttyctl:  r = tty_ctl(curTask->tty, (int)a, b); break;
     case SYS_spawnfd: r = sys_spawnfd((const char *)a, (char *const *)b, (const int *)c); break;
-    case SYS_kcmd:    r = -ENOSYS; break;      /* 10/6/26: the kernel's shell commands (surfos/kcmd.h), */
-    case SYS_kcmdinfo: r = -ENOSYS; break;     /* which the shell's bridge will answer */
+    case SYS_kcmd:    r = sys_kcmd((char *const *)a); break;
+    case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

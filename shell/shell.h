@@ -4,7 +4,9 @@ SurfOS ring0 Shell - internal prototypes
 
 10/6/26 (surfsh): a command returns its status, as the user shell's commands do:
 CMD_OK, CMD_FAIL (a refusal and a Cancelled question are failures too) or
-CMD_USAGE (surfos/kcmd.h; the user shell shows it in its prompt).
+CMD_USAGE (surfos/kcmd.h; the user shell shows it in its prompt). The user shell
+runs the same commands in its own task (SYS_kcmd): a question is asked with
+shell_ask(), so it is seen even when the command's output goes to a file.
 */
 
 #ifndef _SHELL_SHELL_H
@@ -25,6 +27,9 @@ struct command {
     const char *help;
     int (*fn)(int argc, char **argv);   /* the status, CMD_OK, CMD_FAIL or CMD_USAGE (10/6/26) */
 };
+
+/* main.c: a question on this task's console and its answer, a line (10/6/26) */
+void shell_ask(const char *question, char *answer, size_t size);
 
 /* demos.c: the 2004 demonstrations */
 void runHanoi(void);

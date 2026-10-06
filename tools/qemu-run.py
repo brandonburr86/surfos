@@ -184,6 +184,19 @@ SMOKE = [
     ('echo status $?', ['status 127']),
     ('run hello', ['exit status 42']),
     ('echo status $?', ['status 42']),
+    # the bridge (SYS_kcmd, SYS_kcmdinfo) from user space: statuses, errors, run, redirection, cut output, the table
+    ('run kcmdtest /hda1', ['KCMDTEST PASS', 'exit status 0']),
+    # a question while the output goes to a file: seen and answered on the console; the rest is in the file
+    ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['kcmdtest: fdisk: status 1'])]),
+    ('cat /hda1/FDISK.TXT', ['rd1: scratch.img, 64M', 'change: ', 'Cancelled']),
+    ('rm /hda1/FDISK.TXT', []),
+    # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
+    # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
+    ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
+    ('run kcmdtest crash /kcmd/CRASH.TXT', ['General Protection Fault', 'killed]']),
+    ('umount /kcmd', []),
+    ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
+    ('umount /kcmd', []),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -237,7 +250,7 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60}
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 

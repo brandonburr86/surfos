@@ -21,6 +21,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #include <surfos/wait.h>
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
+#include <surfos/process.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
 
@@ -300,8 +301,9 @@ static void reap(surf_task *t) {
     ntasks--;
     irq_restore(flags);
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
+    kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
-    kfree(t->stackmem);
+    kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
 }
 

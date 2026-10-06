@@ -24,4 +24,9 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
 
 void init_syscalls(void);
 
+/* 10/6/26: a task is being reaped (task.c): what a kernel command it ran through SYS_kcmd still
+   held, because the command ended the task, is released (kernel/syscall.c) */
+struct surf_task;
+void kcmd_task_gone(struct surf_task *t);
+
 #endif

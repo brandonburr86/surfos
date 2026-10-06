@@ -127,13 +127,12 @@ static void show_result(struct bdev *d) {
     printf(n ? "\n" : " no partitions\n");
 }
 
-/* the disk's name typed back, exactly */
+/* the disk's name typed back, exactly (10/6/26: on the console even when fdisk's output goes to a file) */
 static bool confirmed(struct bdev *d) {
-    struct tty *tty = (curTask && curTask->tty) ? curTask->tty : tty_active;
-    char size[8], line[BDEV_NAME_LEN + 8];
+    char size[8], line[BDEV_NAME_LEN + 8], question[160];
     part_fmt_size(d->nblocks, size, sizeof(size));
-    printf("    Type %s to write the new partition table to %s (%s, %s): ", d->name, d->name, d->model, size);
-    tty_readline(tty, line, sizeof(line));
+    snprintf(question, sizeof(question), "    Type %s to write the new partition table to %s (%s, %s): ", d->name, d->name, d->model, size);
+    shell_ask(question, line, sizeof(line));
     return !strcmp(line, d->name);
 }
 
