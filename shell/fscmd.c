@@ -12,6 +12,9 @@ rewrite; a formatted whole disk is read again, so its old partitions go.
 eject unmounts everything on a disk and flushes it before it says the disk
 may be pulled out. A protected device (the SurfOS boot drive) is only ever
 mounted read-only.
+
+10/6/26: every command returns its status (shell.h): a refused device, a Cancelled
+question and a busy volume are failures; df fails when a volume cannot say its size.
 */
 
 #include <blibc_common.h>
@@ -74,8 +77,8 @@ static bool type_to_set(struct bdev *d, int bits, struct part_kind *k) {
 }
 
 /* rewrite partition d's type through the partition code (checked, read back, the disk read
-   again: d itself is replaced by a new device of the same name) */
-static void set_type(struct bdev *d, const struct part_kind *k) {
+   again: d itself is replaced by a new device of the same name); 0, or -1 after saying why not */
+static int set_type(struct bdev *d, const struct part_kind *k) {
     struct bdev *disk = bdev_disk(d), *now;
     struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
     struct part_plan plan;
@@ -95,19 +98,20 @@ static void set_type(struct bdev *d, const struct part_kind *k) {
             printf("    %s: partition type: %s\n", name, now && now->type_name ? now->type_name : "changed");
             kfree(t);
             kfree(plan.buf);
-            return;
+            return 0;
         }
     }
     printf("    %s: the partition type stays as it was: %s\n", name, why);
     kfree(t);
     kfree(plan.buf);
+    return -1;
 }
 
-void cmd_mkfs(int argc, char **argv) {
+int cmd_mkfs(int argc, char **argv) {
     struct fat_layout l;
     struct part_kind kind;
     struct bdev *d, *p;
-    char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1];
+    char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1], question[160];
     const char *label, *t;
     int bits = 0, i = 1, parts = 0;
     bool retype;
@@ -118,12 +122,12 @@ void cmd_mkfs(int argc, char **argv) {
         else i = argc;                                       /* a usage error */
         i += 2;
     }
-    if(i >= argc || argc > i + 2) { printf("    usage: mkfs [-t fat16|fat32] <device> [label]   (lsblk lists the devices)\n"); return; }
+    if(i >= argc || argc > i + 2) { printf("    usage: mkfs [-t fat16|fat32] <device> [label]   (lsblk lists the devices)\n"); return CMD_USAGE; }
     d = bdev_find(argv[i]);
     label = argc > i + 1 ? argv[i + 1] : NULL;
-    if(!d) { printf("    mkfs: no block device '%s' (lsblk lists them)\n", argv[i]); return; }
-    if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    mkfs: %s: %s\n", d->name, why); return; }
-    if(fat_mkfs_plan(d, label, bits, &l, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return; }
+    if(!d) { printf("    mkfs: no block device '%s' (lsblk lists them)\n", argv[i]); return CMD_FAIL; }
+    if(bdev_may_format(d, why, sizeof(why)) != 0) { printf("    mkfs: %s: %s\n", d->name, why); return CMD_FAIL; }
+    if(fat_mkfs_plan(d, label, bits, &l, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return CMD_FAIL; }
 
     human(d->nblocks, size, sizeof(size));
     printf("    %s: %s, %s (%lu blocks)%s\n", d->name, d->model[0] ? d->model : "no model name", size, (u_long)d->nblocks,
@@ -141,19 +145,19 @@ void cmd_mkfs(int argc, char **argv) {
     retype = type_to_set(d, l.bits, &kind);
     if(retype) printf("    the partition's type (%s) becomes %s\n", d->type_name ? d->type_name : "unknown",
                       d->scheme == PART_SCHEME_GPT ? "basic data" : l.bits == 32 ? "0c FAT32 LBA" : "0e FAT16 LBA");
-    printf("    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
-    memset(line, 0, sizeof(line));
-    gets(line);
-    if(strcmp(line, d->name)) { printf("    Cancelled\n"); return; }
-    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return; }
+    snprintf(question, sizeof(question), "    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
+    shell_ask(question, line, sizeof(line));                 /* on the console, also when the output goes to a file */
+    if(strcmp(line, d->name)) { printf("    Cancelled\n"); return CMD_FAIL; }
+    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return CMD_FAIL; }
     printf("    %s: %s\n", d->name, msg);
-    if(retype) set_type(d, &kind);
-    else if(!d->parent && bdev_rescan(d) >= 0 && parts) printf("    %s was read again: no partitions now\n", d->name);
+    if(retype) return set_type(d, &kind) ? CMD_FAIL : CMD_OK;
+    if(!d->parent && bdev_rescan(d) >= 0 && parts) printf("    %s was read again: no partitions now\n", d->name);
+    return CMD_OK;
 }
 
 /**** mount, umount, eject ****/
 
-void cmd_mount(int argc, char **argv) {
+int cmd_mount(int argc, char **argv) {
     const struct mount *m;
     char path[VFS_PATH_MAX];
     struct bdev *d;
@@ -163,15 +167,15 @@ void cmd_mount(int argc, char **argv) {
         for(m = vfs_mounts(); m; m = m->next)
             printf("    %-6s on %-12s type %s%s%s\n", m->sb->dev ? m->sb->dev->name : "none", m->path, m->sb->type->name,
                    m->sb->readonly ? " (ro)" : "", m->sb->dev && m->sb->dev->gone ? " (unplugged: umount it)" : "");
-        return;
+        return CMD_OK;
     }
     if(!strcmp(argv[1], "-r")) { flags = MNT_RDONLY; i++; }
-    if(i >= argc || argc > i + 3) { printf("    usage: mount [-r] <device> [path [type]]   (path: /<device>)\n"); return; }
+    if(i >= argc || argc > i + 3) { printf("    usage: mount [-r] <device> [path [type]]   (path: /<device>)\n"); return CMD_USAGE; }
     d = bdev_find(argv[i]);
-    if(!d) { printf("    mount: no block device '%s' (lsblk lists them)\n", argv[i]); return; }
+    if(!d) { printf("    mount: no block device '%s' (lsblk lists them)\n", argv[i]); return CMD_FAIL; }
     if(argc > i + 1) strlcpy(path, argv[i + 1], sizeof(path));
     else snprintf(path, sizeof(path), "/%s", d->name);
-    if(vfs_bdev_busy(d)) { printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name); return; }
+    if(vfs_bdev_busy(d)) { printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name); return CMD_FAIL; }
     if(d->protect || bdev_disk(d)->protect) {               /* the SurfOS boot drive is only ever read */
         printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
         flags |= MNT_RDONLY;
@@ -181,6 +185,7 @@ void cmd_mount(int argc, char **argv) {
     else if(r == -EBUSY) printf("    mount: %s: something is mounted there already\n", path);
     else if(r) printf("    mount: %s: %s\n", d->name, strerror(r));
     else describe_mount(path);
+    return r ? CMD_FAIL : CMD_OK;
 }
 
 /* unmount the mount at path, saying why not */
@@ -192,25 +197,25 @@ static int unmount(const char *cmd, const char *path) {
     return r;
 }
 
-void cmd_umount(int argc, char **argv) {
+int cmd_umount(int argc, char **argv) {
     const struct mount *m;
     char path[VFS_PATH_MAX];
-    if(argc != 2) { printf("    usage: umount <path|device>\n"); return; }
+    if(argc != 2) { printf("    usage: umount <path|device>\n"); return CMD_USAGE; }
     m = argv[1][0] == '/' ? NULL : mount_of(argv[1]);        /* a device name stands for its mount */
     strlcpy(path, m ? m->path : argv[1], sizeof(path));
-    unmount("umount", path);
+    return unmount("umount", path) ? CMD_FAIL : CMD_OK;
 }
 
 /* eject <disk>: every mount of the disk and its partitions goes (all of them, or none when one
    is busy), the cache and the disk's own cache are written out, and its blocks forgotten */
-void cmd_eject(int argc, char **argv) {
+int cmd_eject(int argc, char **argv) {
     const struct mount *m;
     struct bdev *d, *disk = NULL, *p;
     char paths[8][VFS_PATH_MAX], why[128];
     u_int n = 0, i;
     int r = 0;
 
-    if(argc != 2) { printf("    usage: eject <disk>   (usb0, or one of its partitions)\n"); return; }
+    if(argc != 2) { printf("    usage: eject <disk>   (usb0, or one of its partitions)\n"); return CMD_USAGE; }
     d = bdev_find(argv[1]);
     if(d) disk = bdev_disk(d);
     for(m = vfs_mounts(); m; m = m->next) {                  /* an unplugged disk is off the list: its mounts know it */
@@ -219,30 +224,35 @@ void cmd_eject(int argc, char **argv) {
         if(!disk && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
         if(disk && bdev_disk(x) == disk && n < 8) strlcpy(paths[n++], m->path, sizeof(paths[0]));
     }
-    if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return; }
+    if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
     for(i = 0; i < n; i++) {
         if(vfs_busy(paths[i], why, sizeof(why)) == -EBUSY) {
             printf("    eject: %s: %s is busy: %s\n", disk->name, paths[i], why);
-            return;
+            return CMD_FAIL;
         }
     }
     for(i = 0; i < n && !r; i++) {
         r = unmount("eject", paths[i]);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
-    if(r) return;
+    if(r) return CMD_FAIL;
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); binvalidate(p); }
     bsync(disk);
     binvalidate(disk);
-    if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return; }
-    if(bdev_flush(disk) != 0) printf("    eject: %s: the disk did not confirm that its cache was written (check it elsewhere)\n", disk->name);
-    else printf("    %s: safe to remove\n", disk->name);
+    if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return CMD_OK; }
+    if(bdev_flush(disk) != 0) {
+        printf("    eject: %s: the disk did not confirm that its cache was written (check it elsewhere)\n", disk->name);
+        return CMD_FAIL;
+    }
+    printf("    %s: safe to remove\n", disk->name);
+    return CMD_OK;
 }
 
 /**** df, mv ****/
 
-void cmd_df(int argc, char **argv) {
+int cmd_df(int argc, char **argv) {
     const struct mount *m;
+    int status = CMD_OK;
     printf("    Device  Type       Size     Used    Avail  Use%%  Mounted on    Label\n");
     for(m = vfs_mounts(); m; m = m->next) {
         struct statfs st;
@@ -251,7 +261,11 @@ void cmd_df(int argc, char **argv) {
         int r;
         if(!m->sb->dev) continue;                            /* the root and /dev hold no data */
         r = vfs_statfs(m->path, &st);
-        if(r) { printf("    %-7s %-7s %s (%s)\n", m->sb->dev->name, m->sb->type->name, m->path, strerror(r)); continue; }
+        if(r) {
+            printf("    %-7s %-7s %s (%s)\n", m->sb->dev->name, m->sb->type->name, m->path, strerror(r));
+            status = CMD_FAIL;
+            continue;
+        }
         if(!st.units) { printf("    %-7s %-7s %8s %8s %8s %5s  %-13s %s\n", st.dev, st.fs, "-", "-", "-", "-", st.path, st.label); continue; }
         inuse = st.units - st.free_units;
         human((u64)st.units * st.unit >> 9, size, sizeof(size));
@@ -260,13 +274,14 @@ void cmd_df(int argc, char **argv) {
         printf("    %-7s %-7s %8s %8s %8s %4lu%%  %-13s %s\n", st.dev, st.fs, size, used, avail,
                (u_long)div64_32((u64)inuse * 100 + st.units - 1, st.units, NULL), st.path, st.label);
     }
+    return status;
 }
 
-void cmd_mv(int argc, char **argv) {
+int cmd_mv(int argc, char **argv) {
     char to[VFS_PATH_MAX];
     struct stat st;
     int r;
-    if(argc != 3) { printf("    usage: mv <from> <to>   (into <to> when it is a directory)\n"); return; }
+    if(argc != 3) { printf("    usage: mv <from> <to>   (into <to> when it is a directory)\n"); return CMD_USAGE; }
     strlcpy(to, argv[2], sizeof(to));
     if(vfs_stat(to, &st) == 0 && st.type == VN_DIR) {        /* into the directory, under the same name */
         const char *base = strrchr(argv[1], '/');
@@ -275,6 +290,7 @@ void cmd_mv(int argc, char **argv) {
     }
     r = vfs_rename(argv[1], to);
     if(r) printf("    mv: %s -> %s: %s\n", argv[1], to, strerror(r));
+    return r ? CMD_FAIL : CMD_OK;
 }
 
 /**** fsbench ****/
@@ -307,7 +323,7 @@ static void rate(const char *what, u32 kb, long ms) {
 }
 
 /* fsbench <dir> [MB]: time writing a file in 4 KB pieces, reading it in 4 KB and in 64 KB pieces */
-void cmd_fsbench(int argc, char **argv) {
+int cmd_fsbench(int argc, char **argv) {
     struct bcache_io a, b;
     struct file *f;
     char path[VFS_PATH_MAX];
@@ -316,12 +332,12 @@ void cmd_fsbench(int argc, char **argv) {
     long tw, tr4, tr64;
     int r = 0;
 
-    if(argc < 2 || argc > 3 || mb < 1 || mb > 64) { printf("    usage: fsbench <directory> [MB]   (1 to 64, default 4)\n"); return; }
+    if(argc < 2 || argc > 3 || mb < 1 || mb > 64) { printf("    usage: fsbench <directory> [MB]   (1 to 64, default 4)\n"); return CMD_USAGE; }
     snprintf(path, sizeof(path), "%s/fsbench.tmp", argv[1]);
     size = mb << 20;
     buf = (u8 *)kalloc(65536);
     want = (u8 *)kalloc(65536);
-    if(!buf || !want) { printf("    fsbench: out of memory\n"); kfree(buf); kfree(want); return; }
+    if(!buf || !want) { printf("    fsbench: out of memory\n"); kfree(buf); kfree(want); return CMD_FAIL; }
     bcache_io_stats(&a);
     tw = (long)uptime_ms();
     r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
@@ -331,7 +347,7 @@ void cmd_fsbench(int argc, char **argv) {
     }
     if(r == 0) r = vfs_close(f);                             /* close writes it out */
     tw = (long)uptime_ms() - tw;
-    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return; }
+    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return CMD_FAIL; }
     tr4 = bench_read(path, buf, want, size, 4096);
     tr64 = bench_read(path, buf, want, size, 65536);
     bcache_io_stats(&b);
@@ -344,4 +360,5 @@ void cmd_fsbench(int argc, char **argv) {
     printf("    fsbench: %s\n", tr4 >= 0 && tr64 >= 0 ? "ok" : "FAILED");
     kfree(buf);
     kfree(want);
+    return tr4 >= 0 && tr64 >= 0 ? CMD_OK : CMD_FAIL;
 }

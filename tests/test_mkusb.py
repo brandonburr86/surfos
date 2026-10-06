@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -76,6 +77,29 @@ class MkusbTests(unittest.TestCase):
         data[0x1010:0x1014] = b'\0\0\0\0'
         bad.write_bytes(bytes(data))
         self.assertEqual(self.build(kernel=bad), 1)
+
+    # ---- the menu: no tools needed ----
+
+    def test_menu(self):
+        """10/6/26: every SurfOS entry of the USB image's menu boots the kernel with profile=laptop and its initrd;
+        the troubleshooting entry stays second and the kernel shell (shell=kernel, that entry alone) third, where
+        tools/qemu-usb.py's scenarios find them with the Down key; the USB-off entry says what it leaves out"""
+        entries = re.findall(r'^menuentry "([^"]+)" \{\n(.*?)^\}', self.cfg.read_text(), re.S | re.M)
+        titles = [t for t, _ in entries]
+        for title, body in entries:
+            if title.startswith('SurfOS'):
+                self.assertRegex(body, r'multiboot2 /boot/surfos\.bin profile=laptop( |\n)', title)
+                self.assertIn('module2 /boot/initrd.tar initrd.tar\n', body, title)
+        self.assertEqual(titles[0], 'SurfOS')
+        self.assertTrue(titles[1].startswith('SurfOS (troubleshooting'), titles)
+        self.assertEqual(titles[2], 'SurfOS (kernel shell)')
+        self.assertEqual([t for t, body in entries if 'shell=kernel' in body], ['SurfOS (kernel shell)'])
+        usb_off = [t for t, body in entries if 'usb=off' in body]
+        self.assertEqual(len(usb_off), 1)
+        self.assertIn('no USB network adapter, no USB sticks', usb_off[0])
+        iso = (REPO / 'boot' / 'grub.cfg').read_text()               # the ISO's menu has the kernel shell too
+        self.assertIn('menuentry "SurfOS (kernel shell)"', iso)
+        self.assertIn('multiboot /boot/surfos.bin shell=kernel', iso)
 
     def test_rejects_device_outputs(self):
         self.assertEqual(self.build(output='/dev/null'), 1)

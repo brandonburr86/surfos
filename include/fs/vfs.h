@@ -218,5 +218,6 @@ const char *strerror(int err);
 void tarfs_init(void);
 void fatfs_init(void);
 void devfs_init(void);
+bool devfs_is_console(const struct file *f);     /* 10/6/26: /dev/console or /dev/tty */
 
 #endif

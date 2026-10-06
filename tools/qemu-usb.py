@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test boots the image eleven times, each a cold boot with fresh firmware variables:
+--test boots the image twelve times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -32,6 +32,9 @@ comes out of the framebuffer.
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
              timer ticks and polled keystrokes arrive
+  kernel-shell
+             the GRUB menu's kernel shell entry (shell=kernel): the kernel's ring-0 shell on
+             every console instead of the user shell, its prompt elevated (#), no recovery line
   no-pit     a machine without an 8254 (a chipset can gate its clock): the delays are
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
@@ -84,14 +87,16 @@ FONT_C = os.path.join(REPO, 'driver', 'font8x16.c')
 _SGR = rb'(?:\x1b\[[0-9;]*m)*'
 PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR + rb'>')
 PROMPT_TEXT = re.compile(r'SurfOS\*>|(?:\u224b|~)[!#@?]?>')
-PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>)$')
+# 10/6/26: on a screen whose console does not draw UTF-8 yet the wave is not drawn, and the ring-0 shell's prompt
+# ends in its state alone ("SURF #>")
+PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>| [!#@?]>)$')
 # the pager's question after a screenful (TTY_MORE in include/surfos/tty.h): answered with Space
 MORE = b'--More--'
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kernel panic', 'BOOT PROBLEM']
 
 # (command, strings that must appear before the next prompt) - over the serial console
 PORTABLE = [
-    ('help', ['SurfOS ring0 Debug Shell', '(C)2004 Brandon Burr.']),
+    ('help', ['SurfOS kernel shell 1.0', '(C)2004-2026 Brandon Burr.']),
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
     ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
                  'keyboard  8042', 'usb       1 xHCI controller']),
@@ -101,7 +106,7 @@ PORTABLE = [
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
     ('lsblk', ['rd0']),
     ('mount', ['rd0', '/initrd', 'tarfs']),
-    ('cat /initrd/etc/version', ['SurfOS 0.007']),
+    ('cat /initrd/etc/version', ['SurfOS 1.0 (ai-dev)']),
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('count 3 10', ['counted to 3']),
     ('sleep 300', ['slept 300 ms']),
@@ -118,12 +123,12 @@ KEYBOARD = [
     ('echo abcx<bs>d\n', ['abcd']),                                  # Backspace
     ('<up>\n', ['abcd']),                                            # history
     ('tick\n', ['Ticks:']),
-    ('cat /initrd/etc/version\n', ['SurfOS 0.007']),
+    ('cat /initrd/etc/version\n', ['SurfOS 1.0 (ai-dev)']),
     ('run hello a b\n', ['exit status 42']),
     ('count 3 10\n', ['counted to 3']),
     ('drivers\n', ['console   framebuffer', 'serial    none', 'keyboard  8042']),
     ('memstat\n', ['Free physical pages:', 'dma heap']),
-    ('help\n', ['(C)2004 Brandon Burr.']),
+    ('help\n', ['(C)2004-2026 Brandon Burr.']),
 ]
 
 
@@ -458,6 +463,33 @@ ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '        
 GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
 # 10/6/26: what `pagetest utf8` prints, as the console draws it (code page 437: no euro sign)
 UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
+LRED, ORANGE = bytes((255, 85, 85)), bytes((170, 85, 0))
+
+
+def version_h(name):
+    """a string of include/surfos/version.h (10/6/26), which the banner prints"""
+    m = re.search(r'#define\s+' + name + r'\s+"([^"]*)"', open(os.path.join(REPO, 'include', 'surfos', 'version.h')).read())
+    return m.group(1) if m else '?'
+
+
+def banner_ok(scr):
+    """the banner of kernel/sys.c (10/6/26): "Brandon Burr's SurfOS" in light red, then "Version 1.0 on an x86,
+    2004-2026" in light red with the version and the years in orange"""
+    if scr is None:
+        return False
+    rows = [i for i, r in enumerate(scr.rows) if r == f"{version_h('SURFOS_AUTHOR')}'s {version_h('SURFOS_NAME')}"]
+    if not rows or rows[-1] + 1 >= len(scr.rows):
+        return False
+    title, line = rows[-1], rows[-1] + 1
+    parts = [('Version ', LRED), (version_h('SURFOS_VERSION'), ORANGE), (' on an x86, ', LRED), (version_h('SURFOS_YEARS'), ORANGE)]
+    if scr.rows[line] != ''.join(text for text, _ in parts):
+        return False
+    cells = [(c, title, LRED) for c, ch in enumerate(scr.rows[title]) if ch != ' ']
+    col = 0
+    for text, colour in parts:
+        cells += [(col + i, line, colour) for i, ch in enumerate(text) if ch != ' ']
+        col += len(text)
+    return all(scr.colours[(c, r)][0] == colour for c, r, colour in cells)
 
 
 def ansi_ok(scr):
@@ -468,6 +500,11 @@ def ansi_ok(scr):
             scr.rows[12] == f'ANSI-TEST done, {scr.cols}x{scr.nrows}' and scr.rows[-1].endswith('Z') and
             len(scr.rows[-1]) == scr.cols and scr.colours[(9, 2)] == (BLACK, GREY) and
             scr.colours[(9, 3)] == (YELLOW, BLUE))
+
+
+def drawn(text):
+    """text as both sides of a comparison can show it: printable ASCII, no space at the ends"""
+    return ''.join(c for c in text if ' ' <= c <= '~').strip()
 
 
 def ends_prompt(row):
@@ -558,11 +595,13 @@ def scenario_serial(args, image, firmware, outdir):
             m = PROMPT_TEXT.search(vm.text())
             serial_boot = vm.text()[:m.end()] if m else vm.text()
             results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
-            # the last boot lines on the serial port must be the last ones on the screen too
-            want = [l.strip() for l in serial_boot.splitlines() if l.strip()][-6:]
-            shown = [r.strip() for r in scr.rows if r.strip()]
+            # the last boot lines on the serial port must be the last ones on the screen too (what the screen
+            # can draw of them: before the console draws UTF-8 the prompt's wave is not there)
+            want = [drawn(l) for l in serial_boot.splitlines() if drawn(l)][-6:]
+            shown = [drawn(r) for r in scr.rows if drawn(r)]
             results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
-            results.append(('framebuffer shows the banner', any("Phrite's SurfOS" in r for r in scr.rows)))
+            results.append(('framebuffer shows the banner: Brandon Burr\'s SurfOS, the version and the years in their colours',
+                            banner_ok(scr)))
             results.append(('GRUB found its own partition through $cmdpath, no disk search',
                             'searching all disks' not in serial_boot and 'Booting `SurfOS' in serial_boot))
             run_portable(vm, results)
@@ -608,7 +647,7 @@ def scenario_keyboard(args, image, firmware, outdir):
         results.append(('F2 switches to console 2 (its own shell)', two is not None))
         vm.screen('console2.png')
         vm.keys('<f1>')
-        one = vm.wait_screen(lambda s: '(C)2004 Brandon Burr.' in s.text(), 20, interval=0.5)
+        one = vm.wait_screen(lambda s: '(C)2004-2026 Brandon Burr.' in s.text(), 20, interval=0.5)
         results.append(('F1 switches back to console 1 with its screen', one is not None))
         vm.screen('console1.png')
         # escape sequences (tty.h): the test pattern of `ansi`, read back with its colours
@@ -769,6 +808,35 @@ def scenario_fallback(args, image, firmware, outdir):
             vm.keys('tick\n')                                        # through the polled keyboard
             results.append(('typing reaches the shell through the polled 8042', vm.expect('Ticks:', 20)
                             and vm.expect(PROMPT, 20)))
+        check_bad(vm, results, vm.text())
+    finally:
+        vm.close()
+    return results
+
+
+def scenario_kernel_shell(args, image, firmware, outdir):
+    """10/6/26: the menu's third entry, shell=kernel: the ring-0 shell on every console on purpose, elevated (≋#>),
+    with the banner on the screen and no recovery line"""
+    results = []
+    elevated = re.compile(rb'SURF \xe2\x89\x8b' + _SGR + rb'#' + _SGR + rb'>')
+    vm = Vm('kernel-shell', args, image, firmware, mem='512', serial=True, outdir=outdir)
+    try:
+        ok = vm.expect('Use the', args.boot_timeout)               # the GRUB menu on the firmware console
+        results.append(('the GRUB menu appears', ok))
+        if ok:
+            time.sleep(0.5)
+            vm.keys('<down><down>')
+            vm.keys('\n')
+            ok = vm.expect('Loading SurfOS with shell=kernel', 30) and vm.expect(elevated, args.boot_timeout)
+            results.append(('the kernel shell entry boots to the ring-0 shell, elevated: SURF \u224b#>', ok))
+        if ok:
+            vm.pump(1)
+            scr = vm.screen('kernel-shell.png')
+            row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
+            results.append(('the framebuffer shows the banner and the elevated prompt', banner_ok(scr) and row.endswith('#>')))
+            results.append(('it was asked for: no recovery line', 'recovery console' not in vm.text()))
+            ok, out = run_cmd(vm, 'ps', ['Shell 0', 'Shell 1', 'Shell 2', 'Shell 3'])
+            results.append(('ps: the ring-0 shells on F1 to F4, no surfsh', ok and 'surfsh' not in out))
         check_bad(vm, results, vm.text())
     finally:
         vm.close()
@@ -1193,7 +1261,8 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
-             'highmem': scenario_highmem, 'fallback': scenario_fallback, 'no-pit': scenario_nopit,
+             'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
+             'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
@@ -1297,8 +1366,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'usbdisk',
-                               'storage', 'no-initrd', 'no-kernel']:
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+                               'usbdisk', 'storage', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)

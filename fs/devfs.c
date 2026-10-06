@@ -5,6 +5,9 @@ File: devfs.c   Date: 10/3/26 (roadmap P2)
 --------------------
 /dev holds the console (the calling task's tty and console), null and zero,
 so a program's descriptors 0, 1 and 2 are ordinary open files.
+
+10/6/26: devfs_is_console() tells a kernel command run by the user shell
+(SYS_kcmd) whether descriptor 1 is the console or a redirection.
 */
 
 #include <surfos/types.h>
@@ -70,6 +73,11 @@ static int dev_readdir(struct vnode *dir, u_int index, struct dirent *de) {
 }
 
 static const struct vnode_ops dev_vops = { dev_lookup, dev_readdir, dev_read, dev_write, NULL, NULL, NULL, NULL };
+
+/* is f /dev/console or /dev/tty (the calling task's console)? */
+bool devfs_is_console(const struct file *f) {
+    return f && f->v && f->v->ops == &dev_vops && (f->v->ino == DEV_CONSOLE || f->v->ino == DEV_TTY);
+}
 
 static int dev_mount(struct superblock *sb) {
     sb->root = vnode_alloc(sb, &dev_vops, VN_DIR);

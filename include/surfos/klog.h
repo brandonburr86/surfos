@@ -14,7 +14,7 @@ Everything kprintf() prints also lands in a ring buffer; `dmesg` shows it.
 #define KLOG_SIZE 16384
 
 void klog_write(const char *s);
-void klog_dump(void);          /* print the whole buffer to the active console */
+void klog_dump(void);          /* print the whole buffer to the calling task's console (the active one at boot) */
 u_long klog_length(void);
 
 #endif

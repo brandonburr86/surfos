@@ -4,6 +4,9 @@ SurfOS Multi-tasking Routine's
 File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 --------------------
 (C)2004 Brandon Burr
+
+10/6/26 (surfsh): init starts the user shell on every console, and the ring-0 shell
+when that cannot be (see init_main()).
 */
 
 #include <surfos/types.h>
@@ -21,6 +24,8 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 #include <surfos/wait.h>
 #include <surfos/multiboot.h>
 #include <surfos/tty.h>
+#include <surfos/process.h>
+#include <surfos/klog.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
 
@@ -300,8 +305,9 @@ static void reap(surf_task *t) {
     ntasks--;
     irq_restore(flags);
     fd_close_all(t);                /* in the waiter's context: closing may write a file system */
+    kcmd_task_gone(t);              /* 10/6/26: a kernel command that ended its task (crashgp from the user shell) */
     if(t->uvm) uvm_destroy(t->uvm);
-    kfree(t->stackmem);
+    kfree(t->stackmem);             /* only now: kcmd_task_gone() reads that stack */
     kfree(t);
 }
 
@@ -428,15 +434,119 @@ static u_long *yield_trap(struct trapframe *tf) {
 
 /**** init: the first task, parent of everything that has no parent ****/
 
-static void spawn_shell(surf_console *con) {
+/*
+    10/6/26 (surfsh): every console (F1..F4) gets the user shell, /initrd/bin/surfsh -l, a
+    process flagged TF_SHELL, started again whenever it ends. The kernel's ring-0 shell (Shell N)
+    takes a console instead
+      - on purpose: shell=kernel on the kernel command line, every console (its prompt ≋#>);
+      - as a recovery console (≋?>), with a line saying why: when surfsh cannot be started at
+        all (no initrd, no such file), or when it ended abnormally three times within 30
+        seconds. Abnormal: killed (a fault, kill), not loadable (exit status 127), or gone
+        within 2 seconds of its start, whatever its status (it could not get going).
+    A console keeps the ring-0 shell until the next boot; that shell is started again when
+    it dies (crashgp), as it always was.
+*/
+#define SURFSH_PATH       "/initrd/bin/surfsh"
+#define SURFSH_LOAD_FAILED 127          /* process.c: the exit status of a program that could not be loaded */
+#define SHELL_FAILS       3             /* abnormal ends of surfsh... */
+#define SHELL_WINDOW_MS   30000         /* ...within this long: the recovery console */
+#define SHELL_QUICK_MS    2000          /* a surfsh that ends sooner did not get going */
+
+static struct console_shell {
+    u_long pid;                         /* the shell there now */
+    bool kernel;                        /* the ring-0 shell: shell=kernel, or a recovery console */
+    char why[96];                       /* a recovery console: init's line, shown before its first prompt */
+    u_long started;                     /* uptime_ms() when surfsh last started */
+    u_long ends[SHELL_FAILS - 1];       /* uptime_ms() of its last abnormal ends, oldest first */
+    u_int nends;
+} cshell[NUM_CONSOLES];
+
+/* a line on console i, and in the kernel log with the console's key */
+static void init_say(int i, const char *line) {
+    char logged[16];
+    snprintf(logged, sizeof(logged), "F%i: ", i + 1);
+    klog_write(logged);
+    klog_write(line);
+    kcprintf(&conArray[i], "%s", line);
+}
+
+static void start_kernel_shell(int i) {
     char name[TASK_NAME_LEN];
-    snprintf(name, sizeof(name), "Shell %i", (int)(con - conArray));
-    kthread_create_on(name, con, (kthread_fn)shell, NULL, PL_HIGH, TF_SHELL);
+    surf_task *t;
+    snprintf(name, sizeof(name), "Shell %i", i);
+    t = kthread_create_on(name, &conArray[i], shell, cshell[i].why[0] ? cshell[i].why : NULL, PL_HIGH, TF_SHELL);
+    cshell[i].pid = t ? t->pid : 0;
+    if(!t) kprintf("init: no memory for a shell on F%i\n", i + 1);
+}
+
+/* the ring-0 shell from now on, with init's reason: the shell shows it, the kernel log keeps it */
+static void recovery_console(int i) {
+    char logged[16];
+    cshell[i].kernel = true;
+    snprintf(logged, sizeof(logged), "F%i: ", i + 1);
+    klog_write(logged);
+    klog_write(cshell[i].why);
+    klog_write("\n");
+    start_kernel_shell(i);
+}
+
+static void start_surfsh(int i) {
+    char *argv[] = { "surfsh", "-l" };
+    int pid = process_spawn(SURFSH_PATH, 2, argv, &conArray[i], TF_SHELL);
+    if(pid < 0) {
+        snprintf(cshell[i].why, sizeof(cshell[i].why), "init: %s: %s; recovery console", SURFSH_PATH, strerror(pid));
+        recovery_console(i);
+        return;
+    }
+    cshell[i].pid = (u_long)pid;
+    cshell[i].started = uptime_ms();
+}
+
+static void start_shell(int i) {
+    if(cshell[i].kernel) start_kernel_shell(i);
+    else start_surfsh(i);
+}
+
+/* the shell of console i ended with status (-1: killed) */
+static void shell_ended(int i, int status) {
+    struct console_shell *c = &cshell[i];
+    u_long now = uptime_ms();
+    char how[40], line[80];
+    if(c->kernel) {
+        init_say(i, "init: restarted the shell\n");
+        start_kernel_shell(i);
+        return;
+    }
+    if(status == -1) strlcpy(how, "was killed", sizeof(how));
+    else if(status == SURFSH_LOAD_FAILED) strlcpy(how, "could not be loaded", sizeof(how));
+    else if(now - c->started < SHELL_QUICK_MS) snprintf(how, sizeof(how), "ended at once, status %i", status);
+    else {                                                  /* it ran and was left: just a new one */
+        start_surfsh(i);
+        return;
+    }
+    if(c->nends == SHELL_FAILS - 1 && now - c->ends[0] <= SHELL_WINDOW_MS) {
+        snprintf(c->why, sizeof(c->why), "init: surfsh failed %i times in %i s (%s); recovery console",
+                 SHELL_FAILS, SHELL_WINDOW_MS / 1000, how);
+        recovery_console(i);
+        return;
+    }
+    if(c->nends == SHELL_FAILS - 1) {                       /* keep the last ones */
+        memmove(c->ends, c->ends + 1, (SHELL_FAILS - 2) * sizeof(c->ends[0]));
+        c->nends--;
+    }
+    c->ends[c->nends++] = now;
+    snprintf(line, sizeof(line), "init: surfsh %s; restarted the shell\n", how);
+    init_say(i, line);
+    start_surfsh(i);
 }
 
 static void init_main(void *arg) {
+    bool kernel = bootinfo_has_arg(&bootinfo, "shell=kernel");
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) spawn_shell(&conArray[i]); /* F1..F4 */
+    for(i = 0; i < NUM_CONSOLES; i++) {                      /* F1..F4 */
+        cshell[i].kernel = kernel;
+        start_shell(i);
+    }
     for(;;) {
         int status;
         u_int flags = 0;
@@ -446,9 +556,9 @@ static void init_main(void *arg) {
             sleep_ms(100);
             continue;
         }
-        if(flags & TF_SHELL) {
-            kprintf("init: restarted the shell\n");
-            spawn_shell(con);
+        if(!(flags & TF_SHELL) || !con) continue;           /* an orphan: collected, that is all */
+        for(i = 0; i < NUM_CONSOLES; i++) {
+            if(con == &conArray[i] && cshell[i].pid == (u_long)pid) shell_ended(i, status);
         }
     }
 }

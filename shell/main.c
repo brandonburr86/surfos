@@ -4,6 +4,16 @@ SurfOS ring0 Shell (v0.002)
 
 A line is split into words; the first one selects a command from the table below,
 the rest arrive as argv. `help` is generated from the same table.
+
+10/6/26 (surfsh): every command returns a status (shell.h): 0 success, 1 failure,
+2 a usage error. A word $? is the status of the previous command (`echo $?`); a line
+that is no command is 127, and a program run by its name gives its exit status.
+The prompt is the SurfOS prompt (shell/prompt.c): this shell has system privileges,
+so it is elevated, "SURF ≋#>", or "SURF ≋?>" as init's recovery console when the user
+shell cannot run; each command's output is paged (TTY_PAGE). The user
+shell, surfsh, runs these commands in its own task through SYS_kcmd and lists them
+through SYS_kcmdinfo (kernel/syscall.c, surfos/kcmd.h): shell_run_command() and
+shell_command_info() below.
 */
 
 #include <blibc_common.h>
@@ -38,6 +48,9 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <surfos/multiboot.h>
 #include <surfos/cpu.h>
 #include <surfos/acpi.h>
+#include <surfos/version.h>
+#include <surfos/prompt.h>
+#include <surfos/kcmd.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -46,119 +59,142 @@ the rest arrive as argv. `help` is generated from the same table.
 
 #include "shell.h"
 
-char *prompt = "SurfOS*> ";
-
 static const struct command commands[];
-static u_int ncommands;
+static const u_int ncommands;           /* both defined after the commands */
+
+/* 10/6/26: a question, seen and answered on this task's console even while a kernel command
+   run by the user shell has its output kept for a file (SYS_kcmd: console_capture_begin()) */
+void shell_ask(const char *question, char *answer, size_t size) {
+    struct kcapture *kept = curTask->kcap;
+    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    console_capture_end();
+    printf("%s", question);
+    memset(answer, 0, size);
+    tty_readline(tty, answer, size);
+    if(kept) console_capture_begin(kept);
+}
 
 /**** small commands ****/
 
-static void cmd_help(int argc, char **argv) {
+static int cmd_help(int argc, char **argv) {
     u_int i;
     if(argc > 1) {
         for(i = 0; i < ncommands; i++) {
             if(!strcmp(commands[i].name, argv[1])) {
                 printf("    %s %s\n    %s\n", commands[i].name, commands[i].args, commands[i].help);
-                return;
+                return CMD_OK;
             }
         }
         printf("    no such command: %s\n", argv[1]);
-        return;
+        return CMD_FAIL;
     }
-    printf("\n    SurfOS ring0 Debug Shell v0.009\n");
+    printf("\n    %s kernel shell %s\n", SURFOS_NAME, SURFOS_VERSION);
     printf("    -------------------------------\n");
     for(i = 0; i < ncommands; i++) {
         printf("    %-9s %-14s %s\n", commands[i].name, commands[i].args, commands[i].help);
     }
     printf("    -------------------------------\n");
-    printf("    (C)2004 Brandon Burr.\n\n");
+    printf("    (C)%s %s.\n\n", SURFOS_YEARS, SURFOS_AUTHOR);
+    return CMD_OK;
 }
 
-static void cmd_clear(int argc, char **argv) { clearScreen(); }
+static int cmd_clear(int argc, char **argv) { clearScreen(); return CMD_OK; }
 
-static void cmd_echo(int argc, char **argv) {
+static int cmd_echo(int argc, char **argv) {
     int i;
     for(i = 1; i < argc; i++) printf("%s%s", argv[i], i + 1 < argc ? " " : "");
     printf("\n");
+    return CMD_OK;
 }
 
-static void cmd_reboot(int argc, char **argv) {
+static int cmd_reboot(int argc, char **argv) {
     printf("\n    Please wait... rebooting...");
     reboot();
+    return CMD_FAIL;                    /* not reached: reset() halts when nothing resets the machine */
 }
 
-static void cmd_tick(int argc, char **argv) {
+static int cmd_tick(int argc, char **argv) {
     printf("\n    Ticks: %lu\n\n", getticks());
+    return CMD_OK;
 }
 
-static void cmd_uptime(int argc, char **argv) {
+static int cmd_uptime(int argc, char **argv) {
     u_long ms = uptime_ms();
     printf("    up %lu.%02lu s (%lu ticks at %i Hz), %u tasks, %u timers pending\n",
            ms / 1000, (ms % 1000) / 10, getticks(), HZ, task_count(), ktimers_count());
+    return CMD_OK;
 }
 
-static void cmd_date(int argc, char **argv) {
+static int cmd_date(int argc, char **argv) {
     time_t t;
     get_time(&t);
     printf("    %04u-%02u-%02u %02u:%02u:%02u (CMOS clock)\n", t.year, t.month, t.date, t.hour, t.minute, t.second);
+    return CMD_OK;
 }
 
-static void cmd_sleep(int argc, char **argv) {
+static int cmd_sleep(int argc, char **argv) {
     u_long ms = argc > 1 ? strtoul(argv[1], NULL, 10) : 1000;
     u_long t0 = getticks();
     sleep_ms(ms);
     printf("    slept %lu ms (%lu ticks)\n", ms, getticks() - t0);
+    return CMD_OK;
 }
 
-static void cmd_ps(int argc, char **argv) { print_tasks(); }
+static int cmd_ps(int argc, char **argv) { print_tasks(); return CMD_OK; }
 
-static void cmd_kill(int argc, char **argv) {
+static int cmd_kill(int argc, char **argv) {
     surf_task *t;
     u_long pid;
-    if(argc < 2) { printf("    usage: kill <pid>\n"); return; }
-    pid = strtoul(argv[1], NULL, 10);
+    char *end;
+    if(argc < 2) { printf("    usage: kill <pid>\n"); return CMD_USAGE; }
+    pid = strtoul(argv[1], &end, 10);
+    if(!argv[1][0] || *end) { printf("    usage: kill <pid>   (a number: ps lists them)\n"); return CMD_USAGE; }
     t = task_find(pid);
-    if(!t) { printf("    no task with pid %lu\n", pid); return; }
-    if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return; }
+    if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
+    if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
     printf("    killing '%s' (pid %lu)\n", t->name, pid);
     kill_task(t);
-    if(t == curTask) yield();
+    if(t == curTask) yield();           /* this shell itself: does not come back */
+    return CMD_OK;
 }
 
-static void cmd_memstat(int argc, char **argv) { printMemInfo(); }
+static int cmd_memstat(int argc, char **argv) { printMemInfo(); return CMD_OK; }
 
-static void cmd_heaptest(int argc, char **argv) { heaptest(); }
+static int cmd_heaptest(int argc, char **argv) { return heaptest() ? CMD_FAIL : CMD_OK; }
 
-static void cmd_dmesg(int argc, char **argv) { klog_dump(); }
+static int cmd_dmesg(int argc, char **argv) { klog_dump(); return CMD_OK; }
 
-static void cmd_irqstat(int argc, char **argv) {
+static int cmd_irqstat(int argc, char **argv) {
     int i;
     printf("    IRQ  count\n");
     for(i = 0; i < NR_IRQS; i++) if(irq_count[i]) printf("    %3i  %lu\n", i, irq_count[i]);
     printf("    spurious: %lu\n", spurious_irq_count);
+    return CMD_OK;
 }
 
-static void cmd_bootinfo(int argc, char **argv) {
+static int cmd_bootinfo(int argc, char **argv) {
     char buf[160];
     mb_print();
     printf("  screen: %s\n", console_describe(buf, sizeof(buf)));
+    return CMD_OK;
 }
-static void cmd_lspci(int argc, char **argv) { pci_print(); }
-static void cmd_lsusb(int argc, char **argv) { usb_print(); }
-static void cmd_drivers(int argc, char **argv) { print_drivers(); }
-static void cmd_cpuinfo(int argc, char **argv) { cpu_print(); }
-static void cmd_acpi(int argc, char **argv) { acpi_print(); }
+static int cmd_lspci(int argc, char **argv) { pci_print(); return CMD_OK; }
+static int cmd_lsusb(int argc, char **argv) { usb_print(); return CMD_OK; }
+static int cmd_drivers(int argc, char **argv) { print_drivers(); return CMD_OK; }
+static int cmd_cpuinfo(int argc, char **argv) { cpu_print(); return CMD_OK; }
+static int cmd_acpi(int argc, char **argv) { acpi_print(); return CMD_OK; }
 
-static void cmd_himem(int argc, char **argv) {
+static int cmd_himem(int argc, char **argv) {
     char wrote[40], got[40];
     u64 phys;
     int r = himem_test(wrote, got, sizeof(wrote), &phys);
-    if(r < 0) { printf("    no RAM above 4 GB is mapped (none in the memory map, or no PSE-36)\n"); return; }
+    if(r < 0) { printf("    no RAM above 4 GB is mapped (none in the memory map, or no PSE-36)\n"); return CMD_FAIL; }
     printf("    himem: wrote \"%s\" at physical 0x%llx, read back \"%s\": %s\n", wrote, phys, got, r ? "MISMATCH" : "ok");
+    return r ? CMD_FAIL : CMD_OK;
 }
 
 /* 10/5/26: raw mode (tty.h) from end to end: the bytes the keys send, until q */
-static void cmd_rawkeys(int argc, char **argv) {
+static int cmd_rawkeys(int argc, char **argv) {
     struct tty *t = curTask->tty;
     char buf[16];
     int n, i, reads, size = tty_ctl(t, TTY_GETSIZE, 0);
@@ -171,11 +207,12 @@ static void cmd_rawkeys(int argc, char **argv) {
     }
     tty_ctl(t, TTY_RAW, 0);
     printf("\n");
+    return CMD_OK;
 }
 
 /* 10/5/26: the escape sequences the console draws (tty.h), laid out for the screen tests:
    tools/qemu-run.py reads them back from VGA memory, tools/qemu-usb.py from the framebuffer */
-static void cmd_ansi(int argc, char **argv) {
+static int cmd_ansi(int argc, char **argv) {
     int size = tty_ctl(curTask->tty, TTY_GETSIZE, 0), cols = size >> 16, rows = size & 0xFFFF;
     printf("\033[2J\033[HANSI-TEST top left");
     printf("\033[3;10H\033[7mINVERSE\033[0m normal");
@@ -185,27 +222,30 @@ static void cmd_ansi(int argc, char **argv) {
     printf("\033[11;10H\033[5n\033[?7h\033(B\033[ q\033[38;5;196mUNKNOWN-IGNORED\033[0m");
     printf("\033[%d;%dHZ", rows, cols);                                          /* the corner, without scrolling */
     printf("\033[13;1H\033[?25l\033[?25hANSI-TEST done, %dx%d\n", cols, rows);
+    return CMD_OK;
 }
 
-static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
+static int cmd_lpstat(int argc, char **argv) { printParStatus(); return CMD_OK; }
 
-static void cmd_lsblk(int argc, char **argv) {
-    if(argc > 1 && !strcmp(argv[1], "-s")) bdev_print_io();
+static int cmd_lsblk(int argc, char **argv) {
+    if(argc > 2 || (argc == 2 && strcmp(argv[1], "-s"))) { printf("    usage: lsblk [-s]   (-s: blocks moved)\n"); return CMD_USAGE; }
+    if(argc > 1) bdev_print_io();
     else bdev_print();
+    return CMD_OK;
 }
 
 /**** network ****/
 
-static void cmd_ifconfig(int argc, char **argv) {
+static int cmd_ifconfig(int argc, char **argv) {
     struct netdev *dev;
     ipaddr_t ip, mask, gw = 0, dns = 0;
-    if(argc == 1) { netdev_print(); return; }
+    if(argc == 1) { netdev_print(); return CMD_OK; }
     dev = netdev_find(argv[1]);
-    if(!dev) { printf("    no interface '%s'\n", argv[1]); return; }
+    if(!dev) { printf("    no interface '%s'\n", argv[1]); return CMD_FAIL; }
     if(argc < 4 || !ip_parse(argv[2], &ip) || !ip_parse(argv[3], &mask) || (argc > 4 && !ip_parse(argv[4], &gw)) ||
        (argc > 5 && !ip_parse(argv[5], &dns))) {
         printf("    usage: ifconfig <if> <address> <netmask> [gateway] [dns]\n");
-        return;
+        return CMD_USAGE;
     }
     mutex_lock(&net_lock);
     dev->ip = ip;
@@ -215,34 +255,38 @@ static void cmd_ifconfig(int argc, char **argv) {
     arp_announce(dev);
     mutex_unlock(&net_lock);
     netdev_print();
+    return CMD_OK;
 }
 
-static void cmd_arp(int argc, char **argv) { arp_print(); }
+static int cmd_arp(int argc, char **argv) { arp_print(); return CMD_OK; }
 
-static void cmd_dhcp(int argc, char **argv) {
+static int cmd_dhcp(int argc, char **argv) {
     struct netdev *dev = argc > 1 ? netdev_find(argv[1]) : netdev_default();
-    if(!dev) { printf("    no interface\n"); return; }
-    if(dhcp_configure(dev, 8000) == 0) netdev_print();
-    else printf("    dhcp: no lease\n");
+    if(!dev) { printf("    no interface\n"); return CMD_FAIL; }
+    if(dhcp_configure(dev, 8000) != 0) { printf("    dhcp: no lease\n"); return CMD_FAIL; }
+    netdev_print();
+    return CMD_OK;
 }
 
-static void cmd_nslookup(int argc, char **argv) {
+static int cmd_nslookup(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
-    if(argc < 2) { printf("    usage: nslookup <name>\n"); return; }
-    if(!netdev_default() || !netdev_default()->dns) { printf("    no DNS server configured (ifconfig ... dns, or dhcp)\n"); return; }
-    if(dns_resolve(argv[1], &ip, 3000) == 0) printf("    %s has address %s\n", argv[1], ipfmt(ip, a));
-    else printf("    %s: not found\n", argv[1]);
+    if(argc < 2) { printf("    usage: nslookup <name>\n"); return CMD_USAGE; }
+    if(!netdev_default() || !netdev_default()->dns) { printf("    no DNS server configured (ifconfig ... dns, or dhcp)\n"); return CMD_FAIL; }
+    if(dns_resolve(argv[1], &ip, 3000) != 0) { printf("    %s: not found\n", argv[1]); return CMD_FAIL; }
+    printf("    %s has address %s\n", argv[1], ipfmt(ip, a));
+    return CMD_OK;
 }
 
-static void cmd_ping(int argc, char **argv) {
+/* any reply is a success, as ping has it elsewhere */
+static int cmd_ping(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
     int count = argc > 2 ? atoi(argv[2]) : 4, seq, got = 0, rtt;
     u8 ttl = 0;
-    if(argc < 2) { printf("    usage: ping <address|name> [count]\n"); return; }
-    if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return; }
-    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return; }
+    if(argc < 2) { printf("    usage: ping <address|name> [count]\n"); return CMD_USAGE; }
+    if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return CMD_FAIL; }
+    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
     printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
     for(seq = 1; seq <= count; seq++) {
         rtt = icmp_ping(ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
@@ -251,6 +295,7 @@ static void cmd_ping(int argc, char **argv) {
         if(seq < count) sleep_ms(rtt > 0 && rtt < 1000 ? 1000 - rtt : 1000);
     }
     printf("    %d packets transmitted, %d received, %d%% packet loss\n", count, got, count ? (count - got) * 100 / count : 0);
+    return got ? CMD_OK : CMD_FAIL;
 }
 
 static void tcpecho_thread(void *arg) {
@@ -275,13 +320,23 @@ static void tcpecho_thread(void *arg) {
     }
 }
 
-static void cmd_tcpecho(int argc, char **argv) {
-    u16 port = argc > 1 ? (u16)strtoul(argv[1], NULL, 10) : 7;
-    kthread_create("tcpecho", tcpecho_thread, (void *)(u_long)port, PL_NORMAL, TF_DETACHED);
-    printf("    tcpecho server started on port %u (background task)\n", port);
+/* the server task says itself whether it could listen: the status says it was started */
+static int cmd_tcpecho(int argc, char **argv) {
+    char *end = NULL;
+    u_long port = argc > 1 ? strtoul(argv[1], &end, 10) : 7;
+    if(argc > 2 || (end && (!argv[1][0] || *end || !port || port > 65535))) {
+        printf("    usage: tcpecho [port]   (1 to 65535, default 7)\n");
+        return CMD_USAGE;
+    }
+    if(!kthread_create("tcpecho", tcpecho_thread, (void *)port, PL_NORMAL, TF_DETACHED)) {
+        printf("    tcpecho: no memory for the server task\n");
+        return CMD_FAIL;
+    }
+    printf("    tcpecho server started on port %lu (background task)\n", port);
+    return CMD_OK;
 }
 
-static void cmd_httpget(int argc, char **argv) {
+static int cmd_httpget(int argc, char **argv) {
     ipaddr_t ip;
     struct tcp_socket *s;
     const char *path = argc > 3 ? argv[3] : "/";
@@ -289,14 +344,15 @@ static void cmd_httpget(int argc, char **argv) {
     u_long total = 0, t0, shown = 0;
     u16 port;
     int n;
-    if(argc < 3) { printf("    usage: httpget <host> <port> [path]\n"); return; }
-    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    httpget: cannot resolve %s\n", argv[1]); return; }
+    if(argc < 3) { printf("    usage: httpget <host> <port> [path]\n"); return CMD_USAGE; }
+    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    httpget: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
     port = (u16)strtoul(argv[2], NULL, 10);
     t0 = getticks();
     s = tcp_connect(ip, port, 5000);
-    if(!s) { printf("    httpget: connection to %s:%u failed\n", ipfmt(ip, a), port); return; }
-    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: SurfOS/0.007\r\nConnection: close\r\n\r\n", path, argv[1]);
-    if(tcp_send(s, req, strlen(req)) != (int)strlen(req)) { printf("    httpget: send failed\n"); tcp_close(s); return; }
+    if(!s) { printf("    httpget: connection to %s:%u failed\n", ipfmt(ip, a), port); return CMD_FAIL; }
+    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " SURFOS_NAME "/" SURFOS_VERSION "\r\nConnection: close\r\n\r\n",
+             path, argv[1]);
+    if(tcp_send(s, req, strlen(req)) != (int)strlen(req)) { printf("    httpget: send failed\n"); tcp_close(s); return CMD_FAIL; }
     while((n = tcp_recv(s, buf, sizeof(buf) - 1, 10000)) > 0) {
         int i;
         total += n;
@@ -308,12 +364,14 @@ static void cmd_httpget(int argc, char **argv) {
     }
     tcp_close(s);
     printf("\n    %lu bytes received in %lu ms%s\n", total, (getticks() - t0) * (1000 / HZ), n < 0 ? " (timed out)" : "");
+    return n < 0 ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_netstat(int argc, char **argv) {
+static int cmd_netstat(int argc, char **argv) {
     netdev_print();
     udp_print();
     tcp_print();
+    return CMD_OK;
 }
 
 /**** processes ****/
@@ -324,27 +382,32 @@ static void program_path(const char *name, char *path, size_t size) {
     else snprintf(path, size, "/initrd/bin/%s", name);
 }
 
-static void run_program(int argc, char **argv, bool background) {
+/* 10/6/26: the status of a program in the foreground is its exit status, CMD_FAIL when it
+   could not start or was killed (a status below 0 would read as an error number). A process
+   running this as a kernel command (the user shell, SYS_kcmd) is the program's parent and
+   passes its descriptors 0, 1 and 2 on: `run hello > out.txt` puts hello's output in the file.
+   A program in the background stays detached (init collects it), wherever spawn ran. */
+static int run_program(int argc, char **argv, bool background) {
     char path[VFS_PATH_MAX];
     int pid, status = 0;
     program_path(argv[0], path, sizeof(path));
-    pid = process_spawn(path, argc, argv, curTask->con, background ? TF_DETACHED : 0);
-    if(pid < 0) { printf("    %s: %s\n", argv[0], strerror(pid)); return; }
-    if(background) { printf("    [pid %d started]\n", pid); return; }
-    if(task_wait(pid, &status) == pid) {
-        if(status == -1) printf("    [pid %d killed]\n", pid);
-        else printf("    [pid %d exit status %d]\n", pid, status);
-    }
+    pid = process_spawn_files(path, argc, argv, curTask->con, background ? TF_DETACHED : 0, curTask->uvm ? curTask->files : NULL);
+    if(pid < 0) { printf("    %s: %s\n", argv[0], strerror(pid)); return CMD_FAIL; }
+    if(background) { printf("    [pid %d started]\n", pid); return CMD_OK; }
+    if(task_wait(pid, &status) != pid) return CMD_FAIL;
+    if(status == -1) { printf("    [pid %d killed]\n", pid); return CMD_FAIL; }
+    printf("    [pid %d exit status %d]\n", pid, status);
+    return status < 0 ? CMD_FAIL : status;
 }
 
-static void cmd_run(int argc, char **argv) {
-    if(argc < 2) { printf("    usage: run <program> [args...]   (a name in /initrd/bin or a path)\n"); return; }
-    run_program(argc - 1, argv + 1, false);
+static int cmd_run(int argc, char **argv) {
+    if(argc < 2) { printf("    usage: run <program> [args...]   (a name in /initrd/bin or a path)\n"); return CMD_USAGE; }
+    return run_program(argc - 1, argv + 1, false);
 }
 
-static void cmd_spawn(int argc, char **argv) {
-    if(argc < 2) { printf("    usage: spawn <program> [args...]   (runs in the background)\n"); return; }
-    run_program(argc - 1, argv + 1, true);
+static int cmd_spawn(int argc, char **argv) {
+    if(argc < 2) { printf("    usage: spawn <program> [args...]   (runs in the background)\n"); return CMD_USAGE; }
+    return run_program(argc - 1, argv + 1, true);
 }
 
 /**** files ****/
@@ -363,7 +426,7 @@ static void fmt_time(u32 t, char *buf, size_t size) {
     snprintf(buf, size, "%04d-%02u-%02u %02u:%02u:%02u", y, m, d, rem / 3600, (rem / 60) % 60, rem % 60);
 }
 
-static void cmd_ls(int argc, char **argv) {
+static int cmd_ls(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : ".";
     struct file *f;
     struct dirent de;
@@ -372,14 +435,14 @@ static void cmd_ls(int argc, char **argv) {
     u_int n = 0;
     u_long total = 0;
     int r = vfs_stat(path, &st);
-    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return; }
+    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return CMD_FAIL; }
     if(st.type != VN_DIR) {
         fmt_time(st.mtime, when, sizeof(when));
         printf("    - %8lu  %s  %s\n", (u_long)st.size, when, path);
-        return;
+        return CMD_OK;
     }
     r = vfs_open(path, O_RDONLY | O_DIRECTORY, &f);
-    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return; }
+    if(r) { printf("    ls: %s: %s\n", path, strerror(r)); return CMD_FAIL; }
     while((r = vfs_readdir(f, &de)) == 0) {
         fmt_time(de.mtime, when, sizeof(when));
         printf("    %c %8lu  %-19s  %s%s\n", de.type == VN_DIR ? 'd' : '-', (u_long)de.size, when, de.name, de.type == VN_DIR ? "/" : "");
@@ -389,16 +452,17 @@ static void cmd_ls(int argc, char **argv) {
     if(r < 0) printf("    ls: %s\n", strerror(r));
     vfs_close(f);
     printf("    %u entries, %lu bytes\n", n, total);
+    return r < 0 ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_cat(int argc, char **argv) {
-    int i;
-    if(argc < 2) { printf("    usage: cat <file>...\n"); return; }
+static int cmd_cat(int argc, char **argv) {
+    int i, status = CMD_OK;
+    if(argc < 2) { printf("    usage: cat <file>...\n"); return CMD_USAGE; }
     for(i = 1; i < argc; i++) {
         struct file *f;
         char buf[256];
         int r = vfs_open(argv[i], O_RDONLY, &f), last = '\n';
-        if(r) { printf("    cat: %s: %s\n", argv[i], strerror(r)); continue; }
+        if(r) { printf("    cat: %s: %s\n", argv[i], strerror(r)); status = CMD_FAIL; continue; }
         while((r = vfs_read(f, buf, sizeof(buf))) > 0) {
             int j;
             for(j = 0; j < r; j++) {
@@ -408,89 +472,97 @@ static void cmd_cat(int argc, char **argv) {
                 last = c;
             }
         }
-        if(r < 0) printf("\n    cat: %s: %s", argv[i], strerror(r));
+        if(r < 0) { printf("\n    cat: %s: %s", argv[i], strerror(r)); status = CMD_FAIL; }
         if(last != '\n') printf("\n");
         vfs_close(f);
     }
+    return status;
 }
 
-static void cmd_cd(int argc, char **argv) {
+static int cmd_cd(int argc, char **argv) {
     int r = vfs_chdir(argc > 1 ? argv[1] : "/");
     if(r) printf("    cd: %s: %s\n", argc > 1 ? argv[1] : "/", strerror(r));
+    return r ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_pwd(int argc, char **argv) { printf("    %s\n", vfs_getcwd()); }
+static int cmd_pwd(int argc, char **argv) { printf("    %s\n", vfs_getcwd()); return CMD_OK; }
 
-static void cmd_stat(int argc, char **argv) {
+static int cmd_stat(int argc, char **argv) {
     struct stat st;
     char when[24];
     int r;
-    if(argc < 2) { printf("    usage: stat <path>\n"); return; }
+    if(argc < 2) { printf("    usage: stat <path>\n"); return CMD_USAGE; }
     r = vfs_stat(argv[1], &st);
-    if(r) { printf("    stat: %s: %s\n", argv[1], strerror(r)); return; }
+    if(r) { printf("    stat: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
     fmt_time(st.mtime, when, sizeof(when));
     printf("    %s: %s, %lu bytes, modified %s, inode %lu on %s (%s)\n", argv[1], st.type == VN_DIR ? "directory" : "file",
            (u_long)st.size, when, (u_long)st.ino, st.dev[0] ? st.dev : "none", st.fs);
+    return CMD_OK;
 }
 
-static void cmd_sync(int argc, char **argv) {
+static int cmd_sync(int argc, char **argv) {
     u_long h, m, w;
     int r = vfs_sync();
     bcache_stats(&h, &m, &w);
     printf("    %s; block cache: %lu hits, %lu misses, %lu blocks written\n", r ? strerror(r) : "synced", h, m, w);
+    return r ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_mkdir(int argc, char **argv) {
+static int cmd_mkdir(int argc, char **argv) {
     int r;
-    if(argc < 2) { printf("    usage: mkdir <dir>\n"); return; }
+    if(argc < 2) { printf("    usage: mkdir <dir>\n"); return CMD_USAGE; }
     r = vfs_mkdir(argv[1]);
     if(r) printf("    mkdir: %s: %s\n", argv[1], strerror(r));
+    return r ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_rm(int argc, char **argv) {
-    int i;
-    if(argc < 2) { printf("    usage: rm <file>...\n"); return; }
+static int cmd_rm(int argc, char **argv) {
+    int i, status = CMD_OK;
+    if(argc < 2) { printf("    usage: rm <file>...\n"); return CMD_USAGE; }
     for(i = 1; i < argc; i++) {
         int r = vfs_unlink(argv[i]);
-        if(r) printf("    rm: %s: %s\n", argv[i], strerror(r));
+        if(r) { printf("    rm: %s: %s\n", argv[i], strerror(r)); status = CMD_FAIL; }
     }
+    return status;
 }
 
-static void cmd_rmdir(int argc, char **argv) {
+static int cmd_rmdir(int argc, char **argv) {
     int r;
-    if(argc < 2) { printf("    usage: rmdir <dir>\n"); return; }
+    if(argc < 2) { printf("    usage: rmdir <dir>\n"); return CMD_USAGE; }
     r = vfs_rmdir(argv[1]);
     if(r) printf("    rmdir: %s: %s\n", argv[1], strerror(r));
+    return r ? CMD_FAIL : CMD_OK;
 }
 
 /* write <file> words...: the words, space separated, plus a newline (there is no shell redirection) */
-static void cmd_write(int argc, char **argv) {
+static int cmd_write(int argc, char **argv) {
     struct file *f;
-    int r, i;
-    if(argc < 3) { printf("    usage: write <file> <text>...\n"); return; }
+    int r, c, i;
+    if(argc < 3) { printf("    usage: write <file> <text>...\n"); return CMD_USAGE; }
     r = vfs_open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, &f);
-    if(r) { printf("    write: %s: %s\n", argv[1], strerror(r)); return; }
+    if(r) { printf("    write: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
     for(i = 2; i < argc && r >= 0; i++) {
         r = vfs_write(f, argv[i], strlen(argv[i]));
         if(r >= 0) r = vfs_write(f, i + 1 < argc ? " " : "\n", 1);
     }
     if(r < 0) printf("    write: %s\n", strerror(r));
-    r = vfs_close(f);
-    if(r) printf("    write: close: %s\n", strerror(r));
+    c = vfs_close(f);
+    if(c) printf("    write: close: %s\n", strerror(c));
+    return r < 0 || c ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_cp(int argc, char **argv) {
+static int cmd_cp(int argc, char **argv) {
     struct file *in, *out;
     char *buf;
     u_long total = 0;
     int r, w;
-    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return; }
+    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return CMD_USAGE; }
     r = vfs_open(argv[1], O_RDONLY, &in);
-    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return; }
+    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
     r = vfs_open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, &out);
-    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return; }
+    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return CMD_FAIL; }
     buf = (char *)kalloc(4096);
-    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return; }
+    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
     while((r = vfs_read(in, buf, 4096)) > 0) {
         w = vfs_write(out, buf, r);
         if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
@@ -499,28 +571,30 @@ static void cmd_cp(int argc, char **argv) {
     if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
     kfree(buf);
     vfs_close(in);
-    r = vfs_close(out);
-    if(r) printf("    cp: close: %s\n", strerror(r));
+    w = vfs_close(out);
+    if(w) printf("    cp: close: %s\n", strerror(w));
     else if(r == 0) printf("    %lu bytes copied\n", total);
+    return r || w ? CMD_FAIL : CMD_OK;
 }
 
 /* 10/5/26: how fast a disk reads (nothing is written): 64 KB requests through the block layer */
-static void cmd_readbench(int argc, char **argv) {
+static int cmd_readbench(int argc, char **argv) {
     struct bdev *d;
     u_long mb, blocks, done = 0, t0, ms;
     u8 *buf;
-    if(argc < 2) { printf("    usage: readbench <device> [MB]   (reads only; lsblk lists the devices)\n"); return; }
+    int r = 0;
+    if(argc < 2) { printf("    usage: readbench <device> [MB]   (reads only; lsblk lists the devices)\n"); return CMD_USAGE; }
     d = bdev_find(argv[1]);
-    if(!d) { printf("    no block device '%s'\n", argv[1]); return; }
+    if(!d) { printf("    no block device '%s'\n", argv[1]); return CMD_FAIL; }
     mb = argc > 2 ? strtoul(argv[2], NULL, 0) : 8;
     blocks = mb * 2048;
     if(blocks > d->nblocks) blocks = d->nblocks;
     buf = (u8 *)kalloc(65536);
-    if(!buf) return;
+    if(!buf) { printf("    readbench: out of memory\n"); return CMD_FAIL; }
     t0 = getticks();
     while(done < blocks) {
         u_long n = blocks - done > 128 ? 128 : blocks - done;
-        int r = bdev_read(d, (u32)done, (u32)n, buf);
+        r = bdev_read(d, (u32)done, (u32)n, buf);
         if(r) { printf("    read of block %lu failed (%i)\n", done, r); break; }
         done += n;
     }
@@ -529,22 +603,23 @@ static void cmd_readbench(int argc, char **argv) {
     if(ms) printf(": %lu KB/s", (done / 2) * 1000 / ms);
     printf("\n");
     kfree(buf);
+    return r ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_hexdump(int argc, char **argv) {
+static int cmd_hexdump(int argc, char **argv) {
     struct bdev *d;
     u_long lba, nblk, i, j;
     u8 *buf;
     int rc;
-    if(argc < 2) { printf("    usage: hexdump <device> [block] [count]   (lsblk lists the devices)\n"); return; }
+    if(argc < 2) { printf("    usage: hexdump <device> [block] [count]   (lsblk lists the devices)\n"); return CMD_USAGE; }
     d = bdev_find(argv[1]);
     if(!d) {                                            /* not a device: a file, 512 bytes at an offset */
         struct file *f;
         u_long off = argc > 2 ? strtoul(argv[2], NULL, 0) : 0;
         int r = vfs_open(argv[1], O_RDONLY, &f);
-        if(r) { printf("    no block device or file '%s' (%s)\n", argv[1], strerror(r)); return; }
+        if(r) { printf("    no block device or file '%s' (%s)\n", argv[1], strerror(r)); return CMD_FAIL; }
         buf = (u8 *)kalloc(512);
-        if(!buf) { vfs_close(f); return; }
+        if(!buf) { printf("    hexdump: out of memory\n"); vfs_close(f); return CMD_FAIL; }
         vfs_lseek(f, (i32)off, SEEK_SET);
         r = vfs_read(f, buf, 512);
         for(i = 0; (int)i < r; i += 16) {
@@ -557,13 +632,13 @@ static void cmd_hexdump(int argc, char **argv) {
         if(r < 0) printf("    read failed: %s\n", strerror(r));
         kfree(buf);
         vfs_close(f);
-        return;
+        return r < 0 ? CMD_FAIL : CMD_OK;
     }
     lba = argc > 2 ? strtoul(argv[2], NULL, 0) : 0;
     nblk = argc > 3 ? strtoul(argv[3], NULL, 0) : 1;
-    if(nblk < 1 || nblk > 8) { printf("    1 to 8 blocks at a time\n"); return; }
+    if(nblk < 1 || nblk > 8) { printf("    1 to 8 blocks at a time\n"); return CMD_USAGE; }
     buf = (u8 *)kalloc(nblk * d->block_size);
-    if(!buf) { printf("    out of memory\n"); return; }
+    if(!buf) { printf("    out of memory\n"); return CMD_FAIL; }
     rc = bdev_read(d, lba, nblk, buf);
     if(rc) printf("    read of %s block %lu failed (%i)\n", d->name, lba, rc);
     else for(i = 0; i < nblk * d->block_size; i += 16) {
@@ -574,34 +649,42 @@ static void cmd_hexdump(int argc, char **argv) {
         printf("|\n");
     }
     kfree(buf);
+    return rc ? CMD_FAIL : CMD_OK;
 }
 
-static void cmd_test(int argc, char **argv) {
+static int cmd_test(int argc, char **argv) {
     void *tmp = palloc(1024);
-    void *tmp2 = mm_lookup_linear(tmp);
+    void *tmp2;
+    if(!tmp) { printf("    test: no DMA memory\n"); return CMD_FAIL; }
+    tmp2 = mm_lookup_linear(tmp);
     printf("0x%lx linear is using physical 0x%lx\n", (u_long)tmp, (u_long)tmp2);
     pfree(tmp);
+    return CMD_OK;
 }
 
-static void cmd_beep(int argc, char **argv) { demoBeep(); }
-static void cmd_funky(int argc, char **argv) { new_task("funky", conActive, KERNEL, PL_NORMAL, (u_long*)funky); }
-static void cmd_die(int argc, char **argv) { new_task("ring3", conActive, USER, PL_NORMAL, (u_long*)funky); } /* a ring-3 task: faults until P1 exists */
-static void cmd_demo(int argc, char **argv) { invokeDemo(); }
-static void cmd_hanoi(int argc, char **argv) { runHanoi(); }
+static int cmd_beep(int argc, char **argv) { demoBeep(); return CMD_OK; }
+static int cmd_funky(int argc, char **argv) { return new_task("funky", conActive, KERNEL, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; }
+static int cmd_die(int argc, char **argv) { return new_task("ring3", conActive, USER, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; } /* a ring-3 task: faults until P1 exists */
+static int cmd_demo(int argc, char **argv) { invokeDemo(); return CMD_OK; }
+static int cmd_hanoi(int argc, char **argv) { runHanoi(); return CMD_OK; }
 
-static void cmd_selftest(int argc, char **argv) { run_selftest(); }
+static int cmd_selftest(int argc, char **argv) { return run_selftest() ? CMD_FAIL : CMD_OK; }
 
-/* exercise the trap framework: real exceptions in this task */
-static void cmd_crashdiv(int argc, char **argv) {
+/* exercise the trap framework: real exceptions in this task (which they kill: the status of the
+   three that fault is never seen; the report reaches the screen also when the user shell sent
+   the output to a file, kernel/panic.c) */
+static int cmd_crashdiv(int argc, char **argv) {
     volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
     printf("%i\n", one/zero);
+    return CMD_FAIL;
 }
-static void cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); }
-static void cmd_crashint(int argc, char **argv) {
+static int cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
+static int cmd_crashint(int argc, char **argv) {
     asm volatile("int $0x50");
     printf("    int 0x50 returned\n");
+    return CMD_OK;
 }
-static void cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; } /* page 0 is unmapped */
+static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
@@ -672,56 +755,112 @@ static const struct command commands[] = {
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };
+static const u_int ncommands = sizeof(commands) / sizeof(commands[0]);
 
 /**** line handling ****/
 
-static int split_args(char *line, char **argv) {
+/* the words of a line; 10/6/26: a word $? becomes last, the previous command's status, in status[] */
+static int split_args(char *line, char **argv, int last, char *status, size_t size) {
     int argc = 0;
     char *save;
     char *tok = strtok_r(line, " \t", &save);
     while(tok && argc < SHELL_MAX_ARGS) {
+        if(!strcmp(tok, "$?")) {
+            snprintf(status, size, "%d", last);
+            tok = status;
+        }
         argv[argc++] = tok;
         tok = strtok_r(NULL, " \t", &save);
     }
     return argc;
 }
 
-void parseCommand(char *line) {
-    char *argv[SHELL_MAX_ARGS];
-    int argc = split_args(line, argv);
+/* 10/6/26: run the command argv[0] in the calling task; its status, -ENOENT when there is no
+   such command. This shell's lines and the user shell's SYS_kcmd come here. */
+int shell_run_command(int argc, char **argv) {
     u_int i;
-
-    if(!argc) return; /* no command entered */
+    if(argc < 1 || !argv[0]) return -ENOENT;
     for(i = 0; i < ncommands; i++) {
         if(!strcmp(commands[i].name, argv[0])) {
-            commands[i].fn(argc, argv);
-            return;
+            int r = commands[i].fn(argc, argv);
+            return r < 0 ? CMD_FAIL : r;       /* below 0 a status would read as an error number */
         }
     }
+    return -ENOENT;
+}
+
+/* 10/6/26: entry index of the table, for help and Tab completion in the user shell
+   (SYS_kcmdinfo); 0, or -ENOENT after the last one */
+int shell_command_info(int index, struct kcmd_info *out) {
+    if(index < 0 || (u_int)index >= ncommands) return -ENOENT;
+    memset(out, 0, sizeof(*out));                    /* nothing of the kernel's stack goes along */
+    strlcpy(out->name, commands[index].name, sizeof(out->name));
+    strlcpy(out->args, commands[index].args, sizeof(out->args));
+    strlcpy(out->help, commands[index].help, sizeof(out->help));
+    return 0;
+}
+
+/* run one line; its status (shell.h), or last again for an empty line */
+int parseCommand(char *line, int last) {
+    char *argv[SHELL_MAX_ARGS], status[12];
+    int argc = split_args(line, argv, last, status, sizeof(status)), r;
+
+    if(!argc) return last; /* no command entered */
+    r = shell_run_command(argc, argv);
+    if(r != -ENOENT) return r;
     {   /* not built in: a user program in /initrd/bin? */
         char path[VFS_PATH_MAX];
         struct stat st;
         program_path(argv[0], path, sizeof(path));
-        if(vfs_stat(path, &st) == 0 && st.type == VN_FILE) { run_program(argc, argv, false); return; }
+        if(vfs_stat(path, &st) == 0 && st.type == VN_FILE) return run_program(argc, argv, false);
     }
     printf("    Invalid command: %s (try help)\n", argv[0]);
+    return 127;                         /* what other shells answer for a command that is not there */
 }
 
-/* the shell task body (started by init for each console) */
-void startShell(void);
+/* 10/6/26: the SurfOS prompt (surfos/prompt.h) for the current directory: elevated, since this
+   shell has system privileges, diagnostic as a recovery console; in Unicode when the terminal
+   draws it, in the SurfOS colours */
+static void show_prompt(int status, int diagnostic) {
+    struct prompt_ctx c;
+    char buf[PROMPT_MAX];
+    int caps = tty_ctl(curTask->tty, TTY_CAPS, 0);
+    memset(&c, 0, sizeof(c));
+    c.cwd = vfs_getcwd();
+    c.last_status = status;
+    c.elevated = 1;
+    c.diagnostic = diagnostic;
+    c.width = (int)COLUMNS;
+    c.unicode = caps > 0 && (caps & TTY_CAP_UTF8);
+    c.color = 1;
+    prompt_render(&c, buf, sizeof(buf));        /* cut short (still terminated) only by a path longer than any is */
+    puts(buf);                                  /* not printf: its buffer is shorter than PROMPT_MAX */
+}
 
-void shell() {
+/* the shell task body, started by init for each console (kernel/task.c). 10/6/26: why is NULL
+   when this shell was asked for (shell=kernel), otherwise init's reason for a recovery console,
+   said once before the first prompt */
+void startShell(int diagnostic);
+
+void shell(void *why) {
     do_banner();
-    startShell();
+    if(why) {
+        cputs(KERN_TXT_COLOR, (char *)why);
+        printf("\n");
+    }
+    startShell(why != NULL);
 }
 
-void startShell() {
+/* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful */
+void startShell(int diagnostic) {
     char line[SHELL_LINE_LEN];
-    ncommands = sizeof(commands) / sizeof(commands[0]);
+    int status = 0;
     for(;;) {
-        cputs(LBLUE_TXT, prompt);
+        show_prompt(status, diagnostic);
         memset(line, 0, sizeof(line));
         cgets(TEAL_TXT, line);
-        parseCommand(line);
+        tty_ctl(curTask->tty, TTY_PAGE, 1);
+        status = parseCommand(line, status);
+        tty_ctl(curTask->tty, TTY_PAGE, 0);
     }
 }

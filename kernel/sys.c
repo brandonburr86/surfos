@@ -1,5 +1,7 @@
 /*
     SurfOS System Calls -- (C)2004 Brandon Burr
+
+    10/6/26: the banner says SurfOS 1.0, 2004-2026 (surfos/version.h), in its old colours.
 */
 
 #include <asm/io.h>
@@ -12,6 +14,7 @@
 #include <surfos/console.h>
 #include <surfos/task.h>
 #include <surfos/acpi.h>
+#include <surfos/version.h>
 #include <mm/paging.h>
 
 /* Reset the machine. 2004: pulse the reset line through the keyboard controller. Since
@@ -44,10 +47,11 @@ void reset() {
 }
 
 void do_banner(void) {
-    cputs(LRED_TXT,"\n\nPhrite's SurfOS\n");
-    cputs(LRED_TXT,"Kernel version ");
-    cputs(ORANGE_TXT,"0.007");
-    cputs(LRED_TXT," on an x86");
+    cputs(LRED_TXT,"\n\n" SURFOS_AUTHOR "'s " SURFOS_NAME "\n");
+    cputs(LRED_TXT,"Version ");
+    cputs(ORANGE_TXT,SURFOS_VERSION);
+    cputs(LRED_TXT," on an x86, ");
+    cputs(ORANGE_TXT,SURFOS_YEARS);
     printf("\n");
 }
 

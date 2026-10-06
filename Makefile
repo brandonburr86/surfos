@@ -36,7 +36,7 @@ USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
 USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
-USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh
+USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
