@@ -470,8 +470,8 @@ still to be filled in. M9 and M10 are done under emulation and wait for the lapt
 (`docs/USB-BOOT.md` sections 9 and 10, the storage and shell rows of the hardware record).
 
 The shell work left these open: typing letters beyond ASCII (the keyboard and the line
-editor are byte-wise; the console already draws them); Ctrl+C for a running command
-(there are no signals yet); pipes, variables and wildcards in surfsh; users and home
+editor are byte-wise; the console already draws them); job control (bringing a background
+program back); pipes, variables and wildcards in surfsh; users and home
 directories (a shell starts at `/`); and remote sessions, for which the prompt's `≋@>`
 state is ready.
 

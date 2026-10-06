@@ -455,7 +455,7 @@ SurfOS has no users and no home directories, so a shell starts at `/`.
 | Up, Down | the lines typed before (`history` lists them) |
 | Tab | complete the command or file name; a second Tab lists the choices |
 | Ctrl+L | clear the screen |
-| Ctrl+C | drop the line |
+| Ctrl+C | drop the line; while a command runs, stop it |
 | Ctrl+D | on an empty line: leave this shell |
 
 Tab completes the first word from the shell's commands, the kernel's and the programs, and
@@ -486,7 +486,8 @@ what they say: `lspci > /data/lspci.txt`. A question such as fdisk's still appea
 screen.
 
 **Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
-that could not be started, 127 no such command, 137 a program the kernel killed. A
+that could not be started, 127 no such command, 130 a kernel command stopped with Ctrl+C,
+137 a program that was killed (by `kill`, by Ctrl+C or by a fault). A
 program that ends with another status says `[exit status N]`.
 
 **Settings.** `set` lists them, `set <key> <value>` (or `<key>=<value>`) changes one for

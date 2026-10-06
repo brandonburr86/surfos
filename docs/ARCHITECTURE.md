@@ -205,7 +205,9 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   semaphores and events (`kernel/sync.c`), `sleep_ms()`, kernel timers
   (`kernel/ktimer.c`). `getch()` blocks on the keyboard wait queue.
 * Lifetime: `kthread_create()` makes a child of the caller; `task_exit()` or
-  `kill_task()` turns a task into a zombie and `task_wait()` in the parent frees it;
+  `kill_task()` turns a task into a zombie and `task_wait()` in the parent frees it
+  (10/6/26: a task killed inside a system call or kernel command is only marked and ends
+  at the end of its call, section 17);
   init (pid 1) collects detached and orphaned tasks and restarts a shell when one
   dies. Nothing frees a stack that may still be running, and every kernel stack is
   pre-faulted at creation (a stack page fault would double-fault). **ai-dev** (10/6/26):
@@ -1090,17 +1092,32 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   `make test-usb` drives it on the framebuffer and the keyboard: `help` page by page, Tab
   and history from the PS/2 keyboard, UTF-8 read back through the font in `fullhd`, and the
   `kernel-shell` scenario boots the GRUB entry.
+* **Stopping a command** (`kernel/task.c`, `kernel/tty.c`). A task that another task kills
+  while it is inside a call (a system call, a kernel command run by the ring-0 shell or by
+  SYS_kcmd, a process until its program is loaded) is only marked: its interruptible waits
+  end at once (terminal reads and the pager, `sleep_intr()`, `wait_on_timeout()` and the
+  network's waits, the wait for a child; they answer -1 or -EINTR), the command gives up
+  along its usual way out (fdisk and mkfs cancel their question, cp closes its files, ping,
+  cat, fsbench and readbench stop, the self test ends between tests with `SELFTEST STOPPED`
+  and releases its claim), and at the end of the call the task exits with -1 in its own
+  context, so its files close and nothing is left held. Mutexes, semaphores, untimed
+  events, the block cache and drivers' waits are not cut short. A task that has not ended
+  its call 2 seconds after the kill is killed at once from the timer, with a line in the
+  kernel log (`sleep -u` shows it); faults kill at once, as before. Ctrl+C in line mode
+  while a shell pages a command in the foreground uses the same path: a kernel command
+  running in the shell's own task is cut short and answers `KCMD_INTERRUPTED` (130) while
+  the shell lives on, and the innermost programs started under the pager
+  (`TF_FOREGROUND`) are killed (surfsh reports 137); programs in the background are left
+  alone, and at a prompt, in raw mode or at `--More--` Ctrl+C is a key as before.
 * **Limits.** Typing stays ASCII: in line mode the bytes above 0x7F are the keyboard's
   special keys, so accented letters show but cannot be typed. No pipes, no variables other
-  than `$?`, no wildcards, no job control, and no Ctrl+C for a command that runs (Ctrl+C
-  drops the line at the prompt and acts like q at `--More--`). A task killed by another
-  task in the middle of a kernel command has only the bridge's own allocations released at
-  `reap()`; what the command itself held (an open file, its buffers) stays. The console's
+  than `$?`, no wildcards and no job control (a program in the background cannot be brought
+  back). A kill that has to fall back to killing at once after 2 seconds leaves what the
+  task held (a lock, a file) as before, and a long `mkfs` is not cut short. The console's
   input queue holds 256 bytes, so a long paste over the serial line loses bytes. A serial
   terminal must be as wide as the console's grid for the editor's wrapping to look right
   there, since the width comes from `TTY_GETSIZE`. `heaptest` compares the heap's totals
   before and after, and `selftest` the number of tasks, so other consoles using the heap or
-  starting programs meanwhile make them report failures; a self test that was killed keeps
-  the next one refused until a reboot, since its helper tasks may still wait on its
-  semaphores. A redirected kernel command takes a 256 KB buffer from the kernel heap each
-  time.
+  starting programs meanwhile make them report failures; a self test killed at once (after
+  the 2 seconds) keeps the next one refused until a reboot. A redirected kernel command
+  takes a 256 KB buffer from the kernel heap each time.
