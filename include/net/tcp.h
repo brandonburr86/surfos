@@ -3,8 +3,9 @@ SurfOS Network Stack: TCP
 ----------------------
 File: tcp.h     Date: 10/3/26 (roadmap N2)
 ----------------------
-10/6/26 (the telnet server): tcp_open() and tcp_listen_on() answer -errno: why a
-connection or a listening socket could not be had.
+10/6/26 (the telnet server): calls that answer -errno and may wait without a time
+limit, for the connections programs have (net/sock.c, surfos/sock.h). A wait that a
+kill or Ctrl+C cuts short gives up: -EINTR (surfos/task.h).
 */
 
 #ifndef _NET_TCP_H
@@ -42,8 +43,16 @@ int tcp_recv(struct tcp_socket *s, void *buf, u_int size, u_long timeout_ms); /*
 int tcp_close(struct tcp_socket *s);                           /* FIN, then release */
 ipaddr_t tcp_peer(struct tcp_socket *s, u16 *port);
 
-/* 10/6/26: the same with the reason they fail, -errno (surfos/sock.h lists them) */
+/* 10/6/26: the same with the reason they fail, -errno (surfos/sock.h lists them); TCP_NO_LIMIT
+   waits until it happens or the wait is cut short (-EINTR) */
+#define TCP_NO_LIMIT ((u_long)-1)
 int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out);
 int tcp_listen_on(u16 port, struct tcp_socket **out);
+int tcp_accept_next(struct tcp_socket *l, u_long timeout_ms, struct tcp_socket **out);
+int tcp_read(struct tcp_socket *s, void *buf, u_int len);     /* read(): bytes, 0 at the end; waits */
+int tcp_write(struct tcp_socket *s, const void *data, u_int len); /* write(): every byte queued; waits */
+void tcp_release(struct tcp_socket *s);    /* the last descriptor closed: FIN, or stop listening; never waits */
+int tcp_poll(struct tcp_socket *s);        /* POLLIN POLLOUT POLLHUP POLLERR (surfos/poll.h); never waits */
+bool tcp_listening(const struct tcp_socket *s);
 
 #endif
