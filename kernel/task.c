@@ -272,8 +272,12 @@ static void become_zombie(surf_task *t, int code) {
 }
 
 void task_exit(int code) {
-    u_long flags = irq_save();
+    u_long flags;
     if(curTask == idle_task) panic("the idle task tried to exit");
+    /* 10/6/26: its files close now, in its own context, not when someone waits for it: a
+       background program's file is written out and its volume can be unmounted at once */
+    fd_close_all(curTask);
+    flags = irq_save();
     become_zombie(curTask, code);
     irq_restore(flags);
     yield();
@@ -311,7 +315,18 @@ static void reap(surf_task *t) {
     kfree(t);
 }
 
-int task_wait_ex(u_long pid, int *status, u_int *flags_out, surf_console **con_out) {
+/* the children of the calling task (10/6/26: the self test asks before it waits for any) */
+u_int task_child_count(void) {
+    surf_task *t;
+    u_int n = 0;
+    u_long flags = irq_save();
+    for(t = all_tasks; t; t = t->all_next) if(t->parent == curTask && t != curTask) n++;
+    irq_restore(flags);
+    return n;
+}
+
+/* 10/6/26: WNOHANG in options answers 0 at once when children are left but none has ended */
+static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **con_out, int options) {
     for(;;) {
         u_long flags = irq_save();
         surf_task *z, *found = NULL;
@@ -337,14 +352,26 @@ int task_wait_ex(u_long pid, int *status, u_int *flags_out, surf_console **con_o
             irq_restore(flags);
             return -1;
         }
+        if(options & WNOHANG) {
+            irq_restore(flags);
+            return 0;
+        }
         wait_prepare(&zombie_wq);
         irq_restore(flags);
         yield();
     }
 }
 
+int task_wait_ex(u_long pid, int *status, u_int *flags_out, surf_console **con_out) {
+    return wait_for(pid, status, flags_out, con_out, 0);
+}
+
 int task_wait(u_long pid, int *status) {
-    return task_wait_ex(pid, status, NULL, NULL);
+    return wait_for(pid, status, NULL, NULL, 0);
+}
+
+int task_wait_opts(u_long pid, int *status, int options) {
+    return wait_for(pid, status, NULL, NULL, options);
 }
 
 /**** Blocking ****/

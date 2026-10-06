@@ -33,7 +33,8 @@ user shell, surfsh (surfos/kcmd.h).
 #define SYS_sleep   15   /* (u32 ms) */
 #define SYS_yield   16   /* () */
 #define SYS_spawn   17   /* (const char *path, char *const argv[]): pid */
-#define SYS_wait    18   /* (int pid, int *status): pid, -1 when there is nothing to wait for */
+#define SYS_wait    18   /* (int pid, int *status, int options): pid, -1 when there is nothing to wait for;
+                            options WNOHANG (1, 10/6/26): 0 when children are left but none has ended */
 #define SYS_sbrk    19   /* (long incr): the old break, 0 on failure */
 #define SYS_uptime  20   /* (): milliseconds since boot */
 #define SYS_kill    21   /* (int pid) */

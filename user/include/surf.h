@@ -59,6 +59,8 @@ int spawnfd(const char *path, char *const argv[], const int fds[3]);
     /* the same, with the child's descriptors 0, 1 and 2 sharing this process's fds[0..2]
        (-1: the console), for redirection: the files stay open here too */
 int wait(int pid, int *status);     /* pid -1: any child. status: the exit code, -1 when it was killed */
+#define WNOHANG 1                   /* 10/6/26: waitpid() answers 0 at once while the children run on */
+int waitpid(int pid, int *status, int options);
 int kill(int pid);
 int yield(void);
 unsigned int uptime(void);          /* milliseconds since boot */

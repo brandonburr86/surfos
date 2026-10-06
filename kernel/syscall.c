@@ -144,11 +144,12 @@ static int sys_spawnfd(const char *path, char *const argv[], const int *fds) {
     return process_spawn_files(path, argc, kargv, curTask->con, 0, files);
 }
 
-static int sys_wait(int pid, int *status) {
+static int sys_wait(int pid, int *status, int options) {
     int st = 0, r;
     if(status && !ubuf(status, sizeof(int), true)) return -EFAULT;
-    r = task_wait(pid < 0 ? WAIT_ANY : (u_long)pid, &st);
-    if(r >= 0 && status) *status = st;
+    if(options & ~WNOHANG) return -EINVAL;
+    r = task_wait_opts(pid < 0 ? WAIT_ANY : (u_long)pid, &st, options);
+    if(r > 0 && status) *status = st;
     return r;
 }
 
@@ -398,7 +399,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_sleep:   sleep_ms(a); r = 0; break;
     case SYS_yield:   yield(); r = 0; break;
     case SYS_spawn:   r = sys_spawn((const char *)a, (char *const *)b); break;
-    case SYS_wait:    r = sys_wait((int)a, (int *)b); break;
+    case SYS_wait:    r = sys_wait((int)a, (int *)b, (int)c); break;
     case SYS_sbrk:    r = (int)uvm_sbrk(curTask->uvm, (long)a); break;
     case SYS_uptime:  r = (int)(getticks() * (1000 / HZ)); break;
     case SYS_kill:    r = sys_kill((int)a); break;

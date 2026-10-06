@@ -124,7 +124,10 @@ surf_task *kthread_create_on(const char *name, surf_console *con, kthread_fn fn,
 surf_task *new_task(char *name, surf_console *con, u_int ring, prio_level prio, u_long *eip); /* 2004 API: a detached task */
 void task_exit(int code) __attribute__((noreturn));
 #define WAIT_ANY ((u_long)-1)
+#define WNOHANG  1              /* 10/6/26, task_wait_opts() and SYS_wait: 0 at once when no child has ended */
 int task_wait(u_long pid, int *status);                            /* returns the pid, or -1 with nothing to wait for */
+int task_wait_opts(u_long pid, int *status, int options);   /* WNOHANG: 0 while children are left running */
+u_int task_child_count(void);
 int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
 void kill_task(surf_task *t);                                      /* mark dead; the caller yields if it killed itself */
 surf_task *task_find(u_long pid);

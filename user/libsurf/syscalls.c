@@ -139,7 +139,12 @@ int kcmdinfo(int index, struct kcmd_info *out) { return (int)ret(sc(SYS_kcmdinfo
 int getdent(int fd, struct dirent *de) { return (int)ret(sc(SYS_readdir, fd, (long)de, 0)); }
 
 int wait(int pid, int *status) {
-    long r = sc(SYS_wait, pid, (long)status, 0);
+    return waitpid(pid, status, 0);
+}
+
+/* 10/6/26: options WNOHANG: 0 at once while children are left but none has ended */
+int waitpid(int pid, int *status, int options) {
+    long r = sc(SYS_wait, pid, (long)status, options);
     if(r == -1) { errno = ECHILD; return -1; }          /* the kernel's "nothing to wait for" */
     return (int)ret(r);
 }
