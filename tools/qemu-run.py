@@ -69,6 +69,8 @@ SMOKE = [
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
                     ('cat /initrd/etc/version', ['SurfOS 0.007', '$ ']),
                     ('exit 3', ['exit status 3'])]),
+    # raw mode (tty.h): the terminal's bytes arrive unchanged, an arrow key as ESC [ A
+    ('rawkeys', ['raw mode (80x25)'], [('\x1b[A\x7f\x03q', ['1b 5b 41 7f 03 71'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]

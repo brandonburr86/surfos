@@ -29,6 +29,8 @@ struct tty {
     char history[TTY_HISTORY][TTY_LINE_MAX];
     int hist_count;                     /* lines ever added */
     u_long dropped;                     /* input bytes lost to a full queue */
+    volatile int raw;                   /* TTY_RAW (tty_ctl): read by the keyboard and serial ISRs */
+    struct surf_task *raw_owner;        /* the task that set it; raw mode ends with that task */
 };
 
 extern struct tty ttys[NUM_CONSOLES];
@@ -61,5 +63,12 @@ void tty_switch(int index);
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 int tty_ctl(struct tty *t, int op, u32 arg);   /* 0 or the size; -errno */
+
+/* the kernel's side of raw mode: keys from the keyboard (special keys become their escape
+   sequences), read(2) on /dev/console, and the end of the task that set it (task.c) */
+struct surf_task;
+void tty_key(struct tty *t, u_char c);
+int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one) */
+void tty_task_gone(struct surf_task *task);          /* interrupts off */
 
 #endif

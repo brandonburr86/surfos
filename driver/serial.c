@@ -100,6 +100,7 @@ void serial_console_clear(void) {
     IRQ 4: feed received bytes to the keyboard queue as if they were typed.
     CR becomes newline and DEL becomes backspace so terminals behave; ANSI escape
     sequences (arrow keys etc.) are swallowed until there is something to do with them.
+    10/5/26: a tty in raw mode (tty.h) gets the bytes as the terminal sent them.
 */
 int serial_isr(u_int irq, void *param) {
     static int esc = 0; /* 0 = normal, 1 = got ESC, 2 = inside ESC [ or ESC O */
@@ -110,6 +111,11 @@ int serial_isr(u_int irq, void *param) {
         lsr = inb(uart + UART_LSR);
         if(lsr == 0xFF || !(lsr & LSR_DATA_READY)) break;
         c = inb(uart + UART_RBR);
+        if(tty_active->raw) {
+            esc = 0;
+            tty_input(tty_active, c);
+            continue;
+        }
         if(esc == 1) {
             esc = (c == '[' || c == 'O') ? 2 : 0;
             continue;

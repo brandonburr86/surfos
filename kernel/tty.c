@@ -3,6 +3,8 @@ SurfOS Terminals
 --------------------
 File: tty.c     Date: 10/3/26 (roadmap C1)
 --------------------
+10/5/26: raw mode for full-screen programs (tty.h): no echo, no line editing, keys as
+the bytes a terminal sends. It ends with the task that set it.
 */
 
 #include <surfos/types.h>
@@ -49,6 +51,38 @@ void tty_input(struct tty *t, u_char c) {
     }
     irq_restore(flags);
     wake_up(&t->readers);
+}
+
+/* several bytes that belong together (an escape sequence): all of them or none */
+static void input_seq(struct tty *t, const char *s) {
+    u_long flags = irq_save();
+    u_int n = strlen(s), room = (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
+    if(n > room) {
+        t->dropped += n;
+    } else {
+        for(; *s; s++) {
+            t->inq[t->in_head] = (u_char)*s;
+            t->in_head = (t->in_head + 1) % TTY_INPUT_SIZE;
+        }
+    }
+    irq_restore(flags);
+    wake_up(&t->readers);
+}
+
+/* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h) */
+static const char *const raw_keys[RT - INS + 1] = {
+    "\033[2~", "\033[3~", "\033[H", "\033[F", "\033[5~", "\033[6~",     /* INS DEL HOME END PGUP PGDN */
+    "\033[D", "\033[A", "\033[B", "\033[C"                                /* LEFT UP DOWN RT */
+};
+
+/* A key from the keyboard, as a code from keyboard.h. Line mode queues the code; raw mode
+   queues the escape sequence for it, and F5-F12 (which have none) are dropped. */
+void tty_key(struct tty *t, u_char c) {
+    if(t->raw && c >= 0x80) {
+        if(c >= INS && c <= RT) input_seq(t, raw_keys[c - INS]);
+        return;
+    }
+    tty_input(t, c);
 }
 
 int tty_trygetc(struct tty *t) {
@@ -161,6 +195,26 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
     }
 }
 
+/* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
+   Raw mode: whatever keys are queued, at least one (it waits for that one), up to len. */
+int tty_read(struct tty *t, char *buf, size_t len) {
+    char line[TTY_LINE_MAX];
+    int n;
+    if(!len) return 0;
+    if(t->raw) {
+        size_t got = 0;
+        buf[got++] = (char)tty_getc(t);
+        while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
+        return (int)got;
+    }
+    n = tty_readline(t, line, sizeof(line));
+    if(n < 0) return n;
+    line[n++] = '\n';
+    if((size_t)n > len) n = (int)len;
+    memcpy(buf, line, n);
+    return n;
+}
+
 /**** console switching ****/
 
 /* Repaint the newly active console on the serial terminal: clear, text, cursor. */
@@ -192,11 +246,35 @@ void tty_switch(int index) {
     serial_redraw(tty_active->con);
 }
 
-/* 10/5/26: terminal control for full-screen programs (see tty.h); raw mode is not
-   implemented yet */
+/**** raw mode (10/5/26) ****/
+
+/* Keys typed in one mode mean something else in the other (0x7f and escape sequences are
+   not line editing), so leaving raw mode drops what was not read yet. */
+static void set_raw(struct tty *t, int on, struct surf_task *owner) {
+    u_long flags = irq_save();
+    if(t->raw && !on) t->in_tail = t->in_head;
+    t->raw = on;
+    t->raw_owner = on ? owner : NULL;
+    irq_restore(flags);
+}
+
+/* terminal control for full-screen programs (see tty.h) */
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
     if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
-    if(op == TTY_RAW) return -38;                 /* ENOSYS */
+    if(op == TTY_RAW) {
+        if(arg > 1) return -22;                   /* EINVAL */
+        set_raw(t, (int)arg, curTask);
+        return 0;
+    }
     return -22;                                   /* EINVAL */
+}
+
+/* A task is gone (it exited or was killed): raw mode it set ends with it, so a crashed
+   editor cannot leave its shell's console raw. From task.c, interrupts off. */
+void tty_task_gone(struct surf_task *task) {
+    int i;
+    for(i = 0; i < NUM_CONSOLES; i++) {
+        if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
+    }
 }

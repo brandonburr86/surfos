@@ -25,6 +25,8 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/multiboot.h>
 #include <mm/kalloc.h>
 #include <sys/usb.h>
+#include <surfos/tty.h>
+#include <surfos/keyboard.h>
 #include "shell.h"
 
 static int fails;
@@ -465,6 +467,37 @@ static void test_net(void) {
     printf("        (%s: %lu frames in, %lu out)\n", ipfmt(dev->ip, a), dev->rx_packets, dev->tx_packets);
 }
 
+/**** terminal (10/5/26) ****/
+
+static volatile int raw_was_set;
+
+static void set_raw_and_exit(void *arg) {     /* and never turns it off */
+    struct tty *t = (struct tty *)arg;
+    raw_was_set = tty_ctl(t, TTY_RAW, 1) == 0 && t->raw;
+}
+
+/* raw mode on this shell's own terminal: nothing is typed, the keys are made up here */
+static void test_tty(void) {
+    struct tty *t = curTask->tty;
+    char buf[16];
+    int size = tty_ctl(t, TTY_GETSIZE, 0), n, status;
+    surf_task *k;
+
+    check((size >> 16) == COLUMNS && (size & 0xFFFF) == LINES, "tty: TTY_GETSIZE is the console's text grid");
+    tty_flush(t);
+    check(tty_ctl(t, TTY_RAW, 1) == 0 && t->raw, "tty: raw mode on");
+    tty_key(t, UP); tty_key(t, DEL); tty_key(t, 0x03); tty_key(t, F5); tty_key(t, 'x');
+    n = tty_read(t, buf, sizeof(buf));
+    check(n == 9 && !memcmp(buf, "\033[A\033[3~\003x", 9), "tty: raw keys at once, special keys as escape sequences");
+    check(tty_ctl(t, TTY_RAW, 0) == 0 && !t->raw, "tty: raw mode off");
+    check(tty_ctl(t, TTY_RAW, 2) < 0 && tty_ctl(t, 99, 0) < 0, "tty: unknown requests are refused");
+    raw_was_set = 0;
+    k = kthread_create("rawexit", set_raw_and_exit, t, PL_NORMAL, 0);
+    if(k) task_wait(k->pid, &status);
+    check(k && raw_was_set && !t->raw, "tty: raw mode ends when the task that set it exits");
+    tty_flush(t);
+}
+
 /* 10/5/26: endpoint 0 of a USB device must work again after a request it stalled */
 static void test_usb(void) {
     int r = usb_stall_test();
@@ -490,6 +523,7 @@ int run_selftest(void) {
     test_semaphore();
     test_event_fn();
     test_libc();
+    test_tty();
     printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
     return fails;
 }

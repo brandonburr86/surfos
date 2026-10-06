@@ -19,8 +19,8 @@ PS/2 keyboard (monitor sendkey), text comes out of the framebuffer.
 --test boots the image eight times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
-  keyboard   4 GB, no serial port: typing (Shift, Backspace, history), console switching
-             and a set of commands, all through the keyboard and the screen
+  keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
+             switching and a set of commands, all through the keyboard and the screen
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -508,6 +508,14 @@ def scenario_keyboard(args, image, firmware, outdir):
                 return all(e in text for e in expects) and last_prompt_row(s) >= 0 and s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT) and text != before.text()
             got = vm.wait_screen(done, 60, interval=0.5)
             results.append((f'keyboard: {keys.strip()!r} shows {expects}', got is not None))
+        # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them, F5 nothing
+        vm.keys('rawkeys\n')
+        ok = vm.wait_screen(lambda s: 'q ends' in s.text(), 20, interval=0.5) is not None
+        if ok:
+            vm.keys('<up><bs>\n<f5>xq')
+            ok = vm.wait_screen(lambda s: '1b 5b 41 7f 0d 78 71' in s.text() and
+                                s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT), 30, interval=0.5) is not None
+        results.append(('keyboard: raw mode sends ESC [ A, 7f and 0d for Up, Backspace and Enter', ok))
         # console switching: F2 shows another shell, F1 comes back
         vm.keys('<f2>')
         two = vm.wait_screen(lambda s: prompt_on(s) and 'Hello World' not in s.text(), 20, interval=0.5)
