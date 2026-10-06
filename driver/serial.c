@@ -74,7 +74,9 @@ void serial_puts(const char *s) {
     while(*s) serial_putc(*s++);
 }
 
-/* What the VGA console does with a character, done for a terminal instead */
+/* What the VGA console does with a character, done for a terminal instead.
+   10/5/26: carriage returns and escape sequences (tty.h) pass through; the terminal
+   draws the sequences itself. */
 void serial_console_putc(int c) {
     switch(c) {
     case '\n':
@@ -85,6 +87,10 @@ void serial_console_putc(int c) {
         serial_putc('\b');
         serial_putc(' ');
         serial_putc('\b');
+        break;
+    case '\r':
+    case 0x1B:
+        serial_putc((char)c);
         break;
     default:
         if(c >= 32 && c <= 126) serial_putc((char)c);

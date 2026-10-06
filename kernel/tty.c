@@ -217,10 +217,13 @@ int tty_read(struct tty *t, char *buf, size_t len) {
 
 /**** console switching ****/
 
-/* Repaint the newly active console on the serial terminal: clear, text, cursor. */
+/* Repaint the newly active console on the serial terminal: clear, text, cursor. The
+   text comes without its colours; the terminal's attributes are reset first and the
+   cursor is shown or hidden as on that console (10/5/26, escape sequences). */
 static void serial_redraw(surf_console *con) {
     char seq[16];
     int row, col;
+    serial_puts(con->cursor_off ? "\033[0m\033[?25l" : "\033[0m\033[?25h");
     serial_console_clear();
     for(row = 0; row < LINES; row++) {
         int last = -1;
@@ -270,11 +273,14 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
     return -22;                                   /* EINVAL */
 }
 
-/* A task is gone (it exited or was killed): raw mode it set ends with it, so a crashed
-   editor cannot leave its shell's console raw. From task.c, interrupts off. */
+/* A task is gone (it exited or was killed): raw mode it set ends with it, and so do the
+   colours and the hidden cursor it left on a console (console.c), so a crashed editor
+   cannot leave its shell's console raw or unreadable. From task.c with interrupts off,
+   and from trap_fatal() before the report. */
 void tty_task_gone(struct surf_task *task) {
     int i;
     for(i = 0; i < NUM_CONSOLES; i++) {
         if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
     }
+    console_task_gone(task);
 }

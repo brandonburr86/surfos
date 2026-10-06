@@ -471,9 +471,74 @@ static void test_net(void) {
 
 static volatile int raw_was_set;
 
-static void set_raw_and_exit(void *arg) {     /* and never turns it off */
+static void set_raw_and_exit(void *arg) {     /* and never turns it off, nor the inverse or the cursor */
     struct tty *t = (struct tty *)arg;
+    const char *s = "\033[7m\033[?25l";
     raw_was_set = tty_ctl(t, TTY_RAW, 1) == 0 && t->raw;
+    while(*s) kputch(t->con, t->con->txtColor, *s++);
+    raw_was_set = raw_was_set && t->con->inverse && t->con->cursor_off;
+}
+
+/* escape sequences on a console that is never shown (no screen, no serial port) */
+static surf_console ansi_con;
+
+static void ansi_put(const char *s) {
+    while(*s) kputch(&ansi_con, WHITE_TXT, *s++);
+}
+
+/* the text at x,y, and its attribute unless attr is -1 */
+static bool ansi_at(u_int x, u_int y, const char *s, int attr) {
+    for(; *s; s++, x++) {
+        u_char *cell = ansi_con.vmem + (y * COLUMNS + x) * 2;
+        if(cell[0] != (u_char)*s || (attr >= 0 && cell[1] != attr)) return false;
+    }
+    return true;
+}
+
+static bool ansi_cursor(u_int x, u_int y) {
+    return ansi_con.loc.x == x && ansi_con.loc.y == y;
+}
+
+static void test_ansi(void) {
+    u_int i;
+    ansi_con.vmem = ansi_con.memBuf;
+    ansi_con.txtColor = WHITE_TXT;
+    clearConsole(&ansi_con);
+    ansi_put("first\033[3;5Hxy");
+    check(ansi_at(0, 0, "first", 0x07) && ansi_at(4, 2, "xy", 0x07) && ansi_cursor(6, 2), "console: ESC[row;colH");
+    ansi_put("\033[7mI\033[0mN\033[1;31mR\033[44mB\033[m.");
+    check(ansi_at(6, 2, "I", 0x70) && ansi_at(7, 2, "N", 0x07) && ansi_at(8, 2, "R", 0x0C) && ansi_at(9, 2, "B", 0x1C) &&
+          ansi_at(10, 2, ".", 0x07), "console: SGR 7, 1, 31, 44 and 0 in VGA colours");
+    ansi_put("\033[2A\033[3C\033[B\033[2D*");
+    check(ansi_at(12, 1, "*", -1), "console: ESC[nA ESC[nB ESC[nC ESC[nD");
+    ansi_put("\033[1;3H\033[K");
+    check(ansi_at(0, 0, "fi   ", 0x07) && ansi_cursor(2, 0), "console: ESC[K erases to the end of the line");
+    ansi_put("\033[99;99HZ");
+    check(ansi_at(COLUMNS - 1, LINES - 1, "Z", -1) && ansi_at(0, 0, "fi", -1) && ansi_cursor(COLUMNS - 1, LINES - 1),
+          "console: the bottom right corner is written without scrolling");
+    ansi_put("\033[2J");
+    check(ansi_at(4, 2, "  ", 0x07) && ansi_at(COLUMNS - 1, LINES - 1, " ", -1), "console: ESC[2J clears");
+    ansi_put("\033[H\033[5n\033[?1049h\033(B\033]0;a title\007\033[38;5;196m\033[ q\033[?7;9rok");
+    check(ansi_at(0, 0, "ok ", 0x07), "console: other sequences are dropped whole");
+    ansi_put("\033[?25l");
+    check(ansi_con.cursor_off && ansi_con.ansi_owner == curTask, "console: ESC[?25l hides the cursor");
+    ansi_put("\033[?25h");
+    check(!ansi_con.cursor_off && !ansi_con.ansi_owner, "console: ESC[?25h shows it");
+    /* a full line: the cursor waits in the last column; "\r\n" is one line, "\n" alone wraps first as it always did */
+    ansi_put("\033[H");
+    for(i = 0; i < COLUMNS; i++) ansi_put("a");
+    check(ansi_cursor(COLUMNS - 1, 0) && ansi_con.wrap, "console: the cursor stays in the last column");
+    ansi_put("\r\n");
+    for(i = 0; i < COLUMNS; i++) ansi_put("b");
+    ansi_put("\n");
+    check(ansi_cursor(0, 3), "console: \\r\\n after a full line is one line, \\n alone wraps first");
+    /* the line editor's backspace goes back across a wrapped line */
+    ansi_put("\033[2J\033[H");
+    for(i = 0; i < COLUMNS; i++) ansi_put("c");
+    ansi_put("d\b\b");
+    check(ansi_at(COLUMNS - 1, 0, " ", -1) && ansi_at(0, 1, " ", -1) && ansi_cursor(COLUMNS - 1, 0),
+          "console: backspace erases back across the end of a line");
+    console_reset_ansi(&ansi_con);
 }
 
 /* raw mode on this shell's own terminal: nothing is typed, the keys are made up here */
@@ -495,7 +560,9 @@ static void test_tty(void) {
     k = kthread_create("rawexit", set_raw_and_exit, t, PL_NORMAL, 0);
     if(k) task_wait(k->pid, &status);
     check(k && raw_was_set && !t->raw, "tty: raw mode ends when the task that set it exits");
+    check(k && raw_was_set && !t->con->inverse && !t->con->cursor_off, "console: so do its colours and its hidden cursor");
     tty_flush(t);
+    test_ansi();
 }
 
 /* 10/5/26: endpoint 0 of a USB device must work again after a request it stalled */

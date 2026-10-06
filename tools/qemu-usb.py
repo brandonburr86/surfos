@@ -20,7 +20,8 @@ PS/2 keyboard (monitor sendkey), text comes out of the framebuffer.
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
-             switching and a set of commands, all through the keyboard and the screen
+             switching, a set of commands and the escape sequences of `ansi`, all through
+             the keyboard and the screen
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -173,8 +174,11 @@ class Screen:
         self.ppm = ppm
         s = max(1, min(self.w // 640, self.h // 400))
         self.scale, self.ox, self.oy = s, (self.w - 640 * s) // 2, (self.h - 400 * s) // 2
+        self.cols, self.nrows = 80, 25
         self.cursor = None
-        self.rows = [''.join(self.cell(c, r) for c in range(80)).rstrip() for r in range(25)] if self.w >= 640 else []
+        self.colours = {}                       # (col, row): (foreground, background) as RGB bytes
+        self.rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
+                     if self.w >= 640 else [])
 
     def pixel(self, x, y):
         i = (y * self.w + x) * 3
@@ -183,7 +187,9 @@ class Screen:
     def cell(self, col, row):
         s, x0, y0 = self.scale, self.ox + col * 8 * self.scale, self.oy + row * 16 * self.scale
         grid = [[self.pixel(x0 + gx * s, y0 + gy * s) for gx in range(8)] for gy in range(16)]
-        bg = collections.Counter(p for line in grid for p in line).most_common(1)[0][0]
+        counts = collections.Counter(p for line in grid for p in line).most_common(2)
+        bg = counts[0][0]
+        self.colours[(col, row)] = (counts[1][0] if len(counts) > 1 else None, bg)
         bits = tuple(sum(0x80 >> gx for gx in range(8) if grid[gy][gx] != bg) for gy in range(16))
         ch = GLYPHS.get(bits)
         if ch is None and bits[14] == 0xFF and bits[15] == 0xFF:      # the underline cursor
@@ -389,6 +395,23 @@ class Vm:
         shutil.rmtree(self.work, ignore_errors=True)
 
 
+# what the shell command `ansi` draws with escape sequences (row: text); the last line and the
+# corner depend on the grid
+ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
+             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED'}
+GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
+
+
+def ansi_ok(scr):
+    """the `ansi` pattern: text, Z in the bottom right corner (no scroll), inverse and bright yellow on blue"""
+    if scr is None or len(scr.rows) < scr.nrows:
+        return False
+    return (all(scr.rows[r] == text for r, text in ANSI_ROWS.items()) and
+            scr.rows[12] == f'ANSI-TEST done, {scr.cols}x{scr.nrows}' and scr.rows[-1].endswith('Z') and
+            len(scr.rows[-1]) == scr.cols and scr.colours[(9, 2)] == (BLACK, GREY) and
+            scr.colours[(9, 3)] == (YELLOW, BLUE))
+
+
 def prompt_on(scr):
     return any(r.rstrip().endswith(PROMPT) for r in scr.rows)
 
@@ -525,6 +548,11 @@ def scenario_keyboard(args, image, firmware, outdir):
         one = vm.wait_screen(lambda s: '(C)2004 Brandon Burr.' in s.text(), 20, interval=0.5)
         results.append(('F1 switches back to console 1 with its screen', one is not None))
         vm.screen('console1.png')
+        # escape sequences (tty.h): the test pattern of `ansi`, read back with its colours
+        vm.keys('ansi\n')
+        scr = vm.wait_screen(lambda s: 'ANSI-TEST done' in s.text() and prompt_on(s), 20, interval=0.5)
+        results.append(('escape sequences on the framebuffer: position, moves, erase, inverse, colours, the corner',
+                        ansi_ok(scr)))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:

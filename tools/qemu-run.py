@@ -71,6 +71,9 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     # raw mode (tty.h): the terminal's bytes arrive unchanged, an arrow key as ESC [ A
     ('rawkeys', ['raw mode (80x25)'], [('\x1b[A\x7f\x03q', ['1b 5b 41 7f 03 71'])]),
+    # escape sequences (tty.h): the test pattern, then read back from VGA memory with its colours
+    ('ansi', ['ANSI-TEST done, 80x25']),
+    ('@ansi-screen', []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]
@@ -202,7 +205,7 @@ class Qemu:
 
     def text(self):
         t = self.transcript.decode(errors='replace').replace('\r', '')
-        return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', t)
+        return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', t)
 
     # --- monitor --------------------------------------------------------
     def monitor(self, command, wait=0.3):
@@ -228,20 +231,25 @@ class Qemu:
         s.close()
         return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', out.decode(errors='replace'))
 
-    def screen(self):
-        """the 80x25 VGA text screen. The file name is relative on purpose: the
-        monitor treats a leading '/' as a format specifier."""
+    def vga_memory(self):
+        """the 80x25 VGA text page: character and attribute bytes, None if the dump fails.
+        The file name is relative on purpose: the monitor treats a leading '/' as a format
+        specifier."""
         path = os.path.join(self.workdir, 'vga.bin')
         if os.path.exists(path):
             os.remove(path)
         self.monitor('pmemsave 0xb8000 4000 vga.bin')
         for _ in range(50):
             if os.path.exists(path) and os.path.getsize(path) == 4000:
-                break
+                return open(path, 'rb').read()
             time.sleep(0.1)
-        else:
+        return None
+
+    def screen(self):
+        """the 80x25 VGA text screen"""
+        d = self.vga_memory()
+        if d is None:
             return '(screen dump failed)'
-        d = open(path, 'rb').read()
         rows = []
         for r in range(25):
             cells = (d[(r * 80 + c) * 2] for c in range(80))
@@ -340,6 +348,26 @@ def host_echo_check(q):
     return ('host reaches the guest TCP echo server', got == msg)
 
 
+# what the shell command `ansi` draws with escape sequences (row: text), 80x25
+ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
+             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
+             12: 'ANSI-TEST done, 80x25'}
+
+
+def ansi_screen_check(q):
+    """after `ansi`: its pattern in VGA memory, characters and attributes, and Z in the corner"""
+    d = q.vga_memory() or bytes(4000)
+
+    def row(r):
+        return ''.join(chr(b) if 32 <= b < 127 else ' ' for b in d[r * 160:(r + 1) * 160:2]).rstrip()
+
+    def attr(c, r):
+        return d[(r * 80 + c) * 2 + 1]
+    ok = all(row(r) == text for r, text in ANSI_ROWS.items()) and d[(24 * 80 + 79) * 2] == ord('Z')
+    ok = ok and attr(9, 2) == 0x70 and attr(16, 2) == 0x07 and attr(9, 3) == 0x1E   # inverse, normal, bright yellow on blue
+    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
+
+
 def host_checks(q):
     """after the guest has run: read what it wrote to the disk with the host's mtools"""
     if not q.disk or not shutil.which('mcopy'):
@@ -370,6 +398,9 @@ def run_smoke(q, boot_timeout):
             follow = entry[2] if len(entry) > 2 else []      # (line, expects) pairs typed after cmd
             if cmd == '@host-echo':                          # a step the host performs while the guest runs
                 results.append(host_echo_check(q))
+                continue
+            if cmd == '@ansi-screen':                        # the screen the previous step drew
+                results.append(ansi_screen_check(q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd.split()[0], 10)

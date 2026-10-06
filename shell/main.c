@@ -173,6 +173,20 @@ static void cmd_rawkeys(int argc, char **argv) {
     printf("\n");
 }
 
+/* 10/5/26: the escape sequences the console draws (tty.h), laid out for the screen tests:
+   tools/qemu-run.py reads them back from VGA memory, tools/qemu-usb.py from the framebuffer */
+static void cmd_ansi(int argc, char **argv) {
+    int size = tty_ctl(curTask->tty, TTY_GETSIZE, 0), cols = size >> 16, rows = size & 0xFFFF;
+    printf("\033[2J\033[HANSI-TEST top left");
+    printf("\033[3;10H\033[7mINVERSE\033[0m normal");
+    printf("\033[4;10H\033[1;33;44mYELLOW-ON-BLUE\033[m");
+    printf("\033[5;10HKEEP-ERASED\033[5;14H\033[K");
+    printf("\033[8;10HA\033[BB\033[2AC\033[3DD\033[5CE");                    /* moves: D C E above A, B below */
+    printf("\033[11;10H\033[5n\033[?7h\033(B\033[ q\033[38;5;196mUNKNOWN-IGNORED\033[0m");
+    printf("\033[%d;%dHZ", rows, cols);                                          /* the corner, without scrolling */
+    printf("\033[13;1H\033[?25l\033[?25hANSI-TEST done, %dx%d\n", cols, rows);
+}
+
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
 static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
@@ -607,6 +621,7 @@ static const struct command commands[] = {
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys },
+    { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
     { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
