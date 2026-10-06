@@ -15,6 +15,8 @@ shell starts in the directory it was started in ("/" when init starts it).
 On the console the line is typed in the line editor (editor.c); with any other
 input (surfsh < file) the lines are read and run without a prompt. Either way
 the shell ends with exit, at the end of the input or with Ctrl-D on an empty line.
+Before each prompt (each line of a file) the programs that ran in the background
+and ended are reported.
 */
 
 #include "surfsh.h"
@@ -162,6 +164,7 @@ static void read_lines(void) {
         }
         if(n && buf[n - 1] == '\r') buf[--n] = 0;
         last_status = run_line(buf);
+        run_collect(0);
     }
 }
 
@@ -183,7 +186,9 @@ int main(int argc, char **argv) {
         return exit_requested ? exit_code : last_status;
     }
     while(!exit_requested) {
-        int n = edit_line(line, sizeof(line));
+        int n;
+        run_collect(1);                             /* the background programs that ended */
+        n = edit_line(line, sizeof(line));
         if(n == -1) break;                          /* Ctrl-D, or no more input */
         if(n == -2) {
             fprintf(stderr, "surfsh: the line is longer than %d bytes: it was not run\n", LINE_LIMIT);

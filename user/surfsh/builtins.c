@@ -65,6 +65,10 @@ static int b_cd(int argc, char **argv) {
         dir = oldpwd;
         back = 1;
     }
+    if(strlen(dir) > WORD_LIMIT) {              /* the kernel would answer EFAULT */
+        fprintf(stderr, "surfsh: cd: a path of %u bytes: paths have at most %d\n", (unsigned)strlen(dir), WORD_LIMIT);
+        return STATUS_USAGE;
+    }
     if(!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
     if(chdir(dir) < 0) {
         fprintf(stderr, "surfsh: cd: %s: %s\n", dir, strerror(errno));
@@ -114,12 +118,7 @@ static int b_echo(int argc, char **argv) {
         if(i < argc - 1) putchar(' ');
     }
     if(newline) putchar('\n');
-    if(fflush(stdout)) {                    /* a redirected echo on a full disk */
-        clearerr(stdout);
-        fprintf(stderr, "surfsh: echo: %s\n", strerror(errno));
-        return STATUS_FAIL;
-    }
-    return 0;
+    return 0;                               /* what a full disk does not take: run.c says so */
 }
 
 /**** exit, history, set ****/
@@ -265,7 +264,8 @@ static int b_help(int argc, char **argv) {
            "      cmd < file     the program reads the file\n"
            "      cmd > file     what cmd prints goes into the file, which starts empty\n"
            "      cmd >> file    ... is added at the end of the file\n"
-           "      cmd &          the program runs in the background\n"
+           "      cmd &          the program runs in the background; the first prompt\n"
+           "                     after it has ended says how it ended\n"
            "      cmd1 ; cmd2    one after the other\n"
            "      # comment      the rest of the line is not read\n"
            "      $?             the status of the command before, as a number (also in\n"

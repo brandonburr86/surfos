@@ -11,33 +11,33 @@ same names are reached by their paths (/initrd/bin/ls -l).
 
 Kernel commands run in this task, as they did in the ring-0 shell; the kernel's
 table (SYS_kcmdinfo) is read once at the start. A kernel without the bridge
-answers -ENOSYS, and then no name is a kernel command. "> file" and ">> file" put
-the file on descriptor 1 for the command (the kernel writes its output there when
-it is done), and descriptor 1 is put back afterwards; "<" is refused, since a
-kernel command reads only the console. surfsh's own commands are redirected the
-same way. Programs get their files through spawnfd(), the console otherwise.
+answers ENOSYS, and then no name is a kernel command. A name in the table is
+the kernel's, whatever kcmd() answers. "> file" and ">> file" put the file on
+descriptor 1 for the command (the kernel writes its output there when it is
+done), and descriptor 1 is put back afterwards; "<" is refused, since a kernel
+command reads only the console. surfsh's own commands are redirected the same
+way, and what they leave unwritten (a full disk) is dropped, never shown later.
+Programs get their files through spawnfd(), the console otherwise. The kernel
+takes a path or an argument of at most 255 bytes: a longer word is refused here
+with that reason rather than by the kernel with EFAULT.
 
 Every command in the foreground runs with the pager on (ttyctl(TTY_PAGE, 1)) and
 off again afterwards. A program in the foreground is waited for: its exit status
 is the command's ("[exit status n]" when it is not 0); a program the kernel
-killed counts as 137 ("[pid n killed]"). A program started with & is not waited
-for ("[pid] started"); it is collected while a later program is waited for, and
-how it ended is shown then ("[pid] done", "[pid] exit status n", "[pid] killed").
+killed counts as 137 ("[pid n killed]"). Those lines come after paging ends, so
+q at --More-- does not hide them. A program started with & is not waited for
+("[pid] started"); before each prompt the ones that ended are collected and
+reported: "[pid] done", "[pid] exit status n", "[pid] killed".
 */
 
 #include "surfsh.h"
 
 #define NOT_KERNEL   (-1000)        /* run_kernel: the name is not a kernel command */
 #define SAVED_STDOUT 15             /* NR_OPEN - 1: descriptor 1 as surfsh was started with it */
-#define MAX_NOTES    16
 
 static struct kcmd_info *ktable;    /* the kernel's commands, as SYS_kcmdinfo lists them */
 static int nk, bridge;
 static int saved_out = -1;
-
-/* background programs that ended while surfsh waited for another one */
-static struct { int pid, status; } notes[MAX_NOTES];
-static int nnotes, lost_notes;
 
 /**** the kernel's commands ****/
 
@@ -102,11 +102,28 @@ int program_names(struct cands *c) {
     return 0;
 }
 
+/* /initrd/bin/<name> when that program exists, for a hint; NULL otherwise */
+static const char *program_of(const char *name) {
+    static char path[PATH_MAX];
+    struct stat st;
+    if(strchr(name, '/') || snprintf(path, sizeof(path), PROGRAM_DIR "/%s", name) >= (int)sizeof(path)) return NULL;
+    return stat(path, &st) == 0 && S_ISREG(st.type) ? path : NULL;
+}
+
+/* a command this shell runs in its own task cannot have < or &: why, and the program to use instead */
+static int refuse(const struct command *c, const char *what, const char *why) {
+    const char *program = program_of(c->argv[0]);
+    fprintf(stderr, "surfsh: %s is %s: %s", c->argv[0], what, why);
+    if(program) fprintf(stderr, "; use %s for that", program);
+    fputc('\n', stderr);
+    return STATUS_USAGE;
+}
+
 /**** redirection and paging ****/
 
 static void page(int on) {
     fflush(stdout);
-    ttyctl(TTY_PAGE, (unsigned int)on);     /* inert until the console's pager exists */
+    ttyctl(TTY_PAGE, (unsigned int)on);
 }
 
 static int open_out(const struct command *c) {
@@ -140,58 +157,67 @@ static int redirect_out(const struct command *c) {
     return 0;
 }
 
-/* descriptor 1 as it was: the copy kept at the start, or the console */
-static void restore_out(void) {
-    fflush(stdout);
-    if(saved_out >= 0 && dup2(saved_out, 1) == 1) return;
-    {
+/* After a command with > or >> that ran in this task: what stdout still holds goes into the
+   file. When it cannot (a full disk) it is dropped, so it never reaches the console later,
+   and the command failed. Then descriptor 1 is what it was: the copy kept at the start, or
+   the console. */
+static int restore_out(const struct command *c, int status) {
+    if(fflush(stdout) == EOF) {
+        int e = errno;
+        fpurge(stdout);
+        fprintf(stderr, "surfsh: %s: %s\n", c->out, strerror(e));
+        if(!status) status = STATUS_FAIL;
+    }
+    if(saved_out < 0 || dup2(saved_out, 1) != 1) {
         int fd = open("/dev/console", O_WRONLY);
         if(fd >= 0 && fd != 1) {
             dup2(fd, 1);
             close(fd);
         }
     }
+    return status;
+}
+
+/* a word the kernel would refuse (EFAULT): what is wrong with it */
+static int too_long(const char *what, const char *word) {
+    size_t n = strlen(word);
+    if(n <= WORD_LIMIT) return 0;
+    fprintf(stderr, "surfsh: %s of %u bytes: paths and arguments have at most %d\n", what, (unsigned)n, WORD_LIMIT);
+    return 1;
 }
 
 /**** surfsh's own commands ****/
 
 static int run_builtin(const struct builtin *b, struct command *c) {
     int status;
-    if(c->bg) {
-        fprintf(stderr, "surfsh: %s is surfsh's own command: only programs run in the background (&)\n", c->argv[0]);
-        return STATUS_USAGE;
-    }
+    if(c->bg) return refuse(c, "surfsh's own command", "only programs run in the background (&)");
     if(c->in && check_in(c)) return STATUS_FAIL;
     if(c->out && redirect_out(c)) return STATUS_FAIL;
     page(1);
     status = b->fn(c->argc, c->argv);
+    if(c->out) status = restore_out(c, status);
     page(0);
-    if(c->out) restore_out();
     return status;
 }
 
 /**** the kernel's commands ****/
 
 static int run_kernel(struct command *c) {
+    const struct kcmd_info *k = kcmd_find(c->argv[0]);
     int r, e;
-    if(bridge && !kcmd_find(c->argv[0])) return NOT_KERNEL;
-    if(!bridge && (c->in || c->out || c->bg)) return NOT_KERNEL;   /* without the bridge only a plain try */
-    if(c->bg) {
-        fprintf(stderr, "surfsh: %s is a kernel command: only programs run in the background (&)\n", c->argv[0]);
-        return STATUS_USAGE;
-    }
-    if(c->in) {
-        fprintf(stderr, "surfsh: %s is a kernel command, which reads only the console: no < here\n", c->argv[0]);
-        return STATUS_USAGE;
-    }
+    if(bridge && !k) return NOT_KERNEL;                     /* not a kernel command at all */
+    if(!bridge && (c->in || c->out || c->bg)) return NOT_KERNEL;   /* without the table only a plain try */
+    if(c->bg) return refuse(c, "a kernel command", "only programs run in the background (&)");
+    if(c->in) return refuse(c, "a kernel command", "it reads only the console, not < file");
     if(c->out && redirect_out(c)) return STATUS_FAIL;
     page(1);
     r = kcmd(c->argv);
     e = errno;
+    if(c->out) r = restore_out(c, r);
     page(0);
-    if(c->out) restore_out();
     if(r < 0) {
-        if(e == ENOENT || e == ENOSYS) return NOT_KERNEL;
+        if(e == ENOSYS) return NOT_KERNEL;                  /* no bridge in this kernel */
+        if(e == ENOENT && !k) return NOT_KERNEL;            /* (no table) the kernel has no such command */
         fprintf(stderr, "surfsh: %s: %s\n", c->argv[0], strerror(e));
         return STATUS_FAIL;
     }
@@ -200,55 +226,32 @@ static int run_kernel(struct command *c) {
 
 /**** programs ****/
 
-static void note_background(int pid, int status) {
-    if(nnotes == MAX_NOTES) { lost_notes++; return; }
-    notes[nnotes].pid = pid;
-    notes[nnotes].status = status;
-    nnotes++;
+static void report(int pid, int status) {
+    if(status == -1) printf("[%d] killed\n", pid);
+    else if(status) printf("[%d] exit status %d\n", pid, status);
+    else printf("[%d] done\n", pid);
 }
 
-static void show_notes(void) {
-    int i;
-    for(i = 0; i < nnotes; i++) {
-        if(notes[i].status == -1) printf("[%d] killed\n", notes[i].pid);
-        else if(notes[i].status) printf("[%d] exit status %d\n", notes[i].pid, notes[i].status);
-        else printf("[%d] done\n", notes[i].pid);
+void run_collect(int fresh) {
+    int pid, status, any = 0;
+    while((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if(!any && fresh) edit_fresh_row();
+        any = 1;
+        report(pid, status);
     }
-    if(lost_notes) printf("(and %d more programs that ran in the background ended)\n", lost_notes);
-    nnotes = lost_notes = 0;
-    fflush(stdout);
-}
-
-/* the foreground program's status; programs from the background that end meanwhile are collected */
-static int wait_for(int pid) {
-    int status = 0, r;
-    for(;;) {
-        r = wait(-1, &status);
-        if(r < 0) {
-            fprintf(stderr, "surfsh: waiting for %d: %s\n", pid, strerror(errno));
-            return STATUS_FAIL;
-        }
-        if(r == pid) break;
-        note_background(r, status);
-    }
-    if(status == -1) {
-        printf("[pid %d killed]\n", pid);
-        return STATUS_KILLED;
-    }
-    if(status) printf("[exit status %d]\n", status);
-    return status;
+    if(any) fflush(stdout);
 }
 
 static int run_program(struct command *c) {
     char path[PATH_MAX];
     struct stat st;
-    int fds[3] = { -1, -1, -1 }, pid, e, status, n;
+    int fds[3] = { -1, -1, -1 }, pid, e, status = 0, n;
     const char *name = c->argv[0];
 
     if(strchr(name, '/')) n = snprintf(path, sizeof(path), "%s", name);
     else n = snprintf(path, sizeof(path), PROGRAM_DIR "/%s", name);
     if(n >= (int)sizeof(path) || stat(path, &st) < 0) {
-        if(strchr(name, '/')) fprintf(stderr, "surfsh: %s: %s\n", name, n >= (int)sizeof(path) ? "the path is too long" : strerror(errno));
+        if(strchr(name, '/')) fprintf(stderr, "surfsh: %s: %s\n", name, strerror(n >= (int)sizeof(path) ? ENAMETOOLONG : errno));
         else fprintf(stderr, "surfsh: %s: command not found\n", name);
         return STATUS_NOTFOUND;
     }
@@ -280,9 +283,18 @@ static int run_program(struct command *c) {
         fflush(stdout);
         return 0;
     }
-    status = wait_for(pid);
-    page(0);
-    if(nnotes || lost_notes) show_notes();
+    if(waitpid(pid, &status, 0) != pid) {
+        e = errno;
+        page(0);
+        fprintf(stderr, "surfsh: waiting for %d: %s\n", pid, strerror(e));
+        return STATUS_FAIL;
+    }
+    page(0);                                /* the lines below are not paged: q cannot hide them */
+    if(status == -1) {
+        printf("[pid %d killed]\n", pid);
+        return STATUS_KILLED;
+    }
+    if(status) printf("[exit status %d]\n", status);
     return status;
 }
 
@@ -290,9 +302,16 @@ static int run_program(struct command *c) {
 
 static int run_command(struct command *c) {
     const struct builtin *b;
-    int r;
-    if(!strchr(c->argv[0], '/')) {
-        if((b = builtin_find(c->argv[0]))) return run_builtin(b, c);
+    const char *name = c->argv[0];
+    int i, r;
+    if(!name[0] || !strcmp(name, ".") || !strcmp(name, "..")) {    /* no name at all, or a directory's */
+        fprintf(stderr, "surfsh: %s: command not found\n", name);
+        return STATUS_NOTFOUND;
+    }
+    if((c->in && too_long("a file name", c->in)) || (c->out && too_long("a file name", c->out))) return STATUS_USAGE;
+    if(!strchr(name, '/') && (b = builtin_find(name))) return run_builtin(b, c);
+    for(i = 0; i < c->argc; i++) if(too_long(i ? "an argument" : "a command name", c->argv[i])) return STATUS_USAGE;
+    if(!strchr(name, '/')) {
         r = run_kernel(c);
         if(r != NOT_KERNEL) return r;
     }

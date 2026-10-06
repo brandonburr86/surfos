@@ -185,6 +185,12 @@ static void fresh_row(void) {
     put("\r", 1);
 }
 
+void edit_fresh_row(void) {
+    make_prompt();                              /* the terminal's width with it */
+    fresh_row();
+    flush_out();
+}
+
 /* the cursor after the line, and the next row: the line is done */
 static void leave_line(const char *say) {
     move_to(col_of(len));

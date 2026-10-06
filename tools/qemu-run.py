@@ -297,9 +297,10 @@ SMOKE = [
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
     # 10/6/26: surfsh, the SurfOS shell, started inside the one init runs on F1. Raw mode passes the bytes on as
-    # they are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, $?, Tab for a command and a path (a second
-    # Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue takes),
-    # redirection of a builtin and of a program, & and a killed program, help, set, exit with a status.
+    # they are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, $?, Tab for a command (the kernel's too) and a
+    # path (a second Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue
+    # takes), a kernel command's status and its redirection, < refused for it, a builtin and a program redirected,
+    # & reported at the next prompt, a killed program, help paged (the harness answers --More--), set, exit.
     ('surfsh', [shown('SURF \u224b> ')],
      [('cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
       ('nosuchcommand', ['surfsh: nosuchcommand: command not found', shown('initrd \u25b8 bin \u224b!> ')]),
@@ -312,16 +313,24 @@ SMOKE = [
       (b'w' * 150 + b'4', ['4']), (b'w' * 150 + b'5', ['5']), (b'w' * 150 + b'6', ['6']),
       (b'w' * 150 + b'\n', ['surfsh: the line is longer than 1023 bytes: it was not run', shown('bin \u224b!> ')]),
       (b'cd /hd\t\n', [shown('hda1 \u224b> ')]),
-      (b'c\t\t', ['count', 'crash', shown('hda1 \u224b> ')]),
+      (b'c\t\t', ['cpuinfo', shown('hda1 \u224b> ')]),
       (b'\x03', ['^C', shown('hda1 \u224b> ')]),
+      ('ls no-such-file', ['No such file or directory', shown('hda1 \u224b!> ')]),
+      ('echo status $?', ['\r\nstatus 1\r\n', shown('hda1 \u224b> ')]),
+      (b'lsbl\t\n', ['part mbr FAT16', shown('hda1 \u224b> ')]),
+      ('lsblk > LSBLK.TXT; echo status $?', ['\r\nstatus 0\r\n', shown('hda1 \u224b> ')]),
+      ('cat LSBLK.TXT', ['rd0', 'part mbr FAT16', shown('hda1 \u224b> ')]),
+      ('lsblk < LSBLK.TXT', ['surfsh: lsblk is a kernel command: it reads only the console', shown('hda1 \u224b!> ')]),
+      ('ls < LSBLK.TXT', ['use /initrd/bin/ls for that', shown('hda1 \u224b!> ')]),
       ('echo hello > /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/echo more >> /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/cat < /hda1/SURFSH.TXT', ['hello\r\nmore\r\n', shown('hda1 \u224b> ')]),
       ('cat SURFSH.TXT', ['hello\r\nmore\r\n', shown('hda1 \u224b> ')]),
-      ('/initrd/bin/cat /dev/null &', ['] started', shown('hda1 \u224b> ')]),
-      ('/initrd/bin/count 2 100', ['counted to 2', '] done', shown('hda1 \u224b> ')]),
+      ('/initrd/bin/count 1 200 > /dev/null &', ['] started', shown('hda1 \u224b> ')]),
+      ('sleep 1000', ['slept 1000 ms', '] done', shown('hda1 \u224b> ')]),      # reported before the next prompt
       ('crash null', ['killed by "Page Fault', 'killed]', shown('hda1 \u224b!> ')]),
-      ('help', ['surfsh 1.0, the SurfOS shell', 'history', "the kernel's commands", 'programs in /initrd/bin',
+      ('echo status $?', ['\r\nstatus 137\r\n', shown('hda1 \u224b> ')]),
+      ('help', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--', 'lsblk', 'programs in /initrd/bin',
                 'fstest', '$? is the one expansion', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
       ('set prompt.unicode on', [shown('hda1 \u224b> ')]),

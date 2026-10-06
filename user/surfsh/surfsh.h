@@ -33,6 +33,7 @@ prompt's wave ≋!, and $? on the next command's line is the number.
 #define LINE_LIMIT      1023        /* bytes of one line; the editor refuses a longer one */
 #define HIST_MAX        128         /* lines the history keeps */
 #define MAX_WORDS       32          /* words of one command, its name included (SPAWN_MAX_ARGS) */
+#define WORD_LIMIT      255         /* bytes of a path or an argument the kernel takes (VFS_PATH_MAX - 1) */
 #define WORDS_SIZE      (6 * (LINE_LIMIT + 1))  /* a command's words: any line's, with $? at its longest */
 
 #define STATUS_FAIL     1
@@ -70,6 +71,7 @@ int display_cols(const char *s, int n);   /* the columns of n bytes of UTF-8: on
 /* A line typed at the prompt, without its line end: its length; -1 at the end of the input
    (Ctrl-D on an empty line); -2 when it was longer than LINE_LIMIT and is refused. */
 int edit_line(char *buf, int size);
+void edit_fresh_row(void);          /* the cursor at the start of a fresh row, as before a prompt */
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 
@@ -120,6 +122,8 @@ int needs_quotes(const char *s);    /* a word that the parser would split or cha
 void run_init(void);                /* the kernel's command table, the saved descriptor 1 */
 int run_line(const char *line);     /* every command of the line: the last one's status
                                        (last_status for a blank line) */
+void run_collect(int fresh);        /* background programs that ended: reported (fresh: from a
+                                       fresh row on the console), before each prompt */
 int kcmd_count(void);
 const struct kcmd_info *kcmd_entry(int i);
 const struct kcmd_info *kcmd_find(const char *name);
