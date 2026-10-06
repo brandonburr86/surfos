@@ -38,6 +38,16 @@ tests). An unacceptable segment always gets an ACK (a keepalive or a window prob
 from the other end is answered); a FIN behind data that did not fit is not taken;
 a window update goes out only when the window opened enough to matter; segments
 are cut to the other end's MSS.
+
+10/6/26 (track T's end-to-end tests): no silly windows (RFC 1122 4.2.3.3 and
+4.2.3.4). A segment shorter than the MSS goes only when it is at least half the
+largest window the other end has offered, or when it carries all that is queued
+and nothing is in flight (Nagle's rule): many small writes make few segments. A
+window too small for a segment worth sending is left to the persist timer, which
+sends what fits after a second. The window offered never shrinks and grows only
+by a segment at least, and a read tells the other end only when that lets it
+send again, or when the window grew by two segments. A client that keeps its
+window small costs a segment now and then, not a stream of tiny ones.
 */
 
 #include <surfos/types.h>
@@ -85,18 +95,20 @@ struct tcp_socket {
     u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
     u_long last_rx;                     /* 10/6/26: when the other end last sent anything (keepalive) */
     u_int ka_probes;                    /* 10/6/26: keepalive probes unanswered */
-    u_long persist_at;                  /* 10/6/26: the next probe of a shut window, 0: none due */
+    u_long persist_at;                  /* 10/6/26: the persist timer: a shut window probed, or a small one used; 0: off */
     u_int persist_n;                    /* 10/6/26: probes since the window shut (the pause doubles) */
     int state;
     ipaddr_t remote_ip;
     u16 local_port, remote_port;
     /* send side */
     u32 iss, snd_una, snd_nxt, snd_wnd;
+    u32 max_wnd;                        /* 10/6/26: the largest window the other end has offered */
     u8 *txbuf;                          /* data from snd_una on, not yet acknowledged */
     u_int tx_len;
     bool fin_pending, fin_sent;         /* FIN queued behind the data; FIN counted in snd_nxt */
     /* receive side */
     u32 irs, rcv_nxt;
+    u32 rcv_adv;                        /* 10/6/26: the right edge of the window last offered */
     u8 *rxbuf;
     u_int rx_len;
     bool peer_fin;
@@ -263,8 +275,23 @@ static int send_segment(ipaddr_t dst, u16 sport, u16 dport, u32 seq, u32 ack, u8
     return ip_output(NULL, dst, IPPROTO_TCP, nb);
 }
 
+/* 10/6/26: what is left of the window last offered */
+static u32 rcv_open(const struct tcp_socket *s) {
+    return SEQ_LT(s->rcv_nxt, s->rcv_adv) ? s->rcv_adv - s->rcv_nxt : 0;
+}
+
+/* 10/6/26: receiver SWS avoidance: the window's right edge moves on only when the room beyond it is
+   a segment at least (half the buffer when that is less) */
+static bool window_grows(const struct tcp_socket *s) {
+    u32 step = s->mss < TCP_BUF / 2 ? s->mss : TCP_BUF / 2;
+    return TCP_BUF - s->rx_len >= rcv_open(s) + step;
+}
+
+/* the window a segment offers; 10/6/26: it never shrinks, and grows only as window_grows() says */
 static u16 window(struct tcp_socket *s) {
-    return (u16)(TCP_BUF - s->rx_len);
+    u32 w = window_grows(s) ? TCP_BUF - s->rx_len : rcv_open(s);
+    s->rcv_adv = s->rcv_nxt + w;
+    return (u16)w;
 }
 
 /* 10/6/26: the MSS option of a SYN or SYN-ACK, at least TCP_MIN_MSS and at most ours; ours without one */
@@ -298,17 +325,27 @@ static void arm_rto(struct tcp_socket *s) {
     if(!s->rto_at) { s->rto_at = getticks() + TCP_RTO; s->retries = 0; }
 }
 
-/* send whatever the window allows from snd_nxt on, then the FIN if it is due. 10/6/26: with data
-   waiting, nothing in flight and the window shut, the persist timer probes it (tcp_tick) */
-static void tcp_output(struct tcp_socket *s) {
+/* send whatever the window allows from snd_nxt on, then the FIN if it is due. 10/6/26: sender SWS
+   avoidance: a segment shorter than the MSS goes only when it is at least half the largest window
+   offered, or carries all that is queued with nothing in flight (Nagle), unless force (the persist
+   timer). What waits with nothing in flight (a shut window, one too small, a send that failed) is
+   the persist timer's (tcp_tick): it probes a shut window and sends what fits into a small one. */
+static void output(struct tcp_socket *s, bool force) {
     u32 in_flight = s->snd_nxt - s->snd_una;
+    bool held = false;
     while(in_flight < s->tx_len) {
-        u_int chunk = s->tx_len - in_flight, room = s->snd_wnd > in_flight ? s->snd_wnd - in_flight : 0;
+        u_int left = s->tx_len - in_flight, room = s->snd_wnd > in_flight ? s->snd_wnd - in_flight : 0, chunk = left;
         if(chunk > s->mss) chunk = s->mss;
         if(chunk > room) chunk = room;
-        if(!chunk) break;
+        if(!chunk || (!force && chunk < s->mss && chunk < s->max_wnd / 2 && (chunk < left || in_flight))) {
+            held = true;
+            break;
+        }
         if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
-                        s->txbuf + in_flight, chunk, false) != 0) break;
+                        s->txbuf + in_flight, chunk, false) != 0) {
+            held = true;
+            break;
+        }
         s->tx_segs++;
         s->snd_nxt += chunk;
         in_flight += chunk;
@@ -321,17 +358,27 @@ static void tcp_output(struct tcp_socket *s) {
         s->snd_nxt++;
         arm_rto(s);
     }
-    if(s->tx_len > in_flight && !s->snd_wnd && !in_flight) {
-        if(!s->persist_at) {
+    if(held && !in_flight) {
+        if(!s->persist_at || (s->snd_wnd && s->persist_n)) {     /* off, or probing a window open now */
             s->persist_n = 0;
             s->persist_at = getticks() + TCP_RTO;
         }
     } else s->persist_at = 0;
 }
 
-/* 10/6/26: the persist timer: the next probe of the shut window, after twice the pause (a minute at most) */
+static void tcp_output(struct tcp_socket *s) {
+    output(s, false);
+}
+
+/* 10/6/26: the persist timer: a window too small to be worth a segment gets what fits now; a shut
+   one is probed, the next time after twice the pause (a minute at most) */
 static void probe_window(struct tcp_socket *s) {
     u_long pause = (u_long)TCP_RTO << (s->persist_n < 6 ? s->persist_n + 1 : 6);
+    if(s->snd_wnd) {
+        s->persist_at = 0;
+        output(s, true);
+        return;
+    }
     send_probe(s);
     s->persist_n++;
     s->persist_at = getticks() + (pause < TCP_PERSIST_MAX ? pause : TCP_PERSIST_MAX);
@@ -441,10 +488,11 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         c->remote_port = ntohs(th->sport);
         c->irs = seq;
         c->rcv_nxt = seq + 1;
+        c->rcv_adv = c->rcv_nxt;
         c->iss = (u32)getticks() * 2654435761UL ^ (u32)seq;
         c->snd_una = c->iss;
         c->snd_nxt = c->iss + 1;
-        c->snd_wnd = ntohs(th->win);
+        c->snd_wnd = c->max_wnd = ntohs(th->win);
         c->mss = peer_mss(th, hlen);
         c->state = SYN_RCVD;
         c->listener = s;
@@ -471,8 +519,9 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         if((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK) && ack == s->snd_nxt) {
             s->irs = seq;
             s->rcv_nxt = seq + 1;
+            s->rcv_adv = s->rcv_nxt;
             s->snd_una = ack;
-            s->snd_wnd = ntohs(th->win);
+            s->snd_wnd = s->max_wnd = ntohs(th->win);
             s->mss = peer_mss(th, hlen);
             s->rto_at = 0;
             set_state(s, ESTABLISHED);
@@ -506,6 +555,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     }
 
     s->snd_wnd = ntohs(th->win);
+    if(s->snd_wnd > s->max_wnd) s->max_wnd = s->snd_wnd;
     if(!s->snd_wnd && ack == s->snd_una && s->snd_una != s->snd_nxt) s->retries = 0;   /* 10/6/26: alive, window shut */
     process_ack(s, ack);
 
@@ -803,16 +853,18 @@ int tcp_write(struct tcp_socket *s, const void *data, u_int len) {
     return r;
 }
 
-/* the received bytes, up to size, into buf; under net_lock, with something there. 10/6/26: the
-   window opened: the other end hears of it when that matters (from less than a segment to one or
-   more, or by two segments); smaller openings it finds by itself, probing a shut window */
+/* the received bytes, up to size, into buf; under net_lock, with something there. 10/6/26: the room
+   made is offered at once (an ACK) when the window may grow (window_grows()) and either the other end
+   had less than a segment left to send into or the window grows by two segments; otherwise the ACK
+   of its next segment tells it */
 static int take_rx(struct tcp_socket *s, void *buf, u_int size) {
-    u_int n = s->rx_len < size ? s->rx_len : size, before = TCP_BUF - s->rx_len, after;
+    u_int n = s->rx_len < size ? s->rx_len : size;
+    u32 open;
     memcpy(buf, s->rxbuf, n);
     memmove(s->rxbuf, s->rxbuf + n, s->rx_len - n);
     s->rx_len -= n;
-    after = TCP_BUF - s->rx_len;
-    if(s->state != CLOSED && ((before < s->mss && after >= s->mss) || after - before >= 2u * s->mss)) send_ack(s);
+    open = rcv_open(s);
+    if(s->state != CLOSED && window_grows(s) && (open < s->mss || TCP_BUF - s->rx_len - open >= 2u * s->mss)) send_ack(s);
     return (int)n;
 }
 
