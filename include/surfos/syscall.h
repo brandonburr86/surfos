@@ -8,7 +8,9 @@ int 0x80 with the number in eax and up to five arguments in ebx, ecx, edx,
 esi, edi; the result comes back in eax, negative values are -errno.
 
 10/6/26: calls 32 and 33 run and describe the kernel's shell commands for the
-user shell, surfsh (surfos/kcmd.h).
+user shell, surfsh (surfos/kcmd.h). Calls 34-43 give programs network
+connections, poll, pseudo-terminals and the process list, for the telnet
+server (surfos/sock.h, poll.h, pty.h, proc.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -52,7 +54,18 @@ user shell, surfsh (surfos/kcmd.h).
 /* 10/6/26 (the SurfOS shell, surfsh): the kernel's shell commands, surfos/kcmd.h */
 #define SYS_kcmd    32   /* (char *const argv[]): the command's status, -ENOENT when there is none */
 #define SYS_kcmdinfo 33  /* (int index, struct kcmd_info *out): 0, -ENOENT after the last */
-#define NR_SYSCALLS 34
+/* 10/6/26 (the telnet server): network connections, poll, pseudo-terminals, processes */
+#define SYS_listen   34  /* (u16 port): a listening descriptor (surfos/sock.h) */
+#define SYS_accept   35  /* (int fd, struct netaddr *peer): a connection's descriptor */
+#define SYS_connect  36  /* (u32 ip, u16 port): a connection's descriptor */
+#define SYS_netinfo  37  /* (struct netinfo *ni): the default interface */
+#define SYS_poll     38  /* (struct pollfd *fds, int nfds, int timeout_ms): entries ready (surfos/poll.h) */
+#define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
+#define SYS_spawnpty 40  /* (const char *path, char *const argv[], int masterfd): pid of a program on the pty */
+#define SYS_ptyctl   41  /* (int masterfd, int op, u32 arg) */
+#define SYS_procinfo 42  /* (int index, struct procinfo *pi): 0, -ENOENT after the last (surfos/proc.h) */
+#define SYS_detach   43  /* (): init becomes the caller's parent */
+#define NR_SYSCALLS 44
 
 #define SPAWN_MAX_ARGS 32
 

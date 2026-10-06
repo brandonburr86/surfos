@@ -776,6 +776,16 @@ const char *strerror(int err) {
     case ENAMETOOLONG: return "File name too long";
     case ENOSYS: return "Function not implemented";
     case ENOTEMPTY: return "Directory not empty";
+    case EAGAIN: return "Try again";
+    case ENFILE: return "File table overflow";
+    case EPIPE: return "Broken pipe";
+    case EADDRINUSE: return "Address already in use";
+    case ENETUNREACH: return "Network is unreachable";
+    case ECONNRESET: return "Connection reset by peer";
+    case ENOTCONN: return "Transport endpoint is not connected";
+    case ETIMEDOUT: return "Connection timed out";
+    case ECONNREFUSED: return "Connection refused";
+    case EHOSTUNREACH: return "No route to host";
     }
     return "Unknown error";
 }
@@ -786,6 +796,8 @@ void init_fs(void) {
     struct bdev *d;
     bool have_initrd = false;
     int r;
+
+    poll_init();                        /* 10/6/26: poll()'s wait queue (fs/poll.c) */
 
     kprintf("\nFile Systems\n");
     init_bcache();

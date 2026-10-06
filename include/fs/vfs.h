@@ -52,6 +52,17 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define ENAMETOOLONG 36
 #define ENOSYS       38
 #define ENOTEMPTY    39
+/* 10/6/26: network connections and pseudo-terminals for programs (surfos/sock.h, pty.h) */
+#define EAGAIN       11
+#define ENFILE       23
+#define EPIPE        32
+#define EADDRINUSE   98
+#define ENETUNREACH 101
+#define ECONNRESET  104
+#define ENOTCONN    107
+#define ETIMEDOUT   110
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
 #define ERANGE       34
 
 /* open flags (Linux values) */
@@ -116,6 +127,9 @@ struct vnode_ops {
     void (*release)(struct vnode *v);                                   /* last reference dropped */
     /* 10/5/26: within one file system; replaces an existing file (not a directory) at the target */
     int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname);
+    /* 10/6/26: what poll() reports for a descriptor of this vnode (POLLIN, POLLOUT, POLLHUP,
+       POLLERR of surfos/poll.h); NULL: always ready to read and write */
+    int (*poll)(struct vnode *v, struct file *f);
 };
 
 struct vnode {
@@ -233,5 +247,12 @@ void tarfs_init(void);
 void fatfs_init(void);
 void devfs_init(void);
 bool devfs_is_console(const struct file *f);     /* 10/6/26: /dev/console or /dev/tty */
+
+/* 10/6/26: poll() (surfos/poll.h). Whatever may change a descriptor's readiness (data
+   arriving, a connection made or closed, room to write, a session's output or end) calls
+   poll_wake(), which wakes every task waiting in poll(); they look again. fs/poll.c. */
+void poll_init(void);
+void poll_wake(void);
+wait_queue_t *poll_queue(void);
 
 #endif

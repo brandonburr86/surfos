@@ -39,6 +39,11 @@ for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <time.h>
+#include <surfos/sock.h>
+#include <surfos/poll.h>
+#include <surfos/pty.h>
+#include <surfos/proc.h>
+#include <surfos/sysimpl.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
@@ -47,7 +52,21 @@ for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short
 typedef char stat_layout_is_fixed[sizeof(struct stat) == 40 ? 1 : -1];
 typedef char statfs_layout_is_fixed[sizeof(struct statfs) == 116 ? 1 : -1];
 typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
+/* 10/6/26: the telnet server's calls (surfos/sock.h, poll.h, proc.h) */
+typedef char netaddr_layout_is_fixed[sizeof(struct netaddr) == 8 ? 1 : -1];
+typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
+typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
+typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
+
+/* 10/6/26: also for the calls in other files (surfos/sysimpl.h) */
+bool user_str(const char *s) {
+    return uvm_check_str(curTask->uvm, s, ARG_STR_MAX);
+}
+
+bool user_buf(const void *p, u_long len, bool write) {
+    return uvm_check(curTask->uvm, (u_long)p, len, write);
+}
 
 static bool ustr(const char *s) {
     return uvm_check_str(curTask->uvm, s, ARG_STR_MAX);
@@ -103,7 +122,7 @@ static int sys_getcwd(char *buf, u32 size) {
 }
 
 /* copy a user argv[] (NULL-terminated) into kargv; an empty one becomes { path } */
-static int user_argv(const char *path, char *const argv[], char **kargv) {
+int user_argv(const char *path, char *const argv[], char **kargv) {
     int argc = 0;
     if(argv) {
         for(;;) {
@@ -455,6 +474,17 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_ttyctl:  r = tty_ctl(curTask->tty, (int)a, b); break;
     case SYS_spawnfd: r = sys_spawnfd((const char *)a, (char *const *)b, (const int *)c); break;
     case SYS_kcmd:    r = sys_kcmd((char *const *)a); break;
+    /* 10/6/26: the telnet server's calls, each in its own file (surfos/sysimpl.h) */
+    case SYS_listen:   r = sys_listen((u16)a); break;
+    case SYS_accept:   r = sys_accept((int)a, (struct netaddr *)b); break;
+    case SYS_connect:  r = sys_connect((u32)a, (u16)b); break;
+    case SYS_netinfo:  r = sys_netinfo((struct netinfo *)a); break;
+    case SYS_poll:     r = sys_poll((struct pollfd *)a, (int)b, (int)c); break;
+    case SYS_openpty:  r = sys_openpty(); break;
+    case SYS_spawnpty: r = sys_spawnpty((const char *)a, (char *const *)b, (int)c); break;
+    case SYS_ptyctl:   r = sys_ptyctl((int)a, (int)b, c); break;
+    case SYS_procinfo: r = sys_procinfo((int)a, (struct procinfo *)b); break;
+    case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;
     default:          r = -ENOSYS; break;
     }

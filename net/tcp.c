@@ -34,10 +34,6 @@ kill waits for its end, or Ctrl+C: surfos/task.h).
 #define TCP_MAX_RETRIES 8
 #define TCP_TIME_WAIT (2 * HZ)
 #define TCP_BACKLOG 4
-#define ECONNREFUSED 111
-#define ECONNRESET 104
-#define ETIMEDOUT 110
-#define ENOTCONN 107
 
 enum { CLOSED, LISTEN, SYN_SENT, SYN_RCVD, ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSE_WAIT, CLOSING, LAST_ACK, TIME_WAIT };
 static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "FIN_WAIT_1",
