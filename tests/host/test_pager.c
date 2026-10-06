@@ -828,6 +828,27 @@ static void t_stream_backspace(void) {
     check(stream_is("\n\033[A\033[999C\033[K"), "at a row's start: the end of the row above");
     say(SHELL, "a\001\002\177b\033[1mc");
     check(stream_is("ab\033[1mc"), "other control characters and DEL are dropped, as the screen draws none");
+    say(SHELL, "\033[0m\033[H");
+    stream_now();
+    say(SHELL, "\b");
+    check(stream_is(""), "at the top left: nothing, as on the screen");
+}
+
+/* the review's probe: ESC[J after printing at the top left is no new screenful */
+static void t_stream_review(void) {
+    int st, x, wrap, rows, drop, a, o;
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 5);
+    say(CHILD, "\033[Habc\033[J");
+    page_state(&rows, &drop, &a, &o);
+    sim_stream_pos(&x, &wrap);
+    check(rows == 5 && x == 3, "ESC[H, text, ESC[J: not an empty screen, the 5 rows still count");
+    stream_now();
+    say(CHILD, "\n");
+    st = run(CHILD, w_lines, 6, 30);
+    check(st == BLOCKED && stream_is(lines_text("\n", 6, 8, QUESTION)), "so the question comes after 9 rows, not later");
+    sim_input('q');
+    resume(CHILD);
 }
 
 static void t_stream_clear(void) {
@@ -935,6 +956,7 @@ int main(void) {
     t_stream_resize();
     t_stream_colour();
     t_stream_backspace();
+    t_stream_review();
     t_stream_clear();
     t_stream_tty();
     reset(0);

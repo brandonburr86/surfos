@@ -683,16 +683,20 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         } else if(con->loc.x > 0) {
             n += stream_lit(out + n, "\b \b");
             con->loc.x--;
+        } else if(con->at_home) {
+            return;                                     /* the top left: nothing, as on the screen */
         } else {
             n += stream_lit(out + n, "\033[A\033[999C\033[K");
             con->loc.x = con->cols - 1;
         }
         con->page_fresh = 0;
+        con->at_home = 0;
         break;
     case '\t':
         if(!con->wrap) con->loc.x = (con->loc.x + 8) & ~7u;
         if(con->loc.x >= con->cols) con->loc.x = con->cols - 1;
         con->page_fresh = 0;
+        con->at_home = 0;
         out[n++] = '\t';
         break;
     default:
@@ -700,6 +704,7 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         if((b & 0xC0) != 0x80) {                        /* a character (ASCII, or a UTF-8 one's first byte): a column */
             if(con->wrap) stream_row(con);
             con->page_fresh = 0;
+            con->at_home = 0;                           /* the cursor left the top left: ESC[J is no clear screen */
             if(con->loc.x + 1 < con->cols) con->loc.x++;
             else con->wrap = 1;
         }
