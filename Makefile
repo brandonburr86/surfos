@@ -35,7 +35,7 @@ USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
 USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
-USER_PROGS   = hello crash cat ls count sh
+USER_PROGS   = hello crash cat ls count sh echo
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 
 

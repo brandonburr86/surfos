@@ -71,6 +71,16 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
+    # 10/5/26: the user C library and its programs. sh redirects < > >> through spawnfd().
+    ('run echo one  two', ['one two', 'exit status 0']),
+    ('sh', ['$ '], [('echo hello > /hda1/R.TXT', ['$ ']),
+                    ('cat < /hda1/R.TXT', ['hello', '$ ']),
+                    ('echo more >> /hda1/R.TXT', ['$ ']),
+                    ('cat /hda1/R.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/R.TXT > /hda1/R2.TXT', ['$ ']),
+                    ('cat /hda1/R2.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/NOPE', ['sh: /hda1/NOPE: No such file or directory', '$ ']),
+                    ('exit', ['exit status 0'])]),
 ]
 # steps that legitimately take longer than the 10 s default
 TIMEOUTS = {'selftest': 120}
