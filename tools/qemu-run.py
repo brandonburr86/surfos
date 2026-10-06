@@ -71,8 +71,9 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
-    # 10/5/26: the user C library and its programs. sh redirects < > >> through spawnfd(); the
-    # file tools work on files with known content.
+    # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
+    # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
+    ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
     ('run echo one  two', ['one two', 'exit status 0']),
     ('run ls -l /hda1', ['d          0 ', 'DOCS/', 'hello', 'motd', 'README', 'entries']),
     ('sh', ['$ '], [('echo hello > /hda1/R.TXT', ['$ ']),
@@ -98,8 +99,8 @@ SMOKE = [
                     ('df', ['Mounted on', 'rootfs', 'devfs', 'rd0', '/initrd', 'hda1', '/hda1', '$ ']),
                     ('exit', ['exit status 0'])]),
 ]
-# steps that legitimately take longer than the 10 s default
-TIMEOUTS = {'selftest': 120}
+# steps that legitimately take longer than the 10 s default (by command, or by its first word)
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
@@ -396,7 +397,7 @@ def run_smoke(q, boot_timeout):
                 results.append(host_echo_check(q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
-            limit = TIMEOUTS.get(cmd.split()[0], 10)
+            limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
             q.send(cmd + '\n')
             ok = all(q.expect(e, limit) for e in expects)
             for line, exp in follow:
