@@ -15,26 +15,29 @@ on the socket's event with the lock released.
 kill waits for its end, or Ctrl+C: surfos/task.h).
 
 10/6/26 (the telnet server): connections for programs (net/sock.c, surfos/sock.h).
-Sixteen sockets; a listening one has no buffers. The calls programs need answer
--errno and may wait without a time limit (a kill or Ctrl+C still ends the wait):
-tcp_open() keeps why a connection failed (refused, timed out, no route, no
-network), tcp_read() blocks like read(), tcp_write() waits only while nothing
-fits and queues what does, tcp_poll() says what is ready, and tcp_release()
-closes without waiting: the socket sends its FIN and finishes on its own (an
-orphan, given 30 seconds at most). Whatever changes what a socket is ready for
-also wakes poll() (poll_wake()). A listening socket conflicts only with another
-listening one on its port, so a server can listen again while its old
-connections finish.
+Sixteen sockets; a listening one has no buffers, and the last free one is kept
+for the kernel's own connections. The calls programs need answer -errno and may
+wait without a time limit (a kill or Ctrl+C still ends the wait): tcp_open() keeps
+why a connection failed (refused, timed out, no route, no network), tcp_read()
+blocks like read(), tcp_write() waits only while nothing fits and queues what
+does, tcp_poll() says what is ready, and tcp_release() closes without waiting: the
+socket sends its FIN and finishes on its own (an orphan, reset when it makes no
+progress for 30 seconds). Whatever changes what a socket is ready for also wakes
+poll() (poll_wake()). A listening socket conflicts only with another listening one
+on its port, so a server can listen again while its old connections finish.
 
-10/6/26 (review of the above): a connection that dies during its handshake
-leaves its listener's backlog at once, and a SYN finding the backlog full takes
-the place of a half-open one (a SYN scan or flood cannot make a listener deaf).
-A shut window is probed (the persist timer, with backoff, never giving up while
-the other end answers), and an ACK that only says the window is still shut
-proves the other end alive. An unacceptable segment always gets an ACK (a window
-probe from the other end is answered); a FIN behind data that did not fit is not
-taken; a window update goes out only when the window opened enough to matter;
-segments are cut to the other end's MSS.
+10/6/26 (review of the above): nothing waits forever on the other end. A
+connection that dies during its handshake leaves its listener's backlog at once,
+and a SYN finding the backlog full takes the place of a half-open one (a SYN scan
+or flood cannot make a listener deaf). A shut window is probed (the persist
+timer, with backoff, never giving up while the other end answers), and an ACK
+that only says the window is still shut proves the other end alive. A connection
+silent for two minutes is probed (keepalive: every 10 seconds, ETIMEDOUT after 5
+unanswered; tcpka=<idle>,<interval> in seconds on the kernel command line for the
+tests). An unacceptable segment always gets an ACK (a keepalive or a window probe
+from the other end is answered); a FIN behind data that did not fit is not taken;
+a window update goes out only when the window opened enough to matter; segments
+are cut to the other end's MSS.
 */
 
 #include <surfos/types.h>
@@ -48,9 +51,11 @@ segments are cut to the other end's MSS.
 #include <net/tcp.h>
 #include <fs/vfs.h>
 #include <surfos/poll.h>
+#include <surfos/multiboot.h>
 #include <blibc_common.h>
 
 #define TCP_SOCKETS 16                  /* 10/6/26: 8 before the telnet server */
+#define TCP_RESERVED 1                  /* 10/6/26: free sockets only the kernel's own connections may take */
 #define TCP_BUF 8192
 #define TCP_MSS 1460
 #define TCP_MIN_MSS 64                  /* 10/6/26: the smallest MSS of the other end's taken */
@@ -59,8 +64,11 @@ segments are cut to the other end's MSS.
 #define TCP_SYNACK_RETRIES 4            /* 10/6/26: a half-open connection gives up after about 10 s */
 #define TCP_TIME_WAIT (2 * HZ)
 #define TCP_BACKLOG 4
-#define TCP_ORPHAN_LIFE (30 * HZ)       /* 10/6/26: a closed socket still finishing is reset after this */
+#define TCP_ORPHAN_LIFE (30 * HZ)       /* 10/6/26: an orphan that made no progress this long is reset */
 #define TCP_PERSIST_MAX (60 * HZ)       /* 10/6/26: the longest pause between two probes of a shut window */
+#define TCP_KEEPIDLE (120 * HZ)         /* 10/6/26: keepalive: silent this long, the other end is asked */
+#define TCP_KEEPINTVL (10 * HZ)         /*          again after this, */
+#define TCP_KEEPCNT 5                   /*          and given up after this many unanswered */
 
 enum { CLOSED, LISTEN, SYN_SENT, SYN_RCVD, ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSE_WAIT, CLOSING, LAST_ACK, TIME_WAIT };
 static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "FIN_WAIT_1",
@@ -72,9 +80,11 @@ static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_
 struct tcp_socket {
     bool used, orphan;                  /* orphan: closed by the application, finishing on its own */
     bool synced;                        /* 10/6/26: it reached ESTABLISHED (accept() hands it out then) */
-    u_long orphan_at;                   /* 10/6/26: when it became an orphan */
+    u_long orphan_at;                   /* 10/6/26: when an orphan last made progress */
     struct tcp_socket *listener;        /* 10/6/26: whose backlog it waits in, until accept() takes it */
     u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
+    u_long last_rx;                     /* 10/6/26: when the other end last sent anything (keepalive) */
+    u_int ka_probes;                    /* 10/6/26: keepalive probes unanswered */
     u_long persist_at;                  /* 10/6/26: the next probe of a shut window, 0: none due */
     u_int persist_n;                    /* 10/6/26: probes since the window shut (the pause doubles) */
     int state;
@@ -103,40 +113,61 @@ struct tcp_socket {
 
 static struct tcp_socket socks[TCP_SOCKETS];
 static u16 next_port = 40000;
+static u_long ka_idle = TCP_KEEPIDLE, ka_intvl = TCP_KEEPINTVL;   /* 10/6/26: tcpka= on the command line */
 
 /**** sockets ****/
 
-/* 10/6/26: a listening socket moves no data: no buffers. *err says why there is none:
-   -ENFILE (all sockets in use) or -ENOMEM. */
-static struct tcp_socket *sock_new(bool buffers, int *err) {
-    int i;
+static void sock_free(struct tcp_socket *s);
+
+/* 10/6/26: a listening socket moves no data: no buffers. The last TCP_RESERVED free sockets are
+   for the kernel's own connections (reserved): programs and the connections that come in cannot
+   take them all. An orphan in TIME_WAIT counts as free, the oldest giving its place up when none
+   is (a program that connects and closes in a loop does not run out). *err says why there is
+   none: -ENFILE (all sockets in use) or -ENOMEM. */
+static struct tcp_socket *sock_new(bool buffers, bool reserved, int *err) {
+    struct tcp_socket *s = NULL, *tw = NULL;
+    int i, n = 0;
     for(i = 0; i < TCP_SOCKETS; i++) {
-        struct tcp_socket *s = &socks[i];
-        if(s->used) continue;
-        memset(s, 0, sizeof(*s));
-        if(buffers) {
-            s->txbuf = (u8 *)kalloc(TCP_BUF);
-            s->rxbuf = (u8 *)kalloc(TCP_BUF);
-            if(!s->txbuf || !s->rxbuf) {
-                kfree(s->txbuf);
-                kfree(s->rxbuf);
-                s->txbuf = s->rxbuf = NULL;
-                if(err) *err = -ENOMEM;
-                return NULL;
-            }
+        struct tcp_socket *x = &socks[i];
+        if(!x->used) {
+            if(!s) s = x;
+            n++;
+        } else if(x->orphan && x->state == TIME_WAIT) {   /* 10/6/26: one done but for its 2 s: as good as free */
+            n++;
+            if(!tw || (long)(x->wait_until - tw->wait_until) < 0) tw = x;
         }
-        s->used = true;
-        s->state = CLOSED;
-        s->mss = TCP_MSS;
-        event_init(&s->ev);
-        return s;
     }
-    if(err) *err = -ENFILE;
-    return NULL;
+    if((!s && !tw) || (!reserved && n <= TCP_RESERVED)) {
+        if(err) *err = -ENFILE;
+        return NULL;
+    }
+    if(!s) {                                             /* the oldest of them gives its place up */
+        sock_free(tw);
+        s = tw;
+    }
+    memset(s, 0, sizeof(*s));
+    if(buffers) {
+        s->txbuf = (u8 *)kalloc(TCP_BUF);
+        s->rxbuf = (u8 *)kalloc(TCP_BUF);
+        if(!s->txbuf || !s->rxbuf) {
+            kfree(s->txbuf);
+            kfree(s->rxbuf);
+            s->txbuf = s->rxbuf = NULL;
+            if(err) *err = -ENOMEM;
+            return NULL;
+        }
+    }
+    s->used = true;
+    s->state = CLOSED;
+    s->mss = TCP_MSS;
+    s->last_rx = getticks();
+    event_init(&s->ev);
+    return s;
 }
 
+/* a connection that came in (a SYN to a listener) */
 static struct tcp_socket *sock_alloc(void) {
-    return sock_new(true, NULL);
+    return sock_new(true, false, NULL);
 }
 
 static void sock_free(struct tcp_socket *s) {
@@ -174,6 +205,7 @@ static u16 ephemeral_port(void) {
 static void set_state(struct tcp_socket *s, int state) {
     s->state = state;
     if(state == ESTABLISHED) s->synced = true;
+    if(s->orphan) s->orphan_at = getticks();             /* 10/6/26: progress */
     notify(s);
 }
 
@@ -251,7 +283,7 @@ static u16 peer_mss(const struct tcp_hdr *th, u_int hlen) {
 }
 
 /* 10/6/26: an ACK the other end has to answer (an old sequence number, RFC 793), and its answer says
-   its window: the probe of a shut window */
+   its window: the probe of a shut window and keepalive's */
 static void send_probe(struct tcp_socket *s) {
     send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una - 1, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
     s->tx_segs++;
@@ -345,6 +377,7 @@ static void process_ack(struct tcp_socket *s, u32 ack) {
     s->rto_at = 0;
     s->retries = 0;
     if(s->snd_una != s->snd_nxt) arm_rto(s);
+    if(s->orphan) s->orphan_at = getticks();             /* 10/6/26: progress */
     notify(s);                                           /* room in the send buffer */
 }
 
@@ -423,6 +456,9 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         netbuf_free(nb);
         return;
     }
+
+    s->last_rx = getticks();                             /* 10/6/26: the other end is there (keepalive) */
+    s->ka_probes = 0;
 
     if(flags & TCP_RST) {
         if(s->state == SYN_SENT ? ack == s->snd_nxt : (SEQ_LEQ(s->rcv_nxt, seq) && SEQ_LT(seq, s->rcv_nxt + TCP_BUF)))
@@ -517,9 +553,37 @@ static void abort_conn(struct tcp_socket *s) {
     sock_free(s);
 }
 
+/* 10/6/26: tcpka=<idle>[,<interval>] on the kernel command line, in seconds: keepalive sooner (the tests) */
+static void keepalive_setting(void) {
+    const char *p = strstr(bootinfo.cmdline, "tcpka=");
+    char *end;
+    u_long idle, intvl;
+    if(!p) return;
+    idle = strtoul(p + 6, &end, 10);
+    if(idle) ka_idle = idle * HZ;
+    if(*end == ',' && (intvl = strtoul(end + 1, NULL, 10)) != 0) ka_intvl = intvl * HZ;
+}
+
+/* 10/6/26: keepalive: a connection the other end has said nothing on for ka_idle gets a probe, and
+   another every ka_intvl; TCP_KEEPCNT unanswered, the other end is gone: ETIMEDOUT */
+static void keepalive(struct tcp_socket *s, u_long now) {
+    if(now - s->last_rx < ka_idle + s->ka_probes * ka_intvl) return;
+    if(s->ka_probes >= TCP_KEEPCNT) {
+        fail(s, -ETIMEDOUT);
+        return;
+    }
+    send_probe(s);
+    s->ka_probes++;
+}
+
 void tcp_tick(void) {
+    static bool setting_read;
     u_long now = getticks();
     int i;
+    if(!setting_read) {
+        setting_read = true;
+        keepalive_setting();
+    }
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
         if(!s->used) continue;
@@ -528,13 +592,14 @@ void tcp_tick(void) {
             if(s->orphan) sock_free(s);
             continue;
         }
-        if(s->orphan && now - s->orphan_at >= TCP_ORPHAN_LIFE) {   /* 10/6/26: the other end never finished */
+        if(s->orphan && now - s->orphan_at >= TCP_ORPHAN_LIFE) {   /* 10/6/26: the other end stopped finishing it */
             abort_conn(s);
             continue;
         }
         if(s->rto_at && (long)(now - s->rto_at) >= 0) retransmit(s);
         if(!s->used) continue;                           /* it failed and went */
         if(s->persist_at && (long)(now - s->persist_at) >= 0) probe_window(s);
+        if((s->state == ESTABLISHED || s->state == CLOSE_WAIT) && !s->rto_at) keepalive(s, now);
     }
 }
 
@@ -580,15 +645,15 @@ static int no_route(ipaddr_t dst) {
    -ECONNREFUSED (a reset answered), -EHOSTUNREACH (the next hop never answered ARP),
    -ETIMEDOUT (no answer within timeout_ms, or the SYN's retries ran out), -EINTR (cut short).
    A connection that was made is handed out even when the other end has sent its data and closed,
-   or reset it, before this task ran again: read() says so. */
-int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out) {
+   or reset it, before this task ran again: read() says so. reserved: the kernel's own. */
+static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, struct tcp_socket **out) {
     struct tcp_socket *s;
     int err = 0;
     *out = NULL;
     if(!dst || !dport) return -EINVAL;
     mutex_lock(&net_lock);
     err = no_route(dst);
-    s = err ? NULL : sock_new(true, &err);
+    s = err ? NULL : sock_new(true, reserved, &err);
     if(!s) { mutex_unlock(&net_lock); return err; }
     s->local_port = ephemeral_port();
     s->remote_ip = dst;
@@ -613,29 +678,37 @@ int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out
     return 0;
 }
 
+int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out) {
+    return open_conn(dst, dport, timeout_ms, false, out);
+}
+
 struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
     struct tcp_socket *s;
-    return tcp_open(dst, dport, timeout_ms, &s) ? NULL : s;
+    return open_conn(dst, dport, timeout_ms, true, &s) ? NULL : s;
 }
 
 /* 10/6/26: -EINVAL for port 0, -EADDRINUSE when another socket listens there, -ENFILE */
-int tcp_listen_on(u16 port, struct tcp_socket **out) {
+static int listen_port(u16 port, bool reserved, struct tcp_socket **out) {
     struct tcp_socket *s = NULL;
     int err = 0;
     *out = NULL;
     if(!port) return -EINVAL;
     mutex_lock(&net_lock);
     if(port_listened(port)) err = -EADDRINUSE;
-    else s = sock_new(false, &err);
+    else s = sock_new(false, reserved, &err);
     if(s) { s->local_port = port; s->state = LISTEN; }
     mutex_unlock(&net_lock);
     *out = s;
     return s ? 0 : err;
 }
 
+int tcp_listen_on(u16 port, struct tcp_socket **out) {
+    return listen_port(port, false, out);
+}
+
 struct tcp_socket *tcp_listen(u16 port) {
     struct tcp_socket *s;
-    return tcp_listen_on(port, &s) ? NULL : s;
+    return listen_port(port, true, &s) ? NULL : s;
 }
 
 /* the first connection in l's backlog that finished its handshake (it may have been closed or reset
