@@ -63,6 +63,7 @@ int init_ramdisk(void) {
         strlcpy(d->model, bootinfo.mods[i].name[0] ? basename_of(bootinfo.mods[i].name) : "module", sizeof(d->model));
         d->block_size = BDEV_BLOCK_SIZE;
         d->nblocks = rd->size / BDEV_BLOCK_SIZE;                  /* a partial last block is not addressable */
+        d->bus = BDEV_BUS_RAM;                                    /* RAM only: the tests format these */
         d->ops = &rd_ops;
         d->priv = rd;
         if(bdev_register(d) != 0) { kfree(rd); kfree(d); continue; }

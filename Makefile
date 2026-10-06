@@ -128,8 +128,10 @@ run: $(KERNEL) images
 run-vga: $(KERNEL) images
 	$(QEMU) -m $(QEMUMEM) -kernel $(KERNEL) $(QEMUDISK) -serial stdio -no-reboot $(QEMUFLAGS)
 
+# the smoke test also gets a blank 64 MB module, the scratch ramdisk rd1 that fdisk and mkfs may write
+TESTMEM ?= 256
 test: $(KERNEL) images
-	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --mem $(QEMUMEM) --disk $(DISKIMG) --initrd $(INITRD) --test
+	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --mem $(TESTMEM) --disk $(DISKIMG) --initrd $(INITRD) --scratch 64 --test
 
 test-all:
 	$(MAKE) O=0 test

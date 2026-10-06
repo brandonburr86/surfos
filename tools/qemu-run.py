@@ -80,7 +80,7 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
 class Qemu:
     def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
-                 disk=None, initrd=None, disk_inplace=False, net=True, append=''):
+                 disk=None, initrd=None, disk_inplace=False, net=True, append='', scratch_mb=0):
         # UNIX socket paths are limited to 108 bytes, so keep the work directory short
         base = tempfile.gettempdir()
         if len(base) > 50 and os.path.isdir('/tmp'):
@@ -89,11 +89,19 @@ class Qemu:
         self.mon_path = os.path.join(self.workdir, 'mon.sock')
         self.ser_path = os.path.join(self.workdir, 'ser.sock')
         boot = ['-cdrom', os.path.abspath(iso), '-boot', 'd'] if iso else ['-kernel', os.path.abspath(kernel)]
+        modules = []
         if initrd and not iso:
             # a Multiboot module: the ramdisk rd0. QEMU splits -initrd at spaces (module arguments),
             # so a project path such as "SurfOS Restoration Project" needs a copy with a plain name.
             shutil.copyfile(initrd, os.path.join(self.workdir, 'initrd.tar'))
-            boot += ['-initrd', 'initrd.tar']
+            modules.append('initrd.tar')
+        if scratch_mb and not iso:
+            # a blank module after it: ramdisk rd1, RAM only, which fdisk and mkfs may write
+            with open(os.path.join(self.workdir, 'scratch.img'), 'wb') as f:
+                f.truncate(int(scratch_mb) << 20)
+            modules.append('scratch.img')
+        if modules:
+            boot += ['-initrd', ','.join(modules)]
         cmdline = append.split()
         self.disk = None
         if disk:
@@ -391,6 +399,8 @@ def main():
     ap.add_argument('--extra', default='', help='extra QEMU arguments')
     ap.add_argument('--append', default='', help='kernel command line words (for example profile=laptop)')
     ap.add_argument('--int-log', help='write the QEMU interrupt/exception log here (-d int)')
+    ap.add_argument('--scratch', type=int, default=0, metavar='MB',
+                    help='a blank module of this many MB after the initrd: a scratch ramdisk (rd1) for fdisk/mkfs')
     ap.add_argument('--boot-timeout', type=float, default=20)
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument('--test', action='store_true', help='smoke test over the serial console')
@@ -401,7 +411,7 @@ def main():
     a = ap.parse_args()
 
     q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace, not a.no_net,
-             a.append)
+             a.append, a.scratch)
     try:
         if a.test:
             results = run_smoke(q, a.boot_timeout)

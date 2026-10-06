@@ -191,3 +191,12 @@ void tty_switch(int index) {
     irq_restore(flags);
     serial_redraw(tty_active->con);
 }
+
+/* 10/5/26: terminal control for full-screen programs (see tty.h); raw mode is not
+   implemented yet */
+int tty_ctl(struct tty *t, int op, u32 arg) {
+    if(!t) return -9;                             /* EBADF */
+    if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
+    if(op == TTY_RAW) return -38;                 /* ENOSYS */
+    return -22;                                   /* EINVAL */
+}

@@ -3,6 +3,9 @@ SurfOS Block Cache
 --------------------
 File: bcache.c  Date: 10/3/26 (roadmap F1)
 --------------------
+10/5/26 (USB storage): an unplugged device's blocks are never read from the
+cache again, its dirty blocks are dropped instead of written, and a block
+still held when it went away is dropped when released.
 */
 
 #include <surfos/types.h>
@@ -24,6 +27,10 @@ void init_bcache(void) {
 /* must hold bcache_lock */
 static int writeback(struct buf *b) {
     int r = 0;
+    if(b->valid && b->dirty && b->dev->gone) {          /* unplugged: nowhere to write it */
+        b->dirty = false;
+        return BDEV_EGONE;
+    }
     if(b->valid && b->dirty) {
         r = bdev_write(b->dev, b->lba, 1, b->data);
         if(r == 0) { b->dirty = false; writes++; }
@@ -51,6 +58,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill) {
     struct buf *b;
     bool found;
 
+    if(dev->gone) return NULL;
     mutex_lock(&bcache_lock);
     b = lookup(dev, lba, &found);
     if(!b) { mutex_unlock(&bcache_lock); kprintf("bcache: every buffer is busy\n"); return NULL; }
@@ -90,6 +98,7 @@ void bdirty(struct buf *b) {
 void brelse(struct buf *b) {
     mutex_lock(&bcache_lock);
     if(b->refs) b->refs--;
+    if(!b->refs && b->dev && b->dev->gone) b->valid = b->dirty = false;
     mutex_unlock(&bcache_lock);
 }
 
@@ -109,7 +118,7 @@ void binvalidate(struct bdev *dev) {
     int i;
     mutex_lock(&bcache_lock);
     for(i = 0; i < BCACHE_BLOCKS; i++) {
-        if(bufs[i].valid && bufs[i].dev == dev && bufs[i].refs == 0) bufs[i].valid = false;
+        if(bufs[i].valid && bufs[i].dev == dev && bufs[i].refs == 0) bufs[i].valid = bufs[i].dirty = false;
     }
     mutex_unlock(&bcache_lock);
 }

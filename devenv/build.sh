@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 IMAGE=surfos-modern-toolchain
-VOLUME=surfos-modern-build
+VOLUME="${SURFOS_VOLUME:-surfos-modern-build}"   # a separate volume per worktree lets builds run side by side
 PLATFORM=linux/amd64
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 

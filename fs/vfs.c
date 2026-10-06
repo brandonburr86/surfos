@@ -120,6 +120,10 @@ const struct mount *vfs_mounts(void) {
 }
 
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
+    return vfs_mount_flags(dev, path, fstype, 0);
+}
+
+int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags) {
     const struct fs_type *type = fstype ? find_type(fstype) : (dev ? probe_type(dev) : NULL);
     struct superblock *sb;
     struct mount *m, **pp;
@@ -134,13 +138,15 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
     sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
     m = (struct mount *)kcalloc(1, sizeof(struct mount));
     if(!sb || !m) { kfree(sb); kfree(m); return -ENOMEM; }
+    if(dev && dev->gone) { kfree(sb); kfree(m); return -ENODEV; }
     sb->type = type;
     sb->dev = dev;
-    sb->readonly = dev ? dev->readonly : false;
+    sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
     mutex_init(&sb->lock, type->name);
     r = type->mount(sb);
     if(r) { kfree(sb); kfree(m); return r; }
     if(!sb->root) { kfree(sb); kfree(m); return -EIO; }
+    if(dev) bdev_get(dev);                          /* held until umount, even if unplugged meanwhile */
 
     strlcpy(m->path, abs, sizeof(m->path));
     m->sb = sb;
@@ -166,13 +172,33 @@ int vfs_umount(const char *path) {
     mutex_unlock(&mount_lock);
     sb = m->sb;
     if(sb->ops && sb->ops->sync) sb->ops->sync(sb);
-    if(sb->dev) bsync(sb->dev);
+    if(sb->dev) {
+        bsync(sb->dev);
+        bdev_flush(sb->dev);                        /* and out of the device's own cache */
+    }
     vput(sb->root);
     if(sb->ops && sb->ops->unmount) sb->ops->unmount(sb);
-    if(sb->dev) binvalidate(sb->dev);
+    if(sb->dev) {
+        binvalidate(sb->dev);
+        bdev_put(sb->dev);
+    }
     kfree(sb);
     kfree(m);
     return 0;
+}
+
+/* is d, the disk it is on, or a partition of d mounted? */
+bool vfs_bdev_busy(struct bdev *d) {
+    struct mount *m;
+    bool busy = false;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m && !busy; m = m->next) {
+        struct bdev *x = m->sb->dev;
+        if(!x) continue;
+        if(x == d || x->parent == d || d->parent == x) busy = true;     /* itself, a partition of it, its disk */
+    }
+    mutex_unlock(&mount_lock);
+    return busy;
 }
 
 int vfs_sync(void) {
@@ -465,6 +491,79 @@ int vfs_rmdir(const char *path) {
     return remove_entry(path, VN_DIR);
 }
 
+/* 10/5/26: rename within one file system; the file system does the work */
+int vfs_rename(const char *from, const char *to) {
+    char afrom[VFS_PATH_MAX], ato[VFS_PATH_MAX], oname[VFS_NAME_MAX + 1], nname[VFS_NAME_MAX + 1];
+    struct vnode *v, *odir, *ndir;
+    size_t lf;
+    int r = vfs_normalize(vfs_getcwd(), from, afrom, sizeof(afrom));
+    if(r == 0) r = vfs_normalize(vfs_getcwd(), to, ato, sizeof(ato));
+    if(r) return r;
+    lf = strlen(afrom);
+    if(!strncmp(ato, afrom, lf) && (ato[lf] == '/' || ato[lf] == 0)) return ato[lf] ? -EINVAL : 0;   /* into itself, or no change */
+    r = lookup_abs(afrom, &v);
+    if(r) return r;
+    if(v == v->sb->root) { vput(v); return -EBUSY; }                /* a mount point */
+    vput(v);
+    r = lookup_parent(afrom, &odir, oname);
+    if(r) return r;
+    r = lookup_parent(ato, &ndir, nname);
+    if(r) { vput(odir); return r; }
+    if(odir->sb != ndir->sb) r = -EXDEV;
+    else if(odir->sb->readonly) r = -EROFS;
+    else if(!odir->ops->rename) r = -ENOSYS;
+    else r = odir->ops->rename(odir, oname, ndir, nname);
+    if(r == 0 && odir->sb->ops && odir->sb->ops->sync) odir->sb->ops->sync(odir->sb);
+    vput(odir);
+    vput(ndir);
+    return r;
+}
+
+int vfs_statfs(const char *path, struct statfs *st) {
+    char abs[VFS_PATH_MAX];
+    struct mount *m, *best = NULL;
+    size_t bestlen = 0;
+    int r = vfs_normalize(vfs_getcwd(), path, abs, sizeof(abs));
+    if(r) return r;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m; m = m->next) {
+        size_t l = strlen(m->path);
+        if(l == 1) { if(!best) { best = m; bestlen = 1; } continue; }
+        if(l > bestlen && !strncmp(abs, m->path, l) && (abs[l] == '/' || abs[l] == 0)) { best = m; bestlen = l; }
+    }
+    mutex_unlock(&mount_lock);
+    if(!best) return -ENOENT;
+    memset(st, 0, sizeof(*st));
+    strlcpy(st->fs, best->sb->type->name, sizeof(st->fs));
+    strlcpy(st->dev, best->sb->dev ? best->sb->dev->name : "", sizeof(st->dev));
+    strlcpy(st->path, best->path, sizeof(st->path));
+    st->flags = best->sb->readonly ? MNT_RDONLY : 0;
+    if(!best->sb->ops || !best->sb->ops->statfs) return 0;            /* sizes unknown: all zero */
+    return best->sb->ops->statfs(best->sb, st);
+}
+
+int vfs_ftruncate(struct file *f, u32 size) {
+    int r;
+    if(!f) return -EBADF;
+    if(f->v->type != VN_FILE) return -EISDIR;
+    if((f->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
+    if(f->v->sb->readonly || !f->v->ops->truncate) return -EROFS;
+    r = f->v->ops->truncate(f->v, size);           /* the position stays where it is (POSIX) */
+    return r;
+}
+
+int vfs_fsync(struct file *f) {
+    struct superblock *sb;
+    if(!f) return -EBADF;
+    sb = f->v->sb;
+    if(sb->ops && sb->ops->sync && sb->ops->sync(sb) != 0) return -EIO;
+    if(sb->dev) {
+        if(bsync(sb->dev) != 0) return -EIO;
+        if(bdev_flush(sb->dev) != 0) return -EIO;
+    }
+    return 0;
+}
+
 /**** descriptors ****/
 
 int fd_install(struct file *f) {
@@ -510,6 +609,7 @@ const char *strerror(int err) {
     case ERANGE: return "Result too large";
     case EACCES: return "Permission denied";
     case EBUSY: return "Device or resource busy";
+    case EXDEV: return "Invalid cross-device link";
     case EEXIST: return "File exists";
     case ENODEV: return "No such device";
     case ENOTDIR: return "Not a directory";

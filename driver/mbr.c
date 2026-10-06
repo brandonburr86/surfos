@@ -44,13 +44,17 @@ int bdev_scan_partitions(struct bdev *disk) {
         }
         p = (struct bdev *)kcalloc(1, sizeof(struct bdev));
         if(!p) break;
-        snprintf(p->name, sizeof(p->name), "%s%i", disk->name, i + 1);
+        bdev_part_name(disk, (u_int)(i + 1), p->name, sizeof(p->name));
         strlcpy(p->model, disk->model, sizeof(p->model));
         p->block_size = disk->block_size;
         p->nblocks = count;
         p->start = start;
         p->parent = disk;
         p->part_type = type;
+        p->part_index = (u8)(i + 1);
+        p->bus = disk->bus;
+        p->removable = disk->removable;
+        p->protect = disk->protect;
         p->readonly = disk->readonly;
         if(bdev_register(p) != 0) { kfree(p); continue; }
         kprintf("+MBR: %s at block %lu, %lu blocks, type %02x (%s)%s\n", p->name, (u_long)start, (u_long)count,

@@ -245,6 +245,7 @@ int init_ata(void) {
             }
             d->block_size = BDEV_BLOCK_SIZE;
             d->nblocks = dev->sectors;
+            d->bus = BDEV_BUS_ATA;                           /* an internal disk: never formatted */
             d->ops = &ata_ops;
             d->priv = dev;
             if(bdev_register(d) != 0) { kfree(dev); continue; }

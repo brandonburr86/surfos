@@ -34,7 +34,18 @@ esi, edi; the result comes back in eax, negative values are -errno.
 #define SYS_sbrk    19   /* (long incr): the old break, 0 on failure */
 #define SYS_uptime  20   /* (): milliseconds since boot */
 #define SYS_kill    21   /* (int pid) */
-#define NR_SYSCALLS 22
+/* 10/5/26 (files on USB storage, the editor) */
+#define SYS_rename  22   /* (const char *from, const char *to) */
+#define SYS_fstat   23   /* (int fd, struct stat *st) */
+#define SYS_ftruncate 24 /* (int fd, u32 size) */
+#define SYS_fsync   25   /* (int fd) */
+#define SYS_sync    26   /* () */
+#define SYS_statfs  27   /* (const char *path, struct statfs *st) */
+#define SYS_dup2    28   /* (int oldfd, int newfd): newfd */
+#define SYS_time    29   /* (): seconds since 1970, from the CMOS clock */
+#define SYS_ttyctl  30   /* (int op, u32 arg): TTY_RAW, TTY_GETSIZE (surfos/tty.h) */
+#define SYS_spawnfd 31   /* (const char *path, char *const argv[], const int fds[3]): pid; the child's 0, 1, 2 */
+#define NR_SYSCALLS 32
 
 #define SPAWN_MAX_ARGS 32
 

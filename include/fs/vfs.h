@@ -9,6 +9,10 @@ open object (file or directory) that a file system hands out from lookup(),
 create() or as its root; it is reference counted and released through vput().
 A struct file is an open file: a vnode plus a position and the open flags.
 Every call returns 0 or a negative errno value.
+
+10/5/26 (USB storage): rename, statfs, ftruncate, fsync, read-only mounts, and
+vfs_bdev_busy() for the destructive tools' safety rule. A mount holds its block
+device (bdev_get) until it is unmounted.
 */
 
 #ifndef _FS_VFS_H
@@ -28,6 +32,7 @@ Every call returns 0 or a negative errno value.
 #define E2BIG         7
 #define ENOMEM       12
 #define EFAULT       14
+#define EXDEV        18
 #define EACCES       13
 #define EBUSY        16
 #define EEXIST       17
@@ -83,6 +88,18 @@ struct stat {                   /* also the layout user programs see */
     char dev[16];               /* block device name, "" for none */
 };
 
+#define MNT_RDONLY 1            /* vfs_mount_flags(): no writes through this mount */
+
+struct statfs {                 /* also the layout user programs see (df) */
+    u32 unit;                   /* bytes per allocation unit (a FAT cluster) */
+    u32 units, free_units;      /* in all, and free */
+    u32 flags;                  /* MNT_RDONLY */
+    char fs[8];                 /* file system type name */
+    char dev[16];               /* block device name, "" for none */
+    char label[12];             /* volume label, "" for none */
+    char path[64];              /* where it is mounted */
+};
+
 struct vnode_ops {
     int (*lookup)(struct vnode *dir, const char *name, struct vnode **out);
     int (*readdir)(struct vnode *dir, u_int index, struct dirent *de);   /* 0 entry, 1 end, < 0 error */
@@ -92,6 +109,8 @@ struct vnode_ops {
     int (*create)(struct vnode *dir, const char *name, int type, struct vnode **out);
     int (*unlink)(struct vnode *dir, const char *name);                 /* files and empty directories */
     void (*release)(struct vnode *v);                                   /* last reference dropped */
+    /* 10/5/26: within one file system; replaces an existing file (not a directory) at the target */
+    int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname);
 };
 
 struct vnode {
@@ -108,6 +127,7 @@ struct vnode {
 struct superblock_ops {
     int (*sync)(struct superblock *sb);
     int (*unmount)(struct superblock *sb);     /* after the root vnode is released */
+    int (*statfs)(struct superblock *sb, struct statfs *st);   /* 10/5/26: unit, units, free_units, label */
 };
 
 struct superblock {
@@ -149,7 +169,9 @@ void vput(struct vnode *v);
 void init_fs(void);                                  /* register the file systems, mount what is found */
 int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
+int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
+bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
 int vfs_sync(void);
 const struct mount *vfs_mounts(void);
 
@@ -170,6 +192,10 @@ int vfs_readdir(struct file *f, struct dirent *de);              /* 0 entry, 1 e
 int vfs_mkdir(const char *path);
 int vfs_unlink(const char *path);                                /* a file */
 int vfs_rmdir(const char *path);                                 /* an empty directory */
+int vfs_rename(const char *from, const char *to);                /* one file system only (-EXDEV) */
+int vfs_statfs(const char *path, struct statfs *st);             /* the mount that holds path */
+int vfs_ftruncate(struct file *f, u32 size);
+int vfs_fsync(struct file *f);                                   /* its file system's dirty blocks to the device */
 
 /* descriptors of the current task (the system call layer) */
 int fd_install(struct file *f);                                  /* fd, or -EMFILE */
