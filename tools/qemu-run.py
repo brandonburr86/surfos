@@ -839,26 +839,22 @@ def pager_background_check(q):
 
 
 def kcmd_echo_check(q):
-    """typed input's echo is shown and never kept with a kernel command's output (kcmdtest run: the 2004 demo with
-    its output on a file; its string comparison, answered on the console, reads two lines)"""
-    q.send('kcmdtest run /hda1/ECHO.TXT demo\n')
-    ok = q.expect('\x1b[2J', 10)                            # the menu: the screen cleared, the text kept
-    for keys, shows in (('2', '\x1b[2J'), ('first-typed\r', 'first-typed'), ('second-typed\r', 'second-typed'),
-                        (' ', '\x1b[2J')):
-        if ok:
-            q.send(keys)
-            ok = q.expect(shows, 10)
+    """typed input's echo is shown and never kept with a kernel command's output: fdisk's question with its
+    output on a file (kcmdtest run), answered on the console. The interactive commands that read without a
+    question of the shell's (demo, hanoi, rawkeys) refuse a redirection, so fdisk is the one left to show it"""
+    start = len(q.transcript)
+    q.send('kcmdtest run /hda1/ECHO.TXT fdisk rd1 new gpt\n')
+    ok = q.expect(CONFIRM_RD1, 10)
     if ok:
-        q.send('q')
-        ok = q.expect('kcmdtest: demo: status 0', 10) and q.expect(PROMPT, 10)
+        q.send('nope-typed\n')
+        ok = q.expect('nope-typed', 10) and q.expect('kcmdtest: fdisk: status 1', 10) and q.expect(PROMPT, 10)
     if ok:
         start = len(q.transcript)
         q.send('cat /hda1/ECHO.TXT\n')
-        ok = q.expect('Enter a string: Enter another string: ', 10) and q.expect('first string is less', 10) and \
-            q.expect(PROMPT, 10) and b'typed' not in q.transcript[start:]
+        ok = q.expect('Cancelled', 10) and q.expect(PROMPT, 10) and b'nope-typed' not in q.transcript[start:]
     q.send('rm /hda1/ECHO.TXT\n')
     ok = q.expect(PROMPT, 10) and ok
-    return ('a kernel command with its output on a file: typed lines are shown, and not kept in the file', ok)
+    return ('a kernel command with its output on a file: the typed answer is shown, and not kept in the file', ok)
 
 
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
