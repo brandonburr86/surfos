@@ -360,7 +360,7 @@ static void test_fs(void) {
         vfs_close(f);
     }
     check(r == 17 && !memcmp(buf, "Welcome to SurfOS", 17), "read /initrd/motd through the VFS");
-    check(vfs_stat("/initrd/etc/version", &st) == 0 && st.type == VN_FILE && st.size == 22, "stat /initrd/etc/version: 22-byte file");
+    check(vfs_stat("/initrd/etc/version", &st) == 0 && st.type == VN_FILE && st.size == 20, "stat /initrd/etc/version: 20-byte file");
     check(vfs_stat("/initrd/etc", &st) == 0 && st.type == VN_DIR, "/initrd/etc is a directory");
     check(vfs_open("/initrd/nothing", O_RDONLY, &f) == -ENOENT, "missing file is ENOENT");
     check(vfs_open("/initrd/motd", O_WRONLY, &f) == -EROFS, "writing the initrd is EROFS");

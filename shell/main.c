@@ -42,6 +42,7 @@ that is no command is 127, and a program run by its name gives its exit status.
 #include <surfos/multiboot.h>
 #include <surfos/cpu.h>
 #include <surfos/acpi.h>
+#include <surfos/version.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -69,13 +70,13 @@ static int cmd_help(int argc, char **argv) {
         printf("    no such command: %s\n", argv[1]);
         return CMD_FAIL;
     }
-    printf("\n    SurfOS ring0 Debug Shell v0.009\n");
+    printf("\n    %s kernel shell %s\n", SURFOS_NAME, SURFOS_VERSION);
     printf("    -------------------------------\n");
     for(i = 0; i < ncommands; i++) {
         printf("    %-9s %-14s %s\n", commands[i].name, commands[i].args, commands[i].help);
     }
     printf("    -------------------------------\n");
-    printf("    (C)2004 Brandon Burr.\n\n");
+    printf("    (C)%s %s.\n\n", SURFOS_YEARS, SURFOS_AUTHOR);
     return CMD_OK;
 }
 
@@ -331,7 +332,8 @@ static int cmd_httpget(int argc, char **argv) {
     t0 = getticks();
     s = tcp_connect(ip, port, 5000);
     if(!s) { printf("    httpget: connection to %s:%u failed\n", ipfmt(ip, a), port); return CMD_FAIL; }
-    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: SurfOS/0.007\r\nConnection: close\r\n\r\n", path, argv[1]);
+    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " SURFOS_NAME "/" SURFOS_VERSION "\r\nConnection: close\r\n\r\n",
+             path, argv[1]);
     if(tcp_send(s, req, strlen(req)) != (int)strlen(req)) { printf("    httpget: send failed\n"); tcp_close(s); return CMD_FAIL; }
     while((n = tcp_recv(s, buf, sizeof(buf) - 1, 10000)) > 0) {
         int i;

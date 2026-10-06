@@ -90,7 +90,7 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kerne
 
 # (command, strings that must appear before the next prompt) - over the serial console
 PORTABLE = [
-    ('help', ['SurfOS ring0 Debug Shell', '(C)2004 Brandon Burr.']),
+    ('help', ['SurfOS kernel shell 1.0', '(C)2004-2026 Brandon Burr.']),
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
     ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
                  'keyboard  8042', 'usb       1 xHCI controller']),
@@ -100,7 +100,7 @@ PORTABLE = [
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
     ('lsblk', ['rd0']),
     ('mount', ['rd0', '/initrd', 'tarfs']),
-    ('cat /initrd/etc/version', ['SurfOS 0.007']),
+    ('cat /initrd/etc/version', ['SurfOS 1.0 (ai-dev)']),
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('count 3 10', ['counted to 3']),
     ('sleep 300', ['slept 300 ms']),
@@ -117,12 +117,12 @@ KEYBOARD = [
     ('echo abcx<bs>d\n', ['abcd']),                                  # Backspace
     ('<up>\n', ['abcd']),                                            # history
     ('tick\n', ['Ticks:']),
-    ('cat /initrd/etc/version\n', ['SurfOS 0.007']),
+    ('cat /initrd/etc/version\n', ['SurfOS 1.0 (ai-dev)']),
     ('run hello a b\n', ['exit status 42']),
     ('count 3 10\n', ['counted to 3']),
     ('drivers\n', ['console   framebuffer', 'serial    none', 'keyboard  8042']),
     ('memstat\n', ['Free physical pages:', 'dma heap']),
-    ('help\n', ['(C)2004 Brandon Burr.']),
+    ('help\n', ['(C)2004-2026 Brandon Burr.']),
 ]
 
 
@@ -449,6 +449,33 @@ class Vm:
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
              6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED'}
 GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
+LRED, ORANGE = bytes((255, 85, 85)), bytes((170, 85, 0))
+
+
+def version_h(name):
+    """a string of include/surfos/version.h (10/6/26), which the banner prints"""
+    m = re.search(r'#define\s+' + name + r'\s+"([^"]*)"', open(os.path.join(REPO, 'include', 'surfos', 'version.h')).read())
+    return m.group(1) if m else '?'
+
+
+def banner_ok(scr):
+    """the banner of kernel/sys.c (10/6/26): "Brandon Burr's SurfOS" in light red, then "Version 1.0 on an x86,
+    2004-2026" in light red with the version and the years in orange"""
+    if scr is None:
+        return False
+    rows = [i for i, r in enumerate(scr.rows) if r == f"{version_h('SURFOS_AUTHOR')}'s {version_h('SURFOS_NAME')}"]
+    if not rows or rows[-1] + 1 >= len(scr.rows):
+        return False
+    title, line = rows[-1], rows[-1] + 1
+    parts = [('Version ', LRED), (version_h('SURFOS_VERSION'), ORANGE), (' on an x86, ', LRED), (version_h('SURFOS_YEARS'), ORANGE)]
+    if scr.rows[line] != ''.join(text for text, _ in parts):
+        return False
+    cells = [(c, title, LRED) for c, ch in enumerate(scr.rows[title]) if ch != ' ']
+    col = 0
+    for text, colour in parts:
+        cells += [(col + i, line, colour) for i, ch in enumerate(text) if ch != ' ']
+        col += len(text)
+    return all(scr.colours[(c, r)][0] == colour for c, r, colour in cells)
 
 
 def ansi_ok(scr):
@@ -553,7 +580,8 @@ def scenario_serial(args, image, firmware, outdir):
             want = [l.strip() for l in serial_boot.splitlines() if l.strip()][-6:]
             shown = [r.strip() for r in scr.rows if r.strip()]
             results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
-            results.append(('framebuffer shows the banner', any("Phrite's SurfOS" in r for r in scr.rows)))
+            results.append(('framebuffer shows the banner: Brandon Burr\'s SurfOS, the version and the years in their colours',
+                            banner_ok(scr)))
             results.append(('GRUB found its own partition through $cmdpath, no disk search',
                             'searching all disks' not in serial_boot and 'Booting `SurfOS' in serial_boot))
             run_portable(vm, results)
@@ -599,7 +627,7 @@ def scenario_keyboard(args, image, firmware, outdir):
         results.append(('F2 switches to console 2 (its own shell)', two is not None))
         vm.screen('console2.png')
         vm.keys('<f1>')
-        one = vm.wait_screen(lambda s: '(C)2004 Brandon Burr.' in s.text(), 20, interval=0.5)
+        one = vm.wait_screen(lambda s: '(C)2004-2026 Brandon Burr.' in s.text(), 20, interval=0.5)
         results.append(('F1 switches back to console 1 with its screen', one is not None))
         vm.screen('console1.png')
         # escape sequences (tty.h): the test pattern of `ansi`, read back with its colours

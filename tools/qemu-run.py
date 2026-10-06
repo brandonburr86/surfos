@@ -46,7 +46,7 @@ SMOKE = [
     ('tick',    ['Ticks:']),
     ('memstat', ['Physical memory:', 'Free physical pages:']),
     ('ps',      ['Kernel Idle Task', 'init', 'Shell 0']),
-    ('help',    ['SurfOS ring0 Debug Shell']),
+    ('help',    ['SurfOS kernel shell 1.0', '(C)2004-2026 Brandon Burr.']),
     ('test',    ['linear is using physical']),
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
@@ -161,7 +161,7 @@ SMOKE = [
     ('count 3 10', ['counted to 3']),
     ('ls /dev', ['console', 'null']),
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
-                    ('cat /initrd/etc/version', ['SurfOS 0.007', '$ ']),
+                    ('cat /initrd/etc/version', ['SurfOS 1.0 (ai-dev)', '$ ']),
                     ('exit 3', ['exit status 3'])]),
     # raw mode (tty.h): the terminal's bytes arrive unchanged, an arrow key as ESC [ A
     ('rawkeys', ['raw mode (80x25)'], [('\x1b[A\x7f\x03q', ['1b 5b 41 7f 03 71'])]),
@@ -550,7 +550,7 @@ def console_switch_check(q):
     from the console's buffer, down to its last row in use (Z in the corner, row 25), and the
     cursor goes back up to the prompt on row 14, column 10"""
     q.sendkeys('<f2>')
-    ok = q.expect('Kernel version', 10) and q.expect(PROMPT, 10)
+    ok = q.expect("Brandon Burr's SurfOS", 10) and q.expect(PROMPT, 10)
     q.sendkeys('<f1>')
     ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
     ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
