@@ -114,10 +114,9 @@ int pty_out(surf_console *con, const char *s, u_int n, int how) {
         }
         if(p->out_len + n <= limit) {
             at = (p->out_first + p->out_len) % PTY_OUT_SIZE;
-            for(k = 0; k < n; k++) {
-                p->out[at] = s[k];
-                at = (at + 1) % PTY_OUT_SIZE;
-            }
+            k = PTY_OUT_SIZE - at < n ? PTY_OUT_SIZE - at : n;     /* up to the end of the ring, then from its start */
+            memcpy(p->out + at, s, k);
+            memcpy(p->out, s + k, n - k);
             p->out_len += n;
             irq_restore(flags);
             wake_up_all(&p->readers);
@@ -171,7 +170,9 @@ static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
         flags = irq_save();
         if(p->out_len) {
             n = p->out_len < len ? p->out_len : len;
-            for(k = 0; k < n; k++) chunk[k] = p->out[(p->out_first + k) % PTY_OUT_SIZE];
+            k = PTY_OUT_SIZE - p->out_first < n ? PTY_OUT_SIZE - p->out_first : n;
+            memcpy(chunk, p->out + p->out_first, k);    /* up to the end of the ring, then from its start */
+            memcpy(chunk + k, p->out, n - k);
             p->out_first = (p->out_first + n) % PTY_OUT_SIZE;
             p->out_len -= n;
             irq_restore(flags);
