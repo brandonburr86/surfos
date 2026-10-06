@@ -171,6 +171,19 @@ SMOKE = [
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
+    # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
+    # error; $? in the ring-0 shell; 127 for no such command; a program's exit status through run
+    ('echo status $?', ['status 0']),
+    ('ls /hda1/no-such-file', ['No such file or directory']),
+    ('echo status $?', ['status 1']),
+    ('fdisk hda new mbr', ['hda will not be changed']),
+    ('echo status $?', ['status 1']),
+    ('fdisk', ['fdisk <disk> new mbr|gpt']),
+    ('echo status $?', ['status 2']),
+    ('no-such-command', ['Invalid command']),
+    ('echo status $?', ['status 127']),
+    ('run hello', ['exit status 42']),
+    ('echo status $?', ['status 42']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),

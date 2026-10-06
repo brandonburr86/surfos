@@ -18,6 +18,10 @@ ramdisk, not the SurfOS boot drive, not read-only, nothing on it mounted.
 fdisk shows the disk, its table and the change, and writes only after the
 disk's name has been typed back. What was written is read back and checked
 before fdisk says so, and the disk's partitions are registered again.
+
+10/6/26: the status (shell.h) is CMD_OK for a table shown or written, CMD_USAGE for
+what fdisk does not understand, and CMD_FAIL otherwise: a refused disk, a change
+that cannot be planned, a Cancelled question or a failed write.
 */
 
 #include <blibc_common.h>
@@ -141,7 +145,8 @@ static int number(const char *s, u_int *n) {
     return 0;
 }
 
-/* the plan for argv[2...], or -1 after saying what is wrong */
+/* the plan for argv[2...]: CMD_OK, or after saying what is wrong CMD_USAGE (not a change fdisk
+   knows) or CMD_FAIL (a change that cannot be made) */
 static int make_plan(struct bdev *d, const struct part_table *t, int argc, char **argv, struct part_plan *plan) {
     struct part_io io;
     struct part_kind kind;
@@ -162,7 +167,7 @@ static int make_plan(struct bdev *d, const struct part_table *t, int argc, char 
             else {
                 printf("    fdisk: '%s' is neither a size (500M, 2G, all) nor a type\n", argv[i]);
                 printf("    (fat32, fat16, linux, efi, or an MBR type byte in hex)\n");
-                return -1;
+                return CMD_USAGE;
             }
         }
         r = part_plan_add(&io, t, count, &kind, plan, err, sizeof(err));
@@ -171,31 +176,33 @@ static int make_plan(struct bdev *d, const struct part_table *t, int argc, char 
     } else if(!strcmp(argv[2], "type") && argc == 5 && number(argv[3], &index) == 0) {
         if(part_parse_type(argv[4], &kind) != 0) {
             printf("    fdisk: no type '%s' (fat32, fat16, linux, efi, or an MBR type byte in hex)\n", argv[4]);
-            return -1;
+            return CMD_USAGE;
         }
         r = part_plan_type(&io, t, index, &kind, plan, err, sizeof(err));
     } else {
         usage();
-        return -1;
+        return CMD_USAGE;
     }
-    if(r) printf("    fdisk: %s: %s\n", d->name, err);
-    return r;
+    if(!r) return CMD_OK;
+    printf("    fdisk: %s: %s\n", d->name, err);
+    return CMD_FAIL;
 }
 
-void cmd_fdisk(int argc, char **argv) {
+int cmd_fdisk(int argc, char **argv) {
     struct part_table *t = NULL;
     struct part_plan plan;
     struct part_io io;
     struct bdev *d;
     char why[120];
+    int status = CMD_FAIL;
 
-    if(argc < 2) { usage(); return; }
+    if(argc < 2) { usage(); return CMD_USAGE; }
     d = bdev_find(argv[1]);
-    if(!d) { printf("    fdisk: no block device '%s' (lsblk lists them)\n", argv[1]); return; }
-    if(d->parent) { printf("    fdisk: %s is a partition; fdisk works on whole disks (%s)\n", d->name, d->parent->name); return; }
+    if(!d) { printf("    fdisk: no block device '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
+    if(d->parent) { printf("    fdisk: %s is a partition; fdisk works on whole disks (%s)\n", d->name, d->parent->name); return CMD_FAIL; }
     if(argc > 2 && bdev_may_format(d, why, sizeof(why)) != 0) {     /* the one safety rule, before anything else */
         printf("    fdisk: %s will not be changed:\n  %s\n", d->name, why);
-        return;
+        return CMD_FAIL;
     }
     t = (struct part_table *)kalloc(sizeof(struct part_table));
     plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
@@ -208,9 +215,12 @@ void cmd_fdisk(int argc, char **argv) {
         show_free(t);
         if(bdev_may_format(d, why, sizeof(why)) == 0) printf("    fdisk and mkfs may change %s\n", d->name);
         else printf("    fdisk and mkfs will not change %s:\n  %s\n", d->name, why);
+        status = CMD_OK;
         goto out;
     }
-    if(make_plan(d, t, argc, argv, &plan) != 0) goto out;
+    status = make_plan(d, t, argc, argv, &plan);
+    if(status != CMD_OK) goto out;
+    status = CMD_FAIL;
     show_disk(d);
     show_table(d, t);
     printf("    change: %s\n", plan.what);
@@ -222,7 +232,9 @@ void cmd_fdisk(int argc, char **argv) {
     }
     printf("    %s: written, flushed and verified\n", d->name);
     show_result(d);
+    status = CMD_OK;
 out:
     kfree(plan.buf);
     kfree(t);
+    return status;
 }
