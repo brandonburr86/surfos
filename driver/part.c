@@ -17,10 +17,17 @@ table, the disk itself) holds a FAT volume labelled SURFOSUSB, which is what
 tools/mkusb.py writes, gets protect = bdev_boot_drive, and so do its
 partitions; bdev_may_format() then refuses it to fdisk and mkfs. bdev_rescan()
 reads a table again after fdisk has written it.
+
+fdisk's changes are planned by parttab.c and carried out by part_commit():
+through the block layer, flushed, read back and compared, the table read again
+and checked against the plan, and the disk rescanned.
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
+#include <surfos/cpu.h>
+#include <surfos/sync.h>
+#include <surfos/timer.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -36,6 +43,32 @@ static int disk_read(void *arg, u32 lba, u32 count, void *buf) {
 
 static void boot_note(void *arg, const char *msg) {
     kprintf("+PART: %s: %s\n", ((struct bdev *)arg)->name, msg);
+}
+
+static void shell_note(void *arg, const char *msg) {
+    printf("    note: %s\n", msg);
+}
+
+/* for disk signatures and GUIDs: the time stamp counter (or the tick count) stirred into a counter,
+   so two calls in a row never agree */
+static u32 part_random(void *arg) {
+    static u32 count;
+    u32 x = (u32)getticks() * 2654435761u + (count += 0x9E3779B9);
+    if(cpu.tsc) {
+        u64 tsc = rdtsc();
+        x ^= (u32)tsc ^ (u32)(tsc >> 32);
+    }
+    x ^= x >> 16; x *= 0x85EBCA6B;                  /* the MurmurHash3 finalizer */
+    x ^= x >> 13; x *= 0xC2B2AE35;
+    x ^= x >> 16;
+    return x;
+}
+
+void part_io_init(struct part_io *io, struct bdev *disk, bool to_shell) {
+    io->arg = disk;
+    io->read = disk_read;
+    io->note = to_shell ? shell_note : boot_note;
+    io->random = part_random;
 }
 
 static struct bdev *add_partition(struct bdev *disk, const struct part_table *t, const struct part_entry *e) {
@@ -97,10 +130,7 @@ int bdev_scan_partitions(struct bdev *disk) {
     int found = 0;
 
     if(!t || !sec) { kfree(t); kfree(sec); return -1; }
-    io.arg = disk;
-    io.read = disk_read;
-    io.note = boot_note;
-    io.random = NULL;                               /* reading needs none */
+    part_io_init(&io, disk, false);
     if(part_read(&io, disk->nblocks, t) != 0) { kfree(t); kfree(sec); return -1; }
     disk->scheme = (u8)(t->damaged ? PART_SCHEME_NONE : t->scheme);
     for(i = 0; i < t->nparts; i++) {
@@ -142,4 +172,83 @@ int bdev_rescan(struct bdev *disk) {
     if(disk->protect == bdev_boot_drive) disk->protect = NULL;     /* found again below if it still is */
     disk->scheme = PART_SCHEME_NONE;
     return bdev_scan_partitions(disk);
+}
+
+/**** fdisk's writes ****/
+
+#define CHUNK 32                                    /* blocks per write of zeros and per read back */
+
+static mutex_t write_lock = MUTEX_INIT("fdisk");
+
+static int write_extent(struct bdev *disk, const struct part_write *w, const u8 *zero) {
+    u32 done, c;
+    if(w->data) return bdev_write(disk, w->lba, w->count, w->data);
+    for(done = 0; done < w->count; done += c) {
+        c = w->count - done < CHUNK ? w->count - done : CHUNK;
+        if(bdev_write(disk, w->lba + done, c, zero) != 0) return -1;
+    }
+    return 0;
+}
+
+static int verify_extent(struct bdev *disk, const struct part_write *w, u8 *buf, const u8 *zero) {
+    u32 done, c;
+    for(done = 0; done < w->count; done += c) {
+        c = w->count - done < CHUNK ? w->count - done : CHUNK;
+        if(bdev_read(disk, w->lba + done, c, buf) != 0) return -1;
+        if(memcmp(buf, w->data ? w->data + done * PART_SECTOR : zero, c * PART_SECTOR)) return -1;
+    }
+    return 0;
+}
+
+/* Carries a plan out on disk. before is the table the plan was made from: when the disk no longer
+   reads the same (another fdisk, or a different stick under the same name), nothing is written.
+   The safety rule is asked again, as the user took a while to answer. 0, or -1 with what went
+   wrong in msg; either way the disk is rescanned once something was written. */
+int part_commit(struct bdev *disk, const struct part_table *before, const struct part_plan *p, char *msg, size_t n) {
+    struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
+    u8 *buf = (u8 *)kalloc(CHUNK * PART_SECTOR), *zero = (u8 *)kcalloc(1, CHUNK * PART_SECTOR);
+    struct part_io io;
+    char why[100];
+    u_int i;
+    int r = -1, found;
+
+    msg[0] = 0;
+    if(!t || !buf || !zero) { snprintf(msg, n, "out of memory"); goto out; }
+    if(!mutex_trylock(&write_lock)) { snprintf(msg, n, "another fdisk is writing a partition table; try again"); goto out; }
+    if(bdev_may_format(disk, why, sizeof(why)) != 0) { snprintf(msg, n, "%s will not be changed: %s", disk->name, why); goto unlock; }
+    part_io_init(&io, disk, false);
+    io.note = NULL;
+    if(part_read(&io, disk->nblocks, t) != 0 || memcmp(t, before, sizeof(struct part_table))) {
+        snprintf(msg, n, "the partition table on %s changed since it was read; nothing was written", disk->name);
+        goto unlock;
+    }
+    for(i = 0; i < p->nwrites; i++) {
+        if(write_extent(disk, &p->w[i], zero) != 0) {
+            snprintf(msg, n, "writing blocks %lu-%lu failed", (u_long)p->w[i].lba, (u_long)(p->w[i].lba + p->w[i].count - 1));
+            goto rescan;
+        }
+    }
+    if(bdev_flush(disk) != 0) { snprintf(msg, n, "%s did not write its cache to the medium", disk->name); goto rescan; }
+    for(i = 0; i < p->nwrites; i++) {
+        if(verify_extent(disk, &p->w[i], buf, zero) != 0) {
+            snprintf(msg, n, "blocks %lu-%lu do not read back as written", (u_long)p->w[i].lba, (u_long)(p->w[i].lba + p->w[i].count - 1));
+            goto rescan;
+        }
+    }
+    if(part_read(&io, disk->nblocks, t) != 0 || part_plan_check(p, t, why, sizeof(why)) != 0) {
+        snprintf(msg, n, "the table read back is not what was planned: %s", why);
+        goto rescan;
+    }
+    r = 0;
+rescan:
+    found = bdev_rescan(disk);                      /* the cached blocks of the disk go with it */
+    if(found < 0 && !msg[0]) snprintf(msg, n, "%s could not be read again (%d)", disk->name, found);
+    if(found < 0) r = -1;
+unlock:
+    mutex_unlock(&write_lock);
+out:
+    kfree(t);
+    kfree(buf);
+    kfree(zero);
+    return r;
 }

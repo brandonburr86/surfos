@@ -710,7 +710,7 @@ int part_plan_new(const struct part_io *io, u32 nblocks, int scheme, struct part
         plan_write(p, nblocks - 33, 33, NULL);      /* where a backup GPT would be, */
         plan_write(p, 1, 33, NULL);                 /* and a primary one */
         plan_write(p, 0, 1, mbr);
-        snprintf(p->what, sizeof(p->what), "a new, empty MBR partition table (disk signature %08lx)", (u_long)sig);
+        snprintf(p->what, sizeof(p->what), "a new, empty MBR (disk signature %08lx)", (u_long)sig);
         return 0;
     }
     random_guid(io, guid);
@@ -723,7 +723,7 @@ int part_plan_new(const struct part_io *io, u32 nblocks, int scheme, struct part
     gpt_plan(p, nblocks, guid, 2 + entry_sectors(GPT_ENTRIES), GPT_ENTRIES);
     plan_write(p, 0, 1, mbr);
     part_guid_str(guid, g);
-    snprintf(p->what, sizeof(p->what), "a new, empty GPT partition table (disk %s)", g);
+    snprintf(p->what, sizeof(p->what), "a new, empty GPT (disk GUID %s)", g);
     return 0;
 }
 
@@ -773,7 +773,7 @@ int part_plan_add(const struct part_io *io, const struct part_table *t, u32 coun
         memcpy(p->type_guid, k->gpt, 16);
         part_fmt_size(r.count, size, sizeof(size));
         snprintf(p->what, sizeof(p->what), "add partition %u: blocks %lu-%lu (%s), %s \"%s\"", index, (u_long)r.start,
-                 (u_long)(r.start + r.count - 1), size, part_gpt_type_name(k->gpt, false), name);
+                 (u_long)(r.start + r.count - 1), size, part_gpt_type_name(k->gpt, true), name);
     }
     p->index = index;
     p->present = 1;

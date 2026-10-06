@@ -150,4 +150,14 @@ int part_plan_type(const struct part_io *io, const struct part_table *t, u_int i
 /* the table read back after the plan was written says what it should: 0, or -1 and why */
 int part_plan_check(const struct part_plan *p, const struct part_table *t, char *err, size_t n);
 
+/**** driver/part.c, in the kernel ****/
+
+struct bdev;
+/* reading a disk through the block layer; notes go to the shell (fdisk) or the kernel log */
+void part_io_init(struct part_io *io, struct bdev *disk, bool to_shell);
+/* writes a plan made from the table before (nothing is written if the disk now reads otherwise),
+   flushes, reads every block back, checks the table against the plan and rescans the disk:
+   0, or -1 and what went wrong in msg */
+int part_commit(struct bdev *disk, const struct part_table *before, const struct part_plan *p, char *msg, size_t n);
+
 #endif

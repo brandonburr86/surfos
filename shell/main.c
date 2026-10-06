@@ -593,6 +593,7 @@ static const struct command commands[] = {
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
+    { "fdisk",     "<disk> [cmd]", "partition tables: new mbr|gpt, add, delete, type", cmd_fdisk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
     { "ls",        "[path]",    "list a directory", cmd_ls },

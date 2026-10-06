@@ -247,10 +247,14 @@ static void lsblk_measure(struct bdev *d, void *arg) {
 static void lsblk_print(struct bdev *d, void *arg) {
     const struct lsblk_widths *w = (const struct lsblk_widths *)arg;
     struct lsblk_row r;
+    char line[160];
+    int n;
     lsblk_row(d, &r);
-    printf("%-*s %*s %-3s %2s %-*s ", w->name, r.name, w->size, r.size, r.bus, d->removable ? "1" : "0", w->type, r.type);
-    if(r.status[0]) printf("%-*.*s %s\n", w->label, w->label, r.label, r.status);
-    else printf("%.*s\n", w->label, r.label);
+    n = snprintf(line, sizeof(line), "%-*s %*s %-3s %2s %-*s %-*.*s %s", w->name, r.name, w->size, r.size, r.bus,
+                 d->removable ? "1" : "0", w->type, r.type, w->label, w->label, r.label, r.status);
+    if(n > (int)sizeof(line) - 1) n = sizeof(line) - 1;
+    while(n > 0 && line[n - 1] == ' ') line[--n] = 0;       /* no padding after the last column */
+    printf("%s\n", line);
 }
 
 /* lsblk: the columns are as wide as what they hold, and the model or partition name gives way

@@ -15,6 +15,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/timer.h>
 #include <surfos/klog.h>
 #include <sys/bdev.h>
+#include <sys/part.h>
 #include <fs/vfs.h>
 #include <surfos/process.h>
 #include <net/net.h>
@@ -307,6 +308,40 @@ static void test_boot_drive(void) {
     kfree(b);
 }
 
+/* 10/5/26: fdisk's writer asks the safety rule again, and writes nothing when the disk no longer
+   reads as the table the change was planned from (plans are made, never carried out here) */
+static void test_part_commit(void) {
+    struct bdev *rd = bdev_find("rd1"), *hd = bdev_find("hda");
+    struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
+    u8 *b0 = (u8 *)kalloc(512), *b1 = (u8 *)kalloc(512);
+    struct part_plan plan;
+    struct part_io io;
+    char err[120];
+    plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
+    if(!t || !b0 || !b1 || !plan.buf) { check(false, "part_commit test buffers"); goto out; }
+    if(hd) {
+        part_io_init(&io, hd, false);
+        io.note = NULL;
+        check(part_read(&io, hd->nblocks, t) == 0 && part_plan_new(&io, hd->nblocks, PART_SCHEME_GPT, &plan, err, sizeof(err)) == 0 &&
+              bdev_read(hd, 0, 1, b0) == 0 && part_commit(hd, t, &plan, err, sizeof(err)) == -1 && strstr(err, "not a USB drive") &&
+              bdev_read(hd, 0, 1, b1) == 0 && !memcmp(b0, b1, 512), "fdisk's writer refuses an internal disk and leaves it alone");
+    }
+    if(rd && !strcmp(rd->model, "scratch.img") && bdev_may_format(rd, NULL, 0) == 0) {
+        part_io_init(&io, rd, false);
+        io.note = NULL;
+        check(part_read(&io, rd->nblocks, t) == 0 && part_plan_new(&io, rd->nblocks, PART_SCHEME_MBR, &plan, err, sizeof(err)) == 0,
+              "a plan for the scratch disk");
+        t->nblocks--;                                   /* as if the disk read differently now */
+        check(bdev_read(rd, 0, 1, b0) == 0 && part_commit(rd, t, &plan, err, sizeof(err)) == -1 && strstr(err, "changed since") &&
+              bdev_read(rd, 0, 1, b1) == 0 && !memcmp(b0, b1, 512), "fdisk's writer writes nothing when the table changed");
+    } else printf("  skip fdisk's writer on rd1 (no free scratch ramdisk)\n");
+out:
+    kfree(plan.buf);
+    kfree(b0);
+    kfree(b1);
+    kfree(t);
+}
+
 static void test_fs(void) {
     struct file *f;
     struct stat st;
@@ -519,6 +554,7 @@ int run_selftest(void) {
     check(heaptest() == 0, "heap");
     test_bdev();
     test_boot_drive();
+    test_part_commit();
     test_fs();
     test_fat();
     test_user();
