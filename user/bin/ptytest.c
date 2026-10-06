@@ -26,6 +26,9 @@ ptytest flood             `pagetest 1000` on an 80x1024 pty, read only after a s
 ptytest hangup            `count 1000 100` on a pty; the master closed after the first
                           numbers: the process is gone at once (procinfo), killed, and the
                           pty is free again
+ptytest tcpecho [PORT]    `tcpecho PORT` (2323) in a session: its kernel thread is on F1,
+                          the session ends with `exit`, the thread lives on, and nothing it
+                          prints is in the session
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
                           (POLLIN), after the end (POLLIN and POLLHUP); a closed descriptor
                           (POLLNVAL); a negative one (skipped); too many (EINVAL); the
@@ -45,6 +48,7 @@ ptytest kmsg              a line written to /dev/kmsg (the harness finds it with
 #include <surf.h>
 
 #define KMSG_LINE "ptytest kmsg: a line for the kernel log"     /* the harness looks for it in dmesg */
+#define PROMPT "\xe2\x89\x8b"                                      /* the wave in surfsh's prompt (UTF-8 on a pty) */
 
 static char out[65536];                 /* what the master read in this mode */
 static int outlen;
@@ -359,6 +363,51 @@ static int mode_hangup(void) {
     return pass();
 }
 
+/* a kernel thread started in a session (tcpecho) is not part of it: on F1, the session ends with
+   exit, the thread lives on after the hangup, and nothing it prints is in the session */
+static int mode_tcpecho(int argc, char **argv) {
+    char *sargv[] = { "surfsh", NULL };
+    char cmd[32];
+    struct procinfo pi;
+    int before[64], nbefore = 0, port = argc > 2 ? atoi(argv[2]) : 2323;
+    int m, pid, st = -99, at, i, k, tpid = -1;
+    unsigned int t0;
+    for(i = 0; procinfo(i, &pi) == 0; i++)
+        if(!strcmp(pi.name, "tcpecho") && nbefore < 64) before[nbefore++] = pi.pid;
+    m = start("/initrd/bin/surfsh", sargv, (80 << 16) | 24, &pid);
+    if(m < 0) return fail("surfsh did not start");
+    if(read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    snprintf(cmd, sizeof(cmd), "tcpecho %d\r", port);
+    type(m, cmd);
+    if(read_until(m, "tcpecho server started", at, 10000) != 1) return fail("tcpecho did not start");
+    at = after("tcpecho server started", at);
+    if(read_until(m, PROMPT, at, 10000) != 1) return fail("no prompt after tcpecho");
+    at = after(PROMPT, at);
+    for(i = 0; procinfo(i, &pi) == 0; i++) {
+        if(strcmp(pi.name, "tcpecho") || pi.state == PROC_DEAD) continue;
+        for(k = 0; k < nbefore && before[k] != pi.pid; k++);
+        if(k == nbefore) {
+            tpid = pi.pid;
+            break;
+        }
+    }
+    if(tpid < 0) return fail("no new tcpecho task");
+    if(pi.tty != 0) return fail("the tcpecho thread is on the session's terminal, not on F1");
+    printf("ptytest: tcpecho (pid %d), started in the session, runs on F1 (tty %d)\n", tpid, pi.tty);
+    type(m, "exit\r");
+    t0 = uptime();
+    if(read_until(m, NULL, at, 5000) != 1) return fail("the master did not read 0 after exit");
+    printf("ptytest: exit: the master read 0 after %u ms\n", uptime() - t0);
+    if(strstr(out, "tcpecho: listening")) return fail("what the thread printed is in the session");
+    close(m);
+    wait(pid, &st);
+    msleep(200);
+    if(!find_task(tpid, &pi) || pi.state == PROC_DEAD) return fail("the thread did not live on");
+    printf("ptytest: the session's hangup is over; tcpecho (pid %d) lives on\n", tpid);
+    return pass();
+}
+
 static int mode_poll(void) {
     char *argv[] = { "hello", "polled", NULL }, *child[] = { "ptytest", "pollwait", NULL };
     struct pollfd p[POLL_MAX + 1];
@@ -496,6 +545,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "size")) return mode_size(argc, argv);
     if(!strcmp(mode, "pager")) return mode_pager();
     if(!strcmp(mode, "hangup")) return mode_hangup();
+    if(!strcmp(mode, "tcpecho")) return mode_tcpecho(argc, argv);
     if(!strcmp(mode, "flood")) return mode_flood();
     if(!strcmp(mode, "poll")) return mode_poll();
     if(!strcmp(mode, "pollwait")) return mode_pollwait();
@@ -503,6 +553,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach")) return mode_detach();
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
-    fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | poll | ps | detach | kmsg\n");
+    fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | tcpecho [PORT] |\n"
+                    "       poll | ps | detach | kmsg\n");
     return 2;
 }

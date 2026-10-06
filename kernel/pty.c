@@ -20,7 +20,8 @@ starts a program on it, and every task whose terminal it is belongs to the sessi
 those programs start, too); the session ends when no task has the pty as its terminal
 any more (the master reads what is left, then 0); the master is closed: the hangup, every
 task still on the pty gets the kill that waits for the end of its call, and what they
-print goes nowhere; free again once the master is closed and no task is left on it.
+print goes nowhere; free again once the master is closed and no task is left on it. Only
+processes are ever on a pty: a kernel thread started from a session is on F1 (task_alloc()).
 
 Output: a writer that may wait (console.c says when) waits while the buffer is full, and
 gives up when its call is cut short (a kill, the hangup, Ctrl+C); the bytes of one that

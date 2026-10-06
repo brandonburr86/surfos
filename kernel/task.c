@@ -10,7 +10,8 @@ when that cannot be (see init_main()).
 10/6/26: a kill waits for the end of the call its task is in (task.h), and Ctrl+C
 reaches the job in the foreground (task_interrupt_job()).
 10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c);
-the task list as programs see it, and a process leaving its shell's job (kernel/proc.c).
+the task list as programs see it, and a process leaving its shell's job (kernel/proc.c). A
+kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 */
 
 #include <surfos/types.h>
@@ -194,6 +195,11 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     t->prio = prio;
     t->flags = (flags & ~TF_INCALL) | (ring == USER ? TF_USER : 0);
     t->in_call = (flags & TF_INCALL) ? TC_SYSCALL : 0;     /* 10/6/26: a kill waits for the call to end */
+    /* 10/6/26: a kernel thread (no TF_INCALL: not a process) is never part of a pseudo-terminal's
+       session (kernel/pty.c): started from one, it prints on F1 and reads F1's keys, as a kernel
+       thread of the boot does. So a session ends with its processes, and a hangup's kill, which
+       waits for the end of a call, never meets a thread that is in none. */
+    if(con && con->stream && !(flags & TF_INCALL)) con = &conArray[0];
     t->con = con;
     t->tty = tty_for_console(con);
     strlcpy(t->cwd, (curTask && curTask->cwd[0]) ? curTask->cwd : "/", sizeof(t->cwd));

@@ -294,6 +294,8 @@ SMOKE = [
     ('run ptytest flood', ['lines 1-1000, all of them, in order', 'PTYTEST flood PASS', 'exit status 0']),
     ('run ptytest hangup', ['the master is closed', 'count is gone', "count's exit status -1 (killed)",
                             'is free again', 'PTYTEST hangup PASS', 'exit status 0']),
+    # 10/6/26 (the review): a kernel thread started in a session is on F1
+    ('@pty-tcpecho', []),
     ('run ptytest poll', ['timed out after', 'POLLNVAL', '(POLLIN | POLLHUP)', 'killed: gone after', 'PTYTEST poll PASS',
                           'exit status 0']),
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
@@ -955,6 +957,19 @@ def kmsg_check(q):
 
 
 CONSOLE_CHECKS['@kmsg'] = kmsg_check
+
+
+def pty_tcpecho_check(q):
+    """a kernel thread started in a pty session (tcpecho) is on F1: the session ends with exit, the thread lives on
+    (ptytest tcpecho checks those), and what it prints shows on F1 (the serial line) rather than in the session"""
+    start = len(q.transcript)
+    q.send('run ptytest tcpecho 2323\n')
+    ok = q.expect('PTYTEST tcpecho PASS', 20) and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    ok = ok and b'tcpecho: listening on port 2323' in q.transcript[start:]
+    return ('pty: a kernel thread started in a session (tcpecho) runs on F1 and outlives the session', ok)
+
+
+CONSOLE_CHECKS['@pty-tcpecho'] = pty_tcpecho_check
 
 
 def surfsh_corner_check(q):
