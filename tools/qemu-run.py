@@ -697,10 +697,9 @@ REPAINTED_PROMPT = re.compile(rb'SURF \xe2\x89\x8b[!#@?]?>')
 
 def console_switch_check(q):
     """F2 and back to F1 on the PS/2 keyboard, after `ansi`: the serial terminal is repainted
-    from the console's buffer, down to its last row in use, and the cursor goes back to the
-    prompt on row 14, just after it (the column the screen shows). 10/6/26: surfsh clears the
-    rows below its prompt when it draws it (ESC [ J), so `ansi`'s Z in the corner is gone and
-    the prompt's row is the last one in use: no rows to climb back"""
+    from the console's buffer, down to its last row in use (Z in the corner, row 25: surfsh
+    keeps to its own rows), and the cursor goes back up to the prompt on row 14, just after it
+    (the column the screen shows)"""
     q.sendkeys('<f2>')
     ok = q.expect("Brandon Burr's SurfOS", 10) and q.expect(REPAINTED_PROMPT, 10)
     q.sendkeys('<f1>')
@@ -708,8 +707,8 @@ def console_switch_check(q):
     screen = q.screen()
     rows = screen.split('\n')
     column = len(rows[13]) + 1 if len(rows) > 13 else 0          # the prompt and the space after it
-    ok = ok and len(rows) == 14 and q.expect(re.compile(rb'ANSI-TEST done, 80x25\r\n' + REPAINTED_PROMPT.pattern +
-                                                         rb'\r\x1b\[%dC' % column), 10)
+    ok = ok and q.expect(f'Z\r\x1b[11A\x1b[{column}C', 10)
+    ok = ok and 'ANSI-TEST done, 80x25' in screen
     return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
 
 
