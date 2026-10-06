@@ -180,6 +180,7 @@ int vfs_umount(const char *path);
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
+bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
 int vfs_sync(void);
 const struct mount *vfs_mounts(void);
 

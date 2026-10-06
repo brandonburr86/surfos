@@ -592,7 +592,7 @@ static void fill_ep_context(struct usb_device *dev, struct usb_endpoint *ep, u32
     }
     c[0] = (interval << 16) | ((esit >> 16) << 24);
     c[1] = (3 << 1) | (type << 3) | ((u32)ep->burst << 8) | ((u32)ep->mps << 16);
-    c[2] = phys(ep->ring.trbs) | 1;
+    c[2] = phys(&ep->ring.trbs[ep->ring.enq]) | ep->ring.pcs;    /* a new ring: its start, cycle 1 */
     c[3] = 0;
     c[4] = (avg & 0xffff) | ((esit & 0xffff) << 16);
 }
@@ -698,13 +698,30 @@ static int set_dequeue(struct usb_endpoint *ep) {
 /* A control transfer: setup, optional data and status stages, then wait. The bytes moved,
    or USB_E*. After a stall (a request the device does not support), an error or a timeout,
    endpoint 0 is stopped and moved past the transfer, ready for the next request. */
+static int control_locked(struct usb_device *dev, const u8 *setup, void *data, u_int len, bool in, u_int timeout_ms);
+
 int xhci_control(struct usb_device *dev, const u8 *setup, void *data, u_int timeout_ms) {
+    struct xhci *x = XHC(dev->hc);
+    struct usb_endpoint *ep = &dev->ep0;
+    u_int len = setup[6] | (setup[7] << 8);
+    bool in = (setup[0] & USB_DIR_IN) != 0;
+    int status;
+
+    if(dev->gone || x->hc.failed || !dev->slot) return USB_ENODEV;
+    if(ep->stuck) return USB_EIO;
+    if(len > 4096) return USB_EINVAL;
+    mutex_lock(&dev->ep0_lock);                        /* one request at a time per device */
+    status = control_locked(dev, setup, data, len, in, timeout_ms);
+    mutex_unlock(&dev->ep0_lock);
+    return status;
+}
+
+static int control_locked(struct usb_device *dev, const u8 *setup, void *data, u_int len, bool in, u_int timeout_ms) {
     struct xhci *x = XHC(dev->hc);
     struct usb_endpoint *ep = &dev->ep0;
     struct usb_ring *r = &ep->ring;
     struct usb_xfer t;
-    u_int len = setup[6] | (setup[7] << 8), first;
-    bool in = (setup[0] & USB_DIR_IN) != 0;
+    u_int first;
     u8 *buf = NULL;
     void *raw = NULL;
     u_long f;
@@ -714,7 +731,6 @@ int xhci_control(struct usb_device *dev, const u8 *setup, void *data, u_int time
 
     if(dev->gone || x->hc.failed || !dev->slot) return USB_ENODEV;
     if(ep->stuck) return USB_EIO;
-    if(len > 4096) return USB_EINVAL;
     if(len) {
         /* aligned to its size, so the data stage cannot cross a 64 KB boundary */
         for(align = 64; align < len; align <<= 1);
@@ -852,6 +868,27 @@ static void recover_endpoint(struct usb_endpoint *ep) {
     if(r) kprintf("+USB: port %u: endpoint %02x could not be reset after an error\n", dev->port, ep->addr);
 }
 
+/* Recover a halted endpoint now, from whichever task needs it (the usb thread for the
+   asynchronous transfers, a driver waiting for its own transfer); one at a time. 0 when it
+   runs again (or never halted), USB_PENDING while another task is at it, USB_EIO when the
+   reset failed. */
+int xhci_recover(struct usb_endpoint *ep) {
+    u_long f = irq_save();
+    if(!ep->halted || ep->stuck) {
+        irq_restore(f);
+        return ep->stuck ? USB_EIO : 0;
+    }
+    if(ep->recovering) {
+        irq_restore(f);
+        return USB_PENDING;
+    }
+    ep->recovering = true;
+    irq_restore(f);
+    recover_endpoint(ep);
+    ep->recovering = false;
+    return ep->stuck ? USB_EIO : 0;
+}
+
 void xhci_service(struct usb_hc *h) {
     struct xhci *x = XHC(h);
     u_int s, dci;
@@ -861,9 +898,135 @@ void xhci_service(struct usb_hc *h) {
         if(!dev || dev->gone) continue;
         for(dci = 2; dci < USB_MAX_EP; dci++) {
             struct usb_endpoint *ep = dev->eps[dci];
-            if(ep && ep->halted && !ep->stuck) recover_endpoint(ep);
+            if(ep && ep->halted && !ep->stuck) xhci_recover(ep);
         }
     }
+}
+
+/* Take a transfer back off its ring (it timed out): stop the endpoint, forget the TRBs,
+   move the controller past them. The endpoint is stuck if the controller refuses. */
+static void abort_xfer(struct usb_endpoint *ep, struct usb_xfer *t) {
+    struct usb_ring *r = &ep->ring;
+    int rc = ep_stop(ep);
+    u_long f = irq_save();
+    if(t->status == USB_PENDING) {
+        u_int i = t->first, k;
+        for(k = 0; k < t->ntrbs; k++) {
+            r->owner[i] = NULL;
+            if(++i == r->n - 1) i = 0;
+        }
+        r->used -= t->ntrbs;
+        if(r->deq == t->first) r->deq = r->used ? i : r->enq;
+        t->status = USB_ETIMEOUT;
+    }
+    irq_restore(f);
+    if(rc == 0) rc = set_dequeue(ep);
+    if(rc) ep->stuck = true;
+}
+
+/* A bulk transfer the caller waits for (a disk command): the event ring is polled in a
+   tight loop for the first few milliseconds, because a USB stick answers within microseconds
+   to a few milliseconds and a tick is 10 ms, then a tick at a time. buf must be DMA heap
+   memory within one 64 KB block. The bytes moved, or USB_E*. An error that halts the endpoint
+   is recovered by xhci_recover() (the caller's choice, or the usb thread). */
+#define SYNC_SPINS 500                         /* x 10 us */
+int xhci_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_ms) {
+    struct usb_device *dev = ep->dev;
+    struct xhci *x = XHC(dev->hc);
+    struct usb_xfer t;
+    bool sleeping = usb_can_sleep();
+    u_long start, spins = 0;
+    int r;
+    memset(&t, 0, sizeof(t));
+    t.ep = ep;
+    t.buf = buf;
+    t.length = len;
+    r = xhci_submit(&t);
+    if(r) return r;
+    start = getticks();
+    for(;;) {
+        u_long f = irq_save();
+        xhci_poll(&x->hc);
+        irq_restore(f);
+        if(t.status != USB_PENDING) break;
+        if(x->hc.failed || dev->gone) {
+            /* the controller is letting go of the device: no more commands for this endpoint,
+               but no late event may find a pointer into this stack frame either */
+            struct usb_ring *rg = &ep->ring;
+            f = irq_save();
+            if(t.status == USB_PENDING) {
+                u_int i = t.first, k;
+                for(k = 0; k < t.ntrbs; k++) {
+                    rg->owner[i] = NULL;
+                    if(++i == rg->n - 1) i = 0;
+                }
+                rg->used -= t.ntrbs;
+                t.status = USB_ENODEV;
+            }
+            irq_restore(f);
+            return USB_ENODEV;
+        }
+        if(spins < SYNC_SPINS || !sleeping) {
+            if(spins++ >= SYNC_SPINS + (u_long)timeout_ms * 100) break;
+            udelay(10);
+            continue;
+        }
+        if((getticks() - start) * (1000 / HZ) >= timeout_ms) break;
+        sleep_ms(1);
+    }
+    if(t.status == USB_PENDING) {
+        abort_xfer(ep, &t);
+        if(t.status != USB_OK) return USB_ETIMEOUT;   /* it may have finished while being stopped */
+    }
+    return t.status < 0 ? t.status : (int)t.actual;
+}
+
+/* Reset the controller's side of an endpoint without a halt: drop and add it in one
+   Configure Endpoint, which restarts its data toggle (USB 2) or sequence number (USB 3) at 0,
+   as CLEAR_FEATURE(ENDPOINT_HALT) does on the device. Nothing may be queued on it. */
+int xhci_endpoint_reset(struct usb_endpoint *ep) {
+    struct usb_device *dev = ep->dev;
+    struct xhci *x = XHC(dev->hc);
+    struct usb_ring *r = &ep->ring;
+    u32 *slot;
+    u_long f;
+    u_int i;
+    int rc;
+    if(dev->gone || x->hc.failed) return USB_ENODEV;
+    for(i = 0; ; i++) {                                /* claim it; someone else may be resetting it */
+        bool mine;
+        f = irq_save();
+        mine = !ep->recovering;
+        if(mine) ep->recovering = true;
+        irq_restore(f);
+        if(mine) break;
+        if(i >= 500) return USB_EIO;
+        usb_msleep(10);
+    }
+    ep_stop(ep);
+    f = irq_save();
+    for(i = 0; i < r->n; i++) {
+        struct usb_xfer *t = r->owner[i];
+        if(t && t->status == USB_PENDING) t->status = USB_ECANCEL;
+        r->owner[i] = NULL;
+    }
+    r->used = 0;
+    r->deq = r->enq;
+    irq_restore(f);
+    memset(dev->in_ctx, 0, 33 * x->csz);
+    in_ctrl(dev)[0] = 1u << ep->dci;                   /* drop it ... */
+    in_ctrl(dev)[1] = (1u << ep->dci) | 1;             /* ... and add it again */
+    slot = in_slot(dev);
+    memcpy(slot, out_slot(dev), 16);
+    slot[3] = 0;
+    fill_ep_context(dev, ep, in_ep(dev, ep->dci));
+    rc = command(x, phys(dev->in_ctx), 0, TRB_TYPE(TRB_CONFIGURE_EP) | TRB_SLOT(dev->slot), NULL);
+    f = irq_save();
+    ep->halted = false;
+    ep->stuck = rc != 0;
+    ep->recovering = false;
+    irq_restore(f);
+    return rc;
 }
 
 void xhci_describe(struct usb_hc *h, char *buf, size_t size) {

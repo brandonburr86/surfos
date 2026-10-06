@@ -19,6 +19,7 @@ event poll with interrupts off.
 #define _SYS_USB_H
 
 #include <surfos/types.h>
+#include <surfos/sync.h>
 
 /**** requests and descriptors (USB 2.0 and 3.2, chapter 9) ****/
 
@@ -161,6 +162,7 @@ struct usb_endpoint {
     u8 dci;                        /* xHCI device context index: 1 for endpoint 0 */
     bool configured;               /* the controller knows it (Configure Endpoint done) */
     volatile bool halted;          /* stopped by an error; the usb thread resets it */
+    volatile bool recovering;      /* someone is resetting it right now */
     bool stuck;                    /* the reset failed: transfers fail at once */
     volatile int halt_status;
     u_long xfers, errors;
@@ -191,6 +193,7 @@ struct usb_device {
     void *driver_data;
     char status[64];               /* what lsusb says about it: "eth0 (cdc-ecm)", "no driver" */
     struct usb_endpoint ep0;
+    mutex_t ep0_lock;              /* one control transfer at a time */
     struct usb_endpoint *eps[USB_MAX_EP];
     void *out_ctx, *out_raw, *in_ctx, *in_raw;    /* xHCI device and input contexts */
 };
@@ -211,11 +214,13 @@ struct usb_driver {
     const char *name;
     bool (*match)(struct usb_device *dev, const u8 *cfg, u_int len);  /* would it drive this configuration? */
     int (*attach)(struct usb_device *dev);     /* dev->config is the one it matched; 0 when it took the device */
+    void (*quiesce)(struct usb_device *dev);   /* unplugged (dev->gone set): wait until no task is inside the driver */
     void (*detach)(struct usb_device *dev);    /* unplugged; the controller has let go of it already */
     void (*service)(struct usb_device *dev);   /* from the usb thread, at least once a second */
 };
 
 extern const struct usb_driver usbnet_driver;
+extern const struct usb_driver msc_driver;
 
 /* device layer (driver/usb/usb.c) */
 int init_usb(void);                            /* the driver table entry: controllers, then the ports */
@@ -229,6 +234,9 @@ struct usb_endpoint *usb_endpoint_add(struct usb_device *dev, const struct usb_e
                                       const struct usb_ss_ep_comp_descriptor *comp);
 int usb_configure_endpoints(struct usb_device *dev);   /* tell the controller about the endpoints added */
 int usb_submit(struct usb_xfer *x);            /* bulk or interrupt; any context */
+int usb_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_ms);   /* bytes or USB_E*; a task */
+int usb_endpoint_recover(struct usb_endpoint *ep, u_int timeout_ms);   /* after a halt: 0 when it runs again */
+int usb_endpoint_reset(struct usb_endpoint *ep);    /* toggle/sequence to 0 on both sides (BOT reset recovery) */
 void usb_poll(void);                           /* run the controllers' event rings now; any context */
 void usb_wake(void);                           /* the usb thread has work; any context */
 void usb_msleep(u_long ms);                    /* sleeps in a task, busy-waits during boot */
@@ -253,6 +261,9 @@ int xhci_control(struct usb_device *dev, const u8 *setup, void *data, u_int time
 int xhci_endpoint_init(struct usb_endpoint *ep);     /* its transfer ring */
 int xhci_configure_endpoints(struct usb_device *dev);
 int xhci_submit(struct usb_xfer *x);
+int xhci_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_ms);
+int xhci_recover(struct usb_endpoint *ep);
+int xhci_endpoint_reset(struct usb_endpoint *ep);
 void xhci_poll(struct usb_hc *hc);             /* interrupts off */
 void xhci_service(struct usb_hc *hc);          /* the usb thread: reset halted endpoints */
 void xhci_describe(struct usb_hc *hc, char *buf, size_t size);

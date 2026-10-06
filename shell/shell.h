@@ -29,6 +29,9 @@ void funky(void);
 int heaptest(void);         /* 0 = pass */
 int run_selftest(void);     /* 0 = all pass */
 
+/* fdisk.c */
+void cmd_fdisk(int argc, char **argv);
+
 /* fscmd.c: file system commands (10/5/26) */
 void cmd_mount(int argc, char **argv);
 void cmd_umount(int argc, char **argv);

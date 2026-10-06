@@ -1,7 +1,8 @@
 /* Host-side unit tests for the framebuffer renderer (driver/fbcore.c): mode checks,
    RGB and BGR channel layouts, 15/16/24/32 bits per pixel, padded pitch, glyphs,
-   scaling, the cursor, and that nothing is written outside the visible lines. The
-   "framebuffer" is a buffer in memory with guard bytes around it. Run by `make unittest`. */
+   scaling, the text grid and its margins (10/5/26: the grid fills the screen), the
+   cursor, and that nothing is written outside the visible lines. The "framebuffer" is
+   a buffer in memory with guard bytes around it. Run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -126,8 +127,8 @@ static void test_drawing(void) {
         char what[96];
         m = mode(640, 400, 640 * bpp_bytes + 52, b, 1);        /* a padded pitch */
         surface(&s, &m);
-        for(row = 0; row < FB_ROWS; row++)
-            for(col = 0; col < FB_COLS; col++) fb_draw_glyph(&s, col, row, 'A' + (col + row) % 26, 0x07, 0);
+        for(row = 0; row < s.rows; row++)
+            for(col = 0; col < s.cols; col++) fb_draw_glyph(&s, col, row, 'A' + (col + row) % 26, 0x07, 0);
         snprintf(what, sizeof(what), "%u bpp: all 80x25 cells drawn, padding and guards untouched", b);
         check(guards_intact(&s), what);
         /* 'A' at (0,0): row 2 is 0x7c, so x 1-5 are on and x 0 is off */
@@ -161,25 +162,68 @@ static void test_scaling(void) {
 
     m = mode(1920, 1080, 7680, 32, 1);
     surface(&s, &m);
-    check(s.scale == 2 && s.ox == 320 && s.oy == 140, "1920x1080: scale 2, text area centred at 320,140");
+    check(s.scale == 2 && s.cols == 120 && s.rows == 33 && s.ox == 0 && s.oy == 12,
+          "1920x1080: 120x33 cells at scale 2, a 12-pixel margin above and below");
     fb_draw_glyph(&s, 0, 0, 'A', 0x0F, 0);
-    /* row 2, x 1 of the glyph is on: pixels (322..323, 144..145) after scaling and offset */
-    check(pixel(&s, 322, 144) == s.palette[15] && pixel(&s, 323, 145) == s.palette[15] &&
-          pixel(&s, 320, 144) == s.palette[0] && pixel(&s, 321, 145) == s.palette[0], "each glyph pixel is 2x2");
-    for(ok = 1, y = 0; y < 140; y++) for(x = 0; x < 1920; x++) if(pixel(&s, x, y) != 0xA5A5A5A5) ok = 0;
-    check(ok && guards_intact(&s), "nothing drawn above the text area");
-    fb_draw_glyph(&s, 79, 24, 'Z', 0x0F, 0);
-    check(guards_intact(&s), "the last cell at scale 2 stays inside");
+    /* row 2, x 1 of the glyph is on: pixels (2..3, 16..17) after scaling and the margin */
+    check(pixel(&s, 2, 16) == s.palette[15] && pixel(&s, 3, 17) == s.palette[15] &&
+          pixel(&s, 0, 16) == s.palette[0] && pixel(&s, 1, 17) == s.palette[0], "each glyph pixel is 2x2");
+    for(ok = 1, y = 0; y < 12; y++) for(x = 0; x < 1920; x++) if(pixel(&s, x, y) != 0xA5A5A5A5) ok = 0;
+    check(ok && guards_intact(&s), "nothing drawn in the margin above the text");
+    fb_draw_glyph(&s, 119, 32, 'Z', 0x0F, 0);
+    /* 'Z' row 2 is 0xfe, x 0-6 on; the cell starts at 1904,1036 (119 * 16, 12 + 32 * 32) */
+    check(pixel(&s, 1904, 1040) == s.palette[15] && pixel(&s, 1919, 1041) == s.palette[0] && guards_intact(&s),
+          "the last cell (119,32) is drawn inside the screen");
+    for(ok = 1, y = 1068; y < 1080; y++) for(x = 0; x < 1920; x++) if(pixel(&s, x, y) != 0xA5A5A5A5) ok = 0;
+    check(ok, "nothing drawn in the margin below the text");
+    surface(&s, &m);
+    fb_draw_glyph(&s, 120, 0, 'X', 0x0F, 0);
+    fb_draw_glyph(&s, 0, 33, 'X', 0x0F, 0);
+    for(ok = 1, x = 0; x < sizeof(mem); x++) if(mem[x] != GUARD_BYTE) ok = 0;
+    check(ok, "cells outside 120x33 draw nothing");
 
     m = mode(1366, 768, 5464, 32, 1);
+    surface(&s, &m);
+    check(s.scale == 1 && s.cols == 170 && s.rows == 48 && s.ox == 3 && s.oy == 0, "1366x768: 170x48 at scale 1");
+    fb_draw_glyph(&s, 0, 0, 'A', 0x0F, 0);
+    check(pixel(&s, 4, 2) == s.palette[15] && pixel(&s, 3, 2) == s.palette[0] && pixel(&s, 2, 2) == 0xA5A5A5A5,
+          "1366x768: the first cell starts after the 3-pixel margin");
+    fb_draw_glyph(&s, 169, 47, 'Z', 0x0F, 0);
+    check(pixel(&s, 3 + 169 * 8, 47 * 16 + 2) == s.palette[15] && pixel(&s, 1362, 767) == s.palette[0] &&
+          pixel(&s, 1363, 767) == 0xA5A5A5A5 && guards_intact(&s), "1366x768: the last cell ends before the right margin");
+
+    m = mode(1280, 800, 5120, 32, 1);
     fb_setup(&s, mem, &m);
-    check(s.scale == 1 && s.ox == 363 && s.oy == 184, "1366x768: scale 1, centred");
+    check(s.scale == 2 && s.cols == 80 && s.rows == 25 && s.ox == 0 && s.oy == 0, "1280x800 (OVMF): 80x25 at scale 2, as before");
+    m = mode(1024, 768, 4096, 32, 1);
+    fb_setup(&s, mem, &m);
+    check(s.scale == 1 && s.cols == 128 && s.rows == 48 && s.ox == 0 && s.oy == 0, "1024x768: 128x48 at scale 1");
+    m = mode(800, 600, 3200, 32, 1);
+    surface(&s, &m);
+    check(s.scale == 1 && s.cols == 100 && s.rows == 37 && s.ox == 0 && s.oy == 4, "800x600: 100x37, 4-pixel margins");
+    fb_draw_glyph(&s, 99, 36, 'A', 0x0F, 0);
+    check(pixel(&s, 99 * 8 + 1, 4 + 36 * 16 + 2) == s.palette[15] && pixel(&s, 99 * 8, 4 + 36 * 16 + 2) == s.palette[0] &&
+          pixel(&s, 799, 597) == 0xA5A5A5A5 && guards_intact(&s), "800x600: the last cell at its offset, the margin untouched");
+    m = mode(640, 480, 2560, 32, 1);
+    fb_setup(&s, mem, &m);
+    check(s.scale == 1 && s.cols == 80 && s.rows == 30 && s.ox == 0 && s.oy == 0, "640x480: 80x30");
     m = mode(640, 400, 2560, 32, 1);
     fb_setup(&s, mem, &m);
-    check(s.scale == 1 && s.ox == 0 && s.oy == 0, "640x400: exactly the text area");
+    check(s.scale == 1 && s.cols == 80 && s.rows == 25 && s.ox == 0 && s.oy == 0, "640x400: exactly 80x25");
     m = mode(1280, 1024, 5120, 32, 1);
     fb_setup(&s, mem, &m);
-    check(s.scale == 2 && s.ox == 0 && s.oy == 112, "1280x1024: scale 2");
+    check(s.scale == 2 && s.cols == 80 && s.rows == 32 && s.ox == 0 && s.oy == 0, "1280x1024: 80x32 at scale 2");
+    m = mode(3840, 2160, 15360, 32, 1);
+    fb_setup(&s, mem, &m);
+    check(s.scale == 5 && s.cols == 96 && s.rows == 27 && s.ox == 0 && s.oy == 0, "3840x2160: 96x27 at scale 5");
+    m = mode(3000, 400, 12000, 32, 1);                          /* very wide: capped at 240 columns */
+    fb_setup(&s, mem, &m);
+    check(s.scale == 1 && s.cols == FB_MAX_COLS && s.rows == 25 && s.ox == (3000 - 240 * 8) / 2 && s.oy == 0,
+          "3000x400: capped at 240 columns, centred");
+    m = mode(640, 2000, 2560, 32, 1);                           /* very tall: capped at 100 rows */
+    fb_setup(&s, mem, &m);
+    check(s.scale == 1 && s.cols == 80 && s.rows == FB_MAX_ROWS && s.ox == 0 && s.oy == (2000 - 100 * 16) / 2,
+          "640x2000: capped at 100 rows, centred");
 }
 
 int main(void) {

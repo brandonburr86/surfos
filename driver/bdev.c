@@ -15,6 +15,7 @@ the destructive tools.
 #include <surfos/console.h>
 #include <surfos/irq.h>
 #include <sys/bdev.h>
+#include <sys/part.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <blibc_common.h>
@@ -155,42 +156,126 @@ int bdev_flush(struct bdev *d) {
     return disk->ops->flush(disk);
 }
 
+/* the MBR type byte's name (driver/parttab.c keeps the table) */
 const char *bdev_part_type_name(u8 type) {
-    switch(type) {
-    case 0x01: return "FAT12";
-    case 0x04: return "FAT16 <32M";
-    case 0x05: return "extended";
-    case 0x06: return "FAT16";
-    case 0x07: return "NTFS/exFAT";
-    case 0x0B: return "FAT32";
-    case 0x0C: return "FAT32 LBA";
-    case 0x0E: return "FAT16 LBA";
-    case 0x0F: return "extended LBA";
-    case 0x82: return "Linux swap";
-    case 0x83: return "Linux";
-    case 0xEE: return "GPT protective";
-    case 0xEF: return "EFI system";
+    const char *n = part_mbr_type_name(type);
+    return n ? n : "?";
+}
+
+/**** lsblk ****/
+
+#define LSBLK_WIDTH 79                  /* the VGA console is 80 columns, and a full line wraps */
+
+struct lsblk_row {
+    char name[BDEV_NAME_LEN + 2], size[8], type[48];
+    const char *bus, *label, *status;
+};
+
+struct lsblk_widths {
+    u_int name, size, type, label, status;
+};
+
+static const char *bus_name(u8 bus) {
+    switch(bus) {
+    case BDEV_BUS_RAM: return "ram";
+    case BDEV_BUS_ATA: return "ata";
+    case BDEV_BUS_USB: return "usb";
     }
-    return "?";
+    return "-";
 }
 
-static void print_blocks(u32 nblocks) {
-    /* 512-byte blocks: 2048 per MB */
-    if(nblocks >= 2048 * 1024) printf("%5luG", (u_long)(nblocks / (2048 * 1024)));
-    else if(nblocks >= 2048) printf("%5luM", (u_long)(nblocks / 2048));
-    else printf("%5luK", (u_long)(nblocks / 2));
+static const char *scheme_name(u8 scheme) {
+    return scheme == PART_SCHEME_GPT ? "gpt" : scheme == PART_SCHEME_MBR ? "mbr" : "";
 }
 
-void bdev_print(void) {
-    struct bdev *d;
-    printf("    NAME   SIZE   BLOCKS      RD/WR BLKS  TYPE          MODEL\n");
+/* the device itself is mounted (vfs_bdev_busy() also counts its disk and partitions) */
+static bool mounted(const struct bdev *d) {
+    const struct mount *m;
+    for(m = vfs_mounts(); m; m = m->next) if(m->sb && m->sb->dev == d) return true;
+    return false;
+}
+
+/* the first of these that applies; bdev_may_format() is the rule, this only says it */
+static const char *status_of(struct bdev *d) {
+    if(mounted(d)) return "mounted";
+    if(d->protect == bdev_boot_drive) return "boot drive: protected";
+    if(d->protect) return "protected";
+    if(bdev_disk(d)->bus == BDEV_BUS_ATA) return "internal: never formatted";
+    if(d->readonly) return "read-only";
+    return "";
+}
+
+static void lsblk_row(struct bdev *d, struct lsblk_row *r) {
+    snprintf(r->name, sizeof(r->name), "%s%s", d->parent ? "  " : "", d->name);
+    part_fmt_size(d->nblocks, r->size, sizeof(r->size));
+    if(d->parent) snprintf(r->type, sizeof(r->type), "part %s %s", scheme_name(d->scheme), d->type_name ? d->type_name : "?");
+    else snprintf(r->type, sizeof(r->type), "disk%s%s", d->scheme ? " " : "", scheme_name(d->scheme));
+    r->bus = bus_name(bdev_disk(d)->bus);
+    r->label = d->parent ? d->part_label : d->model;      /* a GPT partition's name; a disk's model */
+    r->status = status_of(d);
+}
+
+/* every disk, each followed by its partitions in order (a rescan appends new ones at the end of
+   the list) */
+static void lsblk_walk(void (*fn)(struct bdev *d, void *arg), void *arg) {
+    struct bdev *d, *p, *next;
+    u_int last;
     for(d = bdevs; d; d = d->next) {
-        printf("    %-6s", d->name);
-        print_blocks(d->nblocks);
-        printf(" %-10lu %6lu/%-6lu", (u_long)d->nblocks, d->reads, d->writes);
-        if(d->parent) printf(" part %02x %-6s", d->part_type, bdev_part_type_name(d->part_type));
-        else printf(" disk%s        ", d->readonly ? " ro" : "   ");
-        printf(" %s\n", d->parent ? "" : d->model);
+        if(d->parent) continue;
+        fn(d, arg);
+        for(last = 0;; last = next->part_index) {
+            next = NULL;
+            for(p = bdevs; p; p = p->next)
+                if(p->parent == d && p->part_index > last && (!next || p->part_index < next->part_index)) next = p;
+            if(!next) break;
+            fn(next, arg);
+        }
     }
-    if(!bdevs) printf("    (no block devices)\n");
+}
+
+static void lsblk_measure(struct bdev *d, void *arg) {
+    struct lsblk_widths *w = (struct lsblk_widths *)arg;
+    struct lsblk_row r;
+    lsblk_row(d, &r);
+    if(strlen(r.name) > w->name) w->name = strlen(r.name);
+    if(strlen(r.size) > w->size) w->size = strlen(r.size);
+    if(strlen(r.type) > w->type) w->type = strlen(r.type);
+    if(strlen(r.label) > w->label) w->label = strlen(r.label);
+    if(strlen(r.status) > w->status) w->status = strlen(r.status);
+}
+
+static void lsblk_print(struct bdev *d, void *arg) {
+    const struct lsblk_widths *w = (const struct lsblk_widths *)arg;
+    struct lsblk_row r;
+    char line[160];
+    int n;
+    lsblk_row(d, &r);
+    n = snprintf(line, sizeof(line), "%-*s %*s %-3s %2s %-*s %-*.*s %s", w->name, r.name, w->size, r.size, r.bus,
+                 d->removable ? "1" : "0", w->type, r.type, w->label, w->label, r.label, r.status);
+    if(n > (int)sizeof(line) - 1) n = sizeof(line) - 1;
+    while(n > 0 && line[n - 1] == ' ') line[--n] = 0;       /* no padding after the last column */
+    printf("%s\n", line);
+}
+
+/* lsblk: the columns are as wide as what they hold, and the model or partition name gives way
+   so a line stays within LSBLK_WIDTH */
+void bdev_print(void) {
+    struct lsblk_widths w = { 4, 4, 4, 11, 0 };          /* the headings */
+    u_int fixed;
+    if(!bdevs) { printf("(no block devices)\n"); return; }
+    lsblk_walk(lsblk_measure, &w);
+    fixed = w.name + 1 + w.size + 1 + 3 + 1 + 2 + 1 + w.type + 1 + (w.status ? w.status + 1 : 0);
+    if(fixed + w.label > LSBLK_WIDTH) w.label = fixed + 8 < LSBLK_WIDTH ? LSBLK_WIDTH - fixed : 8;
+    printf("%-*s %*s BUS RM %-*s ", w.name, "NAME", w.size, "SIZE", w.type, "TYPE");
+    if(w.status) printf("%-*.*s STATUS\n", w.label, w.label, "MODEL/LABEL");
+    else printf("%.*s\n", w.label, "MODEL/LABEL");
+    lsblk_walk(lsblk_print, &w);
+}
+
+/* lsblk -s: the blocks each device has moved since boot */
+void bdev_print_io(void) {
+    struct bdev *d;
+    printf("NAME          BLOCKS        READ     WRITTEN\n");
+    for(d = bdevs; d; d = d->next) printf("%-8s %11lu %11lu %11lu\n", d->name, (u_long)d->nblocks, d->reads, d->writes);
+    if(!bdevs) printf("(no block devices)\n");
 }

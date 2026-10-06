@@ -20,6 +20,7 @@ handler is a kernel wipeout.
 #include <surfos/irq.h>
 #include <surfos/task.h>
 #include <surfos/apic.h>
+#include <surfos/tty.h>
 #include <sys/framebuffer.h>
 #include <mm/paging.h>
 #include <surfos/ksym.h>
@@ -55,7 +56,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
 
     if(!curTask || curTask->pid == 0 || in_interrupt()) { //a kernel exception.. beadd
         irq_disable();
-        framebuffer_panic(); //whoever was drawing will not finish: the report must reach the screen
+        console_panic(); //whoever was drawing will not finish: the report must reach the screen, as plain text
         kprintf("\nKernel Wipeout: %s\n", why);
         dump_trapframe(tf);
         backtrace(tf->ebp, tf->eip);
@@ -63,6 +64,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
         halt();
     }
 
+    tty_task_gone(curTask); //raw mode, colours and a hidden cursor it set end here, before the report
     printf("\nProcess (\'%s\':%i) killed by \"%s\" (eip 0x%x%s)\n", curTask->name, curTask->pid, why, tf->eip,
            (tf->cs & 3) ? ", user mode" : "");
     if(!(tf->cs & 3)) backtrace(tf->ebp, tf->eip);     /* a user stack holds no kernel frames */
@@ -101,7 +103,7 @@ void panic(const char *fmt, ...) {
     u_long ebp;
 
     irq_disable();
-    framebuffer_panic(); //a panic must be visible on a framebuffer console too
+    console_panic(); //a panic must be visible on a framebuffer console too, and not in an editor's colours
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);

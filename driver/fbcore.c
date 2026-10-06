@@ -52,6 +52,10 @@ u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b) {
            ((u32)(b >> (8 - m->blue_size)) << m->blue_pos);
 }
 
+/* The letters are as large as they were with a centred 80x25 screen: the largest whole
+   scale at which 640x400 fits. 10/5/26: the grid then takes as many cells as the mode
+   holds (more text, same letters), within FB_MAX_COLS x FB_MAX_ROWS, and the pixels left
+   over become an even margin. 1920x1080: 120x33 at scale 2; 1280x800: 80x25 as before. */
 void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m) {
     u32 i, sx, sy;
     s->base = base;
@@ -62,8 +66,12 @@ void fb_setup(struct fb_surface *s, u8 *base, const struct fb_mode *m) {
     sy = m->height / FB_MIN_HEIGHT;
     s->scale = sx < sy ? sx : sy;
     if(s->scale < 1) s->scale = 1;
-    s->ox = (m->width - FB_MIN_WIDTH * s->scale) / 2;
-    s->oy = (m->height - FB_MIN_HEIGHT * s->scale) / 2;
+    s->cols = m->width / (FONT_WIDTH * s->scale);
+    s->rows = m->height / (FONT_HEIGHT * s->scale);
+    if(s->cols > FB_MAX_COLS) s->cols = FB_MAX_COLS;
+    if(s->rows > FB_MAX_ROWS) s->rows = FB_MAX_ROWS;
+    s->ox = (m->width - s->cols * FONT_WIDTH * s->scale) / 2;
+    s->oy = (m->height - s->rows * FONT_HEIGHT * s->scale) / 2;
 }
 
 /* one horizontal run of the same pixel */
@@ -102,7 +110,7 @@ void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr,
     u32 fg = s->palette[attr & 0x0F], bg = s->palette[(attr >> 4) & 0x07];  /* bit 7 is blink in text mode */
     u32 x0 = s->ox + col * FONT_WIDTH * s->scale, y0 = s->oy + row * FONT_HEIGHT * s->scale;
     u32 gy, gx, k;
-    if(col >= FB_COLS || row >= FB_ROWS) return;
+    if(col >= s->cols || row >= s->rows) return;
     for(gy = 0; gy < FONT_HEIGHT; gy++) {
         u8 bits = font8x16[ch][gy];
         if(cursor && gy >= FONT_HEIGHT - 2) bits = 0xFF;    /* an underline cursor */

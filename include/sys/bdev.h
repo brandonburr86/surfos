@@ -17,6 +17,10 @@ unregistered: it and its partitions are marked gone (every I/O fails) and taken
 off the list, but never freed, so no mount, cache block or command is left
 holding a dangling pointer. Partitions of a disk whose name ends in a digit
 get a 'p' (usb0p1).
+
+10/5/26 (partitions): tables are MBR (with logical partitions) or GPT
+(driver/part.c, sys/part.h); the disk that holds the SurfOS boot volume
+(label SURFOSUSB) is protected; fdisk rescans a disk after changing it.
 */
 
 #ifndef _SYS_BDEV_H
@@ -57,6 +61,11 @@ struct bdev {
     struct bdev *parent;        /* a partition: the disk, else NULL */
     u8 part_type;               /* a partition: the MBR type byte */
     u8 part_index;              /* a partition: its number, from 1 */
+    u8 scheme;                  /* a disk: its partition table; a partition: the table it is in (PART_SCHEME_*
+                                   in sys/part.h). On GPT, part_type is the MBR equivalent of the type, or 0;
+                                   MBR logical partitions are numbered from 5 */
+    const char *type_name;      /* a partition: its type in a few words ("FAT32 LBA", "EFI system", "basic data") */
+    char part_label[37];        /* a GPT partition: its name ("SURFOSUSB"), in ASCII; "" for MBR */
     u8 bus;                     /* BDEV_BUS_*; a partition copies its disk's */
     bool removable;             /* the medium can be taken out (a USB stick, a card reader) */
     bool readonly;
@@ -93,10 +102,17 @@ int bdev_flush(struct bdev *d);             /* the disk's write cache to its med
 int bdev_may_format(struct bdev *d, char *why, size_t size);
 
 void bdev_print(void);                      /* lsblk */
+void bdev_print_io(void);                   /* lsblk -s: blocks read and written */
 const char *bdev_part_type_name(u8 type);
 
-/* mbr.c: register the MBR partitions of a disk as <name>1..<name>4 */
+/* part.c: register the partitions of a disk (MBR with logical partitions from 5, or GPT) as
+   <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read.
+   A disk with a FAT volume labelled SURFOSUSB gets protect = bdev_boot_drive, and so do its
+   partitions. bdev_rescan() reads the table again after it was rewritten: the old partitions are
+   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted. */
 int bdev_scan_partitions(struct bdev *disk);
+int bdev_rescan(struct bdev *disk);
+extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
 
 /* drivers (driver table entries) */
 int init_ramdisk(void);

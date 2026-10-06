@@ -399,4 +399,4 @@ static void usbnet_service(struct usb_device *udev) {
     }
 }
 
-const struct usb_driver usbnet_driver = { "usbnet", usbnet_match, usbnet_attach, usbnet_detach, usbnet_service };
+const struct usb_driver usbnet_driver = { "usbnet", usbnet_match, usbnet_attach, NULL, usbnet_detach, usbnet_service };

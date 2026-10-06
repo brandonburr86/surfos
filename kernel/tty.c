@@ -3,6 +3,8 @@ SurfOS Terminals
 --------------------
 File: tty.c     Date: 10/3/26 (roadmap C1)
 --------------------
+10/5/26: raw mode for full-screen programs (tty.h): no echo, no line editing, keys as
+the bytes a terminal sends. It ends with the task that set it.
 */
 
 #include <surfos/types.h>
@@ -49,6 +51,38 @@ void tty_input(struct tty *t, u_char c) {
     }
     irq_restore(flags);
     wake_up(&t->readers);
+}
+
+/* several bytes that belong together (an escape sequence): all of them or none */
+static void input_seq(struct tty *t, const char *s) {
+    u_long flags = irq_save();
+    u_int n = strlen(s), room = (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
+    if(n > room) {
+        t->dropped += n;
+    } else {
+        for(; *s; s++) {
+            t->inq[t->in_head] = (u_char)*s;
+            t->in_head = (t->in_head + 1) % TTY_INPUT_SIZE;
+        }
+    }
+    irq_restore(flags);
+    wake_up(&t->readers);
+}
+
+/* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h) */
+static const char *const raw_keys[RT - INS + 1] = {
+    "\033[2~", "\033[3~", "\033[H", "\033[F", "\033[5~", "\033[6~",     /* INS DEL HOME END PGUP PGDN */
+    "\033[D", "\033[A", "\033[B", "\033[C"                                /* LEFT UP DOWN RT */
+};
+
+/* A key from the keyboard, as a code from keyboard.h. Line mode queues the code; raw mode
+   queues the escape sequence for it, and F5-F12 (which have none) are dropped. */
+void tty_key(struct tty *t, u_char c) {
+    if(t->raw && c >= 0x80) {
+        if(c >= INS && c <= RT) input_seq(t, raw_keys[c - INS]);
+        return;
+    }
+    tty_input(t, c);
 }
 
 int tty_trygetc(struct tty *t) {
@@ -161,24 +195,67 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
     }
 }
 
+/* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
+   Raw mode: whatever keys are queued, at least one (it waits for that one), up to len. */
+int tty_read(struct tty *t, char *buf, size_t len) {
+    char line[TTY_LINE_MAX];
+    int n;
+    if(!len) return 0;
+    if(t->raw) {
+        size_t got = 0;
+        buf[got++] = (char)tty_getc(t);
+        while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
+        return (int)got;
+    }
+    n = tty_readline(t, line, sizeof(line));
+    if(n < 0) return n;
+    line[n++] = '\n';
+    if((size_t)n > len) n = (int)len;
+    memcpy(buf, line, n);
+    return n;
+}
+
 /**** console switching ****/
 
-/* Repaint the newly active console on the serial terminal: clear, text, cursor. */
+/* the last column of a row with something in it, -1 for an empty row */
+static int last_used(surf_console *con, int row) {
+    int col, last = -1;
+    for(col = 0; col < (int)COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    return last;
+}
+
+/* Repaint the newly active console on the serial terminal: clear, text, cursor. The
+   text comes without its colours; the terminal's attributes are reset first and the
+   cursor is shown or hidden as on that console (10/5/26, escape sequences).
+   10/5/26: the grid may be larger than the terminal (120x33 on a 1920x1080 screen), and
+   nothing tells SurfOS the terminal's size. So the rows are painted only down to the last
+   one in use (or the cursor's), each up to its last character, and the cursor is put
+   back by moving up and right from there rather than to a screen position: a terminal as
+   large as the grid shows the screen exactly, a smaller one shows its bottom part, with
+   rows longer than the terminal is wide wrapped. */
 static void serial_redraw(surf_console *con) {
     char seq[16];
-    int row, col;
+    int row, col, rows = con->loc.y;
+    serial_puts(con->cursor_off ? "\033[0m\033[?25l" : "\033[0m\033[?25h");
     serial_console_clear();
-    for(row = 0; row < LINES; row++) {
-        int last = -1;
-        for(col = 0; col < COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    for(row = con->loc.y + 1; row < (int)LINES; row++) if(last_used(con, row) >= 0) rows = row;
+    for(row = 0; row <= rows; row++) {
+        int last = last_used(con, row);
         for(col = 0; col <= last; col++) {
             u_char ch = con->vmem[(row * COLUMNS + col) * 2];
             serial_putc(ch >= 32 && ch < 127 ? ch : ' ');
         }
-        if(row < LINES - 1) serial_puts("\r\n");
+        if(row < rows) serial_puts("\r\n");
     }
-    snprintf(seq, sizeof(seq), "\033[%u;%uH", con->loc.y + 1, con->loc.x + 1);
-    serial_puts(seq);
+    serial_putc('\r');
+    if(rows > (int)con->loc.y) {
+        snprintf(seq, sizeof(seq), "\033[%dA", rows - (int)con->loc.y);
+        serial_puts(seq);
+    }
+    if(con->loc.x) {
+        snprintf(seq, sizeof(seq), "\033[%uC", con->loc.x);
+        serial_puts(seq);
+    }
 }
 
 void tty_switch(int index) {
@@ -192,11 +269,38 @@ void tty_switch(int index) {
     serial_redraw(tty_active->con);
 }
 
-/* 10/5/26: terminal control for full-screen programs (see tty.h); raw mode is not
-   implemented yet */
+/**** raw mode (10/5/26) ****/
+
+/* Keys typed in one mode mean something else in the other (0x7f and escape sequences are
+   not line editing), so leaving raw mode drops what was not read yet. */
+static void set_raw(struct tty *t, int on, struct surf_task *owner) {
+    u_long flags = irq_save();
+    if(t->raw && !on) t->in_tail = t->in_head;
+    t->raw = on;
+    t->raw_owner = on ? owner : NULL;
+    irq_restore(flags);
+}
+
+/* terminal control for full-screen programs (see tty.h) */
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
     if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
-    if(op == TTY_RAW) return -38;                 /* ENOSYS */
+    if(op == TTY_RAW) {
+        if(arg > 1) return -22;                   /* EINVAL */
+        set_raw(t, (int)arg, curTask);
+        return 0;
+    }
     return -22;                                   /* EINVAL */
+}
+
+/* A task is gone (it exited or was killed): raw mode it set ends with it, and so do the
+   colours and the hidden cursor it left on a console (console.c), so a crashed editor
+   cannot leave its shell's console raw or unreadable. From task.c with interrupts off,
+   and from trap_fatal() before the report. */
+void tty_task_gone(struct surf_task *task) {
+    int i;
+    for(i = 0; i < NUM_CONSOLES; i++) {
+        if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
+    }
+    console_task_gone(task);
 }

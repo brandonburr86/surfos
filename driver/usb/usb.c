@@ -31,7 +31,7 @@ usb=off on the kernel command line leaves the controllers alone.
 #define MAX_TRIES 3                /* enumeration attempts before a port is left alone until replugged */
 
 /* the class drivers, asked in order; the list ends with NULL */
-static const struct usb_driver *const usb_drivers[] = { &usbnet_driver, NULL };
+static const struct usb_driver *const usb_drivers[] = { &usbnet_driver, &msc_driver, NULL };
 
 static struct usb_hc *hcs;
 static event_t usb_event;
@@ -198,6 +198,30 @@ int usb_submit(struct usb_xfer *x) {
     return xhci_submit(x);
 }
 
+int usb_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_ms) {
+    return xhci_bulk_sync(ep, buf, len, timeout_ms);
+}
+
+/* after a transfer halted ep: reset it now (or wait while another task does) */
+int usb_endpoint_recover(struct usb_endpoint *ep, u_int timeout_ms) {
+    u_long start = getticks();
+    for(;;) {
+        int r;
+        if(ep->dev->gone) return USB_ENODEV;
+        r = xhci_recover(ep);
+        if(r != USB_PENDING) return r;
+        if((getticks() - start) * (1000 / HZ) >= timeout_ms) return USB_ETIMEOUT;
+        usb_msleep(10);
+    }
+}
+
+/* both ends of an endpoint back to data toggle / sequence number 0 */
+int usb_endpoint_reset(struct usb_endpoint *ep) {
+    int r = xhci_endpoint_reset(ep);
+    if(r == 0) r = usb_clear_halt(ep->dev, ep->addr);
+    return r < 0 ? r : 0;
+}
+
 /**** enumeration ****/
 
 /* the configurations, in order; the first one a driver matches is used */
@@ -254,6 +278,7 @@ static struct usb_device *enumerate(struct usb_hc *hc, u_int port, int speed) {
     dev->ep0.type = USB_EP_CONTROL;
     dev->ep0.mps = speed >= USB_SPEED_SUPER ? 512 : (speed == USB_SPEED_LOW ? 8 : 64);
     dev->eps[1] = &dev->ep0;
+    mutex_init(&dev->ep0_lock, "usb ep0");
 
     stage = "getting a device slot";
     if((r = xhci_enable_slot(dev)) != 0) goto fail;
@@ -311,6 +336,7 @@ static void port_disconnect(struct usb_hc *hc, u_int port) {
     f = irq_save();
     dev->gone = true;
     irq_restore(f);
+    if(dev->driver && dev->driver->quiesce) dev->driver->quiesce(dev);   /* no task inside it any more */
     xhci_release_device(dev);              /* the controller lets go first: no more callbacks */
     if(dev->driver) dev->driver->detach(dev);
     kprintf("+USB: port %u: %04x:%04x %s unplugged (%s)\n", port, dev->desc.idVendor, dev->desc.idProduct,

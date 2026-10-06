@@ -9,6 +9,9 @@ maps and reads the ELF segments straight into their user addresses, builds
 the stack with argc/argv, opens /dev/console as descriptors 0, 1 and 2 and
 drops to ring 3 with an iret. From then on it only re-enters the kernel
 through traps.
+
+10/5/26: process_spawn_files() hands the child open files of its parent as
+descriptors 0, 1 and 2 instead (the user shell's < > >> redirection).
 */
 
 #include <surfos/types.h>
@@ -18,6 +21,7 @@ through traps.
 #include <surfos/elf.h>
 #include <surfos/process.h>
 #include <surfos/syscall.h>
+#include <surfos/irq.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
 #include <mm/kalloc.h>
@@ -34,11 +38,22 @@ struct spawn_args {
     int argc;
     char *argv[SPAWN_MAX_ARGS];
     char strs[SPAWN_STR_BYTES];
+    struct file *files[3];              /* the child's 0, 1, 2 (a reference each); NULL: the console */
 };
+
+/* drop the references to the files the child has not taken over */
+static void release_files(struct spawn_args *sa) {
+    int i;
+    for(i = 0; i < 3; i++) {
+        if(sa->files[i]) vfs_close(sa->files[i]);
+        sa->files[i] = NULL;
+    }
+}
 
 static void load_failed(struct spawn_args *sa, struct file *f, const char *why) {
     if(f) vfs_close(f);
     kprintf("%s: %s\n", sa->path, why);
+    release_files(sa);
     kfree(sa);
     task_exit(EXIT_LOAD_FAILED);
 }
@@ -123,10 +138,12 @@ static void user_entry(void *arg) {
         ((u_long *)sp)[1] = argv_addr;
     }
 
-    /* 0, 1, 2: the console */
+    /* 0, 1, 2: the files the parent passed, otherwise the console */
     for(fd = 0; fd < 3; fd++) {
-        struct file *cf;
-        if(vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) == 0) fd_install(cf);
+        struct file *cf = sa->files[fd];
+        sa->files[fd] = NULL;                             /* the descriptor table owns the reference now */
+        if(!cf && vfs_open("/dev/console", fd == 0 ? O_RDONLY : O_WRONLY, &cf) != 0) continue;
+        curTask->files[fd] = cf;
     }
 
     kfree(sa);
@@ -134,6 +151,11 @@ static void user_entry(void *arg) {
 }
 
 int process_spawn(const char *path, int argc, char *const argv[], surf_console *con, u_int flags) {
+    return process_spawn_files(path, argc, argv, con, flags, NULL);
+}
+
+int process_spawn_files(const char *path, int argc, char *const argv[], surf_console *con, u_int flags,
+                        struct file *const files[3]) {
     struct spawn_args *sa;
     struct stat st;
     surf_task *t;
@@ -157,9 +179,18 @@ int process_spawn(const char *path, int argc, char *const argv[], surf_console *
         used += n;
     }
     sa->argc = argc;
+    for(i = 0; files && i < 3; i++) {
+        if(!files[i]) continue;
+        {
+            u_long irqf = irq_save();               /* the count is shared with the parent's descriptors */
+            files[i]->refs++;
+            irq_restore(irqf);
+        }
+        sa->files[i] = files[i];
+    }
     base = strrchr(sa->path, '/');
     base = base ? base + 1 : sa->path;
     t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, flags & TF_DETACHED);
-    if(!t) { kfree(sa); return -ENOMEM; }
+    if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
     return (int)t->pid;
 }

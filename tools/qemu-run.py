@@ -25,6 +25,8 @@ import tempfile
 import time
 
 PROMPT = 'SurfOS*>'
+# fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
+CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
 
 
 def answered(cmd, question, answer, expects):
@@ -45,17 +47,38 @@ SMOKE = [
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
-    ('lsblk',   ['rd0', 'hda', 'hda1']),
+    ('lsblk',   ['rd0', 'ram', 'mounted', 'hda', 'ata', 'disk mbr', 'internal: never formatted', 'hda1', 'part mbr FAT16', 'mounted']),
+    ('lsblk -s', ['READ', 'rd0', 'hda1']),
+    # fdisk on the scratch ramdisk rd1; a step's third item answers its question
+    ('fdisk hda new mbr', ['hda will not be changed', 'not a USB drive']),    # an internal disk
+    ('fdisk rd0 new mbr', ['rd0 will not be changed', 'mounted']),             # the initrd, on /initrd
+    ('fdisk rd1', ['rd1: scratch.img, 64M', 'no partition table', 'fdisk and mkfs may change rd1']),
+    ('fdisk rd1 new mbr', ['change: a new, empty MBR', CONFIRM_RD1], [('rd1', ['written, flushed and verified', 'no partitions'])]),
+    ('fdisk rd1 add', ['change: add partition 1: blocks 2048-131071', CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (63M)'])]),
+    ('lsblk', ['rd1', 'disk mbr', 'rd1p1', 'part mbr FAT32 LBA']),
+    ('fdisk rd1', ['MBR partition table', 'rd1p1', '2048', '131071', '0c FAT32 LBA', 'free: none']),
+    ('fdisk rd1p1 new gpt', ['rd1p1 is a partition']),
+    ('fdisk rd1 delete 1', [CONFIRM_RD1], [('rd1', ['verified', 'no partitions'])]),
+    ('fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['Cancelled'])]),         # a wrong answer writes nothing
+    ('fdisk rd1', ['MBR partition table']),
+    ('fdisk rd1 new gpt', [CONFIRM_RD1], [('rd1', ['verified'])]),
+    ('fdisk rd1 add 16M', ['add partition 1: blocks 2048-34815', CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (16M)'])]),
+    ('fdisk rd1 add', [CONFIRM_RD1], [('rd1', ['verified', 'rd1p1 (16M), rd1p2 (46M)'])]),
+    ('fdisk rd1 type 2 linux', [CONFIRM_RD1], [('rd1', ['verified'])]),
+    ('lsblk', ['rd1', 'disk gpt', 'rd1p1', 'part gpt basic data', 'SurfOS data', 'rd1p2', 'part gpt Linux']),
+    ('fdisk rd1', ['GPT partition table, usable blocks 34-131038', 'rd1p1', 'Microsoft basic data', 'SurfOS data',
+                   'rd1p2', 'Linux filesystem', 'free: none']),
     ('hexdump hda 0', ['55 aa']),
     ('mount',   ['rd0', '/initrd', 'tarfs']),
     ('ls /initrd', ['etc/', 'motd']),
     ('cat /initrd/motd', ['Welcome to SurfOS']),
     ('ls /hda1', ['DOCS/', 'README', 'motd']),
     ('cat /hda1/DOCS/README.md', ['SurfOS']),
-    # 10/5/26 (USB storage): FAT16 and FAT32 made, used, remounted and ejected on the scratch ramdisk rd1
-    answered('mkfs rd1 TESTVOL', 'Type rd1 to erase rd1 (64 MB) and create a FAT16 file system: ', 'rd1',
-             ['rd1: FAT16, 2048-byte clusters', 'label TESTVOL']),
-    ('mount rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL', 'read-write']),
+    # 10/5/26 (USB storage): on the GPT fdisk left on rd1, FAT16 on rd1p1 and FAT32 (forced) on rd1p2,
+    # used, remounted and ejected; then the whole disk as one volume, and the refusals
+    answered('mkfs rd1p1 TESTVOL', 'Type rd1p1 to erase rd1p1 (16 MB) and create a FAT16 file system: ', 'rd1p1',
+             ['rd1p1: FAT16, 2048-byte clusters', 'label TESTVOL']),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL', 'read-write']),
     ('write /scratch/hello.txt Hello from SurfOS', []),
     ('cp /initrd/motd /scratch/motd', ['bytes copied']),
     ('write /scratch/a-much-longer-file-name.text long names work', []),
@@ -64,33 +87,36 @@ SMOKE = [
     ('mv /scratch/docs /scratch/papers', []),
     ('ls /scratch/papers', ['hello.txt', '1 entries']),
     ('ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
-    ('df', ['rd1     fat16', '/scratch', 'TESTVOL']),
+    ('df', ['rd1p1   fat16', '/scratch', 'TESTVOL']),
     ('fsbench /scratch 4', ['read, 64 KB pieces:', 'fsbench: ok']),
     ('cd /scratch/papers', []),
-    ('umount rd1', ['/scratch is busy: it holds the current directory']),
+    ('umount rd1p1', ['/scratch is busy: it holds the current directory']),
     ('cd /', []),
-    ('umount rd1', []),
-    ('mount rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL']),
+    ('umount rd1p1', []),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL']),
     ('cat /scratch/papers/hello.txt', ['Hello from SurfOS']),
     ('cat /scratch/a-much-longer-file-name.text', ['long names work']),
     ('cat /scratch/motd', ['Welcome to SurfOS']),
     ('umount /scratch', []),
-    ('mount -r rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL', 'read-only']),
+    ('mount -r rd1p1 /scratch', ['rd1p1 on /scratch: fat16, label TESTVOL', 'read-only']),
     ('write /scratch/new.txt nope', ['Read-only file system']),
+    ('mount rd1p2', ['rd1p2: no file system found']),
     ('umount /scratch', []),
-    answered('mkfs -t fat32 rd1 BIG32', 'Type rd1 to erase rd1 (64 MB) and create a FAT32 file system: ', 'rd1',
-             ['rd1: FAT32, 512-byte clusters', '(1 MiB aligned)', 'label BIG32']),
-    ('mount rd1', ['rd1 on /rd1: fat32, label BIG32']),
-    ('mount rd1 /again', ['rd1 is mounted already']),
-    ('write /rd1/fat32.txt FAT32 works', []),
-    ('mkdir /rd1/dir', []),
-    ('mv /rd1/fat32.txt /rd1/dir/renamed.txt', []),
-    ('cat /rd1/dir/renamed.txt', ['FAT32 works']),
-    ('df', ['rd1     fat32', '/rd1', 'BIG32']),
-    ('eject rd1', ['/rd1 unmounted', 'rd1: safe to remove']),
-    ('mount rd1', ['(FSInfo)', 'rd1 on /rd1: fat32, label BIG32']),     # cleanly unmounted: FSInfo's count is trusted
-    ('cat /rd1/dir/renamed.txt', ['FAT32 works']),
-    ('eject rd1', ['rd1: safe to remove']),
+    answered('mkfs -t fat32 rd1p2 BIG32', 'Type rd1p2 to erase rd1p2 (', 'rd1p2',
+             ['rd1p2: FAT32, 512-byte clusters', '(1 MiB aligned)', 'label BIG32']),
+    ('mount rd1p2', ['rd1p2 on /rd1p2: fat32, label BIG32']),
+    ('mount rd1p2 /again', ['rd1p2 is mounted already']),
+    ('mount rd1 /whole', ['rd1 is mounted already, or its disk or a partition of it is']),
+    ('write /rd1p2/fat32.txt FAT32 works', []),
+    ('mkdir /rd1p2/dir', []),
+    ('mv /rd1p2/fat32.txt /rd1p2/dir/renamed.txt', []),
+    ('cat /rd1p2/dir/renamed.txt', ['FAT32 works']),
+    ('df', ['rd1p2   fat32', '/rd1p2', 'BIG32']),
+    ('eject rd1', ['/rd1p2 unmounted', 'rd1: safe to remove']),
+    ('mount rd1p2', ['(FSInfo)', 'rd1p2 on /rd1p2: fat32, label BIG32']),     # cleanly unmounted: FSInfo is trusted
+    ('cat /rd1p2/dir/renamed.txt', ['FAT32 works']),
+    ('mount rd1p1 /scratch', ['rd1p1 on /scratch: fat16']),
+    ('eject rd1p1', ['/rd1p2 unmounted', '/scratch unmounted', 'rd1: safe to remove']),   # the whole disk goes
     ('mkfs hda1', ['mkfs: hda1: it is not a USB drive']),
     ('mkfs rd0', ['mkfs: rd0: it, its disk or one of its partitions is mounted']),
     answered('mkfs rd1', 'Type rd1 to erase rd1', 'rd2', ['Cancelled']),
@@ -111,18 +137,74 @@ SMOKE = [
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
-    ('crash efault', ['= -14', 'exit status 0']),
+    ('crash efault', ['= -1 (errno 14: Bad address)', 'exit status 0']),
     ('count 3 10', ['counted to 3']),
     ('ls /dev', ['console', 'null']),
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
                     ('cat /initrd/etc/version', ['SurfOS 0.007', '$ ']),
                     ('exit 3', ['exit status 3'])]),
+    # raw mode (tty.h): the terminal's bytes arrive unchanged, an arrow key as ESC [ A
+    ('rawkeys', ['raw mode (80x25)'], [('\x1b[A\x7f\x03q', ['1b 5b 41 7f 03 71'])]),
+    # escape sequences (tty.h): the test pattern, then read back from VGA memory with its colours
+    ('ansi', ['ANSI-TEST done, 80x25']),
+    ('@ansi-screen', []),
+    ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
+    # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
+    # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
+    ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
+    ('run echo one  two', ['one two', 'exit status 0']),
+    ('run ls -l /hda1', ['d          0 ', 'DOCS/', 'hello', 'motd', 'README', 'entries']),
+    ('sh', ['$ '], [('echo hello > /hda1/R.TXT', ['$ ']),
+                    ('cat < /hda1/R.TXT', ['hello', '$ ']),
+                    ('echo more >> /hda1/R.TXT', ['$ ']),
+                    ('cat /hda1/R.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/R.TXT > /hda1/R2.TXT', ['$ ']),
+                    ('cat /hda1/R2.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/NOPE', ['sh: /hda1/NOPE: No such file or directory', '$ ']),
+                    ('wc /hda1/R.TXT', ['      2       2      11 /hda1/R.TXT', '$ ']),
+                    ('mkdir -p /hda1/T/a/b', ['$ ']),
+                    ('cp /hda1/R.TXT /hda1/T/a/b/C.TXT', ['$ ']),
+                    ('cp -r /hda1/T/a /hda1/T/z', ['$ ']),
+                    ('cat /hda1/T/z/b/C.TXT', ['hello\r\nmore', '$ ']),
+                    ('mv /hda1/T/z/b/C.TXT /hda1/T/M.TXT', ['$ ']),
+                    ('rmdir /hda1/T/z/b', ['$ ']),
+                    ('touch /hda1/T/E.TXT', ['$ ']),
+                    ('ls -l /hda1/T', ['d          0 ', 'a/', '-          0 ', 'E.TXT', '-         11 ', 'M.TXT', 'z/', '4 entries', '$ ']),
+                    ('head -n 1 /hda1/T/M.TXT', ['hello\r\n/ $ ']),
+                    ('hexdump /hda1/R.TXT', ['00000000  68 65 6c 6c 6f 0a 6d 6f  72 65 0a', '|hello.more.|', '0000000b', '$ ']),
+                    ('rm -r /hda1/T', ['$ ']),
+                    ('ls /hda1/T', ['No such file or directory', '$ ']),
+                    ('df', ['Mounted on', 'rootfs', 'devfs', 'rd0', '/initrd', 'hda1', '/hda1', '$ ']),
+                    ('exit', ['exit status 0'])]),
+    # the text editor over the serial line (raw mode, keys as bytes): type with Enter, Backspace,
+    # Home, arrows and an insertion, save, quit, check the file; reopen it, change a line, quit
+    # and answer the question; a file with CRLF line ends keeps them
+    ('run edit /hda1/NOTE.TXT', ['New file', '^S Save'],
+     [(b'Alpha one\rGamma threex', ['Col 13']),
+      (b'\x7f\x1b[HBeta two\r', ['Ln 3/3']),
+      (b'\x1b[A\x1b[A\x1b[F!', ['Alpha one!']),
+      (b'\x13', ['Wrote 3 lines']),
+      (b'\x11', ['exit status 0'])]),
+    ('cat /hda1/NOTE.TXT', ['Alpha one!\r\nBeta two\r\nGamma three\r\n']),
+    ('run wc /hda1/NOTE.TXT', ['      3       6      32 /hda1/NOTE.TXT']),
+    ('run edit /hda1/NOTE.TXT', ['Read 3 lines', '^S Save'],
+     [(b'\x1b[B\x1b[F\x7f\x7f\x7f2', ['Beta 2']),
+      (b'\x11', ['Save changes? (y/n/^C)']),
+      (b'y', ['exit status 0'])]),
+    ('cat /hda1/NOTE.TXT', ['Alpha one!\r\nBeta 2\r\nGamma three\r\n']),
+    ('run ls /hda1/NOTE.TXT.tmp', ['No such file or directory']),
+    ('sh', ['$ '], [('echo -e "first\\r\\nsecond\\r" > /hda1/CRLF.TXT', ['$ ']),
+                    ('exit', ['exit status 0'])]),
+    ('run edit /hda1/CRLF.TXT', ['Read 2 lines (CRLF line ends)', '^S Save'],
+     [(b'\x1b[F!\x13', ['Wrote 2 lines']),
+      (b'\x11', ['exit status 0'])]),
+    ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
-# steps that legitimately take longer than the 10 s default
-TIMEOUTS = {'selftest': 120, 'fsbench': 60}
+# steps that legitimately take longer than the 10 s default (by command, or by its first word)
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
@@ -249,7 +331,7 @@ class Qemu:
 
     def text(self):
         t = self.transcript.decode(errors='replace').replace('\r', '')
-        return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', t)
+        return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', t)
 
     # --- monitor --------------------------------------------------------
     def monitor(self, command, wait=0.3):
@@ -275,20 +357,25 @@ class Qemu:
         s.close()
         return re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', out.decode(errors='replace'))
 
-    def screen(self):
-        """the 80x25 VGA text screen. The file name is relative on purpose: the
-        monitor treats a leading '/' as a format specifier."""
+    def vga_memory(self):
+        """the 80x25 VGA text page: character and attribute bytes, None if the dump fails.
+        The file name is relative on purpose: the monitor treats a leading '/' as a format
+        specifier."""
         path = os.path.join(self.workdir, 'vga.bin')
         if os.path.exists(path):
             os.remove(path)
         self.monitor('pmemsave 0xb8000 4000 vga.bin')
         for _ in range(50):
             if os.path.exists(path) and os.path.getsize(path) == 4000:
-                break
+                return open(path, 'rb').read()
             time.sleep(0.1)
-        else:
+        return None
+
+    def screen(self):
+        """the 80x25 VGA text screen"""
+        d = self.vga_memory()
+        if d is None:
             return '(screen dump failed)'
-        d = open(path, 'rb').read()
         rows = []
         for r in range(25):
             cells = (d[(r * 80 + c) * 2] for c in range(80))
@@ -387,6 +474,38 @@ def host_echo_check(q):
     return ('host reaches the guest TCP echo server', got == msg)
 
 
+# what the shell command `ansi` draws with escape sequences (row: text), 80x25
+ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
+             6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED',
+             12: 'ANSI-TEST done, 80x25'}
+
+
+def ansi_screen_check(q):
+    """after `ansi`: its pattern in VGA memory, characters and attributes, and Z in the corner"""
+    d = q.vga_memory() or bytes(4000)
+
+    def row(r):
+        return ''.join(chr(b) if 32 <= b < 127 else ' ' for b in d[r * 160:(r + 1) * 160:2]).rstrip()
+
+    def attr(c, r):
+        return d[(r * 80 + c) * 2 + 1]
+    ok = all(row(r) == text for r, text in ANSI_ROWS.items()) and d[(24 * 80 + 79) * 2] == ord('Z')
+    ok = ok and attr(9, 2) == 0x70 and attr(16, 2) == 0x07 and attr(9, 3) == 0x1E   # inverse, normal, bright yellow on blue
+    return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
+
+
+def console_switch_check(q):
+    """F2 and back to F1 on the PS/2 keyboard, after `ansi`: the serial terminal is repainted
+    from the console's buffer, down to its last row in use (Z in the corner, row 25), and the
+    cursor goes back up to the prompt on row 14, column 10"""
+    q.sendkeys('<f2>')
+    ok = q.expect('Kernel version', 10) and q.expect(PROMPT, 10)
+    q.sendkeys('<f1>')
+    ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
+    ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
+    return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
+
+
 def host_checks(q):
     """after the guest has run: read what it wrote to the disk with the host's mtools"""
     if not q.disk or not shutil.which('mcopy'):
@@ -396,12 +515,16 @@ def host_checks(q):
         mbr = f.read(512)
     start = int.from_bytes(mbr[454:458], 'little') * 512     # partition 1
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
-    try:
-        out = subprocess.run(['mcopy', '-i', f'{q.disk}@@{start}', '::/SELFTEST.TXT', '-'],
-                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
-    except Exception as e:
-        out = str(e).encode()
-    results = [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')]
+
+    def read(name):
+        try:
+            return subprocess.run(['mcopy', '-i', f'{q.disk}@@{start}', '::/' + name, '-'],
+                                  env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
+        except Exception as e:
+            return str(e).encode()
+    results = [('FAT file written by the self test is readable with mtools', read('SELFTEST.TXT') == b'SurfOS wrote this file.\n'),
+               ('the files the editor saved are exact, line ends included (mtools)',
+                read('NOTE.TXT') == b'Alpha one!\nBeta 2\nGamma three\n' and read('CRLF.TXT') == b'first!\r\nsecond\r\n')]
     try:                                                    # the UTF-8 name the self test made, through mtools' UTF-16
         out = subprocess.run(['mdir', '-i', f'{q.disk}@@{start}', '::/'], env=dict(env, LC_ALL='C.UTF-8'),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
@@ -444,12 +567,21 @@ def run_smoke(q, boot_timeout):
             if cmd == '@host-echo':                          # a step the host performs while the guest runs
                 results.append(host_echo_check(q))
                 continue
+            if cmd == '@ansi-screen':                        # the screen the previous step drew
+                results.append(ansi_screen_check(q))
+                continue
+            if cmd == '@console-switch':
+                results.append(console_switch_check(q))
+                continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
-            limit = TIMEOUTS.get(cmd.split()[0], 10)
+            limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
             q.send(cmd + '\n')
             ok = all(q.expect(e, limit) for e in expects)
             for line, exp in follow:
-                q.send(line + '\n')
+                if isinstance(line, bytes):                  # keys as they are, for a full-screen program
+                    q.ser.sendall(line)
+                else:
+                    q.send(line + '\n')
                 ok = ok and all(q.expect(e, limit) for e in exp)
             ok = ok and q.expect(PROMPT, limit)
             results.append((cmd, ok))
