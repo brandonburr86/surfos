@@ -13,16 +13,21 @@ gets a pseudo-terminal (openpty; 80x24 until the client's NAWS says otherwise), 
 telnet opening (telnet.c) and surfsh -l on the pseudo-terminal (spawnpty), so it begins
 with the banner and the prompt. Then bytes go both ways through the protocol: what the
 client types to the master, where it arrives as typed keys, and what the session prints
-to the connection. The session ends when surfsh does (the master reads 0: the
-connection is closed, and the client sees the end) or when the client goes (the
-connection reads 0 or is reset: the master is closed, which hangs the pseudo-terminal
-up and ends surfsh and whatever it runs). The shells that end are collected here.
+to the connection. The session ends when surfsh does (the master reads 0: what is left
+for the client is sent, then the connection is closed) or when the client goes (the
+connection reads 0 or an error, ECONNRESET, or ETIMEDOUT when a vanished client's
+keepalive runs out, or poll() says POLLHUP or POLLERR with nothing left to read: the
+master is closed, which hangs the pseudo-terminal up and ends surfsh and whatever it
+runs). The shells that end are collected here.
 
-A write to a connection waits until every byte is queued (net/sock.c), with no limit, so
-a client that reads slowly could hold up every session. What a session prints is read in
-pieces of PIECE bytes (at most twice that once encoded), and only while the connection
-has room (POLLOUT; poll() is asked about it once a piece found none): a slow client then
-slows its own session, whose output waits in its pseudo-terminal, and the others go on.
+Nothing here waits for one client. A write to a connection takes what fits, so each
+session keeps what its connection has not taken yet (the session's output, the answers to
+the client's negotiation, the opening) in an output buffer, and poll() is asked about
+POLLOUT only while that holds something; the connection is written only when POLLOUT
+says it takes bytes. The pseudo-terminal is read, in pieces of PIECE bytes (at most twice
+that once encoded), only while the buffer has room for a piece: a client that reads
+slowly, or not at all, holds back its own session, whose programs then wait to print,
+and the other sessions and new connections go on.
 
 telnetd off kills the server: the kill ends it at the end of its poll(), and its
 descriptors close with it, so the port is free, every client gets its FIN and every
@@ -40,12 +45,16 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0)", "telnetd
 #define COLS_MAX 1024
 #define ROWS_MIN 2
 #define ROWS_MAX 1024
-#define PIECE       512                 /* the most of a session's output read and written at once */
+#define PIECE    512                    /* the most of a session's output read at once */
+#define OUT_SIZE 4096                   /* what waits for the client */
+#define OUT_KEEP 256                    /* the last of it, kept for answers to the client's negotiation */
 
 struct session {
     int conn, master;                   /* -1: the slot is free */
     int pty, num;                       /* pty<pty>; the session's number for the log */
-    int full;                           /* the connection had no room: the pty waits until it has */
+    int ended;                          /* the shell ended: the connection closes once out is sent */
+    int out_len;
+    unsigned char out[OUT_SIZE];        /* for the client, not taken by the connection yet */
     struct telnet tn;
 };
 
@@ -67,22 +76,28 @@ static void say(const char *fmt, ...) {
     write(kmsg, buf, (size_t)n);
 }
 
-static int write_all(int fd, const void *p, int n) {
-    const char *s = p;
-    while(n > 0) {
-        ssize_t w = write(fd, s, (size_t)n);
-        if(w <= 0) return -1;
-        s += w;
-        n -= (int)w;
-    }
-    return 0;
+/* bytes for the client, behind what waits already; what does not fit is dropped */
+static void queue(struct session *s, const unsigned char *p, int n) {
+    if(n > OUT_SIZE - s->out_len) n = OUT_SIZE - s->out_len;
+    memcpy(s->out + s->out_len, p, (size_t)n);
+    s->out_len += n;
 }
 
-/* a connection that gets no session: why, then the end */
+/* is there room for another piece of the session's output, with OUT_KEEP left? */
+static int room(const struct session *s) {
+    return OUT_SIZE - s->out_len >= 2 * PIECE + OUT_KEEP;
+}
+
+/* a connection that gets no session: why, if the connection takes it now (a new one has room
+   for it all; what it does not take is dropped), then the end: the FIN goes out behind it */
 static void refuse(int conn, const char *why) {
-    write_all(conn, "\r\ntelnetd: ", 11);
-    write_all(conn, why, (int)strlen(why));
-    write_all(conn, "\r\n", 2);
+    struct pollfd p;
+    char msg[96];
+    int n = snprintf(msg, sizeof(msg), "\r\ntelnetd: %s\r\n", why);
+    p.fd = conn;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if(poll(&p, 1, 0) == 1 && (p.revents & POLLOUT)) write(conn, msg, (size_t)n);
     close(conn);
 }
 
@@ -90,6 +105,7 @@ static void end_session(struct session *s, const char *why) {
     close(s->conn);
     close(s->master);                   /* the last master descriptor: the pty hangs up */
     s->conn = s->master = -1;
+    s->out_len = 0;
     say("telnetd: session %d ended (%s)", s->num, why);
 }
 
@@ -98,11 +114,11 @@ static void new_session(int lfd) {
     unsigned char opening[TN_OPENING];
     struct session *s = NULL;
     struct netaddr from;
-    int conn, master, pid, i, n;
+    int conn, master, pid, i;
 
     conn = tcp_accept(lfd, &from);
     if(conn < 0) {
-        if(errno == EINTR || errno == EAGAIN) return;
+        if(errno == EINTR || errno == EAGAIN || errno == ECONNRESET) return;
         say("telnetd: accept: %s; the server ends", strerror(errno));
         _exit(1);                       /* the listening descriptor is not one (or broke) */
     }
@@ -120,13 +136,6 @@ static void new_session(int lfd) {
         return;
     }
     ptyctl(master, PTY_SETSIZE, (80u << 16) | 24u);
-    telnet_init(&s->tn);
-    n = telnet_opening(&s->tn, opening);
-    if(write_all(conn, opening, n) < 0) {
-        close(conn);
-        close(master);
-        return;
-    }
     pid = spawnpty(SURFSH_PATH, argv, master);
     if(pid < 0) {
         say("telnetd: %s: spawnpty %s: %s", peer, SURFSH_PATH, strerror(errno));
@@ -136,15 +145,19 @@ static void new_session(int lfd) {
     }
     s->conn = conn;
     s->master = master;
-    s->full = 0;
+    s->ended = 0;
+    s->out_len = 0;
     s->pty = ptyctl(master, PTY_INDEX, 0);
     s->num = ++sessions_ever;
+    telnet_init(&s->tn);
+    queue(s, opening, telnet_opening(&s->tn, opening));    /* sent at the first POLLOUT, before the banner */
     say("telnetd: session %d from %s (pty%d)", s->num, peer, s->pty);
 }
 
-/* what the client sent: keys for the session, answers for the client, perhaps a new size */
+/* what the client sent (POLLIN: the read does not wait): keys for the session, answers for the
+   client, perhaps a new size; or the end of the connection, the client's or an error's */
 static void from_client(struct session *s) {
-    unsigned char in[512], data[512], reply[1024];
+    unsigned char in[512], data[512], reply[OUT_KEEP];
     struct tn_buf d = { data, 0, sizeof(data) }, r = { reply, 0, sizeof(reply) };
     ssize_t n = read(s->conn, in, sizeof(in));
     if(n <= 0) {
@@ -152,40 +165,39 @@ static void from_client(struct session *s) {
         return;
     }
     telnet_recv(&s->tn, in, (int)n, &d, &r);
-    if(r.len && write_all(s->conn, reply, r.len) < 0) {
-        end_session(s, "the connection broke");
-        return;
-    }
+    queue(s, reply, r.len);
+    if(s->ended) return;                /* the shell is gone: nothing to type to */
     if(s->tn.resized) {
         int cols = s->tn.cols < COLS_MIN ? COLS_MIN : s->tn.cols > COLS_MAX ? COLS_MAX : s->tn.cols;
         int rows = s->tn.rows < ROWS_MIN ? ROWS_MIN : s->tn.rows > ROWS_MAX ? ROWS_MAX : s->tn.rows;
         s->tn.resized = 0;
         ptyctl(s->master, PTY_SETSIZE, (unsigned int)cols << 16 | (unsigned int)rows);
     }
-    if(d.len && write_all(s->master, data, d.len) < 0) end_session(s, "the terminal broke");
+    if(d.len) write(s->master, data, (size_t)d.len);   /* typed keys: the pty waits briefly, then drops */
 }
 
-/* what the session printed, for the client: a piece, when the connection has room for it */
+/* what the session printed, a piece of it, for the client */
 static void from_pty(struct session *s) {
     unsigned char in[PIECE], out[2 * PIECE];
-    struct pollfd room;
-    ssize_t n;
-    int k;
-    room.fd = s->conn;
-    room.events = POLLOUT;
-    room.revents = 0;
-    if(poll(&room, 1, 0) < 0 || !(room.revents & POLLOUT)) {
-        if(room.revents & (POLLHUP | POLLERR | POLLNVAL)) end_session(s, "the client left");
-        else s->full = 1;                       /* until poll() says the connection has room */
+    ssize_t n = read(s->master, in, sizeof(in));
+    if(n <= 0) {                        /* the shell ended: what is left goes first */
+        s->ended = 1;
+        if(!s->out_len) end_session(s, "the shell ended");
         return;
     }
-    n = read(s->master, in, sizeof(in));
-    if(n <= 0) {
-        end_session(s, "the shell ended");
+    queue(s, out, telnet_send(&s->tn, in, (int)n, out));
+}
+
+/* the connection takes bytes (POLLOUT): as many as it will */
+static void to_client(struct session *s) {
+    ssize_t n = write(s->conn, s->out, (size_t)s->out_len);
+    if(n < 0) {
+        if(errno != EINTR && errno != EAGAIN) end_session(s, strerror(errno));
         return;
     }
-    k = telnet_send(&s->tn, in, (int)n, out);
-    if(write_all(s->conn, out, k) < 0) end_session(s, "the connection broke");
+    memmove(s->out, s->out + n, (size_t)(s->out_len - n));
+    s->out_len -= (int)n;
+    if(s->ended && !s->out_len) end_session(s, "the shell ended");
 }
 
 int serve(int lfd, int port) {
@@ -205,10 +217,10 @@ int serve(int lfd, int port) {
             struct session *s = &sessions[i];
             if(s->conn < 0) continue;
             fds[n].fd = s->conn;
-            fds[n].events = s->full ? POLLIN | POLLOUT : POLLIN;
+            fds[n].events = s->out_len ? POLLIN | POLLOUT : POLLIN;
             fds[n].revents = 0;
             who[n++] = s;
-            if(s->full) continue;                   /* its output waits for room in the connection */
+            if(s->ended || !room(s)) continue;      /* its output waits in the pty for room here */
             fds[n].fd = s->master;
             fds[n].events = POLLIN;
             fds[n].revents = 0;
@@ -222,12 +234,17 @@ int serve(int lfd, int port) {
         }
         for(i = 1; i < n; i++) {
             struct session *s = who[i];
-            if(!fds[i].revents || s->conn < 0) continue;    /* nothing, or the session ended just now */
-            if(fds[i].fd != s->conn) from_pty(s);
-            else {
-                if(fds[i].revents & POLLOUT) s->full = 0;   /* room again: the pty is read next time */
-                if(fds[i].revents & ~POLLOUT) from_client(s);
+            short ev = fds[i].revents;
+            if(!ev || s->conn < 0) continue;    /* nothing, or the session ended just now */
+            if(fds[i].fd == s->master) {
+                if(!s->ended) from_pty(s);
+                continue;
             }
+            if((ev & POLLOUT) && s->out_len) to_client(s);
+            if(s->conn < 0) continue;
+            if(ev & POLLIN) from_client(s);     /* what is left, then 0 or the error that ended it */
+            else if(ev & (POLLERR | POLLHUP | POLLNVAL))
+                end_session(s, ev & POLLHUP ? "the client left" : "the connection broke");
         }
         if(fds[0].revents) new_session(lfd);
         while(waitpid(-1, NULL, WNOHANG) > 0);              /* the shells of sessions that ended */
