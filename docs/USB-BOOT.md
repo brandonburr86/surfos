@@ -11,10 +11,11 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 11 cold boots under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 12 cold boots under OVMF, at -O0 and -O2 |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
 | Files on a second USB stick: partitions, FAT32 that the Mac reads, a text editor, a C library | done under emulation; **pending on the laptop** | `make test-usb`, scenarios `usbdisk` and `storage`; [section 9](#9-files-on-a-usb-stick) |
+| The SurfOS shell, surfsh: the breadcrumb prompt, Tab completion, a pager; SurfOS 1.0 | done under emulation; **pending on the laptop** | `make test` and `make test-usb`; [section 10](#10-the-shell) |
 
 ## What is on the drive
 
@@ -62,12 +63,12 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 11 cold boots, about two and a half minutes
+devenv/test-usb.sh      # the automatic tests: 12 cold boots, about three minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
 The tests leave their serial transcripts and screenshots in `build/usb-test/`. In the
-window the GRUB menu appears, then the SurfOS boot log and the `SurfOS*>` prompt.
+window the GRUB menu appears, then the SurfOS boot log, the banner and the `SURF ≋>` prompt.
 
 ## 3. Check the image
 
@@ -138,7 +139,8 @@ firmware version setup shows, for the hardware record.
    button menu → *Boot Menu*.
 3. Pick the USB drive (shown as *EFI USB Device* or by the drive's name).
 4. GRUB's menu waits 5 seconds and starts **SurfOS**. The screen fills with the boot log,
-   then the red *Phrite's SurfOS* banner and the `SurfOS*>` prompt.
+   then the banner, *Brandon Burr's SurfOS* and *Version 1.0 on an x86, 2004-2026* in red
+   and orange, and the shell's prompt, `SURF ≋>` (section 10).
 
 The text fills the screen: 120x33 characters on a 1920x1080 panel, with the letters
 drawn at twice the font's size, or 170x48 on a 1366x768 panel.
@@ -148,6 +150,9 @@ The GRUB menu also has:
 * **SurfOS (troubleshooting: local APIC timer, polled keyboard)**: the same kernel with
   `timer=lapic kbd=poll`, for when the normal entry boots but the clock or the keyboard
   does not respond.
+* **SurfOS (kernel shell)**: the kernel's own shell on every console instead of surfsh
+  (section 10).
+* **SurfOS (USB controller off: no USB network adapter, no USB sticks)**: section 8.
 * **UEFI firmware setup**: restarts into the firmware's setup screens.
 * **Restart** and **Power off**.
 
@@ -157,18 +162,19 @@ back on afterwards if you want it on.
 
 ## 7. What to try
 
-Type at the `SurfOS*>` prompt:
+Type at the prompt, `SURF ≋>`:
 
 | Command | Expect |
 |---|---|
-| `help` | the command list |
+| `help` | the commands, a screenful at a time: Space shows the next (section 10) |
 | `bootinfo` | `multiboot2`, `profile=laptop`, `firmware UEFI`, the memory map, the framebuffer |
 | `drivers` | which console, timer and keyboard paths were chosen |
 | `cpuinfo` | the processor (an i3-1005G1 should say so) |
 | `acpi` | the firmware's ACPI tables |
 | `memstat`, `ps`, `tick`, `uptime` | memory, tasks, the clock moving |
 | `lsblk`, `mount`, `ls /initrd` | the ramdisk rd0 mounted on `/initrd`, and the SurfOS drive as `usb0`, `boot drive: protected` |
-| `cat /initrd/etc/version` | `SurfOS 0.007 (ai-dev)` |
+| `cat /initrd/etc/version` | `SurfOS 1.0 (ai-dev)` |
+| `cd /initrd/bin`, `ls`, `cd -` | the prompt shows where you are, `initrd ▸ bin ≋>`; the programs, surfsh among them |
 | `run hello a b` | a ring-3 program, `exit status 42` |
 | `count 3 10`, `spawn count 20 500` | user programs, one in the background |
 | `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (the disk tests are skipped, and the network tests without an adapter and a cable) |
@@ -227,9 +233,9 @@ When the adapter is unplugged, `eth0` stays (with `link down`). Plugged back in,
 is `eth0` again, and with the same adapter it keeps its address, so no new `dhcp` is
 needed. A different adapter also becomes `eth0`, but needs `dhcp` again.
 
-The GRUB menu has an entry **SurfOS (USB controller off: no USB network adapter)**. It
-boots without touching the USB controller, in case the USB driver ever gets in the way
-on the laptop.
+The GRUB menu has an entry **SurfOS (USB controller off: no USB network adapter, no USB
+sticks)**. It boots without touching the USB controller, in case the USB driver ever gets
+in the way on the laptop.
 
 ## 9. Files on a USB stick
 
@@ -262,7 +268,7 @@ says it was found), and type `lsblk`. Under QEMU it looks like this; on the lapt
 models and sizes are those of your drives:
 
 ```text
-SurfOS*> lsblk
+SURF ≋> lsblk
 NAME     SIZE BUS RM TYPE                MODEL/LABEL      STATUS
 rd0        1M ram  0 disk                initrd.tar       mounted
 usb0     256M usb  1 disk gpt            QEMU QEMU HARDDI boot drive: protected
@@ -279,7 +285,7 @@ stick has.
 **A stick that already holds FAT32 (or FAT16).** Mount it on a directory of your choice:
 
 ```text
-SurfOS*> mount usb1p1 /data
+SURF ≋> mount usb1p1 /data
     usb1p1 on /data: fat32, label SURFDATA, 1020 MB, 1019 MB free, read-write
 ```
 
@@ -296,27 +302,27 @@ partitions, make a partition table first. On a 1 GB stick under QEMU (the kernel
 `+PART:` and `+FAT32:` lines left out):
 
 ```text
-SurfOS*> fdisk usb1 new mbr
+SURF ≋> fdisk usb1 new mbr
     usb1: QEMU QEMU HARDDISK, 1.0G (2097152 blocks), USB, removable
     no partition table
     change: a new, empty MBR (disk signature 4fc8c3c8)
     Type usb1 to write the new partition table to usb1 (QEMU QEMU HARDDISK, 1.0G): usb1
     usb1: written, flushed and verified
     usb1 now has no partitions
-SurfOS*> fdisk usb1 add
+SURF ≋> fdisk usb1 add
     usb1: QEMU QEMU HARDDISK, 1.0G (2097152 blocks), USB, removable
     MBR partition table, disk signature 4fc8c3c8
     change: add partition 1: blocks 2048-2097151 (0.9G), type 0c FAT32 LBA
     Type usb1 to write the new partition table to usb1 (QEMU QEMU HARDDISK, 1.0G): usb1
     usb1: written, flushed and verified
     usb1 now has usb1p1 (0.9G)
-SurfOS*> mkfs usb1p1 SURFDATA
+SURF ≋> mkfs usb1p1 SURFDATA
     usb1p1: QEMU QEMU HARDDISK, 1023 MB (2095104 blocks), a partition
     no file system found on it
     new: FAT32, 4096-byte clusters, 261120 of them, label SURFDATA
     Type usb1p1 to erase usb1p1 (1023 MB) and create a FAT32 file system: usb1p1
     usb1p1: FAT32, 4096-byte clusters: 261120 clusters, 2 FATs of 2044 sectors, 2056 reserved sectors, data at sector 6144 (1 MiB aligned), serial 4507-0D05
-SurfOS*> mount usb1p1 /data
+SURF ≋> mount usb1p1 /data
     usb1p1 on /data: fat32, label SURFDATA, 1020 MB, 1019 MB free, read-write
 ```
 
@@ -333,7 +339,7 @@ device's name; any other answer prints `Cancelled` and writes nothing. More of `
 | `fdisk usb1 delete 2` | delete partition 2 |
 | `fdisk usb1 type 1 fat32` | change partition 1's type |
 
-**Working with files.** At the `SurfOS*>` prompt:
+**Working with files.**
 
 | Command | What it does |
 |---|---|
@@ -344,24 +350,23 @@ device's name; any other answer prints `Cancelled` and writes nothing. More of `
 | `write /data/todo.txt buy milk` | a file with one line of text |
 | `df` | size, use and free space of everything mounted |
 | `sync` | write the changes SurfOS still holds in memory to the drives (before pulling a stick out, `eject` it) |
-| `sh` | a small shell with a `$ ` prompt (below) |
 
-The `SurfOS*>` prompt splits a line at spaces and has no quotes. For names with spaces,
-and for the programs in `/initrd/bin`, start `sh`:
+Names with spaces go in quotes, and what a command prints can go into a file
+(section 10):
 
 ```text
-SurfOS*> sh
-$ echo "hello from SurfOS" > /data/hello.txt
-$ mkdir /data/Documents
-$ mv /data/hello.txt "/data/Documents/Hello World.txt"
-$ ls -la /data/Documents
-$ exit
+SURF ≋> echo "hello from SurfOS" > /data/hello.txt
+SURF ≋> mkdir /data/Documents
+SURF ≋> mv /data/hello.txt "/data/Documents/Hello World.txt"
+SURF ≋> cd /data/Documents
+data ▸ Documents ≋> /initrd/bin/ls -la
 ```
 
-`sh` has `"quoted words"`, `>`, `>>` and `<`, a trailing `&`, and `cd`, `pwd`, `echo` and
-`exit`. Its programs: `ls [-la]`, `cat`, `cp [-r]`, `mv`, `rm [-rf]`, `mkdir [-p]`,
-`rmdir`, `touch`, `head [-n N]`, `wc [-lwc]`, `hexdump`, `df` and `edit`. They are written
-against SurfOS's small C library (`user/libsurf`), which new programs can use too.
+The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and `rmdir` come first; the programs
+of the same names know more options (`ls -la`, `cp -r`, `rm -rf`, `mkdir -p`) and run by
+their path, as above. The other programs: `touch`, `head [-n N]`, `wc [-lwc]`,
+`hexdump`, `df`, `edit` and `sh` (an earlier, smaller shell). They are written against
+SurfOS's small C library (`user/libsurf`), which new programs can use too.
 
 **The editor.** `edit <file>` opens a file, or starts a new one, on the whole screen: a
 title line, the text, a status line and a line of keys.
@@ -407,9 +412,8 @@ ramdisks, and refuse:
 
 **Limits.**
 
-* The console shows and types plain ASCII only. A file name with accents (`café.txt`) is
-  stored and read correctly, by SurfOS and by the Mac, but the console shows it without
-  those letters (`caf.txt`) and you cannot type them.
+* A file name with accents (`café.txt`) is stored and shown correctly, but letters beyond
+  ASCII cannot be typed yet. Characters outside the console's set (section 10) show as `?`.
 * FAT12, FAT16 and FAT32. exFAT and NTFS are not read.
 * Files up to 4 GB, FAT32's limit, but a program can seek only within the first 2 GB.
   The editor takes files up to 1 MB.
@@ -421,7 +425,89 @@ ramdisks, and refuse:
 * No USB hubs, so every drive needs a port of its own. The laptop's three ports take the
   SurfOS drive, a data stick and the Ethernet adapter.
 
-## 10. When something goes wrong
+## 10. The shell
+
+Every console (F1 to F4) runs **surfsh**, the SurfOS shell. It is a program like the
+others, `/initrd/bin/surfsh` (`ls /initrd/bin` lists it): `init` starts it on each
+console at boot and starts it again when it ends. Typing `surfsh` starts a shell inside
+the shell; `exit` (or Ctrl+D on an empty line) goes back.
+
+**The prompt** shows where you are, as breadcrumbs, and the wave `≋`:
+
+```text
+SURF ≋>                         the root directory, /
+initrd ▸ bin ≋>                 /initrd/bin
+… ▸ 2026 ▸ October ≋>           a deep directory: the names on the left give way to …
+data ▸ Documents ≋!>            the last command failed
+```
+
+The `!` (in red) says the last command failed; it goes away after one that succeeds.
+`cd` changes the directory (`cd` alone goes to `/`, `cd -` back to the previous one).
+SurfOS has no users and no home directories, so a shell starts at `/`.
+
+**Typing.**
+
+| Keys | What they do |
+|---|---|
+| Left, Right, Home, End (Ctrl+A, Ctrl+E) | move in the line |
+| Backspace, Delete | delete before or under the cursor |
+| Ctrl+U, Ctrl+K, Ctrl+W | delete the whole line, to its end, the word before the cursor |
+| Up, Down | the lines typed before (`history` lists them) |
+| Tab | complete the command or file name; a second Tab lists the choices |
+| Ctrl+L | clear the screen |
+| Ctrl+C | drop the line |
+| Ctrl+D | on an empty line: leave this shell |
+
+Tab completes the first word from the shell's commands, the kernel's and the programs, and
+any other word (or one with a `/` in it) as a file or directory name: one match is filled
+in, several as far as they agree, and a second Tab lists them.
+
+**Long output** stops when the screen is full, with `--More--` on the last row: Space
+shows the next screenful, Enter one more line, and q (or Esc on the keyboard) leaves the
+rest unshown. `help` is long on purpose.
+
+**Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
+`help`, `history`, `set`), then the kernel's (everything in sections 7 to 9: `lsblk`,
+`fdisk`, `mount`, `ifconfig`, `ps`, ...), then a program in `/initrd/bin`; a name with a
+`/` in it is a program's path. The kernel's `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir` and
+`rmdir` come before the programs of the same names, which know more options: run those by
+their path, for example `/initrd/bin/ls -la` (`help` marks them with `*`). `help` lists
+all three groups, `help <name>` one command.
+
+**A line** is words separated by blanks. `"double"` or `'single'` quotes keep blanks
+inside a word, and `\` keeps the next character as it is. `cmd > file` sends what the
+command prints into the file (`>>` adds to its end), `cmd < file` makes a program read
+the file, `cmd &` runs a program in the background, and `;` separates commands. `$?` is
+the status of the last command (`echo $?`); there are no other variables, no wildcards
+and no pipes. The kernel's commands can be redirected too, which is a quick way to keep
+what they say: `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the
+screen.
+
+**Statuses.** 0 is success, 1 a failure, 2 a command used the wrong way, 126 a program
+that could not be started, 127 no such command, 137 a program the kernel killed. A
+program that ends with another status says `[exit status N]`.
+
+**Settings.** `set` lists them, `set <key> <value>` changes one for this shell, and
+`/initrd/etc/surfsh.conf` has the values every shell starts with:
+
+| Key | Values | |
+|---|---|---|
+| `prompt.unicode` | `on`, `off` | `off` draws the prompt in ASCII: `initrd > bin ~>` |
+| `prompt.color` | `on`, `off` | the colours (light blue prompt, teal typing, red `!`) |
+| `prompt.max_depth` | 2 to 16 (5) | how many names the prompt shows at most |
+
+**The characters on the screen.** The console draws accented letters, box drawing, some
+Greek and symbols, and the prompt's `▸ ≋ …` (the characters of code page 437); anything
+else shows as `?`. Letters beyond ASCII cannot be typed yet.
+
+**When the shell cannot run.** If surfsh is missing, or crashes three times within 30
+seconds, `init` gives that console the kernel's own shell as a **recovery console**: its
+prompt is `SURF ≋?>`, and a line above it says why. Every kernel command works there, and
+`surfsh` starts the shell by hand. The GRUB entry **SurfOS (kernel shell)** puts the
+kernel's shell on every console on purpose; its prompt is `SURF ≋#>`, because it runs with
+the kernel's privileges.
+
+## 11. When something goes wrong
 
 | What you see | What it means, what to do |
 |---|---|
@@ -442,7 +528,10 @@ ramdisks, and refuse:
 | `fdisk` or `mkfs` says it will not change a drive | The line after it says why: the boot drive, not a USB drive, or something on it is mounted (`umount` or `eject` first). |
 | `… is busy: it holds the current directory` | `cd /`, then `umount` or `eject` again. |
 | `+FAT32: usb1p1 was not unmounted cleanly` | The stick was pulled out without `eject`. If files look wrong, let the Mac check it (*Disk Utility* → *First Aid*). |
-| A file name is missing letters | It has accented or other non-ASCII letters, which the console cannot show; the file itself is fine. |
+| A file name shows a `?` | It has a character the console cannot draw (section 10); the file itself is fine. |
+| `--More--` on the last row | The output is longer than the screen: Space shows the next screenful, Enter one more line, q the rest is not shown. |
+| The prompt ends in `≋!>` | The last command failed and said why; the mark goes away after one that succeeds. |
+| The prompt is `SURF ≋?>`, with a line about a *recovery console* above it | surfsh could not run on that console (missing, or it crashed three times within 30 seconds), so the kernel's own shell took over. Every command still works and `surfsh` starts the shell by hand; please report the line. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
 
@@ -461,7 +550,8 @@ power button.
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
-| USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing or showing letters beyond ASCII |
+| USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII |
+| The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, the kernel's commands; UTF-8 on the screen | Pipes, variables, wildcards, job control |
 
 ## How it works
 
@@ -473,9 +563,11 @@ power button.
   DMA heap go (`mm/pmm.c`); they used to sit at fixed addresses where UEFI firmware keeps
   data. RAM above 4 GB is counted with 64-bit arithmetic and left unused.
 * **Screen.** `driver/framebuffer.c` draws the console's cells into the firmware's
-  framebuffer with an 8x16 font (Spleen), scaled by the largest whole number at which
-  640x400 fits; the grid then takes as many cells as the screen holds (120x33 at
-  1920x1080), and the console follows its size. A framebuffer above 4 GB is reached with a
+  framebuffer with an 8x16 font, scaled by the largest whole number at which 640x400
+  fits; the grid then takes as many cells as the screen holds (120x33 at 1920x1080), and
+  the console follows its size. A cell holds a code page 437 character, into which the
+  console decodes UTF-8; the font has those 256 characters, from Spleen, with SurfOS's
+  `▸` and `≋` drawn for it. A framebuffer above 4 GB is reached with a
   4 MB page (PSE-36), write-combining through PAT.
 * **profile=laptop** (`kernel/main.c`): ACPI tables, the local APIC in virtual wire mode
   with the I/O APICs masked, the 8042 set up again and polled, ISA devices skipped, only
@@ -496,18 +588,25 @@ power button.
   specification lays it out, which macOS and Linux check without complaint. One rule,
   `bdev_may_format()` in `driver/bdev.c`, decides what `fdisk` and `mkfs` may change.
 * **Programs** (`user/`). User programs run in ring 3 and link `libsurf`, a small C
-  library (stdio, stdlib, string, dirent, time, errno) over 31 system calls; `edit` uses
+  library (stdio, stdlib, string, dirent, time, errno) over 33 system calls; `edit` uses
   the console's raw mode and a subset of ANSI escape sequences.
+* **The shell** (`user/surfsh/`, `shell/prompt.c`). `init` starts `/initrd/bin/surfsh` on
+  every console and starts it again when it ends. It edits the line in raw mode, draws
+  the prompt with the same renderer as the kernel's own shell, and runs the kernel's
+  commands inside its own task through two system calls, which can also send their output
+  to a file. A pager in the terminal layer stops each command's output after a
+  screenful.
 
-The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14 and 16, and the original briefs in
-[superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md)
-and [superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md).
+The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16 and 17, and the original briefs in
+[superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md),
+[superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md)
+and [superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md).
 
 ## Make targets
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 11 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 12 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image
 ```
