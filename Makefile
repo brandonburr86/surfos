@@ -312,6 +312,20 @@ $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
+# the console and its pager (10/6/26): the real console.c, tty.c and cp437.c on the host, with pager_bridge.c for
+# the rest of the kernel and pager_shim/ for port I/O and the interrupt flag; the test runs every task as a thread
+PAGER_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+PAGER_OBJ   = $(BUILD)/host/pager/kernel/console.o $(BUILD)/host/pager/kernel/tty.o $(BUILD)/host/pager/driver/cp437.o \
+              $(BUILD)/host/pager/tests/host/pager_bridge.o
+$(BUILD)/host/pager/%.o: %.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (pager test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(PAGER_FLAGS) -c $< -o $@
+
+$(BUILD)/host/test_pager: tests/host/test_pager.c $(PAGER_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $^ -o $@
+
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
 $(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
@@ -334,7 +348,7 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
-          $(BUILD)/host/test_cp437
+          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -345,6 +359,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_mkfs
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
+	$(BUILD)/host/test_pager
 
 clean:
 	rm -rf build
@@ -353,4 +368,5 @@ help:
 	@sed -n '2,15p' Makefile
 
 .PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
--include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d)
+-include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
+                           $(BUILD)/host/pager/tests/host/*.d)
