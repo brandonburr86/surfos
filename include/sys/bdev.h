@@ -97,7 +97,8 @@ int bdev_flush(struct bdev *d);             /* the disk's write cache to its med
    (a mount of the disk or of any of its partitions counts). */
 int bdev_may_format(struct bdev *d, char *why, size_t size);
 
-void bdev_print(void);                      /* lsblk */
+void bdev_print(void);                      /* lsblk: size, bus, removable, table and type, model or name, status */
+void bdev_print_io(void);                   /* lsblk -s: blocks read and written */
 const char *bdev_part_type_name(u8 type);
 
 /* part.c: register the partitions of a disk (MBR with logical partitions from 5, or GPT) as

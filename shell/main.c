@@ -158,7 +158,10 @@ static void cmd_himem(int argc, char **argv) {
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
-static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+static void cmd_lsblk(int argc, char **argv) {
+    if(argc > 1 && !strcmp(argv[1], "-s")) bdev_print_io();
+    else bdev_print();
+}
 
 /**** network ****/
 
@@ -589,7 +592,7 @@ static const struct command commands[] = {
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
-    { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
+    { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
     { "ls",        "[path]",    "list a directory", cmd_ls },

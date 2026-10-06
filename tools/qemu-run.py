@@ -39,7 +39,8 @@ SMOKE = [
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
-    ('lsblk',   ['rd0', 'hda', 'hda1']),
+    ('lsblk',   ['rd0', 'ram', 'mounted', 'hda', 'ata', 'disk mbr', 'internal: never formatted', 'hda1', 'part mbr FAT16', 'mounted']),
+    ('lsblk -s', ['READ', 'rd0', 'hda1']),
     ('hexdump hda 0', ['55 aa']),
     ('mount',   ['rd0', '/initrd', 'tarfs']),
     ('ls /initrd', ['etc/', 'motd']),
