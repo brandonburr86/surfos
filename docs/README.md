@@ -5,12 +5,13 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32 |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, and networking it through a USB Ethernet adapter |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, and keeping files on a second USB stick |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
+| [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
 
 ## Building and running
 
@@ -20,7 +21,8 @@ make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quit
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
-make test-usb     # boot that image under QEMU + OVMF from an emulated USB stick
+make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (11 scenarios)
+make unittest     # host unit tests
 ```
 
 Needs `gcc` with 32-bit support, `binutils`, `nasm`, `qemu-system-x86` and `python3`.
@@ -38,4 +40,8 @@ milestone M7 it also boots from a USB drive on a UEFI PC: under OVMF from an emu
 USB stick it reaches the shell on a framebuffer console with the PS/2 keyboard and no
 serial port, with or without a PIT, and the owner has booted it on the Lenovo IdeaPad.
 Since M8 it drives the laptop's USB 3 controller and USB Ethernet adapters (CDC ECM/NCM,
-such as RTL8153 ones); the owner reports that the network works on the laptop.
+such as RTL8153 ones); the owner reports that the network works on the laptop. Since
+M9 (under emulation so far) a second USB stick holds files: `fdisk` (MBR or GPT), `mkfs`
+(FAT32 that macOS checks clean), `mount`/`umount`/`eject` by hand, user programs on a
+small C library, `sh` and a text editor, while the boot drive and internal disks are
+never repartitioned or formatted. The console fills the screen (120x33 at 1920x1080).

@@ -9,7 +9,8 @@ This image uses Debian bookworm with GCC multilib on `linux/amd64`, producing EL
 x86 kernels. Docker emulates amd64 on Apple Silicon. The host blibc tests contain
 x86 inline assembly too, so they must run in the x86 container rather than on an
 ARM host. The image includes Python 3, mtools for the disk images, QEMU for the test
-suite, and GRUB's EFI files and OVMF for the USB image. No host compiler installation
+suite, GRUB's EFI files and OVMF for the USB image, and dosfstools, fdisk and gdisk, which
+build and check the storage test images (`mkfs.fat`, `fsck.fat`, `sfdisk`, `sgdisk`). No host compiler installation
 or Documents bind mount is required. The source revision recorded in the USB image's
 manifest is passed in from the host's git (the container's copy has no `.git`).
 
@@ -20,7 +21,7 @@ manifest is passed in from the host's git (the container's copy has no `.git`).
 ./devenv/boottest.sh 15 help  # PS/2 keyboard + VGA screenshot
 ./devenv/build.sh O=2         # optimized kernel and user programs
 O=2 ./devenv/run.sh           # run the optimized kernel
-./devenv/build.sh unittest   # native host blibc tests inside Docker
+./devenv/build.sh unittest   # the host unit tests inside Docker (blibc, boot info, framebuffer, USB, partitions, mkfs, C library)
 ./devenv/build.sh test-all   # complete QEMU suite at O0 and O2 inside Docker
 ./devenv/build.sh clean      # successful even though no kernel remains
 ```
@@ -30,7 +31,7 @@ The USB image for UEFI PCs (`docs/USB-BOOT.md`):
 ```sh
 ./devenv/build-usb.sh         # build/usb/surfos-ideapad-15iil05.img (+ .sha256, build-manifest.json), O=2
 O=0 ./devenv/build-usb.sh     # the same with the debug build
-./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from an emulated USB stick: 8 scenarios
+./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from emulated USB sticks: 11 scenarios
 ./devenv/test-usb.sh --screen # just boot it without a serial port and print the screen
 ./devenv/run-usb.sh           # boot a copy of it in a QEMU window to try it by hand
 ```
@@ -44,7 +45,8 @@ Docker Desktop must be running, and the invoking process must have access to its
 socket. Host `run.sh` and `boottest.sh` require `qemu-system-i386` on PATH.
 
 The image `surfos-modern-toolchain` and volume `surfos-modern-build` are separate
-from the original restoration environment. Source edits and deletions are synced
+from the original restoration environment. `SURFOS_VOLUME=<name>` selects another
+volume, so that two checkouts (git worktrees, for example) can build at the same time. Source edits and deletions are synced
 into the volume; generated `build/` files stay there for incremental builds.
 Docker rebuilds the image using its layer cache each invocation so Dockerfile
 changes take effect. A failed build returns a nonzero status and keeps the last

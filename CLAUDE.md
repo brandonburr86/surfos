@@ -17,22 +17,27 @@ make              # build/O0/surfos.bin (O=2 for an optimised build)
 make run          # boot in QEMU on this terminal over the serial console; Ctrl-A x quits
 make test         # headless boot + smoke test over the serial console; exit code 0 = pass
 make test-all     # the smoke test at -O0 and -O2
-make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer, USB/NCM parsing
+make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer, USB/NCM parsing,
+                  # partition tables (+ sfdisk/sgdisk cross-checks), mkfs (+ fsck.fat), the user C library
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from an emulated USB stick: 8 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 11 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
-make images       # build/images/test.img (MBR + FAT16 partition) and initrd.tar (rootfs/ + the user programs); run/test attach them
+make images       # build/images/test.img (MBR + FAT16 partition) and initrd.tar (rootfs/ + the user programs); run/test attach them;
+                  # foreign-fat32.img (made by mkfs.fat + mcopy: long, accented, macOS-style names) for the storage scenario
 make user         # just the user programs, build/O0/user/bin/
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --shell ps memstat     # ad hoc commands
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --disk build/images/test.img --initrd build/images/initrd.tar --shell lsblk
+python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --scratch 64 --shell 'fdisk rd1'  # a blank ramdisk rd1 to partition and format
 # the harness gives QEMU a user-mode network (gateway 10.0.2.2) with a port forward to guest port 7 and a host HTTP server (httpport= on the kernel command line)
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n'  # VGA text dump
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append profile=laptop --shell drivers acpi
 python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --shell drivers   # UEFI boot, serial
 python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --screen --keys 'help\n'  # no serial: keyboard + framebuffer
 python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --extra '-netdev user,id=n0 -device usb-net,bus=xhci.0,netdev=n0' --shell lsusb dhcp 'ping 10.0.2.2'  # a USB Ethernet adapter
+python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --extra '-drive if=none,id=d1,format=raw,file=/tmp/stick.img -device usb-storage,bus=xhci.0,drive=d1,removable=on' --shell lsblk 'fdisk usb1'  # a data stick (--extra splits at spaces: no spaces in the path)
+python3 tools/qemu-usb.py --image build/usb/surfos-ideapad-15iil05.img --test --scenario storage   # one scenario
 ```
 
 Every change must build with `make` and pass `make test-all` before it is committed;
@@ -49,18 +54,22 @@ boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg f
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile)
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
-driver/    serial console, PCI (+ id tables), driver table, block layer (bdev, ramdisk, ATA, MBR), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
+driver/    serial console, PCI (+ id tables), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
+           (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console; fonts/ has the Spleen source and licence)
            usb/: xhci.c (USB 3 host controller, polled), usb.c (enumeration, the usb thread, lsusb),
-           usbnet.c (CDC ECM/NCM Ethernet adapters as eth0), usbdesc.c (descriptor and NCM parsing, host-tested)
-fs/        VFS (mounts, paths, files, descriptors), block cache, tarfs (initrd), FAT12/16/32, devfs
+           usbnet.c (CDC ECM/NCM Ethernet adapters as eth0), msc.c (USB sticks: Bulk-Only Transport + SCSI, as usb0, usb1, ...),
+           usbdesc.c (descriptor and NCM parsing, host-tested)
+fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS resolver
-user/      user programs: user.ld, libsurf (crt0, syscall wrappers), include/surf.h, bin/*.c (built into the initrd's /bin)
+user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno), include/ (the
+           standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv, rm, mkdir, df, fstest, ...)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
-shell/     the ring-0 shell and demos
+shell/     the ring-0 shell (main.c), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness, mkimage.py (disk image and initrd), mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py
-tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing), test_mkusb.py, test_devenv.py
+tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library), test_part_tools.py,
+           test_mkusb.py, test_devenv.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
@@ -74,6 +83,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   ACPI tables and the boot CPU's local APIC (virtual wire, its timer as a fallback) are
   in scope; x86-64, SMP and I/O APIC routing are not. The USB stack (milestone M8) polls the
   xHCI event ring from a kernel timer rather than relying on the controller's interrupt.
+* Storage safety (milestone M9): `bdev_may_format()` in `driver/bdev.c` is the only rule
+  for what may be repartitioned or formatted: USB drives and ramdisks, never an ATA
+  (internal) disk, never the SurfOS boot drive (`protect`, set by `driver/part.c` from the
+  volume label SURFOSUSB), never anything read-only, gone or mounted. Anything new that
+  writes a partition table or a file system goes through it, shows what it will change and
+  asks for the device's name. Nothing mounts a USB drive by itself.
 * Two profiles: without `profile=laptop` on the kernel command line (QEMU `-kernel`, the
   GRUB ISO) the boot must stay exactly as it was; `profile=laptop` (the USB image) is real
   UEFI hardware. Every hardware wait is bounded and a missing legacy device is a normal
@@ -114,3 +129,13 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `dmesg` record plugging and errors. Endpoint 0 transfers are synchronous and belong to
   the usb thread (or boot); bulk/interrupt `done` callbacks run in the timer interrupt.
   QEMU's `device_del`/`device_add` on the monitor unplug and plug a USB device.
+* Storage: `lsblk` (STATUS says why a device may not be changed), `fdisk <disk>` alone
+  (only reads), `mount`, `df`, `lsblk -s` (blocks moved), `hexdump <dev> <block>`,
+  `readbench`, `fsbench`; `+PART:` and `+FAT` lines in `dmesg`. A device that was unplugged
+  stays in the list as gone (never freed while referenced); its mounts fail cleanly until
+  `umount`. The storage scenario checks the sticks afterwards with macOS `fsck_msdos`
+  (`hdiutil attach -nomount -readonly`) and `fsck.fat` (host or the devenv container).
+* User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
+  it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
+  The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
+  `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides.
