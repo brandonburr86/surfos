@@ -173,13 +173,19 @@ def find_firmware(code, vars_):
 # ---- the screen ----------------------------------------------------------------------------
 
 def load_font():
+    """{glyph rows: character} from the console font. 10/6/26: the font holds code page 437
+    (tools/bdf2c.py), and each entry's comment names its code point (/* U+25B8 ▸ */), which
+    is the character a cell with that glyph shows. The blank glyphs (the empty cell, space,
+    no-break space) read as a space; were two characters to share a glyph, ASCII would win,
+    then the lower index."""
     glyphs = {}
-    src = open(FONT_C).read()
-    for m in re.finditer(r'\[(\d+)\] = \{ ([^}]*) \}', src):
-        glyphs[tuple(int(x, 16) for x in m.group(2).split(','))] = chr(int(m.group(1)))
+    src = open(FONT_C, encoding='utf-8').read()
+    entries = re.findall(r'\[0x([0-9a-fA-F]{2})\] = \{ ([^}]*) \}, /\* U\+([0-9A-Fa-f]{4,6})', src)
+    if len(entries) != 256:
+        sys.exit(f'{FONT_C}: could not read the font table ({len(entries)} of 256 entries)')
+    for index, rows, code in sorted(entries, key=lambda e: (not 0x20 <= int(e[0], 16) <= 0x7e, int(e[0], 16))):
+        glyphs.setdefault(tuple(int(x, 16) for x in rows.split(',')), chr(int(code, 16)))
     glyphs[(0,) * 16] = ' '
-    if len(glyphs) < 95:                        # printable ASCII; space is the blank cell
-        sys.exit(f'{FONT_C}: could not read the font table')
     return glyphs
 
 

@@ -3,12 +3,13 @@
    control characters), the UTF-8 decoder (ASCII, 2-, 3- and 4-byte sequences, characters
    outside the set, overlong forms, surrogates, values above U+10FFFF, stray continuation
    bytes, sequences cut short by ASCII or ESC, 0xFF), and the framebuffer font in the same
-   order (every character that is not blank has a glyph, ▸ and ≋ have their own). Built
-   like the kernel objects and run by `make unittest`. */
+   order (every character that is not blank has a glyph of its own, ▸ and ≋ have their
+   shapes). Built like the kernel objects and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
 #include <sys/cp437.h>
+#include <sys/framebuffer.h>
 
 void exit(int status);
 
@@ -160,9 +161,76 @@ static void test_decoder(void) {
     check(n == 1 && cells[0] == 0x82 && d.have == 0, "and the decoder is clean afterwards");
 }
 
+/**** the framebuffer font (driver/font8x16.c, tools/bdf2c.py) ****/
+
+static int blank(int i) {
+    int y;
+    for(y = 0; y < FONT_HEIGHT; y++) if(font8x16[i][y]) return 0;
+    return 1;
+}
+
+/* the rows with ink in them: first and last, and how many separate bands they make */
+static int ink_rows(int i, int *first, int *last) {
+    int y, bands = 0, prev = 0;
+    *first = *last = -1;
+    for(y = 0; y < FONT_HEIGHT; y++) {
+        int on = font8x16[i][y] != 0;
+        if(on) {
+            if(*first < 0) *first = y;
+            *last = y;
+            if(!prev) bands++;
+        }
+        prev = on;
+    }
+    return bands;
+}
+
+/* a row that is one run of pixels: its first column and length (-1: not one run) */
+static int run(u8 v, int *len) {
+    int x = 0, n = 0;
+    while(x < 8 && !(v & (0x80 >> x))) x++;
+    while(x + n < 8 && (v & (0x80 >> (x + n)))) n++;
+    *len = n;
+    return n && (u8)(v << (x + n)) == 0 ? x : -1;
+}
+
+static void test_font(void) {
+    int i, j, ok, first, last, mid, start, len, len0;
+
+    for(ok = 1, i = 0; i < 256; i++) if(blank(i) != (i == 0x00 || i == 0x20 || i == 0xFF)) ok = 0;
+    check(ok, "font: every character that is not blank has a glyph; 0x00, space and no-break space are blank");
+    for(ok = 1, i = 0; i < 256; i++)
+        for(j = i + 1; j < 256; j++) if(!blank(i) && !memcmp(font8x16[i], font8x16[j], FONT_HEIGHT)) ok = 0;
+    check(ok, "font: no two characters share a glyph (the screen tests tell them apart by their pixels)");
+    check(font8x16['A'][2] == 0x7c && font8x16['~'][7] == 0x7e, "font: ASCII is where it was");
+
+    /* ▸: a solid triangle pointing right, inside the letters' x-height (rows 5-11): every row a
+       run from the same column, growing to the middle row and shrinking again */
+    ok = ink_rows(0x10, &first, &last) == 1 && first >= 5 && last <= 11 && (last - first) % 2 == 0;
+    mid = (first + last) / 2;
+    start = run(font8x16[0x10][mid], &len0);
+    for(i = 1; ok && i <= mid - first; i++) {
+        int s1 = run(font8x16[0x10][mid - i], &len), l1 = len, s2 = run(font8x16[0x10][mid + i], &len);
+        if(s1 != start || s2 != start || l1 != len || len > len0 || len < 1) ok = 0;
+        len0 = len;
+    }
+    check(ok && start >= 0, "font: ▸ (0x10) is a small solid triangle pointing right, in the x-height");
+
+    /* ≋: three tildes, the same one three times, one row apart */
+    ok = ink_rows(0xF7, &first, &last) == 3 && last - first == 7;
+    for(i = 0; ok && i < 2; i++) {
+        if(!font8x16[0xF7][first + i] || memcmp(&font8x16[0xF7][first], &font8x16[0xF7][first + 3 * (i + 1)], 2)) ok = 0;
+    }
+    check(ok, "font: ≋ (0xF7) is three tildes");
+    check(ink_rows(0xF0, &first, &last) == 3 && memcmp(font8x16[0xF0], font8x16[0xF7], FONT_HEIGHT),
+          "font: ≡ (0xF0) has three bands too, and is another glyph");
+    check(ink_rows(0xF9, &first, &last) == 1 && first >= 9, "font: … (0xF9) sits on the baseline");
+}
+
 int main(void) {
     test_tables();
     test_decoder();
+    test_font();
     printf("%s: %d checks, %d failures\n", failures ? "CP437 UNIT TESTS FAILED" : "CP437 UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);
     return 0;

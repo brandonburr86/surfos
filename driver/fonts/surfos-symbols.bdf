@@ -1,0 +1,131 @@
+STARTFONT 2.1
+COMMENT /*
+COMMENT  * SurfOS symbols 8x16, 10/6/26
+COMMENT  * Copyright (c) 2026, Brandon Burr
+COMMENT  *
+COMMENT  * The code page 437 characters the console needs that Spleen 8x16
+COMMENT  * (spleen-8x16.bdf next to this file) does not have, drawn for SurfOS
+COMMENT  * in Spleen's manner: SurfOS's breadcrumb triangle and wave (the prompt,
+COMMENT  * shell/prompt.c), and the pointer and right angle at 0x11 and 0x1C.
+COMMENT  * tools/bdf2c.py takes a glyph from here only where Spleen has none.
+COMMENT  *
+COMMENT  * U+25B8 a small solid triangle: Spleen's triangles are steps of two
+COMMENT  *        pixels in the x-height band (rows 5-11); this one is 5x5 in
+COMMENT  *        rows 6-10, so it sits on the same centre row as the letters.
+COMMENT  * U+224B three of the tildes of Spleen's U+2248, three rows apart,
+COMMENT  *        centred where = and > are (rows 3-10).
+COMMENT  * U+25C4 Spleen's U+25B2 turned to point left (rows 5-11).
+COMMENT  * U+221F the right angle in the rows of Spleen's U+2310 and U+00AC.
+COMMENT  *
+COMMENT  * Released under the BSD 2-Clause license, the same terms as Spleen
+COMMENT  * (LICENSE-spleen in this directory, with this copyright line), so the
+COMMENT  * table generated from both fonts, driver/font8x16.c, has one license.
+COMMENT  *
+COMMENT  * SPDX-License-Identifier: BSD-2-Clause
+COMMENT  */
+FONT -surfos-symbols-medium-r-normal--16-160-72-72-C-80-ISO10646-1
+SIZE 16 72 72
+FONTBOUNDINGBOX 8 16 0 -4
+STARTPROPERTIES 7
+FAMILY_NAME "SurfOS Symbols"
+WEIGHT_NAME "Medium"
+SPACING "C"
+FONT_ASCENT 12
+FONT_DESCENT 4
+COPYRIGHT "Copyright (c) 2026, Brandon Burr"
+DEFAULT_CHAR 32
+ENDPROPERTIES
+CHARS 4
+STARTCHAR RIGHT ANGLE
+ENCODING 8735
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 16 0 -4
+BITMAP
+00
+00
+00
+00
+00
+00
+C0
+C0
+C0
+FE
+00
+00
+00
+00
+00
+00
+ENDCHAR
+STARTCHAR TRIPLE TILDE
+ENCODING 8779
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 16 0 -4
+BITMAP
+00
+00
+00
+32
+4C
+00
+32
+4C
+00
+32
+4C
+00
+00
+00
+00
+00
+ENDCHAR
+STARTCHAR BLACK RIGHT-POINTING SMALL TRIANGLE
+ENCODING 9656
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 16 0 -4
+BITMAP
+00
+00
+00
+00
+00
+00
+60
+78
+7C
+78
+60
+00
+00
+00
+00
+00
+ENDCHAR
+STARTCHAR BLACK LEFT-POINTING POINTER
+ENCODING 9668
+SWIDTH 500 0
+DWIDTH 8 0
+BBX 8 16 0 -4
+BITMAP
+00
+00
+00
+00
+00
+06
+1E
+7E
+FE
+7E
+1E
+06
+00
+00
+00
+00
+ENDCHAR
+ENDFONT

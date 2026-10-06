@@ -1,34 +1,54 @@
 #!/usr/bin/env python3
-"""Turn an 8x16 BDF bitmap font into the C table the framebuffer console draws with.
+"""Turn 8x16 BDF bitmap fonts into the C table the framebuffer console draws with.
 
-    tools/bdf2c.py driver/fonts/spleen-8x16.bdf > driver/font8x16.c
+    tools/bdf2c.py driver/fonts/spleen-8x16.bdf driver/fonts/surfos-symbols.bdf > driver/font8x16.c
 
-Only the printable ASCII range (32-126) is taken: the console stores one byte per cell
-and kputch() only ever puts those characters on the screen. Every other entry is blank.
-The glyph rows are placed by the BDF bounding boxes, so a glyph that is shorter than the
-cell sits on the font's baseline. Used once to generate driver/font8x16.c; kept so the
-table can be checked against, or regenerated from, the font it came from.
+A console cell holds one byte, a code page 437 character (10/6/26). The table has all 256
+of them in that order: the code point of each index comes from cp437_unicode[] in
+driver/cp437.c, so the font and the console agree (SurfOS's U+25B8, U+224B and U+2026 at
+0x10, 0xF7 and 0xF9 included). Each glyph is taken from the first font that has it: Spleen,
+then SurfOS's own symbols for what Spleen lacks, which are listed on stderr. Index 0x00,
+the empty cell, is blank. Every entry carries a comment naming its code point
+("/* U+25B8 ▸ */"): tools/qemu-usb.py reads them to recognise the characters in
+screenshots. The glyph rows are placed by the BDF bounding boxes, so a glyph that is
+shorter than the cell sits on the font's baseline. Run by hand when a font changes; kept so
+the table can be checked against, or regenerated from, the fonts it came from.
 """
+import os
+import re
 import sys
 
 WIDTH, HEIGHT = 8, 16
+CP437_C = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'driver', 'cp437.c')
+
+
+def cp437_table(path=CP437_C):
+    """the 256 code points of cp437_unicode[] in driver/cp437.c"""
+    src = open(path, encoding='utf-8').read()
+    m = re.search(r'cp437_unicode\[256\] = \{(.*?)\};', src, re.S)
+    if not m:
+        sys.exit(f'{path}: no cp437_unicode[256] table')
+    body = re.sub(r'/\*.*?\*/', '', m.group(1), flags=re.S)
+    table = [int(v, 16) for v in re.findall(r'0x([0-9A-Fa-f]+)', body)]
+    if len(table) != 256:
+        sys.exit(f'{path}: cp437_unicode[] has {len(table)} entries, not 256')
+    return table
 
 
 def parse(path):
+    """{code point: 16 rows} of a BDF font whose cell is WIDTH x HEIGHT"""
     glyphs = {}
     ascent = None
     with open(path, encoding='ascii') as f:
         lines = f.read().splitlines()
     i = 0
-    descent = 0
     while i < len(lines):
         words = lines[i].split()
         if words and words[0] == 'FONTBOUNDINGBOX':
             w, h, _, yoff = map(int, words[1:5])
             if (w, h) != (WIDTH, HEIGHT):
                 sys.exit(f'{path}: font is {w}x{h}, not {WIDTH}x{HEIGHT}')
-            descent = -yoff
-            ascent = h - descent
+            ascent = h + yoff
         elif words and words[0] == 'STARTCHAR':
             code, bbx, rows = None, None, []
             i += 1
@@ -45,7 +65,7 @@ def parse(path):
                         i += 1
                     break
                 i += 1
-            if code is not None and 32 <= code <= 126:
+            if code is not None and code >= 0:
                 glyphs[code] = place(bbx, rows, ascent)
         i += 1
     return glyphs
@@ -64,28 +84,63 @@ def place(bbx, rows, ascent):
     return cell
 
 
+def describe(u):
+    """the comment of an entry: the code point, and the character where it shows"""
+    if u == 0:
+        return 'U+0000 the empty cell'
+    if u == 0x20:
+        return 'U+0020 space'
+    if u == 0xA0:
+        return 'U+00A0 no-break space'
+    return f'U+{u:04X} {chr(u)}'
+
+
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         sys.exit(__doc__)
-    glyphs = parse(sys.argv[1])
-    missing = [c for c in range(32, 127) if c not in glyphs]
+    fonts = [(os.path.basename(p), parse(p)) for p in sys.argv[1:]]
+    table = cp437_table()
+    rows, taken, missing = [], [], []
+    for index, u in enumerate(table):
+        if index == 0:
+            rows.append([0] * HEIGHT)
+            continue
+        for n, (name, glyphs) in enumerate(fonts):
+            if u in glyphs:
+                rows.append(glyphs[u])
+                if n:
+                    taken.append((index, u, name))
+                break
+        else:
+            missing.append(f'0x{index:02X} {describe(u)}')
     if missing:
-        sys.exit(f'{sys.argv[1]}: no glyph for {missing}')
+        sys.exit('no glyph in ' + ', '.join(n for n, _ in fonts) + ' for: ' + '; '.join(missing))
+    for index, u, name in taken:
+        print(f'bdf2c: {fonts[0][0]} has no glyph for 0x{index:02X} {describe(u)}: taken from {name}', file=sys.stderr)
+    others = sorted({name for _, _, name in taken})
     out = sys.stdout
     out.write('/*\nSurfOS Console Font\n--------------------\n')
-    out.write('File: font8x16.c  Date: 10/5/26 (USB boot); generated by tools/bdf2c.py\n')
+    out.write('File: font8x16.c  Date: 10/5/26 (USB boot), 10/6/26 (code page 437); generated by tools/bdf2c.py\n')
     out.write('--------------------\n')
-    out.write('8x16 glyphs for the framebuffer console, printable ASCII only, one byte per row,\n')
-    out.write('the most significant bit leftmost.\n\n')
+    out.write('8x16 glyphs for the framebuffer console, one byte per row, the most significant bit\n')
+    out.write('leftmost: the 256 characters of code page 437 in its order (driver/cp437.c), so a cell\n')
+    out.write('shows on a framebuffer what VGA text mode shows, with SurfOS\'s symbols at 0x10, 0xF7\n')
+    out.write('and 0xF9. Each entry names its code point; index 0x00, the empty cell, is blank.\n\n')
     out.write('The glyphs are Spleen 8x16 by Frederic Cambus (https://github.com/fcambus/spleen),\n')
     out.write('Copyright (c) 2018-2026, Frederic Cambus, under the BSD 2-Clause license: see\n')
-    out.write('driver/fonts/LICENSE-spleen, which also applies to this table.\n*/\n\n')
+    out.write('driver/fonts/LICENSE-spleen, which also applies to this table.')
+    if taken:
+        names = [f'U+{u:04X}' for _, u, _ in taken]
+        names = ', '.join(names[:-1]) + ' and ' + names[-1] if len(names) > 1 else names[0]
+        out.write(' Spleen has no glyph\nfor ' + names + '; ' + ('they come' if len(taken) > 1 else 'it comes') +
+                  ' from ' + ' and '.join(f'driver/fonts/{n}' for n in others) + ',\n'
+                  'drawn for SurfOS in Spleen\'s manner, Copyright (c) 2026, Brandon Burr, under the same\nlicense.')
+    out.write('\n*/\n\n')
     out.write('#include <surfos/types.h>\n#include <sys/framebuffer.h>\n\n')
     out.write('const u8 font8x16[256][FONT_HEIGHT] = {\n')
-    for code in range(32, 127):
-        rows = ', '.join(f'0x{v:02x}' for v in glyphs[code])
-        name = {32: 'space', 92: 'backslash', 39: 'quote'}.get(code, chr(code))
-        out.write(f'    [{code}] = {{ {rows} }}, /* {name} */\n')
+    for index, u in enumerate(table):
+        bits = ', '.join(f'0x{v:02x}' for v in rows[index])
+        out.write(f'    [0x{index:02x}] = {{ {bits} }}, /* {describe(u)} */\n')
     out.write('};\n')
 
 

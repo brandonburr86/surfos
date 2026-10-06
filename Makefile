@@ -292,8 +292,9 @@ $(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/p
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-# the console's character set (10/6/26): code page 437, the UTF-8 decoder
-$(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(HOSTLIB_OBJ)
+# the console's character set (10/6/26): code page 437, the UTF-8 decoder, the font in the same order
+$(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/font8x16.o \
+                          $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
