@@ -7,7 +7,7 @@
 #   make run-vga      same with a VGA window (needs a display); serial on the terminal
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
-#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code
+#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs too)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
@@ -264,11 +264,19 @@ $(BUILD)/host/test_usb: tests/host/test_usb.c $(BUILD)/host/kernel/driver/usb/us
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb
+# mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
+# fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
+$(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
+$(BUILD)/host/test_mkfs: tests/host/test_mkfs.c $(BUILD)/host/kernel/fs/fat_mkfs.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb $(BUILD)/host/test_mkfs
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
 	$(BUILD)/host/test_usb
+	$(BUILD)/host/test_mkfs
 
 clean:
 	rm -rf build

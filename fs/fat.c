@@ -29,6 +29,7 @@ writes nothing.
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
+#include <fs/fat.h>
 #include <mm/kalloc.h>
 #include <blibc_common.h>
 
@@ -1145,6 +1146,29 @@ static bool fat_probe(struct bdev *dev) {
     ok = bpb_sane(b->data);
     brelse(b);
     return ok;
+}
+
+static void copy_label(char *out, const u8 *raw);
+
+/* 10/5/26: what the boot sector says, for mkfs and mount: "FAT32, label TESTVOL" */
+int fat_describe(struct bdev *d, char *buf, size_t n) {
+    struct buf *b = bread(d, 0);
+    const u8 *bs;
+    u32 total, spf, data, clusters;
+    char label[12];
+    if(!b) return -1;
+    bs = b->data;
+    if(!bpb_sane(bs)) { brelse(b); return -1; }
+    total = le16(bs + 19) ? le16(bs + 19) : le32(bs + 32);
+    spf = le16(bs + 22) ? le16(bs + 22) : le32(bs + 36);
+    data = le16(bs + 14) + bs[16] * spf + (le16(bs + 17) * 32 + 511) / 512;
+    clusters = total > data ? (total - data) / bs[13] : 0;
+    label[0] = 0;
+    if(le16(bs + 22) && bs[38] == 0x29) copy_label(label, bs + 43);
+    else if(!le16(bs + 22) && bs[66] == 0x29) copy_label(label, bs + 71);
+    brelse(b);
+    snprintf(buf, n, "FAT%i%s%s", clusters < 4085 ? 12 : clusters < 65525 ? 16 : 32, label[0] ? ", label " : "", label);
+    return 0;
 }
 
 /* a label for people: trailing spaces gone, "NO NAME" is none, anything unusual a '_' */
