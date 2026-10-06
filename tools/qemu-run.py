@@ -34,6 +34,18 @@ PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR
 MORE = b'--More--'
 # fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
 CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
+# A VGA cell's byte is a code page 437 character (driver/cp437.c, 10/6/26): the graphic set,
+# with SurfOS's ▸ ≋ … at 0x10, 0xF7 and 0xF9 where VGA draws ► ≈ ∙. The empty cell reads as a space.
+CP437 = (' ☺☻♥♦♣♠•◘○◙♂♀♪♫☼▸◄↕‼¶§▬↨↑↓→←∟↔▲▼' + ''.join(map(chr, range(0x20, 0x7f))) + '⌂' +
+         bytes(range(0x80, 0xf7)).decode('cp437') + '≋°…' + bytes(range(0xfa, 0x100)).decode('cp437'))
+assert len(CP437) == 256
+# what `pagetest utf8` prints, as the console draws it: the euro sign is not in code page 437
+UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
+
+
+def cells_text(cells):
+    """VGA character bytes (every other byte of a text page) as the text the console shows"""
+    return ''.join(CP437[b] for b in cells)
 
 
 def answered(cmd, question, answer, expects):
@@ -169,6 +181,10 @@ SMOKE = [
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
+    # 10/6/26 (the console's character set, the pager): a line of UTF-8 reaches the serial port as it
+    # was printed, and VGA memory as code page 437 cells
+    ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
+    ('@utf8-screen', []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
@@ -414,10 +430,7 @@ class Qemu:
         d = self.vga_memory()
         if d is None:
             return '(screen dump failed)'
-        rows = []
-        for r in range(25):
-            cells = (d[(r * 80 + c) * 2] for c in range(80))
-            rows.append(''.join(chr(b) if 32 <= b < 127 else ' ' for b in cells).rstrip())
+        rows = [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
         return '\n'.join(rows).rstrip('\n')
 
     def sendkeys(self, spec):
@@ -523,7 +536,7 @@ def ansi_screen_check(q):
     d = q.vga_memory() or bytes(4000)
 
     def row(r):
-        return ''.join(chr(b) if 32 <= b < 127 else ' ' for b in d[r * 160:(r + 1) * 160:2]).rstrip()
+        return cells_text(d[r * 160:(r + 1) * 160:2]).rstrip()
 
     def attr(c, r):
         return d[(r * 80 + c) * 2 + 1]
@@ -542,6 +555,16 @@ def console_switch_check(q):
     ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
     ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
     return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
+
+
+def utf8_screen_check(q):
+    """after `run pagetest utf8`: its line read back from VGA memory, cell by cell"""
+    return ('UTF-8 on the VGA console: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ as code page 437 cells, € as ?',
+            UTF8_SAMPLE in q.screen().splitlines())
+
+
+# the steps of the console's character set and the pager (10/6/26) that the host carries out
+CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check}
 
 
 def host_checks(q):
@@ -610,6 +633,9 @@ def run_smoke(q, boot_timeout):
                 continue
             if cmd == '@console-switch':
                 results.append(console_switch_check(q))
+                continue
+            if cmd in CONSOLE_CHECKS:
+                results.append(CONSOLE_CHECKS[cmd](q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))

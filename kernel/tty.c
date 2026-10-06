@@ -5,6 +5,7 @@ File: tty.c     Date: 10/3/26 (roadmap C1)
 --------------------
 10/5/26: raw mode for full-screen programs (tty.h): no echo, no line editing, keys as
 the bytes a terminal sends. It ends with the task that set it.
+10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8.
 */
 
 #include <surfos/types.h>
@@ -16,6 +17,7 @@ the bytes a terminal sends. It ends with the task that set it.
 #include <surfos/irq.h>
 #include <surfos/interrupt.h>
 #include <sys/serial.h>
+#include <sys/cp437.h>
 #include <blibc_common.h>
 
 struct tty ttys[NUM_CONSOLES];
@@ -217,10 +219,16 @@ int tty_read(struct tty *t, char *buf, size_t len) {
 
 /**** console switching ****/
 
-/* the last column of a row with something in it, -1 for an empty row */
+/* the last column of a row with something in it, -1 for an empty row. 10/6/26: a cell is a
+   code page 437 character, and only the empty cell, space and no-break space are blank
+   (▸ is 0x10, below ' ') */
 static int last_used(surf_console *con, int row) {
     int col, last = -1;
-    for(col = 0; col < (int)COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    u_char ch;
+    for(col = 0; col < (int)COLUMNS; col++) {
+        ch = con->vmem[(row * COLUMNS + col) * 2];
+        if(ch != 0 && ch != ' ' && ch != 0xFF) last = col;
+    }
     return last;
 }
 
@@ -232,18 +240,19 @@ static int last_used(surf_console *con, int row) {
    one in use (or the cursor's), each up to its last character, and the cursor is put
    back by moving up and right from there rather than to a screen position: a terminal as
    large as the grid shows the screen exactly, a smaller one shows its bottom part, with
-   rows longer than the terminal is wide wrapped. */
+   rows longer than the terminal is wide wrapped. 10/6/26: each cell goes as the UTF-8 of
+   its code page 437 character (the terminal is taken to speak UTF-8, as for the mirror). */
 static void serial_redraw(surf_console *con) {
-    char seq[16];
-    int row, col, rows = con->loc.y;
+    char seq[16], utf[CP437_UTF8_MAX];
+    int row, col, rows = con->loc.y, n, k;
     serial_puts(con->cursor_off ? "\033[0m\033[?25l" : "\033[0m\033[?25h");
     serial_console_clear();
     for(row = con->loc.y + 1; row < (int)LINES; row++) if(last_used(con, row) >= 0) rows = row;
     for(row = 0; row <= rows; row++) {
         int last = last_used(con, row);
         for(col = 0; col <= last; col++) {
-            u_char ch = con->vmem[(row * COLUMNS + col) * 2];
-            serial_putc(ch >= 32 && ch < 127 ? ch : ' ');
+            n = cp437_utf8(con->vmem[(row * COLUMNS + col) * 2], utf);
+            for(k = 0; k < n; k++) serial_putc(utf[k]);
         }
         if(row < rows) serial_puts("\r\n");
     }

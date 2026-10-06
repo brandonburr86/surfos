@@ -26,7 +26,8 @@ comes out of the framebuffer.
   fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
              hands that mode over. The console fills it with 120x33 cells at scale 2: a long
              line on one row, Backspace back across a typed line that wrapped, `ansi` with
-             its corner at (119,32), console switching
+             its corner at (119,32), console switching, a line of UTF-8 read back through the
+             code page 437 font (▸ ≋ … café)
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -455,6 +456,8 @@ class Vm:
 ANSI_ROWS = {0: 'ANSI-TEST top left', 2: '         INVERSE normal', 3: '         YELLOW-ON-BLUE', 4: '         KEEP',
              6: '         D C   E', 7: '         A', 8: '          B', 10: '         UNKNOWN-IGNORED'}
 GREY, BLACK, BLUE, YELLOW = bytes((170, 170, 170)), bytes((0, 0, 0)), bytes((0, 0, 170)), bytes((255, 255, 85))
+# 10/6/26: what `pagetest utf8` prints, as the console draws it (code page 437: no euro sign)
+UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
 
 
 def ansi_ok(scr):
@@ -660,6 +663,13 @@ def scenario_fullhd(args, image, firmware, outdir):
         vm.keys('<f1>')
         one = vm.wait_screen(lambda s: 'ANSI-TEST done, 120x33' in s.text(), 20, interval=0.5)
         results.append(('F2 shows console 2 and F1 brings console 1 back, at 120x33', two is not None and one is not None))
+        # 10/6/26 (the console's character set, the pager): UTF-8 drawn as code page 437 cells,
+        # read back through the rebuilt font (driver/font8x16.c), SurfOS's ▸ and ≋ included
+        got = typed('run pagetest utf8\n', lambda s: UTF8_SAMPLE in s.rows)
+        if got is not None:
+            vm.screen('utf8.png')
+        results.append(('UTF-8 on the framebuffer: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ read back through the font, € as ?',
+                        got is not None))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:

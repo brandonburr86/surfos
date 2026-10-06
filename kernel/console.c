@@ -7,6 +7,8 @@ File: console.c Date: Prior to 4/23/04
 
 10/5/26: the text grid is set at boot (a framebuffer gets as many cells as it holds),
 and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
+10/6/26: a cell's byte is a code page 437 character (driver/cp437.c), and what is
+printed is UTF-8: kputch() decodes it per console, so ▸ ≋ … and café show on the screen.
 */
 
 #include <asm/io.h>
@@ -296,6 +298,7 @@ void console_reset_ansi(surf_console *con) {
     con->bold = con->inverse = 0;
     con->cursor_off = 0;
     con->ansi_owner = NULL;
+    con->utf.have = 0;                                  /* 10/6/26: nor a UTF-8 character half read */
 }
 
 /* a task is gone (task.c, through tty_task_gone): undo what it did to the look of a console.
@@ -416,7 +419,7 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
         }
         if(c == 0x1B || (c >= 0x20 && c <= 0x2F)) return 1;      /* ESC again, or ESC ( B and the like */
         con->esc = ESC_NONE;
-        return c >= 0x30;                                       /* ESC 7, ESC c, ...: not ours */
+        return c >= 0x30 && c < 0x80;                           /* ESC 7, ESC c, ...: not ours; a UTF-8 byte is printed */
     case ESC_CSI:
         if(c >= '0' && c <= '9') {
             if(con->nparam < ESC_PARAMS && con->param[con->nparam] < 1000)
@@ -458,6 +461,18 @@ static void newline(surf_console *con) {
     }
 }
 
+/* A character at the cursor. 10/5/26: the VT100 way of wrapping. Writing the last column
+   leaves the cursor there; the next character starts the next line (a carriage return or
+   a cursor move cancels that). So a full-screen program can write the bottom right corner
+   without scrolling. 10/6/26: ch is a code page 437 cell, any of the 256. */
+static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
+    if(con->wrap) newline(con);
+    putcell(con, ansi_attr(con, color), ch);
+    if(con->loc.x + 1 < COLUMNS) con->loc.x++;
+    else con->wrap = 1;
+    if(isConsoleActive(con)) syncVideoConsole(false);
+}
+
 /* 10/6/26: a task's output kept instead of shown (console.h) */
 void console_capture_begin(struct kcapture *k) {
     if(curTask) curTask->kcap = k;
@@ -468,6 +483,9 @@ void console_capture_end(void) {
 }
 
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
+    u_char b = (u_char)c;           /* 10/6/26: a char above 0x7f may come signed */
+    u_char cells[UTF8_OUT_MAX];
+    int n, i;
     /* 10/6/26: a redirected kernel command (console.h): its output goes to memory, not the screen */
     if(con && curTask && curTask->kcap && con == curTask->con && !in_interrupt()) {
         struct kcapture *k = curTask->kcap;
@@ -479,8 +497,20 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
     if(!con) return;
-    if(con->esc && ansi_byte(con, color, c)) return;
-    switch (c) {
+    if(con->esc && ansi_byte(con, color, b)) return;
+    /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
+       it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
+       below 0x80 that cuts a character short comes out last, and is handled below as ever. */
+    if(b >= 0x80 || con->utf.have) {
+        n = utf8_feed(&con->utf, b, cells);
+        if(b < 0x80) n--;
+        for(i = 0; i < n; i++) put_char(con, color, cells[i]);
+        if(b >= 0x80) {
+            setpos(con);
+            return;
+        }
+    }
+    switch (b) {
     case 0x1B: //10/5/26: an escape sequence starts (tty.h)
         con->esc = ESC_SEEN;
         return;
@@ -505,17 +535,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         syncVideoConsole(false);
         break;
     default:
-        if(c>=32 && c<=126) {
-            /* 10/5/26: the VT100 way of wrapping. Writing the last column leaves the cursor
-               there; the next character starts the next line (a carriage return or a cursor
-               move cancels that). So a full-screen program can write the bottom right
-               corner without scrolling. */
-            if(con->wrap) newline(con);
-            putcell(con, ansi_attr(con, color), c);
-            if(con->loc.x + 1 < COLUMNS) con->loc.x++;
-            else con->wrap = 1;
-            if(isConsoleActive(con)) syncVideoConsole(false);
-        }
+        if(b >= 32 && b <= 126) put_char(con, color, b);   /* other control characters: nothing */
         break;
     }
     setpos(con);

@@ -10,6 +10,7 @@ File: console.h Date: Prior than 4/23/04
 #define _SURFOS_CONSOLE_H
 
 #include <surfos/types.h>
+#include <sys/cp437.h>
 
 /* 10/5/26: the text grid. Every console starts at 80x25 in its own memBuf, and VGA text
    mode stays there. On a framebuffer that holds more cells of the same letters (driver/
@@ -55,6 +56,9 @@ typedef struct surf_console {
     u_char cursor_off;          /* ESC [ ? 25 l */
     u_char wrap;                /* the last column was written: the next character starts the next line */
     struct surf_task *ansi_owner; /* who changed the colours or hid the cursor; reset when it ends */
+    /* 10/6/26: a cell's byte is a code page 437 character (sys/cp437.h); what is printed is
+       UTF-8, decoded here, a character at a time */
+    struct utf8_dec utf;
 } surf_console;
 
 void sscroll(surf_console *con);
