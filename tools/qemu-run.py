@@ -60,6 +60,16 @@ def shown(text):
     return re.compile(_SGR.join(re.escape(ch.encode()) for ch in text))
 
 
+# 10/6/26: the 2026 shell sh (user/bin/sh.c) in the root directory, which init runs in a boot where it is surfsh
+SH_PROMPT = re.compile(rb'/ \$ ')
+
+
+def own_shell_killed(q):
+    """the line that has sh run kcmd kill on sh itself: its pid from its latest banner"""
+    pids = re.findall(r'SurfOS user shell \(pid (\d+)\)', q.text())
+    return 'kcmdtest run - kill ' + (pids[-1] if pids else '0')
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -244,18 +254,29 @@ SMOKE = [
     ('umount /kcmd', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
-    # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program>, an initrd whose bin/surfsh
-    # is that program), for init's choice of shell. shell=kernel: the ring-0 shell on every console on purpose,
-    # elevated (#), no recovery line; no initrd: no /initrd/bin/surfsh, a recovery console (?) at once with init's
-    # line; a surfsh that ends at once (hello: 42): started again twice, then the recovery console
-    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')])],
+    # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
+    # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
+    # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
+    # /initrd/bin/surfsh, a recovery console (?) at once with init's line; a surfsh that ends at once (hello: 42):
+    # started again twice, then the recovery console; one that is not an executable: the recovery console at once;
+    # one that runs (sh): an exit after 2 s with status 3 is said, with 0 not, a kill is said ('@sleep n' waits)
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')]),
+                                                          ('crashgp', ['General Protection Fault', 'init: restarted the shell',
+                                                                       surf_prompt(b'SURF', b'#')])],
      ['recovery console']),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
-    ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh ended at once, status 42; restarted the shell',
-                            'init: surfsh ended at once, status 42; restarted the shell',
-                            'init: surfsh failed 3 times in 30 s (ended at once, status 42); recovery console',
+    ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh exited at once (status 42); restarted the shell',
+                            'init: surfsh exited at once (status 42); restarted the shell',
+                            'init: surfsh exited at once 3 times in 30 s (status 42); recovery console',
                             surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
+    ('@boot surfsh=etc/version', ['init: /initrd/bin/surfsh could not be loaded; recovery console', surf_prompt(b'SURF', b'?')],
+     [], ['restarted the shell']),
+    ('@boot surfsh=sh', ['SurfOS user shell', SH_PROMPT],
+     [('@sleep 2.5', []), ('exit 3', ['init: surfsh exited (status 3); restarted the shell', 'SurfOS user shell', SH_PROMPT]),
+      ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
+      (own_shell_killed, ['init: surfsh was killed; restarted the shell', 'SurfOS user shell', SH_PROMPT])],
+     ['exited (status 0)', 'recovery console']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -820,7 +841,7 @@ def initrd_with(src, dst, name, data):
 def boot_step(reboot, entry, timeout):
     """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
-    that must not appear"""
+    that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'."""
     cmd, expects, follow, absent = entry
     try:
         q2 = reboot(cmd.split()[1:])
@@ -830,6 +851,11 @@ def boot_step(reboot, entry, timeout):
     try:
         ok = all(q2.expect(e, timeout) for e in expects)
         for line, exp in follow:
+            if callable(line):
+                line = line(q2)
+            if line.startswith('@sleep '):
+                q2.wait(float(line.split()[1]))
+                continue
             q2.send(line + '\n')
             ok = ok and all(q2.expect(e, 10) for e in exp)
             if exp and isinstance(exp[-1], re.Pattern):
@@ -915,7 +941,7 @@ def main():
 
     def reboot(words):
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
-        surfsh=<program> (the initrd with that program as bin/surfsh)"""
+        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh)"""
         initrd, append = a.initrd, a.append.split()
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
@@ -926,7 +952,7 @@ def main():
                     if not a.initrd:
                         raise RuntimeError('surfsh= needs --initrd')
                     with tarfile.open(a.initrd) as t:
-                        program = t.extractfile('bin/' + w[7:]).read()
+                        program = t.extractfile(w[7:] if '/' in w[7:] else 'bin/' + w[7:]).read()
                     initrd = os.path.join(tmp, 'initrd.tar')
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:

@@ -14,7 +14,8 @@ through traps.
 descriptors 0, 1 and 2 instead (the user shell's < > >> redirection).
 
 10/6/26: TF_SHELL passes through too: init starts the user shell, surfsh, with it
-and starts it again when it ends.
+and starts it again when it ends. TF_LOADED tells a program that ran from one that
+could not be loaded, whatever its exit status says.
 */
 
 #include <surfos/types.h>
@@ -150,6 +151,7 @@ static void user_entry(void *arg) {
     }
 
     kfree(sa);
+    curTask->flags |= TF_LOADED;                          /* 10/6/26: it runs: init tells a load failure apart */
     enter_user(eh.e_entry, sp);
 }
 

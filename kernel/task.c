@@ -466,25 +466,30 @@ static u_long *yield_trap(struct trapframe *tf) {
     process flagged TF_SHELL, started again whenever it ends. The kernel's ring-0 shell (Shell N)
     takes a console instead
       - on purpose: shell=kernel on the kernel command line, every console (its prompt ≋#>);
-      - as a recovery console (≋?>), with a line saying why: when surfsh cannot be started at
-        all (no initrd, no such file), or when it ended abnormally three times within 30
-        seconds. Abnormal: killed (a fault, kill), not loadable (exit status 127), or gone
-        within 2 seconds of its start, whatever its status (it could not get going).
-    A console keeps the ring-0 shell until the next boot; that shell is started again when
-    it dies (crashgp), as it always was.
+      - as a recovery console (≋?>), with a line saying why: when surfsh cannot be started
+        (no initrd, no such file, not a file) or loaded (not an executable: that does not get
+        better by trying again), or when it ended abnormally three times within 30 seconds.
+        Abnormal: killed (a fault, kill), or ended within 2 seconds of its start, whatever its
+        status (it could not get going).
+    A shell that cannot be started for want of memory leaves its console without one for a
+    while: init tries again every second. Its restarts are said on the console and in the
+    kernel log, except after a plain exit with status 0. A console keeps the ring-0 shell
+    until the next boot; that shell is started again when it dies (crashgp), as it always was.
 */
 #define SURFSH_PATH       "/initrd/bin/surfsh"
-#define SURFSH_LOAD_FAILED 127          /* process.c: the exit status of a program that could not be loaded */
 #define SHELL_FAILS       3             /* abnormal ends of surfsh... */
 #define SHELL_WINDOW_MS   30000         /* ...within this long: the recovery console */
 #define SHELL_QUICK_MS    2000          /* a surfsh that ends sooner did not get going */
+#define SHELL_RETRY_MS    1000          /* a console left without a shell: the next try */
 
 static struct console_shell {
-    u_long pid;                         /* the shell there now */
+    u_long pid;                         /* the shell there now, 0: none yet (init tries again) */
     bool kernel;                        /* the ring-0 shell: shell=kernel, or a recovery console */
+    bool waiting;                       /* init said it tries again (once) */
     char why[96];                       /* a recovery console: init's line, shown before its first prompt */
     u_long started;                     /* uptime_ms() when surfsh last started */
     u_long ends[SHELL_FAILS - 1];       /* uptime_ms() of its last abnormal ends, oldest first */
+    bool killed[SHELL_FAILS - 1];       /* and which of them were kills (the others: quick exits) */
     u_int nends;
 } cshell[NUM_CONSOLES];
 
@@ -503,7 +508,11 @@ static void start_kernel_shell(int i) {
     snprintf(name, sizeof(name), "Shell %i", i);
     t = kthread_create_on(name, &conArray[i], shell, cshell[i].why[0] ? cshell[i].why : NULL, PL_HIGH, TF_SHELL);
     cshell[i].pid = t ? t->pid : 0;
-    if(!t) kprintf("init: no memory for a shell on F%i\n", i + 1);
+    if(t) cshell[i].waiting = false;
+    else if(!cshell[i].waiting) {                           /* init's loop tries again */
+        init_say(i, "init: no memory for a shell here; trying again\n");
+        cshell[i].waiting = true;
+    }
 }
 
 /* the ring-0 shell from now on, with init's reason: the shell shows it, the kernel log keeps it */
@@ -518,14 +527,24 @@ static void recovery_console(int i) {
 }
 
 static void start_surfsh(int i) {
-    char *argv[] = { "surfsh", "-l" };
+    char *argv[] = { "surfsh", "-l" }, line[96];
     int pid = process_spawn(SURFSH_PATH, 2, argv, &conArray[i], TF_SHELL);
-    if(pid < 0) {
+    if(pid == -ENOMEM || pid == -EIO) {                     /* it may work in a moment: init's loop tries again */
+        cshell[i].pid = 0;
+        if(!cshell[i].waiting) {
+            snprintf(line, sizeof(line), "init: %s: %s; trying again\n", SURFSH_PATH, strerror(pid));
+            init_say(i, line);
+            cshell[i].waiting = true;
+        }
+        return;
+    }
+    if(pid < 0) {                                           /* missing, not a file: it cannot be started */
         snprintf(cshell[i].why, sizeof(cshell[i].why), "init: %s: %s; recovery console", SURFSH_PATH, strerror(pid));
         recovery_console(i);
         return;
     }
     cshell[i].pid = (u_long)pid;
+    cshell[i].waiting = false;
     cshell[i].started = uptime_ms();
 }
 
@@ -534,35 +553,60 @@ static void start_shell(int i) {
     else start_surfsh(i);
 }
 
-/* the shell of console i ended with status (-1: killed) */
-static void shell_ended(int i, int status) {
+/* the third abnormal end within the window: the recovery console, with what the ends were */
+static void too_many_ends(int i, bool killed, int status) {
+    struct console_shell *c = &cshell[i];
+    u_int k, kills = killed;
+    for(k = 0; k < c->nends; k++) kills += c->killed[k];
+    if(kills == SHELL_FAILS)
+        snprintf(c->why, sizeof(c->why), "init: surfsh was killed %i times in %i s; recovery console", SHELL_FAILS, SHELL_WINDOW_MS / 1000);
+    else if(!kills)
+        snprintf(c->why, sizeof(c->why), "init: surfsh exited at once %i times in %i s (status %i); recovery console",
+                 SHELL_FAILS, SHELL_WINDOW_MS / 1000, status);
+    else
+        snprintf(c->why, sizeof(c->why), "init: surfsh failed %i times in %i s (%u kill%s, %u quick exit%s); recovery console",
+                 SHELL_FAILS, SHELL_WINDOW_MS / 1000, kills, kills > 1 ? "s" : "", SHELL_FAILS - kills,
+                 SHELL_FAILS - kills > 1 ? "s" : "");
+    recovery_console(i);
+}
+
+/* the shell of console i ended with status (-1: killed); flags: the task's (TF_LOADED) */
+static void shell_ended(int i, int status, u_int flags) {
     struct console_shell *c = &cshell[i];
     u_long now = uptime_ms();
-    char how[40], line[80];
+    char line[96];
+    bool killed = status == -1;
     if(c->kernel) {
         init_say(i, "init: restarted the shell\n");
         start_kernel_shell(i);
         return;
     }
-    if(status == -1) strlcpy(how, "was killed", sizeof(how));
-    else if(status == SURFSH_LOAD_FAILED) strlcpy(how, "could not be loaded", sizeof(how));
-    else if(now - c->started < SHELL_QUICK_MS) snprintf(how, sizeof(how), "ended at once, status %i", status);
-    else {                                                  /* it ran and was left: just a new one */
+    if(!killed && !(flags & TF_LOADED)) {                  /* not an executable: trying again will not help */
+        snprintf(c->why, sizeof(c->why), "init: %s could not be loaded; recovery console", SURFSH_PATH);
+        recovery_console(i);
+        return;
+    }
+    if(!killed && now - c->started >= SHELL_QUICK_MS) {     /* it ran and was left: a new one */
+        if(status) {
+            snprintf(line, sizeof(line), "init: surfsh exited (status %i); restarted the shell\n", status);
+            init_say(i, line);
+        }
         start_surfsh(i);
         return;
     }
     if(c->nends == SHELL_FAILS - 1 && now - c->ends[0] <= SHELL_WINDOW_MS) {
-        snprintf(c->why, sizeof(c->why), "init: surfsh failed %i times in %i s (%s); recovery console",
-                 SHELL_FAILS, SHELL_WINDOW_MS / 1000, how);
-        recovery_console(i);
+        too_many_ends(i, killed, status);
         return;
     }
     if(c->nends == SHELL_FAILS - 1) {                       /* keep the last ones */
         memmove(c->ends, c->ends + 1, (SHELL_FAILS - 2) * sizeof(c->ends[0]));
+        memmove(c->killed, c->killed + 1, (SHELL_FAILS - 2) * sizeof(c->killed[0]));
         c->nends--;
     }
-    c->ends[c->nends++] = now;
-    snprintf(line, sizeof(line), "init: surfsh %s; restarted the shell\n", how);
+    c->ends[c->nends] = now;
+    c->killed[c->nends++] = killed;
+    if(killed) snprintf(line, sizeof(line), "init: surfsh was killed; restarted the shell\n");
+    else snprintf(line, sizeof(line), "init: surfsh exited at once (status %i); restarted the shell\n", status);
     init_say(i, line);
     start_surfsh(i);
 }
@@ -575,17 +619,22 @@ static void init_main(void *arg) {
         start_shell(i);
     }
     for(;;) {
-        int status;
+        int status, pid;
         u_int flags = 0;
         surf_console *con = NULL;
-        int pid = task_wait_ex(WAIT_ANY, &status, &flags, &con);
-        if(pid < 0) { /* no children at all: should not happen, but never spin */
-            sleep_ms(100);
+        bool missing = false;
+        for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) missing = true;
+        pid = wait_for(WAIT_ANY, &status, &flags, &con, missing ? WNOHANG : 0);
+        if(pid <= 0) {
+            /* 10/6/26: a console without a shell (no memory a moment ago): another try. No
+               children at all should not happen, but never spin. */
+            sleep_ms(missing ? SHELL_RETRY_MS : 100);
+            for(i = 0; i < NUM_CONSOLES; i++) if(!cshell[i].pid) start_shell(i);
             continue;
         }
         if(!(flags & TF_SHELL) || !con) continue;           /* an orphan: collected, that is all */
         for(i = 0; i < NUM_CONSOLES; i++) {
-            if(con == &conArray[i] && cshell[i].pid == (u_long)pid) shell_ended(i, status);
+            if(con == &conArray[i] && cshell[i].pid == (u_long)pid) shell_ended(i, status, flags);
         }
     }
 }
