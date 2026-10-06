@@ -74,11 +74,6 @@ void shell_ask(const char *question, char *answer, size_t size) {
     if(kept) console_capture_begin(kept);
 }
 
-/* 10/6/26: a fault report belongs on the screen, also when the output was going to a file */
-static void report_on_screen(void) {
-    console_capture_end();
-}
-
 /**** small commands ****/
 
 static int cmd_help(int argc, char **argv) {
@@ -676,21 +671,20 @@ static int cmd_hanoi(int argc, char **argv) { runHanoi(); return CMD_OK; }
 static int cmd_selftest(int argc, char **argv) { return run_selftest() ? CMD_FAIL : CMD_OK; }
 
 /* exercise the trap framework: real exceptions in this task (which they kill: the status of the
-   three that fault is never seen) */
+   three that fault is never seen; the report reaches the screen also when the user shell sent
+   the output to a file, kernel/panic.c) */
 static int cmd_crashdiv(int argc, char **argv) {
     volatile int one = 1, zero = 0; /* two volatiles: gcc folds 1/x into compares with no idiv */
-    report_on_screen();
     printf("%i\n", one/zero);
     return CMD_FAIL;
 }
-static int cmd_crashgp(int argc, char **argv) { report_on_screen(); asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
+static int cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
 static int cmd_crashint(int argc, char **argv) {
-    report_on_screen();
     asm volatile("int $0x50");
     printf("    int 0x50 returned\n");
     return CMD_OK;
 }
-static int cmd_crashnull(int argc, char **argv) { report_on_screen(); *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
+static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },

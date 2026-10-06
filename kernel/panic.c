@@ -9,6 +9,10 @@ The eighteen exN stubs and exDivZero()..exSIMDFP() became one handler on the tra
 dispatch table. The policy is the 2004 one: an exception in a task kills that task
 and the scheduler moves on; an exception in the idle task or inside an interrupt
 handler is a kernel wipeout.
+
+10/6/26: a kernel command run by the user shell keeps its output for a file while
+the shell's descriptor 1 is redirected (SYS_kcmd, console_capture_begin()); a fault
+report or a panic is never kept there, it goes to the screen.
 */
 
 #include <surfos/system.h>
@@ -64,6 +68,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
         halt();
     }
 
+    console_capture_end(); //10/6/26: not into a redirected kernel command's file (SYS_kcmd)
     tty_task_gone(curTask); //raw mode, colours and a hidden cursor it set end here, before the report
     printf("\nProcess (\'%s\':%i) killed by \"%s\" (eip 0x%x%s)\n", curTask->name, curTask->pid, why, tf->eip,
            (tf->cs & 3) ? ", user mode" : "");
@@ -103,6 +108,7 @@ void panic(const char *fmt, ...) {
     u_long ebp;
 
     irq_disable();
+    console_capture_end(); //10/6/26: nor in a redirected kernel command's file (SYS_kcmd)
     console_panic(); //a panic must be visible on a framebuffer console too, and not in an editor's colours
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
