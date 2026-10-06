@@ -5,7 +5,8 @@ File: tty.c     Date: 10/3/26 (roadmap C1)
 --------------------
 10/5/26: raw mode for full-screen programs (tty.h): no echo, no line editing, keys as
 the bytes a terminal sends. It ends with the task that set it.
-10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8.
+10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8,
+and TTY_CAPS says what the console draws.
 */
 
 #include <surfos/types.h>
@@ -16,6 +17,7 @@ the bytes a terminal sends. It ends with the task that set it.
 #include <surfos/wait.h>
 #include <surfos/irq.h>
 #include <surfos/interrupt.h>
+#include <surfos/multiboot.h>
 #include <sys/serial.h>
 #include <sys/cp437.h>
 #include <blibc_common.h>
@@ -294,7 +296,10 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
     if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
-    if(op == TTY_CAPS) return TTY_CAP_UTF8 | TTY_CAP_COLOR;
+    /* 10/6/26: the console draws UTF-8 (as code page 437, console.c) and the ANSI colours.
+       `ascii` on the kernel command line, for a serial terminal that cannot show UTF-8, leaves
+       UTF-8 out: the user shell then draws its prompt in ASCII. */
+    if(op == TTY_CAPS) return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
     if(op == TTY_PAGE) return arg > 1 ? -22 : 0;  /* 10/6/26: accepted; the pager comes with the console's UTF-8 work */
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */

@@ -185,6 +185,7 @@ SMOKE = [
     # was printed, and VGA memory as code page 437 cells
     ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
     ('@utf8-screen', []),
+    ('run pagetest caps', ['TTY_CAPS 3: UTF-8 colour', 'exit status 0']),     # no `ascii` on the command line
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;

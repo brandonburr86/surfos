@@ -72,8 +72,9 @@ void tty_switch(int index);
    kernel's shell its own commands.
    TTY_CAPS: TTY_CAP_* flags. TTY_CAP_UTF8: the console draws UTF-8 text: ASCII, the
    characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
-   mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. TTY_CAP_COLOR:
-   the ANSI colours above. */
+   mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. It is left out
+   when the kernel command line has the word `ascii` (a serial terminal that cannot show
+   UTF-8). TTY_CAP_COLOR: the ANSI colours above. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
 #define TTY_CAP_UTF8  1
