@@ -36,7 +36,10 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0)", "telnetd
 #include "telnetd.h"
 #include "telnet.h"
 
-#define SIZE_MAX_TN 1000                /* the largest window a client's NAWS may set */
+#define COLS_MIN 8                      /* the window sizes PTY_SETSIZE takes; a client's NAWS is kept in them */
+#define COLS_MAX 1024
+#define ROWS_MIN 2
+#define ROWS_MAX 1024
 #define PIECE       512                 /* the most of a session's output read and written at once */
 
 struct session {
@@ -154,10 +157,10 @@ static void from_client(struct session *s) {
         return;
     }
     if(s->tn.resized) {
-        unsigned int cols = s->tn.cols < SIZE_MAX_TN ? (unsigned int)s->tn.cols : SIZE_MAX_TN;
-        unsigned int rows = s->tn.rows < SIZE_MAX_TN ? (unsigned int)s->tn.rows : SIZE_MAX_TN;
+        int cols = s->tn.cols < COLS_MIN ? COLS_MIN : s->tn.cols > COLS_MAX ? COLS_MAX : s->tn.cols;
+        int rows = s->tn.rows < ROWS_MIN ? ROWS_MIN : s->tn.rows > ROWS_MAX ? ROWS_MAX : s->tn.rows;
         s->tn.resized = 0;
-        ptyctl(s->master, PTY_SETSIZE, cols << 16 | rows);
+        ptyctl(s->master, PTY_SETSIZE, (unsigned int)cols << 16 | (unsigned int)rows);
     }
     if(d.len && write_all(s->master, data, d.len) < 0) end_session(s, "the terminal broke");
 }
