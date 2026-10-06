@@ -478,13 +478,17 @@ int vfs_open(const char *path, int flags, struct file **out) {
 int vfs_close(struct file *f) {
     struct superblock *sb;
     u_long fl;
+    bool last;
     if(!f) return -EBADF;
-    if(--f->refs) return 0;
-    fl = irq_save();
-    if(f->oprev) f->oprev->onext = f->onext;
-    else open_files = f->onext;
-    if(f->onext) f->onext->oprev = f->oprev;
+    fl = irq_save();                                /* tasks share files (spawnfd): the count is atomic */
+    last = --f->refs == 0;
+    if(last) {
+        if(f->oprev) f->oprev->onext = f->onext;
+        else open_files = f->onext;
+        if(f->onext) f->onext->oprev = f->oprev;
+    }
     irq_restore(fl);
+    if(!last) return 0;
     sb = f->v->sb;
     if((f->flags & O_ACCMODE) != O_RDONLY) {      /* a written file reaches the disk when it is closed */
         if(sb->ops && sb->ops->sync) sb->ops->sync(sb);

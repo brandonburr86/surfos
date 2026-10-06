@@ -469,6 +469,23 @@ static void test_fat_statfs(void) {
     }
     check(r == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units + 10 == a.free_units, "a 10 KB file takes 10 clusters");
     check(vfs_unlink("/hda1/statfs.bin") == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units == a.free_units, "unlink gives them back");
+    r = put_file("/hda1/grow.txt", "abc");
+    if(r == 0) {                                     /* ftruncate past the end: zeros, as POSIX says */
+        struct file *f;
+        r = vfs_open("/hda1/grow.txt", O_RDWR, &f);
+        if(r == 0) {
+            u_int i;
+            r = vfs_ftruncate(f, 5000);
+            memset(blk, 0xEE, 5000);
+            if(r == 0 && vfs_read(f, blk, 5000) != 5000) r = -EIO;
+            for(i = 3; r == 0 && i < 5000; i++) if(blk[i]) r = -EIO;
+            if(r == 0 && memcmp(blk, "abc", 3)) r = -EIO;
+            if(r == 0) r = vfs_ftruncate(f, 2);
+            vfs_close(f);
+        }
+    }
+    check(r == 0 && vfs_stat("/hda1/grow.txt", &st) == 0 && st.size == 2 && vfs_unlink("/hda1/grow.txt") == 0,
+          "ftruncate grows a file with zeros and shrinks it again");
     r = bdev_read(d, 0, 1, blk);
     if(r == 0) r = bdev_read(d, blk[14] | (blk[15] << 8), 1, blk);        /* the first sector of the FAT */
     check(r == 0 && !(blk[3] & 0x80), "mounted read-write: FAT[1] says not cleanly unmounted");

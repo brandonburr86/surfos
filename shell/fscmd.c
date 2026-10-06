@@ -6,8 +6,12 @@ mkfs, mount, umount, eject, df and mv, and fsbench to time a volume; mount
 and umount moved here from main.c. mkfs is the one destructive command: it
 obeys bdev_may_format() (only USB drives and ramdisks, nothing mounted, never
 the SurfOS boot drive), shows what is on the device, and goes ahead only when
-the user types the device's name. eject unmounts everything on a disk and
-flushes it before it says the disk may be pulled out.
+the user types the device's name. A formatted partition gets the type that
+matches (MBR 0c or 0e, GPT basic data) through the partition code's checked
+rewrite; a formatted whole disk is read again, so its old partitions go.
+eject unmounts everything on a disk and flushes it before it says the disk
+may be pulled out. A protected device (the SurfOS boot drive) is only ever
+mounted read-only.
 */
 
 #include <blibc_common.h>
@@ -16,6 +20,7 @@ flushes it before it says the disk may be pulled out.
 #include <surfos/ktimer.h>
 #include <surfos/math64.h>
 #include <sys/bdev.h>
+#include <sys/part.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <fs/fat.h>
@@ -58,12 +63,54 @@ static void describe_mount(const char *path) {
 
 /**** mkfs ****/
 
+/* the partition type a new FAT volume on d should have, in *k; false when it has it already
+   (or d is no partition) */
+static bool type_to_set(struct bdev *d, int bits, struct part_kind *k) {
+    if(!d->parent || part_parse_type(bits == 32 ? "fat32" : "fat16", k) != 0) return false;
+    if(d->scheme == PART_SCHEME_GPT) return d->part_type != 0x07;          /* basic data, FAT's GPT type */
+    if(d->scheme != PART_SCHEME_MBR) return false;
+    if(bits == 32) return d->part_type != 0x0B && d->part_type != 0x0C;
+    return d->part_type != 0x04 && d->part_type != 0x06 && d->part_type != 0x0E;
+}
+
+/* rewrite partition d's type through the partition code (checked, read back, the disk read
+   again: d itself is replaced by a new device of the same name) */
+static void set_type(struct bdev *d, const struct part_kind *k) {
+    struct bdev *disk = bdev_disk(d), *now;
+    struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
+    struct part_plan plan;
+    struct part_io io;
+    char name[BDEV_NAME_LEN], why[128];
+    u_int index = d->part_index;
+
+    strlcpy(name, d->name, sizeof(name));
+    strlcpy(why, "out of memory", sizeof(why));
+    plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
+    if(t && plan.buf) {
+        part_io_init(&io, disk, true);
+        strlcpy(why, "the partition table cannot be read", sizeof(why));
+        if(part_read(&io, disk->nblocks, t) == 0 && part_plan_type(&io, t, index, k, &plan, why, sizeof(why)) == 0 &&
+           part_commit(disk, t, &plan, why, sizeof(why)) == 0) {
+            now = bdev_find(name);
+            printf("    %s: partition type: %s\n", name, now && now->type_name ? now->type_name : "changed");
+            kfree(t);
+            kfree(plan.buf);
+            return;
+        }
+    }
+    printf("    %s: the partition type stays as it was: %s\n", name, why);
+    kfree(t);
+    kfree(plan.buf);
+}
+
 void cmd_mkfs(int argc, char **argv) {
     struct fat_layout l;
+    struct part_kind kind;
     struct bdev *d, *p;
     char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1];
     const char *label, *t;
     int bits = 0, i = 1, parts = 0;
+    bool retype;
 
     if(argc > 2 && !strcmp(argv[1], "-t")) {
         if(!strcmp(argv[2], "fat16")) bits = 16;
@@ -91,12 +138,17 @@ void cmd_mkfs(int argc, char **argv) {
     if(parts) printf("\n");
     printf("    new: FAT%i, %lu-byte clusters, %lu of them, label %s\n", l.bits, (u_long)l.spc * 512, (u_long)l.clusters,
            label && label[0] ? label : "NO NAME");
+    retype = type_to_set(d, l.bits, &kind);
+    if(retype) printf("    the partition's type (%s) becomes %s\n", d->type_name ? d->type_name : "unknown",
+                      d->scheme == PART_SCHEME_GPT ? "basic data" : l.bits == 32 ? "0c FAT32 LBA" : "0e FAT16 LBA");
     printf("    Type %s to erase %s (%s) and create a FAT%i file system: ", d->name, d->name, size, l.bits);
     memset(line, 0, sizeof(line));
     gets(line);
     if(strcmp(line, d->name)) { printf("    Cancelled\n"); return; }
-    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) printf("    mkfs: %s: %s\n", d->name, msg);
-    else printf("    %s: %s\n", d->name, msg);
+    if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) { printf("    mkfs: %s: %s\n", d->name, msg); return; }
+    printf("    %s: %s\n", d->name, msg);
+    if(retype) set_type(d, &kind);
+    else if(!d->parent && bdev_rescan(d) >= 0 && parts) printf("    %s was read again: no partitions now\n", d->name);
 }
 
 /**** mount, umount, eject ****/
@@ -120,6 +172,10 @@ void cmd_mount(int argc, char **argv) {
     if(argc > i + 1) strlcpy(path, argv[i + 1], sizeof(path));
     else snprintf(path, sizeof(path), "/%s", d->name);
     if(vfs_bdev_busy(d)) { printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name); return; }
+    if(d->protect || bdev_disk(d)->protect) {               /* the SurfOS boot drive is only ever read */
+        printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
+        flags |= MNT_RDONLY;
+    }
     r = vfs_mount_flags(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags);
     if(r == -EINVAL && argc <= i + 2) printf("    mount: %s: no file system found (mkfs makes one)\n", d->name);
     else if(r == -EBUSY) printf("    mount: %s: something is mounted there already\n", path);
