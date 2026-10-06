@@ -653,11 +653,18 @@ static void t_caps(void) {
 #define UNASKED  "\r\033[K"
 
 static char strm[65536], want[65536];
+static int strm_len;
 
 /* what the master got since the last look */
 static const char *stream_now(void) {
-    sim_stream(strm, sizeof(strm));
+    strm_len = sim_stream(strm, sizeof(strm));
     return strm;
+}
+
+/* it was exactly s, by its length too: a NUL in the stream shows */
+static int stream_is(const char *s) {
+    stream_now();
+    return strm_len == (int)strlen(s) && !memcmp(strm, s, (size_t)strm_len);
 }
 
 /* "line from\n" .. "line to\n" after prefix, then suffix */
@@ -684,21 +691,21 @@ static void t_stream_screenful(void) {
     on_pty(80, 10, 1);
     st = run(CHILD, w_lines, 1, 30);
     check(st == BLOCKED && asker() == CHILD, "a pty at 80x10: the 10th line asks first");
-    check(!strcmp(stream_now(), lines_text("", 1, 9, QUESTION)),
+    check(stream_is(lines_text("", 1, 9, QUESTION)),
           "the stream: lines 1-9 as printed (LF alone), then the question in inverse video");
     sim_input(' ');
     st = resume(CHILD);
-    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 10, 18, QUESTION)),
+    check(st == BLOCKED && stream_is(lines_text(UNASKED, 10, 18, QUESTION)),
           "Space: CR ESC[K takes the question away, 9 more lines, the question again");
     sim_input('\r');
     st = resume(CHILD);
-    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 19, 19, QUESTION)), "Enter: one more line");
+    check(st == BLOCKED && stream_is(lines_text(UNASKED, 19, 19, QUESTION)), "Enter: one more line");
     sim_input('q');
     st = resume(CHILD);
-    check(st == DONE && dropping() && !strcmp(stream_now(), UNASKED), "q: the rest is dropped");
+    check(st == DONE && dropping() && stream_is(UNASKED), "q: the rest is dropped");
     run(SHELL, w_page, 0, 0);
     say(SHELL, "prompt> ");
-    check(!strcmp(stream_now(), "prompt> "), "and paging ends with TTY_PAGE 0");
+    check(stream_is("prompt> "), "and paging ends with TTY_PAGE 0");
 }
 
 static void t_stream_columns(void) {
@@ -738,7 +745,7 @@ static void t_stream_columns(void) {
     sim_stream_pos(&x, &wrap);
     check(x == 11, "ESC[5D: 5 columns back");
     snprintf(want, sizeof(want), "\033[1;33m%s\033[0mz\tab\t\033[5D", u80);
-    check(!strcmp(stream_now(), want), "the bytes go as they were printed: no UTF-8 decoding, no cells");
+    check(stream_is(want), "the bytes go as they were printed: no UTF-8 decoding, no cells");
 }
 
 static void t_stream_wrap_ask(void) {
@@ -752,15 +759,15 @@ static void t_stream_wrap_ask(void) {
     stream_now();
     say_text = "z";
     st = run(CHILD, w_say, 0, 0);
-    check(st == BLOCKED && !strcmp(stream_now(), "\n" QUESTION),
+    check(st == BLOCKED && stream_is("\n" QUESTION),
           "the 9th row full with the wrap pending: a newline, then the question on the 10th");
     sim_input(' ');
     resume(CHILD);
-    check(!strcmp(stream_now(), UNASKED "z"), "and the character goes where the question was");
+    check(stream_is(UNASKED "z"), "and the character goes where the question was");
 
     on_pty(40, 10, 1);
     run(CHILD, w_lines, 1, 30);
-    check(!strcmp(stream_now(), lines_text("", 1, 9, "\033[7m--More-- (Space: next page, Enter: next\033[27m")),
+    check(stream_is(lines_text("", 1, 9, "\033[7m--More-- (Space: next page, Enter: next\033[27m")),
           "at 40 columns the question is cut to 39");
 }
 
@@ -773,11 +780,11 @@ static void t_stream_resize(void) {
     check(st == BLOCKED && asker() == CHILD && sim_on_list(CHILD), "a smaller size leaves the question up");
     sim_stream_size(80, 20);
     st = resume(CHILD);
-    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 10, 19, QUESTION)),
+    check(st == BLOCKED && stream_is(lines_text(UNASKED, 10, 19, QUESTION)),
           "PTY_SETSIZE 80x20 at the question: it goes without a key, and the rows go on to 19 before it comes back");
     sim_input(' ');
     st = resume(CHILD);
-    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 20, 38, QUESTION)), "then 19 lines a screenful");
+    check(st == BLOCKED && stream_is(lines_text(UNASKED, 20, 38, QUESTION)), "then 19 lines a screenful");
     sim_input('q');
     resume(CHILD);
 }
@@ -785,23 +792,23 @@ static void t_stream_resize(void) {
 static void t_stream_colour(void) {
     on_pty(80, 24, 0);
     sim_kprintf_line("kernel\n");
-    check(!strcmp(stream_now(), "\033[0;1;33mkernel\n"), "a kernel message (yellow): its SGR sequence first");
+    check(stream_is("\033[0;1;33mkernel\n"), "a kernel message (yellow): its SGR sequence first");
     say(SHELL, "plain\n");
-    check(!strcmp(stream_now(), "\033[0mplain\n"), "the console's own colour again: ESC[0m, the terminal's default");
+    check(stream_is("\033[0mplain\n"), "the console's own colour again: ESC[0m, the terminal's default");
     say(SHELL, "\033[36mcyan ");
     sim_kprintf_line("k2 ");
-    check(!strcmp(stream_now(), "\033[36mcyan k2 "), "while a program's SGR is in force, the writer's colour is not sent");
+    check(stream_is("\033[36mcyan k2 "), "while a program's SGR is in force, the writer's colour is not sent");
     say(SHELL, "\033[0m");
     sim_kprintf_line("k3");
     say(SHELL, "\033[7m!");
-    check(!strcmp(stream_now(), "\033[0m\033[0;1;33mk3\033[0m\033[7m!"),
+    check(stream_is("\033[0m\033[0;1;33mk3\033[0m\033[7m!"),
           "after the program's ESC[0m the colours are sent again, also before a program's own sequence");
     say(SHELL, "\033[0m");
     stream_now();
     say(SHELL, "\033[7m\033[?25l");
     stream_now();
     sim_task_gone(SHELL);
-    check(!strcmp(stream_now(), "\033[0m\033[?25h"),
+    check(stream_is("\033[0m\033[?25h"),
           "a program that ends with inverse video and the cursor hidden: ESC[0m ESC[?25h to the far terminal");
 }
 
@@ -811,16 +818,16 @@ static void t_stream_backspace(void) {
     l80[80] = 0;
     on_pty(80, 24, 0);
     say(SHELL, "ab\b");
-    check(!strcmp(stream_now(), "ab\b \b"), "Backspace erases the cell before: BS SP BS");
+    check(stream_is("ab\b \b"), "Backspace erases the cell before: BS SP BS");
     say(SHELL, "\r");
     say(SHELL, l80);
     stream_now();
     say(SHELL, "\b");
-    check(!strcmp(stream_now(), "\r\033[999C\033[K"), "at a pending wrap: the last column (CR ESC[999C ESC[K)");
+    check(stream_is("\r\033[999C\033[K"), "at a pending wrap: the last column (CR ESC[999C ESC[K)");
     say(SHELL, "\n\b");
-    check(!strcmp(stream_now(), "\n\033[A\033[999C\033[K"), "at a row's start: the end of the row above");
+    check(stream_is("\n\033[A\033[999C\033[K"), "at a row's start: the end of the row above");
     say(SHELL, "a\001\002\177b\033[1mc");
-    check(!strcmp(stream_now(), "ab\033[1mc"), "other control characters and DEL are dropped, as the screen draws none");
+    check(stream_is("ab\033[1mc"), "other control characters and DEL are dropped, as the screen draws none");
 }
 
 static void t_stream_clear(void) {
@@ -835,7 +842,7 @@ static void t_stream_clear(void) {
     check(st == DONE && asker() < 0, "ESC[H ESC[J: a new screenful too");
     stream_now();
     run(CHILD, w_clear, 0, 0);
-    check(!strcmp(stream_now(), "\033[2J\033[H"), "clearing the console: ESC[2J ESC[H to the far terminal");
+    check(stream_is("\033[2J\033[H"), "clearing the console: ESC[2J ESC[H to the far terminal");
     st = run(CHILD, w_lines, 27, 35);
     check(st == DONE && asker() < 0, "and a new screenful");
     run(SHELL, w_page, 0, 0);
@@ -896,7 +903,7 @@ static void t_stream_tty(void) {
     run(CHILD, w_lines, 1, 30);
     stream_now();
     sim_task_gone(CHILD);
-    check(asker() < 0 && !strcmp(stream_now(), UNASKED), "the asker killed at the question: CR ESC[K takes it away");
+    check(asker() < 0 && stream_is(UNASKED), "the asker killed at the question: CR ESC[K takes it away");
 }
 
 int main(void) {
