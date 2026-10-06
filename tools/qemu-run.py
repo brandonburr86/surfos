@@ -71,8 +71,10 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
-    # 10/5/26: the user C library and its programs. sh redirects < > >> through spawnfd().
+    # 10/5/26: the user C library and its programs. sh redirects < > >> through spawnfd(); the
+    # file tools work on files with known content.
     ('run echo one  two', ['one two', 'exit status 0']),
+    ('run ls -l /hda1', ['d          0 ', 'DOCS/', 'hello', 'motd', 'README', 'entries']),
     ('sh', ['$ '], [('echo hello > /hda1/R.TXT', ['$ ']),
                     ('cat < /hda1/R.TXT', ['hello', '$ ']),
                     ('echo more >> /hda1/R.TXT', ['$ ']),
@@ -80,6 +82,20 @@ SMOKE = [
                     ('cat < /hda1/R.TXT > /hda1/R2.TXT', ['$ ']),
                     ('cat /hda1/R2.TXT', ['hello\r\nmore', '$ ']),
                     ('cat < /hda1/NOPE', ['sh: /hda1/NOPE: No such file or directory', '$ ']),
+                    ('wc /hda1/R.TXT', ['      2       2      11 /hda1/R.TXT', '$ ']),
+                    ('mkdir -p /hda1/T/a/b', ['$ ']),
+                    ('cp /hda1/R.TXT /hda1/T/a/b/C.TXT', ['$ ']),
+                    ('cp -r /hda1/T/a /hda1/T/z', ['$ ']),
+                    ('cat /hda1/T/z/b/C.TXT', ['hello\r\nmore', '$ ']),
+                    ('mv /hda1/T/z/b/C.TXT /hda1/T/M.TXT', ['$ ']),
+                    ('rmdir /hda1/T/z/b', ['$ ']),
+                    ('touch /hda1/T/E.TXT', ['$ ']),
+                    ('ls -l /hda1/T', ['d          0 ', 'a/', '-          0 ', 'E.TXT', '-         11 ', 'M.TXT', 'z/', '4 entries', '$ ']),
+                    ('head -n 1 /hda1/T/M.TXT', ['hello\r\n/ $ ']),
+                    ('hexdump /hda1/R.TXT', ['00000000  68 65 6c 6c 6f 0a 6d 6f  72 65 0a', '|hello.more.|', '0000000b', '$ ']),
+                    ('rm -r /hda1/T', ['$ ']),
+                    ('ls /hda1/T', ['No such file or directory', '$ ']),
+                    ('df', ['Mounted on', 'rootfs', 'devfs', 'rd0', '/initrd', 'hda1', '/hda1', '$ ']),
                     ('exit', ['exit status 0'])]),
 ]
 # steps that legitimately take longer than the 10 s default
