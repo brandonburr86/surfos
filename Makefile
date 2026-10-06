@@ -24,11 +24,16 @@ DISKIMG    = $(IMAGES)/test.img
 INITRD     = $(IMAGES)/initrd.tar
 DISK_FILES = README rootfs/motd docs/README.md $(BUILD)/user/bin/hello
 ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null)
-# user programs (roadmap P2): static ELF at 0x40000000, libsurf = syscall stubs + blibc
-USER_CFLAGS  = $(CFLAGS) -Iuser/include
-USER_LIB_SRC = user/libsurf/syscalls.c lib/blibc/vsnprintf.c lib/blibc/string.c lib/blibc/memory.c \
-               lib/blibc/stdlib.c lib/blibc/ctype.c
+# user programs (roadmap P2): static ELF at 0x40000000 linked with libsurf.a, the user C library
+# (10/5/26). Programs see only user/include, never the kernel's headers; the library also finds
+# the system call numbers in include/surfos/syscall.h (-idirafter). Sections per function and
+# --gc-sections keep each program to what it uses.
+USER_CFLAGS  = $(filter-out -Iinclude,$(CFLAGS)) -Iuser/include -ffunction-sections -fdata-sections \
+               -fno-tree-loop-distribute-patterns
+USER_LIB_CFLAGS = $(USER_CFLAGS) -idirafter include
+USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
+USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
 USER_PROGS   = hello crash cat ls count sh
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
@@ -36,6 +41,7 @@ USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 
 CC         = gcc
 LD         = ld
+AR         = ar
 NASM       = nasm
 NM         = nm
 QEMU       = qemu-system-i386
@@ -172,7 +178,11 @@ user: $(USER_BINS)
 $(BUILD)/user/lib/%.o: %.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
-	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+	$(Q)$(CC) $(USER_LIB_CFLAGS) -c $< -o $@
+
+$(USER_LIB): $(USER_LIB_OBJ)
+	@echo "AR   $@"
+	$(Q)rm -f $@ && $(AR) rcs $@ $(USER_LIB_OBJ)
 
 $(USER_CRT0): user/libsurf/crt0.S
 	@mkdir -p $(dir $@)
@@ -184,10 +194,13 @@ $(BUILD)/user/obj/%.o: user/bin/%.c
 	@echo "UCC  $<"
 	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD)/user/bin/%: $(BUILD)/user/obj/%.o $(USER_CRT0) $(USER_LIB_OBJ) user/user.ld
+$(BUILD)/user/bin/%: $(BUILD)/user/obj/%.o $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
-	$(Q)$(LD) -m elf_i386 -nostdlib -T user/user.ld -o $@ $(USER_CRT0) $< $(USER_LIB_OBJ)
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $< $(USER_LIB)
+
+# keep the program objects (make would delete them as intermediates and rebuild them every time)
+.SECONDARY: $(USER_PROGS:%=$(BUILD)/user/obj/%.o)
 
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"

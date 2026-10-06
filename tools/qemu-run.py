@@ -63,7 +63,7 @@ SMOKE = [
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
-    ('crash efault', ['= -14', 'exit status 0']),
+    ('crash efault', ['= -1 (errno 14: Bad address)', 'exit status 0']),
     ('count 3 10', ['counted to 3']),
     ('ls /dev', ['console', 'null']),
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
