@@ -277,11 +277,25 @@ $(BUILD)/host/test_usb: tests/host/test_usb.c $(BUILD)/host/kernel/driver/usb/us
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb
+# the user C library (10/5/26): its portable parts against the host libc, every symbol renamed
+HOSTUSER_SRC = user/libsurf/printf.c user/libsurf/string.c user/libsurf/stdlib.c user/libsurf/ctype.c \
+               user/libsurf/time.c user/libsurf/malloc.c
+HOSTUSER_OBJ = $(HOSTUSER_SRC:user/libsurf/%.c=$(BUILD)/host/libsurf/%.o)
+$(BUILD)/host/libsurf/%.o: user/libsurf/%.c tests/host/libsurf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h -MMD -MP -c $< -o $@
+
+$(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb $(BUILD)/host/test_libc
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
 	$(BUILD)/host/test_usb
+	$(BUILD)/host/test_libc
 
 clean:
 	rm -rf build
@@ -290,4 +304,4 @@ help:
 	@sed -n '2,15p' Makefile
 
 .PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
--include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d)
+-include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d)
