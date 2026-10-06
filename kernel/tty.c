@@ -217,25 +217,45 @@ int tty_read(struct tty *t, char *buf, size_t len) {
 
 /**** console switching ****/
 
+/* the last column of a row with something in it, -1 for an empty row */
+static int last_used(surf_console *con, int row) {
+    int col, last = -1;
+    for(col = 0; col < (int)COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    return last;
+}
+
 /* Repaint the newly active console on the serial terminal: clear, text, cursor. The
    text comes without its colours; the terminal's attributes are reset first and the
-   cursor is shown or hidden as on that console (10/5/26, escape sequences). */
+   cursor is shown or hidden as on that console (10/5/26, escape sequences).
+   10/5/26: the grid may be larger than the terminal (120x33 on a 1920x1080 screen), and
+   nothing tells SurfOS the terminal's size. So the rows are painted only down to the last
+   one in use (or the cursor's), each up to its last character, and the cursor is put
+   back by moving up and right from there rather than to a screen position: a terminal as
+   large as the grid shows the screen exactly, a smaller one shows its bottom part, with
+   rows longer than the terminal is wide wrapped. */
 static void serial_redraw(surf_console *con) {
     char seq[16];
-    int row, col;
+    int row, col, rows = con->loc.y;
     serial_puts(con->cursor_off ? "\033[0m\033[?25l" : "\033[0m\033[?25h");
     serial_console_clear();
-    for(row = 0; row < LINES; row++) {
-        int last = -1;
-        for(col = 0; col < COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    for(row = con->loc.y + 1; row < (int)LINES; row++) if(last_used(con, row) >= 0) rows = row;
+    for(row = 0; row <= rows; row++) {
+        int last = last_used(con, row);
         for(col = 0; col <= last; col++) {
             u_char ch = con->vmem[(row * COLUMNS + col) * 2];
             serial_putc(ch >= 32 && ch < 127 ? ch : ' ');
         }
-        if(row < LINES - 1) serial_puts("\r\n");
+        if(row < rows) serial_puts("\r\n");
     }
-    snprintf(seq, sizeof(seq), "\033[%u;%uH", con->loc.y + 1, con->loc.x + 1);
-    serial_puts(seq);
+    serial_putc('\r');
+    if(rows > (int)con->loc.y) {
+        snprintf(seq, sizeof(seq), "\033[%dA", rows - (int)con->loc.y);
+        serial_puts(seq);
+    }
+    if(con->loc.x) {
+        snprintf(seq, sizeof(seq), "\033[%uC", con->loc.x);
+        serial_puts(seq);
+    }
 }
 
 void tty_switch(int index) {

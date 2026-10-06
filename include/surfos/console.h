@@ -11,8 +11,14 @@ File: console.h Date: Prior than 4/23/04
 
 #include <surfos/types.h>
 
-#define COLUMNS     80
-#define LINES       25
+/* 10/5/26: the text grid is set once at boot (init_console): 80x25 in VGA text mode, and
+   on a framebuffer as many cells of the same letters as the screen holds (driver/fbcore.c),
+   at most MAX_COLUMNS x MAX_LINES. COLUMNS and LINES were 80 and 25 until then. */
+extern u_int conColumns, conLines;
+#define COLUMNS     conColumns
+#define LINES       conLines
+#define MAX_COLUMNS 240
+#define MAX_LINES   100
 
 #define VMEM_ADDR   0xB8000
 #define VIDPORT 0x3D4
@@ -23,7 +29,7 @@ File: console.h Date: Prior than 4/23/04
 
 /* Virtual Console memory allocation*/
 #define NUM_CONSOLES 4 //F1..F4; each has a shell and a tty
-#define VMEM_SIZE 4000 //each virtual console is 4000 bytes
+#define VMEM_SIZE (MAX_COLUMNS * MAX_LINES * 2) //each virtual console holds the largest grid (in 2004, 4000 bytes)
 #define CONSOLE_BASE 0xC000000//0x800 //start storing the first console @
 //0x800 /***********************************/
 
@@ -38,7 +44,7 @@ typedef struct surf_console {
     TEXTCOLOR txtColor;
     surf_point loc;
     u_char *vmem;
-    u_char memBuf[4001];
+    u_char memBuf[VMEM_SIZE];
     /* 10/5/26: the ANSI escape sequences of tty.h (kernel/console.c); all zero is plain text */
     u_char esc;                 /* where the parser is in a sequence */
     u_char esc_mark;            /* ESC [ ? ...: the private marker; 1 = intermediate bytes (not ours) */

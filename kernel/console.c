@@ -4,6 +4,9 @@ SurfOS Console I/O
 File: console.c Date: Prior to 4/23/04
 --------------------
 (C)2004 Brandon Burr
+
+10/5/26: the text grid is set at boot (a framebuffer gets as many cells as it holds),
+and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
 */
 
 #include <asm/io.h>
@@ -34,8 +37,17 @@ surf_console *conActive; //the pointer to the active console
    ports are never touched there, only the serial port shows anything. */
 enum { VIDEO_VGA, VIDEO_FB, VIDEO_NONE };
 static int video = VIDEO_VGA;
-static u_char video_ram[VMEM_SIZE];
 static bool mirror_serial = true;
+
+/* The text grid (10/5/26): 80x25 as in 2004, unless a framebuffer holds more cells of the
+   same letters (1920x1080: 120x33). Set once, before anything is printed on the screen. */
+u_int conColumns = 80, conLines = 25;
+#if FB_MAX_COLS > MAX_COLUMNS || FB_MAX_ROWS > MAX_LINES
+#error "the console buffers must hold the largest framebuffer grid"
+#endif
+
+/* the bytes of one screenful in the grid: cells x 2 (character and attribute) */
+#define SCREEN_BYTES (COLUMNS * LINES * 2)
 
 void init_console(void) {
     int i=0;
@@ -44,15 +56,16 @@ void init_console(void) {
     //init the video console
     if(framebuffer_init() == 0) video = VIDEO_FB;
     else if(bootinfo.efi) video = VIDEO_NONE;
-    conVideo.vmem = video == VIDEO_VGA ? (u_char*)VMEM_ADDR : video_ram; //normally 0xB8000
-    if(video == VIDEO_FB) framebuffer_bind(video_ram);
+    if(video == VIDEO_FB) framebuffer_grid(&conColumns, &conLines); //more text, same letters
+    conVideo.vmem = video == VIDEO_VGA ? (u_char*)VMEM_ADDR : conVideo.memBuf; //normally 0xB8000
+    if(video == VIDEO_FB) framebuffer_bind(conVideo.memBuf);
     conVideo.txtColor=TEAL_TXT; //for posterity
     clearConsole((surf_console*)&conVideo);
     setPoint((surf_point*)&conVideo.loc,0,0);
 
     //init the virtual consoles
     for(i=0;i<NUM_CONSOLES;i++) {
-        conArray[i].vmem = &conArray[i].memBuf;//( CONSOLE_BASE + (i*VMEM_SIZE) );
+        conArray[i].vmem = conArray[i].memBuf;//( CONSOLE_BASE + (i*VMEM_SIZE) );
       conArray[i].txtColor=WHITE_TXT;
       clearConsole((surf_console*)&conArray[i]);
         setPoint((surf_point*)&conArray[i].loc,0,0);
@@ -68,7 +81,7 @@ void init_console(void) {
 const char *console_describe(char *buf, size_t size) {
     if(video == VIDEO_FB) return framebuffer_describe(buf, size);
     if(video == VIDEO_VGA) {
-        strlcpy(buf, "VGA text mode at 0xB8000", size);
+        strlcpy(buf, "VGA text mode at 0xB8000, 80x25 text", size);
         return buf;
     }
     framebuffer_describe(buf, size);            /* "none (why)" */
@@ -90,7 +103,7 @@ void syncVideoConsole(bool memcopy) {
     conVideo.loc=con->loc;
     conVideo.txtColor=con->txtColor;
     setpos(con);
-    if(memcopy) memcpy(conVideo.vmem,con->vmem,VMEM_SIZE);
+    if(memcopy) memcpy(conVideo.vmem,con->vmem,SCREEN_BYTES);
     KCRIT_LEAVE
     if(memcopy && video == VIDEO_FB) framebuffer_present();
 }
@@ -118,7 +131,7 @@ void switchConsole(u_int conNum) {
 void clearConsole(surf_console *con) { //re-initializes a console
   int i;
   if(!con) return;
-  for (i=0; i< (COLUMNS*LINES*2); i+=2) {
+  for (i=0; i< SCREEN_BYTES; i+=2) {
         *(con->vmem + i) = 0;
        *(con->vmem + i + 1) = 7;
   }
@@ -155,11 +168,11 @@ void sscroll(surf_console *con) { //scrolls the console
     if(!con) return;
     vmem=con->vmem;
 
-    for(i=COLUMNS*2,j=0;i<4000;i++,j++) { //shift the console up
+    for(i=COLUMNS*2,j=0;i<SCREEN_BYTES;i++,j++) { //shift the console up
         *(vmem+j) = *(vmem+i);
     }
 
-    for(;j<4000;j+=2) { //clean the last line
+    for(;j<SCREEN_BYTES;j+=2) { //clean the last line
         *(vmem+j)=0; //char byte
         *(vmem+j+1)=7; //attrib byte
     }
@@ -171,6 +184,7 @@ void sscroll(surf_console *con) { //scrolls the console
 
 int tX,tY;
 inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for the console
+    u_int pos;
     if(!con) return;
     if(isConsoleActive(con)==false) return;
     tX=con->loc.x;
@@ -178,31 +192,15 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
     if(con->cursor_off) { tX = 0; tY = LINES; } //ESC[?25l: just below the last line, where it never shows
     if(video == VIDEO_FB) { framebuffer_set_cursor(tX, tY); return; } //a drawn cursor; no CRTC on a framebuffer
     if(video == VIDEO_NONE) return;
+    /* 10/5/26: the CRTC cursor location, low byte (register 0xF) then high byte (0xE). The
+       2004 code did the same sum in inline assembly, with the width fixed at 80. */
+    pos = tY * COLUMNS + tX;
     KCRIT_ENTER
-    asm("mov $0, %ebx");
-    asm("mov (%0), %%bl" :: "m"(tX));
-    asm("mov $0, %eax");
-    asm("mov (%0),%%al" :: "m"(tY));
-    asm("movl $80, %edx\n"
-        "mul %edx\n"
-        "add %eax, %ebx\n"
-
-        "mov $0xf, %al\n"
-        "mov $0x03d4, %dx\n"
-        "out %al, %dx\n"
-
-        "mov %bl,%al\n"
-        "mov $0x03d5, %dx\n"
-        "out %al, %dx\n"
-
-        "mov $0xe, %al\n"
-        "mov $0x03d4,%dx\n"
-        "out %al,%dx\n"
-
-        "mov %bh, %al\n"
-        "mov $0x03d5, %dx\n"
-        "out %al, %dx\n");
-   KCRIT_LEAVE
+    outb(VIDPORT, 0x0F);
+    outb(VIDPORT + 1, pos & 0xFF);
+    outb(VIDPORT, 0x0E);
+    outb(VIDPORT + 1, (pos >> 8) & 0xFF);
+    KCRIT_LEAVE
 }
 
 /* write one character cell at the console's cursor, without moving the cursor */

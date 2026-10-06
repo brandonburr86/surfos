@@ -74,6 +74,7 @@ SMOKE = [
     # escape sequences (tty.h): the test pattern, then read back from VGA memory with its colours
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
+    ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
 ]
@@ -368,6 +369,18 @@ def ansi_screen_check(q):
     return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
 
 
+def console_switch_check(q):
+    """F2 and back to F1 on the PS/2 keyboard, after `ansi`: the serial terminal is repainted
+    from the console's buffer, down to its last row in use (Z in the corner, row 25), and the
+    cursor goes back up to the prompt on row 14, column 10"""
+    q.sendkeys('<f2>')
+    ok = q.expect('Kernel version', 10) and q.expect(PROMPT, 10)
+    q.sendkeys('<f1>')
+    ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
+    ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
+    return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
+
+
 def host_checks(q):
     """after the guest has run: read what it wrote to the disk with the host's mtools"""
     if not q.disk or not shutil.which('mcopy'):
@@ -401,6 +414,9 @@ def run_smoke(q, boot_timeout):
                 continue
             if cmd == '@ansi-screen':                        # the screen the previous step drew
                 results.append(ansi_screen_check(q))
+                continue
+            if cmd == '@console-switch':
+                results.append(console_switch_check(q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd.split()[0], 10)

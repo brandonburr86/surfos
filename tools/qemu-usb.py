@@ -12,16 +12,21 @@ and runs \\EFI\\BOOT\\BOOTX64.EFI from it, the same removable-media path a lapto
 
 The screen is read back without OCR: the framebuffer is captured with the monitor's
 screendump and every 8x16 cell is matched against the console font (driver/font8x16.c),
-using the same scale and centring as driver/fbcore.c. That is how the keyboard-only boot
-(no serial port at all, like the laptop) is driven: keys go in through the emulated
-PS/2 keyboard (monitor sendkey), text comes out of the framebuffer.
+using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at scale 2;
+1920x1080: 120x33). That is how the keyboard-only boot (no serial port at all, like the
+laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
+comes out of the framebuffer.
 
---test boots the image eight times, each a cold boot with fresh firmware variables:
+--test boots the image nine times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
              switching, a set of commands and the escape sequences of `ansi`, all through
              the keyboard and the screen
+  fullhd     the IdeaPad's panel size: QEMU's VGA offers 1920x1080 in its EDID and OVMF
+             hands that mode over. The console fills it with 120x33 cells at scale 2: a long
+             line on one row, Backspace back across a typed line that wrapped, `ansi` with
+             its corner at (119,32), console switching
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -160,8 +165,11 @@ def load_font():
 GLYPHS = None
 
 
+FB_MAX_COLS, FB_MAX_ROWS = 240, 100            # include/sys/framebuffer.h
+
+
 class Screen:
-    """an 80x25 text screen read back from a framebuffer screenshot (PPM)"""
+    """the console's text grid read back from a framebuffer screenshot (PPM)"""
     def __init__(self, ppm):
         global GLYPHS
         if GLYPHS is None:
@@ -172,9 +180,11 @@ class Screen:
         self.w, self.h = int(m.group(1)), int(m.group(2))
         self.px = ppm[m.end():]
         self.ppm = ppm
+        # fb_setup(): the scale at which 80x25 cells fit, then as many cells as the mode holds
         s = max(1, min(self.w // 640, self.h // 400))
-        self.scale, self.ox, self.oy = s, (self.w - 640 * s) // 2, (self.h - 400 * s) // 2
-        self.cols, self.nrows = 80, 25
+        self.scale = s
+        self.cols, self.nrows = min(self.w // (8 * s), FB_MAX_COLS), min(self.h // (16 * s), FB_MAX_ROWS)
+        self.ox, self.oy = (self.w - self.cols * 8 * s) // 2, (self.h - self.nrows * 16 * s) // 2
         self.cursor = None
         self.colours = {}                       # (col, row): (foreground, background) as RGB bytes
         self.rows = ([''.join(self.cell(c, r) for c in range(self.cols)).rstrip() for r in range(self.nrows)]
@@ -562,6 +572,53 @@ def scenario_keyboard(args, image, firmware, outdir):
     return results
 
 
+def scenario_fullhd(args, image, firmware, outdir):
+    """1920x1080, as on the laptop: more text, same letters (120x33 at scale 2, not 80x25 centred)"""
+    results = []
+    vm = Vm('fullhd', args, image, firmware, mem='512', serial=False, outdir=outdir,
+            extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
+
+    def at_prompt(s):
+        return last_prompt_row(s) >= 0 and s.rows[last_prompt_row(s)].rstrip().endswith(PROMPT)
+
+    def typed(keys, test, timeout=60):
+        vm.keys(keys)
+        return vm.wait_screen(lambda s: test(s) and at_prompt(s), timeout, interval=0.5)
+    try:
+        scr = vm.wait_screen(prompt_on, args.boot_timeout, interval=2.0)
+        results.append(('UEFI boot at 1920x1080 to the prompt (keyboard and framebuffer only)', scr is not None))
+        if scr is None:
+            vm.screen('stuck.png')
+            return results
+        vm.screen('boot.png')
+        results.append(('1920x1080: 120x33 cells at scale 2, 12-pixel margins above and below, the prompt at the left edge',
+                        (scr.w, scr.h, scr.scale, scr.cols, scr.nrows, scr.ox, scr.oy) == (1920, 1080, 2, 120, 33, 0, 12)
+                        and scr.rows[last_prompt_row(scr)].startswith(PROMPT)))
+        got = typed('bootinfo\n', lambda s: '120x33 text at scale 2' in s.text())
+        results.append(('bootinfo: framebuffer 1920x1080, 120x33 text at scale 2', got is not None))
+        # a line longer than 80 columns: typed past the end of the row (the line editor wraps it),
+        # 6 x Backspace back across the wrap, and echoed on one row of 105 characters
+        long = 'abcdefghij' * 11
+        got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:104] + 'Z' in s.rows)
+        results.append(('a 105-character line on one row; Backspace erases back across a wrapped line', got is not None))
+        got = typed('help\n', lambda s: any(r.startswith('    die ') and r.endswith('processes use run)') for r in s.rows))
+        results.append(('help: its 104-character line on one row', got is not None))
+        got = typed('ansi\n', lambda s: 'ANSI-TEST done' in s.text(), 30)
+        results.append(('ansi at 120x33: the pattern, Z in the corner (119,32), the size from TTY_GETSIZE', ansi_ok(got)))
+        vm.keys('<f2>')
+        two = vm.wait_screen(lambda s: prompt_on(s) and 'ANSI-TEST' not in s.text(), 20, interval=0.5)
+        vm.keys('<f1>')
+        one = vm.wait_screen(lambda s: 'ANSI-TEST done, 120x33' in s.text(), 20, interval=0.5)
+        results.append(('F2 shows console 2 and F1 brings console 1 back, at 120x33', two is not None and one is not None))
+        results.append(('QEMU still running', vm.proc.poll() is None))
+        final = vm.screen('final.png').text()
+        for bad in BAD:
+            results.append((f'no "{bad}" on the screen', bad not in final))
+    finally:
+        vm.close()
+    return results
+
+
 def scenario_highmem(args, image, firmware, outdir):
     results = []
     vm = Vm('highmem', args, image, firmware, mem='6144', serial=True, outdir=outdir)
@@ -772,8 +829,9 @@ def scenario_missing(args, image, firmware, outdir, path, message):
     return results
 
 
-SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'highmem': scenario_highmem,
-             'fallback': scenario_fallback, 'no-pit': scenario_nopit, 'usbnet': scenario_usbnet,
+SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
+             'highmem': scenario_highmem, 'fallback': scenario_fallback, 'no-pit': scenario_nopit,
+             'usbnet': scenario_usbnet,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -867,7 +925,7 @@ def main():
                 time.sleep(2)
             scr = vm.screen('screen.png')
             print(scr.text())
-            print(f'\n({scr.w}x{scr.h}, text scale {scr.scale}, cursor {scr.cursor})')
+            print(f'\n({scr.w}x{scr.h}, {scr.cols}x{scr.nrows} text at scale {scr.scale}, cursor {scr.cursor})')
             return 0 if scr and prompt_on(scr) else 1
         finally:
             vm.close()
@@ -876,7 +934,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'highmem', 'fallback', 'no-pit', 'usbnet', 'no-initrd', 'no-kernel']:
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'no-initrd',
+                               'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)
