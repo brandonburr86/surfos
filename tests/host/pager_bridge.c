@@ -46,6 +46,20 @@ void serial_console_putc(int c) {           /* driver/serial.c's rules */
 }
 void serial_console_clear(void) { serial_puts("\033[2J\033[H"); }
 
+/* 10/6/26: a stream console's bytes for its master (kernel/pty.c's pty_out()): recorded, for any
+   pseudo-terminal, as if the master read them at once */
+static char stream_rec[1 << 16];
+static int stream_len;
+int pty_out(surf_console *con, const char *s, u_int n, int how) {
+    (void)con;
+    (void)how;
+    if(stream_len + (int)n > (int)sizeof(stream_rec)) return 0;
+    memcpy(stream_rec + stream_len, s, n);
+    stream_len += (int)n;
+    return 1;
+}
+void pty_task_gone(struct surf_task *task) { (void)task; }
+
 int framebuffer_init(void) { return 0; }
 void framebuffer_bind(const u8 *cells) { (void)cells; }
 void framebuffer_grid(u_int *cols, u_int *rows) { *cols = 80; *rows = 25; }
@@ -129,7 +143,7 @@ void sim_init(int ascii) {
     extern surf_console conVideo;
     ascii_word = ascii;
     memset(T, 0, sizeof(T));
-    memset(conArray, 0, sizeof(surf_console) * NUM_CONSOLES);     /* a scenario that ended at a question leaves nothing */
+    memset(conArray, 0, sizeof(surf_console) * NUM_TTYS);         /* a scenario that ended at a question leaves nothing */
     memset(&conVideo, 0, sizeof(conVideo));
     for(i = 0; i < NT; i++) {
         T[i].pid = i;
@@ -146,6 +160,7 @@ void sim_init(int ascii) {
     init_tty();
     for(i = 0; i < NT; i++) T[i].tty = &ttys[0];
     serial_len = 0;
+    stream_len = 0;
 }
 
 void sim_cur(int task) { curTask = &T[task]; T[task].state = TS_RUNNING; }

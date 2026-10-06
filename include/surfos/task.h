@@ -169,6 +169,8 @@ int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tt
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
 surf_task *task_find(u_long pid);
 u_int task_count(void);
+u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */
+u_int task_kill_tty(struct tty *tty);    /* 10/6/26: kill_task() for each of them (a hangup); how many */
 
 void yield(void);
 void sleep_ms(u_long ms);

@@ -12,6 +12,10 @@ itself is in console.c: it counts the rows and asks; here is who is paged).
 or Ctrl+C: surfos/task.h), and Ctrl+C in line mode interrupts the job in the foreground.
 10/6/26: tty_term_input(): the serial line's input rules, which a pseudo-terminal's master
 side (kernel/pty.c) follows too.
+10/6/26: the pseudo-terminals' ttys follow the consoles' in ttys[] (NUM_TTYS in all), each
+with its stream console: raw mode, the pager, Ctrl+C, TTY_GETSIZE (PTY_SETSIZE's size) and
+TTY_CAPS (UTF-8 and colour) work on them as on F1-F4; the keyboard, the serial port and
+console switching stay with F1-F4.
 */
 
 #include <surfos/types.h>
@@ -25,14 +29,15 @@ side (kernel/pty.c) follows too.
 #include <surfos/multiboot.h>
 #include <sys/serial.h>
 #include <sys/cp437.h>
+#include <surfos/proc.h>
 #include <blibc_common.h>
 
-struct tty ttys[NUM_CONSOLES];
+struct tty ttys[NUM_TTYS];      /* 10/6/26: F1-F4, then the pseudo-terminals' */
 struct tty *tty_active;
 
 void init_tty(void) {
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) {
+    for(i = 0; i < NUM_TTYS; i++) {
         memset(&ttys[i], 0, sizeof(struct tty));
         ttys[i].index = i;
         ttys[i].con = &conArray[i];
@@ -42,10 +47,30 @@ void init_tty(void) {
     tty_active = &ttys[0];
 }
 
+/* 10/6/26: a console's tty, a pseudo-terminal's too (conArray[i] is ttys[i]'s console) */
 struct tty *tty_for_console(surf_console *con) {
-    int i;
-    for(i = 0; i < NUM_CONSOLES; i++) if(ttys[i].con == con) return &ttys[i];
+    if(con >= conArray && con < conArray + NUM_TTYS) return &ttys[con - conArray];
     return &ttys[0];
+}
+
+/* 10/6/26: the number programs see (surfos/proc.h): 0-3 for F1-F4, PROC_TTY_PTY + n for pty n */
+int tty_number(struct tty *t) {
+    if(t >= ttys && t < ttys + NUM_CONSOLES) return (int)(t - ttys);
+    if(t >= ttys + NUM_CONSOLES && t < ttys + NUM_TTYS) return PROC_TTY_PTY + (int)(t - ttys - NUM_CONSOLES);
+    return -1;
+}
+
+/* 10/6/26: a pseudo-terminal's tty as new (kernel/pty.c): no keys queued, line mode, no history.
+   Nobody reads it meanwhile, so its wait queues are left as they are (empty). */
+void tty_reset(struct tty *t) {
+    u_long flags = irq_save();
+    t->hungup = 0;
+    t->in_head = t->in_tail = 0;
+    t->hist_count = 0;
+    t->dropped = 0;
+    t->raw = 0;
+    t->raw_owner = NULL;
+    irq_restore(flags);
 }
 
 /**** input ****/
@@ -160,12 +185,12 @@ int tty_trygetc(struct tty *t) {
 }
 
 /* 10/6/26: -1 when the reader's call is cut short (task_interrupted()): the keys stay queued for
-   whoever reads next */
+   whoever reads next. -1 also on a pseudo-terminal that has hung up (kernel/pty.c): no key comes. */
 int tty_getc(struct tty *t) {
     console_page_read(t->con);
     for(;;) {
         u_long flags = irq_save();
-        if(task_interrupted() && !in_interrupt()) {
+        if((task_interrupted() && !in_interrupt()) || t->hungup) {
             irq_restore(flags);
             return -1;
         }
@@ -195,7 +220,7 @@ int tty_getc(struct tty *t) {
 int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
     for(;;) {
         u_long flags = irq_save();
-        if(*cancel || (task_interrupted() && !in_interrupt())) {
+        if(*cancel || (task_interrupted() && !in_interrupt()) || t->hungup) {
             irq_restore(flags);
             return -1;
         }
@@ -213,6 +238,11 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
             irq_restore(flags);
         }
     }
+}
+
+/* 10/6/26: how many more keys the input queue takes (a pty's master waits for room, kernel/pty.c) */
+u_int tty_room(struct tty *t) {
+    return (t->in_tail + TTY_INPUT_SIZE - t->in_head - 1) % TTY_INPUT_SIZE;
 }
 
 void tty_flush(struct tty *t) {
@@ -303,7 +333,8 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
    Raw mode: whatever keys are queued, at least one (it waits for that one), up to len.
-   10/6/26: -EINTR when the reader's call is cut short (a kill, Ctrl+C). */
+   10/6/26: -EINTR when the reader's call is cut short (a kill, Ctrl+C); 0, the end of the
+   input, on a pseudo-terminal that has hung up. */
 int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;
@@ -311,13 +342,13 @@ int tty_read(struct tty *t, char *buf, size_t len) {
     if(t->raw) {
         size_t got = 0;
         n = tty_getc(t);
-        if(n < 0) return -EINTR;
+        if(n < 0) return t->hungup ? 0 : -EINTR;
         buf[got++] = (char)n;
         while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
         return (int)got;
     }
     n = tty_readline(t, line, sizeof(line));
-    if(n < 0) return -EINTR;
+    if(n < 0) return t->hungup ? 0 : -EINTR;
     line[n++] = '\n';
     if((size_t)n > len) n = (int)len;
     memcpy(buf, line, n);
@@ -427,11 +458,18 @@ static int tty_page(struct tty *t, int on) {
 /* terminal control for full-screen programs (see tty.h) */
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
-    if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
+    if(op == TTY_GETSIZE) {                       /* 10/6/26: a pseudo-terminal's is PTY_SETSIZE's */
+        if(t->con->stream) return (int)((t->con->cols << 16) | t->con->rows);
+        return (COLUMNS << 16) | LINES;
+    }
     /* 10/6/26: the console draws UTF-8 (as code page 437, console.c) and the ANSI colours.
        `ascii` on the kernel command line, for a serial terminal that cannot show UTF-8, leaves
-       UTF-8 out: the user shell then draws its prompt in ASCII. */
-    if(op == TTY_CAPS) return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
+       UTF-8 out: the user shell then draws its prompt in ASCII. A pseudo-terminal passes both
+       on to the terminal at its far end, which is taken to draw them (the telnet client). */
+    if(op == TTY_CAPS) {
+        if(t->con->stream) return TTY_CAP_COLOR | TTY_CAP_UTF8;
+        return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
+    }
     if(op == TTY_PAGE) return arg > 1 ? -22 : tty_page(t, (int)arg);
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
@@ -448,11 +486,13 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
 /* A task is gone (it exited or was killed): raw mode it set ends with it, and so do the
    colours and the hidden cursor it left on a console (console.c), so a crashed editor
    cannot leave its shell's console raw or unreadable. From task.c with interrupts off,
-   and from trap_fatal() before the report. */
+   and from trap_fatal() before the report. 10/6/26: the pseudo-terminals too, and a session
+   whose last task this was has ended (kernel/pty.c). */
 void tty_task_gone(struct surf_task *task) {
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) {
+    for(i = 0; i < NUM_TTYS; i++) {
         if(ttys[i].raw && ttys[i].raw_owner == task) set_raw(&ttys[i], 0, NULL);
     }
     console_task_gone(task);
+    pty_task_gone(task);
 }

@@ -9,6 +9,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 when that cannot be (see init_main()).
 10/6/26: a kill waits for the end of the call its task is in (task.h), and Ctrl+C
 reaches the job in the foreground (task_interrupt_job()).
+10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c).
 */
 
 #include <surfos/types.h>
@@ -227,6 +228,12 @@ surf_task *kthread_create_on(const char *name, surf_console *con, kthread_fn fn,
     if(!t) return NULL;
     t->entry = fn;
     t->arg = arg;
+    /* 10/6/26: a process started on a pseudo-terminal that has hung up (kernel/pty.c) gets the kill
+       that waits, as the tasks there did: it ends once it is loaded */
+    if((flags & TF_INCALL) && t->tty && t->tty->hungup) {
+        t->intr |= TI_KILL;
+        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+    }
     task_start(t);
     return t;
 }
@@ -423,6 +430,33 @@ int task_interrupt_job(surf_task *owner) {
         hit = 1;
     }
     return hit;
+}
+
+/* 10/6/26: the live tasks whose terminal is tty (a pseudo-terminal's session: kernel/pty.c) */
+u_int task_count_tty(struct tty *tty) {
+    surf_task *t;
+    u_int n = 0;
+    u_long flags = irq_save();
+    for(t = all_tasks; t; t = t->all_next) if(t->tty == tty && t->state != TS_DEAD) n++;
+    irq_restore(flags);
+    return n;
+}
+
+/* 10/6/26: a pseudo-terminal hangs up (kernel/pty.c): every live task whose terminal it is gets
+   the kill that waits for the end of its call; how many. The calling task, if it is one of them,
+   only inside a call (it ends at the call's end): otherwise it is ending already. */
+u_int task_kill_tty(struct tty *tty) {
+    surf_task *t;
+    u_int n = 0;
+    u_long flags = irq_save();
+    for(t = all_tasks; t; t = t->all_next) {
+        if(t->tty != tty || t->state == TS_DEAD || t == idle_task) continue;
+        if(t == curTask && !t->in_call) continue;
+        kill_task(t);
+        n++;
+    }
+    irq_restore(flags);
+    return n;
 }
 
 static void reap(surf_task *t) {

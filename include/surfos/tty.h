@@ -7,6 +7,8 @@ One tty per virtual console: its own input queue, readers' wait queue and line
 history. The active tty receives the keyboard and the serial port; a task reads
 from the tty of the console it was started on, so a shell on console 2 only sees
 keys typed while console 2 is displayed.
+10/6/26: and one per pseudo-terminal (surfos/pty.h, kernel/pty.c), after them in ttys[]:
+its keys come from the master side, its console is a stream to the master side.
 */
 
 #ifndef _SURFOS_TTY_H
@@ -32,13 +34,16 @@ struct tty {
     volatile int raw;                   /* TTY_RAW (tty_ctl): read by the keyboard and serial ISRs */
     struct surf_task *raw_owner;        /* the task that set it; raw mode ends with that task */
     wait_queue_t page_waiters;          /* 10/6/26: paged tasks waiting while another one is at --More-- */
+    volatile u_char hungup;             /* 10/6/26: a pty whose master side is closed: no key comes, reads end */
 };
 
-extern struct tty ttys[NUM_CONSOLES];
+extern struct tty ttys[NUM_TTYS];     /* 10/6/26: F1-F4, then the pseudo-terminals' */
 extern struct tty *tty_active;
 
 void init_tty(void);
 struct tty *tty_for_console(surf_console *con);
+int tty_number(struct tty *t);          /* 10/6/26: 0-3 for F1-F4, PROC_TTY_PTY + n for pty n (surfos/proc.h), -1 */
+void tty_reset(struct tty *t);          /* 10/6/26: a pseudo-terminal's, as new: no keys, line mode, no history */
 
 /* input side (interrupt handlers call tty_input) */
 void tty_input(struct tty *t, u_char c);  /* 10/6/26: Ctrl+C in line mode interrupts the job in the foreground */
@@ -49,6 +54,7 @@ int tty_getc(struct tty *t);            /* blocks; 0-255; 10/6/26: -1 when the r
 int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the pager: -1 once *cancel is set */
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */
 void tty_flush(struct tty *t);
+u_int tty_room(struct tty *t);          /* 10/6/26: how many more keys the input queue takes */
 
 /* line discipline: echo, backspace, Ctrl-U, Ctrl-C, Up/Down history; returns the length.
    10/6/26: -1 and an empty line when the reader's call is cut short (surfos/task.h) */
@@ -113,5 +119,9 @@ struct surf_task;
 void tty_key(struct tty *t, u_char c);
 int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
 void tty_task_gone(struct surf_task *task);          /* interrupts off */
+
+/* 10/6/26: pseudo-terminals (kernel/pty.c): a task on one ended (from tty_task_gone()); when
+   no task has the pty as its terminal any more, its session has ended */
+void pty_task_gone(struct surf_task *task);
 
 #endif
