@@ -843,11 +843,12 @@ static void stream_show(surf_console *con) {
         memcpy(out + n, "\033[27m", 5);
         n += 5;
     }
-    pty_out(con, out, n, PTY_OUT_URGENT);
+    if(!pty_out(con, out, n, PTY_OUT_URGENT)) return;  /* no room at all (nobody reads): nothing shown to take away */
     con->page_len = (u_char)len;
     con->page_shown = 1;
     con->loc.x = len;
     con->wrap = 0;
+    con->at_home = 0;
 }
 
 /* the question on the cursor's row, from its start, the cursor after it. Interrupts off. */

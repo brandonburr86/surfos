@@ -54,6 +54,7 @@ const char *sim_captured(void);
 void sim_term(int n);
 int sim_stream(char *out, int max);
 void sim_stream_size(int cols, int rows);
+void sim_stream_drop(int on);
 void sim_stream_pos(int *x, int *wrap);
 void sim_term_input(int c);
 void sim_clear(void);
@@ -834,7 +835,8 @@ static void t_stream_backspace(void) {
     check(stream_is(""), "at the top left: nothing, as on the screen");
 }
 
-/* the review's probe: ESC[J after printing at the top left is no new screenful */
+/* the review's probes: ESC[J after printing at the top left is no new screenful; a question
+   that could not be sent is not taken away */
 static void t_stream_review(void) {
     int st, x, wrap, rows, drop, a, o;
     on_pty(80, 10, 1);
@@ -849,6 +851,15 @@ static void t_stream_review(void) {
     check(st == BLOCKED && stream_is(lines_text("\n", 6, 8, QUESTION)), "so the question comes after 9 rows, not later");
     sim_input('q');
     resume(CHILD);
+
+    on_pty(80, 10, 1);
+    sim_stream_drop(1);
+    st = run(CHILD, w_lines, 1, 12);
+    sim_stream_drop(0);
+    check(st == BLOCKED && asker() == CHILD, "the question with no room left in the master's buffer: it is asked all the same");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == DONE && stream_is(lines_text("", 10, 12, "")), "and with nothing shown, nothing is taken away (no CR ESC[K)");
 }
 
 static void t_stream_clear(void) {

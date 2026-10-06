@@ -52,11 +52,11 @@ void serial_console_clear(void) { serial_puts("\033[2J\033[H"); }
 /* 10/6/26: a stream console's bytes for its master (kernel/pty.c's pty_out()): recorded, for any
    pseudo-terminal, as if the master read them at once */
 static char stream_rec[1 << 16];
-static int stream_len;
+static int stream_len, stream_drop;
 int pty_out(surf_console *con, const char *s, u_int n, int how) {
     (void)con;
     (void)how;
-    if(stream_len + (int)n > (int)sizeof(stream_rec)) return 0;
+    if(stream_drop || stream_len + (int)n > (int)sizeof(stream_rec)) return 0;   /* no room at all: dropped */
     memcpy(stream_rec + stream_len, s, n);
     stream_len += (int)n;
     return 1;
@@ -165,6 +165,7 @@ void sim_init(int ascii) {
     for(i = 0; i < NT; i++) T[i].tty = &ttys[0];
     serial_len = 0;
     stream_len = 0;
+    stream_drop = 0;
     term = 0;
     term_esc = 0;
 }
@@ -189,6 +190,7 @@ int sim_stream(char *out, int max) {
     return n;
 }
 
+void sim_stream_drop(int on) { stream_drop = on; }   /* the master's buffer full: pty_out() drops everything */
 void sim_stream_size(int cols, int rows) { console_stream_resize(&conArray[term], (u_int)cols, (u_int)rows); }
 void sim_stream_pos(int *x, int *wrap) { *x = (int)conArray[term].loc.x; *wrap = conArray[term].wrap; }
 void sim_term_input(int c) { tty_term_input(&ttys[term], &term_esc, (u_char)c); }
