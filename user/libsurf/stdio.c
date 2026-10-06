@@ -230,6 +230,18 @@ int fflush(FILE *f) {
     return r;
 }
 
+/* 10/6/26: the stream forgets what it holds, written or read ahead, and its error: for a
+   shell whose redirected output could not be written (a full disk), so that the rest does
+   not reach the console once descriptor 1 is the console again */
+int fpurge(FILE *f) {
+    f->wlen = 0;
+    f->rpos = f->rend = 0;
+    f->ungot = EOF;
+    f->dir = 0;
+    f->flags &= ~F_ERR;
+    return 0;
+}
+
 int setvbuf(FILE *f, char *buf, int mode, size_t size) {
     if(mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return -1;
     fflush(f);
