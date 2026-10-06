@@ -460,7 +460,8 @@ SurfOS has no users and no home directories, so a shell starts at `/`.
 
 Tab completes the first word from the shell's commands, the kernel's and the programs, and
 any other word (or one with a `/` in it) as a file or directory name: one match is filled
-in, several as far as they agree, and a second Tab lists them.
+in, several as far as they agree, and a second Tab lists them (asking first when there
+are more than the screen holds).
 
 **Long output** stops when the screen is full, with `--More--` on the last row: Space
 shows the next screenful, Enter one more line, and q (or Esc on the keyboard) leaves the
@@ -477,7 +478,8 @@ all three groups, `help <name>` one command.
 **A line** is words separated by blanks. `"double"` or `'single'` quotes keep blanks
 inside a word, and `\` keeps the next character as it is. `cmd > file` sends what the
 command prints into the file (`>>` adds to its end), `cmd < file` makes a program read
-the file, `cmd &` runs a program in the background, and `;` separates commands. `$?` is
+the file, `cmd &` runs a program in the background (its end is reported before the next
+prompt), and `;` separates commands. `$?` is
 the status of the last command (`echo $?`); there are no other variables, no wildcards
 and no pipes. The kernel's commands can be redirected too, which is a quick way to keep
 what they say: `lspci > /data/lspci.txt`. A question such as fdisk's still appears on the
@@ -487,7 +489,8 @@ screen.
 that could not be started, 127 no such command, 137 a program the kernel killed. A
 program that ends with another status says `[exit status N]`.
 
-**Settings.** `set` lists them, `set <key> <value>` changes one for this shell, and
+**Settings.** `set` lists them, `set <key> <value>` (or `<key>=<value>`) changes one for
+this shell, and
 `/initrd/etc/surfsh.conf` has the values every shell starts with:
 
 | Key | Values | |
