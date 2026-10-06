@@ -23,7 +23,9 @@ returns 0 once the session has ended (no task has the pty as its terminal any mo
 everything was read. write() on the master side delivers the bytes as typed keys, with
 the serial line's rules: in line mode CR is Enter, DEL is Backspace and the escape
 sequences of the cursor keys become those keys; in raw mode (TTY_RAW) the bytes pass as
-they are; Ctrl+C interrupts the foreground job as on a console.
+they are; Ctrl+C interrupts the foreground job as on a console. poll() on the master side
+(surfos/poll.h): POLLIN when there is output or the session has ended, POLLHUP once it has
+ended and everything was read (the read that returns 0 is next), POLLOUT always.
 
 On the pty, TTY_GETSIZE answers what PTY_SETSIZE set (80x24 at first), TTY_CAPS answers
 TTY_CAP_UTF8 | TTY_CAP_COLOR, and TTY_RAW and TTY_PAGE work as on a console (the pager

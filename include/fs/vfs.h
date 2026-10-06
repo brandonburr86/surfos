@@ -128,7 +128,9 @@ struct vnode_ops {
     /* 10/5/26: within one file system; replaces an existing file (not a directory) at the target */
     int (*rename)(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname);
     /* 10/6/26: what poll() reports for a descriptor of this vnode (POLLIN, POLLOUT, POLLHUP,
-       POLLERR of surfos/poll.h); NULL: always ready to read and write */
+       POLLERR of surfos/poll.h); NULL: always ready to read and write. It only looks: it never
+       waits, and it must never call poll_wake(), or a task in poll() would never sleep (it looks
+       again after every poll_wake(), fs/poll.c) */
     int (*poll)(struct vnode *v, struct file *f);
 };
 
