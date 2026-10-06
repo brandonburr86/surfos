@@ -607,6 +607,23 @@ def scenario_keyboard(args, image, firmware, outdir):
         scr = vm.wait_screen(lambda s: 'ANSI-TEST done' in s.text() and prompt_on(s), 20, interval=0.5)
         results.append(('escape sequences on the framebuffer: position, moves, erase, inverse, colours, the corner',
                         ansi_ok(scr)))
+        # 10/6/26: surfsh's line editor on the PS/2 keyboard, as on the laptop: Tab, Up and Enter ('\r') in raw
+        # mode. The ASCII prompt first, which every framebuffer font draws (the wave needs the console's UTF-8 work).
+        vm.keys('surfsh\n')
+        ok = vm.wait_screen(lambda s: any(r.startswith('SURF ') for r in s.rows), 30, interval=0.5) is not None
+        if ok:
+            vm.keys('set prompt.unicode off\n')
+            ok = vm.wait_screen(lambda s: s.rows[last_prompt_row(s)].rstrip().endswith('SURF ~>'), 30, interval=0.5) is not None
+        if ok:
+            vm.keys('ech<tab>keyboard-ok\n<up>\n')
+            ok = vm.wait_screen(lambda s: [r.strip() for r in s.rows].count('keyboard-ok') == 2 and
+                                s.rows[last_prompt_row(s)].rstrip().endswith('SURF ~>'), 30, interval=0.5) is not None
+        if ok:
+            vm.keys('exit 7\n')
+            ok = vm.wait_screen(lambda s: 'exit status 7' in s.text() and ends_prompt(s.rows[last_prompt_row(s)]),
+                                30, interval=0.5) is not None
+        vm.screen('surfsh.png')
+        results.append(('keyboard: surfsh completes with Tab, recalls with Up, runs with Enter and exits', ok))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:
