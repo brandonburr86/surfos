@@ -13,6 +13,12 @@ on the socket's event with the lock released.
 
 10/6/26: a wait gives up like a timeout when the caller's call is cut short (a
 kill waits for its end, or Ctrl+C: surfos/task.h).
+
+10/6/26 (the telnet server): sixteen sockets; a listening one has no buffers,
+and conflicts only with another listening one on its port, so a server can
+listen again while its old connections finish. tcp_open() and tcp_listen_on()
+say why they fail (refused, timed out, no route to the host or the network, the
+port listened on, no socket left).
 */
 
 #include <surfos/types.h>
@@ -27,7 +33,7 @@ kill waits for its end, or Ctrl+C: surfos/task.h).
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
-#define TCP_SOCKETS 8
+#define TCP_SOCKETS 16                  /* 10/6/26: 8 before the telnet server */
 #define TCP_BUF 8192
 #define TCP_MSS 1460
 #define TCP_RTO (HZ)                    /* ticks */
@@ -73,21 +79,36 @@ static u16 next_port = 40000;
 
 /**** sockets ****/
 
-static struct tcp_socket *sock_alloc(void) {
+/* 10/6/26: a listening socket moves no data: no buffers. *err says why there is none:
+   -ENFILE (all sockets in use) or -ENOMEM. */
+static struct tcp_socket *sock_new(bool buffers, int *err) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
         if(s->used) continue;
         memset(s, 0, sizeof(*s));
-        s->txbuf = (u8 *)kalloc(TCP_BUF);
-        s->rxbuf = (u8 *)kalloc(TCP_BUF);
-        if(!s->txbuf || !s->rxbuf) { kfree(s->txbuf); kfree(s->rxbuf); return NULL; }
+        if(buffers) {
+            s->txbuf = (u8 *)kalloc(TCP_BUF);
+            s->rxbuf = (u8 *)kalloc(TCP_BUF);
+            if(!s->txbuf || !s->rxbuf) {
+                kfree(s->txbuf);
+                kfree(s->rxbuf);
+                s->txbuf = s->rxbuf = NULL;
+                if(err) *err = -ENOMEM;
+                return NULL;
+            }
+        }
         s->used = true;
         s->state = CLOSED;
         event_init(&s->ev);
         return s;
     }
+    if(err) *err = -ENFILE;
     return NULL;
+}
+
+static struct tcp_socket *sock_alloc(void) {
+    return sock_new(true, NULL);
 }
 
 static void sock_free(struct tcp_socket *s) {
@@ -101,6 +122,13 @@ static void sock_free(struct tcp_socket *s) {
 static bool port_in_use(u16 port) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) if(socks[i].used && socks[i].local_port == port) return true;
+    return false;
+}
+
+/* 10/6/26: a listener's port: only another listener takes it (connections keep their own) */
+static bool port_listened(u16 port) {
+    int i;
+    for(i = 0; i < TCP_SOCKETS; i++) if(socks[i].used && socks[i].state == LISTEN && socks[i].local_port == port) return true;
     return false;
 }
 
@@ -387,6 +415,17 @@ void tcp_tick(void) {
     }
 }
 
+/* 10/6/26: the next hop to hop does not answer ARP (net/arp.c): a connection being opened through
+   it fails (EHOSTUNREACH) instead of retrying until it times out. Under net_lock. */
+void tcp_unreachable(ipaddr_t hop) {
+    struct netdev *dev = netdev_default();
+    int i;
+    for(i = 0; i < TCP_SOCKETS; i++) {
+        struct tcp_socket *s = &socks[i];
+        if(s->used && s->state == SYN_SENT && dev && ip_next_hop(dev, s->remote_ip) == hop) fail(s, -EHOSTUNREACH);
+    }
+}
+
 /**** the API ****/
 
 /* wait until cond, with the lock released; returns false on timeout (10/6/26: or when cut short) */
@@ -404,12 +443,28 @@ void tcp_tick(void) {
     }                                                                       \
     ok_; })
 
-struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
+/* 10/6/26: why a connection to dst cannot even be tried: no interface, no address on it, no
+   link, or dst off the interface's network with no gateway to send it to; 0 when it can */
+static int no_route(ipaddr_t dst) {
+    struct netdev *dev = netdev_default();
+    if(!dev || !dev->ip || !dev->link_up) return -ENETUNREACH;
+    if(dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) && !dev->gateway) return -ENETUNREACH;
+    return 0;
+}
+
+/* 10/6/26: the active open, with the reason it failed: -ENETUNREACH, -ENFILE, -ENOMEM,
+   -ECONNREFUSED (a reset answered), -EHOSTUNREACH (the next hop never answered ARP),
+   -ETIMEDOUT (no answer within timeout_ms, or the SYN's retries ran out), -EINTR (cut short) */
+int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out) {
     struct tcp_socket *s;
+    int err = 0;
     bool ok;
+    *out = NULL;
+    if(!dst || !dport) return -EINVAL;
     mutex_lock(&net_lock);
-    s = sock_alloc();
-    if(!s) { mutex_unlock(&net_lock); return NULL; }
+    err = no_route(dst);
+    s = err ? NULL : sock_new(true, &err);
+    if(!s) { mutex_unlock(&net_lock); return err; }
     s->local_port = ephemeral_port();
     s->remote_ip = dst;
     s->remote_port = dport;
@@ -423,24 +478,39 @@ struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
     arm_rto(s);
     ok = WAIT_FOR(s, s->state != SYN_SENT, timeout_ms);
     if(!ok || s->state != ESTABLISHED) {
-        int err = s->error ? s->error : -ETIMEDOUT;
+        err = s->state == SYN_SENT ? (task_interrupted() ? -EINTR : -ETIMEDOUT) : (s->error ? s->error : -ECONNREFUSED);
         sock_free(s);
         mutex_unlock(&net_lock);
-        (void)err;
-        return NULL;
+        return err;
     }
     mutex_unlock(&net_lock);
-    return s;
+    *out = s;
+    return 0;
+}
+
+struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
+    struct tcp_socket *s;
+    return tcp_open(dst, dport, timeout_ms, &s) ? NULL : s;
+}
+
+/* 10/6/26: -EINVAL for port 0, -EADDRINUSE when another socket listens there, -ENFILE */
+int tcp_listen_on(u16 port, struct tcp_socket **out) {
+    struct tcp_socket *s = NULL;
+    int err = 0;
+    *out = NULL;
+    if(!port) return -EINVAL;
+    mutex_lock(&net_lock);
+    if(port_listened(port)) err = -EADDRINUSE;
+    else s = sock_new(false, &err);
+    if(s) { s->local_port = port; s->state = LISTEN; }
+    mutex_unlock(&net_lock);
+    *out = s;
+    return s ? 0 : err;
 }
 
 struct tcp_socket *tcp_listen(u16 port) {
     struct tcp_socket *s;
-    mutex_lock(&net_lock);
-    if(port_in_use(port)) { mutex_unlock(&net_lock); return NULL; }
-    s = sock_alloc();
-    if(s) { s->local_port = port; s->state = LISTEN; }
-    mutex_unlock(&net_lock);
-    return s;
+    return tcp_listen_on(port, &s) ? NULL : s;
 }
 
 struct tcp_socket *tcp_accept(struct tcp_socket *l, u_long timeout_ms) {
