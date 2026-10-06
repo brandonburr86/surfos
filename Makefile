@@ -264,11 +264,17 @@ $(BUILD)/host/test_usb: tests/host/test_usb.c $(BUILD)/host/kernel/driver/usb/us
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb
+$(BUILD)/host/test_part: tests/host/test_part.c $(BUILD)/host/kernel/driver/parttab.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
+          $(BUILD)/host/test_part
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
 	$(BUILD)/host/test_usb
+	$(BUILD)/host/test_part
 
 clean:
 	rm -rf build

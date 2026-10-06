@@ -55,8 +55,12 @@ struct bdev {
     u32 nblocks;                /* capacity */
     u32 start;                  /* a partition: first block on the parent */
     struct bdev *parent;        /* a partition: the disk, else NULL */
-    u8 part_type;               /* a partition: the MBR type byte */
-    u8 part_index;              /* a partition: its number, from 1 */
+    u8 part_type;               /* a partition: the MBR type byte (GPT: its MBR equivalent, or 0) */
+    u8 part_index;              /* a partition: its number, from 1 (MBR logical partitions from 5) */
+    u8 scheme;                  /* a disk: the partition table found on it; a partition: the table it is in
+                                   (PART_SCHEME_NONE, _MBR, _GPT in sys/part.h) */
+    const char *type_name;      /* a partition: its type in a few words ("FAT32 LBA", "EFI system", "basic data") */
+    char part_label[37];        /* a GPT partition: its name ("SURFOSUSB"), in ASCII; "" for MBR */
     u8 bus;                     /* BDEV_BUS_*; a partition copies its disk's */
     bool removable;             /* the medium can be taken out (a USB stick, a card reader) */
     bool readonly;
@@ -95,7 +99,8 @@ int bdev_may_format(struct bdev *d, char *why, size_t size);
 void bdev_print(void);                      /* lsblk */
 const char *bdev_part_type_name(u8 type);
 
-/* mbr.c: register the MBR partitions of a disk as <name>1..<name>4 */
+/* part.c: register the partitions of a disk (MBR with logical partitions from 5, or GPT) as
+   <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read */
 int bdev_scan_partitions(struct bdev *disk);
 
 /* drivers (driver table entries) */

@@ -15,6 +15,7 @@ the destructive tools.
 #include <surfos/console.h>
 #include <surfos/irq.h>
 #include <sys/bdev.h>
+#include <sys/part.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <blibc_common.h>
@@ -155,23 +156,10 @@ int bdev_flush(struct bdev *d) {
     return disk->ops->flush(disk);
 }
 
+/* the MBR type byte's name (driver/parttab.c keeps the table) */
 const char *bdev_part_type_name(u8 type) {
-    switch(type) {
-    case 0x01: return "FAT12";
-    case 0x04: return "FAT16 <32M";
-    case 0x05: return "extended";
-    case 0x06: return "FAT16";
-    case 0x07: return "NTFS/exFAT";
-    case 0x0B: return "FAT32";
-    case 0x0C: return "FAT32 LBA";
-    case 0x0E: return "FAT16 LBA";
-    case 0x0F: return "extended LBA";
-    case 0x82: return "Linux swap";
-    case 0x83: return "Linux";
-    case 0xEE: return "GPT protective";
-    case 0xEF: return "EFI system";
-    }
-    return "?";
+    const char *n = part_mbr_type_name(type);
+    return n ? n : "?";
 }
 
 static void print_blocks(u32 nblocks) {
@@ -188,7 +176,7 @@ void bdev_print(void) {
         printf("    %-6s", d->name);
         print_blocks(d->nblocks);
         printf(" %-10lu %6lu/%-6lu", (u_long)d->nblocks, d->reads, d->writes);
-        if(d->parent) printf(" part %02x %-6s", d->part_type, bdev_part_type_name(d->part_type));
+        if(d->parent) printf(" part %s %-10s", d->scheme == PART_SCHEME_GPT ? "gpt" : "mbr", d->type_name ? d->type_name : "?");
         else printf(" disk%s        ", d->readonly ? " ro" : "   ");
         printf(" %s\n", d->parent ? "" : d->model);
     }
