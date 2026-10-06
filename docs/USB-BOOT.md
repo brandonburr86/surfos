@@ -11,9 +11,10 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 8 cold boots under OVMF, 117 checks, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 11 cold boots under OVMF, at -O0 and -O2 |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
+| Files on a second USB stick: partitions, FAT32 that the Mac reads, a text editor, a C library | done under emulation; **pending on the laptop** | `make test-usb`, scenarios `usbdisk` and `storage`; [section 9](#9-files-on-a-usb-stick) |
 
 ## What is on the drive
 
@@ -61,7 +62,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 7 cold boots, about a minute and a half
+devenv/test-usb.sh      # the automatic tests: 11 cold boots, about two and a half minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -139,8 +140,8 @@ firmware version setup shows, for the hardware record.
 4. GRUB's menu waits 5 seconds and starts **SurfOS**. The screen fills with the boot log,
    then the red *Phrite's SurfOS* banner and the `SurfOS*>` prompt.
 
-On a 1366x768 panel the 80x25 text screen is drawn 1:1 in the middle of the display; on
-a 1920x1080 panel it is drawn at twice the size.
+The text fills the screen: 120x33 characters on a 1920x1080 panel, with the letters
+drawn at twice the font's size, or 170x48 on a 1366x768 panel.
 
 The GRUB menu also has:
 
@@ -166,13 +167,14 @@ Type at the `SurfOS*>` prompt:
 | `cpuinfo` | the processor (an i3-1005G1 should say so) |
 | `acpi` | the firmware's ACPI tables |
 | `memstat`, `ps`, `tick`, `uptime` | memory, tasks, the clock moving |
-| `lsblk`, `mount`, `ls /initrd` | the ramdisk rd0 mounted on `/initrd` |
+| `lsblk`, `mount`, `ls /initrd` | the ramdisk rd0 mounted on `/initrd`, and the SurfOS drive as `usb0`, `boot drive: protected` |
 | `cat /initrd/etc/version` | `SurfOS 0.007 (ai-dev)` |
 | `run hello a b` | a ring-3 program, `exit status 42` |
 | `count 3 10`, `spawn count 20 500` | user programs, one in the background |
 | `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (the disk tests are skipped, and the network tests without an adapter and a cable) |
 | `lsusb` | the USB controller and what is plugged in: the SurfOS drive itself, the webcam, Bluetooth |
 | F1 to F4 | four consoles, each with its own shell |
+| `edit /initrd/etc/version` | the text editor, full screen; Ctrl+Q leaves it (the ramdisk is read-only: files to keep go on a second stick, section 9) |
 
 Please record the results, and photos of the screen, in
 [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md). The output of `cpuinfo`,
@@ -229,7 +231,194 @@ The GRUB menu has an entry **SurfOS (USB controller off: no USB network adapter)
 boots without touching the USB controller, in case the USB driver ever gets in the way
 on the laptop.
 
-## 9. When something goes wrong
+## 9. Files on a USB stick
+
+SurfOS forgets everything at a restart: its own drive is mounted read-only and the
+ramdisk is unpacked afresh at every boot. Files that should last go on a **second USB
+stick**. SurfOS partitions it and formats it as **FAT32**, the format macOS, Windows and
+Linux all read and write, and it has a text editor and the usual file commands, so the
+same stick carries files between SurfOS and the Mac. Nothing is mounted by itself: you
+mount the stick, and you eject it before pulling it out.
+
+**What to buy.** A plain USB-A flash drive from a known brand, 16 to 64 GB. Its size
+hardly matters to SurfOS, and a USB 3 stick is faster in the laptop's USB 3 ports.
+Avoid these:
+
+* USB-C-only sticks: this laptop has USB-A ports.
+* Hubs, docks and card-reader dongles: SurfOS has no hub support, so a stick behind
+  one is not seen.
+* Portable SSDs and USB hard drives: many use 4096-byte sectors, which SurfOS refuses
+  (`+USB: port …: 4096-byte blocks are not supported (only 512)`).
+
+Sticks of 32 GB or less are usually sold with FAT32 on them and work as they come.
+Larger ones usually come with exFAT, which SurfOS cannot read. Either `mkfs` replaces
+it with FAT32 (below; this erases the stick), or the Mac does: *Disk Utility* → *View* →
+*Show All Devices* → the stick → *Erase*, format *MS-DOS (FAT)*, scheme *Master Boot
+Record*.
+
+**Find the stick.** Plug it in, before or after starting SurfOS (a line `+USB: usb1: …`
+says it was found), and type `lsblk`. Under QEMU it looks like this; on the laptop the
+models and sizes are those of your drives:
+
+```text
+SurfOS*> lsblk
+NAME     SIZE BUS RM TYPE                MODEL/LABEL      STATUS
+rd0        1M ram  0 disk                initrd.tar       mounted
+usb0     256M usb  1 disk gpt            QEMU QEMU HARDDI boot drive: protected
+  usb0p1 254M usb  1 part gpt EFI system SURFOSUSB        boot drive: protected
+usb1      16M usb  1 disk mbr            QEMU QEMU HARDDI
+  usb1p1  15M usb  1 part mbr FAT16
+```
+
+USB drives are named in the order SurfOS finds them (`usb0`, `usb1`, …) and their
+partitions after them (`usb1p1`, `usb1p2`, …). The SurfOS drive is marked `boot drive:
+protected` whatever its number. The examples below use `usb1`: check which name your
+stick has.
+
+**A stick that already holds FAT32 (or FAT16).** Mount it on a directory of your choice:
+
+```text
+SurfOS*> mount usb1p1 /data
+    usb1p1 on /data: fat32, label SURFDATA, 1020 MB, 1019 MB free, read-write
+```
+
+`mount usb1p1` alone mounts it on `/usb1p1`, `mount -r usb1p1 /data` read-only, and
+`mount` with nothing after it lists what is mounted where.
+
+**A new file system, or a new partition table.** When `mount` answers `no file system
+found (mkfs makes one)`, the stick holds exFAT, NTFS or nothing. `mkfs usb1p1 MYFILES`
+replaces whatever is on the partition with a FAT32 file system labelled MYFILES (FAT16
+when the partition is smaller than 512 MB; `mkfs -t fat16|fat32` chooses). A label has up
+to 11 letters, digits and spaces. To start from a blank stick, or to replace its
+partitions, make a partition table first. On a 1 GB stick under QEMU (the kernel's own
+`+PART:` and `+FAT32:` lines left out):
+
+```text
+SurfOS*> fdisk usb1 new mbr
+    usb1: QEMU QEMU HARDDISK, 1.0G (2097152 blocks), USB, removable
+    no partition table
+    change: a new, empty MBR (disk signature 4fc8c3c8)
+    Type usb1 to write the new partition table to usb1 (QEMU QEMU HARDDISK, 1.0G): usb1
+    usb1: written, flushed and verified
+    usb1 now has no partitions
+SurfOS*> fdisk usb1 add
+    usb1: QEMU QEMU HARDDISK, 1.0G (2097152 blocks), USB, removable
+    MBR partition table, disk signature 4fc8c3c8
+    change: add partition 1: blocks 2048-2097151 (0.9G), type 0c FAT32 LBA
+    Type usb1 to write the new partition table to usb1 (QEMU QEMU HARDDISK, 1.0G): usb1
+    usb1: written, flushed and verified
+    usb1 now has usb1p1 (0.9G)
+SurfOS*> mkfs usb1p1 SURFDATA
+    usb1p1: QEMU QEMU HARDDISK, 1023 MB (2095104 blocks), a partition
+    no file system found on it
+    new: FAT32, 4096-byte clusters, 261120 of them, label SURFDATA
+    Type usb1p1 to erase usb1p1 (1023 MB) and create a FAT32 file system: usb1p1
+    usb1p1: FAT32, 4096-byte clusters: 261120 clusters, 2 FATs of 2044 sectors, 2056 reserved sectors, data at sector 6144 (1 MiB aligned), serial 4507-0D05
+SurfOS*> mount usb1p1 /data
+    usb1p1 on /data: fat32, label SURFDATA, 1020 MB, 1019 MB free, read-write
+```
+
+`fdisk` and `mkfs` say what they are about to change and write only after you type the
+device's name; any other answer prints `Cancelled` and writes nothing. More of `fdisk`
+(`help fdisk` lists it):
+
+| Command | What it does |
+|---|---|
+| `fdisk usb1` | the partition table, the free space, and whether SurfOS may change the stick |
+| `fdisk usb1 new mbr` | a new, empty MBR table: what data sticks usually have, and what the Mac formats |
+| `fdisk usb1 new gpt` | a new, empty GPT table instead |
+| `fdisk usb1 add 2G` | a 2 GB partition (`500M`, `all`; without a size, the largest free space); a type may follow: `fat32` (the default), `fat16`, `linux`, `efi`, or an MBR type byte in hex |
+| `fdisk usb1 delete 2` | delete partition 2 |
+| `fdisk usb1 type 1 fat32` | change partition 1's type |
+
+**Working with files.** At the `SurfOS*>` prompt:
+
+| Command | What it does |
+|---|---|
+| `ls /data`, `cat /data/notes.txt`, `stat /data/notes.txt` | list a directory, print a file, its size and time |
+| `edit /data/notes.txt` | the text editor (below); the file is made when you first save |
+| `cd /data`, `pwd` | change and show the current directory |
+| `cp`, `mv`, `rm`, `mkdir`, `rmdir` | copy, rename or move, delete, make and remove directories |
+| `write /data/todo.txt buy milk` | a file with one line of text |
+| `df` | size, use and free space of everything mounted |
+| `sync` | write everything still in memory to the drives |
+| `sh` | a small shell with a `$ ` prompt (below) |
+
+The `SurfOS*>` prompt splits a line at spaces and has no quotes. For names with spaces,
+and for the programs in `/initrd/bin`, start `sh`:
+
+```text
+SurfOS*> sh
+$ echo "hello from SurfOS" > /data/hello.txt
+$ mkdir /data/Documents
+$ mv /data/hello.txt "/data/Documents/Hello World.txt"
+$ ls -la /data/Documents
+$ exit
+```
+
+`sh` has `"quoted words"`, `>`, `>>` and `<`, a trailing `&`, and `cd`, `pwd`, `echo` and
+`exit`. Its programs: `ls [-la]`, `cat`, `cp [-r]`, `mv`, `rm [-rf]`, `mkdir [-p]`,
+`rmdir`, `touch`, `head [-n N]`, `wc [-lwc]`, `hexdump`, `df` and `edit`. They are written
+against SurfOS's small C library (`user/libsurf`), which new programs can use too.
+
+**The editor.** `edit <file>` opens a file, or starts a new one, on the whole screen: a
+title line, the text, a status line and a line of keys.
+
+| Keys | What they do |
+|---|---|
+| arrows, Home, End, PgUp, PgDn | move |
+| Enter, Backspace, Delete, Tab | as usual (Tab puts in a tab character) |
+| Ctrl+S | save |
+| Ctrl+Q | quit; with unsaved changes it asks `Save changes? (y/n/^C)` |
+| Ctrl+F | find; Enter alone finds the same text again |
+| Ctrl+K, Ctrl+U | cut the line (several cuts in a row go together), paste them |
+| Ctrl+G | go to a line number |
+| Ctrl+C | say where the cursor is |
+| Ctrl+L | draw the screen again |
+
+It takes files up to 1 MB. Lines do not wrap: the line with the cursor scrolls sideways,
+and a `>` in the last column says a line goes on. Saving writes a new copy and then
+renames it over the old file, so a failed save leaves the old file as it was. Windows
+line ends (CR LF) stay as they were.
+
+**Taking the stick out.** Type `eject usb1` and wait for `usb1: safe to remove`. It
+unmounts every partition of the stick and writes everything still held in memory. When
+something still uses the stick, `eject` says what, for example `eject: usb1: /data is
+busy: it holds the current directory, /data (cd / first)`. A stick pulled out without
+`eject` may lose its last changes, and the next `mount` warns `… was not unmounted
+cleanly`; let the Mac check it then (*Disk Utility* → *First Aid*).
+
+**On the Mac.** The stick appears under its label, and the files SurfOS wrote are
+ordinary files. macOS adds hidden files of its own (`.fseventsd`, `.Spotlight-V100`,
+`.DS_Store`, and `._` files beside others); they do no harm, and `ls -a` in `sh` shows
+them. Eject the stick in the Finder before pulling it out there too.
+
+**What SurfOS will not change.** `fdisk` and `mkfs` work only on USB drives and
+ramdisks, and refuse:
+
+* the SurfOS boot drive, recognised by its volume label SURFOSUSB whatever its number. It
+  can be mounted, but only read-only;
+* internal disks. SurfOS has no driver for the laptop's SSD, so it cannot even see it;
+  an internal disk it does see (an IDE disk under QEMU) is marked `internal: never
+  formatted`;
+* a drive that is mounted, or whose disk or partitions are: `umount` or `eject` first.
+
+**Limits.**
+
+* The console shows and types plain ASCII only. A file name with accents (`café.txt`) is
+  stored and read correctly, by SurfOS and by the Mac, but the console shows it without
+  those letters (`caf.txt`) and you cannot type them.
+* FAT12, FAT16 and FAT32. exFAT and NTFS are not read.
+* Files up to 4 GB, FAT32's limit. The editor takes files up to 1 MB.
+* `fdisk add` makes primary partitions only (four at most in an MBR table). Logical
+  partitions made elsewhere are read.
+* `umount` and `eject` notice a current directory on the stick only in the shell where
+  you type them. A shell on another console (F2 to F4) that is still in `/data` does not
+  stop them; its commands then find nothing there until it changes directory.
+* No USB hubs, so every drive needs a port of its own. The laptop's three ports take the
+  SurfOS drive, a data stick and the Ethernet adapter.
+
+## 10. When something goes wrong
 
 | What you see | What it means, what to do |
 |---|---|
@@ -238,13 +427,19 @@ on the laptop.
 | GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). |
 | GRUB's menu, then a blank screen | The kernel could not use the firmware's framebuffer. Photograph the GRUB screen and note the panel resolution; report it. |
 | The boot log stops, or ends with `SYSTEM HALTED` or a line starting `BOOT PROBLEM` | Photograph the screen and report it: those lines name what failed. |
-| The prompt appears but keys do nothing | Restart and choose the troubleshooting entry. USB keyboards are not supported (the USB stack drives network adapters only), so use the built-in keyboard. |
+| The prompt appears but keys do nothing | Restart and choose the troubleshooting entry. USB keyboards are not supported (the USB stack drives network adapters and storage only), so use the built-in keyboard. |
 | The boot stops at a line starting `+xHCI` or `+USB` | Restart and choose "SurfOS (USB controller off)". Please report the last lines on the screen. |
 | `lsusb` does not list the adapter | Try another port, and plug the adapter straight into the laptop (not through a hub or a dock). A line `(connected, not set up)` or `+USB: port …: … failed` means the adapter did not answer: unplug it, wait two seconds, plug it in again. |
 | `lsusb` lists the adapter with `no driver` | It speaks only its maker's protocol: use an RTL8153 or another CDC ECM/NCM adapter. |
 | `ifconfig` says `link down` | Check the cable and that the other end (router, switch) is on: the adapter reports the link it sees. |
 | `dhcp: eth0: no offer` | Nothing on that network hands out addresses: set one by hand (section 8). |
 | `ping` by address works, by name does not | No DNS server is set: `dhcp` sets one, or give it as the last `ifconfig` value. |
+| `lsblk` does not show a USB stick | Plug it straight into the laptop, not through a hub, and try another port. `dmesg` shows the `+USB:` lines: `4096-byte blocks are not supported` means a portable SSD or hard drive (section 9). |
+| `mount: usb1p1: no file system found (mkfs makes one)` | The stick holds exFAT, NTFS or nothing: `mkfs` it (this erases it), or format it as MS-DOS (FAT) on the Mac. |
+| `fdisk` or `mkfs` says it will not change a drive | The line after it says why: the boot drive, not a USB drive, or something on it is mounted (`umount` or `eject` first). |
+| `… is busy: it holds the current directory` | `cd /`, then `umount` or `eject` again. |
+| `+FAT32: usb1p1 was not unmounted cleanly` | The stick was pulled out without `eject`. If files look wrong, let the Mac check it (*Disk Utility* → *First Aid*). |
+| A file name is missing letters | It has accented or other non-ASCII letters, which the console cannot show; the file itself is fine. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
 
@@ -256,13 +451,14 @@ power button.
 | Works on the laptop (verified under emulation) | Not supported yet |
 |---|---|
 | UEFI boot from USB, GRUB, Multiboot 2 | Secure Boot (GRUB is unsigned) |
-| Framebuffer console, 80x25 cells, VGA colours, 4 consoles | USB keyboards, mice and storage; USB hubs and docks |
+| Framebuffer console filling the screen (120x33 cells at 1920x1080), VGA colours, 4 consoles | USB keyboards and mice; USB hubs and docks |
 | Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | The touchpad |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
 | Delays calibrated on the PIT, the ACPI PM timer or the HPET | Wi-Fi, Bluetooth, sound, battery, suspend, ACPI power-off |
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |
-| Ramdisk initrd, user programs, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
-| The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | |
+| Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
+| The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
+| USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing or showing letters beyond ASCII |
 
 ## How it works
 
@@ -273,9 +469,11 @@ power button.
 * **Memory.** The memory map decides where the page tables, the free-frame stack and the
   DMA heap go (`mm/pmm.c`); they used to sit at fixed addresses where UEFI firmware keeps
   data. RAM above 4 GB is counted with 64-bit arithmetic and left unused.
-* **Screen.** `driver/framebuffer.c` draws the console's 80x25 cells into the firmware's
-  framebuffer with an 8x16 font (Spleen), scaled by a whole number and centred; a
-  framebuffer above 4 GB is reached with a 4 MB page (PSE-36), write-combining through PAT.
+* **Screen.** `driver/framebuffer.c` draws the console's cells into the firmware's
+  framebuffer with an 8x16 font (Spleen), scaled by the largest whole number at which
+  640x400 fits; the grid then takes as many cells as the screen holds (120x33 at
+  1920x1080), and the console follows its size. A framebuffer above 4 GB is reached with a
+  4 MB page (PSE-36), write-combining through PAT.
 * **profile=laptop** (`kernel/main.c`): ACPI tables, the local APIC in virtual wire mode
   with the I/O APICs masked, the 8042 set up again and polled, ISA devices skipped, only
   the initrd mounted, and a timer that must prove it ticks. Without the word on the command
@@ -286,16 +484,27 @@ power button.
   layer sets up whatever is plugged into the laptop's ports, at boot and whenever a port
   changes, and picks the first configuration a driver wants. For an RTL8153 that is its
   CDC Ethernet configuration, not Realtek's own. The CDC ECM/NCM driver turns the adapter
-  into `eth0` for the existing network stack.
+  into `eth0` for the existing network stack, and the mass-storage driver
+  (`driver/usb/msc.c`: the Bulk-Only Transport and SCSI commands) turns a flash drive into
+  the block device `usb0`, `usb1`, … .
+* **Files** (`driver/part.c`, `shell/fdisk.c`, `fs/fat.c`, `fs/fat_mkfs.c`). Partition
+  tables are read (MBR with logical partitions, GPT) and written through plans that are
+  checked before and verified after writing. FAT is written the way Microsoft's
+  specification lays it out, which macOS and Linux check without complaint. One rule,
+  `bdev_may_format()` in `driver/bdev.c`, decides what `fdisk` and `mkfs` may change.
+* **Programs** (`user/`). User programs run in ring 3 and link `libsurf`, a small C
+  library (stdio, stdlib, string, dirent, time, errno) over 31 system calls; `edit` uses
+  the console's raw mode and a subset of ANSI escape sequences.
 
-The design is in [ARCHITECTURE.md](ARCHITECTURE.md) section 14 and the original brief in
-[superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md).
+The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14 and 16, and the original briefs in
+[superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md)
+and [superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md).
 
 ## Make targets
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json
-make test-usb  [O=2]     # boot that image under OVMF from an emulated USB stick (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 11 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image
 ```
