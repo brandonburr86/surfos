@@ -11,7 +11,10 @@ and returning its exit status; a command whose output is redirected (a file in <
 descriptor 1 with dup2, then the console back on 1 from /dev/console) and the file read
 back, the same for a program started by run, and an output longer than KCMD_CAPTURE_MAX
 cut with a note at its end; kcmdinfo() walking the table, which holds lsblk and fdisk and
-ends with ENOENT; cd moving this process. The files made in <dir> are removed again.
+ends with ENOENT; cd moving this process. 10/6/26: the limits (32 arguments, 255
+bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
+(EFAULT, nothing written), and descriptor 1 read-only (the write fails: status 1),
+closed (the console) and /dev/null. The files made in <dir> are removed again.
 One line per check, then KCMDTEST PASS (exit 0) or KCMDTEST FAIL.
 
 kcmdtest crash [file]: kcmd crashgp, which kills this process (with descriptor 1 on
@@ -71,6 +74,7 @@ static int out_to(const char *path) {
     fflush(stdout);
     fd = path ? open(path, O_WRONLY | O_CREAT | O_TRUNC) : open("/dev/console", O_WRONLY);
     if(fd < 0) return -1;
+    if(fd == 1) return 0;                               /* descriptor 1 was closed: the open took it */
     if(dup2(fd, 1) < 0) { close(fd); return -1; }
     close(fd);
     return 0;
@@ -189,6 +193,67 @@ static void test_cut(void) {
           slurp(out, head, sizeof(head)) > 0 && !strncmp(head, "kcmdtest line 00000\nkcmdtest line 00001\n", 40),
           "kcmd cat of it into a file: KCMD_CAPTURE_MAX bytes, then the note");
     check(unlink(big) == 0 && unlink(out) == 0, "remove the two files");
+}
+
+/* 10/6/26: the limits of the arguments, kcmdinfo at the end of mapped memory, and what
+   descriptor 1 may be */
+static void test_edges(void) {
+    static char a255[256], a256[257];
+    char *argv[40], *end, *ro = in_dir("KCMDRO.TXT");
+    struct kcmd_info *info;
+    int i, r, fd, untouched;
+
+    for(i = 1; i < 32; i++) argv[i] = "w";
+    argv[0] = "true-is-not-a-kernel-command";            /* the count is checked before the name */
+    argv[32] = "33rd";
+    argv[33] = NULL;
+    errno = 0;
+    check(kcmd(argv) == -1 && errno == E2BIG, "33 arguments: E2BIG");
+    argv[0] = "echo";
+    argv[32] = NULL;
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "32 arguments are taken (and descriptor 1 on /dev/null: nothing shown, status 0)");
+    memset(a255, 'a', 255);
+    memset(a256, 'b', 256);
+    argv[1] = a255;
+    argv[2] = NULL;
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "an argument of 255 bytes is taken");
+    argv[1] = a256;
+    errno = 0;
+    check(kcmd(argv) == -1 && errno == E2BIG, "one of 256 bytes: E2BIG");
+
+    end = (char *)(((unsigned long)sbrk(0) + 4095) & ~4095UL);   /* the first byte past the heap's pages */
+    info = (struct kcmd_info *)(end - 100);
+    memset(end - 100, 0x5a, 100);
+    errno = 0;
+    r = kcmdinfo(0, info);
+    for(untouched = 1, i = 0; i < 100; i++) if((unsigned char)end[i - 100] != 0x5a) untouched = 0;
+    check(r == -1 && errno == EFAULT && untouched, "kcmdinfo into a buffer that runs into unmapped memory: EFAULT, nothing written");
+
+    fd = open(ro, O_WRONLY | O_CREAT | O_TRUNC);
+    if(fd >= 0) close(fd);
+    fd = open(ro, O_RDONLY);
+    argv[1] = "into";
+    argv[2] = "a";
+    argv[3] = "read-only";
+    argv[4] = "descriptor";
+    argv[5] = NULL;
+    fflush(stdout);
+    r = fd >= 0 && dup2(fd, 1) == 1 ? kcmd(argv) : -2;
+    if(fd >= 0) close(fd);
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 1, "descriptor 1 read-only: the output cannot be written, status 1 (and the console says so)");
+    fflush(stdout);
+    close(1);
+    argv[1] = "kcmdtest: descriptor 1 closed, this line on the console";
+    argv[2] = NULL;
+    r = kcmd(argv);
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "descriptor 1 closed: the output goes to the console, status 0");
+    check(unlink(ro) == 0, "remove the file");
 }
 
 static void test_cd(void) {
@@ -316,6 +381,7 @@ int main(int argc, char **argv) {
     test_run();
     test_redirect();
     test_cut();
+    test_edges();
     test_cd();
     printf("%d checks, %d failed\n", checks, failures);
     puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
