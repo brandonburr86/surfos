@@ -161,6 +161,37 @@ static void test_decoder(void) {
     check(n == 1 && cells[0] == 0x82 && d.have == 0, "and the decoder is clean afterwards");
 }
 
+/* 10/6/26: states no byte sequence leaves behind (two writers once shared a decoder, and one
+   could find another's finished 4-byte character still counted as held): the decoder starts
+   afresh and never writes past UTF8_OUT_MAX cells */
+static void test_bad_states(void) {
+    static const struct { u8 have, need; const char *what; } bad[] = {
+        { 4, 4, "4 of 4 bytes held" }, { 3, 2, "more held than the sequence's length" },
+        { 1, 0, "a length of 0" }, { 2, 7, "a length above 4" }, { 255, 255, "garbage" },
+    };
+    struct utf8_dec d;
+    u8 out[UTF8_OUT_MAX + 4];
+    char what[96];
+    unsigned i;
+    int n, k, ok;
+    for(i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        memset(&d, 0, sizeof(d));
+        memset(d.b, 0xF0, sizeof(d.b));
+        d.have = bad[i].have;
+        d.need = bad[i].need;
+        memset(out, 0xEE, sizeof(out));
+        n = utf8_feed(&d, 'a', out);
+        for(ok = 1, k = UTF8_OUT_MAX; k < (int)sizeof(out); k++) if(out[k] != 0xEE) ok = 0;
+        snprintf(what, sizeof(what), "decoder with %s: 'a' alone comes out, nothing past UTF8_OUT_MAX", bad[i].what);
+        check(ok && n == 1 && out[0] == 'a' && d.have == 0, what);
+    }
+    memset(&d, 0, sizeof(d));
+    d.have = 4; d.need = 4;
+    n = utf8_feed(&d, 0xC3, out);
+    n += utf8_feed(&d, 0xA9, out + n);
+    check(n == 1 && out[0] == 0x82, "and it decodes the next character as usual");
+}
+
 /**** the framebuffer font (driver/font8x16.c, tools/bdf2c.py) ****/
 
 static int blank(int i) {
@@ -230,6 +261,7 @@ static void test_font(void) {
 int main(void) {
     test_tables();
     test_decoder();
+    test_bad_states();
     test_font();
     printf("%s: %d checks, %d failures\n", failures ? "CP437 UNIT TESTS FAILED" : "CP437 UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);

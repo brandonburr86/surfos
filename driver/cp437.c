@@ -123,20 +123,27 @@ static int continues(const struct utf8_dec *d, u8 c) {
 }
 
 int utf8_feed(struct utf8_dec *d, u8 c, u8 *out) {
-    int n = 0, i;
+    int n = 0, i, len;
     u32 u;
+    /* 10/6/26: a state no sequence leaves behind (two writers on one decoder, say) starts afresh,
+       so out[] never gets more than UTF8_OUT_MAX cells */
+    if(d->have && (d->need < 2 || d->need > 4 || d->have >= d->need)) d->have = 0;
     if(d->have) {
         if(continues(d, c)) {
-            d->b[d->have++] = c;
-            if(d->have < d->need) return 0;
-            u = d->b[0] & (0x7F >> d->need);
-            for(i = 1; i < d->need; i++) u = (u << 6) | (d->b[i] & 0x3F);
+            if(d->have + 1 < d->need) {
+                d->b[d->have++] = c;
+                return 0;
+            }
+            d->b[d->have] = c;                              /* the last byte: done, and nothing held */
+            len = d->need;
             d->have = 0;
+            u = d->b[0] & (0x7F >> len);
+            for(i = 1; i < len; i++) u = (u << 6) | (d->b[i] & 0x3F);
             i = cp437_from_unicode(u);
             out[0] = i < 0 ? '?' : (u8)i;
             return 1;
         }
-        for(i = 0; i < d->have; i++) out[n++] = d->b[i];     /* cut short: its bytes as they are */
+        for(i = 0; i < d->have && n < UTF8_OUT_MAX - 1; i++) out[n++] = d->b[i];   /* cut short: its bytes as they are */
         d->have = 0;
     }
     if(c >= 0x80 && (d->need = (u8)lead_length(c)) != 0) {

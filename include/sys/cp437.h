@@ -37,7 +37,8 @@ int cp437_from_unicode(u32 u);
 #define CP437_UTF8_MAX 3
 int cp437_utf8(u8 index, char *out);
 
-/* the UTF-8 decoder of one console: all zero is "nothing held" */
+/* a UTF-8 decoder: all zero is "nothing held". 10/6/26: one per writer, not per console
+   (kernel/console.c): each task has its own, the interrupt handlers share one */
 struct utf8_dec {
     u8 have;            /* bytes of an unfinished sequence held in b[] */
     u8 need;            /* that sequence's length, 2 to 4 */

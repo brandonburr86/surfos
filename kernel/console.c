@@ -8,7 +8,7 @@ File: console.c Date: Prior to 4/23/04
 10/5/26: the text grid is set at boot (a framebuffer gets as many cells as it holds),
 and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
 10/6/26: a cell's byte is a code page 437 character (driver/cp437.c), and what is
-printed is UTF-8: kputch() decodes it per console, so ▸ ≋ … and café show on the screen.
+printed is UTF-8: kputch() decodes it, per writer, so ▸ ≋ … and café show on the screen.
 The pager (TTY_PAGE in tty.h) lives here too: kputch() counts the rows and asks --More--.
 */
 
@@ -307,7 +307,6 @@ void console_reset_ansi(surf_console *con) {
     con->bold = con->inverse = 0;
     con->cursor_off = 0;
     con->ansi_owner = NULL;
-    con->utf.have = 0;                                  /* 10/6/26: nor a UTF-8 character half read */
 }
 
 /* a task is gone (task.c, through tty_task_gone): undo what it did to the look of a console.
@@ -469,6 +468,16 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
     return 0;
 }
 
+/* 10/6/26: UTF-8 is decoded per writer, not per console (sys/cp437.h). A character a task has
+   half printed is its own (surf_task.utf), so another task's or an interrupt handler's bytes
+   in between never mix with it, and a task that ends takes its half character with it.
+   Interrupt handlers, and the boot before there are tasks, share this one. */
+static struct utf8_dec shared_utf;
+
+static struct utf8_dec *writer_utf(void) {
+    return (curTask && !in_interrupt()) ? &curTask->utf : &shared_utf;
+}
+
 /* the next line, scrolling at the bottom. 10/6/26: a row starts, for the pager */
 static void newline(surf_console *con) {
     con->wrap = 0;
@@ -593,7 +602,7 @@ static int page_hold(surf_console *con, u_char b) {
     if(in_interrupt() || !curTask || curTask == idle_task || con->page_asker || !console_paging(con))
         return 0;
     if(con->page_drop) return 1;
-    if(con->esc || con->utf.have || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
+    if(con->esc || writer_utf()->have || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
         return 0;                                       /* draws nothing, or not yet */
     if(con->wrap ? con->page_rows + 2 < LINES : !con->page_fresh || con->page_rows + 1 < LINES)
         return 0;                                       /* the screenful is not full yet */
@@ -616,6 +625,7 @@ void console_capture_end(void) {
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
     u_char b = (u_char)c;           /* 10/6/26: a char above 0x7f may come signed */
     u_char cells[UTF8_OUT_MAX];
+    struct utf8_dec *utf;
     int n, i;
     /* 10/6/26: a redirected kernel command (console.h): its output goes to memory, not the screen */
     if(con && curTask && curTask->kcap && con == curTask->con && !in_interrupt()) {
@@ -635,8 +645,9 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
        it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
        below 0x80 that cuts a character short comes out last, and is handled below as ever. */
-    if(b >= 0x80 || con->utf.have) {
-        n = utf8_feed(&con->utf, b, cells);
+    utf = writer_utf();
+    if(b >= 0x80 || utf->have) {
+        n = utf8_feed(utf, b, cells);
         if(b < 0x80) n--;
         for(i = 0; i < n; i++) put_char(con, color, cells[i]);
         if(b >= 0x80) {

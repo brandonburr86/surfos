@@ -56,9 +56,6 @@ typedef struct surf_console {
     u_char cursor_off;          /* ESC [ ? 25 l */
     u_char wrap;                /* the last column was written: the next character starts the next line */
     struct surf_task *ansi_owner; /* who changed the colours or hid the cursor; reset when it ends */
-    /* 10/6/26: a cell's byte is a code page 437 character (sys/cp437.h); what is printed is
-       UTF-8, decoded here, a character at a time */
-    struct utf8_dec utf;
     /* 10/6/26: the pager (TTY_PAGE, tty.h); all zero is "not paging" */
     struct surf_task *page_owner; /* the task that asked: what it and its descendants print is paged */
     struct surf_task *page_asker; /* the task waiting at the question, while it is shown */
