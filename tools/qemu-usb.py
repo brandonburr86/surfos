@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test boots the image eleven times, each a cold boot with fresh firmware variables:
+--test boots the image twelve times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -31,6 +31,9 @@ comes out of the framebuffer.
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
              timer ticks and polled keystrokes arrive
+  kernel-shell
+             the GRUB menu's kernel shell entry (shell=kernel): the kernel's ring-0 shell on
+             every console instead of the user shell, its prompt elevated (#), no recovery line
   no-pit     a machine without an 8254 (a chipset can gate its clock): the delays are
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
@@ -754,6 +757,35 @@ def scenario_fallback(args, image, firmware, outdir):
     return results
 
 
+def scenario_kernel_shell(args, image, firmware, outdir):
+    """10/6/26: the menu's third entry, shell=kernel: the ring-0 shell on every console on purpose, elevated (≋#>),
+    with the banner on the screen and no recovery line"""
+    results = []
+    elevated = re.compile(rb'SURF \xe2\x89\x8b' + _SGR + rb'#' + _SGR + rb'>')
+    vm = Vm('kernel-shell', args, image, firmware, mem='512', serial=True, outdir=outdir)
+    try:
+        ok = vm.expect('Use the', args.boot_timeout)               # the GRUB menu on the firmware console
+        results.append(('the GRUB menu appears', ok))
+        if ok:
+            time.sleep(0.5)
+            vm.keys('<down><down>')
+            vm.keys('\n')
+            ok = vm.expect('Loading SurfOS with shell=kernel', 30) and vm.expect(elevated, args.boot_timeout)
+            results.append(('the kernel shell entry boots to the ring-0 shell, elevated: SURF \u224b#>', ok))
+        if ok:
+            vm.pump(1)
+            scr = vm.screen('kernel-shell.png')
+            row = scr.rows[last_prompt_row(scr)] if last_prompt_row(scr) >= 0 else ''
+            results.append(('the framebuffer shows the banner and the elevated prompt', banner_ok(scr) and row.endswith('#>')))
+            results.append(('it was asked for: no recovery line', 'recovery console' not in vm.text()))
+            ok, out = run_cmd(vm, 'ps', ['Shell 0', 'Shell 1', 'Shell 2', 'Shell 3'])
+            results.append(('ps: the ring-0 shells on F1 to F4, no surfsh', ok and 'surfsh' not in out))
+        check_bad(vm, results, vm.text())
+    finally:
+        vm.close()
+    return results
+
+
 def scenario_nopit(args, image, firmware, outdir):
     """no 8254 at all (as when a chipset gates its clock): another clock calibrates, the APIC timer ticks"""
     results = []
@@ -1172,7 +1204,8 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
-             'highmem': scenario_highmem, 'fallback': scenario_fallback, 'no-pit': scenario_nopit,
+             'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
+             'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
@@ -1276,8 +1309,8 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'usbdisk',
-                               'storage', 'no-initrd', 'no-kernel']:
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+                               'usbdisk', 'storage', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)
