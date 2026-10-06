@@ -9,10 +9,15 @@ directories, with VFAT long-name entries when the name is not a plain 8.3
 name), unlink and rmdir. Every access goes through the block cache; the
 superblock mutex serializes operations on one volume. No FSInfo updates,
 no extended partition walking, ASCII names only.
+
+10/5/26 (USB storage): rename, and one vnode per object in use (lookups of an
+open file share its vnode, so its size stays right and it follows its entry
+when renamed; the VFS can tell that it is open).
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
+#include <surfos/irq.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
@@ -30,6 +35,9 @@ no extended partition walking, ASCII names only.
 #define NTRES_LOWER_EXT  0x10
 #define LFN_CHARS 13
 #define LFN_MAX_ENTRIES 20          /* 255 characters */
+#define NO_IDX 0xFFFFFFFFUL         /* no directory entry */
+
+struct fat_node;
 
 struct fat_fs {
     struct superblock *sb;
@@ -38,9 +46,12 @@ struct fat_fs {
     u32 spc, rsv, nfats, root_entries, spf, total;
     u32 fat_lba, root_lba, root_sectors, data_lba, nclusters, root_cluster;
     u32 cluster_bytes, eoc, next_free;
+    struct fat_node *live;          /* the objects that have a vnode now (not the root) */
 };
 
 struct fat_node {
+    struct vnode *v;                /* the one vnode of this object while it is in use */
+    struct fat_node *next;          /* fs->live */
     u32 first;                      /* first cluster; 0 = empty file, or the FAT12/16 root */
     u32 dir_lba, dir_off;           /* where the short entry lives (not for the root) */
     bool is_root;
@@ -210,12 +221,17 @@ static int fat_free_chain(struct fat_fs *fs, u32 c) {
 
 static void diter_init(struct diter *it, struct fat_fs *fs, struct fat_node *dir) {
     it->fs = fs;
-    it->first = (dir->is_root && fs->type != 32) ? 0 : dir->first;
     it->idx = 0;
-    it->clus = it->first;
     it->off = 0;
-    if(it->first) { it->lba = clus_lba(fs, it->first); it->at_end = it->first < 2; }
-    else { it->lba = fs->root_lba; it->at_end = fs->root_sectors == 0; }
+    if(dir->is_root && fs->type != 32) {                     /* the fixed FAT12/16 root */
+        it->first = it->clus = 0;
+        it->lba = fs->root_lba;
+        it->at_end = fs->root_sectors == 0;
+    } else {                                                 /* a cluster chain; a broken entry is empty */
+        it->first = it->clus = dir->first;
+        it->at_end = dir->first < 2 || dir->first >= fs->nclusters + 2;
+        it->lba = it->at_end ? 0 : clus_lba(fs, dir->first);
+    }
 }
 
 /* step to the next entry; at_end becomes true when the directory's space is used up */
@@ -360,8 +376,9 @@ static int dir_find_free(struct fat_fs *fs, struct fat_node *dir, u32 need, stru
     }
 }
 
-/* write n raw entries at pos (the space was found by dir_find_free) */
-static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n) {
+/* write n raw entries at pos (the space was found by dir_find_free); *lba and *off (when
+   given) say where the last one, the short entry, went */
+static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n, u32 *lba, u32 *off) {
     u32 i;
     for(i = 0; i < n; i++) {
         struct buf *b;
@@ -372,6 +389,7 @@ static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n) {
         memcpy(b->data + pos->off, entries + i * 32, 32);
         bdirty(b);
         brelse(b);
+        if(i == n - 1 && lba) { *lba = pos->lba; *off = pos->off; }
         r = diter_next(pos);
         if(r) return r;
     }
@@ -441,17 +459,20 @@ static bool short_char_ok(int c) {
     return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("$%'-_@~`!(){}^#&", c) != NULL;
 }
 
-static bool dir_has_short(struct fat_fs *fs, struct fat_node *dir, const u8 *raw11) {
+/* is raw11 the short name of an entry of dir other than the one at index skip? */
+static bool dir_has_short(struct fat_fs *fs, struct fat_node *dir, const u8 *raw11, u32 skip) {
     struct diter it;
     struct fat_dirent e;
     diter_init(&it, fs, dir);
-    while(dir_read(&it, &e) == 0) if(!memcmp(e.raw, raw11, 11)) return true;
+    while(dir_read(&it, &e) == 0) if(e.idx != skip && !memcmp(e.raw, raw11, 11)) return true;
     return false;
 }
 
-/* The 8.3 form of name in raw[11] with the lowercase flags in *ntres; returns true when
-   long-name entries are needed as well (the name is not representable as 8.3). */
-static bool make_short_name(struct fat_fs *fs, struct fat_node *dir, const char *name, u8 *raw, u8 *ntres) {
+/* The 8.3 form of name in raw[11] with the lowercase flags in *ntres, unique in dir (the
+   entry at index skip, which is being renamed, does not count). *lfn says whether long-name
+   entries are needed as well (the name is not representable as 8.3). -ENOSPC when every
+   ~N tail is taken. */
+static int make_short_name(struct fat_fs *fs, struct fat_node *dir, const char *name, u32 skip, u8 *raw, u8 *ntres, bool *lfn) {
     const char *dot = strrchr(name, '.');
     size_t blen = dot ? (size_t)(dot - name) : strlen(name), elen = dot ? strlen(dot + 1) : 0;
     bool fits = true, base_lower = false, base_upper = false, ext_lower = false, ext_upper = false;
@@ -460,6 +481,7 @@ static bool make_short_name(struct fat_fs *fs, struct fat_node *dir, const char 
 
     memset(raw, ' ', 11);
     *ntres = 0;
+    *lfn = true;
     if(dot == name) { fits = false; blen = 0; }              /* ".name" */
     if(blen > 8 || elen > 3 || (dot && !elen)) fits = false;
     for(i = 0; i < blen && fits; i++) {
@@ -479,10 +501,13 @@ static bool make_short_name(struct fat_fs *fs, struct fat_node *dir, const char 
     if(fits && !(base_lower && base_upper) && !(ext_lower && ext_upper)) {
         for(i = 0; i < blen; i++) raw[i] = upper((u8)name[i]);
         for(i = 0; i < elen; i++) raw[8 + i] = upper((u8)dot[1 + i]);
-        if(base_lower) *ntres |= NTRES_LOWER_BASE;
-        if(ext_lower) *ntres |= NTRES_LOWER_EXT;
         if(raw[0] == 0xE5) raw[0] = 0x05;
-        return false;
+        if(!dir_has_short(fs, dir, raw, skip)) {             /* else another entry's alias: a ~N name and a long name */
+            if(base_lower) *ntres |= NTRES_LOWER_BASE;
+            if(ext_lower) *ntres |= NTRES_LOWER_EXT;
+            *lfn = false;
+            return 0;
+        }
     }
     /* BASENA~1.EXT from the legal characters */
     for(i = 0, n = 0; i < blen && n < 6; i++) {
@@ -508,19 +533,24 @@ static bool make_short_name(struct fat_fs *fs, struct fat_node *dir, const char 
         memcpy(raw, base, bl);
         memcpy(raw + bl, tail, tl);
         memcpy(raw + 8, ext, strlen(ext));
-        if(!dir_has_short(fs, dir, raw)) break;
+        if(!dir_has_short(fs, dir, raw, skip)) return 0;
     }
-    return true;
+    return -ENOSPC;
 }
 
-/* raw entries for a new name: the LFN entries (if any) followed by the short entry */
-static u32 build_entries(struct fat_fs *fs, struct fat_node *dir, const char *name, u8 attr, u32 first, u32 size, u8 *out) {
+/* Raw entries for a name: the LFN entries (if any) followed by the short entry; *count
+   of them. tmpl, when given, is the short entry of the object being renamed (at index skip
+   of dir): its attributes, times, cluster and size carry over to the new entry. */
+static int build_entries(struct fat_fs *fs, struct fat_node *dir, const char *name, u8 attr, u32 first,
+                         const u8 *tmpl, u32 skip, u8 *out, u32 *count) {
     u8 raw[11], ntres, sum;
-    bool lfn = make_short_name(fs, dir, name, raw, &ntres);
     u32 n = 0, nlfn = 0, k;
+    bool lfn;
     u16 d, t;
     u8 *p;
+    int r = make_short_name(fs, dir, name, skip, raw, &ntres, &lfn);
 
+    if(r) return r;
     if(lfn) {
         size_t len = strlen(name);
         nlfn = (len + LFN_CHARS - 1) / LFN_CHARS;
@@ -542,28 +572,51 @@ static u32 build_entries(struct fat_fs *fs, struct fat_node *dir, const char *na
         }
     }
     p = out + n * 32;
-    memset(p, 0, 32);
+    if(tmpl) memcpy(p, tmpl, 32);                            /* a rename: everything but the name stays */
+    else {
+        memset(p, 0, 32);
+        p[11] = attr;
+        fat_now(&d, &t);
+        put16(p + 14, t); put16(p + 16, d);                  /* created */
+        put16(p + 18, d);                                    /* accessed */
+        put16(p + 20, (u16)(fs->type == 32 ? first >> 16 : 0));
+        put16(p + 22, t); put16(p + 24, d);                  /* modified */
+        put16(p + 26, (u16)(first & 0xFFFF));
+    }
     memcpy(p, raw, 11);
-    p[11] = attr;
-    p[12] = ntres;
-    fat_now(&d, &t);
-    put16(p + 14, t); put16(p + 16, d);                      /* created */
-    put16(p + 18, d);                                        /* accessed */
-    put16(p + 20, (u16)(fs->type == 32 ? first >> 16 : 0));
-    put16(p + 22, t); put16(p + 24, d);                      /* modified */
-    put16(p + 26, (u16)(first & 0xFFFF));
-    put32(p + 28, size);
-    return n + 1;
+    p[12] = (p[12] & ~(NTRES_LOWER_BASE | NTRES_LOWER_EXT)) | ntres;
+    *count = n + 1;
+    return 0;
 }
 
 /**** vnodes ****/
 
+/* the in-use node of the entry at lba/off, or NULL */
+static struct fat_node *live_node(struct fat_fs *fs, u32 lba, u32 off) {
+    struct fat_node *n;
+    for(n = fs->live; n; n = n->next) if(n->dir_lba == lba && n->dir_off == off && n->v->refs) return n;
+    return NULL;
+}
+
+/* the vnode of a directory entry: the one in use already, else a new one (holds sb->lock) */
 static struct vnode *fat_vnode(struct superblock *sb, const struct fat_dirent *e) {
-    struct fat_node *n = (struct fat_node *)kcalloc(1, sizeof(struct fat_node));
+    struct fat_fs *fs = (struct fat_fs *)sb->priv;
+    struct fat_node *n;
     struct vnode *v;
+    for(n = fs->live; n; n = n->next) {
+        if(n->dir_lba == e->lba && n->dir_off == e->off) {
+            u_long f = irq_save();
+            bool alive = n->v->refs > 0;                     /* 0: vput is releasing it right now */
+            if(alive) n->v->refs++;
+            irq_restore(f);
+            if(alive) return n->v;
+        }
+    }
+    n = (struct fat_node *)kcalloc(1, sizeof(struct fat_node));
     if(!n) return NULL;
     v = vnode_alloc(sb, &fat_vops, (e->raw[11] & ATTR_DIR) ? VN_DIR : VN_FILE);
     if(!v) { kfree(n); return NULL; }
+    n->v = v;
     n->first = e->first;
     n->dir_lba = e->lba;
     n->dir_off = e->off;
@@ -571,6 +624,8 @@ static struct vnode *fat_vnode(struct superblock *sb, const struct fat_dirent *e
     v->mtime = fat_to_unix(le16(e->raw + 24), le16(e->raw + 22));
     v->ino = (e->lba << 4) | (e->off / 32);
     v->priv = n;
+    n->next = fs->live;
+    fs->live = n;
     return v;
 }
 
@@ -739,9 +794,9 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
         bdirty(b);
         brelse(b);
     }
-    n = build_entries(fs, dn, name, type == VN_DIR ? ATTR_DIR : ATTR_ARCHIVE, first, 0, entries);
-    r = dir_find_free(fs, dn, n, &pos);
-    if(r == 0) r = dir_write_entries(&pos, entries, n);
+    r = build_entries(fs, dn, name, type == VN_DIR ? ATTR_DIR : ATTR_ARCHIVE, first, NULL, NO_IDX, entries, &n);
+    if(r == 0) r = dir_find_free(fs, dn, n, &pos);
+    if(r == 0) r = dir_write_entries(&pos, entries, n, NULL, NULL);
     if(r) { if(first) fat_free_chain(fs, first); goto out; }
     r = dir_find(fs, dn, name, &e);                          /* read it back for the vnode */
     if(r == 0) {
@@ -753,6 +808,21 @@ out:
     return r;
 }
 
+/* 0 when the directory starting at cluster first holds nothing but "." and "..", else -ENOTEMPTY */
+static int dir_empty(struct fat_fs *fs, u32 first) {
+    struct fat_node sub;
+    struct diter it;
+    struct fat_dirent x;
+    int r;
+    memset(&sub, 0, sizeof(sub));
+    sub.first = first;
+    diter_init(&it, fs, &sub);
+    while((r = dir_read(&it, &x)) == 0) {
+        if(strcmp(x.name, ".") && strcmp(x.name, "..")) return -ENOTEMPTY;
+    }
+    return r < 0 ? r : 0;
+}
+
 static int fat_unlink(struct vnode *dir, const char *name) {
     struct fat_fs *fs = (struct fat_fs *)dir->sb->priv;
     struct fat_node *dn = (struct fat_node *)dir->priv;
@@ -761,19 +831,7 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     mutex_lock(&dir->sb->lock);
     r = dir_find(fs, dn, name, &e);
     if(r) goto out;
-    if(e.raw[11] & ATTR_DIR) {                               /* only an empty directory goes */
-        struct fat_node sub;
-        struct diter it;
-        struct fat_dirent x;
-        memset(&sub, 0, sizeof(sub));
-        sub.first = e.first;
-        diter_init(&it, fs, &sub);
-        while((r = dir_read(&it, &x)) == 0) {
-            if(strcmp(x.name, ".") && strcmp(x.name, "..")) { r = -ENOTEMPTY; goto out; }
-        }
-        if(r < 0) goto out;
-        r = 0;
-    }
+    if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
     if(e.first) r = fat_free_chain(fs, e.first);
     if(r == 0) r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx);
 out:
@@ -781,12 +839,91 @@ out:
     return r;
 }
 
+/* do two directory nodes stand for the same directory? */
+static bool dir_same(const struct fat_node *a, const struct fat_node *b) {
+    if(a->is_root || b->is_root) return a->is_root && b->is_root;
+    return a->first == b->first;
+}
+
+/* point the ".." entry of the directory at cluster first to its new parent (0 for the root) */
+static int set_dotdot(struct fat_fs *fs, u32 first, const struct fat_node *parent) {
+    u32 pc = parent->is_root ? 0 : parent->first;
+    struct buf *b;
+    u8 *p;
+    if(first < 2 || first >= fs->nclusters + 2) return 0;
+    b = bread(fs->dev, clus_lba(fs, first));
+    if(!b) return -EIO;
+    p = b->data + 32;
+    if(p[0] == '.' && p[1] == '.' && p[2] == ' ' && (p[11] & ATTR_DIR)) {
+        put16(p + 26, (u16)(pc & 0xFFFF));
+        put16(p + 20, (u16)(fs->type == 32 ? pc >> 16 : 0));
+        bdirty(b);
+    }
+    brelse(b);
+    return 0;
+}
+
+/* 10/5/26: rename within the volume. The new entries (a fresh short alias, the long name if
+   one is needed, everything else copied from the old short entry) are written before the
+   old ones are deleted, so an interruption leaves two names rather than none. A file at the
+   target is replaced (POSIX), so is an empty directory; a directory that moves to another
+   parent gets its ".." pointed there. The VFS has refused moving a directory into itself. */
+static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname) {
+    struct fat_fs *fs = (struct fat_fs *)odir->sb->priv;
+    struct fat_node *on = (struct fat_node *)odir->priv, *nn = (struct fat_node *)ndir->priv, *x;
+    struct fat_dirent src, dst;
+    struct diter pos;
+    u8 entries[(LFN_MAX_ENTRIES + 1) * 32];
+    u32 n, new_lba = 0, new_off = 0;
+    bool same = dir_same(on, nn), is_dir, replace = false;
+    int r = validate_name(nname);
+
+    if(r) return r;
+    mutex_lock(&odir->sb->lock);
+    r = dir_find(fs, on, oname, &src);
+    if(r) goto out;
+    is_dir = (src.raw[11] & ATTR_DIR) != 0;
+    r = dir_find(fs, nn, nname, &dst);
+    if(r == 0 && !(same && dst.idx == src.idx)) {            /* another object has the name (else: a change of case) */
+        if(live_node(fs, dst.lba, dst.off)) { r = -EBUSY; goto out; }   /* in use: not deleted under its user */
+        if(is_dir && !(dst.raw[11] & ATTR_DIR)) { r = -ENOTDIR; goto out; }
+        if(!is_dir && (dst.raw[11] & ATTR_DIR)) { r = -EISDIR; goto out; }
+        if(is_dir && (r = dir_empty(fs, dst.first)) != 0) goto out;
+        replace = true;
+    } else if(r != 0 && r != -ENOENT) goto out;
+    r = build_entries(fs, nn, nname, 0, 0, src.raw, same ? src.idx : NO_IDX, entries, &n);
+    if(r == 0) r = dir_find_free(fs, nn, n, &pos);
+    if(r == 0) r = dir_write_entries(&pos, entries, n, &new_lba, &new_off);
+    if(r) goto out;
+    if(replace) {
+        r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx);
+        if(r == 0 && dst.first) r = fat_free_chain(fs, dst.first);
+        if(r) goto out;
+    }
+    r = dir_delete_entries(fs, on, src.lfn_idx, src.idx);
+    if(r == 0 && is_dir && !same) r = set_dotdot(fs, src.first, nn);
+    for(x = fs->live; x; x = x->next) {                      /* an open file or directory follows its entry */
+        if(x->dir_lba == src.lba && x->dir_off == src.off) { x->dir_lba = new_lba; x->dir_off = new_off; }
+    }
+out:
+    mutex_unlock(&odir->sb->lock);
+    return r;
+}
+
+/* the last reference is gone: forget the node (the root's goes at unmount) */
 static void fat_release(struct vnode *v) {
-    kfree(v->priv);
+    struct fat_node *n = (struct fat_node *)v->priv, **pp;
+    struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
+    if(n && !n->is_root) {
+        mutex_lock(&v->sb->lock);
+        for(pp = &fs->live; *pp; pp = &(*pp)->next) if(*pp == n) { *pp = n->next; break; }
+        mutex_unlock(&v->sb->lock);
+    }
+    kfree(n);
 }
 
 static const struct vnode_ops fat_vops = {
-    fat_lookup, fat_readdir, fat_read, fat_write, fat_truncate, fat_create, fat_unlink, fat_release
+    fat_lookup, fat_readdir, fat_read, fat_write, fat_truncate, fat_create, fat_unlink, fat_release, fat_rename
 };
 
 /**** mount ****/

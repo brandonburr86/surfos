@@ -352,7 +352,27 @@ def host_checks(q):
                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
     except Exception as e:
         out = str(e).encode()
-    return [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')]
+    return [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')] + \
+        fsck_check(q.disk, start, int.from_bytes(mbr[458:462], 'little') * 512)
+
+
+def fsck_check(disk, start, size):
+    """fsck.fat (dosfstools) on a copy of the partition: what SurfOS wrote must be consistent"""
+    if not shutil.which('fsck.fat') or not size:
+        return []
+    part = os.path.join(os.path.dirname(disk), 'part.img')
+    with open(disk, 'rb') as f, open(part, 'wb') as o:
+        f.seek(start)
+        o.write(f.read(size))
+    try:
+        r = subprocess.run(['fsck.fat', '-n', part], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        ok = r.returncode == 0
+        if not ok:
+            print(r.stdout.decode(errors='replace'))
+    except Exception as e:
+        print(e)
+        ok = False
+    return [('fsck.fat finds the FAT volume SurfOS wrote consistent', ok)]
 
 
 def tail(text, n=40):

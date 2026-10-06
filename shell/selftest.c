@@ -343,6 +343,65 @@ static void test_fat(void) {
     kfree(rb);
 }
 
+/* 10/5/26: a small file with the given contents (0 or -errno) */
+static int put_file(const char *path, const char *text) {
+    struct file *f;
+    int r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r) return r;
+    r = vfs_write(f, text, strlen(text));
+    vfs_close(f);
+    return r == (int)strlen(text) ? 0 : (r < 0 ? r : -EIO);
+}
+
+/* does the file hold exactly text? */
+static bool file_is(const char *path, const char *text) {
+    struct file *f;
+    char buf[64];
+    int r = vfs_open(path, O_RDONLY, &f);
+    if(r) return false;
+    r = vfs_read(f, buf, sizeof(buf));
+    vfs_close(f);
+    return r == (int)strlen(text) && !memcmp(buf, text, r);
+}
+
+/* 10/5/26 (USB storage): rename on FAT. The tree it leaves (/hda1/RENAMED/moved/...) is what
+   the host's fsck.fat checks after the run, the ".." of a moved directory included. */
+static void test_fat_rename(void) {
+    struct stat st;
+    struct file *f;
+    int r;
+
+    if(vfs_stat("/hda1", &st) != 0) return;
+    vfs_unlink("/hda1/RENAMED/moved/a much longer name.txt");      /* leftovers of an earlier run */
+    vfs_unlink("/hda1/RENAMED/moved/opened.txt");
+    vfs_rmdir("/hda1/RENAMED/moved");
+    vfs_rmdir("/hda1/RENAMED");
+    check(put_file("/hda1/rn_a.txt", "alpha") == 0 && vfs_rename("/hda1/rn_a.txt", "/hda1/rn_b.txt") == 0 &&
+          vfs_stat("/hda1/rn_a.txt", &st) == -ENOENT && file_is("/hda1/rn_b.txt", "alpha"), "rename a file in its directory");
+    check(vfs_mkdir("/hda1/rn_dir") == 0 && vfs_rename("/hda1/rn_b.txt", "/hda1/rn_dir/a much longer name.txt") == 0 &&
+          file_is("/hda1/rn_dir/A MUCH LONGER NAME.TXT", "alpha"), "move it into a directory under a long name");
+    check(put_file("/hda1/rn_c.txt", "gamma") == 0 && vfs_rename("/hda1/rn_c.txt", "/hda1/rn_dir/a much longer name.txt") == 0 &&
+          file_is("/hda1/rn_dir/a much longer name.txt", "gamma") && vfs_stat("/hda1/rn_c.txt", &st) == -ENOENT,
+          "rename replaces an existing file");
+    check(vfs_rename("/hda1/rn_dir", "/hda1/rn_dir/sub") == -EINVAL, "a directory cannot move into itself");
+    check(vfs_mkdir("/hda1/rn_full") == 0 && put_file("/hda1/rn_full/x", "x") == 0 &&
+          vfs_rename("/hda1/rn_dir", "/hda1/rn_full") == -ENOTEMPTY && put_file("/hda1/rn_d.txt", "d") == 0 &&
+          vfs_rename("/hda1/rn_d.txt", "/hda1/rn_full") == -EISDIR, "no rename onto a non-empty directory or a file onto a directory");
+    vfs_unlink("/hda1/rn_full/x");
+    vfs_unlink("/hda1/rn_d.txt");
+    r = vfs_open("/hda1/rn_dir/opened.txt", O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r == 0) {                                     /* an open file follows its entry */
+        vfs_write(f, "12345", 5);
+        r = vfs_rename("/hda1/rn_dir", "/hda1/rn_full");             /* an empty directory is replaced */
+        if(r == 0) r = vfs_write(f, "678", 3) == 3 ? 0 : -EIO;
+        vfs_close(f);
+    }
+    check(r == 0 && vfs_stat("/hda1/rn_full/opened.txt", &st) == 0 && st.size == 8 && vfs_stat("/hda1/rn_dir", &st) == -ENOENT,
+          "move a directory over an empty one while a file in it is open");
+    check(vfs_mkdir("/hda1/RENAMED") == 0 && vfs_rename("/hda1/rn_full", "/hda1/RENAMED/moved") == 0 &&
+          file_is("/hda1/RENAMED/moved/a much longer name.txt", "gamma"), "move a directory into another one");
+}
+
 static int run_and_wait(const char *path, int argc, char **argv) {
     int pid = process_spawn(path, argc, argv, curTask->con, 0), status = -99;
     if(pid < 0) return pid;
@@ -480,6 +539,7 @@ int run_selftest(void) {
     test_bdev();
     test_fs();
     test_fat();
+    test_fat_rename();
     test_user();
     test_net();
     test_usb();
