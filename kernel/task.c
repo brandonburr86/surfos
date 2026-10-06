@@ -363,12 +363,13 @@ void kill_task(surf_task *t) {
    so whatever the call holds (a file system's lock, a claim) is let go on the way out. The kernel log
    says once, KILL_WAIT_MS later, that it is waited for (kill_escalate()). Interrupts off. */
 static void kill_hangup(surf_task *t) {
-    if(t->state == TS_DEAD) return;
+    if(t->state == TS_DEAD ||                   /* who it spares, all here: gone already, */
+       (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
+        return;
     if(!t->in_call) {
         become_zombie(t, -1);
         return;
     }
-    if(t->intr & TI_KILL) return;               /* killed already: that kill's rule stands */
     t->intr |= TI_KILL | TI_HANGUP;
     ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
     wake_intr(t);
