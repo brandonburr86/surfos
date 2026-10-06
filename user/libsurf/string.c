@@ -241,6 +241,13 @@ char *strerror(int err) {
     if(err < (int)(sizeof(messages) / sizeof(messages[0]))) return (char *)messages[err];
     if(err == EOVERFLOW) return "Value too large for defined data type";
     if(err == ENOTSUP) return "Operation not supported";
+    if(err == EADDRINUSE) return "Address already in use";
+    if(err == ENETUNREACH) return "Network is unreachable";
+    if(err == ECONNRESET) return "Connection reset by peer";
+    if(err == ENOTCONN) return "Transport endpoint is not connected";
+    if(err == ETIMEDOUT) return "Connection timed out";
+    if(err == ECONNREFUSED) return "Connection refused";
+    if(err == EHOSTUNREACH) return "No route to host";
     strcpy(unknown, "Unknown error ");
     {
         char digits[12];

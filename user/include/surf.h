@@ -81,6 +81,25 @@ int ttyctl(int op, unsigned int arg);
 int kcmd(char *const argv[]);                   /* the command's status (0 success); -1 with errno ENOENT: none */
 int kcmdinfo(int index, struct kcmd_info *out); /* 0; -1 with errno ENOENT after the last entry */
 
+/* 10/6/26: network connections (surfos/sock.h has the rules): descriptors for read, write, close */
+#include <surfos/sock.h>
+int tcp_listen(unsigned short port);                    /* a listening descriptor */
+int tcp_accept(int fd, struct netaddr *peer);           /* the next connection (waits); peer may be NULL */
+int tcp_connect(unsigned int ip, unsigned short port);  /* ip in network byte order */
+int netinfo(struct netinfo *ni);                        /* the default interface; -1 ENODEV without one */
+char *ipstr(unsigned int ip, char buf[16]);             /* "192.168.1.20" from network byte order */
+int ipparse(const char *s, unsigned int *ip);           /* "192.168.1.20" -> network byte order; 0, or -1 */
+
+/* poll() is in <poll.h>; pseudo-terminals (surfos/pty.h) and processes (surfos/proc.h) */
+#include <poll.h>
+#include <surfos/pty.h>
+#include <surfos/proc.h>
+int openpty(void);                                      /* a pseudo-terminal's master descriptor */
+int spawnpty(const char *path, char *const argv[], int masterfd);   /* a program on that pty: its pid */
+int ptyctl(int masterfd, int op, unsigned int arg);     /* PTY_SETSIZE, PTY_INDEX */
+int procinfo(int index, struct procinfo *pi);           /* task number index; -1 ENOENT after the last */
+int detach(void);                                       /* init becomes this process's parent */
+
 /* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
 int getdent(int fd, struct dirent *de);
 

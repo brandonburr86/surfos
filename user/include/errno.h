@@ -55,6 +55,13 @@ extern int errno;
 #define ELOOP        40         /* Too many symbolic links */
 #define EOVERFLOW    75         /* Value too large for defined data type */
 #define ENOTSUP      95         /* Operation not supported */
+#define EADDRINUSE   98         /* Address already in use (10/6/26: network connections) */
+#define ENETUNREACH 101         /* Network is unreachable */
+#define ECONNRESET  104         /* Connection reset by peer */
+#define ENOTCONN    107         /* Transport endpoint is not connected */
+#define ETIMEDOUT   110         /* Connection timed out */
+#define ECONNREFUSED 111        /* Connection refused */
+#define EHOSTUNREACH 113        /* No route to host */
 #define EOPNOTSUPP   ENOTSUP
 
 #endif

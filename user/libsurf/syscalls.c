@@ -25,6 +25,10 @@ typedef char stat_layout_is_fixed[sizeof(struct stat) == 40 ? 1 : -1];
 typedef char statfs_layout_is_fixed[sizeof(struct statfs) == 116 ? 1 : -1];
 typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
 typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
+typedef char netaddr_layout_is_fixed[sizeof(struct netaddr) == 8 ? 1 : -1];
+typedef char netinfo_layout_is_fixed[sizeof(struct netinfo) == 32 ? 1 : -1];
+typedef char pollfd_layout_is_fixed[sizeof(struct pollfd) == 8 ? 1 : -1];
+typedef char procinfo_layout_is_fixed[sizeof(struct procinfo) == 36 ? 1 : -1];
 
 int errno;
 
@@ -136,6 +140,20 @@ int ttyctl(int op, unsigned int arg) { return (int)ret(sc(SYS_ttyctl, op, (long)
 /* 10/6/26: the kernel's shell commands (surfos/kcmd.h) */
 int kcmd(char *const argv[]) { return (int)ret(sc(SYS_kcmd, (long)argv, 0, 0)); }
 int kcmdinfo(int index, struct kcmd_info *out) { return (int)ret(sc(SYS_kcmdinfo, index, (long)out, 0)); }
+
+/* 10/6/26: network connections, poll, pseudo-terminals, processes (surfos/sock.h, poll.h, pty.h, proc.h) */
+int tcp_listen(unsigned short port) { return (int)ret(sc(SYS_listen, port, 0, 0)); }
+int tcp_accept(int fd, struct netaddr *peer) { return (int)ret(sc(SYS_accept, fd, (long)peer, 0)); }
+int tcp_connect(unsigned int ip, unsigned short port) { return (int)ret(sc(SYS_connect, (long)ip, port, 0)); }
+int netinfo(struct netinfo *ni) { return (int)ret(sc(SYS_netinfo, (long)ni, 0, 0)); }
+int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) { return (int)ret(sc(SYS_poll, (long)fds, (long)nfds, timeout_ms)); }
+int openpty(void) { return (int)ret(sc(SYS_openpty, 0, 0, 0)); }
+int spawnpty(const char *path, char *const argv[], int masterfd) {
+    return (int)ret(sc(SYS_spawnpty, (long)path, (long)argv, masterfd));
+}
+int ptyctl(int masterfd, int op, unsigned int arg) { return (int)ret(sc(SYS_ptyctl, masterfd, op, (long)arg)); }
+int procinfo(int index, struct procinfo *pi) { return (int)ret(sc(SYS_procinfo, index, (long)pi, 0)); }
+int detach(void) { return (int)ret(sc(SYS_detach, 0, 0, 0)); }
 int getdent(int fd, struct dirent *de) { return (int)ret(sc(SYS_readdir, fd, (long)de, 0)); }
 
 int wait(int pid, int *status) {
