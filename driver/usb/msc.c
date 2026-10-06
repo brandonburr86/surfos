@@ -203,8 +203,10 @@ static void pick_name(char *name, size_t size) {
     }
 }
 
-/* Unregister a disk. Never with m->lock held: bdev_unregister() takes the block cache's lock,
-   and the cache holds that lock while it reads and writes through msc_rw(), which takes m->lock. */
+/* Unregister a disk: the block layer marks it and its partitions gone, and the cache forgets
+   their idle blocks. Called without m->lock: it needs none, and keeping the block layer and the
+   cache out of the device lock keeps the lock order one way (msc_rw() is called with no cache
+   lock held, and takes m->lock). */
 static void disk_drop(struct bdev *d, const char *why) {
     if(!d) return;
     bdev_unregister(d);
