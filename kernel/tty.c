@@ -10,6 +10,8 @@ TTY_CAPS says what the console draws, and TTY_PAGE pages a task's output (the pa
 itself is in console.c: it counts the rows and asks; here is who is paged).
 10/6/26: a read gives up when the reader's call is cut short (a kill waits for its end,
 or Ctrl+C: surfos/task.h), and Ctrl+C in line mode interrupts the job in the foreground.
+10/6/26: tty_term_input(): the serial line's input rules, which a pseudo-terminal's master
+side (kernel/pty.c) follows too.
 */
 
 #include <surfos/types.h>
@@ -82,6 +84,48 @@ static void input_seq(struct tty *t, const char *s) {
     }
     irq_restore(flags);
     wake_up(&t->readers);
+}
+
+/* 10/6/26: a byte from a terminal at the other end of a line: the serial port (driver/serial.c),
+   and a pseudo-terminal's master side (kernel/pty.c). In line mode CR is Enter and DEL is
+   Backspace, and the escape sequences of the cursor keys (ESC [ or ESC O, then the final byte)
+   become those keys; other sequences are swallowed to their final byte. A lone Esc answers the
+   pager's question (it drops the rest), and the rest of a sequence that follows is still
+   swallowed. In raw mode (tty.h) the bytes arrive as they were sent. *esc is the line's state
+   (0 normal, 1 after ESC, 2 inside ESC [ or ESC O); one per line. From interrupt handlers too. */
+void tty_term_input(struct tty *t, u_char *esc, u_char c) {
+    if(t->raw) {
+        *esc = 0;
+        tty_input(t, c);
+        return;
+    }
+    if(*esc == 1) {
+        *esc = (c == '[' || c == 'O') ? 2 : 0;
+        return;
+    }
+    if(*esc == 2) {
+        if(c >= 0x40 && c <= 0x7E) {    /* the final byte: arrows and friends become key codes */
+            *esc = 0;
+            switch(c) {
+            case 'A': tty_input(t, UP); break;
+            case 'B': tty_input(t, DOWN); break;
+            case 'C': tty_input(t, RT); break;
+            case 'D': tty_input(t, LEFT); break;
+            case 'H': tty_input(t, HOME); break;
+            case 'F': tty_input(t, END); break;
+            default: break;
+            }
+        }
+        return;
+    }
+    if(c == 0x1B) {
+        if(t->con->page_asker) tty_input(t, 0x1B);
+        *esc = 1;
+        return;
+    }
+    if(c == '\r') c = '\n';
+    if(c == 0x7F) c = 0x08;
+    tty_input(t, c);
 }
 
 /* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h) */
