@@ -5,7 +5,8 @@ File: arp.c     Date: 10/3/26 (roadmap N2)
 --------------------
 A 16-entry table. An unresolved entry parks one frame and re-sends the
 request from arp_tick() a few times before giving up; entries age out
-after ten minutes.
+after ten minutes. 10/6/26: giving up tells TCP (a connection being opened
+through that address fails at once: no route to host).
 */
 
 #include <surfos/types.h>
@@ -13,6 +14,7 @@ after ten minutes.
 #include <surfos/timer.h>
 #include <net/net.h>
 #include <net/eth.h>
+#include <net/tcp.h>
 #include <blibc_common.h>
 
 struct arp_pkt {
@@ -145,7 +147,9 @@ void arp_tick(void) {
         } else if(now - e->updated >= HZ) {                /* no reply within a second: ask again */
             if(++e->retries > ARP_RETRIES) {
                 if(e->pending) netbuf_free(e->pending);
+                e->pending = NULL;
                 e->valid = false;
+                tcp_unreachable(e->ip);                    /* 10/6/26 */
             } else if(dev) {
                 e->updated = now;
                 request(dev, e->ip);

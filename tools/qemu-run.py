@@ -189,6 +189,17 @@ SMOKE = [
     ('tcpecho 7', ['tcpecho server started']),
     ('@host-echo', []),
     ('netstat', ['tcpecho: connection from 10.0.2.2', 'tcpecho: closed, 39 bytes echoed', 'tcp  LISTEN']),
+    # 10/6/26 (the telnet server, track N): network connections for programs (surfos/sock.h), with nettest: the
+    # interface; an echo server the host reaches through the forwarded port 23, and a megabyte the host reads slowly;
+    # an HTTP GET from the harness's server; a refused connection, and one to an address that does not answer ARP;
+    # the calls' errors and limits; a kill and Ctrl+C while accept() waits. Port 23 is free again at the end.
+    ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
+    ('@nettest-host', []),
+    ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),
+    ('nettest refuse 10.0.2.2 1', ['connect to 10.0.2.2 port 1: Connection refused']),
+    ('nettest connect 10.0.2.99 23', ['connect to 10.0.2.99 port 23: No route to host']),
+    ('nettest limits', ['NETTEST PASS']),
+    ('@nettest-kills', []),
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
@@ -1117,6 +1128,109 @@ class Telnet:
         except OSError:
             pass
         self.closed = True
+
+
+# 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
+def nettest_pattern(n):
+    """what `nettest send` sends: "nettest 0000000\\n", "nettest 0000001\\n", ... cut to n bytes"""
+    return b''.join(b'nettest %07d\n' % i for i in range((n + 15) // 16))[:n]
+
+
+def guest_connection(q, timeout=10):
+    """the host's connection to the guest's port 23 (QEMU's forwarded port): it accepts at once and closes again
+    while nothing listens in the guest, so try until the guest's listener answers"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection(('127.0.0.1', q.ports['telnet']), timeout=3)
+            s.settimeout(0.5)
+            try:
+                if s.recv(1, socket.MSG_PEEK) == b'':
+                    s.close()
+                    q.pump(0.2)
+                    continue
+            except socket.timeout:
+                pass                        # open, nothing sent yet: the guest accepted it
+            s.settimeout(20)
+            return s
+        except OSError:
+            q.pump(0.2)
+    return None
+
+
+def nettest_host_check(q):
+    """`nettest echo 23 1 &`: the host connects through the forwarded port 23, what it sends comes back, it
+    closes, and nettest says how many bytes it echoed; `nettest send 23 1048576 &`: a megabyte the host starts
+    to read late and slowly arrives whole and in order (write waits for room as long as it takes), then the end"""
+    msg = b'surfos nettest: echoed through port 23\n'
+    q.send('nettest echo 23 1 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    s = guest_connection(q) if ok else None
+    got = b''
+    if s:
+        try:
+            s.sendall(msg)
+            while len(got) < len(msg):
+                d = s.recv(1024)
+                if not d:
+                    break
+                got += d
+        except OSError:
+            pass
+        s.close()
+    ok = ok and got == msg and q.expect('%d bytes echoed' % len(msg), 10)
+    n = 1 << 20
+    q.send('nettest send 23 %d &\n' % n)
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10) and ok
+    s = guest_connection(q) if ok else None
+    got = b''
+    if s:
+        q.wait(2)                           # the guest's writes wait for room meanwhile
+        try:
+            while True:
+                d = s.recv(4096)
+                if not d:
+                    break
+                got += d
+                if len(got) < 65536:
+                    time.sleep(0.01)        # slowly at first
+        except OSError:
+            pass
+        s.close()
+    ok = ok and got == nettest_pattern(n) and q.expect('%d bytes sent' % n, 20)
+    q.send('nettest info\n')               # a program waited for: surfsh collects the two from the background
+    ok = q.expect(PROMPT, 10) and ok
+    return ('nettest: an echo server and a megabyte to the host through the forwarded port 23', ok)
+
+
+def nettest_kills_check(q):
+    """a program waiting in accept(): Ctrl+C kills it at once (it was started in the foreground), and so does kill
+    for one in the background; nothing holds port 23 afterwards (nettest echo 23 0 listens there and stops)"""
+    q.send('nettest echo 23 1\n')
+    ok = q.expect('listening on port 23', 10)
+    if ok:
+        q.wait(0.5)
+        q.ser.sendall(b'\x03')
+        ok = q.expect('killed]', 5) and q.expect(FAILED_PROMPT, 5)
+    start = len(q.transcript)
+    q.send('nettest echo 23 1 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10) and ok
+    pids = re.findall(r'\[(\d+)\] started', q.transcript[start:].decode(errors='replace'))
+    if ok and pids:
+        q.wait(0.5)
+        q.send('kill %s\n' % pids[-1])
+        ok = q.expect("killing 'nettest'", 5) and q.expect(PROMPT, 5)
+        q.wait(0.5)                         # it ends when its accept() gives up, as soon as it runs
+    else:
+        ok = False
+    q.send('nettest echo 23 0\n')
+    ok = q.expect('listening on port 23', 10) and q.expect(PROMPT, 10) and ok
+    return ('nettest: Ctrl+C and kill while accept() waits end it at once, and port 23 is free again', ok)
+
+
+CONSOLE_CHECKS['@nettest-host'] = nettest_host_check
+CONSOLE_CHECKS['@nettest-kills'] = nettest_kills_check
+TIMEOUTS.update({'nettest connect 10.0.2.99 23': 30, 'nettest limits': 60})
 
 
 def host_checks(q):

@@ -30,6 +30,7 @@ void ip_input(struct netdev *dev, struct netbuf *nb);         /* after the Ether
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb);
 ipaddr_t ip_route_src(ipaddr_t dst);                          /* our address to use for dst */
 struct netdev *ip_route_dev(ipaddr_t dst);
+ipaddr_t ip_next_hop(struct netdev *dev, ipaddr_t dst);      /* 10/6/26: dst itself on dev's network, else the gateway */
 
 /* ICMP */
 struct icmp_hdr {
