@@ -505,7 +505,7 @@ static int cmd_cat(int argc, char **argv) {
         char buf[256];
         int r = vfs_open(argv[i], O_RDONLY, &f), last = '\n';
         if(r) { printf("    cat: %s: %s\n", argv[i], strerror(r)); status = CMD_FAIL; continue; }
-        while((r = vfs_read(f, buf, sizeof(buf))) > 0) {
+        while((r = vfs_read(f, buf, sizeof(buf))) > 0 && !task_interrupted()) {   /* 10/6/26: /dev/zero ends too */
             int j;
             for(j = 0; j < r; j++) {
                 u_char c = (u_char)buf[j];
@@ -609,6 +609,7 @@ static int cmd_cp(int argc, char **argv) {
         w = vfs_write(out, buf, r);
         if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
         total += r;
+        if(task_interrupted()) { printf("    cp: cut short after %lu bytes\n", total); r = -1; break; }   /* 10/6/26: a kill, Ctrl+C */
     }
     if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
     kfree(buf);
@@ -634,7 +635,7 @@ static int cmd_readbench(int argc, char **argv) {
     buf = (u8 *)kalloc(65536);
     if(!buf) { printf("    readbench: out of memory\n"); return CMD_FAIL; }
     t0 = getticks();
-    while(done < blocks) {
+    while(done < blocks && !task_interrupted()) {        /* 10/6/26: a kill or Ctrl+C stops it */
         u_long n = blocks - done > 128 ? 128 : blocks - done;
         r = bdev_read(d, (u32)done, (u32)n, buf);
         if(r) { printf("    read of block %lu failed (%i)\n", done, r); break; }

@@ -46,8 +46,9 @@ for the command to end (surfos/task.h in the kernel). Each command runs in a chi
 this process kills once ps shows it waiting: cp /dev/tty <dir>/HELD.TXT waiting for a
 line (its files are closed: <dir>'s volume unmounts afterwards, which the smoke test
 shows) and fdisk rd1 at its question, each with the kernel heap as before; sleep 10000,
-and ping <host> 100 when a host is given; a self test, which stops (SELFTEST STOPPED in
-its file) and lets go of its claim, so a heaptest runs afterwards. Each ends at once, not
+and ping <host> 100 when a host is given; cp /dev/zero /dev/null, which never waits but
+looks between its pieces; a self test, which stops (SELFTEST STOPPED in its file) and
+lets go of its claim, so a heaptest runs afterwards. Each ends at once, not
 by the kernel's 2-second kill at once, which the kernel log would show; that one comes
 for sleep -u 10000, which nothing cuts short, and the kernel log says so.
 
@@ -529,6 +530,7 @@ static int kills(const char *host) {
     char *fdisk[] = { "fdisk", "rd1", "new", "gpt", NULL };
     char *sleep10[] = { "sleep", "10000", NULL };
     char *ping[] = { "ping", (char *)host, "100", NULL };
+    char *cp_zero[] = { "cp", "/dev/zero", "/dev/null", NULL };
     char *selftest[] = { "selftest", NULL };
     char *heaptest[] = { "heaptest", NULL };
     char *sleep_u[] = { "sleep", "-u", "10000", NULL };
@@ -562,6 +564,10 @@ static int kills(const char *host) {
         snprintf(what, sizeof(what), "ping %s 100, killed while it pings: ended in %u ms", host, took);
         check(status == -1 && took < 2000 && !killed_at_once(pid), what);
     }
+
+    status = kill_child(cp_zero, "-", "ready", 300, &pid, &took);
+    snprintf(what, sizeof(what), "cp /dev/zero /dev/null, killed while it copies: ended in %u ms", took);
+    check(status == -1 && took < 2000 && !killed_at_once(pid), what);
 
     status = kill_child(selftest, stfile, NULL, 150, &pid, &took);
     r = slurp(stfile, big, sizeof(big));
