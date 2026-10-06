@@ -545,15 +545,24 @@ def ansi_screen_check(q):
     return ('escape sequences on the VGA screen: position, moves, erase, inverse, colours, the corner', ok)
 
 
+# 10/6/26: the prompt in the root directory as a repaint draws it from a console's cells: a console that does not
+# draw UTF-8 yet keeps no wave there (SURF #>), one that does keeps it in one cell
+REPAINTED_PROMPT = re.compile(rb'SURF (?:\xe2\x89\x8b|~)?[!#@?]?>')
+
+
 def console_switch_check(q):
     """F2 and back to F1 on the PS/2 keyboard, after `ansi`: the serial terminal is repainted
     from the console's buffer, down to its last row in use (Z in the corner, row 25), and the
-    cursor goes back up to the prompt on row 14, column 10"""
+    cursor goes back up to the prompt on row 14, just after it (the column the screen shows)"""
     q.sendkeys('<f2>')
-    ok = q.expect("Brandon Burr's SurfOS", 10) and q.expect(PROMPT, 10)
+    ok = q.expect("Brandon Burr's SurfOS", 10) and q.expect(REPAINTED_PROMPT, 10)
     q.sendkeys('<f1>')
-    ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
-    ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
+    ok = ok and q.expect('ANSI-TEST top left', 10)
+    screen = q.screen()
+    rows = screen.split('\n')
+    column = len(rows[13]) + 1 if len(rows) > 13 else 0          # the prompt and the space after it
+    ok = ok and q.expect(f'Z\r\x1b[11A\x1b[{column}C', 10)
+    ok = ok and 'ANSI-TEST done, 80x25' in screen
     return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
 
 

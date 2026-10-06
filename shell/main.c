@@ -8,6 +8,8 @@ the rest arrive as argv. `help` is generated from the same table.
 10/6/26 (surfsh): every command returns a status (shell.h): 0 success, 1 failure,
 2 a usage error. A word $? is the status of the previous command (`echo $?`); a line
 that is no command is 127, and a program run by its name gives its exit status.
+The prompt is the SurfOS prompt (shell/prompt.c): this shell has system privileges,
+so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE).
 */
 
 #include <blibc_common.h>
@@ -43,6 +45,7 @@ that is no command is 127, and a program run by its name gives its exit status.
 #include <surfos/cpu.h>
 #include <surfos/acpi.h>
 #include <surfos/version.h>
+#include <surfos/prompt.h>
 
 #include <mm/kalloc.h>
 #include <mm/memory.h>
@@ -51,10 +54,8 @@ that is no command is 127, and a program run by its name gives its exit status.
 
 #include "shell.h"
 
-char *prompt = "SurfOS*> ";
-
 static const struct command commands[];
-static u_int ncommands;
+static const u_int ncommands;           /* both defined after the commands */
 
 /**** small commands ****/
 
@@ -733,6 +734,7 @@ static const struct command commands[] = {
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };
+static const u_int ncommands = sizeof(commands) / sizeof(commands[0]);
 
 /**** line handling ****/
 
@@ -775,6 +777,23 @@ int parseCommand(char *line, int last) {
     return 127;                         /* what other shells answer for a command that is not there */
 }
 
+/* 10/6/26: the SurfOS prompt (surfos/prompt.h) for the current directory: elevated, since this
+   shell has system privileges; in Unicode when the terminal draws it, in the SurfOS colours */
+static void show_prompt(int status) {
+    struct prompt_ctx c;
+    char buf[PROMPT_MAX];
+    int caps = tty_ctl(curTask->tty, TTY_CAPS, 0);
+    memset(&c, 0, sizeof(c));
+    c.cwd = vfs_getcwd();
+    c.last_status = status;
+    c.elevated = 1;
+    c.width = (int)COLUMNS;
+    c.unicode = caps > 0 && (caps & TTY_CAP_UTF8);
+    c.color = 1;
+    prompt_render(&c, buf, sizeof(buf));        /* cut short (still terminated) only by a path longer than any is */
+    puts(buf);                                  /* not printf: its buffer is shorter than PROMPT_MAX */
+}
+
 /* the shell task body (started by init for each console) */
 void startShell(void);
 
@@ -783,14 +802,16 @@ void shell() {
     startShell();
 }
 
+/* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful */
 void startShell() {
     char line[SHELL_LINE_LEN];
     int status = 0;
-    ncommands = sizeof(commands) / sizeof(commands[0]);
     for(;;) {
-        cputs(LBLUE_TXT, prompt);
+        show_prompt(status);
         memset(line, 0, sizeof(line));
         cgets(TEAL_TXT, line);
+        tty_ctl(curTask->tty, TTY_PAGE, 1);
         status = parseCommand(line, status);
+        tty_ctl(curTask->tty, TTY_PAGE, 0);
     }
 }

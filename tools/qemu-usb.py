@@ -83,7 +83,9 @@ FONT_C = os.path.join(REPO, 'driver', 'font8x16.c')
 _SGR = rb'(?:\x1b\[[0-9;]*m)*'
 PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR + rb'>')
 PROMPT_TEXT = re.compile(r'SurfOS\*>|(?:\u224b|~)[!#@?]?>')
-PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>)$')
+# 10/6/26: on a screen whose console does not draw UTF-8 yet the wave is not drawn, and the ring-0 shell's prompt
+# ends in its state alone ("SURF #>")
+PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>| [!#@?]>)$')
 # the pager's question after a screenful (TTY_MORE in include/surfos/tty.h): answered with Space
 MORE = b'--More--'
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kernel panic', 'BOOT PROBLEM']
@@ -488,6 +490,11 @@ def ansi_ok(scr):
             scr.colours[(9, 3)] == (YELLOW, BLUE))
 
 
+def drawn(text):
+    """text as both sides of a comparison can show it: printable ASCII, no space at the ends"""
+    return ''.join(c for c in text if ' ' <= c <= '~').strip()
+
+
 def ends_prompt(row):
     return PROMPT_ROW.search(row.rstrip()) is not None
 
@@ -576,9 +583,10 @@ def scenario_serial(args, image, firmware, outdir):
             m = PROMPT_TEXT.search(vm.text())
             serial_boot = vm.text()[:m.end()] if m else vm.text()
             results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
-            # the last boot lines on the serial port must be the last ones on the screen too
-            want = [l.strip() for l in serial_boot.splitlines() if l.strip()][-6:]
-            shown = [r.strip() for r in scr.rows if r.strip()]
+            # the last boot lines on the serial port must be the last ones on the screen too (what the screen
+            # can draw of them: before the console draws UTF-8 the prompt's wave is not there)
+            want = [drawn(l) for l in serial_boot.splitlines() if drawn(l)][-6:]
+            shown = [drawn(r) for r in scr.rows if drawn(r)]
             results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
             results.append(('framebuffer shows the banner: Brandon Burr\'s SurfOS, the version and the years in their colours',
                             banner_ok(scr)))
