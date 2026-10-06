@@ -19,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
-            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf
+            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk
 
       - name: Unit tests (host)
         run: make unittest

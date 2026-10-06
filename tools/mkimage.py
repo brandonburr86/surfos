@@ -5,8 +5,13 @@
                                                       block 2048, formatted with mtools and holding FILEs
     tools/mkimage.py initrd OUT.tar DIR                ustar archive of DIR: the Multiboot module that the
                                                       ramdisk driver exposes as rd0
+    tools/mkimage.py foreign OUT.img                    a 64 MB "stick from another computer": MBR, one FAT32
+                                                      partition made by mkfs.fat and filled by mtools with long,
+                                                      accented and macOS-style names, folders and a 1 MB file
+                                                      (the USB storage tests mount it in SurfOS)
 
-Needs python3 and mtools (mformat, mmd, mcopy) for the disk image.
+Needs python3 and mtools (mformat, mmd, mcopy) for the disk images, and dosfstools (mkfs.fat) for the
+foreign one.
 """
 import os
 import struct
@@ -63,6 +68,78 @@ def make_disk(out, size_mb, files):
           f"{len(files)} files")
 
 
+# what the foreign stick holds: (path on the volume, content)
+FOREIGN_FILES = [
+    ('A long file name written elsewhere.txt', b'Written on another computer, long name and all.\n'),
+    ('caf\u00e9 menu.txt', b'Accented name: the long-name entry is UTF-16 on disk.\n'),
+    ('._A long file name written elsewhere.txt', b'\x00\x05\x16\x07AppleDouble stand-in\n'),
+    ('.DS_Store', b'\x00\x00\x00\x01Bud1 stand-in\n'),
+    ('Photos/2026/October/notes.txt', b'Three folders down.\n'),
+    ('README.TXT', b'A plain 8.3 name.\n'),
+]
+
+
+def foreign_big():
+    """the 1 MB file: 16384 lines of 64 bytes, numbered, so a wrong block shows"""
+    return b''.join(b'SurfOS foreign stick, line %05d of 16384, 64 bytes per line...\n' % i for i in range(16384))
+
+
+def make_foreign(out):
+    size = 64 * 1024 * 1024
+    part_blocks = size // 512 - PART_START
+    offset = PART_START * 512
+    tmp = out + '.tmp'
+    part = out + '.part'
+    with open(part, 'wb') as f:
+        f.truncate(part_blocks * 512)
+    # FAT32 by dosfstools, 512-byte clusters so a 63 MB volume can be FAT32, the partition's offset in the BPB
+    run(['mkfs.fat', '-F', '32', '-s', '1', '-n', 'FOREIGN', '-h', str(PART_START), part])
+    env = dict(MTOOLS_ENV, LC_ALL='C.UTF-8', LANG='C.UTF-8')
+    work = out + '.files'
+    os.makedirs(work, exist_ok=True)
+    try:
+        made = set()
+        for name, data in FOREIGN_FILES + [('BIG.BIN', foreign_big())]:
+            parts = name.split('/')
+            for i in range(1, len(parts)):
+                d = '/'.join(parts[:i])
+                if d not in made:
+                    r = subprocess.run(['mmd', '-i', part, '::/' + d], env=env, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True)
+                    if r.returncode:
+                        sys.exit(r.stdout)
+                    made.add(d)
+            src = os.path.join(work, 'f%d' % len(os.listdir(work)))
+            with open(src, 'wb') as f:
+                f.write(data)
+            r = subprocess.run(['mcopy', '-i', part, '-o', src, '::/' + name], env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+            if r.returncode:
+                sys.exit(r.stdout)
+    finally:
+        for n in os.listdir(work):
+            os.remove(os.path.join(work, n))
+        os.rmdir(work)
+    mbr = bytearray(512)
+    mbr[0:16] = b'SurfOS foreign  '
+    mbr[440:444] = b'SFOS'                                        # disk signature
+    mbr[446:462] = struct.pack('<B3sB3sII', 0x00, b'\xfe\xff\xff', 0x0C, b'\xfe\xff\xff', PART_START, part_blocks)
+    mbr[510:512] = b'\x55\xaa'
+    with open(tmp, 'wb') as f:
+        f.write(mbr)
+        f.truncate(offset)
+        f.seek(offset)
+        with open(part, 'rb') as p:
+            while True:
+                chunk = p.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+    os.remove(part)
+    os.replace(tmp, out)
+    print(f"{out}: 64 MB, FAT32 'FOREIGN' at block {PART_START}, {len(FOREIGN_FILES) + 1} files")
+
+
 def make_initrd(out, directory):
     tmp = out + '.tmp'
     with tarfile.open(tmp, 'w', format=tarfile.USTAR_FORMAT) as tar:
@@ -81,6 +158,8 @@ def main(argv):
         make_disk(argv[2], int(argv[3]), argv[4:])
     elif len(argv) == 4 and argv[1] == 'initrd':
         make_initrd(argv[2], argv[3])
+    elif len(argv) == 3 and argv[1] == 'foreign':
+        make_foreign(argv[2])
     else:
         sys.exit(__doc__)
 

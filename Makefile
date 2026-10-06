@@ -22,6 +22,7 @@ ISO        = $(BUILD)/surfos.iso
 IMAGES     = build/images
 DISKIMG    = $(IMAGES)/test.img
 INITRD     = $(IMAGES)/initrd.tar
+FOREIGNIMG = $(IMAGES)/foreign-fat32.img
 DISK_FILES = README rootfs/motd docs/README.md $(BUILD)/user/bin/hello
 ROOTFS_FILES = $(shell find rootfs -type f 2>/dev/null)
 # user programs (roadmap P2): static ELF at 0x40000000 linked with libsurf.a, the user C library
@@ -162,7 +163,12 @@ run-iso: $(ISO) $(DISKIMG)
 	$(QEMU) -m $(QEMUMEM) -cdrom $(ISO) -boot d -drive file=$(DISKIMG),format=raw,if=ide,index=0,media=disk -nographic -no-reboot $(QEMUFLAGS)
 
 # ---- images -------------------------------------------------------------------------------
-images: $(DISKIMG) $(INITRD)
+images: $(DISKIMG) $(INITRD) $(FOREIGNIMG)
+
+# a FAT32 stick as another computer leaves it (mkfs.fat + mtools), for the USB storage tests
+$(FOREIGNIMG): tools/mkimage.py | $(IMAGES)
+	@echo "IMG  $@"
+	$(Q)$(PYTHON) tools/mkimage.py foreign $@
 
 $(IMAGES):
 	$(Q)mkdir -p $@

@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test boots the image ten times, each a cold boot with fresh firmware variables:
+--test boots the image eleven times, each a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -42,6 +42,13 @@ comes out of the framebuffer.
              boot stick: it becomes usb1, is mounted by hand, read and written, unplugged while
              mounted (I/O errors, no crash, umount still works), plugged in again, and what was
              written is still there (and in the image file, checked here afterwards)
+  storage    the storage work end to end, with two more sticks: a blank 1 GB one is
+             partitioned (fdisk), formatted FAT32 (mkfs), mounted, used through the C library
+             (fstest), sh redirection, mv and the editor, then ejected; a stick made by another
+             computer (mkfs.fat + mtools: long, accented and macOS-style names, folders, 1 MB) is
+             read and written; the boot drive is refused. Afterwards other FAT implementations
+             check both images here: macOS's fsck_msdos (hdiutil, without mounting), fsck.fat
+             (on the host or in the devenv container) and a FAT32 reader reading the files back
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -878,6 +885,190 @@ def scenario_usbdisk(args, image, firmware, outdir):
     return results
 
 
+def run_steps(vm, results, steps, timeout=60):
+    """(command, strings to see, [follow-up (line or raw bytes, strings to see)], name): one result each"""
+    for step in steps:
+        cmd, expects = step[0], step[1]
+        follow = step[2] if len(step) > 2 else []
+        name = step[3] if len(step) > 3 else cmd
+        vm.send(cmd + '\n')
+        ok = all(vm.expect(e, timeout) for e in expects)
+        for line, exp in follow:
+            if isinstance(line, bytes):
+                vm.ser.sendall(line)                  # keys as they are, for a full-screen program
+            else:
+                vm.send(line + '\n')
+            ok = ok and all(vm.expect(e, timeout) for e in exp)
+        ok = ok and vm.expect(PROMPT, timeout)
+        results.append((name, ok))
+
+
+def find_image(name):
+    for d in (os.path.join(REPO, 'build', 'docker', 'build', 'images'), os.path.join(REPO, 'build', 'images')):
+        if os.path.isfile(os.path.join(d, name)):
+            return os.path.join(d, name)
+    return None
+
+
+def mbr_partition(path, n=1):
+    """(first byte, length in bytes) of MBR partition n"""
+    with open(path, 'rb') as f:
+        mbr = f.read(512)
+    _, _, _, _, start, count = struct.unpack_from('<B3sB3sII', mbr, 446 + 16 * (n - 1))
+    return start * 512, count * 512
+
+
+def sparse_extract(path, offset, length, out):
+    """a partition into its own file, skipping zero runs (images are sparse)"""
+    with open(path, 'rb') as src, open(out, 'wb') as dst:
+        src.seek(offset)
+        left = length
+        while left:
+            chunk = src.read(min(left, 1 << 20))
+            if not chunk:
+                break
+            if chunk.count(0) == len(chunk):
+                dst.seek(len(chunk), 1)
+            else:
+                dst.write(chunk)
+            left -= len(chunk)
+        dst.truncate(length)
+
+
+def fat_checks(path, label):
+    """What independent FAT checkers say about partition 1 of an image: [(what, ok, output)].
+    macOS: hdiutil attaches the image without mounting it and fsck_msdos -n reads it. Elsewhere,
+    or as well: fsck.fat -n, from the host or from the devenv container."""
+    out = []
+    if sys.platform == 'darwin' and shutil.which('hdiutil') and shutil.which('fsck_msdos'):
+        r = subprocess.run(['hdiutil', 'attach', '-imagekey', 'diskimage-class=CRawDiskImage', '-nomount', '-readonly',
+                            path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        dev = r.stdout.split()[0] if r.returncode == 0 and r.stdout.split() else None
+        if dev:
+            try:
+                f = subprocess.run(['fsck_msdos', '-n', dev + 's1'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True)
+                out.append((f'macOS fsck_msdos finds no error on the {label}', f.returncode == 0, f.stdout))
+            finally:
+                subprocess.run(['hdiutil', 'detach', dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            out.append((f'hdiutil attaches the {label} image', False, r.stdout))
+    off, length = mbr_partition(path)
+    tmpd = tempfile.mkdtemp(prefix='surfos-fsck-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    try:
+        part = os.path.join(tmpd, 'part.img')
+        sparse_extract(path, off, length, part)
+        cmd = None
+        if shutil.which('fsck.fat'):
+            cmd = ['fsck.fat', '-n', part]
+        else:
+            docker = shutil.which('docker') or '/Applications/Docker.app/Contents/Resources/bin/docker'
+            if os.path.exists(docker) and subprocess.run([docker, 'image', 'inspect', 'surfos-modern-toolchain'],
+                                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                cmd = [docker, 'run', '--rm', '--platform', 'linux/amd64', '-v', f'{tmpd}:/d', 'surfos-modern-toolchain',
+                       'fsck.fat', '-n', '/d/part.img']
+        if cmd:
+            f = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            out.append((f'fsck.fat finds no error on the {label}', f.returncode == 0, f.stdout))
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return out
+
+
+def read_fat32(path, name):
+    """a file from partition 1 of an image, through tools/mkusb.py's FAT32 reader"""
+    mk = load_mkusb()
+    off, _ = mbr_partition(path)
+    with open(path, 'rb') as f:
+        return mk.Fat32(f, off).read(name)
+
+
+EXTRA_STICKS = ['-blockdev', 'driver=file,filename={data},node-name=datafile',
+                '-blockdev', 'driver=raw,file=datafile,node-name=data',
+                '-device', 'usb-storage,bus=xhci.0,drive=data,removable=on,id=stick1',
+                '-blockdev', 'driver=file,filename={foreign},node-name=foreignfile',
+                '-blockdev', 'driver=raw,file=foreignfile,node-name=foreign',
+                '-device', 'usb-storage,bus=xhci.0,drive=foreign,removable=on,id=stick2']
+
+
+def scenario_storage(args, image, firmware, outdir):
+    results = []
+    foreign_src = find_image('foreign-fat32.img')
+    if not foreign_src:
+        return [('the foreign FAT32 image exists (make images)', False)]
+    tmpd = tempfile.mkdtemp(prefix='surfos-storage-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    data, foreign = os.path.join(tmpd, 'data.img'), os.path.join(tmpd, 'foreign.img')
+    with open(data, 'wb') as f:
+        f.truncate(1 << 30)                       # a blank 1 GB stick (sparse)
+    shutil.copyfile(foreign_src, foreign)
+    vm = Vm('storage', args, image, firmware, mem='512', serial=True, outdir=outdir,
+            extra=[a.format(data=data, foreign=foreign) for a in EXTRA_STICKS])
+    try:
+        if boot_serial(vm, results, args.boot_timeout):
+            boot = vm.text()
+            results.append(('the blank stick is usb1, the foreign one usb2 with partition usb2p1',
+                            '+USB: usb1: QEMU QEMU HARDDISK, 1024 MB' in boot and '+PART: usb2p1:' in boot))
+            steps = [
+                # the safety rule
+                ('mkfs usb0p1', ['the SurfOS boot drive'], [], 'mkfs refuses the boot drive'),
+                ('fdisk usb0 new mbr', ['the SurfOS boot drive'], [], 'fdisk refuses the boot drive'),
+                ('mount usb0p1 /bootstick', ['read-only'], [], 'the boot drive mounts read-only'),
+                ('cat /bootstick/boot/BUILD-INFO.txt', ['SurfOS USB boot image', 'Source revision']),
+                ('write /bootstick/X.TXT no', ['Read-only file system'], [], 'and cannot be written'),
+                ('umount /bootstick', []),
+                # a stick from another computer: long, accented and macOS-style names, folders, 1 MB
+                ('mount usb2p1 /foreign', []),
+                # (the console and its serial mirror show no bytes above 0x7e: 'cafe menu' loses its accent)
+                ('run ls -a /foreign', ['._A long file name written elsewhere.txt', '.DS_Store',
+                                        'A long file name written elsewhere.txt', 'BIG.BIN', 'menu.txt', 'Photos/']),
+                ('cat /foreign/README.TXT', ['A plain 8.3 name.']),
+                ('cat /foreign/Photos/2026/October/notes.txt', ['Three folders down.']),
+                ('run wc -l /foreign/BIG.BIN', ['16384']),
+                ('run head -n 2 /foreign/BIG.BIN', ['line 00000 of 16384', 'line 00001 of 16384']),
+                ('sh', ['$ '], [('cat "/foreign/A long file name written elsewhere.txt"', ['Written on another computer', '$ ']),
+                                ('cp /foreign/README.TXT "/foreign/Photos/2026/October/copied by SurfOS.txt"', ['$ ']),
+                                ('exit', ['exit status 0'])], 'a long name through sh, a copy into a folder'),
+                ('umount /foreign', []),
+                # a blank stick: an MBR, one partition, FAT32, then files through the C library and the editor
+                ('fdisk usb1 new mbr', ['Type usb1 to'], [('usb1', ['written, flushed and verified'])]),
+                ('fdisk usb1 add', ['Type usb1 to'], [('usb1', ['written, flushed and verified', 'usb1 now has usb1p1'])]),
+                ('mkfs usb1p1 SURFDATA', ['Type usb1p1 to'], [('usb1p1', ['FAT32'])]),
+                ('mount usb1p1 /data', []),
+                ('run fstest /data', ['FSTEST PASS']),
+                ('sh', ['$ '], [('echo "hello from SurfOS" > /data/hello.txt', ['$ ']),
+                                ('mkdir /data/Documents', ['$ ']),
+                                ('mv /data/hello.txt "/data/Documents/Hello World.txt"', ['$ ']),
+                                ('cat "/data/Documents/Hello World.txt"', ['hello from SurfOS', '$ ']),
+                                ('exit', ['exit status 0'])], 'sh redirection, mkdir and mv on the stick'),
+                ('run edit /data/notes.txt', ['New file', '^S Save'],
+                 [(b'Written in the SurfOS editor\ron a USB stick', ['Col 15']),
+                  (b'\x13', ['Wrote 2 lines']),
+                  (b'\x11', ['exit status 0'])], 'the editor writes a file on the stick'),
+                ('cat /data/notes.txt', ['Written in the SurfOS editor', 'on a USB stick']),
+                ('df', ['/data']),
+                ('umount /data', []),
+                ('eject usb1', ['safe to remove']),
+            ]
+            run_steps(vm, results, steps, timeout=180)
+        check_bad(vm, results, vm.text())
+    finally:
+        vm.close()
+    # what other FAT implementations make of the two sticks
+    try:
+        for what, ok, text in fat_checks(data, 'stick SurfOS formatted') + fat_checks(foreign, 'foreign stick'):
+            results.append((what, ok))
+            if not ok:
+                print(text, flush=True)
+        results.append(('the files SurfOS wrote read back elsewhere (a FAT32 reader)',
+                        read_fat32(data, 'Documents/Hello World.txt') == b'hello from SurfOS\n'
+                        and read_fat32(data, 'notes.txt') == b'Written in the SurfOS editor\non a USB stick\n'
+                        and read_fat32(foreign, 'Photos/2026/October/copied by SurfOS.txt') == b'A plain 8.3 name.\n'))
+    except Exception as e:
+        results.append((f'the sticks can be read back here ({e})', False))
+    shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def load_mkusb():
     import importlib.util
     spec = importlib.util.spec_from_file_location('mkusb', os.path.join(REPO, 'tools', 'mkusb.py'))
@@ -913,7 +1104,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'no-pit': scenario_nopit,
-             'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk,
+             'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -1017,7 +1208,7 @@ def main():
                'scenarios': {}}
     failed = 0
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'no-pit', 'usbnet', 'usbdisk',
-                               'no-initrd', 'no-kernel']:
+                               'storage', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)
