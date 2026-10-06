@@ -209,6 +209,8 @@ SMOKE = [
     ('@pager-q-crash', []),
     # a job in the background that turned paging on does not keep the shell's next command from being paged
     ('@pager-background', []),
+    # what is typed for a kernel command whose output goes to a file is shown, and is not in the file
+    ('@kcmd-echo', []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
@@ -797,11 +799,34 @@ def pager_background_check(q):
     return ('pager: a command after a background job that holds the pager is paged all the same', ok)
 
 
+def kcmd_echo_check(q):
+    """typed input's echo is shown and never kept with a kernel command's output (kcmdtest run: the 2004 demo with
+    its output on a file; its string comparison, answered on the console, reads two lines)"""
+    q.send('kcmdtest run /hda1/ECHO.TXT demo\n')
+    ok = q.expect('\x1b[2J', 10)                            # the menu: the screen cleared, the text kept
+    for keys, shows in (('2', '\x1b[2J'), ('first-typed\r', 'first-typed'), ('second-typed\r', 'second-typed'),
+                        (' ', '\x1b[2J')):
+        if ok:
+            q.send(keys)
+            ok = q.expect(shows, 10)
+    if ok:
+        q.send('q')
+        ok = q.expect('kcmdtest: demo: status 0', 10) and q.expect(PROMPT, 10)
+    if ok:
+        start = len(q.transcript)
+        q.send('cat /hda1/ECHO.TXT\n')
+        ok = q.expect('Enter a string: Enter another string: ', 10) and q.expect('first string is less', 10) and \
+            q.expect(PROMPT, 10) and b'typed' not in q.transcript[start:]
+    q.send('rm /hda1/ECHO.TXT\n')
+    ok = q.expect(PROMPT, 10) and ok
+    return ('a kernel command with its output on a file: typed lines are shown, and not kept in the file', ok)
+
+
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
 CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
-                  '@pager-background': pager_background_check}
+                  '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}
 
 
 def host_checks(q):

@@ -165,7 +165,7 @@ void tty_flush(struct tty *t) {
 /**** line discipline ****/
 
 static void echo(struct tty *t, int c) {
-    kputch(t->con, t->con->txtColor, c);
+    console_echo(t->con, t->con->txtColor, c);      /* 10/6/26: never into a kept output (console.c) */
 }
 
 static void erase(struct tty *t, size_t n) {

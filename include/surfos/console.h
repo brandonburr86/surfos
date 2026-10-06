@@ -108,6 +108,8 @@ struct kcapture {
 };
 void console_capture_begin(struct kcapture *k);
 void console_capture_end(void);
+/* 10/6/26: typed input as it is echoed (the line editor, getchar()): shown, never kept */
+void console_echo(surf_console *con, TEXTCOLOR color, int c);
 
 /* 10/6/26: the pager (TTY_PAGE, tty.h): the console counts the rows and asks, tty.c says who
    is paged. */

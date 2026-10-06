@@ -32,7 +32,7 @@ u_char getch() { /*blocks until a usable key arrives*/
 
 u_char getchar() {
     unsigned char code=getch();
-    putch(code);
+    if(curTask) console_echo(curTask->con, curTask->con->txtColor, code); /* 10/6/26: shown, never kept for a file */
     return code;
 }
 

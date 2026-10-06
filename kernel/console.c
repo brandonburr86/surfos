@@ -737,6 +737,16 @@ void console_capture_end(void) {
     if(curTask) curTask->kcap = NULL;
 }
 
+/* 10/6/26: typed input shown as it is typed (the line editor's echo, getchar()) goes to the
+   screen even while the task's output is kept for a file: the file gets the command's
+   output, not the user's keystrokes, and the user sees what they type */
+void console_echo(surf_console *con, TEXTCOLOR color, int c) {
+    struct kcapture *kept = (curTask && !in_interrupt()) ? curTask->kcap : NULL;
+    if(kept) curTask->kcap = NULL;
+    kputch(con, color, c);
+    if(kept) curTask->kcap = kept;
+}
+
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
     u_char b = (u_char)c;           /* 10/6/26: a char above 0x7f may come signed */
     u_char cells[UTF8_OUT_MAX];

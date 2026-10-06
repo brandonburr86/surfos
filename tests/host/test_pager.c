@@ -606,6 +606,29 @@ static void t_new_screenful(void) {
     check(st == DONE && asker() < 0, "after raw mode: a new screenful");
 }
 
+/* the echo of what is typed goes to the screen even while the output is kept for a file */
+static char line_got[64];
+static void w_readline_kept(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_capture(1);
+    sim_print("Enter a string: ", 16);
+    sim_readline(line_got, sizeof(line_got));
+    sim_print("thanks\n", 7);
+    sim_capture(0);
+}
+
+static void t_echo_not_kept(void) {
+    int st;
+    reset(0);
+    sim_input('h');
+    sim_input('i');
+    sim_input('\n');
+    st = run(CHILD, w_readline_kept, 0, 0);
+    check(st == DONE && !strcmp(line_got, "hi") && !strcmp(sim_captured(), "Enter a string: thanks\n") && screen_has("hi") &&
+          !screen_has("Enter"), "a kept output gets the command's output; the typed line's echo is shown, not kept");
+}
+
 static void t_caps(void) {
     reset(0);
     check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
@@ -634,6 +657,7 @@ int main(void) {
     t_nested();
     t_takeover();
     t_new_screenful();
+    t_echo_not_kept();
     t_caps();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
