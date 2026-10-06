@@ -9,7 +9,7 @@ docs/superpowers/plans/2026-10-06-surfsh.md). surfsh is a ring-3 program in
 
     main.c      the start (-l: the banner), the settings and /initrd/etc/surfsh.conf, the loop
     editor.c    the line editor in raw mode: keys, long lines that wrap, the history
-    complete.c  lists of names in columns (help)
+    complete.c  Tab completion: command names and paths
     parse.c     a line becomes commands: words, quotes, < > >>, &, ;, #
     run.c       running a command: surfsh's own, then the kernel's (kcmd), then programs
     builtins.c  cd, pwd, echo, exit, help, history, set
@@ -72,11 +72,11 @@ int edit_line(char *buf, int size);
 void history_add(const char *line);
 int history_print(void);            /* the history builtin */
 
-/**** complete.c: lists of names ****/
+/**** complete.c: Tab ****/
 
 struct cand {
     char *name;                     /* a command name, or a directory entry's name */
-    int dir;                        /* a directory: listed with "/" */
+    int dir;                        /* a directory: completed with "/", listed with "/" */
 };
 
 struct cands {
@@ -84,6 +84,10 @@ struct cands {
     int n, cap;
 };
 
+/* Tab with the cursor at *pos: the word before the cursor is completed in place.
+   0: nothing to complete; 1: the line changed; 2: several candidates with nothing more in
+   common, which are in *list, sorted (list them on a second Tab, then cands_free). */
+int complete(char *line, int *len, int *pos, int limit, struct cands *list);
 void cands_free(struct cands *c);
 
 /* names in columns that fit width, sorted down the columns as ls does; each row starts with
@@ -110,6 +114,7 @@ struct parsed {
 
 /* 0 and the commands, or -1 with a message in err */
 int parse_line(const char *line, struct parsed *out, char *err, int errsize);
+int needs_quotes(const char *s);    /* a word that parse_line would split or change */
 
 /**** run.c: running commands ****/
 

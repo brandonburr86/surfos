@@ -273,7 +273,8 @@ static int b_help(int argc, char **argv) {
            "    a name with a / is the path of a program.\n", PROGRAM_DIR);
     printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the line,\n"
            "    ^K deletes to its end, ^W the word before the cursor; Up and Down: the history;\n"
-           "    ^L clears the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n");
+           "    Tab completes a command or a path, a second Tab lists the choices; ^L clears\n"
+           "    the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n");
     printf("\n    The prompt shows the current directory and the wave; a ! after the wave says\n"
            "    that the last command failed. set changes how it looks; %s\n"
            "    is read at the start.\n", SURFSH_CONF);

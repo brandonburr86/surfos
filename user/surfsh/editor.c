@@ -12,8 +12,9 @@ arrive as they were sent.
 
 Keys: Left, Right, Home, End (also ^A, ^E), Backspace, Delete; ^U clears the line,
 ^K deletes to its end, ^W the word before the cursor; Up and Down go through the
-history (HIST_MAX lines, no line twice in a row); ^L clears the screen, ^C drops the
-line for a fresh prompt, ^D on an empty line leaves the shell (otherwise it deletes). Enter is
+history (HIST_MAX lines, no line twice in a row); Tab completes (complete.c), and a
+second Tab in a row lists the choices; ^L clears the screen, ^C drops the line for a
+fresh prompt, ^D on an empty line leaves the shell (otherwise it deletes). Enter is
 '\r' from a keyboard or a terminal and '\n' from a test harness (CR LF counts once).
 Typed text is teal. A line longer than LINE_LIMIT bytes takes no more characters and
 is refused with Enter, so a cut-off command never runs. Keys that arrive together
@@ -30,7 +31,7 @@ a count of columns from the prompt's start (the row is that over the width), and
 moves only with CR, ESC[nA, ESC[nB and ESC[nC. A change in the middle of the line
 moves back to the first changed character, erases to the end of the screen (ESC[J)
 and writes the rest of the line again; the prompt itself is written once per line
-(again only after ^L). Before a prompt the cursor goes to the
+(again only after ^L or a list of choices). Before a prompt the cursor goes to the
 start of a fresh row without leaving an empty one: a row of spaces up to the edge
 and a CR do that wherever the last command left the cursor.
 */
@@ -355,6 +356,34 @@ static void history_go(int to) {
     redraw(0);
 }
 
+/**** Tab ****/
+
+static void list_choices(struct cands *c) {
+    char **names = malloc((size_t)c->n * sizeof(char *));
+    int i, n = 0;
+    if(!names) return;
+    for(i = 0; i < c->n; i++) {
+        char *s = malloc(strlen(c->v[i].name) + 2);
+        if(!s) break;
+        strcpy(s, c->v[i].name);
+        if(c->v[i].dir) strcat(s, "/");
+        names[n++] = s;
+    }
+    leave_line(NULL);
+    columns(names, n, width, "", "\r\n", put);
+    for(i = 0; i < n; i++) free(names[i]);
+    free(names);
+    draw_all();
+}
+
+static void tab(int second) {
+    struct cands list = { NULL, 0, 0 };
+    int r = complete(line, &len, &pos, limit, &list);
+    if(r == 1) redraw(0);
+    else if(r == 2 && second) list_choices(&list);
+    cands_free(&list);
+}
+
 /**** a line ****/
 
 static int raw_failed;                  /* the console has no raw mode: the kernel's line editing */
@@ -370,7 +399,7 @@ static int plain_line(char *buf, int size) {
 }
 
 int edit_line(char *buf, int size) {
-    int key, result;
+    int key, last_tab = 0, result;
     if(raw_failed || ttyctl(TTY_RAW, 1) < 0) {
         raw_failed = 1;
         return plain_line(buf, size);
@@ -384,6 +413,7 @@ int edit_line(char *buf, int size) {
     draw_all();
     flush_out();
     for(;;) {
+        int was_tab = 0;
         key = get_key();
         if(key == '\n' && after_cr) {           /* the LF of a CR LF */
             after_cr = 0;
@@ -464,6 +494,10 @@ int edit_line(char *buf, int size) {
         case KEY_DOWN:
             history_go(hist_pos + 1);
             break;
+        case '\t':
+            tab(last_tab);
+            was_tab = 1;
+            break;
         default:
             if(key >= 0x20 && key < 0x7f) {
                 char ch = (char)key;
@@ -473,6 +507,7 @@ int edit_line(char *buf, int size) {
             }
             break;                              /* other control characters and keys: nothing */
         }
+        last_tab = was_tab;
     }
 done:
     flush_out();

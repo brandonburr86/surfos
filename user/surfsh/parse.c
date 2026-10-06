@@ -23,6 +23,16 @@ it is typed. An empty command (";;", a leading ";") is skipped.
 #define BLANK(c) ((c) == ' ' || (c) == '\t')
 #define ENDS_WORD(c) (BLANK(c) || (c) == ';' || (c) == '&' || (c) == '|' || (c) == '<' || (c) == '>')
 
+/* a word that parse_line would split or change: it needs quotes to stay as it is */
+int needs_quotes(const char *s) {
+    if(!*s) return 1;
+    if(*s == '#') return 1;
+    for(; *s; s++) {
+        if(ENDS_WORD(*s) || *s == '"' || *s == '\'' || *s == '\\') return 1;
+    }
+    return 0;
+}
+
 static int error(char *err, int size, const char *msg) {
     snprintf(err, (size_t)size, "%s", msg);
     return -1;

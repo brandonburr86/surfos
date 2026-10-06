@@ -227,20 +227,22 @@ SMOKE = [
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
     # 10/6/26: surfsh, the SurfOS shell, started from the ring-0 shell. Raw mode passes the bytes on as they
-    # are: Up (ESC [ A), Ctrl-C. The prompt and its state, history, a line over the 1023-byte limit (in
-    # pieces the console's input queue takes), redirection of a builtin and of a program, & and a killed
-    # program, help, set, exit with a status.
+    # are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, Tab for a command and a path (a second Tab
+    # lists), history, a line over the 1023-byte limit (in pieces the console's input queue takes),
+    # redirection of a builtin and of a program, & and a killed program, help, set, exit with a status.
     ('surfsh', [shown('SURF \u224b> ')],
      [('cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
       ('nosuchcommand', ['surfsh: nosuchcommand: command not found', shown('initrd \u25b8 bin \u224b!> ')]),
       ('pwd', ['\r\n/initrd/bin\r\n', shown('initrd \u25b8 bin \u224b> ')]),
+      (b'ech\tcompleted-command\n', ['\r\ncompleted-command\r\n', shown('bin \u224b> ')]),
       ('echo history-check', ['\r\nhistory-check\r\n', shown('bin \u224b> ')]),
       (b'\x1b[A\n', ['\r\nhistory-check\r\n', shown('bin \u224b> ')]),
       (b'echo ' + b'w' * 150 + b'1', ['1']), (b'w' * 150 + b'2', ['2']), (b'w' * 150 + b'3', ['3']),
       (b'w' * 150 + b'4', ['4']), (b'w' * 150 + b'5', ['5']), (b'w' * 150 + b'6', ['6']),
       (b'w' * 150 + b'\n', ['surfsh: the line is longer than 1023 bytes: it was not run', shown('bin \u224b!> ')]),
-      ('cd /hda1', [shown('hda1 \u224b> ')]),
-      (b'dropped\x03', ['^C', shown('hda1 \u224b> ')]),
+      (b'cd /hd\t\n', [shown('hda1 \u224b> ')]),
+      (b'c\t\t', ['count', 'crash', shown('hda1 \u224b> ')]),
+      (b'\x03', ['^C', shown('hda1 \u224b> ')]),
       ('echo hello > /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/echo more >> /hda1/SURFSH.TXT', [shown('hda1 \u224b> ')]),
       ('/initrd/bin/cat < /hda1/SURFSH.TXT', ['hello\r\nmore\r\n', shown('hda1 \u224b> ')]),
