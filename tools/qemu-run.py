@@ -211,6 +211,8 @@ SMOKE = [
     ('@pager-background', []),
     # what is typed for a kernel command whose output goes to a file is shown, and is not in the file
     ('@kcmd-echo', []),
+    # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
+    ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
