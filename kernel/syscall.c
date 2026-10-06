@@ -6,6 +6,9 @@ File: syscall.c Date: 10/3/26 (roadmap P1)
 int 0x80 lands here. Every pointer a program passes is checked against its
 address space before the kernel touches it (uvm_check), so a bad pointer
 costs the program -EFAULT and never the kernel a page fault with a lock held.
+
+10/5/26 (files on USB storage, the editor): rename, fstat, ftruncate, fsync,
+sync, statfs, dup2, time, ttyctl and spawnfd (calls 22-31).
 */
 
 #include <surfos/types.h>
@@ -15,11 +18,20 @@ costs the program -EFAULT and never the kernel a page fault with a lock held.
 #include <surfos/timer.h>
 #include <surfos/syscall.h>
 #include <surfos/process.h>
+#include <surfos/tty.h>
+#include <surfos/irq.h>
+#include <sys/bdev.h>
 #include <mm/uvm.h>
 #include <fs/vfs.h>
+#include <time.h>
 #include <blibc_common.h>
 
 #define ARG_STR_MAX VFS_PATH_MAX
+
+/* the structures user programs see (user/include/sys/stat.h, sys/statfs.h, dirent.h) keep these sizes */
+typedef char stat_layout_is_fixed[sizeof(struct stat) == 40 ? 1 : -1];
+typedef char statfs_layout_is_fixed[sizeof(struct statfs) == 116 ? 1 : -1];
+typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
 
 static bool ustr(const char *s) {
     return uvm_check_str(curTask->uvm, s, ARG_STR_MAX);
@@ -74,10 +86,9 @@ static int sys_getcwd(char *buf, u32 size) {
     return (int)strlen(cwd);
 }
 
-static int sys_spawn(const char *path, char *const argv[]) {
-    char *kargv[SPAWN_MAX_ARGS];
+/* copy a user argv[] (NULL-terminated) into kargv; an empty one becomes { path } */
+static int user_argv(const char *path, char *const argv[], char **kargv) {
     int argc = 0;
-    if(!ustr(path)) return -EFAULT;
     if(argv) {
         for(;;) {
             if(!ubuf(argv + argc, sizeof(char *), false)) return -EFAULT;
@@ -89,7 +100,36 @@ static int sys_spawn(const char *path, char *const argv[]) {
         }
     }
     if(!argc) { kargv[0] = (char *)path; argc = 1; }
+    return argc;
+}
+
+static int sys_spawn(const char *path, char *const argv[]) {
+    char *kargv[SPAWN_MAX_ARGS];
+    int argc;
+    if(!ustr(path)) return -EFAULT;
+    argc = user_argv(path, argv, kargv);
+    if(argc < 0) return argc;
     return process_spawn(path, argc, kargv, curTask->con, 0);
+}
+
+/* spawn with the child's 0, 1 and 2 shared with the caller's fds[i] (-1: the console) */
+static int sys_spawnfd(const char *path, char *const argv[], const int *fds) {
+    char *kargv[SPAWN_MAX_ARGS];
+    struct file *files[3] = { NULL, NULL, NULL };
+    int kfds[3], argc, i;
+    if(!ustr(path)) return -EFAULT;
+    argc = user_argv(path, argv, kargv);
+    if(argc < 0) return argc;
+    if(fds) {
+        if(!ubuf(fds, sizeof(kfds), false)) return -EFAULT;
+        memcpy(kfds, fds, sizeof(kfds));
+        for(i = 0; i < 3; i++) {
+            if(kfds[i] == -1) continue;
+            files[i] = fd_get(kfds[i]);
+            if(!files[i]) return -EBADF;
+        }
+    }
+    return process_spawn_files(path, argc, kargv, curTask->con, 0, files);
 }
 
 static int sys_wait(int pid, int *status) {
@@ -106,6 +146,73 @@ static int sys_kill(int pid) {
     kill_task(t);
     if(t == curTask) yield();
     return 0;
+}
+
+/**** 10/5/26: calls 22-31 ****/
+
+static int sys_rename(const char *from, const char *to) {
+    if(!ustr(from) || !ustr(to)) return -EFAULT;
+    return vfs_rename(from, to);
+}
+
+static int sys_fstat(int fd, struct stat *st) {
+    struct file *f = fd_get(fd);
+    struct stat k;
+    if(!f) return -EBADF;
+    if(!ubuf(st, sizeof(*st), true)) return -EFAULT;
+    memset(&k, 0, sizeof(k));
+    k.type = f->v->type;
+    k.size = f->v->size;
+    k.mtime = f->v->mtime;
+    k.ino = f->v->ino;
+    strlcpy(k.fs, f->v->sb->type->name, sizeof(k.fs));
+    strlcpy(k.dev, f->v->sb->dev ? f->v->sb->dev->name : "", sizeof(k.dev));
+    memcpy(st, &k, sizeof(k));
+    return 0;
+}
+
+static int sys_statfs(const char *path, struct statfs *st) {
+    struct statfs k;
+    int r;
+    if(!ustr(path) || !ubuf(st, sizeof(*st), true)) return -EFAULT;
+    r = vfs_statfs(path, &k);
+    if(r == 0) memcpy(st, &k, sizeof(k));
+    return r;
+}
+
+/* newfd becomes another descriptor for oldfd's open file (shared position), closing what it was */
+static int sys_dup2(int oldfd, int newfd) {
+    struct file *f = fd_get(oldfd), *old;
+    u_long flags;
+    if(!f || newfd < 0 || newfd >= NR_OPEN) return -EBADF;
+    if(oldfd == newfd) return newfd;
+    flags = irq_save();                  /* the reference count is shared with other tasks after spawnfd */
+    f->refs++;
+    irq_restore(flags);
+    old = curTask->files[newfd];
+    curTask->files[newfd] = f;
+    if(old) vfs_close(old);
+    return newfd;
+}
+
+/* days since 1970-01-01 (Howard Hinnant's days_from_civil, as in fs/fat.c) */
+static i32 days_from_civil(i32 y, u32 m, u32 d) {
+    i32 era, yoe, doy, doe;
+    y -= m <= 2;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = y - era * 400;
+    doy = (153 * (i32)(m + (m > 2 ? -3 : 9)) + 2) / 5 + (i32)d - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+/* seconds since 1970 from the CMOS clock, read as it is (the time FAT stamps files with) */
+static int sys_time(void) {
+    time_t t;
+    get_time(&t);
+    if(t.year < 1970 || t.month < 1 || t.month > 12 || t.date < 1 || t.date > 31 || t.hour > 23 || t.minute > 59 || t.second > 59)
+        return 0;
+    return (int)((u32)days_from_civil((i32)t.year, t.month, t.date) * 86400 + t.hour * 3600 + t.minute * 60 + t.second);
 }
 
 static u_long *syscall_trap(struct trapframe *tf) {
@@ -139,6 +246,16 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_sbrk:    r = (int)uvm_sbrk(curTask->uvm, (long)a); break;
     case SYS_uptime:  r = (int)(getticks() * (1000 / HZ)); break;
     case SYS_kill:    r = sys_kill((int)a); break;
+    case SYS_rename:  r = sys_rename((const char *)a, (const char *)b); break;
+    case SYS_fstat:   r = sys_fstat((int)a, (struct stat *)b); break;
+    case SYS_ftruncate: r = vfs_ftruncate(fd_get((int)a), b); break;
+    case SYS_fsync:   r = vfs_fsync(fd_get((int)a)); break;
+    case SYS_sync:    r = vfs_sync(); break;
+    case SYS_statfs:  r = sys_statfs((const char *)a, (struct statfs *)b); break;
+    case SYS_dup2:    r = sys_dup2((int)a, (int)b); break;
+    case SYS_time:    r = sys_time(); break;
+    case SYS_ttyctl:  r = tty_ctl(curTask->tty, (int)a, b); break;
+    case SYS_spawnfd: r = sys_spawnfd((const char *)a, (char *const *)b, (const int *)c); break;
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

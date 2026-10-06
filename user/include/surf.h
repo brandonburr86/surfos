@@ -1,79 +1,77 @@
 /*
 SurfOS user library (libsurf)
 ----------------------
-File: surf.h    Date: 10/3/26 (roadmap P2)
+File: surf.h    Date: 10/3/26 (roadmap P2), 10/5/26
 ----------------------
-System call wrappers and the small libc user programs link against. The
-string, memory and formatting functions come from lib/blibc, built a second
-time for user space; printf() writes to descriptor 1.
+What only SurfOS has: starting and waiting for programs, the terminal control
+call of full-screen programs, the uptime and the raw directory call.
+
+Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
+stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
+the POSIX convention: a failed call returns -1 (or NULL) and sets errno. This
+header still includes all of them, so code written for the first libsurf keeps
+building; where its names clashed with the standard ones the standard won:
+readdir() takes a DIR * (the raw call is getdent()), mkdir() takes a mode,
+sleep() counts seconds (msleep() milliseconds), getcwd() returns the buffer,
+and errors come back as -1 with errno instead of -errno.
 */
 
 #ifndef _SURF_H
 #define _SURF_H
 
-#include <surfos/types.h>
-#include <surfos/syscall.h>
+#include <stddef.h>
 #include <stdarg.h>
-#include <string.h>
+#include <stdint.h>
+#include <limits.h>
+#include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/statfs.h>
 
-#ifndef NULL
-#define NULL ((void *)0)
-#endif
+/* the kernel's short type names, for the first programs */
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef unsigned long long u64;
+typedef signed char i8;
+typedef short i16;
+typedef int i32;
+typedef long long i64;
 
-/* the kernel's structures and constants that cross the boundary */
+/* the kernel's names for what crosses the boundary (include/fs/vfs.h) */
 #define VFS_NAME_MAX 255
 #define VFS_PATH_MAX 256
-#define VN_FILE 1
-#define VN_DIR  2
-#define O_RDONLY    0x0000
-#define O_WRONLY    0x0001
-#define O_RDWR      0x0002
-#define O_CREAT     0x0040
-#define O_EXCL      0x0080
-#define O_TRUNC     0x0200
-#define O_APPEND    0x0400
-#define O_DIRECTORY 0x10000
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
+#define VN_FILE S_IFREG
+#define VN_DIR  S_IFDIR
 
-struct dirent { char name[VFS_NAME_MAX + 1]; int type; u32 size; u32 mtime; };
-struct stat { int type; u32 size; u32 mtime; u32 ino; char fs[8]; char dev[16]; };
-
-/* system calls (negative return = -errno) */
-void exit(int code) __attribute__((noreturn));
-int write(int fd, const void *buf, u32 len);
-int read(int fd, void *buf, u32 len);
-int open(const char *path, int flags);
-int close(int fd);
-int lseek(int fd, i32 off, int whence);
-int readdir(int fd, struct dirent *de);
-int stat(const char *path, struct stat *st);
-int chdir(const char *path);
-int getcwd(char *buf, u32 size);
-int mkdir(const char *path);
-int unlink(const char *path);
-int rmdir(const char *path);
-int getpid(void);
-int sleep(u32 ms);
-int yield(void);
-int spawn(const char *path, char *const argv[]);
-int wait(int pid, int *status);
-void *sbrk(long incr);
-u32 uptime(void);
+/* programs */
+int spawn(const char *path, char *const argv[]);                    /* the new pid; argv NULL: { path } */
+int spawnfd(const char *path, char *const argv[], const int fds[3]);
+    /* the same, with the child's descriptors 0, 1 and 2 sharing this process's fds[0..2]
+       (-1: the console), for redirection: the files stay open here too */
+int wait(int pid, int *status);     /* pid -1: any child. status: the exit code, -1 when it was killed */
 int kill(int pid);
+int yield(void);
+unsigned int uptime(void);          /* milliseconds since boot */
+int msleep(unsigned int ms);
 
-/* libc bits */
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
-int snprintf(char *buf, size_t size, const char *fmt, ...);
-int printf(const char *fmt, ...);
-int dprintf(int fd, const char *fmt, ...);
-int puts(const char *s);
-int putchar(int c);
-int readline(char *buf, size_t size);       /* a line from fd 0 without the newline; -1 at end of input */
-void *malloc(size_t n);
-void free(void *p);
-const char *strerror(int err);
+/* the terminal (include/surfos/tty.h has the full description) */
+#define TTY_RAW     1   /* arg 1: keys one at a time, no echo, special keys as escape sequences; 0: lines */
+#define TTY_GETSIZE 2   /* returns (columns << 16) | rows */
+int ttyctl(int op, unsigned int arg);
+
+/* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
+int getdent(int fd, struct dirent *de);
+
+/* a line from descriptor 0 without its newline (stdout is flushed first); -1 at the end of input */
+int readline(char *buf, size_t size);
 
 #endif

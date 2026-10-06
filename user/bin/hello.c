@@ -1,5 +1,6 @@
 /* hello: the first user program. Prints its arguments and exits with 42. */
-#include <surf.h>
+#include <stdio.h>
+#include <unistd.h>
 
 int main(int argc, char **argv) {
     int i;

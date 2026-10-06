@@ -1,5 +1,8 @@
 /* crash: misbehave in the named way; the kernel must survive and only this process die. */
-#include <surf.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
 
 static void bad_pointer(void) { *(volatile int *)0 = 1; }
 static void kernel_write(void) { *(volatile int *)0x100000 = 1; }       /* the kernel's text */
@@ -7,7 +10,10 @@ static void cli(void) { asm volatile("cli"); }
 static void hlt(void) { asm volatile("hlt"); }
 static void io(void) { asm volatile("inb $0x60, %%al" ::: "eax"); }
 static void yield_gate(void) { asm volatile("int $0x40"); }
-static void bad_syscall(void) { printf("write(1, 0x100000, 16) = %d\n", write(1, (void *)0x100000, 16)); }
+static void bad_syscall(void) {
+    int r = (int)write(1, (void *)0x100000, 16);
+    printf("write(1, 0x100000, 16) = %d (errno %d: %s)\n", r, errno, strerror(errno));
+}
 static int recurse(int n) { volatile char pad[512]; pad[0] = (char)n; return n ? recurse(n - 1) + pad[0] : 0; }
 static void divide(void) { volatile int z = 0; printf("%d\n", 1 / z); }
 

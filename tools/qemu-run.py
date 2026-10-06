@@ -85,7 +85,7 @@ SMOKE = [
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
-    ('crash efault', ['= -14', 'exit status 0']),
+    ('crash efault', ['= -1 (errno 14: Bad address)', 'exit status 0']),
     ('count 3 10', ['counted to 3']),
     ('ls /dev', ['console', 'null']),
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
@@ -99,9 +99,59 @@ SMOKE = [
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
+    # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
+    # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
+    ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
+    ('run echo one  two', ['one two', 'exit status 0']),
+    ('run ls -l /hda1', ['d          0 ', 'DOCS/', 'hello', 'motd', 'README', 'entries']),
+    ('sh', ['$ '], [('echo hello > /hda1/R.TXT', ['$ ']),
+                    ('cat < /hda1/R.TXT', ['hello', '$ ']),
+                    ('echo more >> /hda1/R.TXT', ['$ ']),
+                    ('cat /hda1/R.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/R.TXT > /hda1/R2.TXT', ['$ ']),
+                    ('cat /hda1/R2.TXT', ['hello\r\nmore', '$ ']),
+                    ('cat < /hda1/NOPE', ['sh: /hda1/NOPE: No such file or directory', '$ ']),
+                    ('wc /hda1/R.TXT', ['      2       2      11 /hda1/R.TXT', '$ ']),
+                    ('mkdir -p /hda1/T/a/b', ['$ ']),
+                    ('cp /hda1/R.TXT /hda1/T/a/b/C.TXT', ['$ ']),
+                    ('cp -r /hda1/T/a /hda1/T/z', ['$ ']),
+                    ('cat /hda1/T/z/b/C.TXT', ['hello\r\nmore', '$ ']),
+                    ('mv /hda1/T/z/b/C.TXT /hda1/T/M.TXT', ['$ ']),
+                    ('rmdir /hda1/T/z/b', ['$ ']),
+                    ('touch /hda1/T/E.TXT', ['$ ']),
+                    ('ls -l /hda1/T', ['d          0 ', 'a/', '-          0 ', 'E.TXT', '-         11 ', 'M.TXT', 'z/', '4 entries', '$ ']),
+                    ('head -n 1 /hda1/T/M.TXT', ['hello\r\n/ $ ']),
+                    ('hexdump /hda1/R.TXT', ['00000000  68 65 6c 6c 6f 0a 6d 6f  72 65 0a', '|hello.more.|', '0000000b', '$ ']),
+                    ('rm -r /hda1/T', ['$ ']),
+                    ('ls /hda1/T', ['No such file or directory', '$ ']),
+                    ('df', ['Mounted on', 'rootfs', 'devfs', 'rd0', '/initrd', 'hda1', '/hda1', '$ ']),
+                    ('exit', ['exit status 0'])]),
+    # the text editor over the serial line (raw mode, keys as bytes): type with Enter, Backspace,
+    # Home, arrows and an insertion, save, quit, check the file; reopen it, change a line, quit
+    # and answer the question; a file with CRLF line ends keeps them
+    ('run edit /hda1/NOTE.TXT', ['New file', '^S Save'],
+     [(b'Alpha one\rGamma threex', ['Col 13']),
+      (b'\x7f\x1b[HBeta two\r', ['Ln 3/3']),
+      (b'\x1b[A\x1b[A\x1b[F!', ['Alpha one!']),
+      (b'\x13', ['Wrote 3 lines']),
+      (b'\x11', ['exit status 0'])]),
+    ('cat /hda1/NOTE.TXT', ['Alpha one!\r\nBeta two\r\nGamma three\r\n']),
+    ('run wc /hda1/NOTE.TXT', ['      3       6      32 /hda1/NOTE.TXT']),
+    ('run edit /hda1/NOTE.TXT', ['Read 3 lines', '^S Save'],
+     [(b'\x1b[B\x1b[F\x7f\x7f\x7f2', ['Beta 2']),
+      (b'\x11', ['Save changes? (y/n/^C)']),
+      (b'y', ['exit status 0'])]),
+    ('cat /hda1/NOTE.TXT', ['Alpha one!\r\nBeta 2\r\nGamma three\r\n']),
+    ('run ls /hda1/NOTE.TXT.tmp', ['No such file or directory']),
+    ('sh', ['$ '], [('echo -e "first\\r\\nsecond\\r" > /hda1/CRLF.TXT', ['$ ']),
+                    ('exit', ['exit status 0'])]),
+    ('run edit /hda1/CRLF.TXT', ['Read 2 lines (CRLF line ends)', '^S Save'],
+     [(b'\x1b[F!\x13', ['Wrote 2 lines']),
+      (b'\x11', ['exit status 0'])]),
+    ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
 ]
-# steps that legitimately take longer than the 10 s default
-TIMEOUTS = {'selftest': 120}
+# steps that legitimately take longer than the 10 s default (by command, or by its first word)
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
@@ -412,12 +462,16 @@ def host_checks(q):
         mbr = f.read(512)
     start = int.from_bytes(mbr[454:458], 'little') * 512     # partition 1
     env = dict(os.environ, MTOOLS_SKIP_CHECK='1')
-    try:
-        out = subprocess.run(['mcopy', '-i', f'{q.disk}@@{start}', '::/SELFTEST.TXT', '-'],
-                             env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
-    except Exception as e:
-        out = str(e).encode()
-    return [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')]
+
+    def read(name):
+        try:
+            return subprocess.run(['mcopy', '-i', f'{q.disk}@@{start}', '::/' + name, '-'],
+                                  env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
+        except Exception as e:
+            return str(e).encode()
+    return [('FAT file written by the self test is readable with mtools', read('SELFTEST.TXT') == b'SurfOS wrote this file.\n'),
+            ('the files the editor saved are exact, line ends included (mtools)',
+             read('NOTE.TXT') == b'Alpha one!\nBeta 2\nGamma three\n' and read('CRLF.TXT') == b'first!\r\nsecond\r\n')]
 
 
 def tail(text, n=40):
@@ -441,11 +495,14 @@ def run_smoke(q, boot_timeout):
                 results.append(console_switch_check(q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
-            limit = TIMEOUTS.get(cmd.split()[0], 10)
+            limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
             q.send(cmd + '\n')
             ok = all(q.expect(e, limit) for e in expects)
             for line, exp in follow:
-                q.send(line + '\n')
+                if isinstance(line, bytes):                  # keys as they are, for a full-screen program
+                    q.ser.sendall(line)
+                else:
+                    q.send(line + '\n')
                 ok = ok and all(q.expect(e, limit) for e in exp)
             ok = ok and q.expect(PROMPT, limit)
             results.append((cmd, ok))
