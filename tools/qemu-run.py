@@ -71,6 +71,7 @@ SMOKE = [
                     ('exit 3', ['exit status 3'])]),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
+    ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default
 TIMEOUTS = {'selftest': 120}

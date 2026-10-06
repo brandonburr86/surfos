@@ -12,7 +12,12 @@ no extended partition walking, ASCII names only.
 
 10/5/26 (USB storage): rename, and one vnode per object in use (lookups of an
 open file share its vnode, so its size stays right and it follows its entry
-when renamed; the VFS can tell that it is open).
+when renamed; the VFS can tell that it is open). statfs with the volume label;
+a free-cluster count, from FAT32's FSInfo sector when that can be trusted, else
+counted, and written back to FSInfo at sync and unmount; the clean-shutdown bit
+in FAT[1]: cleared while mounted read-write, set again at unmount, so macOS and
+Windows check a volume that was unplugged while mounted. A read-only mount
+writes nothing.
 */
 
 #include <surfos/types.h>
@@ -36,6 +41,13 @@ when renamed; the VFS can tell that it is open).
 #define LFN_CHARS 13
 #define LFN_MAX_ENTRIES 20          /* 255 characters */
 #define NO_IDX 0xFFFFFFFFUL         /* no directory entry */
+#define DIR_MAX_ENTRIES 65536       /* the most a FAT directory may hold: walks stop there */
+#define FREE_UNKNOWN 0xFFFFFFFFUL   /* also what FSInfo says when it does not know */
+#define FSINFO_LEAD   0x41615252
+#define FSINFO_STRUCT 0x61417272
+#define FSINFO_TRAIL  0xAA550000
+#define FAT16_CLEAN 0x8000          /* FAT[1]: set = cleanly unmounted */
+#define FAT32_CLEAN 0x08000000
 
 struct fat_node;
 
@@ -47,6 +59,11 @@ struct fat_fs {
     u32 fat_lba, root_lba, root_sectors, data_lba, nclusters, root_cluster;
     u32 cluster_bytes, eoc, next_free;
     struct fat_node *live;          /* the objects that have a vnode now (not the root) */
+    u32 free;                       /* free clusters; FREE_UNKNOWN until counted */
+    u32 fsinfo;                     /* FAT32: the FSInfo sector, 0 when there is no valid one */
+    bool fsinfo_dirty;              /* free or next_free changed since FSInfo was written */
+    bool marked;                    /* this read-write mount cleared the clean bit */
+    char label[12];                 /* "" for none */
 };
 
 struct fat_node {
@@ -193,13 +210,16 @@ static int zero_cluster(struct fat_fs *fs, u32 c) {
 /* a free cluster, zeroed, chained after prev (0: a new chain); returns the cluster or 0 */
 static u32 fat_alloc(struct fat_fs *fs, u32 prev) {
     u32 n, c = fs->next_free, v;
+    if(fs->free == 0) return 0;                              /* known to be full */
     for(n = 0; n < fs->nclusters; n++, c++) {
-        if(c >= fs->nclusters + 2) c = 2;
+        if(c < 2 || c >= fs->nclusters + 2) c = 2;
         if(fat_get(fs, c, &v) != 0) return 0;
         if(v == 0) {
             if(fat_set(fs, c, fs->eoc) != 0 || zero_cluster(fs, c) != 0) return 0;
             if(prev && fat_set(fs, prev, c) != 0) return 0;
             fs->next_free = c + 1;
+            if(fs->free != FREE_UNKNOWN) fs->free--;
+            fs->fsinfo_dirty = true;
             return c;
         }
     }
@@ -212,8 +232,75 @@ static int fat_free_chain(struct fat_fs *fs, u32 c) {
         if(fat_get(fs, c, &next) != 0) return -EIO;
         if(fat_set(fs, c, 0) != 0) return -EIO;
         if(c < fs->next_free) fs->next_free = c;
+        if(fs->free != FREE_UNKNOWN) fs->free++;
+        fs->fsinfo_dirty = true;
         c = next;
     }
+    return 0;
+}
+
+/* the free clusters, counted in one pass over the first FAT */
+static int count_free(struct fat_fs *fs) {
+    u32 c, v, n = 0, first = 0;
+    if(fs->type == 12) {                                     /* entries straddle sectors; the FAT is small */
+        for(c = 2; c < fs->nclusters + 2; c++) {
+            if(fat_get(fs, c, &v) != 0) return -EIO;
+            if(!v) { n++; if(!first) first = c; }
+        }
+    } else {
+        u32 per = fs->type == 16 ? 256 : 128, sec, nsec = (fs->nclusters + 2 + per - 1) / per;
+        for(sec = 0; sec < nsec; sec++) {
+            struct buf *b = bread(fs->dev, fs->fat_lba + sec);
+            u32 i;
+            if(!b) return -EIO;
+            for(i = 0; i < per; i++) {
+                c = sec * per + i;
+                if(c < 2) continue;
+                if(c >= fs->nclusters + 2) break;
+                v = fs->type == 16 ? le16(b->data + i * 2) : le32(b->data + i * 4) & 0x0FFFFFFF;
+                if(!v) { n++; if(!first) first = c; }
+            }
+            brelse(b);
+        }
+    }
+    fs->free = n;
+    if(first) fs->next_free = first;
+    return 0;
+}
+
+/* FAT[1]'s clean-shutdown bit, in every copy of the FAT (FAT12 has none) */
+static int fat_mark(struct fat_fs *fs, bool clean) {
+    u32 i;
+    if(fs->type == 12) return 0;
+    for(i = 0; i < fs->nfats; i++) {
+        struct buf *b = bread(fs->dev, fs->fat_lba + i * fs->spf);
+        if(!b) return -EIO;
+        if(fs->type == 32) {
+            u32 v = le32(b->data + 4);
+            put32(b->data + 4, clean ? v | FAT32_CLEAN : v & ~FAT32_CLEAN);
+        } else {
+            u16 v = le16(b->data + 2);
+            put16(b->data + 2, (u16)(clean ? v | FAT16_CLEAN : v & ~FAT16_CLEAN));
+        }
+        bdirty(b);
+        brelse(b);
+    }
+    return 0;
+}
+
+/* the free count and the next-free hint back into FSInfo (FAT32) */
+static int write_fsinfo(struct fat_fs *fs) {
+    struct buf *b;
+    if(!fs->fsinfo || !fs->fsinfo_dirty) return 0;
+    b = bread(fs->dev, fs->fsinfo);
+    if(!b) return -EIO;
+    if(le32(b->data) == FSINFO_LEAD && le32(b->data + 484) == FSINFO_STRUCT) {
+        put32(b->data + 488, fs->free);
+        put32(b->data + 492, fs->next_free >= 2 && fs->next_free < fs->nclusters + 2 ? fs->next_free : 2);
+        bdirty(b);
+    }
+    brelse(b);
+    fs->fsinfo_dirty = false;
     return 0;
 }
 
@@ -238,6 +325,7 @@ static void diter_init(struct diter *it, struct fat_fs *fs, struct fat_node *dir
 static int diter_next(struct diter *it) {
     struct fat_fs *fs = it->fs;
     it->idx++;
+    if(it->idx >= DIR_MAX_ENTRIES) { it->at_end = true; return 0; }   /* a looping chain ends here too */
     it->off += 32;
     if(it->off < 512) return 0;
     it->off = 0;
@@ -258,7 +346,7 @@ static int diter_next(struct diter *it) {
 static int diter_extend(struct diter *it) {
     struct fat_fs *fs = it->fs;
     u32 c;
-    if(!it->first) return -ENOSPC;                          /* the FAT12/16 root cannot grow */
+    if(!it->first || it->idx >= DIR_MAX_ENTRIES) return -ENOSPC;    /* the FAT12/16 root cannot grow */
     c = fat_alloc(fs, it->clus);
     if(!c) return -ENOSPC;
     it->clus = c;
@@ -948,25 +1036,87 @@ static bool fat_probe(struct bdev *dev) {
     return ok;
 }
 
-static int fat_sync(struct superblock *sb) {
-    return bsync(sb->dev) ? -EIO : 0;
+/* a label for people: trailing spaces gone, "NO NAME" is none, anything unusual a '_' */
+static void copy_label(char *out, const u8 *raw) {
+    int i, n = 11;
+    while(n && raw[n - 1] == ' ') n--;
+    for(i = 0; i < n; i++) out[i] = (raw[i] >= 0x20 && raw[i] < 0x7F) ? raw[i] : '_';
+    out[n] = 0;
+    if(!strcmp(out, "NO NAME")) out[0] = 0;
 }
 
+/* the root directory's volume-label entry, which wins over the boot sector's copy */
+static void read_root_label(struct fat_fs *fs, struct fat_node *root) {
+    struct diter it;
+    diter_init(&it, fs, root);
+    while(!it.at_end) {
+        struct buf *b = bread(fs->dev, it.lba);
+        const u8 *p;
+        if(!b) return;
+        p = b->data + it.off;
+        if(p[0] == 0) { brelse(b); return; }
+        if(p[0] != 0xE5 && (p[11] & ATTR_LFN) != ATTR_LFN && (p[11] & ATTR_LABEL)) {
+            copy_label(fs->label, p);
+            brelse(b);
+            return;
+        }
+        brelse(b);
+        if(diter_next(&it)) return;
+    }
+}
+
+/* the volume's state reaches the disk: FSInfo, then the dirty blocks */
+static int fat_sync(struct superblock *sb) {
+    struct fat_fs *fs = (struct fat_fs *)sb->priv;
+    int r = 0;
+    if(!sb->readonly) {
+        mutex_lock(&sb->lock);
+        r = write_fsinfo(fs);
+        mutex_unlock(&sb->lock);
+    }
+    if(bsync(sb->dev)) r = -EIO;
+    return r;
+}
+
+/* after the VFS has synced: mark the volume clean once everything else is on the disk */
 static int fat_unmount(struct superblock *sb) {
-    kfree(sb->priv);
+    struct fat_fs *fs = (struct fat_fs *)sb->priv;
+    if(fs->marked && !fs->dev->gone) {
+        if(write_fsinfo(fs) == 0 && bsync(fs->dev) == 0 && fat_mark(fs, true) == 0 && bsync(fs->dev) == 0) bdev_flush(fs->dev);
+        else kprintf("+FAT%i: %s: write errors, the volume stays marked as not cleanly unmounted\n", fs->type, fs->dev->name);
+    }
+    kfree(fs);
     return 0;
 }
 
-static const struct superblock_ops fat_sops = { fat_sync, fat_unmount };
+static int fat_statfs(struct superblock *sb, struct statfs *st) {
+    struct fat_fs *fs = (struct fat_fs *)sb->priv;
+    int r = 0;
+    mutex_lock(&sb->lock);
+    if(fs->free == FREE_UNKNOWN) r = count_free(fs);         /* a read-only mount counts when asked */
+    st->unit = fs->cluster_bytes;
+    st->units = fs->nclusters;
+    st->free_units = fs->free == FREE_UNKNOWN ? 0 : fs->free;
+    snprintf(st->fs, sizeof(st->fs), "fat%i", fs->type);
+    strlcpy(st->label, fs->label, sizeof(st->label));
+    mutex_unlock(&sb->lock);
+    return r;
+}
+
+static const struct superblock_ops fat_sops = { fat_sync, fat_unmount, fat_statfs };
 
 static int fat_mount(struct superblock *sb) {
     struct fat_fs *fs;
     struct fat_node *root;
     struct buf *b;
     const u8 *bs;
-    u32 tot16, tot32, spf16, spf32;
+    u32 tot16, tot32, spf16, spf32, fsi = 0, hint_free = FREE_UNKNOWN, hint_next = 0;
+    u8 bpb_label[11];
+    bool clean = true, trusted;
+    const char *from = "counted";
 
     if(!sb->dev) return -ENODEV;
+    if(sb->dev->gone) return -EIO;
     b = bread(sb->dev, 0);
     if(!b) return -EIO;
     bs = b->data;
@@ -987,6 +1137,10 @@ static int fat_mount(struct superblock *sb) {
     fs->total = tot16 ? tot16 : tot32;
     fs->spf = spf16 ? spf16 : spf32;
     fs->root_cluster = spf16 ? 0 : le32(bs + 44);
+    memset(bpb_label, ' ', 11);
+    if(spf16 && bs[38] == 0x29) memcpy(bpb_label, bs + 43, 11);          /* extended boot record: FAT12/16 */
+    else if(!spf16 && bs[66] == 0x29) memcpy(bpb_label, bs + 71, 11);    /* and FAT32 */
+    if(!spf16) fsi = le16(bs + 48);
     brelse(b);
 
     if(fs->total > sb->dev->nblocks) fs->total = sb->dev->nblocks;
@@ -1001,16 +1155,51 @@ static int fat_mount(struct superblock *sb) {
     fs->cluster_bytes = fs->spc * 512;
     fs->eoc = fs->type == 12 ? 0xFFF : fs->type == 16 ? 0xFFFF : 0x0FFFFFFF;
     fs->next_free = 2;
+    fs->free = FREE_UNKNOWN;
+    copy_label(fs->label, bpb_label);
 
+    if(fs->type == 32 && fsi >= 1 && fsi < fs->rsv && (b = bread(sb->dev, fsi)) != NULL) {   /* FSInfo */
+        if(le32(b->data) == FSINFO_LEAD && le32(b->data + 484) == FSINFO_STRUCT && le32(b->data + 508) == FSINFO_TRAIL) {
+            fs->fsinfo = fsi;
+            hint_free = le32(b->data + 488);
+            hint_next = le32(b->data + 492);
+        }
+        brelse(b);
+    }
+    if(fs->type != 12 && (b = bread(sb->dev, fs->fat_lba)) != NULL) {     /* the clean-shutdown bit */
+        clean = fs->type == 32 ? (le32(b->data + 4) & FAT32_CLEAN) != 0 : (le16(b->data + 2) & FAT16_CLEAN) != 0;
+        brelse(b);
+    }
     root->is_root = true;
     root->first = fs->type == 32 ? fs->root_cluster : 0;
     sb->priv = fs;
+    read_root_label(fs, root);
+
+    if(!clean) kprintf("+FAT%i: %s was not unmounted cleanly (check it on another computer if files look wrong)\n",
+                       fs->type, fs->dev->name);
+    if(!sb->readonly) {                                      /* mounted read-write: dirty until unmounted */
+        if(fat_mark(fs, false) != 0 || bsync(fs->dev) != 0) {
+            binvalidate(fs->dev);                            /* nothing of this attempt is written later */
+            kfree(fs); kfree(root); sb->priv = NULL;
+            return -EIO;
+        }
+        fs->marked = true;
+    }
+    trusted = fs->fsinfo && clean && hint_free <= fs->nclusters;
+    if(hint_next >= 2 && hint_next < fs->nclusters + 2) fs->next_free = hint_next;
+    if(trusted) { fs->free = hint_free; from = "FSInfo"; }
+    else if(!sb->readonly && count_free(fs) != 0) { kfree(fs); kfree(root); sb->priv = NULL; return -EIO; }
+    if(fs->free == FREE_UNKNOWN) from = "not counted yet";
+
     sb->ops = &fat_sops;
     sb->root = vnode_alloc(sb, &fat_vops, VN_DIR);
-    if(!sb->root) { kfree(fs); kfree(root); return -ENOMEM; }
+    if(!sb->root) { kfree(fs); kfree(root); sb->priv = NULL; return -ENOMEM; }
     sb->root->priv = root;
-    kprintf("+FAT%i: %s: %lu clusters of %lu bytes, %lu FAT sectors x %lu, data at block %lu\n", fs->type, fs->dev->name,
-            (u_long)fs->nclusters, (u_long)fs->cluster_bytes, (u_long)fs->spf, (u_long)fs->nfats, (u_long)fs->data_lba);
+    kprintf("+FAT%i: %s: %s%s%s%lu clusters of %lu bytes, %lu FAT sectors x %lu, data at block %lu; ", fs->type, fs->dev->name,
+            fs->label[0] ? "label " : "", fs->label, fs->label[0] ? ", " : "", (u_long)fs->nclusters, (u_long)fs->cluster_bytes,
+            (u_long)fs->spf, (u_long)fs->nfats, (u_long)fs->data_lba);
+    if(fs->free == FREE_UNKNOWN) kprintf("free space %s\n", from);
+    else kprintf("%lu free (%s)\n", (u_long)fs->free, from);
     return 0;
 }
 

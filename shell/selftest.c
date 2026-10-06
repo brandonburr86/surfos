@@ -366,6 +366,36 @@ static bool file_is(const char *path, const char *text) {
 
 /* 10/5/26 (USB storage): rename on FAT. The tree it leaves (/hda1/RENAMED/moved/...) is what
    the host's fsck.fat checks after the run, the ".." of a moved directory included. */
+/* 10/5/26 (USB storage): statfs counts clusters as they are used and freed; a read-write
+   mount has cleared FAT[1]'s clean-shutdown bit (umount sets it again: the host's fsck.fat
+   checks that after the smoke test) */
+static void test_fat_statfs(void) {
+    struct statfs a, b;
+    struct stat st;
+    struct bdev *d = bdev_find("hda1");
+    u8 *blk;
+    int r;
+
+    if(vfs_stat("/hda1", &st) != 0 || !d) return;
+    r = vfs_statfs("/hda1/DOCS", &a);
+    check(r == 0 && a.unit == 1024 && a.units > 15000 && a.free_units > 0 && a.free_units < a.units && !strcmp(a.fs, "fat16") &&
+          !strcmp(a.label, "SURFOS") && !strcmp(a.dev, "hda1") && !strcmp(a.path, "/hda1"), "statfs /hda1: FAT16, 1 KB clusters, label SURFOS");
+    blk = (u8 *)kcalloc(1, 10240);
+    if(!blk) { check(false, "statfs test buffer"); return; }
+    r = put_file("/hda1/statfs.bin", "");
+    if(r == 0) {
+        struct file *f;
+        r = vfs_open("/hda1/statfs.bin", O_WRONLY, &f);
+        if(r == 0) { r = vfs_write(f, blk, 10240) == 10240 ? 0 : -EIO; vfs_close(f); }
+    }
+    check(r == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units + 10 == a.free_units, "a 10 KB file takes 10 clusters");
+    check(vfs_unlink("/hda1/statfs.bin") == 0 && vfs_statfs("/hda1", &b) == 0 && b.free_units == a.free_units, "unlink gives them back");
+    r = bdev_read(d, 0, 1, blk);
+    if(r == 0) r = bdev_read(d, blk[14] | (blk[15] << 8), 1, blk);        /* the first sector of the FAT */
+    check(r == 0 && !(blk[3] & 0x80), "mounted read-write: FAT[1] says not cleanly unmounted");
+    kfree(blk);
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -540,6 +570,7 @@ int run_selftest(void) {
     test_fs();
     test_fat();
     test_fat_rename();
+    test_fat_statfs();
     test_user();
     test_net();
     test_usb();
