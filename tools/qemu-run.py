@@ -335,6 +335,7 @@ SMOKE = [
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
       ('set prompt.unicode on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
+    ('@surfsh-corner', []),                                 # surfsh draws only where its line is
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -748,6 +749,28 @@ def pager_keys_check(q):
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
 CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check}
+
+
+def surfsh_corner_check(q):
+    """10/6/26 (surfsh): after `ansi`, the next prompt and a line typed, edited (Backspace, Left, an insertion,
+    Delete) and dropped with Ctrl-C change only their own rows: the pattern and the Z in the corner stay in VGA
+    memory, the line reads as it was edited, and the new prompt is on the row under it"""
+    q.send('ansi\n')
+    ok = q.expect('ANSI-TEST done', 10) and q.expect(PROMPT, 10)
+    if ok:
+        q.ser.sendall(b'echo abcdef\x7f\x7f\x1b[D\x1b[DX\x1b[3~')
+        q.wait(1)
+        q.ser.sendall(b'\x03')
+        ok = q.expect('^C', 10) and q.expect(PROMPT, 10)
+        q.wait(0.5)
+    d = q.vga_memory() or bytes(4000)
+    rows = [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
+    ok = ok and all(rows[r] == text for r, text in ANSI_ROWS.items()) and d[(24 * 80 + 79) * 2] == ord('Z')
+    ok = ok and re.fullmatch('SURF \u224b!?> echo abXd\\^C', rows[13]) is not None and rows[14].startswith('SURF \u224b')
+    return ('surfsh: a prompt and a line edited after ansi leave the screen below them alone (the Z in the corner)', ok)
+
+
+CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
 
 
 def host_checks(q):

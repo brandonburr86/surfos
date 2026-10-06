@@ -94,9 +94,10 @@ int complete(char *line, int *len, int *pos, int limit, struct cands *list);
 void cands_free(struct cands *c);
 
 /* names in columns that fit width, sorted down the columns as ls does; each row starts with
-   indent and ends with eol, and put() writes the pieces */
+   indent and ends with eol, and put() writes the pieces. columns_rows(): the rows it takes. */
 void columns(char *const *names, int n, int width, const char *indent, const char *eol,
              void (*put)(const char *s, int len));
+int columns_rows(char *const *names, int n, int width, int indent);
 
 /**** parse.c: a line becomes commands ****/
 
