@@ -16,8 +16,11 @@ disk, the SurfOS boot drive, or anything mounted. An unplugged disk is
 unregistered: it and its partitions are marked gone (every I/O fails) and taken
 off the list, but never freed, so no mount, cache block or command is left
 holding a dangling pointer. Partitions of a disk whose name ends in a digit
-get a 'p' (usb0p1). Partition tables are MBR (with logical partitions) or GPT;
-the disk that holds the SurfOS boot volume (label SURFOSUSB) is protected.
+get a 'p' (usb0p1).
+
+10/5/26 (partitions): tables are MBR (with logical partitions) or GPT
+(driver/part.c, sys/part.h); the disk that holds the SurfOS boot volume
+(label SURFOSUSB) is protected; fdisk rescans a disk after changing it.
 */
 
 #ifndef _SYS_BDEV_H
@@ -56,10 +59,11 @@ struct bdev {
     u32 nblocks;                /* capacity */
     u32 start;                  /* a partition: first block on the parent */
     struct bdev *parent;        /* a partition: the disk, else NULL */
-    u8 part_type;               /* a partition: the MBR type byte (GPT: its MBR equivalent, or 0) */
-    u8 part_index;              /* a partition: its number, from 1 (MBR logical partitions from 5) */
-    u8 scheme;                  /* a disk: the partition table found on it; a partition: the table it is in
-                                   (PART_SCHEME_NONE, _MBR, _GPT in sys/part.h) */
+    u8 part_type;               /* a partition: the MBR type byte */
+    u8 part_index;              /* a partition: its number, from 1 */
+    u8 scheme;                  /* a disk: its partition table; a partition: the table it is in (PART_SCHEME_*
+                                   in sys/part.h). On GPT, part_type is the MBR equivalent of the type, or 0;
+                                   MBR logical partitions are numbered from 5 */
     const char *type_name;      /* a partition: its type in a few words ("FAT32 LBA", "EFI system", "basic data") */
     char part_label[37];        /* a GPT partition: its name ("SURFOSUSB"), in ASCII; "" for MBR */
     u8 bus;                     /* BDEV_BUS_*; a partition copies its disk's */
@@ -97,7 +101,7 @@ int bdev_flush(struct bdev *d);             /* the disk's write cache to its med
    (a mount of the disk or of any of its partitions counts). */
 int bdev_may_format(struct bdev *d, char *why, size_t size);
 
-void bdev_print(void);                      /* lsblk: size, bus, removable, table and type, model or name, status */
+void bdev_print(void);                      /* lsblk */
 void bdev_print_io(void);                   /* lsblk -s: blocks read and written */
 const char *bdev_part_type_name(u8 type);
 

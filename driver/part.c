@@ -235,7 +235,8 @@ int part_commit(struct bdev *disk, const struct part_table *before, const struct
             goto rescan;
         }
     }
-    if(part_read(&io, disk->nblocks, t) != 0 || part_plan_check(p, t, why, sizeof(why)) != 0) {
+    if(part_read(&io, disk->nblocks, t) != 0) { snprintf(msg, n, "block 0 of %s cannot be read back", disk->name); goto rescan; }
+    if(part_plan_check(p, t, why, sizeof(why)) != 0) {
         snprintf(msg, n, "the table read back is not what was planned: %s", why);
         goto rescan;
     }
