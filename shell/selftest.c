@@ -16,6 +16,8 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <surfos/klog.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
+#include <fs/fat.h>
+#include <fs/bcache.h>
 #include <surfos/process.h>
 #include <net/net.h>
 #include <net/eth.h>
@@ -497,6 +499,74 @@ static void test_fat_concurrent(void) {
     check(t[0] && t[1] && t[2] && t[3] && !conc_bad, "three tasks write and check FAT files while a fourth reads the initrd");
 }
 
+/* 10/5/26 (USB storage): a FAT volume whose device goes away while it is mounted and a file
+   is open, as when a USB stick is pulled. The device is a RAM disk of the test's own (never
+   registered, so nothing else can see it). */
+#define UNPLUG_BLOCKS 8192                           /* 4 MB: FAT16 with 512-byte clusters */
+
+static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
+    return 0;
+}
+
+static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
+    memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
+    return 0;
+}
+
+static const struct bdev_ops ram_ops = { ram_read, ram_write, NULL };
+
+static struct bdev *ram_disk(u8 *mem) {
+    struct bdev *d = (struct bdev *)kcalloc(1, sizeof(struct bdev));
+    if(!d) return NULL;
+    strlcpy(d->name, "stick9", sizeof(d->name));
+    strlcpy(d->model, "self test RAM", sizeof(d->model));
+    d->block_size = 512;
+    d->nblocks = UNPLUG_BLOCKS;
+    d->bus = BDEV_BUS_RAM;
+    d->removable = true;
+    d->ops = &ram_ops;
+    d->priv = mem;
+    return d;
+}
+
+static void test_fat_unplug(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL, *d2 = NULL;
+    struct statfs sf;
+    struct stat st;
+    struct file *f = NULL;
+    struct vnode *v;
+    char msg[160];
+    int r;
+
+    if(!d) { check(false, "unplug test: 4 MB of memory"); kfree(mem); return; }
+    r = fat_mkfs(d, "UNPLUG", 0, msg, sizeof(msg));
+    check(r == 0 && vfs_mount_flags(d, "/selftest-stick", "fat", 0) == 0, "mkfs and mount a 4 MB RAM stick");
+    if(r || vfs_stat("/selftest-stick", &st) != 0) { kfree(d); kfree(mem); return; }
+    r = put_file("/selftest-stick/kept.txt", "written before");
+    if(r == 0) r = vfs_open("/selftest-stick/open.txt", O_WRONLY | O_CREAT, &f);
+    if(r == 0) r = vfs_write(f, "x", 1) == 1 ? 0 : -EIO;
+    check(r == 0 && (mem[512 + 3] & 0x80) == 0, "files written, FAT[1] says in use");
+    bdev_unregister(d);                              /* pulled out */
+    check(f && vfs_write(f, "y", 1) == -EIO && vfs_stat("/selftest-stick/kept.txt", &st) == -EIO &&
+          vfs_lookup("/selftest-stick/kept.txt", &v) == -EIO && vfs_mkdir("/selftest-stick/d") == -EIO &&
+          vfs_rename("/selftest-stick/kept.txt", "/selftest-stick/k2.txt") == -EIO && vfs_statfs("/selftest-stick", &sf) == -EIO,
+          "unplugged: write, stat, open, mkdir, rename and statfs fail with EIO");
+    check(vfs_umount("/selftest-stick") == -EBUSY, "umount waits for the open file");
+    if(f) vfs_close(f);
+    check(vfs_umount("/selftest-stick") == 0, "then it unmounts, writing nothing");
+    d2 = ram_disk(mem);                              /* plugged in again */
+    r = d2 ? vfs_mount_flags(d2, "/selftest-stick", "fat", MNT_RDONLY) : -ENOMEM;
+    check(r == 0 && file_is("/selftest-stick/kept.txt", "written before") && (mem[512 + 3] & 0x80) == 0,
+          "plugged in again: the file written before is there, the volume says not cleanly unmounted");
+    if(r == 0) vfs_umount("/selftest-stick");
+    if(d2) { binvalidate(d2); kfree(d2); }
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -674,6 +744,7 @@ int run_selftest(void) {
     test_fat_statfs();
     test_fat_utf8();
     test_fat_concurrent();
+    test_fat_unplug();
     test_user();
     test_net();
     test_usb();

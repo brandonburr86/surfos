@@ -15,7 +15,8 @@ open file share its vnode, so its size stays right and it follows its entry
 when renamed; the VFS can tell that it is open). Names are UTF-8: long names
 are UTF-16 on the disk, lookups fold ASCII letters only, an 8.3 alias puts '_'
 for what it cannot hold, and short names without a long name are read as code
-page 437. statfs with the volume label;
+page 437. Once the device is unplugged every operation fails with EIO and the
+volume can still be unmounted. statfs with the volume label;
 a free-cluster count, from FAT32's FSInfo sector when that can be trusted, else
 counted, and written back to FSInfo at sync and unmount; the clean-shutdown bit
 in FAT[1]: cleared while mounted read-write, set again at unmount, so macOS and
@@ -868,6 +869,7 @@ static int fat_lookup(struct vnode *dir, const char *name, struct vnode **out) {
     struct fat_fs *fs = (struct fat_fs *)dir->sb->priv;
     struct fat_dirent e;
     int r;
+    if(fs->dev->gone) return -EIO;                           /* unplugged */
     mutex_lock(&dir->sb->lock);
     r = dir_find(fs, (struct fat_node *)dir->priv, name, &e);
     if(r == 0) {
@@ -887,6 +889,7 @@ static int fat_readdir(struct vnode *dir, u_int index, struct dirent *de) {
     struct fat_dirent e;
     u_int skip = index;
     int r;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&dir->sb->lock);
     if(dn->rd_valid && dn->rd_index == index) { it = dn->rd_it; skip = 0; }
     else diter_init(&it, fs, dn);
@@ -1048,6 +1051,7 @@ static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     }
     if(!len) return 0;
     if(write && off + len < off) return -EFBIG;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&v->sb->lock);
     size = v->size;
     if(write && off > v->size) r = grow_zeros(fs, v, off);   /* the gap reads as zeros */
@@ -1070,6 +1074,7 @@ static int fat_truncate(struct vnode *v, u32 size) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
     int r = 0;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&v->sb->lock);
     if(size > v->size) {                                     /* growing: zeros */
         r = grow_zeros(fs, v, size);
@@ -1104,6 +1109,7 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
     int r = validate_name(name);
 
     if(r) return r;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
@@ -1162,6 +1168,7 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     struct fat_node *dn = (struct fat_node *)dir->priv;
     struct fat_dirent e;
     int r;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
@@ -1214,6 +1221,7 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     int r = validate_name(nname);
 
     if(r) return r;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&odir->sb->lock);
     on->rd_valid = nn->rd_valid = false;
     r = dir_find(fs, on, oname, &src);
@@ -1340,6 +1348,7 @@ static void read_root_label(struct fat_fs *fs, struct fat_node *root) {
 static int fat_sync(struct superblock *sb) {
     struct fat_fs *fs = (struct fat_fs *)sb->priv;
     int r = 0;
+    if(fs->dev->gone) { bsync(sb->dev); return -EIO; }       /* drops what can no longer be written */
     if(!sb->readonly) {
         mutex_lock(&sb->lock);
         r = write_fsinfo(fs);
@@ -1363,6 +1372,7 @@ static int fat_unmount(struct superblock *sb) {
 static int fat_statfs(struct superblock *sb, struct statfs *st) {
     struct fat_fs *fs = (struct fat_fs *)sb->priv;
     int r = 0;
+    if(fs->dev->gone) return -EIO;
     mutex_lock(&sb->lock);
     if(fs->free == FREE_UNKNOWN) r = count_free(fs);         /* a read-only mount counts when asked */
     st->unit = fs->cluster_bytes;
