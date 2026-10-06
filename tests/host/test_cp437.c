@@ -100,6 +100,9 @@ static void test_tables(void) {
     check(latin == 55, "55 of Latin-1's 96 characters from U+00A0 are in the set");
     check(cp437_from_unicode(0x03B2) == 0xE1 && cp437_from_unicode(0x03BC) == 0xE6 && cp437_from_unicode(0x2126) == 0xEA,
           "β, μ and the ohm sign share ß, µ and Ω");
+    check(cp437_from_unicode(0x2018) == '\'' && cp437_from_unicode(0x2019) == '\'' && cp437_from_unicode(0x201C) == '"' &&
+          cp437_from_unicode(0x201D) == '"' && cp437_from_unicode(0x2013) == '-' && cp437_from_unicode(0x2014) == '-',
+          "the quotes ‘ ’ “ ” and the dashes – — are drawn as ' \" -");
     check(cp437_from_unicode(0) == 0 && cp437_from_unicode(0x01) < 0 && cp437_from_unicode(0x1F) < 0 &&
           cp437_from_unicode(0x7F) < 0 && cp437_from_unicode(0x80) < 0 && cp437_from_unicode(0x9F) < 0,
           "control characters have no place (they are never drawn)");
@@ -123,6 +126,7 @@ static void test_decoder(void) {
     EXPECT("\xF0\x9F\x98\x80", "?", "4 bytes: U+1F600 is outside the set: ?");
     EXPECT("\xF4\x8F\xBF\xBF", "?", "4 bytes: U+10FFFF, the last character: ?");
     EXPECT("\xE2\x82\xAC\xC4\xB4\xE6\x97\xA5\xC2\x85\xEF\xBF\xBD", "?????", "outside the set: € Ĵ 日 a C1 control, U+FFFD");
+    EXPECT("\xE2\x80\x9Cit\xE2\x80\x99s\xE2\x80\x9D \xE2\x80\x94 ok", "\"it's\" - ok", "UTF-8 text with “it’s” and —");
     EXPECT("\xED\x9F\xBF", "?", "U+D7FF, just below the surrogates, is a character: ?");
 
     /* not UTF-8: the bytes are the code page 437 characters they are */

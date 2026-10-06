@@ -55,7 +55,8 @@ const u16 cp437_unicode[256] = {
 };
 
 /* Other characters drawn in the same places: what VGA text mode shows at SurfOS's three,
-   the bigger triangles for ▸, and the Greek letters code page 437 shares with ß, µ and Ω. */
+   the bigger triangles for ▸, and the Greek letters code page 437 shares with ß, µ and Ω.
+   10/6/26: and the typographic quotes and dashes of UTF-8 text, as their ASCII forms. */
 static const struct { u16 u; u8 index; } aliases[] = {
     { 0x25BA, 0x10 }, { 0x25B6, 0x10 },         /* ► ▶ */
     { 0x2248, 0xF7 },                           /* ≈ */
@@ -63,6 +64,9 @@ static const struct { u16 u; u8 index; } aliases[] = {
     { 0x03B2, 0xE1 },                           /* β */
     { 0x03BC, 0xE6 },                           /* μ */
     { 0x2126, 0xEA },                           /* Ω, the ohm sign */
+    { 0x2018, '\'' }, { 0x2019, '\'' },         /* ‘ ’ */
+    { 0x201C, '"' }, { 0x201D, '"' },           /* “ ” */
+    { 0x2013, '-' }, { 0x2014, '-' },           /* – — */
 };
 #define NALIASES (sizeof(aliases) / sizeof(aliases[0]))
 
