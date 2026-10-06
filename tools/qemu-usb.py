@@ -27,7 +27,7 @@ comes out of the framebuffer.
              hands that mode over. The console fills it with 120x33 cells at scale 2: a long
              line on one row, Backspace back across a typed line that wrapped, `ansi` with
              its corner at (119,32), console switching, a line of UTF-8 read back through the
-             code page 437 font (▸ ≋ … café)
+             code page 437 font (▸ ≋ … café), the pager answered on the keyboard
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -670,6 +670,30 @@ def scenario_fullhd(args, image, firmware, outdir):
             vm.screen('utf8.png')
         results.append(('UTF-8 on the framebuffer: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ read back through the font, € as ?',
                         got is not None))
+
+        # the pager (TTY_PAGE) on the keyboard: after `clear`, `pagetest 100` asks after 32 lines
+        # (120x33) in inverse video on the last row; Enter shows one more line, Space the next 32,
+        # Esc drops the rest
+        def asking_after(last):
+            return lambda s: (s.rows[-1].startswith('--More--') and s.colours.get((0, s.nrows - 1)) == (BLACK, GREY) and
+                              s.rows[:-1] == ['pagetest line %03d' % n for n in range(last - s.nrows + 2, last + 1)])
+        ok = typed('clear\n', lambda s: True) is not None
+        if ok:
+            vm.keys('run pagetest 100\n')
+            ok = vm.wait_screen(asking_after(32), 30, interval=0.5) is not None
+        if ok:
+            vm.keys('\n')
+            ok = vm.wait_screen(asking_after(33), 30, interval=0.5) is not None
+        if ok:
+            vm.keys(' ')
+            ok = vm.wait_screen(asking_after(65), 30, interval=0.5) is not None
+        if ok:
+            vm.screen('pager.png')
+            vm.keys('<esc>')
+            got = vm.wait_screen(lambda s: at_prompt(s) and 'exit status 0' in s.text(), 30, interval=0.5)
+            ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 066' not in got.text()
+        results.append(('pager on the keyboard at 120x33: --More-- after 32 lines, Enter one more, Space 32 more, '
+                        'Esc drops the rest', ok))
         results.append(('QEMU still running', vm.proc.poll() is None))
         final = vm.screen('final.png').text()
         for bad in BAD:
