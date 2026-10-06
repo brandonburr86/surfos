@@ -232,6 +232,9 @@ SMOKE = [
     ('rm /hda1/FDISK.TXT', []),
     # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
     # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
+    # a report that is not fatal (crashint's unexpected vector) reaches the screen too
+    ('run kcmdtest run /hda1/CRASHINT.TXT crashint', ['Unexpected trap', 'int 0x50 returned', 'kcmdtest: crashint: status 0']),
+    ('rm /hda1/CRASHINT.TXT', []),
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
     ('run kcmdtest crash /kcmd/CRASH.TXT', ['General Protection Fault', 'killed]']),
     ('umount /kcmd', []),

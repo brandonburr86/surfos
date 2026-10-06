@@ -14,7 +14,9 @@ cut with a note at its end; kcmdinfo() walking the table, which holds lsblk and 
 ends with ENOENT; cd moving this process. 10/6/26: the limits (32 arguments, 255
 bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
 (EFAULT, nothing written), and descriptor 1 read-only (the write fails: status 1),
-closed (the console) and /dev/null. The files made in <dir> are removed again.
+closed (the console) and /dev/null; clear writes escape sequences to descriptor 1, and
+rawkeys, which reads the keyboard as it goes, refuses a redirection (status 2). The
+files made in <dir> are removed again.
 One line per check, then KCMDTEST PASS (exit 0) or KCMDTEST FAIL.
 
 kcmdtest crash [file]: kcmd crashgp, which kills this process (with descriptor 1 on
@@ -253,6 +255,19 @@ static void test_edges(void) {
     r = kcmd(argv);
     if(out_to(NULL) < 0) exit(3);
     check(r == 0, "descriptor 1 closed: the output goes to the console, status 0");
+    argv[0] = "clear";
+    argv[1] = NULL;
+    {
+        char buf[64];
+        r = out_to(ro) == 0 ? kcmd(argv) : -2;
+        if(out_to(NULL) < 0) exit(3);
+        check(r == 0 && slurp(ro, buf, sizeof(buf)) > 0 && strstr(buf, "\033[2J\033[H"),
+              "clear writes ESC [2J ESC [H to descriptor 1 (the caller's, not the console that shows)");
+    }
+    argv[0] = "rawkeys";
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 2, "rawkeys with its output in a file: refused, status 2 (it reads the keyboard as it goes)");
     check(unlink(ro) == 0, "remove the file");
 }
 

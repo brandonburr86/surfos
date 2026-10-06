@@ -98,7 +98,10 @@ static int cmd_help(int argc, char **argv) {
     return CMD_OK;
 }
 
-static int cmd_clear(int argc, char **argv) { clearScreen(); return CMD_OK; }
+/* 10/6/26: the caller's console, not the one that shows, and as escape sequences, so the serial
+   terminal clears too and `clear > file` puts them in the file: plain colours, the cursor shown,
+   the screen erased, the cursor home */
+static int cmd_clear(int argc, char **argv) { printf("\033[0m\033[?25h\033[2J\033[H"); return CMD_OK; }
 
 static int cmd_echo(int argc, char **argv) {
     int i;
@@ -663,8 +666,9 @@ static int cmd_test(int argc, char **argv) {
 }
 
 static int cmd_beep(int argc, char **argv) { demoBeep(); return CMD_OK; }
-static int cmd_funky(int argc, char **argv) { return new_task("funky", conActive, KERNEL, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; }
-static int cmd_die(int argc, char **argv) { return new_task("ring3", conActive, USER, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; } /* a ring-3 task: faults until P1 exists */
+/* 10/6/26: on the caller's console, not the one that shows */
+static int cmd_funky(int argc, char **argv) { return new_task("funky", curTask->con, KERNEL, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; }
+static int cmd_die(int argc, char **argv) { return new_task("ring3", curTask->con, USER, PL_NORMAL, (u_long*)funky) ? CMD_OK : CMD_FAIL; } /* a ring-3 task: faults until P1 exists */
 static int cmd_demo(int argc, char **argv) { invokeDemo(); return CMD_OK; }
 static int cmd_hanoi(int argc, char **argv) { runHanoi(); return CMD_OK; }
 
@@ -680,6 +684,7 @@ static int cmd_crashdiv(int argc, char **argv) {
 }
 static int cmd_crashgp(int argc, char **argv) { asm volatile("mov %0, %%ds" :: "r"(0x1234)); return CMD_FAIL; }
 static int cmd_crashint(int argc, char **argv) {
+    console_capture_end();          /* 10/6/26: its report is not fatal, and still belongs on the screen */
     asm volatile("int $0x50");
     printf("    int 0x50 returned\n");
     return CMD_OK;
@@ -688,7 +693,7 @@ static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
-    { "clear",     "",          "clear the active console", cmd_clear },
+    { "clear",     "",          "clear the console", cmd_clear },
     { "echo",      "words...",  "print the arguments", cmd_echo },
     { "ps",        "",          "list tasks", cmd_ps },
     { "kill",      "<pid>",     "kill a task", cmd_kill },
@@ -709,7 +714,7 @@ static const struct command commands[] = {
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
-    { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys },
+    { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys, CMD_ASKS },
     { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
     { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
     { "fdisk",     "<disk> [cmd]", "partition tables: new mbr|gpt, add, delete, type", cmd_fdisk },
@@ -747,8 +752,8 @@ static const struct command commands[] = {
     { "beep",      "",          "beep the PC speaker", cmd_beep },
     { "funky",     "",          "play a tune in a new task", cmd_funky },
     { "die",       "",          "start a ring-3 task at a kernel address (killed at once: processes use run)", cmd_die },
-    { "demo",      "",          "the 2004 demonstration menu", cmd_demo },
-    { "hanoi",     "",          "Towers of Hanoi", cmd_hanoi },
+    { "demo",      "",          "the 2004 demonstration menu", cmd_demo, CMD_ASKS },
+    { "hanoi",     "",          "Towers of Hanoi", cmd_hanoi, CMD_ASKS },
     { "crashdiv",  "",          "divide by zero in this shell", cmd_crashdiv },
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
@@ -782,7 +787,15 @@ int shell_run_command(int argc, char **argv) {
     if(argc < 1 || !argv[0]) return -ENOENT;
     for(i = 0; i < ncommands; i++) {
         if(!strcmp(commands[i].name, argv[0])) {
-            int r = commands[i].fn(argc, argv);
+            int r;
+            if((commands[i].flags & CMD_ASKS) && curTask->kcap) {   /* 10/6/26: its questions would go to the file */
+                struct kcapture *kept = curTask->kcap;
+                console_capture_end();
+                printf("    %s reads the keyboard as it goes: not with its output in a file\n", argv[0]);
+                console_capture_begin(kept);
+                return CMD_USAGE;
+            }
+            r = commands[i].fn(argc, argv);
             return r < 0 ? CMD_FAIL : r;       /* below 0 a status would read as an error number */
         }
     }

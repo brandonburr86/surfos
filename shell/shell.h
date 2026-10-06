@@ -26,7 +26,12 @@ struct command {
     const char *args;   /* shown in help */
     const char *help;
     int (*fn)(int argc, char **argv);   /* the status, CMD_OK, CMD_FAIL or CMD_USAGE (10/6/26) */
+    int flags;          /* 10/6/26: CMD_ASKS */
 };
+
+/* 10/6/26: it reads the keyboard as it goes, not through shell_ask(): it is refused (CMD_USAGE)
+   when the user shell sends its output to a file (SYS_kcmd), where its questions would go */
+#define CMD_ASKS 1
 
 /* main.c: a question on this task's console and its answer, a line (10/6/26) */
 void shell_ask(const char *question, char *answer, size_t size);
