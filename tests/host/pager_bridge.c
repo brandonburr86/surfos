@@ -62,7 +62,8 @@ int pty_out(surf_console *con, const char *s, u_int n, int how) {
     return 1;
 }
 void pty_task_gone(struct surf_task *task) { (void)task; }
-void poll_wake(void) {}
+static int poll_wakes;                  /* 10/6/26: poll_wake() calls, for the test */
+void poll_wake(void) { poll_wakes++; }
 
 int framebuffer_init(void) { return 0; }
 void framebuffer_bind(const u8 *cells) { (void)cells; }
@@ -194,6 +195,9 @@ void sim_stream_drop(int on) { stream_drop = on; }   /* the master's buffer full
 void sim_stream_size(int cols, int rows) { console_stream_resize(&conArray[term], (u_int)cols, (u_int)rows); }
 void sim_stream_pos(int *x, int *wrap) { *x = (int)conArray[term].loc.x; *wrap = conArray[term].wrap; }
 void sim_term_input(int c) { tty_term_input(&ttys[term], &term_esc, (u_char)c); }
+int sim_term_queues(int c) { return tty_term_queues(&ttys[term], term_esc, (u_char)c); }
+int sim_room(void) { return (int)tty_room(&ttys[term]); }
+int sim_poll_wakes(void) { return poll_wakes; }
 void sim_clear(void) { clearConsole(curTask->con); }
 int sim_key_up(void) { return UP; }
 int sim_key_home(void) { return HOME; }

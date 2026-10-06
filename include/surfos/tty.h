@@ -50,6 +50,7 @@ void tty_input(struct tty *t, u_char c);  /* 10/6/26: Ctrl+C in line mode interr
 /* 10/6/26: a byte from a terminal at the end of a line (the serial port, a pty's master side): in
    line mode CR is Enter, DEL Backspace, the cursor keys' sequences those keys; raw mode passes it */
 void tty_term_input(struct tty *t, u_char *esc, u_char c);
+int tty_term_queues(struct tty *t, u_char esc, u_char c);     /* 10/6/26: does that byte take a place in the queue? */
 int tty_getc(struct tty *t);            /* blocks; 0-255; 10/6/26: -1 when the reader's call is cut short */
 int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the pager: -1 once *cancel is set */
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */

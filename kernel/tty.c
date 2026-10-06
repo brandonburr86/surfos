@@ -16,6 +16,9 @@ side (kernel/pty.c) follows too.
 with its stream console: raw mode, the pager, Ctrl+C, TTY_GETSIZE (PTY_SETSIZE's size) and
 TTY_CAPS (UTF-8 and colour) work on them as on F1-F4; the keyboard, the serial port and
 console switching stay with F1-F4.
+10/6/26: a line-mode Ctrl+C drops the keys queued before it, on every terminal (POSIX's
+VINTR without NOFLSH): what was typed ahead never runs after an interrupt. Room appearing in
+a pty's full input queue wakes poll() (its master is ready for writing again, kernel/pty.c).
 */
 
 #include <surfos/types.h>
@@ -76,16 +79,39 @@ void tty_reset(struct tty *t) {
 
 /**** input ****/
 
+/* 10/6/26: the input queue holds no more keys (a pty's master waits for room, kernel/pty.c) */
+static int queue_full(struct tty *t) {
+    return (t->in_head + 1) % TTY_INPUT_SIZE == t->in_tail;
+}
+
+/* 10/6/26: keys left a pty's input queue that was full (read, or dropped): its master side can be
+   written again, which poll() reports (POLLOUT) once woken. Interrupts off. */
+static void room_made(struct tty *t, int was_full) {
+    if(was_full && t->con->stream) poll_wake();
+}
+
+/* 10/6/26: what is queued is dropped (Ctrl+C, raw mode's end, tty_flush()). Interrupts off. */
+static void drop_queued(struct tty *t) {
+    int full = queue_full(t);
+    t->in_tail = t->in_head;
+    room_made(t, full);
+}
+
 void tty_input(struct tty *t, u_char c) {
     u_long flags = irq_save();
-    u_int next = (t->in_head + 1) % TTY_INPUT_SIZE;
-    /* 10/6/26: Ctrl+C in line mode while the pager's owner has a job in the foreground (a
-       command it runs, the programs it started): the job is interrupted (task.c) and the key
-       goes no further. With nothing to interrupt it is a key as before (tty_readline()). */
-    if(c == 0x03 && !t->raw && t->con->page_owner && task_interrupt_job(t->con->page_owner)) {
-        irq_restore(flags);
-        return;
+    u_int next;
+    /* 10/6/26: Ctrl+C in line mode drops what was typed ahead, so none of it runs after the
+       interrupt (POSIX's VINTR, without NOFLSH). While the pager's owner has a job in the
+       foreground (a command it runs, the programs it started) the job is interrupted (task.c)
+       and the key goes no further; with nothing to interrupt it is a key (tty_readline()). */
+    if(c == 0x03 && !t->raw) {
+        drop_queued(t);
+        if(t->con->page_owner && task_interrupt_job(t->con->page_owner)) {
+            irq_restore(flags);
+            return;
+        }
     }
+    next = (t->in_head + 1) % TTY_INPUT_SIZE;
     if(next == t->in_tail) {
         t->dropped++;
     } else {
@@ -156,6 +182,19 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
     tty_input(t, c);
 }
 
+/* 10/6/26: does byte c, given to tty_term_input() with the line's state esc, need room in the input
+   queue? Not the rest of an escape sequence that is swallowed, nor a line-mode Ctrl+C (it empties
+   the queue first, and interrupts the job or is queued then, tty_input()), nor a lone Esc with no
+   question up. A pty's master takes those whatever room is left (kernel/pty.c). */
+int tty_term_queues(struct tty *t, u_char esc, u_char c) {
+    if(t->raw) return 1;
+    if(esc == 1) return 0;
+    if(esc == 2) return c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'H' || c == 'F';
+    if(c == 0x03) return 0;
+    if(c == 0x1B) return t->con->page_asker != NULL;
+    return 1;
+}
+
 /* 10/5/26: what a terminal sends for the special keys, which raw mode passes on (tty.h) */
 static const char *const raw_keys[RT - INS + 1] = {
     "\033[2~", "\033[3~", "\033[H", "\033[F", "\033[5~", "\033[6~",     /* INS DEL HOME END PGUP PGDN */
@@ -177,10 +216,11 @@ void tty_key(struct tty *t, u_char c) {
    last line it dropped, the question the reader asks perhaps, and drops no more */
 int tty_trygetc(struct tty *t) {
     u_long flags = irq_save();
-    int c = -1;
+    int c = -1, full = queue_full(t);
     if(t->in_tail != t->in_head) {
         c = t->inq[t->in_tail];
         t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+        room_made(t, full);
         console_page_read(t->con);
     }
     irq_restore(flags);
@@ -198,8 +238,9 @@ int tty_getc(struct tty *t) {
             return -1;
         }
         if(t->in_tail != t->in_head) {
-            int c = t->inq[t->in_tail];
+            int c = t->inq[t->in_tail], full = queue_full(t);
             t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+            room_made(t, full);
             console_page_read(t->con);
             irq_restore(flags);
             return c;
@@ -228,8 +269,9 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
             return -1;
         }
         if(t->in_tail != t->in_head) {
-            int c = t->inq[t->in_tail];
+            int c = t->inq[t->in_tail], full = queue_full(t);
             t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+            room_made(t, full);
             irq_restore(flags);
             return c;
         }
@@ -255,7 +297,7 @@ int tty_queued(struct tty *t) {
 
 void tty_flush(struct tty *t) {
     u_long flags = irq_save();
-    t->in_tail = t->in_head;
+    drop_queued(t);
     irq_restore(flags);
 }
 
@@ -430,7 +472,7 @@ void tty_switch(int index) {
    not line editing), so leaving raw mode drops what was not read yet. */
 static void set_raw(struct tty *t, int on, struct surf_task *owner) {
     u_long flags = irq_save();
-    if(t->raw && !on) t->in_tail = t->in_head;
+    if(t->raw && !on) drop_queued(t);
     t->raw = on;
     t->raw_owner = on ? owner : NULL;
     irq_restore(flags);

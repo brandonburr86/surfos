@@ -36,6 +36,10 @@ ptytest tcpecho [PORT]    `tcpecho PORT` (2323) in a session: its kernel thread 
 ptytest reuse             a second session on the same master: line mode again (the first
                           set raw mode) and none of the keys written in between; the pty
                           opened again is 80x24
+ptytest fullqueue         the master's write never waits: 300 keys for a program that is
+                          not reading yet take a short count, one more EAGAIN, POLLOUT is
+                          back once it reads; in a session, Ctrl+C gets through a full
+                          queue, cuts sleep short, and what was typed ahead never runs
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
                           (POLLIN), after the end (POLLIN and POLLHUP); spawnpty of no
                           program (POLLHUP at once); a closed descriptor (POLLNVAL); a
@@ -582,6 +586,72 @@ static int mode_reuse(void) {
     return pass();
 }
 
+/* the master's write never waits (a server polling many masters must not stall on one session) */
+static int mode_fullqueue(void) {
+    char *reader[] = { "ptytest", "slowreader", "1500", NULL }, *sargv[] = { "surfsh", NULL };
+    char keys[300];
+    struct pollfd p;
+    unsigned int t0, took;
+    int m, pid, st = -99, r, at;
+    memset(keys, 'x', sizeof(keys));
+    m = start("/initrd/bin/ptytest", reader, 0, &pid);
+    if(m < 0) return fail("slowreader did not start");
+    msleep(200);                                        /* it sleeps 1.5 s before it reads */
+    r = (int)write(m, keys, sizeof(keys));
+    if(r <= 0 || r >= (int)sizeof(keys)) return fail("300 keys for a program not reading: not a short count");
+    printf("ptytest: 300 keys written, %d taken: the input queue is full\n", r);
+    p.fd = m;
+    p.events = POLLOUT;
+    p.revents = 0;
+    if(poll(&p, 1, 0) != 0) return fail("POLLOUT with the queue full");
+    if(write(m, "y", 1) != -1 || errno != EAGAIN) return fail("a key into the full queue: no EAGAIN");
+    printf("ptytest: one more: EAGAIN, and no POLLOUT\n");
+    t0 = uptime();
+    if(poll(&p, 1, 5000) != 1 || !(p.revents & POLLOUT)) return fail("POLLOUT did not come back when the program read");
+    took = uptime() - t0;
+    printf("ptytest: POLLOUT came back after %u ms, when the program began to read\n", took);
+    if(took < 800) return fail("POLLOUT came back before the program read");
+    if(write(m, "\r", 1) != 1) return fail("Enter after room came back");
+    if(read_until(m, "slowreader: a line of", 0, 5000) != 1 || read_until(m, NULL, 0, 5000) != 1)
+        return fail("the program did not get its line");
+    close(m);
+    wait(pid, &st);
+
+    /* Ctrl+C through a full queue, in a session; what was typed ahead never runs */
+    outlen = 0;
+    out[0] = 0;
+    m = start("/initrd/bin/surfsh", sargv, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "sleep 5000\r");
+    if(read_until(m, "sleep 5000", at, 10000) != 1) return fail("sleep 5000 was not typed");
+    msleep(300);
+    type(m, "echo TYPED-AHEAD\r");                       /* typed ahead while sleep runs */
+    r = (int)write(m, keys, sizeof(keys));
+    if(r <= 0 || r >= (int)sizeof(keys) || poll(&p, 1, 0) != 0) return fail("the session's queue did not fill");
+    if(write(m, "\003", 1) != 1) return fail("Ctrl+C did not get through the full queue");
+    if(read_until(m, "sleep cut short", at, 10000) != 1) return fail("Ctrl+C did not cut sleep short");
+    at = after("sleep cut short", at);
+    if(read_until(m, PROMPT, at, 10000) != 1) return fail("no prompt after Ctrl+C");
+    read_until(m, "TYPED-AHEAD", at, 700);              /* nothing more should come */
+    if(strstr(out + at, "TYPED-AHEAD") || strstr(out + at, "xxxx")) return fail("what was typed ahead ran after Ctrl+C");
+    printf("ptytest: Ctrl+C through the full queue cut sleep short, and what was typed ahead never ran\n");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
+    return pass();
+}
+
+/* ptytest fullqueue's program: it sleeps, then reads one line and says how long it was */
+static int mode_slowreader(int argc, char **argv) {
+    char line[512];
+    msleep((unsigned int)(argc > 2 ? atoi(argv[2]) : 1500));
+    if(!fgets(line, sizeof(line), stdin)) return 1;
+    printf("slowreader: a line of %u bytes\n", (unsigned int)strlen(line));
+    return 0;
+}
+
 /* ptytest reuse's first session: raw mode on, and gone */
 static int mode_rawexit(void) {
     return ttyctl(TTY_RAW, 1) < 0;
@@ -675,6 +745,8 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "hangup-call")) return mode_hangup_call();
     if(!strcmp(mode, "tcpecho")) return mode_tcpecho(argc, argv);
     if(!strcmp(mode, "reuse")) return mode_reuse();
+    if(!strcmp(mode, "fullqueue")) return mode_fullqueue();
+    if(!strcmp(mode, "slowreader")) return mode_slowreader(argc, argv);
     if(!strcmp(mode, "rawexit")) return mode_rawexit();
     if(!strcmp(mode, "flood")) return mode_flood();
     if(!strcmp(mode, "poll")) return mode_poll();
@@ -684,6 +756,6 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
     fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
-                    "       tcpecho [PORT] | reuse | poll | ps | detach | kmsg\n");
+                    "       tcpecho [PORT] | reuse | fullqueue | poll | ps | detach | kmsg\n");
     return 2;
 }

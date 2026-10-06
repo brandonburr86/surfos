@@ -29,10 +29,12 @@ Output: a writer that may wait (console.c says when) waits while the buffer is f
 gives up when its call is cut short (a kill, the hangup, Ctrl+C); the bytes of one that
 may not are dropped then, and counted. The last PTY_OUT_KEEP bytes of room are kept for
 the pager's question and the console's own sequences (PTY_OUT_URGENT). Input: a write on
-the master is never refused for want of room: when the tty's input queue (TTY_INPUT_SIZE
-keys) is full, the write waits up to PTY_IN_WAIT_MS in all for the session to read, and
-what still does not fit is dropped, as the keyboard and the serial port drop it (the tty
-counts it).
+the master never waits (a server polling many masters must not stall on one): it hands the
+bytes to the serial line's rules while each fits in the tty's input queue (TTY_INPUT_SIZE
+keys) and returns how many it took, or -EAGAIN when the first does not fit; a byte that
+needs no room always fits (a line-mode Ctrl+C, which drops what was typed ahead; the rest of
+a cursor key's escape sequence). POLLOUT says a key fits; room appearing wakes poll()
+(kernel/tty.c).
 */
 
 #include <surfos/types.h>
@@ -51,7 +53,6 @@ counts it).
 
 #define PTY_OUT_SIZE   8192             /* what the session printed and the master has not read */
 #define PTY_OUT_KEEP   256              /* the last of it, for PTY_OUT_URGENT */
-#define PTY_IN_WAIT_MS 250              /* a write on the master waits this long in all for the session to read */
 #define PTY_COLS_MIN   8                /* PTY_SETSIZE's limits */
 #define PTY_COLS_MAX   1024
 #define PTY_ROWS_MIN   2
@@ -194,31 +195,35 @@ static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
 
 /* The bytes as typed keys, through the serial line's rules (tty_term_input(): in line mode CR is
    Enter, DEL Backspace, the cursor keys' sequences those keys, Ctrl+C reaches the job; raw mode
-   passes them). All of them are taken; see the top for a full input queue. */
+   passes them), in order, while each fits: how many were taken, or -EAGAIN when the first does
+   not fit. It never waits. A byte that needs no room (tty_term_queues()) always fits. */
 static int master_write(struct vnode *v, u32 off, const void *buf, u32 len) {
     struct pty *p = (struct pty *)v->priv;
     struct tty *t = pty_tty(p);
     const u_char *s = (const u_char *)buf;
-    u_int waited = 0;
+    u_long flags;
     u32 i;
     (void)off;
     for(i = 0; i < len; i++) {
         u_char c = s[i];                                /* the caller's memory (checked), read with interrupts on */
-        while(p->started && !p->ended && waited < PTY_IN_WAIT_MS && !tty_room(t)) {
-            if(sleep_intr(10) < 0) return i ? (int)i : -EINTR;
-            waited += 10;
+        flags = irq_save();                             /* the room looked at is the room the key gets */
+        if(!tty_room(t) && tty_term_queues(t, p->in_esc, c)) {
+            irq_restore(flags);
+            break;
         }
         tty_term_input(t, &p->in_esc, c);
+        irq_restore(flags);
     }
-    return (int)len;
+    return (i || !len) ? (int)i : -EAGAIN;
 }
 
 /* surfos/poll.h: POLLIN when there is output or the session has ended, POLLHUP once it has ended
-   and everything was read; a write is always taken (POLLOUT) */
+   and everything was read; POLLOUT while a key fits in the input queue */
 static int master_poll(struct vnode *v, struct file *f) {
     struct pty *p = (struct pty *)v->priv;
-    int r = POLLOUT;
+    int r = 0;
     u_long flags = irq_save();
+    if(tty_room(pty_tty(p))) r |= POLLOUT;
     if(p->out_len || p->ended) r |= POLLIN;
     if(p->ended && !p->out_len) r |= POLLHUP;
     irq_restore(flags);

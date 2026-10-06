@@ -13,9 +13,9 @@ whose fd is negative is skipped.
 
 What is ready: a connection or a listening socket (surfos/sock.h); a pseudo-terminal's
 master side (surfos/pty.h: POLLIN when the session printed something or has ended,
-POLLHUP once it has ended and everything it printed was read, POLLOUT always); the
-console (POLLIN when a key is queued); anything else (a file, /dev/null) is always ready
-for both.
+POLLHUP once it has ended and everything it printed was read, POLLOUT while a key fits in
+its input queue); the console (POLLIN when a key is queued); anything else (a file,
+/dev/null) is always ready for both.
 
 In the kernel a vnode answers through vnode_ops->poll (fs/vfs.h), and whatever changes a
 descriptor's readiness calls poll_wake(), which wakes every task in poll().

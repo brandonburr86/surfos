@@ -57,6 +57,9 @@ void sim_stream_size(int cols, int rows);
 void sim_stream_drop(int on);
 void sim_stream_pos(int *x, int *wrap);
 void sim_term_input(int c);
+int sim_term_queues(int c);
+int sim_room(void);
+int sim_poll_wakes(void);
 void sim_clear(void);
 int sim_key_up(void);
 int sim_key_home(void);
@@ -914,6 +917,13 @@ static void t_stream_tty(void) {
     check(got_key == sim_key_home(), "ESC O H is Home");
     run(SHELL, w_getc, 0, 0);
     check(got_key == 'k', "a sequence it does not know is swallowed to its final byte");
+    check(sim_term_queues('k') && !sim_term_queues(0x03) && !sim_term_queues(0x1B), "line mode: a key takes a place in "
+          "the queue; Ctrl+C and a lone Esc (with no question up) do not, so a full queue never holds them up");
+    sim_term_input(0x1B);
+    check(!sim_term_queues('['), "nor what follows an Esc");
+    sim_term_input('[');
+    check(!sim_term_queues('1') && sim_term_queues('A') && !sim_term_queues('~'), "only the final byte of a cursor key does");
+    sim_term_input('~');
     run(SHELL, w_raw, 1, 0);
     sim_term_input('\r');
     sim_term_input(0x1B);
@@ -936,6 +946,45 @@ static void t_stream_tty(void) {
     stream_now();
     sim_task_gone(CHILD);
     check(asker() < 0 && stream_is(UNASKED), "the asker killed at the question: CR ESC[K takes it away");
+}
+
+/* 10/6/26: a line-mode Ctrl+C drops what was typed ahead (F1 and a pty alike); room appearing in a
+   pty's full input queue wakes poll(), its master being ready for writing again */
+static void t_term_room(void) {
+    int i, w, room;
+    reset(0);                                       /* F1, line mode */
+    sim_input('r');
+    sim_input('m');
+    sim_input('\n');
+    sim_input(0x03);
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 0x03, "F1: Ctrl+C in line mode drops the keys typed ahead (\"rm\\n\" never runs)");
+    run(SHELL, w_raw, 1, 0);
+    sim_input('a');
+    sim_input(0x03);
+    run(SHELL, w_getc, 0, 0);
+    i = got_key;
+    run(SHELL, w_getc, 0, 0);
+    check(i == 'a' && got_key == 0x03, "raw mode: Ctrl+C is a key like any other, nothing dropped");
+    run(SHELL, w_raw, 0, 0);
+
+    on_pty(80, 24, 0);
+    for(i = 0; sim_room() && i < 1000; i++) sim_input('x');
+    check(i == 255 && !sim_room(), "a pty's input queue holds 255 keys");
+    w = sim_poll_wakes();
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 'x' && sim_room() == 1 && sim_poll_wakes() == w + 1, "a key read from the full queue wakes poll()");
+    w = sim_poll_wakes();
+    run(SHELL, w_getc, 0, 0);
+    check(sim_poll_wakes() == w, "and only from a full one");
+    while(sim_room()) sim_input('x');
+    w = sim_poll_wakes();
+    check(sim_term_queues(0x03) == 0, "Ctrl+C needs no room: it fits a full queue");
+    sim_term_input(0x03);
+    room = sim_room();
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 0x03 && room == 254 && sim_poll_wakes() > w,
+          "a pty: Ctrl+C drops the full queue's keys (poll() woken: room), and is the next key");
 }
 
 int main(void) {
@@ -970,6 +1019,7 @@ int main(void) {
     t_stream_review();
     t_stream_clear();
     t_stream_tty();
+    t_term_room();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);
