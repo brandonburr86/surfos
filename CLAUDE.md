@@ -98,8 +98,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
   system call (SYS_kcmd), so a new command prints on `curTask->con` (printf), never on
-  `conActive`; keeps no state in statics that two consoles could use at once (or takes a
-  mutex: see heaptest/selftest); asks its questions through `shell_ask()` (so a
+  `conActive`; keeps no state in statics that two consoles could use at once (or claims
+  it for one run at a time, as heaptest and selftest do); asks its questions through `shell_ask()` (so a
   redirection does not swallow them); and returns rather than looping when its input
   ends. The prompt is drawn only by `shell/prompt.c`.
 * Two profiles: without `profile=laptop` on the kernel command line (QEMU `-kernel`, the

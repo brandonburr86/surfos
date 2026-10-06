@@ -464,8 +464,8 @@ in, several as far as they agree, and a second Tab lists them (asking first when
 are more than the screen holds).
 
 **Long output** stops when the screen is full, with `--More--` on the last row: Space
-shows the next screenful, Enter one more line, and q (or Esc on the keyboard) leaves the
-rest unshown. `help` is long on purpose.
+shows the next screenful, Enter one more line, and q (or Esc, or Ctrl+C) leaves the rest
+unshown. `help` is long on purpose.
 
 **Which command runs.** First the shell's own commands (`cd`, `pwd`, `echo`, `exit`,
 `help`, `history`, `set`), then the kernel's (everything in sections 7 to 9: `lsblk`,
@@ -503,8 +503,9 @@ this shell, and
 Greek and symbols, and the prompt's `▸ ≋ …` (the characters of code page 437); anything
 else shows as `?`. Letters beyond ASCII cannot be typed yet.
 
-**When the shell cannot run.** If surfsh is missing, or crashes three times within 30
-seconds, `init` gives that console the kernel's own shell as a **recovery console**: its
+**When the shell cannot run.** If surfsh is missing or cannot be loaded, or ends
+abnormally three times within 30 seconds (killed, or ended within 2 seconds of starting),
+`init` gives that console the kernel's own shell as a **recovery console**: its
 prompt is `SURF ≋?>`, and a line above it says why. Every kernel command works there, and
 `surfsh` starts the shell by hand. The GRUB entry **SurfOS (kernel shell)** puts the
 kernel's shell on every console on purpose; its prompt is `SURF ≋#>`, because it runs with
@@ -534,7 +535,7 @@ the kernel's privileges.
 | A file name shows a `?` | It has a character the console cannot draw (section 10); the file itself is fine. |
 | `--More--` on the last row | The output is longer than the screen: Space shows the next screenful, Enter one more line, q the rest is not shown. |
 | The prompt ends in `≋!>` | The last command failed and said why; the mark goes away after one that succeeds. |
-| The prompt is `SURF ≋?>`, with a line about a *recovery console* above it | surfsh could not run on that console (missing, or it crashed three times within 30 seconds), so the kernel's own shell took over. Every command still works and `surfsh` starts the shell by hand; please report the line. |
+| The prompt is `SURF ≋?>`, with a line about a *recovery console* above it | surfsh could not run on that console (missing, not loadable, or it ended abnormally three times within 30 seconds), so the kernel's own shell took over. Every command still works and `surfsh` starts the shell by hand; please report the line. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
 
