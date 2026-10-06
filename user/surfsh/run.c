@@ -300,16 +300,20 @@ static int run_command(struct command *c) {
 }
 
 int run_line(const char *line) {
-    static struct parsed p;
+    static struct command c;
     char err[120];
-    int i, status = last_status;
-    if(parse_line(line, &p, err, sizeof(err))) {
+    int status = last_status, r = 0;
+    if(parse_check(line, err, sizeof(err))) {
         fprintf(stderr, "surfsh: %s\n", err);
         return STATUS_USAGE;
     }
-    for(i = 0; i < p.ncmd && !exit_requested; i++) {
-        status = run_command(&p.cmd[i]);
+    while(!exit_requested && (r = parse_next(&line, status, &c, err, sizeof(err))) > 0) {
+        status = run_command(&c);
         fflush(stdout);
+    }
+    if(r < 0) {
+        fprintf(stderr, "surfsh: %s\n", err);
+        status = STATUS_USAGE;
     }
     return status;
 }

@@ -296,13 +296,14 @@ SMOKE = [
      [(b'\x1b[F!\x13', ['Wrote 2 lines']),
       (b'\x11', ['exit status 0'])]),
     ('run hexdump /hda1/CRLF.TXT', ['66 69 72 73 74 21 0d 0a  73 65 63 6f 6e 64 0d 0a', '|first!..second..|']),
-    # 10/6/26: surfsh, the SurfOS shell, started from the ring-0 shell. Raw mode passes the bytes on as they
-    # are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, Tab for a command and a path (a second Tab
-    # lists), history, a line over the 1023-byte limit (in pieces the console's input queue takes),
+    # 10/6/26: surfsh, the SurfOS shell, started inside the one init runs on F1. Raw mode passes the bytes on as
+    # they are: Tab, Up (ESC [ A), Ctrl-C. The prompt and its state, $?, Tab for a command and a path (a second
+    # Tab lists), history, a line over the 1023-byte limit (in pieces the console's input queue takes),
     # redirection of a builtin and of a program, & and a killed program, help, set, exit with a status.
     ('surfsh', [shown('SURF \u224b> ')],
      [('cd /initrd/bin', [shown('initrd \u25b8 bin \u224b> ')]),
       ('nosuchcommand', ['surfsh: nosuchcommand: command not found', shown('initrd \u25b8 bin \u224b!> ')]),
+      ('echo status $? "$?" \'$?\'', ['\r\nstatus 127 127 $?\r\n', shown('initrd \u25b8 bin \u224b> ')]),
       ('pwd', ['\r\n/initrd/bin\r\n', shown('initrd \u25b8 bin \u224b> ')]),
       (b'ech\tcompleted-command\n', ['\r\ncompleted-command\r\n', shown('bin \u224b> ')]),
       ('echo history-check', ['\r\nhistory-check\r\n', shown('bin \u224b> ')]),
@@ -321,7 +322,7 @@ SMOKE = [
       ('/initrd/bin/count 2 100', ['counted to 2', '] done', shown('hda1 \u224b> ')]),
       ('crash null', ['killed by "Page Fault', 'killed]', shown('hda1 \u224b!> ')]),
       ('help', ['surfsh 1.0, the SurfOS shell', 'history', "the kernel's commands", 'programs in /initrd/bin',
-                'fstest', 'no variables', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
+                'fstest', '$? is the one expansion', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
       ('set prompt.unicode on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),

@@ -254,30 +254,33 @@ static int b_help(int argc, char **argv) {
         size = ttyctl(TTY_GETSIZE, 0);
         width = size > 0 ? (size >> 16) & 0xffff : 80;
         columns(names, n, width, "    ", "\n", put_stdout);
-        if(example) printf("    * a command of the same name runs first; %s/%s runs the program\n", PROGRAM_DIR, example);
+        if(example) printf("    * a command of this name runs first; %s/%s runs the program\n", PROGRAM_DIR, example);
         for(i = 0; i < n; i++) free(names[i]);
         free(names);
     }
     cands_free(&progs);
 
-    printf("\n    A line: words with blanks between them. \"double\" or 'single' quotes keep blanks\n"
-           "    and the characters below in a word, and a \\ keeps the character after it.\n"
+    printf("\n    A line: words with blanks between them. \"double\" or 'single' quotes keep\n"
+           "    blanks and the characters below in a word; a \\ keeps the next character.\n"
            "      cmd < file     the program reads the file\n"
            "      cmd > file     what cmd prints goes into the file, which starts empty\n"
            "      cmd >> file    ... is added at the end of the file\n"
            "      cmd &          the program runs in the background\n"
            "      cmd1 ; cmd2    one after the other\n"
            "      # comment      the rest of the line is not read\n"
-           "    There is no $ and no *: no variables and no wildcards, every word is as typed.\n"
-           "    Which command runs: surfsh's own, then the kernel's, then a program in %s;\n"
-           "    a name with a / is the path of a program.\n", PROGRAM_DIR);
-    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the line,\n"
-           "    ^K deletes to its end, ^W the word before the cursor; Up and Down: the history;\n"
-           "    Tab completes a command or a path, a second Tab lists the choices; ^L clears\n"
-           "    the screen, ^C drops the line, ^D on an empty line leaves surfsh.\n");
-    printf("\n    The prompt shows the current directory and the wave; a ! after the wave says\n"
-           "    that the last command failed. set changes how it looks; %s\n"
-           "    is read at the start.\n", SURFSH_CONF);
+           "      $?             the status of the command before, as a number (also in\n"
+           "                     double quotes; '$?' is just the two characters)\n"
+           "    $? is the one expansion: no variables and no wildcards, * is just a star.\n"
+           "    Which command runs: surfsh's own, then the kernel's, then a program in\n"
+           "    %s; a name with a / is the path of a program.\n", PROGRAM_DIR);
+    printf("\n    Keys: Left, Right, Home, End (^A ^E), Backspace, Delete; ^U clears the\n"
+           "    line, ^K deletes to its end, ^W the word before the cursor; Up and Down:\n"
+           "    the history; Tab completes a command or a path, a second Tab lists the\n"
+           "    choices; ^L clears the screen, ^C drops the line, ^D on an empty line\n"
+           "    leaves surfsh.\n");
+    printf("\n    The prompt shows the current directory and the wave; a ! after the wave\n"
+           "    says that the last command failed. set changes how it looks;\n"
+           "    %s is read at the start.\n", SURFSH_CONF);
     printf("%s\n    (C)%s %s.\n\n", rule, SURFOS_YEARS, SURFOS_AUTHOR);
     return 0;
 }

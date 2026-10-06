@@ -19,7 +19,8 @@ One candidate is completed, with "/" after a directory and a space after anythin
 else. Several are completed as far as they agree; when they agree on nothing more,
 the editor lists them on a second Tab. A name with a blank or a special character
 in it is completed inside double quotes (left open after a directory, so the next
-Tab can go on), as is any word that was begun with a quote.
+Tab can go on), as is any word that was begun with a quote; a " \ or $ in it gets
+a backslash there, so "$?" in a file's name stays itself.
 */
 
 #include "surfsh.h"
@@ -191,7 +192,7 @@ static int write_word(char *out, int size, const char *value, const char *suffix
     }
     for(s = value; *s; s++) {
         if(n + 2 >= size) return -1;
-        if(quote && (*s == '"' || *s == '\\')) out[n++] = '\\';
+        if(quote && (*s == '"' || *s == '\\' || *s == '$')) out[n++] = '\\';
         out[n++] = *s;
     }
     for(s = suffix; *s; s++) {
