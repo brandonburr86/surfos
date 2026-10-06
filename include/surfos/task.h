@@ -171,6 +171,9 @@ surf_task *task_find(u_long pid);
 u_int task_count(void);
 u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */
 u_int task_kill_tty(struct tty *tty);    /* 10/6/26: kill_task() for each of them (a hangup); how many */
+struct procinfo;
+int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
+int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
 
 void yield(void);
 void sleep_ms(u_long ms);

@@ -9,7 +9,8 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 when that cannot be (see init_main()).
 10/6/26: a kill waits for the end of the call its task is in (task.h), and Ctrl+C
 reaches the job in the foreground (task_interrupt_job()).
-10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c).
+10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c);
+the task list as programs see it, and a process leaving its shell's job (kernel/proc.c).
 */
 
 #include <surfos/types.h>
@@ -32,6 +33,7 @@ reaches the job in the foreground (task_interrupt_job()).
 #include <sys/framebuffer.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
+#include <surfos/proc.h>
 
 #include <blibc_common.h>
 
@@ -869,6 +871,54 @@ void init_task() {
 }
 
 /**** ps ****/
+
+/* 10/6/26: task number index of the list, as SYS_procinfo tells it (surfos/proc.h): 0, or -ENOENT
+   after the last. A dead task (not collected yet) has no terminal any more. */
+int task_info(int index, struct procinfo *pi) {
+    surf_task *t;
+    u_long flags;
+    int i = 0;
+    if(index < 0) return -EINVAL;
+    flags = irq_save();
+    for(t = all_tasks; t && i < index; t = t->all_next) i++;
+    if(!t) {
+        irq_restore(flags);
+        return -ENOENT;
+    }
+    memset(pi, 0, sizeof(*pi));
+    pi->pid = (int)t->pid;
+    pi->ppid = t->parent ? (int)t->parent->pid : -1;
+    switch(t->state) {
+    case TS_READY:    pi->state = PROC_READY; break;
+    case TS_RUNNING:  pi->state = PROC_RUNNING; break;
+    case TS_BLOCKED:  pi->state = PROC_BLOCKED; break;
+    case TS_SLEEPING: pi->state = PROC_SLEEPING; break;
+    default:          pi->state = PROC_DEAD; break;
+    }
+    pi->flags = ((t->flags & TF_USER) ? PROC_USER : 0) | ((t->flags & TF_DETACHED) ? PROC_DETACHED : 0) |
+                ((t->flags & TF_SHELL) ? PROC_SHELL : 0);
+    pi->tty = (t->tty && t->state != TS_DEAD) ? tty_number(t->tty) : -1;
+    strlcpy(pi->name, t->name, sizeof(pi->name));
+    irq_restore(flags);
+    return 0;
+}
+
+/* 10/6/26: SYS_detach (surfos/proc.h): a process leaves its parent and the job of the shell that
+   started it. init becomes its parent (and collects it), it is no longer in the foreground (Ctrl+C
+   there does not reach it, task_interrupt_job()) nor paged (the pager follows parents), and a pager
+   it owns is let go (its shell takes paging back). A parent waiting for it looks again: it is not
+   its child any more. Its descriptors and its terminal stay. -EINVAL for a task that is no process. */
+int task_detach(surf_task *t) {
+    u_long flags;
+    if(!t || !(t->flags & TF_USER) || !init_task_ptr) return -EINVAL;
+    flags = irq_save();
+    t->parent = init_task_ptr;
+    t->flags = (t->flags | TF_DETACHED) & ~TF_FOREGROUND;
+    if(t->con && t->con->page_owner == t) console_page_start(t->con, NULL);
+    irq_restore(flags);
+    wake_up_all(&zombie_wq);
+    return 0;
+}
 
 void print_tasks() {
     surf_task *t;
