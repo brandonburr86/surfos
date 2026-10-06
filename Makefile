@@ -346,9 +346,15 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
+# telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
+$(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnetd tests/host/test_telnet.c user/telnetd/telnet.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
-          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager
+          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -360,6 +366,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
+	$(BUILD)/host/test_telnet
 
 clean:
 	rm -rf build
