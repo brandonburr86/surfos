@@ -259,6 +259,7 @@ static void become_zombie(surf_task *t, int code) {
     if(t->list) task_list_remove(t->list, t); /* a run queue, the sleep list or a wait queue */
     t->exit_code = code;
     t->state = TS_DEAD;
+    tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
     task_list_append(&zombies, t);

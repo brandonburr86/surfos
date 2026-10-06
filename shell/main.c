@@ -31,6 +31,7 @@ the rest arrive as argv. `help` is generated from the same table.
 #include <net/dhcp.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
+#include <surfos/tty.h>
 #include <surfos/system.h>
 #include <surfos/klog.h>
 #include <surfos/interrupt.h>
@@ -154,6 +155,36 @@ static void cmd_himem(int argc, char **argv) {
     int r = himem_test(wrote, got, sizeof(wrote), &phys);
     if(r < 0) { printf("    no RAM above 4 GB is mapped (none in the memory map, or no PSE-36)\n"); return; }
     printf("    himem: wrote \"%s\" at physical 0x%llx, read back \"%s\": %s\n", wrote, phys, got, r ? "MISMATCH" : "ok");
+}
+
+/* 10/5/26: raw mode (tty.h) from end to end: the bytes the keys send, until q */
+static void cmd_rawkeys(int argc, char **argv) {
+    struct tty *t = curTask->tty;
+    char buf[16];
+    int n, i, reads, size = tty_ctl(t, TTY_GETSIZE, 0);
+    tty_ctl(t, TTY_RAW, 1);
+    printf("    raw mode (%dx%d): press keys, q ends\n    ", size >> 16, size & 0xFFFF);
+    for(reads = 0; reads < 256; reads++) {
+        n = tty_read(t, buf, sizeof(buf));
+        for(i = 0; i < n; i++) printf("%02x ", (u_char)buf[i]);
+        if(memchr(buf, 'q', n)) break;
+    }
+    tty_ctl(t, TTY_RAW, 0);
+    printf("\n");
+}
+
+/* 10/5/26: the escape sequences the console draws (tty.h), laid out for the screen tests:
+   tools/qemu-run.py reads them back from VGA memory, tools/qemu-usb.py from the framebuffer */
+static void cmd_ansi(int argc, char **argv) {
+    int size = tty_ctl(curTask->tty, TTY_GETSIZE, 0), cols = size >> 16, rows = size & 0xFFFF;
+    printf("\033[2J\033[HANSI-TEST top left");
+    printf("\033[3;10H\033[7mINVERSE\033[0m normal");
+    printf("\033[4;10H\033[1;33;44mYELLOW-ON-BLUE\033[m");
+    printf("\033[5;10HKEEP-ERASED\033[5;14H\033[K");
+    printf("\033[8;10HA\033[BB\033[2AC\033[3DD\033[5CE");                    /* moves: D C E above A, B below */
+    printf("\033[11;10H\033[5n\033[?7h\033(B\033[ q\033[38;5;196mUNKNOWN-IGNORED\033[0m");
+    printf("\033[%d;%dHZ", rows, cols);                                          /* the corner, without scrolling */
+    printf("\033[13;1H\033[?25l\033[?25hANSI-TEST done, %dx%d\n", cols, rows);
 }
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
@@ -589,6 +620,8 @@ static const struct command commands[] = {
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
+    { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys },
+    { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
     { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
