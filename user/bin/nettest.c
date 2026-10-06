@@ -22,6 +22,19 @@ nettest connect <ip> <port>: a connection, closed at once, or why there is none.
 nettest refuse <ip> <port>: a connection to a closed port: exit 0 when it is refused
 (ECONNREFUSED), 1 otherwise.
 
+For the tests with hand-made segments (tools/qemu-tcp.py), each a line "nettest: ..." at
+the end saying how it went:
+nettest reader <port>: one connection, read until it ends.
+nettest writer <port> <bytes> [chunk]: one connection gets <bytes> bytes of the pattern in
+writes of chunk bytes (4096), each written again from where a partial one stopped; how
+many writes there were, and how many partial.
+nettest sleepsrv <port> <ms>: listens, sleeps ms, then accepts one connection and reads it.
+nettest recv <ip> <port>: a connection to ip:port, read until it ends (what came is shown).
+nettest churn <ip> <port> <n>: n connections to ip:port one after another, each closed at
+once; how many could not be made, and why.
+nettest pollsrv <port> <n>: a server driven by poll() (as telnetd is): it echoes what its
+connections send and stops after n connections have ended.
+
 nettest limits: the calls' errors: listen on port 0 (EINVAL) and on a port in use
 (EADDRINUSE); accept on no descriptor (EBADF), on the console or a file (EINVAL: no
 listening socket), into memory that is not the caller's (EFAULT, before anything
@@ -63,6 +76,11 @@ static int write_all(int fd, const char *p, long n, long *writes, long *partial)
         n -= w;
     }
     return 0;
+}
+
+/* how a read loop ended: "EOF", or the error */
+static const char *ending(long r) {
+    return r < 0 ? strerror(errno) : "EOF";
 }
 
 static int ip_arg(const char *s, unsigned int *ip) {
@@ -134,6 +152,163 @@ static int send_bytes(int port, long count) {
     return 0;
 }
 
+/**** for the tests with hand-made segments ****/
+
+/* one connection on port, the listener closed again: its descriptor, or -1 */
+static int accept_one(int port, int ms) {
+    struct netaddr peer;
+    char a[16];
+    int l = tcp_listen((unsigned short)port), c;
+    if(l < 0) { printf("nettest: listen on port %d: %s\n", port, strerror(errno)); return -1; }
+    printf("nettest: listening on port %d\n", port);
+    fflush(stdout);
+    if(ms) {
+        msleep((unsigned int)ms);
+        printf("nettest: accepting now\n");
+        fflush(stdout);
+    }
+    c = tcp_accept(l, &peer);
+    close(l);
+    if(c < 0) { printf("nettest: accept: %s\n", strerror(errno)); return -1; }
+    printf("nettest: connection from %s port %u\n", ipstr(peer.ip, a), peer.port);
+    fflush(stdout);
+    return c;
+}
+
+/* read c until it ends, the data shown when show; closed afterwards */
+static int read_to_end(int c, int show) {
+    char buf[1025];
+    long total = 0, r;
+    while((r = (long)read(c, buf, sizeof(buf) - 1)) > 0) {
+        buf[r] = 0;
+        if(show) fputs(buf, stdout);
+        total += r;
+    }
+    printf("%snettest: read %ld bytes, then %s\n", show && total ? "\n" : "", total, ending(r));
+    close(c);
+    return r < 0;
+}
+
+static int reader(int port, int ms) {
+    int c = accept_one(port, ms);
+    return c < 0 ? 1 : read_to_end(c, 0);
+}
+
+static int writer(int port, long count, int chunk) {
+    static char buf[16384];
+    long done = 0, writes = 0, partial = 0;
+    int c = accept_one(port, 0), i, n;
+    if(c < 0) return 1;
+    if(chunk < 1 || chunk > (int)sizeof(buf)) chunk = 4096;
+    while(done < count) {
+        n = count - done < chunk ? (int)(count - done) : chunk;
+        for(i = 0; i < n; i++) buf[i] = pattern_byte(done + i);
+        if(write_all(c, buf, n, &writes, &partial)) {
+            printf("nettest: write after %ld bytes: %s\n", done, strerror(errno));
+            close(c);
+            return 1;
+        }
+        done += n;
+    }
+    close(c);
+    printf("nettest: wrote %ld bytes in %ld writes, %ld partial\n", done, writes, partial);
+    return 0;
+}
+
+static int recv_from(unsigned int ip, int port) {
+    char a[16];
+    int c = tcp_connect(ip, (unsigned short)port);
+    if(c < 0) { printf("nettest: connect to %s port %d: %s\n", ipstr(ip, a), port, strerror(errno)); return 1; }
+    printf("nettest: connected to %s port %d\n", ipstr(ip, a), port);
+    fflush(stdout);
+    return read_to_end(c, 1);
+}
+
+static int churn(unsigned int ip, int port, int n) {
+    char a[16];
+    int i, failed = 0, first_errno = 0;
+    for(i = 0; i < n; i++) {
+        int c = tcp_connect(ip, (unsigned short)port);
+        if(c < 0) {
+            if(!failed++) first_errno = errno;
+            continue;
+        }
+        close(c);
+    }
+    printf("nettest: %d connections to %s port %d, %d failed%s%s\n", n, ipstr(ip, a), port, failed,
+           failed ? ": " : "", failed ? strerror(first_errno) : "");
+    return failed != 0;
+}
+
+/* a poll()-driven echo server, telnetd's shape: the listener and up to 4 connections. A connection's
+   echo that did not fit (write() queues what fits) waits in its own buffer, and the server reads
+   no more from that connection until the buffer is out (POLLOUT): a client that stops reading
+   holds up nobody else. It stops after ends connections have ended. */
+static int pollsrv(int port, int ends) {
+    struct pollfd p[5];
+    static char out[4][512];
+    int conns[4] = { -1, -1, -1, -1 }, pend[4] = { 0, 0, 0, 0 }, l = tcp_listen((unsigned short)port), i, n, ended = 0;
+    char a[16];
+    if(l < 0) { printf("nettest: listen on port %d: %s\n", port, strerror(errno)); return 1; }
+    printf("nettest: polling on port %d\n", port);
+    fflush(stdout);
+    while(ended < ends) {
+        p[0].fd = l;
+        p[0].events = POLLIN;
+        for(i = 0; i < 4; i++) {
+            p[i + 1].fd = conns[i];
+            p[i + 1].events = pend[i] ? POLLOUT : POLLIN;
+        }
+        n = poll(p, 5, -1);
+        if(n < 0) { printf("nettest: poll: %s\n", strerror(errno)); close(l); return 1; }
+        if(p[0].revents & POLLIN) {
+            struct netaddr peer;
+            int c = tcp_accept(l, &peer);
+            if(c < 0) printf("nettest: accept: %s\n", strerror(errno));
+            else {
+                for(i = 0; i < 4 && conns[i] >= 0; i++);
+                if(i == 4) { write(c, "busy\r\n", 6); close(c); }
+                else conns[i] = c;
+                printf("nettest: connection from %s port %u%s\n", ipstr(peer.ip, a), peer.port, i == 4 ? ": busy" : "");
+            }
+            fflush(stdout);
+        }
+        for(i = 0; i < 4; i++) {
+            long r;
+            if(conns[i] < 0 || !p[i + 1].revents) continue;
+            if(pend[i]) {                                   /* POLLOUT: more of the echo */
+                r = (long)write(conns[i], out[i], (size_t)pend[i]);
+                if(r > 0) {
+                    memmove(out[i], out[i] + r, (size_t)(pend[i] - r));
+                    pend[i] -= (int)r;
+                    continue;
+                }
+            } else {
+                r = (long)read(conns[i], out[i], sizeof(out[i]));
+                if(r > 0) {
+                    long w = (long)write(conns[i], out[i], (size_t)r);
+                    if(w > 0) {
+                        memmove(out[i], out[i] + w, (size_t)(r - w));
+                        pend[i] = (int)(r - w);
+                        continue;
+                    }
+                    r = w;
+                }
+            }
+            printf("nettest: a connection ended: %s\n", ending(r));
+            fflush(stdout);
+            close(conns[i]);
+            conns[i] = -1;
+            pend[i] = 0;
+            ended++;
+        }
+    }
+    for(i = 0; i < 4; i++) if(conns[i] >= 0) close(conns[i]);
+    close(l);
+    printf("nettest: %d connections ended\n", ended);
+    return 0;
+}
+
 /**** a client ****/
 
 static int get(unsigned int ip, int port, const char *path) {
@@ -193,10 +368,13 @@ static int listen_all(int first, int *fds, int max, int *why) {
     return n;
 }
 
-/* nettest hold <port>: the child of limits; listens until the sockets run out. Exit 0 for ENFILE */
-static int hold(int first) {
+/* nettest hold <port> [ms]: the child of limits; listens until the sockets run out, keeps them ms
+   (the tests: the kernel's own connections still get one). Exit 0 for ENFILE */
+static int hold(int first, int ms) {
     int fds[32], why, n = listen_all(first, fds, 32, &why), i;
     printf("nettest: a child process listened on %d more ports, then: %s\n", n, strerror(why));
+    fflush(stdout);
+    if(ms) msleep((unsigned int)ms);
     for(i = 0; i < n; i++) close(fds[i]);
     return why == ENFILE ? 0 : 1;
 }
@@ -262,13 +440,20 @@ int main(int argc, char **argv) {
     if(argc == 4 && !strcmp(argv[1], "connect")) return ip_arg(argv[2], &ip) ? 2 : connect_to(ip, atoi(argv[3]), 0);
     if(argc == 4 && !strcmp(argv[1], "refuse")) return ip_arg(argv[2], &ip) ? 2 : connect_to(ip, atoi(argv[3]), 1);
     if(argc == 2 && !strcmp(argv[1], "limits")) return limits();
-    if(argc == 3 && !strcmp(argv[1], "hold")) return hold(atoi(argv[2]));
+    if((argc == 3 || argc == 4) && !strcmp(argv[1], "hold")) return hold(atoi(argv[2]), argc == 4 ? atoi(argv[3]) : 0);
+    if(argc == 3 && !strcmp(argv[1], "reader")) return reader(atoi(argv[2]), 0);
+    if((argc == 4 || argc == 5) && !strcmp(argv[1], "writer")) return writer(atoi(argv[2]), atol(argv[3]), argc == 5 ? atoi(argv[4]) : 4096);
+    if(argc == 4 && !strcmp(argv[1], "sleepsrv")) return reader(atoi(argv[2]), atoi(argv[3]));
+    if(argc == 4 && !strcmp(argv[1], "recv")) return ip_arg(argv[2], &ip) ? 2 : recv_from(ip, atoi(argv[3]));
+    if(argc == 5 && !strcmp(argv[1], "churn")) return ip_arg(argv[2], &ip) ? 2 : churn(ip, atoi(argv[3]), atoi(argv[4]));
+    if(argc == 4 && !strcmp(argv[1], "pollsrv")) return pollsrv(atoi(argv[2]), atoi(argv[3]));
     fprintf(stderr, "usage: nettest echo <port> [n]\n"
                     "       nettest send <port> <bytes>\n"
                     "       nettest get <ip> <port> <path>\n"
                     "       nettest info\n"
                     "       nettest connect <ip> <port>\n"
                     "       nettest refuse <ip> <port>\n"
-                    "       nettest limits\n");
+                    "       nettest limits\n"
+                    "       nettest reader|writer|sleepsrv|recv|churn|pollsrv ...   (tools/qemu-tcp.py)\n");
     return 2;
 }

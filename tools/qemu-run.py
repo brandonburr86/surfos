@@ -200,6 +200,12 @@ SMOKE = [
     ('nettest connect 10.0.2.99 23', ['connect to 10.0.2.99 port 23: No route to host']),
     ('nettest limits', ['NETTEST PASS']),
     ('@nettest-kills', []),
+    # TCP against an other end that makes its segments by hand (tools/qemu-tcp.py, tools/rawnet.py): a boot of its
+    # own whose NIC is on a raw link, shared by these steps; the scenarios are listed in tools/qemu-tcp.py
+    ('@tcp-raw scan', []), ('@tcp-raw flood', []), ('@tcp-raw reset', []), ('@tcp-raw greet', []),
+    ('@tcp-raw window', []), ('@tcp-raw fin', []), ('@tcp-raw keepalive', []), ('@tcp-raw churn', []),
+    ('@tcp-raw reserve', []), ('@tcp-raw sws', []), ('@tcp-raw linger', []), ('@tcp-raw pollscan', []),
+    ('@tcp-raw pollstall', []), ('@tcp-raw end', []),
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
@@ -1050,6 +1056,54 @@ def nettest_kills_check(q):
 CONSOLE_CHECKS['@nettest-host'] = nettest_host_check
 CONSOLE_CHECKS['@nettest-kills'] = nettest_kills_check
 TIMEOUTS.update({'nettest connect 10.0.2.99 23': 30, 'nettest limits': 60})
+
+# 10/6/26 (track N, after its review): the scenarios of tools/qemu-tcp.py as smoke steps
+_tcp_raw = {}
+
+
+def tcp_raw_check(q, name):
+    """one scenario of tools/qemu-tcp.py: the first step boots the kernel the smoke test runs (the same initrd) with
+    its NIC on a raw link to tools/rawnet.py; '@tcp-raw end' ends that boot"""
+    import importlib.util
+    import types
+    tcp = _tcp_raw.get('module')
+    if not tcp:
+        spec = importlib.util.spec_from_file_location('qemutcp', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'qemu-tcp.py'))
+        tcp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tcp)
+        _tcp_raw['module'] = tcp
+    rig = _tcp_raw.get('rig')
+    if name == 'end':
+        if not rig:
+            return ('TCP with hand-made segments: its boot', False)
+        rig.q.pump(0.5)
+        text = rig.q.text()
+        ok = rig.q.alive() and not any(bad in text for bad in BAD)
+        if not ok:
+            print('\n---- the raw-link boot: serial transcript (tail) ----\n' + tail(text, 40))
+        rig.close()
+        del _tcp_raw['rig']
+        return ('TCP with hand-made segments: its boot ends well', ok)
+    if not rig:
+        harness = types.SimpleNamespace(Qemu=Qemu, PROMPT=PROMPT, BAD=BAD, tail=tail)
+        rig = tcp.Rig(harness, q.cmd[q.cmd.index('-kernel') + 1], os.path.join(q.workdir, 'initrd.tar'), q.cmd[0],
+                      q.cmd[q.cmd.index('-m') + 1])
+        _tcp_raw['rig'] = rig
+    fn, what = [(f, w) for n, f, w in tcp.SCENARIOS if n == name][0]
+    try:
+        ok = rig.ok and bool(fn(rig))
+    except Exception as e:
+        print('        (%s: %r)' % (name, e))
+        ok = False
+    if not ok:
+        print('\n---- the raw-link boot, %s: serial transcript (tail) ----\n%s' % (name, tail(rig.q.text(), 30)))
+    rig.q.wait(0.5)
+    return ('TCP %s: %s' % (name, what), ok)
+
+
+for _name in ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'pollscan',
+              'pollstall', 'end'):
+    CONSOLE_CHECKS['@tcp-raw ' + _name] = (lambda name: lambda q: tcp_raw_check(q, name))(_name)
 
 
 def host_checks(q):
