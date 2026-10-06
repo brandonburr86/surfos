@@ -221,6 +221,7 @@ const char *vfs_getcwd(void);
 
 /* files */
 int vfs_open(const char *path, int flags, struct file **out);
+int vfs_open_vnode(struct vnode *v, int flags, struct file **out);   /* 10/6/26: a vnode without a path (a socket) */
 int vfs_close(struct file *f);
 int vfs_read(struct file *f, void *buf, u32 len);
 int vfs_write(struct file *f, const void *buf, u32 len);

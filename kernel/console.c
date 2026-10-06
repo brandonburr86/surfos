@@ -10,6 +10,10 @@ and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
 10/6/26: a cell's byte is a code page 437 character (driver/cp437.c), and what is
 printed is UTF-8: kputch() decodes it, per writer, so ▸ ≋ … and café show on the screen.
 The pager (TTY_PAGE in tty.h) lives here too: kputch() counts the rows and asks --More--.
+10/6/26: the pseudo-terminals' consoles (kernel/pty.c) are streams: kputch() hands what is
+printed to the master side instead of drawing it, the writer's colour becomes an ANSI SGR
+sequence, and the pager counts the rows and columns of the size PTY_SETSIZE gave and asks
+its question in the stream (see "stream consoles" below).
 */
 
 #include <asm/io.h>
@@ -31,7 +35,7 @@ The pager (TTY_PAGE in tty.h) lives here too: kputch() counts the rows and asks 
 #include <stdarg.h>
 
 /* Initial consoles */
-surf_console conArray[NUM_CONSOLES]; //array of available consoles
+surf_console conArray[NUM_TTYS]; //array of available consoles (10/6/26: F1-F4, then the pseudo-terminals')
 surf_console conVideo; //the console mapped to the actual video memory
 surf_console *conActive; //the pointer to the active console
 /********************/
@@ -55,6 +59,14 @@ u_int conColumns = 80, conLines = 25;
 static void page_show(surf_console *con);       /* 10/6/26: the pager's question (below) */
 static void page_unshow(surf_console *con);
 static int page_descends(struct surf_task *t, struct surf_task *owner);
+static void stream_clear(surf_console *con);    /* 10/6/26: stream consoles (below) */
+static void stream_csi(surf_console *con, int final);
+static int stream_how(void);
+static bool panicking;                          /* 10/6/26: console_panic() was called: the report goes to the screen */
+
+/* 10/6/26: the size the pager counts: the grid's, or a stream console's own */
+static u_int con_cols(surf_console *con) { return con->stream ? con->cols : COLUMNS; }
+static u_int con_rows(surf_console *con) { return con->stream ? con->rows : LINES; }
 
 void init_console(void) {
     int i=0;
@@ -76,6 +88,8 @@ void init_console(void) {
       clearConsole((surf_console*)&conArray[i]);
         setPoint((surf_point*)&conArray[i].loc,0,0);
     }
+
+    for(i = NUM_CONSOLES; i < NUM_TTYS; i++) console_stream_reset(&conArray[i]); //10/6/26: the pseudo-terminals'
 
     conActive = (surf_console*)&conArray[0]; //set active console to first.*/
     if(video == VIDEO_FB) framebuffer_present();
@@ -177,6 +191,7 @@ void switchConsole(u_int conNum) {
 void clearConsole(surf_console *con) { //re-initializes a console
   int i;
   if(!con) return;
+  if(con->stream) { stream_clear(con); return; } //10/6/26: a pseudo-terminal's: ESC[2J ESC[H to the far terminal
   for (i=0; i< SCREEN_BYTES; i+=2) {
         *(con->vmem + i) = 0;
        *(con->vmem + i + 1) = 7;
@@ -310,8 +325,12 @@ static void ansi_owner(surf_console *con) {
 }
 
 void console_reset_ansi(surf_console *con) {
-    if(con == conActive && mirror_serial && (con->fg || con->bg || con->bold || con->inverse || con->cursor_off))
+    bool marked = con->fg || con->bg || con->bold || con->inverse || con->cursor_off;
+    if(con == conActive && mirror_serial && marked)
         serial_puts("\033[0m\033[?25h");                /* the terminal mirrors this console: undo it there too */
+    /* 10/6/26: a stream console's far terminal likewise (a sequence half sent ends at the ESC) */
+    if(con->stream && (marked || con->esc) && pty_out(con, "\033[0m\033[?25h", 10, PTY_OUT_URGENT))
+        con->shown = WHITE_TXT;
     con->esc = ESC_NONE;
     con->fg = con->bg = 0;
     con->bold = con->inverse = 0;
@@ -324,7 +343,7 @@ void console_reset_ansi(surf_console *con) {
 void console_task_gone(struct surf_task *task) {
     surf_console *con;
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) {
+    for(i = 0; i < NUM_TTYS; i++) {                     /* 10/6/26: the pseudo-terminals' too */
         con = &conArray[i];
         if(con->ansi_owner == task) console_reset_ansi(con);
         if(con->page_asker == task) {                   /* 10/6/26: killed at the question: it goes */
@@ -341,12 +360,13 @@ void console_task_gone(struct surf_task *task) {
 /* panic and wipeout (kernel/panic.c): the report is plain text, whatever was half printed */
 void console_panic(void) {
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) {
+    for(i = 0; i < NUM_TTYS; i++) {
         console_reset_ansi(&conArray[i]);
         console_page_start(&conArray[i], NULL);         /* 10/6/26: nothing paged or dropped, no question */
         conArray[i].page_asker = NULL;
         conArray[i].page_shown = 0;
     }
+    panicking = true;                                   /* 10/6/26: a pseudo-terminal's task's report: on the screen */
     framebuffer_panic();
 }
 
@@ -394,6 +414,10 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
     u_int here = con->loc.y * COLUMNS + con->loc.x, row = con->loc.y * COLUMNS;
     TEXTCOLOR attr = ansi_attr(con, color);
 
+    if(con->stream) {                                    /* 10/6/26: the far terminal carries it out */
+        stream_csi(con, final);
+        return;
+    }
     if(con->esc_mark == '?') {                           /* only ESC [ ? 25 l / h */
         if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
             con->cursor_off = final == 'l';
@@ -489,6 +513,241 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
     return 0;
 }
 
+/**** stream consoles (10/6/26) ****/
+
+/*
+    A pseudo-terminal's console (kernel/pty.c) draws nothing: kputch() hands each byte to
+    its master side as it was printed (pty_out()), for a terminal at the far end to draw.
+    What the console still does for it:
+      * the writer's colour: a byte that draws, or an ESC that starts a sequence, printed in
+        another colour than the far terminal draws in now, while no SGR sequence of the
+        program's own is in force, goes after an SGR sequence for that colour: ESC[0m for
+        the console's own (light grey, the terminal's default), others for kprintf()'s
+        yellow or cputs(). A program's own SGR sequences go as they are;
+      * it follows the far terminal's cursor column and its VT100 wrap at the width
+        PTY_SETSIZE gave (a UTF-8 character is one column, its other bytes none, an escape
+        sequence none, TAB goes to the next multiple of 8), so the pager counts the rows
+        as they are on that screen; LF starts a row (it goes as it is: the telnet server
+        makes it CR LF);
+      * Backspace erases, as on the screen: BS SP BS; at a pending wrap the last column
+        (CR ESC[999C ESC[K); at a row's start the end of the row above (ESC[A ESC[999C ESC[K);
+      * other control characters (but LF, CR, BS, TAB and ESC) are dropped: the screen draws
+        none of them.
+    A writer that may wait (a task with interrupts on, outside KCRIT_ENTER, holding no
+    mutex, its call not cut short) waits while the master's buffer is full; the bytes of
+    anyone else are dropped then. The serial mirror, F1-F4 and the active console never
+    involve a stream console.
+*/
+#define STREAM_BASE WHITE_TXT           /* the console's own colour: the far terminal's default */
+
+/* may the writer wait for room in the master's buffer? */
+static int stream_how(void) {
+    return (curTask && curTask != idle_task && !in_interrupt() && irqs_enabled() && !curTask->crit &&
+            !curTask->mutexes) ? PTY_OUT_WAIT : 0;
+}
+
+/* the SGR sequence that makes the far terminal draw in VGA attribute a (bright: bold); its length */
+static u_int stream_sgr(TEXTCOLOR a, char *out) {
+    char *p = out;
+    if(a == STREAM_BASE) {
+        memcpy(out, "\033[0m", 4);
+        return 4;
+    }
+    *p++ = 0x1B;
+    *p++ = '[';
+    *p++ = '0';
+    if(a & 0x08) {
+        *p++ = ';';
+        *p++ = '1';
+    }
+    *p++ = ';';
+    *p++ = '3';
+    *p++ = (char)('0' + ansi_vga[a & 7]);
+    if((a >> 4) & 7) {
+        *p++ = ';';
+        *p++ = '4';
+        *p++ = (char)('0' + ansi_vga[(a >> 4) & 7]);
+    }
+    *p++ = 'm';
+    return (u_int)(p - out);
+}
+
+/* a row starts on the far terminal */
+static void stream_row(surf_console *con) {
+    con->wrap = 0;
+    con->loc.x = 0;
+    con->page_rows++;
+    con->page_fresh = 1;
+    con->at_home = 0;
+}
+
+/* a whole CSI sequence went to the far terminal (ansi_csi()): what it does to the column, the
+   pager's count and the colours */
+static void stream_csi(surf_console *con, int final) {
+    int n = con->param[0] ? con->param[0] : 1, x = con->loc.x, i;
+    if(con->esc_mark == '?') {                           /* ESC [ ? 25 l / h: the cursor hidden */
+        if((final == 'l' || final == 'h') && con->nparam == 0 && con->param[0] == 25) {
+            con->cursor_off = final == 'l';
+            ansi_owner(con);
+        }
+        return;
+    }
+    if(con->esc_mark) return;
+    switch(final) {
+    case 'H':
+    case 'f':
+        x = (con->nparam >= 1 && con->param[1] ? con->param[1] : 1) - 1;
+        con->at_home = n == 1 && x == 0;
+        break;
+    case 'C': x += n; con->at_home = 0; break;
+    case 'D': x -= n; con->at_home = 0; break;
+    case 'G': x = n - 1; con->at_home = 0; break;
+    case 'A':
+    case 'B': con->at_home = 0; break;
+    case 'J':                                            /* an empty screen: a new screenful */
+        con->wrap = 0;
+        if(con->param[0] == 2 || (con->param[0] == 0 && con->at_home)) con->page_rows = 0;
+        return;
+    case 'K':
+        con->wrap = 0;
+        return;
+    case 'm':                                            /* a 0 resets the far terminal: its default colours */
+        for(i = 0; i <= con->nparam && i < ESC_PARAMS; i++) if(con->param[i] == 0) con->shown = STREAM_BASE;
+        ansi_sgr(con);
+        return;
+    default:
+        return;
+    }
+    /* the cursor moved: on its row still, no pending wrap, and the pager asks only at a row's start */
+    con->loc.x = x < 0 ? 0 : (x >= (int)con->cols ? con->cols - 1 : (u_int)x);
+    con->wrap = 0;
+    con->page_fresh = 0;
+}
+
+/* ESC[2J ESC[H to the far terminal (clearConsole()): an empty screen, a new screenful */
+static void stream_clear(surf_console *con) {
+    u_long flags;
+    console_reset_ansi(con);
+    pty_out(con, "\033[2J\033[H", 7, stream_how());
+    con->loc.x = 0;
+    con->wrap = 0;
+    con->at_home = 1;
+    con->page_rows = 0;
+    con->page_fresh = 1;
+    con->page_shown = 0;
+    if(con->page_asker && !con->page_cancel) {          /* a task at the question: it comes back at the top */
+        flags = irq_save();
+        page_show(con);
+        irq_restore(flags);
+    }
+}
+
+/* one byte printed on a stream console (kputch()) */
+static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
+    char out[24];
+    u_int n = 0, sgr = 0;
+    int how = stream_how();
+    if(con->esc && ansi_byte(con, color, b)) {         /* part of a sequence: as it is; the parser follows */
+        pty_out(con, (const char *)&b, 1, how);
+        return;
+    }
+    if((b == 0x1B || (b >= 0x20 && b != 0x7F && (b & 0xC0) != 0x80)) && color != con->shown &&
+       !con->fg && !con->bg && !con->bold && !con->inverse)
+        n = sgr = stream_sgr(color, out);               /* the writer's colour first */
+    switch(b) {
+    case 0x1B:
+        con->esc = ESC_SEEN;
+        out[n++] = 0x1B;
+        break;
+    case '\n':
+        stream_row(con);
+        out[n++] = '\n';
+        break;
+    case '\r':
+        con->loc.x = 0;
+        con->wrap = 0;
+        out[n++] = '\r';
+        break;
+    case 0x08:                                          /* erase the cell before, as the screen does */
+        if(con->wrap) {
+            memcpy(out + n, "\r\033[999C\033[K", 10);
+            n += 10;
+            con->wrap = 0;
+        } else if(con->loc.x > 0) {
+            memcpy(out + n, "\b \b", 3);
+            n += 3;
+            con->loc.x--;
+        } else {
+            memcpy(out + n, "\033[A\033[999C\033[K", 13);
+            n += 13;
+            con->loc.x = con->cols - 1;
+        }
+        con->page_fresh = 0;
+        break;
+    case '\t':
+        if(!con->wrap) con->loc.x = (con->loc.x + 8) & ~7u;
+        if(con->loc.x >= con->cols) con->loc.x = con->cols - 1;
+        con->page_fresh = 0;
+        out[n++] = '\t';
+        break;
+    default:
+        if(b < 0x20 || b == 0x7F) return;               /* other control characters: nothing, as on the screen */
+        if((b & 0xC0) != 0x80) {                        /* a character (ASCII, or a UTF-8 one's first byte): a column */
+            if(con->wrap) stream_row(con);
+            con->page_fresh = 0;
+            if(con->loc.x + 1 < con->cols) con->loc.x++;
+            else con->wrap = 1;
+        }
+        out[n++] = (char)b;
+        break;
+    }
+    if(pty_out(con, out, n, how) && sgr) con->shown = color;
+}
+
+/* a stream console's new size (PTY_SETSIZE, kernel/pty.c): the cursor stays in its row, and a
+   question of the pager that the new size has room for is called off: its asker goes on, counting
+   the rows at the new size (page_ask()) */
+void console_stream_resize(surf_console *con, u_int cols, u_int rows) {
+    u_long flags = irq_save();
+    con->cols = cols;
+    con->rows = rows;
+    if(con->loc.x >= cols) {
+        con->loc.x = cols - 1;
+        con->wrap = 0;
+    }
+    if(con->page_asker && !con->page_cancel && con->page_rows + 1 < rows) {
+        con->page_resized = 1;
+        console_page_call_off(con);
+    }
+    irq_restore(flags);
+}
+
+/* a pseudo-terminal's console as new (kernel/pty.c, and at boot): 80x24, plain colours, no
+   sequence half sent, not paging. Nobody prints on it meanwhile. */
+void console_stream_reset(surf_console *con) {
+    u_long flags = irq_save();
+    con->vmem = con->memBuf;            /* never drawn; a valid buffer all the same */
+    con->txtColor = WHITE_TXT;
+    con->loc.x = con->loc.y = 0;
+    con->esc = ESC_NONE;
+    con->fg = con->bg = 0;
+    con->bold = con->inverse = 0;
+    con->cursor_off = 0;
+    con->ansi_owner = NULL;
+    con->wrap = 0;
+    con->page_owner = con->page_asker = NULL;
+    con->page_rows = 0;
+    con->page_fresh = 1;
+    con->page_drop = con->page_cancel = con->page_shown = con->page_resized = 0;
+    con->page_tail_len = 0;
+    con->stream = 1;
+    con->at_home = 0;
+    con->shown = STREAM_BASE;
+    con->cols = 80;
+    con->rows = 24;
+    irq_restore(flags);
+}
+
 /* 10/6/26: UTF-8 is decoded per writer, not per console (sys/cp437.h). A character a task has
    half printed is its own (surf_task.utf), so another task's or an interrupt handler's bytes
    in between never mix with it, and a task that ends takes its half character with it.
@@ -553,13 +812,42 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
     (the usb thread's +USB: lines), takes the question away first, and it comes back on
     the row after their newline. Such output takes rows but never waits and is never
     dropped, and captured output (console_capture_begin) never reaches the pager.
+
+    10/6/26: on a stream console (a pseudo-terminal) the rows are those of its size
+    (PTY_SETSIZE), the question goes into the stream (ESC[7m, TTY_MORE cut to the width
+    less one, ESC[27m) and is taken away with CR ESC[K. A new size that leaves room on the
+    screen calls a question off, and the asker goes on counting rows at that size.
 */
 #define PAGE_ASK_ATTR 0x70              /* the question: black on light grey, inverse video */
+
+/* 10/6/26: the question in a stream: inverse video, TTY_MORE, inverse off unless the program had it on */
+static void stream_show(surf_console *con) {
+    static const char q[] = TTY_MORE;
+    char out[sizeof(q) + 16];
+    u_int len = sizeof(q) - 1, n;
+    if(len > con->cols - 1) len = con->cols - 1;
+    memcpy(out, "\033[7m", 4);
+    memcpy(out + 4, q, len);
+    n = 4 + len;
+    if(!con->inverse) {
+        memcpy(out + n, "\033[27m", 5);
+        n += 5;
+    }
+    pty_out(con, out, n, PTY_OUT_URGENT);
+    con->page_len = (u_char)len;
+    con->page_shown = 1;
+    con->loc.x = len;
+    con->wrap = 0;
+}
 
 /* the question on the cursor's row, from its start, the cursor after it. Interrupts off. */
 static void page_show(surf_console *con) {
     static const char q[] = TTY_MORE;
     u_int len = sizeof(q) - 1, y = con->loc.y, i;
+    if(con->stream) {
+        stream_show(con);
+        return;
+    }
     if(len > COLUMNS - 1) len = COLUMNS - 1;
     if(len > PAGE_ASK_MAX) len = PAGE_ASK_MAX;
     for(i = 0; i < len; i++) {
@@ -581,6 +869,13 @@ static void page_show(surf_console *con) {
 static void page_unshow(surf_console *con) {
     u_int i;
     if(!con->page_shown) return;
+    if(con->stream) {                   /* 10/6/26: the far terminal's row cleared, the cursor at its start */
+        pty_out(con, "\r\033[K", 4, PTY_OUT_URGENT);
+        con->page_shown = 0;
+        con->loc.x = 0;
+        con->wrap = 0;
+        return;
+    }
     for(i = 0; i < con->page_len; i++) cell_at(con, i, con->page_y, con->page_saved[2 * i + 1], con->page_saved[2 * i]);
     con->page_shown = 0;
     con->loc.x = 0;
@@ -631,7 +926,7 @@ void console_page_read(surf_console *con) {
 
 /* q: a dropped byte; the ones since the last newline are kept (the last COLUMNS of them) */
 static void page_keep(surf_console *con, TEXTCOLOR color, u_char b) {
-    u_int max = COLUMNS < PAGE_TAIL_MAX ? COLUMNS : PAGE_TAIL_MAX;
+    u_int max = con_cols(con) < PAGE_TAIL_MAX ? con_cols(con) : PAGE_TAIL_MAX;
     if(b == '\n') {
         con->page_tail_len = 0;
         return;
@@ -673,14 +968,20 @@ static int page_may_wait(struct tty *t) {
    is full and the question takes the next one. */
 static void page_ask(surf_console *con, struct tty *t) {
     u_long flags;
-    int key;
+    int key, resized;
     if(con->wrap) {
-        newline(con);
-        if(con == conActive && mirror_serial) serial_puts("\r\n");
+        if(con->stream) {                               /* 10/6/26: the far terminal's next row */
+            stream_row(con);
+            pty_out(con, "\n", 1, PTY_OUT_URGENT);
+        } else {
+            newline(con);
+            if(con == conActive && mirror_serial) serial_puts("\r\n");
+        }
     }
     flags = irq_save();
     con->page_asker = curTask;
     con->page_cancel = 0;
+    con->page_resized = 0;
     page_show(con);
     irq_restore(flags);
     key = tty_getc_unless(t, &con->page_cancel);          /* -1: called off, or the asker's call cut short */
@@ -688,11 +989,15 @@ static void page_ask(surf_console *con, struct tty *t) {
     page_unshow(con);
     con->page_asker = NULL;
     con->page_cancel = 0;
+    resized = con->page_resized;
+    con->page_resized = 0;
     irq_restore(flags);
     wake_up_all(&t->page_waiters);
     if(key == 'q' || key == 'Q' || key == 0x1B || key == 0x03 || (key < 0 && curTask->intr))
         con->page_drop = 1;                                /* q, Esc, Ctrl-C; 10/6/26: killed or interrupted there */
-    else con->page_rows = (key == '\n' || key == '\r') ? LINES - 2 : 0;
+    else if(key < 0 && resized)
+        ;                                                  /* 10/6/26: a bigger pseudo-terminal: the rows go on */
+    else con->page_rows = (key == '\n' || key == '\r') ? con_rows(con) - 2 : 0;
 }
 
 /* For each byte a console gets while paging is on: 1 when it is dropped (q was pressed).
@@ -720,9 +1025,11 @@ static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
         return 1;
     }
     if(con->page_asker) return 0;                       /* it may not wait: it prints, the question gives way */
-    if(con->esc || writer_utf()->have || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
-        return 0;                                       /* draws nothing, or not yet */
-    if(con->wrap ? con->page_rows + 2 < LINES : !con->page_fresh || con->page_rows + 1 < LINES)
+    if(con->esc || (con->stream ? (b & 0xC0) == 0x80 : writer_utf()->have) || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
+        return 0;                                       /* draws nothing, or not yet (10/6/26: the rest of a UTF-8 character) */
+    /* 10/6/26: on a stream a newline after a full row starts just one row, as on any terminal */
+    if((con->wrap && !(con->stream && b == '\n')) ? con->page_rows + 2 < con_rows(con)
+                                                  : !con->page_fresh || con->page_rows + 1 < con_rows(con))
         return 0;                                       /* the screenful is not full yet */
     if(!page_may_wait(t) || wq_count(&t->readers))
         return 0;                                       /* no waiting here: at the next row */
@@ -739,6 +1046,15 @@ void console_capture_begin(struct kcapture *k) {
 
 void console_capture_end(void) {
     if(curTask) curTask->kcap = NULL;
+}
+
+/* 10/6/26: the pager's question comes back after someone else's newline */
+static void page_reshow(surf_console *con, u_char b) {
+    u_long flags;
+    if(b != '\n' || !con->page_asker || con->page_shown || con->page_cancel) return;
+    flags = irq_save();
+    if(con->page_asker && !con->page_shown && !con->wrap && !con->loc.x) page_show(con);
+    irq_restore(flags);
 }
 
 /* 10/6/26: typed input shown as it is typed (the line editor's echo, getchar()) goes to the
@@ -763,6 +1079,8 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         else k->cut++;
         return;
     }
+    /* 10/6/26: a panic's report goes to the screen, whichever console its task printed on */
+    if(con && con->stream && panicking) con = conActive;
     /* 10/6/26: the pager (TTY_PAGE): a paged task waits at a full screen, and after q what
        it prints is dropped; the question gives way to anyone else who prints here */
     if(con && con->page_owner && page_hold(con, color, b)) return;
@@ -770,6 +1088,12 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         u_long flags = irq_save();
         page_unshow(con);
         irq_restore(flags);
+    }
+    /* 10/6/26: a pseudo-terminal's console: to its master side (stream consoles, above) */
+    if(con && con->stream) {
+        stream_put(con, color, b);
+        page_reshow(con, b);
+        return;
     }
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
@@ -818,12 +1142,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         if(b >= 32 && b <= 126) put_char(con, color, b);   /* other control characters: nothing */
         break;
     }
-    /* 10/6/26: the pager's question comes back after someone else's newline */
-    if(b == '\n' && con->page_asker && !con->page_shown && !con->page_cancel) {
-        u_long flags = irq_save();
-        if(con->page_asker && !con->page_shown && !con->wrap && !con->loc.x) page_show(con);
-        irq_restore(flags);
-    }
+    page_reshow(con, b);        /* 10/6/26: the pager's question comes back after someone else's newline */
     setpos(con);
     return;
 }

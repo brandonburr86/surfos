@@ -6,7 +6,10 @@
    So a task can wait at --More-- while others print, read or end, in any order.
    Covered: the screenful and the question (rows, wraps, the keys, the screen and the
    serial port), where a task may not wait, readers, UTF-8 per writer, TTY_CAPS. Run by
-   `make unittest`. */
+   `make unittest`. 10/6/26: the same pager on a pseudo-terminal's stream console (the
+   rows and columns of its size, the question in the stream, a new size), and what else
+   the stream does (the writer's colour as SGR, Backspace, UTF-8 and escape sequences in
+   the column count), the serial line's input rules (tty_term_input()). */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -48,6 +51,14 @@ int sim_readers(void);
 int sim_raw(void);
 void sim_capture(int on);
 const char *sim_captured(void);
+void sim_term(int n);
+int sim_stream(char *out, int max);
+void sim_stream_size(int cols, int rows);
+void sim_stream_pos(int *x, int *wrap);
+void sim_term_input(int c);
+void sim_clear(void);
+int sim_key_up(void);
+int sim_key_home(void);
 
 static int failures, checks;
 
@@ -636,6 +647,258 @@ static void t_caps(void) {
     check(sim_ttyctl(TTY_CAPS, 0) == 2, "TTY_CAPS with `ascii` on the command line: colour only");
 }
 
+/**** 10/6/26: a pseudo-terminal: the stream console ****/
+
+#define QUESTION "\033[7m--More-- (Space: next page, Enter: next line, q: skip the rest)\033[27m"
+#define UNASKED  "\r\033[K"
+
+static char strm[65536], want[65536];
+
+/* what the master got since the last look */
+static const char *stream_now(void) {
+    sim_stream(strm, sizeof(strm));
+    return strm;
+}
+
+/* "line from\n" .. "line to\n" after prefix, then suffix */
+static const char *lines_text(const char *prefix, int from, int to, const char *suffix) {
+    int i, n = snprintf(want, sizeof(want), "%s", prefix);
+    for(i = from; i <= to; i++) n += snprintf(want + n, sizeof(want) - n, "line %03d\n", i);
+    snprintf(want + n, sizeof(want) - n, "%s", suffix);
+    return want;
+}
+
+static void w_clear(int unused, int unused2) { (void)unused; (void)unused2; sim_clear(); }
+
+/* the tasks on pty 0, cols x rows, the shell paging */
+static void on_pty(int cols, int rows, int paging) {
+    reset(0);
+    sim_term(0);
+    sim_stream_size(cols, rows);
+    if(paging) run(SHELL, w_page, 1, 0);
+    stream_now();
+}
+
+static void t_stream_screenful(void) {
+    int st;
+    on_pty(80, 10, 1);
+    st = run(CHILD, w_lines, 1, 30);
+    check(st == BLOCKED && asker() == CHILD, "a pty at 80x10: the 10th line asks first");
+    check(!strcmp(stream_now(), lines_text("", 1, 9, QUESTION)),
+          "the stream: lines 1-9 as printed (LF alone), then the question in inverse video");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 10, 18, QUESTION)),
+          "Space: CR ESC[K takes the question away, 9 more lines, the question again");
+    sim_input('\r');
+    st = resume(CHILD);
+    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 19, 19, QUESTION)), "Enter: one more line");
+    sim_input('q');
+    st = resume(CHILD);
+    check(st == DONE && dropping() && !strcmp(stream_now(), UNASKED), "q: the rest is dropped");
+    run(SHELL, w_page, 0, 0);
+    say(SHELL, "prompt> ");
+    check(!strcmp(stream_now(), "prompt> "), "and paging ends with TTY_PAGE 0");
+}
+
+static void t_stream_columns(void) {
+    char l80[81], u80[161];
+    int i, st, x, wrap, rows, drop, a, o;
+    memset(l80, 'x', 80);
+    l80[80] = 0;
+    for(i = 0; i < 80; i++) memcpy(u80 + 2 * i, "\xc3\xa9", 2);    /* é */
+    u80[160] = 0;
+
+    on_pty(80, 10, 1);
+    for(i = 0; i < 9; i++) {
+        say(CHILD, l80);
+        say(CHILD, "\n");
+    }
+    check(asker() < 0, "9 lines of exactly 80 columns: 9 rows on a terminal (no empty row after each, as on the screen)");
+    say_text = "y";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == BLOCKED, "the 10th row asks first");
+    sim_input(' ');
+    resume(CHILD);
+
+    on_pty(80, 10, 1);
+    say(CHILD, "\033[1;33m");
+    say(CHILD, u80);
+    say(CHILD, "\033[0m");
+    sim_stream_pos(&x, &wrap);
+    check(x == 79 && wrap, "80 two-byte UTF-8 characters, in an SGR sequence, fill one row of 80 columns: the wrap pending");
+    say(CHILD, "z");
+    sim_stream_pos(&x, &wrap);
+    page_state(&rows, &drop, &a, &o);
+    check(x == 1 && !wrap && rows == 1, "the next character starts the next row");
+    say(CHILD, "\tab\t");
+    sim_stream_pos(&x, &wrap);
+    check(x == 16, "TAB goes to the next multiple of 8");
+    say(CHILD, "\033[5D");
+    sim_stream_pos(&x, &wrap);
+    check(x == 11, "ESC[5D: 5 columns back");
+    snprintf(want, sizeof(want), "\033[1;33m%s\033[0mz\tab\t\033[5D", u80);
+    check(!strcmp(stream_now(), want), "the bytes go as they were printed: no UTF-8 decoding, no cells");
+}
+
+static void t_stream_wrap_ask(void) {
+    char l80[81];
+    int st;
+    memset(l80, 'x', 80);
+    l80[80] = 0;
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 8);
+    say(CHILD, l80);                                /* the 9th row is full, the wrap pending */
+    stream_now();
+    say_text = "z";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == BLOCKED && !strcmp(stream_now(), "\n" QUESTION),
+          "the 9th row full with the wrap pending: a newline, then the question on the 10th");
+    sim_input(' ');
+    resume(CHILD);
+    check(!strcmp(stream_now(), UNASKED "z"), "and the character goes where the question was");
+
+    on_pty(40, 10, 1);
+    run(CHILD, w_lines, 1, 30);
+    check(!strcmp(stream_now(), lines_text("", 1, 9, "\033[7m--More-- (Space: next page, Enter: next\033[27m")),
+          "at 40 columns the question is cut to 39");
+}
+
+static void t_stream_resize(void) {
+    int st;
+    on_pty(80, 10, 1);
+    st = run(CHILD, w_lines, 1, 40);
+    stream_now();
+    sim_stream_size(80, 5);
+    check(st == BLOCKED && asker() == CHILD && sim_on_list(CHILD), "a smaller size leaves the question up");
+    sim_stream_size(80, 20);
+    st = resume(CHILD);
+    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 10, 19, QUESTION)),
+          "PTY_SETSIZE 80x20 at the question: it goes without a key, and the rows go on to 19 before it comes back");
+    sim_input(' ');
+    st = resume(CHILD);
+    check(st == BLOCKED && !strcmp(stream_now(), lines_text(UNASKED, 20, 38, QUESTION)), "then 19 lines a screenful");
+    sim_input('q');
+    resume(CHILD);
+}
+
+static void t_stream_colour(void) {
+    on_pty(80, 24, 0);
+    sim_kprintf_line("kernel\n");
+    check(!strcmp(stream_now(), "\033[0;1;33mkernel\n"), "a kernel message (yellow): its SGR sequence first");
+    say(SHELL, "plain\n");
+    check(!strcmp(stream_now(), "\033[0mplain\n"), "the console's own colour again: ESC[0m, the terminal's default");
+    say(SHELL, "\033[36mcyan ");
+    sim_kprintf_line("k2 ");
+    check(!strcmp(stream_now(), "\033[36mcyan k2 "), "while a program's SGR is in force, the writer's colour is not sent");
+    say(SHELL, "\033[0m");
+    sim_kprintf_line("k3");
+    say(SHELL, "\033[7m!");
+    check(!strcmp(stream_now(), "\033[0m\033[0;1;33mk3\033[0m\033[7m!"),
+          "after the program's ESC[0m the colours are sent again, also before a program's own sequence");
+    say(SHELL, "\033[0m");
+    stream_now();
+    say(SHELL, "\033[7m\033[?25l");
+    stream_now();
+    sim_task_gone(SHELL);
+    check(!strcmp(stream_now(), "\033[0m\033[?25h"),
+          "a program that ends with inverse video and the cursor hidden: ESC[0m ESC[?25h to the far terminal");
+}
+
+static void t_stream_backspace(void) {
+    char l80[81];
+    memset(l80, 'x', 80);
+    l80[80] = 0;
+    on_pty(80, 24, 0);
+    say(SHELL, "ab\b");
+    check(!strcmp(stream_now(), "ab\b \b"), "Backspace erases the cell before: BS SP BS");
+    say(SHELL, "\r");
+    say(SHELL, l80);
+    stream_now();
+    say(SHELL, "\b");
+    check(!strcmp(stream_now(), "\r\033[999C\033[K"), "at a pending wrap: the last column (CR ESC[999C ESC[K)");
+    say(SHELL, "\n\b");
+    check(!strcmp(stream_now(), "\n\033[A\033[999C\033[K"), "at a row's start: the end of the row above");
+    say(SHELL, "a\001\002\177b\033[1mc");
+    check(!strcmp(stream_now(), "ab\033[1mc"), "other control characters and DEL are dropped, as the screen draws none");
+}
+
+static void t_stream_clear(void) {
+    int st;
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 8);
+    say(CHILD, "\033[2J");
+    st = run(CHILD, w_lines, 9, 17);
+    check(st == DONE && asker() < 0, "ESC[2J: a new screenful, 9 more lines without a question");
+    say(CHILD, "\033[H\033[J");
+    st = run(CHILD, w_lines, 18, 26);
+    check(st == DONE && asker() < 0, "ESC[H ESC[J: a new screenful too");
+    stream_now();
+    run(CHILD, w_clear, 0, 0);
+    check(!strcmp(stream_now(), "\033[2J\033[H"), "clearing the console: ESC[2J ESC[H to the far terminal");
+    st = run(CHILD, w_lines, 27, 35);
+    check(st == DONE && asker() < 0, "and a new screenful");
+    run(SHELL, w_page, 0, 0);
+}
+
+static void t_stream_tty(void) {
+    int st;
+    reset(1);                                       /* `ascii` on the kernel command line */
+    sim_term(0);
+    check(sim_ttyctl(TTY_CAPS, 0) == 3, "a pty's TTY_CAPS: UTF-8 and colour, whatever `ascii` says");
+    check(sim_ttyctl(2, 0) == ((80 << 16) | 24), "TTY_GETSIZE: 80x24 at first");
+    sim_stream_size(100, 30);
+    check(sim_ttyctl(2, 0) == ((100 << 16) | 30), "TTY_GETSIZE: the size PTY_SETSIZE gave");
+
+    /* the serial line's rules for what the master writes */
+    on_pty(80, 24, 0);
+    sim_term_input('\r');
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == '\n', "line mode: CR is Enter");
+    sim_term_input(0x7F);
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 0x08, "DEL is Backspace");
+    sim_term_input(0x1B);
+    sim_term_input('[');
+    sim_term_input('A');
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == sim_key_up(), "ESC [ A is Up");
+    sim_term_input(0x1B);
+    sim_term_input('O');
+    sim_term_input('H');
+    sim_term_input(0x1B);
+    sim_term_input('[');
+    sim_term_input('3');
+    sim_term_input('~');
+    sim_term_input('k');
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == sim_key_home(), "ESC O H is Home");
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 'k', "a sequence it does not know is swallowed to its final byte");
+    run(SHELL, w_raw, 1, 0);
+    sim_term_input('\r');
+    sim_term_input(0x1B);
+    sim_term_input('[');
+    sim_term_input('A');
+    run(SHELL, w_getc, 0, 0);
+    st = got_key;
+    run(SHELL, w_getc, 0, 0);
+    check(st == '\r' && got_key == 0x1B, "raw mode: the bytes as they were sent");
+    run(SHELL, w_raw, 0, 0);
+
+    /* a lone Esc answers the question; killed at the question, it goes */
+    on_pty(80, 10, 1);
+    st = run(CHILD, w_lines, 1, 30);
+    sim_term_input(0x1B);
+    st = resume(CHILD);
+    check(st == DONE && dropping(), "Esc from the master answers --More--: the rest is dropped");
+    on_pty(80, 10, 1);
+    run(CHILD, w_lines, 1, 30);
+    stream_now();
+    sim_task_gone(CHILD);
+    check(asker() < 0 && !strcmp(stream_now(), UNASKED), "the asker killed at the question: CR ESC[K takes it away");
+}
+
 int main(void) {
     int i;
     for(i = 0; i < NT; i++) pthread_create(&task[i].th, NULL, task_main, (void *)(long)i);
@@ -659,6 +922,14 @@ int main(void) {
     t_new_screenful();
     t_echo_not_kept();
     t_caps();
+    t_stream_screenful();
+    t_stream_columns();
+    t_stream_wrap_ask();
+    t_stream_resize();
+    t_stream_colour();
+    t_stream_backspace();
+    t_stream_clear();
+    t_stream_tty();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);

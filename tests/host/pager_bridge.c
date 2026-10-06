@@ -9,6 +9,7 @@
 #include <surfos/console.h>
 #include <surfos/task.h>
 #include <surfos/tty.h>
+#include <surfos/keyboard.h>
 #include <surfos/wait.h>
 #include <surfos/irq.h>
 #include <surfos/interrupt.h>
@@ -22,6 +23,8 @@
 
 int sim_if = 1;                 /* the interrupt flag */
 volatile int in_irq;
+static int term;                /* 10/6/26: the terminal the test uses: 0 (F1), or a pty's (NUM_CONSOLES + n) */
+static u_char term_esc;         /* tty_term_input()'s state for it */
 struct boot_info bootinfo;
 surf_task *curTask, *idle_task, *init_task_ptr;
 static surf_task T[NT];
@@ -45,6 +48,21 @@ void serial_console_putc(int c) {           /* driver/serial.c's rules */
     }
 }
 void serial_console_clear(void) { serial_puts("\033[2J\033[H"); }
+
+/* 10/6/26: a stream console's bytes for its master (kernel/pty.c's pty_out()): recorded, for any
+   pseudo-terminal, as if the master read them at once */
+static char stream_rec[1 << 16];
+static int stream_len;
+int pty_out(surf_console *con, const char *s, u_int n, int how) {
+    (void)con;
+    (void)how;
+    if(stream_len + (int)n > (int)sizeof(stream_rec)) return 0;
+    memcpy(stream_rec + stream_len, s, n);
+    stream_len += (int)n;
+    return 1;
+}
+void pty_task_gone(struct surf_task *task) { (void)task; }
+void poll_wake(void) {}
 
 int framebuffer_init(void) { return 0; }
 void framebuffer_bind(const u8 *cells) { (void)cells; }
@@ -129,7 +147,7 @@ void sim_init(int ascii) {
     extern surf_console conVideo;
     ascii_word = ascii;
     memset(T, 0, sizeof(T));
-    memset(conArray, 0, sizeof(surf_console) * NUM_CONSOLES);     /* a scenario that ended at a question leaves nothing */
+    memset(conArray, 0, sizeof(surf_console) * NUM_TTYS);         /* a scenario that ended at a question leaves nothing */
     memset(&conVideo, 0, sizeof(conVideo));
     for(i = 0; i < NT; i++) {
         T[i].pid = i;
@@ -146,17 +164,47 @@ void sim_init(int ascii) {
     init_tty();
     for(i = 0; i < NT; i++) T[i].tty = &ttys[0];
     serial_len = 0;
+    stream_len = 0;
+    term = 0;
+    term_esc = 0;
 }
+
+/* 10/6/26: from now on the tasks are on pty n's terminal (a stream console), and so are the
+   test's input and its look at the pager; n -1 is F1 again */
+void sim_term(int n) {
+    int i;
+    term = n < 0 ? 0 : NUM_CONSOLES + n;
+    for(i = 0; i < NT; i++) {
+        T[i].con = &conArray[term];
+        T[i].tty = &ttys[term];
+    }
+}
+
+/* what the stream consoles handed to their masters since the last call */
+int sim_stream(char *out, int max) {
+    int n = stream_len < max - 1 ? stream_len : max - 1;
+    memcpy(out, stream_rec, n);
+    out[n] = 0;
+    stream_len = 0;
+    return n;
+}
+
+void sim_stream_size(int cols, int rows) { console_stream_resize(&conArray[term], (u_int)cols, (u_int)rows); }
+void sim_stream_pos(int *x, int *wrap) { *x = (int)conArray[term].loc.x; *wrap = conArray[term].wrap; }
+void sim_term_input(int c) { tty_term_input(&ttys[term], &term_esc, (u_char)c); }
+void sim_clear(void) { clearConsole(curTask->con); }
+int sim_key_up(void) { return UP; }
+int sim_key_home(void) { return HOME; }
 
 void sim_cur(int task) { curTask = &T[task]; T[task].state = TS_RUNNING; }
 int sim_task(void) { return id_of(curTask); }
 void sim_print(const char *s, int len) { int i; for(i = 0; i < len; i++) kputch(curTask->con, WHITE_TXT, s[i]); }
 void sim_kprintf_line(const char *s) { kprintf("%s", s); }
 int sim_ttyctl(int op, unsigned arg) { return tty_ctl(curTask->tty, op, arg); }
-void sim_input(int c) { tty_input(&ttys[0], (u_char)c); }
-void sim_key(int c) { tty_key(&ttys[0], (u_char)c); }
-int sim_getc(void) { return tty_getc(&ttys[0]); }
-int sim_readline(char *buf, int size) { return tty_readline(&ttys[0], buf, (size_t)size); }
+void sim_input(int c) { tty_input(&ttys[term], (u_char)c); }
+void sim_key(int c) { tty_key(&ttys[term], (u_char)c); }
+int sim_getc(void) { return tty_getc(&ttys[term]); }
+int sim_readline(char *buf, int size) { return tty_readline(&ttys[term], buf, (size_t)size); }
 int sim_lines(void) { return (int)LINES; }
 int sim_cols(void) { return (int)COLUMNS; }
 
@@ -185,7 +233,7 @@ int sim_serial(char *out, int max) {
 }
 
 void sim_page(int *rows, int *drop, int *asker, int *owner) {
-    surf_console *c = &conArray[0];
+    surf_console *c = &conArray[term];
     *rows = (int)c->page_rows;
     *drop = c->page_drop;
     *asker = c->page_asker ? id_of(c->page_asker) : -1;
@@ -206,8 +254,8 @@ void sim_set_in_irq(int n) { in_irq = n; }
 void sim_set_mutexes(int task, int n) { T[task].mutexes = (u_int)n; }
 void sim_set_crit(int task, int n) { T[task].crit = (u_int)n; }
 int sim_on_list(int task) { return T[task].list != NULL; }
-int sim_readers(void) { return (int)ttys[0].readers.count; }
-int sim_raw(void) { return ttys[0].raw; }
+int sim_readers(void) { return (int)ttys[term].readers.count; }
+int sim_raw(void) { return ttys[term].raw; }
 
 /* the current task's output kept in memory (console_capture_begin), as SYS_kcmd does it */
 static struct kcapture cap;

@@ -276,6 +276,29 @@ SMOKE = [
     ('@ctrl-c', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
+    # 10/6/26 (the telnet server's track P): pseudo-terminals, poll(), the process list, detach() and /dev/kmsg,
+    # from user space (user/bin/ptytest.c). A program on a pty and what its master read; surfsh driven through
+    # one (a command, Ctrl+C on a kernel command and on a program, dmesg in the kernel's colour, exit: the master
+    # reads 0); PTY_SETSIZE and what TTY_GETSIZE and TTY_CAPS answer there; the pager asking in the stream at
+    # 80x10; a program that waits for room in the master's buffer; the hangup; poll(); procinfo(); detach();
+    # a line written to /dev/kmsg is in dmesg and on no console
+    ('run ptytest run hello pty', ['Hello from user mode', 'argv[1] = "pty"', 'ptytest: exit status 42',
+                                   'PTYTEST run PASS', 'exit status 0']),
+    ('run ptytest surfsh', ['ptytest: typed "echo hello"', 'ptytest: Ctrl+C: sleep cut short, count killed',
+                            'in the kernel\'s colour', 'ptytest: exit typed: the master read 0', 'PTYTEST surfsh PASS',
+                            'exit status 0']),
+    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 3: UTF-8 colour',
+                                 'PTYTEST size PASS', 'exit status 0']),
+    ('run ptytest pager', ['the lines between them: 1-9 10-18 19-27 28-36 37-45 46-54 55-60', 'PTYTEST pager PASS',
+                           'exit status 0']),
+    ('run ptytest flood', ['lines 1-1000, all of them, in order', 'PTYTEST flood PASS', 'exit status 0']),
+    ('run ptytest hangup', ['the master is closed', 'count is gone', "count's exit status -1 (killed)",
+                            'is free again', 'PTYTEST hangup PASS', 'exit status 0']),
+    ('run ptytest poll', ['timed out after', 'POLLNVAL', '(POLLIN | POLLHUP)', 'killed: gone after', 'PTYTEST poll PASS',
+                          'exit status 0']),
+    ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
+    ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
+    ('@kmsg', []),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
@@ -914,6 +937,24 @@ CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
                   '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}
+
+
+# 10/6/26 (track P): what `ptytest kmsg` writes to /dev/kmsg (user/bin/ptytest.c)
+KMSG_LINE = 'ptytest kmsg: a line for the kernel log'
+
+
+def kmsg_check(q):
+    """a line a program writes to /dev/kmsg is not shown on the console, and dmesg has it"""
+    start = len(q.transcript)
+    q.send('run ptytest kmsg\n')
+    ok = q.expect('PTYTEST kmsg PASS', 10) and q.expect(PROMPT, 10)
+    ok = ok and KMSG_LINE.encode() not in q.transcript[start:]
+    q.send('dmesg\n')
+    ok = ok and q.expect(KMSG_LINE, 30) and q.expect(PROMPT, 30)
+    return ('/dev/kmsg: a line written there is in the kernel log (dmesg), and on no console', ok)
+
+
+CONSOLE_CHECKS['@kmsg'] = kmsg_check
 
 
 def surfsh_corner_check(q):

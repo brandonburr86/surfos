@@ -13,7 +13,8 @@ instead of freeing it under them; vfs_busy() says who.
 
 10/6/26: whoever goes on using a mount after mount_lock is let go (a path
 lookup, statfs, sync) holds its root vnode first, under the lock: umount then
-says the mount is busy instead of freeing it under them.
+says the mount is busy instead of freeing it under them. vfs_open_vnode() makes
+a file of a vnode that has no path (a network connection, net/sock.c).
 */
 
 #include <surfos/types.h>
@@ -477,7 +478,6 @@ int vfs_chdir(const char *path) {
 
 int vfs_open(const char *path, int flags, struct file **out) {
     struct vnode *v;
-    struct file *f;
     int acc = flags & O_ACCMODE;
     int r = vfs_lookup(path, &v);
 
@@ -504,8 +504,17 @@ int vfs_open(const char *path, int flags, struct file **out) {
         r = v->ops->truncate(v, 0);
         if(r) { vput(v); return r; }
     }
-    f = (struct file *)kcalloc(1, sizeof(struct file));
-    if(!f) { vput(v); return -ENOMEM; }
+    r = vfs_open_vnode(v, flags, out);
+    if(r) vput(v);
+    return r;
+}
+
+/* 10/6/26: a file for a vnode that has no path (a network connection, net/sock.c); the file takes
+   over the caller's reference to v, which stays the caller's when this fails (-ENOMEM) */
+int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
+    struct file *f = (struct file *)kcalloc(1, sizeof(struct file));
+    u_long fl;
+    if(!f) return -ENOMEM;
     f->v = v;
     f->flags = flags;
     f->refs = 1;
@@ -513,13 +522,11 @@ int vfs_open(const char *path, int flags, struct file **out) {
         f->pid = curTask->pid;
         strlcpy(f->owner, curTask->name, sizeof(f->owner));
     }
-    {
-        u_long fl = irq_save();
-        f->onext = open_files;
-        if(open_files) open_files->oprev = f;
-        open_files = f;
-        irq_restore(fl);
-    }
+    fl = irq_save();
+    f->onext = open_files;
+    if(open_files) open_files->oprev = f;
+    open_files = f;
+    irq_restore(fl);
     *out = f;
     return 0;
 }
