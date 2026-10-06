@@ -29,4 +29,7 @@ void funky(void);
 int heaptest(void);         /* 0 = pass */
 int run_selftest(void);     /* 0 = all pass */
 
+/* fdisk.c */
+void cmd_fdisk(int argc, char **argv);
+
 #endif

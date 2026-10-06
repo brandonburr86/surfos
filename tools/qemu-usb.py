@@ -825,10 +825,14 @@ def scenario_usbdisk(args, image, firmware, outdir):
         if boot_serial(vm, results, args.boot_timeout):
             boot = vm.text()
             results.append(('the second stick is the disk usb1 with partition usb1p1',
-                            '+USB: usb1: QEMU QEMU HARDDISK, 16 MB' in boot and '+MBR: usb1p1' in boot))
+                            '+USB: usb1: QEMU QEMU HARDDISK, 16 MB' in boot and '+PART: usb1p1: MBR partition 1' in boot))
+            results.append(('the boot stick is recognised as the SurfOS boot drive',
+                            '+PART: usb0 is the SurfOS boot drive' in boot))
             results.append(('the boot does not mount a USB drive by itself',
                             not re.search(r'\+VFS: usb\S* mounted', boot)))
-            for cmd, expects in [('lsblk', ['usb0', 'usb1', 'usb1p1']),
+            ok, _ = run_cmd(vm, 'fdisk usb0 new mbr', ['the SurfOS boot drive'])
+            results.append(('fdisk refuses the boot drive', ok))
+            for cmd, expects in [('lsblk', ['usb0', 'boot drive: protected', 'usb1', 'usb1p1']),
                                  ('mount usb1p1 /stick', ['+FAT16: usb1p1']),
                                  ('ls /stick', ['DOCS/', 'README']),
                                  ('cat /stick/README', ['Welcome to the SurfOS Source Code']),
@@ -848,17 +852,18 @@ def scenario_usbdisk(args, image, firmware, outdir):
                             and sa.group(1) == sb.group(1)))
             # pulled out while mounted: errors, not a crash; umount still works
             vm.mon.cmd('device_del stick1')
-            ok = vm.expect('+USB: usb1: unplugged', 20)
+            ok = vm.expect('+USB: usb1: unplugged', 20) and vm.expect('unplugged (usb1', 20)   # the port's line comes last
             results.append(('unplugging the stick is noticed', ok))
             ok, out = run_cmd(vm, 'ls /stick', [])
             results.append(('a mounted file system on the unplugged stick fails cleanly', ok and 'DOCS/' not in out))
             ok, _ = run_cmd(vm, 'umount /stick', [])
             results.append(('and can still be unmounted', ok))
             ok, out = run_cmd(vm, 'lsblk', ['usb0'])
-            results.append(('usb1 is gone from lsblk', ok and 'usb1' not in out))
-            # plugged in again: the same name, the data is still there
+            results.append(('usb1 is gone from lsblk', ok and not re.search(r'^\s*usb1(p\d+)?\s', out, re.M)))
+            # plugged in again: the same name, the data is still there. The port's status line comes
+            # after the partition scan, so usb1p1 exists by then.
             vm.mon.cmd('device_add ' + DATA_STICK)
-            ok = vm.expect('+USB: usb1: QEMU QEMU HARDDISK', 30)
+            ok = vm.expect('+USB: usb1: QEMU QEMU HARDDISK', 30) and vm.expect(': usb1 (16 MB)', 30)
             results.append(('plugged in again it is usb1 again', ok))
             ok, _ = run_cmd(vm, 'mount usb1p1 /stick', ['+FAT16: usb1p1'])
             ok2, _ = run_cmd(vm, 'cat /stick/NOTE.TXT', [note])

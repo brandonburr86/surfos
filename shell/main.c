@@ -189,7 +189,10 @@ static void cmd_ansi(int argc, char **argv) {
 
 static void cmd_lpstat(int argc, char **argv) { printParStatus(); }
 
-static void cmd_lsblk(int argc, char **argv) { bdev_print(); }
+static void cmd_lsblk(int argc, char **argv) {
+    if(argc > 1 && !strcmp(argv[1], "-s")) bdev_print_io();
+    else bdev_print();
+}
 
 /**** network ****/
 
@@ -649,7 +652,8 @@ static const struct command commands[] = {
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys },
     { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },
-    { "lsblk",     "",          "block devices: disks, partitions, ramdisks", cmd_lsblk },
+    { "lsblk",     "[-s]",      "disks, partitions, ramdisks (-s: blocks moved)", cmd_lsblk },
+    { "fdisk",     "<disk> [cmd]", "partition tables: new mbr|gpt, add, delete, type", cmd_fdisk },
     { "mount",     "[dev path [type]]", "list mounts, or mount a block device", cmd_mount },
     { "umount",    "<path>",    "unmount", cmd_umount },
     { "ls",        "[path]",    "list a directory", cmd_ls },

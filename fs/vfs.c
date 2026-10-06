@@ -668,9 +668,9 @@ void init_fs(void) {
             continue;
         }
         else snprintf(path, sizeof(path), "/%s", d->name);
-        r = vfs_mount(d, path, t->name);
+        r = vfs_mount_flags(d, path, t->name, d->protect ? MNT_RDONLY : 0);    /* the boot drive is only read */
         if(r) kprintf("+VFS: %s on %s (%s): %s\n", d->name, path, t->name, strerror(r));
-        else kprintf("+VFS: %s mounted on %s (%s%s)\n", d->name, path, t->name, d->readonly ? ", read-only" : "");
+        else kprintf("+VFS: %s mounted on %s (%s%s)\n", d->name, path, t->name, (d->readonly || d->protect) ? ", read-only" : "");
     }
     kprintf("*DONE\n");
 }
