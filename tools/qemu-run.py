@@ -252,6 +252,10 @@ SMOKE = [
     ('umount /kcmd', []),
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
     ('umount /kcmd', []),
+    # the question answered as asked, with the output going to a file: the change is made, and the file says so
+    ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new mbr', [CONFIRM_RD1], [('rd1', ['kcmdtest: fdisk: status 0'])]),
+    ('cat /hda1/FDISK.TXT', ['change: a new, empty MBR', 'rd1: written, flushed and verified', 'rd1 now has no partitions']),
+    ('rm /hda1/FDISK.TXT', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
