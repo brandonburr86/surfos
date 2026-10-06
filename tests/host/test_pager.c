@@ -507,6 +507,47 @@ static void t_question_gives_way(void) {
     check(st == DONE && screen_has("line 102"), "and the waiting task prints");
 }
 
+/* after q: what a program prints before it reads, its question, still shows; so does its
+   crash report */
+static void t_drop_question(void) {
+    char ser[4096];
+    int st;
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    say(CHILD, "line 031\n    Type rd1 to write it: ");
+    check(dropping() && !screen_has("line 031") && !screen_has("Type rd1"), "after q the command's next lines are dropped");
+    sim_serial(ser, sizeof(ser));
+    st = run(CHILD, w_getc, 0, 0);
+    sim_serial(ser, sizeof(ser));
+    check(st == BLOCKED && screen_has("    Type rd1 to write it:") && !screen_has("line 031") && !dropping() &&
+          !strcmp(ser, "    Type rd1 to write it: "),
+          "when it reads, the drop ends and its question shows: the last line q dropped (on the terminal too)");
+    sim_input('y');
+    resume(CHILD);
+    say(CHILD, "written\n");
+    check(got_key == 'y' && screen_has("written"), "and what it prints after the answer shows");
+}
+
+static void w_crash(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_set_if(0);                          /* trap_fatal(): an interrupt gate, */
+    sim_task_gone(sim_task());              /* tty_task_gone() first, */
+    sim_print("Process ('crash':3) killed by \"Page Fault\"\n", 44);   /* then the report */
+    sim_set_if(1);
+}
+
+static void t_drop_crash(void) {
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    run(CHILD, w_crash, 0, 0);
+    check(screen_has("killed by \"Page Fault\"") && !dropping(), "after q, a paged program's crash report still shows");
+}
+
 static void t_caps(void) {
     reset(0);
     check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
@@ -530,6 +571,8 @@ int main(void) {
     t_question_owner_gone();
     t_waiting_for_the_answer();
     t_question_gives_way();
+    t_drop_question();
+    t_drop_crash();
     t_caps();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);

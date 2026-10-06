@@ -91,8 +91,9 @@ void tty_key(struct tty *t, u_char c) {
     tty_input(t, c);
 }
 
-/* 10/6/26: a key read from the terminal means the user has seen the screen: the pager
-   (console.c) starts a new screenful, and shows again what it dropped after q */
+/* 10/6/26: reading the terminal means the user sees the screen: the pager (console.c) starts
+   a new screenful, and when the reader's own output was being dropped after q, it shows the
+   last line it dropped, the question the reader asks perhaps, and drops no more */
 int tty_trygetc(struct tty *t) {
     u_long flags = irq_save();
     int c = -1;
@@ -106,6 +107,7 @@ int tty_trygetc(struct tty *t) {
 }
 
 int tty_getc(struct tty *t) {
+    console_page_read(t->con);
     for(;;) {
         u_long flags = irq_save();
         if(t->in_tail != t->in_head) {

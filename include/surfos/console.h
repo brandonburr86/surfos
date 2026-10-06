@@ -41,6 +41,7 @@ typedef struct surf_point {
 
 #define ESC_PARAMS 8
 #define PAGE_ASK_MAX 64             /* 10/6/26: the cells the pager's question covers, at most (TTY_MORE is 63) */
+#define PAGE_TAIL_MAX 240           /* 10/6/26: what q dropped since the last newline, kept (the widest grid) */
 
 typedef struct surf_console {
     TEXTCOLOR txtColor;
@@ -67,6 +68,9 @@ typedef struct surf_console {
     u_char page_shown;          /* the question is on the screen, at the start of row page_y */
     u_char page_y, page_len;
     u_char page_saved[2 * PAGE_ASK_MAX];  /* the cells it covers */
+    u_char page_tail[PAGE_TAIL_MAX];      /* q: the dropped bytes since the last newline, a question perhaps, */
+    u_short page_tail_len;                /* shown when the paged task that printed them reads */
+    TEXTCOLOR page_tail_color;
 } surf_console;
 
 void sscroll(surf_console *con);
@@ -108,7 +112,8 @@ void console_capture_end(void);
 /* 10/6/26: the pager (TTY_PAGE, tty.h): the console counts the rows and asks, tty.c says who
    is paged. */
 void console_page_start(surf_console *con, struct surf_task *owner);  /* a new screenful; NULL ends paging */
-void console_page_read(surf_console *con);   /* the terminal was read: a new screenful, nothing dropped */
+void console_page_read(surf_console *con);   /* the terminal is read: a new screenful; a dropped question shows */
+void console_page_new(surf_console *con);    /* a new screenful, nothing dropped any more (a question comes, say) */
 int console_paging(surf_console *con);       /* is what the current task prints there paged? */
 void console_page_call_off(surf_console *con);  /* interrupts off: the task at the question goes on without a key */
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */

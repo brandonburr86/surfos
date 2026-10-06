@@ -54,6 +54,7 @@ u_int conColumns = 80, conLines = 25;
 
 static void page_show(surf_console *con);       /* 10/6/26: the pager's question (below) */
 static void page_unshow(surf_console *con);
+static int page_descends(struct surf_task *t, struct surf_task *owner);
 
 void init_console(void) {
     int i=0;
@@ -332,6 +333,8 @@ void console_task_gone(struct surf_task *task) {
             wake_up_all(&tty_for_console(con)->page_waiters);
         }
         if(con->page_owner == task) console_page_start(con, NULL);   /* 10/6/26: paging ends with it */
+        else if(con->page_owner && page_descends(task, con->page_owner))
+            console_page_new(con);                      /* a paged task's last words (a fault report) show */
     }
 }
 
@@ -600,27 +603,57 @@ void console_page_start(surf_console *con, struct surf_task *owner) {
     irq_restore(flags);
 }
 
-/* the terminal was read (tty.c): the user has seen the screen, a new screenful begins, and
-   what was dropped after q shows again (a program that asks must be seen asking) */
-void console_page_read(surf_console *con) {
+/* a new screenful, and nothing dropped any more */
+void console_page_new(surf_console *con) {
     con->page_rows = 0;
     con->page_drop = 0;
+    con->page_tail_len = 0;
+}
+
+/* The terminal is read (tty.c): the user sees the screen, a new screenful begins. When the
+   reader is paged and its output is being dropped after q, the drop ends, and what it
+   dropped since the last newline is shown first: the question a program asks before it
+   reads (fdisk's "Type rd1 to write ...: "). */
+void console_page_read(surf_console *con) {
+    u_int i, n = con->page_tail_len;
+    if(!con->page_drop || !con->page_owner || !console_paging(con)) {
+        console_page_new(con);
+        return;
+    }
+    console_page_new(con);
+    for(i = 0; i < n; i++) kputch(con, con->page_tail_color, con->page_tail[i]);
+}
+
+/* q: a dropped byte; the ones since the last newline are kept (the last COLUMNS of them) */
+static void page_keep(surf_console *con, TEXTCOLOR color, u_char b) {
+    u_int max = COLUMNS < PAGE_TAIL_MAX ? COLUMNS : PAGE_TAIL_MAX;
+    if(b == '\n') {
+        con->page_tail_len = 0;
+        return;
+    }
+    if(con->page_tail_len >= max) {
+        memmove(con->page_tail, con->page_tail + 1, max - 1);
+        con->page_tail_len = max - 1;
+    }
+    con->page_tail[con->page_tail_len++] = b;
+    con->page_tail_color = color;
+}
+
+/* is t the owner, or descended from it? Interrupts off. */
+static int page_descends(struct surf_task *t, struct surf_task *owner) {
+    int depth;
+    for(depth = 0; t && depth < 64; t = t->parent, depth++) if(t == owner) return 1;
+    return 0;
 }
 
 /* Is the current task the owner, or descended from it (its parent's parent, ...)? With
    interrupts off: a parent that ends hands its children to init meanwhile. */
 int console_paging(surf_console *con) {
-    struct surf_task *t;
     u_long flags;
-    int depth, found = 0;
+    int found;
     if(!con->page_owner || !curTask) return 0;
     flags = irq_save();
-    for(t = curTask, depth = 0; t && depth < 64; t = t->parent, depth++) {
-        if(t == con->page_owner) {
-            found = 1;
-            break;
-        }
-    }
+    found = page_descends(curTask, con->page_owner);
     irq_restore(flags);
     return found;
 }
@@ -659,7 +692,7 @@ static void page_ask(surf_console *con, struct tty *t) {
    Before a paged task's byte draws on, or starts, the row after a screenful, the task
    waits at the question first, where it may; while another task is at the question, it
    waits for the answer first. */
-static int page_hold(surf_console *con, u_char b) {
+static int page_hold(surf_console *con, TEXTCOLOR color, u_char b) {
     struct tty *t;
     u_long flags;
     if(in_interrupt() || !curTask || curTask == idle_task || !console_paging(con)) return 0;
@@ -675,7 +708,10 @@ static int page_hold(surf_console *con, u_char b) {
         }
         if(!console_paging(con)) return 0;              /* paging ended meanwhile */
     }
-    if(con->page_drop) return 1;
+    if(con->page_drop) {
+        page_keep(con, color, b);
+        return 1;
+    }
     if(con->page_asker) return 0;                       /* it may not wait: it prints, the question gives way */
     if(con->esc || writer_utf()->have || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
         return 0;                                       /* draws nothing, or not yet */
@@ -684,7 +720,9 @@ static int page_hold(surf_console *con, u_char b) {
     if(!page_may_wait(t) || wq_count(&t->readers))
         return 0;                                       /* no waiting here: at the next row */
     page_ask(con, t);
-    return con->page_drop;
+    if(!con->page_drop) return 0;
+    page_keep(con, color, b);
+    return 1;
 }
 
 /* 10/6/26: a task's output kept instead of shown (console.h) */
@@ -710,7 +748,7 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
     }
     /* 10/6/26: the pager (TTY_PAGE): a paged task waits at a full screen, and after q what
        it prints is dropped; the question gives way to anyone else who prints here */
-    if(con && con->page_owner && page_hold(con, b)) return;
+    if(con && con->page_owner && page_hold(con, color, b)) return;
     if(con && con->page_shown) {
         u_long flags = irq_save();
         page_unshow(con);
