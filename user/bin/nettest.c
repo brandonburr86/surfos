@@ -52,6 +52,19 @@ static void check(int ok, const char *what) {
     printf("  FAIL  %s (errno %d: %s)\n", what, errno, strerror(errno));
 }
 
+/* 10/6/26: write() on a connection queues what fits: the rest goes in later writes */
+static int write_all(int fd, const char *p, long n, long *writes, long *partial) {
+    while(n > 0) {
+        long w = (long)write(fd, p, (size_t)n);
+        if(w <= 0) return -1;
+        if(writes) (*writes)++;
+        if(partial && w < n) (*partial)++;
+        p += w;
+        n -= w;
+    }
+    return 0;
+}
+
 static int ip_arg(const char *s, unsigned int *ip) {
     if(ipparse(s, ip) == 0) return 0;
     fprintf(stderr, "nettest: %s: not an IPv4 address\n", s);
@@ -74,7 +87,7 @@ static int echo(int port, int n) {
         printf("nettest: connection from %s port %u\n", ipstr(peer.ip, a), peer.port);
         fflush(stdout);
         while((r = (int)read(c, buf, sizeof(buf))) > 0) {
-            if(write(c, buf, (size_t)r) != r) { printf("nettest: write: %s\n", strerror(errno)); break; }
+            if(write_all(c, buf, r, NULL, NULL)) { printf("nettest: write: %s\n", strerror(errno)); break; }
             total += r;
         }
         if(r < 0) printf("nettest: read: %s\n", strerror(errno));
@@ -113,7 +126,7 @@ static int send_bytes(int port, long count) {
     while(done < count) {
         int n = count - done < (long)sizeof(buf) ? (int)(count - done) : (int)sizeof(buf);
         for(i = 0; i < n; i++) buf[i] = pattern_byte(done + i);
-        if(write(c, buf, (size_t)n) != n) { printf("nettest: write after %ld bytes: %s\n", done, strerror(errno)); close(c); return 1; }
+        if(write_all(c, buf, n, NULL, NULL)) { printf("nettest: write after %ld bytes: %s\n", done, strerror(errno)); close(c); return 1; }
         done += n;
     }
     close(c);
@@ -131,7 +144,7 @@ static int get(unsigned int ip, int port, const char *path) {
     n = snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: nettest\r\nConnection: close\r\n\r\n",
                  path, ipstr(ip, a));
     if(n < 0 || n >= (int)sizeof(req)) { printf("nettest: the path is too long\n"); close(c); return 1; }
-    if(write(c, req, (size_t)n) != n) { printf("nettest: write: %s\n", strerror(errno)); close(c); return 1; }
+    if(write_all(c, req, n, NULL, NULL)) { printf("nettest: write: %s\n", strerror(errno)); close(c); return 1; }
     while((r = (int)read(c, buf, sizeof(buf) - 1)) > 0) {
         buf[r] = 0;
         fputs(buf, stdout);

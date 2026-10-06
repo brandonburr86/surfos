@@ -22,10 +22,15 @@ SYS_netinfo (struct netinfo *ni): the default network interface (the first): nam
 
 read() on a connection waits for data and returns what has arrived (at most len bytes),
 0 once the other end has closed and everything was read, -ECONNRESET after a reset.
-write() returns when all its bytes are queued (it waits for room in the send buffer), or
--EPIPE when the connection is closed. poll() (surfos/poll.h) says POLLIN when read() would
-not wait (data, the end, or on a listening socket a connection to accept), POLLOUT when
-write() would queue a byte at once, POLLHUP when the other end has closed.
+write() queues as many bytes as fit in the send buffer (8 KB) and returns how many: it
+waits only while none fits (-EINTR when cut short), so after poll() says POLLOUT it does
+not wait, and a caller with more to send writes the rest later (libsurf's stdio does).
+-ECONNRESET or -ETIMEDOUT when that ended the connection, -EPIPE once it is closed both
+ways, -ENOTCONN on a listening socket. A reader that stopped reading shuts its window: it
+is probed, and the bytes go on when it reads again.
+poll() (surfos/poll.h) says POLLIN when read() would not wait (data, the end, or on a
+listening socket a connection to accept), POLLOUT when write() would queue a byte at once,
+POLLHUP when the other end has closed.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/sock.h.
 */

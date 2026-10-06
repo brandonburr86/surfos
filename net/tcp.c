@@ -18,18 +18,23 @@ kill waits for its end, or Ctrl+C: surfos/task.h).
 Sixteen sockets; a listening one has no buffers. The calls programs need answer
 -errno and may wait without a time limit (a kill or Ctrl+C still ends the wait):
 tcp_open() keeps why a connection failed (refused, timed out, no route, no
-network), tcp_read() and tcp_write() block like read() and write(), tcp_poll()
-says what is ready, and tcp_release() closes without waiting: the socket sends
-its FIN and finishes on its own (an orphan, given 30 seconds at most). Whatever
-changes what a socket is ready for also wakes poll() (poll_wake()). A listening
-socket conflicts only with another listening one on its port, so a server can
-listen again while its old connections finish.
+network), tcp_read() blocks like read(), tcp_write() waits only while nothing
+fits and queues what does, tcp_poll() says what is ready, and tcp_release()
+closes without waiting: the socket sends its FIN and finishes on its own (an
+orphan, given 30 seconds at most). Whatever changes what a socket is ready for
+also wakes poll() (poll_wake()). A listening socket conflicts only with another
+listening one on its port, so a server can listen again while its old
+connections finish.
 
 10/6/26 (review of the above): a connection that dies during its handshake
 leaves its listener's backlog at once, and a SYN finding the backlog full takes
 the place of a half-open one (a SYN scan or flood cannot make a listener deaf).
-A FIN behind data that did not fit is not taken; segments are cut to the other
-end's MSS.
+A shut window is probed (the persist timer, with backoff, never giving up while
+the other end answers), and an ACK that only says the window is still shut
+proves the other end alive. An unacceptable segment always gets an ACK (a window
+probe from the other end is answered); a FIN behind data that did not fit is not
+taken; a window update goes out only when the window opened enough to matter;
+segments are cut to the other end's MSS.
 */
 
 #include <surfos/types.h>
@@ -55,6 +60,7 @@ end's MSS.
 #define TCP_TIME_WAIT (2 * HZ)
 #define TCP_BACKLOG 4
 #define TCP_ORPHAN_LIFE (30 * HZ)       /* 10/6/26: a closed socket still finishing is reset after this */
+#define TCP_PERSIST_MAX (60 * HZ)       /* 10/6/26: the longest pause between two probes of a shut window */
 
 enum { CLOSED, LISTEN, SYN_SENT, SYN_RCVD, ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSE_WAIT, CLOSING, LAST_ACK, TIME_WAIT };
 static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "FIN_WAIT_1",
@@ -69,6 +75,8 @@ struct tcp_socket {
     u_long orphan_at;                   /* 10/6/26: when it became an orphan */
     struct tcp_socket *listener;        /* 10/6/26: whose backlog it waits in, until accept() takes it */
     u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
+    u_long persist_at;                  /* 10/6/26: the next probe of a shut window, 0: none due */
+    u_int persist_n;                    /* 10/6/26: probes since the window shut (the pause doubles) */
     int state;
     ipaddr_t remote_ip;
     u16 local_port, remote_port;
@@ -189,6 +197,7 @@ static void backlog_remove(struct tcp_socket *c) {
 static void fail(struct tcp_socket *s, int err) {
     s->error = err;
     s->rto_at = 0;
+    s->persist_at = 0;
     set_state(s, CLOSED);
     if(s->listener && !s->synced) {
         backlog_remove(s);
@@ -241,6 +250,13 @@ static u16 peer_mss(const struct tcp_hdr *th, u_int hlen) {
     return TCP_MSS;
 }
 
+/* 10/6/26: an ACK the other end has to answer (an old sequence number, RFC 793), and its answer says
+   its window: the probe of a shut window */
+static void send_probe(struct tcp_socket *s) {
+    send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una - 1, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
+    s->tx_segs++;
+}
+
 static void send_ack(struct tcp_socket *s) {
     send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
     s->tx_segs++;
@@ -250,7 +266,8 @@ static void arm_rto(struct tcp_socket *s) {
     if(!s->rto_at) { s->rto_at = getticks() + TCP_RTO; s->retries = 0; }
 }
 
-/* send whatever the window allows from snd_nxt on, then the FIN if it is due */
+/* send whatever the window allows from snd_nxt on, then the FIN if it is due. 10/6/26: with data
+   waiting, nothing in flight and the window shut, the persist timer probes it (tcp_tick) */
 static void tcp_output(struct tcp_socket *s) {
     u32 in_flight = s->snd_nxt - s->snd_una;
     while(in_flight < s->tx_len) {
@@ -272,6 +289,20 @@ static void tcp_output(struct tcp_socket *s) {
         s->snd_nxt++;
         arm_rto(s);
     }
+    if(s->tx_len > in_flight && !s->snd_wnd && !in_flight) {
+        if(!s->persist_at) {
+            s->persist_n = 0;
+            s->persist_at = getticks() + TCP_RTO;
+        }
+    } else s->persist_at = 0;
+}
+
+/* 10/6/26: the persist timer: the next probe of the shut window, after twice the pause (a minute at most) */
+static void probe_window(struct tcp_socket *s) {
+    u_long pause = (u_long)TCP_RTO << (s->persist_n < 6 ? s->persist_n + 1 : 6);
+    send_probe(s);
+    s->persist_n++;
+    s->persist_at = getticks() + (pause < TCP_PERSIST_MAX ? pause : TCP_PERSIST_MAX);
 }
 
 /* the oldest unacknowledged segment again (or the SYN / FIN) */
@@ -424,7 +455,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
             datalen -= skip;
             seq = s->rcv_nxt;
         } else {
-            if(datalen || (flags & (TCP_SYN | TCP_FIN))) send_ack(s);        /* out of order or old: say where we are */
+            send_ack(s);        /* out of order or old: say where we are (10/6/26: also to a bare ACK, a probe) */
             netbuf_free(nb);
             return;
         }
@@ -439,6 +470,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     }
 
     s->snd_wnd = ntohs(th->win);
+    if(!s->snd_wnd && ack == s->snd_una && s->snd_una != s->snd_nxt) s->retries = 0;   /* 10/6/26: alive, window shut */
     process_ack(s, ack);
 
     if(datalen && s->orphan) {
@@ -501,6 +533,8 @@ void tcp_tick(void) {
             continue;
         }
         if(s->rto_at && (long)(now - s->rto_at) >= 0) retransmit(s);
+        if(!s->used) continue;                           /* it failed and went */
+        if(s->persist_at && (long)(now - s->persist_at) >= 0) probe_window(s);
     }
 }
 
@@ -650,7 +684,8 @@ static bool can_send(const struct tcp_socket *s) {
     return s->state == ESTABLISHED || s->state == CLOSE_WAIT;
 }
 
-/* why nothing more can be sent: the error that ended the connection, or the end of it */
+/* why nothing more can be sent: the error that ended the connection (a reset, a timeout), or the
+   end of it (-EPIPE: the connection was closed both ways) */
 static int send_error(const struct tcp_socket *s) {
     return s->error ? s->error : -EPIPE;
 }
@@ -680,32 +715,31 @@ int tcp_send(struct tcp_socket *s, const void *data, u_int len) {
     return (int)done;
 }
 
-/* 10/6/26: write() on a connection: every byte queued, waiting for room as long as it takes;
-   -EPIPE once nothing can be sent (-ECONNRESET, -ETIMEDOUT when that ended it), -ENOTCONN on a
-   listening socket. Cut short (a kill, Ctrl+C): what was queued, or -EINTR. */
+/* 10/6/26: write() on a connection: as many bytes as fit in the send buffer now, at least one: it
+   waits (as long as it takes, a kill or Ctrl+C aside: -EINTR) only while none fits, so after poll()
+   says POLLOUT it never waits; the caller writes the rest later. -ECONNRESET or -ETIMEDOUT when
+   that ended the connection, -EPIPE once it is closed both ways, -ENOTCONN on a listening socket. */
 int tcp_write(struct tcp_socket *s, const void *data, u_int len) {
-    const u8 *p = (const u8 *)data;
-    u_int done = 0;
     int r = 0;
     mutex_lock(&net_lock);
     if(s->state == LISTEN) r = -ENOTCONN;
-    while(!r && done < len) {
-        if(!can_send(s)) r = send_error(s);
-        else if(s->tx_len == TCP_BUF) {
-            if(!WAIT_FOR(s, s->tx_len < TCP_BUF || !can_send(s), TCP_NO_LIMIT) && task_interrupted()) r = -EINTR;
-        } else done += queue_some(s, p + done, len - done);
-    }
+    else if(!WAIT_FOR(s, s->tx_len < TCP_BUF || !can_send(s), TCP_NO_LIMIT)) r = -EINTR;
+    else if(!can_send(s)) r = send_error(s);
+    else r = (int)queue_some(s, (const u8 *)data, len);
     mutex_unlock(&net_lock);
-    return done ? (int)done : r;
+    return r;
 }
 
-/* the received bytes, up to size, into buf; under net_lock, with something there */
+/* the received bytes, up to size, into buf; under net_lock, with something there. 10/6/26: the
+   window opened: the other end hears of it when that matters (from less than a segment to one or
+   more, or by two segments); smaller openings it finds by itself, probing a shut window */
 static int take_rx(struct tcp_socket *s, void *buf, u_int size) {
-    u_int n = s->rx_len < size ? s->rx_len : size;
+    u_int n = s->rx_len < size ? s->rx_len : size, before = TCP_BUF - s->rx_len, after;
     memcpy(buf, s->rxbuf, n);
     memmove(s->rxbuf, s->rxbuf + n, s->rx_len - n);
     s->rx_len -= n;
-    if(s->state != CLOSED) send_ack(s);                  /* the window opened */
+    after = TCP_BUF - s->rx_len;
+    if(s->state != CLOSED && ((before < s->mss && after >= s->mss) || after - before >= 2u * s->mss)) send_ack(s);
     return (int)n;
 }
 
