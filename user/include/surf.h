@@ -69,7 +69,8 @@ int msleep(unsigned int ms);
 /* the terminal (include/surfos/tty.h has the full description) */
 #define TTY_RAW     1   /* arg 1: keys one at a time, no echo, special keys as escape sequences; 0: lines */
 #define TTY_GETSIZE 2   /* returns (columns << 16) | rows */
-#define TTY_PAGE    3   /* arg 1: this program's output and its children's is paged (--More--); 0: not */
+#define TTY_PAGE    3   /* arg 1: this program's output and its children's is paged (--More--); 0: paging ends, if
+                           this program turned it on. Under a shell that pages it, 1 and 0 only start a new screenful */
 #define TTY_CAPS    4   /* returns the TTY_CAP_ flags */
 #define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
 #define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */

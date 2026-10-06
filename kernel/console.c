@@ -417,6 +417,8 @@ static void ansi_csi(surf_console *con, TEXTCOLOR color, int final) {
         if(con->param[0] == 0) ansi_blank(con, here, COLUMNS * LINES, attr);
         else if(con->param[0] == 1) ansi_blank(con, 0, here + 1, attr);
         else if(con->param[0] == 2) ansi_blank(con, 0, COLUMNS * LINES, attr);
+        if(con->param[0] == 2 || (con->param[0] == 0 && here == 0))
+            con->page_rows = 0;                          /* 10/6/26: an empty screen, a new screenful for the pager */
         break;
     case 'K':                                            /* erase in line: 0 right, 1 left, 2 all */
         con->wrap = 0;
@@ -532,8 +534,9 @@ static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
     draw on, or start, another row, that task first waits: TTY_MORE in inverse video on
     that row, one key from the tty (the keyboard or the serial port), and the question is
     taken away again (the row as it was, the cursor at its start; CR ESC[K on the serial
-    terminal). Space or any other key shows another screenful, Enter one more row; q, Q
-    or Esc drops what the paged tasks print until paging ends or the terminal is read.
+    terminal). Space or any other key shows another screenful, Enter one more row; q, Q,
+    Esc or Ctrl-C drops what the paged tasks print until paging ends, or until a paged task
+    reads (what it printed since the last newline, its question, shows then) or ends.
 
     A task waits only where it may: in task context, with interrupts on, outside
     KCRIT_ENTER, holding no mutex, not in raw mode, and while no other task waits to read
@@ -684,7 +687,7 @@ static void page_ask(surf_console *con, struct tty *t) {
     con->page_cancel = 0;
     irq_restore(flags);
     wake_up_all(&t->page_waiters);
-    if(key == 'q' || key == 'Q' || key == 0x1B) con->page_drop = 1;
+    if(key == 'q' || key == 'Q' || key == 0x1B || key == 0x03) con->page_drop = 1;   /* q, Esc, Ctrl-C */
     else con->page_rows = (key == '\n' || key == '\r') ? LINES - 2 : 0;
 }
 

@@ -332,19 +332,23 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 /* 10/6/26: TTY_PAGE (tty.h). Paging belongs to the task that turned it on, its owner: what
    the owner and the tasks descended from it print on this terminal is paged until the
    owner turns it off or ends (tty_task_gone). TTY_PAGE 1 again from the owner starts a new
-   screenful. A task that is paged already, a program the owner started, keeps being paged
-   whatever it asks: TTY_PAGE 1 and 0 change nothing for it except that output dropped
-   after q shows again (a program of its own starts, or one has ended), so a nested shell
-   is seen. Any other task cannot take the pager while it is in use: EBUSY. */
+   screenful. An ancestor of the owner takes the pager over (a shell whose job in the
+   background turned paging on, and which runs a command now). A task that is paged
+   already, a program the owner started, keeps being paged whatever it asks: TTY_PAGE 1
+   and 0 start a new screenful for it and end a drop (a program of its own starts, or one
+   has ended), so a nested shell's prompt is seen and never asked about. Any other task
+   cannot take the pager while it is in use: EBUSY, and its TTY_PAGE 0 changes nothing. */
 static int tty_page(struct tty *t, int on) {
     surf_console *con = t->con;
-    int r = 0;
+    struct surf_task *o;
+    int r = 0, depth;
     u_long flags = irq_save();
-    if(!con->page_owner || con->page_owner == curTask) {
+    for(o = con->page_owner, depth = 0; o && o != curTask && depth < 64; o = o->parent, depth++);
+    if(!con->page_owner || o == curTask) {              /* free, its own, or an ancestor's to take over */
         if(on) console_page_start(con, curTask);
         else if(con->page_owner) console_page_start(con, NULL);
     } else if(console_paging(con)) {
-        con->page_drop = 0;
+        console_page_new(con);
     } else if(on) {
         r = -16;                                  /* EBUSY */
     }
@@ -364,7 +368,10 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);
-        if(arg) console_page_read(t->con);        /* 10/6/26: a full-screen program is never paged, nor dropped */
+        /* 10/6/26: a full-screen program is never paged nor dropped (raw mode on reads, as far as
+           the pager is concerned); after it, a new screenful */
+        if(arg) console_page_read(t->con);
+        else console_page_new(t->con);
         return 0;
     }
     return -22;                                   /* EINVAL */

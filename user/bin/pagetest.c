@@ -15,6 +15,8 @@ pagetest ask N  the same lines, then a question ("pagetest question: ") and the 
                 still shows, when the program reads.
 pagetest crash N  the same lines, then a write through a NULL pointer: after q the
                 kernel's report of the crash still shows.
+pagetest hold MS  turns the pager on, waits MS milliseconds and says "PAGETEST HELD":
+                a program in the background that holds the pager.
 pagetest utf8   one line of UTF-8 samples: SurfOS's symbols, accented letters, signs,
                 box drawing, and the euro sign, which code page 437 lacks and the
                 console draws as '?'. The tests read the line back from the screen.
@@ -68,12 +70,18 @@ int main(int argc, char **argv) {
         *nowhere = 1;
         return 0;
     }
+    if(argc == 3 && !strcmp(argv[1], "hold")) {
+        if(ttyctl(TTY_PAGE, 1) < 0) perror("pagetest: TTY_PAGE");
+        msleep((unsigned int)atoi(argv[2]));
+        printf("PAGETEST HELD\n");
+        return 0;
+    }
     n = argc == 2 ? atoi(argv[1]) : 0;
     if(n > 0) {
         lines(n);
         printf("PAGETEST DONE\n");
         return 0;
     }
-    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | utf8 | caps\n");
+    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | hold <ms> | utf8 | caps\n");
     return 2;
 }

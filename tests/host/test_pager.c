@@ -265,7 +265,7 @@ static void t_screenful(void) {
 }
 
 static void t_quit(void) {
-    static const int keys[] = { 'q', 'Q', 0x1B };
+    static const int keys[] = { 'q', 'Q', 0x1B, 0x03 };
     char what[96];
     unsigned i;
     int st;
@@ -548,6 +548,64 @@ static void t_drop_crash(void) {
     check(screen_has("killed by \"Page Fault\"") && !dropping(), "after q, a paged program's crash report still shows");
 }
 
+/* TTY_PAGE from a task that is paged already (a nested shell): a new screenful */
+static void t_nested(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 24);                     /* the nested shell's command filled the screen exactly */
+    run(CHILD, w_page, 0, 0);               /* the nested shell: its command ended */
+    say_text = "SURF > ";
+    st = run(CHILD, w_say, 0, 0);
+    check(st == DONE && asker() < 0 && screen_has("SURF >") && owner() == SHELL,
+          "a nested TTY_PAGE 0 starts a new screenful: its prompt after an exact fit does not ask");
+    reset(0);
+    paged_lines(1, 30);
+    sim_input('q');
+    resume(CHILD);
+    run(GRAND, w_page, 1, 0);               /* a program the command starts turns paging on */
+    say(GRAND, "grand\n");
+    check(owner() == SHELL && screen_has("grand"), "and ends a drop, while the pager stays its owner's");
+}
+
+/* a shell whose background job turned paging on takes the pager for its next command */
+static void t_takeover(void) {
+    int st;
+    reset(0);
+    run(BG, w_page, 1, 0);                  /* the job, while the shell waits at its prompt */
+    check(owner() == BG, "a background job takes the free pager");
+    st = run(SHELL, w_page, 1, 0);
+    check(owner() == SHELL, "the shell, its parent, takes it over for its command (no EBUSY)");
+    st = run(CHILD, w_lines, 1, 30);
+    check(st == BLOCKED && asker() == CHILD, "and the command is paged");
+    sim_input(' ');
+    resume(CHILD);
+    run(USB, w_page, 1, 0);
+    check(owner() == SHELL, "a task that is no ancestor still cannot take it");
+}
+
+/* an empty screen, or the end of raw mode: a new screenful */
+static void t_new_screenful(void) {
+    int st;
+    reset(0);
+    paged_lines(1, 20);
+    say(CHILD, "\033[2J\033[H");
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "ESC[2J ESC[H: 24 more lines fit the empty screen");
+    st = run(CHILD, w_lines, 125, 125);
+    check(st == BLOCKED, "the 25th asks");
+    reset(0);
+    paged_lines(1, 20);
+    say(CHILD, "\033[H\033[J");
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "ESC[H ESC[J: the same");
+    reset(0);
+    paged_lines(1, 20);
+    run(CHILD, w_raw, 1, 0);
+    run(CHILD, w_raw, 0, 0);
+    st = run(CHILD, w_lines, 101, 124);
+    check(st == DONE && asker() < 0, "after raw mode: a new screenful");
+}
+
 static void t_caps(void) {
     reset(0);
     check(sim_ttyctl(TTY_CAPS, 0) == 3, "TTY_CAPS: UTF-8 and colour");
@@ -573,6 +631,9 @@ int main(void) {
     t_question_gives_way();
     t_drop_question();
     t_drop_crash();
+    t_nested();
+    t_takeover();
+    t_new_screenful();
     t_caps();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
