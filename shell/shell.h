@@ -38,7 +38,7 @@ void demoBeep(void);
 void getFunky(int tempo);
 void funky(void);
 
-/* selftest.c */
+/* selftest.c: one of them at a time (10/6/26), a second is refused and fails */
 int heaptest(void);         /* 0 = pass */
 int run_selftest(void);     /* 0 = all pass */
 

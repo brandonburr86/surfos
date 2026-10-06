@@ -4,6 +4,13 @@ SurfOS kernel self tests
 
 `selftest` in the shell; `make test` runs it over the serial console and looks for
 SELFTEST PASS. Every test prints one line; the summary prints the verdict.
+
+10/6/26: the user shell runs selftest and heaptest in its own task (SYS_kcmd), on any
+console and from any program, so two could run at once. They share this file's state
+(the counters, the ring and its semaphores, test_event, ansi_con, the files of fixed
+names on /hda1, /selftest-stick, the scratch ramdisk rd1), a second run would
+re-initialise a semaphore or an event the first one waits on, and two heaptests freed
+each other's blocks. So one runs at a time, and a second is refused (status 1).
 */
 
 #include <blibc_common.h>
@@ -30,6 +37,7 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 #include <sys/usb.h>
 #include <surfos/tty.h>
 #include <surfos/keyboard.h>
+#include <surfos/irq.h>
 #include "shell.h"
 
 static int fails;
@@ -39,28 +47,61 @@ static void check(bool ok, const char *what) {
     if(!ok) fails++;
 }
 
+/**** one at a time (10/6/26) ****/
+
+/* The task running a self test or heaptest, and which one. Not a mutex: the pager lets a
+   task that holds one print on without stopping, and nobody waits for this one, a second
+   run is refused at once. A heaptest whose task was killed leaves nothing behind but
+   memory and gives way; a killed self test may leave helper tasks waiting on its
+   semaphores, so the self test stays refused until a reboot then. */
+static u_long busy_pid;
+static bool busy_selftest;
+
+static bool claim(const char *what, bool selftest) {
+    u_long flags = irq_save(), pid = busy_pid;
+    surf_task *t = pid ? task_find(pid) : NULL;
+    bool killed = pid && (!t || t->state == TS_DEAD);
+    if(!pid || (killed && !busy_selftest)) {
+        busy_pid = curTask->pid;
+        busy_selftest = selftest;
+        irq_restore(flags);
+        return true;
+    }
+    irq_restore(flags);
+    if(killed) printf("    %s: a self test (pid %lu) was killed before it ended: no other until a reboot\n", what, pid);
+    else printf("    %s: the %s of pid %lu is running: one at a time\n", what, busy_selftest ? "self test" : "heaptest", pid);
+    return false;
+}
+
+static void unclaim(void) {
+    busy_pid = 0;
+}
+
 /**** heap ****/
 
 /* Random allocate/free with a byte pattern per block, then everything freed and the
-   heap walked and compared with the starting point. */
-int heaptest() {
+   heap walked and compared with the starting point. 10/6/26: the tables are the run's
+   own, from the heap, allocated before the starting point is taken. */
+static int heap_round(void) {
     enum { SLOTS = 192, ROUNDS = 20000 };
-    static void *ptrs[SLOTS];
-    static u_int sizes[SLOTS];
+    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; } *s = kcalloc(1, sizeof(*s));
     struct heap_stats before, after;
     u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
 
-    memset(ptrs, 0, sizeof(ptrs));
+    if(!s) {
+        printf("heaptest: no memory for its tables: HEAPTEST FAIL\n");
+        return 1;
+    }
     kheap_stats(&before);
     srand(getticks() + 7);
     for(r = 0; r < ROUNDS; r++) {
         i = rand() % SLOTS;
-        if(ptrs[i]) {
-            u_char *p = ptrs[i];
+        if(s->ptrs[i]) {
+            u_char *p = s->ptrs[i];
             u_int k;
-            for(k = 0; k < sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
-            kfree(ptrs[i]);
-            ptrs[i] = NULL;
+            for(k = 0; k < s->sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
+            kfree(s->ptrs[i]);
+            s->ptrs[i] = NULL;
             frees++; live--;
         } else {
             u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
@@ -68,18 +109,27 @@ int heaptest() {
             u_int k;
             if(!p) { bad++; continue; }
             for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
-            ptrs[i] = p; sizes[i] = sz;
+            s->ptrs[i] = p; s->sizes[i] = sz;
             allocs++; live++;
             if(live > maxlive) maxlive = live;
         }
     }
-    for(i = 0; i < SLOTS; i++) if(ptrs[i]) { kfree(ptrs[i]); ptrs[i] = NULL; frees++; }
+    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) { kfree(s->ptrs[i]); s->ptrs[i] = NULL; frees++; }
     kheap_stats(&after);
     if(!kheap_check()) bad++;
     if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
+    kfree(s);
     printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
            allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
     return bad ? 1 : 0;
+}
+
+int heaptest() {
+    int r;
+    if(!claim("heaptest", false)) return 1;
+    r = heap_round();
+    unclaim();
+    return r;
 }
 
 /**** tasks ****/
@@ -940,9 +990,11 @@ static void test_usb(void) {
 }
 
 int run_selftest(void) {
+    if(!claim("selftest", true)) return 1;
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
-    check(heaptest() == 0, "heap");
+    check(heap_round() == 0, "heap");
+    check(heaptest() == 1, "a heaptest while the self test runs is refused");
     test_bdev();
     test_boot_drive();
     test_part_commit();
@@ -965,5 +1017,6 @@ int run_selftest(void) {
     test_libc();
     test_tty();
     printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
+    unclaim();
     return fails;
 }

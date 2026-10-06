@@ -221,6 +221,11 @@ SMOKE = [
     ('echo status $?', ['status 42']),
     # the bridge (SYS_kcmd, SYS_kcmdinfo) from user space: statuses, errors, run, redirection, cut output, the table
     ('run kcmdtest /hda1', ['KCMDTEST PASS', 'exit status 0']),
+    # one self test or heaptest at a time, since they share state: four heaptests at once from four processes;
+    # a self test run through kcmd by a process with a child of its own leaves that child to it
+    ('run kcmdtest together /hda1', ['four heaptests at once', 'KCMDTEST PASS', 'exit status 0']),
+    ('run kcmdtest child-selftest /hda1/KSELF.TXT',
+     ["kcmd selftest: status 0; this process's own child: collected, exit status 42", 'exit status 0']),
     # a question while the output goes to a file: seen and answered on the console; the rest is in the file
     ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['kcmdtest: fdisk: status 1'])]),
     ('cat /hda1/FDISK.TXT', ['rd1: scratch.img, 64M', 'change: ', 'Cancelled']),
@@ -328,7 +333,8 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60}
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
+            'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 

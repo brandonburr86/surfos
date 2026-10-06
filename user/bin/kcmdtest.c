@@ -20,6 +20,15 @@ kernel lets go of the file when the process is collected). It never returns.
 
 kcmdtest run <file> <command> [args...]: one kernel command with descriptor 1 on file
 ("-": the console), then its status; a question it asks is still seen on the console.
+The program's exit status is the command's (125 when kcmd itself failed).
+
+kcmdtest together <dir> (10/6/26): four heaptests at once, each run by a process of its
+own with its output in a file in <dir>: one runs at a time and the others are refused,
+and a heaptest alone afterwards finds the heap whole.
+
+kcmdtest child-selftest [file] (10/6/26): kcmd selftest from a process that has a child
+of its own (hello, ended and not yet collected): the self test passes and leaves the
+child to its parent, which collects its exit status 42 afterwards.
 */
 
 #include <stdio.h>
@@ -200,7 +209,62 @@ static int run(const char *file, char **argv) {
     if(out_to(NULL) < 0) return 3;
     if(r < 0) printf("kcmdtest: %s: %s\n", argv[0], strerror(errno));
     else printf("kcmdtest: %s: status %d\n", argv[0], r);
-    return r < 0 ? 1 : 0;
+    return r < 0 ? 125 : r;
+}
+
+/* four heaptests at once: one at a time, the others refused; the heap is whole afterwards */
+static int together(void) {
+    char *files[4], *argv[4][5], buf[600];
+    char *heaptest[] = { "heaptest", NULL };
+    int pids[4], i, ran = 0, refused = 0, odd = 0, status, r;
+    for(i = 0; i < 4; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "KHEAP%d.TXT", i);
+        files[i] = in_dir(name);
+        argv[i][0] = "kcmdtest";
+        argv[i][1] = "run";
+        argv[i][2] = files[i];
+        argv[i][3] = "heaptest";
+        argv[i][4] = NULL;
+    }
+    fflush(stdout);
+    for(i = 0; i < 4; i++) pids[i] = spawn("/initrd/bin/kcmdtest", argv[i]);
+    for(i = 0; i < 4; i++) {
+        status = -99;
+        buf[0] = 0;
+        if(pids[i] < 0 || waitpid(pids[i], &status, 0) != pids[i] || slurp(files[i], buf, sizeof(buf)) < 0) odd++;
+        else if(status == 1 && strstr(buf, "one at a time")) refused++;
+        else if((status == 0 || status == 1) && strstr(buf, "heaptest: ") && strstr(buf, "HEAPTEST")) ran++;
+        else odd++;
+        unlink(files[i]);
+    }
+    printf("kcmdtest: four heaptests at once: %d ran, %d refused, %d otherwise\n", ran, refused, odd);
+    check(ran >= 1 && !odd, "four heaptests at once: one at a time, the others refused, no kernel panic");
+    r = out_to(files[0]) == 0 ? kcmd(heaptest) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0 && slurp(files[0], buf, sizeof(buf)) > 0 && strstr(buf, "HEAPTEST PASS"), "a heaptest alone afterwards: the heap is whole");
+    unlink(files[0]);
+    printf("%d checks, %d failed\n", checks, failures);
+    puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
+    return failures ? 1 : 0;
+}
+
+/* kcmd selftest from a process with a child of its own that has ended: the child stays its own */
+static int child_selftest(const char *file) {
+    char *hello[] = { "hello", "kcmdtest's child", NULL };
+    char *selftest[] = { "selftest", NULL };
+    int pid, r = -2, w, status = -99;
+    fflush(stdout);
+    pid = spawn("/initrd/bin/hello", hello);
+    if(pid < 0) { printf("kcmdtest: hello: %s\n", strerror(errno)); return 1; }
+    msleep(300);                                        /* it has ended by now: a child not yet collected */
+    if(!file || out_to(file) == 0) r = kcmd(selftest);
+    if(file && out_to(NULL) < 0) exit(3);
+    w = waitpid(pid, &status, 0);
+    printf("kcmdtest: kcmd selftest: status %d; this process's own child: %s, exit status %d\n", r,
+           w == pid ? "collected" : "gone", status);
+    if(file) unlink(file);
+    return r == 0 && w == pid && status == 42 ? 0 : 1;
 }
 
 /* a kernel command that faults ends the process that ran it */
@@ -214,28 +278,38 @@ static int crash(const char *file) {
     return 1;
 }
 
-int main(int argc, char **argv) {
+/* dir: the directory to work in, absolute (so getcwd() can be compared with it); 0 or -1 */
+static int set_dir(const char *arg) {
     struct stat st;
     size_t n;
-    if((argc == 2 || argc == 3) && !strcmp(argv[1], "crash")) return crash(argc == 3 ? argv[2] : NULL);
-    if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
-    if(argc != 2) {
-        fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
-                        "       kcmdtest crash [file]\n"
-                        "       kcmdtest run <file|-> <command> [args...]\n");
-        return 2;
-    }
-    if(argv[1][0] == '/') snprintf(dir, sizeof(dir), "%s", argv[1]);
-    else {                                              /* absolute, so getcwd() can be compared with it */
+    if(arg[0] == '/') snprintf(dir, sizeof(dir), "%s", arg);
+    else {
         char cwd[PATH_MAX];
-        snprintf(dir, sizeof(dir), "%s/%s", getcwd(cwd, sizeof(cwd)) ? (strcmp(cwd, "/") ? cwd : "") : ".", argv[1]);
+        snprintf(dir, sizeof(dir), "%s/%s", getcwd(cwd, sizeof(cwd)) ? (strcmp(cwd, "/") ? cwd : "") : ".", arg);
     }
     n = strlen(dir);
     while(n > 1 && dir[n - 1] == '/') dir[--n] = 0;
     if(stat(dir, &st) < 0 || !S_ISDIR(st.type)) {
         fprintf(stderr, "kcmdtest: %s: not a directory\n", dir);
-        return 1;
+        return -1;
     }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if((argc == 2 || argc == 3) && !strcmp(argv[1], "crash")) return crash(argc == 3 ? argv[2] : NULL);
+    if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
+    if(argc == 3 && !strcmp(argv[1], "together")) return set_dir(argv[2]) ? 1 : together();
+    if((argc == 2 || argc == 3) && !strcmp(argv[1], "child-selftest")) return child_selftest(argc == 3 ? argv[2] : NULL);
+    if(argc != 2) {
+        fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
+                        "       kcmdtest crash [file]\n"
+                        "       kcmdtest run <file|-> <command> [args...]\n"
+                        "       kcmdtest together <dir>\n"
+                        "       kcmdtest child-selftest [file]\n");
+        return 2;
+    }
+    if(set_dir(argv[1])) return 1;
     printf("kcmdtest in %s\n", dir);
     test_status();
     test_info();
