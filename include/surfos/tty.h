@@ -62,7 +62,24 @@ void tty_switch(int index);
    ESC[1m (bright), ESC[7m (inverse), ESC[30-37m, ESC[40-47m, ESC[?25l / ESC[?25h (cursor). */
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
-int tty_ctl(struct tty *t, int op, u32 arg);   /* 0 or the size; -errno */
+/* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
+   it starts is paged. After a screenful (the console's rows less one) the console shows
+   TTY_MORE on its last row and waits for a key: Space shows the next screenful, Enter one
+   more line, q or Esc leaves the rest unshown until paging ends. The pause happens only
+   where a task may wait (task context, interrupts on, no lock held) and never in raw mode;
+   reading from the console starts a new screenful. TTY_PAGE 0 ends paging, and so does
+   the end of the task that set it. The user shell pages every command it runs, the
+   kernel's shell its own commands.
+   TTY_CAPS: TTY_CAP_* flags. TTY_CAP_UTF8: the console draws UTF-8 text: ASCII, the
+   characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
+   mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. TTY_CAP_COLOR:
+   the ANSI colours above. */
+#define TTY_PAGE    3
+#define TTY_CAPS    4
+#define TTY_CAP_UTF8  1
+#define TTY_CAP_COLOR 2
+#define TTY_MORE    "--More-- (Space: next page, Enter: next line, q: skip the rest)"
+int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -errno */
 
 /* the kernel's side of raw mode: keys from the keyboard (special keys become their escape
    sequences), read(2) on /dev/console, and the end of the task that set it (task.c) */

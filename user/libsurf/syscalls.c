@@ -24,6 +24,7 @@ kernel answers -errno on failure; the wrappers turn that into -1 and errno.
 typedef char stat_layout_is_fixed[sizeof(struct stat) == 40 ? 1 : -1];
 typedef char statfs_layout_is_fixed[sizeof(struct statfs) == 116 ? 1 : -1];
 typedef char dirent_layout_is_fixed[sizeof(struct dirent) == 268 ? 1 : -1];
+typedef char kcmd_info_layout_is_fixed[sizeof(struct kcmd_info) == 176 ? 1 : -1];
 
 int errno;
 
@@ -131,6 +132,10 @@ int yield(void) { return (int)sc(SYS_yield, 0, 0, 0); }
 unsigned int uptime(void) { return (unsigned int)sc(SYS_uptime, 0, 0, 0); }
 int msleep(unsigned int ms) { sc(SYS_sleep, (long)ms, 0, 0); return 0; }
 int ttyctl(int op, unsigned int arg) { return (int)ret(sc(SYS_ttyctl, op, (long)arg, 0)); }
+
+/* 10/6/26: the kernel's shell commands (surfos/kcmd.h) */
+int kcmd(char *const argv[]) { return (int)ret(sc(SYS_kcmd, (long)argv, 0, 0)); }
+int kcmdinfo(int index, struct kcmd_info *out) { return (int)ret(sc(SYS_kcmdinfo, index, (long)out, 0)); }
 int getdent(int fd, struct dirent *de) { return (int)ret(sc(SYS_readdir, fd, (long)de, 0)); }
 
 int wait(int pid, int *status) {

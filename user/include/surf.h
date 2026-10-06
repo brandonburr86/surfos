@@ -4,7 +4,8 @@ SurfOS user library (libsurf)
 File: surf.h    Date: 10/3/26 (roadmap P2), 10/5/26
 ----------------------
 What only SurfOS has: starting and waiting for programs, the terminal control
-call of full-screen programs, the uptime and the raw directory call.
+call of full-screen programs, the uptime and the raw directory call. Since
+10/6/26 also the kernel's shell commands (kcmd), for the user shell surfsh.
 
 Since 10/5/26 libsurf is a small C library with standard headers (stdio.h,
 stdlib.h, string.h, unistd.h, fcntl.h, sys/stat.h, dirent.h, time.h, ...) and
@@ -66,7 +67,16 @@ int msleep(unsigned int ms);
 /* the terminal (include/surfos/tty.h has the full description) */
 #define TTY_RAW     1   /* arg 1: keys one at a time, no echo, special keys as escape sequences; 0: lines */
 #define TTY_GETSIZE 2   /* returns (columns << 16) | rows */
+#define TTY_PAGE    3   /* arg 1: this program's output and its children's is paged (--More--); 0: not */
+#define TTY_CAPS    4   /* returns the TTY_CAP_ flags */
+#define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
+#define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */
 int ttyctl(int op, unsigned int arg);
+
+/* the kernel's shell commands: lsblk, fdisk, mount, ps, ... (surfos/kcmd.h) */
+#include <surfos/kcmd.h>
+int kcmd(char *const argv[]);                   /* the command's status (0 success); -1 with errno ENOENT: none */
+int kcmdinfo(int index, struct kcmd_info *out); /* 0; -1 with errno ENOENT after the last entry */
 
 /* a directory entry from a descriptor opened with O_DIRECTORY: 0 an entry, 1 the end, -1 an error */
 int getdent(int fd, struct dirent *de);

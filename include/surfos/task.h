@@ -95,6 +95,9 @@ typedef struct surf_task {
 
     kthread_fn entry;
     void *arg;
+
+    struct kcapture *kcap;      /* 10/6/26: what this task prints to its console is kept here instead
+                                   (a kernel command redirected to a file, kernel/console.c) */
 } surf_task;
 
 extern surf_task *curTask;

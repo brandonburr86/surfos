@@ -285,6 +285,8 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
     if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
+    if(op == TTY_CAPS) return TTY_CAP_UTF8 | TTY_CAP_COLOR;
+    if(op == TTY_PAGE) return arg > 1 ? -22 : 0;  /* 10/6/26: accepted; the pager comes with the console's UTF-8 work */
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);

@@ -256,6 +256,8 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_time:    r = sys_time(); break;
     case SYS_ttyctl:  r = tty_ctl(curTask->tty, (int)a, b); break;
     case SYS_spawnfd: r = sys_spawnfd((const char *)a, (char *const *)b, (const int *)c); break;
+    case SYS_kcmd:    r = -ENOSYS; break;      /* 10/6/26: the kernel's shell commands (surfos/kcmd.h), */
+    case SYS_kcmdinfo: r = -ENOSYS; break;     /* which the shell's bridge will answer */
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;

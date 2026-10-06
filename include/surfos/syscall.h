@@ -6,6 +6,9 @@ File: syscall.h Date: 10/3/26 (roadmap P1)
 Shared by the kernel (kernel/syscall.c) and user programs (user/libsurf).
 int 0x80 with the number in eax and up to five arguments in ebx, ecx, edx,
 esi, edi; the result comes back in eax, negative values are -errno.
+
+10/6/26: calls 32 and 33 run and describe the kernel's shell commands for the
+user shell, surfsh (surfos/kcmd.h).
 */
 
 #ifndef _SURFOS_SYSCALL_H
@@ -45,7 +48,10 @@ esi, edi; the result comes back in eax, negative values are -errno.
 #define SYS_time    29   /* (): seconds since 1970, from the CMOS clock */
 #define SYS_ttyctl  30   /* (int op, u32 arg): TTY_RAW, TTY_GETSIZE (surfos/tty.h) */
 #define SYS_spawnfd 31   /* (const char *path, char *const argv[], const int fds[3]): pid; the child's 0, 1, 2 */
-#define NR_SYSCALLS 32
+/* 10/6/26 (the SurfOS shell, surfsh): the kernel's shell commands, surfos/kcmd.h */
+#define SYS_kcmd    32   /* (char *const argv[]): the command's status, -ENOENT when there is none */
+#define SYS_kcmdinfo 33  /* (int index, struct kcmd_info *out): 0, -ENOENT after the last */
+#define NR_SYSCALLS 34
 
 #define SPAWN_MAX_ARGS 32
 

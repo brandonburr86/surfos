@@ -458,7 +458,23 @@ static void newline(surf_console *con) {
     }
 }
 
+/* 10/6/26: a task's output kept instead of shown (console.h) */
+void console_capture_begin(struct kcapture *k) {
+    if(curTask) curTask->kcap = k;
+}
+
+void console_capture_end(void) {
+    if(curTask) curTask->kcap = NULL;
+}
+
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
+    /* 10/6/26: a redirected kernel command (console.h): its output goes to memory, not the screen */
+    if(con && curTask && curTask->kcap && con == curTask->con && !in_interrupt()) {
+        struct kcapture *k = curTask->kcap;
+        if(k->len < k->size) k->buf[k->len++] = (char)c;
+        else k->cut++;
+        return;
+    }
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);

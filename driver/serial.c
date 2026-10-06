@@ -76,7 +76,8 @@ void serial_puts(const char *s) {
 
 /* What the VGA console does with a character, done for a terminal instead.
    10/5/26: carriage returns and escape sequences (tty.h) pass through; the terminal
-   draws the sequences itself. */
+   draws the sequences itself. 10/6/26: so do the bytes of UTF-8 characters (the
+   prompt's ▸ and ≋): the terminal is taken to speak UTF-8. */
 void serial_console_putc(int c) {
     switch(c) {
     case '\n':
@@ -93,7 +94,7 @@ void serial_console_putc(int c) {
         serial_putc((char)c);
         break;
     default:
-        if(c >= 32 && c <= 126) serial_putc((char)c);
+        if((c >= 32 && c <= 126) || c < 0 || c >= 0x80) serial_putc((char)c);    /* a char above 0x7f may come signed */
         break;
     }
 }

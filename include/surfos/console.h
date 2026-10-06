@@ -80,6 +80,18 @@ void init_console_grid(void);    /* a framebuffer's whole grid, after init_inter
    the cursor shown) when the task that changed them ends, and for a panic report. */
 void console_reset_ansi(surf_console *con);
 void console_task_gone(struct surf_task *task);   /* interrupts off */
+
+/* 10/6/26: a task's console output kept in memory instead of shown (the user shell's
+   redirection of a kernel command, kernel/syscall.c). From console_capture_begin() until
+   console_capture_end() every byte the calling task prints on its own console, outside
+   interrupts, goes into buf (escape sequences too); what does not fit is counted in cut. */
+struct kcapture {
+    char *buf;
+    u_int len, size;
+    u_long cut;
+};
+void console_capture_begin(struct kcapture *k);
+void console_capture_end(void);
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */
 
 extern surf_console *conActive;
