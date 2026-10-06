@@ -172,6 +172,7 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fsty
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
+bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
 int vfs_sync(void);
 const struct mount *vfs_mounts(void);
 

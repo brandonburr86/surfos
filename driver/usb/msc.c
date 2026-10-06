@@ -44,7 +44,9 @@ came out finds it marked gone instead of freed memory.
 
 #define SK_NOT_READY   0x02
 #define SK_UNIT_ATTENTION 0x06
+#define SK_ILLEGAL_REQUEST 0x05
 #define ASC_NO_MEDIUM  0x3a
+#define ASC_MEDIUM_CHANGED 0x28
 
 struct msc;
 
@@ -52,6 +54,8 @@ struct msc_lun {
     struct msc *m;
     u8 lun;
     bool inquired, usable, removable;
+    volatile bool changed;              /* the medium may have changed under the disk: drop it, probe again */
+    bool bad_medium;                    /* this medium cannot be used (said once, until it is taken out) */
     char vendor[9], product[17];
     struct bdev *disk;                  /* registered while a medium is there (never freed) */
     u_long next_poll;                   /* tick of the next TEST UNIT READY for a removable unit */
@@ -64,7 +68,8 @@ struct msc {
     u32 tag;
     mutex_t lock;                       /* one command at a time; held across the whole exchange */
     volatile bool gone;                 /* unplugged and quiesced: every call fails */
-    u8 *cbw, *csw, *data;               /* DMA heap */
+    u8 *cbw, *csw, *sense, *data;       /* DMA heap: the sense data has its own buffer, so a retried WRITE
+                                           still sends the caller's data */
     void *small_raw, *data_raw;
     u8 sense_key, asc, ascq;
     u_long resets;
@@ -111,7 +116,8 @@ static int reset_recovery(struct msc *m, int err) {
 
 /* One command: the command block wrapper (31 bytes), the data stage, the status wrapper
    (13 bytes). 0, BOT_CHECK, or USB_E*. *got: data bytes moved. m->lock is held. */
-static int bot_command(struct msc_lun *l, const u8 *cdb, u_int cdb_len, u_int len, bool in, u_int timeout_ms, u_int *got) {
+static int bot_command(struct msc_lun *l, const u8 *cdb, u_int cdb_len, u8 *buf, u_int len, bool in, u_int timeout_ms,
+                       u_int *got) {
     struct msc *m = l->m;
     struct usb_endpoint *dep = in ? m->in : m->out;
     u32 tag = ++m->tag;
@@ -131,7 +137,7 @@ static int bot_command(struct msc_lun *l, const u8 *cdb, u_int cdb_len, u_int le
     if(r != 31) return reset_recovery(m, r);
 
     if(len) {
-        r = usb_bulk_sync(dep, m->data, len, timeout_ms);
+        r = usb_bulk_sync(dep, buf, len, timeout_ms);
         if(r == USB_ESTALL) {
             /* the device stopped the data stage early: clear the halt, then the status follows */
             if(usb_endpoint_recover(dep, 5000) != 0) return reset_recovery(m, USB_EIO);
@@ -158,22 +164,30 @@ static void request_sense(struct msc_lun *l) {
     u_int got;
     m->sense_key = 0xff;
     m->asc = m->ascq = 0;
-    if(bot_command(l, cdb, 6, 18, true, 5000, &got) == 0 && got >= 14) {
-        m->sense_key = m->data[2] & 0x0f;
-        m->asc = m->data[12];
-        m->ascq = m->data[13];
+    if(bot_command(l, cdb, 6, m->sense, 18, true, 5000, &got) == 0 && got >= 14) {
+        m->sense_key = m->sense[2] & 0x0f;
+        m->asc = m->sense[12];
+        m->ascq = m->sense[13];
     }
 }
 
-/* a command with REQUEST SENSE after a failure, retried after a unit attention (power-on, a
-   medium change); 0, BOT_CHECK with m->sense_*, or USB_E*. m->lock is held. */
+/* A command with REQUEST SENSE after a failure: 0, BOT_CHECK with m->sense_*, or USB_E*.
+   A unit attention (power-on, a reset) is retried, except "the medium may have changed" on a
+   removable unit that already has a disk: that disk's cache and mounts belong to the old medium,
+   so the command fails and the unit is marked for the usb thread to drop and probe again.
+   m->lock is held. */
 static int scsi(struct msc_lun *l, const u8 *cdb, u_int cdb_len, u_int len, bool in, u_int timeout_ms, u_int *got) {
     int r = USB_EIO, tries;
     for(tries = 0; tries < 3; tries++) {
-        r = bot_command(l, cdb, cdb_len, len, in, timeout_ms, got);
+        r = bot_command(l, cdb, cdb_len, l->m->data, len, in, timeout_ms, got);
         if(r != BOT_CHECK) return r;
         request_sense(l);
         if(l->m->sense_key != SK_UNIT_ATTENTION) return BOT_CHECK;
+        if(l->disk && l->removable && l->m->asc == ASC_MEDIUM_CHANGED) {
+            l->changed = true;
+            usb_wake();
+            return BOT_CHECK;
+        }
     }
     return r;
 }
@@ -184,22 +198,15 @@ static int scsi(struct msc_lun *l, const u8 *cdb, u_int cdb_len, u_int len, bool
 static void pick_name(char *name, size_t size) {
     u_int n;
     for(n = 0; n < 100; n++) {
-        const struct mount *mt;
-        bool used;
         snprintf(name, size, "usb%u", n);
-        used = bdev_find(name) != NULL;
-        for(mt = vfs_mounts(); mt && !used; mt = mt->next) {
-            struct bdev *d = mt->sb->dev;
-            if(d && (!strcmp(d->name, name) || (d->parent && !strcmp(d->parent->name, name)))) used = true;
-        }
-        if(!used) return;
+        if(!bdev_find(name) && !vfs_disk_name_mounted(name)) return;
     }
 }
 
-static void lun_drop(struct msc_lun *l, const char *why) {
-    struct bdev *d = l->disk;
+/* Unregister a disk. Never with m->lock held: bdev_unregister() takes the block cache's lock,
+   and the cache holds that lock while it reads and writes through msc_rw(), which takes m->lock. */
+static void disk_drop(struct bdev *d, const char *why) {
     if(!d) return;
-    l->disk = NULL;
     bdev_unregister(d);
     kprintf("+USB: %s: %s\n", d->name, why);
 }
@@ -219,7 +226,7 @@ static void lun_probe(struct msc_lun *l, bool announce) {
         memset(cdb, 0, sizeof(cdb));
         cdb[0] = 0x12;                                 /* INQUIRY */
         cdb[4] = 36;
-        if(scsi(l, cdb, 6, 36, true, 5000, &got) != 0 || got < 5) return;
+        if(scsi(l, cdb, 6, 36, true, 5000, &got) != 0 || got < 5) return;   /* asked again by msc_service */
         l->inquired = true;
         if((m->data[0] >> 5) == 3) return;             /* no such unit */
         l->usable = (m->data[0] & 0x1f) == 0x00 || (m->data[0] & 0x1f) == 0x0e;   /* block devices only */
@@ -242,9 +249,13 @@ static void lun_probe(struct msc_lun *l, bool announce) {
         r = scsi(l, cdb, 6, 0, false, 5000, &got);
         if(r == 0) break;
         if(r != BOT_CHECK || tries >= 10) return;
-        if(m->sense_key == SK_NOT_READY && m->asc == ASC_NO_MEDIUM) return;   /* an empty card reader slot */
+        if(m->sense_key == SK_NOT_READY && m->asc == ASC_NO_MEDIUM) {      /* an empty card reader slot */
+            l->bad_medium = false;
+            return;
+        }
         usb_msleep(100);
     }
+    if(l->bad_medium) return;                          /* the same unusable medium as last time */
     memset(cdb, 0, sizeof(cdb));
     cdb[0] = 0x25;                                     /* READ CAPACITY (10) */
     if(scsi(l, cdb, 10, 8, true, 5000, &got) != 0 || got < 8) return;
@@ -257,14 +268,15 @@ static void lun_probe(struct msc_lun *l, bool announce) {
         cdb[13] = 32;
         if(scsi(l, cdb, 16, 32, true, 5000, &got) != 0 || got < 12) return;
         bs = be32(m->data + 8);
-        blocks = be32(m->data) ? 0xffffffff : be32(m->data + 4);     /* the block layer counts in 32 bits */
+        blocks = (be32(m->data) || be32(m->data + 4) == 0xffffffff) ? 0xffffffff : be32(m->data + 4) + 1;
         kprintf("+USB: port %u: a disk of 2 TB or more: only its first 2 TB are used\n", m->udev->port);
     } else {
         blocks++;                                      /* READ CAPACITY gives the last block */
     }
+    if(bs == 0) bs = BDEV_BLOCK_SIZE;                  /* some devices leave it out */
     if(bs != BDEV_BLOCK_SIZE) {
         kprintf("+USB: port %u: %u-byte blocks are not supported (only 512)\n", m->udev->port, bs);
-        l->usable = false;
+        l->bad_medium = true;                          /* a card reader's next card may be fine */
         return;
     }
     memset(cdb, 0, sizeof(cdb));                       /* MODE SENSE (6), all pages: the write-protect bit */
@@ -352,8 +364,10 @@ static int msc_flush(struct bdev *d) {
     mutex_lock(&m->lock);
     r = (m->gone || m->udev->gone) ? USB_ENODEV : scsi(l, cdb, 10, 0, false, CMD_TIMEOUT, &got);
     mutex_unlock(&m->lock);
+    if(r == BOT_CHECK && m->sense_key != SK_ILLEGAL_REQUEST) kprintf("+USB: %s: flushing failed\n", d->name);
     if(r == USB_ENODEV) return BDEV_EGONE;
-    return r < 0 ? BDEV_EIO : 0;                       /* BOT_CHECK: not supported, nothing to flush */
+    if(r == BOT_CHECK && m->sense_key == SK_ILLEGAL_REQUEST) return 0;    /* not supported: no cache to flush */
+    return r ? BDEV_EIO : 0;
 }
 
 static const struct bdev_ops msc_ops = { msc_read, msc_write, msc_flush };
@@ -431,6 +445,7 @@ static int msc_attach(struct usb_device *udev) {
         return USB_ENOMEM;
     }
     m->csw = m->cbw + 64;
+    m->sense = m->cbw + 128;
     m->in = usb_endpoint_add(udev, in, in_comp);
     m->out = usb_endpoint_add(udev, out, out_comp);
     r = (!m->in || !m->out) ? USB_ENOMEM : usb_configure_endpoints(udev);
@@ -459,35 +474,48 @@ static int msc_attach(struct usb_device *udev) {
     return 0;
 }
 
-/* the usb thread, every second or so: a medium put in or taken out of a removable unit, or
-   a drive that was not ready when it was plugged in */
+/* The usb thread, every second or so: a medium put in or taken out of a removable unit, a
+   medium changed under its disk, or a drive that was not ready (or did not answer) when it was
+   plugged in. A device busy with a command is left for the next round: the usb thread must not
+   wait behind a long copy. */
 static void msc_service(struct usb_device *udev) {
     struct msc *m = (struct msc *)udev->driver_data;
+    struct bdev *drop[MSC_MAX_LUNS];
+    const char *why[MSC_MAX_LUNS];
+    u_int i, ndrop = 0;
     bool changed = false;
-    u_int i;
-    if(!m || m->gone) return;
-    mutex_lock(&m->lock);
+    if(!m || m->gone || !mutex_trylock(&m->lock)) return;
     for(i = 0; i < m->nluns; i++) {
         struct msc_lun *l = &m->luns[i];
         u8 cdb[6];
         u_int got;
         int r;
-        if(!l->usable || (l->disk && !l->removable) || (long)(getticks() - l->next_poll) < 0) continue;
+        if(l->changed && l->disk) {                    /* the medium changed under the disk */
+            drop[ndrop] = l->disk; why[ndrop++] = "the medium was changed";
+            l->disk = NULL;
+            l->changed = false;
+            changed = true;
+            l->next_poll = getticks();                 /* and look at the new one now */
+        }
+        if((l->inquired && !l->usable) || (l->disk && !l->removable) || (long)(getticks() - l->next_poll) < 0) continue;
         l->next_poll = getticks() + POLL_TICKS;
-        if(!l->disk) {                                 /* an empty slot, or a drive still spinning up */
+        if(!l->disk) {                                 /* an empty slot, a drive spinning up, a failed first probe */
             lun_probe(l, true);
             if(l->disk) changed = true;
             continue;
         }
         memset(cdb, 0, sizeof(cdb));                   /* TEST UNIT READY */
         r = scsi(l, cdb, 6, 0, false, 5000, &got);
-        if(r == BOT_CHECK && m->sense_key == SK_NOT_READY) {
-            lun_drop(l, "the medium was taken out");
+        if(r == BOT_CHECK && ((m->sense_key == SK_NOT_READY && m->asc == ASC_NO_MEDIUM) || l->changed)) {
+            drop[ndrop] = l->disk; why[ndrop++] = l->changed ? "the medium was changed" : "the medium was taken out";
+            l->disk = NULL;
+            l->changed = false;
             changed = true;
         }
     }
     if(changed) describe(m);
     mutex_unlock(&m->lock);
+    for(i = 0; i < ndrop; i++) disk_drop(drop[i], why[i]);
 }
 
 /* unplugged: wait for a task inside a command to come out (every wait in here gives up
@@ -505,12 +533,16 @@ static void msc_detach(struct usb_device *udev) {
     u_int i;
     if(!m) return;
     m->gone = true;
-    for(i = 0; i < m->nluns; i++) lun_drop(&m->luns[i], "unplugged");
+    for(i = 0; i < m->nluns; i++) {                    /* m->lock is not held here */
+        struct bdev *d = m->luns[i].disk;
+        m->luns[i].disk = NULL;
+        disk_drop(d, "unplugged");
+    }
     if(!udev->dma_live) {                              /* else the controller may still write there */
         kfree_dma(m->small_raw);
         kfree_dma(m->data_raw);
     }
-    m->cbw = m->csw = m->data = NULL;
+    m->cbw = m->csw = m->sense = m->data = NULL;
     udev->driver_data = NULL;                          /* m itself stays: a disk's priv still points into it */
 }
 

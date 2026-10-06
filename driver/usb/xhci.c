@@ -949,7 +949,23 @@ int xhci_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_
         xhci_poll(&x->hc);
         irq_restore(f);
         if(t.status != USB_PENDING) break;
-        if(x->hc.failed || dev->gone) return USB_ENODEV;   /* its ring is going away: hands off */
+        if(x->hc.failed || dev->gone) {
+            /* the controller is letting go of the device: no more commands for this endpoint,
+               but no late event may find a pointer into this stack frame either */
+            struct usb_ring *rg = &ep->ring;
+            f = irq_save();
+            if(t.status == USB_PENDING) {
+                u_int i = t.first, k;
+                for(k = 0; k < t.ntrbs; k++) {
+                    rg->owner[i] = NULL;
+                    if(++i == rg->n - 1) i = 0;
+                }
+                rg->used -= t.ntrbs;
+                t.status = USB_ENODEV;
+            }
+            irq_restore(f);
+            return USB_ENODEV;
+        }
         if(spins < SYNC_SPINS || !sleeping) {
             if(spins++ >= SYNC_SPINS + (u_long)timeout_ms * 100) break;
             udelay(10);
@@ -960,7 +976,7 @@ int xhci_bulk_sync(struct usb_endpoint *ep, void *buf, u_int len, u_int timeout_
     }
     if(t.status == USB_PENDING) {
         abort_xfer(ep, &t);
-        return USB_ETIMEOUT;
+        if(t.status != USB_OK) return USB_ETIMEOUT;   /* it may have finished while being stopped */
     }
     return t.status < 0 ? t.status : (int)t.actual;
 }
@@ -977,8 +993,16 @@ int xhci_endpoint_reset(struct usb_endpoint *ep) {
     u_int i;
     int rc;
     if(dev->gone || x->hc.failed) return USB_ENODEV;
-    for(i = 0; ep->recovering && i < 500; i++) usb_msleep(10);    /* someone else is resetting it */
-    ep->recovering = true;
+    for(i = 0; ; i++) {                                /* claim it; someone else may be resetting it */
+        bool mine;
+        f = irq_save();
+        mine = !ep->recovering;
+        if(mine) ep->recovering = true;
+        irq_restore(f);
+        if(mine) break;
+        if(i >= 500) return USB_EIO;
+        usb_msleep(10);
+    }
     ep_stop(ep);
     f = irq_save();
     for(i = 0; i < r->n; i++) {

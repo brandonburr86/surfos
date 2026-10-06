@@ -187,6 +187,19 @@ int vfs_umount(const char *path) {
     return 0;
 }
 
+/* is a disk of this name, or one of its partitions, mounted (it may be unplugged and gone)? */
+bool vfs_disk_name_mounted(const char *name) {
+    struct mount *m;
+    bool used = false;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m && !used; m = m->next) {
+        struct bdev *x = m->sb->dev;
+        if(x && (!strcmp(x->name, name) || (x->parent && !strcmp(x->parent->name, name)))) used = true;
+    }
+    mutex_unlock(&mount_lock);
+    return used;
+}
+
 /* is d, the disk it is on, or a partition of d mounted? */
 bool vfs_bdev_busy(struct bdev *d) {
     struct mount *m;
@@ -644,14 +657,12 @@ void init_fs(void) {
     r = vfs_mount(NULL, "/dev", "devfs");
     if(r) kprintf("*devfs: %s\n", strerror(r));
     for(d = bdev_first(); d; d = d->next) {
-        const struct fs_type *t = probe_type(d);
+        const struct fs_type *t;
         char path[VFS_PATH_MAX];
+        if(d->bus == BDEV_BUS_USB) continue;    /* USB drives are mounted by hand (mount usb0p1), in either profile */
+        t = probe_type(d);
         if(!t) continue;
         if(!strcmp(t->name, "tarfs") && !have_initrd) { strcpy(path, "/initrd"); have_initrd = true; }
-        else if(d->bus == BDEV_BUS_USB) {        /* USB drives are mounted by hand (mount usb0p1), in either profile */
-            kprintf("+VFS: %s (%s) not mounted (USB drives are mounted with mount)\n", d->name, t->name);
-            continue;
-        }
         else if(bootinfo.laptop) {               /* native hardware: never write a disk nobody asked for */
             kprintf("+VFS: %s (%s) not mounted (profile=laptop mounts only the initrd; use mount)\n", d->name, t->name);
             continue;

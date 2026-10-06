@@ -733,7 +733,8 @@ def scenario_usbdisk(args, image, firmware, outdir):
             boot = vm.text()
             results.append(('the second stick is the disk usb1 with partition usb1p1',
                             '+USB: usb1: QEMU QEMU HARDDISK, 16 MB' in boot and '+MBR: usb1p1' in boot))
-            results.append(('the boot does not mount a USB drive by itself', 'usb1p1 (fat) not mounted' in boot))
+            results.append(('the boot does not mount a USB drive by itself',
+                            not re.search(r'\+VFS: usb\S* mounted', boot)))
             for cmd, expects in [('lsblk', ['usb0', 'usb1', 'usb1p1']),
                                  ('mount usb1p1 /stick', ['+FAT16: usb1p1']),
                                  ('ls /stick', ['DOCS/', 'README']),
@@ -743,10 +744,15 @@ def scenario_usbdisk(args, image, firmware, outdir):
                                  ('cat /stick/NOTE.TXT', [note]),
                                  ('umount /stick', []),
                                  ('mount usb1p1 /stick', ['+FAT16: usb1p1']),
-                                 ('cat /stick/NOTE.TXT', [note]),
-                                 ('stat /stick/HELLO2', ['56324'])]:
+                                 ('cat /stick/NOTE.TXT', [note])]:
                 ok, _ = run_cmd(vm, cmd, expects)
                 results.append((cmd, ok))
+            # the copy has the original's size (which depends on the build)
+            ok1, a = run_cmd(vm, 'stat /stick/hello', ['bytes'])
+            ok2, b = run_cmd(vm, 'stat /stick/HELLO2', ['bytes'])
+            sa, sb = re.search(r'file, (\d+) bytes', a), re.search(r'file, (\d+) bytes', b)
+            results.append(('the copy on the stick is as long as the original', ok1 and ok2 and sa and sb
+                            and sa.group(1) == sb.group(1)))
             # pulled out while mounted: errors, not a crash; umount still works
             vm.mon.cmd('device_del stick1')
             ok = vm.expect('+USB: usb1: unplugged', 20)
