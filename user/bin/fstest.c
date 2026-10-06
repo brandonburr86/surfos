@@ -34,9 +34,11 @@ static int checks, failures, skips, made;
 static char dir[PATH_MAX];
 
 static void check(int ok, const char *what) {
+    int e = errno;
     checks++;
-    if(!ok) failures++;
-    printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
+    if(ok) { printf("  ok    %s\n", what); return; }
+    failures++;
+    printf("  FAIL  %s (errno %d: %s)\n", what, e, strerror(e));
 }
 
 /* ok, or a skip when the call said ENOSYS */
@@ -49,10 +51,10 @@ static void check_or_skip(int ok, int err, const char *what) {
     check(ok, what);
 }
 
+/* dir/name, in memory of its own (kept: a test holds several at once) */
 static const char *in_dir(const char *name) {
-    static char paths[4][PATH_MAX];
-    static int next;
-    char *p = paths[next++ & 3];
+    char *p = malloc(PATH_MAX);
+    if(!p) { puts("FSTEST FAIL (out of memory)"); exit(1); }
     snprintf(p, PATH_MAX, "%s/%s", dir, name);
     return p;
 }
