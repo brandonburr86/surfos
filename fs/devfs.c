@@ -5,6 +5,8 @@ File: devfs.c   Date: 10/3/26 (roadmap P2)
 --------------------
 /dev holds the console (the calling task's tty and console), null and zero,
 so a program's descriptors 0, 1 and 2 are ordinary open files.
+10/6/26: and kmsg: what a program writes there goes to the kernel log (dmesg),
+and to no console; a read finds nothing (end of file).
 
 10/6/26: devfs_is_console() tells a kernel command run by the user shell
 (SYS_kcmd) whether descriptor 1 is the console or a redirection.
@@ -17,13 +19,15 @@ has a key queued; the others are always ready.
 #include <surfos/task.h>
 #include <surfos/tty.h>
 #include <surfos/poll.h>
+#include <surfos/klog.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
-enum { DEV_CONSOLE = 1, DEV_TTY, DEV_NULL, DEV_ZERO };
+enum { DEV_CONSOLE = 1, DEV_TTY, DEV_NULL, DEV_ZERO, DEV_KMSG };
 
 static const struct { const char *name; int id; } devices[] = {
     { "console", DEV_CONSOLE }, { "tty", DEV_TTY }, { "null", DEV_NULL }, { "zero", DEV_ZERO },
+    { "kmsg", DEV_KMSG },
 };
 #define NDEVICES (sizeof(devices) / sizeof(devices[0]))
 
@@ -45,6 +49,18 @@ static int dev_write(struct vnode *v, u32 off, const void *buf, u32 len) {
         const char *p = (const char *)buf;
         u32 i;
         for(i = 0; i < len; i++) kputch(con, con->txtColor, p[i]);
+    }
+    if(v->ino == DEV_KMSG) {                                 /* 10/6/26: the kernel log only, as it was written */
+        const char *p = (const char *)buf;
+        char chunk[128];
+        u32 done = 0, n, i;
+        while(done < len) {
+            n = len - done < sizeof(chunk) - 1 ? len - done : sizeof(chunk) - 1;
+            for(i = 0; i < n; i++) chunk[i] = p[done + i] ? p[done + i] : ' ';   /* a NUL would end the string */
+            chunk[n] = 0;
+            klog_write(chunk);
+            done += n;
+        }
     }
     return (int)len;
 }
