@@ -18,6 +18,12 @@ connection is closed, and the client sees the end) or when the client goes (the
 connection reads 0 or is reset: the master is closed, which hangs the pseudo-terminal
 up and ends surfsh and whatever it runs). The shells that end are collected here.
 
+A write to a connection waits until every byte is queued (net/sock.c), with no limit, so
+a client that reads slowly could hold up every session. What a session prints is read in
+pieces of PIECE bytes (at most twice that once encoded), and only while the connection
+has room (POLLOUT; poll() is asked about it once a piece found none): a slow client then
+slows its own session, whose output waits in its pseudo-terminal, and the others go on.
+
 telnetd off kills the server: the kill ends it at the end of its poll(), and its
 descriptors close with it, so the port is free, every client gets its FIN and every
 pseudo-terminal hangs up.
@@ -31,10 +37,12 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0)", "telnetd
 #include "telnet.h"
 
 #define SIZE_MAX_TN 1000                /* the largest window a client's NAWS may set */
+#define PIECE       512                 /* the most of a session's output read and written at once */
 
 struct session {
     int conn, master;                   /* -1: the slot is free */
     int pty, num;                       /* pty<pty>; the session's number for the log */
+    int full;                           /* the connection had no room: the pty waits until it has */
     struct telnet tn;
 };
 
@@ -125,6 +133,7 @@ static void new_session(int lfd) {
     }
     s->conn = conn;
     s->master = master;
+    s->full = 0;
     s->pty = ptyctl(master, PTY_INDEX, 0);
     s->num = ++sessions_ever;
     say("telnetd: session %d from %s (pty%d)", s->num, peer, s->pty);
@@ -153,11 +162,21 @@ static void from_client(struct session *s) {
     if(d.len && write_all(s->master, data, d.len) < 0) end_session(s, "the terminal broke");
 }
 
-/* what the session printed, for the client */
+/* what the session printed, for the client: a piece, when the connection has room for it */
 static void from_pty(struct session *s) {
-    unsigned char in[1024], out[2 * 1024];
-    ssize_t n = read(s->master, in, sizeof(in));
+    unsigned char in[PIECE], out[2 * PIECE];
+    struct pollfd room;
+    ssize_t n;
     int k;
+    room.fd = s->conn;
+    room.events = POLLOUT;
+    room.revents = 0;
+    if(poll(&room, 1, 0) < 0 || !(room.revents & POLLOUT)) {
+        if(room.revents & (POLLHUP | POLLERR | POLLNVAL)) end_session(s, "the client left");
+        else s->full = 1;                       /* until poll() says the connection has room */
+        return;
+    }
+    n = read(s->master, in, sizeof(in));
     if(n <= 0) {
         end_session(s, "the shell ended");
         return;
@@ -183,9 +202,10 @@ int serve(int lfd, int port) {
             struct session *s = &sessions[i];
             if(s->conn < 0) continue;
             fds[n].fd = s->conn;
-            fds[n].events = POLLIN;
+            fds[n].events = s->full ? POLLIN | POLLOUT : POLLIN;
             fds[n].revents = 0;
             who[n++] = s;
+            if(s->full) continue;                   /* its output waits for room in the connection */
             fds[n].fd = s->master;
             fds[n].events = POLLIN;
             fds[n].revents = 0;
@@ -200,8 +220,11 @@ int serve(int lfd, int port) {
         for(i = 1; i < n; i++) {
             struct session *s = who[i];
             if(!fds[i].revents || s->conn < 0) continue;    /* nothing, or the session ended just now */
-            if(fds[i].fd == s->conn) from_client(s);
-            else from_pty(s);
+            if(fds[i].fd != s->conn) from_pty(s);
+            else {
+                if(fds[i].revents & POLLOUT) s->full = 0;   /* room again: the pty is read next time */
+                if(fds[i].revents & ~POLLOUT) from_client(s);
+            }
         }
         if(fds[0].revents) new_session(lfd);
         while(waitpid(-1, NULL, WNOHANG) > 0);              /* the shells of sessions that ended */
