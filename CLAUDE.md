@@ -19,7 +19,7 @@ make test         # headless boot + smoke test over the serial console; exit cod
 make test-all     # the smoke test at -O0 and -O2
 make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer, USB/NCM parsing,
                   # partition tables (+ sfdisk/sgdisk cross-checks), mkfs (+ fsck.fat), the user C library,
-                  # the prompt renderer, code page 437 and the UTF-8 decoder
+                  # the prompt renderer, code page 437 and the UTF-8 decoder, the console's pager (test_pager)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 12 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
