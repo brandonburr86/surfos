@@ -10,6 +10,10 @@ entries are the mount points below it.
 10/5/26 (USB storage): umount refuses a mount whose vnodes are in use (an
 open file, an open directory, the current directory of the task asking)
 instead of freeing it under them; vfs_busy() says who.
+
+10/6/26: whoever goes on using a mount after mount_lock is let go (a path
+lookup, statfs, sync) holds its root vnode first, under the lock: umount then
+says the mount is busy instead of freeing it under them.
 */
 
 #include <surfos/types.h>
@@ -74,15 +78,20 @@ void vput(struct vnode *v) {
 static int rootfs_lookup(struct vnode *dir, const char *name, struct vnode **out) {
     struct mount *m;
     char want[VFS_PATH_MAX];
+    int r = -ENOENT;
     snprintf(want, sizeof(want), "/%s", name);
+    mutex_lock(&mount_lock);                    /* 10/6/26: the list, and the root held, under the lock */
     for(m = mounts; m; m = m->next) {
-        if(!strcmp(m->path, want)) { *out = vget(m->sb->root); return 0; }
+        if(!strcmp(m->path, want)) { *out = vget(m->sb->root); r = 0; break; }
     }
-    return -ENOENT;
+    mutex_unlock(&mount_lock);
+    return r;
 }
 
 static int rootfs_readdir(struct vnode *dir, u_int index, struct dirent *de) {
     struct mount *m;
+    int r = 1;
+    mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) {
         if(!strcmp(m->path, "/") || strchr(m->path + 1, '/')) continue;   /* only the top level */
         if(index-- == 0) {
@@ -90,10 +99,12 @@ static int rootfs_readdir(struct vnode *dir, u_int index, struct dirent *de) {
             de->type = VN_DIR;
             de->size = 0;
             de->mtime = 0;
-            return 0;
+            r = 0;
+            break;
         }
     }
-    return 1;
+    mutex_unlock(&mount_lock);
+    return r;
 }
 
 static const struct vnode_ops rootfs_vops = { rootfs_lookup, rootfs_readdir, NULL, NULL, NULL, NULL, NULL, NULL };
@@ -300,12 +311,22 @@ const char *vfs_probe(struct bdev *dev) {
     return t ? t->name : NULL;
 }
 
+/* 10/6/26: each file system is synced with its root held and mount_lock let go (a sync writes); a umount
+   meanwhile finds it busy, and the mount stays on the list, where the walk goes on from */
 int vfs_sync(void) {
     struct mount *m;
     int r = 0;
+    mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) {
-        if(m->sb->ops && m->sb->ops->sync && m->sb->ops->sync(m->sb) != 0) r = -EIO;
+        struct superblock *sb = m->sb;
+        if(!sb->ops || !sb->ops->sync) continue;
+        vget(sb->root);
+        mutex_unlock(&mount_lock);
+        if(sb->ops->sync(sb) != 0) r = -EIO;
+        mutex_lock(&mount_lock);
+        vput(sb->root);                             /* not the last reference: the mount keeps one */
     }
+    mutex_unlock(&mount_lock);
     if(bsync(NULL) != 0) r = -EIO;
     return r;
 }
@@ -345,9 +366,11 @@ int vfs_normalize(const char *cwd, const char *path, char *out, size_t size) {
     return 0;
 }
 
-/* the mount that owns an absolute path (longest prefix); rest is the path inside it */
-static struct superblock *find_mount(const char *abs, const char **rest) {
+/* the mount that owns an absolute path (longest prefix); rest is the path inside it. 10/6/26: its
+   root vnode, held before mount_lock goes (a umount cannot free it then), for walk() */
+static struct vnode *find_mount(const char *abs, const char **rest) {
     struct mount *m, *best = NULL;
+    struct vnode *root = NULL;
     size_t bestlen = 0;
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) {
@@ -355,15 +378,16 @@ static struct superblock *find_mount(const char *abs, const char **rest) {
         if(l == 1) { if(!best) { best = m; bestlen = 1; } continue; }
         if(l > bestlen && !strncmp(abs, m->path, l) && (abs[l] == '/' || abs[l] == 0)) { best = m; bestlen = l; }
     }
+    if(best) root = vget(best->sb->root);
     mutex_unlock(&mount_lock);
-    if(!best) return NULL;
+    if(!root) return NULL;
     *rest = abs + bestlen;
     while(**rest == '/') (*rest)++;
-    return best->sb;
+    return root;
 }
 
-static int walk(struct superblock *sb, const char *rest, struct vnode **out) {
-    struct vnode *v = vget(sb->root);
+/* from v (a reference that becomes walk's) down the components of rest */
+static int walk(struct vnode *v, const char *rest, struct vnode **out) {
     char comp[VFS_NAME_MAX + 1];
     while(*rest) {
         const char *s = rest;
@@ -388,9 +412,9 @@ static int walk(struct superblock *sb, const char *rest, struct vnode **out) {
 
 static int lookup_abs(const char *abs, struct vnode **out) {
     const char *rest;
-    struct superblock *sb = find_mount(abs, &rest);
-    if(!sb) return -ENOENT;
-    return walk(sb, rest, out);
+    struct vnode *root = find_mount(abs, &rest);
+    if(!root) return -ENOENT;
+    return walk(root, rest, out);
 }
 
 const char *vfs_getcwd(void) {
@@ -639,27 +663,36 @@ int vfs_rename(const char *from, const char *to) {
     return r;
 }
 
+/* 10/6/26: the mount's path is copied and its root held under mount_lock; the file system answers
+   (it may read the disk) with the lock let go and the root still held, so a umount meanwhile finds
+   it busy instead of freeing it */
 int vfs_statfs(const char *path, struct statfs *st) {
     char abs[VFS_PATH_MAX];
     struct mount *m, *best = NULL;
+    struct superblock *sb = NULL;
     size_t bestlen = 0;
     int r = vfs_normalize(vfs_getcwd(), path, abs, sizeof(abs));
     if(r) return r;
+    memset(st, 0, sizeof(*st));
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) {
         size_t l = strlen(m->path);
         if(l == 1) { if(!best) { best = m; bestlen = 1; } continue; }
         if(l > bestlen && !strncmp(abs, m->path, l) && (abs[l] == '/' || abs[l] == 0)) { best = m; bestlen = l; }
     }
+    if(best) {
+        sb = best->sb;
+        vget(sb->root);
+        strlcpy(st->path, best->path, sizeof(st->path));
+    }
     mutex_unlock(&mount_lock);
-    if(!best) return -ENOENT;
-    memset(st, 0, sizeof(*st));
-    strlcpy(st->fs, best->sb->type->name, sizeof(st->fs));
-    strlcpy(st->dev, best->sb->dev ? best->sb->dev->name : "", sizeof(st->dev));
-    strlcpy(st->path, best->path, sizeof(st->path));
-    st->flags = best->sb->readonly ? MNT_RDONLY : 0;
-    if(!best->sb->ops || !best->sb->ops->statfs) return 0;            /* sizes unknown: all zero */
-    return best->sb->ops->statfs(best->sb, st);
+    if(!sb) return -ENOENT;
+    strlcpy(st->fs, sb->type->name, sizeof(st->fs));
+    strlcpy(st->dev, sb->dev ? sb->dev->name : "", sizeof(st->dev));    /* block devices are never freed */
+    st->flags = sb->readonly ? MNT_RDONLY : 0;
+    r = sb->ops && sb->ops->statfs ? sb->ops->statfs(sb, st) : 0;      /* sizes unknown: all zero */
+    vput(sb->root);
+    return r;
 }
 
 int vfs_ftruncate(struct file *f, u32 size) {
