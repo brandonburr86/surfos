@@ -12,6 +12,7 @@ as the restoration; new work happens here.
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
+| [superpowers/plans/…surfsh.md](superpowers/plans/2026-10-06-surfsh.md) | The brief for surfsh, the SurfOS shell: the prompt design, the pager, Tab completion, SurfOS 1.0 |
 
 ## Building and running
 
@@ -21,7 +22,7 @@ make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quit
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
-make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (11 scenarios)
+make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (12 scenarios)
 make unittest     # host unit tests
 ```
 
@@ -45,3 +46,7 @@ M9 (under emulation so far) a second USB stick holds files: `fdisk` (MBR or GPT)
 (FAT32 that macOS checks clean), `mount`/`umount`/`eject` by hand, user programs on a
 small C library, `sh` and a text editor, while the boot drive and internal disks are
 never repartitioned or formatted. The console fills the screen (120x33 at 1920x1080).
+Since M10 (under emulation so far) the shell is a program, `/initrd/bin/surfsh`, on every
+console: the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes
+and redirection, with the kernel's commands reached through two system calls; the
+console draws UTF-8, and the banner says SurfOS 1.0.

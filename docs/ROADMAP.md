@@ -385,6 +385,24 @@ Each module: why, what exists, what to build, how to prove it, size
   self-test and prints `SELFTEST PASS` or the failures; new commands arrive with
   their modules (`lspci dmesg uptime date free kill heaptest ls cat ping`).
 
+**U2. surfsh, the SurfOS shell** (done on `ai-dev`, emulation) - size L - deps U1, P2, F2, C1
+
+* The shell becomes a program, as `bash` or `sh` is elsewhere: `/initrd/bin/surfsh`,
+  which `init` starts on every console and restarts, with the ring-0 shell kept as a
+  recovery console (when surfsh cannot run) and on purpose (`shell=kernel`). The owner's
+  prompt design (2026-10-06): breadcrumbs with `▸`, the wave `≋`, a state character
+  (`≋!>` failed, `≋#>` elevated, `≋@>` remote, `≋?>` diagnostic), drawn by one renderer
+  (`shell/prompt.c`) that both shells use. A line editor with history and Tab
+  completion, quotes and redirection, `$?`; the kernel's commands through two system
+  calls (`SYS_kcmd`, `SYS_kcmdinfo`), with a status each and redirectable output; a pager
+  in the terminal layer (`--More--`); a console that draws UTF-8 as code page 437 cells
+  (accents, box drawing, `▸ ≋ …`); the banner of SurfOS 1.0.
+* Prove: the smoke test and the USB scenarios drive surfsh on every console: the prompt
+  and its states, Tab, history, redirection of programs and kernel commands, the pager
+  (Space, Enter, q) from the serial line and the keyboard, UTF-8 on the VGA and
+  framebuffer screens, the recovery console (no initrd, a surfsh that keeps failing) and
+  the kernel shell entry. On the laptop: the same on its screen and keyboard.
+
 **T1. Test and CI harness** - size S - deps Phase 0, K4 - **done on `ai-dev`** except the `selftest` command (comes with U1)
 
 * `make test` boots QEMU headless, drives the serial console, runs `selftest` and
@@ -415,6 +433,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M7 Laptop USB boot** (done: the owner booted it on the laptop, 2026-10-05; the hardware record is still to be filled in) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick; the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
 | **M8 Laptop network** (done: the owner reports the network works on the laptop, 2026-10-05; details still to be recorded) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
 | **M9 Files on a stick** (done under emulation, 2026-10-06; pending on the laptop) | F2 | `make test-usb` scenarios `usbdisk` and `storage` pass at -O0 and -O2; on the laptop a USB stick is partitioned, formatted, written with `edit`, ejected, and its files read on the Mac (`docs/USB-BOOT.md` section 9) |
+| **M10 The SurfOS shell** (done under emulation, 2026-10-06; pending on the laptop) | U2 | `make test`, `make test-all` and `make test-usb` (at -O0 and -O2) drive surfsh on every console; on the laptop the prompt, Tab, the pager and the banner work on its screen and keyboard (`docs/USB-BOOT.md` section 10) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -447,13 +466,18 @@ plan, with the catalog IDs that build each one:
 
 M7 and M8 are reported working on the IdeaPad; their tables in
 `docs/hardware/ideapad-3-15iil05.md` (adapter model, `lsusb`, `dhcp`, `ping` output) are
-still to be filled in. M9 is done under emulation and waits for a USB stick on the
-laptop (`docs/USB-BOOT.md` section 9, the storage rows of the hardware record).
+still to be filled in. M9 and M10 are done under emulation and wait for the laptop
+(`docs/USB-BOOT.md` sections 9 and 10, the storage and shell rows of the hardware record).
+
+The shell work left these open: typing letters beyond ASCII (the keyboard and the line
+editor are byte-wise; the console already draws them); Ctrl+C for a running command
+(there are no signals yet); pipes, variables and wildcards in surfsh; users and home
+directories (a shell starts at `/`); and remote sessions, for which the prompt's `≋@>`
+state is ready.
 
 The storage work left these open, smallest first: the busy check of `umount` and `eject`
 sees only the asking task's current directory (it should look at every task's);
-UTF-8 on the console, so names with accents can be shown and typed (they are stored
-correctly); `fdisk add` of logical partitions; one cache identity for a disk and its
+`fdisk add` of logical partitions; one cache identity for a disk and its
 partitions (today a block reached both ways is cached twice); FAT12 in `mkfs`; exFAT,
 which larger sticks are sold with (deferred by the owner, October 2026); floating point in
 `printf`; and a 64-bit `time_t` before 2038.

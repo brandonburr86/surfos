@@ -174,6 +174,13 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | `readbench usbN 16` and `fsbench /data 16`: the speeds | |
 | `eject usbN`; then on the Mac: the files there? *Disk Utility* → *First Aid* result | |
 | A file written on the Mac, read in SurfOS after `mount` | |
+| The banner (Brandon Burr's SurfOS, version 1.0, 2004-2026) and the prompt `SURF ≋>`: are ▸ and ≋ drawn cleanly? | |
+| `cd /initrd/bin`: the prompt `initrd ▸ bin ≋>`; a failing command: `≋!>` with a red `!` | |
+| Tab: `lsb` + Tab completes `lsblk`; `cat /initrd/e` + Tab completes `etc/`; a second Tab lists choices | |
+| Arrows, Home, End, Backspace, Delete in the line; Up and Down for the history | |
+| `help`: `--More--` after a screenful; Space, Enter and q (or Esc) on the built-in keyboard | |
+| F1 to F4: each console has its own surfsh; `ps` lists four | |
+| GRUB entry "SurfOS (kernel shell)": the prompt `SURF ≋#>` | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,
