@@ -287,6 +287,11 @@ $(BUILD)/host/test_part: tests/host/test_part.c $(BUILD)/host/kernel/driver/part
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
+# the SurfOS prompt (10/6/26), the same file in the kernel's shell and in libsurf for surfsh
+$(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/prompt.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
 $(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
@@ -308,7 +313,7 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
-          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs
+          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -317,6 +322,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(PYTHON) tests/test_part_tools.py $(BUILD)/host/test_part
 	$(BUILD)/host/test_libc
 	$(BUILD)/host/test_mkfs
+	$(BUILD)/host/test_prompt
 
 clean:
 	rm -rf build
