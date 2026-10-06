@@ -63,17 +63,25 @@ void tty_switch(int index);
 #define TTY_RAW     1
 #define TTY_GETSIZE 2
 /* 10/6/26 (the SurfOS shell). TTY_PAGE 1: the output of the calling task and of the tasks
-   it starts is paged. After a screenful (the console's rows less one) the console shows
-   TTY_MORE on its last row and waits for a key: Space shows the next screenful, Enter one
-   more line, q or Esc leaves the rest unshown until paging ends. The pause happens only
-   where a task may wait (task context, interrupts on, no lock held) and never in raw mode;
-   reading from the console starts a new screenful. TTY_PAGE 0 ends paging, and so does
-   the end of the task that set it. The user shell pages every command it runs, the
-   kernel's shell its own commands.
+   descended from it is paged; the caller owns the pager of this terminal. After a
+   screenful (the console's rows less one) the console shows TTY_MORE in inverse video on
+   the next row, the last one of a full screen, and waits for a key: Space (or any other
+   key) shows the next screenful, Enter one more line, q, Q or Esc drops the rest until
+   paging ends. The pause happens only where a task may wait (task context, interrupts on,
+   no KCRIT_ENTER, no mutex held), never in raw mode, and not while another task waits to
+   read the terminal; elsewhere it comes at the next row where it may. Other tasks' output
+   (kernel threads, interrupt handlers) and captured output are never paged. Reading from
+   the terminal starts a new screenful and shows again what q dropped. TTY_PAGE 0 from the
+   owner ends paging, and so does the owner's end. A task that is paged already stays
+   paged: TTY_PAGE 1 or 0 from it only ends a drop (a nested shell starts or ends a
+   command). Another task gets EBUSY while the pager is in use. The user shell pages every
+   command it runs, the kernel's shell its own commands. Kernel code: kernel/console.c
+   (the rows, the question) and kernel/tty.c (who is paged).
    TTY_CAPS: TTY_CAP_* flags. TTY_CAP_UTF8: the console draws UTF-8 text: ASCII, the
    characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
-   mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. TTY_CAP_COLOR:
-   the ANSI colours above. */
+   mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. It is left out
+   when the kernel command line has the word `ascii` (a serial terminal that cannot show
+   UTF-8). TTY_CAP_COLOR: the ANSI colours above. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
 #define TTY_CAP_UTF8  1

@@ -7,6 +7,9 @@ File: console.c Date: Prior to 4/23/04
 
 10/5/26: the text grid is set at boot (a framebuffer gets as many cells as it holds),
 and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
+10/6/26: a cell's byte is a code page 437 character (driver/cp437.c), and what is
+printed is UTF-8: kputch() decodes it per console, so ▸ ≋ … and café show on the screen.
+The pager (TTY_PAGE in tty.h) lives here too: kputch() counts the rows and asks --More--.
 */
 
 #include <asm/io.h>
@@ -15,6 +18,7 @@ and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
 #include <surfos/keyboard.h>
 #include <surfos/task.h>
 #include <surfos/console.h>
+#include <surfos/tty.h>
 #include <surfos/multiboot.h>
 #include <sys/serial.h>
 #include <sys/framebuffer.h>
@@ -176,6 +180,8 @@ void clearConsole(surf_console *con) { //re-initializes a console
   con->loc.x = 0;
   con->loc.y = 0;
   con->wrap = 0;
+  con->page_rows = 0; //10/6/26: an empty screen for the pager to fill
+  con->page_fresh = 1;
   console_reset_ansi(con); //10/5/26: no escape sequence half read, plain colours, the cursor shown
   setpos(con);
   if(isConsoleActive(con)) {
@@ -241,18 +247,23 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
     KCRIT_LEAVE
 }
 
-/* write one character cell at the console's cursor, without moving the cursor */
-static void putcell(surf_console *con, TEXTCOLOR color, int c) {
-    u_int off = (con->loc.x + con->loc.y * COLUMNS) * 2;
+/* write one character cell, at (x, y) (10/6/26: the pager's question) or at the console's
+   cursor, without moving the cursor */
+static void cell_at(surf_console *con, u_int x, u_int y, TEXTCOLOR color, int c) {
+    u_int off = (x + y * COLUMNS) * 2;
     KCRIT_ENTER
     *(con->vmem + off) = c & 0xFF;
     *(con->vmem + off + 1) = color;
     if(isConsoleActive(con)) {
         *(conVideo.vmem + off) = c & 0xFF;
         *(conVideo.vmem + off + 1) = color;
-        if(video == VIDEO_FB) framebuffer_draw_cell(con->loc.x, con->loc.y, c & 0xFF, color);
+        if(video == VIDEO_FB) framebuffer_draw_cell(x, y, c & 0xFF, color);
     }
     KCRIT_LEAVE
+}
+
+static void putcell(surf_console *con, TEXTCOLOR color, int c) {
+    cell_at(con, con->loc.x, con->loc.y, color, c);
 }
 
 /**** escape sequences (10/5/26) ****/
@@ -296,19 +307,28 @@ void console_reset_ansi(surf_console *con) {
     con->bold = con->inverse = 0;
     con->cursor_off = 0;
     con->ansi_owner = NULL;
+    con->utf.have = 0;                                  /* 10/6/26: nor a UTF-8 character half read */
 }
 
 /* a task is gone (task.c, through tty_task_gone): undo what it did to the look of a console.
    Interrupts are off; the cursor comes back with the next character printed there. */
 void console_task_gone(struct surf_task *task) {
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) if(conArray[i].ansi_owner == task) console_reset_ansi(&conArray[i]);
+    for(i = 0; i < NUM_CONSOLES; i++) {
+        if(conArray[i].ansi_owner == task) console_reset_ansi(&conArray[i]);
+        if(conArray[i].page_owner == task) console_page_start(&conArray[i], NULL);   /* 10/6/26: paging ends with it */
+        if(conArray[i].page_asker == task) conArray[i].page_asker = NULL;          /* killed at the question */
+    }
 }
 
 /* panic and wipeout (kernel/panic.c): the report is plain text, whatever was half printed */
 void console_panic(void) {
     int i;
-    for(i = 0; i < NUM_CONSOLES; i++) console_reset_ansi(&conArray[i]);
+    for(i = 0; i < NUM_CONSOLES; i++) {
+        console_reset_ansi(&conArray[i]);
+        console_page_start(&conArray[i], NULL);         /* 10/6/26: nothing paged or dropped */
+        conArray[i].page_asker = NULL;
+    }
     framebuffer_panic();
 }
 
@@ -317,6 +337,7 @@ static void ansi_moveto(surf_console *con, int x, int y) {
     con->loc.x = x < 0 ? 0 : (x >= (int)COLUMNS ? COLUMNS - 1 : (u_int)x);
     con->loc.y = y < 0 ? 0 : (y >= (int)LINES ? LINES - 1 : (u_int)y);
     con->wrap = 0;
+    con->page_fresh = 0;                                /* 10/6/26: the pager asks only at a row's start */
     if(isConsoleActive(con)) syncVideoConsole(false);
 }
 
@@ -416,7 +437,7 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
         }
         if(c == 0x1B || (c >= 0x20 && c <= 0x2F)) return 1;      /* ESC again, or ESC ( B and the like */
         con->esc = ESC_NONE;
-        return c >= 0x30;                                       /* ESC 7, ESC c, ...: not ours */
+        return c >= 0x30 && c < 0x80;                           /* ESC 7, ESC c, ...: not ours; a UTF-8 byte is printed */
     case ESC_CSI:
         if(c >= '0' && c <= '9') {
             if(con->nparam < ESC_PARAMS && con->param[con->nparam] < 1000)
@@ -448,14 +469,139 @@ static int ansi_byte(surf_console *con, TEXTCOLOR color, int c) {
     return 0;
 }
 
-/* the next line, scrolling at the bottom */
+/* the next line, scrolling at the bottom. 10/6/26: a row starts, for the pager */
 static void newline(surf_console *con) {
     con->wrap = 0;
     con->loc.x = 0;
+    con->page_rows++;
+    con->page_fresh = 1;
     if(++con->loc.y >= LINES) {
         sscroll(con);
         con->loc.y--;
     }
+}
+
+/* A character at the cursor. 10/5/26: the VT100 way of wrapping. Writing the last column
+   leaves the cursor there; the next character starts the next line (a carriage return or
+   a cursor move cancels that). So a full-screen program can write the bottom right corner
+   without scrolling. 10/6/26: ch is a code page 437 cell, any of the 256. */
+static void put_char(surf_console *con, TEXTCOLOR color, u_char ch) {
+    if(con->wrap) newline(con);
+    putcell(con, ansi_attr(con, color), ch);
+    con->page_fresh = 0;
+    if(con->loc.x + 1 < COLUMNS) con->loc.x++;
+    else con->wrap = 1;
+    if(isConsoleActive(con)) syncVideoConsole(false);
+}
+
+/**** the pager (10/6/26) ****/
+
+/*
+    TTY_PAGE 1 makes a task the pager's owner on its console (tty.c). What the owner, and
+    any task descended from it, prints on that console in task context is paged: the
+    console counts the rows that start (a newline, or the VT100 wrap), and when a
+    screenful has been shown, LINES - 1 rows since it began, and a paged task is about to
+    draw on, or start, another row, that task first waits: TTY_MORE in inverse video on
+    that row, one key from the tty (tty_getc(): the keyboard or the serial port), and the
+    question is taken away again (the row as it was, the cursor at its start; CR ESC[K on
+    the serial terminal). Space or any other key shows another screenful, Enter one more
+    row; q, Q or Esc drops what the paged tasks print until paging ends or the terminal is
+    read. A task waits only where it may: in task context, with interrupts on, outside
+    KCRIT_ENTER, holding no mutex, not in raw mode, and while no other task waits to read
+    the terminal (a paged task in the background must not take the shell's keys);
+    elsewhere the rows are counted and the question comes at the next row where it may.
+    What other tasks print (the usb thread's +USB: lines, interrupt handlers) takes rows
+    but never waits and is never dropped, and captured output (console_capture_begin)
+    never reaches the pager.
+*/
+#define PAGE_ASK_ATTR 0x70              /* the question: black on light grey, inverse video */
+
+/* a new screenful: paging starts (or ends, owner NULL) */
+void console_page_start(surf_console *con, struct surf_task *owner) {
+    con->page_owner = owner;
+    con->page_rows = 0;
+    con->page_fresh = 0;
+    con->page_drop = 0;
+}
+
+/* the terminal was read (tty.c): the user has seen the screen, a new screenful begins, and
+   what was dropped after q shows again (a program that asks must be seen asking) */
+void console_page_read(surf_console *con) {
+    con->page_rows = 0;
+    con->page_drop = 0;
+}
+
+/* Is the current task the owner, or descended from it (its parent's parent, ...)? With
+   interrupts off: a parent that ends hands its children to init meanwhile. */
+int console_paging(surf_console *con) {
+    struct surf_task *t;
+    u_long flags;
+    int depth, found = 0;
+    if(!con->page_owner || !curTask) return 0;
+    flags = irq_save();
+    for(t = curTask, depth = 0; t && depth < 64; t = t->parent, depth++) {
+        if(t == con->page_owner) {
+            found = 1;
+            break;
+        }
+    }
+    irq_restore(flags);
+    return found;
+}
+
+/* Wait for a key at the question. The cursor's row has nothing drawn on it yet, or the row
+   is full and the question takes the next one. */
+static void page_ask(surf_console *con) {
+    static const char q[] = TTY_MORE;
+    u_char saved[2 * (sizeof(q) - 1)];
+    u_int len = sizeof(q) - 1, x, y, i;
+    int key;
+    if(con->wrap) {
+        newline(con);
+        if(con == conActive && mirror_serial) serial_puts("\r\n");
+    }
+    if(len > COLUMNS - 1) len = COLUMNS - 1;
+    x = con->loc.x;
+    y = con->loc.y;
+    con->page_asker = curTask;
+    for(i = 0; i < len; i++) {
+        saved[2 * i] = con->vmem[(y * COLUMNS + i) * 2];
+        saved[2 * i + 1] = con->vmem[(y * COLUMNS + i) * 2 + 1];
+        cell_at(con, i, y, PAGE_ASK_ATTR, q[i]);
+    }
+    con->loc.x = len;
+    setpos(con);
+    /* the terminal: inverse video on, the question, inverse off unless the program had it on */
+    if(con == conActive && mirror_serial) serial_puts(con->inverse ? "\r\033[7m" TTY_MORE : "\r\033[7m" TTY_MORE "\033[27m");
+    key = tty_getc(tty_for_console(con));
+    if(con->loc.y == y && con->loc.x == len) {             /* nothing else printed here meanwhile */
+        for(i = 0; i < len; i++) cell_at(con, i, y, saved[2 * i + 1], saved[2 * i]);
+        con->loc.x = x;
+        setpos(con);
+        if(con == conActive && mirror_serial) serial_puts("\r\033[K");
+    }
+    con->page_asker = NULL;
+    if(key == 'q' || key == 'Q' || key == 0x1B) con->page_drop = 1;
+    else con->page_rows = (key == '\n' || key == '\r') ? LINES - 2 : 0;
+}
+
+/* For each byte a console gets while paging is on: 1 when it is dropped (q was pressed).
+   Before a paged task's byte draws on, or starts, the row after a screenful, the task
+   waits at the question first, where it may. */
+static int page_hold(surf_console *con, u_char b) {
+    struct tty *t;
+    if(in_interrupt() || !curTask || curTask == idle_task || con->page_asker || !console_paging(con))
+        return 0;
+    if(con->page_drop) return 1;
+    if(con->esc || con->utf.have || !(b == '\n' || (b >= 0x20 && b != 0x7F)))
+        return 0;                                       /* draws nothing, or not yet */
+    if(con->wrap ? con->page_rows + 2 < LINES : !con->page_fresh || con->page_rows + 1 < LINES)
+        return 0;                                       /* the screenful is not full yet */
+    t = tty_for_console(con);
+    if(!irqs_enabled() || curTask->crit || curTask->mutexes || t->raw || wq_count(&t->readers))
+        return 0;                                       /* no waiting here: at the next row */
+    page_ask(con);
+    return con->page_drop;
 }
 
 /* 10/6/26: a task's output kept instead of shown (console.h) */
@@ -468,6 +614,9 @@ void console_capture_end(void) {
 }
 
 void kputch(surf_console *con,TEXTCOLOR color, int c) {
+    u_char b = (u_char)c;           /* 10/6/26: a char above 0x7f may come signed */
+    u_char cells[UTF8_OUT_MAX];
+    int n, i;
     /* 10/6/26: a redirected kernel command (console.h): its output goes to memory, not the screen */
     if(con && curTask && curTask->kcap && con == curTask->con && !in_interrupt()) {
         struct kcapture *k = curTask->kcap;
@@ -475,12 +624,27 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         else k->cut++;
         return;
     }
+    /* 10/6/26: the pager (TTY_PAGE): a paged task waits at a full screen, and after q what
+       it prints is dropped */
+    if(con && con->page_owner && page_hold(con, b)) return;
     /* The serial console shows whatever the active console shows, plus anything
        printed before the video console exists (con == NULL during early boot). */
     if((!con || con == conActive) && mirror_serial) serial_console_putc(c);
     if(!con) return;
-    if(con->esc && ansi_byte(con, color, c)) return;
-    switch (c) {
+    if(con->esc && ansi_byte(con, color, b)) return;
+    /* 10/6/26: UTF-8 (driver/cp437.c). A character comes out as the code page 437 cell for
+       it ('?' when the set has none), bytes that are not UTF-8 as the cells they are. A byte
+       below 0x80 that cuts a character short comes out last, and is handled below as ever. */
+    if(b >= 0x80 || con->utf.have) {
+        n = utf8_feed(&con->utf, b, cells);
+        if(b < 0x80) n--;
+        for(i = 0; i < n; i++) put_char(con, color, cells[i]);
+        if(b >= 0x80) {
+            setpos(con);
+            return;
+        }
+    }
+    switch (b) {
     case 0x1B: //10/5/26: an escape sequence starts (tty.h)
         con->esc = ESC_SEEN;
         return;
@@ -502,20 +666,11 @@ void kputch(surf_console *con,TEXTCOLOR color, int c) {
         else if(con->loc.y > 0) { con->loc.y--; con->loc.x = COLUMNS - 1; }
         else { syncVideoConsole(false); break; }
         putcell(con, ansi_attr(con, color), ' ');
+        con->page_fresh = 0;
         syncVideoConsole(false);
         break;
     default:
-        if(c>=32 && c<=126) {
-            /* 10/5/26: the VT100 way of wrapping. Writing the last column leaves the cursor
-               there; the next character starts the next line (a carriage return or a cursor
-               move cancels that). So a full-screen program can write the bottom right
-               corner without scrolling. */
-            if(con->wrap) newline(con);
-            putcell(con, ansi_attr(con, color), c);
-            if(con->loc.x + 1 < COLUMNS) con->loc.x++;
-            else con->wrap = 1;
-            if(isConsoleActive(con)) syncVideoConsole(false);
-        }
+        if(b >= 32 && b <= 126) put_char(con, color, b);   /* other control characters: nothing */
         break;
     }
     setpos(con);

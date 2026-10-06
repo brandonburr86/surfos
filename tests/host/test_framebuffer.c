@@ -1,8 +1,10 @@
 /* Host-side unit tests for the framebuffer renderer (driver/fbcore.c): mode checks,
    RGB and BGR channel layouts, 15/16/24/32 bits per pixel, padded pitch, glyphs,
    scaling, the text grid and its margins (10/5/26: the grid fills the screen), the
-   cursor, and that nothing is written outside the visible lines. The "framebuffer" is
-   a buffer in memory with guard bytes around it. Run by `make unittest`. */
+   cursor, and that nothing is written outside the visible lines. 10/6/26: a cell is a
+   code page 437 character (driver/cp437.c), so the whole font is drawn, not only ASCII.
+   The "framebuffer" is a buffer in memory with guard bytes around it. Run by
+   `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -155,6 +157,30 @@ static void test_drawing(void) {
     check(pixel(&s, 8, 0) == s.palette[1], "attribute bit 7 does not brighten the background");
 }
 
+/* 10/6/26: cells above 0x7e and below 0x20 are characters too (code page 437) */
+static void test_cp437_cells(void) {
+    struct fb_surface s;
+    struct fb_mode m;
+    u32 x, y, ok;
+
+    m = mode(640, 400, 2560, 32, 1);
+    surface(&s, &m);
+    fb_draw_glyph(&s, 0, 0, 0xDB, 0x0F, 0);                    /* █ */
+    for(ok = 1, y = 0; y < 16; y++) for(x = 0; x < 8; x++) if(pixel(&s, x, y) != s.palette[15]) ok = 0;
+    check(ok, "0xDB (full block) fills its cell with the foreground");
+    fb_draw_glyph(&s, 1, 0, 0x00, 0x1F, 0);                    /* the empty cell */
+    fb_draw_glyph(&s, 2, 0, 0xFF, 0x1F, 0);                    /* no-break space */
+    for(ok = 1, y = 0; y < 16; y++) for(x = 8; x < 24; x++) if(pixel(&s, x, y) != s.palette[1]) ok = 0;
+    check(ok, "0x00 (the empty cell) and 0xFF (no-break space) draw only the background");
+    fb_draw_glyph(&s, 3, 0, 0xC4, 0x07, 0);                    /* ─ */
+    check(pixel(&s, 24, 7) == s.palette[7] && pixel(&s, 31, 7) == s.palette[7] && pixel(&s, 24, 6) == s.palette[0],
+          "0xC4 (box drawing) runs across the whole cell, so lines join");
+    fb_draw_glyph(&s, 4, 0, 0x10, 0x07, 0);                    /* SurfOS's breadcrumb ▸ */
+    check(pixel(&s, 33, 8) == s.palette[7] && pixel(&s, 37, 8) == s.palette[7] && pixel(&s, 38, 8) == s.palette[0] &&
+          pixel(&s, 33, 5) == s.palette[0] && pixel(&s, 33, 11) == s.palette[0], "0x10 is the small triangle of the prompt");
+    check(guards_intact(&s), "code page 437 cells: padding and guards untouched");
+}
+
 static void test_scaling(void) {
     struct fb_surface s;
     struct fb_mode m;
@@ -230,6 +256,7 @@ int main(void) {
     test_modes();
     test_colours();
     test_drawing();
+    test_cp437_cells();
     test_scaling();
     printf("%s: %d checks, %d failures\n", failures ? "FRAMEBUFFER UNIT TESTS FAILED" : "FRAMEBUFFER UNIT TESTS PASSED",
            checks, failures);

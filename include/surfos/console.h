@@ -10,6 +10,7 @@ File: console.h Date: Prior than 4/23/04
 #define _SURFOS_CONSOLE_H
 
 #include <surfos/types.h>
+#include <sys/cp437.h>
 
 /* 10/5/26: the text grid. Every console starts at 80x25 in its own memBuf, and VGA text
    mode stays there. On a framebuffer that holds more cells of the same letters (driver/
@@ -55,6 +56,15 @@ typedef struct surf_console {
     u_char cursor_off;          /* ESC [ ? 25 l */
     u_char wrap;                /* the last column was written: the next character starts the next line */
     struct surf_task *ansi_owner; /* who changed the colours or hid the cursor; reset when it ends */
+    /* 10/6/26: a cell's byte is a code page 437 character (sys/cp437.h); what is printed is
+       UTF-8, decoded here, a character at a time */
+    struct utf8_dec utf;
+    /* 10/6/26: the pager (TTY_PAGE, tty.h); all zero is "not paging" */
+    struct surf_task *page_owner; /* the task that asked: what it and its descendants print is paged */
+    struct surf_task *page_asker; /* the task waiting at the question, while it is shown */
+    u_int page_rows;            /* rows started since this screenful began */
+    u_char page_fresh;          /* nothing drawn on the cursor's row since it started */
+    u_char page_drop;           /* q: what the paged tasks print is dropped */
 } surf_console;
 
 void sscroll(surf_console *con);
@@ -92,6 +102,12 @@ struct kcapture {
 };
 void console_capture_begin(struct kcapture *k);
 void console_capture_end(void);
+
+/* 10/6/26: the pager (TTY_PAGE, tty.h): the console counts the rows and asks, tty.c says who
+   is paged. */
+void console_page_start(surf_console *con, struct surf_task *owner);  /* a new screenful; NULL ends paging */
+void console_page_read(surf_console *con);   /* the terminal was read: a new screenful, nothing dropped */
+int console_paging(surf_console *con);       /* is what the current task prints there paged? */
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */
 
 extern surf_console *conActive;

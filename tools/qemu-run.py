@@ -34,6 +34,18 @@ PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR
 MORE = b'--More--'
 # fdisk's question before it writes the scratch ramdisk rd1 (a 64 MB blank module, see --scratch)
 CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64M): '
+# A VGA cell's byte is a code page 437 character (driver/cp437.c, 10/6/26): the graphic set,
+# with SurfOS's ▸ ≋ … at 0x10, 0xF7 and 0xF9 where VGA draws ► ≈ ∙. The empty cell reads as a space.
+CP437 = (' ☺☻♥♦♣♠•◘○◙♂♀♪♫☼▸◄↕‼¶§▬↨↑↓→←∟↔▲▼' + ''.join(map(chr, range(0x20, 0x7f))) + '⌂' +
+         bytes(range(0x80, 0xf7)).decode('cp437') + '≋°…' + bytes(range(0xfa, 0x100)).decode('cp437'))
+assert len(CP437) == 256
+# what `pagetest utf8` prints, as the console draws it: the euro sign is not in code page 437
+UTF8_SAMPLE = 'UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ ? END'
+
+
+def cells_text(cells):
+    """VGA character bytes (every other byte of a text page) as the text the console shows"""
+    return ''.join(CP437[b] for b in cells)
 
 
 def answered(cmd, question, answer, expects):
@@ -169,6 +181,16 @@ SMOKE = [
     ('ansi', ['ANSI-TEST done, 80x25']),
     ('@ansi-screen', []),
     ('@console-switch', []),                                 # F2, F1: the serial terminal repainted
+    # 10/6/26 (the console's character set, the pager): a line of UTF-8 reaches the serial port as it
+    # was printed, and VGA memory as code page 437 cells
+    ('run pagetest utf8', ['UTF8: SURF ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ € END', 'exit status 0']),
+    ('@utf8-screen', []),
+    ('run pagetest caps', ['TTY_CAPS 3: UTF-8 colour', 'exit status 0']),     # no `ascii` on the command line
+    # the pager (TTY_PAGE): --More-- after a screenful less one row, 24 lines at 80x25; answered by the
+    # harness with Space, then with Enter and q, then on the PS/2 keyboard and read back from VGA memory
+    ('@pager-space', []),
+    ('@pager-enter-q', []),
+    ('@pager-keys', []),
     ('selftest', ['SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
@@ -414,10 +436,7 @@ class Qemu:
         d = self.vga_memory()
         if d is None:
             return '(screen dump failed)'
-        rows = []
-        for r in range(25):
-            cells = (d[(r * 80 + c) * 2] for c in range(80))
-            rows.append(''.join(chr(b) if 32 <= b < 127 else ' ' for b in cells).rstrip())
+        rows = [cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)]
         return '\n'.join(rows).rstrip('\n')
 
     def sendkeys(self, spec):
@@ -523,7 +542,7 @@ def ansi_screen_check(q):
     d = q.vga_memory() or bytes(4000)
 
     def row(r):
-        return ''.join(chr(b) if 32 <= b < 127 else ' ' for b in d[r * 160:(r + 1) * 160:2]).rstrip()
+        return cells_text(d[r * 160:(r + 1) * 160:2]).rstrip()
 
     def attr(c, r):
         return d[(r * 80 + c) * 2 + 1]
@@ -542,6 +561,92 @@ def console_switch_check(q):
     ok = ok and q.expect('ANSI-TEST top left', 10) and q.expect('Z\r\x1b[11A\x1b[9C', 10)
     ok = ok and 'ANSI-TEST done, 80x25' in q.screen()
     return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
+
+
+def utf8_screen_check(q):
+    """after `run pagetest utf8`: its line read back from VGA memory, cell by cell"""
+    return ('UTF-8 on the VGA console: ▸ ≋ … café ÄÖÜ ñ ½ ° ± ┌─┐ as code page 437 cells, € as ?',
+            UTF8_SAMPLE in q.screen().splitlines())
+
+
+def pagetest_lines(text):
+    """the numbers of the `pagetest N` lines in a piece of output"""
+    return [int(n) for n in re.findall(r'pagetest line (\d{3})', text)]
+
+
+def pager_space_check(q):
+    """pagetest 60, the harness answering --More-- with Space: the question after lines 1-24,
+    again after 25-48, then the rest, and paging ends with the program"""
+    start = len(q.transcript)
+    q.send('run pagetest 60\n')
+    ok = q.expect('PAGETEST DONE', 20) and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    parts = q.transcript[start:].decode(errors='replace').split(MORE.decode())
+    ok = ok and [pagetest_lines(p) for p in parts] == [list(range(1, 25)), list(range(25, 49)), list(range(49, 61))]
+    return ('pager: --More-- after 24 lines at 80x25, Space shows the next 24, the rest follows', ok)
+
+
+def pager_enter_quit_check(q):
+    """the harness's Space off: Enter at --More-- shows one more line and asks again, q drops the
+    rest of the program's output, and the shell's prompt comes back"""
+    q.auto_more = False
+    try:
+        start = len(q.transcript)
+        q.send('run pagetest 60\n')
+        ok = q.expect('--More--', 20)
+        if ok:
+            q.send('\r')
+            ok = q.expect('pagetest line 025', 10) and q.expect('--More--', 10)
+        if ok:
+            q.send('q')
+            ok = q.expect('exit status 0', 20) and q.expect(PROMPT, 10)
+        out = q.transcript[start:].decode(errors='replace')
+        parts = out.split(MORE.decode())
+        ok = ok and [pagetest_lines(p) for p in parts] == [list(range(1, 25)), [25], []] and 'PAGETEST DONE' not in out
+    finally:
+        q.more_at, q.auto_more = len(q.transcript), True
+    return ('pager: Enter shows one more line, q drops the rest, the prompt comes back', ok)
+
+
+def pager_keys_check(q):
+    """the pager on the PS/2 keyboard, read back from VGA memory: after `clear`, lines 1-24 and the
+    question in inverse video on the last row; Space the next 24, Enter one more, q the end"""
+    def vga_until(test, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            d = q.vga_memory()
+            if d and test([cells_text(d[r * 160:(r + 1) * 160:2]).rstrip() for r in range(25)], d):
+                return True
+            q.pump(0.3)
+        return False
+
+    def asking_after(last):
+        return lambda rows, d: (rows[24].startswith('--More--') and d[24 * 160 + 1] == 0x70 and
+                                rows[:24] == ['pagetest line %03d' % n for n in range(last - 23, last + 1)])
+    q.auto_more = False
+    try:
+        start = len(q.transcript)
+        q.sendkeys('clear\n')
+        ok = q.expect(PROMPT, 10)
+        q.sendkeys('run pagetest 60\n')
+        ok = ok and vga_until(asking_after(24))
+        if ok:
+            q.sendkeys(' ')
+            ok = vga_until(asking_after(48))
+        if ok:
+            q.sendkeys('\n')
+            ok = vga_until(asking_after(49))
+        if ok:
+            q.sendkeys('q')
+            ok = q.expect('exit status 0', 20) and q.expect(PROMPT, 10)
+        ok = ok and 'PAGETEST DONE' not in q.transcript[start:].decode(errors='replace')
+    finally:
+        q.more_at, q.auto_more = len(q.transcript), True
+    return ('pager on the PS/2 keyboard: --More-- in inverse video on the last row, Space, Enter, q', ok)
+
+
+# the steps of the console's character set and the pager (10/6/26) that the host carries out
+CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
+                  '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check}
 
 
 def host_checks(q):
@@ -610,6 +715,9 @@ def run_smoke(q, boot_timeout):
                 continue
             if cmd == '@console-switch':
                 results.append(console_switch_check(q))
+                continue
+            if cmd in CONSOLE_CHECKS:
+                results.append(CONSOLE_CHECKS[cmd](q))
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))

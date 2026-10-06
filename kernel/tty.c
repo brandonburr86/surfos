@@ -5,6 +5,9 @@ File: tty.c     Date: 10/3/26 (roadmap C1)
 --------------------
 10/5/26: raw mode for full-screen programs (tty.h): no echo, no line editing, keys as
 the bytes a terminal sends. It ends with the task that set it.
+10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8,
+TTY_CAPS says what the console draws, and TTY_PAGE pages a task's output (the pager
+itself is in console.c: it counts the rows and asks; here is who is paged).
 */
 
 #include <surfos/types.h>
@@ -15,7 +18,9 @@ the bytes a terminal sends. It ends with the task that set it.
 #include <surfos/wait.h>
 #include <surfos/irq.h>
 #include <surfos/interrupt.h>
+#include <surfos/multiboot.h>
 #include <sys/serial.h>
+#include <sys/cp437.h>
 #include <blibc_common.h>
 
 struct tty ttys[NUM_CONSOLES];
@@ -85,12 +90,15 @@ void tty_key(struct tty *t, u_char c) {
     tty_input(t, c);
 }
 
+/* 10/6/26: a key read from the terminal means the user has seen the screen: the pager
+   (console.c) starts a new screenful, and shows again what it dropped after q */
 int tty_trygetc(struct tty *t) {
     u_long flags = irq_save();
     int c = -1;
     if(t->in_tail != t->in_head) {
         c = t->inq[t->in_tail];
         t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+        console_page_read(t->con);
     }
     irq_restore(flags);
     return c;
@@ -102,6 +110,7 @@ int tty_getc(struct tty *t) {
         if(t->in_tail != t->in_head) {
             int c = t->inq[t->in_tail];
             t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
+            console_page_read(t->con);
             irq_restore(flags);
             return c;
         }
@@ -217,10 +226,16 @@ int tty_read(struct tty *t, char *buf, size_t len) {
 
 /**** console switching ****/
 
-/* the last column of a row with something in it, -1 for an empty row */
+/* the last column of a row with something in it, -1 for an empty row. 10/6/26: a cell is a
+   code page 437 character, and only the empty cell, space and no-break space are blank
+   (▸ is 0x10, below ' ') */
 static int last_used(surf_console *con, int row) {
     int col, last = -1;
-    for(col = 0; col < (int)COLUMNS; col++) if(con->vmem[(row * COLUMNS + col) * 2] > ' ') last = col;
+    u_char ch;
+    for(col = 0; col < (int)COLUMNS; col++) {
+        ch = con->vmem[(row * COLUMNS + col) * 2];
+        if(ch != 0 && ch != ' ' && ch != 0xFF) last = col;
+    }
     return last;
 }
 
@@ -232,18 +247,19 @@ static int last_used(surf_console *con, int row) {
    one in use (or the cursor's), each up to its last character, and the cursor is put
    back by moving up and right from there rather than to a screen position: a terminal as
    large as the grid shows the screen exactly, a smaller one shows its bottom part, with
-   rows longer than the terminal is wide wrapped. */
+   rows longer than the terminal is wide wrapped. 10/6/26: each cell goes as the UTF-8 of
+   its code page 437 character (the terminal is taken to speak UTF-8, as for the mirror). */
 static void serial_redraw(surf_console *con) {
-    char seq[16];
-    int row, col, rows = con->loc.y;
+    char seq[16], utf[CP437_UTF8_MAX];
+    int row, col, rows = con->loc.y, n, k;
     serial_puts(con->cursor_off ? "\033[0m\033[?25l" : "\033[0m\033[?25h");
     serial_console_clear();
     for(row = con->loc.y + 1; row < (int)LINES; row++) if(last_used(con, row) >= 0) rows = row;
     for(row = 0; row <= rows; row++) {
         int last = last_used(con, row);
         for(col = 0; col <= last; col++) {
-            u_char ch = con->vmem[(row * COLUMNS + col) * 2];
-            serial_putc(ch >= 32 && ch < 127 ? ch : ' ');
+            n = cp437_utf8(con->vmem[(row * COLUMNS + col) * 2], utf);
+            for(k = 0; k < n; k++) serial_putc(utf[k]);
         }
         if(row < rows) serial_puts("\r\n");
     }
@@ -281,15 +297,42 @@ static void set_raw(struct tty *t, int on, struct surf_task *owner) {
     irq_restore(flags);
 }
 
+/* 10/6/26: TTY_PAGE (tty.h). Paging belongs to the task that turned it on, its owner: what
+   the owner and the tasks descended from it print on this terminal is paged until the
+   owner turns it off or ends (tty_task_gone). TTY_PAGE 1 again from the owner starts a new
+   screenful. A task that is paged already, a program the owner started, keeps being paged
+   whatever it asks: TTY_PAGE 1 and 0 change nothing for it except that output dropped
+   after q shows again (a program of its own starts, or one has ended), so a nested shell
+   is seen. Any other task cannot take the pager while it is in use: EBUSY. */
+static int tty_page(struct tty *t, int on) {
+    surf_console *con = t->con;
+    int r = 0;
+    u_long flags = irq_save();
+    if(!con->page_owner || con->page_owner == curTask) {
+        if(on) console_page_start(con, curTask);
+        else if(con->page_owner) console_page_start(con, NULL);
+    } else if(console_paging(con)) {
+        con->page_drop = 0;
+    } else if(on) {
+        r = -16;                                  /* EBUSY */
+    }
+    irq_restore(flags);
+    return r;
+}
+
 /* terminal control for full-screen programs (see tty.h) */
 int tty_ctl(struct tty *t, int op, u32 arg) {
     if(!t) return -9;                             /* EBADF */
     if(op == TTY_GETSIZE) return (COLUMNS << 16) | LINES;
-    if(op == TTY_CAPS) return TTY_CAP_UTF8 | TTY_CAP_COLOR;
-    if(op == TTY_PAGE) return arg > 1 ? -22 : 0;  /* 10/6/26: accepted; the pager comes with the console's UTF-8 work */
+    /* 10/6/26: the console draws UTF-8 (as code page 437, console.c) and the ANSI colours.
+       `ascii` on the kernel command line, for a serial terminal that cannot show UTF-8, leaves
+       UTF-8 out: the user shell then draws its prompt in ASCII. */
+    if(op == TTY_CAPS) return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
+    if(op == TTY_PAGE) return arg > 1 ? -22 : tty_page(t, (int)arg);
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);
+        if(arg) console_page_read(t->con);        /* 10/6/26: a full-screen program is never paged, nor dropped */
         return 0;
     }
     return -22;                                   /* EINVAL */

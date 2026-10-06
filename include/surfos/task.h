@@ -98,6 +98,7 @@ typedef struct surf_task {
 
     struct kcapture *kcap;      /* 10/6/26: what this task prints to its console is kept here instead
                                    (a kernel command redirected to a file, kernel/console.c) */
+    u_int mutexes;              /* 10/6/26: mutexes it holds (kernel/sync.c); the pager waits for a key only at 0 */
 } surf_task;
 
 extern surf_task *curTask;
