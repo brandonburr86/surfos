@@ -132,6 +132,31 @@ const struct mount *vfs_mounts(void) {
     return mounts;
 }
 
+/* 10/6/26 (vfs.h): a copy, for listings that may block while they print */
+int vfs_mount_views(struct vfs_mount_view *out, int max) {
+    struct mount *m;
+    int n = 0;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m; m = m->next, n++) {
+        if(n >= max) continue;
+        strlcpy(out[n].path, m->path, sizeof(out[n].path));
+        out[n].type = m->sb->type->name;
+        out[n].dev = m->sb->dev;
+        out[n].readonly = m->sb->readonly;
+    }
+    mutex_unlock(&mount_lock);
+    return n;
+}
+
+bool vfs_dev_mounted(const struct bdev *d) {
+    struct mount *m;
+    bool found = false;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m && !found; m = m->next) found = m->sb->dev == d;
+    mutex_unlock(&mount_lock);
+    return found;
+}
+
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
     return vfs_mount_flags(dev, path, fstype, 0);
 }

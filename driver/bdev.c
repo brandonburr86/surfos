@@ -188,11 +188,10 @@ static const char *scheme_name(u8 scheme) {
     return scheme == PART_SCHEME_GPT ? "gpt" : scheme == PART_SCHEME_MBR ? "mbr" : "";
 }
 
-/* the device itself is mounted (vfs_bdev_busy() also counts its disk and partitions) */
+/* the device itself is mounted (vfs_bdev_busy() also counts its disk and partitions);
+   10/6/26: asked under the mount table's lock, which an umount takes to free a record */
 static bool mounted(const struct bdev *d) {
-    const struct mount *m;
-    for(m = vfs_mounts(); m; m = m->next) if(m->sb && m->sb->dev == d) return true;
-    return false;
+    return vfs_dev_mounted(d);
 }
 
 /* the first of these that applies; bdev_may_format() is the rule, this only says it */

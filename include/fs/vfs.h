@@ -182,7 +182,18 @@ int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path i
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
 bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
 int vfs_sync(void);
-const struct mount *vfs_mounts(void);
+const struct mount *vfs_mounts(void);             /* the list itself: only under the table's lock (vfs.c) */
+/* 10/6/26: the mounts as they are now, copied while the table is locked, for a command that
+   prints them and may block or wait at the pager meanwhile (df, mount, eject): an umount can
+   free a mount record whenever the lock is free. Up to max of them; the number of mounts. */
+struct vfs_mount_view {
+    char path[VFS_PATH_MAX];
+    const char *type;           /* the file system's name (it stays) */
+    struct bdev *dev;           /* NULL for none; block devices are never freed */
+    bool readonly;
+};
+int vfs_mount_views(struct vfs_mount_view *out, int max);
+bool vfs_dev_mounted(const struct bdev *d);       /* 10/6/26: d itself is mounted (lsblk) */
 
 /* paths */
 int vfs_normalize(const char *cwd, const char *path, char *out, size_t size);
