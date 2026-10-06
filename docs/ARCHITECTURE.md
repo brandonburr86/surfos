@@ -16,20 +16,23 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 |---|---|
 | CPU mode | 32-bit protected mode, paging on, single CPU; **ai-dev**: CR0/CR4 set explicitly, x87 initialised |
 | Boot | Multiboot 1 (GRUB or `qemu -kernel`), ELF image linked at 1 MB; **ai-dev**: also Multiboot 2 (GRUB on UEFI, the USB image, section 14) |
-| Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80` |
+| Kernel style | Monolithic; the debug shell runs in ring 0, programs run in ring 3 behind `int 0x80`; **ai-dev** (10/6/26): the shell is a ring-3 program, surfsh, on every console, and the ring-0 shell is the recovery console (section 17) |
 | Segmentation | Flat: kernel code 0x08, data 0x10; user code 0x1B, data 0x23; one TSS (0x28) whose esp0 is the current task's kernel stack |
 | Memory | Identity map of the low 16 MB, demand-paged kernel heap at 0xB0000000, a page directory per process with the user range 0x40000000-0x7FFFFFFF |
 | Scheduling | Pre-emptive, 100 Hz PIT, software stack switching, 4 run levels + sleeping + removal queues |
 | Interrupts | Two 8259 PICs remapped to 0x20-0x2F, shared IRQ handler chains, exceptions kill the current task; **ai-dev** `profile=laptop`: the 8259s reach the CPU through the local APIC (virtual wire), whose timer is the fallback tick |
-| Devices | VGA text console, or **ai-dev** a framebuffer console on UEFI (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console when there is one, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions (**ai-dev**: also GPT, and USB sticks through the xHCI controller, section 16), 3Com 3c905B NIC (no protocol stack) |
+| Devices | VGA text console, or **ai-dev** a framebuffer console on UEFI (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console when there is one, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions (**ai-dev**: also GPT, and USB sticks through the xHCI controller, section 16), 3Com 3c905B NIC (no protocol stack); **ai-dev** (10/6/26): the console draws UTF-8 as code page 437 cells and pages long output (section 7) |
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write, `mkfs` for FAT16/32); 1024-block write-back cache |
-| Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 31 system calls, a small C library (`user/libsurf`), a user-mode shell, file programs and a text editor |
+| Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 33 system calls, a small C library (`user/libsurf`), the SurfOS shell surfsh and an older small shell (`sh`), file programs and a text editor |
 | Network | e1000 driver; Ethernet, ARP, IPv4, ICMP, UDP, TCP, a DHCP client and a DNS resolver in a kernel thread; `ifconfig arp ping dhcp nslookup tcpecho httpget netstat` |
-| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name |
+| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name. **ai-dev** (10/6/26): surfsh on every console, with the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes, redirection and `$?`; it runs the ring-0 shell's 67 commands in its own task through `SYS_kcmd`. The ring-0 shell is the recovery console (`≋?>`) and the shell of `shell=kernel` (`≋#>`) |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
-the shell calls itself v0.008.
+the shell calls itself v0.008. **ai-dev** (10/6/26): SurfOS 1.0, from
+`include/surfos/version.h`: the banner ("Brandon Burr's SurfOS", "Version 1.0 on an x86,
+2004-2026"), `/initrd/etc/version`, the web client's User-Agent and the ring-0 shell's
+help ("SurfOS kernel shell 1.0").
 
 ## 2. Source tree
 
@@ -39,37 +42,47 @@ boot/        boot.S (Multiboot 1 + 2 headers, entry), grub.cfg (the ISO),
 kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch, IRQ chains),
              traps.asm (256 entry stubs), task.c (scheduler), wait.c + sync.c + ktimer.c (wait queues, locks,
              kernel timers), timer.c (PIT), panic.c (exceptions, panic), ksym.c (symbol lookup, backtraces),
-             klog.c (kernel log), console.c (VGA or framebuffer text grid, escape sequences, kprintf),
-             tty.c (input queues, line editor, raw mode, console switching), keyboard.c (scan codes, LEDs),
-             process.c (spawn, ELF loader, entering ring 3), syscall.c (int 0x80 dispatch),
+             klog.c (kernel log), console.c (VGA or framebuffer text grid, escape sequences, UTF-8, the
+             pager, kprintf), tty.c (input queues, line editor, raw mode, TTY_PAGE and TTY_CAPS, console
+             switching), keyboard.c (scan codes, LEDs), process.c (spawn, ELF loader, entering ring 3),
+             syscall.c (int 0x80 dispatch, the kernel commands for programs),
              sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks),
              multiboot.c + multiboot2.c (boot information), cpu.c, acpi.c, apic.c (profile=laptop)
 mm/          memory.c (init), pmm.c (frame stack), memrange.c (64-bit address ranges), paging.c (page tables,
              page-fault handler, ioremap), kalloc.c (kernel and DMA heaps), uvm.c (per-process address spaces)
 lib/blibc/   chars.c printf.c vsnprintf.c strings.c string.c memory.c ctype.c stdlib.c time.c
-shell/       main.c (the shell), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
+shell/       main.c (the ring-0 shell and the kernel's command table), prompt.c (the SurfOS prompt, also
+             built into libsurf), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
              selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, fat_mkfs.c (mkfs),
              devfs.c (/dev)
 net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c
 user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.c stdlib.c string.c ctype.c
-             malloc.c dirent.c time.c); include/ (surf.h, the standard headers stdio.h stdlib.h string.h
-             unistd.h fcntl.h errno.h dirent.h time.h ctype.h limits.h stdarg.h stddef.h stdint.h, and
-             sys/stat.h sys/statfs.h sys/types.h); bin/ (hello crash cat ls count sh echo cp mv rm mkdir
-             rmdir touch df wc head hexdump fstest edit)
+             malloc.c dirent.c time.c, and prompt.c, which builds shell/prompt.c again); include/ (surf.h,
+             the standard headers stdio.h stdlib.h string.h unistd.h fcntl.h errno.h dirent.h time.h ctype.h
+             limits.h stdarg.h stddef.h stdint.h, sys/stat.h sys/statfs.h sys/types.h, and surfos/prompt.h
+             kcmd.h version.h, which include the kernel's headers of those names); bin/ (hello crash cat ls
+             count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest kcmdtest);
+             surfsh/ (the SurfOS shell: main.c editor.c complete.c parse.c run.c builtins.c surfsh.h)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
-             framebuffer.c + fbcore.c + font8x16.c (the UEFI console; fonts/ has the Spleen source),
+             framebuffer.c + fbcore.c + font8x16.c (the UEFI console: the 256 code page 437 characters;
+             fonts/ has the Spleen source and surfos-symbols.bdf), cp437.c (the character set, the UTF-8
+             decoder),
              net/e1000.c, parport.c, dma/, floppy/, net/3c905b/ (2004, unwired),
              usb/ (xhci.c, usb.c, usbnet.c, usbdesc.c, msc.c: the USB stack, sections 15 and 16)
-include/     surfos/ (kernel headers), mm/, sys/ (driver headers: bdev.h, part.h, usb.h, ...),
+include/     surfos/ (kernel headers; prompt.h, kcmd.h and version.h use no kernel types and are shared with
+             programs), mm/, sys/ (driver headers: bdev.h, part.h, usb.h, cp437.h, ...),
              fs/ (vfs.h, bcache.h, fat.h), net/, asm/io.h, blibc headers
 tools/       qemu-run.py (headless QEMU harness), qemu-usb.py (the USB image under OVMF), gensyms.py (symbol
              table for backtraces), mkimage.py (test disk image, initrd, the "foreign" FAT32 stick),
              mkusb.py (the USB image), bdf2c.py (the font table)
-rootfs/      packed into build/images/initrd.tar, the Multiboot module behind rd0
+rootfs/      packed into build/images/initrd.tar, the Multiboot module behind rd0; etc/version, etc/surfsh.conf
+             (the shell's settings)
 tests/       host/: unit tests built with the host compiler (make unittest): blibc, boot information,
-             framebuffer, USB parsing, partition tables, mkfs, the user C library;
+             framebuffer, USB parsing, partition tables, mkfs, the user C library, the prompt, code page 437
+             and the font, the pager (test_pager.c with pager_bridge.c and pager_shim/: the real console.c and
+             tty.c on the host);
              test_part_tools.py (partition tables against sfdisk and sgdisk), test_mkusb.py, test_devenv.py
 ```
 
@@ -121,6 +134,16 @@ above, ending with `init_timer()` and `timer_confirm()`, which waits up to 100 m
 first tick (on a laptop it starts the local APIC timer when the PIT's never comes,
 otherwise it stops with a message). `init_fs()` mounts no USB drive, and with
 `profile=laptop` only the initrd (section 16).
+
+**ai-dev** (10/6/26): `init` (pid 1) starts no ring-0 shells of its own accord any more.
+On every console it starts `/initrd/bin/surfsh -l`, a user process flagged `TF_SHELL`,
+and starts it again when it ends. The ring-0 shell takes a console with `shell=kernel` on
+the command line (every console, elevated: `SURF ≋#>`) or as a recovery console
+(`SURF ≋?>`, after init's line saying why): when surfsh cannot be started (no initrd, no
+such file, not a file) or loaded (it never got as far as `TF_LOADED`), or after three
+abnormal ends within 30 seconds (killed, or ended within 2 seconds of its start). A spawn
+that fails for want of memory (or with EIO) leaves the console without a shell, and init
+tries again every second (section 17).
 
 CS reload: the Multiboot specification leaves the code selector undefined. QEMU's
 built-in loader enters with CS=0x08, GRUB 2 with CS=0x10. The far jump in `init_gdt()`
@@ -185,7 +208,18 @@ twice (kernel heap, DMA heap). `memstat` shows frames and heaps; `heaptest` chur
   `kill_task()` turns a task into a zombie and `task_wait()` in the parent frees it;
   init (pid 1) collects detached and orphaned tasks and restarts a shell when one
   dies. Nothing frees a stack that may still be running, and every kernel stack is
-  pre-faulted at creation (a stack page fault would double-fault).
+  pre-faulted at creation (a stack page fault would double-fault). **ai-dev** (10/6/26):
+  `task_exit()` closes the task's descriptors first, in its own context, so a background
+  program's file is written and its volume can be unmounted before anyone collects it (a
+  killed task's are closed at `reap()`, as before); `task_wait_opts(pid, &status,
+  WNOHANG)` answers 0 at once while the caller's children run on, and
+  `task_child_count()` counts them; init supervises the shell of each console (section 17).
+* **ai-dev** (10/6/26): a task also carries the number of mutexes it holds (`mutexes`,
+  kept by `kernel/sync.c`: the pager waits for a key only at 0), the UTF-8 character it
+  has half printed (`utf`: each writer decodes its own, section 7), and `kcap`, its console
+  output kept in memory for a redirected kernel command (section 10). `TF_LOADED` marks a
+  process whose program was loaded and entered, which tells init a load failure from a
+  program that ran and ended.
 * `KCRIT_ENTER`/`KCRIT_LEAVE` is a per-task counter that stops the tick from
   preempting; `irq_save()`/`irq_restore()` protect data an interrupt handler touches.
 * `ps` lists pid, state, class, CPU ticks, switches and parent; `kill`, `sleep`,
@@ -227,7 +261,8 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   Output goes to the task's console and, if that console is active, to video memory.
   **ai-dev**: when the boot loader leaves a linear framebuffer (UEFI), `conVideo` is a
   buffer in RAM and `driver/framebuffer.c` draws the cells that changed into the
-  framebuffer with an 8x16 font (`driver/font8x16.c`, Spleen), scaled by the largest whole
+  framebuffer with an 8x16 font (`driver/font8x16.c`, Spleen; since 10/6/26 the 256
+  characters of code page 437, below), scaled by the largest whole
   number at which 640x400 fits, with a software cursor; `driver/fbcore.c` is the renderer,
   tested on the host. On such a boot 0xB8000 and the CRTC ports are never touched.
   **ai-dev** (storage work): the grid is no longer fixed. `COLUMNS` and `LINES` are the
@@ -244,12 +279,14 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 * Serial console (`driver/serial.c`): `kputch()` mirrors everything written to the
   active console to COM1 (newline becomes CR LF, backspace becomes "\b \b", a console
   clear becomes an ANSI clear; **ai-dev**: CR and ESC pass through, so the terminal draws
-  the same escape sequences as the screen, and nothing outside printable ASCII is sent).
+  the same escape sequences as the screen; since 10/6/26 so do the bytes of UTF-8
+  characters, as they were printed: the terminal is taken to speak UTF-8).
   IRQ 4 feeds received bytes to the active tty (CR to newline, DEL to backspace,
   `ESC [ A/B/C/D/H/F` to the arrow/Home/End key codes; **ai-dev**: in raw mode, the bytes
-  as they came). `qemu -nographic` therefore gives a complete terminal session;
-  `tools/qemu-run.py` drives it. After a console switch the serial terminal is cleared and repainted
-  from the new console's buffer.
+  as they came; in line mode, a lone Esc reaches the pager's question). `qemu -nographic` therefore
+  gives a complete terminal session; `tools/qemu-run.py` drives it. After a console switch
+  the serial terminal is cleared and repainted from the new console's buffer (**ai-dev**:
+  each cell's character as UTF-8, `cp437_utf8()`).
 * `kernel/tty.c` (roadmap C1): one `struct tty` per console with a 256-byte input
   ring filled by the keyboard and serial ISRs under `irq_save()`, a wait queue for
   readers (`tty_getc()` blocks, `tty_trygetc()` polls), and a line discipline
@@ -257,6 +294,10 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   the Up/Down keys. `gets()`/`cgets()` and the shell read through it; `getch()`
   blocks on the task's own tty. `tty_switch(n)` makes console n active, repaints
   the VGA screen and the serial terminal; F1-F4 call it from the keyboard handler.
+  **ai-dev** (10/6/26): a read starts a new screenful for the pager, and a task that is
+  about to wait for a key calls off a question another task is waiting at (below); the
+  line editor's echo and `getchar()`'s go through `console_echo()`, which a kept output
+  never takes.
 * Keyboard (`kernel/keyboard.c`, roadmap C2): scan-code set 1 with the E0 prefix
   (arrows, Home/End, PgUp/PgDn, Insert/Delete), shift, caps lock on letters, num
   lock on the keypad, Ctrl-letter control characters, LEDs, Ctrl-Alt-Del reboots.
@@ -270,7 +311,7 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   prints in the writer's colour, so `kprintf()` and the older programs look as they did.
   Wrapping is VT100's: writing the last column leaves the cursor there and the next
   character starts the next line, so a program can write the bottom right corner without
-  scrolling. Only printable ASCII (32-126) is drawn; other bytes are dropped. `tty_ctl()`
+  scrolling. Until 10/6/26 only printable ASCII (32-126) was drawn (now UTF-8 is, below). `tty_ctl()`
   (system call `ttyctl`) with `TTY_RAW` 1 stops echo and line editing: keys arrive one at a
   time, Ctrl-C is just 0x03, the keyboard's special keys become the sequences a terminal
   sends (`ESC [ A` ... `ESC [ 6 ~`, Backspace 0x7f, Enter CR), and serial input arrives as
@@ -278,6 +319,55 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
   end with the task that set them (`tty_task_gone()`, from task exit and `trap_fatal()`),
   so a crashed editor cannot leave its console raw or unreadable. A read of `/dev/console`
   is `tty_read()`: a line with its newline, or in raw mode the keys queued (at least one).
+* **Characters** (**ai-dev**, 10/6/26; `driver/cp437.c`, `include/sys/cp437.h`). A cell's byte
+  is a code page 437 character: VGA text mode draws it with the card's own font, the
+  framebuffer with `font8x16.c`, the same 256 characters in the same order
+  (`tools/bdf2c.py` builds it from Spleen 8x16 and `driver/fonts/surfos-symbols.bdf`, which
+  draws what Spleen lacks: ▸, ◄, ∟ and ≋). SurfOS's symbols take three places whose VGA
+  glyph is close: ▸ U+25B8 at 0x10 (VGA ►), ≋ U+224B at 0xF7 (VGA ≈), … U+2026 at 0xF9
+  (VGA ∙); ► ▶ ≈ ∙ are drawn in those places too, β μ and the ohm sign at ß µ Ω, and the
+  typographic quotes and dashes ‘ ’ “ ” – — as ' " -. `kputch()` hands every byte that is
+  not plain ASCII to `utf8_feed()`, a pure function tested on the host: a complete
+  character becomes its cell, one code page 437 lacks is drawn as `?`, and bytes that are
+  not UTF-8 (a stray byte, a sequence cut short or not allowed) are drawn as the code page
+  437 characters they are, as the programs of 2004 meant them. Each writer has its own
+  decoder state (`surf_task.utf`; the interrupt handlers and early boot share one), so two
+  tasks printing at once cannot mix the halves of their characters. `ttyctl(TTY_CAPS)`
+  answers `TTY_CAP_UTF8 | TTY_CAP_COLOR`; `ascii` on the kernel command line leaves UTF-8
+  out, for a serial terminal that cannot show it (the shells then draw their prompt in
+  ASCII). Input stays ASCII: in line mode the bytes above 0x7F are the keyboard's
+  special keys.
+* **The pager** (**ai-dev**, 10/6/26; `include/surfos/tty.h` is the contract,
+  `kernel/console.c` counts the rows and asks, `kernel/tty.c` decides who is paged).
+  `ttyctl(TTY_PAGE, 1)` makes the caller the owner on its console: what it and the tasks
+  descended from it (the parent chain) print there in task context is paged. The console
+  counts the rows that start, by a newline or a VT100 wrap; once LINES - 1 rows have been
+  shown and a paged task is about to draw on, or start, another, that task first waits at
+  `TTY_MORE`, `--More-- (Space: next page, Enter: next line, q: skip the rest)`, in inverse
+  video on that row (the serial terminal gets it too), reads one key and takes the question
+  away again (the row as it was; CR ESC[K on the terminal). Space or any other key gives
+  another screenful, Enter one more row; q, Q, Esc or Ctrl-C drops what the paged tasks
+  print until paging ends, until a paged task reads (the dropped bytes since the last
+  newline, the question a program asks before it reads, are shown first) or until a paged
+  task ends (its fault report shows). A task waits only in task context, with interrupts
+  on, outside `KCRIT_ENTER`, holding no mutex, not in raw mode, and while no other task
+  waits to read the terminal; elsewhere the rows are counted and it asks at the next row
+  where it may. The other order is covered too: a task that starts to wait for a key calls
+  the question off, and so do `TTY_PAGE 0` and the owner's end or change; the asker goes on
+  as after Space. While the question is up another paged task that may wait waits for the
+  answer (`page_waiters`), and anyone else who prints there, a task or an interrupt
+  handler, takes the question away first; it comes back after their newline. A read, raw
+  mode on or off, `ESC[2J` (or `ESC[J` at home) and a paged task's own `TTY_PAGE` start a
+  new screenful. An ancestor of the owner takes the pager over (a shell whose background
+  job turned paging on); anyone else gets EBUSY. Kept output and other tasks' output are
+  never paged. `tests/host/test_pager.c` runs the real `console.c` and `tty.c` on the host,
+  with tasks as threads.
+* **Kept output** (**ai-dev**, 10/6/26): between `console_capture_begin()` and
+  `console_capture_end()`, what a task prints on its own console outside interrupts goes
+  into a buffer (`struct kcapture`; what does not fit is counted) instead of the screen.
+  The kernel-command bridge keeps a redirected command's output this way (section 10).
+  Typed input's echo bypasses it (`console_echo()`), `shell_ask()` pauses it around a
+  question, and a fault report or a panic ends it first.
 
 ## 8. Drivers
 
@@ -409,7 +499,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   their addresses, put the strings, `argv[]`, `argc` and `argv` on the user stack, open
   `/dev/console` as descriptors 0-2 and `iret` to ring 3 (`enter_user()`). A load
   failure ends the task with exit code 127; the pid is returned at once and `wait`
-  collects the exit code. **ai-dev**: `process_spawn_files()` (system call `spawnfd`)
+  collects the exit code. **ai-dev** (10/6/26): a process that gets as far as ring 3 is
+  flagged `TF_LOADED`, and `process_spawn()` passes `TF_SHELL` through for init. **ai-dev**: `process_spawn_files()` (system call `spawnfd`)
   hands the child open files of its parent as 0, 1 and 2 instead, which is how the user
   shell redirects; a new task starts in its creator's current directory. Exceptions in
   ring 3 kill only that process (`trap_fatal()` prints ", user mode" and skips the kernel
@@ -425,7 +516,33 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   sticks and the editor): rename fstat ftruncate fsync sync statfs dup2 time ttyctl
   spawnfd. `dup2` shares the open file and its position; `time` is the CMOS clock read
   as it is (local time, no time zone) in seconds since 1970, the scale FAT stamps files
-  with; `ttyctl` is raw mode and the screen size (section 7).
+  with; `ttyctl` is raw mode and the screen size (section 7). **ai-dev** (10/6/26): `wait`
+  takes options, `WNOHANG` (0 at once while children run on); `ttyctl` also `TTY_PAGE`
+  and `TTY_CAPS`; `kcmd` and `kcmdinfo` (32 and 33) run and list the kernel's shell
+  commands (below).
+* **Kernel commands from programs** (**ai-dev**, 10/6/26; `kernel/syscall.c`,
+  `include/surfos/kcmd.h`). `SYS_kcmd(argv)` runs one of the ring-0 shell's commands in
+  the calling task through `shell_run_command()`, as the ring-0 shell would, and returns
+  its status (0, 1 or 2; `run` the program's) or -ENOENT, -EINVAL, -EFAULT, -E2BIG,
+  -ENOMEM. argv is checked and measured first (at most 32 arguments of at most 255 bytes;
+  E2BIG beyond) and copied into one kernel block with exactly those lengths. When the
+  caller's descriptor 1 is a file that is not the console (`devfs_is_console()`), the call
+  takes a reference to it, keeps the command's output in a `KCMD_CAPTURE_MAX` (256 KB)
+  heap buffer while it runs (`console_capture_begin()`), and writes it there afterwards,
+  with a note when it was cut; a failed write turns a success into 1. What a call holds
+  (the argv block, the buffer, the file reference) is on a record (`struct kcmd_call`, on
+  the task's stack) that joins a list before anything is taken and leaves it after
+  everything is let go, each field set together with what it names; a command that ends
+  its own task (crashgp) or a task killed meanwhile is released at `reap()`
+  (`kcmd_task_gone()`). A question is asked through `shell_ask()`, which pauses the
+  capture, so it is seen and answered on the console while the rest goes to the file; the
+  commands that read the keyboard as they go (`rawkeys`, `demo`, `hanoi`: `CMD_ASKS`)
+  refuse a redirection (2). Inside a process a command prints on the caller's console,
+  `cd` moves the caller, `run` starts the program as the caller's child with its
+  descriptors 0-2, `spawn` and the tasks of `funky`, `tcpecho` and `die` are detached, a
+  crash command kills the caller (init restarts a shell it kills), and fault reports and
+  panics end the capture first, so they reach the screen. `SYS_kcmdinfo(i, &info)` copies
+  entry i of the table (name, arguments, help; 176 bytes, zeroed first).
 * **User space** (`user/`): `user.ld` links static ELF executables at 0x40000000 and
   `crt0.S` passes argc/argv to `main()`. **ai-dev** (10/5/26): `libsurf` is a small C
   library of its own, `libsurf.a` (programs see only `user/include`, never the kernel's
@@ -438,13 +555,19 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   `opendir`/`readdir`, the file calls (`open`, `lseek`, `stat`, `fstat`, `rename`,
   `ftruncate`, `fsync`, `statfs`, `dup2`, ...) and `time`, `localtime`, `mktime` and
   `strftime`. `surf.h` keeps what only SurfOS has: `spawn`, `spawnfd`, `wait`, `ttyctl`,
-  `uptime`, `msleep`, `getdent`. Programs, in the initrd under `/bin`: `hello`, `crash`
+  `uptime`, `msleep`, `getdent` (**ai-dev** 10/6/26: also `waitpid()` with `WNOHANG`,
+  `kcmd()`, `kcmdinfo()` and the `TTY_PAGE` and `TTY_CAPS` constants; `fpurge()` in stdio
+  drops what a stream holds; `user/include/surfos/` gives programs the kernel's
+  `prompt.h`, `kcmd.h` and `version.h`). Programs, in the initrd under `/bin`: `hello`, `crash`
   (NULL write, kernel write, cli, hlt, in, int 0x40, EFAULT, deep recursion, divide by
   zero), `count`, `sh` (spawns from `/initrd/bin` or a path and waits; `"quoted words"`,
   `<`, `>`, `>>`, a trailing `&`, and `cd`, `pwd`, `echo`, `exit` built in), `cat`,
   `ls [-la]`, `cp [-r]`, `mv`, `rm [-rf]`, `mkdir [-p]`, `rmdir`, `touch`, `echo`, `df`,
   `wc [-lwc]`, `head [-n N]`, `hexdump`, `fstest` (the file API from user space, `FSTEST
-  PASS`) and `edit`.
+  PASS`) and `edit`; **ai-dev** (10/6/26): `surfsh` (section 17), `pagetest` (the pager and
+  the character set: `pagetest N`, `ask N`, `crash N`, `hold MS`, `utf8`, `caps`) and
+  `kcmdtest` (the kernel-command calls from user space: statuses, limits, errors,
+  redirection, several callers at once).
 * **The editor** (`user/bin/edit.c`, **ai-dev**): full screen, in the manner of nano. The
   file lives in memory as an array of lines (up to 1 MB); the screen is a title line, the
   text, a status line and a line of keys. Lines do not wrap: the cursor's line scrolls
@@ -493,13 +616,16 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 
 ## 12. The shell (`shell/main.c`)
 
-**ai-dev**: a command table with argument splitting; `help` is generated from it.
+**ai-dev**: a command table with argument splitting; `help` is generated from it. Since
+10/6/26 the ring-0 shell around it is the recovery console and the shell of
+`shell=kernel`, and surfsh (section 17) runs the same commands in its own task through
+`SYS_kcmd`.
 
 | Command | Result |
 |---|---|
 | `help`, `clear`, `echo`, `tick`, `uptime`, `date`, `ps`, `kill`, `sleep`, `memstat`, `dmesg`, `irqstat`, `bootinfo`, `lpstat`, `test` | Work |
 | `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
-| `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task; the first three kill it and init restarts it, the last is reported and ignored |
+| `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task (from surfsh: the surfsh process); the first three kill it and init restarts it, the last is reported and ignored |
 | `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
@@ -514,6 +640,27 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 the device's name (`Type usb1 to write the new partition table to usb1 (...):`); any other
 answer prints `Cancelled` and nothing is written.
 
+**ai-dev** (10/6/26, surfsh): every command returns `CMD_OK` (0), `CMD_FAIL` (1, a refusal
+and a Cancelled question included) or `CMD_USAGE` (2) (`shell/shell.h`); `run` returns the
+program's exit status (1 when it could not start or was killed), and a line that names no
+command is 127. The ring-0 shell draws its prompt with `prompt_render()` (section 17):
+elevated, `SURF ≋#>`, or, as init's recovery console, diagnostic, `SURF ≋?>`. Since those
+states win over a failure, its `!` never shows, so a word `$?` is the last status (`echo
+$?`). Each command runs with `TTY_PAGE` on. `help` is headed "SurfOS kernel shell 1.0" and
+signed "(C)2004-2026 Brandon Burr.". The commands now also run inside user processes, and
+on four consoles at once, which shapes how they are written: they print on the caller's
+console (`clear` prints `ESC[0m ESC[?25h ESC[2J ESC[H`, so it clears the caller's console
+and follows a redirection; `funky` and `die` start on the caller's console); a question is
+asked through `shell_ask()`; a command that reads the keyboard as it goes is flagged
+`CMD_ASKS`; and none keeps state in statics that two callers could share. `heaptest` and
+`selftest` run one at a time (a claim by pid; a second is refused with status 1; heaptest's
+tables come from the heap for each run), and `selftest` waits for its own threads by pid,
+never for any child, since its caller may have programs of its own. `df`, `mount`,
+`umount` (by device) and `eject` print from a copy of the mount table taken under its lock
+(`vfs_mount_views()`), so an `umount` elsewhere cannot free what they walk while the pager
+holds them; `lsblk` asks `vfs_dev_mounted()`. `icmp_ping()` takes `ping_lock`: one request
+at a time (two pings used to share one request record).
+
 ## 13. Build system
 
 One non-recursive `Makefile` at the top level (the 2004 per-directory Makefiles with
@@ -524,11 +671,14 @@ symbol table after the data, and discards the sections a 2026 toolchain adds. Th
 kernel is linked twice so the symbol table can hold the final addresses. Targets:
 `all`, `run` (QEMU, serial console on the terminal), `run-vga`, `test` (headless
 smoke test through `tools/qemu-run.py`), `test-all` (-O0 and -O2), `unittest`
-(the host tests in `tests/host/` and `tests/test_part_tools.py`), `debug` (gdb stub),
+(the host tests in `tests/host/` and `tests/test_part_tools.py`; **ai-dev** 10/6/26 also
+`test_prompt`, `test_cp437` with the font, and `test_pager`), `debug` (gdb stub),
 `iso` (GRUB image), `run-iso`, `clean`.
 `.github/workflows/ci.yml` runs the unit tests, the smoke tests and the ISO build.
 See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags.
 **ai-dev**: `usb-image` and `test-usb` (section 14), `test-mkusb`; CI runs them too.
+User programs are one `.c` file each in `user/bin/`, except surfsh, whose files in
+`user/surfsh/` are linked by a rule of its own.
 
 ## 14. UEFI laptop boot (ai-dev, October 2026)
 
@@ -580,11 +730,14 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
 * **Testing.** `tools/qemu-usb.py` boots the image file itself under OVMF with fresh
   firmware variables from an emulated xHCI USB stick, without serial if asked, types on
   the PS/2 keyboard through the monitor and reads the framebuffer back cell by cell
-  against the font, with the grid and margins of `driver/fbcore.c`. Eleven scenarios:
-  serial, keyboard-only at 4 GB (raw mode and escape sequences included), the IdeaPad's
-  1920x1080 panel filled with 120x33 cells (`fullhd`), 6 GB with `himem` checked through
-  the monitor, the troubleshooting entry, no PIT, a USB Ethernet adapter (section 15), two
-  USB storage scenarios (section 16), and images missing their initrd or kernel.
+  against the font, with the grid and margins of `driver/fbcore.c` (since 10/6/26 the
+  font's code-point comments say which character each glyph is, so `▸ ≋ …` and accents
+  read back; `page_through()` answers the pager with Space on the keyboard). Twelve
+  scenarios: serial, keyboard-only at 4 GB (raw mode and escape sequences included), the
+  IdeaPad's 1920x1080 panel filled with 120x33 cells (`fullhd`), 6 GB with `himem` checked
+  through the monitor, the troubleshooting entry, the kernel-shell entry (`shell=kernel`,
+  section 17), no PIT, a USB Ethernet adapter (section 15), two USB storage scenarios
+  (section 16), and images missing their initrd or kernel.
 
 ## 15. USB networking (ai-dev, October 2026)
 
@@ -784,9 +937,8 @@ shell/                lsblk, fdisk, mkfs, mount, umount, eject, df, mv (main.c, 
   the host checks both images with macOS's `fsck_msdos` (attached by `hdiutil -nomount
   -readonly`), with `fsck.fat -n` (on the host or in the devenv container), and reads the
   files back with the FAT32 reader of `tools/mkusb.py`.
-* **Limits.** The screen, the serial mirror and the font show printable ASCII only, and
-  the keyboard types nothing else: a UTF-8 name is stored and read correctly but shows
-  without its other letters, and cannot be typed. `umount` and `eject` see only the asking
+* **Limits.** Typing stays ASCII: a UTF-8 name is stored, read and (since 10/6/26, section
+  7) shown correctly, but cannot be typed. `umount` and `eject` see only the asking
   task's current directory: a shell on another console that is still inside the mount does
   not stop them (its commands then find nothing there). No hubs, so a stick behind a hub,
   a dock or a dongle is not seen. `fdisk add` makes primary partitions only (four in an
@@ -800,3 +952,155 @@ shell/                lsblk, fdisk, mkfs, mount, umount, eject, df, mv (main.c, 
   up to 2 TB. In user space `time_t` is a signed 32-bit count, so the clock wraps in
   January 2038; `printf` has no floating point; `lseek` takes a signed 32-bit offset, so a
   file can grow to FAT's 4 GB limit but positions past 2 GB cannot be sought.
+
+## 17. surfsh, the SurfOS shell (ai-dev, October 2026)
+
+The owner asked (2026-10-06) for the shell to become a program, as `bash` or `sh` is
+elsewhere, started by the system on every console, with a prompt of SurfOS's own design,
+Tab completion, a pager, and the banner of SurfOS 1.0 (`docs/USB-BOOT.md` section 10; the
+brief is `docs/superpowers/plans/2026-10-06-surfsh.md`). The layers, from the top:
+
+```
+surfsh (user/surfsh/)  ring 3: the line editor in raw mode, Tab, parsing, its own commands, programs
+prompt_render()        shell/prompt.c: breadcrumbs, the wave and the state (the ring-0 shell's too)
+SYS_kcmd, SYS_kcmdinfo kernel/syscall.c: the ring-0 shell's commands in surfsh's task; kept output for >
+shell_run_command()    shell/main.c: the command table, statuses, shell_ask()
+TTY_PAGE, TTY_CAPS     kernel/tty.c: who is paged; what the console draws
+kputch()               kernel/console.c: kept output, the pager, UTF-8 into code page 437 cells
+init                   kernel/task.c: surfsh -l on F1-F4, started again; the ring-0 shell for recovery
+```
+
+* **The prompt** (`shell/prompt.c`, `include/surfos/prompt.h`), as the owner designed it:
+  the working directory as breadcrumbs, ` ▸ ` between the names and no leading `/`
+  (`/initrd/bin` is `initrd ▸ bin`), `SURF` for the root, then the wave `≋` and one state
+  character before `>`: none (normal), `!` (the last command failed), `@` (a remote session,
+  its host name the first breadcrumb), `#` (elevated), `?` (diagnostic). Only one is shown:
+  diagnostic before elevated before remote before failed. A long path keeps its last names
+  after `…`: at most `max_depth` items (5 unless set; `…` counts as one) and at most half the
+  terminal's width (at least 20 columns); when even `… ▸ name` is too wide, the name keeps
+  its last characters after `…`. Every character counts as one column, as on the console,
+  and a control character in a name is drawn as `?`. Without Unicode the same prompt is
+  ASCII (`initrd > bin ~>`, `...`); with colour it is light blue, the prompt's colour since
+  2004, its state character light red (`!`), yellow (`#`), light magenta (`@`) or orange
+  (`?`), and the colours end before the trailing space. The renderer is plain C without
+  library calls: the kernel links it, libsurf builds it again (`user/libsurf/prompt.c`) and
+  `tests/host/test_prompt.c` runs it on the host. surfsh is never elevated, remote or
+  diagnostic, so it shows `≋>` or `≋!>`; the ring-0 shell is elevated, and diagnostic as a
+  recovery console. SurfOS has no remote sessions yet.
+* **surfsh's parts** (`user/surfsh/`, about 1,900 lines; `surfsh.h` lists them): `main.c`
+  (the start: the settings from `/initrd/etc/surfsh.conf`, then with `-l` the banner of
+  `do_banner()` from `surfos/version.h`; the loop), `editor.c` (the line), `complete.c`
+  (Tab), `parse.c`, `run.c`, and `builtins.c`: `cd [dir]` (none: `/`; `-`: the one before),
+  `pwd`, `echo [-n] [-e]`, `exit [n]`, `help [name]`, `history`, `set [key [value]]` for
+  `prompt.unicode`, `prompt.color` and `prompt.max_depth` (also `key=value`, as the file
+  writes them). The banner and the prompt are coloured only where `TTY_CAPS` says the
+  console has colours, and drawn with `▸ ≋` only where it says UTF-8. With input that is
+  not the console (`surfsh < file`) it runs the lines without a prompt. Statuses: 0, 1 a
+  failure, 2 a usage or syntax error (a line too long included), 126 a program that could
+  not be started, 127 no such command, 137 a program the kernel killed (128 + 9); `exit`
+  keeps its status in 0-255, so a shell that ends is never mistaken for a killed one.
+* **Lines** (`parse.c`). Words are separated by blanks; `"double"` and `'single'` quotes
+  and `\` keep blanks and the characters `< > >> & ; #` in a word, and `|` is refused.
+  `$?`, unquoted or in double quotes, is the one expansion: the status of the command
+  before, in decimal. The whole line is checked first (`parse_check()`), then each command
+  is read again just before it runs (`parse_next()`), so in `ls x; echo $?` the echo sees the
+  status of ls. A line holds at most 1023 bytes and a command 32 words; a word of more than
+  255 bytes, which the kernel would answer with EFAULT, is refused by surfsh with that
+  reason.
+* **Which command runs** (`run.c`), in the ring-0 shell's order: surfsh's own, then the
+  kernel's (a name that `SYS_kcmdinfo` listed when surfsh started, run with `kcmd()`), then
+  a program, `/initrd/bin/<name>` or a path when the name has a `/`. So `ls`, `cat` and `cp`
+  are the kernel's, as they always were at the prompt, and the programs of the same names
+  are reached by path (`help` marks them with `*`); the kernel's `help`, `echo`, `cd` and
+  `pwd` give way to surfsh's own. On a kernel without the bridge (ENOSYS) there are no
+  kernel commands; a name the table lists is the kernel's whatever `kcmd()` answers.
+* **Redirection.** A program gets its files from `spawnfd()`. A builtin or a kernel command
+  runs in surfsh's own task, so its file is put on descriptor 1 (`dup2`) and taken off
+  again afterwards from a copy of descriptor 1 made at the start (`dup2(1, 15)`, the last
+  slot, which no program inherits) or, failing that, from `/dev/console`; for a kernel
+  command the kernel keeps the output and writes it into that file when the command is
+  done (section 10). What stdout could not write (a full disk) is dropped with `fpurge()`
+  rather than shown on the console later, and the command fails. `<` and `&` are refused
+  for builtins and kernel commands, with a hint when a program of the name exists.
+* **Background programs** (`&`) are not waited for (`[pid] started`); before each prompt
+  the ones that have ended are collected with `waitpid(-1, &status, WNOHANG)` and reported
+  (`[pid] done`, `[pid] exit status n`, `[pid] killed`). Their files were closed when they
+  exited (section 5).
+* **Paging.** Every command in the foreground, builtin, kernel command or program, runs
+  between `ttyctl(TTY_PAGE, 1)` and `ttyctl(TTY_PAGE, 0)`, so long output (`help`, long on
+  purpose) stops at `--More--` (section 7). The lines surfsh itself prints after a program,
+  `[exit status n]` and `[pid n killed]`, come after paging ends, so q cannot hide them.
+* **Tab** (`complete.c`) reads the line up to the cursor with the parser's rules. The first
+  word of a command, without a `/`, completes against the builtins, the kernel's commands
+  and the programs; anything else is a path, relative to the current directory, with `.`,
+  `..` and dot files only after a typed dot. One candidate is completed (`/` after a
+  directory, a space otherwise), several as far as they agree, cut at a character
+  boundary; a second Tab lists them in columns, asking first ("Display all N
+  possibilities?") when they would not fit on the screen, since the list is written in raw
+  mode, where the pager does not act. A name with blanks or special characters is
+  completed inside double quotes.
+* **The line editor** (`editor.c`) uses only raw mode, `TTY_GETSIZE` and the ANSI subset of
+  `tty.h`, the same on the screen and over the serial line. Raw mode is on only while a
+  line is typed: whatever runs finds the console in line mode, where the kernel's commands
+  ask their questions and the pager can stop. Keys: Left, Right, Home, End (^A ^E),
+  Backspace, Delete, ^U, ^K, ^W, Up and Down through 128 lines of history (no line twice in
+  a row), Tab, ^L, ^C (the line dropped), ^D (on an empty line, the end); typed text is
+  teal, and a terminal's escape sequences are read to their final byte, so one the editor
+  does not know leaves nothing in the line. It draws only on its own rows. The cursor is a
+  count of columns from the prompt's start, moved only with CR and `ESC[nA/B/C`, and never
+  left in the console's pending wrap (CR LF where the prompt or the line ends exactly at a
+  row's end). An edit rewrites the line from the first changed character and blanks only
+  the cells it no longer needs, so whatever lies below (a program's drawing, `ansi`'s corner)
+  stays unless the line grows over it. Before each prompt `fresh_row()` resets the colours
+  and shows the cursor (a kernel command runs in surfsh's task, and what it leaves behind is
+  not undone by a task's end), then writes a row of spaces, CR and `ESC[K`: the prompt
+  starts on a fresh row wherever the last output stopped, without leaving an empty one.
+  Only Ctrl-L clears the screen (`ESC[2J ESC[H`); the prompt is written again only after
+  Ctrl-L, Ctrl-C or a list. Keys that arrive together (a paste) are all handled before the
+  screen is written, and keys typed after Enter are dropped, as the console drops its queue
+  when raw mode ends.
+* **Supervision** (`kernel/task.c`, section 3): init starts `/initrd/bin/surfsh -l` on F1-F4
+  (`TF_SHELL`) and starts it again when it ends, quietly after an exit with status 0 and
+  with a line otherwise. Three abnormal ends within 30 seconds (killed, or ended within 2
+  seconds of its start), or a surfsh that cannot be started or loaded, give that console
+  the ring-0 shell as a recovery console until the next boot, with init's line shown before
+  its first prompt; a spawn that fails for want of memory is tried again every second.
+  `shell=kernel` gives every console the ring-0 shell, and the USB image's GRUB menu has an
+  entry for it ("SurfOS (kernel shell)").
+* **Tests.** `make unittest`: `test_prompt` (the states and their priority, shortening by
+  depth and by width, ASCII, colours, odd names, small buffers), `test_cp437` (the tables,
+  the decoder's corner cases, the font's glyphs) and `test_pager` (the real `console.c` and
+  `tty.c` on the host: exact fits and wraps, the keys, where a task may not wait, the
+  call-off in both orders, a killed asker, the owner's end, takeover and EBUSY, the drop
+  and its replay, the serial bytes of the question). `make test` drives surfsh on every
+  console over the serial line; the harness's `PROMPT` pattern matches every prompt state
+  and answers `--More--` with Space unless a step turns that off. surfsh's block starts a
+  nested shell and covers the prompt and its states, `$?`, Tab for commands and paths,
+  history, a line over the limit, kernel commands' statuses and redirection, `<` refused, a
+  background program reported at the next prompt, a killed program, `help` paged, `set`
+  and `exit`. The pager's steps answer with Space, Enter and q from the serial line and on
+  the PS/2 keyboard (read back from VGA memory), and check a question after q, a crash
+  report after q and a background job during a paged command. `@surfsh-corner` checks that
+  `ansi`'s Z stays in VGA memory's corner through a prompt and an edited, cancelled line.
+  `kcmdtest` covers the bridge's statuses, limits, errors and redirection, heaptests and
+  pings from several processes at once, and selftest from a process with a child. `@boot`
+  steps boot again with other kernel words or initrds: `shell=kernel` (`≋#>`), `ascii`
+  (`~>`), no initrd (a recovery console at once), a surfsh that exits at once (started
+  again twice, then recovery), one that cannot be loaded, and the old `sh` in its place.
+  `make test-usb` drives it on the framebuffer and the keyboard: `help` page by page, Tab
+  and history from the PS/2 keyboard, UTF-8 read back through the font in `fullhd`, and the
+  `kernel-shell` scenario boots the GRUB entry.
+* **Limits.** Typing stays ASCII: in line mode the bytes above 0x7F are the keyboard's
+  special keys, so accented letters show but cannot be typed. No pipes, no variables other
+  than `$?`, no wildcards, no job control, and no Ctrl+C for a command that runs (Ctrl+C
+  drops the line at the prompt and acts like q at `--More--`). A task killed by another
+  task in the middle of a kernel command has only the bridge's own allocations released at
+  `reap()`; what the command itself held (an open file, its buffers) stays. The console's
+  input queue holds 256 bytes, so a long paste over the serial line loses bytes. A serial
+  terminal must be as wide as the console's grid for the editor's wrapping to look right
+  there, since the width comes from `TTY_GETSIZE`. `heaptest` compares the heap's totals
+  before and after, and `selftest` the number of tasks, so other consoles using the heap or
+  starting programs meanwhile make them report failures; a self test that was killed keeps
+  the next one refused until a reboot, since its helper tasks may still wait on its
+  semaphores. A redirected kernel command takes a 256 KB buffer from the kernel heap each
+  time.
