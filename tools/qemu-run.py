@@ -70,8 +70,8 @@ def surf_prompt(crumbs, state):
 SMOKE = [
     ('tick',    ['Ticks:']),
     ('memstat', ['Physical memory:', 'Free physical pages:']),
-    ('ps',      ['Kernel Idle Task', 'init', 'Shell 0']),
-    ('help',    ['SurfOS kernel shell 1.0', '(C)2004-2026 Brandon Burr.']),
+    ('ps',      ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),                 # 10/6/26: surfsh on every console
+    ('help',    ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
     ('test',    ['linear is using physical']),
     ('dmesg',   ['Booting SurfOS Kernel']),
     ('crashgp', ['General Protection Fault', 'Backtrace:', 'restarted the shell']),
@@ -182,7 +182,7 @@ SMOKE = [
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
-    ('crash efault', ['= -1 (errno 14: Bad address)', 'exit status 0']),
+    ('run crash efault', ['= -1 (errno 14: Bad address)', 'exit status 0']),   # run: the kernel says the status
     ('count 3 10', ['counted to 3']),
     ('ls /dev', ['console', 'null']),
     ('sh', ['$ '], [('hello from-sh', ['Hello from user mode', 'argv[1] = "from-sh"', '$ ']),
@@ -215,7 +215,7 @@ SMOKE = [
     ('echo status $?', ['status 1']),
     ('fdisk', ['fdisk <disk> new mbr|gpt']),
     ('echo status $?', ['status 2']),
-    ('no-such-command', ['Invalid command']),
+    ('no-such-command', ['surfsh: no-such-command: command not found']),
     ('echo status $?', ['status 127']),
     ('run hello', ['exit status 42']),
     ('echo status $?', ['status 42']),
@@ -272,7 +272,7 @@ SMOKE = [
                     ('rm -r /hda1/T', ['$ ']),
                     ('ls /hda1/T', ['No such file or directory', '$ ']),
                     ('df', ['Mounted on', 'rootfs', 'devfs', 'rd0', '/initrd', 'hda1', '/hda1', '$ ']),
-                    ('exit', ['exit status 0'])]),
+                    ('exit', [])]),                                  # status 0: surfsh says nothing
     # the text editor over the serial line (raw mode, keys as bytes): type with Enter, Backspace,
     # Home, arrows and an insertion, save, quit, check the file; reopen it, change a line, quit
     # and answer the question; a file with CRLF line ends keeps them
@@ -291,7 +291,7 @@ SMOKE = [
     ('cat /hda1/NOTE.TXT', ['Alpha one!\r\nBeta 2\r\nGamma three\r\n']),
     ('run ls /hda1/NOTE.TXT.tmp', ['No such file or directory']),
     ('sh', ['$ '], [('echo -e "first\\r\\nsecond\\r" > /hda1/CRLF.TXT', ['$ ']),
-                    ('exit', ['exit status 0'])]),
+                    ('exit', [])]),
     ('run edit /hda1/CRLF.TXT', ['Read 2 lines (CRLF line ends)', '^S Save'],
      [(b'\x1b[F!\x13', ['Wrote 2 lines']),
       (b'\x11', ['exit status 0'])]),
@@ -635,13 +635,15 @@ def ansi_screen_check(q):
 
 # 10/6/26: the prompt in the root directory as a repaint draws it from a console's cells: a console that does not
 # draw UTF-8 yet keeps no wave there (SURF #>), one that does keeps it in one cell
-REPAINTED_PROMPT = re.compile(rb'SURF (?:\xe2\x89\x8b|~)?[!#@?]?>')
+REPAINTED_PROMPT = re.compile(rb'SURF \xe2\x89\x8b[!#@?]?>')
 
 
 def console_switch_check(q):
     """F2 and back to F1 on the PS/2 keyboard, after `ansi`: the serial terminal is repainted
-    from the console's buffer, down to its last row in use (Z in the corner, row 25), and the
-    cursor goes back up to the prompt on row 14, just after it (the column the screen shows)"""
+    from the console's buffer, down to its last row in use, and the cursor goes back to the
+    prompt on row 14, just after it (the column the screen shows). 10/6/26: surfsh clears the
+    rows below its prompt when it draws it (ESC [ J), so `ansi`'s Z in the corner is gone and
+    the prompt's row is the last one in use: no rows to climb back"""
     q.sendkeys('<f2>')
     ok = q.expect("Brandon Burr's SurfOS", 10) and q.expect(REPAINTED_PROMPT, 10)
     q.sendkeys('<f1>')
@@ -649,8 +651,8 @@ def console_switch_check(q):
     screen = q.screen()
     rows = screen.split('\n')
     column = len(rows[13]) + 1 if len(rows) > 13 else 0          # the prompt and the space after it
-    ok = ok and q.expect(f'Z\r\x1b[11A\x1b[{column}C', 10)
-    ok = ok and 'ANSI-TEST done, 80x25' in screen
+    ok = ok and len(rows) == 14 and q.expect(re.compile(rb'ANSI-TEST done, 80x25\r\n' + REPAINTED_PROMPT.pattern +
+                                                         rb'\r\x1b\[%dC' % column), 10)
     return ('F2 and F1: the serial terminal is repainted and the cursor put back', ok)
 
 
@@ -689,7 +691,7 @@ def pager_enter_quit_check(q):
             ok = q.expect('pagetest line 025', 10) and q.expect('--More--', 10)
         if ok:
             q.send('q')
-            ok = q.expect('exit status 0', 20) and q.expect(PROMPT, 10)
+            ok = q.expect(PROMPT, 20)                       # the rest, run's status line too, is not shown
         out = q.transcript[start:].decode(errors='replace')
         parts = out.split(MORE.decode())
         ok = ok and [pagetest_lines(p) for p in parts] == [list(range(1, 25)), [25], []] and 'PAGETEST DONE' not in out
@@ -728,7 +730,7 @@ def pager_keys_check(q):
             ok = vga_until(asking_after(49))
         if ok:
             q.sendkeys('q')
-            ok = q.expect('exit status 0', 20) and q.expect(PROMPT, 10)
+            ok = q.expect(PROMPT, 20)
         ok = ok and 'PAGETEST DONE' not in q.transcript[start:].decode(errors='replace')
     finally:
         q.more_at, q.auto_more = len(q.transcript), True
