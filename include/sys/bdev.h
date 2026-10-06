@@ -16,7 +16,8 @@ disk, the SurfOS boot drive, or anything mounted. An unplugged disk is
 unregistered: it and its partitions are marked gone (every I/O fails) and taken
 off the list, but never freed, so no mount, cache block or command is left
 holding a dangling pointer. Partitions of a disk whose name ends in a digit
-get a 'p' (usb0p1).
+get a 'p' (usb0p1). Partition tables are MBR (with logical partitions) or GPT;
+the disk that holds the SurfOS boot volume (label SURFOSUSB) is protected.
 */
 
 #ifndef _SYS_BDEV_H
@@ -100,8 +101,13 @@ void bdev_print(void);                      /* lsblk */
 const char *bdev_part_type_name(u8 type);
 
 /* part.c: register the partitions of a disk (MBR with logical partitions from 5, or GPT) as
-   <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read */
+   <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read.
+   A disk with a FAT volume labelled SURFOSUSB gets protect = bdev_boot_drive, and so do its
+   partitions. bdev_rescan() reads the table again after it was rewritten: the old partitions are
+   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted. */
 int bdev_scan_partitions(struct bdev *disk);
+int bdev_rescan(struct bdev *disk);
+extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
 
 /* drivers (driver table entries) */
 int init_ramdisk(void);
