@@ -11,14 +11,14 @@ File: console.h Date: Prior than 4/23/04
 
 #include <surfos/types.h>
 
-/* 10/5/26: the text grid is set once at boot (init_console): 80x25 in VGA text mode, and
-   on a framebuffer as many cells of the same letters as the screen holds (driver/fbcore.c),
-   at most MAX_COLUMNS x MAX_LINES. COLUMNS and LINES were 80 and 25 until then. */
+/* 10/5/26: the text grid. Every console starts at 80x25 in its own memBuf, and VGA text
+   mode stays there. On a framebuffer that holds more cells of the same letters (driver/
+   fbcore.c: 120x33 at 1920x1080), init_console_grid() moves the consoles to buffers of
+   that size from the kernel heap, once the heap can be touched. COLUMNS and LINES were
+   the constants 80 and 25 until then. */
 extern u_int conColumns, conLines;
 #define COLUMNS     conColumns
 #define LINES       conLines
-#define MAX_COLUMNS 240
-#define MAX_LINES   100
 
 #define VMEM_ADDR   0xB8000
 #define VIDPORT 0x3D4
@@ -29,7 +29,7 @@ extern u_int conColumns, conLines;
 
 /* Virtual Console memory allocation*/
 #define NUM_CONSOLES 4 //F1..F4; each has a shell and a tty
-#define VMEM_SIZE (MAX_COLUMNS * MAX_LINES * 2) //each virtual console holds the largest grid (in 2004, 4000 bytes)
+#define VMEM_SIZE 4000 //each virtual console is 4000 bytes (80x25; a bigger grid's buffers come from the heap)
 #define CONSOLE_BASE 0xC000000//0x800 //start storing the first console @
 //0x800 /***********************************/
 
@@ -44,7 +44,7 @@ typedef struct surf_console {
     TEXTCOLOR txtColor;
     surf_point loc;
     u_char *vmem;
-    u_char memBuf[VMEM_SIZE];
+    u_char memBuf[4001];
     /* 10/5/26: the ANSI escape sequences of tty.h (kernel/console.c); all zero is plain text */
     u_char esc;                 /* where the parser is in a sequence */
     u_char esc_mark;            /* ESC [ ? ...: the private marker; 1 = intermediate bytes (not ours) */
@@ -74,6 +74,7 @@ void syncVideoConsole(bool);
 /* 10/5/26 (USB boot): VGA text or the framebuffer, see kernel/console.c */
 const char *console_describe(char *buf, size_t size);
 void console_replay_log(void);   /* the early boot messages, on a screen that did not exist yet */
+void init_console_grid(void);    /* a framebuffer's whole grid, after init_interrupt() (the heap faults its pages in) */
 
 /* 10/5/26: escape sequences. Back to plain text (no sequence half read, the writer's colours,
    the cursor shown) when the task that changed them ends, and for a panic report. */

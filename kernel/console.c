@@ -21,6 +21,7 @@ and the consoles draw the ANSI escape sequences that include/surfos/tty.h lists.
 #include <surfos/klog.h>
 
 #include <mm/kalloc.h>
+#include <surfos/irq.h>
 
 #include <blibc_common.h>
 #include <stdarg.h>
@@ -39,12 +40,10 @@ enum { VIDEO_VGA, VIDEO_FB, VIDEO_NONE };
 static int video = VIDEO_VGA;
 static bool mirror_serial = true;
 
-/* The text grid (10/5/26): 80x25 as in 2004, unless a framebuffer holds more cells of the
-   same letters (1920x1080: 120x33). Set once, before anything is printed on the screen. */
+/* The text grid (10/5/26): 80x25 as in 2004, in each console's memBuf, until a framebuffer
+   that holds more cells of the same letters (1920x1080: 120x33) gets its whole grid in
+   init_console_grid(). */
 u_int conColumns = 80, conLines = 25;
-#if FB_MAX_COLS > MAX_COLUMNS || FB_MAX_ROWS > MAX_LINES
-#error "the console buffers must hold the largest framebuffer grid"
-#endif
 
 /* the bytes of one screenful in the grid: cells x 2 (character and attribute) */
 #define SCREEN_BYTES (COLUMNS * LINES * 2)
@@ -56,7 +55,6 @@ void init_console(void) {
     //init the video console
     if(framebuffer_init() == 0) video = VIDEO_FB;
     else if(bootinfo.efi) video = VIDEO_NONE;
-    if(video == VIDEO_FB) framebuffer_grid(&conColumns, &conLines); //more text, same letters
     conVideo.vmem = video == VIDEO_VGA ? (u_char*)VMEM_ADDR : conVideo.memBuf; //normally 0xB8000
     if(video == VIDEO_FB) framebuffer_bind(conVideo.memBuf);
     conVideo.txtColor=TEAL_TXT; //for posterity
@@ -75,6 +73,46 @@ void init_console(void) {
     if(video == VIDEO_FB) framebuffer_present();
 
     return;
+}
+
+/* 10/5/26: more text, same letters. A framebuffer that holds more than 80x25 cells gets
+   its whole grid here, with one buffer from the kernel heap for the four consoles and the
+   screen (static buffers of the largest grid would make the kernel image hundreds of KB
+   bigger). The heap is touched only once the page fault handler exists, so this runs
+   after init_interrupt(); the boot messages so far are in the kernel log and are drawn
+   again on the bigger grid. VGA text mode, and a mode that holds just 80x25, keep the
+   static buffers. Without memory the screen stays at 80x25. */
+void init_console_grid(void) {
+    u_int cols, rows, bytes, i;
+    u_char *mem;
+    u_long flags;
+    if(video != VIDEO_FB) return;
+    framebuffer_grid(&cols, &rows);
+    if(cols == COLUMNS && rows == LINES) return;
+    bytes = cols * rows * 2;
+    mem = (u_char *)kalloc((NUM_CONSOLES + 1) * bytes);
+    if(!mem) return;
+    for(i = 0; i < (NUM_CONSOLES + 1) * bytes; i += 2) {   /* cleared cells, as clearConsole() leaves them */
+        mem[i] = 0;
+        mem[i + 1] = 7;
+    }
+    if(framebuffer_grow(mem + NUM_CONSOLES * bytes) != 0) {
+        kfree(mem);
+        return;
+    }
+    flags = irq_save();
+    conColumns = cols;
+    conLines = rows;
+    conVideo.vmem = mem + NUM_CONSOLES * bytes;
+    setPoint(&conVideo.loc, 0, 0);
+    for(i = 0; i < NUM_CONSOLES; i++) {
+        conArray[i].vmem = mem + i * bytes;
+        setPoint(&conArray[i].loc, 0, 0);
+        conArray[i].wrap = 0;
+    }
+    irq_restore(flags);
+    syncVideoConsole(true);     //the whole screen, blank
+    console_replay_log();       //and the boot so far (the serial port has it already)
 }
 
 /* what the screen is, for bootinfo and drivers */

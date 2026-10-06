@@ -479,31 +479,38 @@ static void set_raw_and_exit(void *arg) {     /* and never turns it off, nor the
     raw_was_set = raw_was_set && t->con->inverse && t->con->cursor_off;
 }
 
-/* escape sequences on a console that is never shown (no screen, no serial port) */
-static surf_console ansi_con;
+/* escape sequences on a console that is never shown (no screen, no serial port), with
+   cells for the screen's grid */
+static surf_console *ansi_con;
 
 static void ansi_put(const char *s) {
-    while(*s) kputch(&ansi_con, WHITE_TXT, *s++);
+    while(*s) kputch(ansi_con, WHITE_TXT, *s++);
 }
 
 /* the text at x,y, and its attribute unless attr is -1 */
 static bool ansi_at(u_int x, u_int y, const char *s, int attr) {
     for(; *s; s++, x++) {
-        u_char *cell = ansi_con.vmem + (y * COLUMNS + x) * 2;
+        u_char *cell = ansi_con->vmem + (y * COLUMNS + x) * 2;
         if(cell[0] != (u_char)*s || (attr >= 0 && cell[1] != attr)) return false;
     }
     return true;
 }
 
 static bool ansi_cursor(u_int x, u_int y) {
-    return ansi_con.loc.x == x && ansi_con.loc.y == y;
+    return ansi_con->loc.x == x && ansi_con->loc.y == y;
 }
 
 static void test_ansi(void) {
     u_int i;
-    ansi_con.vmem = ansi_con.memBuf;
-    ansi_con.txtColor = WHITE_TXT;
-    clearConsole(&ansi_con);
+    ansi_con = (surf_console *)kcalloc(1, sizeof(surf_console));
+    if(ansi_con) ansi_con->vmem = (u_char *)kalloc(COLUMNS * LINES * 2);
+    if(!ansi_con || !ansi_con->vmem) {
+        check(false, "console: memory for the escape sequence tests");
+        if(ansi_con) kfree(ansi_con);
+        return;
+    }
+    ansi_con->txtColor = WHITE_TXT;
+    clearConsole(ansi_con);
     ansi_put("first\033[3;5Hxy");
     check(ansi_at(0, 0, "first", 0x07) && ansi_at(4, 2, "xy", 0x07) && ansi_cursor(6, 2), "console: ESC[row;colH");
     ansi_put("\033[7mI\033[0mN\033[1;31mR\033[44mB\033[m.");
@@ -521,13 +528,13 @@ static void test_ansi(void) {
     ansi_put("\033[H\033[5n\033[?1049h\033(B\033]0;a title\007\033[38;5;196m\033[ q\033[?7;9rok");
     check(ansi_at(0, 0, "ok ", 0x07), "console: other sequences are dropped whole");
     ansi_put("\033[?25l");
-    check(ansi_con.cursor_off && ansi_con.ansi_owner == curTask, "console: ESC[?25l hides the cursor");
+    check(ansi_con->cursor_off && ansi_con->ansi_owner == curTask, "console: ESC[?25l hides the cursor");
     ansi_put("\033[?25h");
-    check(!ansi_con.cursor_off && !ansi_con.ansi_owner, "console: ESC[?25h shows it");
+    check(!ansi_con->cursor_off && !ansi_con->ansi_owner, "console: ESC[?25h shows it");
     /* a full line: the cursor waits in the last column; "\r\n" is one line, "\n" alone wraps first as it always did */
     ansi_put("\033[H");
     for(i = 0; i < COLUMNS; i++) ansi_put("a");
-    check(ansi_cursor(COLUMNS - 1, 0) && ansi_con.wrap, "console: the cursor stays in the last column");
+    check(ansi_cursor(COLUMNS - 1, 0) && ansi_con->wrap, "console: the cursor stays in the last column");
     ansi_put("\r\n");
     for(i = 0; i < COLUMNS; i++) ansi_put("b");
     ansi_put("\n");
@@ -538,7 +545,9 @@ static void test_ansi(void) {
     ansi_put("d\b\b");
     check(ansi_at(COLUMNS - 1, 0, " ", -1) && ansi_at(0, 1, " ", -1) && ansi_cursor(COLUMNS - 1, 0),
           "console: backspace erases back across the end of a line");
-    console_reset_ansi(&ansi_con);
+    kfree(ansi_con->vmem);
+    kfree(ansi_con);
+    ansi_con = NULL;
 }
 
 /* raw mode on this shell's own terminal: nothing is typed, the keys are made up here */
