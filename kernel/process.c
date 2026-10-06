@@ -16,6 +16,12 @@ descriptors 0, 1 and 2 instead (the user shell's < > >> redirection).
 10/6/26: TF_SHELL passes through too: init starts the user shell, surfsh, with it
 and starts it again when it ends. TF_LOADED tells a program that ran from one that
 could not be loaded, whatever its exit status says.
+
+10/6/26: from its creation until its program is loaded, a process is inside a call
+(TF_INCALL, TC_SYSCALL): a kill waits for the loading to end (task.h), and what the
+process was handed (its arguments, its files) is never left behind. A program started
+by a task that its console's pager covers is in the foreground (TF_FOREGROUND): Ctrl+C
+reaches it (tty.c, task_interrupt_job()).
 */
 
 #include <surfos/types.h>
@@ -152,6 +158,7 @@ static void user_entry(void *arg) {
 
     kfree(sa);
     curTask->flags |= TF_LOADED;                          /* 10/6/26: it runs: init tells a load failure apart */
+    task_call_leave(TC_SYSCALL);                          /* 10/6/26: loaded; a kill that waited ends it here */
     enter_user(eh.e_entry, sp);
 }
 
@@ -195,7 +202,8 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     }
     base = strrchr(sa->path, '/');
     base = base ? base + 1 : sa->path;
-    t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, flags & (TF_DETACHED | TF_SHELL));
+    if(!(flags & TF_DETACHED) && con && console_paging(con)) flags |= TF_FOREGROUND;   /* 10/6/26 */
+    t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, (flags & (TF_DETACHED | TF_SHELL | TF_FOREGROUND)) | TF_INCALL);
     if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
     return (int)t->pid;
 }

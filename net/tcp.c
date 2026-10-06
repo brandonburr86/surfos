@@ -10,12 +10,16 @@ no congestion control, no out-of-order queueing, no window scaling and no
 urgent data; a lost segment costs a second. Eight sockets, each with 8 KB
 of send and receive buffer. Everything runs under net_lock; the API waits
 on the socket's event with the lock released.
+
+10/6/26: a wait gives up like a timeout when the caller's call is cut short (a
+kill waits for its end, or Ctrl+C: surfos/task.h).
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/timer.h>
 #include <surfos/sync.h>
+#include <surfos/task.h>
 #include <mm/kalloc.h>
 #include <net/net.h>
 #include <net/ip.h>
@@ -389,13 +393,13 @@ void tcp_tick(void) {
 
 /**** the API ****/
 
-/* wait until cond, with the lock released; returns false on timeout */
+/* wait until cond, with the lock released; returns false on timeout (10/6/26: or when cut short) */
 #define WAIT_FOR(s, cond, timeout_ms) ({                                   \
     bool ok_ = true;                                                        \
     u_long deadline_ = getticks() + (timeout_ms) / (1000 / HZ);            \
     while(!(cond)) {                                                        \
         long left_ = (long)(deadline_ - getticks());                        \
-        if(left_ <= 0) { ok_ = false; break; }                              \
+        if(left_ <= 0 || task_interrupted()) { ok_ = false; break; }        \
         event_clear(&(s)->ev);                                              \
         if(cond) break;                                                     \
         mutex_unlock(&net_lock);                                            \

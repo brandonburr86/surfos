@@ -9,6 +9,12 @@ interrupt handler; wait_on() may not.
 
     while(!condition) wait_on(&q);        in a task
     condition = true; wake_up(&q);        in the ISR or another task
+
+10/6/26: a wait may also be one that a kill or Ctrl+C cuts short (task.h: the
+kill that waits for the end of a call). Such a waiter is queued with
+wait_prepare_intr(), looks at task_interrupted() before it waits and after it
+is woken, and gives up then; whoever cuts it short wakes it (task.c).
+wait_on_timeout() is such a wait.
 */
 
 #ifndef _SURFOS_WAIT_H
@@ -16,6 +22,10 @@ interrupt handler; wait_on() may not.
 
 #include <surfos/types.h>
 #include <surfos/task.h>
+
+#ifndef EINTR
+#define EINTR 4                 /* 10/6/26: the errno number of a wait that was cut short */
+#endif
 
 typedef struct task_list wait_queue_t;
 
@@ -27,9 +37,10 @@ void wq_init(wait_queue_t *q);
    (irq_save), which keeps the condition check and the enqueue atomic; the caller then
    restores interrupts and calls yield(). wait_on() does all of that. */
 void wait_prepare(wait_queue_t *q);
+void wait_prepare_intr(wait_queue_t *q);    /* 10/6/26: the same, for a wait that may be cut short */
 void wait_on(wait_queue_t *q);
 
-/* 0 when woken, -1 when ms passed first */
+/* 0 when woken, -1 when ms passed first; 10/6/26: -EINTR when cut short (task_interrupted()) */
 int wait_on_timeout(wait_queue_t *q, u_long ms);
 
 void wake_up(wait_queue_t *q);       /* the first waiter */

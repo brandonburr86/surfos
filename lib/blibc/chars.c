@@ -26,13 +26,14 @@ u_char getc() { /*reads the queue, does not wait*/
 u_char getch() { /*blocks until a usable key arrives*/
     for(;;) {
         int c = tty_getc(my_tty());
+        if(c < 0) return 0;     /* 10/6/26: the read was cut short (a kill, Ctrl+C: task_interrupted()): no key */
         if(isprint(c) || c == 0x08 || c == '\n' || c == '\t') return (u_char)c;
     }
 }
 
 u_char getchar() {
     unsigned char code=getch();
-    if(curTask) console_echo(curTask->con, curTask->con->txtColor, code); /* 10/6/26: shown, never kept for a file */
+    if(curTask && code) console_echo(curTask->con, curTask->con->txtColor, code); /* 10/6/26: shown, never kept for a file */
     return code;
 }
 

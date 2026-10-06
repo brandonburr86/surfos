@@ -18,6 +18,10 @@ child (spawn's are detached, init's), a crash command kills the caller, and the
 background tasks of funky and tcpecho are detached too. When the caller's
 descriptor 1 is a file, the output is kept in memory while the command runs and
 written there afterwards, with a note when it did not all fit.
+
+10/6/26: a task is inside a call from its int 0x80 until it returns to user mode
+(TC_SYSCALL), and a kernel command is a call of its own (TC_COMMAND): a kill waits
+for the call's end, then the task ends (task.h), and Ctrl+C cuts a command short.
 */
 
 #include <surfos/types.h>
@@ -144,20 +148,22 @@ static int sys_spawnfd(const char *path, char *const argv[], const int *fds) {
     return process_spawn_files(path, argc, kargv, curTask->con, 0, files);
 }
 
+/* 10/6/26: a kill of the caller ends the wait (EINTR), and the caller ends with the call */
 static int sys_wait(int pid, int *status, int options) {
     int st = 0, r;
     if(status && !ubuf(status, sizeof(int), true)) return -EFAULT;
     if(options & ~WNOHANG) return -EINVAL;
-    r = task_wait_opts(pid < 0 ? WAIT_ANY : (u_long)pid, &st, options);
+    r = task_wait_opts(pid < 0 ? WAIT_ANY : (u_long)pid, &st, options | WINTR);
+    if(r < 0 && (curTask->intr & TI_KILL)) return -EINTR;
     if(r > 0 && status) *status = st;
     return r;
 }
 
+/* 10/6/26: the caller killing itself ends when this call does, like any task in a call */
 static int sys_kill(int pid) {
     surf_task *t = task_find((u_long)pid);
     if(!t || pid <= 1) return -EINVAL;
     kill_task(t);
-    if(t == curTask) yield();
     return 0;
 }
 
@@ -231,8 +237,9 @@ static int sys_time(void) {
 /**** 10/6/26: the kernel's shell commands (surfos/kcmd.h) ****/
 
 /* What a kernel command running in a task's system call holds. A command can end its task
-   (crashgp, kill of the caller itself, any fault in it), and another task can kill it: then
-   reap() hands the task to kcmd_task_gone() and these are released all the same. The record
+   (crashgp, any fault in it), and so can a kill that could not wait for its end (10/6/26: a
+   kill waits for the end of the call, 2 s at most, surfos/task.h): then reap() hands the
+   task to kcmd_task_gone() and these are released all the same. The record
    is on the task's kernel stack, which stays until the task is reaped; a task runs one
    command at a time. 10/6/26 (review): the record is on the list before the call holds
    anything and leaves it only after the call let go of everything, and each field is set
@@ -374,7 +381,9 @@ static int sys_kcmd(char *const argv[]) {
         cap.cut = 0;
         console_capture_begin(&cap);
     }
+    task_call_enter(TC_COMMAND);                         /* 10/6/26: Ctrl+C cuts it short */
     r = shell_run_command(argc, kargv);
+    if(task_call_leave(TC_COMMAND)) r = KCMD_INTERRUPTED;
     if(call.capture) {
         console_capture_end();
         w = write_all(call.out, cap.buf, cap.len);
@@ -407,11 +416,12 @@ static u_long *syscall_trap(struct trapframe *tf) {
     u_long n = tf->eax, a = tf->ebx, b = tf->ecx, c = tf->edx;
     int r;
 
-    asm volatile("sti");                 /* system calls run with interrupts on, like any task code */
     if(!curTask || !curTask->uvm) {      /* int 0x80 from kernel code: nothing to do for it */
         tf->eax = (u_long)-ENOSYS;
         return (u_long*)tf;
     }
+    curTask->in_call |= TC_SYSCALL;      /* 10/6/26: interrupts are still off: a kill waits for the call from here */
+    asm volatile("sti");                 /* system calls run with interrupts on, like any task code */
     switch(n) {
     case SYS_exit:    task_exit((int)a);                                     /* does not return */
     case SYS_write:   r = sys_write((int)a, (const void *)b, c); break;
@@ -427,7 +437,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_unlink:  r = ustr((const char *)a) ? vfs_unlink((const char *)a) : -EFAULT; break;
     case SYS_rmdir:   r = ustr((const char *)a) ? vfs_rmdir((const char *)a) : -EFAULT; break;
     case SYS_getpid:  r = (int)curTask->pid; break;
-    case SYS_sleep:   sleep_ms(a); r = 0; break;
+    case SYS_sleep:   sleep_intr(a); r = 0; break;        /* 10/6/26: a kill cuts it short */
     case SYS_yield:   yield(); r = 0; break;
     case SYS_spawn:   r = sys_spawn((const char *)a, (char *const *)b); break;
     case SYS_wait:    r = sys_wait((int)a, (int *)b, (int)c); break;
@@ -449,6 +459,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     default:          r = -ENOSYS; break;
     }
     tf->eax = (u_long)r;
+    task_call_leave(TC_SYSCALL);         /* 10/6/26: a kill that waited for this call ends the task here */
     return (u_long*)tf;
 }
 

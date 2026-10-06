@@ -45,7 +45,7 @@ typedef struct {
 
 void event_init(event_t *e);
 void event_wait(event_t *e);             /* returns once set; does not clear */
-int event_wait_timeout(event_t *e, u_long ms); /* 0 set, -1 timeout */
+int event_wait_timeout(event_t *e, u_long ms); /* 0 set, -1 timeout; 10/6/26: -EINTR cut short (wait.h) */
 void event_set(event_t *e);              /* ISR safe: wakes everyone */
 void event_clear(event_t *e);
 

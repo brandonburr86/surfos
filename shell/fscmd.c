@@ -342,7 +342,7 @@ static long bench_read(const char *path, u8 *buf, u8 *want, u32 size, u32 piece)
     u32 off;
     if(vfs_open(path, O_RDONLY, &f) != 0) return -1;
     for(off = 0; off < size; off += piece) {
-        if(vfs_read(f, buf, piece) != (int)piece) { vfs_close(f); return -1; }
+        if(task_interrupted() || vfs_read(f, buf, piece) != (int)piece) { vfs_close(f); return -1; }   /* 10/6/26: or cut short */
         pattern(want, off, piece);
         if(memcmp(buf, want, piece)) { printf("    fsbench: wrong data at offset %lu\n", (u_long)off); vfs_close(f); return -1; }
     }
@@ -354,7 +354,8 @@ static void rate(const char *what, u32 kb, long ms) {
     printf("    %-24s %6lu KB in %5ld ms  %6lu KB/s\n", what, (u_long)kb, ms, (u_long)(ms > 0 ? kb * 1000UL / (u_long)ms : 0));
 }
 
-/* fsbench <dir> [MB]: time writing a file in 4 KB pieces, reading it in 4 KB and in 64 KB pieces */
+/* fsbench <dir> [MB]: time writing a file in 4 KB pieces, reading it in 4 KB and in 64 KB pieces.
+   10/6/26: a kill or Ctrl+C stops it (surfos/task.h); its file is closed and removed whatever ends it */
 int cmd_fsbench(int argc, char **argv) {
     struct bcache_io a, b;
     struct file *f;
@@ -362,7 +363,7 @@ int cmd_fsbench(int argc, char **argv) {
     u32 mb = argc > 2 ? strtoul(argv[2], NULL, 10) : 4, size, off;
     u8 *buf, *want;
     long tw, tr4, tr64;
-    int r = 0;
+    int r = 0, c;
 
     if(argc < 2 || argc > 3 || mb < 1 || mb > 64) { printf("    usage: fsbench <directory> [MB]   (1 to 64, default 4)\n"); return CMD_USAGE; }
     snprintf(path, sizeof(path), "%s/fsbench.tmp", argv[1]);
@@ -373,13 +374,16 @@ int cmd_fsbench(int argc, char **argv) {
     bcache_io_stats(&a);
     tw = (long)uptime_ms();
     r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return CMD_FAIL; }
     for(off = 0; r == 0 && off < size; off += 4096) {
         pattern(buf, off, 4096);
         if(vfs_write(f, buf, 4096) != 4096) r = -EIO;
+        else if(task_interrupted()) r = -EINTR;
     }
-    if(r == 0) r = vfs_close(f);                             /* close writes it out */
+    c = vfs_close(f);                                        /* close writes it out */
+    if(!r) r = c;
     tw = (long)uptime_ms() - tw;
-    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return CMD_FAIL; }
+    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); vfs_unlink(path); kfree(buf); kfree(want); return CMD_FAIL; }
     tr4 = bench_read(path, buf, want, size, 4096);
     tr64 = bench_read(path, buf, want, size, 65536);
     bcache_io_stats(&b);

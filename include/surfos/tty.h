@@ -41,13 +41,14 @@ void init_tty(void);
 struct tty *tty_for_console(surf_console *con);
 
 /* input side (interrupt handlers call tty_input) */
-void tty_input(struct tty *t, u_char c);
-int tty_getc(struct tty *t);            /* blocks; 0-255 */
+void tty_input(struct tty *t, u_char c);  /* 10/6/26: Ctrl+C in line mode interrupts the job in the foreground */
+int tty_getc(struct tty *t);            /* blocks; 0-255; 10/6/26: -1 when the reader's call is cut short */
 int tty_getc_unless(struct tty *t, volatile u_char *cancel);   /* 10/6/26, the pager: -1 once *cancel is set */
 int tty_trygetc(struct tty *t);         /* -1 when nothing is queued */
 void tty_flush(struct tty *t);
 
-/* line discipline: echo, backspace, Ctrl-U, Ctrl-C, Up/Down history; returns the length */
+/* line discipline: echo, backspace, Ctrl-U, Ctrl-C, Up/Down history; returns the length.
+   10/6/26: -1 and an empty line when the reader's call is cut short (surfos/task.h) */
 int tty_readline(struct tty *t, char *buf, size_t size);
 
 /* display + input routing to console `index` (F1..Fn) */
@@ -86,7 +87,11 @@ void tty_switch(int index);
    new screenful and end a drop: it stays paged while its shell pages. Any other task gets
    EBUSY while the pager is in use. The user shell pages every command it runs, the
    kernel's shell its own commands. Kernel code: kernel/console.c (the rows, the
-   question) and kernel/tty.c (who is paged).
+   question) and kernel/tty.c (who is paged). 10/6/26: Ctrl+C in line mode while the
+   owner pages a job in the foreground interrupts the job instead of reaching a reader
+   (surfos/task.h): a kernel command it runs in its own task is cut short (its status
+   130, the owner lives on), and the innermost of the programs it started while paging
+   are killed.
    TTY_CAPS: TTY_CAP_* flags. TTY_CAP_UTF8: the console draws UTF-8 text: ASCII, the
    characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
    mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. It is left out
@@ -103,7 +108,7 @@ int tty_ctl(struct tty *t, int op, u32 arg);   /* 0, the size or the flags; -err
    sequences), read(2) on /dev/console, and the end of the task that set it (task.c) */
 struct surf_task;
 void tty_key(struct tty *t, u_char c);
-int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one) */
+int tty_read(struct tty *t, char *buf, size_t len);  /* a line with its newline; raw: the keys queued (at least one); -EINTR */
 void tty_task_gone(struct surf_task *task);          /* interrupts off */
 
 #endif

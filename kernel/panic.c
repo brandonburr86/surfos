@@ -75,7 +75,7 @@ u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
     if(!(tf->cs & 3)) backtrace(tf->ebp, tf->eip);     /* a user stack holds no kernel frames */
 
     framebuffer_task_died(curTask); //it may have been drawing (a framebuffer console)
-    kill_task(curTask); //it stays on its stack until the idle task reaps it
+    kill_task_now(curTask); //it stays on its stack until the idle task reaps it (10/6/26: at once, also inside a system call)
     return schedule(tf); //switch to the next task
 }
 
