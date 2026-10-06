@@ -8,11 +8,14 @@ read, write (extending the cluster chain), truncate, create (files and
 directories, with VFAT long-name entries when the name is not a plain 8.3
 name), unlink and rmdir. Every access goes through the block cache; the
 superblock mutex serializes operations on one volume. No FSInfo updates,
-no extended partition walking, ASCII names only.
+no extended partition walking.
 
 10/5/26 (USB storage): rename, and one vnode per object in use (lookups of an
 open file share its vnode, so its size stays right and it follows its entry
-when renamed; the VFS can tell that it is open). statfs with the volume label;
+when renamed; the VFS can tell that it is open). Names are UTF-8: long names
+are UTF-16 on the disk, lookups fold ASCII letters only, an 8.3 alias puts '_'
+for what it cannot hold, and short names without a long name are read as code
+page 437. statfs with the volume label;
 a free-cluster count, from FAT32's FSInfo sector when that can be trusted, else
 counted, and written back to FSInfo at sync and unmount; the clean-shutdown bit
 in FAT[1]: cleared while mounted read-write, set again at unmount, so macOS and
@@ -102,9 +105,93 @@ static void put32(u8 *p, u32 v) { p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] 
 static int lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 static int upper(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
 
+/* names compare with ASCII letters folded; any other byte must match exactly */
 static bool name_eq(const char *a, const char *b) {
     while(*a && *b) { if(lower(*a) != lower(*b)) return false; a++; b++; }
     return *a == *b;
+}
+
+/**** UTF-8, UTF-16 and code page 437 ****/
+
+/* the upper half of code page 437, what short names without a long name are read as */
+static const u16 cp437[128] = {
+    0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7, 0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+    0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9, 0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+    0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA, 0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556, 0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+    0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F, 0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+    0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B, 0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4, 0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+    0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248, 0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0
+};
+
+/* code point cp as UTF-8 at out; the number of bytes (1 to 4) */
+static u32 utf8_put(char *out, u32 cp) {
+    if(cp < 0x80) { out[0] = (char)cp; return 1; }
+    if(cp < 0x800) { out[0] = (char)(0xC0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+    if(cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* the code point at *s, which moves past it; -1 for malformed UTF-8 (a stray continuation
+   byte, a short sequence, an overlong form, a surrogate, beyond U+10FFFF) */
+static i32 utf8_next(const char **s) {
+    const u8 *p = (const u8 *)*s;
+    u32 c = p[0], cp, need, i, min;
+    if(c < 0x80) { *s += 1; return (i32)c; }
+    if(c >= 0xC2 && c <= 0xDF) { need = 1; cp = c & 0x1F; min = 0x80; }
+    else if(c >= 0xE0 && c <= 0xEF) { need = 2; cp = c & 0x0F; min = 0x800; }
+    else if(c >= 0xF0 && c <= 0xF4) { need = 3; cp = c & 0x07; min = 0x10000; }
+    else return -1;
+    for(i = 1; i <= need; i++) {
+        if((p[i] & 0xC0) != 0x80) return -1;
+        cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    if(cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return -1;
+    *s += need + 1;
+    return (i32)cp;
+}
+
+/* a UTF-8 name as the UTF-16 units of a long name: -EINVAL for malformed UTF-8,
+   -ENAMETOOLONG beyond 255 units */
+static int name_to_utf16(const char *name, u16 *out, u32 *count) {
+    u32 n = 0;
+    while(*name) {
+        i32 cp = utf8_next(&name);
+        if(cp < 0) return -EINVAL;
+        if(n + (cp >= 0x10000 ? 2 : 1) > 255) return -ENAMETOOLONG;
+        if(cp >= 0x10000) {                                  /* a surrogate pair */
+            out[n++] = (u16)(0xD800 + ((cp - 0x10000) >> 10));
+            out[n++] = (u16)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+        } else out[n++] = (u16)cp;
+    }
+    *count = n;
+    return 0;
+}
+
+/* n UTF-16 units as UTF-8 (a lone surrogate becomes U+FFFD); false when it does not fit size */
+static bool utf16_to_utf8(const u16 *in, u32 n, char *out, size_t size) {
+    size_t o = 0;
+    u32 i;
+    char tmp[4];
+    for(i = 0; i < n; i++) {
+        u32 cp = in[i], len;
+        if(cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && in[i + 1] >= 0xDC00 && in[i + 1] <= 0xDFFF) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (in[i + 1] - 0xDC00);
+            i++;
+        } else if(cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;
+        len = utf8_put(tmp, cp);
+        if(o + len >= size) return false;
+        memcpy(out + o, tmp, len);
+        o += len;
+    }
+    out[o] = 0;
+    return true;
 }
 
 static u32 clus_lba(struct fat_fs *fs, u32 c) {
@@ -363,23 +450,32 @@ static u8 lfn_checksum(const u8 *short_name) {
     return sum;
 }
 
+/* the 8.3 name as UTF-8 (code page 437 above 0x7F; NT's lower-case flags honoured) */
 static void short_to_name(const u8 *raw, char *out) {
-    int n = 0, i, base = 8, ext = 3;
+    u32 n = 0;
+    int i, base = 8, ext = 3;
     while(base && raw[base - 1] == ' ') base--;
     while(ext && raw[8 + ext - 1] == ' ') ext--;
-    for(i = 0; i < base; i++) out[n++] = (raw[12] & NTRES_LOWER_BASE) ? lower(raw[i]) : raw[i];
-    if(out[0] == 0x05) out[0] = (char)0xE5;
+    for(i = 0; i < base; i++) {
+        u8 c = (i == 0 && raw[0] == 0x05) ? 0xE5 : raw[i];  /* 0x05 stands for a leading 0xE5 */
+        if(raw[12] & NTRES_LOWER_BASE) c = (u8)lower(c);
+        n += utf8_put(out + n, c < 0x80 ? c : cp437[c - 0x80]);
+    }
     if(ext) {
         out[n++] = '.';
-        for(i = 0; i < ext; i++) out[n++] = (raw[12] & NTRES_LOWER_EXT) ? lower(raw[8 + i]) : raw[8 + i];
+        for(i = 0; i < ext; i++) {
+            u8 c = raw[8 + i];
+            if(raw[12] & NTRES_LOWER_EXT) c = (u8)lower(c);
+            n += utf8_put(out + n, c < 0x80 ? c : cp437[c - 0x80]);
+        }
     }
     out[n] = 0;
 }
 
 /* the next logical entry (long name resolved, free and label entries skipped): 0, 1 at the end, < 0 */
 static int dir_read(struct diter *it, struct fat_dirent *e) {
-    char lfn[LFN_MAX_ENTRIES * LFN_CHARS + 1];
-    u32 lfn_start = 0;
+    u16 lfn[LFN_MAX_ENTRIES * LFN_CHARS];
+    u32 lfn_start = 0, len;
     int lfn_expected = 0, lfn_seen = 0;
     u8 lfn_sum = 0;
 
@@ -399,10 +495,7 @@ static int dir_read(struct diter *it, struct fat_dirent *e) {
             if(p[0] & 0x40) { lfn_expected = seq; lfn_seen = 0; lfn_sum = p[13]; lfn_start = it->idx; memset(lfn, 0, sizeof(lfn)); }
             if(lfn_expected && seq >= 1 && seq <= LFN_MAX_ENTRIES && p[13] == lfn_sum) {
                 static const u8 pos[LFN_CHARS] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
-                for(k = 0; k < LFN_CHARS; k++) {
-                    u16 ch = le16(p + pos[k]);
-                    lfn[(seq - 1) * LFN_CHARS + k] = (ch == 0 || ch == 0xFFFF) ? 0 : (ch < 256 ? (char)ch : '_');
-                }
+                for(k = 0; k < LFN_CHARS; k++) lfn[(seq - 1) * LFN_CHARS + k] = le16(p + pos[k]);
                 lfn_seen++;
             } else lfn_expected = 0;
         } else if(p[11] & ATTR_LABEL) {
@@ -412,8 +505,9 @@ static int dir_read(struct diter *it, struct fat_dirent *e) {
             e->lba = it->lba;
             e->off = it->off;
             e->idx = it->idx;
-            if(lfn_expected && lfn_seen == lfn_expected && lfn_checksum(p) == lfn_sum && lfn[0]) {
-                strlcpy(e->name, lfn, sizeof(e->name));
+            for(len = 0; lfn_expected && len < (u32)lfn_expected * LFN_CHARS && lfn[len] && lfn[len] != 0xFFFF; len++);
+            if(lfn_expected && lfn_seen == lfn_expected && lfn_checksum(p) == lfn_sum && len &&
+               utf16_to_utf8(lfn, len, e->name, sizeof(e->name))) {   /* else (too long as UTF-8, say) the 8.3 name */
                 e->lfn_idx = lfn_start;
             } else {
                 short_to_name(p, e->name);
@@ -532,7 +626,11 @@ static bool legal_char(int c) {
     return !strchr("\\/:*?\"<>|", c);
 }
 
+/* a name a new entry may have: well-formed UTF-8 of at most 255 UTF-16 units, none of
+   \\ / : * ? " < > | or control characters, not "." or "..", not ending in a space or a dot */
 static int validate_name(const char *name) {
+    u16 units[LFN_MAX_ENTRIES * LFN_CHARS];
+    u32 count;
     size_t n = strlen(name);
     size_t i;
     if(!n) return -EINVAL;
@@ -540,7 +638,7 @@ static int validate_name(const char *name) {
     if(!strcmp(name, ".") || !strcmp(name, "..")) return -EINVAL;
     for(i = 0; i < n; i++) if(!legal_char((u8)name[i])) return -EINVAL;
     if(name[n - 1] == ' ' || name[n - 1] == '.') return -EINVAL;
-    return 0;
+    return name_to_utf16(name, units, &count);
 }
 
 static bool short_char_ok(int c) {
@@ -556,15 +654,25 @@ static bool dir_has_short(struct fat_fs *fs, struct fat_node *dir, const u8 *raw
     return false;
 }
 
+/* the alias character for code point cp: upper case, or '_' for what an 8.3 name cannot
+   hold, everything beyond ASCII included */
+static int short_char(i32 cp) {
+    if(cp > 0 && cp < 0x80 && short_char_ok(upper((int)cp))) return upper((int)cp);
+    return '_';
+}
+
 /* The 8.3 form of name in raw[11] with the lowercase flags in *ntres, unique in dir (the
    entry at index skip, which is being renamed, does not count). *lfn says whether long-name
-   entries are needed as well (the name is not representable as 8.3). -ENOSPC when every
-   ~N tail is taken. */
+   entries are needed as well (the name is not representable as 8.3). A name that is not
+   8.3 gets fatgen103's basis name: upper case, '_' for what cannot be held, spaces and
+   leading dots dropped, the base up to the first dot that is left (8 at most), the extension
+   after the last dot (3 at most); then a ~N tail, unless only the case was in the way.
+   -ENOSPC when every ~N tail is taken. */
 static int make_short_name(struct fat_fs *fs, struct fat_node *dir, const char *name, u32 skip, u8 *raw, u8 *ntres, bool *lfn) {
-    const char *dot = strrchr(name, '.');
+    const char *dot = strrchr(name, '.'), *q, *last;
     size_t blen = dot ? (size_t)(dot - name) : strlen(name), elen = dot ? strlen(dot + 1) : 0;
     bool fits = true, base_lower = false, base_upper = false, ext_lower = false, ext_upper = false;
-    size_t i, n;
+    size_t i, n, nb = 0, ne = 0;
     char base[9], ext[4];
 
     memset(raw, ' ', 11);
@@ -577,7 +685,7 @@ static int make_short_name(struct fat_fs *fs, struct fat_node *dir, const char *
         if(c == '.' || c == ' ') fits = false;
         if(c >= 'a' && c <= 'z') base_lower = true;
         else if(c >= 'A' && c <= 'Z') base_upper = true;
-        if(!short_char_ok(upper(c))) fits = false;
+        if(!short_char_ok(upper(c))) fits = false;           /* bytes beyond ASCII are never 8.3 */
     }
     for(i = 0; i < elen && fits; i++) {
         int c = (u8)dot[1 + i];
@@ -586,41 +694,43 @@ static int make_short_name(struct fat_fs *fs, struct fat_node *dir, const char *
         else if(c >= 'A' && c <= 'Z') ext_upper = true;
         if(!short_char_ok(upper(c))) fits = false;
     }
-    if(fits && !(base_lower && base_upper) && !(ext_lower && ext_upper)) {
+    if(fits) {                                               /* 8.3 already: upper case, and flags for lower case */
         for(i = 0; i < blen; i++) raw[i] = upper((u8)name[i]);
         for(i = 0; i < elen; i++) raw[8 + i] = upper((u8)dot[1 + i]);
-        if(raw[0] == 0xE5) raw[0] = 0x05;
         if(!dir_has_short(fs, dir, raw, skip)) {             /* else another entry's alias: a ~N name and a long name */
+            if((base_lower && base_upper) || (ext_lower && ext_upper)) return 0;   /* mixed case: the long name keeps it */
             if(base_lower) *ntres |= NTRES_LOWER_BASE;
             if(ext_lower) *ntres |= NTRES_LOWER_EXT;
             *lfn = false;
             return 0;
         }
     }
-    /* BASENA~1.EXT from the legal characters */
-    for(i = 0, n = 0; i < blen && n < 6; i++) {
-        int c = upper((u8)name[i]);
-        if(c == ' ' || c == '.') continue;
-        base[n++] = short_char_ok(c) ? c : '_';
+    /* the basis name, then BASENA~1.EXT */
+    for(q = name; *q == '.'; q++);
+    last = strrchr(q, '.');
+    while(*q && *q != '.' && nb < 8) {
+        i32 cp = utf8_next(&q);
+        if(cp < 0) break;
+        if(cp != ' ') base[nb++] = (char)short_char(cp);
     }
-    if(!n) base[n++] = '_';
-    base[n] = 0;
-    for(i = 0, n = 0; dot && i < elen && n < 3; i++) {
-        int c = upper((u8)dot[1 + i]);
-        if(c == ' ' || c == '.') continue;
-        ext[n++] = short_char_ok(c) ? c : '_';
+    if(!nb) base[nb++] = '_';
+    base[nb] = 0;
+    for(q = last ? last + 1 : ""; *q && ne < 3; ) {
+        i32 cp = utf8_next(&q);
+        if(cp < 0) break;
+        if(cp != ' ') ext[ne++] = (char)short_char(cp);
     }
-    ext[n] = 0;
+    ext[ne] = 0;
     for(n = 1; n < 1000; n++) {
         char tail[8];
-        size_t bl = strlen(base), tl;
+        size_t bl = nb, tl;
         snprintf(tail, sizeof(tail), "~%u", (u_int)n);
         tl = strlen(tail);
         if(bl + tl > 8) bl = 8 - tl;
         memset(raw, ' ', 11);
         memcpy(raw, base, bl);
         memcpy(raw + bl, tail, tl);
-        memcpy(raw + 8, ext, strlen(ext));
+        memcpy(raw + 8, ext, ne);
         if(!dir_has_short(fs, dir, raw, skip)) return 0;
     }
     return -ENOSPC;
@@ -636,11 +746,13 @@ static int build_entries(struct fat_fs *fs, struct fat_node *dir, const char *na
     bool lfn;
     u16 d, t;
     u8 *p;
-    int r = make_short_name(fs, dir, name, skip, raw, &ntres, &lfn);
+    u16 units[LFN_MAX_ENTRIES * LFN_CHARS];
+    u32 len;
+    int r = name_to_utf16(name, units, &len);
 
+    if(r == 0) r = make_short_name(fs, dir, name, skip, raw, &ntres, &lfn);
     if(r) return r;
     if(lfn) {
-        size_t len = strlen(name);
         nlfn = (len + LFN_CHARS - 1) / LFN_CHARS;
         sum = lfn_checksum(raw);
         for(k = nlfn; k >= 1; k--) {
@@ -652,9 +764,8 @@ static int build_entries(struct fat_fs *fs, struct fat_node *dir, const char *na
             p[11] = ATTR_LFN;
             p[13] = sum;
             for(j = 0; j < LFN_CHARS; j++) {
-                size_t ci = (k - 1) * LFN_CHARS + j;
-                u16 ch = ci < len ? (u8)name[ci] : (ci == len ? 0 : 0xFFFF);
-                put16(p + pos[j], ch);
+                u32 ci = (k - 1) * LFN_CHARS + j;
+                put16(p + pos[j], ci < len ? units[ci] : (ci == len ? 0 : 0xFFFF));
             }
             n++;
         }

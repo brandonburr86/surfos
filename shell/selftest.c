@@ -396,6 +396,39 @@ static void test_fat_statfs(void) {
     kfree(blk);
 }
 
+/* is name an entry of the directory dir? */
+static bool dir_lists(const char *dir, const char *name) {
+    struct file *f;
+    struct dirent de;
+    bool found = false;
+    if(vfs_open(dir, O_RDONLY | O_DIRECTORY, &f) != 0) return false;
+    while(!found && vfs_readdir(f, &de) == 0) found = !strcmp(de.name, name);
+    vfs_close(f);
+    return found;
+}
+
+/* 10/5/26 (USB storage): UTF-8 names. /hda1/café.txt stays for the host to list with mtools;
+   the macOS names (AppleDouble files, .DS_Store) are ordinary entries. */
+static void test_fat_utf8(void) {
+    static const char cafe[] = "/hda1/caf\xc3\xa9.txt";               /* café.txt */
+    static const char smile[] = "/hda1/\xf0\x9f\x98\x80 smile.txt";  /* U+1F600: a surrogate pair on the disk */
+    struct stat st;
+    struct file *f;
+
+    if(vfs_stat("/hda1", &st) != 0) return;
+    vfs_unlink(cafe);
+    check(put_file(cafe, "caf\xc3\xa9\n") == 0 && file_is("/hda1/CAF\xc3\xa9.TXT", "caf\xc3\xa9\n") &&
+          vfs_stat("/hda1/caf\xc3\x89.txt", &st) == -ENOENT && dir_lists("/hda1", "caf\xc3\xa9.txt"),
+          "a UTF-8 name: listed as written, ASCII letters folded only");
+    check(put_file(smile, ":)") == 0 && dir_lists("/hda1", smile + 6) && vfs_unlink(smile) == 0, "a character beyond U+FFFF");
+    check(vfs_open("/hda1/bad\xc3(.txt", O_WRONLY | O_CREAT, &f) == -EINVAL && vfs_open("/hda1/bad\xc0\xaf.txt", O_WRONLY | O_CREAT, &f) == -EINVAL,
+          "malformed UTF-8 is refused");
+    check(put_file("/hda1/._caf\xc3\xa9.txt", "AppleDouble") == 0 && put_file("/hda1/.DS_Store", "Bud1") == 0 &&
+          vfs_mkdir("/hda1/.fseventsd") == 0 && dir_lists("/hda1", "._caf\xc3\xa9.txt") && dir_lists("/hda1", ".DS_Store") &&
+          file_is("/hda1/.ds_store", "Bud1") && vfs_unlink("/hda1/._caf\xc3\xa9.txt") == 0 && vfs_unlink("/hda1/.DS_Store") == 0 &&
+          vfs_rmdir("/hda1/.fseventsd") == 0, "macOS's ._ files, .DS_Store and .fseventsd");
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -571,6 +604,7 @@ int run_selftest(void) {
     test_fat();
     test_fat_rename();
     test_fat_statfs();
+    test_fat_utf8();
     test_user();
     test_net();
     test_usb();

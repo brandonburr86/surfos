@@ -353,8 +353,14 @@ def host_checks(q):
                              env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
     except Exception as e:
         out = str(e).encode()
-    return [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')] + \
-        fsck_check(q.disk, start, int.from_bytes(mbr[458:462], 'little') * 512)
+    results = [('FAT file written by the self test is readable with mtools', out == b'SurfOS wrote this file.\n')]
+    try:                                                    # the UTF-8 name the self test made, through mtools' UTF-16
+        out = subprocess.run(['mdir', '-i', f'{q.disk}@@{start}', '::/'], env=dict(env, LC_ALL='C.UTF-8'),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20).stdout
+    except Exception as e:
+        out = str(e).encode()
+    results.append(('mtools lists the UTF-8 name caf\u00e9.txt', 'caf\u00e9.txt'.encode() in out))
+    return results + fsck_check(q.disk, start, int.from_bytes(mbr[458:462], 'little') * 512)
 
 
 def fsck_check(disk, start, size):
