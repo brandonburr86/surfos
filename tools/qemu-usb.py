@@ -89,20 +89,20 @@ PROMPT = re.compile(rb'SurfOS\*>|(?:\xe2\x89\x8b|~)' + _SGR + rb'[!#@?]?' + _SGR
 PROMPT_TEXT = re.compile(r'SurfOS\*>|(?:\u224b|~)[!#@?]?>')
 # 10/6/26: on a screen whose console does not draw UTF-8 yet the wave is not drawn, and the ring-0 shell's prompt
 # ends in its state alone ("SURF #>")
-PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>| [!#@?]>)$')
+PROMPT_ROW = re.compile(r'(?:SurfOS\*>|(?:\u224b|~)[!#@?]?>)$')
 # the pager's question after a screenful (TTY_MORE in include/surfos/tty.h): answered with Space
 MORE = b'--More--'
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kernel panic', 'BOOT PROBLEM']
 
 # (command, strings that must appear before the next prompt) - over the serial console
 PORTABLE = [
-    ('help', ['SurfOS kernel shell 1.0', '(C)2004-2026 Brandon Burr.']),
+    ('help', ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
     ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
                  'keyboard  8042', 'usb       1 xHCI controller']),
     ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> usb0 (256 MB)']),   # the stick, at 5 Gbit/s, as a disk
     ('tick', ['Ticks:']),
-    ('ps', ['Kernel Idle Task', 'init', 'Shell 0']),
+    ('ps', ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),
     ('lsblk', ['rd0']),
     ('mount', ['rd0', '/initrd', 'tarfs']),
@@ -128,8 +128,7 @@ KEYBOARD = [
     ('count 3 10\n', ['counted to 3']),
     ('drivers\n', ['console   framebuffer', 'serial    none', 'keyboard  8042']),
     ('memstat\n', ['Free physical pages:', 'dma heap']),
-    ('help\n', ['(C)2004-2026 Brandon Burr.']),
-]
+]   # help pages: see page_through()
 
 
 # ---- firmware ----------------------------------------------------------------------------
@@ -503,12 +502,37 @@ def ansi_ok(scr):
 
 
 def drawn(text):
-    """text as both sides of a comparison can show it: printable ASCII, no space at the ends"""
-    return ''.join(c for c in text if ' ' <= c <= '~').strip()
+    """text as both sides of a comparison can show it: no control characters, no space at the ends
+    (10/6/26: the console draws UTF-8, so the prompt's ▸ and ≋ are on both)"""
+    return ''.join(c for c in text if c >= ' ').strip()
 
 
 def ends_prompt(row):
     return PROMPT_ROW.search(row.rstrip()) is not None
+
+
+def asking(scr):
+    """the pager's question on the last row (TTY_MORE)"""
+    return bool(scr.rows) and scr.rows[-1].startswith('--More--')
+
+
+def page_through(vm, keys, limit=16, timeout=30):
+    """10/6/26: type keys (a command whose output pages), then answer every --More-- with Space
+    until the prompt comes back; the screens seen, the last one at the prompt, or None"""
+    vm.keys(keys)
+    seen, before = [], ''
+    for _ in range(limit):
+        s = vm.wait_screen(lambda s: s.text() != before and (asking(s) or (last_prompt_row(s) >= 0 and
+                                                                             ends_prompt(s.rows[last_prompt_row(s)]))),
+                           timeout, interval=0.5)
+        if s is None:
+            return None
+        seen.append(s)
+        if not asking(s):
+            return seen
+        before = s.text()
+        vm.keys(' ')
+    return None
 
 
 def prompt_on(scr):
@@ -595,8 +619,7 @@ def scenario_serial(args, image, firmware, outdir):
             m = PROMPT_TEXT.search(vm.text())
             serial_boot = vm.text()[:m.end()] if m else vm.text()
             results.append(('framebuffer shows the shell prompt', prompt_on(scr)))
-            # the last boot lines on the serial port must be the last ones on the screen too (what the screen
-            # can draw of them: before the console draws UTF-8 the prompt's wave is not there)
+            # the last boot lines on the serial port must be the last ones on the screen too
             want = [drawn(l) for l in serial_boot.splitlines() if drawn(l)][-6:]
             shown = [drawn(r) for r in scr.rows if drawn(r)]
             results.append(('framebuffer and serial agree on the last boot stages', shown[-len(want):] == want))
@@ -633,6 +656,12 @@ def scenario_keyboard(args, image, firmware, outdir):
                 return all(e in text for e in expects) and last_prompt_row(s) >= 0 and ends_prompt(s.rows[last_prompt_row(s)]) and text != before.text()
             got = vm.wait_screen(done, 60, interval=0.5)
             results.append((f'keyboard: {keys.strip()!r} shows {expects}', got is not None))
+        # 10/6/26: help on the keyboard, longer than the screen: the pager asks after each screenful
+        # (--More--), Space shows the next, the last one ends at the prompt
+        seen = page_through(vm, 'help\n')
+        results.append(('keyboard: help, paged: its header, --More-- answered with Space, the end and the prompt',
+                        seen is not None and len(seen) > 1 and 'surfsh 1.0, the SurfOS shell' in seen[0].text() and
+                        '(C)2004-2026 Brandon Burr.' in seen[-1].text()))
         # raw mode (tty.h) on the PS/2 keyboard: Up, Backspace and Enter as a terminal sends them, F5 nothing
         vm.keys('rawkeys\n')
         ok = vm.wait_screen(lambda s: 'q ends' in s.text(), 20, interval=0.5) is not None
@@ -710,8 +739,10 @@ def scenario_fullhd(args, image, firmware, outdir):
         long = 'abcdefghij' * 11
         got = typed('echo ' + long + '<bs>' * 6 + 'Z\n', lambda s: long[:104] + 'Z' in s.rows)
         results.append(('a 105-character line on one row; Backspace erases back across a wrapped line', got is not None))
-        got = typed('help\n', lambda s: any(r.startswith('    die ') and r.endswith('processes use run)') for r in s.rows))
-        results.append(('help: its 104-character line on one row', got is not None))
+        seen = page_through(vm, 'help\n')
+        results.append(('help: its 104-character line on one row (paged)',
+                        seen is not None and any(r.startswith('    die ') and r.endswith('processes use run)')
+                                                 for s in seen for r in s.rows)))
         got = typed('ansi\n', lambda s: 'ANSI-TEST done' in s.text(), 30)
         results.append(('ansi at 120x33: the pattern, Z in the corner (119,32), the size from TTY_GETSIZE', ansi_ok(got)))
         vm.keys('<f2>')
@@ -746,7 +777,7 @@ def scenario_fullhd(args, image, firmware, outdir):
         if ok:
             vm.screen('pager.png')
             vm.keys('<esc>')
-            got = vm.wait_screen(lambda s: at_prompt(s) and 'exit status 0' in s.text(), 30, interval=0.5)
+            got = vm.wait_screen(lambda s: at_prompt(s), 30, interval=0.5)   # the rest, run's status line too, dropped
             ok = got is not None and 'PAGETEST DONE' not in got.text() and 'pagetest line 066' not in got.text()
         results.append(('pager on the keyboard at 120x33: --More-- after 32 lines, Enter one more, Space 32 more, '
                         'Esc drops the rest', ok))
@@ -1185,7 +1216,7 @@ def scenario_storage(args, image, firmware, outdir):
                 ('run head -n 2 /foreign/BIG.BIN', ['line 00000 of 16384', 'line 00001 of 16384']),
                 ('sh', ['$ '], [('cat "/foreign/A long file name written elsewhere.txt"', ['Written on another computer', '$ ']),
                                 ('cp /foreign/README.TXT "/foreign/Photos/2026/October/copied by SurfOS.txt"', ['$ ']),
-                                ('exit', ['exit status 0'])], 'a long name through sh, a copy into a folder'),
+                                ('exit', [])], 'a long name through sh, a copy into a folder'),
                 ('umount /foreign', []),
                 # a blank stick: an MBR, one partition, FAT32, then files through the C library and the editor
                 ('fdisk usb1 new mbr', ['Type usb1 to'], [('usb1', ['written, flushed and verified'])]),
@@ -1197,7 +1228,7 @@ def scenario_storage(args, image, firmware, outdir):
                                 ('mkdir /data/Documents', ['$ ']),
                                 ('mv /data/hello.txt "/data/Documents/Hello World.txt"', ['$ ']),
                                 ('cat "/data/Documents/Hello World.txt"', ['hello from SurfOS', '$ ']),
-                                ('exit', ['exit status 0'])], 'sh redirection, mkdir and mv on the stick'),
+                                ('exit', [])], 'sh redirection, mkdir and mv on the stick'),
                 ('run edit /data/notes.txt', ['New file', '^S Save'],
                  [(b'Written in the SurfOS editor\ron a USB stick', ['Col 15']),
                   (b'\x13', ['Wrote 2 lines']),
