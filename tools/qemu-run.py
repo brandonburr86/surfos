@@ -65,6 +65,7 @@ SMOKE = [
     ('ls /scratch/papers', ['hello.txt', '1 entries']),
     ('ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
     ('df', ['rd1     fat16', '/scratch', 'TESTVOL']),
+    ('fsbench /scratch 4', ['read, 64 KB pieces:', 'fsbench: ok']),
     ('cd /scratch/papers', []),
     ('umount rd1', ['/scratch is busy: it holds the current directory']),
     ('cd /', []),
@@ -121,7 +122,7 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default
-TIMEOUTS = {'selftest': 120}
+TIMEOUTS = {'selftest': 120, 'fsbench': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 

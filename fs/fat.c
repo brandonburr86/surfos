@@ -46,6 +46,12 @@ writes nothing.
 #define LFN_MAX_ENTRIES 20          /* 255 characters */
 #define NO_IDX 0xFFFFFFFFUL         /* no directory entry */
 #define DIR_MAX_ENTRIES 65536       /* the most a FAT directory may hold: walks stop there */
+#define FAT_DIRECT 16               /* whole-block runs this long or longer bypass the cache (8 KB) */
+#define FAT_READAHEAD BCACHE_RUN    /* blocks a cache miss reads ahead along a file (64 KB) */
+#define META_AHEAD 8                /* and in a FAT or a directory (4 KB) */
+#define RW_READ  0
+#define RW_WRITE 1
+#define RW_ZERO  2                  /* write zeros */
 #define FREE_UNKNOWN 0xFFFFFFFFUL   /* also what FSInfo says when it does not know */
 #define FSINFO_LEAD   0x41615252
 #define FSINFO_STRUCT 0x61417272
@@ -54,6 +60,15 @@ writes nothing.
 #define FAT32_CLEAN 0x08000000
 
 struct fat_node;
+struct fat_fs;
+
+/* position inside a directory */
+struct diter {
+    struct fat_fs *fs;
+    u32 first;                      /* 0: the fixed FAT12/16 root */
+    u32 idx, clus, lba, off;
+    bool at_end;
+};
 
 struct fat_fs {
     struct superblock *sb;
@@ -76,6 +91,10 @@ struct fat_node {
     u32 first;                      /* first cluster; 0 = empty file, or the FAT12/16 root */
     u32 dir_lba, dir_off;           /* where the short entry lives (not for the root) */
     bool is_root;
+    u32 pos_ci, pos_c;              /* the last cluster used: its index in the chain, its number (0: none) */
+    bool rd_valid;                  /* readdir resumes at rd_it for entry rd_index */
+    u_int rd_index;
+    struct diter rd_it;
 };
 
 /* one logical directory entry as the iterator returns it */
@@ -87,13 +106,6 @@ struct fat_dirent {
     u32 idx, lfn_idx;               /* entry indexes: the short entry and the first LFN entry */
 };
 
-/* position inside a directory */
-struct diter {
-    struct fat_fs *fs;
-    u32 first;                      /* 0: the fixed FAT12/16 root */
-    u32 idx, clus, lba, off;
-    bool at_end;
-};
 
 static const struct vnode_ops fat_vops;
 
@@ -239,7 +251,7 @@ static int fat_get(struct fat_fs *fs, u32 c, u32 *val) {
     off = fs->type == 12 ? c + c / 2 : fs->type == 16 ? c * 2 : c * 4;
     lba = fs->fat_lba + off / 512;
     o = off % 512;
-    b = bread(fs->dev, lba);
+    b = breada(fs->dev, lba, fs->fat_lba + fs->spf - lba < META_AHEAD ? fs->fat_lba + fs->spf - lba : META_AHEAD);
     if(!b) return -EIO;
     if(fs->type == 12) {
         u32 v = b->data[o];
@@ -262,8 +274,8 @@ static int fat_set(struct fat_fs *fs, u32 c, u32 val) {
     off = fs->type == 12 ? c + c / 2 : fs->type == 16 ? c * 2 : c * 4;
     o = off % 512;
     for(i = 0; i < fs->nfats; i++) {
-        u32 lba = fs->fat_lba + i * fs->spf + off / 512;
-        struct buf *b = bread(fs->dev, lba), *b2 = NULL;
+        u32 lba = fs->fat_lba + i * fs->spf + off / 512, end = fs->fat_lba + (i + 1) * fs->spf;
+        struct buf *b = breada(fs->dev, lba, end - lba < META_AHEAD ? end - lba : META_AHEAD), *b2 = NULL;
         if(!b) return -EIO;
         if(fs->type == 12) {
             u8 *lo = b->data + o, *hi;
@@ -295,22 +307,36 @@ static int zero_cluster(struct fat_fs *fs, u32 c) {
     return 0;
 }
 
-/* a free cluster, zeroed, chained after prev (0: a new chain); returns the cluster or 0 */
-static u32 fat_alloc(struct fat_fs *fs, u32 prev) {
-    u32 n, c = fs->next_free, v;
-    if(fs->free == 0) return 0;                              /* known to be full */
-    for(n = 0; n < fs->nclusters; n++, c++) {
-        if(c < 2 || c >= fs->nclusters + 2) c = 2;
-        if(fat_get(fs, c, &v) != 0) return 0;
-        if(v == 0) {
-            if(fat_set(fs, c, fs->eoc) != 0 || zero_cluster(fs, c) != 0) return 0;
-            if(prev && fat_set(fs, prev, c) != 0) return 0;
-            fs->next_free = c + 1;
-            if(fs->free != FREE_UNKNOWN) fs->free--;
-            fs->fsinfo_dirty = true;
-            return c;
-        }
+/* A free cluster, chained after prev (0: a new chain): prev + 1 when that is free, so files
+   stay contiguous, else the first free one from the hint on. Only a directory's is zeroed: a
+   file's bytes past its end are never read, and a gap is written as zeros (grow_zeros).
+   0, -ENOSPC or -EIO. */
+static int fat_alloc(struct fat_fs *fs, u32 prev, bool dir, u32 *out) {
+    u32 n, c, v;
+    int r;
+    if(fs->free == 0) return -ENOSPC;                        /* known to be full */
+    if(prev >= 2 && prev + 1 < fs->nclusters + 2) {
+        r = fat_get(fs, prev + 1, &v);
+        if(r) return r;
+        if(!v) { c = prev + 1; goto found; }
     }
+    for(n = 0, c = fs->next_free; n < fs->nclusters; n++, c++) {
+        if(c < 2 || c >= fs->nclusters + 2) c = 2;
+        r = fat_get(fs, c, &v);
+        if(r) return r;
+        if(!v) goto found;
+    }
+    fs->free = 0;
+    return -ENOSPC;
+found:
+    r = fat_set(fs, c, fs->eoc);
+    if(r == 0 && dir) r = zero_cluster(fs, c);
+    if(r == 0 && prev) r = fat_set(fs, prev, c);
+    if(r) return r;
+    fs->next_free = c + 1;
+    if(fs->free != FREE_UNKNOWN && fs->free) fs->free--;
+    fs->fsinfo_dirty = true;
+    *out = c;
     return 0;
 }
 
@@ -327,7 +353,7 @@ static int fat_free_chain(struct fat_fs *fs, u32 c) {
     return 0;
 }
 
-/* the free clusters, counted in one pass over the first FAT */
+/* the free clusters, counted in one pass over the first FAT, read 64 KB at a time */
 static int count_free(struct fat_fs *fs) {
     u32 c, v, n = 0, first = 0;
     if(fs->type == 12) {                                     /* entries straddle sectors; the FAT is small */
@@ -336,20 +362,21 @@ static int count_free(struct fat_fs *fs) {
             if(!v) { n++; if(!first) first = c; }
         }
     } else {
-        u32 per = fs->type == 16 ? 256 : 128, sec, nsec = (fs->nclusters + 2 + per - 1) / per;
-        for(sec = 0; sec < nsec; sec++) {
-            struct buf *b = bread(fs->dev, fs->fat_lba + sec);
-            u32 i;
-            if(!b) return -EIO;
-            for(i = 0; i < per; i++) {
+        u32 per = fs->type == 16 ? 256 : 128, nsec = (fs->nclusters + 2 + per - 1) / per, sec, k, i;
+        u8 *chunk = (u8 *)kalloc(BCACHE_RUN * 512);
+        if(!chunk) return -ENOMEM;
+        for(sec = 0; sec < nsec; sec += k) {
+            k = nsec - sec < BCACHE_RUN ? nsec - sec : BCACHE_RUN;
+            if(bread_blocks(fs->dev, fs->fat_lba + sec, k, chunk) != 0) { kfree(chunk); return -EIO; }
+            for(i = 0; i < k * per; i++) {
                 c = sec * per + i;
                 if(c < 2) continue;
                 if(c >= fs->nclusters + 2) break;
-                v = fs->type == 16 ? le16(b->data + i * 2) : le32(b->data + i * 4) & 0x0FFFFFFF;
+                v = fs->type == 16 ? le16(chunk + i * 2) : le32(chunk + i * 4) & 0x0FFFFFFF;
                 if(!v) { n++; if(!first) first = c; }
             }
-            brelse(b);
         }
+        kfree(chunk);
     }
     fs->free = n;
     if(first) fs->next_free = first;
@@ -434,9 +461,10 @@ static int diter_next(struct diter *it) {
 static int diter_extend(struct diter *it) {
     struct fat_fs *fs = it->fs;
     u32 c;
+    int r;
     if(!it->first || it->idx >= DIR_MAX_ENTRIES) return -ENOSPC;    /* the FAT12/16 root cannot grow */
-    c = fat_alloc(fs, it->clus);
-    if(!c) return -ENOSPC;
+    r = fat_alloc(fs, it->clus, true, &c);
+    if(r) return r;
     it->clus = c;
     it->lba = clus_lba(fs, c);
     it->off = 0;
@@ -473,6 +501,13 @@ static void short_to_name(const u8 *raw, char *out) {
     out[n] = 0;
 }
 
+/* the directory block the iterator is in, read with the rest of its cluster (or root area) */
+static struct buf *dir_block(struct diter *it) {
+    struct fat_fs *fs = it->fs;
+    u32 end = it->first ? clus_lba(fs, it->clus) + fs->spc : fs->root_lba + fs->root_sectors;
+    return breada(fs->dev, it->lba, end > it->lba ? (end - it->lba < META_AHEAD ? end - it->lba : META_AHEAD) : 1);
+}
+
 /* the next logical entry (long name resolved, free and label entries skipped): 0, 1 at the end, < 0 */
 static int dir_read(struct diter *it, struct fat_dirent *e) {
     u16 lfn[LFN_MAX_ENTRIES * LFN_CHARS];
@@ -485,7 +520,7 @@ static int dir_read(struct diter *it, struct fat_dirent *e) {
         u8 *p;
         int r;
         if(it->at_end) return 1;
-        b = bread(it->fs->dev, it->lba);
+        b = dir_block(it);
         if(!b) return -EIO;
         p = b->data + it->off;
         if(p[0] == 0) { brelse(b); it->at_end = true; return 1; }
@@ -843,20 +878,29 @@ static int fat_lookup(struct vnode *dir, const char *name, struct vnode **out) {
     return r;
 }
 
+/* entry index of the directory; a listing asks for 0, 1, 2... and each call resumes where the
+   last one stopped instead of reading the directory from its start again */
 static int fat_readdir(struct vnode *dir, u_int index, struct dirent *de) {
     struct fat_fs *fs = (struct fat_fs *)dir->sb->priv;
+    struct fat_node *dn = (struct fat_node *)dir->priv;
     struct diter it;
     struct fat_dirent e;
+    u_int skip = index;
     int r;
     mutex_lock(&dir->sb->lock);
-    diter_init(&it, fs, (struct fat_node *)dir->priv);
+    if(dn->rd_valid && dn->rd_index == index) { it = dn->rd_it; skip = 0; }
+    else diter_init(&it, fs, dn);
+    dn->rd_valid = false;
     while((r = dir_read(&it, &e)) == 0) {
         if(!strcmp(e.name, ".") || !strcmp(e.name, "..")) continue;
-        if(index-- == 0) {
+        if(skip-- == 0) {
             strlcpy(de->name, e.name, sizeof(de->name));
             de->type = (e.raw[11] & ATTR_DIR) ? VN_DIR : VN_FILE;
             de->size = (e.raw[11] & ATTR_DIR) ? 0 : e.size;
             de->mtime = fat_to_unix(le16(e.raw + 24), le16(e.raw + 22));
+            dn->rd_it = it;
+            dn->rd_index = index + 1;
+            dn->rd_valid = true;
             break;
         }
     }
@@ -864,11 +908,138 @@ static int fat_readdir(struct vnode *dir, u_int index, struct dirent *de) {
     return r;
 }
 
-/* read or write len bytes at off; the chain grows as needed when writing */
+/* the cluster after c in its chain; on a write past the end of the chain a new one (c + 1 when
+   that is free). 0, 1 when a read reaches the end, < 0. */
+static int next_cluster(struct fat_fs *fs, u32 c, bool grow, u32 *out) {
+    u32 next;
+    int r = fat_get(fs, c, &next);
+    if(r) return r;
+    if(is_eoc(fs, next)) return grow ? fat_alloc(fs, c, false, out) : 1;
+    *out = next;
+    return 0;
+}
+
+/* The cluster at index ci of n's chain, walked to from the position n remembers when that is
+   not past ci (sequential I/O takes one step per cluster, not a walk from the start). With
+   grow the chain is extended as needed. 0, 1 when ci is past the end (reading), < 0. */
+static int seek_cluster(struct fat_fs *fs, struct fat_node *n, u32 ci, bool grow, u32 *out) {
+    u32 c, i;
+    int r;
+    if(!n->first) {
+        if(!grow) return 1;
+        r = fat_alloc(fs, 0, false, &c);
+        if(r) return r;
+        n->first = c;
+        n->pos_c = 0;
+    }
+    if(n->pos_c && n->pos_ci <= ci) { i = n->pos_ci; c = n->pos_c; }
+    else { i = 0; c = n->first; }
+    while(i < ci) {
+        r = next_cluster(fs, c, grow, &c);
+        if(r) return r;
+        i++;
+    }
+    n->pos_ci = ci;
+    n->pos_c = c;
+    *out = c;
+    return 0;
+}
+
+/* How many blocks from block s of cluster c on are next to each other on the disk and in the
+   file (the chain going c, c + 1, ...), up to max; with grow the chain is extended as far as
+   that needs (c + 1 first). */
+static int run_blocks(struct fat_fs *fs, u32 c, u32 s, u32 max, bool grow, u32 *count) {
+    u32 n = fs->spc - s, next;
+    while(n < max) {
+        int r = next_cluster(fs, c, grow, &next);
+        if(r < 0) return r;
+        if(r == 1 || next != c + 1) break;
+        c = next;
+        n += fs->spc;
+    }
+    *count = n < max ? n : max;
+    return 0;
+}
+
+/* chunk bytes at so in block s of cluster c through the cache; pos is the file offset of the
+   first of them. A read that misses reads ahead along the file; a write to a whole block, or
+   to one that starts past the end of the file, does not read it first. */
+static int block_rw(struct fat_fs *fs, struct vnode *v, u32 c, u32 s, u32 so, u8 *buf, u32 chunk, u32 pos, int mode) {
+    u32 lba = clus_lba(fs, c) + s;
+    struct buf *b;
+    if(mode == RW_READ) {
+        b = bpeek(fs->dev, lba);
+        if(!b) {
+            u32 ahead, left = (v->size - (pos - so) + 511) / 512;
+            if(run_blocks(fs, c, s, FAT_READAHEAD, false, &ahead) != 0) ahead = 1;
+            b = breada(fs->dev, lba, ahead < left ? ahead : (left ? left : 1));
+        }
+        if(!b) return -EIO;
+        memcpy(buf, b->data + so, chunk);
+    } else {
+        b = (chunk == 512 || pos - so >= v->size) ? bget(fs->dev, lba) : bread(fs->dev, lba);
+        if(!b) return -EIO;
+        if(mode == RW_WRITE) memcpy(b->data + so, buf, chunk);
+        else memset(b->data + so, 0, chunk);
+        bdirty(b);
+    }
+    brelse(b);
+    return 0;
+}
+
+/* len bytes at off of the file: read into buf, written from buf, or (RW_ZERO, buf NULL) zeroed;
+   writes grow the chain. Runs of FAT_DIRECT whole blocks or more that lie next to each other
+   on the disk move straight between the device and buf, up to 64 KB a request; the rest goes
+   through the cache. Holds sb->lock. The bytes done, else < 0. */
+static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 len, int mode) {
+    struct fat_node *n = (struct fat_node *)v->priv;
+    bool grow = mode != RW_READ;
+    u32 done = 0, c, within = off % fs->cluster_bytes;
+    int r = seek_cluster(fs, n, off / fs->cluster_bytes, grow, &c);
+
+    while(r == 0 && done < len) {
+        u32 s = within / 512, so = within % 512, left = len - done, chunk = 512 - so, nb = 0;
+        u8 *p = buf ? buf + done : NULL;
+        if(!so && left >= 512) {
+            r = run_blocks(fs, c, s, left / 512 < BCACHE_RUN ? left / 512 : BCACHE_RUN, grow, &nb);
+            if(r) break;
+        }
+        if(nb >= FAT_DIRECT) {
+            u32 lba = clus_lba(fs, c) + s;
+            r = mode == RW_READ ? bread_blocks(fs->dev, lba, nb, p) : mode == RW_WRITE ? bwrite_blocks(fs->dev, lba, nb, p)
+                                                                      : bzero_blocks(fs->dev, lba, nb);
+            if(r) { r = -EIO; break; }
+            chunk = nb * 512;
+        } else {
+            if(chunk > left) chunk = left;
+            r = block_rw(fs, v, c, s, so, p, chunk, off + done, mode);
+            if(r) break;
+        }
+        done += chunk;
+        within += chunk;
+        while(within >= fs->cluster_bytes && done < len) {   /* on to the next cluster (several after a run) */
+            within -= fs->cluster_bytes;
+            r = next_cluster(fs, c, grow, &c);
+            if(r) break;
+            n->pos_ci++;
+            n->pos_c = c;
+        }
+    }
+    if(r == 1) r = 0;                                        /* a read reached the end of the chain */
+    return done ? (int)done : r;
+}
+
+/* the file grows to size with zeros (a write past its end, a truncate that grows); sb->lock */
+static int grow_zeros(struct fat_fs *fs, struct vnode *v, u32 size) {
+    int r = rw_locked(fs, v, v->size, NULL, size - v->size, RW_ZERO);
+    if(r > 0) v->size += r;
+    return v->size == size ? 0 : r < 0 ? r : -ENOSPC;
+}
+
 static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
-    u32 done = 0, c, ci, within, prev = 0;
+    u32 size;
     int r = 0;
 
     if(!write) {
@@ -878,56 +1049,12 @@ static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     if(!len) return 0;
     if(write && off + len < off) return -EFBIG;
     mutex_lock(&v->sb->lock);
-    ci = off / fs->cluster_bytes;
-    within = off % fs->cluster_bytes;
-    c = n->first;
-    if(!c) {
-        if(!write) { mutex_unlock(&v->sb->lock); return 0; }
-        c = fat_alloc(fs, 0);
-        if(!c) { mutex_unlock(&v->sb->lock); return -ENOSPC; }
-        n->first = c;
-    }
-    while(ci--) {                                            /* walk to the cluster that holds off */
-        u32 next;
-        if(fat_get(fs, c, &next) != 0) { r = -EIO; goto out; }
-        if(is_eoc(fs, next)) {
-            if(!write) goto out;
-            next = fat_alloc(fs, c);
-            if(!next) { r = -ENOSPC; goto out; }
-        }
-        c = next;
-    }
-    while(done < len) {
-        u32 s = within / 512, so = within % 512, chunk = 512 - so;
-        struct buf *b;
-        if(chunk > len - done) chunk = len - done;
-        b = (write && chunk == 512) ? bget(fs->dev, clus_lba(fs, c) + s) : bread(fs->dev, clus_lba(fs, c) + s);
-        if(!b) { r = -EIO; goto out; }
-        if(write) { memcpy(b->data + so, buf + done, chunk); bdirty(b); }
-        else memcpy(buf + done, b->data + so, chunk);
-        brelse(b);
-        done += chunk;
-        within += chunk;
-        if(within == fs->cluster_bytes && done < len) {
-            u32 next;
-            within = 0;
-            prev = c;
-            if(fat_get(fs, c, &next) != 0) { r = -EIO; goto out; }
-            if(is_eoc(fs, next)) {
-                if(!write) goto out;
-                next = fat_alloc(fs, prev);
-                if(!next) { r = -ENOSPC; goto out; }
-            }
-            c = next;
-        }
-    }
-out:
-    if(write && done) {
-        if(off + done > v->size) v->size = off + done;
-        if(update_entry(fs, n, v->size, true) != 0 && r == 0) r = -EIO;
-    }
+    size = v->size;
+    if(write && off > v->size) r = grow_zeros(fs, v, off);   /* the gap reads as zeros */
+    if(r == 0) r = rw_locked(fs, v, off, buf, len, write ? RW_WRITE : RW_READ);
+    if(write && r > 0 && off + (u32)r > v->size) v->size = off + r;
+    if(write && (r > 0 || v->size != size) && update_entry(fs, n, v->size, true) != 0 && r >= 0) r = -EIO;
     mutex_unlock(&v->sb->lock);
-    if(done) return (int)done;
     return r;
 }
 
@@ -943,8 +1070,14 @@ static int fat_truncate(struct vnode *v, u32 size) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
     int r = 0;
-    if(size > v->size) return -EINVAL;                       /* growing happens by writing */
     mutex_lock(&v->sb->lock);
+    if(size > v->size) {                                     /* growing: zeros */
+        r = grow_zeros(fs, v, size);
+        if(update_entry(fs, n, v->size, true) != 0 && !r) r = -EIO;
+        mutex_unlock(&v->sb->lock);
+        return r;
+    }
+    n->pos_c = 0;                                            /* the remembered position may be freed */
     if(size == 0) {
         if(n->first) r = fat_free_chain(fs, n->first);
         n->first = 0;
@@ -972,6 +1105,7 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
 
     if(r) return r;
     mutex_lock(&dir->sb->lock);
+    dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
     if(r == 0) { r = -EEXIST; goto out; }
     if(r != -ENOENT) goto out;
@@ -980,8 +1114,8 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
         u8 *p;
         u16 d, t;
         u32 parent = dn->is_root ? 0 : dn->first;
-        first = fat_alloc(fs, 0);
-        if(!first) { r = -ENOSPC; goto out; }
+        r = fat_alloc(fs, 0, true, &first);
+        if(r) goto out;
         b = bread(fs->dev, clus_lba(fs, first));
         if(!b) { r = -EIO; goto out; }
         fat_now(&d, &t);
@@ -1029,6 +1163,7 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     struct fat_dirent e;
     int r;
     mutex_lock(&dir->sb->lock);
+    dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
     if(r) goto out;
     if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
@@ -1080,6 +1215,7 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
 
     if(r) return r;
     mutex_lock(&odir->sb->lock);
+    on->rd_valid = nn->rd_valid = false;
     r = dir_find(fs, on, oname, &src);
     if(r) goto out;
     is_dir = (src.raw[11] & ATTR_DIR) != 0;

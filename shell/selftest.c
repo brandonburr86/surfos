@@ -429,6 +429,74 @@ static void test_fat_utf8(void) {
           vfs_rmdir("/hda1/.fseventsd") == 0, "macOS's ._ files, .DS_Store and .fseventsd");
 }
 
+/* 10/5/26 (USB storage): the block cache with several users at once. Three tasks write and
+   check files of their own on /hda1 (their closes sync outside the volume's lock, so blocks
+   are written back while others hold them) while a fourth keeps reading the initrd. */
+static volatile int conc_bad;
+
+static void conc_pattern(u8 *p, u32 n, u32 seed) {
+    u32 i;
+    for(i = 0; i < n; i++) p[i] = (u8)(seed * 31 + i * 7 + (i >> 9));
+}
+
+static void conc_fat(void *arg) {
+    u32 id = (u32)(u_long)arg, round, k;
+    char path[32];
+    u8 *w = (u8 *)kalloc(8192), *rb = (u8 *)kalloc(8192);
+    if(!w || !rb) { conc_bad++; kfree(w); kfree(rb); return; }
+    snprintf(path, sizeof(path), "/hda1/conc%u.bin", (u_int)id);
+    for(round = 0; round < 6; round++) {
+        struct file *f;
+        int bad = 0;
+        if(vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f) != 0) { conc_bad++; continue; }
+        for(k = 0; k < 5; k++) {
+            u32 n = k == 4 ? 1000 : 8192;
+            conc_pattern(w, 8192, id * 100 + round * 10 + k);
+            if(vfs_write(f, w, n) != (int)n) bad = 1;
+        }
+        vfs_close(f);
+        if(vfs_open(path, O_RDONLY, &f) != 0) { conc_bad++; continue; }
+        for(k = 0; k < 5; k++) {
+            u32 n = k == 4 ? 1000 : 8192;
+            conc_pattern(w, 8192, id * 100 + round * 10 + k);
+            if(vfs_read(f, rb, n) != (int)n || memcmp(w, rb, n)) bad = 1;
+        }
+        vfs_close(f);
+        if(bad) conc_bad++;
+    }
+    vfs_unlink(path);
+    kfree(w);
+    kfree(rb);
+}
+
+static void conc_initrd(void *arg) {
+    u8 *a = (u8 *)kalloc(4096), *b = (u8 *)kalloc(4096);
+    int i, n0 = -1;
+    if(!a || !b) { conc_bad++; kfree(a); kfree(b); return; }
+    for(i = 0; i < 40; i++) {
+        struct file *f;
+        int n = vfs_open("/initrd/bin/hello", O_RDONLY, &f);
+        if(n == 0) { n = vfs_read(f, i ? b : a, 4096); vfs_close(f); }
+        if(!i) n0 = n;
+        else if(n != n0 || memcmp(a, b, n)) conc_bad++;
+        yield();
+    }
+    kfree(a);
+    kfree(b);
+}
+
+static void test_fat_concurrent(void) {
+    surf_task *t[4];
+    struct stat st;
+    int i, status;
+    if(vfs_stat("/hda1", &st) != 0 || vfs_stat("/initrd/bin/hello", &st) != 0) return;
+    conc_bad = 0;
+    for(i = 0; i < 3; i++) t[i] = kthread_create("fatconc", conc_fat, (void *)(u_long)i, PL_NORMAL, 0);
+    t[3] = kthread_create("rdconc", conc_initrd, NULL, PL_NORMAL, 0);
+    for(i = 0; i < 4; i++) if(t[i]) task_wait(t[i]->pid, &status);
+    check(t[0] && t[1] && t[2] && t[3] && !conc_bad, "three tasks write and check FAT files while a fourth reads the initrd");
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -605,6 +673,7 @@ int run_selftest(void) {
     test_fat_rename();
     test_fat_statfs();
     test_fat_utf8();
+    test_fat_concurrent();
     test_user();
     test_net();
     test_usb();
