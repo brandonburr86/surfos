@@ -394,7 +394,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M5 Processes** (done) | P1, P2 | A user-mode ELF runs, makes syscalls, and cannot crash the kernel |
 | **M6 Network** (done) | N1, N2 | `ping` works in both directions on QEMU user networking; DHCP lease obtained |
 | **M7 Laptop USB boot** (done: the owner booted it on the laptop, 2026-10-05; the hardware record is still to be filled in) | the USB boot plan | `make usb-image` builds a GPT/FAT32 image with GRUB; `make test-usb` boots that exact file under OVMF from an emulated USB stick; the IdeaPad 3 15IIL05 boots it to an interactive shell (`docs/USB-BOOT.md`, `docs/hardware/`) |
-| **M8 Laptop network** (emulation done, hardware pending: needs a USB Ethernet adapter) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
+| **M8 Laptop network** (done: the owner reports the network works on the laptop, 2026-10-05; details still to be recorded) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -424,9 +424,9 @@ plan, with the catalog IDs that build each one:
 
 ## 7. Immediate next step
 
-M8: plug an RTL8153 (or other CDC ECM/NCM) adapter into the IdeaPad, follow
-`docs/USB-BOOT.md` section 8 and record the results in `docs/hardware/ideapad-3-15iil05.md`
-(M7's table for the boot itself is still open as well). After that, in the order the laptop
+M7 and M8 are reported working on the IdeaPad; their tables in
+`docs/hardware/ideapad-3-15iil05.md` (adapter model, `lsusb`, `dhcp`, `ping` output) are
+still to be filled in. After that, in the order the laptop
 needs them (each its own milestone): USB hub support (docks and multi-port dongles), the
 controller's interrupt through MSI (lower latency than the 10 ms poll), USB mass storage
 and a USB HID keyboard on the same stack, AHCI or NVMe for the internal disk (identify the

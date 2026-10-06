@@ -38,4 +38,4 @@ milestone M7 it also boots from a USB drive on a UEFI PC: under OVMF from an emu
 USB stick it reaches the shell on a framebuffer console with the PS/2 keyboard and no
 serial port, with or without a PIT, and the owner has booted it on the Lenovo IdeaPad.
 Since M8 it drives the laptop's USB 3 controller and USB Ethernet adapters (CDC ECM/NCM,
-such as RTL8153 ones), tested under emulation; on the laptop that still needs an adapter.
+such as RTL8153 ones); the owner reports that the network works on the laptop.

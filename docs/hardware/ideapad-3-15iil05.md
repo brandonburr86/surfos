@@ -107,8 +107,12 @@ paths are written to the specification but only the laptop can exercise them.
 ### Physical laptop
 
 **2026-10-05: the owner reports that the USB image boots SurfOS on the laptop.** No
-details were recorded yet. Networking has not been tried on the laptop (it needs a USB
-Ethernet adapter, docs/USB-BOOT.md section 8).
+details were recorded yet.
+
+**2026-10-05: the owner reports that the network interface works on the laptop** through a
+USB Ethernet adapter, with the image built from `5dfb279` (sha256 `df6510f2…04d6`). The
+adapter's make and chip and the command output were not recorded; the network rows of the
+table below are still open.
 Please fill in a copy of this table for each boot (photos of the screen help most):
 
 | Field | Value |

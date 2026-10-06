@@ -13,7 +13,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
 | The same image tested under emulation | done | `make test-usb`: 8 cold boots under OVMF, 117 checks, at -O0 and -O2 |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
-| Wired network through a USB Ethernet adapter | done under emulation; **pending on the laptop** (needs an adapter) | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
+| Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
 
 ## What is on the drive
 
