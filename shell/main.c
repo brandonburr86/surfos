@@ -135,9 +135,18 @@ static int cmd_date(int argc, char **argv) {
     return CMD_OK;
 }
 
+/* 10/6/26: a whole number, nothing else in the word */
+static bool number_arg(const char *s, u_long *out) {
+    char *end;
+    if(!*s || *s == '-' || *s == '+') return false;
+    *out = strtoul(s, &end, 10);
+    return !*end;
+}
+
 static int cmd_sleep(int argc, char **argv) {
-    u_long ms = argc > 1 ? strtoul(argv[1], NULL, 10) : 1000;
-    u_long t0 = getticks();
+    u_long ms = 1000, t0;
+    if(argc > 2 || (argc == 2 && !number_arg(argv[1], &ms))) { printf("    usage: sleep [ms]   (milliseconds, 1000 when not given)\n"); return CMD_USAGE; }
+    t0 = getticks();
     sleep_ms(ms);
     printf("    slept %lu ms (%lu ticks)\n", ms, getticks() - t0);
     return CMD_OK;
@@ -285,9 +294,14 @@ static int cmd_nslookup(int argc, char **argv) {
 static int cmd_ping(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
-    int count = argc > 2 ? atoi(argv[2]) : 4, seq, got = 0, rtt;
+    u_long n = 4;
+    int count, seq, got = 0, rtt;
     u8 ttl = 0;
-    if(argc < 2) { printf("    usage: ping <address|name> [count]\n"); return CMD_USAGE; }
+    if(argc < 2 || argc > 3 || (argc == 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
+        printf("    usage: ping <address|name> [count]   (count: 1 or more, 4 when not given)\n");
+        return CMD_USAGE;
+    }
+    count = (int)n;
     if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return CMD_FAIL; }
     if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
     printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
@@ -344,17 +358,25 @@ static int cmd_httpget(int argc, char **argv) {
     struct tcp_socket *s;
     const char *path = argc > 3 ? argv[3] : "/";
     char req[300], buf[513], a[16];
-    u_long total = 0, t0, shown = 0;
+    u_long total = 0, t0, shown = 0, p = 0;
     u16 port;
     int n;
-    if(argc < 3) { printf("    usage: httpget <host> <port> [path]\n"); return CMD_USAGE; }
+    if(argc < 3 || argc > 4 || !number_arg(argv[2], &p) || !p || p > 65535) {
+        printf("    usage: httpget <host> <port> [path]   (port 1 to 65535)\n");
+        return CMD_USAGE;
+    }
+    port = (u16)p;
+    /* 10/6/26: a request that does not fit is refused, not sent cut short (the server would wait for its end) */
+    n = snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " SURFOS_NAME "/" SURFOS_VERSION "\r\nConnection: close\r\n\r\n",
+                 path, argv[1]);
+    if(n < 0 || n >= (int)sizeof(req)) {
+        printf("    httpget: the request would be longer than %u bytes: a shorter host name or path\n", (u_int)sizeof(req) - 1);
+        return CMD_USAGE;
+    }
     if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    httpget: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
-    port = (u16)strtoul(argv[2], NULL, 10);
     t0 = getticks();
     s = tcp_connect(ip, port, 5000);
     if(!s) { printf("    httpget: connection to %s:%u failed\n", ipfmt(ip, a), port); return CMD_FAIL; }
-    snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: " SURFOS_NAME "/" SURFOS_VERSION "\r\nConnection: close\r\n\r\n",
-             path, argv[1]);
     if(tcp_send(s, req, strlen(req)) != (int)strlen(req)) { printf("    httpget: send failed\n"); tcp_close(s); return CMD_FAIL; }
     while((n = tcp_recv(s, buf, sizeof(buf) - 1, 10000)) > 0) {
         int i;
@@ -845,7 +867,7 @@ static void show_prompt(int status, int diagnostic) {
     c.diagnostic = diagnostic;
     c.width = (int)COLUMNS;
     c.unicode = caps > 0 && (caps & TTY_CAP_UTF8);
-    c.color = 1;
+    c.color = caps > 0 && (caps & TTY_CAP_COLOR);    /* 10/6/26: only where the console draws colours */
     prompt_render(&c, buf, sizeof(buf));        /* cut short (still terminated) only by a path longer than any is */
     puts(buf);                                  /* not printf: its buffer is shorter than PROMPT_MAX */
 }

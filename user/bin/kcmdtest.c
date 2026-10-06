@@ -15,8 +15,10 @@ ends with ENOENT; cd moving this process. 10/6/26: the limits (32 arguments, 255
 bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
 (EFAULT, nothing written), and descriptor 1 read-only (the write fails: status 1),
 closed (the console) and /dev/null; clear writes escape sequences to descriptor 1, and
-rawkeys, which reads the keyboard as it goes, refuses a redirection (status 2). The
-files made in <dir> are removed again.
+rawkeys, which reads the keyboard as it goes, refuses a redirection (status 2); usage
+errors (2): mkfs -t alone, ping with a count that is no number or 0, sleep with a time
+that is no number, an httpget request too long to send. The files made in <dir> are
+removed again.
 One line per check, then KCMDTEST PASS (exit 0) or KCMDTEST FAIL.
 
 kcmdtest crash [file]: kcmd crashgp, which kills this process (with descriptor 1 on
@@ -34,6 +36,10 @@ and a heaptest alone afterwards finds the heap whole.
 kcmdtest child-selftest [file] (10/6/26): kcmd selftest from a process that has a child
 of its own (hello, ended and not yet collected): the self test passes and leaves the
 child to its parent, which collects its exit status 42 afterwards.
+
+kcmdtest pings <dir> <host> (10/6/26): three pings of 3 requests at once, each run by a
+process of its own with its output in a file in <dir>: every request is answered (the
+kernel's ping takes turns; it had one record for the reply it waits for).
 */
 
 #include <stdio.h>
@@ -271,6 +277,28 @@ static void test_edges(void) {
     check(unlink(ro) == 0, "remove the file");
 }
 
+/* 10/6/26: what was typed is not how the command is used: status 2 */
+static int usage_status(char *const argv[]) {
+    int r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    return r;
+}
+
+static void test_usage(void) {
+    static char path[242];
+    char *mkfs[] = { "mkfs", "-t", NULL };
+    char *ping_abc[] = { "ping", "10.0.2.2", "abc", NULL };
+    char *ping_0[] = { "ping", "10.0.2.2", "0", NULL };
+    char *sleep_abc[] = { "sleep", "abc", NULL };
+    char *httpget[] = { "httpget", "10.0.2.2", "80", path, NULL };
+    path[0] = '/';
+    memset(path + 1, 'x', 240);
+    check(usage_status(mkfs) == 2, "mkfs -t alone: status 2");
+    check(usage_status(ping_abc) == 2 && usage_status(ping_0) == 2, "ping with a count that is no number, or 0: status 2");
+    check(usage_status(sleep_abc) == 2, "sleep with a time that is no number: status 2");
+    check(usage_status(httpget) == 2, "httpget with a request too long to send: refused before it connects, status 2");
+}
+
 static void test_cd(void) {
     char got[PATH_MAX];
     char *cd_root[] = { "cd", "/", NULL };
@@ -329,6 +357,38 @@ static int together(void) {
     return failures ? 1 : 0;
 }
 
+/* three pings at once: they take turns, and every request is answered */
+static int pings(const char *host) {
+    char *files[3], *argv[3][7], buf[600];
+    int pids[3], i, good = 0, status;
+    for(i = 0; i < 3; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "KPING%d.TXT", i);
+        files[i] = in_dir(name);
+        argv[i][0] = "kcmdtest";
+        argv[i][1] = "run";
+        argv[i][2] = files[i];
+        argv[i][3] = "ping";
+        argv[i][4] = (char *)host;
+        argv[i][5] = "3";
+        argv[i][6] = NULL;
+    }
+    fflush(stdout);
+    for(i = 0; i < 3; i++) pids[i] = spawn("/initrd/bin/kcmdtest", argv[i]);
+    for(i = 0; i < 3; i++) {
+        status = -99;
+        buf[0] = 0;
+        if(pids[i] >= 0 && waitpid(pids[i], &status, 0) == pids[i] && slurp(files[i], buf, sizeof(buf)) > 0 &&
+           status == 0 && strstr(buf, "3 packets transmitted, 3 received")) good++;
+        else printf("kcmdtest: ping %d: status %d:\n%s\n", i + 1, status, buf);
+        unlink(files[i]);
+    }
+    check(good == 3, "three pings at once: every request answered");
+    printf("%d checks, %d failed\n", checks, failures);
+    puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
+    return failures ? 1 : 0;
+}
+
 /* kcmd selftest from a process with a child of its own that has ended: the child stays its own */
 static int child_selftest(const char *file) {
     char *hello[] = { "hello", "kcmdtest's child", NULL };
@@ -381,12 +441,14 @@ int main(int argc, char **argv) {
     if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
     if(argc == 3 && !strcmp(argv[1], "together")) return set_dir(argv[2]) ? 1 : together();
     if((argc == 2 || argc == 3) && !strcmp(argv[1], "child-selftest")) return child_selftest(argc == 3 ? argv[2] : NULL);
+    if(argc == 4 && !strcmp(argv[1], "pings")) return set_dir(argv[2]) ? 1 : pings(argv[3]);
     if(argc != 2) {
         fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
                         "       kcmdtest crash [file]\n"
                         "       kcmdtest run <file|-> <command> [args...]\n"
                         "       kcmdtest together <dir>\n"
-                        "       kcmdtest child-selftest [file]\n");
+                        "       kcmdtest child-selftest [file]\n"
+                        "       kcmdtest pings <dir> <host>\n");
         return 2;
     }
     if(set_dir(argv[1])) return 1;
@@ -397,6 +459,7 @@ int main(int argc, char **argv) {
     test_redirect();
     test_cut();
     test_edges();
+    test_usage();
     test_cd();
     printf("%d checks, %d failed\n", checks, failures);
     puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");

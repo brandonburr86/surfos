@@ -140,10 +140,10 @@ int cmd_mkfs(int argc, char **argv) {
     int bits = 0, i = 1, parts = 0;
     bool retype;
 
-    if(argc > 2 && !strcmp(argv[1], "-t")) {
-        if(!strcmp(argv[2], "fat16")) bits = 16;
-        else if(!strcmp(argv[2], "fat32")) bits = 32;
-        else i = argc;                                       /* a usage error */
+    if(argc > 1 && !strcmp(argv[1], "-t")) {
+        if(argc > 2 && !strcmp(argv[2], "fat16")) bits = 16;
+        else if(argc > 2 && !strcmp(argv[2], "fat32")) bits = 32;
+        else i = argc;                                       /* a usage error (10/6/26: -t alone too) */
         i += 2;
     }
     if(i >= argc || argc > i + 2) { printf("    usage: mkfs [-t fat16|fat32] <device> [label]   (lsblk lists the devices)\n"); return CMD_USAGE; }

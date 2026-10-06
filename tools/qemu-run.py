@@ -232,6 +232,8 @@ SMOKE = [
     ('rm /hda1/FDISK.TXT', []),
     # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
     # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
+    # three pings at once from three processes take turns: every request is answered
+    ('run kcmdtest pings /hda1 10.0.2.2', ['three pings at once: every request answered', 'KCMDTEST PASS', 'exit status 0']),
     # a report that is not fatal (crashint's unexpected vector) reaches the screen too
     ('run kcmdtest run /hda1/CRASHINT.TXT crashint', ['Unexpected trap', 'int 0x50 returned', 'kcmdtest: crashint: status 0']),
     ('rm /hda1/CRASHINT.TXT', []),
@@ -337,7 +339,8 @@ SMOKE = [
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
 TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
-            'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180}
+            'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
+            'run kcmdtest pings /hda1 10.0.2.2': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
