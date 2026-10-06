@@ -38,6 +38,7 @@ USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
 USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
+USER_PROGS  += ptytest       # 10/6/26 (the telnet server): pseudo-terminals, poll, procinfo, detach, /dev/kmsg
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
