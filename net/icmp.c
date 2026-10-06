@@ -4,6 +4,8 @@ SurfOS Network Stack: ICMP
 File: icmp.c    Date: 10/3/26 (roadmap N2)
 --------------------
 Echo replies, and echo requests for ping with one outstanding request.
+10/6/26: one request at a time (ping_lock): two pings at once, from two consoles or a
+ping and the self test, re-initialised the record's event under the other's waiter.
 */
 
 #include <surfos/types.h>
@@ -43,7 +45,9 @@ void icmp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) 
     netbuf_free(nb);
 }
 
-int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
+static mutex_t ping_lock = MUTEX_INIT("ping");
+
+static int ping_once(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
     struct netbuf *nb;
     struct icmp_hdr *ic;
     u8 *p;
@@ -74,4 +78,13 @@ int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u
     if(event_wait_timeout(&ping.done, timeout_ms) != 0) { ping.waiting = false; return -1; }
     if(ttl_out) *ttl_out = ping.ttl;
     return (int)(ping.rtt_ticks * (1000 / HZ));
+}
+
+/* the others wait their turn: a request takes at most timeout_ms */
+int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
+    int r;
+    mutex_lock(&ping_lock);
+    r = ping_once(dst, id, seq, payload, timeout_ms, ttl_out);
+    mutex_unlock(&ping_lock);
+    return r;
 }

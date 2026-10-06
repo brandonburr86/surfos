@@ -231,9 +231,13 @@ static int sys_time(void) {
 /**** 10/6/26: the kernel's shell commands (surfos/kcmd.h) ****/
 
 /* What a kernel command running in a task's system call holds. A command can end its task
-   (crashgp, kill of the caller itself, any fault in it): then reap() hands the task to
-   kcmd_task_gone() and these are released all the same. The record is on the task's kernel
-   stack, which stays until the task is reaped; a task runs one command at a time. */
+   (crashgp, kill of the caller itself, any fault in it), and another task can kill it: then
+   reap() hands the task to kcmd_task_gone() and these are released all the same. The record
+   is on the task's kernel stack, which stays until the task is reaped; a task runs one
+   command at a time. 10/6/26 (review): the record is on the list before the call holds
+   anything and leaves it only after the call let go of everything, and each field is set
+   together with taking what it names, interrupts off (and cleared together with letting it
+   go), so whenever the task stops, the record says exactly what it holds. */
 struct kcmd_call {
     surf_task *task;
     char *args;                 /* argv[] and its strings in one block */
@@ -243,12 +247,29 @@ struct kcmd_call {
 };
 static struct kcmd_call *kcmd_calls;
 
+static void kcmd_track(struct kcmd_call *c) {
+    u_long flags = irq_save();
+    c->next = kcmd_calls;
+    kcmd_calls = c;
+    irq_restore(flags);
+}
+
+/* let go of what c holds, each pointer cleared with its object */
 static void kcmd_release(struct kcmd_call *c) {
-    if(c->out) vfs_close(c->out);
-    kfree(c->capture);
-    kfree(c->args);
+    struct file *f;
+    u_long flags = irq_save();
+    f = c->out;
     c->out = NULL;
-    c->capture = c->args = NULL;
+    if(f && f->refs > 1) {              /* not the last reference: that only counts down, at once */
+        vfs_close(f);
+        f = NULL;
+    }
+    kfree(c->capture);
+    c->capture = NULL;
+    kfree(c->args);
+    c->args = NULL;
+    irq_restore(flags);
+    if(f) vfs_close(f);                 /* the last one (descriptor 1 was closed meanwhile): it may write */
 }
 
 void kcmd_task_gone(surf_task *t) {
@@ -288,62 +309,71 @@ static int write_all(struct file *f, const char *p, u32 len) {
     return 0;
 }
 
+/* the size of a kernel command's argument, its NUL included: -EFAULT when it is not in the
+   caller's memory, -E2BIG when it is longer than ARG_STR_MAX - 1 bytes */
+static int arg_size(const char *s) {
+    if(ustr(s)) return (int)strlen(s) + 1;
+    return ubuf(s, ARG_STR_MAX, false) ? -E2BIG : -EFAULT;
+}
+
 /* argv is checked as user_argv() checks it and copied, strings and all: a command may write
    into its arguments (strtok), and user memory is not the kernel's to keep */
 static int sys_kcmd(char *const argv[]) {
     struct kcmd_call call;
     struct kcapture cap;
-    char **kargv, *p, *end, note[120];
-    u_long bytes = 0;
-    int argc = 0, i, r, w = 0;
+    struct file *f;
+    char **kargv, *p, note[120];
+    int size[SPAWN_MAX_ARGS], argc = 0, i, r, w = 0;
+    u_long bytes = 0, flags;
 
     if(!argv) return -EINVAL;
     for(;;) {
         if(!ubuf(argv + argc, sizeof(char *), false)) return -EFAULT;
         if(!argv[argc]) break;
-        if(!ustr(argv[argc])) return -EFAULT;
         if(argc == SPAWN_MAX_ARGS) return -E2BIG;
-        bytes += strlen(argv[argc]) + 1;
+        size[argc] = arg_size(argv[argc]);
+        if(size[argc] < 0) return size[argc];
+        bytes += (u_long)size[argc];
         argc++;
     }
     if(!argc) return -EINVAL;
+    if(!kcmd_exists(argv[0])) return -ENOENT;            /* checked user memory: this task alone can change it */
+
     memset(&call, 0, sizeof(call));
     call.task = curTask;
+    kcmd_track(&call);                                   /* listed before it holds anything */
+    flags = irq_save();
     call.args = (char *)kalloc((argc + 1) * sizeof(char *) + bytes);
-    if(!call.args) return -ENOMEM;
+    irq_restore(flags);
+    if(!call.args) { r = -ENOMEM; goto out; }
     kargv = (char **)call.args;
     p = call.args + (argc + 1) * sizeof(char *);
-    end = p + bytes;
-    for(i = 0; i < argc; i++) {
+    for(i = 0; i < argc; i++) {                          /* the bytes measured above, no more */
+        memcpy(p, argv[i], (size_t)size[i]);
+        p[size[i] - 1] = 0;
         kargv[i] = p;
-        strlcpy(p, argv[i], end - p);
-        p += strlen(p) + 1;
+        p += size[i];
     }
     kargv[argc] = NULL;
 
-    if(!kcmd_exists(kargv[0])) { kfree(call.args); return -ENOENT; }
-    call.out = fd_get(1);
-    if(call.out && !devfs_is_console(call.out)) {            /* a redirection: keep the output, write it afterwards */
+    flags = irq_save();                                  /* descriptor 1 a file: a redirection */
+    f = fd_get(1);
+    if(f && !devfs_is_console(f)) {
+        f->refs++;                                       /* shared with other tasks' descriptors */
+        call.out = f;
+    }
+    irq_restore(flags);
+    if(call.out) {                                       /* the output is kept and written afterwards */
+        flags = irq_save();
         call.capture = (char *)kalloc(KCMD_CAPTURE_MAX);
-        if(!call.capture) { kfree(call.args); return -ENOMEM; }
-        {
-            u_long flags = irq_save();                      /* the count is shared with other tasks' descriptors */
-            call.out->refs++;
-            irq_restore(flags);
-        }
+        irq_restore(flags);
+        if(!call.capture) { r = -ENOMEM; goto out; }
         cap.buf = call.capture;
         cap.len = 0;
         cap.size = KCMD_CAPTURE_MAX;
         cap.cut = 0;
-    } else call.out = NULL;
-    {
-        u_long flags = irq_save();
-        call.next = kcmd_calls;
-        kcmd_calls = &call;
-        irq_restore(flags);
+        console_capture_begin(&cap);
     }
-
-    if(call.capture) console_capture_begin(&cap);
     r = shell_run_command(argc, kargv);
     if(call.capture) {
         console_capture_end();
@@ -358,8 +388,9 @@ static int sys_kcmd(char *const argv[]) {
             if(r == 0) r = 1;                                /* the command worked; keeping what it said did not */
         }
     }
+out:
+    kcmd_release(&call);                                 /* everything let go of, then off the list */
     kcmd_forget(&call);
-    kcmd_release(&call);
     return r;
 }
 

@@ -11,7 +11,14 @@ and returning its exit status; a command whose output is redirected (a file in <
 descriptor 1 with dup2, then the console back on 1 from /dev/console) and the file read
 back, the same for a program started by run, and an output longer than KCMD_CAPTURE_MAX
 cut with a note at its end; kcmdinfo() walking the table, which holds lsblk and fdisk and
-ends with ENOENT; cd moving this process. The files made in <dir> are removed again.
+ends with ENOENT; cd moving this process. 10/6/26: the limits (32 arguments, 255
+bytes each: E2BIG beyond), kcmdinfo into a buffer that runs into unmapped memory
+(EFAULT, nothing written), and descriptor 1 read-only (the write fails: status 1),
+closed (the console) and /dev/null; clear writes escape sequences to descriptor 1, and
+rawkeys, which reads the keyboard as it goes, refuses a redirection (status 2); usage
+errors (2): mkfs -t alone, ping with a count that is no number or 0, sleep with a time
+that is no number, an httpget request too long to send. The files made in <dir> are
+removed again.
 One line per check, then KCMDTEST PASS (exit 0) or KCMDTEST FAIL.
 
 kcmdtest crash [file]: kcmd crashgp, which kills this process (with descriptor 1 on
@@ -20,6 +27,19 @@ kernel lets go of the file when the process is collected). It never returns.
 
 kcmdtest run <file> <command> [args...]: one kernel command with descriptor 1 on file
 ("-": the console), then its status; a question it asks is still seen on the console.
+The program's exit status is the command's (125 when kcmd itself failed).
+
+kcmdtest together <dir> (10/6/26): four heaptests at once, each run by a process of its
+own with its output in a file in <dir>: one runs at a time and the others are refused,
+and a heaptest alone afterwards finds the heap whole.
+
+kcmdtest child-selftest [file] (10/6/26): kcmd selftest from a process that has a child
+of its own (hello, ended and not yet collected): the self test passes and leaves the
+child to its parent, which collects its exit status 42 afterwards.
+
+kcmdtest pings <dir> <host> (10/6/26): three pings of 3 requests at once, each run by a
+process of its own with its output in a file in <dir>: every request is answered (the
+kernel's ping takes turns; it had one record for the reply it waits for).
 */
 
 #include <stdio.h>
@@ -62,6 +82,7 @@ static int out_to(const char *path) {
     fflush(stdout);
     fd = path ? open(path, O_WRONLY | O_CREAT | O_TRUNC) : open("/dev/console", O_WRONLY);
     if(fd < 0) return -1;
+    if(fd == 1) return 0;                               /* descriptor 1 was closed: the open took it */
     if(dup2(fd, 1) < 0) { close(fd); return -1; }
     close(fd);
     return 0;
@@ -182,6 +203,102 @@ static void test_cut(void) {
     check(unlink(big) == 0 && unlink(out) == 0, "remove the two files");
 }
 
+/* 10/6/26: the limits of the arguments, kcmdinfo at the end of mapped memory, and what
+   descriptor 1 may be */
+static void test_edges(void) {
+    static char a255[256], a256[257];
+    char *argv[40], *end, *ro = in_dir("KCMDRO.TXT");
+    struct kcmd_info *info;
+    int i, r, fd, untouched;
+
+    for(i = 1; i < 32; i++) argv[i] = "w";
+    argv[0] = "true-is-not-a-kernel-command";            /* the count is checked before the name */
+    argv[32] = "33rd";
+    argv[33] = NULL;
+    errno = 0;
+    check(kcmd(argv) == -1 && errno == E2BIG, "33 arguments: E2BIG");
+    argv[0] = "echo";
+    argv[32] = NULL;
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "32 arguments are taken (and descriptor 1 on /dev/null: nothing shown, status 0)");
+    memset(a255, 'a', 255);
+    memset(a256, 'b', 256);
+    argv[1] = a255;
+    argv[2] = NULL;
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "an argument of 255 bytes is taken");
+    argv[1] = a256;
+    errno = 0;
+    check(kcmd(argv) == -1 && errno == E2BIG, "one of 256 bytes: E2BIG");
+
+    end = (char *)(((unsigned long)sbrk(0) + 4095) & ~4095UL);   /* the first byte past the heap's pages */
+    info = (struct kcmd_info *)(end - 100);
+    memset(end - 100, 0x5a, 100);
+    errno = 0;
+    r = kcmdinfo(0, info);
+    for(untouched = 1, i = 0; i < 100; i++) if((unsigned char)end[i - 100] != 0x5a) untouched = 0;
+    check(r == -1 && errno == EFAULT && untouched, "kcmdinfo into a buffer that runs into unmapped memory: EFAULT, nothing written");
+
+    fd = open(ro, O_WRONLY | O_CREAT | O_TRUNC);
+    if(fd >= 0) close(fd);
+    fd = open(ro, O_RDONLY);
+    argv[1] = "into";
+    argv[2] = "a";
+    argv[3] = "read-only";
+    argv[4] = "descriptor";
+    argv[5] = NULL;
+    fflush(stdout);
+    r = fd >= 0 && dup2(fd, 1) == 1 ? kcmd(argv) : -2;
+    if(fd >= 0) close(fd);
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 1, "descriptor 1 read-only: the output cannot be written, status 1 (and the console says so)");
+    fflush(stdout);
+    close(1);
+    argv[1] = "kcmdtest: descriptor 1 closed, this line on the console";
+    argv[2] = NULL;
+    r = kcmd(argv);
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0, "descriptor 1 closed: the output goes to the console, status 0");
+    argv[0] = "clear";
+    argv[1] = NULL;
+    {
+        char buf[64];
+        r = out_to(ro) == 0 ? kcmd(argv) : -2;
+        if(out_to(NULL) < 0) exit(3);
+        check(r == 0 && slurp(ro, buf, sizeof(buf)) > 0 && strstr(buf, "\033[2J\033[H"),
+              "clear writes ESC [2J ESC [H to descriptor 1 (the caller's, not the console that shows)");
+    }
+    argv[0] = "rawkeys";
+    r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 2, "rawkeys with its output in a file: refused, status 2 (it reads the keyboard as it goes)");
+    check(unlink(ro) == 0, "remove the file");
+}
+
+/* 10/6/26: what was typed is not how the command is used: status 2 */
+static int usage_status(char *const argv[]) {
+    int r = out_to("/dev/null") == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    return r;
+}
+
+static void test_usage(void) {
+    static char path[242];
+    char *mkfs[] = { "mkfs", "-t", NULL };
+    char *ping_abc[] = { "ping", "10.0.2.2", "abc", NULL };
+    char *ping_0[] = { "ping", "10.0.2.2", "0", NULL };
+    char *sleep_abc[] = { "sleep", "abc", NULL };
+    char *httpget[] = { "httpget", "10.0.2.2", "80", path, NULL };
+    path[0] = '/';
+    memset(path + 1, 'x', 240);
+    check(usage_status(mkfs) == 2, "mkfs -t alone: status 2");
+    check(usage_status(ping_abc) == 2 && usage_status(ping_0) == 2, "ping with a count that is no number, or 0: status 2");
+    check(usage_status(sleep_abc) == 2, "sleep with a time that is no number: status 2");
+    check(usage_status(httpget) == 2, "httpget with a request too long to send: refused before it connects, status 2");
+}
+
 static void test_cd(void) {
     char got[PATH_MAX];
     char *cd_root[] = { "cd", "/", NULL };
@@ -200,7 +317,94 @@ static int run(const char *file, char **argv) {
     if(out_to(NULL) < 0) return 3;
     if(r < 0) printf("kcmdtest: %s: %s\n", argv[0], strerror(errno));
     else printf("kcmdtest: %s: status %d\n", argv[0], r);
-    return r < 0 ? 1 : 0;
+    return r < 0 ? 125 : r;
+}
+
+/* four heaptests at once: one at a time, the others refused; the heap is whole afterwards */
+static int together(void) {
+    char *files[4], *argv[4][5], buf[600];
+    char *heaptest[] = { "heaptest", NULL };
+    int pids[4], i, ran = 0, refused = 0, odd = 0, status, r;
+    for(i = 0; i < 4; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "KHEAP%d.TXT", i);
+        files[i] = in_dir(name);
+        argv[i][0] = "kcmdtest";
+        argv[i][1] = "run";
+        argv[i][2] = files[i];
+        argv[i][3] = "heaptest";
+        argv[i][4] = NULL;
+    }
+    fflush(stdout);
+    for(i = 0; i < 4; i++) pids[i] = spawn("/initrd/bin/kcmdtest", argv[i]);
+    for(i = 0; i < 4; i++) {
+        status = -99;
+        buf[0] = 0;
+        if(pids[i] < 0 || waitpid(pids[i], &status, 0) != pids[i] || slurp(files[i], buf, sizeof(buf)) < 0) odd++;
+        else if(status == 1 && strstr(buf, "one at a time")) refused++;
+        else if((status == 0 || status == 1) && strstr(buf, "heaptest: ") && strstr(buf, "HEAPTEST")) ran++;
+        else odd++;
+        unlink(files[i]);
+    }
+    printf("kcmdtest: four heaptests at once: %d ran, %d refused, %d otherwise\n", ran, refused, odd);
+    check(ran >= 1 && !odd, "four heaptests at once: one at a time, the others refused, no kernel panic");
+    r = out_to(files[0]) == 0 ? kcmd(heaptest) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    check(r == 0 && slurp(files[0], buf, sizeof(buf)) > 0 && strstr(buf, "HEAPTEST PASS"), "a heaptest alone afterwards: the heap is whole");
+    unlink(files[0]);
+    printf("%d checks, %d failed\n", checks, failures);
+    puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
+    return failures ? 1 : 0;
+}
+
+/* three pings at once: they take turns, and every request is answered */
+static int pings(const char *host) {
+    char *files[3], *argv[3][7], buf[600];
+    int pids[3], i, good = 0, status;
+    for(i = 0; i < 3; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "KPING%d.TXT", i);
+        files[i] = in_dir(name);
+        argv[i][0] = "kcmdtest";
+        argv[i][1] = "run";
+        argv[i][2] = files[i];
+        argv[i][3] = "ping";
+        argv[i][4] = (char *)host;
+        argv[i][5] = "3";
+        argv[i][6] = NULL;
+    }
+    fflush(stdout);
+    for(i = 0; i < 3; i++) pids[i] = spawn("/initrd/bin/kcmdtest", argv[i]);
+    for(i = 0; i < 3; i++) {
+        status = -99;
+        buf[0] = 0;
+        if(pids[i] >= 0 && waitpid(pids[i], &status, 0) == pids[i] && slurp(files[i], buf, sizeof(buf)) > 0 &&
+           status == 0 && strstr(buf, "3 packets transmitted, 3 received")) good++;
+        else printf("kcmdtest: ping %d: status %d:\n%s\n", i + 1, status, buf);
+        unlink(files[i]);
+    }
+    check(good == 3, "three pings at once: every request answered");
+    printf("%d checks, %d failed\n", checks, failures);
+    puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
+    return failures ? 1 : 0;
+}
+
+/* kcmd selftest from a process with a child of its own that has ended: the child stays its own */
+static int child_selftest(const char *file) {
+    char *hello[] = { "hello", "kcmdtest's child", NULL };
+    char *selftest[] = { "selftest", NULL };
+    int pid, r = -2, w, status = -99;
+    fflush(stdout);
+    pid = spawn("/initrd/bin/hello", hello);
+    if(pid < 0) { printf("kcmdtest: hello: %s\n", strerror(errno)); return 1; }
+    msleep(300);                                        /* it has ended by now: a child not yet collected */
+    if(!file || out_to(file) == 0) r = kcmd(selftest);
+    if(file && out_to(NULL) < 0) exit(3);
+    w = waitpid(pid, &status, 0);
+    printf("kcmdtest: kcmd selftest: status %d; this process's own child: %s, exit status %d\n", r,
+           w == pid ? "collected" : "gone", status);
+    if(file) unlink(file);
+    return r == 0 && w == pid && status == 42 ? 0 : 1;
 }
 
 /* a kernel command that faults ends the process that ran it */
@@ -214,34 +418,48 @@ static int crash(const char *file) {
     return 1;
 }
 
-int main(int argc, char **argv) {
+/* dir: the directory to work in, absolute (so getcwd() can be compared with it); 0 or -1 */
+static int set_dir(const char *arg) {
     struct stat st;
     size_t n;
-    if((argc == 2 || argc == 3) && !strcmp(argv[1], "crash")) return crash(argc == 3 ? argv[2] : NULL);
-    if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
-    if(argc != 2) {
-        fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
-                        "       kcmdtest crash [file]\n"
-                        "       kcmdtest run <file|-> <command> [args...]\n");
-        return 2;
-    }
-    if(argv[1][0] == '/') snprintf(dir, sizeof(dir), "%s", argv[1]);
-    else {                                              /* absolute, so getcwd() can be compared with it */
+    if(arg[0] == '/') snprintf(dir, sizeof(dir), "%s", arg);
+    else {
         char cwd[PATH_MAX];
-        snprintf(dir, sizeof(dir), "%s/%s", getcwd(cwd, sizeof(cwd)) ? (strcmp(cwd, "/") ? cwd : "") : ".", argv[1]);
+        snprintf(dir, sizeof(dir), "%s/%s", getcwd(cwd, sizeof(cwd)) ? (strcmp(cwd, "/") ? cwd : "") : ".", arg);
     }
     n = strlen(dir);
     while(n > 1 && dir[n - 1] == '/') dir[--n] = 0;
     if(stat(dir, &st) < 0 || !S_ISDIR(st.type)) {
         fprintf(stderr, "kcmdtest: %s: not a directory\n", dir);
-        return 1;
+        return -1;
     }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if((argc == 2 || argc == 3) && !strcmp(argv[1], "crash")) return crash(argc == 3 ? argv[2] : NULL);
+    if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
+    if(argc == 3 && !strcmp(argv[1], "together")) return set_dir(argv[2]) ? 1 : together();
+    if((argc == 2 || argc == 3) && !strcmp(argv[1], "child-selftest")) return child_selftest(argc == 3 ? argv[2] : NULL);
+    if(argc == 4 && !strcmp(argv[1], "pings")) return set_dir(argv[2]) ? 1 : pings(argv[3]);
+    if(argc != 2) {
+        fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
+                        "       kcmdtest crash [file]\n"
+                        "       kcmdtest run <file|-> <command> [args...]\n"
+                        "       kcmdtest together <dir>\n"
+                        "       kcmdtest child-selftest [file]\n"
+                        "       kcmdtest pings <dir> <host>\n");
+        return 2;
+    }
+    if(set_dir(argv[1])) return 1;
     printf("kcmdtest in %s\n", dir);
     test_status();
     test_info();
     test_run();
     test_redirect();
     test_cut();
+    test_edges();
+    test_usage();
     test_cd();
     printf("%d checks, %d failed\n", checks, failures);
     puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");

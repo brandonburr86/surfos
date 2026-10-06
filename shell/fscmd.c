@@ -11,7 +11,9 @@ matches (MBR 0c or 0e, GPT basic data) through the partition code's checked
 rewrite; a formatted whole disk is read again, so its old partitions go.
 eject unmounts everything on a disk and flushes it before it says the disk
 may be pulled out. A protected device (the SurfOS boot drive) is only ever
-mounted read-only.
+mounted read-only. 10/6/26: what they list of the mounts is a copy made under the
+mount table's lock (vfs_mount_views()): printing may wait at the pager, and an umount
+on another console frees mount records meanwhile.
 
 10/6/26: every command returns its status (shell.h): a refused device, a Cancelled
 question and a busy volume are failures; df fails when a volume cannot say its size.
@@ -44,13 +46,35 @@ static void human(u64 blocks, char *out, size_t n) {
     else snprintf(out, n, "%lu.%lu %s", (u_long)whole, (u_long)tenth, unit);
 }
 
-/* the mount a device is on (or the mount at a path), or NULL */
-static const struct mount *mount_of(const char *name) {
-    const struct mount *m;
-    for(m = vfs_mounts(); m; m = m->next) {
-        if(!strcmp(m->path, name) || (m->sb->dev && !strcmp(m->sb->dev->name, name))) return m;
+#define MAX_VIEWS 32
+
+/* the mount table copied under its lock, in n (*total: the mounts there are); NULL after
+   saying so when there is no memory for the copy */
+static struct vfs_mount_view *mounts_now(int *n, int *total) {
+    struct vfs_mount_view *v = (struct vfs_mount_view *)kalloc(MAX_VIEWS * sizeof(*v));
+    if(!v) {
+        printf("    out of memory for the list of mounts\n");
+        return NULL;
     }
-    return NULL;
+    *total = vfs_mount_views(v, MAX_VIEWS);
+    *n = *total < MAX_VIEWS ? *total : MAX_VIEWS;
+    return v;
+}
+
+/* the path of the mount a device is on (or of the mount at a path), in path; false: none */
+static bool mount_of(const char *name, char *path, size_t size) {
+    struct vfs_mount_view *v;
+    int n, total, j;
+    bool found = false;
+    if(!(v = mounts_now(&n, &total))) return false;
+    for(j = 0; j < n && !found; j++) {
+        if(!strcmp(v[j].path, name) || (v[j].dev && !strcmp(v[j].dev->name, name))) {
+            strlcpy(path, v[j].path, size);
+            found = true;
+        }
+    }
+    kfree(v);
+    return found;
 }
 
 /* one line about a mounted volume: "rd1 on /scratch: fat16, label TESTVOL, 64 MB, 63.9 MB free, read-write" */
@@ -116,10 +140,10 @@ int cmd_mkfs(int argc, char **argv) {
     int bits = 0, i = 1, parts = 0;
     bool retype;
 
-    if(argc > 2 && !strcmp(argv[1], "-t")) {
-        if(!strcmp(argv[2], "fat16")) bits = 16;
-        else if(!strcmp(argv[2], "fat32")) bits = 32;
-        else i = argc;                                       /* a usage error */
+    if(argc > 1 && !strcmp(argv[1], "-t")) {
+        if(argc > 2 && !strcmp(argv[2], "fat16")) bits = 16;
+        else if(argc > 2 && !strcmp(argv[2], "fat32")) bits = 32;
+        else i = argc;                                       /* a usage error (10/6/26: -t alone too) */
         i += 2;
     }
     if(i >= argc || argc > i + 2) { printf("    usage: mkfs [-t fat16|fat32] <device> [label]   (lsblk lists the devices)\n"); return CMD_USAGE; }
@@ -158,15 +182,18 @@ int cmd_mkfs(int argc, char **argv) {
 /**** mount, umount, eject ****/
 
 int cmd_mount(int argc, char **argv) {
-    const struct mount *m;
+    struct vfs_mount_view *v;
     char path[VFS_PATH_MAX];
     struct bdev *d;
-    int flags = 0, i = 1, r;
+    int flags = 0, i = 1, r, n, total, j;
 
     if(argc == 1) {
-        for(m = vfs_mounts(); m; m = m->next)
-            printf("    %-6s on %-12s type %s%s%s\n", m->sb->dev ? m->sb->dev->name : "none", m->path, m->sb->type->name,
-                   m->sb->readonly ? " (ro)" : "", m->sb->dev && m->sb->dev->gone ? " (unplugged: umount it)" : "");
+        if(!(v = mounts_now(&n, &total))) return CMD_FAIL;
+        for(j = 0; j < n; j++)
+            printf("    %-6s on %-12s type %s%s%s\n", v[j].dev ? v[j].dev->name : "none", v[j].path, v[j].type,
+                   v[j].readonly ? " (ro)" : "", v[j].dev && v[j].dev->gone ? " (unplugged: umount it)" : "");
+        if(total > n) printf("    (and %d more)\n", total - n);
+        kfree(v);
         return CMD_OK;
     }
     if(!strcmp(argv[1], "-r")) { flags = MNT_RDONLY; i++; }
@@ -198,32 +225,34 @@ static int unmount(const char *cmd, const char *path) {
 }
 
 int cmd_umount(int argc, char **argv) {
-    const struct mount *m;
     char path[VFS_PATH_MAX];
     if(argc != 2) { printf("    usage: umount <path|device>\n"); return CMD_USAGE; }
-    m = argv[1][0] == '/' ? NULL : mount_of(argv[1]);        /* a device name stands for its mount */
-    strlcpy(path, m ? m->path : argv[1], sizeof(path));
+    if(argv[1][0] == '/' || !mount_of(argv[1], path, sizeof(path)))   /* a device name stands for its mount */
+        strlcpy(path, argv[1], sizeof(path));
     return unmount("umount", path) ? CMD_FAIL : CMD_OK;
 }
 
 /* eject <disk>: every mount of the disk and its partitions goes (all of them, or none when one
    is busy), the cache and the disk's own cache are written out, and its blocks forgotten */
 int cmd_eject(int argc, char **argv) {
-    const struct mount *m;
+    struct vfs_mount_view *v;
     struct bdev *d, *disk = NULL, *p;
     char paths[8][VFS_PATH_MAX], why[128];
     u_int n = 0, i;
-    int r = 0;
+    int r = 0, nv, total, j;
 
     if(argc != 2) { printf("    usage: eject <disk>   (usb0, or one of its partitions)\n"); return CMD_USAGE; }
+    if(!(v = mounts_now(&nv, &total))) return CMD_FAIL;
     d = bdev_find(argv[1]);
     if(d) disk = bdev_disk(d);
-    for(m = vfs_mounts(); m; m = m->next) {                  /* an unplugged disk is off the list: its mounts know it */
-        struct bdev *x = m->sb->dev;
-        if(!x) continue;
-        if(!disk && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
-        if(disk && bdev_disk(x) == disk && n < 8) strlcpy(paths[n++], m->path, sizeof(paths[0]));
+    for(j = 0; j < nv && !disk; j++) {                       /* an unplugged disk is off the list: its mounts know it */
+        struct bdev *x = v[j].dev;
+        if(x && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
     }
+    for(j = 0; j < nv && disk; j++) {
+        if(v[j].dev && bdev_disk(v[j].dev) == disk && n < 8) strlcpy(paths[n++], v[j].path, sizeof(paths[0]));
+    }
+    kfree(v);
     if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
     for(i = 0; i < n; i++) {
         if(vfs_busy(paths[i], why, sizeof(why)) == -EBUSY) {
@@ -251,18 +280,19 @@ int cmd_eject(int argc, char **argv) {
 /**** df, mv ****/
 
 int cmd_df(int argc, char **argv) {
-    const struct mount *m;
-    int status = CMD_OK;
+    struct vfs_mount_view *v;
+    int status = CMD_OK, n, total, j;
+    if(!(v = mounts_now(&n, &total))) return CMD_FAIL;
     printf("    Device  Type       Size     Used    Avail  Use%%  Mounted on    Label\n");
-    for(m = vfs_mounts(); m; m = m->next) {
+    for(j = 0; j < n; j++) {
         struct statfs st;
         char size[16], used[16], avail[16];
         u32 inuse;
         int r;
-        if(!m->sb->dev) continue;                            /* the root and /dev hold no data */
-        r = vfs_statfs(m->path, &st);
+        if(!v[j].dev) continue;                              /* the root and /dev hold no data */
+        r = vfs_statfs(v[j].path, &st);
         if(r) {
-            printf("    %-7s %-7s %s (%s)\n", m->sb->dev->name, m->sb->type->name, m->path, strerror(r));
+            printf("    %-7s %-7s %s (%s)\n", v[j].dev->name, v[j].type, v[j].path, strerror(r));
             status = CMD_FAIL;
             continue;
         }
@@ -274,6 +304,8 @@ int cmd_df(int argc, char **argv) {
         printf("    %-7s %-7s %8s %8s %8s %4lu%%  %-13s %s\n", st.dev, st.fs, size, used, avail,
                (u_long)div64_32((u64)inuse * 100 + st.units - 1, st.units, NULL), st.path, st.label);
     }
+    if(total > n) printf("    (and %d more mounts)\n", total - n);
+    kfree(v);
     return status;
 }
 

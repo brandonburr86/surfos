@@ -33,6 +33,7 @@ typedef void (*kthread_fn)(void *arg);
 #define TF_DETACHED 0x2  /* nobody waits for it: init reaps it when it exits */
 #define TF_KTHREAD  0x4
 #define TF_USER     0x8  /* runs in ring 3 (roadmap P1) */
+#define TF_LOADED   0x10 /* 10/6/26: a process whose program was loaded and started (process.c) */
 
 typedef enum {
     TS_READY = 0,   /* on a run queue */

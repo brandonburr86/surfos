@@ -60,6 +60,16 @@ def shown(text):
     return re.compile(_SGR.join(re.escape(ch.encode()) for ch in text))
 
 
+# 10/6/26: the 2026 shell sh (user/bin/sh.c) in the root directory, which init runs in a boot where it is surfsh
+SH_PROMPT = re.compile(rb'/ \$ ')
+
+
+def own_shell_killed(q):
+    """the line that has sh run kcmd kill on sh itself: its pid from its latest banner"""
+    pids = re.findall(r'SurfOS user shell \(pid (\d+)\)', q.text())
+    return 'kcmdtest run - kill ' + (pids[-1] if pids else '0')
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -230,10 +240,20 @@ SMOKE = [
     ('echo status $?', ['status 42']),
     # the bridge (SYS_kcmd, SYS_kcmdinfo) from user space: statuses, errors, run, redirection, cut output, the table
     ('run kcmdtest /hda1', ['KCMDTEST PASS', 'exit status 0']),
+    # one self test or heaptest at a time, since they share state: four heaptests at once from four processes;
+    # a self test run through kcmd by a process with a child of its own leaves that child to it
+    ('run kcmdtest together /hda1', ['four heaptests at once', 'KCMDTEST PASS', 'exit status 0']),
+    ('run kcmdtest child-selftest /hda1/KSELF.TXT',
+     ["kcmd selftest: status 0; this process's own child: collected, exit status 42", 'exit status 0']),
     # a question while the output goes to a file: seen and answered on the console; the rest is in the file
     ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['kcmdtest: fdisk: status 1'])]),
     ('cat /hda1/FDISK.TXT', ['rd1: scratch.img, 64M', 'change: ', 'Cancelled']),
     ('rm /hda1/FDISK.TXT', []),
+    # three pings at once from three processes take turns: every request is answered
+    ('run kcmdtest pings /hda1 10.0.2.2', ['three pings at once: every request answered', 'KCMDTEST PASS', 'exit status 0']),
+    # a report that is not fatal (crashint's unexpected vector) reaches the screen with the output going to a file
+    ('run kcmdtest run /hda1/CRASHINT.TXT crashint', ['Unexpected trap', 'int 0x50 returned', 'kcmdtest: crashint: status 0']),
+    ('rm /hda1/CRASHINT.TXT', []),
     # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
     # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
@@ -241,20 +261,35 @@ SMOKE = [
     ('umount /kcmd', []),
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
     ('umount /kcmd', []),
+    # the question answered as asked, with the output going to a file: the change is made, and the file says so
+    ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new mbr', [CONFIRM_RD1], [('rd1', ['kcmdtest: fdisk: status 0'])]),
+    ('cat /hda1/FDISK.TXT', ['change: a new, empty MBR', 'rd1: written, flushed and verified', 'rd1 now has no partitions']),
+    ('rm /hda1/FDISK.TXT', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
-    # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program>, an initrd whose bin/surfsh
-    # is that program), for init's choice of shell. shell=kernel: the ring-0 shell on every console on purpose,
-    # elevated (#), no recovery line; no initrd: no /initrd/bin/surfsh, a recovery console (?) at once with init's
-    # line; a surfsh that ends at once (hello: 42): started again twice, then the recovery console
-    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')])],
+    # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
+    # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
+    # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
+    # /initrd/bin/surfsh, a recovery console (?) at once with init's line; a surfsh that ends at once (hello: 42):
+    # started again twice, then the recovery console; one that is not an executable: the recovery console at once;
+    # one that runs (sh): an exit after 2 s with status 3 is said, with 0 not, a kill is said ('@sleep n' waits)
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')]),
+                                                          ('crashgp', ['General Protection Fault', 'init: restarted the shell',
+                                                                       surf_prompt(b'SURF', b'#')])],
      ['recovery console']),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
-    ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh ended at once, status 42; restarted the shell',
-                            'init: surfsh ended at once, status 42; restarted the shell',
-                            'init: surfsh failed 3 times in 30 s (ended at once, status 42); recovery console',
+    ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh exited at once (status 42); restarted the shell',
+                            'init: surfsh exited at once (status 42); restarted the shell',
+                            'init: surfsh exited at once 3 times in 30 s (status 42); recovery console',
                             surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
+    ('@boot surfsh=etc/version', ['init: /initrd/bin/surfsh could not be loaded; recovery console', surf_prompt(b'SURF', b'?')],
+     [], ['restarted the shell']),
+    ('@boot surfsh=sh', ['SurfOS user shell', SH_PROMPT],
+     [('@sleep 2.5', []), ('exit 3', ['init: surfsh exited (status 3); restarted the shell', 'SurfOS user shell', SH_PROMPT]),
+      ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
+      (own_shell_killed, ['init: surfsh was killed; restarted the shell', 'SurfOS user shell', SH_PROMPT])],
+     ['exited (status 0)', 'recovery console']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -337,7 +372,9 @@ SMOKE = [
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60}
+TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
+            'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
+            'run kcmdtest pings /hda1 10.0.2.2': 60}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
@@ -897,7 +934,7 @@ def initrd_with(src, dst, name, data):
 def boot_step(reboot, entry, timeout):
     """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
-    that must not appear"""
+    that must not appear. A line may be a function of the QEMU that returns it, or '@sleep <seconds>'."""
     cmd, expects, follow, absent = entry
     try:
         q2 = reboot(cmd.split()[1:])
@@ -907,6 +944,11 @@ def boot_step(reboot, entry, timeout):
     try:
         ok = all(q2.expect(e, timeout) for e in expects)
         for line, exp in follow:
+            if callable(line):
+                line = line(q2)
+            if line.startswith('@sleep '):
+                q2.wait(float(line.split()[1]))
+                continue
             q2.send(line + '\n')
             ok = ok and all(q2.expect(e, 10) for e in exp)
             if exp and isinstance(exp[-1], re.Pattern):
@@ -992,7 +1034,7 @@ def main():
 
     def reboot(words):
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
-        surfsh=<program> (the initrd with that program as bin/surfsh)"""
+        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh)"""
         initrd, append = a.initrd, a.append.split()
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
@@ -1003,7 +1045,7 @@ def main():
                     if not a.initrd:
                         raise RuntimeError('surfsh= needs --initrd')
                     with tarfile.open(a.initrd) as t:
-                        program = t.extractfile('bin/' + w[7:]).read()
+                        program = t.extractfile(w[7:] if '/' in w[7:] else 'bin/' + w[7:]).read()
                     initrd = os.path.join(tmp, 'initrd.tar')
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:

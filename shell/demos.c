@@ -2,7 +2,9 @@
 SurfOS ring0 Shell - the 2004 demonstrations
 (C)2004 Brandon Burr
 
-Moved out of main.c in 10/2026; the code is the original.
+Moved out of main.c in 10/2026; the code is the original. 10/6/26: they clear the
+console of the task that runs them, which is not always the one that shows (the user
+shell runs them through SYS_kcmd on any console).
 */
 
 #include <blibc_common.h>
@@ -10,7 +12,10 @@ Moved out of main.c in 10/2026; the code is the original.
 #include <surfos/kernel.h>
 #include <surfos/console.h>
 #include <surfos/system.h>
+#include <surfos/task.h>
 #include "shell.h"
+
+#define clearScreen() clearConsole(curTask->con)    /* 10/6/26: the caller's console, not the active one */
 
 static void dohanoi(int N, int from, int to, int use) {
     if (N > 0) {
