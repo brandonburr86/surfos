@@ -3,6 +3,9 @@ SurfOS Synchronization Primitives
 --------------------
 File: sync.c    Date: 10/3/26 (roadmap S2)
 --------------------
+10/6/26: a task counts the mutexes it holds (surf_task.mutexes). The console's pager
+(TTY_PAGE, kernel/console.c) makes a task wait for a key only when it holds none, so a
+lock is never kept while somebody reads a screenful.
 */
 
 #include <surfos/types.h>
@@ -33,6 +36,7 @@ void mutex_lock(mutex_t *m) {
     }
     m->locked = 1;
     m->owner = curTask;
+    if(curTask) curTask->mutexes++;
     irq_restore(flags);
 }
 
@@ -42,6 +46,7 @@ bool mutex_trylock(mutex_t *m) {
     if(!m->locked) {
         m->locked = 1;
         m->owner = curTask;
+        if(curTask) curTask->mutexes++;
         got = true;
     }
     irq_restore(flags);
@@ -53,6 +58,7 @@ void mutex_unlock(mutex_t *m) {
     if(!m->locked || m->owner != curTask) panic("mutex '%s': unlock by '%s' who does not hold it", m->name, curTask ? curTask->name : "?");
     m->locked = 0;
     m->owner = NULL;
+    if(curTask && curTask->mutexes) curTask->mutexes--;
     wake_up(&m->waiters);
     irq_restore(flags);
 }
