@@ -9,7 +9,8 @@ the rest arrive as argv. `help` is generated from the same table.
 2 a usage error. A word $? is the status of the previous command (`echo $?`); a line
 that is no command is 127, and a program run by its name gives its exit status.
 The prompt is the SurfOS prompt (shell/prompt.c): this shell has system privileges,
-so it is elevated, "SURF ≋#>"; each command's output is paged (TTY_PAGE). The user
+so it is elevated, "SURF ≋#>", or "SURF ≋?>" as init's recovery console when the user
+shell cannot run; each command's output is paged (TTY_PAGE). The user
 shell, surfsh, runs these commands in its own task through SYS_kcmd and lists them
 through SYS_kcmdinfo (kernel/syscall.c, surfos/kcmd.h): shell_run_command() and
 shell_command_info() below.
@@ -824,8 +825,9 @@ int parseCommand(char *line, int last) {
 }
 
 /* 10/6/26: the SurfOS prompt (surfos/prompt.h) for the current directory: elevated, since this
-   shell has system privileges; in Unicode when the terminal draws it, in the SurfOS colours */
-static void show_prompt(int status) {
+   shell has system privileges, diagnostic as a recovery console; in Unicode when the terminal
+   draws it, in the SurfOS colours */
+static void show_prompt(int status, int diagnostic) {
     struct prompt_ctx c;
     char buf[PROMPT_MAX];
     int caps = tty_ctl(curTask->tty, TTY_CAPS, 0);
@@ -833,6 +835,7 @@ static void show_prompt(int status) {
     c.cwd = vfs_getcwd();
     c.last_status = status;
     c.elevated = 1;
+    c.diagnostic = diagnostic;
     c.width = (int)COLUMNS;
     c.unicode = caps > 0 && (caps & TTY_CAP_UTF8);
     c.color = 1;
@@ -840,20 +843,26 @@ static void show_prompt(int status) {
     puts(buf);                                  /* not printf: its buffer is shorter than PROMPT_MAX */
 }
 
-/* the shell task body (started by init for each console) */
-void startShell(void);
+/* the shell task body, started by init for each console (kernel/task.c). 10/6/26: why is NULL
+   when this shell was asked for (shell=kernel), otherwise init's reason for a recovery console,
+   said once before the first prompt */
+void startShell(int diagnostic);
 
-void shell() {
+void shell(void *why) {
     do_banner();
-    startShell();
+    if(why) {
+        cputs(KERN_TXT_COLOR, (char *)why);
+        printf("\n");
+    }
+    startShell(why != NULL);
 }
 
 /* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful */
-void startShell() {
+void startShell(int diagnostic) {
     char line[SHELL_LINE_LEN];
     int status = 0;
     for(;;) {
-        show_prompt(status);
+        show_prompt(status, diagnostic);
         memset(line, 0, sizeof(line));
         cgets(TEAL_TXT, line);
         tty_ctl(curTask->tty, TTY_PAGE, 1);

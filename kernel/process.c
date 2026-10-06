@@ -12,6 +12,9 @@ through traps.
 
 10/5/26: process_spawn_files() hands the child open files of its parent as
 descriptors 0, 1 and 2 instead (the user shell's < > >> redirection).
+
+10/6/26: TF_SHELL passes through too: init starts the user shell, surfsh, with it
+and starts it again when it ends.
 */
 
 #include <surfos/types.h>
@@ -190,7 +193,7 @@ int process_spawn_files(const char *path, int argc, char *const argv[], surf_con
     }
     base = strrchr(sa->path, '/');
     base = base ? base + 1 : sa->path;
-    t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, flags & TF_DETACHED);
+    t = kthread_create_on(base, con, user_entry, sa, PL_NORMAL, flags & (TF_DETACHED | TF_SHELL));
     if(!t) { release_files(sa); kfree(sa); return -ENOMEM; }
     return (int)t->pid;
 }

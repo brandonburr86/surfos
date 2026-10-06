@@ -13,8 +13,9 @@ A process is a task with a user address space running an ELF executable.
 #include <surfos/console.h>
 
 /* Start path as a new process with argv[0..argc-1] on console con; returns the pid or -errno.
-   The executable is loaded by the new task itself; a load failure ends it with exit code 127. */
-int process_spawn(const char *path, int argc, char *const argv[], surf_console *con, u_int flags); /* TF_DETACHED: nobody waits */
+   The executable is loaded by the new task itself; a load failure ends it with exit code 127.
+   flags: TF_DETACHED (nobody waits), TF_SHELL (init's user shell, started again when it ends) */
+int process_spawn(const char *path, int argc, char *const argv[], surf_console *con, u_int flags);
 
 /* 10/5/26: the same, with the child's descriptors 0, 1 and 2 sharing files[0..2] (each gains a
    reference; NULL or no array: the console) */

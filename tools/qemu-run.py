@@ -13,6 +13,7 @@ serial path itself is what is broken.
 """
 import argparse
 import http.server
+import io
 import threading
 import os
 import re
@@ -21,6 +22,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -39,6 +41,12 @@ CONFIRM_RD1 = 'Type rd1 to write the new partition table to rd1 (scratch.img, 64
 def answered(cmd, question, answer, expects):
     """a step whose command asks first (mkfs): wait for the question, type the answer, then expect"""
     return (cmd, [question], [(answer, expects)])
+
+
+def surf_prompt(crumbs, state):
+    """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
+    the state character, colour sequences between"""
+    return re.compile(re.escape(crumbs) + rb' \xe2\x89\x8b' + _SGR + re.escape(state) + _SGR + rb'>')
 
 
 # (command, strings that must appear, in order, before the next prompt)
@@ -197,6 +205,20 @@ SMOKE = [
     ('umount /kcmd', []),
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
     ('umount /kcmd', []),
+    # the prompt's breadcrumbs, whichever shell init started on F1
+    ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
+    # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program>, an initrd whose bin/surfsh
+    # is that program), for init's choice of shell. shell=kernel: the ring-0 shell on every console on purpose,
+    # elevated (#), no recovery line; no initrd: no /initrd/bin/surfsh, a recovery console (?) at once with init's
+    # line; a surfsh that ends at once (hello: 42): started again twice, then the recovery console
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')])],
+     ['recovery console']),
+    ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
+     [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),
+    ('@boot surfsh=hello', ['Hello from user mode', 'init: surfsh ended at once, status 42; restarted the shell',
+                            'init: surfsh ended at once, status 42; restarted the shell',
+                            'init: surfsh failed 3 times in 30 s (ended at once, status 42); recovery console',
+                            surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -631,12 +653,54 @@ def tail(text, n=40):
     return '\n'.join(lines[-n:])
 
 
-def run_smoke(q, boot_timeout):
+def initrd_with(src, dst, name, data):
+    """10/6/26: a copy of the initrd with one file replaced (or added)"""
+    with tarfile.open(src) as old, tarfile.open(dst, 'w', format=tarfile.USTAR_FORMAT) as new:
+        for m in old.getmembers():
+            if m.name != name:
+                new.addfile(m, old.extractfile(m) if m.isfile() else None)
+        info = tarfile.TarInfo(name)
+        info.size, info.mode = len(data), 0o755
+        new.addfile(info, io.BytesIO(data))
+
+
+def boot_step(reboot, entry, timeout):
+    """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
+    lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
+    that must not appear"""
+    cmd, expects, follow, absent = entry
+    try:
+        q2 = reboot(cmd.split()[1:])
+    except Exception as e:
+        print(f'{cmd}: {e}')
+        return (cmd, False)
+    try:
+        ok = all(q2.expect(e, timeout) for e in expects)
+        for line, exp in follow:
+            q2.send(line + '\n')
+            ok = ok and all(q2.expect(e, 10) for e in exp)
+            if exp and isinstance(exp[-1], re.Pattern):
+                continue
+            ok = ok and q2.expect(PROMPT, 10)
+        q2.pump(0.5)
+        text = q2.text()
+        ok = ok and not any(a in text for a in absent) and not any(bad in text for bad in BAD) and q2.alive()
+        if not ok:
+            print(f'\n---- {cmd}: serial transcript (tail) ----\n' + tail(text, 25))
+    finally:
+        q2.close()
+    return (cmd, ok)
+
+
+def run_smoke(q, boot_timeout, reboot=None):
     results = [('boot to prompt (serial)', q.expect(PROMPT, boot_timeout))]
     if results[0][1]:
         for entry in SMOKE:
             cmd, expects = entry[0], entry[1]
             follow = entry[2] if len(entry) > 2 else []      # (line, expects) pairs typed after cmd
+            if cmd.startswith('@boot'):                      # 10/6/26: a boot of its own
+                results.append(boot_step(reboot, entry, boot_timeout) if reboot else (cmd, False))
+                continue
             if cmd == '@host-echo':                          # a step the host performs while the guest runs
                 results.append(host_echo_check(q))
                 continue
@@ -692,9 +756,32 @@ def main():
 
     q = Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), a.int_log, a.iso, a.disk, a.initrd, a.disk_inplace, not a.no_net,
              a.append, a.scratch)
+
+    def reboot(words):
+        """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
+        surfsh=<program> (the initrd with that program as bin/surfsh)"""
+        initrd, append = a.initrd, a.append.split()
+        tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
+        try:
+            for w in words:
+                if w == 'no-initrd':
+                    initrd = None
+                elif w.startswith('surfsh='):
+                    if not a.initrd:
+                        raise RuntimeError('surfsh= needs --initrd')
+                    with tarfile.open(a.initrd) as t:
+                        program = t.extractfile('bin/' + w[7:]).read()
+                    initrd = os.path.join(tmp, 'initrd.tar')
+                    initrd_with(a.initrd, initrd, 'bin/surfsh', program)
+                else:
+                    append.append(w)
+            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, False, ' '.join(append), 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
+
     try:
         if a.test:
-            results = run_smoke(q, a.boot_timeout)
+            results = run_smoke(q, a.boot_timeout, reboot)
             for name, ok in results:
                 print(('PASS ' if ok else 'FAIL ') + name)
             failed = [n for n, ok in results if not ok]
