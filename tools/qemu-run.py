@@ -240,13 +240,13 @@ SMOKE = [
     ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new gpt', [CONFIRM_RD1], [('nope', ['kcmdtest: fdisk: status 1'])]),
     ('cat /hda1/FDISK.TXT', ['rd1: scratch.img, 64M', 'change: ', 'Cancelled']),
     ('rm /hda1/FDISK.TXT', []),
-    # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
-    # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
     # three pings at once from three processes take turns: every request is answered
     ('run kcmdtest pings /hda1 10.0.2.2', ['three pings at once: every request answered', 'KCMDTEST PASS', 'exit status 0']),
-    # a report that is not fatal (crashint's unexpected vector) reaches the screen too
+    # a report that is not fatal (crashint's unexpected vector) reaches the screen with the output going to a file
     ('run kcmdtest run /hda1/CRASHINT.TXT crashint', ['Unexpected trap', 'int 0x50 returned', 'kcmdtest: crashint: status 0']),
     ('rm /hda1/CRASHINT.TXT', []),
+    # a kernel command that faults kills the process that ran it, with its fault report on the screen even though
+    # its output went to a file; the kernel lets go of that file, so the volume unmounts and mounts again
     ('mount rd1p1 /kcmd', ['rd1p1 on /kcmd: fat16']),
     ('run kcmdtest crash /kcmd/CRASH.TXT', ['General Protection Fault', 'killed]']),
     ('umount /kcmd', []),
