@@ -93,6 +93,9 @@ void wait_prepare(wait_queue_t *q) {
     task_list_append(q, curTask);
 }
 
+/* 10/6/26: a wait a kill may cut short (task.h); the test's tasks are never cut short */
+void wait_prepare_intr(wait_queue_t *q) { wait_prepare(q); curTask->wait_intr = 1; }
+
 static void wake(surf_task *t) {
     task_list_remove(t->list, t);
     t->state = TS_READY;

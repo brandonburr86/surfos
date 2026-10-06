@@ -8,6 +8,8 @@ the bytes a terminal sends. It ends with the task that set it.
 10/6/26: the serial terminal's repaint sends a cell's code page 437 character as UTF-8,
 TTY_CAPS says what the console draws, and TTY_PAGE pages a task's output (the pager
 itself is in console.c: it counts the rows and asks; here is who is paged).
+10/6/26: a read gives up when the reader's call is cut short (a kill waits for its end:
+surfos/task.h).
 */
 
 #include <surfos/types.h>
@@ -106,10 +108,16 @@ int tty_trygetc(struct tty *t) {
     return c;
 }
 
+/* 10/6/26: -1 when the reader's call is cut short (task_interrupted()): the keys stay queued for
+   whoever reads next */
 int tty_getc(struct tty *t) {
     console_page_read(t->con);
     for(;;) {
         u_long flags = irq_save();
+        if(task_interrupted() && !in_interrupt()) {
+            irq_restore(flags);
+            return -1;
+        }
         if(t->in_tail != t->in_head) {
             int c = t->inq[t->in_tail];
             t->in_tail = (t->in_tail + 1) % TTY_INPUT_SIZE;
@@ -121,7 +129,7 @@ int tty_getc(struct tty *t) {
             /* 10/6/26: a task at the pager's question (console.c) goes on without a key: the
                keys are this reader's now */
             if(t->con->page_asker && t->con->page_asker != curTask) console_page_call_off(t->con);
-            wait_prepare(&t->readers);   /* enqueued before interrupts come back: no lost wakeup */
+            wait_prepare_intr(&t->readers);   /* enqueued before interrupts come back: no lost wakeup */
             irq_restore(flags);
             yield();
         } else {
@@ -132,11 +140,11 @@ int tty_getc(struct tty *t) {
 
 /* 10/6/26: the pager's question (console.c): a key, or -1 once *cancel is set. Whoever sets
    it wakes this task (console_page_call_off()). It is no read of the terminal: the
-   screenful is the pager's own business. */
+   screenful is the pager's own business. -1 too when the asker's call is cut short. */
 int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
     for(;;) {
         u_long flags = irq_save();
-        if(*cancel) {
+        if(*cancel || (task_interrupted() && !in_interrupt())) {
             irq_restore(flags);
             return -1;
         }
@@ -147,7 +155,7 @@ int tty_getc_unless(struct tty *t, volatile u_char *cancel) {
             return c;
         }
         if(curTask && curTask != idle_task && !in_interrupt()) {
-            wait_prepare(&t->readers);
+            wait_prepare_intr(&t->readers);
             irq_restore(flags);
             yield();
         } else {
@@ -192,6 +200,11 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
     for(;;) {
         int c = tty_getc(t);
 
+        if(c < 0) {     /* 10/6/26: the call is cut short: no line */
+            if(len) echo(t, '\n');
+            buf[0] = 0;
+            return -1;
+        }
         if(c == '\n' || c == '\r') {
             echo(t, '\n');
             buf[len] = 0;
@@ -237,19 +250,22 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
 }
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.
-   Raw mode: whatever keys are queued, at least one (it waits for that one), up to len. */
+   Raw mode: whatever keys are queued, at least one (it waits for that one), up to len.
+   10/6/26: -EINTR when the reader's call is cut short (a kill). */
 int tty_read(struct tty *t, char *buf, size_t len) {
     char line[TTY_LINE_MAX];
     int n;
     if(!len) return 0;
     if(t->raw) {
         size_t got = 0;
-        buf[got++] = (char)tty_getc(t);
+        n = tty_getc(t);
+        if(n < 0) return -EINTR;
+        buf[got++] = (char)n;
         while(got < len && (n = tty_trygetc(t)) >= 0) buf[got++] = (char)n;
         return (int)got;
     }
     n = tty_readline(t, line, sizeof(line));
-    if(n < 0) return n;
+    if(n < 0) return -EINTR;
     line[n++] = '\n';
     if((size_t)n > len) n = (int)len;
     memcpy(buf, line, n);

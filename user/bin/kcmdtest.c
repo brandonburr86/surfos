@@ -40,6 +40,19 @@ child to its parent, which collects its exit status 42 afterwards.
 kcmdtest pings <dir> <host> (10/6/26): three pings of 3 requests at once, each run by a
 process of its own with its output in a file in <dir>: every request is answered (the
 kernel's ping takes turns; it had one record for the reply it waits for).
+
+kcmdtest kills <dir> [host] (10/6/26): a kill of a process inside a kernel command waits
+for the command to end (surfos/task.h in the kernel). Each command runs in a child, which
+this process kills once ps shows it waiting: cp /dev/tty <dir>/HELD.TXT waiting for a
+line (its files are closed: <dir>'s volume unmounts afterwards, which the smoke test
+shows) and fdisk rd1 at its question, each with the kernel heap as before; sleep 10000,
+and ping <host> 100 when a host is given; a self test, which stops (SELFTEST STOPPED in
+its file) and lets go of its claim, so a heaptest runs afterwards. Each ends at once, not
+by the kernel's 2-second kill at once, which the kernel log would show; that one comes
+for sleep -u 10000, which nothing cuts short, and the kernel log says so.
+
+kcmdtest started <marker> <file|-> <command> [args...] (10/6/26): as run, after making
+the file <marker> (so the kills above know the command is under way).
 */
 
 #include <stdio.h>
@@ -418,6 +431,155 @@ static int crash(const char *file) {
     return 1;
 }
 
+/**** 10/6/26: kills inside a kernel command ****/
+
+static char big[65536];                         /* dmesg, a self test's output */
+
+/* a kernel command with its output in dir/KOUT.TXT, read into big; its status, or -1 */
+static int kcmd_into_big(char **argv) {
+    char *file = in_dir("KOUT.TXT");
+    int r = out_to(file) == 0 ? kcmd(argv) : -2;
+    if(out_to(NULL) < 0) exit(3);
+    if(slurp(file, big, sizeof(big)) < 0) r = -1;
+    unlink(file);
+    free(file);
+    return r;
+}
+
+/* what memstat says the kernel heap holds ("214864 bytes in 142 blocks"), into out; 0 or -1 */
+static int heap_used(char *out, size_t size) {
+    char *memstat[] = { "memstat", NULL };
+    char *p, *e;
+    if(kcmd_into_big(memstat) != 0 || !(p = strstr(big, "kernel heap:")) || !(p = strstr(p, "used: ")) ||
+       !(e = strstr(p, " blocks")) || (size_t)(e + 7 - (p + 6)) >= size) {
+        snprintf(out, size, "?");
+        return -1;
+    }
+    p += 6;
+    memcpy(out, p, e + 7 - p);
+    out[e + 7 - p] = 0;
+    return 0;
+}
+
+/* the state ps shows for pid (ready, blocked, sleeping, ...) into st[16]; 0, or -1 when not listed */
+static int task_state(int pid, char *st) {
+    char *ps[] = { "ps", NULL };
+    char *line;
+    int p;
+    if(kcmd_into_big(ps) != 0) return -1;
+    for(line = big; line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL)
+        if(sscanf(line, "%d %15s", &p, st) == 2 && p == pid) return 0;
+    return -1;
+}
+
+/* did the kernel kill pid at once, its call not ended after 2 s (the kernel log)? */
+static int killed_at_once(int pid) {
+    char *dmesg[] = { "dmesg", NULL };
+    char line[48];
+    snprintf(line, sizeof(line), "(pid %d) did not end", pid);
+    return kcmd_into_big(dmesg) == 0 && strstr(big, line) != NULL;
+}
+
+/* kcmdtest started: the marker, then as run */
+static int started(const char *marker, const char *file, char **argv) {
+    int fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC);
+    if(fd < 0) { printf("kcmdtest: %s: %s\n", marker, strerror(errno)); return 1; }
+    close(fd);
+    return run(file, argv);
+}
+
+/* One kernel command in a child (kcmdtest started), killed once the command is under way and,
+   when states is given, ps shows the child in one of them (waiting), after pause ms more. The
+   child's status (-1: killed), its pid, and the time from the kill to its end. */
+static int kill_child(char **cmd, const char *file, const char *states, unsigned pause, int *pid, unsigned *took) {
+    char *argv[16], *marker = in_dir("KSTART.TXT"), st[16];
+    struct stat sb;
+    int n = 0, status = -99;
+    unsigned t0;
+    unlink(marker);
+    argv[n++] = "kcmdtest";
+    argv[n++] = "started";
+    argv[n++] = marker;
+    argv[n++] = (char *)file;
+    while(*cmd && n < 15) argv[n++] = *cmd++;
+    argv[n] = NULL;
+    fflush(stdout);
+    *pid = spawn("/initrd/bin/kcmdtest", argv);
+    *took = 0;
+    if(*pid < 0) { free(marker); return -98; }
+    for(t0 = uptime(); stat(marker, &sb) < 0 && uptime() - t0 < 30000; ) msleep(20);
+    for(t0 = uptime(); states && uptime() - t0 < 20000; msleep(20)) {
+        if(task_state(*pid, st) < 0 || !strcmp(st, "zombie")) break;    /* ended already */
+        if(strstr(states, st)) break;
+    }
+    if(pause) msleep(pause);
+    t0 = uptime();
+    kill(*pid);
+    if(waitpid(*pid, &status, 0) != *pid) status = -97;
+    *took = uptime() - t0;
+    unlink(marker);
+    free(marker);
+    return status;
+}
+
+static int kills(const char *host) {
+    char *held = in_dir("HELD.TXT"), *stfile = in_dir("KILLST.TXT"), before[48], after[48], what[200];
+    char *cp_null[] = { "cp", "/dev/null", held, NULL };
+    char *cp_tty[] = { "cp", "/dev/tty", held, NULL };
+    char *fdisk[] = { "fdisk", "rd1", "new", "gpt", NULL };
+    char *sleep10[] = { "sleep", "10000", NULL };
+    char *ping[] = { "ping", (char *)host, "100", NULL };
+    char *selftest[] = { "selftest", NULL };
+    char *heaptest[] = { "heaptest", NULL };
+    char *sleep_u[] = { "sleep", "-u", "10000", NULL };
+    unsigned took;
+    int status, pid, r;
+
+    printf("kcmdtest kills in %s\n", dir);
+    kcmd_into_big(cp_null);                         /* HELD.TXT exists: the heap's start is after that */
+    heap_used(before, sizeof(before));
+    status = kill_child(cp_tty, "-", "blocked", 0, &pid, &took);
+    heap_used(after, sizeof(after));
+    snprintf(what, sizeof(what), "cp /dev/tty %s, killed while it waits for a line: ended in %u ms", held, took);
+    check(status == -1 && took < 2000 && !killed_at_once(pid), what);
+    snprintf(what, sizeof(what), "... the kernel heap as before (%s; then %s)", before, after);
+    check(!strcmp(before, after) && strcmp(before, "?"), what);
+    unlink(held);
+
+    heap_used(before, sizeof(before));
+    status = kill_child(fdisk, "-", "blocked", 0, &pid, &took);
+    heap_used(after, sizeof(after));
+    snprintf(what, sizeof(what), "fdisk rd1 new gpt, killed at its question: ended in %u ms", took);
+    check(status == -1 && took < 2000 && !killed_at_once(pid), what);
+    snprintf(what, sizeof(what), "... its buffers freed: the kernel heap as before (%s; then %s)", before, after);
+    check(!strcmp(before, after) && strcmp(before, "?"), what);
+
+    status = kill_child(sleep10, "-", "sleeping", 0, &pid, &took);
+    snprintf(what, sizeof(what), "sleep 10000, killed while it sleeps: ended in %u ms", took);
+    check(status == -1 && took < 2000 && !killed_at_once(pid), what);
+    if(host) {
+        status = kill_child(ping, "-", "blocked sleeping", 1200, &pid, &took);
+        snprintf(what, sizeof(what), "ping %s 100, killed while it pings: ended in %u ms", host, took);
+        check(status == -1 && took < 2000 && !killed_at_once(pid), what);
+    }
+
+    status = kill_child(selftest, stfile, NULL, 150, &pid, &took);
+    r = slurp(stfile, big, sizeof(big));
+    snprintf(what, sizeof(what), "a self test, killed while it runs: it stops (SELFTEST STOPPED) and ends in %u ms", took);
+    check(status == -1 && took < 2000 && r > 0 && strstr(big, "SELFTEST STOPPED") && !killed_at_once(pid), what);
+    unlink(stfile);
+    r = kcmd_into_big(heaptest);
+    check(r == 0 && strstr(big, "HEAPTEST PASS"), "a heaptest afterwards runs: the killed self test let go of its claim");
+
+    status = kill_child(sleep_u, "-", "sleeping", 0, &pid, &took);
+    snprintf(what, sizeof(what), "sleep -u 10000, which nothing cuts short: killed at once after the kernel's 2 s (%u ms)", took);
+    check(status == -1 && took >= 1900 && took < 6000, what);
+    check(killed_at_once(pid), "... and the kernel log says so");
+    printf("%d checks, %d failed\n", checks, failures);
+    puts(failures ? "KCMDTEST FAIL" : "KCMDTEST PASS");
+    return failures ? 1 : 0;
+}
+
 /* dir: the directory to work in, absolute (so getcwd() can be compared with it); 0 or -1 */
 static int set_dir(const char *arg) {
     struct stat st;
@@ -442,13 +604,17 @@ int main(int argc, char **argv) {
     if(argc == 3 && !strcmp(argv[1], "together")) return set_dir(argv[2]) ? 1 : together();
     if((argc == 2 || argc == 3) && !strcmp(argv[1], "child-selftest")) return child_selftest(argc == 3 ? argv[2] : NULL);
     if(argc == 4 && !strcmp(argv[1], "pings")) return set_dir(argv[2]) ? 1 : pings(argv[3]);
+    if((argc == 3 || argc == 4) && !strcmp(argv[1], "kills")) return set_dir(argv[2]) ? 1 : kills(argc == 4 ? argv[3] : NULL);
+    if(argc >= 5 && !strcmp(argv[1], "started")) return started(argv[2], argv[3], argv + 4);
     if(argc != 2) {
         fprintf(stderr, "usage: kcmdtest <dir>   (a directory to write in: its files are removed again)\n"
                         "       kcmdtest crash [file]\n"
                         "       kcmdtest run <file|-> <command> [args...]\n"
                         "       kcmdtest together <dir>\n"
                         "       kcmdtest child-selftest [file]\n"
-                        "       kcmdtest pings <dir> <host>\n");
+                        "       kcmdtest pings <dir> <host>\n"
+                        "       kcmdtest kills <dir> [host]\n"
+                        "       kcmdtest started <marker> <file|-> <command> [args...]\n");
         return 2;
     }
     if(set_dir(argv[1])) return 1;

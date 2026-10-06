@@ -4,7 +4,8 @@ SurfOS ring0 Shell - the 2004 demonstrations
 
 Moved out of main.c in 10/2026; the code is the original. 10/6/26: they clear the
 console of the task that runs them, which is not always the one that shows (the user
-shell runs them through SYS_kcmd on any console).
+shell runs them through SYS_kcmd on any console), and the menus that wait for a key
+leave when the wait is cut short (a kill of their task: surfos/task.h).
 */
 
 #include <blibc_common.h>
@@ -38,6 +39,7 @@ void runHanoi() {
     do {
         printf("\nHanoi Number# ");
         ch=getchar();
+        if(task_interrupted()) return;      /* 10/6/26 */
         printf("\n");
         n=ch-'0';
         if(isdigit(ch)) dohanoi(n,from,to,use);
@@ -63,6 +65,7 @@ static void demoException() {
         cputs(GREEN_TXT,"\nInvoke exception: ");
         ch=(char)0;
         ch=getch();
+        if(task_interrupted()) return;      /* 10/6/26 */
         printf("\n");
         switch(ch) {
             case 'q':
@@ -153,6 +156,7 @@ void invokeDemo() {
             }
             skip=false;
             choice=getchar();
+            if(task_interrupted()) return;  /* 10/6/26 */
             putch('\n');
             if(choice=='q') break;
             if(choice<'1' || choice>'3') { skip=true; putch('\b'); continue; }

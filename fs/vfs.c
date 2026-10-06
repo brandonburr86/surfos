@@ -754,6 +754,7 @@ const char *strerror(int err) {
     switch(err) {
     case 0: return "Success";
     case ENOENT: return "No such file or directory";
+    case EINTR: return "Interrupted system call";
     case EIO: return "I/O error";
     case EBADF: return "Bad file descriptor";
     case E2BIG: return "Argument list too long";

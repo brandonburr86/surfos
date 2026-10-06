@@ -18,7 +18,9 @@ done, with a note at the end when the rest was cut; a failed write makes a succe
 otherwise to the caller's console, paged when the caller asked for paging (TTY_PAGE,
 surfos/tty.h). Its questions (fdisk's and mkfs's) are asked and answered on the caller's
 console, also with a redirection, and so is a fault report; the commands that read the
-keyboard as they go (rawkeys, demo, hanoi) refuse a redirection (2).
+keyboard as they go (rawkeys, demo, hanoi) refuse a redirection (2). A kill of the
+caller waits for the command to end, 2 seconds at most (surfos/task.h in the kernel):
+its waits end (a question, a sleep, a ping) and it lets go of what it holds.
 
 SYS_kcmdinfo (int index, struct kcmd_info *out) copies entry index (0, 1, ...) of the
 command table, for help and for Tab completion; -ENOENT after the last one.

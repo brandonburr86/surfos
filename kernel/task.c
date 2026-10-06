@@ -7,6 +7,7 @@ File: task.c    Date: 6/10/04, rebuilt 10/2026 (roadmap S1)
 
 10/6/26 (surfsh): init starts the user shell on every console, and the ring-0 shell
 when that cannot be (see init_main()).
+10/6/26: a kill waits for the end of the call its task is in (task.h).
 */
 
 #include <surfos/types.h>
@@ -26,6 +27,7 @@ when that cannot be (see init_main()).
 #include <surfos/tty.h>
 #include <surfos/process.h>
 #include <surfos/klog.h>
+#include <sys/framebuffer.h>
 #include <fs/vfs.h>
 #include <mm/uvm.h>
 
@@ -170,6 +172,8 @@ static void task_stublet(void) {
     task_exit(0);
 }
 
+static void kill_escalate(void *arg);
+
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
     u_long irqf;
@@ -184,12 +188,14 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     memset(t->stackmem, 0, KSTACK_SIZE);
     strlcpy(t->name, name, TASK_NAME_LEN);
     t->prio = prio;
-    t->flags = flags | (ring == USER ? TF_USER : 0);
+    t->flags = (flags & ~TF_INCALL) | (ring == USER ? TF_USER : 0);
+    t->in_call = (flags & TF_INCALL) ? TC_SYSCALL : 0;     /* 10/6/26: a kill waits for the call to end */
     t->con = con;
     t->tty = tty_for_console(con);
     strlcpy(t->cwd, (curTask && curTask->cwd[0]) ? curTask->cwd : "/", sizeof(t->cwd));
     t->stack_top = (u_long)t->stackmem + KSTACK_SIZE;
     t->esp = (u_long *)build_initial_frame(t->stackmem + KSTACK_SIZE, ring, (u_long)task_stublet);
+    ktimer_init(&t->kill_timer, kill_escalate, t);
     /* a detached task is init's from the start: nobody else may wait for it, and a shell running
        a background server must not see it as a child in task_wait(WAIT_ANY) */
     t->parent = ((flags & TF_DETACHED) && init_task_ptr) ? init_task_ptr : curTask;
@@ -261,10 +267,16 @@ static void orphan_children(surf_task *t) {
 }
 
 static void become_zombie(surf_task *t, int code) {
+    ktimer_cancel(&t->kill_timer);            /* 10/6/26: a kill that waited has come */
+    if(t->wait_timer) {                       /* killed at once in wait_on_timeout(): its timer is on t's stack */
+        ktimer_cancel(t->wait_timer);
+        t->wait_timer = NULL;
+    }
     if(t->list) task_list_remove(t->list, t); /* a run queue, the sleep list or a wait queue */
     t->exit_code = code;
     t->state = TS_DEAD;
     tty_task_gone(t);                         /* raw mode it set on a terminal ends with it */
+    framebuffer_task_died(t);                 /* 10/6/26: killed from an interrupt while it drew, it gives the screen back */
     orphan_children(t);
     if(t->flags & TF_DETACHED) t->parent = init_task_ptr;
     task_list_append(&zombies, t);
@@ -285,13 +297,80 @@ void task_exit(int code) {
 }
 
 /* Mark a task dead. If it is the current task the caller must yield (or, in a trap
-   handler, return schedule(tf)); the task keeps its stack until someone waits for it. */
-void kill_task(surf_task *t) {
+   handler, return schedule(tf)); the task keeps its stack until someone waits for it.
+   10/6/26: at once; a fault (kernel/panic.c) and a kill that waited too long come here. */
+void kill_task_now(surf_task *t) {
     u_long flags;
     if(!t) return;
     if(t == idle_task) panic("FATAL: Kernel Idle Task Killed");
     flags = irq_save();
     if(t->state != TS_DEAD) become_zombie(t, -1);
+    irq_restore(flags);
+}
+
+/* 10/6/26: t goes on now if the wait it is in may be cut short; interrupts off */
+static void wake_intr(surf_task *t) {
+    if(!t->wait_intr || !t->list) return;
+    if(t->state == TS_BLOCKED || t->state == TS_SLEEPING) {
+        task_list_remove(t->list, t);
+        task_make_ready(t);
+    }
+}
+
+/* 10/6/26: the kill that waits (task.h). Outside a call (a program running its own code, a
+   kernel thread) it comes at once, as it always did; inside one the task is marked, its
+   wait cut short where that may be, and the call ends it (task_call_leave()). */
+void kill_task(surf_task *t) {
+    u_long flags;
+    if(!t) return;
+    if(t == idle_task) panic("FATAL: Kernel Idle Task Killed");
+    flags = irq_save();
+    if(t->state == TS_DEAD) {
+        /* gone already */
+    } else if(!t->in_call) {
+        become_zombie(t, -1);
+    } else if(!(t->intr & TI_KILL)) {
+        t->intr |= TI_KILL;
+        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+        wake_intr(t);
+    }
+    irq_restore(flags);
+}
+
+/* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing
+   cuts it short, or it does not look. Killed at once, as every kill was before (whatever it
+   holds stays held); the kernel log says so. From the timer interrupt. */
+static void kill_escalate(void *arg) {
+    surf_task *t = (surf_task *)arg;
+    char line[160];
+    if(t->state == TS_DEAD) return;
+    if(t == curTask && t->crit) {                   /* inside KCRIT_ENTER (drawing): a tick later */
+        ktimer_start(&t->kill_timer, 10, false);
+        return;
+    }
+    snprintf(line, sizeof(line), "kill: '%s' (pid %lu) did not end its %s within %u ms: killed at once%s\n",
+             t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call", (u_int)KILL_WAIT_MS,
+             t->mutexes ? ", holding a lock" : "");
+    klog_write(line);
+    become_zombie(t, -1);
+}
+
+/* 10/6/26: a call begins (TC_SYSCALL, TC_COMMAND) */
+void task_call_enter(u_int what) {
+    u_long flags = irq_save();
+    curTask->in_call |= what;
+    irq_restore(flags);
+}
+
+/* ... and ends. Once the task is in no call, a kill that waited for it comes: task_exit(-1),
+   in the task's own context, which closes its files. */
+void task_call_leave(u_int what) {
+    u_long flags = irq_save();
+    curTask->in_call &= ~what;
+    if(!curTask->in_call && (curTask->intr & TI_KILL)) {
+        irq_restore(flags);
+        task_exit(-1);
+    }
     irq_restore(flags);
 }
 
@@ -325,7 +404,8 @@ u_int task_child_count(void) {
     return n;
 }
 
-/* 10/6/26: WNOHANG in options answers 0 at once when children are left but none has ended */
+/* 10/6/26: WNOHANG in options answers 0 at once when children are left but none has ended; with
+   WINTR a kill of the caller (TI_KILL) ends the wait, -1 */
 static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **con_out, int options) {
     for(;;) {
         u_long flags = irq_save();
@@ -356,7 +436,15 @@ static int wait_for(u_long pid, int *status, u_int *flags_out, surf_console **co
             irq_restore(flags);
             return 0;
         }
-        wait_prepare(&zombie_wq);
+        if(options & WINTR) {
+            if(curTask->intr & TI_KILL) {
+                irq_restore(flags);
+                return -1;
+            }
+            wait_prepare_intr(&zombie_wq);
+        } else {
+            wait_prepare(&zombie_wq);
+        }
         irq_restore(flags);
         yield();
     }
@@ -389,9 +477,31 @@ void sleep_ms(u_long ms) {
     flags = irq_save();
     curTask->wake_at = getticks() + ms_to_ticks(ms);
     curTask->state = TS_SLEEPING;
+    curTask->wait_intr = 0;                  /* a driver's delay: never cut short */
     sleepers_insert(curTask);
     irq_restore(flags);
     yield();
+}
+
+/* 10/6/26: a sleep that a kill cuts short (sleep, ping's pause, SYS_sleep) */
+int sleep_intr(u_long ms) {
+    u_long flags;
+    if(!curTask || curTask == idle_task || in_interrupt()) {
+        mdelay(ms);
+        return 0;
+    }
+    flags = irq_save();
+    if(curTask->intr) {
+        irq_restore(flags);
+        return -EINTR;
+    }
+    curTask->wake_at = getticks() + ms_to_ticks(ms);
+    curTask->state = TS_SLEEPING;
+    curTask->wait_intr = 1;
+    sleepers_insert(curTask);
+    irq_restore(flags);
+    yield();
+    return curTask->intr ? -EINTR : 0;
 }
 
 /**** The scheduler ****/
@@ -445,6 +555,7 @@ bool sched_tick(void) {
         task_list_remove(&sleepers, t);
         task_make_ready(t);
     }
+    if(curTask->state != TS_RUNNING) return true; /* 10/6/26: killed in this tick (a kill that waited too long) */
 
     if(curTask == idle_task) return best_woken < NUM_PRIO || runq[0].first || runq[1].first || runq[2].first || runq[3].first;
     if(curTask->crit) return false;             /* inside KCRIT_ENTER */

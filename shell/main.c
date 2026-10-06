@@ -14,6 +14,10 @@ shell cannot run; each command's output is paged (TTY_PAGE). The user
 shell, surfsh, runs these commands in its own task through SYS_kcmd and lists them
 through SYS_kcmdinfo (kernel/syscall.c, surfos/kcmd.h): shell_run_command() and
 shell_command_info() below.
+
+10/6/26: a command is a call (surfos/task.h): a kill of its task waits for its end. What
+waits for the user (a question, a key, a sleep, a ping) gives up then (task_interrupted()),
+along its usual way out.
 */
 
 #include <blibc_common.h>
@@ -63,7 +67,8 @@ static const struct command commands[];
 static const u_int ncommands;           /* both defined after the commands */
 
 /* 10/6/26: a question, seen and answered on this task's console even while a kernel command
-   run by the user shell has its output kept for a file (SYS_kcmd: console_capture_begin()) */
+   run by the user shell has its output kept for a file (SYS_kcmd: console_capture_begin()).
+   A kill while it waits leaves the answer empty: no question is answered so. */
 void shell_ask(const char *question, char *answer, size_t size) {
     struct kcapture *kept = curTask->kcap;
     struct tty *tty = curTask->tty ? curTask->tty : tty_active;
@@ -71,7 +76,7 @@ void shell_ask(const char *question, char *answer, size_t size) {
     if(console_paging(curTask->con)) console_page_new(curTask->con);   /* seen after q too, from a new screenful */
     printf("%s", question);
     memset(answer, 0, size);
-    tty_readline(tty, answer, size);
+    if(tty_readline(tty, answer, size) < 0) printf("\n");   /* 10/6/26: killed: the line ends */
     if(kept) console_capture_begin(kept);
 }
 
@@ -144,13 +149,21 @@ static bool number_arg(const char *s, u_long *out) {
     return !*end;
 }
 
+/* 10/6/26: a kill cuts the sleep short. -u sleeps as a driver's delay does, where nothing cuts
+   it short: a kill then comes at once after its 2 seconds (surfos/task.h shows that in the kernel log) */
 static int cmd_sleep(int argc, char **argv) {
     u_long ms = 1000, t0;
-    if(argc > 2 || (argc == 2 && !number_arg(argv[1], &ms))) { printf("    usage: sleep [ms]   (milliseconds, 1000 when not given)\n"); return CMD_USAGE; }
+    int plain = argc > 1 && !strcmp(argv[1], "-u"), r = 0;
+    if(argc > 2 + plain || (argc == 2 + plain && !number_arg(argv[1 + plain], &ms))) {
+        printf("    usage: sleep [-u] [ms]   (milliseconds, 1000 when not given; -u: not cut short by a kill)\n");
+        return CMD_USAGE;
+    }
     t0 = getticks();
-    sleep_ms(ms);
-    printf("    slept %lu ms (%lu ticks)\n", ms, getticks() - t0);
-    return CMD_OK;
+    if(plain) sleep_ms(ms);
+    else r = sleep_intr(ms);
+    if(r) printf("    sleep cut short after %lu ms\n", (getticks() - t0) * (1000 / HZ));
+    else printf("    slept %lu ms (%lu ticks)\n", ms, getticks() - t0);
+    return r ? CMD_FAIL : CMD_OK;
 }
 
 static int cmd_ps(int argc, char **argv) { print_tasks(); return CMD_OK; }
@@ -166,8 +179,7 @@ static int cmd_kill(int argc, char **argv) {
     if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
     if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
     printf("    killing '%s' (pid %lu)\n", t->name, pid);
-    kill_task(t);
-    if(t == curTask) yield();           /* this shell itself: does not come back */
+    kill_task(t);                       /* 10/6/26: inside a call it ends with the call; this shell itself, after this command */
     return CMD_OK;
 }
 
@@ -215,6 +227,7 @@ static int cmd_rawkeys(int argc, char **argv) {
     printf("    raw mode (%dx%d): press keys, q ends\n    ", size >> 16, size & 0xFFFF);
     for(reads = 0; reads < 256; reads++) {
         n = tty_read(t, buf, sizeof(buf));
+        if(n < 0) break;                /* 10/6/26: cut short (a kill) */
         for(i = 0; i < n; i++) printf("%02x ", (u_char)buf[i]);
         if(memchr(buf, 'q', n)) break;
     }
@@ -291,12 +304,13 @@ static int cmd_nslookup(int argc, char **argv) {
     return CMD_OK;
 }
 
-/* any reply is a success, as ping has it elsewhere */
+/* any reply is a success, as ping has it elsewhere. 10/6/26: a kill ends it at once, with the count of
+   what was sent */
 static int cmd_ping(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
     u_long n = 4;
-    int count, seq, got = 0, rtt;
+    int count, seq, got = 0, sent = 0, rtt;
     u8 ttl = 0;
     if(argc < 2 || argc > 3 || (argc == 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
         printf("    usage: ping <address|name> [count]   (count: 1 or more, 4 when not given)\n");
@@ -306,13 +320,14 @@ static int cmd_ping(int argc, char **argv) {
     if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return CMD_FAIL; }
     if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
     printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
-    for(seq = 1; seq <= count; seq++) {
+    for(seq = 1; seq <= count && !task_interrupted(); seq++) {
         rtt = icmp_ping(ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
+        sent++;
         if(rtt >= 0) { got++; printf("    64 bytes from %s: icmp_seq=%d ttl=%u time=%d ms\n", a, seq, ttl, rtt); }
-        else printf("    request timeout for icmp_seq %d\n", seq);
-        if(seq < count) sleep_ms(rtt > 0 && rtt < 1000 ? 1000 - rtt : 1000);
+        else if(!task_interrupted()) printf("    request timeout for icmp_seq %d\n", seq);
+        if(seq < count) sleep_intr(rtt > 0 && rtt < 1000 ? 1000 - rtt : 1000);
     }
-    printf("    %d packets transmitted, %d received, %d%% packet loss\n", count, got, count ? (count - got) * 100 / count : 0);
+    printf("    %d packets transmitted, %d received, %d%% packet loss\n", sent, got, sent ? (sent - got) * 100 / sent : 0);
     return got ? CMD_OK : CMD_FAIL;
 }
 
@@ -389,7 +404,8 @@ static int cmd_httpget(int argc, char **argv) {
         }
     }
     tcp_close(s);
-    printf("\n    %lu bytes received in %lu ms%s\n", total, (getticks() - t0) * (1000 / HZ), n < 0 ? " (timed out)" : "");
+    printf("\n    %lu bytes received in %lu ms%s\n", total, (getticks() - t0) * (1000 / HZ),
+           n >= 0 ? "" : task_interrupted() ? " (cut short)" : " (timed out)");
     return n < 0 ? CMD_FAIL : CMD_OK;
 }
 
@@ -420,7 +436,7 @@ static int run_program(int argc, char **argv, bool background) {
     pid = process_spawn_files(path, argc, argv, curTask->con, background ? TF_DETACHED : 0, curTask->uvm ? curTask->files : NULL);
     if(pid < 0) { printf("    %s: %s\n", argv[0], strerror(pid)); return CMD_FAIL; }
     if(background) { printf("    [pid %d started]\n", pid); return CMD_OK; }
-    if(task_wait(pid, &status) != pid) return CMD_FAIL;
+    if(task_wait_opts(pid, &status, WINTR) != pid) return CMD_FAIL;   /* 10/6/26: this task is killed; the program stays */
     if(status == -1) { printf("    [pid %d killed]\n", pid); return CMD_FAIL; }
     printf("    [pid %d exit status %d]\n", pid, status);
     return status < 0 ? CMD_FAIL : status;
@@ -720,7 +736,7 @@ static const struct command commands[] = {
     { "echo",      "words...",  "print the arguments", cmd_echo },
     { "ps",        "",          "list tasks", cmd_ps },
     { "kill",      "<pid>",     "kill a task", cmd_kill },
-    { "sleep",     "[ms]",      "sleep this shell for a while", cmd_sleep },
+    { "sleep",     "[-u] [ms]", "sleep this shell for a while", cmd_sleep },
     { "tick",      "",          "print the tick count", cmd_tick },
     { "uptime",    "",          "time since boot", cmd_uptime },
     { "date",      "",          "CMOS clock", cmd_date },
@@ -887,7 +903,8 @@ void shell(void *why) {
     startShell(why != NULL);
 }
 
-/* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful */
+/* 10/6/26: each command's output is paged (TTY_PAGE, tty.h): it stops at --More-- after a screenful.
+   A line is a call (surfos/task.h): a kill of this shell waits for its end. */
 void startShell(int diagnostic) {
     char line[SHELL_LINE_LEN];
     int status = 0;
@@ -895,8 +912,10 @@ void startShell(int diagnostic) {
         show_prompt(status, diagnostic);
         memset(line, 0, sizeof(line));
         cgets(TEAL_TXT, line);
+        task_call_enter(TC_COMMAND);
         tty_ctl(curTask->tty, TTY_PAGE, 1);
         status = parseCommand(line, status);
         tty_ctl(curTask->tty, TTY_PAGE, 0);
+        task_call_leave(TC_COMMAND);    /* a kill that waited ends this shell here */
     }
 }

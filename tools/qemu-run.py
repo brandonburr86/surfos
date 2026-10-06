@@ -265,6 +265,13 @@ SMOKE = [
     ('run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new mbr', [CONFIRM_RD1], [('rd1', ['kcmdtest: fdisk: status 0'])]),
     ('cat /hda1/FDISK.TXT', ['change: a new, empty MBR', 'rd1: written, flushed and verified', 'rd1 now has no partitions']),
     ('rm /hda1/FDISK.TXT', []),
+    # 10/6/26 (the kill that waits): a kill of a process inside a kernel command waits for the command to end; the
+    # command gives up where it waits and lets go of what it holds. kcmdtest kills: a file held open, fdisk at its
+    # question, a sleep, a ping, a self test (which lets go of its claim), each ended at once; a sleep nothing cuts
+    # short, killed at once after 2 s with a kernel log line. The volume of the file held open unmounts afterwards.
+    ('run kcmdtest kills /hda1 10.0.2.2', ['cp /dev/tty', 'KCMDTEST PASS', 'exit status 0']),
+    ('umount /hda1', []),
+    ('mount hda1 /hda1', ['hda1 on /hda1: fat16']),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
@@ -374,7 +381,7 @@ SMOKE = [
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
 TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
             'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
-            'run kcmdtest pings /hda1 10.0.2.2': 60}
+            'run kcmdtest pings /hda1 10.0.2.2': 60, 'run kcmdtest kills /hda1 10.0.2.2': 180}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 

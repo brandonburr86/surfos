@@ -11,6 +11,11 @@ console and from any program, so two could run at once. They share this file's s
 names on /hda1, /selftest-stick, the scratch ramdisk rd1), a second run would
 re-initialise a semaphore or an event the first one waits on, and two heaptests freed
 each other's blocks. So one runs at a time, and a second is refused (status 1).
+
+10/6/26: a kill of the task running it waits for the self test to end (surfos/task.h):
+the test under way finishes, waiting for its helper tasks, its waits cut short (its
+checks may fail then), no other starts, and SELFTEST STOPPED says so; the self test
+lets go of its claim on the way out as always.
 */
 
 #include <blibc_common.h>
@@ -53,7 +58,9 @@ static void check(bool ok, const char *what) {
    task that holds one print on without stopping, and nobody waits for this one, a second
    run is refused at once. A heaptest whose task was killed leaves nothing behind but
    memory and gives way; a killed self test may leave helper tasks waiting on its
-   semaphores, so the self test stays refused until a reboot then. */
+   semaphores, so the self test stays refused until a reboot then. 10/6/26: a kill waits
+   for the end of the self test, which lets go of its claim then; only a self test the
+   kill could not wait for (2 s: task.h) still keeps it. */
 static u_long busy_pid;
 static bool busy_selftest;
 
@@ -94,7 +101,7 @@ static int heap_round(void) {
     }
     kheap_stats(&before);
     srand(getticks() + 7);
-    for(r = 0; r < ROUNDS; r++) {
+    for(r = 0; r < ROUNDS && !task_interrupted(); r++) {      /* 10/6/26: a kill: fewer rounds */
         i = rand() % SLOTS;
         if(s->ptrs[i]) {
             u_char *p = s->ptrs[i];
@@ -998,34 +1005,23 @@ static void test_usb(void) {
     if(r) printf("        (%s)\n", usb_strerror(r));
 }
 
+/* 10/6/26: in this order; after a kill no other starts (each one waits for its helpers) */
+static void (*const tests[])(void) = {
+    test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks,
+    test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+};
+
 int run_selftest(void) {
+    u_int i;
     if(!claim("selftest", true)) return 1;
     fails = 0;
     printf("\nSurfOS self test\n----------------\n");
     check(heap_round() == 0, "heap");
     check(heaptest() == 1, "a heaptest while the self test runs is refused");
-    test_bdev();
-    test_boot_drive();
-    test_part_commit();
-    test_fs();
-    test_fat();
-    test_fat_rename();
-    test_fat_statfs();
-    test_fat_utf8();
-    test_fat_concurrent();
-    test_fat_unplug();
-    test_user();
-    test_net();
-    test_usb();
-    test_tasks();
-    test_sleep();
-    test_timers();
-    test_mutex_fn();
-    test_semaphore();
-    test_event_fn();
-    test_libc();
-    test_tty();
-    printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
+    for(i = 0; i < sizeof(tests) / sizeof(tests[0]) && !task_interrupted(); i++) tests[i]();
+    if(task_interrupted()) printf("SELFTEST STOPPED (cut short by a kill after %u of %u tests)\n\n", i, (u_int)(sizeof(tests) / sizeof(tests[0])));
+    else printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
     unclaim();
-    return fails;
+    return fails || task_interrupted();
 }

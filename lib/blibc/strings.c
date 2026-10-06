@@ -36,7 +36,7 @@ void cputs(u_char atr, char *str) {
 
 char *gets(char *str) { /* a line from this task's tty, with editing and history; 255 bytes at most */
     struct tty *t = (curTask && curTask->tty) ? curTask->tty : tty_active;
-    tty_readline(t, str, 255);
+    tty_readline(t, str, 255);          /* 10/6/26: an empty line when the read is cut short (a kill) */
     return str;
 }
 
