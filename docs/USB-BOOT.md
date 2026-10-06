@@ -233,8 +233,9 @@ on the laptop.
 
 ## 9. Files on a USB stick
 
-SurfOS forgets everything at a restart: its own drive is mounted read-only and the
-ramdisk is unpacked afresh at every boot. Files that should last go on a **second USB
+SurfOS forgets everything at a restart: it never writes to its own drive (which it does
+not even mount unless asked, and then only read-only), and the ramdisk is unpacked
+afresh at every boot. Files that should last go on a **second USB
 stick**. SurfOS partitions it and formats it as **FAT32**, the format macOS, Windows and
 Linux all read and write, and it has a text editor and the usual file commands, so the
 same stick carries files between SurfOS and the Mac. Nothing is mounted by itself: you
@@ -289,7 +290,8 @@ SurfOS*> mount usb1p1 /data
 found (mkfs makes one)`, the stick holds exFAT, NTFS or nothing. `mkfs usb1p1 MYFILES`
 replaces whatever is on the partition with a FAT32 file system labelled MYFILES (FAT16
 when the partition is smaller than 512 MB; `mkfs -t fat16|fat32` chooses). A label has up
-to 11 letters, digits and spaces. To start from a blank stick, or to replace its
+to 11 characters: letters (made upper case), digits, spaces (not first) and
+``!#$%&'()-@^_`{}~``. To start from a blank stick, or to replace its
 partitions, make a partition table first. On a 1 GB stick under QEMU (the kernel's own
 `+PART:` and `+FAT32:` lines left out):
 
@@ -320,7 +322,7 @@ SurfOS*> mount usb1p1 /data
 
 `fdisk` and `mkfs` say what they are about to change and write only after you type the
 device's name; any other answer prints `Cancelled` and writes nothing. More of `fdisk`
-(`help fdisk` lists it):
+(`fdisk` alone lists it):
 
 | Command | What it does |
 |---|---|
@@ -341,7 +343,7 @@ device's name; any other answer prints `Cancelled` and writes nothing. More of `
 | `cp`, `mv`, `rm`, `mkdir`, `rmdir` | copy, rename or move, delete, make and remove directories |
 | `write /data/todo.txt buy milk` | a file with one line of text |
 | `df` | size, use and free space of everything mounted |
-| `sync` | write everything still in memory to the drives |
+| `sync` | write the changes SurfOS still holds in memory to the drives (before pulling a stick out, `eject` it) |
 | `sh` | a small shell with a `$ ` prompt (below) |
 
 The `SurfOS*>` prompt splits a line at spaces and has no quotes. For names with spaces,
@@ -409,7 +411,8 @@ ramdisks, and refuse:
   stored and read correctly, by SurfOS and by the Mac, but the console shows it without
   those letters (`caf.txt`) and you cannot type them.
 * FAT12, FAT16 and FAT32. exFAT and NTFS are not read.
-* Files up to 4 GB, FAT32's limit. The editor takes files up to 1 MB.
+* Files up to 4 GB, FAT32's limit, but a program can seek only within the first 2 GB.
+  The editor takes files up to 1 MB.
 * `fdisk add` makes primary partitions only (four at most in an MBR table). Logical
   partitions made elsewhere are read.
 * `umount` and `eject` notice a current directory on the stick only in the shell where
