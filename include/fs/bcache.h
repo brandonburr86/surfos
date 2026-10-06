@@ -37,4 +37,11 @@ int bsync(struct bdev *dev);                         /* write dirty blocks of de
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
 
+/* 10/5/26: the requests the cache has sent to the devices, and the blocks they moved */
+struct bcache_io {
+    u_long reads, read_blocks;
+    u_long writes, written_blocks;
+};
+void bcache_io_stats(struct bcache_io *io);
+
 #endif

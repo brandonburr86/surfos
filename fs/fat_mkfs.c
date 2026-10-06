@@ -115,9 +115,29 @@ static int plan16(u32 total, u32 spc, struct fat_layout *l) {
     return -1;
 }
 
-int fat_mkfs_plan(struct bdev *d, int fat_bits, struct fat_layout *l, char *msg, size_t n) {
+/* the 11-byte label field: upper case, space padded; "" is NO NAME. -1 for what DOS forbids. */
+static int make_label(const char *label, u8 *out) {
+    size_t i, len = label ? strlen(label) : 0;
+    memset(out, ' ', 11);
+    if(!len) { memcpy(out, "NO NAME", 7); return 0; }
+    if(len > 11 || label[0] == ' ') return -1;
+    for(i = 0; i < len; i++) {
+        int c = (u8)label[i];
+        if(c >= 'a' && c <= 'z') c -= 32;
+        if(c < 0x20 || c > 0x7E || strchr("\"*+,./:;<=>?[\\]|", c)) return -1;
+        out[i] = (u8)c;
+    }
+    return 0;
+}
+
+int fat_mkfs_plan(struct bdev *d, const char *label, int fat_bits, struct fat_layout *l, char *msg, size_t n) {
     u32 total = d->nblocks, spc;
+    u8 lab[11];
     memset(l, 0, sizeof(*l));
+    if(make_label(label, lab) != 0) {
+        snprintf(msg, n, "a label has up to 11 characters: letters, digits, spaces and !#$%%&'()-@^_`{}~");
+        return -EINVAL;
+    }
     l->total = total;
     l->hidden = d->start;
     if(d->block_size != SECTOR) { snprintf(msg, n, "only 512-byte sectors are supported"); return -EINVAL; }
@@ -136,21 +156,6 @@ int fat_mkfs_plan(struct bdev *d, int fat_bits, struct fat_layout *l, char *msg,
     if(total <= 4194304UL && plan16(total, spc, l) == 0) return 0;
     snprintf(msg, n, total > 4194304UL ? "too large for FAT16 (2 GB at most): use FAT32" : "too small for FAT16 (about 2 MB at least)");
     return -EINVAL;
-}
-
-/* the 11-byte label field: upper case, space padded; "" is NO NAME. -1 for what DOS forbids. */
-static int make_label(const char *label, u8 *out) {
-    size_t i, len = label ? strlen(label) : 0;
-    memset(out, ' ', 11);
-    if(!len) { memcpy(out, "NO NAME", 7); return 0; }
-    if(len > 11 || label[0] == ' ') return -1;
-    for(i = 0; i < len; i++) {
-        int c = (u8)label[i];
-        if(c >= 'a' && c <= 'z') c -= 32;
-        if(c < 0x20 || c > 0x7E || strchr("\"*+,./:;<=>?[\\]|", c)) return -1;
-        out[i] = (u8)c;
-    }
-    return 0;
 }
 
 static void fat_now(u16 *date, u16 *time) {
@@ -235,12 +240,9 @@ int fat_mkfs(struct bdev *d, const char *label, int fat_bits, char *msg, size_t 
     int r;
 
     if(bdev_may_format(d, why, sizeof(why)) != 0) { snprintf(msg, n, "%s", why); return -EACCES; }
-    if(make_label(label, lab) != 0) {
-        snprintf(msg, n, "a label has up to 11 characters: letters, digits, spaces and !#$%%&'()-@^_`{}~");
-        return -EINVAL;
-    }
-    r = fat_mkfs_plan(d, fat_bits, &l, msg, n);
+    r = fat_mkfs_plan(d, label, fat_bits, &l, msg, n);
     if(r) return r;
+    make_label(label, lab);
     zeros = (u8 *)kalloc(CHUNK * SECTOR);
     sec = (u8 *)kalloc(SECTOR);
     if(!zeros || !sec) { kfree(zeros); kfree(sec); snprintf(msg, n, "out of memory"); return -ENOMEM; }

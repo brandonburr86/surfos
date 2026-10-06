@@ -271,7 +271,7 @@ static void format(const char *what, struct image *im, struct bdev *d, int bits_
     char msg[300], text[400];
     int r;
     writes = written = flushes = invalidated = outside = 0;
-    if(fat_mkfs_plan(d, bits_wanted, &l, msg, sizeof(msg)) == 0) {
+    if(fat_mkfs_plan(d, label, bits_wanted, &l, msg, sizeof(msg)) == 0) {
         allowed_end = l.data + (l.bits == 32 ? l.spc : 0);
         tail_start = d->parent ? d->nblocks : d->nblocks - 33;
     }
@@ -306,15 +306,15 @@ static void refusals(void) {
           "FAT32 on 16 MB is refused (too few clusters)");
     check(fat_mkfs(&im.disk, NULL, 12, msg, sizeof(msg)) == -EINVAL, "FAT12 is not offered");
     im.disk.nblocks = 2048;                                     /* 1 MB */
-    check(fat_mkfs_plan(&im.disk, 0, &l, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too small"), "1 MB is too small for anything");
+    check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too small"), "1 MB is too small for anything");
     im.disk.nblocks = 8U * 2097152;                             /* 8 GB, never written */
-    check(fat_mkfs_plan(&im.disk, 16, &l, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too large for FAT16"), "FAT16 on 8 GB is refused");
+    check(fat_mkfs_plan(&im.disk, NULL, 16, &l, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too large for FAT16"), "FAT16 on 8 GB is refused");
     im.disk.nblocks = 511U * 2048;
-    check(fat_mkfs_plan(&im.disk, 0, &l, msg, sizeof(msg)) == 0 && l.bits == 16 && l.spc == 16, "511 MB: FAT16 with 8 KB clusters");
+    check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == 0 && l.bits == 16 && l.spc == 16, "511 MB: FAT16 with 8 KB clusters");
     im.disk.nblocks = 512U * 2048;
-    check(fat_mkfs_plan(&im.disk, 0, &l, msg, sizeof(msg)) == 0 && l.bits == 32 && l.spc == 8, "512 MB: FAT32 with 4 KB clusters");
+    check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == 0 && l.bits == 32 && l.spc == 8, "512 MB: FAT32 with 4 KB clusters");
     im.disk.nblocks = 16U * 2097152 + 8;
-    check(fat_mkfs_plan(&im.disk, 0, &l, msg, sizeof(msg)) == 0 && l.spc == 32, "just over 16 GB: 16 KB clusters");
+    check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == 0 && l.spc == 32, "just over 16 GB: 16 KB clusters");
     im.disk.nblocks = 32768;
     fail_at = 5;
     check(fat_mkfs(&im.disk, NULL, 0, msg, sizeof(msg)) == -EIO && strstr(msg, "write failed at sector") != NULL, "a write error is reported");

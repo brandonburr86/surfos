@@ -30,8 +30,9 @@ struct fat_layout {
 };
 
 /* the layout mkfs would write (fat_bits: 0 = FAT16 below 512 MB, else FAT32; or 16, 32).
-   0, or -EINVAL with the reason in msg (too small, too large for the type). Writes nothing. */
-int fat_mkfs_plan(struct bdev *d, int fat_bits, struct fat_layout *l, char *msg, size_t n);
+   0, or -EINVAL with the reason in msg (a bad label, too small or too large for the type).
+   Writes nothing. */
+int fat_mkfs_plan(struct bdev *d, const char *label, int fat_bits, struct fat_layout *l, char *msg, size_t n);
 
 /* a new, empty FAT file system on d with this label (NULL or "": NO NAME). 0 and a summary
    in msg, or -errno and the reason: -EACCES when bdev_may_format() refuses, -EINVAL for a bad

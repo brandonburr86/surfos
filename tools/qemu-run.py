@@ -26,6 +26,12 @@ import time
 
 PROMPT = 'SurfOS*>'
 
+
+def answered(cmd, question, answer, expects):
+    """a step whose command asks first (mkfs): wait for the question, type the answer, then expect"""
+    return (cmd, [question], [(answer, expects)])
+
+
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
     ('tick',    ['Ticks:']),
@@ -46,6 +52,47 @@ SMOKE = [
     ('cat /initrd/motd', ['Welcome to SurfOS']),
     ('ls /hda1', ['DOCS/', 'README', 'motd']),
     ('cat /hda1/DOCS/README.md', ['SurfOS']),
+    # 10/5/26 (USB storage): FAT16 and FAT32 made, used, remounted and ejected on the scratch ramdisk rd1
+    answered('mkfs rd1 TESTVOL', 'Type rd1 to erase rd1 (64 MB) and create a FAT16 file system: ', 'rd1',
+             ['rd1: FAT16, 2048-byte clusters', 'label TESTVOL']),
+    ('mount rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL', 'read-write']),
+    ('write /scratch/hello.txt Hello from SurfOS', []),
+    ('cp /initrd/motd /scratch/motd', ['bytes copied']),
+    ('write /scratch/a-much-longer-file-name.text long names work', []),
+    ('mkdir /scratch/docs', []),
+    ('mv /scratch/hello.txt /scratch/docs', []),
+    ('mv /scratch/docs /scratch/papers', []),
+    ('ls /scratch/papers', ['hello.txt', '1 entries']),
+    ('ls /scratch', ['papers/', 'motd', 'a-much-longer-file-name.text', '3 entries']),
+    ('df', ['rd1     fat16', '/scratch', 'TESTVOL']),
+    ('cd /scratch/papers', []),
+    ('umount rd1', ['/scratch is busy: it holds the current directory']),
+    ('cd /', []),
+    ('umount rd1', []),
+    ('mount rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL']),
+    ('cat /scratch/papers/hello.txt', ['Hello from SurfOS']),
+    ('cat /scratch/a-much-longer-file-name.text', ['long names work']),
+    ('cat /scratch/motd', ['Welcome to SurfOS']),
+    ('umount /scratch', []),
+    ('mount -r rd1 /scratch', ['rd1 on /scratch: fat16, label TESTVOL', 'read-only']),
+    ('write /scratch/new.txt nope', ['Read-only file system']),
+    ('umount /scratch', []),
+    answered('mkfs -t fat32 rd1 BIG32', 'Type rd1 to erase rd1 (64 MB) and create a FAT32 file system: ', 'rd1',
+             ['rd1: FAT32, 512-byte clusters', '(1 MiB aligned)', 'label BIG32']),
+    ('mount rd1', ['rd1 on /rd1: fat32, label BIG32']),
+    ('mount rd1 /again', ['rd1 is mounted already']),
+    ('write /rd1/fat32.txt FAT32 works', []),
+    ('mkdir /rd1/dir', []),
+    ('mv /rd1/fat32.txt /rd1/dir/renamed.txt', []),
+    ('cat /rd1/dir/renamed.txt', ['FAT32 works']),
+    ('df', ['rd1     fat32', '/rd1', 'BIG32']),
+    ('eject rd1', ['/rd1 unmounted', 'rd1: safe to remove']),
+    ('mount rd1', ['(FSInfo)', 'rd1 on /rd1: fat32, label BIG32']),     # cleanly unmounted: FSInfo's count is trusted
+    ('cat /rd1/dir/renamed.txt', ['FAT32 works']),
+    ('eject rd1', ['rd1: safe to remove']),
+    ('mkfs hda1', ['mkfs: hda1: it is not a USB drive']),
+    ('mkfs rd0', ['mkfs: rd0: it, its disk or one of its partitions is mounted']),
+    answered('mkfs rd1', 'Type rd1 to erase rd1', 'rd2', ['Cancelled']),
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
