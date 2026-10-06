@@ -333,7 +333,7 @@ SMOKE = [
       ('help', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--', 'lsblk', 'programs in /initrd/bin',
                 'fstest', '$? is the one expansion', '(C)2004-2026 Brandon Burr.', shown('hda1 \u224b> ')]),
       ('set prompt.unicode off', [shown('hda1 ~> ')]),
-      ('set prompt.unicode on', [shown('hda1 \u224b> ')]),
+      ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host

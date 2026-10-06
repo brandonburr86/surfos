@@ -211,7 +211,7 @@ $(BUILD)/user/bin/%: $(BUILD)/user/obj/%.o $(USER_CRT0) $(USER_LIB) user/user.ld
 # keep the program objects (make would delete them as intermediates and rebuild them every time)
 .SECONDARY: $(USER_PROGS:%=$(BUILD)/user/obj/%.o)
 
-# surfsh is linked from its own objects (this rule comes before the one-file pattern above)
+# surfsh is linked from its own objects: an explicit rule, which make prefers to the one-file pattern above
 $(BUILD)/user/surfsh/%.o: user/surfsh/%.c
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"

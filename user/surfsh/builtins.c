@@ -11,10 +11,11 @@ redirected like a program's (run.c puts the file on descriptor 1).
     cd [dir]          no dir: /; "cd -": the previous directory (printed)
     pwd               the current directory
     echo [-n] [-e]    the words; -n: no newline; -e: \n \r \t \\ are the characters they name
-    exit [n]          leave with status n, 0 when it is not given
+    exit [n]          leave with status n (0-255, n & 255 as on Unix), 0 when it is not given
     help [command]    this shell's commands, the kernel's, the programs; or one of them
     history           the lines typed before, oldest first
-    set [key [value]] the settings (main.c); "set key = value" as surfsh.conf writes it
+    set [key [value]] the settings (main.c); also "set key = value" and "set key=value",
+                      as surfsh.conf writes them
 */
 
 #include "surfsh.h"
@@ -35,7 +36,7 @@ const struct builtin builtins[] = {
     { "history", "",              "the lines typed before (Up and Down recall them)", b_history },
     { "set",     "[key [value]]", "show or change the settings (set alone: all)", b_set },
     { "help",    "[command]",     "this list, or one command", b_help },
-    { "exit",    "[n]",           "leave surfsh with status n (0 when not given)", b_exit },
+    { "exit",    "[n]",           "leave surfsh with status n, 0-255 (none: 0)", b_exit },
 };
 const int nbuiltins = sizeof(builtins) / sizeof(builtins[0]);
 
@@ -138,7 +139,7 @@ static int b_exit(int argc, char **argv) {
         }
     }
     exit_requested = 1;                     /* the main loop ends after this command */
-    exit_code = (int)n;
+    exit_code = (int)(n & 0xff);            /* 0-255: init takes -1 for a shell that was killed */
     return 0;
 }
 
@@ -151,20 +152,30 @@ static int b_history(int argc, char **argv) {
     return history_print();
 }
 
+/* set, set key, set key value; with an = the words are "key = value" as surfsh.conf has them */
 static int b_set(int argc, char **argv) {
-    char why[120];
-    const char *value = argc == 3 ? argv[2] : argc == 4 && !strcmp(argv[2], "=") ? argv[3] : NULL;
+    char why[120], text[LINE_LIMIT + 1] = "", *key = argv[1], *value = argc == 3 ? argv[2] : NULL, *eq, *p;
+    int i;
     if(argc == 1) return settings_show(NULL), 0;
-    if(argc == 2) {
+    for(i = 1; i < argc; i++) {
+        strlcat(text, argv[i], sizeof(text));
+        if(i < argc - 1) strlcat(text, " ", sizeof(text));
+    }
+    if((eq = strchr(text, '='))) {
+        for(p = eq; p > text && (p[-1] == ' ' || p[-1] == '\t'); p--);
+        *p = 0;
+        for(value = eq + 1; *value == ' ' || *value == '\t'; value++);
+        key = text;
+    } else if(argc == 2) {
         if(settings_show(argv[1]) == 0) return 0;
         fprintf(stderr, "surfsh: set: no setting called %s (set alone lists them)\n", argv[1]);
         return STATUS_USAGE;
     }
-    if(!value) {
-        fprintf(stderr, "usage: set [key [value]]\n");
+    if(!value || !*key) {
+        fprintf(stderr, "usage: set [key [value]]   (or set key = value)\n");
         return STATUS_USAGE;
     }
-    if(settings_apply(argv[1], value, why, sizeof(why))) {
+    if(settings_apply(key, value, why, sizeof(why))) {
         fprintf(stderr, "surfsh: set: %s\n", why);
         return STATUS_USAGE;
     }
