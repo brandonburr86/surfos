@@ -100,6 +100,7 @@ int bdev_scan_partitions(struct bdev *disk) {
     io.arg = disk;
     io.read = disk_read;
     io.note = boot_note;
+    io.random = NULL;                               /* reading needs none */
     if(part_read(&io, disk->nblocks, t) != 0) { kfree(t); kfree(sec); return -1; }
     disk->scheme = (u8)(t->damaged ? PART_SCHEME_NONE : t->scheme);
     for(i = 0; i < t->nparts; i++) {

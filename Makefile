@@ -275,6 +275,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_framebuffer
 	$(BUILD)/host/test_usb
 	$(BUILD)/host/test_part
+	$(PYTHON) tests/test_part_tools.py $(BUILD)/host/test_part
 
 clean:
 	rm -rf build

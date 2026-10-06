@@ -8,6 +8,11 @@ an extended one) and GPT (both headers, their CRC32s, the backup when the
 primary is damaged), read from 512-byte sectors through a callback. This is
 pure code (driver/parttab.c): driver/part.c registers what it finds as block
 devices, and tests/host/test_part.c runs it on the host.
+
+Changes (fdisk's new, add, delete, type) are planned here too: a plan is the
+list of whole sectors to write, in order, plus what the table must say when
+it is read back. driver/part.c carries a plan out through the block layer;
+the host test carries it out in RAM and checks it with sfdisk and sgdisk.
 */
 
 #ifndef _SYS_PART_H
@@ -26,6 +31,8 @@ devices, and tests/host/test_part.c runs it on the host.
 
 #define GPT_ENTRY_SIZE   128    /* the only entry size read (and the one every tool writes) */
 #define GPT_MAX_ENTRIES  1024   /* the most entries a header may announce */
+#define GPT_ENTRIES      128    /* what a new GPT gets (32 blocks of entries), and the most fdisk changes */
+#define PART_ALIGN       2048   /* new partitions start on 1 MB boundaries, and are at least that big */
 
 struct part_entry {
     u_int index;                /* MBR: 1-4 primary, 5... logical, as Linux numbers them; GPT: the entry number */
@@ -52,6 +59,7 @@ struct part_table {
     u8 backup_bad;              /* the primary is fine; the backup is missing, damaged or different */
     u8 damaged;                 /* a protective MBR, but neither GPT header is valid: no partitions */
     u8 full;                    /* more than PART_MAX partitions (the rest were left out) */
+    u_int skipped;              /* entries left out (outside the disk, a loop, ...): fdisk will not change the table */
     u_int nparts;
     struct part_entry part[PART_MAX];   /* in table order; the extended partition is one of them */
 };
@@ -61,6 +69,7 @@ struct part_io {
     void *arg;
     int (*read)(void *arg, u32 lba, u32 count, void *buf);   /* 0 ok */
     void (*note)(void *arg, const char *msg);                 /* may be NULL */
+    u32 (*random)(void *arg);                                 /* for disk signatures and GUIDs (plans only) */
 };
 
 /* The partition table of a disk of nblocks blocks: 0 (t->scheme says what was found), or -1
@@ -83,5 +92,62 @@ u32 part_crc32(u32 crc, const void *buf, size_t len);
 
 /* a FAT boot sector: true, and its 11-character volume label (FAT32: offset 71, FAT12/16: 43) */
 bool part_fat_label(const u8 *sector, char *label);         /* label: 12 bytes */
+
+/**** changes ****/
+
+/* free space where an aligned partition of at least PART_ALIGN blocks fits, in disk order:
+   (start, count) with start aligned; the number found (at most max) */
+struct part_region { u32 start, count; };
+u_int part_free(const struct part_table *t, struct part_region *r, u_int max);
+
+/* fdisk's words: sizes "500M", "2G", "1T", "4096K" (binary units, at least 1M) or "all" (0: the
+   largest free region); types fat32 (MBR 0c / GPT basic data), fat16 (0e / basic data), linux
+   (83 / Linux filesystem), efi (ef / EFI system), or an MBR type byte in hex. 0 or -1. */
+struct part_kind {
+    u8 mbr;                     /* the MBR type byte */
+    const u8 *gpt;              /* the GPT type GUID, NULL when the byte has none */
+};
+int part_parse_size(const char *s, u32 *blocks);
+int part_parse_type(const char *s, struct part_kind *k);
+
+#define PART_PLAN_WRITES 6
+#define PART_PLAN_BUF    (3 * PART_SECTOR + GPT_ENTRIES * GPT_ENTRY_SIZE)   /* sector 0 or an EBR, 2 headers, entries */
+
+struct part_write {
+    u32 lba, count;
+    const u8 *data;             /* count blocks; NULL: zeros */
+};
+
+struct part_plan {
+    u8 *buf;                    /* PART_PLAN_BUF bytes, the caller's: the data written points into it */
+    u_int nwrites;
+    struct part_write w[PART_PLAN_WRITES];  /* in this order: the step that makes the change valid comes last */
+    char what[100];             /* the change, in a line */
+    /* what the table must say when it is read back (part_plan_check) */
+    int scheme;
+    u_int index;                /* the partition added, deleted or retyped; 0: a new table, no partitions */
+    u8 present;
+    u32 start, count;           /* added: where (count 0: not checked) */
+    u8 type;                    /* MBR type, or GPT type GUID */
+    u8 type_guid[16];
+};
+
+/* Each fills p (p->buf set by the caller) and returns 0, or -1 with the reason in err. A new
+   table: MBR (a random disk signature, no partitions; the GPT areas, blocks 1-33 and the last 33,
+   are zeroed so no stale GPT is found later) or GPT (protective MBR, both headers and 128 entries,
+   random GUIDs). add uses the first free entry and the largest free region (count 0) or the
+   first one count blocks fit in; MBR adds primary partitions only. delete and type take the
+   partition number; an MBR logical partition can be retyped, not deleted (delete its extended
+   partition). Changing a GPT rewrites both copies, the backup at the end of the disk. Tables
+   with entries left out (t->skipped) are not changed. */
+int part_plan_new(const struct part_io *io, u32 nblocks, int scheme, struct part_plan *p, char *err, size_t n);
+int part_plan_add(const struct part_io *io, const struct part_table *t, u32 count, const struct part_kind *k,
+                  struct part_plan *p, char *err, size_t n);
+int part_plan_delete(const struct part_io *io, const struct part_table *t, u_int index, struct part_plan *p,
+                     char *err, size_t n);
+int part_plan_type(const struct part_io *io, const struct part_table *t, u_int index, const struct part_kind *k,
+                   struct part_plan *p, char *err, size_t n);
+/* the table read back after the plan was written says what it should: 0, or -1 and why */
+int part_plan_check(const struct part_plan *p, const struct part_table *t, char *err, size_t n);
 
 #endif

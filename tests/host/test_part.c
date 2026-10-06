@@ -2,13 +2,20 @@
    partition and its chain of logical partitions, GPT with both headers, the CRC32s, and the
    FAT volume label that marks the SurfOS boot drive. The tables are built by hand in a RAM
    disk, with a CRC32 of this file's own, then read back through part_read() and checked
-   field by field, intact and damaged. Built like the kernel objects and run by `make unittest`. */
+   field by field, intact and damaged. Then fdisk's changes: plans carried out on the RAM disk,
+   read back and checked the same way. Built like the kernel objects and run by `make unittest`.
+
+   test_part --image mbr|gpt|mbr-over-gpt > file   writes a 16 MB disk image made with the plans
+   test_part --parse < file                        prints what part_read() finds in an image
+   tests/test_part_tools.py uses both to compare SurfOS with sfdisk and sgdisk. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
 #include <sys/part.h>
 
 void exit(int status);
+long read(int fd, void *buf, unsigned long n);
+long write(int fd, const void *buf, unsigned long n);
 
 static int failures, checks;
 
@@ -37,7 +44,14 @@ static void ram_note(void *arg, const char *msg) {
     if(l + strlen(msg) + 2 < sizeof(notes)) { memcpy(notes + l, msg, strlen(msg)); notes[l + strlen(msg)] = '\n'; notes[l + strlen(msg) + 1] = 0; }
 }
 
-static const struct part_io io = { NULL, ram_read, ram_note };
+/* a fixed sequence, so every run writes the same GUIDs */
+static u32 rnd_state = 12345;
+static u32 test_random(void *arg) {
+    rnd_state = rnd_state * 1103515245u + 12345u;
+    return rnd_state ^ (rnd_state >> 15);
+}
+
+static const struct part_io io = { NULL, ram_read, ram_note, test_random };
 static struct part_table t;
 
 static void blank(void) {
@@ -52,6 +66,9 @@ static int scan(void) {
 }
 
 static u8 *sector(u32 lba) { return disk + (u64)lba * 512; }
+static u16 get16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
+static u32 get32(const u8 *p) { return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24); }
+static u64 get64(const u8 *p) { return (u64)get32(p) | ((u64)get32(p + 4) << 32); }
 static void put16(u8 *p, u16 v) { p[0] = (u8)v; p[1] = (u8)(v >> 8); }
 static void put32(u8 *p, u32 v) { put16(p, (u16)v); put16(p + 2, (u16)(v >> 16)); }
 static void put64(u8 *p, u64 v) { put32(p, (u32)v); put32(p + 4, (u32)(v >> 32)); }
@@ -260,7 +277,7 @@ static void build_gpt(const struct tpart *p, int n) {
     gpt_header(nblocks - 1, 1, nblocks - 33, 34, nblocks - 34, 128, ecrc);
 }
 
-static const struct tpart three[] = {
+static const struct tpart three_parts[] = {
     { 1, G_EFI, 2048, 18431, 0, "EFI system partition" },
     { 2, G_BASIC, 18432, 26623, 0x8000000000000000ull, "SurfOS data" },
     { 5, G_LINUX, 26624, 32734, 0, "a name that is exactly 36 characters" },
@@ -288,7 +305,7 @@ static void test_gpt(void) {
     };
     u8 save[512];
 
-    build_gpt(three, 3);
+    build_gpt(three_parts, 3);
     check(scan() == 0 && t.scheme == PART_SCHEME_GPT && !t.backup_used && !t.backup_bad && !t.damaged && !notes[0],
           "GPT: found, both copies valid, no notes");
     check(same_three(), "GPT: entries 1, 2 and 5 with every field (types, GUIDs, blocks, attributes, names)");
@@ -313,17 +330,17 @@ static void test_gpt(void) {
     sector(1)[60] ^= 1;
     check(scan() == 0 && t.damaged && t.nparts == 0 && strstr(notes, "no valid GPT"), "GPT: both copies damaged: no partitions");
 
-    build_gpt(three, 3);
+    build_gpt(three_parts, 3);
     put32(sector(1) + 12, 600);                       /* header size beyond a sector */
     put32(sector(1) + 16, 0);
     put32(sector(1) + 16, crc32_bits(sector(1), 92));
     check(scan() == 0 && t.backup_used && strstr(notes, "a header size of 600"), "GPT: a header size beyond the sector is refused");
-    build_gpt(three, 3);
+    build_gpt(three_parts, 3);
     put64(sector(1) + 24, 7);                        /* MyLBA wrong */
     put32(sector(1) + 16, 0);
     put32(sector(1) + 16, crc32_bits(sector(1), 92));
     check(scan() == 0 && t.backup_used && strstr(notes, "it says it is at block 7"), "GPT: a header that is not where it says is refused");
-    build_gpt(three, 3);
+    build_gpt(three_parts, 3);
     put32(sector(1) + 84, 256);                      /* 256-byte entries */
     put32(sector(1) + 16, 0);
     put32(sector(1) + 16, crc32_bits(sector(1), 92));
@@ -339,7 +356,7 @@ static void test_gpt(void) {
           strstr(notes, "partition 7 (blocks 6000-40000) runs past the end of the disk"),
           "GPT: entries beyond 2^32, backwards, outside the usable area or the disk are refused");
 
-    build_gpt(three, 3);
+    build_gpt(three_parts, 3);
     memset(sector(0) + 446, 0, 16);                  /* an MBR with a FAT32 partition and a stale GPT behind it */
     mbr_entry(0, 0, 0x00, 0x0C, 2048, 8192);
     check(scan() == 0 && t.scheme == PART_SCHEME_MBR && t.nparts == 1 && part_find(&t, 1)->type == 0x0C,
@@ -347,7 +364,7 @@ static void test_gpt(void) {
     mbr_entry(0, 1, 0x00, 0xEE, 1, 100);            /* a hybrid MBR: 0xEE plus another entry */
     check(scan() == 0 && t.scheme == PART_SCHEME_GPT && same_three(), "a hybrid MBR: the GPT is used");
 
-    build_gpt(three, 3);                             /* an image made for a bigger disk, cut short */
+    build_gpt(three_parts, 3);                             /* an image made for a bigger disk, cut short */
     nblocks = DISK_BLOCKS - 4000;
     check(scan() == 0 && t.scheme == PART_SCHEME_GPT && !t.backup_used && t.backup_bad && t.last_usable == nblocks - 1 &&
           t.nparts == 2 && part_find(&t, 1) && part_find(&t, 2) && strstr(notes, "partition 5 (blocks 26624-32734) runs past the end") &&
@@ -406,13 +423,363 @@ static void test_fat_label(void) {
     check(!part_fat_label(bs, label), "zeros: not a FAT boot sector");
 }
 
-int main(void) {
+/**** changes ****/
+
+static u8 planbuf[PART_PLAN_BUF];
+static struct part_plan plan = { planbuf };
+static char err[160];
+
+/* carries a plan out on the RAM disk, the way driver/part.c does on a block device */
+static void apply(void) {
+    u_int i;
+    for(i = 0; i < plan.nwrites; i++) {
+        if(plan.w[i].data) memcpy(sector(plan.w[i].lba), plan.w[i].data, plan.w[i].count * 512);
+        else memset(sector(plan.w[i].lba), 0, plan.w[i].count * 512);
+    }
+}
+
+/* after a plan was made: write it, read the table back and check it says what the plan meant */
+static int done(int r) {
+    if(r) return r;
+    apply();
+    if(scan() != 0) return -1;
+    return part_plan_check(&plan, &t, err, sizeof(err));
+}
+
+static int do_new(int scheme) {
+    err[0] = 0;
+    return done(part_plan_new(&io, nblocks, scheme, &plan, err, sizeof(err)));
+}
+
+static int do_add(const char *size, const char *type) {
+    struct part_kind k;
+    u32 count = 0;
+    err[0] = 0;
+    if((size && part_parse_size(size, &count)) || part_parse_type(type ? type : "fat32", &k)) return -2;
+    scan();
+    return done(part_plan_add(&io, &t, count, &k, &plan, err, sizeof(err)));
+}
+
+static int do_delete(u_int index) {
+    err[0] = 0;
+    scan();
+    return done(part_plan_delete(&io, &t, index, &plan, err, sizeof(err)));
+}
+
+static int do_type(u_int index, const char *type) {
+    struct part_kind k;
+    err[0] = 0;
+    if(part_parse_type(type, &k)) return -2;
+    scan();
+    return done(part_plan_type(&io, &t, index, &k, &plan, err, sizeof(err)));
+}
+
+static int zeros(u32 lba, u32 count) {
+    u64 i;
+    for(i = 0; i < (u64)count * 512; i++) if(sector(lba)[i]) return 0;
+    return 1;
+}
+
+static int filled(u32 lba, u8 v) {
+    int i;
+    for(i = 0; i < 512; i++) if(sector(lba)[i] != v) return 0;
+    return 1;
+}
+
+/* a GPT header as written, its own CRC and its entries' CRC checked with this file's CRC32 */
+static int header_ok(u32 lba, u32 my, u32 alt, u32 elba) {
+    u8 h[92];
+    memcpy(h, sector(lba), 92);
+    memset(h + 16, 0, 4);
+    return !memcmp(sector(lba), "EFI PART", 8) && get32(sector(lba) + 8) == 0x00010000 && get32(sector(lba) + 12) == 92 &&
+           crc32_bits(h, 92) == get32(sector(lba) + 16) && get64(sector(lba) + 24) == my && get64(sector(lba) + 32) == alt &&
+           get64(sector(lba) + 72) == elba && get32(sector(lba) + 80) == 128 && get32(sector(lba) + 84) == 128 &&
+           crc32_bits(sector(elba), 128 * 128) == get32(sector(lba) + 88);
+}
+
+static int v4(const u8 *g) {
+    return (g[7] >> 4) == 4 && (g[8] & 0xC0) == 0x80;
+}
+
+static int name_is(u32 index, const char *name) {
+    const u8 *e = sector(2) + (index - 1) * 128;
+    u32 i;
+    for(i = 0; name[i]; i++) if(get16(e + 56 + 2 * i) != (u8)name[i]) return 0;
+    return get16(e + 56 + 2 * i) == 0;
+}
+
+static void test_words(void) {
+    struct part_kind k;
+    u32 b;
+    check(part_parse_size("500M", &b) == 0 && b == 1024000, "size 500M");
+    check(part_parse_size("2G", &b) == 0 && b == 4194304, "size 2G");
+    check(part_parse_size("1T", &b) == 0 && b == 0x80000000u, "size 1T");
+    check(part_parse_size("4096K", &b) == 0 && b == 8192, "size 4096K");
+    check(part_parse_size("16MB", &b) == 0 && b == 32768 && part_parse_size("16MiB", &b) == 0 && b == 32768, "sizes 16MB and 16MiB");
+    check(part_parse_size("all", &b) == 0 && b == 0, "size all: 0, the largest free region");
+    check(part_parse_size("2T", &b) == -1, "2T is beyond 2^32 blocks");
+    check(part_parse_size("1K", &b) == -1 && part_parse_size("1023K", &b) == -1 && part_parse_size("0M", &b) == -1, "below 1M is refused");
+    check(part_parse_size("12", &b) == -1 && part_parse_size("M", &b) == -1 && part_parse_size("1.5G", &b) == -1 &&
+          part_parse_size("16Mx", &b) == -1 && part_parse_size("", &b) == -1 && part_parse_size("1234567890M", &b) == -1,
+          "malformed sizes are refused");
+
+    check(part_parse_type("fat32", &k) == 0 && k.mbr == 0x0C && k.gpt && !memcmp(k.gpt, G_BASIC, 16), "type fat32: 0c, basic data");
+    check(part_parse_type("fat16", &k) == 0 && k.mbr == 0x0E && k.gpt && !memcmp(k.gpt, G_BASIC, 16), "type fat16: 0e, basic data");
+    check(part_parse_type("linux", &k) == 0 && k.mbr == 0x83 && k.gpt && !memcmp(k.gpt, G_LINUX, 16), "type linux: 83, Linux filesystem");
+    check(part_parse_type("efi", &k) == 0 && k.mbr == 0xEF && k.gpt && !memcmp(k.gpt, G_EFI, 16), "type efi: ef, EFI system");
+    check(part_parse_type("0c", &k) == 0 && k.mbr == 0x0C && k.gpt && !memcmp(k.gpt, G_BASIC, 16), "type 0c: FAT32 LBA, basic data on GPT");
+    check(part_parse_type("0x83", &k) == 0 && k.mbr == 0x83 && k.gpt && !memcmp(k.gpt, G_LINUX, 16), "type 0x83");
+    check(part_parse_type("EF", &k) == 0 && k.mbr == 0xEF && k.gpt && !memcmp(k.gpt, G_EFI, 16), "type EF (upper case)");
+    check(part_parse_type("7", &k) == 0 && k.mbr == 0x07 && k.gpt && !memcmp(k.gpt, G_BASIC, 16), "type 7");
+    check(part_parse_type("42", &k) == 0 && k.mbr == 0x42 && !k.gpt, "type 42: MBR only");
+    check(part_parse_type("ee", &k) == -1 && part_parse_type("05", &k) == -1 && part_parse_type("0f", &k) == -1 &&
+          part_parse_type("85", &k) == -1 && part_parse_type("00", &k) == -1, "types 00, ee and extended ones are refused");
+    check(part_parse_type("zz", &k) == -1 && part_parse_type("123", &k) == -1 && part_parse_type("", &k) == -1 &&
+          part_parse_type("0x", &k) == -1 && part_parse_type("fat", &k) == -1, "malformed types are refused");
+}
+
+static void test_new(void) {
+    u32 i, sig;
+    build_gpt(three_parts, 3);                      /* a GPT, and garbage everywhere else */
+    for(i = 34; i < DISK_BLOCKS - 33; i++) memset(sector(i), 0xA5, 512);
+    nblocks = 4000;
+    check(do_new(PART_SCHEME_MBR) == -1 && strstr(err, "too small"), "new: a 2 MB disk at least");
+    nblocks = DISK_BLOCKS;
+
+    check(do_new(PART_SCHEME_MBR) == 0, "new mbr: written, read back as planned");
+    sig = get32(sector(0) + 440);
+    check(t.scheme == PART_SCHEME_MBR && t.nparts == 0 && t.disk_sig == sig && sig != 0 && !notes[0], "new mbr: empty, with a disk signature");
+    check(sector(0)[510] == 0x55 && sector(0)[511] == 0xAA && zeros(1, 33) && zeros(DISK_BLOCKS - 33, 33),
+          "new mbr: blocks 1-33 and the last 33 are zero, so no stale GPT is left");
+    for(i = 0; i < 440 && !sector(0)[i]; i++);
+    check(i == 440 && !sector(0)[444] && !sector(0)[445] && zeros(0, 0) && filled(34, 0xA5) && filled(DISK_BLOCKS - 34, 0xA5),
+          "new mbr: no boot code, and nothing else is touched");
+    for(i = 446; i < 510 && !sector(0)[i]; i++);
+    check(i == 510, "new mbr: no partitions");
+    check(plan.nwrites == 3 && plan.w[2].lba == 0 && plan.w[2].count == 1, "new mbr: the MBR is written last");
+
+    check(do_new(PART_SCHEME_GPT) == 0, "new gpt: written, read back as planned");
+    check(t.scheme == PART_SCHEME_GPT && t.nparts == 0 && t.first_usable == 34 && t.last_usable == DISK_BLOCKS - 34 &&
+          t.entries_lba == 2 && t.nentries == 128 && !t.backup_bad && !notes[0], "new gpt: empty, usable blocks 34 to the end - 34");
+    check(!memcmp(sector(0) + 446, "\x00\x00\x02\x00\xee\xff\xff\xff", 8) && get32(sector(0) + 454) == 1 &&
+          get32(sector(0) + 458) == DISK_BLOCKS - 1 && sector(0)[510] == 0x55, "new gpt: the protective MBR entry");
+    check(header_ok(1, 1, DISK_BLOCKS - 1, 2) && header_ok(DISK_BLOCKS - 1, DISK_BLOCKS - 1, 1, DISK_BLOCKS - 33),
+          "new gpt: both headers and both entry arrays, CRCs checked independently");
+    check(zeros(2, 32) && !memcmp(sector(1) + 56, sector(DISK_BLOCKS - 1) + 56, 16) && v4(sector(1) + 56),
+          "new gpt: no entries; the same version 4 disk GUID in both headers");
+    check(plan.nwrites == 5 && plan.w[0].lba == 2 && plan.w[1].lba == 1 && plan.w[2].lba == DISK_BLOCKS - 33 &&
+          plan.w[3].lba == DISK_BLOCKS - 1 && plan.w[4].lba == 0, "new gpt: primary, backup, then the protective MBR last");
+    check(do_new(PART_SCHEME_MBR) == 0 && t.scheme == PART_SCHEME_MBR && zeros(1, 33) && zeros(DISK_BLOCKS - 33, 33),
+          "new mbr over a GPT: both copies of the GPT are gone");
+}
+
+static void test_mbr_changes(void) {
+    struct part_region r[8];
+    const struct part_entry *e;
+    u8 before[512];
+    u32 i;
+    blank();
+    check(do_add("4M", NULL) == -1 && strstr(err, "no partition table"), "add on a blank disk: refused");
+    check(do_new(PART_SCHEME_MBR) == 0 && part_free(&t, r, 8) == 1 && r[0].start == 2048 && r[0].count == DISK_BLOCKS - 2048,
+          "MBR: all of it free from block 2048");
+    check(do_add("4M", "fat32") == 0 && (e = part_find(&t, 1)) && e->start == 2048 && e->count == 8192 && e->type == 0x0C && !e->active,
+          "MBR add 4M fat32: partition 1 at block 2048");
+    check(!memcmp(sector(0) + 446 + 1, "\x20\x21\x00", 3) && !memcmp(sector(0) + 446 + 5, "\xa2\x22\x00", 3),
+          "MBR add: CHS 0/32/33 to 0/162/34 for blocks 2048-10239");
+    check(do_add("2M", "linux") == 0 && (e = part_find(&t, 2)) && e->start == 10240 && e->count == 4096 && e->type == 0x83,
+          "MBR add 2M linux: partition 2 right after");
+    check(do_add(NULL, "efi") == 0 && (e = part_find(&t, 3)) && e->start == 14336 && e->count == DISK_BLOCKS - 14336 && e->type == 0xEF,
+          "MBR add (no size) efi: the rest of the disk");
+    check(do_add("1M", NULL) == -1 && strstr(err, "no free space"), "MBR add on a full disk: no free space");
+    check(do_delete(2) == 0 && !part_find(&t, 2) && part_find(&t, 1) && part_find(&t, 3) && plan.nwrites == 1 && plan.w[0].lba == 0,
+          "MBR delete 2: block 0 only");
+    check(part_free(&t, r, 8) == 1 && r[0].start == 10240 && r[0].count == 4096, "MBR: the hole is free again");
+    check(do_add("8M", NULL) == -1 && strstr(err, "no free region of 8M (the largest is 2M)"), "MBR add 8M: does not fit, says what does");
+    check(do_add("1M", NULL) == 0 && (e = part_find(&t, 2)) && e->start == 10240 && e->count == 2048 && e->type == 0x0C,
+          "MBR add 1M: first fit, into the hole, as partition 2");
+    check(do_type(3, "0b") == 0 && (e = part_find(&t, 3)) && e->type == 0x0B && e->start == 14336, "MBR type 3 0b");
+    check(do_add("1M", "fat16") == 0 && (e = part_find(&t, 4)) && e->start == 12288 && e->type == 0x0E, "MBR add: the fourth entry");
+    check(do_add("1M", NULL) == -1 && strstr(err, "all four primary entries"), "MBR add: no fifth primary partition");
+    for(i = 0; i < t.nparts; i++) if(t.part[i].start % 2048) break;
+    check(i == t.nparts, "MBR: every partition starts on a 1 MB boundary");
+    check(do_delete(7) == -1 && strstr(err, "no partition 7"), "MBR delete 7: there is none");
+
+    build_logical();
+    memcpy(before, sector(18432), 512);
+    check(do_type(6, "linux") == 0 && (e = part_find(&t, 6)) && e->type == 0x83 && e->active && e->logical && e->start == 20480,
+          "logical: type 6 linux");
+    before[446 + 4] = 0x83;
+    check(plan.nwrites == 1 && plan.w[0].lba == 18432 && !memcmp(before, sector(18432), 512), "logical: only its EBR changes, one byte");
+    check(do_delete(6) == -1 && strstr(err, "delete extended partition 2"), "logical: not deleted one by one");
+    check(do_type(2, "fat32") == -1 && strstr(err, "extended partition"), "the extended partition keeps its type");
+    check(do_add("1M", NULL) == -1 && strstr(err, "no free space"), "logical: no room outside the extended partition");
+    check(do_delete(2) == 0 && t.nparts == 2 && part_find(&t, 1) && part_find(&t, 3) && !part_find(&t, 5),
+          "delete the extended partition: its logical ones go too");
+
+    blank();
+    mbr_entry(0, 0, 0x00, 0x0C, 2048, 4096);
+    mbr_entry(0, 1, 0x00, 0x83, 30000, 10000);      /* outside the disk */
+    check(do_add("1M", NULL) == -1 && strstr(err, "left out"), "a table with entries left out is not changed");
+}
+
+static void test_gpt_changes(void) {
+    static const struct tpart small[] = {
+        { 1, G_EFI, 2048, 10239, 0, "EFI" },
+        { 2, G_BASIC, 10240, 20479, 0, "DATA" },
+    };
+    const struct part_entry *e = NULL, *e2;
+    struct part_region r[8];
+    u8 g1[16];
+    u32 nb;
+
+    blank();
+    check(do_new(PART_SCHEME_GPT) == 0 && part_free(&t, r, 8) == 1 && r[0].start == 2048 && r[0].count == DISK_BLOCKS - 34 - 2048 + 1,
+          "GPT: free from block 2048 to the last usable block");
+    check(do_add("4M", NULL) == 0 && (e = part_find(&t, 1)) && e->start == 2048 && e->count == 8192 && !memcmp(e->type_guid, G_BASIC, 16) &&
+          e->type == 0x07 && !strcmp(e->name, "SurfOS data") && v4(e->guid) && e->attrs == 0, "GPT add 4M: entry 1, basic data, \"SurfOS data\"");
+    memset(g1, 0, 16);
+    if(e) memcpy(g1, e->guid, 16);
+    check(name_is(1, "SurfOS data") && header_ok(1, 1, DISK_BLOCKS - 1, 2) && header_ok(DISK_BLOCKS - 1, DISK_BLOCKS - 1, 1, DISK_BLOCKS - 33) &&
+          !memcmp(sector(2), sector(DISK_BLOCKS - 33), 128 * 128), "GPT add: both copies rewritten, CRCs right");
+    check(plan.nwrites == 4 && plan.w[0].lba == 2 && plan.w[1].lba == 1 && plan.w[2].lba == DISK_BLOCKS - 33 && plan.w[3].lba == DISK_BLOCKS - 1,
+          "GPT change: primary entries, primary header, backup entries, backup header");
+    check(do_add(NULL, "linux") == 0 && (e = part_find(&t, 2)) && e->start == 10240 && e->count == DISK_BLOCKS - 34 - 10240 + 1 &&
+          !memcmp(e->type_guid, G_LINUX, 16) && !strcmp(e->name, "Linux filesystem") && memcmp(e->guid, g1, 16),
+          "GPT add linux: entry 2, the rest, its own GUID");
+    check(do_add("1M", NULL) == -1 && strstr(err, "no free space"), "GPT add on a full disk: no free space");
+    check(do_type(2, "efi") == 0 && (e = part_find(&t, 2)) && !memcmp(e->type_guid, G_EFI, 16) && !strcmp(e->name, "Linux filesystem"),
+          "GPT type 2 efi: the name stays");
+    check(do_type(2, "42") == -1 && strstr(err, "no GPT counterpart"), "GPT type with an MBR-only byte: refused");
+    check(do_delete(1) == 0 && !part_find(&t, 1) && part_find(&t, 2) && t.nparts == 1 && zeros(2, 0), "GPT delete 1");
+    check(do_add("2M", "efi") == 0 && (e = part_find(&t, 1)) && e->start == 2048 && e->count == 4096 && !strcmp(e->name, "EFI system"),
+          "GPT add 2M efi: entry 1 again, \"EFI system\"");
+    check(do_add("1M", "fat16") == 0 && (e = part_find(&t, 3)) && e->start == 6144 && e->count == 2048 && (e2 = part_find(&t, 2)) &&
+          e2->start == 10240, "GPT add 1M fat16: entry 3, into the hole");
+    check(do_delete(9) == -1 && strstr(err, "no partition 9"), "GPT delete 9: there is none");
+
+    build_gpt(three_parts, 3);                       /* a damaged primary: changing the table repairs it */
+    sector(1)[60] ^= 1;
+    check(do_type(5, "fat32") == 0 && !t.backup_used && !t.backup_bad && (e = part_find(&t, 5)) && !memcmp(e->type_guid, G_BASIC, 16) &&
+          part_find(&t, 1) && part_find(&t, 2) && header_ok(1, 1, DISK_BLOCKS - 1, 2), "GPT change with the backup in use: both copies whole again");
+
+    nb = DISK_BLOCKS - 8192;                         /* an image made for a smaller disk, on a bigger one */
+    build_gpt(small, 2);
+    memmove(sector(nb - 33), sector(DISK_BLOCKS - 33), 33 * 512);
+    memset(sector(DISK_BLOCKS - 33), 0, 33 * 512);
+    put64(sector(1) + 32, nb - 1);
+    put64(sector(1) + 48, nb - 34);
+    put64(sector(nb - 1) + 24, nb - 1);
+    put64(sector(nb - 1) + 48, nb - 34);
+    put64(sector(nb - 1) + 72, nb - 33);
+    put32(sector(1) + 16, 0);
+    put32(sector(1) + 16, crc32_bits(sector(1), 92));
+    put32(sector(nb - 1) + 16, 0);
+    put32(sector(nb - 1) + 16, crc32_bits(sector(nb - 1), 92));
+    put32(sector(0) + 458, nb - 1);
+    check(scan() == 0 && t.scheme == PART_SCHEME_GPT && t.backup_bad && t.nparts == 2 && t.last_usable == nb - 34 && part_free(&t, r, 8) == 1 &&
+          r[0].start == 20480 && r[0].count == DISK_BLOCKS - 34 - 20480 + 1, "GPT on a bigger disk: the space beyond the table is free");
+    check(do_add(NULL, NULL) == 0 && (e = part_find(&t, 3)) && e->start == 20480 && e->count == DISK_BLOCKS - 34 - 20480 + 1 &&
+          t.last_usable == DISK_BLOCKS - 34 && header_ok(DISK_BLOCKS - 1, DISK_BLOCKS - 1, 1, DISK_BLOCKS - 33),
+          "GPT add on a bigger disk: the backup moves to the end, the new space is used");
+
+    build_gpt(three_parts, 3);
+    sector(1)[60] ^= 1;
+    sector(DISK_BLOCKS - 1)[60] ^= 1;
+    check(do_add("1M", NULL) == -1 && strstr(err, "damaged in both copies"), "a GPT damaged in both copies is not changed");
+}
+
+static void test_plan_check(void) {
+    blank();
+    check(do_new(PART_SCHEME_GPT) == 0 && do_add("4M", NULL) == 0, "plan check: a partition added");
+    plan.start += 2048;
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == -1 && strstr(err, "reads back at blocks 2048-10239"), "plan check: a partition in the wrong place");
+    plan.start -= 2048;
+    plan.type_guid[0] ^= 1;
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == -1 && strstr(err, "another type"), "plan check: the wrong type");
+    plan.type_guid[0] ^= 1;
+    plan.present = 0;
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == -1 && strstr(err, "still there"), "plan check: a partition that should be gone");
+    plan.present = 1;
+    plan.scheme = PART_SCHEME_MBR;
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == -1 && strstr(err, "as MBR"), "plan check: the wrong kind of table");
+    plan.scheme = PART_SCHEME_GPT;
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == 0, "plan check: what was planned");
+    sector(DISK_BLOCKS - 1)[60] ^= 1;
+    scan();
+    check(part_plan_check(&plan, &t, err, sizeof(err)) == -1 && strstr(err, "whole"), "plan check: a damaged backup");
+}
+
+/**** images for tests/test_part_tools.py ****/
+
+static int put_all(int fd, const u8 *p, u64 n) {
+    while(n) {
+        long w = write(fd, p, n > 1048576 ? 1048576 : (unsigned long)n);
+        if(w <= 0) return -1;
+        p += w;
+        n -= (u64)w;
+    }
+    return 0;
+}
+
+static int make_image(const char *kind) {
+    int r = 0;
+    blank();
+    if(!strcmp(kind, "mbr")) {
+        r = do_new(PART_SCHEME_MBR) || do_add("4M", "fat32") || do_add("2M", "linux") || do_add(NULL, "efi");
+    } else if(!strcmp(kind, "gpt") || !strcmp(kind, "mbr-over-gpt")) {
+        r = do_new(PART_SCHEME_GPT) || do_add("4M", "fat32") || do_add("2M", "fat16") || do_type(2, "linux") || do_add(NULL, "efi");
+        if(!r && !strcmp(kind, "mbr-over-gpt")) r = do_new(PART_SCHEME_MBR) || do_add(NULL, NULL);
+    } else {
+        printf("test_part: no image kind %s\n", kind);
+        return 2;
+    }
+    if(r) { printf("test_part: %s\n", err); return 1; }
+    return put_all(1, disk, (u64)nblocks * 512) ? 1 : 0;
+}
+
+static int parse_image(void) {
+    u64 got = 0;
+    long r;
+    u32 i;
+    char g[37], tg[37];
+    blank();
+    while(got < sizeof(disk) && (r = read(0, disk + got, (unsigned long)(sizeof(disk) - got))) > 0) got += (u64)r;
+    nblocks = (u32)(got / 512);
+    if(scan() != 0) { printf("unreadable\n"); return 1; }
+    printf("scheme %s\n", t.scheme == PART_SCHEME_GPT ? "gpt" : t.scheme == PART_SCHEME_MBR ? "mbr" : "none");
+    if(t.scheme == PART_SCHEME_GPT) {
+        part_guid_str(t.disk_guid, g);
+        printf("disk %s %lu %lu %u %u\n", g, (u_long)t.first_usable, (u_long)t.last_usable, t.backup_used, t.backup_bad);
+    } else if(t.scheme == PART_SCHEME_MBR) printf("disk 0x%08lx\n", (u_long)t.disk_sig);
+    for(i = 0; i < t.nparts; i++) {
+        const struct part_entry *e = &t.part[i];
+        if(t.scheme == PART_SCHEME_GPT) {
+            part_guid_str(e->type_guid, tg);
+            part_guid_str(e->guid, g);
+            printf("part %u %lu %lu %s %s %s\n", e->index, (u_long)e->start, (u_long)e->count, tg, g, e->name);
+        } else printf("part %u %lu %lu %x %u %u\n", e->index, (u_long)e->start, (u_long)e->count, e->type, e->active, e->extended);
+    }
+    {   /* one note per line */
+        char *p = notes, *nl;
+        while(*p && (nl = strchr(p, '\n'))) { *nl = 0; printf("note %s\n", p); p = nl + 1; }
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if(argc == 3 && !strcmp(argv[1], "--image")) return make_image(argv[2]);
+    if(argc == 2 && !strcmp(argv[1], "--parse")) return parse_image();
     test_names();
     test_blank_and_errors();
     test_mbr_primary();
     test_mbr_logical();
     test_gpt();
     test_fat_label();
+    test_words();
+    test_new();
+    test_mbr_changes();
+    test_gpt_changes();
+    test_plan_check();
     printf("PARTITION UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);
     return 0;
