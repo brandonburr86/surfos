@@ -36,8 +36,11 @@ USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
 USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
-USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit
+USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit surfsh
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
+# surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
+SURFSH_SRC   = $(wildcard user/surfsh/*.c)
+SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
 
 
 CC         = gcc
@@ -78,7 +81,7 @@ SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c)
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
-DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d)
+DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -207,6 +210,17 @@ $(BUILD)/user/bin/%: $(BUILD)/user/obj/%.o $(USER_CRT0) $(USER_LIB) user/user.ld
 
 # keep the program objects (make would delete them as intermediates and rebuild them every time)
 .SECONDARY: $(USER_PROGS:%=$(BUILD)/user/obj/%.o)
+
+# surfsh is linked from its own objects (this rule comes before the one-file pattern above)
+$(BUILD)/user/surfsh/%.o: user/surfsh/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/surfsh: $(SURFSH_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(SURFSH_OBJ) $(USER_LIB)
 
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
