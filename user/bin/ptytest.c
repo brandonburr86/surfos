@@ -23,8 +23,9 @@ ptytest pager             `pagetest 60` on an 80x10 pty: --More-- after every 9 
 ptytest flood             `pagetest 1000` on an 80x1024 pty, read only after a second: the
                           program waits for room in the master's buffer, and every line
                           arrives, in order
-ptytest hangup            `count 1000 100` on a pty; the master closed after the first
-                          numbers: the process is gone at once (procinfo), killed, and the
+ptytest hangup            the master closed while `count 1000 100` prints, while `pagetest`
+                          waits at --More--, and while `pagetest 3000` waits for room in the
+                          master's buffer: each is gone at once (procinfo), killed, and the
                           pty is free again
 ptytest hangup-call       the master closed 300 ms into `sleep -u 4000` (a kernel command
                           surfsh runs, which looks at nothing): no kill at once after the
@@ -43,11 +44,20 @@ ptytest fullqueue         the master's write never waits: 300 keys for a program
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
                           (POLLIN), after the end (POLLIN and POLLHUP); spawnpty of no
                           program (POLLHUP at once); a closed descriptor (POLLNVAL); a
-                          negative one (skipped); too many (EINVAL); the console; and a kill
-                          cuts a poll() with no timeout short at once
+                          negative one (skipped); too many (EINVAL); two masters and the
+                          console at once; and a kill cuts a poll() with no timeout short
 ptytest ps                procinfo(): every task
 ptytest detach            a child that detaches: init is its parent, PROC_DETACHED, and
                           wait() finds it is no child of this process any more
+ptytest detach-ctrlc      in a session, a program that detaches (ptytest sleeper) lives on
+                          when Ctrl+C cuts the next command short
+ptytest isolate           with the harness (@pty-isolate): a session's output is not shown
+                          here, the console's keys are not the session's, POLLIN on the
+                          console when a line is typed there
+ptytest selftest-hangup   by hand (about 30 s): the hangup during the self test's concurrent
+                          FAT test; /hda1 works afterwards
+ptytest session WORDS     by hand: surfsh on an 80x1024 pty runs the line WORDS; what the
+                          master read is shown (ptytest session selftest)
 ptytest kmsg              a line written to /dev/kmsg (the harness finds it with dmesg)
 */
 
@@ -343,35 +353,60 @@ static int mode_flood(void) {
     return st == 0 ? pass() : fail("pagetest's exit status");
 }
 
-static int mode_hangup(void) {
-    char *argv[] = { "count", "1000", "100", NULL };
+/* A program on a pty, in a state where it waits (until: a text the master reads first, or NULL to let it
+   fill the master's buffer); the master closed: it is gone within 2 s, killed, and the pty is free again */
+static int hangup_case(const char *what, char *const argv[], unsigned int size, const char *until) {
     struct procinfo pi;
     unsigned int t0;
     int m, pid, st = -99, n, gone = 0;
-    m = start("/initrd/bin/count", argv, 0, &pid);
-    if(m < 0) return fail("count did not start");
+    char path[48];
+    snprintf(path, sizeof(path), "/initrd/bin/%s", argv[0]);
+    outlen = 0;
+    out[0] = 0;
+    m = start(path, argv, size, &pid);
+    if(m < 0) return -1;
     n = ptyctl(m, PTY_INDEX, 0);
-    if(read_until(m, " 3 ", 0, 10000) != 1) return fail("count printed nothing");
-    if(!find_task(pid, &pi) || pi.state == PROC_DEAD || pi.tty != PROC_TTY_PTY + n)
-        return fail("count is not running on the pty");
-    printf("ptytest: count (pid %d) runs on pty %d (tty %d); the master is closed\n", pid, n, pi.tty);
+    if(until && read_until(m, until, 0, 10000) != 1) {
+        printf("ptytest: %s: \"%s\" never came\n", what, until);
+        return -1;
+    }
+    if(!until) msleep(1500);                             /* the buffer fills, and the program waits for room */
+    if(!find_task(pid, &pi) || pi.state == PROC_DEAD || pi.tty != PROC_TTY_PTY + n) {
+        printf("ptytest: %s: not running on the pty\n", what);
+        return -1;
+    }
+    printf("ptytest: %s (pid %d, pty %d, tty %d, %s); the master is closed\n", what, pid, n, pi.tty,
+           pi.state == PROC_BLOCKED ? "blocked" : pi.state == PROC_SLEEPING ? "sleeping" : "running");
     t0 = uptime();
     close(m);
-    while(uptime() - t0 < 3000) {
+    while(uptime() - t0 < 2000) {
         if(!find_task(pid, &pi) || pi.state == PROC_DEAD) {
             gone = 1;
             break;
         }
         msleep(10);
     }
-    if(!gone) return fail("count still runs 3 s after the hangup");
-    printf("ptytest: count is gone %u ms after the hangup\n", uptime() - t0);
-    if(wait(pid, &st) != pid || st != -1) return fail("count was not killed");
-    printf("ptytest: count's exit status %d (killed)\n", st);
+    if(!gone || wait(pid, &st) != pid || st != -1) {
+        printf("ptytest: %s: not killed within 2 s of the hangup\n", what);
+        return -1;
+    }
+    printf("ptytest: %s: gone %u ms after the hangup, exit status %d (killed)\n", what, uptime() - t0, st);
     m = openpty();
-    if(m < 0 || ptyctl(m, PTY_INDEX, 0) != n) return fail("the pty is not free again");
+    if(m < 0 || ptyctl(m, PTY_INDEX, 0) != n) {
+        printf("ptytest: %s: pty %d is not free again\n", what, n);
+        return -1;
+    }
     close(m);
-    printf("ptytest: pty %d is free again\n", n);
+    return 0;
+}
+
+static int mode_hangup(void) {
+    char *count[] = { "count", "1000", "100", NULL }, *paged[] = { "pagetest", "100", NULL };
+    char *flood[] = { "pagetest", "3000", NULL };
+    if(hangup_case("count", count, 0, " 3 ")) return fail("count");
+    if(hangup_case("pagetest at --More--", paged, (80 << 16) | 10, "--More--")) return fail("at --More--");
+    if(hangup_case("pagetest waiting for room", flood, (80 << 16) | 1024, NULL)) return fail("waiting for room");
+    printf("ptytest: each pty is free again after its hangup\n");
     return pass();
 }
 
@@ -532,10 +567,30 @@ static int mode_poll(void) {
     printf("ptytest: after the end and the last read: revents 0x%x (POLLIN | POLLHUP)\n", p[0].revents);
     if(read(m, out, 1) != 0) return fail("a read after the end did not return 0");
     close(m);
-    p[0].fd = 1;                                        /* the console: writes are always taken */
-    p[0].events = POLLOUT;
-    if(poll(p, 1, 0) != 1 || p[0].revents != POLLOUT) return fail("the console is not ready for writing");
-    printf("ptytest: the console: POLLOUT\n");
+    /* several at once: two masters, one with output, and the console (nothing typed: no POLLIN; POLLOUT) */
+    m = openpty();
+    r = openpty();
+    if(m < 0 || r < 0) return fail("openpty");
+    pid = spawnpty("/initrd/bin/hello", argv, r);
+    if(pid < 0) return fail("spawnpty hello");
+    p[0].fd = r;
+    p[0].events = POLLIN;
+    if(poll(p, 1, 5000) != 1) return fail("hello printed nothing");
+    p[0].fd = m;
+    p[0].events = POLLIN;
+    p[1].fd = r;
+    p[1].events = POLLIN;
+    p[2].fd = 0;
+    p[2].events = POLLIN;
+    p[3].fd = 1;
+    p[3].events = POLLOUT;
+    if(poll(p, 4, 0) != 2 || p[0].revents || !(p[1].revents & POLLIN) || p[2].revents || p[3].revents != POLLOUT)
+        return fail("four descriptors at once: not just the master with output and the console's POLLOUT");
+    printf("ptytest: two masters and the console at once: only the master with output, and the console's POLLOUT\n");
+    read_until(r, NULL, 0, 5000);
+    wait(pid, &st);
+    close(m);
+    close(r);
     /* a kill ends a poll() with no timeout at once (EINTR), not after the kill's 2 s */
     pid = spawn("/initrd/bin/ptytest", child);
     if(pid < 0) return fail("spawn ptytest pollwait");
@@ -584,6 +639,47 @@ static int mode_reuse(void) {
     if(!strstr(out, "TTY_GETSIZE 80x24")) return fail("a pty opened again is not 80x24");
     printf("ptytest: pty %d opened again: 80x24\n", n);
     return pass();
+}
+
+/* Ctrl+C on a session reaches the command in the foreground, not a process that detached from it */
+static int mode_detach_ctrlc(void) {
+    char *argv[] = { "surfsh", NULL };
+    struct procinfo pi;
+    int m, pid, st = -99, at, i, sleeper = -1;
+    m = start("/initrd/bin/surfsh", argv, (80 << 16) | 1024, &pid);
+    if(m < 0) return fail("surfsh did not start");
+    if(read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "/initrd/bin/ptytest sleeper 3000\r");
+    if(read_until(m, "No child processes", at, 10000) != 1) return fail("the sleeper did not leave surfsh");
+    at = after("No child processes", at);
+    if(read_until(m, PROMPT, at, 10000) != 1) return fail("no prompt after the sleeper");
+    at = after(PROMPT, at);
+    for(i = 0; procinfo(i, &pi) == 0; i++)
+        if(!strcmp(pi.name, "ptytest") && pi.ppid == 1 && (pi.flags & PROC_DETACHED) && pi.tty >= PROC_TTY_PTY) sleeper = pi.pid;
+    if(sleeper < 0) return fail("no detached sleeper on the pty");
+    printf("ptytest: a sleeper (pid %d) detached from surfsh, still on the pty (tty %d)\n", sleeper, pi.tty);
+    type(m, "sleep 5000\r");
+    if(read_until(m, "sleep 5000", at, 10000) != 1) return fail("sleep 5000 was not typed");
+    msleep(300);
+    type(m, "\003");
+    if(read_until(m, "sleep cut short", at, 10000) != 1) return fail("Ctrl+C did not cut sleep short");
+    if(!find_task(sleeper, &pi) || pi.state == PROC_DEAD) return fail("Ctrl+C reached the detached sleeper");
+    if(read_until(m, "PTYTEST SLEEPER DONE", at, 8000) != 1) return fail("the sleeper did not finish");
+    printf("ptytest: Ctrl+C cut sleep short; the detached sleeper lived on and finished\n");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
+    return pass();
+}
+
+/* ptytest detach-ctrlc's sleeper: it leaves surfsh, sleeps, and says it is done */
+static int mode_sleeper(int argc, char **argv) {
+    if(detach() < 0) return 1;
+    msleep((unsigned int)(argc > 2 ? atoi(argv[2]) : 3000));
+    printf("PTYTEST SLEEPER DONE\n");
+    return 0;
 }
 
 /* the master's write never waits (a server polling many masters must not stall on one session) */
@@ -655,6 +751,99 @@ static int mode_slowreader(int argc, char **argv) {
 /* ptytest reuse's first session: raw mode on, and gone */
 static int mode_rawexit(void) {
     return ttyctl(TTY_RAW, 1) < 0;
+}
+
+/* A session is kept apart from the console (with the harness, tools/qemu-run.py @pty-isolate): what it
+   prints is not shown here, a line typed on the console is this program's (poll() sees it queued) and
+   never the session's, and the session gets its own keys */
+static int mode_isolate(void) {
+    char *ask[] = { "pagetest", "ask", "0", NULL };
+    char line[64];
+    struct pollfd p;
+    int m, pid, st = -99;
+    m = start("/initrd/bin/pagetest", ask, 0, &pid);
+    if(m < 0 || read_until(m, "pagetest question: ", 0, 5000) != 1) return fail("the session asks nothing");
+    printf("ptytest: isolate: type a line on the console now\n");
+    fflush(stdout);
+    p.fd = 0;
+    p.events = POLLIN;
+    p.revents = 0;
+    if(poll(&p, 1, 15000) != 1 || !(p.revents & POLLIN)) return fail("no POLLIN on the console");
+    printf("ptytest: POLLIN on the console\n");
+    if(!fgets(line, sizeof(line), stdin)) return fail("nothing read on the console");
+    line[strcspn(line, "\r\n")] = 0;
+    printf("ptytest: the console read \"%s\"\n", line);
+    type(m, "pty-keys\r");
+    if(read_until(m, NULL, 0, 5000) != 1) return fail("the session did not end");
+    close(m);
+    wait(pid, &st);
+    if(!strstr(out, " pty-keys\n")) return fail("the session did not read its own keys");
+    if(*line && strstr(out, line)) return fail("the console's line reached the session");
+    printf("ptytest: the session read only its own keys, and nothing it printed was shown here\n");
+    return pass();
+}
+
+/* By hand (it runs the self test, about 30 s; not in the smoke test): the hangup while the self test
+   runs its concurrent FAT test, in a session. Its threads are on F1 and finish; the command ends at
+   its next look; the self test can be run again and /hda1 works. */
+static int mode_selftest_hangup(void) {
+    char *argv[] = { "surfsh", NULL }, *ls[] = { "ls", "/hda1", NULL };
+    struct procinfo pi;
+    int m, pid, st = -99, i, lspid, fatconc = 0, tty = -1;
+    unsigned int t0;
+    m = start("/initrd/bin/surfsh", argv, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    type(m, "selftest\r");
+    for(t0 = uptime(); uptime() - t0 < 60000 && !fatconc; msleep(5)) {
+        for(i = 0; procinfo(i, &pi) == 0; i++) {
+            if(strcmp(pi.name, "fatconc") || pi.state == PROC_DEAD) continue;
+            fatconc = pi.pid;
+            tty = pi.tty;
+        }
+        if(outlen > 60000) {                            /* the self test prints a lot: keep only the recent */
+            outlen = 0;
+            out[0] = 0;
+        }
+        if(!fatconc) read_until(m, "\001", 0, 1);       /* keep the session's output flowing */
+    }
+    if(!fatconc) return fail("the concurrent FAT test never started");
+    printf("ptytest: fatconc (pid %d) on tty %d; the master is closed\n", fatconc, tty);
+    close(m);
+    t0 = uptime();
+    while(uptime() - t0 < 30000 && find_task(pid, &pi) && pi.state != PROC_DEAD) msleep(50);
+    if(find_task(pid, &pi) && pi.state != PROC_DEAD) return fail("surfsh still runs 30 s after the hangup");
+    printf("ptytest: surfsh ended %u ms after the hangup\n", uptime() - t0);
+    wait(pid, &st);
+    lspid = spawn("/initrd/bin/ls", ls);
+    for(t0 = uptime(); uptime() - t0 < 5000 && find_task(lspid, &pi) && pi.state != PROC_DEAD; ) msleep(20);
+    if(find_task(lspid, &pi) && pi.state != PROC_DEAD) return fail("ls /hda1 hangs: a lock was left held");
+    wait(lspid, &st);
+    printf("ptytest: ls /hda1 works afterwards\n");
+    return pass();
+}
+
+/* By hand: surfsh on an 80x1024 pty runs one line (selftest, say); what the master read is shown */
+static int mode_session(int argc, char **argv) {
+    char *sargv[] = { "surfsh", NULL };
+    char line[256];
+    int m, pid, st = -99, at, i;
+    if(argc < 3) return fail("usage: ptytest session WORDS...");
+    for(line[0] = 0, i = 2; i < argc; i++) {
+        strlcat(line, argv[i], sizeof(line));
+        strlcat(line, i + 1 < argc ? " " : "\r", sizeof(line));
+    }
+    m = start("/initrd/bin/surfsh", sargv, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, line);
+    answer_more = 1;
+    if(read_until(m, PROMPT, at, 300000) != 1) return fail("no prompt after the line");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
+    show(at);
+    return pass();
 }
 
 /* ptytest poll's child: a poll() on a fresh pty that nothing ends (but a kill) */
@@ -747,7 +936,12 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "reuse")) return mode_reuse();
     if(!strcmp(mode, "fullqueue")) return mode_fullqueue();
     if(!strcmp(mode, "slowreader")) return mode_slowreader(argc, argv);
+    if(!strcmp(mode, "detach-ctrlc")) return mode_detach_ctrlc();
+    if(!strcmp(mode, "sleeper")) return mode_sleeper(argc, argv);
     if(!strcmp(mode, "rawexit")) return mode_rawexit();
+    if(!strcmp(mode, "isolate")) return mode_isolate();
+    if(!strcmp(mode, "selftest-hangup")) return mode_selftest_hangup();
+    if(!strcmp(mode, "session")) return mode_session(argc, argv);
     if(!strcmp(mode, "flood")) return mode_flood();
     if(!strcmp(mode, "poll")) return mode_poll();
     if(!strcmp(mode, "pollwait")) return mode_pollwait();
@@ -756,6 +950,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
     fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
-                    "       tcpecho [PORT] | reuse | fullqueue | poll | ps | detach | kmsg\n");
+                    "       tcpecho [PORT] | reuse | fullqueue | poll | ps | detach | detach-ctrlc | isolate | kmsg |\n"
+                    "       selftest-hangup | session WORDS\n");
     return 2;
 }
