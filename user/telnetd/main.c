@@ -117,30 +117,48 @@ static int listening(int fd) {
     return poll(&p, 1, 0) == 0;
 }
 
-/* the server's sessions: the tasks on a pseudo-terminal whose parent it is (each session's
-   surfsh); their pids into pids (up to max), listed when list; how many */
-static int sessions(int server, int list, int *pids, int max) {
+struct shell {
+    int pid, pty;
+    char name[16];
+};
+
+/* the server's session shells: the tasks on a pseudo-terminal whose parent it is; into sh (PTY_MAX
+   at most), how many. A task collected while the list is read (by index) shifts the rest and can
+   hide one, so the list is read SCANS times and the reading that saw the most is kept. */
+static int shells_of(int server, struct shell *sh) {
+    struct shell cur[PTY_MAX];
     struct procinfo pi;
-    int i, n = 0;
-    for(i = 0; task(i, &pi) > 0; i++) {
-        if(pi.ppid != server || pi.tty < PROC_TTY_PTY || pi.state == PROC_DEAD) continue;
-        if(list) printf("    pty%-2d %s (pid %d)\n", pi.tty - PROC_TTY_PTY, pi.name, pi.pid);
-        if(n < max) pids[n] = pi.pid;
-        n++;
+    int i, k, n, best = -1;
+    for(k = 0; k < SCANS; k++) {
+        for(i = n = 0; task(i, &pi) > 0; i++) {
+            if(pi.ppid != server || pi.tty < PROC_TTY_PTY || pi.state == PROC_DEAD) continue;
+            if(n < PTY_MAX) {
+                cur[n].pid = pi.pid;
+                cur[n].pty = pi.tty - PROC_TTY_PTY;
+                memcpy(cur[n].name, pi.name, sizeof(cur[n].name));
+                cur[n].name[sizeof(cur[n].name) - 1] = 0;
+            }
+            n++;
+        }
+        if(n > best) {
+            best = n;
+            memcpy(sh, cur, sizeof(cur));
+        }
     }
-    return n;
+    return best > PTY_MAX ? PTY_MAX : best;
 }
 
 static int cmd_status(void) {
-    int pid = find_server(), n;
+    struct shell sh[PTY_MAX];
+    int pid = find_server(), n, i;
     if(pid < 0) return failed("procinfo");
     if(!pid) {
         printf("telnetd: not running (telnetd on starts it)\n");
         return 0;
     }
-    n = sessions(pid, 0, NULL, 0);
+    n = shells_of(pid, sh);
     printf("telnetd: running (pid %d), %d session shell%s%s\n", pid, n, n == 1 ? "" : "s", n ? ":" : "");
-    sessions(pid, 1, NULL, 0);
+    for(i = 0; i < n; i++) printf("    pty%-2d %s (pid %d)\n", sh[i].pty, sh[i].name, sh[i].pid);
     return 0;
 }
 
@@ -212,14 +230,15 @@ static int cmd_on(const char *word) {
 }
 
 static int cmd_off(void) {
-    int pid = find_server(), pids[PTY_MAX], n, k, left, waited, e;
+    struct shell sh[PTY_MAX];
+    int pid = find_server(), n, k, left, waited, e;
     struct procinfo pi;
     if(pid < 0) return failed("procinfo");
     if(!pid) {
         printf("telnetd: not running\n");
         return 1;
     }
-    n = sessions(pid, 0, pids, PTY_MAX);
+    n = shells_of(pid, sh);
     /* the kernel's log says it before the kill (the server's own log ends with it): a telnetd
        off typed in a telnet session hangs up with that session as the server ends */
     klog("telnetd: telnetd off stops the server (pid %d, %d session shell%s)", pid, n, n == 1 ? "" : "s");
@@ -232,7 +251,7 @@ static int cmd_off(void) {
     /* the server, then its sessions' shells (they end as their pseudo-terminals hang up) */
     for(waited = 0; waited < WAIT_MS; waited += STEP_MS) {
         left = find_task(pid, &pi);
-        for(k = 0; k < n && k < PTY_MAX; k++) left += find_task(pids[k], &pi);
+        for(k = 0; k < n; k++) left += find_task(sh[k].pid, &pi);
         if(!left) break;
         msleep(STEP_MS);
     }

@@ -26,20 +26,27 @@ POLLOUT only while that holds something; the connection is written only when POL
 says it takes bytes. The pseudo-terminal is read, in pieces of PIECE bytes (at most twice
 that and one more once encoded), only while the buffer has room for a piece and OUT_KEEP
 for answers: a client that reads slowly holds back its own session, whose programs then
-wait to print, and the other sessions and new connections go on. A client that takes
-nothing for STALL_MS while output waits for it is gone or stuck: its session is ended, so
+wait to print, and the other sessions and new connections go on. A client that has taken
+nothing for STALL_MS while output waits for it is stalled: it may be gone, asleep, behind a
+buffering middlebox or reading slowly, so its session goes on, but when a new connection
+comes and every session is taken, the session stalled longest is ended to make room, so
 that clients which stop reading cannot keep every session for good. The answers to one
 read from the client go into the buffer whole or not at all (a client that sends without
 reading loses answers, never a part of one).
 
-The other way: the client is always read, so that its Ctrl+C always arrives, and what it
-types waits in a buffer of KEYS_SIZE keys (what does not fit is dropped, as the keyboard
-drops keys) until the master takes it. A write on the master never waits: it takes the
-keys that fit in the terminal's input queue, and poll() is asked about the master's
-POLLOUT only while keys wait. A Ctrl+C (typed, or IAC IP) drops the keys that waited
-before it and is written at once: in line mode it always fits (and drops what was typed
-ahead), and when it does not (raw mode, a full queue) it waits first in line. So a client
-that types faster than its session reads holds back only its own keys.
+The other way: what the client types waits in a buffer of KEYS_SIZE keys until the master
+takes it. A write on the master never waits: it takes the keys that fit in the terminal's
+input queue, and poll() is asked about the master's POLLOUT only while keys wait. While the
+master keeps taking keys (it took some within KEYS_IDLE_MS), the client is read only while
+the buffer has room for a whole read: TCP holds the rest back at the client, so a paste
+into a program that reads arrives whole. Once the master has taken nothing for KEYS_IDLE_MS
+the client is read whatever comes, and what does not fit is dropped, as a keyboard drops
+keys: its Ctrl+C still arrives. A Ctrl+C (typed, or IAC IP) drops the keys that waited
+from earlier reads; the keys of its own read that come before it are written first (as far
+as the master takes them), then the Ctrl+C at once: in line mode it always fits (it ends an
+escape sequence in progress and drops what was typed ahead), and when it does not (raw
+mode, a full queue) it waits first in line. So a client that types faster than its session
+reads holds back only its own keys.
 
 The shells are collected here (waitpid) after every poll(): while a session's shell has
 ended or is ending, poll() waits REAP_MS at most, so that none stays a zombie long. When
@@ -65,11 +72,13 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0, surfsh pid
 #define PIECE    512                    /* the most of a session's output read at once */
 #define OUT_SIZE 4096                   /* what waits for the client */
 #define OUT_KEEP 256                    /* the last of it, kept for answers to the client's negotiation */
-#define STALL_MS 60000                  /* output waiting this long with nothing taken: the session ends */
+#define STALL_MS 60000                  /* output waiting this long with nothing taken: a stalled session */
 #define REAP_MS  200                    /* poll()'s longest wait while a shell is to be collected soon */
 #define TICK_MS  1000                   /* ... while sessions run (a shell that ended while its output waits) */
 #define PAUSE_MS 1000                   /* the listening descriptor rests this long after accept() failed */
 #define KEYS_SIZE 1024                  /* typed keys the master has not taken yet */
+#define KEYS_IDLE_MS 1000               /* a master that took no key for this long is not reading: drop, not hold */
+#define READ_SIZE 512                   /* the most read from a client at once */
 
 struct session {
     int conn, master;                   /* conn -1: the slot is free; master -1 once the shell has ended */
@@ -80,6 +89,7 @@ struct session {
     unsigned char out[OUT_SIZE];        /* for the client, not taken by the connection yet */
     int keys_len;
     unsigned char keys[KEYS_SIZE];      /* typed, not taken by the master yet */
+    unsigned int keys_at;               /* uptime() when the master last took keys (or the session began) */
     struct telnet tn;
 };
 
@@ -139,8 +149,21 @@ static void end_session(struct session *s, const char *why) {
     say("telnetd: session %d ended (%s)", s->num, why);
 }
 
+/* the session whose client has taken nothing for longest while output waited, STALL_MS or more; NULL when none */
+static struct session *stalled_longest(void) {
+    struct session *best = NULL;
+    unsigned int now = uptime();
+    int i;
+    for(i = 0; i < MAX_SESSIONS; i++) {
+        struct session *s = &sessions[i];
+        if(s->conn < 0 || !s->out_len || now - s->since < STALL_MS) continue;
+        if(!best || now - s->since > now - best->since) best = s;
+    }
+    return best;
+}
+
 static void new_session(int lfd) {
-    char *argv[] = { "surfsh", "-l", NULL }, ip[16], peer[24], why[64];
+    char *argv[] = { "surfsh", "-l", NULL }, ip[16], peer[24], why[96];
     unsigned char opening[TN_OPENING];
     struct session *s = NULL;
     struct netaddr from;
@@ -160,6 +183,11 @@ static void new_session(int lfd) {
     }
     snprintf(peer, sizeof(peer), "%s:%u", ipstr(from.ip, ip), (unsigned int)from.port);
     for(i = 0; i < MAX_SESSIONS && !s; i++) if(sessions[i].conn < 0) s = &sessions[i];
+    if(!s && (s = stalled_longest()) != NULL) {         /* every session taken: one stalled makes room */
+        snprintf(why, sizeof(why), "the client took nothing for %u s, and a new connection needed the place",
+                 (uptime() - s->since) / 1000);
+        end_session(s, why);
+    }
     if(!s) {
         snprintf(why, sizeof(why), "%d sessions are open already; try again later.", MAX_SESSIONS);
         refuse(conn, why);
@@ -168,8 +196,8 @@ static void new_session(int lfd) {
     }
     master = openpty();
     if(master < 0) {
+        say("telnetd: %s refused: openpty: %s", peer, strerror(errno));     /* before refuse() changes errno */
         refuse(conn, "no pseudo-terminal is free; try again later.");
-        say("telnetd: %s refused: openpty: %s", peer, strerror(errno));
         return;
     }
     ptyctl(master, PTY_SETSIZE, (80u << 16) | 24u);
@@ -186,6 +214,7 @@ static void new_session(int lfd) {
     s->pid = pid;
     s->ended = 0;
     s->out_len = s->keys_len = 0;
+    s->keys_at = uptime();
     s->pty = ptyctl(master, PTY_INDEX, 0);
     s->num = ++sessions_ever;
     telnet_init(&s->tn);
@@ -202,14 +231,24 @@ static void to_pty(struct session *s) {
     }
     memmove(s->keys, s->keys + n, (size_t)(s->keys_len - n));
     s->keys_len -= (int)n;
+    s->keys_at = uptime();
 }
 
-/* typed keys, behind those that wait; a Ctrl+C drops those before it and goes to the master at once */
+/* is the client to wait? While the master keeps taking keys, until the buffer has room for a whole read */
+static int keys_held(const struct session *s, unsigned int now) {
+    return s->master >= 0 && KEYS_SIZE - s->keys_len < READ_SIZE && now - s->keys_at < KEYS_IDLE_MS;
+}
+
+/* typed keys, behind those that wait. A Ctrl+C drops the keys that waited from earlier reads; this
+   read's keys before it go to the master first, in order, as far as it takes them now (it never
+   waits; the rest is dropped), so that in a program where ^C is a key (edit) or at the prompt
+   ("echo x\r" then ^C) nothing typed just before it is lost; then the Ctrl+C, at once */
 static void type_keys(struct session *s, const unsigned char *p, int n) {
     int i, room;
     for(i = n - 1; i >= 0 && p[i] != 0x03; i--);
     if(i >= 0) {
         s->keys_len = 0;
+        if(i > 0 && write(s->master, p, (size_t)i) > 0) s->keys_at = uptime();
         p += i;
         n -= i;
     }
@@ -223,15 +262,18 @@ static void type_keys(struct session *s, const unsigned char *p, int n) {
 /* what the client sent (the read does not wait: poll() said so): keys for the session, answers
    for the client, perhaps a new size; or the end of the connection, the client's or an error's */
 static void from_client(struct session *s) {
-    unsigned char in[512], data[512], reply[OUT_KEEP];
+    unsigned char in[READ_SIZE], data[READ_SIZE], reply[OUT_KEEP];
     struct tn_buf d = { data, 0, sizeof(data) }, r = { reply, 0, sizeof(reply) };
     ssize_t n = read(s->conn, in, sizeof(in));
     if(n <= 0) {
         end_session(s, n < 0 ? strerror(errno) : "the client left");
         return;
     }
+    /* only the answers that will be queued are made: one made and then dropped would use up the NUL
+       that a CR at the end of the session's output waits for (telnet.c) */
+    if(r.size > OUT_SIZE - s->out_len) r.size = OUT_SIZE - s->out_len;
     telnet_recv(&s->tn, in, (int)n, &d, &r);
-    queue(s, reply, r.len);             /* the answers whole, or none when the client does not read */
+    queue(s, reply, r.len);             /* the answers, whole: they fit */
     if(s->master < 0) return;           /* the shell has ended: nothing to type to */
     if(s->tn.resized) {
         int cols = s->tn.cols < COLS_MIN ? COLS_MIN : s->tn.cols > COLS_MAX ? COLS_MAX : s->tn.cols;
@@ -270,17 +312,15 @@ static void to_client(struct session *s) {
     if(s->ended && !s->out_len) end_session(s, "the shell ended");
 }
 
-/* how long poll() may wait: until a session's stall limit, the end of the listening
+/* how long poll() may wait: until a held client is to be read again, the end of the listening
    descriptor's rest, or a look for shells to collect; -1: until something happens */
 static int wait_ms(unsigned int now) {
     int i, ms = -1, running = 0;
     for(i = 0; i < MAX_SESSIONS; i++) {
         const struct session *s = &sessions[i];
-        if(s->conn < 0) continue;
-        if(s->master >= 0) running++;
-        if(s->out_len) {
-            unsigned int waited = now - s->since;
-            int left = waited >= STALL_MS ? 0 : (int)(STALL_MS - waited);
+        if(s->conn >= 0 && s->master >= 0) running++;
+        if(s->conn >= 0 && keys_held(s, now)) {         /* the client is read again once the master stops taking */
+            int left = (int)(s->keys_at + KEYS_IDLE_MS - now);
             if(ms < 0 || left < ms) ms = left;
         }
     }
@@ -317,7 +357,7 @@ int serve(int lfd, int port) {
             struct session *s = &sessions[i];
             if(s->conn < 0) continue;
             fds[n].fd = s->conn;
-            fds[n].events = s->out_len ? POLLIN | POLLOUT : POLLIN;
+            fds[n].events = (keys_held(s, now) ? 0 : POLLIN) | (s->out_len ? POLLOUT : 0);   /* POLLHUP, POLLERR come anyway */
             fds[n].revents = 0;
             master[n] = 0;
             who[n++] = s;
@@ -348,12 +388,6 @@ int serve(int lfd, int port) {
             if(s->conn < 0) continue;
             if(ev & (POLLIN | POLLHUP | POLLERR)) from_client(s);   /* the read says which: data, the end, an error */
             else if(ev & POLLNVAL) end_session(s, "the connection broke");
-        }
-        now = uptime();
-        for(i = 0; i < MAX_SESSIONS; i++) {
-            struct session *s = &sessions[i];
-            if(s->conn >= 0 && s->out_len && now - s->since >= STALL_MS)
-                end_session(s, "the client took nothing for 60 s");
         }
         if(l >= 0 && fds[l].revents) new_session(lfd);
         for(;;) {                                   /* the shells of sessions that ended */

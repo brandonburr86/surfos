@@ -456,12 +456,13 @@ SMOKE = [
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
-    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none
-    # and --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
-    # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
-    # served; a client whose keys flood a session that reads none; the rest of the protocol in one session that ends
-    # with a reset; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the
-    # server's log.
+    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
+    # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
+    # sessions at once, status, off ending both, on again; four, and a fifth refused; a client that stops reading while
+    # a second session is served; a client whose keys flood a session that reads none; a paste into edit, whole; keys
+    # and a Ctrl+C in one segment; a pasted block at the prompt, its first line only; the rest of the protocol in one
+    # session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
+    # port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
@@ -473,7 +474,12 @@ SMOKE = [
     ('@telnet-full', []),
     ('@telnet-stalled', []),
     ('@telnet-flood', []),
+    ('@telnet-paste', []),
+    ('@telnet-ctrlc-keys', []),
+    ('@telnet-paste-lines', []),
+    ('@surfsh-crlf', []),
     ('@telnet-protocol', []),
+    ('@telnet-binary', []),
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -1109,7 +1115,7 @@ CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
 
 # ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------
 TN_IAC, TN_DONT, TN_DO, TN_WONT, TN_WILL, TN_SB, TN_SE = 255, 254, 253, 252, 251, 250, 240
-TO_ECHO, TO_SGA, TO_NAWS = 1, 3, 31
+TO_BINARY, TO_ECHO, TO_SGA, TO_NAWS = 0, 1, 3, 31
 
 
 class Telnet:
@@ -1117,10 +1123,13 @@ class Telnet:
     server echo and suppress go-ahead (DO), suppresses go-ahead itself and tells its window size when asked
     (WILL, then NAWS), and refuses anything else once. What the session printed is kept in self.data with
     the IAC sequences taken out (IAC IAC is the byte 255, CR NUL a CR); self.raw has everything as it came.
-    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
+    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off.
+    With binary, the client agrees to send in binary mode (WILL BINARY), as Apple's telnet does, and then sends
+    Return as a CR alone."""
 
-    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
+    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None, binary=False):
         self.sock = self._connect(host, port, timeout, rcvbuf)
+        self.binary = binary
         self.cols, self.rows = cols, rows
         self.raw, self.data = b'', b''
         self.cursor, self.more_at, self.auto_more = 0, 0, True
@@ -1170,7 +1179,8 @@ class Telnet:
     def _option(self, verb, opt):
         side = 'him' if verb in (TN_WILL, TN_WONT) else 'us'
         if verb in (TN_WILL, TN_DO):
-            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else (TO_SGA, TO_NAWS))
+            ours = (TO_SGA, TO_NAWS) + ((TO_BINARY,) if self.binary else ())
+            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else ours)
             if (side, opt) in self.agreed:
                 return                          # nothing changes: nothing to say
             if not wanted:
@@ -1263,7 +1273,8 @@ class Telnet:
     def send(self, keys):
         """keys as typed: a string (a newline is Return, sent as CR NUL; 0xff doubled) or bytes as they are"""
         if isinstance(keys, str):
-            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', b'\r\0')
+            enter = b'\r' if ('us', TO_BINARY) in self.agreed else b'\r\0'     # binary mode: a CR alone
+            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', enter)
         self._out(keys)
 
     def wait_closed(self, timeout=10):
@@ -1388,9 +1399,10 @@ def telnet_full_check(q):
 def telnet_stalled_check(q):
     """a client that stops reading while its session prints without end (hexdump /dev/zero in the background, which
     is not paged): however much the host's side takes first, the connection's send buffer in the guest fills and
-    stays full (netstat: out 8192), and the server holds that session back and serves a second session all the
-    same. When the first client reads again its session goes on: the hexdump is killed from the console, and an
-    Enter in the session brings the report of it and a prompt; every line arrived, in order. Then the client goes."""
+    stays full (netstat: out 8192), and the server holds that session back (and keeps it: a stalled session is ended
+    only when a new connection needs its place) and serves a second session all the same. When the first client
+    reads again its session goes on: the hexdump is killed from the console, and an Enter in the session brings the
+    report of it and a prompt; every line arrived, in order. Then the client goes."""
     a, b = Telnet(q.ports['telnet'], rcvbuf=4096), None
     full = re.compile(rb'local 23\s+remote [0-9.]+:[0-9]+\s+rx\s+[0-9]+\s+tx\s+[0-9]+\s+retrans\s+[0-9]+\s+'
                       rb'buf\s+in\s+[0-9]+\s+out\s+8192')
@@ -1403,8 +1415,8 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
             m = re.search(rb'\[(\d+)\] started', a.data)
             pid = int(m.group(1)) if m else 0
-        stalled, deadline = False, time.time() + 90
-        while ok and not stalled and time.time() < deadline:
+        stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
+        while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
             start = len(q.transcript)
             q.send('netstat\n')
             ok = q.expect(PROMPT, 10)
@@ -1436,14 +1448,12 @@ def telnet_stalled_check(q):
                     quiet_since = time.time()
             a.send('\n')
             ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
-            # the lines from the prompt after "[pid] started" on: the job's first lines may come before that notice
-            # and the prompt, which then cut one of them
-            started = re.search(rb'\] started', a.data)
-            prompt = TELNET_ROOT.search(a.data, started.end()) if started else None
-            offsets = [int(x, 16) for x in line.findall(a.data, prompt.end() if prompt else 0)]
-            ok = ok and len(offsets) > 2000 and offsets[0] < 0x10000 and \
-                offsets == list(range(offsets[0], offsets[0] + 16 * len(offsets), 16))
-            why = why or ('' if ok else ' (%d lines, not all in order)' % len(offsets))
+            # every line, in order: the job's first lines can come while surfsh still writes "[pid] started" and its
+            # prompt, which then cut a line or three of them; past those, no line may be missing
+            offsets = [int(x, 16) for x in line.findall(a.data)]
+            gaps = [(i, offsets[i + 1] - offsets[i]) for i in range(len(offsets) - 1) if offsets[i + 1] != offsets[i] + 16]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i < 1000 and 16 < d <= 64 for i, d in gaps)
+            why = why or ('' if ok else ' (%d lines, gaps %s)' % (len(offsets), gaps[:3]))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
     finally:
@@ -1457,7 +1467,8 @@ def telnet_flood_check(q):
     """a client that types without end into a session that reads nothing (sleep 100000, a kernel command): the server
     keeps reading it, holds what the pseudo-terminal does not take and drops the rest, and a second session stays
     quick all the while (an echo, a hexdump of a program paged on a tall window); a Ctrl+C from the flooding client
-    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed"""
+    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed. Then
+    400 cursor keys (ESC [ A) fill the queue, and a Ctrl+C after them still ends another sleep"""
     a, b = Telnet(q.ports['telnet']), None
     stop, sent = threading.Event(), [0]
 
@@ -1504,6 +1515,20 @@ def telnet_flood_check(q):
             a.send('echo after-flood\n')
             ok = a.expect('\r\nafter-flood\r\n', 10) and a.expect(TELNET_ROOT, 10)
             why = why or ('' if ok else ' (keys typed ahead were left)')
+        if ok:                                      # cursor keys fill the queue, the rest waits: Ctrl+C still ends it
+            a.send('sleep 100000\n')
+            ok = a.expect('sleep 100000', 10)
+        if ok:
+            time.sleep(0.5)
+            a._out(b'\x1b[A' * 400)
+            time.sleep(1.5)
+            a.cursor = len(a.data)
+            a._out(b'\x03')
+            ok = a.expect(PROMPT, 15)
+            why = why or ('' if ok else ' (a Ctrl+C after cursor keys did not end the sleep)')
+        if ok:
+            a.send('echo after-arrows\n')
+            ok = a.expect('\r\nafter-arrows\r\n', 10) and a.expect(TELNET_ROOT, 10)
         if ok and b:
             b.send('exit\n')
             ok = b.wait_closed(10)
@@ -1606,6 +1631,141 @@ def telnet_protocol_check(q):
             'a reset; no zombie after', ok)
 
 
+def telnet_binary_check(q):
+    """a client that agrees to send in binary mode (DO BINARY is in the server's opening: Apple's telnet otherwise
+    strips the eighth bit of what is typed) and then sends Return as a CR alone: UTF-8 typed arrives whole, the
+    command runs"""
+    t = Telnet(q.ports['telnet'], binary=True)
+    try:
+        ok = t.expect(TELNET_ROOT, 15) and bytes([TN_IAC, TN_DO, TO_BINARY]) in t.raw and ('us', TO_BINARY) in t.agreed
+        if ok:
+            t.send('echo caf\u00e9-ok\n')
+            ok = t.expect('\r\ncaf\u00e9-ok\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a client in binary mode: UTF-8 typed, and Return as a CR alone, run the command', ok)
+
+
+def telnet_quiet(t, quiet, limit):
+    """read until the session has printed nothing for quiet seconds (at most limit); True if it did go quiet"""
+    deadline, since = time.time() + limit, time.time()
+    while time.time() < deadline and not t.closed:
+        n = len(t.data)
+        t.pump(0.1)
+        if len(t.data) != n:
+            since = time.time()
+        elif time.time() - since >= quiet:
+            return True
+    return False
+
+
+def telnet_paste_check(q):
+    """a paste of 60 lines, 3000 bytes in one go, into a program that reads every key (edit, in raw mode): while the
+    editor takes keys the server reads the client only as far as its key buffer has room, so TCP holds the rest at
+    the client and nothing is dropped; saved, the file has the 60 lines"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    lines = ['line %02d ' % i + 'x' * 41 for i in range(60)]
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t.send('/initrd/bin/rm /hda1/PASTE.TXT\n')    # from a run before, if there was one
+            ok = t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('/initrd/bin/edit /hda1/PASTE.TXT\n')
+            ok = telnet_quiet(t, 1.0, 20)               # the editor's screen
+        if ok:
+            t._out(''.join(line + '\r' for line in lines).encode())
+            ok = telnet_quiet(t, 2.0, 120)              # every key taken and drawn
+        if ok:
+            t._out(b'\x13')                             # ^S: save
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x11')                             # ^Q: quit
+            ok = t.expect(TELNET_ROOT, 20)
+        if ok:
+            mark = len(t.data)
+            t.send('/initrd/bin/cat /hda1/PASTE.TXT\n')
+            ok = t.expect(TELNET_ROOT, 20)
+            got = [int(x) for x in re.findall(rb'line (\d\d) x{41}\r\n', t.data[mark:])]
+            ok = ok and got == list(range(60))
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a paste of 60 lines (3000 bytes) into edit arrives whole', ok)
+
+
+def telnet_ctrlc_keys_check(q):
+    """keys and a Ctrl+C in one segment: those before the Ctrl+C are not lost. At the prompt, "echo RAWKEYS-1",
+    Return and a Ctrl+C sent together run the command; in edit, where ^C is a key, "hello" and ^C sent together leave
+    hello in the file"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t._out(b'echo RAWKEYS-1\r\0\x03')
+            ok = t.expect('\r\nRAWKEYS-1\r\n', 10) and t.expect(TELNET_ROOT, 10)
+            telnet_quiet(t, 0.5, 10)                    # the ^C after the Enter was the rest of a "paste": the
+        if ok:                                          # terminal skips what comes until a pause (TTY_SKIP)
+            t.send('/initrd/bin/rm /hda1/CTRLC.TXT\n')     # from a run before, if there was one
+            ok = t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('/initrd/bin/edit /hda1/CTRLC.TXT\n')
+            ok = telnet_quiet(t, 1.0, 20)
+        if ok:
+            t._out(b'hello\x03')                        # ^C in edit: where the cursor is
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x13')                             # ^S: save
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x11')                             # ^Q: quit
+            ok = t.expect(TELNET_ROOT, 20)
+        if ok:
+            t.send('/initrd/bin/cat /hda1/CTRLC.TXT\n')
+            ok = t.expect('\r\nhello\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: keys sent with a Ctrl+C in one segment are kept: a command at the prompt, text in edit', ok)
+
+
+def surfsh_crlf_check(q):
+    """Return as CR LF on the serial line, as a serial terminal sends it: the LF right after the CR is part of the
+    Enter, not the rest of a paste, so it starts no skip and a command typed at once after the prompt runs"""
+    q.ser.sendall(b'echo CRLF-A\r\n')
+    ok = q.expect('CRLF-A\r\n', 10) and q.expect(PROMPT, 10)
+    q.ser.sendall(b'echo CRLF-B\r\n')
+    ok = q.expect('CRLF-B\r\n', 10) and q.expect(PROMPT, 10) and ok
+    return ('surfsh: Return as CR LF on the serial line starts no skip: the next command, typed at once, runs', ok)
+
+
+def telnet_paste_lines_check(q):
+    """a pasted block of 40 lines at the prompt runs its first line and nothing else (surfsh drops the rest of what it
+    read, the terminal skips the rest of the paste); a command typed after a pause runs"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            mark = len(t.data)
+            t._out(b'echo ONE\r' + b''.join(b'echo LINE%02d\r' % i for i in range(2, 41)))
+            ok = t.expect('\r\nONE\r\n', 10) and t.expect(TELNET_ROOT, 10)
+            telnet_quiet(t, 1.0, 10)
+            ok = ok and b'not found' not in t.data[mark:] and b'\r\nLINE' not in t.data[mark:]
+        if ok:
+            t.send('echo TWO\n')
+            ok = t.expect('\r\nTWO\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a pasted block of 40 lines runs its first line only; a command after a pause runs', ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1642,7 +1802,11 @@ def telnet_port_busy_check(q):
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
-                       '@telnet-flood': telnet_flood_check, '@telnet-protocol': telnet_protocol_check,
+                       '@telnet-flood': telnet_flood_check, '@telnet-paste': telnet_paste_check,
+                       '@telnet-ctrlc-keys': telnet_ctrlc_keys_check,
+                       '@telnet-paste-lines': telnet_paste_lines_check, '@surfsh-crlf': surfsh_crlf_check,
+                       '@telnet-protocol': telnet_protocol_check,
+                       '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 

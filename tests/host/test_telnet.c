@@ -1,8 +1,9 @@
 /* Host-side unit tests for user/telnetd/telnet.c, telnetd's telnet protocol: the opening
-   negotiation; options answered once and never in a loop (RFC 1143), also against a client
-   that answers everything; commands, sub-negotiations and CR pairs split across reads at
-   every byte; IAC IAC, IP and BRK as Ctrl+C, EC and EL as DEL and Ctrl+U, AYT; NAWS sizes,
-   and payloads of another length ignored; answers whole or not at all when their room is
+   negotiation (BINARY asked of the client, the 8 bits passing once it agrees); options
+   answered once and never in a loop (RFC 1143), also against a client that answers
+   everything; commands, sub-negotiations and CR pairs split across reads at every byte;
+   IAC IAC, IP and BRK as Ctrl+C, EC and EL as DEL and Ctrl+U, AYT; NAWS sizes, and
+   payloads of another length ignored; answers whole or not at all when their room is
    short; and the output side (LF as CR LF, a CR alone as CR NUL, 255 doubled), checked
    against a receiver. Built from the same file as the program and run by `make unittest`. */
 #include <stdio.h>
@@ -52,15 +53,23 @@ static struct telnet fresh(void) {
 }
 
 static void test_opening(void) {
-    static const unsigned char want[] = { 255, 251, 1, 255, 251, 3, 255, 253, 3, 255, 253, 31 };
+    static const unsigned char want[] = { 255, 251, 1, 255, 251, 3, 255, 253, 3, 255, 253, 31, 255, 253, 0 };
+    static const unsigned char will_binary[] = { 255, 251, 0 }, do_binary[] = { 255, 253, 0 }, wont_binary[] = { 255, 252, 0 };
     struct telnet t;
     unsigned char out[TN_OPENING];
     int n;
     telnet_init(&t);
     n = telnet_opening(&t, out);
-    check(n == 12 && !memcmp(out, want, 12), "the opening: WILL ECHO, WILL SGA, DO SGA, DO NAWS");
+    check(n == 15 && !memcmp(out, want, 15), "the opening: WILL ECHO, WILL SGA, DO SGA, DO NAWS, DO BINARY");
     check(t.us[TO_ECHO] == TN_WANTYES && t.us[TO_SGA] == TN_WANTYES, "the opening: ECHO and SGA asked on our side");
-    check(t.him[TO_SGA] == TN_WANTYES && t.him[TO_NAWS] == TN_WANTYES, "the opening: SGA and NAWS asked of the client");
+    check(t.him[TO_SGA] == TN_WANTYES && t.him[TO_NAWS] == TN_WANTYES && t.him[TO_BINARY] == TN_WANTYES,
+          "the opening: SGA, NAWS and BINARY asked of the client");
+    recv_all(&t, will_binary, 3);
+    check(R.len == 0 && t.him[TO_BINARY] == TN_YES, "WILL BINARY, the answer: on, nothing said");
+    recv_all(&t, (const unsigned char *)"caf\303\251\r", 6);
+    check(is(&D, "caf\303\251\r", 6), "in binary mode the 8 bits pass, and Return comes as a CR alone");
+    recv_all(&t, do_binary, 3);
+    check(is(&R, wont_binary, 3) && t.us[TO_BINARY] == TN_NO, "DO BINARY: WONT, the server's output stays text");
     check(telnet_opening(&t, out) == 0, "a second opening asks nothing again");
 }
 
@@ -72,7 +81,7 @@ static void test_answers(void) {
     static const unsigned char dont_echo[] = { 255, 254, 1 }, wont_echo[] = { 255, 252, 1 };
     static const unsigned char wont_naws[] = { 255, 252, 31 }, dont_naws[] = { 255, 254, 31 };
     static const unsigned char do_echo[] = { 255, 253, 1 }, will_echo[] = { 255, 251, 1 };
-    static const unsigned char will_binary[] = { 255, 251, 0 }, dont_binary[] = { 255, 254, 0 };
+    static const unsigned char will_linemode[] = { 255, 251, 34 }, dont_linemode[] = { 255, 254, 34 };
 
     recv_all(&t, accept, sizeof(accept));
     check(D.len == 0 && R.len == 0, "the client accepts the opening: no data, nothing to answer");
@@ -87,8 +96,8 @@ static void test_answers(void) {
     check(is(&R, wont24, 3), "DO TERMINAL-TYPE again: WONT again (an answer to every request in NO)");
     recv_all(&t, ttype_will, 3);
     check(is(&R, dont24, 3), "WILL TERMINAL-TYPE: DONT");
-    recv_all(&t, will_binary, 3);
-    check(is(&R, dont_binary, 3), "WILL BINARY: DONT");
+    recv_all(&t, will_linemode, 3);
+    check(is(&R, dont_linemode, 3), "WILL LINEMODE: DONT");
 
     recv_all(&t, dont_echo, 3);
     check(is(&R, wont_echo, 3) && t.us[TO_ECHO] == TN_NO, "DONT ECHO while on: WONT ECHO, off");
@@ -105,11 +114,11 @@ static void test_answers(void) {
 
 static void test_refusals_of_the_opening(void) {
     struct telnet t = fresh();
-    static const unsigned char refuse[] = { 255, 254, 1, 255, 254, 3, 255, 252, 3, 255, 252, 31 };
+    static const unsigned char refuse[] = { 255, 254, 1, 255, 254, 3, 255, 252, 3, 255, 252, 31, 255, 252, 0 };
     recv_all(&t, refuse, sizeof(refuse));
     check(R.len == 0, "the client refuses the opening: nothing more is said");
-    check(t.us[TO_ECHO] == TN_NO && t.us[TO_SGA] == TN_NO && t.him[TO_SGA] == TN_NO && t.him[TO_NAWS] == TN_NO,
-          "and the options stay off");
+    check(t.us[TO_ECHO] == TN_NO && t.us[TO_SGA] == TN_NO && t.him[TO_SGA] == TN_NO && t.him[TO_NAWS] == TN_NO &&
+          t.him[TO_BINARY] == TN_NO, "and the options stay off");
 }
 
 /* A client that answers every request it sees with the opposite of what was last said
