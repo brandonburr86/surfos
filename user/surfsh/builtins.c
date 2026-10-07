@@ -290,7 +290,8 @@ static int b_help(int argc, char **argv) {
            "    choices; ^L clears the screen, ^C drops the line, ^D on an empty line\n"
            "    leaves surfsh.\n");
     printf("\n    The prompt shows the current directory and the wave; a ! after the wave\n"
-           "    says that the last command failed. set changes how it looks;\n"
+           "    says that the last command failed, an @ that this is a telnet session\n"
+           "    (another computer's terminal). set changes how it looks;\n"
            "    %s is read at the start.\n", SURFSH_CONF);
     printf("%s\n    (C)%s %s.\n\n", rule, SURFOS_YEARS, SURFOS_AUTHOR);
     return 0;

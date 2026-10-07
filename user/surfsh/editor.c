@@ -43,6 +43,10 @@ the edge, a CR and ESC[K do that wherever the last command left the cursor, and 
 the prompt's own row. The colours are reset and the cursor shown first: a kernel
 command runs in this task, and what it leaves (inverse video, a hidden cursor) is not
 undone by the end of a task.
+
+10/6/26: on a pseudo-terminal (a telnet session) the prompt is in its remote state,
+"≋@>" (surfos/prompt.h): the terminal is another computer's. The process list says which
+terminal this shell has (procinfo), once.
 */
 
 #include "surfsh.h"
@@ -142,6 +146,22 @@ static void screen_setup(void) {
     colour = use_color();
 }
 
+/* is this shell's terminal a pseudo-terminal, a telnet session's? Asked once. The process
+   list is read by index, and a task collected meanwhile shifts the rest: a search that does
+   not find this task looks again. */
+static int remote_session(void) {
+    static int known = -1;
+    struct procinfo pi;
+    int i, k, me;
+    if(known >= 0) return known;
+    me = getpid();
+    known = 0;
+    for(k = 0; k < 3; k++)
+        for(i = 0; procinfo(i, &pi) == 0; i++)
+            if(pi.pid == me) return known = pi.tty >= PROC_TTY_PTY;
+    return known;
+}
+
 /* the prompt for this line (screen_setup() first) */
 static void make_prompt(void) {
     struct prompt_ctx c;
@@ -149,6 +169,7 @@ static void make_prompt(void) {
     memset(&c, 0, sizeof(c));
     c.cwd = getcwd(cwd, sizeof(cwd)) ? cwd : NULL;
     c.last_status = last_status;
+    c.remote = remote_session();
     c.width = width;
     c.unicode = use_unicode();
     c.color = colour;

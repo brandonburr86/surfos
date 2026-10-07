@@ -1248,7 +1248,7 @@ class Telnet:
         self.closed = True
 
 
-TELNET_ROOT = shown('SURF \u224b> ')          # a session's prompt in /
+TELNET_ROOT = shown('SURF \u224b@> ')         # a session's prompt in /: the remote state (surfos/prompt.h)
 
 
 def telnet_no_sessions(q, timeout=20):
@@ -1267,30 +1267,37 @@ def telnet_no_sessions(q, timeout=20):
 
 
 def telnet_session_check(q):
-    """one session through the forwarded port 23 (telnetd on came before): the banner, the prompt, a command, cd
-    and the breadcrumbs, Tab, help paged (the client answers --More--), Ctrl+C killing a running count, exit, and
-    the server closing the connection"""
+    """one session through the forwarded port 23 (telnetd on came before): the banner, the prompt in its remote
+    state (\u224b@>, which a failed command does not change), a command, cd and the breadcrumbs, Tab, help paged (the
+    client answers --More--), Ctrl+C killing a running count, exit, and the server closing the connection; the
+    console's own prompt meanwhile has no @"""
     t = Telnet(q.ports['telnet'])
     try:
         ok = t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)
         steps = [('pwd\n', ['\r\n/\r\n', TELNET_ROOT]),
-                 ('cd /initrd/bin\n', [shown('initrd \u25b8 bin \u224b> ')]),
-                 ('ech\ttelnet-tab\n', ['\r\ntelnet-tab\r\n', shown('bin \u224b> ')]),
+                 ('cd /initrd/bin\n', [shown('initrd \u25b8 bin \u224b@> ')]),
+                 ('ech\ttelnet-tab\n', ['\r\ntelnet-tab\r\n', shown('bin \u224b@> ')]),
                  ('help\n', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--',
-                             '(C)2004-2026 Brandon Burr.', shown('bin \u224b> ')]),
+                             '(C)2004-2026 Brandon Burr.', shown('bin \u224b@> ')]),
                  ('count 100 100\n', [' 5 ']),
-                 (b'\x03', ['killed]', FAILED_PROMPT])]
+                 (b'\x03', ['killed]', shown('bin \u224b@> ')])]
         for keys, expects in steps:
             if not ok:
                 break
             t.send(keys)
             ok = all(t.expect(e, 20) for e in expects)
         if ok:
+            q.send('cd /initrd\n')             # the console's prompt: no @ (F1-F4 and the serial line are not remote)
+            ok = q.expect(shown('initrd \u224b> '), 10)
+            q.send('cd /\n')
+            ok = q.expect(shown('SURF \u224b> '), 10) and ok
+        if ok:
             t.send('exit\n')
             ok = t.wait_closed(10)
     finally:
         t.close()
-    return ('telnet: a session: banner, prompt, a command, cd, Tab, help paged, Ctrl+C, exit closes it', ok)
+    return ('telnet: a session: banner, prompt \u224b@> (the console\'s has no @), a command, cd, Tab, help paged, '
+            'Ctrl+C, exit closes it', ok)
 
 
 def telnet_two_check(q):
