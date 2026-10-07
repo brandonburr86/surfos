@@ -98,10 +98,11 @@ class Rig:
         return all(self.q.expect(e, timeout) for e in expects) and self.q.expect(self.qr.PROMPT, timeout)
 
     def start(self, line, first):
-        """a command in the background (&) that must print first"""
-        self.mark()
+        """a command in the background (&) that must print first: before the shell's '] started' or after it"""
+        m = self.mark()
         self.q.send(line + ' &\n')
-        return self.q.expect('] started', 10) and self.q.expect(self.qr.PROMPT, 10) and self.q.expect(first, 10)
+        ok = self.q.expect('] started', 10) and self.q.expect(self.qr.PROMPT, 10)
+        return ok and (first in self.since(m) or self.q.expect(first, 10))
 
     def expect(self, text, timeout=15):
         return self.q.expect(text, timeout)
