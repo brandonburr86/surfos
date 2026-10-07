@@ -3,13 +3,17 @@
    The kernel: sockets with an 8 KB send buffer whose write() takes what fits; pty masters with
    an 8 KB output ring and a 255-key input queue; shells that print, exit, or die some time after
    a hangup; a clock that moves only in poll(), by a little each time, or by the whole timeout when
-   nothing comes. Random clients connect, send IAC-heavy input, stall for a while or for good,
-   drain, half-close or reset; accept(), openpty() and spawnpty() fail now and then.
+   nothing comes; masters whose write takes the keys that fit in a 255-key input queue (in line
+   mode a Ctrl+C needs no room and drops what was typed ahead) and says EAGAIN when none fits.
+   Random clients connect, send IAC-heavy input, stall for a while or for good, drain, half-close
+   or reset; shells read their keys or not; accept(), openpty() and spawnpty() fail now and then.
    Checks: no read or write that would block, and none on a closed or wrong descriptor; POLLOUT
    asked exactly while output waits; the bytes each client gets are, in order, the opening, the
    answers and the encoded session output (a shadow protocol state says what they should be),
    answers dropped only whole and session output never; the keys reaching each master are the
-   decoded client data; NAWS sizes in range; at most MAX_SESSIONS sessions, refusals only when
+   decoded client data as the server's key buffer passes them on (a Ctrl+C drops those before
+   it, and what overflows the buffer is dropped), written only on POLLOUT unless a Ctrl+C leads,
+   and POLLOUT asked on a master exactly while keys wait; NAWS sizes in range; at most MAX_SESSIONS sessions, refusals only when
    full, without a pty or when the shell could not start; the server never exits; a master that
    read 0 is closed before anything else; a session is ended for a stall only when its client
    took nothing for STALL_MS while output waited, and always by then; while a shell waits to be
@@ -43,7 +47,9 @@ struct sconn {
     int used, pending, fd, srv_closed, left, fin, rst, stalled, bound;   /* stalled: 1 for a while, 2 for good */
     unsigned char rx[RXCAP];
     int rx_len, tx_len;
-    struct buf got, expq, keys_exp;
+    struct buf got, expq;
+    unsigned char kpend[KEYS_SIZE];     /* the keys the server should hold for the master, by its rules */
+    int kpend_len;
     long written;
     int pty;
     struct telnet shadow;
@@ -60,7 +66,7 @@ struct sconn {
 struct spty {
     int used, master_fd, shell, shell_pid, ended, conn;   /* shell: 0 none, 1 alive, 2 dying, 3 zombie, 4 reaped */
     unsigned char out[PTYOUT];
-    int out_len, tty_q, reads_keys, eof_read;
+    int out_len, tty_q, reads_keys, eof_read, linemode, pollout;   /* pollout: POLLOUT said since the last write */
     struct buf keys;
 };
 
@@ -77,7 +83,7 @@ static unsigned rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; retur
 
 /* tallies over all runs */
 static long bugs, reply_drop_total, sessions_made, refusals, stall_ends, timeouts_taken, short_writes,
-            input_stalls, cut_answers, rests;
+            keys_dropped, keys_eagain, keys_taken, cut_answers, rests;
 static int inject_enomem, inject_spawnfail, inject_ptyfull;
 static char lastlog[256];
 
@@ -146,11 +152,13 @@ static void checkpoint(void) {
 /* ---------------- the world ---------------- */
 static void gen_client_bytes(struct sconn *c) {
     unsigned char b[1400];
-    int n = 0, want = 1 + (int)(rnd() % (rnd() % 4 ? 40 : 1400)), mode = (int)(rnd() % 10);
+    int n = 0, want = 1 + (int)(rnd() % (rnd() % 4 ? 40 : 1400)), mode = (int)(rnd() % 12);
+    if(mode == 11) want = 1400;                       /* a flood of keys (a paste, or a stuck key) */
     while(n < want - 12) {
         int k = (int)(rnd() % 16);
         if(mode == 0) k = 10;                         /* AYT flood */
         if(mode == 1) k = 11;                         /* DO/WILL flood */
+        if(mode == 11) k = (int)(rnd() % 4);          /* letters only */
         switch(k) {
         case 0: case 1: case 2: case 3: b[n++] = (unsigned char)('a' + rnd() % 26); break;
         case 4: b[n++] = '\r'; b[n++] = rnd() % 2 ? '\n' : 0; break;
@@ -254,7 +262,8 @@ static int world_step(void) {
         case 11:                                        /* a shell reads its keys, or not */
             if(!p->used || p->shell != 1) break;
             p->reads_keys = rnd() % 4 != 0;
-            if(p->reads_keys) p->tty_q = 0;
+            if(p->reads_keys) p->tty_q = (int)(rnd() % (unsigned)(p->tty_q + 1));     /* takes some of its keys */
+            if(rnd() % 8 == 0) p->linemode = !p->linemode;
             return 1;
         }
     }
@@ -278,7 +287,7 @@ static short readiness(int fd) {
         return r;
     case F_MASTER:
         p = &P[fdt[fd].obj];
-        r = POLLOUT;
+        r = p->tty_q < TTYQ ? POLLOUT : 0;
         if(p->out_len || p->ended) r |= POLLIN;
         if(p->ended && !p->out_len) r |= POLLHUP;
         return r;
@@ -312,7 +321,18 @@ static void before_wait(struct pollfd *fds, nfds_t n, int timeout) {
         else if(fdt[fds[i].fd].type == F_CONN) {
             struct session *s = srv_session(fds[i].fd);
             if(s && !!(fds[i].events & POLLOUT) != !!s->out_len) BUG("POLLOUT asked %d, out_len %d", fds[i].events, s->out_len);
+        } else if(fdt[fds[i].fd].type == F_MASTER) {
+            int j;
+            for(j = 0; j < MAX_SESSIONS; j++)
+                if(sessions[j].conn >= 0 && sessions[j].master == fds[i].fd && !!(fds[i].events & POLLOUT) != !!sessions[j].keys_len)
+                    BUG("master: POLLOUT asked %d, keys_len %d", fds[i].events, sessions[j].keys_len);
         }
+    }
+    for(k = 0; k < MAX_SESSIONS; k++) {                 /* keys that wait: their master is asked about POLLOUT */
+        int found = 0;
+        if(sessions[k].conn < 0 || sessions[k].master < 0 || !sessions[k].keys_len) continue;
+        for(i = 0; i < n; i++) if(fds[i].fd == sessions[k].master && (fds[i].events & POLLOUT)) found = 1;
+        if(!found) BUG("session %d: %d keys wait and its master is not asked about POLLOUT", k, sessions[k].keys_len);
     }
     for(k = 0; k < nconn; k++) {                        /* no session left that should have ended for a stall */
         struct sconn *c = &C[k];
@@ -351,7 +371,12 @@ int sim_poll(struct pollfd *fds, nfds_t n, int timeout) {
             fds[i].revents = readiness(fds[i].fd) & (fds[i].events | POLLERR | POLLHUP | POLLNVAL);
             if(fds[i].revents) ready++;
         }
-        if(ready) { quiet = 0; return ready; }                 /* quiet: waits in a row that ran out */
+        if(ready) {                                     /* quiet: waits in a row that ran out */
+            quiet = 0;
+            for(i = 0; i < n; i++)
+                if((fds[i].revents & POLLOUT) && fdt[fds[i].fd].type == F_MASTER) P[fdt[fds[i].fd].obj].pollout = 1;
+            return ready;
+        }
         if(timeout > 0 && tries > 0 && rnd() % 16 == 0) {     /* the wait runs out */
             sim_now += (unsigned)timeout;
             timeouts_taken++;
@@ -393,7 +418,16 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
                 telnet_recv(&c->shadow, buf, k, &D, &R);
                 bput(&c->expq, r, R.len);
                 c->answers = R.len;
-                if(s->master >= 0) bput(&c->keys_exp, d, D.len);
+                if(s->master >= 0 && D.len) {           /* the server's key buffer, by its rules */
+                    int j, room, m = D.len;
+                    const unsigned char *kp = d;
+                    for(j = m - 1; j >= 0 && kp[j] != 0x03; j--);
+                    if(j >= 0) { c->kpend_len = 0; kp += j; m -= j; }
+                    room = KEYS_SIZE - c->kpend_len;
+                    if(m > room) { keys_dropped += m - room; m = room; }
+                    memcpy(c->kpend + c->kpend_len, kp, (size_t)m);
+                    c->kpend_len += m;
+                }
                 if(c->shadow.resized && s->master >= 0) { c->ptyctl_expect = 1; c->shadow.resized = 0; }
                 c->last_read = 1;
             }
@@ -462,20 +496,33 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
         c->written += k;
         return k;
     }
-    if(fdt[fd].type == F_MASTER) {
+    if(fdt[fd].type == F_MASTER) {                     /* never waits: the keys that fit, or EAGAIN */
         struct spty *p = &P[fdt[fd].obj];
         struct sconn *c = p->conn >= 0 ? &C[p->conn] : NULL;
+        const unsigned char *b = buf;
+        int taken = 0;
+        if(!n) return 0;
+        if(!p->pollout && b[0] != 0x03) BUG("pty %ld: keys written without POLLOUT", (long)(p - P));
+        p->pollout = 0;
+        if(c && ((int)n != c->kpend_len || memcmp(buf, c->kpend, n))) {
+            BUG("pty %ld: the keys written (%d) are not the ones the server should hold (%d)", (long)(p - P), (int)n, c->kpend_len);
+            c = NULL;                                   /* no comparison from here on */
+            C[p->conn].kpend_len = 0;
+        }
+        while(taken < (int)n) {
+            if(p->linemode && b[taken] == 0x03) p->tty_q = 0;      /* needs no room; drops the type-ahead */
+            else if(p->tty_q < TTYQ) p->tty_q++;
+            else break;
+            taken++;
+        }
+        if(!taken) { keys_eagain++; errno = EAGAIN; return -1; }
+        bput(&p->keys, buf, taken);
+        keys_taken += taken;
         if(c) {
-            if(p->keys.len + (int)n > c->keys_exp.len || memcmp(buf, c->keys_exp.p + p->keys.len, n))
-                BUG("keys to master differ from the decoded client data");
+            memmove(c->kpend, c->kpend + taken, (size_t)(c->kpend_len - taken));
+            c->kpend_len -= taken;
         }
-        bput(&p->keys, buf, (int)n);
-        if(p->shell == 1 && !p->reads_keys) {
-            if(p->tty_q + (int)n > TTYQ) input_stalls++;  /* the real master waits up to 250 ms here */
-            p->tty_q += (int)n;
-            if(p->tty_q > TTYQ) p->tty_q = TTYQ;
-        }
-        return (ssize_t)n;
+        return taken;
     }
     if(fdt[fd].type == F_NUL) return (ssize_t)n;
     BUG("write on fd %d of type %d", fd, fdt[fd].type);
@@ -655,7 +702,7 @@ static void run(unsigned long long seed, long iters) {
     int k, r;
     rs = seed * 2654435761ULL + 1;
     memset(fdt, 0, sizeof(fdt));
-    for(k = 0; k < nconn; k++) { free(C[k].got.p); free(C[k].expq.p); free(C[k].keys_exp.p); }
+    for(k = 0; k < nconn; k++) { free(C[k].got.p); free(C[k].expq.p); }
     memset(C, 0, sizeof(C));
     for(k = 0; k < PTY_MAX; k++) free(P[k].keys.p);
     memset(P, 0, sizeof(P));
@@ -702,8 +749,9 @@ int main(int argc, char **argv) {
     }
     printf("telnetd server: %ld runs of %ld polls (failures of accept, spawnpty, openpty in some): %ld sessions, %ld refusals, "
            "%ld ended for a stall, %ld rests of the listener, %ld short writes, %ld waits that ran out, %ld answer bytes "
-           "dropped whole, %ld input stalls\n", total, iters, sessions_made, refusals, stall_ends, rests, short_writes,
-           timeouts_taken, reply_drop_total, input_stalls);
+           "dropped whole, %ld keys taken by masters, %ld dropped (the buffer full), %ld key writes that found no room\n",
+           total, iters, sessions_made, refusals, stall_ends, rests, short_writes, timeouts_taken, reply_drop_total, keys_taken,
+           keys_dropped, keys_eagain);
     if(bugs) {
         printf("TELNETD SERVER UNIT TESTS FAILED: %ld bugs\n", bugs);
         return 1;

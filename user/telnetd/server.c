@@ -32,6 +32,15 @@ that clients which stop reading cannot keep every session for good. The answers 
 read from the client go into the buffer whole or not at all (a client that sends without
 reading loses answers, never a part of one).
 
+The other way: the client is always read, so that its Ctrl+C always arrives, and what it
+types waits in a buffer of KEYS_SIZE keys (what does not fit is dropped, as the keyboard
+drops keys) until the master takes it. A write on the master never waits: it takes the
+keys that fit in the terminal's input queue, and poll() is asked about the master's
+POLLOUT only while keys wait. A Ctrl+C (typed, or IAC IP) drops the keys that waited
+before it and is written at once: in line mode it always fits (and drops what was typed
+ahead), and when it does not (raw mode, a full queue) it waits first in line. So a client
+that types faster than its session reads holds back only its own keys.
+
 The shells are collected here (waitpid) after every poll(): while a session's shell has
 ended or is ending, poll() waits REAP_MS at most, so that none stays a zombie long. When
 accept() fails for want of something (ENOMEM, EMFILE), the listening descriptor rests for
@@ -60,6 +69,7 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0, surfsh pid
 #define REAP_MS  200                    /* poll()'s longest wait while a shell is to be collected soon */
 #define TICK_MS  1000                   /* ... while sessions run (a shell that ended while its output waits) */
 #define PAUSE_MS 1000                   /* the listening descriptor rests this long after accept() failed */
+#define KEYS_SIZE 1024                  /* typed keys the master has not taken yet */
 
 struct session {
     int conn, master;                   /* conn -1: the slot is free; master -1 once the shell has ended */
@@ -68,6 +78,8 @@ struct session {
     unsigned int since;                 /* uptime() when the client last took output, or output began to wait */
     int out_len;
     unsigned char out[OUT_SIZE];        /* for the client, not taken by the connection yet */
+    int keys_len;
+    unsigned char keys[KEYS_SIZE];      /* typed, not taken by the master yet */
     struct telnet tn;
 };
 
@@ -123,7 +135,7 @@ static void end_session(struct session *s, const char *why) {
     close(s->conn);
     if(s->master >= 0) close(s->master);    /* the last master descriptor: the pty hangs up */
     s->conn = s->master = -1;
-    s->out_len = 0;
+    s->out_len = s->keys_len = 0;
     say("telnetd: session %d ended (%s)", s->num, why);
 }
 
@@ -173,12 +185,39 @@ static void new_session(int lfd) {
     s->master = master;
     s->pid = pid;
     s->ended = 0;
-    s->out_len = 0;
+    s->out_len = s->keys_len = 0;
     s->pty = ptyctl(master, PTY_INDEX, 0);
     s->num = ++sessions_ever;
     telnet_init(&s->tn);
     queue(s, opening, telnet_opening(&s->tn, opening));    /* sent at the first POLLOUT, before the banner */
     say("telnetd: session %d from %s (pty%d, surfsh pid %d)", s->num, peer, s->pty, pid);
+}
+
+/* the keys that wait, to the master: as many as it takes (it never waits; -EAGAIN when none fits) */
+static void to_pty(struct session *s) {
+    ssize_t n = write(s->master, s->keys, (size_t)s->keys_len);
+    if(n <= 0) {
+        if(n < 0 && errno != EAGAIN && errno != EINTR) s->keys_len = 0;    /* the pty is gone: nobody reads them */
+        return;
+    }
+    memmove(s->keys, s->keys + n, (size_t)(s->keys_len - n));
+    s->keys_len -= (int)n;
+}
+
+/* typed keys, behind those that wait; a Ctrl+C drops those before it and goes to the master at once */
+static void type_keys(struct session *s, const unsigned char *p, int n) {
+    int i, room;
+    for(i = n - 1; i >= 0 && p[i] != 0x03; i--);
+    if(i >= 0) {
+        s->keys_len = 0;
+        p += i;
+        n -= i;
+    }
+    room = KEYS_SIZE - s->keys_len;
+    if(n > room) n = room;                  /* beyond the buffer: dropped, as a keyboard drops keys */
+    memcpy(s->keys + s->keys_len, p, (size_t)n);
+    s->keys_len += n;
+    if(i >= 0) to_pty(s);
 }
 
 /* what the client sent (the read does not wait: poll() said so): keys for the session, answers
@@ -200,7 +239,7 @@ static void from_client(struct session *s) {
         s->tn.resized = 0;
         ptyctl(s->master, PTY_SETSIZE, (unsigned int)cols << 16 | (unsigned int)rows);
     }
-    if(d.len) write(s->master, data, (size_t)d.len);   /* typed keys: the pty waits briefly, then drops */
+    if(d.len) type_keys(s, data, d.len);
 }
 
 /* what the session printed, a piece of it, for the client; or the end of the shell */
@@ -211,6 +250,7 @@ static void from_pty(struct session *s) {
         close(s->master);
         s->master = -1;
         s->ended = 1;
+        s->keys_len = 0;
         if(!s->out_len) end_session(s, "the shell ended");
         return;
     }
@@ -281,10 +321,10 @@ int serve(int lfd, int port) {
             fds[n].revents = 0;
             master[n] = 0;
             who[n++] = s;
-            if(s->master < 0 || !room(s)) continue;     /* its output waits in the pty for room here */
+            if(s->master < 0 || (!room(s) && !s->keys_len)) continue;
             fds[n].fd = s->master;
-            fds[n].events = POLLIN;
-            fds[n].revents = 0;
+            fds[n].events = (room(s) ? POLLIN : 0) | (s->keys_len ? POLLOUT : 0);   /* output while there is room */
+            fds[n].revents = 0;                                                    /* for it; keys while they wait */
             master[n] = 1;
             who[n++] = s;
         }
@@ -299,7 +339,9 @@ int serve(int lfd, int port) {
             short ev = fds[i].revents;
             if(!ev || !s || s->conn < 0) continue;      /* nothing, the listener, or a session ended just now */
             if(master[i]) {
-                if(s->master >= 0) from_pty(s);
+                if((ev & POLLOUT) && s->master >= 0 && s->keys_len) to_pty(s);
+                if((ev & (POLLIN | POLLHUP | POLLERR)) && s->master >= 0) from_pty(s);
+                else if(ev & POLLNVAL) end_session(s, "the pseudo-terminal broke");
                 continue;
             }
             if((ev & POLLOUT) && s->out_len) to_client(s);

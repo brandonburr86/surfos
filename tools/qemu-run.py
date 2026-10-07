@@ -453,7 +453,8 @@ SMOKE = [
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); a port that is none
     # (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
     # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
-    # served; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the log.
+    # served; a client whose keys flood a session that reads none; telnetd off typed in a session; on while nettest has
+    # the port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
@@ -462,6 +463,7 @@ SMOKE = [
     ('@telnet-two', []),
     ('@telnet-full', []),
     ('@telnet-stalled', []),
+    ('@telnet-flood', []),
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -1402,6 +1404,72 @@ def telnet_stalled_check(q):
     return ('telnet: a client that stops reading holds back only its own session, which goes on later' + why, ok)
 
 
+def telnet_flood_check(q):
+    """a client that types without end into a session that reads nothing (sleep 100000, a kernel command): the server
+    keeps reading it, holds what the pseudo-terminal does not take and drops the rest, and a second session stays
+    quick all the while (an echo, a hexdump of a program paged on a tall window); a Ctrl+C from the flooding client
+    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed"""
+    a, b = Telnet(q.ports['telnet']), None
+    stop, sent = threading.Event(), [0]
+
+    def flood():
+        chunk = b'x' * 1024
+        while not stop.is_set():
+            try:
+                a.sock.sendall(chunk)
+                sent[0] += len(chunk)
+            except OSError:
+                return
+
+    flooder = threading.Thread(target=flood, daemon=True)
+    ok, why = a.expect(TELNET_ROOT, 15), ''
+    try:
+        if ok:
+            a.send('sleep 100000\n')
+            ok = a.expect('sleep 100000', 10)
+        if ok:
+            flooder.start()
+            time.sleep(1)
+            b = Telnet(q.ports['telnet'], rows=1000)
+            t0 = time.time()
+            ok = b.expect(TELNET_ROOT, 20)
+            if ok:
+                b.send('echo flood-ok\n')
+                ok = b.expect('\r\nflood-ok\r\n', 10) and b.expect(TELNET_ROOT, 10) and time.time() - t0 < 20
+                why = '' if ok else ' (the second session was slow)'
+            if ok:
+                t0 = time.time()
+                b.send('/initrd/bin/hexdump /initrd/bin/echo\n')
+                ok = b.expect(re.compile(rb'\r\n[0-9a-f]{8}\r\n'), 60) and b.expect(TELNET_ROOT, 20)
+                ok = ok and time.time() - t0 < 60 and sent[0] > 64 * 1024
+                why = '' if ok else ' (the hexdump was slow, or the flood stopped: %d bytes sent)' % sent[0]
+        stop.set()
+        if flooder.is_alive():
+            flooder.join(10)
+        if ok:
+            a.cursor = len(a.data)
+            a.send(b'\xff\xf4')                     # IAC IP: Ctrl+C
+            ok = a.expect(PROMPT, 15)
+            why = why or ('' if ok else ' (Ctrl+C did not end the sleep)')
+        if ok:
+            a.send('echo after-flood\n')
+            ok = a.expect('\r\nafter-flood\r\n', 10) and a.expect(TELNET_ROOT, 10)
+            why = why or ('' if ok else ' (keys typed ahead were left)')
+        if ok and b:
+            b.send('exit\n')
+            ok = b.wait_closed(10)
+        if ok:
+            a.send('exit\n')
+            ok = a.wait_closed(10)
+    finally:
+        stop.set()
+        a.close()
+        if b:
+            b.close()
+    return ('telnet: keys flooding into a session that reads none hold back no other session; Ctrl+C still gets '
+            'through' + why, ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1438,6 +1506,7 @@ def telnet_port_busy_check(q):
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
+                       '@telnet-flood': telnet_flood_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 
