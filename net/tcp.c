@@ -70,7 +70,11 @@ an unacceptable bare ACK is answered only when its sequence number is old (a
 keepalive, a probe): two strict ends no longer trade ACKs across a hole. An
 orphan gives its receive buffer back when it becomes one, and its send buffer
 once all in it is acknowledged: one still finishing when its network went away
-held 16 KB until its retries ran out.
+held 16 KB until its retries ran out. An orphan whose retries run out sends a
+reset as it goes (its other end was left half-open). A connection that has
+failed (CLOSED, its program not done with it yet) is no longer looked up:
+what comes for it is answered as for no connection, with a reset. tcpka= is
+matched as a word.
 */
 
 #include <surfos/types.h>
@@ -360,6 +364,12 @@ static void send_ack(struct tcp_socket *s) {
     s->tx_segs++;
 }
 
+/* 10/6/26: the other end is told the connection is over, when there is one to tell */
+static void send_reset(struct tcp_socket *s) {
+    if(s->state != CLOSED && s->state != LISTEN && s->state != SYN_SENT && s->state != TIME_WAIT)
+        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
+}
+
 static void arm_rto(struct tcp_socket *s) {
     if(!s->rto_at) { s->rto_at = getticks() + TCP_RTO; s->retries = 0; }
 }
@@ -429,7 +439,11 @@ static void probe_window(struct tcp_socket *s) {
 static void retransmit(struct tcp_socket *s) {
     u_int sent;
     s->retrans++;
-    if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) { fail(s, -ETIMEDOUT); return; }
+    if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) {
+        if(s->orphan) send_reset(s);                     /* 10/6/26: it goes: its other end hears so */
+        fail(s, -ETIMEDOUT);
+        return;
+    }
     s->rto_at = getticks() + TCP_RTO * (s->retries < 4 ? s->retries : 4);
     switch(s->state) {
     case SYN_SENT:
@@ -477,7 +491,7 @@ static struct tcp_socket *lookup(ipaddr_t rip, u16 rport, u16 lport) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
-        if(!s->used || s->local_port != lport) continue;
+        if(!s->used || s->local_port != lport || s->state == CLOSED) continue;   /* 10/6/26: a failed one is no connection */
         if(s->state == LISTEN) { listener = s; continue; }
         if(s->remote_ip == rip && s->remote_port == rport) return s;
     }
@@ -648,16 +662,16 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
 
 /* 10/6/26: a connection given up at once: a reset to the other end, and the socket goes */
 static void abort_conn(struct tcp_socket *s) {
-    if(s->state != CLOSED && s->state != LISTEN && s->state != SYN_SENT && s->state != TIME_WAIT)
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
+    send_reset(s);
     sock_free(s);
 }
 
 /* 10/6/26: tcpka=<idle>[,<interval>] on the kernel command line, in seconds: keepalive sooner (the tests) */
 static void keepalive_setting(void) {
-    const char *p = strstr(bootinfo.cmdline, "tcpka=");
+    const char *p = bootinfo.cmdline;
     char *end;
     u_long idle, intvl;
+    while((p = strstr(p, "tcpka=")) != NULL && p != bootinfo.cmdline && p[-1] != ' ') p++;   /* the word only */
     if(!p) return;
     idle = strtoul(p + 6, &end, 10);
     if(idle) ka_idle = idle * HZ;

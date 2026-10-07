@@ -14,7 +14,7 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               a real client still gets its SYN-ACK and is accepted
   flood       five SYNs never acknowledged: a real client takes a half-open one's place
   reset       a connection reset before the server accepts it: accept() hands it out,
-              read() says ECONNRESET
+              read() says ECONNRESET; a segment for it after the reset gets a reset
   greet       a server that greets and closes (or resets) before the guest acknowledged
               its SYN-ACK: connect() succeeds and read() gets the greeting, then the end
   window      a reader that shuts its window and opens it again without saying so: the
@@ -172,6 +172,11 @@ def sc_reset(rig):
     c = Conn(rig.net, 2200, 23)
     ok = c.connect() is not None and ok
     c.rst()
+    rig.q.wait(0.2)
+    rig.net.drain()
+    c.ack(flags=ACK | PSH, data=b'late\n')         # the failed connection is none: a reset, not an ACK
+    r = rig.net.wait(lambda s: c.mine(s), 2)
+    ok = r is not None and bool(r.flags & RST) and ok
     return rig.expect('nettest: connection from 10.0.2.2 port 2200') and \
         rig.expect('nettest: read 0 bytes, then Connection reset by peer') and ok
 
@@ -557,7 +562,7 @@ def sc_pollstall(rig):
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
-    ('reset', sc_reset, 'a connection reset before accept(): accepted, read() says ECONNRESET'),
+    ('reset', sc_reset, 'a connection reset before accept(): accepted, read() says ECONNRESET; then it is none'),
     ('greet', sc_greet, 'a server that greets and closes (or resets) at once: connect() succeeds, read() says so'),
     ('window', sc_window, 'a shut window is probed until it opens: every byte arrives'),
     ('fin', sc_fin, 'a FIN behind data that did not fit waits for that data'),
