@@ -33,6 +33,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               again alone, and the bytes and the FIN follow its acknowledgement
   latency     bursts of small writes (1, 20, 30 bytes) to a client that delays its ACKs
               200 ms: each burst arrives whole at once, not held for the ACK (no Nagle)
+  zwprobe     a full receive buffer probed with a byte at a time (BSD, macOS and Windows
+              probe so): each probe gets an ACK saying the window is shut
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -392,6 +394,27 @@ def sc_latency(rig):
     return ok
 
 
+def sc_zwprobe(rig):
+    ok = rig.start('nettest sleepsrv 23 5000', 'listening on port 23')
+    c = Conn(rig.net, 3300, 23)
+    ok = c.connect() is not None and ok
+    data = pattern(8192)
+    for i in range(0, len(data), 1460):             # the guest's receive buffer, full: nobody reads yet
+        c.ack(flags=ACK | PSH, data=data[i:i + 1460])
+    rig.q.wait(0.5)
+    rig.net.drain()
+    answers = 0
+    for i in range(3):                              # a byte into the shut window, not taken
+        rig.net.send(c.pp, c.gp, c.snd, c.rcv, ACK | PSH, 8192, b'+')
+        a = rig.net.wait(lambda s: c.mine(s) and not s.data and not c.is_probe(s) and s.ack == c.snd, 1.0)
+        answers += a is not None and a.win == 0
+    c.ack(flags=ACK | FIN)                          # the end, where the probes' byte was
+    ok = rig.expect('nettest: read 8192 bytes, then EOF', 10) and answers == 3 and ok
+    rig.finish(c)
+    print('        (three 1-byte probes of a full receive buffer: %d answered, window 0)' % answers)
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -459,6 +482,7 @@ SCENARIOS = [
     ('linger', sc_linger, 'FIN_WAIT_2 and TIME_WAIT hold no buffers; TIME_WAIT ends on time with the link down'),
     ('lost', sc_lost, 'a lost small segment is sent again as it was, and what waited behind it follows'),
     ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
+    ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]

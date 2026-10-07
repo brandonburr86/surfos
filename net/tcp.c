@@ -60,7 +60,8 @@ segment ended the connection: its retransmission ran past snd_nxt, and the ACK
 of it was ignored). A program's connections (net/sock.c) send small writes at
 once: Nagle's rule held telnetd's echo and screen updates for the client's
 delayed ACK (40 to 200 ms); the kernel's own connections keep it, and both keep
-the silly window rules.
+the silly window rules. Data that did not fit is answered all the same (a byte
+probing a shut window, as BSD, macOS and Windows probe, got no ACK).
 */
 
 #include <surfos/types.h>
@@ -481,6 +482,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     u_int hlen, datalen;
     u32 seq, ack;
     u8 flags, *data;
+    bool cut = false;                                    /* 10/6/26: data that did not fit (it gets an ACK) */
 
     if(nb->len < sizeof(*th)) { netbuf_free(nb); return; }
     hlen = (th->off >> 4) * 4;
@@ -594,6 +596,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         if(datalen > room) {                             /* 10/6/26: the rest comes again, the FIN with it */
             datalen = room;
             flags &= (u8)~TCP_FIN;
+            cut = true;
         }
         memcpy(s->rxbuf + s->rx_len, data, datalen);
         s->rx_len += datalen;
@@ -619,7 +622,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         else if(s->state == CLOSING) { set_state(s, TIME_WAIT); s->wait_until = getticks() + TCP_TIME_WAIT; }
         else if(s->state == LAST_ACK) { set_state(s, CLOSED); if(s->orphan) { sock_free(s); netbuf_free(nb); return; } }
     }
-    if(datalen) send_ack(s);
+    if(datalen || cut) send_ack(s);
     if(s->used && s->state != CLOSED) tcp_output(s);     /* the window may have opened */
     netbuf_free(nb);
 }
