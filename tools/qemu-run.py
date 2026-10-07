@@ -293,6 +293,42 @@ SMOKE = [
     ('@ctrl-c', []),
     # the prompt's breadcrumbs, whichever shell init started on F1
     ('cd /initrd/bin', [re.compile(rb'initrd \xe2\x96\xb8 bin \xe2\x89\x8b')], [('cd /', [])]),
+    # 10/6/26 (the telnet server's track P): pseudo-terminals, poll(), the process list, detach() and /dev/kmsg,
+    # from user space (user/bin/ptytest.c). A program on a pty and what its master read; surfsh driven through
+    # one (a command, Ctrl+C on a kernel command and on a program, dmesg in the kernel's colour, exit: the master
+    # reads 0); PTY_SETSIZE and what TTY_GETSIZE and TTY_CAPS answer there; the pager asking in the stream at
+    # 80x10; a program that waits for room in the master's buffer; the hangup; poll(); procinfo(); detach();
+    # a line written to /dev/kmsg is in dmesg and on no console
+    ('run ptytest run hello pty', ['Hello from user mode', 'argv[1] = "pty"', 'ptytest: exit status 42',
+                                   'PTYTEST run PASS', 'exit status 0']),
+    ('run ptytest surfsh', ['ptytest: typed "echo hello"', 'ptytest: Ctrl+C: sleep cut short, count killed',
+                            'in the kernel\'s colour', 'ptytest: exit typed: the master read 0', 'PTYTEST surfsh PASS',
+                            'exit status 0']),
+    ('run ptytest size 100 30', ['sizes out of range refused', 'TTY_GETSIZE 100x30', 'TTY_CAPS 3: UTF-8 colour',
+                                 'PTYTEST size PASS', 'exit status 0']),
+    ('run ptytest pager', ['the lines between them: 1-9 10-18 19-27 28-36 37-45 46-54 55-60', 'PTYTEST pager PASS',
+                           'exit status 0']),
+    ('run ptytest flood', ['lines 1-1000, all of them, in order', 'PTYTEST flood PASS', 'exit status 0']),
+    ('run ptytest hangup', ['count: gone', 'pagetest at --More--: gone', 'pagetest waiting for room: gone',
+                            'each pty is free again', 'PTYTEST hangup PASS', 'exit status 0']),
+    # 10/6/26 (the review): the hangup's kill waits for a kernel command however long; a kernel thread started in a
+    # session is on F1; a second session starts clean; a master's write never waits (a full queue: a short count,
+    # EAGAIN, POLLOUT again), and Ctrl+C drops what was typed ahead; Ctrl+C does not reach a detached process; a
+    # session is kept apart from F1 (its output, F1's keys) and poll() sees a key queued on the console
+    ('run ptytest hangup-call', ['still there', 'the kernel log says the kill waited', 'PTYTEST hangup-call PASS',
+                                 'exit status 0']),
+    ('@pty-tcpecho', []),
+    ('run ptytest reuse', ['line mode, and only its own keys', 'opened again: 80x24', 'PTYTEST reuse PASS', 'exit status 0']),
+    ('run ptytest fullqueue', ['the input queue is full', 'EAGAIN, and no POLLOUT', 'POLLOUT came back after',
+                               'what was typed ahead never ran', 'PTYTEST fullqueue PASS', 'exit status 0']),
+    ('run ptytest detach-ctrlc', ['detached from surfsh', 'the detached sleeper lived on', 'PTYTEST detach-ctrlc PASS',
+                                  'exit status 0']),
+    ('@pty-isolate', []),
+    ('run ptytest poll', ['timed out after', 'POLLNVAL', 'POLLHUP at once', '(POLLIN | POLLHUP)', 'two masters and the console',
+                          'killed: gone after', 'PTYTEST poll PASS', 'exit status 0']),
+    ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
+    ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
+    ('@kmsg', []),
     # boots of their own (@boot: kernel command-line words; no-initrd; surfsh=<program or file in the initrd>, an
     # initrd whose bin/surfsh is that), for init's choice of shell. shell=kernel: the ring-0 shell on every console
     # on purpose, elevated (#), no recovery line, and started again elevated after crashgp; no initrd: no
@@ -931,6 +967,53 @@ CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
                   '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}
+
+
+# 10/6/26 (track P): what `ptytest kmsg` writes to /dev/kmsg (user/bin/ptytest.c)
+KMSG_LINE = 'ptytest kmsg: a line for the kernel log'
+
+
+def kmsg_check(q):
+    """a line a program writes to /dev/kmsg is not shown on the console, and dmesg has it"""
+    start = len(q.transcript)
+    q.send('run ptytest kmsg\n')
+    ok = q.expect('PTYTEST kmsg PASS', 10) and q.expect(PROMPT, 10)
+    ok = ok and KMSG_LINE.encode() not in q.transcript[start:]
+    q.send('dmesg\n')
+    ok = ok and q.expect(KMSG_LINE, 30) and q.expect(PROMPT, 30)
+    return ('/dev/kmsg: a line written there is in the kernel log (dmesg), and on no console', ok)
+
+
+CONSOLE_CHECKS['@kmsg'] = kmsg_check
+
+
+def pty_tcpecho_check(q):
+    """a kernel thread started in a pty session (tcpecho) is on F1: the session ends with exit, the thread lives on
+    (ptytest tcpecho checks those), and what it prints shows on F1 (the serial line) rather than in the session"""
+    start = len(q.transcript)
+    q.send('run ptytest tcpecho 2323\n')
+    ok = q.expect('PTYTEST tcpecho PASS', 20) and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    ok = ok and b'tcpecho: listening on port 2323' in q.transcript[start:]
+    return ('pty: a kernel thread started in a session (tcpecho) runs on F1 and outlives the session', ok)
+
+
+def pty_isolation_check(q):
+    """a pty session's output is not shown on F1, a line typed on F1 goes to the program reading F1 and not to the
+    session, and poll() on the console sees it queued (ptytest isolate)"""
+    start = len(q.transcript)
+    q.send('run ptytest isolate\n')
+    ok = q.expect('type a line on the console now', 10)
+    if ok:
+        q.send('f1-typed-line\n')
+        ok = (q.expect('POLLIN on the console', 10) and q.expect('the console read "f1-typed-line"', 10) and
+              q.expect('PTYTEST isolate PASS', 10) and q.expect(PROMPT, 10))
+    text = q.transcript[start:]
+    ok = ok and b'pagetest question' not in text and b'pagetest answer' not in text
+    return ('pty: a session prints only to its master, F1 keeps its keys, poll() sees a key on the console', ok)
+
+
+CONSOLE_CHECKS['@pty-tcpecho'] = pty_tcpecho_check
+CONSOLE_CHECKS['@pty-isolate'] = pty_isolation_check
 
 
 def surfsh_corner_check(q):

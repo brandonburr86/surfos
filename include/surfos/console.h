@@ -11,6 +11,7 @@ File: console.h Date: Prior than 4/23/04
 
 #include <surfos/types.h>
 #include <sys/cp437.h>
+#include <surfos/pty.h>             /* 10/6/26: PTY_MAX */
 
 /* 10/5/26: the text grid. Every console starts at 80x25 in its own memBuf, and VGA text
    mode stays there. On a framebuffer that holds more cells of the same letters (driver/
@@ -30,6 +31,9 @@ extern u_int conColumns, conLines;
 
 /* Virtual Console memory allocation*/
 #define NUM_CONSOLES 4 //F1..F4; each has a shell and a tty
+/* 10/6/26: the pseudo-terminals' consoles come after them in conArray[], as their ttys do in
+   ttys[] (kernel/pty.c): stream consoles, which draw nothing and are never on the screen */
+#define NUM_TTYS (NUM_CONSOLES + PTY_MAX)
 #define VMEM_SIZE 4000 //each virtual console is 4000 bytes (80x25; a bigger grid's buffers come from the heap)
 #define CONSOLE_BASE 0xC000000//0x800 //start storing the first console @
 //0x800 /***********************************/
@@ -71,6 +75,14 @@ typedef struct surf_console {
     u_char page_tail[PAGE_TAIL_MAX];      /* q: the dropped bytes since the last newline, a question perhaps, */
     u_short page_tail_len;                /* shown when the paged task that printed them reads */
     TEXTCOLOR page_tail_color;
+    u_char page_resized;        /* 10/6/26: PTY_SETSIZE made room: the asker goes on counting the rows */
+    /* 10/6/26: a pseudo-terminal's console (kernel/pty.c); all zero is a screen. No cells: what is
+       printed goes to the master side as it was printed (pty_out()), the writer's colour as an ANSI
+       SGR sequence where it changes; loc.x, wrap and the pager's counts follow the far terminal */
+    u_char stream;              /* a stream console */
+    u_char at_home;             /* its cursor went to the top left (ESC[H): ESC[J then clears it all */
+    TEXTCOLOR shown;            /* the writer's colour the far terminal draws in (the last SGR sent) */
+    u_int cols, rows;           /* its size (PTY_SETSIZE): the pager counts these */
 } surf_console;
 
 void sscroll(surf_console *con);
@@ -119,6 +131,17 @@ void console_page_new(surf_console *con);    /* a new screenful, nothing dropped
 int console_paging(surf_console *con);       /* is what the current task prints there paged? */
 void console_page_call_off(surf_console *con);  /* interrupts off: the task at the question goes on without a key */
 void console_panic(void);                         /* also takes the screen back (framebuffer_panic) */
+
+/* 10/6/26: stream consoles (pseudo-terminals). pty_out() (kernel/pty.c) hands bytes of a stream
+   console to its master side, all or none: 1, or 0 when they were dropped (the master is closed,
+   or there is no room and the writer may not wait). PTY_OUT_WAIT: the writer may wait for room
+   (a task's output: the reader keeps up with the writers); PTY_OUT_URGENT: it may use the room
+   kept back for the pager's question and the console's own sequences. */
+#define PTY_OUT_WAIT   1
+#define PTY_OUT_URGENT 2
+int pty_out(surf_console *con, const char *s, u_int n, int how);
+void console_stream_reset(surf_console *con);    /* a pty's console as new: 80x24, plain, not paging */
+void console_stream_resize(surf_console *con, u_int cols, u_int rows);  /* PTY_SETSIZE: a question with room goes */
 
 extern surf_console *conActive;
 extern surf_console conArray[];

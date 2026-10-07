@@ -50,13 +50,18 @@ typedef void (*kthread_fn)(void *arg);
     that has not ended KILL_WAIT_MS later is killed at once, as every kill was before, and
     the kernel log says so. Ctrl+C on a terminal (tty.c) marks a kernel command run by the
     pager's owner TI_INT instead: its waits are cut short the same way, its task lives on,
-    and its status is KCMD_INTERRUPTED (130, surfos/kcmd.h).
+    and its status is KCMD_INTERRUPTED (130, surfos/kcmd.h). 10/6/26: the kill of a pseudo-
+    terminal's hangup (kernel/pty.c) is marked TI_HANGUP too: it waits for the end of the call
+    however long that takes, never killing at once what is inside one (a client going away
+    must not leave a lock held); the kernel log says once that it waits. An explicit kill_task()
+    afterwards brings back the KILL_WAIT_MS rule.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
 #define TC_EXIT     0x4  /* in_call: 10/6/26: the task is ending (task_exit()): a kill has nothing left to do */
 #define TI_KILL     0x1  /* intr: killed; it ends at the end of its call */
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
+#define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -170,6 +175,11 @@ int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tt
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
 surf_task *task_find(u_long pid);
 u_int task_count(void);
+u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */
+u_int task_kill_tty(struct tty *tty);    /* 10/6/26: kill_task() for each of them (a hangup); how many */
+struct procinfo;
+int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
+int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
 
 void yield(void);
 void sleep_ms(u_long ms);

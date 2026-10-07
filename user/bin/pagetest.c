@@ -22,6 +22,8 @@ pagetest utf8   one line of UTF-8 samples: SurfOS's symbols, accented letters, s
                 console draws as '?'. The tests read the line back from the screen.
 pagetest caps   what TTY_CAPS says: UTF-8 and colour, or colour alone when the kernel
                 command line has the word `ascii`.
+pagetest size   what TTY_GETSIZE says: "TTY_GETSIZE 80x25" (10/6/26: a pseudo-terminal
+                answers the size PTY_SETSIZE gave it; ptytest size).
 */
 
 #include <stdio.h>
@@ -55,6 +57,15 @@ int main(int argc, char **argv) {
         printf("TTY_CAPS %d:%s%s\n", caps, (caps & TTY_CAP_UTF8) ? " UTF-8" : "", (caps & TTY_CAP_COLOR) ? " colour" : "");
         return 0;
     }
+    if(argc == 2 && !strcmp(argv[1], "size")) {
+        n = ttyctl(TTY_GETSIZE, 0);
+        if(n < 0) {
+            perror("pagetest: TTY_GETSIZE");
+            return 1;
+        }
+        printf("TTY_GETSIZE %dx%d\n", (n >> 16) & 0xffff, n & 0xffff);
+        return 0;
+    }
     if(argc == 3 && !strcmp(argv[1], "ask")) {
         lines(atoi(argv[2]));
         printf("pagetest question: ");
@@ -82,6 +93,6 @@ int main(int argc, char **argv) {
         printf("PAGETEST DONE\n");
         return 0;
     }
-    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | hold <ms> | utf8 | caps\n");
+    fprintf(stderr, "usage: pagetest <lines> | ask <lines> | crash <lines> | hold <ms> | utf8 | caps | size\n");
     return 2;
 }
