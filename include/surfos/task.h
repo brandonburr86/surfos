@@ -54,6 +54,7 @@ typedef void (*kthread_fn)(void *arg);
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
+#define TC_EXIT     0x4  /* in_call: 10/6/26: the task is ending (task_exit()): a kill has nothing left to do */
 #define TI_KILL     0x1  /* intr: killed; it ends at the end of its call */
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define KILL_WAIT_MS 2000

@@ -296,6 +296,15 @@ static void become_zombie(surf_task *t, int code) {
 void task_exit(int code) {
     u_long flags;
     if(curTask == idle_task) panic("the idle task tried to exit");
+    /* 10/6/26 (review of the network connections): the task ends by itself now. Closing its files
+       (a socket's close takes net_lock, a file's may write) must not be cut by a kill at once (a
+       second Ctrl+C, say) nor by the 2 s of a kill that waited: either would leave a lock held for
+       good. So it is a call that every kill leaves alone (TC_EXIT), the kill that waited is
+       answered, and its timer goes. */
+    flags = irq_save();
+    curTask->in_call |= TC_EXIT;
+    ktimer_cancel(&curTask->kill_timer);
+    irq_restore(flags);
     /* 10/6/26: its files close now, in its own context, not when someone waits for it: a
        background program's file is written out and its volume can be unmounted at once */
     fd_close_all(curTask);
@@ -337,8 +346,8 @@ void kill_task(surf_task *t) {
     if(!t) return;
     if(t == idle_task) panic("FATAL: Kernel Idle Task Killed");
     flags = irq_save();
-    if(t->state == TS_DEAD) {
-        /* gone already */
+    if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) {
+        /* gone already, or ending by itself (task_exit()) */
     } else if(!t->in_call) {
         become_zombie(t, -1);
     } else if(!(t->intr & TI_KILL)) {
@@ -355,7 +364,7 @@ void kill_task(surf_task *t) {
 static void kill_escalate(void *arg) {
     surf_task *t = (surf_task *)arg;
     char line[160];
-    if(t->state == TS_DEAD) return;
+    if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) return;
     if(t == curTask && t->crit) {                   /* inside KCRIT_ENTER (drawing): a tick later */
         ktimer_start(&t->kill_timer, 10, false);
         return;

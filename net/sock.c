@@ -79,12 +79,12 @@ static int sock_fd(struct tcp_socket *s) {
     return fd;
 }
 
-int sys_listen(u16 port) {
+int sys_listen(u32 port) {
     struct tcp_socket *s;
     int r;
-    if(!port) return -EINVAL;
+    if(!port || port > 65535) return -EINVAL;
     if(!fd_free()) return -EMFILE;
-    r = tcp_listen_on(port, &s);
+    r = tcp_listen_on((u16)port, &s);
     return r ? r : sock_fd(s);
 }
 
@@ -108,12 +108,12 @@ int sys_accept(int fd, struct netaddr *peer) {
     return r;
 }
 
-int sys_connect(u32 ip, u16 port) {
+int sys_connect(u32 ip, u32 port) {
     struct tcp_socket *s;
     int r;
-    if(!ip || !port) return -EINVAL;
+    if(!ip || !port || port > 65535) return -EINVAL;
     if(!fd_free()) return -EMFILE;
-    r = tcp_open(ip, port, CONNECT_MS, &s);
+    r = tcp_open(ip, (u16)port, CONNECT_MS, &s);
     return r ? r : sock_fd(s);
 }
 

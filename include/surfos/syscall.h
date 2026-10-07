@@ -55,9 +55,9 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 #define SYS_kcmd    32   /* (char *const argv[]): the command's status, -ENOENT when there is none */
 #define SYS_kcmdinfo 33  /* (int index, struct kcmd_info *out): 0, -ENOENT after the last */
 /* 10/6/26 (the telnet server): network connections, poll, pseudo-terminals, processes */
-#define SYS_listen   34  /* (u16 port): a listening descriptor (surfos/sock.h) */
+#define SYS_listen   34  /* (u32 port): a listening descriptor (surfos/sock.h) */
 #define SYS_accept   35  /* (int fd, struct netaddr *peer): a connection's descriptor */
-#define SYS_connect  36  /* (u32 ip, u16 port): a connection's descriptor */
+#define SYS_connect  36  /* (u32 ip, u32 port): a connection's descriptor */
 #define SYS_netinfo  37  /* (struct netinfo *ni): the default interface */
 #define SYS_poll     38  /* (struct pollfd *fds, int nfds, int timeout_ms): entries ready (surfos/poll.h) */
 #define SYS_openpty  39  /* (): a pseudo-terminal's master descriptor (surfos/pty.h) */
