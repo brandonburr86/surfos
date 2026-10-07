@@ -7,6 +7,7 @@
 #   make run-vga      same with a VGA window (needs a display); serial on the terminal
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
+#   make test-tcp     TCP against hand-made segments on a raw link (tools/qemu-tcp.py; the smoke test runs it too)
 #   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs too)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
@@ -36,7 +37,7 @@ USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
 USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
-USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest
+USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest nettest
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
@@ -146,6 +147,10 @@ test: $(KERNEL) images
 test-all:
 	$(MAKE) O=0 test
 	$(MAKE) O=2 test
+
+# 10/6/26: the guest's NIC on a raw link to tools/rawnet.py, which makes TCP segments by hand
+test-tcp: $(KERNEL) images
+	$(PYTHON) tools/qemu-tcp.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --test
 
 debug: $(KERNEL) images
 	@echo "in another terminal: gdb $(KERNEL) -ex 'target remote :1234'"
@@ -367,6 +372,6 @@ clean:
 help:
 	@sed -n '2,15p' Makefile
 
-.PHONY: all run run-vga test test-all unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
+.PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
                            $(BUILD)/host/pager/tests/host/*.d)

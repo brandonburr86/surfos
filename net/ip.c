@@ -4,6 +4,8 @@ SurfOS Network Stack: IPv4
 File: ip.c      Date: 10/3/26 (roadmap N2)
 --------------------
 No fragments, no options on output, one interface.
+10/6/26: ip_next_hop() says where a datagram goes first (TCP asks it which
+connections an ARP failure concerns).
 */
 
 #include <surfos/types.h>
@@ -42,6 +44,12 @@ struct netdev *ip_route_dev(ipaddr_t dst) {
     return netdev_default();
 }
 
+/* where a datagram to dst goes first: on our subnet (or a broadcast) directly, otherwise the gateway */
+ipaddr_t ip_next_hop(struct netdev *dev, ipaddr_t dst) {
+    if(dst != IP_BROADCAST && dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) && dev->gateway) return dev->gateway;
+    return dst;
+}
+
 ipaddr_t ip_route_src(ipaddr_t dst) {
     struct netdev *dev = ip_route_dev(dst);
     return dev ? dev->ip : 0;
@@ -77,7 +85,7 @@ void ip_input(struct netdev *dev, struct netbuf *nb) {
 
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb) {
     struct ip_hdr *ip;
-    ipaddr_t hop = dst;
+    ipaddr_t hop;
     u8 mac[ETH_ALEN];
     if(!dev) dev = ip_route_dev(dst);
     if(!dev) { netbuf_free(nb); return -1; }
@@ -95,8 +103,7 @@ int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb) {
     ip->src = dev->ip;
     ip->dst = dst;
     ip->csum = ip_checksum(ip, IP_HLEN);
-    /* next hop: on our subnet (or a broadcast) directly, otherwise the gateway */
-    if(dst != IP_BROADCAST && dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) && dev->gateway) hop = dev->gateway;
+    hop = ip_next_hop(dev, dst);
     if(arp_resolve(dev, hop, mac, nb) != 0) return 0;      /* parked until the ARP reply arrives */
     return eth_output(dev, mac, ETH_P_IP, nb);
 }

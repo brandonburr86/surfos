@@ -26,10 +26,10 @@ bool user_str(const char *s);                                   /* a NUL-termina
 bool user_buf(const void *p, u_long len, bool write);           /* len bytes the caller may read (or write) */
 int user_argv(const char *path, char *const argv[], char **kargv);   /* argc, or -errno; kargv points into user memory */
 
-/* net/sock.c */
-int sys_listen(u16 port);
+/* net/sock.c (10/6/26: a port as the caller passed it, -EINVAL above 65535) */
+int sys_listen(u32 port);
 int sys_accept(int fd, struct netaddr *peer);
-int sys_connect(u32 ip, u16 port);
+int sys_connect(u32 ip, u32 port);
 int sys_netinfo(struct netinfo *ni);
 
 /* fs/poll.c */

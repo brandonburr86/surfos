@@ -475,9 +475,9 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_spawnfd: r = sys_spawnfd((const char *)a, (char *const *)b, (const int *)c); break;
     case SYS_kcmd:    r = sys_kcmd((char *const *)a); break;
     /* 10/6/26: the telnet server's calls, each in its own file (surfos/sysimpl.h) */
-    case SYS_listen:   r = sys_listen((u16)a); break;
+    case SYS_listen:   r = sys_listen(a); break;            /* 10/6/26: the port as it came: checked there */
     case SYS_accept:   r = sys_accept((int)a, (struct netaddr *)b); break;
-    case SYS_connect:  r = sys_connect((u32)a, (u16)b); break;
+    case SYS_connect:  r = sys_connect((u32)a, b); break;
     case SYS_netinfo:  r = sys_netinfo((struct netinfo *)a); break;
     case SYS_poll:     r = sys_poll((struct pollfd *)a, (int)b, (int)c); break;
     case SYS_openpty:  r = sys_openpty(); break;
