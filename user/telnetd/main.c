@@ -16,9 +16,9 @@ command, so it runs only when it is turned on.
                         server listens all the same). Not in a telnet session: a server
                         started there would end with that session.
     telnetd off         stop the server, which ends every session: "stopped (n sessions
-                        ended)" once they are gone, in the kernel's log too; status 1
-                        when it was not running. Typed in a telnet session, it ends that
-                        session with the rest.
+                        ended)" once they are gone; the kernel's log says it before the
+                        server stops; status 1 when it was not running. Typed in a telnet
+                        session, it ends that session with the rest.
     telnetd [status]    whether it runs, its pid, and its sessions: the pseudo-terminal
                         and the pid of each session's surfsh.
 
@@ -58,6 +58,23 @@ static int find_server(void) {
            !strcmp(pi.name, "telnetd")) return pi.pid;
     }
     return r < 0 ? -1 : 0;
+}
+
+/* a line for the kernel's log (dmesg) */
+static void klog(const char *fmt, ...) {
+    char line[96];
+    va_list ap;
+    int fd, n;
+    va_start(ap, fmt);
+    n = vsnprintf(line, sizeof(line) - 1, fmt, ap);
+    va_end(ap);
+    if(n < 0) return;
+    if(n > (int)sizeof(line) - 2) n = (int)sizeof(line) - 2;
+    line[n++] = '\n';
+    if((fd = open("/dev/kmsg", O_WRONLY)) >= 0) {
+        write(fd, line, (size_t)n);
+        close(fd);
+    }
 }
 
 /* the task pid as the list has it: 1 and *pi while it lives, 0 when it is gone */
@@ -165,25 +182,22 @@ static int cmd_on(const char *word) {
 }
 
 static int cmd_off(void) {
-    int pid = find_server(), pids[PTY_MAX], n, k, left, waited, kmsg;
+    int pid = find_server(), pids[PTY_MAX], n, k, left, waited, e;
     struct procinfo pi;
-    char line[48];
     if(pid < 0) return failed("procinfo");
     if(!pid) {
         printf("telnetd: not running\n");
         return 1;
     }
     n = sessions(pid, 0, pids, PTY_MAX);
+    /* the kernel's log says it before the kill (the server's own log ends with it): a telnetd
+       off typed in a telnet session hangs up with that session as the server ends */
+    klog("telnetd: telnetd off stops the server (pid %d, %d session%s)", pid, n, n == 1 ? "" : "s");
     if(kill(pid) < 0) {
-        fprintf(stderr, "telnetd: cannot stop pid %d: %s\n", pid, strerror(errno));
+        e = errno;
+        klog("telnetd: telnetd off could not stop pid %d: %s", pid, strerror(e));
+        fprintf(stderr, "telnetd: cannot stop pid %d: %s\n", pid, strerror(e));
         return 1;
-    }
-    /* the kernel's log says it too (the server's own log ends with the kill), at once: a
-       telnetd off typed in a telnet session ends with that session */
-    snprintf(line, sizeof(line), "telnetd: stopped (%d session%s ended)\n", n, n == 1 ? "" : "s");
-    if((kmsg = open("/dev/kmsg", O_WRONLY)) >= 0) {
-        write(kmsg, line, strlen(line));
-        close(kmsg);
     }
     /* the server, then its sessions' shells (they end as their pseudo-terminals hang up) */
     for(waited = 0; waited < WAIT_MS; waited += STEP_MS) {
@@ -196,7 +210,7 @@ static int cmd_off(void) {
         fprintf(stderr, "telnetd: the server (pid %d) did not stop\n", pid);
         return 1;
     }
-    fputs(line, stdout);
+    printf("telnetd: stopped (%d session%s ended)\n", n, n == 1 ? "" : "s");
     return 0;
 }
 

@@ -446,8 +446,8 @@ SMOKE = [
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
     ('dmesg', ['telnetd: listening on port 23', 'telnetd: session 1 from 10.0.2.2:', 'telnetd: session 1 ended (the shell',
-               'telnetd: stopped (2 sessions ended)', 'refused: 4 sessions are open', 'ended (the client left)',
-               'telnetd: stopped (1 session ended)']),
+               'telnetd: telnetd off stops the server (pid', ', 2 sessions)', 'refused: 4 sessions are open',
+               'ended (the client left)', 'telnetd: telnetd off stops the server (pid', ', 1 session)']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
