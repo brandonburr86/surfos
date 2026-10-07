@@ -453,8 +453,9 @@ SMOKE = [
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none
     # and --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
     # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
-    # served; a client whose keys flood a session that reads none; telnetd off typed in a session; on while nettest has
-    # the port; off when not running (status 1); the server's log.
+    # served; a client whose keys flood a session that reads none; the rest of the protocol in one session that ends
+    # with a reset; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the
+    # server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
@@ -466,6 +467,7 @@ SMOKE = [
     ('@telnet-full', []),
     ('@telnet-stalled', []),
     ('@telnet-flood', []),
+    ('@telnet-protocol', []),
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -1479,6 +1481,93 @@ def telnet_flood_check(q):
             'through' + why, ok)
 
 
+# a BSD telnet's first bytes: DO SGA, WILL TERMINAL-TYPE, NAWS, TERMINAL-SPEED, TOGGLE-FLOW-CONTROL, LINEMODE,
+# NEW-ENVIRON, DO STATUS
+TN_BSD_OPENING = bytes([255, 253, 3, 255, 251, 24, 255, 251, 31, 255, 251, 32, 255, 251, 33, 255, 251, 34, 255, 251, 39,
+                        255, 253, 5])
+
+
+def telnet_server_pid(q):
+    """the running server's pid, as telnetd status on the console says it"""
+    start = len(q.transcript)
+    q.send('telnetd status\n')
+    q.expect(PROMPT, 10)
+    m = re.search(r'running \(pid (\d+)\)', q.transcript[start:].decode(errors='replace'))
+    return int(m.group(1)) if m else None
+
+
+def telnet_zombies(q, server):
+    """the pids of the shells that are zombies under the server, as ps on the console lists them"""
+    start = len(q.transcript)
+    q.send('ps\n')
+    q.expect(PROMPT, 10)
+    text = q.transcript[start:].decode(errors='replace')
+    return re.findall(r'(?m)^\s*(\d+)\s+zombie\s+\S+\s+\d+\s+\d+\s+%d\s+surfsh' % server, text)
+
+
+def telnet_protocol_check(q):
+    """one session for the rest of the protocol: a BSD telnet's opening (each option it offers that the server does not
+    do is refused once), the window size the client tells (NAWS 100x30) as a program sees it, AYT answered, DO
+    TIMING-MARK refused, Enter as CR LF, DEL and BS, IAC EC and IAC EL, UTF-8 typed, IAC IP on a running count, the byte
+    255 in a program's output (cat of a program file, in the background) as IAC IAC; then the client resets the
+    connection: the session ends, and its shell is collected at once (no zombie under the server)"""
+    import struct
+    server = telnet_server_pid(q)
+    t = Telnet(q.ports['telnet'], cols=100, rows=30)
+    ok = server is not None
+    try:
+        t._out(TN_BSD_OPENING)
+        ok = ok and t.expect(TELNET_ROOT, 15)
+        refusals = [bytes([255, 254, o]) for o in (24, 32, 33, 34, 39)] + [bytes([255, 252, 5])]
+        ok = ok and all(t.raw.count(r) == 1 for r in refusals)
+        steps = [('pagetest size\n', ['TTY_GETSIZE 100x30', TELNET_ROOT]),
+                 (b'\xff\xf6', ['[SurfOS: yes]']),
+                 (b'echo crlf-enter\r\n', ['\r\ncrlf-enter\r\n', TELNET_ROOT]),
+                 (b'echo abc\x7f\x7fd\r\0', ['\r\nad\r\n', TELNET_ROOT]),
+                 (b'echo xyz\x08\x08w\r\0', ['\r\nxw\r\n', TELNET_ROOT]),
+                 (b'echo pqX\xff\xf7r\r\0', ['\r\npqr\r\n', TELNET_ROOT]),
+                 (b'not this line\xff\xf8echo el-ok\r\0', ['\r\nel-ok\r\n', TELNET_ROOT]),
+                 ('echo café\n', ['\r\ncafé\r\n', TELNET_ROOT]),
+                 ('count 100 100\n', [' 5 ']),
+                 (b'\xff\xf4', ['killed]', TELNET_ROOT])]
+        for keys, expects in steps:
+            if not ok:
+                break
+            t.send(keys)
+            ok = all(t.expect(e, 20) for e in expects)
+        if ok:                                      # DO TIMING-MARK: WONT
+            mark = len(t.raw)
+            t._out(b'\xff\xfd\x06')
+            deadline = time.time() + 10
+            while b'\xff\xfc\x06' not in t.raw[mark:] and not t.closed and time.time() < deadline:
+                t.pump(0.1)
+            ok = b'\xff\xfc\x06' in t.raw[mark:]
+        if ok:                                      # 255 in the output: cat of a program, then a prompt says done
+            mark = len(t.data)
+            t.send('/initrd/bin/cat /initrd/bin/hello &\n')
+            ok = t.expect('] started', 10)
+            deadline = time.time() + 60
+            while ok and b'] done' not in t.data[mark:] and time.time() < deadline:
+                t.send('\n')
+                t.expect(TELNET_ROOT, 10)
+                t.pump(0.5)
+            ok = ok and b'] done' in t.data[mark:] and t.data[mark:].count(b'\xff') >= 100
+        if ok:                                      # a reset: the session ends, its shell is collected
+            t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            t.close()
+            ok = telnet_no_sessions(q)
+            deadline, zombies = time.time() + 5, ['?']
+            while zombies and time.time() < deadline:
+                zombies = telnet_zombies(q, server)
+                if zombies:
+                    q.wait(0.5)
+            ok = ok and not zombies
+    finally:
+        t.close()
+    return ('telnet: a BSD opening, NAWS 100x30, AYT, TIMING-MARK, CR LF, DEL, BS, EC, EL, UTF-8, IP, 255 in output, '
+            'a reset; no zombie after', ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1515,7 +1604,7 @@ def telnet_port_busy_check(q):
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
-                       '@telnet-flood': telnet_flood_check,
+                       '@telnet-flood': telnet_flood_check, '@telnet-protocol': telnet_protocol_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 
