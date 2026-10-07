@@ -1024,8 +1024,8 @@ class Telnet:
     """A telnet client for the tests that answers as a terminal's client does (RFC 854, 1143): it lets the
     server echo and suppress go-ahead (DO), suppresses go-ahead itself and tells its window size when asked
     (WILL, then NAWS), and refuses anything else once. What the session printed is kept in self.data with
-    the IAC sequences taken out (IAC IAC is the byte 255); self.raw has everything as it came. Return is
-    sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
+    the IAC sequences taken out (IAC IAC is the byte 255, CR NUL a CR); self.raw has everything as it came.
+    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
 
     def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
         self.sock = self._connect(host, port, timeout, rcvbuf)
@@ -1034,6 +1034,7 @@ class Telnet:
         self.cursor, self.more_at, self.auto_more = 0, 0, True
         self.closed = False
         self.state, self.verb, self.sb = 'data', 0, b''
+        self.after_cr = False                   # the last data byte was CR: a NUL after it is not data
         self.agreed = set()                     # (side, option): ('him', 1) the server echoes, ('us', 31) NAWS ...
 
     @staticmethod
@@ -1098,16 +1099,21 @@ class Telnet:
         self._out(bytes([TN_IAC, TN_SB, TO_NAWS]) + size + bytes([TN_IAC, TN_SE]))
 
     def _feed(self, chunk):
+        out = bytearray()
         for c in chunk:
             if self.state == 'data':
                 if c == TN_IAC:
                     self.state = 'iac'
+                elif c == 0 and self.after_cr:
+                    self.after_cr = False       # CR NUL: a CR alone (RFC 854)
                 else:
-                    self.data += bytes([c])
+                    out.append(c)
+                    self.after_cr = c == 13
             elif self.state == 'iac':
                 self.state = 'data'
                 if c == TN_IAC:
-                    self.data += b'\xff'
+                    out.append(255)
+                    self.after_cr = False
                 elif c in (TN_WILL, TN_WONT, TN_DO, TN_DONT):
                     self.state, self.verb = 'option', c
                 elif c == TN_SB:
@@ -1119,6 +1125,7 @@ class Telnet:
                 self.state = 'sb-iac' if c == TN_IAC else 'sb'
             elif self.state == 'sb-iac':
                 self.state = 'data' if c == TN_SE else 'sb'
+        self.data += bytes(out)
 
     def pump(self, timeout=0.1):
         if self.closed:

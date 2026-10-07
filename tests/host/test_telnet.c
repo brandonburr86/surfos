@@ -1,9 +1,10 @@
 /* Host-side unit tests for user/telnetd/telnet.c, telnetd's telnet protocol: the opening
    negotiation; options answered once and never in a loop (RFC 1143), also against a client
    that answers everything; commands, sub-negotiations and CR pairs split across reads at
-   every byte; IAC IAC, IP and BRK as Ctrl+C, AYT; NAWS sizes; full reply buffers; and the
-   output side (LF as CR LF, 255 doubled). Built from the same file as the program and run
-   by `make unittest`. */
+   every byte; IAC IAC, IP and BRK as Ctrl+C, EC and EL as DEL and Ctrl+U, AYT; NAWS sizes,
+   and payloads of another length ignored; answers whole or not at all when their room is
+   short; and the output side (LF as CR LF, a CR alone as CR NUL, 255 doubled), checked
+   against a receiver. Built from the same file as the program and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "telnet.h"
@@ -143,7 +144,8 @@ static void test_data(void) {
     static const unsigned char want[] = "ls -l\rpwd\rcd /\rx\r";
     static const unsigned char ff[] = { 'a', 255, 255, 'b' }, ff_want[] = { 'a', 255, 'b' };
     static const unsigned char ip[] = { 'x', 255, 244, 'y', 255, 243 }, ip_want[] = { 'x', 3, 'y', 3 };
-    static const unsigned char nop[] = { 'a', 255, 241, 'b', 255, 249, 'c', 255, 242, 255, 248, 255, 247, 255, 245, 255, 240 };
+    static const unsigned char nop[] = { 'a', 255, 241, 'b', 255, 249, 'c', 255, 242, 255, 245, 255, 240 };
+    static const unsigned char ec_el[] = { 'x', 255, 247, 'y', 255, 248, 'z' }, ec_el_want[] = { 'x', 0x7f, 'y', 0x15, 'z' };
     static const unsigned char ayt[] = { 'q', 255, 246 };
     static const unsigned char crlf_split[] = "a\r";
     static const unsigned char lf_next[] = "\nb";
@@ -156,7 +158,9 @@ static void test_data(void) {
     recv_all(&t, ip, sizeof(ip));
     check(is(&D, ip_want, sizeof(ip_want)), "IAC IP and IAC BRK are Ctrl+C");
     recv_all(&t, nop, sizeof(nop));
-    check(is(&D, "abc", 3) && R.len == 0, "NOP, GA, DM, EL, EC, AO and a stray SE change nothing");
+    check(is(&D, "abc", 3) && R.len == 0, "NOP, GA, DM, AO and a stray SE change nothing");
+    recv_all(&t, ec_el, sizeof(ec_el));
+    check(is(&D, ec_el_want, sizeof(ec_el_want)) && R.len == 0, "IAC EC is DEL (Backspace), IAC EL is Ctrl+U");
     recv_all(&t, ayt, sizeof(ayt));
     check(is(&D, "q", 1) && is(&R, TN_AYT_ANSWER, (int)strlen(TN_AYT_ANSWER)), "AYT is answered at once");
     recv_all(&t, crlf_split, 2);
@@ -175,6 +179,8 @@ static void test_naws(void) {
     static const unsigned char other[] = { 255, 250, 24, 1, 255, 240, 'm' };
     static const unsigned char longsb[64 + 6] = { 255, 250, 39 };
     static const unsigned char broken[] = { 255, 250, 31, 0, 80, 255, 244, 'r' };
+    static const unsigned char three[] = { 255, 250, 31, 0, 90, 0, 255, 240, 's' };
+    static const unsigned char five[] = { 255, 250, 31, 0, 90, 0, 50, 7, 255, 240, 't' };
     unsigned char big[sizeof(longsb)];
 
     recv_all(&t, naws, sizeof(naws));
@@ -197,6 +203,10 @@ static void test_naws(void) {
     check(D.len == 0 && t.state == 0, "an overlong sub-negotiation: dropped, the reader back at data");
     recv_all(&t, broken, sizeof(broken));
     check(is(&D, "\003r", 2) && t.cols == 255, "a sub-negotiation cut short by IAC IP: dropped, Ctrl+C counts");
+    recv_all(&t, three, sizeof(three));
+    check(!t.resized && t.cols == 255 && t.rows == 33 && is(&D, "s", 1), "a NAWS payload of 3 bytes: ignored");
+    recv_all(&t, five, sizeof(five));
+    check(!t.resized && t.cols == 255 && t.rows == 33 && is(&D, "t", 1), "a NAWS payload of 5 bytes: ignored");
 }
 
 /* everything at once, then the same in reads of every size: the same data and answers */
@@ -225,29 +235,56 @@ static void test_splits(void) {
     check(ok, "a stream split into reads of 1, 2, ... bytes: the same data, answers and size");
 }
 
+/* answers beyond the room are dropped whole: the client never gets a part of a sequence */
 static void test_full_reply(void) {
     struct telnet t = fresh();
-    unsigned char in[300], small[4];
+    unsigned char in[510], small[4], keep[256];
     struct tn_buf d = { data, 0, sizeof(data) }, r = { small, 0, sizeof(small) };
-    int i;
-    for(i = 0; i < 100; i++) {                    /* 100 DO TERMINAL-TYPE: 300 bytes of WONT */
+    static const unsigned char ayt[] = { 255, 246, 'a', 255, 246 };
+    int i, whole = 1;
+    for(i = 0; i < 170; i++) {                    /* 170 DO TERMINAL-TYPE in one read: 510 bytes of WONT */
         in[3 * i] = 255;
         in[3 * i + 1] = 253;
         in[3 * i + 2] = 24;
     }
+    telnet_recv(&t, in, 300, &d, &r);
+    check(r.len == 3 && !memcmp(small, "\377\374\030", 3) && d.len == 0 && t.state == 0,
+          "room for 4 bytes: one whole answer (3), no part of the next; the reader goes on");
+    r.p = keep;
+    r.len = 0;
+    r.size = sizeof(keep);                        /* the server's room for answers (OUT_KEEP) */
     telnet_recv(&t, in, sizeof(in), &d, &r);
-    check(r.len == sizeof(small) && d.len == 0 && t.state == 0, "answers beyond the room are dropped, the reader goes on");
+    for(i = 0; i + 2 < r.len; i += 3) if(keep[i] != 255 || keep[i + 1] != 252 || keep[i + 2] != 24) whole = 0;
+    check(r.len == 255 && whole, "170 refusals in 256 bytes of room: 85 whole answers, no IAC left alone at the end");
+    r.p = small;
+    r.len = 0;
+    r.size = sizeof(small);
+    d.len = 0;
+    telnet_recv(&t, ayt, sizeof(ayt), &d, &r);
+    check(r.len == 0 && d.len == 1, "an AYT answer that does not fit: none of it");
 }
 
 static void test_output(void) {
     struct telnet t = fresh();
-    unsigned char out[64];
+    unsigned char out[64], in[2] = { 255, 246 };
     static const unsigned char ff[] = { 'a', 255, 'b' }, ff_want[] = { 'a', 255, 255, 'b' };
     int n;
     n = telnet_send(&t, (const unsigned char *)"one\ntwo\r\nthree\r", 15, out);
-    check(n == 16 && !memcmp(out, "one\r\ntwo\r\nthree\r", 16), "LF as CR LF; a CR LF stays one; a CR alone stays");
+    check(n == 16 && !memcmp(out, "one\r\ntwo\r\nthree\r", 16), "LF as CR LF; a CR LF stays one; a CR at the end waits");
     n = telnet_send(&t, (const unsigned char *)"\nx", 2, out);
     check(n == 2 && !memcmp(out, "\nx", 2), "a CR at the end of one write and the LF at the start of the next: one CR");
+    n = telnet_send(&t, (const unsigned char *)"a\rb\r\r\n", 6, out);
+    check(n == 8 && !memcmp(out, "a\r\0b\r\0\r\n", 8), "a CR alone as CR NUL, also before a CR LF");
+    n = telnet_send(&t, (const unsigned char *)"\r", 1, out);
+    check(n == 1 && telnet_send(&t, (const unsigned char *)"y", 1, out) == 2 && !memcmp(out, "\0y", 2),
+          "a CR at the end of one write and another byte at the start of the next: its NUL first");
+    telnet_send(&t, (const unsigned char *)"\r", 1, out);
+    recv_all(&t, in, 2);
+    check(R.len == 1 + (int)strlen(TN_AYT_ANSWER) && reply[0] == 0 && !memcmp(reply + 1, TN_AYT_ANSWER, R.len - 1),
+          "an answer after output that ended in a CR: the NUL first");
+    check(telnet_send(&t, (const unsigned char *)"z", 1, out) == 1 && out[0] == 'z', "and not again before the output");
+    n = telnet_send(&t, (const unsigned char *)"\r\377", 2, out);
+    check(n == 4 && !memcmp(out, "\r\0\377\377", 4), "CR then 255: CR NUL IAC IAC");
     n = telnet_send(&t, ff, sizeof(ff), out);
     check(n == 4 && !memcmp(out, ff_want, 4), "the byte 255 as IAC IAC");
     n = telnet_send(&t, (const unsigned char *)"\n\n", 2, out);
@@ -281,6 +318,61 @@ static void test_random(void) {
     check(ok, "20000 random streams: data within its input, answers within their room, the reader recovers");
 }
 
+/* what a telnet client makes of the output: IAC IAC is 255, the NUL after a CR goes */
+static int receive(const unsigned char *in, int n, unsigned char *out) {
+    int i, k = 0, cr = 0;
+    for(i = 0; i < n; i++) {
+        unsigned char c = in[i];
+        if(c == 255) {
+            if(i + 1 >= n || in[i + 1] != 255) return -1;      /* only IAC IAC belongs in the output */
+            i++;
+        } else if(cr && c == 0) {
+            cr = 0;
+            continue;
+        }
+        cr = c == '\r';
+        out[k++] = c;
+    }
+    return k;
+}
+
+/* random output in random writes: at most 2 n + 1 bytes per write, and the receiver gets the bytes
+   back, each LF without a CR before it as CR LF */
+static void test_random_output(void) {
+    static const unsigned char pool[] = { '\r', '\n', 255, 0, 'a', 0xe2, '\r', '\n' };
+    unsigned char in[4096], wire[8192 + 64], back[8192 + 64], want[8192];
+    unsigned int seed = 777;
+    int round, ok = 1, bound = 1;
+    for(round = 0; round < 2000; round++) {
+        struct telnet t = fresh();
+        int n, i, w = 0, k = 0, b;
+        seed = seed * 1103515245 + 12345;
+        n = (int)(seed >> 16) % 300;
+        for(i = 0; i < n; i++) {
+            seed = seed * 1103515245 + 12345;
+            in[i] = pool[(seed >> 16) % sizeof(pool)];
+        }
+        for(i = 0; i < n; ) {                         /* writes of 1 to 8 bytes */
+            int m, got;
+            seed = seed * 1103515245 + 12345;
+            m = 1 + (int)((seed >> 16) % 8);
+            if(m > n - i) m = n - i;
+            got = telnet_send(&t, in + i, m, wire + w);
+            if(got > 2 * m + 1) bound = 0;
+            w += got;
+            i += m;
+        }
+        for(i = 0; i < n; i++) {
+            if(in[i] == '\n' && (i == 0 || in[i - 1] != '\r')) want[k++] = '\r';
+            want[k++] = in[i];
+        }
+        b = receive(wire, w, back);
+        if(b != k || memcmp(back, want, (size_t)k)) ok = 0;
+    }
+    check(bound, "random output in random writes: at most 2 n + 1 bytes per write");
+    check(ok, "and a receiver gets it back: LF as CR LF, the NUL after a CR alone gone, 255 once");
+}
+
 int main(void) {
     test_opening();
     test_answers();
@@ -292,6 +384,7 @@ int main(void) {
     test_full_reply();
     test_output();
     test_random();
+    test_random_output();
     if(failures) {
         printf("TELNET UNIT TESTS FAILED: %d of %d checks\n", failures, checks);
         return 1;

@@ -25,9 +25,11 @@ session keeps what its connection has not taken yet (the session's output, the a
 the client's negotiation, the opening) in an output buffer, and poll() is asked about
 POLLOUT only while that holds something; the connection is written only when POLLOUT
 says it takes bytes. The pseudo-terminal is read, in pieces of PIECE bytes (at most twice
-that once encoded), only while the buffer has room for a piece: a client that reads
-slowly, or not at all, holds back its own session, whose programs then wait to print,
-and the other sessions and new connections go on.
+that and one more once encoded), only while the buffer has room for a piece and OUT_KEEP
+for answers: a client that reads slowly, or not at all, holds back its own session, whose
+programs then wait to print, and the other sessions and new connections go on. The
+answers to one read from the client go into the buffer whole or not at all (a client
+that sends without reading loses answers, never a part of one).
 
 telnetd off kills the server: the kill ends it at the end of its poll(), and its
 descriptors close with it, so the port is free, every client gets its FIN and every
@@ -76,16 +78,17 @@ static void say(const char *fmt, ...) {
     write(kmsg, buf, (size_t)n);
 }
 
-/* bytes for the client, behind what waits already; what does not fit is dropped */
+/* bytes for the client, behind what waits already: all of them, or none when they do not fit
+   (only answers can meet a full buffer: the session's output is read only when there is room) */
 static void queue(struct session *s, const unsigned char *p, int n) {
-    if(n > OUT_SIZE - s->out_len) n = OUT_SIZE - s->out_len;
+    if(n <= 0 || n > OUT_SIZE - s->out_len) return;
     memcpy(s->out + s->out_len, p, (size_t)n);
     s->out_len += n;
 }
 
 /* is there room for another piece of the session's output, with OUT_KEEP left? */
 static int room(const struct session *s) {
-    return OUT_SIZE - s->out_len >= 2 * PIECE + OUT_KEEP;
+    return OUT_SIZE - s->out_len >= 2 * PIECE + 1 + OUT_KEEP;
 }
 
 /* a connection that gets no session: why, if the connection takes it now (a new one has room
@@ -165,7 +168,7 @@ static void from_client(struct session *s) {
         return;
     }
     telnet_recv(&s->tn, in, (int)n, &d, &r);
-    queue(s, reply, r.len);
+    queue(s, reply, r.len);             /* the answers whole, or none when the client does not read */
     if(s->ended) return;                /* the shell is gone: nothing to type to */
     if(s->tn.resized) {
         int cols = s->tn.cols < COLS_MIN ? COLS_MIN : s->tn.cols > COLS_MAX ? COLS_MAX : s->tn.cols;
@@ -178,7 +181,7 @@ static void from_client(struct session *s) {
 
 /* what the session printed, a piece of it, for the client */
 static void from_pty(struct session *s) {
-    unsigned char in[PIECE], out[2 * PIECE];
+    unsigned char in[PIECE], out[2 * PIECE + 1];
     ssize_t n = read(s->master, in, sizeof(in));
     if(n <= 0) {                        /* the shell ended: what is left goes first */
         s->ended = 1;

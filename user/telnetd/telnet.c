@@ -12,14 +12,30 @@ library calls, so the host tests run this file as it is.
 
 enum { S_DATA, S_IAC, S_OPTION, S_SB, S_SB_IAC };
 
+/* a data byte, if there is room */
 static void put(struct tn_buf *b, unsigned char c) {
     if(b->len < b->size) b->p[b->len++] = c;
 }
 
-static void put3(struct tn_buf *b, int verb, int opt) {
-    put(b, TN_IAC);
-    put(b, (unsigned char)verb);
-    put(b, (unsigned char)opt);
+/* an answer for the client: all of it or none, so that no sequence reaches the client cut
+   short. When the session's output so far ends in a CR, the NUL that makes it CR NUL comes
+   first (telnet_send() leaves it to the next byte, which this answer is). */
+static void answer(struct telnet *t, struct tn_buf *b, const unsigned char *p, int n) {
+    int i, nul = t->out_cr;
+    if(b->len + nul + n > b->size) return;
+    if(nul) {
+        b->p[b->len++] = 0;
+        t->out_cr = 0;
+    }
+    for(i = 0; i < n; i++) b->p[b->len++] = p[i];
+}
+
+static void put3(struct telnet *t, struct tn_buf *b, int verb, int opt) {
+    unsigned char c[3];
+    c[0] = TN_IAC;
+    c[1] = (unsigned char)verb;
+    c[2] = (unsigned char)opt;
+    answer(t, b, c, 3);
 }
 
 void telnet_init(struct telnet *t) {
@@ -45,10 +61,10 @@ int telnet_opening(struct telnet *t, unsigned char *out) {
     b.p = out;
     b.len = 0;
     b.size = TN_OPENING;
-    if(t->us[TO_ECHO] == TN_NO) { t->us[TO_ECHO] = TN_WANTYES; put3(&b, TN_WILL, TO_ECHO); }
-    if(t->us[TO_SGA] == TN_NO) { t->us[TO_SGA] = TN_WANTYES; put3(&b, TN_WILL, TO_SGA); }
-    if(t->him[TO_SGA] == TN_NO) { t->him[TO_SGA] = TN_WANTYES; put3(&b, TN_DO, TO_SGA); }
-    if(t->him[TO_NAWS] == TN_NO) { t->him[TO_NAWS] = TN_WANTYES; put3(&b, TN_DO, TO_NAWS); }
+    if(t->us[TO_ECHO] == TN_NO) { t->us[TO_ECHO] = TN_WANTYES; put3(t, &b, TN_WILL, TO_ECHO); }
+    if(t->us[TO_SGA] == TN_NO) { t->us[TO_SGA] = TN_WANTYES; put3(t, &b, TN_WILL, TO_SGA); }
+    if(t->him[TO_SGA] == TN_NO) { t->him[TO_SGA] = TN_WANTYES; put3(t, &b, TN_DO, TO_SGA); }
+    if(t->him[TO_NAWS] == TN_NO) { t->him[TO_NAWS] = TN_WANTYES; put3(t, &b, TN_DO, TO_NAWS); }
     return b.len;
 }
 
@@ -62,7 +78,7 @@ static void option(struct telnet *t, int verb, int opt, struct tn_buf *reply) {
         if(*s == TN_NO) {
             int yes = verb == TN_WILL ? he_may(opt) : we_may(opt);
             if(yes) *s = TN_YES;
-            put3(reply, verb == TN_WILL ? (yes ? TN_DO : TN_DONT) : (yes ? TN_WILL : TN_WONT), opt);
+            put3(t, reply, verb == TN_WILL ? (yes ? TN_DO : TN_DONT) : (yes ? TN_WILL : TN_WONT), opt);
         } else if(*s == TN_WANTYES) {
             *s = TN_YES;                        /* our offer or request accepted */
         } else if(*s == TN_WANTNO) {
@@ -73,7 +89,7 @@ static void option(struct telnet *t, int verb, int opt, struct tn_buf *reply) {
     case TN_DONT:
         if(*s == TN_YES) {
             *s = TN_NO;
-            put3(reply, verb == TN_WONT ? TN_DONT : TN_WONT, opt);
+            put3(t, reply, verb == TN_WONT ? TN_DONT : TN_WONT, opt);
         } else if(*s == TN_WANTYES || *s == TN_WANTNO) {
             *s = TN_NO;
         }
@@ -102,7 +118,7 @@ static void sub_byte(struct telnet *t, unsigned char c) {
 
 /* IAC c */
 static void command(struct telnet *t, unsigned char c, struct tn_buf *data, struct tn_buf *reply) {
-    const char *s;
+    static const unsigned char ayt[] = TN_AYT_ANSWER;
     t->state = S_DATA;
     switch(c) {
     case TN_IAC:                                /* IAC IAC: the data byte 255 */
@@ -126,10 +142,18 @@ static void command(struct telnet *t, unsigned char c, struct tn_buf *data, stru
         t->cr = 0;
         put(data, 0x03);
         break;
-    case TN_AYT:
-        for(s = TN_AYT_ANSWER; *s; s++) put(reply, (unsigned char)*s);
+    case TN_EC:                                 /* erase character: the Backspace key (DEL) */
+        t->cr = 0;
+        put(data, 0x7f);
         break;
-    default:                                    /* NOP, DM, GA, EC, EL, AO, a stray SE */
+    case TN_EL:                                 /* erase line: Ctrl+U, which clears the line */
+        t->cr = 0;
+        put(data, 0x15);
+        break;
+    case TN_AYT:
+        answer(t, reply, ayt, (int)sizeof(ayt) - 1);
+        break;
+    default:                                    /* NOP, DM, GA, AO (no output to abort), a stray SE */
         break;
     }
 }
@@ -180,10 +204,11 @@ int telnet_send(struct telnet *t, const unsigned char *in, int n, unsigned char 
     int i, k = 0;
     for(i = 0; i < n; i++) {
         unsigned char c = in[i];
-        if(c == '\n' && !t->out_cr) out[k++] = '\r';
+        if(t->out_cr && c != '\n') out[k++] = 0;      /* the CR before was a CR alone: CR NUL */
+        if(c == '\n' && !t->out_cr) out[k++] = '\r';  /* LF: CR LF, unless the CR is there already */
         if(c == TN_IAC) out[k++] = TN_IAC;
         out[k++] = c;
-        t->out_cr = c == '\r';
+        t->out_cr = c == '\r';                         /* what follows a CR decides: LF, or NUL */
     }
     return k;
 }

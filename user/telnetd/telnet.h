@@ -9,16 +9,22 @@ the same file on the host.
 
 From the client (telnet_recv): the data for the terminal, and what to send back.
 Commands start with IAC (255) and may be split across reads at any byte. IAC IAC is a
-data byte 255; IAC IP and IAC BRK become Ctrl+C (3); IAC AYT is answered at once; the
-other commands (NOP, DM, GA, EC, EL, AO) change nothing. CR LF and CR NUL are a CR
-alone, as a terminal's Return key. Options follow RFC 1143: the server will do ECHO
-and SUPPRESS-GO-AHEAD and wants the client to do SUPPRESS-GO-AHEAD and NAWS (its window
-size, "negotiate about window size"); every other option is refused once (WONT, DONT),
-and nothing is answered that does not change an option's state, so two ends cannot
-negotiate in a loop. A NAWS sub-negotiation sets cols and rows and raises resized.
+data byte 255; IAC IP and IAC BRK become Ctrl+C (3), IAC EC the Backspace key (DEL,
+127), IAC EL Ctrl+U (21, which clears the line); IAC AYT is answered at once; the other
+commands (NOP, DM, GA, AO) change nothing. CR LF and CR NUL are a CR alone, as a
+terminal's Return key. Options follow RFC 1143: the server will do ECHO and
+SUPPRESS-GO-AHEAD and wants the client to do SUPPRESS-GO-AHEAD and NAWS (its window
+size, "negotiate about window size"). Every other option is refused (WONT, DONT) each
+time the client asks for it; a request for what is so already, and the client's answer
+to the server's own request, get no answer, so two ends cannot negotiate in a loop. A
+NAWS sub-negotiation of 4 bytes sets cols and rows (0 means unknown) and raises resized;
+one of another length changes nothing. Each answer goes into reply whole or not at all:
+a client that sends faster than it reads loses answers, never a part of one.
 
 To the client (telnet_send): LF becomes CR LF (a CR LF that is there already stays one),
-and a data byte 255 becomes IAC IAC.
+a CR followed by anything else CR NUL, and a data byte 255 IAC IAC. Whether a CR at the
+end of what was printed so far is CR LF or CR NUL, the next byte says: the next call's,
+or the NUL comes before the next answer to the client.
 
 telnet_opening(): the server's first bytes: WILL ECHO, WILL SUPPRESS-GO-AHEAD,
 DO SUPPRESS-GO-AHEAD, DO NAWS. The client then echoes nothing itself and sends each key
@@ -68,7 +74,7 @@ struct telnet {
     unsigned char him[256];         /* each option on the client's side (DO/DONT) */
     int cols, rows;                 /* the client's window (NAWS); 0 until it says */
     int resized;                    /* NAWS changed cols or rows: the caller acts, then clears it */
-    int out_cr;                     /* the last byte sent to the client was CR */
+    int out_cr;                     /* the session's output so far ends in a CR (its LF or NUL comes next) */
 };
 
 /* bytes, as far as the room goes: what is left out is dropped */
@@ -86,7 +92,8 @@ int telnet_opening(struct telnet *t, unsigned char *out);
    for the client into reply */
 void telnet_recv(struct telnet *t, const unsigned char *in, int n, struct tn_buf *data, struct tn_buf *reply);
 
-/* n bytes the session printed, for the client, into out (2 * n bytes at most); its length */
+/* n bytes the session printed, for the client, into out (2 * n + 1 bytes at most: the +1 is the
+   NUL after a CR that ended the call before); its length */
 int telnet_send(struct telnet *t, const unsigned char *in, int n, unsigned char *out);
 
 #endif
