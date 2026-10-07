@@ -35,6 +35,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               200 ms: each burst arrives whole at once, not held for the ACK (no Nagle)
   zwprobe     a full receive buffer probed with a byte at a time (BSD, macOS and Windows
               probe so): each probe gets an ACK saying the window is shut
+  evict       a client whose half-open connection a later SYN took the place of: its ACK
+              and data get a reset at once, and the server serves the next client
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -54,7 +56,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rawnet                                       # noqa: E402
-from rawnet import ACK, FIN, PSH, Conn, Server     # noqa: E402
+from rawnet import ACK, FIN, PSH, RST, Conn, Server   # noqa: E402
 
 
 def load_harness():
@@ -415,6 +417,28 @@ def sc_zwprobe(rig):
     return ok
 
 
+def sc_evict(rig):
+    ok = rig.start('nettest sleepsrv 23 3000', 'listening on port 23')
+    c = Conn(rig.net, 3400, 23)
+    ok = c.syn() is not None and ok                 # a client whose ACK is slow to come
+    others = [Conn(rig.net, 3410 + i, 23) for i in range(4)]
+    for o in others:                                # four more SYNs: the backlog (4) is full, and the oldest
+        ok = o.syn() is not None and ok             # half-open entry, the slow client's, makes room
+    rig.net.drain()
+    c.ack(flags=ACK | PSH, data=b'hello\n')         # its handshake's ACK, and data: no connection for it now
+    r = rig.net.wait(lambda s: c.mine(s), 2)
+    ok = r is not None and bool(r.flags & RST) and ok
+    for o in others:
+        o.rst()
+    d = real_client(rig, 3420)                      # the next client is served
+    ok = d is not None and rig.expect('nettest: connection from 10.0.2.2 port 3420') and \
+        rig.expect('nettest: read 6 bytes, then EOF') and ok
+    if d:
+        rig.finish(d)
+    print('        (the evicted client: %s)' % ('a reset' if r is not None and r.flags & RST else 'no answer' if r is None else repr(r)))
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -483,6 +507,7 @@ SCENARIOS = [
     ('lost', sc_lost, 'a lost small segment is sent again as it was, and what waited behind it follows'),
     ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
     ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
+    ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]

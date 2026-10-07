@@ -61,7 +61,9 @@ of it was ignored). A program's connections (net/sock.c) send small writes at
 once: Nagle's rule held telnetd's echo and screen updates for the client's
 delayed ACK (40 to 200 ms); the kernel's own connections keep it, and both keep
 the silly window rules. Data that did not fit is answered all the same (a byte
-probing a shut window, as BSD, macOS and Windows probe, got no ACK).
+probing a shut window, as BSD, macOS and Windows probe, got no ACK). A listener
+answers a segment with an ACK in it with a reset (RFC 793): a client whose
+half-open connection made room for another hears so at once.
 */
 
 #include <surfos/types.h>
@@ -501,6 +503,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     if(s->state == LISTEN) {
         struct tcp_socket *c;
         u_int i;
+        if(flags & TCP_ACK) send_rst_for(ip, th, datalen);   /* 10/6/26: no connection for it (one evicted below, say) */
         if(!(flags & TCP_SYN) || (flags & (TCP_ACK | TCP_RST))) { netbuf_free(nb); return; }
         /* 10/6/26: a full backlog makes room by dropping the oldest half-open connection: a real client
            finishes its handshake in a round trip, so only a scan or a flood loses its place */
