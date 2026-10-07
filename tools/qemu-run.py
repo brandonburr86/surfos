@@ -451,6 +451,31 @@ SMOKE = [
       ('set prompt.unicode=on', [shown('hda1 \u224b> ')]),
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
+    # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
+    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none
+    # and --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
+    # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
+    # served; a client whose keys flood a session that reads none; the rest of the protocol in one session that ends
+    # with a reset; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the
+    # server's log.
+    ('telnetd', ['telnetd: not running (telnetd on starts it)']),
+    ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
+    ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
+    ('run telnetd on 65536', ['telnetd: 65536 is no port (1-65535)', 'exit status 2']),
+    ('run telnetd on +23', ['telnetd: +23 is no port (1-65535)', 'exit status 2']),
+    ('run telnetd --server 23', ['telnetd: --server is how telnetd on starts the server', 'exit status 2']),
+    ('@telnet-session', []),
+    ('@telnet-two', []),
+    ('@telnet-full', []),
+    ('@telnet-stalled', []),
+    ('@telnet-flood', []),
+    ('@telnet-protocol', []),
+    ('@telnet-off-inside', []),
+    ('@telnet-port-busy', []),
+    ('run telnetd off', ['telnetd: not running', 'exit status 1']),
+    ('dmesg', ['telnetd: listening on port 23', 'telnetd: session 1 from 10.0.2.2:', 'telnetd: session 1 ended (the shell',
+               'telnetd: telnetd off stops the server (pid', ', 2 session shells)', 'refused: 4 sessions are open',
+               'ended (the client left)', 'telnetd: telnetd off stops the server (pid', ', 1 session shell)']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -1044,6 +1069,545 @@ def surfsh_corner_check(q):
 
 
 CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
+
+
+# ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------
+TN_IAC, TN_DONT, TN_DO, TN_WONT, TN_WILL, TN_SB, TN_SE = 255, 254, 253, 252, 251, 250, 240
+TO_ECHO, TO_SGA, TO_NAWS = 1, 3, 31
+
+
+class Telnet:
+    """A telnet client for the tests that answers as a terminal's client does (RFC 854, 1143): it lets the
+    server echo and suppress go-ahead (DO), suppresses go-ahead itself and tells its window size when asked
+    (WILL, then NAWS), and refuses anything else once. What the session printed is kept in self.data with
+    the IAC sequences taken out (IAC IAC is the byte 255, CR NUL a CR); self.raw has everything as it came.
+    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
+
+    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
+        self.sock = self._connect(host, port, timeout, rcvbuf)
+        self.cols, self.rows = cols, rows
+        self.raw, self.data = b'', b''
+        self.cursor, self.more_at, self.auto_more = 0, 0, True
+        self.closed = False
+        self.state, self.verb, self.sb = 'data', 0, b''
+        self.after_cr = False                   # the last data byte was CR: a NUL after it is not data
+        self.agreed = set()                     # (side, option): ('him', 1) the server echoes, ('us', 31) NAWS ...
+
+    @staticmethod
+    def _connect(host, port, timeout, rcvbuf):
+        """the connection; QEMU's forwarded port accepts at once and closes again while nothing listens in the
+        guest, so until timeout, one that ends before the server has said anything is tried again. rcvbuf: a
+        small window, for a client that stops reading"""
+        deadline = time.time() + timeout
+        while True:
+            s = socket.socket()
+            if rcvbuf:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            s.settimeout(timeout)
+            try:
+                s.connect((host, port))
+            except OSError:
+                s.close()
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.2)
+                continue
+            s.settimeout(1)
+            try:
+                alive = s.recv(1, socket.MSG_PEEK) != b''
+            except socket.timeout:
+                alive = True                    # open and quiet so far: the server's opening is on its way
+            except OSError:
+                alive = False                   # reset
+            if alive or time.time() > deadline:
+                s.settimeout(timeout)
+                return s
+            s.close()
+            time.sleep(0.2)
+
+    def _out(self, b):
+        try:
+            self.sock.sendall(b)
+        except OSError:
+            self.closed = True
+
+    def _option(self, verb, opt):
+        side = 'him' if verb in (TN_WILL, TN_WONT) else 'us'
+        if verb in (TN_WILL, TN_DO):
+            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else (TO_SGA, TO_NAWS))
+            if (side, opt) in self.agreed:
+                return                          # nothing changes: nothing to say
+            if not wanted:
+                self._out(bytes([TN_IAC, TN_DONT if verb == TN_WILL else TN_WONT, opt]))
+                return
+            self.agreed.add((side, opt))
+            self._out(bytes([TN_IAC, TN_DO if verb == TN_WILL else TN_WILL, opt]))
+            if side == 'us' and opt == TO_NAWS:
+                self.resize(self.cols, self.rows)
+        elif (side, opt) in self.agreed:        # WONT or DONT for something on: agreed off
+            self.agreed.discard((side, opt))
+            self._out(bytes([TN_IAC, TN_DONT if verb == TN_WONT else TN_WONT, opt]))
+
+    def resize(self, cols, rows):
+        """a new window size (NAWS), as a terminal's client sends it when its window changes"""
+        self.cols, self.rows = cols, rows
+        size = bytes([cols >> 8, cols & 255, rows >> 8, rows & 255]).replace(b'\xff', b'\xff\xff')
+        self._out(bytes([TN_IAC, TN_SB, TO_NAWS]) + size + bytes([TN_IAC, TN_SE]))
+
+    def _feed(self, chunk):
+        out = bytearray()
+        for c in chunk:
+            if self.state == 'data':
+                if c == TN_IAC:
+                    self.state = 'iac'
+                elif c == 0 and self.after_cr:
+                    self.after_cr = False       # CR NUL: a CR alone (RFC 854)
+                else:
+                    out.append(c)
+                    self.after_cr = c == 13
+            elif self.state == 'iac':
+                self.state = 'data'
+                if c == TN_IAC:
+                    out.append(255)
+                    self.after_cr = False
+                elif c in (TN_WILL, TN_WONT, TN_DO, TN_DONT):
+                    self.state, self.verb = 'option', c
+                elif c == TN_SB:
+                    self.state, self.sb = 'sb', b''
+            elif self.state == 'option':
+                self.state = 'data'
+                self._option(self.verb, c)
+            elif self.state == 'sb':
+                self.state = 'sb-iac' if c == TN_IAC else 'sb'
+            elif self.state == 'sb-iac':
+                self.state = 'data' if c == TN_SE else 'sb'
+        self.data += bytes(out)
+
+    def pump(self, timeout=0.1):
+        if self.closed:
+            time.sleep(timeout)
+            return
+        r, _, _ = select.select([self.sock], [], [], timeout)
+        if not r:
+            return
+        try:
+            chunk = self.sock.recv(65536)
+        except OSError:
+            chunk = b''
+        if not chunk:
+            self.closed = True
+            return
+        self.raw += chunk
+        self._feed(chunk)
+        while self.auto_more:                   # the pager's question: Space, as the console harness answers it
+            i = self.data.find(MORE, self.more_at)
+            if i < 0:
+                break
+            self.more_at = i + len(MORE)
+            self._out(b' ')
+
+    def expect(self, needle, timeout=10):
+        """wait for needle (a string, or a compiled bytes pattern) in what the session printed, after the last match"""
+        deadline = time.time() + timeout
+        while True:
+            if isinstance(needle, re.Pattern):
+                m = needle.search(self.data, self.cursor)
+                if m:
+                    self.cursor = m.end()
+                    return True
+            else:
+                i = self.data.find(needle.encode(), self.cursor)
+                if i >= 0:
+                    self.cursor = i + len(needle.encode())
+                    return True
+            if time.time() > deadline or self.closed:
+                return False
+            self.pump(0.1)
+
+    def send(self, keys):
+        """keys as typed: a string (a newline is Return, sent as CR NUL; 0xff doubled) or bytes as they are"""
+        if isinstance(keys, str):
+            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', b'\r\0')
+        self._out(keys)
+
+    def wait_closed(self, timeout=10):
+        deadline = time.time() + timeout
+        while not self.closed and time.time() < deadline:
+            self.pump(0.1)
+        return self.closed
+
+    def leave(self, timeout=10):
+        """the client goes: its FIN, then the server's close once the session has ended (True)"""
+        try:
+            self.sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        return self.wait_closed(timeout)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        self.closed = True
+
+
+TELNET_ROOT = shown('SURF \u224b@> ')         # a session's prompt in /: the remote state (surfos/prompt.h)
+
+
+def telnet_no_sessions(q, timeout=20):
+    """True once telnetd status on the console says that the server runs with no session left"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        start = len(q.transcript)
+        q.send('telnetd status\n')
+        if not q.expect(PROMPT, 10):
+            return False
+        if 'running (pid' in q.transcript[start:].decode(errors='replace') and \
+           ', 0 session shells' in q.transcript[start:].decode(errors='replace'):
+            return True
+        q.wait(0.5)
+    return False
+
+
+def telnet_session_check(q):
+    """one session through the forwarded port 23 (telnetd on came before): the banner, the prompt in its remote
+    state (\u224b@>, which a failed command does not change), a command, cd and the breadcrumbs, Tab, help paged (the
+    client answers --More--), Ctrl+C killing a running count, exit, and the server closing the connection; the
+    console's own prompt meanwhile has no @"""
+    t = Telnet(q.ports['telnet'])
+    try:
+        ok = t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)
+        steps = [('pwd\n', ['\r\n/\r\n', TELNET_ROOT]),
+                 ('cd /initrd/bin\n', [shown('initrd \u25b8 bin \u224b@> ')]),
+                 ('ech\ttelnet-tab\n', ['\r\ntelnet-tab\r\n', shown('bin \u224b@> ')]),
+                 ('help\n', ['surfsh 1.0, the SurfOS shell', "the kernel's commands", '--More--',
+                             '(C)2004-2026 Brandon Burr.', shown('bin \u224b@> ')]),
+                 ('count 100 100\n', [' 5 ']),
+                 (b'\x03', ['killed]', shown('bin \u224b@> ')])]
+        for keys, expects in steps:
+            if not ok:
+                break
+            t.send(keys)
+            ok = all(t.expect(e, 20) for e in expects)
+        if ok:
+            q.send('cd /initrd\n')             # the console's prompt: no @ (F1-F4 and the serial line are not remote)
+            ok = q.expect(shown('initrd \u224b> '), 10)
+            q.send('cd /\n')
+            ok = q.expect(shown('SURF \u224b> '), 10) and ok
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a session: banner, prompt \u224b@> (the console\'s has no @), a command, cd, Tab, help paged, '
+            'Ctrl+C, exit closes it', ok)
+
+
+def telnet_two_check(q):
+    """two sessions at once, each with its own shell; telnetd status on the console lists both; telnetd off ends
+    them (both connections close); telnetd on again"""
+    a, b = Telnet(q.ports['telnet']), Telnet(q.ports['telnet'])
+    try:
+        ok = a.expect(TELNET_ROOT, 15) and b.expect(TELNET_ROOT, 15)
+        if ok:
+            a.send('echo from-a\n')
+            b.send('echo from-b\n')
+            ok = a.expect('\r\nfrom-a\r\n') and b.expect('\r\nfrom-b\r\n')
+            ok = ok and b'from-b' not in a.data and b'from-a' not in b.data
+        q.send('telnetd status\n')
+        ok = ok and q.expect('telnetd: running (pid') and q.expect('2 session shells:') and q.expect('surfsh (pid') \
+            and q.expect('surfsh (pid') and q.expect(PROMPT)
+        q.send('telnetd off\n')
+        ok = ok and q.expect('telnetd: stopped (2 session shells ended)', 15) and q.expect(PROMPT)
+        ok = ok and a.wait_closed(10) and b.wait_closed(10)
+        q.send('telnetd on\n')
+        ok = ok and q.expect('telnetd: listening on 10.0.2.15 port 23') and q.expect(PROMPT)
+    finally:
+        a.close()
+        b.close()
+    return ('telnet: two sessions at once, telnetd status lists them, off ends both, on again', ok)
+
+
+def telnet_full_check(q):
+    """four sessions at once, a fifth connection told so and closed; the four end when their clients go"""
+    clients, fifth = [], None
+    try:
+        ok = True
+        for _ in range(4):
+            t = Telnet(q.ports['telnet'])
+            clients.append(t)
+            ok = ok and t.expect(TELNET_ROOT, 15)
+        fifth = Telnet(q.ports['telnet'])
+        ok = ok and fifth.expect('4 sessions are open already', 10) and fifth.wait_closed(10)
+        for t in clients:
+            ok = t.leave(10) and ok
+        ok = ok and telnet_no_sessions(q)
+    finally:
+        for t in clients + ([fifth] if fifth else []):
+            t.close()
+    return ('telnet: four sessions at once, a fifth refused; they end when their clients go', ok)
+
+
+def telnet_stalled_check(q):
+    """a client that stops reading while its session prints without end (hexdump /dev/zero in the background, which
+    is not paged): however much the host's side takes first, the connection's send buffer in the guest fills and
+    stays full (netstat: out 8192), and the server holds that session back and serves a second session all the
+    same. When the first client reads again its session goes on: the hexdump is killed from the console, and an
+    Enter in the session brings the report of it and a prompt; every line arrived, in order. Then the client goes."""
+    a, b = Telnet(q.ports['telnet'], rcvbuf=4096), None
+    full = re.compile(rb'local 23\s+remote [0-9.]+:[0-9]+\s+rx\s+[0-9]+\s+tx\s+[0-9]+\s+retrans\s+[0-9]+\s+'
+                      rb'buf\s+in\s+[0-9]+\s+out\s+8192')
+    line = re.compile(rb'([0-9a-f]{8})  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  \|\.{16}\|\r\n')
+    why = ''
+    try:
+        ok = a.expect(TELNET_ROOT, 15)
+        if ok:
+            a.send('/initrd/bin/hexdump /dev/zero &\n')
+            ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
+            m = re.search(rb'\[(\d+)\] started', a.data)
+            pid = int(m.group(1)) if m else 0
+        stalled, deadline = False, time.time() + 90
+        while ok and not stalled and time.time() < deadline:
+            start = len(q.transcript)
+            q.send('netstat\n')
+            ok = q.expect(PROMPT, 10)
+            stalled = full.search(q.transcript[start:]) is not None
+            if not stalled:
+                q.wait(1)
+        why = '' if stalled else ' (the send buffer never filled)'
+        ok = ok and stalled
+        if ok:
+            b = Telnet(q.ports['telnet'])
+            ok = b.expect(TELNET_ROOT, 15)
+        if ok:
+            b.send('echo second-session\n')
+            ok = b.expect('\r\nsecond-session\r\n', 15) and b.expect(TELNET_ROOT, 10)
+        if ok:
+            b.send('exit\n')
+            ok = b.wait_closed(10)
+        if ok:                                      # a reads again; the hexdump is stopped from the console
+            a.pump(1)
+            q.send('kill %d\n' % pid)
+            ok = q.expect("killing 'hexdump'", 10) and q.expect(PROMPT, 10)
+        if ok:                                      # everything it printed, then an Enter: the report and a prompt
+            quiet_since = time.time()
+            deadline = time.time() + 120
+            while time.time() - quiet_since < 2 and time.time() < deadline and not a.closed:
+                n = len(a.data)
+                a.pump(0.2)
+                if len(a.data) != n:
+                    quiet_since = time.time()
+            a.send('\n')
+            ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
+            # the lines from the prompt after "[pid] started" on: the job's first lines may come before that notice
+            # and the prompt, which then cut one of them
+            started = re.search(rb'\] started', a.data)
+            prompt = TELNET_ROOT.search(a.data, started.end()) if started else None
+            offsets = [int(x, 16) for x in line.findall(a.data, prompt.end() if prompt else 0)]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x10000 and \
+                offsets == list(range(offsets[0], offsets[0] + 16 * len(offsets), 16))
+            why = why or ('' if ok else ' (%d lines, not all in order)' % len(offsets))
+            ok = a.leave(10) and ok
+        ok = ok and telnet_no_sessions(q)
+    finally:
+        a.close()
+        if b:
+            b.close()
+    return ('telnet: a client that stops reading holds back only its own session, which goes on later' + why, ok)
+
+
+def telnet_flood_check(q):
+    """a client that types without end into a session that reads nothing (sleep 100000, a kernel command): the server
+    keeps reading it, holds what the pseudo-terminal does not take and drops the rest, and a second session stays
+    quick all the while (an echo, a hexdump of a program paged on a tall window); a Ctrl+C from the flooding client
+    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed"""
+    a, b = Telnet(q.ports['telnet']), None
+    stop, sent = threading.Event(), [0]
+
+    def flood():
+        chunk = b'x' * 1024
+        while not stop.is_set():
+            try:
+                a.sock.sendall(chunk)
+                sent[0] += len(chunk)
+            except OSError:
+                return
+
+    flooder = threading.Thread(target=flood, daemon=True)
+    ok, why = a.expect(TELNET_ROOT, 15), ''
+    try:
+        if ok:
+            a.send('sleep 100000\n')
+            ok = a.expect('sleep 100000', 10)
+        if ok:
+            flooder.start()
+            time.sleep(1)
+            b = Telnet(q.ports['telnet'], rows=1000)
+            t0 = time.time()
+            ok = b.expect(TELNET_ROOT, 20)
+            if ok:
+                b.send('echo flood-ok\n')
+                ok = b.expect('\r\nflood-ok\r\n', 10) and b.expect(TELNET_ROOT, 10) and time.time() - t0 < 20
+                why = '' if ok else ' (the second session was slow)'
+            if ok:
+                t0 = time.time()
+                b.send('/initrd/bin/hexdump /initrd/bin/echo\n')
+                ok = b.expect(re.compile(rb'\r\n[0-9a-f]{8}\r\n'), 60) and b.expect(TELNET_ROOT, 20)
+                ok = ok and time.time() - t0 < 60 and sent[0] > 64 * 1024
+                why = '' if ok else ' (the hexdump was slow, or the flood stopped: %d bytes sent)' % sent[0]
+        stop.set()
+        if flooder.is_alive():
+            flooder.join(10)
+        if ok:
+            a.cursor = len(a.data)
+            a.send(b'\xff\xf4')                     # IAC IP: Ctrl+C
+            ok = a.expect(PROMPT, 15)
+            why = why or ('' if ok else ' (Ctrl+C did not end the sleep)')
+        if ok:
+            a.send('echo after-flood\n')
+            ok = a.expect('\r\nafter-flood\r\n', 10) and a.expect(TELNET_ROOT, 10)
+            why = why or ('' if ok else ' (keys typed ahead were left)')
+        if ok and b:
+            b.send('exit\n')
+            ok = b.wait_closed(10)
+        if ok:
+            a.send('exit\n')
+            ok = a.wait_closed(10)
+    finally:
+        stop.set()
+        a.close()
+        if b:
+            b.close()
+    return ('telnet: keys flooding into a session that reads none hold back no other session; Ctrl+C still gets '
+            'through' + why, ok)
+
+
+# a BSD telnet's first bytes: DO SGA, WILL TERMINAL-TYPE, NAWS, TERMINAL-SPEED, TOGGLE-FLOW-CONTROL, LINEMODE,
+# NEW-ENVIRON, DO STATUS
+TN_BSD_OPENING = bytes([255, 253, 3, 255, 251, 24, 255, 251, 31, 255, 251, 32, 255, 251, 33, 255, 251, 34, 255, 251, 39,
+                        255, 253, 5])
+
+
+def telnet_server_pid(q):
+    """the running server's pid, as telnetd status on the console says it"""
+    start = len(q.transcript)
+    q.send('telnetd status\n')
+    q.expect(PROMPT, 10)
+    m = re.search(r'running \(pid (\d+)\)', q.transcript[start:].decode(errors='replace'))
+    return int(m.group(1)) if m else None
+
+
+def telnet_zombies(q, server):
+    """the pids of the shells that are zombies under the server, as ps on the console lists them"""
+    start = len(q.transcript)
+    q.send('ps\n')
+    q.expect(PROMPT, 10)
+    text = q.transcript[start:].decode(errors='replace')
+    return re.findall(r'(?m)^\s*(\d+)\s+zombie\s+\S+\s+\d+\s+\d+\s+%d\s+surfsh' % server, text)
+
+
+def telnet_protocol_check(q):
+    """one session for the rest of the protocol: a BSD telnet's opening (each option it offers that the server does not
+    do is refused once), the window size the client tells (NAWS 100x30) as a program sees it, AYT answered, DO
+    TIMING-MARK refused, Enter as CR LF, DEL and BS, IAC EC and IAC EL, UTF-8 typed, IAC IP on a running count, the byte
+    255 in a program's output (cat of a program file, in the background) as IAC IAC; then the client resets the
+    connection: the session ends, and its shell is collected at once (no zombie under the server)"""
+    import struct
+    server = telnet_server_pid(q)
+    t = Telnet(q.ports['telnet'], cols=100, rows=30)
+    ok = server is not None
+    try:
+        t._out(TN_BSD_OPENING)
+        ok = ok and t.expect(TELNET_ROOT, 15)
+        refusals = [bytes([255, 254, o]) for o in (24, 32, 33, 34, 39)] + [bytes([255, 252, 5])]
+        ok = ok and all(t.raw.count(r) == 1 for r in refusals)
+        steps = [('pagetest size\n', ['TTY_GETSIZE 100x30', TELNET_ROOT]),
+                 (b'\xff\xf6', ['[SurfOS: yes]']),
+                 (b'echo crlf-enter\r\n', ['\r\ncrlf-enter\r\n', TELNET_ROOT]),
+                 (b'echo abc\x7f\x7fd\r\0', ['\r\nad\r\n', TELNET_ROOT]),
+                 (b'echo xyz\x08\x08w\r\0', ['\r\nxw\r\n', TELNET_ROOT]),
+                 (b'echo pqX\xff\xf7r\r\0', ['\r\npqr\r\n', TELNET_ROOT]),
+                 (b'not this line\xff\xf8echo el-ok\r\0', ['\r\nel-ok\r\n', TELNET_ROOT]),
+                 ('echo café\n', ['\r\ncafé\r\n', TELNET_ROOT]),
+                 ('count 100 100\n', [' 5 ']),
+                 (b'\xff\xf4', ['killed]', TELNET_ROOT])]
+        for keys, expects in steps:
+            if not ok:
+                break
+            t.send(keys)
+            ok = all(t.expect(e, 20) for e in expects)
+        if ok:                                      # DO TIMING-MARK: WONT
+            mark = len(t.raw)
+            t._out(b'\xff\xfd\x06')
+            deadline = time.time() + 10
+            while b'\xff\xfc\x06' not in t.raw[mark:] and not t.closed and time.time() < deadline:
+                t.pump(0.1)
+            ok = b'\xff\xfc\x06' in t.raw[mark:]
+        if ok:                                      # 255 in the output: cat of a program, then a prompt says done
+            mark = len(t.data)
+            t.send('/initrd/bin/cat /initrd/bin/hello &\n')
+            ok = t.expect('] started', 10)
+            deadline = time.time() + 60
+            while ok and b'] done' not in t.data[mark:] and time.time() < deadline:
+                t.send('\n')
+                t.expect(TELNET_ROOT, 10)
+                t.pump(0.5)
+            ok = ok and b'] done' in t.data[mark:] and t.data[mark:].count(b'\xff') >= 100
+        if ok:                                      # a reset: the session ends, its shell is collected
+            t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            t.close()
+            ok = telnet_no_sessions(q)
+            deadline, zombies = time.time() + 5, ['?']
+            while zombies and time.time() < deadline:
+                zombies = telnet_zombies(q, server)
+                if zombies:
+                    q.wait(0.5)
+            ok = ok and not zombies
+    finally:
+        t.close()
+    return ('telnet: a BSD opening, NAWS 100x30, AYT, TIMING-MARK, CR LF, DEL, BS, EC, EL, UTF-8, IP, 255 in output, '
+            'a reset; no zombie after', ok)
+
+
+def telnet_off_inside_check(q):
+    """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
+    closes); on the console the server is not running any more"""
+    t = Telnet(q.ports['telnet'])
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t.send('telnetd off\n')
+            ok = t.wait_closed(15)
+    finally:
+        t.close()
+    q.send('telnetd\n')
+    ok = q.expect('telnetd: not running (telnetd on starts it)', 10) and q.expect(PROMPT, 10) and ok
+    return ('telnet: telnetd off typed in a session stops the server and ends the session', ok)
+
+
+def telnet_port_busy_check(q):
+    """telnetd on while another program listens on port 23 (nettest echo 23 1 &): the port is in use (status 1), and
+    no server is left behind; the host's connection to nettest then lets it end"""
+    q.send('nettest echo 23 1 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    q.send('run telnetd on\n')
+    ok = q.expect('telnetd: port 23 is in use', 10) and q.expect('exit status 1', 10) and q.expect(PROMPT, 10) and ok
+    q.send('telnetd\n')
+    ok = q.expect('telnetd: not running', 10) and q.expect(PROMPT, 10) and ok
+    s = guest_connection(q) if ok else None
+    if s:
+        s.close()
+    ok = ok and s is not None and q.expect('0 bytes echoed', 10)
+    q.send('telnetd\n')                     # surfsh collects nettest from the background
+    ok = q.expect(PROMPT, 10) and ok
+    return ('telnet: telnetd on while nettest has port 23: in use, and no server left', ok)
+
+
+CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
+                       '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
+                       '@telnet-flood': telnet_flood_check, '@telnet-protocol': telnet_protocol_check,
+                       '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host

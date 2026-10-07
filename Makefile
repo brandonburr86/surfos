@@ -37,12 +37,16 @@ USER_LIB_SRC = $(wildcard user/libsurf/*.c)
 USER_LIB_OBJ = $(USER_LIB_SRC:%.c=$(BUILD)/user/lib/%.o)
 USER_LIB     = $(BUILD)/user/lib/libsurf.a
 USER_CRT0    = $(BUILD)/user/lib/crt0.o
-USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest nettest
+USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest surfsh kcmdtest nettest \
+               telnetd
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 USER_PROGS  += ptytest       # 10/6/26 (the telnet server): pseudo-terminals, poll, procinfo, detach, /dev/kmsg
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
 SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
+# telnetd, the telnet server (10/6/26): user/telnetd/, its protocol module host-tested too
+TELNETD_SRC  = $(wildcard user/telnetd/*.c)
+TELNETD_OBJ  = $(TELNETD_SRC:user/telnetd/%.c=$(BUILD)/user/telnetd/%.o)
 
 
 CC         = gcc
@@ -83,7 +87,7 @@ SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c)
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
-DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d)
+DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -228,6 +232,17 @@ $(BUILD)/user/bin/surfsh: $(SURFSH_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(SURFSH_OBJ) $(USER_LIB)
 
+# telnetd likewise
+$(BUILD)/user/telnetd/%.o: user/telnetd/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/telnetd: $(TELNETD_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TELNETD_OBJ) $(USER_LIB)
+
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)$(PYTHON) tools/mkimage.py disk $@ 16 $(DISK_FILES)
@@ -352,9 +367,22 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
+# telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
+$(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnetd tests/host/test_telnet.c user/telnetd/telnet.c -o $@
+
+# 10/6/26: telnetd's server loop, user/telnetd/server.c as it is, against a simulated kernel (tests/host/telnetd/surf.h)
+$(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h user/telnetd/server.c user/telnetd/telnetd.h \
+                            user/telnetd/telnet.c user/telnetd/telnet.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetd -Iuser/telnetd tests/host/test_telnetd.c user/telnetd/telnet.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
-          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager
+          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -366,6 +394,8 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
+	$(BUILD)/host/test_telnet
+	$(BUILD)/host/test_telnetd
 
 clean:
 	rm -rf build

@@ -39,7 +39,8 @@ comes out of the framebuffer.
              calibrated on the ACPI PM timer and the local APIC timer takes over the tick
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
              controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
-             this host (a small page and 1 MB), the self test's network checks, then the
+             this host (a small page and 1 MB), the self test's network checks, a telnet
+             session (telnetd on; this host reaches port 23 through a forwarded port), then the
              adapter unplugged and plugged in again through the monitor, and finally a
              different adapter on another network (192.168.76.0/24) in its place
   usbdisk    a second emulated USB stick (a copy of the QEMU test disk: MBR + FAT16) next to the
@@ -929,13 +930,48 @@ USBNET_DEV = 'usb-net,bus=xhci.0,netdev=n0,id=usbnet0,mac=52:54:00:12:34:56'
 USBNET_OTHER = 'usb-net,bus=xhci.0,netdev=n1,id=usbnet1,mac=52:54:00:65:43:21'
 
 
+def load_smoke_harness():
+    """10/6/26: tools/qemu-run.py as a module, for its telnet client (Telnet)"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('qemu_run', os.path.join(REPO, 'tools', 'qemu-run.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def telnet_session(vm, qr, port):
+    """10/6/26: telnetd over the adapter, as from another computer on the laptop's network: this host reaches guest
+    port 23 through n0's forwarded port; one session (the banner, lsusb in it, exit), then telnetd off"""
+    results = []
+    ok, _ = run_cmd(vm, 'telnetd on', ['telnetd: listening on 10.0.2.15 port 23'])
+    if ok:
+        t = qr.Telnet(port, timeout=30)
+        try:
+            ok = t.expect("Brandon Burr's SurfOS", 30) and t.expect(qr.TELNET_ROOT, 30)
+            if ok:
+                t.send('lsusb\n')
+                ok = t.expect('-> eth0, cdc-ecm', 30) and t.expect(qr.TELNET_ROOT, 30)
+            if ok:
+                t.send('exit\n')
+                ok = t.wait_closed(30)
+        finally:
+            t.close()
+    results.append(('telnet: a session over the adapter (telnetd on, the banner, lsusb in it, exit)', ok))
+    ok, _ = run_cmd(vm, 'telnetd off', ['telnetd: stopped (0 session shells ended)'])
+    results.append(('telnetd off', ok))
+    return results
+
+
 def scenario_usbnet(args, image, firmware, outdir):
     results = []
     httpd = http.server.HTTPServer(('127.0.0.1', 0), HttpHandler)
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    qr = load_smoke_harness()
+    telnet_port = qr.free_port()
     vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
-            extra=['-netdev', 'user,id=n0', '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV])
+            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23',
+                   '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV])
     try:
         if boot_serial(vm, results, args.boot_timeout):
             boot = vm.text()
@@ -959,6 +995,7 @@ def scenario_usbnet(args, image, firmware, outdir):
                             and 'timed out' not in m.group(3)))
             ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
             results.append(('selftest, with its network checks on the USB adapter', ok))
+            results += telnet_session(vm, qr, telnet_port)
             # unplugged: the port reports it, eth0 stays but has no link
             vm.mon.cmd('device_del usbnet0')
             ok = vm.expect('unplugged (eth0, cdc-ecm', 20)
