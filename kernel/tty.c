@@ -145,10 +145,17 @@ static void input_seq(struct tty *t, const char *s) {
    Backspace, and the escape sequences of the cursor keys (ESC [ or ESC O, then the final byte)
    become those keys; other sequences are swallowed to their final byte. A lone Esc answers the
    pager's question (it drops the rest), and the rest of a sequence that follows is still
-   swallowed. In raw mode (tty.h) the bytes arrive as they were sent. *esc is the line's state
-   (0 normal, 1 after ESC, 2 inside ESC [ or ESC O); one per line. From interrupt handlers too. */
+   swallowed. A Ctrl+C ends a sequence in progress and goes through: a sequence cut short (a
+   cursor key that did not fit a full queue) never swallows it. In raw mode (tty.h) the bytes
+   arrive as they were sent. *esc is the line's state (0 normal, 1 after ESC, 2 inside ESC [ or
+   ESC O); one per line. From interrupt handlers too. */
 void tty_term_input(struct tty *t, u_char *esc, u_char c) {
     if(t->raw) {
+        *esc = 0;
+        tty_input(t, c);
+        return;
+    }
+    if(c == 0x03) {                     /* 10/6/26: before the sequence: Ctrl+C always reaches tty_input() */
         *esc = 0;
         tty_input(t, c);
         return;
@@ -188,9 +195,9 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
    question up. A pty's master takes those whatever room is left (kernel/pty.c). */
 int tty_term_queues(struct tty *t, u_char esc, u_char c) {
     if(t->raw) return 1;
+    if(c == 0x03) return 0;                         /* even inside a sequence: it ends it (tty_term_input()) */
     if(esc == 1) return 0;
     if(esc == 2) return c == 'A' || c == 'B' || c == 'C' || c == 'D' || c == 'H' || c == 'F';
-    if(c == 0x03) return 0;
     if(c == 0x1B) return t->con->page_asker != NULL;
     return 1;
 }

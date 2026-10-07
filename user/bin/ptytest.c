@@ -40,7 +40,9 @@ ptytest reuse             a second session on the same master: line mode again (
 ptytest fullqueue         the master's write never waits: 300 keys for a program that is
                           not reading yet take a short count, one more EAGAIN, POLLOUT is
                           back once it reads; in a session, Ctrl+C gets through a full
-                          queue, cuts sleep short, and what was typed ahead never runs
+                          queue, cuts sleep short, and what was typed ahead never runs; and
+                          through a queue filled with cursor keys, the last one cut short
+                          inside its escape sequence
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
                           (POLLIN), after the end (POLLIN and POLLHUP); spawnpty of no
                           program (POLLHUP at once); a closed descriptor (POLLNVAL); a
@@ -688,7 +690,7 @@ static int mode_fullqueue(void) {
     char keys[300];
     struct pollfd p;
     unsigned int t0, took;
-    int m, pid, st = -99, r, at;
+    int m, pid, st = -99, r, at, i;
     memset(keys, 'x', sizeof(keys));
     m = start("/initrd/bin/ptytest", reader, 0, &pid);
     if(m < 0) return fail("slowreader did not start");
@@ -732,6 +734,26 @@ static int mode_fullqueue(void) {
     read_until(m, "TYPED-AHEAD", at, 700);              /* nothing more should come */
     if(strstr(out + at, "TYPED-AHEAD") || strstr(out + at, "xxxx")) return fail("what was typed ahead ran after Ctrl+C");
     printf("ptytest: Ctrl+C through the full queue cut sleep short, and what was typed ahead never ran\n");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
+
+    /* the queue filled with cursor keys (Up held down), the last one cut short inside its sequence */
+    outlen = 0;
+    out[0] = 0;
+    m = start("/initrd/bin/surfsh", sargv, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "sleep 5000\r");
+    if(read_until(m, "sleep 5000", at, 10000) != 1) return fail("sleep 5000 was not typed");
+    msleep(300);
+    for(i = 0; i < 400 && (r = (int)write(m, "\033[A", 3)) == 3; i++);
+    if(i == 400) return fail("cursor keys never filled the queue");
+    printf("ptytest: %d cursor keys filled the queue; the next was cut short after %d of its 3 bytes\n", i, r < 0 ? 0 : r);
+    if(write(m, "\003", 1) != 1) return fail("Ctrl+C after the cursor keys was refused");
+    if(read_until(m, "sleep cut short", at, 10000) != 1) return fail("Ctrl+C after the cursor keys did not cut sleep short");
+    printf("ptytest: Ctrl+C ended the cut sequence and cut sleep short\n");
     type(m, "exit\r");
     read_until(m, NULL, 0, 5000);
     close(m);

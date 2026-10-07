@@ -923,7 +923,13 @@ static void t_stream_tty(void) {
     check(!sim_term_queues('['), "nor what follows an Esc");
     sim_term_input('[');
     check(!sim_term_queues('1') && sim_term_queues('A') && !sim_term_queues('~'), "only the final byte of a cursor key does");
-    sim_term_input('~');
+    check(!sim_term_queues(0x03), "inside a sequence, Ctrl+C needs no room either");
+    sim_term_input(0x03);                           /* a cursor key cut short by a full queue, then Ctrl+C */
+    sim_term_input('k');
+    run(SHELL, w_getc, 0, 0);
+    st = got_key;
+    run(SHELL, w_getc, 0, 0);
+    check(st == 0x03 && got_key == 'k', "Ctrl+C ends a sequence in progress and gets through; what follows is plain again");
     run(SHELL, w_raw, 1, 0);
     sim_term_input('\r');
     sim_term_input(0x1B);
