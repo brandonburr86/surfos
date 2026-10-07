@@ -13,9 +13,12 @@ data byte 255; IAC IP and IAC BRK become Ctrl+C (3), IAC EC the Backspace key (D
 127), IAC EL Ctrl+U (21, which clears the line); IAC AYT is answered at once; the other
 commands (NOP, DM, GA, AO) change nothing. CR LF and CR NUL are a CR alone, as a
 terminal's Return key. Options follow RFC 1143: the server will do ECHO and
-SUPPRESS-GO-AHEAD and wants the client to do SUPPRESS-GO-AHEAD and NAWS (its window
-size, "negotiate about window size"). Every other option is refused (WONT, DONT) each
-time the client asks for it; a request for what is so already, and the client's answer
+SUPPRESS-GO-AHEAD and wants the client to do SUPPRESS-GO-AHEAD, NAWS (its window size,
+"negotiate about window size") and BINARY: a client in binary mode sends all 8 bits of
+what is typed (Apple's telnet otherwise strips the eighth, and UTF-8 is garbled), and
+sends Return as a CR alone, which is what CR LF and CR NUL become here anyway. The
+server itself does not send in binary mode: its output is NVT text. Every other option is
+refused (WONT, DONT) each time the client asks for it; a request for what is so already, and the client's answer
 to the server's own request, get no answer, so two ends cannot negotiate in a loop. A
 NAWS sub-negotiation of 4 bytes sets cols and rows (0 means unknown) and raises resized;
 one of another length changes nothing. Each answer goes into reply whole or not at all:
@@ -27,8 +30,8 @@ end of what was printed so far is CR LF or CR NUL, the next byte says: the next 
 or the NUL comes before the next answer to the client.
 
 telnet_opening(): the server's first bytes: WILL ECHO, WILL SUPPRESS-GO-AHEAD,
-DO SUPPRESS-GO-AHEAD, DO NAWS. The client then echoes nothing itself and sends each key
-as it is typed, which surfsh's line editor needs.
+DO SUPPRESS-GO-AHEAD, DO NAWS, DO BINARY. The client then echoes nothing itself and sends
+each key as it is typed, all 8 bits of it, which surfsh's line editor needs.
 */
 
 #ifndef _TELNET_H
@@ -51,6 +54,7 @@ as it is typed, which surfsh's line editor needs.
 #define TN_DONT  254
 #define TN_IAC   255                /* interpret as command */
 
+#define TO_BINARY 0                 /* the client sends all 8 bits (RFC 856) */
 #define TO_ECHO  1
 #define TO_SGA   3                  /* suppress go ahead */
 #define TO_NAWS  31                 /* negotiate about window size (RFC 1073) */
@@ -61,7 +65,7 @@ as it is typed, which surfsh's line editor needs.
 #define TN_WANTYES 3
 
 #define TN_SB_MAX     32            /* bytes of a sub-negotiation kept (NAWS has 4) */
-#define TN_OPENING    12            /* bytes telnet_opening() writes */
+#define TN_OPENING    15            /* bytes telnet_opening() writes */
 #define TN_AYT_ANSWER "\r\n[SurfOS: yes]\r\n"
 
 struct telnet {

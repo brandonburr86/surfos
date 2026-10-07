@@ -450,12 +450,12 @@ SMOKE = [
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
-    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none
-    # and --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
-    # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
-    # served; a client whose keys flood a session that reads none; the rest of the protocol in one session that ends
-    # with a reset; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the
-    # server's log.
+    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
+    # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
+    # sessions at once, status, off ending both, on again; four, and a fifth refused; a client that stops reading while
+    # a second session is served; a client whose keys flood a session that reads none; the rest of the protocol in one
+    # session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
+    # port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
@@ -468,6 +468,7 @@ SMOKE = [
     ('@telnet-stalled', []),
     ('@telnet-flood', []),
     ('@telnet-protocol', []),
+    ('@telnet-binary', []),
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -1071,7 +1072,7 @@ CONSOLE_CHECKS['@surfsh-corner'] = surfsh_corner_check
 
 # ---- 10/6/26: telnetd, the telnet server ------------------------------------------------------------------------
 TN_IAC, TN_DONT, TN_DO, TN_WONT, TN_WILL, TN_SB, TN_SE = 255, 254, 253, 252, 251, 250, 240
-TO_ECHO, TO_SGA, TO_NAWS = 1, 3, 31
+TO_BINARY, TO_ECHO, TO_SGA, TO_NAWS = 0, 1, 3, 31
 
 
 class Telnet:
@@ -1079,10 +1080,13 @@ class Telnet:
     server echo and suppress go-ahead (DO), suppresses go-ahead itself and tells its window size when asked
     (WILL, then NAWS), and refuses anything else once. What the session printed is kept in self.data with
     the IAC sequences taken out (IAC IAC is the byte 255, CR NUL a CR); self.raw has everything as it came.
-    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off."""
+    Return is sent as CR NUL, as telnet clients send it; --More-- is answered with Space unless auto_more is off.
+    With binary, the client agrees to send in binary mode (WILL BINARY), as Apple's telnet does, and then sends
+    Return as a CR alone."""
 
-    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None):
+    def __init__(self, port, cols=80, rows=24, host='127.0.0.1', timeout=10, rcvbuf=None, binary=False):
         self.sock = self._connect(host, port, timeout, rcvbuf)
+        self.binary = binary
         self.cols, self.rows = cols, rows
         self.raw, self.data = b'', b''
         self.cursor, self.more_at, self.auto_more = 0, 0, True
@@ -1132,7 +1136,8 @@ class Telnet:
     def _option(self, verb, opt):
         side = 'him' if verb in (TN_WILL, TN_WONT) else 'us'
         if verb in (TN_WILL, TN_DO):
-            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else (TO_SGA, TO_NAWS))
+            ours = (TO_SGA, TO_NAWS) + ((TO_BINARY,) if self.binary else ())
+            wanted = opt in ((TO_ECHO, TO_SGA) if side == 'him' else ours)
             if (side, opt) in self.agreed:
                 return                          # nothing changes: nothing to say
             if not wanted:
@@ -1225,7 +1230,8 @@ class Telnet:
     def send(self, keys):
         """keys as typed: a string (a newline is Return, sent as CR NUL; 0xff doubled) or bytes as they are"""
         if isinstance(keys, str):
-            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', b'\r\0')
+            enter = b'\r' if ('us', TO_BINARY) in self.agreed else b'\r\0'     # binary mode: a CR alone
+            keys = keys.encode().replace(b'\xff', b'\xff\xff').replace(b'\n', enter)
         self._out(keys)
 
     def wait_closed(self, timeout=10):
@@ -1568,6 +1574,24 @@ def telnet_protocol_check(q):
             'a reset; no zombie after', ok)
 
 
+def telnet_binary_check(q):
+    """a client that agrees to send in binary mode (DO BINARY is in the server's opening: Apple's telnet otherwise
+    strips the eighth bit of what is typed) and then sends Return as a CR alone: UTF-8 typed arrives whole, the
+    command runs"""
+    t = Telnet(q.ports['telnet'], binary=True)
+    try:
+        ok = t.expect(TELNET_ROOT, 15) and bytes([TN_IAC, TN_DO, TO_BINARY]) in t.raw and ('us', TO_BINARY) in t.agreed
+        if ok:
+            t.send('echo caf\u00e9-ok\n')
+            ok = t.expect('\r\ncaf\u00e9-ok\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a client in binary mode: UTF-8 typed, and Return as a CR alone, run the command', ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1605,6 +1629,7 @@ def telnet_port_busy_check(q):
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
                        '@telnet-flood': telnet_flood_check, '@telnet-protocol': telnet_protocol_check,
+                       '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 

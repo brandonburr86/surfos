@@ -51,9 +51,9 @@ static int we_may(int opt) {
     return opt == TO_ECHO || opt == TO_SGA;
 }
 
-/* what the client may do on its side: no go-aheads, tell the window size */
+/* what the client may do on its side: no go-aheads, tell the window size, send 8 bits */
 static int he_may(int opt) {
-    return opt == TO_SGA || opt == TO_NAWS;
+    return opt == TO_SGA || opt == TO_NAWS || opt == TO_BINARY;
 }
 
 int telnet_opening(struct telnet *t, unsigned char *out) {
@@ -65,6 +65,7 @@ int telnet_opening(struct telnet *t, unsigned char *out) {
     if(t->us[TO_SGA] == TN_NO) { t->us[TO_SGA] = TN_WANTYES; put3(t, &b, TN_WILL, TO_SGA); }
     if(t->him[TO_SGA] == TN_NO) { t->him[TO_SGA] = TN_WANTYES; put3(t, &b, TN_DO, TO_SGA); }
     if(t->him[TO_NAWS] == TN_NO) { t->him[TO_NAWS] = TN_WANTYES; put3(t, &b, TN_DO, TO_NAWS); }
+    if(t->him[TO_BINARY] == TN_NO) { t->him[TO_BINARY] = TN_WANTYES; put3(t, &b, TN_DO, TO_BINARY); }
     return b.len;
 }
 
