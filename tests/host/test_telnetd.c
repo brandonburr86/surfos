@@ -24,6 +24,10 @@
 #include "server.c"
 #include <setjmp.h>
 
+#define RUNS      50          /* runs of each kind (which failures are injected) with each set of seeds */
+#define POLLS     2000        /* the server's polls in a run before its clients finish */
+#define SEED_SETS 3           /* sets of seeds */
+
 #define NFD     16
 #define TXCAP   8192
 #define RXCAP   8192
@@ -68,7 +72,7 @@ struct sconn {
 struct spty {
     int used, master_fd, shell, shell_pid, ended, conn;   /* shell: 0 none, 1 alive, 2 dying, 3 zombie, 4 reaped */
     unsigned char out[PTYOUT];
-    int out_len, tty_q, reads_keys, eof_read, linemode, pollout;   /* pollout: POLLOUT said since the last write */
+    int out_len, tty_q, reads_keys, eof_read, linemode, pollout;   /* pollout: poll() said POLLOUT this round */
     struct buf keys;
 };
 
@@ -368,6 +372,9 @@ int sim_poll(struct pollfd *fds, nfds_t n, int timeout) {
     }
     iter++;
     looks = 0;
+    for(k = 0; k < PTY_MAX; k++) P[k].pollout = 0;     /* a POLLOUT stands for the round it was said in: a write that
+                                                           finds the queue full after a Ctrl+C took the room is told
+                                                           EAGAIN, which costs nothing */
     before_wait(fds, n, timeout);
     if(run_bugs > 20) longjmp(done, 5);                 /* this run has said enough */
     if((iter > max_iter || nconn >= MAXC) && !quiesce) quiesce = 1;     /* the end: no more clients come */
@@ -512,7 +519,6 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
         int taken = 0;
         if(!n) return 0;
         if(!p->pollout && b[0] != 0x03) BUG("pty %ld: keys written without POLLOUT", (long)(p - P));
-        p->pollout = 0;
         if(c && ((int)n != c->kpend_len || memcmp(buf, c->kpend, n))) {
             BUG("pty %ld: the keys written (%d) are not the ones the server should hold (%d)", (long)(p - P), (int)n, c->kpend_len);
             c = NULL;                                   /* no comparison from here on */
@@ -760,17 +766,21 @@ static void run(unsigned long long seed, long iters) {
     if(shells) BUG("seed %llu: %d shells counted at the end", seed, shells);
 }
 
+/* test_telnetd [runs [polls [seed sets [first set]]]]: each kind of run (the failures injected:
+   none, accept, spawnpty, openpty, all three) RUNS times with each set of seeds */
 int main(int argc, char **argv) {
     static const char *const modes[] = { "", "m", "s", "p", "msp" };
-    long runs = argc > 1 ? atol(argv[1]) : 250, iters = argc > 2 ? atol(argv[2]) : 2000, i, total = 0;
+    long runs = argc > 1 ? atol(argv[1]) : RUNS, iters = argc > 2 ? atol(argv[2]) : POLLS;
+    long sets = argc > 3 ? atol(argv[3]) : SEED_SETS, first = argc > 4 ? atol(argv[4]) : 0, i, k, total = 0;
     unsigned m;
-    for(m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
-        inject_enomem = !!strchr(modes[m], 'm');
-        inject_spawnfail = !!strchr(modes[m], 's');
-        inject_ptyfull = !!strchr(modes[m], 'p');
-        for(i = 0; i < runs; i++) run((unsigned long long)(m * 100000 + i + 1), iters);
-        total += runs;
-    }
+    for(k = first; k < first + sets; k++)
+        for(m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
+            inject_enomem = !!strchr(modes[m], 'm');
+            inject_spawnfail = !!strchr(modes[m], 's');
+            inject_ptyfull = !!strchr(modes[m], 'p');
+            for(i = 0; i < runs; i++) run((unsigned long long)(k * 1000003 + m * 100000 + i + 1), iters);
+            total += runs;
+        }
     printf("telnetd server: %ld runs of %ld polls (failures of accept, spawnpty, openpty in some): %ld sessions, %ld refusals, "
            "%ld ended for a stall to make room, %ld rests of the listener, %ld short writes, %ld waits that ran out, %ld answer bytes "
            "dropped whole, %ld keys taken by masters, %ld dropped (the buffer full), %ld key writes that found no room\n",
