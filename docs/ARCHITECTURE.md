@@ -1068,7 +1068,8 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   Only Ctrl-L clears the screen (`ESC[2J ESC[H`); the prompt is written again only after
   Ctrl-L, Ctrl-C or a list. Keys that arrive together (a paste) are all handled before the
   screen is written, and keys typed after Enter are dropped, as the console drops its queue
-  when raw mode ends.
+  when raw mode ends; 10/6/26: the rest of such a paste is then skipped until the input
+  pauses (`TTY_SKIP`, section 18), so no part of a pasted line ever runs as a command.
 * **Supervision** (`kernel/task.c`, section 3): init starts `/initrd/bin/surfsh -l` on F1-F4
   (`TF_SHELL`) and starts it again when it ends, quietly after an exit with status 0 and
   with a line otherwise. Three abnormal ends within 30 seconds (killed, or ended within 2
@@ -1197,7 +1198,14 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   master write never waits: it takes the bytes that fit in the 256-key input queue and
   answers how many, or EAGAIN; a byte that needs no room (a line-mode Ctrl+C) always fits;
   POLLOUT says a key fits. A line-mode Ctrl+C also drops the keys typed ahead, on the
-  consoles as on ptys, so type-ahead never runs after an interrupt. `TTY_GETSIZE` on a
+  consoles as on ptys, so type-ahead never runs after an interrupt, and it ends an escape
+  sequence in progress, so cursor keys that filled the queue cannot swallow it. When raw
+  mode ends with keys still queued, or a program says it dropped keys of its own
+  (`ttyctl(TTY_SKIP, 1)`: surfsh after an Enter with more keys behind it), the serial line
+  and the ptys skip their input until it pauses for 200 ms: the rest of a pasted block is
+  dropped whole instead of arriving at the next prompt in pieces. A Ctrl+C always gets
+  through, a lone LF or NUL left behind by an Enter starts no skip, and the PS/2
+  keyboard is never skipped. `TTY_GETSIZE` on a
   pty answers its size, `TTY_CAPS` UTF-8 and colour; raw mode and the pager work as on a
   console, and a pty's output never reaches the screen or the serial mirror.
 * **Hangup.** Closing the last master descriptor hangs the pty up: each process whose
@@ -1228,19 +1236,28 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   server `detach()`es and loops on `poll()` over the listener and each session's
   connection and pty master. A connection gets `openpty()`, `PTY_SETSIZE` 80x24 and
   `spawnpty("/initrd/bin/surfsh", {"surfsh", "-l"})`; the server offers WILL ECHO, WILL
-  SUPPRESS-GO-AHEAD, DO SUPPRESS-GO-AHEAD and DO NAWS and refuses every other option. From
+  SUPPRESS-GO-AHEAD, DO SUPPRESS-GO-AHEAD, DO NAWS and DO BINARY (without it a BSD or
+  macOS telnet strips the eighth bit of what is typed, so UTF-8 would arrive garbled; the
+  server's own output stays text) and refuses every other option. From
   the client, IAC commands and sub-negotiations are read (NAWS becomes `PTY_SETSIZE`, IP
   and BRK Ctrl+C, EC DEL, EL Ctrl+U; AYT is answered, TIMING-MARK refused), CR LF and CR NUL
-  become CR and IAC IAC a 0xFF byte; the keys wait in a 1 KB buffer per session (more is
-  dropped) and go to the master only on its POLLOUT, and a Ctrl+C drops the keys waiting
-  before it and goes first. Towards the client, LF becomes CR LF, a CR alone CR NUL and 0xFF
+  become CR and IAC IAC a 0xFF byte; the keys wait in a 1 KB buffer per session and go to
+  the master only on its POLLOUT. While the master takes keys, the client is read only
+  when the buffer has room for a whole read, so TCP holds the rest at the client and a
+  paste into a program that reads arrives whole; after a second in which the master took
+  nothing, the client is read again and what does not fit is dropped, so a Ctrl+C or IAC IP
+  always arrives. A Ctrl+C drops the keys waiting from earlier reads, writes the keys of
+  its own read that came before it, then goes. Towards the client, LF becomes CR LF, a CR
+  alone CR NUL and 0xFF
   IAC IAC, through a 4 KB buffer per session written on the socket's POLLOUT, with room kept
   for the protocol's answers, which go whole or not at all. Nothing blocks the loop, so a
   client that stops reading or floods keys slows no other. A session ends when surfsh does
   (the master reads 0 and is closed at once, the last output drains, then the connection
-  closes), when the client goes (the master is closed: a hangup), or when output has waited
-  60 s with nothing taken. Up to 4 sessions: a fifth connection is told so and closed, as
-  is one that finds no free pty. The server collects its shells (polling at most every
+  closes), or when the client goes (the master is closed: a hangup). Up to 4 sessions: a
+  fifth connection is told so and closed, as is one that finds no free pty, unless a
+  session's client has taken no output for 60 s while output waits for it: the one stalled
+  longest is ended to make room (a client behind a buffering proxy, or asleep, is never cut
+  otherwise). The server collects its shells (polling at most every
   200 ms while one is ending), rests 1 s after an `accept()` error, and logs to
   `/dev/kmsg`: listening, each session (the client's address, the pty, surfsh's pid), each
   end with its reason. `telnetd off` logs, kills the server and waits for it; its
@@ -1259,8 +1276,13 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   that stops reading while another session works), `@telnet-flood` (a client flooding
   keys into a program that does not read, while another session stays quick),
   `@telnet-protocol` (a BSD-style opening, NAWS, AYT, TIMING-MARK, CR LF, DEL and BS, EC and
-  EL, typed UTF-8, IAC IP, 0xFF in output, a reset), `@telnet-off-inside` and
-  `@telnet-port-busy`. `make test-tcp` (`tools/qemu-tcp.py`, with `tools/rawnet.py`)
+  EL, typed UTF-8, IAC IP, 0xFF in output, a reset), `@telnet-binary` (a client in BINARY
+  mode typing UTF-8 and Enter as a bare CR), `@telnet-paste` (60 lines pasted into `edit`
+  arrive whole), `@telnet-paste-lines` (a pasted block runs its first line only),
+  `@telnet-ctrlc-keys` (keys in the same segment as a Ctrl+C), an arrow-key flood in
+  `@telnet-flood`, `@telnet-off-inside` and `@telnet-port-busy`; `ptytest paste` checks the
+  skip rule with a small raw-mode shell, and `@surfsh-crlf` that an Enter sent as CR LF over
+  the serial line starts no skip. `make test-tcp` (`tools/qemu-tcp.py`, with `tools/rawnet.py`)
   drives the TCP stack with hand-made segments: half-open handshakes and backlog floods,
   an evicted client, a zero window, its probes and the persist timer, a shrunk window,
   silly windows, a lost segment, a burst's latency against a delayed-ACK peer, keepalive

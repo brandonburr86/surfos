@@ -558,19 +558,20 @@ cannot do yet. A few differences:
   it from the other side: the session's shell is stopped. A kernel command that is still
   running stops where it can stop cleanly, or finishes, before that: it is never killed
   in the middle of writing to a disk.
-* **Pasting:** surfsh takes one line at a time and drops what is typed ahead of its
-  prompt, so a pasted block of several lines runs only its first line: paste one line at a
-  time. Keys typed while a command runs are given to that command (up to 1 KB; more is
-  dropped). Ctrl+C stops the command and drops what was typed ahead, so it never runs
-  afterwards.
+* **Pasting:** surfsh takes one command at a time, so of a pasted block of several lines
+  only the first line runs and the rest of the block is dropped: paste one command at a
+  time. A paste into a program that reads what is typed, such as `edit`, arrives whole.
+  Keys typed while a command runs are given to that command; Ctrl+C stops the command and
+  drops what was typed ahead, so it never runs afterwards.
 * **Messages on the laptop's screen:** a background task that a command starts (such as
   `tcpecho`) prints on the laptop's F1 console, not in the session, and keeps running after
   the session ends.
 * **Up to 4 sessions** at once; a fifth connection is told
   `4 sessions are open already; try again later.` and closed.
-* A telnet program that takes no output for 60 seconds while output waits for it (for
-  example one suspended with Ctrl+] and `z`) is disconnected, so it cannot hold a session
-  forever.
+* A session whose telnet program has taken no output for 60 seconds while output waits
+  for it (one suspended with Ctrl+] and `z`, or a computer gone to sleep) keeps its place
+  until that place is needed: when all 4 are in use, a new connection ends the session
+  stalled longest instead of being refused.
 
 **Check and turn off**, on the laptop or in a session:
 

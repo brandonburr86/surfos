@@ -109,8 +109,11 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   descriptor's readiness calls `poll_wake()`, and a vnode's poll op never does. A kernel
   thread never belongs to a pty session (`task_alloc()` puts it on F1), and a pty's hangup
   kills its processes with the kill that waits for the end of the call, without the
-  2-second fallback (a kernel command is never killed holding a lock). `telnetd` has no
-  login or encryption by the owner's choice: never start it by itself.
+  2-second fallback (a kernel command is never killed holding a lock). A line-mode Ctrl+C
+  always gets through (it ends an escape sequence and drops type-ahead); after type-ahead
+  is dropped, the serial line and ptys skip input until it pauses for 200 ms (`TTY_SKIP`),
+  so the rest of a paste never runs in pieces. `telnetd` has no login or encryption by the
+  owner's choice: never start it by itself.
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
