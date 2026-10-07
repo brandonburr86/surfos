@@ -180,12 +180,15 @@ Type at the prompt, `SURF ≋>`:
 | `count 3 10`, `spawn count 20 500` | user programs, one in the background |
 | `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (the disk tests are skipped, and the network tests without an adapter and a cable) |
 | `lsusb` | the USB controller and what is plugged in: the SurfOS drive itself, the webcam, Bluetooth |
+| `lspci -v`, `lspci 00:14.3` | every PCI device with its ids, subsystem, power state, interrupts and link; one in full, with its configuration space |
+| `wifiinfo` | the Wi-Fi card: its ids, what it probably is, and its Bluetooth half. SurfOS has no Wi-Fi driver yet: this is what one needs, so please send the whole output ([WIFI-PLANNING.md](WIFI-PLANNING.md)) |
 | F1 to F4 | four consoles, each with its own shell |
 | `edit /initrd/etc/version` | the text editor, full screen; Ctrl+Q leaves it (the ramdisk is read-only: files to keep go on a second stick, section 9) |
 
 Please record the results, and photos of the screen, in
 [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md). The output of `cpuinfo`,
-`acpi`, `drivers`, `bootinfo`, `lspci` and `lsusb` answers most of its open questions.
+`acpi`, `drivers`, `bootinfo`, `lspci -v`, `lsusb` and `wifiinfo` answers most of its open
+questions. A telnet session from the Mac (section 11) is the easiest way to copy them.
 
 ## 8. Networking: a USB Ethernet adapter
 

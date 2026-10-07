@@ -26,7 +26,7 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write, `mkfs` for FAT16/32); 1024-block write-back cache |
 | Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 44 system calls, a small C library (`user/libsurf`), the SurfOS shell surfsh and an older small shell (`sh`), file programs and a text editor; **ai-dev** (10/6/26): TCP connections, pseudo-terminals and `poll()` for programs (section 18) |
 | Network | e1000 driver; Ethernet, ARP, IPv4, ICMP, UDP, TCP, a DHCP client and a DNS resolver in a kernel thread; `ifconfig arp ping dhcp nslookup tcpecho httpget netstat`; **ai-dev** (10/6/26): `telnetd`, a telnet server (section 18) |
-| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name. **ai-dev** (10/6/26): surfsh on every console, with the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes, redirection and `$?`; it runs the ring-0 shell's 67 commands in its own task through `SYS_kcmd`. The ring-0 shell is the recovery console (`≋?>`) and the shell of `shell=kernel` (`≋#>`); a telnet session gets surfsh too (`≋@>`) |
+| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name. **ai-dev** (10/6/26): surfsh on every console, with the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes, redirection and `$?`; it runs the ring-0 shell's 68 commands in its own task through `SYS_kcmd`. The ring-0 shell is the recovery console (`≋?>`) and the shell of `shell=kernel` (`≋#>`); a telnet session gets surfsh too (`≋@>`) |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
 the shell calls itself v0.008. **ai-dev** (10/6/26): SurfOS 1.0, from
@@ -68,7 +68,7 @@ user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.
              hexdump fstest edit pagetest kcmdtest nettest ptytest); surfsh/ (the SurfOS shell: main.c
              editor.c complete.c parse.c run.c builtins.c surfsh.h); telnetd/ (the telnet server: main.c
              server.c telnet.c telnet.h telnetd.h)
-driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
+driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, pciinfo.c (lspci -v, wifiinfo), serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
              framebuffer.c + fbcore.c + font8x16.c (the UEFI console: the 256 code page 437 characters;
              fonts/ has the Spleen source and surfos-symbols.bdf), cp437.c (the character set, the UTF-8
@@ -88,7 +88,7 @@ tests/       host/: unit tests built with the host compiler (make unittest): bli
              framebuffer, USB parsing, partition tables, mkfs, the user C library, the prompt, code page 437
              and the font, the pager (test_pager.c with pager_bridge.c and pager_shim/: the real console.c and
              tty.c on the host), the telnet protocol (test_telnet.c) and telnetd's loop (test_telnetd.c with
-             telnetd/surf.h, a simulated kernel);
+             telnetd/surf.h, a simulated kernel), PCI configuration space (test_pciinfo.c);
              test_part_tools.py (partition tables against sfdisk and sgdisk), test_mkusb.py, test_devenv.py
 ```
 
@@ -389,7 +389,7 @@ an uninitialised IDT at 0x6800, and an IRQ 7 handler that rebooted the machine.
 | Parallel port | `driver/parport.c`, `shell/parport.c` | Status readout works in QEMU. Its IRQ 7 handler is `reboot()` |
 | ISA DMA | `driver/dma/` | Register helpers only. `DMAComplete()`, `dma_alloc()`, `dma_xfer()` are broken |
 | Floppy | `driver/floppy/floppy.c` | Detects drive type, resets controller, takes IRQ 6. Read/write path never worked (no DMA start, wrong arg counts, inverted timeout). Needs 3 prototype fixes to compile today |
-| PCI | `driver/pci.c`, `driver/pci_names.c`, `driver/PCIDATA.H` | Config mechanism 1; every bus behind a bridge, every function; class, IRQ line/pin, BARs sized with decoding off; `pci_find_device()`, `pci_find_class()`, `pci_enable_device()`; vendor/device/class names from the 2003 id tables (`lspci`). **Verified** in QEMU: i440FX, PIIX3, PIIX4 PM, VGA, 82540EM |
+| PCI | `driver/pci.c`, `driver/pci_names.c`, `driver/PCIDATA.H` | Config mechanism 1; every bus behind a bridge, every function; class, IRQ line/pin, BARs sized with decoding off; `pci_find_device()`, `pci_find_class()`, `pci_enable_device()`; vendor/device/class names from the 2003 id tables (`lspci`). **Verified** in QEMU: i440FX, PIIX3, PIIX4 PM, VGA, 82540EM. **ai-dev** (10/7/26): `lspci -v` and `lspci bb:dd.f` describe each function's 256 bytes of configuration space (`driver/pciinfo.c`, host-tested: the ids with the subsystem, command and status, the interrupt pin, a bridge's buses, and the capability list: power management and the power state, MSI, MSI-X, PCI Express with its port type and link); `wifiinfo` gathers what a Wi-Fi driver needs (the chipset, every wireless function in full with what its ids probably are, the USB devices with the Bluetooth half of a combo card: `docs/WIFI-PLANNING.md`). Reads only; extended capabilities (from 0x100) are not reached |
 | Block layer | `driver/bdev.c`, `include/sys/bdev.h` | Named 512-byte block devices with read/write ops; partitions translate to their parent; range checks and per-device counters (`lsblk`, `hexdump`). **ai-dev** (USB storage): a disk's bus (RAM, ATA or USB; 0, what a driver that says nothing gets, is never formatted), removable, read-only, `protect` (why it must be left alone) and a `flush` op; `bdev_may_format()`; unplugged disks unregistered but never freed; mount reference counts (section 16) |
 | Ramdisk | `driver/ramdisk.c` | Every Multiboot module is a writable ramdisk `rd0`, `rd1`, ... (`qemu -initrd`, GRUB `module`); modules above 16 MB are mapped with `ioremap()`. **ai-dev**: bus RAM, so `fdisk` and `mkfs` may write one that is not mounted; the smoke test adds a blank one as `rd1` (`tools/qemu-run.py --scratch`) |
 | ATA | `driver/ata.c` | Polled PIO, LBA28, both legacy channels, IDENTIFY, cache flush after writes, a mutex per channel; disks are `hda`-`hdd`, ATAPI devices are reported and skipped. **ai-dev**: bus ATA, an internal disk, which `fdisk` and `mkfs` never change |

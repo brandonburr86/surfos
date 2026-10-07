@@ -25,20 +25,28 @@ radio sits on the M.2 module and whose controller is in the chipset) or a Realte
 ## What the owner needs to supply
 
 1. **The card's exact hardware IDs** (the single most important item). Any one of:
+   * **SurfOS itself** (since 2026-10-07, the easiest): boot it on the laptop and run
+     `wifiinfo`. It prints the chipset, every wireless PCI device in full (vendor, device,
+     subsystem, revision, power state, interrupts, PCI Express link, and all 256 bytes of
+     its configuration space), with what the ids probably are, and the USB devices, among
+     them the Bluetooth half of the Wi-Fi card, whose id names the card (`8087:0026` an
+     AX201, `8087:0aaa` a 9560). Send the whole output: copy it from a telnet session on the
+     Mac (`telnetd on`, `docs/USB-BOOT.md` section 11), or save it on a data stick with
+     `wifiinfo > /data/wifi.txt`. `lspci -v` shows every PCI device the same way, and
+     `lspci 00:14.3` one in full.
    * **Windows**, if it is still on the laptop: *Device Manager* → *Network adapters* →
      the Wi-Fi adapter's name; then *Properties* → *Details* → *Hardware Ids*, the first
      line, which looks like `PCI\VEN_xxxx&DEV_xxxx&SUBSYS_xxxxxxxx&REV_xx`.
    * **An Ubuntu live USB** booted on the laptop: the output of `lspci -nnk`, and of
      `sudo dmesg | grep -iE 'iwlwifi|rtw|ath'`. The second names the exact firmware file
      and the chip revision the card uses.
-   * Not from SurfOS yet: its `lspci` prints "unknown device" for chips newer than its
-     2004 name table, without the numeric IDs. That is a few lines to change if SurfOS
-     should be the tool for this.
 2. **A recording of Linux joining the network**, if an Ubuntu live USB can be booted:
    commands to be supplied when the work starts. It shows the sequence of commands that
    works with this exact card and firmware, the biggest single way to lower the risk.
-3. **The network's settings**, from the router's admin page (or `iw dev wlan0 scan` in
-   Linux, `netsh wlan show networks mode=bssid` in Windows):
+3. **The network's settings**, from the router's admin page, or the Mac (hold *Option* and
+   click the Wi-Fi icon in the menu bar: *Security*, *Channel* with its band and width, *PHY
+   Mode*), or `iw dev wlan0 scan` in Linux, `netsh wlan show networks mode=bssid` in
+   Windows. SurfOS cannot read them before it has the driver:
    * Security: **WPA2-Personal** is the target; WPA2/WPA3 mixed ("transition") mode is
      fine (SurfOS would use WPA2); WPA3-only is much harder; Enterprise (802.1X) logins
      are out of scope.
@@ -93,4 +101,5 @@ Bigger than anything SurfOS has had so far. Three layers:
 Layers 2 and 3 can be built and tested on the Mac first, against the published test
 vectors; layer 1 cannot. Realistically several milestones.
 
-**The first step, when this is picked up again:** the hardware IDs (item 1 above).
+**The first step, when this is picked up again:** the hardware IDs (item 1 above): run
+`wifiinfo` on the laptop and send its output.

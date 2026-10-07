@@ -181,6 +181,7 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | `help`: `--More--` after a screenful; Space, Enter and q (or Esc) on the built-in keyboard | |
 | F1 to F4: each console has its own surfsh; `ps` lists four | |
 | GRUB entry "SurfOS (kernel shell)": the prompt `SURF ≋#>` | |
+| `wifiinfo`: the whole output (for the Wi-Fi driver; easiest copied from a telnet session) | |
 | `telnetd on` (after `dhcp`): the address it prints | |
 | From the Mac (`brew install telnet`), `telnet <address>`: the banner and `SURF ≋@>`; are ▸, ≋ and the colours right in the Mac's terminal? | |
 | In the session: typing (does the echo lag?), Tab, `help` with `--More--`, Ctrl+C on `ping <router> 100` | |

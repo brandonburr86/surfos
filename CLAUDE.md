@@ -20,7 +20,8 @@ make test-all     # the smoke test at -O0 and -O2
 make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame ranges, the framebuffer renderer, USB/NCM parsing,
                   # partition tables (+ sfdisk/sgdisk cross-checks), mkfs (+ fsck.fat), the user C library,
                   # the prompt renderer, code page 437 and the UTF-8 decoder, the console's pager (test_pager),
-                  # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd)
+                  # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
+                  # PCI configuration space as lspci -v reads it (test_pciinfo)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 12 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -59,7 +60,7 @@ kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.
            pty.c (pseudo-terminals: a tty with a stream console), proc.c (procinfo, detach),
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile)
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
-driver/    serial console, PCI (+ id tables), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
+driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for lspci -v and wifiinfo), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console: 256 code page 437 glyphs made by tools/bdf2c.py from
            fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences), cp437.c (the character set, the UTF-8 decoder)
@@ -156,6 +157,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   check there and a line to `SMOKE` in tools/qemu-run.py for new features.
 * On the laptop (or under OVMF): `bootinfo`, `drivers`, `cpuinfo`, `acpi`, `memstat` say
   what the firmware handed over and which console, timer and keyboard path was chosen.
+  `lspci -v` gives every PCI function's ids, subsystem, power state, MSI/MSI-X and PCI
+  Express link, `lspci bb:dd.f` one with its 256 bytes, and `wifiinfo` the Wi-Fi card
+  for a future driver (docs/WIFI-PLANNING.md).
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * USB: `lsusb` lists the controller and every device with what drives it; `+USB:` lines in
