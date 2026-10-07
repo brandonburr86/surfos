@@ -24,9 +24,9 @@ A 2004 hobby kernel for 32-bit x86, about 8,500 lines of C and NASM (plus a
 | Devices | VGA text console, or **ai-dev** a framebuffer console on UEFI (4 virtual consoles, each a tty with a line editor) mirrored to a COM1 serial console when there is one, PS/2 keyboard plus serial input, PIT, CMOS RTC, parallel port, 8237 DMA (incomplete), floppy (incomplete), full PCI enumeration with names, block layer with ramdisks from boot modules, ATA PIO disks and MBR partitions (**ai-dev**: also GPT, and USB sticks through the xHCI controller, section 16), 3Com 3c905B NIC (no protocol stack); **ai-dev** (10/6/26): the console draws UTF-8 as code page 437 cells and pages long output (section 7) |
 | libc | `blibc`: printf/snprintf, puts/gets (through the tty), getch, the standard string and memory functions, strtol, ctype, CMOS time |
 | Files | VFS with a mount table; tar file system for the initrd (read-only), FAT12/16/32 with long names (read and write, `mkfs` for FAT16/32); 1024-block write-back cache |
-| Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 33 system calls, a small C library (`user/libsurf`), the SurfOS shell surfsh and an older small shell (`sh`), file programs and a text editor |
-| Network | e1000 driver; Ethernet, ARP, IPv4, ICMP, UDP, TCP, a DHCP client and a DNS resolver in a kernel thread; `ifconfig arp ping dhcp nslookup tcpecho httpget netstat` |
-| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name. **ai-dev** (10/6/26): surfsh on every console, with the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes, redirection and `$?`; it runs the ring-0 shell's 67 commands in its own task through `SYS_kcmd`. The ring-0 shell is the recovery console (`≋?>`) and the shell of `shell=kernel` (`≋#>`) |
+| Processes | ELF32 executables loaded from any mounted file system, argc/argv, exit codes, wait, 44 system calls, a small C library (`user/libsurf`), the SurfOS shell surfsh and an older small shell (`sh`), file programs and a text editor; **ai-dev** (10/6/26): TCP connections, pseudo-terminals and `poll()` for programs (section 18) |
+| Network | e1000 driver; Ethernet, ARP, IPv4, ICMP, UDP, TCP, a DHCP client and a DNS resolver in a kernel thread; `ifconfig arp ping dhcp nslookup tcpecho httpget netstat`; **ai-dev** (10/6/26): `telnetd`, a telnet server (section 18) |
+| User interface | Ring-0 debug shell with about 70 commands; `run`/`spawn`, or type a program's name. **ai-dev** (10/6/26): surfsh on every console, with the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes, redirection and `$?`; it runs the ring-0 shell's 67 commands in its own task through `SYS_kcmd`. The ring-0 shell is the recovery console (`≋?>`) and the shell of `shell=kernel` (`≋#>`); a telnet session gets surfsh too (`≋@>`) |
 
 Required RAM is 32 MB (`mm/memory.c:21`). The kernel version string is 0.007 and
 the shell calls itself v0.008. **ai-dev** (10/6/26): SurfOS 1.0, from
@@ -45,7 +45,8 @@ kernel/      main.c (kmain), gdt.c (GDT + TSS), interrupt.c (IDT, PICs, dispatch
              klog.c (kernel log), console.c (VGA or framebuffer text grid, escape sequences, UTF-8, the
              pager, kprintf), tty.c (input queues, line editor, raw mode, TTY_PAGE and TTY_CAPS, console
              switching), keyboard.c (scan codes, LEDs), process.c (spawn, ELF loader, entering ring 3),
-             syscall.c (int 0x80 dispatch, the kernel commands for programs),
+             syscall.c (int 0x80 dispatch, the kernel commands for programs), pty.c (pseudo-terminals),
+             proc.c (procinfo, detach),
              sys.c (sleep/beep/reboot), turf.c (Martin McCormick's reader/writer "turf" locks),
              multiboot.c + multiboot2.c (boot information), cpu.c, acpi.c, apic.c (profile=laptop)
 mm/          memory.c (init), pmm.c (frame stack), memrange.c (64-bit address ranges), paging.c (page tables,
@@ -55,15 +56,18 @@ shell/       main.c (the ring-0 shell and the kernel's command table), prompt.c 
              built into libsurf), fdisk.c, fscmd.c (mkfs mount umount eject df mv fsbench), demos.c,
              selftest.c, parport.c (lpstat)
 fs/          vfs.c (mounts, paths, open files, descriptors), bcache.c, tarfs.c, fat.c, fat_mkfs.c (mkfs),
-             devfs.c (/dev)
-net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c
+             devfs.c (/dev, /dev/kmsg), poll.c (poll())
+net/         netbuf.c (buffers, devices, the net thread), eth.c, arp.c, ip.c, icmp.c, udp.c, tcp.c, dhcp.c, dns.c,
+             sock.c (TCP connections as descriptors)
 user/        user.ld; libsurf/ (the C library: crt0.S syscalls.c stdio.c printf.c stdlib.c string.c ctype.c
-             malloc.c dirent.c time.c, and prompt.c, which builds shell/prompt.c again); include/ (surf.h,
+             malloc.c dirent.c time.c inet.c, and prompt.c, which builds shell/prompt.c again); include/ (surf.h,
              the standard headers stdio.h stdlib.h string.h unistd.h fcntl.h errno.h dirent.h time.h ctype.h
-             limits.h stdarg.h stddef.h stdint.h, sys/stat.h sys/statfs.h sys/types.h, and surfos/prompt.h
-             kcmd.h version.h, which include the kernel's headers of those names); bin/ (hello crash cat ls
-             count sh echo cp mv rm mkdir rmdir touch df wc head hexdump fstest edit pagetest kcmdtest);
-             surfsh/ (the SurfOS shell: main.c editor.c complete.c parse.c run.c builtins.c surfsh.h)
+             limits.h stdarg.h stddef.h stdint.h poll.h, sys/stat.h sys/statfs.h sys/types.h, and
+             surfos/prompt.h kcmd.h version.h sock.h poll.h pty.h proc.h, which include the kernel's headers
+             of those names); bin/ (hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc head
+             hexdump fstest edit pagetest kcmdtest nettest ptytest); surfsh/ (the SurfOS shell: main.c
+             editor.c complete.c parse.c run.c builtins.c surfsh.h); telnetd/ (the telnet server: main.c
+             server.c telnet.c telnet.h telnetd.h)
 driver/      drivers.c (driver table), pci.c + pci_names.c + PCIDATA.H, serial.c, bdev.c (block layer),
              ramdisk.c, ata.c, part.c + parttab.c (MBR and GPT partitions; mbr.c until 10/5/26),
              framebuffer.c + fbcore.c + font8x16.c (the UEFI console: the 256 code page 437 characters;
@@ -76,13 +80,15 @@ include/     surfos/ (kernel headers; prompt.h, kcmd.h and version.h use no kern
              fs/ (vfs.h, bcache.h, fat.h), net/, asm/io.h, blibc headers
 tools/       qemu-run.py (headless QEMU harness), qemu-usb.py (the USB image under OVMF), gensyms.py (symbol
              table for backtraces), mkimage.py (test disk image, initrd, the "foreign" FAT32 stick),
-             mkusb.py (the USB image), bdf2c.py (the font table)
+             mkusb.py (the USB image), bdf2c.py (the font table), qemu-tcp.py + rawnet.py (TCP against
+             hand-made segments)
 rootfs/      packed into build/images/initrd.tar, the Multiboot module behind rd0; etc/version, etc/surfsh.conf
              (the shell's settings)
 tests/       host/: unit tests built with the host compiler (make unittest): blibc, boot information,
              framebuffer, USB parsing, partition tables, mkfs, the user C library, the prompt, code page 437
              and the font, the pager (test_pager.c with pager_bridge.c and pager_shim/: the real console.c and
-             tty.c on the host);
+             tty.c on the host), the telnet protocol (test_telnet.c) and telnetd's loop (test_telnetd.c with
+             telnetd/surf.h, a simulated kernel);
              test_part_tools.py (partition tables against sfdisk and sgdisk), test_mkusb.py, test_devenv.py
 ```
 
@@ -606,7 +612,9 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   an 8 KB send buffer retransmitted on a one-second timer (eight tries, backing off to
   four seconds), FIN in both directions with CLOSING, LAST_ACK and a two-second
   TIME_WAIT, RST in and out. No congestion control, out-of-order queueing or window
-  scaling. Eight sockets; `tcp_connect/listen/accept/send/recv/close`.
+  scaling. Eight sockets; `tcp_connect/listen/accept/send/recv/close`. **ai-dev** (10/6/26):
+  16 sockets, partial writes, a persist timer, keepalive, no silly windows, and the
+  connections of programs as descriptors (section 18).
 * **DHCP and DNS** (`dhcp.c`, `dns.c`): DISCOVER/OFFER/REQUEST/ACK on port 68 applies
   address, netmask, router and DNS server (the lease is reported, not renewed); one A
   query with name compression on the answer.
@@ -986,9 +994,9 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   2004, its state character light red (`!`), yellow (`#`), light magenta (`@`) or orange
   (`?`), and the colours end before the trailing space. The renderer is plain C without
   library calls: the kernel links it, libsurf builds it again (`user/libsurf/prompt.c`) and
-  `tests/host/test_prompt.c` runs it on the host. surfsh is never elevated, remote or
-  diagnostic, so it shows `≋>` or `≋!>`; the ring-0 shell is elevated, and diagnostic as a
-  recovery console. SurfOS has no remote sessions yet.
+  `tests/host/test_prompt.c` runs it on the host. surfsh is never elevated or diagnostic,
+  so it shows `≋>` or `≋!>`, and `≋@>` in a telnet session (on a pseudo-terminal, section
+  18); the ring-0 shell is elevated, and diagnostic as a recovery console.
 * **surfsh's parts** (`user/surfsh/`, about 1,900 lines; `surfsh.h` lists them): `main.c`
   (the start: the settings from `/initrd/etc/surfsh.conf`, then with `-l` the banner of
   `do_banner()` from `surfos/version.h`; the loop), `editor.c` (the line), `complete.c`
@@ -1121,3 +1129,146 @@ init                   kernel/task.c: surfsh -l on F1-F4, started again; the rin
   starting programs meanwhile make them report failures; a self test killed at once (after
   the 2 seconds) keeps the next one refused until a reboot. A redirected kernel command
   takes a 256 KB buffer from the kernel heap each time.
+
+## 18. Network connections, pseudo-terminals and telnetd (ai-dev, October 2026)
+
+The owner asked (2026-10-06) to telnet from another computer on the network into the
+laptop and land at a SurfOS prompt, with a program, `telnetd`, turned on and off and
+running in the background, and nothing security-related (`docs/USB-BOOT.md` section 11;
+the brief is `docs/superpowers/plans/2026-10-06-telnetd.md`). Programs had no network
+connections (only kernel code used TCP), and a shell needs a terminal; so the work added
+five things under the server. The layers, from the top:
+
+```
+telnetd (user/telnetd/)  ring 3: the CLI (on, off, status) and the server: one poll() loop, the telnet protocol
+sockets                  net/sock.c: TCP connections and listening sockets as descriptors (SYS_listen ... SYS_netinfo)
+pseudo-terminals         kernel/pty.c: a tty with a stream console; the master side is a descriptor (SYS_openpty ...)
+poll()                   fs/poll.c: vnode_ops->poll, one wait queue woken by poll_wake()
+processes                kernel/task.c: SYS_procinfo, SYS_detach; /dev/kmsg (fs/devfs.c) for the kernel log
+TCP                      net/tcp.c: partial writes, the persist timer, keepalive, no silly windows, no Nagle for programs
+```
+
+* **Sockets** (`net/sock.c`, `include/surfos/sock.h`). A connection or a listening socket
+  is a vnode of a small pseudo file system, opened with `vfs_open_vnode()`, so `read`,
+  `write`, `close`, `dup2` and `spawnfd` work on it as on a file. `SYS_listen` (34) listens
+  on a port on every interface, `SYS_accept` (35) takes the next connection with the
+  peer's address, `SYS_connect` (36) makes one within 10 seconds, `SYS_netinfo` (37)
+  describes the default interface; libsurf has `tcp_listen`, `tcp_accept`, `tcp_connect`,
+  `netinfo`, `ipstr` and `ipparse`. There are 16 TCP sockets (8 before); programs and
+  connections coming in leave the last free one to the kernel's own commands. `read()`
+  waits as long as it takes (a kill or Ctrl+C ends the wait), `write()` queues what fits
+  in the 8 KB send buffer and returns that count, waiting only while nothing fits, and
+  `close()` never waits: the FIN follows the queued bytes and the socket finishes on its
+  own. Errors are POSIX's (ECONNRESET, ETIMEDOUT, ECONNREFUSED, EHOSTUNREACH,
+  ENETUNREACH, EADDRINUSE, ...), with Linux's numbers.
+* **TCP** (`net/tcp.c`), reviewed twice and hardened for a server that must outlive bad
+  clients. A handshake that dies leaves the listener's backlog at once, the SYN-ACK gives
+  up after 4 tries, a SYN that finds the backlog full replaces the oldest half-open entry,
+  and a stray ACK reaching a listener is answered with a reset (RFC 793), as is anything
+  for a connection that failed. A receiver that stops reading shuts its window and is
+  probed by the persist timer (1 s, doubling to 60 s, not counted as retries) until it
+  reads again; a window shrunk to zero with bytes in flight is probed the same way rather
+  than retransmitted into, and a probe carrying a byte (BSD, macOS, Windows) is answered.
+  A retransmission carries only bytes that were sent. Keepalive probes a connection silent
+  for 120 s every 10 s and gives it up (ETIMEDOUT) after 5 unanswered probes
+  (`tcpka=<idle>,<interval>` on the command line shortens it for tests). A program's
+  writes go out at once, however small (no Nagle delay, which against the 40-200 ms
+  delayed ACKs of real clients made typing over telnet lag); the kernel's own connections
+  keep Nagle's rule, and on both only a window too small for a sensible segment holds a
+  small one back, a second at most (silly-window avoidance on both sides). An orphan (a
+  closed connection still sending) frees its receive buffer at once and its send buffer
+  once that is empty, is reset after 30 s without progress, and TIME_WAIT keeps no
+  buffers. Ports are checked as 32-bit numbers (above 65535: EINVAL), and every sequence
+  comparison is modular. Not done: random initial sequence numbers, challenge ACKs (RFC
+  5961).
+* **Pseudo-terminals** (`kernel/pty.c`, `include/surfos/pty.h`; 8 of them). A pty is a
+  `struct tty` whose console is a *stream console*: `kputch()` on it appends bytes to the
+  master's 8 KB output ring instead of drawing cells (no UTF-8 decoding, the remote
+  terminal does it; a kernel message's colour becomes an ANSI SGR sequence), and the pager
+  counts the rows and columns that `PTY_SETSIZE` gave (80x24 at first), asking its question
+  in the stream. `SYS_openpty` (39) gives the master side as a descriptor, `SYS_spawnpty`
+  (40) starts a program whose terminal is the pty (its descriptors 0-2, `/dev/console`,
+  `curTask->con` and `->tty`, so the kernel's commands it runs print there too), and
+  `SYS_ptyctl` (41) sets the size (`PTY_SETSIZE`) or names the pty (`PTY_INDEX`). Reading
+  the master gives what the session printed, as it was printed, and 0 once the session has
+  ended and everything was read. Writing it types keys with the serial line's input rules
+  (`tty_term_input()`, shared with the serial interrupt): CR is Enter and DEL Backspace in
+  line mode, bytes pass as they are in raw mode, Ctrl+C interrupts the foreground job. A
+  master write never waits: it takes the bytes that fit in the 256-key input queue and
+  answers how many, or EAGAIN; a byte that needs no room (a line-mode Ctrl+C) always fits;
+  POLLOUT says a key fits. A line-mode Ctrl+C also drops the keys typed ahead, on the
+  consoles as on ptys, so type-ahead never runs after an interrupt. `TTY_GETSIZE` on a
+  pty answers its size, `TTY_CAPS` UTF-8 and colour; raw mode and the pager work as on a
+  console, and a pty's output never reaches the screen or the serial mirror.
+* **Hangup.** Closing the last master descriptor hangs the pty up: each process whose
+  terminal it is gets a kill that waits for the end of its call however long that takes
+  (never the 2-second fallback of section 17, which would leave a lock held: the kernel log
+  says once that it is waiting), its reads end, its output is dropped, and the pty is free
+  once they are gone. A kernel thread started from a session (`tcpecho`, the self test's
+  helpers) is put on F1 instead of the pty, so it never belongs to a session: its output
+  goes to the laptop's screen, and it outlives the session as it would on F1.
+* **poll()** (`fs/poll.c`, `include/surfos/poll.h`, `SYS_poll` 38): up to 64 descriptors,
+  a timeout in milliseconds (-1: none), POLLIN, POLLOUT, POLLERR, POLLHUP and POLLNVAL.
+  `vnode_ops->poll` (appended to the table) says what a descriptor is ready for: sockets,
+  pty masters and the console have one; a file or `/dev/null`, without one, is always
+  ready. Whatever changes readiness calls `poll_wake()`, which wakes every task in
+  `poll()` (one wait queue, a counter checked with interrupts off so no wake-up is lost);
+  a poll op itself must never call it.
+* **Processes** (`include/surfos/proc.h`). `SYS_procinfo` (42) gives the task list entry by
+  entry (pid, parent, state, flags user/detached/shell, terminal: 0-3 for F1-F4,
+  `PROC_TTY_PTY` + n for pty n, the name), for telnetd to find its server; `SYS_detach`
+  (43) makes the caller init's child, out of its shell's job (Ctrl+C there no longer
+  reaches it), keeping its descriptors and terminal. `/dev/kmsg` takes lines into the
+  kernel log (`dmesg`).
+* **telnetd** (`user/telnetd/`: `main.c` the commands, `server.c` the loop, `telnet.c` the
+  protocol as a module without calls). `telnetd on [port]` looks for a running server in
+  the process list (a detached user task named `telnetd`), takes the port itself with
+  `tcp_listen()` so that "in use" is said at once, starts the server with `spawnfd()`, the
+  listening descriptor as its descriptor 0, and prints the address `netinfo()` gives. The
+  server `detach()`es and loops on `poll()` over the listener and each session's
+  connection and pty master. A connection gets `openpty()`, `PTY_SETSIZE` 80x24 and
+  `spawnpty("/initrd/bin/surfsh", {"surfsh", "-l"})`; the server offers WILL ECHO, WILL
+  SUPPRESS-GO-AHEAD, DO SUPPRESS-GO-AHEAD and DO NAWS and refuses every other option. From
+  the client, IAC commands and sub-negotiations are read (NAWS becomes `PTY_SETSIZE`, IP
+  and BRK Ctrl+C, EC DEL, EL Ctrl+U; AYT is answered, TIMING-MARK refused), CR LF and CR NUL
+  become CR and IAC IAC a 0xFF byte; the keys wait in a 1 KB buffer per session (more is
+  dropped) and go to the master only on its POLLOUT, and a Ctrl+C drops the keys waiting
+  before it and goes first. Towards the client, LF becomes CR LF, a CR alone CR NUL and 0xFF
+  IAC IAC, through a 4 KB buffer per session written on the socket's POLLOUT, with room kept
+  for the protocol's answers, which go whole or not at all. Nothing blocks the loop, so a
+  client that stops reading or floods keys slows no other. A session ends when surfsh does
+  (the master reads 0 and is closed at once, the last output drains, then the connection
+  closes), when the client goes (the master is closed: a hangup), or when output has waited
+  60 s with nothing taken. Up to 4 sessions: a fifth connection is told so and closed, as
+  is one that finds no free pty. The server collects its shells (polling at most every
+  200 ms while one is ending), rests 1 s after an `accept()` error, and logs to
+  `/dev/kmsg`: listening, each session (the client's address, the pty, surfsh's pid), each
+  end with its reason. `telnetd off` logs, kills the server and waits for it; its
+  descriptors close with it, so every session's master hangs up. surfsh shows the prompt's
+  remote state, `≋@>`, when the process list says its terminal is a pty.
+* **Tests.** `make unittest` adds `test_telnet` (the protocol, split at every byte),
+  `test_telnetd` (`server.c` built unchanged against a simulated kernel and driven with
+  random clients, floods, stalls and failures) and the stream console's pager checks in
+  `test_pager`. `make test` adds `nettest` (an echo server and client through the
+  forwarded port, connect errors, limits), `ptytest` (sessions, hangups at `--More--` and
+  while a writer waits, the kill that waits, kernel threads on F1, a full input queue and
+  Ctrl+C through it, poll over several descriptors, detach, a reused pty starting clean,
+  isolation from F1 and the serial line), the `@tcp-raw` steps, and telnetd's steps:
+  `@telnet-session` (the banner, the prompt, commands, Tab, a paged command, Ctrl+C,
+  `exit`), `@telnet-two`, `@telnet-full` (a fifth connection), `@telnet-stalled` (a client
+  that stops reading while another session works), `@telnet-flood` (a client flooding
+  keys into a program that does not read, while another session stays quick),
+  `@telnet-protocol` (a BSD-style opening, NAWS, AYT, TIMING-MARK, CR LF, DEL and BS, EC and
+  EL, typed UTF-8, IAC IP, 0xFF in output, a reset), `@telnet-off-inside` and
+  `@telnet-port-busy`. `make test-tcp` (`tools/qemu-tcp.py`, with `tools/rawnet.py`)
+  drives the TCP stack with hand-made segments: half-open handshakes and backlog floods,
+  an evicted client, a zero window, its probes and the persist timer, a shrunk window,
+  silly windows, a lost segment, a burst's latency against a delayed-ACK peer, keepalive
+  against a dead peer, resets in every state, orphans and TIME_WAIT, and a `poll()` server
+  under a SYN scan and a stalled client. `make test-usb`'s `usbnet` scenario runs a telnet
+  session over the USB Ethernet adapter.
+* **Limits.** No security of any kind, by the owner's choice: anyone on the network who
+  connects gets a shell with every kernel command, and telnet sends everything as plain
+  text. The window size follows NAWS, but no terminal type (TTYPE) is asked for: a session
+  always speaks the console's ANSI subset. surfsh has no type-ahead (section 17), so a
+  pasted block of several lines runs only its first line.

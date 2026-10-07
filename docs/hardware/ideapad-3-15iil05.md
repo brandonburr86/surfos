@@ -181,6 +181,12 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | `help`: `--More--` after a screenful; Space, Enter and q (or Esc) on the built-in keyboard | |
 | F1 to F4: each console has its own surfsh; `ps` lists four | |
 | GRUB entry "SurfOS (kernel shell)": the prompt `SURF ≋#>` | |
+| `telnetd on` (after `dhcp`): the address it prints | |
+| From the Mac (`brew install telnet`), `telnet <address>`: the banner and `SURF ≋@>`; are ▸, ≋ and the colours right in the Mac's terminal? | |
+| In the session: typing (does the echo lag?), Tab, `help` with `--More--`, Ctrl+C on `ping <router> 100` | |
+| A second telnet window at the same time; `telnetd status` on the laptop lists both | |
+| `exit` in one window, close the other; `dmesg` on the laptop: the session lines | |
+| `telnetd off`, then `telnet <address>` again: "Connection refused" | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,

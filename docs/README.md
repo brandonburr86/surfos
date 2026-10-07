@@ -5,15 +5,16 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, and the telnet server with the sockets, pseudo-terminals and `poll()` it stands on |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, and keeping files on a second USB stick |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, and reaching its shell from another computer over telnet |
 | [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
 | [superpowers/plans/…surfsh.md](superpowers/plans/2026-10-06-surfsh.md) | The brief for surfsh, the SurfOS shell: the prompt design, the pager, Tab completion, SurfOS 1.0 |
+| [superpowers/plans/…telnetd.md](superpowers/plans/2026-10-06-telnetd.md) | The brief for telnetd, the telnet server: network connections for programs, pseudo-terminals, `poll()` |
 
 ## Building and running
 
@@ -25,6 +26,7 @@ make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
 make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (12 scenarios)
 make unittest     # host unit tests
+make test-tcp     # TCP against hand-made segments (tools/qemu-tcp.py)
 ```
 
 Needs `gcc` with 32-bit support, `binutils`, `nasm`, `qemu-system-x86` and `python3`.
@@ -50,4 +52,6 @@ never repartitioned or formatted. The console fills the screen (120x33 at 1920x1
 Since M10 (under emulation so far) the shell is a program, `/initrd/bin/surfsh`, on every
 console: the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a pager, quotes
 and redirection, with the kernel's commands reached through two system calls; the
-console draws UTF-8, and the banner says SurfOS 1.0.
+console draws UTF-8, and the banner says SurfOS 1.0. Since M11 (under emulation so far)
+programs have TCP connections, `poll()` and pseudo-terminals, and `telnetd on` lets
+another computer on the network telnet in to a surfsh of its own (`SURF ≋@>`).
