@@ -79,7 +79,7 @@ def surf_prompt(crumbs, state):
 # 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
-           'latency', 'zwprobe', 'evict', 'pollscan', 'pollstall', 'end')
+           'latency', 'zwprobe', 'evict', 'ackahead', 'pollscan', 'pollstall', 'end')
 
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [

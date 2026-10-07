@@ -63,7 +63,11 @@ delayed ACK (40 to 200 ms); the kernel's own connections keep it, and both keep
 the silly window rules. Data that did not fit is answered all the same (a byte
 probing a shut window, as BSD, macOS and Windows probe, got no ACK). A listener
 answers a segment with an ACK in it with a reset (RFC 793): a client whose
-half-open connection made room for another hears so at once.
+half-open connection made room for another hears so at once. A bare ACK whose
+sequence number is ahead of ours (a segment of the other end's was lost) is
+acceptable within the window: its ACK and window count, and it gets no answer;
+an unacceptable bare ACK is answered only when its sequence number is old (a
+keepalive, a probe): two strict ends no longer trade ACKs across a hole.
 */
 
 #include <surfos/types.h>
@@ -572,8 +576,11 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
             data += skip;
             datalen -= skip;
             seq = s->rcv_nxt;
+        } else if(!datalen && !(flags & (TCP_SYN | TCP_FIN)) && SEQ_LT(s->rcv_nxt, seq) && SEQ_LT(seq, s->rcv_nxt + rcv_open(s))) {
+            /* 10/6/26: a bare ACK ahead of us, in the window: acceptable (RFC 793); its ACK counts below */
         } else {
-            send_ack(s);        /* out of order or old: say where we are (10/6/26: also to a bare ACK, a probe) */
+            /* out of order or old: say where we are. 10/6/26: to a bare ACK only when it is old (a keepalive, a probe) */
+            if(datalen || (flags & (TCP_SYN | TCP_FIN)) || SEQ_LT(seq, s->rcv_nxt)) send_ack(s);
             netbuf_free(nb);
             return;
         }

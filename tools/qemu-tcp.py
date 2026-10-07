@@ -37,6 +37,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               probe so): each probe gets an ACK saying the window is shut
   evict       a client whose half-open connection a later SYN took the place of: its ACK
               and data get a reset at once, and the server serves the next client
+  ackahead    the other end's segment lost, then its bare ACK ahead of the guest: taken (it
+              acknowledges the guest's data), and not answered (no ACK ping-pong)
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -439,6 +441,31 @@ def sc_evict(rig):
     return ok
 
 
+def sc_ackahead(rig):
+    ok = rig.start('nettest burst 23 1 0 100', 'listening on port 23')
+    c = Conn(rig.net, 3600, 23)
+    ok = c.connect() is not None and ok
+    d = rig.net.wait(lambda s: c.mine(s) and s.data, 5)          # the guest's 100 bytes arrive,
+    ok = d is not None and ok
+    if d:
+        c.rcv = (d.seq + len(d.data)) & 0xffffffff
+    c.snd += 10                                     # but 10 bytes of ours are lost on the way,
+    c.ack()                                         # and our ACK of the 100 comes after them: ahead of the guest
+    t0, n = time.time(), 0
+    while time.time() - t0 < 2:                     # nothing comes back: no answer to it, and no resending
+        s = rig.net.wait(lambda s: c.mine(s), 0.25)
+        if s:
+            n += 1
+            if s.data or s.seq != c.rcv:            # (a strict end answers what it cannot take)
+                c.ack()
+    rig.net.send(c.pp, c.gp, c.snd - 10, c.rcv, ACK | PSH, 8192, b'0123456789')   # the lost bytes again
+    c.ack(flags=ACK | FIN)
+    ok = rig.expect('nettest: read 10 bytes, then EOF') and n == 0 and ok
+    rig.finish(c)
+    print('        (segments from the guest in 2 s after an ACK ahead of it: %d)' % n)
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -508,6 +535,7 @@ SCENARIOS = [
     ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
     ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
     ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
+    ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]
