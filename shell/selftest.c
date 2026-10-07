@@ -847,11 +847,16 @@ static void test_net_other(struct netdev *dev) {
 static void test_net(void) {
     struct netdev *dev = netdev_default();
     const struct arp_entry *e;
+    ipaddr_t was_ip, was_mask, was_gw, was_dns;
     int i, rtt = -1, ok = 0;
     char a[16];
 
     if(!dev) { printf("  skip network (no interface)\n"); return; }
     if(!dev->link_up) { printf("  skip network (%s: no link)\n", dev->name); return; }
+    was_ip = dev->ip;                                /* 10/6/26: given back if the lease below fails */
+    was_mask = dev->netmask;
+    was_gw = dev->gateway;
+    was_dns = dev->dns;
     if(!dev->ip) {
         /* which network is this? A lease from QEMU's comes with gateway 10.0.2.2; then the
            configuration is dropped again so the checks below start from nothing as always */
@@ -883,6 +888,18 @@ static void test_net(void) {
     dev->ip = dev->netmask = dev->gateway = dev->dns = 0;    /* start over through DHCP */
     mutex_unlock(&net_lock);
     rtt = dhcp_configure(dev, 8000);
+    if(rtt != 0 && was_ip) {
+        /* 10/6/26: no lease, because a kill or Ctrl+C cut the wait short or none came: the
+           interface gets back the configuration it had, so a self test stopped here never
+           leaves it without an address (and the laptop unreachable, telnetd included) */
+        mutex_lock(&net_lock);
+        dev->ip = was_ip;
+        dev->netmask = was_mask;
+        dev->gateway = was_gw;
+        dev->dns = was_dns;
+        arp_announce(dev);
+        mutex_unlock(&net_lock);
+    }
     check(rtt == 0 && dev->ip == IP4(10, 0, 2, 15) && dev->gateway == IP4(10, 0, 2, 2) && dev->dns == IP4(10, 0, 2, 3),
           "DHCP lease: 10.0.2.15, gateway 10.0.2.2, DNS 10.0.2.3");
     check(icmp_ping(IP4(10, 0, 2, 2), 0x5f60, 1, 56, 2000, NULL) >= 0, "ping works on the leased address");
