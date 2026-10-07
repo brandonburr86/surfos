@@ -13,12 +13,14 @@
    answers dropped only whole and session output never; the keys reaching each master are the
    decoded client data as the server's key buffer passes them on (a Ctrl+C drops those before
    it, and what overflows the buffer is dropped), written only on POLLOUT unless a Ctrl+C leads,
-   and POLLOUT asked on a master exactly while keys wait; NAWS sizes in range; at most MAX_SESSIONS sessions, refusals only when
-   full, without a pty or when the shell could not start; the server never exits; a master that
-   read 0 is closed before anything else; a session is ended for a stall only when its client
-   took nothing for STALL_MS while output waited, and always by then; while a shell waits to be
-   collected poll() never waits longer than TICK_MS; and at the end every descriptor, pty, session
-   and shell is gone. Run by `make unittest`. */
+   and POLLOUT asked on a master exactly while keys wait; NAWS sizes in range; at most
+   MAX_SESSIONS sessions, refusals only when full with no session stalled, without a pty or when
+   the shell could not start; the server never exits; a master that read 0 is closed before
+   anything else; a session is ended for a stall only when its client has taken nothing for
+   STALL_MS while output waited, a new connection came with every session taken, and no other
+   session was stalled longer; while a shell waits to be collected poll() never waits longer
+   than TICK_MS; and at the end every descriptor, pty, session and shell is gone. Run by
+   `make unittest`. */
 #include "server.c"
 #include <setjmp.h>
 
@@ -75,9 +77,10 @@ static int nconn;
 static struct spty P[PTY_MAX];
 static int next_pid = 100, last_accepted = -1, closing_fd = -1;
 static jmp_buf done;
-static long iter, max_iter, quiet, looks;
+static long iter, max_iter, quiet, looks, accept_iter = -1;
+static int accept_full, evicted;                /* the last accept: every session was taken; one was ended for it */
 static int quiesce, server_exited;
-static unsigned int sim_now;
+static unsigned int sim_now, time_step;        /* time_step: the most a poll() takes when something is there at once */
 static unsigned long long rs = 1;
 static unsigned rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return (unsigned)(rs >> 11); }
 
@@ -230,9 +233,9 @@ static int world_step(void) {
             return 1;
         case 6:                                         /* the client goes */
             if(!nconn || !c->used || c->left || (quiesce ? 0 : rnd() % 4)) break;
-            if(quiesce && c->tx_len) break;             /* in the end, clients read everything first */
-            c->left = 1;
-            if(rnd() % 3 == 0 && !quiesce) c->rst = 1; else c->fin = 1;
+            if(quiesce && c->tx_len && c->stalled != 2) break;  /* in the end, clients read everything first; one */
+            c->left = 1;                                         /* stalled for good just goes, with a reset */
+            if((rnd() % 3 == 0 && !quiesce) || (quiesce && c->stalled == 2)) c->rst = 1; else c->fin = 1;
             return 1;
         case 7: case 8: {                               /* a shell prints */
             unsigned char b[2048];
@@ -295,6 +298,19 @@ static short readiness(int fd) {
     }
 }
 
+/* how long the most stalled client has taken nothing while output waited for it (0: none waits) */
+static unsigned int longest_stall(void) {
+    unsigned int most = 0;
+    int k;
+    for(k = 0; k < nconn; k++) {
+        struct sconn *c = &C[k];
+        struct session *s = c->bound && !c->srv_closed ? srv_session(c->fd) : NULL;
+        if(s && s->out_len && sim_now - later(c->wait_since, c->last_progress) > most)
+            most = sim_now - later(c->wait_since, c->last_progress);
+    }
+    return most;
+}
+
 static int no_events_left(void) {
     int k;
     for(k = 0; k < nconn; k++) {
@@ -334,13 +350,6 @@ static void before_wait(struct pollfd *fds, nfds_t n, int timeout) {
         for(i = 0; i < n; i++) if(fds[i].fd == sessions[k].master && (fds[i].events & POLLOUT)) found = 1;
         if(!found) BUG("session %d: %d keys wait and its master is not asked about POLLOUT", k, sessions[k].keys_len);
     }
-    for(k = 0; k < nconn; k++) {                        /* no session left that should have ended for a stall */
-        struct sconn *c = &C[k];
-        struct session *s = c->bound && !c->srv_closed ? srv_session(c->fd) : NULL;
-        if(s && s->out_len && sim_now - later(c->wait_since, c->last_progress) >= STALL_MS)
-            BUG("conn %d: nothing taken for %u ms while output waits, and the session goes on", k,
-                sim_now - later(c->wait_since, c->last_progress));
-    }
     if(zombies() && (timeout < 0 || timeout > TICK_MS)) BUG("a shell waits to be collected and poll() waits %d ms", timeout);
 }
 
@@ -363,7 +372,7 @@ int sim_poll(struct pollfd *fds, nfds_t n, int timeout) {
     if(run_bugs > 20) longjmp(done, 5);                 /* this run has said enough */
     if((iter > max_iter || nconn >= MAXC) && !quiesce) quiesce = 1;     /* the end: no more clients come */
     if(quiesce) for(k = 0; k < nconn; k++) if(C[k].stalled == 1) C[k].stalled = 0;
-    sim_now += rnd() % 20;                              /* time passes */
+    sim_now += rnd() % time_step;                       /* time passes */
     for(k = (int)(rnd() % 4); k > 0; k--) world_step();
     for(tries = 0;; tries++) {
         int ready = 0, stepped;
@@ -540,12 +549,19 @@ int sim_close(int fd) {
         struct session *s = srv_session(fd);
         if(s && c->bound) {
             if(s->out_len && !c->left && !c->rst) {     /* output dropped although the client is there: a stall */
-                if(sim_now - later(c->wait_since, c->last_progress) < STALL_MS)
-                    BUG("conn %ld: %d bytes of output dropped after %u ms without progress", (long)(c - C), s->out_len,
-                        sim_now - later(c->wait_since, c->last_progress));
-                else stall_ends++;
+                unsigned int stall = sim_now - later(c->wait_since, c->last_progress);
+                if(stall < STALL_MS || accept_iter != iter || !accept_full || evicted || stall < longest_stall())
+                    BUG("conn %ld: %d bytes of output dropped after %u ms without progress (accepted now %d, full %d)",
+                        (long)(c - C), s->out_len, stall, accept_iter == iter, accept_full);
+                else {
+                    stall_ends++;
+                    evicted = 1;
+                }
             }
             c->ended_by_server = 1;
+        } else if(!c->bound && fdt[fd].obj == last_accepted && accept_iter == iter && accept_full && !evicted &&
+                  longest_stall() >= STALL_MS) {
+            BUG("conn %d refused while a session had taken nothing for %u ms", fdt[fd].obj, longest_stall());
         }
         c->srv_closed = 1;
         c->fd = -1;
@@ -604,6 +620,13 @@ int sim_tcp_accept(int fd, struct netaddr *peer) {
     }
     nfd = fd_alloc(F_CONN, k);
     if(nfd < 0) { BUG("accept: no descriptor left"); errno = EMFILE; return -1; }
+    {                                                   /* every session taken? (then a stalled one may make room) */
+        int j, busy = 0;
+        for(j = 0; j < MAX_SESSIONS; j++) if(sessions[j].conn >= 0) busy++;
+        accept_full = busy >= MAX_SESSIONS;
+        accept_iter = iter;
+        evicted = 0;
+    }
     C[k].pending = 0;
     C[k].fd = nfd;
     if(peer) { peer->ip = 0x0202000a; peer->port = (unsigned short)(40000 + k); peer->zero = 0; }
@@ -710,8 +733,9 @@ static void run(unsigned long long seed, long iters) {
     kmsg = -1;
     sessions_ever = shells = resting = 0;
     rest_end = 0;
-    nconn = 0; iter = 0; quiet = 0; looks = 0; run_bugs = 0; max_iter = iters; quiesce = 0; server_exited = 0; last_accepted = -1;
+    nconn = 0; iter = 0; quiet = 0; looks = 0; run_bugs = 0; accept_iter = -1; accept_full = evicted = 0; max_iter = iters; quiesce = 0; server_exited = 0; last_accepted = -1;
     sim_now = (unsigned int)(rnd() % 100000);
+    time_step = seed % 3 ? 20 : 400;                    /* some runs live long enough for clients to stall for good */
     fdt[0].type = F_LISTEN; fdt[1].type = F_NUL; fdt[2].type = F_NUL;
     r = setjmp(done);
     if(!r) { serve(0, 23); BUG("serve returned"); return; }
@@ -748,7 +772,7 @@ int main(int argc, char **argv) {
         total += runs;
     }
     printf("telnetd server: %ld runs of %ld polls (failures of accept, spawnpty, openpty in some): %ld sessions, %ld refusals, "
-           "%ld ended for a stall, %ld rests of the listener, %ld short writes, %ld waits that ran out, %ld answer bytes "
+           "%ld ended for a stall to make room, %ld rests of the listener, %ld short writes, %ld waits that ran out, %ld answer bytes "
            "dropped whole, %ld keys taken by masters, %ld dropped (the buffer full), %ld key writes that found no room\n",
            total, iters, sessions_made, refusals, stall_ends, rests, short_writes, timeouts_taken, reply_drop_total, keys_taken,
            keys_dropped, keys_eagain);

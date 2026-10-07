@@ -1356,9 +1356,10 @@ def telnet_full_check(q):
 def telnet_stalled_check(q):
     """a client that stops reading while its session prints without end (hexdump /dev/zero in the background, which
     is not paged): however much the host's side takes first, the connection's send buffer in the guest fills and
-    stays full (netstat: out 8192), and the server holds that session back and serves a second session all the
-    same. When the first client reads again its session goes on: the hexdump is killed from the console, and an
-    Enter in the session brings the report of it and a prompt; every line arrived, in order. Then the client goes."""
+    stays full (netstat: out 8192), and the server holds that session back (and keeps it: a stalled session is ended
+    only when a new connection needs its place) and serves a second session all the same. When the first client
+    reads again its session goes on: the hexdump is killed from the console, and an Enter in the session brings the
+    report of it and a prompt; every line arrived, in order. Then the client goes."""
     a, b = Telnet(q.ports['telnet'], rcvbuf=4096), None
     full = re.compile(rb'local 23\s+remote [0-9.]+:[0-9]+\s+rx\s+[0-9]+\s+tx\s+[0-9]+\s+retrans\s+[0-9]+\s+'
                       rb'buf\s+in\s+[0-9]+\s+out\s+8192')
@@ -1371,8 +1372,8 @@ def telnet_stalled_check(q):
             ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
             m = re.search(rb'\[(\d+)\] started', a.data)
             pid = int(m.group(1)) if m else 0
-        stalled, deadline = False, time.time() + 90
-        while ok and not stalled and time.time() < deadline:
+        stalled, deadline = False, time.time() + 45     # seconds here; the server ends no session for a stall
+        while ok and not stalled and time.time() < deadline:    # unless a new connection needs its place
             start = len(q.transcript)
             q.send('netstat\n')
             ok = q.expect(PROMPT, 10)

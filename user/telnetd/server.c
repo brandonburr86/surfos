@@ -26,8 +26,10 @@ POLLOUT only while that holds something; the connection is written only when POL
 says it takes bytes. The pseudo-terminal is read, in pieces of PIECE bytes (at most twice
 that and one more once encoded), only while the buffer has room for a piece and OUT_KEEP
 for answers: a client that reads slowly holds back its own session, whose programs then
-wait to print, and the other sessions and new connections go on. A client that takes
-nothing for STALL_MS while output waits for it is gone or stuck: its session is ended, so
+wait to print, and the other sessions and new connections go on. A client that has taken
+nothing for STALL_MS while output waits for it is stalled: it may be gone, asleep, behind a
+buffering middlebox or reading slowly, so its session goes on, but when a new connection
+comes and every session is taken, the session stalled longest is ended to make room, so
 that clients which stop reading cannot keep every session for good. The answers to one
 read from the client go into the buffer whole or not at all (a client that sends without
 reading loses answers, never a part of one).
@@ -65,7 +67,7 @@ listening on port 23", "telnetd: session 1 from 10.0.2.2:51234 (pty0, surfsh pid
 #define PIECE    512                    /* the most of a session's output read at once */
 #define OUT_SIZE 4096                   /* what waits for the client */
 #define OUT_KEEP 256                    /* the last of it, kept for answers to the client's negotiation */
-#define STALL_MS 60000                  /* output waiting this long with nothing taken: the session ends */
+#define STALL_MS 60000                  /* output waiting this long with nothing taken: a stalled session */
 #define REAP_MS  200                    /* poll()'s longest wait while a shell is to be collected soon */
 #define TICK_MS  1000                   /* ... while sessions run (a shell that ended while its output waits) */
 #define PAUSE_MS 1000                   /* the listening descriptor rests this long after accept() failed */
@@ -139,8 +141,21 @@ static void end_session(struct session *s, const char *why) {
     say("telnetd: session %d ended (%s)", s->num, why);
 }
 
+/* the session whose client has taken nothing for longest while output waited, STALL_MS or more; NULL when none */
+static struct session *stalled_longest(void) {
+    struct session *best = NULL;
+    unsigned int now = uptime();
+    int i;
+    for(i = 0; i < MAX_SESSIONS; i++) {
+        struct session *s = &sessions[i];
+        if(s->conn < 0 || !s->out_len || now - s->since < STALL_MS) continue;
+        if(!best || now - s->since > now - best->since) best = s;
+    }
+    return best;
+}
+
 static void new_session(int lfd) {
-    char *argv[] = { "surfsh", "-l", NULL }, ip[16], peer[24], why[64];
+    char *argv[] = { "surfsh", "-l", NULL }, ip[16], peer[24], why[96];
     unsigned char opening[TN_OPENING];
     struct session *s = NULL;
     struct netaddr from;
@@ -160,6 +175,11 @@ static void new_session(int lfd) {
     }
     snprintf(peer, sizeof(peer), "%s:%u", ipstr(from.ip, ip), (unsigned int)from.port);
     for(i = 0; i < MAX_SESSIONS && !s; i++) if(sessions[i].conn < 0) s = &sessions[i];
+    if(!s && (s = stalled_longest()) != NULL) {         /* every session taken: one stalled makes room */
+        snprintf(why, sizeof(why), "the client took nothing for %u s, and a new connection needed the place",
+                 (uptime() - s->since) / 1000);
+        end_session(s, why);
+    }
     if(!s) {
         snprintf(why, sizeof(why), "%d sessions are open already; try again later.", MAX_SESSIONS);
         refuse(conn, why);
@@ -270,19 +290,13 @@ static void to_client(struct session *s) {
     if(s->ended && !s->out_len) end_session(s, "the shell ended");
 }
 
-/* how long poll() may wait: until a session's stall limit, the end of the listening
-   descriptor's rest, or a look for shells to collect; -1: until something happens */
+/* how long poll() may wait: until the end of the listening descriptor's rest, or a look for
+   shells to collect; -1: until something happens */
 static int wait_ms(unsigned int now) {
     int i, ms = -1, running = 0;
     for(i = 0; i < MAX_SESSIONS; i++) {
         const struct session *s = &sessions[i];
-        if(s->conn < 0) continue;
-        if(s->master >= 0) running++;
-        if(s->out_len) {
-            unsigned int waited = now - s->since;
-            int left = waited >= STALL_MS ? 0 : (int)(STALL_MS - waited);
-            if(ms < 0 || left < ms) ms = left;
-        }
+        if(s->conn >= 0 && s->master >= 0) running++;
     }
     if(shells > running && (ms < 0 || ms > REAP_MS)) ms = REAP_MS;      /* a shell ended or is ending */
     else if(shells && (ms < 0 || ms > TICK_MS)) ms = TICK_MS;
@@ -348,12 +362,6 @@ int serve(int lfd, int port) {
             if(s->conn < 0) continue;
             if(ev & (POLLIN | POLLHUP | POLLERR)) from_client(s);   /* the read says which: data, the end, an error */
             else if(ev & POLLNVAL) end_session(s, "the connection broke");
-        }
-        now = uptime();
-        for(i = 0; i < MAX_SESSIONS; i++) {
-            struct session *s = &sessions[i];
-            if(s->conn >= 0 && s->out_len && now - s->since >= STALL_MS)
-                end_session(s, "the client took nothing for 60 s");
         }
         if(l >= 0 && fds[l].revents) new_session(lfd);
         for(;;) {                                   /* the shells of sessions that ended */
