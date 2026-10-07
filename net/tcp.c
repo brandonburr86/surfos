@@ -53,6 +53,11 @@ window small costs a segment now and then, not a stream of tiny ones.
 and that nobody reads for (TIME_WAIT, an orphan in FIN_WAIT_2) gives its 16 KB
 of buffers back at once: what lingers there, the other end gone with a network
 unplugged say, holds its slot only, and the heap does not change when it ends.
+
+10/6/26 (second review): a retransmission carries only bytes that were sent;
+what the window or Nagle's rule held back waits for output() (a lost small
+segment ended the connection: its retransmission ran past snd_nxt, and the ACK
+of it was ignored).
 */
 
 #include <surfos/types.h>
@@ -399,8 +404,10 @@ static void probe_window(struct tcp_socket *s) {
     s->persist_at = getticks() + (pause < TCP_PERSIST_MAX ? pause : TCP_PERSIST_MAX);
 }
 
-/* the oldest unacknowledged segment again (or the SYN / FIN) */
+/* the oldest unacknowledged segment again (or the SYN / FIN). 10/6/26: of the bytes sent only (up to
+   snd_nxt): those held back (the window, Nagle) are output()'s, and an ACK past snd_nxt is not taken */
 static void retransmit(struct tcp_socket *s) {
+    u_int sent;
     s->retrans++;
     if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) { fail(s, -ETIMEDOUT); return; }
     s->rto_at = getticks() + TCP_RTO * (s->retries < 4 ? s->retries : 4);
@@ -412,8 +419,9 @@ static void retransmit(struct tcp_socket *s) {
         send_segment(s->remote_ip, s->local_port, s->remote_port, s->iss, s->rcv_nxt, TCP_SYN | TCP_ACK, window(s), NULL, 0, true);
         break;
     default:
-        if(s->tx_len) {
-            u_int chunk = s->tx_len > s->mss ? s->mss : s->tx_len;
+        sent = s->snd_nxt - s->snd_una - (s->fin_sent ? 1 : 0);
+        if(sent) {
+            u_int chunk = sent > s->mss ? s->mss : sent;
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s), s->txbuf, chunk, false);
         } else if(s->fin_sent) {
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);

@@ -30,6 +30,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               (no silly window syndrome)
   linger      a closed connection whose other end never sends its FIN, then TIME_WAIT
               with the link down: neither keeps its buffers, TIME_WAIT ends on time
+  lost        a 1-byte segment lost while bytes behind it wait for the window: it is sent
+              again alone, and the bytes and the FIN follow its acknowledgement
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -339,6 +341,25 @@ def sc_linger(rig):
     return ok
 
 
+def sc_lost(rig):
+    ok = rig.start('nettest burst 23 1 -1 1 2', 'listening on port 23')
+    c = Conn(rig.net, 3100, 23, win=1)              # a window of one byte: the 2 bytes after it wait
+    ok = c.connect() is not None and ok
+    first = rig.net.wait(lambda s: c.mine(s) and s.data, 5)          # lost on the way: not acknowledged
+    again = rig.net.wait(lambda s: c.mine(s) and s.data, 3)          # sent again: that byte, no more
+    ok = first is not None and again is not None and again.seq == first.seq and len(again.data) == 1 and ok
+    got = b''
+    if again:
+        got = again.data
+        c.rcv = (again.seq + len(again.data)) & 0xffffffff
+        c.ack(win=8192)                             # acknowledged, and the window opens
+    got += c.receive(2, win_for=lambda g: 8192, timeout=5)
+    ok = got == pattern(3) and rig.finish(c) and ok                  # the held bytes, then the FIN
+    ok = rig.expect('nettest: burst closed') and ok
+    print('        (sent again: %d byte(s); then %d more and the FIN)' % (len(again.data) if again else 0, len(got) - 1))
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -404,6 +425,7 @@ SCENARIOS = [
     ('reserve', sc_reserve, "programs that take every socket leave one for the kernel's own connection"),
     ('sws', sc_sws, 'small writes and small windows make no storm of small segments'),
     ('linger', sc_linger, 'FIN_WAIT_2 and TIME_WAIT hold no buffers; TIME_WAIT ends on time with the link down'),
+    ('lost', sc_lost, 'a lost small segment is sent again as it was, and what waited behind it follows'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]
