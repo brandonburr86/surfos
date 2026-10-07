@@ -57,7 +57,10 @@ unplugged say, holds its slot only, and the heap does not change when it ends.
 10/6/26 (second review): a retransmission carries only bytes that were sent;
 what the window or Nagle's rule held back waits for output() (a lost small
 segment ended the connection: its retransmission ran past snd_nxt, and the ACK
-of it was ignored).
+of it was ignored). A program's connections (net/sock.c) send small writes at
+once: Nagle's rule held telnetd's echo and screen updates for the client's
+delayed ACK (40 to 200 ms); the kernel's own connections keep it, and both keep
+the silly window rules.
 */
 
 #include <surfos/types.h>
@@ -100,6 +103,7 @@ static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_
 struct tcp_socket {
     bool used, orphan;                  /* orphan: closed by the application, finishing on its own */
     bool synced;                        /* 10/6/26: it reached ESTABLISHED (accept() hands it out then) */
+    bool nodelay;                       /* 10/6/26: small writes go at once (a program's connection: no Nagle) */
     u_long orphan_at;                   /* 10/6/26: when an orphan last made progress */
     struct tcp_socket *listener;        /* 10/6/26: whose backlog it waits in, until accept() takes it */
     u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
@@ -347,9 +351,10 @@ static void arm_rto(struct tcp_socket *s) {
 
 /* send whatever the window allows from snd_nxt on, then the FIN if it is due. 10/6/26: sender SWS
    avoidance: a segment shorter than the MSS goes only when it is at least half the largest window
-   offered, or carries all that is queued with nothing in flight (Nagle), unless force (the persist
-   timer). What waits with nothing in flight (a shut window, one too small, a send that failed) is
-   the persist timer's (tcp_tick): it probes a shut window and sends what fits into a small one. */
+   offered, or carries all that is queued with nothing in flight (Nagle; with nodelay, in flight or
+   not), unless force (the persist timer). What waits with nothing in flight (a shut window, one too
+   small, a send that failed) is the persist timer's (tcp_tick): it probes a shut window and sends
+   what fits into a small one. */
 static void output(struct tcp_socket *s, bool force) {
     u32 in_flight = s->snd_nxt - s->snd_una;
     bool held = false;
@@ -357,7 +362,7 @@ static void output(struct tcp_socket *s, bool force) {
         u_int left = s->tx_len - in_flight, room = s->snd_wnd > in_flight ? s->snd_wnd - in_flight : 0, chunk = left;
         if(chunk > s->mss) chunk = s->mss;
         if(chunk > room) chunk = room;
-        if(!chunk || (!force && chunk < s->mss && chunk < s->max_wnd / 2 && (chunk < left || in_flight))) {
+        if(!chunk || (!force && chunk < s->mss && chunk < s->max_wnd / 2 && (chunk < left || (in_flight && !s->nodelay)))) {
             held = true;
             break;
         }
@@ -975,6 +980,13 @@ int tcp_poll(struct tcp_socket *s) {
     }
     mutex_unlock(&net_lock);
     return ev;
+}
+
+/* 10/6/26: s sends small writes at once (no Nagle; the silly window rules stay): a program's connection */
+void tcp_set_nodelay(struct tcp_socket *s) {
+    mutex_lock(&net_lock);
+    s->nodelay = true;
+    mutex_unlock(&net_lock);
 }
 
 bool tcp_listening(const struct tcp_socket *s) {

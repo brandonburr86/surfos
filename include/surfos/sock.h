@@ -40,9 +40,9 @@ waits only while none fits (-EINTR when cut short), so after poll() says POLLOUT
 not wait, and a caller with more to send writes the rest later (libsurf's stdio does).
 -ECONNRESET or -ETIMEDOUT when that ended the connection, -EPIPE once it is closed both
 ways, -ENOTCONN on a listening socket. A reader that stopped reading shuts its window: it
-is probed, and the bytes go on when it reads again. Small writes are gathered: while sent
-data is unacknowledged, less than a full segment waits for that acknowledgement (Nagle's
-rule; there is no TCP_NODELAY).
+is probed, and the bytes go on when it reads again. What is written goes out at once,
+however small (no Nagle delay); only a window too small for a sensible segment holds a
+small one back, a second at most (silly window avoidance).
 close() never waits: a connection's FIN goes out behind the bytes still queued and the
 socket finishes on its own (reset when it makes no progress for 30 seconds); a listening
 socket resets the connections it had not accepted.

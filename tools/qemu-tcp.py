@@ -25,13 +25,14 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
   churn       40 connections made and closed in a row: none fails for want of a socket
   reserve     programs that hold every socket they can: the kernel's own connection
               (httpget) still gets one
-  sws         100-byte writes to a client that keeps its window small: segments of a
-              useful size, and a reader that opens 100 bytes at a time gets one a second
-              (no silly window syndrome)
+  sws         100-byte writes to a client that keeps its window small: a reader that opens
+              100 bytes at a time gets one segment a second (no silly window syndrome)
   linger      a closed connection whose other end never sends its FIN, then TIME_WAIT
               with the link down: neither keeps its buffers, TIME_WAIT ends on time
   lost        a 1-byte segment lost while bytes behind it wait for the window: it is sent
               again alone, and the bytes and the FIN follow its acknowledgement
+  latency     bursts of small writes (1, 20, 30 bytes) to a client that delays its ACKs
+              200 ms: each burst arrives whole at once, not held for the ACK (no Nagle)
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -274,7 +275,7 @@ def sc_sws(rig):
     ok = c.connect() is not None and ok
     got, segs = b'', 0
     deadline = time.time() + 10
-    while len(got) < 12000 and time.time() < deadline:   # a reader that keeps up: the writes travel together
+    while len(got) < 12000 and time.time() < deadline:   # a reader that keeps up
         s = rig.net.wait(lambda s: c.mine(s) and s.data, 1.0)
         if not s:
             continue
@@ -285,7 +286,7 @@ def sc_sws(rig):
         c.ack(win=4096)
     size = len(got) // max(segs, 1)
     got += c.receive(4096, win_for=lambda g: max(0, 4096 - g))     # then it stops reading: the window shuts
-    t0, small = time.time(), 0
+    t0, small, sizes = time.time(), 0, []
     while time.time() - t0 < 4:                     # a silly reader: room for 100 bytes, never more
         s = rig.net.wait(lambda s: c.mine(s) and (s.data or c.is_probe(s)), 0.5)
         if not s:
@@ -294,9 +295,11 @@ def sc_sws(rig):
             got += s.data
             c.rcv = (c.rcv + len(s.data)) & 0xffffffff
             small += 1
+            sizes.append(len(s.data))
         c.ack(win=100)
     got += c.receive(n - len(got), win_for=lambda g: 8192, timeout=30)   # it reads everything again
-    ok = ok and got == pattern(n) and size >= 400 and 1 <= small <= 6
+    # no storm: a segment a second at most into the small window, each filling it (no smaller pieces)
+    ok = ok and got == pattern(n) and 1 <= small <= 6 and all(x == 100 for x in sizes)
     ok = rig.expect('nettest: wrote %d bytes in' % n, 15) and ok
     rig.finish(c)
     print('        (100-byte writes: %d bytes a segment; a reader offering 100 bytes: %d segments in 4 s)' % (size, small))
@@ -357,6 +360,35 @@ def sc_lost(rig):
     ok = got == pattern(3) and rig.finish(c) and ok                  # the held bytes, then the FIN
     ok = rig.expect('nettest: burst closed') and ok
     print('        (sent again: %d byte(s); then %d more and the FIN)' % (len(again.data) if again else 0, len(got) - 1))
+    return ok
+
+
+def sc_latency(rig):
+    sizes, bursts = (1, 20, 30), 4
+    per = sum(sizes)
+    ok = rig.start('nettest burst 23 %d 300 %s' % (bursts, ' '.join(map(str, sizes))), 'listening on port 23')
+    c = Conn(rig.net, 3200, 23)
+    ok = c.connect() is not None and ok
+    got, at, ack_due = b'', [], None
+    deadline = time.time() + 10
+    while len(got) < bursts * per and time.time() < deadline:
+        s = rig.net.wait(lambda s: c.mine(s) and s.data, 0.5 if ack_due is None else max(0.001, ack_due - time.time()))
+        if s and s.seq == c.rcv:
+            at += [s.t] * len(s.data)               # when each byte came
+            got += s.data
+            c.rcv = (c.rcv + len(s.data)) & 0xffffffff
+            if ack_due is None:
+                ack_due = time.time() + 0.2         # a client that delays its ACK 200 ms
+        if ack_due is not None and time.time() >= ack_due:
+            c.ack()
+            ack_due = None
+    c.ack(flags=ACK | FIN)
+    ok = rig.expect('nettest: read 0 bytes, then EOF') and ok
+    rig.finish(c)
+    spread = [round((at[b * per + per - 1] - at[b * per]) * 1000) for b in range(bursts) if len(at) >= (b + 1) * per]
+    ok = ok and got == pattern(bursts * per) and len(spread) == bursts and max(spread) < 100
+    print('        (bursts of %s-byte writes, ACKs delayed 200 ms: %s ms from the first byte of each to its last)' % (
+        '+'.join(map(str, sizes)), spread))
     return ok
 
 
@@ -426,6 +458,7 @@ SCENARIOS = [
     ('sws', sc_sws, 'small writes and small windows make no storm of small segments'),
     ('linger', sc_linger, 'FIN_WAIT_2 and TIME_WAIT hold no buffers; TIME_WAIT ends on time with the link down'),
     ('lost', sc_lost, 'a lost small segment is sent again as it was, and what waited behind it follows'),
+    ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]
