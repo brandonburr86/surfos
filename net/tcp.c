@@ -74,7 +74,10 @@ held 16 KB until its retries ran out. An orphan whose retries run out sends a
 reset as it goes (its other end was left half-open). A connection that has
 failed (CLOSED, its program not done with it yet) is no longer looked up:
 what comes for it is answered as for no connection, with a reset. tcpka= is
-matched as a word.
+matched as a word. A window shut on bytes in flight (a peer that shrank it, which
+RFC 1122 forbids) no longer brings a full segment again every second for ever:
+nothing goes into it, the persist timer probes it with its backoff, and when it
+opens, what was in flight goes again at once.
 */
 
 #include <surfos/types.h>
@@ -125,6 +128,7 @@ struct tcp_socket {
     u_int ka_probes;                    /* 10/6/26: keepalive probes unanswered */
     u_long persist_at;                  /* 10/6/26: the persist timer: a shut window probed, or a small one used; 0: off */
     u_int persist_n;                    /* 10/6/26: probes since the window shut (the pause doubles) */
+    bool shrunk;                        /* 10/6/26: the window shut on bytes in flight: they go again when it opens */
     int state;
     ipaddr_t remote_ip;
     u16 local_port, remote_port;
@@ -408,7 +412,7 @@ static void output(struct tcp_socket *s, bool force) {
         s->snd_nxt++;
         arm_rto(s);
     }
-    if(held && !in_flight) {
+    if((held && !in_flight) || s->shrunk) {
         if(!s->persist_at || (s->snd_wnd && s->persist_n)) {     /* off, or probing a window open now */
             s->persist_n = 0;
             s->persist_at = getticks() + TCP_RTO;
@@ -432,6 +436,28 @@ static void probe_window(struct tcp_socket *s) {
     send_probe(s);
     s->persist_n++;
     s->persist_at = getticks() + (pause < TCP_PERSIST_MAX ? pause : TCP_PERSIST_MAX);
+}
+
+/* 10/6/26: all that was in flight again, from snd_una, as far as the window goes (it had shut on it:
+   tcp_input()); the timer for the next time */
+static void resend(struct tcp_socket *s) {
+    u_int sent = s->snd_nxt - s->snd_una - (s->fin_sent ? 1 : 0), off = 0;
+    while(off < sent && off < s->snd_wnd) {
+        u_int chunk = sent - off;
+        if(chunk > s->mss) chunk = s->mss;
+        if(chunk > s->snd_wnd - off) chunk = s->snd_wnd - off;
+        if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una + off, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
+                        s->txbuf + off, chunk, false) != 0) break;
+        s->tx_segs++;
+        s->retrans++;
+        off += chunk;
+    }
+    if(off == sent && s->fin_sent) {
+        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
+        s->tx_segs++;
+    }
+    s->rto_at = 0;
+    arm_rto(s);
 }
 
 /* the oldest unacknowledged segment again (or the SYN / FIN). 10/6/26: of the bytes sent only (up to
@@ -619,8 +645,17 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
 
     s->snd_wnd = ntohs(th->win);
     if(s->snd_wnd > s->max_wnd) s->max_wnd = s->snd_wnd;
-    if(!s->snd_wnd && ack == s->snd_una && s->snd_una != s->snd_nxt) s->retries = 0;   /* 10/6/26: alive, window shut */
     process_ack(s, ack);
+    /* 10/6/26: a window shut on bytes in flight: nothing goes into it, the persist timer probes it
+       (output()); when it opens, they go again at once */
+    if(s->snd_una == s->snd_nxt) s->shrunk = false;
+    else if(!s->snd_wnd) {
+        s->shrunk = true;
+        s->rto_at = 0;
+    } else if(s->shrunk) {
+        s->shrunk = false;
+        resend(s);
+    }
 
     if(datalen && s->orphan) {
         s->rcv_nxt += datalen;                           /* 10/6/26: nobody reads it any more: taken and dropped */

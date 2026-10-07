@@ -41,6 +41,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               acknowledges the guest's data), and not answered (no ACK ping-pong)
   orphans     closed connections whose FIN is not acknowledged (FIN_WAIT_1, LAST_ACK): no
               buffers held while they finish
+  shrink      a client that shrinks its window to 0 under bytes in flight: probes with their
+              backoff, no full segment every second; when it opens, everything arrives
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -506,6 +508,29 @@ def sc_orphans(rig):
     return ok
 
 
+def sc_shrink(rig):
+    n = 12000
+    ok = rig.start('nettest writer 23 %d 4096' % n, 'listening on port 23')
+    c = Conn(rig.net, 3700, 23, win=4096)
+    ok = c.connect() is not None and ok
+    t0, data, probes = time.time(), 0, 0
+    while time.time() - t0 < 5:                     # nothing taken, and the window shrunk to 0 under what is in flight
+        s = rig.net.wait(lambda s: c.mine(s), 0.5)
+        if not s:
+            continue
+        if s.data:
+            data += 1
+        elif c.is_probe(s):
+            probes += 1
+        c.ack(win=0)
+    c.ack(win=8192)                                 # it opens: what was in flight comes again, and the rest
+    got = c.receive(n, win_for=lambda g: 8192, timeout=20)
+    ok = rig.expect('nettest: wrote %d bytes in' % n, 15) and got == pattern(n) and data <= 3 and probes >= 1 and ok
+    rig.finish(c)
+    print('        (5 s with the window shrunk to 0: %d data segments, %d probes; then %d bytes)' % (data, probes, len(got)))
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -577,6 +602,7 @@ SCENARIOS = [
     ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
     ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
     ('orphans', sc_orphans, 'a closed connection still finishing holds no buffers'),
+    ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]
