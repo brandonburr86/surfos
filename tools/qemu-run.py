@@ -460,7 +460,8 @@ SMOKE = [
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
     # sessions at once, status, off ending both, on again; four, and a fifth refused; a client that stops reading while
     # a second session is served; a client whose keys flood a session that reads none; a paste into edit, whole; keys
-    # and a Ctrl+C in one segment; the rest of the protocol in one session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
+    # and a Ctrl+C in one segment; a pasted block at the prompt, its first line only; the rest of the protocol in one
+    # session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
     # port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
@@ -475,6 +476,8 @@ SMOKE = [
     ('@telnet-flood', []),
     ('@telnet-paste', []),
     ('@telnet-ctrlc-keys', []),
+    ('@telnet-paste-lines', []),
+    ('@surfsh-crlf', []),
     ('@telnet-protocol', []),
     ('@telnet-binary', []),
     ('@telnet-off-inside', []),
@@ -1705,7 +1708,8 @@ def telnet_ctrlc_keys_check(q):
         if ok:
             t._out(b'echo RAWKEYS-1\r\0\x03')
             ok = t.expect('\r\nRAWKEYS-1\r\n', 10) and t.expect(TELNET_ROOT, 10)
-        if ok:
+            telnet_quiet(t, 0.5, 10)                    # the ^C after the Enter was the rest of a "paste": the
+        if ok:                                          # terminal skips what comes until a pause (TTY_SKIP)
             t.send('/initrd/bin/rm /hda1/CTRLC.TXT\n')     # from a run before, if there was one
             ok = t.expect(TELNET_ROOT, 10)
         if ok:
@@ -1727,6 +1731,39 @@ def telnet_ctrlc_keys_check(q):
     finally:
         t.close()
     return ('telnet: keys sent with a Ctrl+C in one segment are kept: a command at the prompt, text in edit', ok)
+
+
+def surfsh_crlf_check(q):
+    """Return as CR LF on the serial line, as a serial terminal sends it: the LF right after the CR is part of the
+    Enter, not the rest of a paste, so it starts no skip and a command typed at once after the prompt runs"""
+    q.ser.sendall(b'echo CRLF-A\r\n')
+    ok = q.expect('CRLF-A\r\n', 10) and q.expect(PROMPT, 10)
+    q.ser.sendall(b'echo CRLF-B\r\n')
+    ok = q.expect('CRLF-B\r\n', 10) and q.expect(PROMPT, 10) and ok
+    return ('surfsh: Return as CR LF on the serial line starts no skip: the next command, typed at once, runs', ok)
+
+
+def telnet_paste_lines_check(q):
+    """a pasted block of 40 lines at the prompt runs its first line and nothing else (surfsh drops the rest of what it
+    read, the terminal skips the rest of the paste); a command typed after a pause runs"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            mark = len(t.data)
+            t._out(b'echo ONE\r' + b''.join(b'echo LINE%02d\r' % i for i in range(2, 41)))
+            ok = t.expect('\r\nONE\r\n', 10) and t.expect(TELNET_ROOT, 10)
+            telnet_quiet(t, 1.0, 10)
+            ok = ok and b'not found' not in t.data[mark:] and b'\r\nLINE' not in t.data[mark:]
+        if ok:
+            t.send('echo TWO\n')
+            ok = t.expect('\r\nTWO\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a pasted block of 40 lines runs its first line only; a command after a pause runs', ok)
 
 
 def telnet_off_inside_check(q):
@@ -1767,6 +1804,7 @@ CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': t
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
                        '@telnet-flood': telnet_flood_check, '@telnet-paste': telnet_paste_check,
                        '@telnet-ctrlc-keys': telnet_ctrlc_keys_check,
+                       '@telnet-paste-lines': telnet_paste_lines_check, '@surfsh-crlf': surfsh_crlf_check,
                        '@telnet-protocol': telnet_protocol_check,
                        '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})

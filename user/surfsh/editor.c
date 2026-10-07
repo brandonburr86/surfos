@@ -25,7 +25,10 @@ the line on the screen is what runs again. Keys that arrive together
 (a paste) are all handled before the screen is written, so the editor keeps up with
 the console's input queue (256 bytes; a faster paste over the serial line loses
 bytes in the kernel). Keys typed after Enter are dropped, as the console drops what
-it holds when raw mode ends: there is no type-ahead.
+it holds when raw mode ends: there is no type-ahead. 10/6/26: when the editor's own
+buffer still held keys after the Enter (the rest of a paste; an LF right after the CR
+of the Enter does not count), it asks the terminal to skip the rest of the paste until
+the input pauses (TTY_SKIP), so a pasted block runs its first line and nothing else.
 
 Long lines wrap. The console wraps the VT100 way: writing the last column leaves the
 cursor there until the next character comes. So the editor keeps the cursor out of
@@ -602,6 +605,11 @@ int edit_line(char *buf, int size) {
     }
 done:
     flush_out();
+    if(after_cr && inpos < inlen && inbuf[inpos] == '\n') {     /* the LF of the CR LF that ended the line */
+        inpos++;
+        after_cr = 0;
+    }
+    if(inpos < inlen) ttyctl(TTY_SKIP, 1);     /* keys after the Enter: the rest of a paste is skipped */
     ttyctl(TTY_RAW, 0);                         /* the console drops the keys it still holds, */
     inpos = inlen = 0;                          /* and so does the editor: no type-ahead either way */
     buf[len] = 0;
