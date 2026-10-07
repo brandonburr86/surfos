@@ -439,8 +439,8 @@ SMOKE = [
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); a port that is none
     # (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
-    # off ending both, on again; four, and a fifth refused; telnetd off typed in a session; on while nettest has the
-    # port; off when not running (status 1); the server's log.
+    # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
+    # served; telnetd off typed in a session; on while nettest has the port; off when not running (status 1); the log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
@@ -448,6 +448,7 @@ SMOKE = [
     ('@telnet-session', []),
     ('@telnet-two', []),
     ('@telnet-full', []),
+    ('@telnet-stalled', []),
     ('@telnet-off-inside', []),
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
@@ -1278,6 +1279,69 @@ def telnet_full_check(q):
     return ('telnet: four sessions at once, a fifth refused; they end when their clients go', ok)
 
 
+def telnet_stalled_check(q):
+    """a client that stops reading while its session prints without end (hexdump /dev/zero in the background, which
+    is not paged): however much the host's side takes first, the connection's send buffer in the guest fills and
+    stays full (netstat: out 8192), and the server holds that session back and serves a second session all the
+    same. When the first client reads again its session goes on: the hexdump is killed from the console, and an
+    Enter in the session brings the report of it and a prompt; every line arrived, in order. Then the client goes."""
+    a, b = Telnet(q.ports['telnet'], rcvbuf=4096), None
+    full = re.compile(rb'local 23\s+remote [0-9.]+:[0-9]+\s+rx\s+[0-9]+\s+tx\s+[0-9]+\s+retrans\s+[0-9]+\s+'
+                      rb'buf\s+in\s+[0-9]+\s+out\s+8192')
+    line = re.compile(rb'([0-9a-f]{8})  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  \|\.{16}\|\r\n')
+    why = ''
+    try:
+        ok = a.expect(TELNET_ROOT, 15)
+        if ok:
+            a.send('/initrd/bin/hexdump /dev/zero &\n')
+            ok = a.expect(re.compile(rb'\[(\d+)\] started'), 10)     # a reads nothing more from here on
+            m = re.search(rb'\[(\d+)\] started', a.data)
+            pid = int(m.group(1)) if m else 0
+        stalled, deadline = False, time.time() + 90
+        while ok and not stalled and time.time() < deadline:
+            start = len(q.transcript)
+            q.send('netstat\n')
+            ok = q.expect(PROMPT, 10)
+            stalled = full.search(q.transcript[start:]) is not None
+            if not stalled:
+                q.wait(1)
+        why = '' if stalled else ' (the send buffer never filled)'
+        ok = ok and stalled
+        if ok:
+            b = Telnet(q.ports['telnet'])
+            ok = b.expect(TELNET_ROOT, 15)
+        if ok:
+            b.send('echo second-session\n')
+            ok = b.expect('\r\nsecond-session\r\n', 15) and b.expect(TELNET_ROOT, 10)
+        if ok:
+            b.send('exit\n')
+            ok = b.wait_closed(10)
+        if ok:                                      # a reads again; the hexdump is stopped from the console
+            a.pump(1)
+            q.send('kill %d\n' % pid)
+            ok = q.expect("killing 'hexdump'", 10) and q.expect(PROMPT, 10)
+        if ok:                                      # everything it printed, then an Enter: the report and a prompt
+            quiet_since = time.time()
+            deadline = time.time() + 120
+            while time.time() - quiet_since < 2 and time.time() < deadline and not a.closed:
+                n = len(a.data)
+                a.pump(0.2)
+                if len(a.data) != n:
+                    quiet_since = time.time()
+            a.send('\n')
+            ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
+            offsets = [int(x, 16) for x in line.findall(a.data)]
+            ok = ok and len(offsets) > 2000 and offsets == list(range(0, 16 * len(offsets), 16))
+            why = why or ('' if ok else ' (%d lines, not all in order)' % len(offsets))
+            ok = a.leave(10) and ok
+        ok = ok and telnet_no_sessions(q)
+    finally:
+        a.close()
+        if b:
+            b.close()
+    return ('telnet: a client that stops reading holds back only its own session, which goes on later' + why, ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1313,8 +1377,8 @@ def telnet_port_busy_check(q):
 
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
-                       '@telnet-full': telnet_full_check, '@telnet-off-inside': telnet_off_inside_check,
-                       '@telnet-port-busy': telnet_port_busy_check})
+                       '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
+                       '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
