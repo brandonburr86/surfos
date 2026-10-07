@@ -114,12 +114,13 @@ void tty_switch(int index);
    mode ends with keys still queued (they came after the Enter that ended the line: the rest
    of a paste), they are dropped, and the terminal skips what comes in from the serial line
    or a pty's master until that input pauses for TTY_SKIP_MS (no byte for that long; each
-   byte's arrival is the clock, there is no timer). A Ctrl+C always gets through and ends
-   the skip; a key that comes after the pause is input again (type-ahead typed while a
-   command runs, well after its Enter, is kept). TTY_SKIP 1 starts the same skip for a
-   program that dropped keys it had read itself (the user shell: the rest of its read
-   buffer after an Enter); TTY_SKIP 0 ends it. The PS/2 keyboard cannot paste: its keys are
-   never skipped. */
+   byte's arrival is the clock, there is no timer). A lone LF or NUL queued is the end of
+   the Enter itself (a terminal that sends CR LF, a telnet client's CR NUL): it is dropped
+   and starts no skip. A Ctrl+C always gets through and ends the skip; a key that comes
+   after the pause is input again (type-ahead typed while a command runs, well after its
+   Enter, is kept). TTY_SKIP 1 starts the same skip for a program that dropped keys it had
+   read itself (the user shell: the rest of its read buffer after an Enter); TTY_SKIP 0
+   ends it. The PS/2 keyboard cannot paste: its keys are never skipped. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
 #define TTY_SKIP    5

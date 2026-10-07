@@ -497,11 +497,14 @@ void tty_switch(int index) {
 /**** raw mode (10/5/26) ****/
 
 /* Keys typed in one mode mean something else in the other (0x7f and escape sequences are
-   not line editing), so leaving raw mode drops what was not read yet. */
+   not line editing), so leaving raw mode drops what was not read yet. 10/6/26: keys after
+   the Enter are a paste's rest, and what follows them is skipped (TTY_SKIP); not a lone LF
+   or NUL, the end of the Enter itself from a terminal that sends CR LF (or CR NUL, telnet). */
 static void set_raw(struct tty *t, int on, struct surf_task *owner) {
     u_long flags = irq_save();
     if(t->raw && !on) {
-        if(t->in_tail != t->in_head) t->skip = 1;  /* 10/6/26: keys after the Enter: a paste's rest (TTY_SKIP) */
+        u_int n = (t->in_head + TTY_INPUT_SIZE - t->in_tail) % TTY_INPUT_SIZE;
+        if(n > 1 || (n == 1 && t->inq[t->in_tail] != '\n' && t->inq[t->in_tail] != 0)) t->skip = 1;
         drop_queued(t);
     }
     t->raw = on;

@@ -1054,6 +1054,49 @@ static void t_paste_skip(void) {
     check(sim_room() == 252, "raw mode's end with nothing queued skips nothing: type-ahead is kept");
 }
 
+/* 10/6/26: a line read in raw mode from n bytes that come 10 ms apart; raw mode ends after its
+   CR, and "pwd" comes 10 ms later. How many of its keys are input (-1: keys left after the CR
+   were kept)? The terminal is left with nothing queued and no skip. */
+static int after_line(const char *s, int n) {
+    int i, kept;
+    run(SHELL, w_raw, 1, 0);
+    for(i = 0; i < n; i++) {
+        sim_time_ms(10);
+        sim_term_input((unsigned char)s[i]);
+    }
+    do run(SHELL, w_getc, 0, 0); while(got_key != '\r');
+    run(SHELL, w_raw, 0, 0);
+    kept = sim_room() == 255 ? 0 : -1;
+    feed("pwd", 10);
+    if(kept == 0) kept = 255 - sim_room();
+    while(sim_room() != 255) run(SHELL, w_getc, 0, 0);
+    sim_ttyctl(TTY_SKIP, 0);
+    return kept;
+}
+
+/* 10/6/26: what a terminal sends after the CR of its Enter (CR LF, or a telnet client's CR NUL)
+   may still be queued when raw mode ends: dropped, but it is no paste's rest, so the next
+   command, sent at once (a script, a fast typist), is kept. More than that starts the skip. */
+static void t_paste_crlf(void) {
+    int t;
+    for(t = -1; t <= 0; t++) {
+        const char *where = t < 0 ? "F1 (the serial line)" : "a pty";
+        char what[160];
+        reset(0);
+        sim_term(t);
+        snprintf(what, sizeof(what), "%s: raw mode's end drops a lone LF (CR LF's) and starts no skip", where);
+        check(after_line("ls\r\n", 4) == 3, what);
+        snprintf(what, sizeof(what), "%s: nor does a lone NUL (CR NUL's)", where);
+        check(after_line("ls\r\0", 4) == 3, what);
+        snprintf(what, sizeof(what), "%s: two LFs left start the skip", where);
+        check(after_line("ls\r\n\n", 5) == 0, what);
+        snprintf(what, sizeof(what), "%s: so does a lone key that is no LF or NUL", where);
+        check(after_line("ls\rx", 4) == 0, what);
+        snprintf(what, sizeof(what), "%s: and an LF with a key after it", where);
+        check(after_line("ls\r\nx", 5) == 0, what);
+    }
+}
+
 int main(void) {
     int i;
     for(i = 0; i < NT; i++) pthread_create(&task[i].th, NULL, task_main, (void *)(long)i);
@@ -1088,6 +1131,7 @@ int main(void) {
     t_stream_tty();
     t_term_room();
     t_paste_skip();
+    t_paste_crlf();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);
