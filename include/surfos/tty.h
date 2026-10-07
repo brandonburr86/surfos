@@ -35,6 +35,8 @@ struct tty {
     struct surf_task *raw_owner;        /* the task that set it; raw mode ends with that task */
     wait_queue_t page_waiters;          /* 10/6/26: paged tasks waiting while another one is at --More-- */
     volatile u_char hungup;             /* 10/6/26: a pty whose master side is closed: no key comes, reads end */
+    u_char skip;                        /* 10/6/26: the rest of a paste is dropped until the input pauses (TTY_SKIP) */
+    u_long last_in;                     /* 10/6/26: when tty_term_input() last had a byte (ticks), for the skip */
 };
 
 extern struct tty ttys[NUM_TTYS];     /* 10/6/26: F1-F4, then the pseudo-terminals' */
@@ -107,9 +109,21 @@ void tty_switch(int index);
    characters of code page 437 (Latin-1 letters, box drawing, blocks, arrows, Greek, some
    mathematics) and SurfOS's ▸ ≋ … ; any other character is drawn as '?'. It is left out
    when the kernel command line has the word `ascii` (a serial terminal that cannot show
-   UTF-8). TTY_CAP_COLOR: the ANSI colours above. */
+   UTF-8). TTY_CAP_COLOR: the ANSI colours above.
+   TTY_SKIP (10/6/26): a pasted block runs its first line and nothing else of it. When raw
+   mode ends with keys still queued (they came after the Enter that ended the line: the rest
+   of a paste), they are dropped, and the terminal skips what comes in from the serial line
+   or a pty's master until that input pauses for TTY_SKIP_MS (no byte for that long; each
+   byte's arrival is the clock, there is no timer). A Ctrl+C always gets through and ends
+   the skip; a key that comes after the pause is input again (type-ahead typed while a
+   command runs, well after its Enter, is kept). TTY_SKIP 1 starts the same skip for a
+   program that dropped keys it had read itself (the user shell: the rest of its read
+   buffer after an Enter); TTY_SKIP 0 ends it. The PS/2 keyboard cannot paste: its keys are
+   never skipped. */
 #define TTY_PAGE    3
 #define TTY_CAPS    4
+#define TTY_SKIP    5
+#define TTY_SKIP_MS 200
 #define TTY_CAP_UTF8  1
 #define TTY_CAP_COLOR 2
 #define TTY_MORE    "--More-- (Space: next page, Enter: next line, q: skip the rest)"

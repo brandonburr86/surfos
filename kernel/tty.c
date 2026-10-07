@@ -19,6 +19,8 @@ console switching stay with F1-F4.
 10/6/26: a line-mode Ctrl+C drops the keys queued before it, on every terminal (POSIX's
 VINTR without NOFLSH): what was typed ahead never runs after an interrupt. Room appearing in
 a pty's full input queue wakes poll() (its master is ready for writing again, kernel/pty.c).
+10/6/26: the rest of a paste is skipped (TTY_SKIP in tty.h): after raw mode's end dropped
+keys, or ttyctl(TTY_SKIP, 1), tty_term_input() drops what comes until its input pauses.
 */
 
 #include <surfos/types.h>
@@ -33,6 +35,8 @@ a pty's full input queue wakes poll() (its master is ready for writing again, ke
 #include <sys/serial.h>
 #include <sys/cp437.h>
 #include <surfos/proc.h>
+#include <surfos/timer.h>
+#include <surfos/ktimer.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
 
@@ -69,6 +73,7 @@ int tty_number(struct tty *t) {
 void tty_reset(struct tty *t) {
     u_long flags = irq_save();
     t->hungup = 0;
+    t->skip = 0;
     t->in_head = t->in_tail = 0;
     t->hist_count = 0;
     t->dropped = 0;
@@ -148,8 +153,22 @@ static void input_seq(struct tty *t, const char *s) {
    swallowed. A Ctrl+C ends a sequence in progress and goes through: a sequence cut short (a
    cursor key that did not fit a full queue) never swallows it. In raw mode (tty.h) the bytes
    arrive as they were sent. *esc is the line's state (0 normal, 1 after ESC, 2 inside ESC [ or
-   ESC O); one per line. From interrupt handlers too. */
+   ESC O); one per line. From interrupt handlers too. 10/6/26: while the rest of a paste is
+   skipped (TTY_SKIP, tty.h), bytes that come less than TTY_SKIP_MS after the one before are
+   dropped, whatever the mode; a Ctrl+C, or a byte after such a pause, ends the skip. */
 void tty_term_input(struct tty *t, u_char *esc, u_char c) {
+    u_long flags = irq_save(), now = getticks();
+    int burst = now - t->last_in < ms_to_ticks(TTY_SKIP_MS);
+    t->last_in = now;
+    if(t->skip) {
+        if(burst && c != 0x03) {        /* the paste goes on: dropped */
+            irq_restore(flags);
+            return;
+        }
+        t->skip = 0;                    /* a pause, or Ctrl+C: input again, from a fresh start */
+        *esc = 0;
+    }
+    irq_restore(flags);
     if(t->raw) {
         *esc = 0;
         tty_input(t, c);
@@ -194,6 +213,8 @@ void tty_term_input(struct tty *t, u_char *esc, u_char c) {
    the queue first, and interrupts the job or is queued then, tty_input()), nor a lone Esc with no
    question up. A pty's master takes those whatever room is left (kernel/pty.c). */
 int tty_term_queues(struct tty *t, u_char esc, u_char c) {
+    if(t->skip && c != 0x03 && getticks() - t->last_in < ms_to_ticks(TTY_SKIP_MS))
+        return 0;                                   /* the rest of a paste: dropped (tty_term_input()) */
     if(t->raw) return 1;
     if(c == 0x03) return 0;                         /* even inside a sequence: it ends it (tty_term_input()) */
     if(esc == 1) return 0;
@@ -479,7 +500,10 @@ void tty_switch(int index) {
    not line editing), so leaving raw mode drops what was not read yet. */
 static void set_raw(struct tty *t, int on, struct surf_task *owner) {
     u_long flags = irq_save();
-    if(t->raw && !on) drop_queued(t);
+    if(t->raw && !on) {
+        if(t->in_tail != t->in_head) t->skip = 1;  /* 10/6/26: keys after the Enter: a paste's rest (TTY_SKIP) */
+        drop_queued(t);
+    }
     t->raw = on;
     t->raw_owner = on ? owner : NULL;
     irq_restore(flags);
@@ -528,6 +552,14 @@ int tty_ctl(struct tty *t, int op, u32 arg) {
         return TTY_CAP_COLOR | (bootinfo_has_arg(&bootinfo, "ascii") ? 0 : TTY_CAP_UTF8);
     }
     if(op == TTY_PAGE) return arg > 1 ? -22 : tty_page(t, (int)arg);
+    if(op == TTY_SKIP) {                          /* 10/6/26: the caller dropped keys it had read (tty.h) */
+        u_long flags;
+        if(arg > 1) return -22;
+        flags = irq_save();
+        t->skip = (u_char)arg;
+        irq_restore(flags);
+        return 0;
+    }
     if(op == TTY_RAW) {
         if(arg > 1) return -22;                   /* EINVAL */
         set_raw(t, (int)arg, curTask);

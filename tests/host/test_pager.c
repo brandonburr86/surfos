@@ -59,6 +59,7 @@ void sim_stream_pos(int *x, int *wrap);
 void sim_term_input(int c);
 int sim_term_queues(int c);
 int sim_room(void);
+void sim_time_ms(int ms);
 int sim_poll_wakes(void);
 void sim_clear(void);
 int sim_key_up(void);
@@ -993,6 +994,66 @@ static void t_term_room(void) {
           "a pty: Ctrl+C drops the full queue's keys (poll() woken: room), and is the next key");
 }
 
+/* 10/6/26: the rest of a paste is skipped until the input pauses (TTY_SKIP in tty.h) */
+#define TTY_SKIP 5
+static void feed(const char *s, int gap_ms) {
+    for(; *s; s++) {
+        sim_time_ms(gap_ms);
+        sim_term_input((unsigned char)*s);
+    }
+}
+
+static void t_paste_skip(void) {
+    int a, b, c;
+    on_pty(80, 24, 0);
+    run(SHELL, w_raw, 1, 0);
+    feed("ls\rjunk", 1);                          /* a line and more, pasted: the reader takes the line */
+    run(SHELL, w_getc, 0, 0);
+    a = got_key;
+    run(SHELL, w_getc, 0, 0);
+    b = got_key;
+    run(SHELL, w_getc, 0, 0);
+    c = got_key;
+    run(SHELL, w_raw, 0, 0);                        /* raw mode ends with "junk" queued */
+    check(a == 'l' && b == 's' && c == '\r' && sim_room() == 255, "raw mode's end drops the keys after the Enter");
+    feed("echo frag\r", 50);
+    check(sim_room() == 255, "and what comes on in the same burst is dropped too, line mode or not");
+    check(!sim_term_queues('x'), "a byte that is dropped needs no room");
+    sim_time_ms(250);
+    sim_term_input('y');
+    check(sim_room() == 254, "after a pause of 200 ms a key is input again");
+    run(SHELL, w_getc, 0, 0);
+
+    sim_ttyctl(TTY_SKIP, 1);                        /* a program dropped keys of its own */
+    feed("ab", 50);
+    check(sim_room() == 255, "TTY_SKIP 1: the burst is dropped");
+    sim_time_ms(50);
+    sim_term_input(0x03);
+    feed("c", 10);
+    run(SHELL, w_getc, 0, 0);
+    a = got_key;
+    run(SHELL, w_getc, 0, 0);
+    check(a == 0x03 && got_key == 'c', "Ctrl+C gets through the skip and ends it");
+
+    sim_ttyctl(TTY_SKIP, 1);
+    sim_key('k');                                   /* the PS/2 keyboard */
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 'k', "the keyboard's keys are never skipped");
+    check(sim_ttyctl(TTY_SKIP, 0) == 0 && sim_ttyctl(TTY_SKIP, 2) < 0, "TTY_SKIP 0 ends it; 2 is refused");
+    feed("q", 10);
+    run(SHELL, w_getc, 0, 0);
+    check(got_key == 'q', "after TTY_SKIP 0, input at once");
+
+    run(SHELL, w_raw, 1, 0);                        /* a line typed by hand: nothing queued after its Enter */
+    feed("ls\r", 100);
+    run(SHELL, w_getc, 0, 0);
+    run(SHELL, w_getc, 0, 0);
+    run(SHELL, w_getc, 0, 0);
+    run(SHELL, w_raw, 0, 0);
+    feed("pwd", 30);
+    check(sim_room() == 252, "raw mode's end with nothing queued skips nothing: type-ahead is kept");
+}
+
 int main(void) {
     int i;
     for(i = 0; i < NT; i++) pthread_create(&task[i].th, NULL, task_main, (void *)(long)i);
@@ -1026,6 +1087,7 @@ int main(void) {
     t_stream_clear();
     t_stream_tty();
     t_term_room();
+    t_paste_skip();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);
