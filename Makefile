@@ -373,9 +373,16 @@ $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/t
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/telnetd tests/host/test_telnet.c user/telnetd/telnet.c -o $@
 
+# 10/6/26: telnetd's server loop, user/telnetd/server.c as it is, against a simulated kernel (tests/host/telnetd/surf.h)
+$(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h user/telnetd/server.c user/telnetd/telnetd.h \
+                            user/telnetd/telnet.c user/telnetd/telnet.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetd -Iuser/telnetd tests/host/test_telnetd.c user/telnetd/telnet.c -o $@
+
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
-          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet
+          $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -388,6 +395,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
 	$(BUILD)/host/test_telnet
+	$(BUILD)/host/test_telnetd
 
 clean:
 	rm -rf build

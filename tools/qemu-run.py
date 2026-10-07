@@ -1385,8 +1385,13 @@ def telnet_stalled_check(q):
                     quiet_since = time.time()
             a.send('\n')
             ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
-            offsets = [int(x, 16) for x in line.findall(a.data)]
-            ok = ok and len(offsets) > 2000 and offsets == list(range(0, 16 * len(offsets), 16))
+            # the lines from the prompt after "[pid] started" on: the job's first lines may come before that notice
+            # and the prompt, which then cut one of them
+            started = re.search(rb'\] started', a.data)
+            prompt = TELNET_ROOT.search(a.data, started.end()) if started else None
+            offsets = [int(x, 16) for x in line.findall(a.data, prompt.end() if prompt else 0)]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x10000 and \
+                offsets == list(range(offsets[0], offsets[0] + 16 * len(offsets), 16))
             why = why or ('' if ok else ' (%d lines, not all in order)' % len(offsets))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
