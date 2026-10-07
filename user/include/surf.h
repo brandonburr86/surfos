@@ -72,6 +72,10 @@ int msleep(unsigned int ms);
 #define TTY_PAGE    3   /* arg 1: this program's output and its children's is paged (--More--); 0: paging ends, if
                            this program turned it on. Under a shell that pages it, 1 and 0 only start a new screenful */
 #define TTY_CAPS    4   /* returns the TTY_CAP_ flags */
+#define TTY_SKIP    5   /* 10/6/26, arg 1: this program dropped keys it had read (the rest of a paste after an
+                           Enter): what comes from the serial line or a pty's master is dropped until it pauses for
+                           200 ms; Ctrl+C gets through. Raw mode's end does the same with keys queued (a lone
+                           LF or NUL, CR LF's or CR NUL's end, is dropped without it). 0: end it */
 #define TTY_CAP_UTF8  1 /* the console draws UTF-8: ASCII, code page 437's characters and SurfOS's ▸ ≋ … */
 #define TTY_CAP_COLOR 2 /* the console draws the ANSI colours */
 int ttyctl(int op, unsigned int arg);

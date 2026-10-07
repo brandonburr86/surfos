@@ -40,7 +40,16 @@ ptytest reuse             a second session on the same master: line mode again (
 ptytest fullqueue         the master's write never waits: 300 keys for a program that is
                           not reading yet take a short count, one more EAGAIN, POLLOUT is
                           back once it reads; in a session, Ctrl+C gets through a full
-                          queue, cuts sleep short, and what was typed ahead never runs
+                          queue, cuts sleep short, and what was typed ahead never runs; and
+                          through a queue filled with cursor keys, the last one cut short
+                          inside its escape sequence
+ptytest paste             a pasted block runs its first line and nothing else of it, with
+                          `ptytest minishell` as the session's shell (it reads as surfsh does
+                          and says TTY_SKIP when it drops keys of its own; `minishell
+                          bytewise` leaves them queued, for raw mode's end to drop): only
+                          "echo ONE" of 41 lines runs, nothing is "not found"; a line typed
+                          after a pause runs; Ctrl+C in the middle of the skip cuts a sleep
+                          short; type-ahead typed after a pause, while a command runs, runs
 ptytest poll              poll(): a master with nothing to read (the timeout), with output
                           (POLLIN), after the end (POLLIN and POLLHUP); spawnpty of no
                           program (POLLHUP at once); a closed descriptor (POLLNVAL); a
@@ -688,7 +697,7 @@ static int mode_fullqueue(void) {
     char keys[300];
     struct pollfd p;
     unsigned int t0, took;
-    int m, pid, st = -99, r, at;
+    int m, pid, st = -99, r, at, i;
     memset(keys, 'x', sizeof(keys));
     m = start("/initrd/bin/ptytest", reader, 0, &pid);
     if(m < 0) return fail("slowreader did not start");
@@ -736,6 +745,26 @@ static int mode_fullqueue(void) {
     read_until(m, NULL, 0, 5000);
     close(m);
     wait(pid, &st);
+
+    /* the queue filled with cursor keys (Up held down), the last one cut short inside its sequence */
+    outlen = 0;
+    out[0] = 0;
+    m = start("/initrd/bin/surfsh", sargv, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, PROMPT, 0, 15000) != 1) return fail("no prompt");
+    at = after(PROMPT, 0);
+    type(m, "sleep 5000\r");
+    if(read_until(m, "sleep 5000", at, 10000) != 1) return fail("sleep 5000 was not typed");
+    msleep(300);
+    for(i = 0; i < 400 && (r = (int)write(m, "\033[A", 3)) == 3; i++);
+    if(i == 400) return fail("cursor keys never filled the queue");
+    printf("ptytest: %d cursor keys filled the queue; the next was cut short after %d of its 3 bytes\n", i, r < 0 ? 0 : r);
+    if(write(m, "\003", 1) != 1) return fail("Ctrl+C after the cursor keys was refused");
+    if(read_until(m, "sleep cut short", at, 10000) != 1) return fail("Ctrl+C after the cursor keys did not cut sleep short");
+    printf("ptytest: Ctrl+C ended the cut sequence and cut sleep short\n");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
     return pass();
 }
 
@@ -746,6 +775,142 @@ static int mode_slowreader(int argc, char **argv) {
     if(!fgets(line, sizeof(line), stdin)) return 1;
     printf("slowreader: a line of %u bytes\n", (unsigned int)strlen(line));
     return 0;
+}
+
+/* ptytest paste's shell: it reads a line as surfsh does, in raw mode, in blocks (bytewise: one
+   key at a time), the line ending at CR or LF; the keys after the Enter are dropped, and said so
+   with TTY_SKIP (bytewise: they are still queued, and raw mode's end drops them). The line runs as
+   a kernel command (kcmd), paged as surfsh pages one, so Ctrl+C reaches it. */
+static int mode_minishell(int argc, char **argv) {
+    int bytewise = argc > 2 && !strcmp(argv[2], "bytewise"), n, i, len, nw, r;
+    char buf[256], line[256], *words[16], *w;
+    for(;;) {
+        ttyctl(TTY_RAW, 1);
+        printf("MINI> ");
+        fflush(stdout);
+        for(len = 0;;) {
+            n = (int)read(0, buf, bytewise ? 1 : sizeof(buf));
+            if(n <= 0) return 0;
+            for(i = 0; i < n && buf[i] != '\r' && buf[i] != '\n'; i++)
+                if(len < (int)sizeof(line) - 1) line[len++] = buf[i];
+            if(i < n) {
+                if(i + 1 < n) ttyctl(TTY_SKIP, 1);      /* keys after the Enter, dropped here: a paste's rest */
+                break;
+            }
+        }
+        line[len] = 0;
+        ttyctl(TTY_RAW, 0);                             /* keys still queued: dropped, and skipped (the kernel) */
+        printf("\nMINI ran: %s\n", line);
+        if(!strcmp(line, "exit")) return 0;
+        for(nw = 0, w = strtok(line, " "); w && nw < 15; w = strtok(NULL, " ")) words[nw++] = w;
+        words[nw] = NULL;
+        if(!nw) continue;
+        ttyctl(TTY_PAGE, 1);
+        r = kcmd(words);
+        ttyctl(TTY_PAGE, 0);
+        if(r < 0 && errno == ENOENT) printf("minishell: %s: command not found\n", words[0]);
+    }
+}
+
+/* write all of s to the master as a client would: as fast as POLLOUT allows */
+static int burst(int m, const char *s, int n) {
+    struct pollfd p;
+    int r;
+    while(n > 0) {
+        p.fd = m;
+        p.events = POLLOUT;
+        p.revents = 0;
+        if(poll(&p, 1, 2000) != 1) return -1;
+        r = (int)write(m, s, (size_t)n);
+        if(r < 0 && errno != EAGAIN) return -1;
+        if(r > 0) {
+            s += r;
+            n -= r;
+        }
+    }
+    return 0;
+}
+
+/* a block of 40 lines after first: about 2 KB, as a paste */
+static int paste_block(int m, const char *first) {
+    static char block[4096];
+    int n = snprintf(block, sizeof(block), "%s\r", first), i;
+    for(i = 0; i < 40; i++)
+        n += snprintf(block + n, sizeof(block) - n, "echo PASTE-%02d-abcdefghijklmnopqrstuvwxyz0123456789\r", i);
+    return burst(m, block, n);
+}
+
+/* the session's output from byte from on has none of the pasted lines run, nor anything "not found" */
+static int nothing_else_ran(int from) {
+    return !strstr(out + from, "MINI ran: echo PASTE") && !strstr(out + from, "PASTE-") && !strstr(out + from, "not found");
+}
+
+static int mode_paste(void) {
+    char *mini[] = { "ptytest", "minishell", NULL }, *bytewise[] = { "ptytest", "minishell", "bytewise", NULL };
+    char junk[24];
+    unsigned int t0;
+    int m, pid, st = -99, at, k;
+    for(k = 0; k < 2; k++) {
+        outlen = 0;
+        out[0] = 0;
+        m = start("/initrd/bin/ptytest", k ? bytewise : mini, (80 << 16) | 1024, &pid);
+        if(m < 0 || read_until(m, "MINI> ", 0, 10000) != 1) return fail("minishell did not start");
+        at = after("MINI> ", 0);
+        if(paste_block(m, "echo ONE")) return fail("the paste could not be written");
+        if(read_until(m, "MINI ran: echo ONE", at, 10000) != 1) return fail("the pasted first line did not run");
+        at = after("MINI ran: echo ONE", at);
+        if(read_until(m, "MINI> ", at, 10000) != 1) return fail("no prompt after the first line");
+        msleep(500);                                    /* anything else that would run, would by now */
+        read_until(m, "PASTE-", at, 300);
+        if(!nothing_else_ran(at)) return fail("more of the paste ran");
+        printf("ptytest: %s: of 41 pasted lines only \"echo ONE\" ran\n",
+               k ? "keys left queued, dropped at raw mode's end" : "keys the shell dropped itself, TTY_SKIP");
+        at = after("MINI> ", at);
+        type(m, "echo TWO\r");                          /* after a pause: input again */
+        if(read_until(m, "MINI ran: echo TWO", at, 10000) != 1) return fail("a line typed after a pause did not run");
+        printf("ptytest: a line typed after the pause ran\n");
+        type(m, "exit\r");
+        read_until(m, NULL, 0, 5000);
+        close(m);
+        wait(pid, &st);
+    }
+
+    /* Ctrl+C in the middle of a skip gets through and cuts the command short */
+    outlen = 0;
+    out[0] = 0;
+    m = start("/initrd/bin/ptytest", mini, (80 << 16) | 1024, &pid);
+    if(m < 0 || read_until(m, "MINI> ", 0, 10000) != 1) return fail("minishell did not start");
+    at = after("MINI> ", 0);
+    if(paste_block(m, "sleep 5000")) return fail("the paste could not be written");
+    if(read_until(m, "MINI ran: sleep 5000", at, 10000) != 1) return fail("the pasted sleep did not run");
+    memset(junk, 'j', sizeof(junk));
+    for(t0 = uptime(); uptime() - t0 < 600; ) {         /* the paste goes on, 50 ms apart: the skip holds */
+        msleep(50);
+        if(write(m, junk, sizeof(junk)) != (ssize_t)sizeof(junk)) return fail("the paste's rest was refused");
+    }
+    if(write(m, "\003", 1) != 1) return fail("Ctrl+C refused in the skip");
+    if(read_until(m, "sleep cut short", at, 10000) != 1) return fail("Ctrl+C in the skip did not cut sleep short");
+    at = after("sleep cut short", at);
+    if(read_until(m, "MINI> ", at, 10000) != 1) return fail("no prompt after Ctrl+C");
+    msleep(300);
+    read_until(m, "MINI ran: j", at, 300);
+    if(!nothing_else_ran(at) || strstr(out + at, "MINI ran: j")) return fail("the paste ran after Ctrl+C");
+    printf("ptytest: Ctrl+C in the middle of the skip cut sleep short; nothing else of the paste ran\n");
+    at = after("MINI> ", at);
+
+    /* type-ahead typed after a pause, while a command runs: kept, it runs after the command */
+    if(paste_block(m, "sleep 1500")) return fail("the paste could not be written");
+    if(read_until(m, "MINI ran: sleep 1500", at, 10000) != 1) return fail("the pasted sleep did not run");
+    msleep(400);                                        /* a pause: the skip is over */
+    type(m, "echo LATER\r");
+    if(read_until(m, "MINI ran: echo LATER", at, 10000) != 1) return fail("type-ahead typed after the pause did not run");
+    if(!nothing_else_ran(at)) return fail("more of the paste ran");
+    printf("ptytest: a line typed after a pause, while sleep ran: it ran after it\n");
+    type(m, "exit\r");
+    read_until(m, NULL, 0, 5000);
+    close(m);
+    wait(pid, &st);
+    return pass();
 }
 
 /* ptytest reuse's first session: raw mode on, and gone */
@@ -935,6 +1100,8 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "tcpecho")) return mode_tcpecho(argc, argv);
     if(!strcmp(mode, "reuse")) return mode_reuse();
     if(!strcmp(mode, "fullqueue")) return mode_fullqueue();
+    if(!strcmp(mode, "paste")) return mode_paste();
+    if(!strcmp(mode, "minishell")) return mode_minishell(argc, argv);
     if(!strcmp(mode, "slowreader")) return mode_slowreader(argc, argv);
     if(!strcmp(mode, "detach-ctrlc")) return mode_detach_ctrlc();
     if(!strcmp(mode, "sleeper")) return mode_sleeper(argc, argv);
@@ -950,7 +1117,7 @@ int main(int argc, char **argv) {
     if(!strcmp(mode, "detach-child")) return mode_detach_child();
     if(!strcmp(mode, "kmsg")) return mode_kmsg();
     fprintf(stderr, "usage: ptytest run PROG [ARGS] | surfsh | size [COLS ROWS] | pager | flood | hangup | hangup-call |\n"
-                    "       tcpecho [PORT] | reuse | fullqueue | poll | ps | detach | detach-ctrlc | isolate | kmsg |\n"
+                    "       tcpecho [PORT] | reuse | fullqueue | paste | poll | ps | detach | detach-ctrlc | isolate | kmsg |\n"
                     "       selftest-hangup | session WORDS\n");
     return 2;
 }
