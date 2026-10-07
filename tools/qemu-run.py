@@ -458,6 +458,12 @@ TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcm
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
 
+# 10/6/26: steps that need every echo request answered through QEMU's user-mode network, which now and then
+# loses one when several QEMUs on the host ping at once: such a step runs once more when it failed and the
+# kernel's ping said a request timed out, and fails only if the second run fails too
+ICMP_STEPS = {'ping 10.0.2.2 2', 'run kcmdtest pings /hda1 10.0.2.2'}
+LOST_PING = b'request timeout for icmp_seq'
+
 
 class Qemu:
     def __init__(self, kernel, qemu='qemu-system-i386', mem='64', extra=(), int_log=None, iso=None,
@@ -947,7 +953,7 @@ def ctrl_c_check(q):
     (ping) cuts the command short: its summary, then surfsh's prompt saying it failed (status 130); while surfsh
     waits for a program (count), the program is killed: [pid n killed], the prompt saying so; surfsh lives on"""
     q.send('ping 10.0.2.2 100\n')
-    ok = q.expect('icmp_seq=2', 15)
+    ok = q.expect(re.compile(rb'icmp_seq[= ]2\b'), 15)     # its second request, answered or not: it is pinging
     if ok:
         q.ser.sendall(b'\x03')
         ok = q.expect('packets transmitted', 10) and q.expect(FAILED_PROMPT, 10)
@@ -1316,15 +1322,21 @@ def run_smoke(q, boot_timeout, reboot=None):
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
-            q.send(cmd + '\n')
-            ok = all(q.expect(e, limit) for e in expects)
-            for line, exp in follow:
-                if isinstance(line, bytes):                  # keys as they are, for a full-screen program
-                    q.ser.sendall(line)
-                else:
-                    q.send(line + '\n')
-                ok = ok and all(q.expect(e, limit) for e in exp)
-            ok = ok and q.expect(PROMPT, limit)
+            for attempt in (1, 2):
+                start = len(q.transcript)
+                q.send(cmd + '\n')
+                ok = all(q.expect(e, limit) for e in expects)
+                for line, exp in follow:
+                    if isinstance(line, bytes):              # keys as they are, for a full-screen program
+                        q.ser.sendall(line)
+                    else:
+                        q.send(line + '\n')
+                    ok = ok and all(q.expect(e, limit) for e in exp)
+                ok = ok and q.expect(PROMPT, limit)
+                if ok or attempt == 2 or cmd not in ICMP_STEPS or LOST_PING not in q.transcript[start:]:
+                    break
+                q.expect(PROMPT, limit)                      # the end of the first run
+                print(f'  {cmd}: an echo request went unanswered (QEMU user network): once more')
             results.append((cmd, ok))
     q.pump(0.5)
     text = q.text()
