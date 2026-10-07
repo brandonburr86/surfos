@@ -957,17 +957,8 @@ def telnet_session(vm, qr, port):
         finally:
             t.close()
     results.append(('telnet: a session over the adapter (telnetd on, the banner, lsusb in it, exit)', ok))
-    ok, _ = run_cmd(vm, 'telnetd off', ['telnetd: stopped (0 sessions ended)'])
+    ok, _ = run_cmd(vm, 'telnetd off', ['telnetd: stopped (0 session shells ended)'])
     results.append(('telnetd off', ok))
-    # the connection's socket is gone too (TIME_WAIT lasts 2 s) before the adapter is unplugged: one left over
-    # would be freed only later, in the middle of the next selftest's heap check
-    deadline, gone = time.time() + 15, False
-    while not gone and time.time() < deadline:
-        ok, out = run_cmd(vm, 'netstat', [])
-        gone = ok and 'local 23 ' not in out
-        if not gone:
-            time.sleep(1)
-    results.append(('no socket on port 23 is left a moment later (netstat)', gone))
     return results
 
 

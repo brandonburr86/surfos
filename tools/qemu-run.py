@@ -450,8 +450,8 @@ SMOKE = [
       ('exit 7', ['exit status 7'])]),
     ('@surfsh-corner', []),                                 # surfsh draws only where its line is
     # 10/6/26: telnetd, the telnet server (user/telnetd/), through the forwarded port 23 with the harness's telnet
-    # client (Telnet, below). Not running at first; on; on again (running already, status 1); a port that is none
-    # (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
+    # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none
+    # and --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two sessions at once, status,
     # off ending both, on again; four, and a fifth refused; a client that stops reading while a second session is
     # served; a client whose keys flood a session that reads none; telnetd off typed in a session; on while nettest has
     # the port; off when not running (status 1); the server's log.
@@ -459,6 +459,8 @@ SMOKE = [
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
     ('run telnetd on', ['telnetd: running already (pid', 'exit status 1']),
     ('run telnetd on 65536', ['telnetd: 65536 is no port (1-65535)', 'exit status 2']),
+    ('run telnetd on +23', ['telnetd: +23 is no port (1-65535)', 'exit status 2']),
+    ('run telnetd --server 23', ['telnetd: --server is how telnetd on starts the server', 'exit status 2']),
     ('@telnet-session', []),
     ('@telnet-two', []),
     ('@telnet-full', []),
@@ -468,8 +470,8 @@ SMOKE = [
     ('@telnet-port-busy', []),
     ('run telnetd off', ['telnetd: not running', 'exit status 1']),
     ('dmesg', ['telnetd: listening on port 23', 'telnetd: session 1 from 10.0.2.2:', 'telnetd: session 1 ended (the shell',
-               'telnetd: telnetd off stops the server (pid', ', 2 sessions)', 'refused: 4 sessions are open',
-               'ended (the client left)', 'telnetd: telnetd off stops the server (pid', ', 1 session)']),
+               'telnetd: telnetd off stops the server (pid', ', 2 session shells)', 'refused: 4 sessions are open',
+               'ended (the client left)', 'telnetd: telnetd off stops the server (pid', ', 1 session shell)']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
@@ -1258,7 +1260,7 @@ def telnet_no_sessions(q, timeout=20):
         if not q.expect(PROMPT, 10):
             return False
         if 'running (pid' in q.transcript[start:].decode(errors='replace') and \
-           ', 0 sessions' in q.transcript[start:].decode(errors='replace'):
+           ', 0 session shells' in q.transcript[start:].decode(errors='replace'):
             return True
         q.wait(0.5)
     return False
@@ -1303,10 +1305,10 @@ def telnet_two_check(q):
             ok = a.expect('\r\nfrom-a\r\n') and b.expect('\r\nfrom-b\r\n')
             ok = ok and b'from-b' not in a.data and b'from-a' not in b.data
         q.send('telnetd status\n')
-        ok = ok and q.expect('telnetd: running (pid') and q.expect('2 sessions:') and q.expect('surfsh (pid') \
+        ok = ok and q.expect('telnetd: running (pid') and q.expect('2 session shells:') and q.expect('surfsh (pid') \
             and q.expect('surfsh (pid') and q.expect(PROMPT)
         q.send('telnetd off\n')
-        ok = ok and q.expect('telnetd: stopped (2 sessions ended)', 15) and q.expect(PROMPT)
+        ok = ok and q.expect('telnetd: stopped (2 session shells ended)', 15) and q.expect(PROMPT)
         ok = ok and a.wait_closed(10) and b.wait_closed(10)
         q.send('telnetd on\n')
         ok = ok and q.expect('telnetd: listening on 10.0.2.15 port 23') and q.expect(PROMPT)
