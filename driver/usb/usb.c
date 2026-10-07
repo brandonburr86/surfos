@@ -484,6 +484,31 @@ void usb_print(void) {
     mutex_unlock(&usb_lock);
 }
 
+/* 10/7/26: the devices plugged in, at most max, copied while the lock is held: the caller prints
+   them afterwards, so a pager's question never holds the lock (wifiinfo) */
+u_int usb_snapshot(struct usb_info *out, u_int max) {
+    struct usb_hc *hc;
+    u_int n = 0, p;
+    if(usb_off || !hcs) return 0;
+    mutex_lock(&usb_lock);
+    for(hc = hcs; hc && n < max; hc = hc->next) {
+        for(p = 1; p <= hc->nports && n < max; p++) {
+            struct usb_device *dev = hc->port_dev[p];
+            if(!dev) continue;
+            out[n].port = (u8)p;
+            out[n].class_code = dev->class_code;
+            out[n].vendor = dev->desc.idVendor;
+            out[n].product = dev->desc.idProduct;
+            snprintf(out[n].name, sizeof(out[n].name), "%s%s%s", dev->manufacturer, dev->manufacturer[0] ? " " : "",
+                     dev->product[0] ? dev->product : "(no name)");
+            strlcpy(out[n].status, dev->status, sizeof(out[n].status));
+            n++;
+        }
+    }
+    mutex_unlock(&usb_lock);
+    return n;
+}
+
 const char *usb_describe(char *buf, size_t size) {
     struct usb_hc *hc;
     u_int nhc = 0, ndev = 0, p;

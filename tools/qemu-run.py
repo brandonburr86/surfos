@@ -93,6 +93,14 @@ SMOKE = [
     ('crashnull', ['Page Fault at 0x00000000', 'restarted the shell']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
+    # 10/7/26 (the Wi-Fi report): the ids with the subsystem, command, interrupt; one device in full, with its bytes
+    ('lspci -v', ['ids 8086:1237, subsystem 1af4:1100, class 060000', 'status: no capability list',
+                  'ids 8086:100e, subsystem 1af4:1100, class 020000', 'command: I/O, memory, bus master', 'interrupt: pin A']),
+    ('lspci 00:00.0', ['ids 8086:1237', 'configuration space:', '        00: 86 80 37 12', '        f0: 00']),
+    ('lspci 00:1f.7', ['lspci: no PCI device at 00:1f.7']),
+    ('lspci zz', ['usage: lspci [-v] [bus:device.function]']),
+    ('wifiinfo', ['Wi-Fi report', 'chipset: 00:00.0 8086:1237', 'none: no PCI device is a wireless network controller',
+                  'Other network controllers:', '00:03.0 8086:100e', 'USB: no xHCI controller', 'hold Option']),
     ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
     ('lsblk',   ['rd0', 'ram', 'mounted', 'hda', 'ata', 'disk mbr', 'internal: never formatted', 'hda1', 'part mbr FAT16', 'mounted']),
     ('lsblk -s', ['READ', 'rd0', 'hda1']),

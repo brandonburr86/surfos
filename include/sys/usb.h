@@ -243,6 +243,15 @@ void usb_msleep(u_long ms);                    /* sleeps in a task, busy-waits d
 bool usb_can_sleep(void);
 void usb_print(void);                          /* lsusb */
 const char *usb_describe(char *buf, size_t size);
+/* 10/7/26: what is plugged in, copied under the lock so that the caller prints after it (wifiinfo) */
+struct usb_info {
+    u8 port;                       /* root hub port, from 1 */
+    u8 class_code;
+    u16 vendor, product;
+    char name[82];                 /* manufacturer and product, or "(no name)" */
+    char status[64];               /* what drives it, as lsusb says */
+};
+u_int usb_snapshot(struct usb_info *out, u_int max);   /* how many, at most max; 0 without USB */
 const char *usb_strerror(int err);
 const char *usb_speed_name(u_int speed);
 const char *usb_class_name(u8 class_code);

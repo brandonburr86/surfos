@@ -90,7 +90,11 @@ u_int pci_device_count(void);
 struct pci_dev *pci_find_device(u16 vendor, u16 device, struct pci_dev *after);
 struct pci_dev *pci_find_class(u8 class_code, u8 subclass, struct pci_dev *after);
 void pci_enable_device(struct pci_dev *d);   /* turn on the decoders it uses and bus mastering */
-void pci_print(void);                        /* lspci */
+void pci_print(bool details);                /* lspci; 10/7/26: details (lspci -v), see pci_print_device() */
+/* 10/7/26: lspci -v and wifiinfo (driver/pciinfo.c describes the bytes) */
+void pci_read_config(struct pci_dev *d, u8 *cfg);            /* its 256 bytes (PCI_CONFIG_SIZE) of configuration space */
+struct pci_dev *pci_find_at(u8 bus, u8 slot, u8 func);
+void pci_print_device(struct pci_dev *d, bool details, bool dump);   /* lspci's lines; details: -v; dump: the bytes */
 
 /* names from the 2004 PCIDATA.H table */
 const char *pci_vendor_name(u16 vendor);

@@ -8,6 +8,8 @@ File: pci.c Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 Configuration mechanism 1. Every bus reachable through PCI-to-PCI bridges, every
 function of multi-function devices, BARs sized with the decoders turned off. The
 reconstructed 2004 scanner did bus 0, function 0 only (audit D3).
+10/7/26: lspci -v and wifiinfo read each function's 256 bytes of configuration space
+(reads only) and describe them with driver/pciinfo.c.
 */
 
 #include <surfos/types.h>
@@ -17,6 +19,7 @@ reconstructed 2004 scanner did bus 0, function 0 only (audit D3).
 #include <asm/io.h>
 #include <mm/kalloc.h>
 #include <sys/pci.h>
+#include <sys/pciinfo.h>
 #include <blibc_common.h>
 
 #define PCI_CONFIG_ADDR 0xCF8
@@ -210,25 +213,65 @@ static void print_size(u32 size) {
     else kprintf("%u", size);
 }
 
-void pci_print(void) {
+/* 10/7/26: the 256 bytes of configuration space that mechanism 1 reaches, a dword at a time */
+void pci_read_config(struct pci_dev *d, u8 *cfg) {
+    int i;
+    for(i = 0; i < PCI_CONFIG_SIZE; i += 4) {
+        u32 v = pci_dev_read32(d, (u8)i);
+        cfg[i] = (u8)v;
+        cfg[i + 1] = (u8)(v >> 8);
+        cfg[i + 2] = (u8)(v >> 16);
+        cfg[i + 3] = (u8)(v >> 24);
+    }
+}
+
+struct pci_dev *pci_find_at(u8 bus, u8 slot, u8 func) {
     struct pci_dev *d;
-    for(d = pci_devices; d; d = d->next) {
-        char name[96];
-        int i;
-        kprintf("%02x:%02x.%x %02x%02x %s: %s %s (rev %02x)", d->bus, d->slot, d->func, d->class_code, d->subclass,
-                pci_class_name(d->class_code, d->subclass), pci_vendor_name(d->vendor),
-                pci_device_name(d->vendor, d->device, name, sizeof(name)), d->revision);
-        if(d->irq_pin) kprintf(" irq %u", d->irq);
-        kprintf("\n");
-        for(i = 0; i < 6; i++) {
-            if(!d->bar_size[i] && !d->bar_hi[i] && !(d->bar[i] && !d->bar_io[i] && d->class_code == PCI_CLASS_DISPLAY)) continue;
-            if(d->bar_hi[i]) kprintf("        BAR%i mem 0x%x%08x [", i, d->bar_hi[i], d->bar[i]);
-            else kprintf("        BAR%i %s 0x%08x [", i, d->bar_io[i] ? "io " : "mem", d->bar[i]);
-            if(d->bar_size[i]) print_size(d->bar_size[i]);
-            else kprintf("size not probed");
-            kprintf("]\n");
+    for(d = pci_devices; d; d = d->next) if(d->bus == bus && d->slot == slot && d->func == func) return d;
+    return NULL;
+}
+
+static void line_out(void *ctx, const char *line) {
+    (void)ctx;
+    kprintf("%s\n", line);
+}
+
+/* one device as lspci shows it: its line and its BARs; 10/7/26: with details, what its configuration
+   space says (pciinfo.c) and what a known wireless chip probably is; with dump, the 256 bytes too */
+void pci_print_device(struct pci_dev *d, bool details, bool dump) {
+    char name[96];
+    int i;
+    kprintf("%02x:%02x.%x %02x%02x %s: %s %s (rev %02x)", d->bus, d->slot, d->func, d->class_code, d->subclass,
+            pci_class_name(d->class_code, d->subclass), pci_vendor_name(d->vendor),
+            pci_device_name(d->vendor, d->device, name, sizeof(name)), d->revision);
+    if(d->irq_pin) kprintf(" irq %u", d->irq);
+    kprintf("\n");
+    for(i = 0; i < 6; i++) {
+        if(!d->bar_size[i] && !d->bar_hi[i] && !(d->bar[i] && !d->bar_io[i] && d->class_code == PCI_CLASS_DISPLAY)) continue;
+        if(d->bar_hi[i]) kprintf("        BAR%i mem 0x%x%08x [", i, d->bar_hi[i], d->bar[i]);
+        else kprintf("        BAR%i %s 0x%08x [", i, d->bar_io[i] ? "io " : "mem", d->bar[i]);
+        if(d->bar_size[i]) print_size(d->bar_size[i]);
+        else kprintf("size not probed");
+        kprintf("]\n");
+    }
+    if(details || dump) {
+        u8 cfg[PCI_CONFIG_SIZE];
+        pci_read_config(d, cfg);
+        if(details) {
+            const char *what = pciinfo_chip(d->vendor, d->device);
+            pciinfo_details(cfg, line_out, NULL);
+            if(what) kprintf("        probably: %s\n", what);
+        }
+        if(dump) {
+            kprintf("        configuration space:\n");
+            pciinfo_dump(cfg, line_out, NULL);
         }
     }
+}
+
+void pci_print(bool details) {
+    struct pci_dev *d;
+    for(d = pci_devices; d; d = d->next) pci_print_device(d, details, false);
     kprintf("%u devices\n", ndevices);
 }
 

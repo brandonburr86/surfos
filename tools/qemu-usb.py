@@ -102,6 +102,10 @@ PORTABLE = [
     ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
                  'keyboard  8042', 'usb       1 xHCI controller']),
     ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> usb0 (256 MB)']),   # the stick, at 5 Gbit/s, as a disk
+    # 10/7/26 (the Wi-Fi report): capabilities on PCI Express (q35), as the laptop's Wi-Fi has them
+    ('lspci -v', ['ids 1b36:000d', 'MSI-X, 16 vectors', 'PCI Express 2, root complex integrated endpoint',
+                  'MSI, 64-bit, up to 1 vector']),
+    ('wifiinfo', ['chipset: 00:00.0 8086:29c0', 'none: no PCI device', 'QEMU USB HARDDRIVE', 'hold Option']),
     ('tick', ['Ticks:']),
     ('ps', ['Kernel Idle Task', 'init', 'surfsh (ring 3)']),
     ('memstat', ['Physical memory:', 'Free physical pages:', 'page tables']),

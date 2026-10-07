@@ -32,6 +32,7 @@ a ping) gives up when that happens (task_interrupted()), along its usual way out
 #include <sys/parport.h>
 #include <sys/serial.h>
 #include <sys/pci.h>
+#include <sys/pciinfo.h>
 #include <sys/usb.h>
 #include <sys/driver.h>
 #include <sys/bdev.h>
@@ -203,7 +204,105 @@ static int cmd_bootinfo(int argc, char **argv) {
     printf("  screen: %s\n", console_describe(buf, sizeof(buf)));
     return CMD_OK;
 }
-static int cmd_lspci(int argc, char **argv) { pci_print(); return CMD_OK; }
+/* 10/7/26: bus:device.function in hexadecimal, as lspci prints it (00:14.3) */
+static bool pci_addr_arg(const char *s, u8 *bus, u8 *slot, u8 *func) {
+    char *end;
+    u_long b, d, f;
+    if(!isxdigit((unsigned char)*s)) return false;
+    b = strtoul(s, &end, 16);
+    if(*end != ':' || b > 0xff || !isxdigit((unsigned char)end[1])) return false;
+    d = strtoul(end + 1, &end, 16);
+    if(*end != '.' || d > 0x1f || !isxdigit((unsigned char)end[1])) return false;
+    f = strtoul(end + 1, &end, 16);
+    if(*end || f > 7) return false;
+    *bus = (u8)b;
+    *slot = (u8)d;
+    *func = (u8)f;
+    return true;
+}
+
+/* 10/7/26: lspci [-v] [bus:device.function]: -v adds what each configuration space says; an
+   address shows that device in full, with its 256 bytes */
+static int cmd_lspci(int argc, char **argv) {
+    struct pci_dev *d;
+    u8 bus = 0, slot = 0, func = 0;
+    bool verbose = false, one = false;
+    int i;
+    for(i = 1; i < argc; i++) {
+        if(!strcmp(argv[i], "-v")) verbose = true;
+        else if(!one && pci_addr_arg(argv[i], &bus, &slot, &func)) one = true;
+        else {
+            printf("    usage: lspci [-v] [bus:device.function]\n"
+                   "    -v: the ids with the subsystem, power state, interrupts (MSI, MSI-X) and PCI Express link;\n"
+                   "    an address (lspci 00:14.3): that device in full, with its configuration space\n");
+            return CMD_USAGE;
+        }
+    }
+    if(!one) {
+        pci_print(verbose);
+        return CMD_OK;
+    }
+    d = pci_find_at(bus, slot, func);
+    if(!d) {
+        printf("    lspci: no PCI device at %02x:%02x.%x (lspci lists them)\n", bus, slot, func);
+        return CMD_FAIL;
+    }
+    pci_print_device(d, true, true);
+    return CMD_OK;
+}
+
+/* 10/7/26: what a Wi-Fi driver for this machine needs to know about its card (docs/WIFI-PLANNING.md):
+   the chipset, every wireless PCI device in full, the other network controllers, and the USB devices,
+   among them the Bluetooth half of a combo card, whose id names the card. Reads only. */
+#define WIFIINFO_USB 24
+static int cmd_wifiinfo(int argc, char **argv) {
+    struct usb_info *usb;                       /* 3.6 KB: from the heap, not the kernel stack */
+    struct pci_dev *d;
+    u8 cfg[PCI_CONFIG_SIZE];
+    char buf[96];
+    const char *hint;
+    u_int n, i, wireless = 0, other = 0;
+
+    printf("    Wi-Fi report (docs/WIFI-PLANNING.md): send all of it\n\n");
+    for(d = pci_devices; d; d = d->next)
+        if(d->class_code == PCI_CLASS_BRIDGE && (d->subclass == 0x00 || d->subclass == 0x01))
+            printf("    chipset: %02x:%02x.%x %04x:%04x %s\n", d->bus, d->slot, d->func, d->vendor, d->device,
+                   pci_class_name(d->class_code, d->subclass));
+
+    printf("\n    Wireless PCI devices:\n");
+    for(d = pci_devices; d; d = d->next) {
+        pci_read_config(d, cfg);
+        if(!pciinfo_is_wireless(cfg)) continue;
+        wireless++;
+        pci_print_device(d, true, true);
+    }
+    if(!wireless) printf("    none: no PCI device is a wireless network controller (class 0280 or 0d) or a known Wi-Fi chip\n");
+
+    for(d = pci_devices; d; d = d->next) {
+        if(d->class_code != PCI_CLASS_NETWORK) continue;
+        pci_read_config(d, cfg);
+        if(pciinfo_is_wireless(cfg)) continue;
+        if(!other++) printf("\n    Other network controllers:\n");
+        printf("    %02x:%02x.%x %04x:%04x, subsystem %04x:%04x, %s\n", d->bus, d->slot, d->func, d->vendor, d->device,
+               d->subsys_vendor, d->subsys_id, pci_class_name(d->class_code, d->subclass));
+    }
+
+    printf("\n    USB: %s\n", usb_describe(buf, sizeof(buf)));
+    usb = (struct usb_info *)kalloc(WIFIINFO_USB * sizeof(struct usb_info));
+    n = usb ? usb_snapshot(usb, WIFIINFO_USB) : 0;
+    if(!usb) printf("    (no memory for the list of USB devices)\n");
+    for(i = 0; i < n; i++) {
+        printf("    port %2u  %04x:%04x  %-8s  %s -> %s\n", usb[i].port, usb[i].vendor, usb[i].product,
+               usb_class_name(usb[i].class_code), usb[i].name, usb[i].status);
+        hint = pciinfo_bluetooth(usb[i].vendor, usb[i].product, usb[i].class_code);
+        if(hint) printf("             probably: %s\n", hint);
+    }
+
+    printf("\n    The network's own settings (security, band, channel) need the driver to be read here:\n"
+           "    on the Mac, hold Option and click the Wi-Fi icon. Never send the network's password.\n");
+    kfree(usb);
+    return CMD_OK;
+}
 static int cmd_lsusb(int argc, char **argv) { usb_print(); return CMD_OK; }
 static int cmd_drivers(int argc, char **argv) { print_drivers(); return CMD_OK; }
 static int cmd_cpuinfo(int argc, char **argv) { cpu_print(); return CMD_OK; }
@@ -750,7 +849,8 @@ static const struct command commands[] = {
     { "cpuinfo",   "",          "processor model and features", cmd_cpuinfo },
     { "acpi",      "",          "firmware ACPI tables (profile=laptop)", cmd_acpi },
     { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
-    { "lspci",     "",          "PCI devices with names", cmd_lspci },
+    { "lspci",     "[-v] [bus:dev.fn]", "PCI devices (-v: ids, power, interrupts, link)", cmd_lspci },
+    { "wifiinfo",  "",          "the Wi-Fi card's ids, for a Wi-Fi driver", cmd_wifiinfo },
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
