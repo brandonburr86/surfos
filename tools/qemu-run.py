@@ -453,8 +453,8 @@ SMOKE = [
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
     # sessions at once, status, off ending both, on again; four, and a fifth refused; a client that stops reading while
-    # a second session is served; a client whose keys flood a session that reads none; the rest of the protocol in one
-    # session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
+    # a second session is served; a client whose keys flood a session that reads none; a paste into edit, whole; the
+    # rest of the protocol in one session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
     # port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
@@ -467,6 +467,7 @@ SMOKE = [
     ('@telnet-full', []),
     ('@telnet-stalled', []),
     ('@telnet-flood', []),
+    ('@telnet-paste', []),
     ('@telnet-protocol', []),
     ('@telnet-binary', []),
     ('@telnet-off-inside', []),
@@ -1405,14 +1406,12 @@ def telnet_stalled_check(q):
                     quiet_since = time.time()
             a.send('\n')
             ok = a.expect('] killed', 20) and a.expect(TELNET_ROOT, 10)
-            # the lines from the prompt after "[pid] started" on: the job's first lines may come before that notice
-            # and the prompt, which then cut one of them
-            started = re.search(rb'\] started', a.data)
-            prompt = TELNET_ROOT.search(a.data, started.end()) if started else None
-            offsets = [int(x, 16) for x in line.findall(a.data, prompt.end() if prompt else 0)]
-            ok = ok and len(offsets) > 2000 and offsets[0] < 0x10000 and \
-                offsets == list(range(offsets[0], offsets[0] + 16 * len(offsets), 16))
-            why = why or ('' if ok else ' (%d lines, not all in order)' % len(offsets))
+            # every line, in order: the job's first lines can come while surfsh still writes "[pid] started" and its
+            # prompt, which then cut a line or three of them; past those, no line may be missing
+            offsets = [int(x, 16) for x in line.findall(a.data)]
+            gaps = [(i, offsets[i + 1] - offsets[i]) for i in range(len(offsets) - 1) if offsets[i + 1] != offsets[i] + 16]
+            ok = ok and len(offsets) > 2000 and offsets[0] < 0x400 and all(i < 1000 and 16 < d <= 64 for i, d in gaps)
+            why = why or ('' if ok else ' (%d lines, gaps %s)' % (len(offsets), gaps[:3]))
             ok = a.leave(10) and ok
         ok = ok and telnet_no_sessions(q)
     finally:
@@ -1593,6 +1592,55 @@ def telnet_binary_check(q):
     return ('telnet: a client in binary mode: UTF-8 typed, and Return as a CR alone, run the command', ok)
 
 
+def telnet_quiet(t, quiet, limit):
+    """read until the session has printed nothing for quiet seconds (at most limit); True if it did go quiet"""
+    deadline, since = time.time() + limit, time.time()
+    while time.time() < deadline and not t.closed:
+        n = len(t.data)
+        t.pump(0.1)
+        if len(t.data) != n:
+            since = time.time()
+        elif time.time() - since >= quiet:
+            return True
+    return False
+
+
+def telnet_paste_check(q):
+    """a paste of 60 lines, 3000 bytes in one go, into a program that reads every key (edit, in raw mode): while the
+    editor takes keys the server reads the client only as far as its key buffer has room, so TCP holds the rest at
+    the client and nothing is dropped; saved, the file has the 60 lines"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    lines = ['line %02d ' % i + 'x' * 41 for i in range(60)]
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t.send('/initrd/bin/rm /hda1/PASTE.TXT\n')    # from a run before, if there was one
+            ok = t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('/initrd/bin/edit /hda1/PASTE.TXT\n')
+            ok = telnet_quiet(t, 1.0, 20)               # the editor's screen
+        if ok:
+            t._out(''.join(line + '\r' for line in lines).encode())
+            ok = telnet_quiet(t, 2.0, 120)              # every key taken and drawn
+        if ok:
+            t._out(b'\x13')                             # ^S: save
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x11')                             # ^Q: quit
+            ok = t.expect(TELNET_ROOT, 20)
+        if ok:
+            mark = len(t.data)
+            t.send('/initrd/bin/cat /hda1/PASTE.TXT\n')
+            ok = t.expect(TELNET_ROOT, 20)
+            got = [int(x) for x in re.findall(rb'line (\d\d) x{41}\r\n', t.data[mark:])]
+            ok = ok and got == list(range(60))
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: a paste of 60 lines (3000 bytes) into edit arrives whole', ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1629,7 +1677,8 @@ def telnet_port_busy_check(q):
 
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
-                       '@telnet-flood': telnet_flood_check, '@telnet-protocol': telnet_protocol_check,
+                       '@telnet-flood': telnet_flood_check, '@telnet-paste': telnet_paste_check,
+                       '@telnet-protocol': telnet_protocol_check,
                        '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
