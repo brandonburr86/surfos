@@ -42,9 +42,11 @@ the buffer has room for a whole read: TCP holds the rest back at the client, so 
 into a program that reads arrives whole. Once the master has taken nothing for KEYS_IDLE_MS
 the client is read whatever comes, and what does not fit is dropped, as a keyboard drops
 keys: its Ctrl+C still arrives. A Ctrl+C (typed, or IAC IP) drops the keys that waited
-before it and is written at once: in line mode it always fits (and drops what was typed
-ahead), and when it does not (raw mode, a full queue) it waits first in line. So a client
-that types faster than its session reads holds back only its own keys.
+from earlier reads; the keys of its own read that come before it are written first (as far
+as the master takes them), then the Ctrl+C at once: in line mode it always fits (it ends an
+escape sequence in progress and drops what was typed ahead), and when it does not (raw
+mode, a full queue) it waits first in line. So a client that types faster than its session
+reads holds back only its own keys.
 
 The shells are collected here (waitpid) after every poll(): while a session's shell has
 ended or is ending, poll() waits REAP_MS at most, so that none stays a zombie long. When
@@ -237,12 +239,16 @@ static int keys_held(const struct session *s, unsigned int now) {
     return s->master >= 0 && KEYS_SIZE - s->keys_len < READ_SIZE && now - s->keys_at < KEYS_IDLE_MS;
 }
 
-/* typed keys, behind those that wait; a Ctrl+C drops those before it and goes to the master at once */
+/* typed keys, behind those that wait. A Ctrl+C drops the keys that waited from earlier reads; this
+   read's keys before it go to the master first, in order, as far as it takes them now (it never
+   waits; the rest is dropped), so that in a program where ^C is a key (edit) or at the prompt
+   ("echo x\r" then ^C) nothing typed just before it is lost; then the Ctrl+C, at once */
 static void type_keys(struct session *s, const unsigned char *p, int n) {
     int i, room;
     for(i = n - 1; i >= 0 && p[i] != 0x03; i--);
     if(i >= 0) {
         s->keys_len = 0;
+        if(i > 0 && write(s->master, p, (size_t)i) > 0) s->keys_at = uptime();
         p += i;
         n -= i;
     }

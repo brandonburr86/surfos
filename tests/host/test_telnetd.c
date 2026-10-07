@@ -11,8 +11,9 @@
    asked exactly while output waits; the bytes each client gets are, in order, the opening, the
    answers and the encoded session output (a shadow protocol state says what they should be),
    answers dropped only whole and session output never; the keys reaching each master are the
-   decoded client data as the server's key buffer passes them on (a Ctrl+C drops those before
-   it, and what overflows the buffer is dropped, never while the master takes keys: the client
+   decoded client data as the server's key buffer passes them on (a Ctrl+C drops those that
+   waited from earlier reads, the keys of its own read before it written at once, and what
+   overflows the buffer is dropped, never while the master takes keys: the client
    then waits while the buffer has no room for a whole read), written only on POLLOUT unless a
    Ctrl+C leads,
    and POLLOUT asked on a master exactly while keys wait; NAWS sizes in range; at most
@@ -58,6 +59,8 @@ struct sconn {
     struct buf got, expq;
     unsigned char kpend[KEYS_SIZE];     /* the keys the server should hold for the master, by its rules */
     int kpend_len;
+    unsigned char direct[READ_SIZE];    /* a read's keys before its Ctrl+C: the server writes them at once */
+    int direct_len;
     long written;
     int pty;
     struct telnet shadow;
@@ -458,7 +461,13 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
                     int j, room, m = D.len;
                     const unsigned char *kp = d;
                     for(j = m - 1; j >= 0 && kp[j] != 0x03; j--);
-                    if(j >= 0) { c->kpend_len = 0; kp += j; m -= j; }
+                    if(j >= 0) {                        /* the keys that waited go; this read's before the */
+                        c->kpend_len = 0;               /* Ctrl+C are written at once, then the Ctrl+C */
+                        memcpy(c->direct, kp, (size_t)j);
+                        c->direct_len = j;
+                        kp += j;
+                        m -= j;
+                    }
                     room = KEYS_SIZE - c->kpend_len;
                     if(m > room) {
                         if(!c->fin && !c->rst && sim_now - P[fdt[s->master].obj].last_take < KEYS_IDLE_MS)
@@ -508,6 +517,19 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
     return -1;
 }
 
+/* the keys of a master's write that the input queue takes, in order: a line-mode Ctrl+C needs no room
+   (and drops what was typed ahead); the first that does not fit ends it */
+static int tty_take(struct spty *p, const unsigned char *b, int n) {
+    int taken = 0;
+    while(taken < n) {
+        if(p->linemode && b[taken] == 0x03) p->tty_q = 0;
+        else if(p->tty_q < TTYQ) p->tty_q++;
+        else break;
+        taken++;
+    }
+    return taken;
+}
+
 ssize_t sim_write(int fd, const void *buf, size_t n) {
     checkpoint();
     if(fd < 0 || fd >= NFD || fdt[fd].type == F_FREE) { BUG("write on closed fd %d", fd); errno = EBADF; return -1; }
@@ -543,18 +565,24 @@ ssize_t sim_write(int fd, const void *buf, size_t n) {
         const unsigned char *b = buf;
         int taken = 0;
         if(!n) return 0;
+        if(c && c->direct_len) {                        /* a read's keys before its Ctrl+C: once, what fits */
+            if((int)n != c->direct_len || memcmp(buf, c->direct, n))
+                BUG("pty %ld: %d keys written before a Ctrl+C, not the %d of its read", (long)(p - P), (int)n, c->direct_len);
+            c->direct_len = 0;
+            taken = tty_take(p, b, (int)n);
+            if(!taken) { keys_eagain++; errno = EAGAIN; return -1; }
+            bput(&p->keys, buf, taken);
+            keys_taken += taken;
+            p->last_take = sim_now;
+            return taken;
+        }
         if(!p->pollout && b[0] != 0x03) BUG("pty %ld: keys written without POLLOUT", (long)(p - P));
         if(c && ((int)n != c->kpend_len || memcmp(buf, c->kpend, n))) {
             BUG("pty %ld: the keys written (%d) are not the ones the server should hold (%d)", (long)(p - P), (int)n, c->kpend_len);
             c = NULL;                                   /* no comparison from here on */
             C[p->conn].kpend_len = 0;
         }
-        while(taken < (int)n) {
-            if(p->linemode && b[taken] == 0x03) p->tty_q = 0;      /* needs no room; drops the type-ahead */
-            else if(p->tty_q < TTYQ) p->tty_q++;
-            else break;
-            taken++;
-        }
+        taken = tty_take(p, b, (int)n);
         if(!taken) { keys_eagain++; errno = EAGAIN; return -1; }
         bput(&p->keys, buf, taken);
         keys_taken += taken;
@@ -601,7 +629,7 @@ int sim_close(int fd) {
         struct spty *p = &P[fdt[fd].obj];
         p->master_fd = -1;
         p->eof_read = 0;
-        if(p->conn >= 0) C[p->conn].kpend_len = 0;     /* the keys the server held for it go with it */
+        if(p->conn >= 0) C[p->conn].kpend_len = C[p->conn].direct_len = 0;   /* the keys held for it go with it */
         if(p->shell == 1) p->shell = 2;                 /* the hangup: killed, dies later */
         pty_maybe_free(p);
     }

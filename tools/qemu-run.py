@@ -459,8 +459,8 @@ SMOKE = [
     # client (Telnet, below). Not running at first; on; on again (running already, status 1); ports that are none and
     # --server typed by hand (status 2); a session: the banner, a command, cd, Tab, help paged, Ctrl+C, exit; two
     # sessions at once, status, off ending both, on again; four, and a fifth refused; a client that stops reading while
-    # a second session is served; a client whose keys flood a session that reads none; a paste into edit, whole; the
-    # rest of the protocol in one session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
+    # a second session is served; a client whose keys flood a session that reads none; a paste into edit, whole; keys
+    # and a Ctrl+C in one segment; the rest of the protocol in one session that ends with a reset; a client in binary mode; telnetd off typed in a session; on while nettest has the
     # port; off when not running (status 1); the server's log.
     ('telnetd', ['telnetd: not running (telnetd on starts it)']),
     ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
@@ -474,6 +474,7 @@ SMOKE = [
     ('@telnet-stalled', []),
     ('@telnet-flood', []),
     ('@telnet-paste', []),
+    ('@telnet-ctrlc-keys', []),
     ('@telnet-protocol', []),
     ('@telnet-binary', []),
     ('@telnet-off-inside', []),
@@ -1463,7 +1464,8 @@ def telnet_flood_check(q):
     """a client that types without end into a session that reads nothing (sleep 100000, a kernel command): the server
     keeps reading it, holds what the pseudo-terminal does not take and drops the rest, and a second session stays
     quick all the while (an echo, a hexdump of a program paged on a tall window); a Ctrl+C from the flooding client
-    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed"""
+    still gets through at once, ends the sleep, and drops what was typed ahead: its next command runs as typed. Then
+    400 cursor keys (ESC [ A) fill the queue, and a Ctrl+C after them still ends another sleep"""
     a, b = Telnet(q.ports['telnet']), None
     stop, sent = threading.Event(), [0]
 
@@ -1510,6 +1512,20 @@ def telnet_flood_check(q):
             a.send('echo after-flood\n')
             ok = a.expect('\r\nafter-flood\r\n', 10) and a.expect(TELNET_ROOT, 10)
             why = why or ('' if ok else ' (keys typed ahead were left)')
+        if ok:                                      # cursor keys fill the queue, the rest waits: Ctrl+C still ends it
+            a.send('sleep 100000\n')
+            ok = a.expect('sleep 100000', 10)
+        if ok:
+            time.sleep(0.5)
+            a._out(b'\x1b[A' * 400)
+            time.sleep(1.5)
+            a.cursor = len(a.data)
+            a._out(b'\x03')
+            ok = a.expect(PROMPT, 15)
+            why = why or ('' if ok else ' (a Ctrl+C after cursor keys did not end the sleep)')
+        if ok:
+            a.send('echo after-arrows\n')
+            ok = a.expect('\r\nafter-arrows\r\n', 10) and a.expect(TELNET_ROOT, 10)
         if ok and b:
             b.send('exit\n')
             ok = b.wait_closed(10)
@@ -1679,6 +1695,40 @@ def telnet_paste_check(q):
     return ('telnet: a paste of 60 lines (3000 bytes) into edit arrives whole', ok)
 
 
+def telnet_ctrlc_keys_check(q):
+    """keys and a Ctrl+C in one segment: those before the Ctrl+C are not lost. At the prompt, "echo RAWKEYS-1",
+    Return and a Ctrl+C sent together run the command; in edit, where ^C is a key, "hello" and ^C sent together leave
+    hello in the file"""
+    t = Telnet(q.ports['telnet'], rows=1000)
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        if ok:
+            t._out(b'echo RAWKEYS-1\r\0\x03')
+            ok = t.expect('\r\nRAWKEYS-1\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('/initrd/bin/rm /hda1/CTRLC.TXT\n')     # from a run before, if there was one
+            ok = t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('/initrd/bin/edit /hda1/CTRLC.TXT\n')
+            ok = telnet_quiet(t, 1.0, 20)
+        if ok:
+            t._out(b'hello\x03')                        # ^C in edit: where the cursor is
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x13')                             # ^S: save
+            telnet_quiet(t, 1.0, 20)
+            t._out(b'\x11')                             # ^Q: quit
+            ok = t.expect(TELNET_ROOT, 20)
+        if ok:
+            t.send('/initrd/bin/cat /hda1/CTRLC.TXT\n')
+            ok = t.expect('\r\nhello\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return ('telnet: keys sent with a Ctrl+C in one segment are kept: a command at the prompt, text in edit', ok)
+
+
 def telnet_off_inside_check(q):
     """telnetd off typed in a session: the server stops, which ends every session, that one too (its connection
     closes); on the console the server is not running any more"""
@@ -1716,6 +1766,7 @@ def telnet_port_busy_check(q):
 CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': telnet_two_check,
                        '@telnet-full': telnet_full_check, '@telnet-stalled': telnet_stalled_check,
                        '@telnet-flood': telnet_flood_check, '@telnet-paste': telnet_paste_check,
+                       '@telnet-ctrlc-keys': telnet_ctrlc_keys_check,
                        '@telnet-protocol': telnet_protocol_check,
                        '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
