@@ -76,6 +76,11 @@ def surf_prompt(crumbs, state):
     return re.compile(re.escape(crumbs) + rb' \xe2\x89\x8b' + _SGR + re.escape(state) + _SGR + rb'>')
 
 
+# 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
+# of their own (tcp_raw_check() below); 'end' ends that boot
+TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
+           'latency', 'zwprobe', 'evict', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
+
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
     ('tick',    ['Ticks:']),
@@ -201,11 +206,8 @@ SMOKE = [
     ('nettest limits', ['NETTEST PASS']),
     ('@nettest-kills', []),
     # TCP against an other end that makes its segments by hand (tools/qemu-tcp.py, tools/rawnet.py): a boot of its
-    # own whose NIC is on a raw link, shared by these steps; the scenarios are listed in tools/qemu-tcp.py
-    ('@tcp-raw scan', []), ('@tcp-raw flood', []), ('@tcp-raw reset', []), ('@tcp-raw greet', []),
-    ('@tcp-raw window', []), ('@tcp-raw fin', []), ('@tcp-raw keepalive', []), ('@tcp-raw churn', []),
-    ('@tcp-raw reserve', []), ('@tcp-raw sws', []), ('@tcp-raw linger', []), ('@tcp-raw pollscan', []),
-    ('@tcp-raw pollstall', []), ('@tcp-raw end', []),
+    # own whose NIC is on a raw link, shared by these steps (TCP_RAW above; tools/qemu-tcp.py says what each does)
+    *[('@tcp-raw ' + name, []) for name in TCP_RAW],
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
@@ -1190,8 +1192,7 @@ def tcp_raw_check(q, name):
     return ('TCP %s: %s' % (name, what), ok)
 
 
-for _name in ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'pollscan',
-              'pollstall', 'end'):
+for _name in TCP_RAW:
     CONSOLE_CHECKS['@tcp-raw ' + _name] = (lambda name: lambda q: tcp_raw_check(q, name))(_name)
 
 

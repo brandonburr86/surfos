@@ -54,5 +54,6 @@ int tcp_write(struct tcp_socket *s, const void *data, u_int len); /* write(): wh
 void tcp_release(struct tcp_socket *s);    /* the last descriptor closed: FIN, or stop listening; never waits */
 int tcp_poll(struct tcp_socket *s);        /* POLLIN POLLOUT POLLHUP POLLERR (surfos/poll.h); takes net_lock */
 bool tcp_listening(const struct tcp_socket *s);
+void tcp_set_nodelay(struct tcp_socket *s);     /* 10/6/26: small writes go at once (no Nagle): a program's connection */
 
 #endif

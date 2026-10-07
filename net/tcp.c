@@ -53,6 +53,31 @@ window small costs a segment now and then, not a stream of tiny ones.
 and that nobody reads for (TIME_WAIT, an orphan in FIN_WAIT_2) gives its 16 KB
 of buffers back at once: what lingers there, the other end gone with a network
 unplugged say, holds its slot only, and the heap does not change when it ends.
+
+10/6/26 (second review): a retransmission carries only bytes that were sent;
+what the window or Nagle's rule held back waits for output() (a lost small
+segment ended the connection: its retransmission ran past snd_nxt, and the ACK
+of it was ignored). A program's connections (net/sock.c) send small writes at
+once: Nagle's rule held telnetd's echo and screen updates for the client's
+delayed ACK (40 to 200 ms); the kernel's own connections keep it, and both keep
+the silly window rules. Data that did not fit is answered all the same (a byte
+probing a shut window, as BSD, macOS and Windows probe, got no ACK). A listener
+answers a segment with an ACK in it with a reset (RFC 793): a client whose
+half-open connection made room for another hears so at once. A bare ACK whose
+sequence number is ahead of ours (a segment of the other end's was lost) is
+acceptable within the window: its ACK and window count, and it gets no answer;
+an unacceptable bare ACK is answered only when its sequence number is old (a
+keepalive, a probe): two strict ends no longer trade ACKs across a hole. An
+orphan gives its receive buffer back when it becomes one, and its send buffer
+once all in it is acknowledged: one still finishing when its network went away
+held 16 KB until its retries ran out. An orphan whose retries run out sends a
+reset as it goes (its other end was left half-open). A connection that has
+failed (CLOSED, its program not done with it yet) is no longer looked up:
+what comes for it is answered as for no connection, with a reset. tcpka= is
+matched as a word. A window shut on bytes in flight (a peer that shrank it, which
+RFC 1122 forbids) no longer brings a full segment again every second for ever:
+nothing goes into it, the persist timer probes it with its backoff, and when it
+opens, what was in flight goes again at once.
 */
 
 #include <surfos/types.h>
@@ -95,6 +120,7 @@ static const char *const state_names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_
 struct tcp_socket {
     bool used, orphan;                  /* orphan: closed by the application, finishing on its own */
     bool synced;                        /* 10/6/26: it reached ESTABLISHED (accept() hands it out then) */
+    bool nodelay;                       /* 10/6/26: small writes go at once (a program's connection: no Nagle) */
     u_long orphan_at;                   /* 10/6/26: when an orphan last made progress */
     struct tcp_socket *listener;        /* 10/6/26: whose backlog it waits in, until accept() takes it */
     u16 mss;                            /* 10/6/26: the most data a segment carries: the other end's MSS, at most ours */
@@ -102,6 +128,7 @@ struct tcp_socket {
     u_int ka_probes;                    /* 10/6/26: keepalive probes unanswered */
     u_long persist_at;                  /* 10/6/26: the persist timer: a shut window probed, or a small one used; 0: off */
     u_int persist_n;                    /* 10/6/26: probes since the window shut (the pause doubles) */
+    bool shrunk;                        /* 10/6/26: the window shut on bytes in flight: they go again when it opens */
     int state;
     ipaddr_t remote_ip;
     u16 local_port, remote_port;
@@ -195,13 +222,18 @@ static void sock_free(struct tcp_socket *s) {
     s->used = false;
 }
 
-/* 10/6/26: the other end has acknowledged our FIN (all our data) and nobody reads for s: it sends
-   nothing more and keeps nothing it receives, so its buffers go; its sequence numbers stay */
+/* 10/6/26: what s no longer needs goes back to the heap at once, its sequence numbers staying: once
+   nobody reads for it (an orphan drops what comes, TIME_WAIT takes nothing more) its receive buffer,
+   and its send buffer when nothing in it is left to send or to send again */
 static void drop_buffers(struct tcp_socket *s) {
-    kfree(s->txbuf);
+    if(!s->orphan && s->state != TIME_WAIT) return;
     kfree(s->rxbuf);
-    s->txbuf = s->rxbuf = NULL;
-    s->tx_len = s->rx_len = 0;
+    s->rxbuf = NULL;
+    s->rx_len = 0;
+    if(!s->tx_len) {
+        kfree(s->txbuf);
+        s->txbuf = NULL;
+    }
 }
 
 static bool port_in_use(u16 port) {
@@ -231,7 +263,7 @@ static u16 ephemeral_port(void) {
 static void set_state(struct tcp_socket *s, int state) {
     s->state = state;
     if(state == ESTABLISHED) s->synced = true;
-    if(state == TIME_WAIT || (state == FIN_WAIT_2 && s->orphan)) drop_buffers(s);   /* 10/6/26 */
+    drop_buffers(s);                                     /* 10/6/26: an orphan's, TIME_WAIT's */
     if(s->orphan) s->orphan_at = getticks();             /* 10/6/26: progress */
     notify(s);
 }
@@ -336,15 +368,22 @@ static void send_ack(struct tcp_socket *s) {
     s->tx_segs++;
 }
 
+/* 10/6/26: the other end is told the connection is over, when there is one to tell */
+static void send_reset(struct tcp_socket *s) {
+    if(s->state != CLOSED && s->state != LISTEN && s->state != SYN_SENT && s->state != TIME_WAIT)
+        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
+}
+
 static void arm_rto(struct tcp_socket *s) {
     if(!s->rto_at) { s->rto_at = getticks() + TCP_RTO; s->retries = 0; }
 }
 
 /* send whatever the window allows from snd_nxt on, then the FIN if it is due. 10/6/26: sender SWS
    avoidance: a segment shorter than the MSS goes only when it is at least half the largest window
-   offered, or carries all that is queued with nothing in flight (Nagle), unless force (the persist
-   timer). What waits with nothing in flight (a shut window, one too small, a send that failed) is
-   the persist timer's (tcp_tick): it probes a shut window and sends what fits into a small one. */
+   offered, or carries all that is queued with nothing in flight (Nagle; with nodelay, in flight or
+   not), unless force (the persist timer). What waits with nothing in flight (a shut window, one too
+   small, a send that failed) is the persist timer's (tcp_tick): it probes a shut window and sends
+   what fits into a small one. */
 static void output(struct tcp_socket *s, bool force) {
     u32 in_flight = s->snd_nxt - s->snd_una;
     bool held = false;
@@ -352,7 +391,7 @@ static void output(struct tcp_socket *s, bool force) {
         u_int left = s->tx_len - in_flight, room = s->snd_wnd > in_flight ? s->snd_wnd - in_flight : 0, chunk = left;
         if(chunk > s->mss) chunk = s->mss;
         if(chunk > room) chunk = room;
-        if(!chunk || (!force && chunk < s->mss && chunk < s->max_wnd / 2 && (chunk < left || in_flight))) {
+        if(!chunk || (!force && chunk < s->mss && chunk < s->max_wnd / 2 && (chunk < left || (in_flight && !s->nodelay)))) {
             held = true;
             break;
         }
@@ -373,7 +412,7 @@ static void output(struct tcp_socket *s, bool force) {
         s->snd_nxt++;
         arm_rto(s);
     }
-    if(held && !in_flight) {
+    if((held && !in_flight) || s->shrunk) {
         if(!s->persist_at || (s->snd_wnd && s->persist_n)) {     /* off, or probing a window open now */
             s->persist_n = 0;
             s->persist_at = getticks() + TCP_RTO;
@@ -399,10 +438,38 @@ static void probe_window(struct tcp_socket *s) {
     s->persist_at = getticks() + (pause < TCP_PERSIST_MAX ? pause : TCP_PERSIST_MAX);
 }
 
-/* the oldest unacknowledged segment again (or the SYN / FIN) */
+/* 10/6/26: all that was in flight again, from snd_una, as far as the window goes (it had shut on it:
+   tcp_input()); the timer for the next time */
+static void resend(struct tcp_socket *s) {
+    u_int sent = s->snd_nxt - s->snd_una - (s->fin_sent ? 1 : 0), off = 0;
+    while(off < sent && off < s->snd_wnd) {
+        u_int chunk = sent - off;
+        if(chunk > s->mss) chunk = s->mss;
+        if(chunk > s->snd_wnd - off) chunk = s->snd_wnd - off;
+        if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una + off, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
+                        s->txbuf + off, chunk, false) != 0) break;
+        s->tx_segs++;
+        s->retrans++;
+        off += chunk;
+    }
+    if(off == sent && s->fin_sent) {
+        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
+        s->tx_segs++;
+    }
+    s->rto_at = 0;
+    arm_rto(s);
+}
+
+/* the oldest unacknowledged segment again (or the SYN / FIN). 10/6/26: of the bytes sent only (up to
+   snd_nxt): those held back (the window, Nagle) are output()'s, and an ACK past snd_nxt is not taken */
 static void retransmit(struct tcp_socket *s) {
+    u_int sent;
     s->retrans++;
-    if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) { fail(s, -ETIMEDOUT); return; }
+    if(++s->retries > (s->state == SYN_RCVD ? TCP_SYNACK_RETRIES : TCP_MAX_RETRIES)) {
+        if(s->orphan) send_reset(s);                     /* 10/6/26: it goes: its other end hears so */
+        fail(s, -ETIMEDOUT);
+        return;
+    }
     s->rto_at = getticks() + TCP_RTO * (s->retries < 4 ? s->retries : 4);
     switch(s->state) {
     case SYN_SENT:
@@ -412,8 +479,9 @@ static void retransmit(struct tcp_socket *s) {
         send_segment(s->remote_ip, s->local_port, s->remote_port, s->iss, s->rcv_nxt, TCP_SYN | TCP_ACK, window(s), NULL, 0, true);
         break;
     default:
-        if(s->tx_len) {
-            u_int chunk = s->tx_len > s->mss ? s->mss : s->tx_len;
+        sent = s->snd_nxt - s->snd_una - (s->fin_sent ? 1 : 0);
+        if(sent) {
+            u_int chunk = sent > s->mss ? s->mss : sent;
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s), s->txbuf, chunk, false);
         } else if(s->fin_sent) {
             send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
@@ -434,6 +502,7 @@ static void process_ack(struct tcp_socket *s, u32 ack) {
     if(acked) {
         memmove(s->txbuf, s->txbuf + acked, s->tx_len - acked);
         s->tx_len -= acked;
+        drop_buffers(s);                                 /* 10/6/26: an orphan's send buffer, all acknowledged */
     }
     s->snd_una = ack;
     s->rto_at = 0;
@@ -448,7 +517,7 @@ static struct tcp_socket *lookup(ipaddr_t rip, u16 rport, u16 lport) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
-        if(!s->used || s->local_port != lport) continue;
+        if(!s->used || s->local_port != lport || s->state == CLOSED) continue;   /* 10/6/26: a failed one is no connection */
         if(s->state == LISTEN) { listener = s; continue; }
         if(s->remote_ip == rip && s->remote_port == rport) return s;
     }
@@ -468,6 +537,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     u_int hlen, datalen;
     u32 seq, ack;
     u8 flags, *data;
+    bool cut = false;                                    /* 10/6/26: data that did not fit (it gets an ACK) */
 
     if(nb->len < sizeof(*th)) { netbuf_free(nb); return; }
     hlen = (th->off >> 4) * 4;
@@ -486,6 +556,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     if(s->state == LISTEN) {
         struct tcp_socket *c;
         u_int i;
+        if(flags & TCP_ACK) send_rst_for(ip, th, datalen);   /* 10/6/26: no connection for it (one evicted below, say) */
         if(!(flags & TCP_SYN) || (flags & (TCP_ACK | TCP_RST))) { netbuf_free(nb); return; }
         /* 10/6/26: a full backlog makes room by dropping the oldest half-open connection: a real client
            finishes its handshake in a round trip, so only a scan or a flood loses its place */
@@ -554,8 +625,11 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
             data += skip;
             datalen -= skip;
             seq = s->rcv_nxt;
+        } else if(!datalen && !(flags & (TCP_SYN | TCP_FIN)) && SEQ_LT(s->rcv_nxt, seq) && SEQ_LT(seq, s->rcv_nxt + rcv_open(s))) {
+            /* 10/6/26: a bare ACK ahead of us, in the window: acceptable (RFC 793); its ACK counts below */
         } else {
-            send_ack(s);        /* out of order or old: say where we are (10/6/26: also to a bare ACK, a probe) */
+            /* out of order or old: say where we are. 10/6/26: to a bare ACK only when it is old (a keepalive, a probe) */
+            if(datalen || (flags & (TCP_SYN | TCP_FIN)) || SEQ_LT(seq, s->rcv_nxt)) send_ack(s);
             netbuf_free(nb);
             return;
         }
@@ -571,8 +645,17 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
 
     s->snd_wnd = ntohs(th->win);
     if(s->snd_wnd > s->max_wnd) s->max_wnd = s->snd_wnd;
-    if(!s->snd_wnd && ack == s->snd_una && s->snd_una != s->snd_nxt) s->retries = 0;   /* 10/6/26: alive, window shut */
     process_ack(s, ack);
+    /* 10/6/26: a window shut on bytes in flight: nothing goes into it, the persist timer probes it
+       (output()); when it opens, they go again at once */
+    if(s->snd_una == s->snd_nxt) s->shrunk = false;
+    else if(!s->snd_wnd) {
+        s->shrunk = true;
+        s->rto_at = 0;
+    } else if(s->shrunk) {
+        s->shrunk = false;
+        resend(s);
+    }
 
     if(datalen && s->orphan) {
         s->rcv_nxt += datalen;                           /* 10/6/26: nobody reads it any more: taken and dropped */
@@ -581,6 +664,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         if(datalen > room) {                             /* 10/6/26: the rest comes again, the FIN with it */
             datalen = room;
             flags &= (u8)~TCP_FIN;
+            cut = true;
         }
         memcpy(s->rxbuf + s->rx_len, data, datalen);
         s->rx_len += datalen;
@@ -606,23 +690,23 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         else if(s->state == CLOSING) { set_state(s, TIME_WAIT); s->wait_until = getticks() + TCP_TIME_WAIT; }
         else if(s->state == LAST_ACK) { set_state(s, CLOSED); if(s->orphan) { sock_free(s); netbuf_free(nb); return; } }
     }
-    if(datalen) send_ack(s);
+    if(datalen || cut) send_ack(s);
     if(s->used && s->state != CLOSED) tcp_output(s);     /* the window may have opened */
     netbuf_free(nb);
 }
 
 /* 10/6/26: a connection given up at once: a reset to the other end, and the socket goes */
 static void abort_conn(struct tcp_socket *s) {
-    if(s->state != CLOSED && s->state != LISTEN && s->state != SYN_SENT && s->state != TIME_WAIT)
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
+    send_reset(s);
     sock_free(s);
 }
 
 /* 10/6/26: tcpka=<idle>[,<interval>] on the kernel command line, in seconds: keepalive sooner (the tests) */
 static void keepalive_setting(void) {
-    const char *p = strstr(bootinfo.cmdline, "tcpka=");
+    const char *p = bootinfo.cmdline;
     char *end;
     u_long idle, intvl;
+    while((p = strstr(p, "tcpka=")) != NULL && p != bootinfo.cmdline && p[-1] != ' ') p++;   /* the word only */
     if(!p) return;
     idle = strtoul(p + 6, &end, 10);
     if(idle) ka_idle = idle * HZ;
@@ -923,7 +1007,7 @@ static int start_close(struct tcp_socket *s) {
 static void make_orphan(struct tcp_socket *s) {
     s->orphan = true;
     s->orphan_at = getticks();
-    if(s->state == FIN_WAIT_2) drop_buffers(s);          /* 10/6/26: nothing to send, nobody to read */
+    drop_buffers(s);                                     /* 10/6/26: nobody reads; the send buffer once empty */
 }
 
 int tcp_close(struct tcp_socket *s) {
@@ -967,6 +1051,13 @@ int tcp_poll(struct tcp_socket *s) {
     }
     mutex_unlock(&net_lock);
     return ev;
+}
+
+/* 10/6/26: s sends small writes at once (no Nagle; the silly window rules stay): a program's connection */
+void tcp_set_nodelay(struct tcp_socket *s) {
+    mutex_lock(&net_lock);
+    s->nodelay = true;
+    mutex_unlock(&net_lock);
 }
 
 bool tcp_listening(const struct tcp_socket *s) {

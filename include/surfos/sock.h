@@ -11,7 +11,8 @@ network byte order, ports in host order. The calls (surfos/syscall.h):
 SYS_listen  (u32 port): a descriptor listening on port (1-65535), on every interface.
             -EINVAL for port 0 or above 65535, -EADDRINUSE when another socket listens on
             the port (connections a server accepted there before do not count), -ENFILE
-            without a free socket, -ENOMEM, -EMFILE without a free descriptor.
+            without a free socket, -EMFILE without a free descriptor, -ENOMEM (no memory
+            for the descriptor's file).
 SYS_accept  (int fd, struct netaddr *peer): the next connection on a listening
             descriptor. It waits as long as it takes; a kill or Ctrl+C cuts the wait short
             (-EINTR). After poll() says POLLIN on the listener it does not wait. peer, when
@@ -38,14 +39,15 @@ on a listening socket.
 write() queues as many bytes as fit in the send buffer (8 KB) and returns how many: it
 waits only while none fits (-EINTR when cut short), so after poll() says POLLOUT it does
 not wait, and a caller with more to send writes the rest later (libsurf's stdio does).
--ECONNRESET or -ETIMEDOUT when that ended the connection, -EPIPE once it is closed both
-ways, -ENOTCONN on a listening socket. A reader that stopped reading shuts its window: it
-is probed, and the bytes go on when it reads again. Small writes are gathered: while sent
-data is unacknowledged, less than a full segment waits for that acknowledgement (Nagle's
-rule; there is no TCP_NODELAY).
+-ECONNRESET or -ETIMEDOUT when that ended the connection (nothing else ends it while the
+program has it: there is no shutdown()), -ENOTCONN on a listening socket. A reader that
+stopped reading shuts its window: it is probed, and the bytes go on when it reads again.
+What is written goes out at once, however small (no Nagle delay); only a window too small
+for a sensible segment holds a small one back, a second at most (silly window avoidance).
 close() never waits: a connection's FIN goes out behind the bytes still queued and the
-socket finishes on its own (reset when it makes no progress for 30 seconds); a listening
-socket resets the connections it had not accepted.
+socket finishes on its own; when the other end stops answering (its retries run out, or
+30 seconds pass without progress) it is given up with a reset. A listening socket resets
+the connections it had not accepted.
 poll() (surfos/poll.h) says POLLIN when read() would not wait (data, the end, a reset or a
 timeout; on a listening socket a connection to accept), POLLOUT when write() would queue a
 byte at once, POLLHUP when the other end has closed or the connection is gone, POLLERR
