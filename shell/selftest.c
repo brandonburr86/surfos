@@ -978,9 +978,11 @@ static void test_tty(void) {
     struct tty *t = curTask->tty;
     char buf[16];
     int size = tty_ctl(t, TTY_GETSIZE, 0), n, status;
+    u_int cols = t->con->stream ? t->con->cols : COLUMNS, rows = t->con->stream ? t->con->rows : LINES;
     surf_task *k;
 
-    check((size >> 16) == COLUMNS && (size & 0xFFFF) == LINES, "tty: TTY_GETSIZE is the console's text grid");
+    /* 10/6/26: run in a pseudo-terminal's session (telnet), the size is the pty's (PTY_SETSIZE) */
+    check((size >> 16) == (int)cols && (size & 0xFFFF) == (int)rows, "tty: TTY_GETSIZE is the console's text grid, or the pty's size");
     tty_flush(t);
     check(tty_ctl(t, TTY_RAW, 1) == 0 && t->raw, "tty: raw mode on");
     tty_key(t, UP); tty_key(t, DEL); tty_key(t, 0x03); tty_key(t, F5); tty_key(t, 'x');

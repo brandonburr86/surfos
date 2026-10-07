@@ -309,10 +309,23 @@ SMOKE = [
     ('run ptytest pager', ['the lines between them: 1-9 10-18 19-27 28-36 37-45 46-54 55-60', 'PTYTEST pager PASS',
                            'exit status 0']),
     ('run ptytest flood', ['lines 1-1000, all of them, in order', 'PTYTEST flood PASS', 'exit status 0']),
-    ('run ptytest hangup', ['the master is closed', 'count is gone', "count's exit status -1 (killed)",
-                            'is free again', 'PTYTEST hangup PASS', 'exit status 0']),
-    ('run ptytest poll', ['timed out after', 'POLLNVAL', '(POLLIN | POLLHUP)', 'killed: gone after', 'PTYTEST poll PASS',
-                          'exit status 0']),
+    ('run ptytest hangup', ['count: gone', 'pagetest at --More--: gone', 'pagetest waiting for room: gone',
+                            'each pty is free again', 'PTYTEST hangup PASS', 'exit status 0']),
+    # 10/6/26 (the review): the hangup's kill waits for a kernel command however long; a kernel thread started in a
+    # session is on F1; a second session starts clean; a master's write never waits (a full queue: a short count,
+    # EAGAIN, POLLOUT again), and Ctrl+C drops what was typed ahead; Ctrl+C does not reach a detached process; a
+    # session is kept apart from F1 (its output, F1's keys) and poll() sees a key queued on the console
+    ('run ptytest hangup-call', ['still there', 'the kernel log says the kill waited', 'PTYTEST hangup-call PASS',
+                                 'exit status 0']),
+    ('@pty-tcpecho', []),
+    ('run ptytest reuse', ['line mode, and only its own keys', 'opened again: 80x24', 'PTYTEST reuse PASS', 'exit status 0']),
+    ('run ptytest fullqueue', ['the input queue is full', 'EAGAIN, and no POLLOUT', 'POLLOUT came back after',
+                               'what was typed ahead never ran', 'PTYTEST fullqueue PASS', 'exit status 0']),
+    ('run ptytest detach-ctrlc', ['detached from surfsh', 'the detached sleeper lived on', 'PTYTEST detach-ctrlc PASS',
+                                  'exit status 0']),
+    ('@pty-isolate', []),
+    ('run ptytest poll', ['timed out after', 'POLLNVAL', 'POLLHUP at once', '(POLLIN | POLLHUP)', 'two masters and the console',
+                          'killed: gone after', 'PTYTEST poll PASS', 'exit status 0']),
     ('run ptytest ps', ['init', 'ptytest', 'PTYTEST ps PASS', 'exit status 0']),
     ('run ptytest detach', ['detached: parent 1', 'ECHILD', 'PTYTEST detach PASS', 'exit status 0']),
     ('@kmsg', []),
@@ -463,6 +476,12 @@ TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcm
             'run kcmdtest pings /hda1 10.0.2.2': 60, 'run kcmdtest kills /hda1 10.0.2.2': 180}
 # anything that means the kernel fell over
 BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING']
+
+# 10/6/26: steps that need every echo request answered through QEMU's user-mode network, which now and then
+# loses one when several QEMUs on the host ping at once: such a step runs once more when it failed and the
+# kernel's ping said a request timed out, and fails only if the second run fails too
+ICMP_STEPS = {'ping 10.0.2.2 2', 'run kcmdtest pings /hda1 10.0.2.2'}
+LOST_PING = b'request timeout for icmp_seq'
 
 
 class Qemu:
@@ -953,7 +972,7 @@ def ctrl_c_check(q):
     (ping) cuts the command short: its summary, then surfsh's prompt saying it failed (status 130); while surfsh
     waits for a program (count), the program is killed: [pid n killed], the prompt saying so; surfsh lives on"""
     q.send('ping 10.0.2.2 100\n')
-    ok = q.expect('icmp_seq=2', 15)
+    ok = q.expect(re.compile(rb'icmp_seq[= ]2\b'), 15)     # its second request, answered or not: it is pinging
     if ok:
         q.ser.sendall(b'\x03')
         ok = q.expect('packets transmitted', 10) and q.expect(FAILED_PROMPT, 10)
@@ -991,6 +1010,35 @@ def kmsg_check(q):
 
 
 CONSOLE_CHECKS['@kmsg'] = kmsg_check
+
+
+def pty_tcpecho_check(q):
+    """a kernel thread started in a pty session (tcpecho) is on F1: the session ends with exit, the thread lives on
+    (ptytest tcpecho checks those), and what it prints shows on F1 (the serial line) rather than in the session"""
+    start = len(q.transcript)
+    q.send('run ptytest tcpecho 2323\n')
+    ok = q.expect('PTYTEST tcpecho PASS', 20) and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    ok = ok and b'tcpecho: listening on port 2323' in q.transcript[start:]
+    return ('pty: a kernel thread started in a session (tcpecho) runs on F1 and outlives the session', ok)
+
+
+def pty_isolation_check(q):
+    """a pty session's output is not shown on F1, a line typed on F1 goes to the program reading F1 and not to the
+    session, and poll() on the console sees it queued (ptytest isolate)"""
+    start = len(q.transcript)
+    q.send('run ptytest isolate\n')
+    ok = q.expect('type a line on the console now', 10)
+    if ok:
+        q.send('f1-typed-line\n')
+        ok = (q.expect('POLLIN on the console', 10) and q.expect('the console read "f1-typed-line"', 10) and
+              q.expect('PTYTEST isolate PASS', 10) and q.expect(PROMPT, 10))
+    text = q.transcript[start:]
+    ok = ok and b'pagetest question' not in text and b'pagetest answer' not in text
+    return ('pty: a session prints only to its master, F1 keeps its keys, poll() sees a key on the console', ok)
+
+
+CONSOLE_CHECKS['@pty-tcpecho'] = pty_tcpecho_check
+CONSOLE_CHECKS['@pty-isolate'] = pty_isolation_check
 
 
 def surfsh_corner_check(q):
@@ -1666,15 +1714,21 @@ def run_smoke(q, boot_timeout, reboot=None):
                 continue
             cmd = cmd.format(**q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
-            q.send(cmd + '\n')
-            ok = all(q.expect(e, limit) for e in expects)
-            for line, exp in follow:
-                if isinstance(line, bytes):                  # keys as they are, for a full-screen program
-                    q.ser.sendall(line)
-                else:
-                    q.send(line + '\n')
-                ok = ok and all(q.expect(e, limit) for e in exp)
-            ok = ok and q.expect(PROMPT, limit)
+            for attempt in (1, 2):
+                start = len(q.transcript)
+                q.send(cmd + '\n')
+                ok = all(q.expect(e, limit) for e in expects)
+                for line, exp in follow:
+                    if isinstance(line, bytes):              # keys as they are, for a full-screen program
+                        q.ser.sendall(line)
+                    else:
+                        q.send(line + '\n')
+                    ok = ok and all(q.expect(e, limit) for e in exp)
+                ok = ok and q.expect(PROMPT, limit)
+                if ok or attempt == 2 or cmd not in ICMP_STEPS or LOST_PING not in q.transcript[start:]:
+                    break
+                q.expect(PROMPT, limit)                      # the end of the first run
+                print(f'  {cmd}: an echo request went unanswered (QEMU user network): once more')
             results.append((cmd, ok))
     q.pump(0.5)
     text = q.text()

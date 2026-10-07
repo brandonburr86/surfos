@@ -23,13 +23,21 @@ returns 0 once the session has ended (no task has the pty as its terminal any mo
 everything was read. write() on the master side delivers the bytes as typed keys, with
 the serial line's rules: in line mode CR is Enter, DEL is Backspace and the escape
 sequences of the cursor keys become those keys; in raw mode (TTY_RAW) the bytes pass as
-they are; Ctrl+C interrupts the foreground job as on a console.
+they are; Ctrl+C interrupts the foreground job as on a console, and in line mode drops the
+keys typed ahead (on the consoles too). write() never waits: it takes the bytes in order
+while each fits in the terminal's input queue (256 keys) and returns how many it took, or
+-EAGAIN when the first does not fit; a byte that needs no room always fits (a line-mode
+Ctrl+C; the rest of a cursor key's escape sequence, which line mode swallows). poll() on the
+master side (surfos/poll.h): POLLIN when there is output or the session has ended, POLLHUP
+once it has ended and everything was read (the read that returns 0 is next), POLLOUT while
+a key fits.
 
 On the pty, TTY_GETSIZE answers what PTY_SETSIZE set (80x24 at first), TTY_CAPS answers
 TTY_CAP_UTF8 | TTY_CAP_COLOR, and TTY_RAW and TTY_PAGE work as on a console (the pager
 counts the rows that PTY_SETSIZE set). Closing the last master descriptor hangs up:
 every task whose terminal is the pty is killed (the kill that waits for the end of a
-system call), its reads end, and the pty is free again once they are gone.
+system call, however long it takes: a kernel command is never killed in the middle), its
+reads end, and the pty is free again once they are gone.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/pty.h.
 */

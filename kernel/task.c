@@ -10,7 +10,8 @@ when that cannot be (see init_main()).
 10/6/26: a kill waits for the end of the call its task is in (task.h), and Ctrl+C
 reaches the job in the foreground (task_interrupt_job()).
 10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c);
-the task list as programs see it, and a process leaving its shell's job (kernel/proc.c).
+the task list as programs see it, and a process leaving its shell's job (kernel/proc.c). A
+kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 */
 
 #include <surfos/types.h>
@@ -177,6 +178,7 @@ static void task_stublet(void) {
 }
 
 static void kill_escalate(void *arg);
+static void kill_hangup(surf_task *t);
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -194,6 +196,11 @@ static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, sur
     t->prio = prio;
     t->flags = (flags & ~TF_INCALL) | (ring == USER ? TF_USER : 0);
     t->in_call = (flags & TF_INCALL) ? TC_SYSCALL : 0;     /* 10/6/26: a kill waits for the call to end */
+    /* 10/6/26: a kernel thread (no TF_INCALL: not a process) is never part of a pseudo-terminal's
+       session (kernel/pty.c): started from one, it prints on F1 and reads F1's keys, as a kernel
+       thread of the boot does. So a session ends with its processes, and a hangup's kill, which
+       waits for the end of a call, never meets a thread that is in none. */
+    if(con && con->stream && !(flags & TF_INCALL)) con = &conArray[0];
     t->con = con;
     t->tty = tty_for_console(con);
     strlcpy(t->cwd, (curTask && curTask->cwd[0]) ? curTask->cwd : "/", sizeof(t->cwd));
@@ -230,11 +237,12 @@ surf_task *kthread_create_on(const char *name, surf_console *con, kthread_fn fn,
     if(!t) return NULL;
     t->entry = fn;
     t->arg = arg;
-    /* 10/6/26: a process started on a pseudo-terminal that has hung up (kernel/pty.c) gets the kill
-       that waits, as the tasks there did: it ends once it is loaded */
+    /* 10/6/26: a process started on a pseudo-terminal that has hung up (kernel/pty.c) gets the
+       hangup's kill, as the tasks there did: it ends once it is loaded */
     if((flags & TF_INCALL) && t->tty && t->tty->hungup) {
-        t->intr |= TI_KILL;
-        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+        u_long irqf = irq_save();
+        kill_hangup(t);
+        irq_restore(irqf);
     }
     task_start(t);
     return t;
@@ -350,12 +358,31 @@ void kill_task(surf_task *t) {
         /* gone already, or ending by itself (task_exit()) */
     } else if(!t->in_call) {
         become_zombie(t, -1);
-    } else if(!(t->intr & TI_KILL)) {
-        t->intr |= TI_KILL;
+    } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
+        t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
         ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
         wake_intr(t);
     }
     irq_restore(flags);
+}
+
+/* 10/6/26: the kill of a pseudo-terminal's hangup (task_kill_tty(), kthread_create_on()). In its own
+   code a process ends at once, as with kill_task(); inside a call it is marked and its waits that may
+   be cut short are, but no escalation follows: it ends when the call does, however long that takes,
+   so whatever the call holds (a file system's lock, a claim) is let go on the way out. The kernel log
+   says once, KILL_WAIT_MS later, that it is waited for (kill_escalate()). Interrupts off. */
+static void kill_hangup(surf_task *t) {
+    if(t->state == TS_DEAD ||                   /* who it spares, all here: gone already, */
+       (t->in_call & TC_EXIT) ||                /* ending already (task_exit(): its files are closing), */
+       (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
+        return;
+    if(!t->in_call) {
+        become_zombie(t, -1);
+        return;
+    }
+    t->intr |= TI_KILL | TI_HANGUP;
+    ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+    wake_intr(t);
 }
 
 /* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing
@@ -365,6 +392,13 @@ static void kill_escalate(void *arg) {
     surf_task *t = (surf_task *)arg;
     char line[160];
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) return;
+    if(t->intr & TI_HANGUP) {                       /* 10/6/26: a hangup's kill waits for the call, however long */
+        snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still in its %s %u ms after its terminal hung up: "
+                 "waiting for its end%s\n", t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call",
+                 (u_int)KILL_WAIT_MS, t->mutexes ? ", holding a lock" : "");
+        klog_write(line);
+        return;
+    }
     if(t == curTask && t->crit) {                   /* inside KCRIT_ENTER (drawing): a tick later */
         ktimer_start(&t->kill_timer, 10, false);
         return;
@@ -454,8 +488,9 @@ u_int task_count_tty(struct tty *tty) {
 }
 
 /* 10/6/26: a pseudo-terminal hangs up (kernel/pty.c): every live task whose terminal it is gets
-   the kill that waits for the end of its call; how many. The calling task, if it is one of them,
-   only inside a call (it ends at the call's end): otherwise it is ending already. */
+   the hangup's kill (kill_hangup(): it waits for the end of the call, however long); how many.
+   They are all processes (a kernel thread is never on a pty: task_alloc()). The calling task, if
+   it is one of them, only inside a call (it ends at the call's end): otherwise it is ending already. */
 u_int task_kill_tty(struct tty *tty) {
     surf_task *t;
     u_int n = 0;
@@ -463,7 +498,7 @@ u_int task_kill_tty(struct tty *tty) {
     for(t = all_tasks; t; t = t->all_next) {
         if(t->tty != tty || t->state == TS_DEAD || t == idle_task) continue;
         if(t == curTask && !t->in_call) continue;
-        kill_task(t);
+        kill_hangup(t);
         n++;
     }
     irq_restore(flags);

@@ -63,6 +63,7 @@ static void stream_clear(surf_console *con);    /* 10/6/26: stream consoles (bel
 static void stream_csi(surf_console *con, int final);
 static int stream_how(void);
 static bool panicking;                          /* 10/6/26: console_panic() was called: the report goes to the screen */
+#define PTY_OUT_LIT(con, lit, how) pty_out(con, lit, sizeof(lit) - 1, how)     /* 10/6/26: a sequence of our own */
 
 /* 10/6/26: the size the pager counts: the grid's, or a stream console's own */
 static u_int con_cols(surf_console *con) { return con->stream ? con->cols : COLUMNS; }
@@ -329,7 +330,7 @@ void console_reset_ansi(surf_console *con) {
     if(con == conActive && mirror_serial && marked)
         serial_puts("\033[0m\033[?25h");                /* the terminal mirrors this console: undo it there too */
     /* 10/6/26: a stream console's far terminal likewise (a sequence half sent ends at the ESC) */
-    if(con->stream && (marked || con->esc) && pty_out(con, "\033[0m\033[?25h", 10, PTY_OUT_URGENT))
+    if(con->stream && (marked || con->esc) && PTY_OUT_LIT(con, "\033[0m\033[?25h", PTY_OUT_URGENT))
         con->shown = WHITE_TXT;
     con->esc = ESC_NONE;
     con->fg = con->bg = 0;
@@ -628,7 +629,7 @@ static void stream_csi(surf_console *con, int final) {
 static void stream_clear(surf_console *con) {
     u_long flags;
     console_reset_ansi(con);
-    pty_out(con, "\033[2J\033[H", 7, stream_how());
+    PTY_OUT_LIT(con, "\033[2J\033[H", stream_how());
     con->loc.x = 0;
     con->wrap = 0;
     con->at_home = 1;
@@ -640,6 +641,13 @@ static void stream_clear(surf_console *con) {
         page_show(con);
         irq_restore(flags);
     }
+}
+
+/* a sequence of the console's own into out; its length (without the NUL) */
+static u_int stream_lit(char *out, const char *s) {
+    u_int n = (u_int)strlen(s);
+    memcpy(out, s, n);
+    return n;
 }
 
 /* one byte printed on a stream console (kputch()) */
@@ -670,24 +678,25 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         break;
     case 0x08:                                          /* erase the cell before, as the screen does */
         if(con->wrap) {
-            memcpy(out + n, "\r\033[999C\033[K", 10);
-            n += 10;
+            n += stream_lit(out + n, "\r\033[999C\033[K");
             con->wrap = 0;
         } else if(con->loc.x > 0) {
-            memcpy(out + n, "\b \b", 3);
-            n += 3;
+            n += stream_lit(out + n, "\b \b");
             con->loc.x--;
+        } else if(con->at_home) {
+            return;                                     /* the top left: nothing, as on the screen */
         } else {
-            memcpy(out + n, "\033[A\033[999C\033[K", 13);
-            n += 13;
+            n += stream_lit(out + n, "\033[A\033[999C\033[K");
             con->loc.x = con->cols - 1;
         }
         con->page_fresh = 0;
+        con->at_home = 0;
         break;
     case '\t':
         if(!con->wrap) con->loc.x = (con->loc.x + 8) & ~7u;
         if(con->loc.x >= con->cols) con->loc.x = con->cols - 1;
         con->page_fresh = 0;
+        con->at_home = 0;
         out[n++] = '\t';
         break;
     default:
@@ -695,6 +704,7 @@ static void stream_put(surf_console *con, TEXTCOLOR color, u_char b) {
         if((b & 0xC0) != 0x80) {                        /* a character (ASCII, or a UTF-8 one's first byte): a column */
             if(con->wrap) stream_row(con);
             con->page_fresh = 0;
+            con->at_home = 0;                           /* the cursor left the top left: ESC[J is no clear screen */
             if(con->loc.x + 1 < con->cols) con->loc.x++;
             else con->wrap = 1;
         }
@@ -833,11 +843,12 @@ static void stream_show(surf_console *con) {
         memcpy(out + n, "\033[27m", 5);
         n += 5;
     }
-    pty_out(con, out, n, PTY_OUT_URGENT);
+    if(!pty_out(con, out, n, PTY_OUT_URGENT)) return;  /* no room at all (nobody reads): nothing shown to take away */
     con->page_len = (u_char)len;
     con->page_shown = 1;
     con->loc.x = len;
     con->wrap = 0;
+    con->at_home = 0;
 }
 
 /* the question on the cursor's row, from its start, the cursor after it. Interrupts off. */
@@ -870,7 +881,7 @@ static void page_unshow(surf_console *con) {
     u_int i;
     if(!con->page_shown) return;
     if(con->stream) {                   /* 10/6/26: the far terminal's row cleared, the cursor at its start */
-        pty_out(con, "\r\033[K", 4, PTY_OUT_URGENT);
+        PTY_OUT_LIT(con, "\r\033[K", PTY_OUT_URGENT);
         con->page_shown = 0;
         con->loc.x = 0;
         con->wrap = 0;
@@ -972,7 +983,7 @@ static void page_ask(surf_console *con, struct tty *t) {
     if(con->wrap) {
         if(con->stream) {                               /* 10/6/26: the far terminal's next row */
             stream_row(con);
-            pty_out(con, "\n", 1, PTY_OUT_URGENT);
+            PTY_OUT_LIT(con, "\n", PTY_OUT_URGENT);
         } else {
             newline(con);
             if(con == conActive && mirror_serial) serial_puts("\r\n");
