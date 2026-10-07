@@ -65,6 +65,11 @@ void pty_task_gone(struct surf_task *task) { (void)task; }
 static int poll_wakes;                  /* 10/6/26: poll_wake() calls, for the test */
 void poll_wake(void) { poll_wakes++; }
 
+/* 10/6/26: the clock (ticks of 10 ms), moved by the test (sim_time_ms()) */
+static u_long sim_now;
+u_long getticks(void) { return sim_now; }
+u_long ms_to_ticks(u_long ms) { return ms >= 10 ? (ms + 9) / 10 : 1; }
+
 int framebuffer_init(void) { return 0; }
 void framebuffer_bind(const u8 *cells) { (void)cells; }
 void framebuffer_grid(u_int *cols, u_int *rows) { *cols = 80; *rows = 25; }
@@ -197,6 +202,7 @@ void sim_stream_pos(int *x, int *wrap) { *x = (int)conArray[term].loc.x; *wrap =
 void sim_term_input(int c) { tty_term_input(&ttys[term], &term_esc, (u_char)c); }
 int sim_term_queues(int c) { return tty_term_queues(&ttys[term], term_esc, (u_char)c); }
 int sim_room(void) { return (int)tty_room(&ttys[term]); }
+void sim_time_ms(int ms) { sim_now += (u_long)ms / 10; }
 int sim_poll_wakes(void) { return poll_wakes; }
 void sim_clear(void) { clearConsole(curTask->con); }
 int sim_key_up(void) { return UP; }

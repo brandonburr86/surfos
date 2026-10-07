@@ -14,7 +14,7 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               a real client still gets its SYN-ACK and is accepted
   flood       five SYNs never acknowledged: a real client takes a half-open one's place
   reset       a connection reset before the server accepts it: accept() hands it out,
-              read() says ECONNRESET
+              read() says ECONNRESET; a segment for it after the reset gets a reset
   greet       a server that greets and closes (or resets) before the guest acknowledged
               its SYN-ACK: connect() succeeds and read() gets the greeting, then the end
   window      a reader that shuts its window and opens it again without saying so: the
@@ -25,11 +25,24 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
   churn       40 connections made and closed in a row: none fails for want of a socket
   reserve     programs that hold every socket they can: the kernel's own connection
               (httpget) still gets one
-  sws         100-byte writes to a client that keeps its window small: segments of a
-              useful size, and a reader that opens 100 bytes at a time gets one a second
-              (no silly window syndrome)
+  sws         100-byte writes to a client that keeps its window small: a reader that opens
+              100 bytes at a time gets one segment a second (no silly window syndrome)
   linger      a closed connection whose other end never sends its FIN, then TIME_WAIT
               with the link down: neither keeps its buffers, TIME_WAIT ends on time
+  lost        a 1-byte segment lost while bytes behind it wait for the window: it is sent
+              again alone, and the bytes and the FIN follow its acknowledgement
+  latency     bursts of small writes (1, 20, 30 bytes) to a client that delays its ACKs
+              200 ms: each burst arrives whole at once, not held for the ACK (no Nagle)
+  zwprobe     a full receive buffer probed with a byte at a time (BSD, macOS and Windows
+              probe so): each probe gets an ACK saying the window is shut
+  evict       a client whose half-open connection a later SYN took the place of: its ACK
+              and data get a reset at once, and the server serves the next client
+  ackahead    the other end's segment lost, then its bare ACK ahead of the guest: taken (it
+              acknowledges the guest's data), and not answered (no ACK ping-pong)
+  orphans     closed connections whose FIN is not acknowledged (FIN_WAIT_1, LAST_ACK): no
+              buffers held while they finish
+  shrink      a client that shrinks its window to 0 under bytes in flight: probes with their
+              backoff, no full segment every second; when it opens, everything arrives
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -49,7 +62,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rawnet                                       # noqa: E402
-from rawnet import ACK, FIN, PSH, Conn, Server     # noqa: E402
+from rawnet import ACK, FIN, PSH, RST, Conn, Server   # noqa: E402
 
 
 def load_harness():
@@ -89,10 +102,11 @@ class Rig:
         return all(self.q.expect(e, timeout) for e in expects) and self.q.expect(self.qr.PROMPT, timeout)
 
     def start(self, line, first):
-        """a command in the background (&) that must print first"""
-        self.mark()
+        """a command in the background (&) that must print first: before the shell's '] started' or after it"""
+        m = self.mark()
         self.q.send(line + ' &\n')
-        return self.q.expect('] started', 10) and self.q.expect(self.qr.PROMPT, 10) and self.q.expect(first, 10)
+        ok = self.q.expect('] started', 10) and self.q.expect(self.qr.PROMPT, 10)
+        return ok and (first in self.since(m) or self.q.expect(first, 10))
 
     def expect(self, text, timeout=15):
         return self.q.expect(text, timeout)
@@ -160,6 +174,11 @@ def sc_reset(rig):
     c = Conn(rig.net, 2200, 23)
     ok = c.connect() is not None and ok
     c.rst()
+    rig.q.wait(0.2)
+    rig.net.drain()
+    c.ack(flags=ACK | PSH, data=b'late\n')         # the failed connection is none: a reset, not an ACK
+    r = rig.net.wait(lambda s: c.mine(s), 2)
+    ok = r is not None and bool(r.flags & RST) and ok
     return rig.expect('nettest: connection from 10.0.2.2 port 2200') and \
         rig.expect('nettest: read 0 bytes, then Connection reset by peer') and ok
 
@@ -272,7 +291,7 @@ def sc_sws(rig):
     ok = c.connect() is not None and ok
     got, segs = b'', 0
     deadline = time.time() + 10
-    while len(got) < 12000 and time.time() < deadline:   # a reader that keeps up: the writes travel together
+    while len(got) < 12000 and time.time() < deadline:   # a reader that keeps up
         s = rig.net.wait(lambda s: c.mine(s) and s.data, 1.0)
         if not s:
             continue
@@ -283,7 +302,7 @@ def sc_sws(rig):
         c.ack(win=4096)
     size = len(got) // max(segs, 1)
     got += c.receive(4096, win_for=lambda g: max(0, 4096 - g))     # then it stops reading: the window shuts
-    t0, small = time.time(), 0
+    t0, small, sizes = time.time(), 0, []
     while time.time() - t0 < 4:                     # a silly reader: room for 100 bytes, never more
         s = rig.net.wait(lambda s: c.mine(s) and (s.data or c.is_probe(s)), 0.5)
         if not s:
@@ -292,9 +311,11 @@ def sc_sws(rig):
             got += s.data
             c.rcv = (c.rcv + len(s.data)) & 0xffffffff
             small += 1
+            sizes.append(len(s.data))
         c.ack(win=100)
     got += c.receive(n - len(got), win_for=lambda g: 8192, timeout=30)   # it reads everything again
-    ok = ok and got == pattern(n) and size >= 400 and 1 <= small <= 6
+    # no storm: a segment a second at most into the small window, each filling it (no smaller pieces)
+    ok = ok and got == pattern(n) and 1 <= small <= 6 and all(x == 100 for x in sizes)
     ok = rig.expect('nettest: wrote %d bytes in' % n, 15) and ok
     rig.finish(c)
     print('        (100-byte writes: %d bytes a segment; a reader offering 100 bytes: %d segments in 4 s)' % (size, small))
@@ -336,6 +357,177 @@ def sc_linger(rig):
     after = heap_used(rig)
     ok = ok and after is not None and held == after and tw == after
     print('        (heap in use: %s bytes in FIN_WAIT_2, %s in TIME_WAIT, %s with the connection gone)' % (held, tw, after))
+    return ok
+
+
+def sc_lost(rig):
+    ok = rig.start('nettest burst 23 1 -1 1 2', 'listening on port 23')
+    c = Conn(rig.net, 3100, 23, win=1)              # a window of one byte: the 2 bytes after it wait
+    ok = c.connect() is not None and ok
+    first = rig.net.wait(lambda s: c.mine(s) and s.data, 5)          # lost on the way: not acknowledged
+    again = rig.net.wait(lambda s: c.mine(s) and s.data, 3)          # sent again: that byte, no more
+    ok = first is not None and again is not None and again.seq == first.seq and len(again.data) == 1 and ok
+    got = b''
+    if again:
+        got = again.data
+        c.rcv = (again.seq + len(again.data)) & 0xffffffff
+        c.ack(win=8192)                             # acknowledged, and the window opens
+    got += c.receive(2, win_for=lambda g: 8192, timeout=5)
+    ok = got == pattern(3) and rig.finish(c) and ok                  # the held bytes, then the FIN
+    ok = rig.expect('nettest: burst closed') and ok
+    print('        (sent again: %d byte(s); then %d more and the FIN)' % (len(again.data) if again else 0, len(got) - 1))
+    return ok
+
+
+def sc_latency(rig):
+    sizes, bursts = (1, 20, 30), 4
+    per = sum(sizes)
+    ok = rig.start('nettest burst 23 %d 300 %s' % (bursts, ' '.join(map(str, sizes))), 'listening on port 23')
+    c = Conn(rig.net, 3200, 23)
+    ok = c.connect() is not None and ok
+    got, at, ack_due = b'', [], None
+    deadline = time.time() + 10
+    while len(got) < bursts * per and time.time() < deadline:
+        s = rig.net.wait(lambda s: c.mine(s) and s.data, 0.5 if ack_due is None else max(0.001, ack_due - time.time()))
+        if s and s.seq == c.rcv:
+            at += [s.t] * len(s.data)               # when each byte came
+            got += s.data
+            c.rcv = (c.rcv + len(s.data)) & 0xffffffff
+            if ack_due is None:
+                ack_due = time.time() + 0.2         # a client that delays its ACK 200 ms
+        if ack_due is not None and time.time() >= ack_due:
+            c.ack()
+            ack_due = None
+    c.ack(flags=ACK | FIN)
+    ok = rig.expect('nettest: read 0 bytes, then EOF') and ok
+    rig.finish(c)
+    spread = [round((at[b * per + per - 1] - at[b * per]) * 1000) for b in range(bursts) if len(at) >= (b + 1) * per]
+    ok = ok and got == pattern(bursts * per) and len(spread) == bursts and max(spread) < 100
+    print('        (bursts of %s-byte writes, ACKs delayed 200 ms: %s ms from the first byte of each to its last)' % (
+        '+'.join(map(str, sizes)), spread))
+    return ok
+
+
+def sc_zwprobe(rig):
+    ok = rig.start('nettest sleepsrv 23 5000', 'listening on port 23')
+    c = Conn(rig.net, 3300, 23)
+    ok = c.connect() is not None and ok
+    data = pattern(8192)
+    for i in range(0, len(data), 1460):             # the guest's receive buffer, full: nobody reads yet
+        c.ack(flags=ACK | PSH, data=data[i:i + 1460])
+    rig.q.wait(0.5)
+    rig.net.drain()
+    answers = 0
+    for i in range(3):                              # a byte into the shut window, not taken
+        rig.net.send(c.pp, c.gp, c.snd, c.rcv, ACK | PSH, 8192, b'+')
+        a = rig.net.wait(lambda s: c.mine(s) and not s.data and not c.is_probe(s) and s.ack == c.snd, 1.0)
+        answers += a is not None and a.win == 0
+    c.ack(flags=ACK | FIN)                          # the end, where the probes' byte was
+    ok = rig.expect('nettest: read 8192 bytes, then EOF', 10) and answers == 3 and ok
+    rig.finish(c)
+    print('        (three 1-byte probes of a full receive buffer: %d answered, window 0)' % answers)
+    return ok
+
+
+def sc_evict(rig):
+    ok = rig.start('nettest sleepsrv 23 3000', 'listening on port 23')
+    c = Conn(rig.net, 3400, 23)
+    ok = c.syn() is not None and ok                 # a client whose ACK is slow to come
+    others = [Conn(rig.net, 3410 + i, 23) for i in range(4)]
+    for o in others:                                # four more SYNs: the backlog (4) is full, and the oldest
+        ok = o.syn() is not None and ok             # half-open entry, the slow client's, makes room
+    rig.net.drain()
+    c.ack(flags=ACK | PSH, data=b'hello\n')         # its handshake's ACK, and data: no connection for it now
+    r = rig.net.wait(lambda s: c.mine(s), 2)
+    ok = r is not None and bool(r.flags & RST) and ok
+    for o in others:
+        o.rst()
+    d = real_client(rig, 3420)                      # the next client is served
+    ok = d is not None and rig.expect('nettest: connection from 10.0.2.2 port 3420') and \
+        rig.expect('nettest: read 6 bytes, then EOF') and ok
+    if d:
+        rig.finish(d)
+    print('        (the evicted client: %s)' % ('a reset' if r is not None and r.flags & RST else 'no answer' if r is None else repr(r)))
+    return ok
+
+
+def sc_ackahead(rig):
+    ok = rig.start('nettest burst 23 1 0 100', 'listening on port 23')
+    c = Conn(rig.net, 3600, 23)
+    ok = c.connect() is not None and ok
+    d = rig.net.wait(lambda s: c.mine(s) and s.data, 5)          # the guest's 100 bytes arrive,
+    ok = d is not None and ok
+    if d:
+        c.rcv = (d.seq + len(d.data)) & 0xffffffff
+    c.snd += 10                                     # but 10 bytes of ours are lost on the way,
+    c.ack()                                         # and our ACK of the 100 comes after them: ahead of the guest
+    t0, n = time.time(), 0
+    while time.time() - t0 < 2:                     # nothing comes back: no answer to it, and no resending
+        s = rig.net.wait(lambda s: c.mine(s), 0.25)
+        if s:
+            n += 1
+            if s.data or s.seq != c.rcv:            # (a strict end answers what it cannot take)
+                c.ack()
+    rig.net.send(c.pp, c.gp, c.snd - 10, c.rcv, ACK | PSH, 8192, b'0123456789')   # the lost bytes again
+    c.ack(flags=ACK | FIN)
+    ok = rig.expect('nettest: read 10 bytes, then EOF') and n == 0 and ok
+    rig.finish(c)
+    print('        (segments from the guest in 2 s after an ACK ahead of it: %d)' % n)
+    return ok
+
+
+def sc_orphans(rig):
+    ok = rig.start('nettest writer 23 100', 'listening on port 23')
+    a = Conn(rig.net, 3500, 23)
+    ok = a.connect() is not None and ok
+    ok = a.receive(100) == pattern(100) and ok      # the data acknowledged, the FIN behind it not (FIN_WAIT_1)
+    fa = rig.net.wait(lambda s: a.mine(s) and s.flags & FIN, 5)
+    ok = fa is not None and rig.expect('nettest: wrote 100 bytes in') and ok
+    ok = rig.start('nettest reader 23', 'listening on port 23') and ok
+    b = Conn(rig.net, 3501, 23)
+    ok = b.connect() is not None and ok
+    b.ack(flags=ACK | FIN)                          # its other end closes first, the reader after the end:
+    fb = rig.net.wait(lambda s: b.mine(s) and s.flags & FIN, 5)  # its FIN not acknowledged (LAST_ACK)
+    ok = fb is not None and rig.expect('nettest: read 0 bytes, then EOF') and ok
+    rig.q.wait(0.5)
+    m = rig.mark()
+    rig.run('netstat')
+    ok = 'FIN_WAIT_1' in rig.since(m) and 'LAST_ACK' in rig.since(m) and ok
+    held = heap_used(rig)
+    if fa:                                          # now they finish
+        a.fin = (fa.seq + len(fa.data)) & 0xffffffff
+        rig.finish(a)
+    if fb:
+        b.rcv = (fb.seq + len(fb.data) + 1) & 0xffffffff
+        b.ack()
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    after = heap_used(rig)
+    ok = ok and after is not None and held == after
+    print('        (heap in use: %s bytes with the two finishing, %s with them gone)' % (held, after))
+    return ok
+
+
+def sc_shrink(rig):
+    n = 12000
+    ok = rig.start('nettest writer 23 %d 4096' % n, 'listening on port 23')
+    c = Conn(rig.net, 3700, 23, win=4096)
+    ok = c.connect() is not None and ok
+    t0, data, probes = time.time(), 0, 0
+    while time.time() - t0 < 5:                     # nothing taken, and the window shrunk to 0 under what is in flight
+        s = rig.net.wait(lambda s: c.mine(s), 0.5)
+        if not s:
+            continue
+        if s.data:
+            data += 1
+        elif c.is_probe(s):
+            probes += 1
+        c.ack(win=0)
+    c.ack(win=8192)                                 # it opens: what was in flight comes again, and the rest
+    got = c.receive(n, win_for=lambda g: 8192, timeout=20)
+    ok = rig.expect('nettest: wrote %d bytes in' % n, 15) and got == pattern(n) and data <= 3 and probes >= 1 and ok
+    rig.finish(c)
+    print('        (5 s with the window shrunk to 0: %d data segments, %d probes; then %d bytes)' % (data, probes, len(got)))
     return ok
 
 
@@ -395,7 +587,7 @@ def sc_pollstall(rig):
 SCENARIOS = [
     ('scan', sc_scan, 'a SYN scan does not make a listener deaf'),
     ('flood', sc_flood, 'SYNs never acknowledged give their place to a real client'),
-    ('reset', sc_reset, 'a connection reset before accept(): accepted, read() says ECONNRESET'),
+    ('reset', sc_reset, 'a connection reset before accept(): accepted, read() says ECONNRESET; then it is none'),
     ('greet', sc_greet, 'a server that greets and closes (or resets) at once: connect() succeeds, read() says so'),
     ('window', sc_window, 'a shut window is probed until it opens: every byte arrives'),
     ('fin', sc_fin, 'a FIN behind data that did not fit waits for that data'),
@@ -404,6 +596,13 @@ SCENARIOS = [
     ('reserve', sc_reserve, "programs that take every socket leave one for the kernel's own connection"),
     ('sws', sc_sws, 'small writes and small windows make no storm of small segments'),
     ('linger', sc_linger, 'FIN_WAIT_2 and TIME_WAIT hold no buffers; TIME_WAIT ends on time with the link down'),
+    ('lost', sc_lost, 'a lost small segment is sent again as it was, and what waited behind it follows'),
+    ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
+    ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
+    ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
+    ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
+    ('orphans', sc_orphans, 'a closed connection still finishing holds no buffers'),
+    ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]

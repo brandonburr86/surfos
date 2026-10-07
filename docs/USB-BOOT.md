@@ -16,6 +16,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
 | Files on a second USB stick: partitions, FAT32 that the Mac reads, a text editor, a C library | done under emulation; **pending on the laptop** | `make test-usb`, scenarios `usbdisk` and `storage`; [section 9](#9-files-on-a-usb-stick) |
 | The SurfOS shell, surfsh: the breadcrumb prompt, Tab completion, a pager; SurfOS 1.0 | done under emulation; **pending on the laptop** | `make test` and `make test-usb`; [section 10](#10-the-shell) |
+| Telnet into the laptop from another computer: `telnetd`, surfsh over the network | done under emulation; **pending on the laptop** | `make test`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 11](#11-telnet-the-shell-from-another-computer) |
 
 ## What is on the drive
 
@@ -439,9 +440,11 @@ SURF ≋>                         the root directory, /
 initrd ▸ bin ≋>                 /initrd/bin
 … ▸ 2026 ▸ October ≋>           a deep directory: the names on the left give way to …
 data ▸ Documents ≋!>            the last command failed
+SURF ≋@>                        a telnet session (section 11)
 ```
 
-The `!` (in red) says the last command failed; it goes away after one that succeeds.
+The `!` (in red) says the last command failed; it goes away after one that succeeds. In
+a telnet session the `@` (magenta) is shown instead, whatever the last command did.
 `cd` changes the directory (`cd` alone goes to `/`, `cd -` back to the previous one).
 SurfOS has no users and no home directories, so a shell starts at `/`.
 
@@ -512,7 +515,74 @@ prompt is `SURF ≋?>`, and a line above it says why. Every kernel command works
 kernel's shell on every console on purpose; its prompt is `SURF ≋#>`, because it runs with
 the kernel's privileges.
 
-## 11. When something goes wrong
+## 11. Telnet: the shell from another computer
+
+`telnetd` is a telnet server. While it runs, another computer on the same network (the
+Mac) can `telnet` to the laptop and get a SurfOS shell of its own, as on F1: the banner,
+the prompt, every command.
+
+> **There is no password and no encryption.** Anyone who can reach the laptop over the
+> network gets a shell with every kernel command (`fdisk`, `mkfs` and `reboot`
+> included), and everything typed crosses the network as plain text. Use it on your own
+> network only, and turn it off when you are done. It never starts by itself.
+
+**Turn it on**, on one of the laptop's own consoles (F1 to F4):
+
+1. Get the laptop onto the network (section 8): the USB Ethernet adapter, the cable,
+   `dhcp`.
+2. `telnetd on` starts the server in the background and says where to connect:
+   `telnetd: listening on 192.168.1.50 port 23`. The console is free again at once.
+   `telnetd on 2323` uses another port. Without an address yet it says
+   `... but eth0 has no address yet: run dhcp first`; the server listens all the same, so
+   `dhcp` is enough.
+
+**Connect from the Mac.** macOS has had no `telnet` command since 10.13 (High Sierra);
+install it once with [Homebrew](https://brew.sh): `brew install telnet`. Then
+
+```sh
+telnet 192.168.1.50          # the address telnetd on printed
+telnet 192.168.1.50 2323     # when it was started on another port
+```
+
+The banner appears, then the prompt `SURF ≋@>`: the `@` says this shell is a telnet
+session (`help` explains it). From Linux use `telnet` (package `telnet` or
+`inetutils-telnet`); from Windows, PuTTY with the connection type *Telnet*.
+
+**In a session** surfsh works as on the laptop: editing the line, history, Tab, `help`
+with `--More--` (sized to your telnet window), colours, and Ctrl+C to stop a command.
+Characters beyond ASCII can be typed here (`echo café`), which the laptop's own keyboard
+cannot do yet. A few differences:
+
+* **Leaving:** `exit` (or Ctrl+D on an empty line) ends the session and closes the
+  connection. Closing the telnet window, or Ctrl+] then `quit` in the Mac's telnet, ends
+  it from the other side: the session's shell is stopped. A kernel command that is still
+  running stops where it can stop cleanly, or finishes, before that: it is never killed
+  in the middle of writing to a disk.
+* **Pasting:** surfsh takes one line at a time and drops what is typed ahead of its
+  prompt, so a pasted block of several lines runs only its first line: paste one line at a
+  time. Keys typed while a command runs are given to that command (up to 1 KB; more is
+  dropped). Ctrl+C stops the command and drops what was typed ahead, so it never runs
+  afterwards.
+* **Messages on the laptop's screen:** a background task that a command starts (such as
+  `tcpecho`) prints on the laptop's F1 console, not in the session, and keeps running after
+  the session ends.
+* **Up to 4 sessions** at once; a fifth connection is told
+  `4 sessions are open already; try again later.` and closed.
+* A telnet program that takes no output for 60 seconds while output waits for it (for
+  example one suspended with Ctrl+] and `z`) is disconnected, so it cannot hold a session
+  forever.
+
+**Check and turn off**, on the laptop or in a session:
+
+| Command | What it says |
+|---|---|
+| `telnetd` (or `telnetd status`) | `telnetd: running (pid 12), 1 session shell:` and a line per session (`pty0 surfsh (pid 13)`), or `telnetd: not running` |
+| `telnetd off` | `telnetd: stopped (1 session shell ended)`: the server is gone and every session has ended. Typed inside a session, it ends that session too |
+| `dmesg` | who connected and when each session ended, and why: `telnetd: session 1 from 192.168.1.20:51234 (pty0, surfsh pid 13)` |
+
+After a reboot `telnetd on` has to be typed again.
+
+## 12. When something goes wrong
 
 | What you see | What it means, what to do |
 |---|---|
@@ -536,6 +606,11 @@ the kernel's privileges.
 | A file name shows a `?` | It has a character the console cannot draw (section 10); the file itself is fine. |
 | `--More--` on the last row | The output is longer than the screen: Space shows the next screenful, Enter one more line, q the rest is not shown. |
 | The prompt ends in `≋!>` | The last command failed and said why; the mark goes away after one that succeeds. |
+| `telnet: command not found` on the Mac | `brew install telnet` (section 11). |
+| `telnet: connect to address …: Connection refused` | The server is not running (`telnetd on` on the laptop), or it was started on another port (`telnetd status` says which). |
+| `telnet` says `Trying 192.168.…` and nothing more | That is not the laptop's address (`ifconfig` on the laptop shows it), or the Mac is on another network (a guest Wi-Fi, a VPN) that cannot reach the laptop. |
+| `telnetd: port 23 is in use` | Something else listens there: `telnetd on 2323`, then `telnet <address> 2323`. |
+| `4 sessions are open already; try again later.` | Four telnet sessions are open: `exit` one of them, or `telnetd off` and `telnetd on` (which ends them all). |
 | The prompt is `SURF ≋?>`, with a line about a *recovery console* above it | surfsh could not run on that console (missing, not loadable, or it ended abnormally three times within 30 seconds), so the kernel's own shell took over. Every command still works and `surfsh` starts the shell by hand; please report the line. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
@@ -555,8 +630,9 @@ power button.
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
-| USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII |
+| USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
 | The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, the kernel's commands; UTF-8 on the screen | Pipes, variables, wildcards, job control |
+| Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 
 ## How it works
 
@@ -593,7 +669,7 @@ power button.
   specification lays it out, which macOS and Linux check without complaint. One rule,
   `bdev_may_format()` in `driver/bdev.c`, decides what `fdisk` and `mkfs` may change.
 * **Programs** (`user/`). User programs run in ring 3 and link `libsurf`, a small C
-  library (stdio, stdlib, string, dirent, time, errno) over 33 system calls; `edit` uses
+  library (stdio, stdlib, string, dirent, time, errno) over 44 system calls; `edit` uses
   the console's raw mode and a subset of ANSI escape sequences.
 * **The shell** (`user/surfsh/`, `shell/prompt.c`). `init` starts `/initrd/bin/surfsh` on
   every console and starts it again when it ends. It edits the line in raw mode, draws
@@ -601,11 +677,18 @@ power button.
   commands inside its own task through two system calls, which can also send their output
   to a file. A pager in the terminal layer stops each command's output after a
   screenful.
+* **Telnet** (`user/telnetd/`, `net/sock.c`, `kernel/pty.c`, `fs/poll.c`). Programs reach
+  TCP through descriptors (listen, accept, connect) and wait on several at once with
+  `poll()`. A pseudo-terminal is a terminal whose screen is a byte stream read by the
+  program holding its other side. `telnetd` is one background process: it accepts
+  connections, starts surfsh on a pseudo-terminal for each, and passes the bytes between
+  the two in the telnet protocol (the window size, Ctrl+C, who echoes).
 
-The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16 and 17, and the original briefs in
+The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16, 17 and 18, and the original briefs in
 [superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md),
-[superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md)
-and [superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md).
+[superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md),
+[superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md)
+and [superpowers/plans/2026-10-06-telnetd.md](superpowers/plans/2026-10-06-telnetd.md).
 
 ## Make targets
 

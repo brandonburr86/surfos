@@ -376,6 +376,20 @@ Each module: why, what exists, what to build, how to prove it, size
   QEMU monitor works (`make test-usb`, scenario `usbnet`); NCM's transfer blocks are
   host-tested. On the laptop: the same with an RTL8153 adapter.
 
+**N4. Network connections for programs and a telnet server** (done on `ai-dev`, emulation) - size L - deps N2, P2, U2
+
+* TCP connections and listening sockets as file descriptors (`listen`, `accept`,
+  `connect`, `netinfo`), `poll()`, pseudo-terminals whose console is a byte stream,
+  `procinfo` and `detach`, `/dev/kmsg`; `telnetd on|off|status`, one background process
+  serving up to 4 surfsh sessions over telnet. TCP hardened for a server that must outlive
+  bad clients: partial writes, the persist timer, keepalive, silly-window avoidance, no
+  Nagle for program sockets, resets where RFC 793 wants them.
+* Prove: smoke steps telnet into the guest through a forwarded port (a session, two, a
+  fifth refused, Ctrl+C, the pager, a client that stops reading and one that floods keys,
+  the protocol end to end); `make test-tcp` drives TCP with hand-made segments; `make
+  test-usb` scenario `usbnet` runs a session over the USB adapter. On the laptop: `telnet`
+  from the Mac.
+
 ### Shell, tests, hygiene
 
 **U1. Shell v2** - size S-M - deps K5 (then grows with every module) - **done on `ai-dev`**
@@ -434,6 +448,7 @@ Each module: why, what exists, what to build, how to prove it, size
 | **M8 Laptop network** (done: the owner reports the network works on the laptop, 2026-10-05; details still to be recorded) | N3 | `make test-usb` scenario `usbnet` passes at -O0 and -O2; on the laptop an RTL8153 adapter gets a DHCP lease and `ping`/`httpget` work (`docs/USB-BOOT.md` section 8) |
 | **M9 Files on a stick** (done under emulation, 2026-10-06; pending on the laptop) | F2 | `make test-usb` scenarios `usbdisk` and `storage` pass at -O0 and -O2; on the laptop a USB stick is partitioned, formatted, written with `edit`, ejected, and its files read on the Mac (`docs/USB-BOOT.md` section 9) |
 | **M10 The SurfOS shell** (done under emulation, 2026-10-06; pending on the laptop) | U2 | `make test`, `make test-all` and `make test-usb` (at -O0 and -O2) drive surfsh on every console; on the laptop the prompt, Tab, the pager and the banner work on its screen and keyboard (`docs/USB-BOOT.md` section 10) |
+| **M11 Telnet** (done under emulation, 2026-10-06; pending on the laptop) | N4 | `make test-all`, `make test-tcp` and `make test-usb` (at -O0 and -O2) telnet into the guest through a forwarded port and over the USB adapter; on the laptop a Mac on the same network telnets in, gets the banner and `SURF ≋@>`, and `telnetd off` ends the sessions (`docs/USB-BOOT.md` section 11) |
 
 Rough effort: M0 one session; M1 three to four; M2 four to five; M3 three;
 M4 three; M5 four; M6 five or more. M1 and M2 are the foundation and should not be
@@ -466,14 +481,20 @@ plan, with the catalog IDs that build each one:
 
 M7 and M8 are reported working on the IdeaPad; their tables in
 `docs/hardware/ideapad-3-15iil05.md` (adapter model, `lsusb`, `dhcp`, `ping` output) are
-still to be filled in. M9 and M10 are done under emulation and wait for the laptop
-(`docs/USB-BOOT.md` sections 9 and 10, the storage and shell rows of the hardware record).
+still to be filled in. M9, M10 and M11 are done under emulation and wait for the laptop
+(`docs/USB-BOOT.md` sections 9 to 11, the storage, shell and telnet rows of the hardware
+record).
 
 The shell work left these open: typing letters beyond ASCII (the keyboard and the line
 editor are byte-wise; the console already draws them); job control (bringing a background
-program back); pipes, variables and wildcards in surfsh; users and home
-directories (a shell starts at `/`); and remote sessions, for which the prompt's `≋@>`
-state is ready.
+program back); pipes, variables and wildcards in surfsh; and users and home
+directories (a shell starts at `/`).
+
+The telnet work left these open: logins and encryption (by the owner's choice; an SSH
+server would need both); type-ahead in surfsh, so that a pasted block of several lines
+runs whole; a terminal type (TTYPE) for programs that draw; a host name for the prompt's
+remote state (`≋@>`); and in TCP, random initial sequence numbers, challenge ACKs (RFC
+5961) and Nagle as an option for programs.
 
 The storage work left these open, smallest first: the busy check of `umount` and `eject`
 sees only the asking task's current directory (it should look at every task's);
@@ -490,7 +511,7 @@ disks, and that rule stays), and the actual Wi-Fi chip (tabled by the owner on
 2026-10-06; what it needs first is in `docs/WIFI-PLANNING.md`).
 
 The six earlier milestones are done. What remains there is polish and the items the catalog left open:
-a user-space socket API over the kernel sockets, DHCP renewal, TCP congestion control
+DHCP renewal, TCP congestion control
 and out-of-order queueing, the floppy transfer path (D1/D2), the parallel-port register
 fix (D5), wrapping the 3c905B driver behind `struct netdev`, retiring turf (T12), and
 the user shell as the default shell on one console.

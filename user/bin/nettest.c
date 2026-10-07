@@ -34,6 +34,9 @@ nettest churn <ip> <port> <n>: n connections to ip:port one after another, each 
 once; how many could not be made, and why.
 nettest pollsrv <port> <n>: a server driven by poll() (as telnetd is): it echoes what its
 connections send and stops after n connections have ended.
+nettest burst <port> <bursts> <ms> <size>...: one connection gets <bursts> bursts, each a
+write() of every size in turn (the pattern), ms apart; then it is read until it ends, or,
+with ms below 0, closed at once after the writes. When each burst began (the uptime).
 
 nettest limits: the calls' errors: listen on port 0 (EINVAL) and on a port in use
 (EADDRINUSE); accept on no descriptor (EBADF), on the console or a file (EINVAL: no
@@ -309,6 +312,35 @@ static int pollsrv(int port, int ends) {
     return 0;
 }
 
+/* 10/6/26 (second review): bursts of small writes (latency, a lost small segment) */
+static int burst(int port, int bursts, int ms, int nsizes, char **sizes) {
+    static char buf[16384];
+    static unsigned int at[64];
+    long done = 0, w;
+    int c = accept_one(port, 0), b, j, i, n;
+    if(c < 0) return 1;
+    for(b = 0; b < bursts; b++) {
+        if(b < 64) at[b] = uptime();
+        for(j = 0; j < nsizes; j++) {
+            n = atoi(sizes[j]);
+            if(n < 1 || n > (int)sizeof(buf)) n = 1;
+            for(i = 0; i < n; i++) buf[i] = pattern_byte(done + i);
+            w = (long)write(c, buf, (size_t)n);
+            if(w != n) printf("nettest: burst write: %ld of %d: %s\n", w, n, strerror(errno));
+            if(w > 0) done += w;
+        }
+        if(ms > 0) msleep((unsigned int)ms);
+    }
+    printf("nettest: burst wrote %ld bytes; bursts at", done);
+    for(b = 0; b < bursts && b < 64; b++) printf(" %u", at[b]);
+    printf(" ms\n");
+    fflush(stdout);
+    if(ms >= 0) return read_to_end(c, 0);
+    close(c);
+    printf("nettest: burst closed\n");
+    return 0;
+}
+
 /**** a client ****/
 
 static int get(unsigned int ip, int port, const char *path) {
@@ -447,6 +479,7 @@ int main(int argc, char **argv) {
     if(argc == 4 && !strcmp(argv[1], "recv")) return ip_arg(argv[2], &ip) ? 2 : recv_from(ip, atoi(argv[3]));
     if(argc == 5 && !strcmp(argv[1], "churn")) return ip_arg(argv[2], &ip) ? 2 : churn(ip, atoi(argv[3]), atoi(argv[4]));
     if(argc == 4 && !strcmp(argv[1], "pollsrv")) return pollsrv(atoi(argv[2]), atoi(argv[3]));
+    if(argc >= 6 && !strcmp(argv[1], "burst")) return burst(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), argc - 5, argv + 5);
     fprintf(stderr, "usage: nettest echo <port> [n]\n"
                     "       nettest send <port> <bytes>\n"
                     "       nettest get <ip> <port> <path>\n"
@@ -454,6 +487,6 @@ int main(int argc, char **argv) {
                     "       nettest connect <ip> <port>\n"
                     "       nettest refuse <ip> <port>\n"
                     "       nettest limits\n"
-                    "       nettest reader|writer|sleepsrv|recv|churn|pollsrv ...   (tools/qemu-tcp.py)\n");
+                    "       nettest reader|writer|sleepsrv|recv|churn|pollsrv|burst ...   (tools/qemu-tcp.py)\n");
     return 2;
 }

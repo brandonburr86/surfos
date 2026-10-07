@@ -10,7 +10,8 @@ tcp_read() and tcp_write(), poll() to tcp_poll(); when the last descriptor goes
 (close(), or the descriptors closed as the task ends, also when it was killed) the
 vnode is released and the socket closed: a connection sends its FIN and finishes on
 its own, a listening socket stops listening. dup2() and spawnfd() share the file, as
-for any other. The calls answer -errno.
+for any other. The calls answer -errno. A program's connection sends small writes at
+once (tcp_set_nodelay(): no Nagle delay behind a client's delayed ACK).
 */
 
 #include <surfos/types.h>
@@ -101,6 +102,7 @@ int sys_accept(int fd, struct netaddr *peer) {
     if(!fd_free()) return -EMFILE;
     r = tcp_accept_next(l, TCP_NO_LIMIT, &c);
     if(r) return r;
+    tcp_set_nodelay(c);
     memset(&a, 0, sizeof(a));
     a.ip = tcp_peer(c, &a.port);
     r = sock_fd(c);
@@ -114,7 +116,9 @@ int sys_connect(u32 ip, u32 port) {
     if(!ip || !port || port > 65535) return -EINVAL;
     if(!fd_free()) return -EMFILE;
     r = tcp_open(ip, (u16)port, CONNECT_MS, &s);
-    return r ? r : sock_fd(s);
+    if(r) return r;
+    tcp_set_nodelay(s);
+    return sock_fd(s);
 }
 
 int sys_netinfo(struct netinfo *ni) {

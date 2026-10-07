@@ -76,6 +76,11 @@ def surf_prompt(crumbs, state):
     return re.compile(re.escape(crumbs) + rb' \xe2\x89\x8b' + _SGR + re.escape(state) + _SGR + rb'>')
 
 
+# 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
+# of their own (tcp_raw_check() below); 'end' ends that boot
+TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
+           'latency', 'zwprobe', 'evict', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
+
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
     ('tick',    ['Ticks:']),
@@ -115,7 +120,7 @@ SMOKE = [
     ('ls /initrd', ['etc/', 'motd']),
     ('cat /initrd/motd', ['Welcome to SurfOS']),
     ('ls /hda1', ['DOCS/', 'README', 'motd']),
-    ('cat /hda1/DOCS/README.md', ['SurfOS']),
+    ('@readme-cat', []),                    # cat /hda1/DOCS/README.md, every line of it (readme_cat_check)
     # 10/5/26 (USB storage): on the GPT fdisk left on rd1, FAT16 on rd1p1 and FAT32 (forced) on rd1p2,
     # used, remounted and ejected; then the whole disk as one volume, and the refusals
     answered('mkfs rd1p1 TESTVOL', 'Type rd1p1 to erase rd1p1 (16 MB) and create a FAT16 file system: ', 'rd1p1',
@@ -201,11 +206,8 @@ SMOKE = [
     ('nettest limits', ['NETTEST PASS']),
     ('@nettest-kills', []),
     # TCP against an other end that makes its segments by hand (tools/qemu-tcp.py, tools/rawnet.py): a boot of its
-    # own whose NIC is on a raw link, shared by these steps; the scenarios are listed in tools/qemu-tcp.py
-    ('@tcp-raw scan', []), ('@tcp-raw flood', []), ('@tcp-raw reset', []), ('@tcp-raw greet', []),
-    ('@tcp-raw window', []), ('@tcp-raw fin', []), ('@tcp-raw keepalive', []), ('@tcp-raw churn', []),
-    ('@tcp-raw reserve', []), ('@tcp-raw sws', []), ('@tcp-raw linger', []), ('@tcp-raw pollscan', []),
-    ('@tcp-raw pollstall', []), ('@tcp-raw end', []),
+    # own whose NIC is on a raw link, shared by these steps (TCP_RAW above; tools/qemu-tcp.py says what each does)
+    *[('@tcp-raw ' + name, []) for name in TCP_RAW],
     ('run hello a b', ['Hello from user mode', 'argv[2] = "b"', 'exit status 42']),
     ('crash null', ['killed by "Page Fault at 0x00000000', 'killed]']),
     ('crash cli', ['killed by "General Protection Fault', 'killed]']),
@@ -320,7 +322,11 @@ SMOKE = [
     ('@pty-tcpecho', []),
     ('run ptytest reuse', ['line mode, and only its own keys', 'opened again: 80x24', 'PTYTEST reuse PASS', 'exit status 0']),
     ('run ptytest fullqueue', ['the input queue is full', 'EAGAIN, and no POLLOUT', 'POLLOUT came back after',
-                               'what was typed ahead never ran', 'PTYTEST fullqueue PASS', 'exit status 0']),
+                               'what was typed ahead never ran', 'cursor keys filled the queue',
+                               'Ctrl+C ended the cut sequence', 'PTYTEST fullqueue PASS', 'exit status 0']),
+    ('run ptytest paste', ["TTY_SKIP: of 41 pasted lines only", "raw mode's end: of 41 pasted lines only",
+                           'Ctrl+C in the middle of the skip cut sleep short', 'a line typed after a pause, while sleep ran',
+                           'PTYTEST paste PASS', 'exit status 0']),
     ('run ptytest detach-ctrlc', ['detached from surfsh', 'the detached sleeper lived on', 'PTYTEST detach-ctrlc PASS',
                                   'exit status 0']),
     ('@pty-isolate', []),
@@ -995,8 +1001,40 @@ def ctrl_c_check(q):
     return ('Ctrl+C: a ping surfsh runs is cut short, a program it waits for is killed, surfsh lives on', ok)
 
 
+def readme_cat_check(q):
+    """cat of a file of several clusters on the FAT16 disk (docs/README.md as DOCS/README.md, tools/mkimage.py), through
+    the pager: every line of it arrives in order, and the step ends at the prompt after its last line. 10/6/26: the file
+    shows prompts as text (`SURF ≋@>`), which PROMPT alone takes for the end: the next command was then typed while cat
+    was still paging, and the pager took its first key"""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'docs', 'README.md')
+    with open(path, encoding='utf-8') as f:
+        want = [line.strip() for line in f.read().splitlines() if line.strip()]
+    start = len(q.transcript)
+    q.send('cat /hda1/DOCS/README.md\n')
+    deadline, text, end = time.time() + 30, '', -1
+    while time.time() < deadline and q.alive():
+        q.pump(0.2)
+        text = q.transcript[start:].decode('utf-8', 'replace').replace('\r', '')
+        text = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', text)
+        text = re.sub(r'\n?--More-- \([^)]*\)', '', text)       # the pager's questions, answered with Space
+        end = text.find(want[-1])
+        if end >= 0 and PROMPT.search(text[end + len(want[-1]):].encode()):
+            break
+    at, ok = 0, end >= 0
+    for line in want:                                   # every line, in order
+        i = text.find(line, at)
+        if i < 0:
+            ok = False
+            print(f'\n---- @readme-cat: missing line: {line[:70]!r}')
+            break
+        at = i + len(line)
+    ok = ok and PROMPT.search(text[at:].encode()) is not None
+    q.cursor = len(q.transcript)                       # the next step starts after this prompt
+    return (f'cat /hda1/DOCS/README.md: all {len(want)} lines, through the pager, then the prompt', ok)
+
+
 # the steps of the console's character set and the pager (10/6/26) that the host carries out
-CONSOLE_CHECKS = {'@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
+CONSOLE_CHECKS = {'@readme-cat': readme_cat_check, '@utf8-screen': utf8_screen_check, '@pager-space': pager_space_check,
                   '@pager-enter-q': pager_enter_quit_check, '@pager-keys': pager_keys_check,
                   '@pager-q-ask': pager_quit_ask_check, '@pager-q-crash': pager_quit_crash_check,
                   '@pager-background': pager_background_check, '@kcmd-echo': kcmd_echo_check}
@@ -1829,8 +1867,7 @@ def tcp_raw_check(q, name):
     return ('TCP %s: %s' % (name, what), ok)
 
 
-for _name in ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'pollscan',
-              'pollstall', 'end'):
+for _name in TCP_RAW:
     CONSOLE_CHECKS['@tcp-raw ' + _name] = (lambda name: lambda q: tcp_raw_check(q, name))(_name)
 
 
