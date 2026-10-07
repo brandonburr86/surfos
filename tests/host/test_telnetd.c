@@ -450,6 +450,7 @@ ssize_t sim_read(int fd, void *buf, size_t n) {
             if(c->bound && s) {                         /* the shadow: answers and keys */
                 static unsigned char d[2048], r[65536];
                 struct tn_buf D = { d, 0, sizeof(d) }, R = { r, 0, OUT_KEEP };
+                if(R.size > OUT_SIZE - s->out_len) R.size = OUT_SIZE - s->out_len;   /* as the server: only what fits */
                 telnet_recv(&c->shadow, buf, k, &D, &R);
                 bput(&c->expq, r, R.len);
                 c->answers = R.len;

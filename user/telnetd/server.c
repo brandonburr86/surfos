@@ -194,8 +194,8 @@ static void new_session(int lfd) {
     }
     master = openpty();
     if(master < 0) {
+        say("telnetd: %s refused: openpty: %s", peer, strerror(errno));     /* before refuse() changes errno */
         refuse(conn, "no pseudo-terminal is free; try again later.");
-        say("telnetd: %s refused: openpty: %s", peer, strerror(errno));
         return;
     }
     ptyctl(master, PTY_SETSIZE, (80u << 16) | 24u);
@@ -263,8 +263,11 @@ static void from_client(struct session *s) {
         end_session(s, n < 0 ? strerror(errno) : "the client left");
         return;
     }
+    /* only the answers that will be queued are made: one made and then dropped would use up the NUL
+       that a CR at the end of the session's output waits for (telnet.c) */
+    if(r.size > OUT_SIZE - s->out_len) r.size = OUT_SIZE - s->out_len;
     telnet_recv(&s->tn, in, (int)n, &d, &r);
-    queue(s, reply, r.len);             /* the answers whole, or none when the client does not read */
+    queue(s, reply, r.len);             /* the answers, whole: they fit */
     if(s->master < 0) return;           /* the shell has ended: nothing to type to */
     if(s->tn.resized) {
         int cols = s->tn.cols < COLS_MIN ? COLS_MIN : s->tn.cols > COLS_MAX ? COLS_MAX : s->tn.cols;
