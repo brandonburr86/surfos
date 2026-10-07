@@ -39,6 +39,8 @@ with keepalive made quick (tcpka=3,1: three seconds silent, then a probe a secon
               and data get a reset at once, and the server serves the next client
   ackahead    the other end's segment lost, then its bare ACK ahead of the guest: taken (it
               acknowledges the guest's data), and not answered (no ACK ping-pong)
+  orphans     closed connections whose FIN is not acknowledged (FIN_WAIT_1, LAST_ACK): no
+              buffers held while they finish
   pollscan    (poll() needed) the scan against a server driven by poll(), telnetd's shape
   pollstall   (poll() needed) one client stops reading: the poll() server serves another
 
@@ -467,6 +469,38 @@ def sc_ackahead(rig):
     return ok
 
 
+def sc_orphans(rig):
+    ok = rig.start('nettest writer 23 100', 'listening on port 23')
+    a = Conn(rig.net, 3500, 23)
+    ok = a.connect() is not None and ok
+    ok = a.receive(100) == pattern(100) and ok      # the data acknowledged, the FIN behind it not (FIN_WAIT_1)
+    fa = rig.net.wait(lambda s: a.mine(s) and s.flags & FIN, 5)
+    ok = fa is not None and rig.expect('nettest: wrote 100 bytes in') and ok
+    ok = rig.start('nettest reader 23', 'listening on port 23') and ok
+    b = Conn(rig.net, 3501, 23)
+    ok = b.connect() is not None and ok
+    b.ack(flags=ACK | FIN)                          # its other end closes first, the reader after the end:
+    fb = rig.net.wait(lambda s: b.mine(s) and s.flags & FIN, 5)  # its FIN not acknowledged (LAST_ACK)
+    ok = fb is not None and rig.expect('nettest: read 0 bytes, then EOF') and ok
+    rig.q.wait(0.5)
+    m = rig.mark()
+    rig.run('netstat')
+    ok = 'FIN_WAIT_1' in rig.since(m) and 'LAST_ACK' in rig.since(m) and ok
+    held = heap_used(rig)
+    if fa:                                          # now they finish
+        a.fin = (fa.seq + len(fa.data)) & 0xffffffff
+        rig.finish(a)
+    if fb:
+        b.rcv = (fb.seq + len(fb.data) + 1) & 0xffffffff
+        b.ack()
+    rig.q.wait(3)
+    ok = rig.run('netstat', 'no TCP sockets') and ok
+    after = heap_used(rig)
+    ok = ok and after is not None and held == after
+    print('        (heap in use: %s bytes with the two finishing, %s with them gone)' % (held, after))
+    return ok
+
+
 def poll_missing(rig, m):
     return 'poll: Function not implemented' in rig.since(m)
 
@@ -537,6 +571,7 @@ SCENARIOS = [
     ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
     ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
     ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
+    ('orphans', sc_orphans, 'a closed connection still finishing holds no buffers'),
     ('pollscan', sc_pollscan, 'a SYN scan against a poll() server (when poll() is there)'),
     ('pollstall', sc_pollstall, 'a client that stops reading holds up no other (when poll() is there)'),
 ]

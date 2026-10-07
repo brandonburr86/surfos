@@ -67,7 +67,10 @@ half-open connection made room for another hears so at once. A bare ACK whose
 sequence number is ahead of ours (a segment of the other end's was lost) is
 acceptable within the window: its ACK and window count, and it gets no answer;
 an unacceptable bare ACK is answered only when its sequence number is old (a
-keepalive, a probe): two strict ends no longer trade ACKs across a hole.
+keepalive, a probe): two strict ends no longer trade ACKs across a hole. An
+orphan gives its receive buffer back when it becomes one, and its send buffer
+once all in it is acknowledged: one still finishing when its network went away
+held 16 KB until its retries ran out.
 */
 
 #include <surfos/types.h>
@@ -211,13 +214,18 @@ static void sock_free(struct tcp_socket *s) {
     s->used = false;
 }
 
-/* 10/6/26: the other end has acknowledged our FIN (all our data) and nobody reads for s: it sends
-   nothing more and keeps nothing it receives, so its buffers go; its sequence numbers stay */
+/* 10/6/26: what s no longer needs goes back to the heap at once, its sequence numbers staying: once
+   nobody reads for it (an orphan drops what comes, TIME_WAIT takes nothing more) its receive buffer,
+   and its send buffer when nothing in it is left to send or to send again */
 static void drop_buffers(struct tcp_socket *s) {
-    kfree(s->txbuf);
+    if(!s->orphan && s->state != TIME_WAIT) return;
     kfree(s->rxbuf);
-    s->txbuf = s->rxbuf = NULL;
-    s->tx_len = s->rx_len = 0;
+    s->rxbuf = NULL;
+    s->rx_len = 0;
+    if(!s->tx_len) {
+        kfree(s->txbuf);
+        s->txbuf = NULL;
+    }
 }
 
 static bool port_in_use(u16 port) {
@@ -247,7 +255,7 @@ static u16 ephemeral_port(void) {
 static void set_state(struct tcp_socket *s, int state) {
     s->state = state;
     if(state == ESTABLISHED) s->synced = true;
-    if(state == TIME_WAIT || (state == FIN_WAIT_2 && s->orphan)) drop_buffers(s);   /* 10/6/26 */
+    drop_buffers(s);                                     /* 10/6/26: an orphan's, TIME_WAIT's */
     if(s->orphan) s->orphan_at = getticks();             /* 10/6/26: progress */
     notify(s);
 }
@@ -454,6 +462,7 @@ static void process_ack(struct tcp_socket *s, u32 ack) {
     if(acked) {
         memmove(s->txbuf, s->txbuf + acked, s->tx_len - acked);
         s->tx_len -= acked;
+        drop_buffers(s);                                 /* 10/6/26: an orphan's send buffer, all acknowledged */
     }
     s->snd_una = ack;
     s->rto_at = 0;
@@ -949,7 +958,7 @@ static int start_close(struct tcp_socket *s) {
 static void make_orphan(struct tcp_socket *s) {
     s->orphan = true;
     s->orphan_at = getticks();
-    if(s->state == FIN_WAIT_2) drop_buffers(s);          /* 10/6/26: nothing to send, nobody to read */
+    drop_buffers(s);                                     /* 10/6/26: nobody reads; the send buffer once empty */
 }
 
 int tcp_close(struct tcp_socket *s) {
