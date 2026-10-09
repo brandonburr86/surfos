@@ -35,6 +35,8 @@ struct command {
 
 /* main.c: a question on this task's console and its answer, a line (10/6/26) */
 void shell_ask(const char *question, char *answer, size_t size);
+/* 10/9/26: the same for a secret (a password): nothing typed is shown, kept or logged */
+void shell_ask_secret(const char *question, char *answer, size_t size);
 
 /* demos.c: the 2004 demonstrations */
 void runHanoi(void);

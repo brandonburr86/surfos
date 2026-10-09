@@ -81,6 +81,22 @@ void shell_ask(const char *question, char *answer, size_t size) {
     if(kept) console_capture_begin(kept);
 }
 
+/* 10/9/26 (Wi-Fi): shell_ask() for a secret, a network's password. The terminal's echo is off
+   for that one line (tty_readline_secret(), kernel/tty.c): no key typed is shown, on the
+   screen, the serial line or a telnet session (telnetd leaves the echo to SurfOS: WILL ECHO),
+   the line goes into no history, and each key is wiped from the input queue as it is read.
+   Nothing of it is printed or logged here; the caller wipes answer as soon as it is done. */
+void shell_ask_secret(const char *question, char *answer, size_t size) {
+    struct kcapture *kept = curTask->kcap;
+    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    console_capture_end();
+    if(console_paging(curTask->con)) console_page_new(curTask->con);
+    printf("%s", question);
+    memset(answer, 0, size);
+    if(tty_readline_secret(tty, answer, size) < 0 && !(curTask->intr & TI_INT)) printf("\n");
+    if(kept) console_capture_begin(kept);
+}
+
 /**** small commands ****/
 
 static int cmd_help(int argc, char **argv) {

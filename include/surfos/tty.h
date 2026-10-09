@@ -63,6 +63,10 @@ int tty_queued(struct tty *t);          /* 10/6/26: a key is waiting to be read 
 /* line discipline: echo, backspace, Ctrl-U, Ctrl-C, Up/Down history; returns the length.
    10/6/26: -1 and an empty line when the reader's call is cut short (surfos/task.h) */
 int tty_readline(struct tty *t, char *buf, size_t size);
+/* 10/9/26 (Wi-Fi): the same for a secret (a password): no key is echoed, only the Enter (or ^C);
+   the line is not added to the history, the history is not recalled into it, and each key is
+   wiped from the input queue as it is read. The caller wipes buf when it is done with it. */
+int tty_readline_secret(struct tty *t, char *buf, size_t size);
 
 /* display + input routing to console `index` (F1..Fn) */
 void tty_switch(int index);
