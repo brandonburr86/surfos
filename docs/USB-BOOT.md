@@ -11,12 +11,13 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 12 cold boots under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 13 scenarios under OVMF, at -O0 and -O2 |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
 | Files on a second USB stick: partitions, FAT32 that the Mac reads, a text editor, a C library | done under emulation; **pending on the laptop** | `make test-usb`, scenarios `usbdisk` and `storage`; [section 9](#9-files-on-a-usb-stick) |
 | The SurfOS shell, surfsh: the breadcrumb prompt, Tab completion, a pager; SurfOS 1.0 | done under emulation; **pending on the laptop** | `make test` and `make test-usb`; [section 10](#10-the-shell) |
 | Telnet into the laptop from another computer: `telnetd`, surfsh over the network | done under emulation; **pending on the laptop** | `make test`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 11](#11-telnet-the-shell-from-another-computer) |
+| Development builds over the network: a data stick, GRUB's development entry, `autonet`, `rx`, `tools/devloop.py` | done under emulation; **pending on the laptop** | `make test`, `make test-usb` (scenario `devloop`), `make test-devloop`; [section 13](#13-development-builds-over-the-network) |
 
 ## What is on the drive
 
@@ -28,6 +29,7 @@ GPT partition table (backup copy at the end of the disk)
 └─ partition 1: EFI system partition, FAT32, label SURFOSUSB, 1 MB to 255 MB
    ├─ /EFI/BOOT/BOOTX64.EFI   GRUB for 64-bit UEFI (the path firmware tries on removable drives)
    ├─ /boot/grub/grub.cfg     the menu
+   ├─ /boot/grub/x86_64-efi/fs.lst   empty: GRUB loads no file system modules (section 13)
    ├─ /boot/surfos.bin        the SurfOS kernel (32-bit, Multiboot 2)
    ├─ /boot/initrd.tar        the user programs and rootfs/, loaded into RAM as ramdisk rd0
    └─ /boot/BUILD-INFO.txt    source revision, build date, checksums
@@ -64,7 +66,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 12 cold boots, about three minutes
+devenv/test-usb.sh      # the automatic tests: 13 scenarios, about four minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -148,6 +150,8 @@ drawn at twice the font's size, or 170x48 on a 1366x768 panel.
 
 The GRUB menu also has:
 
+* **SurfOS (development build from the data stick)**, first and chosen after 5 seconds, but
+  only when a second USB stick holds a development build (section 13).
 * **SurfOS (troubleshooting: local APIC timer, polled keyboard)**: the same kernel with
   `timer=lapic kbd=poll`, for when the normal entry boots but the clock or the keyboard
   does not respond.
@@ -527,7 +531,8 @@ the prompt, every command.
 > **There is no password and no encryption.** Anyone who can reach the laptop over the
 > network gets a shell with every kernel command (`fdisk`, `mkfs` and `reboot`
 > included), and everything typed crosses the network as plain text. Use it on your own
-> network only, and turn it off when you are done. It never starts by itself.
+> network only, and turn it off when you are done. It never starts by itself, except in
+> a development build from the data stick (section 13).
 
 **Turn it on**, on one of the laptop's own consoles (F1 to F4):
 
@@ -584,7 +589,8 @@ cannot do yet. A few differences:
 | `telnetd off` | `telnetd: stopped (1 session shell ended)`: the server is gone and every session has ended. Typed inside a session, it ends that session too |
 | `dmesg` | who connected and when each session ended, and why: `telnetd: session 1 from 192.168.1.20:51234 (pty0, surfsh pid 13)` |
 
-After a reboot `telnetd on` has to be typed again.
+After a reboot `telnetd on` has to be typed again (a development build from the data stick
+starts it by itself: section 13).
 
 ## 12. When something goes wrong
 
@@ -619,8 +625,73 @@ After a reboot `telnetd on` has to be typed again.
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
 
+| The menu has no development entry, though the data stick holds a build | GRUB looks for a folder `surfos-dev` holding `surfos.bin` and `initrd.tar` at the top of the stick's first partition (FAT). Plug the stick straight into the laptop, or into another port: the firmware may not have shown it to GRUB (section 13). |
+| The development build does not start, or misbehaves | Restart (hold the power button if need be) and choose **SurfOS**, the second entry, within the 5 seconds: the build on the boot stick, which nothing changes (section 13). |
+| `+AUTONET: no network link within 90 s` | The Ethernet adapter or its cable is not plugged in, or the router is off. Type `dhcp` and `telnetd on` once the cable is in. |
+
 SurfOS has no ACPI power-off: `reboot` restarts the laptop; to switch it off, hold the
 power button.
+
+## 13. Development builds over the network
+
+Claude, working on the Mac, can put a new build of SurfOS onto the laptop and start it
+without anyone at the laptop: over the network it copies the build onto a second USB
+stick, the **data stick**, and restarts the laptop, whose GRUB menu then starts that
+build. The boot stick itself never changes.
+
+**Keep plugged in**, straight into the laptop's three USB ports (no hub): the SurfOS boot
+stick, the data stick, and the USB Ethernet adapter with its cable (section 8). The data
+stick is any USB stick whose first partition is FAT32. The 30 GB *USB Disk 2.0* (`lsblk`
+calls it *VendorCo Product*) is FAT32 already: it is ready as it is. Another stick can be
+made FAT32 on the Mac: *Disk Utility* → *View* → *Show All Devices* → the stick → *Erase*,
+format *MS-DOS (FAT)*, scheme *Master Boot Record* (this erases it). Nothing here ever
+formats the data stick: it is only mounted, written in its `surfos-dev` folder and
+ejected. SurfOS may call the two sticks `usb0` and `usb1` in either order from one boot
+to the next; the data stick is found by what it holds, not by its name.
+
+**In the firmware setup (once):** besides Secure Boot off (step 5), set the boot order
+so that **USB comes first**, before Windows Boot Manager, so that a restart comes back
+to SurfOS by itself. If the laptop does not start SurfOS with both sticks plugged in,
+swap their ports, or move the boot stick to the top of the USB entries.
+
+**The first time**, with this image written to the boot stick (step 4), the data stick
+holds no build yet and SurfOS starts as usual. Type `dhcp` and `telnetd on` (section 11)
+and Claude does the rest. From then on:
+
+* The GRUB menu starts with **SurfOS (development build from the data stick)** and
+  chooses it after 5 seconds. That build brings up the network and the telnet server by
+  itself: the screen shows `+AUTONET:` lines and `telnetd: listening on … port 23`.
+  Everything said about telnet in section 11 holds: no password, so keep the data stick
+  plugged in only on your own network.
+* **If a development build misbehaves**, restart (hold the power button if need be) and
+  choose **SurfOS**, the second entry, with the arrow keys before the 5 seconds are up:
+  the build on the boot stick, which nothing changes.
+* **To stop using development builds**, take the data stick out (or delete its
+  `surfos-dev` folder on the Mac). The menu is then exactly as before.
+
+On the data stick there is one folder, `surfos-dev`, with `surfos.bin` and `initrd.tar`;
+the rest of the stick is yours. `cat /initrd/etc/build-id` says which build runs: the
+source revision (`-dirty` when it had changes not yet committed) and when it was built.
+
+How it works, for Claude (`tools/devloop.py`, from the `06-restoration` folder; never
+with `reboot`, `mkfs` or `fdisk`'s changes, which it refuses):
+
+```sh
+tools/devloop.py find                 # the laptop's address: 10.0.0.4, else it searches 10.0.0.0/24
+tools/devloop.py run lsblk 'uptime'   # commands in a telnet session, with their output
+tools/devloop.py log                  # dmesg
+devenv/build-usb.sh                   # a build (O=0 for the debug build) ...
+tools/devloop.py deploy               # ... onto the data stick: rx, eject, reboot, the build id checked
+tools/devloop.py reboot               # a restart without a new build
+```
+
+`deploy` finds the data stick with `lsblk` (the USB disk that is not the boot drive and
+whose first partition is FAT), mounts that partition, and pushes the newest build's `surfos.bin` and `initrd.tar`
+with `rx`, a program that receives one file over the network and says its CRC-32, which
+`deploy` compares with the file it sent. Both files are renamed into place only once both
+have arrived whole. Then it ejects the stick, restarts the laptop, waits up to three
+minutes for telnet, and checks that `/initrd/etc/build-id` is the pushed build's. A stick
+without a FAT file system stops it with what to do.
 
 ## What works, what does not
 
@@ -637,6 +708,7 @@ power button.
 | USB flash drives: MBR and GPT partitions (`fdisk`), FAT32 and FAT16 that macOS reads (`mkfs`, `mount`, `eject`, `df`), long file names, the editor and file programs | Typing letters beyond ASCII on the laptop's keyboard (a telnet session can) |
 | The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, the kernel's commands; UTF-8 on the screen | Pipes, variables, wildcards, job control |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
+| Development builds over the network onto a data stick, started by GRUB's first entry | |
 
 ## How it works
 
@@ -681,6 +753,16 @@ power button.
   commands inside its own task through two system calls, which can also send their output
   to a file. A pager in the terminal layer stops each command's output after a
   screenful.
+* **Development builds** (`boot/grub-usb.cfg`, `kernel/autonet.c`, `user/bin/rx.c`,
+  `tools/devloop.py`). GRUB looks at each disk other than the boot drive (`test -f` on
+  `(hdN,msdos1)`, `(hdN,gpt1)` and `(hdN)`, which says nothing when a disk is not there)
+  for `/surfos-dev/surfos.bin` and `initrd.tar`, and when it finds them makes the first
+  entry boot them with the kernel word `autonet`. The empty
+  `/boot/grub/x86_64-efi/fs.lst` keeps GRUB from trying to load file system modules,
+  which are not on the drive, for a disk that is not FAT. `autonet` starts a kernel
+  thread that waits up to 90 seconds for a link, gets a DHCP lease (three tries) and runs
+  `telnetd on` on F1. `rx` writes what one connection sends to `<path>.part`, then renames
+  it. The Makefile writes `etc/build-id` into the initrd at every build.
 * **Telnet** (`user/telnetd/`, `net/sock.c`, `kernel/pty.c`, `fs/poll.c`). Programs reach
   TCP through descriptors (listen, accept, connect) and wait on several at once with
   `poll()`. A pseudo-terminal is a terminal whose screen is a byte stream read by the
@@ -691,15 +773,17 @@ power button.
 The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16, 17 and 18, and the original briefs in
 [superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md),
 [superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md),
-[superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md)
-and [superpowers/plans/2026-10-06-telnetd.md](superpowers/plans/2026-10-06-telnetd.md).
+[superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md),
+[superpowers/plans/2026-10-06-telnetd.md](superpowers/plans/2026-10-06-telnetd.md)
+and, for development builds over the network, [superpowers/plans/2026-10-09-wifi.md](superpowers/plans/2026-10-09-wifi.md) (track D).
 
 ## Make targets
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 12 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 13 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
+make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image
 ```
 
