@@ -221,7 +221,7 @@ SMOKE = [
     # 10/9/26 (the development loop, track D): rx, with which tools/devloop.py pushes builds onto the laptop's data
     # stick, through the forwarded port RX_PORT: 300 KB and their CRC-32, then a smaller file in their place; a
     # connection reset in the middle (the file before stays, nothing partial is left); its refusals (no port, a
-    # missing directory, a read-only file system, a directory, a port in use).
+    # missing directory, a read-only file system, a directory, a port in use). The initrd's build id.
     ('run rx', ['usage: rx <port> <path>', 'exit status 2']),
     ('run rx 0 /hda1/RX.BIN', ['rx: 0 is no port (1-65535)', 'exit status 2']),
     (f'run rx {RX_PORT} /hda1/nodir/RX.BIN', ['rx: /hda1/nodir/RX.BIN.part: No such file or directory', 'exit status 1']),
@@ -230,6 +230,7 @@ SMOKE = [
     ('@rx-push', []),
     ('@rx-reset', []),
     ('@rx-busy', []),
+    ('cat /initrd/etc/build-id', [re.compile(rb'\n(?:[0-9a-f]{7,40}|unknown)(?:-dirty)? \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\r?\n')]),
     # TCP against an other end that makes its segments by hand (tools/qemu-tcp.py, tools/rawnet.py): a boot of its
     # own whose NIC is on a raw link, shared by these steps (TCP_RAW above; tools/qemu-tcp.py says what each does)
     *[('@tcp-raw ' + name, []) for name in TCP_RAW],

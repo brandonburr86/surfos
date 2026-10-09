@@ -9,10 +9,13 @@
                                                       partition made by mkfs.fat and filled by mtools with long,
                                                       accented and macOS-style names, folders and a 1 MB file
                                                       (the USB storage tests mount it in SurfOS)
+    tools/mkimage.py initrd OUT.tar DIR --build-id REV  (10/9/26) the same, with DIR/etc/build-id written first:
+                                                      "REV YYYY-MM-DDTHH:MM:SSZ", the revision and the UTC time
 
 Needs python3 and mtools (mformat, mmd, mcopy) for the disk images, and dosfstools (mkfs.fat) for the
 foreign one.
 """
+import datetime
 import os
 import struct
 import subprocess
@@ -140,7 +143,17 @@ def make_foreign(out):
     print(f"{out}: 64 MB, FAT32 'FOREIGN' at block {PART_START}, {len(FOREIGN_FILES) + 1} files")
 
 
-def make_initrd(out, directory):
+def write_build_id(directory, rev):
+    """10/9/26 (the development loop): etc/build-id, which tools/devloop.py compares after a reboot"""
+    when = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    os.makedirs(os.path.join(directory, 'etc'), exist_ok=True)
+    with open(os.path.join(directory, 'etc', 'build-id'), 'w') as f:
+        f.write(f'{rev} {when}\n')
+
+
+def make_initrd(out, directory, build_rev=None):
+    if build_rev is not None:
+        write_build_id(directory, build_rev)
     tmp = out + '.tmp'
     with tarfile.open(tmp, 'w', format=tarfile.USTAR_FORMAT) as tar:
         for root, dirs, names in os.walk(directory):
@@ -158,6 +171,8 @@ def main(argv):
         make_disk(argv[2], int(argv[3]), argv[4:])
     elif len(argv) == 4 and argv[1] == 'initrd':
         make_initrd(argv[2], argv[3])
+    elif len(argv) == 6 and argv[1] == 'initrd' and argv[4] == '--build-id' and argv[5]:
+        make_initrd(argv[2], argv[3], argv[5])
     elif len(argv) == 3 and argv[1] == 'foreign':
         make_foreign(argv[2])
     else:

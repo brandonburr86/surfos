@@ -188,10 +188,16 @@ $(FOREIGNIMG): tools/mkimage.py | $(IMAGES)
 $(IMAGES):
 	$(Q)mkdir -p $@
 
-$(INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py | $(IMAGES)
+# 10/9/26 (the development loop): the initrd's etc/build-id names the build, the source revision (-dirty with
+# uncommitted changes: SURFOS_REV and SURFOS_DIRTY, below) and the UTC time it was made; tools/devloop.py checks it
+# after a reboot. Both initrds are made again at every build (FORCE), so the time is always that build's.
+BUILD_REV  = $(SURFOS_REV)$(if $(filter yes,$(SURFOS_DIRTY)),-dirty)
+FORCE:
+
+$(INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)rm -rf $(IMAGES)/initrd && mkdir -p $(IMAGES)/initrd/bin && cp -r rootfs/. $(IMAGES)/initrd/ && cp $(USER_BINS) $(IMAGES)/initrd/bin/
-	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(IMAGES)/initrd
+	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(IMAGES)/initrd --build-id $(BUILD_REV)
 
 # ---- user programs --------------------------------------------------------------------
 user: $(USER_BINS)
@@ -263,10 +269,10 @@ SURFOS_REV   ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknow
 SURFOS_DIRTY ?= $(shell git rev-parse --git-dir >/dev/null 2>&1 && { test -z "$$(git status --porcelain 2>/dev/null)" && echo no || echo yes; } || echo unknown)
 OVMF_ARGS    = $(if $(OVMF_CODE),--ovmf-code $(OVMF_CODE)) $(if $(OVMF_VARS),--ovmf-vars $(OVMF_VARS))
 
-$(USB_INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py
+$(USB_INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE
 	@echo "IMG  $@"
 	$(Q)rm -rf $(BUILD)/initrd && mkdir -p $(BUILD)/initrd/bin && cp -r rootfs/. $(BUILD)/initrd/ && cp $(USER_BINS) $(BUILD)/initrd/bin/
-	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(BUILD)/initrd
+	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(BUILD)/initrd --build-id $(BUILD_REV)
 
 usb-image: $(KERNEL) $(USB_INITRD) boot/grub-usb.cfg boot/grub-usb-bootstrap.cfg tools/mkusb.py
 	@mkdir -p $(USB_DIR)
