@@ -14,6 +14,7 @@
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
 #   make usb-image    build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 #   make test-usb     boot that exact image under QEMU + OVMF from an emulated USB stick and test it
+#   make test-devloop the development loop's host side: tools/devloop.py, the data stick image, the build id
 #   make clean
 
 O         ?= 0
@@ -288,6 +289,12 @@ test-usb: usb-image
 test-mkusb:
 	$(PYTHON) -m unittest discover -s tests -p test_mkusb.py -v
 
+# 10/9/26 (the development loop): tools/devloop.py's own logic, the data stick image (tools/mkimage.py) and the build
+# id; nothing connects anywhere (tools/qemu-usb.py's devloop scenario drives devloop.py against QEMU)
+test-devloop:
+	$(PYTHON) -m unittest discover -s tests -p test_devloop.py -v
+.PHONY: test-devloop
+
 # host-side unit tests for the pure parts of blibc (formatter, strings), see tests/host/
 HOSTCC    ?= gcc
 # -m32 when the host can link 32-bit programs (libc6-dev-i386), so long is 32 bits like in the kernel
@@ -411,12 +418,13 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnet
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
+	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 
 clean:
 	rm -rf build
 
 help:
-	@sed -n '2,15p' Makefile
+	@sed -n '2,18p' Makefile
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
