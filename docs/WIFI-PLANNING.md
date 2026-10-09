@@ -1,8 +1,12 @@
 # Wi-Fi for SurfOS on the IdeaPad 3 15IIL05: what is needed before building it
 
-Status: **tabled** by the owner on 2026-10-06, to be picked up later. Nothing is built
-yet. This note keeps what was worked out: what the owner needs to supply, the decisions
-to make, what the result would look like, and how big the job is.
+Status: tabled by the owner on 2026-10-06; **resumed on 2026-10-09**. The card is an
+**Intel Wireless-AC 9560** (the Ice Lake chipset's CNVi Wi-Fi, 8086:34f0, subsystem
+8086:0234, its Bluetooth half 8087:0aaa), and the owner's network offers WPA2 on 2.4 and
+5 GHz. The work follows the brief
+[superpowers/plans/2026-10-09-wifi.md](superpowers/plans/2026-10-09-wifi.md), which records
+the decisions below as made. This note keeps what was worked out before: what the owner
+needed to supply, the decisions, what the result looks like, and how big the job is.
 
 The goal: SurfOS reaches the network through the laptop's internal wireless card. A
 command lists the networks in range (their SSIDs), joins one with its password, and then

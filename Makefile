@@ -82,7 +82,8 @@ LDFLAGS    = -m elf_i386 -nostdlib -T linker.ld
 SRC_S      = boot/boot.S
 SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c) \
              $(wildcard shell/*.c) $(wildcard fs/*.c) $(wildcard net/*.c) $(wildcard driver/*.c) $(wildcard driver/net/*.c) $(wildcard driver/dma/*.c) \
-             $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c) $(wildcard driver/usb/*.c)
+             $(wildcard driver/floppy/*.c) $(wildcard driver/net/3c905b/*.c) $(wildcard driver/usb/*.c) \
+             $(wildcard driver/wifi/*.c) $(wildcard net/wlan/*.c) $(wildcard lib/crypto/*.c)
 # kernel/setjmp.asm is a dead pre-Multiboot entry stub and is not built.
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 

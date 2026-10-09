@@ -9,3 +9,6 @@ build/
 *.log
 *.sock
 __pycache__/
+
+# 10/9/26: vendor firmware fetched by tools/fetch-firmware.py (never committed)
+/firmware/
