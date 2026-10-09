@@ -72,6 +72,23 @@ def own_shell_killed(q):
     return 'kcmdtest run - kill ' + (pids[-1] if pids else '0')
 
 
+def autonet_telnet(q):
+    """10/9/26 (the development loop): in a boot with autonet, a telnet session through the forwarded port 23 (the
+    banner, the session's prompt, exit); the line to type afterwards says how it went"""
+    try:
+        t = Telnet(q.ports['telnet'], timeout=20)
+    except OSError:
+        return 'echo autonet-telnet-FAILED'
+    try:
+        ok = t.expect("Brandon Burr's SurfOS", 20) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return 'echo autonet-telnet-ok' if ok else 'echo autonet-telnet-FAILED'
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -386,6 +403,12 @@ SMOKE = [
                             surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
     ('@boot surfsh=etc/version', ['init: /initrd/bin/surfsh could not be loaded; recovery console', surf_prompt(b'SURF', b'?')],
      [], ['restarted the shell']),
+    # 10/9/26 (the development loop, track D): the kernel word autonet, in a boot with QEMU's network (the word gives
+    # the boot a network): the link, a lease, telnetd started on F1 with nobody typing; a telnet session gets in
+    ('@boot autonet', ['+AUTONET: waiting up to 90 s for a network link', '+AUTONET: eth0: link up after',
+                       'dhcp: eth0: lease 10.0.2.15', 'telnetd: listening on 10.0.2.15 port 23',
+                       '+AUTONET: done: telnet 10.0.2.15'],
+     [(autonet_telnet, ['autonet-telnet-ok']), ('telnetd', ['telnetd: running (pid', '0 session shells'])], []),
     ('@boot surfsh=sh', ['SurfOS user shell', SH_PROMPT],
      [('@sleep 2.5', []), ('exit 3', ['init: surfsh exited (status 3); restarted the shell', 'SurfOS user shell', SH_PROMPT]),
       ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
@@ -2264,7 +2287,8 @@ def main():
 
     def reboot(words):
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
-        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh)"""
+        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh).
+        10/9/26: a boot with autonet has QEMU's network (and its forwarded ports), the others none"""
         initrd, append = a.initrd, a.append.split()
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
@@ -2280,7 +2304,9 @@ def main():
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:
                     append.append(w)
-            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, False, ' '.join(append), 0)
+            # 10/9/26: autonet needs a network to bring up
+            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, 'autonet' in append,
+                        ' '.join(append), 0)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
 
