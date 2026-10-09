@@ -259,7 +259,7 @@ static u_int ap_frame(struct sim *s, int ap, u8 subtype, u8 *buf, u_int size) {
 
 static void ap_mgmt(struct sim *s, int ap, u8 subtype, const u8 *body, u_int n) {
     struct wbuf b;
-    u8 f[128], bssid[6];
+    u8 f[256], bssid[6];                                /* an association response with HT and WMM: 124 */
     bssid_of(ap, bssid);
     wbuf_init(&b, f, sizeof(f));
     wbuf_hdr(&b, WLAN_FC(WLAN_FC_TYPE_MGMT, subtype), s->w->mac, bssid, bssid, s->seq++);
@@ -610,7 +610,8 @@ static void rx_station_mgmt(struct sim *s, const u8 *f, u_int len) {
         if(s->authed == ap || s->assoc == ap) {
             s->authed = s->assoc = -1;
             s->a.stage = A_IDLE;
-            if(aps[ap].flaky && wlan_le16(f + h.hdr_len) == WLAN_REASON_LEAVING) s->flaky_assocs = 0;   /* wifi leave */
+            if(aps[ap].flaky && len - h.hdr_len >= 2 && wlan_le16(f + h.hdr_len) == WLAN_REASON_LEAVING)
+                s->flaky_assocs = 0;                    /* wifi leave */
         }
         return;
     default:
