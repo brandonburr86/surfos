@@ -16,6 +16,7 @@ void reboot(void);
 /* Initialization Functions */
 void init_console(void);
 void init_interrupt(void);
+void init_autonet(void);   /* 10/9/26: the kernel word autonet: network and telnetd at boot (kernel/autonet.c) */
 /*********************/
 
 void do_banner(void);

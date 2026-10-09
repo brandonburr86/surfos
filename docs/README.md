@@ -24,7 +24,7 @@ make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quit
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
-make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (12 scenarios)
+make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (13 scenarios)
 make unittest     # host unit tests
 make test-tcp     # TCP against hand-made segments (tools/qemu-tcp.py)
 ```

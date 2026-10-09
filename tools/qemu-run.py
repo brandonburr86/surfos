@@ -20,11 +20,13 @@ import re
 import select
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import zlib
 
 # The shell's prompt: the ring-0 shell's "SurfOS*> " of old, or the SurfOS prompt (10/6/26,
 # shell/prompt.c): breadcrumbs, the wave (~ in ASCII), a state character, "> ", with colour
@@ -70,6 +72,23 @@ def own_shell_killed(q):
     return 'kcmdtest run - kill ' + (pids[-1] if pids else '0')
 
 
+def autonet_telnet(q):
+    """10/9/26 (the development loop): in a boot with autonet, a telnet session through the forwarded port 23 (the
+    banner, the session's prompt, exit); the line to type afterwards says how it went"""
+    try:
+        t = Telnet(q.ports['telnet'], timeout=20)
+    except OSError:
+        return 'echo autonet-telnet-FAILED'
+    try:
+        ok = t.expect("Brandon Burr's SurfOS", 20) and t.expect(TELNET_ROOT, 10)
+        if ok:
+            t.send('exit\n')
+            ok = t.wait_closed(10)
+    finally:
+        t.close()
+    return 'echo autonet-telnet-ok' if ok else 'echo autonet-telnet-FAILED'
+
+
 def surf_prompt(crumbs, state):
     """10/6/26: the SurfOS prompt as a shell writes it to the serial port: the breadcrumbs (bytes), the wave and
     the state character, colour sequences between"""
@@ -80,6 +99,9 @@ def surf_prompt(crumbs, state):
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
            'latency', 'zwprobe', 'evict', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
+
+# 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
+RX_PORT = 5555
 
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
@@ -213,6 +235,19 @@ SMOKE = [
     ('nettest connect 10.0.2.99 23', ['connect to 10.0.2.99 port 23: No route to host']),
     ('nettest limits', ['NETTEST PASS']),
     ('@nettest-kills', []),
+    # 10/9/26 (the development loop, track D): rx, with which tools/devloop.py pushes builds onto the laptop's data
+    # stick, through the forwarded port RX_PORT: 300 KB and their CRC-32, then a smaller file in their place; a
+    # connection reset in the middle (the file before stays, nothing partial is left); its refusals (no port, a
+    # missing directory, a read-only file system, a directory, a port in use). The initrd's build id.
+    ('run rx', ['usage: rx <port> <path>', 'exit status 2']),
+    ('run rx 0 /hda1/RX.BIN', ['rx: 0 is no port (1-65535)', 'exit status 2']),
+    (f'run rx {RX_PORT} /hda1/nodir/RX.BIN', ['rx: /hda1/nodir/RX.BIN.part: No such file or directory', 'exit status 1']),
+    (f'run rx {RX_PORT} /initrd/RX.BIN', ['rx: /initrd/RX.BIN.part: Read-only file system', 'exit status 1']),
+    (f'run rx {RX_PORT} /hda1', ['rx: /hda1: Is a directory', 'exit status 1']),
+    ('@rx-push', []),
+    ('@rx-reset', []),
+    ('@rx-busy', []),
+    ('cat /initrd/etc/build-id', [re.compile(rb'\n(?:[0-9a-f]{7,40}|unknown)(?:-dirty)? \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\r?\n')]),
     # TCP against an other end that makes its segments by hand (tools/qemu-tcp.py, tools/rawnet.py): a boot of its
     # own whose NIC is on a raw link, shared by these steps (TCP_RAW above; tools/qemu-tcp.py says what each does)
     *[('@tcp-raw ' + name, []) for name in TCP_RAW],
@@ -368,6 +403,12 @@ SMOKE = [
                             surf_prompt(b'SURF', b'?')], [('ps', ['Shell 0'])], []),
     ('@boot surfsh=etc/version', ['init: /initrd/bin/surfsh could not be loaded; recovery console', surf_prompt(b'SURF', b'?')],
      [], ['restarted the shell']),
+    # 10/9/26 (the development loop, track D): the kernel word autonet, in a boot with QEMU's network (the word gives
+    # the boot a network): the link, a lease, telnetd started on F1 with nobody typing; a telnet session gets in
+    ('@boot autonet', ['+AUTONET: waiting up to 90 s for a network link', '+AUTONET: eth0: link up after',
+                       'dhcp: eth0: lease 10.0.2.15', 'telnetd: listening on 10.0.2.15 port 23',
+                       '+AUTONET: done: telnet 10.0.2.15'],
+     [(autonet_telnet, ['autonet-telnet-ok']), ('telnetd', ['telnetd: running (pid', '0 session shells'])], []),
     ('@boot surfsh=sh', ['SurfOS user shell', SH_PROMPT],
      [('@sleep 2.5', []), ('exit 3', ['init: surfsh exited (status 3); restarted the shell', 'SurfOS user shell', SH_PROMPT]),
       ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
@@ -546,15 +587,18 @@ class Qemu:
             boot += ['-drive', f'file={self.disk},format=raw,if=ide,index=0,media=disk']  # primary master: hda
         # user-mode network: 10.0.2.0/24, gateway 10.0.2.2; the host reaches guest ports 7 and
         # (10/6/26, the telnet server) 23 through forwarded ports, and the guest reaches a small HTTP
-        # server on the host (10.0.2.2) whose port travels on the kernel command line
+        # server on the host (10.0.2.2) whose port travels on the kernel command line. 10/9/26 (the
+        # development loop): guest port RX_PORT too, where rx listens in the smoke test
         self.ports = {}
         self.http = None
         if net:
             self.ports['echo'] = free_port()
             self.ports['telnet'] = free_port()
             self.ports['http'] = free_port()
+            self.ports['rx'] = free_port()
             boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23",
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['rx']}-:{RX_PORT}",
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
             cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
@@ -1920,6 +1964,100 @@ CONSOLE_CHECKS['@nettest-host'] = nettest_host_check
 CONSOLE_CHECKS['@nettest-kills'] = nettest_kills_check
 TIMEOUTS.update({'nettest connect 10.0.2.99 23': 30, 'nettest limits': 60})
 
+# 10/9/26 (the development loop, track D): rx (user/bin/rx.c) and the host, through the forwarded port RX_PORT
+RX_FIRST = b''.join(b'rx test %06d ' % i + bytes(range(i % 7, 240, 7)) for i in range(7000))[:300000]
+RX_SECOND = b'the second push, in place of the first\n' * 25
+
+
+def rx_connection(q, timeout=10):
+    """the host's connection to rx through the forwarded port (rx listens already)"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            s = socket.create_connection(('127.0.0.1', q.ports['rx']), timeout=3)
+            s.settimeout(20)
+            return s
+        except OSError:
+            q.pump(0.2)
+    return None
+
+
+def rx_send(q, path, data, reset_after=None):
+    """run rx <port> <path> on the console and send it data (or, with reset_after, that much and then a reset);
+    True once rx listened and took the connection"""
+    q.send(f'run rx {RX_PORT} {path}\n')
+    if not q.expect(f'rx: listening on port {RX_PORT} for {path}', 10):
+        return False
+    s = rx_connection(q)
+    if not s:
+        return False
+    try:
+        if reset_after is None:
+            s.sendall(data)
+            s.shutdown(socket.SHUT_WR)
+            while s.recv(4096):                 # rx closes once the file has its name
+                pass
+        else:
+            s.sendall(data[:reset_after])
+            q.wait(1)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+    except OSError:
+        pass
+    s.close()
+    return True
+
+
+def rx_said(data, path):
+    return f'rx: {len(data)} bytes, crc32 {zlib.crc32(data) & 0xFFFFFFFF:08x} -> {path}'
+
+
+def rx_push_check(q):
+    """300 KB into /hda1/RX.BIN, their length and CRC-32 said; then a smaller file in its place; no .part left"""
+    ok = rx_send(q, '/hda1/RX.BIN', RX_FIRST) and q.expect(rx_said(RX_FIRST, '/hda1/RX.BIN'), 60)
+    ok = ok and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    q.send('stat /hda1/RX.BIN\n')
+    ok = q.expect(f'file, {len(RX_FIRST)} bytes', 10) and q.expect(PROMPT, 10) and ok
+    ok = ok and rx_send(q, '/hda1/RX.BIN', RX_SECOND) and q.expect(rx_said(RX_SECOND, '/hda1/RX.BIN'), 60)
+    ok = ok and q.expect('exit status 0', 10) and q.expect(PROMPT, 10)
+    q.send('stat /hda1/RX.BIN\n')
+    ok = q.expect(f'file, {len(RX_SECOND)} bytes', 10) and q.expect(PROMPT, 10) and ok
+    q.send('ls /hda1/RX.BIN.part\n')
+    ok = q.expect('No such file or directory', 10) and q.expect(PROMPT, 10) and ok
+    return ('rx: 300 KB through the forwarded port with their CRC-32, then another file in their place', ok)
+
+
+def rx_reset_check(q):
+    """a connection reset after 50 KB: rx says so (status 1), the file before is as it was, nothing partial"""
+    ok = rx_send(q, '/hda1/RX.BIN', RX_FIRST, reset_after=50000)
+    ok = ok and q.expect('rx: the connection, after ', 20) and q.expect('Connection reset', 10)
+    ok = ok and q.expect('exit status 1', 10) and q.expect(PROMPT, 10)
+    q.send('stat /hda1/RX.BIN\n')
+    ok = q.expect(f'file, {len(RX_SECOND)} bytes', 10) and q.expect(PROMPT, 10) and ok
+    q.send('ls /hda1/RX.BIN.part\n')
+    ok = q.expect('No such file or directory', 10) and q.expect(PROMPT, 10) and ok
+    return ('rx: a connection reset in the middle: status 1, the file before kept, nothing partial left', ok)
+
+
+def rx_busy_check(q):
+    """rx on a port another program listens on (nettest echo): in use, status 1, nothing left behind; the host's
+    connection to nettest then lets it end"""
+    q.send(f'nettest echo {RX_PORT} 1 &\n')
+    ok = q.expect('] started', 10) and q.expect(PROMPT, 10)
+    q.send(f'run rx {RX_PORT} /hda1/BUSY.BIN\n')
+    ok = q.expect(f'rx: port {RX_PORT} is in use', 10) and q.expect('exit status 1', 10) and q.expect(PROMPT, 10) and ok
+    q.send('ls /hda1/BUSY.BIN.part\n')
+    ok = q.expect('No such file or directory', 10) and q.expect(PROMPT, 10) and ok
+    s = rx_connection(q)
+    if s:
+        s.close()
+    ok = ok and s is not None and q.expect('0 bytes echoed', 10)
+    q.send('ls /hda1/RX.BIN\n')                # surfsh collects nettest from the background
+    ok = q.expect(PROMPT, 10) and ok
+    return ('rx: a port in use is refused (status 1), nothing left behind', ok)
+
+
+CONSOLE_CHECKS.update({'@rx-push': rx_push_check, '@rx-reset': rx_reset_check, '@rx-busy': rx_busy_check})
+
 # 10/6/26 (track N, after its review): the scenarios of tools/qemu-tcp.py as smoke steps
 _tcp_raw = {}
 
@@ -1985,6 +2123,7 @@ def host_checks(q):
         except Exception as e:
             return str(e).encode()
     results = [('FAT file written by the self test is readable with mtools', read('SELFTEST.TXT') == b'SurfOS wrote this file.\n'),
+               ('the file rx received last is exact (mtools)', read('RX.BIN') == RX_SECOND),     # 10/9/26
                ('the files the editor saved are exact, line ends included (mtools)',
                 read('NOTE.TXT') == b'Alpha one!\nBeta 2\nGamma three\n' and read('CRLF.TXT') == b'first!\r\nsecond\r\n')]
     try:                                                    # the UTF-8 name the self test made, through mtools' UTF-16
@@ -2148,7 +2287,8 @@ def main():
 
     def reboot(words):
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
-        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh)"""
+        surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh).
+        10/9/26: a boot with autonet has QEMU's network (and its forwarded ports), the others none"""
         initrd, append = a.initrd, a.append.split()
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
@@ -2164,7 +2304,9 @@ def main():
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:
                     append.append(w)
-            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, False, ' '.join(append), 0)
+            # 10/9/26: autonet needs a network to bring up
+            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, 'autonet' in append,
+                        ' '.join(append), 0)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
 

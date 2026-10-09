@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test boots the image twelve times, each a cold boot with fresh firmware variables:
+--test runs thirteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -54,6 +54,15 @@ comes out of the framebuffer.
              read and written; the boot drive is refused. Afterwards other FAT implementations
              check both images here: macOS's fsck_msdos (hdiutil, without mounting), fsck.fat
              (on the host or in the devenv container) and a FAT32 reader reading the files back
+  devloop    (10/9/26) the development loop: a FAT32 data stick holding this image's kernel and
+             initrd in /surfos-dev (tools/mkimage.py devstick) and a USB adapter with telnet and a
+             second port forwarded. GRUB's development entry is first and boots by itself, with
+             autonet: eth0, a lease and telnetd with nobody typing; a telnet session; rx receives
+             a file with its CRC-32; tools/devloop.py deploy pushes the build with another build id,
+             ejects the stick and reboots (the guest restarts inside the same QEMU), and finds that
+             build running; with the stick unplugged the next boot is the normal entry, quietly and
+             without autonet; a stick with no file system is refused. Afterwards the stick holds
+             exactly the pushed files (read here) and fsck_msdos and fsck.fat find no error
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -312,7 +321,8 @@ NAMED.update({f'f{i}': f'f{i}' for i in range(1, 13)})
 
 
 class Vm:
-    def __init__(self, name, args, image, firmware, mem='512', serial=True, outdir=None, machine='q35', extra=()):
+    def __init__(self, name, args, image, firmware, mem='512', serial=True, outdir=None, machine='q35', extra=(),
+                 reboot=False):
         self.name, self.args, self.serial_on = name, args, serial
         base = '/tmp' if os.path.isdir('/tmp') else tempfile.gettempdir()      # short: UNIX socket paths
         self.work = tempfile.mkdtemp(prefix='surfos-usb-', dir=base)
@@ -328,7 +338,7 @@ class Vm:
                '-device', 'qemu-xhci,id=xhci',
                '-drive', 'if=none,id=usbstick,format=raw,file=usb.img',
                '-device', 'usb-storage,bus=xhci.0,drive=usbstick,removable=on',
-               '-nic', 'none', '-vga', 'std', '-display', 'none', '-no-reboot',
+               '-nic', 'none', '-vga', 'std', '-display', 'none'] + ([] if reboot else ['-no-reboot']) + [
                '-monitor', f'unix:{self.mon_path},server,nowait']
         cmd += (['-chardev', f'socket,id=ser0,path={ser_path},server=on,wait=off', '-serial', 'chardev:ser0']
                 if serial else ['-serial', 'none'])
@@ -1307,6 +1317,204 @@ def load_mkusb():
     return mod
 
 
+def load_tool(name, file):
+    """10/9/26: another tool of tools/ as a module (devloop.py, mkimage.py)"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, os.path.join(REPO, 'tools', file))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def with_build_id(initrd, build_id):
+    """10/9/26: an initrd (bytes) whose etc/build-id says build_id"""
+    import io
+    import tarfile
+    out = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(initrd)) as old, tarfile.open(fileobj=out, mode='w', format=tarfile.USTAR_FORMAT) as new:
+        for m in old.getmembers():
+            if m.name == 'etc/build-id':
+                data = (build_id + '\n').encode()
+                m.size = len(data)
+                new.addfile(m, io.BytesIO(data))
+            else:
+                new.addfile(m, old.extractfile(m) if m.isfile() else None)
+    return out.getvalue()
+
+
+DEV_TITLE = 'SurfOS (development build from the data stick)'
+AUTONET_LINES = ['+AUTONET: waiting up to 90 s for a network link', '+AUTONET: eth0: link up after',
+                 'dhcp: eth0: lease 10.0.2.15', 'telnetd: listening on 10.0.2.15 port 23', '+AUTONET: done: telnet 10.0.2.15']
+
+
+class Draining:
+    """10/9/26: the serial port read in the background while this host does something else with the guest
+    (tools/devloop.py over telnet), so its output is kept and the guest never waits for its UART"""
+    def __init__(self, vm):
+        self.vm, self.stop = vm, threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def run(self):
+        while not self.stop.is_set():
+            self.vm.pump(0.1)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join()
+
+
+def in_order(vm, needles, timeout, start=0):
+    """10/9/26: the needles in this order in what the serial port said from start on (boot messages come in
+    between the shell's prompt and its commands, so vm.expect's cursor may have passed them)"""
+    deadline = time.time() + timeout
+    while True:
+        text, at = vm.text()[start:], 0
+        for n in needles:
+            at = text.find(n, at)
+            if at < 0:
+                break
+            at += len(n)
+        else:
+            return True
+        if time.time() > deadline or vm.proc.poll() is not None:
+            return False
+        vm.pump(0.2)
+BLANK_STICK = ['-blockdev', 'driver=file,filename={blank},node-name=blankfile',
+               '-blockdev', 'driver=raw,file=blankfile,node-name=blank']
+BLANK_DEV = 'usb-storage,bus=xhci.0,drive=blank,removable=on,id=stick2'
+
+
+def scenario_devloop(args, image, firmware, outdir):
+    """10/9/26 (the development loop, track D): the laptop as the integrator drives it, under QEMU"""
+    results = []
+    mk, dl, mi, qr = load_mkusb(), load_tool('devloop', 'devloop.py'), load_tool('mkimage', 'mkimage.py'), load_smoke_harness()
+    with open(image, 'rb') as f:
+        fat = mk.Fat32(f, mk.read_gpt(f, os.path.getsize(image) // 512)['first_lba'] * 512)
+        kernel, initrd = fat.read('/boot/surfos.bin'), fat.read('/boot/initrd.tar')
+    first_id = dl.build_id_of(initrd)
+    new_id = 'devloop-test ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    pushed = with_build_id(initrd, new_id)
+    tmpd = tempfile.mkdtemp(prefix='surfos-devloop-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick, blank = os.path.join(tmpd, 'devstick.img'), os.path.join(tmpd, 'blank.img')
+    mi.make_devstick(stick, kernel, initrd)
+    with open(blank, 'wb') as f:
+        f.truncate(64 << 20)
+    tport, rport = qr.free_port(), qr.free_port()
+    net = ['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{tport}-:23,hostfwd=tcp:127.0.0.1:{rport}-:{rport}',
+           '-device', USBNET_DEV]
+    vm = Vm('devloop', args, image, firmware, mem='512', serial=True, outdir=outdir, reboot=True,
+            extra=data_stick_args(stick) + [a.format(blank=blank) for a in BLANK_STICK] + net)
+    rx_data = os.urandom(200000)
+    sessions = []
+    try:
+        # GRUB: the development entry first, booted by itself after the timeout
+        ok = vm.expect('*' + DEV_TITLE, args.boot_timeout) and vm.expect('Booting `' + DEV_TITLE, 30)
+        results.append(('GRUB: the data stick\'s development entry is first, the default, and boots', ok))
+        ok = ok and vm.expect(PROMPT, args.boot_timeout)
+        results.append(('the development build boots to the prompt', ok))
+        if ok:
+            ok = in_order(vm, AUTONET_LINES, 90)
+            results.append(('autonet: the USB adapter\'s link, a lease, telnetd on F1, with nobody typing', ok))
+            ok2, _ = run_cmd(vm, 'bootinfo', ['cmdline "profile=laptop autonet"'])
+            results.append(('bootinfo: the kernel command line has autonet', ok2))
+        if ok:
+            try:
+                with Draining(vm):
+                    s = dl.Session('127.0.0.1', tport, timeout=20)
+                    sessions.append(s)
+                    results.append(('telnet from this host: the banner and a session\'s prompt',
+                                    "Brandon Burr's SurfOS" in s.banner))
+                    results.append(('the build id is the data stick\'s build', s.build_id() == first_id))
+                    s.check('mount usb1p1 /st')
+                    dl.push(s, rx_data, '/st/RX.BIN', rport, '127.0.0.1')
+                    results.append(('rx: 200 KB through the second forwarded port, with the right CRC-32', True))
+                    s.check('umount /st')
+            except dl.DevloopError as e:
+                print(f'      ({e})', flush=True)
+                results.append(('telnet and rx', False))
+                ok = False
+        if ok:
+            # devloop deploy: another build id onto the stick, eject, reboot (inside this QEMU), telnet again
+            mark = len(vm.text())
+            try:
+                with Draining(vm):
+                    s2 = dl.deploy(sessions[-1], kernel, pushed, new_id, port=tport, rx_port=rport,
+                                   connect_host='127.0.0.1')
+                sessions.append(s2)
+                results.append(('devloop deploy: pushed, ejected, rebooted, and the new build id runs', True))
+            except dl.DevloopError as e:
+                print(f'      ({e})', flush=True)
+                results.append(('devloop deploy: pushed, ejected, rebooted, and the new build id runs', False))
+                ok = False
+            results.append(('the reboot came through the development entry again, with autonet',
+                            in_order(vm, ['Booting `' + DEV_TITLE] + AUTONET_LINES, 30, mark)))
+        if ok:
+            # the data stick out: the next boot is the normal entry, the menu as before, no autonet
+            vm.mon.cmd('device_del stick1')
+            ok = vm.expect('+USB: usb1: unplugged', 20)
+            mark = len(vm.transcript)
+            sessions[-1].t.send('reboot\n')
+            ok = ok and vm.expect("Booting `SurfOS'", args.boot_timeout) and vm.expect(PROMPT, args.boot_timeout)
+            vm.pump(3)
+            again = vm.transcript[mark:].decode(errors='replace')
+            grub = again.split("Booting `SurfOS'")[0]
+            results.append(('without the data stick: no development entry, no GRUB error, the normal entry boots',
+                            ok and DEV_TITLE not in again and 'error' not in grub.lower()))
+            ok2, out = run_cmd(vm, 'bootinfo', ['cmdline "profile=laptop"'])
+            results.append(('and without autonet: nothing starts the network or telnetd',
+                            ok2 and 'autonet' not in out and '+AUTONET' not in vm.transcript[mark:].decode(errors='replace')))
+            # by hand then, as after the normal entry: dhcp, telnetd on; a stick with no file system is refused
+            ok = run_cmd(vm, 'dhcp', ['lease 10.0.2.15'])[0] and run_cmd(vm, 'telnetd on', ['listening on 10.0.2.15'])[0]
+            vm.mon.cmd('device_add ' + BLANK_DEV)
+            ok = ok and vm.expect('+USB: usb1: QEMU QEMU HARDDISK, 64 MB', 30)
+            refused = None
+            if ok:
+                try:
+                    with Draining(vm):
+                        s3 = dl.Session('127.0.0.1', tport, timeout=20)
+                        sessions.append(s3)
+                        dl.deploy(s3, kernel, pushed, new_id, port=tport, rx_port=rport, connect_host='127.0.0.1')
+                except dl.DevloopError as e:
+                    refused = str(e)
+            results.append(('devloop deploy refuses a stick without a FAT file system and says what to do',
+                            bool(refused) and 'has no FAT file system' in refused and 'never formats' in refused))
+        check_bad(vm, results, vm.text())
+    finally:
+        for s in sessions:
+            try:
+                s.t.close()
+            except Exception:
+                pass
+        vm.close()
+    # what the data stick holds now, read here: exactly the pushed build, nothing partial; the blank stick untouched
+    try:
+        off, _ = mbr_partition(stick)
+        with open(stick, 'rb') as f:
+            fat = mk.Fat32(f, off)
+            # (SurfOS writes a lower-case 8.3 name as a short entry, which this reader gives in upper case)
+            names = sorted(n.lower() for n, _, _, _, _ in fat.entries(next(c for n, d, c, _, _ in fat.entries(fat.root)
+                                                                          if n.lower() == 'surfos-dev')))
+            results.append(('the data stick holds the pushed kernel and initrd, nothing else in /surfos-dev',
+                            fat.read('surfos-dev/surfos.bin') == kernel and fat.read('surfos-dev/initrd.tar') == pushed
+                            and names == ['.', '..', 'initrd.tar', 'surfos.bin']))
+            results.append(('and the file rx received', fat.read('RX.BIN') == rx_data))
+        for what, ok, text in fat_checks(stick, 'data stick'):
+            results.append((what, ok))
+            if not ok:
+                print(text, flush=True)
+        with open(blank, 'rb') as f:
+            results.append(('nothing was written to the stick without a file system',
+                            all(chunk.count(0) == len(chunk) for chunk in iter(lambda: f.read(1 << 20), b''))))
+    except Exception as e:
+        results.append((f'the sticks can be read back here ({e})', False))
+    shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def scenario_missing(args, image, firmware, outdir, path, message):
     """a stick that lost a file must stop with a message saying so, not a blank screen or a hang"""
     results = []
@@ -1336,6 +1544,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
+             'devloop': scenario_devloop,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -1439,7 +1648,7 @@ def main():
                'scenarios': {}}
     failed = 0
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
-                               'usbdisk', 'storage', 'no-initrd', 'no-kernel']:
+                               'usbdisk', 'storage', 'devloop', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)

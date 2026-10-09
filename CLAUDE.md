@@ -21,10 +21,11 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # partition tables (+ sfdisk/sgdisk cross-checks), mkfs (+ fsck.fat), the user C library,
                   # the prompt renderer, code page 437 and the UTF-8 decoder, the console's pager (test_pager),
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
-                  # PCI configuration space as lspci -v reads it (test_pciinfo)
+                  # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 12 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 13 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
+make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-tcp     # the TCP stack against hand-made segments: tools/qemu-tcp.py (+ rawnet.py), QEMU 7.2 or later
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
@@ -58,7 +59,8 @@ shell command or a kernel feature that the shell can exercise, and a check in
 boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg for the USB image
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
            pty.c (pseudo-terminals: a tty with a stream console), proc.c (procinfo, detach),
-           multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile)
+           multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile),
+           autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds)
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
 driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for lspci -v and wifiinfo), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
@@ -73,17 +75,19 @@ net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP
            programs' descriptors)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno), include/ (the
            standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv, rm, mkdir, df, fstest,
-           pagetest, kcmdtest, nettest, ptytest, ...), surfsh/ (the SurfOS shell: main, editor, complete, parse, run, builtins),
+           pagetest, kcmdtest, nettest, ptytest, rx (one file from the network), ...), surfsh/ (the SurfOS shell: main,
+           editor, complete, parse, run, builtins),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
            prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
-tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image and initrd), mkusb.py (the USB image), qemu-usb.py (its UEFI
-           boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against hand-made segments)
+tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
+           mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
+           hand-made segments), devloop.py (development builds onto the laptop over the network)
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
            protocol, telnetd's loop), test_part_tools.py,
-           test_mkusb.py, test_devenv.py
+           test_mkusb.py, test_devenv.py, test_devloop.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
@@ -114,7 +118,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   always gets through (it ends an escape sequence and drops type-ahead); after type-ahead
   is dropped, the serial line and ptys skip input until it pauses for 200 ms (`TTY_SKIP`),
   so the rest of a paste never runs in pieces. `telnetd` has no login or encryption by the
-  owner's choice: never start it by itself.
+  owner's choice: never start it by itself. The one exception is the kernel word `autonet`
+  (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13).
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
@@ -185,6 +190,21 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   one TCP scenario (`--verbose` prints every segment); the harness's `Telnet` client
   (tools/qemu-run.py) reaches guest port 23 through `q.ports['telnet']`; `telnetd status`
   and `dmesg` show the server's sessions and why each ended.
+* The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
+  telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
+  `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under
+  build/docker/build/O2 or O0, from `devenv/build-usb.sh`, pushed with `rx` onto the data stick's
+  `/surfos-dev/`, then eject, reboot through GRUB's development entry, telnet again, `/initrd/etc/build-id`
+  checked); `reboot`. The laptop (10.0.0.4) belongs to one track at a time, as the integrator assigns it; test
+  against QEMU instead: `tools/qemu-usb.py --test --scenario devloop`, or devloop.py with `--host 127.0.0.1
+  --port <forwarded telnet> --rx-port <a port forwarded to itself> --net none` against a guest you started
+  (`tools/mkimage.py devstick` makes a data stick image). Never run `find` or a default `--net` from a test:
+  it searches 10.0.0.0/24. On the laptop the boot stick is the 118 GB General USB Flash Disk (USB 346d:3281,
+  GPT, SURFOSUSB, "boot drive: protected") and the data stick the 30 GB USB Disk 2.0 (346d:5678, lsblk model
+  "VendorCo Product", MBR, one FAT32 LBA partition): only mounted, written in `/surfos-dev/` and ejected, never
+  formatted. usb0 and usb1 swap between boots, so devloop.py takes the USB disk that lsblk does not call
+  protected and whose first partition is FAT, never a name or a size. The laptop boots from USB first, so a
+  `reboot` comes back to the boot stick's GRUB by itself.
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that

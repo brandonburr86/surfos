@@ -11,6 +11,8 @@ The image is a whole disk, written to a USB drive with a raw-image writer:
     the end: the EFI system partition, FAT32, label SURFOSUSB, holding
         /EFI/BOOT/BOOTX64.EFI   standalone GRUB for x86_64 UEFI (the removable-media path)
         /boot/grub/grub.cfg     the menu: multiboot2 + module2 with profile=laptop
+        /boot/grub/x86_64-efi/fs.lst  (10/9/26) empty: GRUB loads no file system modules (it has
+                                none on the drive) when it looks at a disk that is not FAT
         /boot/surfos.bin        the kernel
         /boot/initrd.tar        the user programs and rootfs/, ramdisk rd0
         /boot/BUILD-INFO.txt    what was built, from what, when
@@ -333,6 +335,7 @@ def assemble(args, tmp_image, staging):
 
     files = {'/EFI/BOOT/BOOTX64.EFI': os.path.join(staging, 'BOOTX64.EFI'),
              '/boot/grub/grub.cfg': args.grub_cfg,
+             '/boot/grub/x86_64-efi/fs.lst': os.path.join(staging, 'fs.lst'),
              '/boot/surfos.bin': args.kernel,
              '/boot/initrd.tar': args.initrd,
              '/boot/BUILD-INFO.txt': os.path.join(staging, 'BUILD-INFO.txt')}
@@ -353,7 +356,7 @@ def assemble(args, tmp_image, staging):
         spc //= 2
     run([args.mformat, '-i', where, '-F', '-T', str(part_sectors), '-h', '64', '-s', '32', '-H', str(first),
          '-c', str(spc), '-v', LABEL, '-N', serial, '::'], 'mformat', MTOOLS_ENV)
-    for d in ('::/EFI', '::/EFI/BOOT', '::/boot', '::/boot/grub'):
+    for d in ('::/EFI', '::/EFI/BOOT', '::/boot', '::/boot/grub', '::/boot/grub/x86_64-efi'):
         run([args.mmd, '-i', where, d], 'mmd', MTOOLS_ENV)
     for dest, src in files.items():
         run([args.mcopy, '-i', where, '-o', src, '::' + dest], 'mcopy', MTOOLS_ENV)
@@ -411,6 +414,10 @@ def build(args):
         kernel_sha, initrd_sha = sha256_file(args.kernel), sha256_file(args.initrd)
         with open(os.path.join(staging, 'BUILD-INFO.txt'), 'w') as f:
             f.write(build_info(args, kernel_sha, initrd_sha, built))
+        # 10/9/26: when the bootstrap sets $prefix to the drive's /boot/grub, GRUB reads its list of file system
+        # modules to load on demand from here; empty, it tries none (the menu looks at every disk for a development
+        # build, and a disk that is not FAT would otherwise print an error for each module it cannot find)
+        open(os.path.join(staging, 'fs.lst'), 'w').close()
         layout, files = assemble(args, tmp_image, staging)
         with open(tmp_image, 'rb+') as f:
             os.fsync(f.fileno())
@@ -473,10 +480,10 @@ def inspect(path):
         print(f'{path}: {size // (1024 * 1024)} MB, GPT disk {part["disk_guid"]}')
         print(f'  partition 1: {part["name"]}, type {part["type_guid"]}, LBA {part["first_lba"]}-{part["last_lba"]}')
         print(f'  FAT32 volume {fat.label}, {fat.csize}-byte clusters, {fat.clusters} clusters')
-        for dest in ('/EFI/BOOT/BOOTX64.EFI', '/boot/grub/grub.cfg', '/boot/surfos.bin', '/boot/initrd.tar',
-                     '/boot/BUILD-INFO.txt'):
+        for dest in ('/EFI/BOOT/BOOTX64.EFI', '/boot/grub/grub.cfg', '/boot/grub/x86_64-efi/fs.lst', '/boot/surfos.bin',
+                     '/boot/initrd.tar', '/boot/BUILD-INFO.txt'):
             data = fat.read(dest)
-            print(f'  {dest:24} {len(data):9} bytes  sha256 {hashlib.sha256(data).hexdigest()}')
+            print(f'  {dest:30} {len(data):9} bytes  sha256 {hashlib.sha256(data).hexdigest()}')
     return 0
 
 

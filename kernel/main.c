@@ -11,6 +11,10 @@ image's GRUB menu passes it) the kernel expects real UEFI hardware: it reads the
 tables, routes the 8259s through the local APIC, sets up the 8042 and polls it, skips
 the ISA devices such a machine does not have, mounts only the initrd, and makes sure
 the timer really ticks. The screen is the boot loader's framebuffer when there is one.
+
+10/9/26 (the development loop): the word autonet, which GRUB's development entry passes,
+starts a thread that waits for a network link, gets an address and starts telnetd
+(kernel/autonet.c).
 */
 
 #include <surfos/console.h>
@@ -97,6 +101,7 @@ void kmain(u_long magic, u_long addr) {
     init_net(); //the net thread (frames queue up until it runs)
     init_fs(); //mount the initrd and whatever the disks hold
     init_syscalls(); //int 0x80 for user programs
+    init_autonet(); //10/9/26: with the word autonet, a thread brings up the network and telnetd (the development loop)
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 

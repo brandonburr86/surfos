@@ -101,6 +101,25 @@ class MkusbTests(unittest.TestCase):
         self.assertIn('menuentry "SurfOS (kernel shell)"', iso)
         self.assertIn('multiboot /boot/surfos.bin shell=kernel', iso)
 
+    def test_development_entry(self):
+        """10/9/26 (the development loop): the data stick's entry is defined before every other one, only when a
+        disk other than the boot drive holds both files, and boots them with autonet (which no other entry has);
+        the disks are looked at with test -f, never search, which prints an error when it finds nothing"""
+        cfg = self.cfg.read_text()
+        code = '\n'.join(l for l in cfg.splitlines() if not l.lstrip().startswith('#'))
+        dev = re.search(r'^if \[ -n "\$surfos_devbuild" \]; then\n(.*?)^fi\n', code, re.S | re.M)
+        self.assertIsNotNone(dev)
+        self.assertLess(dev.start(), code.index('menuentry "SurfOS" {'))
+        body = dev.group(1)
+        self.assertIn('menuentry "SurfOS (development build from the data stick)" {', body)
+        self.assertIn('multiboot2 ($surfos_devbuild)/surfos-dev/surfos.bin profile=laptop autonet\n', body)
+        self.assertIn('module2 ($surfos_devbuild)/surfos-dev/initrd.tar initrd.tar\n', body)
+        self.assertEqual(code.count('autonet'), 1)
+        self.assertIn('if [ "$surfos_disk" != "$surfos_boot_disk" ]', code)            # never the boot drive
+        self.assertIn('[ -f "($surfos_part)/surfos-dev/surfos.bin" ]', code)
+        self.assertIn('[ -f "($surfos_part)/surfos-dev/initrd.tar" ]', code)
+        self.assertNotRegex(code, r'(^|\s)search\s')
+
     def test_rejects_device_outputs(self):
         self.assertEqual(self.build(output='/dev/null'), 1)
         self.assertEqual(self.build(output='/dev/disk2'), 1)
@@ -130,6 +149,7 @@ class MkusbTests(unittest.TestCase):
             self.assertEqual(fat.read('/boot/initrd.tar'), self.initrd.read_bytes())
             self.assertEqual(fat.read('/EFI/BOOT/BOOTX64.EFI'), self.efi.read_bytes())
             self.assertEqual(fat.read('/boot/grub/grub.cfg'), self.cfg.read_bytes())
+            self.assertEqual(fat.read('/boot/grub/x86_64-efi/fs.lst'), b'')     # 10/9/26: no modules to load
             info = fat.read('/boot/BUILD-INFO.txt').decode()
             self.assertIn('Source revision: abc123', info)
             self.assertIn('Optimization: O2', info)
