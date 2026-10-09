@@ -1,6 +1,8 @@
 /* Host-side unit tests for lib/crypto/ (10/9/26, track C of the Wi-Fi brief), against published
-   test vectors: FIPS 180-4 and RFC 6234 (SHA-1, SHA-256), RFC 2202 and RFC 4231 (HMAC); and the
-   constant-time compare and the wiping. Built like the kernel objects and run by `make unittest`. */
+   test vectors: FIPS 180-4 and RFC 6234 (SHA-1, SHA-256), RFC 2202 and RFC 4231 (HMAC), RFC 6070
+   (PBKDF2-HMAC-SHA1; all but the 16777216-iteration case, which takes minutes under emulation) and
+   IEEE 802.11-2016 Annex J.3 and J.4 (the PRF; the passphrase to the PSK); and the constant-time
+   compare and the wiping. Built like the kernel objects and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -219,6 +221,52 @@ static void test_hmac(void) {
     check_hex(mac2, SHA1_LEN, rfc2202[1].mac, "HMAC-SHA1 with the output buffer over the key");
 }
 
+/**** PBKDF2 and the 802.11 key derivations ****/
+
+static void test_kdf(void) {
+    static const char *case3 = "Test Using Larger Than Block-Size Key - Hash Key First";
+    u8 out[64], key[80];
+
+    pbkdf2_sha1((const u8 *)"password", 8, (const u8 *)"salt", 4, 1, out, 20);
+    check_hex(out, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6", "PBKDF2-HMAC-SHA1 RFC 6070 case 1 (c = 1)");
+    pbkdf2_sha1((const u8 *)"password", 8, (const u8 *)"salt", 4, 2, out, 20);
+    check_hex(out, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957", "RFC 6070 case 2 (c = 2)");
+    pbkdf2_sha1((const u8 *)"password", 8, (const u8 *)"salt", 4, 4096, out, 20);
+    check_hex(out, 20, "4b007901b765489abead49d926f721d065a429c1", "RFC 6070 case 3 (c = 4096)");
+    pbkdf2_sha1((const u8 *)"passwordPASSWORDpassword", 24, (const u8 *)"saltSALTsaltSALTsaltSALTsaltSALTsalt", 36,
+                4096, out, 25);
+    check_hex(out, 25, "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038", "RFC 6070 case 5 (25 bytes: two blocks)");
+    pbkdf2_sha1((const u8 *)"pass\0word", 9, (const u8 *)"sa\0lt", 5, 4096, out, 16);
+    check_hex(out, 16, "56fa6aa75548099dcc37d7f03425e0c3", "RFC 6070 case 6 (NUL bytes inside)");
+    check(pbkdf2_sha1((const u8 *)"password", 8, (const u8 *)"salt", 4, 0, out, 20) == -1, "PBKDF2 with 0 iterations: -1");
+
+    /* 802.11-2016 J.4.3: PSK = PBKDF2(passphrase, SSID, 4096, 256 bits) */
+    pbkdf2_sha1((const u8 *)"password", 8, (const u8 *)"IEEE", 4, 4096, out, 32);
+    check_hex(out, 32, "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e", "802.11 J.4 \"password\", SSID \"IEEE\"");
+    pbkdf2_sha1((const u8 *)"ThisIsAPassword", 15, (const u8 *)"ThisIsASSID", 11, 4096, out, 32);
+    check_hex(out, 32, "0dc0d6eb90555ed6419756b9a15ec3e3209b63df707dd508d14581f8982721af", "802.11 J.4 \"ThisIsAPassword\"");
+    pbkdf2_sha1((const u8 *)"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 32, (const u8 *)"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", 32, 4096, out, 32);
+    check_hex(out, 32, "becb93866bb8c3832cb777c2f559807c8c59afcb6eae734885001300a981cc62", "802.11 J.4 32 'a', 32 'Z'");
+
+    /* 802.11-2016 J.3.2: the PRF with HMAC-SHA1 */
+    memset(key, 0x0b, 20);
+    ieee80211_prf_sha1(key, 20, "prefix", (const u8 *)"Hi There", 8, out, 24);
+    check_hex(out, 24, "bcd4c650b30b9684951829e0d75f9d54b862175ed9f00606", "802.11 PRF J.3 test case 1 (192 bits)");
+    ieee80211_prf_sha1((const u8 *)"Jefe", 4, "prefix-2", (const u8 *)"what do ya want for nothing?", 28, out, 32);
+    check_hex(out, 32, "47c4908e30c947521ad20be9053450ecbea23d3aa604b77326d8b3825ff7475c", "802.11 PRF J.3 test case 2 (256 bits)");
+    memset(key, 0xaa, 80);
+    ieee80211_prf_sha1(key, 80, "prefix-3", (const u8 *)case3, strlen(case3), out, 48);
+    check_hex(out, 48, "0ab6c33ccf70d0d736f4b04c8a7373255511abc5073713163bd0b8c9eeb7e1956fa066820a73ddee3f6d3bd407e0682a",
+              "802.11 PRF J.3 test case 3 (384 bits, an 80-byte key)");
+    memset(key, 0x0b, 20);
+    ieee80211_prf_sha1(key, 20, "prefix-4", (const u8 *)"Hi There Again", 14, out, 64);
+    check_hex(out, 64, "248cfbc532ab38ffa483c8a2e40bf170eb542a2e0916d7bf6d97da2c4c5ca877736c53a65b03fa4b3745ce7613f6ad68"
+              "e0e4a798b7cf691c96176fd634a59a49", "802.11 PRF J.3 test case 4 (512 bits)");
+    ieee80211_prf_sha1(key, 20, "prefix-4", (const u8 *)"Hi There Again", 14, out, 48);
+    check_hex(out, 48, "248cfbc532ab38ffa483c8a2e40bf170eb542a2e0916d7bf6d97da2c4c5ca877736c53a65b03fa4b3745ce7613f6ad68",
+              "PRF-384 is the first 48 bytes of PRF-512");
+}
+
 /**** compare and wipe ****/
 
 static void test_util(void) {
@@ -242,6 +290,7 @@ static void test_util(void) {
 int main(void) {
     test_sha();
     test_hmac();
+    test_kdf();
     test_util();
     printf("CRYPTO UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);

@@ -50,11 +50,13 @@ void hmac_sha256_init(struct hmac_sha256_ctx *c, const u8 *key, size_t key_len);
 void hmac_sha256_update(struct hmac_sha256_ctx *c, const void *data, size_t len);
 void hmac_sha256_final(struct hmac_sha256_ctx *c, u8 out[SHA256_LEN]);
 
-/* PBKDF2 with HMAC-SHA1 (RFC 8018); 0 */
+/* PBKDF2 with HMAC-SHA1 (RFC 8018); 0, or -1 when iterations is 0 (10/9/26: out must not
+   overlap salt) */
 int pbkdf2_sha1(const u8 *pass, size_t pass_len, const u8 *salt, size_t salt_len, u_int iterations,
                 u8 *out, size_t out_len);
 
-/* the IEEE 802.11 PRF with HMAC-SHA1 (802.11-2016 12.7.1.2): label, a zero byte, data, a counter */
+/* the IEEE 802.11 PRF with HMAC-SHA1 (802.11-2016 12.7.1.2): label, a zero byte, data, a counter.
+   (10/9/26) out_len is in bytes (PRF-384 is 48), at most 5100; out must not overlap data */
 void ieee80211_prf_sha1(const u8 *key, size_t key_len, const char *label, const u8 *data, size_t data_len,
                         u8 *out, size_t out_len);
 
