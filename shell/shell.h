@@ -52,6 +52,9 @@ int run_selftest(void);     /* 0 = all pass */
 /* fdisk.c */
 int cmd_fdisk(int argc, char **argv);
 
+/* wifi.c: the Wi-Fi command (10/9/26) */
+int cmd_wifi(int argc, char **argv);
+
 /* fscmd.c: file system commands (10/5/26) */
 int cmd_mount(int argc, char **argv);
 int cmd_umount(int argc, char **argv);

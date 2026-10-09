@@ -101,6 +101,9 @@ SMOKE = [
     ('lspci zz', ['usage: lspci [-v] [bus:device.function]']),
     ('wifiinfo', ['Wi-Fi report', 'chipset: 00:00.0 8086:1237', 'none: no PCI device is a wireless network controller',
                   'Other network controllers:', '00:03.0 8086:100e', 'USB: no xHCI controller', 'hold Option']),
+    # 10/9/26 (Wi-Fi, track S): no Wi-Fi device here (the simulated one needs the word wlansim: its @boot block below)
+    ('wifi', ['usage: wifi up | down | scan | join <ssid> [bssid] | status | leave']),
+    ('wifi status', ['wifi: no Wi-Fi device']),
     ('lsusb',   ['no USB host controller']),             # the USB/UEFI tests (tools/qemu-usb.py) attach USB devices
     ('lsblk',   ['rd0', 'ram', 'mounted', 'hda', 'ata', 'disk mbr', 'internal: never formatted', 'hda1', 'part mbr FAT16', 'mounted']),
     ('lsblk -s', ['READ', 'rd0', 'hda1']),
