@@ -405,6 +405,21 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
 
+# ---- Wi-Fi, track C (10/9/26): lib/crypto/ on the host ---------------------------------------
+# The kernel builds lib/crypto/ through SRC_C; here it is built against the SurfOS headers like the
+# other kernel objects. `make unittest` runs these first.
+CRYPTO_HOST_OBJ = $(patsubst %.c,$(BUILD)/host/kernel/%.o,$(wildcard lib/crypto/*.c))
+$(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+test-wifi-c: $(BUILD)/host/test_crypto
+	$(BUILD)/host/test_crypto
+
+unittest: test-wifi-c
+.PHONY: test-wifi-c
+-include $(wildcard $(BUILD)/host/kernel/lib/crypto/*.d)
+
 clean:
 	rm -rf build
 
