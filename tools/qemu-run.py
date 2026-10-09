@@ -385,12 +385,12 @@ SMOKE = [
     # 10/9/26 (Wi-Fi, track S): the station layer, the wifi command and two interfaces on one network, with the simulated
     # chip (`wlansim`, driver/wifi/wlansim.c) and QEMU's user network (`net`: eth0, which the simulated access points are
     # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
-    # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined; eth0 and wlan0 each
-    # leased their own address by QEMU's DHCP server, pings through each, the default route eth0 (it registered first),
-    # ARP per interface; TCP out; telnet to each interface's address answered through that interface (BOOT_CHECKS:
-    # wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa: refused until track C's supplicant is in); a network
-    # that deauthenticates the station once, then loses its beacons for 4 s: the link goes down twice and comes back up
-    # on its own; down. The passphrases typed never show.
+    # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined by its BSSID (an
+    # unknown one is no access point in range); eth0 and wlan0 each leased their own address by QEMU's DHCP server, pings
+    # through each, the default route eth0 (it registered first), ARP per interface; TCP out; telnet to each interface's
+    # address answered through that interface (BOOT_CHECKS: wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa:
+    # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
+    # for 4 s: the link goes down twice and comes back up on its own; down. The passphrases typed never show.
     ('@boot wlansim net', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('wifi status', ['wlan0: down (wifi up starts it)', 'wlan0: MAC 00:00:00:00:00:00, link down']),
       ('wifi scan', ['wifi: wlan0 is down (wifi up first)']),
@@ -404,7 +404,8 @@ SMOKE = [
       ('wifi join NoSuchNetwork', ['no network named NoSuchNetwork in range']),
       ('wifi join SurfSimHidden', ['link up: "SurfSimHidden" (02:53:49:4d:00:03), channel 11', 'joined SurfSimHidden']),
       ('wifi leave', ['wlan0: left "SurfSimHidden"', 'wlan0: not associated']),
-      ('wifi join SurfSim', ['joining SurfSim (open)', 'wlansim: SurfSim: the station is associated (QoS)',
+      ('wifi join SurfSim 02:53:49:4d:00:09', ['no access point 02:53:49:4d:00:09 named SurfSim in range']),
+      ('wifi join SurfSim 02:53:49:4d:00:01', ['joining SurfSim (open)', 'wlansim: SurfSim: the station is associated (QoS)',
                              'wlan0: link up: "SurfSim" (02:53:49:4d:00:01), channel 6, 2.4 GHz, -45 dBm, open',
                              'wlan0: associated with "SurfSim"', 'joined SurfSim: dhcp wlan0 gets an address']),
       ('dhcp', ['dhcp: eth0: lease 10.0.2.15']),

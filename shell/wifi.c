@@ -194,13 +194,15 @@ static int refuse(const char *name, int security) {
     return CMD_FAIL;
 }
 
-static int joined(struct wlan_dev *w, const char *name, int r) {
+/* the outcome of a join; ap: the BSSID asked for, as text, or NULL */
+static int joined(struct wlan_dev *w, const char *name, const char *ap, int r) {
     if(!r) {
         describe(w);
         printf("    joined %s: dhcp %s gets an address\n", name, w->name);
         return CMD_OK;
     }
     if(r == -EACCES) printf("    wifi: could not join %s: the 4-way handshake failed: the password may be wrong\n", name);
+    else if(r == -ENOENT && ap) printf("    wifi: no access point %s named %s in range\n", ap, name);
     else if(r == -ENOENT) printf("    wifi: no network named %s in range\n", name);
     else if(r == -ENOSYS) printf("    wifi: WPA2 needs the supplicant (net/wlan/wpa.c), which this kernel does not have yet\n");
     else if(r == -EINTR || r == -EBUSY || r == -ENODEV) return fail("join", r);
@@ -212,7 +214,8 @@ static int joined(struct wlan_dev *w, const char *name, int r) {
 
 static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
     u8 ssid[WLAN_SSID_MAX], bssid[WLAN_ADDR_LEN], pmk[WPA_PMK_LEN];
-    char name[4 * WLAN_SSID_MAX + 1], pass[PASS_MAX], question[4 * WLAN_SSID_MAX + 32];
+    char name[4 * WLAN_SSID_MAX + 1], pass[PASS_MAX], question[4 * WLAN_SSID_MAX + 32], apbuf[18];
+    const char *ap = NULL;
     struct wlan_bss *list;
     bool has_bssid = false;
     u_int len = 0;
@@ -224,6 +227,7 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
     }
     if(argc > 3 && parse_mac(argv[last], bssid)) {
         has_bssid = true;
+        ap = macfmt(bssid, apbuf);
         last--;
     }
     for(i = 2; i <= last; i++) {                        /* the words of the SSID, a space between */
@@ -262,22 +266,22 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
         r = wlan_join(w, ssid, len, has_bssid ? bssid : NULL, NULL);
         if(r != -ENOENT) {
             kfree(list);
-            return joined(w, name, r);
+            return joined(w, name, ap, r);
         }
         security = lookup(w, list, ssid, len, has_bssid ? bssid : NULL);
         if(security < 0 || security == WLAN_SEC_OPEN) {
             kfree(list);
-            return joined(w, name, -ENOENT);
+            return joined(w, name, ap, -ENOENT);
         }
     }
     kfree(list);
 
     if(security == WLAN_SEC_OPEN) {
         printf("    joining %s (open)\n", name);
-        return joined(w, name, wlan_join(w, ssid, len, has_bssid ? bssid : NULL, NULL));
+        return joined(w, name, ap, wlan_join(w, ssid, len, has_bssid ? bssid : NULL, NULL));
     }
     if(security != WLAN_SEC_WPA2_PSK && security != WLAN_SEC_WPA2_WPA3) return refuse(name, security);
-    if(!wpa_passphrase_to_pmk) return joined(w, name, -ENOSYS);
+    if(!wpa_passphrase_to_pmk) return joined(w, name, ap, -ENOSYS);
 
     snprintf(question, sizeof(question), "    Password for %s: ", name);
     shell_ask_secret(question, pass, sizeof(pass));
@@ -296,7 +300,7 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
     printf("    joining %s (%s)\n", name, ieee80211_security_name((u8)security));
     r = wlan_join(w, ssid, len, has_bssid ? bssid : NULL, pmk);
     wipe(pmk, sizeof(pmk));
-    return joined(w, name, r);
+    return joined(w, name, ap, r);
 }
 
 /**** the command ****/
