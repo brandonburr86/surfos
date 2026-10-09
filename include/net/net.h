@@ -77,9 +77,10 @@ struct netdev {
     struct netdev *next;
 };
 
-int netdev_register(struct netdev *dev);              /* names it ethN */
+int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0) */
 struct netdev *netdev_find(const char *name);
-struct netdev *netdev_default(void);                   /* the first one */
+struct netdev *netdev_default(void);                   /* the first one; 10/9/26: the first ethN, else the first */
+struct netdev *netdev_first(void);                     /* 10/9/26: every one, in the order they registered (->next) */
 void netdev_rx(struct netdev *dev, const void *frame, u_int len);  /* from an ISR: queue for the net thread */
 int netdev_send(struct netdev *dev, struct netbuf *nb);           /* a complete Ethernet frame */
 void netdev_print(void);

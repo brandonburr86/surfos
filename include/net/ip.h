@@ -29,7 +29,10 @@ void ip_input(struct netdev *dev, struct netbuf *nb);         /* after the Ether
 /* send nb (payload only) to dst: adds the IP header, resolves the next hop, hands to Ethernet; frees nb */
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb);
 ipaddr_t ip_route_src(ipaddr_t dst);                          /* our address to use for dst */
-struct netdev *ip_route_dev(ipaddr_t dst);
+struct netdev *ip_route_dev(ipaddr_t dst);                    /* ip_route(0, dst) */
+/* 10/9/26: the interface for a datagram from src (0: none yet) to dst: the one that has src, else the
+   one whose subnet holds dst (in registration order, a link up first), else the first with a gateway */
+struct netdev *ip_route(ipaddr_t src, ipaddr_t dst);
 ipaddr_t ip_next_hop(struct netdev *dev, ipaddr_t dst);      /* 10/6/26: dst itself on dev's network, else the gateway */
 
 /* ICMP */
@@ -45,6 +48,8 @@ struct icmp_hdr {
 void icmp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip);
 /* send one echo request and wait up to timeout_ms for the reply; returns the round trip in ms, or -1 */
 int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out);
+/* 10/9/26: the same through the interface dev (NULL: as the routes say) */
+int icmp_ping_dev(struct netdev *dev, ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out);
 
 /* UDP */
 struct udp_hdr {
@@ -54,6 +59,9 @@ struct udp_hdr {
 struct udp_socket;
 struct udp_socket *udp_open(u16 local_port);                  /* 0: any free port above 1024 */
 void udp_close(struct udp_socket *s);
+/* 10/9/26: the socket sends through dev and takes only datagrams that came in on it (DHCP on wlan0
+   while eth0 hears the same broadcasts); NULL: any, as the routes say */
+void udp_bind_dev(struct udp_socket *s, struct netdev *dev);
 int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, u_int len);
 /* a datagram, or -1 after timeout_ms; src/sport tell where it came from */
 int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *sport, u_long timeout_ms);

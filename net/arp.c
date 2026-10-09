@@ -7,6 +7,8 @@ A 16-entry table. An unresolved entry parks one frame and re-sends the
 request from arp_tick() a few times before giving up; entries age out
 after ten minutes. 10/6/26: giving up tells TCP (a connection being opened
 through that address fails at once: no route to host).
+10/9/26 (Wi-Fi, track S): an entry belongs to an interface (eth0 and wlan0 may both reach
+10.0.0.1): it is looked up, asked again and given up on through its own.
 */
 
 #include <surfos/types.h>
@@ -38,14 +40,14 @@ const struct arp_entry *arp_table(void) {
     return table;
 }
 
-static struct arp_entry *find(ipaddr_t ip) {
+static struct arp_entry *find(struct netdev *dev, ipaddr_t ip) {
     int i;
-    for(i = 0; i < ARP_TABLE_SIZE; i++) if(table[i].valid && table[i].ip == ip) return &table[i];
+    for(i = 0; i < ARP_TABLE_SIZE; i++) if(table[i].valid && table[i].ip == ip && table[i].dev == dev) return &table[i];
     return NULL;
 }
 
-static struct arp_entry *alloc(ipaddr_t ip) {
-    struct arp_entry *e = find(ip), *oldest = &table[0];
+static struct arp_entry *alloc(struct netdev *dev, ipaddr_t ip) {
+    struct arp_entry *e = find(dev, ip), *oldest = &table[0];
     int i;
     if(e) return e;
     for(i = 0; i < ARP_TABLE_SIZE; i++) {
@@ -55,6 +57,7 @@ static struct arp_entry *alloc(ipaddr_t ip) {
     if(oldest->pending) netbuf_free(oldest->pending);
     memset(oldest, 0, sizeof(*oldest));
     oldest->ip = ip;
+    oldest->dev = dev;
     oldest->valid = true;
     oldest->updated = getticks();
     return oldest;
@@ -87,7 +90,7 @@ void arp_announce(struct netdev *dev) {
 }
 
 static void learn(struct netdev *dev, ipaddr_t ip, const u8 *mac) {
-    struct arp_entry *e = alloc(ip);
+    struct arp_entry *e = alloc(dev, ip);
     memcpy(e->mac, mac, ETH_ALEN);
     e->resolved = true;
     e->updated = getticks();
@@ -104,7 +107,7 @@ void arp_input(struct netdev *dev, struct netbuf *nb) {
         netbuf_free(nb);
         return;
     }
-    if(a->spa && (find(a->spa) || a->tpa == dev->ip)) learn(dev, a->spa, a->sha);   /* refresh, or learn who asks us */
+    if(a->spa && (find(dev, a->spa) || a->tpa == dev->ip)) learn(dev, a->spa, a->sha);   /* refresh, or learn who asks us */
     if(ntohs(a->op) == ARP_REQUEST && dev->ip && a->tpa == dev->ip) {
         send_arp(dev, ARP_REPLY, a->sha, a->sha, a->spa);
     }
@@ -118,13 +121,13 @@ int arp_resolve(struct netdev *dev, ipaddr_t ip, u8 *mac, struct netbuf *park) {
         memcpy(mac, eth_broadcast, ETH_ALEN);
         return 0;
     }
-    e = find(ip);
+    e = find(dev, ip);
     if(e && e->resolved) {
         memcpy(mac, e->mac, ETH_ALEN);
         return 0;
     }
     if(!e) {
-        e = alloc(ip);
+        e = alloc(dev, ip);
         e->retries = 0;
         request(dev, ip);
     }
@@ -137,7 +140,6 @@ int arp_resolve(struct netdev *dev, ipaddr_t ip, u8 *mac, struct netbuf *park) {
 
 void arp_tick(void) {
     u_long now = getticks();
-    struct netdev *dev = netdev_default();
     int i;
     for(i = 0; i < ARP_TABLE_SIZE; i++) {
         struct arp_entry *e = &table[i];
@@ -149,10 +151,10 @@ void arp_tick(void) {
                 if(e->pending) netbuf_free(e->pending);
                 e->pending = NULL;
                 e->valid = false;
-                tcp_unreachable(e->ip);                    /* 10/6/26 */
-            } else if(dev) {
+                tcp_unreachable(e->dev, e->ip);            /* 10/6/26 */
+            } else if(e->dev) {
                 e->updated = now;
-                request(dev, e->ip);
+                request(e->dev, e->ip);
             }
         }
     }
@@ -161,11 +163,12 @@ void arp_tick(void) {
 void arp_print(void) {
     char a[16], m[18];
     int i, n = 0;
-    printf("    ADDRESS          HWADDRESS          AGE\n");
+    printf("    ADDRESS          HWADDRESS          IFACE   AGE\n");
     for(i = 0; i < ARP_TABLE_SIZE; i++) {
         if(!table[i].valid) continue;
-        printf("    %-16s %-18s %lus%s\n", ipfmt(table[i].ip, a), table[i].resolved ? macfmt(table[i].mac, m) : "(incomplete)",
-               (getticks() - table[i].updated) / HZ, table[i].pending ? " (frame waiting)" : "");
+        printf("    %-16s %-18s %-7s %lus%s\n", ipfmt(table[i].ip, a), table[i].resolved ? macfmt(table[i].mac, m) : "(incomplete)",
+               table[i].dev ? table[i].dev->name : "?", (getticks() - table[i].updated) / HZ,
+               table[i].pending ? " (frame waiting)" : "");
         n++;
     }
     if(!n) printf("    (empty)\n");

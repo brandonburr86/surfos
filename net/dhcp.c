@@ -5,6 +5,8 @@ File: dhcp.c    Date: 10/3/26 (roadmap N2)
 --------------------
 DISCOVER, OFFER, REQUEST, ACK over a UDP socket on port 68; the lease is
 applied to the interface. No renewal yet: the lease time is only reported.
+10/9/26 (Wi-Fi, track S): the socket is bound to the interface (udp_bind_dev()): `dhcp wlan0`
+asks through wlan0 and hears only wlan0's answers, as `dhcp eth0` does through eth0.
 */
 
 #include <surfos/types.h>
@@ -112,6 +114,7 @@ int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
     char a[16], b[16];
 
     if(!s) { kprintf("dhcp: port 68 is busy\n"); return -1; }
+    udp_bind_dev(s, dev);
     m = (struct dhcp_msg *)kalloc(sizeof(*m));
     if(!m) { udp_close(s); return -1; }
     for(attempt = 0; attempt < 3 && getticks() < deadline; attempt++) {

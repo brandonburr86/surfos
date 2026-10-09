@@ -6,6 +6,11 @@ File: ip.c      Date: 10/3/26 (roadmap N2)
 No fragments, no options on output, one interface.
 10/6/26: ip_next_hop() says where a datagram goes first (TCP asks it which
 connections an ARP failure concerns).
+10/9/26 (Wi-Fi, track S): two interfaces, eth0 and wlan0, perhaps on one network
+(10.0.0.0/24 on the laptop). ip_route() chooses by the source address when the caller
+has one (a connection keeps the interface its address belongs to), then by the subnet
+that holds the destination, in the order the interfaces registered (one with a link
+first), then the first configured interface with a gateway.
 */
 
 #include <surfos/types.h>
@@ -40,8 +45,33 @@ u16 ip_checksum_pseudo(ipaddr_t src, ipaddr_t dst, u8 proto, const void *data, u
     return htons((u16)~sum);
 }
 
+/* 10/9/26: the interface for a datagram from src (0: none yet) to dst:
+   1. the interface that has the address src: what a TCP connection made to eth0's address
+      sends goes out through eth0 whatever wlan0 does (the integrator's telnet session to the
+      laptop), and one made to wlan0's address through wlan0;
+   2. the interface whose subnet holds dst (its broadcast too), in the order the interfaces
+      registered, one with its link up before one without;
+   3. the first configured interface with a gateway, a link up first;
+   4. the default interface: one with no address yet (DHCP's broadcasts name theirs: udp_bind_dev()) */
+struct netdev *ip_route(ipaddr_t src, ipaddr_t dst) {
+    struct netdev *d, *down = NULL;
+    if(src) for(d = netdev_first(); d; d = d->next) if(d->ip == src) return d;
+    for(d = netdev_first(); d; d = d->next) {
+        if(!d->ip || !d->netmask || (dst & d->netmask) != (d->ip & d->netmask)) continue;
+        if(d->link_up) return d;
+        if(!down) down = d;
+    }
+    if(down) return down;
+    for(d = netdev_first(); d; d = d->next) {
+        if(!d->ip || !d->gateway) continue;
+        if(d->link_up) return d;
+        if(!down) down = d;
+    }
+    return down ? down : netdev_default();
+}
+
 struct netdev *ip_route_dev(ipaddr_t dst) {
-    return netdev_default();
+    return ip_route(0, dst);
 }
 
 /* where a datagram to dst goes first: on our subnet (or a broadcast) directly, otherwise the gateway */

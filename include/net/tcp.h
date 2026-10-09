@@ -32,7 +32,8 @@ struct tcp_socket;
 void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip);
 void tcp_tick(void);
 void tcp_print(void);
-void tcp_unreachable(ipaddr_t hop);        /* 10/6/26: ARP gave up on hop (net/arp.c), under net_lock */
+void tcp_unreachable(struct netdev *dev, ipaddr_t hop);   /* 10/6/26: ARP gave up on hop (net/arp.c), under net_lock;
+                                                             10/9/26: on the interface dev */
 
 /* the kernel socket API: every call may block; a negative return is -errno */
 struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms);

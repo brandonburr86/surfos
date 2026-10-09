@@ -413,30 +413,40 @@ static int cmd_nslookup(int argc, char **argv) {
     ipaddr_t ip;
     char a[16];
     if(argc < 2) { printf("    usage: nslookup <name>\n"); return CMD_USAGE; }
-    if(!netdev_default() || !netdev_default()->dns) { printf("    no DNS server configured (ifconfig ... dns, or dhcp)\n"); return CMD_FAIL; }
+    if(!dns_server()) { printf("    no DNS server configured (ifconfig ... dns, or dhcp)\n"); return CMD_FAIL; }
     if(dns_resolve(argv[1], &ip, 3000) != 0) { printf("    %s: not found\n", argv[1]); return CMD_FAIL; }
     printf("    %s has address %s\n", argv[1], ipfmt(ip, a));
     return CMD_OK;
 }
 
 /* any reply is a success, as ping has it elsewhere. 10/6/26: Ctrl+C or a kill ends it at once, with the
-   count of what was sent */
+   count of what was sent. 10/9/26 (Wi-Fi): an interface may be named (wlan0 and eth0 on one network);
+   otherwise the routes choose (net/ip.c), and the first line says which */
 static int cmd_ping(int argc, char **argv) {
+    struct netdev *dev = NULL;
     ipaddr_t ip;
-    char a[16];
+    char a[16], b[16];
     u_long n = 4;
     int count, seq, got = 0, sent = 0, rtt;
     u8 ttl = 0;
-    if(argc < 2 || argc > 3 || (argc == 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
-        printf("    usage: ping <address|name> [count]   (count: 1 or more, 4 when not given)\n");
+    if(argc < 2 || argc > 4 || (argc >= 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
+        printf("    usage: ping <address|name> [count] [interface]   (count: 1 or more, 4 when not given)\n");
         return CMD_USAGE;
     }
     count = (int)n;
-    if(!netdev_default() || !netdev_default()->ip) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return CMD_FAIL; }
-    if(!ip_parse(argv[1], &ip) && dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
-    printf("    PING %s: 56 data bytes\n", ipfmt(ip, a));
+    if(argc == 4 && !(dev = netdev_find(argv[3]))) { printf("    ping: no interface %s\n", argv[3]); return CMD_FAIL; }
+    if(!ip_parse(argv[1], &ip)) {
+        if(!dns_server()) { printf("    ping: no address configured (ifconfig or dhcp first)\n"); return CMD_FAIL; }
+        if(dns_resolve(argv[1], &ip, 3000) != 0) { printf("    ping: cannot resolve %s\n", argv[1]); return CMD_FAIL; }
+    }
+    if(!dev) dev = ip_route_dev(ip);
+    if(!dev || !dev->ip) {
+        printf("    ping: no address configured%s%s (ifconfig or dhcp first)\n", dev ? " on " : "", dev ? dev->name : "");
+        return CMD_FAIL;
+    }
+    printf("    PING %s from %s (%s): 56 data bytes\n", ipfmt(ip, a), ipfmt(dev->ip, b), dev->name);
     for(seq = 1; seq <= count && !task_interrupted(); seq++) {
-        rtt = icmp_ping(ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
+        rtt = icmp_ping_dev(dev, ip, (u16)curTask->pid, (u16)seq, 56, 2000, &ttl);
         sent++;
         if(rtt >= 0) { got++; printf("    64 bytes from %s: icmp_seq=%d ttl=%u time=%d ms\n", a, seq, ttl, rtt); }
         else if(!task_interrupted()) printf("    request timeout for icmp_seq %d\n", seq);
@@ -898,7 +908,7 @@ static const struct command commands[] = {
     { "nslookup",  "<name>",    "resolve a host name", cmd_nslookup },
     { "tcpecho",   "[port]",    "start a TCP echo server (port 7)", cmd_tcpecho },
     { "httpget",   "<host> <port> [path]", "fetch a page over TCP", cmd_httpget },
-    { "ping",      "<ip> [n]",  "ICMP echo", cmd_ping },
+    { "ping",      "<ip> [n] [if]", "ICMP echo (if: through that interface)", cmd_ping },
     { "netstat",   "",          "interfaces and sockets", cmd_netstat },
     { "run",       "<prog> [args]", "run a user program and wait (also: just type its name)", cmd_run },
     { "spawn",     "<prog> [args]", "run a user program in the background", cmd_spawn },

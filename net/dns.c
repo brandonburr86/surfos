@@ -4,6 +4,8 @@ SurfOS Network Stack: DNS resolver
 File: dns.c     Date: 10/3/26 (roadmap N2)
 --------------------
 One A query to the configured server, with name compression on the way back.
+10/9/26 (Wi-Fi, track S): the server is the default interface's, else that of the first
+configured interface that has one (wlan0's when it is the only one with a lease).
 */
 
 #include <surfos/types.h>
@@ -31,8 +33,19 @@ static u_int skip_name(const u8 *p, u_int len, u_int off) {
     return 0;
 }
 
+ipaddr_t dns_server(void) {
+    struct netdev *d = netdev_default(), *down = NULL;
+    if(d && d->ip && d->dns && d->link_up) return d->dns;
+    for(d = netdev_first(); d; d = d->next) {
+        if(!d->ip || !d->dns) continue;
+        if(d->link_up) return d->dns;
+        if(!down) down = d;
+    }
+    return down ? down->dns : 0;
+}
+
 int dns_resolve(const char *name, ipaddr_t *out, u_long timeout_ms) {
-    struct netdev *dev = netdev_default();
+    ipaddr_t server;
     struct udp_socket *s;
     u8 pkt[512];
     struct dns_hdr *h = (struct dns_hdr *)pkt;
@@ -42,7 +55,10 @@ int dns_resolve(const char *name, ipaddr_t *out, u_long timeout_ms) {
     int r;
 
     if(ip_parse(name, out)) return 0;
-    if(!dev || !dev->dns) return -1;
+    mutex_lock(&net_lock);
+    server = dns_server();
+    mutex_unlock(&net_lock);
+    if(!server) return -1;
     memset(h, 0, sizeof(*h));
     h->id = htons(id);
     h->flags = htons(0x0100);                    /* recursion desired */
@@ -63,7 +79,7 @@ int dns_resolve(const char *name, ipaddr_t *out, u_long timeout_ms) {
 
     s = udp_open(0);
     if(!s) return -1;
-    if(udp_sendto(s, dev->dns, DNS_PORT, pkt, n) != 0) { udp_close(s); return -1; }
+    if(udp_sendto(s, server, DNS_PORT, pkt, n) != 0) { udp_close(s); return -1; }
     for(;;) {
         r = udp_recvfrom(s, pkt, sizeof(pkt), NULL, NULL, timeout_ms);
         if(r < (int)sizeof(*h)) { udp_close(s); return -1; }
