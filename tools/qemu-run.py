@@ -81,6 +81,12 @@ def surf_prompt(crumbs, state):
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
            'latency', 'zwprobe', 'evict', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
 
+# 10/9/26 (Wi-Fi, track S): in an '@boot' block, (name, CHECK) runs BOOT_CHECKS[name] on that boot's QEMU. The simulated
+# Wi-Fi network's passphrase (driver/wifi/wlansim.c's WLANSIM_PASSPHRASE: a test network's, never a real one), and a wrong one
+CHECK = object()
+WLANSIM_PASSPHRASE = 'surfsim-wpa2-test-passphrase'
+WLANSIM_WRONG = 'not-the-surfsim-passphrase'
+
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
     ('tick',    ['Ticks:']),
@@ -376,6 +382,55 @@ SMOKE = [
       ('@sleep 2.5', []), ('exit', ['SurfOS user shell', SH_PROMPT]),
       (own_shell_killed, ['init: surfsh was killed; restarted the shell', 'SurfOS user shell', SH_PROMPT])],
      ['exited (status 0)', 'recovery console']),
+    # 10/9/26 (Wi-Fi, track S): the station layer, the wifi command and two interfaces on one network, with the simulated
+    # chip (`wlansim`, driver/wifi/wlansim.c) and QEMU's user network (`net`: eth0, which the simulated access points are
+    # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
+    # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined; eth0 and wlan0 each
+    # leased their own address by QEMU's DHCP server, pings through each, the default route eth0 (it registered first),
+    # ARP per interface; TCP out; telnet to each interface's address answered through that interface (BOOT_CHECKS:
+    # wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa: refused until track C's supplicant is in); a network
+    # that deauthenticates the station once, then loses its beacons for 4 s: the link goes down twice and comes back up
+    # on its own; down. The passphrases typed never show.
+    ('@boot wlansim net', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
+     [('wifi status', ['wlan0: down (wifi up starts it)', 'wlan0: MAC 00:00:00:00:00:00, link down']),
+      ('wifi scan', ['wifi: wlan0 is down (wifi up first)']),
+      ('wifi up', ['wlansim: the simulated chip is on: 6 access points, bridged to eth0', 'wlan0: up, MAC 52:54:00:12:34:57',
+                   'wlan0: up, not associated']),
+      ('wifi scan', ['SSID', 'BSSID', 'SECURITY', 'SurfSim ', '02:53:49:4d:00:01', '6  2.4 GHz', '-45 dBm', 'open',
+                     'SurfSimWPA', '36  5 GHz', 'WPA2-Personal', 'SurfSimFlaky', 'SurfSimSAE', 'WPA3-Personal',
+                     '(hidden network)', '02:53:49:4d:00:03', 'SurfSimWEP', 'WEP', '6 networks']),
+      ('wifi join SurfSimWEP', ['SurfSimWEP uses WEP, which SurfOS does not support']),
+      ('wifi join SurfSimSAE', ['SurfSimSAE is WPA3-Personal only (SAE): not supported yet']),
+      ('wifi join NoSuchNetwork', ['no network named NoSuchNetwork in range']),
+      ('wifi join SurfSimHidden', ['link up: "SurfSimHidden" (02:53:49:4d:00:03), channel 11', 'joined SurfSimHidden']),
+      ('wifi leave', ['wlan0: left "SurfSimHidden"', 'wlan0: not associated']),
+      ('wifi join SurfSim', ['joining SurfSim (open)', 'wlansim: SurfSim: the station is associated (QoS)',
+                             'wlan0: link up: "SurfSim" (02:53:49:4d:00:01), channel 6, 2.4 GHz, -45 dBm, open',
+                             'wlan0: associated with "SurfSim"', 'joined SurfSim: dhcp wlan0 gets an address']),
+      ('dhcp', ['dhcp: eth0: lease 10.0.2.15']),
+      ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16', 'wlan0: 52:54:00:12:34:57, link up', 'inet 10.0.2.16']),
+      ('ping 10.0.2.2 2 wlan0', ['PING 10.0.2.2 from 10.0.2.16 (wlan0)', '64 bytes from 10.0.2.2',
+                                 '2 packets transmitted, 2 received']),
+      ('ping 10.0.2.2 2 eth0', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '2 packets transmitted, 2 received']),
+      ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '1 received']),
+      ('ping 10.0.2.2 1 wlan9', ['ping: no interface wlan9']),
+      ('arp', ['IFACE', '10.0.2.2', 'wlan0', '10.0.2.2', 'eth0']),
+      ('httpget 10.0.2.2 {http} /wlan', ['SurfOS HTTP test OK: /wlan', 'bytes received']),
+      ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
+      ('wlansim-telnet', CHECK),
+      ('wifi status', ['wlan0: associated with "SurfSim"', 'frames:', 'wlan0: MAC 52:54:00:12:34:57, link up, inet 10.0.2.16']),
+      ('wlansim-wpa', CHECK),
+      ('wifi join SurfSimFlaky', ['wlan0: link up: "SurfSimFlaky"', 'joined SurfSimFlaky']),
+      ('@sleep 17', []),
+      ('dmesg', ['link down: "SurfSimFlaky": deauthenticated by the access point: reason 4 inactivity',
+                 'link up again: "SurfSimFlaky"', 'SurfSimFlaky goes silent for 4 s',
+                 'link down: "SurfSimFlaky": the access point is gone (beacons lost)',
+                 'joining "SurfSimFlaky" again failed (try 1 of 5): no such network in range; next try in 6 s',
+                 'link up again: "SurfSimFlaky"']),
+      ('wifi status', ['wlan0: associated with "SurfSimFlaky"']),
+      ('wifi down', ['wlan0: left "SurfSimFlaky" (wifi down)', 'wlan0: down']),
+      ('wifi status', ['wlan0: down (wifi up starts it)'])],
+     [WLANSIM_PASSPHRASE, WLANSIM_WRONG]),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -556,8 +611,10 @@ class Qemu:
             self.ports['echo'] = free_port()
             self.ports['telnet'] = free_port()
             self.ports['http'] = free_port()
+            self.ports['telnet_wlan'] = free_port()          # 10/9/26: port 23 of 10.0.2.16, the simulated wlan0's lease
             boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23",
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23",
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
             cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
@@ -2018,6 +2075,89 @@ def fsck_check(disk, start, size):
     return [('fsck.fat finds the FAT volume SurfOS wrote consistent', ok)]
 
 
+# ---- 10/9/26 (Wi-Fi, track S): the simulated Wi-Fi network (@boot wlansim net) ------------------------------------
+
+def tx_packets(q, dev):
+    """dev's TX packet count, as netstat says it"""
+    start = len(q.transcript)
+    q.send('netstat\n')
+    if not q.expect(PROMPT, 10):
+        return None
+    m = re.search(dev + r': .*?TX packets (\d+)', q.transcript[start:].decode(errors='replace'), re.S)
+    return int(m.group(1)) if m else None
+
+
+def telnet_echo(port, words):
+    """a telnet session through a forwarded port: the banner and the prompt, echo each word, exit; True if all came"""
+    try:
+        t = Telnet(port)
+    except OSError as e:
+        print(f'telnet: {e}')
+        return False
+    try:
+        ok = t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)
+        for w in words:
+            t.send(f'echo {w}\n')
+            ok = ok and t.expect(f'\r\n{w}\r\n', 10) and t.expect(TELNET_ROOT, 10)
+        t.send('exit\n')
+        return ok and t.wait_closed(10)
+    finally:
+        t.close()
+
+
+def wlansim_telnet_check(q):
+    """eth0 (10.0.2.15) and wlan0 (10.0.2.16) on one network, telnetd listening: a session made to wlan0's address works,
+    so its segments leave through wlan0 from wlan0's address (through eth0, the first interface, they would come from
+    10.0.2.15 and the connection would never open); one made to eth0's address works while wlan0 sends nothing, as the
+    integrator's telnet session to the laptop keeps to eth0 whatever wlan0 does"""
+    via_wlan = telnet_echo(q.ports['telnet_wlan'], ['through-wlan0-1', 'through-wlan0-2'])
+    q.wait(1)                                           # the connection's last segments
+    before = tx_packets(q, 'wlan0')
+    via_eth = telnet_echo(q.ports['telnet'], ['through-eth0-1', 'through-eth0-2', 'through-eth0-3'])
+    after = tx_packets(q, 'wlan0')
+    quiet = before is not None and before == after
+    if not (via_wlan and via_eth and quiet):
+        print(f'\nwlansim-telnet: to wlan0 {via_wlan}, to eth0 {via_eth}, wlan0 TX packets {before} then {after}')
+    return via_wlan and via_eth and quiet
+
+
+def wlansim_wpa_check(q):
+    """WPA2 with SurfSimWPA: until track C's supplicant (net/wlan/wpa.c) and crypto are in the kernel, the join is
+    refused saying so, without asking for a password. With them: a wrong password at the hidden prompt fails (the access
+    point never takes message 2), the right one joins, a lease and a ping through wlan0, then the access point's group
+    key renewal 3 s later; no passphrase ever shows (the block's absent list)"""
+    start = len(q.transcript)
+    q.send('wifi join SurfSimWPA\n')
+    if not q.expect(re.compile(rb'Password for SurfSimWPA: |does not have yet'), 30):
+        print('\nwlansim-wpa: neither the password prompt nor the refusal')
+        return False
+    if b'does not have yet' in q.transcript[start:]:
+        ok = q.expect(PROMPT, 10)
+        print('  wlansim-wpa: this kernel has no WPA2 supplicant yet: the join is refused, as it should be')
+        return ok
+    q.send(WLANSIM_WRONG + '\n')
+    ok = q.expect('the password may be wrong', 40) and q.expect(PROMPT, 10)
+    q.send('wifi join SurfSimWPA\n')
+    ok = ok and q.expect('Password for SurfSimWPA: ', 30)
+    q.send(WLANSIM_PASSPHRASE + '\n')
+    ok = ok and q.expect('wlan0: link up: "SurfSimWPA" (02:53:49:4d:00:02), channel 36, 5 GHz', 40) and \
+        q.expect('joined SurfSimWPA', 10) and q.expect(PROMPT, 10)
+    for cmd, exp in (('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
+                     ('ping 10.0.2.2 2 wlan0', ['from 10.0.2.16 (wlan0)', '2 packets transmitted, 2 received'])):
+        q.send(cmd + '\n')
+        ok = ok and all(q.expect(e, 15) for e in exp) and q.expect(PROMPT, 10)
+    q.wait(4)
+    q.send('dmesg\n')
+    ok = ok and q.expect('SurfSimWPA: 4-way handshake done', 10) and q.expect('wlan0: new group key (index 2)', 10) and \
+        q.expect('group key handshake done (key 2)', 10) and q.expect(PROMPT, 10)
+    if not ok:
+        print('\nwlansim-wpa: the WPA2 join, its lease, ping or group key renewal failed')
+    return ok
+
+
+BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check}
+
+
 def tail(text, n=40):
     lines = text.splitlines()
     return '\n'.join(lines[-n:])
@@ -2048,6 +2188,11 @@ def boot_step(reboot, entry, timeout):
     try:
         ok = all(q2.expect(e, timeout) for e in expects)
         for line, exp in follow:
+            if exp is CHECK:                                 # 10/9/26: a check of its own (BOOT_CHECKS)
+                ok = BOOT_CHECKS[line](q2) and ok
+                continue
+            if isinstance(line, str) and q2.ports and '{' in line:
+                line = line.format(**q2.ports)               # 10/9/26: a boot with the network (@boot ... net)
             if callable(line):
                 line = line(q2)
             if isinstance(line, bytes):
@@ -2152,11 +2297,13 @@ def main():
     def reboot(words):
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
         surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh)"""
-        initrd, append = a.initrd, a.append.split()
+        initrd, append, net = a.initrd, a.append.split(), False
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
             for w in words:
-                if w == 'no-initrd':
+                if w == 'net':                               # 10/9/26: QEMU's user network, with its forwards
+                    net = True
+                elif w == 'no-initrd':
                     initrd = None
                 elif w.startswith('surfsh='):
                     if not a.initrd:
@@ -2167,7 +2314,7 @@ def main():
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:
                     append.append(w)
-            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, False, ' '.join(append), 0)
+            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False, net, ' '.join(append), 0)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
 
