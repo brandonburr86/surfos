@@ -405,22 +405,31 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
 
-# ---- Wi-Fi, track C (10/9/26): lib/crypto/ on the host ---------------------------------------
-# The kernel builds lib/crypto/ through SRC_C; here it is built against the SurfOS headers like the
-# other kernel objects. random.c's headers reach console.h's 2004 inline declarations, hence
-# -fgnu89-inline. `make unittest` runs these first.
+# ---- Wi-Fi, track C (10/9/26): lib/crypto/ and the WPA2 supplicant, on the host ---------------
+# The kernel builds lib/crypto/ and net/wlan/ through SRC_C; here they are built against the SurfOS
+# headers like the other kernel objects. random.c's and wpa.c's headers reach console.h's 2004 inline
+# declarations, hence -fgnu89-inline. `make unittest` runs these first.
 CRYPTO_HOST_OBJ = $(patsubst %.c,$(BUILD)/host/kernel/%.o,$(wildcard lib/crypto/*.c))
 $(CRYPTO_HOST_OBJ) $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -fgnu89-inline
 $(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
-test-wifi-c: $(BUILD)/host/test_crypto
+# the supplicant (net/wlan/wpa.c) against a simulated access point and a captured handshake; the test
+# has its own crypto_random() (scripted nonces), so random.o stays out
+WPA_HOST_OBJ = $(BUILD)/host/kernel/net/wlan/wpa.o
+$(WPA_HOST_OBJ) $(BUILD)/host/test_wpa: HOSTKERN_FLAGS += -fgnu89-inline
+$(BUILD)/host/test_wpa: tests/host/test_wpa.c $(WPA_HOST_OBJ) $(filter-out %/random.o,$(CRYPTO_HOST_OBJ)) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+test-wifi-c: $(BUILD)/host/test_crypto $(BUILD)/host/test_wpa
 	$(BUILD)/host/test_crypto
+	$(BUILD)/host/test_wpa
 
 unittest: test-wifi-c
 .PHONY: test-wifi-c
--include $(wildcard $(BUILD)/host/kernel/lib/crypto/*.d)
+-include $(wildcard $(BUILD)/host/kernel/lib/crypto/*.d $(BUILD)/host/kernel/net/wlan/wpa.d)
 
 clean:
 	rm -rf build
