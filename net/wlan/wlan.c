@@ -59,6 +59,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #include <fs/vfs.h>
 #include <net/net.h>
 #include <net/wlan.h>
+#include <net/wlan_cmd.h>
 #include <net/wpa.h>
 #include <net/ieee80211.h>
 #include <blibc_common.h>
@@ -1152,8 +1153,13 @@ int wlan_up(struct wlan_dev *w) {
     return request(w, REQ_UP, NULL, 0, NULL, NULL, 0);
 }
 
+int wlan_down_wait(struct wlan_dev *w) {
+    if(!w) return -ENODEV;
+    return request(w, REQ_DOWN, NULL, 0, NULL, NULL, 0);
+}
+
 void wlan_down(struct wlan_dev *w) {
-    if(w) request(w, REQ_DOWN, NULL, 0, NULL, NULL, 0);
+    wlan_down_wait(w);
 }
 
 int wlan_scan(struct wlan_dev *w, u_int timeout_ms) {
@@ -1184,8 +1190,13 @@ int wlan_join(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *bssi
     return request(w, REQ_JOIN, ssid, ssid_len, bssid, pmk, 0);
 }
 
+int wlan_leave_wait(struct wlan_dev *w) {
+    if(!w) return -ENODEV;
+    return request(w, REQ_LEAVE, NULL, 0, NULL, NULL, 0);
+}
+
 void wlan_leave(struct wlan_dev *w) {
-    if(w) request(w, REQ_LEAVE, NULL, 0, NULL, NULL, 0);
+    wlan_leave_wait(w);
 }
 
 /* state, SSID, BSSID, channel, signal; then lines for the last failure, the driver and the counters */

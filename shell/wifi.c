@@ -31,6 +31,7 @@ cancels what it asked for). 0, 1 or 2 as the other commands.
 #include <fs/vfs.h>
 #include <net/net.h>
 #include <net/wlan.h>
+#include <net/wlan_cmd.h>
 #include <net/wpa.h>
 #include <net/ieee80211.h>
 #include <blibc_common.h>
@@ -334,7 +335,8 @@ int cmd_wifi(int argc, char **argv) {
         return CMD_OK;
     }
     if(!strcmp(argv[1], "down")) {
-        wlan_down(w);
+        r = wlan_down_wait(w);
+        if(r) return fail("down", r);
         printf("    %s: down\n", w->name);
         return CMD_OK;
     }
@@ -347,7 +349,8 @@ int cmd_wifi(int argc, char **argv) {
     }
     if(!strcmp(argv[1], "join")) return wifi_join(w, argc, argv);
     if(!strcmp(argv[1], "leave")) {
-        wlan_leave(w);
+        r = wlan_leave_wait(w);
+        if(r) return fail("leave", r);
         printf("    %s: not associated\n", w->name);
         return CMD_OK;
     }
