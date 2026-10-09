@@ -87,7 +87,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #define RECONNECT_TRIES  5
 #define LISTEN_INTERVAL  10
 #define HT_STREAMS       2              /* the 9560 is 2x2: the integrator reconciles this with the chip */
-#define MSDU_MAX         8
+#define MSDU_MAX         64             /* a 3839-byte A-MSDU of small segments (a TCP ACK is 62 bytes in it) */
 
 enum { ST_DOWN, ST_IDLE, ST_SCAN, ST_AUTH, ST_ASSOC, ST_KEYS, ST_UP, ST_WAIT };
 enum { REQ_NONE, REQ_UP, REQ_DOWN, REQ_SCAN, REQ_JOIN, REQ_LEAVE };
