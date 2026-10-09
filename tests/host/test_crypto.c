@@ -2,13 +2,19 @@
    test vectors: FIPS 180-4 and RFC 6234 (SHA-1, SHA-256), RFC 2202 and RFC 4231 (HMAC), RFC 6070
    (PBKDF2-HMAC-SHA1; all but the 16777216-iteration case, which takes minutes under emulation),
    IEEE 802.11-2016 Annex J.3 and J.4 (the PRF; the passphrase to the PSK), FIPS 197 and
-   SP 800-38A F.1.1 (AES-128) and RFC 3394 4.1 (key wrap). Longer key wraps were cross-checked with
-   OpenSSL's id-aes128-wrap; one is the key data of message 3 of a real 4-way handshake (Wireshark's
-   sample capture wpa2linkuppassphraseiswireshark.pcap). Built like the kernel objects and run by
-   `make unittest`. */
+   SP 800-38A F.1.1 (AES-128), RFC 3394 4.1 (key wrap) and NIST CAVP's HMAC_DRBG SHA-256 vectors.
+   Longer key wraps were cross-checked with OpenSSL's id-aes128-wrap; one is the key data of
+   message 3 of a real 4-way handshake (Wireshark's sample capture wpa2linkuppassphraseiswireshark.pcap).
+   crypto_random() is tested with a fixed entropy source (a known answer, from an HMAC_DRBG
+   written separately in Python) and with the kernel's source, RDRAND hidden and then as this
+   CPU says: the tests never depend on RDRAND being there. random.c's kernel calls (the mutex,
+   the tick count, the cpu structure) are supplied here. Built like the kernel objects and run
+   by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
+#include <surfos/cpu.h>
+#include <surfos/sync.h>
 #include <crypto/crypto.h>
 
 void exit(int status);
@@ -48,6 +54,24 @@ static void check_hex(const u8 *got, u_int n, const char *hex, const char *what)
     int ok = m == n && memcmp(got, want, n) == 0;
     check(ok, what);
     if(!ok) { print_hex("got ", got, n); print_hex("want", want, m); }
+}
+
+/**** what random.c needs of the kernel ****/
+
+struct cpu_info cpu;
+static u_long ticks;
+static int lock_depth, lock_calls;
+
+u_long getticks(void) { return ticks; }
+void mutex_lock(mutex_t *m) { (void)m; lock_depth++; lock_calls++; }
+void mutex_unlock(mutex_t *m) { (void)m; lock_depth--; }
+
+/* this CPU's CPUID leaf 1 (the kernel's cpuid() is in kernel/cpu.c, not linked here) */
+static void host_cpuid1(u32 *ecx, u32 *edx) {
+    u32 a, b, c, d;
+    asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    *ecx = c;
+    *edx = d;
 }
 
 /**** SHA-1 and SHA-256 ****/
@@ -370,6 +394,121 @@ static void test_wrap(void) {
     check(wrapped[0] == 0x77 && wrapped[20] == 0x77, "aes_wrap writes nothing for 8 or 20 bytes");
 }
 
+/**** HMAC_DRBG and crypto_random() ****/
+
+static void test_drbg(void) {
+    struct hmac_drbg d;
+    u8 e[64], n[32], out[128];
+    u_int el, nl;
+
+    /* CAVP drbgvectors_no_reseed, HMAC_DRBG.rsp [SHA-256], 256-bit entropy, 128-bit nonce, no
+       personalization or additional input, COUNT 0: instantiate, generate 1024 bits twice, compare the second */
+    el = unhex("ca851911349384bffe89de1cbdc46e6831e44d34a4fb935ee285dd14b71a7488", e);
+    nl = unhex("659ba96c601dc69fc902940805ec0ca8", n);
+    hmac_drbg_instantiate(&d, e, el, n, nl, NULL, 0);
+    check(hmac_drbg_generate(&d, NULL, 0, out, 128) == 0, "HMAC_DRBG generates");
+    hmac_drbg_generate(&d, NULL, 0, out, 128);
+    check_hex(out, 128, "e528e9abf2dece54d47c7e75e5fe302149f817ea9fb4bee6f4199697d04d5b89d54fbb978a15b5c443c9ec21036d2460"
+              "b6f73ebad0dc2aba6e624abf07745bc107694bb7547bb0995f70de25d6b29e2d3011bb19d27676c07162c8b5ccde0668961df868"
+              "03482cb37ed6d5c0bb8d50cf1f50d476aa0458bdaba806f48be9dcb8",
+              "HMAC_DRBG SHA-256 CAVP (no reseed) COUNT 0");
+
+    /* drbgvectors_pr_false, the same [SHA-256] section, COUNT 0: a reseed comes before the generates */
+    el = unhex("06032cd5eed33f39265f49ecb142c511da9aff2af71203bffaf34a9ca5bd9c0d", e);
+    nl = unhex("0e66f71edc43e42a45ad3c6fc6cdc4df", n);
+    hmac_drbg_instantiate(&d, e, el, n, nl, NULL, 0);
+    el = unhex("01920a4e669ed3a85ae8a33b35a74ad7fb2a6bb4cf395ce00334a9c9a5a5d552", e);
+    hmac_drbg_reseed(&d, e, el, NULL, 0);
+    hmac_drbg_generate(&d, NULL, 0, out, 128);
+    hmac_drbg_generate(&d, NULL, 0, out, 128);
+    check_hex(out, 128, "76fc79fe9b50beccc991a11b5635783a83536add03c157fb30645e611c2898bb2b1bc215000209208cd506cb28da2a51"
+              "bdb03826aaf2bd2335d576d519160842e7158ad0949d1a9ec3e66ea1b1a064b005de914eac2e9d4f2d72a8616a8022542291825"
+              "0ff66a41bd2f864a6a38cc5b6499dc43f7f2bd09e1e0f8f5885935124",
+              "HMAC_DRBG SHA-256 CAVP (reseed) COUNT 0");
+    check(hmac_drbg_generate(&d, NULL, 0, out, 65537) == -1, "a request over 2^19 bits is refused");
+}
+
+static u_int source_calls;
+
+/* byte i of call k is k * 31 + i * 7; what crypto_random() must make of it came from an HMAC_DRBG
+   written separately (in Python) and fed the same bytes the same way */
+static void fixed_source(u8 *buf, u_int len) {
+    u_int i;
+    source_calls++;
+    for(i = 0; i < len; i++) buf[i] = (u8)(source_calls * 31 + i * 7);
+}
+
+static int all_zero(const u8 *p, u_int n) {
+    while(n--) if(*p++) return 0;
+    return 1;
+}
+
+static void test_random(void) {
+    static u8 big[2000];
+    u8 out[17][32], a[32], b[32], h[SHA256_LEN];
+    u32 c3, c4;
+    u_int i;
+    int differ;
+
+    crypto_random_source(fixed_source);
+    source_calls = 0;
+    for(i = 0; i < 17; i++) crypto_random(out[i], 32);
+    check_hex(out[0], 32, "26acc24fb3ec5f55556083494d39fde7566d812f675e4c4f3718ca7c343b221e",
+              "crypto_random with a fixed source: call 1 (seeded from it, then given fresh bytes)");
+    check_hex(out[1], 32, "41867ef6338b616631b632c4bc3a91e763a123bd453dc4329ab4bd58de212030", "... call 2");
+    check_hex(out[15], 32, "8f1e8779d2f494a898d7196acc18c2b976ca3ce334a866c41716b7cebd32db42", "... call 16");
+    check_hex(out[16], 32, "ae7e8dce7ca91438a13ebbd4006ba40e5c8caac2e0b6aca109a6f09a42f02bbb", "... call 17, after the reseed");
+    check(source_calls == 19, "... the source was read 19 times: 2 seeds and 17 calls' fresh bytes");
+    crypto_random(big, sizeof(big));
+    sha256(big, sizeof(big), h);
+    check_hex(h, 32, "3a1d35733f851ed6af0ac08e717e871dff246b651a45b5f34f3e3dcf89c3aa2a", "... 2000 bytes in one call (two requests)");
+    check(lock_depth == 0 && lock_calls > 0, "crypto_random takes and releases its mutex");
+
+    crypto_random_source(fixed_source);
+    source_calls = 0;
+    crypto_random(a, 32);
+    check(memcmp(a, out[0], 32) == 0, "choosing a source starts over from a new seed");
+    crypto_random(a, 0);
+    check(source_calls == 3, "a zero-length request still mixes fresh bytes in");
+
+    /* the kernel's source with RDRAND hidden: the TSC and the ticks */
+    host_cpuid1(&c3, &c4);
+    cpu.has_cpuid = true;
+    cpu.features_ecx = c3 & ~(1u << 30);
+    cpu.features_edx = c4;
+    cpu.tsc = (c4 >> 4) & 1;
+    ticks = 1000;
+    crypto_random_source(NULL);
+    crypto_random(a, 32);
+    ticks++;
+    crypto_random(b, 32);
+    check(!all_zero(a, 32) && memcmp(a, b, 32) != 0, "the kernel's source without RDRAND: two calls differ");
+    crypto_random_source(NULL);
+    crypto_random(b, 32);
+    check(memcmp(a, b, 32) != 0, "... and a new start does not repeat the first output (the TSC moved)");
+
+    cpu.tsc = false;
+    crypto_random_source(NULL);
+    crypto_random(a, 32);
+    for(i = 0, differ = 0; i < 40; i++) {
+        crypto_random(b, 32);
+        if(memcmp(a, b, 32)) differ++;
+        memcpy(a, b, 32);
+    }
+    check(differ == 40, "... with no TSC either, 40 more calls each differ from the last (through a reseed)");
+
+    /* and as this CPU says: RDRAND runs if it is there (the Docker toolchain may emulate it) */
+    cpu.features_ecx = c3;
+    cpu.tsc = (c4 >> 4) & 1;
+    crypto_random_source(NULL);
+    crypto_random(a, 32);
+    crypto_random(b, 32);
+    check(!all_zero(a, 32) && memcmp(a, b, 32) != 0, "the kernel's source as this CPU is");
+    printf("    (this CPU %s RDRAND)\n", (c3 >> 30) & 1 ? "has" : "does not have");
+    for(i = 0; i < 40; i++) crypto_random(big, 100);
+    check(lock_depth == 0, "the mutex is free after every call");
+}
+
 /**** compare and wipe ****/
 
 static void test_util(void) {
@@ -396,6 +535,8 @@ int main(void) {
     test_kdf();
     test_aes();
     test_wrap();
+    test_drbg();
+    test_random();
     test_util();
     printf("CRYPTO UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);

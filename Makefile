@@ -407,8 +407,10 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 
 # ---- Wi-Fi, track C (10/9/26): lib/crypto/ on the host ---------------------------------------
 # The kernel builds lib/crypto/ through SRC_C; here it is built against the SurfOS headers like the
-# other kernel objects. `make unittest` runs these first.
+# other kernel objects. random.c's headers reach console.h's 2004 inline declarations, hence
+# -fgnu89-inline. `make unittest` runs these first.
 CRYPTO_HOST_OBJ = $(patsubst %.c,$(BUILD)/host/kernel/%.o,$(wildcard lib/crypto/*.c))
+$(CRYPTO_HOST_OBJ) $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -fgnu89-inline
 $(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@

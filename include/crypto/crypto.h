@@ -75,8 +75,28 @@ void aes_wrap(const u8 kek[16], const u8 *plain, size_t plain_len, u8 *wrapped);
 int aes_unwrap(const u8 kek[16], const u8 *wrapped, size_t wrapped_len, u8 *plain);
 
 /* random bytes for nonces: RDRAND when the CPU has it, mixed with the TSC and timer jitter into
-   an HMAC-DRBG (SHA-256); never a fixed sequence */
+   an HMAC-DRBG (SHA-256); never a fixed sequence
+   (10/9/26) Task context only (a mutex guards the generator). Every call mixes in fresh bytes
+   from the entropy source, and the generator is reseeded from it every 16 calls. */
 void crypto_random(void *buf, size_t len);
+
+/* (10/9/26) where crypto_random() takes its seeds: the source fills buf with len bytes. The
+   kernel's own reads RDRAND when CPUID.01H:ECX bit 30 says the CPU has it (ten tries a read, as
+   Intel advises), the TSC after each read, and the tick count. crypto_random_source(fn) puts
+   another in its place, NULL the kernel's again; either way the generator starts over from a
+   new seed. For tests, which must not depend on RDRAND. */
+typedef void (*crypto_entropy_fn)(u8 *buf, u_int len);
+void crypto_random_source(crypto_entropy_fn fn);
+
+/* (10/9/26) the generator itself: HMAC_DRBG with SHA-256 (NIST SP 800-90A Rev. 1, 10.1.2), no
+   derivation function and no prediction resistance; for crypto_random() and its known-answer
+   tests. hmac_drbg_generate: 0, or -1 when it must be reseeded first (2^20 requests after the
+   last seed) or out_len is over 65536; out must not overlap add */
+struct hmac_drbg { u8 k[SHA256_LEN], v[SHA256_LEN]; u32 reseed_counter; };
+void hmac_drbg_instantiate(struct hmac_drbg *d, const u8 *entropy, size_t entropy_len, const u8 *nonce,
+                           size_t nonce_len, const u8 *pers, size_t pers_len);
+void hmac_drbg_reseed(struct hmac_drbg *d, const u8 *entropy, size_t entropy_len, const u8 *add, size_t add_len);
+int hmac_drbg_generate(struct hmac_drbg *d, const u8 *add, size_t add_len, u8 *out, size_t out_len);
 
 bool crypto_equal(const void *a, const void *b, size_t len);    /* in constant time */
 void crypto_wipe(void *p, size_t len);                         /* not optimised away */
