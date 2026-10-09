@@ -405,6 +405,19 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
 
+# 10/9/26 (Wi-Fi, track S): the station layer's pure parts on the host: the 802.11 frames (net/wlan/ieee80211.c).
+# net/wlan.h reaches console.h's 2004 inline declarations, as fs/vfs.h does for test_mkfs.
+WLAN_HOSTTESTS = $(BUILD)/host/test_ieee80211
+$(WLAN_HOSTTESTS) $(BUILD)/host/kernel/net/wlan/ieee80211.o: HOSTKERN_FLAGS += -fgnu89-inline
+$(BUILD)/host/test_ieee80211: tests/host/test_ieee80211.c $(BUILD)/host/kernel/net/wlan/ieee80211.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-wlan
+unittest-wlan: $(WLAN_HOSTTESTS)
+	$(BUILD)/host/test_ieee80211
+-include $(wildcard $(BUILD)/host/kernel/net/wlan/*.d)
+.PHONY: unittest-wlan
+
 clean:
 	rm -rf build
 
