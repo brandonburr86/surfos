@@ -156,7 +156,7 @@ struct wlan_state {
     bool ptk_in, gtk_in;
     u8 our_rsn[64];
     u_int our_rsn_len;
-    char last[96];                      /* why the last join failed, or the link went down */
+    char last[160];                     /* why the last join failed, or the link went down */
 
     /* what the netdev's send needs, under irq_save */
     bool tx_up, tx_qos, tx_protect;
@@ -679,7 +679,7 @@ static void wpa_check(struct wlan_state *st) {
 
 static void rx_auth(struct wlan_state *st, const u8 *f, u_int len) {
     struct ieee80211_auth a;
-    char why[96];
+    char why[160];
     if(st->state != ST_AUTH || ieee80211_parse_auth(f, len, &a)) return;
     if(a.algorithm != WLAN_AUTH_OPEN || a.transaction != 2) return;
     if(a.status != WLAN_STATUS_SUCCESS) {
@@ -696,7 +696,7 @@ static void rx_auth(struct wlan_state *st, const u8 *f, u_int len) {
 static void rx_assoc(struct wlan_state *st, const u8 *f, u_int len) {
     struct wlan_dev *w = st->w;
     struct ieee80211_assoc_resp r;
-    char why[96];
+    char why[160];
     int e;
     if(st->state != ST_ASSOC || ieee80211_parse_assoc_resp(f, len, &r)) return;
     if(r.status != WLAN_STATUS_SUCCESS) {
@@ -729,7 +729,7 @@ static void rx_assoc(struct wlan_state *st, const u8 *f, u_int len) {
 }
 
 static void rx_gone(struct wlan_state *st, const u8 *f, u_int len, bool deauth) {
-    char why[96];
+    char why[160];
     u16 reason = 0;
     ieee80211_parse_reason(f, len, &reason);
     snprintf(why, sizeof(why), "%s by the access point: reason %u %s%s", deauth ? "deauthenticated" : "disassociated", reason,

@@ -106,9 +106,9 @@ static int fail(const char *what, int r) {
 
 /* the station's description, a line each, indented, the first after the device's name */
 static void describe(struct wlan_dev *w) {
-    char *buf = (char *)kalloc(512), *line, *nl;
+    char *buf = (char *)kalloc(768), *line, *nl;
     if(!buf) return;
-    wlan_describe(w, buf, 512);
+    wlan_describe(w, buf, 768);
     for(line = buf; line && *line; line = nl) {
         nl = strchr(line, '\n');
         if(nl) *nl++ = 0;
