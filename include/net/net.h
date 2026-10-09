@@ -63,6 +63,11 @@ struct netdev_ops {
     int (*ioctl)(struct netdev *dev, int cmd, void *arg); /* driver specific, may be NULL */
 };
 
+/* 10/9/26 (Wi-Fi, track S): ioctl commands. NETDEV_ADD_RX_ADDR: frames sent to the unicast address
+   arg (u8[ETH_ALEN]) are received too, for a bridge (the simulated Wi-Fi chip's access point,
+   driver/wifi/wlansim.c); 0, or -1 when the device cannot */
+#define NETDEV_ADD_RX_ADDR 1
+
 struct netdev {
     char name[8];                   /* eth0 */
     u8 mac[ETH_ALEN];
@@ -75,6 +80,9 @@ struct netdev {
     /* counters */
     u_long rx_packets, tx_packets, rx_bytes, tx_bytes, rx_dropped, tx_errors;
     struct netdev *next;
+    /* 10/9/26: a bridge's copy of each frame that came in and is not only for this interface (broadcast,
+       multicast, another station's address); from the net thread, under net_lock; NULL: none */
+    void (*bridge_rx)(struct netdev *dev, const u8 *frame, u_int len);
 };
 
 int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0) */
