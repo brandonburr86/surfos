@@ -67,7 +67,10 @@ void aes128_encrypt(const struct aes_ctx *ctx, const u8 in[AES_BLOCK], u8 out[AE
 void aes128_decrypt(const struct aes_ctx *ctx, const u8 in[AES_BLOCK], u8 out[AES_BLOCK]);
 
 /* AES key wrap (RFC 3394) with a 128-bit KEK: n 64-bit blocks of plain, n + 1 of wrapped.
-   aes_unwrap: 0, or -1 when the integrity check fails */
+   aes_unwrap: 0, or -1 when the integrity check fails
+   (10/9/26) n is at least 2, as RFC 3394 asks: for other lengths aes_wrap writes nothing and
+   aes_unwrap returns -1 without writing. When the integrity check fails, plain is left all
+   zeros, never part of a key. plain and wrapped must not overlap. */
 void aes_wrap(const u8 kek[16], const u8 *plain, size_t plain_len, u8 *wrapped);
 int aes_unwrap(const u8 kek[16], const u8 *wrapped, size_t wrapped_len, u8 *plain);
 

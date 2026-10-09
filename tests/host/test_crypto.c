@@ -1,8 +1,11 @@
 /* Host-side unit tests for lib/crypto/ (10/9/26, track C of the Wi-Fi brief), against published
    test vectors: FIPS 180-4 and RFC 6234 (SHA-1, SHA-256), RFC 2202 and RFC 4231 (HMAC), RFC 6070
-   (PBKDF2-HMAC-SHA1; all but the 16777216-iteration case, which takes minutes under emulation) and
-   IEEE 802.11-2016 Annex J.3 and J.4 (the PRF; the passphrase to the PSK); and the constant-time
-   compare and the wiping. Built like the kernel objects and run by `make unittest`. */
+   (PBKDF2-HMAC-SHA1; all but the 16777216-iteration case, which takes minutes under emulation),
+   IEEE 802.11-2016 Annex J.3 and J.4 (the PRF; the passphrase to the PSK), FIPS 197 and
+   SP 800-38A F.1.1 (AES-128) and RFC 3394 4.1 (key wrap). Longer key wraps were cross-checked with
+   OpenSSL's id-aes128-wrap; one is the key data of message 3 of a real 4-way handshake (Wireshark's
+   sample capture wpa2linkuppassphraseiswireshark.pcap). Built like the kernel objects and run by
+   `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -267,6 +270,106 @@ static void test_kdf(void) {
               "PRF-384 is the first 48 bytes of PRF-512");
 }
 
+/**** AES-128 and key wrap ****/
+
+static u32 prng = 12345;
+static u8 next_byte(void) {
+    prng = prng * 1103515245 + 12345;
+    return (u8)(prng >> 16);
+}
+
+static void test_aes(void) {
+    static const char *sp800_38a[4][2] = {
+        { "6bc1bee22e409f96e93d7e117393172a", "3ad77bb40d7a3660a89ecaf32466ef97" },
+        { "ae2d8a571e03ac9c9eb76fac45af8e51", "f5d3d58503b9699de785895a96fdbaaf" },
+        { "30c81c46a35ce411e5fbc1191a0a52ef", "43b1cd7f598ece23881b00e3ed030688" },
+        { "f69f2445df4f9b17ad2b417be66c3710", "7b0c785e27e8ad3f8223207104725dd4" },
+    };
+    struct aes_ctx ctx;
+    u8 key[16], in[16], out[16], back[16];
+    u_int i, j, bad;
+    char what[64];
+
+    unhex("2b7e151628aed2a6abf7158809cf4f3c", key);
+    aes128_setkey(&ctx, key);
+    check(ctx.rk[43] == 0xb6630ca6 && ctx.rk[4] == 0xa0fafe17, "AES-128 key expansion: FIPS 197 A.1's w[4] and w[43]");
+    unhex("3243f6a8885a308d313198a2e0370734", in);
+    aes128_encrypt(&ctx, in, out);
+    check_hex(out, 16, "3925841d02dc09fbdc118597196a0b32", "AES-128 FIPS 197 Appendix B");
+    aes128_decrypt(&ctx, out, back);
+    check(memcmp(back, in, 16) == 0, "... and back");
+    for(i = 0; i < 4; i++) {
+        unhex(sp800_38a[i][0], in);
+        aes128_encrypt(&ctx, in, out);
+        snprintf(what, sizeof(what), "AES-128 SP 800-38A F.1.1 (ECB) block %u", i + 1);
+        check_hex(out, 16, sp800_38a[i][1], what);
+        aes128_decrypt(&ctx, out, out);
+        snprintf(what, sizeof(what), "SP 800-38A F.1.2 (ECB decrypt) block %u, in place", i + 1);
+        check_hex(out, 16, sp800_38a[i][0], what);
+    }
+    unhex("000102030405060708090a0b0c0d0e0f", key);
+    aes128_setkey(&ctx, key);
+    unhex("00112233445566778899aabbccddeeff", in);
+    aes128_encrypt(&ctx, in, out);
+    check_hex(out, 16, "69c4e0d86a7b0430d8cdb78070b4c55a", "AES-128 FIPS 197 C.1 encrypt");
+    aes128_decrypt(&ctx, out, back);
+    check_hex(back, 16, "00112233445566778899aabbccddeeff", "AES-128 FIPS 197 C.1 decrypt");
+
+    for(bad = 0, i = 0; i < 2000; i++) {
+        for(j = 0; j < 16; j++) { key[j] = next_byte(); in[j] = next_byte(); }
+        aes128_setkey(&ctx, key);
+        aes128_encrypt(&ctx, in, out);
+        aes128_decrypt(&ctx, out, back);
+        if(memcmp(back, in, 16) || !memcmp(out, in, 16)) bad++;
+    }
+    check(!bad, "AES-128: 2000 random keys and blocks decrypt to what was encrypted");
+}
+
+static void test_wrap(void) {
+    u8 kek[16], plain[64], wrapped[72], back[64];
+    u_int pl, wl;
+
+    unhex("000102030405060708090a0b0c0d0e0f", kek);
+    pl = unhex("00112233445566778899aabbccddeeff", plain);
+    aes_wrap(kek, plain, pl, wrapped);
+    check_hex(wrapped, 24, "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5", "AES key wrap RFC 3394 4.1 (128-bit KEK and key)");
+    check(aes_unwrap(kek, wrapped, 24, back) == 0, "RFC 3394 4.1 unwraps");
+    check(memcmp(back, plain, pl) == 0, "... to the key data");
+
+    pl = unhex("00112233445566778899aabbccddeeff0001020304050607", plain);
+    aes_wrap(kek, plain, pl, wrapped);
+    check_hex(wrapped, 32, "889671106535a9f86d9f9a262f674569efa38d7535aac77527cab92855bddd6e",
+              "AES key wrap, 3 blocks (as OpenSSL's id-aes128-wrap makes it)");
+    pl = unhex("00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f", plain);
+    aes_wrap(kek, plain, pl, wrapped);
+    check_hex(wrapped, 40, "11826840774d993ff9c2fa02cca3cea0e93b1e1cf96361f93ea6dc2f345194e7b30f964c79f9e61d",
+              "AES key wrap, 4 blocks (OpenSSL)");
+    check(aes_unwrap(kek, wrapped, 40, back) == 0 && memcmp(back, plain, 32) == 0, "... and unwrapped");
+
+    /* message 3 of a WPA2 handshake (Wireshark's sample wpa2linkuppassphraseiswireshark.pcap) */
+    unhex("22fffbcadfbbd96816884599c16d65dd", kek);
+    wl = unhex("b43c7737faedbf17306b5ea1d5059fd5379d0145fa6ddac1e08d460de93cd72c103a7fb2c21445d2b740139c80ac569ae1e865a1"
+               "98c79a21", wrapped);
+    check(aes_unwrap(kek, wrapped, wl, back) == 0, "a real AP's key data (message 3, 7 blocks) unwraps with the KEK");
+    check_hex(back, 48, "30140100000fac040100000fac040100000fac023c00dd16000fac010100eab4e5b93588db11d1ecfda6eac5606bdd00",
+              "... to its RSN element, GTK KDE and padding");
+    aes_wrap(kek, back, 48, plain);
+    check(memcmp(plain, wrapped, 56) == 0, "... and wraps back to what the AP sent");
+
+    wrapped[13] ^= 0x10;
+    memset(back, 0x55, sizeof(back));
+    check(aes_unwrap(kek, wrapped, wl, back) == -1, "a changed bit fails the integrity check");
+    for(pl = 0; pl < 48 && !back[pl]; pl++);
+    check(pl == 48, "... and leaves zeros, not key bytes");
+    memset(back, 0x55, sizeof(back));
+    check(aes_unwrap(kek, wrapped, 16, back) == -1 && back[0] == 0x55, "16 bytes (one block of key data) is refused");
+    check(aes_unwrap(kek, wrapped, 30, back) == -1 && back[0] == 0x55, "a length that is not a multiple of 8 is refused");
+    memset(wrapped, 0x77, sizeof(wrapped));
+    aes_wrap(kek, plain, 8, wrapped);
+    aes_wrap(kek, plain, 20, wrapped);
+    check(wrapped[0] == 0x77 && wrapped[20] == 0x77, "aes_wrap writes nothing for 8 or 20 bytes");
+}
+
 /**** compare and wipe ****/
 
 static void test_util(void) {
@@ -291,6 +394,8 @@ int main(void) {
     test_sha();
     test_hmac();
     test_kdf();
+    test_aes();
+    test_wrap();
     test_util();
     printf("CRYPTO UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);
