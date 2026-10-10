@@ -336,7 +336,7 @@ static void to_station(struct sim *s, const u8 *eth, u_int len) {
 /**** 10/9/26 (review L1): 10.0.2.77, a host on the access point's own network ****/
 
 /* It answers ARP with two A-MSDUs of 64 copies of its reply each, one burst bigger than one device's share
-   of the receive queue (net/netbuf.c), and ping. */
+   of the receive queue (net/netbuf.c), and ping, each reply followed by the same as two fragments (L5). */
 #define VHOST_COPIES 64
 static const u8 vhost_mac[6] = { 0x02, 0x53, 0x49, 0x4d, 0x00, 0x77 };
 
@@ -363,6 +363,26 @@ static void burst(struct sim *s, const u8 *eth, u_int len, u_int n) {
     }
     if(aps[ap].kind == AP_OPEN) deliver(s, ap, f, wbuf_done(&b), false);
     s->in += n;
+}
+
+/* 10/9/26 (review L5): an echo reply again as the two fragments of one frame, the first (More Fragments) and
+   the last (fragment number 1), each holding the whole reply: a station that took either for a whole frame
+   would have the reply three times. It reassembles nothing, so it drops both (and counts them). */
+static void fragments(struct sim *s, const u8 *eth, u_int len) {
+    static u8 f[NETBUF_SIZE + 64];                      /* the sim thread's alone */
+    u8 bssid[6];
+    u_int n;
+    int ap = s->assoc;
+    if(ap < 0 || aps[ap].kind != AP_OPEN || len < ETH_HLEN) return;
+    bssid_of(ap, bssid);
+    n = ieee80211_build_data(f, sizeof(f), false, eth, bssid, eth + 6, s->sta_wmm, s->seq++, wlan_be16(eth + 12),
+                             eth + ETH_HLEN, len - ETH_HLEN);
+    if(!n) return;
+    f[1] |= WLAN_FC_MOREFRAG >> 8;                      /* fragment 0, more to come */
+    deliver(s, ap, f, n, false);
+    f[1] &= (u8)~(WLAN_FC_MOREFRAG >> 8);
+    f[22] |= 1;                                         /* fragment 1, the last */
+    deliver(s, ap, f, n, false);
 }
 
 /* an MSDU from the station for the virtual host: answered here, and true; false for anything else */
@@ -400,6 +420,7 @@ static bool vhost(struct sim *s, const struct ieee80211_msdu *m) {
         ip[ihl + 2] = ip[ihl + 3] = 0;
         *(u16 *)(ip + ihl + 2) = ip_checksum(ip + ihl, total - ihl);
         to_station(s, r, ETH_HLEN + total);
+        fragments(s, r, ETH_HLEN + total);
     }
     return true;                                        /* nothing for it goes to eth0 */
 }

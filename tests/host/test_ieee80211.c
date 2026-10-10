@@ -589,6 +589,30 @@ static void test_data(void) {
     check(ieee80211_parse_hdr(f, 29, &h) == -1, "+HTC cut short: refused");
     f[0] = 0x04;                                        /* a control frame */
     check(ieee80211_parse_hdr(f, n, &h) == -1, "a control frame: refused");
+
+    /* 10/9/26 (review L5): fragments, each with what looks like a whole MSDU in it */
+    n = ieee80211_build_data(f, sizeof(f), false, sta, ap1, ap1, false, 7, 0x0800, (const u8 *)"abcd", 4);
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && !ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == 1,
+          "a whole frame: one MSDU");
+    f[1] |= WLAN_FC_MOREFRAG >> 8;
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "More Fragments (the first fragment): refused");
+    f[1] &= (u8)~(WLAN_FC_MOREFRAG >> 8);
+    f[22] |= 1;
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "fragment number 1 (the last fragment): refused");
+    f[22] = (u8)((f[22] & 0xf0) | 0x0f);
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && (h.seq_ctrl >> 4) == 7 && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "fragment number 15: refused, the sequence number unchanged");
+    wbuf_init(&b, amsdu, sizeof(amsdu));                /* an A-MSDU of one subframe */
+    wbuf_hdr(&b, WLAN_FC(WLAN_FC_TYPE_DATA, WLAN_ST_QOS_DATA) | WLAN_FC_FROMDS, sta, ap1, ap1, 11);
+    wbuf_le16(&b, WLAN_QOS_AMSDU);
+    wbuf_put(&b, sta, 6); wbuf_put(&b, dst, 6); wbuf_be16(&b, 8 + 3);
+    wbuf_put(&b, snap_ip, 8); wbuf_put(&b, "abc", 3);
+    n = wbuf_done(&b);
+    check(ieee80211_parse_hdr(amsdu, n, &h) == 0 && ieee80211_msdus(amsdu, n, &h, m, 4) == 1, "an A-MSDU of one subframe");
+    amsdu[1] |= WLAN_FC_MOREFRAG >> 8;
+    check(ieee80211_parse_hdr(amsdu, n, &h) == 0 && ieee80211_msdus(amsdu, n, &h, m, 4) == -1, "...as a fragment: refused");
 }
 
 int main(void) {

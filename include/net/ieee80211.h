@@ -76,6 +76,13 @@ struct ieee80211_hdr {
    the frame is shorter than its header says */
 int ieee80211_parse_hdr(const u8 *frame, u_int len, struct ieee80211_hdr *h);
 
+/* 10/9/26 (review L5): a fragment, More Fragments or a fragment number other than 0. Nothing here
+   reassembles: a fragment is dropped, whatever its body looks like */
+#define WLAN_SEQ_FRAG     0x000f            /* sequence control: the fragment number */
+static inline bool ieee80211_is_fragment(const struct ieee80211_hdr *h) {
+    return (h->fc & WLAN_FC_MOREFRAG) || (h->seq_ctrl & WLAN_SEQ_FRAG);
+}
+
 /**** elements ****/
 
 #define WLAN_EID_SSID          0
@@ -239,7 +246,9 @@ struct ieee80211_msdu {
 /* the MSDUs of a data frame whose header h describes (From DS or To DS; an A-MSDU has several):
    their number (up to max; a null data frame has none), or -1 when malformed: a body without
    LLC/SNAP, an A-MSDU subframe that runs past the frame, an A-MSDU that begins with an LLC/SNAP
-   header where its first destination should be (CVE-2020-24588), a frame with four addresses */
+   header where its first destination should be (CVE-2020-24588), a frame with four addresses;
+   and -1 for a fragment (10/9/26, review L5): no MSDU is taken from one, not even a whole-looking
+   one (CVE-2020-26145, -26146) */
 int ieee80211_msdus(const u8 *frame, u_int len, const struct ieee80211_hdr *h, struct ieee80211_msdu *out, u_int max);
 
 /**** writing frames: a buffer that refuses what does not fit ****/

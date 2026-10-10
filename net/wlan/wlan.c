@@ -49,7 +49,9 @@ frames, an A-MSDU several. EAPOL (0x888e) goes to the supplicant, never to the I
 from it to the AP protected once the pairwise key is in (review L4);
 on a WPA2 network nothing else passes before the link is up, nor anything that came
 unprotected afterwards. Our own broadcasts that the AP sends back are dropped, and so
-are retransmissions already seen.
+are retransmissions already seen, and fragments (10/9/26, review L5): nothing here reassembles
+them, so a frame with More Fragments or a fragment number is counted and dropped, management
+frames too.
 
 The supplicant is track C's (net/wlan/wpa.c, include/net/wpa.h): its functions are weak
 references here, so this file links and runs before it lands; a WPA2 join is refused
@@ -183,6 +185,7 @@ struct wlan_state {
     bool last_seq_valid[17];
     u8 ethbuf[NETBUF_SIZE];
     u_long rx_frames, rx_dropped, rx_bad, rx_clear;
+    u_long rx_frag;                     /* fragments: never reassembled, dropped (review L5) */
 };
 
 static struct wlan_dev *devs[WLAN_DEVS];
@@ -897,6 +900,7 @@ static void rx_all(struct wlan_state *st) {
         st->rx_frames++;
         if(st->state == ST_DOWN) { kfree(it); continue; }
         if(ieee80211_parse_hdr(it->frame, it->len, &h)) st->rx_bad++;
+        else if(ieee80211_is_fragment(&h)) st->rx_frag++;  /* 10/9/26 (review L5): nothing reassembles them */
         else if(h.type == WLAN_FC_TYPE_MGMT) rx_mgmt(st, it, &h);
         else rx_data(st, it, &h);
         kfree(it);
@@ -1326,6 +1330,6 @@ void wlan_describe(struct wlan_dev *w, char *buf, size_t size) {
         }
         if(drv[0]) put(buf, size, "\ndriver: %s", drv);
     }
-    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
-        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
+    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped, %lu fragments dropped",
+        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear, st->rx_frag);
 }

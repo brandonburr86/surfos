@@ -429,6 +429,7 @@ SMOKE = [
     # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined by its BSSID (an
     # unknown one is no access point in range); eth0 and wlan0 each leased their own address by QEMU's DHCP server, pings
     # through each, the default route eth0 (Ethernet before Wi-Fi); 10.0.2.77 on the access point's own network answering
+    # each ping twice more as fragments, which wlan0 drops (review L5: "4 fragments dropped" after two pings), and
     # ARP with two A-MSDUs of 64 replies, which wlan0 takes without losing one (wlan-no-drops: its share of the receive
     # queue, review L1); ARP per interface; TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
@@ -466,6 +467,7 @@ SMOKE = [
       ('ping 10.0.2.2 1 wlan9', ['ping: no interface wlan9']),
       ('ping 10.0.2.77 2 wlan0', ['PING 10.0.2.77 from 10.0.2.16 (wlan0)', '2 packets transmitted, 2 received']),
       ('wlan-no-drops', CHECK),
+      ('wifi status', ['frames:', ' malformed, 0 unprotected dropped, 4 fragments dropped']),
       ('arp', ['IFACE', '10.0.2.2', 'wlan0', '10.0.2.2', 'eth0']),
       ('httpget 10.0.2.2 {http} /wlan', ['SurfOS HTTP test OK: /wlan', 'bytes received']),
       ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),

@@ -584,6 +584,7 @@ int ieee80211_msdus(const u8 *f, u_int len, const struct ieee80211_hdr *h, struc
     const u8 *body, *da, *sa;
     u_int blen, off = 0, n = 0;
     if(h->type != WLAN_FC_TYPE_DATA || h->a4 || len < h->hdr_len) return -1;
+    if(ieee80211_is_fragment(h)) return -1;             /* not reassembled: nothing is taken from it */
     if(h->subtype & 4) return 0;                        /* null data: nothing in it */
     switch(h->fc & (WLAN_FC_TODS | WLAN_FC_FROMDS)) {
     case WLAN_FC_FROMDS: da = h->a1; sa = h->a3; break;
