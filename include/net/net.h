@@ -84,6 +84,7 @@ struct netdev {
        multicast, another station's address); from the net thread, under net_lock; NULL: none */
     void (*bridge_rx)(struct netdev *dev, const u8 *frame, u_int len);
     volatile u_int rx_inq;          /* 10/9/26: its frames in the receive queue (at most half of it: netbuf.c) */
+    bool no_pad;                    /* 10/10/26: frames go out as long as they are (802.11 has no 60-byte minimum) */
 };
 
 int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0);

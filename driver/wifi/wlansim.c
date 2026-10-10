@@ -165,6 +165,7 @@ struct sim {
        over then, and the chip counts (and says once) any that is */
     bool left;
     u_long late;
+    u_long padded;                      /* MSDUs from the station longer than their packet (Ethernet padding) */
 };
 
 static struct sim *the_sim;             /* one simulated chip: the bridge hook finds it here */
@@ -769,6 +770,10 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
             if(!it->protect || !it->key_valid || memcmp(it->key, s->a.ptk + 32, 16)) { s->undecryptable++; continue; }
         }
         if(m[i].len + ETH_HLEN > NETBUF_SIZE - NETBUF_HEADROOM) { s->dropped++; continue; }
+        if(((m[i].type == ETH_P_ARP && m[i].len > 28) ||
+            (m[i].type == ETH_P_IP && m[i].len >= 20 && m[i].len > wlan_be16(m[i].payload + 2))) && !s->padded++)
+            kprintf("wlansim: a frame from the station carries Ethernet padding (%u bytes, its packet %u)\n", m[i].len,
+                    m[i].type == ETH_P_ARP ? 28 : wlan_be16(m[i].payload + 2));   /* 10/10/26: once */
         if(m[i].da[0] & 1) reflect(s, &m[i]);           /* a group frame goes to the whole network, its sender too */
         if(!s->uplink) { s->dropped++; continue; }
         mutex_lock(&net_lock);                          /* eth0's driver is the stack's, under its lock */

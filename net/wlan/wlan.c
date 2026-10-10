@@ -1162,6 +1162,7 @@ struct wlan_dev *wlan_register(const struct wlan_hw_ops *ops, void *priv) {
     nd->ops = &wlan_netdev_ops;
     nd->priv = w;
     nd->mtu = ETH_MTU;
+    nd->no_pad = true;                                  /* 10/10/26: 802.11 frames need no padding to 60 bytes */
     if(!kthread_create("wlan", wlan_thread, w, PL_HIGH, TF_KTHREAD | TF_DETACHED)) {
         kfree(w);
         kfree(st);

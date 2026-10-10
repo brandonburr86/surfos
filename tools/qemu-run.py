@@ -509,7 +509,7 @@ SMOKE = [
       ('wifi down', ['wlan0: down']),
       ('wifi status', ['wlan0: down (wifi up starts it)']),
       ('eth0-held-end', CHECK)],
-     [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()']),
+     [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()', 'carries Ethernet padding']),
     # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
     # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
@@ -535,7 +535,7 @@ SMOKE = [
       ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
       ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received']),
       ('eth0-held-end', CHECK)],
-     ['handed over after leave() or stop()']),
+     ['handed over after leave() or stop()', 'carries Ethernet padding']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
