@@ -20,7 +20,8 @@ last failure, the driver's line and wlan0's address.
 
 A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in statics,
 asks through shell_ask_secret(), and returns when it is cut short (the station layer
-cancels what it asked for). 0, 1 or 2 as the other commands.
+cancels what it asked for; Ctrl+C at the password prompt joins nothing). 0, 1 or 2 as the
+other commands.
 */
 
 #include <surfos/types.h>
@@ -286,6 +287,10 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
 
     snprintf(question, sizeof(question), "    Password for %s: ", name);
     shell_ask_secret(question, pass, sizeof(pass));
+    if(task_interrupted()) {                            /* 10/9/26: Ctrl+C at the prompt: nothing is joined */
+        wipe(pass, sizeof(pass));
+        return fail("join", -EINTR);
+    }
     if(!pass[0]) {
         wipe(pass, sizeof(pass));
         printf("    wifi: no password: not joined\n");

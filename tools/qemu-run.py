@@ -435,7 +435,8 @@ SMOKE = [
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
     # address streams through it, and no frame reaches the chip after leave() (wlansim-tx-race; the chip would say so);
     # a scan cut short by Ctrl+C, whose end the chip reports during the next scan, which lists the networks all the same
-    # (review L2), and wifi up refused as busy while a telnet session scans (wlansim-scan-abort);
+    # (review L2), and wifi up refused as busy while a telnet session scans (wlansim-scan-abort); Ctrl+C at the password
+    # prompt on the console and over telnet joins nothing (wlansim-ctrl-c);
     # WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
     # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
@@ -475,6 +476,7 @@ SMOKE = [
       ('wifi status', ['wlan0: associated with "SurfSim"', 'frames:', 'wlan0: MAC 52:54:00:12:34:57, link up, inet 10.0.2.16']),
       ('wlansim-tx-race', CHECK),
       ('wlansim-scan-abort', CHECK),
+      ('wlansim-ctrl-c', CHECK),
       ('wifi join SurfSim', ['joined SurfSim']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
       ('wlansim-wpa', CHECK),
@@ -2429,6 +2431,44 @@ def wlansim_scan_abort_check(q):
     return ok and cut and rescan and busy
 
 
+def wlansim_ctrl_c_check(q):
+    """(review test gaps: wifi's Ctrl+C paths) Ctrl+C at the hidden password prompt of a WPA2 join, on the console
+    and in a telnet session: the join is cut short with nothing typed, nothing is joined, and the station is as it was
+    (up, not associated). Without track C's supplicant there is no prompt, and nothing to check"""
+    start = len(q.transcript)
+    q.send('wifi join SurfSimWPA\n')
+    if not q.expect(re.compile(rb'Password for SurfSimWPA: |does not have yet'), 30):
+        print('\nwlansim-ctrl-c: neither the password prompt nor the refusal')
+        return False
+    if b'does not have yet' in q.transcript[start:]:
+        return q.expect(PROMPT, 10)
+    q.wait(0.2)
+    q.ser.sendall(b'\x03')
+    console = q.expect('wifi: join cut short', 10) and q.expect(PROMPT, 10)
+    remote = False
+    try:
+        t = Telnet(q.ports['telnet'])
+        try:
+            if t.expect(TELNET_ROOT, 15):
+                t.send('wifi join SurfSimWPA\n')
+                if t.expect('Password for SurfSimWPA: ', 30):
+                    time.sleep(0.2)
+                    t.send(b'\x03')
+                    remote = t.expect('wifi: join cut short', 10) and t.expect(TELNET_ROOT, 10)
+                t.send('exit\n')
+                t.wait_closed(10)
+        finally:
+            t.close()
+    except OSError as e:
+        print(f'\nwlansim-ctrl-c: telnet: {e}')
+    start = len(q.transcript)
+    q.send('wifi status\n')
+    idle = q.expect(PROMPT, 10) and b'wlan0: up, not associated' in q.transcript[start:]
+    if not (console and remote and idle):
+        print(f'\nwlansim-ctrl-c: on the console {console}, over telnet {remote}, not associated afterwards {idle}')
+    return console and remote and idle
+
+
 def wlan_no_drops_check(q):
     """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
     receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
@@ -2461,7 +2501,8 @@ def wlan_forgotten_check(q):
 
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
-               'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check}
+               'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
+               'wlansim-ctrl-c': wlansim_ctrl_c_check}
 
 
 def tail(text, n=40):
