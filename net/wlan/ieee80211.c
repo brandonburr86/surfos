@@ -132,6 +132,12 @@ bool ieee80211_elems_ok(const u8 *ies, u_int len) {
     return true;
 }
 
+u_int ieee80211_elems_whole(const u8 *ies, u_int len) {
+    u_int off = 0;
+    while(len - off >= 2 && ies[off + 1] <= len - off - 2) off += 2 + ies[off + 1];
+    return off;
+}
+
 const u8 *ieee80211_find_elem(const u8 *ies, u_int len, u8 id) {
     u_int off = 0;
     while(len - off >= 2 && ies[off + 1] <= len - off - 2) {
@@ -274,6 +280,7 @@ int ieee80211_parse_bss(const u8 *f, u_int len, const struct wlan_rx_info *info,
     struct ieee80211_hdr h;
     const u8 *ies, *e, *rsn;
     u_int ies_len;
+    bool cut;
     u8 channel = 0;
 
     *flags = 0;
@@ -282,8 +289,8 @@ int ieee80211_parse_bss(const u8 *f, u_int len, const struct wlan_rx_info *info,
     if(len - h.hdr_len < 12) return -1;                 /* timestamp, beacon interval, capability */
     if(h.a3[0] & 1) return -1;                          /* a group address is no BSSID */
     ies = f + h.hdr_len + 12;
-    ies_len = len - h.hdr_len - 12;
-    if(!ieee80211_elems_ok(ies, ies_len)) return -1;
+    ies_len = ieee80211_elems_whole(ies, len - h.hdr_len - 12);   /* 10/9/26 (review L6): not refused whole */
+    cut = ies_len < len - h.hdr_len - 12;
 
     memset(bss, 0, sizeof(*bss));
     memcpy(bss->bssid, h.a3, WLAN_ADDR_LEN);
@@ -324,6 +331,8 @@ int ieee80211_parse_bss(const u8 *f, u_int len, const struct wlan_rx_info *info,
 
     rsn = ieee80211_find_elem(ies, ies_len, WLAN_EID_RSN);
     bss->security = ieee80211_security(rsn, ieee80211_find_vendor(ies, ies_len, WLAN_OUI_MICROSOFT, 1), bss->capability);
+    if(cut && !rsn && (bss->capability & WLAN_CAP_PRIVACY))
+        bss->security = WLAN_SEC_OTHER;                 /* its RSN element may be what was cut off: not WEP */
     if(rsn) {
         if((u_int)rsn[1] + 2 <= sizeof(bss->rsn_ie)) {
             memcpy(bss->rsn_ie, rsn, rsn[1] + 2);
@@ -527,8 +536,7 @@ int ieee80211_parse_assoc_resp(const u8 *f, u_int len, struct ieee80211_assoc_re
     r->status = wlan_le16(p + 2);
     r->aid = wlan_le16(p + 4) & 0x3fff;
     r->ies = p + 6;
-    r->ies_len = n - 6;
-    if(!ieee80211_elems_ok(r->ies, r->ies_len)) return -1;
+    r->ies_len = ieee80211_elems_whole(r->ies, n - 6);  /* 10/9/26 (review L6): as a beacon's */
     return 0;
 }
 

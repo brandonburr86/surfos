@@ -9,7 +9,8 @@ wlan_hw_ops whose "firmware" is a handful of access points on the air, so the st
 layer, the wifi command, DHCP and the IP stack over wlan0 can be tested under QEMU, which
 has no Wi-Fi:
 
-  SurfSim        open, 2.4 GHz channel 6, HT, WMM (QoS data, A-MSDU now and then)
+  SurfSim        open, 2.4 GHz channel 6, HT, WMM (QoS data, A-MSDU now and then); its beacons and
+                 probe responses end with an element cut short, as some access points' do (review L6)
   SurfSimWPA     WPA2-Personal (CCMP, PSK), 5 GHz channel 36, HT and VHT, WMM; its test-only
                  passphrase is WLANSIM_PASSPHRASE below (the smoke test types it)
   (hidden)       SurfSimHidden: open, 2.4 GHz channel 11, an empty SSID in its beacons; it
@@ -84,15 +85,16 @@ struct sim_ap {
     i8 rssi;
     u8 kind;                            /* AP_* */
     bool ht, vht, wmm, flaky;
+    bool ragged;                        /* its beacons and probe responses end with an element cut short (L6) */
 };
 
 static const struct sim_ap aps[] = {
-    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false },
-    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false },
-    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false },
-    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false },
-    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false },
-    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true  },
+    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false, true  },
+    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false, false },
+    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false, false },
+    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false, false },
+    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false, false },
+    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true,  false },
 };
 #define NAPS ((int)(sizeof(aps) / sizeof(aps[0])))
 
@@ -261,6 +263,7 @@ static u_int ap_frame(struct sim *s, int ap, u8 subtype, u8 *buf, u_int size) {
         wbuf_elem(&b, WLAN_EID_VHT_OPERATION, vhtop, sizeof(vhtop));
     }
     if(p->wmm) wbuf_elem(&b, WLAN_EID_VENDOR, wmm_param, sizeof(wmm_param));
+    if(p->ragged) wbuf_put(&b, "\xdd\x09\x00\x50\xf2", 5);   /* a vendor element: 9 bytes, it says; 3 there */
     return wbuf_done(&b);
 }
 
