@@ -32,7 +32,9 @@ the supplicant is freed; nothing here is ever logged.
 
 /* what the station layer gives a supplicant; ctx is passed back */
 struct wpa_ops {
-    int (*send_eapol)(void *ctx, const u8 *frame, u_int len);     /* to the AP, unprotected */
+    int (*send_eapol)(void *ctx, const u8 *frame, u_int len);     /* to the AP; 10/10/26: protected
+                                               once the pairwise key is in (message 4 of the first
+                                               handshake goes before it, in the clear) */
     int (*install_key)(void *ctx, const struct wlan_key *key);   /* 0 ok */
     void (*done)(void *ctx, int status);    /* WPA_OK once the pairwise and group keys are in (the
                                                port opens), else why it failed; called once */

@@ -21,7 +21,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # partition tables (+ sfdisk/sgdisk cross-checks), mkfs (+ fsck.fat), the user C library,
                   # the prompt renderer, code page 437 and the UTF-8 decoder, the console's pager (test_pager),
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
-                  # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py)
+                  # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py),
+                  # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 13 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -72,13 +73,18 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
 fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
            (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake())
 net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS resolver; sock.c (TCP connections as
-           programs' descriptors)
+           programs' descriptors); routing over several interfaces (by source address, then subnet, Ethernet before Wi-Fi);
+           wlan/: the 802.11 station layer (wlan.c: scan list, joining, wlan0; ieee80211.c: frames, host-tested) and the
+           WPA2 supplicant (wpa.c); interfaces in include/net/wlan.h and include/net/wpa.h
+lib/crypto/ SHA-1/256, HMAC, PBKDF2, the 802.11 PRF, AES-128, key wrap, an RDRAND-fed HMAC-DRBG (include/crypto/crypto.h)
 user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdlib, string, ctype, dirent, time, errno), include/ (the
            standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv, rm, mkdir, df, fstest,
            pagetest, kcmdtest, nettest, ptytest, rx (one file from the network), ...), surfsh/ (the SurfOS shell: main,
            editor, complete, parse, run, builtins),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
+driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests); the
+           Intel driver will go here too (docs/superpowers/plans/2026-10-09-wifi.md)
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
            prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
@@ -205,6 +211,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   formatted. usb0 and usb1 swap between boots, so devloop.py takes the USB disk that lsblk does not call
   protected and whose first partition is FAT, never a name or a size. The laptop boots from USB first, so a
   `reboot` comes back to the boot stick's GRUB by itself.
+* Wi-Fi (docs/superpowers/plans/2026-10-09-wifi.md): `wifi up | down | scan | join <ssid> [bssid] | status |
+  leave` (shell/wifi.c); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
+  the PMK at once. The kernel word `wlansim` gives a simulated card with six access points (SurfSim, SurfSimWPA
+  with the test passphrase in tools/qemu-run.py, a hidden one, WEP, WPA3-only, a flaky one) bridged onto eth0, so
+  `dhcp wlan0` works in QEMU; the smoke test's `@boot wlansim net` and `@boot wlansim usbnet-later` blocks drive
+  it. Never put a real Wi-Fi password in a file, a log or a test.
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
