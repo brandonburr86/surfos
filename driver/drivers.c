@@ -12,6 +12,8 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 in, after e1000 so that QEMU's NIC stays eth0 where both exist.
 10/9/26 (Wi-Fi, track S): with `wlansim` on the kernel command line, and only then, the
 simulated Wi-Fi chip of the tests registers as wlan0 after the table (driver/wifi/wlansim.c).
+10/10/26 (Wi-Fi, track I): "iwlwifi", the laptop's Intel Wireless-AC 9560 (driver/wifi/iwl.c),
+only with profile=laptop: at boot it finds the card and names it, nothing more.
 */
 //Rebuilt 9/28/2026 - not in the printout, see REBUILD-NOTES.md
 
@@ -34,6 +36,7 @@ simulated Wi-Fi chip of the tests registers as wlan0 after the table (driver/wif
 extern int net_3c905b_init(void);
 int init_e1000(void);
 int init_wlansim(void);         /* 10/9/26: nothing without the kernel word wlansim */
+int init_iwlwifi(void);         /* 10/10/26: the Intel 9560 (driver/wifi/iwl.c) */
 
 static int drv_serial(void) { return init_serial_irq(); }
 static int drv_parport(void) { init_parport(); return PAR0 ? 0 : 1; }
@@ -44,6 +47,8 @@ static int drv_pci(void) { return init_pci(); }
 /* legacy: skipped with profile=laptop (there is nothing at those ports on such a machine,
    and the BIOS data area the parallel port reads is not filled in by UEFI firmware) */
 #define LEGACY 1
+/* 10/10/26: hardware only the laptop has, not probed without profile=laptop (the emulator's boot stays as it was) */
+#define LAPTOP 2
 
 static struct driver drivers[] = {
     { "serial",  drv_serial, 0, 0 },          /* serial input; needs the task system, hence not in init_serial() */
@@ -56,6 +61,7 @@ static struct driver drivers[] = {
     { "ata",     init_ata, 0, LEGACY },
     { "e1000",   init_e1000, 0, 0 },          /* QEMU's default NIC */
     { "usb",     init_usb, 0, 0 },            /* xHCI, then USB Ethernet adapters (CDC ECM/NCM) */
+    { "iwlwifi", init_iwlwifi, 0, LAPTOP },   /* the Intel 9560 Wi-Fi card: wlan0 */
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 
@@ -68,6 +74,7 @@ void init_drivers() {
     u_int i;
     for(i = 0; i < NDRIVERS; i++) {
         if(bootinfo.laptop && (drivers[i].flags & LEGACY)) drivers[i].status = DRV_SKIPPED;
+        else if(!bootinfo.laptop && (drivers[i].flags & LAPTOP)) drivers[i].status = DRV_SKIPPED;
         else drivers[i].status = drivers[i].init();
     }
     kprintf("\nDrivers:");

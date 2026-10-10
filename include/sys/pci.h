@@ -22,6 +22,7 @@ File: pci.h Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 #define  PCI_COMMAND_MASTER 0x4
 #define  PCI_COMMAND_INTX_DISABLE 0x400
 #define PCI_STATUS          0x06
+#define  PCI_STATUS_CAP_LIST 0x10
 #define PCI_REVISION_ID     0x08
 #define PCI_CLASS_PROG      0x09
 #define PCI_CLASS_SUB       0x0a
@@ -40,6 +41,7 @@ File: pci.h Date: 7/1/04, rebuilt 10/2026 (roadmap D1)
 #define  PCI_BASE_ADDRESS_IO_MASK  (~0x03UL)
 #define PCI_SUBSYSTEM_VENDOR_ID 0x2c
 #define PCI_SUBSYSTEM_ID    0x2e
+#define PCI_CAPABILITY_LIST 0x34
 #define PCI_INTERRUPT_LINE  0x3c
 #define PCI_INTERRUPT_PIN   0x3d
 /* type 1 (bridge) */
@@ -94,6 +96,14 @@ void pci_print(bool details);                /* lspci; 10/7/26: details (lspci -
 /* 10/7/26: lspci -v and wifiinfo (driver/pciinfo.c describes the bytes) */
 void pci_read_config(struct pci_dev *d, u8 *cfg);            /* its 256 bytes (PCI_CONFIG_SIZE) of configuration space */
 struct pci_dev *pci_find_at(u8 bus, u8 slot, u8 func);
+/* 10/10/26: a capability's offset in configuration space, 0 when absent */
+#define PCI_CAP_ID_EXP      0x10                /* PCI Express */
+#define  PCI_EXP_LNKCTL     0x10                /* link control, from the capability */
+#define  PCI_EXP_LNKCTL_ASPM_L0S 0x0001
+#define  PCI_EXP_LNKCTL_ASPM_L1  0x0002
+#define  PCI_EXP_DEVCTL2    0x28
+#define  PCI_EXP_DEVCTL2_LTR_EN  0x0400
+u8 pci_find_capability(struct pci_dev *d, u8 id);
 void pci_print_device(struct pci_dev *d, bool details, bool dump);   /* lspci's lines; details: -v; dump: the bytes */
 
 /* names from the 2004 PCIDATA.H table */

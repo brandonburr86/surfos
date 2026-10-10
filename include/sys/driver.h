@@ -16,7 +16,8 @@ struct driver {
     const char *name;
     int (*init)(void);
     int status;             /* filled in by init_drivers() */
-    u_int flags;            /* 1: a legacy ISA device, skipped with profile=laptop */
+    u_int flags;            /* 1: a legacy ISA device, skipped with profile=laptop; 2 (10/10/26): the
+                               laptop's own hardware, skipped without it */
 };
 
 #define DRV_SKIPPED 2       /* status: not probed in this profile */

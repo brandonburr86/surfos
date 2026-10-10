@@ -85,8 +85,9 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
-           iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); the Intel
-           driver grows here (docs/superpowers/plans/2026-10-09-wifi.md)
+           iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
+           laptop's Intel 9560 (profile=laptop only; registers in include/sys/iwl_reg.h), growing step by step
+           (docs/superpowers/plans/2026-10-09-wifi.md)
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS

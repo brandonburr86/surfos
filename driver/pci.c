@@ -231,6 +231,20 @@ struct pci_dev *pci_find_at(u8 bus, u8 slot, u8 func) {
     return NULL;
 }
 
+/* 10/10/26 (Wi-Fi): where a capability is in configuration space (PCI_CAP_ID_*), 0 when the
+   device does not list it; a looping or broken list ends after 48 entries */
+u8 pci_find_capability(struct pci_dev *d, u8 id) {
+    u8 off;
+    int n;
+    if(!(pci_dev_read16(d, PCI_STATUS) & PCI_STATUS_CAP_LIST)) return 0;
+    off = pci_dev_read8(d, d->header_type == PCI_HEADER_TYPE_CARDBUS ? 0x14 : PCI_CAPABILITY_LIST) & 0xfc;
+    for(n = 0; off >= 0x40 && n < 48; n++) {
+        if(pci_dev_read8(d, off) == id) return off;
+        off = pci_dev_read8(d, off + 1) & 0xfc;
+    }
+    return 0;
+}
+
 static void line_out(void *ctx, const char *line) {
     (void)ctx;
     kprintf("%s\n", line);

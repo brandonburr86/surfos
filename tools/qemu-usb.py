@@ -108,8 +108,9 @@ BAD = ['Kernel Wipeout', "Woah.. this ain't", 'SYSTEM HALTED', 'HALTING', 'Kerne
 PORTABLE = [
     ('help', ['surfsh 1.0, the SurfOS shell', 'lsblk', '(C)2004-2026 Brandon Burr.']),   # paged: Space from the harness
     ('bootinfo', ['multiboot2', 'profile=laptop', 'firmware UEFI', 'screen: framebuffer']),
-    ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok', 'console   framebuffer',
-                 'keyboard  8042', 'usb       1 xHCI controller']),
+    ('drivers', ['parport   skipped', 'ramdisk   ok', 'ata       skipped', 'usb       ok',
+                 'iwlwifi   not present',    # 10/10/26: looked for (profile=laptop); QEMU has no Intel Wi-Fi card
+                 'console   framebuffer', 'keyboard  8042', 'usb       1 xHCI controller']),
     ('lsusb', ['xHCI 1.00', 'QEMU USB HARDDRIVE', '-> usb0 (256 MB)']),   # the stick, at 5 Gbit/s, as a disk
     # 10/7/26 (the Wi-Fi report): capabilities on PCI Express (q35), as the laptop's Wi-Fi has them
     ('lspci -v', ['ids 1b36:000d', 'MSI-X, 16 vectors', 'PCI Express 2, root complex integrated endpoint',

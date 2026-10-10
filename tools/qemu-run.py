@@ -222,7 +222,8 @@ SMOKE = [
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
-    ('drivers', ['parport   ok', 'usb       not present', 'console   VGA text mode', 'timer     PIT channel 0']),
+    ('drivers', ['parport   ok', 'usb       not present', 'iwlwifi   skipped', 'console   VGA text mode',
+                 'timer     PIT channel 0']),   # in the order printed; 10/10/26: iwlwifi only with profile=laptop
     ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
     ('himem',   ['no RAM above 4 GB']),
