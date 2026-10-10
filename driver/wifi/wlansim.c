@@ -34,7 +34,9 @@ A data frame from the station becomes an Ethernet frame on it from wlan0's own M
 multicasts become data frames from the access point (eth0 is given the address with
 NETDEV_ADD_RX_ADDR, and its bridge_rx hook brings them here). QEMU's DHCP server so gives
 wlan0 an address of its own. Every seventh frame to the station comes twice, the second as
-a retransmission, and with WMM every third unicast one as an A-MSDU.
+a retransmission, and with WMM every third unicast one as an A-MSDU. A broadcast or
+multicast from the station comes back to it too, as an access point sends it to its whole
+network.
 
 WPA2: the access point runs the authenticator side of the 4-way handshake (802.11-2016
 12.7.6) and, 3 seconds after it, one group key handshake (12.7.7), with track C's crypto
@@ -723,6 +725,19 @@ static void rx_station_mgmt(struct sim *s, const u8 *f, u_int len) {
     }
 }
 
+/* 10/9/26 (review test gaps): an access point sends a broadcast or multicast frame from a station to every
+   station of its network, the sender among them (From DS, its own address as the source): the station must
+   drop its own (wlan0's counter says how many) */
+static void reflect(struct sim *s, const struct ieee80211_msdu *m) {
+    static u8 e[NETBUF_SIZE];                           /* the sim thread's alone */
+    memcpy(e, m->da, 6);
+    memcpy(e + 6, m->sa, 6);
+    e[12] = (u8)(m->type >> 8);
+    e[13] = (u8)m->type;
+    memcpy(e + ETH_HLEN, m->payload, m->len);
+    to_station(s, e, ETH_HLEN + m->len);
+}
+
 static void rx_station_data(struct sim *s, struct sim_item *it) {
     struct ieee80211_hdr h;
     struct ieee80211_msdu m[4];
@@ -753,7 +768,9 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
             if(s->a.stage != A_OPEN && s->a.stage != A_GROUP1) { s->dropped++; continue; }   /* the port is closed */
             if(!it->protect || !it->key_valid || memcmp(it->key, s->a.ptk + 32, 16)) { s->undecryptable++; continue; }
         }
-        if(!s->uplink || m[i].len + ETH_HLEN > NETBUF_SIZE - NETBUF_HEADROOM) { s->dropped++; continue; }
+        if(m[i].len + ETH_HLEN > NETBUF_SIZE - NETBUF_HEADROOM) { s->dropped++; continue; }
+        if(m[i].da[0] & 1) reflect(s, &m[i]);           /* a group frame goes to the whole network, its sender too */
+        if(!s->uplink) { s->dropped++; continue; }
         mutex_lock(&net_lock);                          /* eth0's driver is the stack's, under its lock */
         nb = netbuf_alloc();
         if(nb) {

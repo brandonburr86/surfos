@@ -431,7 +431,8 @@ SMOKE = [
     # through each, the default route eth0 (Ethernet before Wi-Fi); 10.0.2.77 on the access point's own network answering
     # each ping twice more as fragments, which wlan0 drops (review L5: "4 fragments dropped" after two pings), and
     # ARP with two A-MSDUs of 64 replies, which wlan0 takes without losing one (wlan-no-drops: its share of the receive
-    # queue, review L1); ARP per interface; TCP out; telnet to each interface's
+    # queue, review L1); ARP per interface, wlan0's own broadcasts, which the access point sends back, dropped and never
+    # learned from (wlan-own-frames); TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
     # address streams through it, and no frame reaches the chip after leave() (wlansim-tx-race; the chip would say so);
     # a scan cut short by Ctrl+C, whose end the chip reports during the next scan, which lists the networks all the same
@@ -468,8 +469,9 @@ SMOKE = [
       ('ping 10.0.2.2 1 wlan9', ['ping: no interface wlan9']),
       ('ping 10.0.2.77 2 wlan0', ['PING 10.0.2.77 from 10.0.2.16 (wlan0)', '2 packets transmitted, 2 received']),
       ('wlan-no-drops', CHECK),
-      ('wifi status', ['frames:', ' malformed, 0 unprotected dropped, 4 fragments dropped']),
+      ('wifi status', ['frames:', ' 4 fragments dropped, ']),
       ('arp', ['IFACE', '10.0.2.2', 'wlan0', '10.0.2.2', 'eth0']),
+      ('wlan-own-frames', CHECK),
       ('httpget 10.0.2.2 {http} /wlan', ['SurfOS HTTP test OK: /wlan', 'bytes received']),
       ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
       ('wlansim-telnet', CHECK),
@@ -2469,6 +2471,25 @@ def wlansim_ctrl_c_check(q):
     return console and remote and idle
 
 
+def wlan_own_frames_check(q):
+    """(review test gaps) the simulated access point sends wlan0's broadcasts back to it, as an access point sends them
+    to its whole network: wlan0 dropped them (wifi status counts them), so its own gratuitous ARP (dhcp's announcement)
+    never taught the ARP table that wlan0's address 10.0.2.16 is at wlan0's own MAC address"""
+    start = len(q.transcript)
+    q.send('wifi status\n')
+    ok = q.expect(PROMPT, 10)
+    m = re.search(r'(\d+) own broadcasts the access point sent back', q.transcript[start:].decode(errors='replace'))
+    own = int(m.group(1)) if m else 0
+    start = len(q.transcript)
+    q.send('arp\n')
+    ok = ok and q.expect(PROMPT, 10)
+    learned = [line for line in q.transcript[start:].decode(errors='replace').splitlines()
+               if '10.0.2.16 ' in line and '52:54:00:12:34:57' in line]
+    if not (ok and own >= 1 and not learned):
+        print(f'\nwlan-own-frames: own broadcasts sent back and dropped {own}, ARP entries for ourselves {learned}')
+    return ok and own >= 1 and not learned
+
+
 def wlan_no_drops_check(q):
     """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
     receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
@@ -2502,7 +2523,7 @@ def wlan_forgotten_check(q):
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
                'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
-               'wlansim-ctrl-c': wlansim_ctrl_c_check}
+               'wlansim-ctrl-c': wlansim_ctrl_c_check, 'wlan-own-frames': wlan_own_frames_check}
 
 
 def tail(text, n=40):

@@ -186,6 +186,7 @@ struct wlan_state {
     u8 ethbuf[NETBUF_SIZE];
     u_long rx_frames, rx_dropped, rx_bad, rx_clear;
     u_long rx_frag;                     /* fragments: never reassembled, dropped (review L5) */
+    u_long rx_own;                      /* our own broadcasts the AP sent back to its network, dropped */
 };
 
 static struct wlan_dev *devs[WLAN_DEVS];
@@ -863,7 +864,10 @@ static void rx_data(struct wlan_state *st, struct rx_item *it, const struct ieee
     n = ieee80211_msdus(it->frame, it->len, h, m, MSDU_MAX);
     if(n < 0) { st->rx_bad++; return; }
     for(i = 0; i < n; i++) {
-        if(!memcmp(m[i].sa, w->mac, WLAN_ADDR_LEN)) continue;   /* our own broadcast, sent back by the AP */
+        if(!memcmp(m[i].sa, w->mac, WLAN_ADDR_LEN)) {   /* our own broadcast, sent back by the AP */
+            st->rx_own++;
+            continue;
+        }
         if(m[i].type == ETH_P_EAPOL) {
             if(st->sm) {
                 wpa_rx_eapol(st->sm, m[i].payload, m[i].len);
@@ -1330,6 +1334,7 @@ void wlan_describe(struct wlan_dev *w, char *buf, size_t size) {
         }
         if(drv[0]) put(buf, size, "\ndriver: %s", drv);
     }
-    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped, %lu fragments dropped",
-        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear, st->rx_frag);
+    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
+        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
+    put(buf, size, "\n        %lu fragments dropped, %lu own broadcasts the access point sent back", st->rx_frag, st->rx_own);
 }
