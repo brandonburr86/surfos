@@ -1,0 +1,8 @@
+SurfOS Files: type files [directory] to browse the filesystem.
+Arrows select; Enter opens a folder or edits a file; Left goes to the parent.
+Home/End and Page Up/Down move around; / goes to root; r refreshes.
+. shows/hides dotfiles; q returns to the shell.
+In edit: Ctrl+S saves, Ctrl+Q returns to Files.
+Mouse in SGR serial/Telnet terminals: select then click again to open,
+or select and click Open/Edit. The native SurfOS screen uses the keyboard.
+Devices and obvious binary files are refused; read-only mounts allow viewing.
