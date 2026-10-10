@@ -154,6 +154,10 @@ struct sim {
     u_long flaky_deauth_at, flaky_lost_at, flaky_silent_until;
     /* counters */
     u_long out, in, dropped, undecryptable;
+    /* 10/9/26 (review M3): leave() or stop() came and no join() or start() since: wlan.h says no frame is handed
+       over then, and the chip counts (and says once) any that is */
+    bool left;
+    u_long late;
 };
 
 static struct sim *the_sim;             /* one simulated chip: the bridge hook finds it here */
@@ -785,6 +789,7 @@ static int sim_start(struct wlan_dev *w) {
         d->bridge_rx = sim_bridge_rx;
     }
     s->tuned = s->authed = s->assoc = -1;
+    s->left = false;
     s->started = true;
     kprintf("wlansim: the simulated chip is on: %d access points, bridged to %s%s\n", NAPS, d ? d->name : "nothing",
             have_crypto() ? "" : " (no crypto in this kernel: SurfSimWPA refuses stations)");
@@ -793,11 +798,19 @@ static int sim_start(struct wlan_dev *w) {
 
 static void sim_stop(struct wlan_dev *w) {
     struct sim *s = (struct sim *)w->priv;
+    s->left = true;
     s->started = false;
     s->scan_pending = false;
     s->tuned = s->authed = s->assoc = -1;
     s->ptk_set = s->gtk_set = false;
     s->a.stage = A_IDLE;
+}
+
+/* 10/9/26 (review M3): a frame handed over between leave() or stop() and the next join() or start() */
+static bool too_late(struct sim *s) {
+    if(!s->left) return false;
+    if(!s->late++) kprintf("wlansim: a frame handed over after leave() or stop()\n");
+    return true;
 }
 
 static int sim_scan(struct wlan_dev *w, const struct wlan_scan_req *req) {
@@ -818,11 +831,14 @@ static void sim_scan_abort(struct wlan_dev *w) {
 static int sim_join(struct wlan_dev *w, const struct wlan_bss *bss) {
     struct sim *s = (struct sim *)w->priv;
     s->tuned = ap_by_bssid(bss->bssid);
+    s->left = false;
     return 0;
 }
 
 static int sim_tx_mgmt(struct wlan_dev *w, const u8 *frame, u_int len) {
-    enqueue((struct sim *)w->priv, IT_MGMT, frame, len, false);
+    struct sim *s = (struct sim *)w->priv;
+    if(too_late(s)) return -1;
+    enqueue(s, IT_MGMT, frame, len, false);
     return 0;
 }
 
@@ -851,7 +867,9 @@ static int sim_set_key(struct wlan_dev *w, const struct wlan_key *key) {
 }
 
 static int sim_tx_data(struct wlan_dev *w, struct netbuf *nb, bool protect) {
-    enqueue((struct sim *)w->priv, IT_DATA, netbuf_data(nb), nb->len, protect);
+    struct sim *s = (struct sim *)w->priv;
+    if(too_late(s)) return -1;
+    enqueue(s, IT_DATA, netbuf_data(nb), nb->len, protect);
     return 0;
 }
 
@@ -859,6 +877,7 @@ static void sim_leave(struct wlan_dev *w) {
     struct sim *s = (struct sim *)w->priv;
     u_long flags = irq_save();
     s->tuned = -1;
+    s->left = true;
     s->ptk_set = s->gtk_set = false;
     wipe(s->ptk_key, sizeof(s->ptk_key));
     wipe(s->gtk_key, sizeof(s->gtk_key));

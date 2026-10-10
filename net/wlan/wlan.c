@@ -19,7 +19,9 @@ end; a second command meanwhile is told the device is busy, and Ctrl+C or a kill
 the request to the thread, which cancels it. Every hw operation but the two that send is
 called with hw_lock held (one at a time per device, as wlan.h asks) and never with
 net_lock; the netdev's send runs under net_lock and only calls tx_data(), which never
-waits.
+waits. 10/9/26 (review M3): before leave() and stop(), wlan0's sends are stopped and one
+under way is waited out (tx_quiesce(): net_lock taken and dropped), so the driver never
+gets a frame while it tears its queues down or after.
 
 Joining: the network comes from the scan list (by BSSID, else the strongest with the SSID
 and the security asked for: a PMK means WPA2, none an open network); when it is not
@@ -250,6 +252,14 @@ static void send_deauth(struct wlan_state *st, u16 reason) {
                                           next_seq(st, false)));
 }
 
+/* 10/9/26 (review M3): every send of wlan0 runs under net_lock (netdev_send() from the IP stack), so once
+   tx_up is false, taking and dropping the lock waits out a send that read tx_up before: no tx_data() reaches
+   the driver during or after leave() or stop(). Called before either, never with hw_lock held. */
+static void tx_quiesce(void) {
+    mutex_lock(&net_lock);
+    mutex_unlock(&net_lock);
+}
+
 /* what the netdev's send may use; up false stops it */
 static void tx_context(struct wlan_state *st, bool up) {
     u_long flags = irq_save();
@@ -456,6 +466,7 @@ static void unjoin(struct wlan_state *st, u16 reason) {
     st->wpa_done = false;
     st->ptk_in = st->gtk_in = false;
     if(st->hw_joined) {
+        tx_quiesce();                                   /* no wlan0 send left in the driver's way */
         hw_lock(st);
         if(w->ops->leave) w->ops->leave(w);
         hw_unlock(st);
@@ -887,7 +898,8 @@ static void do_down(struct wlan_state *st) {
     struct wlan_dev *w = st->w;
     if(!w->up) return;
     scan_abort(st);
-    leave_now(st, "wifi down");
+    leave_now(st, "wifi down");                         /* wlan0's sends stopped (tx_context()) */
+    tx_quiesce();
     hw_lock(st);
     w->ops->stop(w);
     hw_unlock(st);

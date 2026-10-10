@@ -429,7 +429,9 @@ SMOKE = [
     # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined by its BSSID (an
     # unknown one is no access point in range); eth0 and wlan0 each leased their own address by QEMU's DHCP server, pings
     # through each, the default route eth0 (Ethernet before Wi-Fi), ARP per interface; TCP out; telnet to each interface's
-    # address answered through that interface (BOOT_CHECKS: wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa:
+    # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
+    # address streams through it, and no frame reaches the chip after leave() (wlansim-tx-race; the chip would say so);
+    # WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
     # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
     # and coming back up on its own; leaving it forgets the address and the ARP entries; down. The passphrases typed
@@ -463,6 +465,9 @@ SMOKE = [
       ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
       ('wlansim-telnet', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'frames:', 'wlan0: MAC 52:54:00:12:34:57, link up, inet 10.0.2.16']),
+      ('wlansim-tx-race', CHECK),
+      ('wifi join SurfSim', ['joined SurfSim']),
+      ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
       ('wlansim-wpa', CHECK),
       ('wifi join SurfSimFlaky', ['wlan0: address 10.0.2.16 forgotten', 'wlan0: link up: "SurfSimFlaky"',
                                   'joined SurfSimFlaky']),
@@ -480,7 +485,7 @@ SMOKE = [
       ('wlan-forgotten', CHECK),
       ('wifi down', ['wlan0: down']),
       ('wifi status', ['wlan0: down (wifi up starts it)'])],
-     [WLANSIM_PASSPHRASE, WLANSIM_WRONG]),
+     [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()']),
     # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
     # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
@@ -503,7 +508,7 @@ SMOKE = [
       ('wifi join SurfSimHidden', ['joined SurfSimHidden']),
       ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
       ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received'])],
-     []),
+     ['handed over after leave() or stop()']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -2349,6 +2354,28 @@ def usbnet_plug_check(q):
     return ok
 
 
+def wlansim_tx_race_check(q):
+    """(review M3) wlan0 busy sending, a telnet session to wlan0's address printing as fast as it can, while wifi leave
+    takes the link away; the simulated chip says so if a frame reaches it after leave() (the block's absent list)"""
+    try:
+        t = Telnet(q.ports['telnet_wlan'])
+    except OSError as e:
+        print(f'\nwlansim-tx-race: {e}')
+        return False
+    try:
+        ok = t.expect(TELNET_ROOT, 15)
+        t.send('count 1000000 0\n')
+        ok = ok and t.expect(' 500 ', 15)               # it streams through wlan0
+        q.send('wifi leave\n')
+        ok = q.expect('wlan0: not associated', 15) and q.expect(PROMPT, 10) and ok
+    finally:
+        t.close()
+    q.wait(1)
+    if not ok:
+        print('\nwlansim-tx-race: no stream through wlan0, or wifi leave did not end during it')
+    return ok
+
+
 def wlan_forgotten_check(q):
     """(review M2) after wlan0 left its network: no address on it (wifi status) and no ARP entry through it"""
     start = len(q.transcript)
@@ -2366,7 +2393,7 @@ def wlan_forgotten_check(q):
 
 
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
-               'wlan-forgotten': wlan_forgotten_check}
+               'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check}
 
 
 def tail(text, n=40):
