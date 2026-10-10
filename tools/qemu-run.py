@@ -433,6 +433,8 @@ SMOKE = [
     # queue, review L1); ARP per interface; TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
     # address streams through it, and no frame reaches the chip after leave() (wlansim-tx-race; the chip would say so);
+    # a scan cut short by Ctrl+C, whose end the chip reports during the next scan, which lists the networks all the same
+    # (review L2), and wifi up refused as busy while a telnet session scans (wlansim-scan-abort);
     # WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
     # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
@@ -470,13 +472,14 @@ SMOKE = [
       ('wlansim-telnet', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'frames:', 'wlan0: MAC 52:54:00:12:34:57, link up, inet 10.0.2.16']),
       ('wlansim-tx-race', CHECK),
+      ('wlansim-scan-abort', CHECK),
       ('wifi join SurfSim', ['joined SurfSim']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
       ('wlansim-wpa', CHECK),
       ('wifi join SurfSimFlaky', ['wlan0: address 10.0.2.16 forgotten', 'wlan0: link up: "SurfSimFlaky"',
                                   'joined SurfSimFlaky']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
-      ('@sleep 20', []),
+      ('@sleep 24', []),
       ('dmesg', ['link down: "SurfSimFlaky": deauthenticated by the access point: reason 4 inactivity',
                  'link up again: "SurfSimFlaky"', 'SurfSimFlaky goes silent for 4 s',
                  'link down: "SurfSimFlaky": the access point is gone (beacons lost)',
@@ -2387,6 +2390,43 @@ def wlansim_tx_race_check(q):
     return ok and quiet
 
 
+def wlansim_scan_abort_check(q):
+    """(review L2; wifi's Ctrl+C and busy paths) the list emptied (wifi down, up); wifi scan cut short by Ctrl+C: the
+    simulated chip reports the end of that aborted scan 300 ms later, during the next scan, which must not end early (it
+    lists the six networks, though the aborted scan heard none). Then wifi up on the console while a telnet session's
+    scan runs is told the device is busy"""
+    ok = True
+    for line, exp in (('wifi down', 'wlan0: down'), ('wifi up', 'wlan0: up, not associated')):
+        q.send(line + '\n')
+        ok = ok and q.expect(exp, 15) and q.expect(PROMPT, 10)
+    q.send('wifi scan\n')
+    q.wait(0.2)
+    q.ser.sendall(b'\x03')
+    cut = q.expect('wifi: scan cut short', 10) and q.expect(PROMPT, 10)
+    start = len(q.transcript)
+    q.send('wifi scan\n')
+    rescan = q.expect(PROMPT, 15) and b'6 networks' in q.transcript[start:]
+    busy = False
+    try:
+        t = Telnet(q.ports['telnet'])
+        try:
+            if t.expect(TELNET_ROOT, 15):
+                t.send('wifi scan\n')
+                time.sleep(0.15)
+                q.send('wifi up\n')
+                busy = q.expect('wifi: busy: another wifi command is running on this device', 10) and q.expect(PROMPT, 10)
+                busy = busy and t.expect('6 networks', 15) and t.expect(TELNET_ROOT, 10)
+                t.send('exit\n')
+                t.wait_closed(10)
+        finally:
+            t.close()
+    except OSError as e:
+        print(f'\nwlansim-scan-abort: telnet: {e}')
+    if not (ok and cut and rescan and busy):
+        print(f'\nwlansim-scan-abort: down/up {ok}, cut short {cut}, the scan after it listed all {rescan}, busy {busy}')
+    return ok and cut and rescan and busy
+
+
 def wlan_no_drops_check(q):
     """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
     receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
@@ -2419,7 +2459,7 @@ def wlan_forgotten_check(q):
 
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
-               'wlan-no-drops': wlan_no_drops_check}
+               'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check}
 
 
 def tail(text, n=40):

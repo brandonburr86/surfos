@@ -20,8 +20,9 @@ has no Wi-Fi:
                  station; 1 s after the second its beacons stop (wlan_link_lost()) for 4 s
 
 The simulated firmware runs in a kernel thread of its own (`wlansim`), as a real driver's
-would: a scan takes 50 ms and delivers a beacon from every access point on the channels
-asked for, and a probe response from those that answer the probe; authentication and
+would: a scan takes 600 ms and delivers a beacon from every access point on the channels
+asked for, and a probe response from those that answer the probe (an aborted scan's end is
+reported 300 ms after the abort, as iwx's firmware reports it); authentication and
 association are answered as an access point does (an association to the WPA2 network must
 carry an RSN element it accepts); a station that sends data frames while not associated is
 deauthenticated (reason 7). The associated network beacons once a second.
@@ -136,6 +137,7 @@ struct sim {
     volatile bool scan_pending;
     struct wlan_scan_req scan_req;
     u_long scan_at;
+    u_long stale_done_at;               /* 10/9/26 (review L2): when to report the end of an aborted scan, 0: none */
     /* the air */
     int tuned;                          /* join(): the AP whose channel the chip is on, -1 */
     int authed, assoc;                  /* the AP that authenticated, associated the station; -1 */
@@ -814,6 +816,10 @@ static void sim_thread(void *arg) {
         if(!s->started) continue;
         now = getticks();
         if(s->scan_pending && (long)(now - s->scan_at) >= 0) scan_run(s);
+        if(s->stale_done_at && (long)(now - s->stale_done_at) >= 0) {
+            s->stale_done_at = 0;
+            wlan_scan_done(s->w, -EINTR);               /* the aborted scan's end, as iwx's firmware reports it */
+        }
         if(s->assoc >= 0 && !silent(s, s->assoc) && (long)(now - s->next_beacon) >= 0) {
             s->next_beacon = now + HZ;
             deliver(s, s->assoc, f, ap_frame(s, s->assoc, WLAN_ST_BEACON, f, sizeof(f)), false);
@@ -891,14 +897,19 @@ static int sim_scan(struct wlan_dev *w, const struct wlan_scan_req *req) {
     if(!s->started) return -EIO;
     if(s->scan_pending) return -EBUSY;
     s->scan_req = *req;
-    s->scan_at = getticks() + ms_to_ticks(50);
+    s->scan_at = getticks() + ms_to_ticks(600);         /* 10/9/26: as long as a real one, about */
     s->scan_pending = true;
     event_set(&s->kick);
     return 0;
 }
 
 static void sim_scan_abort(struct wlan_dev *w) {
-    ((struct sim *)w->priv)->scan_pending = false;
+    struct sim *s = (struct sim *)w->priv;
+    if(!s->scan_pending) return;
+    s->scan_pending = false;
+    /* 10/9/26 (review L2): iwx's firmware reports the end of an aborted scan too, some time later: here 300 ms,
+       inside the next scan when one follows at once, which that end must not end */
+    s->stale_done_at = getticks() + ms_to_ticks(300);
 }
 
 static int sim_join(struct wlan_dev *w, const struct wlan_bss *bss) {

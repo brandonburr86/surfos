@@ -40,7 +40,8 @@ deauthentication, then leave(). The PMK is kept only for those reconnects: it is
 when a join fails, on leave and down, and when the tries run out. 10/9/26 (review M2):
 wlan0's address, gateway and DNS server, and its ARP entries, go when it leaves its
 network (leave, down, the rejoins given up, a join to another SSID); a link lost and
-joined again keeps them.
+joined again keeps them. A scan's end that the driver reports for a scan that was aborted
+ends nothing (scan_take_dones(), review L2).
 
 Data: an Ethernet frame from the stack becomes a To DS data frame (QoS data with TID 0
 when the AP has WMM), protected once the keys are in; frames from the AP become Ethernet
@@ -82,6 +83,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #define SCAN_AGE         (60 * HZ)      /* a network not heard for this long leaves it */
 #define SCAN_FRESH       (10 * HZ)      /* a join takes the list's word for a network heard this recently */
 #define SCAN_TIMEOUT_MS  10000
+#define SCAN_STALE       HZ             /* an aborted scan's end, if the driver reports it, comes within this */
 #define RXQ_MAX          128            /* frames waiting for the thread */
 #define FRAME_MAX        4096           /* the longest frame taken: an A-MSDU of 3839 bytes and its header */
 #define AUTH_TIMEOUT     (HZ / 5)       /* 200 ms for each answer */
@@ -121,8 +123,9 @@ struct wlan_state {
     /* wlan_rx()'s queue and the driver's news, under irq_save */
     struct rx_item *rxq_head, *rxq_tail;
     u_int rxq_count;
-    volatile bool scan_done_flag, link_lost_flag;
-    volatile int scan_done_status;
+    volatile bool link_lost_flag;
+    volatile u_int scan_dones;          /* 10/9/26 (review L2): wlan_scan_done() calls so far */
+    volatile int scan_done_status;      /* the last one's */
 
     /* a command's request: claimed, filled in, posted (under irq_save); done by the thread */
     volatile bool req_claimed, req_started, req_cancel, req_abandoned;
@@ -139,6 +142,9 @@ struct wlan_state {
     int state;
     bool scanning;
     u_long scan_deadline;
+    u_int scan_dones_seen;              /* 10/9/26: of scan_dones, those taken */
+    u_int scan_owed;                    /* aborted scans whose end the driver may still report: not the running one's */
+    u_long scan_owed_until;
     struct scan_entry list[SCAN_MAX];
 
     /* the network being joined, or joined */
@@ -407,6 +413,24 @@ static bool list_pick(struct wlan_state *st, u_long since, struct wlan_bss *out,
 
 /**** scans ****/
 
+static void scan_finished(struct wlan_state *st, int status);
+
+/* 10/9/26 (review L2): the scan ends the driver reported (wlan_scan_done()) since the thread last looked,
+   in order. A driver may or may not report the end of a scan that was aborted (iwx's firmware does, some
+   time later): each abort leaves one such end owed for SCAN_STALE, and the first ends taken pay those, so
+   that an aborted scan's end never ends the scan that runs after it. A wlan_hw_ops::scan() carries no id
+   to tell them apart by; an aborted scan's end later than SCAN_STALE would still be taken for the next. */
+static void scan_take_dones(struct wlan_state *st) {
+    while(st->scan_dones_seen != st->scan_dones) {
+        st->scan_dones_seen++;
+        if(st->scan_owed) {
+            st->scan_owed--;
+            continue;
+        }
+        if(st->scanning) scan_finished(st, st->scan_done_status);
+    }
+}
+
 static int scan_begin(struct wlan_state *st, const u8 *ssid, u_int ssid_len, u_int timeout_ms) {
     struct wlan_dev *w = st->w;
     struct wlan_scan_req req;
@@ -417,7 +441,7 @@ static int scan_begin(struct wlan_state *st, const u8 *ssid, u_int ssid_len, u_i
         memcpy(req.ssid, ssid, ssid_len);
         req.ssid_len = (u8)ssid_len;
     }
-    st->scan_done_flag = false;
+    scan_take_dones(st);                                /* what came before this scan is no end of it */
     hw_lock(st);
     r = w->ops->scan(w, &req);
     hw_unlock(st);
@@ -436,7 +460,8 @@ static void scan_abort(struct wlan_state *st) {
         hw_unlock(st);
     }
     st->scanning = false;
-    st->scan_done_flag = false;
+    st->scan_owed++;                                    /* its end, already here or still to come, ends nothing */
+    st->scan_owed_until = getticks() + SCAN_STALE;
 }
 
 static void join_continue(struct wlan_state *st);
@@ -980,6 +1005,7 @@ static void req_cancel(struct wlan_state *st) {
 static void tick(struct wlan_state *st) {
     u_long now = getticks();
     list_age(st);
+    if(st->scan_owed && (long)(now - st->scan_owed_until) >= 0) st->scan_owed = 0;   /* no end came for them */
     if(st->scanning && (long)(now - st->scan_deadline) >= 0) {
         scan_abort(st);
         scan_finished(st, -ETIMEDOUT);
@@ -1019,7 +1045,8 @@ static void tick(struct wlan_state *st) {
 }
 
 static bool work_waiting(struct wlan_state *st) {
-    return st->rxq_head || st->scan_done_flag || st->link_lost_flag || (st->req != REQ_NONE && (!st->req_started || st->req_cancel));
+    return st->rxq_head || st->scan_dones != st->scan_dones_seen || st->link_lost_flag ||
+           (st->req != REQ_NONE && (!st->req_started || st->req_cancel));
 }
 
 static void wlan_thread(void *arg) {
@@ -1030,10 +1057,7 @@ static void wlan_thread(void *arg) {
         event_clear(&st->kick);
         if(!work_waiting(st)) event_wait_timeout(&st->kick, 100);
         rx_all(st);
-        if(st->scan_done_flag) {
-            st->scan_done_flag = false;
-            if(st->scanning) scan_finished(st, st->scan_done_status);
-        }
+        scan_take_dones(st);
         if(st->link_lost_flag) {
             st->link_lost_flag = false;
             if(st->state == ST_UP) link_down(st, "the access point is gone (beacons lost)");
@@ -1165,9 +1189,12 @@ void wlan_rx(struct wlan_dev *w, const u8 *frame, u_int len, const struct wlan_r
 }
 
 void wlan_scan_done(struct wlan_dev *w, int status) {
+    u_long flags;
     if(!w || !w->st) return;
+    flags = irq_save();
     w->st->scan_done_status = status;
-    w->st->scan_done_flag = true;
+    w->st->scan_dones++;
+    irq_restore(flags);
     event_set(&w->st->kick);
 }
 
