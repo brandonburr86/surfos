@@ -636,6 +636,43 @@ static void test_data(void) {
     check(ieee80211_parse_hdr(amsdu, n, &h) == 0 && ieee80211_msdus(amsdu, n, &h, m, 4) == -1, "...as a fragment: refused");
 }
 
+/* 10/10/26 (review nit): SSIDs as text, never a control for the terminal */
+static void test_ssid_text(void) {
+    char out[4 * WLAN_SSID_MAX + 1], small[8];
+    u8 all[WLAN_SSID_MAX];
+    u_int i;
+    const char *r;
+#define SSID(s) (const u8 *)(s), (u_int)(sizeof(s) - 1)
+    check(!strcmp(ieee80211_ssid_text(SSID("HouseOfBurr"), true, out, sizeof(out)), "HouseOfBurr"), "ASCII as it is");
+    check(!strcmp(ieee80211_ssid_text(SSID("a b\\c"), false, out, sizeof(out)), "a b\\\\c"), "a backslash doubled");
+    check(!strcmp(ieee80211_ssid_text(SSID("x\x01\x1b[2J\x7f"), true, out, sizeof(out)), "x\\x01\\x1b[2J\\x7f"),
+          "C0 controls, ESC and DEL as \\xHH");
+    check(!strcmp(ieee80211_ssid_text(SSID("caf\xc3\xa9 \xe2\x89\x8b \xf0\x9f\x8c\x8a"), true, out, sizeof(out)),
+                  "caf\xc3\xa9 \xe2\x89\x8b \xf0\x9f\x8c\x8a"), "UTF-8 to a UTF-8 terminal as it is");
+    check(!strcmp(ieee80211_ssid_text(SSID("caf\xc3\xa9"), false, out, sizeof(out)), "caf\\xc3\\xa9"),
+          "...escaped to one that is not");
+    check(!strcmp(ieee80211_ssid_text(SSID("a\xc2\x9b" "31mb"), true, out, sizeof(out)), "a\\xc2\\x9b31mb"),
+          "U+009B (CSI, a C1 control) escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xc2\x85\xc2\xa0"), true, out, sizeof(out)), "\\xc2\\x85\xc2\xa0"),
+          "U+0085 escaped, U+00A0 kept");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xc0\xaf\xe0\x80\xaf"), true, out, sizeof(out)),
+                  "\\xc0\\xaf\\xe0\\x80\\xaf"), "overlong forms escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xed\xa0\x80\xf4\x90\x80\x80"), true, out, sizeof(out)),
+                  "\\xed\\xa0\\x80\\xf4\\x90\\x80\\x80"), "a surrogate and past U+10FFFF escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("ok\xe2\x89"), true, out, sizeof(out)), "ok\\xe2\\x89"),
+          "a sequence cut by the end escaped");
+    for(i = 0; i < WLAN_SSID_MAX; i++) all[i] = 0x9b;
+    r = ieee80211_ssid_text(all, WLAN_SSID_MAX, true, out, sizeof(out));
+    check(strlen(r) == 4 * WLAN_SSID_MAX && !strncmp(r + 124, "\\x9b", 4), "32 bytes escaped fit in 4 * 32 + 1");
+    r = ieee80211_ssid_text(SSID("abcd\x01"), true, small, sizeof(small));
+    check(!strcmp(r, "abcd"), "too small: up to the last whole character, \\x01 left out");
+    r = ieee80211_ssid_text(SSID("ab\xe2\x89\x8b" "cd"), true, small, 5);
+    check(!strcmp(r, "ab"), "too small: a UTF-8 character is not cut");
+    r = ieee80211_ssid_text(SSID("abc"), true, small, 1);
+    check(!strcmp(r, ""), "room for the NUL only");
+#undef SSID
+}
+
 int main(void) {
     guard = (u8 *)mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if(guard == (u8 *)-1 || mprotect(guard + PAGE, PAGE, PROT_NONE)) {
@@ -647,6 +684,7 @@ int main(void) {
     test_build();
     test_responses();
     test_data();
+    test_ssid_text();
     if(failures) {
         printf("IEEE80211 UNIT TESTS FAILED: %d of %d checks\n", failures, checks);
         exit(1);

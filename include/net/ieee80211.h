@@ -144,6 +144,12 @@ int ieee80211_parse_rsn(const u8 *elem, struct ieee80211_rsn *rsn);
    WPA vendor element (or NULL) and the privacy bit of its capability field */
 u8 ieee80211_security(const u8 *rsn_elem, const u8 *wpa_elem, u16 capability);
 const char *ieee80211_security_name(u8 security);   /* "open", "WPA2-Personal", ... */
+/* 10/10/26 (review nit): an SSID (len bytes) as text a terminal shows as it is: printable ASCII (a
+   backslash doubled), well-formed UTF-8 when utf8 (the terminal draws it), and every other byte as
+   \xHH: no control reaches the terminal, C1 ones in UTF-8 (U+0080..U+009F, CSI among them) neither,
+   nor an overlong form, a surrogate or more than U+10FFFF. 4 * len + 1 bytes always fit; a smaller
+   out ends at the last whole character that fits. out, NUL-terminated */
+const char *ieee80211_ssid_text(const u8 *ssid, u_int len, bool utf8, char *out, size_t size);
 
 /**** beacons and probe responses ****/
 

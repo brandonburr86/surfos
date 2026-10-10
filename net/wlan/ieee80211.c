@@ -258,6 +258,49 @@ const char *ieee80211_security_name(u8 security) {
     }
 }
 
+/* the length of the UTF-8 sequence at p (n bytes there) when it is well formed and no C1 control,
+   surrogate or code point past U+10FFFF; 0 otherwise */
+static u_int utf8_len(const u8 *p, u_int n) {
+    u_int len = p[0] >= 0xc2 && p[0] <= 0xdf ? 2 : (p[0] & 0xf0) == 0xe0 ? 3 : p[0] >= 0xf0 && p[0] <= 0xf4 ? 4 : 0, k;
+    u32 cp;
+    if(!len || len > n) return 0;
+    cp = p[0] & (len == 2 ? 0x1f : len == 3 ? 0x0f : 0x07);
+    for(k = 1; k < len; k++) {
+        if((p[k] & 0xc0) != 0x80) return 0;
+        cp = cp << 6 | (p[k] & 0x3f);
+    }
+    if(cp < 0xa0 || (len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000) || (cp >= 0xd800 && cp <= 0xdfff) ||
+       cp > 0x10ffff) return 0;
+    return len;
+}
+
+const char *ieee80211_ssid_text(const u8 *ssid, u_int len, bool utf8, char *out, size_t size) {
+    static const char hex[] = "0123456789abcdef";
+    u_int i = 0, o = 0, n, k;
+    if(!size) return out;
+    while(i < len) {
+        u8 c = ssid[i];
+        n = c >= 32 && c < 127 ? (c == '\\' ? 2 : 1) : utf8 ? utf8_len(ssid + i, len - i) : 0;
+        if(o + (n ? n : 4) >= size) break;              /* and room for the NUL */
+        if(c >= 32 && c < 127) {
+            if(c == '\\') out[o++] = '\\';
+            out[o++] = (char)c;
+            i++;
+        } else if(n) {
+            for(k = 0; k < n; k++) out[o++] = (char)ssid[i + k];
+            i += n;
+        } else {
+            out[o++] = '\\';
+            out[o++] = 'x';
+            out[o++] = hex[c >> 4];
+            out[o++] = hex[c & 15];
+            i++;
+        }
+    }
+    out[o] = 0;
+    return out;
+}
+
 /**** beacons and probe responses ****/
 
 u8 ieee80211_band_of(u8 channel) {
