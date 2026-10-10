@@ -83,13 +83,15 @@ struct netdev {
     /* 10/9/26: a bridge's copy of each frame that came in and is not only for this interface (broadcast,
        multicast, another station's address); from the net thread, under net_lock; NULL: none */
     void (*bridge_rx)(struct netdev *dev, const u8 *frame, u_int len);
+    volatile u_int rx_inq;          /* 10/9/26: its frames in the receive queue (at most half of it: netbuf.c) */
 };
 
 int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0) */
 struct netdev *netdev_find(const char *name);
 struct netdev *netdev_default(void);                   /* the first one; 10/9/26: the first ethN, else the first */
 struct netdev *netdev_first(void);                     /* 10/9/26: every one, in the order they registered (->next) */
-void netdev_rx(struct netdev *dev, const void *frame, u_int len);  /* from an ISR: queue for the net thread */
+void netdev_rx(struct netdev *dev, const void *frame, u_int len);  /* from an ISR: queue for the net thread;
+                                                                      10/9/26: a task waits for room */
 int netdev_send(struct netdev *dev, struct netbuf *nb);           /* a complete Ethernet frame */
 void netdev_print(void);
 

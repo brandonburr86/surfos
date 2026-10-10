@@ -6,6 +6,11 @@ File: netbuf.c  Date: 10/3/26 (roadmap N1)
 10/9/26 (Wi-Fi, track S): a name the driver set (wlan0, from the station layer) is kept; the
 others are eth0, eth1, ... counted apart, so Wi-Fi found at boot leaves eth0 to the first
 Ethernet interface. The default interface (commands that name none) is the first Ethernet one.
+10/9/26 (the review of track S, L1): the receive queue holds 128 frames, of which one device
+may hold 64 (the whole queue before): wlan0 handing over an A-MSDU's MSDUs one after the
+other cannot crowd out eth0's frames (a telnet session). A caller in task context (the
+station layer's thread) waits for room, a second at most, instead of losing the frame; an
+interrupt handler's frame is dropped, as before.
 */
 
 #include <surfos/types.h>
@@ -14,6 +19,7 @@ Ethernet interface. The default interface (commands that name none) is the first
 #include <surfos/wait.h>
 #include <surfos/irq.h>
 #include <surfos/timer.h>
+#include <surfos/interrupt.h>
 #include <mm/kalloc.h>
 #include <net/net.h>
 #include <net/eth.h>
@@ -141,28 +147,47 @@ void netdev_print(void) {
 
 /**** receive queue and the net thread ****/
 
-#define RXQ_SIZE 64
+#define RXQ_SIZE 128                   /* 10/9/26: 64 before */
+#define RXQ_SHARE 64                   /* 10/9/26: the most one device may hold */
+#define RXQ_WAIT_MS 1000               /* 10/9/26: the longest a task waits for room */
 static struct { struct netdev *dev; struct netbuf *nb; } rxq[RXQ_SIZE];
 static volatile u_int rxq_head, rxq_tail;
 static event_t net_event;              /* set by netdev_rx(); the thread clears it before it looks */
+static event_t rxq_room;               /* 10/9/26: set by the net thread as it takes frames */
+static surf_task *net_task;            /* 10/9/26: the net thread, which never waits for room it makes itself */
 mutex_t net_lock = MUTEX_INIT("net");
 
 void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
     struct netbuf *nb;
     u_long flags;
-    u_int next;
+    u_int next, waited = 0;
     if(len > NETBUF_SIZE || len < ETH_HLEN) { dev->rx_dropped++; return; }
     nb = netbuf_alloc();
     if(!nb) { dev->rx_dropped++; return; }
     nb->off = 0;
     memcpy(nb->data, frame, len);
     nb->len = len;
-    flags = irq_save();
-    next = (rxq_head + 1) % RXQ_SIZE;
-    if(next == rxq_tail) { irq_restore(flags); netbuf_free(nb); dev->rx_dropped++; return; }
+    for(;;) {
+        flags = irq_save();
+        next = (rxq_head + 1) % RXQ_SIZE;
+        if(next != rxq_tail && dev->rx_inq < RXQ_SHARE) break;   /* room, and this device under its share */
+        irq_restore(flags);
+        /* 10/9/26: an interrupt handler (or the net thread itself) cannot wait: the frame goes. A task waits
+           for the net thread to take some, a second at most */
+        if(in_interrupt() || !curTask || curTask == net_task || waited >= RXQ_WAIT_MS) {
+            netbuf_free(nb);
+            dev->rx_dropped++;
+            return;
+        }
+        event_clear(&rxq_room);
+        event_set(&net_event);
+        event_wait_timeout(&rxq_room, 10);
+        waited += 10;
+    }
     rxq[rxq_head].dev = dev;
     rxq[rxq_head].nb = nb;
     rxq_head = next;
+    dev->rx_inq++;
     irq_restore(flags);
     dev->rx_packets++;
     dev->rx_bytes += len;
@@ -177,7 +202,11 @@ static void net_thread(void *arg) {
         while(rxq_tail != rxq_head) {
             struct netdev *dev = rxq[rxq_tail].dev;
             struct netbuf *nb = rxq[rxq_tail].nb;
+            u_long flags = irq_save();
             rxq_tail = (rxq_tail + 1) % RXQ_SIZE;
+            dev->rx_inq--;
+            irq_restore(flags);
+            event_set(&rxq_room);                            /* 10/9/26: a task may be waiting for it */
             mutex_lock(&net_lock);
             eth_input(dev, nb);                              /* consumes nb */
             mutex_unlock(&net_lock);
@@ -193,7 +222,8 @@ static void net_thread(void *arg) {
 
 void init_net(void) {
     event_init(&net_event);
-    kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+    event_init(&rxq_room);
+    net_task = kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
 }
 
 /* the 100 ms heartbeat: retransmissions, ARP retries and ageing */

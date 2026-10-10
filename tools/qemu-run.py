@@ -428,7 +428,9 @@ SMOKE = [
     # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
     # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined by its BSSID (an
     # unknown one is no access point in range); eth0 and wlan0 each leased their own address by QEMU's DHCP server, pings
-    # through each, the default route eth0 (Ethernet before Wi-Fi), ARP per interface; TCP out; telnet to each interface's
+    # through each, the default route eth0 (Ethernet before Wi-Fi); 10.0.2.77 on the access point's own network answering
+    # ARP with two A-MSDUs of 64 replies, which wlan0 takes without losing one (wlan-no-drops: its share of the receive
+    # queue, review L1); ARP per interface; TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); wifi leave while a telnet session to wlan0's
     # address streams through it, and no frame reaches the chip after leave() (wlansim-tx-race; the chip would say so);
     # WPA2 typed at the hidden prompt (wlansim-wpa:
@@ -460,6 +462,8 @@ SMOKE = [
       ('ping 10.0.2.2 2 eth0', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '2 packets transmitted, 2 received']),
       ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '1 received']),
       ('ping 10.0.2.2 1 wlan9', ['ping: no interface wlan9']),
+      ('ping 10.0.2.77 2 wlan0', ['PING 10.0.2.77 from 10.0.2.16 (wlan0)', '2 packets transmitted, 2 received']),
+      ('wlan-no-drops', CHECK),
       ('arp', ['IFACE', '10.0.2.2', 'wlan0', '10.0.2.2', 'eth0']),
       ('httpget 10.0.2.2 {http} /wlan', ['SurfOS HTTP test OK: /wlan', 'bytes received']),
       ('telnetd on', ['telnetd: listening on 10.0.2.15 port 23']),
@@ -2383,6 +2387,20 @@ def wlansim_tx_race_check(q):
     return ok and quiet
 
 
+def wlan_no_drops_check(q):
+    """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
+    receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
+    start = len(q.transcript)
+    q.send('netstat\n')
+    ok = q.expect(PROMPT, 10)
+    out = q.transcript[start:].decode(errors='replace')
+    m = re.search(r'wlan0: .*?RX packets (\d+) bytes \d+ dropped (\d+)', out, re.S)
+    good = ok and m is not None and int(m.group(1)) >= 128 and m.group(2) == '0'
+    if not good:
+        print('\nwlan-no-drops: wlan0 lost frames of the bursts, or they never came:\n' + out)
+    return good
+
+
 def wlan_forgotten_check(q):
     """(review M2) after wlan0 left its network: no address on it (wifi status) and no ARP entry through it"""
     start = len(q.transcript)
@@ -2400,7 +2418,8 @@ def wlan_forgotten_check(q):
 
 
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
-               'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check}
+               'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
+               'wlan-no-drops': wlan_no_drops_check}
 
 
 def tail(text, n=40):

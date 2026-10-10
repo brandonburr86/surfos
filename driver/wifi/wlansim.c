@@ -57,6 +57,7 @@ gives up after three tries (deauthentication, reason 15). Nothing here logs a ke
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
+#include <net/ip.h>
 #include <net/wlan.h>
 #include <net/ieee80211.h>
 #include <crypto/crypto.h>
@@ -328,6 +329,77 @@ static void to_station(struct sim *s, const u8 *eth, u_int len) {
         f[1] |= WLAN_FC_RETRY >> 8;
         deliver(s, ap, f, n, decrypted);
     }
+}
+
+/**** 10/9/26 (review L1): 10.0.2.77, a host on the access point's own network ****/
+
+/* It answers ARP with two A-MSDUs of 64 copies of its reply each, one burst bigger than one device's share
+   of the receive queue (net/netbuf.c), and ping. */
+#define VHOST_COPIES 64
+static const u8 vhost_mac[6] = { 0x02, 0x53, 0x49, 0x4d, 0x00, 0x77 };
+
+/* n copies of one Ethernet frame to the station in one A-MSDU from the access point */
+static void burst(struct sim *s, const u8 *eth, u_int len, u_int n) {
+    static u8 f[4096];                                  /* the sim thread's alone */
+    struct wbuf b;
+    u8 bssid[6];
+    u_int i;
+    int ap = s->assoc;
+    if(ap < 0 || len < ETH_HLEN || !s->sta_wmm) return;
+    bssid_of(ap, bssid);
+    wbuf_init(&b, f, sizeof(f));
+    wbuf_hdr(&b, WLAN_FC(WLAN_FC_TYPE_DATA, WLAN_ST_QOS_DATA) | WLAN_FC_FROMDS, eth, bssid, bssid, s->seq++);
+    wbuf_le16(&b, WLAN_QOS_AMSDU);
+    for(i = 0; i < n; i++) {
+        u_int sub = 14 + 8 + len - ETH_HLEN;
+        wbuf_put(&b, eth, 12);
+        wbuf_be16(&b, (u16)(8 + len - ETH_HLEN));
+        wbuf_put(&b, "\xaa\xaa\x03\x00\x00\x00", 6);
+        wbuf_put(&b, eth + 12, 2);
+        wbuf_put(&b, eth + ETH_HLEN, len - ETH_HLEN);
+        if(i + 1 < n) while(sub++ % 4) wbuf_u8(&b, 0);   /* padding, but after the last */
+    }
+    if(aps[ap].kind == AP_OPEN) deliver(s, ap, f, wbuf_done(&b), false);
+    s->in += n;
+}
+
+/* an MSDU from the station for the virtual host: answered here, and true; false for anything else */
+static bool vhost(struct sim *s, const struct ieee80211_msdu *m) {
+    ipaddr_t me = IP4(10, 0, 2, 77);
+    u8 r[ETH_HLEN + 1500];
+    if(m->type == ETH_P_ARP && m->len >= 28 && wlan_be16(m->payload + 6) == 1 && !memcmp(m->payload + 24, &me, 4)) {
+        memcpy(r, m->sa, 6);                            /* who asked */
+        memcpy(r + 6, vhost_mac, 6);
+        r[12] = 0x08; r[13] = 0x06;
+        memcpy(r + 14, m->payload, 6);                  /* hardware and protocol types and lengths */
+        r[20] = 0; r[21] = 2;                           /* a reply */
+        memcpy(r + 22, vhost_mac, 6);
+        memcpy(r + 28, &me, 4);
+        memcpy(r + 32, m->payload + 8, 10);             /* the asker's MAC and address */
+        burst(s, r, 42, VHOST_COPIES);
+        burst(s, r, 42, VHOST_COPIES);
+        return true;
+    }
+    if(memcmp(m->da, vhost_mac, 6)) return false;
+    if(m->type == ETH_P_IP && m->len >= 28 && m->len <= 1500 && m->payload[9] == IPPROTO_ICMP) {
+        u_int ihl = (m->payload[0] & 15) * 4, total = wlan_be16(m->payload + 2);
+        u8 *ip = r + ETH_HLEN;
+        if(ihl < 20 || total > m->len || total < ihl + 8 || m->payload[ihl] != ICMP_ECHO) return true;
+        memcpy(r, m->sa, 6);
+        memcpy(r + 6, vhost_mac, 6);
+        r[12] = 0x08; r[13] = 0x00;
+        memcpy(ip, m->payload, total);
+        memcpy(ip + 12, m->payload + 16, 4);            /* the addresses the other way round */
+        memcpy(ip + 16, m->payload + 12, 4);
+        ip[8] = 64;
+        ip[10] = ip[11] = 0;
+        *(u16 *)(ip + 10) = ip_checksum(ip, ihl);
+        ip[ihl] = ICMP_ECHO_REPLY;
+        ip[ihl + 2] = ip[ihl + 3] = 0;
+        *(u16 *)(ip + ihl + 2) = ip_checksum(ip + ihl, total - ihl);
+        to_station(s, r, ETH_HLEN + total);
+    }
+    return true;                                        /* nothing for it goes to eth0 */
 }
 
 /**** WPA2: the authenticator (with track C's crypto) ****/
@@ -638,6 +710,7 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
     }
     n = ieee80211_msdus(it->data, it->len, &h, m, 4);
     for(i = 0; i < n; i++) {
+        if(aps[ap].kind == AP_OPEN && vhost(s, &m[i])) continue;   /* 10.0.2.77, on the AP's own network */
         if(m[i].type == ETH_P_EAPOL) {
             if(aps[ap].kind == AP_WPA2 && have_crypto()) auth_rx(s, m[i].payload, m[i].len);
             continue;
