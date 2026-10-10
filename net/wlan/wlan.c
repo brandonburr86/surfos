@@ -13,7 +13,7 @@ Threads. wlan_register() starts a kernel thread, `wlan`, per device. wlan_rx() (
 driver's thread) copies each frame into the device's queue and returns; the thread parses
 them: beacons and probe responses into the scan list at any time, the answers to
 authentication and association, deauthentication, EAPOL for the supplicant, data for the
-IP stack (netdev_rx()). A command (shell/wifi.c) never drives the chip itself: wlan_up(),
+IP stack (netdev_rx_wait()). A command (shell/wifi.c) never drives the chip itself: wlan_up(),
 wlan_scan(), wlan_join() and the others post one request to the thread and wait for its
 end; a second command meanwhile is told the device is busy, and Ctrl+C or a kill leaves
 the request to the thread, which cancels it. Every hw operation but the two that send is
@@ -884,7 +884,7 @@ static void rx_data(struct wlan_state *st, struct rx_item *it, const struct ieee
         st->ethbuf[12] = (u8)(m[i].type >> 8);
         st->ethbuf[13] = (u8)m[i].type;
         memcpy(st->ethbuf + ETH_HLEN, m[i].payload, m[i].len);
-        netdev_rx(st->nd, st->ethbuf, ETH_HLEN + m[i].len);
+        netdev_rx_wait(st->nd, st->ethbuf, ETH_HLEN + m[i].len);   /* a burst waits for room (review L1) */
     }
 }
 

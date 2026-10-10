@@ -8,9 +8,11 @@ others are eth0, eth1, ... counted apart, so Wi-Fi found at boot leaves eth0 to 
 Ethernet interface. The default interface (commands that name none) is the first Ethernet one.
 10/9/26 (the review of track S, L1): the receive queue holds 128 frames, of which one device
 may hold 64 (the whole queue before): wlan0 handing over an A-MSDU's MSDUs one after the
-other cannot crowd out eth0's frames (a telnet session). A caller in task context (the
-station layer's thread) waits for room, a second at most, instead of losing the frame; an
-interrupt handler's frame is dropped, as before.
+other cannot crowd out eth0's frames (a telnet session). The station layer's thread waits for
+room (netdev_rx_wait(), a second at most) instead of losing the frame. 10/10/26: only it: a
+driver's netdev_rx() never waits, as before (a frame with no room is dropped), since drivers
+call it from an interrupt handler or, as usbnet's completions, with interrupts off in the
+middle of the xHCI event ring, where waiting would let the timer's poll of that ring in.
 */
 
 #include <surfos/types.h>
@@ -170,7 +172,7 @@ static event_t rxq_room;               /* 10/9/26: set by the net thread as it t
 static surf_task *net_task;            /* 10/9/26: the net thread, which never waits for room it makes itself */
 mutex_t net_lock = MUTEX_INIT("net");
 
-void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
+static void rx_queue(struct netdev *dev, const void *frame, u_int len, bool may_wait) {
     struct netbuf *nb;
     u_long flags;
     u_int next, waited = 0;
@@ -185,9 +187,9 @@ void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
         next = (rxq_head + 1) % RXQ_SIZE;
         if(next != rxq_tail && dev->rx_inq < RXQ_SHARE) break;   /* room, and this device under its share */
         irq_restore(flags);
-        /* 10/9/26: an interrupt handler (or the net thread itself) cannot wait: the frame goes. A task waits
-           for the net thread to take some, a second at most */
-        if(in_interrupt() || !curTask || curTask == net_task || waited >= RXQ_WAIT_MS) {
+        /* 10/9/26: a caller that may wait does, for the net thread to take some, a second at most; the frame
+           goes otherwise. 10/10/26: never with interrupts off, in a handler, or in the net thread itself */
+        if(!may_wait || in_interrupt() || !irqs_enabled() || !curTask || curTask == net_task || waited >= RXQ_WAIT_MS) {
             netbuf_free(nb);
             dev->rx_dropped++;
             return;
@@ -237,6 +239,17 @@ void init_net(void) {
     event_init(&net_event);
     event_init(&rxq_room);
     net_task = kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+}
+
+/* 10/10/26: a driver's frames: never waiting (an interrupt handler, a completion with interrupts off) */
+void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
+    rx_queue(dev, frame, len, false);
+}
+
+/* 10/10/26: a thread's, with interrupts on and no lock the net thread needs (the station layer's): it
+   waits for room, a second at most, rather than lose the frame */
+void netdev_rx_wait(struct netdev *dev, const void *frame, u_int len) {
+    rx_queue(dev, frame, len, true);
 }
 
 /* the 100 ms heartbeat: retransmissions, ARP retries and ageing */
