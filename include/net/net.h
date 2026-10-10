@@ -86,7 +86,8 @@ struct netdev {
     volatile u_int rx_inq;          /* 10/9/26: its frames in the receive queue (at most half of it: netbuf.c) */
 };
 
-int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0) */
+int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0);
+                                                         10/10/26: never ethN itself, nor a name taken (wlan1 then) */
 struct netdev *netdev_find(const char *name);
 struct netdev *netdev_default(void);                   /* the first one; 10/9/26: the first ethN, else the first */
 struct netdev *netdev_first(void);                     /* 10/9/26: every one, in the order they registered (->next) */

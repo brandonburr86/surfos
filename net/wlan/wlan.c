@@ -1158,7 +1158,7 @@ struct wlan_dev *wlan_register(const struct wlan_hw_ops *ops, void *priv) {
     mutex_init(&st->list_lock, "wlan-list");
     event_init(&st->kick);
     event_init(&st->req_event);
-    strlcpy(nd->name, w->name, sizeof(nd->name));       /* netdev_register() keeps it */
+    strlcpy(nd->name, w->name, sizeof(nd->name));       /* netdev_register() keeps it, unless another has it */
     nd->ops = &wlan_netdev_ops;
     nd->priv = w;
     nd->mtu = ETH_MTU;
@@ -1169,6 +1169,7 @@ struct wlan_dev *wlan_register(const struct wlan_hw_ops *ops, void *priv) {
         return NULL;
     }
     netdev_register(nd);
+    strlcpy(w->name, nd->name, sizeof(w->name));        /* 10/10/26: another device had it: the one it got */
     devs[ndevs++] = w;
     kprintf("%s: Wi-Fi station (wifi up starts it)\n", w->name);
     return w;

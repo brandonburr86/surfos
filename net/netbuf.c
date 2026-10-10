@@ -96,9 +96,22 @@ void *netbuf_put(struct netbuf *nb, u_int n) {
 static struct netdev *netdevs;
 static u_int neth;                      /* 10/9/26: ethN names given (not a driver's own, such as wlan0) */
 
+/* 10/10/26 (review nit): a name another device has gets the lowest free number after its letters
+   instead (wlan0 taken: wlan1), so no two devices share one */
+static void unique_name(struct netdev *dev) {
+    size_t n = strlen(dev->name);
+    u_int i;
+    while(n && dev->name[n - 1] >= '0' && dev->name[n - 1] <= '9') n--;
+    if(n > sizeof(dev->name) - 4) n = sizeof(dev->name) - 4;   /* room for three digits */
+    for(i = 0; i < 1000 && netdev_find(dev->name); i++) snprintf(dev->name + n, sizeof(dev->name) - n, "%u", i);
+}
+
+/* ethN names are given here alone, in the order the devices come: a driver's own name is kept
+   (wlan0) unless it begins with "eth", so Ethernet is ethN whatever registers it */
 int netdev_register(struct netdev *dev) {
     struct netdev **pp;
-    if(!dev->name[0]) snprintf(dev->name, sizeof(dev->name), "eth%u", neth++);
+    if(!dev->name[0] || !strncmp(dev->name, "eth", 3)) snprintf(dev->name, sizeof(dev->name), "eth%u", neth++);
+    unique_name(dev);
     if(!dev->mtu) dev->mtu = ETH_MTU;
     dev->next = NULL;
     for(pp = &netdevs; *pp; pp = &(*pp)->next);
