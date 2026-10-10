@@ -515,7 +515,9 @@ SMOKE = [
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
     # (telnetd's address) and the rest take eth0 all the same (Ethernet before Wi-Fi), and telnet to each address is
     # answered through its own interface. (Review M2:) leaving forgets wlan0's address and ARP entries, and joining another
-    # network does not bring the old address back; a telnet session to eth0's address held open meanwhile answers all along
+    # network does not bring the old address back; a telnet session to eth0's address held open meanwhile answers all along.
+    # Two dhcp at once (one port 68): wlan0's on SurfSimHidden's island, where no server answers, and eth0's, which waits
+    # for it and then gets its lease (dhcp-one-at-a-time)
     ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('usbnet-plug', CHECK),
       ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
@@ -534,7 +536,8 @@ SMOKE = [
       ('wifi join SurfSimHidden', ['joined SurfSimHidden']),
       ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
       ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received']),
-      ('eth0-held-end', CHECK)],
+      ('eth0-held-end', CHECK),
+      ('dhcp-one-at-a-time', CHECK)],
      ['handed over after leave() or stop()', 'carries Ethernet padding']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
@@ -2541,6 +2544,33 @@ def eth0_held_end_check(q):
     return ok
 
 
+def dhcp_one_at_a_time_check(q):
+    """(review nit: there is one port 68) wlan0 on SurfSimHidden's island, where no DHCP server answers: dhcp wlan0 in
+    a telnet session asks for its 6 s and gets no lease; dhcp typed on the console meanwhile waits for it, says so, and
+    gets eth0's lease after it (before, it failed at once: port 68 is busy)"""
+    console = remote = False
+    try:
+        t = Telnet(q.ports['telnet'])
+    except OSError as e:
+        print(f'\ndhcp-one-at-a-time: telnet: {e}')
+        return False
+    try:
+        if t.expect(TELNET_ROOT, 15):
+            t.send('dhcp wlan0\n')
+            time.sleep(2)
+            q.send('dhcp\n')
+            console = q.expect('dhcp: eth0: waiting for the dhcp on wlan0', 10) and \
+                q.expect('dhcp: eth0: lease 10.0.2.16', 15) and q.expect(PROMPT, 10)
+            remote = t.expect('dhcp: no lease', 15) and t.expect(TELNET_ROOT, 10)
+            t.send('exit\n')
+            t.wait_closed(10)
+    finally:
+        t.close()
+    if not (console and remote):
+        print(f'\ndhcp-one-at-a-time: eth0 waited, then had its lease {console}; wlan0 had none, alone {remote}')
+    return console and remote
+
+
 def wlan_no_drops_check(q):
     """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
     receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
@@ -2575,7 +2605,8 @@ BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wp
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
                'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
                'wlansim-ctrl-c': wlansim_ctrl_c_check, 'wlan-own-frames': wlan_own_frames_check,
-               'eth0-held': eth0_held_check, 'eth0-held-end': eth0_held_end_check}
+               'eth0-held': eth0_held_check, 'eth0-held-end': eth0_held_end_check,
+               'dhcp-one-at-a-time': dhcp_one_at_a_time_check}
 
 
 def tail(text, n=40):

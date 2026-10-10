@@ -14,7 +14,8 @@ has no Wi-Fi:
   SurfSimWPA     WPA2-Personal (CCMP, PSK), 5 GHz channel 36, HT and VHT, WMM; its test-only
                  passphrase is WLANSIM_PASSPHRASE below (the smoke test types it)
   (hidden)       SurfSimHidden: open, 2.4 GHz channel 11, an empty SSID in its beacons; it
-                 answers a probe for its name only; no HT, no WMM (plain data frames)
+                 answers a probe for its name only; no HT, no WMM (plain data frames); its
+                 network is an island, bridged to nothing: no DHCP server answers there
   SurfSimWEP     WEP (the privacy bit, no RSN element), channel 1
   SurfSimSAE     WPA3-Personal only (SAE, protected management frames required), channel 149
   SurfSimFlaky   open, channel 1, WMM: 3 s after the first association it deauthenticates the
@@ -28,7 +29,8 @@ association are answered as an access point does (an association to the WPA2 net
 carry an RSN element it accepts); a station that sends data frames while not associated is
 deauthenticated (reason 7). The associated network beacons once a second.
 
-Bridging: the access points' network is the first Ethernet interface (QEMU's e1000, eth0).
+Bridging: the access points' network (all but SurfSimHidden's) is the first Ethernet
+interface (QEMU's e1000, eth0).
 A data frame from the station becomes an Ethernet frame on it from wlan0's own MAC address
 (eth0's with the last byte one higher), and frames on eth0 to that address, broadcasts and
 multicasts become data frames from the access point (eth0 is given the address with
@@ -88,15 +90,16 @@ struct sim_ap {
     u8 kind;                            /* AP_* */
     bool ht, vht, wmm, flaky;
     bool ragged;                        /* its beacons and probe responses end with an element cut short (L6) */
+    bool island;                        /* its network reaches nothing: not bridged to eth0, no DHCP server */
 };
 
 static const struct sim_ap aps[] = {
-    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false, true  },
-    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false, false },
-    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false, false },
-    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false, false },
-    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false, false },
-    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true,  false },
+    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false, true,  false },
+    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false, false, false },
+    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false, false, true  },
+    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false, false, false },
+    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false, false, false },
+    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true,  false, false },
 };
 #define NAPS ((int)(sizeof(aps) / sizeof(aps[0])))
 
@@ -754,7 +757,7 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
     }
     n = ieee80211_msdus(it->data, it->len, &h, m, 4);
     for(i = 0; i < n; i++) {
-        if(aps[ap].kind == AP_OPEN && vhost(s, &m[i])) continue;   /* 10.0.2.77, on the AP's own network */
+        if(aps[ap].kind == AP_OPEN && !aps[ap].island && vhost(s, &m[i])) continue;   /* 10.0.2.77, on its network */
         if(m[i].type == ETH_P_EAPOL) {
             if(aps[ap].kind == AP_WPA2 && have_crypto()) {
                 if(it->protect && (!it->key_valid || memcmp(it->key, s->a.ptk + 32, 16))) {
@@ -775,7 +778,7 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
             kprintf("wlansim: a frame from the station carries Ethernet padding (%u bytes, its packet %u)\n", m[i].len,
                     m[i].type == ETH_P_ARP ? 28 : wlan_be16(m[i].payload + 2));   /* 10/10/26: once */
         if(m[i].da[0] & 1) reflect(s, &m[i]);           /* a group frame goes to the whole network, its sender too */
-        if(!s->uplink) { s->dropped++; continue; }
+        if(!s->uplink || aps[ap].island) { s->dropped++; continue; }
         mutex_lock(&net_lock);                          /* eth0's driver is the stack's, under its lock */
         nb = netbuf_alloc();
         if(nb) {
@@ -863,7 +866,7 @@ static void sim_thread(void *arg) {
             if(s->started) {
                 if(it->kind == IT_MGMT) rx_station_mgmt(s, it->data, it->len);
                 else if(it->kind == IT_DATA) rx_station_data(s, it);
-                else to_station(s, it->data, it->len);
+                else if(s->assoc < 0 || !aps[s->assoc].island) to_station(s, it->data, it->len);   /* from eth0 */
             }
             kfree(it);
         }

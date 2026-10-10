@@ -7,11 +7,17 @@ DISCOVER, OFFER, REQUEST, ACK over a UDP socket on port 68; the lease is
 applied to the interface. No renewal yet: the lease time is only reported.
 10/9/26 (Wi-Fi, track S): the socket is bound to the interface (udp_bind_dev()): `dhcp wlan0`
 asks through wlan0 and hears only wlan0's answers, as `dhcp eth0` does through eth0.
+10/10/26: one dhcp at a time, there being one port 68: a second one (dhcp wlan0 typed while
+dhcp runs on eth0, say) waits for the first within its own time limit, saying so, and Ctrl+C
+ends the wait; before, it failed at once ("port 68 is busy").
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/timer.h>
+#include <surfos/sync.h>
+#include <surfos/task.h>
+#include <mm/kalloc.h>
 #include <net/net.h>
 #include <net/eth.h>
 #include <net/ip.h>
@@ -46,6 +52,8 @@ struct dhcp_msg {
 } __attribute__((packed));
 
 static u_long lease_seconds;
+static mutex_t dhcp_lock = MUTEX_INIT("dhcp");  /* 10/10/26: one dhcp at a time */
+static struct netdev *dhcp_dev;                 /* whose dhcp holds it, to say so */
 
 u_long dhcp_lease_seconds(void) {
     return lease_seconds;
@@ -102,8 +110,29 @@ static int expect(struct udp_socket *s, u32 xid, u8 type, struct dhcp_msg *m, u_
     }
 }
 
+/* 10/10/26: dhcp_lock for dev, waited for until the deadline or a Ctrl+C; 0, or -1 when not had */
+static int one_at_a_time(struct netdev *dev, u_long deadline) {
+    bool said = false;
+    while(!mutex_trylock(&dhcp_lock)) {
+        struct netdev *busy = dhcp_dev;
+        if(!said) kprintf("dhcp: %s: waiting for the dhcp on %s\n", dev->name, busy ? busy->name : "another interface");
+        said = true;
+        if(getticks() >= deadline || sleep_intr(50)) {
+            kprintf("dhcp: %s: not tried: another dhcp was still running\n", dev->name);
+            return -1;
+        }
+    }
+    dhcp_dev = dev;
+    return 0;
+}
+
+static void done(void) {
+    dhcp_dev = NULL;
+    mutex_unlock(&dhcp_lock);
+}
+
 int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
-    struct udp_socket *s = udp_open(DHCP_CLIENT_PORT);
+    struct udp_socket *s;
     struct dhcp_msg *m;
     u32 xid = (u32)getticks() * 2654435761UL ^ 0x5f0f1e2d;
     u_long deadline = getticks() + timeout_ms / (1000 / HZ);
@@ -113,10 +142,12 @@ int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
     int attempt, r = -1;
     char a[16], b[16];
 
-    if(!s) { kprintf("dhcp: port 68 is busy\n"); return -1; }
+    if(one_at_a_time(dev, deadline)) return -1;
+    s = udp_open(DHCP_CLIENT_PORT);
+    if(!s) { done(); kprintf("dhcp: port 68 is busy\n"); return -1; }
     udp_bind_dev(s, dev);
     m = (struct dhcp_msg *)kalloc(sizeof(*m));
-    if(!m) { udp_close(s); return -1; }
+    if(!m) { udp_close(s); done(); return -1; }
     for(attempt = 0; attempt < 3 && getticks() < deadline; attempt++) {
         n = build(m, dev, xid, DHCP_DISCOVER, 0, 0);
         if(udp_sendto(s, IP_BROADCAST, DHCP_SERVER_PORT, m, n) != 0) break;
@@ -156,5 +187,6 @@ int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
     }
     kfree(m);
     udp_close(s);
+    done();
     return r;
 }
