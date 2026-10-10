@@ -557,8 +557,9 @@ static void auth_begin(struct sim *s) {
     send_msg1(s);
 }
 
-/* an EAPOL frame from the station (from its EAPOL header on) */
-static void auth_rx(struct sim *s, const u8 *e, u_int len) {
+/* an EAPOL frame from the station (from its EAPOL header on); protected: it came encrypted with the TK
+   (review L4: the station protects EAPOL once its pairwise key is in; both are taken) */
+static void auth_rx(struct sim *s, const u8 *e, u_int len, bool protected) {
     u16 info;
     if(len < OFF_DATA || e[1] != 3 || e[4] != 2) return;
     info = wlan_be16(e + OFF_INFO);
@@ -586,7 +587,8 @@ static void auth_rx(struct sim *s, const u8 *e, u_int len) {
         s->a.stage = A_OPEN;
         memcpy(s->a.tx_gtk, s->a.gtk, 16);
         s->a.tx_gtk_index = s->a.gtk_index;
-        kprintf("wlansim: %s: group key handshake done (key %u)\n", aps[s->assoc].ssid, s->a.gtk_index);
+        kprintf("wlansim: %s: group key handshake done (key %u, its message 2 %s)\n", aps[s->assoc].ssid, s->a.gtk_index,
+                protected ? "protected" : "in the clear");
     }
 }
 
@@ -714,7 +716,13 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
     for(i = 0; i < n; i++) {
         if(aps[ap].kind == AP_OPEN && vhost(s, &m[i])) continue;   /* 10.0.2.77, on the AP's own network */
         if(m[i].type == ETH_P_EAPOL) {
-            if(aps[ap].kind == AP_WPA2 && have_crypto()) auth_rx(s, m[i].payload, m[i].len);
+            if(aps[ap].kind == AP_WPA2 && have_crypto()) {
+                if(it->protect && (!it->key_valid || memcmp(it->key, s->a.ptk + 32, 16))) {
+                    s->undecryptable++;                 /* "encrypted" with a key that is not the TK */
+                    continue;
+                }
+                auth_rx(s, m[i].payload, m[i].len, it->protect);
+            }
             continue;
         }
         if(aps[ap].kind == AP_WPA2) {

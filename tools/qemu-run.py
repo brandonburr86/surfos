@@ -2332,7 +2332,7 @@ def wlansim_wpa_check(q):
     q.wait(4)
     q.send('dmesg\n')
     ok = ok and q.expect('SurfSimWPA: 4-way handshake done', 10) and q.expect('wlan0: new group key (index 2)', 10) and \
-        q.expect('group key handshake done (key 2)', 10) and q.expect(PROMPT, 10)
+        q.expect('group key handshake done (key 2, its message 2 protected)', 10) and q.expect(PROMPT, 10)
     if not ok:
         print('\nwlansim-wpa: the WPA2 join, its lease, ping or group key renewal failed')
     return ok

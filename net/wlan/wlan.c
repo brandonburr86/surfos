@@ -45,7 +45,8 @@ ends nothing (scan_take_dones(), review L2).
 
 Data: an Ethernet frame from the stack becomes a To DS data frame (QoS data with TID 0
 when the AP has WMM), protected once the keys are in; frames from the AP become Ethernet
-frames, an A-MSDU several. EAPOL (0x888e) goes to the supplicant, never to the IP stack;
+frames, an A-MSDU several. EAPOL (0x888e) goes to the supplicant, never to the IP stack, and
+from it to the AP protected once the pairwise key is in (review L4);
 on a WPA2 network nothing else passes before the link is up, nor anything that came
 unprotected afterwards. Our own broadcasts that the AP sends back are dropped, and so
 are retransmissions already seen.
@@ -687,9 +688,12 @@ static void leave_now(struct wlan_state *st, const char *why) {
 
 /**** the supplicant's calls ****/
 
+/* 10/9/26 (review L4): protected once the pairwise key is in, as any other data frame: the group key
+   handshake's message 2, a new 4-way handshake's messages. Message 4 goes before the supplicant installs the
+   key (wpa.c), so in the clear, as the access point expects it then */
 static int wpa_send(void *ctx, const u8 *frame, u_int len) {
     struct wlan_state *st = (struct wlan_state *)ctx;
-    return send_data(st, ETH_P_EAPOL, frame, len, false);   /* unprotected, as wpa.h has it */
+    return send_data(st, ETH_P_EAPOL, frame, len, st->ptk_in);
 }
 
 static int wpa_install(void *ctx, const struct wlan_key *key) {
