@@ -22,7 +22,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # the prompt renderer, code page 437 and the UTF-8 decoder, the console's pager (test_pager),
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
                   # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py),
-                  # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211)
+                  # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
+                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 13 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -83,8 +84,11 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            editor, complete, parse, run, builtins),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
-driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests); the
-           Intel driver will go here too (docs/superpowers/plans/2026-10-09-wifi.md)
+driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
+           iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); the Intel
+           driver grows here (docs/superpowers/plans/2026-10-09-wifi.md)
+firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
+           devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
            prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers

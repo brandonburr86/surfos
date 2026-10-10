@@ -14,6 +14,10 @@ export O="$LEVEL"
 source "$(dirname "$0")/common.sh"
 NAME=surfos-ideapad-15iil05.img
 
+# 10/10/26: the Wi-Fi firmware for the laptop's card (firmware/, checked against its SHA-256 values);
+# without a network the files already there are used, and without them the image has no Wi-Fi firmware
+python3 "$ROOT/tools/fetch-firmware.py" || echo "build-usb: no Wi-Fi firmware (tools/fetch-firmware.py failed): the image works without Wi-Fi" >&2
+
 "$ROOT/devenv/build.sh" O="$LEVEL" usb-image
 
 SRC="$OUT/build/usb"

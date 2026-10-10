@@ -195,6 +195,13 @@ $(IMAGES):
 BUILD_REV  = $(SURFOS_REV)$(if $(filter yes,$(SURFOS_DIRTY)),-dirty)
 FORCE:
 
+# 10/10/26 (Wi-Fi): Intel's firmware for the laptop's card, with its licence, under /lib/firmware/ of the USB
+# image's initrd when tools/fetch-firmware.py has put it in firmware/ (never committed); without it the initrd is
+# as before. The QEMU initrd (build/images/) has no Intel card to load it into and stays as it was.
+define initrd_firmware
+if ls firmware/*.ucode > /dev/null 2>&1; then mkdir -p $(1)/lib/firmware && cp firmware/*.ucode firmware/LICENCE.* $(1)/lib/firmware/; fi
+endef
+
 $(INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)rm -rf $(IMAGES)/initrd && mkdir -p $(IMAGES)/initrd/bin && cp -r rootfs/. $(IMAGES)/initrd/ && cp $(USER_BINS) $(IMAGES)/initrd/bin/
@@ -273,6 +280,7 @@ OVMF_ARGS    = $(if $(OVMF_CODE),--ovmf-code $(OVMF_CODE)) $(if $(OVMF_VARS),--o
 $(USB_INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE
 	@echo "IMG  $@"
 	$(Q)rm -rf $(BUILD)/initrd && mkdir -p $(BUILD)/initrd/bin && cp -r rootfs/. $(BUILD)/initrd/ && cp $(USER_BINS) $(BUILD)/initrd/bin/
+	$(Q)$(call initrd_firmware,$(BUILD)/initrd)
 	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(BUILD)/initrd --build-id $(BUILD_REV)
 
 usb-image: $(KERNEL) $(USB_INITRD) boot/grub-usb.cfg boot/grub-usb-bootstrap.cfg tools/mkusb.py
@@ -334,6 +342,11 @@ $(BUILD)/host/test_usb: tests/host/test_usb.c $(BUILD)/host/kernel/driver/usb/us
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
 $(BUILD)/host/test_part: tests/host/test_part.c $(BUILD)/host/kernel/driver/parttab.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
+# 10/10/26: Intel's Wi-Fi firmware files (driver/wifi/iwl_fw.c), against the real ones in firmware/ when fetched
+$(BUILD)/host/test_iwlfw: tests/host/test_iwlfw.c $(BUILD)/host/kernel/driver/wifi/iwl_fw.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
@@ -403,7 +416,7 @@ $(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -418,6 +431,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnet
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
+	$(BUILD)/host/test_iwlfw
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 
 # ---- Wi-Fi, track C (10/9/26): lib/crypto/ and the WPA2 supplicant, on the host ---------------
