@@ -69,7 +69,9 @@ static struct netdev *best(ipaddr_t dst, bool subnet) {
 /* 10/9/26: the interface for a datagram from src (0: none yet) to dst:
    1. the interface that has the address src: what a TCP connection made to eth0's address
       sends goes out through eth0 whatever wlan0 does (the integrator's telnet session to the
-      laptop), and one made to wlan0's address through wlan0;
+      laptop), and one made to wlan0's address through wlan0; none (NULL) when no interface
+      has it any more (wlan0 left its network, a new lease): nothing goes out from an address
+      that is not ours, through another interface under that one's address;
    2. the interface whose subnet holds dst (its broadcast too);
    3. the configured interface with a gateway;
    4. the default interface: one with no address yet (DHCP's broadcasts name theirs: udp_bind_dev()).
@@ -77,7 +79,10 @@ static struct netdev *best(ipaddr_t dst, bool subnet) {
    (best()): on the laptop, wlan0 registers at boot and the USB adapter later as eth0 */
 struct netdev *ip_route(ipaddr_t src, ipaddr_t dst) {
     struct netdev *d;
-    if(src) for(d = netdev_first(); d; d = d->next) if(d->ip == src) return d;
+    if(src) {
+        for(d = netdev_first(); d; d = d->next) if(d->ip == src) return d;
+        return NULL;
+    }
     d = best(dst, true);
     if(!d) d = best(dst, false);
     return d ? d : netdev_default();

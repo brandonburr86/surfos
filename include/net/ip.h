@@ -30,9 +30,9 @@ void ip_input(struct netdev *dev, struct netbuf *nb);         /* after the Ether
 int ip_output(struct netdev *dev, ipaddr_t dst, u8 proto, struct netbuf *nb);
 ipaddr_t ip_route_src(ipaddr_t dst);                          /* our address to use for dst */
 struct netdev *ip_route_dev(ipaddr_t dst);                    /* ip_route(0, dst) */
-/* 10/9/26: the interface for a datagram from src (0: none yet) to dst: the one that has src, else the
-   one whose subnet holds dst, else one with a gateway; of several, a link up first, then Ethernet before
-   Wi-Fi, then the order they registered */
+/* 10/9/26: the interface for a datagram from src (0: none yet) to dst: the one that has src (NULL when
+   none has it any more), else the one whose subnet holds dst, else one with a gateway; of several, a link
+   up first, then Ethernet before Wi-Fi, then the order they registered */
 struct netdev *ip_route(ipaddr_t src, ipaddr_t dst);
 ipaddr_t ip_next_hop(struct netdev *dev, ipaddr_t dst);      /* 10/6/26: dst itself on dev's network, else the gateway */
 

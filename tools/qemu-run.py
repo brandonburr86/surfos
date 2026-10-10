@@ -2356,7 +2356,8 @@ def usbnet_plug_check(q):
 
 def wlansim_tx_race_check(q):
     """(review M3) wlan0 busy sending, a telnet session to wlan0's address printing as fast as it can, while wifi leave
-    takes the link away; the simulated chip says so if a frame reaches it after leave() (the block's absent list)"""
+    takes the link away; the simulated chip says so if a frame reaches it after leave() (the block's absent list). Then
+    that session's connection, whose address wlan0 forgot, sends nothing through eth0 either"""
     try:
         t = Telnet(q.ports['telnet_wlan'])
     except OSError as e:
@@ -2370,10 +2371,16 @@ def wlansim_tx_race_check(q):
         ok = q.expect('wlan0: not associated', 15) and q.expect(PROMPT, 10) and ok
     finally:
         t.close()
+    # the session's connection is still there, its address gone with wlan0's: nothing of it goes out through eth0
+    # under eth0's address (ip_route() finds no interface for it)
     q.wait(1)
-    if not ok:
-        print('\nwlansim-tx-race: no stream through wlan0, or wifi leave did not end during it')
-    return ok
+    before = tx_packets(q, 'eth0')
+    q.wait(3)
+    after = tx_packets(q, 'eth0')
+    quiet = before is not None and before == after
+    if not (ok and quiet):
+        print(f'\nwlansim-tx-race: stream and leave {ok}; eth0 TX packets {before} then {after}')
+    return ok and quiet
 
 
 def wlan_forgotten_check(q):
