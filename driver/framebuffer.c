@@ -45,6 +45,9 @@ static u32 *shown = shown_boot;             /* then the whole grid's, from the k
 static u32 cursor = NO_CURSOR;              /* cell index; off screen until set */
 static volatile int busy, dirty;
 static surf_task *owner;                    /* the task that holds busy (or was interrupted holding it) */
+static surf_task *graphics_task;            /* a longer-lived graphics session, never the drawing lock */
+static surf_console *graphics_console;
+static bool clear_text;                     /* remove graphics, including the text grid's margins */
 static const char *why_not = "the boot loader passed no framebuffer";
 
 int framebuffer_init(void) {
@@ -124,11 +127,32 @@ static void draw(u32 i) {
     shown[i] = want;
 }
 
+/* Called with the drawing lock held, or from panic with interrupts disabled. */
+static void prepare_text(void) {
+    u32 i;
+    if(!clear_text) return;
+    clear_text = false;
+    fb_fill(&fbs, 0, 0, fbs.mode.width, fbs.mode.height, 0);
+    for(i = 0; i < ncells; i++) shown[i] = SHOWN_UNKNOWN;
+}
+
+/* IRQs off. No drawing here: console switching must first copy the new cells. */
+static void drop_graphics(void) {
+    graphics_task = NULL;
+    graphics_console = NULL;
+    clear_text = true;
+    dirty = 1;
+}
+
 /* true when this caller owns the screen; otherwise the owner will repaint */
-static bool begin(void) {
+static bool begin(bool graphics) {
     u_long flags;
     if(!ready || !cells) return false;
     flags = irq_save();
+    if(graphics ? (!graphics_task || graphics_task != curTask || graphics_console != conActive) : !!graphics_task) {
+        irq_restore(flags);
+        return false;
+    }
     if(busy) {
         dirty = 1;
         irq_restore(flags);
@@ -138,6 +162,7 @@ static bool begin(void) {
     owner = curTask;
     kcritical_enter();                          /* no preemption until end(): nobody can kill us holding it */
     irq_restore(flags);
+    if(!graphics) prepare_text();
     return true;
 }
 
@@ -146,6 +171,7 @@ static void end(void) {
     for(;;) {
         u_long flags = irq_save();
         u32 i;
+        if(graphics_task) dirty = 0;            /* text cells are kept in RAM until graphics ends */
         if(!dirty) {
             busy = 0;
             owner = NULL;
@@ -155,6 +181,7 @@ static void end(void) {
         }
         dirty = 0;
         irq_restore(flags);
+        prepare_text();
         for(i = 0; i < ncells; i++) draw(i);
     }
 }
@@ -167,9 +194,11 @@ void framebuffer_panic(void) {
     u32 i;
     if(!ready || !cells || inside) return;
     inside = true;
+    if(graphics_task) drop_graphics();
     busy = 0;
     dirty = 0;
     owner = NULL;
+    prepare_text();
     for(i = 0; i < ncells; i++) shown[i] = SHOWN_UNKNOWN;
     for(i = 0; i < ncells; i++) draw(i);
     inside = false;
@@ -179,6 +208,7 @@ void framebuffer_panic(void) {
    The next drawer catches up with everything (dirty), nothing is drawn from here. */
 void framebuffer_task_died(surf_task *t) {
     u_long flags = irq_save();
+    if(graphics_task == t) drop_graphics();
     if(busy && owner == t) {
         busy = 0;
         owner = NULL;
@@ -188,21 +218,21 @@ void framebuffer_task_died(surf_task *t) {
 }
 
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color) {
-    if(col >= fbs.cols || row >= fbs.rows || !begin()) return;
+    if(col >= fbs.cols || row >= fbs.rows || !begin(false)) return;
     draw(row * fbs.cols + col);                 /* ch and color are already in the buffer */
     end();
 }
 
 void framebuffer_present(void) {
     u32 i;
-    if(!begin()) return;
+    if(!begin(false)) return;
     for(i = 0; i < ncells; i++) draw(i);
     end();
 }
 
 void framebuffer_set_cursor(u32 col, u32 row) {
     u32 old, now = (col < fbs.cols && row < fbs.rows) ? row * fbs.cols + col : NO_CURSOR;
-    if(now == cursor || !begin()) {
+    if(now == cursor || !begin(false)) {
         if(now != cursor) cursor = now;         /* the owner's next pass draws it */
         return;
     }
@@ -211,6 +241,47 @@ void framebuffer_set_cursor(u32 col, u32 row) {
     if(old != NO_CURSOR) draw(old);
     if(now != NO_CURSOR) draw(now);
     end();
+}
+
+int framebuffer_graphics_begin(void) {
+    u_long flags = irq_save();
+    if(!ready || !cells || busy || graphics_task || !curTask || !curTask->con ||
+       curTask->con->stream || curTask->con != conActive) {
+        irq_restore(flags);
+        return -1;
+    }
+    graphics_task = curTask;
+    graphics_console = curTask->con;
+    irq_restore(flags);
+    return 0;
+}
+
+bool framebuffer_graphics_owned(void) {
+    u_long flags = irq_save();
+    bool owned = graphics_task && graphics_task == curTask && graphics_console == conActive;
+    irq_restore(flags);
+    return owned;
+}
+
+int framebuffer_graphics_draw(void (*paint)(const struct fb_surface *, void *), void *arg) {
+    if(!paint || !begin(true)) return -1;
+    paint(&fbs, arg);
+    end();
+    return 0;
+}
+
+void framebuffer_graphics_end(void) {
+    u_long flags = irq_save();
+    if(!graphics_task || graphics_task != curTask) { irq_restore(flags); return; }
+    drop_graphics();
+    irq_restore(flags);
+    framebuffer_present();
+}
+
+void framebuffer_console_switched(void) {
+    u_long flags = irq_save();
+    if(graphics_task && graphics_console != conActive) drop_graphics();
+    irq_restore(flags);
 }
 
 const char *framebuffer_describe(char *buf, size_t size) {

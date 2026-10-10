@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test runs thirteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs fourteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -30,6 +30,8 @@ comes out of the framebuffer.
              code page 437 font (▸ ≋ … café), the pager answered on the keyboard
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
+  graphics   software 2D at 1920x1080: color bars and image pixels, text restoration
+             after completion, Ctrl+C, console switching, and a full pager
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
              timer ticks and polled keystrokes arrive
   kernel-shell
@@ -721,6 +723,80 @@ def scenario_keyboard(args, image, firmware, outdir):
         final = vm.screen('final.png').text()
         for bad in BAD:
             results.append((f'no "{bad}" on the screen', bad not in final))
+    finally:
+        vm.close()
+    return results
+
+
+def scenario_graphics(args, image, firmware, outdir):
+    """Real framebuffer pixels and recovery from normal exit, Ctrl+C and F2."""
+    results = []
+    vm = Vm('graphics', args, image, firmware, mem='512', serial=True, outdir=outdir,
+            extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
+
+    def rgb(s, x, y):
+        p = (y * s.w + x) * 3
+        return tuple(s.px[p:p + 3])
+
+    def start(seconds):
+        vm.send('gfxtest %d\n' % seconds)
+        if not vm.expect('graphics test:', 10):
+            return False
+        return vm.wait_screen(lambda s: rgb(s, 0, 0) == (16, 32, 48) and
+                              rgb(s, s.w // 16, s.h // 3) == (255, 0, 0), 10, interval=0.1) is not None
+
+    try:
+        ready = vm.expect(PROMPT, args.boot_timeout)
+        results.append(('graphics boot reaches shell', ready))
+        if not ready:
+            return results
+        vm.send('gfxinfo\n')
+        results.append(('graphics mode is reported', vm.expect('software 2D', 10) and vm.expect(PROMPT, 10)))
+        active = start(3)
+        results.append(('graphics test starts', active))
+        if not active:
+            return results
+        s = vm.screen('graphics.png')
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+                  (0, 255, 255), (255, 0, 255), (255, 255, 255), (0, 0, 0)]
+        results.append(('all eight color bars reach the actual display',
+                        all(rgb(s, (2 * i + 1) * s.w // 16, s.h // 3) == color for i, color in enumerate(colors))))
+        results.append(('background and image copy reach the actual display',
+                        rgb(s, 0, 0) == (16, 32, 48) and rgb(s, s.w // 2, 3 * s.h // 4) == (255, 128, 0)))
+        results.append(('normal completion restores the prompt', vm.expect('text console restored', 12) and vm.expect(PROMPT, 12)))
+        restored = vm.screen('graphics-restored.png')
+        results.append(('graphics margins cleared when text returns', rgb(restored, 0, 0) == (0, 0, 0)))
+        results.append(('restored framebuffer contains shell text', 'text console restored' in restored.text() and prompt_on(restored)))
+        active = start(30)
+        vm.send('\x03')
+        results.append(('Ctrl+C releases graphics', active and vm.expect('text console restored', 10) and vm.expect(PROMPT, 10)))
+        active = start(30)
+        vm.keys('<f2>')
+        s = vm.wait_screen(prompt_on, 10)
+        results.append(('F2 cancels graphics and shows the other text console', active and s is not None))
+        vm.keys('<f1>')
+        s = vm.wait_screen(lambda s: prompt_on(s) and 'text console restored' in s.text(), 10)
+        results.append(('F1 returns to a usable text console', s is not None))
+        vm.screen('graphics-final.png')
+        # Leave paging enabled with a full budget before invoking SYS_kcmd.
+        # The old implementation hid --More-- behind the pattern indefinitely.
+        vm.cursor = len(vm.transcript)
+        vm.auto_more = False
+        vm.send('kcmdtest gfxpager\n')
+        more = vm.expect(MORE.decode(), 10)
+        s = vm.screen('graphics-pager.png')
+        results.append(('a full pager is visible before graphics takes ownership', more and '--More--' in s.text()))
+        vm.send(' ')
+        results.append(('graphics finishes after the visible pager is answered',
+                        vm.expect('GRAPHICS PAGER PASS', 12) and vm.expect(PROMPT, 12)))
+        vm.send('kcmdtest gfxpager\n')
+        more = vm.expect(MORE.decode(), 10)
+        vm.send('\x03')
+        cancelled = vm.expect(PROMPT, 10)
+        s = vm.screen('graphics-pager-cancelled.png')
+        results.append(('Ctrl+C at the full pager promptly returns to text',
+                        more and cancelled and prompt_on(s) and rgb(s, 0, 0) == (0, 0, 0)))
+        vm.auto_more = True
     finally:
         vm.close()
     return results
@@ -1541,7 +1617,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
     return results
 
 
-SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd,
+SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
@@ -1648,7 +1724,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

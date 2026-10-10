@@ -883,6 +883,8 @@ static const struct command commands[] = {
     { "wifi",      "up|down|scan|join <ssid>|status|leave", "Wi-Fi: start the card, list networks, join one", cmd_wifi },
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
+    { "gfxinfo",   "",          "framebuffer mode and software graphics support", cmd_gfxinfo },
+    { "gfxtest",   "[seconds]", "show a 2D graphics test for 1-60 seconds (default 5)", cmd_gfxtest, CMD_ASKS },
     { "lpstat",    "",          "parallel port status", cmd_lpstat },
     { "rawkeys",   "",          "raw mode: show the bytes keys send (q ends)", cmd_rawkeys, CMD_ASKS },
     { "ansi",      "",          "draw a test pattern with escape sequences", cmd_ansi },

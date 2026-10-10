@@ -604,7 +604,22 @@ static int set_dir(const char *arg) {
     return 0;
 }
 
+/* A full pager must be visible before graphics takes the screen. */
+static int graphics_pager(void) {
+    int i, rows = ttyctl(TTY_GETSIZE, 0) & 0xffff, r;
+    char *args[] = { "gfxtest", "2", NULL };
+    fflush(stdout);
+    ttyctl(TTY_PAGE, 1);
+    for(i = 0; i < rows - 1; i++) puts("graphics pager prefill");
+    fflush(stdout);
+    r = kcmd(args);
+    ttyctl(TTY_PAGE, 0);
+    printf("GRAPHICS PAGER %s\n", r == 0 ? "PASS" : "FAIL");
+    return r;
+}
+
 int main(int argc, char **argv) {
+    if(argc == 2 && !strcmp(argv[1], "gfxpager")) return graphics_pager();
     if((argc == 2 || argc == 3) && !strcmp(argv[1], "crash")) return crash(argc == 3 ? argv[2] : NULL);
     if(argc >= 4 && !strcmp(argv[1], "run")) return run(argv[2], argv + 3);
     if(argc == 3 && !strcmp(argv[1], "together")) return set_dir(argv[2]) ? 1 : together();

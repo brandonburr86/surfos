@@ -252,12 +252,95 @@ static void test_scaling(void) {
           "640x2000: capped at 100 rows, centred");
 }
 
+/* These assertions catch out-of-bounds writes, wrong RGB conversion, clipped
+   source offsets, and line algorithms that overflow or walk billions of pixels. */
+static void test_graphics(void) {
+    struct fb_surface s;
+    struct fb_mode m;
+    u32 i, j;
+    const u32 bpps[] = { 15, 16, 24, 32 };
+    const u32 red[] = { 0x7C00, 0xF800, 0xFF0000, 0xFF0000 };
+    const u32 src[] = { 0xFF0000, 0x00FF00, 0xDEADBE,
+                        0x0000FF, 0xFFFFFF, 0xDEADBE };
+    struct fb_bitmap bitmap = { src, 2, 2, 3, sizeof(src) };
+    for(i = 0; i < 4; i++) {
+        m = mode(640, 400, 640 * ((bpps[i] + 7) / 8) + 52, bpps[i], 1);
+        surface(&s, &m);
+        fb_rect_rgb(&s, -2, -1, 4, 3, 0xFF0000);
+        check(pixel(&s, 0, 0) == red[i] && pixel(&s, 1, 1) == red[i], "signed rectangle clips its left/top edges");
+        fb_pixel_rgb(&s, 639, 399, 0xFF0000);
+        fb_pixel_rgb(&s, 640, 400, 0xFFFFFF);
+        fb_pixel_rgb(&s, -1, 0, 0xFFFFFF);
+        check(pixel(&s, 639, 399) == red[i] && guards_intact(&s), "pixel formats and bounds");
+        check(fb_blit_rgb(&s, -1, -1, &bitmap) == 0 && pixel(&s, 0, 0) == s.palette[15],
+              "blit clips source offset and honours source stride");
+        check(guards_intact(&s), "RGB blit never writes padding or guards");
+    }
+    m = mode(640, 400, 2560 + 52, 32, 0);
+    surface(&s, &m);
+    fb_pixel_rgb(&s, 0, 0, 0x123456);
+    check(pixel(&s, 0, 0) == 0x563412, "RGB API converts RGBX channel order");
+    fb_fill(&s, 0, 0, 640, 400, 0);
+    fb_line_rgb(&s, -100, 20, 800, 20, 0xFF0000);
+    check(pixel(&s, 0, 20) == 0xFF && pixel(&s, 639, 20) == 0xFF && pixel(&s, 1, 19) == 0,
+          "horizontal line clips both edges");
+    fb_line_rgb(&s, 30, 450, 30, -10, 0x00FF00);
+    check(pixel(&s, 30, 0) == 0xFF00 && pixel(&s, 30, 399) == 0xFF00, "reversed vertical line clips");
+    fb_line_rgb(&s, 2, 2, 6, 4, 0xFFFFFF);
+    check(pixel(&s, 2, 2) == 0xFFFFFF && pixel(&s, 3, 3) == 0xFFFFFF &&
+          pixel(&s, 4, 3) == 0xFFFFFF && pixel(&s, 5, 4) == 0xFFFFFF && pixel(&s, 6, 4) == 0xFFFFFF,
+          "shallow diagonal includes endpoints and rounded intermediate pixels");
+    fb_line_rgb(&s, 12, 16, 10, 10, 0xFFFFFF);
+    check(pixel(&s, 10, 10) == 0xFFFFFF && pixel(&s, 11, 13) == 0xFFFFFF && pixel(&s, 12, 16) == 0xFFFFFF,
+          "steep reversed line");
+    fb_line_rgb(&s, 50, 50, 50, 50, 0x0000FF);
+    check(pixel(&s, 50, 50) == 0xFF0000, "zero-length line draws one pixel");
+    fb_line_rgb(&s, (-2147483647 - 1), (-2147483647 - 1), 2147483647, 2147483647, 0xFFFFFF);
+    check(pixel(&s, 0, 0) == 0xFFFFFF && pixel(&s, 399, 399) == 0xFFFFFF,
+          "INT_MIN to INT_MAX diagonal finishes and clips without overflow");
+    fb_line_rgb(&s, -100, -2, 900, -2, 0xFFFFFF);
+    check(guards_intact(&s), "lines outside the surface leave guards intact");
+    fb_rect_rgb(&s, (-2147483647 - 1), (-2147483647 - 1), 0xFFFFFFFFu, 0xFFFFFFFFu, 0x123456);
+    check(pixel(&s, 0, 0) == 0x563412 && pixel(&s, 639, 399) == 0x563412,
+          "large rectangle arithmetic does not wrap");
+    fb_rect_rgb(&s, 0, 0, 0, 400, 0xFFFFFF);
+    fb_rect_rgb(&s, 0, 0, 640, 0, 0xFFFFFF);
+    check(pixel(&s, 0, 0) == 0x563412, "empty rectangles draw nothing");
+    bitmap.bytes = 4;
+    check(fb_blit_rgb(&s, 0, 0, &bitmap) == -1 && pixel(&s, 0, 0) == 0x563412,
+          "truncated source rejected before any drawing");
+    bitmap.bytes = sizeof(src); bitmap.stride = 1;
+    check(fb_blit_rgb(&s, 0, 0, &bitmap) == -1, "source stride shorter than width rejected");
+    bitmap.stride = 3; bitmap.pixels = NULL;
+    check(fb_blit_rgb(&s, 0, 0, &bitmap) == -1 && fb_blit_rgb(&s, 0, 0, NULL) == -1, "null bitmap rejected");
+    bitmap.pixels = src; bitmap.width = 0xFFFFFFFFu; bitmap.stride = 0xFFFFFFFFu;
+    bitmap.height = 0xFFFFFFFFu;
+    check(fb_blit_rgb(&s, 0, 0, &bitmap) == -1, "overflowing bitmap dimensions rejected");
+    check(guards_intact(&s), "all graphics operations preserve padding and guards");
+    /* All eight octants, both traversal directions, endpoints and no gaps. */
+    for(i = 0; i < 8; i++) {
+        static const i32 dx[] = { 6, 3, -3, -6, -6, -3, 3, 6 };
+        static const i32 dy[] = { 3, 6, 6, 3, -3, -6, -6, -3 };
+        fb_fill(&s, 0, 0, 640, 400, 0);
+        fb_line_rgb(&s, 100, 100, 100 + dx[i], 100 + dy[i], 0xFFFFFF);
+        for(j = 0; j <= 6; j++) {
+            i32 x = 100 + (dx[i] < 0 ? -1 : 1) * (i32)((i % 4 == 0 || i % 4 == 3) ? j : (j + 1) / 2);
+            i32 y = 100 + (dy[i] < 0 ? -1 : 1) * (i32)((i % 4 == 0 || i % 4 == 3) ? (j + 1) / 2 : j);
+            /* Half-pixel ties follow the increasing major-axis traversal. */
+            if(j % 2 && (dx[i] < 0 && (i % 4 == 0 || i % 4 == 3))) y -= dy[i] < 0 ? -1 : 1;
+            if(j % 2 && (dy[i] < 0 && (i % 4 == 1 || i % 4 == 2))) x -= dx[i] < 0 ? -1 : 1;
+            check(pixel(&s, x, y) == 0xFFFFFF, "line octant raster");
+        }
+    }
+}
+
 int main(void) {
     test_modes();
     test_colours();
     test_drawing();
     test_cp437_cells();
     test_scaling();
+    test_graphics();
     printf("%s: %d checks, %d failures\n", failures ? "FRAMEBUFFER UNIT TESTS FAILED" : "FRAMEBUFFER UNIT TESTS PASSED",
            checks, failures);
     exit(failures ? 1 : 0);
