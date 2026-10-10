@@ -7,18 +7,24 @@ The laptop's Wi-Fi card: the CNVi "Qu" MAC of the Ice Lake chipset (PCI 8086:34f
 9560 "JF" radio module, driven the way OpenBSD's iwx(4) drives this family, with Intel's
 firmware (API 77, include/sys/iwl_fw.h) and the registers of include/sys/iwl_reg.h.
 
-What it does so far (W1, step 2 of the brief's bring-up):
+What it does (W1, steps 2 and 3 of the brief's bring-up):
 * At boot, with profile=laptop only (the driver table's "iwlwifi"): it finds the card, maps
   its 16 KB of registers and reads CSR_HW_REV and CSR_HW_RF_ID, which say which MAC (Qu or
   QuZ, its step) and which radio it is; those name the firmware file. It touches nothing
-  else on the card, and registers wlan0 with the station layer.
-* `wifi up` (start()): the power-up of iwx_start_hw(): the card made ready, its persistence
+  else on the card, registers wlan0 with the station layer and starts its thread, `iwl`,
+  which polls the card while the firmware runs.
+* `wifi up` (start()): the power-up of iwx_start_hw() (the card made ready, its persistence
   bit cleared, a reset, power gating forced (an integrated card), the clock started and
-  waited for, MSI chosen over MSI-X (SurfOS polls); then CSR_HW_RF_ID read again, the radio
-  switch read, and the firmware file read from /initrd/lib/firmware/ and checked
-  (iwl_fw_parse()). Loading it into the card is the next step: until then start() stops the
-  card again (iwx_stop_device()'s order) and fails with -ENOSYS, and `wifi status` and the
-  `+IWL:` lines in dmesg say how far it got.
+  waited for, MSI chosen over MSI-X: SurfOS polls); CSR_HW_RF_ID read again, the radio
+  switch read; the firmware file read from /initrd/lib/firmware/ and checked
+  (iwl_fw_parse()); then, step 3 (10/10/26), the firmware loaded and started through the
+  context info (iwl_trans.c) up to ALIVE, the init flow of iwx_run_init_mvm_ucode()
+  (INIT_EXTENDED_CFG_CMD for the NVM, NVM_ACCESS_COMPLETE, INIT_COMPLETE), NVM_GET_INFO
+  (the bands, 802.11n/ac, the antennas) and the MAC address from the card's registers:
+  wlan0 is up. Scanning is the next step (W2): scan() and the rest still fail with ENOSYS.
+* `wifi down` (stop()): the receive DMA and the card stopped (iwx_stop_device()).
+`wifi status` and the `+IWL:` lines in dmesg say how far a start got; a firmware error is
+reported with its error logs (iwx_nic_error()).
 
 Polled, no interrupt: the card's interrupt line stays masked (INTx disabled, MSI and MSI-X
 off). Every wait on the hardware is bounded.
@@ -80,46 +86,26 @@ kept here as their licences ask:
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/timer.h>
+#include <surfos/task.h>
 #include <mm/kalloc.h>
 #include <mm/paging.h>
-#include <sys/pci.h>
-#include <sys/iwl_reg.h>
-#include <sys/iwl_fw.h>
-#include <net/wlan.h>
 #include <fs/vfs.h>
 #include <blibc_common.h>
+#include "iwl_priv.h"
 
 #define FW_DIR      "/initrd/lib/firmware/"
 #define FW_MAX      (4u << 20)                  /* a firmware file larger than this is not one of ours */
+#define POLL_MS     10                          /* the thread's pace while the firmware runs */
 
 /* the PCI ids this driver takes: the laptop's card only, for now */
 static const u16 iwl_devices[] = { 0x34f0 };
 
-struct iwl_softc {
-    struct pci_dev *pci;
-    volatile u8 *regs;
-    u8 pcie_cap;                    /* the PCI Express capability's offset, 0 if none */
-    u32 hw_rev, hw_rf_id;           /* as read (the RF id again at each start) */
-    u_int mac_type, mac_step, rf_type;
-    const char *fw_name;            /* the file for this MAC and radio, NULL if none */
-    char fw_version[32];            /* of the file, once read and checked */
-    int nic_locks;
-    bool rfkill;                    /* the radio switch is off */
-    char last[96];                  /* how far the last start got (wifi status) */
-    struct wlan_dev *w;
-};
-
 /**** registers ****/
 
-static inline u32 rd(struct iwl_softc *sc, u_int off) { return *(volatile u32 *)(sc->regs + off); }
-static inline void wr(struct iwl_softc *sc, u_int off, u32 v) { *(volatile u32 *)(sc->regs + off) = v; }
-static inline void setbits(struct iwl_softc *sc, u_int off, u32 bits) { wr(sc, off, rd(sc, off) | bits); }
-static inline void clrbits(struct iwl_softc *sc, u_int off, u32 bits) { wr(sc, off, rd(sc, off) & ~bits); }
-
 /* until (reg & mask) == (bits & mask), up to timeout_us (if_iwx.c iwx_poll_bit()) */
-static bool poll_bit(struct iwl_softc *sc, u_int reg, u32 bits, u32 mask, u_int timeout_us) {
+bool iwl_poll_bit(struct iwl_softc *sc, u_int reg, u32 bits, u32 mask, u_int timeout_us) {
     for(;;) {
-        if((rd(sc, reg) & mask) == (bits & mask)) return true;
+        if((iwl_rd(sc, reg) & mask) == (bits & mask)) return true;
         if(timeout_us < 10) return false;
         timeout_us -= 10;
         udelay(10);
@@ -127,51 +113,51 @@ static bool poll_bit(struct iwl_softc *sc, u_int reg, u32 bits, u32 mask, u_int 
 }
 
 /* keep the card's MAC awake for register and memory access through the HBUS window */
-static bool nic_lock(struct iwl_softc *sc) {
+bool iwl_nic_lock(struct iwl_softc *sc) {
     if(sc->nic_locks > 0) {
         sc->nic_locks++;
         return true;
     }
-    setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
+    iwl_setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
     udelay(2);
-    if(poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY,
+    if(iwl_poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY,
                 IWL_GP_CNTRL_MAC_CLOCK_READY | IWL_GP_CNTRL_GOING_TO_SLEEP, 150000)) {
         sc->nic_locks++;
         return true;
     }
-    kprintf("+IWL: the card did not wake for register access (GP_CNTRL 0x%08x)\n", rd(sc, IWL_CSR_GP_CNTRL));
+    kprintf("+IWL: the card did not wake for register access (GP_CNTRL 0x%08x)\n", iwl_rd(sc, IWL_CSR_GP_CNTRL));
     return false;
 }
 
-static void nic_unlock(struct iwl_softc *sc) {
-    if(sc->nic_locks > 0 && --sc->nic_locks == 0) clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
+void iwl_nic_unlock(struct iwl_softc *sc) {
+    if(sc->nic_locks > 0 && --sc->nic_locks == 0) iwl_clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
 }
 
-static u32 prph_read(struct iwl_softc *sc, u32 addr) {
-    wr(sc, IWL_HBUS_TARG_PRPH_RADDR, (addr & IWL_PRPH_ADDR_MASK) | (3u << 24));
-    return rd(sc, IWL_HBUS_TARG_PRPH_RDAT);
+u32 iwl_prph_read(struct iwl_softc *sc, u32 addr) {
+    iwl_wr(sc, IWL_HBUS_TARG_PRPH_RADDR, (addr & IWL_PRPH_ADDR_MASK) | (3u << 24));
+    return iwl_rd(sc, IWL_HBUS_TARG_PRPH_RDAT);
 }
 
-static void prph_write(struct iwl_softc *sc, u32 addr, u32 v) {
-    wr(sc, IWL_HBUS_TARG_PRPH_WADDR, (addr & IWL_PRPH_ADDR_MASK) | (3u << 24));
-    wr(sc, IWL_HBUS_TARG_PRPH_WDAT, v);
+void iwl_prph_write(struct iwl_softc *sc, u32 addr, u32 v) {
+    iwl_wr(sc, IWL_HBUS_TARG_PRPH_WADDR, (addr & IWL_PRPH_ADDR_MASK) | (3u << 24));
+    iwl_wr(sc, IWL_HBUS_TARG_PRPH_WDAT, v);
 }
 
 /* (prph & mask) | bits, with the NIC held awake (if_iwx.c iwx_set_bits_mask_prph()) */
 static int prph_update(struct iwl_softc *sc, u32 addr, u32 bits, u32 mask) {
-    if(!nic_lock(sc)) return -EBUSY;
-    prph_write(sc, addr, (prph_read(sc, addr) & mask) | bits);
-    nic_unlock(sc);
+    if(!iwl_nic_lock(sc)) return -EBUSY;
+    iwl_prph_write(sc, addr, (iwl_prph_read(sc, addr) & mask) | bits);
+    iwl_nic_unlock(sc);
     return 0;
 }
 
 /**** power ****/
 
 static bool set_hw_ready(struct iwl_softc *sc) {
-    setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_NIC_READY);
-    if(!poll_bit(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_NIC_READY, IWL_HW_IF_CONFIG_BIT_NIC_READY, 50))
+    iwl_setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_NIC_READY);
+    if(!iwl_poll_bit(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_NIC_READY, IWL_HW_IF_CONFIG_BIT_NIC_READY, 50))
         return false;
-    setbits(sc, IWL_CSR_MBOX_SET_REG, IWL_MBOX_SET_OS_ALIVE);
+    iwl_setbits(sc, IWL_CSR_MBOX_SET_REG, IWL_MBOX_SET_OS_ALIVE);
     return true;
 }
 
@@ -179,10 +165,10 @@ static bool set_hw_ready(struct iwl_softc *sc) {
 static int prepare_card_hw(struct iwl_softc *sc) {
     u_int tries, t = 0;
     if(set_hw_ready(sc)) return 0;
-    setbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
+    iwl_setbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
     mdelay(1);
     for(tries = 0; tries < 10; tries++) {
-        setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_PREPARE);
+        iwl_setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_PREPARE);
         do {
             if(set_hw_ready(sc)) return 0;
             udelay(200);
@@ -194,19 +180,19 @@ static int prepare_card_hw(struct iwl_softc *sc) {
 }
 
 static int clear_persistence_bit(struct iwl_softc *sc) {
-    u32 hpm = prph_read(sc, IWL_HPM_DEBUG);
+    u32 hpm = iwl_prph_read(sc, IWL_HPM_DEBUG);
     if(hpm != 0xa5a5a5a0 && (hpm & IWL_PERSISTENCE_BIT)) {
-        if(prph_read(sc, IWL_PRPH_WPROT_22000) & IWL_PRPH_WFPM_ACCESS) {
+        if(iwl_prph_read(sc, IWL_PRPH_WPROT_22000) & IWL_PRPH_WFPM_ACCESS) {
             kprintf("+IWL: the persistence bit cannot be cleared (write protected)\n");
             return -EACCES;
         }
-        prph_write(sc, IWL_HPM_DEBUG, hpm & ~IWL_PERSISTENCE_BIT);
+        iwl_prph_write(sc, IWL_HPM_DEBUG, hpm & ~IWL_PERSISTENCE_BIT);
     }
     return 0;
 }
 
 static void sw_reset(struct iwl_softc *sc) {
-    setbits(sc, IWL_CSR_RESET, IWL_RESET_SW_RESET);
+    iwl_setbits(sc, IWL_CSR_RESET, IWL_RESET_SW_RESET);
     mdelay(5);
 }
 
@@ -221,40 +207,40 @@ static int force_power_gating(struct iwl_softc *sc) {
 }
 
 /* the card's basic functions after a reset; no firmware yet (if_iwx.c iwx_apm_init()) */
-static int apm_init(struct iwl_softc *sc) {
-    setbits(sc, IWL_CSR_GIO_CHICKEN_BITS, IWL_GIO_CHICKEN_L1A_NO_L0S_RX);
-    setbits(sc, IWL_CSR_DBG_HPET_MEM_REG, IWL_DBG_HPET_MEM_REG_VAL);
-    setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_HAP_WAKE_L1A);
-    setbits(sc, IWL_CSR_GIO_REG, IWL_GIO_VAL_L0S_DISABLED);    /* iwx_apm_config(): L0s off, always */
-    setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
-    if(!poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY, IWL_GP_CNTRL_MAC_CLOCK_READY, 25000)) {
-        kprintf("+IWL: the card's clock did not stabilize (GP_CNTRL 0x%08x)\n", rd(sc, IWL_CSR_GP_CNTRL));
+int iwl_apm_init(struct iwl_softc *sc) {
+    iwl_setbits(sc, IWL_CSR_GIO_CHICKEN_BITS, IWL_GIO_CHICKEN_L1A_NO_L0S_RX);
+    iwl_setbits(sc, IWL_CSR_DBG_HPET_MEM_REG, IWL_DBG_HPET_MEM_REG_VAL);
+    iwl_setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_BIT_HAP_WAKE_L1A);
+    iwl_setbits(sc, IWL_CSR_GIO_REG, IWL_GIO_VAL_L0S_DISABLED);    /* iwx_apm_config(): L0s off, always */
+    iwl_setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
+    if(!iwl_poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY, IWL_GP_CNTRL_MAC_CLOCK_READY, 25000)) {
+        kprintf("+IWL: the card's clock did not stabilize (GP_CNTRL 0x%08x)\n", iwl_rd(sc, IWL_CSR_GP_CNTRL));
         return -ETIMEDOUT;
     }
     return 0;
 }
 
 static void apm_stop(struct iwl_softc *sc) {
-    setbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
-    setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_PREPARE | IWL_HW_IF_CONFIG_ENABLE_PME);
+    iwl_setbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
+    iwl_setbits(sc, IWL_CSR_HW_IF_CONFIG_REG, IWL_HW_IF_CONFIG_PREPARE | IWL_HW_IF_CONFIG_ENABLE_PME);
     mdelay(1);
-    clrbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
+    iwl_clrbits(sc, IWL_CSR_DBG_LINK_PWR_MGMT_REG, IWL_RESET_LINK_PWR_MGMT_DISABLED);
     mdelay(5);
-    setbits(sc, IWL_CSR_RESET, IWL_RESET_STOP_MASTER);           /* its DMA stops */
-    if(!poll_bit(sc, IWL_CSR_RESET, IWL_RESET_MASTER_DISABLED, IWL_RESET_MASTER_DISABLED, 100))
+    iwl_setbits(sc, IWL_CSR_RESET, IWL_RESET_STOP_MASTER);           /* its DMA stops */
+    if(!iwl_poll_bit(sc, IWL_CSR_RESET, IWL_RESET_MASTER_DISABLED, IWL_RESET_MASTER_DISABLED, 100))
         kprintf("+IWL: the card's DMA did not stop\n");
-    clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
+    iwl_clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
 }
 
-static void disable_interrupts(struct iwl_softc *sc) {
-    wr(sc, IWL_CSR_INT_MASK, 0);
-    wr(sc, IWL_CSR_INT, ~0u);                   /* every cause acknowledged */
-    wr(sc, IWL_CSR_FH_INT_STATUS, ~0u);
+void iwl_disable_interrupts(struct iwl_softc *sc) {
+    iwl_wr(sc, IWL_CSR_INT_MASK, 0);
+    iwl_wr(sc, IWL_CSR_INT, ~0u);                   /* every cause acknowledged */
+    iwl_wr(sc, IWL_CSR_FH_INT_STATUS, ~0u);
 }
 
 /* the radio switch: GP_CNTRL bit 27 clear means it is off (if_iwx.c iwx_check_rfkill()) */
-static bool check_rfkill(struct iwl_softc *sc) {
-    sc->rfkill = !(rd(sc, IWL_CSR_GP_CNTRL) & IWL_GP_CNTRL_HW_RF_KILL_SW);
+bool iwl_check_rfkill(struct iwl_softc *sc) {
+    sc->rfkill = !(iwl_rd(sc, IWL_CSR_GP_CNTRL) & IWL_GP_CNTRL_HW_RF_KILL_SW);
     return sc->rfkill;
 }
 
@@ -262,44 +248,44 @@ static bool check_rfkill(struct iwl_softc *sc) {
 static int start_hw(struct iwl_softc *sc) {
     int r = prepare_card_hw(sc);
     if(r) {
-        kprintf("+IWL: the card did not become ready (HW_IF_CONFIG 0x%08x)\n", rd(sc, IWL_CSR_HW_IF_CONFIG_REG));
+        kprintf("+IWL: the card did not become ready (HW_IF_CONFIG 0x%08x)\n", iwl_rd(sc, IWL_CSR_HW_IF_CONFIG_REG));
         return r;
     }
     r = clear_persistence_bit(sc);
     if(r) return r;
     sw_reset(sc);
-    setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
+    iwl_setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_INIT_DONE);
     udelay(20);
-    if(!poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY, IWL_GP_CNTRL_MAC_CLOCK_READY, 25000)) {
-        kprintf("+IWL: the card's clock did not stabilize after the reset (GP_CNTRL 0x%08x)\n", rd(sc, IWL_CSR_GP_CNTRL));
+    if(!iwl_poll_bit(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_CLOCK_READY, IWL_GP_CNTRL_MAC_CLOCK_READY, 25000)) {
+        kprintf("+IWL: the card's clock did not stabilize after the reset (GP_CNTRL 0x%08x)\n", iwl_rd(sc, IWL_CSR_GP_CNTRL));
         return -ETIMEDOUT;
     }
     r = force_power_gating(sc);
     if(r) return r;
     sw_reset(sc);
-    r = apm_init(sc);
+    r = iwl_apm_init(sc);
     if(r) return r;
-    if(nic_lock(sc)) {                          /* iwx_conf_msix_hw() without MSI-X: the causes in CSR_INT */
-        prph_write(sc, IWL_UREG_CHICK, IWL_UREG_CHICK_MSI_ENABLE);
-        nic_unlock(sc);
+    if(iwl_nic_lock(sc)) {                          /* iwx_conf_msix_hw() without MSI-X: the causes in CSR_INT */
+        iwl_prph_write(sc, IWL_UREG_CHICK, IWL_UREG_CHICK_MSI_ENABLE);
+        iwl_nic_unlock(sc);
     }
-    wr(sc, IWL_CSR_INT_MASK, IWL_INT_BIT_RF_KILL);   /* iwx_enable_rfkill_int(): only the cause is read */
-    setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_RFKILL_WAKE_L1A_EN);
-    check_rfkill(sc);
+    iwl_wr(sc, IWL_CSR_INT_MASK, IWL_INT_BIT_RF_KILL);   /* iwx_enable_rfkill_int(): only the cause is read */
+    iwl_setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_RFKILL_WAKE_L1A_EN);
+    iwl_check_rfkill(sc);
     return 0;
 }
 
 /* everything off and the card back in its low-power state (if_iwx.c iwx_stop_device()) */
 static void stop_device(struct iwl_softc *sc) {
-    disable_interrupts(sc);
-    clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
+    iwl_disable_interrupts(sc);
+    iwl_clrbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_MAC_ACCESS_REQ);
     sc->nic_locks = 0;
     apm_stop(sc);
     sw_reset(sc);
-    disable_interrupts(sc);                     /* stopping raises one when the radio switch is off */
-    wr(sc, IWL_CSR_INT_MASK, IWL_INT_BIT_RF_KILL);
-    setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_RFKILL_WAKE_L1A_EN);
-    check_rfkill(sc);
+    iwl_disable_interrupts(sc);                     /* stopping raises one when the radio switch is off */
+    iwl_wr(sc, IWL_CSR_INT_MASK, IWL_INT_BIT_RF_KILL);
+    iwl_setbits(sc, IWL_CSR_GP_CNTRL, IWL_GP_CNTRL_RFKILL_WAKE_L1A_EN);
+    iwl_check_rfkill(sc);
     prepare_card_hw(sc);
 }
 
@@ -325,10 +311,10 @@ static bool valid_address(const u8 *mac) {
 /* the address the card came with: an OEM's in the strap registers when valid, else the OTP's
    (if_iwx.c iwx_set_mac_addr_from_csr(), which reads them once the firmware runs) */
 static bool read_address(struct iwl_softc *sc, u8 *mac) {
-    if(!nic_lock(sc)) return false;
-    flip_address(rd(sc, IWL_CSR_MAC_ADDR0_STRAP), rd(sc, IWL_CSR_MAC_ADDR1_STRAP), mac);
-    if(!valid_address(mac)) flip_address(rd(sc, IWL_CSR_MAC_ADDR0_OTP), rd(sc, IWL_CSR_MAC_ADDR1_OTP), mac);
-    nic_unlock(sc);
+    if(!iwl_nic_lock(sc)) return false;
+    flip_address(iwl_rd(sc, IWL_CSR_MAC_ADDR0_STRAP), iwl_rd(sc, IWL_CSR_MAC_ADDR1_STRAP), mac);
+    if(!valid_address(mac)) flip_address(iwl_rd(sc, IWL_CSR_MAC_ADDR0_OTP), iwl_rd(sc, IWL_CSR_MAC_ADDR1_OTP), mac);
+    iwl_nic_unlock(sc);
     return valid_address(mac);
 }
 
@@ -421,7 +407,100 @@ out:
     return r;
 }
 
+/**** the firmware's first commands ****/
+
+/* what the firmware file says that is still needed once the file is freed */
+static int keep_fw_info(struct iwl_softc *sc, const struct iwl_fw *fw) {
+    memcpy(sc->fw_api, fw->api, sizeof(sc->fw_api));
+    memcpy(sc->fw_capa, fw->capa, sizeof(sc->fw_capa));
+    sc->phy_sku = fw->phy_sku;
+    sc->n_scan_channels = fw->n_scan_channels;
+    sc->lmac_error_table = fw->lmac_error_table;    /* ALIVE says them again */
+    sc->umac_error_table = fw->umac_error_table;
+    if(sc->cmd_versions) kfree(sc->cmd_versions);
+    sc->cmd_versions = NULL;
+    sc->n_cmd_versions = 0;
+    if(fw->n_cmd_versions) {
+        sc->cmd_versions = (struct iwl_fw_cmd_version *)kalloc(fw->n_cmd_versions * sizeof(struct iwl_fw_cmd_version));
+        if(!sc->cmd_versions) return -ENOMEM;
+        memcpy(sc->cmd_versions, fw->cmd_versions, fw->n_cmd_versions * sizeof(struct iwl_fw_cmd_version));
+        sc->n_cmd_versions = fw->n_cmd_versions;
+    }
+    return 0;
+}
+
+static bool fw_has_api(struct iwl_softc *sc, u_int bit) { return (sc->fw_api[bit / 32] >> (bit % 32)) & 1; }
+static bool fw_has_capa(struct iwl_softc *sc, u_int bit) { return (sc->fw_capa[bit / 32] >> (bit % 32)) & 1; }
+
+/* the init flow of if_iwx.c iwx_run_init_mvm_ucode(sc, 1): the NVM commands announced and done, INIT_COMPLETE
+   waited for; then NVM_GET_INFO (iwx_nvm_get()) */
+static int init_firmware(struct iwl_softc *sc) {
+    u32 init_flags = IWL_INIT_NVM, zero = 0;
+    const struct iwl_nvm_get_info_head *h;
+    u_int rsp_len = 0, want;
+    u8 *rsp;
+    int r;
+
+    r = iwl_cmd(sc, IWL_WIDE_ID(IWL_SYSTEM_GROUP, IWL_INIT_EXTENDED_CFG_CMD), &init_flags, sizeof(init_flags), NULL, 0,
+                NULL);
+    if(r) {
+        kprintf("+IWL: INIT_EXTENDED_CFG_CMD: %s\n", strerror(r));
+        return r;
+    }
+    r = iwl_cmd(sc, IWL_WIDE_ID(IWL_REGULATORY_AND_NVM_GROUP, IWL_NVM_ACCESS_COMPLETE), &zero, sizeof(zero), NULL, 0,
+                NULL);
+    if(r) {
+        kprintf("+IWL: NVM_ACCESS_COMPLETE: %s\n", strerror(r));
+        return r;
+    }
+    r = iwl_wait_init_complete(sc, 2000);
+    if(r) {
+        kprintf("+IWL: no INIT_COMPLETE from the firmware: %s\n", strerror(r));
+        return r;
+    }
+    want = fw_has_api(sc, IWL_API_REGULATORY_NVM_INFO) ? IWL_NVM_INFO_RSP_LEN_V4 : IWL_NVM_INFO_RSP_LEN_V3;
+    rsp = (u8 *)kalloc(IWL_NVM_INFO_RSP_LEN_V4);
+    if(!rsp) return -ENOMEM;
+    r = iwl_cmd(sc, IWL_WIDE_ID(IWL_REGULATORY_AND_NVM_GROUP, IWL_NVM_GET_INFO), &zero, sizeof(zero), rsp,
+                IWL_NVM_INFO_RSP_LEN_V4, &rsp_len);
+    if(!r && rsp_len != want) {
+        kprintf("+IWL: NVM_GET_INFO: %u bytes, not the %u of its layout\n", rsp_len, want);
+        r = -EIO;
+    } else if(r) {
+        kprintf("+IWL: NVM_GET_INFO: %s\n", strerror(r));
+    }
+    if(r) {
+        kfree(rsp);
+        return r;
+    }
+    h = (const struct iwl_nvm_get_info_head *)rsp;
+    sc->nvm_version = h->nvm_version;
+    sc->mac_sku_flags = h->mac_sku_flags;
+    sc->tx_chains = h->tx_chains;
+    sc->rx_chains = h->rx_chains;
+    sc->lar_enabled = h->lar_enabled && fw_has_capa(sc, IWL_CAPA_LAR_SUPPORT);
+    kprintf("+IWL: NVM version 0x%x%s: bands %s%s, 802.11%s%s%s, %s, antennas tx 0x%x rx 0x%x, %u addresses, "
+            "regulatory: %s\n", sc->nvm_version, (h->flags & IWL_NVM_GENERAL_FLAGS_EMPTY_OTP) ? " (an empty OTP)" : "",
+            (sc->mac_sku_flags & IWL_NVM_MAC_SKU_BAND_2_4) ? "2.4" : "",
+            (sc->mac_sku_flags & IWL_NVM_MAC_SKU_BAND_5_2) ? " 5 GHz" : " GHz",
+            (sc->mac_sku_flags & IWL_NVM_MAC_SKU_11N) ? "n" : "", (sc->mac_sku_flags & IWL_NVM_MAC_SKU_11AC) ? "/ac" : "",
+            (sc->mac_sku_flags & IWL_NVM_MAC_SKU_11AX) ? "/ax" : "",
+            (sc->mac_sku_flags & IWL_NVM_MAC_SKU_MIMO_DISABLED) ? "no MIMO" : "MIMO", sc->tx_chains, sc->rx_chains,
+            h->n_hw_addrs, sc->lar_enabled ? "location aware (LAR)" : "the NVM's channel list");
+    kfree(rsp);
+    return 0;
+}
+
 /**** the station layer's operations ****/
+
+/* a start that went wrong: everything off, and what happened kept for wifi status */
+static int start_failed(struct iwl_softc *sc, int r, const char *what) {
+    if(what) snprintf(sc->last, sizeof(sc->last), "%s (%s)", what, strerror(r));
+    kprintf("+IWL: %s\n", sc->last);
+    iwl_trans_stop(sc);
+    stop_device(sc);
+    return r;
+}
 
 static int iwl_start(struct wlan_dev *w) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
@@ -431,53 +510,56 @@ static int iwl_start(struct wlan_dev *w) {
     u_int len;
     int r;
 
+    sc->last[0] = 0;
     pci_dev_write16(sc->pci, PCI_COMMAND, pci_dev_read16(sc->pci, PCI_COMMAND) | PCI_COMMAND_MEMORY |
                     PCI_COMMAND_MASTER | PCI_COMMAND_INTX_DISABLE);
-    disable_interrupts(sc);
+    iwl_disable_interrupts(sc);
     r = start_hw(sc);
-    if(r) {
-        snprintf(sc->last, sizeof(sc->last), "the card did not power up (%s)", strerror(r));
-        stop_device(sc);
-        return r;
-    }
-    sc->hw_rf_id = rd(sc, IWL_CSR_HW_RF_ID);    /* Linux reads it once the card is up */
+    if(r) return start_failed(sc, r, "the card did not power up");
+    sc->hw_rf_id = iwl_rd(sc, IWL_CSR_HW_RF_ID);    /* Linux reads it once the card is up */
     identify(sc);
     kprintf("+IWL: powered up: RF id 0x%08x (%s, step %c), the radio switch is %s\n", sc->hw_rf_id,
             rf_name(sc->rf_type), 'A' + IWL_HW_RFID_STEP(sc->hw_rf_id), sc->rfkill ? "OFF" : "on");
-    /* the other drivers read it once the firmware runs; whether it reads before is worth knowing */
-    if(read_address(sc, mac)) kprintf("+IWL: the card's MAC address: %s\n", macfmt(mac, m));
-    else kprintf("+IWL: no valid MAC address in the card's registers before its firmware runs (%s)\n", macfmt(mac, m));
     if(!sc->fw_name) {
         snprintf(sc->last, sizeof(sc->last), "no firmware file for %s %c0 with %s", mac_name(sc->mac_type),
                  'A' + sc->mac_step, rf_name(sc->rf_type));
-        kprintf("+IWL: %s\n", sc->last);
-        stop_device(sc);
-        return -ENOENT;                         /* (-ENODEV would read as "the device is down") */
+        return start_failed(sc, -ENOENT, NULL);     /* (-ENODEV would read as "the device is down") */
     }
     fw = (struct iwl_fw *)kalloc(sizeof(*fw));
-    if(!fw) {
-        stop_device(sc);
-        return -ENOMEM;
-    }
+    if(!fw) return start_failed(sc, -ENOMEM, "no memory for the firmware");
     r = read_firmware(sc, &file, &len, fw);
     if(r) {
-        snprintf(sc->last, sizeof(sc->last), "%s: %s", sc->fw_name, strerror(r));
         kfree(fw);
-        stop_device(sc);
-        return r;
+        snprintf(sc->last, sizeof(sc->last), "%s: %s", sc->fw_name, strerror(r));
+        return start_failed(sc, r, NULL);
     }
     strlcpy(sc->fw_version, fw->version, sizeof(sc->fw_version));
-    /* step 3 loads it here: the context info, ALIVE, the MAC address from the NVM */
+    r = keep_fw_info(sc, fw);
+    if(!r) r = iwl_trans_alloc(sc);
+    if(!r) r = iwl_load_firmware(sc, fw);       /* copies what the card needs: the file can go */
     kfree(file);
     kfree(fw);
-    stop_device(sc);
-    snprintf(sc->last, sizeof(sc->last), "powered up, firmware %s checked; loading it is the next step", sc->fw_version);
-    kprintf("+IWL: %s: the card is stopped again\n", sc->last);
-    return -ENOSYS;
+    if(r) return start_failed(sc, r, "the firmware did not start");
+    r = init_firmware(sc);
+    if(r) return start_failed(sc, r, "the firmware's init flow failed");
+    if(!read_address(sc, mac)) {
+        snprintf(sc->last, sizeof(sc->last), "no valid MAC address in the card (%s)", macfmt(mac, m));
+        return start_failed(sc, -EIO, NULL);
+    }
+    memcpy(sc->mac, mac, WLAN_ADDR_LEN);
+    memcpy(w->mac, mac, WLAN_ADDR_LEN);
+    snprintf(sc->last, sizeof(sc->last), "firmware %s running", sc->fw_version);
+    kprintf("+IWL: up: firmware %s, MAC %s, %lu packets from the card so far; scanning is the next step\n",
+            sc->fw_version, macfmt(mac, m), sc->rx_packets);
+    return 0;
 }
 
 static void iwl_stop(struct wlan_dev *w) {
-    stop_device((struct iwl_softc *)w->priv);
+    struct iwl_softc *sc = (struct iwl_softc *)w->priv;
+    iwl_trans_stop(sc);
+    stop_device(sc);
+    snprintf(sc->last, sizeof(sc->last), "stopped (wifi down)");
+    kprintf("+IWL: stopped\n");
 }
 
 static int iwl_scan(struct wlan_dev *w, const struct wlan_scan_req *req) { return -ENOSYS; }
@@ -491,8 +573,21 @@ static void iwl_leave(struct wlan_dev *w) { }
 
 static void iwl_status(struct wlan_dev *w, char *buf, size_t size) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
-    snprintf(buf, size, "Intel 9560, MAC %s %c0, RF %s, %s%s%s", mac_name(sc->mac_type), 'A' + sc->mac_step,
-             rf_name(sc->rf_type), sc->fw_name ? sc->fw_name : "no firmware file", sc->last[0] ? "; " : "", sc->last);
+    if(sc->fw_state == IWL_FW_ALIVE)
+        snprintf(buf, size, "Intel 9560 (%s %c0, %s): firmware %s running, %lu packets from the card", mac_name(sc->mac_type),
+                 'A' + sc->mac_step, rf_name(sc->rf_type), sc->fw_version, sc->rx_packets);
+    else
+        snprintf(buf, size, "Intel 9560 (%s %c0, %s): %s", mac_name(sc->mac_type), 'A' + sc->mac_step,
+                 rf_name(sc->rf_type), sc->last[0] ? sc->last : (sc->fw_name ? sc->fw_name : "no firmware file for it"));
+}
+
+/* the driver's thread: while the firmware runs, the card's notifications every POLL_MS */
+static void iwl_thread(void *arg) {
+    struct iwl_softc *sc = (struct iwl_softc *)arg;
+    for(;;) {
+        if(sc->fw_state != IWL_FW_DOWN) iwl_poll(sc);
+        sleep_ms(sc->fw_state != IWL_FW_DOWN ? POLL_MS : 100);
+    }
 }
 
 static const struct wlan_hw_ops iwl_ops = {
@@ -525,13 +620,13 @@ static int attach(struct pci_dev *pci) {
         kfree(sc);
         return -1;
     }
-    sc->hw_rev = rd(sc, IWL_CSR_HW_REV);
+    sc->hw_rev = iwl_rd(sc, IWL_CSR_HW_REV);
     if(sc->hw_rev == 0xffffffff) {
         kprintf("+IWL: %02x:%02x.%x: the registers do not answer (HW_REV 0xffffffff)\n", pci->bus, pci->slot, pci->func);
         kfree(sc);
         return -1;
     }
-    sc->hw_rf_id = rd(sc, IWL_CSR_HW_RF_ID);
+    sc->hw_rf_id = iwl_rd(sc, IWL_CSR_HW_RF_ID);
     identify(sc);
     kprintf("+IWL: %02x:%02x.%x %04x:%04x (subsystem %04x:%04x), registers at 0x%x%08x: HW_REV 0x%08x (%s %c0), "
             "RF_ID 0x%08x (%s), firmware %s\n", pci->bus, pci->slot, pci->func, pci->vendor, pci->device,
@@ -543,6 +638,8 @@ static int attach(struct pci_dev *pci) {
         kfree(sc);
         return -1;
     }
+    if(!kthread_create("iwl", iwl_thread, sc, PL_HIGH, TF_KTHREAD | TF_DETACHED))
+        kprintf("+IWL: no thread for the card: its notifications are read only while a command waits\n");
     return 0;
 }
 

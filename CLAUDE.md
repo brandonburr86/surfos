@@ -86,8 +86,9 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
-           laptop's Intel 9560 (profile=laptop only; registers in include/sys/iwl_reg.h), growing step by step
-           (docs/superpowers/plans/2026-10-09-wifi.md)
+           laptop's Intel 9560 (profile=laptop only; registers in include/sys/iwl_reg.h): PCI, power, wlan ops;
+           iwl_trans.c: its firmware transport (context info, receive and command queues, polled); iwl_priv.h
+           what the two share; growing step by step (docs/superpowers/plans/2026-10-09-wifi.md)
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
@@ -221,7 +222,9 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   the PMK at once. The kernel word `wlansim` gives a simulated card with six access points (SurfSim, SurfSimWPA
   with the test passphrase in tools/qemu-run.py, a hidden one, WEP, WPA3-only, a flaky one) bridged onto eth0, so
   `dhcp wlan0` works in QEMU; the smoke test's `@boot wlansim net` and `@boot wlansim usbnet-later` blocks drive
-  it. Never put a real Wi-Fi password in a file, a log or a test.
+  it. Never put a real Wi-Fi password in a file, a log or a test. The laptop's Intel card says each stage of a
+  start in `+IWL:` lines (dmesg; `tools/devloop.py log`) and its state in `wifi status`'s driver line; a firmware
+  error prints the firmware's error log. QEMU has no Intel card: that code runs only on the laptop.
 * User programs: system call numbers are in `include/surfos/syscall.h` (libsurf includes
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
