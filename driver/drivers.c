@@ -10,6 +10,8 @@ File: drivers.c Date: 4/23/04, driver table 10/2026 (roadmap D1)
 `drivers` also says what the console, the timer and the keyboard ended up being.
 10/5/26 (USB networking): "usb" starts the xHCI controllers and sets up what is plugged
 in, after e1000 so that QEMU's NIC stays eth0 where both exist.
+10/9/26 (Wi-Fi, track S): with `wlansim` on the kernel command line, and only then, the
+simulated Wi-Fi chip of the tests registers as wlan0 after the table (driver/wifi/wlansim.c).
 */
 //Rebuilt 9/28/2026 - not in the printout, see REBUILD-NOTES.md
 
@@ -31,6 +33,7 @@ in, after e1000 so that QEMU's NIC stays eth0 where both exist.
 
 extern int net_3c905b_init(void);
 int init_e1000(void);
+int init_wlansim(void);         /* 10/9/26: nothing without the kernel word wlansim */
 
 static int drv_serial(void) { return init_serial_irq(); }
 static int drv_parport(void) { init_parport(); return PAR0 ? 0 : 1; }
@@ -73,6 +76,7 @@ void init_drivers() {
         kprintf(" %s%s", drivers[i].name, s == 0 ? "" : (s == DRV_SKIPPED ? "(skipped)" : (s > 0 ? "(absent)" : "(FAILED)")));
     }
     kprintf("\n");
+    init_wlansim();
 }
 
 void print_drivers() {

@@ -9,7 +9,9 @@
    `make unittest`. 10/6/26: the same pager on a pseudo-terminal's stream console (the
    rows and columns of its size, the question in the stream, a new size), and what else
    the stream does (the writer's colour as SGR, Backspace, UTF-8 and escape sequences in
-   the column count), the serial line's input rules (tty_term_input()). */
+   the column count), the serial line's input rules (tty_term_input()). 10/9/26 (Wi-Fi): a
+   secret line (tty_readline_secret(), a password): nothing typed reaches the screen, the
+   serial line or a pty's stream, the history, or stays in the input queue. */
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -64,6 +66,8 @@ int sim_poll_wakes(void);
 void sim_clear(void);
 int sim_key_up(void);
 int sim_key_home(void);
+int sim_readline_secret(char *buf, int size);
+int sim_inq_has(const char *s);
 
 static int failures, checks;
 
@@ -1097,6 +1101,77 @@ static void t_paste_crlf(void) {
     }
 }
 
+/**** 10/9/26 (Wi-Fi): a secret line ****/
+
+static char secret_got[64];
+static int secret_len;
+static void w_secret(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_print("Password for net: ", 18);
+    secret_len = sim_readline_secret(secret_got, sizeof(secret_got));
+    sim_print("done\n", 5);
+}
+
+static void w_line(int unused, int unused2) {
+    (void)unused;
+    (void)unused2;
+    sim_readline(line_got, sizeof(line_got));
+}
+
+static void type(const char *k, int term) {
+    for(; *k; k++) {
+        if(term) sim_term_input((unsigned char)*k);
+        else sim_input((unsigned char)*k);
+    }
+}
+
+static void t_secret(void) {
+    char ser[4096];
+    int st;
+    reset(0);
+    type("ls -l\n", 0);
+    run(SHELL, w_line, 0, 0);                      /* a line for the history */
+    sim_serial(ser, sizeof(ser));
+    type("hunter2x\b", 0);
+    sim_input('\n');
+    st = run(CHILD, w_secret, 0, 0);
+    check(st == DONE && secret_len == 7 && !strcmp(secret_got, "hunter2"), "a secret line is read, Backspace and all");
+    check(screen_has("Password for net:") && screen_has("done") && !screen_has("hunter"),
+          "the screen shows the question and none of the keys typed");
+    sim_serial(ser, sizeof(ser));
+    check(strstr(ser, "Password for net: ") && !strstr(ser, "hunter") && !strchr(ser, '\b'),
+          "the serial line gets the question and the Enter, no key and no Backspace");
+    check(!sim_inq_has("hunter"), "its keys are wiped from the input queue as they are read");
+    sim_input(sim_key_up());
+    sim_input('\n');
+    run(SHELL, w_line, 0, 0);
+    check(!strcmp(line_got, "ls -l"), "Up then recalls the line before it: the secret is in no history");
+    sim_input(sim_key_up());
+    type("x\n", 0);
+    run(CHILD, w_secret, 0, 0);
+    check(!strcmp(secret_got, "x"), "Up in a secret line recalls nothing into it");
+    type("abc\x15" "def\n", 0);
+    run(CHILD, w_secret, 0, 0);
+    check(!strcmp(secret_got, "def") && !screen_has("abc"), "Ctrl-U clears it, unseen");
+    type("zzz\x03", 0);
+    st = run(CHILD, w_secret, 0, 0);
+    check(st == DONE && secret_len == 0 && secret_got[0] == 0 && screen_has("^C") && !screen_has("zzz"),
+          "Ctrl-C: ^C and an empty answer");
+    sim_input('a');
+    check(sim_inq_has("a"), "keys typed after it are still queued for the next reader");
+
+    /* a pseudo-terminal (telnet): the stream carries the question and the newline only */
+    on_pty(80, 24, 0);
+    type("pa55word\r", 1);
+    st = run(CHILD, w_secret, 0, 0);
+    stream_now();
+    check(st == DONE && !strcmp(secret_got, "pa55word"), "a pty: the secret line is read");
+    check(strstr(strm, "Password for net: ") && strstr(strm, "done") && !strstr(strm, "pa55"),
+          "a pty's stream: the question and the Enter, no key typed");
+    check(!sim_inq_has("pa55"), "a pty's input queue keeps none of it");
+}
+
 int main(void) {
     int i;
     for(i = 0; i < NT; i++) pthread_create(&task[i].th, NULL, task_main, (void *)(long)i);
@@ -1132,6 +1207,7 @@ int main(void) {
     t_term_room();
     t_paste_skip();
     t_paste_crlf();
+    t_secret();
     reset(0);
     printf("%s: %d checks, %d failures\n", failures ? "PAGER UNIT TESTS FAILED" : "PAGER UNIT TESTS PASSED", checks, failures);
     exit(failures ? 1 : 0);

@@ -8,6 +8,8 @@ mapped through ioremap(); receive and transmit descriptor rings and their
 buffers live in the 1:1 DMA heap. Received frames are copied to the stack
 from the interrupt handler (netdev_rx queues them for the net thread);
 transmit fills the next descriptor and bumps the tail.
+10/9/26 (Wi-Fi, track S): NETDEV_ADD_RX_ADDR puts another address in a free receive
+address register, for the simulated Wi-Fi chip's bridge (driver/wifi/wlansim.c).
 */
 
 #include <surfos/types.h>
@@ -164,7 +166,28 @@ static int e1000_isr(u_int irq, void *param) {
     return 0;
 }
 
-static const struct netdev_ops e1000_ops = { e1000_send, NULL };
+/* 10/9/26: frames to one more unicast address are received too (receive address 1-15) */
+static int e1000_ioctl(struct netdev *dev, int cmd, void *arg) {
+    struct e1000 *e = (struct e1000 *)dev->priv;
+    const u8 *mac = (const u8 *)arg;
+    u32 ral, rah;
+    int i;
+    if(cmd != NETDEV_ADD_RX_ADDR || !mac || (mac[0] & 1)) return -1;
+    ral = mac[0] | (mac[1] << 8) | (mac[2] << 16) | ((u32)mac[3] << 24);
+    rah = mac[4] | (mac[5] << 8) | RAH_AV;
+    for(i = 1; i < 16; i++) {
+        u32 have = rd(e, REG_RAH + i * 8);
+        if((have & RAH_AV) && have == rah && rd(e, REG_RAL + i * 8) == ral) return 0;   /* there already */
+        if(!(have & RAH_AV)) {
+            wr(e, REG_RAL + i * 8, ral);
+            wr(e, REG_RAH + i * 8, rah);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static const struct netdev_ops e1000_ops = { e1000_send, e1000_ioctl };
 
 static int e1000_attach(struct pci_dev *pci) {
     struct e1000 *e = (struct e1000 *)kcalloc(1, sizeof(struct e1000));

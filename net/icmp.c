@@ -6,6 +6,8 @@ File: icmp.c    Date: 10/3/26 (roadmap N2)
 Echo replies, and echo requests for ping with one outstanding request.
 10/6/26: one request at a time (ping_lock): two pings at once, from two consoles or a
 ping and the self test, re-initialised the record's event under the other's waiter.
+10/9/26 (Wi-Fi, track S): icmp_ping_dev() sends through an interface the caller names
+(ping <address> [count] [interface]).
 */
 
 #include <surfos/types.h>
@@ -47,7 +49,7 @@ void icmp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) 
 
 static mutex_t ping_lock = MUTEX_INIT("ping");
 
-static int ping_once(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
+static int ping_once(struct netdev *dev, ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
     struct netbuf *nb;
     struct icmp_hdr *ic;
     u8 *p;
@@ -72,7 +74,7 @@ static int ping_once(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeou
     ping.id = htons(id);
     ping.seq = htons(seq);
     ping.sent = getticks();
-    r = ip_output(NULL, dst, IPPROTO_ICMP, nb);
+    r = ip_output(dev, dst, IPPROTO_ICMP, nb);
     mutex_unlock(&net_lock);
     if(r != 0) { ping.waiting = false; return -1; }
     if(event_wait_timeout(&ping.done, timeout_ms) != 0) { ping.waiting = false; return -1; }
@@ -81,10 +83,14 @@ static int ping_once(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeou
 }
 
 /* the others wait their turn: a request takes at most timeout_ms */
-int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
+int icmp_ping_dev(struct netdev *dev, ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
     int r;
     mutex_lock(&ping_lock);
-    r = ping_once(dst, id, seq, payload, timeout_ms, ttl_out);
+    r = ping_once(dev, dst, id, seq, payload, timeout_ms, ttl_out);
     mutex_unlock(&ping_lock);
     return r;
+}
+
+int icmp_ping(ipaddr_t dst, u16 id, u16 seq, u_int payload, u_long timeout_ms, u8 *ttl_out) {
+    return icmp_ping_dev(NULL, dst, id, seq, payload, timeout_ms, ttl_out);
 }

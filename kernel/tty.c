@@ -21,6 +21,9 @@ VINTR without NOFLSH): what was typed ahead never runs after an interrupt. Room 
 a pty's full input queue wakes poll() (its master is ready for writing again, kernel/pty.c).
 10/6/26: the rest of a paste is skipped (TTY_SKIP in tty.h): after raw mode's end dropped
 keys, or ttyctl(TTY_SKIP, 1), tty_term_input() drops what comes until its input pauses.
+10/9/26 (Wi-Fi): tty_readline_secret(), a line that is never shown, for a password: the line
+discipline with its echo off for that one line (only the Enter, or ^C, is echoed), no history
+either way, and each key wiped from the input queue as it is read.
 */
 
 #include <surfos/types.h>
@@ -346,7 +349,17 @@ static void history_add(struct tty *t, const char *line) {
     t->hist_count++;
 }
 
-int tty_readline(struct tty *t, char *buf, size_t size) {
+/* 10/9/26: the slot of the key just read is wiped (a secret's keys stay nowhere). Only the
+   reader frees slots, and an interrupt handler writes one only while it is free and not the one
+   behind in_tail (the queue is full then), so it is this key's still. */
+static void scrub_last(struct tty *t) {
+    u_long flags = irq_save();
+    t->inq[(t->in_tail + TTY_INPUT_SIZE - 1) % TTY_INPUT_SIZE] = 0;
+    irq_restore(flags);
+}
+
+/* the line discipline; 10/9/26: secret, the echo is off for this line (tty_readline_secret()) */
+static int readline(struct tty *t, char *buf, size_t size, int secret) {
     size_t len = 0;
     int pos = t->hist_count;            /* history cursor; == hist_count means the line being typed */
     int oldest = t->hist_count > TTY_HISTORY ? t->hist_count - TTY_HISTORY : 0;
@@ -359,34 +372,44 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
     for(;;) {
         int c = tty_getc(t);
 
+        if(c >= 0 && secret) scrub_last(t);
         if(c < 0) {     /* 10/6/26: the call is cut short: no line. Ctrl+C says so, as below */
             if(curTask->intr & TI_INT) { echo(t, '^'); echo(t, 'C'); echo(t, '\n'); }
             else if(len) echo(t, '\n');
+            if(secret) memset(buf, 0, len);
             buf[0] = 0;
             return -1;
         }
         if(c == '\n' || c == '\r') {
             echo(t, '\n');
             buf[len] = 0;
-            if(len) history_add(t, buf);
+            if(len && !secret) history_add(t, buf);
             return (int)len;
         }
         if(c == 0x08 || c == 0x7F) {
-            if(len) { len--; echo(t, '\b'); }
+            if(len) {
+                len--;
+                if(secret) buf[len] = 0;
+                else echo(t, '\b');
+            }
             continue;
         }
         if(c == 0x15) { /* Ctrl-U: clear the line */
-            erase(t, len);
+            if(secret) memset(buf, 0, len);
+            else erase(t, len);
             len = 0;
             continue;
         }
         if(c == 0x03) { /* Ctrl-C: drop the line */
             echo(t, '^'); echo(t, 'C'); echo(t, '\n');
+            if(secret) memset(buf, 0, len);
             buf[0] = 0;
             return 0;
         }
         if(c == UP || c == DOWN) {
-            int want = pos + (c == UP ? -1 : 1);
+            int want;
+            if(secret) continue;        /* 10/9/26: no history for a secret, nor into one */
+            want = pos + (c == UP ? -1 : 1);
             if(want < oldest || want > t->hist_count) continue;
             if(pos == t->hist_count) { buf[len] = 0; strlcpy(saved, buf, sizeof(saved)); } /* keep what was typed */
             pos = want;
@@ -404,9 +427,17 @@ int tty_readline(struct tty *t, char *buf, size_t size) {
         if(c == '\t') c = ' ';
         if(len + 1 < size && len + 1 < TTY_LINE_MAX && c >= 32 && c < 127) {
             buf[len++] = (char)c;
-            echo(t, c);
+            if(!secret) echo(t, c);
         }
     }
+}
+
+int tty_readline(struct tty *t, char *buf, size_t size) {
+    return readline(t, buf, size, 0);
+}
+
+int tty_readline_secret(struct tty *t, char *buf, size_t size) {
+    return readline(t, buf, size, 1);
 }
 
 /* read(2) on the console (fs/devfs.c). Line mode: a line with its newline, cut to len.

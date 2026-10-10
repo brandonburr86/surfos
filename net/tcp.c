@@ -78,6 +78,11 @@ matched as a word. A window shut on bytes in flight (a peer that shrank it, whic
 RFC 1122 forbids) no longer brings a full segment again every second for ever:
 nothing goes into it, the persist timer probes it with its backoff, and when it
 opens, what was in flight goes again at once.
+
+10/9/26 (Wi-Fi, track S): a connection keeps the address it was made to (or chose when it
+opened): its segments are routed by it (ip_route(), net/ip.c), so a connection to eth0's
+address answers through eth0 while wlan0 is up on the same network, and one to wlan0's
+through wlan0. A segment finds its connection by the address it came to as well.
 */
 
 #include <surfos/types.h>
@@ -131,6 +136,7 @@ struct tcp_socket {
     bool shrunk;                        /* 10/6/26: the window shut on bytes in flight: they go again when it opens */
     int state;
     ipaddr_t remote_ip;
+    ipaddr_t local_ip;                  /* 10/9/26: ours in this connection (0: a listener's, any) */
     u16 local_port, remote_port;
     /* send side */
     u32 iss, snd_una, snd_nxt, snd_wnd;
@@ -298,10 +304,15 @@ static void fail(struct tcp_socket *s, int err) {
 
 /**** segments ****/
 
-static int send_segment(ipaddr_t dst, u16 sport, u16 dport, u32 seq, u32 ack, u8 flags, u16 win, const void *data, u_int len, bool mss) {
-    struct netbuf *nb = netbuf_alloc();
+/* 10/9/26: src, our address in the connection, chooses the interface (0: the routes do) */
+static int send_segment(ipaddr_t src, ipaddr_t dst, u16 sport, u16 dport, u32 seq, u32 ack, u8 flags, u16 win, const void *data,
+                        u_int len, bool mss) {
+    struct netdev *dev = ip_route(src, dst);
+    struct netbuf *nb;
     struct tcp_hdr *th;
     u_int hlen = sizeof(*th) + (mss ? 4 : 0);
+    if(!dev) return -1;
+    nb = netbuf_alloc();
     if(!nb) return -1;
     if(len) memcpy(netbuf_put(nb, len), data, len);
     th = (struct tcp_hdr *)netbuf_push(nb, hlen);
@@ -318,8 +329,8 @@ static int send_segment(ipaddr_t dst, u16 sport, u16 dport, u32 seq, u32 ack, u8
         u8 *o = (u8 *)(th + 1);
         o[0] = 2; o[1] = 4; o[2] = TCP_MSS >> 8; o[3] = TCP_MSS & 0xFF;
     }
-    th->csum = ip_checksum_pseudo(ip_route_src(dst), dst, IPPROTO_TCP, th, nb->len);
-    return ip_output(NULL, dst, IPPROTO_TCP, nb);
+    th->csum = ip_checksum_pseudo(dev->ip, dst, IPPROTO_TCP, th, nb->len);
+    return ip_output(dev, dst, IPPROTO_TCP, nb);
 }
 
 /* 10/6/26: what is left of the window last offered */
@@ -359,19 +370,19 @@ static u16 peer_mss(const struct tcp_hdr *th, u_int hlen) {
 /* 10/6/26: an ACK the other end has to answer (an old sequence number, RFC 793), and its answer says
    its window: the probe of a shut window and keepalive's */
 static void send_probe(struct tcp_socket *s) {
-    send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una - 1, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
+    send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_una - 1, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
     s->tx_segs++;
 }
 
 static void send_ack(struct tcp_socket *s) {
-    send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
+    send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK, window(s), NULL, 0, false);
     s->tx_segs++;
 }
 
 /* 10/6/26: the other end is told the connection is over, when there is one to tell */
 static void send_reset(struct tcp_socket *s) {
     if(s->state != CLOSED && s->state != LISTEN && s->state != SYN_SENT && s->state != TIME_WAIT)
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
+        send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_RST | TCP_ACK, 0, NULL, 0, false);
 }
 
 static void arm_rto(struct tcp_socket *s) {
@@ -395,7 +406,7 @@ static void output(struct tcp_socket *s, bool force) {
             held = true;
             break;
         }
-        if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
+        if(send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
                         s->txbuf + in_flight, chunk, false) != 0) {
             held = true;
             break;
@@ -406,7 +417,7 @@ static void output(struct tcp_socket *s, bool force) {
         arm_rto(s);
     }
     if(s->fin_pending && !s->fin_sent && in_flight == s->tx_len) {
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
+        send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
         s->tx_segs++;
         s->fin_sent = true;
         s->snd_nxt++;
@@ -446,14 +457,14 @@ static void resend(struct tcp_socket *s) {
         u_int chunk = sent - off;
         if(chunk > s->mss) chunk = s->mss;
         if(chunk > s->snd_wnd - off) chunk = s->snd_wnd - off;
-        if(send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una + off, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
+        if(send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_una + off, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s),
                         s->txbuf + off, chunk, false) != 0) break;
         s->tx_segs++;
         s->retrans++;
         off += chunk;
     }
     if(off == sent && s->fin_sent) {
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
+        send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
         s->tx_segs++;
     }
     s->rto_at = 0;
@@ -473,18 +484,18 @@ static void retransmit(struct tcp_socket *s) {
     s->rto_at = getticks() + TCP_RTO * (s->retries < 4 ? s->retries : 4);
     switch(s->state) {
     case SYN_SENT:
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
+        send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
         break;
     case SYN_RCVD:
-        send_segment(s->remote_ip, s->local_port, s->remote_port, s->iss, s->rcv_nxt, TCP_SYN | TCP_ACK, window(s), NULL, 0, true);
+        send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->iss, s->rcv_nxt, TCP_SYN | TCP_ACK, window(s), NULL, 0, true);
         break;
     default:
         sent = s->snd_nxt - s->snd_una - (s->fin_sent ? 1 : 0);
         if(sent) {
             u_int chunk = sent > s->mss ? s->mss : sent;
-            send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_una, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s), s->txbuf, chunk, false);
+            send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_una, s->rcv_nxt, TCP_ACK | TCP_PSH, window(s), s->txbuf, chunk, false);
         } else if(s->fin_sent) {
-            send_segment(s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
+            send_segment(s->local_ip, s->remote_ip, s->local_port, s->remote_port, s->snd_nxt - 1, s->rcv_nxt, TCP_ACK | TCP_FIN, window(s), NULL, 0, false);
         } else s->rto_at = 0;
         break;
     }
@@ -512,22 +523,23 @@ static void process_ack(struct tcp_socket *s, u32 ack) {
     notify(s);                                           /* room in the send buffer */
 }
 
-static struct tcp_socket *lookup(ipaddr_t rip, u16 rport, u16 lport) {
+/* 10/9/26: lip, the address the segment came to, is part of what names a connection */
+static struct tcp_socket *lookup(ipaddr_t lip, ipaddr_t rip, u16 rport, u16 lport) {
     struct tcp_socket *listener = NULL;
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
         if(!s->used || s->local_port != lport || s->state == CLOSED) continue;   /* 10/6/26: a failed one is no connection */
         if(s->state == LISTEN) { listener = s; continue; }
-        if(s->remote_ip == rip && s->remote_port == rport) return s;
+        if(s->remote_ip == rip && s->remote_port == rport && (!s->local_ip || s->local_ip == lip)) return s;
     }
     return listener;
 }
 
 static void send_rst_for(const struct ip_hdr *ip, const struct tcp_hdr *th, u_int datalen) {
     if(th->flags & TCP_RST) return;
-    if(th->flags & TCP_ACK) send_segment(ip->src, ntohs(th->dport), ntohs(th->sport), ntohl(th->ack), 0, TCP_RST, 0, NULL, 0, false);
-    else send_segment(ip->src, ntohs(th->dport), ntohs(th->sport), 0, ntohl(th->seq) + datalen + ((th->flags & TCP_SYN) ? 1 : 0),
+    if(th->flags & TCP_ACK) send_segment(ip->dst, ip->src, ntohs(th->dport), ntohs(th->sport), ntohl(th->ack), 0, TCP_RST, 0, NULL, 0, false);
+    else send_segment(ip->dst, ip->src, ntohs(th->dport), ntohs(th->sport), 0, ntohl(th->seq) + datalen + ((th->flags & TCP_SYN) ? 1 : 0),
                       TCP_RST | TCP_ACK, 0, NULL, 0, false);
 }
 
@@ -549,7 +561,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     data = (u8 *)th + hlen;
     datalen = nb->len - hlen;
 
-    s = lookup(ip->src, ntohs(th->sport), ntohs(th->dport));
+    s = lookup(ip->dst, ip->src, ntohs(th->sport), ntohs(th->dport));
     if(!s) { send_rst_for(ip, th, datalen); netbuf_free(nb); return; }
     s->rx_segs++;
 
@@ -570,6 +582,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         c = sock_alloc();
         if(!c) { netbuf_free(nb); return; }
         c->local_port = s->local_port;
+        c->local_ip = ip->dst;                           /* 10/9/26: it answers from the address it was made to */
         c->remote_ip = ip->src;
         c->remote_port = ntohs(th->sport);
         c->irs = seq;
@@ -584,7 +597,7 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         c->listener = s;
         s->backlog[s->backlog_n] = c;
         s->backlog_n++;
-        send_segment(c->remote_ip, c->local_port, c->remote_port, c->iss, c->rcv_nxt, TCP_SYN | TCP_ACK, window(c), NULL, 0, true);
+        send_segment(c->local_ip, c->remote_ip, c->local_port, c->remote_port, c->iss, c->rcv_nxt, TCP_SYN | TCP_ACK, window(c), NULL, 0, true);
         c->tx_segs++;
         arm_rto(c);
         netbuf_free(nb);
@@ -754,12 +767,12 @@ void tcp_tick(void) {
 
 /* 10/6/26: the next hop to hop does not answer ARP (net/arp.c): a connection being opened through
    it fails (EHOSTUNREACH) instead of retrying until it times out. Under net_lock. */
-void tcp_unreachable(ipaddr_t hop) {
-    struct netdev *dev = netdev_default();
+void tcp_unreachable(struct netdev *dev, ipaddr_t hop) {
     int i;
     for(i = 0; i < TCP_SOCKETS; i++) {
         struct tcp_socket *s = &socks[i];
-        if(s->used && s->state == SYN_SENT && dev && ip_next_hop(dev, s->remote_ip) == hop) fail(s, -EHOSTUNREACH);
+        if(s->used && s->state == SYN_SENT && dev && ip_route(s->local_ip, s->remote_ip) == dev &&
+           ip_next_hop(dev, s->remote_ip) == hop) fail(s, -EHOSTUNREACH);
     }
 }
 
@@ -784,7 +797,7 @@ void tcp_unreachable(ipaddr_t hop) {
 /* 10/6/26: why a connection to dst cannot even be tried: no interface, no address on it, no
    link, or dst off the interface's network with no gateway to send it to; 0 when it can */
 static int no_route(ipaddr_t dst) {
-    struct netdev *dev = netdev_default();
+    struct netdev *dev = ip_route(0, dst);              /* 10/9/26: the interface the routes choose */
     if(!dev || !dev->ip || !dev->link_up) return -ENETUNREACH;
     if(dev->netmask && (dst & dev->netmask) != (dev->ip & dev->netmask) && !dev->gateway) return -ENETUNREACH;
     return 0;
@@ -805,6 +818,7 @@ static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, 
     s = err ? NULL : sock_new(true, reserved, &err);
     if(!s) { mutex_unlock(&net_lock); return err; }
     s->local_port = ephemeral_port();
+    s->local_ip = ip_route_src(dst);                    /* 10/9/26: the connection keeps it, and its interface */
     s->remote_ip = dst;
     s->remote_port = dport;
     s->iss = (u32)getticks() * 2654435761UL ^ 0x7e57c0de;
@@ -812,7 +826,7 @@ static int open_conn(ipaddr_t dst, u16 dport, u_long timeout_ms, bool reserved, 
     s->snd_nxt = s->iss + 1;
     s->snd_wnd = TCP_MSS;
     s->state = SYN_SENT;
-    send_segment(dst, s->local_port, dport, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
+    send_segment(s->local_ip, dst, s->local_port, dport, s->iss, 0, TCP_SYN, window(s), NULL, 0, true);
     s->tx_segs++;
     arm_rto(s);
     WAIT_FOR(s, s->state != SYN_SENT, timeout_ms);

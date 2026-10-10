@@ -16,5 +16,8 @@ u_long dhcp_lease_seconds(void);          /* of the last lease, 0 if none */
 
 /* an A record through the configured server (dotted quads pass straight through); 0 or -1 */
 int dns_resolve(const char *name, ipaddr_t *out, u_long timeout_ms);
+/* 10/9/26: the server dns_resolve() asks: the default interface's, else the first configured one's
+   (a link up first); 0 when none is known */
+ipaddr_t dns_server(void);
 
 #endif

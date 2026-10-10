@@ -29,6 +29,7 @@ struct arp_entry {
     u_long updated;                  /* tick */
     struct netbuf *pending;          /* one frame waiting for the reply */
     u_int retries;
+    struct netdev *dev;              /* 10/9/26: the interface it was learned or asked on (an entry each) */
 };
 
 void arp_input(struct netdev *dev, struct netbuf *nb);

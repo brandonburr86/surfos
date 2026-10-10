@@ -3,6 +3,9 @@ SurfOS Network Stack: packet buffers, addresses, device registry, the net thread
 --------------------
 File: netbuf.c  Date: 10/3/26 (roadmap N1)
 --------------------
+10/9/26 (Wi-Fi, track S): a name the driver set (wlan0, from the station layer) is kept; the
+others are eth0, eth1, ... counted apart, so Wi-Fi found at boot leaves eth0 to the first
+Ethernet interface. The default interface (commands that name none) is the first Ethernet one.
 */
 
 #include <surfos/types.h>
@@ -85,11 +88,11 @@ void *netbuf_put(struct netbuf *nb, u_int n) {
 /**** devices ****/
 
 static struct netdev *netdevs;
-static u_int ndevs;
+static u_int neth;                      /* 10/9/26: ethN names given (not a driver's own, such as wlan0) */
 
 int netdev_register(struct netdev *dev) {
     struct netdev **pp;
-    snprintf(dev->name, sizeof(dev->name), "eth%u", ndevs++);
+    if(!dev->name[0]) snprintf(dev->name, sizeof(dev->name), "eth%u", neth++);
     if(!dev->mtu) dev->mtu = ETH_MTU;
     dev->next = NULL;
     for(pp = &netdevs; *pp; pp = &(*pp)->next);
@@ -103,7 +106,15 @@ struct netdev *netdev_find(const char *name) {
     return NULL;
 }
 
+/* 10/9/26: the first Ethernet interface, else the first: on the laptop the Wi-Fi card registers
+   wlan0 at boot and the USB adapter eth0 later, and `dhcp` or a program's netinfo still mean eth0 */
 struct netdev *netdev_default(void) {
+    struct netdev *d;
+    for(d = netdevs; d; d = d->next) if(!strncmp(d->name, "eth", 3)) return d;
+    return netdevs;
+}
+
+struct netdev *netdev_first(void) {
     return netdevs;
 }
 

@@ -5,6 +5,9 @@ File: udp.c     Date: 10/3/26 (roadmap N2)
 --------------------
 Eight kernel sockets with a receive queue each; DHCP, DNS and the shell
 use them.
+10/9/26 (Wi-Fi, track S): a socket may be bound to an interface (udp_bind_dev()): it sends
+through it and takes only what came in on it. DHCP on wlan0 is, while eth0 hears the same
+broadcasts on the same network.
 */
 
 #include <surfos/types.h>
@@ -20,6 +23,7 @@ use them.
 struct udp_socket {
     bool used;
     u16 port;
+    struct netdev *dev;                 /* 10/9/26: bound to it (udp_bind_dev()), NULL: any */
     struct netbuf *head, *tail;
     u_int queued;
     u_long rx, tx, dropped;
@@ -69,13 +73,21 @@ u16 udp_local_port(struct udp_socket *s) {
     return s->port;
 }
 
+void udp_bind_dev(struct udp_socket *s, struct netdev *dev) {
+    mutex_lock(&net_lock);
+    s->dev = dev;
+    mutex_unlock(&net_lock);
+}
+
 int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, u_int len) {
     struct netbuf *nb;
     struct udp_hdr *uh;
+    struct netdev *dev;
     int r;
     if(len > NETBUF_SIZE - NETBUF_HEADROOM) return -1;
     mutex_lock(&net_lock);
-    nb = netbuf_alloc();
+    dev = s->dev ? s->dev : ip_route(0, dst);          /* 10/9/26 */
+    nb = dev ? netbuf_alloc() : NULL;
     if(!nb) { mutex_unlock(&net_lock); return -1; }
     memcpy(netbuf_put(nb, len), data, len);
     uh = (struct udp_hdr *)netbuf_push(nb, sizeof(*uh));
@@ -83,9 +95,9 @@ int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 dport, const void *data, 
     uh->dport = htons(dport);
     uh->len = htons((u16)nb->len);
     uh->csum = 0;
-    uh->csum = ip_checksum_pseudo(ip_route_src(dst), dst, IPPROTO_UDP, uh, nb->len);
+    uh->csum = ip_checksum_pseudo(dev->ip, dst, IPPROTO_UDP, uh, nb->len);
     if(uh->csum == 0) uh->csum = 0xFFFF;
-    r = ip_output(NULL, dst, IPPROTO_UDP, nb);
+    r = ip_output(dev, dst, IPPROTO_UDP, nb);
     if(r == 0) s->tx++;
     mutex_unlock(&net_lock);
     return r;
@@ -101,6 +113,7 @@ void udp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     nb->len = len;
     if(uh->csum && ip_checksum_pseudo(ip->src, ip->dst, IPPROTO_UDP, uh, len) != 0) { netbuf_free(nb); return; }
     s = by_port(ntohs(uh->dport));
+    if(s && s->dev && s->dev != dev) s = NULL;           /* 10/9/26: bound to another interface */
     if(!s || s->queued >= UDP_QUEUE_MAX) { if(s) s->dropped++; netbuf_free(nb); return; }
     nb->aux_ip = ip->src;
     nb->aux_port = ntohs(uh->sport);

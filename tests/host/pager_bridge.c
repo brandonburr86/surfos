@@ -217,6 +217,13 @@ void sim_input(int c) { tty_input(&ttys[term], (u_char)c); }
 void sim_key(int c) { tty_key(&ttys[term], (u_char)c); }
 int sim_getc(void) { return tty_getc(&ttys[term]); }
 int sim_readline(char *buf, int size) { return tty_readline(&ttys[term], buf, (size_t)size); }
+/* 10/9/26 (Wi-Fi): a secret line, and whether bytes are anywhere in the terminal's input queue */
+int sim_readline_secret(char *buf, int size) { return tty_readline_secret(&ttys[term], buf, (size_t)size); }
+int sim_inq_has(const char *s) {
+    u_int n = strlen(s), i;
+    for(i = 0; i + n <= TTY_INPUT_SIZE; i++) if(!memcmp(ttys[term].inq + i, s, n)) return 1;
+    return 0;
+}
 int sim_lines(void) { return (int)LINES; }
 int sim_cols(void) { return (int)COLUMNS; }
 
