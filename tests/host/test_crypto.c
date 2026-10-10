@@ -16,6 +16,7 @@
 #include <surfos/cpu.h>
 #include <surfos/sync.h>
 #include <crypto/crypto.h>
+#include <fs/vfs.h>
 
 void exit(int status);
 
@@ -509,6 +510,103 @@ static void test_random(void) {
     check(lock_depth == 0, "the mutex is free after every call");
 }
 
+/* Real syscall implementation; unrelated DNS code is discarded by the host linker. */
+bool user_buf(const void *p, u_long len, bool write) {
+    (void)len;
+    return write && p && p != (void *)0x100000;
+}
+#include "../../kernel/websvc.c"
+
+/**** strict hardware entropy (separate from the Wi-Fi test source) ****/
+
+/* One hardware attempt, before the bounded retry loop. Mode zero uses the host CPU
+   for the pre-existing Wi-Fi tests; every strict test is deterministic. */
+static int hardware_mode, hardware_reads, hardware_fail_at, nested_entropy;
+static u8 nested_output[4];
+bool crypto_test_rdrand32(u32 *value) {
+    u8 ok;
+    if(!hardware_mode) {
+        asm volatile(".byte 0x0f, 0xc7, 0xf0; setc %1" : "=a"(*value), "=qm"(ok) : : "cc");
+        return ok;
+    }
+    hardware_reads++;
+    if((hardware_mode == 4 && hardware_reads < 10) || hardware_mode == 3 || (hardware_fail_at && hardware_reads >= hardware_fail_at)) return false;
+    *value = hardware_mode == 2 ? 0xffffffff : 0x01020300 + hardware_reads;
+    if(nested_entropy && hardware_reads == 9) {
+        nested_entropy = 0;
+        check(crypto_random_strong(nested_output, sizeof(nested_output)) == 0,
+              "strict entropy: interleaved caller succeeds");
+    }
+    return true;
+}
+static void hardware_reset(int mode) {
+    hardware_mode = mode; hardware_reads = hardware_fail_at = nested_entropy = 0;
+    cpu.has_cpuid = true; cpu.features_ecx = 1u << 30;
+}
+static void test_strong_random(void) {
+    u8 out[257], before[257], wifi[32];
+    int i, calls;
+    memset(before, 0x5a, sizeof(before));
+    memcpy(out, before, sizeof(out));
+    hardware_reset(1); cpu.has_cpuid = false;
+    check(crypto_random_strong(out, 32) == -ENOSYS && hardware_reads == 0 &&
+          !memcmp(out, before, sizeof(out)), "strict entropy: no CPUID, no read or output");
+    cpu.has_cpuid = true; cpu.features_ecx = 0;
+    check(crypto_random_strong(out, 32) == -ENOSYS && hardware_reads == 0,
+          "strict entropy: absent RDRAND, no timer fallback");
+    check(crypto_random_strong(NULL, 0) == 0 && hardware_reads == 0,
+          "strict entropy: zero length succeeds without hardware or pointer");
+    check(crypto_random_strong(out, 257) == -EINVAL && hardware_reads == 0,
+          "strict entropy: 257 bytes rejected before hardware");
+    check(crypto_random_strong(NULL, 1) == -EFAULT && hardware_reads == 0,
+          "strict entropy: NULL with nonzero length rejected");
+    hardware_reset(2);
+    check(crypto_random_strong(out, 32) == -EIO && hardware_reads == 8 &&
+          !memcmp(out, before, sizeof(out)), "strict entropy: repeated startup values rejected");
+    hardware_reset(3);
+    check(crypto_random_strong(out, 32) == -EIO && hardware_reads == 10 &&
+          !memcmp(out, before, sizeof(out)), "strict entropy: exactly ten unsuccessful attempts");
+    hardware_reset(4);
+    check(crypto_random_strong(out, 4) == 0 && hardware_reads == 18,
+          "strict entropy: tenth hardware attempt can succeed");
+    memcpy(out, before, sizeof(out));
+    hardware_reset(1); hardware_fail_at = 11;
+    check(crypto_random_strong(out, 32) == -EIO && hardware_reads == 20 &&
+          !memcmp(out, before, sizeof(out)), "strict entropy: failure after partial fill publishes nothing");
+    hardware_reset(1);
+    check(crypto_random_strong(out, 256) == 0 && hardware_reads == 72 && out[256] == before[256],
+          "strict entropy: 256 bytes succeed without overrunning output");
+    for(i = 0; i < 256; i++)
+        if(out[i] != (u8)((0x01020309 + i / 4) >> ((i % 4) * 8))) break;
+    check(i == 256, "strict entropy: output consists only of hardware words");
+    for(i = 1; i <= 5; i += 2) {
+        hardware_reset(1); memcpy(out, before, sizeof(out));
+        check(crypto_random_strong(out, i) == 0 && out[i] == before[i] && out[0] == 9,
+              "strict entropy: final partial word respects byte length");
+    }
+    hardware_reset(1); nested_entropy = 1;
+    check(crypto_random_strong(out, 4) == 0 && memcmp(out, nested_output, 4),
+          "strict entropy: interleaved callers keep independent temporary buffers");
+    crypto_random_source(fixed_source); source_calls = 0;
+    crypto_random(wifi, sizeof(wifi)); calls = source_calls;
+    hardware_reset(1);
+    check(crypto_random_strong(out, 4) == 0 && source_calls == (u_int)calls,
+          "strict entropy: Wi-Fi replacement source is never consulted");
+    crypto_random(wifi, sizeof(wifi));
+    check(source_calls == (u_int)calls + 1, "strict entropy: Wi-Fi state remains independent");
+    hardware_reset(1);
+    check(sys_getentropy(NULL, 0) == 0 && sys_getentropy(out, 257) == -EINVAL &&
+          sys_getentropy((void *)0x100000, 1) == -EFAULT && hardware_reads == 0,
+          "entropy syscall: length and pointer checks precede hardware");
+    memcpy(out, before, sizeof(out)); hardware_fail_at = 11;
+    check(sys_getentropy(out, 32) == -EIO && !memcmp(out, before, sizeof(out)),
+          "entropy syscall: partial hardware failure preserves user output");
+    hardware_reset(1);
+    check(sys_getentropy(out, 256) == 0 && out[256] == before[256],
+          "entropy syscall: bounded success");
+    hardware_mode = 0;
+}
+
 /**** compare and wipe ****/
 
 static void test_util(void) {
@@ -537,6 +635,7 @@ int main(void) {
     test_wrap();
     test_drbg();
     test_random();
+    test_strong_random();
     test_util();
     printf("CRYPTO UNIT TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
     exit(failures ? 1 : 0);

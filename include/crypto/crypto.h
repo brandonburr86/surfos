@@ -80,6 +80,10 @@ int aes_unwrap(const u8 kek[16], const u8 *wrapped, size_t wrapped_len, u8 *plai
    from the entropy source, and the generator is reseeded from it every 16 calls. */
 void crypto_random(void *buf, size_t len);
 
+/* Strict hardware entropy for TLS: 0 or -errno; at most 256 bytes, output unchanged
+   on failure. Zero length succeeds. Never uses the Wi-Fi generator or timer entropy. */
+int crypto_random_strong(void *buf, size_t len);
+
 /* (10/9/26) where crypto_random() takes its seeds: the source fills buf with len bytes. The
    kernel's own reads RDRAND when CPUID.01H:ECX bit 30 says the CPU has it (ten tries a read, as
    Intel advises), the TSC after each read, and the tick count. crypto_random_source(fn) puts

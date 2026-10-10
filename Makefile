@@ -440,6 +440,9 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 # declarations, hence -fgnu89-inline. `make unittest` runs these first.
 CRYPTO_HOST_OBJ = $(patsubst %.c,$(BUILD)/host/kernel/%.o,$(wildcard lib/crypto/*.c))
 $(CRYPTO_HOST_OBJ) $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -fgnu89-inline
+# Only the host random object can replace individual hardware attempts.
+$(BUILD)/host/kernel/lib/crypto/random.o: HOSTKERN_FLAGS += -DCRYPTO_RANDOM_TEST
+$(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -ffunction-sections -Wl,--gc-sections
 $(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
@@ -486,7 +489,7 @@ help:
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
 $(BUILD)/host/test_dns: tests/host/test_dns.c $(BUILD)/host/kernel/net/dns_wire.o $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline tests/host/test_dns.c $(filter %.o,$^) -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline -ffunction-sections -Wl,--gc-sections tests/host/test_dns.c $(filter %.o,$^) -o $@
 
 $(BUILD)/host/test_dns: net/dns.c kernel/websvc.c
 
@@ -494,3 +497,9 @@ test-dns: $(BUILD)/host/test_dns
 	$(BUILD)/host/test_dns
 unittest: test-dns
 .PHONY: test-dns
+
+# Strict entropy checks retain QEMU's default CPU for the unsupported baseline;
+# tools/qemu-run.py selects RDRAND explicitly only in the positive child guest.
+test-entropy: $(KERNEL) $(INITRD)
+	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --entropy-test
+.PHONY: test-entropy

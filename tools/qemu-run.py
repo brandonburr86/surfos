@@ -238,6 +238,8 @@ SMOKE = [
     # interface; an echo server the host reaches through the forwarded port 23, and a megabyte the host reads slowly;
     # an HTTP GET from the harness's server; a refused connection, and one to an address that does not answer ARP;
     # the calls' errors and limits; a kill and Ctrl+C while accept() waits. Port 23 is free again at the end.
+    ('nettest entropy unsupported', ['ENTROPY PASS']),
+    ('@entropy-supported', []),
     ('nettest resolve 192.0.2.1', ['resolve 192.0.2.1: 192.0.2.1']),
     ('@dns-bounded', []),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
@@ -2156,6 +2158,42 @@ def dns_bounded_check(q):
 
 
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
+def entropy_supported_check(q):
+    """Positive entropy CPU is explicit and isolated from the default baseline.
+    Two user processes request entropy while a third joins the simulated WPA2 AP.
+    """
+    guest = None
+    try:
+        kernel = q.cmd[q.cmd.index('-kernel') + 1]
+        initrd = os.path.join(q.workdir, q.cmd[q.cmd.index('-initrd') + 1].split(',')[0])
+        guest = Qemu(kernel, q.cmd[0], '128', ['-cpu', 'max,+rdrand'],
+                     initrd=initrd, append='wlansim')
+        ok = guest.expect(PROMPT, 30)
+        guest.send('wifi up\n')
+        ok = guest.expect('wlan0: up, not associated', 10) and guest.expect(PROMPT, 10) and ok
+        start = len(guest.transcript)
+        guest.send('nettest entropy supported &\n')
+        ok = guest.expect('entropy workers running', 15) and ok
+        guest.send('wifi join SurfSimWPA\n')
+        ok = guest.expect('Password for SurfSimWPA: ', 15) and ok
+        guest.send(WLANSIM_PASSPHRASE + '\n')
+        ok = guest.expect('joined SurfSimWPA', 30) and ok
+        if b'ENTROPY PASS' not in guest.transcript[start:]:
+            ok = guest.expect('ENTROPY PASS', 20) and ok
+        guest.pump(0.5)
+        transcript = guest.transcript[start:]
+        running, joined, finished = (transcript.find(t) for t in
+                                    (b'entropy workers running', b'joining SurfSimWPA', b'ENTROPY PASS'))
+        ok = (0 <= running < joined < finished and b'ENTROPY FAIL' not in transcript
+              and not any(bad in guest.text() for bad in BAD) and guest.alive() and ok)
+        if not ok:
+            print('\n---- entropy positive CPU transcript ----\n' + guest.text())
+        return ('entropy: explicit RDRAND CPU, concurrent callers and WPA2 activity', ok)
+    finally:
+        if guest:
+            guest.close()
+
+
 def nettest_pattern(n):
     """what `nettest send` sends: "nettest 0000000\\n", "nettest 0000001\\n", ... cut to n bytes"""
     return b''.join(b'nettest %07d\n' % i for i in range((n + 15) // 16))[:n]
@@ -2254,6 +2292,7 @@ def nettest_kills_check(q):
 
 
 CONSOLE_CHECKS['@dns-bounded'] = dns_bounded_check
+CONSOLE_CHECKS['@entropy-supported'] = entropy_supported_check
 CONSOLE_CHECKS['@nettest-host'] = nettest_host_check
 CONSOLE_CHECKS['@nettest-kills'] = nettest_kills_check
 TIMEOUTS.update({'nettest connect 10.0.2.99 23': 30, 'nettest limits': 60})
@@ -2908,6 +2947,7 @@ def main():
                     help='a blank module of this many MB after the initrd: a scratch ramdisk (rd1) for fdisk/mkfs')
     ap.add_argument('--boot-timeout', type=float, default=20)
     mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--entropy-test', action='store_true', help='strict entropy on default and RDRAND CPUs')
     mode.add_argument('--test', action='store_true', help='smoke test over the serial console')
     mode.add_argument('--shell', nargs='+', metavar='CMD', help='run shell commands over serial')
     mode.add_argument('--screen', action='store_true', help='dump the VGA text screen')
@@ -2951,6 +2991,16 @@ def main():
             shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
 
     try:
+        if a.entropy_test:
+            baseline = q.expect(PROMPT, a.boot_timeout)
+            q.send('nettest entropy unsupported\n')
+            baseline = q.expect('ENTROPY PASS', 15) and q.expect(PROMPT, 10) and baseline
+            results = [('entropy: default CPU fails closed', baseline), entropy_supported_check(q)]
+            for name, ok in results:
+                print(('PASS ' if ok else 'FAIL ') + name)
+            if not baseline:
+                print(q.text())
+            return int(not all(ok for _, ok in results))
         if a.test:
             results = run_smoke(q, a.boot_timeout, reboot)
             for name, ok in results:

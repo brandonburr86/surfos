@@ -484,6 +484,7 @@ static u_long *syscall_trap(struct trapframe *tf) {
     case SYS_spawnpty: r = sys_spawnpty((const char *)a, (char *const *)b, (int)c); break;
     case SYS_ptyctl:   r = sys_ptyctl((int)a, (int)b, c); break;
     case SYS_procinfo: r = sys_procinfo((int)a, (struct procinfo *)b); break;
+    case SYS_getentropy: r = sys_getentropy((void *)a, (size_t)b); break;
     case SYS_resolve:  r = sys_resolve((const char *)a, (u32 *)b); break;
     case SYS_detach:   r = sys_detach(); break;
     case SYS_kcmdinfo: r = sys_kcmdinfo((int)a, (struct kcmd_info *)b); break;

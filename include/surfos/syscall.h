@@ -66,7 +66,8 @@ server (surfos/sock.h, poll.h, pty.h, proc.h).
 #define SYS_procinfo 42  /* (int index, struct procinfo *pi): 0, -ENOENT after the last (surfos/proc.h) */
 #define SYS_detach   43  /* (): init becomes the caller's parent */
 #define SYS_resolve  44  /* (const char *host, u32 *ip): IPv4 in network byte order */
-#define NR_SYSCALLS 45
+#define SYS_getentropy 45 /* (void *buf, u32 len): strict hardware bytes, maximum 256 */
+#define NR_SYSCALLS 46
 
 #define SPAWN_MAX_ARGS 32
 

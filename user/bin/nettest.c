@@ -399,6 +399,57 @@ static int resolve(const char *host) {
     return 0;
 }
 
+/**** strict entropy, from user mode (10/10/26) ****/
+
+static int entropy_worker(void) {
+    unsigned char bytes[256], previous[256];
+    int i;
+    memset(previous, 0, sizeof(previous));
+    for(i = 0; i < 128; i++) {
+        if(getentropy(bytes, sizeof(bytes)) || !memcmp(bytes, previous, sizeof(bytes))) return 1;
+        memcpy(previous, bytes, sizeof(previous));
+        msleep(20);                 /* let other callers and Wi-Fi tasks run */
+    }
+    return 0;
+}
+
+/* expected: -1 accepts either real hardware or ENOSYS, 0/1 asserts that CPU profile. */
+static int entropy(int expected) {
+    unsigned char bytes[257], before[257], second[256];
+    char *child[] = { "nettest", "entropy-worker", NULL };
+    int r, why, pids[2], status, i;
+    memset(before, 0x5a, sizeof(before)); memcpy(bytes, before, sizeof(bytes));
+    check(getentropy(NULL, 0) == 0, "entropy zero length");
+    check(getentropy(bytes, 257) == -1 && errno == EINVAL && !memcmp(bytes, before, sizeof(bytes)),
+          "entropy 257 bytes: EINVAL, output unchanged");
+    check(getentropy(NULL, 1) == -1 && errno == EFAULT, "entropy NULL: EFAULT");
+    check(getentropy((void *)KERNEL_ADDR, 32) == -1 && errno == EFAULT, "entropy kernel pointer: EFAULT");
+    check(getentropy((void *)0x60000000, 32) == -1 && errno == EFAULT, "entropy unmapped pointer: EFAULT");
+    check(getentropy((void *)0xfffffff0, 32) == -1 && errno == EFAULT, "entropy pointer wrap: EFAULT");
+    check(getentropy((void *)0x7ffffff0, 32) == -1 && errno == EFAULT, "entropy crosses user limit: EFAULT");
+    r = getentropy(bytes, 256); why = errno;
+    if(r == 0) {
+        check(expected != 0 && bytes[256] == before[256] && memcmp(bytes, before, 256),
+              "entropy supported CPU: 256 bytes, bounded output");
+        check(getentropy(second, sizeof(second)) == 0 && memcmp(bytes, second, sizeof(second)),
+              "entropy successive requests differ");
+        pids[0] = spawn("/initrd/bin/nettest", child);
+        pids[1] = spawn("/initrd/bin/nettest", child);
+        puts("entropy workers running"); fflush(stdout);
+        for(i = 0; i < 2; i++) {
+            status = -1;
+            check(pids[i] > 0 && waitpid(pids[i], &status, 0) == pids[i] && status == 0,
+                  "entropy concurrent worker completed");
+        }
+    } else {
+        check(expected != 1 && why == ENOSYS && !memcmp(bytes, before, sizeof(bytes)),
+              "entropy unsupported CPU: ENOSYS, output unchanged");
+    }
+    printf("%d entropy checks, %d failed\n", checks, failures);
+    puts(failures ? "ENTROPY FAIL" : "ENTROPY PASS");
+    return failures ? 1 : 0;
+}
+
 /**** limits ****/
 
 /* listening sockets on ports from first on, until a listen fails: how many, and why it failed (errno) */
@@ -489,6 +540,13 @@ static int limits(void) {
 
 int main(int argc, char **argv) {
     unsigned int ip;
+    if(argc == 2 && !strcmp(argv[1], "entropy-worker")) return entropy_worker();
+    if((argc == 2 || argc == 3) && !strcmp(argv[1], "entropy")) {
+        if(argc == 2) return entropy(-1);
+        if(!strcmp(argv[2], "supported")) return entropy(1);
+        if(!strcmp(argv[2], "unsupported")) return entropy(0);
+        return 2;
+    }
     if(argc == 3 && !strcmp(argv[1], "resolve")) return resolve(argv[2]);
     if((argc == 3 || argc == 4) && !strcmp(argv[1], "echo")) return echo(atoi(argv[2]), argc == 4 ? atoi(argv[3]) : 1);
     if(argc == 4 && !strcmp(argv[1], "send")) return send_bytes(atoi(argv[2]), atol(argv[3]));
@@ -510,6 +568,7 @@ int main(int argc, char **argv) {
                     "       nettest get <ip> <port> <path>\n"
                     "       nettest info\n"
                     "       nettest resolve <host>\n"
+                    "       nettest entropy [supported|unsupported]\n"
                     "       nettest connect <ip> <port>\n"
                     "       nettest refuse <ip> <port>\n"
                     "       nettest limits\n"
