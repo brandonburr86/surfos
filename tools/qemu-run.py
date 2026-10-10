@@ -2594,6 +2594,12 @@ def initrd_with(src, dst, name, data):
         new.addfile(info, io.BytesIO(data))
 
 
+def fill_ports(line, ports):
+    """10/10/26 (review nit): {name} for a forwarded port (http, telnet, ...) becomes its number; any other brace stays
+    as typed (str.format() took every brace for a field of its own: a line with one failed, or lost it)"""
+    return re.sub(r'\{(\w+)\}', lambda m: str(ports[m.group(1)]) if m.group(1) in ports else m.group(0), line)
+
+
 def boot_step(reboot, entry, timeout):
     """10/6/26: an '@boot' step of SMOKE: a boot of its own (reboot(words) starts it), the strings that must appear,
     lines typed then with what must follow them (and the prompt, unless that is what they end with), and strings
@@ -2611,8 +2617,8 @@ def boot_step(reboot, entry, timeout):
             if exp is CHECK:                                 # 10/9/26: a check of its own (BOOT_CHECKS)
                 ok = BOOT_CHECKS[line](q2) and ok
                 continue
-            if isinstance(line, str) and q2.ports and '{' in line:
-                line = line.format(**q2.ports)               # 10/9/26: a boot with the network (@boot ... net)
+            if isinstance(line, str) and q2.ports:
+                line = fill_ports(line, q2.ports)            # 10/9/26: a boot with the network (@boot ... net)
             if callable(line):
                 line = line(q2)
             if isinstance(line, bytes):
@@ -2661,7 +2667,7 @@ def run_smoke(q, boot_timeout, reboot=None):
             if cmd == '@ctrl-c':                             # 10/6/26: the kill that waits
                 results.append(ctrl_c_check(q))
                 continue
-            cmd = cmd.format(**q.ports) if q.ports else cmd
+            cmd = fill_ports(cmd, q.ports) if q.ports else cmd
             limit = TIMEOUTS.get(cmd, TIMEOUTS.get(cmd.split()[0], 10))
             for attempt in (1, 2):
                 start = len(q.transcript)
