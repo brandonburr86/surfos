@@ -88,6 +88,14 @@ struct iwl_softc {
     u32 mac_sku_flags, tx_chains, rx_chains;
     bool lar_enabled;
     u_long rx_packets, rx_notifs_other;
+
+    /* step 4: configuration and scanning (iwl_mac.c) */
+    u32 chan_flags[IWL_NUM_NVM_CHANNELS];       /* the NVM's, then the regulatory domain's */
+    char mcc[3];                                /* the regulatory domain's country code */
+    bool ltr_enabled;                           /* the platform enabled LTR on the PCI Express link */
+    volatile bool scanning;
+    u32 scan_uid;
+    u_long scan_frames, rx_bad, rx_protected;
 };
 
 /* registers */
@@ -117,5 +125,12 @@ int iwl_wait_init_complete(struct iwl_softc *sc, u_int ms);
 void iwl_dump_error(struct iwl_softc *sc);                      /* the firmware's error logs, once */
 u_int iwl_cmd_version(struct iwl_softc *sc, u8 group, u8 cmd);
 u_int iwl_notif_version(struct iwl_softc *sc, u8 group, u8 cmd);
+
+/* iwl_mac.c */
+int iwl_mac_config(struct iwl_softc *sc);                       /* the rest of iwx_init_hw() */
+int iwl_mac_scan_begin(struct iwl_softc *sc, const struct wlan_scan_req *req);
+void iwl_mac_scan_abort(struct iwl_softc *sc);
+void iwl_mac_scan_done(struct iwl_softc *sc, u_int status);     /* SCAN_COMPLETE_UMAC and the like */
+void iwl_mac_rx_mpdu(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen);
 
 #endif

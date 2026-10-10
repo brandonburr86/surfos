@@ -364,4 +364,266 @@ struct iwl_umac_error_table {
 };
 #define IWL_ERROR_TABLE_MIN     0x400000    /* a smaller address is not one */
 
+/**** step 4: the firmware's configuration and scanning (driver/wifi/iwl_mac.c) ****/
+
+/* more command and notification ids (group << 8 | opcode; a legacy group 0 command goes out in
+   the long group: firmware API 50 and later refuses group 0) */
+#define IWL_PHY_OPS_GROUP           0x4
+#define IWL_SOC_CONFIGURATION_CMD   0x01        /* the system group's */
+#define IWL_TEMP_REPORTING_THRESHOLDS_CMD 0x04  /* the PHY operations group's */
+#define IWL_CT_KILL_NOTIFICATION    0xfe
+#define IWL_SCAN_CFG_CMD            0x0c        /* the long group's */
+#define IWL_SCAN_REQ_UMAC           0x0d
+#define IWL_SCAN_ABORT_UMAC         0x0e
+#define IWL_SCAN_COMPLETE_UMAC      0x0f
+#define IWL_SCAN_ITERATION_COMPLETE_UMAC 0xb5
+#define IWL_POWER_TABLE_CMD         0x77
+#define IWL_TX_ANT_CONFIGURATION_CMD 0x98
+#define IWL_BT_CONFIG               0x9b
+#define IWL_REPLY_RX_PHY_CMD        0xc0
+#define IWL_REPLY_RX_MPDU_CMD       0xc1
+#define IWL_MCC_UPDATE_CMD          0xc8
+#define IWL_MCC_CHUB_UPDATE_CMD     0xc9
+#define IWL_REPLY_BEACON_FILTERING_CMD 0xd2
+#define IWL_LTR_CONFIG              0xee
+
+/* API and capability bits used (if_iwxreg.h IWX_UCODE_TLV_API_*, _CAPA_*) */
+#define IWL_API_WIFI_MCC_UPDATE     9
+#define IWL_API_REDUCED_SCAN_CONFIG 56
+#define IWL_API_SCAN_EXT_CHAN_VER   58
+#define IWL_CAPA_DS_PARAM_SET_IE_SUPPORT 9
+#define IWL_CAPA_LAR_MULTI_MCC      29
+#define IWL_CAPA_CT_KILL_BY_FW      74
+#define IWL_CAPA_MCC_UPDATE_11AX_SUPPORT 89
+
+/* the firmware's PHY_SKU: valid antennas (if_iwxreg.h IWX_FW_PHY_CFG_TX_CHAIN, _RX_CHAIN) */
+#define IWL_FW_PHY_CFG_TX_CHAIN(v)  (((v) >> 16) & 0xf)
+#define IWL_FW_PHY_CFG_RX_CHAIN(v)  (((v) >> 20) & 0xf)
+
+struct iwl_tx_ant_cfg_cmd { u32 valid; } __attribute__((packed));
+#define IWL_BT_COEX_WIFI            0x3
+struct iwl_bt_coex_cmd { u32 mode; u32 enabled_modules; } __attribute__((packed));
+/* SOC_CONFIGURATION_CMD version 2: the platform's power stabilization (this card: an LTR delay of
+   1820 us and a crystal latency of 1820 us, as Linux's iwl_qu_medium_latency_mac_cfg has it for
+   8086:34f0; the delay's code goes in bits 3-2, as Linux encodes it) */
+#define IWL_SOC_FLAGS_LTR_APPLY_DELAY_1820  3
+#define IWL_SOC_FLAGS_LTR_APPLY_DELAY_SHIFT 2
+#define IWL_SOC_XTAL_LATENCY_34F0           1820
+struct iwl_soc_configuration_cmd { u32 flags; u32 latency; } __attribute__((packed));
+#define IWL_LTR_CFG_FLAG_FEATURE_ENABLE 0x00000001
+struct iwl_ltr_config_cmd {
+    u32 flags, static_long, static_short, ltr_cfg_values[4], ltr_short_idle_timeout;
+} __attribute__((packed));
+struct iwl_temp_report_ths_cmd { u32 num_temps; u16 thresholds[8]; } __attribute__((packed));
+struct iwl_device_power_cmd { u16 flags; u16 reserved; } __attribute__((packed));   /* 0: no power saving */
+struct iwl_beacon_filter_cmd { u32 words[15]; } __attribute__((packed));            /* all 0: filtering off */
+
+/* MCC_UPDATE_CMD: the regulatory domain ("ZZ": the NVM's own); its response (layout 4) lists the
+   flags of every channel the card knows */
+#define IWL_MCC_SOURCE_OLD_FW       0
+#define IWL_MCC_SOURCE_GET_CURRENT  0x10
+struct iwl_mcc_update_cmd {
+    u16 mcc;
+    u8 source_id;
+    u8 reserved;
+    u32 key;
+    u32 reserved2[5];
+} __attribute__((packed));
+struct iwl_mcc_update_resp {
+    u32 status;
+    u16 mcc;
+    u16 cap;
+    u16 time;
+    u16 geo_info;
+    u8 source_id;
+    u8 reserved[3];
+    u32 n_channels;
+    u32 channels[];                 /* the NVM's channel flags, below */
+} __attribute__((packed));
+
+/* the card's channels: the order of the NVM's and MCC's channel lists (if_iwx.c iwx_nvm_channels_8000) */
+#define IWL_NUM_2GHZ_CHANNELS       14
+#define IWL_NUM_5GHZ_CHANNELS       37
+#define IWL_NUM_NVM_CHANNELS        (IWL_NUM_2GHZ_CHANNELS + IWL_NUM_5GHZ_CHANNELS)
+#define IWL_NVM_CHANNEL_VALID       (1u << 0)
+#define IWL_NVM_CHANNEL_ACTIVE      (1u << 3)   /* active scanning (probes) allowed */
+#define IWL_NVM_CHANNEL_RADAR       (1u << 4)
+#define IWL_NVM_CHANNEL_INDOOR_ONLY (1u << 5)
+#define IWL_NVM_CHANNEL_DFS         (1u << 7)
+#define IWL_NVM_CHANNEL_40MHZ       (1u << 9)
+#define IWL_NVM_CHANNEL_80MHZ       (1u << 10)
+
+/* SCAN_CFG_CMD, the reduced one (version 5: no broadcast station) */
+struct iwl_scan_config {
+    u8 enable_cam_mode;
+    u8 enable_promiscuous_mode;
+    u8 bcast_sta_id;
+    u8 reserved;
+    u32 tx_chains;
+    u32 rx_chains;
+} __attribute__((packed));
+
+/* SCAN_REQ_UMAC versions 14 and 15 (if_iwxreg.h struct iwx_scan_req_umac_v14; version 15's general
+   parameters, version 11, have the same layout as version 10's) */
+#define IWL_SCAN_TWO_LMACS          2
+#define IWL_SCAN_LB_LMAC_IDX        0           /* 2.4 GHz */
+#define IWL_SCAN_HB_LMAC_IDX        1           /* 5 GHz */
+#define IWL_SCAN_PRIORITY_EXT_6     6
+#define IWL_PHY_BAND_5              0
+#define IWL_PHY_BAND_24             1
+#define IWL_UMAC_SCAN_GEN_FLAGS_V2_PASS_ALL           (1u << 1)
+#define IWL_UMAC_SCAN_GEN_FLAGS_V2_NTFY_ITER_COMPLETE (1u << 2)
+#define IWL_UMAC_SCAN_GEN_FLAGS_V2_ADAPTIVE_DWELL     (1u << 7)
+#define IWL_UMAC_SCAN_GEN_FLAGS_V2_FORCE_PASSIVE      (1u << 11)
+#define IWL_SCAN_CHANNEL_FLAG_ENABLE_CHAN_ORDER       (1u << 5)
+#define IWL_SCAN_DWELL_ACTIVE       10
+#define IWL_SCAN_DWELL_PASSIVE      110
+#define IWL_SCAN_ADWELL_MAX_BUDGET_FULL_SCAN     300
+#define IWL_SCAN_ADWELL_MAX_BUDGET_DIRECTED_SCAN 100
+#define IWL_SCAN_ADWELL_DEFAULT_HB_N_APS         8
+#define IWL_SCAN_ADWELL_DEFAULT_LB_N_APS         2
+#define IWL_SCAN_ADWELL_DEFAULT_N_APS_SOCIAL     10
+#define IWL_SCAN_ADWELL_N_APS_GO_FRIENDLY        10
+#define IWL_SCAN_ADWELL_N_APS_SOCIAL_CHS         2
+#define IWL_SCAN_MAX_CHANNELS       67
+#define IWL_PROBE_OPTION_MAX        20
+#define IWL_SCAN_OFFLOAD_PROBE_REQ_SIZE 512
+
+struct iwl_scan_general_params_v10 {
+    u16 flags;
+    u8 reserved;
+    u8 scan_start_mac_id;
+    u8 active_dwell[IWL_SCAN_TWO_LMACS];
+    u8 adwell_default_2g;
+    u8 adwell_default_5g;
+    u8 adwell_default_social_chn;
+    u8 reserved1;
+    u16 adwell_max_budget;
+    u32 max_out_of_time[IWL_SCAN_TWO_LMACS];
+    u32 suspend_time[IWL_SCAN_TWO_LMACS];
+    u32 scan_priority;
+    u8 passive_dwell[IWL_SCAN_TWO_LMACS];
+    u8 num_of_fragments[IWL_SCAN_TWO_LMACS];
+} __attribute__((packed));
+
+struct iwl_scan_channel_cfg_umac {
+    u32 flags;                      /* bits 0-19: the direct SSIDs probed on it */
+    u8 channel_num;                 /* version 2 of the layout (API SCAN_EXT_CHAN_VER): with the band */
+    u8 band;
+    u8 iter_count;
+    u8 iter_interval;
+} __attribute__((packed));
+
+struct iwl_scan_channel_params_v6 {
+    u8 flags;
+    u8 count;
+    u8 n_aps_override[2];
+    struct iwl_scan_channel_cfg_umac channel_config[IWL_SCAN_MAX_CHANNELS];
+} __attribute__((packed));
+
+struct iwl_scan_umac_schedule {
+    u16 interval;
+    u8 iter_count;
+    u8 reserved;
+} __attribute__((packed));
+
+struct iwl_scan_periodic_parms_v1 {
+    struct iwl_scan_umac_schedule schedule[2];
+    u16 delay;
+    u16 reserved;
+} __attribute__((packed));
+
+struct iwl_scan_probe_segment {
+    u16 offset;
+    u16 len;
+} __attribute__((packed));
+
+struct iwl_scan_probe_req {         /* the probe request the firmware sends, in pieces */
+    struct iwl_scan_probe_segment mac_header;
+    struct iwl_scan_probe_segment band_data[3];
+    struct iwl_scan_probe_segment common_data;
+    u8 buf[IWL_SCAN_OFFLOAD_PROBE_REQ_SIZE];
+} __attribute__((packed));
+
+struct iwl_ssid_ie {
+    u8 id;
+    u8 len;
+    u8 ssid[32];
+} __attribute__((packed));
+
+struct iwl_scan_probe_params_v4 {
+    struct iwl_scan_probe_req preq;
+    u8 short_ssid_num;
+    u8 bssid_num;
+    u16 reserved;
+    struct iwl_ssid_ie direct_scan[IWL_PROBE_OPTION_MAX];
+    u32 short_ssid[8];
+    u8 bssid_array[16][6];
+} __attribute__((packed));
+
+struct iwl_scan_req_umac_v14 {
+    u32 uid;
+    u32 ooc_priority;
+    struct iwl_scan_general_params_v10 general_params;
+    struct iwl_scan_channel_params_v6 channel_params;
+    struct iwl_scan_periodic_parms_v1 periodic_params;
+    struct iwl_scan_probe_params_v4 probe_params;
+} __attribute__((packed));
+
+struct iwl_umac_scan_abort { u32 uid; u32 flags; } __attribute__((packed));
+struct iwl_umac_scan_complete {
+    u32 uid;
+    u8 last_schedule;
+    u8 last_iter;
+    u8 status;
+    u8 ebs_status;
+    u32 time_from_last_iter;
+    u32 reserved;
+} __attribute__((packed));
+struct iwl_umac_scan_iter_complete {
+    u32 uid;
+    u8 scanned_channels;
+    u8 status;
+    u8 bt_status;
+    u8 last_channel;
+    u32 tsf_low;
+    u32 tsf_high;
+} __attribute__((packed));
+
+/* a received frame's descriptor (if_iwxreg.h struct iwx_rx_mpdu_desc with its version 1 tail, the
+   22000 family's: IWX_RX_DESC_SIZE_V1, 48 bytes); the frame follows it */
+#define IWL_RX_MPDU_RES_STATUS_CRC_OK       (1u << 0)
+#define IWL_RX_MPDU_RES_STATUS_OVERRUN_OK   (1u << 1)
+#define IWL_RX_MPDU_RES_STATUS_SEC_ENC_MSK  (7u << 8)
+#define IWL_RX_MPDU_RES_STATUS_SEC_NO_ENC   (0u << 8)
+#define IWL_RX_MPDU_RES_STATUS_SEC_CCM_ENC  (2u << 8)
+#define IWL_RX_MPDU_RES_STATUS_DEC_DONE     (1u << 11)
+#define IWL_RX_MPDU_RES_STATUS_MIC_OK       (1u << 6)
+#define IWL_RX_MPDU_MFLG2_PAD               0x20    /* 2 bytes of padding after the 802.11 header */
+#define IWL_RX_MPDU_MFLG2_AMSDU             0x40
+struct iwl_rx_mpdu_desc {
+    u16 mpdu_len;
+    u8 mac_flags1;
+    u8 mac_flags2;
+    u8 amsdu_info;
+    u16 phy_info;
+    u8 mac_phy_idx;
+    u16 raw_csum;
+    u16 l3l4_flags;
+    u32 status;
+    u32 reorder_data;
+    u32 rss_hash;                   /* version 1 */
+    u32 filter_match;
+    u32 rate_n_flags;
+    u8 energy_a;                    /* -dBm, 0 when nothing */
+    u8 energy_b;
+    u8 channel;
+    u8 mac_context;
+    u32 gp2_on_air_rise;
+    u32 tsf_on_air_rise0;
+    u32 tsf_on_air_rise1;
+} __attribute__((packed));
+typedef char iwl_rx_mpdu_desc_is_48_bytes[sizeof(struct iwl_rx_mpdu_desc) == 48 ? 1 : -1];
+typedef char iwl_scan_req_umac_v14_size[sizeof(struct iwl_scan_req_umac_v14) == 1940 ? 1 : -1];
+
 #endif

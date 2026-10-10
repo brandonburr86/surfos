@@ -509,7 +509,8 @@ latency than the 10 ms poll), a USB HID keyboard on the same stack, AHCI or NVMe
 internal disk (identify the controller first; the block layer refuses to format internal
 disks, and that rule stays), and the actual Wi-Fi chip (tabled by the owner on
 2026-10-06, started 2026-10-09: `docs/superpowers/plans/2026-10-09-wifi.md`; the Intel 9560
-loads its firmware and comes up as wlan0 on the laptop since 2026-10-10, milestone W1;
+loads its firmware and comes up as wlan0 on the laptop since 2026-10-10, milestone W1, and
+`wifi scan` lists the networks in range, W2;
 `docs/WIFI-PLANNING.md` and `wifiinfo` gathered what it needed).
 
 The six earlier milestones are done. What remains there is polish and the items the catalog left open:

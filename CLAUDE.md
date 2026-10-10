@@ -87,8 +87,9 @@ lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
            laptop's Intel 9560 (profile=laptop only; registers in include/sys/iwl_reg.h): PCI, power, wlan ops;
-           iwl_trans.c: its firmware transport (context info, receive and command queues, polled); iwl_priv.h
-           what the two share; growing step by step (docs/superpowers/plans/2026-10-09-wifi.md)
+           iwl_trans.c: its firmware transport (context info, receive and command queues, polled); iwl_mac.c:
+           the firmware's configuration, scans and received frames; iwl_priv.h what they share; growing step
+           by step (docs/superpowers/plans/2026-10-09-wifi.md)
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS

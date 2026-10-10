@@ -474,6 +474,14 @@ static int init_firmware(struct iwl_softc *sc) {
         return r;
     }
     h = (const struct iwl_nvm_get_info_head *)rsp;
+    {                                           /* the channels' flags (iwx_init_channel_map()) */
+        u_int i;
+        const u8 *prof = rsp + sizeof(*h) + (want == IWL_NVM_INFO_RSP_LEN_V4 ? 4 : 0);
+        for(i = 0; i < IWL_NUM_NVM_CHANNELS; i++)
+            sc->chan_flags[i] = want == IWL_NVM_INFO_RSP_LEN_V4 ?
+                (u32)(prof[i * 4] | (prof[i * 4 + 1] << 8) | (prof[i * 4 + 2] << 16) | ((u32)prof[i * 4 + 3] << 24)) :
+                (u32)(prof[i * 2] | (prof[i * 2 + 1] << 8));
+    }
     sc->nvm_version = h->nvm_version;
     sc->mac_sku_flags = h->mac_sku_flags;
     sc->tx_chains = h->tx_chains;
@@ -548,22 +556,31 @@ static int iwl_start(struct wlan_dev *w) {
     }
     memcpy(sc->mac, mac, WLAN_ADDR_LEN);
     memcpy(w->mac, mac, WLAN_ADDR_LEN);
+    r = iwl_mac_config(sc);                     /* step 4: the rest of iwx_init_hw() */
+    if(r) return start_failed(sc, r, "the firmware's configuration failed");
     snprintf(sc->last, sizeof(sc->last), "firmware %s running", sc->fw_version);
-    kprintf("+IWL: up: firmware %s, MAC %s, %lu packets from the card so far; scanning is the next step\n",
-            sc->fw_version, macfmt(mac, m), sc->rx_packets);
+    kprintf("+IWL: up: firmware %s, MAC %s, %lu packets from the card so far\n", sc->fw_version, macfmt(mac, m),
+            sc->rx_packets);
     return 0;
 }
 
 static void iwl_stop(struct wlan_dev *w) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
+    sc->scanning = false;
     iwl_trans_stop(sc);
     stop_device(sc);
     snprintf(sc->last, sizeof(sc->last), "stopped (wifi down)");
     kprintf("+IWL: stopped\n");
 }
 
-static int iwl_scan(struct wlan_dev *w, const struct wlan_scan_req *req) { return -ENOSYS; }
-static void iwl_scan_abort(struct wlan_dev *w) { }
+static int iwl_scan(struct wlan_dev *w, const struct wlan_scan_req *req) {
+    return iwl_mac_scan_begin((struct iwl_softc *)w->priv, req);
+}
+
+static void iwl_scan_abort(struct wlan_dev *w) {
+    iwl_mac_scan_abort((struct iwl_softc *)w->priv);
+}
+
 static int iwl_join(struct wlan_dev *w, const struct wlan_bss *bss) { return -ENOSYS; }
 static int iwl_tx_mgmt(struct wlan_dev *w, const u8 *frame, u_int len) { return -ENOSYS; }
 static int iwl_associated(struct wlan_dev *w, u16 aid, const u8 *ies, u_int ies_len) { return -ENOSYS; }
@@ -574,8 +591,9 @@ static void iwl_leave(struct wlan_dev *w) { }
 static void iwl_status(struct wlan_dev *w, char *buf, size_t size) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
     if(sc->fw_state == IWL_FW_ALIVE)
-        snprintf(buf, size, "Intel 9560 (%s %c0, %s): firmware %s running, %lu packets from the card", mac_name(sc->mac_type),
-                 'A' + sc->mac_step, rf_name(sc->rf_type), sc->fw_version, sc->rx_packets);
+        snprintf(buf, size, "Intel 9560 (%s %c0, %s): firmware %s, country \"%s\", %lu packets from the card%s",
+                 mac_name(sc->mac_type), 'A' + sc->mac_step, rf_name(sc->rf_type), sc->fw_version,
+                 sc->mcc[0] ? sc->mcc : "?", sc->rx_packets, sc->scanning ? ", scanning" : "");
     else
         snprintf(buf, size, "Intel 9560 (%s %c0, %s): %s", mac_name(sc->mac_type), 'A' + sc->mac_step,
                  rf_name(sc->rf_type), sc->last[0] ? sc->last : (sc->fw_name ? sc->fw_name : "no firmware file for it"));
@@ -610,6 +628,8 @@ static int attach(struct pci_dev *pci) {
     if(!sc) return -1;
     sc->pci = pci;
     sc->pcie_cap = pci_find_capability(pci, PCI_CAP_ID_EXP);
+    if(sc->pcie_cap)                            /* iwx_apm_config(): LTR as the platform set the link */
+        sc->ltr_enabled = (pci_dev_read16(pci, sc->pcie_cap + PCI_EXP_DEVCTL2) & PCI_EXP_DEVCTL2_LTR_EN) != 0;
     /* the registers: memory decoding on (the firmware leaves it on); bus mastering waits for wifi up. The
        other drivers also clear an old card's retry timeout at 0x41; on this one 0x41 is a pointer in the
        capability list (its PCI Express capability is at 0x40), so it is left alone */

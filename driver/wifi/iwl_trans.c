@@ -351,12 +351,41 @@ static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_i
         sc->cmd_done = true;
         return;
     }
-    if(group == IWL_LEGACY_GROUP && code == IWL_ALIVE) handle_alive(sc, pkt, paylen);
-    else if(group == IWL_LEGACY_GROUP && code == IWL_INIT_COMPLETE_NOTIF) sc->init_complete = true;
-    else if(group == IWL_LEGACY_GROUP && code == IWL_REPLY_ERROR && paylen >= 5)
-        kprintf("+IWL: the firmware refused command 0x%02x (error 0x%x)\n", pkt->data[4],
-                pkt->data[0] | (pkt->data[1] << 8) | (pkt->data[2] << 16) | ((u32)pkt->data[3] << 24));
-    else sc->rx_notifs_other++;
+    if(group > IWL_LONG_GROUP) {                /* the wide groups' notifications */
+        if(group == IWL_PHY_OPS_GROUP && code == IWL_CT_KILL_NOTIFICATION)
+            kprintf("+IWL: the card is at its critical temperature (%u C)\n", paylen >= 2 ? pkt->data[0] | (pkt->data[1] << 8) : 0);
+        else sc->rx_notifs_other++;
+        return;
+    }
+    switch(code) {                              /* the legacy group's (some come in the long group too) */
+    case IWL_ALIVE:
+        handle_alive(sc, pkt, paylen);
+        break;
+    case IWL_INIT_COMPLETE_NOTIF:
+        sc->init_complete = true;
+        break;
+    case IWL_REPLY_ERROR:
+        if(paylen >= 5)
+            kprintf("+IWL: the firmware refused command 0x%02x (error 0x%x)\n", pkt->data[4],
+                    pkt->data[0] | (pkt->data[1] << 8) | (pkt->data[2] << 16) | ((u32)pkt->data[3] << 24));
+        break;
+    case IWL_REPLY_RX_MPDU_CMD:
+        iwl_mac_rx_mpdu(sc, pkt, paylen);
+        break;
+    case IWL_SCAN_COMPLETE_UMAC:
+        iwl_mac_scan_done(sc, paylen >= sizeof(struct iwl_umac_scan_complete) ?
+                          ((const struct iwl_umac_scan_complete *)pkt->data)->status : 1);
+        break;
+    case IWL_SCAN_ITERATION_COMPLETE_UMAC:
+        iwl_mac_scan_done(sc, 1);
+        break;
+    case IWL_MCC_CHUB_UPDATE_CMD:
+        if(paylen >= 2) kprintf("+IWL: the firmware reports the country \"%c%c\"\n", pkt->data[1], pkt->data[0]);
+        break;
+    default:
+        sc->rx_notifs_other++;
+        break;
+    }
 }
 
 /* the packets in one receive buffer, each 64-byte aligned (if_iwx.c iwx_rx_pkt(), iwx_rx_pkt_valid());
@@ -435,6 +464,7 @@ int iwl_cmd(struct iwl_softc *sc, u32 id, const void *data, u_int len, void *res
     int r = 0;
 
     if(sc->fw_state != IWL_FW_ALIVE) return -ENODEV;
+    if(!((id >> 8) & 0xff)) id |= IWL_LONG_GROUP << 8;     /* firmware API 50 on refuses group 0 (iwx_send_cmd()) */
     mutex_lock(&sc->cmd_lock);
     idx = cq->cur;
     if(len > sizeof(cmd->data)) {               /* larger than a slot: a buffer of its own */
