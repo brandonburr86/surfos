@@ -276,7 +276,14 @@ inline void setpos(surf_console *con) { //Sets the hardware cursor correctly for
 /* write one character cell, at (x, y) (10/6/26: the pager's question) or at the console's
    cursor, without moving the cursor */
 static void cell_at(surf_console *con, u_int x, u_int y, TEXTCOLOR color, int c) {
-    u_int off = (x + y * COLUMNS) * 2;
+    u_int off;
+    /* 10/10/26: never outside the grid. Two tasks printing on one console at once are not kept
+       apart (2004), so a cursor may be read while another writer moves it; a cell one row below
+       the last would land past the grid: on a VGA console in its own fields after memBuf (the
+       pager's task pointers: seen as a fault in console_page_call_off()), on a framebuffer in the
+       next console's grid or past the heap block they share */
+    if(x >= COLUMNS || y >= LINES) return;
+    off = (x + y * COLUMNS) * 2;
     KCRIT_ENTER
     *(con->vmem + off) = c & 0xFF;
     *(con->vmem + off + 1) = color;
@@ -383,6 +390,7 @@ static void ansi_moveto(surf_console *con, int x, int y) {
 /* cells [from, to) become blanks in the writer's colours (what ED and EL leave behind) */
 static void ansi_blank(surf_console *con, u_int from, u_int to, TEXTCOLOR attr) {
     u_int i;
+    if(to > COLUMNS * LINES) to = COLUMNS * LINES;     /* 10/10/26: inside the grid, always */
     if(from >= to) return;
     KCRIT_ENTER
     for(i = from; i < to; i++) {
@@ -770,14 +778,16 @@ static struct utf8_dec *writer_utf(void) {
 
 /* the next line, scrolling at the bottom. 10/6/26: a row starts, for the pager */
 static void newline(surf_console *con) {
+    u_int y = con->loc.y + 1;
     con->wrap = 0;
     con->loc.x = 0;
     con->page_rows++;
     con->page_fresh = 1;
-    if(++con->loc.y >= LINES) {
-        sscroll(con);
-        con->loc.y--;
+    if(y >= LINES) {                    /* 10/10/26: loc.y is never one row below the last, not even */
+        sscroll(con);                   /* between the increment and the scroll (cell_at() above) */
+        y = LINES - 1;
     }
+    con->loc.y = y;
 }
 
 /* A character at the cursor. 10/5/26: the VT100 way of wrapping. Writing the last column
@@ -861,6 +871,7 @@ static void page_show(surf_console *con) {
     }
     if(len > COLUMNS - 1) len = COLUMNS - 1;
     if(len > PAGE_ASK_MAX) len = PAGE_ASK_MAX;
+    if(y >= LINES) y = LINES - 1;       /* 10/10/26: never below the grid (cell_at()) */
     for(i = 0; i < len; i++) {
         con->page_saved[2 * i] = con->vmem[(y * COLUMNS + i) * 2];
         con->page_saved[2 * i + 1] = con->vmem[(y * COLUMNS + i) * 2 + 1];
