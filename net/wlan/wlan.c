@@ -55,6 +55,7 @@ references here, so this file links and runs before it lands; a WPA2 join is ref
 until it does. Nothing here logs a key, a PMK or a password.
 */
 
+#include <stdarg.h>
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/task.h>
@@ -1264,50 +1265,63 @@ void wlan_leave(struct wlan_dev *w) {
     wlan_leave_wait(w);
 }
 
-/* state, SSID, BSSID, channel, signal; then lines for the last failure, the driver and the counters */
+/* 10/9/26 (review L3): text after what buf holds, cut at size; snprintf() answers the length it would have
+   needed, so lengths are never added up from it */
+static void put(char *buf, size_t size, const char *fmt, ...) {
+    size_t n = strlen(buf);
+    va_list ap;
+    if(n + 1 >= size) return;
+    va_start(ap, fmt);
+    vsnprintf(buf + n, size - n, fmt, ap);
+    va_end(ap);
+}
+
+/* state, SSID, BSSID, channel, signal; then lines for the last failure, the driver and the counters.
+   10/9/26: never past size, however small (review L3); the driver's line only when its operation lock is
+   free: `wifi status` does not wait behind a firmware being loaded, nor without a way out */
 void wlan_describe(struct wlan_dev *w, char *buf, size_t size) {
     static const char *const joining[] = { "", "", "looking for", "authenticating with", "associating with",
                                            "4-way handshake with", "", "" };
     struct wlan_state *st;
     char s[WLAN_SSID_MAX + 1], m[18], drv[160];
-    int n = 0, state;
+    int state;
     if(!size) return;
     buf[0] = 0;
     if(!w || !(st = w->st)) return;
     state = st->state;
     switch(state) {
     case ST_DOWN:
-        n = snprintf(buf, size, "down (wifi up starts it)");
+        put(buf, size, "down (wifi up starts it)");
         break;
     case ST_IDLE:
-        n = snprintf(buf, size, "up, not associated%s", st->scanning ? ", scanning" : "");
+        put(buf, size, "up, not associated%s", st->scanning ? ", scanning" : "");
         break;
     case ST_UP:
-        n = snprintf(buf, size, "associated with \"%s\" (%s), channel %u, %s GHz, signal %d dBm, %s%s%s",
-                     ssid_text(st->ssid, st->ssid_len, s), macfmt(st->cur.bssid, m), st->cur.channel,
-                     st->cur.band == WLAN_BAND_5GHZ ? "5" : "2.4", st->cur.rssi, ieee80211_security_name(st->cur.security),
-                     st->cur_wmm ? ", QoS" : "", st->cur.ht ? ", HT" : "");
+        put(buf, size, "associated with \"%s\" (%s), channel %u, %s GHz, signal %d dBm, %s%s%s",
+            ssid_text(st->ssid, st->ssid_len, s), macfmt(st->cur.bssid, m), st->cur.channel,
+            st->cur.band == WLAN_BAND_5GHZ ? "5" : "2.4", st->cur.rssi, ieee80211_security_name(st->cur.security),
+            st->cur_wmm ? ", QoS" : "", st->cur.ht ? ", HT" : "");
         break;
     case ST_WAIT:
-        n = snprintf(buf, size, "link lost: joining \"%s\" again (try %u of %u)", ssid_text(st->ssid, st->ssid_len, s),
-                     st->reconnects + 1, RECONNECT_TRIES);
+        put(buf, size, "link lost: joining \"%s\" again (try %u of %u)", ssid_text(st->ssid, st->ssid_len, s),
+            st->reconnects + 1, RECONNECT_TRIES);
         break;
     default:
-        n = snprintf(buf, size, "%s \"%s\"", joining[state], ssid_text(st->ssid, st->ssid_len, s));
-        if(state > ST_SCAN) n += snprintf(buf + n, size - n, " (%s), channel %u", macfmt(st->cur.bssid, m), st->cur.channel);
+        put(buf, size, "%s \"%s\"", joining[state], ssid_text(st->ssid, st->ssid_len, s));
+        if(state > ST_SCAN) put(buf, size, " (%s), channel %u", macfmt(st->cur.bssid, m), st->cur.channel);
         break;
     }
-    if(n < 0 || (size_t)n >= size) return;
-    if(st->last[0] && state != ST_UP) n += snprintf(buf + n, size - n, "\nlast: %s", st->last);
-    if((size_t)n >= size) return;
+    if(st->last[0] && state != ST_UP) put(buf, size, "\nlast: %s", st->last);
     if(w->ops->status) {
         drv[0] = 0;
-        hw_lock(st);
-        w->ops->status(w, drv, sizeof(drv));
-        hw_unlock(st);
-        if(drv[0]) n += snprintf(buf + n, size - n, "\ndriver: %s", drv);
-        if((size_t)n >= size) return;
+        if(mutex_trylock(&st->hw_lock)) {
+            w->ops->status(w, drv, sizeof(drv));
+            hw_unlock(st);
+        } else {
+            strlcpy(drv, "busy (the chip is starting, or answering another operation)", sizeof(drv));
+        }
+        if(drv[0]) put(buf, size, "\ndriver: %s", drv);
     }
-    snprintf(buf + n, size - n, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
-             st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
+    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
+        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
 }
