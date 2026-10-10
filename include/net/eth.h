@@ -37,6 +37,7 @@ void arp_input(struct netdev *dev, struct netbuf *nb);
    (if given) now belongs to the table, to be sent when the reply arrives. */
 int arp_resolve(struct netdev *dev, ipaddr_t ip, u8 *mac, struct netbuf *park);
 void arp_announce(struct netdev *dev);                                         /* gratuitous ARP for our address */
+void arp_flush(struct netdev *dev);       /* 10/9/26: forget every entry of dev (its address went); under net_lock */
 void arp_tick(void);
 void arp_print(void);
 const struct arp_entry *arp_table(void);

@@ -35,7 +35,10 @@ disassociation from the AP, or wlan_link_lost() from the driver, takes the link 
 (the log says why) and a new join follows 3 seconds later, then after 6, 9, 12 and 15
 seconds, five tries at most; then the station gives up. wlan_leave() sends a
 deauthentication, then leave(). The PMK is kept only for those reconnects: it is wiped
-when a join fails, on leave and down, and when the tries run out.
+when a join fails, on leave and down, and when the tries run out. 10/9/26 (review M2):
+wlan0's address, gateway and DNS server, and its ARP entries, go when it leaves its
+network (leave, down, the rejoins given up, a join to another SSID); a link lost and
+joined again keeps them.
 
 Data: an Ethernet frame from the stack becomes a To DS data frame (QoS data with TID 0
 when the AP has WMM), protected once the keys are in; frames from the AP become Ethernet
@@ -58,6 +61,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
+#include <net/eth.h>
 #include <net/wlan.h>
 #include <net/wlan_cmd.h>
 #include <net/wpa.h>
@@ -459,6 +463,21 @@ static void unjoin(struct wlan_state *st, u16 reason) {
     }
 }
 
+/* 10/9/26 (review M2): wlan0's address belonged to the network it was on. When the station leaves it (wifi
+   leave, wifi down, the rejoins given up, a join to another network) the address, netmask, gateway and DNS
+   server go, with wlan0's ARP entries, under net_lock: no route keeps pointing into a network wlan0 is no
+   longer on. A link lost and joined again (the same network) keeps them: the lease is still good. */
+static void forget_address(struct wlan_state *st) {
+    struct netdev *nd = st->nd;
+    char a[16];
+    mutex_lock(&net_lock);
+    if(nd->ip) kprintf("%s: address %s forgotten (dhcp %s for one on the next network)\n", nd->name, ipfmt(nd->ip, a),
+                       nd->name);
+    nd->ip = nd->netmask = nd->gateway = nd->dns = 0;
+    arp_flush(nd);
+    mutex_unlock(&net_lock);
+}
+
 static void forget(struct wlan_state *st) {
     wipe(st->pmk, sizeof(st->pmk));
     st->has_pmk = false;
@@ -484,6 +503,7 @@ static void join_fail(struct wlan_state *st, int err, u16 reason, const char *wh
                 st->reconnects, why);
         st->state = ST_IDLE;
         forget(st);
+        forget_address(st);
         return;
     }
     kprintf("%s: joining \"%s\" again failed (try %u of %u): %s; next try in %u s\n", w->name,
@@ -874,6 +894,7 @@ static void do_down(struct wlan_state *st) {
     w->up = false;
     st->state = ST_DOWN;
     st->nd->link_up = false;
+    forget_address(st);
     list_clear(st);
     kprintf("%s: down\n", w->name);
 }
@@ -891,7 +912,10 @@ static void req_start(struct wlan_state *st) {
         req_complete(st, 0);
         break;
     case REQ_LEAVE:
-        if(w->up) leave_now(st, "wifi leave");
+        if(w->up) {
+            leave_now(st, "wifi leave");
+            forget_address(st);
+        }
         req_complete(st, 0);
         break;
     case REQ_SCAN:
@@ -905,6 +929,8 @@ static void req_start(struct wlan_state *st) {
         if(st->req_has_pmk && !wpa_available()) { req_complete(st, -ENOSYS); break; }
         if(st->state != ST_IDLE) leave_now(st, "joining another network");
         scan_abort(st);
+        if(st->ssid_len && (st->ssid_len != st->req_ssid_len || memcmp(st->ssid, st->req_ssid, st->ssid_len)))
+            forget_address(st);                         /* another network than the last one: its address is no good */
         memcpy(st->ssid, st->req_ssid, st->req_ssid_len);
         st->ssid_len = st->req_ssid_len;
         st->has_pin = st->req_has_bssid;

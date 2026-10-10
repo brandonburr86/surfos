@@ -16,7 +16,7 @@ has no Wi-Fi:
                  answers a probe for its name only; no HT, no WMM (plain data frames)
   SurfSimWEP     WEP (the privacy bit, no RSN element), channel 1
   SurfSimSAE     WPA3-Personal only (SAE, protected management frames required), channel 149
-  SurfSimFlaky   open, channel 1, WMM: 1 s after the first association it deauthenticates the
+  SurfSimFlaky   open, channel 1, WMM: 3 s after the first association it deauthenticates the
                  station; 1 s after the second its beacons stop (wlan_link_lost()) for 4 s
 
 The simulated firmware runs in a kernel thread of its own (`wlansim`), as a real driver's
@@ -599,7 +599,7 @@ static void rx_station_mgmt(struct sim *s, const u8 *f, u_int len) {
         kprintf("wlansim: %s: the station is associated%s\n", aps[ap].ssid, s->sta_wmm ? " (QoS)" : "");
         if(aps[ap].flaky) {
             s->flaky_assocs++;
-            if(s->flaky_assocs == 1) s->flaky_deauth_at = getticks() + HZ;
+            if(s->flaky_assocs == 1) s->flaky_deauth_at = getticks() + 3 * HZ;   /* time for a lease first */
             if(s->flaky_assocs == 2) s->flaky_lost_at = getticks() + HZ;
         }
         if(aps[ap].kind == AP_WPA2) auth_begin(s);

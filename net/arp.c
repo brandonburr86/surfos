@@ -8,7 +8,8 @@ request from arp_tick() a few times before giving up; entries age out
 after ten minutes. 10/6/26: giving up tells TCP (a connection being opened
 through that address fails at once: no route to host).
 10/9/26 (Wi-Fi, track S): an entry belongs to an interface (eth0 and wlan0 may both reach
-10.0.0.1): it is looked up, asked again and given up on through its own.
+10.0.0.1): it is looked up, asked again and given up on through its own. arp_flush()
+forgets one interface's entries (wlan0 left its network).
 */
 
 #include <surfos/types.h>
@@ -136,6 +137,18 @@ int arp_resolve(struct netdev *dev, ipaddr_t ip, u8 *mac, struct netbuf *park) {
         e->pending = park;
     }
     return 1;
+}
+
+/* 10/9/26: every entry of one interface goes, with the frame it parked: its address went (wlan0 left
+   the network those neighbours were on). Under net_lock. */
+void arp_flush(struct netdev *dev) {
+    int i;
+    for(i = 0; i < ARP_TABLE_SIZE; i++) {
+        struct arp_entry *e = &table[i];
+        if(!e->valid || e->dev != dev) continue;
+        if(e->pending) netbuf_free(e->pending);
+        memset(e, 0, sizeof(*e));
+    }
 }
 
 void arp_tick(void) {

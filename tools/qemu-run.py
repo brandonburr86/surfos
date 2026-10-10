@@ -431,7 +431,9 @@ SMOKE = [
     # through each, the default route eth0 (Ethernet before Wi-Fi), ARP per interface; TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
-    # for 4 s: the link goes down twice and comes back up on its own; down. The passphrases typed never show.
+    # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
+    # and coming back up on its own; leaving it forgets the address and the ARP entries; down. The passphrases typed
+    # never show.
     ('@boot wlansim net', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('wifi status', ['wlan0: down (wifi up starts it)', 'wlan0: MAC 00:00:00:00:00:00, link down']),
       ('wifi scan', ['wifi: wlan0 is down (wifi up first)']),
@@ -462,22 +464,29 @@ SMOKE = [
       ('wlansim-telnet', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'frames:', 'wlan0: MAC 52:54:00:12:34:57, link up, inet 10.0.2.16']),
       ('wlansim-wpa', CHECK),
-      ('wifi join SurfSimFlaky', ['wlan0: link up: "SurfSimFlaky"', 'joined SurfSimFlaky']),
-      ('@sleep 17', []),
+      ('wifi join SurfSimFlaky', ['wlan0: address 10.0.2.16 forgotten', 'wlan0: link up: "SurfSimFlaky"',
+                                  'joined SurfSimFlaky']),
+      ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
+      ('@sleep 20', []),
       ('dmesg', ['link down: "SurfSimFlaky": deauthenticated by the access point: reason 4 inactivity',
                  'link up again: "SurfSimFlaky"', 'SurfSimFlaky goes silent for 4 s',
                  'link down: "SurfSimFlaky": the access point is gone (beacons lost)',
                  'joining "SurfSimFlaky" again failed (try 1 of 5): no such network in range; next try in 6 s',
                  'link up again: "SurfSimFlaky"']),
-      ('wifi status', ['wlan0: associated with "SurfSimFlaky"']),
-      ('wifi down', ['wlan0: left "SurfSimFlaky" (wifi down)', 'wlan0: down']),
+      ('wifi status', ['wlan0: associated with "SurfSimFlaky"', 'inet 10.0.2.16']),
+      ('ping 10.0.2.2 1 wlan0', ['PING 10.0.2.2 from 10.0.2.16 (wlan0)', '1 received']),
+      ('wifi leave', ['wlan0: left "SurfSimFlaky" (wifi leave)', 'wlan0: address 10.0.2.16 forgotten',
+                      'wlan0: not associated']),
+      ('wlan-forgotten', CHECK),
+      ('wifi down', ['wlan0: down']),
       ('wifi status', ['wlan0: down (wifi up starts it)'])],
      [WLANSIM_PASSPHRASE, WLANSIM_WRONG]),
     # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
     # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
     # (telnetd's address) and the rest take eth0 all the same (Ethernet before Wi-Fi), and telnet to each address is
-    # answered through its own interface
+    # answered through its own interface. (Review M2:) leaving forgets wlan0's address and ARP entries, and joining another
+    # network does not bring the old address back
     ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('usbnet-plug', CHECK),
       ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
@@ -488,7 +497,12 @@ SMOKE = [
       ('ping 10.0.2.2 2', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '2 packets transmitted, 2 received']),
       ('ping 10.0.2.2 2 wlan0', ['PING 10.0.2.2 from 10.0.2.15 (wlan0)', '2 packets transmitted, 2 received']),
       ('telnetd on', ['telnetd: listening on 10.0.2.16 port 23']),
-      ('wlansim-telnet', CHECK)],
+      ('wlansim-telnet', CHECK),
+      ('wifi leave', ['wlan0: address 10.0.2.15 forgotten', 'wlan0: not associated']),
+      ('wlan-forgotten', CHECK),
+      ('wifi join SurfSimHidden', ['joined SurfSimHidden']),
+      ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
+      ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received'])],
      []),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
@@ -2335,7 +2349,24 @@ def usbnet_plug_check(q):
     return ok
 
 
-BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check}
+def wlan_forgotten_check(q):
+    """(review M2) after wlan0 left its network: no address on it (wifi status) and no ARP entry through it"""
+    start = len(q.transcript)
+    q.send('arp\n')
+    ok = q.expect(PROMPT, 10)
+    arp = q.transcript[start:].decode(errors='replace')
+    start = len(q.transcript)
+    q.send('wifi status\n')
+    ok = q.expect(PROMPT, 10) and ok
+    status = q.transcript[start:].decode(errors='replace')
+    good = ok and 'wlan0' not in arp and 'inet 0.0.0.0' in status
+    if not good:
+        print('\nwlan-forgotten: wlan0 kept an ARP entry or its address:\n' + arp + status)
+    return good
+
+
+BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
+               'wlan-forgotten': wlan_forgotten_check}
 
 
 def tail(text, n=40):
