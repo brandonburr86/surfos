@@ -14,7 +14,11 @@ The host memory the card reads and writes, and what goes through it (W1, step 3)
   status the card writes. Buffers are read in order and handed back in place, as iwx does
   for everything but received frames;
 * the command queue (queue 0): IWL_CMD_RING TFDs, each with a command buffer, a command
-  being its header and payload in one or two pieces (the first 20 bytes, then the rest).
+  being its header and payload in one or two pieces (the first 20 bytes, then the rest);
+* W3 (10/10/26): the transmit queue the firmware gives the access point's station: a TX
+  command and the 802.11 header in two pieces, the body copied into DMA memory as a third,
+  the scheduler's byte count table; TX_CMD's response says how far the frames are done, and
+  their bodies are freed (iwx_tx(), iwx_rx_tx_cmd(), iwx_txq_advance()).
 
 Polled, never interrupted: iwl_poll() reads the interrupt causes (ALIVE, a firmware or
 hardware error, the radio switch) and the receive queue, under rx_lock; the driver's
@@ -259,6 +263,9 @@ void iwl_trans_stop(struct iwl_softc *sc) {
     reset_rings(sc);
     free_image(sc);
     dma_free(&sc->raw_paging);
+    mutex_unlock(&sc->rx_lock);
+    iwl_txq_reset(sc);                          /* (its own lock) */
+    mutex_lock(&sc->rx_lock);
     sc->cmd_done = true;                        /* a waiter, if any, gives up */
     sc->cmd_failed = true;
     mutex_unlock(&sc->rx_lock);
@@ -339,10 +346,25 @@ static void handle_alive(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, 
     sc->alive_seen = true;
 }
 
+/* a notification the driver does not handle: counted, and its kind logged the first time (what the
+   firmware says is worth knowing while the driver grows) */
+static void unhandled(struct iwl_softc *sc, u_int group, u_int code, u_int paylen) {
+    u16 id = (u16)(group << 8 | code);
+    u_int i;
+    sc->rx_notifs_other++;
+    for(i = 0; i < sc->n_seen_notifs; i++) if(sc->seen_notifs[i] == id) return;
+    if(sc->n_seen_notifs < sizeof(sc->seen_notifs) / sizeof(sc->seen_notifs[0])) sc->seen_notifs[sc->n_seen_notifs++] = id;
+    kprintf("+IWL: a notification 0x%04x (%u bytes) the driver does not handle\n", id, paylen);
+}
+
 /* one packet: a response to the command at its index, or a notification */
 static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int len) {
     u_int paylen = len - sizeof(*pkt), code = pkt->hdr.code, group = pkt->hdr.flags & ~IWL_CMD_FAILED_MSK;
     sc->rx_packets++;
+    if(code == IWL_TX_CMD && group <= IWL_LONG_GROUP && !(pkt->hdr.qid & 0x80) && pkt->hdr.qid != 0) {
+        iwl_tx_done(sc, pkt, paylen);           /* a frame's response, from its transmit queue */
+        return;
+    }
     if(!(pkt->hdr.qid & 0x80)) {                /* a response: queue 0 is the command queue */
         if(pkt->hdr.qid != 0 || pkt->hdr.idx != sc->cmd_idx || sc->cmd_done) return;
         sc->cmd_failed = (pkt->hdr.flags & IWL_CMD_FAILED_MSK) != 0;
@@ -354,7 +376,7 @@ static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_i
     if(group > IWL_LONG_GROUP) {                /* the wide groups' notifications */
         if(group == IWL_PHY_OPS_GROUP && code == IWL_CT_KILL_NOTIFICATION)
             kprintf("+IWL: the card is at its critical temperature (%u C)\n", paylen >= 2 ? pkt->data[0] | (pkt->data[1] << 8) : 0);
-        else sc->rx_notifs_other++;
+        else unhandled(sc, group, code, paylen);
         return;
     }
     switch(code) {                              /* the legacy group's (some come in the long group too) */
@@ -383,7 +405,7 @@ static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_i
         if(paylen >= 2) kprintf("+IWL: the firmware reports the country \"%c%c\"\n", pkt->data[1], pkt->data[0]);
         break;
     default:
-        sc->rx_notifs_other++;
+        unhandled(sc, group, code, paylen);
         break;
     }
 }
@@ -448,6 +470,142 @@ void iwl_poll(struct iwl_softc *sc) {
     }
     if(any) iwl_wr(sc, IWL_RFH_Q0_FRBDCB_WIDX_TRG, ((hw == 0) ? IWL_RX_RING - 1 : hw - 1) & ~7u);
     mutex_unlock(&sc->rx_lock);
+}
+
+/**** the transmit queue (W3) ****/
+
+int iwl_txq_alloc(struct iwl_softc *sc) {
+    struct iwl_tx_ring *q = &sc->txq;
+    if(q->desc) return 0;
+    q->desc = (struct iwl_tfh_tfd *)dma_zalloc(IWL_TX_RING * sizeof(struct iwl_tfh_tfd), 256, &q->raw_desc);
+    q->cmd = (struct iwl_device_cmd *)dma_zalloc(IWL_TX_RING * sizeof(struct iwl_device_cmd), 64, &q->raw_cmd);
+    q->bc = (struct iwl_agn_scd_bc_tbl *)dma_zalloc(sizeof(struct iwl_agn_scd_bc_tbl), 64, &q->raw_bc);
+    if(!q->desc || !q->cmd || !q->bc) {
+        dma_free(&q->raw_desc);
+        dma_free(&q->raw_cmd);
+        dma_free(&q->raw_bc);
+        q->desc = NULL;
+        return -ENOMEM;
+    }
+    mutex_init(&sc->tx_lock, "iwl-tx");
+    return 0;
+}
+
+/* every frame given up, the queue empty and disabled (if_iwx.c iwx_reset_tx_ring()) */
+void iwl_txq_reset(struct iwl_softc *sc) {
+    struct iwl_tx_ring *q = &sc->txq;
+    u_int i;
+    if(!q->desc) return;
+    mutex_lock(&sc->tx_lock);
+    for(i = 0; i < IWL_TX_RING; i++) dma_free(&q->raw_payload[i]);
+    memset(q->desc, 0, IWL_TX_RING * sizeof(struct iwl_tfh_tfd));
+    memset(q->bc, 0, sizeof(*q->bc));
+    q->cur = q->cur_hw = q->tail = q->tail_hw = q->queued = 0;
+    q->enabled = false;
+    mutex_unlock(&sc->tx_lock);
+}
+
+/* the scheduler's byte count for a TFD: the frame's length in 32-bit words and how many 64-byte chunks of
+   the TFD are filled (if_iwx.c iwx_tx_update_byte_tbl(), before the AX210) */
+static void bc_update(struct iwl_tx_ring *q, u_int idx, u_int len, u_int num_tbs) {
+    u_int filled = 2 + num_tbs * sizeof(struct iwl_tfh_tb), chunks = (filled + 63) / 64 - 1;
+    q->bc->tfd_offset[idx] = (u16)(((len + 3) / 4) | (chunks << 12));
+}
+
+/* a frame on the queue (if_iwx.c iwx_tx()): TB0 and TB1 the command header, the TX command and the
+   802.11 header (padded to 4 bytes), TB2 the body, copied into DMA memory */
+int iwl_tx_frame(struct iwl_softc *sc, const u8 *frame, u_int len, u32 flags, u32 rate_n_flags) {
+    struct iwl_tx_ring *q = &sc->txq;
+    struct iwl_device_cmd *cmd;
+    struct iwl_tx_cmd_gen2 *tx;
+    struct iwl_tfh_tfd *tfd;
+    u_int hdrlen, pad, idx, head, body;
+    u8 *payload = NULL;
+    void *raw = NULL;
+    u32 pa;
+
+    if(len < 10) return -EINVAL;
+    hdrlen = iwl_hdr_len(frame);
+    if(hdrlen > len || hdrlen > 40) return -EINVAL;
+    body = len - hdrlen;
+    pad = (hdrlen & 3) ? 4 - (hdrlen & 3) : 0;
+    if(body) {
+        payload = (u8 *)dma_zalloc(body, 64, &raw);
+        if(!payload) return -ENOMEM;
+        memcpy(payload, frame + hdrlen, body);
+    }
+    mutex_lock(&sc->tx_lock);
+    if(!q->enabled || sc->fw_state != IWL_FW_ALIVE || q->queued >= IWL_TX_MAX_QUEUED) {
+        mutex_unlock(&sc->tx_lock);
+        dma_free(&raw);
+        sc->tx_refused++;
+        return -EBUSY;
+    }
+    idx = q->cur;
+    dma_free(&q->raw_payload[idx]);             /* (reclaimed already: never set here) */
+    q->raw_payload[idx] = raw;
+    cmd = &q->cmd[idx];
+    memset(cmd, 0, sizeof(*cmd));
+    {                                           /* the narrow command header: TX_CMD, the queue, the index */
+        struct iwl_cmd_header *h = (struct iwl_cmd_header *)cmd;
+        h->code = IWL_TX_CMD;
+        h->flags = 0;
+        h->idx = (u8)idx;
+        h->qid = (u8)q->qid;
+    }
+    tx = (struct iwl_tx_cmd_gen2 *)((u8 *)cmd + sizeof(struct iwl_cmd_header));
+    tx->len = (u16)len;
+    tx->offload_assist = (u16)(IWL_TX_CMD_OFFLD_MH_SIZE((hdrlen / 2) & IWL_TX_CMD_OFFLD_MH_MASK) |
+                               (pad ? IWL_TX_CMD_OFFLD_PAD : 0));
+    tx->flags = flags;
+    tx->rate_n_flags = rate_n_flags;
+    memcpy((u8 *)(tx + 1), frame, hdrlen);
+    head = sizeof(struct iwl_cmd_header) + sizeof(*tx) + hdrlen + pad;
+    pa = phys(cmd);
+    tfd = &q->desc[idx];
+    memset(tfd, 0, sizeof(*tfd));
+    tfd->tbs[0].tb_len = IWL_FIRST_TB_SIZE;
+    tfd->tbs[0].addr = pa;
+    tfd->tbs[1].tb_len = (u16)(head - IWL_FIRST_TB_SIZE);
+    tfd->tbs[1].addr = pa + IWL_FIRST_TB_SIZE;
+    tfd->num_tbs = 2;
+    if(body) {
+        tfd->tbs[2].tb_len = (u16)body;
+        tfd->tbs[2].addr = phys(payload);
+        tfd->num_tbs = 3;
+    }
+    bc_update(q, idx, len, tfd->num_tbs);
+    q->queued++;
+    q->cur = (idx + 1) % IWL_TX_RING;
+    q->cur_hw = (q->cur_hw + 1) % IWL_TFD_QUEUE_SIZE;
+    sc->tx_frames++;
+    iwl_wr(sc, IWL_HBUS_TARG_WRPTR, (q->qid << 16) | q->cur_hw);
+    mutex_unlock(&sc->tx_lock);
+    return 0;
+}
+
+/* TX_CMD's response: how the frame went, and how far the queue's frames are done (if_iwx.c
+   iwx_rx_tx_cmd(), iwx_txq_advance()) */
+void iwl_tx_done(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen) {
+    const struct iwl_tx_resp *r = (const struct iwl_tx_resp *)pkt->data;
+    struct iwl_tx_ring *q = &sc->txq;
+    u32 ssn;
+    u_int status;
+    if(paylen < sizeof(*r) + 4 || r->frame_count != 1 || pkt->hdr.qid != q->qid) return;
+    status = r->status & IWL_TX_STATUS_MSK;
+    if(status != IWL_TX_STATUS_SUCCESS && status != IWL_TX_STATUS_DIRECT_DONE) sc->tx_failed++;
+    memcpy(&ssn, (const u8 *)r + sizeof(*r), 4);  /* after the one frame's status */
+    if(ssn >= IWL_TFD_QUEUE_SIZE) return;
+    mutex_lock(&sc->tx_lock);
+    while(q->tail_hw != ssn && q->queued) {
+        memset(&q->desc[q->tail], 0, sizeof(struct iwl_tfh_tfd));
+        q->bc->tfd_offset[q->tail] = 0;
+        dma_free(&q->raw_payload[q->tail]);
+        q->queued--;
+        q->tail = (q->tail + 1) % IWL_TX_RING;
+        q->tail_hw = (q->tail_hw + 1) % IWL_TFD_QUEUE_SIZE;
+    }
+    mutex_unlock(&sc->tx_lock);
 }
 
 /**** commands ****/

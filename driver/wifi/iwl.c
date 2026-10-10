@@ -7,7 +7,7 @@ The laptop's Wi-Fi card: the CNVi "Qu" MAC of the Ice Lake chipset (PCI 8086:34f
 9560 "JF" radio module, driven the way OpenBSD's iwx(4) drives this family, with Intel's
 firmware (API 77, include/sys/iwl_fw.h) and the registers of include/sys/iwl_reg.h.
 
-What it does (W1, steps 2 and 3 of the brief's bring-up):
+What it does (W1 to W3, steps 2 to 5 of the brief's bring-up):
 * At boot, with profile=laptop only (the driver table's "iwlwifi"): it finds the card, maps
   its 16 KB of registers and reads CSR_HW_REV and CSR_HW_RF_ID, which say which MAC (Qu or
   QuZ, its step) and which radio it is; those name the firmware file. It touches nothing
@@ -20,8 +20,10 @@ What it does (W1, steps 2 and 3 of the brief's bring-up):
   (iwl_fw_parse()); then, step 3 (10/10/26), the firmware loaded and started through the
   context info (iwl_trans.c) up to ALIVE, the init flow of iwx_run_init_mvm_ucode()
   (INIT_EXTENDED_CFG_CMD for the NVM, NVM_ACCESS_COMPLETE, INIT_COMPLETE), NVM_GET_INFO
-  (the bands, 802.11n/ac, the antennas) and the MAC address from the card's registers:
-  wlan0 is up. Scanning is the next step (W2): scan() and the rest still fail with ENOSYS.
+  (the bands, 802.11n/ac, the antennas) and the MAC address from the card's registers;
+  then, step 4, the rest of iwx_init_hw() (iwl_mac.c): wlan0 is up.
+* The station layer's scan(), join(), tx_mgmt(), associated(), set_key(), tx_data() and
+  leave() go to iwl_mac.c (steps 4 and 5: W2 scans, W3 joins open and WPA2 networks).
 * `wifi down` (stop()): the receive DMA and the card stopped (iwx_stop_device()).
 `wifi status` and the `+IWL:` lines in dmesg say how far a start got; a firmware error is
 reported with its error logs (iwx_nic_error()).
@@ -567,6 +569,8 @@ static int iwl_start(struct wlan_dev *w) {
 static void iwl_stop(struct wlan_dev *w) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
     sc->scanning = false;
+    sc->phy_active = sc->mac_active = sc->binding_active = sc->sta_active = sc->session_active = false;
+    sc->have_ptk = sc->have_gtk = false;      /* the firmware forgets them all as it stops */
     iwl_trans_stop(sc);
     stop_device(sc);
     snprintf(sc->last, sizeof(sc->last), "stopped (wifi down)");
@@ -581,19 +585,37 @@ static void iwl_scan_abort(struct wlan_dev *w) {
     iwl_mac_scan_abort((struct iwl_softc *)w->priv);
 }
 
-static int iwl_join(struct wlan_dev *w, const struct wlan_bss *bss) { return -ENOSYS; }
-static int iwl_tx_mgmt(struct wlan_dev *w, const u8 *frame, u_int len) { return -ENOSYS; }
-static int iwl_associated(struct wlan_dev *w, u16 aid, const u8 *ies, u_int ies_len) { return -ENOSYS; }
-static int iwl_set_key(struct wlan_dev *w, const struct wlan_key *key) { return -ENOSYS; }
-static int iwl_tx_data(struct wlan_dev *w, struct netbuf *nb, bool protect) { return -ENOSYS; }
-static void iwl_leave(struct wlan_dev *w) { }
+static int iwl_join(struct wlan_dev *w, const struct wlan_bss *bss) {
+    return iwl_mac_join((struct iwl_softc *)w->priv, bss);
+}
+
+static int iwl_tx_mgmt(struct wlan_dev *w, const u8 *frame, u_int len) {
+    return iwl_mac_tx_mgmt((struct iwl_softc *)w->priv, frame, len);
+}
+
+static int iwl_associated(struct wlan_dev *w, u16 aid, const u8 *ies, u_int ies_len) {
+    return iwl_mac_associated((struct iwl_softc *)w->priv, aid, ies, ies_len);
+}
+
+static int iwl_set_key(struct wlan_dev *w, const struct wlan_key *key) {
+    return iwl_mac_set_key((struct iwl_softc *)w->priv, key);
+}
+
+static int iwl_tx_data(struct wlan_dev *w, struct netbuf *nb, bool protect) {
+    return iwl_mac_tx_data((struct iwl_softc *)w->priv, netbuf_data(nb), nb->len, protect);
+}
+
+static void iwl_leave(struct wlan_dev *w) {
+    iwl_mac_leave((struct iwl_softc *)w->priv);
+}
 
 static void iwl_status(struct wlan_dev *w, char *buf, size_t size) {
     struct iwl_softc *sc = (struct iwl_softc *)w->priv;
     if(sc->fw_state == IWL_FW_ALIVE)
-        snprintf(buf, size, "Intel 9560 (%s %c0, %s): firmware %s, country \"%s\", %lu packets from the card%s",
-                 mac_name(sc->mac_type), 'A' + sc->mac_step, rf_name(sc->rf_type), sc->fw_version,
-                 sc->mcc[0] ? sc->mcc : "?", sc->rx_packets, sc->scanning ? ", scanning" : "");
+        snprintf(buf, size, "Intel 9560, firmware %s%s; sent %lu (%lu failed, %lu refused); data in %lu to us, %lu "
+                 "to groups; dropped: %lu bad, %lu undecrypted, %lu replays", sc->fw_version,
+                 sc->scanning ? ", scanning" : "", sc->tx_frames, sc->tx_failed, sc->tx_refused, sc->rx_data_ucast,
+                 sc->rx_data_group, sc->rx_bad, sc->rx_undecryptable, sc->rx_replays);
     else
         snprintf(buf, size, "Intel 9560 (%s %c0, %s): %s", mac_name(sc->mac_type), 'A' + sc->mac_step,
                  rf_name(sc->rf_type), sc->last[0] ? sc->last : (sc->fw_name ? sc->fw_name : "no firmware file for it"));

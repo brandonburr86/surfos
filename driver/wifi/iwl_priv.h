@@ -46,6 +46,20 @@ struct iwl_cmd_ring {
     u_int cur_hw;                       /* the write pointer (modulo IWL_TFD_QUEUE_SIZE) */
 };
 
+/* W3: the transmit queue for management and data frames (one, as iwx without aggregation) */
+#define IWL_TX_RING         256         /* its TFDs (the 22000 family's queue size) */
+#define IWL_TX_MAX_QUEUED   64          /* frames in flight at most: the rest are refused (the netdev drops) */
+struct iwl_tx_ring {
+    struct iwl_tfh_tfd *desc;
+    struct iwl_device_cmd *cmd;         /* the TX command and the 802.11 header of each */
+    struct iwl_agn_scd_bc_tbl *bc;      /* the byte count table the scheduler reads */
+    void *raw_desc, *raw_cmd, *raw_bc;
+    void *raw_payload[IWL_TX_RING];     /* each frame's body in DMA memory, freed when the card is done */
+    u_int qid;                          /* the firmware's number for it (SCD_QUEUE_CONFIG_CMD's response) */
+    u_int cur, cur_hw, tail, tail_hw, queued;
+    bool enabled;
+};
+
 struct iwl_softc {
     struct pci_dev *pci;
     volatile u8 *regs;
@@ -96,6 +110,28 @@ struct iwl_softc {
     volatile bool scanning;
     u32 scan_uid;
     u_long scan_frames, rx_bad, rx_protected;
+
+    /* W3: the network joined (iwl_mac.c) */
+    struct iwl_tx_ring txq;
+    mutex_t tx_lock;                    /* tx_data() may come from two threads at once */
+    bool phy_active, mac_active, binding_active, sta_active, session_active;
+    struct wlan_bss bss;                /* the access point */
+    u16 aid;
+    u32 ap_rates, ap_basic;             /* the access point's rates and its basic ones: bits of 1 2 5.5 11 6 9 12
+                                           18 24 36 48 54 Mbps */
+    u32 mgmt_rate;                      /* rate_n_flags for management and group frames: its lowest basic rate */
+    bool have_ptk, have_gtk;
+    bool ht, ht40, mimo;                /* the link as associated: 802.11n, 40 MHz, two streams */
+    u8 ap_ampdu, ap_mcs[2];             /* the access point's HT capabilities: A-MPDU parameters, MCS 0-15 */
+    u16 ap_capinfo;
+    u32 ht_prot;                        /* MAC context protection flags */
+    u8 phy_width, phy_ctrl_pos, phy_chains; /* the PHY context as last sent */
+    u64 rx_pn[17];                      /* the last PN per TID (16: non-QoS), for the pairwise key */
+    u64 rx_group_pn[4];                 /* per group key index */
+    u_long tx_frames, tx_failed, tx_refused, rx_replays, rx_undecryptable;
+    u_long rx_data_ucast, rx_data_group;        /* data frames handed up, to us and to a group */
+    u16 seen_notifs[24];                        /* group << 8 | code of notifications not handled, logged once each */
+    u_int n_seen_notifs;
 };
 
 /* registers */
@@ -126,11 +162,23 @@ void iwl_dump_error(struct iwl_softc *sc);                      /* the firmware'
 u_int iwl_cmd_version(struct iwl_softc *sc, u8 group, u8 cmd);
 u_int iwl_notif_version(struct iwl_softc *sc, u8 group, u8 cmd);
 
+int iwl_txq_alloc(struct iwl_softc *sc);                        /* once */
+void iwl_txq_reset(struct iwl_softc *sc);                       /* every frame dropped, the queue empty */
+int iwl_tx_frame(struct iwl_softc *sc, const u8 *frame, u_int len, u32 flags, u32 rate_n_flags);
+void iwl_tx_done(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen);
+
 /* iwl_mac.c */
+u_int iwl_hdr_len(const u8 *f);                                 /* an 802.11 header's length */
 int iwl_mac_config(struct iwl_softc *sc);                       /* the rest of iwx_init_hw() */
 int iwl_mac_scan_begin(struct iwl_softc *sc, const struct wlan_scan_req *req);
 void iwl_mac_scan_abort(struct iwl_softc *sc);
 void iwl_mac_scan_done(struct iwl_softc *sc, u_int status);     /* SCAN_COMPLETE_UMAC and the like */
 void iwl_mac_rx_mpdu(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen);
+int iwl_mac_join(struct iwl_softc *sc, const struct wlan_bss *bss);
+int iwl_mac_tx_mgmt(struct iwl_softc *sc, const u8 *frame, u_int len);
+int iwl_mac_associated(struct iwl_softc *sc, u16 aid, const u8 *ies, u_int ies_len);
+int iwl_mac_set_key(struct iwl_softc *sc, const struct wlan_key *key);
+int iwl_mac_tx_data(struct iwl_softc *sc, const u8 *frame, u_int len, bool protect);
+void iwl_mac_leave(struct iwl_softc *sc);
 
 #endif

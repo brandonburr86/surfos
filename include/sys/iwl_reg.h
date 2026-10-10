@@ -626,4 +626,385 @@ struct iwl_rx_mpdu_desc {
 typedef char iwl_rx_mpdu_desc_is_48_bytes[sizeof(struct iwl_rx_mpdu_desc) == 48 ? 1 : -1];
 typedef char iwl_scan_req_umac_v14_size[sizeof(struct iwl_scan_req_umac_v14) == 1940 ? 1 : -1];
 
+/**** W3: joining a network, sending and receiving (driver/wifi/iwl_mac.c, iwl_trans.c) ****/
+
+#define IWL_MAC_CONF_GROUP          0x3
+#define IWL_DATA_PATH_GROUP         0x5
+#define IWL_PHY_CONTEXT_CMD         0x08        /* the long group's (from the legacy group) */
+#define IWL_ADD_STA_KEY             0x17
+#define IWL_ADD_STA                 0x18
+#define IWL_REMOVE_STA              0x19
+#define IWL_TX_CMD                  0x1c        /* a frame to send; its response says how it went */
+#define IWL_TXPATH_FLUSH            0x1e
+#define IWL_MAC_CONTEXT_CMD         0x28
+#define IWL_BINDING_CONTEXT_CMD     0x2b
+#define IWL_MAC_PM_POWER_TABLE      0xa9
+#define IWL_MCAST_FILTER_CMD        0xd0
+#define IWL_REPLY_SF_CFG_CMD        0xd1
+#define IWL_SESSION_PROTECTION_CMD  0x05        /* the MAC configuration group's */
+#define IWL_SESSION_PROTECTION_NOTIF 0xfb
+#define IWL_RLC_CONFIG_CMD          0x08        /* the data path group's */
+#define IWL_TLC_MNG_CONFIG_CMD      0x0f
+#define IWL_SCD_QUEUE_CONFIG_CMD    0x17
+#define IWL_TLC_MNG_UPDATE_NOTIF    0xf7
+
+#define IWL_FW_CTXT_ACTION_ADD      1
+#define IWL_FW_CTXT_ACTION_MODIFY   2
+#define IWL_FW_CTXT_ACTION_REMOVE   3
+#define IWL_FW_CTXT_INVALID         0xffffffff
+#define IWL_FW_CMD_ID_AND_COLOR(id, color) ((u32)(id) | ((u32)(color) << 8))
+#define IWL_CAPA_CDB_SUPPORT        40
+#define IWL_CAPA_ULTRA_HB_CHANNELS  48          /* the PHY context's longer channel layout */
+#define IWL_API_SMART_FIFO_OFFLOAD  68
+#define IWL_LMAC_24G_INDEX          0
+#define IWL_PHY_VHT_CHANNEL_MODE20  0
+#define IWL_PHY_VHT_CTRL_POS_1_BELOW 0
+#define IWL_PHY_RX_CHAIN_VALID_POS  1
+#define IWL_PHY_RX_CHAIN_CNT_POS    10
+#define IWL_PHY_RX_CHAIN_MIMO_CNT_POS 12
+
+/* PHY_CONTEXT_CMD versions 3 and 4 with the 6-7 GHz channel layout (if_iwxreg.h struct
+   iwx_phy_context_cmd_uhb: the firmware has the ULTRA_HB_CHANNELS capability) */
+struct iwl_phy_context_cmd_uhb {
+    u32 id_and_color;
+    u32 action;
+    u32 channel;                    /* struct iwx_fw_channel_info: the channel, band, width, position */
+    u8 band;
+    u8 width;
+    u8 ctrl_pos;
+    u8 reserved_ci;
+    u32 lmac_id;
+    u32 rxchain_info;               /* reserved in version 4: RLC_CONFIG_CMD has it */
+    u32 dsp_cfg_flags;
+    u32 reserved;
+} __attribute__((packed));
+/* the same with the 4-byte channel layout (no ULTRA_HB_CHANNELS) */
+struct iwl_phy_context_cmd {
+    u32 id_and_color;
+    u32 action;
+    u8 band;
+    u8 channel;
+    u8 width;
+    u8 ctrl_pos;
+    u32 lmac_id;
+    u32 rxchain_info;
+    u32 dsp_cfg_flags;
+    u32 reserved;
+} __attribute__((packed));
+struct iwl_rlc_config_cmd {         /* version 2 */
+    u32 phy_id;
+    u32 rx_chain_info;
+    u32 reserved_rlc;
+    u32 chain_a_sad_mode, chain_b_sad_mode, sad_mac_id, sad_reserved;
+    u8 flags;
+    u8 reserved[3];
+} __attribute__((packed));
+
+/* MAC_CONTEXT_CMD (if_iwxreg.h struct iwx_mac_ctx_cmd with the station's data) */
+#define IWL_FW_MAC_TYPE_BSS_STA     5
+#define IWL_TSF_ID_A                0
+#define IWL_MAC_FILTER_ACCEPT_GRP   (1u << 2)
+#define IWL_MAC_FILTER_IN_BEACON    (1u << 6)
+#define IWL_MAC_QOS_FLG_UPDATE_EDCA (1u << 0)
+#define IWL_MAC_FLG_SHORT_SLOT      (1u << 4)
+#define IWL_MAC_FLG_SHORT_PREAMBLE  (1u << 5)
+#define IWL_AC_NUM                  4
+#define IWL_TX_FIFO_BK              0           /* the 22000 family's EDCA FIFOs (IWX_GEN2_EDCA_TX_FIFO_*) */
+#define IWL_TX_FIFO_BE              1
+#define IWL_TX_FIFO_VI              2
+#define IWL_TX_FIFO_VO              3
+struct iwl_ac_qos {
+    u16 cw_min;
+    u16 cw_max;
+    u8 aifsn;
+    u8 fifos_mask;
+    u16 edca_txop;                  /* 32 us units */
+} __attribute__((packed));
+struct iwl_mac_data_sta {
+    u32 is_assoc;
+    u32 dtim_time;
+    u64 dtim_tsf;
+    u32 bi;
+    u32 reserved1;
+    u32 dtim_interval;
+    u32 data_policy;
+    u32 listen_interval;
+    u32 assoc_id;
+    u32 assoc_beacon_arrive_time;
+} __attribute__((packed));
+struct iwl_mac_ctx_cmd {
+    u32 id_and_color;
+    u32 action;
+    u32 mac_type;
+    u32 tsf_id;
+    u8 node_addr[6];
+    u16 reserved_for_node_addr;
+    u8 bssid_addr[6];
+    u16 reserved_for_bssid_addr;
+    u32 cck_rates;
+    u32 ofdm_rates;
+    u32 protection_flags;
+    u32 cck_short_preamble;
+    u32 short_slot;
+    u32 filter_flags;
+    u32 qos_flags;
+    struct iwl_ac_qos ac[IWL_AC_NUM + 1];
+    union {                         /* the largest of iwx's per-type data is 48 bytes (the AP's, the GO's) */
+        struct iwl_mac_data_sta sta;
+        u8 any[48];
+    };
+} __attribute__((packed));
+
+#define IWL_MAX_MACS_IN_BINDING     3
+struct iwl_binding_cmd {            /* version 2 */
+    u32 id_and_color;
+    u32 action;
+    u32 macs[IWL_MAX_MACS_IN_BINDING];
+    u32 phy;
+    u32 lmac_id;
+} __attribute__((packed));
+struct iwl_cmd_response { u32 status; } __attribute__((packed));
+
+/* ADD_STA (versions 10 to 12 share the layout) */
+#define IWL_STATION_ID              0
+#define IWL_STA_LINK                0
+#define IWL_ADD_STA_SUCCESS         0x1
+#define IWL_ADD_STA_STATUS_MASK     0xff
+#define IWL_STA_FLG_FAT_EN_MSK      (3u << 26)
+#define IWL_STA_FLG_MIMO_EN_MSK     (3u << 28)
+struct iwl_add_sta_cmd {
+    u8 add_modify;
+    u8 awake_acs;
+    u16 tid_disable_tx;
+    u32 mac_id_n_color;
+    u8 addr[6];
+    u16 reserved2;
+    u8 sta_id;
+    u8 modify_mask;
+    u16 reserved3;
+    u32 station_flags;
+    u32 station_flags_msk;
+    u8 add_immediate_ba_tid;
+    u8 remove_immediate_ba_tid;
+    u16 add_immediate_ba_ssn;
+    u16 sleep_tx_count;
+    u8 sleep_state_flags;
+    u8 station_type;
+    u16 assoc_id;
+    u16 beamform_flags;
+    u32 tfd_queue_msk;
+    u16 rx_ba_window;
+    u8 sp_length;
+    u8 uapsd_acs;
+} __attribute__((packed));
+struct iwl_rm_sta_cmd { u8 sta_id; u8 reserved[3]; } __attribute__((packed));
+
+/* ADD_STA_KEY version 3 (if_iwxreg.h struct iwx_add_sta_key_cmd) */
+#define IWL_STA_KEY_FLG_CCM         (2u << 0)
+#define IWL_STA_KEY_FLG_WEP_KEY_MAP (1u << 3)
+#define IWL_STA_KEY_FLG_KEYID_POS   8
+#define IWL_STA_KEY_FLG_KEYID_MSK   (3u << 8)
+#define IWL_STA_KEY_MULTICAST       (1u << 14)
+struct iwl_add_sta_key_cmd {
+    u8 sta_id;
+    u8 key_offset;
+    u16 key_flags;
+    u8 key[32];
+    u8 rx_secur_seq_cnt[16];
+    u64 rx_mic_key;
+    u64 tx_mic_key;
+    u64 transmit_seq_cnt;
+} __attribute__((packed));
+
+/* SESSION_PROTECTION_CMD: the firmware stays on the channel while the station joins */
+#define IWL_SESSION_PROTECT_CONF_ASSOC 0
+struct iwl_session_prot_cmd {
+    u32 id_and_color;
+    u32 action;
+    u32 conf_id;
+    u32 duration_tu;
+    u32 repetition_count;
+    u32 interval;
+} __attribute__((packed));
+
+/* SCD_QUEUE_CONFIG_CMD version 3: a transmit queue for a station and TID; the response names it */
+#define IWL_SCD_QUEUE_ADD           0
+#define IWL_SCD_QUEUE_REMOVE        1
+#define IWL_MGMT_TID                15          /* management and non-QoS data: one queue, as iwx */
+struct iwl_scd_queue_cfg_cmd {
+    u32 operation;
+    union {
+        struct {
+            u32 sta_mask;
+            u8 tid;
+            u8 reserved[3];
+            u32 flags;
+            u32 cb_size;
+            u64 bc_dram_addr;
+            u64 tfdq_dram_addr;
+        } __attribute__((packed)) add;
+        struct {
+            u32 sta_mask;
+            u32 tid;
+        } __attribute__((packed)) remove;
+    } u;
+} __attribute__((packed));
+struct iwl_tx_queue_cfg_rsp {
+    u16 queue_number;
+    u16 flags;
+    u16 write_pointer;
+    u16 reserved;
+} __attribute__((packed));
+
+#define IWL_TFD_QUEUE_BC_SIZE       (256 + 64)  /* the byte count table's entries */
+struct iwl_agn_scd_bc_tbl { u16 tfd_offset[IWL_TFD_QUEUE_BC_SIZE]; } __attribute__((packed));
+
+/* TX_CMD for the 22000 family (if_iwxreg.h struct iwx_tx_cmd_gen2; versions 7 to 9), behind the
+   4-byte command header; the 802.11 header follows it, then padding to 4 bytes */
+#define IWL_TX_FLAGS_CMD_RATE       (1u << 0)   /* rate_n_flags is the rate (else the firmware's rate control) */
+#define IWL_TX_FLAGS_ENCRYPT_DIS    (1u << 1)
+#define IWL_TX_FLAGS_HIGH_PRI       (1u << 2)
+#define IWL_TX_CMD_OFFLD_MH_SIZE(x) ((x) << 8)  /* the 802.11 header's length in 16-bit words */
+#define IWL_TX_CMD_OFFLD_PAD        (1u << 13)
+#define IWL_TX_CMD_OFFLD_MH_MASK    0x1f
+struct iwl_tx_cmd_gen2 {
+    u16 len;
+    u16 offload_assist;
+    u32 flags;
+    u32 pn_low;                     /* struct iwx_dram_sec_info */
+    u16 pn_high;
+    u16 aux_info;
+    u32 rate_n_flags;
+    /* the 802.11 header */
+} __attribute__((packed));
+/* rate_n_flags, version 2 (the firmware's TX_CMD notification is version 7 or later) */
+#define IWL_RATE_MCS_ANT_A_MSK      (1u << 14)
+#define IWL_RATE_MCS_CCK_MSK        (0u << 8)
+#define IWL_RATE_MCS_LEGACY_OFDM_MSK (1u << 8)
+#define IWL_RATE_LEGACY_RATE_MSK    0x7
+
+/* the response to a frame (if_iwxreg.h struct iwx_tx_resp, version 6 on); after the status of each
+   frame, the queue's index up to which its frames are done */
+#define IWL_TX_STATUS_MSK           0xff
+#define IWL_TX_STATUS_SUCCESS       0x01
+#define IWL_TX_STATUS_DIRECT_DONE   0x02
+struct iwl_tx_resp {
+    u8 frame_count;
+    u8 bt_kill_count;
+    u8 failure_rts;
+    u8 failure_frame;
+    u32 initial_rate;
+    u16 wireless_media_time;
+    u8 pa_status;
+    u8 pa_integ_res_a[3];
+    u8 pa_integ_res_b[3];
+    u8 pa_integ_res_c[3];
+    u16 measurement_req_id;
+    u8 reduced_tpc;
+    u8 reserved;
+    u32 tfd_info;
+    u16 seq_ctl;
+    u16 byte_cnt;
+    u8 tlc_info;
+    u8 ra_tid;
+    u16 frame_ctrl;
+    u16 tx_queue;
+    u16 reserved2;
+    u16 status;                     /* struct iwx_agg_tx_status, one per frame */
+    u16 sequence;
+} __attribute__((packed));
+
+struct iwl_tx_path_flush_cmd { u32 sta_id; u16 tid_mask; u16 reserved; } __attribute__((packed));
+
+/* TLC_MNG_CONFIG_CMD version 4: the firmware's rate control for the station */
+#define IWL_TLC_MNG_CH_WIDTH_20MHZ  0
+#define IWL_TLC_MNG_MODE_NON_HT     0
+#define IWL_TLC_MNG_CHAIN_A_MSK     (1u << 0)
+struct iwl_tlc_config_cmd_v4 {
+    u8 sta_id;
+    u8 reserved1[3];
+    u8 max_ch_width;
+    u8 mode;
+    u8 chains;
+    u8 sgi_ch_width_supp;
+    u16 flags;
+    u16 non_ht_rates;               /* bit i: the i'th of 1 2 5.5 11 6 9 12 18 24 36 48 54 Mbps */
+    u16 ht_rates[2][3];
+    u16 max_mpdu_len;
+    u16 max_tx_op;
+} __attribute__((packed));
+
+/* REPLY_SF_CFG_CMD (smart FIFO; if_iwxreg.h struct iwx_sf_cfg_cmd) */
+#define IWL_SF_FULL_ON              1
+#define IWL_SF_INIT_OFF             3
+#define IWL_SF_W_MARK_LEGACY        4096
+#define IWL_SF_W_MARK_SISO          4096
+#define IWL_SF_W_MARK_MIMO2         8192
+#define IWL_SF_W_MARK_SCAN          4096
+#define IWL_SF_NUM_SCENARIO         5
+#define IWL_SF_LONG_DELAY_AGING_TIMER 1000000
+struct iwl_sf_cfg_cmd {
+    u32 state;
+    u32 watermark[2];
+    u32 long_delay_timeouts[IWL_SF_NUM_SCENARIO][2];
+    u32 full_on_timeouts[IWL_SF_NUM_SCENARIO][2];
+} __attribute__((packed));
+
+struct iwl_mcast_filter_cmd {
+    u8 filter_own;
+    u8 port_id;
+    u8 count;
+    u8 pass_all;
+    u8 bssid[6];
+    u8 reserved[2];
+} __attribute__((packed));
+
+#define IWL_POWER_KEEP_ALIVE_PERIOD_SEC 25
+struct iwl_mac_power_cmd {
+    u32 id_and_color;
+    u16 flags;
+    u16 keep_alive_seconds;
+    u32 rx_data_timeout;
+    u32 tx_data_timeout;
+    u32 rx_data_timeout_uapsd;
+    u32 tx_data_timeout_uapsd;
+    u8 lprx_rssi_threshold;
+    u8 skip_dtim_periods;
+    u16 snooze_interval;
+    u16 snooze_window;
+    u8 snooze_step;
+    u8 qndp_tid;
+    u8 uapsd_ac_flags;
+    u8 uapsd_max_sp;
+    u8 heavy_tx_thld_packets;
+    u8 heavy_rx_thld_packets;
+    u8 heavy_tx_thld_percentage;
+    u8 heavy_rx_thld_percentage;
+    u8 limited_ps_threshold;
+    u8 reserved;
+} __attribute__((packed));
+
+/* W3: an HT (802.11n) access point (if_iwxreg.h) */
+#define IWL_PHY_VHT_CHANNEL_MODE40  1
+#define IWL_PHY_VHT_CTRL_POS_1_ABOVE 4
+#define IWL_MAC_QOS_FLG_TGN         (1u << 1)
+#define IWL_MAC_PROT_FLG_HT_PROT    (1u << 23)
+#define IWL_MAC_PROT_FLG_FAT_PROT   (1u << 24)
+#define IWL_STA_FLG_MAX_AGG_SIZE_SHIFT 19
+#define IWL_STA_FLG_MAX_AGG_SIZE_MSK (0xfu << 19)
+#define IWL_STA_FLG_AGG_MPDU_DENS_SHIFT 23
+#define IWL_STA_FLG_AGG_MPDU_DENS_MSK (7u << 23)
+#define IWL_STA_FLG_FAT_EN_40MHZ    (1u << 26)
+#define IWL_STA_FLG_MIMO_EN_MIMO2   (1u << 28)
+#define IWL_TLC_MNG_MODE_HT         1
+#define IWL_TLC_MNG_CH_WIDTH_40MHZ  1
+#define IWL_TLC_MNG_CHAIN_B_MSK     (1u << 1)
+#define IWL_TLC_MNG_CFG_FLAGS_STBC_MSK (1u << 0)
+
+typedef char iwl_mac_ctx_cmd_size[sizeof(struct iwl_mac_ctx_cmd) == 4 * 4 + 16 + 7 * 4 + 5 * 8 + 48 ? 1 : -1];
+typedef char iwl_add_sta_cmd_size[sizeof(struct iwl_add_sta_cmd) == 48 ? 1 : -1];
+typedef char iwl_tx_resp_size[sizeof(struct iwl_tx_resp) == 44 ? 1 : -1];
+typedef char iwl_tlc_config_size[sizeof(struct iwl_tlc_config_cmd_v4) == 28 ? 1 : -1];
+typedef char iwl_sf_cfg_size[sizeof(struct iwl_sf_cfg_cmd) == 92 ? 1 : -1];
+
 #endif
