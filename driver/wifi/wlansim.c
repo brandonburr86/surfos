@@ -780,7 +780,8 @@ static int sim_start(struct wlan_dev *w) {
     w->mac[5]++;                                        /* eth0's with the last byte one higher */
     if(d) {
         if(!d->ops->ioctl || d->ops->ioctl(d, NETDEV_ADD_RX_ADDR, w->mac))
-            kprintf("wlansim: %s cannot take a second address: frames to %s will not reach it\n", d->name, macfmt(w->mac, m));
+            kprintf("wlansim: %s takes no second address: frames to %s reach it only if its device passes them all "
+                    "(QEMU's usb-net does)\n", d->name, macfmt(w->mac, m));
         d->bridge_rx = sim_bridge_rx;
     }
     s->tuned = s->authed = s->assoc = -1;

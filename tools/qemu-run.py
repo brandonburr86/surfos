@@ -428,7 +428,7 @@ SMOKE = [
     # bridged to). Down at first; up; a scan listing its six networks (the hidden one as such); the ones SurfOS does not
     # join refused with the reason; a hidden network joined by name and left; the open SurfSim joined by its BSSID (an
     # unknown one is no access point in range); eth0 and wlan0 each leased their own address by QEMU's DHCP server, pings
-    # through each, the default route eth0 (it registered first), ARP per interface; TCP out; telnet to each interface's
+    # through each, the default route eth0 (Ethernet before Wi-Fi), ARP per interface; TCP out; telnet to each interface's
     # address answered through that interface (BOOT_CHECKS: wlansim-telnet); WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
     # for 4 s: the link goes down twice and comes back up on its own; down. The passphrases typed never show.
@@ -473,6 +473,23 @@ SMOKE = [
       ('wifi down', ['wlan0: left "SurfSimFlaky" (wifi down)', 'wlan0: down']),
       ('wifi status', ['wlan0: down (wifi up starts it)'])],
      [WLANSIM_PASSPHRASE, WLANSIM_WRONG]),
+    # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
+    # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
+    # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
+    # (telnetd's address) and the rest take eth0 all the same (Ethernet before Wi-Fi), and telnet to each address is
+    # answered through its own interface
+    ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
+     [('usbnet-plug', CHECK),
+      ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
+      ('wifi up', ['bridged to eth0', 'wlan0: up, not associated']),
+      ('wifi join SurfSim', ['joined SurfSim']),
+      ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.15']),
+      ('dhcp', ['dhcp: eth0: lease 10.0.2.16']),
+      ('ping 10.0.2.2 2', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '2 packets transmitted, 2 received']),
+      ('ping 10.0.2.2 2 wlan0', ['PING 10.0.2.2 from 10.0.2.15 (wlan0)', '2 packets transmitted, 2 received']),
+      ('telnetd on', ['telnetd: listening on 10.0.2.16 port 23']),
+      ('wlansim-telnet', CHECK)],
+     []),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -2295,7 +2312,30 @@ def wlansim_wpa_check(q):
     return ok
 
 
-BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check}
+def usbnet_later_boot(kernel, qemu, mem, extra, initrd, append):
+    """10/9/26 (the review of track S, M1): a boot in the laptop's order: no e1000, an xHCI whose USB Ethernet adapter
+    (QEMU's usb-net on its user network) is plugged in after boot (BOOT_CHECKS usbnet-plug), so that wlan0, which the
+    simulated chip registers at boot, comes before eth0. Port 23 of 10.0.2.16 is forwarded as 'telnet' (eth0's lease
+    here) and of 10.0.2.15 as 'telnet_wlan' (wlan0 asks first, and gets .15)"""
+    p_eth, p_wlan = free_port(), free_port()
+    q = Qemu(kernel, qemu, mem, list(extra) + ['-device', 'qemu-xhci,id=xhci', '-netdev',
+             f'user,id=n0,hostfwd=tcp:127.0.0.1:{p_eth}-10.0.2.16:23,hostfwd=tcp:127.0.0.1:{p_wlan}-10.0.2.15:23'],
+             None, None, None, initrd, False, False, ' '.join(append), 0)
+    q.ports.update({'telnet': p_eth, 'telnet_wlan': p_wlan})
+    return q
+
+
+def usbnet_plug_check(q):
+    """the USB adapter plugged in after boot: QEMU's usb-net on the xHCI becomes eth0, after wlan0"""
+    q.monitor('device_add usb-net,bus=xhci.0,netdev=n0,id=usbnet0,mac=52:54:00:12:34:56')
+    ok = q.expect('eth0, cdc-ecm', 30)
+    q.wait(2)                                           # its link
+    if not ok:
+        print('\nusbnet-plug: the usb-net plugged in did not become eth0')
+    return ok
+
+
+BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check}
 
 
 def tail(text, n=40):
@@ -2439,12 +2479,14 @@ def main():
         surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh).
         10/9/26: 'net' gives the boot QEMU's network (and its forwarded ports), and so does autonet, which needs one;
         the others have none"""
-        initrd, append, net = a.initrd, a.append.split(), False
+        initrd, append, net, usbnet = a.initrd, a.append.split(), False, False
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
             for w in words:
                 if w == 'net':                               # 10/9/26: QEMU's user network, with its forwards
                     net = True
+                elif w == 'usbnet-later':                    # 10/9/26: the laptop's order (usbnet_later_boot())
+                    usbnet = True
                 elif w == 'no-initrd':
                     initrd = None
                 elif w.startswith('surfsh='):
@@ -2456,6 +2498,8 @@ def main():
                     initrd_with(a.initrd, initrd, 'bin/surfsh', program)
                 else:
                     append.append(w)
+            if usbnet:
+                return usbnet_later_boot(a.kernel, a.qemu, a.mem, a.extra.split(), initrd, append)
             # 10/9/26: autonet needs a network to bring up
             return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False,
                         net or 'autonet' in append, ' '.join(append), 0)
