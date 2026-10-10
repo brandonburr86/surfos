@@ -482,3 +482,15 @@ help:
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
                            $(BUILD)/host/pager/tests/host/*.d)
+
+# Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
+$(BUILD)/host/test_dns: tests/host/test_dns.c $(BUILD)/host/kernel/net/dns_wire.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline tests/host/test_dns.c $(filter %.o,$^) -o $@
+
+$(BUILD)/host/test_dns: net/dns.c kernel/websvc.c
+
+test-dns: $(BUILD)/host/test_dns
+	$(BUILD)/host/test_dns
+unittest: test-dns
+.PHONY: test-dns

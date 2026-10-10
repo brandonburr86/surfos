@@ -238,6 +238,8 @@ SMOKE = [
     # interface; an echo server the host reaches through the forwarded port 23, and a megabyte the host reads slowly;
     # an HTTP GET from the harness's server; a refused connection, and one to an address that does not answer ARP;
     # the calls' errors and limits; a kill and Ctrl+C while accept() waits. Port 23 is free again at the end.
+    ('nettest resolve 192.0.2.1', ['resolve 192.0.2.1: 192.0.2.1']),
+    ('@dns-bounded', []),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
     ('@nettest-host', []),
     ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),
@@ -1990,6 +1992,169 @@ CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': t
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
 
 
+# 10/10/26 (Undertow): a private DNS peer on a QEMU raw link. No public DNS,
+# host resolver, privileged port or physical network is involved.
+class DnsPeer:
+    def __init__(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(('127.0.0.1', 0))
+        self.port = self.sock.getsockname()[1]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
+            reserve.bind(('127.0.0.1', 0))
+            self.qport = reserve.getsockname()[1]
+        self.running = True
+        self.pending = []
+        self.ids = []
+        self.floods = []
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def args(self):
+        return ['-netdev', f'dgram,id=dns,local.type=inet,local.host=127.0.0.1,local.port={self.qport},'
+                          f'remote.type=inet,remote.host=127.0.0.1,remote.port={self.port}',
+                '-device', 'e1000,netdev=dns,mac=52:54:00:12:34:56']
+
+    @staticmethod
+    def checksum(p):
+        if len(p) & 1:
+            p += b'\0'
+        n = sum(struct.unpack('!%dH' % (len(p) // 2), p))
+        while n >> 16:
+            n = (n & 65535) + (n >> 16)
+        return (~n) & 65535
+
+    def send(self, frame, payload, protocol=17, source=b'\x0a\0\x02\x03'):
+        dest = frame[26:30]
+        ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(payload), 1, 0, 64, protocol, 0, source, dest)
+        ip = ip[:10] + struct.pack('!H', self.checksum(ip)) + ip[12:]
+        self.sock.sendto(frame[6:12] + b'\x52\x54\0\x12\x34\x02\x08\0' + ip + payload,
+                         ('127.0.0.1', self.qport))
+
+    def reply(self, frame, query, flags=0x8180, port=53, source=b'\x0a\0\x02\x03', address=b'\xc0\0\x02\x07'):
+        answer = b'\xc0\x0c' + struct.pack('!HHIH', 1, 1, 30, 4) + address
+        data = query[:2] + struct.pack('!HHHHH', flags, 1, int(flags == 0x8180), 0, 0) + query[12:]
+        if flags == 0x8180:
+            data += answer
+        udp = struct.pack('!HHHH', port, struct.unpack('!H', frame[34:36])[0], 8 + len(data), 0) + data
+        self.send(frame, udp, source=source)
+
+    def flood(self, frame, query):
+        bad = struct.pack('!H', (struct.unpack('!H', query[:2])[0] + 1) & 65535) + query[2:]
+        until = time.monotonic() + 6
+        while self.running and time.monotonic() < until:
+            self.reply(frame, bad)
+            time.sleep(0.005)
+
+    def run(self):
+        self.sock.settimeout(0.1)
+        while self.running:
+            try:
+                frame, _ = self.sock.recvfrom(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if len(frame) < 42:
+                continue
+            if frame[12:14] == b'\x08\x06':
+                if frame[20:22] == b'\0\x01':
+                    mac = b'\x52\x54\0\x12\x34\x02'
+                    arp = frame[6:12] + mac + b'\x08\x06' + struct.pack('!HHBBH', 1, 0x800, 6, 4, 2)
+                    self.sock.sendto(arp + mac + frame[38:42] + frame[22:28] + frame[28:32],
+                                     ('127.0.0.1', self.qport))
+                continue
+            if frame[12:14] != b'\x08\0':
+                continue
+            if frame[23] == 1 and frame[34] == 8:  # ICMP echo for ping's DNS path
+                msg = bytearray(frame[34:]); msg[0] = 0; msg[2:4] = b'\0\0'
+                msg[2:4] = struct.pack('!H', self.checksum(bytes(msg)))
+                self.send(frame, msg, 1, frame[30:34])
+                continue
+            if frame[23] != 17 or frame[36:38] != b'\0\x35':
+                continue
+            query = frame[42:]
+            if len(query) < 17:
+                continue
+            parts, off = [], 12
+            while query[off]:
+                n = query[off]; parts.append(query[off + 1:off + n + 1]); off += n + 1
+            host = b'.'.join(parts)
+            if host == b'flood.test':
+                t = threading.Thread(target=self.flood, args=(frame, query), daemon=True)
+                self.floods.append(t); t.start()
+            elif host.startswith(b'concurrent'):
+                self.pending.append((frame, query)); self.ids.append(query[:2])
+                if len(self.pending) == 2:
+                    for f, q in reversed(self.pending):
+                        self.reply(f, q)
+                    self.pending.clear()
+            elif host == b'missing.test':
+                self.reply(frame, query, 0x8183)
+            else:
+                # Even matching IDs must not accept these before the real peer's answer.
+                self.reply(frame, query, source=b'\x0a\0\x02\x63', address=b'\xcb\0\x71\x42')
+                self.reply(frame, query, port=54, address=b'\xcb\0\x71\x42')
+                wrong = query[:13] + b'X' + query[14:]
+                self.reply(frame, wrong, address=b'\xcb\0\x71\x42')
+                self.reply(frame, query)
+
+    def close(self):
+        self.running = False
+        self.thread.join(timeout=1)
+        for t in self.floods:
+            t.join(timeout=1)
+        self.sock.close()
+
+
+def dns_bounded_check(q):
+    peer = DnsPeer()
+    guest = None
+    ok = False
+    try:
+        kernel = q.cmd[q.cmd.index('-kernel') + 1]
+        initrd = os.path.join(q.workdir, q.cmd[q.cmd.index('-initrd') + 1].split(',')[0])
+        guest = Qemu(kernel, q.cmd[0], '128', peer.args(), initrd=initrd, net=False)
+        ok = guest.expect(PROMPT, 60)
+
+        def command(line, *expected, timeout=10):
+            guest.cursor = len(guest.transcript)
+            guest.send(line + '\n')
+            return all(guest.expect(e, timeout) for e in expected) and guest.expect(PROMPT, timeout)
+
+        ok = command('ifconfig eth0 10.0.2.15 255.255.255.0 0.0.0.0 8.8.8.8') and ok
+        ok = command('nettest resolve offroute.test', 'errno=101') and ok
+        ok = command('ifconfig eth0 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3') and ok
+        ok = command('nettest resolve answer.test', 'resolve answer.test: 192.0.2.7') and ok
+        ok = command('nslookup answer.test', '192.0.2.7') and ok
+        ok = command('ping answer.test 1', '1 received') and ok
+        ok = command('nettest resolve missing.test', 'errno=2') and ok
+        guest.cursor = len(guest.transcript)
+        guest.send('nettest resolve concurrent1.test &\n')
+        ok = guest.expect('] started', 10) and guest.expect(PROMPT, 10) and ok
+        guest.send('nettest resolve concurrent2.test\n')
+        resolved = re.compile(rb'resolve concurrent[12]\.test: 192\.0\.2\.7')
+        ok = guest.expect(resolved, 10) and guest.expect(resolved, 10) and ok
+        ok = len(peer.ids) == 2 and peer.ids[0] != peer.ids[1] and ok
+        guest.expect(PROMPT, 10)
+        guest.cursor = len(guest.transcript)
+        start = time.monotonic()
+        flood_start = len(guest.transcript)
+        guest.send('nettest resolve flood.test\n')
+        ok = guest.expect('errno=110', 8) and guest.expect(PROMPT, 3) and ok
+        elapsed = time.monotonic() - start
+        # Assert guest ticks, too: wall time includes emulator scheduling.
+        duration = re.search(r'resolve flood.test:.*in (\d+) ms', guest.transcript[flood_start:].decode(errors='replace'))
+        ok = elapsed < 7 and duration is not None and 5000 <= int(duration[1]) <= 5100 and ok
+        ok = command('nettest resolve answer.test', 'resolve answer.test: 192.0.2.7') and ok
+    finally:
+        if guest:
+            if not ok:
+                print('\n---- bounded DNS guest transcript ----\n' + tail(guest.text(), 35))
+            guest.close()
+        peer.close()
+    return ('DNS: isolated peer, source/question filters, concurrent IDs, 5-second flood deadline, legacy commands', ok)
+
+
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
 def nettest_pattern(n):
     """what `nettest send` sends: "nettest 0000000\\n", "nettest 0000001\\n", ... cut to n bytes"""
@@ -2088,6 +2253,7 @@ def nettest_kills_check(q):
     return ('nettest: Ctrl+C and kill while accept() waits end it at once, and port 23 is free again', ok)
 
 
+CONSOLE_CHECKS['@dns-bounded'] = dns_bounded_check
 CONSOLE_CHECKS['@nettest-host'] = nettest_host_check
 CONSOLE_CHECKS['@nettest-kills'] = nettest_kills_check
 TIMEOUTS.update({'nettest connect 10.0.2.99 23': 30, 'nettest limits': 60})

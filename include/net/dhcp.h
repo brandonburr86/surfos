@@ -14,6 +14,9 @@ File: dhcp.h    Date: 10/3/26 (roadmap N2)
 int dhcp_configure(struct netdev *dev, u_long timeout_ms);
 u_long dhcp_lease_seconds(void);          /* of the last lease, 0 if none */
 
+/* Bounded A lookup: 0 or negative errno; output changes only on success. */
+int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms);
+
 /* an A record through the configured server (dotted quads pass straight through); 0 or -1 */
 int dns_resolve(const char *name, ipaddr_t *out, u_long timeout_ms);
 /* 10/9/26: the server dns_resolve() asks: the default interface's, else the first configured one's

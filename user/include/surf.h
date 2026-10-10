@@ -90,6 +90,8 @@ int kcmdinfo(int index, struct kcmd_info *out); /* 0; -1 with errno ENOENT after
 int tcp_listen(unsigned short port);                    /* a listening descriptor */
 int tcp_accept(int fd, struct netaddr *peer);           /* the next connection (waits); peer may be NULL */
 int tcp_connect(unsigned int ip, unsigned short port);  /* ip in network byte order */
+/* Resolve a hostname within 5 seconds; output changes only on success. */
+int net_resolve(const char *host, unsigned int *ip);
 int netinfo(struct netinfo *ni);                        /* the default interface; -1 ENODEV without one */
 char *ipstr(unsigned int ip, char buf[16]);             /* "192.168.1.20" from network byte order */
 int ipparse(const char *s, unsigned int *ip);           /* "192.168.1.20" -> network byte order; 0, or -1 */
