@@ -125,6 +125,10 @@ struct iwl_softc {
     u8 ap_ampdu, ap_mcs[2];             /* the access point's HT capabilities: A-MPDU parameters, MCS 0-15 */
     u16 ap_capinfo;
     u32 ht_prot;                        /* MAC context protection flags */
+    struct { u8 aifsn, ecwmin, ecwmax; u16 txop; } edca[4];   /* per access category (BE, BK, VI, VO): the
+                                           access point's WMM parameters, else 802.11's defaults */
+    bool link_lost;                     /* wlan_link_lost() said, once per association */
+    u_long beacons_missed;
     u8 phy_width, phy_ctrl_pos, phy_chains; /* the PHY context as last sent */
     u64 rx_pn[17];                      /* the last PN per TID (16: non-QoS), for the pairwise key */
     u64 rx_group_pn[4];                 /* per group key index */
@@ -180,5 +184,6 @@ int iwl_mac_associated(struct iwl_softc *sc, u16 aid, const u8 *ies, u_int ies_l
 int iwl_mac_set_key(struct iwl_softc *sc, const struct wlan_key *key);
 int iwl_mac_tx_data(struct iwl_softc *sc, const u8 *frame, u_int len, bool protect);
 void iwl_mac_leave(struct iwl_softc *sc);
+void iwl_mac_missed_beacons(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen);
 
 #endif

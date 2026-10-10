@@ -374,7 +374,12 @@ static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_i
         return;
     }
     if(group > IWL_LONG_GROUP) {                /* the wide groups' notifications */
-        if(group == IWL_PHY_OPS_GROUP && code == IWL_CT_KILL_NOTIFICATION)
+        if(group == IWL_MAC_CONF_GROUP && code == IWL_MISSED_BEACONS_NOTIF)
+            iwl_mac_missed_beacons(sc, pkt, paylen);
+        else if((group == IWL_MAC_CONF_GROUP && code == IWL_SESSION_PROTECTION_NOTIF) ||
+                (group == IWL_DATA_PATH_GROUP && (code == IWL_TLC_MNG_UPDATE_NOTIF || code == IWL_RX_QUEUES_NOTIFICATION)))
+            sc->rx_notifs_other++;              /* the session's start and end, the firmware's rate choice: nothing to do */
+        else if(group == IWL_PHY_OPS_GROUP && code == IWL_CT_KILL_NOTIFICATION)
             kprintf("+IWL: the card is at its critical temperature (%u C)\n", paylen >= 2 ? pkt->data[0] | (pkt->data[1] << 8) : 0);
         else unhandled(sc, group, code, paylen);
         return;
@@ -400,6 +405,14 @@ static void rx_packet(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_i
         break;
     case IWL_SCAN_ITERATION_COMPLETE_UMAC:
         iwl_mac_scan_done(sc, 1);
+        break;
+    case IWL_MISSED_BEACONS_NOTIFICATION:
+        iwl_mac_missed_beacons(sc, pkt, paylen);
+        break;
+    case IWL_STATISTICS_NOTIFICATION:           /* nothing reads them yet */
+    case IWL_MFUART_LOAD_NOTIFICATION:
+    case IWL_DEBUG_LOG_MSG:
+        sc->rx_notifs_other++;
         break;
     case IWL_MCC_CHUB_UPDATE_CMD:
         if(paylen >= 2) kprintf("+IWL: the firmware reports the country \"%c%c\"\n", pkt->data[1], pkt->data[0]);

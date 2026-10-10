@@ -1001,6 +1001,24 @@ struct iwl_mac_power_cmd {
 #define IWL_TLC_MNG_CHAIN_B_MSK     (1u << 1)
 #define IWL_TLC_MNG_CFG_FLAGS_STBC_MSK (1u << 0)
 
+/* W4: the access point's beacons missed (if_iwxreg.h struct iwx_missed_beacons_notif; the MAC
+   configuration group's version starts the same) */
+#define IWL_MISSED_BEACONS_NOTIFICATION 0xa2    /* the legacy group's */
+#define IWL_MISSED_BEACONS_NOTIF    0xf6        /* the MAC configuration group's */
+struct iwl_missed_beacons_notif {
+    u32 mac_id;
+    u32 consec_missed_beacons_since_last_rx;
+    u32 consec_missed_beacons;
+    u32 num_expected_beacons;
+    u32 num_recvd_beacons;
+} __attribute__((packed));
+
+/* notifications nothing needs yet, seen on the laptop: taken without a word (W4) */
+#define IWL_STATISTICS_NOTIFICATION 0x9d        /* the legacy group's */
+#define IWL_MFUART_LOAD_NOTIFICATION 0xb1
+#define IWL_DEBUG_LOG_MSG           0xf7
+#define IWL_RX_QUEUES_NOTIFICATION  0xf8        /* the data path group's */
+
 typedef char iwl_mac_ctx_cmd_size[sizeof(struct iwl_mac_ctx_cmd) == 4 * 4 + 16 + 7 * 4 + 5 * 8 + 48 ? 1 : -1];
 typedef char iwl_add_sta_cmd_size[sizeof(struct iwl_add_sta_cmd) == 48 ? 1 : -1];
 typedef char iwl_tx_resp_size[sizeof(struct iwl_tx_resp) == 44 ? 1 : -1];

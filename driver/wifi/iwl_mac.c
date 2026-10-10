@@ -583,11 +583,41 @@ static int phy_ctxt(struct iwl_softc *sc, u32 action) {
 
 /* the MAC context: a station on the access point, its ACK rates, EDCA (802.11's defaults until the access
    point's own come: W4), beacons let through until associated (if_iwx.c iwx_mac_ctxt_cmd()) */
+/* 802.11's EDCA defaults for a station, per access category BE, BK, VI, VO (802.11-2016 table 9-137) */
+static void edca_defaults(struct iwl_softc *sc) {
+    static const u8 d[4][3] = { { 3, 4, 10 }, { 7, 4, 10 }, { 2, 3, 4 }, { 2, 2, 3 } };
+    static const u16 txop[4] = { 0, 0, 94, 47 };
+    u_int i;
+    for(i = 0; i < 4; i++) {
+        sc->edca[i].aifsn = d[i][0];
+        sc->edca[i].ecwmin = d[i][1];
+        sc->edca[i].ecwmax = d[i][2];
+        sc->edca[i].txop = txop[i];
+    }
+}
+
+/* the access point's WMM parameter element (OUI 00:50:f2, type 2, subtype 1): AIFSN, ECWmin/max and the TXOP
+   limit per access category, for the MAC context (if_iwx.c iwx_mac_ctxt_cmd_common() takes net80211's) */
+static void take_wmm_params(struct iwl_softc *sc, const u8 *ies, u_int ies_len) {
+    u_int i, k;
+    for(i = 0; i + 2 <= ies_len && i + 2 + ies[i + 1] <= ies_len; i += 2 + ies[i + 1]) {
+        const u8 *e = ies + i + 2;
+        if(ies[i] != 221 || ies[i + 1] < 24 || e[0] != 0x00 || e[1] != 0x50 || e[2] != 0xf2 || e[3] != 2 || e[4] != 1)
+            continue;
+        for(k = 0; k < 4; k++) {                /* the records after OUI, type, subtype, version, QoS info, reserved */
+            const u8 *r = e + 8 + 4 * k;
+            u_int aci = (r[0] >> 5) & 3;        /* 0 BE, 1 BK, 2 VI, 3 VO: the order of sc->edca */
+            sc->edca[aci].aifsn = r[0] & 0x0f;
+            sc->edca[aci].ecwmin = r[1] & 0x0f;
+            sc->edca[aci].ecwmax = r[1] >> 4;
+            sc->edca[aci].txop = (u16)(r[2] | (r[3] << 8));
+        }
+        return;
+    }
+}
+
 static int mac_ctxt(struct iwl_softc *sc, u32 action, bool assoc) {
-    static const struct { u8 fifo, aifsn, ecwmin, ecwmax; u16 txop; } edca[IWL_AC_NUM] = {
-        { IWL_TX_FIFO_BE, 3, 4, 10, 0 }, { IWL_TX_FIFO_BK, 7, 4, 10, 0 },
-        { IWL_TX_FIFO_VI, 2, 3, 4, 94 }, { IWL_TX_FIFO_VO, 2, 2, 3, 47 },
-    };
+    static const u8 fifo[IWL_AC_NUM] = { IWL_TX_FIFO_BE, IWL_TX_FIFO_BK, IWL_TX_FIFO_VI, IWL_TX_FIFO_VO };
     struct iwl_mac_ctx_cmd c;
     u_int i;
     memset(&c, 0, sizeof(c));
@@ -607,12 +637,12 @@ static int mac_ctxt(struct iwl_softc *sc, u32 action, bool assoc) {
         c.cck_short_preamble = (sc->bss.capability & 0x0020) ? IWL_MAC_FLG_SHORT_PREAMBLE : 0;
         c.short_slot = (sc->bss.band == WLAN_BAND_5GHZ || (sc->bss.capability & 0x0400)) ? IWL_MAC_FLG_SHORT_SLOT : 0;
         for(i = 0; i < IWL_AC_NUM; i++) {
-            struct iwl_ac_qos *q = &c.ac[edca[i].fifo];
-            q->cw_min = (u16)((1u << edca[i].ecwmin) - 1);
-            q->cw_max = (u16)((1u << edca[i].ecwmax) - 1);
-            q->aifsn = edca[i].aifsn;
-            q->fifos_mask = (u8)(1u << edca[i].fifo);
-            q->edca_txop = edca[i].txop;
+            struct iwl_ac_qos *q = &c.ac[fifo[i]];
+            q->cw_min = (u16)((1u << sc->edca[i].ecwmin) - 1);
+            q->cw_max = (u16)((1u << sc->edca[i].ecwmax) - 1);
+            q->aifsn = sc->edca[i].aifsn;
+            q->fifos_mask = (u8)(1u << fifo[i]);
+            q->edca_txop = sc->edca[i].txop;
         }
         c.qos_flags = IWL_MAC_QOS_FLG_UPDATE_EDCA;
         if(sc->ht) {
@@ -777,6 +807,8 @@ int iwl_mac_join(struct iwl_softc *sc, const struct wlan_bss *bss) {
     sc->phy_width = IWL_PHY_VHT_CHANNEL_MODE20;
     sc->phy_ctrl_pos = IWL_PHY_VHT_CTRL_POS_1_BELOW;
     sc->phy_chains = 1;
+    sc->link_lost = false;
+    edca_defaults(sc);
     take_rates(sc, bss->rates, bss->nrates, bss->band == WLAN_BAND_5GHZ);
     memset(sc->rx_pn, 0, sizeof(sc->rx_pn));
     memset(sc->rx_group_pn, 0, sizeof(sc->rx_group_pn));
@@ -868,6 +900,7 @@ int iwl_mac_associated(struct iwl_softc *sc, u16 aid, const u8 *ies, u_int ies_l
             if(r) return r;
         }
     }
+    take_wmm_params(sc, ies, ies_len);          /* (W4) the access point's EDCA, when it sends them */
     r = add_sta(sc, true);
     if(r) return r;
     r = mac_ctxt(sc, IWL_FW_CTXT_ACTION_MODIFY, true);
@@ -999,4 +1032,19 @@ void iwl_mac_leave(struct iwl_softc *sc) {
     unjoin(sc);
     sc->aid = 0;
     kprintf("+IWL: left the network\n");
+}
+
+/* MISSED_BEACONS_NOTIFICATION (W4): the access point not heard for this many beacons in a row, the station layer
+   is told the link is lost (once per association), and it joins again (if_iwx.c iwx_rx_bmiss() probes the access
+   point first; the station layer's rejoin scans for it) */
+#define BEACON_LOSS 16
+void iwl_mac_missed_beacons(struct iwl_softc *sc, const struct iwl_rx_packet *pkt, u_int paylen) {
+    const struct iwl_missed_beacons_notif *n = (const struct iwl_missed_beacons_notif *)pkt->data;
+    if(paylen < sizeof(*n) || !sc->aid) return;
+    sc->beacons_missed = n->consec_missed_beacons_since_last_rx;
+    if(n->consec_missed_beacons_since_last_rx < BEACON_LOSS || sc->link_lost) return;
+    sc->link_lost = true;
+    kprintf("+IWL: %u beacons missed in a row (%u expected, %u heard): the link is lost\n",
+            n->consec_missed_beacons_since_last_rx, n->num_expected_beacons, n->num_recvd_beacons);
+    wlan_link_lost(sc->w);
 }
