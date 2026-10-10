@@ -468,6 +468,8 @@ SMOKE = [
       ('ping 10.0.2.2 2 eth0', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '2 packets transmitted, 2 received']),
       ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.15 (eth0)', '1 received']),
       ('ping 10.0.2.2 1 wlan9', ['ping: no interface wlan9']),
+      ('ping 10.0.2.2 wlan0', ['PING 10.0.2.2 from 10.0.2.16 (wlan0)', '4 packets transmitted, 4 received']),
+      ('ping 10.0.2.2 wlan9', ['usage: ping <address|name> [count] [interface]']),
       ('ping 10.0.2.77 2 wlan0', ['PING 10.0.2.77 from 10.0.2.16 (wlan0)', '2 packets transmitted, 2 received']),
       ('wlan-no-drops', CHECK),
       ('wifi status', ['frames:', ' 4 fragments dropped, ']),
