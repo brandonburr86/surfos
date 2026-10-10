@@ -83,6 +83,8 @@ opens, what was in flight goes again at once.
 opened): its segments are routed by it (ip_route(), net/ip.c), so a connection to eth0's
 address answers through eth0 while wlan0 is up on the same network, and one to wlan0's
 through wlan0. A segment finds its connection by the address it came to as well.
+10/10/26: only a segment to the address of the interface it came in on is taken (RFC 1122
+4.2.3.10): none to a broadcast or multicast address, none to an interface without one.
 */
 
 #include <surfos/types.h>
@@ -551,6 +553,10 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
     u8 flags, *data;
     bool cut = false;                                    /* 10/6/26: data that did not fit (it gets an ACK) */
 
+    /* 10/10/26 (RFC 1122 4.2.3.10): a segment to the interface's own address only. One to a broadcast or
+       multicast address (which IP takes) is dropped unanswered, a SYN opening nothing and the rest getting
+       no reset, and so is one on an interface with no address yet (IP takes everything there, for DHCP) */
+    if(!dev->ip || ip->dst != dev->ip) { netbuf_free(nb); return; }
     if(nb->len < sizeof(*th)) { netbuf_free(nb); return; }
     hlen = (th->off >> 4) * 4;
     if(hlen < sizeof(*th) || hlen > nb->len) { netbuf_free(nb); return; }
