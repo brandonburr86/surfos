@@ -20,7 +20,8 @@ last failure, the driver's line and wlan0's address.
 
 A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in statics,
 asks through shell_ask_secret(), and returns when it is cut short (the station layer
-cancels what it asked for). 0, 1 or 2 as the other commands.
+cancels what it asked for; Ctrl+C at the password prompt joins nothing). 0, 1 or 2 as the
+other commands.
 */
 
 #include <surfos/types.h>
@@ -49,31 +50,12 @@ static void wipe(void *p, size_t n) {
     while(n--) *q++ = 0;
 }
 
-/* an SSID as text: printable ASCII as it is, UTF-8 where the terminal draws it, any other byte '?' */
+/* an SSID as text: printable ASCII as it is, UTF-8 where the terminal draws it. 10/10/26 (review nit):
+   any other byte as \xHH, a C1 control in UTF-8 too, which a terminal would act on (ieee80211_ssid_text()) */
 static const char *ssid_str(const u8 *ssid, u_int len, char *out, size_t size) {
     int caps = tty_ctl(curTask->tty, TTY_CAPS, 0);
-    bool utf8 = caps > 0 && (caps & TTY_CAP_UTF8);
-    u_int i = 0, o = 0;
     if(!len) return "(hidden network)";
-    while(i < len && o + 5 < size) {
-        u8 c = ssid[i];
-        u_int n = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3 : (c & 0xf8) == 0xf0 ? 4 : 0, k;
-        if(n == 1) {
-            out[o++] = c >= 32 && c < 127 ? (char)c : '?';
-            i++;
-            continue;
-        }
-        for(k = 1; n && k < n; k++) if(i + k >= len || (ssid[i + k] & 0xc0) != 0x80) n = 0;
-        if(!n || !utf8) {
-            out[o++] = '?';
-            i++;
-            continue;
-        }
-        for(k = 0; k < n; k++) out[o++] = (char)ssid[i + k];
-        i += n;
-    }
-    out[o] = 0;
-    return out;
+    return ieee80211_ssid_text(ssid, len, caps > 0 && (caps & TTY_CAP_UTF8), out, size);
 }
 
 static bool parse_mac(const char *s, u8 *mac) {
@@ -286,6 +268,10 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
 
     snprintf(question, sizeof(question), "    Password for %s: ", name);
     shell_ask_secret(question, pass, sizeof(pass));
+    if(task_interrupted()) {                            /* 10/9/26: Ctrl+C at the prompt: nothing is joined */
+        wipe(pass, sizeof(pass));
+        return fail("join", -EINTR);
+    }
     if(!pass[0]) {
         wipe(pass, sizeof(pass));
         printf("    wifi: no password: not joined\n");

@@ -421,7 +421,8 @@ static int cmd_nslookup(int argc, char **argv) {
 
 /* any reply is a success, as ping has it elsewhere. 10/6/26: Ctrl+C or a kill ends it at once, with the
    count of what was sent. 10/9/26 (Wi-Fi): an interface may be named (wlan0 and eth0 on one network);
-   otherwise the routes choose (net/ip.c), and the first line says which */
+   otherwise the routes choose (net/ip.c), and the first line says which. 10/10/26: with no count too
+   (ping <address> <interface>) */
 static int cmd_ping(int argc, char **argv) {
     struct netdev *dev = NULL;
     ipaddr_t ip;
@@ -429,7 +430,9 @@ static int cmd_ping(int argc, char **argv) {
     u_long n = 4;
     int count, seq, got = 0, sent = 0, rtt;
     u8 ttl = 0;
-    if(argc < 2 || argc > 4 || (argc >= 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
+    if(argc == 3 && !number_arg(argv[2], &n) && (dev = netdev_find(argv[2])) != NULL) {
+        n = 4;                                          /* ping <address> <interface> */
+    } else if(argc < 2 || argc > 4 || (argc >= 3 && (!number_arg(argv[2], &n) || n < 1 || n > 100000))) {
         printf("    usage: ping <address|name> [count] [interface]   (count: 1 or more, 4 when not given)\n");
         return CMD_USAGE;
     }

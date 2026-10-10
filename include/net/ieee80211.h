@@ -76,6 +76,13 @@ struct ieee80211_hdr {
    the frame is shorter than its header says */
 int ieee80211_parse_hdr(const u8 *frame, u_int len, struct ieee80211_hdr *h);
 
+/* 10/9/26 (review L5): a fragment, More Fragments or a fragment number other than 0. Nothing here
+   reassembles: a fragment is dropped, whatever its body looks like */
+#define WLAN_SEQ_FRAG     0x000f            /* sequence control: the fragment number */
+static inline bool ieee80211_is_fragment(const struct ieee80211_hdr *h) {
+    return (h->fc & WLAN_FC_MOREFRAG) || (h->seq_ctrl & WLAN_SEQ_FRAG);
+}
+
 /**** elements ****/
 
 #define WLAN_EID_SSID          0
@@ -97,6 +104,10 @@ int ieee80211_parse_hdr(const u8 *frame, u_int len, struct ieee80211_hdr *h);
 
 /* every element of ies[0..len) fits: an id, a length, that many bytes, to the last byte */
 bool ieee80211_elems_ok(const u8 *ies, u_int len);
+/* 10/9/26 (review L6): how many bytes from the start of ies[0..len) are whole elements: all of them,
+   or up to the first that does not fit (cut short, a stray byte at the end), where the list ends as
+   Linux reads it. Beacons, probe and association responses are read that far */
+u_int ieee80211_elems_whole(const u8 *ies, u_int len);
 /* the first element with that id (its id byte: e[1] is its length, e + 2 its body), or NULL */
 const u8 *ieee80211_find_elem(const u8 *ies, u_int len, u8 id);
 /* the first vendor-specific element with that OUI and OUI type, or NULL */
@@ -133,6 +144,12 @@ int ieee80211_parse_rsn(const u8 *elem, struct ieee80211_rsn *rsn);
    WPA vendor element (or NULL) and the privacy bit of its capability field */
 u8 ieee80211_security(const u8 *rsn_elem, const u8 *wpa_elem, u16 capability);
 const char *ieee80211_security_name(u8 security);   /* "open", "WPA2-Personal", ... */
+/* 10/10/26 (review nit): an SSID (len bytes) as text a terminal shows as it is: printable ASCII (a
+   backslash doubled), well-formed UTF-8 when utf8 (the terminal draws it), and every other byte as
+   \xHH: no control reaches the terminal, C1 ones in UTF-8 (U+0080..U+009F, CSI among them) neither,
+   nor an overlong form, a surrogate or more than U+10FFFF. 4 * len + 1 bytes always fit; a smaller
+   out ends at the last whole character that fits. out, NUL-terminated */
+const char *ieee80211_ssid_text(const u8 *ssid, u_int len, bool utf8, char *out, size_t size);
 
 /**** beacons and probe responses ****/
 
@@ -146,7 +163,9 @@ const char *ieee80211_security_name(u8 security);   /* "open", "WPA2-Personal", 
 #define IEEE80211_BSS_PROBE_RESP 2          /* it came in a probe response (else a beacon) */
 
 /* a beacon or probe response into bss (a network seen in a scan) at tick now; flags gets
-   IEEE80211_BSS_*. The channel comes from the DS parameter set, else the HT operation element,
+   IEEE80211_BSS_*. Its elements are read up to the last whole one (ieee80211_elems_whole()), and a
+   network with the privacy bit whose RSN element may be what was cut off is WLAN_SEC_OTHER, not WEP.
+   The channel comes from the DS parameter set, else the HT operation element,
    else info's; a hidden SSID (none, empty or all zero bytes) leaves ssid_len 0. 0, or -1 when it
    is no beacon or probe response, or malformed */
 int ieee80211_parse_bss(const u8 *frame, u_int len, const struct wlan_rx_info *info, u_long now,
@@ -210,7 +229,7 @@ int ieee80211_parse_auth(const u8 *frame, u_int len, struct ieee80211_auth *a); 
 struct ieee80211_assoc_resp {
     u16 capability, status, aid;            /* aid without its two top bits */
     const u8 *ies;                          /* the elements, in the frame */
-    u_int ies_len;
+    u_int ies_len;                          /* up to the last whole one (10/9/26, review L6) */
 };
 int ieee80211_parse_assoc_resp(const u8 *frame, u_int len, struct ieee80211_assoc_resp *r);   /* 0 or -1 */
 int ieee80211_parse_reason(const u8 *frame, u_int len, u16 *reason);   /* deauth, disassoc: 0 or -1 */
@@ -239,7 +258,9 @@ struct ieee80211_msdu {
 /* the MSDUs of a data frame whose header h describes (From DS or To DS; an A-MSDU has several):
    their number (up to max; a null data frame has none), or -1 when malformed: a body without
    LLC/SNAP, an A-MSDU subframe that runs past the frame, an A-MSDU that begins with an LLC/SNAP
-   header where its first destination should be (CVE-2020-24588), a frame with four addresses */
+   header where its first destination should be (CVE-2020-24588), a frame with four addresses;
+   and -1 for a fragment (10/9/26, review L5): no MSDU is taken from one, not even a whole-looking
+   one (CVE-2020-26145, -26146) */
 int ieee80211_msdus(const u8 *frame, u_int len, const struct ieee80211_hdr *h, struct ieee80211_msdu *out, u_int max);
 
 /**** writing frames: a buffer that refuses what does not fit ****/

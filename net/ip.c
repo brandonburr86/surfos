@@ -9,8 +9,11 @@ connections an ARP failure concerns).
 10/9/26 (Wi-Fi, track S): two interfaces, eth0 and wlan0, perhaps on one network
 (10.0.0.0/24 on the laptop). ip_route() chooses by the source address when the caller
 has one (a connection keeps the interface its address belongs to), then by the subnet
-that holds the destination, in the order the interfaces registered (one with a link
-first), then the first configured interface with a gateway.
+that holds the destination, then the first configured interface with a gateway; when
+several would do, one with its link up, then Ethernet (ethN) before Wi-Fi, then the
+order they registered. The laptop registers wlan0 at boot and its USB adapter later as
+eth0, and traffic with no source address still takes eth0, as dhcp, netinfo and
+dns_server() do (the review of track S, M1).
 */
 
 #include <surfos/types.h>
@@ -45,29 +48,44 @@ u16 ip_checksum_pseudo(ipaddr_t src, ipaddr_t dst, u8 proto, const void *data, u
     return htons((u16)~sum);
 }
 
+/* 10/9/26: of the configured interfaces whose subnet holds dst (subnet), or that have a gateway, the
+   one the routes prefer: its link up before one without, then Ethernet (ethN) before Wi-Fi (wlanN),
+   then the first to register; NULL when none would do */
+static struct netdev *best(ipaddr_t dst, bool subnet) {
+    struct netdev *d, *pick = NULL;
+    int score, top = -1;
+    for(d = netdev_first(); d; d = d->next) {
+        if(!d->ip) continue;
+        if(subnet ? !d->netmask || (dst & d->netmask) != (d->ip & d->netmask) : !d->gateway) continue;
+        score = (d->link_up ? 2 : 0) + (strncmp(d->name, "eth", 3) ? 0 : 1);
+        if(score > top) {
+            top = score;
+            pick = d;
+        }
+    }
+    return pick;
+}
+
 /* 10/9/26: the interface for a datagram from src (0: none yet) to dst:
    1. the interface that has the address src: what a TCP connection made to eth0's address
       sends goes out through eth0 whatever wlan0 does (the integrator's telnet session to the
-      laptop), and one made to wlan0's address through wlan0;
-   2. the interface whose subnet holds dst (its broadcast too), in the order the interfaces
-      registered, one with its link up before one without;
-   3. the first configured interface with a gateway, a link up first;
-   4. the default interface: one with no address yet (DHCP's broadcasts name theirs: udp_bind_dev()) */
+      laptop), and one made to wlan0's address through wlan0; none (NULL) when no interface
+      has it any more (wlan0 left its network, a new lease): nothing goes out from an address
+      that is not ours, through another interface under that one's address;
+   2. the interface whose subnet holds dst (its broadcast too);
+   3. the configured interface with a gateway;
+   4. the default interface: one with no address yet (DHCP's broadcasts name theirs: udp_bind_dev()).
+   In 2 and 3, of several: one with its link up, then Ethernet before Wi-Fi, then the first to register
+   (best()): on the laptop, wlan0 registers at boot and the USB adapter later as eth0 */
 struct netdev *ip_route(ipaddr_t src, ipaddr_t dst) {
-    struct netdev *d, *down = NULL;
-    if(src) for(d = netdev_first(); d; d = d->next) if(d->ip == src) return d;
-    for(d = netdev_first(); d; d = d->next) {
-        if(!d->ip || !d->netmask || (dst & d->netmask) != (d->ip & d->netmask)) continue;
-        if(d->link_up) return d;
-        if(!down) down = d;
+    struct netdev *d;
+    if(src) {
+        for(d = netdev_first(); d; d = d->next) if(d->ip == src) return d;
+        return NULL;
     }
-    if(down) return down;
-    for(d = netdev_first(); d; d = d->next) {
-        if(!d->ip || !d->gateway) continue;
-        if(d->link_up) return d;
-        if(!down) down = d;
-    }
-    return down ? down : netdev_default();
+    d = best(dst, true);
+    if(!d) d = best(dst, false);
+    return d ? d : netdev_default();
 }
 
 struct netdev *ip_route_dev(ipaddr_t dst) {

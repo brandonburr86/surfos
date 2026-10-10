@@ -13,13 +13,15 @@ Threads. wlan_register() starts a kernel thread, `wlan`, per device. wlan_rx() (
 driver's thread) copies each frame into the device's queue and returns; the thread parses
 them: beacons and probe responses into the scan list at any time, the answers to
 authentication and association, deauthentication, EAPOL for the supplicant, data for the
-IP stack (netdev_rx()). A command (shell/wifi.c) never drives the chip itself: wlan_up(),
+IP stack (netdev_rx_wait()). A command (shell/wifi.c) never drives the chip itself: wlan_up(),
 wlan_scan(), wlan_join() and the others post one request to the thread and wait for its
 end; a second command meanwhile is told the device is busy, and Ctrl+C or a kill leaves
 the request to the thread, which cancels it. Every hw operation but the two that send is
 called with hw_lock held (one at a time per device, as wlan.h asks) and never with
 net_lock; the netdev's send runs under net_lock and only calls tx_data(), which never
-waits.
+waits. 10/9/26 (review M3): before leave() and stop(), wlan0's sends are stopped and one
+under way is waited out (tx_quiesce(): net_lock taken and dropped), so the driver never
+gets a frame while it tears its queues down or after.
 
 Joining: the network comes from the scan list (by BSSID, else the strongest with the SSID
 and the security asked for: a PMK means WPA2, none an open network); when it is not
@@ -35,20 +37,28 @@ disassociation from the AP, or wlan_link_lost() from the driver, takes the link 
 (the log says why) and a new join follows 3 seconds later, then after 6, 9, 12 and 15
 seconds, five tries at most; then the station gives up. wlan_leave() sends a
 deauthentication, then leave(). The PMK is kept only for those reconnects: it is wiped
-when a join fails, on leave and down, and when the tries run out.
+when a join fails, on leave and down, and when the tries run out. 10/9/26 (review M2):
+wlan0's address, gateway and DNS server, and its ARP entries, go when it leaves its
+network (leave, down, the rejoins given up, a join to another SSID); a link lost and
+joined again keeps them. A scan's end that the driver reports for a scan that was aborted
+ends nothing (scan_take_dones(), review L2).
 
 Data: an Ethernet frame from the stack becomes a To DS data frame (QoS data with TID 0
 when the AP has WMM), protected once the keys are in; frames from the AP become Ethernet
-frames, an A-MSDU several. EAPOL (0x888e) goes to the supplicant, never to the IP stack;
+frames, an A-MSDU several. EAPOL (0x888e) goes to the supplicant, never to the IP stack, and
+from it to the AP protected once the pairwise key is in (review L4);
 on a WPA2 network nothing else passes before the link is up, nor anything that came
 unprotected afterwards. Our own broadcasts that the AP sends back are dropped, and so
-are retransmissions already seen.
+are retransmissions already seen, and fragments (10/9/26, review L5): nothing here reassembles
+them, so a frame with More Fragments or a fragment number is counted and dropped, management
+frames too.
 
 The supplicant is track C's (net/wlan/wpa.c, include/net/wpa.h): its functions are weak
 references here, so this file links and runs before it lands; a WPA2 join is refused
 until it does. Nothing here logs a key, a PMK or a password.
 */
 
+#include <stdarg.h>
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/task.h>
@@ -58,6 +68,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
+#include <net/eth.h>
 #include <net/wlan.h>
 #include <net/wlan_cmd.h>
 #include <net/wpa.h>
@@ -76,6 +87,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #define SCAN_AGE         (60 * HZ)      /* a network not heard for this long leaves it */
 #define SCAN_FRESH       (10 * HZ)      /* a join takes the list's word for a network heard this recently */
 #define SCAN_TIMEOUT_MS  10000
+#define SCAN_STALE       HZ             /* an aborted scan's end, if the driver reports it, comes within this */
 #define RXQ_MAX          128            /* frames waiting for the thread */
 #define FRAME_MAX        4096           /* the longest frame taken: an A-MSDU of 3839 bytes and its header */
 #define AUTH_TIMEOUT     (HZ / 5)       /* 200 ms for each answer */
@@ -115,8 +127,9 @@ struct wlan_state {
     /* wlan_rx()'s queue and the driver's news, under irq_save */
     struct rx_item *rxq_head, *rxq_tail;
     u_int rxq_count;
-    volatile bool scan_done_flag, link_lost_flag;
-    volatile int scan_done_status;
+    volatile bool link_lost_flag;
+    volatile u_int scan_dones;          /* 10/9/26 (review L2): wlan_scan_done() calls so far */
+    volatile int scan_done_status;      /* the last one's */
 
     /* a command's request: claimed, filled in, posted (under irq_save); done by the thread */
     volatile bool req_claimed, req_started, req_cancel, req_abandoned;
@@ -133,6 +146,9 @@ struct wlan_state {
     int state;
     bool scanning;
     u_long scan_deadline;
+    u_int scan_dones_seen;              /* 10/9/26: of scan_dones, those taken */
+    u_int scan_owed;                    /* aborted scans whose end the driver may still report: not the running one's */
+    u_long scan_owed_until;
     struct scan_entry list[SCAN_MAX];
 
     /* the network being joined, or joined */
@@ -169,6 +185,8 @@ struct wlan_state {
     bool last_seq_valid[17];
     u8 ethbuf[NETBUF_SIZE];
     u_long rx_frames, rx_dropped, rx_bad, rx_clear;
+    u_long rx_frag;                     /* fragments: never reassembled, dropped (review L5) */
+    u_long rx_own;                      /* our own broadcasts the AP sent back to its network, dropped */
 };
 
 static struct wlan_dev *devs[WLAN_DEVS];
@@ -244,6 +262,14 @@ static void send_deauth(struct wlan_state *st, u16 reason) {
     u8 f[32];
     tx_mgmt(st, f, ieee80211_build_deauth(f, sizeof(f), WLAN_ST_DEAUTH, st->cur.bssid, st->w->mac, st->cur.bssid, reason,
                                           next_seq(st, false)));
+}
+
+/* 10/9/26 (review M3): every send of wlan0 runs under net_lock (netdev_send() from the IP stack), so once
+   tx_up is false, taking and dropping the lock waits out a send that read tx_up before: no tx_data() reaches
+   the driver during or after leave() or stop(). Called before either, never with hw_lock held. */
+static void tx_quiesce(void) {
+    mutex_lock(&net_lock);
+    mutex_unlock(&net_lock);
 }
 
 /* what the netdev's send may use; up false stops it */
@@ -393,6 +419,24 @@ static bool list_pick(struct wlan_state *st, u_long since, struct wlan_bss *out,
 
 /**** scans ****/
 
+static void scan_finished(struct wlan_state *st, int status);
+
+/* 10/9/26 (review L2): the scan ends the driver reported (wlan_scan_done()) since the thread last looked,
+   in order. A driver may or may not report the end of a scan that was aborted (iwx's firmware does, some
+   time later): each abort leaves one such end owed for SCAN_STALE, and the first ends taken pay those, so
+   that an aborted scan's end never ends the scan that runs after it. A wlan_hw_ops::scan() carries no id
+   to tell them apart by; an aborted scan's end later than SCAN_STALE would still be taken for the next. */
+static void scan_take_dones(struct wlan_state *st) {
+    while(st->scan_dones_seen != st->scan_dones) {
+        st->scan_dones_seen++;
+        if(st->scan_owed) {
+            st->scan_owed--;
+            continue;
+        }
+        if(st->scanning) scan_finished(st, st->scan_done_status);
+    }
+}
+
 static int scan_begin(struct wlan_state *st, const u8 *ssid, u_int ssid_len, u_int timeout_ms) {
     struct wlan_dev *w = st->w;
     struct wlan_scan_req req;
@@ -403,7 +447,7 @@ static int scan_begin(struct wlan_state *st, const u8 *ssid, u_int ssid_len, u_i
         memcpy(req.ssid, ssid, ssid_len);
         req.ssid_len = (u8)ssid_len;
     }
-    st->scan_done_flag = false;
+    scan_take_dones(st);                                /* what came before this scan is no end of it */
     hw_lock(st);
     r = w->ops->scan(w, &req);
     hw_unlock(st);
@@ -422,7 +466,8 @@ static void scan_abort(struct wlan_state *st) {
         hw_unlock(st);
     }
     st->scanning = false;
-    st->scan_done_flag = false;
+    st->scan_owed++;                                    /* its end, already here or still to come, ends nothing */
+    st->scan_owed_until = getticks() + SCAN_STALE;
 }
 
 static void join_continue(struct wlan_state *st);
@@ -452,11 +497,27 @@ static void unjoin(struct wlan_state *st, u16 reason) {
     st->wpa_done = false;
     st->ptk_in = st->gtk_in = false;
     if(st->hw_joined) {
+        tx_quiesce();                                   /* no wlan0 send left in the driver's way */
         hw_lock(st);
         if(w->ops->leave) w->ops->leave(w);
         hw_unlock(st);
         st->hw_joined = false;
     }
+}
+
+/* 10/9/26 (review M2): wlan0's address belonged to the network it was on. When the station leaves it (wifi
+   leave, wifi down, the rejoins given up, a join to another network) the address, netmask, gateway and DNS
+   server go, with wlan0's ARP entries, under net_lock: no route keeps pointing into a network wlan0 is no
+   longer on. A link lost and joined again (the same network) keeps them: the lease is still good. */
+static void forget_address(struct wlan_state *st) {
+    struct netdev *nd = st->nd;
+    char a[16];
+    mutex_lock(&net_lock);
+    if(nd->ip) kprintf("%s: address %s forgotten (dhcp %s for one on the next network)\n", nd->name, ipfmt(nd->ip, a),
+                       nd->name);
+    nd->ip = nd->netmask = nd->gateway = nd->dns = 0;
+    arp_flush(nd);
+    mutex_unlock(&net_lock);
 }
 
 static void forget(struct wlan_state *st) {
@@ -484,6 +545,7 @@ static void join_fail(struct wlan_state *st, int err, u16 reason, const char *wh
                 st->reconnects, why);
         st->state = ST_IDLE;
         forget(st);
+        forget_address(st);
         return;
     }
     kprintf("%s: joining \"%s\" again failed (try %u of %u): %s; next try in %u s\n", w->name,
@@ -630,9 +692,12 @@ static void leave_now(struct wlan_state *st, const char *why) {
 
 /**** the supplicant's calls ****/
 
+/* 10/9/26 (review L4): protected once the pairwise key is in, as any other data frame: the group key
+   handshake's message 2, a new 4-way handshake's messages. Message 4 goes before the supplicant installs the
+   key (wpa.c), so in the clear, as the access point expects it then */
 static int wpa_send(void *ctx, const u8 *frame, u_int len) {
     struct wlan_state *st = (struct wlan_state *)ctx;
-    return send_data(st, ETH_P_EAPOL, frame, len, false);   /* unprotected, as wpa.h has it */
+    return send_data(st, ETH_P_EAPOL, frame, len, st->ptk_in);
 }
 
 static int wpa_install(void *ctx, const struct wlan_key *key) {
@@ -799,7 +864,10 @@ static void rx_data(struct wlan_state *st, struct rx_item *it, const struct ieee
     n = ieee80211_msdus(it->frame, it->len, h, m, MSDU_MAX);
     if(n < 0) { st->rx_bad++; return; }
     for(i = 0; i < n; i++) {
-        if(!memcmp(m[i].sa, w->mac, WLAN_ADDR_LEN)) continue;   /* our own broadcast, sent back by the AP */
+        if(!memcmp(m[i].sa, w->mac, WLAN_ADDR_LEN)) {   /* our own broadcast, sent back by the AP */
+            st->rx_own++;
+            continue;
+        }
         if(m[i].type == ETH_P_EAPOL) {
             if(st->sm) {
                 wpa_rx_eapol(st->sm, m[i].payload, m[i].len);
@@ -816,7 +884,7 @@ static void rx_data(struct wlan_state *st, struct rx_item *it, const struct ieee
         st->ethbuf[12] = (u8)(m[i].type >> 8);
         st->ethbuf[13] = (u8)m[i].type;
         memcpy(st->ethbuf + ETH_HLEN, m[i].payload, m[i].len);
-        netdev_rx(st->nd, st->ethbuf, ETH_HLEN + m[i].len);
+        netdev_rx_wait(st->nd, st->ethbuf, ETH_HLEN + m[i].len);   /* a burst waits for room (review L1) */
     }
 }
 
@@ -836,6 +904,7 @@ static void rx_all(struct wlan_state *st) {
         st->rx_frames++;
         if(st->state == ST_DOWN) { kfree(it); continue; }
         if(ieee80211_parse_hdr(it->frame, it->len, &h)) st->rx_bad++;
+        else if(ieee80211_is_fragment(&h)) st->rx_frag++;  /* 10/9/26 (review L5): nothing reassembles them */
         else if(h.type == WLAN_FC_TYPE_MGMT) rx_mgmt(st, it, &h);
         else rx_data(st, it, &h);
         kfree(it);
@@ -867,13 +936,15 @@ static void do_down(struct wlan_state *st) {
     struct wlan_dev *w = st->w;
     if(!w->up) return;
     scan_abort(st);
-    leave_now(st, "wifi down");
+    leave_now(st, "wifi down");                         /* wlan0's sends stopped (tx_context()) */
+    tx_quiesce();
     hw_lock(st);
     w->ops->stop(w);
     hw_unlock(st);
     w->up = false;
     st->state = ST_DOWN;
     st->nd->link_up = false;
+    forget_address(st);
     list_clear(st);
     kprintf("%s: down\n", w->name);
 }
@@ -891,7 +962,10 @@ static void req_start(struct wlan_state *st) {
         req_complete(st, 0);
         break;
     case REQ_LEAVE:
-        if(w->up) leave_now(st, "wifi leave");
+        if(w->up) {
+            leave_now(st, "wifi leave");
+            forget_address(st);
+        }
         req_complete(st, 0);
         break;
     case REQ_SCAN:
@@ -905,6 +979,8 @@ static void req_start(struct wlan_state *st) {
         if(st->req_has_pmk && !wpa_available()) { req_complete(st, -ENOSYS); break; }
         if(st->state != ST_IDLE) leave_now(st, "joining another network");
         scan_abort(st);
+        if(st->ssid_len && (st->ssid_len != st->req_ssid_len || memcmp(st->ssid, st->req_ssid, st->ssid_len)))
+            forget_address(st);                         /* another network than the last one: its address is no good */
         memcpy(st->ssid, st->req_ssid, st->req_ssid_len);
         st->ssid_len = st->req_ssid_len;
         st->has_pin = st->req_has_bssid;
@@ -942,6 +1018,7 @@ static void req_cancel(struct wlan_state *st) {
 static void tick(struct wlan_state *st) {
     u_long now = getticks();
     list_age(st);
+    if(st->scan_owed && (long)(now - st->scan_owed_until) >= 0) st->scan_owed = 0;   /* no end came for them */
     if(st->scanning && (long)(now - st->scan_deadline) >= 0) {
         scan_abort(st);
         scan_finished(st, -ETIMEDOUT);
@@ -981,7 +1058,8 @@ static void tick(struct wlan_state *st) {
 }
 
 static bool work_waiting(struct wlan_state *st) {
-    return st->rxq_head || st->scan_done_flag || st->link_lost_flag || (st->req != REQ_NONE && (!st->req_started || st->req_cancel));
+    return st->rxq_head || st->scan_dones != st->scan_dones_seen || st->link_lost_flag ||
+           (st->req != REQ_NONE && (!st->req_started || st->req_cancel));
 }
 
 static void wlan_thread(void *arg) {
@@ -992,10 +1070,7 @@ static void wlan_thread(void *arg) {
         event_clear(&st->kick);
         if(!work_waiting(st)) event_wait_timeout(&st->kick, 100);
         rx_all(st);
-        if(st->scan_done_flag) {
-            st->scan_done_flag = false;
-            if(st->scanning) scan_finished(st, st->scan_done_status);
-        }
+        scan_take_dones(st);
         if(st->link_lost_flag) {
             st->link_lost_flag = false;
             if(st->state == ST_UP) link_down(st, "the access point is gone (beacons lost)");
@@ -1083,10 +1158,11 @@ struct wlan_dev *wlan_register(const struct wlan_hw_ops *ops, void *priv) {
     mutex_init(&st->list_lock, "wlan-list");
     event_init(&st->kick);
     event_init(&st->req_event);
-    strlcpy(nd->name, w->name, sizeof(nd->name));       /* netdev_register() keeps it */
+    strlcpy(nd->name, w->name, sizeof(nd->name));       /* netdev_register() keeps it, unless another has it */
     nd->ops = &wlan_netdev_ops;
     nd->priv = w;
     nd->mtu = ETH_MTU;
+    nd->no_pad = true;                                  /* 10/10/26: 802.11 frames need no padding to 60 bytes */
     if(!kthread_create("wlan", wlan_thread, w, PL_HIGH, TF_KTHREAD | TF_DETACHED)) {
         kfree(w);
         kfree(st);
@@ -1094,6 +1170,7 @@ struct wlan_dev *wlan_register(const struct wlan_hw_ops *ops, void *priv) {
         return NULL;
     }
     netdev_register(nd);
+    strlcpy(w->name, nd->name, sizeof(w->name));        /* 10/10/26: another device had it: the one it got */
     devs[ndevs++] = w;
     kprintf("%s: Wi-Fi station (wifi up starts it)\n", w->name);
     return w;
@@ -1127,9 +1204,12 @@ void wlan_rx(struct wlan_dev *w, const u8 *frame, u_int len, const struct wlan_r
 }
 
 void wlan_scan_done(struct wlan_dev *w, int status) {
+    u_long flags;
     if(!w || !w->st) return;
+    flags = irq_save();
     w->st->scan_done_status = status;
-    w->st->scan_done_flag = true;
+    w->st->scan_dones++;
+    irq_restore(flags);
     event_set(&w->st->kick);
 }
 
@@ -1199,50 +1279,64 @@ void wlan_leave(struct wlan_dev *w) {
     wlan_leave_wait(w);
 }
 
-/* state, SSID, BSSID, channel, signal; then lines for the last failure, the driver and the counters */
+/* 10/9/26 (review L3): text after what buf holds, cut at size; snprintf() answers the length it would have
+   needed, so lengths are never added up from it */
+static void put(char *buf, size_t size, const char *fmt, ...) {
+    size_t n = strlen(buf);
+    va_list ap;
+    if(n + 1 >= size) return;
+    va_start(ap, fmt);
+    vsnprintf(buf + n, size - n, fmt, ap);
+    va_end(ap);
+}
+
+/* state, SSID, BSSID, channel, signal; then lines for the last failure, the driver and the counters.
+   10/9/26: never past size, however small (review L3); the driver's line only when its operation lock is
+   free: `wifi status` does not wait behind a firmware being loaded, nor without a way out */
 void wlan_describe(struct wlan_dev *w, char *buf, size_t size) {
     static const char *const joining[] = { "", "", "looking for", "authenticating with", "associating with",
                                            "4-way handshake with", "", "" };
     struct wlan_state *st;
     char s[WLAN_SSID_MAX + 1], m[18], drv[160];
-    int n = 0, state;
+    int state;
     if(!size) return;
     buf[0] = 0;
     if(!w || !(st = w->st)) return;
     state = st->state;
     switch(state) {
     case ST_DOWN:
-        n = snprintf(buf, size, "down (wifi up starts it)");
+        put(buf, size, "down (wifi up starts it)");
         break;
     case ST_IDLE:
-        n = snprintf(buf, size, "up, not associated%s", st->scanning ? ", scanning" : "");
+        put(buf, size, "up, not associated%s", st->scanning ? ", scanning" : "");
         break;
     case ST_UP:
-        n = snprintf(buf, size, "associated with \"%s\" (%s), channel %u, %s GHz, signal %d dBm, %s%s%s",
-                     ssid_text(st->ssid, st->ssid_len, s), macfmt(st->cur.bssid, m), st->cur.channel,
-                     st->cur.band == WLAN_BAND_5GHZ ? "5" : "2.4", st->cur.rssi, ieee80211_security_name(st->cur.security),
-                     st->cur_wmm ? ", QoS" : "", st->cur.ht ? ", HT" : "");
+        put(buf, size, "associated with \"%s\" (%s), channel %u, %s GHz, signal %d dBm, %s%s%s",
+            ssid_text(st->ssid, st->ssid_len, s), macfmt(st->cur.bssid, m), st->cur.channel,
+            st->cur.band == WLAN_BAND_5GHZ ? "5" : "2.4", st->cur.rssi, ieee80211_security_name(st->cur.security),
+            st->cur_wmm ? ", QoS" : "", st->cur.ht ? ", HT" : "");
         break;
     case ST_WAIT:
-        n = snprintf(buf, size, "link lost: joining \"%s\" again (try %u of %u)", ssid_text(st->ssid, st->ssid_len, s),
-                     st->reconnects + 1, RECONNECT_TRIES);
+        put(buf, size, "link lost: joining \"%s\" again (try %u of %u)", ssid_text(st->ssid, st->ssid_len, s),
+            st->reconnects + 1, RECONNECT_TRIES);
         break;
     default:
-        n = snprintf(buf, size, "%s \"%s\"", joining[state], ssid_text(st->ssid, st->ssid_len, s));
-        if(state > ST_SCAN) n += snprintf(buf + n, size - n, " (%s), channel %u", macfmt(st->cur.bssid, m), st->cur.channel);
+        put(buf, size, "%s \"%s\"", joining[state], ssid_text(st->ssid, st->ssid_len, s));
+        if(state > ST_SCAN) put(buf, size, " (%s), channel %u", macfmt(st->cur.bssid, m), st->cur.channel);
         break;
     }
-    if(n < 0 || (size_t)n >= size) return;
-    if(st->last[0] && state != ST_UP) n += snprintf(buf + n, size - n, "\nlast: %s", st->last);
-    if((size_t)n >= size) return;
+    if(st->last[0] && state != ST_UP) put(buf, size, "\nlast: %s", st->last);
     if(w->ops->status) {
         drv[0] = 0;
-        hw_lock(st);
-        w->ops->status(w, drv, sizeof(drv));
-        hw_unlock(st);
-        if(drv[0]) n += snprintf(buf + n, size - n, "\ndriver: %s", drv);
-        if((size_t)n >= size) return;
+        if(mutex_trylock(&st->hw_lock)) {
+            w->ops->status(w, drv, sizeof(drv));
+            hw_unlock(st);
+        } else {
+            strlcpy(drv, "busy (the chip is starting, or answering another operation)", sizeof(drv));
+        }
+        if(drv[0]) put(buf, size, "\ndriver: %s", drv);
     }
-    snprintf(buf + n, size - n, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
-             st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
+    put(buf, size, "\nframes: %lu received, %lu dropped, %lu malformed, %lu unprotected dropped",
+        st->rx_frames, st->rx_dropped, st->rx_bad, st->rx_clear);
+    put(buf, size, "\n        %lu fragments dropped, %lu own broadcasts the access point sent back", st->rx_frag, st->rx_own);
 }

@@ -16,7 +16,12 @@ Context:
 * A driver delivers received frames with wlan_rx() from task context (its own thread),
   never from an interrupt handler; wlan_rx() copies the frame and returns at once.
 * tx_data() and tx_mgmt() never wait: they queue the frame or drop it (non-zero), and may
-  be called with net_lock held.
+  be called with net_lock held. 10/9/26 (the review of track S): tx_data() may be called by
+  two threads at once, wlan0's sends from the IP stack (always under net_lock) and the
+  station layer's own thread (EAPOL); tx_mgmt() by the station layer's thread. Neither is
+  called during or after leave() or stop(): the station layer stops wlan0's sends, waits
+  out one already under way (by taking net_lock) and only then calls them; the next comes
+  after join() or start().
 * Every other operation may wait for the hardware and is called by the station layer only
   from its own thread or a command's task, never with net_lock held, never two at a time
   for one device. They return 0 or a negative errno (include/fs/vfs.h).

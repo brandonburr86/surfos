@@ -9,30 +9,36 @@ wlan_hw_ops whose "firmware" is a handful of access points on the air, so the st
 layer, the wifi command, DHCP and the IP stack over wlan0 can be tested under QEMU, which
 has no Wi-Fi:
 
-  SurfSim        open, 2.4 GHz channel 6, HT, WMM (QoS data, A-MSDU now and then)
+  SurfSim        open, 2.4 GHz channel 6, HT, WMM (QoS data, A-MSDU now and then); its beacons and
+                 probe responses end with an element cut short, as some access points' do (review L6)
   SurfSimWPA     WPA2-Personal (CCMP, PSK), 5 GHz channel 36, HT and VHT, WMM; its test-only
                  passphrase is WLANSIM_PASSPHRASE below (the smoke test types it)
   (hidden)       SurfSimHidden: open, 2.4 GHz channel 11, an empty SSID in its beacons; it
-                 answers a probe for its name only; no HT, no WMM (plain data frames)
+                 answers a probe for its name only; no HT, no WMM (plain data frames); its
+                 network is an island, bridged to nothing: no DHCP server answers there
   SurfSimWEP     WEP (the privacy bit, no RSN element), channel 1
   SurfSimSAE     WPA3-Personal only (SAE, protected management frames required), channel 149
-  SurfSimFlaky   open, channel 1, WMM: 1 s after the first association it deauthenticates the
+  SurfSimFlaky   open, channel 1, WMM: 3 s after the first association it deauthenticates the
                  station; 1 s after the second its beacons stop (wlan_link_lost()) for 4 s
 
 The simulated firmware runs in a kernel thread of its own (`wlansim`), as a real driver's
-would: a scan takes 50 ms and delivers a beacon from every access point on the channels
-asked for, and a probe response from those that answer the probe; authentication and
+would: a scan takes 600 ms and delivers a beacon from every access point on the channels
+asked for, and a probe response from those that answer the probe (an aborted scan's end is
+reported 300 ms after the abort, as iwx's firmware reports it); authentication and
 association are answered as an access point does (an association to the WPA2 network must
 carry an RSN element it accepts); a station that sends data frames while not associated is
 deauthenticated (reason 7). The associated network beacons once a second.
 
-Bridging: the access points' network is the first Ethernet interface (QEMU's e1000, eth0).
+Bridging: the access points' network (all but SurfSimHidden's) is the first Ethernet
+interface (QEMU's e1000, eth0).
 A data frame from the station becomes an Ethernet frame on it from wlan0's own MAC address
 (eth0's with the last byte one higher), and frames on eth0 to that address, broadcasts and
 multicasts become data frames from the access point (eth0 is given the address with
 NETDEV_ADD_RX_ADDR, and its bridge_rx hook brings them here). QEMU's DHCP server so gives
 wlan0 an address of its own. Every seventh frame to the station comes twice, the second as
-a retransmission, and with WMM every third unicast one as an A-MSDU.
+a retransmission, and with WMM every third unicast one as an A-MSDU. A broadcast or
+multicast from the station comes back to it too, as an access point sends it to its whole
+network.
 
 WPA2: the access point runs the authenticator side of the 4-way handshake (802.11-2016
 12.7.6) and, 3 seconds after it, one group key handshake (12.7.7), with track C's crypto
@@ -57,6 +63,7 @@ gives up after three tries (deauthentication, reason 15). Nothing here logs a ke
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
+#include <net/ip.h>
 #include <net/wlan.h>
 #include <net/ieee80211.h>
 #include <crypto/crypto.h>
@@ -82,15 +89,17 @@ struct sim_ap {
     i8 rssi;
     u8 kind;                            /* AP_* */
     bool ht, vht, wmm, flaky;
+    bool ragged;                        /* its beacons and probe responses end with an element cut short (L6) */
+    bool island;                        /* its network reaches nothing: not bridged to eth0, no DHCP server */
 };
 
 static const struct sim_ap aps[] = {
-    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false },
-    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false },
-    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false },
-    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false },
-    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false },
-    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true  },
+    { "SurfSim",       false, 1,   6, -45, AP_OPEN, true,  false, true,  false, true,  false },
+    { "SurfSimWPA",    false, 2,  36, -52, AP_WPA2, true,  true,  true,  false, false, false },
+    { "SurfSimHidden", true,  3,  11, -67, AP_OPEN, false, false, false, false, false, true  },
+    { "SurfSimWEP",    false, 4,   1, -71, AP_WEP,  false, false, false, false, false, false },
+    { "SurfSimSAE",    false, 5, 149, -60, AP_SAE,  true,  false, true,  false, false, false },
+    { "SurfSimFlaky",  false, 6,   1, -58, AP_OPEN, false, false, true,  true,  false, false },
 };
 #define NAPS ((int)(sizeof(aps) / sizeof(aps[0])))
 
@@ -135,6 +144,7 @@ struct sim {
     volatile bool scan_pending;
     struct wlan_scan_req scan_req;
     u_long scan_at;
+    u_long stale_done_at;               /* 10/9/26 (review L2): when to report the end of an aborted scan, 0: none */
     /* the air */
     int tuned;                          /* join(): the AP whose channel the chip is on, -1 */
     int authed, assoc;                  /* the AP that authenticated, associated the station; -1 */
@@ -154,6 +164,11 @@ struct sim {
     u_long flaky_deauth_at, flaky_lost_at, flaky_silent_until;
     /* counters */
     u_long out, in, dropped, undecryptable;
+    /* 10/9/26 (review M3): leave() or stop() came and no join() or start() since: wlan.h says no frame is handed
+       over then, and the chip counts (and says once) any that is */
+    bool left;
+    u_long late;
+    u_long padded;                      /* MSDUs from the station longer than their packet (Ethernet padding) */
 };
 
 static struct sim *the_sim;             /* one simulated chip: the bridge hook finds it here */
@@ -254,6 +269,7 @@ static u_int ap_frame(struct sim *s, int ap, u8 subtype, u8 *buf, u_int size) {
         wbuf_elem(&b, WLAN_EID_VHT_OPERATION, vhtop, sizeof(vhtop));
     }
     if(p->wmm) wbuf_elem(&b, WLAN_EID_VENDOR, wmm_param, sizeof(wmm_param));
+    if(p->ragged) wbuf_put(&b, "\xdd\x09\x00\x50\xf2", 5);   /* a vendor element: 9 bytes, it says; 3 there */
     return wbuf_done(&b);
 }
 
@@ -324,6 +340,98 @@ static void to_station(struct sim *s, const u8 *eth, u_int len) {
         f[1] |= WLAN_FC_RETRY >> 8;
         deliver(s, ap, f, n, decrypted);
     }
+}
+
+/**** 10/9/26 (review L1): 10.0.2.77, a host on the access point's own network ****/
+
+/* It answers ARP with two A-MSDUs of 64 copies of its reply each, one burst bigger than one device's share
+   of the receive queue (net/netbuf.c), and ping, each reply followed by the same as two fragments (L5). */
+#define VHOST_COPIES 64
+static const u8 vhost_mac[6] = { 0x02, 0x53, 0x49, 0x4d, 0x00, 0x77 };
+
+/* n copies of one Ethernet frame to the station in one A-MSDU from the access point */
+static void burst(struct sim *s, const u8 *eth, u_int len, u_int n) {
+    static u8 f[4096];                                  /* the sim thread's alone */
+    struct wbuf b;
+    u8 bssid[6];
+    u_int i;
+    int ap = s->assoc;
+    if(ap < 0 || len < ETH_HLEN || !s->sta_wmm) return;
+    bssid_of(ap, bssid);
+    wbuf_init(&b, f, sizeof(f));
+    wbuf_hdr(&b, WLAN_FC(WLAN_FC_TYPE_DATA, WLAN_ST_QOS_DATA) | WLAN_FC_FROMDS, eth, bssid, bssid, s->seq++);
+    wbuf_le16(&b, WLAN_QOS_AMSDU);
+    for(i = 0; i < n; i++) {
+        u_int sub = 14 + 8 + len - ETH_HLEN;
+        wbuf_put(&b, eth, 12);
+        wbuf_be16(&b, (u16)(8 + len - ETH_HLEN));
+        wbuf_put(&b, "\xaa\xaa\x03\x00\x00\x00", 6);
+        wbuf_put(&b, eth + 12, 2);
+        wbuf_put(&b, eth + ETH_HLEN, len - ETH_HLEN);
+        if(i + 1 < n) while(sub++ % 4) wbuf_u8(&b, 0);   /* padding, but after the last */
+    }
+    if(aps[ap].kind == AP_OPEN) deliver(s, ap, f, wbuf_done(&b), false);
+    s->in += n;
+}
+
+/* 10/9/26 (review L5): an echo reply again as the two fragments of one frame, the first (More Fragments) and
+   the last (fragment number 1), each holding the whole reply: a station that took either for a whole frame
+   would have the reply three times. It reassembles nothing, so it drops both (and counts them). */
+static void fragments(struct sim *s, const u8 *eth, u_int len) {
+    static u8 f[NETBUF_SIZE + 64];                      /* the sim thread's alone */
+    u8 bssid[6];
+    u_int n;
+    int ap = s->assoc;
+    if(ap < 0 || aps[ap].kind != AP_OPEN || len < ETH_HLEN) return;
+    bssid_of(ap, bssid);
+    n = ieee80211_build_data(f, sizeof(f), false, eth, bssid, eth + 6, s->sta_wmm, s->seq++, wlan_be16(eth + 12),
+                             eth + ETH_HLEN, len - ETH_HLEN);
+    if(!n) return;
+    f[1] |= WLAN_FC_MOREFRAG >> 8;                      /* fragment 0, more to come */
+    deliver(s, ap, f, n, false);
+    f[1] &= (u8)~(WLAN_FC_MOREFRAG >> 8);
+    f[22] |= 1;                                         /* fragment 1, the last */
+    deliver(s, ap, f, n, false);
+}
+
+/* an MSDU from the station for the virtual host: answered here, and true; false for anything else */
+static bool vhost(struct sim *s, const struct ieee80211_msdu *m) {
+    ipaddr_t me = IP4(10, 0, 2, 77);
+    u8 r[ETH_HLEN + 1500];
+    if(m->type == ETH_P_ARP && m->len >= 28 && wlan_be16(m->payload + 6) == 1 && !memcmp(m->payload + 24, &me, 4)) {
+        memcpy(r, m->sa, 6);                            /* who asked */
+        memcpy(r + 6, vhost_mac, 6);
+        r[12] = 0x08; r[13] = 0x06;
+        memcpy(r + 14, m->payload, 6);                  /* hardware and protocol types and lengths */
+        r[20] = 0; r[21] = 2;                           /* a reply */
+        memcpy(r + 22, vhost_mac, 6);
+        memcpy(r + 28, &me, 4);
+        memcpy(r + 32, m->payload + 8, 10);             /* the asker's MAC and address */
+        burst(s, r, 42, VHOST_COPIES);
+        burst(s, r, 42, VHOST_COPIES);
+        return true;
+    }
+    if(memcmp(m->da, vhost_mac, 6)) return false;
+    if(m->type == ETH_P_IP && m->len >= 28 && m->len <= 1500 && m->payload[9] == IPPROTO_ICMP) {
+        u_int ihl = (m->payload[0] & 15) * 4, total = wlan_be16(m->payload + 2);
+        u8 *ip = r + ETH_HLEN;
+        if(ihl < 20 || total > m->len || total < ihl + 8 || m->payload[ihl] != ICMP_ECHO) return true;
+        memcpy(r, m->sa, 6);
+        memcpy(r + 6, vhost_mac, 6);
+        r[12] = 0x08; r[13] = 0x00;
+        memcpy(ip, m->payload, total);
+        memcpy(ip + 12, m->payload + 16, 4);            /* the addresses the other way round */
+        memcpy(ip + 16, m->payload + 12, 4);
+        ip[8] = 64;
+        ip[10] = ip[11] = 0;
+        *(u16 *)(ip + 10) = ip_checksum(ip, ihl);
+        ip[ihl] = ICMP_ECHO_REPLY;
+        ip[ihl + 2] = ip[ihl + 3] = 0;
+        *(u16 *)(ip + ihl + 2) = ip_checksum(ip + ihl, total - ihl);
+        to_station(s, r, ETH_HLEN + total);
+        fragments(s, r, ETH_HLEN + total);
+    }
+    return true;                                        /* nothing for it goes to eth0 */
 }
 
 /**** WPA2: the authenticator (with track C's crypto) ****/
@@ -479,8 +587,9 @@ static void auth_begin(struct sim *s) {
     send_msg1(s);
 }
 
-/* an EAPOL frame from the station (from its EAPOL header on) */
-static void auth_rx(struct sim *s, const u8 *e, u_int len) {
+/* an EAPOL frame from the station (from its EAPOL header on); protected: it came encrypted with the TK
+   (review L4: the station protects EAPOL once its pairwise key is in; both are taken) */
+static void auth_rx(struct sim *s, const u8 *e, u_int len, bool protected) {
     u16 info;
     if(len < OFF_DATA || e[1] != 3 || e[4] != 2) return;
     info = wlan_be16(e + OFF_INFO);
@@ -508,7 +617,8 @@ static void auth_rx(struct sim *s, const u8 *e, u_int len) {
         s->a.stage = A_OPEN;
         memcpy(s->a.tx_gtk, s->a.gtk, 16);
         s->a.tx_gtk_index = s->a.gtk_index;
-        kprintf("wlansim: %s: group key handshake done (key %u)\n", aps[s->assoc].ssid, s->a.gtk_index);
+        kprintf("wlansim: %s: group key handshake done (key %u, its message 2 %s)\n", aps[s->assoc].ssid, s->a.gtk_index,
+                protected ? "protected" : "in the clear");
     }
 }
 
@@ -599,7 +709,7 @@ static void rx_station_mgmt(struct sim *s, const u8 *f, u_int len) {
         kprintf("wlansim: %s: the station is associated%s\n", aps[ap].ssid, s->sta_wmm ? " (QoS)" : "");
         if(aps[ap].flaky) {
             s->flaky_assocs++;
-            if(s->flaky_assocs == 1) s->flaky_deauth_at = getticks() + HZ;
+            if(s->flaky_assocs == 1) s->flaky_deauth_at = getticks() + 3 * HZ;   /* time for a lease first */
             if(s->flaky_assocs == 2) s->flaky_lost_at = getticks() + HZ;
         }
         if(aps[ap].kind == AP_WPA2) auth_begin(s);
@@ -619,6 +729,19 @@ static void rx_station_mgmt(struct sim *s, const u8 *f, u_int len) {
     }
 }
 
+/* 10/9/26 (review test gaps): an access point sends a broadcast or multicast frame from a station to every
+   station of its network, the sender among them (From DS, its own address as the source): the station must
+   drop its own (wlan0's counter says how many) */
+static void reflect(struct sim *s, const struct ieee80211_msdu *m) {
+    static u8 e[NETBUF_SIZE];                           /* the sim thread's alone */
+    memcpy(e, m->da, 6);
+    memcpy(e + 6, m->sa, 6);
+    e[12] = (u8)(m->type >> 8);
+    e[13] = (u8)m->type;
+    memcpy(e + ETH_HLEN, m->payload, m->len);
+    to_station(s, e, ETH_HLEN + m->len);
+}
+
 static void rx_station_data(struct sim *s, struct sim_item *it) {
     struct ieee80211_hdr h;
     struct ieee80211_msdu m[4];
@@ -634,15 +757,28 @@ static void rx_station_data(struct sim *s, struct sim_item *it) {
     }
     n = ieee80211_msdus(it->data, it->len, &h, m, 4);
     for(i = 0; i < n; i++) {
+        if(aps[ap].kind == AP_OPEN && !aps[ap].island && vhost(s, &m[i])) continue;   /* 10.0.2.77, on its network */
         if(m[i].type == ETH_P_EAPOL) {
-            if(aps[ap].kind == AP_WPA2 && have_crypto()) auth_rx(s, m[i].payload, m[i].len);
+            if(aps[ap].kind == AP_WPA2 && have_crypto()) {
+                if(it->protect && (!it->key_valid || memcmp(it->key, s->a.ptk + 32, 16))) {
+                    s->undecryptable++;                 /* "encrypted" with a key that is not the TK */
+                    continue;
+                }
+                auth_rx(s, m[i].payload, m[i].len, it->protect);
+            }
             continue;
         }
         if(aps[ap].kind == AP_WPA2) {
             if(s->a.stage != A_OPEN && s->a.stage != A_GROUP1) { s->dropped++; continue; }   /* the port is closed */
             if(!it->protect || !it->key_valid || memcmp(it->key, s->a.ptk + 32, 16)) { s->undecryptable++; continue; }
         }
-        if(!s->uplink || m[i].len + ETH_HLEN > NETBUF_SIZE - NETBUF_HEADROOM) { s->dropped++; continue; }
+        if(m[i].len + ETH_HLEN > NETBUF_SIZE - NETBUF_HEADROOM) { s->dropped++; continue; }
+        if(((m[i].type == ETH_P_ARP && m[i].len > 28) ||
+            (m[i].type == ETH_P_IP && m[i].len >= 20 && m[i].len > wlan_be16(m[i].payload + 2))) && !s->padded++)
+            kprintf("wlansim: a frame from the station carries Ethernet padding (%u bytes, its packet %u)\n", m[i].len,
+                    m[i].type == ETH_P_ARP ? 28 : wlan_be16(m[i].payload + 2));   /* 10/10/26: once */
+        if(m[i].da[0] & 1) reflect(s, &m[i]);           /* a group frame goes to the whole network, its sender too */
+        if(!s->uplink || aps[ap].island) { s->dropped++; continue; }
         mutex_lock(&net_lock);                          /* eth0's driver is the stack's, under its lock */
         nb = netbuf_alloc();
         if(nb) {
@@ -730,13 +866,17 @@ static void sim_thread(void *arg) {
             if(s->started) {
                 if(it->kind == IT_MGMT) rx_station_mgmt(s, it->data, it->len);
                 else if(it->kind == IT_DATA) rx_station_data(s, it);
-                else to_station(s, it->data, it->len);
+                else if(s->assoc < 0 || !aps[s->assoc].island) to_station(s, it->data, it->len);   /* from eth0 */
             }
             kfree(it);
         }
         if(!s->started) continue;
         now = getticks();
         if(s->scan_pending && (long)(now - s->scan_at) >= 0) scan_run(s);
+        if(s->stale_done_at && (long)(now - s->stale_done_at) >= 0) {
+            s->stale_done_at = 0;
+            wlan_scan_done(s->w, -EINTR);               /* the aborted scan's end, as iwx's firmware reports it */
+        }
         if(s->assoc >= 0 && !silent(s, s->assoc) && (long)(now - s->next_beacon) >= 0) {
             s->next_beacon = now + HZ;
             deliver(s, s->assoc, f, ap_frame(s, s->assoc, WLAN_ST_BEACON, f, sizeof(f)), false);
@@ -780,10 +920,12 @@ static int sim_start(struct wlan_dev *w) {
     w->mac[5]++;                                        /* eth0's with the last byte one higher */
     if(d) {
         if(!d->ops->ioctl || d->ops->ioctl(d, NETDEV_ADD_RX_ADDR, w->mac))
-            kprintf("wlansim: %s cannot take a second address: frames to %s will not reach it\n", d->name, macfmt(w->mac, m));
+            kprintf("wlansim: %s takes no second address: frames to %s reach it only if its device passes them all "
+                    "(QEMU's usb-net does)\n", d->name, macfmt(w->mac, m));
         d->bridge_rx = sim_bridge_rx;
     }
     s->tuned = s->authed = s->assoc = -1;
+    s->left = false;
     s->started = true;
     kprintf("wlansim: the simulated chip is on: %d access points, bridged to %s%s\n", NAPS, d ? d->name : "nothing",
             have_crypto() ? "" : " (no crypto in this kernel: SurfSimWPA refuses stations)");
@@ -792,6 +934,7 @@ static int sim_start(struct wlan_dev *w) {
 
 static void sim_stop(struct wlan_dev *w) {
     struct sim *s = (struct sim *)w->priv;
+    s->left = true;
     s->started = false;
     s->scan_pending = false;
     s->tuned = s->authed = s->assoc = -1;
@@ -799,29 +942,44 @@ static void sim_stop(struct wlan_dev *w) {
     s->a.stage = A_IDLE;
 }
 
+/* 10/9/26 (review M3): a frame handed over between leave() or stop() and the next join() or start() */
+static bool too_late(struct sim *s) {
+    if(!s->left) return false;
+    if(!s->late++) kprintf("wlansim: a frame handed over after leave() or stop()\n");
+    return true;
+}
+
 static int sim_scan(struct wlan_dev *w, const struct wlan_scan_req *req) {
     struct sim *s = (struct sim *)w->priv;
     if(!s->started) return -EIO;
     if(s->scan_pending) return -EBUSY;
     s->scan_req = *req;
-    s->scan_at = getticks() + ms_to_ticks(50);
+    s->scan_at = getticks() + ms_to_ticks(600);         /* 10/9/26: as long as a real one, about */
     s->scan_pending = true;
     event_set(&s->kick);
     return 0;
 }
 
 static void sim_scan_abort(struct wlan_dev *w) {
-    ((struct sim *)w->priv)->scan_pending = false;
+    struct sim *s = (struct sim *)w->priv;
+    if(!s->scan_pending) return;
+    s->scan_pending = false;
+    /* 10/9/26 (review L2): iwx's firmware reports the end of an aborted scan too, some time later: here 300 ms,
+       inside the next scan when one follows at once, which that end must not end */
+    s->stale_done_at = getticks() + ms_to_ticks(300);
 }
 
 static int sim_join(struct wlan_dev *w, const struct wlan_bss *bss) {
     struct sim *s = (struct sim *)w->priv;
     s->tuned = ap_by_bssid(bss->bssid);
+    s->left = false;
     return 0;
 }
 
 static int sim_tx_mgmt(struct wlan_dev *w, const u8 *frame, u_int len) {
-    enqueue((struct sim *)w->priv, IT_MGMT, frame, len, false);
+    struct sim *s = (struct sim *)w->priv;
+    if(too_late(s)) return -1;
+    enqueue(s, IT_MGMT, frame, len, false);
     return 0;
 }
 
@@ -850,7 +1008,9 @@ static int sim_set_key(struct wlan_dev *w, const struct wlan_key *key) {
 }
 
 static int sim_tx_data(struct wlan_dev *w, struct netbuf *nb, bool protect) {
-    enqueue((struct sim *)w->priv, IT_DATA, netbuf_data(nb), nb->len, protect);
+    struct sim *s = (struct sim *)w->priv;
+    if(too_late(s)) return -1;
+    enqueue(s, IT_DATA, netbuf_data(nb), nb->len, protect);
     return 0;
 }
 
@@ -858,6 +1018,7 @@ static void sim_leave(struct wlan_dev *w) {
     struct sim *s = (struct sim *)w->priv;
     u_long flags = irq_save();
     s->tuned = -1;
+    s->left = true;
     s->ptk_set = s->gtk_set = false;
     wipe(s->ptk_key, sizeof(s->ptk_key));
     wipe(s->gtk_key, sizeof(s->gtk_key));

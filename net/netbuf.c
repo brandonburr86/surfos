@@ -6,6 +6,13 @@ File: netbuf.c  Date: 10/3/26 (roadmap N1)
 10/9/26 (Wi-Fi, track S): a name the driver set (wlan0, from the station layer) is kept; the
 others are eth0, eth1, ... counted apart, so Wi-Fi found at boot leaves eth0 to the first
 Ethernet interface. The default interface (commands that name none) is the first Ethernet one.
+10/9/26 (the review of track S, L1): the receive queue holds 128 frames, of which one device
+may hold 64 (the whole queue before): wlan0 handing over an A-MSDU's MSDUs one after the
+other cannot crowd out eth0's frames (a telnet session). The station layer's thread waits for
+room (netdev_rx_wait(), a second at most) instead of losing the frame. 10/10/26: only it: a
+driver's netdev_rx() never waits, as before (a frame with no room is dropped), since drivers
+call it from an interrupt handler or, as usbnet's completions, with interrupts off in the
+middle of the xHCI event ring, where waiting would let the timer's poll of that ring in.
 */
 
 #include <surfos/types.h>
@@ -14,6 +21,7 @@ Ethernet interface. The default interface (commands that name none) is the first
 #include <surfos/wait.h>
 #include <surfos/irq.h>
 #include <surfos/timer.h>
+#include <surfos/interrupt.h>
 #include <mm/kalloc.h>
 #include <net/net.h>
 #include <net/eth.h>
@@ -90,9 +98,22 @@ void *netbuf_put(struct netbuf *nb, u_int n) {
 static struct netdev *netdevs;
 static u_int neth;                      /* 10/9/26: ethN names given (not a driver's own, such as wlan0) */
 
+/* 10/10/26 (review nit): a name another device has gets the lowest free number after its letters
+   instead (wlan0 taken: wlan1), so no two devices share one */
+static void unique_name(struct netdev *dev) {
+    size_t n = strlen(dev->name);
+    u_int i;
+    while(n && dev->name[n - 1] >= '0' && dev->name[n - 1] <= '9') n--;
+    if(n > sizeof(dev->name) - 4) n = sizeof(dev->name) - 4;   /* room for three digits */
+    for(i = 0; i < 1000 && netdev_find(dev->name); i++) snprintf(dev->name + n, sizeof(dev->name) - n, "%u", i);
+}
+
+/* ethN names are given here alone, in the order the devices come: a driver's own name is kept
+   (wlan0) unless it begins with "eth", so Ethernet is ethN whatever registers it */
 int netdev_register(struct netdev *dev) {
     struct netdev **pp;
-    if(!dev->name[0]) snprintf(dev->name, sizeof(dev->name), "eth%u", neth++);
+    if(!dev->name[0] || !strncmp(dev->name, "eth", 3)) snprintf(dev->name, sizeof(dev->name), "eth%u", neth++);
+    unique_name(dev);
     if(!dev->mtu) dev->mtu = ETH_MTU;
     dev->next = NULL;
     for(pp = &netdevs; *pp; pp = &(*pp)->next);
@@ -141,28 +162,47 @@ void netdev_print(void) {
 
 /**** receive queue and the net thread ****/
 
-#define RXQ_SIZE 64
+#define RXQ_SIZE 128                   /* 10/9/26: 64 before */
+#define RXQ_SHARE 64                   /* 10/9/26: the most one device may hold */
+#define RXQ_WAIT_MS 1000               /* 10/9/26: the longest a task waits for room */
 static struct { struct netdev *dev; struct netbuf *nb; } rxq[RXQ_SIZE];
 static volatile u_int rxq_head, rxq_tail;
 static event_t net_event;              /* set by netdev_rx(); the thread clears it before it looks */
+static event_t rxq_room;               /* 10/9/26: set by the net thread as it takes frames */
+static surf_task *net_task;            /* 10/9/26: the net thread, which never waits for room it makes itself */
 mutex_t net_lock = MUTEX_INIT("net");
 
-void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
+static void rx_queue(struct netdev *dev, const void *frame, u_int len, bool may_wait) {
     struct netbuf *nb;
     u_long flags;
-    u_int next;
+    u_int next, waited = 0;
     if(len > NETBUF_SIZE || len < ETH_HLEN) { dev->rx_dropped++; return; }
     nb = netbuf_alloc();
     if(!nb) { dev->rx_dropped++; return; }
     nb->off = 0;
     memcpy(nb->data, frame, len);
     nb->len = len;
-    flags = irq_save();
-    next = (rxq_head + 1) % RXQ_SIZE;
-    if(next == rxq_tail) { irq_restore(flags); netbuf_free(nb); dev->rx_dropped++; return; }
+    for(;;) {
+        flags = irq_save();
+        next = (rxq_head + 1) % RXQ_SIZE;
+        if(next != rxq_tail && dev->rx_inq < RXQ_SHARE) break;   /* room, and this device under its share */
+        irq_restore(flags);
+        /* 10/9/26: a caller that may wait does, for the net thread to take some, a second at most; the frame
+           goes otherwise. 10/10/26: never with interrupts off, in a handler, or in the net thread itself */
+        if(!may_wait || in_interrupt() || !irqs_enabled() || !curTask || curTask == net_task || waited >= RXQ_WAIT_MS) {
+            netbuf_free(nb);
+            dev->rx_dropped++;
+            return;
+        }
+        event_clear(&rxq_room);
+        event_set(&net_event);
+        event_wait_timeout(&rxq_room, 10);
+        waited += 10;
+    }
     rxq[rxq_head].dev = dev;
     rxq[rxq_head].nb = nb;
     rxq_head = next;
+    dev->rx_inq++;
     irq_restore(flags);
     dev->rx_packets++;
     dev->rx_bytes += len;
@@ -177,7 +217,11 @@ static void net_thread(void *arg) {
         while(rxq_tail != rxq_head) {
             struct netdev *dev = rxq[rxq_tail].dev;
             struct netbuf *nb = rxq[rxq_tail].nb;
+            u_long flags = irq_save();
             rxq_tail = (rxq_tail + 1) % RXQ_SIZE;
+            dev->rx_inq--;
+            irq_restore(flags);
+            event_set(&rxq_room);                            /* 10/9/26: a task may be waiting for it */
             mutex_lock(&net_lock);
             eth_input(dev, nb);                              /* consumes nb */
             mutex_unlock(&net_lock);
@@ -193,7 +237,19 @@ static void net_thread(void *arg) {
 
 void init_net(void) {
     event_init(&net_event);
-    kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+    event_init(&rxq_room);
+    net_task = kthread_create("net", net_thread, NULL, PL_HIGH, TF_KTHREAD | TF_DETACHED);
+}
+
+/* 10/10/26: a driver's frames: never waiting (an interrupt handler, a completion with interrupts off) */
+void netdev_rx(struct netdev *dev, const void *frame, u_int len) {
+    rx_queue(dev, frame, len, false);
+}
+
+/* 10/10/26: a thread's, with interrupts on and no lock the net thread needs (the station layer's): it
+   waits for room, a second at most, rather than lose the frame */
+void netdev_rx_wait(struct netdev *dev, const void *frame, u_int len) {
+    rx_queue(dev, frame, len, true);
 }
 
 /* the 100 ms heartbeat: retransmissions, ARP retries and ageing */

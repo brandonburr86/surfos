@@ -178,25 +178,24 @@ static int parse(const u8 *f, u_int len, struct wlan_bss *bss, u_int *flags) {
     return ieee80211_parse_bss(at_edge(f, len), len, &info, 777, bss, flags);
 }
 
-/* the lengths a beacon may be cut to and still be whole: after the fixed fields, and after each
-   element but the last */
-static u_int boundaries(const u8 *f, u_int len) {
-    u_int off = WLAN_HDR_LEN + 12, n = 0;
-    while(off < len) {
-        n++;
-        off += 2 + f[off + 1];
-    }
-    return n;
-}
-
-/* every shorter copy is refused, or parsed when cut between two elements, and never read past;
-   every one-byte change is parsed or refused, never read past */
+/* 10/9/26 (review L6): every shorter copy is refused when cut within the fixed fields and parsed
+   otherwise, as far as its last whole element; one whose RSN element was cut off is never WEP;
+   nothing is read past. Every one-byte change is parsed or refused, never read past */
 static void abuse(const u8 *f, u_int len, const char *what) {
+    const u_int fixed = WLAN_HDR_LEN + 12;
     struct wlan_bss bss;
-    u_int cut, i, flags, ok = 0;
+    u_int cut, i, flags, ok = 0, early = 0, wep = 0;
     u8 copy[1024];
     char msg[120];
-    for(cut = 0; cut < len; cut++) if(parse(f, cut, &bss, &flags) == 0) ok++;
+    for(cut = 0; cut < len; cut++) {
+        if(parse(f, cut, &bss, &flags) != 0) continue;
+        if(cut < fixed) early++;
+        else ok++;
+        if(cut >= fixed && bss.security == WLAN_SEC_WEP && ieee80211_elems_whole(f + fixed, cut - fixed) < cut - fixed)
+            wep++;
+    }
+    snprintf(msg, sizeof(msg), "%s: copies cut within the fixed fields refused (%u parsed)", what, early);
+    check(!early, msg);
     memcpy(copy, f, len);
     for(i = 0; i < len; i++) {
         u8 was = copy[i];
@@ -206,8 +205,10 @@ static void abuse(const u8 *f, u_int len, const char *what) {
         parse(copy, len, &bss, &flags);
         copy[i] = was;
     }
-    snprintf(msg, sizeof(msg), "%s: only the %u copies cut between elements parse (%u did)", what, boundaries(f, len), ok);
-    check(ok == boundaries(f, len), msg);
+    snprintf(msg, sizeof(msg), "%s: the %u copies cut after the fixed fields parse (%u did)", what, len - fixed, ok);
+    check(ok == len - fixed, msg);
+    snprintf(msg, sizeof(msg), "%s: a copy cut within an element is never WEP (%u were)", what, wep);
+    check(!wep, msg);
 }
 
 static void test_beacons(void) {
@@ -258,15 +259,33 @@ static void test_beacons(void) {
     n = beacon_open(f, sizeof(f), "12345678901234567890123456789012", 32, true);
     check(parse(f, n, &bss, &flags) == 0 && bss.ssid_len == 32, "an SSID of 32 bytes");
 
-    /* broken frames */
+    /* broken frames. 10/9/26 (review L6): a malformed element at the end ends the list there */
     n = beacon_open(f, sizeof(f), "x", 1, true);
     f[n++] = WLAN_EID_VENDOR;
     f[n++] = 10;                                        /* says 10 bytes, has 2 */
     f[n++] = 0; f[n++] = 0;
-    check(parse(f, n, &bss, &flags) == -1, "an element that runs past the end: refused");
+    check(parse(f, n, &bss, &flags) == 0 && bss.ssid_len == 1 && bss.channel == 157 && bss.nrates == 8 &&
+          bss.security == WLAN_SEC_OPEN, "an element that runs past the end: the ones before it are read");
     n = beacon_open(f, sizeof(f), "x", 1, true);
     f[n++] = 7;                                         /* a lone id byte */
-    check(parse(f, n, &bss, &flags) == -1, "a stray byte at the end: refused");
+    check(parse(f, n, &bss, &flags) == 0 && bss.ssid_len == 1 && bss.channel == 157, "a stray byte at the end: the same");
+    {
+        u8 e[40];
+        u_int k = rsn(e, 4, ccmp, 1, psk, 1, 0);
+        n = beacon_sec(f, sizeof(f), e, k, false, true);
+        check(parse(f, n, &bss, &flags) == 0 && bss.security == WLAN_SEC_WPA2_PSK, "WPA2, its RSN element last");
+        check(parse(f, n - 1, &bss, &flags) == 0 && bss.security == WLAN_SEC_OTHER && bss.rsn_ie_len == 0 &&
+              bss.ssid_len == 3, "that RSN element cut short: other (not joinable), not WEP");
+        n = beacon_sec(f, sizeof(f), e, k, true, true);
+        check(parse(f, n - 3, &bss, &flags) == 0 && bss.security == WLAN_SEC_WPA2_PSK && bss.rsn_ie_len == k,
+              "the RSN element whole, a vendor element after it cut short: WPA2");
+        n = beacon_sec(f, sizeof(f), NULL, 0, false, true);
+        f[n++] = WLAN_EID_COUNTRY;
+        f[n++] = 6;
+        check(parse(f, n, &bss, &flags) == 0 && bss.security == WLAN_SEC_OTHER,
+              "the privacy bit and something cut off at the end: other, not WEP");
+        check(parse(f, n - 2, &bss, &flags) == 0 && bss.security == WLAN_SEC_WEP, "...and with nothing cut off: WEP");
+    }
     n = beacon_open(f, sizeof(f), "x", 1, true);
     f[WLAN_HDR_LEN + 10] = 0x02;                        /* IBSS, not ESS */
     f[WLAN_HDR_LEN + 11] = 0;
@@ -347,7 +366,8 @@ static void test_security(void) {
     check(ieee80211_parse_rsn(e, &rs) == -1, "half a capability field: refused");
     k = rsn(e, 4, ccmp, 1, psk, 1, 0);
     n = beacon_sec(f, sizeof(f), e, k - 1, false, true);   /* the element says one byte more than there is */
-    check(parse(f, n, &bss, &flags) == -1, "an RSN element cut by the end of the frame: the frame is refused");
+    check(parse(f, n, &bss, &flags) == 0 && bss.security == WLAN_SEC_OTHER && bss.rsn_ie_len == 0,
+          "an RSN element cut by the end of the frame: the rest is read, the network other (10/9/26, review L6)");
     k = rsn(e, 4, ccmp, 1, psk_sae, 2, 0x0080);
     check(ieee80211_parse_rsn(e, &rs) == 0 && rs.akm == (RSN_A_PSK | RSN_A_SAE) && rs.caps == 0x0080, "AKMs and capabilities");
     check(ieee80211_security(e, NULL, 0) == WLAN_SEC_WPA2_WPA3, "ieee80211_security on the element alone");
@@ -478,7 +498,8 @@ static void test_responses(void) {
     bad = 0;
     for(k = 0; k < n; k++) if(ieee80211_parse_assoc_resp(at_edge(f, k), k, &r) == 0 && k < 30) bad++;
     check(!bad, "an association response cut before its elements: refused");
-    check(ieee80211_parse_assoc_resp(at_edge(f, n - 1), n - 1, &r) == -1, "one cut inside an element: refused");
+    check(ieee80211_parse_assoc_resp(at_edge(f, n - 1), n - 1, &r) == 0 && r.ies_len == 10,
+          "one cut inside its last element: read up to it (review L6)");
     f[0] = WLAN_FC(WLAN_FC_TYPE_MGMT, WLAN_ST_REASSOC_RESP);
     check(ieee80211_parse_assoc_resp(at_edge(f, n), n, &r) == 0, "a reassociation response too");
 
@@ -589,6 +610,67 @@ static void test_data(void) {
     check(ieee80211_parse_hdr(f, 29, &h) == -1, "+HTC cut short: refused");
     f[0] = 0x04;                                        /* a control frame */
     check(ieee80211_parse_hdr(f, n, &h) == -1, "a control frame: refused");
+
+    /* 10/9/26 (review L5): fragments, each with what looks like a whole MSDU in it */
+    n = ieee80211_build_data(f, sizeof(f), false, sta, ap1, ap1, false, 7, 0x0800, (const u8 *)"abcd", 4);
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && !ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == 1,
+          "a whole frame: one MSDU");
+    f[1] |= WLAN_FC_MOREFRAG >> 8;
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "More Fragments (the first fragment): refused");
+    f[1] &= (u8)~(WLAN_FC_MOREFRAG >> 8);
+    f[22] |= 1;
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && ieee80211_is_fragment(&h) && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "fragment number 1 (the last fragment): refused");
+    f[22] = (u8)((f[22] & 0xf0) | 0x0f);
+    check(ieee80211_parse_hdr(f, n, &h) == 0 && (h.seq_ctrl >> 4) == 7 && ieee80211_msdus(f, n, &h, m, 4) == -1,
+          "fragment number 15: refused, the sequence number unchanged");
+    wbuf_init(&b, amsdu, sizeof(amsdu));                /* an A-MSDU of one subframe */
+    wbuf_hdr(&b, WLAN_FC(WLAN_FC_TYPE_DATA, WLAN_ST_QOS_DATA) | WLAN_FC_FROMDS, sta, ap1, ap1, 11);
+    wbuf_le16(&b, WLAN_QOS_AMSDU);
+    wbuf_put(&b, sta, 6); wbuf_put(&b, dst, 6); wbuf_be16(&b, 8 + 3);
+    wbuf_put(&b, snap_ip, 8); wbuf_put(&b, "abc", 3);
+    n = wbuf_done(&b);
+    check(ieee80211_parse_hdr(amsdu, n, &h) == 0 && ieee80211_msdus(amsdu, n, &h, m, 4) == 1, "an A-MSDU of one subframe");
+    amsdu[1] |= WLAN_FC_MOREFRAG >> 8;
+    check(ieee80211_parse_hdr(amsdu, n, &h) == 0 && ieee80211_msdus(amsdu, n, &h, m, 4) == -1, "...as a fragment: refused");
+}
+
+/* 10/10/26 (review nit): SSIDs as text, never a control for the terminal */
+static void test_ssid_text(void) {
+    char out[4 * WLAN_SSID_MAX + 1], small[8];
+    u8 all[WLAN_SSID_MAX];
+    u_int i;
+    const char *r;
+#define SSID(s) (const u8 *)(s), (u_int)(sizeof(s) - 1)
+    check(!strcmp(ieee80211_ssid_text(SSID("HouseOfBurr"), true, out, sizeof(out)), "HouseOfBurr"), "ASCII as it is");
+    check(!strcmp(ieee80211_ssid_text(SSID("a b\\c"), false, out, sizeof(out)), "a b\\\\c"), "a backslash doubled");
+    check(!strcmp(ieee80211_ssid_text(SSID("x\x01\x1b[2J\x7f"), true, out, sizeof(out)), "x\\x01\\x1b[2J\\x7f"),
+          "C0 controls, ESC and DEL as \\xHH");
+    check(!strcmp(ieee80211_ssid_text(SSID("caf\xc3\xa9 \xe2\x89\x8b \xf0\x9f\x8c\x8a"), true, out, sizeof(out)),
+                  "caf\xc3\xa9 \xe2\x89\x8b \xf0\x9f\x8c\x8a"), "UTF-8 to a UTF-8 terminal as it is");
+    check(!strcmp(ieee80211_ssid_text(SSID("caf\xc3\xa9"), false, out, sizeof(out)), "caf\\xc3\\xa9"),
+          "...escaped to one that is not");
+    check(!strcmp(ieee80211_ssid_text(SSID("a\xc2\x9b" "31mb"), true, out, sizeof(out)), "a\\xc2\\x9b31mb"),
+          "U+009B (CSI, a C1 control) escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xc2\x85\xc2\xa0"), true, out, sizeof(out)), "\\xc2\\x85\xc2\xa0"),
+          "U+0085 escaped, U+00A0 kept");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xc0\xaf\xe0\x80\xaf"), true, out, sizeof(out)),
+                  "\\xc0\\xaf\\xe0\\x80\\xaf"), "overlong forms escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("\xed\xa0\x80\xf4\x90\x80\x80"), true, out, sizeof(out)),
+                  "\\xed\\xa0\\x80\\xf4\\x90\\x80\\x80"), "a surrogate and past U+10FFFF escaped");
+    check(!strcmp(ieee80211_ssid_text(SSID("ok\xe2\x89"), true, out, sizeof(out)), "ok\\xe2\\x89"),
+          "a sequence cut by the end escaped");
+    for(i = 0; i < WLAN_SSID_MAX; i++) all[i] = 0x9b;
+    r = ieee80211_ssid_text(all, WLAN_SSID_MAX, true, out, sizeof(out));
+    check(strlen(r) == 4 * WLAN_SSID_MAX && !strncmp(r + 124, "\\x9b", 4), "32 bytes escaped fit in 4 * 32 + 1");
+    r = ieee80211_ssid_text(SSID("abcd\x01"), true, small, sizeof(small));
+    check(!strcmp(r, "abcd"), "too small: up to the last whole character, \\x01 left out");
+    r = ieee80211_ssid_text(SSID("ab\xe2\x89\x8b" "cd"), true, small, 5);
+    check(!strcmp(r, "ab"), "too small: a UTF-8 character is not cut");
+    r = ieee80211_ssid_text(SSID("abc"), true, small, 1);
+    check(!strcmp(r, ""), "room for the NUL only");
+#undef SSID
 }
 
 int main(void) {
@@ -602,6 +684,7 @@ int main(void) {
     test_build();
     test_responses();
     test_data();
+    test_ssid_text();
     if(failures) {
         printf("IEEE80211 UNIT TESTS FAILED: %d of %d checks\n", failures, checks);
         exit(1);

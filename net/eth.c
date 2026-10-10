@@ -6,6 +6,8 @@ File: eth.c     Date: 10/3/26 (roadmap N2)
 10/9/26 (Wi-Fi, track S): a frame for another station's address is dropped, as a NIC's own
 filter would (an interface may receive a second address for a bridge); the bridge gets a
 copy of it, and of every broadcast and multicast (netdev.bridge_rx).
+10/10/26: frames are padded to Ethernet's 60 bytes only where the device needs it: wlan0's
+(no_pad) go out as long as they are, and its data frames carry no padding over the air.
 */
 
 #include <surfos/types.h>
@@ -43,7 +45,7 @@ int eth_output(struct netdev *dev, const u8 *dst, u16 type, struct netbuf *nb) {
     memcpy(eh->dst, dst, ETH_ALEN);
     memcpy(eh->src, dev->mac, ETH_ALEN);
     eh->type = htons(type);
-    while(nb->len < 60) *(u8 *)netbuf_put(nb, 1) = 0;    /* minimum frame size */
+    if(!dev->no_pad) while(nb->len < 60) *(u8 *)netbuf_put(nb, 1) = 0;   /* minimum frame size (10/10/26: Ethernet's) */
     r = netdev_send(dev, nb);
     netbuf_free(nb);
     return r;
