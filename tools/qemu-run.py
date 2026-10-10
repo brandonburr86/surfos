@@ -441,7 +441,8 @@ SMOKE = [
     # WPA2 typed at the hidden prompt (wlansim-wpa:
     # refused until track C's supplicant is in); a network that deauthenticates the station once, then loses its beacons
     # for 4 s: joining it forgets the address of the network before, and its own lease survives the link going down twice
-    # and coming back up on its own; leaving it forgets the address and the ARP entries; down. The passphrases typed
+    # and coming back up on its own; leaving it forgets the address and the ARP entries; down. A telnet session to eth0's
+    # address is held open from before that join to after wifi down and answers all along (eth0-held). The passphrases typed
     # never show.
     ('@boot wlansim net', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('wifi status', ['wlan0: down (wifi up starts it)', 'wlan0: MAC 00:00:00:00:00:00, link down']),
@@ -482,10 +483,16 @@ SMOKE = [
       ('wifi join SurfSim', ['joined SurfSim']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
       ('wlansim-wpa', CHECK),
+      ('eth0-held', CHECK),
       ('wifi join SurfSimFlaky', ['wlan0: address 10.0.2.16 forgotten', 'wlan0: link up: "SurfSimFlaky"',
                                   'joined SurfSimFlaky']),
       ('dhcp wlan0', ['dhcp: wlan0: lease 10.0.2.16']),
-      ('@sleep 24', []),
+      ('eth0-held', CHECK),
+      ('@sleep 8', []),
+      ('eth0-held', CHECK),
+      ('@sleep 8', []),
+      ('eth0-held', CHECK),
+      ('@sleep 8', []),
       ('dmesg', ['link down: "SurfSimFlaky": deauthenticated by the access point: reason 4 inactivity',
                  'link up again: "SurfSimFlaky"', 'SurfSimFlaky goes silent for 4 s',
                  'link down: "SurfSimFlaky": the access point is gone (beacons lost)',
@@ -496,15 +503,17 @@ SMOKE = [
       ('wifi leave', ['wlan0: left "SurfSimFlaky" (wifi leave)', 'wlan0: address 10.0.2.16 forgotten',
                       'wlan0: not associated']),
       ('wlan-forgotten', CHECK),
+      ('eth0-held', CHECK),
       ('wifi down', ['wlan0: down']),
-      ('wifi status', ['wlan0: down (wifi up starts it)'])],
+      ('wifi status', ['wlan0: down (wifi up starts it)']),
+      ('eth0-held-end', CHECK)],
      [WLANSIM_PASSPHRASE, WLANSIM_WRONG, 'handed over after leave() or stop()']),
     # 10/9/26 (the review of track S, M1): the laptop's order. The simulated chip registers wlan0 at boot and the USB
     # Ethernet adapter is plugged in later (QEMU's usb-net on an xHCI, `usbnet-later`): eth0 comes after wlan0. wlan0
     # leases its address first, while eth0 has none (10.0.2.15), eth0 then 10.0.2.16; a ping with no interface, netinfo
     # (telnetd's address) and the rest take eth0 all the same (Ethernet before Wi-Fi), and telnet to each address is
     # answered through its own interface. (Review M2:) leaving forgets wlan0's address and ARP entries, and joining another
-    # network does not bring the old address back
+    # network does not bring the old address back; a telnet session to eth0's address held open meanwhile answers all along
     ('@boot wlansim usbnet-later', ['wlansim: simulated Wi-Fi chip registered as wlan0', PROMPT],
      [('usbnet-plug', CHECK),
       ('ifconfig', ['wlan0: 00:00:00:00:00:00', 'eth0: 52:54:00:12:34:56']),
@@ -516,11 +525,14 @@ SMOKE = [
       ('ping 10.0.2.2 2 wlan0', ['PING 10.0.2.2 from 10.0.2.15 (wlan0)', '2 packets transmitted, 2 received']),
       ('telnetd on', ['telnetd: listening on 10.0.2.16 port 23']),
       ('wlansim-telnet', CHECK),
+      ('eth0-held', CHECK),
       ('wifi leave', ['wlan0: address 10.0.2.15 forgotten', 'wlan0: not associated']),
       ('wlan-forgotten', CHECK),
+      ('eth0-held', CHECK),
       ('wifi join SurfSimHidden', ['joined SurfSimHidden']),
       ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
-      ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received'])],
+      ('ping 10.0.2.2 1', ['PING 10.0.2.2 from 10.0.2.16 (eth0)', '1 received']),
+      ('eth0-held-end', CHECK)],
      ['handed over after leave() or stop()']),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
@@ -2490,6 +2502,43 @@ def wlan_own_frames_check(q):
     return ok and own >= 1 and not learned
 
 
+def eth0_held_check(q):
+    """(review test gaps) a telnet session to eth0's address, opened at the first call and held open through what wlan0
+    does next (a join that forgets its old address, a lease, the link going down and up twice, wifi leave, wifi down): it
+    must answer at every call, as the integrator's session to the laptop over eth0 must whatever Wi-Fi does"""
+    t = getattr(q, 'held', None)
+    if t is None:
+        try:
+            t = q.held = Telnet(q.ports['telnet'])
+        except OSError as e:
+            print(f'\neth0-held: telnet: {e}')
+            return False
+        if not (t.expect("Brandon Burr's SurfOS", 15) and t.expect(TELNET_ROOT, 10)):
+            print('\neth0-held: no banner or prompt from the session to eth0')
+            return False
+    q.held_n = getattr(q, 'held_n', 0) + 1
+    word = f'held-through-wlan0-{q.held_n}'
+    t.send(f'echo {word}\n')
+    ok = t.expect(f'\r\n{word}\r\n', 15) and t.expect(TELNET_ROOT, 10)
+    if not ok:
+        print(f'\neth0-held: the session to eth0 did not answer ({word})')
+    return ok
+
+
+def eth0_held_end_check(q):
+    """the held session answers once more, and ends when asked"""
+    t = getattr(q, 'held', None)
+    if t is None:
+        print('\neth0-held-end: no session held')
+        return False
+    ok = eth0_held_check(q)
+    t.send('exit\n')
+    ok = t.wait_closed(10) and ok
+    t.close()
+    q.held = None
+    return ok
+
+
 def wlan_no_drops_check(q):
     """(review L1) after 10.0.2.77's ARP bursts, two A-MSDUs of 64 replies each, more than one device's share of the
     receive queue: wlan0 lost none (netstat's RX dropped), the station's thread having waited for room"""
@@ -2523,7 +2572,8 @@ def wlan_forgotten_check(q):
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
                'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
-               'wlansim-ctrl-c': wlansim_ctrl_c_check, 'wlan-own-frames': wlan_own_frames_check}
+               'wlansim-ctrl-c': wlansim_ctrl_c_check, 'wlan-own-frames': wlan_own_frames_check,
+               'eth0-held': eth0_held_check, 'eth0-held-end': eth0_held_end_check}
 
 
 def tail(text, n=40):
