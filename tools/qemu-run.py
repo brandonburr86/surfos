@@ -249,6 +249,17 @@ SMOKE = [
     # 10/11/26 (Undertow, the web browser, user/undertow/): the program is in the initrd and answers; its own
     # end-to-end tests against web fixtures are tools/qemu-web.py (make test-web)
     ('undertow --help', ['usage: undertow [ADDRESS]', 'undertow --dump ADDRESS']),
+    # -- track S (the session, the screen, the commands): the welcome screen, what HTTPS needs (this CPU has no
+    # RDRAND), the undertow> prompt and quit; bad usage (exit 2); an address that is refused (exit 1, and in the
+    # browser, a message under "Loading ..."; the connection to the host's port 1 fails, or the stand-ins refuse it)
+    ('undertow', [shown('Undertow 1.0 - the SurfOS web browser'), 'Clock  ', 'HTTPS  ', 'help: all commands',
+                  'undertow> '], [('quit', [])]),
+    ('undertow --dump', ['undertow: --dump takes one address', 'usage: undertow [ADDRESS]', '[exit status 2]']),
+    ('undertow -x', ['undertow: no option -x', '[exit status 2]']),
+    ('undertow --dump ftp://10.0.2.2/', ['undertow: cannot open ftp://10.0.2.2/: unsupported URL scheme',
+                                         '[exit status 1]']),
+    ('undertow --dump http://10.0.2.2:1/', ['undertow: http://10.0.2.2:1/: ', '[exit status 1]']),
+    ('undertow http://10.0.2.2:1/', ['Loading http://10.0.2.2:1/ ...', 'undertow: ', 'undertow> '], [('quit', [])]),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
     ('@nettest-host', []),
     ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),

@@ -1,0 +1,19 @@
+# attributes: quoted values may hold >, unquoted values, duplicates, entities; an unclosed quote ends the page
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Attributes
+notice:
+truncated:
+link 1: https://example.test/a?x=1>2
+  label: Quoted > in values
+link 2: https://example.test/unquoted?y=2
+  label: Unquoted value
+link 3: https://example.test/spaces
+  label: Spaces around the equals sign
+link 4: https://example.test/upper
+  label: Upper-case names
+link 5: https://example.test/first
+  label: Duplicate attribute: the first wins
+link 6: https://example.test/amp?a=1&b=2&c=3
+  label: Entities in a value

@@ -1,0 +1,7 @@
+# preformatted text: spaces kept, tabs to 8-column stops, no trailing spaces, one blank line at most
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Preformatted
+notice:
+truncated:

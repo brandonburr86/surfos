@@ -1,0 +1,15 @@
+A relative link[1], a root-relative one[2], a scheme-relative one[3], a query only[4] and an absolute address[5].
+
+A fragment of this page[6] and its top[7].
+
+Write to us[8], a script link[9], FTP[10]: numbered, but Undertow cannot follow them.
+
+Up one directory[11] and another port[12].
+
+A label with nested elements inside[13]
+
+A name without an address is no link.
+
+An empty address is no link either.
+
+Spaces inside an address[14], a space in a host[15] and IPv6[16].

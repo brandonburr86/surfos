@@ -208,9 +208,16 @@ define initrd_firmware
 if ls firmware/*.ucode > /dev/null 2>&1; then mkdir -p $(1)/lib/firmware && cp firmware/*.ucode firmware/LICENCE.* $(1)/lib/firmware/; fi
 endef
 
+# 10/11/26 (Undertow): the licence of Mbed TLS, whose code /bin/undertow carries, in /licenses/ of both initrds
+# (Apache-2.0 asks for it with every copy of the program). The fetch put it in third_party/ before undertow was built.
+define initrd_licenses
+mkdir -p $(1)/licenses && cp third_party/mbedtls/LICENSE $(1)/licenses/mbedtls.txt
+endef
+
 $(INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE | $(IMAGES)
 	@echo "IMG  $@"
 	$(Q)rm -rf $(IMAGES)/initrd && mkdir -p $(IMAGES)/initrd/bin && cp -r rootfs/. $(IMAGES)/initrd/ && cp $(USER_BINS) $(IMAGES)/initrd/bin/
+	$(Q)$(call initrd_licenses,$(IMAGES)/initrd)
 	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(IMAGES)/initrd --build-id $(BUILD_REV)
 
 # ---- user programs --------------------------------------------------------------------
@@ -298,6 +305,7 @@ $(USB_INITRD): $(ROOTFS_FILES) $(USER_BINS) tools/mkimage.py FORCE
 	@echo "IMG  $@"
 	$(Q)rm -rf $(BUILD)/initrd && mkdir -p $(BUILD)/initrd/bin && cp -r rootfs/. $(BUILD)/initrd/ && cp $(USER_BINS) $(BUILD)/initrd/bin/
 	$(Q)$(call initrd_firmware,$(BUILD)/initrd)
+	$(Q)$(call initrd_licenses,$(BUILD)/initrd)
 	$(Q)$(PYTHON) tools/mkimage.py initrd $@ $(BUILD)/initrd --build-id $(BUILD_REV)
 
 usb-image: $(KERNEL) $(USB_INITRD) boot/grub-usb.cfg boot/grub-usb-bootstrap.cfg tools/mkusb.py
@@ -564,12 +572,195 @@ unittest: test-undertow-util
 .PHONY: test-undertow-util
 
 # -- http.c (track H) --
+# http.c against scripted servers: the test provides the transport's calls itself, so neither
+# transport.o nor TLS is linked; url.c resolves the redirects as it does in the program.
+$(BUILD)/host/test_undertow_http: tests/host/test_undertow_http.c $(BUILD)/host/undertow/http.o \
+                                  $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o \
+                                  $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-http: $(BUILD)/host/test_undertow_http $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_http
+unittest: test-undertow-http
+.PHONY: test-undertow-http
 
 # -- html.c (track R) --
+# html.c with url.c and util.c: the fixtures in tests/fixtures/undertow/ (NAME.html, or NAME.body for other text,
+# in; NAME.txt and NAME.doc what must come out) and pages the test makes. The test brings its own allocator, which counts bytes so that a
+# document's bytes field is checked, so alloc.o is not linked.
+$(BUILD)/host/test_undertow_html: tests/host/test_undertow_html.c $(BUILD)/host/undertow/html.o \
+                                  $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-html: $(BUILD)/host/test_undertow_html $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_html tests/fixtures/undertow
+unittest: test-undertow-html
+.PHONY: test-undertow-html
 
 # -- session.c, view.c, main.c (track S) --
+# session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
+$(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
+                                     $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o \
+                                     $(BUILD)/host/undertow/config.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-session: $(BUILD)/host/test_undertow_session $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_session
+unittest: test-undertow-session
+.PHONY: test-undertow-session
+
+# view.c and edit.c with the test's own terminal (views written into memory, keys from a script), and the
+# console's real code page 437 (driver/cp437.c, which libsurf builds as user/libsurf/cp437.c); view.c finds
+# its surfos/cp437.h in user/include after the host's own headers
+$(BUILD)/host/undertow/view.o: UT_HOSTFLAGS += -idirafter user/include
+$(BUILD)/host/test_undertow_view: tests/host/test_undertow_view.c $(BUILD)/host/undertow/view.o \
+                                  $(BUILD)/host/undertow/edit.o $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/alloc.o \
+                                  $(BUILD)/host/kernel/driver/cp437.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-view: $(BUILD)/host/test_undertow_view $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_view
+unittest: test-undertow-view
+.PHONY: test-undertow-view
 
 # -- transport.c and Mbed TLS (track T) --
+# Undertow's HTTPS (10/11/26): Mbed TLS 3.6.7, pinned by SHA-256 in third_party/undertow-lock.json and never
+# committed (third_party/README.md). tools/fetch-webdeps.py downloads the release archive (or takes the cached,
+# checked copy), extracts include/, library/ and LICENSE into third_party/mbedtls/ and writes the stamp below;
+# devenv/build.sh runs it on the Mac before the tree is copied into Docker, and this rule runs it wherever the stamp
+# is missing or older than the lock (a clean Linux checkout, CI), so one make builds everything. The sources are
+# listed, not found with $(wildcard) (nothing is there before the fetch): the files tls_config.h compiles to code;
+# one it newly needs shows up as an undefined symbol at the link.
+MBEDTLS_DIR    = third_party/mbedtls
+MBEDTLS_STAMP  = $(MBEDTLS_DIR)/UNDERTOW-LOCK
+MBEDTLS_SRC    = aes.c asn1parse.c asn1write.c base64.c bignum.c bignum_core.c chacha20.c chachapoly.c cipher.c \
+                 cipher_wrap.c constant_time.c ctr_drbg.c ecdh.c ecdsa.c ecp.c ecp_curves.c entropy.c gcm.c hkdf.c md.c \
+                 mps_reader.c oid.c pem.c pk.c pk_ecc.c pk_wrap.c pkparse.c platform.c platform_util.c poly1305.c \
+                 psa_crypto.c psa_crypto_aead.c psa_crypto_cipher.c psa_crypto_client.c \
+                 psa_crypto_driver_wrappers_no_static.c psa_crypto_ecp.c psa_crypto_hash.c psa_crypto_mac.c \
+                 psa_crypto_random.c psa_crypto_rsa.c psa_crypto_slot_management.c psa_util.c rsa.c rsa_alt_helpers.c \
+                 sha1.c sha256.c sha512.c ssl_ciphersuites.c ssl_client.c ssl_msg.c ssl_tls.c ssl_tls12_client.c \
+                 ssl_tls13_client.c ssl_tls13_generic.c ssl_tls13_keys.c x509.c x509_crt.c
+MBEDTLS_CONF   = -DMBEDTLS_CONFIG_FILE='"tls_config.h"' -I$(MBEDTLS_DIR)/include -Iuser/undertow
+MBEDTLS_OBJ    = $(MBEDTLS_SRC:%.c=$(BUILD)/user/mbedtls/%.o)
+MBEDTLS_LIB    = $(BUILD)/user/mbedtls/libmbedtls.a
+# The library is built with -O2 at every level (debugging Mbed TLS is not what -O0 is for, and slow crypto makes
+# handshakes under QEMU slower still) and without debug information (it would add megabytes to the initrd); the
+# target's other flags stay. -fbuiltin undoes -ffreestanding's -fno-builtin here: Mbed TLS reads unaligned words
+# through memcpy() and relies on the compiler to make that one instruction (library/alignment.h).
+MBEDTLS_CFLAGS = $(filter-out -O% -g,$(USER_CFLAGS)) -O2 -g0 -fbuiltin -Werror=implicit-function-declaration $(MBEDTLS_CONF)
+# the cross-compiler's own 32-bit helpers (64-bit division), never the host's C library
+UT_LIBGCC     := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
+
+$(MBEDTLS_STAMP): third_party/undertow-lock.json
+	$(PYTHON) tools/fetch-webdeps.py
+
+# A source exists once the stamp does; this rule only makes make fetch first when it does not. The rules name their
+# files (static patterns), so that make never chains its built-in rules through them.
+MBEDTLS_SOURCES = $(addprefix $(MBEDTLS_DIR)/library/,$(MBEDTLS_SRC) ssl_tls12_server.c ssl_tls13_server.c)
+$(MBEDTLS_SOURCES): | $(MBEDTLS_STAMP)
+	@test -f $@ || { echo "$@ is not in the extracted Mbed TLS: run tools/fetch-webdeps.py --check"; exit 1; }
+
+$(MBEDTLS_OBJ): $(BUILD)/user/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
+                                           user/undertow/tls_platform.h
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(MBEDTLS_CFLAGS) -c $< -o $@
+
+$(MBEDTLS_LIB): $(MBEDTLS_OBJ)
+	@echo "AR   $@"
+	$(Q)rm -f $@ && $(AR) rcs $@ $(MBEDTLS_OBJ)
+
+# transport.c and tls_platform.c see Mbed TLS's headers; the program links the library and libgcc after its
+# own objects (the link rule above takes them from UNDERTOW_OBJ) and before libsurf, which both use
+$(BUILD)/user/undertow/transport.o $(BUILD)/user/undertow/tls_platform.o: USER_CFLAGS += $(MBEDTLS_CONF)
+$(BUILD)/user/undertow/transport.o $(BUILD)/user/undertow/tls_platform.o: $(MBEDTLS_STAMP)
+UNDERTOW_OBJ  += $(MBEDTLS_LIB) $(UT_LIBGCC)
+$(BUILD)/user/bin/undertow: $(MBEDTLS_LIB)
+
+# Every initrd checks the program first: a 32-bit i386 ELF with no undefined symbol (a weak reference would be 0 at
+# run time). Until http.c calls the transport, --gc-sections leaves TLS out of undertow, so the same objects are also
+# linked with the transport's entry points as roots (-u): undertow-tls.elf, never installed, is undertow with all of
+# TLS in it, and gets the same checks. The file left says how much of each is Mbed TLS: the sizes of the symbols the
+# library defines, out of all of them.
+UNDERTOW_LINKCHECK = $(BUILD)/user/undertow/link-check.txt
+UNDERTOW_TLS_ELF   = $(BUILD)/user/undertow/undertow-tls.elf
+UT_TRANSPORT_ROOTS = $(addprefix -u ,ut_transport_open ut_transport_read ut_transport_write ut_transport_close \
+                       ut_transport_error ut_transport_verified ut_transport_tls ut_transport_cleanup ut_transport_status)
+$(UNDERTOW_TLS_ELF): $(BUILD)/user/bin/undertow
+	@echo "ULD  $@ (link check)"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld $(UT_TRANSPORT_ROOTS) -o $@ $(USER_CRT0) \
+		$(UNDERTOW_OBJ) $(USER_LIB)
+
+define ut_link_check
+u="$$($(NM) -u $(1))"; if [ -n "$$u" ]; then echo "$$u"; echo "$(1): undefined symbols"; exit 1; fi; \
+readelf -h $(1) | grep -q 'Class:.*ELF32' && readelf -h $(1) | grep -q 'Machine:.*Intel 80386' \
+	|| { echo "$(1): not a 32-bit i386 ELF"; exit 1; }; \
+$(NM) -S -t d $(1) | awk 'FNR == NR { lib[$$1] = 1; next } NF == 4 { t += $$2; if($$4 in lib) m += $$2 } \
+	END { printf "%s: %d bytes in symbols, %d of them Mbed TLS\n", "$(1)", t, m }' $@.lib - >> $@
+endef
+
+$(UNDERTOW_LINKCHECK): $(BUILD)/user/bin/undertow $(UNDERTOW_TLS_ELF) $(MBEDTLS_LIB)
+	@$(NM) $(MBEDTLS_LIB) | awk 'NF == 3 { print $$3 }' > $@.lib
+	@rm -f $@
+	@$(call ut_link_check,$(BUILD)/user/bin/undertow)
+	@$(call ut_link_check,$(UNDERTOW_TLS_ELF))
+	@rm -f $@.lib
+	@cat $@
+$(INITRD) $(USB_INITRD): $(UNDERTOW_LINKCHECK)
+-include $(MBEDTLS_OBJ:.o=.d)
+
+# The host tests: the same configuration plus the server side for the test's peer (tests/host/undertow/
+# tls_host_config.h), built apart from the target's and never linked into it
+MBEDTLS_HOST_OBJ   = $(MBEDTLS_SRC:%.c=$(BUILD)/host/mbedtls/%.o) $(BUILD)/host/mbedtls/ssl_tls12_server.o \
+                     $(BUILD)/host/mbedtls/ssl_tls13_server.o
+MBEDTLS_HOST_LIB   = $(BUILD)/host/mbedtls/libmbedtls-host.a
+MBEDTLS_HOST_CONF  = $(MBEDTLS_CONF) -DMBEDTLS_USER_CONFIG_FILE='"tls_host_config.h"' -Itests/host/undertow
+$(MBEDTLS_HOST_OBJ): $(BUILD)/host/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
+                                                user/undertow/tls_platform.h tests/host/undertow/tls_host_config.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -MMD -MP $(MBEDTLS_HOST_CONF) -c $< -o $@
+
+$(MBEDTLS_HOST_LIB): $(MBEDTLS_HOST_OBJ)
+	@echo "AR   $@"
+	$(Q)rm -f $@ && $(AR) rcs $@ $(MBEDTLS_HOST_OBJ)
+-include $(MBEDTLS_HOST_OBJ:.o=.d)
+
+# transport.c and tls_platform.c on the host: their socket calls go to the test's simulated network (UT_HOST_NET,
+# tests/host/undertow/surf.h)
+$(BUILD)/host/undertow/transport.o $(BUILD)/host/undertow/tls_platform.o: UT_HOSTFLAGS += $(MBEDTLS_HOST_CONF) -DUT_HOST_NET
+$(BUILD)/host/undertow/transport.o $(BUILD)/host/undertow/tls_platform.o: $(MBEDTLS_STAMP) tests/host/undertow/tls_host_config.h
+
+UT_TRANSPORT_OBJ = $(BUILD)/host/undertow/transport.o $(BUILD)/host/undertow/tls_platform.o \
+                   $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/config.o $(BUILD)/host/undertow/url.o \
+                   $(BUILD)/host/undertow/alloc.o
+$(BUILD)/host/test_undertow_transport: tests/host/test_undertow_transport.c $(UT_TRANSPORT_OBJ) $(MBEDTLS_HOST_LIB)
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $(MBEDTLS_HOST_CONF) -I$(MBEDTLS_DIR)/library $(filter %.c %.o %.a,$^) -o $@
+
+# the certificates are the test's own (tests/host/undertow/certs/, made by make-certs.sh there)
+test-undertow-transport: $(BUILD)/host/test_undertow_transport $(BUILD)/user/bin/undertow $(UNDERTOW_LINKCHECK)
+	$(BUILD)/host/test_undertow_transport tests/host/undertow/certs
+unittest: test-undertow-transport
+.PHONY: test-undertow-transport
+
+# tools/fetch-webdeps.py against local archives made by the test (nothing is downloaded), then the real thing
+# checked: every extracted Mbed TLS file as it came from the archive, and rootfs/etc/ssl/cert.pem as pinned
+test-webdeps: $(MBEDTLS_STAMP)
+	$(PYTHON) -m unittest discover -s tests -p test_webdeps.py
+	$(PYTHON) tools/fetch-webdeps.py --check
+unittest: test-webdeps
+.PHONY: test-webdeps
 
 # -- the browser in QEMU (track F) --
 # 10/11/26: the web fixtures (tools/web-fixtures.py: HTTP and HTTPS servers on 127.0.0.1 with a test CA made for each

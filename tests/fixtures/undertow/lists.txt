@@ -1,0 +1,32 @@
+Before the lists.
+
+* First item
+* Second item, unclosed like the first
+* Third item with a nested list:
+  * Nested one
+  * Nested two
+    1. Deeper, numbered
+    2. Deeper again
+* Fourth item
+  with a second line
+
+9. Nine
+10. Ten: the marker grows
+
+    and a paragraph in the item lines up with its text.
+
+20. Twenty
+21. Twenty-one
+
+Term
+  Its definition, indented.
+Another term
+  Another definition
+
+  A quotation is indented by two spaces.
+
+  Its second paragraph too.
+
+* An empty item above is not shown.
+
+After the lists.

@@ -1,0 +1,7 @@
+# no Content-Type: the start of the body decides (plain-text bodies are tested in test_undertow_html.c)
+url: https://example.test/dir/page.html
+type:
+charset:
+title: No Content-Type
+notice:
+truncated:

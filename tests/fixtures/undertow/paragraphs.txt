@@ -1,0 +1,18 @@
+The first paragraph. Its spaces, tabs and line breaks collapse into one space.
+
+A second paragraph with a line break
+here, and two
+
+there.
+
+Text outside any paragraph
+A division starts a new line
+and so does the next one.
+
+Leading and trailing whitespace in a paragraph is dropped.
+
+Empty paragraphs above and below leave one blank line, not several.
+
+A non-breaking  space stays, but not at the end of a line:
+
+Inline bold, italic, code and spans are plain text.

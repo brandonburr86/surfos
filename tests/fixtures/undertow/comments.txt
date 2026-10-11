@@ -1,0 +1,13 @@
+Before after.
+
+A comment is skipped whole.
+
+Odd comments: empty, abrupt, abrupt too, oddly.
+
+A bogus comment and a processing instruction vanish.
+
+A CDATA section only ]]> in HTML.
+
+An end tag that is not one: and .
+
+A lone < is text: 1 < 2 and <3.
