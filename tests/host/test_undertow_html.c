@@ -717,15 +717,17 @@ static void safety(void) {
 static void links(void) {
     struct sb b = { 0, 0, 0 };
     unsigned i;
-    for(i = 1; i <= 256; i++) sb_printf(&b, "<a href=\"/p%u\">L%u</a> ", i, i);
-    page("text/html", "utf-8", b.s, b.len, "256 links");
-    check(pg_ok && pg.link_count == 256 && !(pg.truncated & UT_TRUNC_LINKS) && link_is(256, "https://example.test/p256", 1, "L256") &&
-          strlen(pg.text) > 9 && !strcmp(pg.text + strlen(pg.text) - 9, "L256[256]"), "256 links are all numbered");
-    sb_str(&b, "<a href=\"/p257\">L257</a>");
-    page("text/html", "utf-8", b.s, b.len, "257 links");
-    check(pg_ok && pg.link_count == 256 && (pg.truncated & UT_TRUNC_LINKS) && strstr(pg.notice, "256") &&
-          strlen(pg.text) > 14 && !strcmp(pg.text + strlen(pg.text) - 14, "L256[256] L257"),
-          "the 257th link keeps its text but gets no number");
+    for(i = 1; i <= 2048; i++) sb_printf(&b, "<a href=\"/p%u\">L%u</a> ", i, i);
+    page("text/html", "utf-8", b.s, b.len, "2048 links");
+    check(pg_ok && pg.link_count == 2048 && !(pg.truncated & UT_TRUNC_LINKS) && !pg.notice[0] &&
+          link_is(2048, "https://example.test/p2048", 1, "L2048") &&
+          strlen(pg.text) > 11 && !strcmp(pg.text + strlen(pg.text) - 11, "L2048[2048]"), "2048 links are all numbered");
+    sb_str(&b, "<a href=\"/p2049\">L2049</a>");
+    page("text/html", "utf-8", b.s, b.len, "2049 links");
+    check(pg_ok && pg.link_count == 2048 && (pg.truncated & UT_TRUNC_LINKS) &&
+          !strcmp(pg.notice, "only its first 2048 links have numbers") &&
+          strlen(pg.text) > 17 && !strcmp(pg.text + strlen(pg.text) - 17, "L2048[2048] L2049"),
+          "the 2049th link keeps its text but gets no number, and the notice says how many have one");
     free(b.s);
 
     page("text/html", "utf-8", LIT("<a href=\"#sec\">S</a> <a href=\"page\">P</a> <a href=\"//third.test/x\">T</a> "
@@ -802,10 +804,11 @@ static void anchors(void) {
     check(!ut_anchor_offset(&pg, "", &off) && off == 0 && !ut_anchor_offset(&pg, "Top", &off) && off == 0,
           "\"\" and \"top\" are the start");
     check(ut_anchor_offset(&pg, NULL, &off) == -1 && ut_anchor_offset(NULL, "top", &off) == -1, "nothing to look in or for");
-    for(i = 0; i < 257; i++) sb_printf(&b, "<p id=a%u>x</p>", i);
-    page("text/html", "utf-8", b.s, b.len, "257 anchors");
-    check(pg_ok && pg.anchor_count == 256 && (pg.truncated & UT_TRUNC_ANCHORS) && ut_anchor_offset(&pg, "a256", &off) == -1 &&
-          !ut_anchor_offset(&pg, "a255", &off), "anchors past UT_ANCHORS_MAX are not known");
+    for(i = 0; i < 2049; i++) sb_printf(&b, "<p id=a%u>x</p>", i);
+    page("text/html", "utf-8", b.s, b.len, "2049 anchors");
+    check(pg_ok && pg.anchor_count == 2048 && (pg.truncated & UT_TRUNC_ANCHORS) && ut_anchor_offset(&pg, "a2048", &off) == -1 &&
+          !ut_anchor_offset(&pg, "a2047", &off) && !ut_anchor_offset(&pg, "a0", &off) && !off,
+          "2048 anchors are known, the 2049th is not");
     free(b.s);
     b.s = NULL; b.len = b.cap = 0;
     sb_str(&b, "<p id=\"");
@@ -814,6 +817,70 @@ static void anchors(void) {
     page("text/html", "utf-8", b.s, b.len, "odd anchor names");
     check(pg_ok && pg.anchor_count == 1 && !strcmp(pg.anchors[0].name, "ok"),
           "names over UT_FIELD_MAX bytes or with control characters are not kept");
+    free(b.s);
+}
+
+/* What UT_LINK_BYTES_MAX counts: every link's label and address and every anchor's name, allocation by allocation */
+static size_t link_strings(const struct ut_document *d) {
+    size_t i, n = 0;
+    for(i = 0; i < d->link_count; i++) n += strlen(d->links[i].label) + 1 + strlen(d->links[i].url) + 1;
+    for(i = 0; i < d->anchor_count; i++) n += strlen(d->anchors[i].name) + 1;
+    return n;
+}
+
+static void link_bytes(void) {
+    struct sb b = { 0, 0, 0 };
+    char long_part[1501], want[80], *after;
+    size_t n, off;
+    unsigned i;
+    memset(long_part, 'a', 1500);
+    long_part[1500] = 0;
+    /* links whose addresses fill UT_LINK_BYTES_MAX long before the count limit */
+    for(i = 0; i < 1000; i++) {
+        sb_printf(&b, "<a href=\"/%u/", i);
+        sb_str(&b, long_part);
+        sb_printf(&b, "\">L%u</a> ", i);
+    }
+    sb_str(&b, "<a href=/s>short</a> <p id=late>x</p>");
+    page("text/html", "utf-8", b.s, b.len, "links over UT_LINK_BYTES_MAX");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.link_count > 600 && pg.link_count < 1000 && (pg.truncated & UT_TRUNC_LINKS) &&
+          n <= UT_LINK_BYTES_MAX && n > UT_LINK_BYTES_MAX - 1600,
+          "links stop getting numbers where their labels and addresses would pass UT_LINK_BYTES_MAX");
+    snprintf(want, sizeof(want), "only its first %u links have numbers", pg_ok ? (unsigned)pg.link_count : 0);
+    check(pg_ok && !strcmp(pg.notice, want), "the notice gives the number that applied");
+    snprintf(want, sizeof(want), "L%u[%u] L%u L%u", pg_ok ? (unsigned)pg.link_count - 1 : 0, pg_ok ? (unsigned)pg.link_count : 0,
+             pg_ok ? (unsigned)pg.link_count : 0, pg_ok ? (unsigned)pg.link_count + 1 : 0);
+    after = pg_ok ? strstr(pg.text, want) : NULL;
+    check(after && pg_ok && strstr(pg.text, "L999 short") && ut_anchor_offset(&pg, "late", &off) == -1 &&
+          (pg.truncated & UT_TRUNC_ANCHORS), "the links after keep their text, and anchors after are not kept either");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* anchors whose names fill it, before the count limit; links after them get no number */
+    for(i = 0; i < 2000; i++) {
+        sb_printf(&b, "<p id=\"n%u-", i);
+        sb_add(&b, long_part, 690);
+        sb_str(&b, "\">x</p>");
+    }
+    sb_str(&b, "<a href=/after>after</a>");
+    page("text/html", "utf-8", b.s, b.len, "anchors over UT_LINK_BYTES_MAX");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.anchor_count > 1400 && pg.anchor_count < 2000 && (pg.truncated & UT_TRUNC_ANCHORS) &&
+          n <= UT_LINK_BYTES_MAX && n > UT_LINK_BYTES_MAX - 800 && !pg.link_count && (pg.truncated & UT_TRUNC_LINKS) &&
+          strlen(pg.text) > 5 && !strcmp(pg.text + strlen(pg.text) - 5, "after"),
+          "anchors stop being kept at UT_LINK_BYTES_MAX; a link after them keeps its text without a number");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* a late <base> that would make the addresses of the links before it pass the cap is not used */
+    for(i = 0; i < 1300; i++) sb_printf(&b, "<a href=\"x%u\">%u</a> ", i, i);
+    sb_str(&b, "<base href=\"https://example.test/");
+    sb_str(&b, long_part);
+    sb_str(&b, "/\"><a href=y>y</a>");
+    page("text/html", "utf-8", b.s, b.len, "a late base too big");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.link_count == 1301 && n <= UT_LINK_BYTES_MAX && link_is(1, "https://example.test/dir/x0", 1, "0") &&
+          link_is(1301, "https://example.test/dir/y", 1, "y"),
+          "a late <base> whose addresses would pass UT_LINK_BYTES_MAX is not used, for any link");
     free(b.s);
 }
 
@@ -836,7 +903,7 @@ static void limits(void) {
     for(i = 0; i < 300; i++) sb_printf(&b, "<a href=/l%u>l</a>", i);
     for(i = 0; i < 5000; i++) sb_printf(&b, "<h2>h%u</h2>", i);
     page("text/html", "utf-8", b.s, b.len, "5000 headings");
-    check(pg_ok && pg.span_count <= UT_SPANS_MAX && pg.link_count == 256, "heading spans stop at UT_SPANS_MAX; every link keeps its span");
+    check(pg_ok && pg.span_count <= UT_SPANS_MAX && pg.link_count == 300, "heading spans stop at UT_SPANS_MAX; every link keeps its span");
     free(b.s);
 }
 
@@ -957,9 +1024,9 @@ static void review_round(void) {
             "<scripts> is not <script>; -> does not end the escape");
     /* the notice: the links part first, a long charset name cut */
     sb_str(&b, "<meta charset=\"an-extremely-long-and-made-up-charset-name-for-testing\"><form></form>");
-    for(i = 0; i < 257; i++) sb_str(&b, "<a href=/l>l</a>");
+    for(i = 0; i < 2049; i++) sb_str(&b, "<a href=/l>l</a>");
     page("text/html", "", b.s, b.len, "a full notice");
-    check(pg_ok && !strcmp(pg.notice, "only its first 256 links have numbers; the page says it is in an-extremely-long-and...; "
+    check(pg_ok && !strcmp(pg.notice, "only its first 2048 links have numbers; the page says it is in an-extremely-long-and...; "
                                        "only its ASCII is shown; forms are not supported"),
           "the notice: links first, a charset name cut at 24 bytes, all three parts");
     if(pg_ok && !strstr(pg.notice, "an-extremely-long-and...")) printf("  notice \"%s\"\n", pg.notice);
@@ -1154,6 +1221,8 @@ static void alloc_failures(const char *dir) {
     fail_each("a page in an unknown charset", "text/html", "shift_jis", LIT("<p>abc\x82\xa0</p><form></form>"));
     fail_each("plain text", "text/plain", "", LIT("one\ttwo\nthree"));
     fail_each("a UTF-16 page", "text/html", "", LIT("\xff\xfe<\0p\0>\0x\0"));
+    fail_each("links before a late base", "text/html", "", LIT("<a href=a>A</a><a href=#f>F</a><p id=x>x</p><a href=b>B</a>"
+                                                               "<base href=\"https://other.test/d/\"><a href=c>C</a>"));
     fail_each("a data table", "text/html", "", LIT("<table><tr><th>a</th><td></td></tr><tr><td><a href=/x></a></td></tr></table>"));
     snprintf(path, sizeof(path), "%s/article.html", dir);
     article = read_file(path, &len);
@@ -1284,6 +1353,8 @@ static void timed(const char *what, const char *body, size_t len, double limit_m
     response_free(r);
 }
 
+static size_t n0;
+
 static void bounded(void) {
     static const struct { const char *what, *head, *unit, *tail; } pages[] = {
         { "nested <div>", "", "<div>", "x" }, { "only <", "", "<", "" }, { "only <a", "", "<a", "" },
@@ -1312,6 +1383,21 @@ static void bounded(void) {
     }
     for(n = 0; b.len < MIB; n++) sb_printf(&b, "<span id=a%u>x</span>", n);
     timed("distinct ids", b.s, b.len, 5000, NULL);
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    for(n = 0; n < 2048; n++) sb_printf(&b, "<p id=\"s%u\"><a href=\"/w/p%u?a=1&amp;b=2#c\">Link %u</a></p>\n", n, n, n);
+    timed("2048 links and 2048 ids", b.s, b.len, 5000, NULL);
+    page("text/html", "utf-8", b.s, b.len, "2048 links and 2048 ids");
+    check(pg_ok && pg.link_count == 2048 && pg.anchor_count == 2048 && !pg.truncated, "all 2048 links and 2048 ids are kept");
+    b.len = 0;
+    for(n = 0; n < 2048; n++) sb_printf(&b, "<a name=e%u></a>", n);
+    sb_str(&b, "<pre>");
+    while(b.len < MIB) sb_str(&b, " \n");
+    sb_str(&b, "</pre>end");
+    timed("2048 waiting anchors and lines of spaces", b.s, b.len, 5000, NULL);
+    page("text/html", "utf-8", b.s, b.len, "anchors before blank lines");
+    check(pg_ok && pg.anchor_count == 2048 && !strcmp(pg.text, "end") && !ut_anchor_offset(&pg, "e2047", &n0) && !n0,
+          "anchors before lines of nothing but spaces point where the next text starts");
     free(b.s);
     body = repeat("", "<div>", "", 50000, &len);
     b.s = NULL; b.len = b.cap = 0;
@@ -1355,6 +1441,7 @@ int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : "tests/fixtures/undertow";
     size_t i;
     if(argc > 2 && !strcmp(argv[1], "--dump")) return dump_file(argc, argv);
+    setvbuf(stdout, NULL, _IOLBF, 0);               /* a test that hangs still shows how far it got */
     for(i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); i++) fixture(dir, fixtures[i]);
     entities();
     charsets();
@@ -1363,6 +1450,7 @@ int main(int argc, char **argv) {
     links();
     anchors();
     limits();
+    link_bytes();
     structure();
     review_round();
     misc();

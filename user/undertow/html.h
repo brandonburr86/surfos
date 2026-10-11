@@ -39,8 +39,8 @@ struct ut_span {
 };
 
 #define UT_TRUNC_TEXT    1      /* the text stopped at UT_TEXT_MAX (a notice says so at its end) */
-#define UT_TRUNC_LINKS   2      /* links after UT_LINKS_MAX have no number */
-#define UT_TRUNC_ANCHORS 4      /* fragment targets after UT_ANCHORS_MAX are not known */
+#define UT_TRUNC_LINKS   2      /* links after UT_LINKS_MAX, or past UT_LINK_BYTES_MAX, have no number */
+#define UT_TRUNC_ANCHORS 4      /* fragment targets after UT_ANCHORS_MAX, or past UT_LINK_BYTES_MAX, are not known */
 
 struct ut_document {
     char *text;                 /* text_len bytes and a NUL */

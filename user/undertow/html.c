@@ -35,7 +35,9 @@ title. Whatever is past a bound is skipped in time linear in the input.
 #define PRESCAN      1024               /* bytes searched for <meta charset> */
 #define LABEL_MAX    64                 /* bytes of a charset's name kept for the notice */
 #define HEADING_SPANS (UT_SPANS_MAX - UT_LINKS_MAX)     /* every link keeps room for its [N] */
-#define AHASH        1024               /* slots of the anchor names' hash table */
+#define AHASH        (2 * UT_ANCHORS_MAX)   /* slots of the anchor names' hash table: never more than half full */
+
+typedef char heading_room[UT_SPANS_MAX > UT_LINKS_MAX ? 1 : -1];    /* headings keep spans of their own */
 #define RULE         "----------------------------------------"         /* <hr>: 40 of them */
 
 static const char cut_notice[] = "[Undertow: the rest of this page is not shown: it is over 512 KB]";
@@ -326,6 +328,9 @@ struct rd {
     char **hrefs;                       /* each link's address as written, until the end */
     unsigned char long_href[UT_LINKS_MAX];  /* it was longer than HREF_MAX: unusable */
     size_t nlinks, links_cap;
+    size_t link_bytes;                  /* the links' labels and addresses and the anchors' names, as allocated */
+    int link_bytes_full;                /* they reached UT_LINK_BYTES_MAX: no more numbers, no more anchors */
+    struct work { struct ut_url u; char safe[UT_URL_MAX + 1]; } *work;     /* for resolving addresses */
     struct ut_anchor *anchors;
     size_t nanchors, anchors_cap, aplaced;  /* anchors[aplaced..] wait for the next text */
     unsigned short ahash[AHASH];        /* index + 1 into anchors, by name */
@@ -337,6 +342,7 @@ struct rd {
     size_t title_len;
     int title_seen;
     struct ut_url *base;                /* the first <base href> that resolved */
+    int base_done;                      /* that one was seen (used or, too big for the links before it, not) */
     unsigned char *decoded;             /* a UTF-16 body as UTF-8 */
 
     int given;                          /* the document has taken the text, links, anchors and spans */
@@ -822,12 +828,13 @@ static void place_anchors(struct rd *rd, size_t offset) {
     while(rd->aplaced < rd->nanchors) rd->anchors[rd->aplaced++].offset = offset;
 }
 
-/* The line's trailing spaces go; anchors that pointed at them wait for the next text again */
+/* The line's trailing spaces go; anchors that pointed at them point where they ended (each anchor moves
+   once at most: the text never shrinks below a line already ended, so this stays linear) */
 static void trim(struct rd *rd) {
-    size_t old = rd->tlen;
+    size_t old = rd->tlen, i;
     while(rd->tlen > rd->line_start && rd->text[rd->tlen - 1] == ' ') rd->tlen--;
     if(rd->tlen == old) return;
-    while(rd->aplaced > 0 && rd->anchors[rd->aplaced - 1].offset >= rd->tlen) rd->aplaced--;
+    for(i = rd->aplaced; i > 0 && rd->anchors[i - 1].offset > rd->tlen; i--) rd->anchors[i - 1].offset = rd->tlen;
 }
 
 /* The line breaks wanted, before the next text: the line ends, and a blank line follows if one was
@@ -1323,7 +1330,8 @@ static void add_anchor(struct rd *rd, const char *name, size_t len, int over) {
     for(i = 0; i < len; i++) h = (h ^ (unsigned char)name[i]) * 16777619u;
     for(slot = h % AHASH; rd->ahash[slot]; slot = (slot + 1) % AHASH)
         if(!strcmp(rd->anchors[rd->ahash[slot] - 1].name, name)) return;
-    if(rd->nanchors == UT_ANCHORS_MAX) {
+    if(rd->nanchors == UT_ANCHORS_MAX || rd->link_bytes_full || rd->link_bytes + len + 1 > UT_LINK_BYTES_MAX) {
+        if(rd->nanchors < UT_ANCHORS_MAX) rd->link_bytes_full = 1;
         rd->truncated |= UT_TRUNC_ANCHORS;
         return;
     }
@@ -1347,6 +1355,7 @@ static void add_anchor(struct rd *rd, const char *name, size_t len, int over) {
     a->offset = 0;
     rd->ahash[slot] = (unsigned short)(rd->nanchors + 1);
     rd->nanchors++;
+    rd->link_bytes += len + 1;
 }
 
 /**** links ****/
@@ -1386,7 +1395,7 @@ static void link_start(struct rd *rd, struct tag *t) {
     rd->link_alt_len = 0;
     if(rd->stopped || rd->failed) return;
     link_alt(rd, t);
-    if(rd->nlinks == UT_LINKS_MAX) {                /* its text, but no number */
+    if(rd->nlinks == UT_LINKS_MAX || rd->link_bytes_full) {    /* its text, but no number */
         rd->truncated |= UT_TRUNC_LINKS;
         return;
     }
@@ -1429,26 +1438,76 @@ static int link_marker(struct rd *rd) {
     return rd->failed ? -1 : 0;
 }
 
+static int other_scheme(const char *h);
+static size_t safe_copy(char *out, size_t cap, const char *in);
+static int resolve(const struct ut_url *base, const char *href, struct ut_url *u);
+
+/* Link i's address against base (a fragment alone against the page itself): the absolute address when it
+   resolves to safe text, else the reference as written, as safe text. *url is malloc'ed (exactly its size).
+   0, or -1 when memory is out. */
+static int link_url(struct rd *rd, size_t i, const struct ut_url *base, char **url, int *usable) {
+    const char *h = rd->hrefs[i], *src;
+    size_t n;
+    int rc = 1;
+    if(!rd->work && !(rd->work = malloc(sizeof(*rd->work)))) return -1;
+    if(h[0] == '#') base = &rd->r->url;
+    if(!rd->long_href[i] && !other_scheme(h)) rc = resolve(base, h, &rd->work->u);
+    if(rc < 0) return -1;
+    if(rc == 0) src = rd->work->u.text;
+    else {
+        safe_copy(rd->work->safe, sizeof(rd->work->safe), h);
+        src = rd->work->safe;
+    }
+    n = strlen(src);
+    *url = malloc(n + 1);
+    if(!*url) return -1;
+    memcpy(*url, src, n + 1);
+    *usable = rc == 0;
+    return 0;
+}
+
+/* A numbered link ends: its label and address are made now, so that their size is known exactly; it keeps
+   its number only while the page's link and anchor strings stay within UT_LINK_BYTES_MAX (and its [N] fits
+   in the text). Otherwise it is no link: its text stays, without a number, and so for every link after it. */
 static void link_close(struct rd *rd) {
-    char *label;
+    struct ut_link *l;
+    char *label, *url = NULL;
+    size_t i, need;
+    int usable = 0;
     if(!rd->link_open) return;
     if(rd->link_num && !rd->label_len && rd->link_alt_len)
         words(rd, rd->link_alt, rd->link_alt_len);     /* no text: its aria-label or title shows as its label */
     rd->link_open = 0;
-    if(!rd->link_num) return;
-    if(!link_marker(rd)) {
+    if(!rd->link_num || rd->failed) return;
+    i = (size_t)rd->link_num - 1;
+    if(link_url(rd, i, rd->base ? rd->base : &rd->r->url, &url, &usable)) {
+        free(url);
+        rd->failed = 1;
+        return;
+    }
+    need = rd->label_len + 1 + strlen(url) + 1;
+    if(rd->link_bytes_full || rd->link_bytes + need > UT_LINK_BYTES_MAX) {
+        rd->link_bytes_full = 1;
+        rd->truncated |= UT_TRUNC_LINKS;
+    } else if(!link_marker(rd)) {
         label = malloc(rd->label_len + 1);
         if(!label) {
+            free(url);
             rd->failed = 1;
             return;
         }
         memcpy(label, rd->label, rd->label_len);
         label[rd->label_len] = 0;
-        rd->links[rd->link_num - 1].label = label;
+        l = &rd->links[i];
+        l->label = label;
+        l->url = url;
+        l->usable = usable;
+        rd->link_bytes += need;
         return;
     }
+    free(url);
     if(rd->failed) return;
-    rd->nlinks--;                                   /* the text is full: its [N] is not in it, so it is no link */
+    rd->nlinks--;                                   /* no room for it: no number, so no link */
     free(rd->hrefs[rd->nlinks]);
     rd->hrefs[rd->nlinks] = NULL;
 }
@@ -1495,13 +1554,46 @@ static int resolve(const struct ut_url *base, const char *href, struct ut_url *u
     return strstr(err, "out of memory") ? -1 : 1;
 }
 
+/* A <base> after links: their addresses again, against it. 1 when done; 0 when they would pass
+   UT_LINK_BYTES_MAX (nothing changes, and the base is not used); -1 when memory is out. */
+static int rebase(struct rd *rd, const struct ut_url *base) {
+    struct { char *url; int usable; } *again;
+    size_t i, k, n = rd->nlinks - (rd->link_open && rd->link_num ? 1 : 0), total = rd->link_bytes;
+    if(!n) return 1;
+    again = malloc(n * sizeof(*again));
+    if(!again) return -1;
+    for(i = 0; i < n; i++) {
+        if(link_url(rd, i, base, &again[i].url, &again[i].usable)) {
+            for(k = 0; k < i; k++) free(again[k].url);
+            free(again);
+            return -1;
+        }
+        total = total - strlen(rd->links[i].url) + strlen(again[i].url);
+    }
+    if(total > UT_LINK_BYTES_MAX) {
+        for(i = 0; i < n; i++) free(again[i].url);
+        free(again);
+        return 0;
+    }
+    for(i = 0; i < n; i++) {
+        free(rd->links[i].url);
+        rd->links[i].url = again[i].url;
+        rd->links[i].usable = again[i].usable;
+    }
+    rd->link_bytes = total;
+    free(again);
+    return 1;
+}
+
+/* The first <base href> that resolves counts for every link, those before it too; when it would make their
+   addresses pass UT_LINK_BYTES_MAX it is not used (and no later one is) */
 static void base_href(struct rd *rd, struct tag *t) {
     size_t n = t->len[A_HREF];
     const char *h;
     char *copy;
     struct ut_url *u;
     int rc;
-    if(rd->base || !t->seen[A_HREF] || t->over[A_HREF]) return;
+    if(rd->base_done || !t->seen[A_HREF] || t->over[A_HREF]) return;
     h = stripped(t->val[A_HREF], &n);
     if(!n) return;
     copy = malloc(n + 1);
@@ -1516,9 +1608,14 @@ static void base_href(struct rd *rd, struct tag *t) {
     copy[n] = 0;
     rc = resolve(&rd->r->url, copy, u);
     free(copy);
+    if(!rc) {
+        rd->base_done = 1;
+        rc = rebase(rd, u);                         /* 1: used, 0: not used, -1: out of memory */
+        rc = rc > 0 ? 0 : rc == 0 ? 1 : -1;
+    }
     if(rc < 0) rd->failed = 1;
     if(rc) free(u);
-    else rd->base = u;                              /* the first <base> that resolves counts */
+    else rd->base = u;
 }
 
 /**** images and forms ****/
@@ -2121,40 +2218,6 @@ static size_t safe_copy(char *out, size_t cap, const char *in) {
     return o;
 }
 
-/* Every link's address, now that the <base> is known: the absolute address when it resolves to a safe one
-   (a fragment alone against the page itself), else the reference as written, as safe text. */
-static int resolve_links(struct rd *rd) {
-    struct work { struct ut_url u; char safe[UT_URL_MAX + 1]; } *w;
-    const struct ut_url *base;
-    struct ut_link *l;
-    size_t i, n;
-    int rc;
-    if(!rd->nlinks) return 0;
-    w = malloc(sizeof(*w));
-    if(!w) return -1;
-    for(i = 0; i < rd->nlinks; i++) {
-        const char *h = rd->hrefs[i];
-        l = &rd->links[i];
-        base = h[0] == '#' || !rd->base ? &rd->r->url : rd->base;
-        rc = rd->long_href[i] || other_scheme(h) ? 1 : resolve(base, h, &w->u);
-        if(rc < 0) break;
-        if(rc == 0) {
-            n = strlen(w->u.text);
-            l->url = malloc(n + 1);
-            if(!l->url) break;
-            memcpy(l->url, w->u.text, n + 1);
-            l->usable = 1;
-        } else {
-            n = safe_copy(w->safe, sizeof(w->safe), h);
-            l->url = malloc(n + 1);
-            if(!l->url) break;
-            memcpy(l->url, w->safe, n + 1);
-        }
-    }
-    free(w);
-    return i < rd->nlinks ? -1 : 0;
-}
-
 /* An array down to its count (kept as it is when that fails: its size is what is counted) */
 static void *shrink(void *p, size_t count, size_t size, size_t *cap) {
     void *q;
@@ -2198,7 +2261,6 @@ static int finish(struct rd *rd, struct ut_document *out) {
         rd->limit = UT_TEXT_MAX;
         if((rd->tlen && put(rd, "\n\n", 2)) || put(rd, cut_notice, sizeof(cut_notice) - 1)) return -1;
     }
-    if(resolve_links(rd)) return -1;
     if(!rd->text) {                                 /* a page with no text at all */
         rd->text = malloc(1);
         if(!rd->text) return -1;
@@ -2230,7 +2292,11 @@ static int finish(struct rd *rd, struct ut_document *out) {
               rd->anchors_cap * sizeof(*d.anchors) + rd->spans_cap * sizeof(*d.spans);
     for(i = 0; i < d.link_count; i++) d.bytes += strlen(d.links[i].label) + 1 + strlen(d.links[i].url) + 1;
     for(i = 0; i < d.anchor_count; i++) d.bytes += strlen(d.anchors[i].name) + 1;
-    if(rd->truncated & UT_TRUNC_LINKS) add_notice(d.notice, sizeof(d.notice), "only its first 256 links have numbers");
+    if(rd->truncated & UT_TRUNC_LINKS) {             /* the count or the bytes, whichever applied */
+        if(rd->nlinks) snprintf(part, sizeof(part), "only its first %u links have numbers", (unsigned)rd->nlinks);
+        else snprintf(part, sizeof(part), "%s", "its links have no numbers");
+        add_notice(d.notice, sizeof(d.notice), part);
+    }
     if(rd->cs == CS_ASCII) {                        /* a long name is cut, so that every part fits */
         char name[25];
         copy_cut(name, sizeof(name), rd->charset);
@@ -2254,6 +2320,7 @@ static void cleanup(struct rd *rd) {
     if(!rd->given) cleanup_parts(rd);
     free(rd->base);
     free(rd->decoded);
+    free(rd->work);
     free(rd);
 }
 
