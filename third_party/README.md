@@ -39,6 +39,23 @@ committed instead: `rootfs/etc/ssl/cert.pem` (see `rootfs/etc/ssl/README`), reco
 * `make test-webdeps` (part of `make unittest`) tests the tool with archives it makes itself, then
   checks the real tree with `--check`.
 
+## How Undertow uses it
+
+`user/undertow/tls_config.h` is the whole configuration (`MBEDTLS_CONFIG_FILE`): a TLS 1.2 and 1.3
+client with SNI and ALPN, ECDHE over X25519, P-256 and P-384, ChaCha20-Poly1305 and AES-GCM,
+certificates signed with RSA (PKCS#1 v1.5, PSS) or ECDSA; no server side, DTLS, renegotiation, tickets,
+resumption, early data, PSK, sockets, files, threads, assembly or SIMD. P-521, SHA-512 and SHA-1 are
+there only so that every root of the bundle can be read; `transport.c` accepts only SHA-256, SHA-384 and
+SHA-512 in certificate chains and handshakes (an explicit `mbedtls_x509_crt_profile` and signature
+list). `user/undertow/tls_platform.c` is the platform: memory and formatting from libsurf, randomness
+only from `getentropy()` (RDRAND; a CPU without it has no HTTPS, and nothing weaker stands in), the
+monotonic clock from `uptime()`, and certificate dates checked against the browser's UTC clock
+(`config.h`). The library is built with `-O2` and without debug information at every level, from the
+listed sources, and linked into `/initrd/bin/undertow` with the cross-compiler's 32-bit `libgcc`; the
+host tests build it separately, with the server side added (`tests/host/undertow/tls_host_config.h`).
+`platform_util.c` keeps one empty `asm volatile("")` in `mbedtls_platform_zeroize()`: a compiler
+barrier that emits no instruction, which `MBEDTLS_HAVE_ASM` does not control.
+
 ## Security advisories (checked 2026-10-11)
 
 The index <https://mbed-tls.readthedocs.io/en/latest/security-advisories/> lists nothing published
@@ -49,6 +66,30 @@ advisory names no fixed version: compiler-induced constant-time violations (CVE-
 Clang's select-optimize pass; SurfOS is built with GCC, and the operations it affects (RSA PKCS#1 v1.5
 decryption, CBC padding) are not used by this client. The lock lists the identifiers. Check again
 whenever the pin changes.
+
+## Known issues of 3.6.7 that Undertow works around
+
+Found by `tests/host/test_undertow_transport.c`, which makes every allocation of a connection fail in
+turn (`UT_TRANSPORT_EXHAUSTIVE=1` for all of them):
+
+1. `mbedtls_ssl_tls13_compute_handshake_transform()` and `..._compute_application_transform()`
+   (`library/ssl_tls13_keys.c`) free a half-made transform with `mbedtls_free()` rather than
+   `mbedtls_ssl_transform_free()`. When the second `mbedtls_cipher_setup()` in
+   `mbedtls_ssl_tls13_populate_transform()` fails for lack of memory, the first cipher context (one
+   small block) is lost, and the handshake fails with `MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE`. Only an
+   allocation failing at that point leaks; the test counts these leaks apart.
+2. `mbedtls_entropy_func()` (`library/entropy.c`) frees its SHA-512 accumulator and sets it up again;
+   when that allocation fails, the context keeps the hash's type without its state while
+   `accumulator_started` stays 1, and the next entropy call (the generator's next reseed) dereferences
+   NULL. `transport.c` therefore makes PSA, its random generator and the roots anew, once no TLS
+   connection is open, after any handshake that failed inside Mbed TLS (such a failure often surfaces
+   only as `MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE`).
+
+Both need an allocation to fail at one exact point; neither is reached otherwise. Worth reporting
+upstream, and worth checking again at the next update.
+
+Also: Mbed TLS sends the host name as SNI even when it is an IPv4 address (RFC 6066 says it should not);
+servers ignore it, and the address is still checked against the certificate's IP names.
 
 ## Updating
 
