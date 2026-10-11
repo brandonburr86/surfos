@@ -95,7 +95,7 @@ size_t ut_utf8_encode(unsigned int cp, unsigned char out[4]) {
 }
 
 int ut_unsafe_char(unsigned int cp) {
-    return cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp <= 0x9f) ||
+    return cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp <= 0x9f) || cp == 0x061c ||
            cp == 0x200e || cp == 0x200f || cp == 0x2028 || cp == 0x2029 ||
            (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069) || cp == 0xfeff;
 }

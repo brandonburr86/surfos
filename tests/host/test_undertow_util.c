@@ -97,7 +97,7 @@ static void utf8(void) {
 }
 
 static void unsafe_and_ascii(void) {
-    static const unsigned int unsafe[] = { 0, 9, 10, 13, 27, 31, 127, 0x80, 0x85, 0x9b, 0x9f, 0x200e, 0x200f,
+    static const unsigned int unsafe[] = { 0, 9, 10, 13, 27, 31, 127, 0x80, 0x85, 0x9b, 0x9f, 0x061c, 0x200e, 0x200f,
                                           0x2028, 0x2029, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff };
     static const unsigned int fine[] = { ' ', 'a', '~', 0xa0, 0xe9, 0x2014, 0x202f, 0x2070, 0x25b8, 0xfffd };
     static const struct { unsigned int cp; const char *ascii; } tr[] = {
@@ -135,8 +135,8 @@ static void safe_text(void) {
     check(n == strlen(out) && !strcmp(out, "a[2Jbc31md"), "escape sequences lose their controls (ESC, BEL, C1 CSI)");
     ut_safe_text(out, sizeof(out), LIT("a\tb\r\nc\xe2\x80\xa8" "d"), 1);
     check(!strcmp(out, "a b  c d"), "tabs and line breaks become spaces");
-    ut_safe_text(out, sizeof(out), LIT("x\xe2\x80\xae" "evil\xe2\x81\xa6" "y"), 1);
-    check(!strcmp(out, "xevily"), "bidirectional overrides and isolates are dropped");
+    ut_safe_text(out, sizeof(out), LIT("x\xe2\x80\xae" "evil\xe2\x81\xa6" "y\xd8\x9c" "z"), 1);
+    check(!strcmp(out, "xevilyz"), "bidirectional overrides, isolates and the Arabic letter mark are dropped");
     ut_safe_text(out, sizeof(out), LIT("\xff" "a\xe2\x82"), 1);
     check(!strcmp(out, "\xef\xbf\xbd" "a\xef\xbf\xbd\xef\xbf\xbd"), "ill-formed UTF-8 becomes U+FFFD");
     ut_safe_text(out, sizeof(out), LIT("caf\xc3\xa9 \xe2\x80\x9cq\xe2\x80\x9d \xe2\x80\x94 \xe4\xb8\xad"), 0);

@@ -75,7 +75,8 @@ size_t ut_utf8_decode(const unsigned char *s, size_t len, unsigned int *cp);
 size_t ut_utf8_encode(unsigned int cp, unsigned char out[4]);
 
 /* Characters that must never reach a terminal: C0 controls, DEL, C1 controls, the
-   bidirectional overrides and isolates (U+202A-U+202E, U+2066-U+2069), U+200E/U+200F, U+FEFF. */
+   bidirectional marks, overrides and isolates (U+061C, U+200E, U+200F, U+202A-U+202E,
+   U+2066-U+2069), the line and paragraph separators U+2028 and U+2029, and U+FEFF. */
 int ut_unsafe_char(unsigned int cp);
 
 /* The ASCII stand-in for a character, for a terminal without UTF-8: itself for printable
