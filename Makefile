@@ -572,12 +572,20 @@ unittest: test-undertow-util
 # -- transport.c and Mbed TLS (track T) --
 
 # -- the browser in QEMU (track F) --
-# 10/11/26: the web fixtures for Undertow's end-to-end tests (tools/web-fixtures.py: HTTP and HTTPS servers on
-# 127.0.0.1 with a test CA made for each run, which needs an OpenSSL 3 openssl command), tested on the host.
+# 10/11/26: the web fixtures (tools/web-fixtures.py: HTTP and HTTPS servers on 127.0.0.1 with a test CA made for each
+# run, which needs an OpenSSL 3 openssl command) and the end-to-end harness's own logic (tools/qemu-web.py: the test
+# initrd, a copy of the normal one that is never written, and its scenarios) on the host; then the browser in QEMU
+# against those fixtures, with its transcripts in build/web-test/O<level>/. The images make and make usb-image build
+# never hold the fixture CA: the harness makes its own initrd in a temporary directory.
+WEB_TESTDIR = build/web-test/O$(O)
 test-web-host:
 	$(PYTHON) -m unittest discover -s tests -p test_web_fixtures.py
+	$(PYTHON) -m unittest discover -s tests -p test_qemu_web.py
 unittest: test-web-host
-.PHONY: test-web-host
+
+test-web: $(KERNEL) images
+	$(PYTHON) tools/qemu-web.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --output-dir $(WEB_TESTDIR) --test
+.PHONY: test-web test-web-host
 
 # Standalone file-browser integration checks; uses temporary QEMU disk copies.
 test-files: $(KERNEL) images
