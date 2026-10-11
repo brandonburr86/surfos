@@ -947,6 +947,44 @@ def escape_reason(ex):
             b'Content-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body)
 
 
+SPLIT_BODY = ('<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>Split everywhere</title></head>\n'
+              '<body><p>Gr\u00fc\u00dfe \u2014 caf&eacute; &#x2014; &amp; &#8364;5 \u65e5\u672c</p>\n'
+              '<p>The end of the split page.</p></body></html>\n').encode()
+
+
+@route('/split', 'a chunked page written one byte at a time (TCP_NODELAY: each byte a segment of its own, over TLS a '
+                 'record of its own): the status line, headers, chunk lines, UTF-8 and entities split at every byte')
+def split(ex):
+    data = (b'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nTransfer-Encoding: chunked\r\n'
+            b'Connection: close\r\n\r\n' + chunked([(SPLIT_BODY[i:i + 7], ';x=1') for i in range(0, len(SPLIT_BODY), 7)]))
+    ex.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    for i in range(len(data)):
+        ex.send(data[i:i + 1])
+        if not ex.wait(0.002):
+            ex.abort()
+            return
+
+
+# a title far over UT_FIELD_MAX with escape sequences all through it; tools/qemu-web.py checks the raw bytes
+LONG_ESCAPES = [b'\x1b]0;', b'\x07', b'\x1b[6n']
+LONG_TITLE = ('UT-LONG-TITLE-START ' + 'a long title with \x1b]0;UT-T\x07 and \x1b[6n inside it, ' * 70 +
+              'UT-LONG-TITLE-END')
+
+
+@route('/long-fields', 'a 3000-byte title full of escape sequences, a link whose address is 2000 bytes and one '
+                       'over 2048, a 5000-byte word')
+def long_fields(ex):
+    href0 = '/about?x='
+    href0 += 'x' * (2000 - len(ex.url(href0)))
+    href1 = '/about?y=' + 'y' * 2100
+    ex.page(LONG_TITLE, f'''
+<h1>Long fields</h1>
+<p><a href="{href0}">An address of 2000 bytes</a></p>
+<p><a href="{href1}">An address over 2048 bytes</a></p>
+<p>UT-WORD-START{"w" * 5000}UT-WORD-END</p>
+<p>The end of the long fields.</p>''')
+
+
 @route('/counter', 'how many times this server sent /counter (reload)')
 def counter(ex):
     with ex.fx.lock:

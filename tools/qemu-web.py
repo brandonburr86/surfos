@@ -183,6 +183,11 @@ def loading(url):
     return f'Loading {url} ...'
 
 
+def loading_from(url):
+    """the start of a Loading line: for an address that goes on (a long one), or that may show its fragment"""
+    return f'Loading {url}'
+
+
 def title(text):
     return f'Undertow - {text}'
 
@@ -245,6 +250,11 @@ MSG = {
     'bad-month': 'the month must be 01 to 12',                              # config.c
     'clock-form': 'give the time in UTC as clock YYYY-MM-DD HH:MM:SS',      # config.c
     'conf-warning': 'undertow.conf line 3: unknown setting "colour"',       # config.c
+    'url-space': 'URL contains a space',                                    # url.c
+    'url-scheme': 'unsupported URL scheme',                                 # url.c
+    'url-ipv6': 'IPv6 is unsupported',                                      # url.c
+    'url-credentials': 'URL credentials are unsupported',                   # url.c
+    'url-long': 'URL exceeds 2048 bytes',                                   # url.c
 }
 
 # ---- scenarios -------------------------------------------------------------------------------------------------------
@@ -287,6 +297,14 @@ def act(fn, name):
 
 def sleep(seconds):
     return act(lambda ctx: (time.sleep(seconds), (True, ''))[1], f'(wait {seconds} s)')
+
+
+def later(text, timeout):
+    """text on the serial console at any time since the scenario began (a job in the background prints it)"""
+    def wait(ctx):
+        end = ctx.run.wait_text(ctx.guest.serial, ctx.serial_start, 0, text, timeout)
+        return end is not None and end >= 0, f'{text!r} never came'
+    return act(wait, f'(wait for {text!r})')
 
 
 # -- checks of what the fixtures saw during a step (or since the scenario began: whole=True) --
@@ -422,6 +440,7 @@ def netstat_clean(ctx):
 # -- the scenarios: browser=False ones are the plumbing, which runs before the browser exists --
 
 NETSTAT_TCP = re.compile(r'(?i)\btcp\b')        # a "tcp ..." line, or "(no TCP sockets)"
+SPLIT_TEXT = 'Gr\u00fc\u00dfe \u2014 caf\u00e9 \u2014 & \u20ac5 \u65e5\u672c'     # /split's text, entities decoded
 
 def _type_long(prefix, n, tail=''):
     return lambda ctx: prefix + 'a' * n + tail
@@ -519,6 +538,7 @@ SCENARIOS = [
         Step('back', title('Undertow Fixture Home')),
         Step('open ' + url('refused'), loading(url('refused')), MSG['refused'], absent=[VERIFIED]),
         Step('open http://nowhere.test/', loading('http://nowhere.test/'), MSG['dns']),
+        Step('open http://bad host/', MSG['url-space'], check=nothing_fetched),
         Step('forward', title('About the fixtures'), check=nothing_fetched),
         Step('back', title('Undertow Fixture Home')),
         Step('open ' + H('/long'), loading(H('/long')), title('A long page')),
@@ -557,11 +577,11 @@ SCENARIOS = [
     ]),
     Scenario('anchors', 'an address with a fragment (never sent), fragment links on the page (no fetch), a missing '
                         'anchor, the same page by another address', [
-        Step('undertow ' + H('/anchors#section-3'), loading(H('/anchors')), title('Anchors'), 'Section 3',
+        Step('undertow ' + H('/anchors#section-3'), loading_from(H('/anchors')), title('Anchors'), 'Section 3',
              'Text of section 3, paragraph 1.', absent=['Section 1', 'Section 2'], check=fetched('http', '/anchors')),
         Step('2', 'Section 2', 'Text of section 2, paragraph 1.', absent=['Loading'], check=nothing_fetched),
         Step('3', absent=['Loading'], check=nothing_fetched),
-        Step('4', loading(H('/anchors?again=1#section-4')), 'Section 4', 'Text of section 4, paragraph 1.',
+        Step('4', loading_from(H('/anchors?again=1')), 'Section 4', 'Text of section 4, paragraph 1.',
              absent=['Section 3'], check=fetched('http', '/anchors')),
         Step('q', wait=SH),
     ]),
@@ -662,6 +682,14 @@ SCENARIOS = [
         Step('open ' + H('/shift_jis'), 'ASCII survives', 'Shift_JIS'),
         Step('q', wait=SH),
     ]),
+    Scenario('splits', 'a page that arrives one byte per TCP segment, and over HTTPS one byte per TLS record: the '
+                       'status line, headers, chunk lines, UTF-8 and entities split at every byte keep their meaning', [
+        Step('undertow ' + H('/split'), loading(H('/split')), title('Split everywhere'), SPLIT_TEXT,
+             'The end of the split page.', timeout=60, check=fetched('http', '/split')),
+        Step('open ' + S('/split'), loading(S('/split')), HTTPS_ANY, SPLIT_TEXT, 'The end of the split page.',
+             timeout=90),
+        Step('q', wait=SH),
+    ]),
     Scenario('escapes', 'escape sequences, C1 and bidi controls in a title, the text, labels and an href never reach '
                         'the terminal', [
         Step('undertow ' + H('/escape'), title('Escapes'), 'Before.', 'UT-SGR', 'The end of the escapes.',
@@ -670,6 +698,20 @@ SCENARIOS = [
         Step('url', H('/escape'), raw_absent=wf.ESCAPE_BYTES),
         Step('q', wait=SH),
         Step('undertow --dump ' + H('/escape'), 'Before.', 'The end of the escapes.', wait=SH, raw_absent=wf.ESCAPE_BYTES),
+    ]),
+    Scenario('long-fields', 'a 3000-byte title full of escape sequences, links of 2000 and 2100 bytes, a 5000-byte '
+                            'word, then a line over 4096 bytes whose tail is quit: bounded, safe, the tail never runs', [
+        Step('undertow ' + H('/long-fields'), title('UT-LONG-TITLE-START'), POSITION, raw_absent=wf.LONG_ESCAPES,
+             absent=['UT-LONG-TITLE-END']),
+        Step('links', 'An address of 2000 bytes', H('/about?x=xxxx'), raw_absent=wf.LONG_ESCAPES),
+        Step('1', loading_from(H('/about?x=xxxx')), title('About the fixtures'), check=fetched('http', '/about')),
+        Step('back', title('UT-LONG-TITLE-START'), raw_absent=wf.LONG_ESCAPES),
+        Step('2', absent=['Loading'], check=nothing_fetched),
+        Step('find UT-WORD-END', re.compile(r'w{10}UT-WORD-END')),
+        Step(lambda ctx: 'url' + ' ' * 4093 + 'quit', MSG['too-long'], timeout=60),
+        Step('history', 'UT-LONG-TITLE-START', raw_absent=wf.LONG_ESCAPES, absent=['UT-LONG-TITLE-END']),
+        Step('url', H('/long-fields')),
+        Step('q', wait=SH),
     ]),
     Scenario('links-limit', '256 links are numbered, the 257th is not', [
         Step('undertow ' + H('/links/257'), title('257 links'), 'link 1[1]', timeout=40),
@@ -750,6 +792,18 @@ SCENARIOS = [
         Step('url', H('/about')),
         Step('q', wait=SH),
     ]),
+    Scenario('bad-addresses', 'addresses url.c refuses (a space, another scheme, IPv6, credentials, 2049 bytes) are '
+                              'refused with its message and change nothing', [
+        Step('undertow ' + H('/about'), title('About the fixtures')),
+        Step('open http://bad host/', MSG['url-space'], check=nothing_fetched),
+        Step('open ftp://fixture.test/', MSG['url-scheme'], check=nothing_fetched),
+        Step('open http://[::1]/', MSG['url-ipv6'], check=nothing_fetched),
+        Step('open http://user@fixture.test:{http}/', MSG['url-credentials'], check=nothing_fetched),
+        Step(lambda ctx: 'open ' + fill(H('/'), ctx) + 'a' * (2049 - len(fill(H('/'), ctx))), MSG['url-long'],
+             check=nothing_fetched),
+        Step('url', H('/about')),
+        Step('q', wait=SH),
+    ]),
     Scenario('clock', 'clock shows UTC; bad times are refused (config.c\'s messages); the session time is what '
                       'certificates are checked against', [
         Step('undertow', 'Undertow', '{today}'),
@@ -797,6 +851,14 @@ SCENARIOS = [
         act(lambda ctx: ctx.close_telnet(), 'the telnet session ends'),
         Step('telnetd off', wait=SH),
     ]),
+    Scenario('concurrent', 'an HTTPS load in the background while the console looks up a name and asks for strong '
+                           'randomness: the page arrives whole, nothing is left open', [
+        Step('undertow --dump ' + S('/slow/delay?ms=6000') + ' &', '] started', wait=SH),
+        Step('nettest resolve nowhere.test', 'resolve nowhere.test:', 'errno=', wait=SH),
+        Step('nettest entropy supported', 'ENTROPY PASS', wait=SH),
+        later('This page waited 6000 ms.', 40),
+        Step('netstat', NETSTAT_TCP, wait=SH, check=netstat_clean),
+    ]),
     Scenario('no-rdrand', 'without RDRAND: the welcome screen says HTTPS cannot work, HTTPS refuses, HTTP works', [
         Step('undertow', 'Undertow', MSG['entropy']),
         Step('open ' + S('/about'), loading(S('/about')), MSG['entropy'], absent=[VERIFIED], check=no_http_on('https')),
@@ -837,6 +899,16 @@ SCENARIOS = [
         Step('echo status $?', 'status 0', wait=SH),
         Step('undertow --dump ' + H('/long'), 'Line 400: the last line', wait=SH, timeout=60),
         Step('wifi status', 'associated with "SurfSim"', wait=SH),
+    ], boot='wlansim'),
+    Scenario('wlansim-join', 'an HTTPS load over Ethernet while the Wi-Fi joins a WPA2 network on the same console: '
+                             'the page arrives, the passphrase never shows', [
+        Step(f'ifconfig eth0 10.0.2.16 255.255.255.0 10.0.2.2 {DNS_NOWHERE}', 'inet 10.0.2.16', wait=SH),
+        Step('undertow --dump ' + S('/slow/delay?ms=8000') + ' &', '] started', wait=SH),
+        Step('wifi join SurfSimWPA', 'Password for SurfSimWPA: ', wait=None),
+        Step(lambda ctx: harness.WLANSIM_PASSPHRASE, 'joined SurfSimWPA', wait=SH, timeout=40,
+             absent=[harness.WLANSIM_PASSPHRASE]),
+        later('This page waited 8000 ms.', 40),
+        Step('netstat', NETSTAT_TCP, wait=SH, check=netstat_clean),
     ], boot='wlansim'),
     Scenario('usbnet', 'over a USB Ethernet adapter (QEMU usb-net): HTTP and HTTPS', [
         Step('undertow --dump ' + S('/about'), 'The fixture servers listen on 127.0.0.1', wait=SH),
@@ -951,6 +1023,7 @@ class Context:
         self.ports = run.fx.ports
         self.state = {}
         self.scenario_mark = self.mark = run.fx.mark()
+        self.serial_start = len(guest.serial.raw())
         self.out, self.raw = '', b''
 
     def open_telnet(self, cols, rows):

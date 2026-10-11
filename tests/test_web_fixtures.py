@@ -522,6 +522,44 @@ class FramingTests(unittest.TestCase):
         self.assertTrue(get('http', '/frame/no-status-line').startswith(b'<html>'))
 
 
+class SplitAndLongTests(unittest.TestCase):
+    def test_split(self):
+        """/split arrives one byte per write: over plain TCP the reads come in pieces of a few bytes at most
+        (TCP_NODELAY), and the bytes, put together, are a chunked response with extensions"""
+        for server in ('http', 'https'):
+            s = connect(server)
+            s.sendall(b'GET /split HTTP/1.1\r\nHost: fixture.test\r\nConnection: close\r\n\r\n')
+            pieces = []
+            while True:
+                try:
+                    chunk = s.recv(65536)
+                except (ssl.SSLEOFError, ConnectionResetError):
+                    break
+                if not chunk:
+                    break
+                pieces.append(chunk)
+            s.close()
+            raw = b''.join(pieces)
+            r = final(raw)
+            self.assertEqual((r[1], header(r, 'Transfer-Encoding'), r[5]), (200, 'chunked', True), server)
+            self.assertIn(b';x=1\r\n', raw)
+            self.assertIn('caf&eacute; &#x2014; &amp; &#8364;5 \u65e5\u672c', r[4].decode())
+            self.assertGreater(len(pieces), len(raw) // 8, server)      # not one big read: it came apart
+
+    def test_long_fields(self):
+        r = final(get('http', '/long-fields'))
+        body = r[4].decode()
+        title = re.search(r'<title>(.*)</title>', body, re.S).group(1)
+        self.assertGreater(len(title), 3000)
+        self.assertTrue(title.startswith('UT-LONG-TITLE-START') and title.endswith('UT-LONG-TITLE-END'))
+        for b in wf.LONG_ESCAPES:
+            self.assertIn(b.decode('latin-1'), title)
+        hrefs = re.findall(r'href="([^"]*)"', body)
+        self.assertEqual(len(FX.url('http', hrefs[0])), 2000)
+        self.assertGreater(len(FX.url('http', hrefs[1])), 2048)
+        self.assertIn('UT-WORD-START' + 'w' * 5000 + 'UT-WORD-END', body)
+
+
 class SizeTests(unittest.TestCase):
     def test_sizes(self):
         for target, n, framing in (('/size/1m', wf.BODY_MAX, 'Content-Length'),
