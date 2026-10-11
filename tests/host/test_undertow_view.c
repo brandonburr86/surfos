@@ -151,12 +151,14 @@ static int ends(const char *s, const char *suffix) {
     return a >= b && !strcmp(s + a - b, suffix);
 }
 
+/* the SurfOS console's: code page 437 drawn (remote 0) */
 static struct ut_term term(unsigned int cols, unsigned int rows, int utf8, int color) {
     struct ut_term t;
     t.cols = cols;
     t.rows = rows;
     t.utf8 = utf8;
     t.color = color;
+    t.remote = 0;
     return t;
 }
 
@@ -261,6 +263,7 @@ static void wrapping(void) {
     text[0] = 0;
     for(k = 0; k < 50; k++) strcat(text, "\xe4\xb8\xad");       /* U+4E2D, a CJK character */
     strcat(text, " \xf0\x9f\x98\x80 end");
+    t.remote = 1;                                                   /* a telnet client draws them */
     text_shot(&s, &t, text, NULL, 0);
     check(s.n == 2 && s.cols[0] == 40 && !strcmp(s.row[1], "\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad"
           "\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad\xe4\xb8\xad \xf0\x9f\x98\x80 end") && !s.bad_utf8,
@@ -270,6 +273,36 @@ static void wrapping(void) {
     check(s.n == 1 && !strcmp(s.row[0], "bad \xef\xbf\xbd\xef\xbf\xbd bytes \xef\xbf\xbd\xef\xbf\xbd") && !s.bad_utf8,
           "ill-formed UTF-8 shows as U+FFFD, a byte at a time as ut_utf8_decode() reads it");
     shot_free(&s);
+    t.remote = 0;
+    text_shot(&s, &t, "bad \xff\xc3 bytes \xe2\x82", NULL, 0);
+    check(s.n == 1 && !strcmp(s.row[0], "bad ?? bytes ??"), "on the console, which has no U+FFFD, a ?");
+    shot_free(&s);
+
+    /* the console draws code page 437; for the rest the ASCII stand-ins, and their widths */
+    text_shot(&s, &t, "thin\xe2\x80\x89space zero\xe2\x80\x8bwidth \xe2\x82\xac" "5 \xe2\x80\xb0 \xe2\x80\xa0"
+                      " \xc2\xbe caf\xc3\xa9 \xe2\x80\x9cq\xe2\x80\x9d \xe2\x96\xb8 \xe2\x80\xa6 \xe4\xb8\xad", NULL, 0);
+    check(s.n == 2 && !strcmp(s.row[0], "thin space zerowidth EUR5 %o + 3/4 caf\xc3\xa9") &&
+          !strcmp(s.row[1], "\xe2\x80\x9cq\xe2\x80\x9d \xe2\x96\xb8 \xe2\x80\xa6 ?"),
+          "console: code page 437 as itself (and its aliases), the rest as stand-ins, ? last");
+    shot_free(&s);
+    text[0] = 0;
+    for(k = 0; k < 20; k++) strcat(text, "\xe2\x82\xac");       /* U+20AC: EUR, three columns */
+    text_shot(&s, &t, text, NULL, 0);
+    check(s.n == 2 && s.cols[0] == 39 && s.cols[1] == 21 && !s.high, "console: rows count what is drawn");
+    shot_free(&s);
+    check(ut_view_stand_in(&t, 'a') == NULL && ut_view_stand_in(&t, 0xe9) == NULL && ut_view_stand_in(&t, 0x2026) == NULL &&
+          ut_view_stand_in(&t, 0x201c) == NULL && !strcmp(ut_view_stand_in(&t, 0x20ac), "EUR") &&
+          !strcmp(ut_view_stand_in(&t, 0x200b), "") && !strcmp(ut_view_stand_in(&t, 0x4e2d), "?"),
+          "the console's rule: code page 437 and its aliases as themselves");
+    t.utf8 = 0;
+    check(!strcmp(ut_view_stand_in(&t, 0xe9), "e") && ut_view_stand_in(&t, 'a') == NULL, "an ASCII terminal's rule");
+    t.utf8 = 1;
+    t.remote = 1;
+    check(ut_view_stand_in(&t, 0x20ac) == NULL && ut_view_stand_in(&t, 0x4e2d) == NULL, "a telnet terminal's rule");
+    text_shot(&s, &t, "\xe2\x82\xac" "5 \xe2\x80\x89\xe4\xb8\xad", NULL, 0);
+    check(s.n == 1 && !strcmp(s.row[0], "\xe2\x82\xac" "5 \xe2\x80\x89\xe4\xb8\xad"), "telnet: every printable character as itself");
+    shot_free(&s);
+    t.remote = 0;
     text_shot(&s, &t, "esc\033[2J bel\a c1\xc2\x9b" "31m bidi\xe2\x80\xae" "x tab\tz", NULL, 0);
     check(s.n == 1 && !s.bad_esc && !s.other_ctl && !strcmp(s.row[0], "esc[2J bel c131m bidix tab z"),
           "unsafe characters in text are left out, a tab is a space");
@@ -543,6 +576,18 @@ static void views(void) {
     t = term(80, 25, 1, 0);
     view_shot(&s, &t, p, 0, NULL);
     check(!s.sgr && !s.bad_esc, "the same page without colours: no escape sequence at all");
+    shot_free(&s);
+
+    /* the console: a title's characters outside code page 437 as stand-ins too */
+    free(p->doc.title);
+    p->doc.title = strdup("Price \xe2\x82\xac and \xe2\x80\xb0");
+    t = term(80, 25, 1, 0);
+    view_shot(&s, &t, p, 0, NULL);
+    check(starts(s.row[0], "Undertow - Price EUR and %o ") && s.cols[0] == 80, "console: the title line's stand-ins");
+    shot_free(&s);
+    t.remote = 1;
+    view_shot(&s, &t, p, 0, NULL);
+    check(starts(s.row[0], "Undertow - Price \xe2\x82\xac and \xe2\x80\xb0 ") && s.cols[0] == 80, "telnet: the title as it is");
     shot_free(&s);
 
     /* ASCII */

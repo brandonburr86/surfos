@@ -15,6 +15,7 @@ UT_TEXT_MAX bytes, and the terminal may have changed its size since.
 
 #include <stdio.h>
 #include <string.h>
+#include <surfos/cp437.h>
 #include "undertow.h"
 #include "view.h"
 
@@ -55,6 +56,12 @@ unsigned int ut_view_text_rows(const struct ut_term *t0) {
 
 /**** characters as the terminal shows them ****/
 
+const char *ut_view_stand_in(const struct ut_term *t, unsigned int cp) {
+    if(cp < 0x80) return NULL;
+    if(!t->utf8 || (!t->remote && cp437_from_unicode(cp) < 0)) return ut_ascii_for(cp);
+    return NULL;
+}
+
 struct ch {
     size_t len;                 /* bytes */
     unsigned int cp;            /* what is shown: ' ' for a space, 0 for nothing */
@@ -63,13 +70,14 @@ struct ch {
 };
 
 /* the character at s (n > 0 bytes): what ut_safe_text() would make of it, and its width */
-static void get_ch(const struct ut_term *t, const unsigned char *s, size_t n, struct ch *c) {
+static void get_ch(const struct ut_term *t, const unsigned char *u, size_t n, struct ch *c) {
+    const char *s;
     unsigned int cp;
-    if(s[0] < 0x80) {
+    if(u[0] < 0x80) {
         c->len = 1;
-        cp = s[0];
+        cp = u[0];
     } else {
-        c->len = ut_utf8_decode(s, n, &cp);
+        c->len = ut_utf8_decode(u, n, &cp);
     }
     if(cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == '\v' || cp == '\f' ||
        cp == 0x85 || cp == 0x2028 || cp == 0x2029) {
@@ -85,15 +93,19 @@ static void get_ch(const struct ut_term *t, const unsigned char *s, size_t n, st
         return;
     }
     c->cp = cp;
-    c->cols = t->utf8 || cp < 0x80 ? 1 : (unsigned int)strlen(ut_ascii_for(cp));
+    c->cols = (s = ut_view_stand_in(t, cp)) ? (unsigned int)strlen(s) : 1;
+}
+
+static void put_cp(FILE *out, const struct ut_term *t, unsigned int cp) {
+    unsigned char b[4];
+    const char *s = ut_view_stand_in(t, cp);
+    if(s) fputs(s, out);
+    else if(cp < 0x80) putc((int)cp, out);
+    else fwrite(b, 1, ut_utf8_encode(cp, b), out);
 }
 
 static void put_ch(FILE *out, const struct ut_term *t, const struct ch *c) {
-    unsigned char b[4];
-    if(!c->cp) return;
-    if(c->cp < 0x80) putc((int)c->cp, out);
-    else if(t->utf8) fwrite(b, 1, ut_utf8_encode(c->cp, b), out);
-    else fputs(ut_ascii_for(c->cp), out);
+    if(c->cp) put_cp(out, t, c->cp);
 }
 
 /* the columns of a one-line text */
@@ -112,22 +124,27 @@ static unsigned int text_cols(const struct ut_term *t, const char *s, size_t len
 /* A one-line text (a title, an address, a message: anything a server may have sent) in at most
    cols columns: through ut_safe_text() first, then cut short with an ellipsis when it is wider.
    Returns the columns written. More than UT_ERR_MAX bytes never fit on a row: they are cut. */
-static char safe_line[UT_ERR_MAX * 4 + 1];   /* the safe copy: an ASCII stand-in has up to 4 bytes */
+static char safe_line[UT_ERR_MAX * 3 + 1];   /* the safe copy: an ill-formed byte's U+FFFD has 3 bytes */
 
 static unsigned int put_cut(FILE *out, const struct ut_term *t, const char *s, size_t len, unsigned int cols) {
+    const unsigned char *u = (const unsigned char *)safe_line;
     unsigned int used = 0, ell = t->utf8 ? 1 : 3, room, total = 0;
-    size_t n, i, end;
+    size_t n, i;
+    struct ch c;
     int longer = len > UT_ERR_MAX;
-    n = ut_safe_text(safe_line, sizeof(safe_line), s, longer ? UT_ERR_MAX : len, t->utf8);
-    for(i = 0; i < n; i++) if(((unsigned char)safe_line[i] & 0xc0) != 0x80) total++;
-    room = !longer && total <= cols ? cols : cols > ell ? cols - ell : 0;
-    for(end = 0; end < n; end++) {
-        if(((unsigned char)safe_line[end] & 0xc0) == 0x80) continue;
-        if(used == room) break;
-        used++;
+    n = ut_safe_text(safe_line, sizeof(safe_line), s, longer ? UT_ERR_MAX : len, 1);
+    for(i = 0; i < n; i += c.len) {
+        get_ch(t, u + i, n - i, &c);
+        total += c.cols;
     }
-    fwrite(safe_line, 1, end, out);
-    if((end < n || longer) && cols >= ell) {
+    room = !longer && total <= cols ? cols : cols > ell ? cols - ell : 0;
+    for(i = 0; i < n; i += c.len) {
+        get_ch(t, u + i, n - i, &c);
+        if(used + c.cols > room) break;
+        put_ch(out, t, &c);
+        used += c.cols;
+    }
+    if((i < n || longer) && cols >= ell) {
         fputs(t->utf8 ? ELLIPSIS_U : "...", out);
         used += ell;
     }

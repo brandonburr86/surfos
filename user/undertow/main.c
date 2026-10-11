@@ -66,6 +66,23 @@ static void usage(FILE *f) {
 
 /**** the terminal ****/
 
+/* Is this program's terminal a pseudo-terminal, a telnet session's? Its far end draws any
+   character; the console draws code page 437's. Asked once, as surfsh's editor does: the process
+   list is read by index, and a task collected meanwhile shifts the rest, so a search that does not
+   find this task looks again. */
+static int remote_terminal(void) {
+    static int known = -1;
+    struct procinfo pi;
+    int i, k, me;
+    if(known >= 0) return known;
+    me = getpid();
+    known = 0;
+    for(k = 0; k < 3; k++)
+        for(i = 0; procinfo(i, &pi) == 0; i++)
+            if(pi.pid == me) return known = pi.tty >= PROC_TTY_PTY;
+    return known;
+}
+
 static void term_update(void) {
     int size = ttyctl(TTY_GETSIZE, 0), caps = ttyctl(TTY_CAPS, 0);
     term.cols = size > 0 ? (unsigned int)(size >> 16) & 0xffff : 80;
@@ -73,6 +90,7 @@ static void term_update(void) {
     if(caps < 0) caps = 0;
     term.utf8 = (caps & TTY_CAP_UTF8) != 0;
     term.color = (caps & TTY_CAP_COLOR) != 0;
+    term.remote = remote_terminal();
 }
 
 static long io_read(void *ctx, unsigned char *buf, size_t cap) {
@@ -676,9 +694,26 @@ static int interactive(const char *address) {
 
 /**** --dump ****/
 
-/* text on stdout: as it is (the renderer's safe text), through ut_safe_text() line by line
-   all the same, in ASCII on a terminal without UTF-8 */
-static void dump_text(const char *s, size_t len, int utf8) {
+/* safe UTF-8 (n bytes) on stdout: as it is into a file or a pipe; on a terminal each character as
+   the terminal draws it (view.c: a stand-in for what it cannot draw), the line not wrapped */
+static void dump_drawn(const char *s, size_t n, const struct ut_term *t) {
+    unsigned int cp;
+    const char *alt;
+    size_t i, k;
+    if(!t) {
+        fwrite(s, 1, n, stdout);
+        return;
+    }
+    for(i = 0; i < n; i += k) {
+        k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
+        alt = ut_view_stand_in(t, cp);
+        if(alt) fputs(alt, stdout);
+        else fwrite(s + i, 1, k, stdout);
+    }
+}
+
+/* the page's text line by line, through ut_safe_text() all the same (t: stdout is that terminal) */
+static void dump_text(const char *s, size_t len, const struct ut_term *t) {
     char *buf;
     size_t start = 0, end, longest = 0;
     for(end = 0; end <= len; end++)
@@ -686,15 +721,14 @@ static void dump_text(const char *s, size_t len, int utf8) {
             if(end - start > longest) longest = end - start;
             start = end + 1;
         }
-    buf = malloc(longest * 4 + 1);
+    buf = malloc(longest * 3 + 1);              /* an ill-formed byte's U+FFFD: 3 bytes */
     if(!buf) {
         fprintf(stderr, "undertow: out of memory\n");
         return;
     }
     for(start = 0; start < len; start = end + 1) {
         for(end = start; end < len && s[end] != '\n'; end++);
-        ut_safe_text(buf, longest * 4 + 1, s + start, end - start, utf8);
-        fputs(buf, stdout);
+        dump_drawn(buf, ut_safe_text(buf, longest * 3 + 1, s + start, end - start, 1), t);
         putchar('\n');
     }
     free(buf);
@@ -705,7 +739,8 @@ static int dump(const char *address) {
     struct ut_response *r = calloc(1, sizeof(*r));
     struct ut_document *d = calloc(1, sizeof(*d));
     char safe[300], reason[64];
-    int rc = 1, utf8 = 1;
+    const struct ut_term *t = NULL;
+    int rc = 1;
     size_t i;
     if(!u || !r || !d) {
         fprintf(stderr, "undertow: out of memory\n");
@@ -726,18 +761,20 @@ static int dump(const char *address) {
         goto out;
     }
     if(isatty(1)) {
-        int caps = ttyctl(TTY_CAPS, 0);
-        utf8 = caps >= 0 && (caps & TTY_CAP_UTF8);
+        term_update();
+        t = &term;
     }
-    dump_text(d->text, d->text_len, utf8);
+    dump_text(d->text, d->text_len, t);
     if(d->link_count) {
         printf("\nLinks:\n");
         for(i = 0; i < d->link_count; i++) {
-            char *buf = malloc(UT_URL_MAX * 3 + 1);
             const char *link = d->links[i].url ? d->links[i].url : "";
+            size_t n = strlen(link);
+            char *buf = malloc(n * 3 + 1);
             if(!buf) break;
-            ut_safe_text(buf, UT_URL_MAX * 3 + 1, link, strlen(link), utf8);
-            printf("[%lu] %s\n", (unsigned long)i + 1, buf);
+            printf("[%lu] ", (unsigned long)i + 1);
+            dump_drawn(buf, ut_safe_text(buf, n * 3 + 1, link, n, 1), t);
+            putchar('\n');
             free(buf);
         }
     }

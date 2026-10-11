@@ -23,10 +23,15 @@ title and the status give way (shorter forms first) on a narrow terminal. A
 terminal of fewer than 8 rows gets the title line, the page's rows and the
 position line only.
 
-Text is wrapped to the width in display columns, one per character as the
-console draws them (one per code point; in ASCII, the length of
-ut_ascii_for()'s stand-in), breaking at spaces and inside a word longer than a
-row, never inside a UTF-8 sequence. A wrapped line's continuation rows are
+A character is drawn as itself where the terminal can draw it, and as its
+ut_ascii_for() stand-in where it cannot: on a terminal without UTF-8 every
+character but ASCII; on the SurfOS console, whose cells are code page 437
+(driver/cp437.c, shared through libsurf), every character outside it, so thin
+and zero-width spaces, the euro sign or a dagger show as " ", nothing, "EUR"
+or "+" rather than '?'; a telnet session's terminal draws them all. Text is
+wrapped to the width in display columns, as the characters are drawn (one a
+character drawn as itself, the length of a stand-in), breaking at spaces and
+inside a word longer than a row, never inside a UTF-8 sequence. A wrapped line's continuation rows are
 indented under its text after the line's leading spaces and list marker ("* ",
 "1. "), unless that would leave fewer than 20 columns. A row ends with "\n", or
 with "\r\n" when it fills the width (the console wraps the VT100 way, and a
@@ -57,9 +62,15 @@ struct ut_term {
     unsigned int cols, rows;    /* the terminal's size (TTY_GETSIZE) */
     int utf8;                   /* it draws UTF-8 (TTY_CAP_UTF8) */
     int color;                  /* it draws the ANSI colours (TTY_CAP_COLOR) */
+    int remote;                 /* a telnet session's (a pseudo-terminal): it draws any character;
+                                   0: the SurfOS console, which draws code page 437's */
 };
 
 #define UT_SPAN_TYPED 16        /* a span kind of the view's own lists: what to type (teal) */
+
+/* How this terminal draws the character cp: NULL for as itself, else its ASCII stand-in (see the
+   top). --dump on a terminal draws its lines this way too, without wrapping them. */
+const char *ut_view_stand_in(const struct ut_term *t, unsigned int cp);
 
 /* The rows of page text a view has on this terminal: rows - 6, at least 1. */
 unsigned int ut_view_text_rows(const struct ut_term *t);

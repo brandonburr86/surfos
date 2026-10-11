@@ -581,9 +581,13 @@ test-undertow-session: $(BUILD)/host/test_undertow_session $(BUILD)/user/bin/und
 unittest: test-undertow-session
 .PHONY: test-undertow-session
 
-# view.c and edit.c with the test's own terminal (views written into memory, keys from a script)
+# view.c and edit.c with the test's own terminal (views written into memory, keys from a script), and the
+# console's real code page 437 (driver/cp437.c, which libsurf builds as user/libsurf/cp437.c); view.c finds
+# its surfos/cp437.h in user/include after the host's own headers
+$(BUILD)/host/undertow/view.o: UT_HOSTFLAGS += -idirafter user/include
 $(BUILD)/host/test_undertow_view: tests/host/test_undertow_view.c $(BUILD)/host/undertow/view.o \
-                                  $(BUILD)/host/undertow/edit.o $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/alloc.o
+                                  $(BUILD)/host/undertow/edit.o $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/alloc.o \
+                                  $(BUILD)/host/kernel/driver/cp437.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
