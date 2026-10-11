@@ -1,0 +1,40 @@
+# links: numbered after their labels, resolved against the page; other schemes and bad addresses keep their number
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Links
+notice:
+truncated:
+link 1: https://example.test/dir/other.html
+  label: relative link
+link 2: https://example.test/root.html
+  label: root-relative one
+link 3: https://cdn.example.test/lib
+  label: scheme-relative one
+link 4: https://example.test/dir/page.html?page=2
+  label: query only
+link 5: https://surf.example.test/x?a=1&b=2#frag
+  label: an absolute address
+link 6: https://example.test/dir/page.html#section-2
+  label: A fragment of this page
+link 7: https://example.test/dir/page.html#
+  label: its top
+link 8 (unusable): mailto:editor@example.test
+  label: Write to us
+link 9 (unusable): javascript:void(0)
+  label: a script link
+link 10 (unusable): ftp://files.example.test/
+  label: FTP
+link 11: https://example.test/up/one.html
+  label: Up one directory
+link 12: http://example.test:8080/port
+  label: another port
+link 13: https://example.test/nested
+  label: A label with nested elements inside
+link 14: https://example.test/spaced%20name.html
+  label: Spaces inside an address
+link 15 (unusable): https://bad host/
+  label: a space in a host
+link 16 (unusable): http://[::1]/
+  label: IPv6
+anchor here: 11:1

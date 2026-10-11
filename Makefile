@@ -579,6 +579,19 @@ unittest: test-undertow-http
 .PHONY: test-undertow-http
 
 # -- html.c (track R) --
+# html.c with url.c and util.c: the fixtures in tests/fixtures/undertow/ (NAME.html, or NAME.body for other text,
+# in; NAME.txt and NAME.doc what must come out) and pages the test makes. The test brings its own allocator, which counts bytes so that a
+# document's bytes field is checked, so alloc.o is not linked.
+$(BUILD)/host/test_undertow_html: tests/host/test_undertow_html.c $(BUILD)/host/undertow/html.o \
+                                  $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-html: $(BUILD)/host/test_undertow_html $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_html tests/fixtures/undertow
+unittest: test-undertow-html
+.PHONY: test-undertow-html
 
 # -- session.c, view.c, main.c (track S) --
 

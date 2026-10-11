@@ -1,0 +1,8 @@
+README for the tide tables
+==========================
+
+        Tabs expand to 8-column stops.
+Trailing spaces are removed.
+
+Many blank lines become one.
+<b>Markup</b> &amp; entities are just text in text/plain.

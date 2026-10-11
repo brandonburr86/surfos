@@ -1,0 +1,7 @@
+# a charset Undertow cannot read: its ASCII, ? for every other byte, and a notice naming it
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Shift_JIS page
+notice: the page says it is in Shift_JIS; only its ASCII is shown
+truncated:

@@ -1,0 +1,23 @@
+<html><head>
+<title>Hidden content</title>
+<meta name="description" content="Not shown">
+<link rel="stylesheet" href="s.css">
+<style>p { color: red; } </p> still style </style>
+<script>document.write("<p>Not shown</p>"); if(a < b && c > d) {} var s = "</div>";</script>
+<script type="module">
+  // a </scri pt> is not an end tag
+</script>
+<noscript><p>Shown: Undertow runs no scripts.</p></noscript>
+</head><body>
+<p>Visible.</p>
+<template><p>A template is not shown.</p></template>
+<svg width="10" height="10"><title>An SVG title is not the page's</title><text>SVG text</text></svg>
+<math><mi>x</mi></math>
+<iframe src="/ad"><p>Iframe content is not shown.</p></iframe>
+<object data="movie.swf"><p>Object fallback is not shown.</p></object>
+<noembed>Noembed content is not shown.</noembed>
+<p>Still visible.</p>
+<svg><p>A paragraph breaks out of an unclosed svg.</p>
+<script>
+unterminated script hides the rest
+<p>Never shown.</p>

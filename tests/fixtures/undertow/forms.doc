@@ -1,0 +1,8 @@
+# forms: every control a bracketed placeholder, and a notice
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Forms
+notice: forms are not supported
+truncated:
+anchor q: 1:18

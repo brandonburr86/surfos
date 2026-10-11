@@ -1,0 +1,21 @@
+# headings: blank lines around them, a span for each line of their text (not for a link's [N])
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Headings
+notice:
+truncated:
+link 1: https://example.test/x
+  label: with a link
+heading 1: Main heading
+heading 5: Second level
+heading 9: Third with a link
+heading 9: inside
+heading 11: Fourth
+heading 12: on two lines
+heading 14: Fifth
+heading 16: Sixth
+heading 18: Unclosed heading
+heading 20: The next heading closes it
+heading 22: A heading inside
+heading 24: another

@@ -1,0 +1,12 @@
+Search the site: [text field] [button: Search] [button: Clear all] [button]
+
+Name: [text field] Password: [password field]
+
+[checkbox] Remember me [radio button] Yes
+
+Size: [select: Small]
+
+Comments:
+[text area]
+
+[button: Go] [button: Reset] [file field] [button]

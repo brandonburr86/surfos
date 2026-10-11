@@ -1,0 +1,10 @@
+A logo: [Surf Shop logo] and a spacer and one with no alt .
+
+Home[1] Cart Shop[2] [3]
+
+[Spaces inside alt text]
+
+[A big wave]
+Figure 1: a big wave at dawn.
+
+[Picture fallback]

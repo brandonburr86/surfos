@@ -1,0 +1,7 @@
+# lists: "* " and "1. " markers, two more spaces per level, continuation lines under the text
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Lists
+notice:
+truncated:

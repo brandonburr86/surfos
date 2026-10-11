@@ -1,0 +1,5 @@
+Latin: café, naïve, Straße. Greek: Καλημέρα. Cyrillic: Привет. CJK: 日本語. Emoji: 🌊🏄.
+
+Combining: é (an e and an acute accent), a wave by reference: 🌊.
+
+Spaces that are characters stay:　(an ideographic space) and a line separator becomes a space.

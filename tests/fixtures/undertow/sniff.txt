@@ -1,0 +1,1 @@
+A page sent without a Content-Type that starts like HTML is read as HTML.

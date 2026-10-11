@@ -1,0 +1,21 @@
+# fragment targets: id= and <a name=>, where their text starts; the first of two equal names counts
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Anchors
+notice:
+truncated:
+link 1: https://example.test/dir/page.html#intro
+  label: Introduction
+link 2: https://example.test/dir/page.html#details
+  label: Details
+link 3: https://example.test/dir/page.html#missing
+  label: Missing
+anchor intro: 3:1
+anchor inline: 5:18
+anchor details: 7:1
+anchor item: 9:1
+anchor last: 13:1
+anchor after-everything: 13:20
+heading 3: Introduction
+heading 7: Details

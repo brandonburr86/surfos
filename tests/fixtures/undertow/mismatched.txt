@@ -1,0 +1,21 @@
+Bold and italic overlap without harm.
+
+An unclosed paragraph is closed by the next one.
+
+A div closes the paragraph before it.
+
+* An item in a list that is never closed
+* Another
+
+  The stray end tag above closed nothing; this paragraph is still in the list.
+
+* Item in a div
+
+The div's end tag closed its list too.
+
+Stray end tags: are ignored.
+
+A lone end tag of a paragraph is an empty paragraph.
+
+Cell still in the cell | next
+After the table, still in the div.
