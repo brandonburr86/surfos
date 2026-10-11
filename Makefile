@@ -631,6 +631,17 @@ test-undertow-view: $(BUILD)/host/test_undertow_view $(BUILD)/user/bin/undertow
 unittest: test-undertow-view
 .PHONY: test-undertow-view
 
+# command.c: what a line typed at the prompt asks for (main.c carries it out)
+$(BUILD)/host/test_undertow_command: tests/host/test_undertow_command.c $(BUILD)/host/undertow/command.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-command: $(BUILD)/host/test_undertow_command $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_command
+unittest: test-undertow-command
+.PHONY: test-undertow-command
+
 # -- transport.c and Mbed TLS (track T) --
 # Undertow's HTTPS (10/11/26): Mbed TLS 3.6.7, pinned by SHA-256 in third_party/undertow-lock.json and never
 # committed (third_party/README.md). tools/fetch-webdeps.py downloads the release archive (or takes the cached,

@@ -16,7 +16,8 @@ The commands are the design's (docs/superpowers/specs/2026-10-10-undertow-design
 the command table; help lists them): open (o), a link's NUMBER or go NUMBER, back
 (b), forward (f), reload (r), Enter or next, prev, top, links, find, findnext,
 history, url, clock, help (?), quit (q). An address typed alone ("example.com",
-anything with "://") is opened too. Ctrl+C and Ctrl+D at the prompt quit.
+anything with "://") is opened too. command.c says what a line asks for; here it
+is carried out. Ctrl+C and Ctrl+D at the prompt quit.
 
 The terminal: the line is read in raw mode by edit.c, which is back in line mode
 before anything else happens, so a load, a view and every list are written in
@@ -50,6 +51,7 @@ the end.
 #include "session.h"
 #include "view.h"
 #include "edit.h"
+#include "command.h"
 
 static struct ut_config *cfg;
 static struct ut_session *ses;
@@ -545,24 +547,9 @@ static void help(void) {
 
 /**** the commands ****/
 
-static int is_number(const char *s) {
-    if(!*s) return 0;
-    for(; *s; s++) if(*s < '0' || *s > '9') return 0;
-    return 1;
-}
-
-/* a word that names a page rather than a command: "://" in it, or a dot with letters after it */
-static int is_address(const char *s) {
-    const char *dot = strchr(s, '.');
-    if(strstr(s, "://")) return 1;
-    if(!dot || dot == s) return 0;
-    for(dot++; *dot; dot++) if((*dot >= 'a' && *dot <= 'z') || (*dot >= 'A' && *dot <= 'Z')) return 1;
-    return 0;
-}
-
-static void number_cmd(const char *digits) {
+/* a link's number (command.c gives it as typed, and its value up to 9 digits) */
+static void number_cmd(const char *digits, unsigned long n) {
     struct ut_page *p = need_page();
-    unsigned long n = 0;
     size_t len = strlen(digits);
     if(!p) return;
     if(len > 9) {                               /* more links than that there are not */
@@ -570,95 +557,45 @@ static void number_cmd(const char *digits) {
             (unsigned long)p->doc.link_count);
         return;
     }
-    while(*digits) n = n * 10 + (unsigned long)(*digits++ - '0');
     follow(n);
 }
 
-/* one line typed at the prompt: 1 when it is the end */
-static int run(char *line) {
-    char *cmd, *arg, *end;
-    size_t i;
-    while(*line == ' ' || *line == '\t') line++;
-    for(end = line + strlen(line); end > line && (end[-1] == ' ' || end[-1] == '\t'); end--);
-    *end = 0;
-    if(!*line) {                                /* Enter alone */
-        next_screen();
-        return 0;
-    }
-    cmd = line;
-    for(arg = line; *arg && *arg != ' ' && *arg != '\t'; arg++);
-    if(*arg) {
-        *arg++ = 0;
-        while(*arg == ' ' || *arg == '\t') arg++;
-    }
-    if(is_number(cmd)) {
-        if(*arg) say("undertow: a link's number alone follows it (%.20s)", cmd);
-        else number_cmd(cmd);
-        return 0;
-    }
-    if(!*arg && is_address(cmd)) {
-        open_address(cmd);
-        return 0;
-    }
-    for(i = 0; cmd[i]; i++) if(cmd[i] >= 'A' && cmd[i] <= 'Z') cmd[i] = (char)(cmd[i] - 'A' + 'a');
+static void move(int direction) {
+    if(!need_page()) return;
+    if(ut_session_move(ses, direction))
+        say(direction < 0 ? "There is no page before this one." : "There is no page after this one.");
+    else show(NULL);
+}
 
-#define IS(a) (!strcmp(cmd, a))
-#define NO_ARG(name) if(*arg) { say("usage: %s (it takes nothing after it)", name); return 0; }
-    if(IS("open") || IS("o")) {
-        if(!*arg) say("usage: open ADDRESS (for example open https://example.com/)");
-        else open_address(arg);
-    } else if(IS("go")) {
-        if(!is_number(arg)) say("usage: go NUMBER (a link's number; links lists them)");
-        else number_cmd(arg);
-    } else if(IS("back") || IS("b") || IS("forward") || IS("f")) {
-        int back = cmd[0] == 'b';
-        NO_ARG(back ? "back" : "forward");
-        if(!need_page()) return 0;
-        if(ut_session_move(ses, back ? -1 : 1))
-            say(back ? "There is no page before this one." : "There is no page after this one.");
-        else show(NULL);
-    } else if(IS("reload") || IS("r")) {
-        NO_ARG("reload");
-        reload();
-    } else if(IS("next")) {
-        NO_ARG("next");
-        next_screen();
-    } else if(IS("prev")) {
-        NO_ARG("prev");
-        prev_screen();
-    } else if(IS("top")) {
-        NO_ARG("top");
+/* one line typed at the prompt (command.c says what it asks for): 1 when it is the end */
+static int run(char *line) {
+    struct ut_command c;
+    ut_command_parse(line, &c);
+    switch(c.kind) {
+    case UT_CMD_NEXT: next_screen(); break;
+    case UT_CMD_PREV: prev_screen(); break;
+    case UT_CMD_TOP:
         if(need_page()) {
             ut_session_current(ses)->position = 0;
             show(NULL);
         }
-    } else if(IS("links")) {
-        NO_ARG("links");
-        links();
-    } else if(IS("find")) {
-        if(!*arg) say("usage: find WORDS (findnext finds them again)");
-        else find(arg, 0);
-    } else if(IS("findnext")) {
-        NO_ARG("findnext");
-        find(NULL, 1);
-    } else if(IS("history")) {
-        NO_ARG("history");
-        history();
-    } else if(IS("url")) {
-        NO_ARG("url");
-        url();
-    } else if(IS("clock")) {
-        clock_cmd(arg);
-    } else if(IS("help") || IS("?")) {
-        NO_ARG("help");
-        help();
-    } else if(IS("quit") || IS("q")) {
-        return 1;
-    } else {
-        say("undertow: there is no command %.40s%s: help lists them", cmd, strlen(cmd) > 40 ? "..." : "");
+        break;
+    case UT_CMD_OPEN: open_address(c.arg); break;
+    case UT_CMD_LINK: number_cmd(c.digits, c.number); break;
+    case UT_CMD_BACK: move(-1); break;
+    case UT_CMD_FORWARD: move(1); break;
+    case UT_CMD_RELOAD: reload(); break;
+    case UT_CMD_LINKS: links(); break;
+    case UT_CMD_FIND: find(c.arg, 0); break;
+    case UT_CMD_FINDNEXT: find(NULL, 1); break;
+    case UT_CMD_HISTORY: history(); break;
+    case UT_CMD_URL: url(); break;
+    case UT_CMD_CLOCK: clock_cmd(c.arg); break;
+    case UT_CMD_HELP: help(); break;
+    case UT_CMD_QUIT: return 1;
+    case UT_CMD_USAGE:
+    case UT_CMD_UNKNOWN: say("%s", c.message); break;     /* made safe there: it may hold what was typed */
     }
-#undef IS
-#undef NO_ARG
     return 0;
 }
 
