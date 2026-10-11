@@ -6,11 +6,12 @@ File: http.h  Date: 10/11/26
 One request per connection (Connection: close), Host with the port when it is
 not the default, the Undertow user agent, Accept-Encoding: identity. Responses
 in HTTP/1.1 or 1.0 framed by Content-Length, chunked transfer coding, or the
-end of the connection. Limits: UT_HEADERS_MAX for every header line of a load's
-responses (interim ones and trailers too), UT_INTERIM_MAX interim (1xx)
-responses, UT_BODY_MAX for a body, UT_REDIRECTS_MAX redirects, UT_LOAD_MS for
-all of it. Anything ambiguous (Content-Length twice with different values, or
-with Transfer-Encoding) is refused rather than guessed.
+end of the connection. Limits: UT_HEADERS_MAX for each response's header lines,
+its interim responses and trailers included (every redirect hop has its own),
+UT_INTERIM_MAX interim (1xx) responses, UT_BODY_MAX for a body,
+UT_REDIRECTS_MAX redirects, UT_LOAD_MS for all of it. Anything ambiguous
+(Content-Length twice with different values, or with Transfer-Encoding) is
+refused rather than guessed.
 */
 
 #ifndef UNDERTOW_HTTP_H
@@ -21,8 +22,9 @@ with Transfer-Encoding) is refused rather than guessed.
 #include "config.h"
 
 struct ut_response {
-    struct ut_url url;          /* where the body came from: the last address after redirects,
-                                   with the fragment of the address that was asked for */
+    struct ut_url url;          /* where the body came from: the last address after redirects;
+                                   a Location's own fragment wins, otherwise the fragment
+                                   carries over from the address before (RFC 9110 10.2.2) */
     unsigned char *body;        /* malloc'ed: len bytes, then a NUL that len does not count */
     size_t len;
     int status;                 /* the final status code, 100..599 */
