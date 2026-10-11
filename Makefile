@@ -594,6 +594,34 @@ unittest: test-undertow-html
 .PHONY: test-undertow-html
 
 # -- session.c, view.c, main.c (track S) --
+# session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
+$(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
+                                     $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o \
+                                     $(BUILD)/host/undertow/config.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-session: $(BUILD)/host/test_undertow_session $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_session
+unittest: test-undertow-session
+.PHONY: test-undertow-session
+
+# view.c and edit.c with the test's own terminal (views written into memory, keys from a script), and the
+# console's real code page 437 (driver/cp437.c, which libsurf builds as user/libsurf/cp437.c); view.c finds
+# its surfos/cp437.h in user/include after the host's own headers
+$(BUILD)/host/undertow/view.o: UT_HOSTFLAGS += -idirafter user/include
+$(BUILD)/host/test_undertow_view: tests/host/test_undertow_view.c $(BUILD)/host/undertow/view.o \
+                                  $(BUILD)/host/undertow/edit.o $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/alloc.o \
+                                  $(BUILD)/host/kernel/driver/cp437.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-view: $(BUILD)/host/test_undertow_view $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_view
+unittest: test-undertow-view
+.PHONY: test-undertow-view
 
 # -- transport.c and Mbed TLS (track T) --
 
