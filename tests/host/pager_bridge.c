@@ -76,6 +76,7 @@ void framebuffer_grid(u_int *cols, u_int *rows) { *cols = 80; *rows = 25; }
 int framebuffer_grow(const u8 *cells) { (void)cells; return -1; }
 void framebuffer_draw_cell(u32 col, u32 row, u8 ch, u8 color) { (void)col; (void)row; (void)ch; (void)color; }
 void framebuffer_present(void) {}
+void framebuffer_console_switched(void) {}
 void framebuffer_set_cursor(u32 col, u32 row) { (void)col; (void)row; }
 bool framebuffer_active(void) { return true; }
 const char *framebuffer_describe(char *buf, size_t size) { if(size) buf[0] = 0; return buf; }

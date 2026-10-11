@@ -12,6 +12,7 @@ kernel state, so tests/host/test_framebuffer.c runs it against a buffer in memor
 
 #include <surfos/types.h>
 #include <surfos/multiboot.h>
+#include <surfos/math64.h>
 #include <sys/framebuffer.h>
 #include <stdio.h>
 
@@ -43,6 +44,73 @@ const char *fb_check_mode(const struct fb_mode *m, u64 *bytes) {
     if(!m->addr || m->addr + size < m->addr) return "no address, or it wraps";
     if(bytes) *bytes = size;
     return NULL;
+}
+
+/* 10/10/26: pixel-space drawing, independent of the console grid. */
+static u32 rgb_pixel(const struct fb_surface *s, u32 rgb) {
+    return fb_rgb(s, (u8)(rgb >> 16), (u8)(rgb >> 8), (u8)rgb);
+}
+
+void fb_pixel_rgb(const struct fb_surface *s, i32 x, i32 y, u32 rgb) {
+    if(x < 0 || y < 0) return;
+    fb_fill(s, (u32)x, (u32)y, 1, 1, rgb_pixel(s, rgb));
+}
+
+/* Wide arithmetic also handles INT_MIN plus UINT_MAX without wrapping. */
+static bool clip_rect(const struct fb_surface *s, i32 x, i32 y, u32 w, u32 h,
+                      u32 *left, u32 *top, u32 *right, u32 *bottom) {
+    i64 l = x, t = y, r = (i64)x + w, b = (i64)y + h;
+    if(l < 0) l = 0;
+    if(t < 0) t = 0;
+    if(r > s->mode.width) r = s->mode.width;
+    if(b > s->mode.height) b = s->mode.height;
+    if(l >= r || t >= b) return false;
+    *left = (u32)l; *top = (u32)t; *right = (u32)r; *bottom = (u32)b;
+    return true;
+}
+
+void fb_rect_rgb(const struct fb_surface *s, i32 x, i32 y, u32 w, u32 h, u32 rgb) {
+    u32 l, t, r, b;
+    if(clip_rect(s, x, y, w, h, &l, &t, &r, &b)) fb_fill(s, l, t, r - l, b - t, rgb_pixel(s, rgb));
+}
+
+/* Sample only the visible part of the major axis: at most width or height
+   iterations, even for INT_MIN..INT_MAX endpoints. Unsigned products fit u64;
+   using the kernel's divider avoids a compiler-runtime dependency. Ties round
+   away from the minor coordinate at the lower major endpoint. */
+void fb_line_rgb(const struct fb_surface *s, i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb) {
+    i64 dx = (i64)x1 - x0, dy = (i64)y1 - y0, a0, a1, b0, b1, first, last, a, b;
+    u32 major, minor, p = rgb_pixel(s, rgb);
+    bool steep = (dy < 0 ? -dy : dy) > (dx < 0 ? -dx : dx);
+    a0 = steep ? y0 : x0; a1 = steep ? y1 : x1;
+    b0 = steep ? x0 : y0; b1 = steep ? x1 : y1;
+    if(a0 > a1) { i64 tmp = a0; a0 = a1; a1 = tmp; tmp = b0; b0 = b1; b1 = tmp; }
+    major = (u32)(a1 - a0);
+    minor = (u32)(b1 < b0 ? b0 - b1 : b1 - b0);
+    first = a0 < 0 ? 0 : a0;
+    last = (steep ? s->mode.height : s->mode.width) - 1;
+    if(a1 < last) last = a1;
+    for(a = first; a <= last; a++) {
+        u32 delta = major ? (u32)div64_32((u64)minor * (u32)(a - a0) + major / 2, major, NULL) : 0;
+        b = b0 + (b1 < b0 ? -(i64)delta : (i64)delta);
+        if(b >= 0 && b < (steep ? s->mode.width : s->mode.height))
+            fb_fill(s, steep ? (u32)b : (u32)a, steep ? (u32)a : (u32)b, 1, 1, p);
+    }
+}
+
+int fb_blit_rgb(const struct fb_surface *s, i32 x, i32 y, const struct fb_bitmap *image) {
+    u32 l, t, r, b, xx, yy;
+    u64 pixels;
+    if(!image || !image->pixels || image->stride < image->width) return -1;
+    if(!image->width || !image->height) return 0;
+    pixels = (u64)(image->height - 1) * image->stride + image->width;
+    if(pixels > image->bytes / sizeof(u32)) return -1;
+    if(!clip_rect(s, x, y, image->width, image->height, &l, &t, &r, &b)) return 0;
+    for(yy = t; yy < b; yy++) {
+        const u32 *src = image->pixels + (u32)((i64)yy - y) * image->stride + (u32)((i64)l - x);
+        for(xx = l; xx < r; xx++) fb_fill(s, xx, yy, 1, 1, rgb_pixel(s, *src++));
+    }
+    return 0;
 }
 
 u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b) {

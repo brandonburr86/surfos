@@ -186,6 +186,7 @@ void switchConsole(u_int conNum) {
     if(isConsoleValid((surf_console*)&conArray[conNum]) == false) return;
     KCRIT_ENTER
     conActive = &conArray[conNum];
+    framebuffer_console_switched();
     KCRIT_LEAVE
 }
 

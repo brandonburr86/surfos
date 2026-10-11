@@ -25,7 +25,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 13 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 14 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-tcp     # the TCP stack against hand-made segments: tools/qemu-tcp.py (+ rawnet.py), QEMU 7.2 or later
@@ -68,6 +68,7 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
            framebuffer.c + fbcore.c + font8x16.c (the UEFI console: 256 code page 437 glyphs made by tools/bdf2c.py from
            fonts/spleen-8x16.bdf and fonts/surfos-symbols.bdf, with their licences), cp437.c (the character set, the UTF-8 decoder)
+           The framebuffer also provides kernel-only software 2D drawing and revocable graphics sessions (docs/GRAPHICS.md).
            usb/: xhci.c (USB 3 host controller, polled), usb.c (enumeration, the usb thread, lsusb),
            usbnet.c (CDC ECM/NCM Ethernet adapters as eth0), msc.c (USB sticks: Bulk-Only Transport + SCSI, as usb0, usb1, ...),
            usbdesc.c (descriptor and NCM parsing, host-tested)

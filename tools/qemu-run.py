@@ -222,6 +222,10 @@ SMOKE = [
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
+    ('gfxinfo', ['software 2D', 'no framebuffer']),
+    ('gfxtest', ['graphics unavailable']),
+    ('gfxtest 4294967301', ['usage: gfxtest']),
+    ('gfxtest 0', ['usage: gfxtest']),
     ('drivers', ['parport   ok', 'usb       not present', 'iwlwifi   skipped', 'console   VGA text mode',
                  'timer     PIT channel 0']),   # in the order printed; 10/10/26: iwlwifi only with profile=laptop
     ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),

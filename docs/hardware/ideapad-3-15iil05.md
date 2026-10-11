@@ -64,6 +64,17 @@ chosen automatically, and each fallback was exercised under QEMU.
 
 ## Evidence
 
+### Basic 2D graphics (2026-10-10)
+
+[The graphics driver](../GRAPHICS.md) extends the boot framebuffer with pixels,
+filled rectangles, lines and RGB image copies. Use `gfxinfo` to record the actual
+mode and `gfxtest 15` on the active local console to check the color bars. Check
+Ctrl+C and F1/F2 text recovery too. It uses the existing firmware-selected mode
+and CPU drawing; native Intel modesetting and acceleration remain future work.
+Physical validation of this extension is pending: the laptop did not answer at
+its documented network address during inspection. The unknown PCI ID and panel
+mode above remain unknown, rather than inferred from the model family.
+
 ### Baseline before the port (2026-10-05, branch `ai-dev`, commit `3f476d2`)
 
 Docker toolchain `surfos-modern-toolchain` (Debian bookworm, linux/amd64 under emulation

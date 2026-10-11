@@ -59,6 +59,31 @@ u32 fb_rgb(const struct fb_surface *s, u8 r, u8 g, u8 b);
 void fb_fill(const struct fb_surface *s, u32 x, u32 y, u32 w, u32 h, u32 pixel);  /* clipped to the surface */
 void fb_draw_glyph(const struct fb_surface *s, u32 col, u32 row, u8 ch, u8 attr, bool cursor); /* ignored outside the grid */
 
+/* 10/10/26: software 2D. Colours are 0x00RRGGBB, coordinates are signed;
+   all drawing clips to the visible pixels and leaves pitch padding alone.
+   Source pixels must be in ordinary RAM, not overlap the destination. */
+struct fb_bitmap {
+    const u32 *pixels;
+    u32 width, height, stride;  /* stride in u32 pixels, including row padding */
+    size_t bytes;              /* readable source allocation, validated before drawing */
+};
+void fb_pixel_rgb(const struct fb_surface *s, i32 x, i32 y, u32 rgb);
+void fb_rect_rgb(const struct fb_surface *s, i32 x, i32 y, u32 w, u32 h, u32 rgb);
+void fb_line_rgb(const struct fb_surface *s, i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb);
+int fb_blit_rgb(const struct fb_surface *s, i32 x, i32 y, const struct fb_bitmap *image);
+
+/* Kernel callers only. One active local console/task owns a graphics session.
+   begin returns -1 if unavailable/busy; draw returns -1 after ownership is lost.
+   The callback is synchronous, with preemption disabled: do not sleep, allocate,
+   print, retain the surface, or call these session APIs from the callback.
+   Interrupts remain enabled. F1-F4 switching, death and panic revoke ownership.
+   Always end on every exit path (including an interrupted wait). */
+int framebuffer_graphics_begin(void);
+bool framebuffer_graphics_owned(void);
+int framebuffer_graphics_draw(void (*draw)(const struct fb_surface *, void *), void *arg);
+void framebuffer_graphics_end(void);
+void framebuffer_console_switched(void); /* console.c, after changing conActive */
+
 /* framebuffer.c: the console's screen */
 int framebuffer_init(void);     /* 0 when the boot loader's framebuffer is mapped and cleared */
 void framebuffer_bind(const u8 *cells);   /* the 80x25x2 char/attribute buffer the screen shows at first */

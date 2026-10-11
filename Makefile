@@ -42,6 +42,7 @@ USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc
                telnetd
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 USER_PROGS  += ptytest       # 10/6/26 (the telnet server): pseudo-terminals, poll, procinfo, detach, /dev/kmsg
+USER_PROGS  += files         # text file browser, independent of the web browser
 USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the network, for tools/devloop.py
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
@@ -525,3 +526,9 @@ test-undertow-url: $(BUILD)/host/test_undertow_url $(BUILD)/user/undertow/url.o
 	$(BUILD)/host/test_undertow_url
 unittest: test-undertow-url
 .PHONY: test-undertow-url
+
+# Standalone file-browser integration checks; uses temporary QEMU disk copies.
+test-files: $(KERNEL) images
+	$(PYTHON) tools/qemu-files.py --qemu $(QEMU) --kernel $(KERNEL) --disk $(DISKIMG) --initrd $(INITRD)
+.PHONY: test-files
+test: test-files
