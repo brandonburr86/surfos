@@ -568,6 +568,18 @@ unittest: test-undertow-util
 # -- html.c (track R) --
 
 # -- session.c, view.c, main.c (track S) --
+# session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
+$(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \
+                                     $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o \
+                                     $(BUILD)/host/undertow/config.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-session: $(BUILD)/host/test_undertow_session $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_session
+unittest: test-undertow-session
+.PHONY: test-undertow-session
 
 # -- transport.c and Mbed TLS (track T) --
 
