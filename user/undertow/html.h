@@ -60,18 +60,21 @@ struct ut_document {
 
 /* Render r: text/html and application/xhtml+xml as HTML, any other text as it is. Links
    resolve against the first <base href> that resolves, wherever it is in the page, or else
-   r->url. The charset is r->charset, else a <meta charset> (or http-equiv Content-Type) in
-   the first 1024 bytes, else UTF-8 when the bytes are valid UTF-8, else windows-1252
-   (iso-8859-1 and us-ascii are read as windows-1252 too, as browsers do); a charset
-   Undertow cannot read gives its ASCII and a notice. 0 and *out (free it with
-   ut_document_free()), or -1 with a message and *out unchanged (out of memory). */
+   r->url. The charset is a byte order mark's (UTF-8, UTF-16LE or UTF-16BE), else r->charset,
+   else a <meta charset> (or http-equiv Content-Type) in the first 1024 bytes, else UTF-8 when
+   the bytes are valid UTF-8, else windows-1252 (iso-8859-1 and us-ascii are read as
+   windows-1252 too, as browsers do); a charset Undertow cannot read gives its ASCII and a
+   notice. 0 and *out (free it with ut_document_free()), or -1 with a message and *out
+   unchanged (out of memory). */
 int ut_render(const struct ut_response *r, struct ut_document *out, char *err, size_t cap);
 
 /* Free everything a document owns and zero it; a zeroed document, or NULL, is fine. */
 void ut_document_free(struct ut_document *d);
 
-/* The text offset of the fragment target name (compared exactly, as written; "" and "top"
-   are the start of the text): 0 and *offset, or -1 when the page has none. */
+/* The text offset of the fragment target name: compared exactly as written first, then once
+   with the fragment's %XX escapes decoded (so a fragment is decoded once in all; callers pass
+   it as the URL has it); "" and "top" are the start of the text. 0 and *offset, or -1 when
+   the page has none. */
 int ut_anchor_offset(const struct ut_document *d, const char *fragment, size_t *offset);
 
 #endif

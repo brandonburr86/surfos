@@ -250,17 +250,18 @@ struct frame {                          /* an open element that shapes the text 
     unsigned char nested;               /* a list inside a list: no blank lines around it */
     unsigned char cell_pending;         /* td, th: it has shown nothing yet */
     unsigned char row_shown;            /* tr: one of its cells has shown something */
+    unsigned char data;                 /* table: it has had a <th>, so every cell keeps its column */
     unsigned short text;                /* the indentation of the lines of its text */
     unsigned short mcol;                /* lists and items: the column of the markers */
     short lst;                          /* the nearest list or item around it (no quote between), or -1 */
     long next;                          /* ol: the number of its next item */
 };
 
-enum { A_HREF, A_ID, A_NAME, A_ALT, A_VALUE, A_TYPE, A_START, A_COUNT };
+enum { A_HREF, A_ID, A_NAME, A_ALT, A_VALUE, A_TYPE, A_START, A_ARIA, A_TITLE, A_COUNT };
 
 static const struct { const char *name; size_t cap; } attr_info[A_COUNT] = {
     { "href", HREF_MAX }, { "id", UT_FIELD_MAX + 1 }, { "name", UT_FIELD_MAX + 1 }, { "alt", UT_FIELD_MAX },
-    { "value", UT_FIELD_MAX }, { "type", 32 }, { "start", 32 }
+    { "value", UT_FIELD_MAX }, { "type", 32 }, { "start", 32 }, { "aria-label", UT_FIELD_MAX }, { "title", UT_FIELD_MAX }
 };
 
 struct tag {                            /* the tag being read */
@@ -270,7 +271,7 @@ struct tag {                            /* the tag being read */
     unsigned char seen[A_COUNT], over[A_COUNT];
     char *val[A_COUNT];                 /* NUL-terminated UTF-8, in the buffers below */
     char href[HREF_MAX + 1], id[UT_FIELD_MAX + 2], name_[UT_FIELD_MAX + 2], alt[UT_FIELD_MAX + 1],
-         value[UT_FIELD_MAX + 1], type[33], start[33];
+         value[UT_FIELD_MAX + 1], type[33], start[33], aria[UT_FIELD_MAX + 1], title[UT_FIELD_MAX + 1];
 };
 
 struct rd {
@@ -313,6 +314,8 @@ struct rd {
     int link_open, link_num, link_text; /* link_num 0: a link without a number */
     char label[UT_FIELD_MAX + 1];
     size_t label_len;
+    char link_alt[UT_FIELD_MAX + 1];    /* its text if it shows none: aria-label or title, its own or inside it */
+    size_t link_alt_len;
     int label_gap, label_full;
     int button;                         /* 1: open, nothing shown yet; 2: "[button: " shown */
     int select, option, select_shown;   /* option 1: in the first one; 2: past it */
@@ -334,6 +337,7 @@ struct rd {
     size_t title_len;
     int title_seen;
     struct ut_url *base;                /* the first <base href> that resolved */
+    unsigned char *decoded;             /* a UTF-16 body as UTF-8 */
 
     int given;                          /* the document has taken the text, links, anchors and spans */
 
@@ -369,10 +373,13 @@ static int ci_prefix(const unsigned char *s, size_t avail, const char *w) {
     return 1;
 }
 
-/* Never shown: ut_unsafe_char()'s (NUL and every control, the bidirectional controls), U+061C (the Arabic
-   letter mark, a bidirectional mark as well), and the soft hyphen (&shy;) */
+/* Never shown: ut_unsafe_char()'s (NUL and every control, the bidirectional marks and controls) and the
+   characters that are invisible on a console: the soft hyphen (&shy;), the combining grapheme joiner, the
+   Mongolian vowel separator, the zero-width space, the word joiner and the invisible operators, and the
+   variation selectors. The zero-width non-joiner and joiner stay: scripts and emoji need them. */
 static int hidden_char(unsigned int cp) {
-    return ut_unsafe_char(cp) || cp == 0x61c || cp == 0xad;
+    return ut_unsafe_char(cp) || cp == 0xad || cp == 0x34f || cp == 0x180e || cp == 0x200b ||
+           (cp >= 0x2060 && cp <= 0x2064) || (cp >= 0xfe00 && cp <= 0xfe0f);
 }
 
 /* HTML's whitespace, and the line and paragraph separators, which ut_safe_text() makes spaces too */
@@ -650,6 +657,47 @@ static int utf8_valid(const unsigned char *s, size_t n) {
     return 1;
 }
 
+/* A UTF-16 body (a byte order mark FF FE or FE FF, else a charset that names UTF-16): decoded into UTF-8, which
+   the renderer then reads (surrogate pairs joined; a lone surrogate or an odd last byte is U+FFFD). 0, or -1
+   when memory is out. */
+static int decode_utf16(struct rd *rd) {
+    const unsigned char *s = rd->in;
+    unsigned char *out;
+    size_t n = rd->len, i, o = 0;
+    unsigned int u, v, cp;
+    int be;
+    const char *label = rd->r->charset;
+    if(n >= 2 && ((s[0] == 0xff && s[1] == 0xfe) || (s[0] == 0xfe && s[1] == 0xff))) {
+        be = s[0] == 0xfe;
+        s += 2;
+        n -= 2;
+    } else if(!(n >= 3 && s[0] == 0xef && s[1] == 0xbb && s[2] == 0xbf) && charset_of(label) == CS_UTF16)
+        be = ci_eq((const unsigned char *)label, strlen(label), "utf-16be") ||
+             ci_eq((const unsigned char *)label, strlen(label), "unicodefffe");
+    else return 0;
+    out = malloc(n / 2 * 3 + 4);
+    if(!out) return -1;
+    for(i = 0; i + 1 < n; i += 2) {
+        u = be ? (unsigned int)s[i] << 8 | s[i + 1] : (unsigned int)s[i + 1] << 8 | s[i];
+        cp = u;
+        if(u >= 0xd800 && u <= 0xdbff && i + 3 < n) {
+            v = be ? (unsigned int)s[i + 2] << 8 | s[i + 3] : (unsigned int)s[i + 3] << 8 | s[i + 2];
+            if(v >= 0xdc00 && v <= 0xdfff) {
+                cp = 0x10000 + ((u - 0xd800) << 10) + (v - 0xdc00);
+                i += 2;
+            }
+        }
+        o += ut_utf8_encode(cp, out + o);           /* a lone surrogate is written as U+FFFD */
+    }
+    if(i < n) o += ut_utf8_encode(UT_REPLACEMENT, out + o);
+    out[o] = 0;
+    rd->decoded = out;
+    rd->in = out;
+    rd->len = o;
+    rd->cs = CS_UTF8;
+    return 0;
+}
+
 /* html.h's order: a byte order mark, the response's charset, a <meta> in the first 1024 bytes (HTML only),
    then UTF-8 if the bytes are UTF-8 and windows-1252 if not. */
 static void choose_charset(struct rd *rd, int html) {
@@ -659,11 +707,6 @@ static void choose_charset(struct rd *rd, int html) {
     if(rd->len >= 3 && s[0] == 0xef && s[1] == 0xbb && s[2] == 0xbf) {
         rd->cs = CS_UTF8;
         rd->pos = 3;
-        return;
-    }
-    if(rd->len >= 2 && ((s[0] == 0xff && s[1] == 0xfe) || (s[0] == 0xfe && s[1] == 0xff))) {
-        unknown_charset(rd, "UTF-16");
-        rd->pos = 2;
         return;
     }
     if(rd->r->charset[0]) {
@@ -996,6 +1039,7 @@ static void text_char(struct rd *rd, unsigned int cp) {
    none at the ends. Returns its length. */
 static size_t collapse(struct rd *rd, const char *s, size_t n) {
     size_t i = 0, k, len = 0;
+    unsigned char b[4];
     unsigned int cp;
     int gap = 0;
     while(i < n) {
@@ -1006,10 +1050,12 @@ static size_t collapse(struct rd *rd, const char *s, size_t n) {
             continue;
         }
         if(hidden_char(cp)) continue;
-        if(len + 1 + 4 > UT_FIELD_MAX) break;
+        k = ut_utf8_encode(cp, b);
+        if(len + (gap && len) + k > UT_FIELD_MAX) break;
         if(gap && len) rd->scratch[len++] = ' ';
         gap = 0;
-        len += ut_utf8_encode(cp, (unsigned char *)rd->scratch + len);
+        memcpy(rd->scratch + len, b, k);
+        len += k;
     }
     rd->scratch[len] = 0;
     return len;
@@ -1043,11 +1089,23 @@ static struct frame *push(struct rd *rd, int el) {
     return f;
 }
 
+static void button_close(struct rd *rd);
+static void select_close(struct rd *rd);
+static int table_at(const struct rd *rd);
+
 /* Close the top element, with what its end does to the text */
 static void pop(struct rd *rd) {
-    struct frame *f = &rd->st[--rd->depth];
-    int el = f->el;
+    struct frame *f = &rd->st[rd->depth - 1];
+    int el = f->el, t;
     unsigned int fl = FL(el);
+    if(el == E_TD || el == E_TH) {                  /* a cell's end closes what is open inside it */
+        link_close(rd);
+        button_close(rd);
+        select_close(rd);
+        t = table_at(rd);                           /* its own table: the cell is on top */
+        if(f->cell_pending && t && rd->st[t].data) emit(rd, "-", 1);   /* an empty cell of a data table */
+    }
+    rd->depth--;
     rd->open[el]--;
     switch(el) {
     case E_LI:
@@ -1056,7 +1114,6 @@ static void pop(struct rd *rd) {
         return;
     case E_TD: case E_TH:
         if(f->cell_pending && !--rd->cells_pending) rd->sep = 0;
-        link_close(rd);
         return;
     case E_CAPTION:
         link_close(rd);
@@ -1133,12 +1190,12 @@ static int parse_int(const char *s, long *out) {
     while(ws((unsigned char)*s)) s++;
     if(*s == '-' || *s == '+') neg = *s++ == '-';
     while(digit((unsigned char)*s)) {
-        if(v < 1000000000L) v = v * 10 + (*s - '0');
+        if(v < 100000000L) v = v * 10 + (*s - '0');     /* at most 999999999: no overflow, even in 32 bits */
+        else v = 999999999L;
         s++;
         digits++;
     }
     if(!digits) return -1;
-    if(v > 999999999L) v = 999999999L;
     *out = neg ? -v : v;
     return 0;
 }
@@ -1206,6 +1263,7 @@ static void cell_start(struct rd *rd, int el) {
     int t = table_at(rd), r, c;
     struct frame *f;
     if(!t) return;
+    if(el == E_TH) rd->st[t].data = 1;              /* a data table from its first header cell on */
     link_close(rd);
     c = above(rd, t, E_TD, E_TH);
     if(c) pop_to(rd, c);
@@ -1303,6 +1361,16 @@ static const char *stripped(const char *s, size_t *n) {
     return s;
 }
 
+/* A label for a link that shows no text: an element's aria-label, else its title (the first that has one:
+   the <a> itself, else an element inside it) */
+static void link_alt(struct rd *rd, struct tag *t) {
+    size_t n = 0;
+    if(t->seen[A_ARIA]) n = collapse(rd, t->val[A_ARIA], t->len[A_ARIA]);
+    if(!n && t->seen[A_TITLE]) n = collapse(rd, t->val[A_TITLE], t->len[A_TITLE]);
+    memcpy(rd->link_alt, rd->scratch, n);
+    rd->link_alt_len = n;
+}
+
 static void link_start(struct rd *rd, struct tag *t) {
     size_t n = t->len[A_HREF], cap;
     const char *h = stripped(t->val[A_HREF], &n);
@@ -1315,7 +1383,9 @@ static void link_start(struct rd *rd, struct tag *t) {
     rd->label_len = 0;
     rd->label_gap = 0;
     rd->label_full = 0;
+    rd->link_alt_len = 0;
     if(rd->stopped || rd->failed) return;
+    link_alt(rd, t);
     if(rd->nlinks == UT_LINKS_MAX) {                /* its text, but no number */
         rd->truncated |= UT_TRUNC_LINKS;
         return;
@@ -1362,6 +1432,8 @@ static int link_marker(struct rd *rd) {
 static void link_close(struct rd *rd) {
     char *label;
     if(!rd->link_open) return;
+    if(rd->link_num && !rd->label_len && rd->link_alt_len)
+        words(rd, rd->link_alt, rd->link_alt_len);     /* no text: its aria-label or title shows as its label */
     rd->link_open = 0;
     if(!rd->link_num) return;
     if(!link_marker(rd)) {
@@ -1524,6 +1596,11 @@ static int select_tag(struct rd *rd, struct tag *t) {
         select_close(rd);
         return el == E_SELECT;
     }
+    if(el == E_TABLE || el == E_CAPTION || el == E_TBODY || el == E_THEAD || el == E_TFOOT || el == E_TR ||
+       el == E_TD || el == E_TH) {                  /* a table's structure ends a select inside it */
+        select_close(rd);
+        return 0;
+    }
     return !(el == E_SCRIPT || el == E_STYLE || el == E_TEMPLATE);
 }
 
@@ -1683,6 +1760,8 @@ static void dispatch(struct rd *rd, struct tag *t) {
     int el = t->el;
     unsigned int fl = FL(el);
     int whole = t->selfclose && (rd->xhtml || el == E_SVG || el == E_MATH);     /* <x /> is all of x */
+    if(!t->end && el != E_A && rd->link_open && rd->link_num && !rd->link_alt_len)
+        link_alt(rd, t);                            /* the first element in a link with a label for it */
     if(rd->skip) {
         hidden_tag(rd, t, whole);
         return;
@@ -1832,6 +1911,58 @@ static size_t raw_end(const struct rd *rd, const char *name) {
     return n;
 }
 
+/* "</script" or "<script" at in[q], followed by whitespace, '/' or '>' */
+static int script_tag_at(const unsigned char *s, size_t n, size_t q, int end) {
+    size_t k = q + 1 + (end ? 1 : 0);
+    if(end && (q + 1 >= n || s[q + 1] != '/')) return 0;
+    return k + 6 < n && ci_prefix(s + k, 6, "script") && (ws(s[k + 6]) || s[k + 6] == '/' || s[k + 6] == '>');
+}
+
+/* Where a script's text ends, with the HTML standard's escaped states: after "<!--" a script may hold
+   "<script>...</script>" (as document.write() strings do) and goes on to its real end tag. Linear. */
+static size_t script_end(const struct rd *rd) {
+    const unsigned char *s = rd->in, *j;
+    size_t n = rd->len, q = rd->pos;
+    int state = 0, dashes = 0;                      /* 0: script data, 1: escaped, 2: double escaped */
+    while(q < n) {
+        if(!state) {
+            j = memchr(s + q, '<', n - q);
+            if(!j) return n;
+            q = (size_t)(j - s);
+            if(script_tag_at(s, n, q, 1)) return q;
+            if(n - q >= 4 && s[q + 1] == '!' && s[q + 2] == '-' && s[q + 3] == '-') {
+                state = 1;
+                dashes = 2;
+                q += 4;
+            } else q++;
+            continue;
+        }
+        if(s[q] == '-') {
+            dashes++;
+            q++;
+            continue;
+        }
+        if(s[q] == '>' && dashes >= 2) state = 0;   /* "-->" ends the escape */
+        else if(s[q] == '<' && state == 1) {
+            if(script_tag_at(s, n, q, 1)) return q;
+            if(script_tag_at(s, n, q, 0)) {
+                state = 2;                          /* "<script": the next "</script" is its own */
+                q += 7;
+                dashes = 0;
+                continue;
+            }
+        } else if(s[q] == '<' && state == 2 && script_tag_at(s, n, q, 1)) {
+            state = 1;
+            q += 8;
+            dashes = 0;
+            continue;
+        }
+        dashes = 0;
+        q++;
+    }
+    return n;
+}
+
 /* A title's text: references decoded, whitespace collapsed, unsafe characters dropped, cut at UT_FIELD_MAX */
 static void title_text(struct rd *rd, size_t q, size_t end) {
     unsigned char b[4];
@@ -1857,7 +1988,7 @@ static void title_text(struct rd *rd, size_t q, size_t end) {
 /* The content of a raw text element, up to its own end tag (which the next markup() reads). Only a title
    (the first one) and an xmp's text are kept, and only when nothing hides them. */
 static void raw(struct rd *rd, int el, const char *name) {
-    size_t start = rd->pos, end = raw_end(rd, name), q;
+    size_t start = rd->pos, end = el == E_SCRIPT ? script_end(rd) : raw_end(rd, name), q;
     rd->pos = end;
     if(rd->skip) return;
     if(el == E_TITLE && !rd->title_seen) {
@@ -1934,7 +2065,8 @@ static void markup(struct rd *rd) {
             rd->pos = n;
         }
     } else if(alpha(c)) {
-        if(tag(rd, p + 1, 0) && (FL(t->el) & (F_RAW | F_RCDATA)) && !(t->selfclose && rd->xhtml))
+        if(tag(rd, p + 1, 0) && (FL(t->el) & (F_RAW | F_RCDATA)) &&
+           !(t->selfclose && (rd->xhtml || rd->hide[E_SVG] || rd->hide[E_MATH])))     /* <title/> in svg is whole */
             raw(rd, t->el, t->name);
     } else {
         text_char(rd, '<');
@@ -2064,7 +2196,7 @@ static int finish(struct rd *rd, struct ut_document *out) {
     if(rd->stopped) {                               /* the text is full: a last line says so */
         rd->stopped = 0;
         rd->limit = UT_TEXT_MAX;
-        if(put(rd, "\n\n", 2) || put(rd, cut_notice, sizeof(cut_notice) - 1)) return -1;
+        if((rd->tlen && put(rd, "\n\n", 2)) || put(rd, cut_notice, sizeof(cut_notice) - 1)) return -1;
     }
     if(resolve_links(rd)) return -1;
     if(!rd->text) {                                 /* a page with no text at all */
@@ -2098,12 +2230,15 @@ static int finish(struct rd *rd, struct ut_document *out) {
               rd->anchors_cap * sizeof(*d.anchors) + rd->spans_cap * sizeof(*d.spans);
     for(i = 0; i < d.link_count; i++) d.bytes += strlen(d.links[i].label) + 1 + strlen(d.links[i].url) + 1;
     for(i = 0; i < d.anchor_count; i++) d.bytes += strlen(d.anchors[i].name) + 1;
-    if(rd->cs == CS_ASCII) {
-        snprintf(part, sizeof(part), "the page says it is in %s; only its ASCII is shown", rd->charset);
+    if(rd->truncated & UT_TRUNC_LINKS) add_notice(d.notice, sizeof(d.notice), "only its first 256 links have numbers");
+    if(rd->cs == CS_ASCII) {                        /* a long name is cut, so that every part fits */
+        char name[25];
+        copy_cut(name, sizeof(name), rd->charset);
+        if(strlen(rd->charset) > 24) strcpy(name + 21, "...");
+        snprintf(part, sizeof(part), "the page says it is in %s; only its ASCII is shown", name);
         add_notice(d.notice, sizeof(d.notice), part);
     }
     if(rd->forms) add_notice(d.notice, sizeof(d.notice), "forms are not supported");
-    if(rd->truncated & UT_TRUNC_LINKS) add_notice(d.notice, sizeof(d.notice), "only its first 256 links have numbers");
     rd->given = 1;                                  /* the document's now */
     memcpy(out, &d, sizeof(d));
     return 0;
@@ -2118,6 +2253,7 @@ static void cleanup(struct rd *rd) {
     free(rd->hrefs);
     if(!rd->given) cleanup_parts(rd);
     free(rd->base);
+    free(rd->decoded);
     free(rd);
 }
 
@@ -2154,9 +2290,15 @@ int ut_render(const struct ut_response *r, struct ut_document *out, char *err, s
     rd->tag.val[A_VALUE] = rd->tag.value;
     rd->tag.val[A_TYPE] = rd->tag.type;
     rd->tag.val[A_START] = rd->tag.start;
+    rd->tag.val[A_ARIA] = rd->tag.aria;
+    rd->tag.val[A_TITLE] = rd->tag.title;
+    if(decode_utf16(rd)) {
+        cleanup(rd);
+        return ut_error(err, cap, "out of memory showing the page");
+    }
     rd->xhtml = !strcmp(r->content_type, "application/xhtml+xml");
     html = rd->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && looks_like_html(rd->in, rd->len));
-    choose_charset(rd, html);
+    if(!rd->decoded) choose_charset(rd, html);
     if(html) run_html(rd);
     else run_plain(rd);
     if(finish(rd, out)) {
