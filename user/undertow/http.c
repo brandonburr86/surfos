@@ -122,27 +122,32 @@ static int named(const char *s, size_t n, const char *name) {
     return 1;
 }
 
+static int plain(unsigned char c) {
+    return c > 0x20 && c < 0x7f;
+}
+
 /* s (len bytes) printable for a message: bytes outside printable ASCII percent-encoded, as an
-   address carries them; at most max bytes, ending in "..." when cut */
-static const char *show(struct fetch *f, const char *s, size_t len, size_t max) {
+   address carries them; at most max bytes (3 or more). What does not fit is cut before a byte,
+   never inside an escape, and replaced by "..."; *cut (when not NULL) says whether it was. */
+static const char *show(struct fetch *f, const char *s, size_t len, size_t max, int *cut) {
     static const char hex[] = "0123456789ABCDEF";
-    size_t i, n = 0;
-    if(max > sizeof(f->show) - 4) max = sizeof(f->show) - 4;
+    size_t i, n = 0, total = 0;
+    if(max > sizeof(f->show) - 1) max = sizeof(f->show) - 1;
+    for(i = 0; i < len; i++) total += plain((unsigned char)s[i]) ? 1 : 3;
+    if(cut) *cut = total > max;
+    if(total > max) max = max > 3 ? max - 3 : 0;            /* room for the "..." */
     for(i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
-        int plain = c > 0x20 && c < 0x7f;
-        if(n + (plain ? 1 : 3) > max) {
-            memcpy(f->show + n, "...", 4);
-            return f->show;
-        }
-        if(plain) f->show[n++] = (char)c;
+        if(n + (plain(c) ? 1 : 3) > max) break;
+        if(plain(c)) f->show[n++] = (char)c;
         else {
             f->show[n++] = '%';
             f->show[n++] = hex[c >> 4];
             f->show[n++] = hex[c & 15];
         }
     }
-    f->show[n] = 0;
+    if(i < len) memcpy(f->show + n, "...", 4);
+    else f->show[n] = 0;
     return f->show;
 }
 
@@ -517,7 +522,8 @@ static int send_request(struct fetch *f, char *err, size_t cap) {
     }
     bad = bad || put(f, &n, "\r\n", 2) || put(f, &n, tail, sizeof(tail) - 1);
     if(bad)
-        return ut_error(err, cap, "the address %s cannot be requested", show(f, u->text, unfragmented(u), SHOW_MAX));
+        return ut_error(err, cap, "the address %s cannot be requested",
+                        show(f, u->text, unfragmented(u), SHOW_MAX, NULL));
     while(done < n) {
         int w;
         if(ut_expired(f->deadline, ut_now())) return late(f, err, cap);
@@ -640,13 +646,14 @@ static int page(struct fetch *f, char *err, size_t cap) {
         if(h->length > UT_BODY_MAX) return too_big(f, err, cap);
         framing = F_LENGTH;
     }
-    if(h->typed && !h->text) {
+    /* a 204 or a 304 has no body: what its head says about one does not matter (RFC 9112 6.3) */
+    if(framing != F_NONE && h->typed && !h->text) {
         if(h->status == 200)
             return ut_error(err, cap, "%s is not text: Undertow shows HTML and plain text", h->type);
         return ut_error(err, cap, "HTTP %d %s: %s is not text: Undertow shows HTML and plain text", h->status,
                         h->reason, h->type);
     }
-    if(h->compressed)
+    if(framing != F_NONE && h->compressed)
         return ut_error(err, cap, "%s sent the page compressed (Content-Encoding: %s), which Undertow does not "
                         "read", f->host, h->encoding_text);
     if(framing == F_LENGTH) {
@@ -707,7 +714,8 @@ static int exchange(struct fetch *f, const struct ut_config *cfg, int redirected
     if(ut_transport_open(&f->t, &f->cur, cfg, f->deadline, err, cap)) {
         f->t = NULL;
         if(redirected)
-            ut_error(err, cap, "redirected to %s: %s", show(f, f->cur.text, unfragmented(&f->cur), SHOW_MAX), err);
+            ut_error(err, cap, "redirected to %s: %s", show(f, f->cur.text, unfragmented(&f->cur), SHOW_MAX, NULL),
+                     err);
         return -1;
     }
     if(!send_request(f, err, cap) && !read_head(f, err, cap)) {
@@ -718,6 +726,27 @@ static int exchange(struct fetch *f, const struct ut_config *cfg, int redirected
     ut_transport_close(f->t);
     f->t = NULL;
     return rc;
+}
+
+/* A redirect from https to http in f->next: refused, with the address, so that the user may open
+   it on purpose. When the message cannot hold all of it after the sentence (ut_error() writes at
+   most UT_ERR_MAX - 1 bytes, and cap - 1), it says so, and the address ends in "..." after a
+   whole byte of it rather than being cut anywhere without a word. */
+static int downgrade(struct fetch *f, char *err, size_t cap) {
+    static const char whole[] = " redirected from HTTPS to unencrypted HTTP, which Undertow does not follow by "
+                                "itself; to read it unencrypted, open ";
+    static const char part[] = " redirected from HTTPS to unencrypted HTTP, which Undertow does not follow by "
+                               "itself; the address is too long to show in full: ";
+    size_t limit = cap < UT_ERR_MAX ? cap : UT_ERR_MAX;
+    size_t room = limit ? limit - 1 : 0, len = strlen(f->next.text), used;
+    const char *shown;
+    int cut;
+    used = strlen(f->host) + sizeof(whole) - 1;
+    shown = show(f, f->next.text, len, room > used ? room - used : 0, &cut);
+    if(!cut) return ut_error(err, cap, "%s%s%s", f->host, whole, shown);
+    used = strlen(f->host) + sizeof(part) - 1;
+    shown = show(f, f->next.text, len, room > used ? room - used : 0, NULL);
+    return ut_error(err, cap, "%s%s%s", f->host, part, shown);
 }
 
 /* The redirect in f->h from f->cur, after the checks: f->cur becomes its target. */
@@ -745,7 +774,7 @@ static int follow(struct fetch *f, int redirects, char *err, size_t cap) {
     f->ref[n] = 0;
     if(ut_url_resolve(&f->cur, f->ref, &f->next, uerr, sizeof(uerr)))
         return ut_error(err, cap, "cannot follow the redirect from %s to %s: %s", f->host,
-                        show(f, h->location, strlen(h->location), SHOW_MAX), uerr);
+                        show(f, h->location, strlen(h->location), SHOW_MAX, NULL), uerr);
     /* without a fragment of its own, the target keeps the one the address had (RFC 9110 10.2.2);
        one that does not fit is dropped rather than the page */
     if(!strchr(h->location, '#') && f->cur.fragment[0]) {
@@ -756,17 +785,15 @@ static int follow(struct fetch *f, int redirects, char *err, size_t cap) {
             memcpy(f->next.fragment, f->cur.fragment, fl + 1);
         }
     }
-    if(f->cur.secure && !f->next.secure)
-        return ut_error(err, cap, "%s redirected from HTTPS to unencrypted HTTP, which Undertow does not follow by "
-                        "itself; to read it unencrypted, open %s", f->host,
-                        show(f, f->next.text, strlen(f->next.text), sizeof(f->show)));
+    if(f->cur.secure && !f->next.secure) return downgrade(f, err, cap);
     n = unfragmented(&f->next);
     for(i = 0; i <= (size_t)redirects; i++)
         if(strlen(f->seen[i]) == n && !memcmp(f->seen[i], f->next.text, n))
-            return ut_error(err, cap, "the page redirects in a loop (back to %s)", show(f, f->next.text, n, SHOW_MAX));
+            return ut_error(err, cap, "the page redirects in a loop (back to %s)",
+                            show(f, f->next.text, n, SHOW_MAX, NULL));
     if(redirects == UT_REDIRECTS_MAX)
         return ut_error(err, cap, "more than %d redirects (the next was to %s)", UT_REDIRECTS_MAX,
-                        show(f, f->next.text, n, SHOW_MAX));
+                        show(f, f->next.text, n, SHOW_MAX, NULL));
     memcpy(&f->cur, &f->next, sizeof(f->cur));
     memcpy(f->seen[redirects + 1], f->cur.text, n);
     f->seen[redirects + 1][n] = 0;

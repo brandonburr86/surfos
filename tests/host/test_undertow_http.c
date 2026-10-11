@@ -58,6 +58,13 @@ static void note(const char *fmt, ...) {
     va_end(ap);
 }
 
+/* check() with the first thing that went wrong in the load, when something did */
+static void check_noted(int ok, const char *what) {
+    char line[1200];
+    snprintf(line, sizeof(line), "%s%s%s", what, ok ? "" : ": ", why);
+    check(ok, line);
+}
+
 static int safe_message(const char *s) {
     if(!*s) return 0;
     for(; *s; s++) if((unsigned char)*s < 32 || (unsigned char)*s > 126) return 0;
@@ -134,6 +141,7 @@ static unsigned int seed = 1;
 static size_t write_max;                /* > 0: a write takes at most this many bytes */
 static long write_fail_at = -1;         /* >= 0: a write at this offset of the request fails */
 static unsigned int read_ms;            /* simulated time each read takes */
+static unsigned int write_ms;           /* ... and each write */
 static int transport_deadline;          /* 1: reads fail at the deadline, as the real transport's do */
 
 static unsigned int rnd(void) {
@@ -149,6 +157,7 @@ static void reset(void) {
     write_max = 0;
     write_fail_at = -1;
     read_ms = 0;
+    write_ms = 0;
     transport_deadline = 0;
     opened = 0;
     live_conns = 0;
@@ -231,6 +240,7 @@ int ut_transport_read(struct ut_transport *t, void *buf, size_t len) {
 int ut_transport_write(struct ut_transport *t, const void *buf, size_t len) {
     struct conn *k = &conns[t->index];
     size_t n = len;
+    sim_ms += write_ms;
     if(!len) { note("a write of 0 bytes"); return -1; }
     if(k->closed) note("a write after close");
     if(write_fail_at >= 0 && k->request_len >= (size_t)write_fail_at) {
@@ -619,6 +629,14 @@ static const struct tcase others[] = {
       LIT("HTTP/1.1 304 Not Modified\r\nContent-Length: 100\r\nTransfer-Encoding: chunked\r\n"
           "Content-Type: text/html\r\n\r\n"), PAGE(304, "", "text/html", "", "Not Modified") },
     { "100 Continue, then 204", LIT(C100 "HTTP/1.1 204 No Content\r\n\r\n"), PAGE(204, "", "", "", "No Content") },
+    { "204 with a Content-Encoding: there is no body to decode",
+      LIT("HTTP/1.1 204 No Content\r\nContent-Encoding: gzip\r\n\r\n"), PAGE(204, "", "", "", "No Content") },
+    { "204 with an image's type: there is no body to show",
+      LIT("HTTP/1.1 204 No Content\r\nContent-Type: image/png\r\n\r\n"), PAGE(204, "", "image/png", "", "No Content") },
+    { "304 with a Content-Encoding", LIT("HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\n\r\n"),
+      PAGE(304, "", "", "", "Not Modified") },
+    { "304 with an image's type", LIT("HTTP/1.1 304 Not Modified\r\nContent-Type: image/png\r\n\r\n"),
+      PAGE(304, "", "image/png", "", "Not Modified") },
 };
 
 /**** status lines and header lines ****/
@@ -1197,6 +1215,151 @@ static void expect_failure(const char *name, const char *start, const char *msg1
     free(r);
 }
 
+/* https to http: the message ends in the whole address, or says it could not show it whole and
+   ends in "..." after a whole character of it (never inside an escape: escaped says that every
+   byte after "http://fixture.test/" is one) */
+static int cut_message(const char *err, size_t cap, const char *encoded, int escaped, const char *why_it) {
+    size_t len = strlen(err), shown;
+    const char *p = strstr(err, "http://fixture.test/");
+    if(len > cap - 1 || len < 3 || strcmp(err + len - 3, "...") || !strstr(err, "too long to show in full") || !p) {
+        note("%s: the message is \"%.80s...%s\" (%lu bytes)", why_it, err, len > 40 ? err + len - 40 : err,
+             (unsigned long)len);
+        return 0;
+    }
+    shown = (size_t)(err + len - 3 - p);
+    if(shown < 20 || strncmp(p, encoded, shown) || (escaped && (shown - 20) % 3 != 0)) {
+        note("%s: the address shown is not a whole-escape prefix (%lu bytes, ends \"%s\")", why_it,
+             (unsigned long)shown, err + len - 10);
+        return 0;
+    }
+    return 1;
+}
+
+static void downgrade_messages(void) {
+    struct text host = { 0 }, start = { 0 }, loc = { 0 }, enc = { 0 };
+    struct ut_response *r = malloc(sizeof(*r));
+    char err[UT_ERR_MAX];
+    size_t fixed, fit, i;
+    int rc;
+    addn(&host, 'a', 63); adds(&host, "."); addn(&host, 'b', 63); adds(&host, ".");
+    addn(&host, 'c', 63); adds(&host, "."); addn(&host, 'd', 61);       /* 253 bytes */
+    addf(&start, "https://%s/start", host.p);
+
+    /* the sentence's own length, from an address that fits */
+    reset();
+    moved(NULL, 301, "http://fixture.test/s");
+    rc = follow(start.p, r, err);
+    fixed = strlen(err) - strlen("http://fixture.test/s");
+    check_noted(rc == -1 && !why[0] && strstr(err, host.p) && !strcmp(err + fixed, "http://fixture.test/s"),
+          "https to http from a 253-byte host: the message ends in the address");
+
+    /* an address that fills the message to its last byte is whole; one byte more is cut, and says so */
+    fit = UT_ERR_MAX - 1 - fixed;
+    check_noted(fit > 20 && fit <= UT_URL_MAX, "the test's exact fit is an address url.c takes");
+    adds(&loc, "http://fixture.test/");
+    addn(&loc, 'x', fit - loc.len);
+    reset();
+    moved(NULL, 301, loc.p);
+    rc = follow(start.p, r, err);
+    check_noted(rc == -1 && !why[0] && strlen(err) == UT_ERR_MAX - 1 && !strcmp(err + fixed, loc.p),
+          "an address that just fits the message is given whole");
+    add(&loc, "x", 1);
+    reset();
+    moved(NULL, 301, loc.p);
+    rc = follow(start.p, r, err);
+    check_noted(rc == -1 && cut_message(err, UT_ERR_MAX, loc.p, 0, "one byte over") && !why[0],
+          "an address one byte too long for the message: cut, and the message says so");
+
+    /* a 253-byte host and a 2048-byte address */
+    loc.len = 0;
+    adds(&loc, "http://fixture.test/");
+    addn(&loc, 'y', UT_URL_MAX - loc.len);
+    reset();
+    moved(NULL, 301, loc.p);
+    rc = follow(start.p, r, err);
+    check_noted(rc == -1 && cut_message(err, UT_ERR_MAX, loc.p, 0, "2048 bytes") && !why[0],
+          "a 253-byte host and a 2048-byte address: cut, and the message says so");
+
+    /* ... in a smaller error buffer: the room is what that buffer leaves */
+    reset();
+    moved(NULL, 301, loc.p);
+    rc = load(start.p, r, err, 600, -1);
+    check_noted(rc == -1 && cut_message(err, 600, loc.p, 0, "a 600-byte buffer") && strlen(err) <= 599 && !why[0],
+          "the same in a 600-byte error buffer");
+
+    /* 700 x U+00E9: 4220 bytes percent-encoded, cut between escapes */
+    loc.len = 0;
+    adds(&loc, "http://fixture.test/");
+    adds(&enc, "http://fixture.test/");
+    for(i = 0; i < 700; i++) {
+        adds(&loc, "\xc3\xa9");
+        adds(&enc, "%C3%A9");
+    }
+    reset();
+    moved(NULL, 301, loc.p);
+    rc = follow("https://fixture.test/start", r, err);
+    check_noted(rc == -1 && cut_message(err, UT_ERR_MAX, enc.p, 1, "700 x e-acute") && !why[0],
+          "an address of 700 x U+00E9 (4220 bytes encoded): cut between escapes, and the message says so");
+    text_free(&host);
+    text_free(&start);
+    text_free(&loc);
+    text_free(&enc);
+    free(r);
+}
+
+/* Sniffing a body without a Content-Type: a NUL anywhere is binary; other binary bytes count in
+   the first 1445 bytes only. */
+static void sniffing(void) {
+    struct text b = { 0 };
+    struct expect binary = FAILS("does not look like text"), text = { 1, 200, NULL, 0, "", "", "OK", NULL };
+    size_t head = strlen(OK_H "\r\n");
+    adds(&b, OK_H "\r\n");
+    addn(&b, 'a', 2000);
+    add(&b, "\0b", 2);
+    every_way("no Content-Type: a NUL after 2000 bytes", b.p, b.len, &binary);
+    b.len = 0;
+    adds(&b, OK_H "\r\n");
+    addn(&b, 'a', 1444);
+    add(&b, "\x01", 1);
+    addn(&b, 'a', 10);
+    every_way("no Content-Type: a control byte at offset 1444", b.p, b.len, &binary);
+    b.len = 0;
+    adds(&b, OK_H "\r\n");
+    addn(&b, 'a', 1445);
+    add(&b, "\x01", 1);
+    addn(&b, 'a', 10);
+    text.body = b.p + head;
+    text.blen = b.len - head;
+    every_way("no Content-Type: a control byte at offset 1445 is past the bytes looked at", b.p, b.len, &text);
+    text_free(&b);
+}
+
+/* A chunk's size line: 4096 bytes with its line end are taken, 4097 are not. */
+static void chunk_line_limits(void) {
+    struct text b = { 0 };
+    struct expect ok = PAGE(200, "Hello", "text/plain", "", "OK"), over = FAILS("chunk size line over 4096 bytes");
+    adds(&b, CHUNKED "5;e=");
+    addn(&b, 'x', 4096 - 4 - 2);
+    adds(&b, "\r\nHello\r\n0\r\n\r\n");
+    every_way("a chunk size line of exactly 4096 bytes", b.p, b.len, &ok);
+    b.len = 0;
+    adds(&b, CHUNKED "5;e=");
+    addn(&b, 'x', 4096 - 4 - 1);
+    adds(&b, "\nHello\r\n0\r\n\r\n");
+    every_way("a chunk size line of exactly 4096 bytes, ended by a line feed alone", b.p, b.len, &ok);
+    b.len = 0;
+    adds(&b, CHUNKED "5;e=");
+    addn(&b, 'x', 4096 - 4 - 2 + 1);
+    adds(&b, "\r\nHello\r\n0\r\n\r\n");
+    every_way("a chunk size line of 4097 bytes", b.p, b.len, &over);
+    b.len = 0;
+    adds(&b, CHUNKED "5\r\nHello\r\n0;e=");
+    addn(&b, 'x', 4096 - 4 - 2 + 1);
+    adds(&b, "\r\n\r\n");
+    every_way("a last-chunk line of 4097 bytes", b.p, b.len, &over);
+    text_free(&b);
+}
+
 static void redirects(void) {
     static const int codes[] = { 301, 302, 303, 307, 308 };
     static const char *const hops6[] = { "http://fixture.test/1", "http://fixture.test/2", "http://fixture.test/3",
@@ -1505,6 +1668,16 @@ static void deadline_tests(void) {
     check(rc == -1 && !why[0] && strstr(err, "the server is too slow (test transport)") && strstr(err, "fixture.test"),
           "the transport's deadline message");
 
+    /* the clock passes the deadline while the request is being written: the rest is not sent */
+    sim_ms = 1000;
+    reset();
+    serve(NULL, LIT(OK_H PLAIN "Content-Length: 2\r\n\r\nok"));
+    write_max = 10;
+    write_ms = 25000;
+    rc = follow(PAGE_ADDRESS, r, err);
+    check(rc == -1 && !why[0] && strstr(err, "60 seconds") && conns[0].request_len == 30 && conns[0].pos == 0,
+          "the deadline passes in the middle of the request: nothing more is written or read");
+
     /* a redirect that arrives after the deadline is not followed */
     sim_ms = 1000;
     reset();
@@ -1622,6 +1795,9 @@ int main(void) {
     long_fields();
     requests();
     redirects();
+    downgrade_messages();
+    sniffing();
+    chunk_line_limits();
     deadline_tests();
     allocation_failures();
     interface();
