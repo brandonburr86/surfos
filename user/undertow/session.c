@@ -83,36 +83,10 @@ static struct ut_page *fetch_page(const struct ut_url *url, const struct ut_conf
     return p;
 }
 
-static int hexval(int c) {
-    if(c >= '0' && c <= '9') return c - '0';
-    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-/* the text offset of the part a fragment names: as it is written, else percent-decoded (a link
-   to "#caf%C3%A9" finds the id written with the accented letter itself, as browsers do); 0 and
-   *offset, or -1 */
+/* the text offset of the part a fragment names: html.c's ut_anchor_offset() matches the fragment
+   as it is written, then %XX-decoded (once: "#a%2541" is "a%41", never "aA"); 0 and *offset, or -1 */
 static int find_part(const struct ut_page *p, const char *fragment, size_t *offset) {
-    char *plain;
-    size_t i, o = 0;
-    int rc;
-    if(!ut_anchor_offset(&p->doc, fragment, offset)) return 0;
-    if(!strchr(fragment, '%') || !(plain = malloc(strlen(fragment) + 1))) return -1;
-    for(i = 0; fragment[i]; i++) {
-        int hi, lo;
-        if(fragment[i] == '%' && (hi = hexval((unsigned char)fragment[i + 1])) >= 0 &&
-           (lo = hexval((unsigned char)fragment[i + 2])) >= 0) {
-            plain[o++] = (char)(hi << 4 | lo);
-            i += 2;
-        } else {
-            plain[o++] = fragment[i];
-        }
-    }
-    plain[o] = 0;
-    rc = ut_anchor_offset(&p->doc, plain, offset);
-    free(plain);
-    return rc;
+    return ut_anchor_offset(&p->doc, fragment, offset);
 }
 
 /* the reading position at the part the page's address names: 1, or 0 and the top when there is none */

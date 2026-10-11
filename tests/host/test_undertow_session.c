@@ -46,6 +46,7 @@ static const struct fake site[] = {
       { "First", "Second", NULL } },
     { "https://b.test/", "Page B", "Page B is short.", { NULL }, { NULL } },
     { "https://c.test/", "Page C", "Page C.", { NULL }, { NULL } },
+    { "https://pct.test/", "Percent", "Intro.\naA is a part named with a capital.", { NULL }, { "aA", NULL } },
     { "https://find.test/", "Find",
       "Alpha foo beta.\nFOO in capitals, Foo in title case.\ncaf\xc3\xa9 and CAF\xc3\x89 differ beyond ASCII.\nlast foo",
       { NULL }, { NULL } },
@@ -163,14 +164,34 @@ oom:
     return ut_error(err, cap, "out of memory (fake render)");
 }
 
+/* as html.c's: "" and "top" are the start, then the name as written, then %XX decoded once */
+static int hexval(int c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
 int ut_anchor_offset(const struct ut_document *d, const char *fragment, size_t *offset) {
-    size_t i;
+    char plain[UT_URL_MAX + 1];
+    size_t i, o = 0;
     if(!*fragment || !strcmp(fragment, "top")) {
         *offset = 0;
         return 0;
     }
     for(i = 0; i < d->anchor_count; i++)
         if(!strcmp(d->anchors[i].name, fragment)) {
+            *offset = d->anchors[i].offset;
+            return 0;
+        }
+    for(i = 0; fragment[i] && o < UT_URL_MAX; i++) {
+        if(fragment[i] == '%' && hexval(fragment[i + 1]) >= 0 && hexval(fragment[i + 2]) >= 0) {
+            plain[o++] = (char)(hexval(fragment[i + 1]) << 4 | hexval(fragment[i + 2]));
+            i += 2;
+        } else {
+            plain[o++] = fragment[i];
+        }
+    }
+    plain[o] = 0;
+    for(i = 0; i < d->anchor_count; i++)
+        if(!strcmp(d->anchors[i].name, plain)) {
             *offset = d->anchors[i].offset;
             return 0;
         }
@@ -374,6 +395,11 @@ static void links(void) {
     check(load(s, "https://a.test/#Missing", &found) == 0 && found == 0 && ut_session_current(s)->position == 0,
           "a load with a missing fragment: the top, and found says so");
     check(load(s, "https://b.test/#", &found) == 0 && found == 1 && ut_session_current(s)->position == 0, "an empty fragment");
+    check(load(s, "https://pct.test/#a%41", &found) == 0 && found == 1 &&
+          ut_session_current(s)->position == (size_t)(strstr(ut_session_current(s)->doc.text, "aA") -
+                                                      ut_session_current(s)->doc.text), "a fragment with %41 finds aA");
+    check(load(s, "https://pct.test/#a%2541", &found) == 0 && found == 0 && ut_session_current(s)->position == 0,
+          "a fragment is decoded once only: #a%2541 is a%41, not aA");
     ut_session_free(s);
     check(ut_alloc_live == 0, "links leak nothing");
     free(u);

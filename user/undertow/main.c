@@ -108,15 +108,25 @@ static void new_screenful(void) {
     ttyctl(TTY_PAGE, 1);
 }
 
-/* a message, wrapped and made safe like a page's text */
+/* a message, each of its lines through ut_safe_text() (an address in it may hold anything a server
+   sent, url.c takes raw bytes in paths), then wrapped as a page's text is */
 static void say(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *fmt, ...) {
-    char buf[UT_ERR_MAX + 128];
+    static char buf[UT_ERR_MAX + 128], safe[(UT_ERR_MAX + 128) * 3 + 1];   /* U+FFFD: 3 bytes a byte */
+    const char *line = buf, *nl;
+    size_t o = 0;
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    ut_view_text(stdout, &term, buf, strlen(buf), NULL, 0);
+    for(;;) {
+        nl = strchr(line, '\n');
+        o += ut_safe_text(safe + o, sizeof(safe) - o, line, nl ? (size_t)(nl - line) : strlen(line), 1);
+        if(!nl || o + 1 >= sizeof(safe)) break;
+        safe[o++] = '\n';
+        line = nl + 1;
+    }
+    ut_view_text(stdout, &term, safe, o, NULL, 0);
 }
 
 /**** a growing text with colours, for help and the lists ****/
