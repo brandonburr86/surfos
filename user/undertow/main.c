@@ -306,7 +306,9 @@ static void load(const struct ut_url *u) {
         show(NULL);
         return;
     }
-    snprintf(message, sizeof(message), "the page has no part called #%.200s: this is its top", u->fragment);
+    /* the final page's fragment: after a redirect, a Location's own fragment wins (http.h) */
+    snprintf(message, sizeof(message), "the page has no part called #%.200s: this is its top",
+             ut_session_current(ses)->url.fragment);
     show(message);
 }
 
@@ -418,7 +420,13 @@ static void links(void) {
         else text_str(&t, "(no text)", 0);
         text_str(&t, "\n     ", 0);                /* under the label, which starts in column 5 */
         text_safe(&t, l->url ? l->url : "", l->url ? strlen(l->url) : 0, 0);
-        if(!l->usable) text_str(&t, "   (not an http: or https: address)", 0);
+        if(!l->usable) {                        /* why it cannot be opened: another scheme, or url.c's reason */
+            char why[UT_ERR_MAX];
+            ut_session_why(p, l->url, why, sizeof(why));
+            text_str(&t, "   (", 0);
+            text_safe(&t, why, strlen(why), 0);
+            text_str(&t, ")", 0);
+        }
         text_str(&t, "\n", 0);
     }
     text_show(&t);
