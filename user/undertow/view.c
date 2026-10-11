@@ -14,6 +14,7 @@ UT_TEXT_MAX bytes, and the terminal may have changed its size since.
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <surfos/cp437.h>
 #include "undertow.h"
@@ -706,6 +707,61 @@ void ut_view_welcome(FILE *out, const struct ut_term *t0, const char *clock, con
     } else {
         end_row(out, &t, put_cut(out, &t, "help, quit", 10, t.cols));
     }
+}
+
+/**** --dump ****/
+
+/* safe UTF-8 (n bytes): as it is into a file or a pipe; on a terminal each character as it draws it */
+static void dump_drawn(FILE *out, const char *s, size_t n, const struct ut_term *t) {
+    unsigned int cp;
+    const char *alt;
+    size_t i, k;
+    if(!t) {
+        fwrite(s, 1, n, out);
+        return;
+    }
+    for(i = 0; i < n; i += k) {
+        k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
+        alt = ut_view_stand_in(t, cp);
+        if(alt) fputs(alt, out);
+        else fwrite(s + i, 1, k, out);
+    }
+}
+
+int ut_view_dump(FILE *out, const struct ut_term *t0, const struct ut_document *d, char *err, size_t cap) {
+    struct ut_term tt;
+    const struct ut_term *t = NULL;
+    size_t start, end, longest = 0, i, n;
+    char *buf;
+    if(t0) {
+        tt = fixed(t0);
+        t = &tt;
+    }
+    for(start = end = 0; end <= d->text_len; end++)         /* one buffer for the longest line or address */
+        if(end == d->text_len || d->text[end] == '\n') {
+            if(end - start > longest) longest = end - start;
+            start = end + 1;
+        }
+    for(i = 0; i < d->link_count; i++)
+        if(d->links[i].url && strlen(d->links[i].url) > longest) longest = strlen(d->links[i].url);
+    buf = malloc(longest * 3 + 1);                          /* an ill-formed byte's U+FFFD: 3 bytes */
+    if(!buf) return ut_error(err, cap, "out of memory for the page's text");
+    for(start = 0; start < d->text_len; start = end + 1) {
+        for(end = start; end < d->text_len && d->text[end] != '\n'; end++);
+        dump_drawn(out, buf, ut_safe_text(buf, longest * 3 + 1, d->text + start, end - start, 1), t);
+        putc('\n', out);
+    }
+    if(d->link_count) fputs("\nLinks:\n", out);
+    for(i = 0; i < d->link_count; i++) {
+        const char *url = d->links[i].url ? d->links[i].url : "";
+        n = ut_safe_text(buf, longest * 3 + 1, url, strlen(url), 1);
+        fprintf(out, "[%lu] ", (unsigned long)i + 1);
+        dump_drawn(out, buf, n, t);
+        putc('\n', out);
+    }
+    free(buf);
+    if(fflush(out) || ferror(out)) return ut_error(err, cap, "the page could not be written whole");
+    return 0;
 }
 
 void ut_view_line(FILE *out, const struct ut_term *t0, const char *before, const char *s, const char *after) {

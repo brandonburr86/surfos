@@ -765,6 +765,68 @@ static void welcome_and_lines(void) {
     }
 }
 
+/**** --dump's output ****/
+
+static void dump(void) {
+    char text[600], err[UT_ERR_MAX], *buf = NULL, *want;
+    char u1[] = "https://example.com/a", u2[] = "mailto:x@example.com", u3[] = "https://example.com/caf\xc3\xa9";
+    struct ut_link links[3];
+    struct ut_document d;
+    struct ut_term t = term(40, 25, 1, 0);
+    size_t len = 0, k;
+    FILE *f;
+    memset(&d, 0, sizeof(d));
+    memset(links, 0, sizeof(links));
+    strcpy(text, "First line \xe2\x82\xac" "5\nA second line longer than forty columns, which a dump never wraps\033[2J");
+    d.text = text;
+    d.text_len = strlen(text);
+    links[0].url = u1;
+    links[0].usable = 1;
+    links[1].url = u2;
+    links[2].url = u3;
+    links[2].usable = 1;
+    d.links = links;
+    d.link_count = 3;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, NULL, &d, err, sizeof(err)) == 0, "dump into a file or a pipe");
+    fclose(f);
+    want = "First line \xe2\x82\xac" "5\nA second line longer than forty columns, which a dump never wraps[2J\n"
+           "\nLinks:\n[1] https://example.com/a\n[2] mailto:x@example.com\n[3] https://example.com/caf\xc3\xa9\n";
+    check(!strcmp(buf, want), "dump: the text as it is, unsafe characters left out, then Links: and [N] address");
+    free(buf);
+    buf = NULL;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, &t, &d, err, sizeof(err)) == 0, "dump on a terminal");
+    fclose(f);
+    want = "First line EUR5\nA second line longer than forty columns, which a dump never wraps[2J\n"
+           "\nLinks:\n[1] https://example.com/a\n[2] mailto:x@example.com\n[3] https://example.com/caf\xc3\xa9\n";
+    check(!strcmp(buf, want), "dump on the console: characters as it draws them, the lines not wrapped");
+    free(buf);
+    buf = NULL;
+    for(k = 0; k < 2; k++) {                    /* out of memory: no output at all, and why */
+        f = open_memstream(&buf, &len);
+        ut_alloc_fail_after = 0;
+        err[0] = 0;
+        check(ut_view_dump(f, k ? &t : NULL, &d, err, sizeof(err)) == -1 && strstr(err, "memory") && !ftell(f),
+              k ? "dump on a terminal, out of memory: -1 and why" : "dump, out of memory: -1 and why");
+        ut_alloc_fail_after = -1;
+        fclose(f);
+        free(buf);
+        buf = NULL;
+    }
+    f = fopen("/dev/null", "r");                /* a stream that cannot be written */
+    err[0] = 0;
+    check(f && ut_view_dump(f, NULL, &d, err, sizeof(err)) == -1 && strstr(err, "written"),
+          "dump into a stream that fails: -1 and why");
+    if(f) fclose(f);
+    d.link_count = 0;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, NULL, &d, err, sizeof(err)) == 0 && !strstr(buf, "Links:"), "no links: no Links: section");
+    fclose(f);
+    free(buf);
+    check(ut_alloc_live == 0, "dump keeps no memory");
+}
+
 /**** the line editor ****/
 
 struct chunk {
@@ -1057,6 +1119,7 @@ int main(void) {
     views();
     sizes();
     welcome_and_lines();
+    dump();
     editor();
     check(ut_alloc_live == 0, "the view allocates nothing");
     printf("UNDERTOW VIEW TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);

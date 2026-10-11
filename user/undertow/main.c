@@ -8,7 +8,8 @@ File: main.c  Date: 10/11/26
     undertow --dump ADDRESS  the page's text, then "Links:" and "[N] address" for
                              each link, on stdout; its status and any error on
                              stderr; exit 0 for a 2xx status, 1 for any other
-                             status or a failure, 2 for bad usage
+                             status or a failure (a page not written whole
+                             too), 2 for bad usage
     undertow --help          the usage
 
 The commands are the design's (docs/superpowers/specs/2026-10-10-undertow-design.md,
@@ -29,8 +30,9 @@ while it loads is dropped. The size and capabilities of the terminal are asked
 for before every view (a telnet window may change). Interactive use needs a
 terminal on stdin and stdout; elsewhere --dump is the way.
 
-Everything printed that came from a page or a server goes through view.c (or
-ut_safe_text() in dump mode), never raw. Everything is freed at the end.
+Everything printed that came from a page or a server goes through view.c (dump
+mode's text and links too: ut_view_dump()), never raw. Everything is freed at
+the end.
 */
 
 #include <stdio.h>
@@ -702,54 +704,13 @@ static int interactive(const char *address) {
 
 /**** --dump ****/
 
-/* safe UTF-8 (n bytes) on stdout: as it is into a file or a pipe; on a terminal each character as
-   the terminal draws it (view.c: a stand-in for what it cannot draw), the line not wrapped */
-static void dump_drawn(const char *s, size_t n, const struct ut_term *t) {
-    unsigned int cp;
-    const char *alt;
-    size_t i, k;
-    if(!t) {
-        fwrite(s, 1, n, stdout);
-        return;
-    }
-    for(i = 0; i < n; i += k) {
-        k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
-        alt = ut_view_stand_in(t, cp);
-        if(alt) fputs(alt, stdout);
-        else fwrite(s + i, 1, k, stdout);
-    }
-}
-
-/* the page's text line by line, through ut_safe_text() all the same (t: stdout is that terminal) */
-static void dump_text(const char *s, size_t len, const struct ut_term *t) {
-    char *buf;
-    size_t start = 0, end, longest = 0;
-    for(end = 0; end <= len; end++)
-        if(end == len || s[end] == '\n') {
-            if(end - start > longest) longest = end - start;
-            start = end + 1;
-        }
-    buf = malloc(longest * 3 + 1);              /* an ill-formed byte's U+FFFD: 3 bytes */
-    if(!buf) {
-        fprintf(stderr, "undertow: out of memory\n");
-        return;
-    }
-    for(start = 0; start < len; start = end + 1) {
-        for(end = start; end < len && s[end] != '\n'; end++);
-        dump_drawn(buf, ut_safe_text(buf, longest * 3 + 1, s + start, end - start, 1), t);
-        putchar('\n');
-    }
-    free(buf);
-}
-
 static int dump(const char *address) {
     struct ut_url *u = malloc(sizeof(*u));
     struct ut_response *r = calloc(1, sizeof(*r));
     struct ut_document *d = calloc(1, sizeof(*d));
-    char safe[300], reason[64];
+    char safe[300], reason[64], why[UT_ERR_MAX];
     const struct ut_term *t = NULL;
-    int rc = 1;
-    size_t i;
+    int rc = 1, written;
     if(!u || !r || !d) {
         fprintf(stderr, "undertow: out of memory\n");
         goto out;
@@ -772,21 +733,7 @@ static int dump(const char *address) {
         term_update();
         t = &term;
     }
-    dump_text(d->text, d->text_len, t);
-    if(d->link_count) {
-        printf("\nLinks:\n");
-        for(i = 0; i < d->link_count; i++) {
-            const char *link = d->links[i].url ? d->links[i].url : "";
-            size_t n = strlen(link);
-            char *buf = malloc(n * 3 + 1);
-            if(!buf) break;
-            printf("[%lu] ", (unsigned long)i + 1);
-            dump_drawn(buf, ut_safe_text(buf, n * 3 + 1, link, n, 1), t);
-            putchar('\n');
-            free(buf);
-        }
-    }
-    fflush(stdout);
+    written = ut_view_dump(stdout, t, d, why, sizeof(why));    /* the text and the links (view.c) */
     ut_safe_text(safe, sizeof(safe), r->url.text, strlen(r->url.text), 0);
     ut_safe_text(reason, sizeof(reason), r->reason, strnlen(r->reason, sizeof(r->reason)), 0);
     fprintf(stderr, "undertow: %s: HTTP %d%s%s, %s%s%s\n", safe, r->status, reason[0] ? " " : "", reason,
@@ -797,6 +744,10 @@ static int dump(const char *address) {
         fprintf(stderr, "undertow: %s\n", safe);
     }
     rc = r->status >= 200 && r->status < 300 ? 0 : 1;
+    if(written) {                               /* the page was not printed whole: never exit 0 then */
+        fprintf(stderr, "undertow: %s: %s\n", safe, why);
+        rc = 1;
+    }
 out:
     if(d) ut_document_free(d);
     if(r) ut_response_free(r);
