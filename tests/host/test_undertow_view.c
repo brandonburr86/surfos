@@ -609,6 +609,32 @@ static void views(void) {
     view_shot(&s, &t, p, 0, NULL);
     check(!s.high && ends(s.row[0], "[HTTP 404 Nao Encontrado] [HTTP unencrypted]"), "ASCII: the reason phrase too");
     shot_free(&s);
+    /* the console draws UTF-8 as code page 437 cells: a reason phrase's zero-width characters
+       (stand-in: nothing) and its characters outside the set (U+00E3) are drawn as they were
+       measured, so the title line is one row and the view never reaches --More-- */
+    t = term(80, 25, 1, 0);
+    strcpy(p->reason, "Not\xe2\x80\x8b\xe2\x80\x8b\xe2\x80\x8b" "Found");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 NotFound] [HTTP unencrypted]"),
+          "console: a reason phrase with zero-width spaces draws as wide as it was measured");
+    shot_free(&s);
+    strcpy(p->reason, "N\xc3\xa3o\xc2\xad Encontrado\xe2\x81\xa0!");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 Nao Encontrado!] [HTTP unencrypted]"),
+          "console: a reason phrase beyond code page 437 (U+00E3, U+00AD, U+2060) as its stand-ins");
+    shot_free(&s);
+    t = term(40, 25, 1, 0);
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 40 && widest(&s) <= 40, "console, 40 columns: the title line still one row");
+    shot_free(&s);
+    t = term(80, 25, 1, 0);
+    t.remote = 1;
+    strcpy(p->reason, "N\xc3\xa3o Encontrado");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 N\xc3\xa3o Encontrado] [HTTP unencrypted]"),
+          "telnet: the reason phrase as it is");
+    shot_free(&s);
+    t = term(80, 25, 0, 0);
     p->status = 200;
     strcpy(p->reason, "OK");
 
@@ -841,6 +867,25 @@ static void editor(void) {
     check(r == 16 && !strcmp(buf, "open example.com"), "a line and Enter");
     check(raw_at_draw == 'r' && raw_ons == 1 && raw_offs == 1 && !raw_on, "the prompt is drawn in raw mode, line mode after");
     check(strstr(drawn, "undertow>") != NULL && row_fits(80), "the prompt, on one row");
+    check(ends(drawn, "\033[0m\r\n"), "the line ends with the colours reset (the typed text is teal)");
+    {
+        static const struct { const char *keys; const char *end; } ends_of[] = {
+            { "abc\003", "\033[0m^C\r\n" }, { "\004", "\033[0mquit\r\n" }, { "\033[6~", "\033[0mnext\r\n" },
+            { "\033[5~", "\033[0mprev\r\n" }, { "abc", "\033[0m\r\n" }
+        };
+        size_t k;
+        int all = 1;
+        for(k = 0; k < sizeof(ends_of) / sizeof(ends_of[0]); k++) {
+            reset_terminal();
+            keys(ends_of[k].keys, strlen(ends_of[k].keys), 0, 0);
+            ut_edit_line(e, &t, 0, buf);
+            if(!ends(drawn, ends_of[k].end)) {
+                printf("  after %s: no reset at the end\n", ends_of[k].end + 4);
+                all = 0;
+            }
+        }
+        check(all, "^C, ^D, PgDn, PgUp and the end of the input reset the colours too");
+    }
 
     reset_terminal();
     KEYS("helo\x7f\x7flp\033[D\033[D\033[3~X\001\033[C\005!\r");

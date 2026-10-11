@@ -466,7 +466,7 @@ static void title_line(FILE *out, const struct ut_term *t, const struct ut_page 
     struct state st;
     const char *title = p->doc.title && p->doc.title[0] ? p->doc.title : p->url.host;
     size_t tlen = strlen(title);
-    unsigned int twidth = text_cols(t, title, tlen), right, room = 0, used, k;
+    unsigned int twidth = text_cols(t, title, tlen), right, room = 0, used;
     int step, prefix = 0, code = 0, via = 0;
     make_state(p, &st, t->utf8);
     for(step = 0; step < 6; step++) {
@@ -511,15 +511,14 @@ static void title_line(FILE *out, const struct ut_term *t, const struct ut_page 
     used += put_cut(out, t, title, tlen, room - used);
     sgr(out, t, C_RESET);
     spaces(out, t->cols - right - used);
-    if(st.code[code][0]) {
+    if(st.code[code][0]) {                      /* drawn as measured: through the stand-ins (a server's reason) */
         sgr(out, t, C_ERROR);
-        fputs(st.code[code], out);
+        put_cut(out, t, st.code[code], strlen(st.code[code]), t->cols);
         sgr(out, t, C_RESET);
         putc(' ', out);
     }
     sgr(out, t, st.via_colour);
-    k = (unsigned int)strlen(st.via[via]);
-    fwrite(st.via[via], 1, k, out);
+    put_cut(out, t, st.via[via], strlen(st.via[via]), t->cols);
     sgr(out, t, C_RESET);
     end_row(out, t, t->cols);
 }
