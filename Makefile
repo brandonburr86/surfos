@@ -570,6 +570,24 @@ unittest: test-undertow-util
 # -- session.c, view.c, main.c (track S) --
 
 # -- transport.c and Mbed TLS (track T) --
+# Undertow's HTTPS (10/11/26): Mbed TLS 3.6.7, pinned by SHA-256 in third_party/undertow-lock.json and never
+# committed (third_party/README.md). tools/fetch-webdeps.py downloads the release archive (or takes the cached,
+# checked copy), extracts include/, library/ and LICENSE into third_party/mbedtls/ and writes the stamp below;
+# devenv/build.sh runs it on the Mac before the tree is copied into Docker, and this rule runs it wherever the stamp
+# is missing or older than the lock (a clean Linux checkout, CI), so one make builds everything.
+MBEDTLS_DIR    = third_party/mbedtls
+MBEDTLS_STAMP  = $(MBEDTLS_DIR)/UNDERTOW-LOCK
+
+$(MBEDTLS_STAMP): third_party/undertow-lock.json
+	$(PYTHON) tools/fetch-webdeps.py
+
+# tools/fetch-webdeps.py against local archives made by the test (nothing is downloaded), then the real thing
+# checked: every extracted Mbed TLS file as it came from the archive, and rootfs/etc/ssl/cert.pem as pinned
+test-webdeps: $(MBEDTLS_STAMP)
+	$(PYTHON) -m unittest discover -s tests -p test_webdeps.py
+	$(PYTHON) tools/fetch-webdeps.py --check
+unittest: test-webdeps
+.PHONY: test-webdeps
 
 # -- the browser in QEMU (track F) --
 

@@ -1,0 +1,36 @@
+{
+  "comment": "What Undertow (user/undertow/) is built from, pinned by SHA-256 (third_party/README.md). tools/fetch-webdeps.py fetches and checks mbedtls; the CA bundle is committed and only checked (tools/fetch-webdeps.py --check).",
+  "mbedtls": {
+    "version": "3.6.7",
+    "url": "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2",
+    "sha256": "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6",
+    "size": 5473689,
+    "root": "mbedtls-3.6.7",
+    "extract": ["LICENSE", "include/", "library/"],
+    "license": "Apache-2.0 OR GPL-2.0-or-later (the archive's LICENSE, extracted with the sources)",
+    "released": "2026-07-07, the 3.6 long-term support branch (supported until at least March 2027)",
+    "checksum_checked": "2026-10-11: the release notes' SHA-256, the release asset mbedtls-3.6.7-sha256sum.txt and GitHub's asset digest all give this value, as does the archive itself",
+    "advisories_checked": {
+      "date": "2026-10-11",
+      "index": "https://mbed-tls.readthedocs.io/en/latest/security-advisories/",
+      "newest_release": "3.6.7 is the newest 3.6 release (GitHub releases, 2026-10-11); 4.2.0 and 4.1.1 came out the same day",
+      "result": "No advisory was published after 3.6.7: the newest (July 2026) came with it. Every advisory of 2026 says 3.6.7 is not affected, the July ones fixed in 3.6.7 and the March ones in 3.6.6, except CVE-2025-66442 (below), which names no fixed version.",
+      "fixed_in_3_6_6": ["CVE-2026-25833", "CVE-2026-25834", "CVE-2026-25835", "CVE-2026-34871", "CVE-2026-34872", "CVE-2026-34873", "CVE-2026-34874", "CVE-2026-34875", "CVE-2026-34876", "CVE-2026-34877"],
+      "fixed_in_3_6_7": ["CVE-2026-49300", "CVE-2026-25832", "CVE-2026-50580", "CVE-2026-50581", "CVE-2026-50583", "CVE-2026-50584", "CVE-2026-50585", "CVE-2026-50586", "CVE-2026-50587", "CVE-2026-50588", "CVE-2026-50640", "CVE-2026-50713", "CVE-2026-35336", "CVE-2026-54435", "CVE-2026-54441", "CVE-2026-73064", "CVE-2026-73096", "PKCS7 weak hash algorithms (no CVE)"],
+      "not_applicable": {
+        "CVE-2026-54434": "Everest's X25519, only in 4.1.0 (3.6.7 is not affected, and MBEDTLS_ECDH_VARIANT_EVEREST_ENABLED is off here)",
+        "CVE-2025-66442": "compiler-induced constant-time violations: affects all versions, known only for Clang with select-optimize; SurfOS builds with GCC, and the affected operations (RSA PKCS#1 v1.5 decryption, CBC padding) are not used by this client"
+      }
+    }
+  },
+  "ca_bundle": {
+    "file": "rootfs/etc/ssl/cert.pem",
+    "url": "https://curl.se/ca/cacert-2026-09-25.pem",
+    "sha256": "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505",
+    "size": 188900,
+    "certificates": 121,
+    "source": "curl's extraction of Mozilla's CA certificate store (https://curl.se/docs/caextract.html), updated by Mozilla on 2026-09-25",
+    "retrieved": "2026-10-10, checked again 2026-10-11 against https://curl.se/ca/cacert-2026-09-25.pem.sha256 and a fresh download",
+    "license": "MPL-2.0"
+  }
+}
