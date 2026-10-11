@@ -12,3 +12,9 @@ __pycache__/
 
 # 10/9/26: vendor firmware fetched by tools/fetch-firmware.py (never committed)
 /firmware/
+
+# 10/11/26 (Undertow): Mbed TLS, fetched and checked by tools/fetch-webdeps.py (third_party/README.md); never committed
+/third_party/mbedtls/
+/third_party/cache/
+/third_party/.mbedtls.*
+/third_party/.fetch-webdeps.lock

@@ -18,6 +18,11 @@ NAME=surfos-ideapad-15iil05.img
 # without a network the files already there are used, and without them the image has no Wi-Fi firmware
 python3 "$ROOT/tools/fetch-firmware.py" || echo "build-usb: no Wi-Fi firmware (tools/fetch-firmware.py failed): the image works without Wi-Fi" >&2
 
+# 10/11/26: Mbed TLS for the web browser's HTTPS (third_party/README.md), checked against its pinned SHA-256; an
+# image is not made without it (devenv/build.sh fetches it too, for every build)
+python3 "$ROOT/tools/fetch-webdeps.py" \
+    || { echo "build-usb: Mbed TLS is missing (tools/fetch-webdeps.py, above): no image without the browser's HTTPS" >&2; exit 1; }
+
 "$ROOT/devenv/build.sh" O="$LEVEL" usb-image
 
 SRC="$OUT/build/usb"

@@ -50,4 +50,10 @@ const char *ut_transport_tls(const struct ut_transport *t);      /* "TLSv1.3", "
    and in tests that count allocations. */
 void ut_transport_cleanup(void);
 
+/* 10/11/26 (track T, additive): can HTTPS work in this process? For the welcome screen. 0 and a line
+   in msg ("HTTPS is ready: strong random numbers, 121 trust roots"; how many could not be read when
+   some could not), or -1 and why not, as ut_transport_open() would say it (the clock, no RDRAND, no
+   usable roots). It reads the roots and seeds the random generator if nothing did yet. */
+int ut_transport_status(const struct ut_config *cfg, char *msg, size_t cap);
+
 #endif
