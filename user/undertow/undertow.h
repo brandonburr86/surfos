@@ -30,8 +30,9 @@ struct ut_url is 6 KB) live on the heap, never on a nested stack.
 #define UT_HEADERS_MAX   (32u * 1024)       /* a response's header lines, interim responses and trailers together */
 #define UT_BODY_MAX      (1024u * 1024)     /* a response body as received (after chunking is undone) */
 #define UT_TEXT_MAX      (512u * 1024)      /* the rendered text of one page */
-#define UT_LINKS_MAX     256u               /* links on one page */
-#define UT_ANCHORS_MAX   256u               /* fragment targets on one page */
+#define UT_LINKS_MAX     2048u              /* links on one page (the design's 256, raised on 10/11/26 after Wikipedia) */
+#define UT_ANCHORS_MAX   2048u              /* fragment targets on one page (the same) */
+#define UT_LINK_BYTES_MAX (1024u * 1024)    /* one page's link labels and addresses and anchor names together */
 #define UT_FIELD_MAX     1024u              /* a title, a link's label, an anchor's name */
 #define UT_HISTORY_MAX   16u                /* pages kept for back and forward */
 #define UT_HISTORY_BYTES (8u * 1024 * 1024) /* what those pages may own together */
