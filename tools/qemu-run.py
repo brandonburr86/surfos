@@ -2108,6 +2108,8 @@ class DnsPeer:
                 t = threading.Thread(target=self.flood, args=(frame, query), daemon=True)
                 self.floods.append(t); t.start()
             elif host.startswith(b'concurrent'):
+                if query[:2] in self.ids:      # 10/11/26: the guest asks again after 1 s; a copy changes nothing
+                    continue
                 self.pending.append((frame, query)); self.ids.append(query[:2])
                 if len(self.pending) == 2:
                     for f, q in reversed(self.pending):

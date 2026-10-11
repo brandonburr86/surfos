@@ -6,6 +6,8 @@ File: dns.c     Date: 10/3/26 (roadmap N2)
 One A query to the configured server, with name compression on the way back.
 10/9/26 (Wi-Fi, track S): the server is the default interface's, else that of the first
 configured interface that has one (wlan0's when it is the only one with a lease).
+10/11/26 (Undertow): the query goes out again after 1 s and 3 s (then every 4 s) while no
+answer has come, all within the caller's one budget.
 */
 
 #include <surfos/types.h>
@@ -19,6 +21,9 @@ configured interface that has one (wlan0's when it is the only one with a lease)
 #include <blibc_common.h>
 
 #define DNS_PORT 53
+#define DNS_QUERY_MAX (12 + DNS_NAME_MAX + 2 + 4)   /* header, the name as labels, type and class */
+#define DNS_RETRY_MS 1000           /* the first wait for an answer before the query goes out again */
+#define DNS_RETRY_MAX_MS 4000       /* the waits double up to this */
 /* Protected with net_lock; same-tick callers receive distinct query IDs. */
 static u16 next_id = 0x3a7c;
 
@@ -39,10 +44,10 @@ int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms) {
     ipaddr_t server, source, address;
     struct netdev *dev;
     struct udp_socket *s;
-    u8 pkt[NETBUF_SIZE];
+    u8 pkt[NETBUF_SIZE], query[DNS_QUERY_MAX];
     u_int n = 12;
     u16 id, port;
-    u32 start = (u32)uptime_ms(), elapsed;
+    u32 start = (u32)uptime_ms(), elapsed, resend = 0, gap = DNS_RETRY_MS;
     const char *label = name;
     int r;
 
@@ -58,35 +63,44 @@ int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms) {
     mutex_unlock(&net_lock);
     if(!server) return -ENETUNREACH;
 
-    memset(pkt, 0, 12);
-    pkt[0] = id >> 8; pkt[1] = id;
-    pkt[2] = 1; pkt[5] = 1;          /* RD, one question */
+    memset(query, 0, 12);
+    query[0] = id >> 8; query[1] = id;
+    query[2] = 1; query[5] = 1;      /* RD, one question */
     while(*label) {
         const char *dot = strchr(label, '.');
         u_int len = dot ? (u_int)(dot - label) : strlen(label);
-        pkt[n++] = len;
-        memcpy(pkt + n, label, len); n += len;
+        query[n++] = len;
+        memcpy(query + n, label, len); n += len;
         label += len;
         if(*label == '.') label++;
     }
-    pkt[n++] = 0;
-    pkt[n++] = 0; pkt[n++] = 1;      /* A/IN */
-    pkt[n++] = 0; pkt[n++] = 1;
+    query[n++] = 0;
+    query[n++] = 0; query[n++] = 1;  /* A/IN */
+    query[n++] = 0; query[n++] = 1;
     if(!timeout_ms) return -ETIMEDOUT;
     s = udp_open(0);
     if(!s) return -ENFILE;
     udp_bind_dev(s, dev);
-    if(udp_sendto(s, server, DNS_PORT, pkt, n) != 0) {
-        r = task_interrupted() ? -EINTR : -ENETUNREACH;
-        udp_close(s); return r;
-    }
     for(;;) {
         if(task_interrupted()) { r = -EINTR; break; }
         elapsed = (u32)((u32)uptime_ms() - start);
         if(elapsed >= timeout_ms) { r = -ETIMEDOUT; break; }
-        r = udp_recvfrom(s, pkt, sizeof(pkt), &source, &port, timeout_ms - elapsed);
+        if(elapsed >= resend) {
+            /* 10/11/26 (Undertow): the question or its answer may be lost on the way (a UDP datagram,
+               Wi-Fi): ask again after 1 s, then 2 s, then every 4 s while the budget lasts, with the
+               same ID, so that an answer to any of the copies counts (RFC 1123 6.1.3.3) */
+            if(udp_sendto(s, server, DNS_PORT, query, n) != 0) {
+                r = task_interrupted() ? -EINTR : -ENETUNREACH;
+                break;
+            }
+            resend = elapsed + gap;
+            if(gap < DNS_RETRY_MAX_MS) gap *= 2;
+            continue;
+        }
+        r = udp_recvfrom(s, pkt, sizeof(pkt), &source, &port, (resend < timeout_ms ? resend : timeout_ms) - elapsed);
         if(task_interrupted()) { r = -EINTR; break; }
-        if(r < 0 || (u32)((u32)uptime_ms() - start) >= timeout_ms) { r = -ETIMEDOUT; break; }
+        if(r < 0) continue;              /* nothing came in time: ask again, or give up, above */
+        if((u32)((u32)uptime_ms() - start) >= timeout_ms) { r = -ETIMEDOUT; break; }
         if(source != server || port != DNS_PORT) continue;
         r = dns_parse_a(pkt, (u_int)r, id, name, &address);
         if(r == 1) continue;

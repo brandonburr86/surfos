@@ -137,7 +137,8 @@ struct udp_socket { int slot; u16 id; };
 static struct udp_socket sockets[2];
 static int live, closes, received, mode, nested, nesting, send_fail, open_fail;
 static int stages[2], route_ok;
-static u32 now_ms, budget, last_remaining;
+static u32 now_ms, budget, lookup_end, sends;
+static u16 send_ids[16];
 static char *mutate_name;
 static u16 nested_id;
 void mutex_lock(mutex_t *m) { (void)m; }
@@ -167,6 +168,8 @@ int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 port, const void *data, u
     const u8 *p = data;
     (void)dst; (void)port; (void)len;
     s->id = (p[0] << 8) | p[1];
+    if(!nesting && sends < 16) send_ids[sends] = s->id;
+    if(!nesting) sends++;
     if(mutate_name) { mutate_name[0] = 'X'; mutate_name = NULL; }
     if(nested && !nesting) {
         ipaddr_t ip;
@@ -180,10 +183,10 @@ int udp_sendto(struct udp_socket *s, ipaddr_t dst, u16 port, const void *data, u
 int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16 *port, u_long remaining) {
     int stage = stages[s->slot]++;
     (void)size;
-    check(remaining > 0 && remaining <= last_remaining, "receive_uses_remaining_budget");
-    last_remaining = remaining; received++;
+    check(remaining > 0 && remaining <= (u32)(lookup_end - now_ms), "receive_waits_within_the_budget");
+    received++;
     if(mode == 3) { task.intr = TI_INT; return -1; }
-    if(mode == 4) { now_ms += remaining; return -1; }
+    if(mode == 4 || (mode == 6 && stage == 0)) { now_ms += remaining; return -1; }   /* silence; 6: the first answer is lost */
     now_ms += mode == 1 ? 250 : 10;
     begin(mode == 2 && stage == 2 ? "other.example.test" : "www.example.test", 1);
     address(NULL, 1); word(0, s->id);
@@ -199,9 +202,9 @@ int udp_recvfrom(struct udp_socket *s, void *buf, u_int size, ipaddr_t *src, u16
 static void reset(int test_mode) {
     memset(&device, 0, sizeof(device)); device.ip = IP4(10, 0, 2, 15);
     device.dns = IP4(10, 0, 2, 3); device.netmask = IP4(255, 255, 255, 0); device.link_up = true;
-    task.intr = 0; now_ms = 0; mode = test_mode; route_ok = 1;
+    task.intr = 0; now_ms = 0; mode = test_mode; route_ok = 1; sends = 0;
     live = closes = received = nested = nesting = send_fail = open_fail = 0;
-    memset(stages, 0, sizeof(stages)); budget = last_remaining = 5000;
+    memset(stages, 0, sizeof(stages)); budget = 5000; lookup_end = budget;
     mutate_name = NULL;
 }
 static void runtime(void) {
@@ -210,16 +213,28 @@ static void runtime(void) {
     reset(0);
     check(dns_lookup(host, &ip, budget) == 0 && ip == IP4(192, 0, 2, 7), "lookup_success");
     check(live == 0 && closes == 1, "success_closes_socket");
-    reset(1); now_ms = 0xfffffff0;
+    reset(1); now_ms = 0xfffffff0; lookup_end = now_ms + budget;
     check(dns_lookup(host, &ip, budget) == -ETIMEDOUT && now_ms == (u32)(0xfffffff0 + budget),
           "unrelated_flood_deadline_across_clock_wrap");
     check(received == 20 && live == 0, "flood_closes_socket");
+    check(sends == 3 && send_ids[0] == send_ids[1] && send_ids[1] == send_ids[2], "flood_query_resent_after_1_and_3_seconds");
     reset(2);
     check(dns_lookup(host, &ip, budget) == 0 && received == 4, "source_port_and_question_filtered");
     reset(3); ip = sentinel;
     check(dns_lookup(host, &ip, budget) == -EINTR && ip == sentinel && live == 0, "interruption_preserves_output_and_closes");
     reset(4);
-    check(dns_lookup(host, &ip, budget) == -ETIMEDOUT && live == 0, "silence_times_out");
+    check(dns_lookup(host, &ip, budget) == -ETIMEDOUT && live == 0 && now_ms == budget, "silence_times_out");
+    check(sends == 3, "silence_query_sent_three_times");
+    reset(6); ip = sentinel;
+    check(dns_lookup(host, &ip, budget) == 0 && ip == IP4(192, 0, 2, 7) && now_ms == 1000 + 10 && live == 0,
+          "lost_answer_retried_after_one_second");
+    check(sends == 2 && send_ids[0] == send_ids[1], "retry_keeps_the_query_id");
+    reset(4); budget = 20000; lookup_end = budget;
+    check(dns_lookup(host, &ip, budget) == -ETIMEDOUT && now_ms == budget && sends == 7,
+          "retry_gaps_double_to_four_seconds");
+    reset(4); budget = 1000; lookup_end = budget;
+    check(dns_lookup(host, &ip, budget) == -ETIMEDOUT && now_ms == budget && sends == 1,
+          "short_budget_sends_once");
     reset(5); ip = sentinel;
     check(dns_lookup(host, &ip, budget) == -ENOENT && ip == sentinel && live == 0, "nxdomain_runtime");
     reset(0); device.dns = 0;
