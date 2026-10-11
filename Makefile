@@ -581,6 +581,18 @@ test-undertow-session: $(BUILD)/host/test_undertow_session $(BUILD)/user/bin/und
 unittest: test-undertow-session
 .PHONY: test-undertow-session
 
+# view.c and edit.c with the test's own terminal (views written into memory, keys from a script)
+$(BUILD)/host/test_undertow_view: tests/host/test_undertow_view.c $(BUILD)/host/undertow/view.o \
+                                  $(BUILD)/host/undertow/edit.o $(BUILD)/host/undertow/util.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-view: $(BUILD)/host/test_undertow_view $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_view
+unittest: test-undertow-view
+.PHONY: test-undertow-view
+
 # -- transport.c and Mbed TLS (track T) --
 
 # -- the browser in QEMU (track F) --
