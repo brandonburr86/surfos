@@ -787,10 +787,15 @@ class Qemu:
         return self.proc.poll() is None
 
     def wait(self, seconds):
-        """sleep while draining the serial port, so QEMU never back-pressures the UART"""
+        """sleep while draining the serial port, so QEMU never back-pressures the UART. 10/11/26: in
+        slices no longer than what is left, so a short wait is short (wait(.03) once took up to 0.1 s,
+        past the 100 ms a program allows between the bytes of an escape sequence)"""
         deadline = time.time() + seconds
-        while time.time() < deadline:
-            self.pump(0.1)
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                break
+            self.pump(min(0.1, left))
 
     def qemu_output(self):
         if self.proc.poll() is None:
@@ -2103,6 +2108,8 @@ class DnsPeer:
                 t = threading.Thread(target=self.flood, args=(frame, query), daemon=True)
                 self.floods.append(t); t.start()
             elif host.startswith(b'concurrent'):
+                if query[:2] in self.ids:      # 10/11/26: the guest asks again after 1 s; a copy changes nothing
+                    continue
                 self.pending.append((frame, query)); self.ids.append(query[:2])
                 if len(self.pending) == 2:
                     for f, q in reversed(self.pending):
