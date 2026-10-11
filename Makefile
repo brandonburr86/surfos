@@ -43,6 +43,7 @@ USER_PROGS   = hello crash cat ls count sh echo cp mv rm mkdir rmdir touch df wc
 USER_BINS    = $(USER_PROGS:%=$(BUILD)/user/bin/%)
 USER_PROGS  += ptytest       # 10/6/26 (the telnet server): pseudo-terminals, poll, procinfo, detach, /dev/kmsg
 USER_PROGS  += files         # text file browser, independent of the web browser
+USER_PROGS  += undertow      # 10/11/26: the web browser, a program of several files in user/undertow/
 USER_PROGS  += rx            # 10/9/26 (the development loop): one file from the network, for tools/devloop.py
 # surfsh, the SurfOS shell (10/6/26): a program of several files in user/surfsh/
 SURFSH_SRC   = $(wildcard user/surfsh/*.c)
@@ -50,6 +51,9 @@ SURFSH_OBJ   = $(SURFSH_SRC:user/surfsh/%.c=$(BUILD)/user/surfsh/%.o)
 # telnetd, the telnet server (10/6/26): user/telnetd/, its protocol module host-tested too
 TELNETD_SRC  = $(wildcard user/telnetd/*.c)
 TELNETD_OBJ  = $(TELNETD_SRC:user/telnetd/%.c=$(BUILD)/user/telnetd/%.o)
+# Undertow, the web browser (10/10/26): user/undertow/, each module host-tested too (tests/host/test_undertow_*.c)
+UNDERTOW_SRC = $(wildcard user/undertow/*.c)
+UNDERTOW_OBJ = $(UNDERTOW_SRC:user/undertow/%.c=$(BUILD)/user/undertow/%.o)
 
 
 CC         = gcc
@@ -91,7 +95,8 @@ SRC_C      = $(wildcard kernel/*.c) $(wildcard mm/*.c) $(wildcard lib/blibc/*.c)
 SRC_ASM    = kernel/traps.asm driver/dma/dma-asm.asm
 
 OBJS       = $(SRC_S:%.S=$(BUILD)/%.o) $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_ASM:%.asm=$(BUILD)/%.o)
-DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d)
+DEPS       = $(OBJS:.o=.d) $(USER_LIB_OBJ:.o=.d) $(USER_PROGS:%=$(BUILD)/user/obj/%.d) $(SURFSH_OBJ:.o=.d) $(TELNETD_OBJ:.o=.d) \
+             $(UNDERTOW_OBJ:.o=.d)
 
 all: $(KERNEL)
 
@@ -259,6 +264,17 @@ $(BUILD)/user/bin/telnetd: $(TELNETD_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
 	@mkdir -p $(dir $@)
 	@echo "ULD  $@"
 	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(TELNETD_OBJ) $(USER_LIB)
+
+# Undertow likewise (10/11/26)
+$(BUILD)/user/undertow/%.o: user/undertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/bin/undertow: $(UNDERTOW_OBJ) $(USER_CRT0) $(USER_LIB) user/user.ld
+	@mkdir -p $(dir $@)
+	@echo "ULD  $@"
+	$(Q)$(LD) -m elf_i386 -nostdlib --gc-sections -T user/user.ld -o $@ $(USER_CRT0) $(UNDERTOW_OBJ) $(USER_LIB)
 
 $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 	@echo "IMG  $@"
@@ -505,27 +521,57 @@ test-entropy: $(KERNEL) $(INITRD)
 	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --entropy-test
 .PHONY: test-entropy
 
-# Undertow URL parsing stays pure user code and is also tested on the host.
-$(BUILD)/host/undertow/url.o: user/undertow/url.c user/undertow/url.h
+# Undertow's host tests (10/10/26). Its modules are built with the host's C library, -m32 as
+# HOSTFLAGS has it; tests/host/undertow/surf.h stands in for SurfOS's own calls, which each test
+# defines, and tests/host/undertow/alloc.c for malloc and its friends, so that a test can count
+# what a module holds and make any allocation fail. Every test also builds the real program,
+# so the modules compile against SurfOS's own headers (user/include) as well.
+UT_HOSTFLAGS = $(HOSTFLAGS) -Itests/host/undertow -Iuser/undertow -MMD -MP
+UT_ALLOC     = -Dmalloc=ut_test_malloc -Dcalloc=ut_test_calloc -Drealloc=ut_test_realloc -Dfree=ut_test_free \
+               -Dstrdup=ut_test_strdup -Dstrndup=ut_test_strndup
+$(BUILD)/host/undertow/%.o: user/undertow/%.c
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) -Dmalloc=ut_test_malloc -Dfree=ut_test_free -c $< -o $@
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $(UT_ALLOC) -c $< -o $@
 
-# Compile with the real freestanding user headers as well, before runtime integration.
-$(BUILD)/user/undertow/%.o: user/undertow/%.c user/undertow/url.h
+$(BUILD)/host/undertow/alloc.o: tests/host/undertow/alloc.c
 	@mkdir -p $(dir $@)
-	@echo "UCC  $<"
-	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) -c $< -o $@
+-include $(wildcard $(BUILD)/host/undertow/*.d)
 
-$(BUILD)/host/test_undertow_url: tests/host/test_undertow_url.c $(BUILD)/host/undertow/url.o user/undertow/url.h
+# url.c (task 3)
+$(BUILD)/host/test_undertow_url: tests/host/test_undertow_url.c $(BUILD)/host/undertow/url.o
 	@mkdir -p $(dir $@)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/undertow tests/host/test_undertow_url.c $(BUILD)/host/undertow/url.o -o $@
 
-test-undertow-url: $(BUILD)/host/test_undertow_url $(BUILD)/user/undertow/url.o
+test-undertow-url: $(BUILD)/host/test_undertow_url $(BUILD)/user/bin/undertow
 	$(BUILD)/host/test_undertow_url
 unittest: test-undertow-url
 .PHONY: test-undertow-url
+
+# util.c and config.c (the shared helpers, the settings and the clock)
+$(BUILD)/host/test_undertow_util: tests/host/test_undertow_util.c $(BUILD)/host/undertow/util.o \
+                                  $(BUILD)/host/undertow/config.o $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-util: $(BUILD)/host/test_undertow_util $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_util
+unittest: test-undertow-util
+.PHONY: test-undertow-util
+
+# -- http.c (track H) --
+
+# -- html.c (track R) --
+
+# -- session.c, view.c, main.c (track S) --
+
+# -- transport.c and Mbed TLS (track T) --
+
+# -- the browser in QEMU (track F) --
 
 # Standalone file-browser integration checks; uses temporary QEMU disk copies.
 test-files: $(KERNEL) images

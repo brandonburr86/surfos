@@ -246,6 +246,9 @@ SMOKE = [
     ('@entropy-supported', []),
     ('nettest resolve 192.0.2.1', ['resolve 192.0.2.1: 192.0.2.1']),
     ('@dns-bounded', []),
+    # 10/11/26 (Undertow, the web browser, user/undertow/): the program is in the initrd and answers; its own
+    # end-to-end tests against web fixtures are tools/qemu-web.py (make test-web)
+    ('undertow --help', ['usage: undertow [ADDRESS]', 'undertow --dump ADDRESS']),
     ('nettest info', ['eth0: 52:54:00:12:34:56, link up', 'inet 10.0.2.15']),
     ('@nettest-host', []),
     ('nettest get 10.0.2.2 {http} /nettest', ['HTTP/1.0 200 OK', 'SurfOS HTTP test OK: /nettest', 'bytes received']),
