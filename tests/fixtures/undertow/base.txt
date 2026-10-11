@@ -1,0 +1,5 @@
+A relative link before the base[1]
+
+A fragment stays on this page[2]
+
+A relative link after the base[3]

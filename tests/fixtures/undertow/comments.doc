@@ -1,0 +1,7 @@
+# comments, <!DOCTYPE>, processing instructions and bogus comments are not shown
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Comments
+notice:
+truncated:

@@ -1,0 +1,13 @@
+Quoted > in values[1]
+
+Unquoted value[2]
+
+Spaces around the equals sign[3]
+
+Upper-case names[4]
+
+Duplicate attribute: the first wins[5]
+
+[It's "quoted"]
+
+Entities in a value[6]

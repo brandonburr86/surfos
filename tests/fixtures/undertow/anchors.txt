@@ -1,0 +1,13 @@
+Introduction[1] Details[2] Missing[3]
+
+Introduction
+
+Some text with a marked phrase in it.
+
+Details
+
+* An item with an id
+
+A second element called intro does not count.
+
+The last paragraph.

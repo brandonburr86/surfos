@@ -1,0 +1,3 @@
+ASCII text survives: Undertow cannot read Shift_JIS.
+
+Every byte that is not ASCII would be a ? (test_undertow_html.c sends some).

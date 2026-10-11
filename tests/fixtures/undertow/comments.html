@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<?xml-stylesheet href="style.css"?>
+<title>Comments</title>
+<p>Before<!-- a comment --> after.</p>
+<p>A comment <!-- with <p>tags</p> and <script>inside</script> --> is skipped whole.</p>
+<p>Odd comments: <!----> empty, <!--> abrupt, <!---> abrupt too, <!-- ends --!> oddly.</p>
+<p>A bogus comment <!bogus thing> and a processing instruction <?php echo 1; ?> vanish.</p>
+<p>A CDATA section <![CDATA[ hides up to the first > only ]]> in HTML.</p>
+<p>An end tag that is not one: </ notatag> and </>.</p>
+<p>A lone &lt; is text: 1 < 2 and <3.</p>
+<!-- an unterminated comment hides the rest of the page
+<p>Never shown.</p>

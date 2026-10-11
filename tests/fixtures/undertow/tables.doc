@@ -1,0 +1,11 @@
+# tables: a line per row, " | " between cells that show something, line breaks inside a cell kept, a table in a table flattened
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Tables
+notice:
+truncated:
+link 1: https://example.test/
+  label: Home
+link 2: https://example.test/news
+  label: News
