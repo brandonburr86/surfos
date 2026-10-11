@@ -572,6 +572,12 @@ unittest: test-undertow-util
 # -- transport.c and Mbed TLS (track T) --
 
 # -- the browser in QEMU (track F) --
+# 10/11/26: the web fixtures for Undertow's end-to-end tests (tools/web-fixtures.py: HTTP and HTTPS servers on
+# 127.0.0.1 with a test CA made for each run, which needs an OpenSSL 3 openssl command), tested on the host.
+test-web-host:
+	$(PYTHON) -m unittest discover -s tests -p test_web_fixtures.py
+unittest: test-web-host
+.PHONY: test-web-host
 
 # Standalone file-browser integration checks; uses temporary QEMU disk copies.
 test-files: $(KERNEL) images
