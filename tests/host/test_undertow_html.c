@@ -849,6 +849,8 @@ static void structure(void) {
     text_is("<table><tr><td><br><p>a</p></td><td id=c><br>b</td></tr></table>", "a | b",
             "line breaks at the start of a cell do not break its row");
     check(pg_ok && !ut_anchor_offset(&pg, "c", &off) && off == 4, "an anchor on a cell: where its text starts, after the \" | \"");
+    text_is("<table><tr><td>a</td><td>&nbsp;</td><td>&nbsp;&nbsp;b&nbsp;&nbsp;c</td></tr><tr><td width=8>&nbsp;</td><td>d</td></tr></table>",
+            "a | b  c\nd", "a cell of no-break spaces is empty (a spacer), and they collapse where a cell starts");
     text_is("<noframes><p>No frames</p></noframes><frameset><frame src=a.html></frameset>", "No frames",
             "noframes is shown; frames are not");
     text_is("<dl><dt>T<dd>D<dd>E<dt>U</dl>", "T\n  D\n  E\nU", "dt and dd close each other");

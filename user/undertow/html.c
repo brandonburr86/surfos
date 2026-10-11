@@ -795,6 +795,7 @@ static int line_breaks(struct rd *rd) {
     rd->space = 0;
     close_span(rd);
     trim(rd);
+    rd->col = 0;
     if(!rd->tlen) return 0;
     if(rd->tlen > rd->line_start) {
         if(put(rd, "\n", 1)) return -1;
@@ -805,7 +806,6 @@ static int line_breaks(struct rd *rd) {
         if(put(rd, "\n", 1)) return -1;
         rd->line_start = rd->tlen;
     }
-    rd->col = 0;
     return 0;
 }
 
@@ -982,8 +982,9 @@ static void text_char(struct rd *rd, unsigned int cp) {
             rd->space = 1;
             return;
         }
-        if(cp == 0xa0) {                    /* a no-break space is a space that does not collapse */
-            emit(rd, " ", 1);
+        if(cp == 0xa0) {                    /* a no-break space is a space that does not collapse, */
+            if(rd->cells_pending) rd->space = 1;    /* except where a cell starts: <td>&nbsp;</td> is empty */
+            else emit(rd, " ", 1);
             return;
         }
     }
