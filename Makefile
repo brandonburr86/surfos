@@ -601,6 +601,27 @@ test-undertow-html: $(BUILD)/host/test_undertow_html $(BUILD)/user/bin/undertow
 unittest: test-undertow-html
 .PHONY: test-undertow-html
 
+# The same test with UndefinedBehaviorSanitizer at SurfOS's ABI (-m32, where a long is 32 bits), when the host
+# compiler has it for that ABI (gcc with lib32ubsan): arithmetic that overflows only in 32 bits stops the test.
+UT_UBSAN      := $(shell echo 'int main(void){return 0;}' | $(HOSTCC) $(HOST32) -fsanitize=undefined -x c - -o /dev/null 2>/dev/null && echo yes)
+UT_UBSANFLAGS  = $(HOSTFLAGS) -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+                 -Itests/host/undertow -Iuser/undertow
+$(BUILD)/host/undertow-ubsan/%.o: user/undertow/%.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (UBSan)"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) -MMD -MP $(UT_ALLOC) -c $< -o $@
+
+$(BUILD)/host/test_undertow_html_ubsan: tests/host/test_undertow_html.c $(BUILD)/host/undertow-ubsan/html.o \
+                                        $(BUILD)/host/undertow-ubsan/url.o $(BUILD)/host/undertow-ubsan/util.o
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_UBSANFLAGS) $^ -o $@
+
+test-undertow-html-ubsan: $(if $(UT_UBSAN),$(BUILD)/host/test_undertow_html_ubsan)
+	$(if $(UT_UBSAN),$(BUILD)/host/test_undertow_html_ubsan tests/fixtures/undertow,@echo "test-undertow-html-ubsan: skipped: $(HOSTCC) has no UndefinedBehaviorSanitizer for $(or $(HOST32),this ABI)")
+unittest: test-undertow-html-ubsan
+.PHONY: test-undertow-html-ubsan
+-include $(wildcard $(BUILD)/host/undertow-ubsan/*.d)
+
 # -- session.c, view.c, main.c (track S) --
 # session.c with the test's own fake ut_fetch() and ut_render() (never http.o or html.o)
 $(BUILD)/host/test_undertow_session: tests/host/test_undertow_session.c $(BUILD)/host/undertow/session.o \

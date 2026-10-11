@@ -1,4 +1,5 @@
-# links: numbered after their labels, resolved against the page; other schemes and bad addresses keep their number
+# links: numbered after their labels, resolved against the page; other schemes and bad addresses keep their number;
+# a link with no text shows its aria-label or title (or the first one inside it), or else [N] alone
 url: https://example.test/dir/page.html
 type: text/html
 charset:
@@ -37,4 +38,10 @@ link 15 (unusable): https://bad host/
   label: a space in a host
 link 16 (unusable): http://[::1]/
   label: IPv6
+link 17: https://example.test/dir/vote?id=1&how=up
+  label: upvote
+link 18: https://example.test/
+  label: Home
+link 19: https://example.test/empty
+  label:
 anchor here: 11:1

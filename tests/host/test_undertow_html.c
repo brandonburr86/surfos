@@ -181,15 +181,20 @@ static void response_free(struct ut_response *r) {
 
 /**** what every document must be ****/
 
-/* Well-formed UTF-8 with no character that is unsafe on a terminal; newlines only if allowed.
-   U+061C (the Arabic letter mark) is a bidirectional mark too. */
+/* Characters that are invisible on a console, which Undertow drops too (the joiners U+200C and U+200D stay) */
+static int invisible(unsigned int cp) {
+    return cp == 0x61c || cp == 0xad || cp == 0x34f || cp == 0x180e || cp == 0x200b || (cp >= 0x2060 && cp <= 0x2064) ||
+           (cp >= 0xfe00 && cp <= 0xfe0f);
+}
+
+/* Well-formed UTF-8 with no character that is unsafe on a terminal or invisible; newlines only if allowed */
 static int safe_utf8(const char *s, size_t len, int newlines) {
     size_t i = 0, n;
     unsigned int cp;
     while(i < len) {
         n = ut_utf8_decode((const unsigned char *)s + i, len - i, &cp);
         if(n == 1 && (unsigned char)s[i] >= 0x80) return 0;
-        if(!(cp == '\n' && newlines) && (ut_unsafe_char(cp) || cp == 0x61c)) return 0;
+        if(!(cp == '\n' && newlines) && (ut_unsafe_char(cp) || invisible(cp))) return 0;
         i += n;
     }
     return 1;
@@ -257,7 +262,7 @@ static const char *bad_doc(const struct ut_document *d, size_t held) {
         else if(t[s->offset] == ' ' || t[s->offset + s->len - 1] == ' ') return "a heading span with spaces at an end";
     }
     if(link_spans != d->link_count) return "a numbered link without its [N] in the text";
-    if((d->truncated & UT_TRUNC_TEXT) &&
+    if((d->truncated & UT_TRUNC_TEXT) && strcmp(t, &NOTICE[2]) &&       /* the notice, alone or after a blank line */
        (d->text_len < strlen(NOTICE) || strcmp(t + d->text_len - strlen(NOTICE), NOTICE)))
         return "a truncated text without its notice";
     if(d->bytes != held) {
@@ -712,15 +717,17 @@ static void safety(void) {
 static void links(void) {
     struct sb b = { 0, 0, 0 };
     unsigned i;
-    for(i = 1; i <= 256; i++) sb_printf(&b, "<a href=\"/p%u\">L%u</a> ", i, i);
-    page("text/html", "utf-8", b.s, b.len, "256 links");
-    check(pg_ok && pg.link_count == 256 && !(pg.truncated & UT_TRUNC_LINKS) && link_is(256, "https://example.test/p256", 1, "L256") &&
-          strlen(pg.text) > 9 && !strcmp(pg.text + strlen(pg.text) - 9, "L256[256]"), "256 links are all numbered");
-    sb_str(&b, "<a href=\"/p257\">L257</a>");
-    page("text/html", "utf-8", b.s, b.len, "257 links");
-    check(pg_ok && pg.link_count == 256 && (pg.truncated & UT_TRUNC_LINKS) && strstr(pg.notice, "256") &&
-          strlen(pg.text) > 14 && !strcmp(pg.text + strlen(pg.text) - 14, "L256[256] L257"),
-          "the 257th link keeps its text but gets no number");
+    for(i = 1; i <= 2048; i++) sb_printf(&b, "<a href=\"/p%u\">L%u</a> ", i, i);
+    page("text/html", "utf-8", b.s, b.len, "2048 links");
+    check(pg_ok && pg.link_count == 2048 && !(pg.truncated & UT_TRUNC_LINKS) && !pg.notice[0] &&
+          link_is(2048, "https://example.test/p2048", 1, "L2048") &&
+          strlen(pg.text) > 11 && !strcmp(pg.text + strlen(pg.text) - 11, "L2048[2048]"), "2048 links are all numbered");
+    sb_str(&b, "<a href=\"/p2049\">L2049</a>");
+    page("text/html", "utf-8", b.s, b.len, "2049 links");
+    check(pg_ok && pg.link_count == 2048 && (pg.truncated & UT_TRUNC_LINKS) &&
+          !strcmp(pg.notice, "only its first 2048 links have numbers") &&
+          strlen(pg.text) > 17 && !strcmp(pg.text + strlen(pg.text) - 17, "L2048[2048] L2049"),
+          "the 2049th link keeps its text but gets no number, and the notice says how many have one");
     free(b.s);
 
     page("text/html", "utf-8", LIT("<a href=\"#sec\">S</a> <a href=\"page\">P</a> <a href=\"//third.test/x\">T</a> "
@@ -797,10 +804,11 @@ static void anchors(void) {
     check(!ut_anchor_offset(&pg, "", &off) && off == 0 && !ut_anchor_offset(&pg, "Top", &off) && off == 0,
           "\"\" and \"top\" are the start");
     check(ut_anchor_offset(&pg, NULL, &off) == -1 && ut_anchor_offset(NULL, "top", &off) == -1, "nothing to look in or for");
-    for(i = 0; i < 257; i++) sb_printf(&b, "<p id=a%u>x</p>", i);
-    page("text/html", "utf-8", b.s, b.len, "257 anchors");
-    check(pg_ok && pg.anchor_count == 256 && (pg.truncated & UT_TRUNC_ANCHORS) && ut_anchor_offset(&pg, "a256", &off) == -1 &&
-          !ut_anchor_offset(&pg, "a255", &off), "anchors past UT_ANCHORS_MAX are not known");
+    for(i = 0; i < 2049; i++) sb_printf(&b, "<p id=a%u>x</p>", i);
+    page("text/html", "utf-8", b.s, b.len, "2049 anchors");
+    check(pg_ok && pg.anchor_count == 2048 && (pg.truncated & UT_TRUNC_ANCHORS) && ut_anchor_offset(&pg, "a2048", &off) == -1 &&
+          !ut_anchor_offset(&pg, "a2047", &off) && !ut_anchor_offset(&pg, "a0", &off) && !off,
+          "2048 anchors are known, the 2049th is not");
     free(b.s);
     b.s = NULL; b.len = b.cap = 0;
     sb_str(&b, "<p id=\"");
@@ -809,6 +817,70 @@ static void anchors(void) {
     page("text/html", "utf-8", b.s, b.len, "odd anchor names");
     check(pg_ok && pg.anchor_count == 1 && !strcmp(pg.anchors[0].name, "ok"),
           "names over UT_FIELD_MAX bytes or with control characters are not kept");
+    free(b.s);
+}
+
+/* What UT_LINK_BYTES_MAX counts: every link's label and address and every anchor's name, allocation by allocation */
+static size_t link_strings(const struct ut_document *d) {
+    size_t i, n = 0;
+    for(i = 0; i < d->link_count; i++) n += strlen(d->links[i].label) + 1 + strlen(d->links[i].url) + 1;
+    for(i = 0; i < d->anchor_count; i++) n += strlen(d->anchors[i].name) + 1;
+    return n;
+}
+
+static void link_bytes(void) {
+    struct sb b = { 0, 0, 0 };
+    char long_part[1501], want[80], *after;
+    size_t n, off;
+    unsigned i;
+    memset(long_part, 'a', 1500);
+    long_part[1500] = 0;
+    /* links whose addresses fill UT_LINK_BYTES_MAX long before the count limit */
+    for(i = 0; i < 1000; i++) {
+        sb_printf(&b, "<a href=\"/%u/", i);
+        sb_str(&b, long_part);
+        sb_printf(&b, "\">L%u</a> ", i);
+    }
+    sb_str(&b, "<a href=/s>short</a> <p id=late>x</p>");
+    page("text/html", "utf-8", b.s, b.len, "links over UT_LINK_BYTES_MAX");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.link_count > 600 && pg.link_count < 1000 && (pg.truncated & UT_TRUNC_LINKS) &&
+          n <= UT_LINK_BYTES_MAX && n > UT_LINK_BYTES_MAX - 1600,
+          "links stop getting numbers where their labels and addresses would pass UT_LINK_BYTES_MAX");
+    snprintf(want, sizeof(want), "only its first %u links have numbers", pg_ok ? (unsigned)pg.link_count : 0);
+    check(pg_ok && !strcmp(pg.notice, want), "the notice gives the number that applied");
+    snprintf(want, sizeof(want), "L%u[%u] L%u L%u", pg_ok ? (unsigned)pg.link_count - 1 : 0, pg_ok ? (unsigned)pg.link_count : 0,
+             pg_ok ? (unsigned)pg.link_count : 0, pg_ok ? (unsigned)pg.link_count + 1 : 0);
+    after = pg_ok ? strstr(pg.text, want) : NULL;
+    check(after && pg_ok && strstr(pg.text, "L999 short") && ut_anchor_offset(&pg, "late", &off) == -1 &&
+          (pg.truncated & UT_TRUNC_ANCHORS), "the links after keep their text, and anchors after are not kept either");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* anchors whose names fill it, before the count limit; links after them get no number */
+    for(i = 0; i < 2000; i++) {
+        sb_printf(&b, "<p id=\"n%u-", i);
+        sb_add(&b, long_part, 690);
+        sb_str(&b, "\">x</p>");
+    }
+    sb_str(&b, "<a href=/after>after</a>");
+    page("text/html", "utf-8", b.s, b.len, "anchors over UT_LINK_BYTES_MAX");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.anchor_count > 1400 && pg.anchor_count < 2000 && (pg.truncated & UT_TRUNC_ANCHORS) &&
+          n <= UT_LINK_BYTES_MAX && n > UT_LINK_BYTES_MAX - 800 && !pg.link_count && (pg.truncated & UT_TRUNC_LINKS) &&
+          strlen(pg.text) > 5 && !strcmp(pg.text + strlen(pg.text) - 5, "after"),
+          "anchors stop being kept at UT_LINK_BYTES_MAX; a link after them keeps its text without a number");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* a late <base> that would make the addresses of the links before it pass the cap is not used */
+    for(i = 0; i < 1300; i++) sb_printf(&b, "<a href=\"x%u\">%u</a> ", i, i);
+    sb_str(&b, "<base href=\"https://example.test/");
+    sb_str(&b, long_part);
+    sb_str(&b, "/\"><a href=y>y</a>");
+    page("text/html", "utf-8", b.s, b.len, "a late base too big");
+    n = pg_ok ? link_strings(&pg) : 0;
+    check(pg_ok && pg.link_count == 1301 && n <= UT_LINK_BYTES_MAX && link_is(1, "https://example.test/dir/x0", 1, "0") &&
+          link_is(1301, "https://example.test/dir/y", 1, "y"),
+          "a late <base> whose addresses would pass UT_LINK_BYTES_MAX is not used, for any link");
     free(b.s);
 }
 
@@ -831,7 +903,7 @@ static void limits(void) {
     for(i = 0; i < 300; i++) sb_printf(&b, "<a href=/l%u>l</a>", i);
     for(i = 0; i < 5000; i++) sb_printf(&b, "<h2>h%u</h2>", i);
     page("text/html", "utf-8", b.s, b.len, "5000 headings");
-    check(pg_ok && pg.span_count <= UT_SPANS_MAX && pg.link_count == 256, "heading spans stop at UT_SPANS_MAX; every link keeps its span");
+    check(pg_ok && pg.span_count <= UT_SPANS_MAX && pg.link_count == 300, "heading spans stop at UT_SPANS_MAX; every link keeps its span");
     free(b.s);
 }
 
@@ -859,6 +931,211 @@ static void structure(void) {
     check(pg_ok && pg.span_count == 3 && pg.spans[0].kind == UT_SPAN_HEADING && pg.spans[0].len == 2 &&
           pg.spans[1].kind == UT_SPAN_LINK && pg.spans[2].kind == UT_SPAN_HEADING && pg.spans[2].offset == 5,
           "spans in order, apart, the link's in the middle");
+}
+
+/* body (UTF-8, with "\x01" standing for a lone high surrogate) as UTF-16 with a byte order mark */
+static void utf16(struct sb *b, const char *body, int big_endian, int bom) {
+    const unsigned char *s = (const unsigned char *)body;
+    size_t i = 0, n = strlen(body);
+    unsigned int cp, units[2], k, u;
+    unsigned char out[2];
+    if(bom) cp = 0xfeff;
+    while(bom || i < n) {
+        if(!bom) {
+            if(s[i] == 1) {
+                cp = 0xd800;
+                i++;
+            } else i += ut_utf8_decode(s + i, n - i, &cp);
+        }
+        bom = 0;
+        if(cp >= 0x10000) {
+            units[0] = 0xd800 + ((cp - 0x10000) >> 10);
+            units[1] = 0xdc00 + ((cp - 0x10000) & 0x3ff);
+            k = 2;
+        } else {
+            units[0] = cp;
+            k = 1;
+        }
+        for(u = 0; u < k; u++) {
+            out[big_endian ? 0 : 1] = (unsigned char)(units[u] >> 8);
+            out[big_endian ? 1 : 0] = (unsigned char)(units[u] & 0xff);
+            sb_add(b, (const char *)out, 2);
+        }
+    }
+}
+
+static void review_round(void) {
+    struct sb b = { 0, 0, 0 };
+    char *body;
+    size_t i, len;
+    /* empty cells keep their place in a data table (one with a <th>), and vanish in a layout table */
+    text_is("<table><tr><th>Day</th><th>High</th><th>Low</th></tr><tr><td>Wed</td><td></td><td>14:02</td></tr>"
+            "<tr><td></td><td>07:00</td><td>13:00</td></tr><tr><td>Thu</td><td>08:10</td><td>&nbsp;</td></tr></table>",
+            "Day | High | Low\nWed | - | 14:02\n- | 07:00 | 13:00\nThu | 08:10 | -",
+            "a data table keeps every cell in its column: an empty or spacer cell is - (middle, start, end)");
+    text_is("<table><tr><th></th><th>AM</th><th>PM</th></tr><tr><th>Sat</th><td>06:10</td><td><img src=x.png></td></tr></table>",
+            "- | AM | PM\nSat | 06:10 | -", "an empty corner <th> is - too");
+    text_is("<table><tr><td>a</td><td></td><td>&nbsp;</td><td>b</td></tr></table>", "a | b",
+            "a table without <th> (for layout) still drops empty and spacer cells");
+    text_is("<table><tr><td>x</td><td></td></tr><tr><th>H</th><td></td></tr></table>", "x\nH | -",
+            "a table is a data table from its first <th> on");
+    text_is("<table><tr><th>K</th><td><table><tr><td></td><td>in</td></tr></table></td><td></td></tr></table>", "K | in | -",
+            "each table decides for itself");
+    /* a self-closed raw text element in svg or math is whole, as in browsers */
+    text_is("<p>Share this article:</p>\n<a href=\"/share\"><svg class=\"icon\" viewBox=\"0 0 24 24\"><title/><use href=\"#share\"/>"
+            "</svg> Share</a>\n<h2>Next section</h2>\n<p>The rest of the article, with <a href=\"/more\">a link</a>.</p>\n",
+            "Share this article:\n\nShare[1]\n\nNext section\n\nThe rest of the article, with a link[2].",
+            "an svg icon with a self-closed <title/> hides nothing after it");
+    text_is("<p>Before</p><svg viewBox='0 0 1 1'><style/><path d='M0 0'/></svg><p>After</p><math><script/></math>end",
+            "Before\n\nAfter\n\nend", "<style/> in svg and <script/> in math are whole");
+    /* list numbers within a billion, whatever the size of long */
+    text_is("<ol start=3000000000><li>a<li>b</ol><ol start=-2147483649><li>c</ol><ol><li value=99999999999>d<li>e</ol>",
+            "999999999. a\n1000000000. b\n\n-999999999. c\n\n999999999. d\n1000000000. e",
+            "list numbers stop at a billion (a 32-bit long never overflows)");
+    /* a cut page with only spaces before the cut */
+    body = malloc(700 * 1024);
+    memset(body, ' ', 700 * 1024);
+    page("text/plain", "", body, 600 * 1024, "600 KiB of spaces");
+    check(pg_ok && (pg.truncated & UT_TRUNC_TEXT) && !strcmp(pg.text, &NOTICE[2]),
+          "a cut page with nothing but spaces before the cut is the notice alone");
+    memcpy(body, "<pre>", 5);
+    page("text/html", "utf-8", body, 700 * 1024, "a pre of 700 KiB of spaces");
+    check(pg_ok && (pg.truncated & UT_TRUNC_TEXT) && !strcmp(pg.text, &NOTICE[2]), "and so is a <pre> of spaces");
+    free(body);
+    /* invisible characters */
+    text_is("a&#x200B;b&#x2060;c&#x2064;d&#xFE0F;e&#xFE00;f&#x180E;g&#x34F;h&#x200C;i&#x200D;j\xe2\x80\x8bk\xef\xb8\x8f",
+            "abcdefgh\xe2\x80\x8ci\xe2\x80\x8dj" "k", "invisible characters are dropped; the joiners ZWNJ and ZWJ stay");
+    page("text/html", "utf-8", LIT("<title>T&#x200B;i</title><img alt=\"A&#x2060;B\"><a href=\"/x\">L&#xFE0F;M</a>"), "invisible in fields");
+    check(pg_ok && !strcmp(pg.title, "Ti") && !strcmp(pg.text, "[AB]LM[1]") && link_is(1, "https://example.test/x", 1, "LM"),
+          "nor in titles, alt text and labels");
+    /* scripts that hide their markup in <!-- --> */
+    text_is("<p>Top story</p>\n<script type=\"text/javascript\"><!--\n"
+            "document.write('<script src=\"https://ads.example.test/ad.js\"></script>');\n//--></script>\n<p>Article text.</p>\n",
+            "Top story\n\nArticle text.", "a script that writes a script inside <!-- --> is all script");
+    text_is("<script><!-- a </script>b", "b", "in an escaped script its end tag still ends it");
+    text_is("<script>a<!--b<script>c</script>d</script>e", "e", "double escaped: the inner end tag does not end the script");
+    text_is("<script><!-- x --> </script>d<script><!--></script>f", "df", "a comment that ends inside a script");
+    text_is("<style><!-- </style>x", "x", "style has no escaped states");
+    page("text/html", "utf-8", LIT("a<script>x<"), "a script ending on <");
+    check(pg_ok && !strcmp(pg.text, "a"), "a script that ends with the body on a lone <");
+    page("text/html", "utf-8", LIT("b<script><!--x<"), "an escaped script ending on <");
+    check(pg_ok && !strcmp(pg.text, "b"), "an escaped script that ends with the body on a lone <");
+    text_is("<script><!--<scripts>--></script>g<script><!--<script>-></script>-->h</script>i", "gi",
+            "<scripts> is not <script>; -> does not end the escape");
+    /* the notice: the links part first, a long charset name cut */
+    sb_str(&b, "<meta charset=\"an-extremely-long-and-made-up-charset-name-for-testing\"><form></form>");
+    for(i = 0; i < 2049; i++) sb_str(&b, "<a href=/l>l</a>");
+    page("text/html", "", b.s, b.len, "a full notice");
+    check(pg_ok && !strcmp(pg.notice, "only its first 2048 links have numbers; the page says it is in an-extremely-long-and...; "
+                                       "only its ASCII is shown; forms are not supported"),
+          "the notice: links first, a charset name cut at 24 bytes, all three parts");
+    if(pg_ok && !strstr(pg.notice, "an-extremely-long-and...")) printf("  notice \"%s\"\n", pg.notice);
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* UTF-16 */
+    utf16(&b, "<title>Caf\xc3\xa9</title><p>Wave: \xf0\x9f\x8c\x8a, lone: \x01.</p><p>&amp; \xe4\xb8\xad</p>", 0, 1);
+    page("text/html", "", b.s, b.len, "UTF-16LE");
+    check(pg_ok && !strcmp(pg.title, "Caf\xc3\xa9") &&
+          !strcmp(pg.text, "Wave: \xf0\x9f\x8c\x8a, lone: \xef\xbf\xbd.\n\n& \xe4\xb8\xad"),
+          "UTF-16LE with its byte order mark: decoded, surrogate pairs joined, a lone surrogate U+FFFD");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    utf16(&b, "<title>Caf\xc3\xa9</title><p>Wave: \xf0\x9f\x8c\x8a, lone: \x01.</p><p>&amp; \xe4\xb8\xad</p>", 1, 1);
+    sb_add(&b, "\x00", 1);
+    page("", "windows-1252", b.s, b.len, "UTF-16BE");
+    check(pg_ok && !strcmp(pg.title, "Caf\xc3\xa9") &&
+          !strcmp(pg.text, "Wave: \xf0\x9f\x8c\x8a, lone: \xef\xbf\xbd.\n\n& \xe4\xb8\xad\n\n\xef\xbf\xbd"),
+          "UTF-16BE: its byte order mark wins over a charset and over no Content-Type; an odd last byte is U+FFFD");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    utf16(&b, "<p>le \xc3\xa9</p>", 0, 0);
+    page("text/html", "utf-16le", b.s, b.len, "utf-16le label");
+    check(pg_ok && !strcmp(pg.text, "le \xc3\xa9"), "charset=utf-16le without a byte order mark");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    utf16(&b, "<p>be \xc3\xa9</p>", 1, 0);
+    page("text/html", "UTF-16BE", b.s, b.len, "utf-16be label");
+    check(pg_ok && !strcmp(pg.text, "be \xc3\xa9"), "charset=UTF-16BE without a byte order mark");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    /* paths no test reached before */
+    page("text/html", "", LIT("<meta http-equiv=content-type content=\"text/html; charset=windows-1252\">caf\xc3\xa9"), "unquoted");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\x83\xc2\xa9"), "an unquoted charset in http-equiv's content");
+    text_is("abc</", "abc</", "</ at the very end of the body is text");
+    for(i = 0; i < 125; i++) sb_str(&b, "<div>");          /* the stack holds 128: the root and 127 more */
+    sb_str(&b, "<table><tr><td>a</td><td>b</td></tr></table>x");
+    page("text/html", "utf-8", b.s, b.len, "a cell that does not fit on the stack");
+    check(pg_ok && !strcmp(pg.text, "ab\nx"), "a row on the stack's last place: cells past it are only their text");
+    if(pg_ok && strcmp(pg.text, "ab\nx")) printf("  got \"%s\"\n", pg.text);
+    b.len = 0;
+    for(i = 0; i < 126; i++) sb_str(&b, "<div>");
+    sb_str(&b, "<table><tr><td>a</td><td>b</td></tr></table>x");
+    page("text/html", "utf-8", b.s, b.len, "a row that does not fit on the stack");
+    check(pg_ok && !strcmp(pg.text, "a\nb\nx"), "a table on the stack's last place: each cell's row is wanted, none fits");
+    if(pg_ok && strcmp(pg.text, "a\nb\nx")) printf("  got \"%s\"\n", pg.text);
+    free(b.s);
+    /* a link that shows no text: its aria-label, its title, or the first one inside it */
+    text_is("<table><tr><td><a id=up_1 href=\"vote?id=1&amp;how=up\"><div class=\"votearrow\" title=\"upvote\"></div></a></td>"
+            "<td><a href=\"item?id=1\">A story</a></td></tr></table>", "upvote[1] | A story[2]",
+            "an empty link takes the title of an element inside it (a vote arrow)");
+    check(link_is(1, "https://example.test/dir/vote?id=1&how=up", 1, "upvote"), "which is its label too");
+    text_is("see <a href=/h aria-label=\" Home   page \" title=\"Go home\"><span title=\"inner\"></span></a>, "
+            "<a href=/t title=\"Tide&#10;tables\"><img src=t.png></a>, <a href=/s><svg aria-label=\"Share\" title=\"Not this\"><path/></svg></a>, "
+            "<a href=/i><b></b><span title=\"More\" aria-label=\"Info\"></span><i title=\"Later\"></i></a>.",
+            "see Home page[1], Tide tables[2], Share[3], Info[4].",
+            "the <a>'s aria-label, else its title, else the first inside: aria-label before title on one element");
+    check(link_is(1, "https://example.test/h", 1, "Home page") && link_is(2, "https://example.test/t", 1, "Tide tables") &&
+          link_is(3, "https://example.test/s", 1, "Share") && link_is(4, "https://example.test/i", 1, "Info"), "their labels");
+    text_is("<a href=/e><div></div></a> <a href=/f aria-label=\"  \" title=\"\"><span title=\"&#x200B;\"></span></a> "
+            "<a href=/x aria-label=\"Label\">Text</a> <a href=/y aria-label=\"A\x1b[2JB&#x202E;C\"></a>",
+            "[1] [2] Text[3] A[2JBC[4]", "nothing at all: [N] alone; text wins over aria-label; the attribute is safe text");
+    check(link_is(1, "https://example.test/e", 1, "") && link_is(3, "https://example.test/x", 1, "Text") &&
+          link_is(4, "https://example.test/y", 1, "A[2JBC"), "and labels to match");
+    body = malloc(3200);                            /* the tag and 1500 two-byte characters */
+    strcpy(body, "<a href=/l title=\"");
+    for(i = 0; i < 1500; i++) strcat(body, "\xc3\xa9");
+    strcat(body, "\"></a>");
+    page("text/html", "utf-8", body, strlen(body), "a long title");
+    check(pg_ok && pg.link_count == 1 && strlen(pg.links[0].label) <= UT_FIELD_MAX && strlen(pg.links[0].label) > UT_FIELD_MAX - 4,
+          "a title for a label is bounded by UT_FIELD_MAX");
+    free(body);
+
+    /* the rest of what a coverage run found unreached */
+    page("text/html", "", LIT("<meta http-equiv=content-type content=\"text/html\">caf\xc3\xa9"), "a Content-Type without charset");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\xa9"), "a <meta> Content-Type without a charset: the bytes decide");
+    page("text/html", "", LIT("<meta http-equiv=content-type content=\"text/html; charset ; charset = windows-1252\">caf\xc3\xa9"),
+         "charset = x");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\x83\xc2\xa9"), "spaces around a charset's = (after a charset with none)");
+    page("text/html", "", LIT("<meta http-equiv=content-type content=\"text/html; charset='windows-1252\">caf\xc3\xa9"), "quote");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\xa9"), "a charset whose quote never closes is none");
+    page("text/html", "", LIT("<meta/charset=windows-1252>caf\xc3\xa9"), "meta/");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\x83\xc2\xa9"), "<meta/charset=...>");
+    page("text/html", "", LIT("caf\xc3\xa9 \xe2\x82"), "a 3-byte character cut short");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\xa9 \xef\xbf\xbd\xef\xbf\xbd"), "a character cut after its second byte is still UTF-8");
+    page("text/html", "", LIT("caf\xc3\xa9 \xe2" "A"), "a lead byte before ASCII");
+    check(pg_ok && !strcmp(pg.text, "caf\xc3\x83\xc2\xa9 \xc3\xa2" "A"), "a lead byte followed by ASCII is not UTF-8");
+    page("", "", LIT("\xef\xbb\xbf  <p>sniffed"), "a byte order mark before sniffing");
+    check(pg_ok && !strcmp(pg.text, "sniffed"), "no Content-Type: sniffed after a UTF-8 byte order mark");
+    text_is("<ol start=\" 7\"><li>s</ol><input type=image><input type=button><pre>\r\nx</pre>",
+            "7. s\n\n[button: Submit][button]\n\nx", "start with spaces; image and button inputs without labels; CR LF after <pre>");
+    b.s = NULL; b.len = b.cap = 0;
+    for(i = 0; i < 48; i++) {                       /* the text full at each byte of two rows: " | ", "\n", "[N]", " " */
+        size_t k, before = UT_TEXT_MAX - (sizeof(NOTICE) - 1) - 2 - i;     /* the pre's text, then its blank line */
+        int ok;
+        b.len = 0;
+        sb_str(&b, "<pre>");
+        for(k = 0; k < before; k++) sb_add(&b, "x", 1);
+        sb_str(&b, "</pre><table>");
+        for(k = 0; k < 4; k++) sb_str(&b, "<tr><td>ab</td><td>cd</td><td><a href=/l>e</a> f</td></tr><tr><td>g<br>h</td></tr>");
+        sb_str(&b, "</table>");
+        page("text/html", "utf-8", b.s, b.len, "a table at the text's end");
+        ok = pg_ok && (pg.truncated & UT_TRUNC_TEXT) && pg.text_len <= UT_TEXT_MAX;
+        if(!ok) printf("  cut %u bytes into the table: not cut as it should be\n", (unsigned)i);
+        checks++;
+        if(!ok) failures++;
+    }
+    free(b.s);
+    (void)len;
 }
 
 static void misc(void) {
@@ -943,6 +1220,10 @@ static void alloc_failures(const char *dir) {
         "<h1 id=h>Head</h1><table><tr><td>1<td>2</table><base href=\"https://other.test/\">"));
     fail_each("a page in an unknown charset", "text/html", "shift_jis", LIT("<p>abc\x82\xa0</p><form></form>"));
     fail_each("plain text", "text/plain", "", LIT("one\ttwo\nthree"));
+    fail_each("a UTF-16 page", "text/html", "", LIT("\xff\xfe<\0p\0>\0x\0"));
+    fail_each("links before a late base", "text/html", "", LIT("<a href=a>A</a><a href=#f>F</a><p id=x>x</p><a href=b>B</a>"
+                                                               "<base href=\"https://other.test/d/\"><a href=c>C</a>"));
+    fail_each("a data table", "text/html", "", LIT("<table><tr><th>a</th><td></td></tr><tr><td><a href=/x></a></td></tr></table>"));
     snprintf(path, sizeof(path), "%s/article.html", dir);
     article = read_file(path, &len);
     if(article) fail_each("the article fixture", "text/html", "utf-8", article, len);
@@ -976,11 +1257,13 @@ static void torture(void) {
         "</select>", "<button>", "</button>", "<input type=submit value=\"", "<input>", "<form>", "javascript:",
         "#", "/", "http://", "https://x.test/", "\\", "%", "%zz", "<b>", "<frame src=", "id=", " id=x",
         "<span id=\"", "<center>", "<plaintext>", "<html>", "<body>", "</body>", "</html>", "<head>", "</head>",
-        "<q>", "<font color=red>", "<h6 id=", "<wbr>", "&lrm;", "&#x2028;", "\xe2\x80\xa8", "\xc2\xa0", "\xc2\xad"
+        "<q>", "<font color=red>", "<h6 id=", "<wbr>", "&lrm;", "&#x2028;", "\xe2\x80\xa8", "\xc2\xa0", "\xc2\xad",
+        "\xe2\x80\x8b", "&#x2060;", "\xef\xb8\x8f", "&#xFE0E;", "\xcd\x8f", "\xe1\xa0\x8e", "<th>", "</th>", "<svg><title/>",
+        "<script><!--", "<script>", "--><", "\xff\xfe", "\xfe\xff", "\x00<\x00p\x00>"
     };
     static const char *const words[] = { "surf", "tide", "caf\xc3\xa9", "wave", "\xe4\xb8\xad", "board", "a", "AT&T" };
     static const char *const types[] = { "text/html", "text/html", "text/html", "text/plain", "", "application/xhtml+xml" };
-    static const char *const sets[] = { "", "", "utf-8", "windows-1252", "iso-8859-1", "shift_jis", "utf-16" };
+    static const char *const sets[] = { "", "", "utf-8", "windows-1252", "iso-8859-1", "shift_jis", "utf-16", "utf-16be" };
     unsigned k, n, i, bad = 0;
     char msg[200];
     for(k = 0; k < 4000; k++) {
@@ -1002,7 +1285,7 @@ static void torture(void) {
                 sb_add(&b, &ch, 1);
             }
         }
-        r = response(PAGE_URL, types[rnd() % 6], sets[rnd() % 7], b.s, b.len);
+        r = response(PAGE_URL, types[rnd() % 6], sets[rnd() % 8], b.s, b.len);
         if(ut_render(r, &d, err, sizeof(err))) why = "ut_render failed";
         else {
             why = bad_doc(&d, live_bytes - before);
@@ -1070,6 +1353,8 @@ static void timed(const char *what, const char *body, size_t len, double limit_m
     response_free(r);
 }
 
+static size_t n0;
+
 static void bounded(void) {
     static const struct { const char *what, *head, *unit, *tail; } pages[] = {
         { "nested <div>", "", "<div>", "x" }, { "only <", "", "<", "" }, { "only <a", "", "<a", "" },
@@ -1098,6 +1383,21 @@ static void bounded(void) {
     }
     for(n = 0; b.len < MIB; n++) sb_printf(&b, "<span id=a%u>x</span>", n);
     timed("distinct ids", b.s, b.len, 5000, NULL);
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+    for(n = 0; n < 2048; n++) sb_printf(&b, "<p id=\"s%u\"><a href=\"/w/p%u?a=1&amp;b=2#c\">Link %u</a></p>\n", n, n, n);
+    timed("2048 links and 2048 ids", b.s, b.len, 5000, NULL);
+    page("text/html", "utf-8", b.s, b.len, "2048 links and 2048 ids");
+    check(pg_ok && pg.link_count == 2048 && pg.anchor_count == 2048 && !pg.truncated, "all 2048 links and 2048 ids are kept");
+    b.len = 0;
+    for(n = 0; n < 2048; n++) sb_printf(&b, "<a name=e%u></a>", n);
+    sb_str(&b, "<pre>");
+    while(b.len < MIB) sb_str(&b, " \n");
+    sb_str(&b, "</pre>end");
+    timed("2048 waiting anchors and lines of spaces", b.s, b.len, 5000, NULL);
+    page("text/html", "utf-8", b.s, b.len, "anchors before blank lines");
+    check(pg_ok && pg.anchor_count == 2048 && !strcmp(pg.text, "end") && !ut_anchor_offset(&pg, "e2047", &n0) && !n0,
+          "anchors before lines of nothing but spaces point where the next text starts");
     free(b.s);
     body = repeat("", "<div>", "", 50000, &len);
     b.s = NULL; b.len = b.cap = 0;
@@ -1141,6 +1441,7 @@ int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : "tests/fixtures/undertow";
     size_t i;
     if(argc > 2 && !strcmp(argv[1], "--dump")) return dump_file(argc, argv);
+    setvbuf(stdout, NULL, _IOLBF, 0);               /* a test that hangs still shows how far it got */
     for(i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); i++) fixture(dir, fixtures[i]);
     entities();
     charsets();
@@ -1149,7 +1450,9 @@ int main(int argc, char **argv) {
     links();
     anchors();
     limits();
+    link_bytes();
     structure();
+    review_round();
     misc();
     ut_document_free(&pg);
     alloc_failures(dir);

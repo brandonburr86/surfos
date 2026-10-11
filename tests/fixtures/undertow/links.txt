@@ -13,3 +13,5 @@ A name without an address is no link.
 An empty address is no link either.
 
 Spaces inside an address[14], a space in a host[15] and IPv6[16].
+
+Links with no text: upvote[17], Home[18], [19].
