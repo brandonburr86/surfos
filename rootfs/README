@@ -1,3 +1,4 @@
 rootfs/ is packed into build/images/initrd.tar by tools/mkimage.py and loaded
 with "qemu -initrd" (or a GRUB "module" line). The ramdisk driver exposes it
 as block device rd0; the tar file system (milestone M4) mounts it as /initrd.
+etc/undertow.conf holds the settings of Undertow (bin/undertow, the web browser): the clock's offset, fixed host addresses.
