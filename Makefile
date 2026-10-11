@@ -564,6 +564,19 @@ unittest: test-undertow-util
 .PHONY: test-undertow-util
 
 # -- http.c (track H) --
+# http.c against scripted servers: the test provides the transport's calls itself, so neither
+# transport.o nor TLS is linked; url.c resolves the redirects as it does in the program.
+$(BUILD)/host/test_undertow_http: tests/host/test_undertow_http.c $(BUILD)/host/undertow/http.o \
+                                  $(BUILD)/host/undertow/url.o $(BUILD)/host/undertow/util.o \
+                                  $(BUILD)/host/undertow/alloc.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-http: $(BUILD)/host/test_undertow_http $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_http
+unittest: test-undertow-http
+.PHONY: test-undertow-http
 
 # -- html.c (track R) --
 
