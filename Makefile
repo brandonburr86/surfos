@@ -503,3 +503,25 @@ unittest: test-dns
 test-entropy: $(KERNEL) $(INITRD)
 	$(PYTHON) tools/qemu-run.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --entropy-test
 .PHONY: test-entropy
+
+# Undertow URL parsing stays pure user code and is also tested on the host.
+$(BUILD)/host/undertow/url.o: user/undertow/url.c user/undertow/url.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Dmalloc=ut_test_malloc -Dfree=ut_test_free -c $< -o $@
+
+# Compile with the real freestanding user headers as well, before runtime integration.
+$(BUILD)/user/undertow/%.o: user/undertow/%.c user/undertow/url.h
+	@mkdir -p $(dir $@)
+	@echo "UCC  $<"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/host/test_undertow_url: tests/host/test_undertow_url.c $(BUILD)/host/undertow/url.o user/undertow/url.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Iuser/undertow tests/host/test_undertow_url.c $(BUILD)/host/undertow/url.o -o $@
+
+test-undertow-url: $(BUILD)/host/test_undertow_url $(BUILD)/user/undertow/url.o
+	$(BUILD)/host/test_undertow_url
+unittest: test-undertow-url
+.PHONY: test-undertow-url
