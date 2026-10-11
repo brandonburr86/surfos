@@ -1,4 +1,5 @@
-# tables: a line per row, " | " between cells that show something, line breaks inside a cell kept, a table in a table flattened
+# tables: a line per row; in a data table (one with a <th>) every cell keeps its column, an empty one is -; in a layout table
+# (no <th>) " | " joins only the cells that show something; line breaks inside a cell kept; a table in a table flattened
 url: https://example.test/dir/page.html
 type: text/html
 charset:
