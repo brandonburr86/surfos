@@ -249,6 +249,14 @@ SMOKE = [
     # 10/11/26 (Undertow, the web browser, user/undertow/): the program is in the initrd and answers; its own
     # end-to-end tests against web fixtures are tools/qemu-web.py (make test-web)
     ('undertow --help', ['usage: undertow [ADDRESS]', 'undertow --dump ADDRESS']),
+    # 10/11/26 (track F): a page of the harness's HTTP server over HTTP, by --dump (the text, the status line on stderr,
+    # exit status 0), then in the browser (Loading, the view, the prompt, q). QEMU's default CPU has no RDRAND, so no
+    # HTTPS here: tools/qemu-web.py (make test-web) tests the rest against its fixtures
+    ('undertow --dump http://10.0.2.2:{http}/undertow-dump', ['SurfOS HTTP test OK: /undertow-dump',
+                                                              'HTTP 200 OK, HTTP unencrypted']),
+    ('echo status $?', ['status 0']),
+    ('undertow http://10.0.2.2:{http}/undertow-view', ['Loading http://10.0.2.2:', '[HTTP unencrypted]',
+                                                       'SurfOS HTTP test OK: /undertow-view', 'undertow> '], [('q', [])]),
     # -- track S (the session, the screen, the commands): the welcome screen, what HTTPS needs (this CPU has no
     # RDRAND), the undertow> prompt and quit; bad usage (exit 2); an address that is refused (exit 1, and in the
     # browser, a message under "Loading ..."; the connection to the host's port 1 fails, or the stand-ins refuse it)

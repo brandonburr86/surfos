@@ -97,6 +97,13 @@ void ut_view_welcome(FILE *out, const struct ut_term *t, const char *clock, cons
 void ut_view_text(FILE *out, const struct ut_term *t, const char *text, size_t len,
                   const struct ut_span *spans, size_t nspans);
 
+/* --dump's output: the document's text line by line, then, when it has links, an empty line,
+   "Links:" and "[N] address" for each; every line through ut_safe_text(); on a terminal (t not
+   NULL) each character as ut_view_stand_in() draws it, the lines never wrapped (a script reading
+   the serial line keeps them whole). 0, or -1 and why when not all of it could be written: out of
+   memory (then nothing is written), or out's error flag (ferror()) once it is flushed. */
+int ut_view_dump(FILE *out, const struct ut_term *t, const struct ut_document *d, char *err, size_t cap);
+
 /* before, s and after on one row: s (safe text) is cut short with an ellipsis to fit. */
 void ut_view_line(FILE *out, const struct ut_term *t, const char *before, const char *s, const char *after);
 

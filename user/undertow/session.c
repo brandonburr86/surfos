@@ -153,10 +153,42 @@ int ut_session_move(struct ut_session *s, int direction) {
 
 /**** links and parts of a page ****/
 
+/* does ref start with a scheme (RFC 3986: a letter, then letters, digits, + - .) other than http and https? */
+static int other_scheme(const char *ref) {
+    static const char http[] = "https";
+    size_t i = 0, k;
+    if(!((ref[0] >= 'a' && ref[0] <= 'z') || (ref[0] >= 'A' && ref[0] <= 'Z'))) return 0;
+    while((ref[i] >= 'a' && ref[i] <= 'z') || (ref[i] >= 'A' && ref[i] <= 'Z') || (ref[i] >= '0' && ref[i] <= '9') ||
+          ref[i] == '+' || ref[i] == '-' || ref[i] == '.') i++;
+    if(ref[i] != ':') return 0;
+    if(i != 4 && i != 5) return 1;
+    for(k = 0; k < i; k++) if((ref[k] | 0x20) != http[k]) return 1;
+    return 0;
+}
+
+void ut_session_why(const struct ut_page *p, const char *ref, char *why, size_t cap) {
+    struct ut_url *u;
+    if(!ref) ref = "";
+    if(other_scheme(ref)) {
+        ut_error(why, cap, "Undertow opens only http: and https: addresses");
+        return;
+    }
+    u = malloc(sizeof(*u));                     /* 6 KB: not on the stack */
+    if(u && p && ut_url_resolve(&p->url, ref, u, why, cap)) {
+        free(u);
+        ut_error(why, cap, "%s", why);          /* url.c's message, made safe all the same */
+        return;
+    }
+    free(u);
+    ut_error(why, cap, "Undertow cannot open it");
+}
+
 int ut_session_link(const struct ut_session *s, unsigned long n, struct ut_url *out, char *err, size_t cap) {
     const struct ut_page *p = ut_session_current(s);
     const struct ut_link *l;
     unsigned long count;
+    char ref[UT_FIELD_MAX], why[UT_ERR_MAX];
+    size_t len;
     if(!p) return ut_error(err, cap, "no page is open: open an address first");
     count = (unsigned long)p->doc.link_count;
     if(!count) return ut_error(err, cap, "there is no link %lu: this page has no links", n);
@@ -164,9 +196,14 @@ int ut_session_link(const struct ut_session *s, unsigned long n, struct ut_url *
         return ut_error(err, cap, "there is no link %lu: this page has %lu link%s, 1 to %lu (links lists them)", n,
                         count, count == 1 ? "" : "s", count);
     l = &p->doc.links[n - 1];
-    if(!l->usable)
-        return ut_error(err, cap, "link %lu goes to %.200s%s: Undertow opens only http: and https: addresses", n,
-                        l->url ? l->url : "", l->url && strlen(l->url) > 200 ? "..." : "");
+    if(!l->usable) {
+        len = l->url ? strlen(l->url) : 0;
+        ut_safe_text(ref, sizeof(ref), l->url, len > 200 ? 200 : len, 0);
+        ut_session_why(p, l->url, why, sizeof(why));
+        if(!strcmp(why, "Undertow cannot open it"))
+            return ut_error(err, cap, "link %lu goes to %s%s, which Undertow cannot open", n, ref, len > 200 ? "..." : "");
+        return ut_error(err, cap, "link %lu goes to %s%s: %s", n, ref, len > 200 ? "..." : "", why);
+    }
     return ut_url_parse(l->url, out, err, cap);
 }
 
@@ -236,7 +273,7 @@ int ut_session_find(struct ut_session *s, const char *text, int next, char *err,
         at = search(p->doc.text, len, 0, from, s->search, n);
         wrapped = 1;
     }
-    if(at == NONE) return ut_error(err, cap, "\"%.200s\" is not on this page", s->search);
+    if(at == NONE) return ut_error(err, cap, "\"%.200s\" was not found on this page", s->search);
     p->position = at;
     s->match_page = p;
     s->match_at = at;

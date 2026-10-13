@@ -14,6 +14,7 @@ UT_TEXT_MAX bytes, and the terminal may have changed its size since.
 */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <surfos/cp437.h>
 #include "undertow.h"
@@ -175,6 +176,8 @@ struct rows {
     unsigned int hang;          /* the indent of its continuation rows */
     size_t start, end, next;    /* the row shows [start, end); the next row starts at next (len: none) */
     int cont;                   /* the row continues its line: hang spaces come first */
+    int labels;                 /* the welcome screen's: a word and two spaces at a line's start
+                                   ("HTTPS  ") is a label, its rows go under the text after it */
 };
 
 /* a line's leading spaces and list marker ("* ", "12. "), when 20 columns are left after them */
@@ -183,7 +186,10 @@ static unsigned int hang_of(const struct rows *r) {
     size_t i = r->line, lead, mark = 0, d;
     while(i < r->eol && s[i] == ' ') i++;
     lead = i - r->line;
-    if(i + 1 < r->eol && s[i] == '*' && s[i + 1] == ' ') {
+    if(r->labels && !lead) {
+        for(d = i; d < r->eol && ((s[d] >= 'A' && s[d] <= 'Z') || (s[d] >= 'a' && s[d] <= 'z')); d++);
+        if(d > i && d + 2 < r->eol && s[d] == ' ' && s[d + 1] == ' ') mark = d - i + 2;
+    } else if(i + 1 < r->eol && s[i] == '*' && s[i + 1] == ' ') {
         mark = 2;
     } else {
         for(d = i; d < r->eol && d - i < 9 && s[d] >= '0' && s[d] <= '9'; d++);
@@ -262,17 +268,23 @@ static int rows_next(struct rows *r) {
 }
 
 /* the row that holds offset (offsets past the text: its last row); 0 when the text has none */
-static int rows_at(struct rows *r, const struct ut_term *t, const char *text, size_t len, size_t offset) {
+static int rows_from(struct rows *r, const struct ut_term *t, const char *text, size_t len, size_t offset,
+                     int labels) {
     size_t line;
     r->t = t;
     r->s = (const unsigned char *)text;
     r->len = len;
+    r->labels = labels;
     if(!len || !text) return 0;
     if(offset >= len) offset = len - 1;
     for(line = offset; line > 0 && text[line - 1] != '\n'; line--);
     rows_line(r, line);
     while(r->next <= offset && rows_next(r));
     return 1;
+}
+
+static int rows_at(struct rows *r, const struct ut_term *t, const char *text, size_t len, size_t offset) {
+    return rows_from(r, t, text, len, offset, 0);
 }
 
 /* the index of the row that holds offset, and how many rows there are */
@@ -466,7 +478,7 @@ static void title_line(FILE *out, const struct ut_term *t, const struct ut_page 
     struct state st;
     const char *title = p->doc.title && p->doc.title[0] ? p->doc.title : p->url.host;
     size_t tlen = strlen(title);
-    unsigned int twidth = text_cols(t, title, tlen), right, room = 0, used, k;
+    unsigned int twidth = text_cols(t, title, tlen), right, room = 0, used;
     int step, prefix = 0, code = 0, via = 0;
     make_state(p, &st, t->utf8);
     for(step = 0; step < 6; step++) {
@@ -511,15 +523,14 @@ static void title_line(FILE *out, const struct ut_term *t, const struct ut_page 
     used += put_cut(out, t, title, tlen, room - used);
     sgr(out, t, C_RESET);
     spaces(out, t->cols - right - used);
-    if(st.code[code][0]) {
+    if(st.code[code][0]) {                      /* drawn as measured: through the stand-ins (a server's reason) */
         sgr(out, t, C_ERROR);
-        fputs(st.code[code], out);
+        put_cut(out, t, st.code[code], strlen(st.code[code]), t->cols);
         sgr(out, t, C_RESET);
         putc(' ', out);
     }
     sgr(out, t, st.via_colour);
-    k = (unsigned int)strlen(st.via[via]);
-    fwrite(st.via[via], 1, k, out);
+    put_cut(out, t, st.via[via], strlen(st.via[via]), t->cols);
     sgr(out, t, C_RESET);
     end_row(out, t, t->cols);
 }
@@ -693,7 +704,7 @@ void ut_view_welcome(FILE *out, const struct ut_term *t0, const char *clock, con
     }
     end_row(out, &t, used);
     if(full) rule(out, &t);
-    if(rows_at(&r, &t, b.text, b.len, 0)) {
+    if(rows_from(&r, &t, b.text, b.len, 0, 1)) {
         do {
             put_row(out, &r, b.spans, b.nspans);
             shown++;
@@ -707,6 +718,61 @@ void ut_view_welcome(FILE *out, const struct ut_term *t0, const char *clock, con
     } else {
         end_row(out, &t, put_cut(out, &t, "help, quit", 10, t.cols));
     }
+}
+
+/**** --dump ****/
+
+/* safe UTF-8 (n bytes): as it is into a file or a pipe; on a terminal each character as it draws it */
+static void dump_drawn(FILE *out, const char *s, size_t n, const struct ut_term *t) {
+    unsigned int cp;
+    const char *alt;
+    size_t i, k;
+    if(!t) {
+        fwrite(s, 1, n, out);
+        return;
+    }
+    for(i = 0; i < n; i += k) {
+        k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
+        alt = ut_view_stand_in(t, cp);
+        if(alt) fputs(alt, out);
+        else fwrite(s + i, 1, k, out);
+    }
+}
+
+int ut_view_dump(FILE *out, const struct ut_term *t0, const struct ut_document *d, char *err, size_t cap) {
+    struct ut_term tt;
+    const struct ut_term *t = NULL;
+    size_t start, end, longest = 0, i, n;
+    char *buf;
+    if(t0) {
+        tt = fixed(t0);
+        t = &tt;
+    }
+    for(start = end = 0; end <= d->text_len; end++)         /* one buffer for the longest line or address */
+        if(end == d->text_len || d->text[end] == '\n') {
+            if(end - start > longest) longest = end - start;
+            start = end + 1;
+        }
+    for(i = 0; i < d->link_count; i++)
+        if(d->links[i].url && strlen(d->links[i].url) > longest) longest = strlen(d->links[i].url);
+    buf = malloc(longest * 3 + 1);                          /* an ill-formed byte's U+FFFD: 3 bytes */
+    if(!buf) return ut_error(err, cap, "out of memory for the page's text");
+    for(start = 0; start < d->text_len; start = end + 1) {
+        for(end = start; end < d->text_len && d->text[end] != '\n'; end++);
+        dump_drawn(out, buf, ut_safe_text(buf, longest * 3 + 1, d->text + start, end - start, 1), t);
+        putc('\n', out);
+    }
+    if(d->link_count) fputs("\nLinks:\n", out);
+    for(i = 0; i < d->link_count; i++) {
+        const char *url = d->links[i].url ? d->links[i].url : "";
+        n = ut_safe_text(buf, longest * 3 + 1, url, strlen(url), 1);
+        fprintf(out, "[%lu] ", (unsigned long)i + 1);
+        dump_drawn(out, buf, n, t);
+        putc('\n', out);
+    }
+    free(buf);
+    if(fflush(out) || ferror(out)) return ut_error(err, cap, "the page could not be written whole");
+    return 0;
 }
 
 void ut_view_line(FILE *out, const struct ut_term *t0, const char *before, const char *s, const char *after) {

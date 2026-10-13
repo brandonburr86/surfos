@@ -47,6 +47,9 @@ static const struct fake site[] = {
     { "https://b.test/", "Page B", "Page B is short.", { NULL }, { NULL } },
     { "https://c.test/", "Page C", "Page C.", { NULL }, { NULL } },
     { "https://pct.test/", "Percent", "Intro.\naA is a part named with a capital.", { NULL }, { "aA", NULL } },
+    { "https://bad.test/", "Unusable links", "Links Undertow cannot open, for their reasons.",
+      { "!mailto:x@example.com", "!http://user:pw@example.com/", "!//[::1]/x", "!HTTPS://example.com:99999/",
+        "!/fine/path" }, { NULL } },
     { "https://find.test/", "Find",
       "Alpha foo beta.\nFOO in capitals, Foo in title case.\ncaf\xc3\xa9 and CAF\xc3\x89 differ beyond ASCII.\nlast foo",
       { NULL }, { NULL } },
@@ -395,6 +398,31 @@ static void links(void) {
     check(load(s, "https://a.test/#Missing", &found) == 0 && found == 0 && ut_session_current(s)->position == 0,
           "a load with a missing fragment: the top, and found says so");
     check(load(s, "https://b.test/#", &found) == 0 && found == 1 && ut_session_current(s)->position == 0, "an empty fragment");
+    /* unusable links say why: another scheme, or what url.c refuses in an http(s) reference */
+    check(load(s, "https://bad.test/", &found) == 0, "open a page of unusable links");
+    {
+        static const char *const why[] = {
+            "link 1 goes to mailto:x@example.com: Undertow opens only http: and https: addresses",
+            "link 2 goes to http://user:pw@example.com/: URL credentials are unsupported",
+            "link 3 goes to //[::1]/x: IPv6 is unsupported",
+            "link 4 goes to HTTPS://example.com:99999/: URL port exceeds 65535",
+            "link 5 goes to /fine/path, which Undertow cannot open"
+        };
+        size_t i;
+        int ok = 1;
+        for(i = 0; i < 5; i++) {
+            err[0] = 0;
+            if(ut_session_link(s, i + 1, u, err, sizeof(err)) != -1 || strcmp(err, why[i]) || !safe_line(err)) {
+                printf("  link %u: %s\n", (unsigned)i + 1, err);
+                ok = 0;
+            }
+        }
+        check(ok, "unusable links: the real reason for each");
+        ut_session_why(ut_session_current(s), "http://a@b/", err, sizeof(err));
+        check(!strcmp(err, "URL credentials are unsupported"), "ut_session_why() for the links list");
+        ut_session_why(ut_session_current(s), "ftp://x/\033[2J\xe2\x80\xae", err, sizeof(err));
+        check(!strcmp(err, "Undertow opens only http: and https: addresses"), "another scheme, whatever follows it");
+    }
     check(load(s, "https://pct.test/#a%41", &found) == 0 && found == 1 &&
           ut_session_current(s)->position == (size_t)(strstr(ut_session_current(s)->doc.text, "aA") -
                                                       ut_session_current(s)->doc.text), "a fragment with %41 finds aA");
@@ -438,8 +466,8 @@ static void find(void) {
           ut_session_current(s)->position == (size_t)(strstr(text, "caf\xc3\xa9") - text),
           "beyond ASCII the bytes must be the same: CAF\xc3\x89 is not caf\xc3\xa9");
     ut_session_current(s)->position = 3;
-    check(ut_session_find(s, "nowhere", 0, err, sizeof(err)) == -1 && strstr(err, "nowhere") && safe_line(err) &&
-          ut_session_current(s)->position == 3, "no match: why, and the position stays");
+    check(ut_session_find(s, "nowhere", 0, err, sizeof(err)) == -1 && strstr(err, "\"nowhere\" was not found on this page") &&
+          safe_line(err) && ut_session_current(s)->position == 3, "no match: why, and the position stays");
     check(ut_session_find(s, "", 0, err, sizeof(err)) == -1 && ut_session_current(s)->position == 3, "nothing to find");
     big = malloc(UT_SEARCH_MAX + 2);
     memset(big, 'a', UT_SEARCH_MAX + 1);

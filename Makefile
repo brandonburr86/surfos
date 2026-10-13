@@ -652,6 +652,17 @@ test-undertow-view: $(BUILD)/host/test_undertow_view $(BUILD)/user/bin/undertow
 unittest: test-undertow-view
 .PHONY: test-undertow-view
 
+# command.c: what a line typed at the prompt asks for (main.c carries it out)
+$(BUILD)/host/test_undertow_command: tests/host/test_undertow_command.c $(BUILD)/host/undertow/command.o
+	@mkdir -p $(dir $@)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(UT_HOSTFLAGS) $^ -o $@
+
+test-undertow-command: $(BUILD)/host/test_undertow_command $(BUILD)/user/bin/undertow
+	$(BUILD)/host/test_undertow_command
+unittest: test-undertow-command
+.PHONY: test-undertow-command
+
 # -- transport.c and Mbed TLS (track T) --
 # Undertow's HTTPS (10/11/26): Mbed TLS 3.6.7, pinned by SHA-256 in third_party/undertow-lock.json and never
 # committed (third_party/README.md). tools/fetch-webdeps.py downloads the release archive (or takes the cached,
@@ -690,7 +701,7 @@ MBEDTLS_SOURCES = $(addprefix $(MBEDTLS_DIR)/library/,$(MBEDTLS_SRC) ssl_tls12_s
 $(MBEDTLS_SOURCES): | $(MBEDTLS_STAMP)
 	@test -f $@ || { echo "$@ is not in the extracted Mbed TLS: run tools/fetch-webdeps.py --check"; exit 1; }
 
-$(MBEDTLS_OBJ): $(BUILD)/user/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
+$(filter-out $(BUILD)/user/mbedtls/ssl_tls13_keys.o,$(MBEDTLS_OBJ)): $(BUILD)/user/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
                                            user/undertow/tls_platform.h
 	@mkdir -p $(dir $@)
 	@echo "UCC  $<"
@@ -745,7 +756,7 @@ MBEDTLS_HOST_OBJ   = $(MBEDTLS_SRC:%.c=$(BUILD)/host/mbedtls/%.o) $(BUILD)/host/
                      $(BUILD)/host/mbedtls/ssl_tls13_server.o
 MBEDTLS_HOST_LIB   = $(BUILD)/host/mbedtls/libmbedtls-host.a
 MBEDTLS_HOST_CONF  = $(MBEDTLS_CONF) -DMBEDTLS_USER_CONFIG_FILE='"tls_host_config.h"' -Itests/host/undertow
-$(MBEDTLS_HOST_OBJ): $(BUILD)/host/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
+$(filter-out $(BUILD)/host/mbedtls/ssl_tls13_keys.o,$(MBEDTLS_HOST_OBJ)): $(BUILD)/host/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_STAMP) user/undertow/tls_config.h \
                                                 user/undertow/tls_platform.h tests/host/undertow/tls_host_config.h
 	@mkdir -p $(dir $@)
 	@echo "HOSTCC $<"
@@ -784,9 +795,43 @@ unittest: test-webdeps
 .PHONY: test-webdeps
 
 # -- the browser in QEMU (track F) --
+# 10/11/26: the web fixtures (tools/web-fixtures.py: HTTP and HTTPS servers on 127.0.0.1 with a test CA made for each
+# run, which needs an OpenSSL 3 openssl command) and the end-to-end harness's own logic (tools/qemu-web.py: the test
+# initrd, a copy of the normal one that is never written, and its scenarios) on the host; then the browser in QEMU
+# against those fixtures, with its transcripts in build/web-test/O<level>/. The images make and make usb-image build
+# never hold the fixture CA: the harness makes its own initrd in a temporary directory.
+WEB_TESTDIR = build/web-test/O$(O)
+test-web-host:
+	$(PYTHON) -m unittest discover -s tests -p test_web_fixtures.py
+	$(PYTHON) -m unittest discover -s tests -p test_qemu_web.py
+unittest: test-web-host
+
+test-web: $(KERNEL) images
+	$(PYTHON) tools/qemu-web.py --qemu $(QEMU) --kernel $(KERNEL) --initrd $(INITRD) --output-dir $(WEB_TESTDIR) --test
+.PHONY: test-web test-web-host
 
 # Standalone file-browser integration checks; uses temporary QEMU disk copies.
 test-files: $(KERNEL) images
 	$(PYTHON) tools/qemu-files.py --qemu $(QEMU) --kernel $(KERNEL) --disk $(DISKIMG) --initrd $(INITRD)
 .PHONY: test-files
 test: test-files
+
+# A verified build-only patch fixes partial TLS 1.3 transform cleanup in 3.6.7.
+# Both target and host use this same generated file; the vendor extraction stays pristine.
+MBEDTLS_PATCHED = $(BUILD)/mbedtls-patched/ssl_tls13_keys.c
+MBEDTLS_PATCH = third_party/patches/mbedtls-3.6.7-tls13-cleanup.json
+$(MBEDTLS_PATCHED): $(MBEDTLS_DIR)/library/ssl_tls13_keys.c $(MBEDTLS_STAMP) $(MBEDTLS_PATCH) tools/patch-webdeps.py
+	$(PYTHON) tools/patch-webdeps.py --source $< --patch $(MBEDTLS_PATCH) --output $@
+
+$(BUILD)/user/mbedtls/ssl_tls13_keys.o: $(MBEDTLS_PATCHED) user/undertow/tls_config.h user/undertow/tls_platform.h
+	@mkdir -p $(dir $@)
+	$(Q)$(CC) $(MBEDTLS_CFLAGS) -I$(MBEDTLS_DIR)/library -c $< -o $@
+
+$(BUILD)/host/mbedtls/ssl_tls13_keys.o: $(MBEDTLS_PATCHED) user/undertow/tls_config.h user/undertow/tls_platform.h tests/host/undertow/tls_host_config.h
+	@mkdir -p $(dir $@)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -MMD -MP $(MBEDTLS_HOST_CONF) -I$(MBEDTLS_DIR)/library -c $< -o $@
+
+test-webpatch:
+	$(PYTHON) -m unittest discover -s tests -p test_webpatch.py
+unittest: test-webpatch
+.PHONY: test-webpatch

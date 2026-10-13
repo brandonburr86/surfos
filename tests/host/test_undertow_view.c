@@ -609,6 +609,32 @@ static void views(void) {
     view_shot(&s, &t, p, 0, NULL);
     check(!s.high && ends(s.row[0], "[HTTP 404 Nao Encontrado] [HTTP unencrypted]"), "ASCII: the reason phrase too");
     shot_free(&s);
+    /* the console draws UTF-8 as code page 437 cells: a reason phrase's zero-width characters
+       (stand-in: nothing) and its characters outside the set (U+00E3) are drawn as they were
+       measured, so the title line is one row and the view never reaches --More-- */
+    t = term(80, 25, 1, 0);
+    strcpy(p->reason, "Not\xe2\x80\x8b\xe2\x80\x8b\xe2\x80\x8b" "Found");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 NotFound] [HTTP unencrypted]"),
+          "console: a reason phrase with zero-width spaces draws as wide as it was measured");
+    shot_free(&s);
+    strcpy(p->reason, "N\xc3\xa3o\xc2\xad Encontrado\xe2\x81\xa0!");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 Nao Encontrado!] [HTTP unencrypted]"),
+          "console: a reason phrase beyond code page 437 (U+00E3, U+00AD, U+2060) as its stand-ins");
+    shot_free(&s);
+    t = term(40, 25, 1, 0);
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 40 && widest(&s) <= 40, "console, 40 columns: the title line still one row");
+    shot_free(&s);
+    t = term(80, 25, 1, 0);
+    t.remote = 1;
+    strcpy(p->reason, "N\xc3\xa3o Encontrado");
+    view_shot(&s, &t, p, 0, NULL);
+    check(s.n == 24 && s.cols[0] == 80 && ends(s.row[0], "[HTTP 404 N\xc3\xa3o Encontrado] [HTTP unencrypted]"),
+          "telnet: the reason phrase as it is");
+    shot_free(&s);
+    t = term(80, 25, 0, 0);
     p->status = 200;
     strcpy(p->reason, "OK");
 
@@ -704,6 +730,27 @@ static void welcome_and_lines(void) {
         free(all);
         shot_free(&s);
     }
+    /* the state lines as transport.c says them, long: their rows go under the text after the label */
+    for(i = 0; i < 2; i++) {
+        struct ut_term t = term(i ? 40 : 80, 25, 1, 0);
+        char *buf = NULL;
+        size_t len = 0;
+        FILE *f = open_memstream(&buf, &len);
+        int k, first = -1, ok;
+        ut_view_welcome(f, &t, "Clock  2026-10-11 14:05:09 UTC, from the hardware clock",
+                        "HTTPS  needs strong random numbers and this CPU has no RDRAND instruction; "
+                        "http:// addresses still work (in QEMU, use -cpu max)");
+        fclose(f);
+        shot_take(&s, buf, len);
+        for(k = 0; k < s.n; k++) if(starts(s.row[k], "HTTPS  needs")) first = k;
+        ok = first > 0 && first + 1 < s.n && starts(s.row[first + 1], "       ") && s.row[first + 1][7] != ' ' &&
+             s.n == 24 && widest(&s) <= (int)t.cols;
+        for(k = first + 1; ok && k < s.n && s.row[k][0]; k++)
+            if(!starts(s.row[k], "       ") || s.row[k][7] == ' ') ok = 0;
+        check(ok, i ? "40 columns: a long HTTPS line's rows go under its text after the label"
+                    : "80 columns: a long HTTPS line's rows go under its text after the label");
+        shot_free(&s);
+    }
     {
         struct ut_term t = term(80, 25, 1, 0);
         char *buf = NULL;
@@ -737,6 +784,68 @@ static void welcome_and_lines(void) {
         check(s.n == 1 && !strcmp(s.row[0], "Loading http://a/ ...") && !s.crlf[0], "one line: a short address whole");
         shot_free(&s);
     }
+}
+
+/**** --dump's output ****/
+
+static void dump(void) {
+    char text[600], err[UT_ERR_MAX], *buf = NULL, *want;
+    char u1[] = "https://example.com/a", u2[] = "mailto:x@example.com", u3[] = "https://example.com/caf\xc3\xa9";
+    struct ut_link links[3];
+    struct ut_document d;
+    struct ut_term t = term(40, 25, 1, 0);
+    size_t len = 0, k;
+    FILE *f;
+    memset(&d, 0, sizeof(d));
+    memset(links, 0, sizeof(links));
+    strcpy(text, "First line \xe2\x82\xac" "5\nA second line longer than forty columns, which a dump never wraps\033[2J");
+    d.text = text;
+    d.text_len = strlen(text);
+    links[0].url = u1;
+    links[0].usable = 1;
+    links[1].url = u2;
+    links[2].url = u3;
+    links[2].usable = 1;
+    d.links = links;
+    d.link_count = 3;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, NULL, &d, err, sizeof(err)) == 0, "dump into a file or a pipe");
+    fclose(f);
+    want = "First line \xe2\x82\xac" "5\nA second line longer than forty columns, which a dump never wraps[2J\n"
+           "\nLinks:\n[1] https://example.com/a\n[2] mailto:x@example.com\n[3] https://example.com/caf\xc3\xa9\n";
+    check(!strcmp(buf, want), "dump: the text as it is, unsafe characters left out, then Links: and [N] address");
+    free(buf);
+    buf = NULL;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, &t, &d, err, sizeof(err)) == 0, "dump on a terminal");
+    fclose(f);
+    want = "First line EUR5\nA second line longer than forty columns, which a dump never wraps[2J\n"
+           "\nLinks:\n[1] https://example.com/a\n[2] mailto:x@example.com\n[3] https://example.com/caf\xc3\xa9\n";
+    check(!strcmp(buf, want), "dump on the console: characters as it draws them, the lines not wrapped");
+    free(buf);
+    buf = NULL;
+    for(k = 0; k < 2; k++) {                    /* out of memory: no output at all, and why */
+        f = open_memstream(&buf, &len);
+        ut_alloc_fail_after = 0;
+        err[0] = 0;
+        check(ut_view_dump(f, k ? &t : NULL, &d, err, sizeof(err)) == -1 && strstr(err, "memory") && !ftell(f),
+              k ? "dump on a terminal, out of memory: -1 and why" : "dump, out of memory: -1 and why");
+        ut_alloc_fail_after = -1;
+        fclose(f);
+        free(buf);
+        buf = NULL;
+    }
+    f = fopen("/dev/null", "r");                /* a stream that cannot be written */
+    err[0] = 0;
+    check(f && ut_view_dump(f, NULL, &d, err, sizeof(err)) == -1 && strstr(err, "written"),
+          "dump into a stream that fails: -1 and why");
+    if(f) fclose(f);
+    d.link_count = 0;
+    f = open_memstream(&buf, &len);
+    check(ut_view_dump(f, NULL, &d, err, sizeof(err)) == 0 && !strstr(buf, "Links:"), "no links: no Links: section");
+    fclose(f);
+    free(buf);
+    check(ut_alloc_live == 0, "dump keeps no memory");
 }
 
 /**** the line editor ****/
@@ -841,6 +950,25 @@ static void editor(void) {
     check(r == 16 && !strcmp(buf, "open example.com"), "a line and Enter");
     check(raw_at_draw == 'r' && raw_ons == 1 && raw_offs == 1 && !raw_on, "the prompt is drawn in raw mode, line mode after");
     check(strstr(drawn, "undertow>") != NULL && row_fits(80), "the prompt, on one row");
+    check(ends(drawn, "\033[0m\r\n"), "the line ends with the colours reset (the typed text is teal)");
+    {
+        static const struct { const char *keys; const char *end; } ends_of[] = {
+            { "abc\003", "\033[0m^C\r\n" }, { "\004", "\033[0mquit\r\n" }, { "\033[6~", "\033[0mnext\r\n" },
+            { "\033[5~", "\033[0mprev\r\n" }, { "abc", "\033[0m\r\n" }
+        };
+        size_t k;
+        int all = 1;
+        for(k = 0; k < sizeof(ends_of) / sizeof(ends_of[0]); k++) {
+            reset_terminal();
+            keys(ends_of[k].keys, strlen(ends_of[k].keys), 0, 0);
+            ut_edit_line(e, &t, 0, buf);
+            if(!ends(drawn, ends_of[k].end)) {
+                printf("  after %s: no reset at the end\n", ends_of[k].end + 4);
+                all = 0;
+            }
+        }
+        check(all, "^C, ^D, PgDn, PgUp and the end of the input reset the colours too");
+    }
 
     reset_terminal();
     KEYS("helo\x7f\x7flp\033[D\033[D\033[3~X\001\033[C\005!\r");
@@ -1012,6 +1140,7 @@ int main(void) {
     views();
     sizes();
     welcome_and_lines();
+    dump();
     editor();
     check(ut_alloc_live == 0, "the view allocates nothing");
     printf("UNDERTOW VIEW TESTS %s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);

@@ -67,7 +67,7 @@ Clang's select-optimize pass; SurfOS is built with GCC, and the operations it af
 decryption, CBC padding) are not used by this client. The lock lists the identifiers. Check again
 whenever the pin changes.
 
-## Known issues of 3.6.7 that Undertow works around
+## Local cleanup patch and remaining 3.6.7 workarounds
 
 Found by `tests/host/test_undertow_transport.c`, which makes every allocation of a connection fail in
 turn (`UT_TRANSPORT_EXHAUSTIVE=1` for all of them):
@@ -77,7 +77,14 @@ turn (`UT_TRANSPORT_EXHAUSTIVE=1` for all of them):
    `mbedtls_ssl_transform_free()`. When the second `mbedtls_cipher_setup()` in
    `mbedtls_ssl_tls13_populate_transform()` fails for lack of memory, the first cipher context (one
    small block) is lost, and the handshake fails with `MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE`. Only an
-   allocation failing at that point leaks; the test counts these leaks apart.
+   allocation failing at that point leaked in the original release. The build now adds
+   `mbedtls_ssl_transform_free()` before each raw free in the early-data, handshake and
+   application-transform error paths. `third_party/patches/mbedtls-3.6.7-tls13-cleanup.json`
+   records the three exact insertions and the input/output SHA-256. `tools/patch-webdeps.py`
+   refuses different input or output and atomically writes only a build-directory copy.
+   Target and host use that same source. The extracted vendor tree is unchanged and
+   `fetch-webdeps.py --check` still verifies all its original files. The transport tests
+   require zero live allocations after failure, with no vendor-leak allowance.
 2. `mbedtls_entropy_func()` (`library/entropy.c`) frees its SHA-512 accumulator and sets it up again;
    when that allocation fails, the context keeps the hash's type without its state while
    `accumulator_started` stays 1, and the next entropy call (the generator's next reseed) dereferences
@@ -85,8 +92,15 @@ turn (`UT_TRANSPORT_EXHAUSTIVE=1` for all of them):
    connection is open, after any handshake that failed inside Mbed TLS (such a failure often surfaces
    only as `MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE`).
 
-Both need an allocation to fail at one exact point; neither is reached otherwise. Worth reporting
-upstream, and worth checking again at the next update.
+Both require allocation failure. On an upstream update, inspect these cleanup paths first.
+If upstream includes the three frees, remove the local patch, its generator/tests and the
+special Makefile source rules together; otherwise re-review the patch against the new
+source and record new input/output hashes. Do not simply relax the hash check.
+
+The official release list and advisory index were rechecked on 2026-10-12: 3.6.7 remains
+the newest listed 3.6 release. This is a dependency-status check, not an independent
+security audit: https://github.com/Mbed-TLS/mbedtls/releases and
+https://mbed-tls.readthedocs.io/en/latest/security-advisories/.
 
 Also: Mbed TLS sends the host name as SNI even when it is an IPv4 address (RFC 6066 says it should not);
 servers ignore it, and the address is still checked against the certificate's IP names.

@@ -232,6 +232,7 @@ before or after starting SurfOS, then:
 | `ping 192.168.1.1` (your router) | replies |
 | `ping example.com` | the name looked up through the DNS server, then replies |
 | `httpget example.com 80 /` | a web page over TCP |
+| `undertow https://example.com/` | read a page with verified HTTPS; `help` lists browser commands |
 | `selftest` | `SELFTEST PASS`; on your network it checks the lease and that the gateway answers (the rest of its network checks need QEMU's network and are skipped) |
 
 On a network without DHCP, set the address by hand:
@@ -790,3 +791,20 @@ tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check
 
 `make test-usb` finds OVMF in the usual places (Homebrew, Debian/Ubuntu `ovmf`) or takes
 `OVMF_CODE=… OVMF_VARS=…`.
+
+## Undertow on the boot image
+
+The normal USB build includes `/initrd/bin/undertow`, its pinned certificate roots,
+`/initrd/etc/undertow.conf` and the Mbed TLS/root-store licenses. Build with
+`devenv/build-usb.sh` so the pinned Intel Wi-Fi firmware and its licenses are fetched
+and included too. The image is a file; building it does not write a physical disk.
+
+After establishing a network connection, run `undertow` and check its UTC clock and
+HTTPS readiness, then `open https://example.com/`. `clock YYYY-MM-DD HH:MM:SS` sets
+UTC for that browser session if the hardware clock is wrong. HTTP remains available
+when strong randomness is absent; HTTPS cannot bypass that requirement or a failed
+certificate check. See [the browser guide](UNDERTOW.md) for commands and limitations.
+
+QEMU exercises the browser through USB Ethernet and simulated Wi-Fi. Physical laptop
+browsing, clock correctness and RDRAND availability still need an owner-run check;
+no emulator result substitutes for that check.

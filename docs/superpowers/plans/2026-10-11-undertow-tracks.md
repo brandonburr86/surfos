@@ -6,6 +6,48 @@ The approved design is [the spec](../specs/2026-10-10-undertow-design.md) and th
 the same time and fixes the interfaces between them. Where this brief is more precise than
 the plan, this brief wins; where it is silent, the spec and plan apply.
 
+## Completion and next steps (2026-10-12, America/Chicago)
+
+The implementation of tasks 1–8 is integrated on `codex/undertow`: DNS, strong
+entropy, URL handling, verified TLS 1.2/1.3, HTTP, HTML rendering, history and
+commands, fixtures, packaging, documentation and CI. The later 2048-link and
+2048-anchor limits and separate 1 MiB string budget supersede the original 256
+limits below. This section supersedes the work-in-progress state recorded below;
+the original track briefs remain as the implementation history.
+
+Final combined-source validation used separate frozen exports at both optimization
+levels (the runs continued into 2026-10-13 UTC):
+
+| Suite | O0 | O2 |
+| --- | --- | --- |
+| System smoke | 295 passed | 295 passed |
+| Files integration | 51 passed | 51 passed |
+| Deterministic browser | 59 passed | 59 passed |
+| Full USB/UEFI | 261 passed | 261 passed |
+
+All host unit suites passed. Browser host checks: URL 382, utility/configuration 72,
+HTTP 835, HTML 610 (also 610 with 32-bit UBSan), session 78, view/editor 127, commands
+75 and transport 376. Native ASan/UBSan passed for HTML, session, view and transport.
+Transport fault injection covered every allocation in TLS 1.3 (9853), TLS 1.2
+(12616), setup (13) and plain HTTP (1), with no leak allowance. The explicit
+build-time Mbed TLS cleanup patch leaves the pinned vendor extraction unchanged;
+see [dependency provenance](../../../third_party/README.md).
+
+The browser suites verify production/test-root isolation, certificate refusal,
+clock and entropy failures, limits, repeated failure cleanup, cancellation,
+simultaneous consoles, and HTTP/HTTPS over simulated Wi-Fi and USB Ethernet.
+The separate current public interoperability results are in the
+[user guide](../../UNDERTOW.md#interoperability). Machine-readable checks,
+transcripts, source hashes and a current console screenshot are retained locally
+under `build/takeover-evidence/`; this is generated evidence, not tracked source.
+
+The remaining handoff steps are independent review of the complete browser branch,
+integration into `ai-dev`, and a separately authorized physical laptop boot. The
+release image is built with `devenv/build-usb.sh` after the final code commit;
+its manifest, build ID, SHA-256, 121-root bundle, browser binary, pinned Wi-Fi
+firmware and licenses must match that revision. Physical laptop browsing remains
+unverified; QEMU/OVMF results do not establish physical-device acceptance.
+
 ## Where things stand (2026-10-11)
 
 | Task | State |

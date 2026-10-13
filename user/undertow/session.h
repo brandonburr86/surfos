@@ -80,8 +80,15 @@ int ut_session_move(struct ut_session *s, int direction);
 
 /* The address of link number n (1, 2, ...) of the current page: 0 and *out; -1 and why: no
    page, no link with that number (the message says how many there are), or a link Undertow
-   cannot open (its reference is named, as safe text). */
+   cannot open: "link N goes to REF: REASON", REF as safe text, REASON as ut_session_why(). */
 int ut_session_link(const struct ut_session *s, unsigned long n, struct ut_url *out, char *err, size_t cap);
+
+/* Why an unusable link's reference ref (html.c's safe text of it) cannot be opened from page p:
+   "Undertow opens only http: and https: addresses" for another scheme; else what url.c says when
+   it resolves ref against the page's address (credentials, IPv6, a bad port, over 2048 bytes);
+   else that Undertow cannot open it (html.c resolved it against a <base> that is not the page's).
+   why (cap bytes) is safe text, always terminated. */
+void ut_session_why(const struct ut_page *p, const char *ref, char *why, size_t cap);
 
 /* Is url an address in the current page itself, a fragment of it (only the part after '#'
    differs, and url has one)? Following such a link moves on the page without fetching. */

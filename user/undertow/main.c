@@ -8,14 +8,16 @@ File: main.c  Date: 10/11/26
     undertow --dump ADDRESS  the page's text, then "Links:" and "[N] address" for
                              each link, on stdout; its status and any error on
                              stderr; exit 0 for a 2xx status, 1 for any other
-                             status or a failure, 2 for bad usage
+                             status or a failure (a page not written whole
+                             too), 2 for bad usage
     undertow --help          the usage
 
 The commands are the design's (docs/superpowers/specs/2026-10-10-undertow-design.md,
 the command table; help lists them): open (o), a link's NUMBER or go NUMBER, back
 (b), forward (f), reload (r), Enter or next, prev, top, links, find, findnext,
 history, url, clock, help (?), quit (q). An address typed alone ("example.com",
-anything with "://") is opened too. Ctrl+C and Ctrl+D at the prompt quit.
+anything with "://") is opened too. command.c says what a line asks for; here it
+is carried out. Ctrl+C and Ctrl+D at the prompt quit.
 
 The terminal: the line is read in raw mode by edit.c, which is back in line mode
 before anything else happens, so a load, a view and every list are written in
@@ -29,8 +31,9 @@ while it loads is dropped. The size and capabilities of the terminal are asked
 for before every view (a telnet window may change). Interactive use needs a
 terminal on stdin and stdout; elsewhere --dump is the way.
 
-Everything printed that came from a page or a server goes through view.c (or
-ut_safe_text() in dump mode), never raw. Everything is freed at the end.
+Everything printed that came from a page or a server goes through view.c (dump
+mode's text and links too: ut_view_dump()), never raw. Everything is freed at
+the end.
 */
 
 #include <stdio.h>
@@ -48,6 +51,7 @@ ut_safe_text() in dump mode), never raw. Everything is freed at the end.
 #include "session.h"
 #include "view.h"
 #include "edit.h"
+#include "command.h"
 
 static struct ut_config *cfg;
 static struct ut_session *ses;
@@ -229,43 +233,24 @@ static void text_show(struct text *t) {
 
 /**** screens ****/
 
-/* how many PEM certificates the trusted roots file holds (-1: no file) */
-static int count_roots(void) {
-    char buf[128];
-    int n = 0;
-    FILE *f = fopen(UT_CA_PATH, "r");
-    if(!f) return -1;
-    while(fgets(buf, sizeof(buf), f)) if(!strncmp(buf, "-----BEGIN CERTIFICATE-----", 27)) n++;
-    fclose(f);
-    return n;
-}
-
+/* The welcome screen: what to type, the clock HTTPS checks dates against, and whether HTTPS can work
+   here, as the transport says it (ut_transport_status(): the clock, strong random numbers and the
+   trust roots, checked as a load would; it reads the roots and seeds the generator once). */
 static void welcome(void) {
-    char clock[200], https[220], when[UT_CLOCK_TEXT];
-    unsigned char random[16];
+    char clock[200], https[UT_ERR_MAX + 8], status[UT_ERR_MAX], when[UT_CLOCK_TEXT];
+    const char *state = status;
     time_t now = ut_clock_now(&cfg->clock);
-    int roots = count_roots(), strong = getentropy(random, sizeof(random)) == 0, why = errno;
-    memset(random, 0, sizeof(random));
     ut_clock_format(now, when);
-    if(!ut_clock_plausible(now))
-        snprintf(clock, sizeof(clock), "Clock  %s: too early for HTTPS to check certificates\n"
-                 "       set it with clock YYYY-MM-DD HH:MM:SS (in UTC)", when);
-    else if(cfg->clock.override_set)
+    if(cfg->clock.override_set)
         snprintf(clock, sizeof(clock), "Clock  %s, set for this session", when);
     else if(cfg->clock.rtc_offset_minutes)
         snprintf(clock, sizeof(clock), "Clock  %s, the hardware clock less %d minutes", when,
                  cfg->clock.rtc_offset_minutes);
     else
         snprintf(clock, sizeof(clock), "Clock  %s, from the hardware clock", when);
-    if(!strong)
-        snprintf(https, sizeof(https), "HTTPS  unavailable: %s\n       http:// pages still work",
-                 why == ENOSYS ? "this processor has no strong random numbers (RDRAND)" :
-                 "the processor's strong random numbers failed");
-    else if(roots <= 0)
-        snprintf(https, sizeof(https), "HTTPS  unavailable: no trusted roots in %s\n       http:// pages still work",
-                 UT_CA_PATH);
-    else
-        snprintf(https, sizeof(https), "HTTPS  ready: strong random numbers and %d trusted roots", roots);
+    ut_transport_status(cfg, status, sizeof(status));
+    if(!strncmp(state, "HTTPS ", 6)) state += 6;    /* "HTTPS is ready: ..." under the label "HTTPS  " */
+    snprintf(https, sizeof(https), "HTTPS  %s", state);
     term_update();
     new_screenful();
     ut_view_welcome(stdout, &term, clock, https);
@@ -306,7 +291,9 @@ static void load(const struct ut_url *u) {
         show(NULL);
         return;
     }
-    snprintf(message, sizeof(message), "the page has no part called #%.200s: this is its top", u->fragment);
+    /* the final page's fragment: after a redirect, a Location's own fragment wins (http.h) */
+    snprintf(message, sizeof(message), "the page has no part called #%.200s: this is its top",
+             ut_session_current(ses)->url.fragment);
     show(message);
 }
 
@@ -418,7 +405,13 @@ static void links(void) {
         else text_str(&t, "(no text)", 0);
         text_str(&t, "\n     ", 0);                /* under the label, which starts in column 5 */
         text_safe(&t, l->url ? l->url : "", l->url ? strlen(l->url) : 0, 0);
-        if(!l->usable) text_str(&t, "   (not an http: or https: address)", 0);
+        if(!l->usable) {                        /* why it cannot be opened: another scheme, or url.c's reason */
+            char why[UT_ERR_MAX];
+            ut_session_why(p, l->url, why, sizeof(why));
+            text_str(&t, "   (", 0);
+            text_safe(&t, why, strlen(why), 0);
+            text_str(&t, ")", 0);
+        }
         text_str(&t, "\n", 0);
     }
     text_show(&t);
@@ -535,24 +528,9 @@ static void help(void) {
 
 /**** the commands ****/
 
-static int is_number(const char *s) {
-    if(!*s) return 0;
-    for(; *s; s++) if(*s < '0' || *s > '9') return 0;
-    return 1;
-}
-
-/* a word that names a page rather than a command: "://" in it, or a dot with letters after it */
-static int is_address(const char *s) {
-    const char *dot = strchr(s, '.');
-    if(strstr(s, "://")) return 1;
-    if(!dot || dot == s) return 0;
-    for(dot++; *dot; dot++) if((*dot >= 'a' && *dot <= 'z') || (*dot >= 'A' && *dot <= 'Z')) return 1;
-    return 0;
-}
-
-static void number_cmd(const char *digits) {
+/* a link's number (command.c gives it as typed, and its value up to 9 digits) */
+static void number_cmd(const char *digits, unsigned long n) {
     struct ut_page *p = need_page();
-    unsigned long n = 0;
     size_t len = strlen(digits);
     if(!p) return;
     if(len > 9) {                               /* more links than that there are not */
@@ -560,95 +538,45 @@ static void number_cmd(const char *digits) {
             (unsigned long)p->doc.link_count);
         return;
     }
-    while(*digits) n = n * 10 + (unsigned long)(*digits++ - '0');
     follow(n);
 }
 
-/* one line typed at the prompt: 1 when it is the end */
-static int run(char *line) {
-    char *cmd, *arg, *end;
-    size_t i;
-    while(*line == ' ' || *line == '\t') line++;
-    for(end = line + strlen(line); end > line && (end[-1] == ' ' || end[-1] == '\t'); end--);
-    *end = 0;
-    if(!*line) {                                /* Enter alone */
-        next_screen();
-        return 0;
-    }
-    cmd = line;
-    for(arg = line; *arg && *arg != ' ' && *arg != '\t'; arg++);
-    if(*arg) {
-        *arg++ = 0;
-        while(*arg == ' ' || *arg == '\t') arg++;
-    }
-    if(is_number(cmd)) {
-        if(*arg) say("undertow: a link's number alone follows it (%.20s)", cmd);
-        else number_cmd(cmd);
-        return 0;
-    }
-    if(!*arg && is_address(cmd)) {
-        open_address(cmd);
-        return 0;
-    }
-    for(i = 0; cmd[i]; i++) if(cmd[i] >= 'A' && cmd[i] <= 'Z') cmd[i] = (char)(cmd[i] - 'A' + 'a');
+static void move(int direction) {
+    if(!need_page()) return;
+    if(ut_session_move(ses, direction))
+        say(direction < 0 ? "There is no page before this one." : "There is no page after this one.");
+    else show(NULL);
+}
 
-#define IS(a) (!strcmp(cmd, a))
-#define NO_ARG(name) if(*arg) { say("usage: %s (it takes nothing after it)", name); return 0; }
-    if(IS("open") || IS("o")) {
-        if(!*arg) say("usage: open ADDRESS (for example open https://example.com/)");
-        else open_address(arg);
-    } else if(IS("go")) {
-        if(!is_number(arg)) say("usage: go NUMBER (a link's number; links lists them)");
-        else number_cmd(arg);
-    } else if(IS("back") || IS("b") || IS("forward") || IS("f")) {
-        int back = cmd[0] == 'b';
-        NO_ARG(back ? "back" : "forward");
-        if(!need_page()) return 0;
-        if(ut_session_move(ses, back ? -1 : 1))
-            say(back ? "There is no page before this one." : "There is no page after this one.");
-        else show(NULL);
-    } else if(IS("reload") || IS("r")) {
-        NO_ARG("reload");
-        reload();
-    } else if(IS("next")) {
-        NO_ARG("next");
-        next_screen();
-    } else if(IS("prev")) {
-        NO_ARG("prev");
-        prev_screen();
-    } else if(IS("top")) {
-        NO_ARG("top");
+/* one line typed at the prompt (command.c says what it asks for): 1 when it is the end */
+static int run(char *line) {
+    struct ut_command c;
+    ut_command_parse(line, &c);
+    switch(c.kind) {
+    case UT_CMD_NEXT: next_screen(); break;
+    case UT_CMD_PREV: prev_screen(); break;
+    case UT_CMD_TOP:
         if(need_page()) {
             ut_session_current(ses)->position = 0;
             show(NULL);
         }
-    } else if(IS("links")) {
-        NO_ARG("links");
-        links();
-    } else if(IS("find")) {
-        if(!*arg) say("usage: find WORDS (findnext finds them again)");
-        else find(arg, 0);
-    } else if(IS("findnext")) {
-        NO_ARG("findnext");
-        find(NULL, 1);
-    } else if(IS("history")) {
-        NO_ARG("history");
-        history();
-    } else if(IS("url")) {
-        NO_ARG("url");
-        url();
-    } else if(IS("clock")) {
-        clock_cmd(arg);
-    } else if(IS("help") || IS("?")) {
-        NO_ARG("help");
-        help();
-    } else if(IS("quit") || IS("q")) {
-        return 1;
-    } else {
-        say("undertow: there is no command %.40s%s: help lists them", cmd, strlen(cmd) > 40 ? "..." : "");
+        break;
+    case UT_CMD_OPEN: open_address(c.arg); break;
+    case UT_CMD_LINK: number_cmd(c.digits, c.number); break;
+    case UT_CMD_BACK: move(-1); break;
+    case UT_CMD_FORWARD: move(1); break;
+    case UT_CMD_RELOAD: reload(); break;
+    case UT_CMD_LINKS: links(); break;
+    case UT_CMD_FIND: find(c.arg, 0); break;
+    case UT_CMD_FINDNEXT: find(NULL, 1); break;
+    case UT_CMD_HISTORY: history(); break;
+    case UT_CMD_URL: url(); break;
+    case UT_CMD_CLOCK: clock_cmd(c.arg); break;
+    case UT_CMD_HELP: help(); break;
+    case UT_CMD_QUIT: return 1;
+    case UT_CMD_USAGE:
+    case UT_CMD_UNKNOWN: say("%s", c.message); break;     /* made safe there: it may hold what was typed */
     }
-#undef IS
-#undef NO_ARG
     return 0;
 }
 
@@ -694,54 +622,13 @@ static int interactive(const char *address) {
 
 /**** --dump ****/
 
-/* safe UTF-8 (n bytes) on stdout: as it is into a file or a pipe; on a terminal each character as
-   the terminal draws it (view.c: a stand-in for what it cannot draw), the line not wrapped */
-static void dump_drawn(const char *s, size_t n, const struct ut_term *t) {
-    unsigned int cp;
-    const char *alt;
-    size_t i, k;
-    if(!t) {
-        fwrite(s, 1, n, stdout);
-        return;
-    }
-    for(i = 0; i < n; i += k) {
-        k = ut_utf8_decode((const unsigned char *)s + i, n - i, &cp);
-        alt = ut_view_stand_in(t, cp);
-        if(alt) fputs(alt, stdout);
-        else fwrite(s + i, 1, k, stdout);
-    }
-}
-
-/* the page's text line by line, through ut_safe_text() all the same (t: stdout is that terminal) */
-static void dump_text(const char *s, size_t len, const struct ut_term *t) {
-    char *buf;
-    size_t start = 0, end, longest = 0;
-    for(end = 0; end <= len; end++)
-        if(end == len || s[end] == '\n') {
-            if(end - start > longest) longest = end - start;
-            start = end + 1;
-        }
-    buf = malloc(longest * 3 + 1);              /* an ill-formed byte's U+FFFD: 3 bytes */
-    if(!buf) {
-        fprintf(stderr, "undertow: out of memory\n");
-        return;
-    }
-    for(start = 0; start < len; start = end + 1) {
-        for(end = start; end < len && s[end] != '\n'; end++);
-        dump_drawn(buf, ut_safe_text(buf, longest * 3 + 1, s + start, end - start, 1), t);
-        putchar('\n');
-    }
-    free(buf);
-}
-
 static int dump(const char *address) {
     struct ut_url *u = malloc(sizeof(*u));
     struct ut_response *r = calloc(1, sizeof(*r));
     struct ut_document *d = calloc(1, sizeof(*d));
-    char safe[300], reason[64];
+    char safe[300], reason[64], why[UT_ERR_MAX];
     const struct ut_term *t = NULL;
-    int rc = 1;
-    size_t i;
+    int rc = 1, written;
     if(!u || !r || !d) {
         fprintf(stderr, "undertow: out of memory\n");
         goto out;
@@ -764,21 +651,7 @@ static int dump(const char *address) {
         term_update();
         t = &term;
     }
-    dump_text(d->text, d->text_len, t);
-    if(d->link_count) {
-        printf("\nLinks:\n");
-        for(i = 0; i < d->link_count; i++) {
-            const char *link = d->links[i].url ? d->links[i].url : "";
-            size_t n = strlen(link);
-            char *buf = malloc(n * 3 + 1);
-            if(!buf) break;
-            printf("[%lu] ", (unsigned long)i + 1);
-            dump_drawn(buf, ut_safe_text(buf, n * 3 + 1, link, n, 1), t);
-            putchar('\n');
-            free(buf);
-        }
-    }
-    fflush(stdout);
+    written = ut_view_dump(stdout, t, d, why, sizeof(why));    /* the text and the links (view.c) */
     ut_safe_text(safe, sizeof(safe), r->url.text, strlen(r->url.text), 0);
     ut_safe_text(reason, sizeof(reason), r->reason, strnlen(r->reason, sizeof(r->reason)), 0);
     fprintf(stderr, "undertow: %s: HTTP %d%s%s, %s%s%s\n", safe, r->status, reason[0] ? " " : "", reason,
@@ -789,6 +662,10 @@ static int dump(const char *address) {
         fprintf(stderr, "undertow: %s\n", safe);
     }
     rc = r->status >= 200 && r->status < 300 ? 0 : 1;
+    if(written) {                               /* the page was not printed whole: never exit 0 then */
+        fprintf(stderr, "undertow: %s: %s\n", safe, why);
+        rc = 1;
+    }
 out:
     if(d) ut_document_free(d);
     if(r) ut_response_free(r);

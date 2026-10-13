@@ -1226,17 +1226,13 @@ static void wrap(void) {
    it), so after it everything must be freed. A handshake makes thousands of allocations (Mbed TLS's big numbers
    grow one at a time): after the first 300, every 41st fails; UT_TRANSPORT_EXHAUSTIVE=1 in the environment makes
    it every one. refused: the connection is refused, so that only the setup runs.
-   One leak is Mbed TLS 3.6.7's own and is let through, counted: when the second of the two mbedtls_cipher_setup()
-   calls in mbedtls_ssl_tls13_populate_transform() fails, its callers (mbedtls_ssl_tls13_compute_handshake_transform()
-   and ..._compute_application_transform(), ssl_tls13_keys.c) free the transform with mbedtls_free() instead of
-   mbedtls_ssl_transform_free(), so the first cipher context (one block) is lost and the client sees
-   MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE (third_party/README.md). */
+   The build-time TLS 1.3 cleanup patch must free partial transforms too: no leak exceptions. */
 static void allocation_failures(const char *what, const char *address, int tls, int max, int refused) {
     struct ut_transport *t, *sentinel = (struct ut_transport *)&cfg;
     struct ut_url *u = calloc(1, sizeof(*u));
     char got[256], msg[200];
     const char *all = getenv("UT_TRANSPORT_EXHAUSTIVE");
-    int n, r, done = 0, bad = 0, injected = 0, step = 1, upstream = 0, made = 0, last = -1;
+    int n, r, done = 0, bad = 0, injected = 0, step = 1, made = 0, last = -1;
     ut_url_parse(address, u, err, sizeof(err));
     for(n = 0; n < 200000 && !done; n += step) {
         step = (all && *all == '1') || n < 300 ? 1 : 41;
@@ -1267,20 +1263,14 @@ static void allocation_failures(const char *what, const char *address, int tls, 
         if(net.open) bad++;
         ut_transport_cleanup();
         if(ut_alloc_live) {
-            if(tls && max != MBEDTLS_SSL_VERSION_TLS1_2 && ut_alloc_live == 1 && strstr(err, "in common")) {
-                upstream++;                     /* the known one (above): the block is lost for good */
-            } else {
-                printf("  %s: failing allocation %d leaves %ld blocks (%s)\n", what, n, ut_alloc_live, err);
-                bad++;
-            }
-            ut_alloc_live = 0;
+            printf("  %s: failing allocation %d leaves %ld blocks (%s)\n", what, n, ut_alloc_live, err);
+            bad++;
         }
     }
     free(u);
     snprintf(msg, sizeof(msg), "%s: allocation failure at %d of its %d allocations", what, injected, made);
     check(done && !bad && !bad_calls, msg);
     printf("  %s: %d allocations, %d of them made to fail", what, made, injected);
-    if(upstream) printf("; Mbed TLS's own leak in TLS 1.3's transform setup: %d", upstream);
     printf("\n");
     bad_calls = 0;
     check_clean(what);
@@ -1328,6 +1318,25 @@ static void fresh_state(void) {
     check_clean("the shared state");
 }
 
+/* Repeated failures in one process must not accumulate state or prevent the next good handshake. */
+static void repeated_failures(void) {
+    struct ut_transport *t, *sentinel = (struct ut_transport *)&cfg;
+    int i;
+    for(i = 0; i < 20; i++) {
+        ut_transport_cleanup();
+        reset_world();
+        plan_tls(0, 0, 0);
+        t = sentinel;
+        check_failed(open_at("https://wrong.test/", &t), t, sentinel, "another name", "repeated refusal");
+        check_clean("repeated refused handshake frees every allocation");
+    }
+    reset_world();
+    plan_tls(0, 0, 0);
+    check(open_at("https://fixture.test/", &t) == 0, "good handshake after repeated failures");
+    if(t != sentinel) ut_transport_close(t);
+    check_clean("recovery handshake frees every allocation");
+}
+
 int main(int argc, char **argv) {
     const char *tmp = getenv("TMPDIR");
     static char ca[1024];
@@ -1355,6 +1364,7 @@ int main(int argc, char **argv) {
     deadlines();
     wrap();
     fresh_state();
+    repeated_failures();
     allocation_failures("TLS setup (PSA, the random generator, the roots)", "https://fixture.test/", 1, 0, 1);
     allocation_failures("TLS 1.3", "https://fixture.test/", 1, 0, 0);
     allocation_failures("TLS 1.2", "https://fixture.test/", 1, MBEDTLS_SSL_VERSION_TLS1_2, 0);

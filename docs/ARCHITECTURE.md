@@ -687,8 +687,8 @@ smoke test through `tools/qemu-run.py`), `test-all` (-O0 and -O2), `unittest`
 `.github/workflows/ci.yml` runs the unit tests, the smoke tests and the ISO build.
 See `CLAUDE.md` for the requirements and `docs/ROADMAP.md` Phase 0 for the flags.
 **ai-dev**: `usb-image` and `test-usb` (section 14), `test-mkusb`; CI runs them too.
-User programs are one `.c` file each in `user/bin/`, except surfsh, whose files in
-`user/surfsh/` are linked by a rule of its own.
+Most user programs are one `.c` file each in `user/bin/`. The multi-file programs
+`user/surfsh/`, `user/telnetd/` and `user/undertow/` have their own link rules.
 
 ## 14. UEFI laptop boot (ai-dev, October 2026)
 
@@ -1294,3 +1294,24 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   text. The window size follows NAWS, but no terminal type (TTYPE) is asked for: a session
   always speaks the console's ANSI subset. surfsh has no type-ahead (section 17), so a
   pasted block of several lines runs only its first line.
+
+## Undertow HTTP/HTTPS browser (2026-10-12)
+
+`/initrd/bin/undertow` is a ring-3 text browser linked with libsurf and pinned Mbed TLS
+3.6.7. `url.c` handles addresses; `transport.c` owns TCP/TLS connections; `http.c` owns
+framing and redirects; `html.c` turns bounded HTML into text, links and anchors;
+`session.c` owns history; `view.c`, `edit.c`, `command.c` and `main.c` provide the console.
+`config.c` handles the host table and session clock. Their headers define ownership
+and failure contracts; there is no kernel HTML or TLS parser.
+
+HTTPS verifies the chain, hostname and dates using the 121 pinned Mozilla roots in
+`/initrd/etc/ssl/cert.pem`. TLS 1.2/1.3 require RDRAND-backed `getentropy()`; there is no
+verification bypass or automatic downgrade. The bounded DNS syscall retransmits at
+1 and 3 seconds within its 5-second deadline. The browser imposes limits on loads,
+response bytes, text, history and link/anchor storage; see [UNDERTOW.md](UNDERTOW.md).
+
+`make unittest` includes browser module and fixture/harness tests. `make test-web`
+boots the real program against ephemeral local HTTP/TLS fixtures, with test roots
+added only to copies of the production initrd. It includes simulated Wi-Fi and USB
+Ethernet. Public interoperability (`tools/qemu-web.py --public`) is separate. These
+checks do not establish physical laptop operation.
