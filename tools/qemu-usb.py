@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test runs fourteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs fifteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -30,6 +30,7 @@ comes out of the framebuffer.
              code page 437 font (▸ ≋ … café), the pager answered on the keyboard
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
+  gui        SurfOS desktop, native mouse input, apps and console recovery
   graphics   software 2D at 1920x1080: color bars and image pixels, text restoration
              after completion, Ctrl+C, console switching, and a full pager
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -726,6 +727,11 @@ def scenario_keyboard(args, image, firmware, outdir):
     finally:
         vm.close()
     return results
+
+
+def scenario_gui(args, image, firmware, outdir):
+    from gui_scenario import run
+    return run(Vm, PROMPT, args, image, firmware, outdir)
 
 
 def scenario_graphics(args, image, firmware, outdir):
@@ -1617,7 +1623,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
     return results
 
 
-SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics,
+SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
@@ -1724,7 +1730,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

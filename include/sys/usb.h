@@ -221,6 +221,7 @@ struct usb_driver {
 
 extern const struct usb_driver usbnet_driver;
 extern const struct usb_driver msc_driver;
+extern const struct usb_driver mouse_driver;
 
 /* device layer (driver/usb/usb.c) */
 int init_usb(void);                            /* the driver table entry: controllers, then the ports */

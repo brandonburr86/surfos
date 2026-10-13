@@ -25,7 +25,7 @@ fi
 COPYFILE_DISABLE=1 tar -C "$ROOT" --exclude .git --exclude .DS_Store --exclude './build' \
     ${TAR_OPTIONS[@]+"${TAR_OPTIONS[@]}"} --format ustar -cf - . \
   | docker run --rm -i --platform "$PLATFORM" -v "$VOLUME":/surfos "$IMAGE" sh -ec \
-      'mkdir /tmp/source; tar -C /tmp/source -xf -; rsync -a --delete --exclude=/build/ /tmp/source/ /surfos/'
+      'mkdir /tmp/source; tar -C /tmp/source -xf -; sh /tmp/source/devenv/sync-source.sh /tmp/source /surfos'
 
 # With no explicit target, make both the kernel and everything QEMU needs to boot.
 TARGETS=()

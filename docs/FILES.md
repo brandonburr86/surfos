@@ -40,8 +40,8 @@ Compatible serial/Telnet terminals can send SGR mouse reports. Click a row to
 select it; click the selected row again or Open/Edit in the footer to open it.
 Click an ancestor folder in the tree to navigate there. The wheel moves the
 selection. Mouse reporting is disabled while `edit` owns the terminal and when
-Files exits. SurfOS currently has no native mouse driver: its own VGA/UEFI
-screen uses the keyboard controls above. F1-F4 retain their console switching.
+Files exits. This terminal application uses the keyboard controls above on
+SurfOS's own screen; [native mouse input](GUI.md) currently belongs to the GUI. F1-F4 retain their console switching.
 
 Directories are read as complete snapshots, with a limit of 8192 displayed
 entries. Failed reads preserve the last successful view and report an error.

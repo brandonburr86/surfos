@@ -15,8 +15,9 @@ embedded controller emulates, and UEFI firmware may hand it over with its interr
 or its scan-code translation switched off. With profile=laptop the controller is set
 up again (every wait bounded, so a missing 8042 only means no keyboard), and it is
 also polled on every timer tick in case IRQ 1 never reaches the CPU. The handler only
-reads port 0x60 when the status register says a keyboard byte is waiting, so the
-interrupt and the poll never take the same byte twice.
+reads port 0x60 when the status register says a byte is waiting, so the interrupt and
+the poll never take the same byte twice. 10/10/26: the same controller also supplies
+standard PS/2 mouse packets from IRQ 12, demultiplexed from keyboard scan codes.
 */
 
 #include <surfos/keyboard.h>
@@ -31,6 +32,8 @@ interrupt and the poll never take the same byte twice.
 #include <surfos/timer.h>
 #include <surfos/multiboot.h>
 #include <blibc_common.h>
+#include <sys/pointer.h>
+#include <sys/ps2mouse.h>
 
 static u_char led_status = NUM_LED;
 static bool shift_l, shift_r, ctrl, alt, e0;
@@ -40,10 +43,15 @@ static u_long irqs, polled;
 #define KBD_OBF  0x01           /* a byte is waiting in port 0x60 */
 #define KBD_IBF  0x02           /* the controller has not taken our last byte yet */
 #define KBD_AUX  0x20           /* the waiting byte is from the mouse port */
+#define KBD_ERROR 0xC0         /* timeout or parity error */
 
 static bool present = true;     /* an 8042 answers (assumed, as in 2004, unless profile=laptop probed it) */
 static bool use_irq = true, polling;
 static int config_before = -1, config_after = -1;
+static struct ps2mouse mouse;
+static bool mouse_present, controller_busy, led_dirty;
+static const char *mouse_description = "none (not probed)";
+static bool i8042_device_command(bool aux, u_char command);
 
 static const u_char normmap[0x59] = {
 /* 00 */ 0,    0x1B, '1',  '2',  '3',  '4',  '5',  '6',  '7',  '8',  '9',  '0',  '-',  '=',  '\b', '\t',
@@ -68,19 +76,18 @@ static const u_char numpad[13] = { '7', '8', '9', '-', '4', '5', '6', '+', '1', 
 
 /**** controller ****/
 
-static void kbd_wait_write(void) {
-    u_long timeout;
-    for(timeout = 100000; timeout; timeout--) {
-        if(!(inb(KBD_STATUS) & 0x02)) return;
-    }
-}
-
+/* LED replies share port 0x60 with key codes and mouse packets. Consume only
+   keyboard ACKs, dispatch everything else, and defer a nested lock-key change. */
 static void setleds(void) {
     u_long flags = irq_save();
-    kbd_wait_write();
-    outb(KBD_PORT, 0xED);
-    kbd_wait_write();
-    outb(KBD_PORT, led_status);
+    led_dirty = true;
+    if(present && !controller_busy) {
+        u_char value = led_status;
+        controller_busy = true;
+        led_dirty = false;
+        if(i8042_device_command(false, 0xED)) i8042_device_command(false, value);
+        controller_busy = false;
+    }
     irq_restore(flags);
 }
 
@@ -181,53 +188,63 @@ static void keyboard_byte(u_char code) {
     deliver(c);
 }
 
-int keyboard_handler(u_int irq, void *param) {
-    u_char status = inb(KBD_STATUS);
-    u_char code;
+/* All readers use this one demultiplexer. ACKs never enter the scan-code
+   translator, including between an E0 prefix and its following key code. */
+static void i8042_byte(u_char status, u_char byte) {
+    if(status & KBD_ERROR) {
+        if(status & KBD_AUX) ps2mouse_reset(&mouse);
+        else { e0 = shift_l = shift_r = ctrl = alt = false; }
+        return;
+    }
+    if(status & KBD_AUX) {
+        struct ps2mouse_event event;
+        if(mouse_present && ps2mouse_byte(&mouse, byte, (u32)getticks() * (1000 / HZ), &event))
+            pointer_report(POINTER_PS2, event.dx, event.dy, 0, event.buttons);
+    } else if(byte != 0xFA && byte != 0xFE && byte != 0xFC && byte != 0xFD) {
+        keyboard_byte(byte);
+    }
+}
 
-    irqs++;
-    if(!(status & KBD_OBF)) return 0;          /* the poll took it already, or a spurious IRQ */
-    code = inb(KBD_PORT);
-    if(status & KBD_AUX) return 0;             /* the mouse port is off; drop strays */
-    keyboard_byte(code);
+/* Drain both ports even when called by just one IRQ: an AUX byte at the front
+   must not prevent the keyboard behind it from reaching its tty (or vice versa). */
+static void i8042_drain(bool poll) {
+    int n;
+    for(n = 0; n < 32; n++) {
+        u_char status = inb(KBD_STATUS);
+        if(status == 0xFF || !(status & KBD_OBF)) break;
+        if(poll) polled++;
+        i8042_byte(status, inb(KBD_PORT));
+    }
+}
+
+int keyboard_handler(u_int irq, void *param) {
+    if(irq == IRQ_KEYBOARD) irqs++;
+    i8042_drain(false);
+    if(led_dirty && !controller_busy) setleds();
     return 0;
 }
 
-/* from the timer tick (profile=laptop): whatever IRQ 1 did not deliver */
+/* The laptop timer provides the same fallback for both PS/2 ports. */
 void keyboard_poll(void) {
-    int n;
     if(!polling) return;
-    in_irq++;                                  /* the same rules as the interrupt handler */
-    for(n = 0; n < 8; n++) {
-        u_char status = inb(KBD_STATUS), code;
-        if(status == 0xFF || !(status & KBD_OBF)) break;
-        code = inb(KBD_PORT);
-        polled++;
-        if(!(status & KBD_AUX)) keyboard_byte(code);
-    }
+    in_irq++;
+    i8042_drain(true);
+    if(led_dirty && !controller_busy) setleds();
     in_irq--;
 }
 
-/**** the 8042 controller (profile=laptop) ****/
+/**** the shared 8042 controller ****/
 
 /* until the controller has taken our last byte; false after about 50 ms */
 static bool i8042_ready(void) {
     u_int i;
     for(i = 0; i < 5000; i++) {
-        if(!(inb(KBD_STATUS) & KBD_IBF)) return true;
+        u_char status = inb(KBD_STATUS);
+        if(status == 0xFF) return false;
+        if(!(status & KBD_IBF)) return true;
         udelay(10);
     }
     return false;
-}
-
-/* a byte from the controller, or -1 after about 50 ms */
-static int i8042_read(void) {
-    u_int i;
-    for(i = 0; i < 5000; i++) {
-        if(inb(KBD_STATUS) & KBD_OBF) return inb(KBD_PORT);
-        udelay(10);
-    }
-    return -1;
 }
 
 static bool i8042_command(u_char cmd) {
@@ -236,38 +253,113 @@ static bool i8042_command(u_char cmd) {
     return true;
 }
 
-static void i8042_flush(void) {
+/* A selected device's reply, never a byte from the other port. For keyboard
+   commands only ACK/RESEND/error is a reply; intervening scan codes still go to
+   the tty. Raw controller reads are used only while the keyboard is inhibited. */
+static int i8042_reply(bool aux, bool ack, unsigned timeout_ms) {
     u_int i;
-    for(i = 0; i < 64 && (inb(KBD_STATUS) & KBD_OBF); i++) {
-        inb(KBD_PORT);
-        udelay(50);
+    for(i = 0; i < timeout_ms * 100; i++) {
+        u_char status = inb(KBD_STATUS);
+        if(status == 0xFF) return -1;
+        if(status & KBD_OBF) {
+            u_char byte = inb(KBD_PORT);
+            if(!(status & KBD_ERROR) && !!(status & KBD_AUX) == !!aux &&
+               (!ack || byte == 0xFA || byte == 0xFE || byte == 0xFC || byte == 0xFD))
+                return byte;
+            i8042_byte(status, byte);
+        }
+        udelay(10);
     }
+    return -1;
 }
 
-/* The controller as this driver expects it: keyboard port on, with its interrupt and
-   the translation to scan code set 1; mouse port off. 1 when no 8042 answers. */
-static int i8042_setup(void) {
-    int cfg;
-    if(inb(KBD_STATUS) == 0xFF) return 1;        /* nothing decodes the port */
-    i8042_flush();
-    if(!i8042_command(0x20) || (cfg = i8042_read()) < 0) return 1;   /* read the command byte */
-    config_before = cfg;
-    cfg = (cfg | 0x01 | 0x20 | 0x40) & ~(0x02 | 0x10);  /* IRQ 1, mouse clock off, translate; no IRQ 12, keyboard clock on */
-    if(!i8042_command(0x60) || !i8042_ready()) return 1;
-    outb(KBD_PORT, cfg);
-    i8042_command(0xA7);                          /* mouse port off */
-    i8042_command(0xAE);                          /* keyboard port on */
-    if(i8042_ready()) {
-        outb(KBD_PORT, 0xF4);                     /* to the keyboard: scanning on */
-        i8042_read();                             /* its 0xFA, if it answers */
+static bool i8042_device_command(bool aux, u_char command) {
+    unsigned retry;
+    for(retry = 0; retry < 2; retry++) {
+        int reply;
+        if(aux && !i8042_command(0xD4)) return false;
+        if(!i8042_ready()) return false;
+        outb(KBD_PORT, command);
+        reply = i8042_reply(aux, true, 50);
+        if(reply == 0xFA) return true;
+        if(reply != 0xFE) return false;
     }
-    i8042_flush();
-    if(i8042_command(0x20) && (cfg = i8042_read()) >= 0) config_after = cfg;
+    return false;
+}
+
+static bool i8042_config(u_char config) {
+    if(!i8042_command(0x60) || !i8042_ready()) return false;
+    outb(KBD_PORT, config);
+    return true;
+}
+
+/* Inhibit both ports before a controller reply (untagged on the keyboard side).
+   Preserve pending key codes rather than flushing them as command responses. */
+static int i8042_read_config(void) {
+    if(inb(KBD_STATUS) == 0xFF || !i8042_command(0xAD) || !i8042_command(0xA7)) return -1;
+    if(!i8042_ready()) return -1;
+    i8042_drain(false);
+    if(!i8042_command(0x20)) return -1;
+    return i8042_reply(false, false, 50);
+}
+
+/* The laptop keyboard needs translation enabled explicitly. The emulator keeps
+   its firmware's keyboard configuration; mouse setup changes only AUX bits. */
+static int i8042_setup(void) {
+    int cfg = i8042_read_config();
+    if(cfg < 0) { i8042_command(0xAE); return 1; }
+    config_before = cfg;
+    cfg = (cfg | 0x01 | 0x20 | 0x40) & ~(0x02 | 0x10);
+    if(!i8042_config(cfg)) { i8042_command(0xAE); return 1; }
+    i8042_command(0xAE);
+    i8042_device_command(false, 0xF4);
+    config_after = cfg;
     return 0;
 }
 
+static void i8042_mouse_setup(void) {
+    int cfg;
+    ps2mouse_reset(&mouse);
+    pointer_device(POINTER_PS2, false);
+    if(bootinfo_has_arg(&bootinfo, "mouse=off")) {
+        mouse_description = "disabled (mouse=off)";
+        return;
+    }
+    mouse_description = "none (no PS/2 mouse answered)";
+    if(!present) return;
+    cfg = i8042_read_config();
+    if(cfg < 0) { i8042_command(0xAE); return; }
+    /* read_config inhibited the keyboard; restore it while waiting on the AUX
+       device, so real keyboard input remains live and is demultiplexed below. */
+    cfg = (cfg | 0x20) & ~(0x02 | 0x10);
+    if(!i8042_config(cfg) || !i8042_command(0xAE) || !i8042_command(0xA8)) goto failed;
+    /* Reset also clears any wheel protocol left by firmware. F6 alone does not.
+       BAT can take 500 ms on a physical device; every wait remains bounded. */
+    if(!i8042_device_command(true, 0xFF) || i8042_reply(true, false, 750) != 0xAA ||
+       i8042_reply(true, false, 50) != 0x00) goto failed;
+    if(!i8042_device_command(true, 0xF6) || !i8042_device_command(true, 0xEA)) goto failed;
+    if(!i8042_config((cfg | 0x02) & ~0x20)) goto failed;
+    if(!i8042_device_command(true, 0xF4)) goto failed;
+    config_after = (cfg | 0x02) & ~0x20;
+    mouse_present = true;
+    ps2mouse_reset(&mouse);
+    pointer_device(POINTER_PS2, true);
+    add_irq_handler(IRQ_MOUSE, keyboard_handler, 0);
+    mouse_description = polling ? "PS/2 three-button mouse (IRQ 12 + poll)" : "PS/2 three-button mouse (IRQ 12)";
+    return;
+failed:
+    i8042_command(0xA7);
+    i8042_config(cfg);
+    i8042_command(0xAE);
+    config_after = cfg;
+}
+
 void init_keyboard() {
+    /* IRQ1 is installed below before AUX probing. Keep its handler from taking
+       a controller reply away from the bounded synchronous setup transaction. */
+    u_long flags = irq_save();
     kprintf("\nKeyboard Initialization\n");
+    controller_busy = true;
     if(bootinfo.laptop) {
         if(i8042_setup() != 0) {
             present = false;
@@ -283,7 +375,11 @@ void init_keyboard() {
         add_irq_handler(IRQ_KEYBOARD, keyboard_handler, 0);
     }
     if(polling) kprintf("*and polled on every timer tick\n");
+    i8042_mouse_setup();
+    kprintf("*Mouse: %s\n", mouse_description);
+    controller_busy = false;
     if(present) setleds();
+    irq_restore(flags);
     kprintf("*DONE\n\n");
 }
 
@@ -299,4 +395,8 @@ const char *keyboard_describe(char *buf, size_t size) {
         snprintf(buf + n, size - n, ", command byte 0x%02x", config_after & 0xFF);
     }
     return buf;
+}
+
+const char *mouse_ps2_describe(void) {
+    return mouse_description;
 }

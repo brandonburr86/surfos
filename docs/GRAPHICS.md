@@ -7,6 +7,9 @@ The target laptop is the **Lenovo IdeaPad 3 15IIL05** recorded in
 has Intel UHD graphics; the exact installed graphics PCI ID and current panel
 mode still need a fresh reading from the laptop.
 
+The [SurfOS desktop](GUI.md) uses this interface for a menu bar, movable windows,
+Calculator and Sketch. Launch it with `gui`.
+
 ## Try it
 
 Boot the UEFI USB image and use the laptop's active local console:

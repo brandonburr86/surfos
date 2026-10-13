@@ -24,6 +24,7 @@ only with profile=laptop: at boot it finds the card and names it, nothing more.
 #include <surfos/keyboard.h>
 #include <surfos/apic.h>
 #include <sys/driver.h>
+#include <sys/pointer.h>
 #include <sys/dma.h>
 #include <sys/floppy.h>
 #include <sys/parport.h>
@@ -98,6 +99,7 @@ void print_drivers() {
     printf("    serial    %s\n", serial_present() ? "COM1 at 0x3f8" : "none");
     printf("    timer     %s\n", timer_describe(buf, sizeof(buf)));
     printf("    keyboard  %s\n", keyboard_describe(buf, sizeof(buf)));
+    printf("    pointer   %u devices; %s\n", pointer_devices(), mouse_ps2_describe());
     printf("    apic      %s\n", apic_describe(buf, sizeof(buf)));
     printf("    usb       %s\n", usb_describe(buf, sizeof(buf)));
 }

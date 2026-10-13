@@ -19,14 +19,14 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Item | Family specification | This laptop |
 |---|---|---|
 | CPU | Core i3-1005G1 (Ice Lake, 2 cores / 4 threads, Intel 64) for the i3 tier | **unknown**: `cpuinfo` shows it |
-| Graphics | Intel UHD Graphics (in the CPU) | **unknown**: `lspci` (class 03) |
-| Panel | 15.6", 1366x768 or 1920x1080 | **unknown**: `bootinfo` shows the framebuffer mode |
+| Graphics | Intel UHD Graphics (in the CPU) | observed 2026-10-10: Intel `8086:8a56`, subsystem `17aa:3fb5`, revision 07, at `00:02.0` |
+| Panel | 15.6", 1366x768 or 1920x1080 | observed 2026-10-10: 1920x1080, 32 bpp RGB, pitch 7680, framebuffer `0x70000000` |
 | Memory | DDR4-2666, soldered plus one SO-DIMM | **unknown**: `memstat` |
 | Storage | SATA 2.5" and/or PCIe NVMe M.2 | **unknown**: `lspci` (class 01); SurfOS has no driver for it and never touches it. Files go on a USB stick (**record its make, model and size**) |
-| Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | Wi-Fi not used by SurfOS; wired network through a **USB Ethernet adapter** (CDC ECM/NCM, e.g. RTL8153): **record the adapter and its `lsusb` line** |
+| Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | observed 2026-10-12: Intel 9560, firmware `77.8dbafb52.0`, associated over 2.4 GHz WPA2 with DHCP address `10.0.0.164`; no USB Ethernet adapter attached |
 | USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
-| Keyboard | built-in, behind the embedded controller | **unknown**: `drivers` shows whether the 8042 answered |
-| Touchpad | Precision TouchPad (I2C HID on this generation) | not used by SurfOS |
+| Keyboard | built-in, behind the embedded controller | observed 2026-10-10: 8042, IRQ 1 plus polling, command byte `0x65` in the pre-GUI kernel |
+| Touchpad | Precision TouchPad (I2C HID on this generation) | actual ACPI/device resources unobserved; native I2C HID driver pending; PS/2 compatibility only if firmware exposes it ([GUI](../GUI.md)) |
 | Firmware | UEFI | **record**: Secure Boot setting, any CSM option, firmware version |
 
 Sources: [Lenovo PSREF](https://psref.lenovo.com/syspool/Sys/PDF/IdeaPad/IdeaPad_3_15IIL05/IdeaPad_3_15IIL05_Spec.pdf),
@@ -64,6 +64,45 @@ chosen automatically, and each fallback was exercised under QEMU.
 
 ## Evidence
 
+### Native desktop test (2026-10-12)
+
+The owner approved installing and rebooting the validated O0 desktop build.
+The data stick received the kernel (1,752,536 bytes, CRC32 `34e40c18`) and
+initrd (4,874,240 bytes, CRC32 `72bd1d95`). The previous development files were
+saved in `/surfos-dev-backup-20261013-032913` on that stick. After reconnecting
+Wi-Fi, telnet verified build ID `4ac143bfb43a-dirty 2026-10-13T03:21:34Z`.
+The owner reported that the desktop works, but the built-in touchpad does not.
+`pointerinfo` reports `none (no PS/2 mouse answered)` and zero pointing devices.
+The native touchpad path therefore remains incomplete; no PS/2 compatibility
+was observed. The original boot stick was not changed.
+
+### Desktop inspection resumed (2026-10-12)
+
+Telnet at `10.0.0.164` answered with build ID
+`4ac143bfb43a 2026-10-11T14:15:41Z`. The framebuffer is still 1920x1080 at
+`0x70000000`; the keyboard command byte is still `0x65`. The two I2C PCI
+functions remain in D3hot with BAR0 zero. USB lists two storage devices, the
+integrated camera and Bluetooth, with no USB pointing device. Wi-Fi provides
+the active network connection. The current development boot starts DHCP and
+telnet after a link appears, but does not save or rejoin a WPA network; after
+reboot the owner must reconnect Wi-Fi locally before remote inspection resumes.
+
+### Desktop input inventory (2026-10-10)
+
+The owner enabled telnetd at `10.0.0.164`. Read-only `drivers`, `lspci -v`,
+`acpi` and `bootinfo` queries verified the graphics/panel/keyboard fields above.
+The firmware reports an 8042 and legacy devices. The old kernel's command byte
+`0x65` has the auxiliary clock disabled. This cannot establish whether the
+built-in touchpad exposes PS/2 compatibility; the new mouse probe must be booted.
+
+PCI functions `00:15.0` (`8086:34e8`, subsystem `17aa:3815`) and `00:15.1`
+(`8086:34e9`, subsystem `17aa:3818`) are present, with BAR0 zero, memory decoding
+off, and power state D3hot. Device identity alone does not supply the touchpad's
+ACPI resource, I2C slave address or HID descriptor address. Native I2C HID support
+is still pending. No firmware setting, driver state or disk was changed by this
+inventory. Emulator GUI evidence and this inventory are separate from a native
+GUI/touchpad test.
+
 ### Basic 2D graphics (2026-10-10)
 
 [The graphics driver](../GRAPHICS.md) extends the boot framebuffer with pixels,
@@ -71,9 +110,9 @@ filled rectangles, lines and RGB image copies. Use `gfxinfo` to record the actua
 mode and `gfxtest 15` on the active local console to check the color bars. Check
 Ctrl+C and F1/F2 text recovery too. It uses the existing firmware-selected mode
 and CPU drawing; native Intel modesetting and acceleration remain future work.
-Physical validation of this extension is pending: the laptop did not answer at
-its documented network address during inspection. The unknown PCI ID and panel
-mode above remain unknown, rather than inferred from the model family.
+Physical drawing validation of this extension is pending. Later telnet
+inspection verified the PCI ID and panel mode recorded above, but did not
+establish the on-screen drawing result.
 
 ### Baseline before the port (2026-10-05, branch `ai-dev`, commit `3f476d2`)
 

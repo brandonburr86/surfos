@@ -54,6 +54,8 @@ int cmd_fdisk(int argc, char **argv);
 
 /* wifi.c: the Wi-Fi command (10/9/26) */
 int cmd_wifi(int argc, char **argv);
+int cmd_gui(int argc, char **argv);
+int cmd_pointerinfo(int argc, char **argv);
 int cmd_gfxinfo(int argc, char **argv);
 int cmd_gfxtest(int argc, char **argv);
 

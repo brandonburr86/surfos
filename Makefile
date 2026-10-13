@@ -434,6 +434,8 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
+	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
+	$(PYTHON) -m unittest discover -s tests -p test_devenv.py
 
 # ---- Wi-Fi, track C (10/9/26): lib/crypto/ and the WPA2 supplicant, on the host ---------------
 # The kernel builds lib/crypto/ and net/wlan/ through SRC_C; here they are built against the SurfOS
@@ -489,3 +491,28 @@ test-files: $(KERNEL) images
 	$(PYTHON) tools/qemu-files.py --qemu $(QEMU) --kernel $(KERNEL) --disk $(DISKIMG) --initrd $(INITRD)
 .PHONY: test-files
 test: test-files
+
+# Native GUI input and application behavior (10/10/26).
+$(BUILD)/host/pointer.o: driver/pointer.c include/sys/pointer.h
+	@mkdir -p $(dir $@)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/gui_stubs $(HOSTKERN_FLAGS) -c $< -o $@
+$(BUILD)/host/test_pointer: tests/host/test_pointer.c $(BUILD)/host/pointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-gui
+unittest-gui: $(BUILD)/host/test_pointer
+.PHONY: unittest-gui
+$(BUILD)/host/test_gui: tests/host/test_gui.c $(BUILD)/host/kernel/shell/guicore.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest-gui: $(BUILD)/host/test_gui
+	$(BUILD)/host/test_pointer
+	$(BUILD)/host/test_gui
+
+$(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ) -o $@
+unittest-mouse: $(BUILD)/host/test_ps2mouse $(BUILD)/host/test_usbmouse
+	$(BUILD)/host/test_ps2mouse
+	$(BUILD)/host/test_usbmouse
+unittest: unittest-mouse
+.PHONY: unittest-mouse
