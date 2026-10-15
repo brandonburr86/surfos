@@ -226,6 +226,22 @@ static const struct entity {
     { "yen", 0xa5, 1 }, { "yuml", 0xff, 1 }, { "zwj", 0x200d, 0 }, { "zwnj", 0x200c, 0 }
 };
 
+/* 10/15/26 (Undertow review M4): every other name in WHATWG's table that begins with a legacy name, so that
+   such a name with its semicolon is never read as the legacy name and the rest (&notin; is U+2209, not U+00AC
+   and "in;"). 0: the standard gives two characters; it stays as written, as an unknown name does. */
+static const struct entity longer[] = {
+    { "centerdot", 0xb7, 0 }, { "copysr", 0x2117, 0 }, { "divideontimes", 0x22c7, 0 }, { "gtcc", 0x2aa7, 0 },
+    { "gtcir", 0x2a7a, 0 }, { "gtdot", 0x22d7, 0 }, { "gtlPar", 0x2995, 0 }, { "gtquest", 0x2a7c, 0 },
+    { "gtrapprox", 0x2a86, 0 }, { "gtrarr", 0x2978, 0 }, { "gtrdot", 0x22d7, 0 }, { "gtreqless", 0x22db, 0 },
+    { "gtreqqless", 0x2a8c, 0 }, { "gtrless", 0x2277, 0 }, { "gtrsim", 0x2273, 0 }, { "ltcc", 0x2aa6, 0 },
+    { "ltcir", 0x2a79, 0 }, { "ltdot", 0x22d6, 0 }, { "lthree", 0x22cb, 0 }, { "ltimes", 0x22c9, 0 },
+    { "ltlarr", 0x2976, 0 }, { "ltquest", 0x2a7b, 0 }, { "ltrPar", 0x2996, 0 }, { "ltri", 0x25c3, 0 },
+    { "ltrie", 0x22b4, 0 }, { "ltrif", 0x25c2, 0 }, { "notin", 0x2209, 0 }, { "notinE", 0, 0 },
+    { "notindot", 0, 0 }, { "notinva", 0x2209, 0 }, { "notinvb", 0x22f7, 0 }, { "notinvc", 0x22f6, 0 },
+    { "notni", 0x220c, 0 }, { "notniva", 0x220c, 0 }, { "notnivb", 0x22fe, 0 }, { "notnivc", 0x22fd, 0 },
+    { "parallel", 0x2225, 0 }, { "timesb", 0x22a0, 0 }, { "timesbar", 0x2a31, 0 }, { "timesd", 0x2a30, 0 }
+};
+
 /* windows-1252's 0x80-0x9F; its five holes stay C1 controls, which are never shown */
 static const unsigned short w1252[32] = {
     0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d,
@@ -425,17 +441,21 @@ static unsigned int next_char(const struct rd *rd, size_t *pos, size_t end) {
     return '?';
 }
 
-static const struct entity *find_entity(const unsigned char *s, size_t n) {
-    size_t lo = 0, hi = sizeof(entities) / sizeof(entities[0]);
+static const struct entity *find_in(const struct entity *table, size_t count, const unsigned char *s, size_t n) {
+    size_t lo = 0, hi = count;
     while(lo < hi) {
         size_t mid = (lo + hi) / 2;
-        int c = strncmp(entities[mid].name, (const char *)s, n);
-        if(!c && entities[mid].name[n]) c = 1;          /* the table's name goes on: it is the greater */
-        if(!c) return &entities[mid];
+        int c = strncmp(table[mid].name, (const char *)s, n);
+        if(!c && table[mid].name[n]) c = 1;             /* the table's name goes on: it is the greater */
+        if(!c) return &table[mid];
         if(c < 0) lo = mid + 1;
         else hi = mid;
     }
     return NULL;
+}
+
+static const struct entity *find_entity(const unsigned char *s, size_t n) {
+    return find_in(entities, sizeof(entities) / sizeof(entities[0]), s, n);
 }
 
 /* A numeric reference's character, as browsers make it */
@@ -448,7 +468,10 @@ static unsigned int numeric(unsigned int v) {
 /* A character reference at in[*pos], which is '&' (before end): its character, with *pos past it; or '&'
    alone, with *pos past the '&' only, when it is none: unknown names stay as written. A name without its
    semicolon counts only for the legacy names (Latin-1, amp, lt, gt, quot), and in an attribute only when
-   neither '=' nor a letter or digit follows it, as in browsers. Bounded: a name has 32 letters at most. */
+   neither '=' nor a letter or digit follows it, as in browsers. 10/15/26 (review M4): that is so also when
+   the letters and digits go on to a semicolon but make no name (&notit; is U+00AC and "it;" in text, as
+   written in an attribute), as in WHATWG's named character reference state, which takes the longest name
+   that matches. Bounded: a name has 32 letters at most. */
 static unsigned int char_ref(const struct rd *rd, size_t *pos, size_t end, int attr) {
     const unsigned char *s = rd->in;
     const struct entity *e;
@@ -478,11 +501,17 @@ static unsigned int char_ref(const struct rd *rd, size_t *pos, size_t end, int a
     while(p < end && p - start < 32 && alnum(s[p])) p++;
     if(p > start && p < end && s[p] == ';') {
         e = find_entity(s + start, p - start);
-        if(e) {
+        if(!e) e = find_in(longer, sizeof(longer) / sizeof(longer[0]), s + start, p - start);
+        if(e && e->cp) {
             *pos = p + 1;
             return e->cp;
         }
-    } else if(p > start) {
+        if(e) {                                 /* two characters in the standard: as written */
+            *pos += 1;
+            return '&';
+        }
+    }
+    if(p > start) {                             /* no name with a semicolon: a legacy name at the start */
         for(k = p - start < 6 ? p - start : 6; k >= 2; k--) {
             e = find_entity(s + start, k);
             if(!e || !e->legacy) continue;

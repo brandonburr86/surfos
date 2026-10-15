@@ -570,6 +570,19 @@ static void entities(void) {
         { "thinsp", 0x2009, 0 }, { "ensp", 0x2002, 0 }, { "emsp", 0x2003, 0 }, { "zwj", 0x200d, 0 },
         { "zwnj", 0x200c, 0 }
     };
+    /* 10/15/26 (review M4): WHATWG's other names that begin with a legacy name, and their characters (0: two) */
+    static const struct { const char *name; unsigned int cp; } longer[] = {
+        { "centerdot", 0xb7 }, { "copysr", 0x2117 }, { "divideontimes", 0x22c7 }, { "gtcc", 0x2aa7 },
+        { "gtcir", 0x2a7a }, { "gtdot", 0x22d7 }, { "gtlPar", 0x2995 }, { "gtquest", 0x2a7c },
+        { "gtrapprox", 0x2a86 }, { "gtrarr", 0x2978 }, { "gtrdot", 0x22d7 }, { "gtreqless", 0x22db },
+        { "gtreqqless", 0x2a8c }, { "gtrless", 0x2277 }, { "gtrsim", 0x2273 }, { "ltcc", 0x2aa6 },
+        { "ltcir", 0x2a79 }, { "ltdot", 0x22d6 }, { "lthree", 0x22cb }, { "ltimes", 0x22c9 }, { "ltlarr", 0x2976 },
+        { "ltquest", 0x2a7b }, { "ltrPar", 0x2996 }, { "ltri", 0x25c3 }, { "ltrie", 0x22b4 }, { "ltrif", 0x25c2 },
+        { "notin", 0x2209 }, { "notinE", 0x0 }, { "notindot", 0x0 }, { "notinva", 0x2209 }, { "notinvb", 0x22f7 },
+        { "notinvc", 0x22f6 }, { "notni", 0x220c }, { "notniva", 0x220c }, { "notnivb", 0x22fe },
+        { "notnivc", 0x22fd }, { "parallel", 0x2225 }, { "timesb", 0x22a0 }, { "timesbar", 0x2a31 },
+        { "timesd", 0x2a30 }
+    };
     char body[80], want[80], c[8];
     size_t i;
     int ok = 1;
@@ -601,8 +614,34 @@ static void entities(void) {
     }
     check(ok, "the other named entities; only amp, lt, gt, quot (and AMP, LT, GT, QUOT, COPY, REG) without a semicolon");
     text_is("&notin; &notit; &ampx &copy2026 AT&T & &; &#; &#x; &#xg; &unknown; &Amp; &lrm;&rlm;.",
-            "&notin; &notit; &x \xc2\xa9" "2026 AT&T & &; &#; &#x; &#xg; &unknown; &Amp; .",
+            "\xe2\x88\x89 \xc2\xac" "it; &x \xc2\xa9" "2026 AT&T & &; &#; &#x; &#xg; &unknown; &Amp; .",
             "unknown names stay as written; a legacy name needs no semicolon in text");
+    /* 10/15/26 (review M4): letters and digits up to a semicolon that make no name: the legacy name at their
+       start, as browsers do (WHATWG's longest match); never inside a longer name of the standard */
+    text_is("&notit; &ampx; &copyx; &ltfoo; &gt1; &paral; &notin &notinx; &centerdot; &parallel; &notinE; &notni;",
+            "\xc2\xac" "it; &x; \xc2\xa9" "x; <foo; >1; \xc2\xb6" "l; \xc2\xac" "in \xc2\xac" "inx; \xc2\xb7 \xe2\x88\xa5 "
+            "&notinE; \xe2\x88\x8c",
+            "a legacy name before letters and a semicolon that make no name is decoded in text");
+    ok = 1;
+    for(i = 0; i < sizeof(longer) / sizeof(longer[0]); i++) {
+        enc(c, longer[i].cp);
+        snprintf(body, sizeof(body), "x&%s;y<img alt=\"&%s;\">", longer[i].name, longer[i].name);
+        if(longer[i].cp) snprintf(want, sizeof(want), "x%sy[%s]", c, c);
+        else snprintf(want, sizeof(want), "x&%s;y[&%s;]", longer[i].name, longer[i].name);
+        page("text/html", "utf-8", body, strlen(body), "a longer name");
+        if(!pg_ok || strcmp(pg.text, want)) {
+            printf("  &%s;: \"%s\"\n", longer[i].name, pg_ok ? pg.text : "");
+            ok = 0;
+        }
+    }
+    check(ok, "every longer name that begins with a legacy name is its own character (or as written), not the legacy one");
+    page("text/html", "utf-8", LIT("<a href=\"/p?a=&notit;&ampx;&lt1;\">x</a>"
+                                   "<img alt=\"&notit; &ampx; &notin; &not; &not x &paral; &not=\">"), "M4 in attributes");
+    check(pg_ok && !strcmp(pg.text, "x[1][&notit; &ampx; \xe2\x88\x89 \xc2\xac \xc2\xac x &paral; &not=]") &&
+          link_is(1, "https://example.test/p?a=&notit;&ampx;&lt1;", 1, "x"),
+          "in an attribute a legacy name before letters and a semicolon stays as written");
+    if(pg_ok && strcmp(pg.text, "x[1][&notit; &ampx; \xe2\x88\x89 \xc2\xac \xc2\xac x &paral; &not=]"))
+        printf("  got \"%s\"\n", pg.text);
     text_is("&#65;&#x42;&#X43;&#0068&#x45 &#0;|&#xD800;|&#x110000;|&#99999999999999999999;|&#x10FFFF;|"
             "&#128;&#x9b;&#x85;|&#x81;&#27;&#x202e;&#127;&#1;|&#9;|&#160;|&#xad;|",
             "ABCDE \xef\xbf\xbd|\xef\xbf\xbd|\xef\xbf\xbd|\xef\xbf\xbd|\xf4\x8f\xbf\xbf|"

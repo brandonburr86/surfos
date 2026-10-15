@@ -8,6 +8,8 @@ Numeric: © © ☺ 😀 – (a windows-1252 dash) � (a replacement character).
 
 Without semicolons: © 2026, fish & chips, x < y > z.
 
-Unknown names stay: &bogus; &notanentity; AT&T &c.
+Unknown names stay: &bogus; &unknownname; AT&T &c.
+
+A legacy name starts a longer word: ¬anentity; but ∉ is a name.
 
 Soft hyphens vanish; spaces: a b c d.

@@ -8,6 +8,9 @@ One A query to the configured server, with name compression on the way back.
 configured interface that has one (wlan0's when it is the only one with a lease).
 10/11/26 (Undertow): the query goes out again after 1 s and 3 s (then every 4 s) while no
 answer has come, all within the caller's one budget.
+10/15/26 (Undertow review M1): the query ID and the source port are random (RFC 5452 section
+9.2), no longer a counter from 0x3a7c and the next ephemeral port, so that an attacker off the
+path has to guess about 2^30 values instead of a handful to forge an answer.
 */
 
 #include <surfos/types.h>
@@ -18,14 +21,39 @@ answer has come, all within the caller's one budget.
 #include <net/dhcp.h>
 #include <net/dns_wire.h>
 #include <fs/vfs.h>
+#include <crypto/crypto.h>
 #include <blibc_common.h>
 
 #define DNS_PORT 53
 #define DNS_QUERY_MAX (12 + DNS_NAME_MAX + 2 + 4)   /* header, the name as labels, type and class */
 #define DNS_RETRY_MS 1000           /* the first wait for an answer before the query goes out again */
 #define DNS_RETRY_MAX_MS 4000       /* the waits double up to this */
-/* Protected with net_lock; same-tick callers receive distinct query IDs. */
-static u16 next_id = 0x3a7c;
+#define DNS_PORT_FIRST 49152        /* the random source port: 49152-65535, as udp_open(0)'s */
+#define DNS_PORT_TRIES 8            /* random ports tried before udp_open(0)'s next free one */
+
+/* 10/15/26 (review M1): the ID and the port come from crypto_random(), the kernel's HMAC-DRBG
+   (lib/crypto/random.c). With RDRAND it is seeded and refreshed from the hardware; without it
+   (QEMU's default CPUs, a 486) only from the TSC and the tick count, which an attacker cannot
+   read from the network but which is weaker than RDRAND. A lookup must work on any CPU, so this
+   is the right trade-off here: crypto_random() never blocks or fails. The strict
+   crypto_random_strong() (TLS, SYS_getentropy) stays RDRAND-only and is not used. */
+static u16 dns_random16(void) {
+    u8 r[2];
+    crypto_random(r, sizeof(r));
+    return (u16)(r[0] << 8 | r[1]);
+}
+
+/* a socket on a random port; when DNS_PORT_TRIES ports are all taken (eight sockets in all),
+   the next free one */
+static struct udp_socket *dns_socket(void) {
+    struct udp_socket *s;
+    int i;
+    for(i = 0; i < DNS_PORT_TRIES; i++) {
+        s = udp_open((u16)(DNS_PORT_FIRST + (dns_random16() & 0x3fff)));
+        if(s) return s;
+    }
+    return udp_open(0);
+}
 
 ipaddr_t dns_server(void) {
     struct netdev *d = netdev_default(), *down = NULL;
@@ -59,9 +87,9 @@ int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms) {
     dev = server ? ip_route(0, server) : NULL;
     if(!dev || !dev->ip || !dev->link_up) server = 0;
     else if(dev->netmask && (server & dev->netmask) != (dev->ip & dev->netmask) && !dev->gateway) server = 0;
-    id = next_id++;
     mutex_unlock(&net_lock);
     if(!server) return -ENETUNREACH;
+    id = dns_random16();
 
     memset(query, 0, 12);
     query[0] = id >> 8; query[1] = id;
@@ -78,7 +106,7 @@ int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms) {
     query[n++] = 0; query[n++] = 1;  /* A/IN */
     query[n++] = 0; query[n++] = 1;
     if(!timeout_ms) return -ETIMEDOUT;
-    s = udp_open(0);
+    s = dns_socket();
     if(!s) return -ENFILE;
     udp_bind_dev(s, dev);
     for(;;) {

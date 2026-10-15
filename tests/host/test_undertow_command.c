@@ -6,6 +6,7 @@ File: test_undertow_command.c  Date: 10/11/26
 user/undertow/command.c: every command of the design's table and its aliases,
 a link's number (go NUMBER too), an address typed alone, the blanks around
 and inside a line, commands used the wrong way and words that are no command.
+10/15/26 (review M3): an IPv4 address alone, with a port, a path, a query or a fragment.
 */
 
 #include <stdio.h>
@@ -74,6 +75,26 @@ static const struct want table[] = {
     { "b.", UT_CMD_UNKNOWN, NULL, 0, "there is no command b." },
     { ".com", UT_CMD_UNKNOWN, NULL, 0, "there is no command .com" },
     { "example.com now", UT_CMD_UNKNOWN, NULL, 0, "there is no command example.com" },
+    /* 10/15/26 (review M3): an IPv4 address alone, with or without a port, a path, a query or a fragment */
+    { "10.0.2.2", UT_CMD_OPEN, "10.0.2.2", 0, NULL },
+    { "  10.0.2.2:8080 ", UT_CMD_OPEN, "10.0.2.2:8080", 0, NULL },
+    { "192.168.1.1:8080", UT_CMD_OPEN, "192.168.1.1:8080", 0, NULL },
+    { "10.0.2.2/", UT_CMD_OPEN, "10.0.2.2/", 0, NULL },
+    { "10.0.2.2:80/a?b", UT_CMD_OPEN, "10.0.2.2:80/a?b", 0, NULL },
+    { "10.0.2.2?x=1", UT_CMD_OPEN, "10.0.2.2?x=1", 0, NULL },
+    { "10.0.2.2#top", UT_CMD_OPEN, "10.0.2.2#top", 0, NULL },
+    { "999.1.1.1", UT_CMD_OPEN, "999.1.1.1", 0, NULL },        /* the transport says it is no address */
+    { "10.0.2.2 now", UT_CMD_UNKNOWN, NULL, 0, "there is no command 10.0.2.2" },
+    { "1.2.3", UT_CMD_UNKNOWN, NULL, 0, "there is no command 1.2.3" },
+    { "1.2.3.4.5", UT_CMD_UNKNOWN, NULL, 0, "there is no command 1.2.3.4.5" },
+    { "1.2.3.", UT_CMD_UNKNOWN, NULL, 0, "there is no command 1.2.3." },
+    { "1..2.3", UT_CMD_UNKNOWN, NULL, 0, "there is no command 1..2.3" },
+    { "1234.1.1.1", UT_CMD_UNKNOWN, NULL, 0, "there is no command 1234.1.1.1" },
+    { "10.0.2.2:", UT_CMD_UNKNOWN, NULL, 0, "there is no command 10.0.2.2:" },
+    { "10.0.2.2:123456", UT_CMD_UNKNOWN, NULL, 0, "there is no command 10.0.2.2:123456" },
+    { "10.0.2.2:80:80", UT_CMD_UNKNOWN, NULL, 0, "there is no command 10.0.2.2:80:80" },
+    { "10.0.2.2-1", UT_CMD_UNKNOWN, NULL, 0, "there is no command 10.0.2.2-1" },
+    { "-1.2.3.4", UT_CMD_UNKNOWN, NULL, 0, "there is no command -1.2.3.4" },
     /* a link's number */
     { "12", UT_CMD_LINK, NULL, 12, NULL },
     { "007", UT_CMD_LINK, NULL, 7, NULL },

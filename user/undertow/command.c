@@ -4,7 +4,8 @@ SurfOS Undertow: what a line typed at the undertow> prompt asks for
 File: command.c  Date: 10/11/26
 ----------------------
 command.h gives the commands. A line is a word and maybe an argument; a word
-of digits is a link's number, a word that names a page an address; any
+of digits is a link's number, a word that names a page (a dotted name, or
+since 10/15/26 an IPv4 address alone) an address; any
 other word is looked up, in lowercase, in the table below, which also says
 whether the command takes an argument (open and find need one, clock may
 have one, quit ignores one, the rest take none).
@@ -60,10 +61,29 @@ static int is_number(const char *s) {
     return 1;
 }
 
-/* a word that names a page rather than a command: "://" in it, or a dot with a letter after it */
+/* 10/15/26 (review M3): an IPv4 address: four groups of 1 to 3 digits with dots between them, maybe a
+   colon and a port of 1 to 5 digits, then the end or a path, a query or a fragment. Whether each number
+   fits is for url.c and the transport to say, which they do in words. */
+static int is_ipv4_host(const char *s) {
+    int group, n;
+    for(group = 0; group < 4; group++) {
+        if(group && *s++ != '.') return 0;
+        for(n = 0; *s >= '0' && *s <= '9'; s++) n++;
+        if(n < 1 || n > 3) return 0;
+    }
+    if(*s == ':') {
+        for(s++, n = 0; *s >= '0' && *s <= '9'; s++) n++;
+        if(n < 1 || n > 5) return 0;
+    }
+    return !*s || *s == '/' || *s == '?' || *s == '#';
+}
+
+/* a word that names a page rather than a command: "://" in it, a dot with a letter after it, or an
+   IPv4 address (10.0.2.2, 10.0.2.2:8080) */
 static int is_address(const char *s) {
     const char *dot = strchr(s, '.');
     if(strstr(s, "://")) return 1;
+    if(is_ipv4_host(s)) return 1;
     if(!dot || dot == s) return 0;
     for(dot++; *dot; dot++) if((*dot >= 'a' && *dot <= 'z') || (*dot >= 'A' && *dot <= 'Z')) return 1;
     return 0;

@@ -141,7 +141,7 @@ gets its stand-in.
 
 | Command | What it does |
 | --- | --- |
-| `open ADDRESS`, `o ADDRESS` | Load a page (HTTPS unless the address says `http://`). An address typed alone (`example.com/news`, anything with `://`) is opened too |
+| `open ADDRESS`, `o ADDRESS` | Load a page (HTTPS unless the address says `http://`). An address typed alone (`example.com/news`, `10.0.2.2:8080`, anything with `://`) is opened too |
 | `NUMBER`, `go NUMBER` | Follow link NUMBER. A link to a place on the same page jumps there without loading anything |
 | Enter, `next` (PgDn) | The next screen |
 | `prev` (PgUp), `top` | The screen before; the start of the page |

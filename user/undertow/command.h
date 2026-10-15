@@ -17,8 +17,8 @@ enum ut_command_kind {
     UT_CMD_NEXT,        /* Enter alone, next */
     UT_CMD_PREV,        /* prev */
     UT_CMD_TOP,         /* top */
-    UT_CMD_OPEN,        /* open ADDRESS, o ADDRESS, or an address alone ("://" in it, or a dot and a
-                           letter after it): arg */
+    UT_CMD_OPEN,        /* open ADDRESS, o ADDRESS, or an address alone ("://" in it, a dot and a
+                           letter after it, or an IPv4 address with or without a port): arg */
     UT_CMD_LINK,        /* NUMBER, go NUMBER: digits and number */
     UT_CMD_BACK,        /* back, b */
     UT_CMD_FORWARD,     /* forward, f */
