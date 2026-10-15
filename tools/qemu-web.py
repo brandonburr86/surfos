@@ -759,6 +759,11 @@ SCENARIOS = [
         Step('back', title('2049 links')),
         Step('2049', MSG['no-link'], absent=['Loading'], check=nothing_fetched),
         Step('find link 2049', '* link 2049', absent=['[2049]']),
+        # 10/15/26 (review M2): links says the real cutoff, and numbers from 1000 on keep the labels in one column
+        Step('links', 'Links on this page: 2048 (the ones after the first 2048 have no number)',
+             re.compile(r'(?<! )   1\. link 1\n {6}http'), re.compile(r'(?<! ) 999\. link 999\n'),
+             re.compile(r'(?<! )1000\. link 1000\n'), re.compile(r'(?<! )2048\. link 2048\n {6}http'),
+             absent=['2049.'], timeout=180),
         Step('q', wait=SH),
     ]),
     Scenario('link-byte-limit', 'long resolved links exhaust the separate 1 MiB string budget before 2048 links', [

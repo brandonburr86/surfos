@@ -384,7 +384,7 @@ static void links(void) {
     struct ut_page *p = need_page();
     struct text t;
     size_t i;
-    int digits;
+    int digits, width;
     if(!p) return;
     if(!p->doc.link_count) {
         say("This page has no links.");
@@ -392,18 +392,21 @@ static void links(void) {
     }
     memset(&t, 0, sizeof(t));
     text_printf(&t, UT_SPAN_HEADING, "Links on this page: %lu", (unsigned long)p->doc.link_count);
+    /* 10/15/26 (review M2): every numbered link is in the list, so the cutoff is their count,
+       whether UT_LINKS_MAX or the link-string budget (UT_LINK_BYTES_MAX) ended the numbering */
     if(p->doc.truncated & UT_TRUNC_LINKS)
-        text_printf(&t, 0, " (the ones after the first %u have no number)", UT_LINKS_MAX);
+        text_printf(&t, 0, " (the ones after the first %lu have no number)", (unsigned long)p->doc.link_count);
     text_str(&t, "\n", 0);
-    digits = p->doc.link_count >= 100 ? 3 : p->doc.link_count >= 10 ? 2 : 1;
+    digits = p->doc.link_count >= 1000 ? 4 : p->doc.link_count >= 100 ? 3 : p->doc.link_count >= 10 ? 2 : 1;
+    width = digits > 3 ? digits : 3;            /* 10/15/26 (review M2): 4 from link 1000 on (UT_LINKS_MAX is 2048) */
     for(i = 0; i < p->doc.link_count; i++) {
         const struct ut_link *l = &p->doc.links[i];
-        text_printf(&t, 0, "%*s", 3 - digits, "");
+        text_printf(&t, 0, "%*s", width - digits, "");
         text_printf(&t, UT_SPAN_LINK, "%*lu.", digits, (unsigned long)i + 1);
         text_str(&t, " ", 0);
         if(l->label && l->label[0]) text_safe(&t, l->label, strlen(l->label), 0);
         else text_str(&t, "(no text)", 0);
-        text_str(&t, "\n     ", 0);                /* under the label, which starts in column 5 */
+        text_printf(&t, 0, "\n%*s", width + 2, "");   /* under the label: column 5, or 6 with 1000 links or more */
         text_safe(&t, l->url ? l->url : "", l->url ? strlen(l->url) : 0, 0);
         if(!l->usable) {                        /* why it cannot be opened: another scheme, or url.c's reason */
             char why[UT_ERR_MAX];
