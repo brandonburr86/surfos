@@ -2038,6 +2038,7 @@ class DnsPeer:
         self.running = True
         self.pending = []
         self.ids = []
+        self.lookups = []           # 10/15/26 (review M1): (source port, ID) of each lookup, copies once
         self.floods = []
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
@@ -2112,13 +2113,18 @@ class DnsPeer:
             while query[off]:
                 n = query[off]; parts.append(query[off + 1:off + n + 1]); off += n + 1
             host = b'.'.join(parts)
+            key = (struct.unpack('!H', frame[34:36])[0], struct.unpack('!H', query[:2])[0])
+            if key not in self.lookups:
+                self.lookups.append(key)
             if host == b'flood.test':
                 t = threading.Thread(target=self.flood, args=(frame, query), daemon=True)
                 self.floods.append(t); t.start()
             elif host.startswith(b'concurrent'):
-                if query[:2] in self.ids:      # 10/11/26: the guest asks again after 1 s; a copy changes nothing
+                # 10/11/26: the guest asks again after 1 s; a copy changes nothing. 10/15/26 (review M1): a
+                # copy has the same source port and ID; the IDs are random, so two lookups may share one
+                if key in self.ids:
                     continue
-                self.pending.append((frame, query)); self.ids.append(query[:2])
+                self.pending.append((frame, query)); self.ids.append(key)
                 if len(self.pending) == 2:
                     for f, q in reversed(self.pending):
                         self.reply(f, q)
@@ -2181,13 +2187,20 @@ def dns_bounded_check(q):
         duration = re.search(r'resolve flood.test:.*in (\d+) ms', guest.transcript[flood_start:].decode(errors='replace'))
         ok = elapsed < 7 and duration is not None and 5000 <= int(duration[1]) <= 5100 and ok
         ok = command('nettest resolve answer.test', 'resolve answer.test: 192.0.2.7') and ok
+        # 10/15/26 (review M1): the IDs and source ports are random, not one more each lookup (as from 0x3a7c
+        # and 49152 before); a counter passes neither test, random values fail it about once in 2^100
+        steps = list(zip(peer.lookups, peer.lookups[1:]))
+        ok = len(peer.lookups) >= 7 and all(port >= 49152 for port, _ in peer.lookups) and ok
+        ok = any((b[1] - a[1]) & 65535 != 1 for a, b in steps) and any((b[0] - a[0]) & 65535 != 1 for a, b in steps) and ok
     finally:
         if guest:
             if not ok:
                 print('\n---- bounded DNS guest transcript ----\n' + tail(guest.text(), 35))
+                print('DNS lookups (source port, ID): ' + ', '.join('%d/%04x' % k for k in peer.lookups))
             guest.close()
         peer.close()
-    return ('DNS: isolated peer, source/question filters, concurrent IDs, 5-second flood deadline, legacy commands', ok)
+    return ('DNS: isolated peer, source/question filters, concurrent IDs, 5-second flood deadline, legacy commands, '
+            'random IDs and ports', ok)
 
 
 # 10/6/26 (the telnet server, track N): nettest (user/bin/nettest.c) and the host
