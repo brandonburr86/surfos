@@ -515,10 +515,13 @@ SCENARIOS = [
         Step('open ' + url('https', '/about', '10.0.2.2'), loading(url('https', '/about', '10.0.2.2')), HTTPS_ANY),
         Step('q', wait=SH),
     ]),
-    Scenario('bare-host', 'an address without a scheme is HTTPS; o is open; an address typed alone is opened', [
+    Scenario('bare-host', 'an address without a scheme is HTTPS; o is open; an address typed alone is opened, '
+                          'an IPv4 address too', [
         Step('undertow fixture.test:{https}/about', loading(S('/about')), title('About the fixtures'), HTTPS_ANY),
         Step('o ' + H('/docs/'), loading(H('/docs/')), title('The documents'), HTTP_PLAIN),
         Step('fixture.test:{https}/docs/guide', loading(S('/docs/guide')), title('The guide, part 1'), HTTPS_ANY),
+        # 10/15/26 (review M3): an IPv4 address alone, with its port, is an address too
+        Step('10.0.2.2:{https}', loading(url('https', '/', '10.0.2.2')), HTTPS_ANY),
         Step('q', wait=SH),
     ]),
     Scenario('editing', 'the line editor: Backspace, Up for the line before, Ctrl+U, PgDn and PgUp on an empty line', [
