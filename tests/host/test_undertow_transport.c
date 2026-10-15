@@ -7,7 +7,8 @@ user/undertow/transport.c and tls_platform.c with the real Mbed TLS, built for
 the host with the server side (tests/host/undertow/tls_host_config.h), against
 peers in this process. Behind the SurfOS calls transport.c makes (tcp_connect,
 net_resolve, poll, read, write, close, getentropy: tests/host/undertow/surf.h)
-is a simulated network; uptime moves only when something waits, so every
+is a simulated network; uptime moves only when something waits (or by a cost a
+test gives each read() or write(): an always-ready socket that is slow), so every
 deadline is exact; at the other end is Mbed TLS's own server or a scripted
 plain peer. The certificates are tests/host/undertow/certs/ (make-certs.sh),
 whose directory is the first argument. The TLS 1.3 server sends two session
@@ -131,6 +132,9 @@ struct plan {
     int no_reading;                 /* the peer never reads what the client sends */
     size_t up_cap;                  /* the client's send buffer (0: 64 KB) */
     size_t write_max, read_max;     /* bytes per write and per read (0: no limit) */
+    unsigned int read_cost_ms;      /* a read() that gives bytes takes this long (the socket is always ready) */
+    unsigned int write_cost_ms;     /* and a write() that takes bytes */
+    int warnings;                   /* the peer first sends this many warning alerts (user_canceled), unencrypted */
 };
 
 static struct plan plan;
@@ -420,6 +424,8 @@ static unsigned int polls, poll_waits;
 static int poll_interrupt;
 
 int tcp_connect(unsigned int ip, unsigned short port) {
+    static const unsigned char warning[] = { 21, 3, 3, 0, 2, 1, 90 };   /* alert, TLS 1.2, 2 bytes: warning, user_canceled */
+    int i;
     connect_calls++;
     connect_ip = ip;
     connect_port = port;
@@ -436,6 +442,7 @@ int tcp_connect(unsigned int ip, unsigned short port) {
         server_start();
         server_end();
     }
+    for(i = 0; i < plan.warnings; i++) append(&net.staged, &net.staged_len, warning, sizeof(warning));
     return NET_FD;
 }
 
@@ -471,6 +478,7 @@ ssize_t ut_sim_read(int fd, void *buf, size_t n) {
     if(net.reset) { errno = ECONNRESET; return -1; }
     avail = net.down_len - net.down_off;
     if(avail) {
+        sim_ms += plan.read_cost_ms;
         if(n > avail) n = avail;
         if(plan.read_max && n > plan.read_max) n = plan.read_max;
         memcpy(buf, net.down + net.down_off, n);
@@ -497,6 +505,7 @@ ssize_t ut_sim_write(int fd, const void *buf, size_t n) {
     }
     if(n > room) n = room;
     if(plan.write_max && n > plan.write_max) n = plan.write_max;
+    sim_ms += plan.write_cost_ms;
     memcpy(net.up + net.up_len, buf, n);
     net.up_len += n;
     return (ssize_t)n;
@@ -1172,6 +1181,160 @@ static void deadlines(void) {
     check_clean("deadlines");
 }
 
+/* the server sends n warning alerts (user_canceled), under its keys once its handshake is done */
+static void server_warnings(int n) {
+    int i;
+    server_begin();
+    for(i = 0; i < n; i++)
+        mbedtls_ssl_send_alert_message(&net.ssl, MBEDTLS_SSL_ALERT_LEVEL_WARNING, MBEDTLS_SSL_ALERT_MSG_USER_CANCELED);
+    server_end();
+}
+
+/* The limits inside Mbed TLS's own calls. One mbedtls_ssl_handshake(), mbedtls_ssl_read() or mbedtls_ssl_write()
+   goes on for as long as the socket is ready: it skips warning alerts one after another, and it sends a record
+   to the end however few bytes each write takes. Here the socket is always ready and every read() or write() takes
+   time, so the time runs out inside the library's call, where the deadlines must hold too: the call ends at the
+   limit, nothing that came after it is returned, and the connection is over. */
+static void deadlines_inside_tls(void) {
+    struct ut_transport *t, *sentinel = (struct ut_transport *)&cfg;
+    char got[256], what[160];
+    static char big[2000];
+    unsigned int start;
+    int r, v, calls;
+
+    /* the handshake: warnings instead of the server's hello, a second a read */
+    reset_world();
+    plan.kind = PEER_SILENT;
+    plan.warnings = 100;
+    plan.read_cost_ms = 1000;
+    start = sim_ms;
+    t = sentinel;
+    check_failed(open_at("https://fixture.test/", &t), t, sentinel, "20 seconds", "a handshake fed warning alerts without end");
+    check(sim_ms - start == UT_HANDSHAKE_MS, "... ends at exactly 20 seconds");
+    check(net.down_off < net.down_len, "... and the rest of the alerts is never read");
+    reset_world();
+    plan.kind = PEER_SILENT;
+    plan.warnings = 100;
+    plan.read_cost_ms = 1000;
+    connect_ms = 2000;
+    start = sim_ms;
+    t = sentinel;
+    check_failed(open_in("https://fixture.test/", 12000, &t), t, sentinel, "60-second limit",
+                 "... and the load's deadline when it comes first");
+    check(sim_ms - start == 12000, "... ends at the deadline");
+    /* a ClientHello that leaves a byte a second */
+    reset_world();
+    plan.kind = PEER_SILENT;
+    plan.write_max = 1;
+    plan.write_cost_ms = 1000;
+    start = sim_ms;
+    t = sentinel;
+    check_failed(open_at("https://fixture.test/", &t), t, sentinel, "20 seconds", "a handshake whose bytes leave one a second");
+    check(sim_ms - start == UT_HANDSHAKE_MS, "... ends at exactly 20 seconds");
+    check_clean("the handshake's limit inside Mbed TLS");
+
+    for(v = 0; v < 2; v++) {
+        const char *name = v ? "TLS 1.3" : "TLS 1.2";
+        int version = v ? MBEDTLS_SSL_VERSION_TLS1_3 : MBEDTLS_SSL_VERSION_TLS1_2;
+
+        /* reading: encrypted warnings after the handshake, a second a read */
+        reset_world();
+        plan_tls(0, version, 0);
+        plan.response = "";
+        plan.response_len = 0;
+        plan.after = AFTER_NOTHING;
+        start = sim_ms;
+        t = NULL;
+        snprintf(what, sizeof(what), "%s: a read fed warning alerts without end: connected", name);
+        check(open_at("https://fixture.test/", &t) == 0 && t, what);
+        if(!t) { printf("  %s\n", err); continue; }
+        check(ut_transport_write(t, REQUEST, strlen(REQUEST)) == (int)strlen(REQUEST), "... the request");
+        peer_step();                    /* the server reads it (and finishes a TLS 1.3 handshake) */
+        server_warnings(100);
+        plan.read_cost_ms = 1000;
+        r = ut_transport_read(t, got, sizeof(got));
+        if(r != -1 || sim_ms - start != UT_LOAD_MS)
+            printf("  %s: read gave %d after %u ms: %s\n", name, r, sim_ms - start, ut_transport_error(t));
+        check(r == -1 && strstr(ut_transport_error(t), "60-second limit") && strstr(ut_transport_error(t), "reading") &&
+              sim_ms - start == UT_LOAD_MS, "... ends at the load's deadline, with its message");
+        check(net.down_off < net.down_len, "... and the rest of the alerts is never read");
+        check(ut_transport_read(t, got, 10) == -1 && ut_transport_write(t, "x", 1) == -1, "... and stays an error");
+        ut_transport_close(t);
+
+        /* a few warnings take time but fit in it: they are skipped and the response comes */
+        reset_world();
+        plan_tls(0, version, 0);
+        start = sim_ms;
+        snprintf(what, sizeof(what), "%s: ten warning alerts, a second a read", name);
+        check(open_at("https://fixture.test/", &t) == 0, what);
+        peer_step();                    /* the server's handshake is over (TLS 1.3: and its tickets out) */
+        server_warnings(10);
+        plan.read_cost_ms = 1000;
+        r = exchange(t, REQUEST, got, sizeof(got), 1000);
+        if(r) printf("  %s\n", ut_transport_error(t));
+        check(r == 0 && !strcmp(got, RESPONSE) && sim_ms - start > 20000 && sim_ms - start < UT_LOAD_MS,
+              "... are skipped and the response comes, within the deadline");
+        ut_transport_close(t);
+
+        /* writing: a record that leaves a byte a second */
+        reset_world();
+        plan_tls(0, version, 0);
+        start = sim_ms;
+        snprintf(what, sizeof(what), "%s: a write whose bytes leave one a second", name);
+        check(open_at("https://fixture.test/", &t) == 0, what);
+        plan.write_max = 1;
+        plan.write_cost_ms = 1000;
+        memset(big, 'x', sizeof(big));
+        r = ut_transport_write(t, big, sizeof(big));
+        if(r != -1 || sim_ms - start != UT_LOAD_MS)
+            printf("  %s: write gave %d after %u ms: %s\n", name, r, sim_ms - start, ut_transport_error(t));
+        check(r == -1 && strstr(ut_transport_error(t), "60-second limit") && strstr(ut_transport_error(t), "writing") &&
+              sim_ms - start == UT_LOAD_MS, "... ends at the load's deadline, with its message");
+        check(ut_transport_write(t, "x", 1) == -1 && ut_transport_read(t, got, 10) == -1, "... and stays an error");
+        ut_transport_close(t);
+
+        /* bytes a read() gives after the deadline are never returned */
+        reset_world();
+        plan_tls(0, version, 0);
+        start = sim_ms;
+        snprintf(what, sizeof(what), "%s: a read() that gives bytes after the deadline", name);
+        check(open_at("https://fixture.test/", &t) == 0, what);
+        plan.read_cost_ms = UT_LOAD_MS + 1000;
+        r = exchange(t, REQUEST, got, sizeof(got), 1000);
+        check(r == -1 && !got[0] && strstr(ut_transport_error(t), "60-second limit"), "... returns nothing of them: the deadline's message");
+        ut_transport_close(t);
+    }
+    reset_world();
+    plan_plain();
+    start = sim_ms;
+    check(open_at("http://fixture.test/", &t) == 0, "plain: a read() that gives bytes after the deadline");
+    plan.read_cost_ms = UT_LOAD_MS + 1000;
+    r = exchange(t, REQUEST, got, sizeof(got), 1000);
+    check(r == -1 && !got[0] && strstr(ut_transport_error(t), "60-second limit"), "... returns nothing of them: the deadline's message");
+    ut_transport_close(t);
+    check_clean("the read and write limits inside Mbed TLS");
+
+    /* after a handshake that ran out inside Mbed TLS, the next connection works, with the same shared state */
+    reset_world();
+    plan_tls(0, 0, 0);
+    check(open_at("https://fixture.test/", &t) == 0, "a connection before the next test");
+    ut_transport_close(t);
+    calls = client_entropy_calls;
+    reset_world();
+    plan.kind = PEER_SILENT;
+    plan.warnings = 100;
+    plan.read_cost_ms = 1000;
+    t = sentinel;
+    check_failed(open_at("https://fixture.test/", &t), t, sentinel, "20 seconds", "warning alerts without end, again");
+    reset_world();
+    plan_tls(0, 0, 0);
+    r = open_at("https://fixture.test/", &t);
+    check(r == 0 && exchange(t, REQUEST, got, sizeof(got), 1000) == 0 && !strcmp(got, RESPONSE) &&
+          client_entropy_calls == calls, "... then the next connection works, with the same shared state");
+    if(r == 0) ut_transport_close(t);
+    check_clean("after a limit inside Mbed TLS");
+}
+
 static void wrap(void) {
     struct ut_transport *t;
     char got[512];
@@ -1362,6 +1525,7 @@ int main(int argc, char **argv) {
     partial_io();
     endings();
     deadlines();
+    deadlines_inside_tls();
     wrap();
     fresh_state();
     repeated_failures();

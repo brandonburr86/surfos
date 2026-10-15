@@ -20,6 +20,16 @@ WANT_WRITE when the socket is not ready, and the loops here do the waiting. Its
 own computations (key exchange, signatures) cannot be interrupted, so the time
 is checked again after each step.
 
+The limits hold inside Mbed TLS's calls as well. One mbedtls_ssl_handshake(),
+mbedtls_ssl_read() or mbedtls_ssl_write() goes on for as long as the socket is
+ready: it skips one warning alert after another, and sends a record to its end
+however few bytes each write takes. So net_recv() and net_send() check the time
+before each read or write (the stage's limit) and after one that moved bytes
+(the handshake's 20 seconds or the deadline: bytes that came too late are never
+used). Once it has run out they return MBEDTLS_ERR_SSL_TIMEOUT, every time, and
+the library's call ends with it; the loops here turn that into the same message
+as their own timeout, and the connection is over.
+
 What every connection shares, per process: PSA Crypto, a CTR_DRBG seeded from
 the CPU (tls_platform.c: getentropy(), which fails on a CPU without RDRAND and
 never falls back to anything weaker) and the parsed roots, made at the first
@@ -64,6 +74,9 @@ struct ut_transport {
     int suspect;                            /* the handshake failed inside Mbed TLS: the shared state is made again */
     unsigned int deadline;                  /* the caller's, absolute ut_now() */
     unsigned int progress;                  /* ut_now() when the last byte moved */
+    unsigned int hs_until;                  /* the handshake's end, absolute ut_now() */
+    int late;                               /* net_recv() or net_send() found the time run out */
+    int closing;                            /* ut_transport_close()'s close_notify: one try, no limit */
     int net_errno;                          /* errno of the last failed poll, read or write */
     char host[254];
     unsigned short port;
@@ -294,15 +307,34 @@ static int io_failed(struct ut_transport *t, const char *doing) {
     return -1;
 }
 
+/* Has the time for what Mbed TLS is doing run out? Before bytes move: the handshake's limit, or for reading
+   and writing the deadline or 15 seconds since the last byte; once some have moved, the handshake's limit or
+   the deadline. Once it has run out it stays so (late), whatever the library does after the first
+   MBEDTLS_ERR_SSL_TIMEOUT. */
+static int out_of_time(struct ut_transport *t, int moved) {
+    unsigned int now = ut_now(), until;
+    if(t->late) return 1;
+    if(t->closing) return 0;
+    if(!t->handshake_done) until = t->hs_until;
+    else if(moved) until = t->deadline;
+    else until = earlier(t->deadline, t->progress + UT_IDLE_MS, now);
+    if(!ut_expired(until, now)) return 0;
+    t->late = 1;
+    return 1;
+}
+
 static int net_recv(void *ctx, unsigned char *buf, size_t len) {
     struct ut_transport *t = ctx;
     ssize_t n;
-    int r = ready(t->fd, POLLIN);
+    int r;
+    if(out_of_time(t, 0)) return MBEDTLS_ERR_SSL_TIMEOUT;
+    r = ready(t->fd, POLLIN);
     if(r < 0) return net_error(t, MBEDTLS_ERR_NET_RECV_FAILED);
     if(!r) return MBEDTLS_ERR_SSL_WANT_READ;
     n = read(t->fd, buf, len > INT_MAX ? INT_MAX : len);
     if(n > 0) {
         t->progress = ut_now();
+        if(out_of_time(t, 1)) return MBEDTLS_ERR_SSL_TIMEOUT;      /* too late: the bytes are never used */
         return (int)n;
     }
     if(n == 0) return 0;                    /* the other end closed: Mbed TLS calls it MBEDTLS_ERR_SSL_CONN_EOF */
@@ -312,12 +344,15 @@ static int net_recv(void *ctx, unsigned char *buf, size_t len) {
 static int net_send(void *ctx, const unsigned char *buf, size_t len) {
     struct ut_transport *t = ctx;
     ssize_t n;
-    int r = ready(t->fd, POLLOUT);
+    int r;
+    if(out_of_time(t, 0)) return MBEDTLS_ERR_SSL_TIMEOUT;
+    r = ready(t->fd, POLLOUT);
     if(r < 0) return net_error(t, MBEDTLS_ERR_NET_SEND_FAILED);
     if(!r) return MBEDTLS_ERR_SSL_WANT_WRITE;
     n = write(t->fd, buf, len > INT_MAX ? INT_MAX : len);
     if(n > 0) {
         t->progress = ut_now();
+        if(out_of_time(t, 1)) return MBEDTLS_ERR_SSL_TIMEOUT;      /* too late: the write does not count */
         return (int)n;
     }
     if(n == 0) return MBEDTLS_ERR_SSL_WANT_WRITE;
@@ -546,7 +581,7 @@ static int handshake(struct ut_transport *t, const struct ut_config *cfg, char *
         return tls_error(t, ret, NULL, err, cap);
     mbedtls_ssl_set_bio(&t->ssl, t, net_send, net_recv, NULL);
 
-    until = earlier(t->deadline, ut_now() + UT_HANDSHAKE_MS, ut_now());
+    until = t->hs_until = earlier(t->deadline, ut_now() + UT_HANDSHAKE_MS, ut_now());
     ut_tls_set_clock(&cfg->clock);
     for(;;) {
         if(ut_expired(until, ut_now())) {
@@ -555,6 +590,12 @@ static int handshake(struct ut_transport *t, const struct ut_config *cfg, char *
             break;
         }
         ret = mbedtls_ssl_handshake(&t->ssl);
+        /* the time ran out inside the call (net_recv(), net_send()), or the call ended after it */
+        if(t->late || (!ret && ut_expired(until, ut_now()))) {
+            t->failed = 1;
+            ret = timed_out(t, DURING_HANDSHAKE, err, cap);
+            break;
+        }
         if(!ret) break;
         if(ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
             ret = tls_error(t, ret, cfg, err, cap);
@@ -635,6 +676,12 @@ static int fail(struct ut_transport *t) {
     return -1;
 }
 
+/* the time ran out while reading or writing: the message, and the connection is over */
+static int too_late(struct ut_transport *t, int stage) {
+    timed_out(t, stage, t->error, sizeof(t->error));
+    return fail(t);
+}
+
 int ut_transport_read(struct ut_transport *t, void *buf, size_t len) {
     int n;
     if(!t) return -1;
@@ -649,10 +696,15 @@ int ut_transport_read(struct ut_transport *t, void *buf, size_t len) {
     for(;;) {
         unsigned int now = ut_now(), until = earlier(t->deadline, t->progress + UT_IDLE_MS, now);
         short event = POLLIN;
+        if(ut_expired(until, now)) return too_late(t, DURING_READ);    /* nothing is returned once it is over */
         if(t->secure) {
             /* what TLS holds already comes first: mbedtls_ssl_read() returns it without reading */
             n = mbedtls_ssl_read(&t->ssl, buf, len);
-            if(n > 0) return n;
+            if(t->late) return too_late(t, DURING_READ);               /* it ran out inside the call */
+            if(n > 0) {
+                if(ut_expired(t->deadline, ut_now())) return too_late(t, DURING_READ);
+                return n;
+            }
             if(n == 0 || n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == MBEDTLS_ERR_SSL_CONN_EOF) {
                 t->eof = 1;
                 return 0;
@@ -670,16 +722,16 @@ int ut_transport_read(struct ut_transport *t, void *buf, size_t len) {
             if(r < 0) return io_failed(t, "reading from");
             if(r) {
                 ssize_t got = read(t->fd, buf, len);
-                if(got > 0) return (int)got;
+                if(got > 0) {
+                    if(ut_expired(t->deadline, ut_now())) return too_late(t, DURING_READ);
+                    return (int)got;
+                }
                 if(got < 0) return io_failed(t, "reading from");
                 t->eof = 1;
                 return 0;
             }
         }
-        if(ut_expired(until, now)) {
-            timed_out(t, DURING_READ, t->error, sizeof(t->error));
-            return fail(t);
-        }
+        if(ut_expired(until, now)) return too_late(t, DURING_READ);
         if(wait_for(t, event, until, t->error, sizeof(t->error))) return fail(t);
     }
 }
@@ -692,12 +744,17 @@ int ut_transport_write(struct ut_transport *t, const void *buf, size_t len) {
     if(len > INT_MAX) len = INT_MAX;
     t->progress = ut_now();
     for(;;) {
-        unsigned int now, until;
+        unsigned int now = ut_now(), until = earlier(t->deadline, t->progress + UT_IDLE_MS, now);
         short event = POLLOUT;
+        if(ut_expired(until, now)) return too_late(t, DURING_WRITE);
         if(t->secure) {
             /* after WANT_WRITE Mbed TLS wants the same buffer again: this loop gives it */
             n = mbedtls_ssl_write(&t->ssl, buf, len);
-            if(n > 0) return n;
+            if(t->late) return too_late(t, DURING_WRITE);              /* it ran out inside the call */
+            if(n > 0) {
+                if(ut_expired(t->deadline, ut_now())) return too_late(t, DURING_WRITE);
+                return n;
+            }
             if(n != MBEDTLS_ERR_SSL_WANT_READ && n != MBEDTLS_ERR_SSL_WANT_WRITE) {
                 tls_error(t, n, NULL, t->error, sizeof(t->error));
                 return fail(t);
@@ -708,16 +765,16 @@ int ut_transport_write(struct ut_transport *t, const void *buf, size_t len) {
             if(r < 0) return io_failed(t, "writing to");
             if(r) {
                 ssize_t put = write(t->fd, buf, len);
-                if(put > 0) return (int)put;
+                if(put > 0) {
+                    if(ut_expired(t->deadline, ut_now())) return too_late(t, DURING_WRITE);
+                    return (int)put;
+                }
                 return io_failed(t, "writing to");
             }
         }
         now = ut_now();
         until = earlier(t->deadline, t->progress + UT_IDLE_MS, now);
-        if(ut_expired(until, now)) {
-            timed_out(t, DURING_WRITE, t->error, sizeof(t->error));
-            return fail(t);
-        }
+        if(ut_expired(until, now)) return too_late(t, DURING_WRITE);
         if(wait_for(t, event, until, t->error, sizeof(t->error))) return fail(t);
     }
 }
@@ -725,6 +782,7 @@ int ut_transport_write(struct ut_transport *t, const void *buf, size_t len) {
 void ut_transport_close(struct ut_transport *t) {
     if(!t) return;
     /* a polite close_notify when the connection is still good; one try, it never waits */
+    t->closing = 1;
     if(t->handshake_done && !t->failed && !t->eof) (void)mbedtls_ssl_close_notify(&t->ssl);
     if(t->secure && tls.open > 0) tls.open--;
     transport_free(t);
