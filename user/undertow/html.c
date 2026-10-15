@@ -1586,11 +1586,13 @@ static int resolve(const struct ut_url *base, const char *href, struct ut_url *u
 }
 
 /* A <base> after links: their addresses again, against it. 1 when done; 0 when they would pass
-   UT_LINK_BYTES_MAX (nothing changes); -1 when memory is out. */
+   UT_LINK_BYTES_MAX, or when that limit has already stopped the numbers, which then depend on the base from
+   the first link on (nothing changes); -1 when memory is out. */
 static int rebase(struct rd *rd, const struct ut_url *base) {
     struct { char *url; int usable; } *again;
     size_t i, k, n = rd->nlinks - (rd->link_open && rd->link_num ? 1 : 0), total = rd->link_bytes;
     if(!n) return 1;
+    if(rd->link_bytes_full) return 0;
     again = malloc(n * sizeof(*again));
     if(!again) return -1;
     for(i = 0; i < n; i++) {

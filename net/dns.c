@@ -33,9 +33,11 @@ path has to guess about 2^30 values instead of a handful to forge an answer.
 
 /* 10/15/26 (review M1): the ID and the port come from crypto_random(), the kernel's HMAC-DRBG
    (lib/crypto/random.c). With RDRAND it is seeded and refreshed from the hardware; without it
-   (QEMU's default CPUs, a 486) only from the TSC and the tick count, which an attacker cannot
-   read from the network but which is weaker than RDRAND. A lookup must work on any CPU, so this
-   is the right trade-off here: crypto_random() never blocks or fails. The strict
+   (QEMU's default CPUs, a 486) only from the TSC and the tick count. That is weaker than RDRAND:
+   the tick count is not secret (TCP's initial sequence numbers are derived from it, net/tcp.c), so
+   on a CPU with neither RDRAND nor a TSC the ID and port can be predicted by a server SurfOS has
+   connected to. A lookup must work on any CPU, so this is the trade-off taken here:
+   crypto_random() never blocks or fails. The strict
    crypto_random_strong() (TLS, SYS_getentropy) stays RDRAND-only and is not used. */
 static u16 dns_random16(void) {
     u8 r[2];

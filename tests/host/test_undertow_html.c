@@ -1045,6 +1045,29 @@ static void late_base(void) {
           full_at(base, pg.link_count, "L") && !strcmp(pg.notice, notice) && ends_with(pg.text, "L2047 L2048"),
           "2049 links, then a late base too big for the link budget: the budget, not the count, says how many are numbered");
     free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+
+    /* a late base that makes the addresses shorter, after the budget was already full against the page: as many
+       numbers as with the base first (the review of 10/15/26: the cutoff stayed where the page's address put it) */
+    snprintf(base, sizeof(base), "http://a/%.900s", long_part);
+    sb_str(&b, "<base href=\"http://a/\">");
+    for(i = 0; i < 1300; i++) {
+        sb_str(&b, "<a href=\"");
+        sb_add(&b, long_part, 900);
+        sb_printf(&b, "x%u\">L%u</a> ", i, i);
+    }
+    page("text/html", "utf-8", b.s, b.len, "a short base first, links past the link budget");
+    n = pg_ok ? pg.link_count : 0;
+    check(pg_ok && n > 600 && n < 1300 && links_at(base, n, "L") && full_at(base, n, "L"),
+          "a short base first, links past the link budget: numbered while they fit");
+    memmove(b.s, b.s + strlen("<base href=\"http://a/\">"), b.len - strlen("<base href=\"http://a/\">"));
+    b.len -= strlen("<base href=\"http://a/\">");
+    sb_str(&b, "<base href=\"http://a/\">");
+    page("text/html", "utf-8", b.s, b.len, "links past the link budget, then a shorter late base");
+    snprintf(notice, sizeof(notice), "only its first %u links have numbers", (unsigned)n);
+    check(pg_ok && pg.link_count == n && links_at(base, n, "L") && !links_elsewhere(base) && !strcmp(pg.notice, notice),
+          "links past the link budget, then a shorter late base: numbered as if it came first");
+    free(b.s);
 }
 
 static void limits(void) {
