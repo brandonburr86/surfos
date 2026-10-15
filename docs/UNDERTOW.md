@@ -283,7 +283,7 @@ Pages that build their content with JavaScript show only the HTML their server s
 | A response body | 1 MiB (a bigger one is refused, and nothing of it is kept) |
 | Text shown for one page | 512 KiB (the rest is left out, with a notice at the end) |
 | Links / named anchors on a page | 2048 each (later links keep their text, without a number) |
-| Link labels, addresses and anchor names together | 1 MiB per page |
+| Link labels, addresses and anchor names together | 1 MiB per page (later links keep their text, without a number; a `<base>` late in a page counts for the links before it too) |
 | Redirects in one load | 5 |
 | Looking up a name / connecting / the TLS handshake | 5 / 10 / 20 seconds |
 | A read or write with no progress | 15 seconds |

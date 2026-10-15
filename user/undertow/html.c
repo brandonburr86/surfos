@@ -342,7 +342,9 @@ struct rd {
     size_t title_len;
     int title_seen;
     struct ut_url *base;                /* the first <base href> that resolved */
-    int base_done;                      /* that one was seen (used or, too big for the links before it, not) */
+    int base_done;                      /* that one was seen, or was known before the page was read */
+    int again;                          /* that one came late and was too big for the links before it: the page is
+                                           read again with it known from the start (failed is set too, to stop) */
     unsigned char *decoded;             /* a UTF-16 body as UTF-8 */
 
     int given;                          /* the document has taken the text, links, anchors and spans */
@@ -1555,7 +1557,7 @@ static int resolve(const struct ut_url *base, const char *href, struct ut_url *u
 }
 
 /* A <base> after links: their addresses again, against it. 1 when done; 0 when they would pass
-   UT_LINK_BYTES_MAX (nothing changes, and the base is not used); -1 when memory is out. */
+   UT_LINK_BYTES_MAX (nothing changes); -1 when memory is out. */
 static int rebase(struct rd *rd, const struct ut_url *base) {
     struct { char *url; int usable; } *again;
     size_t i, k, n = rd->nlinks - (rd->link_open && rd->link_num ? 1 : 0), total = rd->link_bytes;
@@ -1585,15 +1587,18 @@ static int rebase(struct rd *rd, const struct ut_url *base) {
     return 1;
 }
 
-/* The first <base href> that resolves counts for every link, those before it too; when it would make their
-   addresses pass UT_LINK_BYTES_MAX it is not used (and no later one is) */
+/* The first <base href> that resolves counts for every link, those before it too (no later one counts). When
+   it would make their addresses pass UT_LINK_BYTES_MAX, which of them keep their numbers depends on it from the
+   first link on: this reading stops, and the page is read again with the base known from the start, so that
+   the links are numbered in order while their strings fit, as on any page. No link is ever kept at an address
+   against the page instead of its base. */
 static void base_href(struct rd *rd, struct tag *t) {
     size_t n = t->len[A_HREF];
     const char *h;
     char *copy;
     struct ut_url *u;
     int rc;
-    if(rd->base_done || !t->seen[A_HREF] || t->over[A_HREF]) return;
+    if(rd->base_done || rd->failed || !t->seen[A_HREF] || t->over[A_HREF]) return;
     h = stripped(t->val[A_HREF], &n);
     if(!n) return;
     copy = malloc(n + 1);
@@ -1610,8 +1615,9 @@ static void base_href(struct rd *rd, struct tag *t) {
     free(copy);
     if(!rc) {
         rd->base_done = 1;
-        rc = rebase(rd, u);                         /* 1: used, 0: not used, -1: out of memory */
-        rc = rc > 0 ? 0 : rc == 0 ? 1 : -1;
+        rc = rebase(rd, u);                         /* 1: used, 0: too big, -1: out of memory */
+        if(rc == 0) rd->again = rd->failed = 1;     /* ut_render() reads the page again with u */
+        rc = rc >= 0 ? 0 : -1;
     }
     if(rc < 0) rd->failed = 1;
     if(rc) free(u);
@@ -2337,12 +2343,15 @@ static void cleanup_parts(struct rd *rd) {
     free(rd->text);
 }
 
-int ut_render(const struct ut_response *r, struct ut_document *out, char *err, size_t cap) {
-    struct rd *rd;
+/* One reading of r, as far as it goes (rd->failed: out of memory, or rd->again). base: a <base> known from the start,
+   which it takes (NULL: none yet). NULL when memory is out. */
+static struct rd *read_page(const struct ut_response *r, struct ut_url *base) {
+    struct rd *rd = calloc(1, sizeof(*rd));
     int html;
-    if(!r || !out || (!r->body && r->len)) return ut_error(err, cap, "there is no page to show");
-    rd = calloc(1, sizeof(*rd));
-    if(!rd) return ut_error(err, cap, "out of memory showing the page");
+    if(!rd) {
+        free(base);
+        return NULL;
+    }
     rd->r = r;
     rd->in = r->body ? r->body : (const unsigned char *)"";
     rd->len = r->len;
@@ -2350,6 +2359,8 @@ int ut_render(const struct ut_response *r, struct ut_document *out, char *err, s
     rd->depth = 1;
     rd->st[0].el = E_HTML;
     rd->st[0].lst = -1;
+    rd->base = base;
+    rd->base_done = base != NULL;
     rd->tag.val[A_HREF] = rd->tag.href;
     rd->tag.val[A_ID] = rd->tag.id;
     rd->tag.val[A_NAME] = rd->tag.name_;
@@ -2361,15 +2372,29 @@ int ut_render(const struct ut_response *r, struct ut_document *out, char *err, s
     rd->tag.val[A_TITLE] = rd->tag.title;
     if(decode_utf16(rd)) {
         cleanup(rd);
-        return ut_error(err, cap, "out of memory showing the page");
+        return NULL;
     }
     rd->xhtml = !strcmp(r->content_type, "application/xhtml+xml");
     html = rd->xhtml || !strcmp(r->content_type, "text/html") || (!r->content_type[0] && looks_like_html(rd->in, rd->len));
     if(!rd->decoded) choose_charset(rd, html);
     if(html) run_html(rd);
     else run_plain(rd);
-    if(finish(rd, out)) {
+    return rd;
+}
+
+int ut_render(const struct ut_response *r, struct ut_document *out, char *err, size_t cap) {
+    struct rd *rd;
+    struct ut_url *base;
+    if(!r || !out || (!r->body && r->len)) return ut_error(err, cap, "there is no page to show");
+    rd = read_page(r, NULL);
+    if(rd && rd->again) {                           /* a late <base> too big for the links before it: from the start */
+        base = rd->base;
+        rd->base = NULL;
         cleanup(rd);
+        rd = read_page(r, base);                    /* with base_done set, at most once */
+    }
+    if(!rd || finish(rd, out)) {
+        if(rd) cleanup(rd);
         return ut_error(err, cap, "out of memory showing the page");
     }
     cleanup(rd);

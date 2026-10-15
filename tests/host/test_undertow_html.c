@@ -54,6 +54,8 @@ static void check(int ok, const char *what) {
 
 struct hdr { size_t size, pad; };
 static long live_blocks, alloc_calls, fail_after = -1;
+static long big_calls[4];           /* the call numbers of the first callocs of 8 KiB or more: a reading's state */
+static int nbig;
 static size_t live_bytes, peak_bytes;
 
 static int refuse(void) {
@@ -80,6 +82,7 @@ void *ut_test_malloc(size_t n) {
 
 void *ut_test_calloc(size_t n, size_t size) {
     void *p;
+    if(n * size >= 8192 && nbig < 4) big_calls[nbig++] = alloc_calls;
     if(refuse() || (size && n > (size_t)-1 / size)) return NULL;
     p = take(n * size);
     if(p) memset(p, 0, n * size);
@@ -870,17 +873,138 @@ static void link_bytes(void) {
           strlen(pg.text) > 5 && !strcmp(pg.text + strlen(pg.text) - 5, "after"),
           "anchors stop being kept at UT_LINK_BYTES_MAX; a link after them keeps its text without a number");
     free(b.s);
-    b.s = NULL; b.len = b.cap = 0;
-    /* a late <base> that would make the addresses of the links before it pass the cap is not used */
+}
+
+/**** a late <base> ****/
+
+static int ends_with(const char *s, const char *end) {
+    size_t n = strlen(s), k = strlen(end);
+    return n >= k && !strcmp(s + n - k, end);
+}
+
+/* Links 1..count of pg are usable, at base + "x" + (N - 1), labelled with N - 1 (pre + N - 1 when pre is given) */
+static int links_at(const char *base, size_t count, const char *pre) {
+    char want[UT_URL_MAX + 32], label[UT_FIELD_MAX + 32];
+    size_t i;
+    if(!pg_ok || pg.link_count < count) return 0;
+    for(i = 0; i < count; i++) {
+        snprintf(want, sizeof(want), "%sx%u", base, (unsigned)i);
+        snprintf(label, sizeof(label), "%s%u", pre ? pre : "", (unsigned)i);
+        if(!link_is(i + 1, want, 1, label)) return 0;
+    }
+    return 1;
+}
+
+/* How many of pg's links can be followed somewhere their base does not send them (the bug of 10/13/26: a late
+   <base> too big for the link budget left every link at its address against the page) */
+static size_t links_elsewhere(const char *base) {
+    size_t i, bad = 0;
+    for(i = 0; pg_ok && i < pg.link_count; i++)
+        if(pg.links[i].usable && strncmp(pg.links[i].url, base, strlen(base))) bad++;
+    return bad;
+}
+
+/* The link budget is full at link count + 1, labelled with its number - 1, at base + "x" + that: the
+   strings of the links before it fit, and its own would not */
+static int full_at(const char *base, size_t count, const char *pre) {
+    char url[UT_URL_MAX + 32], label[UT_FIELD_MAX + 32];
+    size_t n = pg_ok ? link_strings(&pg) : 0;
+    snprintf(url, sizeof(url), "%sx%u", base, (unsigned)count);
+    snprintf(label, sizeof(label), "%s%u", pre ? pre : "", (unsigned)count);
+    return pg_ok && n <= UT_LINK_BYTES_MAX && n + strlen(label) + 1 + strlen(url) + 1 > UT_LINK_BYTES_MAX;
+}
+
+/* <base href="base"> (sb_printf() keeps 511 bytes) */
+static void base_tag(struct sb *b, const char *base) {
+    sb_str(b, "<base href=\"");
+    sb_str(b, base);
+    sb_str(b, "\">");
+}
+
+/* count links "x0", "x1", ... labelled with label_len bytes of b and their number, then <base href=base> (malloc'ed) */
+static char *base_page(unsigned count, size_t label_len, const char *base, size_t *len) {
+    struct sb b = { 0, 0, 0 };
+    unsigned i;
+    size_t k;
+    for(i = 0; i < count; i++) {
+        sb_printf(&b, "<a href=\"x%u\">", i);
+        for(k = 0; k < label_len; k++) sb_str(&b, "b");
+        sb_printf(&b, "%u</a> ", i);
+    }
+    base_tag(&b, base);
+    *len = b.len;
+    return b.s;
+}
+
+static void late_base(void) {
+    struct sb b = { 0, 0, 0 };
+    char long_part[1501], base[1600], want[160], notice[80];
+    size_t n, off;
+    unsigned i;
+    memset(long_part, 'a', 1500);
+    long_part[1500] = 0;
+    snprintf(base, sizeof(base), "https://example.test/%s/", long_part);
+
+    /* links before the base, one open when it comes, links after it, later bases: all against the first that resolves */
+    page("text/html", "utf-8", LIT("<a href=a>A</a> <p id=p>p</p> <a href=#f>F</a> <a href=o>O <base href=javascript:x>"
+                                   "<base href=\"https://other.test/d/\"> still</a> <a href=c>C</a> "
+                                   "<base href=\"https://third.test/\"><a href=e>E</a>"), "a late base, a link open");
+    check(pg_ok && pg.link_count == 5 && link_is(1, "https://other.test/d/a", 1, "A") &&
+          link_is(2, "https://example.test/dir/page.html#f", 1, "F") && link_is(3, "https://other.test/d/o", 1, "O still") &&
+          link_is(4, "https://other.test/d/c", 1, "C") && link_is(5, "https://other.test/d/e", 1, "E") && !pg.truncated &&
+          !pg.notice[0], "a late base: links before it, the link open at it and links after it, but not a later base");
+
+    /* the bug: links before a base whose addresses against it pass UT_LINK_BYTES_MAX, links after it, a later base */
     for(i = 0; i < 1300; i++) sb_printf(&b, "<a href=\"x%u\">%u</a> ", i, i);
-    sb_str(&b, "<base href=\"https://example.test/");
-    sb_str(&b, long_part);
-    sb_str(&b, "/\"><a href=y>y</a>");
-    page("text/html", "utf-8", b.s, b.len, "a late base too big");
+    base_tag(&b, base);
+    sb_str(&b, "<a href=y>y</a> <base href=\"https://other.test/\"><a href=z>z</a>");
+    page("text/html", "utf-8", b.s, b.len, "a late base too big for the link budget");
+    check(pg_ok && !links_elsewhere(base), "a late base too big for the link budget: no link goes anywhere else");
+    check(pg_ok && pg.link_count > 600 && pg.link_count < 1300 && links_at(base, pg.link_count, NULL) &&
+          full_at(base, pg.link_count, NULL) && (pg.truncated & UT_TRUNC_LINKS) && !(pg.truncated & ~UT_TRUNC_LINKS),
+          "a late base too big for the link budget: the links before it are numbered against it, in order, while they fit");
+    snprintf(notice, sizeof(notice), "only its first %u links have numbers", pg_ok ? (unsigned)pg.link_count : 0);
+    snprintf(want, sizeof(want), " %u[%u] %u %u ", pg_ok ? (unsigned)pg.link_count - 1 : 0, pg_ok ? (unsigned)pg.link_count : 0,
+             pg_ok ? (unsigned)pg.link_count : 0, pg_ok ? (unsigned)pg.link_count + 1 : 0);
+    check(pg_ok && !strcmp(pg.notice, notice) && !strncmp(pg.text, "0[1] 1[2] ", 10) && strstr(pg.text, want) &&
+          ends_with(pg.text, " 1299 y z") && !strstr(pg.text, "other.test"),
+          "a late base too big for the link budget: the rest keep their text without a number, and the notice says so");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+
+    /* the budget full of anchors, one link before the base: it keeps its number, and fewer anchors are known */
+    sb_str(&b, "<a href=x0>0</a>");
+    for(i = 0; i < 1100; i++) {
+        sb_printf(&b, "<p id=\"%04u", i);
+        sb_add(&b, long_part, 996);
+        sb_str(&b, "\">.</p>");
+    }
+    base_tag(&b, base);
+    sb_str(&b, "<p id=end>end</p><a href=x1>1</a>");
+    page("text/html", "utf-8", b.s, b.len, "a late base, the link budget full of anchors");
     n = pg_ok ? link_strings(&pg) : 0;
-    check(pg_ok && pg.link_count == 1301 && n <= UT_LINK_BYTES_MAX && link_is(1, "https://example.test/dir/x0", 1, "0") &&
-          link_is(1301, "https://example.test/dir/y", 1, "y"),
-          "a late <base> whose addresses would pass UT_LINK_BYTES_MAX is not used, for any link");
+    check(pg_ok && pg.link_count == 1 && links_at(base, 1, NULL) && pg.anchor_count > 1000 && pg.anchor_count < 1100 &&
+          n <= UT_LINK_BYTES_MAX && n + 1001 > UT_LINK_BYTES_MAX && ut_anchor_offset(&pg, "end", &off) == -1 &&
+          (pg.truncated & UT_TRUNC_LINKS) && (pg.truncated & UT_TRUNC_ANCHORS) &&
+          !strcmp(pg.notice, "only its first 1 links have numbers") && !strncmp(pg.text, "0[1]", 4) && ends_with(pg.text, ".\n\nend\n\n1"),
+          "a late base, the link budget full of anchors: the link before it keeps its number against it");
+    free(b.s);
+    b.s = NULL; b.len = b.cap = 0;
+
+    /* and the 2048-link limit: 2049 links, then a base whose addresses fit; then one whose addresses do not */
+    for(i = 0; i < 2049; i++) sb_printf(&b, "<a href=\"x%u\">L%u</a> ", i, i);
+    sb_str(&b, "<base href=\"https://other.test/d/\">");
+    page("text/html", "utf-8", b.s, b.len, "2049 links, then a late base");
+    check(pg_ok && pg.link_count == 2048 && links_at("https://other.test/d/", 2048, "L") && (pg.truncated & UT_TRUNC_LINKS) &&
+          !strcmp(pg.notice, "only its first 2048 links have numbers") && ends_with(pg.text, "L2047[2048] L2048"),
+          "2049 links, then a late base: 2048 numbered against it");
+    b.len -= strlen("<base href=\"https://other.test/d/\">");
+    base_tag(&b, base);
+    page("text/html", "utf-8", b.s, b.len, "2049 links, then a late base too big for the link budget");
+    snprintf(notice, sizeof(notice), "only its first %u links have numbers", pg_ok ? (unsigned)pg.link_count : 0);
+    check(pg_ok && !links_elsewhere(base) && pg.link_count > 600 && pg.link_count < 1300 && links_at(base, pg.link_count, "L") &&
+          full_at(base, pg.link_count, "L") && !strcmp(pg.notice, notice) && ends_with(pg.text, "L2047 L2048"),
+          "2049 links, then a late base too big for the link budget: the budget, not the count, says how many are numbered");
     free(b.s);
 }
 
@@ -1157,22 +1281,41 @@ static void misc(void) {
 
 /**** every allocation failing in turn ****/
 
-static void fail_each(const char *what, const char *type, const char *charset, const char *body, size_t len) {
+/* Every allocation failing in turn. A page whose late <base>, at byte base_at, is too big for the link budget has
+   thousands, each with a render of 1 MiB of strings; for it (base_at > 0) every one around where the base comes
+   (rebase() starting), around where the second reading starts (rebase() ending, that reading's state), and every
+   step-th one elsewhere. */
+static void fail_some(const char *what, const char *type, const char *charset, const char *body, size_t len,
+                      size_t base_at, long step) {
     struct ut_response *r = response(PAGE_URL, type, charset, body, len);
     struct ut_document ref, d, untouched;
-    char err[UT_ERR_MAX], msg[200], *want, *got;
-    long n, total, blocks, failed = 0, kept = 0;
+    char err[UT_ERR_MAX], msg[240], *want, *got;
+    long n, total, blocks, failed = 0, kept = 0, tried = 0, at = 0, again = 0;
     size_t bytes;
     int ok = 1;
     if(render(r, &ref, what)) {
         response_free(r);
         return;
     }
+    if(base_at) {                                   /* the allocations before the base: the page without it */
+        struct ut_response *before = response(PAGE_URL, type, charset, body, base_at);
+        at = alloc_calls;
+        if(!ut_render(before, &d, err, sizeof(err))) ut_document_free(&d);
+        at = alloc_calls - at;
+        response_free(before);
+    }
     total = alloc_calls;
+    nbig = 0;
     if(!ut_render(r, &d, err, sizeof(err))) ut_document_free(&d);
+    if(base_at) {
+        check(nbig == 2, "a late base too big for the link budget: the page is read twice");
+        again = nbig == 2 ? big_calls[1] - total : 0;
+    }
     total = alloc_calls - total;                    /* the allocations one render asks for */
     want = dump(&ref, r);
     for(n = 0; n < total && ok; n++) {
+        if(base_at && n % step && (n < at - 32 || n >= at + 64) && (n < again - 64 || n >= again + 64)) continue;
+        tried++;
         memset(&d, 0x5a, sizeof(d));
         memcpy(&untouched, &d, sizeof(d));
         blocks = live_blocks;
@@ -1202,13 +1345,20 @@ static void fail_each(const char *what, const char *type, const char *charset, c
             ok = 0;
         }
     }
-    snprintf(msg, sizeof(msg), "%s: each of its %ld allocations failing: %ld times -1 with the output unchanged and "
-             "nothing kept, %ld times the same document", what, total, failed, kept);
-    check(ok && failed + kept == total, msg);
+    if(base_at) snprintf(msg, sizeof(msg), "%s: %ld of its %ld allocations failing (around %ld and %ld, and one in %ld elsewhere): %ld "
+                         "times -1 with the output unchanged and nothing kept, %ld times the same document", what, tried, total,
+                         at, again, step, failed, kept);
+    else snprintf(msg, sizeof(msg), "%s: each of its %ld allocations failing: %ld times -1 with the output unchanged and "
+                  "nothing kept, %ld times the same document", what, total, failed, kept);
+    check(ok && failed + kept == tried, msg);
     printf("  %s\n", msg);
     free(want);
     ut_document_free(&ref);
     response_free(r);
+}
+
+static void fail_each(const char *what, const char *type, const char *charset, const char *body, size_t len) {
+    fail_some(what, type, charset, body, len, 0, 1);
 }
 
 static void alloc_failures(const char *dir) {
@@ -1223,6 +1373,17 @@ static void alloc_failures(const char *dir) {
     fail_each("a UTF-16 page", "text/html", "", LIT("\xff\xfe<\0p\0>\0x\0"));
     fail_each("links before a late base", "text/html", "", LIT("<a href=a>A</a><a href=#f>F</a><p id=x>x</p><a href=b>B</a>"
                                                                "<base href=\"https://other.test/d/\"><a href=c>C</a>"));
+    {   /* a late <base> too big for the link budget: the page is laid out again. Labels of 1000 bytes and addresses
+           of 2000 make the budget full with few allocations. */
+        char base[2048], *body;
+        memset(base, 'a', sizeof(base));
+        memcpy(base, "https://example.test/", 21);
+        strcpy(base + 2010, "/");
+        body = base_page(360, 1000, base, &len);
+        fail_some("links before a late base too big for the link budget", "text/html", "", body, len,
+                  len - strlen(base) - strlen("<base href=\"\">"), 101);
+        free(body);
+    }
     fail_each("a data table", "text/html", "", LIT("<table><tr><th>a</th><td></td></tr><tr><td><a href=/x></a></td></tr></table>"));
     snprintf(path, sizeof(path), "%s/article.html", dir);
     article = read_file(path, &len);
@@ -1451,6 +1612,7 @@ int main(int argc, char **argv) {
     anchors();
     limits();
     link_bytes();
+    late_base();
     structure();
     review_round();
     misc();
