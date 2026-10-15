@@ -6,6 +6,53 @@ The approved design is [the spec](../specs/2026-10-10-undertow-design.md) and th
 the same time and fixes the interfaces between them. Where this brief is more precise than
 the plan, this brief wins; where it is silent, the spec and plan apply.
 
+## Review fixes and final validation (2026-10-15, America/Chicago)
+
+The whole-branch review of `4ac143b..91ba829` and the fix review that followed are done.
+Fixed on `codex/undertow` (merges `c482a1c`, `830b64e`, `3795825`, `241393b`):
+
+- **TLS deadlines** (`5f76114`): the 20 s handshake, 60 s load and 15 s idle limits now hold
+  inside Mbed TLS's own calls. Ignored warning alerts on an always-ready connection used
+  to keep one `mbedtls_ssl_handshake()`/`mbedtls_ssl_read()` running for minutes past them.
+  Expiry inside the BIO callbacks is sticky (`MBEDTLS_ERR_SSL_TIMEOUT`), maps to the usual
+  timeout messages, and no data or finished handshake is returned after a deadline.
+- **Late `<base>`** (`338b73b`, `7434de3`): a late base whose links would pass the 1 MiB
+  string budget, or that comes after the budget already stopped the numbers, makes the
+  renderer read the page again with the base known from the start. Before, it was silently
+  ignored and links kept addresses against the page.
+- **DNS** (`7724097`, `0eed6fd`): random query IDs and random source ports from the kernel's
+  DRBG (RDRAND-seeded when present; TSC/tick fallback, never blocking).
+- `links` names the real numbering cutoff and keeps 4-digit numbers in line (`8a6278b`); a
+  bare IPv4 address at the prompt opens (`f808581`); legacy character-reference prefixes
+  such as `&notit;` decode as browsers do (`42c2898`).
+
+Each fix has red-then-green host regressions. Final validation of `241393b` (clean source,
+separate O0/O2 exports, volume `surfos-undertow-build`):
+
+| Suite | O0 | O2 |
+| --- | --- | --- |
+| System smoke | 295 passed | 295 passed |
+| Files integration | 51 passed | 51 passed |
+| Deterministic browser | 59 passed | 59 passed |
+| Full USB/UEFI | 261 passed (see below) | 261 passed |
+
+The first O0 USB run failed 1 of 261: `fstest` itself printed `FSTEST PASS` (75 checks), but
+its 1 MB write/read took 9 s each instead of ~60 ms on a loaded shared host, and the step
+timed out. The same image passed 261/261 alone at normal speed. The previous revision's O0
+USB run (60 ms) also passed, and nothing between the two revisions touches USB or storage.
+
+All host unit suites passed: URL 382, utility/configuration 72, HTTP 835, HTML 672, session
+78, view/editor 127, commands 94, transport 426, DNS 232, plus the baseline suites. The
+transport suite with every allocation failed in turn (TLS 1.3 9853, TLS 1.2 12616, setup 13,
+HTTP 1) passed with no leak allowance; native ASan/UBSan passed for HTML, session, view,
+commands and transport (transport and command sources are unchanged since those runs on
+`5f76114`/`0eed6fd`); HTML passed 32-bit UBSan at `338b73b`. The public interoperability check
+was not repeated for this revision. Evidence is under
+`build/undertow-review-fixes/` (generated, not tracked).
+
+Still outstanding: integration into `ai-dev` (the owner's decision) and a physical laptop
+boot. The release image is built with `devenv/build-usb.sh` from the final commit.
+
 ## Completion and next steps (2026-10-12, America/Chicago)
 
 The implementation of tasks 1–8 is integrated on `codex/undertow`: DNS, strong

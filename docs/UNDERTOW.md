@@ -8,8 +8,9 @@ the VGA or framebuffer screen, the serial line and telnet sessions.
 It reads pages; it does not run them. There is no JavaScript, and no forms, logins,
 cookies, downloads, images or CSS layout (see [What pages work](#what-pages-work)).
 
-This guide describes the integrated browser (`user/undertow/`), including the 2026-10-12
-carryover fixes. The messages
+This guide describes the integrated browser (`user/undertow/`), including the 2026-10-15
+review fixes (TLS time limits inside the TLS library's calls, a late `<base>`, random DNS
+query IDs and ports, bare IPv4 addresses at the prompt). The messages
 quoted are the program's own. What was tried on public sites is in
 [Interoperability](#interoperability).
 
@@ -398,6 +399,10 @@ deterministic suite: it is the one check that uses the Internet and public DNS.
 **Setup.** The production initrd and roots, `-cpu max`, QEMU's user network with DHCP, and
 `undertow --dump ADDRESS > /dev/null` for each page. The time runs from the command to the
 shell's prompt.
+
+The 2026-10-15 review fixes were validated with the deterministic suites only (see
+[the tracks brief](superpowers/plans/2026-10-11-undertow-tracks.md)); the public check
+below has not been repeated on that revision.
 
 ### 2026-10-13 03:46 UTC (completion validation)
 
