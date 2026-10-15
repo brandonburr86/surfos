@@ -56,6 +56,8 @@ int cmd_fdisk(int argc, char **argv);
 int cmd_wifi(int argc, char **argv);
 int cmd_gui(int argc, char **argv);
 int cmd_pointerinfo(int argc, char **argv);
+int cmd_acpidump(int argc, char **argv);
+int cmd_acpinvs(int argc, char **argv);
 int cmd_gfxinfo(int argc, char **argv);
 int cmd_gfxtest(int argc, char **argv);
 

@@ -234,6 +234,12 @@ SMOKE = [
                  'timer     PIT channel 0']),   # in the order printed; 10/10/26: iwlwifi only with profile=laptop
     ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
+    ('acpidump DSDT', ['not found']),
+    ('acpidump MSDM', ['usage: acpidump']),
+    ('acpidump SSDT -1', ['usage: acpidump']),
+    ('acpidump DSDT 1', ['usage: acpidump']),
+    ('acpinvs 0 16', ['refused']),
+    ('acpinvs 1000 257', ['usage: acpinvs']),
     ('himem',   ['no RAM above 4 GB']),
     ('dhcp',    ['lease 10.0.2.15', 'inet 10.0.2.15', 'gateway 10.0.2.2']),
     ('ping 10.0.2.2 2', ['64 bytes from 10.0.2.2', '2 packets transmitted, 2 received']),

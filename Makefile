@@ -516,3 +516,13 @@ unittest-mouse: $(BUILD)/host/test_ps2mouse $(BUILD)/host/test_usbmouse
 	$(BUILD)/host/test_usbmouse
 unittest: unittest-mouse
 .PHONY: unittest-mouse
+
+# Read-only firmware AML export, including runtime mapping ownership.
+$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_acpidump $(BUILD)/host/kernel/kernel/acpi.o: HOSTKERN_FLAGS += -fgnu89-inline
+unittest-acpi: $(BUILD)/host/test_acpidump
+	$(BUILD)/host/test_acpidump
+	$(PYTHON) -m unittest discover -s tests -p test_acpi_fetch.py
+unittest: unittest-acpi
+.PHONY: unittest-acpi

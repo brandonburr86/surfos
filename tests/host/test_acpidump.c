@@ -1,0 +1,355 @@
+/*
+SurfOS ACPI Export Tests
+--------------------
+File: test_acpidump.c Date: 10/12/26
+--------------------
+Real ACPI discovery and copying over a replaceable simulated mapping window.
+*/
+#include <surfos/acpi.h>
+#include <surfos/multiboot.h>
+#include <surfos/task.h>
+#include <mm/memory.h>
+#include <mm/kalloc.h>
+#include <string.h>
+#include <stdio.h>
+
+void *malloc(unsigned long size);
+void free(void *pointer);
+int cmd_acpidump(int argc, char **argv);
+int cmd_acpinvs(int argc, char **argv);
+struct boot_info bootinfo;
+static surf_task task;
+surf_task *curTask = &task;
+static unsigned checks, failures, critical, maps, live, allocations;
+static bool exporting, allocation_failed, change_length, change_signature, interrupt_allocation;
+static u64 fail_after, mutate_header_after, corrupt_after;
+#define CAPACITY (TMPMAP_END - TMPMAP_START)
+struct region { u64 address; u8 data[1048576U + 8]; };
+static struct region regions[5];
+static u8 window[CAPACITY];
+
+static void check(bool ok, const char *what) {
+    checks++;
+    if(!ok) { failures++; printf("FAIL: %s\n", what); }
+}
+void kcritical_enter(void) { critical++; }
+void kcritical_leave(void) { check(critical == 1, "balanced non-nested mapping critical section"); critical--; }
+void kprintf(const char *format, ...) { (void)format; }
+static void put32(u8 *p, u32 value) { memcpy(p, &value, 4); }
+static void put64(u8 *p, u64 value) { memcpy(p, &value, 8); }
+static void checksum(u8 *p, u32 size) {
+    u32 i;
+    u8 sum = 0;
+    p[9] = 0;
+    for(i = 0; i < size; i++) sum += p[i];
+    p[9] = -sum;
+}
+static void table(unsigned index, const char *signature, u32 size) {
+    u32 i;
+    memset(regions[index].data, 0, sizeof(regions[index].data));
+    for(i = 36; i < size; i++) regions[index].data[i] = (u8)(i * 17 + i / 1024);
+    memcpy(regions[index].data, signature, 4);
+    put32(regions[index].data + 4, size);
+    regions[index].data[8] = 2;
+    checksum(regions[index].data, size);
+}
+void *vmm_temp_map(u64 physical, u_long size) {
+    unsigned i;
+    maps++;
+    if(exporting) check(critical == 1, "every export mapping is inside the critical section");
+    if(!physical || size + (physical & (PAGE_SIZE - 1)) > CAPACITY || physical > 0x100000000ULL - size)
+        return NULL;
+    if(exporting && fail_after && physical >= fail_after) return NULL;
+    if(exporting && mutate_header_after && physical >= mutate_header_after) {
+        regions[1].data[8]++;
+        checksum(regions[1].data, 2 * CAPACITY);
+        mutate_header_after = 0;
+    }
+    for(i = 5; i-- > 0;) if(physical >= regions[i].address &&
+            physical - regions[i].address < sizeof(regions[i].data) &&
+            size <= sizeof(regions[i].data) - (physical - regions[i].address)) {
+        u32 offset = physical - regions[i].address;
+        if(exporting && corrupt_after && physical >= corrupt_after) {
+            regions[i].data[offset] ^= 1;
+            corrupt_after = 0;
+        }
+        memset(window, 0xa5, sizeof(window));
+        memcpy(window, regions[i].data + offset, size);
+        return window;
+    }
+    return NULL;
+}
+void *kalloc(size_t size) {
+    void *result;
+    allocations++;
+    check(!critical, "allocation never occurs while holding the mapping critical section");
+    if(allocation_failed) return NULL;
+    if(change_length) {
+        put32(regions[1].data + 4, 80);
+        checksum(regions[1].data, 80);
+    }
+    if(change_signature) {
+        memcpy(regions[1].data, "MSDM", 4);
+        checksum(regions[1].data, 64);
+    }
+    result = malloc(size);
+    if(result) live++;
+    if(interrupt_allocation) task.intr = TI_INT;
+    return result;
+}
+void kfree(void *data) {
+    check(!critical, "free never occurs while holding the mapping critical section");
+    if(data) { live--; free(data); }
+}
+
+static void setup(u32 fadt_length, u64 extended, u32 legacy) {
+    unsigned i;
+    exporting = false;
+    allocation_failed = change_length = change_signature = interrupt_allocation = false;
+    fail_after = mutate_header_after = corrupt_after = 0;
+    task.intr = 0;
+    for(i = 0; i < 5; i++) regions[i].address = (i + 1) * 0x100000;
+    table(0, "XSDT", 60);
+    table(1, "DSDT", 64);
+    table(2, "SSDT", 48);
+    table(3, "FACP", fadt_length);
+    table(4, "SSDT", 52);
+    if(fadt_length >= 44) put32(regions[3].data + 40, legacy);
+    if(fadt_length >= 148) put64(regions[3].data + 140, extended);
+    checksum(regions[3].data, fadt_length);
+    put64(regions[0].data + 36, regions[3].address);
+    put64(regions[0].data + 44, regions[2].address);
+    put64(regions[0].data + 52, regions[4].address);
+    checksum(regions[0].data, 60);
+    memset(&bootinfo, 0, sizeof(bootinfo));
+    bootinfo.efi = true;
+    bootinfo.acpi.present = true;
+    bootinfo.acpi.revision = 2;
+    bootinfo.acpi.xsdt = regions[0].address;
+    check(init_acpi() == 0, "real ACPI discovery accepts the valid root");
+    exporting = true;
+}
+
+static void expect_copy(const char *signature, unsigned instance, int wanted, u32 size) {
+    u8 *data = (u8 *)1;
+    u32 length = 123;
+    int result = acpi_aml_copy(signature, instance, &data, &length);
+    check(result == wanted, "export status matches validation outcome");
+    if(result == ACPI_COPY_OK) {
+        const u8 *source = !strcmp(signature, "DSDT") ? regions[1].data : regions[instance ? 4 : 2].data;
+        check(data && length == size && !memcmp(data, signature, 4), "owned copy has the requested table and length");
+        check(!memcmp(data, source, size), "all copied bytes match, including chunk boundaries");
+        memset(window, 0, sizeof(window));
+        check(!memcmp(data, signature, 4), "returned bytes survive remapping the temporary window");
+        kfree(data);
+    } else check(!data && !length, "failed exports return no pointer or length");
+    check(!critical && !live, "no critical section or heap allocation leaks");
+}
+
+static void nvs_setup(void) {
+    setup(148, 0x200000, 0);
+    bootinfo.valid = bootinfo.laptop = true;
+    bootinfo.nregions = 1;
+    bootinfo.regions[0].base = regions[1].address;
+    bootinfo.regions[0].len = 4096;
+    bootinfo.regions[0].type = 4;
+}
+
+static void expect_nvs(u64 address, u32 length, int wanted, bool may_map) {
+    u8 data[256], empty[256];
+    unsigned before = maps;
+    int result;
+    memset(data, 0xa5, sizeof(data));
+    memcpy(empty, data, sizeof(data));
+    result = acpi_nvs_copy(address, length, data);
+    check(result == wanted, "NVS read status matches validation outcome");
+    if(result == ACPI_COPY_OK) {
+        check(!memcmp(data, regions[1].data + (address - regions[1].address), length),
+              "NVS owned copy contains the exact requested bytes");
+        memset(window, 0, sizeof(window));
+        check(!memcmp(data, regions[1].data + (address - regions[1].address), length),
+              "NVS result survives the next mapping");
+    } else check(!memcmp(data, empty, sizeof(data)), "failed NVS reads leave the destination untouched");
+    if(!may_map) check(maps == before, "refused NVS ranges never map physical memory");
+    check(!critical && !live, "NVS read leaks no mapping critical section or allocation");
+}
+
+static void test_nvs(void) {
+    unsigned before;
+    char *good[] = { "acpinvs", "0x200020", "16" };
+    char *refused[] = { "acpinvs", "0", "16" };
+    char *large[] = { "acpinvs", "1000", "257" };
+    char *badhex[] = { "acpinvs", "0xG000", "16" };
+    char *negative[] = { "acpinvs", "-1", "16" };
+    char *overflow[] = { "acpinvs", "10000000000000000", "16" };
+    char *empty[] = { "acpinvs", "0x", "16" };
+    char *badcount[] = { "acpinvs", "200020", "16x" };
+    char *zero[] = { "acpinvs", "200020", "0" };
+    char *huge[] = { "acpinvs", "200020", "4294967296" };
+    nvs_setup();
+    expect_nvs(0x200020, 37, ACPI_COPY_OK, true);
+    expect_nvs(0x200f00, 256, ACPI_COPY_OK, true);
+    expect_nvs(0x200fff, 1, ACPI_COPY_OK, true);
+    expect_nvs(0x200fff, 2, ACPI_COPY_INVALID, false);
+    expect_nvs(0x1fffff, 2, ACPI_COPY_INVALID, false);
+    expect_nvs(0x200000, 0, ACPI_COPY_REQUEST, false);
+    expect_nvs(0x200000, 257, ACPI_COPY_REQUEST, false);
+    before = maps;
+    check(acpi_nvs_copy(0x200000, 1, NULL) == ACPI_COPY_REQUEST && maps == before,
+          "NVS requires an output buffer before mapping");
+    expect_nvs(0xffffffffffffffffULL, 2, ACPI_COPY_REQUEST, false);
+    expect_nvs(0xffffffffULL, 2, ACPI_COPY_REQUEST, false);
+    expect_nvs(0x100000000ULL, 1, ACPI_COPY_REQUEST, false);
+    bootinfo.laptop = false;
+    expect_nvs(0x200000, 1, ACPI_COPY_ABSENT, false);
+    bootinfo.laptop = true; bootinfo.valid = false;
+    expect_nvs(0x200000, 1, ACPI_COPY_ABSENT, false);
+    bootinfo.valid = true; acpi.present = false;
+    expect_nvs(0x200000, 1, ACPI_COPY_ABSENT, false);
+    acpi.present = true; bootinfo.regions[0].type = 1;
+    expect_nvs(0x200000, 1, ACPI_COPY_INVALID, false);
+    bootinfo.regions[0].type = 4;
+    bootinfo.nregions = 2;
+    bootinfo.regions[1] = bootinfo.regions[0];
+    bootinfo.regions[1].base = 0x200010; bootinfo.regions[1].len = 2;
+    bootinfo.regions[1].type = 2;
+    expect_nvs(0x200000, 32, ACPI_COPY_INVALID, false);
+    expect_nvs(0x200012, 1, ACPI_COPY_OK, true);
+    bootinfo.regions[0].len = 16;
+    bootinfo.regions[1].type = 4; bootinfo.regions[1].len = 16;
+    expect_nvs(0x200008, 16, ACPI_COPY_INVALID, false);
+    bootinfo.regions[1].base = 0xfffffffffffffff0ULL; bootinfo.regions[1].len = 32;
+    expect_nvs(0x200000, 1, ACPI_COPY_INVALID, false);
+    bootinfo.nregions = MB_MAX_REGIONS + 1;
+    expect_nvs(0x200000, 1, ACPI_COPY_INVALID, false);
+    nvs_setup();
+    fail_after = 0x200000;
+    expect_nvs(0x200000, 1, ACPI_COPY_INVALID, true);
+    fail_after = 0;
+    check(cmd_acpinvs(3, good) == 0, "NVS shell exports an allowed range");
+    check(cmd_acpinvs(3, refused) == 1, "NVS shell reports a refused range as failure");
+    before = maps;
+    check(cmd_acpinvs(2, good) == 2 && cmd_acpinvs(3, large) == 2 &&
+          cmd_acpinvs(3, badhex) == 2 && cmd_acpinvs(3, negative) == 2 &&
+          cmd_acpinvs(3, overflow) == 2 && cmd_acpinvs(3, empty) == 2 &&
+          cmd_acpinvs(3, badcount) == 2 && cmd_acpinvs(3, zero) == 2 &&
+          cmd_acpinvs(3, huge) == 2, "NVS shell rejects malformed or excessive arguments");
+    task.intr = TI_INT;
+    check(cmd_acpinvs(3, good) == 1 && maps == before, "interrupted NVS command does not map");
+    task.intr = 0;
+    regions[1].address = 0xffffff00ULL;
+    bootinfo.regions[0].base = regions[1].address; bootinfo.regions[0].len = 256;
+    expect_nvs(regions[1].address, 256, ACPI_COPY_OK, true);
+}
+
+int main(void) {
+    unsigned before;
+    char *dsdt[] = { "acpidump", "DSDT" };
+    char *wrong[] = { "acpidump", "MSDM" };
+    char *negative[] = { "acpidump", "SSDT", "-1" };
+    char *overflow[] = { "acpidump", "SSDT", "4294967296" };
+    char *second[] = { "acpidump", "DSDT", "1" };
+
+    setup(148, 0x200000, 0xdead0000);
+    check(acpi.dsdt_addr == 0x200000, "X_DSDT wins over the legacy address");
+    expect_copy("DSDT", 0, ACPI_COPY_OK, 64);
+    expect_copy("SSDT", 0, ACPI_COPY_OK, 48);
+    expect_copy("SSDT", 1, ACPI_COPY_OK, 52);
+    before = maps;
+    expect_copy("SSDT", 2, ACPI_COPY_ABSENT, 0);
+    expect_copy("SSDT", 0xffffffffU, ACPI_COPY_ABSENT, 0);
+    expect_copy("DSDT", 1, ACPI_COPY_REQUEST, 0);
+    expect_copy("MSDM", 0, ACPI_COPY_REQUEST, 0);
+    expect_copy("DSDTextra", 0, ACPI_COPY_REQUEST, 0);
+    expect_copy(NULL, 0, ACPI_COPY_REQUEST, 0);
+    check(maps == before, "bad names and indices never map physical memory");
+    setup(148, 0, 0x200000);
+    check(acpi.dsdt_addr == 0x200000, "zero X_DSDT falls back to the legacy address");
+    setup(147, 0, 0x200000);
+    check(acpi.dsdt_addr == 0x200000, "incomplete X_DSDT field falls back to the legacy address");
+    setup(44, 0, 0x200000);
+    check(acpi.dsdt_addr == 0x200000, "short legacy FADT still supplies DSDT");
+    regions[3].data[36] ^= 1;
+    exporting = false; init_acpi(); exporting = true;
+    expect_copy("DSDT", 0, ACPI_COPY_ABSENT, 0);
+    table(3, "NOPE", 44);
+    exporting = false; init_acpi(); exporting = true;
+    expect_copy("DSDT", 0, ACPI_COPY_ABSENT, 0);
+    setup(40, 0, 0);
+    expect_copy("DSDT", 0, ACPI_COPY_ABSENT, 0);
+    setup(148, 0x100200000ULL, 0x200000);
+    check(acpi.dsdt_addr == 0x100200000ULL, "nonzero X_DSDT is never silently replaced");
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    setup(148, 0x200000, 0);
+    before = maps;
+    acpi.dsdt_addr = 0xfffffffffffffff0ULL;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    check(maps == before, "overflowing physical addresses are rejected before mapping");
+    acpi.dsdt_addr = 0xfff00000;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    acpi.dsdt_addr = 0x200000;
+    regions[1].data[36] ^= 1;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    table(1, "MSDM", 64);
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    table(1, "DSDT", 64);
+    put32(regions[1].data + 4, 35);
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    put32(regions[1].data + 4, 0xffffffffU);
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    table(1, "DSDT", CAPACITY);
+    expect_copy("DSDT", 0, ACPI_COPY_OK, CAPACITY);
+    regions[1].address += PAGE_SIZE - 1; acpi.dsdt_addr = regions[1].address;
+    expect_copy("DSDT", 0, ACPI_COPY_OK, CAPACITY);
+    table(1, "DSDT", 2 * CAPACITY);
+    expect_copy("DSDT", 0, ACPI_COPY_OK, 2 * CAPACITY);
+    table(1, "DSDT", 1048576U);
+    expect_copy("DSDT", 0, ACPI_COPY_OK, 1048576U);
+    table(1, "DSDT", 1048577U);
+    before = allocations;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    check(allocations == before, "over 1 MiB is refused before allocation");
+    table(1, "DSDT", 2 * CAPACITY);
+    fail_after = regions[1].address + 70000;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    fail_after = 0;
+    mutate_header_after = regions[1].address + 70000;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    corrupt_after = regions[1].address + 70000;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    table(1, "DSDT", 64);
+    regions[1].address = acpi.dsdt_addr = 0x100000000ULL - 64;
+    expect_copy("DSDT", 0, ACPI_COPY_OK, 64);
+    regions[1].address++; acpi.dsdt_addr++;
+    before = allocations;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    check(allocations == before, "physical end overflow is refused before allocation");
+    setup(148, 0x200000, 0);
+    acpi.tables[1].ok = false;
+    regions[2].data[36] ^= 1;
+    expect_copy("SSDT", 0, ACPI_COPY_INVALID, 0);
+    expect_copy("SSDT", 1, ACPI_COPY_OK, 52);
+    table(2, "SSDT", CAPACITY + 17);
+    expect_copy("SSDT", 0, ACPI_COPY_OK, CAPACITY + 17);
+    allocation_failed = true;
+    expect_copy("DSDT", 0, ACPI_COPY_NOMEM, 0);
+    allocation_failed = false; change_length = true;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    setup(148, 0x200000, 0);
+    change_signature = true;
+    expect_copy("DSDT", 0, ACPI_COPY_INVALID, 0);
+    setup(148, 0x200000, 0);
+    check(cmd_acpidump(2, wrong) == 2 && cmd_acpidump(3, negative) == 2 &&
+          cmd_acpidump(3, overflow) == 2 && cmd_acpidump(3, second) == 2,
+          "shell rejects sensitive signatures, negative/overflow indices and a second DSDT");
+    task.intr = TI_INT;
+    check(cmd_acpidump(2, dsdt) == 1 && !live && !critical, "interrupted export fails without leaking its owned copy");
+    task.intr = 0;
+    interrupt_allocation = true;
+    check(cmd_acpidump(2, dsdt) == 1 && !live && !critical, "interruption after allocation still frees the table");
+    interrupt_allocation = false; task.intr = 0;
+    check(cmd_acpidump(2, dsdt) == 0 && !live && !critical, "normal shell export succeeds and frees its copy");
+    test_nvs();
+    printf("ACPIDUMP UNIT TESTS %s: %u checks, %u failures\n", failures ? "FAILED" : "PASSED", checks, failures);
+    return failures ? 1 : 0;
+}

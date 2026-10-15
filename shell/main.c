@@ -877,6 +877,8 @@ static const struct command commands[] = {
     { "bootinfo",  "",          "what the boot loader passed", cmd_bootinfo },
     { "cpuinfo",   "",          "processor model and features", cmd_cpuinfo },
     { "acpi",      "",          "firmware ACPI tables (profile=laptop)", cmd_acpi },
+    { "acpidump",  "DSDT | SSDT [instance]", "export checked ACPI AML bytes", cmd_acpidump },
+    { "acpinvs",   "hex-address bytes", "read up to 256 bytes of ACPI NVS", cmd_acpinvs },
     { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
     { "lspci",     "[-v] [bus:dev.fn]", "PCI devices (-v: ids, power, interrupts, link)", cmd_lspci },
     { "wifiinfo",  "",          "the Wi-Fi card's ids, for a Wi-Fi driver", cmd_wifiinfo },

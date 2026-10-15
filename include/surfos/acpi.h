@@ -58,6 +58,7 @@ struct acpi_info {
     struct acpi_table_ref tables[ACPI_MAX_TABLES];
 
     bool fadt;
+    u64 dsdt_addr;             /* X_DSDT when nonzero, else DSDT, from a checked FADT */
     u8 fadt_revision;
     u16 boot_arch;
     u32 fadt_flags;
@@ -86,5 +87,22 @@ extern struct acpi_info acpi;
 int init_acpi(void);            /* 0, or 1 when there are no usable tables */
 void acpi_print(void);
 u32 acpi_isa_gsi(u8 irq);       /* where ISA IRQ n arrives on the I/O APICs (interrupt overrides) */
+
+enum acpi_copy_result {
+    ACPI_COPY_OK = 0,
+    ACPI_COPY_REQUEST = -1,    /* unsupported table, range or arguments */
+    ACPI_COPY_ABSENT = -2,
+    ACPI_COPY_INVALID = -3,    /* bad/unmappable table or it changed while being copied */
+    ACPI_COPY_NOMEM = -4
+};
+#define ACPI_AML_MAX_BYTES (1024U * 1024U)
+#define ACPI_NVS_MAX_BYTES 256U
+/* Task context. On success the caller owns *data and frees it with kfree().
+   The returned bytes never alias the shared firmware mapping window. */
+int acpi_aml_copy(const char *signature, u_int instance, u8 **data, u32 *length);
+/* Read at most 256 bytes wholly within one loader-reported ACPI NVS range.
+   Laptop profile and valid ACPI are required; overlapping non-NVS is refused.
+   The caller supplies length bytes. Failure leaves the buffer unchanged. */
+int acpi_nvs_copy(u64 address, u32 length, u8 *data);
 
 #endif

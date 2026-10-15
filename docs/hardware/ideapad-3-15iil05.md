@@ -26,7 +26,7 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | observed 2026-10-12: Intel 9560, firmware `77.8dbafb52.0`, associated over 2.4 GHz WPA2 with DHCP address `10.0.0.164`; no USB Ethernet adapter attached |
 | USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
 | Keyboard | built-in, behind the embedded controller | observed 2026-10-10: 8042, IRQ 1 plus polling, command byte `0x65` in the pre-GUI kernel |
-| Touchpad | Precision TouchPad (I2C HID on this generation) | actual ACPI/device resources unobserved; native I2C HID driver pending; PS/2 compatibility only if firmware exposes it ([GUI](../GUI.md)) |
+| Touchpad | Precision TouchPad (I2C HID on this generation) | I2C1 resources decoded from native AML (see "Touchpad firmware diagnostics"); native I2C HID driver pending; PS/2 compatibility only if firmware exposes it ([GUI](../GUI.md)) |
 | Firmware | UEFI | **record**: Secure Boot setting, any CSM option, firmware version |
 
 Sources: [Lenovo PSREF](https://psref.lenovo.com/syspool/Sys/PDF/IdeaPad/IdeaPad_3_15IIL05/IdeaPad_3_15IIL05_Spec.pdf),
@@ -242,3 +242,49 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,
 `lsusb`, `cat /proc/cpuinfo` and `sudo dmidecode -t bios`.
+
+### Touchpad firmware diagnostics (2026-10-12)
+
+The desktop's PS/2 probe finds no pointing device on this laptop. The two visible
+Intel I2C functions (8086:34e8 and 8086:34e9 at 00:15.0/1) have BAR0 unassigned
+and report D3hot. Their presence alone does not identify the touchpad.
+
+`acpidump DSDT` and `acpidump SSDT <instance>` export checksummed AML tables as
+hex, without evaluating AML or changing hardware state. `acpi` lists SSDT instance
+numbers. The host helper collects and validates their binary form:
+
+```sh
+python3 tools/acpi-fetch.py --host 10.0.0.164 --output-dir build/laptop-acpi
+```
+
+Use an empty output directory. The helper saves an inventory, binary tables,
+and a SHA-256 manifest tied to the running build ID. ACPICA's `iasl -e ssdt-*.aml -d dsdt.aml`
+can disassemble the DSDT with SSDT externals on the host. Tables up to 1 MiB are copied in chunks through the bounded temporary mapping
+window; inaccessible,
+malformed or bad-checksum tables are refused. Only DSDT and SSDT are exportable.
+
+`acpinvs <hex-address> <bytes>` can read 1–256 bytes of firmware variables only
+when the entire range is marked ACPI NVS in the boot memory map. It rejects
+ordinary RAM, MMIO, crossed ranges and addresses above 4 GiB. Use it only for
+specific fields identified in the decoded AML; it does not evaluate methods or
+modify variables.
+
+
+The revised diagnostic build exported the full 171,067-byte DSDT and nine SSDTs
+with valid checksums. Native evidence is under
+`build/validation/laptop-acpi-r2/` (ignored build output). Important observations:
+
+- DSDT OEM `LENOVO`, table `CB-01`; host bridge 8086:8a02 / 17aa:3808;
+  I2C1 at 00:15.1 is 8086:34e9 / 17aa:3818.
+- Firmware's `SOD3` explicitly enters D3 and clears BAR0. `_PS0` is empty.
+  SANV supplies the PCI producer window 0x65400000–0xbfffffff. The binding
+  checks existing BARs, bridge apertures, RAM, modules and framebuffer before
+  assigning a page within that window. Bus mastering remains disabled.
+- PNVA gives PCHS=2, SBRG=0xfd000000, IM01=1 and IC01=0xa9000 (PCI config
+  offset, not a BAR). The TPD0 interrupt GPIO resolves to 0xfd6e0780.
+- GNVS I2C1 fast-mode timing fields give high=110, low=207, SDA hold=30.
+- TPD0's LFCN.TPTY selects the device: 1 means ELAN at 0x15/descriptor 1;
+  2 or 4 means Synaptics/Cirque at 0x2c/descriptor 0x20; 5 means FocalTech
+  at 0x38/descriptor 1. The actual selector is read at runtime. LFCN is in
+  reserved DRAM rather than NVS, so the public `acpinvs` command refuses it.
+  Only the matching platform binding may read that bounded AML-named region.

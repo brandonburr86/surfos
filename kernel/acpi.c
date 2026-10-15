@@ -13,8 +13,10 @@ length is checked before it is used, so a broken table is listed and skipped.
 #include <surfos/acpi.h>
 #include <surfos/multiboot.h>
 #include <surfos/console.h>
+#include <surfos/task.h>
 #include <mm/memory.h>
 #include <mm/paging.h>
+#include <mm/kalloc.h>
 #include <blibc_common.h>
 
 struct acpi_info acpi;
@@ -42,12 +44,14 @@ static const u8 *map_table(u64 addr, u32 *len_out, bool *ok) {
     const u8 *t;
     u32 len;
     *ok = false;
-    if(!addr || addr + 36 > 0x100000000ULL) return NULL;
+    *len_out = 0;
+    if(!addr || addr > 0x100000000ULL - 36) return NULL;
     t = (const u8 *)vmm_temp_map(addr, 36);
     if(!t) return NULL;
     len = rd32(t + 4);
     *len_out = len;
-    if(len < 36 || len > TMPMAP_END - TMPMAP_START - PAGE_SIZE || addr + len > 0x100000000ULL) return t;
+    if(len < 36 || len > TMPMAP_END - TMPMAP_START - (addr & (PAGE_SIZE - 1)) ||
+       addr + len > 0x100000000ULL) return t;
     t = (const u8 *)vmm_temp_map(addr, len);
     if(t && !sum8(t, len)) *ok = true;
     return t;
@@ -89,6 +93,8 @@ static void parse_fadt(const u8 *t, u32 len) {
     u32 pm = 0, pmlen = 0;
     acpi.fadt = true;
     acpi.fadt_revision = t[8];
+    if(len >= 44) acpi.dsdt_addr = rd32(t + 40);
+    if(len >= 148 && rd64(t + 140)) acpi.dsdt_addr = rd64(t + 140);
     if(len >= 48) acpi.sci_irq = rd16(t + 46);
     if(len >= 80) pm = rd32(t + 76);
     if(len >= 92) pmlen = t[91];
@@ -245,19 +251,115 @@ u32 acpi_isa_gsi(u8 irq) {
     return irq;
 }
 
-void acpi_print(void) {
+/* The window is shared by all firmware readers; no mapping pointer survives
+   this bounded copy. A chunk is at most 64 KiB, including unaligned tables. */
+static bool copy_firmware(u64 address, void *destination, u32 length) {
+    const void *mapped;
+    bool ok;
+    kcritical_enter();
+    mapped = vmm_temp_map(address, length);
+    ok = mapped != NULL;
+    if(ok) memcpy(destination, mapped, length);
+    kcritical_leave();
+    return ok;
+}
+
+/* Only these two firmware table types can cross the diagnostic interface.
+   The boot parser's window limit does not limit this chunked export. Recheck
+   the header after copying and checksum the complete owned image before use. */
+int acpi_aml_copy(const char *signature, u_int instance, u8 **data, u32 *length) {
+    u8 header[36], final_header[36], sum = 0;
+    u8 *copy;
+    u64 address = 0;
+    u32 size, offset, chunk;
+    u_int i, ordinal = 0;
+    bool dsdt;
+    if(data) *data = NULL;
+    if(length) *length = 0;
+    if(!data || !length || !signature) return ACPI_COPY_REQUEST;
+    dsdt = !strcmp(signature, "DSDT");
+    if((!dsdt && strcmp(signature, "SSDT")) || (dsdt && instance)) return ACPI_COPY_REQUEST;
+    if(!acpi.present) return ACPI_COPY_ABSENT;
+    if(dsdt) address = acpi.dsdt_addr;
+    else for(i = 0; i < acpi.ntables; i++) {
+        const struct acpi_table_ref *ref = &acpi.tables[i];
+        if(strcmp(ref->sig, "SSDT")) continue;
+        if(ordinal++ != instance) continue;
+        /* ref->ok may be false solely because this table exceeds the boot
+           parser's mapping window. This path validates all its bytes again. */
+        address = ref->addr;
+        break;
+    }
+    if(!address) return ACPI_COPY_ABSENT;
+    if(address > 0x100000000ULL - sizeof(header) ||
+       !copy_firmware(address, header, sizeof(header)) || memcmp(header, signature, 4))
+        return ACPI_COPY_INVALID;
+    size = rd32(header + 4);
+    if(size < sizeof(header) || size > ACPI_AML_MAX_BYTES || address > 0x100000000ULL - size)
+        return ACPI_COPY_INVALID;
+
+    /* Allocation may page or schedule; no firmware view is held across it. */
+    copy = kalloc(size);
+    if(!copy) return ACPI_COPY_NOMEM;
+    for(offset = 0; offset < size; offset += chunk) {
+        chunk = size - offset;
+        if(chunk > 16 * PAGE_SIZE) chunk = 16 * PAGE_SIZE;
+        if(!copy_firmware(address + offset, copy + offset, chunk)) goto invalid;
+        if(!offset && memcmp(copy, header, sizeof(header))) goto invalid;
+        sum += sum8(copy + offset, chunk);
+    }
+    if(sum || !copy_firmware(address, final_header, sizeof(final_header)) ||
+       memcmp(final_header, header, sizeof(header))) goto invalid;
+    *data = copy;
+    *length = size;
+    return ACPI_COPY_OK;
+invalid:
+    kfree(copy);
+    return ACPI_COPY_INVALID;
+}
+
+/* Only loader-owned NVS ranges are admissible. In particular a broad NVS
+   entry cannot override a narrower reserved or usable-RAM entry. The boot
+   memory map is immutable after initialization. No AML or hardware writes. */
+int acpi_nvs_copy(u64 address, u32 length, u8 *data) {
+    u64 end, region_end;
     u_int i;
+    bool contained = false;
+    if(!data || !length || length > ACPI_NVS_MAX_BYTES || address > 0x100000000ULL - length)
+        return ACPI_COPY_REQUEST;
+    if(!bootinfo.valid || !bootinfo.laptop || !acpi.present) return ACPI_COPY_ABSENT;
+    if(bootinfo.nregions > MB_MAX_REGIONS) return ACPI_COPY_INVALID;
+    end = address + length;
+    for(i = 0; i < bootinfo.nregions; i++) {
+        const struct mb_region *region = &bootinfo.regions[i];
+        if(!region->len) continue;
+        region_end = region->base + region->len;
+        if(region_end < region->base) return ACPI_COPY_INVALID;
+        if(region->type == 4) {
+            if(address >= region->base && end <= region_end) contained = true;
+        } else if(address < region_end && end > region->base) return ACPI_COPY_INVALID;
+    }
+    if(!contained) return ACPI_COPY_INVALID;
+    return copy_firmware(address, data, length) ? ACPI_COPY_OK : ACPI_COPY_INVALID;
+}
+
+void acpi_print(void) {
+    u_int i, ssdt = 0;
     if(!acpi.present) {
         printf("    no ACPI tables were read (they are read with profile=laptop)\n");
         return;
     }
     printf("    ACPI %s, OEM \"%s\", %s at 0x%llx\n", acpi.revision >= 2 ? "2.0+" : "1.0", acpi.oem,
            acpi.xsdt ? "XSDT" : "RSDT", acpi.root);
-    for(i = 0; i < acpi.ntables; i++)
-        printf("    %-4s 0x%09llx %6u bytes%s\n", acpi.tables[i].sig, acpi.tables[i].addr, acpi.tables[i].len,
+    for(i = 0; i < acpi.ntables; i++) {
+        printf("    %-4s 0x%09llx %6u bytes%s", acpi.tables[i].sig, acpi.tables[i].addr, acpi.tables[i].len,
                acpi.tables[i].ok ? "" : "  (failed its checks, not used)");
+        if(!strcmp(acpi.tables[i].sig, "SSDT")) printf("  instance %u", ssdt++);
+        printf("\n");
+    }
     if(acpi.nskipped) printf("    %u more tables not listed\n", acpi.nskipped);
     if(acpi.fadt) {
+        if(acpi.dsdt_addr) printf("    DSDT 0x%09llx (from FADT; acpidump DSDT)\n", acpi.dsdt_addr);
         printf("    FADT rev %u: IAPC_BOOT_ARCH 0x%04x, flags 0x%08x, SCI IRQ %u\n", acpi.fadt_revision, acpi.boot_arch,
                acpi.fadt_flags, acpi.sci_irq);
         printf("      8042 %s, legacy devices %s, CMOS RTC %s, %s\n",
