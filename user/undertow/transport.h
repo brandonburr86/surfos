@@ -10,8 +10,8 @@ ALPN http/1.1. There is no way to skip any of these checks. Names resolve
 through the settings' host table first, then DNS (SYS_resolve); IPv4 literals
 need neither. Every wait is bounded: the stages by UT_DNS_MS, UT_CONNECT_MS and
 UT_HANDSHAKE_MS, each read or write by UT_IDLE_MS without progress, and all of
-it by the caller's deadline. A stage that would need more time than is left
-before the deadline does not start.
+it by the caller's deadline, inside Mbed TLS's own calls too. A stage that would
+need more time than is left before the deadline does not start.
 */
 
 #ifndef UNDERTOW_TRANSPORT_H
@@ -35,7 +35,8 @@ int ut_transport_open(struct ut_transport **out, const struct ut_url *url, const
 /* Up to len bytes: how many (> 0); 0 at the end of the stream (the server closed the
    connection or, over TLS, sent close_notify); -1 on an error, a fatal TLS alert,
    UT_IDLE_MS without a byte, or the deadline (ut_transport_error() says which). Bytes
-   that TLS already holds are returned before anything waits. */
+   that TLS already holds are returned before anything waits; once the deadline has
+   passed nothing is returned, not even bytes that came just after it. */
 int ut_transport_read(struct ut_transport *t, void *buf, size_t len);
 
 /* Some of buf: 1..len bytes (how many), or -1 as for read. The caller writes the rest. */
