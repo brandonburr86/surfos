@@ -60,7 +60,8 @@ struct ut_document {
 
 /* Render r: text/html and application/xhtml+xml as HTML, any other text as it is. Links
    resolve against the first <base href> that resolves, wherever it is in the page, or else
-   r->url. The charset is a byte order mark's (UTF-8, UTF-16LE or UTF-16BE), else r->charset,
+   r->url; with a late one the links are numbered as if it came first (in order, while their
+   strings fit UT_LINK_BYTES_MAX), so a link is never kept at an address it does not give. The charset is a byte order mark's (UTF-8, UTF-16LE or UTF-16BE), else r->charset,
    else a <meta charset> (or http-equiv Content-Type) in the first 1024 bytes, else UTF-8 when
    the bytes are valid UTF-8, else windows-1252 (iso-8859-1 and us-ascii are read as
    windows-1252 too, as browsers do); a charset Undertow cannot read gives its ASCII and a
