@@ -9,6 +9,11 @@ int main(void) {
     pointer_snapshot(&e); CHECK(e.x == 320 && e.y == 200);
     pointer_device(0, true); pointer_device(1, true);
     CHECK(pointer_devices() == 2);
+    /* 10/15/26: the I2C touchpad counts; the keyboard's pointer never does. */
+    pointer_device(POINTER_I2C, true); pointer_device(POINTER_KEYS, true);
+    CHECK(pointer_devices() == 3);
+    pointer_device(POINTER_I2C, false); pointer_device(POINTER_KEYS, false);
+    CHECK(pointer_devices() == 2);
     pointer_report(0, -7, 9, 0, 1); CHECK(pointer_read(&e));
     CHECK(e.x == 313 && e.y == 209 && e.buttons == 1);
     pointer_report(1, 0, 0, 0, 2); CHECK(pointer_read(&e) && e.buttons == 3);

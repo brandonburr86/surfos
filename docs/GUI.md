@@ -38,20 +38,47 @@ USB report-protocol-only devices and multi-touch gestures are not implemented.
 
 The PS/2 controller routes keyboard and auxiliary bytes separately. Its reset,
 ACK and self-test waits are bounded; an absent mouse leaves the keyboard usable.
-Laptop-profile timer polling is a fallback for the legacy IRQ path. Both native
+Laptop-profile timer polling is a fallback for the legacy IRQ path. All native
 transports feed a bounded event queue; on overload it drops the oldest events
 and retains the newest position and button state.
 
-**Built-in IdeaPad touchpad:** the hardware record lists a Precision TouchPad
-but its actual ACPI ID and I2C resources have not been observed. SurfOS currently
-has no native I2C HID driver. It works here only if the firmware exposes PS/2
-compatibility; the presence of a PS/2 controller alone does not prove that. Native
-I2C support needs the actual controller/resource, touchpad I2C address and HID
-descriptor register from its ACPI tables. Do not substitute a guessed ELAN or
-Synaptics configuration. On 2026-10-12 the owner confirmed the desktop works on
-the laptop, but the built-in touchpad does not. The deployed build's PS/2 probe
-reported no mouse and `pointerinfo` reported zero devices. Native touchpad
-support remains unfinished; ACPI resource collection is the next step.
+**Built-in IdeaPad touchpad:** `driver/touchpad.c` adds a narrow native I2C HID
+binding for the observed Lenovo 81WE firmware and Intel 8086:34e9 controller.
+It reads checked static AML fields and firmware variables, restores the powered-
+down controller's resources, and polls the firmware-selected input GPIO. Relative
+mouse reports and the HID InputMode feature feed the same pointer queue as USB
+and PS/2. It does not implement general AML execution or multitouch gestures.
+
+The laptop's touchpad is a Synaptics 06cb:ce2d. Its descriptor has a mouse
+collection (report 2: two buttons, relative X/Y) beside the Precision Touchpad
+contacts, and SurfOS reads the mouse collection. The device refuses GET_REPORT
+for its InputMode feature, so the driver builds the one-byte report and sets mode
+0 (mouse) directly, as Linux and Microsoft's configuration collection do. A
+refused mode request is recorded, not fatal: after a host reset the device
+reports through its default collection anyway. Reports from any other collection
+are counted as ignored and never move the pointer.
+
+`touchpad info` shows startup stage, controller/transport state, the HID
+registers, how the mouse mode was selected (with the interrupt line before and
+after) and report counts.
+`touchpad report` shows the last input bytes, `touchpad descriptor` exports the
+captured HID report descriptor, and `touchpad up` starts it again in the
+dedicated input task: after a failure, or to reset a working touchpad.
+Unsupported machines are left alone. All bus waits are bounded and failure
+leaves the keyboard and other pointing devices available. An I2C controller
+whose error cleanup failed is set up again before the next transfer.
+While the touchpad holds its interrupt line low, each 10 ms wake reads up to
+three reports. A zero-length read (a device-initiated reset, or nothing
+waiting) is counted and input continues, as in Linux. As in Linux and Windows,
+a movement value outside the descriptor's range is clamped rather than
+dropping the report.
+
+The owner confirmed the desktop works on the laptop with the original GUI
+build, but its touchpad did not. The first native build (2026-10-13) found the
+device and read its report descriptor, then stopped at the refused GET_REPORT.
+The 2026-10-15 build sets the mode directly; physical movement/click acceptance
+is still pending. See the [hardware record](hardware/ideapad-3-15iil05.md) for
+the collected firmware facts and current validation evidence.
 
 ## Implementation and checks
 
@@ -59,6 +86,10 @@ support remains unfinished; ACPI resource collection is the next step.
 `driver/ps2mouse.c` parses PS/2 packets; `kernel/keyboard.c` owns the shared 8042.
 `driver/usb/mousedesc.c` validates boot-mouse interfaces and reports;
 `driver/usb/mouse.c` owns USB transfers and lifecycle.
+`driver/i2cdw.c`, `driver/i2chid.c`, `driver/hidpointer.c` and `driver/amlfield.c`
+keep the I2C engine, wire framing, HID parsing and static firmware layouts
+independently testable. `shell/acpidump.c` and `tools/acpi-fetch.py` provide
+checked read-only firmware export for diagnosis.
 
 `include/sys/gui.h` and `shell/guicore.c` contain the host-testable desktop and
 apps. `shell/gui.c` owns a revocable graphics session, renders to ordinary RAM,

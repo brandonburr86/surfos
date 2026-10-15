@@ -132,6 +132,8 @@ PORTABLE = [
     ('acpi', ['FADT', 'MADT', 'I/O APIC']),
     ('acpidump SSDT 4294967295', ['not found']),
     ('acpinvs 0 16', ['refused']),
+    ('touchpad', ['not present on this platform']),
+    ('touchpad up', ['not present on this platform']),
     ('acpidump MSDM', ['usage: acpidump']),
     ('cpuinfo', ['physical address bits', '4 MB pages on']),
     ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),

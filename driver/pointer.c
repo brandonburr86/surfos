@@ -77,7 +77,7 @@ void pointer_snapshot(struct pointer_event *out) {
 unsigned pointer_devices(void) {
     unsigned i, n = 0;
     u_long f = irq_save();
-    for(i = 0; i < POINTER_KEYS; i++) if(devices[i]) n++;
+    for(i = 0; i < POINTER_SOURCES; i++) if(i != POINTER_KEYS && devices[i]) n++;
     irq_restore(f);
     return n;
 }

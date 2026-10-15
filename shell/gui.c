@@ -14,6 +14,7 @@ small batches. No allocation, I/O or waiting inside a framebuffer callback.
 #include <surfos/tty.h>
 #include <surfos/irq.h>
 #include <sys/gui.h>
+#include <sys/touchpad.h>
 #include "shell.h"
 
 struct display {
@@ -120,9 +121,9 @@ int cmd_pointerinfo(int argc,char **argv) {
     if(argc!=1) { printf("    usage: pointerinfo\n"); return CMD_USAGE; }
     pointer_snapshot(&e);
     printf("    PS/2: %s\n",mouse_ps2_describe());
-    printf("    pointing devices: %u (USB boot mice and PS/2)\n",pointer_devices());
+    printf("    pointing devices: %u (USB, PS/2 and supported I2C HID)\n",pointer_devices());
     printf("    pointer: %d,%d buttons=%u; queue drops=%u\n",e.x,e.y,e.buttons,pointer_dropped());
-    printf("    I2C HID touchpads need native I2C/ACPI support; no such driver is installed\n");
+    touchpad_print();
     return CMD_OK;
 }
 int cmd_gui(int argc,char **argv) {

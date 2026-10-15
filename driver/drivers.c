@@ -25,6 +25,7 @@ only with profile=laptop: at boot it finds the card and names it, nothing more.
 #include <surfos/apic.h>
 #include <sys/driver.h>
 #include <sys/pointer.h>
+#include <sys/touchpad.h>
 #include <sys/dma.h>
 #include <sys/floppy.h>
 #include <sys/parport.h>
@@ -63,6 +64,7 @@ static struct driver drivers[] = {
     { "e1000",   init_e1000, 0, 0 },          /* QEMU's default NIC */
     { "usb",     init_usb, 0, 0 },            /* xHCI, then USB Ethernet adapters (CDC ECM/NCM) */
     { "iwlwifi", init_iwlwifi, 0, LAPTOP },   /* the Intel 9560 Wi-Fi card: wlan0 */
+    { "touchpad", init_touchpad, 0, LAPTOP }, /* native I2C HID input, when firmware matches */
 };
 #define NDRIVERS (sizeof(drivers) / sizeof(drivers[0]))
 

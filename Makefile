@@ -526,3 +526,31 @@ unittest-acpi: $(BUILD)/host/test_acpidump
 	$(PYTHON) -m unittest discover -s tests -p test_acpi_fetch.py
 unittest: unittest-acpi
 .PHONY: unittest-acpi
+
+# Bounded DesignWare I2C PIO over a simulated finite-FIFO controller.
+$(BUILD)/host/test_i2cdw: tests/host/test_i2cdw.c $(BUILD)/host/kernel/driver/i2cdw.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest-i2c: $(BUILD)/host/test_i2cdw
+	$(BUILD)/host/test_i2cdw
+unittest: unittest-i2c
+.PHONY: unittest-i2c
+
+# Bounded firmware fields and HID reports used by the native touchpad binding.
+$(BUILD)/host/test_amlfield: tests/host/test_amlfield.c $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_i2chid: tests/host/test_i2chid.c $(BUILD)/host/kernel/driver/i2chid.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_hidpointer: tests/host/test_hidpointer.c $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+TOUCHPAD_TEST_OBJ = $(BUILD)/host/kernel/driver/amlfield.o $(BUILD)/host/kernel/driver/i2chid.o \
+	$(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_touchpad: tests/host/test_touchpad.c driver/touchpad.c $(TOUCHPAD_TEST_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline -ffunction-sections -fdata-sections \
+		tests/host/test_touchpad.c $(TOUCHPAD_TEST_OBJ) -Wl,--gc-sections -o $@
+unittest-touchpad: $(BUILD)/host/test_amlfield $(BUILD)/host/test_i2chid $(BUILD)/host/test_hidpointer $(BUILD)/host/test_touchpad
+	$(BUILD)/host/test_amlfield
+	$(BUILD)/host/test_i2chid
+	$(BUILD)/host/test_hidpointer
+	$(BUILD)/host/test_touchpad
+unittest: unittest-touchpad
+.PHONY: unittest-touchpad

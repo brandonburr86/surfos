@@ -26,7 +26,7 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | observed 2026-10-12: Intel 9560, firmware `77.8dbafb52.0`, associated over 2.4 GHz WPA2 with DHCP address `10.0.0.164`; no USB Ethernet adapter attached |
 | USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
 | Keyboard | built-in, behind the embedded controller | observed 2026-10-10: 8042, IRQ 1 plus polling, command byte `0x65` in the pre-GUI kernel |
-| Touchpad | Precision TouchPad (I2C HID on this generation) | I2C1 resources decoded from native AML (see "Touchpad firmware diagnostics"); native I2C HID driver pending; PS/2 compatibility only if firmware exposes it ([GUI](../GUI.md)) |
+| Touchpad | Precision TouchPad (I2C HID on this generation) | observed 2026-10-13: Synaptics 06cb:ce2d at I2C1 0x2c, report descriptor read natively; it refused GET_REPORT for InputMode. Fix (set the mode directly) built 2026-10-15; movement/click verification pending ([GUI](../GUI.md)) |
 | Firmware | UEFI | **record**: Secure Boot setting, any CSM option, firmware version |
 
 Sources: [Lenovo PSREF](https://psref.lenovo.com/syspool/Sys/PDF/IdeaPad/IdeaPad_3_15IIL05/IdeaPad_3_15IIL05_Spec.pdf),
@@ -288,3 +288,40 @@ with valid checksums. Native evidence is under
   at 0x38/descriptor 1. The actual selector is read at runtime. LFCN is in
   reserved DRAM rather than NVS, so the public `acpinvs` command refuses it.
   Only the matching platform binding may read that bounded AML-named region.
+
+The native driver is implemented and awaits physical report/movement validation.
+The diagnostic R2 image passed all 311 USB/UEFI checks at O0 and O2; those results
+do not establish support by the newer native driver.
+
+### Native touchpad: first boot (2026-10-13) and the InputMode fix (2026-10-15)
+
+Build `7a269b053261-dirty 2026-10-13T03:50:06Z` (O0, development entry) on the
+laptop, `touchpad info` (`build/validation/laptop-touchpad-n2/after.txt`):
+
+- I2C1 powered to D0, BAR0 assigned at 0x65400000; LFCN.TPTY = 2, so address
+  0x2c and HID descriptor register 0x20. Fast-mode timings 110/207, hold 30.
+- HID descriptor read: **Synaptics 06cb:ce2d**, version 0x0102, report
+  descriptor 665 bytes, maximum input 64 bytes. Power on, reset (its reset
+  response read through the GPIO), power on again, report descriptor read.
+- The report descriptor (now `tests/host/touchpad_06cb_ce2d.h`): report 2 is a
+  mouse (two buttons, 8-bit relative X/Y), report 3 Precision Touchpad
+  contacts, report 4 the InputMode feature (one 8-bit field, 0..10), report 6
+  the surface/button switches, 7 the certification blob, 8 and 13 capabilities
+  and latency, 9-12, 14 and 15 vendor reports.
+- Start-up stopped at "HID read input mode": GET_REPORT(Feature, ID 4) aborted
+  with IC_TX_ABRT_SOURCE 0x03000008 (TXDATA_NOACK, 6 commands flushed). Ten
+  commands were queued (6 write bytes, 4 reads), so the device NACKed the 4th
+  byte: the GET_REPORT opcode. The interrupt pad (DW0 at 0xfd6e0780) then read
+  0x80100100, line low, where it read 0x80100102 before start-up.
+- PS/2: no mouse; `pointerinfo`: 0 devices, no reports accepted.
+
+Microsoft's configuration collection has the host set InputMode (0 is the mouse
+collection), nothing reads it back, and a host-initiated reset clears it.
+Linux's hid-multitouch only sets it. The 2026-10-15 build builds
+the whole one-field report and sends SET_REPORT directly. GET-and-patch is kept
+only for mode reports that share other data. A refused SET is recorded in
+`touchpad info`'s mode line and is not fatal. The host suite now replays this
+device: a simulated Synaptics that NACKs that GET runs the real start-up and
+input code. `pointerinfo`'s device count also now includes the I2C touchpad.
+**Pending:** deploy this build, then the owner checks movement and both buttons
+in `gui`.

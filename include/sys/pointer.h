@@ -15,7 +15,8 @@ Relative pointing devices share a bounded screen-space queue. Kernel callers onl
 #define POINTER_USB_FIRST 1
 #define POINTER_USB_COUNT 8
 #define POINTER_KEYS 9
-#define POINTER_SOURCES 10
+#define POINTER_I2C 10
+#define POINTER_SOURCES 11
 #define POINTER_QUEUE 64
 struct pointer_event { int x, y, wheel; unsigned buttons; };
 /* Safe from IRQ or task context. dx/dy are relative, +y moves down. */
