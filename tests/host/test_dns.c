@@ -4,6 +4,7 @@ SurfOS DNS packet and resolver tests
 File: test_dns.c Date: 10/10/26 (Undertow)
 --------------------
 Constructed packets only; never depends on a public DNS service.
+10/15/26 (review M1): random query IDs and source ports, from a scripted crypto_random().
 */
 #include <stdio.h>
 #include <string.h>
@@ -141,6 +142,22 @@ static u32 now_ms, budget, lookup_end, sends;
 static u16 send_ids[16];
 static char *mutate_name;
 static u16 nested_id;
+/* review M1: crypto_random() gives a known sequence; udp_open() records the ports asked for and
+   refuses the first port_taken of them as if another socket had them */
+static u32 rand_state;
+static int rand_calls, port_taken, opens;
+static u16 open_ports[16];
+void crypto_random(void *buf, size_t len) {
+    u8 *p = buf;
+    rand_calls++;
+    while(len--) { rand_state = rand_state * 1103515245u + 12345u; *p++ = rand_state >> 16; }
+}
+static u16 expect16(u32 *state) {
+    u8 b[2];
+    int i;
+    for(i = 0; i < 2; i++) { *state = *state * 1103515245u + 12345u; b[i] = *state >> 16; }
+    return (u16)(b[0] << 8 | b[1]);
+}
 void mutex_lock(mutex_t *m) { (void)m; }
 void mutex_unlock(mutex_t *m) { (void)m; }
 struct netdev *netdev_default(void) { return &device; }
@@ -157,7 +174,8 @@ bool user_buf(const void *p, u_long len, bool write) {
     return (u_long)p >= 0x1000 && p != (void *)0x100000;
 }
 struct udp_socket *udp_open(u16 port) {
-    (void)port;
+    if(opens < 16) open_ports[opens] = port;
+    if(opens++ < port_taken && port) return NULL;
     if(open_fail || live == 2) return NULL;
     sockets[live].slot = live;
     return &sockets[live++];
@@ -206,6 +224,7 @@ static void reset(int test_mode) {
     live = closes = received = nested = nesting = send_fail = open_fail = 0;
     memset(stages, 0, sizeof(stages)); budget = 5000; lookup_end = budget;
     mutate_name = NULL;
+    rand_state = 0x5eed; rand_calls = port_taken = opens = 0;
 }
 static void runtime(void) {
     ipaddr_t ip, sentinel = 0x12345678;
@@ -274,9 +293,41 @@ static void runtime(void) {
     host[0] = 'w'; reset(4); ip = sentinel;
     check(sys_resolve(host, &ip) == -ETIMEDOUT && ip == sentinel, "syscall_failure_preserves_output");
 }
+/* review M1: the query ID and the source port come from the generator, not from a counter */
+static void randomness(void) {
+    ipaddr_t ip;
+    u32 st;
+    u16 port, id;
+    int i, ok;
+    reset(0); st = rand_state;
+    check(dns_lookup("www.example.test", &ip, budget) == 0, "random_lookup_succeeds");
+    id = expect16(&st); port = (u16)(49152 + (expect16(&st) & 0x3fff));
+    check(opens == 1 && open_ports[0] == port, "source_port_random_in_49152_65535");
+    check(sends == 1 && send_ids[0] == id && rand_calls == 2, "query_id_random");
+    st = rand_state; reset(0); rand_state = st;
+    check(dns_lookup("www.example.test", &ip, budget) == 0 && open_ports[0] != port && send_ids[0] != id &&
+          send_ids[0] != (u16)(id + 1), "next_lookup_not_sequential");
+    for(ok = 1, i = 0; i < 64; i++) {
+        reset(0); rand_state = 0x9e3779b9u * (u32)(i + 1);
+        if(dns_lookup("www.example.test", &ip, budget) != 0 || open_ports[0] < 49152) ok = 0;
+    }
+    check(ok, "every_random_port_ephemeral");
+    reset(0); port_taken = 3; st = rand_state;
+    check(dns_lookup("www.example.test", &ip, budget) == 0 && opens == 4, "taken_port_retried");
+    id = expect16(&st);
+    for(i = 0; i < 4; i++) port = (u16)(49152 + (expect16(&st) & 0x3fff));
+    check(open_ports[3] == port && open_ports[2] != port && send_ids[0] == id, "taken_port_retry_uses_new_random_port");
+    reset(0); port_taken = 8;
+    check(dns_lookup("www.example.test", &ip, budget) == 0 && opens == 9 && open_ports[8] == 0,
+          "all_random_ports_taken_falls_back_to_any_free_port");
+    reset(0); open_fail = 1;
+    check(dns_lookup("www.example.test", &ip, budget) == -ENFILE && opens == 9 && live == 0,
+          "no_socket_after_every_try_is_enfile");
+}
 int main(void) {
     packets();
     runtime();
+    randomness();
     printf("DNS: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }
