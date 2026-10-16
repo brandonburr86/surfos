@@ -18,7 +18,9 @@
    conc_host.c and conc_shim/ (here fatconc_host.c, fatconc_shim/), and kept as it was but for the end of
    main(), which now fails (exit 1) when a check found something, and bcache's clock (B18) below.
    `make unittest` runs it for a few seconds with three fixed settings; the review's campaigns ran it for
-   minutes: fsrev-tests/conc_campaign.sh, conc_campaign2.sh, recorded in bcache-review.txt.) */
+   minutes: fsrev-tests/conc_campaign.sh, conc_campaign2.sh, recorded in bcache-review.txt. 10/16/26, round
+   fs-fix-3: four settings; the fourth, six writers on a small volume, is the one with which the review of
+   B12-B19 found trim_chain()'s window (B25): 2 of its 9 runs on fd37406.) */
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/sync.h>
