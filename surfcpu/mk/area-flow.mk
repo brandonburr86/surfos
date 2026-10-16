@@ -60,6 +60,8 @@ test-flow-sim: $(FLOW_SIM)/flow_demo_tb.vvp $(FLOW_SIM)/flow_demo_tb_full.vvp $(
 test-flow-tools:
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/bitinfo.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/cmtcheck.py --self-test
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/bramwe.py --self-test
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/synthcheck.py --self-test
 	$(Q)sh tools/openxc7-flow-test.sh
 	@echo "test-flow-tools: PASS"
 

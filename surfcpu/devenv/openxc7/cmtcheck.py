@@ -2,7 +2,7 @@
 """
 SurfCPU MMCM/PLL divider check
 --------------------
-File: cmtcheck.py Date: 10/15/26 (SurfCPU)
+File: cmtcheck.py Date: 10/16/26 (SurfCPU)
 --------------------
 The open flow's LVS proof does not model clock managers, so this checks their dividers
 separately. For every MMCME2/PLLE2 in a synthesized netlist it recomputes the counter
@@ -23,6 +23,11 @@ values whenever the integer part of a fractional CLKFBOUT_MULT_F or CLKOUT0_DIVI
     cmtcheck.py --json top.json --placement placement.json --fasm top.fasm
 
 Only 50 % duty cycles and zero phases are recomputed; anything else is reported unchecked.
+The parameters are read as Yosys's JSON writes them: a constant as its bits, most significant
+first, at its own width (LiteDRAM's 5'd16 is "10000", a plain 16 thirty-two bits); a real or a
+string as text, with a space appended to a string that would look like bits ("10 "). Until
+round ddr-3 bit strings shorter than eight were read as decimal numbers, which made LiteDRAM's
+PLL dividers (16 read as 10000) look wrong. The self-test also checks this reading.
 The self-test and --table use only the standard library; checking a design needs fasm.
 """
 
@@ -122,8 +127,16 @@ def self_test() -> int:
     if divider(1)["NO_COUNT"] != 1 or divider(35) != {"HIGH_TIME": 17, "LOW_TIME": 18, "EDGE": 1, "NO_COUNT": 0}:
         bad += 1
         print("self-test FAIL: integer divider")
-    print("cmtcheck self-test: " + ("PASS (XAPP888 functions reproduce Vivado's 16 values)" if not bad
-                                    else f"{bad} failures"))
+    # parameters as Yosys's JSON writes them (a PLLE2_ADV of LiteDRAM's, read by this image's Yosys)
+    for raw, want in (("10000", 16), ("111", 7), ("1", 1), ("0", 0), ("10100", 20),
+                      ("00000000000000000000000000001010", 10), ("10.000000", 10.0), ("90.000000", 90.0),
+                      ("18.125", 18.125), ("10 ", 10.0), ("FALSE", "FALSE"), (36, 36)):
+        got = param({"parameters": {"P": raw}}, "P", None)
+        if got != want or type(got) is not type(want):
+            bad += 1
+            print(f"self-test FAIL: parameter {raw!r} read as {got!r}, not {want!r}")
+    print("cmtcheck self-test: " + ("PASS (XAPP888 functions reproduce Vivado's 16 values; Yosys's parameter "
+                                    "formats read)" if not bad else f"{bad} failures"))
     return 1 if bad else 0
 
 
@@ -146,9 +159,10 @@ def param(cell: dict, name: str, default):
         return default
     if isinstance(v, int):
         return v
-    v = str(v).strip().strip('"')
-    if v and set(v) <= {"0", "1"} and len(v) >= 8:
+    v = str(v)
+    if v and set(v) <= {"0", "1"}:              # a constant: its bits, whatever its width
         return int(v, 2)
+    v = v.strip().strip('"')                    # a real, or a string (maybe with Yosys's space)
     try:
         return float(v)
     except ValueError:

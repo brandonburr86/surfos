@@ -295,12 +295,17 @@ if [ "$check" = 1 ]; then
   # LVS (openXC7's lvs-equiv flow): the routed FASM read back into a fabric netlist by
   # fasm2netlist's tile model and proved equal to the synthesis, register by register. A
   # primitive the tile model lacks, or a proof that runs out of time, leaves it BLOCKED:
-  # not proved, which is reported, but not a failure.
+  # not proved, which is reported, but not a failure. Between extraction and proof,
+  # bramwe.py makes the netlist read each RAMB18E1 byte write enable from the site pins the
+  # silicon reads it from (the extractor reads them one to one; docs/OPEN-FLOW.md) and checks
+  # every pin it no longer reads: a difference it finds fails LVS like one the proof finds.
   if [ "$lvs" = 1 ]; then
     if run lvs-gold lvs/gold.log yosys -q -p "read_json $out/$top.json; hierarchy -top $top; splitnets; select $top; write_verilog -noattr -norename -selected $out/lvs/gold.v" &&
        run lvs-extract lvs/tileverilog.log tileverilog --fasm "$out/$top.fasm" --db "$db" --device "$chipdie" \
          --xdc "$xdc" --part "$part" --placement "$out/placement.json" --out "$out/lvs/fabric.v" \
-         --model-out "$out/lvs/tile_model.v"
+         --model-out "$out/lvs/tile_model.v" &&
+       run lvs-bramwe lvs/bramwe.log python3 -I $tools/bramwe.py --fabric "$out/lvs/fabric.v" \
+         --fasm "$out/$top.fasm" --report "$out/lvs/bramwe.txt"
     then
       if run lvs-prove check-lvs.txt timeout "$lvs_timeout" lvs_equiv --gold "$out/lvs/gold.v" \
            --gold-top "$top" --gate "$out/lvs/fabric.v" --gate-top fabric --placement "$out/placement.json" \
@@ -309,6 +314,11 @@ if [ "$check" = 1 ]; then
       else
         st=$?
         if [ "$st" = 124 ]; then result_lvs="BLOCKED (timeout)"; else result_lvs=FAIL; fail=1; fi
+      fi
+      if [ "$dry" = 0 ]; then
+        cat "$out/lvs/bramwe.txt" >> "$out/check-lvs.txt"
+        bram_diff=$(sed -n 's/^bramwe: .* \([0-9][0-9]*\) difference(s)$/\1/p' "$out/lvs/bramwe.txt")
+        if [ "${bram_diff:-0}" != 0 ]; then result_lvs="FAIL ($bram_diff block RAM write enable difference(s))"; fail=1; fi
       fi
     else
       result_lvs="BLOCKED (extraction: see lvs/tileverilog.log)"
