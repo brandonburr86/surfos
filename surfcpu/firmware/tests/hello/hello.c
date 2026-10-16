@@ -23,6 +23,7 @@ reporter to catch.
 struct entry { uint32_t a0, a1, a2, mtvec, mstatus, mie, mscratch; };
 extern char _start[], __image_end[];
 int hello_main(const struct entry *e);
+void hello_illegal(void);                   /* hello_start.S: an all-zero word */
 
 static void putc_(void *ctx, char c)
 {
@@ -106,7 +107,7 @@ int hello_main(const struct entry *e)
         __asm__ volatile ("ecall");
     } else if (contains(bi.cmdline, "illegal")) {
         say("HELLO: an illegal instruction\n");
-        __asm__ volatile (".word 0x00000000");
+        hello_illegal();
     } else if (contains(bi.cmdline, "load")) {
         say("HELLO: a load from an unmapped address\n");
         (void)*(volatile uint32_t *)0x30000000u;

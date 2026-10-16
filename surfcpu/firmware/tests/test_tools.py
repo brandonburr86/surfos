@@ -15,7 +15,9 @@ container (make test-fw):
   mkcard      images verified by fsck.fat and read back with mtools, byte for byte, for
               plain, fragmented, long-name, 4 KiB and 32 KiB cluster and full volumes
   isa-audit   the firmware ELFs pass; programs with compressed, atomic, float, SRET,
-              unknown-CSR, read-only-CSR-write and RV64-shift instructions fail
+              unknown-CSR, read-only-CSR-write and RV64-shift instructions fail, also when
+              written as .word/.4byte/.half data in code (the review's hidden.S); data words
+              pass only in the output section .text.probes
   deploy-sd   against a directory standing in for a card, with fake diskutil and mount: every
               refusal, dry run, first install, update with backup, user files kept, corrupted
               copies caught, system files, explicit backup
@@ -349,7 +351,7 @@ ASM_CASES = {
     "rowrite": ("rv32im_zicsr", "csrw mhartid, a0\n", "write to read-only CSR mhartid"),
     "shamt": ("rv32im", ".insn i 0x13, 1, a0, a0, 32\n", "SLLI with imm[11:5]"),
     "good": ("rv32im_zicsr_zifencei", "mul a0, a1, a2\n div a0, a0, a1\n fence.i\n wfi\n mret\n ecall\n ebreak\n"
-             "csrr a0, mcycle\n csrw mtvec, a0\n .word 0\n nop\n", None),
+             "csrr a0, mcycle\n csrw mtvec, a0\n nop\n", None),
 }
 
 
@@ -378,6 +380,46 @@ class TestIsaAudit(unittest.TestCase):
                     self.assertIn(problem, a.stdout)
         a = tool("isa-audit.py", d / "compressed.elf")
         self.assertIn("EF_RISCV_RVC", a.stdout)
+
+    def link(self, d, name, src, script=None):
+        (d / f"{name}.S").write_text(src)
+        how = [f"-Wl,-T,{script}"] if script else ["-Wl,-Ttext=0x80000000"]
+        r = run("riscv64-unknown-elf-gcc", "-march=rv32im_zicsr_zifencei", "-mabi=ilp32", "-nostdlib",
+                "-nostartfiles", *how, "-Wl,--no-warn-rwx-segments", d / f"{name}.S", "-o", d / f"{name}.elf")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return tool("isa-audit.py", d / f"{name}.elf")
+
+    def test_words_hidden_as_data_are_decoded(self):
+        """The review's case: encodings SurfCPU lacks, written as .word/.4byte/.half in .text so
+        that the assembler marks them $d (data), are decoded and refused. Only the output section
+        .text.probes may hold data words, and its instructions are still checked."""
+        d = fresh("isa_hidden")
+        a = self.link(d, "hidden", "    .text\n    .globl _start\n_start:\n    addi  a0, a0, 1\n"
+                      "    .word 0x00b5252f          # amoadd.w a0, a1, (a0)   (A extension)\n"
+                      "    .4byte 0x00052007         # flw f0, 0(a0)           (F extension)\n"
+                      "    .half 0x0001, 0x0001      # c.nop, c.nop            (C extension)\n"
+                      "    j     _start\n")
+        self.assertEqual(a.returncode, 1, a.stdout)
+        for words in ("00b5252f: atomic (A extension)", "00052007: floating point (F/D extension)",
+                      "0x8000000c (?): 0001 is a 16-bit (compressed)", "0x8000000e (?): 0001 is a 16-bit"):
+            self.assertIn(words, a.stdout)
+        probes = ("    .text\n    .globl _start\n_start:\n    addi a0, a0, 1\n    j _start\n"
+                  "    .section .probes, \"ax\"\n    .word 0x00b5252f\n    .4byte 0x00052007\n    .word 0\n    ret\n")
+        for name, out, extra, problem in (
+                ("probes", ".text.probes", "", None),                    # the allowlisted section
+                ("probes_insn", ".text.probes", "    .option arch, +a\n    amoadd.w a0, a1, (a0)\n", "atomic"),
+                ("other", ".text.other", "", "atomic")):                # data words anywhere else
+            with self.subTest(name):
+                script = d / f"{name}.ld"
+                script.write_text(f"SECTIONS {{ . = 0x80000000; .text : {{ *(.text) }} "
+                                  f"{out} : ALIGN(4) {{ *(.probes) }} }}\n")
+                a = self.link(d, name, probes + extra, script)
+                if problem is None:
+                    self.assertEqual(a.returncode, 0, a.stdout)
+                    self.assertIn("3 data words in .text.probes", a.stdout)
+                else:
+                    self.assertEqual(a.returncode, 1, a.stdout)
+                    self.assertIn(problem, a.stdout)
 
 
 class TestDeploySd(unittest.TestCase):

@@ -45,3 +45,11 @@ _start:
     .globl entry_state
 entry_state:
     .space 28
+
+    /* hello_illegal(): an all-zero word, the illegal instruction the "illegal" command line asks
+     * for; in .probes, the output section where tools/isa-audit.py accepts data words */
+    .section .probes, "ax"
+    .globl hello_illegal
+hello_illegal:
+    .word   0x00000000
+    ret
