@@ -1,0 +1,40 @@
+SurfOS os track: the Arty kernel in the RTL system simulation after the console lock (audit C10)
+make -C surfcpu check at f296e11 (sc/os-2), its test-soc-system-boot (the soc track's test: the RTL of
+surfcpu_soc with the C++ models of the card, the keyboard, the DDR and the VGA capture; simulation, not the board).
+Before the lock the same run's screen showed blank rows between the tasks' lines (docs/evidence/soc/
+test-soc-system-boot.txt at surfcpu de9ee5a); here every line of 'tasks' is whole, as on the UART.
+
+# test-soc-system-boot: 21 of 21 checks passed in 80 s (boot 266822474 cycles = 10.673 s simulated in 80.3 s wall (3.32 M cycles/s); recovery 181736826 cycles = 7.269 s simulated in 54.2 s wall (3.35 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+
+the screen at the end of the boot run, decoded from the VGA pixels (surfcpu/build/soc/system_boot/vga/screen.txt):
+  # surfsim VGA capture: 637 frames; line 800 pixels (sync 96 negative), frame 525 lines (sync 2 negative), 59.9372 Hz at 25173611 Hz; text 80x30, cursor at column 9 row 29, 0 unmatched cells
+  |    task B: round 1 of 3, tick 289, sleeping 170 ms                             |
+  |    task A: round 2 of 4, tick 300, sleeping 100 ms                             |
+  |    task A: round 3 of 4, tick 319, sleeping 100 ms                             |
+  |    task B: round 2 of 3, tick 323, sleeping 170 ms                             |
+  |    task A: round 4 of 4, tick 335, sleeping 100 ms                             |
+  |    task B: round 3 of 3, tick 348, sleeping 170 ms                             |
+  |    task A ran 4 rounds, task B 3, in 98 ticks; both ended (status 0, 0)        |
+  |SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/HELLO.TXT /sd0p1/USERS/DOCUMENTS/DATA.BIN |
+  |    3436d7c7       21  /sd0p1/USERS/DOCUMENTS/HELLO.TXT                         |
+  |    9c9bbf10     8192  /sd0p1/USERS/DOCUMENTS/DATA.BIN                          |
+  |SURF ~#> drivers                                                                |
+  |    driver    status                                                            |
+  |    serial    ok                                                                |
+  |    gpio      ok                                                                |
+  |    ps2kbd    ok                                                                |
+  |    sdcard    ok                                                                |
+  |    board     arty_a7 (SurfCPU on the Arty A7)                                  |
+  |    console   surf_video text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pix|
+  |el clock; 9051 cells written, 63 hardware scrolls                               |
+  |    serial    surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz),|
+  | intc source 0                                                                  |
+  |    timer     machine timer, 1000000 Hz timebase, 100 Hz tick, 48 ticks counted |
+  |late                                                                            |
+  |    irq       surf_intc at 0x10002000, 5 level sources, enabled 0x03, pending 0x|
+  |00                                                                              |
+  |    keyboard  PS/2 on surf_ps2 (set 2 translated to set 1), 16 keys, a keyboard |
+  |answered                                                                        |
+  |    sdcard    sd0, 64 MB, read-only, 12 reads, 0 writes, 0 CRC retries, 0 timeou|
+  |ts, 0 errors                                                                    |
+  |SURF ~#>                                                                        |

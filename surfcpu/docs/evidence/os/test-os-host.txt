@@ -1,2 +1,2 @@
 test_arty: 177 of 177 checks passed, 4 tests x 3 seeds (1 7 123)
-test-os-host: the Arty package not checked: no tools/surfimg.py (the fw track's packer) in this tree
+../build/riscv32/arty_a7/SURFOS.BIN: valid
