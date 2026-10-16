@@ -321,15 +321,42 @@ static void test_crc(void) {
 
 /**** time ****/
 
+/* 10/16/26: the tick count and mtime read together, mtime on both sides of the count, and read again
+   when anything came between them (an interrupt, another task, or a busy host holding QEMU up, after
+   which the count lags mtime until the late ticks are counted) */
+static void read_clocks(u_long *ticks, u64 *mtime) {
+    u64 before;
+    int i;
+    for(i = 0; i < 8; i++) {
+        before = board_mtime();
+        *ticks = getticks();
+        *mtime = board_mtime();
+        if(*mtime - before < timer_period() / 4) return;
+    }
+}
+
 static void test_time(void) {
-    u_long t0 = getticks(), dt, per = timer_period();
-    u64 m0 = board_mtime(), dm;
+    u_long t0, t1, dt = 0, per = timer_period();
+    u64 m0, m1, dm = 0;
     u_long a = 0xFFFFFFF0UL, b = a + 0x20;      /* the tick counter wrapping, as getticks() - t0 does */
-    sleep_ms(100);
-    dt = getticks() - t0;
-    dm = board_mtime() - m0;
+    bool ok = false;
+    int tries;
+    /* 10/16/26: up to three tries. A host that holds QEMU up right after the sleep spoils one try; a
+       fault in the tick count spoils every try. Twice on a loaded Mac, mtime had moved more than
+       16 periods after a count of 10-15 ticks: the count was read before a stall, mtime after it. */
+    for(tries = 1; tries <= 3 && !ok; tries++) {
+        read_clocks(&t0, &m0);
+        sleep_ms(100);
+        read_clocks(&t1, &m1);
+        dt = t1 - t0;
+        dm = m1 - m0;
+        ok = dt >= 10 && dt <= 15 && dm >= (u64)per * 9 && dm <= (u64)per * 16;
+    }
     check(dt >= 10 && dt <= 15, "sleep_ms(100) takes 10-15 ticks (late ticks on a busy host count at once)");
     check(dm >= (u64)per * 9 && dm <= (u64)per * 16, "mtime moved as much as the ticks did");
+    if(tries > 2 || !ok)                        /* what the last try saw, when the first did not pass */
+        printf("       %lu ticks, mtime %lu.%02lu periods, %d tries\n", dt, (u_long)(dm / per),
+               (u_long)(dm % per * 100 / per), tries - 1);
     check(b - a == 0x20, "tick differences survive the 32-bit wrap");
 }
 
