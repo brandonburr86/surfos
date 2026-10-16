@@ -3,7 +3,9 @@
 Option C of [BUILD-HOST.md](BUILD-HOST.md): Yosys, nextpnr and Project X-Ray in an arm64 Linux
 container on the MacBook, with no AMD software. This page says what was built and checked, what
 is wrong with the tools and how the flow guards against it, and what only the board can show.
-Evidence: [`evidence/flow/`](evidence/flow/). Written 2026-10-16 by the flow track.
+Evidence: [`evidence/flow/`](evidence/flow/). Written 2026-10-16 by the flow track; the
+placer seed lists, the three checker fixes and the clock check's phases of round ddr-3
+(sections 3, 4 and 6.5) by the ddr track the same day.
 
 **Nothing built here has been loaded on a board. Every physical result is pending.** A bitstream
 that was generated and checked is not a bitstream that works on the hardware.
@@ -18,7 +20,7 @@ that was generated and checked is not a bitstream that works on the hardware.
 | Does synthesis keep the RTL's logic? | **Not always: Yosys deletes logic** when it packs a multiplied counter into a DSP48 (every version tried, 0.52 to 0.70). The flow avoids that packing by default and checks every netlist against the RTL (section 6.1). |
 | Are the clocks right? | **Not always: nextpnr mis-encodes** an MMCM fractional divider with an odd integer part, the planned pixel clock's 35.25 among them. Every build checks the MMCM/PLL settings against AMD's algorithm; 100 MHz × 18.125 / 2 / 36 avoids it (section 6.2). |
 | Is timing met? | nextpnr says so with wide margins (the demo: 200.6 MHz at 100 MHz; the probe: 127 MHz at 25 MHz). Its timing model is an estimate, not Vivado signoff (section 6.4). |
-| DDR3? | Only through LiteDRAM (no MIG). The one blocker openXC7 records for a similar board does not occur on the Arty A7's DDR pins; the whole PHY is untested (section 6.7). |
+| DDR3? | Only through LiteDRAM (no MIG). Its PHY places, routes and passes every check; its controller closes nextpnr's timing at 80 MHz, not at 100, so the DDR designs run the DDR3L at 640 MT/s, with a list of placer seeds (section 6.7). |
 | Vivado in a container (option B)? | Docker Desktop here runs `linux/amd64` through Rosetta; Vivado itself is unproven (section 7). |
 | Does it work on the board? | **Pending** (section 8). |
 
@@ -52,7 +54,7 @@ into its manifest. Details: [evidence/flow/image.txt](evidence/flow/image.txt).
 
 ```sh
 surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t --xdc <file> \
-    [-D NAME[=VALUE]] [-I dir] [--seed N] [--dsp safe|full|none] [--expect file] \
+    [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--dsp safe|full|none] [--expect file] \
     [--manifest-include file] [--out dir] [--lvs-timeout s] [--no-lvs] [--no-check] [--synth-only] \
     [--dry-run] <source.v>...
 ```
@@ -60,8 +62,10 @@ surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t -
 It runs on the Mac and re-runs itself in the image with the repository at `/work` (paths must
 lie inside `surfcpu/`). Steps: Yosys (`synth_xilinx -flatten -abc9 -arch xc7`, openXC7's recipe),
 nextpnr (`--router router2 -o hold-fix --placer-heap-timingweight 60`, the settings openXC7's CI
-uses for hardware-tested designs), `fasm2frames` and `xc7frames2bit`, then the checks of
-section 4. Outputs in `build/openxc7/<top>-<board>/`: `<top>.bit`, `timing.txt`,
+uses for hardware-tested designs), `fasm2frames` and `xc7frames2bit` (with SOURCE_DATE_EPOCH
+set, as `make release` sets it, the `.bit` header's date and time are then stamped with that
+time by `tools/bitfile.py`, so two builds of one commit are the same bytes: RELEASE.md section
+4), then the checks of section 4. Outputs in `build/openxc7/<top>-<board>/`: `<top>.bit`, `timing.txt`,
 `utilization.txt`, one `check-*.txt` per check, the logs, the netlist with Yosys's simulation
 models, and `manifest.txt` (source revision, part, hashes of the sources and the XDC, DSP mode,
 check results, timing, utilization against the device's documented capacity, step times, tool
@@ -69,6 +73,15 @@ versions, and any `--manifest-include` file such as ROM hashes). The exit status
 every step and every check passed. LVS gives up after 1800 s (`--lvs-timeout`, or
 `OPENXC7_LVS_TIMEOUT` when the script is run directly), and a proof that times out fails the
 build; the whole SoC needs 9 to 12 minutes, and its design lists allow 7200 s.
+
+**A list of placer seeds** (`--seed 1,2,3`; a design list's `seed 1 2 3` line): placement and
+routing run with each seed in turn until nextpnr succeeds, that is until routing converges and
+every clock meets its constraint after routing, the same gate for every seed; the rest of the
+flow then runs on that placement. Every attempt is kept (`nextpnr-seed<n>.log`) and summarized
+in `seeds.txt`, the flow's manifest and `tools/fpga-build.sh`'s (`placer_seeds`, `placer_seed`:
+the one used, `placer_attempts`). nextpnr is deterministic, so a seed's result depends on the
+whole netlist, the build ID included: one seed that passes at one commit can miss at the next,
+which a list absorbs. Only the DDR designs use one (section 6.7); a list never relaxes a check.
 
 * `tools/openxc7-demo.sh` is the proof run behind this page (both parts, the demo, the feature
   probe, the expected failures, gate-level simulation, a determinism rebuild; about 7 minutes).
@@ -102,12 +115,12 @@ build; the whole SoC needs 9 to 12 minutes, and its design lists allow 7200 s.
 
 | Check | Compares | Shows | Does not show |
 |---|---|---|---|
-| synthesis (`synthcheck.py`) | the netlist against the elaborated RTL: flip-flops per instance (with credit for DSP/RAM/SRL registers), large memories against block RAM, outputs that became constant; `--expect` adds minimum flip-flops per instance | that synthesis did not drop logic on a large scale | subtle functional changes (no formal equivalence) |
+| synthesis (`synthcheck.py`) | the netlist against the elaborated RTL: flip-flops per instance (with credit for DSP/RAM/SRL registers; register bits Yosys already merged into a memory's read port are counted apart), large memories against block RAM, outputs that became constant; `--expect` adds minimum flip-flops per instance | that synthesis did not drop logic on a large scale | subtle functional changes (no formal equivalence) |
 | bitstream (`bitinfo.py`, no vendor or prjxray code) | the `.bit` against UG470: length, IDCODE against the device's JTAG IDCODE, whole frames, WCFG/START/DESYNC, every CRC check | a complete bitstream for that device | whether its frames mean what the tools intend |
 | round trip (`bit2fasm`, `fasmcheck.py`) | the bitstream decoded back against the routed FASM, bit by bit | the assembly wrote exactly what nextpnr chose; every difference is a connection without bits, an all-clear default or the STEPDOWN that `fasm2frames` spreads to a bank as Vivado does | anything the database itself gets wrong (same database both ways) |
 | block RAM (`fasm2netlist`, `bramcheck.py`) | initial contents decoded from the bitstream against the netlist, block for block | SurfBoot's ROM would arrive intact (as far as prjxray-db's bit positions are right) | |
-| LVS (`tileverilog`, `lvs_equiv`) | the routed FASM read into a fabric netlist by an independent tile model, proved equal to the synthesized netlist register by register | place, route and FASM writing kept the logic | MMCM/PLL (not modelled), block RAM and DSP internals (cut at their pins), the clock tree (assumed) |
-| clocks (`cmtcheck.py`) | every MMCM/PLL divider field in the FASM against AMD's XAPP888 algorithm, itself checked against register values Vivado produced | the clock managers are configured as Vivado would | duty cycles other than 50 % and non-zero phases (reported unchecked) |
+| LVS (`tileverilog`, `bramwe.py`, `lvs_equiv`) | the routed FASM read into a fabric netlist by an independent tile model, each RAMB18E1 byte write enable read from the site pins the silicon reads it from (with every other pin it ties to that enable checked), proved equal to the synthesized netlist register by register | place, route and FASM writing kept the logic | MMCM/PLL (not modelled), block RAM and DSP internals (cut at their pins), the clock tree (assumed) |
+| clocks (`cmtcheck.py`) | every MMCM/PLL divider field and every output's phase fields (DELAY_TIME, PHASE_MUX, MX) in the FASM against AMD's XAPP888 algorithm, itself checked against register values Vivado produced; the parameters read as Yosys writes them (a constant as its bits, at any width) | the clock managers are configured as Vivado would | duty cycles other than 50 % and phases of fractional dividers (reported unchecked) |
 | simulation (demo only) | the synthesized netlist with Yosys's `cells_sim.v` under the RTL testbench | synthesis kept the behaviour (the UART line, the reset) | |
 
 None of these can show whether Project X-Ray's database is right for this silicon, whether the
@@ -203,7 +216,10 @@ modelled (the flow uses the -1 model).
 nextpnr's delays come from Project X-Ray's timing data and a delay matrix it measures on the
 chip database; they are not Vivado's signoff models. Treat a pass as "probably fine with a wide
 margin" (the demo's critical path takes half of its 10 ns period, the probe's a fifth of its
-40 ns). Paths between clock domains are
+40 ns). The DDR designs' `dram_clk` has no such margin: 0.26 to 1.79 ns of its 12.5 ns at
+80 MHz in the round ddr-3 builds, nextpnr's estimate on a path of 14 to 19 LUT levels (section
+6.7), so there a pass is the flow's gate and no more; Vivado's timing for the same design, or
+the board, has to confirm it. Paths between clock domains are
 reported (`timing.txt`, for example 1.5 ns from the pixel to the system clock in the probe) but
 checked against nothing: the XDC reader has no `set_max_delay -datapath_only` or
 `set_clock_groups`. So cross-domain safety rests on the `rtl/lib` synchronizers, and the delays
@@ -231,6 +247,53 @@ are for a reader to judge. Hold violations are fixed after routing (`-o hold-fix
   bit of a 63-bit FIFO), so `openxc7-build.sh` now runs `setundef -zero` after synthesis.
   `make test-flow-tools` tests the synthcheck, bramcheck and build script changes; the fasmcheck
   change was checked against the SoC build with a planted CLKINV feature, which still fails.
+* The DDR designs (round ddr-2) showed three more checks misreading correct results; round
+  ddr-3 fixed each where it went wrong, with a self-test on `make check` and a regression
+  through the real flow (`tools/openxc7-checks-test.sh`, which builds three small probes from
+  `devenv/openxc7/test/` and one CPU; [evidence/flow/checkers.txt](evidence/flow/checkers.txt)):
+  * **LVS and block RAM write enables.** `fasm2netlist`'s extractor (`src/bram_ports.hpp`)
+    reads a RAMB18E1's byte write enables one to one from the site's first pins (WEA[1:0] from
+    WEA1..0, WEBWE[3:0] from WEBWE3..0). The site has WEA0..3 and WEBWE0..7, and the silicon
+    gives each byte of an 18-bit write port, and of the 36-bit simple dual port write port,
+    two pins: byte i is pins 2i and 2i+1. That is how Vivado connects them (f4pga's
+    fasm2bels, `bram_models.py`, which rebuilds Vivado netlists from Vivado bitstreams) and
+    how nextpnr routes them (`himbaechel/uarch/xilinx/pack.cc`). So nextpnr, the FASM and
+    the netlist were right, and the extractor read the second byte's enable from a pin
+    carrying the first's: LiteDRAM's VexRiscv tag RAM (WEBWE = {0, we, we, we}) gave
+    "DIFFER WEBWE[3]", and any 18-bit port with two byte enables gives "DIFFER WEA[1]".
+    `devenv/openxc7/bramwe.py`, run between extraction and proof, makes the extracted
+    netlist read each used enable where the silicon does, from the block's mode in the FASM,
+    and checks that every pin the silicon ties to that enable carries the same net: a pin
+    that disagrees is a difference and fails LVS. A probe of each shape now proves equal (104
+    and 98 points, no difference); the extractor's own reading still fails, a pin pair that
+    disagrees fails, and a byte lane really enabled against the netlist's 0 still fails the
+    proof. The proper fix is in fasm2netlist (the tile model's port table); this step does
+    its work until the image carries it. Read from nextpnr's packer, not shown by a build:
+    for an 18-bit write on port B in true dual port mode nextpnr routes the two byte enables
+    to WEBWE0..3 as we0, we1, we0, we1, where Vivado's pairing is we0, we0, we1, we1;
+    `bramwe.py` reports such a design as different, which it would then be. No SurfCPU design
+    has one.
+  * **`cmtcheck.py` and Yosys's short bit strings.** Yosys's JSON writes a constant parameter
+    as its bits at its own width (LiteDRAM's `5'd16` is "10000"), a real or a string as text
+    (a space appended to a string that looks like bits). The check read bit strings of fewer
+    than eight characters as decimal numbers, so LiteDRAM's PLL (16, 8, 20, 5) looked wrong.
+    It now reads any bit string as binary; a probe with LiteDRAM's PLL as generated passes.
+  * **`cmtcheck.py` and phases** (not a misreading, a gap): it reported every output with a
+    phase as unchecked, LiteDRAM's 90-degree clock for the DQS strobes among them, and compared
+    no output's phase fields. It now computes DELAY_TIME and PHASE_MUX as XAPP888's
+    `mmcm_phase_calc` does (the phase in VCO cycles, rounded to the nearest eighth) for every
+    integer divider and compares them, zero phases included; LiteDRAM's CLKOUT3 (divide 5, 90
+    degrees: 1.25 VCO cycles, DELAY_TIME 1, PHASE_MUX 2) checks in every DDR build, and two
+    wrong phases written into the probe's FASM fail it. nextpnr 1.0.0 floors the phase to an
+    eighth where XAPP888 rounds (`fasm.cc`, `write_pll_clkout`), so a phase that is not a
+    whole number of eighths of a VCO cycle would fail this check; no SurfCPU clock has one.
+  * **`synthcheck.py` and registers merged into a memory read port.** When Yosys's
+    `memory_dff` (run before the RTL is written for the check) moves a read-data register into
+    a memory's read port, it reconnects that register's merged bits to `$ffmerge_disconnected`
+    wires and keeps the cell if some bits are still used; the check counted those bits as RTL
+    flip-flops that synthesis then lost (VexRiscv lite's 22 instruction-cache tag bits, which
+    its block RAM's read port holds). They are now counted apart and printed;
+    `VexRiscv_Lite.v` synthesized alone passes with 22 merged bits.
 
 ### 6.6 What scales
 
@@ -241,7 +304,23 @@ initialized memories (the probe's 16384-word ROM loop: 34 s to elaborate, 42 s t
 ### 6.7 DDR3
 
 The Arty's DDR3L needs LiteDRAM under this flow (AMD's MIG exists only in Vivado; that is the
-ddr track's work). openXC7's CI records LiteX's DDR3 design for the Arty S7 failing on an
+ddr track's work). **Round ddr-3 (2026-10-16):** the DDR designs pass every check of this flow
+(BOARD.md section 8, DDR.md section 10.3), with two choices this flow forced. LiteDRAM's
+controller does not close nextpnr's timing at 100 MHz: its worst path, from the ZQ calibration
+timer through the refresher and the command multiplexer into a bank machine, has 15 to 19 LUT
+levels and 3 ns of logic, and nextpnr routes it in 8 to 10 ns; 20 placements at 100 MHz with
+the calibration CPU gone, LiteDRAM's controller settings and nextpnr's options among them, gave
+74.3 to 90.2 MHz, and 87.5 MHz missed on both seeds tried (docs/evidence/ddr/openflow-timing.txt). So the core runs at 80 MHz (DDR3L at 640 MT/s, above
+its DLL's floor of 76), where about three placements in four meet the clock, and the DDR
+design lists give seeds 1 to 8 (section 3). Vivado routinely closes LiteDRAM at 100 MHz on this
+board; with it the core could go back to 100 MHz. The DDR3L's own I/O timing (the serializers
+to the pins at 320 MHz, the strobes, the read path into the ISERDESE2s) is checked by nothing
+here: the board's constraints declare those paths false, as LiteX's do, nextpnr has no
+register-to-register path on the 320 MHz clocks, and the read leveling SurfCPU's firmware runs
+on the board is what absorbs the read path's delay. The rest of this section is round 1's
+record.
+
+The PHY probe: openXC7's CI records LiteX's DDR3 design for the Arty S7 failing on an
 OSERDESE2 in a "SING" I/O tile, whose divided-clock pip Project X-Ray never fuzzed for
 Spartan-7. Two of the Arty A7's DDR3 pins (K6 `reset_n`, U8 `cs_n`) sit in such tiles. An
 OSERDESE2 with both clocks on them (`devenv/openxc7/test/ddr_pins.v`) places, routes and passes
@@ -297,6 +376,9 @@ USB-UART at 115200 8N1:
    it would read `pix=01802CD9` (25,177,305); any other value shows what the mis-encoding does.
 4. The timing estimates against Vivado's for the same designs (option A or B).
 5. On a 35T: whether logic placed outside Vivado's 35T region works (section 6.3).
+6. The DDR designs (BOARD.md section 12, steps 4 and 5): whether LiteDRAM's PHY as this flow
+   placed and routed it, with its I/O timing unchecked here (section 6.7), reads the DDR3L back
+   inside a window of read delays on both byte lanes, and the DDR tests pass at 640 MT/s.
 
 ## 9. Files
 
@@ -306,12 +388,13 @@ USB-UART at 115200 8N1:
 | `devenv/openxc7/bitinfo.py` | bitstream inspector (UG470), with `--self-test` |
 | `devenv/openxc7/fasmcheck.py` | round-trip check |
 | `devenv/openxc7/bramcheck.py` | block RAM contents check |
-| `devenv/openxc7/cmtcheck.py` | MMCM/PLL divider check, with `--self-test` and `--table` |
-| `devenv/openxc7/synthcheck.py` | synthesis-against-RTL check |
+| `devenv/openxc7/cmtcheck.py` | MMCM/PLL divider and phase check, with `--self-test` and `--table` |
+| `devenv/openxc7/synthcheck.py` | synthesis-against-RTL check, with `--self-test` |
+| `devenv/openxc7/bramwe.py` | the RAMB18E1 write enables of the LVS proof, with `--self-test` |
 | `devenv/openxc7/report.py` | `timing.txt` and `utilization.txt` |
 | `devenv/openxc7/demo/` | flow_demo and flow_features (RTL, testbenches, XDC) |
-| `devenv/openxc7/test/` | the Yosys DSP reproducer and the DDR3 pin experiment |
-| `tools/openxc7-build.sh`, `openxc7-demo.sh` | the build entry and the proof run |
+| `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
+| `tools/openxc7-build.sh`, `openxc7-demo.sh`, `openxc7-checks-test.sh` | the build entry, the proof run, the checkers' regression (round ddr-3) |
 | `tools/openxc7-fetch.sh`, `openxc7-xdc.sh`, `openxc7-flow-test.sh` | Digilent's XDC (pinned), its conversion, the script tests |
 | `mk/area-flow.mk` | `lint-flow`, `test-flow`, `flow-xdc-check` |
 | `docs/evidence/flow/` | the measurements behind this page |

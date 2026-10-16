@@ -1,4 +1,36 @@
 SurfCPU ddr track evidence: the open flow's clock-tile check on LiteDRAM's PLL
+
+== Round ddr-3 (2026-10-16): fixed, and the phases checked too
+devenv/openxc7/cmtcheck.py now reads a parameter Yosys's JSON writes as a bit string (only 0 and
+1, any length; a string parameter that looks like bits carries a trailing space there) as binary,
+and compares every output's phase fields (DELAY_TIME, PHASE_MUX, MX) by XAPP888's mmcm_phase_calc,
+zero phases included; a phased fractional MMCM divider or a duty cycle other than 50 % is still
+reported unchecked. Its self-test covers both (make test-flow), and tools/openxc7-checks-test.sh
+runs LiteDRAM's PLL as generated through the flow and two wrong phases written into its FASM
+(docs/evidence/flow/checkers.txt). LiteDRAM's PLL now runs at VCO 1600 MHz: 200 MHz (/8), 80 MHz
+(/20), 320 MHz (/5) and 320 MHz at 90 degrees (/5: 1.25 VCO cycles, DELAY_TIME 1, PHASE_MUX 2).
+What the gated build of surfcpu_arty_a7_ddr_bramdiag for the arty_a7_35t at 92a2b510 reports
+(check-clocks.txt; the arty_a7_100t's differs only in the tiles' sites; docs/evidence/board/openxc7-ddr.txt
+has every build's):
+  u_clocks.u_pix_mmcm (MMCME2_BASE at CMT_TOP_L_LOWER_B_X106Y61):
+    DIVCLK_DIVIDE 2: matches XAPP888
+    CLKFBOUT_MULT_F 18.125: matches XAPP888
+    CLKOUT0_DIVIDE_F 36: matches XAPP888
+  u_clocks.u_sys_pll (PLLE2_BASE at CMT_TOP_L_UPPER_T_X106Y96):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 10: matches XAPP888
+    CLKOUT0_DIVIDE 40: matches XAPP888
+  u_dram.PLLE2_ADV (PLLE2_ADV at CMT_TOP_R_UPPER_T_X8Y96):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 16: matches XAPP888
+    CLKOUT0_DIVIDE 8: matches XAPP888
+    CLKOUT1_DIVIDE 20: matches XAPP888
+    CLKOUT2_DIVIDE 5: matches XAPP888
+    CLKOUT3_DIVIDE 5, phase 90: matches XAPP888
+  cmtcheck: 85 fields compared, 0 counters differ from XAPP888, 0 unchecked: PASS
+
+== Round ddr-2's record (the misreading, kept as it was found)
+
 Generated 2026-10-16 (round 2) from a DIAGNOSTIC build of surfcpu_arty_a7_ddr_bramdiag for the
 arty_a7_100t (sim/board/openxc7_ddr_evidence.sh's diagnostic copy of the flow, nextpnr allowed to
 finish despite its timing failure; the calibration CPU was VexRiscv minimal then, which does not

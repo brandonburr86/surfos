@@ -1,9 +1,11 @@
-# LiteDRAM for the open flow, 2026-10-16 (round 2), in surfcpu-toolchain:2026-10-15
+# LiteDRAM for the open flow, 2026-10-16 (round ddr-3: no CPU, 80 MHz), in surfcpu-toolchain:2026-10-15
 # make litedram-setup (ip/litedram/setup.sh: pinned sources and wheels, build/third_party/litedram)
-# make litedram-gen   (ip/litedram/generate.sh: arty.yml, and arty.yml --sim through sim_config.py;
-#                      inspect_core.py; estimate.sh; lock.sh check against ip/litedram/arty.sha256)
+# make litedram-gen   (ip/litedram/generate.sh, run under env -i, and run_gen.py: arty.yml, and arty.yml
+#                      --sim for the simulation core; inspect_core.py; estimate.sh; lock.sh check)
+# make litedram-repro (ip/litedram/repro.sh: the generation in eight differently set up processes)
 
-## pins (setup.sh)
+## pins (setup.sh; unchanged since round ddr-2. VexRiscv, picolibc and compiler-rt are no longer
+## used by the Arty core; tools/openxc7-checks-test.sh still synthesizes VexRiscv_Lite.v)
 migen e19524c963a8342952840983047557707fbe0b6a
 litex b6ae9e0b227354aecffef5339d3e946f2395ac09
 litedram c454a440ca94afd57bca148a0ba2af491325f0e6
@@ -17,86 +19,109 @@ colorama-0.4.6-py2.py3-none-any.whl 4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51
 meson-1.9.1-py3-none-any.whl f824ab770c041a202f532f69e114c971918ed2daff7ea56583d80642564598d0
 ninja-1.13.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl 3d00c692fb717fd511abeb44b8c5d00340c36938c12d6538ba989fe764e79630
 
+## reproducible output, in any checkout
+generate.sh: SOURCE_DATE_EPOCH = the LiteDRAM commit's time (1790239353), Python's clock frozen at it
+by run_gen.py, TZ=UTC, env -i with PYTHONHASHSEED 0; and, since d6f3ef8, run_gen.py replaces the
+instance tree LiteX writes into the Verilog as a block comment with a fixed note. LiteX lists each
+module's black-box instances in that tree sorted by their default string, which holds the object's
+address, so their order follows the Python process's memory layout. env -i kept one checkout
+stable (two runs and make's run identical at 595ab38, below), but the release track's fresh checkout
+got other orders: 16 generations, 5 different files, the Verilog outside the comment the same in all,
+so its first make litedram-gen failed its own lock check.
 
-## reproducible output (generate.sh: SOURCE_DATE_EPOCH = the LiteDRAM commit's time, 1790239353;
-## Python's clock frozen at it by run_gen.py; TZ=UTC)
-Two runs of ip/litedram/generate.sh arty.yml into two directories (calibration CPU standard then):
-  litedram_core.v, litedram_core_rom.init, litedram_core_sram.init, litedram_core.xdc, csr.csv,
-  csr.json, software/bios/bios.bin: identical; litedram_core.tcl differs only by the output
-  directory it names (it is not used).
-Two runs with --sim (the simulation core): litedram_sim.v identical (sha256 22b66255...).
-The lite core generated from a copy of arty.yml in build/tmp and the one make litedram-gen wrote
-into build/litedram/arty: litedram_core.v identical (150b86df...), litedram_core_rom.init
-identical (9a7e0bb0...).
-The BIOS says "BIOS built on Sep 24 2026 08:42:33" (the commit's time) in every run.
-make litedram-gen again at a338e7a3 (arty.yml's comment changed, so the core was regenerated):
-"lock.sh: the 6 generated LiteDRAM files match ip/litedram/arty.sha256".
+Before the fix, at 595ab38: two runs of generate.sh each and make litedram-gen's output, compared:
+  arty gateware/litedram_core.v: identical (sha256 0cc39800c123f3ea...)
+  arty gateware/litedram_core.xdc: identical (sha256 7d666677604e172c...)
+  arty csr.csv: identical (sha256 8a658abc53f883fe...)
+  arty csr.json: identical (sha256 c6dac4d72b69cb26...)
+  arty software/include/generated/sdram_phy.h: identical (sha256 e825f2f6ce755ea0...)
+  arty software/include/generated/csr.h: identical (sha256 3c120737da793c77...)
+  sim  gateware/litedram_sim.v: identical (sha256 63b2566b96f95f3e...)
+  sim  csr.csv: identical (sha256 c63fb1ea1da56a85...)
+  sim  software/include/generated/sdram_phy.h: identical (sha256 a09e2943b6ecc681...)
+Before the fix, a run with a 2000-character variable added and a long output path (seed 99) wrote a
+different litedram_core.v (85bf027c...) where the six others that ran wrote 0cc39800...: two lines of the
+tree swapped ([BB:OSERDESE2] and [BB:OBUFDS] under the PHY), the Verilog outside the comment identical.
 
-## ip/litedram/arty.sha256 (lock.sh write; checked by make litedram-gen and tools/fpga-build.sh)
-150b86df5d61bb67ef4983d26e0a6528b41d5dacdf38883b23795ded09a325f4  build/litedram/arty/gateware/litedram_core.v
-9a7e0bb03b7133a1c2befacff4268893fff53c1d575eefc5cb88fcab81056a7d  build/litedram/arty/gateware/litedram_core_rom.init
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  build/litedram/arty/gateware/litedram_core_sram.init
+make litedram-repro at 92a2b51 (clean; the same result as the first run, just before d6f3ef8): eight
+processes, PYTHONHASHSEED 0, 1, 12345, random, 777, 4242, 99, 31337; generate.sh's env -i, a
+2000-character variable added, the container's whole environment; output paths of different length
+and depth; /tmp as working directory; each run with the comment removed as make litedram-gen does
+and, as the control, kept; and the simulation core twice each way:
+  repro: board core gateware/litedram_core.v: 8 runs give 1 file(s), 8 of them make litedram-gen's (c34b56801e05d330...); with the tree comment kept: 2
+  repro: board core gateware/litedram_core.xdc: 8 runs give 1 file(s), 8 of them make litedram-gen's (7d666677604e172c...); with the tree comment kept: 1
+  repro: board core csr.csv: 8 runs give 1 file(s), 8 of them make litedram-gen's (8a658abc53f883fe...); with the tree comment kept: 1
+  repro: board core software/include/generated/sdram_phy.h: 8 runs give 1 file(s), 8 of them make litedram-gen's (e825f2f6ce755ea0...); with the tree comment kept: 1
+  repro: simulation core gateware/litedram_sim.v: 2 runs give 1 file(s), 2 of them make litedram-gen's; with the tree comment kept: 1
+  repro: litedram_core.v outside the tree comment: 1 version(s) over every run
+  repro: litedram_sim.v outside the tree comment: 1 version(s) over every run
+  repro: PASS
+
+## ip/litedram/arty.sha256 (lock.sh write, d6f3ef8: the two cores' hashes changed with the comment;
+## checked by make litedram-gen and tools/fpga-build.sh)
+c34b56801e05d3301ac82093e491c69df0fe713904f091983ca0b0d6507ed40c  build/litedram/arty/gateware/litedram_core.v
 7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef  build/litedram/arty/gateware/litedram_core.xdc
-90e0b8f5912df2532d12bc766b110a632c1b85dd82b8aecd431d715c25f4cbbe  build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
-22b66255841e7bdde20a8a30cd9be71ba191d7cacfa4b3c0e68c87cc7f385c87  build/litedram/arty_sim/gateware/litedram_sim.v
+8a658abc53f883fe7779bd2c83020eb313637c431943a911288c1ada231bf20b  build/litedram/arty/csr.csv
+e825f2f6ce755ea0c172d2ed7888cd53f74b3b45d20818ab1d44ede1bca83dfd  build/litedram/arty/software/include/generated/sdram_phy.h
+d5e82b7b83d9bcb8f5ff28460648b78966a72d490b24f8c7b509f9f458651131  build/litedram/arty_sim/gateware/litedram_sim.v
 
-## what came out (build/litedram/summary.txt, make litedram-gen)
-== arty: litedram/arty/gateware/litedram_core.v (742401 bytes, sha256 150b86df5d61bb67ef4983d26e0a6528b41d5dacdf38883b23795ded09a325f4)
-ports: input clk, output [13:0]ddram_a, output [2:0]ddram_ba, output ddram_cas_n, output ddram_cke, output ddram_clk_n, output ddram_clk_p, output ddram_cs_n, output [1:0]ddram_dm, inout [15:0]ddram_dq, inout [1:0]ddram_dqs_n, inout [1:0]ddram_dqs_p, output ddram_odt, output ddram_ras_n, output ddram_reset_n, output ddram_we_n, output init_done, output init_error, output pll_locked, input rst, input uart_rx, output uart_tx, output user_clk, input [23:0]user_port_native_0_cmd_addr, output user_port_native_0_cmd_ready, input user_port_native_0_cmd_valid, input user_port_native_0_cmd_we, output [127:0]user_port_native_0_rdata_data, input user_port_native_0_rdata_ready, output user_port_native_0_rdata_valid, input [127:0]user_port_native_0_wdata_data, output user_port_native_0_wdata_ready, input user_port_native_0_wdata_valid, input [15:0]user_port_native_0_wdata_we, output user_rst
+## what came out (build/litedram/summary.txt, make litedram-gen at d6f3ef8)
+== arty: litedram/arty/gateware/litedram_core.v (648609 bytes, sha256 c34b56801e05d3301ac82093e491c69df0fe713904f091983ca0b0d6507ed40c)
+ports: input clk, output [13:0]ddram_a, output [2:0]ddram_ba, output ddram_cas_n, output ddram_cke, output ddram_clk_n, output ddram_clk_p, output ddram_cs_n, output [1:0]ddram_dm, inout [15:0]ddram_dq, inout [1:0]ddram_dqs_n, inout [1:0]ddram_dqs_p, output ddram_odt, output ddram_ras_n, output ddram_reset_n, output ddram_we_n, output init_done, output init_error, output pll_locked, input rst, output user_clk, input [23:0]user_port_native_0_cmd_addr, output user_port_native_0_cmd_ready, input user_port_native_0_cmd_valid, input user_port_native_0_cmd_we, output [127:0]user_port_native_0_rdata_data, input user_port_native_0_rdata_ready, output user_port_native_0_rdata_valid, input [127:0]user_port_native_0_wdata_data, output user_port_native_0_wdata_ready, input user_port_native_0_wdata_valid, input [15:0]user_port_native_0_wdata_we, output user_rst, output wb_ctrl_ack, input [29:0]wb_ctrl_adr, input [1:0]wb_ctrl_bte, input [2:0]wb_ctrl_cti, input wb_ctrl_cyc, output [31:0]wb_ctrl_dat_r, input [31:0]wb_ctrl_dat_w, output wb_ctrl_err, input [3:0]wb_ctrl_sel, input wb_ctrl_stb, input wb_ctrl_we
 vendor primitives: ISERDESE2 x16, OSERDESE2 x45, IDELAYE2 x16, IDELAYCTRL x1, IOBUF x16, IOBUFDS x2, OBUFDS x1, BUFG x4, PLLE2_ADV x1, FDCE x8, FDPE x8
-modules needed from elsewhere: VexRiscv
-PLL: input 100.0 MHz, VCO 1600 MHz; CLKOUT0 200.0 MHz @0 deg; CLKOUT1 100.0 MHz @0 deg; CLKOUT2 400.0 MHz @0 deg; CLKOUT3 400.0 MHz @90 deg
-calibration BIOS: ROM usage 27.34KiB (56.97%)
-litedram_core_rom.init: 63009 bytes, sha256 9a7e0bb03b7133a1c2befacff4268893fff53c1d575eefc5cb88fcab81056a7d
-litedram_core.xdc: 1202 bytes, sha256 7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef
+PLL: input 100.0 MHz, VCO 1600 MHz; CLKOUT0 200.0 MHz @0 deg; CLKOUT1 80.0 MHz @0 deg; CLKOUT2 320.0 MHz @0 deg; CLKOUT3 320.0 MHz @90 deg
+gateware/litedram_core.xdc: 1202 bytes, sha256 7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef
+csr.csv: 2922 bytes, sha256 8a658abc53f883fe7779bd2c83020eb313637c431943a911288c1ada231bf20b
+software/include/generated/sdram_phy.h: 3665 bytes, sha256 e825f2f6ce755ea0c172d2ed7888cd53f74b3b45d20818ab1d44ede1bca83dfd
 constraints shipped: set_false_path x2, set_max_delay x1 (no pins, no I/O standards, no clocks: the board's XDC supplies them)
-adapter assumptions: hold (24-bit beat address, 128-bit data, 16 byte enables)
-== arty_sim: litedram/arty_sim/gateware/litedram_sim.v (535939 bytes, sha256 22b66255841e7bdde20a8a30cd9be71ba191d7cacfa4b3c0e68c87cc7f385c87)
+RTL assumptions: hold (24-bit beat address, 128-bit data, 16 byte enables; wb_ctrl control port, no CPU)
+== arty_sim: litedram/arty_sim/gateware/litedram_sim.v (525972 bytes, sha256 d5e82b7b83d9bcb8f5ff28460648b78966a72d490b24f8c7b509f9f458651131)
 ports: input clk, output init_done, output init_error, input sim_trace, output user_clk, input [23:0]user_port_native_0_cmd_addr, output user_port_native_0_cmd_ready, input user_port_native_0_cmd_valid, input user_port_native_0_cmd_we, output [127:0]user_port_native_0_rdata_data, input user_port_native_0_rdata_ready, output user_port_native_0_rdata_valid, input [127:0]user_port_native_0_wdata_data, output user_port_native_0_wdata_ready, input user_port_native_0_wdata_valid, input [15:0]user_port_native_0_wdata_we, output user_rst, output wb_ctrl_ack, input [29:0]wb_ctrl_adr, input [1:0]wb_ctrl_bte, input [2:0]wb_ctrl_cti, input wb_ctrl_cyc, output [31:0]wb_ctrl_dat_r, input [31:0]wb_ctrl_dat_w, output wb_ctrl_err, input [3:0]wb_ctrl_sel, input wb_ctrl_stb, input wb_ctrl_we
 vendor primitives: none
-adapter assumptions: hold (24-bit beat address, 128-bit data, 16 byte enables)
-VexRiscv_Lite.v (the arty core's calibration CPU, the lite variant, read beside it): sha256 90e0b8f5912df2532d12bc766b110a632c1b85dd82b8aecd431d715c25f4cbbe
+csr.csv: 2330 bytes, sha256 c63fb1ea1da56a85e25af02b9343e0f357dbc9a35bd9b07db948c851125aa2fe
+software/include/generated/sdram_phy.h: 3541 bytes, sha256 a09e2943b6ecc6819a164435869c961dd2ac9a92338fb0dad60534aaddaf39b2
+RTL assumptions: hold (24-bit beat address, 128-bit data, 16 byte enables; wb_ctrl control port, no CPU)
+== the firmware's DDR initialization (firmware/common/ddrinit*.[ch]) against the board core
+register map: spec/soc.toml's ddrc block lists the core's 40 registers at their offsets and with their access (csr.csv)
+PHY settings and init_sequence: ddrinit_phy.h equals sdram_phy.h (11 settings; MR2, MR3, MR1, MR0 and ZQCL in that order)
 == the simulation core (arty_sim) against the bitstream's core (arty)
-configuration: build/litedram/arty_sim/config.yml is ip/litedram/arty.yml but for: cpu 'vexriscv' -> None, uart 'rs232' -> '<absent>'
+configuration: both generated from ip/litedram/arty.yml as it is (generate.sh, --sim for the model)
+registers: the simulation core has the board core's 27 DFII and init registers at the same offsets; of its 13 PHY registers it has none (the model has no delays)
 PHY settings the same (sdram_phy.h): CL=6, CWL=5, DATABITS=16, DDR3, DFI_DATABITS=32, DQ_DQS_RATIO=8, MODULES=2, PHASES=4, SUPPORTED_MEMORY=0x0000000010000000ULL, WRPHASE=3, XDR=2
 PHY settings that differ (board -> simulation): A7DDRPHY set -> <absent>, BITSLIPS 8 -> <absent>, CMD_LATENCY 0 -> <absent>, DELAYS 32 -> <absent>, RDPHASE 3 -> 2, READ_LEVELING_CAPABLE set -> <absent>, SDRAMPHYMODEL <absent> -> set
 DRAM initialization sequence: identical (4 mode register loads, the same values and waits)
-sim/board/stubs/litedram_core.v: the board core's 35 ports exactly
-estimate (yosys synth_xilinx, litedram_core + VexRiscv): LUTs 5492, flip-flops 3361, RAM32M 56, RAMB18E1 17, RAMB36E1 2
-lock.sh: the 6 generated LiteDRAM files match ip/litedram/arty.sha256
+sim/board/stubs/litedram_core.v: the board core's 44 ports exactly
+estimate (yosys synth_xilinx, litedram_core): LUTs 2665, flip-flops 1847, RAM32M 32
 
-## make check-openflow at a338e7a3 (clean): make test-ddr-litedram (the bridge + surf_ddr_litedram_adapter +
-## LiteDRAM's controller, the simulation core litedram_sim.v; sys 40 ns, LiteDRAM 10 ns) and make litedram-check
+## make test-ddr-litedram at 595ab38 (clean): the bridge + surf_ddr_litedram_adapter + LiteDRAM's
+## controller, the simulation core litedram_sim.v; sys 40 ns, LiteDRAM 12.5 ns (80 MHz)
 lint-ddr-adapter: surf_ddr_litedram_adapter clean (Verilator -Wall, Icarus -g2005)
-tb_ddr_litedram: basic           PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=5/7.0/9 cycles=56
-tb_ddr_litedram: lanes           PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/7.6/18 cycles=4964
-tb_ddr_litedram: bounds          PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=324 reads=216 writes=108 err=0 aborted=0 timeouts=0 lat=5/7.4/19 cycles=2744
-tb_ddr_litedram: alias           PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/7.1/18 cycles=888
-tb_ddr_litedram: random          PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=10000 reads=4897 writes=5103 err=0 aborted=0 timeouts=0 lat=5/7.2/22 cycles=94735
-tb_ddr_litedram: stream          PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=2048 reads=1024 writes=1024 err=0 aborted=0 timeouts=0 lat=5/6.7/15 cycles=15711 sys_cycles_per_write=6.02 per_read=9.31
-tb_ddr_litedram: precal          PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=300 reads=97 writes=103 err=100 aborted=0 timeouts=0 lat=5/7.2/21 cycles=1898
-tb_ddr_litedram: calerror        PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=250 reads=0 writes=0 err=250 aborted=0 timeouts=0 lat=0/0.0/0 cycles=20063 calib_fail_seen_at_cycle=20005
-tb_ddr_litedram: sysreset        PASS seed=1 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5064 reads=2409 writes=2417 err=0 aborted=238 timeouts=0 lat=5/7.3/22 cycles=46344 resets=238 maybes=96
-tb_ddr_litedram: basic           PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=5/7.0/9 cycles=56
-tb_ddr_litedram: lanes           PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/7.6/18 cycles=4944
-tb_ddr_litedram: bounds          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=324 reads=216 writes=108 err=0 aborted=0 timeouts=0 lat=5/7.4/19 cycles=2744
-tb_ddr_litedram: alias           PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/7.1/18 cycles=888
-tb_ddr_litedram: random          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=10000 reads=4917 writes=5083 err=0 aborted=0 timeouts=0 lat=5/7.2/22 cycles=94676
-tb_ddr_litedram: stream          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=2048 reads=1024 writes=1024 err=0 aborted=0 timeouts=0 lat=5/6.7/15 cycles=15711 sys_cycles_per_write=6.02 per_read=9.31
-tb_ddr_litedram: precal          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=300 reads=114 writes=86 err=100 aborted=0 timeouts=0 lat=5/7.5/19 cycles=1965
-tb_ddr_litedram: calerror        PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=250 reads=0 writes=0 err=250 aborted=0 timeouts=0 lat=0/0.0/0 cycles=20063 calib_fail_seen_at_cycle=20005
-tb_ddr_litedram: sysreset        PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5064 reads=2405 writes=2436 err=0 aborted=223 timeouts=0 lat=5/7.3/21 cycles=46377 resets=223 maybes=90
-tb_ddr_litedram: random          PASS seed=3 sys=40.000ns ui=10.000ns jitter=0.30 accesses=3000 reads=1550 writes=1450 err=0 aborted=0 timeouts=0 lat=5/7.4/23 cycles=28880
+tb_ddr_litedram: basic           PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=5/7.8/10 cycles=60
+tb_ddr_litedram: lanes           PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/8.5/18 cycles=5480
+tb_ddr_litedram: bounds          PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=324 reads=216 writes=108 err=0 aborted=0 timeouts=0 lat=5/8.4/20 cycles=3070
+tb_ddr_litedram: alias           PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/7.9/18 cycles=976
+tb_ddr_litedram: random          PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=10000 reads=4897 writes=5103 err=0 aborted=0 timeouts=0 lat=5/8.2/26 cycles=104388
+tb_ddr_litedram: stream          PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=2048 reads=1024 writes=1024 err=0 aborted=0 timeouts=0 lat=5/7.5/15 cycles=17442 sys_cycles_per_write=6.73 per_read=10.28
+tb_ddr_litedram: precal          PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=300 reads=97 writes=103 err=100 aborted=0 timeouts=0 lat=5/8.2/23 cycles=2088
+tb_ddr_litedram: calerror        PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=250 reads=0 writes=0 err=250 aborted=0 timeouts=0 lat=0/0.0/0 cycles=20063 calib_fail_seen_at_cycle=20005
+tb_ddr_litedram: sysreset        PASS seed=1 sys=40.000ns ui=12.500ns jitter=0.00 accesses=5064 reads=2408 writes=2413 err=0 aborted=243 timeouts=0 lat=5/8.2/26 cycles=51175 resets=243 maybes=100
+tb_ddr_litedram: basic           PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=5 reads=3 writes=2 err=0 aborted=0 timeouts=0 lat=5/7.6/9 cycles=59
+tb_ddr_litedram: lanes           PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=560 reads=448 writes=112 err=0 aborted=0 timeouts=0 lat=5/8.6/18 cycles=5482
+tb_ddr_litedram: bounds          PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=324 reads=216 writes=108 err=0 aborted=0 timeouts=0 lat=5/8.4/23 cycles=3070
+tb_ddr_litedram: alias           PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=108 reads=54 writes=54 err=0 aborted=0 timeouts=0 lat=5/7.9/18 cycles=976
+tb_ddr_litedram: random          PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=10000 reads=4917 writes=5083 err=0 aborted=0 timeouts=0 lat=5/8.2/26 cycles=104393
+tb_ddr_litedram: stream          PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=2048 reads=1024 writes=1024 err=0 aborted=0 timeouts=0 lat=5/7.5/15 cycles=17442 sys_cycles_per_write=6.73 per_read=10.28
+tb_ddr_litedram: precal          PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=300 reads=114 writes=86 err=100 aborted=0 timeouts=0 lat=5/8.4/24 cycles=2152
+tb_ddr_litedram: calerror        PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=250 reads=0 writes=0 err=250 aborted=0 timeouts=0 lat=0/0.0/0 cycles=20063 calib_fail_seen_at_cycle=20005
+tb_ddr_litedram: sysreset        PASS seed=2 sys=40.000ns ui=12.500ns jitter=0.00 accesses=5064 reads=2398 writes=2421 err=0 aborted=245 timeouts=0 lat=5/8.2/25 cycles=51341 resets=245 maybes=105
+tb_ddr_litedram: random          PASS seed=3 sys=40.000ns ui=12.500ns jitter=0.30 accesses=3000 reads=1460 writes=1540 err=0 aborted=0 timeouts=0 lat=5/8.1/26 cycles=31111
 test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)
-lock.sh: the 6 generated LiteDRAM files match ip/litedram/arty.sha256
-check-openflow: the open flow's checks passed
 
 ## the open flow (docs/DDR.md 10.3; the builds' own record: docs/evidence/board/openxc7-ddr.txt)
-nextpnr-himbaechel 1.0.0 (surfcpu-openxc7:2026-10-15) packs, places and routes the core's
-ISERDESE2 x16, OSERDESE2 x45, IDELAYE2 x16, IDELAYCTRL, IOBUF x16, IOBUFDS x2, OBUFDS x1 and
-PLLE2_ADV in the DDR designs on both Arty parts (bank 34; a third clock tile). Its timing
-estimate for the core's 100 MHz clock fails in every build that routes (63.5 to 81.0 MHz), so
-the gated builds stop without a bitstream; one of the four builds at a338e7a3 did not route.
-Diagnostic builds with nextpnr allowed to finish (383dba74): the bitstream, round trip and block
-RAM checks pass (the BIOS ROM's 13 RAMB18E1 among the 55 block RAMs), and LVS finds one pin
-different, a write enable of the calibration CPU's instruction-cache tag memory.
+The DDR designs' gated builds at 92a2b510 (clean) pass every check on both boards (the generated core's 2 files
+matching the lock at that commit): dram_clk 81.72 to 93.35 MHz after routing against 80 MHz
+(slack +0.263 to +1.788 ns), LVS 10,878 points proved with no difference, the clock tiles'
+85 fields as XAPP888 (the 90-degree DQS clock included). nextpnr-himbaechel 1.0.0 (surfcpu-openxc7:2026-10-15)
+places and routes the core's ISERDESE2 x16, OSERDESE2 x45, IDELAYE2 x16, IDELAYCTRL, IOBUF x16, IOBUFDS x2,
+OBUFDS and PLLE2_ADV in bank 34 and a third clock tile. Round ddr-2's core (with its CPU, at 100 MHz) never
+met its clock (63.5 to 81.0 MHz).

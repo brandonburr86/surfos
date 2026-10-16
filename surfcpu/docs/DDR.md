@@ -9,6 +9,9 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
  ddr_* master  ---->  SurfBus slave | mailboxes |  MIG UI  ---->  MIG 7 Series (Vivado flow)
  port (sys_clk)       (sys_clk)     | (CDC)     | (ui_clk)   or   surf_ddr_litedram_adapter ->
                                                                 LiteDRAM (open-source flow)
+ ddrc_* master ---->  surf_ddr_csr: SurfBus slave | mailboxes | Wishbone master ----> LiteDRAM's
+ port (sys_clk)       (LiteDRAM only: its control registers, for the firmware's   control port
+                       initialization and read leveling)                          (wb_ctrl)
 ```
 
 * `surf_ddr_bridge` (`rtl/soc/ddr/`): the SurfBus slave of MODULES.md, crossing from sys_clk
@@ -19,6 +22,9 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
 * The board top instantiates the controller and the bridge and owns the clocks: with LiteDRAM,
   `surfcpu_arty_a7_top` built with `ARTY_HAS_DDR` (BOARD.md section 7; the DDR designs
   `surfcpu_arty_a7_ddr_bramdiag` and `surfcpu_arty_a7_ddr`).
+* With LiteDRAM, `surf_ddr_csr` (`rtl/soc/ddr/`) too: since round ddr-3 the core has no
+  calibration CPU of its own, and SurfCPU initializes the DDR3L and levels its read path
+  through the core's control registers (the SoC's `ddrc` window; section 10.1).
 
 ## Status (2026-10-16)
 
@@ -26,12 +32,14 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
 |---|---|---|---|
 | `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 387 flip-flops, no vendor primitives (an open-tool estimate); in the DDR designs, placed and routed by the open flow | **pending** |
 | MIG recipe (`ip/mig/`) | the bridge is tested against a behavioural model of the MIG's user interface, not the MIG | **pending**: needs Vivado (no build host, BUILD-HOST.md); recipe dry-run only | **pending** |
-| LiteDRAM core (`ip/litedram/`) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, BIOS included, runs its calibration and fails it cleanly with no memory on its pins, in RTL and, identically, as the synthesized netlist (sections 10.2, 10.4) | generated reproducibly, its hashes recorded; in the DDR designs (BOARD.md section 7) the open flow places and routes it, PHY in bank 34 included, but **misses nextpnr's timing for its 100 MHz clock: no bitstream**; routing converges only for some placements, and LVS finds one block RAM write enable of the calibration CPU different (section 10.3) | **pending** |
+| LiteDRAM core (`ip/litedram/`): no CPU, 80 MHz (round ddr-3) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter, and SurfCPU's firmware initializes it through its registers and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, PHY included, takes the firmware's initialization and fails the leveling cleanly with no memory on its pins (sections 10.2, 10.4) | generated reproducibly, its hashes, register map and PHY settings checked; **the DDR designs pass every check of the open flow on both boards at 80 MHz** (section 10.3, BOARD.md section 8); 100 MHz does not close in nextpnr | **pending** |
+| `surf_ddr_csr` (round ddr-3) | Icarus testbench, six runs at five clock pairs, 9 of 9 mutants caught; in the whole DDR top with both cores | in the DDR designs | **pending** |
+| `firmware/common/ddrinit.c` (round ddr-3) | host model and emulator (SurfBoot and the diagnostics, lane windows, failures), RTL with LiteDRAM's controller and with the board core | in SurfBoot 1.1.0 and the BRAM diagnostics | **pending** |
 | `surf_ddr_litedram_adapter` | tested against LiteDRAM's controller; 5 of 5 mutants caught | in the DDR designs | **pending** |
 
-Nothing here has run on an FPGA. Milestone 4's physical evidence (calibration, address and data
-patterns, byte lanes, boundaries and aliases, sustained transfers, code running from DDR) is all
-pending (sections 10.5 and 11).
+Nothing here has run on an FPGA. Milestone 4's physical evidence (initialization and read
+leveling, calibration, address and data patterns, byte lanes, boundaries and aliases, sustained
+transfers, code running from DDR) is all pending (sections 10.5 and 11).
 
 ## 1. The bridge's ports
 
@@ -50,7 +58,7 @@ and meanings as the MIG has them, so the board top connects them one to one:
 
 | Port | Width | Dir | Meaning |
 |---|---|---|---|
-| `ui_clk` | 1 | in | the controller's clock (MIG: 81.25 MHz; LiteDRAM: 100 MHz) |
+| `ui_clk` | 1 | in | the controller's clock (MIG: 81.25 MHz; LiteDRAM: 80 MHz since round ddr-3) |
 | `ui_rst` | 1 | in | MIG `ui_clk_sync_rst` (active high, synchronous to `ui_clk`); it must also reset the controller |
 | `init_calib_complete` | 1 | in | MIG calibration done (`ui_clk` domain) |
 | `app_addr` | 28 | out | rank (bit 27, always 0) + bank + row + column, counting 16-bit words; bits 2:0 are 0 (one BL8 burst) |
@@ -71,7 +79,7 @@ Parameters (MODULES.md names only `TIMEOUT_CYCLES`; the others are additions wit
 | Parameter | Default | Meaning |
 |---|---|---|
 | `TIMEOUT_CYCLES` | 4096 | sys_clk cycles after acceptance at which the watchdog answers (164 us at 25 MHz; a normal access takes 5 to 20) |
-| `CALIB_TIMEOUT_CYCLES` | 37,500,000 | sys_clk cycles after `rst` for calibration to succeed (1.5 s at 25 MHz; 0 = no limit): under SurfBoot's and the BRAM diagnostics' own 2 s wait, so they see `calib_fail` first; LiteDRAM's BIOS takes about 1 s in simulation (section 10.1). The real time must be measured on the board (the MIG's too) |
+| `CALIB_TIMEOUT_CYCLES` | 37,500,000 | sys_clk cycles after `rst` for calibration to succeed (1.5 s at 25 MHz; 0 = no limit): under SurfBoot's and the BRAM diagnostics' own 2 s wait, so they see `calib_fail` first; with LiteDRAM the firmware's own initialization and read leveling end 0.3 to 0.4 s after reset in simulation (section 10.1). The real time must be measured on the board (the MIG's too) |
 | `APP_ADDR_WIDTH` | 28 | MIG `app_addr` width |
 | `APP_DATA_WIDTH` | 128 | MIG app data width; must be 8 x `DQ_WIDTH` (one BL8 burst per beat, 4:1), else elaboration stops |
 | `DQ_WIDTH` | 16 | memory data width |
@@ -83,8 +91,8 @@ Parameters (MODULES.md names only `TIMEOUT_CYCLES`; the others are additions wit
 * **Accepted while usable** (`calib_done` and no timeout): the access goes to the controller and
   is answered when the controller is done. Latency (sys cycles from the accepting edge to the
   response cycle, MIG model at 81.25 MHz with 12-32 cycles of read latency): 5 to 20, average 9;
-  back to back, 6.8 cycles per write and 13.4 per read. Against LiteDRAM's controller at 100 MHz:
-  6.0 per write and 9.3 per read. These are simulation figures with modelled controller latency.
+  back to back, 6.8 cycles per write and 13.4 per read. Against LiteDRAM's controller at 80 MHz:
+  6.7 per write and 10.3 per read. These are simulation figures with modelled controller latency.
 * **Refused** before calibration, after calibration failed, and after a timeout: the response
   is an error in the cycle right after acceptance, and nothing reaches the controller. (The SoC
   refuses DDR accesses itself while `ddr_calib_done` is 0, MODULES.md section 4; the bridge
@@ -215,10 +223,11 @@ rests on the two-flop synchronizers with `ASYNC_REG` and on the timing constrain
 
 ## 7. Timing constraints for the board top
 
-sys_clk (the board's PLL) and ui_clk (the MIG's MMCM, or LiteDRAM's PLL: 100 MHz) both come from
+sys_clk (the board's PLL) and ui_clk (the MIG's MMCM, or LiteDRAM's PLL: 80 MHz) both come from
 the 100 MHz oscillator, so Vivado sees them as related clocks and would time the bridge's
-crossings as synchronous paths against the closest edges of 25 MHz and 81.25 (or 100) MHz, a
-meaningless requirement.
+crossings as synchronous paths against the closest edges of 25 MHz and 81.25 (or 80) MHz, a
+meaningless requirement. The same holds for `surf_ddr_csr`, whose crossings
+`rtl/soc/ddr/surf_ddr_csr.xdc` bounds the same way (six lines, `cdc surf_ddr_csr`).
 `rtl/soc/ddr/surf_ddr_bridge.xdc` gives each crossing `set_max_delay -datapath_only` instead:
 
 | From | To | Bound |
@@ -253,19 +262,20 @@ it parses and that every cell it names is a real register of the RTL.
 All run in the toolchain container; `make test-ddr` is on `test-soc`, `make lint-ddr` and
 `lint-ddr-adapter` on `lint`, `make check-ddr` and `test-ddr-litedram` on `check`.
 
-| Command | What runs | Result (2026-10-15) |
+| Command | What runs | Result (2026-10-15; the rows marked ddr-3 2026-10-16) |
 |---|---|---|
-| `make lint-ddr`, `lint-ddr-adapter` | Verilator 5.032 `--lint-only -Wall` (default and four other parameter sets for the bridge), Icarus 12 `-g2005 -Wall` | clean |
+| `make lint-ddr`, `lint-ddr-adapter` | Verilator 5.032 `--lint-only -Wall` (default and four other parameter sets for the bridge; `surf_ddr_csr`), Icarus 12 `-g2005 -Wall` | clean |
 | `make test-ddr-bridge` | `tb_ddr_bridge --test all`, seeds 1, 2, 3, at 25 MHz / 81.25 MHz | 3 x 13 tests pass |
-| `make test-ddr-ratios` | random, sysreset, uireset and lanes at 7 more clock pairs (below) | 28 runs pass |
+| `make test-ddr-ratios` | random, sysreset, uireset and lanes at 8 more clock pairs (below; ddr-3 added LiteDRAM's 80 MHz) | 32 runs pass |
 | `make test-ddr-defaults` | the bridge with its default parameters, as the board top instantiates it: calibration limit of 37,500,000 cycles (ui clock stopped), the 4096-cycle watchdog (18 cases), 5000 random accesses | pass; `calib_fail` after 37,500,001 cycles |
 | `make test-ddr-icarus` | the mailbox in Icarus (5 clock pairs x 5000 messages, clock stops, misuse) and a four-state smoke test of the bridge with a Verilog MIG stand-in (3 seeds x 1094 accesses) | pass |
-| `make test-ddr-litedram` | `tb_ddr_litedram --test all`, seeds 1, 2, plus a jittered run: the bridge and adapter against LiteDRAM's controller generated from the board's `arty.yml` (section 10.2) | 2 x 9 tests + 1 pass |
-| `make board-ddr-sim` (board track's target) | the DDR top in RTL from its pins: LiteDRAM's controller and model, and the generated core with its BIOS and no memory (section 10.4) | pass: 569 diagnostic checks; CALIB_FAIL at 1.500 s in both failure runs |
+| `make test-ddr-csr` (ddr-3) | `sim/ddr/tb_ddr_csr.v` (Icarus): the register bridge with short limits at four clock pairs and the board's limits at two, against a Wishbone slave model (random latency, errors, silence): whole-word accesses checked against a reference, 200 non-word accesses and fetches refused at once and never on the bus, slave errors, the controller side's limit, a stopped controller clock (the SoC side's watchdog, the late access, no stale answer), resets of either side cutting accesses, every word read back | 6 runs pass |
+| `make test-ddr-litedram` | `tb_ddr_litedram --test all`, seeds 1, 2, plus a jittered run: the bridge and adapter against LiteDRAM's controller generated from the board's `arty.yml` at 80 MHz (section 10.2) | 2 x 9 tests + 1 pass |
+| `make board-ddr-sim` (board track's target; ddr-3) | the DDR top in RTL from its pins: LiteDRAM's controller and model with the diagnostics and SurfBoot initializing it, and the generated core with no memory (section 10.4) | pass: 570 diagnostic checks; the leveling with no memory fails as it must |
 | `make synth-ddr` | Yosys 0.52 `synth_xilinx` of the bridge | 247 LUTs, 387 flip-flops, 11 CARRY4 (estimate) |
 | `make check-mig` | the MIG recipe without Vivado (section 9.4) | pass |
 | `make prove-ddr` | SymbiYosys 0.52: the mailbox and bridge proofs (ABC PDR, no depth bound) with covers | proved, covers reached (about 20 s) |
-| `make test-ddr-mutants` | 32 deliberately broken copies of the RTL (slow, not on check) | 31 caught, 1 survives as expected |
+| `make test-ddr-mutants` | 41 deliberately broken copies of the RTL (slow, not on check; ddr-3 added nine of `surf_ddr_csr`) | 40 caught, 1 survives as expected |
 
 The Verilator testbench (`sim/ddr/tb_ddr_bridge.cpp` with `surfbus_bench.h`) runs the bridge
 against `sim/ddr/mig_ui_model.{h,cpp}`, a C++ model of the MIG user interface on its own
@@ -297,13 +307,13 @@ never both 1; `timeout` sticky; at most one command in the controller; no acknow
 | `uireset` | 6000 accesses with about 300 controller resets: refusals at once and error answers from the ui side both occur (accesses cut short are answered, not timed out), and 200 accesses after the last reset all work |
 
 Clock pairs (sys ns : ui ns : jitter): 40 : 12.308 : 0 (the MIG, default), 40 : 10 : 0
-(LiteDRAM), 40 : 40 : 0, 40 : 37.3 : 0, 40 : 97 : 0 (ui slower than sys), 10 : 12.3077 : 0 (sys
+(LiteDRAM at 100 MHz, round ddr-2), 40 : 12.5 : 0 (LiteDRAM at 80 MHz), 40 : 40 : 0, 40 : 37.3 : 0, 40 : 97 : 0 (ui slower than sys), 10 : 12.3077 : 0 (sys
 faster than ui), 40 : 12.3077 : 0.3 and 13.1 : 41.7 : 0.3 (every half period jittered by up to
 30%).
 
 `tb_ddr_litedram.cpp` runs basic, lanes, bounds, alias, random (10,000), stream, precal (before
-`init_done`), calerror (the BIOS's failure report: `init_error` then `init_done` over the core's
-control port; every access refused at once, `calib_fail` at the limit, `calib_done` never) and
+`init_done`), calerror (a failed initialization as the firmware reports it: `init_error` then
+`init_done` over the core's control port; every access refused at once, `calib_fail` at the limit, `calib_done` never) and
 sysreset (5000 accesses, about 230 resets) against `tb_litedram_top.v`: the bridge, the adapter
 and LiteDRAM's controller, crossbar and native port, generated from the board's `arty.yml` with
 `--sim` (LiteDRAM's DRAM model instead of the Artix-7 PHY, its memory zero at the start; section
@@ -318,8 +328,12 @@ the error bit taken from the wrong place, the watchdog one cycle early, no fail-
 calibration failure ignored, `calib_done` latched, no calibration limit, `app_wdf_rdy`/`app_rdy`
 ignored, the ui side not refusing when uncalibrated, the request never taken, a response in
 reset, the mailbox sending while full or taking while empty, and five adapter faults (mask
-polarity, address shift, command, no write buffer, calibration). 31 of 32 are caught. The one that
-survives removes the first synchronizer stage of the request toggle: metastability is not
+polarity, address shift, command, no write buffer, calibration). Nine more break the register
+bridge (round ddr-3), run against `tb_ddr_csr.v` at two clock pairs: non-word accesses carried,
+fetches carried, a request sent while one is in flight, a stale answer taken for a later
+access, no watchdog, a request cut by a controller reset left unanswered, address bit 2 lost,
+Wishbone errors ignored, no Wishbone limit; all nine are caught. 40 of 41 are caught. The one
+that survives removes the first synchronizer stage of the request toggle: metastability is not
 simulated, which is why the synchronizers rest on review and constraints.
 
 Formal (`sim/ddr/formal/`, SymbiYosys with ABC PDR; unbounded proofs, synchronizers as plain
@@ -455,82 +469,107 @@ calls the expected commands with the expected values. The first Vivado run must:
 
 For BUILD-HOST.md option C (no Vivado, so no MIG) the DDR designs use a LiteDRAM core:
 `surfcpu_arty_a7_ddr_bramdiag` and `surfcpu_arty_a7_ddr` (BOARD.md sections 1 and 7), the board
-top with `ARTY_HAS_DDR`.
+top with `ARTY_HAS_DDR`. **Round ddr-3 (2026-10-16)** changed two things, both forced by the open
+flow's timing (10.3): the core has **no calibration CPU** (SurfCPU initializes it, 10.1), and
+it runs at **80 MHz** (DDR3L at 640 MT/s), not 100.
 
-### 10.1 Generating it
+### 10.1 Generating it, and who initializes it
 
 * `make litedram-setup` (`ip/litedram/setup.sh`) builds a pinned, vendored generator in
   `build/third_party/litedram/`: Migen `e19524c9`, LiteX `b6ae9e0b` and LiteDRAM `c454a440`
-  (both tag 2026.08), pythondata-cpu-vexriscv `642ecfed`, -software-picolibc `6a13ccce`,
-  -software-compiler_rt `6eb76609`, -misc-tapcfg `a12c3f59`, and the PyPI wheels PyYAML 6.0.2,
-  packaging 25.0, colorama 0.4.6, meson 1.9.1 and ninja 1.13.0 with checked SHA-256, unpacked
-  without pip. It needs the network once.
-* `make litedram-gen` generates `ip/litedram/arty.yml` (LiteDRAM's Arty example with one native
-  port and the lite calibration CPU, below) into `build/litedram/arty/` and the simulation core
-  into `build/litedram/arty_sim/` (10.2), writes `build/litedram/summary.txt`
-  (`ip/litedram/inspect_core.py`, `estimate.sh`) and checks the files against
-  `ip/litedram/arty.sha256` (`ip/litedram/lock.sh check`; also `make litedram-check`, on
-  `check-openflow`).
+  (both tag 2026.08), the pythondata repositories (`642ecfed`, `6a13ccce`, `6eb76609`,
+  `a12c3f59`; the core no longer uses a CPU, but LiteX's liblitedram sources come with LiteX),
+  and the PyPI wheels PyYAML 6.0.2, packaging 25.0, colorama 0.4.6, meson 1.9.1 and ninja 1.13.0
+  with checked SHA-256, unpacked without pip. It needs the network once.
+* `make litedram-gen` generates `ip/litedram/arty.yml` into `build/litedram/arty/` and the
+  simulation core into `build/litedram/arty_sim/` (10.2), writes `build/litedram/summary.txt`
+  (`ip/litedram/inspect_core.py`, `estimate.sh`), checks what the RTL and the firmware rely on
+  (below) and checks the files against `ip/litedram/arty.sha256` (`ip/litedram/lock.sh check`;
+  also `make litedram-check`, on `check-openflow`).
 * **A build product, reproducible and checked.** The generated Verilog is never committed.
-  `ip/litedram/generate.sh` makes it byte for byte the same on every run: SOURCE_DATE_EPOCH is
-  the pinned LiteDRAM commit's time (1790239353), which GCC uses for the BIOS's `__DATE__` and
-  `__TIME__`, Python's clock is frozen at it for LiteX's "Date" lines (`ip/litedram/run_gen.py`),
-  and TZ is UTC. Two runs, and a run into another directory, gave identical files.
-  `ip/litedram/arty.sha256` records the six files the designs and the tests read (the core, its
-  BIOS ROM and SRAM images and constraints, `VexRiscv_Lite.v`, the simulation core); a
-  deliberate change (generator, `arty.yml`, the toolchain image whose RISC-V GCC compiles the
-  BIOS) is recorded with `ip/litedram/lock.sh write`. The design lists name the list on a
-  `generated` line, and `tools/fpga-build.sh` counts a build clean only if every generated file
-  it reads has its recorded hash (`generated_files_match` in the manifest), and refuses to start
-  without them (`make litedram-gen`).
+  `ip/litedram/generate.sh` makes it byte for byte the same on every run and in every checkout:
+  SOURCE_DATE_EPOCH is the pinned LiteDRAM commit's time (1790239353), Python's clock is frozen
+  at it for LiteX's "Date" lines (`ip/litedram/run_gen.py`), TZ is UTC, the generator starts in
+  a fixed environment (`env -i`, PYTHONHASHSEED 0), and `run_gen.py` replaces the instance tree
+  LiteX writes into the Verilog as a comment with a fixed note. LiteX lists each module's
+  black-box instances in that tree sorted by their default string, which holds the object's
+  address, so their order followed the Python process's memory layout: make's extra variables
+  reordered it in one checkout, and a fresh checkout elsewhere (the release track's: 16
+  generations, 5 files) still got other orders, while the Verilog outside the comment never
+  varied. `make litedram-repro` (`ip/litedram/repro.sh`) generates both cores again in eight
+  processes that differ in PYTHONHASHSEED, environment, output path and working directory, and
+  passes only if they give one set of files, the locked one; with the comment kept, its control
+  runs show the order moving (docs/evidence/ddr/litedram.txt). `ip/litedram/arty.sha256` records the five files the
+  designs, the firmware and the tests rely on: the core, its constraints, its register map
+  (`csr.csv`), its PHY settings and DRAM initialization (`software/include/generated/
+  sdram_phy.h`) and the simulation core; a deliberate change (generator, `arty.yml`, the image)
+  is recorded with `ip/litedram/lock.sh write`. The design lists name the list on a `generated`
+  line, and `tools/fpga-build.sh` counts a build clean only if every generated file it reads
+  has its recorded hash (`generated_files_match` in the manifest), and refuses to start without
+  them.
 
-What came out, for the Arty (2026-10-16, in the container):
+**The configuration** (`ip/litedram/arty.yml`): LiteDRAM's Arty example with one native user
+port, `cpu: None` and `sys_clk_freq: 80e6`. What came out (2026-10-16):
 
 * `litedram_core.v` with the DDR3 pins, `clk` (100 MHz in) and `rst`, `pll_locked`,
-  `init_done`/`init_error`, a serial console `uart_tx`/`uart_rx`, and the native user port:
-  `cmd_addr[23:0]` (128-bit beats), `cmd_we`, `wdata_data[127:0]`, `wdata_we[15:0]` (byte enables,
-  1 = write), `rdata_data[127:0]`, valid/ready on each, and `user_clk`/`user_rst` (100 MHz).
-* Clocking inside: one `PLLE2_ADV`, its `clk` straight into CLKIN1 with no buffer of its own
-  (the generator has no CRG option; the board top gives it the oscillator through a BUFG, BOARD.md
-  section 7), VCO 1600 MHz, giving 200 MHz (IDELAYCTRL reference), 100 MHz (core, user port),
-  400 MHz and 400 MHz at 90 degrees (DDR3 at 800 MT/s, CL 6, CWL 5).
+  `init_done`/`init_error`, the native user port (`cmd_addr[23:0]` in 128-bit beats, `cmd_we`,
+  `wdata_data[127:0]`, `wdata_we[15:0]` byte enables (1 = write), `rdata_data[127:0]`,
+  valid/ready on each, `user_clk`/`user_rst` at 80 MHz) and, because there is no CPU, a
+  **Wishbone control port** `wb_ctrl_*` (30-bit word address, 32-bit data, classic cycles) on
+  the core's control and status registers: `ddrctrl` (init_done, init_error) at 0x000, `ddrphy`
+  (the A7 PHY's reset, lane select, read/write phase and the read delay and bitslip strobes) at
+  0x800, `sdram` (DFII: who drives the DRAM, and four phase injectors) at 0x1000.
+* Clocking inside: one `PLLE2_ADV` (VCO 1600 MHz) fed from the board's BUFG, giving 200 MHz
+  (IDELAYCTRL reference), 80 MHz (core, user port, control port), 320 MHz and 320 MHz at 90
+  degrees (DDR3 at 640 MT/s; CL 6, CWL 5 as at 100 MHz; the generator's timings follow the
+  clock).
 * Vendor primitives: ISERDESE2 x16, OSERDESE2 x45, IDELAYE2 x16, IDELAYCTRL x1, IOBUF x16,
   IOBUFDS x2, OBUFDS x1, BUFG x4, PLLE2_ADV x1, FDCE x8, FDPE x8; the simulation core uses none.
-* **Calibration**: the core has its own small CPU running the LiteX BIOS's `sdram_init` from an
-  internal ROM (27.3 KiB of 48 KiB): reset and mode registers, read leveling (bitslip and delay
-  scan per byte), then a 2 MiB memory test and, if it passed, a speed test; then it writes
-  `init_done`, or `init_error` and `init_done`. It needs `VexRiscv_Lite.v` from
-  pythondata-cpu-vexriscv next to the core. This is a second CPU inside the memory controller, a
-  calibration sequencer, not SurfCPU's replacement; the owner should know it is there (brief
-  section 2). Its console (`uart_tx`) is the board's `dram_uart_tx` on ChipKit IO1; its input is
-  held idle.
-* **Which CPU, and why it matters.** The BIOS's run time is set by the CPU, and it must end
-  before SurfBoot and the BRAM diagnostics stop waiting for `CALIB_DONE` (2 s, FIRMWARE.md
-  section on DDR) and before the bridge's limit (1.5 s). Simulated with the board core and no
-  memory (`make board-ddr-sim`, 10.4; the BIOS's code and the controller's cycle timing are
-  exact, only the memory's answers are missing), its milestones were:
-
-  | VexRiscv variant | leveling done | memory test done (the failed one here) | estimated `init_done` on a working memory (+ speed test) |
-  |---|---|---|---|
-  | minimal (RV32I, no caches) | 0.383 s | about 1.75 s (writes 0.39 to 1.07 s, 1.3 of the 2 MiB read back by 1.51 s) | about 2 s: **too late** (past the bridge's 1.5 s, at SurfBoot's 2 s) |
-  | lite (RV32IM, instruction cache) | 0.189 s | 0.823 s | about 0.95 s |
-  | standard (both caches) | 0.164 s | 0.617 s | about 0.75 s |
-
-  The speed test that follows a passing memory test reads and writes the same 2 MiB with
-  unrolled loops, a fraction of the memory test's time (an estimate from its code, not
-  simulated: no DDR3 model here). **The core uses lite**: about 1 s, well inside both limits. The
-  minimal CPU was tried first (it is smaller, and the open flow's synthesis check passes on it)
-  and would make every DDR design fail its calibration wait on the board (or need the waits
-  raised: the bridge's limit and FIRMWARE.md's 2 s). Lite and standard
-  both trip the open flow's synthesis check on a false finding (10.3).
+* No ROM, SRAM, VexRiscv or console: round ddr-2's core carried LiteX's BIOS on a VexRiscv
+  (lite) in the controller's own clock domain, whose bus paths were half of the paths that
+  missed 100 MHz, and its console on ChipKit IO1 (`dram_uart_tx`, gone from the top, XDC and
+  WIRING.md).
 * Constraints shipped: two false paths and one max delay for LiteX's reset synchronizers
-  (`litedram_core.xdc`, read by the DDR designs for Vivado), but no pins, no I/O standards and no
-  clocks: the board's `arty_a7_ddr3_pins.xdc` and `arty_a7_ddr3_timing.xdc` supply them (BOARD.md
-  section 7, WIRING.md section 2.5).
-* Yosys `synth_xilinx` estimate of the core with its CPU and the user port as top-level pins
-  (`estimate.sh`): 5,492 LUTs, 3,361 flip-flops, 56 RAM32M, 17 RAMB18E1, 2 RAMB36E1, no DSP48E1
-  (lite's multiplier is iterative). In the whole DDR design the open flow counts 38 RAMB36E1 and
-  17 RAMB18E1 (10.3).
+  (`litedram_core.xdc`), no pins, I/O standards or clocks (the board's XDC supplies them).
+* Yosys estimate of the core alone (`estimate.sh`): 2,668 LUTs, 1,847 flip-flops, 32 RAM32M,
+  no block RAM (round ddr-2's, CPU and BIOS included: 5,492 LUTs, 3,361 flip-flops, 19 block
+  RAMs).
+
+`inspect_core.py` checks on every `make litedram-gen` what the RTL and the firmware rely on: the
+native port's widths, init_done/init_error, user_clk/user_rst and the wb_ctrl port's widths; no
+CPU in either core; every register of spec/soc.toml's `ddrc` block at the offset and with the
+access the generator's `csr.csv` gives it, and every register of `csr.csv` in the block;
+`firmware/common/ddrinit_phy.h` (phases, modules, delays, bitslips, data bits, read and write
+phase, CL, CWL, the mode register values and their order, ZQCL) equal to the generated
+`sdram_phy.h`; the simulation core's DFII and init registers at the board core's offsets; and
+the board top's lint stand-in with exactly the core's ports.
+
+**Who initializes it: SurfCPU.** `rtl/soc/ddr/surf_ddr_csr.v` carries the SoC's `ddrc`
+window (`0x1000_A000`, 8 KiB; MEMORY-MAP.md, spec/soc.toml) across to the controller's clock and
+onto `wb_ctrl`: whole aligned words only (anything else, and a fetch, is refused at once), two
+`surf_ddr_mailbox` crossings with the bridge's never-reset in-flight flags, a watchdog on each
+side (1024 sys_clk cycles after acceptance on the SoC side, 256 controller cycles for the
+Wishbone answer), no fail-stop: every access is answered, by the controller or with an error,
+and an answer always belongs to its access. Its bounds are in `surf_ddr_csr.xdc` (six
+`set_max_delay -datapath_only`, Vivado only). `sysinfo.DDR_STATUS.SWINIT` (the SoC's
+`DDR_SWINIT`, 1 in the DDR designs) tells the firmware.
+
+The firmware's sequence is `firmware/common/ddrinit.c`: LiteX 2026.08's liblitedram
+(`sdram_init`, the generated `init_sequence()`, the exhaustive read leveling and its LFSR
+patterns; BSD-2, its notice kept) ported to the `ddrc` registers, in SurfBoot 1.1.0 and the
+BRAM diagnostics (FIRMWARE.md section 5): DFII to software, PHY reset pulse, RESET# released
+with CKE low for 1 ms, CKE high, MR2, MR3, MR1, MR0 (0x200, 0x0, 0x6, 0x920), ZQ calibration
+long; then for each byte lane every bitslip (8) and read delay (32 taps), each tap tried with
+three pseudo-random bursts written to row 0 of bank 0 through the phase injectors and read
+back, the bitslip with the best score chosen, its delay set to the middle of its widest
+working window and checked; then DFII back to the controller and `init_done` (with
+`init_error` first when a lane has no window). About 0.2 s at 25 MHz (0.245 s in the emulator
+with the scans printed, 0.24 s in surfsim); the patterns are computed once rather than for
+every probe (LiteX's 128 LFSR steps per probe cost as much as the probe on SurfCPU). The
+bridge's 1.5 s calibration limit now counts from reset with the firmware's start and the
+initialization in it (spec/soc.toml, CALIB_FAIL). A PHY whose phase registers do not read back
+(the simulation core's model, 10.2) is initialized without leveling, as LiteX does for a PHY
+that is not read-leveling capable.
 
 `surf_ddr_litedram_adapter` (`rtl/soc/ddr/`) puts LiteDRAM's native port behind the bridge's
 MIG-style port, on `user_clk`/`user_rst`: commands straight through (`cmd_addr = app_addr[26:3]`,
@@ -541,141 +580,123 @@ without it the bridge deadlocks), `wdata_we = ~app_wdf_mask`, read data always t
 
 ### 10.2 The simulation core and what it shares with the board's
 
-`make test-ddr-litedram` (and `board-ddr-sim`'s model runs) use `litedram_sim`, generated from
-**the board's own `arty.yml`** with `--sim`: `ip/litedram/sim_config.py` changes exactly two keys
-(`cpu` becomes None, `uart` goes) and `build/litedram/arty_sim/config.yml` keeps the result.
-LiteDRAM's DRAM model (SDRAMPHYModel) then replaces the Artix-7 PHY, the PLL and the chip.
-LiteX 2026.08 cannot build the calibration BIOS for that model (its liblitedram calls the A7
-PHY's delay registers, which the model lacks), so the simulation core has no CPU and the
-testbench writes `init_done` (and `init_error`) over the core's Wishbone control port, the BIOS's
-last step on the board. `inspect_core.py` compares the two generated cores on every
+`make test-ddr-litedram` and `board-ddr-sim`'s model runs use `litedram_sim`, generated from the
+same `arty.yml`, unchanged, with `--sim`: LiteDRAM's DRAM model (SDRAMPHYModel) replaces the
+Artix-7 PHY, the PLL and the chip. `inspect_core.py` compares the two cores on every
 `make litedram-gen`:
 
 * the same: the DRAM module (MT41K128M16) and its timings, geometry, the controller settings
   (command buffers 16 deep, bank machines, refresh), the native port and its blocking until
-  `init_done` without `init_error`, CL 6 and CWL 5, the 4:1 phases and write phase, and the
-  DRAM initialization sequence itself (its four mode-register loads and waits, compared line by
-  line);
+  `init_done` without `init_error`, CL 6 and CWL 5, the 4:1 phases and write phase, the DRAM
+  initialization sequence itself, and the 27 DFII and init registers at the same offsets;
 * different: the PHY (A7DDRPHY with its ISERDESE2/OSERDESE2/IDELAYE2, 32 delay taps and 8
-  bitslips, read leveling; the model has none and reads back what was written), the read phase
-  (3 on the board, 2 in the model), the clock (a PLL on the board), and the calibration CPU with
-  its port on the controller's crossbar (idle once calibration is done).
+  bitslips, its 13 registers; the model has no PHY registers, which read 0 there, and returns
+  what was written with no delay to level), the read phase (3 on the board, 2 in the model) and
+  the clock (a PLL on the board).
 
-So the controller, crossbar and native port the bridge talks to in simulation are the
-bitstream's; the PHY, the pins and the calibration are not, and are simulated only as far as
-10.4 says.
+One quirk of the model matters to the firmware: its read data arrive on all four DFI phases but
+it raises `rddata_valid` on phase 0 only, so a read injected through DFII updates phase 0's
+register and leaves the other three, which makes read leveling impossible against it (every tap
+fails). The firmware therefore levels only when the PHY's phase registers read back (on the
+board they do; in the model they read 0), as LiteX's BIOS levels only a read-leveling-capable
+PHY; `firmware/tests/ddrc_model.c` has the same quirk in its `no_phy` mode.
+
+So the controller, crossbar, native port and DFII the bridge and the firmware talk to in
+simulation are the bitstream's; the PHY, the pins and the read leveling against a real memory
+are not.
 
 ### 10.3 Through the open flow (milestone 4 bitstreams)
 
 `make build-fpga FLOW=openxc7 BOARD=<board> DESIGN=surfcpu_arty_a7_ddr_bramdiag` (and
-`surfcpu_arty_a7_ddr`). Results in docs/evidence/board/openxc7-ddr.txt (2026-10-16: the gated
-builds at source a338e7a3, clean; the diagnostic builds at 383dba74, the same design but for its
-build ID):
+`surfcpu_arty_a7_ddr`). **Since round ddr-3 both DDR designs pass every gate of the open flow on
+both boards**: synthesis, bitstream, round trip, block RAM, LVS and clock-tile checks, the
+board's netlist and boot ROM checks, routing complete and every clock met after routing. These
+are the first DDR bitstreams. The builds' records are in docs/evidence/board/openxc7-ddr.txt,
+the timing experiments in docs/evidence/ddr/openflow-timing.txt; BOARD.md section 8 has the
+table, with every clock's figures and each bitstream's SHA-256.
 
-* **Placement and routing of the PHY in bank 34 work**: nextpnr places and routes all 16
-  ISERDESE2, 45 OSERDESE2, 16 IDELAYE2, the IDELAYCTRL, the IOBUF/IOBUFDS/OBUFDS and the third
-  clock tile on both parts (OPEN-FLOW.md 6.7 had left this open), with the pins' SSTL135
-  standards, fast slew and UNTUNED_SPLIT_40 termination in the FASM (a probe build showed
-  nextpnr applies SLEW and IN_TERM; docs/evidence/ddr/openflow-pins.txt) and bank 34's VREF at
-  675 mV.
-* **Timing fails, and with it every build.** nextpnr's estimate after routing for LiteDRAM's
-  100 MHz clock (`dram_clk`: the controller, the calibration CPU and its bus, the adapter and the
-  bridge's controller side) is 63.5 to 81.0 MHz over the builds that routed: at a338e7a3 77.3 MHz
-  for ddr_bramdiag on the 35T and 63.5 and 73.8 MHz for ddr on the 100T and the 35T; at 383dba74,
-  where all four routed, 73.0, 81.0, 77.0 and 78.4 MHz; the diagnostic builds 73.7 and 79.0 MHz.
-  That is 2.3 to 5.8 ns short of the 10 ns, and it moves by several MHz with any change to the
-  netlist, even the build ID. The late paths, a few hundred endpoints each time, are of two kinds:
-  through the calibration CPU's bus (VexRiscv lite's instruction or data bus address through
-  LiteX's bus decoder back into its fetch stage, 12.7 to 15.8 ns, 2.5 to 2.8 ns of it logic and
-  the rest routing) and inside LiteDRAM's controller (from the ZQ-calibration timer through the
-  refresher and the command multiplexer to a bank machine: 12.1 to 13.6 ns, 13 to 17 LUT levels,
-  about 3 ns of logic). Everything else meets its clock with a wide margin (sys_clk 52.7 to 75.7
-  MHz for its 25, pix_clk 116 to 162 for 25.17, LiteDRAM's 200 MHz 341 to 394). The gate is
-  kept: `tools/fpga-build.sh` writes no bitstream, so there is no DDR bitstream from the open
-  flow. What was tried, with the minimal CPU unless said (docs/evidence/ddr/openflow-timing.txt):
-  other placer seeds (80.3 to 80.6 MHz), the 35T (77.6), LiteDRAM's options that touch the
-  controller (command buffers 4 deep and buffered: 82.7; no auto-precharge: 80.9), and a slower
-  controller clock: at 80 MHz (DDR3 at 640 MT/s) nextpnr reaches only 75.4 MHz, and the DDR3L
-  cannot go much slower (its DLL needs at least 303 MHz, a controller clock of 76 MHz). Vivado
-  routinely closes this controller at 100 MHz on the Arty; nextpnr's delays are an estimate
-  (OPEN-FLOW.md 6.4), but the flow's rule is that a missed estimate fails the build.
-* **Routing does not always converge either.** With the lite CPU the 35T did not route at the
-  placer's seed 1 (router2 stayed at 300 to 500 overused wires past 300 iterations), so the
-  design lists set seed 2, with which all four builds routed at 383dba74. At a338e7a3, whose
-  netlist differs only by the build ID, the 100T ddr_bramdiag build did not route at seed 2
-  (router2 between 750 and 980 overused wires through 100 iterations, where it was stopped; the
-  other three routed in 18 to 45 iterations); its record shows the placer's estimates instead
-  (dram_clk 84.1 MHz before routing), and its manifest, from that commit's
-  `tools/fpga-build.sh`, gives them as the reason (the script now records that routing did not
-  finish). So whether a DDR build routes is, for now, a matter of the
-  placement's luck, and no seed fixes it for the next commit; a congestion-aware placement
-  (nextpnr's `--placer-heap-congestion-spread`) is a flow setting, the flow track's to try.
-* **Diagnostic builds** (not the designs' results): the same flow with nextpnr allowed to finish
-  (a copy of `tools/openxc7-build.sh` with `--timing-allow-fail`, made and recorded by
-  `sim/board/openxc7_ddr_evidence.sh`), so that the checks after it run, on
-  surfcpu_arty_a7_ddr_bramdiag for both boards (at 383dba74; 35 and 38 minutes, 30 of them LVS):
-  the bitstream checks pass (IDCODE and part, frames, commands), the round trip through the FASM
-  passes, all 55 block RAMs (38 RAMB36E1 and 17 RAMB18E1, LiteDRAM's BIOS ROM among them) hold
-  their initial contents in the bitstream, and the board's netlist and boot ROM checks pass. **LVS
-  fails on one pin** on both boards, 14,148 points proved equal and 1 different: write enable
-  WEBWE[3] of the RAMB18E1 that holds the calibration CPU's instruction-cache tags
-  (`u_dram.VexRiscv.IBusCachedPlugin_cache.ways_0_tags`, 512 x 36 in simple dual port mode, 23
-  of its 36 bits used), which the netlist ties to 0 and the routed bitstream drives from the
-  write enable of the other three byte lanes (on the 100T through BYP_L3 of INT_L_X38Y147, fed by
-  the same NW2END3 wire as WEBWE[2:0]). It is the only block RAM in these designs with a
-  constant byte enable beside used ones. The extra writes put zeros (its data inputs for that
-  lane are 0) into a byte lane nothing reads, so the design should behave the same, but the
-  bitstream is not the netlist there and LVS is right to fail it; whether nextpnr's handling of
-  the pin or the LVS tile model is at fault is the flow track's to find. The diagnostic
-  bitstreams are refused by `tools/program.sh` (the build's manifest says fail, and the flow's
-  own manifest lists the failing checks).
-* Checks that are the flow's to fix, found here: `cmtcheck.py` reads a parameter that Yosys's JSON
-  writes as a short bit string (LiteDRAM's `5'd16` becomes `"10000"`) as a decimal number, so it
-  reports LiteDRAM's PLL dividers as mismatches although the FASM holds exactly the XAPP888
-  values (read as binary, every divider matches: docs/evidence/ddr/openflow-cmtcheck.txt); and
-  `synthcheck.py` reports the lite CPU's 22 instruction-cache tag-read register bits as lost:
-  synthesis puts them in the tag memory's RAMB18E1, whose read port is synchronous, and the check
-  credits a block RAM's output register only when its optional DOA_REG/DOB_REG is on. Neither
-  is waived here; both are reported for the flow track.
+**Timing.** Round ddr-2's builds missed nextpnr's estimate for LiteDRAM's 100 MHz clock
+(63.5 to 81.0 MHz) on two kinds of path: through the calibration CPU's bus, and inside the
+controller. With the CPU gone (approach (a) of this round) the controller's own path remains,
+every time the worst: from the ZQ calibration timer (a 27-bit down-counter compared with 0)
+through the refresher's state machine, the refresh request of the eight bank machines and the
+command multiplexer's arbitration into a bank machine's state, 15 to 19 LUT levels, 2.4 to 3.4
+ns of logic and 7.8 to 10.4 ns of nextpnr's routing. At 100 MHz, 20 placements (seeds, and
+these changes) gave 74.3 to 90.2 MHz:
+
+| tried at 100 MHz | dram_clk |
+|---|---|
+| no CPU, seeds 1 to 4 | 74.3, 87.4, 77.4, 78.8 MHz |
+| LiteDRAM's settings (b): command buffers 8 or 4 deep, buffered; ZQ calibration at 128 Hz; no auto-precharge (cmd_latency is unused by the A7 PHY) | 79.8 to 87.5 MHz |
+| nextpnr's options (c), on those cores: router rip-up, congestion-driven placement, both, a timing weight of 100, the annealing placer | 75.6 to 90.2 MHz (rip-up +1 to +3 MHz on some placements, worse on others); the annealing placer does not place this design |
+
+None of them changes the path's 15 to 19 LUT levels, and the generated Verilog was not edited.
+A slower clock (d): 87.5 MHz (PLL VCO 1400) missed on both seeds tried (86.6, 84.6 MHz); **80 MHz
+(VCO 1600) closes in 9 of 12 placements** (74.3 to 94.0 MHz; the 100T 5 of 6, the 35T 4 of 6),
+and that is the configuration now: DDR3L at 640 MT/s, above its DLL's floor (tCK at most 3.3 ns,
+303 MHz: a controller clock of at least 76 MHz). Because nextpnr's result for one seed moves
+with any change of the netlist, the build ID included, the DDR design lists give seeds 1 to 8,
+tried in turn until a placement meets every clock (OPEN-FLOW.md section 3: the same gate for
+each seed, every attempt in the manifest). Vivado routinely closes LiteDRAM at 100 MHz on the
+Arty; with it the core could go back to 100 MHz (and the read leveling's window would shrink by
+a fifth).
+
+**The builds** (at 92a2b510, clean; `dram_clk` 81.72 to 93.35 MHz after routing, slack +0.263 to
++1.788 ns; sys_clk 56.5 to 74.4 MHz and pix_clk 135.0 to 153.7 MHz against their 25 and 25.17; each
+on its first seed). LVS proves 10,878 points of each, with no difference; the clock-tile check now
+compares all 85 fields of the three clock tiles, the 90-degree output's phase among them (below).
+The designs use about 7,600 LUTs and 5,214 flip-flops (12 % and 4 % of the 100T, 37 % and 13 % of
+the 35T), the SoC's 36 block RAMs (LiteDRAM has none now; round ddr-2's took 10.5 more) and 4
+DSP48E1. Over this round's gated builds, the first seed met `dram_clk` in 8 of 10 builds (at
+0964f875, 595ab382 and 92a2b510); the others needed seed 2 or 3, so over the whole round about
+three placements in four meet it: the list's spread is what absorbs a netlist change such as the
+build ID.
+
+**The three checks that misread round ddr-2's designs** are fixed where they went wrong
+(OPEN-FLOW.md 6.5, docs/evidence/flow/checkers.txt), each with a self-test on `make check` and
+a regression through the real flow, and one gap is closed:
+
+* LVS's `DIFFER ... WEBWE[3]` on the VexRiscv tag RAM was the LVS extractor's model, not
+  nextpnr, the FASM or the netlist: the extractor read a RAMB18E1's byte write enables one to
+  one from the site's first pins, where the silicon (Vivado's mapping, f4pga's fasm2bels) and
+  nextpnr give byte i pins 2i and 2i+1 in the 36-bit simple dual port mode (and on an 18-bit
+  port). `devenv/openxc7/bramwe.py` corrects the reading between extraction and proof and checks
+  every pin it no longer reads; the tag RAM's shape now proves equal, and real differences
+  still fail. The CPU and its RAM are gone from these designs; the fix stays.
+* `cmtcheck.py` read Yosys's short bit strings (`5'd16` as "10000") as decimal numbers; LiteDRAM's
+  PLL (16, 8, 20, 5) now checks as XAPP888, in these builds too.
+* `synthcheck.py` counted register bits Yosys had already merged into a memory's read port as
+  lost flip-flops; they are counted apart (VexRiscv lite alone: 22).
+* `cmtcheck.py` reported any output with a phase as unchecked and compared no output's phase
+  fields; it now computes them as XAPP888 does, so LiteDRAM's 320 MHz clock at 90 degrees (the
+  DQS strobes: DELAY_TIME 1, PHASE_MUX 2) is checked in every build, and a wrong phase fails.
 
 ### 10.4 Simulation of the DDR top
 
 `make board-ddr-sim BOARD=<board>` (`sim/board/ddr_top_sim.sh`, sim/board/tb_netlist.v from the
 pins, Verilator; docs/evidence/ddr/ddr-top-sim.txt) runs the real board top with `ARTY_HAS_DDR`,
-the real SoC, bridge and adapter, the board's clocking and resets:
+the real SoC, bridge, adapter and register bridge, the board's clocking and resets:
 
 * with LiteDRAM's controller and DRAM model (`sim/board/litedram_simcore.v` around the
-  simulation core of 10.2, `init_done` 2 ms after start): **the BRAM diagnostics pass all their
-  DDR tests** (data and address lines, byte lanes, boundaries and aliases, 1 MiB of patterns,
-  4 x 256 KiB copies at 738 KiB/s, code run from DDR: `BRAMDIAG: PASS (569 checks)` at 2.81 s);
-  with the BIOS's failure report instead (`+dram_calib_fail`), the DDR window stays closed and
-  the bridge sets CALIB_FAIL at its limit, 1.500 s, which the diagnostics report (`DDR_STATUS
-  0x6`, `BRAMDIAG: FAIL (1 of 204 checks failed)`); SurfBoot calibrates, passes its quick DDR
-  test and stops for want of a card;
-* with the generated board core itself (its PHY, its CPU and its BIOS from the ROM image the
-  bitstream holds; `sim/board/prims` models of its primitives) and nothing on the DDR3L pins:
-  the BIOS prints its banner, levels every bitslip of both byte lanes and finds no window, its
-  memory test fails (`Memtest KO`, 0.823 s), it writes `init_error`; the bridge never sees
-  calibration and sets CALIB_FAIL at 1.500 s; the diagnostics report it. This is the only
-  simulation of the exact generated core and of the calibration path, and it shows the failure
-  path end to end: what the board prints with no working memory.
+  simulation core of 10.2, on its own 80 MHz, its control port straight through): **the BRAM
+  diagnostics initialize the controller through `surf_ddr_csr`** (the PHY reset, the mode
+  registers and ZQ calibration through LiteDRAM's DFII; no leveling against the model, 10.2)
+  **and pass all their DDR tests** (data and address lines, byte lanes, boundaries and aliases,
+  1 MiB of patterns, 4 x 256 KiB copies at 720 KiB/s, code run from DDR: `BRAMDIAG: PASS (570
+  checks)` at 2.90 s); SurfBoot initializes it, calibrates, passes its quick DDR test and stops
+  for want of a card (`ddr: initialized by SurfBoot, no read leveling (the PHY has no delay registers)`, `ddr: calibrated after 1 ms`, then `SurfBoot stopped: no card (NO_CARD)` at 59 ms of simulated time);
+* with the generated board core itself (its PHY, its registers; `sim/board/prims` models of
+  its primitives) and nothing on the DDR3L pins: the diagnostics' initialization reaches the
+  real PHY's registers and strobes, scans every bitslip and delay of both lanes, finds no window
+  (nothing answers), writes `init_error` and reports it (all 16 scan lines 0, `lane N: bitslip 0, no working delay`, then `BRAMDIAG: FAIL (3 of 206 checks failed)` at 0.42 s of simulated time). This is the failure path
+  the board would print with no working memory.
 * `make board-netlist-sim DESIGN=<a DDR design>` runs a DDR build's synthesized netlist the same
-  way (the second bullet's case): the core's CPU in gates runs its BIOS from the synthesized ROM,
-  with `sim/board/prims/RAMB18E1.v` modelling the simple dual port block RAMs of its register
-  file and instruction cache. For surfcpu_arty_a7_ddr_bramdiag on the 100T (the netlist of the
-  gated build at a338e7a3, 17,680 cells, its boot ROM inside) **it printed the same 78 lines on
-  the two consoles, each at the same microsecond, as the RTL run of the second bullet**; the
-  two consoles' characters are identical but for the build ID: the diagnostics' sections, the
-  BIOS's banner, every leveling line, `Memtest KO` at 0.823 s and `BRAMDIAG: FAIL` at 1.514 s
-  after the bridge's CALIB_FAIL, and the same LEDs and VGA timing. So the synthesized DDR top,
-  LiteDRAM's controller, PHY logic and calibration CPU with its block RAM caches and register
-  file included (synthcheck's finding, 10.3), behaves as its RTL on this path. It is slow, 0.17
-  ms of simulated time a second, 146 minutes for the 1.5 s (`sh sim/board/ddr_sim_evidence.sh
-  --netlist-only` runs it alone; the record is in docs/evidence/ddr/ddr-top-sim.txt).
+  way (the 100T diagnostics build's netlist at 92a2b510, the one LVS proves its bitstream equal to, with nothing on its memory pins, printed the same 2,166 characters at the same microseconds as the RTL run with the board core: the whole failed leveling included; 26 minutes in Verilator).
 * `make board-uart-expect-ddr` boots SurfOS through SurfBoot with the C++ DDR model in place of
-  the bridge, adapter and LiteDRAM (the soc track's surfsim with the SoC as the DDR designs
-  configure it): the only model fast enough for a kernel boot (5.4 s of simulated time to the
-  shell prompt).
+  the bridge, adapter and LiteDRAM's data path and LiteDRAM's register model
+  (`firmware/tests/ddrc_model.c`, surfsim `--ddr-swinit`) for its registers: the soc track's
+  surfsim with the SoC as the DDR designs configure it (`DDR_SWINIT` 1). SurfBoot levels the
+  model's lanes in 0.24 s and SurfOS reaches its shell prompt at 4.2 s of simulated time.
 
 Real calibration can happen only on the board: no DDR3 model is used anywhere here.
 
@@ -684,44 +705,56 @@ Real calibration can happen only on the board: no DDR3 model is used anywhere he
 Shown without a board:
 
 * the bridge and adapter against LiteDRAM's own controller, crossbar and native port with the
-  board's settings (test-ddr-litedram, 2 seeds x 9 tests and a jittered run, including the
-  calibration-error report), and in the whole SoC with the real board top (board-ddr-sim:
-  569 diagnostic checks over the DDR window);
-* the board top's DDR wiring, clocking, resets and calibration-status path, from the pins, in
-  RTL with the model and with the exact generated core (failure path), and the synthesized
-  netlist of the DDR bramdiag design doing exactly what that RTL does (10.4);
-* that the generated core is the pinned generator's output (hashes) and that the open flow
-  places and routes its PHY in bank 34 and assembles a bitstream from it (diagnostic: round
-  trip, block RAM contents including the BIOS ROM, the clock tiles' dividers, and LVS but for
-  one write enable of the calibration CPU's tag memory, 10.3);
+  board's settings at 80 MHz (test-ddr-litedram), and in the whole SoC with the real board top
+  (board-ddr-sim: 570 diagnostic checks over the DDR window);
+* the register bridge against a Wishbone slave model at five clock pairs with resets, a stopped
+  clock, slave errors and silence (test-ddr-csr; nine of nine mutants caught), and in the whole
+  top against LiteDRAM's real register bank (board-ddr-sim, both cores);
+* the firmware's initialization against a model of LiteDRAM's registers that fails a run on any
+  protocol violation (mode registers, ZQ calibration, phases, open row) and gives each lane a
+  read window, in the host tests and the emulator, SurfBoot and the diagnostics both; against
+  LiteDRAM's DFII and DRAM model in RTL; against the real PHY's registers (no memory) in RTL;
+* the board top's DDR wiring, clocking, resets and calibration-status path, from the pins;
+* that the generated core is the pinned generator's output (hashes), that its registers and PHY
+  settings are what the firmware was written for, and that the open flow builds the DDR designs
+  with every check passing (10.3);
 * the pins against Digilent's MIG projects, and that the pin options reach the bitstream.
 
 Only the board can show:
 
-* that the DDR3L calibrates: read leveling finds a window on both byte lanes (the controller's
-  console on IO1 prints the scan), and the BIOS's memory test passes;
-* how long calibration takes (about 1 s expected from simulation) against the 1.5 s limit;
-* the electrical choices: 40 ohm split termination (Digilent's MIG uses 50), fast slew, the
-  internal VREF, LiteDRAM's drive and ODT settings (34 ohm, 60 ohm);
-* timing: nextpnr says LiteDRAM's clock misses 100 MHz by 19 to 37 %; Vivado's numbers and the
-  hardware decide;
+* that the DDR3L initializes and that read leveling finds a window on both byte lanes (the
+  BRAM diagnostics print every lane's scan: a run of 1s in one bitslip line per lane; at 320 MHz
+  a bit lasts 1.56 ns, about 20 of the 78 ps taps, so a window of about +-6 to +-9 taps is to be
+  expected), and that the memory tests pass after it;
+* how long the initialization takes on SurfCPU (about 0.2 s expected) against the 1.5 s limit;
+* the write path: LiteDRAM's A7 PHY has no write leveling; its DQS strobes come from the PLL's
+  320 MHz output at 90 degrees, whose encoding every build now checks against XAPP888, but whether
+  they are centred on the data at the DRAM only the DDR tests' writes and read-backs on the board
+  show;
+* the I/O timing of the DDR3L pins (false paths for both flows; nextpnr has no path on the
+  320 MHz clocks to time) and the electrical choices: 40 ohm split termination (Digilent's MIG
+  uses 50), fast slew, the internal VREF, LiteDRAM's drive and ODT settings (34 ohm, 60 ohm), now
+  at 640 MT/s, and the DLL at a DDR clock of 320 MHz (its floor is 303 MHz);
+* timing: nextpnr's estimate passes at 80 MHz; Vivado's numbers and the hardware decide;
 * milestone 4's tests on the real memory (the BRAM diagnostics' DDR sections, then SurfBoot
   loading SurfOS);
-* the 35T placed on the whole xc7a50t die (OPEN-FLOW.md 6.3), now with 93 % of its block RAM.
+* the 35T placed on the whole xc7a50t die (OPEN-FLOW.md 6.3).
 
 ## 11. Pending, and what to check first on hardware
 
 * **MIG generation, synthesis, implementation and timing closure**: blocked on a Vivado host.
-* **Physical calibration**: `init_calib_complete` on the real board; measure how long it takes
-  (LiteDRAM: about 1 s expected, section 10.1) against `CALIB_TIMEOUT_CYCLES` (1.5 s).
+* **Physical initialization and calibration** (LiteDRAM): load `surfcpu_arty_a7_ddr_bramdiag`
+  and read the leveling scans and each lane's choice on the UART (BOARD.md section 12, steps 4
+  and 5; the owner's A7-100T is connected and has passed m1 and m3 with the SoC without DDR): a
+  window on both lanes, then `DDR calibration ok`, the DDR tests and `BRAMDIAG: PASS (572
+  checks)`.
 * **Milestone 4's physical tests** (fw track's DDR diagnostic): address and data lines, every byte
   lane, boundaries and aliases, sustained copies, code copied from BRAM into DDR and executed.
 * The DDR part and board revision (owner): Digilent's files are for revision E.0 and the
   MT41K128M16 family.
-* The open flow: LiteDRAM's 100 MHz clock misses nextpnr's timing (section 10.3), so there is no
-  DDR bitstream yet; routing converges only for some placements, LVS differs on one block RAM
-  write enable, and two of the flow's checks misread these designs (all for the flow track,
-  10.3); then the calibration on the board (section 10.5).
+* The open flow at 100 MHz: LiteDRAM's controller does not close nextpnr's estimate there
+  (10.3); the designs run the memory at 640 MT/s instead of 800 until a flow that closes 100 MHz
+  (Vivado) is used.
 * Not covered by any test here: metastability itself, and the real MIG's behaviour beyond the
   model (its latencies, reordering, refresh). The model follows UG586's rules; the MIG may differ
   in timing, which only changes latency.
@@ -733,22 +766,23 @@ Only the board can show:
   calibration, after a failure or a timeout); normal latency 5 cycles and up; the watchdog's
   error exactly `TIMEOUT_CYCLES` after acceptance, then `timeout` sticky and every access refused
   until reset; `calib_done` and `calib_fail` exclusive. `DDR_STATUS.PRESENT` comes from
-  `HAS_DDR`, not from the bridge.
+  `HAS_DDR`, not from the bridge. surfsim's `--ddr-swinit` puts LiteDRAM's register model on the
+  SoC's `ddrc` port (built with `DDR_SWINIT=1`).
 * **board**: for the MIG (Vivado flow, not wired yet): own the oscillator's IBUF and BUFG and give
   the MIG the 100 MHz from the BUFG; make the 200 MHz reference; drive `sys_rst` low until the PLL
-  is locked; read the MIG IP and the bridge's scoped XDC; no DDR3 pin constraints of your own.
-  `ip/mig/mig_ddr3_stub.v` lets the top lint without Vivado. The LiteDRAM top is done (BOARD.md
-  section 7).
-* **fw**: wait for `CALIB_DONE` or `CALIB_FAIL` (never both); `TIMEOUT` means the DDR is out of
-  service until reset (accesses fault at once); after `TIMEOUT`, report and do not retry. The 2 s
-  wait suits LiteDRAM with the lite CPU (about 1 s); it would not suit the minimal CPU (about
-  2 s), so keep it above the bridge's limit if either changes. The message "did not succeed
-  within 2 s" appears when the bridge's `CALIB_FAIL` came first (at 1.5 s): consider naming the
-  status instead.
-* **flow**: what LiteDRAM needs from openXC7 places and routes (section 10.3); open are its
-  timing (LiteDRAM's controller at 100 MHz in nextpnr's model), `cmtcheck.py` reading
-  bit-string parameters, and `synthcheck.py` crediting a register absorbed into a block RAM's
-  synchronous read port (VexRiscv's tag memories).
+  is locked; read the MIG IP and the bridge's scoped XDC; no DDR3 pin constraints of your own;
+  `DDR_SWINIT` 0 (the MIG calibrates by itself). `ip/mig/mig_ddr3_stub.v` lets the top lint
+  without Vivado. The LiteDRAM top is done (BOARD.md section 7).
+* **fw**: done in this round (SurfBoot 1.1.0): with `DDR_STATUS.SWINIT` initialize the
+  controller (`firmware/common/ddrinit.c`), then wait for `CALIB_DONE` or `CALIB_FAIL` (never
+  both); `TIMEOUT` means the DDR is out of service until reset (accesses fault at once). The
+  kernel must leave the `ddrc` registers alone (BOOT-ABI.md section 6).
+* **flow**: the seed lists, the three checker fixes and the clock check's phases of this round
+  are in the flow's files (OPEN-FLOW.md 3 and 6.5); open is fasm2netlist's own RAMB18E1 port
+  table (bramwe.py does its work until then) and nextpnr's pairing of an 18-bit port B's byte enables in true dual port mode (OPEN-FLOW.md 6.5).
+* **release**: the DDR designs now build, and a fresh checkout's `make litedram-gen` matches its
+  lock (10.1); `release/release.txt`'s and RELEASE.md's notes that the DDR designs do not build
+  and that `run_gen.py` should drop the tree comment are the release track's to update.
 
 ## 13. Proposed contract changes
 
