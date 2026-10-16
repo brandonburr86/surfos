@@ -11,8 +11,9 @@ reproduces byte for byte from a pristine copy ([evidence](evidence/release/)). I
 **pre-release**: the DDR designs do not build yet (their generated LiteDRAM core fails its own
 hash check on a fresh checkout, section 4, and past that they miss nextpnr's timing, BOARD.md
 section 8), so the release has no bitstream that boots SurfOS from the card, and so no flash image
-to boot from. **Nothing has been written to a configuration flash and nothing has run on the
-board**: the board steps of section 10 are pending.
+to boot from. The owner's A7-100T has run designs loaded over JTAG (milestones 1 and 3,
+PROGRESS.md), but **nothing has been written to its configuration flash and no release has been
+on it**: the board steps of section 10 are pending.
 
 ## 1. What a release is
 
