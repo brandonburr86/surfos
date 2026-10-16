@@ -76,6 +76,13 @@ EOF
          END { print "placed (nextpnr): " l }' "$2"
 }
 
+histogram() {     # NEXTPNR_LOG: nextpnr's last slack histogram
+    awk '/Slack histogram:/ { n = 0; cap = 1; next }
+         cap && /legend|represents|\[ *-?[0-9]+, *-?[0-9]+\) *\|/ { sub(/^Info: */, ""); b[n++] = $0; next }
+         cap { cap = 0 }
+         END { for (i = 0; i < n; i++) print "  " b[i] }' "$1"
+}
+
 fmax() {          # NEXTPNR_LOG: each clock's last "Max frequency" line
     awk '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c); last[c] = $0; if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
          END { for (i = 0; i < n; i++) { l = last[order[i]]; sub(/^(Info|ERROR): */, "", l); print l } }' "$1"
@@ -179,13 +186,14 @@ fi
             echo "  nextpnr derives them but has no register-to-register path on them to time)"
             echo "critical paths (nextpnr, the last report):"
             critical "$ox/nextpnr.log" | sed 's/^/  /'
+            grep -q 'Critical path report' "$ox/nextpnr.log" || echo "  (none: nextpnr reports them after routing)"
             echo "slack histogram (nextpnr, the last report; ns are in ps):"
-            sed -n '/Slack histogram/,/Hold-fix/p' "$ox/nextpnr.log" | tail -n +2 | grep -v Hold-fix | sed 's/^Info: */  /' | tail -n 24
+            histogram "$ox/nextpnr.log"
             case "$board" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
             if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=$id OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
                make --no-print-directory program-volatile BOARD=$board DESIGN=$design > "$t/program-$board-$design.txt" 2>&1
             then prc=0; else prc=$?; fi
-            echo "make program-volatile BOARD=$board DESIGN=$design (fake openFPGALoader): exit $prc, $(tail -n 1 "$t/program-$board-$design.txt" | sed "s|$PWD/||")"
+            echo "make program-volatile BOARD=$board DESIGN=$design (fake openFPGALoader): exit $prc, $(grep '^program' "$t/program-$board-$design.txt" | tail -n 1 | sed "s|$PWD/||")"
         done
     done
     [ -f "$t/diag.diff" ] || { echo; echo "(no diagnostic builds in this run)"; exit 0; }
@@ -212,8 +220,9 @@ fi
             echo "  check_netlist = $(field check_netlist "$m"), check_boot_rom = $(field check_boot_rom "$m")"
             sed 's/^/    /' "$ox/check-netlist.txt" | grep -E 'u_dram|DSP48E1|netlist_check'
             [ ! -f "$ox/check-rom.txt" ] || grep -E '^romcheck' "$ox/check-rom.txt" | sed 's/^/    /'
-            echo "  block RAM: $(grep -v '^bramcheck' "$ox/check-bram.txt" | head -n 1); $(grep '^bramcheck' "$ox/check-bram.txt")"
+            echo "  block RAM: $(grep -E '^RAMB(18|36)E1:' "$ox/check-bram.txt" | tr '\n' ';' | sed 's/;/; /g')$(grep '^bramcheck' "$ox/check-bram.txt")"
             echo "  LVS: $(grep -E 'proved|BLOCKED|differ' "$ox/check-lvs.txt" 2>/dev/null | tail -n 1)"
+            grep -E '^ *(DIFFER|BLOCKED|UNKNOWN)' "$ox/check-lvs.txt" 2>/dev/null | sed 's/^ */    /' || true
             echo "  round trip: $(tail -n 1 "$ox/check-roundtrip.txt")"
             sed 's/^/  clocks: /' "$ox/check-clocks.txt"
             echo "timing (nextpnr):"
@@ -230,7 +239,7 @@ fi
                 if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=$id OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
                    tools/program.sh volatile $board "$bit" > "$t/program-diag.txt" 2>&1
                 then prc=0; else prc=$?; fi
-                echo "program.sh volatile $board $bit (fake openFPGALoader): exit $prc, $(tail -n 1 "$t/program-diag.txt" | sed "s|$PWD/||")"
+                echo "program.sh volatile $board $bit (fake openFPGALoader): exit $prc, $(grep '^program' "$t/program-diag.txt" | tail -n 1 | sed "s|$PWD/||")"
             done
         done
     done
