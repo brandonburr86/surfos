@@ -15,7 +15,12 @@
 #   make test-os-faults   write faults, the card taken out and put back, and a full volume on the RTL system
 #                         (surfsim's --sd-fault, --sd-remove, --sd-insert), checked by fsck.fat and mtools
 #                         (two runs at once, about 1.5 minutes; on make check, not in test-os)
-#   make evidence-os      test-os, test-os-persist and test-os-faults, their summaries written to docs/evidence/os/
+#   make test-os-kit      the physical test kit (tools/board-test.py, tools/uart.py) proven before there is a
+#                         board: fake boards on pseudo-terminals, m3 and m7 on the RTL system through surfsim
+#                         --uart-pty, and the edge cases (about a minute; on make check, not in test-os)
+#   make test-os-kit-rtl  the kit's m5, m8 and m9 on the RTL system (about 3 minutes; in evidence-os)
+#   make evidence-os      test-os, test-os-persist, test-os-faults and the kit, their summaries written to
+#                         docs/evidence/os/
 #
 # The kernel is built from the repository root (one level up); the x86 kernel's Makefile and outputs
 # are never touched. QEMU's virt machine is not SurfCPU: test-os says nothing about the FPGA.
@@ -44,10 +49,10 @@ OS_HOSTCXX     ?= c++
 OS_IO_C         = ../boards/arty_a7/sdcard.c ../boards/arty_a7/sdproto.c ../boards/arty_a7/tests/iomodel/glue.c
 
 .PHONY: build-kernel-os test-os-host test-os-qemu test-os-iomodel test-os-surfemu test-os-persist test-os-faults \
-        evidence-os
+        test-os-kit test-os-kit-rtl evidence-os
 build-kernel: build-kernel-os
 test-os: test-os-host test-os-iomodel test-os-qemu test-os-surfemu
-check: build-kernel test-os test-os-persist test-os-faults
+check: build-kernel test-os test-os-persist test-os-faults test-os-kit
 
 build-kernel-os:
 	$(OS_MAKE) KBOARD=arty_a7
@@ -147,11 +152,37 @@ test-os-faults:
 	@echo "test-os-faults: skipped: this tree has no surfsim, system_boot_test.py, mkcard.py or surfimg.py"
 endif
 
+# The physical test kit (docs/PHYSICAL-TESTS.md) run as the owner will run it, the owner's steps done by a
+# stand-in (sim/soc/tools/kit_test.py): against fake boards on pseudo-terminals (m1, uart.py, a port that
+# goes away, garbage, silence, a wrong manifest, a lost second) and against the RTL system through surfsim
+# --uart-pty (a power cycle is a new surfsim run on the card image the last one flushed). test-os-kit: the
+# fake boards, m3, m7 and two RTL edge cases at once; test-os-kit-rtl: m5, m8 and m9 with a one-minute soak.
+# OS_KIT_FULL=DIR also keeps each RTL run's whole evidence file, transcript included.
+OS_KIT = $(PYTHON) sim/soc/tools/kit_test.py --surfsim $(BUILD)/sim/surfsim --fw $(BUILD)/fw \
+         --kernel ../build/riscv32/arty_a7/SURFOS.BIN --mkcard $(OS_MKCARD)
+OS_KIT_DEPS = build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/fw/bramdiag.mem $(BUILD)/fw/DDRDIAG.BIN \
+              $(BUILD)/sim/surfsim
+ifneq ($(OS_PERSIST_READY),)
+test-os-kit: $(OS_KIT_DEPS)
+	@mkdir -p $(OS_OUT) $(OS_EVIDENCE)
+	$(Q)$(OS_KIT) --set check --work $(OS_OUT)/kit --evidence $(OS_EVIDENCE)/test-os-kit.txt \
+	    $(if $(OS_KIT_FULL),--evidence-full $(OS_KIT_FULL))
+
+test-os-kit-rtl: $(OS_KIT_DEPS)
+	@mkdir -p $(OS_OUT) $(OS_EVIDENCE)
+	$(Q)$(OS_KIT) --set rtl --work $(OS_OUT)/kit-rtl --evidence $(OS_EVIDENCE)/test-os-kit-rtl.txt \
+	    $(if $(OS_KIT_FULL),--evidence-full $(OS_KIT_FULL))
+else
+test-os-kit test-os-kit-rtl:
+	@echo "$@: skipped: this tree has no surfsim, system_boot_test.py, mkcard.py or surfimg.py"
+endif
+
 OS_ELFS = ../build/riscv32/arty_a7/surfos.elf ../build/riscv32/qemu_virt/surfos.elf ../build/riscv32/qemu_virt-O0/surfos.elf
 OS_EVIDENCE_DIR ?= docs/evidence/os
 
 evidence-os:
-	$(MAKE) --no-print-directory test-os test-os-persist test-os-faults OS_EVIDENCE=$(OS_EVIDENCE_DIR)
+	$(MAKE) --no-print-directory test-os test-os-persist test-os-faults test-os-kit test-os-kit-rtl \
+	    OS_EVIDENCE=$(OS_EVIDENCE_DIR) OS_KIT_FULL=$(OS_EVIDENCE_DIR)/kit
 	$(Q)( echo "# make -C surfcpu build-kernel: sizes, the ISA audit, the packages ($$(date -u +%Y-%m-%d), build $(SURFCPU_BUILD_ID))"; \
 	  $(RV_SIZE) $(OS_ELFS); \
 	  for e in $(OS_ELFS); do $(PYTHON) ../arch/riscv32/isacheck.py --objdump $(RV_OBJDUMP) $$e; done; \
@@ -160,4 +191,4 @@ evidence-os:
 	    for p in $(OS_ELFS:surfos.elf=SURFOS.BIN); do $(PYTHON) $(OS_SURFIMG) verify $$p; done; \
 	  else echo "SURFOS.BIN not built: no $(OS_SURFIMG) (the fw track's packer) in this tree"; fi ) \
 	  > $(OS_EVIDENCE_DIR)/build.txt
-	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0,test-os-surfemu,test-os-persist,test-os-faults}.txt"
+	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0,test-os-surfemu,test-os-persist,test-os-faults,test-os-kit,test-os-kit-rtl}.txt, kit/"
