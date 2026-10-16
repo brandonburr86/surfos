@@ -15,7 +15,7 @@ CPU_BUILD   := $(BUILD)/cpu
 CPU_TB      := $(CPU_BUILD)/surfcpu_tb
 CPU_TEST_SRC := $(sort $(wildcard sim/cpu/tests/*.S))
 # generated tests: build/cpu/gen/<name>.S from sim/cpu/tests/gen_<kind>.py
-CPU_GEN     := muldiv_edges
+CPU_GEN     := muldiv_edges hazards_matrix
 CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_SRC)) \
                $(patsubst %,$(CPU_BUILD)/tests/%.elf,$(CPU_GEN))
 CPU_JOBS    ?= 6
@@ -51,6 +51,10 @@ $(CPU_BUILD)/tests/%.elf: sim/cpu/tests/%.S sim/cpu/tests/surf_test.h sim/cpu/te
 	$(Q)$(RV_OBJDUMP) -d $@ > $(@:.elf=.dis)
 
 $(CPU_BUILD)/gen/muldiv_edges.S: sim/cpu/tests/gen_muldiv.py
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) $< > $@
+
+$(CPU_BUILD)/gen/hazards_matrix.S: sim/cpu/tests/gen_hazards.py
 	@mkdir -p $(dir $@)
 	$(Q)$(PYTHON) $< > $@
 

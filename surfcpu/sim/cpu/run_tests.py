@@ -32,12 +32,13 @@ from pathlib import Path
 
 # (name, ilat, dlat, seeds, extra arguments)
 CONFIGS = [
-    ("zero",   "1:1",  "1:1",  [1],     []),
-    ("short",  "1:3",  "1:3",  [2],     []),
-    ("mixed",  "1:12", "1:12", [3, 13], []),
-    ("dslow",  "1:2",  "4:40", [4],     []),
-    ("islow",  "4:40", "1:2",  [5],     []),
-    ("slow",   "6:30", "6:30", [6],     ["--rand-reset"]),
+    ("zero",   "1:1",    "1:1",    [1],              []),
+    ("short",  "1:3",    "1:3",    [2, 12],          []),
+    ("mixed",  "1:12",   "1:12",   [3, 13, 23, 33],  []),
+    ("dslow",  "1:2",    "4:40",   [4, 14],          []),
+    ("islow",  "4:40",   "1:2",    [5, 15],          []),
+    ("slow",   "6:30",   "6:30",   [6, 16],          ["--rand-reset"]),
+    ("huge",   "20:100", "20:100", [7],              []),
 ]
 
 SPIKE = ["spike", "--isa=rv32im_zicntr_zicsr_zifencei_zihpm", "--priv=m", "--pmpregions=0", "-m0x80000000:0x400000"]
