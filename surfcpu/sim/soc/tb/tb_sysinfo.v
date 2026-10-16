@@ -18,7 +18,7 @@ module tb_sysinfo;
 
     localparam [31:0] P_BOARD   = 32'h0000_0135;
     localparam integer P_SYS    = 12345678;
-    localparam integer P_PIX    = 25177305;
+    localparam integer P_PIX    = 25173611;
     localparam [31:0] P_BUILD   = 32'hDEAD_BEEF;
     localparam [31:0] P_FLAGS   = 32'hFFFF_FFFE;   // SIM set, DIRTY clear, junk above
     localparam [31:0] P_TIME    = 32'h6720_1234;

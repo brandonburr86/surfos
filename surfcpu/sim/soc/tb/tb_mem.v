@@ -30,7 +30,7 @@ module tb_mem;
 
     reg clk = 1'b0, pix_clk = 1'b0;
     always #20 clk = ~clk;
-    always #19.859 pix_clk = ~pix_clk;
+    always #19.862 pix_clk = ~pix_clk;     // clocks.pix_hz, 25,173,611 Hz
     reg rst = 1'b1;
     integer seed = 1;
     integer errors = 0;

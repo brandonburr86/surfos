@@ -12,7 +12,7 @@ pattern), INFO the text geometry, PIXCLK the pixel clock, everything else 0; wri
 ignored; the picture is black with both syncs inactive (high) and text address 0.
 */
 module surf_video #(
-    parameter integer PIX_HZ = 25177305
+    parameter integer PIX_HZ = 25173611
 ) (
     input  wire        clk,
     input  wire        rst,

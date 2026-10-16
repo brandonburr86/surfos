@@ -18,7 +18,7 @@ and has no effect; writes to read-only registers are ignored.
 module surf_sysinfo #(
     parameter [31:0]  BOARD_ID    = 32'h0000_00F0,
     parameter integer SYS_HZ      = 25000000,
-    parameter integer PIX_HZ      = 25177305,
+    parameter integer PIX_HZ      = 25173611,
     parameter [31:0]  BUILD_ID    = 32'h0,
     parameter [31:0]  BUILD_FLAGS = 32'h0,
     parameter [31:0]  BUILD_TIME  = 32'h0,
