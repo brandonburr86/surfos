@@ -45,8 +45,9 @@ _oe or the keyboard pulls it, high otherwise); --ps2-keys TEXT is typed after re
 VGA (--vga-dir DIR): the io track's capture model on vga_r/g/b/hs/vs, ticked every pix_clk
 (pix_clk always runs; the capture adds about 1% to the run time). At the end it writes DIR/screen.ppm (the last whole
 frame), DIR/screen.txt (the measured timing and the 80x30 text decoded from the pixels with
-the font of --vga-font, default rtl/peripherals/surf_video_font.v) and, with --vga-frames N,
-every Nth frame as DIR/frame_NNNNNN.ppm. --vga-after REGEX starts the capture only once REGEX
+the font of --vga-font, default rtl/peripherals/surf_video_font.v, and the cursor's cell: when
+the last frame is in the cursor's dark blink phase, the cell where --settle's frames last
+showed it) and, with --vga-frames N, every Nth frame as DIR/frame_NNNNNN.ppm. --vga-after REGEX starts the capture only once REGEX
 has matched the UART output.
 
 DDR: the C++ DDR model, calibrated after --ddr-calib cycles (default 3000) with random ready
@@ -357,6 +358,10 @@ int main(int argc, char **argv) {
         return 1;
     }
     uint64_t vga_frames_written = 0, vga_last_frame = 0;
+    // the cursor blinks (32 frames, half of them dark): while --settle runs, every whole frame is
+    // decoded and the cursor's last position kept, for a last frame in the dark half
+    int seen_col = -1, seen_row = -1;
+    uint64_t seen_frame = 0, settle_frame = 0;
 
     std::string uart_input;
     if (!opt.uart_in.empty()) uart_input = read_file(opt.uart_in);
@@ -538,12 +543,20 @@ int main(int argc, char **argv) {
             if (pix_edges == RESET_CYCLES) top->pix_rst = 0;
             if (vga_capturing) {
                 cap.tick(top->vga_r, top->vga_g, top->vga_b, top->vga_hs, top->vga_vs);
-                if (opt.vga_frames && cap.frames() != vga_last_frame) {
+                if (cap.frames() != vga_last_frame) {
                     vga_last_frame = cap.frames();
-                    if (vga_last_frame % opt.vga_frames == 0) {
+                    if (opt.vga_frames && vga_last_frame % opt.vga_frames == 0) {
                         char name[64];
                         std::snprintf(name, sizeof name, "/frame_%06" PRIu64 ".ppm", vga_last_frame);
                         if (cap.write_ppm(opt.vga_dir + name)) vga_frames_written++;
+                    }
+                    if (matched && settle_frame++ < 64) {
+                        VgaText t = cap.decode_text(font);
+                        if (t.cursor_row >= 0) {
+                            seen_col = t.cursor_col;
+                            seen_row = t.cursor_row;
+                            seen_frame = vga_last_frame;
+                        }
                     }
                 }
             }
@@ -564,6 +577,12 @@ int main(int argc, char **argv) {
             cap.write_ppm(opt.vga_dir + "/screen.ppm");
             const VgaMeasured &m = cap.measured();
             VgaText text = cap.decode_text(font);
+            std::string blink;
+            if (text.cursor_row < 0 && seen_row >= 0) {
+                text.cursor_col = seen_col;
+                text.cursor_row = seen_row;
+                blink = " (dark in the last frame, its blink; seen in frame " + std::to_string(seen_frame) + ")";
+            }
             std::ofstream f(opt.vga_dir + "/screen.txt");
             f << "# surfsim VGA capture: " << m.frames << " frames; line " << m.h_total
               << " pixels (sync " << m.h_sync << (m.hsync_negative ? " negative" : " positive")
@@ -571,7 +590,7 @@ int main(int argc, char **argv) {
               << (m.vsync_negative ? " negative" : " positive") << "), "
               << m.frame_hz(SURF_PIX_HZ) << " Hz at " << SURF_PIX_HZ << " Hz; text " << text.cols
               << "x" << text.rows << ", cursor at column " << text.cursor_col << " row "
-              << text.cursor_row << ", " << text.unmatched << " unmatched cells\n";
+              << text.cursor_row << blink << ", " << text.unmatched << " unmatched cells\n";
             for (int r = 0; r < text.rows; r++) f << text.printable(r) << "\n";
         }
     }

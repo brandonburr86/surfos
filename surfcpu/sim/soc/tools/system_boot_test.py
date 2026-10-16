@@ -23,8 +23,8 @@ tools/surfimg.py) from a card image made by tools/mkcard.py. Two runs go side by
 
 The expectations follow boards/arty_a7/tests/surfemu_test.py (the fw track's instruction-level
 emulator) where they fit. Two of its steps are left out of these runs for time: crc32 of the
-353 KiB package (23 s of simulated time on this SoC) and the kernel self test (about 80 s,
-some 2 billion cycles); --selftest makes a third kind of run, boot and `selftest` alone
+353 KiB package (23 s of simulated time on this SoC) and the kernel self test (64 s, 1.6
+billion cycles after the prompt); --selftest makes a third kind of run, boot and `selftest` alone
 (make test-soc-system-selftest, not part of check).
 
   system_boot_test.py --surfsim build/sim/surfsim --rom build/fw/surfboot.mem
@@ -197,7 +197,9 @@ def main():
         ps2 = [(rx(data_crc) + NL + r'[\s\S]*' + PROMPT, 'drivers\\n')]
         os.makedirs(os.path.join(w, 'vga'))
         runs['boot'] = dict(card='boot', expects=e, sends=sends, ps2=ps2, max=600000000,
-                            extra=['--vga-dir', os.path.join(w, 'vga'), '--settle', '1000000'])
+                            # 8 million cycles of settling: about 19 frames, more than the
+                            # cursor's 16 dark frames of its 32-frame blink
+                            extra=['--vga-dir', os.path.join(w, 'vga'), '--settle', '8000000'])
         e = boot_expects(pkg, payload_crc, backup=True) + [
             ('bootinfo: from the backup', r'image 0x80000000 \+ \d+ bytes; boot device SD, FAT32 at LBA 2048, '
                                           r'from BACKUP\.BIN' + NL),
