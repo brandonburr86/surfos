@@ -80,6 +80,10 @@ check "dry run: leaves no real manifest" test ! -e "$base/arty_a7_100t/arty_a7_b
 check "dry run: sources staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/rtl/lib/surf_cdc_word.v"
 check "dry run: include files staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/rtl/generated/surfcpu_soc.vh"
 check "dry run: build.tcl staged" test -f "$base/arty_a7_100t/arty_a7_baseline/stage/surfcpu/boards/arty_a7/vivado/build.tcl"
+run env DRY_RUN=1 tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "dry run: DRY_RUN=1 (make build-fpga DRY_RUN=1) is a dry run too" test "$rc" -eq 0 -a ! -s "$FAKE_LOG"
+run env DRY_RUN=yes tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "dry run: DRY_RUN other than 0 or 1 refused" has "DRY_RUN must be 0 or 1"
 
 # ------------------------------------------------------------------------------ ssh flow, passing build
 run tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t

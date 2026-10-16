@@ -255,7 +255,7 @@ for whatever synchronizer it uses), and its calibration status reaches sysinfo t
 ```sh
 make build-fpga BOARD=arty_a7_100t DESIGN=arty_a7_baseline      # milestone 1
 make build-fpga BOARD=arty_a7_100t                              # the whole SoC (needs build/fw/surfboot.mem)
-tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t   # or: make build-fpga ... DRY_RUN=1
 ```
 
 `tools/fpga-build.sh` reads `~/.config/surfcpu/build-host.conf` (BUILD-HOST.md):
@@ -308,7 +308,7 @@ the script or the constraints, never a waiver to get a bitstream.
 
 The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vivado` runs the
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
-locally, with a temporary HOME and output directory (98 checks with fetch.sh's: refusals, dry runs, both flows,
+locally, with a temporary HOME and output directory (100 checks with fetch.sh's: refusals, dry runs, both flows,
 the staged files, `params.tcl`, the TOML manifest, and each gate stopping the bitstream).
 
 ## 9. Programming
@@ -362,5 +362,5 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (98 wrapper and fetch.sh checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (100 wrapper and fetch.sh checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |

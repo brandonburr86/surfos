@@ -2,7 +2,7 @@
 # SurfCPU: build a bitstream on the configured build host (docs/BUILD-HOST.md, docs/BOARD.md section 8).
 #
 #   tools/fpga-build.sh [--dry-run] [--design NAME] BOARD
-#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline]
+#   make build-fpga BOARD=arty_a7_100t [DESIGN=arty_a7_baseline] [DRY_RUN=1]
 #
 # BOARD is a line of boards/arty_a7/boards.txt (arty_a7_35t, arty_a7_100t). The design is
 # surfcpu_arty_a7_top unless --design or $DESIGN names another boards/arty_a7/designs/*.files.
@@ -27,7 +27,11 @@ me=fpga-build
 
 die() { echo "$me: $*" >&2; exit 1; }
 
-dry=0
+case "${DRY_RUN:-0}" in                                # make build-fpga DRY_RUN=1
+    0|'') dry=0 ;;
+    1)    dry=1 ;;
+    *)    die "DRY_RUN must be 0 or 1" ;;
+esac
 design=${DESIGN:-surfcpu_arty_a7_top}
 board=
 while [ $# -gt 0 ]; do

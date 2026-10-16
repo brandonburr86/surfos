@@ -31,7 +31,13 @@ FLOW=vivado-ssh          # A: vivado-ssh | B: vivado-docker | C: openxc7
 HOST=builder.example     # A only: an SSH host alias from ~/.ssh/config (key authentication)
 REMOTE_DIR=surfcpu-build # A only: working directory on that host
 VIVADO=/tools/Xilinx/Vivado/2025.1/bin/vivado   # A and B: the pinned Vivado binary
+IMAGE=surfcpu-vivado:2025.1  # B only: an x86-64 Linux image with that Vivado installed
+DOCKER=docker                # B only, optional: the docker binary (default docker)
 ```
+
+`make build-fpga DESIGN=arty_a7_baseline` builds the milestone 1 design instead of the whole
+SoC, and `DRY_RUN=1` stages the build and prints every command without contacting the host or
+starting Docker (`tools/fpga-build.sh`, docs/BOARD.md section 8).
 
 Every build writes a manifest next to the bitstream: source revision and dirty state, FPGA
 part, constraint-file hash, ROM and kernel hashes, ISA/ABI versions, tool versions, build
