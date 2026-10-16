@@ -1,0 +1,191 @@
+SurfCPU release tooling: the review's findings (rel-2), their tests, and a reduced real release
+2026-10-16, release track, branch sc/rel-2 (commits ad33981..147fe81 on 211755e).
+
+1. Every finding is a test in tools/release-test.py (docs/RELEASE.md section 9). Run against the
+   code the review saw (211755e, the new tests with their stand-ins), they fail:
+
+   M1 shipped = checked (TestShippedIsChecked):
+     FAIL: test_new_commit_meanwhile (TestShippedIsChecked)
+     FAIL: test_one_release_at_a_time (TestShippedIsChecked)
+     FAIL: test_other_bitstream_build_meanwhile (TestShippedIsChecked)
+     FAIL: test_other_software_build_meanwhile (TestShippedIsChecked)
+     FAIL: test_staged_file_changed_meanwhile (TestShippedIsChecked)
+   M2 verify scope (TestVerifyScope):
+     FAIL: test_scope (TestVerifyScope)
+   m1 check/compare (TestCheckStrict, TestCompare):
+     FAIL: test_dropped_design (TestCheckStrict)
+     FAIL: test_empty_lists (TestCheckStrict)
+     FAIL: test_extra_in_new (TestCheckStrict)
+     FAIL: test_planted_file (TestCheckStrict)
+     FAIL: test_reference_bytes (TestCheckStrict)
+     FAIL: test_renamed (TestCheckStrict)
+   m2 environment (TestEnvironment):
+     FAIL: test_allow_listed_environment (TestEnvironment)
+     FAIL: test_record_from_another_run (TestEnvironment)
+     FAIL: test_settings_that_change_the_builds_are_refused (TestEnvironment)
+     FAIL: test_stale_results_never_shipped (TestEnvironment)
+     FAIL: test_stand_ins_only_for_the_tests (TestEnvironment)
+   m3 clean tree (TestCleanTree):
+     FAIL: test_assume_unchanged (TestCleanTree)
+     FAIL: test_global_excludes (TestCleanTree)
+     FAIL: test_run_sh_dirty_flag (TestCleanTree)
+     FAIL: test_show_untracked_no (TestCleanTree)
+   m4 deletes (TestNoForeignDeletes):
+     FAIL: test_fresh_checkout_work (TestNoForeignDeletes)
+     FAIL: test_logs (TestNoForeignDeletes)
+     FAIL: test_out_exact_force (TestNoForeignDeletes)
+     FAIL: test_verify_work (TestNoForeignDeletes)
+   m5 host quoting (TestHostQuoting):
+     FAIL: test_program_targets (TestHostQuoting)
+   c1 .bit header (TestBitfileStrict):
+     FAIL: test_header_rule (TestBitfileStrict) [no field b]
+     FAIL: test_header_rule (TestBitfileStrict) [field b twice]
+     FAIL: test_header_rule (TestBitfileStrict) [field b twice, the other part first]
+     FAIL: test_header_rule (TestBitfileStrict) [field c twice]
+     FAIL: test_header_rule (TestBitfileStrict) [b before a]
+     FAIL: test_header_rule (TestBitfileStrict) [no field d]
+     FAIL: test_info_on_an_incomplete_stream (TestBitfileStrict)
+     FAIL: test_random_damage (TestBitfileStrict)
+   c2, c3 and the stand-ins (TestMake):
+     ERROR: test_complete (TestMake)
+     FAIL: test_ddr_failure (TestMake)
+     FAIL: test_locale_recorded_truthfully (TestMake)
+     FAIL: test_version_tied_to_the_kernel (TestMake)
+     (test_ddr_failure: flash_boot_design named a design the pre-release lacks; test_complete's
+     ERROR was the draft test's own, which unpacked three values from compare(); test_out_exact_force
+     is test_out_force now that --out-exact is gone; TestHostQuoting.test_release_and_card_targets and
+     the program.sh tests passed already: those paths were quoted)
+
+   Each fix's commit was also checked against the commit before it (the tests of that fix, with
+   the previous commit's release.py):
+     m2 (ebbcebe) on 27b08cb: TestEnvironment: 5 of 6 FAIL (stale results: already ok after M1, which
+       empties each design's output directory)
+     m1 (759a189) on ebbcebe: TestCheckStrict, TestCompare: Ran 11 tests in 10.665s; FAILED (failures=6, errors=1) (only the intact case passes)
+     M2 (7a152c5) on 759a189: TestVerifyScope: Ran 1 test in 2.720s; FAILED (failures=1)
+     m4 (8028b1f) on 7a152c5: TestNoForeignDeletes: Ran 4 tests in 9.963s; FAILED (failures=4)
+     c3 (d836f51) on 8028b1f: version, flash designs: Ran 3 tests in 6.143s; FAILED (failures=3)
+     c2 (5d37c58) on d836f51: locale: Ran 1 test in 1.526s; FAILED (failures=1)
+   c1 (ad33981): program.sh before and after, on a .bit with field b twice (100T, then 35T), with
+   the fake openFPGALoader:
+     before (HEAD program.sh): exit 0; it loaded it: openFPGALoader -b arty_a7_100t .../dupb.bit
+     after: exit 1; program: .../dupb.bit has no .bit header naming its part (...); refusing
+     bitfile.py after: BitError: the .bit header has a field 'b' at byte 38 where field c belongs
+
+2. After the fixes (147fe81):
+   make test-release (the toolchain image, Python 3.13.5): Ran 51 tests in 24.1s, OK
+   make release-selftest (Homebrew's Python 3.14.7):        Ran 51 tests in 51.8s, OK
+   make release-selftest PYTHON_HOST=/usr/bin/python3 (3.9.6): Ran 51 tests in 53.0s, OK
+   make board-tools (program.sh, fpga-build.sh and the board track's fake bitstreams changed):
+     test_tools: 245 passed, 0 failed
+   make test-flow: test-flow: PASS
+
+3. A reduced real release of 147fe81 (the baseline design on the 100T only, as the review's was),
+   from the clean worktree, and its verify from a pristine copy:
+
+   $ make release PRERELEASE=1 DESIGNS=arty_a7_baseline BOARDS=arty_a7_100t
+   release: SurfCPU 1.0.0 at 147fe813 (commit time 2026-10-16T18:15:51Z = SOURCE_DATE_EPOCH 1792174551), clean tree
+   release: images: surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d93), surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37)
+   release: plan: 1 bitstreams; 9 not attempted; built in <wt>/surfcpu/build/release-work, staged in <wt>/surfcpu/build/release/.1.0.0-pre-147fe813.stage; logs in <wt>/surfcpu/build/release/1.0.0-pre-147fe813.logs
+   release: [1/2] the software (make build-rom, the kernel)
+   release: software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build 147fe813 (7 s)
+   release: [2/2] arty_a7_baseline for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+   release:     PASS (20 s): wns 31.746 ns, sha256 fdcf7e6b2bdc3710...
+   release: written <wt>/surfcpu/build/release/1.0.0-pre-147fe813: PRE-RELEASE, without:
+       arty_a7_baseline for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_top for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_top for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+   release: 11 artifacts in SHA256SUMS (check: cd <wt>/surfcpu/build/release/1.0.0-pre-147fe813 && shasum -a 256 -c SHA256SUMS); 28 s in all
+   exit 0
+
+   $ make release-check RELEASE=build/release/1.0.0-pre-147fe813
+   ok   DDRDIAG.BIN
+   ok   SURFOS.BIN
+   ok   card/BOOT/CMDLINE.TXT
+   ok   card/BOOT/SURFOS.BIN
+   ok   debug/bramdiag.elf
+   ok   debug/ddrdiag.elf
+   ok   debug/surfboot.elf
+   ok   debug/surfos.elf
+   ok   fpga/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
+   ok   rom/bramdiag.mem
+   ok   rom/surfboot.mem
+   1.0.0-pre-147fe813: prerelease (missing: arty_a7_baseline for arty_a7_35t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_top for arty_a7_100t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_top for arty_a7_35t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_ddr for arty_a7_100t: not built: not requested (DESIGNS/BOARDS); surfcpu_arty_a7_ddr for arty_a7_35t: not built: not requested (DESIGNS/BOARDS))
+   check <wt>/surfcpu/build/release/1.0.0-pre-147fe813: PASS: 11 artifacts, every one listed, intact and consistent
+   exit 0
+
+   The build record names the release's kernel (kernel_sha256 = SURFOS.BIN's e55b331c...) and its run:
+   run_id = "arty_a7_baseline-arty_a7_100t-147fe813-20261016T181642Z", source_dirty = false;
+   MANIFEST: flash_boot_design = "", flash_test_design = "" (neither was built), and
+   locale = "LC_ALL=C TZ=UTC for tools/release.py and the scripts it runs on the Mac; the containers
+   get only SOURCE_DATE_EPOCH from them (devenv/run.sh) and run with their images' environment:
+   surfcpu-toolchain:2026-10-15: no LANG, LC_* or TZ set (the POSIX locale, UTC);
+   surfcpu-openxc7:2026-10-15: no LANG, LC_* or TZ set (the POSIX locale, UTC)"
+
+   $ make release-verify RELEASE=build/release/1.0.0-pre-147fe813
+   release: verify 1.0.0-pre-147fe813: a pristine copy of 147fe813 in <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/src (git clone --shared)
+   release: rebuilding there: 1 of the release's 1 bitstreams and every other artifact
+   release: SurfCPU 1.0.0 at 147fe813 (commit time 2026-10-16T18:15:51Z = SOURCE_DATE_EPOCH 1792174551), clean tree
+   release: images: surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d93), surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37)
+   release: plan: 1 bitstreams; 9 not attempted; built in <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/src/surfcpu/build/release-work, staged in <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/rebuild/.1.0.0-pre-147fe813.stage; logs in <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/logs
+   release: [1/2] the software (make build-rom, the kernel)
+   release: software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build 147fe813 (8 s)
+   release: [2/2] arty_a7_baseline for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+   release:     PASS (21 s): wns 31.746 ns, sha256 fdcf7e6b2bdc3710...
+   release: written <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/rebuild/1.0.0-pre-147fe813: PRE-RELEASE, without:
+       arty_a7_baseline for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_top for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_top for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr for arty_a7_100t: not built: not requested (DESIGNS/BOARDS)
+       surfcpu_arty_a7_ddr for arty_a7_35t: not built: not requested (DESIGNS/BOARDS)
+   release: 11 artifacts in SHA256SUMS (check: cd <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/rebuild/1.0.0-pre-147fe813 && shasum -a 256 -c SHA256SUMS); 30 s in all
+   release: the rebuild ended with exit status 0 after 31 s
+   release: removed <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718 (KEEP=1 keeps it)
+   release-verify 1.0.0-pre-147fe813: commit 147fe813660423874811e20dcff24625dedc3b44, rebuilt in <wt>/surfcpu/build/release-verify/1.0.0-pre-147fe813-20261016T131718/src (31 s)
+   
+     match        DDRDIAG.BIN  sha256 fe71721339855eb2...
+     match        SURFOS.BIN  sha256 e55b331c45356f6f...
+     match        card/BOOT/CMDLINE.TXT  sha256 b495040286e1ae28...
+     match        card/BOOT/SURFOS.BIN  sha256 e55b331c45356f6f...
+     match        debug/bramdiag.elf  sha256 40166f823298291c...
+     match        debug/ddrdiag.elf  sha256 44257b96ade8642a...
+     match        debug/surfboot.elf  sha256 25e1b900a83cb94c...
+     match        debug/surfos.elf  sha256 6c4f978210da24e4...
+     match        fpga/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit  sha256 fdcf7e6b2bdc3710...
+     match        rom/bramdiag.mem  sha256 ea0b605caa93aeb6...
+     match        rom/surfboot.mem  sha256 1227c1c9b9d0bcb8...
+   
+     note: MANIFEST: the same commit, tools, contracts and gate results for the rebuilt designs
+   
+   PASS: 11 of 11 compared artifacts are byte for byte the same; 0 differ, 0 missing, 0 damaged, 0 extra, 0 problems with the releases themselves
+   exit 0
+
+   $ make release-verify RELEASE=build/release/1.0.0-pre-147fe813 DESIGNS=arty_a7_baselin
+   release: unknown design 'arty_a7_baselin' (1.0.0-pre-147fe813's MANIFEST: arty_a7_baseline, surfcpu_arty_a7_bramdiag, surfcpu_arty_a7_top, surfcpu_arty_a7_ddr_bramdiag, surfcpu_arty_a7_ddr)
+   make: *** [release-verify] Error 2
+   exit 2
+   $ make release-verify RELEASE=build/release/1.0.0-pre-147fe813 DESIGNS=surfcpu_arty_a7_top
+   release: no bitstream of surfcpu_arty_a7_top in 1.0.0-pre-147fe813 for arty_a7_100t, arty_a7_35t to rebuild (arty_a7_100t: not built: not requested (DESIGNS/BOARDS); arty_a7_35t: not built: not requested (DESIGNS/BOARDS))
+   make: *** [release-verify] Error 2
+   exit 2
+   $ make release-verify RELEASE=build/release/1.0.0-pre-147fe813 BOARDS=arty_a7_35t
+   release: no bitstream for arty_a7_35t among arty_a7_baseline, surfcpu_arty_a7_bramdiag, surfcpu_arty_a7_top, surfcpu_arty_a7_ddr_bramdiag, surfcpu_arty_a7_ddr in 1.0.0-pre-147fe813 to rebuild
+   make: *** [release-verify] Error 2
+   exit 2
+   $ make release-check RELEASE=build/release/1.0.0-pre-bb066932   (made in round 1, before this round's rules)
+   FAIL MANIFEST: flash_boot_design 'surfcpu_arty_a7_ddr', but the release has no boot flash image of it
+   check <wt>/surfcpu/build/release/1.0.0-pre-bb066932: FAIL: 1 problems
+   make: *** [release-check] Error 1
+
+   The round-1 release (1.0.0-pre-bb066932, release.txt, verify.txt) fails only the new rule that a
+   MANIFEST names no flash design the release lacks; it was made and verified with that commit's
+   tools, and a release of a newer commit is made with the rules above.

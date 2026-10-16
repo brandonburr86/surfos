@@ -13,7 +13,12 @@ hash check on a fresh checkout, section 4, and past that they miss nextpnr's tim
 section 8), so the release has no bitstream that boots SurfOS from the card, and so no flash image
 to boot from. The owner's A7-100T has run designs loaded over JTAG (milestones 1 and 3,
 PROGRESS.md), but **nothing has been written to its configuration flash and no release has been
-on it**: the board steps of section 10 are pending.
+on it**: the board steps of section 10 are pending. A review of the tooling followed
+(`review-fixes.txt`): the release now builds in a directory of its own, ships only what it
+checked, and its checks and comparisons refuse damaged releases; a reduced release made with it,
+`1.0.0-pre-147fe813` (the baseline design on the 100T, 11 artifacts), reproduces byte for byte
+from a pristine copy too. A release made before that fails today's `release-check` on one point
+(its `MANIFEST` names a boot design it does not have): make it again.
 
 ## 1. What a release is
 
@@ -419,6 +424,7 @@ the same; its `MANIFEST` comparison names the new image ids.
 | `evidence/release/release.txt` | the release made from a fresh checkout (`tools/fresh-checkout.sh`): the output, `SHA256SUMS`, the gates of every bitstream, the missing DDR designs and why |
 | `evidence/release/verify.txt` | `make release-verify` of it: every artifact, with what it found |
 | `evidence/release/tests.txt` | `make test-release` in the container and `make release-selftest` with both of the Mac's Pythons |
+| `evidence/release/review-fixes.txt` | the review's findings: each one's tests failing on the code it saw and passing after its fix, the reduced release `1.0.0-pre-147fe813` with its check and verify, and verify's refusals |
 | `evidence/release/determinism.txt` | the nondeterminism found (section 4), before and after, and the generated LiteDRAM core's |
 | `evidence/release/images.txt` | both images rebuilt from their pinned sources with no cache, and the artifacts built with them |
 | `evidence/release/flash.txt` | the flash images, the configuration options and times, the sources behind them, and `program.sh flash` with the fake programmer |
