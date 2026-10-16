@@ -6,7 +6,7 @@ File: surfcpu_tb.cpp Date: 10/15/26 (SurfCPU)
 build/cpu/surfcpu_tb (docs/MODULES.md section 6): runs one RISC-V ELF program on
 surfcpu_core alone, under Verilator.
 
-  surfcpu_tb --elf FILE [--trace FILE] [--seed N] [--max-cycles N]
+  surfcpu_tb --elf FILE [--trace FILE [--trace-tail N]] [--seed N] [--max-cycles N]
              [--ilat MIN:MAX] [--dlat MIN:MAX] [--signature FILE --sig-begin SYM --sig-end SYM]
              [--vcd FILE] [--rand-reset] [--quiet]
 
@@ -29,7 +29,9 @@ fail, test number value >> 1 (exit 1). The run continues until the RVFI record o
 store, so the trace ends with it. Running past --max-cycles exits 2; a testbench error
 (bad arguments or ELF, protocol violation) exits 3. --signature dumps the words between
 the two symbols, one per line, in every case. --trace writes the retirement trace of
-docs/MODULES.md section 5 (field formats: sim/README.md).
+docs/MODULES.md section 5 (field formats: sim/README.md); with --trace-tail N only the last
+N records are kept (in memory, written when the run ends), so a runaway program cannot
+fill the disk.
 */
 #include <elf.h>
 
@@ -75,6 +77,7 @@ enum ExitCode { EXIT_PASS = 0, EXIT_FAIL = 1, EXIT_TIMEOUT = 2, EXIT_ERROR = 3 }
 
 struct Options {
     std::string elf, trace, signature, sig_begin, sig_end, vcd;
+    uint64_t trace_tail = 0;        // 0: the whole trace
     uint64_t seed = 1;
     uint64_t max_cycles = 10000000;
     unsigned ilat_min = 1, ilat_max = 1, dlat_min = 1, dlat_max = 1;
@@ -84,7 +87,7 @@ struct Options {
 
 void usage() {
     std::fprintf(stderr,
-        "usage: surfcpu_tb --elf FILE [--trace FILE] [--seed N] [--max-cycles N]\n"
+        "usage: surfcpu_tb --elf FILE [--trace FILE [--trace-tail N]] [--seed N] [--max-cycles N]\n"
         "                  [--ilat MIN:MAX] [--dlat MIN:MAX]\n"
         "                  [--signature FILE --sig-begin SYM --sig-end SYM]\n"
         "                  [--vcd FILE] [--rand-reset] [--quiet]\n");
@@ -123,6 +126,13 @@ bool parse_args(int argc, char **argv, Options &o) {
         const char *v = nullptr;
         if (a == "--elf") { if (!(v = need("--elf"))) return false; o.elf = v; }
         else if (a == "--trace") { if (!(v = need("--trace"))) return false; o.trace = v; }
+        else if (a == "--trace-tail") {
+            if (!(v = need("--trace-tail")) || !parse_u64(v, o.trace_tail) || o.trace_tail == 0 ||
+                o.trace_tail > 10000000) {
+                std::fprintf(stderr, "surfcpu_tb: bad --trace-tail (a record count, 1..10000000)\n");
+                return false;
+            }
+        }
         else if (a == "--signature") { if (!(v = need("--signature"))) return false; o.signature = v; }
         else if (a == "--sig-begin") { if (!(v = need("--sig-begin"))) return false; o.sig_begin = v; }
         else if (a == "--sig-end") { if (!(v = need("--sig-end"))) return false; o.sig_end = v; }
@@ -288,6 +298,8 @@ class Harness {
     std::unique_ptr<VerilatedVcdC> vcd;
 #endif
     FILE *trace = nullptr;
+    std::vector<std::string> tail;  // --trace-tail: the last records, a ring buffer
+    uint64_t tail_next = 0;         // records written into it so far
     uint64_t cycle = 0;
     uint64_t retired = 0;
     bool tohost_seen = false;
@@ -427,12 +439,19 @@ void Harness::after_edge(Port &p, bool valid, bool ready, const Req &r, bool rsp
 
 void Harness::write_trace_line() {
     if (!trace) return;
-    std::fprintf(trace, "%" PRIu64 " %08x %08x %x %x %x %08x %08x %x %x %08x %08x %08x\n",
+    char line[160];
+    std::snprintf(line, sizeof line, "%" PRIu64 " %08x %08x %x %x %x %08x %08x %x %x %08x %08x %08x\n",
                  uint64_t(top->rvfi_order), unsigned(top->rvfi_pc_rdata), unsigned(top->rvfi_insn),
                  unsigned(top->rvfi_trap), unsigned(top->rvfi_intr), unsigned(top->rvfi_rd_addr),
                  unsigned(top->rvfi_rd_wdata), unsigned(top->rvfi_mem_addr), unsigned(top->rvfi_mem_rmask),
                  unsigned(top->rvfi_mem_wmask), unsigned(top->rvfi_mem_rdata), unsigned(top->rvfi_mem_wdata),
                  unsigned(top->rvfi_pc_wdata));
+    if (opt.trace_tail == 0) {
+        std::fputs(line, trace);
+    } else {
+        tail[tail_next % opt.trace_tail] = line;
+        tail_next++;
+    }
 }
 
 void Harness::dump_signature() {
@@ -467,6 +486,7 @@ int Harness::run() {
         trace = std::fopen(opt.trace.c_str(), "w");
         if (!trace) { std::fprintf(stderr, "surfcpu_tb: cannot write %s\n", opt.trace.c_str()); return EXIT_ERROR; }
         std::fprintf(trace, "# surfcpu-trace v1: order pc insn trap intr rd rd_wdata mem_addr rmask wmask mem_rdata mem_wdata pc_next\n");
+        if (opt.trace_tail) tail.assign(opt.trace_tail, std::string());
         std::fprintf(trace, "# elf %s seed %" PRIu64 " ilat %u:%u dlat %u:%u\n", opt.elf.c_str(), opt.seed,
                      opt.ilat_min, opt.ilat_max, opt.dlat_min, opt.dlat_max);
     }
@@ -552,7 +572,16 @@ int Harness::run() {
 #if VM_TRACE
     if (vcd) vcd->close();
 #endif
-    if (trace) std::fclose(trace);
+    if (trace) {
+        if (opt.trace_tail) {           // the kept records, oldest first
+            if (tail_next > opt.trace_tail)
+                std::fprintf(trace, "# --trace-tail %" PRIu64 ": the first %" PRIu64 " records are not shown\n",
+                             opt.trace_tail, tail_next - opt.trace_tail);
+            uint64_t first = tail_next > opt.trace_tail ? tail_next - opt.trace_tail : 0;
+            for (uint64_t i = first; i < tail_next; i++) std::fputs(tail[i % opt.trace_tail].c_str(), trace);
+        }
+        std::fclose(trace);
+    }
     dump_signature();
 
     if (!opt.quiet || code != EXIT_PASS) {

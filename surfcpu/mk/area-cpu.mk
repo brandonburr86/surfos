@@ -11,6 +11,9 @@
 #   make synth-cpu           Yosys synth_xilinx estimate of the core alone
 #   make synth-cpu-gate      the synthesized netlist simulated on RAM-only tests (Icarus, Xilinx
 #                            cell models): shows synthesis kept the logic
+#   make formal-cpu          bounded model check of the core with SymbiYosys (FORMAL_DEPTH, default 14)
+#   make soc-loop-cpu        no combinational path in surfcpu_soc from a bus request to an irq input
+#   make mutants-cpu         the mutation check of the verification (long; not on check)
 #
 # Hung on the aggregates: lint, test-cpu, check.
 
@@ -30,16 +33,17 @@ CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
 .PHONY: lint-cpu build-cpu test-cpu-tb test-cpu-directed test-cpu-spike test-cpu-riscv-tests \
-        test-cpu-icarus synth-cpu synth-cpu-modules synth-cpu-gate
+        test-cpu-icarus synth-cpu synth-cpu-modules synth-cpu-gate formal-cpu soc-loop-cpu mutants-cpu
 lint: lint-cpu
 test-cpu: test-cpu-tb test-cpu-directed test-cpu-riscv-tests test-cpu-icarus
-check: synth-cpu synth-cpu-gate
+check: synth-cpu synth-cpu-gate formal-cpu soc-loop-cpu
 
 lint-cpu:
 	$(Q)$(VERILATOR_LINT) --top-module surfcpu_core $(CPU_RTL)
 	$(Q)$(VERILATOR_LINT) -DSURFCPU_RVFI --top-module surfcpu_core $(CPU_RTL)
 	$(Q)$(VERILATOR_LINT) -DSURFCPU_RVFI --top-module surfcpu_tb_top sim/cpu/surfcpu_tb_top.v $(CPU_RTL)
-	@echo "lint-cpu: surfcpu_core clean (-Wall, with and without SURFCPU_RVFI)"
+	$(Q)$(VERILATOR_LINT) -DSURFCPU_RVFI -DSURFCPU_FV --top-module surfcpu_core $(CPU_RTL)
+	@echo "lint-cpu: surfcpu_core clean (-Wall, plain, with SURFCPU_RVFI, with SURFCPU_FV)"
 
 build-cpu: $(CPU_TB) $(CPU_ELFS)
 
@@ -123,3 +127,23 @@ synth-cpu-gate: $(CPU_RTL) $(CPU_INC) $(patsubst %,$(CPU_BUILD)/tests/%.elf,$(CP
 	  --netlist $(CPU_BUILD)/gate/surfcpu_core_netlist.v $(filter %.elf,$^)
 	$(Q)$(PYTHON) sim/cpu/gate_mutant.py --netlist $(CPU_BUILD)/gate/surfcpu_core_netlist.v \
 	  --elf $(CPU_BUILD)/tests/muldiv.elf
+
+
+# Bounded formal check (sim/cpu/formal: the review's harness): SurfBus master rules, every data
+# access retired exactly once, interrupt mepc, the RVFI fields, a small RV32I spec of each record,
+# plus the cover task. Depth 14 is the shortest that kills the review's RVFI mutants (the deepest,
+# rv_intr_irq, fails in step 13); it takes about a minute and a half. FORMAL_TIMEOUT per task.
+FORMAL_DEPTH   ?= 14
+FORMAL_TIMEOUT ?= 900
+formal-cpu: $(CPU_RTL) $(CPU_INC) sim/cpu/formal/fv_top.sv sim/cpu/formal/fv.sby
+	$(Q)$(PYTHON) sim/cpu/formal/run_formal.py --depth $(FORMAL_DEPTH) --timeout $(FORMAL_TIMEOUT) \
+	  --out $(CPU_BUILD)/formal
+
+# The core's dbus_req_valid depends combinationally on its interrupt inputs: check that nothing in
+# surfcpu_soc makes an interrupt input depend combinationally on a bus request (no loop).
+soc-loop-cpu:
+	$(Q)$(PYTHON) sim/cpu/soc_loop_check.py --out $(CPU_BUILD)/soc-loop
+
+# Which part of the verification catches each of the review's mutants (about an hour; disk-safe).
+mutants-cpu: build-cpu
+	$(Q)$(PYTHON) sim/cpu/mutants.py --formal-depth $(FORMAL_DEPTH) --jobs $(CPU_JOBS)

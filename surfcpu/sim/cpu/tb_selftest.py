@@ -8,7 +8,8 @@ Checks build/cpu/surfcpu_tb against its contract (docs/MODULES.md section 6, sim
 exit 0 for a pass, 1 for a failure (with the test number), 2 past --max-cycles, 3 for bad
 arguments or ELF files; --signature writes the words between the two symbols, one per
 line as 8 hex digits; --trace writes the header and one 13-field line per record, with
-consecutive order numbers and the tohost store last. The small programs are generated
+consecutive order numbers and the tohost store last; --trace-tail keeps only the last
+records. The small programs are generated
 into build/cpu/selftest/.
 
     tb_selftest.py [--tb build/cpu/surfcpu_tb]
@@ -135,6 +136,17 @@ def main() -> int:
     check("--trace: the last record is the store of 1 to tohost", last_ok, " ".join(recs[-1]) if recs else "")
     first_ok = fields_ok and recs[0][1] == "80000000"
     check("--trace: execution starts at 0x80000000", first_ok)
+
+    tail = OUT / "loop.trace"
+    r = tb(["--elf", str(elfs["loop"]), "--max-cycles", "20000", "--trace", str(tail), "--trace-tail", "3"], a.tb)
+    tt = tail.read_text().splitlines() if tail.exists() else []
+    trecs = [l.split() for l in tt if not l.startswith("#")]
+    check("--trace-tail 3 keeps only the last 3 records of a long run",
+          r.returncode == 2 and len(trecs) == 3 and int(trecs[0][0]) > 100 and
+          [int(f[0]) for f in trecs] == list(range(int(trecs[0][0]), int(trecs[0][0]) + 3)),
+          f"exit {r.returncode}, {len(trecs)} records")
+    r = tb(["--elf", str(elfs["pass"]), "--trace", str(tail), "--trace-tail", "0"], a.tb)
+    check("--trace-tail 0 exits 3", r.returncode == 3, r.stderr.strip())
 
     bad = 0
     for what, ok, detail in checks:

@@ -41,5 +41,14 @@ run synth.txt "surfcpu_core: Yosys synth_xilinx resource estimate" \
     sh -c 'yosys -V; make --no-print-directory synth-cpu'
 run synth-modules.txt "surfcpu_core: Yosys synth_xilinx per module (no -flatten): the registers, DSPs and LUTRAMs are all there" \
     make --no-print-directory synth-cpu-modules
+run formal.txt "surfcpu_core: bounded model check (SymbiYosys, the review's harness) and its covers" \
+    make --no-print-directory formal-cpu
+run soc-loop.txt "surfcpu_soc: no combinational path from a bus request to an interrupt input of the core" \
+    make --no-print-directory soc-loop-cpu
 run synth-gate.txt "surfcpu_core: the synthesized netlist simulated (Icarus, Yosys Xilinx cell models) on RAM-only tests, then a broken copy that must fail" \
     make --no-print-directory synth-cpu-gate
+# the mutation check takes about an hour: only when asked (MUTANTS=1)
+if [ "${MUTANTS:-0}" = 1 ]; then
+    run mutants.txt "surfcpu_core: which part of the verification catches each mutant" \
+        python3 sim/cpu/mutants.py --formal-depth 14 --jobs 6
+fi

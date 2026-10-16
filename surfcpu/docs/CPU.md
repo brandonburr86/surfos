@@ -200,18 +200,23 @@ branch, because the redirect comes from MEM).
 
 **Interrupts.** `mip` is the three inputs (MEIP, MTIP, MSIP); an interrupt is pending and
 enabled when `mstatus.MIE` and `(mip & mie) != 0`, and is taken in the order MEI, MSI, MTI. It
-is taken in place of the instruction in MEM, before that instruction has done anything
-(`mepc` = its pc, `mtval` = 0, the instruction is re-executed after MRET): never once its
-bus request has been offered, and never on a WFI. With MEM empty (after a branch, say) the
+is taken in place of the instruction in MEM, before that instruction has started (`mepc` =
+its pc, `mtval` = 0, the instruction is re-executed after MRET): never once its bus request
+has been offered, nor once a WFI has begun to wait. A CSR write or MRET that sets `MIE` (or
+an `mie` bit) with an interrupt pending is followed at once by the trap, on the next
+instruction whatever it is, as privileged spec 3.1.9 requires. With MEM empty (after a branch, say) the
 interrupt waits for the next instruction to arrive there, so interrupt latency is a few
 cycles plus whatever the instruction in MEM is waiting for (a slow load, or a divide still
 in EX). An instruction that would trap is still interrupted first (the interrupt is between
 instructions); after MRET it traps.
 
-**WFI** waits in MEM until `(mip & mie) != 0`, whatever `MIE` is, then completes. If the
-interrupt is also enabled by `MIE`, the next instruction to reach MEM takes it, so `mepc` =
-the instruction after the WFI. An interrupt already pending and enabled when the WFI reaches
-MEM makes it complete at once, and the same holds (the WFI itself is never interrupted).
+**WFI** can be interrupted only as it arrives in MEM: an interrupt already pending and
+enabled then (for instance because the MRET or CSR write just before set `MIE`) is taken
+before it, `mepc` = the WFI. Otherwise the WFI waits in MEM (`mem_wfi_wait`) until
+`(mip & mie) != 0`, whatever `MIE` is, then completes; if the interrupt is also enabled by
+`MIE`, the next instruction to reach MEM takes it, so `mepc` = the instruction after the
+WFI. With `MIE` = 0, an interrupt pending and enabled in `mie` makes the WFI complete at
+once (no trap).
 
 **MRET** completes in MEM: `pc` = `mepc`, `MIE` = `MPIE`, `MPIE` = 1 (`MPP` stays M);
 younger instructions are flushed.
@@ -313,23 +318,23 @@ only one request in flight per port (SURFBUS.md version 1).
 ## 11. Resources (Yosys estimate)
 
 `make synth-cpu` runs Yosys 0.52 `synth_xilinx -family xc7 -flatten -noiopad` on
-`surfcpu_core` alone (without RVFI). Estimate (2026-10-15, the commit of this document):
+`surfcpu_core` alone (without RVFI). Estimate (2026-10-16, the commit of this document):
 
 | Resource | Count |
 |---|---|
-| LUTs (logic) | 3094 |
+| LUTs (logic) | 2740 |
 | LUTs as distributed RAM | 92 (23 RAM32M: register file 12, fetch buffer 11) |
-| Flip-flops | 937 |
+| Flip-flops | 938 |
 | CARRY4 | 151 |
-| MUXF7 / MUXF8 | 646 / 278 |
+| MUXF7 / MUXF8 | 412 / 158 |
 | DSP48E1 | 4 (the 33 x 33 multiplier) |
 | Block RAM | 0 |
 
-That is about 15 % of the LUTs of an xc7a35t (20,800) and 5 % of an xc7a100t (63,400).
+That is about 13 % of the LUTs of an xc7a35t (20,800) and 4 % of an xc7a100t (63,400).
 These are Yosys's numbers, not Vivado's post-route utilisation, which is pending. They move
-by 10-15 % with small RTL changes (the flattened ABC mapping is sensitive): an earlier
-revision gave 2694 LUTs, and the same RTL synthesised per module adds up to about 2830
-(core 1160, CSRs 632, ALU 487, multiplier/divider 330, decoder 106, fetch 111). The
+by 10-15 % with small RTL changes (the flattened ABC mapping is sensitive): earlier
+revisions gave 2694 and 3094 LUTs, and the RTL synthesised per module adds up to about
+2830 (core about 1160, CSRs 632, ALU 487, multiplier/divider 330, decoder 106, fetch 111). The
 largest single item is the ALU's three barrel shifters; one shared shifter would save a
 couple of hundred LUTs if space ever matters.
 
@@ -339,9 +344,9 @@ multiply into DSP48s (another track hit this). Three checks show it did not dele
 * Synthesised per module (`make synth-cpu-modules`, `docs/evidence/cpu/synth-modules.txt`),
   every register keeps its full width, listed bit by bit by the net on each flip-flop's
   output (`sim/cpu/synth_regs.py`): divider 139, CSRs 265, fetch unit 98, fetch-buffer
-  pointers 6, pipeline registers 433 (436 declared, less 3 bits of the exception-cause
+  pointers 6, pipeline registers 434 (437 declared, less 3 bits of the exception-cause
   fields that can never be 1: ID only produces causes 1, 2, 3 and 11, EX adds 0, 4 and 6),
-  941 in all; the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
+  942 in all; the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
   The flattened run above has 4 fewer, the always-zero low bits of `ex_pc` and `mem_pc`,
   which only show up as constants across the fetch unit's boundary.
 * `make synth-cpu-gate` writes the synthesised netlist (the same flow, with `RESET_PC` set to
@@ -368,20 +373,44 @@ If it is ever short, the multiplier is the first candidate for a pipeline regist
   from `gen_*.py`) and one C program (`sim/cpu/tests/c/cprogram.c`, GCC -O2 with libgcc),
   each under 14 bus timings and seeds (`sim/cpu/run_tests.py`): latencies from 1:1 up to
   20:100 cycles on both ports, `req_ready` waits, one configuration with random reset values.
-  22 tests: `alu`, `branch`, `ldst`, `muldiv`, `muldiv_edges`, `csr`, `csr_impl` (all 4096 CSR
+  28 tests: `alu`, `branch`, `ldst`, `muldiv`, `muldiv_edges`, `csr`, `csr_impl` (all 4096 CSR
   addresses), `counters`, `traps`, `illegal`, `misaligned`, `access_fault`, `hazards_matrix`
   (420 RAW cases), `hazards`, `flush`, `fencei`, `mmio`, `wrongpath`, `interrupts`, `wfi`,
-  `irq_stress`, `c_cprogram`. The testbench also checks the bus protocol on both ports in
-  every run.
+  `irq_stress`, `divflush` (a divide abandoned by a trap, made deterministic by parking the
+  two instructions behind a WFI), `c_cprogram`, and the review's `rv_ctrl`, `rv_excprio`,
+  `rv_irq_wfi`, `rv_irq_mretwfi`, `rv_x0_divflush`. The testbench also checks the bus
+  protocol on both ports in every run.
 * **riscv-tests** (`sim/cpu/riscv_tests.py`, pinned commit, fetched once): the rv32ui,
   rv32um and rv32mi "p" tests under three timings; three need features ISA.md leaves out
   (debug triggers, PMP entries, hardware misaligned accesses) and must fail as noted.
 * **The testbench itself** (`sim/cpu/tb_selftest.py`): its exit codes, signature and trace
-  formats against MODULES.md section 6 and sim/README.md.
+  formats (and `--trace-tail`) against MODULES.md section 6 and sim/README.md.
 * **Icarus Verilog** (`sim/cpu/run_icarus.py`, `sim/cpu/tb_core_icarus.v`): the core built
   without RVFI runs the thirteen tests that need only RAM and bus errors (the C program
   among them), with random `req_ready` and latencies, three seeds each: the RTL simulates in
   both simulators. The same testbench runs the post-synthesis netlist (section 11).
+
+`make check` adds:
+
+* **Formal** (`make formal-cpu`; `sim/cpu/formal/`, the harness written by the independent
+  review): a bounded model check with SymbiYosys from reset, for every program in an 8-word
+  instruction memory and every bus timing, data, error and interrupt pattern: the SurfBus
+  master rules on both ports, every data access accepted on the bus retired exactly once by
+  the next record, interrupt `mepc` = the next instruction in program order, the RVFI fields
+  (order, `intr`, `pc_wdata`, register numbers and values, memory address, lanes and data),
+  and a small RV32I specification of each record. Depth 14 (about a minute), plus the cover
+  task showing the checked situations are reachable. It catches what the testbench cannot
+  see in a passing program: RVFI fields that are wrong but harmless to the program.
+* **No loop through the interrupt inputs** (`make soc-loop-cpu`, `sim/cpu/soc_loop_check.py`):
+  `dbus_req_valid` depends combinationally on the interrupt inputs, so Yosys checks on the
+  flattened `surfcpu_soc` that no interrupt input depends combinationally on a bus request
+  (their cones start at peripheral registers), and that the design has no logic loop.
+* The synthesis checks of section 11.
+
+**Mutation check** (`make mutants-cpu`, `sim/cpu/mutants.py`, about an hour, not on `check`):
+each of the review's mutants, applied one at a time to a copy of the RTL, must be caught by
+the directed tests, the riscv-tests, the testbench self-test or the formal check; the
+results are in `docs/evidence/cpu/mutants.txt`.
 
 Cross-checks of the tests themselves: `make test-cpu-spike` runs every directed test that
 does not need the testbench's devices on Spike (they all pass there too), and
