@@ -7,9 +7,10 @@ register write, memory access. Directed programs, seeded random programs, a CSR 
 the riscv-arch-test suite go through the same runner. The machinery was proven first on
 Spike against itself and against deliberately broken traces (a Spike stand-in for the
 testbench), then run against the real core: the cpu track's `surfcpu_core` and
-`build/cpu/surfcpu_tb`, built from a read-only copy of `surfcpu` at `e792960` (its
-`rtl/cpu`, `rtl/lib` and `sim/cpu` are unchanged up to `c3fb0e0`). Everything passes there;
-[section 12](#12-results) has the numbers.
+`build/cpu/surfcpu_tb` as of `surfcpu` `231ad56` (after the cpu review round), built by the
+cpu track's own make rule in the tree a merge of this branch would give, and before that the
+core of the first cpu merge (`e792960`). Every simulation run passes on both, and 43 of the
+44 riscv-formal checks on the current one; [section 12](#12-results) has the numbers.
 
 A pass is not a certification: it means the core and Spike, configured to our contract,
 agree on these programs. Simulation only; nothing here touches the board.
@@ -389,12 +390,13 @@ yosys-smtbmc with and without unrolling. `rvformal.py` removes sby's `skip` opti
 (the abc engine does not take it; riscv-formal asserts only in the last step anyway) and
 replays a failure's trace with z3 (sby's default, yices, is not in the container).
 
-On the core ([`formal.txt`](evidence/verif/formal.txt)): 43 of the 44 checks pass at their
-depths (21 frames for the instruction and illegal-instruction checks, 26 for causality,
-uniqueness and pc_bwd, 31 for liveness, 21 for pc_fwd, which takes 19 minutes there and did
-not finish at 26 frames in 40); `reg_ch0` did not finish (40 minutes at 26 frames, 25 at 21).
-These are bounded checks: no counterexample within that many cycles after reset, for any
-bus timing, read data and interrupt input the model allows. The first run, with a slave
+On the current core (`surfcpu` `231ad56`, [`formal.txt`](evidence/verif/formal.txt)) 43 of
+the 44 checks pass at their depths in 17 minutes with 4 jobs: 21 frames for the instruction
+and illegal-instruction checks (5 to 22 s each), 26 for causality, uniqueness and pc_bwd, 31
+for liveness, and 21 for pc_fwd (17 minutes; at 26 frames it did not finish in 40). The
+44th, `reg_ch0`, did not finish on the `e792960` core (40 minutes at 26 frames, 25 at 21) and
+was not run again. These are bounded checks: no counterexample within that many cycles after
+reset, for any bus timing, read data and interrupt input the model allows. The first run, with a slave
 that raised errors anywhere, failed `insn_lw`: the core took a load access fault on an
 error, as it must, where riscv-formal expected the load to complete. That is how the
 address rule came about, and putting random errors back makes `insn_lw` and `insn_sw` fail
@@ -442,16 +444,18 @@ Evidence with commands, seeds and counts: [`docs/evidence/verif/`](evidence/veri
 | Run | DUT | Result |
 |---|---|---|
 | `make test-ref` | Spike stand-in | 47 unit tests; CSR probe: patched Spike 0 of 5212 probes differ, stock Spike 423, all known; 177 arch tests built, 177/177 reference hashes as recorded; arch 177, csrmap 1, directed 7, random 12 pass (2,549,696 retirements); self-test 112/112; formal smoke |
-| all suites, 50 random seeds, DUT seeds 1,2,3, `--ilat 1:4 --dlat 1:6` (as `make test-cpu-ref`) | the core | arch 531, csrmap 3, directed 21, random 150 pass; 8,196,852 retirements |
+| `make test-cpu-ref`: all suites, 50 random seeds, DUT seeds 1,2,3, `--ilat 1:4 --dlat 1:6` | the core | arch 531, csrmap 3, directed 21, random 150 pass; 8,196,852 retirements |
 | all suites, 50 random seeds, DUT seed 1, default 1:1 | the core | arch 177, csrmap 1, directed 7, random 50 pass; 2,732,284 retirements |
 | all suites, random seeds 51-150, DUT seed 7, `--ilat 6:30 --dlat 6:30` | the core | arch 177, csrmap 1, directed 7, random 100 pass; 2,984,569 retirements |
 | random seeds 1001-2000, DUT seed 1, `--ilat 1:4 --dlat 1:6` | the core | 1000 pass; 5,120,980 retirements |
-| riscv-formal, 44 checks, ABC bmc3 | the core | 43 pass (42 at the configured depths in 40 minutes, `pc_fwd` at 21 frames in 19 minutes); `reg_ch0` did not finish |
+| riscv-formal, ABC bmc3 (`checks.cfg` as committed) | the core | 43 of 44 checks pass in 17 minutes (4 jobs); `reg_ch0` did not finish in 40 minutes (on the `e792960` core) |
 
-"The core" is the cpu track's `surfcpu_core` in `build/cpu/surfcpu_tb`, built from a read-only
-copy of `surfcpu` at `e792960` ([`core-results.txt`](evidence/verif/core-results.txt) has the
-build and the cycle measurements). The four core runs together: 2,225 runs, 19,034,685
-retirements, no failure, in 3 min 52 s with 3 jobs, leaving 2.5 MB on disk.
+"The core" is the cpu track's `surfcpu_core` in `build/cpu/surfcpu_tb` at `surfcpu`
+`231ad56`, built by `make test-cpu-ref` itself in the tree a merge of this branch would give
+(`git merge-tree`, exported; nothing was merged); the same simulation runs passed before on
+the `e792960` core. [`core-results.txt`](evidence/verif/core-results.txt) has the builds and
+the cycle measurements. The four simulation runs together: 2,225 runs, 19,034,685
+retirements, no failure, in under 4 minutes with 3 jobs, leaving under 2 MB on disk.
 
 Pending: InterruptsSm (needs a reference that models the testbench's interrupt register),
 riscv-formal's `reg_ch0` (a longer run or another solver) and its M instruction checks (need

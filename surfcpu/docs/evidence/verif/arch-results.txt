@@ -9,8 +9,9 @@ retirements on Spike: total 2451871, longest Sm_csr_ro-00 and Sm_csr_ro-01 (8336
 reference signatures: 177/177 as recorded in sim/ref/arch/reference.sha256
 runner against the Spike stand-in: arch 177 passed 0 failed; 2451871 retirements compared (make test-ref)
 
-on the real core (the cpu track's surfcpu_core, build and provenance in core-results.txt):
-  DUT seeds 1, 2, 3 with --ilat 1:4 --dlat 1:6     arch 531 passed 0 failed
+on the real core (the cpu track's surfcpu_core at surfcpu 231ad56 and, before, at e792960, the
+same results on both; builds and provenance in core-results.txt):
+  DUT seeds 1, 2, 3 with --ilat 1:4 --dlat 1:6     arch 531 passed 0 failed   (make test-cpu-ref)
   DUT seed 1, the testbench's default 1:1          arch 177 passed 0 failed
   DUT seed 7 with --ilat 6:30 --dlat 6:30          arch 177 passed 0 failed
   each: exit status 0 (the self-check found every result equal to Spike's signature) and, for the

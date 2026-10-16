@@ -1,4 +1,6 @@
 # riscv-formal on the real core, 2026-10-15/16 (all inside the toolchain container)
+# Sections 1-5: the core of surfcpu e792960 (how the configuration came about); section 6: the
+# current core, surfcpu 231ad56, with the configuration as committed.
 # riscv-formal commit c992aa61fdfe0846c5ed90324c596202a1c69b76 (tarball SHA-256 0e357116...e000),
 # yosys 0.52 with yosys-abc, sby, z3 4.13.3, boolector 1.5.118.
 # DUT: surfcpu_core (CPU_RTL of mk/area-cpu.mk, SURFCPU_RVFI) from the read-only copy of surfcpu at
@@ -89,3 +91,55 @@ What these mean: bounded model checks. Each PASS says no counterexample exists w
 (cycles after reset) for any bus timing the slaves allow, any read data and any interrupt input;
 they are not unbounded proofs. That a check can fail at all was shown for insn_lw and insn_sw (the
 mutation in 2); for the other checks no vacuity test was run.
+
+6. The current core: surfcpu 231ad56 (after the cpu review round) in the tree a merge of sc/verif
+   would give (git merge-tree, exported with git archive; nothing merged), checks.cfg as committed
+   (bmc3, pc_fwd at depth 20):
+   python3 tools/rvformal.py gen --root build/verif/merged/surfcpu
+   python3 tools/rvformal.py run -j 4 --timeout 1800 <every check but reg_ch0>
+rvformal: 43 passed, 0 not passed (1029 s, 4 jobs)
+   check            status  time  frames without a failing assertion
+  causal_ch0       PASS      5s  26
+  ill_ch0          PASS      5s  21
+  insn_add_ch0     PASS      7s  21
+  insn_addi_ch0    PASS      7s  21
+  insn_and_ch0     PASS      6s  21
+  insn_andi_ch0    PASS      6s  21
+  insn_auipc_ch0   PASS      7s  21
+  insn_beq_ch0     PASS      7s  21
+  insn_bge_ch0     PASS      7s  21
+  insn_bgeu_ch0    PASS      6s  21
+  insn_blt_ch0     PASS      7s  21
+  insn_bltu_ch0    PASS      7s  21
+  insn_bne_ch0     PASS      7s  21
+  insn_jal_ch0     PASS      7s  21
+  insn_jalr_ch0    PASS      6s  21
+  insn_lb_ch0      PASS     18s  21
+  insn_lbu_ch0     PASS     21s  21
+  insn_lh_ch0      PASS     21s  21
+  insn_lhu_ch0     PASS     19s  21
+  insn_lui_ch0     PASS      6s  21
+  insn_lw_ch0      PASS     22s  21
+  insn_or_ch0      PASS      6s  21
+  insn_ori_ch0     PASS      6s  21
+  insn_sb_ch0      PASS     19s  21
+  insn_sh_ch0      PASS     21s  21
+  insn_sll_ch0     PASS      6s  21
+  insn_slli_ch0    PASS      6s  21
+  insn_slt_ch0     PASS      6s  21
+  insn_slti_ch0    PASS      5s  21
+  insn_sltiu_ch0   PASS      6s  21
+  insn_sltu_ch0    PASS      6s  21
+  insn_sra_ch0     PASS      6s  21
+  insn_srai_ch0    PASS      6s  21
+  insn_srl_ch0     PASS      6s  21
+  insn_srli_ch0    PASS      6s  21
+  insn_sub_ch0     PASS      6s  21
+  insn_sw_ch0      PASS     19s  21
+  insn_xor_ch0     PASS      6s  21
+  insn_xori_ch0    PASS      7s  21
+  liveness_ch0     PASS      4s  31
+  pc_bwd_ch0       PASS      6s  26
+  pc_fwd_ch0       PASS   1028s  21
+  unique_ch0       PASS      4s  26
+  reg_ch0          not run (it did not finish on the e792960 core in 40 minutes)

@@ -1,12 +1,14 @@
-# Random programs on the real core, 2026-10-15
-# python3 tools/rvrun.py --dut build/verif/core-snapshot/surfcpu/build/cpu/surfcpu_tb --suites random \
-#     --seed-list 1001,...,2000 --dut-seeds 1 --ilat 1:4 --dlat 1:6 --coverage --jobs 3
+# Random programs on the real core, 2026-10-15/16
+# python3 tools/rvrun.py --dut $TB --suites random --seed-list 1001,...,2000 --dut-seeds 1 \
+#     --ilat 1:4 --dlat 1:6 --coverage --jobs 3
 # generator: tools/rvgen.py (rvgen 2: 16-bit encodings with any upper half), --length 3000 (static
-# instructions in the body); reference: Spike with surfcpu-contract.patch; DUT: the cpu track's core
-# (docs/evidence/verif/core-results.txt says which build). Traces of passing runs and the passing
-# programs' files are deleted as the run goes; nothing failed, so nothing was kept.
+# instructions in the body); reference: Spike with surfcpu-contract.patch; DUT: the cpu track's core,
+# the current one (surfcpu 231ad56) and before it e792960 (docs/evidence/verif/core-results.txt says
+# which builds). Traces of passing runs and the passing programs' files are deleted as the run goes;
+# nothing failed, so nothing was kept.
 
-rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 58.0 s
+current core:  rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 54.4 s
+e792960 core:  rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 58.0 s
 
 what Spike's 1000 traces contain (the runner's --coverage, counted in memory):
   5120980 retirements
