@@ -294,6 +294,13 @@ notes the task count and the kernel heap's use over the soak. Over an hour the t
 long: the evidence keeps its first and last 2000 lines and the whole of it goes to
 `build/board-test/`.
 
+With a release (RELEASE.md section 10): the release's `surfcpu_arty_a7_ddr` bitstream in the
+flash, its `card/BOOT` files on the card, and `ARGS="--manifest
+build/release/<name>/fpga/<board>/surfcpu_arty_a7_ddr/manifest.txt --kernel
+build/release/<name>/SURFOS.BIN"`. The open flow's bitstreams load from the flash at about 3 MHz,
+one bit at a time: SurfBoot starts about 10 s after power-on on a 100T (6 s on a 35T), well
+inside the 60 s the script waits for the kernel's load (RELEASE.md section 6).
+
 On the RTL system (two cold boots, each a new surfsim run, and a one-minute soak), PASS in about
 3 minutes:
 

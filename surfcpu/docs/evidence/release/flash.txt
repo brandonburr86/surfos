@@ -1,0 +1,101 @@
+SurfCPU release: the QSPI flash images, the configuration options, programming with the fake programmer
+2026-10-16, release track, on the release 1.0.0-pre-bb066932 (commit bb066932, release.txt in this
+directory); docs/RELEASE.md sections 6 and 7. Nothing was written to a real flash: tools/program.sh
+ran with OPENFPGALOADER set to the board tests' fake (sim/board/tools/fake/openFPGALoader), which logs
+its calls and programs nothing; no board was connected.
+
+Sources for the facts below (read 2026-10-16):
+  AMD UG470 v1.17 (2023-12-05), 7 Series FPGAs Configuration: figure 2-13 note 2 ("The CCLK frequency
+    starts at 3 MHz typical ... increases if the ConfigRate option is utilized"); table 5-25 (command
+    codes, BSPI_READ 10010, IPROG 01111); table 5-27 (CTL0 bit 10 ConfigFallback, 1 = disabled);
+    chapter 7 (MultiBoot: fallback on an IDCODE error, a CRC error or a watchdog time-out; embedded
+    IPROG ignored during fallback; "for SPI configuration mode, fallback loading of the golden images
+    always uses the x1 configuration mode").
+  AMD UG470 v1.10 (2015-06-24): table 1-1 (standard bitstream lengths: 7A35T 17,536,096 bits, 7A100T
+    30,606,304); table 5-19 (a Vivado bitstream: the TIMER, WBSTAR and NULL-command placeholders for
+    MultiBoot, the CRC checks); table 5-41 (BSPI: SPI_buswidth [9:8], SPI_read_opcode [7:0]); tables
+    5-30/5-31 (COR0, OSCFSEL [22:17] "Select CCLK frequency in Master modes (2 MHz - 60 MHz)").
+  Digilent Arty A7 reference manual (the board track's cached copy): section 4 (JP1 MODE selects
+    configuration from the Quad-SPI flash at power-up; "Not setting the mode jumper is useful to
+    prevent the FPGA from being configured from Quad-SPI Flash until a JTAG programming occurs";
+    JTAG works whatever JP1 is), 4.2 ("x1, x2, and x4 bus widths and data rates of up to 50 MHz";
+    "less than a second" with the Xilinx tools' settings), 5.2 (128 Mbit, N25Q128A13ESF40).
+  openFPGALoader master, src/xilinx.cpp: reverse = true only for MEM_MODE (JTAG load) and XCF PROMs,
+    so a .bit written to an SPI flash is its data after the header, bits as they are; a .bin goes
+    through RawParser the same way; the flash is reached through the spiOverJtag bridge bitstream
+    loaded over JTAG. src/bitparser.cpp: the data after field e, its length from field e.
+    src/spiFlash.cpp: "JEDEC ID: 0x..." and "Detected: <maker> <model> ..." for a known part;
+    64 KiB block erases (4 KiB where the part has them); a protected range is refused unless
+    --unprotect-flash; --verify reads back and compares.
+  The pinned image surfcpu-openxc7:2026-10-15: xc7frames2bit --helpfull lists only --architecture,
+    --frm_file, --output_file, --part_file and --part_name: no configuration options.
+
+== tools/bitfile.py info and flash on the release's flash images (paths shortened)
+
+== arty_a7_100t surfcpu_arty_a7_top
+<release>/fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit: .bit header: design 'build/fpga/arty_a7_100t/surfcpu_arty_a7_top/openxc7/surfcpu_arty_a7_top.frames;Generator=xc7frames2bit', part xc7a100tcsg324-1, 2026/10/16 14:33:34; stream 3,825,788 bytes from byte 170
+  IDCODE written: 0x03631093
+  COR0 = 0x02003fe5: OSCFSEL 0 (start-up rate, about 3 MHz)
+  BSPI: not written, so SPI x1 with the start-up read command (no x2/x4 switch)
+  TIMER = 0x00000000: watchdog off
+  WBSTAR = 0x00000000; IPROG absent (MultiBoot: none)
+  CTL0 = 0x00000501: ConfigFallback disabled (bit 10, UG470 v1.17 table 5-27)
+  CRC checks: 0 (the FPGA cannot catch a corrupted stream)
+  commands: NULL RCRC SWITCH WCFG RCRC GRESTORE LFRM START RCRC DESYNC
+  configuration time from the flash, 30,606,304 bits (plus power-on reset and initialization):
+    x1 at the start-up rate (3 MHz typical): the open flow's bitstreams  10.202 s
+    x1 at 33 MHz                                                     0.927 s
+    x2 at 33 MHz                                                     0.464 s
+    x4 at 33 MHz                                                     0.232 s
+    x4 at 50 MHz                                                     0.153 s
+  as built: x1 at about 3 MHz: 10.20 s (3 MHz is typical; the internal oscillator's tolerance, DS181 F_MCCKTOL, stretches it)
+flash image 1.0.0-pre-bb066932/flash/arty_a7_100t/surfcpu_arty_a7_top.bin: 3,825,788 bytes; equal to the .bit after its 170-byte header: True
+QSPI flash image for arty_a7_100t (xc7a100tcsg324-1): 3,825,788 bytes = 30,606,304 bits, the standard length of the xc7a100t (UG470 table 1-1)
+  0x000000-0x3A607B  the configuration stream (slot 0: the FPGA reads from address 0 at power-on)
+  0x3A607C-0x3FFFFF  rest of slot 0, unused (erased with the image up to 0x3AFFFF with 64 KiB sectors, 0x3BFFFF with 256 KiB ones)
+  0x400000-0xFFFFFF  free (12 MiB): nothing of SurfCPU's (no MultiBoot update image; docs/RELEASE.md section 7)
+
+== arty_a7_35t surfcpu_arty_a7_top
+<release>/fpga/arty_a7_35t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit: .bit header: design 'build/fpga/arty_a7_35t/surfcpu_arty_a7_top/openxc7/surfcpu_arty_a7_top.frames;Generator=xc7frames2bit', part xc7a35tcsg324-1, 2026/10/16 14:33:34; stream 2,192,012 bytes from byte 168
+  IDCODE written: 0x0362d093
+  COR0 = 0x02003fe5: OSCFSEL 0 (start-up rate, about 3 MHz)
+  BSPI: not written, so SPI x1 with the start-up read command (no x2/x4 switch)
+  TIMER = 0x00000000: watchdog off
+  WBSTAR = 0x00000000; IPROG absent (MultiBoot: none)
+  CTL0 = 0x00000501: ConfigFallback disabled (bit 10, UG470 v1.17 table 5-27)
+  CRC checks: 0 (the FPGA cannot catch a corrupted stream)
+  commands: NULL RCRC SWITCH WCFG RCRC GRESTORE LFRM START RCRC DESYNC
+  configuration time from the flash, 17,536,096 bits (plus power-on reset and initialization):
+    x1 at the start-up rate (3 MHz typical): the open flow's bitstreams   5.845 s
+    x1 at 33 MHz                                                     0.531 s
+    x2 at 33 MHz                                                     0.266 s
+    x4 at 33 MHz                                                     0.133 s
+    x4 at 50 MHz                                                     0.088 s
+  as built: x1 at about 3 MHz: 5.84 s (3 MHz is typical; the internal oscillator's tolerance, DS181 F_MCCKTOL, stretches it)
+flash image 1.0.0-pre-bb066932/flash/arty_a7_35t/surfcpu_arty_a7_top.bin: 2,192,012 bytes; equal to the .bit after its 168-byte header: True
+QSPI flash image for arty_a7_35t (xc7a35tcsg324-1): 2,192,012 bytes = 17,536,096 bits, the standard length of the xc7a35t (UG470 table 1-1)
+  0x000000-0x21728B  the configuration stream (slot 0: the FPGA reads from address 0 at power-on)
+  0x21728C-0x3FFFFF  rest of slot 0, unused (erased with the image up to 0x21FFFF with 64 KiB sectors, 0x23FFFF with 256 KiB ones)
+  0x400000-0xFFFFFF  free (12 MiB): nothing of SurfCPU's (no MultiBoot update image; docs/RELEASE.md section 7)
+
+== tools/program.sh flash with the fake openFPGALoader (sim/board/tools/fake; nothing is programmed)
+-- SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t <release>/fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+program: JTAG: IDCODE 0x13631093 = BOARD arty_a7_100t (xc7a100tcsg324-1)
+program: writing <release>/fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit to the configuration flash of arty_a7_100t
+program: flash written and verified; set the MODE jumper (JP1) to boot from it
+   calls to the fake openFPGALoader:
+     openFPGALoader --scan-usb
+     openFPGALoader -c digilent --detect
+     openFPGALoader -b arty_a7_100t -f --verify <release>/fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+-- tools/program.sh flash arty_a7_100t <the same> (no confirmation)
+program: JTAG: IDCODE 0x13631093 = BOARD arty_a7_100t (xc7a100tcsg324-1)
+program: not confirmed: writing the configuration flash needs SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t (or the prompt); refusing
+   calls to the fake openFPGALoader:
+     openFPGALoader --scan-usb
+     openFPGALoader -c digilent --detect
+-- SURFCPU_FLASH_CONFIRM=... tools/program.sh flash arty_a7_100t <release>/flash/arty_a7_100t/surfcpu_arty_a7_top.bin
+program: JTAG: IDCODE 0x13631093 = BOARD arty_a7_100t (xc7a100tcsg324-1)
+program: <release>/flash/arty_a7_100t/surfcpu_arty_a7_top.bin has no .bit header naming its part (a raw .bin, or a damaged file?); refusing
+   calls to the fake openFPGALoader:
+     openFPGALoader --scan-usb
+     openFPGALoader -c digilent --detect

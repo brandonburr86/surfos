@@ -1,0 +1,52 @@
+SurfCPU release tooling: tools/release-test.py (docs/RELEASE.md section 9)
+2026-10-16, release track. make test-release (in the toolchain image, Python 3.13, on make check):
+  test_flash_cli (__main__.TestBitfile.test_flash_cli) ... ok
+  test_self_test (__main__.TestBitfile.test_self_test) ... ok
+  test_all_match (__main__.TestCompare.test_all_match) ... ok
+  test_causes (__main__.TestCompare.test_causes) ... ok
+  test_frames_and_records (__main__.TestCompare.test_frames_and_records) ... ok
+  test_not_rebuilt (__main__.TestCompare.test_not_rebuilt) ... ok
+  test_complete (__main__.TestMake.test_complete) ... ok
+  test_ddr_failure (__main__.TestMake.test_ddr_failure) ... ok
+  test_other_failure (__main__.TestMake.test_other_failure) ... ok
+  test_refusals (__main__.TestMake.test_refusals) ... ok
+  test_confirmed_write (__main__.TestProgramFlash.test_confirmed_write) ... ok
+  test_refusals (__main__.TestProgramFlash.test_refusals) ... ok
+  test_volatile_never_flash (__main__.TestProgramFlash.test_volatile_never_flash) ... ok
+  test_parse_as_python_3_9 (__main__.TestPython39.test_parse_as_python_3_9) ... ok
+  test_fpga_manifest (__main__.TestToml.test_fpga_manifest) ... ok
+  test_round_trip (__main__.TestToml.test_round_trip) ... ok
+  Ran 16 tests in 4.185s
+  OK
+
+make release-selftest PYTHON_HOST=/usr/bin/python3 (the Mac's own Python 3.9.6):
+  Ran 16 tests in 8.466s
+  OK
+make release-selftest (python3 on this PATH: Homebrew's 3.14.7):
+  Ran 16 tests in 8.887s
+  OK
+  (the same 16 tests each time)
+
+tools/bitfile.py self-test (part of TestBitfile):
+  ok   header fields read
+  ok   field e is the stream length
+  ok   stamp keeps the length and the stream
+  ok   stamp writes the epoch's UTC date and time
+  ok   stamp is idempotent
+  ok   two builds at different times are the same bytes once stamped
+  ok   stamp refuses a file without a header
+  ok   sync word and packets parsed
+  ok   COR0 and the x1 default read
+  ok   TIMER and WBSTAR placeholders, no IPROG, no CRC check
+  ok   CTL0 0x501: ConfigFallback disabled
+  ok   commands up to DESYNC
+  ok   a BSPI x4 write is read
+  ok   the flash image is the stream after the header (what openFPGALoader -f writes)
+  ok   the image goes at address 0
+  ok   flash refuses another part
+  ok   flash refuses another IDCODE
+  ok   flash refuses no header
+  ok   the 35T takes the open flow's xc7a35tcsg324-1 header
+  ok   100T at x1, 3 MHz: 10.2 s
+  ok   100T at x4, 33 MHz: 0.23 s
+  bitfile self-test: PASS

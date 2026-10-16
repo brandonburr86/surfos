@@ -1,0 +1,177 @@
+SurfCPU release 1.0.0-pre-bb066932: made from a fresh checkout (milestone 9)
+2026-10-16, release track, MacBook Pro M4 Max, Docker Desktop (14 CPUs, 7.7 GiB), other agents' open-flow
+builds running at the same time (two or three surfcpu-openxc7 containers most of the run).
+
+Command: tools/fresh-checkout.sh --commit bb06693 --keep -- PRERELEASE=1
+  (a git clone of the branch at bb06693 in a new directory, the images as they are, then
+  `make -C surfcpu release PRERELEASE=1` there; docs/RELEASE.md sections 3 and 5)
+Result: a pre-release, 18 artifacts. The six HAS_DDR=0 bitstreams passed every gate. The four DDR
+designs are missing: their generated LiteDRAM core failed make litedram-gen's own lock check, so they
+were not built (the reason printed below comes from bb066932's release.py; the tool now names the
+lock check, c7c6b23). Why the generated core differed: determinism.txt section 6. With a core that
+passes the check they would stop at nextpnr's timing for LiteDRAM's clock (BOARD.md section 8).
+Time: 53 minutes (the SoC bitstreams 10 to 17 minutes each, most of it the LVS proof, slower while
+other builds ran). Disk: the bitstream builds 474 MB, LiteDRAM's sources 200 MB, the release 27 MB.
+
+== the run (paths shortened: <clone> is the clone, <scratch> the work directory)
+fresh-checkout: 2026-10-16T14:33:42Z: commit bb06693218dc5da7f5c365b24ccf0fa3341ae410 of <this worktree>, in <clone>
+fresh-checkout: cloned: bb06693 2026-10-16 09:33:34 -0500 release compare: designs the new release did not attempt are "not rebuilt", not missing (1 s)
+fresh-checkout: image surfcpu-toolchain:2026-10-15 present: sha256:e4389c3c6d9349dd5270223947f4caf58aada608b7ba3e0fcf21b03ad85fef55
+fresh-checkout: image surfcpu-openxc7:2026-10-15 present: sha256:b802ed1bac370d991addab18ddf9529d16e4bcaa93c457eb1941c59cb236b2f0
+fresh-checkout: make -C surfcpu release PRERELEASE=1
+release: SurfCPU 1.0.0 at bb066932 (commit time 2026-10-16T14:33:34Z = SOURCE_DATE_EPOCH 1792161214), clean tree
+release: images: surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d93), surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37)
+release: plan: 10 bitstreams; logs in <clone>/surfcpu/build/release/1.0.0-pre-bb066932.logs
+release: [1/11] the software (make build-rom build-kernel, from empty output directories)
+release: software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build bb066932 (12 s)
+release: [2/11] arty_a7_baseline for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (21 s): wns 32.43 ns, sha256 95390240c610c9b8...
+release: [3/11] arty_a7_baseline for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (17 s): wns 32.767 ns, sha256 2e0b35f6efacea85...
+release: [4/11] surfcpu_arty_a7_bramdiag for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (17.4 min): wns 24.166 ns, sha256 e97c49047d06ad9d...
+release: [5/11] surfcpu_arty_a7_bramdiag for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (13.0 min): wns 24.297 ns, sha256 910bae4a44cdb24d...
+release: [6/11] surfcpu_arty_a7_top for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (10.4 min): wns 25.083 ns, sha256 5538b8b9ead58fdf...
+release: [7/11] surfcpu_arty_a7_top for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (11.0 min): wns 25.009 ns, sha256 cf13d11c04a742c6...
+release: [8/11] surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release: make litedram-gen failed (exit 2; it fetches pinned sources the first time):
+    | vendor primitives: none
+    | adapter assumptions: hold (24-bit beat address, 128-bit data, 16 byte enables)
+    | VexRiscv_Lite.v (the arty core's calibration CPU, the lite variant, read beside it): sha256 90e0b8f5912df2532d12bc766b110a632c1b85dd82b8aecd431d715c25f4cbbe
+    | == the simulation core (arty_sim) against the bitstream's core (arty)
+    | configuration: build/litedram/arty_sim/config.yml is ip/litedram/arty.yml but for: cpu 'vexriscv' -> None, uart 'rs232' -> '<absent>'
+    | PHY settings the same (sdram_phy.h): CL=6, CWL=5, DATABITS=16, DDR3, DFI_DATABITS=32, DQ_DQS_RATIO=8, MODULES=2, PHASES=4, SUPPORTED_MEMORY=0x0000000010000000ULL, WRPHASE=3, XDR=2
+    | PHY settings that differ (board -> simulation): A7DDRPHY set -> <absent>, BITSLIPS 8 -> <absent>, CMD_LATENCY 0 -> <absent>, DELAYS 32 -> <absent>, RDPHASE 3 -> 2, READ_LEVELING_CAPABLE set -> <absent>, SDRAMPHYMODEL <absent> -> set
+    | DRAM initialization sequence: identical (4 mode register loads, the same values and waits)
+    | sim/board/stubs/litedram_core.v: the board core's 35 ports exactly
+    | estimate (yosys synth_xilinx, litedram_core + VexRiscv): LUTs 5492, flip-flops 3361, RAM32M 56, RAMB18E1 17, RAMB36E1 2
+    | lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92cd190648ca072ba4169125aefbfed946ecbf641d292989564ea8c9c6bfae, arty.sha256 has 150b86df5d61bb67ef4983d26e0a6528b41d5dacdf38883b23795ded09a325f4)
+    | lock.sh: the generated LiteDRAM files do not match ip/litedram/arty.sha256: regenerate them
+    | lock.sh: (make litedram-gen); if the generator, arty.yml or the image changed on purpose,
+    | lock.sh: record the new files with ip/litedram/lock.sh write and commit arty.sha256
+    | make: *** [mk/area-ddr.mk:142: litedram-gen] Error 1
+release:     FAIL (41 s): make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+release: [9/11] surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     FAIL (0 s): make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+release: [10/11] surfcpu_arty_a7_ddr for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     FAIL (0 s): make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+release: [11/11] surfcpu_arty_a7_ddr for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     FAIL (0 s): make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+release: written <clone>/surfcpu/build/release/1.0.0-pre-bb066932: PRE-RELEASE, without:
+    surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+    surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+    surfcpu_arty_a7_ddr for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+    surfcpu_arty_a7_ddr for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+release: 18 artifacts in SHA256SUMS (check: cd <clone>/surfcpu/build/release/1.0.0-pre-bb066932 && shasum -a 256 -c SHA256SUMS); 53.3 min in all
+fresh-checkout: make release: exit status 0 (3200 s)
+fresh-checkout: release: <clone>/surfcpu/build/release/1.0.0-pre-bb066932
+  release = "1.0.0-pre-bb066932"
+  status = "prerelease"
+  commit = "bb06693218dc5da7f5c365b24ccf0fa3341ae410"
+  status = "built"
+  status = "built"
+  status = "built"
+  status = "built"
+  status = "built"
+  status = "built"
+  status = "missing"
+  status = "missing"
+  status = "missing"
+  status = "missing"
+fresh-checkout: done in 3200 s
+fresh-checkout: evidence in <scratch>/runA-evidence.txt
+fresh-checkout: kept <scratch>/runA
+
+== SHA256SUMS
+d38c6410f78a82feecd7099741449e3e275c1b48d1be2d78400775d47e181e61  DDRDIAG.BIN
+f394a4676d0b85254e54d11c2cbbb433a0be85073f01e3b952ec099532458b04  SURFOS.BIN
+b495040286e1ae28cabcf78b68430b36737dbfc64f3033ac26584c961f100253  card/BOOT/CMDLINE.TXT
+f394a4676d0b85254e54d11c2cbbb433a0be85073f01e3b952ec099532458b04  card/BOOT/SURFOS.BIN
+6db7d5f5efee22a02a2236466d5fe2983c068cf6adf1e740a5498f9edf765bb3  debug/bramdiag.elf
+ba6fc87ccf45320bc39b0696dd3910e57dde29d270dec10cba821b06692d0fec  debug/ddrdiag.elf
+9c86b7b44f006059bab360c1f2171a6344d3be6c650ddc0a65c23a30ef4653c4  debug/surfboot.elf
+480f020dca301f65a345db28cb837ce20cf533c09e763456cf5e73f1618e7e4f  debug/surfos.elf
+5b59d4c8cd7bdcbcd5803def2fced75c571f2dd26d3dfe02073a8c61fe52aa37  flash/arty_a7_100t/surfcpu_arty_a7_top.bin
+28d93329c934745070dd7da19af19a1f3c623edee19f79da3a017c5ef95bf8be  flash/arty_a7_35t/surfcpu_arty_a7_top.bin
+95390240c610c9b841d7d850c8d0540bb209bd32d1380a25bce3ae7e8d07f4e6  fpga/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
+e97c49047d06ad9d800eba26a4e1e5a5b6d8f2e490c7dae653e4fca3799c5518  fpga/arty_a7_100t/surfcpu_arty_a7_bramdiag/surfcpu_arty_a7_bramdiag.bit
+5538b8b9ead58fdf66844b2f2495ca92f97088f5e829092a987fa926c08fce79  fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+2e0b35f6efacea8583ed94c46ba4d954f6ecc378feb6f5d7bf60d66874e2bef3  fpga/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit
+910bae4a44cdb24d2df4acb8d2e1aca751015342b61d7519f387825fe422c92b  fpga/arty_a7_35t/surfcpu_arty_a7_bramdiag/surfcpu_arty_a7_bramdiag.bit
+cf13d11c04a742c613311c61207b359dddb46a290742bb5c7f7d19a30e59cef1  fpga/arty_a7_35t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+5c3ef1f87d05e5c609efe6f8b619a07957aea4f5b630d48db2c9743e545b54df  rom/bramdiag.mem
+af1e73a59db7562d11c8be1e334b73dd4af25d75ec447cd1ca4936b4ed67f20c  rom/surfboot.mem
+
+== MANIFEST: the release, the commit, the images, the contracts
+release = '1.0.0-pre-bb066932'
+version = '1.0.0'
+status = 'prerelease'
+complete = False
+commit = 'bb06693218dc5da7f5c365b24ccf0fa3341ae410'
+source_date_epoch = 1792161214
+commit_time_utc = '2026-10-16T14:33:34Z'
+tree_clean = True
+flash_boot_design = 'surfcpu_arty_a7_ddr'
+card_cmdline = 'sd=rw'
+missing:
+   surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+   surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+   surfcpu_arty_a7_ddr for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+   surfcpu_arty_a7_ddr for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+[tools]
+  toolchain_image = surfcpu-toolchain:2026-10-15
+  toolchain_image_id = sha256:e4389c3c6d9349dd5270223947f4caf58aada608b7ba3e0fcf21b03ad85fef55
+  openxc7_image = surfcpu-openxc7:2026-10-15
+  openxc7_image_id = sha256:b802ed1bac370d991addab18ddf9529d16e4bcaa93c457eb1941c59cb236b2f0
+  nextpnr_threads = 4
+  locale = LC_ALL=C TZ=UTC
+[contracts]
+  spec = spec/soc.toml
+  spec_sha256 = 0e6b7bac9e8e171a09d8cf0bac6b372e15ca7dde6f80334768b69f006d003508
+  map_version = 1
+  soc_version = 0.1.0
+  isa = rv32im_zicsr_zifencei
+  abi = ilp32
+  image_header_version = 1
+  bootinfo_version = 1
+  platform_abi = 1
+  docs/SURFBUS.md = version 1, sha256 fd16659c1404b8a62ad2d46ac1be99fdeb83c1dd959333f8dd8a7d70ee616654
+  docs/ISA.md = version 1, sha256 ba91ec607e916b8716ed2647fdb2af515cc7211f6b8449f5117e51839d7b9372
+  docs/BOOT-ABI.md = version 1, sha256 d496173bddb8e087bac142ed073c2c1a7caeea10a3ceb86f4a44704b7a011e32
+  docs/MODULES.md = version 1, sha256 5a2ecb0309bf40398ca94d3c64654bd47f601db82f2aed15bc4deadb874243cf
+  docs/MEMORY-MAP.md = version 1, sha256 6dbbd8bba7a52eaa458d38f715a37a483fcfe63dc6f2b78668b0c8f972959f90
+designs:
+  arty_a7_baseline arty_a7_100t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram none in the design, lvs PASS, clocks PASS, netlist PASS; wns 32.43 ns; lut 295 / 63400, ff 412 / 126800, bram36 0 / 135, dsp 0 / 240
+      clock pix_clk: constraint 25.17 MHz, achieved 207.30 MHz, slack +34.900 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 132.10 MHz, slack +32.430 ns  PASS
+  arty_a7_baseline arty_a7_35t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram none in the design, lvs PASS, clocks PASS, netlist PASS; wns 32.767 ns; lut 302 / 20800, ff 412 / 41600, bram36 0 / 50, dsp 0 / 90
+      clock pix_clk: constraint 25.17 MHz, achieved 206.53 MHz, slack +34.882 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 138.26 MHz, slack +32.767 ns  PASS
+  surfcpu_arty_a7_bramdiag arty_a7_100t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram PASS, lvs PASS, clocks PASS, netlist PASS, boot_rom PASS; wns 24.166 ns; lut 4282 / 63400, ff 2666 / 126800, bram36 36 / 135, dsp 4 / 240
+      clock pix_clk: constraint 25.17 MHz, achieved 148.61 MHz, slack +32.995 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 63.16 MHz, slack +24.166 ns  PASS
+  surfcpu_arty_a7_bramdiag arty_a7_35t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram PASS, lvs PASS, clocks PASS, netlist PASS, boot_rom PASS; wns 24.297 ns; lut 4275 / 20800, ff 2666 / 41600, bram36 36 / 50, dsp 4 / 90
+      clock pix_clk: constraint 25.17 MHz, achieved 154.77 MHz, slack +33.263 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 63.68 MHz, slack +24.297 ns  PASS
+  surfcpu_arty_a7_top arty_a7_100t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram PASS, lvs PASS, clocks PASS, netlist PASS, boot_rom PASS; wns 25.083 ns; lut 4209 / 63400, ff 2666 / 126800, bram36 36 / 135, dsp 4 / 240
+      clock pix_clk: constraint 25.17 MHz, achieved 163.40 MHz, slack +33.604 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 67.04 MHz, slack +25.083 ns  PASS
+  surfcpu_arty_a7_top arty_a7_35t: built; synthesis PASS, bitstream PASS, round_trip PASS, block_ram PASS, lvs PASS, clocks PASS, netlist PASS, boot_rom PASS; wns 25.009 ns; lut 4192 / 20800, ff 2666 / 41600, bram36 36 / 50, dsp 4 / 90
+      clock pix_clk: constraint 25.17 MHz, achieved 131.67 MHz, slack +32.129 ns  PASS
+      clock sys_clk: constraint 25.00 MHz, achieved 66.71 MHz, slack +25.009 ns  PASS
+  surfcpu_arty_a7_ddr_bramdiag arty_a7_100t: MISSING: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+  surfcpu_arty_a7_ddr_bramdiag arty_a7_35t: MISSING: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+  surfcpu_arty_a7_ddr arty_a7_100t: MISSING: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+  surfcpu_arty_a7_ddr arty_a7_35t: MISSING: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time)
+
+== make release-check
+ok   rom/surfboot.mem
+1.0.0-pre-bb066932: prerelease (missing: surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time); surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time); surfcpu_arty_a7_ddr for arty_a7_100t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time); surfcpu_arty_a7_ddr for arty_a7_35t: did not build: make litedram-gen failed (exit 2; it fetches pinned sources the first time))
+check: PASS: 18 artifacts
+
+== the DDR builds' logs (the end of each)
+-- litedram-gen.txt
+

@@ -5,7 +5,8 @@ PYTHON_HOST ?= python3
 BOARD       ?= arty_a7_100t
 
 .PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga \
-        board-test board-test-selftest uart-list uart-console
+        board-test board-test-selftest uart-list uart-console release release-verify release-check \
+        fresh-checkout release-selftest
 
 help:
 	@sed -n '3,15p' Makefile | sed 's/^# //'
@@ -14,6 +15,8 @@ help:
 	@echo "bitstream flow's image, for make build-fpga FLOW=openxc7), make doctor (check everything)."
 	@echo "Details: docs/COMMANDS.md"
 	@echo "Board tests: make board-test M=m1 (m1 m3 m5 m7 m8 m9; docs/PHYSICAL-TESTS.md), make uart-console."
+	@echo "Release: make release [PRERELEASE=1], make release-verify RELEASE=build/release/<name>,"
+	@echo "make fresh-checkout REFERENCE=build/release/<name> (docs/RELEASE.md)."
 
 doctor:
 	@$(PYTHON_HOST) tools/doctor.py $(if $(JSON),--json)
@@ -63,3 +66,44 @@ uart-console:
 
 board-test-selftest:
 	@$(PYTHON_HOST) sim/soc/tools/kit_test.py --set fake --work build/os/kit-mac
+
+# The reproducible release (milestone 9, docs/RELEASE.md), on the Mac; the builds run in the images.
+#   make release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=a,b] [BOARDS=a,b] [FORCE=1]
+#                    from a clean tree only, SOURCE_DATE_EPOCH = the commit's time: every artifact,
+#                    SHA256SUMS and MANIFEST in build/release/<version>-<commit>/ (a pre-release, named
+#                    <version>-pre-<commit>, only with PRERELEASE=1)
+#   make release-verify RELEASE=build/release/<name> [DESIGNS=..] [BOARDS=..] [KEEP=1] [REPORT=file]
+#                    rebuild from a pristine copy of the release's commit and compare byte for byte
+#   make release-check RELEASE=build/release/<name>   its files against SHA256SUMS and MANIFEST
+#   make fresh-checkout [COMMIT=..] [REFERENCE=build/release/<name>] [EVIDENCE=file] [KEEP=1]
+#                       [ARGS="PRERELEASE=1 SKIP_DDR=1"]
+#                    clone, follow docs/RELEASE.md, make the release, compare it with REFERENCE
+#   make release-selftest   tools/release-test.py with the Mac's own python3 (make check runs it in the
+#                    container; the release itself runs on the Mac, whose paths and Python differ)
+release:
+	@$(PYTHON_HOST) tools/release.py make $(if $(filter 1,$(PRERELEASE)),--prerelease) \
+	    $(if $(filter 1,$(SKIP_DDR)),--skip-ddr) $(if $(DESIGNS),--designs "$(DESIGNS)") \
+	    $(if $(BOARDS),--boards "$(BOARDS)") $(if $(filter 1,$(FORCE)),--force)
+
+release-verify:
+ifeq ($(RELEASE),)
+	@echo "release-verify: name the release: make release-verify RELEASE=build/release/<version>-<commit>"; exit 2
+else
+	@$(PYTHON_HOST) tools/release.py verify "$(RELEASE)" $(if $(DESIGNS),--designs "$(DESIGNS)") \
+	    $(if $(BOARDS),--boards "$(BOARDS)") $(if $(filter 1,$(KEEP)),--keep) $(if $(REPORT),--report "$(REPORT)")
+endif
+
+release-check:
+ifeq ($(RELEASE),)
+	@echo "release-check: name the release: make release-check RELEASE=build/release/<version>-<commit>"; exit 2
+else
+	@$(PYTHON_HOST) tools/release.py check "$(RELEASE)"
+endif
+
+fresh-checkout:
+	@tools/fresh-checkout.sh $(if $(COMMIT),--commit "$(COMMIT)") $(if $(REFERENCE),--reference "$(REFERENCE)") \
+	    $(if $(EVIDENCE),--evidence "$(EVIDENCE)") $(if $(filter 1,$(KEEP)),--keep) -- $(ARGS)
+
+release-selftest:
+	@mkdir -p build/release-test; $(PYTHON_HOST) tools/release-test.py > build/release-test/mac.txt 2>&1; s=$$?; \
+	    grep -E '^(Ran|OK|FAILED|FAIL:|ERROR:)' build/release-test/mac.txt; exit $$s
