@@ -567,6 +567,13 @@ check "seeds: placements that miss a clock are followed by the next seed, whose 
 check "seeds: ... and the manifest records every attempt" \
     test "$(sed -n '/^placer_attempts = \[/,/^\]/p' "$gd/manifest.txt" | grep -c '"seed [0-9]*: ')" -eq 3 -a \
          -n "$(grep '"seed 2: fail (nextpnr exit 1), routed; .dram_clk.: 72.98 MHz (FAIL at 80.00 MHz)' "$gd/manifest.txt")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_FAIL_SEEDS="5" \
+    PLACER_SEEDS="5,6" SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: PLACER_SEEDS replaces the design's list for one build, and the manifest says so" \
+    eval "test $rc -eq 0 && grep -q -- '--seed 5,6' '$FAKE_LOG' && grep -q '^placer_seeds = \[5, 6, \]$' '$gd/manifest.txt' && grep -q '^placer_seeds_from = \"PLACER_SEEDS\"$' '$gd/manifest.txt' && grep -q '^placer_seed = 6$' '$gd/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" PLACER_SEEDS="2;x" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: ... and refuses a PLACER_SEEDS that is not numbers" test "$rc" -ne 0
 check "define: nextpnr is given the DDR3L pins with their slew and termination" \
     grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
 check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \

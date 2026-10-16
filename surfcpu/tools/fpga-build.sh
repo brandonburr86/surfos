@@ -23,7 +23,8 @@
 # (boards/arty_a7/nextpnr-xdc.awk; the rest is listed as not checked) and --dsp safe, with its
 # output in build/fpga/BOARD/DESIGN/openxc7. Either way it writes build/fpga/BOARD/DESIGN/
 # manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga; its kernel_sha256 is of SURFCPU_KERNEL, by
-# default the last make build-kernel's SURFOS.BIN, for the record only). A design may read generated files from
+# default the last make build-kernel's SURFOS.BIN, for the record only; ROM= replaces the design's
+# boot ROM image and PLACER_SEEDS= its placer seeds, both recorded). A design may read generated files from
 # build/ (the LiteDRAM core of the DDR designs): its "generated" lists (ip/litedram/arty.sha256)
 # give their SHA-256, and the build counts as clean only if they match. Exit 0 only with a bitstream whose checks passed; a new build first removes the
 # previous one's bitstream and results. --dry-run prints every command it would run, without
@@ -455,6 +456,14 @@ lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
 seed=$(items seed | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')   # the open flow's placer seeds (default 1),
 case "$seed" in *[!0-9\ ]*) die "$design: seed must be a number or numbers" ;; esac   # tried in turn
+# PLACER_SEEDS= replaces them for one build (a diagnostic build of chosen placements, with its
+# own SURFCPU_FPGA_OUT); the manifest's placer_seeds then lists those, and placer_seeds_from says so
+seeds_from=design
+if [ -n "${PLACER_SEEDS:-}" ]; then
+    seed=$(echo "$PLACER_SEEDS" | tr -s ', \t' '   ' | sed 's/^ *//; s/ *$//')
+    case "$seed" in ''|*[!0-9\ ]*) die "PLACER_SEEDS must be a number or numbers ($PLACER_SEEDS)" ;; esac
+    seeds_from=PLACER_SEEDS
+fi
 set +f
 
 # The boot ROM: the design list's "rom FILE INSTANCE" (FILE relative to surfcpu/), or ROM=.
@@ -544,6 +553,7 @@ write_head() {    # the keys known before the run, the same for every flow
         echo "build_id = \"$build_id\""
         echo "build_time = $build_time"
         printf 'placer_seeds = ['; for sd in ${seed:-1}; do printf '%s, ' "$sd"; done; echo ']'
+        echo "placer_seeds_from = \"$seeds_from\""
         echo "sources_sha256 = \"$(cat_sha $sources)\""
         printf 'defines = ['; for d in $defines; do printf '"%s", ' "$d"; done; echo ']'
         printf 'generated_lists = ['; for l in $gens; do printf '"%s", ' "$l"; done; echo ']'
