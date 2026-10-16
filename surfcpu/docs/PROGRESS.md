@@ -113,9 +113,10 @@ physical results are separate columns, so nothing claims more than happened.
   it could not write; the card-detect watch says when the card was taken out or put back.
 * Three shared kernel fixes (both kernels; x86 `test-all`, `unittest` and `test-usb` pass at
   O0 and O2): a failed block write is kept for the next sync instead of dropped (audit B1),
-  `eject` no longer says "safe to remove" after losing writes (B2), and blocks reach the card in
-  an order that an interruption leaves repairable: data, FAT, directory entries, free count
-  (B3).
+  `eject` no longer says "safe to remove" after losing writes (B2), and blocks were to reach the
+  card in the order data, FAT, directory entries, free count (B3). A later review found holes in
+  that order, and two regressions from B1 and B3. They are fixed in the entry "the block cache
+  and FAT review" below.
 * `test-os-persist` on `make check`: on the RTL system, mkdir, write, a 160 KiB copy, write
   over, append, mv and rm, then eject; a second boot reads every file back with its CRC, and
   `fsck.fat` finds the image clean. The port's own code got faster for it (CRC tables, word
@@ -139,3 +140,41 @@ physical results are separate columns, so nothing claims more than happened.
   * a full card ends a copy with "No space left on device", and `rm` gives the space back.
 * Shared fix B4 (`fs/fat.c`, both kernels; x86 suites pass at O0 and O2): a write that runs out
   of space keeps what fitted and gives back the clusters it had linked past the file's end.
+
+### 2026-10-16: the block cache and FAT review (audit B5 to B11)
+
+* An independent review of B1 to B4 ran the real `fs/bcache.c` and `fs/fat.c` over RAM disks
+  that refuse writes. It found two regressions:
+  * A failed sync in the middle of a rename left the file with two names on one cluster chain.
+    The same `mv` again, or an `rm` of either name, then freed the chain under the other name.
+  * Blocks that failed to write, on one device, could fill the cache that every device shares.
+
+  It also found that B3's order held less than claimed.
+* fs-fix (merged as d7452f4) fixes them, in code both kernels share:
+  * A failed sync in the middle of an operation puts back what the operation changed, and the
+    operation fails with nothing changed (B5).
+  * A device that refuses writes keeps at most 256 changed blocks (128 KiB); past that its
+    writes fail at once with EIO (B6).
+  * The cache itself enforces the write order, and FAT orders its links, new directories and
+    cuts on the disk (B7).
+  * Smaller fixes: B8, B9 and B11 (both FAT copies change, or neither).
+  * `close`, `fsync`, `umount` and `eject` say when changes did not reach the card, including
+    `> file` in the shell (B10).
+* New host test `tests/host/test_fatfs.c`, on `make unittest`: 91 checks. Before the fixes 37
+  of them fail: 34 on real defects and 3 on behaviour the round changed on purpose
+  ([evidence](evidence/os/bcache-review.txt)).
+* Still not promised, in CARD.md section 8:
+  * The guarantee is a write order, not power-fail atomicity.
+  * Two narrow cases can still leave a chain running into free space: a write that stopped
+    because the card began refusing partway through, and FAT12 entries that straddle two
+    sectors.
+* Cost: a growing file now forces a sync each time its chain crosses into another FAT
+  sector. Writing 4 MiB to a 1 GiB FAT32 volume takes 24% more requests. A 64 MiB FAT32 test
+  volume with 512-byte clusters takes two to three times as many.
+* The track's runs:
+  * x86: `test-all` at O0 and O2 (smoke 311, files 51), `unittest` and `test-usb` (315 of 315)
+    at O0 and O2.
+  * surfcpu: QEMU 132 of 132 at both levels, the emulator 18 of 18, `test-os-persist` 17 of 17
+    and `test-os-faults` 25 of 25.
+  * One riscv32 -O0 timing check failed once under load and passed on the rerun.
+* A second independent review of this round is running.
