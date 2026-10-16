@@ -287,6 +287,7 @@ FAKE_FPGA = r"""#!/usr/bin/env python3
 # BOOTROM_INIT), kernel_sha256 of $SURFCPU_KERNEL (default ../build/riscv32/arty_a7/SURFOS.BIN).
 # $FAKE_FPGA_FAIL=d1,d2 fails those designs; $FAKE_FPGA_HOOK (a shell command) runs first, $FAKE_FPGA_HOOK_ON=
 # design/board limits it to one build; $FAKE_FPGA_NOOP=1 builds nothing and exits 0 (as DRY_RUN=1 does);
+# $FAKE_OX_IMAGE records another image (as SURFCPU_OPENXC7_IMAGE would);
 # $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id.
 import hashlib, os, re, subprocess, sys, time
 from pathlib import Path
@@ -331,7 +332,7 @@ else:
     data = bitfile.stamp(bitfile.synthetic(idcode=idcode, part=part), int(os.environ["SOURCE_DATE_EPOCH"]))
     (base / f"{design}.bit").write_bytes(data)
     head += ['result = "pass"', f'bitstream_sha256 = "{hashlib.sha256(data).hexdigest()}"']
-head += ["", "[openxc7]", f'image = "surfcpu-openxc7:{tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
+head += ["", "[openxc7]", f'image = "{os.environ.get("FAKE_OX_IMAGE") or "surfcpu-openxc7:" + tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
          'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5"]
 (base / "manifest.txt").write_text("# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by "
                                    "tools/fpga-build.sh\n" + "\n".join(head) + "\n")
@@ -568,6 +569,48 @@ class TestShippedIsChecked(ScratchRelease):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("stale lock", r.stdout)
         self.assertFalse(lock.exists())
+
+
+class TestEnvironment(ScratchRelease):
+    """review m2: the builds get an allow-listed environment, fresh output directories and records from this run"""
+
+    def test_stale_results_never_shipped(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        r = self.make("--prerelease", "--skip-ddr", "--out", self.dir / "second", FAKE_FPGA_NOOP="1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no build record from this build", r.stderr)
+
+    def test_record_from_another_run(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_RUN_ID_TIME="20200101T000000Z")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("not from this build", r.stderr)
+
+    def test_record_from_another_image(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_OX_IMAGE="surfcpu-openxc7:other")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("built in the image 'surfcpu-openxc7:other'", r.stderr)
+
+    def test_settings_that_change_the_builds_are_refused(self):
+        for var, val in (("DRY_RUN", "1"), ("SURFCPU_OPENXC7_IMAGE", "x:y"), ("SURFCPU_IMAGE", "x:y"),
+                         ("SURFCPU_OPENXC7_BUILD", "/bin/true"), ("SURFCPU_ROMCHECK", "/bin/true"), ("ROM", "/x")):
+            r = self.make("--prerelease", "--skip-ddr", **{var: val})
+            self.assertEqual(r.returncode, 1, f"{var}: {r.stdout}")
+            self.assertIn(var, r.stderr)
+
+    def test_allow_listed_environment(self):
+        dump = self.dir / "env.txt"
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_ENV=str(dump), JUNK_SETTING="1", DESIGN="other")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        names = set(dump.read_text().split())
+        for gone in ("JUNK_SETTING", "DESIGN"):
+            self.assertNotIn(gone, names)
+        for there in ("SOURCE_DATE_EPOCH", "FLOW", "SURFCPU_FPGA_OUT", "PATH", "LC_ALL", "TZ"):
+            self.assertIn(there, names)
+
+    def test_stand_ins_only_for_the_tests(self):
+        r = self.make("--prerelease", "--skip-ddr", SURFCPU_RELEASE_TEST=None)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("SURFCPU_RELEASE_TEST", r.stderr)
 
 
 class TestCleanTree(ScratchRelease):

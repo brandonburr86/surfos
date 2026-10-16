@@ -31,13 +31,22 @@ the Docker images through devenv/run.sh and tools/fpga-build.sh, as a person wou
         The release's files against its SHA256SUMS and MANIFEST (what shasum -a 256 -c does, and more).
 
 Exit status: make 0 written, 1 refused or failed; verify and compare 0 when every compared artifact
-matched, 1 when one differed or is missing, 2 when the comparison could not be made. Stand-ins for
-the tests (tools/release-test.py): SURFCPU_RELEASE_RUN (devenv/run.sh), SURFCPU_RELEASE_FPGA
-(tools/fpga-build.sh), SURFCPU_RELEASE_DOCKER (docker).
+matched, 1 when one differed or is missing, 2 when the comparison could not be made.
+
+The builds get an environment of their own: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, TERM and
+Docker's settings (DOCKER, DOCKER_HOST, DOCKER_CONFIG, DOCKER_CONTEXT, DOCKER_CERT_PATH,
+DOCKER_TLS_VERIFY) from the caller's, and what the release sets (SOURCE_DATE_EPOCH, LC_ALL=C,
+TZ=UTC, FLOW, SURFCPU_FPGA_OUT, ROM, SURFCPU_KERNEL); nothing else. Settings that would change what a
+build makes or uses (DRY_RUN, SURFCPU_FPGA_OUT, SURFCPU_IMAGE, SURFCPU_OPENXC7_IMAGE,
+SURFCPU_OPENXC7_BUILD, SURFCPU_ROMCHECK, ROM, SURFCPU_BUILD_ID, SURFCPU_BUILD_DIRTY) are refused.
+Stand-ins for the tests (tools/release-test.py), honoured only with SURFCPU_RELEASE_TEST=1:
+SURFCPU_RELEASE_RUN (devenv/run.sh), SURFCPU_RELEASE_FPGA (tools/fpga-build.sh),
+SURFCPU_RELEASE_DOCKER (docker); the FAKE_* settings of the stand-ins then reach the builds too.
 """
 from __future__ import annotations
 
 import argparse
+import calendar
 import hashlib
 import importlib.util
 import json
@@ -64,6 +73,15 @@ GATES = ("check_synthesis", "check_bitstream", "check_round_trip", "check_block_
 BIT_INPUTS = ("source_revision", "source_dirty", "build_id", "build_time", "placer_seed", "sources_sha256",
               "defines", "generated_files_match", "constraints_sha256", "rom_sha256", "part")
 FLOW_INPUTS = ("image", "yosys", "nextpnr", "dsp_mode")
+# the tests' stand-ins for devenv/run.sh, tools/fpga-build.sh and docker: honoured only with SURFCPU_RELEASE_TEST=1
+TEST_MODE = os.environ.get("SURFCPU_RELEASE_TEST") == "1"
+HOOKS = ("SURFCPU_RELEASE_RUN", "SURFCPU_RELEASE_FPGA", "SURFCPU_RELEASE_DOCKER")
+# the builds' environment: these names of the caller's, and what the release sets itself
+PASS_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "DOCKER", "DOCKER_HOST", "DOCKER_CONFIG",
+            "DOCKER_CONTEXT", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY")
+# set, these would change what a build makes or which image it uses: refused, never passed on
+REFUSE_ENV = ("DRY_RUN", "SURFCPU_FPGA_OUT", "SURFCPU_IMAGE", "SURFCPU_OPENXC7_IMAGE", "SURFCPU_OPENXC7_BUILD",
+              "SURFCPU_ROMCHECK", "ROM", "SURFCPU_BUILD_ID", "SURFCPU_BUILD_DIRTY")
 PKG_FIELDS = ((0, 4, "magic"), (4, 2, "version"), (6, 2, "header_size"), (8, 4, "isa"), (12, 4, "platform"),
               (16, 4, "load_addr"), (20, 4, "payload_size"), (24, 4, "mem_size"), (28, 4, "entry"),
               (32, 4, "payload_crc32"), (36, 4, "flags"), (40, 4, "image_version"), (44, 4, "build_id"),
@@ -130,8 +148,36 @@ def minutes(seconds: float) -> str:
     return f"{seconds:.0f} s" if seconds < 120 else f"{seconds / 60:.1f} min"
 
 
+def hook(name: str) -> str | None:
+    """a test stand-in's path, only in the tests (SURFCPU_RELEASE_TEST=1)"""
+    return os.environ.get(name) if TEST_MODE else None
+
+
+def check_environment() -> None:
+    """refuses the settings that would make the builds something other than the commit's"""
+    hooks = [k for k in HOOKS if os.environ.get(k)]
+    if hooks and not TEST_MODE:
+        raise Refused(f"{', '.join(hooks)}: stand-ins for tools/release-test.py, honoured only with "
+                      "SURFCPU_RELEASE_TEST=1; unset them")
+    bad = [k for k in REFUSE_ENV if os.environ.get(k)]
+    if bad:
+        raise Refused("these settings would change what the builds make or which image they use, and a release "
+                      "builds its commit with the images that commit names: unset "
+                      + ", ".join(f"{k} (= {os.environ[k]})" for k in bad))
+
+
+def clean_env(**extra) -> dict:
+    """the builds' environment: PASS_ENV of the caller's (and, in the tests, the stand-ins' settings), and extra"""
+    e = {k: v for k, v in os.environ.items() if k in PASS_ENV}
+    if TEST_MODE:
+        e.update({k: v for k, v in os.environ.items()
+                  if k.startswith("FAKE_") or k in HOOKS or k == "SURFCPU_RELEASE_TEST"})
+    e.update(extra)
+    return e
+
+
 def docker() -> str:
-    d = os.environ.get("SURFCPU_RELEASE_DOCKER") or os.environ.get("DOCKER") or "docker"
+    d = hook("SURFCPU_RELEASE_DOCKER") or os.environ.get("DOCKER") or "docker"
     if shutil.which(d) or os.path.exists(d):
         return d
     alt = "/Applications/Docker.app/Contents/Resources/bin/docker"
@@ -811,9 +857,7 @@ class Release:
     # ---------------------------------------------------------------- preflight
     def preflight(self) -> None:
         a, cfg = self.a, self.cfg
-        if os.environ.get("SURFCPU_FPGA_OUT"):
-            raise Refused(f"SURFCPU_FPGA_OUT is set: a release builds in {WORK.relative_to(ROOT)}/fpga (the path is "
-                          "in the .bit header)")
+        check_environment()
         self.commit = git("rev-parse", "HEAD")
         self.short = self.commit[:8]
         self.epoch = int(git("log", "-1", "--format=%ct", "HEAD"))
@@ -863,16 +907,7 @@ class Release:
         return f"{self.version}{'-pre' if prerelease else ''}-{self.short}"
 
     def env(self, **extra) -> dict:
-        e = dict(os.environ)
-        for k in ("DESIGN", "BIT", "ROM", "SURFCPU_FPGA_OUT", "OPENXC7_THREADS", "SURFCPU_BUILD_ID",
-                  "SURFCPU_BUILD_DIRTY", "PYTHONHASHSEED", "SURFCPU_KERNEL"):
-            e.pop(k, None)
-        e.update({"SOURCE_DATE_EPOCH": str(self.epoch), "LC_ALL": "C", "TZ": "UTC"})
-        e.update(extra)
-        return e
-
-    def hook(self, name: str) -> str | None:
-        return os.environ.get(name)
+        return clean_env(SOURCE_DATE_EPOCH=str(self.epoch), LC_ALL="C", TZ="UTC", **extra)
 
     def ship(self, rel: str, data: bytes, record: bool = False) -> str:
         """data as the release's file rel, at once: written to the stage and read back. Its SHA-256 is what the
@@ -890,7 +925,7 @@ class Release:
     def software(self) -> None:
         """the boot ROMs, the diagnostics and the kernel, built in the release's own directory (make build-rom
         BUILD=..., arch/riscv32/kernel.mk OUT=...), checked and staged"""
-        run = self.hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
+        run = hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
         log = self.logs / "software.txt"
         t = time.time()
         steps = (("make build-rom", [run, "make", "--no-print-directory", "build-rom",
@@ -925,7 +960,7 @@ class Release:
         """make litedram-gen once for the DDR designs: None, or why it failed"""
         if getattr(self, "_litedram", "unset") != "unset":
             return self._litedram
-        run = self.hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
+        run = hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
         log = self.logs / "litedram-gen.txt"
         t = time.time()
         rc = run_logged([run, "make", "--no-print-directory", "litedram-gen"], log, self.env())
@@ -957,7 +992,7 @@ class Release:
         build record says pass for this commit, ROM and kernel and describes the bitstream, the bitstream (and
         its flash image) are staged at once"""
         design = d["name"]
-        fpga = self.hook("SURFCPU_RELEASE_FPGA") or str(ROOT / "tools" / "fpga-build.sh")
+        fpga = hook("SURFCPU_RELEASE_FPGA") or str(ROOT / "tools" / "fpga-build.sh")
         out = self.work / "fpga"
         base = out / board / design
         shutil.rmtree(base, ignore_errors=True)
@@ -968,6 +1003,7 @@ class Release:
         if rom:
             env["ROM"] = str(self.work / "fw" / rom)
         self.wait_slot()
+        started = time.time()
         rc = run_logged([fpga, "--design", design, board], log, env)
         rec = base / "manifest.txt"
         rec_bytes = rec.read_bytes() if rec.is_file() else None
@@ -987,6 +1023,13 @@ class Release:
                       "rom_sha256": self.shipped[f"rom/{rom}"] if rom else "",
                       "kernel_sha256": self.shipped["SURFOS.BIN"]}
             problems += [f"build record {k} = {m.get(k)!r}, not {v!r}" for k, v in checks.items() if m.get(k) != v]
+            rid = str(m.get("run_id", ""))
+            mt = re.fullmatch(rf"{re.escape(design)}-{re.escape(board)}-{self.short}-(\d{{8}}T\d{{6}}Z)", rid)
+            when = calendar.timegm(time.strptime(mt.group(1), "%Y%m%dT%H%M%SZ")) if mt else None
+            if when is None or not started - 5 <= when <= time.time() + 5:
+                problems.append(f"build record run_id {rid!r}: not from this build (started {utc(int(started))})")
+            if m.get("openxc7", {}).get("image") != self.ox_image:
+                problems.append(f"built in the image {m.get('openxc7', {}).get('image')!r}, not {self.ox_image}")
             if bit is None or hashlib.sha256(bit).hexdigest() != m.get("bitstream_sha256"):
                 problems.append("the bitstream is not the one its build record describes")
             changed = generated_changed(m)
@@ -1234,6 +1277,7 @@ def cmd_make(a) -> int:
 
 # ============================================================================== verify, compare, check
 def cmd_verify(a) -> int:
+    check_environment()
     ref = Path(a.release).resolve()
     if not (ref / "MANIFEST").is_file() or not (ref / "SHA256SUMS").is_file():
         raise Refused(f"{ref} is not a release directory (no MANIFEST and SHA256SUMS)")
@@ -1270,8 +1314,7 @@ def cmd_verify(a) -> int:
            "--out-exact", "--logs", str(work / "logs")]
     cmd += ["--only", ",".join(f"{b}/{n}" for b, n in sorted(rebuilt))]
     say(f"rebuilding there: {len(rebuilt)} of the release's {len(built)} bitstreams and every other artifact")
-    env = {k: v for k, v in os.environ.items() if k not in ("SOURCE_DATE_EPOCH", "SURFCPU_FPGA_OUT")}
-    rc = subprocess.run(cmd, cwd=str(src / "surfcpu"), env=env).returncode
+    rc = subprocess.run(cmd, cwd=str(src / "surfcpu"), env=clean_env()).returncode
     say(f"the rebuild ended with exit status {rc} after {minutes(time.time() - t0)}")
     rows, notes = compare(ref, out, {(b, n) for b, n in rebuilt}) if out.is_dir() else (
         [(rel, "MISSING", "the rebuild wrote no release") for rel in sorted(read_sums(ref / "SHA256SUMS"))], [])
