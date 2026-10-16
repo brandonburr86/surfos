@@ -33,10 +33,10 @@ SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
         synth-soc test-soc-verilator test-soc-gate test-soc-boot test-soc-mutants soc-gpio-real \
-        soc-mem-once
+        soc-mem-once test-soc-system-boot test-soc-system-selftest
 lint: lint-soc
 test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator \
-          test-soc-boot
+          test-soc-boot test-soc-system-boot
 check: synth-soc test-soc-gate
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
@@ -482,6 +482,29 @@ else
 	@echo "test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)"
 endif
 
+# The whole system (sim/soc/tools/system_boot_test.py): SurfBoot (build-rom) loads the Arty kernel
+# package (build-kernel, packed by tools/surfimg.py) from a tools/mkcard.py card in build/sim/surfsim
+# with HAS_DDR=1, the DDR model and the io track's models: the boot to the shell prompt, a UART
+# session (bootinfo, ls, cat, ps, tasks, crc32), a command typed on the PS/2 keyboard model checked
+# on the screen decoded from the VGA pixels, and SurfBoot falling back to /BOOT/BACKUP.BIN. Two runs
+# side by side, about 300 and 200 million cycles: some two minutes. test-soc-system-selftest boots
+# and runs the kernel self test (some 2 billion cycles, ten minutes): not part of test-soc.
+SOC_SYS_TEST = $(PYTHON) sim/soc/tools/system_boot_test.py --surfsim $(BUILD)/sim/surfsim \
+               --rom $(BUILD)/fw/surfboot.mem --mkcard tools/mkcard.py \
+               --package ../build/riscv32/arty_a7/SURFOS.BIN
+SOC_SYS_READY := $(and $(SOC_BOOT_READY),$(wildcard tools/mkcard.py),$(wildcard tools/surfimg.py),\
+                   $(wildcard ../arch/riscv32/kernel.mk))
+ifneq ($(SOC_SYS_READY),)
+test-soc-system-boot: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/sim/surfsim
+	$(Q)$(SOC_SYS_TEST) --work $(SOC_DIR)/system_boot --evidence $(SOC_DIR)/system_boot/summary.txt
+
+test-soc-system-selftest: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/sim/surfsim
+	$(Q)$(SOC_SYS_TEST) --selftest --work $(SOC_DIR)/system_selftest \
+	  --evidence $(SOC_DIR)/system_selftest/summary.txt
+else
+test-soc-system-boot test-soc-system-selftest:
+	@echo "$@: skipped (needs the real core, SurfBoot, the riscv32 kernel, surfimg.py and mkcard.py)"
+endif
 
 # ---------------------------------------------------------------------------- the tests' own check
 # 37 one-line bugs planted in copies of the RTL (sim/soc/tools/mutants.py); the unit testbench
