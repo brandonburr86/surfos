@@ -129,6 +129,9 @@ differ (reset values, the CSR map, fetching from MMIO).
 | `make test-cpu-icarus` | the thirteen tests that need only RAM and bus errors on the core under Icarus Verilog (`run_icarus.py`, `tb_core_icarus.v`; on `make test-cpu`) |
 | `make test-cpu-spike` | the directed tests on Spike (`--isa=rv32im_zicntr_zicsr_zifencei_zihpm --priv=m --pmpregions=0`), which checks the tests' own expectations |
 | `make synth-cpu` | the Yosys `synth_xilinx` resource estimate of the core (on `make check`) |
+| `make formal-cpu` | bounded model check of the core with SymbiYosys (`sim/cpu/formal/`: the review's harness `fv_top.sv`, `fv.sby`, `run_formal.py`); `FORMAL_DEPTH` (default 14, about a minute) and `FORMAL_TIMEOUT` per task; plus the cover task; on `make check` |
+| `make soc-loop-cpu` | Yosys on the flattened `surfcpu_soc`: no interrupt input of the core depends combinationally on a bus request, and no logic loop (`soc_loop_check.py`; on `make check`) |
+| `make mutants-cpu` | the mutation check: each of 66 mutants (mostly the review's) applied to a copy of the RTL, and which stage catches it (`mutants.py`; about an hour, no traces, not on `make check`) |
 | `make synth-cpu-gate` | the synthesised netlist simulated in Icarus (Yosys's Xilinx cell models) on the RAM-only tests, to show synthesis dropped nothing (on `make check`); `sim/cpu/gate_mutant.py` shows a broken DSP48E1 would be caught |
 | `python3 sim/cpu/spike_compare.py ELF -- TB-ARGS` | run one ELF on the testbench and on Spike and compare the trace with Spike's commit log instruction by instruction |
 | `python3 sim/cpu/fuzz_spike.py --count N --seed S` | random RV32IM programs compared with Spike under three timings |
