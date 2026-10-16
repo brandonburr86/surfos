@@ -188,7 +188,7 @@ class RecordRules(unittest.TestCase):
 
     def test_unknown_rdata_note(self):
         ref = self.rec(mem_addr=0x02000000, rmask=0xF, mem_rdata=0)
-        ref.notes["mem"] = {"rdata": "unknown"}
+        ref.add_note("mem", rdata="unknown")
         dut = self.rec(mem_addr=0x02000000, rmask=0xF, mem_rdata=0x55)
         self.assertEqual(trace_compare.compare_records(ref, dut), [])
 

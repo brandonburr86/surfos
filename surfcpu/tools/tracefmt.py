@@ -39,7 +39,7 @@ class TraceError(Exception):
     pass
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class Rec:
     order: int
     pc: int
@@ -55,7 +55,7 @@ class Rec:
     mem_wdata: int = 0
     pc_next: int = 0
     line: int = 0                                   # line number in the file it came from
-    notes: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
+    notes: dict[str, dict[str, str]] | None = None  # "#@" annotations (None: none)
 
     def fields(self) -> tuple[int, ...]:
         return tuple(getattr(self, f) for f in FIELDS)
@@ -66,7 +66,23 @@ class Rec:
                 f"{self.wmask:x} {self.mem_rdata:08x} {self.mem_wdata:08x} {self.pc_next:08x}")
 
     def note(self, tag: str, key: str, default: str | None = None) -> str | None:
+        if not self.notes:
+            return default
         return self.notes.get(tag, {}).get(key, default)
+
+    def add_note(self, tag: str, **kv: str) -> None:
+        if self.notes is None:
+            self.notes = {}
+        self.notes[tag] = dict(kv)
+
+    def has_note(self, tag: str) -> bool:
+        return bool(self.notes) and tag in self.notes
+
+    def drop_note(self, tag: str) -> None:
+        if self.notes:
+            self.notes.pop(tag, None)
+            if not self.notes:
+                self.notes = None
 
 
 def mem_bytes(addr: int, mask: int, data: int) -> dict[int, int]:
@@ -119,7 +135,7 @@ def parse_lines(lines: Iterable[str], name: str = "<trace>") -> Iterator[Rec]:
             lim = _LIMITS.get(f, 0xFFFFFFFF if f != "order" else (1 << 64) - 1)
             if not 0 <= v <= lim:
                 raise TraceError(f"{name}:{n}: {f} = {v:#x} is out of range (max {lim:#x})")
-        rec = Rec(*vals, line=n, notes=notes)
+        rec = Rec(*vals, line=n, notes=notes or None)
         notes = {}
         yield rec
 
@@ -137,7 +153,7 @@ def write_trace(recs: Iterable[Rec], out: TextIO, comments: Iterable[str] = (),
         out.write(f"# {c}\n")
     n = 0
     for r in recs:
-        if with_notes:
+        if with_notes and r.notes:
             for tag, kv in r.notes.items():
                 extra = "".join(f" {k}={v}" for k, v in kv.items())
                 out.write(f"#@ {tag}{extra}\n")

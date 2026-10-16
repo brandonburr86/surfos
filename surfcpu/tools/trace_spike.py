@@ -64,13 +64,35 @@ from tracefmt import Rec  # noqa: E402
 #   --pmpregions=0  zero PMP entries (pmpcfg/pmpaddr read as zero)
 #   --triggers=0  no debug triggers (tselect and friends do not exist on SurfCPU)
 #   -m            4 MiB of RAM at 0x80000000, like build/cpu/surfcpu_tb
-# Misaligned loads and stores trap because --misaligned is not given.
-SPIKE = os.environ.get("SURFCPU_SPIKE", "spike")
+# Misaligned loads and stores trap because --misaligned is not given. Spike's boot ROM still
+# runs first (--disable-dtb would skip it but also removes the CLINT that programs and the
+# testbench have): its five instructions leave t0, a0 and a1 set and count in minstret, so
+# programs initialize every register and write minstret before relying on it.
+#
+# The binary: $SURFCPU_SPIKE if set; else the contract-patched build of the same commit
+# (sim/ref/spike/build-spike.sh, make ref-spike), which makes the implementation-defined
+# choices docs/ISA.md fixes (sim/ref/spike/surfcpu-contract.patch); else the container's
+# stock Spike, which differs from the contract in the ways docs/VERIFICATION.md lists.
+ROOT = Path(__file__).resolve().parent.parent
+PATCHED_SPIKE = ROOT / "build" / "third_party" / "spike-surfcpu" / "bin" / "spike"
+
+
+def spike_binary() -> tuple[str, str]:
+    """(path, kind) of the reference binary; kind is 'env', 'contract' or 'stock'."""
+    if os.environ.get("SURFCPU_SPIKE"):
+        return os.environ["SURFCPU_SPIKE"], "env"
+    if PATCHED_SPIKE.exists():
+        return str(PATCHED_SPIKE), "contract"
+    return "spike", "stock"
+
+
+SPIKE, SPIKE_KIND = spike_binary()
 SPIKE_ISA = "rv32im_zicsr_zifencei_zicntr_zihpm"
 SPIKE_FLAGS = ["--priv=m", "--pmpregions=0", "--triggers=0", "-m0x80000000:0x400000"]
 RAM_BASE = 0x80000000
 RAM_SIZE = 0x400000
-DEFAULT_MAX_RECORDS = 20_000_000
+DEFAULT_MAX_RECORDS = 4_000_000
+DRAIN_LINES = 400_000
 
 TRAP_CAUSES = {
     "trap_instruction_address_misaligned": 0, "trap_instruction_access_fault": 1,
@@ -109,8 +131,9 @@ class SpikeResult:
 
 
 def spike_command(elf: Path, log: Path, max_instructions: int | None,
-                  sigfile: Path | None) -> list[str]:
-    cmd = [SPIKE, f"--isa={SPIKE_ISA}", *SPIKE_FLAGS, "-l", "--log-commits", f"--log={log}"]
+                  sigfile: Path | None, binary: str | None = None) -> list[str]:
+    cmd = [binary or SPIKE, f"--isa={SPIKE_ISA}", *SPIKE_FLAGS, "-l", "--log-commits",
+           f"--log={log}"]
     if max_instructions:
         cmd.append(f"--instructions={max_instructions}")
     if sigfile is not None:
@@ -204,7 +227,7 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
     def close_previous(next_pc: int) -> None:
         # The previous record's pc_next is the pc of whatever ran next, unless an interrupt
         # came in between (then it is already the interrupt's epc).
-        if recs and "intr_after" not in recs[-1].notes:
+        if recs and not recs[-1].has_note("intr_after"):
             recs[-1].pc_next = next_pc
 
     def word_at(pc: int, fallback: int) -> int:
@@ -256,7 +279,7 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
                             f"{where}: load at {addr:08x} returned {regval:08x} but the "
                             f"shadow memory holds {val:0{2 * size}x}")
                 if val is None:
-                    r.notes["mem"] = {"rdata": "unknown"}
+                    r.add_note("mem", rdata="unknown")
                     val = 0
                 r.mem_addr, r.rmask, r.mem_rdata = addr, (1 << size) - 1, val
             if stores:
@@ -301,7 +324,7 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
                 # where it would have gone (the epc), and the handler's first is intr.
                 if recs:
                     recs[-1].pc_next = epc
-                    recs[-1].notes["intr_after"] = {"epc": f"{epc:08x}"}
+                    recs[-1].add_note("intr_after", epc=f"{epc:08x}")
                 next_intr = 1
                 pending = None
                 continue
@@ -315,8 +338,8 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
                 insn = word_at(epc, pending[1] if fetched else 0)
             r = Rec(order=len(recs), pc=epc, insn=insn, trap=1, intr=next_intr,
                     pc_next=epc)
-            r.notes["trap"] = {"cause": f"{cause:x}", "tval": f"{(tval or 0):08x}",
-                               "name": name.replace("trap_", "")}
+            r.add_note("trap", cause=f"{cause:x}", tval=f"{(tval or 0):08x}",
+                       name=name.replace("trap_", ""))
             next_intr = 1
             close_previous(epc)
             recs.append(r)
@@ -328,7 +351,7 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
             raise ConvertError(f"{where}: unrecognised Spike log line: {line!r}")
         warnings.append(f"{where}: ignored: {line[:80]!r}")
     for r in recs:
-        r.notes.pop("intr_after", None)
+        r.drop_note("intr_after")
     return recs, tohost_value, mem
 
 
@@ -362,7 +385,7 @@ def write_signature_file(words: list[int], path: Path) -> None:
 
 def run_spike(elf_path: str | Path, *, max_records: int | None = DEFAULT_MAX_RECORDS,
               sig_symbols: tuple[str, str] | None = None, keep_log: Path | None = None,
-              timeout: float = 600.0) -> SpikeResult:
+              timeout: float = 600.0, binary: str | None = None) -> SpikeResult:
     """Run one ELF on Spike and convert its log (the reference for one program).
 
     Spike's log is read from a pipe while it runs. Spike's own --instructions limit is not
@@ -378,14 +401,14 @@ def run_spike(elf_path: str | Path, *, max_records: int | None = DEFAULT_MAX_REC
         if "begin_signature" in elf.symbols and "end_signature" in elf.symbols:
             sigfile = Path(tmp) / "spike.sig"
         errfile = Path(tmp) / "spike.err"
-        cmd = spike_command(elf_path, Path("/dev/stdout"), None, sigfile)
+        cmd = spike_command(elf_path, Path("/dev/stdout"), None, sigfile, binary)
         try:
             with errfile.open("w") as err:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True,
                                         errors="replace", bufsize=1 << 16)
         except FileNotFoundError:
-            raise ConvertError(f"{SPIKE} not found: run this inside the toolchain container "
-                               "(surfcpu/devenv/run.sh)") from None
+            raise ConvertError(f"{binary or SPIKE} not found: run this inside the toolchain "
+                               "container (surfcpu/devenv/run.sh)") from None
         fired = threading.Event()
 
         def on_timeout():
@@ -407,8 +430,14 @@ def run_spike(elf_path: str | Path, *, max_records: int | None = DEFAULT_MAX_REC
             if tohost_value is None:
                 proc.kill()                       # past max_records (or Spike stopped)
             else:
-                for _ in lines():                 # let Spike notice tohost and exit
-                    pass
+                # Let Spike notice tohost and exit (it polls between time slices), so that its
+                # +signature dump exists; a program that wrote tohost by accident and runs on
+                # is stopped after DRAIN_LINES more lines.
+                for n, _ in enumerate(lines()):
+                    if n >= DRAIN_LINES:
+                        warnings.append("Spike did not stop after the tohost store")
+                        proc.kill()
+                        break
             proc.wait()
         except BaseException:
             proc.kill()
@@ -416,6 +445,7 @@ def run_spike(elf_path: str | Path, *, max_records: int | None = DEFAULT_MAX_REC
             raise
         finally:
             timer.cancel()
+            proc.stdout.close()
             if logfh is not None:
                 logfh.close()
         stderr = errfile.read_text(errors="replace").strip()
@@ -448,7 +478,9 @@ def trace_comments(res: SpikeResult, elf: Path) -> list[str]:
     cpath = Path("/opt/spike/COMMIT")
     if cpath.exists():
         commit = cpath.read_text().strip()[:12]
-    return [f"reference: spike {commit} " + " ".join(res.command[1:-1]),
+    kind = {"contract": "with surfcpu-contract.patch", "stock": "stock (no contract patch)",
+            "env": f"from SURFCPU_SPIKE={SPIKE}"}[SPIKE_KIND]
+    return [f"reference: spike {commit} {kind} " + " ".join(res.command[1:-1]),
             f"program: {elf}",
             f"result: {res.status}" + (f" tohost={res.tohost:#x}" if res.tohost is not None
                                        else "")]
