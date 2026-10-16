@@ -40,8 +40,9 @@ never to the physical evidence.
 
 The port: uart.py's (115200 8N1 raw, typed bytes paced). A port that goes away is a FAIL at
 once ("USB unplugged, or the board lost power?"), except during a step that may take it away
-(programming, a power cycle, RESET with the card out) and for 15 s after the owner's answer:
-then it is opened again when it is back (the Arty is powered over the same USB cable), the
+(programming, a power cycle, RESET with the card out) and after the owner's answer until the
+board's next expected line arrives: then it is opened again when it is back (the Arty is
+powered over the same USB cable), the
 transcript marks both moments, and if SurfBoot's first lines came before the port was back,
 the boot is read from the kernel load on and the bitstream's identity from bootinfo.
 
@@ -141,6 +142,7 @@ class Run:
         self.sim = False
         self.link = None
         self.pos = 0                    # where the next expect starts in the text
+        self.power_pending = False      # a power step was answered and the board has not spoken since
         self.started = time.time()
         self.extra = []                 # more sections for the evidence (title, lines)
         self.full_log = None
@@ -166,6 +168,9 @@ class Run:
                                 fail_on=fails if fails is not None else [])
         if m:
             self.pos = m.end()
+            if self.power_pending and self.link.port is not None:
+                self.link.allow_reopen(0)   # the port is back and the board talks: from now on a lost port is a FAIL
+                self.power_pending = False
             return m
         if why.startswith('fail-on'):
             fm = self.link.last_fail                # the whole line, and the one after it (the reason)
@@ -212,9 +217,10 @@ class Run:
     def ask(self, step, question, yesno=False, power=False):
         """the owner does a step (Enter) or answers (y/n): 'yes', 'no' or 'skip'. power: the step may
         take the port away (a power cycle, the board programmed or switched over to its flash): while
-        the owner works, and for 15 s after the answer, a port that goes away is opened again once it
-        is back, and SurfBoot's first lines may then be missed. At any other time a port that goes
-        away ends the procedure at once (USB unplugged)"""
+        the owner works, and after the answer until the board's next expected line arrives (at most
+        15 s if the port is not back by then), a port that goes away is opened again once it is
+        back, and SurfBoot's first lines may then be missed. At any other time a port that goes away
+        ends the procedure at once (USB unplugged)"""
         t = self.link.now() if self.link else 0.0
         if power and self.link:
             self.link.allow_reopen(float('inf'))
@@ -242,6 +248,7 @@ class Run:
                     answer = 'yes'
         if power and self.link:
             self.link.allow_reopen(15)
+            self.power_pending = True
         self.steps.append((t, step, question, answer))
         return answer
 

@@ -74,9 +74,9 @@ is loaded, SurfBoot's report of it (build id, size, payload CRC-32) is compared 
 never as passed.
 
 A step that may take the port away (programming the FPGA, a power cycle: the board is powered
-by the same USB cable) is marked as such: while you work, and for 15 seconds after you press
-Enter, a port that goes away is opened again once it is back, and the transcript marks both
-moments with `*`. If SurfBoot's first lines came before the port was back, the boot is read
+by the same USB cable) is marked as such: while you work, and after you press Enter until the
+board's next expected line arrives (15 seconds at most if the port is not back by then), a port
+that goes away is opened again once it is back, and the transcript marks both moments with `*`. If SurfBoot's first lines came before the port was back, the boot is read
 from the kernel load on, and the bitstream's identity comes from the kernel's `bootinfo`
 instead; the evidence says so. At any other moment a port that goes away ends the test at once
 with "USB unplugged, or the board lost power?".
