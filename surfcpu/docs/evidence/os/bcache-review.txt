@@ -233,3 +233,155 @@ Every new scenario fails on d7452f4 (15 of 15); every scenario of round fs-fix p
   cache for each); the 160 KiB cp +1.7 %, reading it back +0.3 %. The refusing card's run asks the card more (B13: up
   to 4 refused requests a sync, B14: room() asks again). Before 08965ef the hold's clock was read each time a block was
   taken: the reboot run's read-back cost +0.95 M (1.3 %), the write run +0.5 %, the faults run +4.9 %.
+
+======================================================================================================================
+Round fs-fix-3 (10/16/26): an independent review of B12-B19 (fd37406), and its fixes (audit B20-B26)
+date:   2026-10-16 (local)
+review: by another agent, read-only, on fd37406: six scenarios (fsrev3-tests/review3.c, S1-S6) against fd37406's
+        fs/bcache.c, fs/fat.c and fs/fat_mkfs.c with tests/host/test_fatfs.c's stand-ins, the threaded test in new
+        settings (conc_campaign3.sh, and hunt.sh with a debug build), S6 under AddressSanitizer. It found B12's core
+        sound: no copy torn, the lists consistent (bcache_audit 0 in every run), no lock inversion, B13, B14 and B18
+        right, no regression of B1-B11. Its findings M1, M2, minor 1-5 and two lesser ones are docs/CODE-AUDIT.md's
+        B20-B26.
+before: fd37406's fs/, include/, lib/ and tests/host (git archive of b81ccc9, whose fs/ and include/ are fd37406's),
+        built with this round's tests/host/test_fatfs.c (its stand-ins; the scenarios call nothing fd37406 lacks),
+        test_fatfuzz.c and test_fatconc.c
+after:  sc/fs-fix-3 (from surfcpu b81ccc9): cb09770 fat (B20, B21, B23-B25), b6337b2 bcache (B22, B26), e9adcb9 and
+        3f8c60f tests, a40fb28 (fat_rename()'s undo arrays zeroed: gcc -O2's warnings), ddead0d docs, 390d194 (the
+        threaded test's threads tasks of their own), 70bb002 (owed() inline again: section 17), then docs and this
+        evidence; the host results below are of 70bb002, but the threaded campaign and hunt of section 14, of 390d194
+        (the two differ in two functions of fs/bcache.c made inline); x86.txt says which commit each devenv run was at
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32, tests/host/pager_shim), and the
+        same with -fsanitize=address,undefined; the devenv container (gcc -m32) through make unittest (section 16)
+
+== 11. Before and after, scenario by scenario (tests/host/test_fatfs.c: 213 checks; those of rounds fs-fix and fs-fix-2
+       pass on both, but B16b, changed for B20)
+scenario  audit review what                                             before (fd37406)                                after
+B20a      B20   S1a    mv a b over b, whose block appended into a       FAIL: the mv says 0, and its first order point   pass: EIO, nothing changed, nothing of it
+                       cluster that last held another file's bytes      writes the root's block (block 65) with b's      written while the block refuses (the root's
+                       refuses (a sync said EIO; b's entry held at 512) entry at size 1024 over those bytes              block waits for it); once it is written, the
+                                                                                                                         entry after it, and the mv works
+B20b      B20   S1b    mv s/a b, the same; s's block unreadable once    FAIL: EIO, and the card keeps b at 1024 over the pass: EIO, nothing changed (the root is not
+                       the root's block is written                      other file's bytes and the new name (B~1) for    written, so s's block stays readable)
+                                                                        a's chain beside s/a: two names on one chain
+B20c      B20   S1c    mv a b, the same; the card refusing the root's   FAIL: EIO; three syncs later the card holds      pass: EIO; A->4, and B->2 at 512, on the card
+                       block once it has written it                     A->4 and B~1->4 (two names on one chain) and
+                                                                        B->2 at 1024 over the other file's bytes
+B21a      B21   S2     rm of a file with 12, and with 20, refused       12: pass; 20: FAIL, EIO for as long as they      pass: both work, the blocks dropped, a sync
+                       blocks                                           refuse (B16 looked at 16)                        then 0 with the card still refusing them
+B21b      B21   S6     rm of a file whose chain loops (7 -> 7) through  FAIL: AddressSanitizer, stack-buffer-overflow    pass: EIO with the name back (g's refused
+                       4 of the card's 17 failed blocks; then, the card WRITE in aside_failed() from fat_unlink(); built blocks hold its order point back), no
+                       working, rm of a one-cluster file whose chain    without it, the rm says EIO with the name gone   overflow; then the rm works, and the looping
+                       loops                                            (the undo array overwritten); the looping        cluster comes free once (+1)
+                                                                        cluster comes free twice (+2)
+B22       B22   S5     a 64 KB straight write over cached blocks; the   FAIL: EIO; 0 blocks read new right after it, 64  pass: EIO; the same 64 blocks read new both
+                       card stores its first 64 blocks, then refuses    once the cache made room                         times, the 64 the card holds
+B23       B23   S3     1 byte at 300000 of a 512-byte file, the card    FAIL: -28 (ENOSPC), size 66048; the truncate EIO pass: EIO and size 512, three times; the
+                       refusing part of the gap; a truncate to 300000;  (size 66048); the 64 KB write EIO with size      chain cut back: nothing lost
+                       64 KB at 102400 (the gap written, not the bytes) 102400; clusters lost
+B24       B24   S4     mv s/a t/a: s's block unreadable after the first FAIL: EIO, then sync 0 with s/a and t/a both on  pass: EIO; "a rename that failed could not
+                       order point, t's unreadable during the undo      the card; rm t/a works (freeing s/a's chain)    be undone ...: read-only until unmounted",
+                                                                                                                         once; rm, create and mv then EROFS; syncs
+                                                                                                                         work; unmount leaves it marked unclean
+B25       B25   -      a write cut back while the card refuses (a       FAIL: the oracle, at the sync once the card      pass: the cut reaches the card first, the
+                       table point put the link into its clusters on    works: "entry 'F' -> cluster 1000 (step 32 of    frees in the same fat_sync()'s second pass;
+                       the card), the frees' FAT sector ahead of the    its chain) is free"                              nothing lost
+                       cut's in the cache
+B26a      B26   -      bsync of 300 blocks on a card that takes         FAIL: the sync asked the card 303 times (each    pass: 4 times
+                       nothing, another task making room at each        room() set the device's count back)
+                       refusal
+B26b      B26   -      an rm, its file's refused block set aside; its   FAIL: the other task's sync says 0; the rm then  pass: -1: it waits for the block as for a hold
+                       order point writes another directory block, and  fails and puts the block back, not written       (here 10 s, the rm being stuck inside that
+                       another task syncs the data and tables then                                                       write; then gives up, said once)
+B16b      B16,  -      (changed) mv over the file whose block refuses   fails (the mv works there)                       pass: EIO, nothing changed; rm of that file
+          B20                                                                                                            works, then the mv
+(each)    B9           the cache's account of each disk matches its      pass                                             pass
+                       blocks
+Every new scenario fails on fd37406 (11 of 11, 25 of their checks; and B16b's 3 as changed: 211 checks there, 28
+failing); every scenario of the earlier rounds passes on both. The review's own file (review3.c, unchanged, with
+fd37406's harness head and this code): 25 checks, 2 failures, both by design: S1a's "the mv works" (B20: EIO while the
+block refuses) and S4's "changed nothing" (B24: it cannot be undone; the volume refuses changes instead); its S6 under
+AddressSanitizer: nothing.
+aside_failed()'s callers against the order rule (M1 asked for it): unlink sets aside after the entry is deleted in the
+cache, truncate to zero after the entry is emptied, a smaller truncate after the cut and the new size; what their order
+point writes then names none of the blocks. rename's first order point now owes them; its second sets them aside once
+the replaced entry is deleted, as unlink does (once the first has worked none is left: nothing dirties the replaced
+file's blocks under the volume's lock; it keeps the rule the same in every caller).
+The drivers (minor 2): sdcard.c's write_once() counts the blocks of a CMD25 the card took and sd_write() returns the
+error with them stored; usb/msc.c's msc_rw() sends WRITE(10) in 32 KB pieces, those before a failed one stored; ata.c
+writes sector by sector. B22 is in the cache, so it holds for all three.
+
+== 12. AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the
+       kernel files and the tests alike)
+  after:   test_fatfs 213 checks, 0 failures, no report; test_fatfuzz's set, 4 runs, 0 failures, no report; test_fatconc
+           in make unittest's four settings, each exit 0, no report; the review's review3.c (all six scenarios): no report
+  before:  test_fatfs b21b and review3.c s6: "AddressSanitizer: stack-buffer-overflow ... WRITE of size 4 ... in
+           aside_failed fat.c:513 ... in fat_unlink fat.c:1494" (the review's finding M2)
+
+== 13. The randomized test (tests/host/test_fatfuzz.c, make unittest's set)
+  after:   4 runs, 0 with failures (oracle, B5, audit, image, sync, short writes that changed more: 0 each); 1.0 s, 3.0 s
+           under the sanitizers
+  (the RAM disks there refuse a request whole, as before: B22's partial stores are B22's scenario's)
+
+== 14. The threaded test (tests/host/test_fatconc.c)
+  Since 390d194 make unittest builds fs/ for it with curTask standing for the calling thread's own task: B26's blocks
+  set aside are then other threads' debt (before, every thread was one task, and B26's waits never ran there). In
+  make unittest's first setting, 3 s, a scratch build counted 2,869 blocks set aside and 175 waits of other threads'
+  syncs for them; every check as before. make unittest's settings, 3 s each, and a fourth added, the review's "6 1 0 1
+  0 0 1 8192 0" (six writers, chaos, no io time, write-heavy, 8192 blocks): exit 0 in each, with one task for all
+  threads and with a task per thread, and under the sanitizers.
+  The review's campaign (conc_campaign3.sh's four settings, seeds 31-34, 12 s each; a task per thread): 16 runs,
+  1,221,719 operations, 25,077 closes whose write-back said 0 checked on the disk: no watchdog, the final syncs 0, no
+  dirty block left, oracle 0, both accounts right, B5 0, the models and the end comparison right, no stale close.
+  The review's hunt (its setting, 12 s, seeds 33 and 41-55): oracle 0 and exit 0 in 16 of 16 runs with one task for
+  all threads, and in 16 of 16 with a task per thread. The same hunt on fd37406 here: 16 of 16 also showed nothing
+  (the review's runs: "oracle 1" in 2 of its 9 runs of that setting, and seed 44 with its debug build, whose trace
+  shows the window, hunt_dbg_44.txt): the window needs a refused order point between a write's table point and its
+  cut-back, then a sync writing the two FAT sectors the other way, while the other writers and the chaos run. B25's
+  scenario (section 11) sets that up deterministically: on fd37406 it shows the chain running into a freed cluster
+  every time, and nothing now.
+
+== 15. Costs (round fs-fix-2's program, section 8; device write requests, blocks, host CPU time, least of eight runs)
+                                                    fd37406                   after (70bb002)
+  unlink of 200 files, a sync after each            600 (  600)   0.7 ms    600 (  600)   0.8 ms
+  mv of 200 files in one directory                  400 (  400)   3.3 ms    400 (  400)   3.5 ms
+  200 x open O_TRUNC, write 512 bytes, close       1000 ( 1000)   1.4 ms   1000 ( 1000)   1.7 ms
+  4 MiB in 4 KiB pieces, FAT16, 512-byte clusters   115 ( 8291)   4.9 ms    115 ( 8291)   4.9 ms
+  4 MiB in 4 KiB pieces, FAT32 64 MiB (512 B cl.)   197 ( 8580)   5.7 ms    197 ( 8580)   5.7 ms
+  4 MiB in 64 KiB pieces, FAT32 64 MiB              196 ( 8580)   3.0 ms    196 ( 8580)   3.1 ms
+  4 MiB in 4 KiB pieces, FAT32 1 GiB                105 ( 8244)   4.7 ms    105 ( 8244)   4.7 ms
+  4 MiB in 64 KiB pieces, FAT32 1 GiB                84 ( 8244)   2.2 ms     84 ( 8244)   2.3 ms
+  The same requests and blocks on every row (nothing here refuses a write, so no list of failed blocks is made). The
+  host's CPU time: the same on the 4 MiB rows; on the rows of 200 operations, each a millisecond or two in all, 0.1-0.3
+  ms more, under 1.5 us an operation (each syncs two or three times; at e9adcb9 the same as fd37406's within 0.1 ms).
+  On SurfCPU, where it counts, section 17. Memory: struct buf unchanged; struct bdev 8 bytes smaller on i386 (B13's
+  three fields out, the task that set blocks aside in; a sync's tally is 68 bytes on its stack); struct fat_fs 76 bytes
+  larger (the pending chains, the damaged flag); a list of the device's failed blocks (5 bytes each, 1024 at most) is
+  kalloc'd only while an rm, mv, truncate or cut-back runs on a device that has some.
+
+== 16. make unittest in the devenv container (gcc -m32)
+  O0 (volume surfos-sc-fs3, 17:23-17:28 at 70bb002; 16:01-16:08 at 390d194): "FATFS: 213 checks, 0 failures",
+  "FATFUZZ: 4 runs, 0 with failures", "CONC: ok" for each of the four settings (the threads tasks of their own); every
+  other unit test passing (surfcpu/docs/evidence/os/x86.txt, round fs-fix-3). O2 (volume surfos-sc-fs3-o2, 18:12-18:18
+  at 2b0800b, the same code; 16:14-16:21 at 390d194): the same; the run's exit 2 is tests/test_devenv.py with O=2 in its
+  environment, as in round fs-fix-2 (x86.txt).
+
+== 17. Where the same code runs under the riscv32 kernel (make -C surfcpu check, 17:29-17:52, sc/fs-fix-3 at 70bb002;
+       it had passed at 390d194 too, 16:21-16:56)
+  "check: all automated SurfCPU checks passed". Among them: boards/qemu_virt/test_os.py 132 of 132 at -O2 and at -O0;
+  test-os-surfemu 18 of 18; on the RTL system (surfsim, with the io track's card model) test-os-persist 17 of 17,
+  test-os-faults 25 of 25, test-os-kit 21 of 21, test-soc-system-boot 21 of 21.
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against b81ccc9's (fd37406's fs/; its tree
+  from git archive, built the same way, with the same surfsim and SurfBoot ROM: this round changes neither; 16:58-17:02):
+                                         b81ccc9              390d194                after (70bb002)
+    test-os-persist, the write run          276,200,532       285,524,383  +3.4 %    277,042,235  +0.3 %
+    test-os-persist, the reboot run         223,209,489       224,053,374  +0.4 %    223,813,073  +0.3 %
+    test-os-faults, the refusing card       312,363,454       324,861,995  +4.0 %    312,771,112  +0.1 %
+    test-os-faults, the full card           200,971,593       207,044,322  +3.0 %    201,728,181  +0.4 %
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 3.7 KB larger
+  (388,724 -> 392,388 bytes: +0.44 M cycles); the commands after that within -0.9 % and +0.5 % of b81ccc9's (the
+  banner comes 1.9 M cycles sooner and the next line as much later, in both runs: two boot lines in another order).
+  At 390d194 every command that syncs took about 0.78 M cycles more (mkdir, write, append, mv, rm +13 to +21 %, an
+  eject +18 to +24 %, a sync command +10 %): B26 had made owed() too large for gcc -O2 to inline, and each sync asks it
+  of all 1024 buffers twice (owed_open() and the last loop), a call each on a CPU that fetches every instruction from
+  DDR; 70bb002 makes owed() and aside_other() inline (the object then has no owed: riscv64-unknown-elf-nm).
