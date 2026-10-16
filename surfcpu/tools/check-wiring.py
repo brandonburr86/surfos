@@ -14,7 +14,13 @@ Checks that the Arty A7 designs' pins agree everywhere (brief section 4, docs/WI
     Verilog), I/O standard and pin options;
   * the row's Digilent name has that pin and I/O standard in both master XDC files
     (boards/arty_a7/digilent/xdc, A7-35 and A7-100), and the pin is in one of the 3.3 V
-    banks 14, 15, 16, 35 (Arty A7 schematic Rev. E.0 sheet 7), never the 1.35 V DDR bank 34.
+    banks 14, 15, 16, 35 (Arty A7 schematic Rev. E.0 sheet 7), never the 1.35 V DDR bank 34;
+  * no unconstrained I/O: every input is a clock, has an input delay or a false path from it,
+    every output has -max and -min output delays or a false path to it (inouts both), and
+    every get_ports pattern in the design's XDC files matches one of its ports;
+  * the scoped CDC constraints (boards/arty_a7/xdc/cdc) name registers and ports their
+    rtl/lib modules really have (Vivado's names: <reg>_reg, <reg>_reg[i] for vectors), and
+    the clock-renaming get_pins paths exist in the RTL hierarchy.
 
     python3 tools/check-wiring.py              check every design (exit 1 on any problem)
     python3 tools/check-wiring.py --self-test  show that each kind of mistake is caught
@@ -202,6 +208,99 @@ def wiring_options(text: str) -> set[str]:
     return set() if text in ("-", "") else {t.upper() for t in text.split()}
 
 
+def read_timing(paths: list[Path]) -> list[tuple[str, str, list[str], str]]:
+    """[(command, role, port patterns, where)] for every timing command naming ports.
+    role: 'clock' (create_clock), 'from'/'to' (set_false_path), 'in' (set_input_delay),
+    'out-max'/'out-min'/'out' (set_output_delay), 'pin' (a pin property line)."""
+    out = []
+    for path in paths:
+        for n, raw in enumerate(path.read_text().splitlines(), 1):
+            line = raw.split(";")[0].strip() if not raw.strip().startswith("#") else ""
+            if not line:
+                continue
+            where = f"{path.name}:{n}"
+            words = line.split()
+            cmd = words[0]
+            for m in re.finditer(r"(-from|-to)?\s*\[get_ports\s+(?:\{([^}]*)\}|([^\s\]]+))\s*\]", line):
+                pats = (m.group(2) or m.group(3)).split()
+                if cmd == "create_clock":
+                    role = "clock"
+                elif cmd == "set_false_path":
+                    role = (m.group(1) or "").lstrip("-") or "?"
+                elif cmd == "set_input_delay":
+                    role = "in"
+                elif cmd == "set_output_delay":
+                    role = "out-max" if "-max" in words else "out-min" if "-min" in words else "out"
+                elif cmd == "set_property":
+                    role = "pin"
+                else:
+                    role = "other"
+                out.append((cmd, role, pats, where))
+    return out
+
+
+def port_match(pattern: str, ports) -> list[str]:
+    rx = re.compile("^" + re.escape(pattern).replace("\\*", ".*") + "$")
+    return [p for p in ports if rx.match(p)]
+
+
+def module_regs(module: str) -> tuple[dict[str, bool], set[str]]:
+    """({register name: is a vector}, {port names}) of rtl/lib/<module>.v."""
+    text = strip_comments((ROOT / "rtl" / "lib" / f"{module}.v").read_text())
+    regs = {}
+    for m in re.finditer(r"\breg\b\s*(\[[^\]]+\])?\s*([^;=]+)", text):
+        for name in re.findall(r"\b([A-Za-z_]\w*)\b", m.group(2).split("=")[0]):
+            regs[name] = m.group(1) is not None
+    ports = set(re.findall(r"\b(?:input|output|inout)\s+(?:wire|reg)?\s*(?:\[[^\]]+\])?\s*(\w+)", text))
+    return regs, ports
+
+
+def check_timing_coverage(data: dict) -> list[str]:
+    errors = []
+    for name, d in data["designs"].items():
+        ports = d["ports"]
+        cover: dict[str, set[str]] = {p: set() for p in ports}
+        for cmd, role, pats, where in d["timing"]:
+            for pat in pats:
+                hits = port_match(pat, ports)
+                if not hits:
+                    errors.append(f"{name}: {where}: get_ports {pat} matches no port of {d['top']}")
+                for h in hits:
+                    cover[h].add(role)
+        for port, dirn in sorted(ports.items()):
+            roles = cover[port]
+            ins = bool(roles & {"clock", "from", "in"})
+            outs = "to" in roles or "out" in roles or {"out-max", "out-min"} <= roles
+            if dirn in ("in", "inout") and not ins:
+                errors.append(f"{name}: input {port} has no clock, input delay or false path (unconstrained I/O)")
+            if dirn in ("out", "inout") and not outs:
+                errors.append(f"{name}: output {port} has no -max/-min output delay or false path (unconstrained I/O)")
+        # clock renaming: the hierarchy the get_pins paths name must exist
+        rtl = "\n".join(strip_comments(sp.read_text()) for sp in d["sources"])
+        for xdc in d["xdc_files"]:
+            text = (BOARD / "xdc" / xdc).read_text()
+            for path in re.findall(r"\[get_pins\s+([\w/]+)\]", text):
+                inst = path.split("/")[:-1]
+                ok = all(re.search(rf"\b{re.escape(i)}\s*\(", rtl) for i in inst)
+                if not ok:
+                    errors.append(f"{name}: {xdc}: get_pins {path}: instance path not found in the sources")
+        # scoped CDC constraints: registers and ports of the module
+        for module, xdc in d["cdc"]:
+            regs, mports = module_regs(module)
+            text = xdc.read_text()
+            for cell in re.findall(r"get_cells\s+(?:-quiet\s+)?\{?([\w\[\]*]+)\}?\]", text):
+                m = re.fullmatch(r"(\w+)_reg(\[[^\]]+\])?", cell)
+                if not m or m.group(1) not in regs:
+                    errors.append(f"{name}: {xdc.name}: cell {cell} is not a register of {module}")
+                elif bool(m.group(2)) != regs[m.group(1)]:
+                    errors.append(f"{name}: {xdc.name}: cell {cell}: {m.group(1)} is "
+                                  f"{'a vector' if regs[m.group(1)] else 'a single bit'} in {module}")
+            for port in re.findall(r"get_ports\s+(\w+)\]", text):
+                if port not in mports:
+                    errors.append(f"{name}: {xdc.name}: {module} has no port {port}")
+    return errors
+
+
 # ------------------------------------------------------------------------------------ checking
 def load_all() -> dict:
     designs = {}
@@ -213,7 +312,9 @@ def load_all() -> dict:
             srcs += expand(f"boards/arty_a7/rtl/{top}.v")
         xdcs = [p for pat in items.get("xdc", []) for p in expand(pat[0])]
         designs[f.stem] = {"top": top, "ports": top_ports(srcs, top), "xdc": read_xdc(xdcs),
-                           "xdc_files": [x.name for x in xdcs]}
+                           "xdc_files": [x.name for x in xdcs], "timing": read_timing(xdcs),
+                           "cdc": [(m, ROOT / x) for m, x in items.get("cdc", [])],
+                           "sources": srcs}
     return {"designs": designs, "wiring": read_wiring(WIRING),
             "masters": {k: read_master(v) for k, v in MASTERS.items()}}
 
@@ -277,6 +378,7 @@ def check(data: dict) -> tuple[list[str], list[str]]:
     for port, row in sorted(wiring.items()):
         if port not in used_ports:
             errors.append(f"WIRING.md:{row['_line']}: {port} is not a port of any design")
+    errors += check_timing_coverage(data)
     a, b = masters["A7-35"], masters["A7-100"]
     for key in sorted(set(a) | set(b)):
         if a.get(key, (None,))[0] != b.get(key, (None,))[0]:
@@ -339,13 +441,36 @@ def self_test() -> int:
         row = dict(data["wiring"]["sw[0]"])
         data["wiring"]["sw[9]"] = row
 
+    def m_nofp(data):         # an input without any timing constraint
+        t = data["designs"][d0]["timing"]
+        data["designs"][d0]["timing"] = [x for x in t if not (x[1] == "from" and "sd_cd_n" in " ".join(x[2]))]
+        data["designs"][d0]["timing"].append(("set_false_path", "from", ["sd_miso", "sd_dat1", "sd_dat2"], "t.xdc:1"))
+
+    def m_noomin(data):       # an output with only a -max output delay
+        t = data["designs"][d0]["timing"]
+        data["designs"][d0]["timing"] = [x for x in t if x[1] != "out-min"]
+
+    def m_dangling(data):     # a constraint on a port pattern that matches nothing
+        data["designs"][d0]["timing"].append(("set_false_path", "from", ["vga_q[*]"], "t.xdc:2"))
+
+    def m_cell(data):         # a scoped CDC file naming a register the module lacks
+        import tempfile
+        tmp = Path(tempfile.mkdtemp()) / "surf_pulse_sync.xdc"
+        tmp.write_text("set_max_delay -datapath_only -from [get_cells src_toggel_reg] "
+                       "-to [get_cells {dst_sync_reg[0]}] 40\n")
+        data["designs"][d0]["cdc"] = [(m, tmp if m == "surf_pulse_sync" else x)
+                                      for m, x in data["designs"][d0]["cdc"]]
+
     cases = [("wrong pin", m_pin, "sd_sclk"), ("constrained twice", m_dup, "vga_hs"),
              ("no pin", m_missing, "vga_vs"), ("unknown port", m_extra, "vga_x"),
              ("shared pin", m_shared, "H5"), ("WIRING.md pin", m_wiring, "uart_tx"),
              ("direction", m_dir, "sd_miso"), ("I/O standard", m_std, "LVCMOS18"),
              ("options", m_opt, "sd_cd_n"), ("Digilent name", m_master, "vga_g[0]"),
              ("DDR bank", m_bank, "bank 34"), ("35T/100T", m_variant, "jd[2]"),
-             ("stray row", m_unlisted, "sw[9]")]
+             ("stray row", m_unlisted, "sw[9]"), ("no false path", m_nofp, "sd_cd_n has no clock"),
+             ("only -max delay", m_noomin, "output delay or false path"),
+             ("dangling get_ports", m_dangling, "vga_q[*] matches no port"),
+             ("CDC cell name", m_cell, "src_toggel_reg")]
     failed = 0
     for label, mutate, word in cases:
         data = copy.deepcopy(base)
@@ -373,7 +498,8 @@ def main(argv: list[str]) -> int:
         print(f"check-wiring: ERROR: {e}")
     if errors:
         return 1
-    print("check-wiring: every port has one pin, matching docs/WIRING.md and both master XDC files")
+    print("check-wiring: every port has one pin, matching docs/WIRING.md and both master XDC files;")
+    print("check-wiring: every port has a timing constraint; the CDC and clock constraints name real cells")
     return 0
 
 

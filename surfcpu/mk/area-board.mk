@@ -28,7 +28,8 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
               -Irtl/generated -I$(BD)/rtl
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
-        board-baseline-rt board-baseline board-top board-digilent board-wiring
+        board-baseline-rt board-baseline board-top board-digilent board-wiring \
+        board-cdc-xdc
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -109,7 +110,7 @@ board-top: $(BSIM)/tb_top.vvp
 	@echo "board-top: PASS (seeds 1 7 123, $(if $(SOC_REAL),real SoC,SoC stand-in))"
 
 # ------------------------------------------------------------------------------------ checks
-check-board: board-clockplan board-digilent board-wiring
+check-board: board-clockplan board-digilent board-wiring board-cdc-xdc
 	@echo "check-board: PASS"
 
 board-clockplan:
@@ -126,3 +127,9 @@ board-wiring:
 	$(Q)$(PYTHON) tools/check-wiring.py --self-test > $(BSIM)/check-wiring-self-test.txt 2>&1 \
 	  || { cat $(BSIM)/check-wiring-self-test.txt; exit 1; }
 	@tail -1 $(BSIM)/check-wiring-self-test.txt
+
+# the scoped CDC constraint files' Tcl logic, run with stand-in Vivado queries
+board-cdc-xdc:
+	$(Q)$(YOSYS) -q -c sim/board/tools/cdc_xdc_test.tcl > $(BSIM)/cdc_xdc_test.txt 2>&1 \
+	  || { cat $(BSIM)/cdc_xdc_test.txt; exit 1; }
+	@tail -1 $(BSIM)/cdc_xdc_test.txt
