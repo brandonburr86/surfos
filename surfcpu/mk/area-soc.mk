@@ -31,9 +31,9 @@ SOC_TOP_RTL     := rtl/soc/surfcpu_soc.v $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(SOC_PER
 SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
-.PHONY: lint-soc test-soc-units test-soc-system soc-gpio-real soc-mem-once
+.PHONY: lint-soc test-soc-units test-soc-system test-soc-models soc-gpio-real soc-mem-once
 lint: lint-soc
-test-soc: test-soc-units test-soc-system
+test-soc: test-soc-units test-soc-system test-soc-models
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
 # stop with the log on the first failure
@@ -199,3 +199,15 @@ soc-gpio-real: $(SOC_DIR)/tb_gpio_real.vvp
 soc-mem-once: $(SOC_DIR)/tb_mem.vvp $(SOC_DIR)/tb_mem_empty.vvp $(SOC_DIR)/rom_b.mem
 	$(call soc_run,$(SOC_DIR)/tb_mem.vvp,tb_mem_plusarg,+bootrom=$(SOC_DIR)/rom_b.mem)
 	$(call soc_run,$(SOC_DIR)/tb_mem_empty.vvp,tb_mem_empty)
+
+# ---------------------------------------------------------------------------- C++ models
+SOC_MODEL_SRC := sim/models/uart_model.cpp sim/models/ddr_model.cpp
+SOC_MODEL_HDR := sim/models/uart_model.h sim/models/ddr_model.h
+SOC_CXX        = g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isim/models -Ifirmware/include
+
+$(SOC_DIR)/test_models: sim/models/test_models.cpp $(SOC_MODEL_SRC) $(SOC_MODEL_HDR)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_CXX) -o $@ sim/models/test_models.cpp $(SOC_MODEL_SRC)
+
+test-soc-models: $(SOC_DIR)/test_models
+	$(Q)for s in $(SOC_SEEDS); do $(SOC_DIR)/test_models $$s || exit 1; done
