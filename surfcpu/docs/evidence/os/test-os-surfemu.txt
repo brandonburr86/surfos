@@ -1,7 +1,7 @@
 # test-os-surfemu arty_a7 SURFOS.BIN: 18 of 18 checks passed in 2 s (the fw track's firmware emulator: not the RTL, not the board)
-# 2026-10-16 07:09:37 UTC
+# 2026-10-16 09:08:18 UTC
 ok   card: mkcard.py makes the card (standard directories, /BOOT/SURFOS.BIN, /BOOT/CMDLINE.TXT, /USERS/DOCUMENTS/HELLO.TXT)
-ok   the emulator saw every expected line, in order (all expected output seen after 124.134 s simulated (3103357547 cycles, 244544636 instructions, 13012 traps); pc 800014a0; LEDs 1 RGB 000)
+ok   the emulator saw every expected line, in order (all expected output seen after 95.295 s simulated (2382366739 cycles, 188774521 instructions, 11168 traps); pc 80001470; LEDs 1 RGB 000)
 ok   SurfBoot loads /BOOT/SURFOS.BIN from the card and checks it
 ok   SurfBoot hands over: entry 0x80000000, a0 = 0, a1 = 0x0001f000, a2 = the magic
 ok   the kernel boots to the shell, its console on surf_uart (ascii, from /BOOT/CMDLINE.TXT)

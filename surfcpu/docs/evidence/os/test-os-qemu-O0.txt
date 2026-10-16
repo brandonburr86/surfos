@@ -1,5 +1,5 @@
-# test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 86 of 86 checks passed in 14 s
-# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 07:09:35 UTC
+# test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 123 of 123 checks passed in 44 s
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 09:08:16 UTC
 ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
 ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
 ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1
@@ -64,7 +64,7 @@ ok   sdsim: ls /sd0p1 over the SD driver
 ok   sdsim: the 1 MB file read through the SD driver (CMD17/CMD18)
 ok   sdsim: a 1 MB copy and a new file written through the SD driver (CMD24/CMD25), synced
 ok   sdsim: mkdir /sd0p1/USERS/DOCUMENTS (longer than 8.3) and a file written in it
-ok   sdsim: the driver counted 61 reads and 47 writes, no timeouts or errors
+ok   sdsim: the driver counted 60 reads and 55 writes, no timeouts or errors
 ok   sdsim: umount, and the card image saved through the monitor
 ok   sdsim: mtools reads SDSIM.TXT
 ok   sdsim: mtools reads the 1 MB copy byte for byte
@@ -72,9 +72,9 @@ ok   sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LF
 ok   sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT
 ok   sdsim: fsck.fat -n finds the volume clean
 ok   sdsim: poweroff
-ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 417120 bytes, CRC b37b40b9, build f296e119
+ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 431760 bytes, CRC 177842c1, build 4423f13c
 ok   package: SURFOS.BIN copied to its load address boots to the shell
-ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1203248)
+ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1230656)
 ok   package: poweroff
 ok   card: mkcard.py makes a 48 MiB card image with the standard directories and /BOOT/SURFOS.BIN
 ok   card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1
@@ -86,3 +86,40 @@ ok   card: mkcard.py --inspect reads /USERS/DOCUMENTS/FROMRV.TXT back
 ok   card: mtools reads it too
 ok   card: fsck.fat -n finds the card clean
 ok   card: poweroff
+ok   faults: sdsim, /sd0p1 mounted read-write
+ok   faults: one block answered "write error": the console says so, the next sync (at the file's close) writes it again, the command succeeds and the file reads back
+ok   faults: a card that refuses every block: write and cp (1 MB, more than the cache holds) both say "not all of it reached /sd0p1: I/O error", and return (0 s; the cache keeps the refused blocks, no hang)
+ok   faults: eject with blocks the card refused: "stays mounted", not "safe to remove" (audit B2)
+ok   faults: the card works again: sync writes everything the cache kept
+ok   faults: a card that answers no command: the write fails at once (no response within NCR: "write: /sd0p1/MUTE.TXT: I/O error", 0.0 s, 1 driver timeouts), and sync works once the card answers
+ok   faults: ERR.BIN holds what cp wrote before the card refused everything: the first 514560 bytes of BIG.BIN
+ok   faults: eject once the card works: safe to remove; the card image saved
+ok   faults: on the host every file the commands wrote is there and whole (MUTE.TXT not made: its open had failed)
+ok   faults: BIG.BIN untouched, ERR.BIN the first 514560 bytes of it
+ok   faults: fsck.fat -n: /ERR.BIN; File size is 514560 bytes, cluster chain length is > 514560 bytes.; Truncating file to 514560 bytes.; Free cluster summary wrong (123936 vs. really 123939); Auto-correcting. (the clusters cp had taken when the card refused the rest stay in ERR.BIN's chain past its size; nothing else)
+ok   faults: poweroff
+ok   pull: the card taken out while mounted read-write: within half a second the kernel says so, and that what was not yet written is lost
+ok   pull: a write afterwards is refused (I/O error), the mount stays, marked "unplugged: umount it"
+ok   pull: the card image as it was taken out, saved
+ok   pull: fsck.fat -n on it finds Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit. (pulled after a sync: only the mark of a volume mounted read-write)
+ok   pull: umount, put back: sd0 again, mounted with "not unmounted cleanly", KEEP.TXT there, AFTER.TXT not
+ok   pull: after eject the card is clean again (fsck.fat -n)
+ok   pull: poweroff
+ok   pull after 1: the write says "not all of it reached /sd0p1", the card is out
+ok   pull after 1: fsck.fat -n finds Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.
+ok   pull after 1: rebooted from it: mounted ("not unmounted cleanly"), KEEP.TXT whole, the new file not there
+ok   pull after 2: the write says "not all of it reached /sd0p1", the card is out
+ok   pull after 2: fsck.fat -n finds FATs differ but appear to be intact.; Using first FAT.; Reclaimed 1 unused cluster (512 bytes).; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.
+ok   pull after 2: rebooted from it: mounted ("not unmounted cleanly"), KEEP.TXT whole, the new file not there
+ok   pull after 3: the write says "not all of it reached /sd0p1", the card is out
+ok   pull after 3: fsck.fat -n finds Reclaimed 1 unused cluster (512 bytes).; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.
+ok   pull after 3: rebooted from it: mounted ("not unmounted cleanly"), KEEP.TXT whole, the new file not there
+ok   pull after 4: the write says "not all of it reached /sd0p1", the card is out
+ok   pull after 4: fsck.fat -n finds Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; Free cluster summary wrong (124946 vs. really 124945); Auto-correcting.
+ok   pull after 4: rebooted from it: mounted ("not unmounted cleanly"), KEEP.TXT whole, the new file there and whole
+ok   pull in rm: "rm" says "not all of it reached /sd0p1", the card is out after its first block
+ok   pull in rm: fsck.fat -n finds Reclaimed 1 unused cluster (512 bytes).; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; Free cluster summary wrong (124946 vs. really 124947); Auto-correcting.
+ok   pull in mv into a folder: "mv" says "not all of it reached /sd0p1", the card is out after its first block
+ok   pull in mv into a folder: fsck.fat -n finds Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; /MOVES.TXT  and; /Folder/Moved-file.txt; share clusters.; Truncating second to 0 bytes.; /Folder/Moved-file.txt; File size is 18 bytes, cluster chain length is 0 bytes.; Truncating file to 0 bytes. (a name too many: the moved file under both names, never under none)
+ok   pull in write over a file: "write" says "not all of it reached /sd0p1", the card is out after its first block
+ok   pull in write over a file: fsck.fat -n finds Reclaimed 1 unused cluster (512 bytes).; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; Free cluster summary wrong (124946 vs. really 124947); Auto-correcting.

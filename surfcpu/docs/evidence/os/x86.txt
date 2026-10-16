@@ -1,6 +1,57 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
-Two rounds, newest first. Round 2 (10/16/26) changes the x86 kernel on purpose: the console lock (audit C10).
+Three rounds, newest first. Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
+write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+Round 2 (10/16/26) changes the x86 kernel on purpose: the console lock (audit C10).
 Round 1 (10/15/26) changed shared files only under #ifdef SURFOS_RISCV32 and left the x86 kernel byte-identical.
+
+======================================================================================================================
+Round 3, 10/16/26: failed writes kept and writes in order (audit B1, B3), eject (B2)
+date: 2026-10-16 (local)
+tree: sc/os-3 (from surfcpu 4e06018) with the shared files below as committed in "block cache: a failed write keeps
+      its block for the next sync (audit B1)", "eject: write the mounts out first, and stay mounted when that fails
+      (audit B2)" and "block cache and FAT: write in an order an interruption leaves repairable (audit B3)"; the
+      baseline is surfcpu 4e06018's x86 code (git archive of it)
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-os, surfos-sc-os-o2 (and surfos-sc-os-base for the baseline)
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B1-B3):
+  fs/bcache.c            blob b2ea4a8d (was 37007143)  B1: a failed write keeps its block dirty for the next sync,
+                                                       each run tried once per bsync(); B3: the write order
+  include/fs/bcache.h    blob 7e9a48ee (was c81311ea)  struct buf's wfail, fail_pass and order; bdirty_order()
+  fs/fat.c               blob a8734a6b (was 2cd18f8a)  B3: tables, entries and FSInfo in their order; order points
+                                                       in unlink, truncate to zero and rename
+  shell/fscmd.c          blob 4081d970 (was f2f47164)  B2: eject writes the mounts out first, stays mounted on failure
+Every x86 tree tested below was checked to hold exactly these blobs.
+
+== 1. The compiled kernel (arch/riscv32/elfcmp.py BASE/build/O<n> NEW/build/O<n>: every object, allocated sections)
+baseline (surfcpu 4e06018's x86 code) and new, both built with devenv/build.sh (make O=0, make O=2):
+  O0: 240 objects identical, 5 different: fs/bcache.o, fs/fat.o, shell/fscmd.o, ksyms.o (the symbol table),
+      surfos.bin (the kernel they link into)
+  O2: the same 240 identical, the same 5 different
+  So nothing else moved: every other user of fs/bcache.h compiles to the same bytes.
+
+== 2. make test-all (devenv/build.sh test-all): exit 0
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+
+== 3. make unittest (devenv/build.sh unittest): exit 0, no failures
+    PAGER 177, CRYPTO 129, WPA 118, IEEE80211 144, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP 467, AML FIELD 5120,
+    TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143, PARTITION TOOL 33,
+    LIBC 195, MKFS 115, PROMPT 55, CP437 69, TELNET 58, TELNETD SERVER 750 runs (0 bugs), PCIINFO 55, IWLFW 38,
+    UNDERTOW URL 382, UTIL 72, HTTP 835, HTML 672 (twice), SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426
+    (checks, 0 failures each); python unittest: Ran 19, 60, 28, 11, 5, 18, 1, 5 tests: OK each
+
+== 4. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks
+
+None of these x86 suites makes a write fail or pulls a disk in the middle of one: on x86 they show the changes do no
+harm (FAT on the RAM disks, the ATA disk and the USB sticks, eject, mkfs, fdisk). What the changes fix is shown where
+the same files run under the riscv32 kernel: boards/qemu_virt/test_os.py injects the SD card model's write errors,
+a card that stops answering and the card taken out after the nth block, and checks what fsck.fat finds afterwards
+(surfcpu/docs/evidence/os/test-os-qemu-O2.txt, -O0.txt).
 
 ======================================================================================================================
 Round 2, 10/16/26: the console lock (audit C10), and the riscv32 heap's bounds
