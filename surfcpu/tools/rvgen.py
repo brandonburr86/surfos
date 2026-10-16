@@ -52,9 +52,10 @@ MASK32 = 0xFFFFFFFF
 MASK64 = (1 << 64) - 1
 
 # Unmapped on Spike (checked by sim/ref/tests/test_rvgen.py) and, per docs/MODULES.md
-# section 6, on build/cpu/surfcpu_tb as long as docs/CPU.md puts no register there.
-FAULT_ADDRS = (0x00000000, 0x20000000, 0x40000000, 0x7FFFFFFC, 0x80400000, 0xF0000000,
-               0xFFFFFFFC)
+# section 6, on build/cpu/surfcpu_tb as long as docs/CPU.md puts no register there. These
+# programs are for the CPU testbench: in the full SoC 0x00000000 is the boot ROM and
+# 0x80400000 is DDR.
+FAULT_ADDRS = (0x00000000, 0x40000000, 0x7FFFFFFC, 0x80400000, 0xF0000000, 0xFFFFFFFC)
 
 DATA_SIZE = 4096        # the data area; x3 points at its middle
 HANDLER_REGS = (30, 31)

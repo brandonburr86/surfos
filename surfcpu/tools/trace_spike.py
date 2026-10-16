@@ -143,23 +143,30 @@ def spike_command(elf: Path, log: Path, max_instructions: int | None,
 
 
 class _Memory:
-    """The shadow memory: the ELF image plus every store Spike logged."""
+    """The shadow memory: the RAM window only (devices such as the CLINT are not memory),
+    starting from the ELF image (zero elsewhere, as Spike's RAM is), plus every store."""
 
     def __init__(self, image: dict[int, int]):
-        self.bytes = image
+        self.bytes = {a: b for a, b in image.items() if _in_ram(a)}
 
     def load(self, addr: int, size: int) -> int | None:
         val = 0
         for i in range(size):
-            b = self.bytes.get((addr + i) & 0xFFFFFFFF)
-            if b is None:
+            a = (addr + i) & 0xFFFFFFFF
+            if not _in_ram(a):
                 return None
-            val |= b << (8 * i)
+            val |= self.bytes.get(a, 0) << (8 * i)
         return val
 
     def store(self, addr: int, size: int, data: int) -> None:
         for i in range(size):
-            self.bytes[(addr + i) & 0xFFFFFFFF] = (data >> (8 * i)) & 0xFF
+            a = (addr + i) & 0xFFFFFFFF
+            if _in_ram(a):
+                self.bytes[a] = (data >> (8 * i)) & 0xFF
+
+
+def _in_ram(a: int) -> bool:
+    return RAM_BASE <= a < RAM_BASE + RAM_SIZE
 
 
 def _parse_commit_tail(tail: str, where: str):
