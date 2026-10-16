@@ -1008,6 +1008,7 @@ static int block_rw(struct fat_fs *fs, struct vnode *v, u32 c, u32 s, u32 so, u8
         if(!b) return -EIO;
         memcpy(buf, b->data + so, chunk);
     } else {
+        if(bcache_room(fs->dev)) return -EIO;                /* 10/16/26 (B6): the device refuses, past its share */
         b = (chunk == 512 || pos - so >= v->size) ? bget(fs->dev, lba) : bread(fs->dev, lba);
         if(!b) return -EIO;
         if(mode == RW_WRITE) memcpy(b->data + so, buf, chunk);
@@ -1103,6 +1104,7 @@ static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     if(!len) return 0;
     if(write && off + len < off) return -EFBIG;
     if(fs->dev->gone) return -EIO;
+    if(write && bcache_room(fs->dev)) return -EIO;          /* 10/16/26 (B6): back-pressure from a refusing device */
     mutex_lock(&v->sb->lock);
     size = v->size;
     first0 = n->first;
@@ -1127,7 +1129,7 @@ static int fat_truncate(struct vnode *v, u32 size) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
     int r = 0;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&v->sb->lock);
     if(size > v->size) {                                     /* growing: zeros */
         u32 first0 = n->first;
@@ -1168,7 +1170,7 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
     int r = validate_name(name);
 
     if(r) return r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
@@ -1227,7 +1229,7 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     struct fat_node *dn = (struct fat_node *)dir->priv;
     struct fat_dirent e;
     int r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
@@ -1282,7 +1284,7 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     int r = validate_name(nname);
 
     if(r) return r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&odir->sb->lock);
     on->rd_valid = nn->rd_valid = false;
     r = dir_find(fs, on, oname, &src);

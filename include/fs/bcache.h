@@ -27,6 +27,11 @@ dirty block of a lower order has, by bsync() and when a block is written to
 make room. FAT gives file data 0, its tables 1, directory entries 2, FSInfo 3,
 so whatever an interruption stops, nothing on the disk points at data that is
 not there yet.
+
+10/16/26 (audit B6): a device whose blocks fail keeps at most BCACHE_HOLD dirty
+blocks; past that its new writes fail at once (bcache_room(), bget()), and the
+rest of the cache stays the other devices'. Making room never writes to a
+device that refuses: a sync tries again, a failed run block by block.
 */
 
 #ifndef _FS_BCACHE_H
@@ -36,6 +41,7 @@ not there yet.
 
 #define BCACHE_BLOCKS 1024
 #define BCACHE_RUN    128               /* the most blocks one device request moves: 64 KB */
+#define BCACHE_HOLD   (BCACHE_BLOCKS / 4)   /* 10/16/26 (B6): a device's share of dirty blocks (bcache_room()) */
 
 struct bdev;
 
@@ -71,7 +77,12 @@ void bdirty(struct buf *b);                          /* changed: write it back l
 #define BORDER_MAX     3
 void bdirty_order(struct buf *b, u8 order);          /* bdirty(), written in that order (the lower, if dirty already) */
 void brelse(struct buf *b);
-int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed */
+int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed.
+                                                        Never with a block of the device held (10/16/26, B7: it waits for holders) */
+/* 10/16/26 (B6): before a file system makes blocks of dev dirty: 0, or -1 when dev refuses writes and
+   already holds BCACHE_HOLD dirty blocks (the write must fail: EIO). A device that works and holds
+   that many writes some out first. bget() asks the same. */
+int bcache_room(struct bdev *dev);
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
 int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
