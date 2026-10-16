@@ -383,5 +383,6 @@ physical results are separate columns, so nothing claims more than happened.
   * starting from it with JP1 on, and the real start-up time;
   * the recovery procedure;
   * m9's ten cold boots and one-hour soak, once a DDR boot design exists.
-* An independent review of the round is running.
+* `make check` passes with the round merged (a05b879, 25 minutes). An independent review of
+  the round is running.
 
