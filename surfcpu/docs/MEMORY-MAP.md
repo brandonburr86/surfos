@@ -171,7 +171,7 @@ Identity of the board and the build, clock rates and the DDR state. All read onl
 | `0x014` | `BUILD_ID` | ro | 31:0 | First 8 hex digits of the source commit the bitstream was built from. |
 | `0x018` | `BUILD_FLAGS` | ro | 0 `DIRTY` the source tree had uncommitted changes<br>1 `SIM` this is a simulation, not a bitstream | Build properties. |
 | `0x01C` | `FEATURES` | ro | 0 `UART`<br>1 `TIMER`<br>2 `IRQ`<br>3 `GPIO`<br>4 `SPI`<br>5 `PS2`<br>6 `VIDEO`<br>7 `DDR` | Which blocks were built in. |
-| `0x020` | `DDR_STATUS` | ro | 0 `CALIB_DONE` calibration succeeded; DDR is usable<br>1 `CALIB_FAIL` calibration did not finish within its time limit<br>2 `PRESENT` a DDR controller is built in<br>3 `TIMEOUT` sticky until reset: a DDR access was abandoned by the bridge's watchdog | DDR controller state. The DDR window answers with errors until CALIB_DONE. |
+| `0x020` | `DDR_STATUS` | ro | 0 `CALIB_DONE` calibration succeeded; DDR is usable<br>1 `CALIB_FAIL` sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0<br>2 `PRESENT` a DDR controller is built in<br>3 `TIMEOUT` sticky until reset: a DDR access was abandoned by the bridge's watchdog | DDR controller state. The DDR window answers with errors until CALIB_DONE. |
 | `0x024` | `DDR_SIZE` | ro | 31:0 | Bytes of DDR behind the window (0 when not present). |
 | `0x028` | `PIX_HZ` | ro | 31:0 | Pixel clock in Hz (0 without video). |
 | `0x02C` | `SCRATCH` | rw | 31:0 | Free read/write word for bus tests (reset 0). |

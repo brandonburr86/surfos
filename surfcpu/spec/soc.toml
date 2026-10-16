@@ -668,7 +668,7 @@ access = "ro"
 desc = "DDR controller state. The DDR window answers with errors until CALIB_DONE."
 fields = [
   { name = "CALIB_DONE", bits = "0", desc = "calibration succeeded; DDR is usable" },
-  { name = "CALIB_FAIL", bits = "1", desc = "calibration did not finish within its time limit" },
+  { name = "CALIB_FAIL", bits = "1", desc = "sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0" },
   { name = "PRESENT", bits = "2", desc = "a DDR controller is built in" },
   { name = "TIMEOUT", bits = "3", desc = "sticky until reset: a DDR access was abandoned by the bridge's watchdog" },
 ]

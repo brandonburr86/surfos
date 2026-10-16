@@ -363,7 +363,7 @@
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_LSB 0 /* calibration succeeded; DDR is usable */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_WIDTH 1
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK 0x00000001u /* in place */
-#define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB 1 /* calibration did not finish within its time limit */
+#define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB 1 /* sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0 */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_WIDTH 1
 #define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK 0x00000002u /* in place */
 #define SURF_SYSINFO_DDR_STATUS_PRESENT_LSB 2 /* a DDR controller is built in */

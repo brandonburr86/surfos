@@ -54,7 +54,10 @@ The instruction port always drives `req_write = 0`, `req_be = 4'b1111`, `req_wda
    value latched when that transfer started, so never more than 16 x 256 = 4096 cycles). The DDR bridge has
    a watchdog that turns a stuck access into an error response (`sysinfo.DDR_STATUS.TIMEOUT`).
 8. **Reset.** In reset, masters drive `req_valid = 0` and slaves drive `rsp_valid = 0`. The
-   whole SoC resets together; no request survives a reset.
+   whole SoC resets together; no request survives a reset. One exception: a DDR access that
+   `surf_ddr_bridge` had already handed to the controller's clock domain is still carried out
+   after a SoC reset; its answer is dropped, and the first DDR access after the reset waits for
+   it (docs/DDR.md section 5).
 
 ## 3. Errors
 
@@ -69,6 +72,12 @@ for:
 * an MMIO offset with no register, or a non-word access to an MMIO register (byte enables
   other than `4'b1111`);
 * any DDR access before calibration has succeeded, or one abandoned by the bridge's watchdog.
+
+Two DDR errors are exceptions to "not performed", and both arise only when the memory
+controller stops answering or is reset (docs/DDR.md section 5): a write the watchdog abandoned
+after the bridge had sent it may still be carried out later (software sees
+`sysinfo.DDR_STATUS.TIMEOUT`, and the DDR window refuses every access until reset), and an
+access cut short by a controller reset may or may not have reached the memory.
 
 ## 4. Alignment and widths
 
@@ -123,3 +132,6 @@ video clock domain.
 
 * 2026-10-15: rule 7's SPI bound uses the DIV latched at the start of the transfer (a DIV
   write during a transfer applies to the next one), as `surf_spi` implements it.
+* 2026-10-15: the DDR exceptions to section 3 (a watchdog-abandoned write that was already sent;
+  an access cut short by a controller reset) and to rule 8 (an access already in the controller's
+  clock domain completes after a SoC reset), as `surf_ddr_bridge` implements them.

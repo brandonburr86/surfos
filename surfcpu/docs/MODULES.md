@@ -61,7 +61,7 @@ A master port is the same list with `m_` and directions reversed.
 | `surf_spi` | io | `SYS_HZ` | `output irq`, `output sclk`, `output mosi`, `input miso`, `output cs_n`, `input cd_n` (card detect, low = card present; tie 0 without one) |
 | `surf_ps2` | io | `SYS_HZ` | `output irq`, `input ps2_clk_i`, `input ps2_data_i`, `output ps2_clk_oe`, `output ps2_data_oe` (open drain: `_oe` = 1 pulls the line low, 0 releases it) |
 | `surf_video` | io | `PIX_HZ` | `output irq`; `input pix_clk`, `input pix_rst`; `output [11:0] text_addr`, `input [31:0] text_data` (to `surf_textram`'s pixel port); `output [3:0] vga_r`, `vga_g`, `vga_b`, `output vga_hs`, `vga_vs` (registered in the `pix_clk` domain) |
-| `surf_ddr_bridge` | ddr | `TIMEOUT_CYCLES` | `output calib_done`, `calib_fail`, `timeout` (sys domain); controller side in the `ui_clk` domain, as the ddr track documents in docs/DDR.md |
+| `surf_ddr_bridge` | ddr | `TIMEOUT_CYCLES`, `CALIB_TIMEOUT_CYCLES`, `APP_ADDR_WIDTH`, `APP_DATA_WIDTH`, `DQ_WIDTH` | `output calib_done`, `calib_fail`, `timeout` (sys domain); controller side in the `ui_clk` domain, as the ddr track documents in docs/DDR.md |
 | `surfcpu_soc` | soc | section 4 | section 4 |
 | `surfcpu_arty_a7_top` | board | `BOARD`, ROM file, build identity | the board's pins (WIRING.md) |
 
@@ -167,4 +167,5 @@ line (the riscv-arch-test format).
 ## 8. Clarifications (version 1 unchanged)
 
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
-  interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6).
+  interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6); `surf_ddr_bridge`'s parameters
+  (section 3).
