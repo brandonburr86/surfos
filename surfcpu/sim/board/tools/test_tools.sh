@@ -440,6 +440,45 @@ for case in "FAKE_OX_LVS=BLOCKED (timeout):check LVS BLOCKED (timeout)" "FAKE_OX
     check "openxc7 gate ${setting%%=*}: build fails, no bitstream" test "$rc" -eq 1 -a ! -e "$b/arty_a7_baseline.bit"
     check "openxc7 gate ${setting%%=*}: the manifest says fail and why" grep -q "^reason = \".*$why" "$b/manifest.txt"
 done
+# the whole SoC: two design lists that differ only in the boot ROM
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_top.files > "$t/top.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files > "$t/diag.list"
+check "soc designs: surfcpu_arty_a7_bramdiag is surfcpu_arty_a7_top but for its boot ROM" cmp -s "$t/top.list" "$t/diag.list"
+check "soc designs: SurfBoot in one, the BRAM diagnostics in the other" test \
+    "$(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_top.files) $(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files)" \
+    = "build/fw/surfboot.mem build/fw/bramdiag.mem"
+printf '00000013\n00000067\n' > "$t/diag.mem"
+d=$base/arty_a7_100t/surfcpu_arty_a7_bramdiag
+romfake=$root/sim/board/tools/fake/romcheck
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: the bramdiag design through the open flow (fake) passes" is "$rc" 0
+check "soc: ... its ROM (ROM=) as the boot ROM define" logged "-D ARTY_BOOTROM_INIT=\"${t#$root/}/diag.mem\""
+check "soc: ... the design list's LVS limit" logged "--lvs-timeout 7200"
+check "soc: ... the boot ROM check on that file and the ROM's instance" \
+    logged "romcheck --rom ${t#$root/}/diag.mem --netlist ${d#$root/}/openxc7/surfcpu_arty_a7_top.json --top surfcpu_arty_a7_top --instance u_soc.u_bootrom"
+check "soc: ... the bitstream under the design's name" test -f "$d/surfcpu_arty_a7_bramdiag.bit"
+check "soc: the manifest names the ROM and has the netlist and boot ROM checks" python3 -c "
+import tomllib,sys,hashlib
+d=tomllib.load(open(sys.argv[1],'rb'))
+o=d['openxc7']
+assert d['result']=='pass' and d['design']=='surfcpu_arty_a7_bramdiag' and d['top']=='surfcpu_arty_a7_top', d
+assert d['rom_image']==sys.argv[2] and d['rom_sha256']==hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()
+assert o['check_netlist']=='PASS' and o['check_boot_rom']=='PASS'
+" "$d/manifest.txt" "${t#$root/}/diag.mem" "$t/diag.mem"
+run env FAKE_IDCODE=0x13631093 DESIGN=surfcpu_arty_a7_bramdiag tools/program.sh volatile arty_a7_100t
+check "soc: make program-volatile DESIGN=surfcpu_arty_a7_bramdiag finds and loads it" \
+    logged "openFPGALoader -b arty_a7_100t $d/surfcpu_arty_a7_bramdiag.bit"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_ROMCHECK=fail \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a boot ROM that is not its .mem fails the build" test "$rc" -eq 1 -a -n "$(grep '^reason = ".*check boot ROM FAIL' "$d/manifest.txt")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_NETLIST=lost \
+    tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a memory synthesis dropped fails the build (netlist check)" test "$rc" -eq 1 -a -n "$(grep '^reason = ".*check netlist FAIL' "$d/manifest.txt")"
+check "soc: ... and says which" grep -q "PROBLEM: memory u_soc.u_bootrom.rom" "$d/openxc7/check-netlist.txt"
+run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_100t
+check "soc: a missing ROM image refused" has "needs the boot ROM image"
+
 run env FLOW=openxc7 SURFCPU_FPGA_OUT=/nonexistent/fpga tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
 check "openxc7: an output directory outside surfcpu/ refused (the container sees only the repository)" has "is outside it"
 mv "$t/conf.saved" "$conf"                              # FLOW=vivado-ssh in the file again

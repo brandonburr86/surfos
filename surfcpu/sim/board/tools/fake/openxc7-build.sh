@@ -8,6 +8,9 @@
 #   FAKE_OX_CLOCKS   the clock check's result (default PASS)
 #   FAKE_OX_TIMING   PASS (default) or FAIL for the sys_clk line
 #   FAKE_OX_RC       the exit status (default 0)
+#   FAKE_OX_NETLIST  lost: the synthesized netlist (top.json) has lost the boot ROM's block RAM
+# It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
+# the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
 top= board= xdc= out= dsp= dry=0 srcs=
 while [ $# -gt 0 ]; do
@@ -19,6 +22,7 @@ while [ $# -gt 0 ]; do
         --dsp) dsp=$2; shift 2 ;;
         --manifest-include) [ -f "$2" ] || { echo "fake openxc7: no $2" >&2; exit 2; }; shift 2 ;;
         -D) shift 2 ;;
+        --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
         -I) [ -d "$2" ] || { echo "fake openxc7: no include directory $2" >&2; exit 2; }; shift 2 ;;
         --dry-run) dry=1; shift ;;
         -*) echo "fake openxc7: unexpected option $1" >&2; exit 2 ;;
@@ -69,4 +73,21 @@ tim=${FAKE_OX_TIMING:-PASS}
   echo "## tools (/etc/surfcpu-openxc7.txt)"
   echo "yosys                  Yosys 0.69+post (fake)"
   echo "nextpnr                \"nextpnr-himbaechel\" -- Next Generation Place and Route (Version 1.0.0)"; } > "$out/manifest.txt"
+: > "$out/cells_sim.v"
+if [ "$top" = surfcpu_arty_a7_top ]; then
+    printf '{"modules": {"%s": {"cells": {"rom": {"type": "$mem_v2", "parameters": {"MEMID": "\\\\u_soc.u_bootrom.rom", "WIDTH": 32, "SIZE": 16384}, "connections": {}}}, "netnames": {}}}}\n' "$top" > "$out/pre.json"
+    cells=
+    if [ "${FAKE_OX_NETLIST:-}" != lost ]; then
+        for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+            cells="$cells\"u_soc.u_bootrom.rom.0.$i\": {\"type\": \"RAMB36E1\", \"parameters\": {}, \"connections\": {}}, "
+        done
+    fi
+    for i in 0 1 2 3; do
+        cells="$cells\"dsp$i\": {\"type\": \"DSP48E1\", \"parameters\": {}, \"connections\": {\"A\": [7]}}, "
+    done
+    printf '{"modules": {"%s": {"cells": {%s"end": {"type": "INV", "connections": {}}}, "netnames": {"u_soc.u_core.muldiv.ma": {"bits": [7]}}}}}\n' "$top" "$cells" > "$out/$top.json"
+else
+    printf '{"modules": {"%s": {"cells": {}, "netnames": {}}}}\n' "$top" > "$out/pre.json"
+    cp "$out/pre.json" "$out/$top.json"
+fi
 exit "${FAKE_OX_RC:-0}"

@@ -219,7 +219,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     if [ -n "$rom" ]; then
         case "$romsrc" in
             "$root"/*) rom_ox=${romsrc#"$root"/} ;;
-            *) mkdir -p "$base/rom"; cp "$romsrc" "$base/rom/surfboot.mem"; rom_ox=${base#"$root"/}/rom/surfboot.mem ;;
+            *) mkdir -p "$base/rom"; cp "$romsrc" "$base/$rom"; rom_ox=${base#"$root"/}/$rom ;;
         esac
     fi
     set --
@@ -235,10 +235,12 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     done
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
+    [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
         --manifest-include "${head#"$root"/}" "$@" $sources
     echo "$me: $design for $board ($part), build $build_id$( [ "$dirty" = 1 ] && echo ' dirty'), flow openxc7 ($ox_image)"
+    [ -z "$rom" ] || echo "$me: boot ROM $rom_ox, sha256 $(sha "$romsrc")"
     echo "$me: nextpnr is given $n_given constraint lines (${xdc_nx#"$root"/}); it cannot check these $n_not, which only Vivado does:"
     sed "s/^/$me:   /" "$notgiven"
     cd "$root"
@@ -282,6 +284,28 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
                 *) problems="${problems:+$problems; }check $name ${v:-missing}" ;;
             esac
         done
+        # The board's checks of the synthesized netlist: every RTL memory still in RAM cells,
+        # the multiplier in its DSP48E1 (boards/arty_a7/netlist_check.py); the boot ROM's
+        # blocks hold its .mem (boards/arty_a7/romcheck.py).
+        if [ -f "$ox/pre.json" ] && [ -f "$ox/$top.json" ]; then
+            # shellcheck disable=SC2086
+            if python3 boards/arty_a7/netlist_check.py --top "$top" --pre "$ox/pre.json" --post "$ox/$top.json" \
+                   $dsp_args > "$ox/check-netlist.txt" 2>&1
+            then v=PASS; else v=FAIL; problems="${problems:+$problems; }check netlist FAIL"; fi
+        else
+            v=missing; problems="${problems:+$problems; }check netlist missing"
+        fi
+        echo "check_netlist = \"$v\""
+        if [ -n "$rom" ]; then
+            if [ -f "$ox/$top.json" ] && "$ROMCHECK" --rom "$rom_ox" --netlist "${ox#"$root"/}/$top.json" \
+                   --top "$top" --instance "$rom_inst" --cells-sim "${ox#"$root"/}/cells_sim.v" \
+                   --out "${ox#"$root"/}/romcheck" > "$ox/romcheck.out" 2>&1 && [ -f "$ox/romcheck/check-rom.txt" ]
+            then v=PASS; cp "$ox/romcheck/check-rom.txt" "$ox/check-rom.txt"
+            else v=FAIL; problems="${problems:+$problems; }check boot ROM FAIL"
+                 [ -f "$ox/romcheck/check-rom.txt" ] && cp "$ox/romcheck/check-rom.txt" "$ox/check-rom.txt"
+            fi
+            echo "check_boot_rom = \"$v\""
+        fi
         if [ -f "$ox/timing.txt" ]; then
             printf 'timing = ['
             grep '^clock ' "$ox/timing.txt" | while IFS= read -r l; do printf '%s, ' "$(toml_str "$l")"; done
@@ -316,7 +340,7 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         echo "result = \"pass\"" >> "$res"
         finish pass "" openxc7 "$res"
         echo "$me: PASS: ${base#"$root"/}/$design.bit (open flow: nextpnr's timing is an estimate; the $n_not constraints above are not checked)"
-        grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode) ' "$res" | sed "s/^/$me:   /"
+        grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode|check_netlist|check_boot_rom) ' "$res" | sed "s/^/$me:   /"
         exit 0
     fi
     echo "result = \"fail\"" >> "$res"
@@ -360,15 +384,34 @@ cdcs=$(items cdc)
 cdc_files=$(echo "$cdcs" | awk 'NF == 2 { print $2 }')
 for x in $cdc_files; do [ -f "$root/$x" ] || die "$design: constraint file $x is missing"; done
 generics=$(items generic)
+rom_line=$(items rom)
+dsp_args=
+for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
+lvs_timeout=$(items lvs-timeout)
+case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
 set +f
 
+# The boot ROM: the design list's "rom FILE INSTANCE" (FILE relative to surfcpu/), or ROM=.
 rom=
+rom_inst=
+rom_image=
 case " $generics " in
     *" BOOTROM_INIT "*)
-        romsrc=${ROM:-$root/build/fw/surfboot.mem}
+        set -f
+        set -- $rom_line
+        set +f
+        [ $# -eq 2 ] || die "$design: BOOTROM_INIT needs a line 'rom <file> <instance>' in $list"
+        rom_inst=$2
+        romsrc=${ROM:-$root/$1}
+        case "$romsrc" in /*) ;; *) romsrc=$PWD/$romsrc ;; esac
         [ -f "$romsrc" ] || die "$design needs the boot ROM image $romsrc (make build-rom, the fw track)"
-        rom=rom/surfboot.mem ;;
+        rom=rom/$(basename "$romsrc")
+        case "$romsrc" in
+            "$root"/*) rom_image=${romsrc#"$root"/} ;;
+            *)         rom_image=$romsrc ;;
+        esac ;;
 esac
+ROMCHECK=${SURFCPU_ROMCHECK:-$root/boards/arty_a7/romcheck.py}
 
 # ------------------------------------------------------------------------------ build identity
 # Clean means the bitstream is exactly the commit: no tracked file changed, and every file the
@@ -421,6 +464,7 @@ write_head() {    # the keys known before the run, the same for every flow
         echo "build_time = $build_time"
         echo "sources_sha256 = \"$(cat_sha $sources)\""
         echo "constraints_sha256 = \"$(cat_sha $xdcs $cdc_files)\""
+        echo "rom_image = \"$rom_image\""
         echo "rom_sha256 = \"$( [ -n "$rom" ] && sha "$romsrc" || true )\""
         echo "kernel_sha256 = \"$( [ -f "$kernel" ] && sha "$kernel" || true )\""
         echo "isa = \"$(spec_get isa)\""
