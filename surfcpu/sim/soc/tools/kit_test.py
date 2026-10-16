@@ -48,6 +48,7 @@ import os
 import pty
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -329,7 +330,8 @@ class Kit:
         ev = os.path.join(d, 'evidence')
         os.makedirs(ev, exist_ok=True)
         argv = [sys.executable, BOARD_TEST, milestone, '--port', link, '--evidence-dir', ev,
-                '--owner', '%s %s owner %s' % (sys.executable, os.path.abspath(__file__), state)] + list(args)
+                '--owner', ' '.join(shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), 'owner', state))
+                ] + list(args)                  # board-test.py splits --owner as a shell would: paths with spaces quoted
         t0 = time.time()
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
