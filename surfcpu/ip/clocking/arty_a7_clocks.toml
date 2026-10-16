@@ -1,0 +1,37 @@
+# SurfCPU clock plan for the Digilent Arty A7 (the A7-35T and the A7-100T alike).
+#
+# The frequencies are not chosen here: they come from spec/soc.toml ([clocks] osc_hz, sys_hz,
+# pix_hz). This file only chooses which clock tile makes each clock and its multiply/divide
+# settings. ip/clocking/clockplan.py checks every setting against the 7-series limits for
+# both parts (docs/BOARD.md section 2 lists them with their sources), checks that the result
+# is exactly the spec's frequency, and generates boards/arty_a7/rtl/arty_a7_clock_params.vh
+# for boards/arty_a7/rtl/arty_a7_clocks.v.
+#
+#   python3 ip/clocking/clockplan.py gen      write the generated header
+#   python3 ip/clocking/clockplan.py check    exit 1 if a setting is illegal or the header is stale
+#   python3 ip/clocking/clockplan.py report   the plan, the margins and the alternatives
+
+[input]
+clock = "osc_hz"            # the board's 100 MHz oscillator (pin E3, an MRCC input of bank 35)
+
+# sys_clk: the CPU and SurfBus clock. A PLL, because the pixel MMCM's VCO (887.5 MHz) has no
+# integer divide that gives 25 MHz and only CLKOUT0 of an MMCM can divide fractionally.
+# VCO 1000 MHz sits well inside 800..1600 MHz and also divides to 200 MHz (/5) and
+# 166.667 MHz (/6), the reference and system clocks AMD's MIG wants on the Arty, should the
+# DDR track take them from this PLL (unused outputs cost nothing).
+[sys]
+spec_hz = "sys_hz"
+primitive = "PLLE2_BASE"
+divclk_divide = 1
+clkfbout_mult = 10
+clkout0_divide = 40
+
+# pix_clk: the VGA pixel clock. The MMCM's fractional feedback and CLKOUT0 dividers (steps of
+# 1/8) get within 92 ppm of the 25.175 MHz standard; a 640x480 monitor accepts that easily
+# (VESA allows +-0.5%).
+[pix]
+spec_hz = "pix_hz"
+primitive = "MMCME2_BASE"
+divclk_divide = 1
+clkfbout_mult_f = 8.875
+clkout0_divide_f = 35.25
