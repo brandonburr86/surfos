@@ -155,11 +155,13 @@ struct regjob {
 
 /* Rounds of the pattern (short ones, so how fast the CPU is does not matter) until both tasks
    of the pair have been switched out and back at least twice: a register of one left in the
-   other would show. At most 400 rounds. */
+   other would show. 10/16/26: the limit is time, 300 ticks, not 400 rounds. 400 rounds of
+   task A were sometimes less than three quanta in QEMU on an idle host, and A then ended
+   before it had been switched out twice. The round limit only stops a stopped clock. */
 static void reg_task(void *arg) {
     struct regjob *j = (struct regjob *)arg;
     u_long t0 = timer_irq_count, s0 = curTask->switches;
-    while(!j->bad && (j->switches < 2 || j->other->switches < 2) && j->rounds < 400) {
+    while(!j->bad && (j->switches < 2 || j->other->switches < 2) && timer_irq_count - t0 < 300 && j->rounds < 100000) {
         if(j->ecall) rv_regs_ecall(j->seed + j->rounds, j->spins, j->out);
         else rv_regs_spin(j->seed + j->rounds, j->spins, j->out);
         j->bad = reg_diff(j->seed + j->rounds, j->out, j->first, sizeof(j->first));
@@ -202,7 +204,7 @@ static void test_registers(void) {
     /* two tasks at once, different patterns, switched by the tick and by yield */
     memset(a, 0, 2 * sizeof(struct regjob));
     a->seed = 0x13579BDFUL; a->spins = 100000; a->ecall = 0; a->other = b;
-    b->seed = 0x2468ACE0UL; b->spins = 50; b->ecall = 1; b->other = a;
+    b->seed = 0x2468ACE0UL; b->spins = 4; b->ecall = 1; b->other = a;  /* 4 yields a round: B's count shows soon */
     ta = kthread_create("regs A", reg_task, a, PL_NORMAL, 0);
     tb = kthread_create("regs B", reg_task, b, PL_NORMAL, 0);
     if(ta) task_wait(ta->pid, &status);
