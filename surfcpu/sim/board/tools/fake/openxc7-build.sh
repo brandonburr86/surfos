@@ -60,7 +60,7 @@ fi
 n=$(( ${#part} + 1 ))
 { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\005fake\000b\000'
   printf "\\$(printf '%03o' "$n")"
-  printf '%s\000c\000\01310/16/2026\000 fake bitstream\n' "$part"; } > "$out/$top.bit"
+  printf '%s\000c\000\01310/16/2026\000d\000\01112:00:00\000e\000\000\000\020 fake bitstream\n' "$part"; } > "$out/$top.bit"
 tim=${FAKE_OX_TIMING:-PASS}
 { echo "Timing (nextpnr's model after routing; an estimate, not Vivado signoff)"
   echo

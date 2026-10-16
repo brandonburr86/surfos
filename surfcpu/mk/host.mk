@@ -1,5 +1,12 @@
 # Targets that run on the Mac itself: they talk to the board over USB, to a mounted card,
 # to a remote build host, or to Docker. Everything else goes into the container (Makefile).
+#
+# Paths may hold spaces (the project lives in "SurfOS Restoration Project"): BIT, MOUNT, PORT,
+# LOG, RELEASE, REPORT, REFERENCE, EVIDENCE and COMMIT each reach their tool as one argument, so
+# quote them on the command line as usual: make program-flash BIT="/Users/me/My Releases/x.bit".
+# ARGS and DEPLOY_ARGS are lists of arguments, split at spaces; a path with spaces inside them
+# needs quotes of its own: make deploy-sd MOUNT=/Volumes/SURFOS DEPLOY_ARGS='--image "/Users/me/My
+# Releases/SURFOS.BIN"'. No value may hold a double quote, a backslash, a dollar sign or a backquote.
 
 PYTHON_HOST ?= python3
 BOARD       ?= arty_a7_100t
@@ -31,16 +38,16 @@ openxc7-image:
 
 # Board, card and build-host commands: tools/*.sh and tools/*.py on the Mac (docs/COMMANDS.md).
 program-volatile:
-	@tools/program.sh volatile $(BOARD) $(BIT)
+	@tools/program.sh volatile "$(BOARD)" "$(BIT)"
 
 program-flash:
-	@tools/program.sh flash $(BOARD) $(BIT)
+	@tools/program.sh flash "$(BOARD)" "$(BIT)"
 
 deploy-sd:
 	@$(PYTHON_HOST) tools/deploy-sd.py $(if $(MOUNT),--mount "$(MOUNT)") $(DEPLOY_ARGS)
 
 build-fpga:
-	@tools/fpga-build.sh $(BOARD)
+	@tools/fpga-build.sh "$(BOARD)"
 
 # The physical test kit (docs/PHYSICAL-TESTS.md), with the Mac's own python3 and nothing installed:
 #   make board-test M=m1 [PORT=/dev/cu.usbserial-<serial>1] [ARGS="--lines 20"]
@@ -55,7 +62,7 @@ board-test:
 ifeq ($(M),)
 	@echo "board-test: name the milestone: make board-test M=m1 (m1, m3, m5, m7, m8 or m9; docs/PHYSICAL-TESTS.md)"; exit 2
 else
-	@$(PYTHON_HOST) tools/board-test.py $(M) --port "$(or $(PORT),auto)" --board $(BOARD) $(ARGS)
+	@$(PYTHON_HOST) tools/board-test.py $(M) --port "$(or $(PORT),auto)" --board "$(BOARD)" $(ARGS)
 endif
 
 uart-list:

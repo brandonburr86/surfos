@@ -69,7 +69,10 @@ class BitError(Exception):
 def parse_header(data: bytes) -> tuple[dict, dict, int]:
     """(fields, spans, offset of the stream) of a .bit file: fields maps 'a'..'d' to their text and
     'e' to the stream length; spans maps each key to the (start, end) of its value in the file.
-    A file without the header (a .bin) gives ({}, {}, 0)."""
+    A file without the header (a .bin) gives ({}, {}, 0). The header is the magic, then the fields
+    a, b, c, d once each and in this order, each a NUL-terminated string, then e: what Vivado and
+    Project X-Ray write, and the one layout tools/program.sh accepts too; anything else (a field
+    missing, twice or out of order) is refused, so that no two readers can take different values."""
     if not data.startswith(MAGIC[:2]):
         return {}, {}, 0
     if not data.startswith(MAGIC):
@@ -77,31 +80,29 @@ def parse_header(data: bytes) -> tuple[dict, dict, int]:
     fields: dict = {}
     spans: dict = {}
     pos = len(MAGIC)
-    while True:
-        if pos + 1 > len(data):
-            raise BitError("the .bit header ends before its field e")
-        key = chr(data[pos])
-        if key == "e":
-            if pos + 5 > len(data):
-                raise BitError("the .bit header's field e is cut short")
-            n = struct.unpack_from(">I", data, pos + 1)[0]
-            fields["e"] = n
-            spans["e"] = (pos + 1, pos + 5)
-            start = pos + 5
-            if start + n != len(data):
-                raise BitError(f"the .bit header says {n} bytes follow, the file has {len(data) - start}")
-            return fields, spans, start
-        if key not in "abcd":
-            raise BitError(f"unexpected .bit header field {key!r} at byte {pos}")
+    for want in "abcd":
         if pos + 3 > len(data):
-            raise BitError(f"the .bit header's field {key} is cut short")
+            raise BitError(f"the .bit header ends before its field {want}")
+        key = chr(data[pos])
+        if key != want:
+            raise BitError(f"the .bit header has a field {key!r} at byte {pos} where field {want} belongs "
+                           "(fields a, b, c, d once each and in this order, then e)")
         n = struct.unpack_from(">H", data, pos + 1)[0]
         value = data[pos + 3:pos + 3 + n]
-        if len(value) != n or not value.endswith(b"\0"):
-            raise BitError(f"the .bit header's field {key} is not a NUL-terminated string")
+        if len(value) != n or not value.endswith(b"\0") or b"\0" in value[:-1]:
+            raise BitError(f"the .bit header's field {key} is not one NUL-terminated string")
         fields[key] = value[:-1].decode("ascii", "replace")
         spans[key] = (pos + 3, pos + 3 + n)
         pos += 3 + n
+    if pos + 5 > len(data) or chr(data[pos]) != "e":
+        raise BitError(f"the .bit header has no field e (the stream length) at byte {pos}, after field d")
+    n = struct.unpack_from(">I", data, pos + 1)[0]
+    fields["e"] = n
+    spans["e"] = (pos + 1, pos + 5)
+    start = pos + 5
+    if start + n != len(data):
+        raise BitError(f"the .bit header says {n} bytes follow, the file has {len(data) - start}")
+    return fields, spans, start
 
 
 def stamp(data: bytes, epoch: int) -> bytes:
@@ -301,8 +302,14 @@ def report(data: bytes) -> dict:
     info = walk(stream)
     opts = options(info)
     bits = len(stream) * 8
+    problems = list(info["problems"])
+    if not problems:                                    # the packets parse: is it a whole configuration?
+        if opts["idcode"] is None:
+            problems.append("no IDCODE write: not a configuration for any device")
+        if info["desync_word"] is None:
+            problems.append("no DESYNC command: the stream ends before the configuration does")
     return {"header": fields, "stream_offset": start, "stream_bytes": len(stream), "bits": bits,
-            "sync_word": info["sync_word"], "problems": info["problems"], "options": opts,
+            "sync_word": info["sync_word"], "problems": problems, "options": opts,
             "fdri_words": sum(n for _, n in info["fdri"]),
             "times": [{"setting": s, "seconds": round(t, 3)} for s, t in time_table(bits)],
             "as_built_seconds": round(config_seconds(bits, opts["spi_width"], STARTUP_CCLK_HZ), 3)
@@ -442,6 +449,22 @@ def self_test() -> int:
         expect(False, "stamp refuses a file without a header")
     except BitError:
         expect(True, "stamp refuses a file without a header")
+    def field(k: str, v: str) -> bytes:
+        raw = v.encode() + b"\0"
+        return k.encode() + struct.pack(">H", len(raw)) + raw
+    body = b"e" + struct.pack(">I", len(bit) - start) + bit[start:]
+    for what, keys in (("no field b", "acd"), ("field b twice", "abbcd"), ("field c twice", "abccd"),
+                       ("b before a", "bacd"), ("no field d", "abc")):
+        try:
+            parse_header(MAGIC + b"".join(field(k, "xc7a100tcsg324-1" if k == "b" else "x") for k in keys) + body)
+            expect(False, f"a header with {what} is refused")
+        except BitError:
+            expect(True, f"a header with {what} is refused")
+    cut = bit[start:start + 80]
+    r = report(bit[:start - 4] + struct.pack(">I", len(cut)) + cut)
+    expect(any("IDCODE" in p for p in r["problems"]) and any("DESYNC" in p for p in r["problems"]),
+           "info finds a stream cut after its sync word incomplete")
+    expect(not report(bit)["problems"], "info finds a whole stream complete")
     info = walk(bit[start:])
     o = options(info)
     expect(info["sync_word"] == 12 and not info["problems"], "sync word and packets parsed")

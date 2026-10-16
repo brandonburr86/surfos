@@ -7,7 +7,11 @@ or `arty_a7_35t`; `DESIGN=arty_a7_baseline` (the milestone 1 design), `surfcpu_a
 (the SoC with the BRAM diagnostics, milestone 3) or `surfcpu_arty_a7_top` (the SoC with SurfBoot;
 default) for the bitstream targets; `BIT=file.bit` to program a particular file;
 `CABLE_SERIAL=` the serial number of the board's USB cable when more than one FT2232H is
-connected; `V=1` shows full commands.
+connected; `V=1` shows full commands. A path may hold spaces: quote it as usual
+(`BIT="/Users/me/My Releases/top.bit"`); `ARGS` and `DEPLOY_ARGS` are lists of arguments, so a
+path with spaces inside them needs quotes of its own
+(`DEPLOY_ARGS='--image "/Users/me/My Releases/SURFOS.BIN"'`). No value may hold `"`, `\`, `$` or
+a backquote (mk/host.mk).
 
 | Command | Runs on | What it does | Status |
 |---|---|---|---|
@@ -31,11 +35,11 @@ connected; `V=1` shows full commands.
 | `make deploy-sd MOUNT=/Volumes/X` | Mac | installs `SURFOS.BIN` and system files on a mounted FAT32 card, verifies them, keeps user files; never formats; `DEPLOY_ARGS=--dry-run` shows what it would do | written and tested against a stand-in volume; never yet run on a real card |
 | `make board-uart-expect BOARD=...` | container | what the serial port should show for the bramdiag and SurfBoot bitstreams, from the RTL simulation (BOARD.md section 12) | works |
 | `make board-netlist-sim` | container | the open flow's synthesized netlists of the SoC bitstreams run bramdiag and SurfBoot in Verilator | works (slow: minutes) |
-| `make release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=a,b] [BOARDS=a,b] [FORCE=1]` | Mac (Docker) | the release (milestone 9, docs/RELEASE.md): from a clean tree only, with `SOURCE_DATE_EPOCH` = the commit's time, the ROMs and the kernel from empty output directories, every design of `release/release.txt` for both boards through `tools/fpga-build.sh` (every gate as it is), the QSPI flash images, the card's `/BOOT` files as deploy-sd installs them, `SHA256SUMS` and `MANIFEST` in `build/release/<version>-<commit>/`; without the DDR designs only as a pre-release (`PRERELEASE=1`, `<version>-pre-<commit>`) | works: a pre-release (the DDR designs do not build yet) |
-| `make release-verify RELEASE=build/release/<name> [DESIGNS=..] [BOARDS=..] [KEEP=1] [REPORT=file]` | Mac (Docker) | clones the release's commit into a new directory, makes the release there again and compares every artifact byte for byte, with the first differing byte and its likely cause | works |
-| `make release-check RELEASE=build/release/<name>` | Mac | a release's files against its `SHA256SUMS` and `MANIFEST` | works |
+| `make release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=a,b] [BOARDS=a,b] [FORCE=1]` | Mac (Docker) | the release (milestone 9, docs/RELEASE.md): from a clean tree only, with `SOURCE_DATE_EPOCH` = the commit's time, in its own `build/release-work/` (one release at a time), the ROMs and the kernel, every design of `release/release.txt` for both boards through `tools/fpga-build.sh` (every gate as it is), the QSPI flash images, the card's `/BOOT` files as deploy-sd installs them, `SHA256SUMS` and `MANIFEST` in `build/release/<version>-<commit>/`, each artifact staged the moment it passed its checks and all of them checked again at the end; without some designs only as a pre-release (`PRERELEASE=1`, also for `SKIP_DDR`, `DESIGNS`, `BOARDS`; `<version>-pre-<commit>`) | works: a pre-release (the DDR designs do not build yet) |
+| `make release-verify RELEASE=build/release/<name> [DESIGNS=..] [BOARDS=..] [KEEP=1] [REPORT=file]` | Mac (Docker) | checks the release, clones its commit into a new directory, makes the release there again and compares every artifact byte for byte, with the first differing byte and its likely cause; `DESIGNS`/`BOARDS` must be names the release has, and checking only some gives `PARTIAL`, never `PASS` | works |
+| `make release-check RELEASE=build/release/<name>` | Mac | a release's files, `SHA256SUMS` and `MANIFEST` against each other: the same artifacts, intact, the name and version, every built design's bitstream, build record and flash image (docs/RELEASE.md section 3) | works |
 | `make fresh-checkout [COMMIT=..] [REFERENCE=build/release/<name>] [ARGS="PRERELEASE=1 .."] [EVIDENCE=file] [KEEP=1]` | Mac (Docker) | `tools/fresh-checkout.sh`: clones the repository, follows docs/RELEASE.md (images, `make release`), compares the result with the reference | works |
-| `make test-release` | container | the release tooling's tests (on `make check`, about 5 s): `tools/bitfile.py`, `tools/release.py` with stand-ins for the builds, `tools/program.sh flash` with the fake openFPGALoader | works |
+| `make test-release` | container | the release tooling's tests (on `make check`, about a minute): `tools/bitfile.py`, `tools/release.py` with stand-ins for the builds, `tools/program.sh flash` with the fake openFPGALoader | works |
 | `make release-selftest` | Mac | the same tests with the Mac's own `python3`, where the release runs (its paths and Python differ from the container's) | works |
 | `tools/bitfile.py info\|flash\|stamp FILE.bit` | Mac or container | a bitstream's configuration options and its configuration time from the flash; its QSPI flash image; the header's date set to an epoch (the open flow runs it with `SOURCE_DATE_EPOCH`) | works |
 | `make check` | container | every automated pre-release check (about 20 minutes) | works |

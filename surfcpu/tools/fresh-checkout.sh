@@ -17,7 +17,8 @@
 #      (tools/release.py compare: SHA-256, and for a reference directory the first differing byte
 #      and its likely cause).
 # --evidence FILE writes a summary there (the commands, their times, the comparison). The clone is
-# removed at the end unless --keep (or the release failed). Exit status: 0 the release was made
+# removed at the end unless --keep (or the release failed): with --work DIR (new or empty), only what
+# the script put there, and DIR stays. Exit status: 0 the release was made
 # (and matched the reference), 1 it failed or differed, 2 bad arguments or no images.
 # Nothing here touches the board, a card or the network beyond what make release itself does
 # (make litedram-gen fetches pinned sources the first time, for the DDR designs).
@@ -58,12 +59,16 @@ docker=${DOCKER:-docker}
 command -v "$docker" >/dev/null 2>&1 || docker=/Applications/Docker.app/Contents/Resources/bin/docker
 "$docker" info >/dev/null 2>&1 || die "Docker is not running (open -a Docker)"
 
+made=1                                                  # the script made the work directory itself
 if [ -z "$work" ]; then
     mkdir -p "$here/build/fresh-checkout"
     work=$(mktemp -d "$here/build/fresh-checkout/run.XXXXXX")
 else
     case "$work" in /*) ;; *) work=$PWD/$work ;; esac
-    [ ! -e "$work" ] || [ -z "$(ls -A "$work")" ] || die "$work exists and is not empty"
+    if [ -e "$work" ] || [ -L "$work" ]; then
+        [ -d "$work" ] && [ ! -L "$work" ] && [ -z "$(ls -A "$work")" ] || die "$work exists and is not an empty directory"
+        made=0
+    fi
     mkdir -p "$work"
 fi
 clone=$work/surfos
@@ -76,7 +81,7 @@ note "$(date -u +%Y-%m-%dT%H:%M:%SZ): commit $commit of $repo, in $clone"
 # 1. a checkout of its own: a full clone (local objects, hard-linked), then the commit, detached
 git clone -q --no-checkout "$repo" "$clone"
 git -C "$clone" checkout -q --detach "$commit"
-[ -z "$(git -C "$clone" status --porcelain)" ] || die "the clone is not clean"
+[ -z "$(git -C "$clone" status --porcelain --untracked-files=normal)" ] || die "the clone is not clean"
 note "cloned: $(git -C "$clone" log -1 --format='%h %ci %s') ($(stamp))"
 
 # 2. the setup (docs/RELEASE.md section 2): the images the scripts of this commit name
@@ -132,8 +137,12 @@ if [ -n "$evidence" ]; then
 fi
 if [ "$keep" = 1 ]; then
     echo "$me: kept $work"
-else
+elif [ "$made" = 1 ]; then
     rm -rf "$work"
     echo "$me: removed $work (--keep keeps it)"
+else                                                    # the caller's directory: only what was put there
+    rm -rf "$clone"
+    rm -f "$log" "$work/compare.txt"
+    echo "$me: removed what it wrote in $work (--keep keeps it)"
 fi
 exit $result
