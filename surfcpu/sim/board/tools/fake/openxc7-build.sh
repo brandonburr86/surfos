@@ -9,6 +9,8 @@
 #   FAKE_OX_TIMING   PASS (default) or FAIL for the sys_clk line
 #   FAKE_OX_RC       the exit status (default 0)
 #   FAKE_OX_NETLIST  lost: the synthesized netlist (top.json) has lost the boot ROM's block RAM
+#   FAKE_OX_STOP     pnr: stop as the real script does when nextpnr misses a clock's constraint:
+#                    the synthesis outputs and nextpnr.log only, no bitstream, no manifest, exit 1
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
@@ -39,6 +41,13 @@ case "$board" in
     *) echo "fake openxc7: unknown board $board" >&2; exit 2 ;;
 esac
 mkdir -p "$out"
+if [ "${FAKE_OX_STOP:-}" = pnr ]; then
+    { echo "Info: Max frequency for clock               'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)"
+      echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
+      echo "ERROR: Max frequency for clock               'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)"
+      echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
+      echo "0 warnings, 2 errors"; } > "$out/nextpnr.log"
+fi
 n=$(( ${#part} + 1 ))
 { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\005fake\000b\000'
   printf "\\$(printf '%03o' "$n")"
@@ -90,5 +99,10 @@ if [ "$top" = surfcpu_arty_a7_top ]; then
 else
     printf '{"modules": {"%s": {"cells": {}, "netnames": {}}}}\n' "$top" > "$out/pre.json"
     cp "$out/pre.json" "$out/$top.json"
+fi
+if [ "${FAKE_OX_STOP:-}" = pnr ]; then
+    rm -f "$out/$top.bit" "$out/manifest.txt" "$out/timing.txt" "$out/utilization.txt" "$out/check-bitstream.txt"
+    echo "openxc7-build.sh: pnr failed (exit 1)" >&2
+    exit 1
 fi
 exit "${FAKE_OX_RC:-0}"

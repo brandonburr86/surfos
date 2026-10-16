@@ -266,8 +266,9 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
     res="$base/openxc7-results.txt"
     problems=
     [ "$1" = 0 ] || problems="tools/openxc7-build.sh exit status $1"
-    check() {         # NAME: the result on the manifest's "check NAME" line
-        [ -f "$om" ] && awk -v n="check $1" 'substr($0, 1, length(n) + 1) == n " " {
+    check() {         # NAME: the result on the manifest's "check NAME" line (nothing without one)
+        [ -f "$om" ] || return 0
+        awk -v n="check $1" 'substr($0, 1, length(n) + 1) == n " " {
             r = substr($0, 21); sub(/ \([^()]*\)$/, "", r); print r; exit }' "$om"
     }
     {
@@ -321,6 +322,16 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             [ -z "$wns" ] || echo "wns_ns = ${wns#+}"
             grep '^clock ' "$ox/timing.txt" | grep -qv ' PASS$' && problems="${problems:+$problems; }timing not met (nextpnr)"
             grep -q '^clock ' "$ox/timing.txt" || problems="${problems:+$problems; }no timing result"
+        elif [ -f "$ox/nextpnr.log" ] && grep -q 'Max frequency for clock' "$ox/nextpnr.log"; then
+            # nextpnr stopped the flow, a clock having missed its constraint: its last report per clock
+            fm=$(awk '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c); last[c] = $0
+                      if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
+                      END { for (i = 0; i < n; i++) { l = last[order[i]]; sub(/^(Info|ERROR): */, "", l); gsub(/ +/, " ", l); print l } }' "$ox/nextpnr.log")
+            printf 'nextpnr_fmax = ['
+            echo "$fm" | while IFS= read -r l; do printf '%s, ' "$(toml_str "$l")"; done
+            echo ']'
+            late=$(echo "$fm" | sed -n "s/^Max frequency for clock '\{0,1\}\([^': ]*\)'\{0,1\}: \([0-9.]* MHz\) (FAIL at \([0-9.]* MHz\))$/\1 \2 of \3/p" | tr '\n' ',' | sed 's/,$//')
+            [ -z "$late" ] || problems="${problems:+$problems; }timing not met (nextpnr: $late)"
         fi
         if [ -f "$ox/utilization.txt" ]; then
             for u in "lut:LUTs (" "lut_positions:LUT positions" "ff:flip-flops" "carry4:carry chains" \

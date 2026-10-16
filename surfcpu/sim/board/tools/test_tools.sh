@@ -567,6 +567,14 @@ check "define: ... and lists the bank's VREF and the DDR3L false paths as not ch
 run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
 check "define: program.sh loads the DDR design's bitstream (fake openFPGALoader)" \
     test "$rc" -eq 0 -a -n "$(grep -- "-b arty_a7_100t $gd/surfcpu_arty_a7_ddr_bramdiag.bit" "$FAKE_LOG")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_STOP=pnr \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "openxc7: a flow that stops at place and route (a clock missed) fails with a complete manifest" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
+check "openxc7: ... whose reason names the clock and nextpnr's figures" \
+    grep -q '^reason = ".*timing not met (nextpnr: dram_clk 72.98 MHz of 100.00 MHz)' "$gd/manifest.txt"
+check "openxc7: ... and records nextpnr's last report per clock" \
+    grep -q "^nextpnr_fmax = \[\"Max frequency for clock 'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)\", \"Max frequency for clock 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)\", \]$" "$gd/manifest.txt"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_TIMING=FAIL \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "define: a DDR build that misses timing fails, with no bitstream under the design's name" \
