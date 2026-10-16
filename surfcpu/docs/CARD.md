@@ -254,3 +254,14 @@ Never, in those tests, a file pointing at free space or at bytes that were not w
   Check such a card on the Mac (Disk Utility, First Aid) before trusting it;
 * the card itself may lose or damage the block it was writing when its power went: no file
   system can know.
+
+**A full card** (tested 2026-10-16, in simulation only, like the rest of this section: on the
+RTL system with a card made nearly full on the Mac, and under QEMU). A command that does not fit
+stops when the space runs out and says so: `cp: write: No space left on device`, and `write` or
+`mkdir` the same. The copy keeps what fitted (the first bytes of its source); delete it if you do
+not want it. `df` shows what is left. Deleting files gives the space back at once. The card stays
+consistent: `fsck.fat` found nothing to repair after a full card.
+
+Since 2026-10-16 a copy that stops early (no space, or a card that refuses writes) also gives back
+the clusters it had taken past what it wrote: the finding "the copy's last clusters allocated
+beyond its size" in the list of what `fsck.fat` found no longer happened in the tests.

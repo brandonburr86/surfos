@@ -1,0 +1,168 @@
+# test-os-faults: 25 of 25 checks passed in 90 s (faults 297500987 cycles = 11.900 s simulated in 89.2 s wall; full 199569270 cycles = 7.983 s simulated in 59.4 s wall; the RTL of surfcpu_soc with the C++ models, not the board)
+# 2026-10-16 10:38:03 UTC
+ok   cards: mkcard.py makes the faults card (36M, /BOOT/CMDLINE.TXT "ascii sd=rw", HELLO.TXT and a 16 KiB DATA.BIN in /USERS/DOCUMENTS)
+ok   cards: the full card: mkcard.py, a 64 KiB DATA.BIN, then mtools adds a 35621376-byte /FILLER.BIN: 83 clusters of 512 bytes stay free (FSInfo)
+ok   faults: every expected line in order (output matched after 297500987 cycles (11.900 s simulated) in 89.2 s wall (3.33 M cycles/s); UART 395 bytes in, 4857 out, 0 framing errors; DDR calibrated, 3465800 reads 1803410 writes 22053444 fetches 0 errors; exit 0)
+ok   faults 1: one block answered "write error": "bcache: write of sd0p1 blocks ... failed (-3); kept for the next sync", then "takes writes again" at the close's sync; the write succeeds
+ok   faults 2: every block refused: "write: not all of it reached /sd0p1: I/O error" (its prompt 348 ms after the one it was typed at), eject: "eject: sd0 stays mounted: sync tries the writes again; umount gives them up"
+ok   faults 2: the fault cleared, sync writes what the cache kept: "bcache: sd0p1 takes writes again", "synced"
+ok   faults 3: taken out after the sync (surfsim --sd-remove, card detect off on surf_spi): "+SD: sd0: the card was taken out" 286 ms later, and that what was not yet written is lost
+ok   faults 3: sdinfo reads surf_spi's STATUS.CARD: "surf_spi at 0x10004000: card absent, divider 0 (identification 31)"
+ok   faults 3: a write afterwards is refused: "write: /sd0p1/AFTER.TXT: I/O error"
+ok   faults 3: umount; put back (--sd-insert): sd0 again, "a card was put in"; mount sd0p1: "+FAT32: sd0p1 was not unmounted cleanly", mounted
+ok   faults 3: KEEP.TXT, ONCE.TXT and STUCK.TXT read back through the card put back, by CRC
+ok   faults 4: the card out right after the 2nd block of Notes-from-the-RTL.txt's write (block 21 the card took): "write: not all of it reached /sd0p1", and the watch says the card was taken out
+ok   faults: surfsim --sd-flush wrote 10 card blocks back into the image
+ok   faults: fsck.fat -n on the card as it came out finds FATs differ but appear to be intact.; Using first FAT.; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.
+ok   faults: on the host (mtools) KEEP.TXT, ONCE.TXT, STUCK.TXT and the card's own files are whole, AFTER.TXT is not there, and Notes-from-the-RTL.txt is not there
+ok   faults: no panic, no killed task
+ok   full: every expected line in order (output matched after 199569270 cycles (7.983 s simulated) in 59.4 s wall (3.36 M cycles/s); UART 190 bytes in, 3340 out, 0 framing errors; DDR calibrated, 2512002 reads 1541426 writes 14338977 fetches 0 errors; exit 0)
+ok   full: 41.5 KB free (df); cp of a 64 KiB file: "cp: write: No space left on device" when the space ran out, the prompt 2025 ms later
+ok   full: the copy keeps what fitted: the first 42496 bytes of DATA.BIN, every free cluster (83)
+ok   full: df says 0 KB free; a write on the full volume: "write: No space left on device"
+ok   full: rm gives the space back (df: 41 KB free), and a write works
+ok   full: eject: "sd0: safe to remove"
+ok   full: fsck.fat -n finds the volume clean
+ok   full: on the host DATA.BIN and the 35621376-byte filler are whole, MORE.TXT holds what was written after the rm, COPY.BIN is gone
+ok   full: no panic, no killed task
+
+faults run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
+  SurfBoot opens the package        1345138  (0.054 s)
+  SurfBoot loads it                47506180  (1.900 s)
+  SurfBoot checks it               47786110  (1.911 s)
+  the command line                 47976890  (1.919 s)
+  the handoff                      48159170  (1.926 s)
+  the card, read-write             74842471  (2.994 s)
+  the card mounted                 86870870  (3.475 s)
+  the banner                       96027488  (3.841 s)
+  the shell prompt                100778507  (4.031 s)
+  KEEP.TXT written                106905610  (4.276 s)
+  1. a block refused              111672128  (4.467 s)
+  1. written again                113400987  (4.536 s)
+  1. prompt                       116047456  (4.642 s)
+  2. refused                      123437334  (4.937 s)
+  2. prompt                       124753900  (4.990 s)
+  2. eject                        126995548  (5.080 s)
+  2. stays mounted                128776772  (5.151 s)
+  2. eject prompt                 130042734  (5.202 s)
+  2. works again                  131623577  (5.265 s)
+  2. synced                       134383691  (5.375 s)
+  2. sync prompt                  135652051  (5.426 s)
+  3. taken out                    142805237  (5.712 s)
+  3. what is lost                 145665721  (5.827 s)
+  3. sdinfo: card detect          148286757  (5.931 s)
+  3. sdinfo                       151479703  (6.059 s)
+  3. sdinfo prompt                152743282  (6.110 s)
+  3. write refused                154933306  (6.197 s)
+  3. write prompt                 156253113  (6.250 s)
+  3. umount                       158321224  (6.333 s)
+  3. put back                     166513073  (6.661 s)
+  3. sd0 again                    170196637  (6.808 s)
+  3. not clean                    174894075  (6.996 s)
+  3. mounted                      262150747  (10.486 s)
+  3. mount prompt                 263428324  (10.537 s)
+  3. crc32                        270171465  (10.807 s)
+  3. crc32 prompt                 271480261  (10.859 s)
+  4. half written                 281184292  (11.247 s)
+  4. prompt                       282500987  (11.300 s)
+  cycle 106905610: --sd-fault write_error=1 (2 of 17)
+  cycle 116047456: --sd-fault write_error=1000000 (4 of 17)
+  cycle 130042734: --sd-fault write_error=0 (7 of 17)
+  cycle 135652051: --sd-remove: the card is out (9 of 17)
+  cycle 158321224: --sd-insert: the card is in (13 of 17)
+  cycle 271480261: --sd-remove: the card comes out after 2 more blocks (16 of 17)
+  cycle 276866717: --sd-remove: the card is out, after block 21 of those written
+  card actions: 3 faults set, taken out 2 times, put in 1 times
+  card build/os/system_faults/faults.img: 1361 blocks read, 21 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+
+full run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
+  SurfBoot opens the package        1345138  (0.054 s)
+  SurfBoot loads it                47506180  (1.900 s)
+  SurfBoot checks it               47786110  (1.911 s)
+  the command line                 47976890  (1.919 s)
+  the handoff                      48159170  (1.926 s)
+  the card, read-write             74842471  (2.994 s)
+  the card mounted                 86839980  (3.474 s)
+  the banner                       95996690  (3.840 s)
+  the shell prompt                100747043  (4.030 s)
+  df                              104349348  (4.174 s)
+  df prompt                       105710345  (4.228 s)
+  cp: no space                    143419686  (5.737 s)
+  cp prompt                       156340197  (6.254 s)
+  crc32                           166049387  (6.642 s)
+  crc32 prompt                    167357116  (6.694 s)
+  df full                         170955692  (6.838 s)
+  df full prompt                  172320427  (6.893 s)
+  write: no space                 174685204  (6.987 s)
+  write prompt                    177480768  (7.099 s)
+  rm                              183095431  (7.324 s)
+  write after the rm              187381856  (7.495 s)
+  df again                        190978089  (7.639 s)
+  df again prompt                 192332804  (7.693 s)
+  eject: unmounted                196394924  (7.856 s)
+  eject: safe                     198303995  (7.932 s)
+  eject prompt                    199569270  (7.983 s)
+  card build/os/system_faults/full.img: 930 blocks read, 109 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+
+the faults run, from the first prompt (escape sequences removed):
+  SURF ~#> write /sd0p1/KEEP.TXT written before the faults
+  SURF ~#> write /sd0p1/ONCE.TXT one block refused, then written again
+  bcache: write of sd0p1 blocks 1929-1929 failed (-3); kept for the next sync (more failures are not shown)
+  bcache: sd0p1 takes writes again
+  SURF ~#> write /sd0p1/STUCK.TXT written while every block is refused
+  bcache: write of sd0p1 blocks 1930-1930 failed (-3); kept for the next sync (more failures are not shown)
+      write: not all of it reached /sd0p1: I/O error
+  SURF ~#> eject sd0
+      eject: sd0: /sd0p1 could not be written: I/O error
+      eject: sd0 stays mounted: sync tries the writes again; umount gives them up
+  SURF ~#> sync
+  bcache: sd0p1 takes writes again
+      synced; block cache: 182 hits, 11 misses, 17 blocks written
+  SURF ~#> +SD: sd0: the card was taken out
+  +SD: /sd0p1 was mounted read-write: what was not yet written to the card is lost; umount /sd0p1
+  sdinfo
+      surf_spi at 0x10004000: card absent, divider 0 (identification 31)
+      card detect: taken out 1 time, put in 0 times since boot
+      no card in the socket
+  SURF ~#> write /sd0p1/AFTER.TXT written after it came out
+      write: /sd0p1/AFTER.TXT: I/O error
+  SURF ~#> umount /sd0p1
+  SURF ~#> +SD: sd0: SDHC 36 MB, SURFC rev 1.0, manufacturer 0x5c 'SF', serial 0badf00d, made 2026-10, CRC checked; read-write (sd=rw on the command line writes)
+  +PART: sd0p1: MBR partition 1, blocks 2048-73727 (35M), type 0c FAT32 LBA
+  +SD: sd0: a card was put in: mount sd0p1 to use it
+  mount sd0p1
+  +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
+  +FAT32: sd0p1: label SURFOS, 70528 clusters of 512 bytes, 560 FAT sectors x 2, data at block 1152; 69749 free (counted)
+      sd0p1 on /sd0p1: fat32, label SURFOS, 34.4 MB, 34 MB free, read-write
+  SURF ~#> crc32 /sd0p1/KEEP.TXT /sd0p1/ONCE.TXT /sd0p1/STUCK.TXT
+      37724534       26  /sd0p1/KEEP.TXT
+      f26ed3f6       38  /sd0p1/ONCE.TXT
+      2956e8ce       37  /sd0p1/STUCK.TXT
+  SURF ~#> write /sd0p1/Notes-from-the-RTL.txt a new file, the card out in its middle
+  bcache: write of sd0p1 blocks 598-598 failed (-3); kept for the next sync (more failures are not shown)
+      write: not all of it reached /sd0p1: I/O error
+  SURF ~#> +SD: sd0: the card was taken out
+  +SD: /sd0p1 was mounted read-write: what was not yet written to the card is lost; umount /sd0p1
+
+the full run, from the first prompt (escape sequences removed):
+  SURF ~#> df
+      Device  Type       Size     Used    Avail  Use%  Mounted on    Label
+      sd0p1   fat32    34.4 MB  34.3 MB  41.5 KB  100%  /sd0p1        SURFOS
+  SURF ~#> cp /sd0p1/USERS/DOCUMENTS/DATA.BIN /sd0p1/COPY.BIN
+      cp: write: No space left on device
+  SURF ~#> crc32 /sd0p1/COPY.BIN
+      40317bc6    42496  /sd0p1/COPY.BIN
+  SURF ~#> df
+      Device  Type       Size     Used    Avail  Use%  Mounted on    Label
+      sd0p1   fat32    34.4 MB  34.4 MB     0 KB  100%  /sd0p1        SURFOS
+  SURF ~#> write /sd0p1/MORE.TXT one more file
+      write: No space left on device
+  SURF ~#> rm /sd0p1/COPY.BIN
+  SURF ~#> write /sd0p1/MORE.TXT written after the rm
+  SURF ~#> df
+      Device  Type       Size     Used    Avail  Use%  Mounted on    Label
+      sd0p1   fat32    34.4 MB  34.3 MB    41 KB  100%  /sd0p1        SURFOS
+  SURF ~#> eject sd0
+      /sd0p1 unmounted
+      sd0: safe to remove
+  SURF ~#> 

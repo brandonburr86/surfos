@@ -18,6 +18,9 @@ shell_command_info() below.
 10/6/26: a command is a call (surfos/task.h): a kill of its task waits for its end, and
 Ctrl+C cuts it short (status 130). What waits for the user (a question, a key, a sleep,
 a ping) gives up when that happens (task_interrupted()), along its usual way out.
+
+10/16/26 (SurfCPU, milestone 8): cp says why a write came up short ("No space left on
+device" on a full disk) instead of "short write".
 */
 
 #include <blibc_common.h>
@@ -735,6 +738,10 @@ static int cmd_cp(int argc, char **argv) {
     if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
     while((r = vfs_read(in, buf, 4096)) > 0) {
         w = vfs_write(out, buf, r);
+        if(w >= 0 && w < r) {                           /* 10/16/26: short (a full disk): the rest, for why */
+            int w2 = vfs_write(out, buf + w, r - w);
+            w = w2 < 0 ? w2 : w + w2;
+        }
         if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
         total += r;
         if(task_interrupted()) { printf("    cp: cut short after %lu bytes\n", total); r = -1; break; }   /* 10/6/26: a kill, Ctrl+C */

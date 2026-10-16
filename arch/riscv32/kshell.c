@@ -573,6 +573,10 @@ static int cmd_cp(int argc, char **argv) {
     if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
     while((r = vfs_read(in, buf, 4096)) > 0) {
         w = vfs_write(out, buf, r);
+        if(w >= 0 && w < r) {                           /* 10/16/26: short (a full disk): the rest, for why */
+            int w2 = vfs_write(out, buf + w, r - w);
+            w = w2 < 0 ? w2 : w + w2;
+        }
         if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
         total += r;
         if(task_interrupted()) { printf("    cp: cut short after %lu bytes\n", total); r = -1; break; }

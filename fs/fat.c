@@ -35,6 +35,14 @@ that is off (fsck.fat finds and fixes them), never an entry pointing at a free
 cluster or at bytes not yet written. An overwrite in place (append, or a write
 into a file's existing bytes) can still leave old and new bytes mixed: FAT32 has
 no journal (surfcpu/docs/CARD.md, "Writing from SurfOS").
+
+10/16/26 (audit B4): a write that stops early leaves no clusters behind. A run of
+blocks is allocated ahead of the data, and when the volume ran out in the middle
+of one (or a block could not be written) the clusters already linked stayed in the
+file's chain past its size: fsck.fat found the chain longer than the file and the
+free count low. Now a run ends where the volume does (the write puts in what fits
+and returns the bytes it wrote; the next one gets ENOSPC), and after a write that
+stopped early the chain is cut back to the file's size.
 */
 
 #include <surfos/types.h>
@@ -974,6 +982,7 @@ static int run_blocks(struct fat_fs *fs, u32 c, u32 s, u32 max, bool grow, u32 *
     u32 n = fs->spc - s, next;
     while(n < max) {
         int r = next_cluster(fs, c, grow, &next);
+        if(r == -ENOSPC) break;                             /* B4: the run ends where the volume does */
         if(r < 0) return r;
         if(r == 1 || next != c + 1) break;
         c = next;
@@ -1051,6 +1060,29 @@ static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 l
     return done ? (int)done : r;
 }
 
+/* 10/16/26 (B4): after a write that stopped early, the clusters it linked past the file's end go
+   back: the chain ends at size again. first0 is the first cluster the entry had before the write
+   (an entry is never left pointing at a freed cluster). Best effort: if this fails as well, the
+   next fsck finds the chain longer than the file. sb->lock */
+static void trim_chain(struct fat_fs *fs, struct fat_node *n, u32 size, u32 first0) {
+    u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next;
+    if(!c) return;
+    n->pos_c = 0;                                            /* the remembered position may go */
+    if(!keep) {
+        if(first0) keep = 1;                                 /* the entry has it: it stays */
+        else {                                               /* taken by this write: all of it goes */
+            n->first = 0;
+            fat_free_chain(fs, c);
+            return;
+        }
+    }
+    while(--keep) {
+        if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) return;
+        c = next;
+    }
+    if(fat_get(fs, c, &next) == 0 && !is_eoc(fs, next) && fat_set(fs, c, fs->eoc) == 0) fat_free_chain(fs, next);
+}
+
 /* the file grows to size with zeros (a write past its end, a truncate that grows); sb->lock */
 static int grow_zeros(struct fat_fs *fs, struct vnode *v, u32 size) {
     int r = rw_locked(fs, v, v->size, NULL, size - v->size, RW_ZERO);
@@ -1061,7 +1093,7 @@ static int grow_zeros(struct fat_fs *fs, struct vnode *v, u32 size) {
 static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
-    u32 size;
+    u32 size, first0;
     int r = 0;
 
     if(!write) {
@@ -1073,9 +1105,11 @@ static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     if(fs->dev->gone) return -EIO;
     mutex_lock(&v->sb->lock);
     size = v->size;
+    first0 = n->first;
     if(write && off > v->size) r = grow_zeros(fs, v, off);   /* the gap reads as zeros */
     if(r == 0) r = rw_locked(fs, v, off, buf, len, write ? RW_WRITE : RW_READ);
     if(write && r > 0 && off + (u32)r > v->size) v->size = off + r;
+    if(write && (r < 0 || (u32)r < len)) trim_chain(fs, n, v->size, first0);   /* B4: stopped early */
     if(write && (r > 0 || v->size != size) && update_entry(fs, n, v->size, true) != 0 && r >= 0) r = -EIO;
     mutex_unlock(&v->sb->lock);
     return r;
@@ -1096,7 +1130,9 @@ static int fat_truncate(struct vnode *v, u32 size) {
     if(fs->dev->gone) return -EIO;
     mutex_lock(&v->sb->lock);
     if(size > v->size) {                                     /* growing: zeros */
+        u32 first0 = n->first;
         r = grow_zeros(fs, v, size);
+        if(r) trim_chain(fs, n, v->size, first0);            /* B4: stopped early */
         if(update_entry(fs, n, v->size, true) != 0 && !r) r = -EIO;
         mutex_unlock(&v->sb->lock);
         return r;

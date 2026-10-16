@@ -15,7 +15,8 @@ VGA capture on the video outputs.
           [--uart-loopback] [--gpio-loopback] [--sw N] [--btn N]
           [--sd-flush] [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]
           [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]
-          [--ddr-stall ADDR] [+plusarg ...]
+          [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...
+          [--sd-insert REGEX]... [+plusarg ...]
 
 Clocks: clk at the spec's sys_hz and pix_clk at its pix_hz (SURF_SYS_HZ, SURF_PIX_HZ from the
 generated soc.h), scheduled in femtoseconds on two independent clocks, both held in reset for
@@ -38,6 +39,17 @@ SD card (--sd IMAGE, raw 512-byte blocks as tools/mkcard.py makes them): the io 
 model on sd_sclk/sd_mosi/sd_cs_n/sd_miso with its card-detect switch on sd_cd_n; without --sd
 the socket is empty. The image is opened read only; writes stay in memory unless --sd-flush
 writes them back at the end.
+
+Card actions (10/16/26, for the os track's fault tests): --sd-fault KIND=N@REGEX sets the card
+model's faults.KIND (SdFaults in sdcard_model.h: no_response, cmd_crc_error, read_error_token,
+error_token, read_bad_crc, write_crc_reject, write_error, busy_extra, init_never_ready) to N
+once REGEX has matched; N=0 clears it. --sd-remove REGEX takes the card out (card detect off,
+the card's state lost, what it was given kept); with N@ it comes out right after the Nth
+block it accepts from then on, in the middle of whatever the SoC is writing. --sd-insert REGEX
+puts it back (powered up afresh). The actions go in the --send list, in order with the sends:
+each REGEX is searched after the previous entry's match, and an action does not move that
+point, so the entry after it may match the same text (arm a fault at a prompt, then type the
+command at that prompt). Each is logged on stderr with its cycle.
 
 PS/2 keyboard: the io track's model on the open-drain lines (a line is low when the SoC's
 _oe or the keyboard pulls it, high otherwise); --ps2-keys TEXT is typed after reset.
@@ -91,6 +103,10 @@ namespace {
 struct Trigger {
     std::string pattern, text;
     std::regex re;
+    // the card actions share the --send list (10/16/26): what to do once the pattern matched
+    enum Kind { SEND, SD_FAULT, SD_REMOVE, SD_INSERT } kind = SEND;
+    std::string fault;              // --sd-fault: the SdFaults member
+    uint64_t value = 0;             // --sd-fault: its value; --sd-remove N@: blocks taken first
 };
 
 struct Options {
@@ -120,7 +136,8 @@ struct Options {
                  "               [--uart-loopback] [--gpio-loopback] [--sw N] [--btn N] [--sd-flush]\n"
                  "               [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]\n"
                  "               [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]\n"
-                 "               [--ddr-stall ADDR] [+plusarg ...]\n");
+                 "               [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...\n"
+                 "               [--sd-insert REGEX]... [+plusarg ...]\n");
     std::exit(1);
 }
 
@@ -194,6 +211,49 @@ Trigger trigger(const std::string &arg, bool with_text, const char *what) {
     return t;
 }
 
+// --sd-fault's KIND: set one of the card model's faults (false: no such fault)
+bool set_fault(SdFaults &f, const std::string &kind, uint64_t v) {
+    if (kind == "no_response") f.no_response = int(v);
+    else if (kind == "cmd_crc_error") f.cmd_crc_error = int(v);
+    else if (kind == "read_error_token") f.read_error_token = int(v);
+    else if (kind == "error_token") f.error_token = uint8_t(v);
+    else if (kind == "read_bad_crc") f.read_bad_crc = int(v);
+    else if (kind == "write_crc_reject") f.write_crc_reject = int(v);
+    else if (kind == "write_error") f.write_error = int(v);
+    else if (kind == "busy_extra") f.busy_extra = v;
+    else if (kind == "init_never_ready") f.init_never_ready = v != 0;
+    else return false;
+    return true;
+}
+
+// --sd-fault KIND=N@REGEX, --sd-remove [N@]REGEX, --sd-insert REGEX: entries of the --send list
+Trigger card_action(const std::string &arg, Trigger::Kind kind, const char *what) {
+    Trigger t;
+    t.kind = kind;
+    std::string rest = arg;
+    if (kind == Trigger::SD_FAULT) {
+        size_t eq = arg.find('='), at = eq == std::string::npos ? eq : arg.find('@', eq);
+        if (at == std::string::npos) usage("--sd-fault needs KIND=N@REGEX");
+        t.fault = arg.substr(0, eq);
+        t.value = number(arg.substr(eq + 1, at - eq - 1), what);
+        SdFaults probe;
+        if (!set_fault(probe, t.fault, t.value)) usage(("--sd-fault: no fault " + t.fault).c_str());
+        rest = arg.substr(at + 1);
+    } else if (kind == Trigger::SD_REMOVE) {
+        // N@ before the pattern: the blocks the card takes before it comes out (a pattern that
+        // starts with digits and @ writes \x40 for the @)
+        size_t at = arg.find('@');
+        if (at != std::string::npos && at > 0 &&
+            std::all_of(arg.begin(), arg.begin() + long(at), [](char c) { return std::isdigit((unsigned char)c); })) {
+            t.value = number(arg.substr(0, at), what);
+            rest = arg.substr(at + 1);
+        }
+    }
+    t.pattern = rest;
+    t.re = compile(rest, what);
+    return t;
+}
+
 // the DDR model's plusargs, as tb_soc takes them
 bool ddr_plusarg(const std::string &a, Options &o) {
     auto val = [&](const char *name, std::string &out) {
@@ -239,6 +299,9 @@ Options parse(int argc, char **argv) {
         else if (a == "--send") o.sends.push_back(trigger(next(), true, "--send"));
         else if (a == "--ps2-send") o.ps2_sends.push_back(trigger(next(), true, "--ps2-send"));
         else if (a == "--fail-on") o.fail_ons.push_back(trigger(next(), false, "--fail-on"));
+        else if (a == "--sd-fault") o.sends.push_back(card_action(next(), Trigger::SD_FAULT, "--sd-fault"));
+        else if (a == "--sd-remove") o.sends.push_back(card_action(next(), Trigger::SD_REMOVE, "--sd-remove"));
+        else if (a == "--sd-insert") o.sends.push_back(card_action(next(), Trigger::SD_INSERT, "--sd-insert"));
         else if (a == "--seed") o.seed = number(next(), "--seed");
         else if (a == "--quiet") o.quiet = true;
         else if (a == "--uart-loopback") o.uart_loopback = true;
@@ -366,6 +429,9 @@ int main(int argc, char **argv) {
     std::string uart_input;
     if (!opt.uart_in.empty()) uart_input = read_file(opt.uart_in);
 
+    // --sd-remove N@: out once the card has taken this many blocks in all (0: not armed)
+    uint64_t sd_out_at = 0, sd_faults_set = 0, sd_removals = 0, sd_insertions = 0;
+
     FILE *trace = nullptr;
     if (!opt.trace.empty()) {
         trace = std::fopen(opt.trace.c_str(), "w");
@@ -467,6 +533,15 @@ int main(int argc, char **argv) {
             top->ddr_timeout = ddr.timeout();
             top->uart_rx = opt.uart_loopback ? top->uart_tx : uart.rx_pin();
             top->sd_miso = sd.tick(top->sd_cs_n, top->sd_sclk, top->sd_mosi);
+            if (sd_out_at && sd.stats.blocks_written >= sd_out_at) {
+                // --sd-remove N@: right after the Nth block, before the card can answer for it
+                sd.set_present(false);
+                top->sd_miso = 1;
+                sd_out_at = 0;
+                sd_removals++;
+                std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": --sd-remove: the card is out, after block %" PRIu64
+                                     " of those written\n", cycles, sd.stats.blocks_written);
+            }
             top->sd_cd_n = sd.cd_n();
             bool ps2_clk = true, ps2_dat = true;
             kbd.tick(top->ps2_clk_oe, top->ps2_data_oe, ps2_clk, ps2_dat);
@@ -498,12 +573,32 @@ int main(int argc, char **argv) {
                 }
                 while (!sends.done() && search(output, (*sends.items)[sends.next].re, sends.from,
                                                end)) {
-                    uart.send((*sends.items)[sends.next].text);
-                    uart_sent += (*sends.items)[sends.next].text.size();
-                    sends.from = end;
+                    const Trigger &s = (*sends.items)[sends.next];
                     sends.next++;
-                    std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": --send %zu of %zu: %s\n", cycles,
-                                 sends.next, opt.sends.size(), shown(opt.sends[sends.next - 1].text).c_str());
+                    if (s.kind == Trigger::SEND) {
+                        uart.send(s.text);
+                        uart_sent += s.text.size();
+                        sends.from = end;
+                        std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": --send %zu of %zu: %s\n", cycles,
+                                     sends.next, opt.sends.size(), shown(s.text).c_str());
+                    } else if (s.kind == Trigger::SD_FAULT) {
+                        // a card action leaves the search point where it was (see the top)
+                        set_fault(sd.faults, s.fault, s.value);
+                        sd_faults_set++;
+                        std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": --sd-fault %s=%" PRIu64 " (%zu of %zu)\n",
+                                     cycles, s.fault.c_str(), s.value, sends.next, opt.sends.size());
+                    } else if (s.kind == Trigger::SD_REMOVE && s.value) {
+                        sd_out_at = sd.stats.blocks_written + s.value;
+                        std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": --sd-remove: the card comes out after %"
+                                     PRIu64 " more blocks (%zu of %zu)\n", cycles, s.value, sends.next, opt.sends.size());
+                    } else {
+                        sd.set_present(s.kind == Trigger::SD_INSERT);
+                        (s.kind == Trigger::SD_INSERT ? sd_insertions : sd_removals)++;
+                        std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": %s (%zu of %zu)\n", cycles,
+                                     s.kind == Trigger::SD_INSERT ? "--sd-insert: the card is in"
+                                                                  : "--sd-remove: the card is out",
+                                     sends.next, opt.sends.size());
+                    }
                 }
                 while (!ps2_sends.done() && search(output, (*ps2_sends.items)[ps2_sends.next].re,
                                                    ps2_sends.from, end)) {
@@ -647,6 +742,9 @@ int main(int argc, char **argv) {
     if (!expects.done() && !opt.expects.empty())
         std::fprintf(stderr, "surfsim: --expect %zu of %zu still waiting: %s\n", expects.next + 1,
                      opt.expects.size(), opt.expects[expects.next].pattern.c_str());
+    if (sd_faults_set || sd_removals || sd_insertions)
+        std::fprintf(stderr, "surfsim: card actions: %" PRIu64 " faults set, taken out %" PRIu64 " times, put in %" PRIu64
+                             " times\n", sd_faults_set, sd_removals, sd_insertions);
     std::fprintf(stderr,
                  "surfsim: card %s: %" PRIu64 " blocks read, %" PRIu64 " written, %" PRIu64
                  " protocol violations; keyboard: %" PRIu64 " frames sent, %zu host bytes, %" PRIu64

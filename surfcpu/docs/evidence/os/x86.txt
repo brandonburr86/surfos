@@ -1,6 +1,49 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
-Three rounds, newest first. Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
+Four rounds, newest first. Round 4 (10/16/26) changes the x86 kernel on purpose: a FAT write that stops early gives
+its clusters back (audit B4), and cp says why a write came up short.
+Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round 4, 10/16/26: a FAT write that stops early gives its clusters back (audit B4); cp says why
+date: 2026-10-16 (local)
+tree: sc/os-4 (from surfcpu cd36aa0) with the shared files below as committed in "FAT: a write that stops early
+      gives its clusters back (audit B4); cp says why"; the baseline is surfcpu cd36aa0's x86 code (git archive)
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-os, surfos-sc-os-o2 (and surfos-sc-os-base for the baseline)
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B4):
+  fs/fat.c               blob c80323f5 (was a8734a6b)  B4: a run ends where the volume does; trim_chain() after a
+                                                       write that stopped early
+  shell/main.c           blob 5c8bb43a (was 2f670f8a)  cp writes the rest of a short write once, to say why
+Every x86 tree tested below was checked to hold exactly these blobs.
+
+== 1. The compiled kernel (arch/riscv32/elfcmp.py BASE/build/O<n> NEW/build/O<n>: every object, allocated sections)
+  O0: 241 kernel objects identical, 4 different: fs/fat.o, shell/main.o, ksyms.o (the symbol table), surfos.bin
+      (the kernel they link into). The new O0 tree also held 119 host unit-test objects (build/O0/host/...) that the
+      round 3 unit-test run had left in the build volume; they are not part of the kernel and were not compared.
+  O2: the same 241 identical, the same 4 different
+
+== 2. make test-all (devenv/build.sh test-all): exit 0
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+
+== 3. make unittest (devenv/build.sh unittest): exit 0, no failures
+    PAGER 177, CRYPTO 129, WPA 118, IEEE80211 144, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP 467, AML FIELD 5120,
+    TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143, PARTITION TOOL 33,
+    LIBC 195, MKFS 115, PROMPT 55, CP437 69, TELNET 58, TELNETD SERVER 750 runs (0 bugs), PCIINFO 55, IWLFW 38,
+    UNDERTOW URL 382, UTIL 72, HTTP 835, HTML 672 (twice), SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426
+    (checks, 0 failures each); python unittest: Ran 19, 60, 28, 11, 5, 18, 1, 5 tests: OK each
+
+== 4. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks
+
+As in round 3, the x86 suites show the change does no harm; what it fixes (a copy that does not fit leaving
+clusters past its end) is shown where the same file runs under the riscv32 kernel: test_os.py's full volume under
+QEMU and test-os-faults' full card on the RTL system (test-os-qemu-O2.txt, -O0.txt, test-os-faults.txt).
 Round 2 (10/16/26) changes the x86 kernel on purpose: the console lock (audit C10).
 Round 1 (10/15/26) changed shared files only under #ifdef SURFOS_RISCV32 and left the x86 kernel byte-identical.
 
