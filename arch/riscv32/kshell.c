@@ -290,6 +290,105 @@ static int cmd_tasks(int argc, char **argv) {
     return a.count == a.rounds && b.count == b.rounds ? CMD_OK : CMD_FAIL;
 }
 
+/**** scrolltest (10/16/26, audit C10) ****/
+
+/* scrolltest [lines]: two kernel tasks print numbered lines on one console at once, as fast as
+   they can, while it scrolls. Then every row of that console's cells (and of the screen, when it
+   shows that console) must be one whole line, each task's lines running on by one to its last:
+   what the console lock keeps (kernel/console.c). Before it, a task preempted inside a scroll let
+   the other task's line land in rows the scroll then moved or cleared, and a line could be split
+   by the other task's. Paging is off for it: its output is the test. */
+#define SCROLL_TAIL "abcdefghijklmnopqrstuvwxyz0123456789"
+
+extern surf_console conVideo;                   /* kernel/console.c: the cells the screen shows */
+
+struct scroller {
+    char name;
+    u_int lines, done;
+};
+
+static void scroller_task(void *arg) {
+    struct scroller *s = (struct scroller *)arg;
+    u_int i;
+    for(i = 1; i <= s->lines && !task_interrupted(); i++) {
+        printf("scroll %c %03u " SCROLL_TAIL " end\n", s->name, i);
+        s->done = i;
+    }
+}
+
+/* row r of a grid as text, trailing blanks dropped */
+static void grid_row(const u_char *g, u_int r, char *out) {
+    u_int c;
+    for(c = 0; c < COLUMNS; c++) out[c] = g[(r * COLUMNS + c) * 2] ? (char)g[(r * COLUMNS + c) * 2] : ' ';
+    out[COLUMNS] = 0;
+    for(c = COLUMNS; c > 0 && out[c - 1] == ' '; c--) out[c - 1] = 0;
+}
+
+/* All rows but the last: whole lines, each task's numbered on by one, ending at its last line;
+   the last row, the cursor's, empty. 0, or 1 with the first bad row and what is wrong with it. */
+static int scroll_check(const u_char *g, const struct scroller *s, char *why, size_t size) {
+    char row[256], want[96];
+    u_int r, num, last[2] = { 0, 0 };
+    int k;
+    for(r = 0; r < LINES; r++) {
+        grid_row(g, r, row);
+        if(r + 1 == LINES) {
+            if(row[0]) { snprintf(why, size, "the cursor's row %u is not empty: '%s'", r, row); return 1; }
+            break;
+        }
+        k = !strncmp(row, "scroll A ", 9) ? 0 : !strncmp(row, "scroll B ", 9) ? 1 : -1;
+        num = k < 0 ? 0 : (u_int)strtoul(row + 9, NULL, 10);
+        if(k >= 0) snprintf(want, sizeof(want), "scroll %c %03u " SCROLL_TAIL " end", s[k].name, num);
+        if(k < 0 || strcmp(row, want)) { snprintf(why, size, "row %u is not a whole line: '%s'", r, row); return 1; }
+        if(last[k] && num != last[k] + 1) {
+            snprintf(why, size, "row %u: %c's line %u follows its line %u", r, s[k].name, num, last[k]);
+            return 1;
+        }
+        last[k] = num;
+    }
+    for(k = 0; k < 2; k++) {
+        if(last[k] && last[k] != s[k].lines) {
+            snprintf(why, size, "%c's last line on the screen is %u of %u", s[k].name, last[k], s[k].lines);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int cmd_scrolltest(int argc, char **argv) {
+    struct scroller s[2] = { { 'A', 60, 0 }, { 'B', 60, 0 } };
+    surf_task *t[2] = { NULL, NULL };
+    surf_console *con = NULL;
+    int st[2] = { 0, 0 }, pid[2] = { 0, 0 }, i, bad, line;
+    u_long n = 60, t0;
+    char why[200];
+    if(argc > 2 || (argc == 2 && (!number_arg(argv[1], &n) || n < 1 || n > 999))) {
+        printf("    usage: scrolltest [lines]   (each task's, 1 to 999; 60 when not given)\n");
+        return CMD_USAGE;
+    }
+    s[0].lines = s[1].lines = (u_int)n;
+    tty_ctl(curTask->tty, TTY_PAGE, 0);
+    t0 = getticks();
+    for(i = 0; i < 2; i++) {
+        t[i] = kthread_create(i ? "scroll B" : "scroll A", scroller_task, &s[i], PL_NORMAL, 0);
+        if(t[i]) pid[i] = (int)t[i]->pid;
+        if(t[i] && !con) con = t[i]->con;      /* (a kernel thread prints on F1); read while it lives */
+    }
+    for(i = 0; i < 2; i++) if(t[i] && task_wait((u_long)pid[i], &st[i]) != pid[i]) return CMD_FAIL;
+    if(!t[0] || !t[1]) { printf("    scrolltest: no memory for the tasks\n"); return CMD_FAIL; }
+    line = console_print_begin(con);            /* nobody draws while the cells are read */
+    bad = scroll_check(con->vmem, s, why, sizeof(why));
+    if(!bad && con == conActive && memcmp(conVideo.vmem, con->vmem, COLUMNS * LINES * 2)) {
+        bad = 1;
+        snprintf(why, sizeof(why), "the screen's cells are not the console's");
+    }
+    console_print_end(line);
+    printf("    scrolltest: 2 tasks x %u lines at once in %lu ticks, the console scrolling: %s\n", s[0].lines,
+           getticks() - t0, bad ? why : "every row a whole line, each task's in order");
+    printf("%s\n", bad ? "SCROLLTEST FAIL" : "SCROLLTEST PASS");
+    return bad || s[0].done != s[0].lines || s[1].done != s[1].lines ? CMD_FAIL : CMD_OK;
+}
+
 /**** files (as shell/main.c) ****/
 
 static void fmt_time(u32 t, char *buf, size_t size) {
@@ -599,6 +698,7 @@ static const struct command commands[] = {
     { "kill",      "<pid>",     "kill a task", cmd_kill },
     { "sleep",     "[-u] [ms]", "sleep this shell for a while", cmd_sleep },
     { "tasks",     "",          "two kernel tasks that count, sleep and wake, then end", cmd_tasks },
+    { "scrolltest", "[lines]",  "two kernel tasks print lines at once; then every row must be whole", cmd_scrolltest },
     { "tick",      "",          "print the tick count", cmd_tick },
     { "uptime",    "",          "time since boot", cmd_uptime },
     { "date",      "",          "the time of day (real-time clock, or the build time)", cmd_date },

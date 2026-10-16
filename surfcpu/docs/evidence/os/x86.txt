@@ -1,4 +1,57 @@
-SurfOS os track: the x86 kernel is unchanged by the riscv32 port's edits to shared files
+SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
+Two rounds, newest first. Round 2 (10/16/26) changes the x86 kernel on purpose: the console lock (audit C10).
+Round 1 (10/15/26) changed shared files only under #ifdef SURFOS_RISCV32 and left the x86 kernel byte-identical.
+
+======================================================================================================================
+Round 2, 10/16/26: the console lock (audit C10), and the riscv32 heap's bounds
+date: 2026-10-16 (local)
+tree: sc/os-2 (from surfcpu de9ee5a) with the shared files below as committed in "console: one writer at a time ..."
+      and "riscv32: the kernel heap ends 16 MiB below ..."; the baseline is surfcpu de9ee5a's x86 code
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-os, surfos-sc-os-o2 (and surfos-sc-os-base for the baseline)
+
+Shared files changed for both kernels (the fix of audit C10, docs/CODE-AUDIT.md):
+  kernel/console.c           blob 950419fe (was d51afc98)  the console lock, the word-wise scroll
+  lib/blibc/printf.c         blob f321191e (was 8dba2c6d)  a printf() call drawn as one
+  include/surfos/console.h   blob aacced0c (was 39956b5a)  console_print_begin(), console_print_end()
+  tests/host/test_pager.c    blob 09c96de3 (was 71307a22)  three console-lock scenarios (166 -> 177 checks)
+  tests/host/pager_bridge.c  blob df4393b4 (was 1727321c)  the test's hook at the serial mirror
+Shared file changed under #ifdef SURFOS_RISCV32 only:
+  mm/kalloc.c                blob 5466b7e6 (was 455dde2c)  riscv32: the kernel heap's bounds set by heap_init()
+Every x86 tree tested below was checked to hold exactly these blobs.
+
+== 1. The compiled kernel (arch/riscv32/elfcmp.py BASE/build/O<n> NEW/build/O<n>: every object, allocated sections)
+baseline (surfcpu's x86 code) and new, both built with devenv/build.sh (make O=0, make O=2):
+  O0: 241 objects identical, 4 different: kernel/console.o, lib/blibc/printf.o, ksyms.o (the symbol table),
+      surfos.bin (the kernel they link into)
+  O2: the same 241 identical, the same 4 different
+  So mm/kalloc.o is identical at both levels (its change is riscv32 only) and nothing else moved.
+
+== 2. make test-all (devenv/build.sh test-all): exit 0
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+
+== 3. make unittest (devenv/build.sh unittest): exit 0, no failures
+    PAGER UNIT TESTS PASSED: 177 checks, 0 failures   (was 166: the console lock's scenarios; the old console
+                                                       fails the first of them: "a task stopped inside its line
+                                                       keeps the other task's line waiting")
+    CRYPTO 129, WPA 118, IEEE80211 144, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP 467, AML FIELD 5120,
+    TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143, PARTITION TOOL 33,
+    LIBC 195, MKFS 115, PROMPT 55, CP437 69, TELNET 58, TELNETD SERVER 750 runs (0 bugs), PCIINFO 55, IWLFW 38,
+    UNDERTOW URL 382, UTIL 72, HTTP 835, HTML 672 (twice), SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426
+    (checks, 0 failures each); python unittest: Ran 19, 60, 28, 11, 5, 18, 5 tests: OK each
+
+== 4. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks
+
+The x86 kernel has the same race in principle (a task preempted inside a scroll or a line); a scroll there takes
+microseconds, so it was seldom hit. The fix is general: the same lock on both kernels.
+
+======================================================================================================================
+Round 1, 10/15/26
 date: 2026-10-15 (local)
 tree: sc/os at c5cb325 plus the shared edits below, committed unchanged in "riscv32: a machine-mode SurfOS
       kernel, its build and QEMU's virt board" (the commit after c5cb325 on sc/os)

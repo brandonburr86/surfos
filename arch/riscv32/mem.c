@@ -9,6 +9,9 @@ is the x86 one, unchanged); their arenas come from the linker script, the kernel
 ending where the board keeps RAM for itself (include/arch/riscv32/mm/memory.h).
 run_memcheck() makes sure the RAM is really there: the SurfBoot boot information
 says how much DDR passed its check, and the heap must end inside it.
+10/16/26: the heap's end follows the boot information: 16 MiB below the end of that DDR
+(BOOT-ABI.md's ddr_top), no higher than the board's HEAP_END. The Arty's 256 MiB give
+0x8F000000, as the fixed end did.
 */
 
 #include <surfos/types.h>
@@ -18,6 +21,7 @@ says how much DDR passed its check, and the heap must end inside it.
 #include <mm/memory.h>
 #include <mm/kalloc.h>
 #include <riscv/arch.h>
+#include <surfcpu/soc.h>
 #include <blibc_common.h>
 
 extern char __ram_start[], __ram_end[];     /* the board's RAM, from the linker script */
@@ -33,7 +37,19 @@ static void ram_range(u_long *start, u_long *end) {
     }
 }
 
+u_long kheap_end;
+
 void init_mem(void) {
+    u_long start, end;
+    kheap_end = (u_long)__kheap_end;            /* the board's most: without SurfBoot's word, all of it */
+    ram_range(&start, &end);
+    if(bootinfo.valid && end - start > SURF_DDR_TOP_SIZE && end - SURF_DDR_TOP_SIZE < kheap_end)
+        kheap_end = end - SURF_DDR_TOP_SIZE;    /* ddr_top: the top 16 MiB of the DDR that calibrated */
+    if(kheap_end < KHEAP_START + 0x400000) {
+        kprintf("\nKernel Panic: less than 4 MB for the kernel heap (0x%08lx-0x%08lx in RAM 0x%08lx-0x%08lx).\n"
+                "SYSTEM HALTED\n", KHEAP_START, kheap_end - 1, start, end - 1);
+        halt();
+    }
     heap_init();
     kprintf("Memory: kernel 0x%08lx-0x%08lx, DMA heap 0x%08lx-0x%08lx, kernel heap 0x%08lx-0x%08lx (%lu MB)\n",
             KERNEL_START, KERNEL_END - 1, PHEAP_START, PHEAP_END - 1, KHEAP_START, KHEAP_END - 1,

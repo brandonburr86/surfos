@@ -1,5 +1,5 @@
-# test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 68 of 68 checks passed in 10 s (2 parts skipped)
-# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:44:08 UTC
+# test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 86 of 86 checks passed in 13 s
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 07:09:21 UTC
 ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
 ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
 ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1
@@ -47,10 +47,14 @@ ok   mount again: clean (umount set the clean bit)
 ok   ps: the heartbeat task sleeps between its beats
 ok   kill: the sleeping heartbeat task is killed and collected (by init)
 ok   poweroff: QEMU exits with status 0 (sifive_test)
+ok   scrolltest: two tasks printing at once while the console scrolls leave every row whole, each task's lines in order (QEMU slowed with -icount)
+ok   scrolltest: the serial line got the same 120 lines, each whole (120)
+ok   scrolltest: poweroff
 ok   handoff: entered as SurfBoot hands over (a0, a1, a2), the kernel boots to the shell
 ok   handoff: the command line from the boot information arrives (ascii: an ASCII prompt)
 ok   handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot's block and its command line
 ok   handoff: the RAM size and the image's memory size come from the boot information
+ok   handoff: 128 MiB of DDR: the kernel heap ends at 0x87000000, 16 MiB below it (ddr_top)
 ok   handoff: the RAM disk works as before
 ok   handoff: poweroff
 ok   handoff: a corrupted boot information block is refused (CRC), the kernel boots on without it
@@ -68,5 +72,17 @@ ok   sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LF
 ok   sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT
 ok   sdsim: fsck.fat -n finds the volume clean
 ok   sdsim: poweroff
-skip package: no build/riscv32/qemu_virt/SURFOS.BIN: SURFOS.BIN is packed by the fw track's tools/surfimg.py, which this tree does not have
-skip card: no tools/mkcard.py (the fw track's card images) in this tree
+ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 363904 bytes, CRC 3899b49f, build f296e119
+ok   package: SURFOS.BIN copied to its load address boots to the shell
+ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1150032)
+ok   package: poweroff
+ok   card: mkcard.py makes a 48 MiB card image with the standard directories and /BOOT/SURFOS.BIN
+ok   card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1
+ok   card: /sd0p1/USERS/DOCUMENTS found by its long name (alias DOCUME~1), both files listed
+ok   card: the files in DOCUMENTS read through the SD driver
+ok   card: /BOOT/SURFOS.BIN on the card is the package
+ok   card: a file written into DOCUMENTS, unmounted, the card image saved
+ok   card: mkcard.py --inspect reads /USERS/DOCUMENTS/FROMRV.TXT back
+ok   card: mtools reads it too
+ok   card: fsck.fat -n finds the card clean
+ok   card: poweroff

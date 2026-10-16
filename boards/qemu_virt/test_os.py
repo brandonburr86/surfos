@@ -14,6 +14,10 @@ init restarts, and FAT read and write. At the end the RAM disk is saved through 
 monitor (pmemsave) and checked on the host: fsck.fat finds it clean and mtools reads back
 what SurfOS wrote.
 
+10/16/26: a second boot runs QEMU slowed with -icount to about SurfCPU's pace for scrolltest:
+two kernel tasks print at once while the console scrolls, and every row must stay whole (the
+console lock, kernel/console.c, audit C10; the console before it fails here).
+
 With --stub it then tests the boot ABI's handoff (BOOT-ABI.md section 4): a stand-in for
 SurfBoot's last step (boards/qemu_virt/stub) enters the kernel with a0 = 0, a1 pointing at
 a struct surf_boot_info the harness made (its command line, RAM size and CRC) and a2 = the
@@ -300,10 +304,10 @@ def elf_image(path):
     return base, max(a + n for a, n in segs) - base
 
 
-def stub_boot(args, disk, work, cmdline, package=None, corrupt=False):
+def stub_boot(args, disk, work, cmdline, package=None, corrupt=False, ram_mb=256):
     """the kernel entered as SurfBoot hands over, by the stand-in (boards/qemu_virt/stub): SURFOS.BIN copied from
     STUB_STAGE to its load address or, without a package, surfos.elf put in place by QEMU's loader; a1 points at a
-    boot information block with this command line. (QEMU, the image's base and memory size)"""
+    boot information block with this command line and RAM size. (QEMU, the image's base and memory size)"""
     if package:
         hdr = package_header(package)
         base, mem, loads, elf = hdr['load'], hdr['mem'], [(package, STUB_STAGE)], None
@@ -311,7 +315,7 @@ def stub_boot(args, disk, work, cmdline, package=None, corrupt=False):
         (base, mem), loads, elf = elf_image(args.kernel), [], args.kernel
     info = os.path.join(work, 'bootinfo.bin')
     with open(info, 'wb') as f:
-        f.write(bootinfo_blob(cmdline, 256 << 20, base, mem, corrupt))
+        f.write(bootinfo_blob(cmdline, ram_mb << 20, base, mem, corrupt))
     q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
              loads=loads + [(info, STUB_BOOTINFO)], elf=elf)
     return q, base, mem
@@ -321,7 +325,8 @@ def handoff_boots(args, disk, check, work):
     """the boot ABI's handoff: a0, a1 and a2 and a boot information block with a command line, then a corrupted one"""
     transcript = b''
     for corrupt in (False, True):
-        q, base, mem = stub_boot(args, disk, work, 'ascii surftest=1', corrupt=corrupt)
+        # 128 MiB of DDR in the boot information: the heap ends 16 MiB below it (BOOT-ABI.md's ddr_top)
+        q, base, mem = stub_boot(args, disk, work, 'ascii surftest=1', corrupt=corrupt, ram_mb=128)
         try:
             ok = q.expect("Brandon Burr's SurfOS", 30) and q.expect(PROMPT, 30)
             boot_log = q.since(0)
@@ -333,9 +338,11 @@ def handoff_boots(args, disk, check, work):
                 ok, out = q.cmd('bootinfo', ['boot information: SurfBoot 0.0.1 (53545542)'])
                 check(ok and "command line: 'ascii surftest=1'" in out and 'handoff a0 0, a1 0x8c000000, a2 0x49465253' in out,
                       'handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot\'s block and its command line')
-                check('RAM 0x80000000 + 256 MB (calibrated, SurfBoot\'s quick test passed)' in out and
+                check('RAM 0x80000000 + 128 MB (calibrated, SurfBoot\'s quick test passed)' in out and
                       'image 0x%08x + %d bytes' % (base, mem) in out,
                       'handoff: the RAM size and the image\'s memory size come from the boot information')
+                check(re.search(r'kernel heap 0x8[0-9a-f]{7}-0x86ffffff', boot_log),
+                      'handoff: 128 MiB of DDR: the kernel heap ends at 0x87000000, 16 MiB below it (ddr_top)')
                 ok, out = q.cmd('ls /rd0p1', ['README.TXT'])
                 check(ok, 'handoff: the RAM disk works as before')
                 check(q.poweroff() == 0, 'handoff: poweroff')
@@ -353,6 +360,34 @@ def handoff_boots(args, disk, check, work):
         finally:
             transcript += q.transcript
             q.close()
+    return transcript
+
+
+SCROLL_LINE = re.compile(r'^scroll [AB] \d{3} ')
+SCROLL_WHOLE = re.compile(r'^scroll [AB] \d{3} abcdefghijklmnopqrstuvwxyz0123456789 end$')
+
+
+def scroll_boot(args, disk, check):
+    """scrolltest (arch/riscv32/kshell.c, audit C10): two kernel tasks print 60 lines each at once while the console
+    scrolls, then the kernel checks every row of the console's cells. QEMU runs with -icount shift=7 (one instruction
+    every 128 ns of virtual time, near SurfCPU's pace), so a 10 ms tick often lands inside a scroll or a line: before
+    the console lock the rows came out blank, cut short or twice (the old console fails this check)."""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel), '-icount', 'shift=7,align=off,sleep=off'],
+             disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        ok, out = q.cmd('scrolltest', ['scrolltest: 2 tasks'], timeout=120)
+        m = re.search(r'scrolltest: (.*)', out)
+        check(ok and 'SCROLLTEST PASS' in out, 'scrolltest: two tasks printing at once while the console scrolls leave '
+              'every row whole, each task\'s lines in order (QEMU slowed with -icount)%s' % ('' if 'SCROLLTEST PASS' in out
+                                                                                            else ': ' + (m.group(1) if m else '?')))
+        lines = [l for l in out.splitlines() if SCROLL_LINE.match(l)]
+        check(len(lines) == 120 and all(SCROLL_WHOLE.match(l) for l in lines),
+              'scrolltest: the serial line got the same 120 lines, each whole (%d)' % len(lines))
+        check(q.poweroff() == 0, 'scrolltest: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
     return transcript
 
 
@@ -728,6 +763,7 @@ def main():
         q.close()
 
     try:
+        transcript += scroll_boot(args, disk, check)
         if args.stub:
             transcript += handoff_boots(args, disk, check, work)
             transcript += sdsim_boot(args, disk, check, work)

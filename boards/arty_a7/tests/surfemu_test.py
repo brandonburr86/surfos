@@ -10,8 +10,10 @@ video, sysinfo). Here it runs the real boot ROM, SurfBoot, which loads the Arty 
 package (build/riscv32/arty_a7/SURFOS.BIN) from a card image made by tools/mkcard.py (the
 standard directories, /BOOT/CMDLINE.TXT, a file in /USERS/DOCUMENTS) and hands over to it.
 The harness then types on the emulated UART: bootinfo, ls and cat in /USERS/DOCUMENTS, the
-package read back from the card by CRC, tasks, drivers, the self test; at the end the text
-screen (surf_video's text RAM, which the console draws on) is checked as well.
+package read back from the card by CRC, tasks, drivers, the self test, scrolltest (two
+tasks printing at once while the console scrolls: every row must stay whole, audit C10);
+at the end the text screen (surf_video's text RAM, which the console draws on) is checked as
+well: the scrolltest rows on it whole and in order.
 
 A test aid, as the emulator says of itself: not the RTL and not the board. Its card is read
 only and has no CMD18 or CMD25, so the kernel's SD driver reads one block per command there.
@@ -33,6 +35,25 @@ import time
 import zlib
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+SCROLL_WHOLE = re.compile(r'^scroll ([AB]) (\d{3}) abcdefghijklmnopqrstuvwxyz0123456789 end$')
+
+
+def scroll_rows(rows):
+    """scrolltest's rows on the screen: next to each other, each whole, each task's numbered on by one;
+    (ok, what)"""
+    at = [i for i, r in enumerate(rows) if r.startswith('scroll ')]
+    last = {}
+    for i in at:
+        m = SCROLL_WHOLE.match(rows[i].rstrip())
+        if not m:
+            return False, 'row %d is not whole: %r' % (i, rows[i].rstrip())
+        k, num = m.group(1), int(m.group(2))
+        if k in last and num != last[k] + 1:
+            return False, 'row %d: %s %03d after %03d' % (i, k, num, last[k])
+        last[k] = num
+    if not at or at != list(range(at[0], at[0] + len(at))):
+        return False, 'the rows are not together: %s' % at
+    return True, '%d rows' % len(at)
 
 
 def main():
@@ -78,7 +99,8 @@ def main():
                 (crcline, 'tasks', 'task A ran 4 rounds, task B 3'),
                 ('task A ran 4 rounds', 'drivers', 'sdcard    sd0'),
                 ('sdcard    sd0', 'selftest', 'SELFTEST PASS'),
-                ('SELFTEST PASS', 'uptime', 'ticks at 100 Hz'),    # (and the screen catches up meanwhile)
+                ('SELFTEST PASS', 'scrolltest', 'SCROLLTEST '),
+                ('SCROLLTEST ', 'uptime', 'ticks at 100 Hz'),      # (and the screen catches up meanwhile)
             ]
             argv = [a.surfemu, '--rom', a.rom, '--card', card, '--screen', screen, '--max-ms', '240000',
                     '--fail-on', 'Kernel panic', '--fail-on', 'BOOT PROBLEM', '--fail-on', 'Wipeout',
@@ -109,14 +131,24 @@ def main():
                   re.search(r'irq\s+surf_intc at 0x[0-9a-f]{8}', out),
                   'drivers: serial, gpio, ps2kbd and sdcard started; surf_intc and the timer listed')
             check('SELFTEST PASS' in out, 'selftest: SELFTEST PASS on the emulated SoC')
+            m = re.search(r'scrolltest: (.*)', out)
+            check('SCROLLTEST PASS' in out, 'scrolltest: two tasks printing at once while the console scrolls leave every '
+                  'row whole, each task\'s lines in order%s' % ('' if 'SCROLLTEST PASS' in out else ': ' + (m.group(1) if m else '?')))
+            lines = [l for l in out.splitlines() if l.startswith('scroll ')]
+            check(len(lines) == 120 and all(SCROLL_WHOLE.match(l.rstrip()) for l in lines),
+                  'scrolltest: the serial line got its 120 lines, each whole (%d)' % len(lines))
+            check(re.search(r'kernel heap 0x8[0-9a-f]{7}-0x8effffff', out),
+                  'the kernel heap ends 16 MiB below the 256 MiB SurfBoot reports (0x8F000000, as before)')
             check(re.search(r'up [\d.]+ s \(\d+ ticks at 100 Hz', out), 'uptime: the tick counts at 100 Hz')
             check('Kernel panic' not in out and 'Wipeout' not in out and 'killed by' not in out and 'BOOT PROBLEM' not in out,
                   'no panic, no killed task, no boot problem')
             text = open(screen, errors='replace').read() if os.path.exists(screen) else ''
-            m = re.search(r'scroll (\d+)', text)
-            check('SELFTEST PASS' in text and 'SURF ~#>' in text and m and int(m.group(1)) > 0,
-                  'the text screen: surf_video\'s text RAM shows the console (the self test\'s end, the prompt), '
-                  'hardware scroll in use')
+            m = re.search(r'# ctrl .* scroll (\d+)', text)
+            rows = [r for r in text.splitlines() if not r.startswith('#')]
+            whole, what = scroll_rows(rows)
+            check(whole and 'SCROLLTEST PASS' in text and 'SURF ~#>' in text and m and int(m.group(1)) > 0,
+                  'the text screen (surf_video\'s text RAM): scrolltest\'s rows whole and in order (%s), its result and '
+                  'the prompt; hardware scroll in use' % what)
             if not results[-1][0] and text:
                 print(text)
     finally:

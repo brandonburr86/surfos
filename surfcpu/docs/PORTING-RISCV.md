@@ -82,11 +82,10 @@ command that does not need PC hardware or processes.
   BOOT-ABI.md section 2, packed by the fw track's `surfcpu/tools/surfimg.py` (`pack --elf`),
   which puts the ELF through its `tools/isa-audit.py` and refuses to write a package SurfBoot
   would refuse; kernel.mk also requires the payload it packed to be objcopy's bytes. There is no
-  other packer: on a tree without surfimg.py (`sc/os` before integration) kernel.mk builds
-  `surfos.elf` and `surfos.payload.bin` and says that `SURFOS.BIN` was skipped. `SURFIMG=` (or
-  `OS_SURFIMG=` for `make -C surfcpu`) names another copy, which is how the package was tested
-  here, with surfimg.py taken from `surfcpu` (b555bb6) by `git show`. Card images come from the
-  fw track's `tools/mkcard.py` the same way (`OS_MKCARD=`).
+  other packer: on a tree without surfimg.py kernel.mk builds `surfos.elf` and
+  `surfos.payload.bin` and says that `SURFOS.BIN` was skipped. `SURFIMG=` (or `OS_SURFIMG=` for
+  `make -C surfcpu`) names another copy. Card images come from the fw track's `tools/mkcard.py`
+  the same way (`OS_MKCARD=`).
 
 ## 3. The inventory: every x86 dependency and what replaces it
 
@@ -154,21 +153,35 @@ self test checks the sizes of the boot ABI's structures.
 **Floating point**: none in the compiled code (the soft-float routines of libgcc would work
 under ilp32, but the speaker tune that used floats is not built).
 
-**Shared kernel files changed** (each guarded, the x86 build unchanged):
+**Shared kernel files changed.** First, for the port, each change guarded and the x86 build
+unchanged:
 
 | File | Change |
 |---|---|
 | `kernel/task.c` | four `#ifdef SURFOS_RISCV32` blocks: `build_initial_frame()` becomes `arch_task_frame()`; `yield()` is `ecall`; no `tss_set_kernel_stack()`; init starts the kernel shell on every console |
 | `lib/blibc/vsnprintf.c` | one: the 64/32 division in C instead of `divl` |
+| `mm/kalloc.c` | one (10/16/26): on riscv32 the kernel heap's bounds are set by `heap_init()`, since its end comes from the boot information at run time |
 
-How "unchanged" was checked (`surfcpu/docs/evidence/os/x86-unchanged.txt`): the x86 kernel
+Then a fix for both kernels (10/16/26), audit **C10** in `docs/CODE-AUDIT.md`: the console race
+that the RTL system boot and the fw emulator found (the screen showed blank, half-written and
+doubled rows during `tasks`; on x86 the same race was there, but a scroll takes microseconds):
+
+| File | Change |
+|---|---|
+| `kernel/console.c` | the console lock: one writer at a time on the grids, the screen and the serial mirror. A task that may wait does so on a wait queue, with interrupts on (a scroll is long on SurfCPU, and the UART must be heard); it counts as holding a mutex meanwhile, and a paged task gives the lock back while it waits at the question. A whole `kprintf()` call is drawn as one (`console_print_begin()`). Whoever may not wait (an interrupt handler, a trap, a task with interrupts off or in KCRIT_ENTER) draws at once when nobody draws; otherwise its character goes to the serial line at once and to the grid when the holder lets go. A task killed holding the lock gives it back; a panic draws over everything. `sscroll()` and the screen copy move words instead of bytes |
+| `lib/blibc/printf.c` | a `printf()` call drawn as one, as `kprintf()` |
+| `include/surfos/console.h` | `console_print_begin()`, `console_print_end()` |
+| `tests/host/test_pager.c`, `pager_bridge.c` | three scenarios with a hook that stops a task inside its line (a preemption) or prints as an interrupt handler: the other task's line waits, the handler's line comes after, a paged line gives the lock back at the question (the old console fails the first two) |
+
+How the first set was shown unchanged (`surfcpu/docs/evidence/os/x86.txt`): the x86 kernel
 built before and after (`devenv/build.sh`, O0 and O2) has byte-identical allocated sections
 (code, data, rodata, the symbol table, BSS) in `kernel/task.o`, `lib/blibc/vsnprintf.o` and
 `surfos.bin` (`arch/riscv32/elfcmp.py`); only the debug information moved with the line
 numbers. With the changed files, `make unittest` passed, `make test-usb` passed 315 of 315 at
 O0 and at O2, and `make test-all` passed at O0 (smoke test 311 checks); its O2 smoke run failed
 once (32 of 306, all following one step on the loaded host) and passed 311 when run again, with
-a kernel image identical to the one built before the change.
+a kernel image identical to the one built before the change. The console fix changes the x86
+kernel on purpose; it passed the same suites (`x86.txt`, round 2).
 
 ## 4. The port checks (AGENT-INSTRUCTIONS.md section 10)
 
@@ -191,8 +204,17 @@ The timing windows of the self test (sleeps, kernel timers, timeouts) allow a fe
 since an emulator on a busy host can stall for a while and the tick then catches up with mtime
 at once.
 
-The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 68 checks per build on a tree without
-the fw track's tools, 82 with them): the banner and identity, help, ps (idle, init, heartbeat, a
+`scrolltest` (arch/riscv32/kshell.c, audit C10): two kernel tasks print 60 numbered lines each
+at once, as fast as they can, while the console scrolls; then every row of the console's cells
+(and of the screen's copy) must be one whole line, each task's lines numbered on by one to its
+last. `make test-os` runs it on QEMU slowed with `-icount shift=7` (about SurfCPU's pace, so a
+tick often lands inside a scroll) and in the fw emulator, where the text screen is checked too.
+The console before the lock fails it in both (rows half written, doubled or blank); with the
+lock it passes, and the scroll is faster (892 ticks instead of 1430 for the 120 lines in the
+emulator).
+
+The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 72 checks per build on a tree without
+the fw track's tools, 86 with them): the banner and identity, help, ps (idle, init, heartbeat, a
 kernel shell on each of F1-F4), the tick against a 1000 ms sleep, the heartbeat task, two kernel
 tasks that count, sleep and wake (`tasks`), interrupt counts, the CPU, the self test and
 heaptest; FAT32 on the RAM disk: long, accented and 8.3 names, three folders deep, a 1 MB file
@@ -249,7 +271,7 @@ shadow copy and the card's backdoor, every fault the model can inject (a bad rea
 rejected for its CRC, a read error token, no response, a write error, a slow card, an
 initialization that never ends, no card), and the model's count of protocol mistakes, which must
 stay zero: 101 checks over seeds 1, 7 and 123. It runs where the model is in the tree (on
-`surfcpu` since the io merge; on `sc/os` from a copy, `OS_IOMODEL_DIR`), and says it is skipped
+`surfcpu` since the io merge; `OS_IOMODEL_DIR` names another copy), and says it is skipped
 otherwise.
 
 `make test-os-surfemu` (`boards/arty_a7/tests/surfemu_test.py`): the Arty kernel itself, in the
@@ -259,11 +281,10 @@ card, ps2, video, sysinfo), booted by the real SurfBoot ROM from a `mkcard.py` c
 `/BOOT/SURFOS.BIN`, `/BOOT/CMDLINE.TXT` and `/USERS/DOCUMENTS/HELLO.TXT`: SurfBoot's checks and
 handoff, the kernel's console on surf_uart, SurfBoot's boot information taken, the card through
 surf_spi with FAT32 on /sd0p1, `/USERS/DOCUMENTS` by its long name, the package read back from
-the card by CRC, two tasks, the drivers, the self test, and surf_video's text RAM showing the
-console with hardware scroll: 15 checks, about 120 s of simulated time in 2 s. It needs the
-emulator, surfimg.py and mkcard.py, so on `sc/os` it says it is skipped; it was run on a trial
-of the branch merged with `surfcpu` (2dd26c9, after the fw, ddr and flow merges), a tree made by `git merge-tree` and unpacked
-under `build/` with nothing merged or committed (evidence in `merged-trial/`). The emulator is
+the card by CRC, two tasks, the drivers, the self test, `scrolltest`, the heap's end from the
+boot information, and surf_video's text RAM showing the console with hardware scroll and
+`scrolltest`'s rows whole: 18 checks, about 120 s of simulated time in 2 s. It needs the
+emulator, surfimg.py and mkcard.py, which `surfcpu` has since the fw merge. The emulator is
 a test aid, not the RTL and not the board. Its card has no CMD18 or CMD25 (SurfBoot reads with
 CMD17 only), which is why the SD driver learned to fall back to one block per command.
 
@@ -286,7 +307,9 @@ generated `soc.h`:
   32-bit cells (glyph, foreground, background), the VGA palette as RGB444, the hardware cursor,
   and hardware scroll (a present that finds the picture moved up one row moves SCROLL on and
   rewrites one row: the new bottom row first, then SCROLL, which surf_video takes once per
-  frame, as IO.md describes). Text mode replaces the reset test pattern at start.
+  frame, as IO.md describes). Text mode replaces the reset test pattern at start. The console
+  lock calls it one caller at a time, so interrupts stay on while it compares and writes a
+  screen (milliseconds on SurfCPU).
 * `ps2kbd.c` + `ps2set2.c` + `kbdset1.c`: the PS/2 keyboard (interrupt source 1): set 2
   translated to set 1, decoded as kernel/keyboard.c does, to the active tty, F1-F4 switching
   consoles, Ctrl+Alt+Del rebooting; line errors forget half-received sequences; the lock keys'
@@ -313,24 +336,23 @@ machine-mode kernel with its shell, tasks, timer and interrupts, the self test w
 checks, FAT read/write on a RAM disk checked from the host, the boot ABI's handoff, FAT over the
 SD protocol driver and a simulated card, `/USERS/DOCUMENTS` by its long name both ways, and,
 with copies of the fw track's surfimg.py and mkcard.py, the kernel package and a card image
-laid out as SurfBoot expects. Done and tested in the fw track's firmware emulator, on a trial
-merge with `surfcpu`: the Arty kernel booted by SurfBoot from a card, to the shell and through
-its self test. Done and tested on the host: the
+laid out as SurfBoot expects. Done and tested in the fw track's firmware emulator: the Arty
+kernel booted by SurfBoot from a card, to the shell, through its self test and `scrolltest`.
+In the RTL system simulation (the soc track's `test-soc-system-boot`): SurfBoot loads the Arty
+`SURFOS.BIN` from a card image on the real core, and the kernel reaches its shell over the UART
+and the PS/2 keyboard model, its console decoded from the VGA pixels; that run found the console
+race fixed as C10. Done and tested on the host: the
 Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
 the SD driver against the io track's card model with surf_spi's timing.
 
 **Pending (needs the board, a bitstream build host, or integration):** everything on the Arty
 itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and links into
 `build/riscv32/arty_a7/surfos.elf` (and `SURFOS.BIN` with the fw track's packer, tested with a
-copy). Its register accesses have run only in the fw track's instruction-level emulator, in a
-trial merge (`make test-os-surfemu`: surf_uart, surf_timer, surf_intc, surf_gpio, surf_spi with
-the emulator's read-only card, surf_video's text RAM; surf_ps2 only idle, with no keyboard): not
-in RTL simulation (the SoC, its peripherals and SurfBoot are other tracks' work, joined at
-integration: brief milestone 7's "real board boots SurfOS from microSD" and milestone 8's
-persistent files are open), not on the FPGA (no board connected). The SD write path in
-particular stays off (read-only) until it is tried on a real card. On `sc/os` itself
-`SURFOS.BIN` is not built (no surfimg.py in this branch); it is, and the package and card parts
-of test-os run, once the branch meets the fw track's tools at integration.
+copy). Its register accesses have run in the fw track's instruction-level emulator (`make
+test-os-surfemu`) and in the soc track's RTL system simulation (`test-soc-system-boot`), with
+models of the card, the keyboard and the DDR: not on the FPGA (no board connected), so brief
+milestone 7's "real board boots SurfOS from microSD" and milestone 8's persistent files are open.
+The SD write path in particular stays off (read-only) until it is tried on a real card.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by
@@ -354,10 +376,10 @@ Found while building to them; nothing was changed in the frozen files.
 * The Arty has no real-time clock: FAT time stamps on the card are the kernel's build time plus
   the uptime. A clock (or a time set over the UART or the network) is for later.
 * BOOT-ABI.md's clarifications (on `surfcpu`, version 1 unchanged) make `ddr_top` the top 16 MiB
-  of the DDR that calibrated. The kernel's heap ends at the map's `ddr_top` (`0x8F000000`), which
-  is right for the Arty's 256 MiB; with less DDR, `run_memcheck()` stops the boot with a report
-  (the heap would not lie inside `ram_size`) instead of using memory that is not there. Taking
-  the heap's end from the boot information is a small change for when a smaller part matters.
+  of the DDR that calibrated. Since 10/16/26 the kernel heap ends at `ram_base + ram_size - 16
+  MiB` from the boot information (`arch/riscv32/mem.c`), never above the board's `HEAP_END`
+  (the Arty: the map's `ddr_top`; QEMU virt: its RAM disk window). The Arty's 256 MiB give
+  `0x8F000000` as before; `test_os.py` hands over 128 MiB and sees the heap end at `0x87000000`.
 * The fw track's simulated SD card (its emulator's) has no CMD18 or CMD25; real cards all do.
   The kernel copes (one block per command), but a run in that emulator says nothing about the
   driver's multiple-block paths, which the io track's card model and the host model test.
