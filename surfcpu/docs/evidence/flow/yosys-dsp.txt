@@ -1,0 +1,67 @@
+Yosys DSP packing silently deletes logic (synth_xilinx, xilinx_dsp pass), 2026-10-15/16
+Reported by the io track (surf_video, io commit 534de7b, merged as fde641f); reproduced and
+measured here. Scripts under build/flow/dspbug/ (not committed); the reproducer
+devenv/openxc7/test/dsp_counter.v and its testbench are committed.
+
+Mechanism (Yosys 0.69 log): "Analysing ... $mul ... for Xilinx DSP packing. preadder
+$add$surf_video.v:172 ... ffAD: ..." - the counter's increment hcnt + 1 is taken as the DSP48E1
+pre-adder and the hcnt register as its AD pipeline register. The counter then exists only
+inside the DSP, so every other reader of hcnt loses its source and is optimized away.
+
+1. surf_video before the io fix (534de7b^), flip-flops / LUTs / DSP48E1 / RAMB after synthesis:
+   Yosys           options                          pre-fix               fixed source
+   0.52 (main)     -family xc7 -flatten             236 /  644 / 0 / 0     862 / 848 / 0 / 1
+   0.52            ... -nodsp                       852 /  874 / 0 / 1     862 / 861 / 0 / 1
+   0.52            -arch xc7 -flatten -abc9         236 /  370 / 0 / 0     862 / 670 / 0 / 1
+   0.52            xilinx_dsp.multonly + abc9       852 /  662 / 1 / 1     862 / 671 / 0 / 1
+   0.69 (openXC7)  -family xc7 -flatten             236 /  373 / 0 / 0     862 / 664 / 0 / 1
+   0.69            -arch xc7 -flatten -abc9         236 /  373 / 0 / 0     862 / 664 / 0 / 1
+   0.69            ... -nodsp                       852 /  713 / 0 / 1     862 / 667 / 0 / 1
+   0.69            xilinx_dsp.multonly + abc9       852 /  667 / 1 / 1     862 / 664 / 0 / 1
+   0.70 (newest,   -family xc7 -flatten             236 /  373 / 0 / 0     862 / 605 / 0 / 1
+   2026-10-13,     -arch xc7 -flatten -abc9         236 /  373 / 0 / 0     862 / 605 / 0 / 1
+   throwaway build) ... -nodsp                      852 /  661 / 0 / 1     862 / 605 / 0 / 1
+   With DSP packing, 616 of 852 flip-flops and the font ROM vanish, with no warning.
+
+2. dsp_counter (10-bit counter, also multiplied by 205), netlist under dsp_counter_tb.v with the
+   same Yosys version's cells_sim.v (DSP48E1 model included), 2000 clocks:
+   Yosys   options                    FFs  LUTs  DSP   simulation
+   (RTL)                                             PASS
+   0.52    -flatten                    0     0    1   FAIL, 1999 of 2000 clocks wrong
+   0.52    -flatten -abc9 -arch xc7    0     0    1   FAIL, 1997
+   0.52    ... -nodsp                 10    58    0   PASS
+   0.52    xilinx_dsp.multonly        10     3    1   PASS
+   0.69    -flatten                    0     0    1   FAIL, 1997
+   0.69    -flatten -abc9 -arch xc7    0     0    1   FAIL, 1997
+   0.69    ... -nodsp                 10    68    0   PASS
+   0.69    xilinx_dsp.multonly        10     3    1   PASS
+   0.70    -flatten / -abc9 -arch xc7  0     0    1   FAIL, 1997
+   0.70    ... -nodsp                 10    65    0   PASS
+   The defective netlists drive cnt[9:0] with constant 0 and hs with constant 1.
+
+Workaround, demonstrated above: `scratchpad -set xilinx_dsp.multonly 1` before synth_xilinx
+(documented in `help xilinx_dsp`: the pass becomes a no-op). Multipliers still map to DSP48E1
+(mul2dsp, xc7_dsp_map); only Yosys's packing of registers and pre/post-adders is skipped, so
+pipeline registers stay in fabric and wide products add their partial sums in LUTs (the probe's
+32x32 multiply: 4 DSP48E1 either way, 507 LUTs instead of 446). tools/openxc7-build.sh uses it
+by default (--dsp safe); --dsp full gives openXC7's plain recipe, --dsp none uses -nodsp.
+
+Detection: devenv/openxc7/synthcheck.py compares the synthesized netlist with the elaborated
+RTL (proc, flatten, opt -full, wreduce, memory -nomap): flip-flops per instance with credit for
+DSP/RAM/SRL registers, large memories against block RAM, outputs that became constant. Every
+openxc7-build.sh run applies it (check-synthesis.txt; --expect adds minimum flip-flops per
+instance). Results (Yosys 0.69):
+   dsp_counter, full packing          FAIL: 0 of 10 flip-flops; 11 outputs became constant
+   dsp_counter, multonly              PASS
+   surf_video pre-fix, full packing   FAIL: (top) 627 -> 236 FFs, u_cfg_cdc 220 -> 0, 32 Kbit ROM
+                                      with no block RAM, 27 outputs became constant
+   surf_video pre-fix, multonly       PASS (852 of 852)
+   surf_video fixed, full packing     PASS (862 of 863)
+   flow_features, full packing        PASS (445 FFs + 94 held in DSPs of 474)
+   flow_demo, flow_features (safe)    PASS
+   make test-flow repeats the dsp_counter cases with the main image's Yosys 0.52 (full FAIL as
+   expected; safe and -nodsp PASS), so a future Yosys that fixes the pass shows up there.
+
+Not demonstrated: that no other DSP pattern is affected (the check is the safeguard), or the
+upstream status (no matching issue found by a search of YosysHQ/yosys issues for
+"xilinx_dsp preadder"; nothing was filed from here).

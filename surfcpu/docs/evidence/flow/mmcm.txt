@@ -1,0 +1,41 @@
+nextpnr 1.0.0's MMCM fractional-divider encoding against AMD's (2026-10-15/16)
+
+LVS does not model MMCM/PLL, so their configuration was compared field by field instead.
+
+References (none of them nextpnr):
+  * AMD XAPP888's reference functions (integer divider; mmcm_frac_count_calc), in the port of
+    F4PGA's f4pga-arch-defs (xilinx/xc7/techmap/cells_map.v at 3d4df2e, mmcm_clkregs_frac),
+    which takes EDGE from the integer calculation "as observed in vendor tools".
+  * Register values Vivado produced for CLKFBOUT_MULT_F/CLKOUT0_DIVIDE_F = 4.000 .. 5.875 in
+    steps of 1/8 (Eli Billauer, "Reprogramming a Series-7 MMCM for fractional division
+    ratios", billauer.se/blog/?p=4506; table parsed from the page).
+devenv/openxc7/cmtcheck.py implements XAPP888's functions; its self-test reproduces all 16
+Vivado rows (make test-flow). nextpnr's rule (himbaechel/uarch/xilinx/fasm.cc,
+write_mmcm_clkout) reimplemented next to it gives `cmtcheck.py --table`, 2.000 .. 9.875:
+  divide  XAPP888 = Vivado (high low edge frac pmf wfr wff)   nextpnr 1.0.0
+   4.250  1 1 0 2 1 1 1                                       1 1 0 2 1 1 1   same
+   5.000  2 3 1 0 0 0 0                                       2 3 1 0 0 0 0   same
+   5.125  2 1 1 1 4 0 1                                       1 2 1 1 0 1 0   DIFFERENT
+   5.250  2 2 1 2 5 0 0                                       1 2 1 2 1 1 1   DIFFERENT
+  35 of 64 ratios agree: every integer ratio and every fractional ratio with an even integer
+  part. All 28 fractional ratios with an odd integer part differ (high time one lower,
+  FRAC_WF_R and FRAC_WF_F set when they should be clear or the reverse, PHASE_MUX_F without
+  its bit 2), as does 2.125 (XAPP888's special case for int 2, frac 1).
+  The integer counters (PLL, DIVCLK, CLKOUT1..6) agree with XAPP888 at 50% duty.
+
+In a real build (cmtcheck.py on the routed FASM, flow_features, Arty A7-35T):
+  default 100 MHz x 18.125 / 2 / 36: DIVCLK 2, CLKFBOUT_MULT_F 18.125, CLKOUT0_DIVIDE_F 36 and
+    the PLL's 1 / 10 / 40 all match XAPP888 (34 fields): PASS
+  -D FLOW_PIX_PLANNED, the planned 100 MHz x 8.875 / 35.25 = 25.1773 MHz:
+    CLKFBOUT_MULT_F 8.875 matches; CLKOUT0_DIVIDE_F 35.25: HIGH_TIME 16 (XAPP888: 17),
+    FRAC_WF_R 1 (0), FRAC_WF_F 1 (0), PHASE_MUX_F 1 (5): FAIL. Bitstream, round-trip and LVS
+    checks all pass on that build, so only this check sees it.
+What the mis-encoded divider does on the chip is unknown (no board): a wrong frequency or duty
+cycle is likely, and the probe's pix= reading would show it.
+
+Settings that avoid it for a VGA pixel clock (25.175 MHz nominal), from a search of MMCM
+settings (VCO 600-1200 MHz, PFD >= 10 MHz) whose fractional values have even integer parts:
+  CLKFBOUT_MULT_F 18.125, DIVCLK_DIVIDE 2, CLKOUT0_DIVIDE 36 -> 25.17361 MHz (+0.0055%), VCO
+  906.25 MHz, PFD 50 MHz (the probe's default). The planned setting is +0.009%.
+Not reported upstream from here (no logging in anywhere); the comparison above is what an
+upstream report would carry.

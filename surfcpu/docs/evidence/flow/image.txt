@@ -1,0 +1,38 @@
+surfcpu-openxc7:2026-10-15, the open-source bitstream flow image (devenv/openxc7/)
+2026-10-15, flow track, MacBook Pro M4 Max, Docker Desktop 4.93.0 (VM: 14 CPUs, 7.7 GiB)
+
+Command:  surfcpu/devenv/openxc7/build-image.sh      (BuildKit builder of its own, JOBS=6)
+Cold build: 331 s wall clock (stages in parallel). Stage times: build tools 80 s,
+  Yosys 232 s, nextpnr + LVS tools 65 s, prjxray tools 38 s, prjxray-db 6 s,
+  both chip databases 74 s, final image packages 18 s.
+Image: sha256:55c5febacacff320e3aabe8f748659adb4aadc144df0672e069668bf27992b18,
+  arm64, 660,718,760 bytes (/opt/openxc7: bin 49 MB, share 288 MB, lib 1.9 MB).
+Builder cache: 2.4 GB (removed at the end of the track's work; a rebuild starts cold).
+
+Pinned sources (all built natively for arm64):
+  Debian trixie-slim@sha256:a29215f6... + snapshot.debian.org 20261005T000000Z (as the main image)
+  Yosys 0.69          release yosys.tar.gz sha256:6dad6412cae417f5a53e2c943c2aee160162cfc1bdd31669230da1b7e3522571
+                      (archived from 143eb14f, a CI merge of tag v0.69 with no file changes; it
+                      prints "0.69+post" because the tarball has no git metadata)
+  openXC7/nextpnr     e860c9c8360d8501a1b55df94e58f3dfe7bde958 (tag 1.0.0, nextpnr-himbaechel, xilinx
+                      uarch); meta a4af910c; 3rdparty/fasm2netlist 0948889f (tileverilog, lvs_equiv)
+  openXC7/prjxray     ed3331c6200f421164101388759fc2860b0f5634 (its fasm submodule 2f57ccb1)
+  openXC7/prjxray-db  a90f27c1caefee5276f47440f4c730b50519a86f, artix7/ only (tree 11c0658d)
+  textX 4.2.3         wheel sha256:dc533d34809408fd7152f499fc97609ba7615f61a9e0ebcc76016a0929be5979
+  The prjxray and prjxray-db pins are those of openXC7/nextpnr 1.0.0's CI (PRJXRAY_REV,
+  PRJXRAY_DB_REV) and of openXC7's toolchain-installer 1.0.0.
+  Not used: openXC7/nextpnr-xilinx, archived 2026-09-25 ("development continues at
+  openXC7/nextpnr"); its last release was 0.9.8.
+
+Chip databases, generated in the build (python3 xilinx_gen.py, then bbasm -l):
+  die       .bba         generation        peak RSS   bbasm   chipdb .bin   SHA-256
+  xc7a50t   123,355,192   26.2 s            1.81 GB    1.3 s   29,585,641    ec876fe0eb87f977a4d5781c5ae9dc03fadc3072f83bd89d31346485b78bc760
+  xc7a100t  165,521,949   45.0 s            3.08 GB    1.6 s   39,198,709    b4098ce6982235f4d1cf4295708751b0a73241cb22ca57d9183b9d5f6d4c57d9
+  The 100T fits the 7.7 GiB VM; no prebuilt databases were needed. xc7a35t has no database of
+  its own: prjxray-db maps it to the xc7a50t fabric (mapping/devices.yaml), and its part
+  files equal the 50T's except for the IDCODE (0x362d093 against 0x362c093).
+
+/etc/surfcpu-openxc7.txt (printed by build-image.sh; copied into every build's manifest):
+  yosys    Yosys 0.69+post (git sha1 143eb14f9cc5..., Release, GNU /usr/bin/c++ 14.2.0)
+  nextpnr  "nextpnr-himbaechel" -- Next Generation Place and Route (Version 1.0.0)
+  python3 3.13.5, fasm 0.0.2.post66 (textX parser), textx 4.2.3, libz3 4.13.3, Eigen 3.4.0

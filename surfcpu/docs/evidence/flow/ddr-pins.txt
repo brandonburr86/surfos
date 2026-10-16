@@ -1,0 +1,33 @@
+DDR3 output pins through the open flow: a first look for the ddr track (2026-10-16)
+
+Why: SurfOS needs the Arty's DDR3L, which the open flow can only reach through LiteDRAM. openXC7's
+own CI (nextpnr 1.0.0 .github/workflows/demos.yml) records LiteX's DDR3 design for the Arty S7
+as a known place-and-route failure: an OSERDESE2 whose divided-clock (CLKDIV) pip is missing from
+Project X-Ray's Spartan-7 database in a "SING" I/O tile (the single-IOB tile at each end of a
+bank), on the DDR reset_n pin; before nextpnr refused such pips, that design got a bitstream with
+the DDR PHY's divided clock simply absent.
+
+Arty A7 DDR3 pins in SING tiles (LiteX's digilent_arty pinout, prjxray-db package_pins.csv):
+  K6 (reset_n)  xc7a35t IOB_X1Y49, RIOB33_SING_X43Y49   (the same bank position as the S7 case)
+  U8 (cs_n)     xc7a35t IOB_X1Y0,  RIOB33_SING_X43Y0
+Experiment devenv/openxc7/test/ddr_pins.v (+ .xdc): an MMCM (400 and 100 MHz) and one OSERDESE2
+(DDR, width 4, CLK and CLKDIV) on each of K6, U8 and R2, SSTL135, through tools/openxc7-build.sh
+--no-lvs, both parts:
+  place and route: PASS (no unavailable pip); clk100 551 MHz estimated against 100 MHz
+  bitstream check: PASS; clock check (MMCM 8 / 2 / 8, integer): PASS; synthesis check: PASS
+  the divided-clock pips IOI_OLOGIC0/1_CLKDIV.IOI_LEAF_GCLK1 in both SING tiles carry 6
+  configuration bits each in the Artix-7 database (the S7 gap is not there)
+  round trip: PASS once two explained differences are accounted for (fasmcheck.py now does):
+   - 47 STEPDOWN bits that fasm2frames spreads, as Vivado does, to every unused IOB of a bank
+     where an IOB uses a low-voltage standard (prjxray utils/fasm2frames.py)
+   - the fast-clock pip IOI_OLOGIC1_CLK.IOI_OCLK_1 in the top-of-bank SING tile has no bits:
+     ppips_rioi3_sing.db lists only the OLOGIC0 form; in RIOI3 (whose bits the SING tile
+     borrows) and every other IOI type it is an ALWAYS (hard-wired) connection
+Also relevant: nextpnr's XDC reader ignores INTERNAL_VREF, but it sets the bank's VREF to 675 mV
+by itself (HCLK_IOI3.VREF.V_675_MV) whenever an SSTL input is used in the bank, the right value
+for 1.35 V DDR3L.
+
+What this does not show: that LiteDRAM's whole PHY (ISERDESE2, IDELAYE2 + IDELAYCTRL, IOBUF and
+IOBUFDS for DQ/DQS, on-die termination, the read leveling) builds and works; nothing here was on
+a board. It removes the one blocker openXC7 has recorded for the closest board, for the Arty
+A7's own pins and database.
