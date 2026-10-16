@@ -82,4 +82,4 @@ header "$out/tools.txt" "Vivado flow, build and program wrappers, CDC constraint
     cat "$b/test_tools.txt"
 } >> "$out/tools.txt"
 
-echo "evidence: wrote $(ls "$out" | tr '\n' ' ')"
+echo "evidence: wrote lint.txt clocks.txt baseline.txt top.txt wiring.txt tools.txt (resources.txt: make estimate-board; openxc7.txt: sim/board/openxc7_evidence.sh on the Mac)"
