@@ -172,7 +172,7 @@ test-ddr-mutants:
 # Synthesizable with an open tool, no vendor primitives needed; a resource estimate.
 synth-ddr:
 	@mkdir -p $(DDR_OUT)
-	$(Q)$(YOSYS) -q -p "read_verilog -Irtl/generated $(DDR_RTL_ALL); synth_xilinx -top surf_ddr_bridge -family xc7 -noiopad -flatten; tee -q -o $(DDR_OUT)/synth_stat.txt stat" \
+	$(Q)$(YOSYS) -q -p "read_verilog -Irtl/generated $(DDR_RTL_ALL); synth_xilinx -top surf_ddr_bridge -family xc7 -noiopad -noclkbuf -flatten; tee -q -o $(DDR_OUT)/synth_stat.txt stat" \
 	  > $(DDR_OUT)/synth.txt 2>&1 || { cat $(DDR_OUT)/synth.txt; exit 1; }
 	@grep -E 'Number of cells|LUT[1-6] |FD[A-Z]+ |CARRY4|RAM|SRL' $(DDR_OUT)/synth_stat.txt | sed 's/^ */  /'
 	@echo "synth-ddr: surf_ddr_bridge synthesizes (yosys synth_xilinx, no vendor primitives in the RTL)"

@@ -109,8 +109,10 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
                                         "-o", str(exe), str(out / "surf_ddr_bridge.v"), str(out / "surf_ddr_mailbox.v"),
                                         "rtl/lib/surf_sync.v"] + TB)
     b = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    if b.returncode != 0:
-        return True, "killed (does not build)"
+    if b.returncode != 0:               # none is meant to break the build: retry once (a busy
+        b = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)   # machine), then say so
+        if b.returncode != 0:
+            return False, "error: does not build: " + b.stderr.strip()[-200:]
     if path == MAILBOX:                 # the mailbox's own test first
         vvp = out / "tb_ddr_mailbox.vvp"
         c = subprocess.run(["iverilog", "-g2005", "-o", str(vvp), "sim/ddr/tb_ddr_mailbox.v",
