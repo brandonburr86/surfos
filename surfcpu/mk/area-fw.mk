@@ -140,7 +140,7 @@ test-fw-unit: $(FW)/host/fwtest
 test-fw-scenarios: $(FW)/host/fwtest
 	$(Q)$(PYTHON) firmware/tests/run_tests.py --fwtest $(FW)/host/fwtest $(if $(FW_JOBS),--jobs $(FW_JOBS))
 
-test-fw-emu: $(FW)/host/surfemu $(FW)/surfboot.mem $(FW)/HELLO.BIN
+test-fw-emu: $(FW)/host/surfemu $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/DDRDIAG.BIN $(FW)/HELLO.BIN
 	$(Q)$(PYTHON) firmware/tests/run_emu.py $(if $(FW_JOBS),--jobs $(FW_JOBS))
 
 test-fw-host: test-fw-unit test-fw-scenarios test-fw-emu
