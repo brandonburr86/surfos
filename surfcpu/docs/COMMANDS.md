@@ -29,4 +29,6 @@ connected; `V=1` shows full commands.
 | `make program-volatile` | Mac | checks for one FT2232H cable (or the one `CABLE_SERIAL=` names), one device on its JTAG chain with `BOARD`'s IDCODE, a bitstream built for that FPGA and package (`DESIGN`'s last build, or `BIT=`) whose manifest passed and matches the file, then loads it into FPGA RAM over USB/JTAG (lost at power-off) | pending: board, openFPGALoader |
 | `make program-flash` | Mac | writes the configuration flash (milestone 9): refused unless `SURFCPU_FLASH_CONFIRM=write-flash-BOARD` is given (or the board name typed at the prompt) and the bitstream's `tools/fpga-build.sh` manifest passed for this file, board and part | later |
 | `make deploy-sd MOUNT=/Volumes/X` | Mac | installs `SURFOS.BIN` and system files on a mounted FAT32 card, verifies them, keeps user files; never formats; `DEPLOY_ARGS=--dry-run` shows what it would do | written and tested against a stand-in volume; never yet run on a real card |
-| `make check` | container | every automated pre-release check | grows with the tracks |
+| `make board-uart-expect BOARD=...` | container | what the serial port should show for the bramdiag and SurfBoot bitstreams, from the RTL simulation (BOARD.md section 12) | works |
+| `make board-netlist-sim` | container | the open flow's synthesized netlists of the SoC bitstreams run bramdiag and SurfBoot in Verilator | works (slow: minutes) |
+| `make check` | container | every automated pre-release check (about 20 minutes) | works |

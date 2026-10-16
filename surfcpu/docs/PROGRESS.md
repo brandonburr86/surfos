@@ -8,7 +8,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
 | 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
-| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS (569 checks) and starts SurfBoot ([evidence](evidence/soc/)) | | pending | simulation done; bitstream and board pending |
+| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs ([evidence](evidence/ddr/)) | MIG recipe pending a Vivado host; LiteDRAM generated | pending | bridge done; board top wiring pending |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | Yosys estimates | pending | RTL in simulation; review fixes in progress |
@@ -95,3 +95,13 @@ physical results are separate columns, so nothing claims more than happened.
   the real core against Spike (6b71d73): 705 programs, 8.2 million retirements, no divergence.
 * All nine tracks are merged; `make check` passes in about 22 minutes on the Mac.
 * The owner's guide: [OWNER-GUIDE.md](OWNER-GUIDE.md).
+
+### 2026-10-16: the console lock; the whole SoC as bitstreams
+
+* os-2 (4e06018): one writer at a time on the console (audit C10, shared with x86; x86
+  `test-all` passes, run again by the integrator on the merged tree); `scrolltest` on
+  `make check`; the kernel heap ends 16 MiB below the RAM the boot information reports.
+* board-3 (96677fb): the whole SoC (HAS_DDR=0) through the open flow for both boards, with
+  bramdiag or SurfBoot in the boot ROM: every flow check plus the board's netlist and ROM checks;
+  the synthesized netlists reach `BRAMDIAG: PASS (203 checks)` and SurfBoot's DDR-absent stop in
+  simulation. Expected UART transcripts for the owner are in BOARD.md section 12.

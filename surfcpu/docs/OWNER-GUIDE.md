@@ -18,7 +18,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Step | State |
 |---|---|
 | CPU, SoC, SurfBoot and the SurfOS kernel | pass in simulation, including SurfBoot booting SurfOS from a card image on the RTL with the real CPU |
-| Bitstreams | built on this Mac with the open-source flow for the milestone 1 design; the full SoC is next |
+| Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the bridge is done; the memory controller in the bitstream is a later step, so booting SurfOS on the board waits for it |
 | The board itself | nothing has been connected or programmed yet |
 
@@ -147,7 +147,7 @@ Docker Desktop must be running (whale icon in the menu bar).
 
 | Adapter | Where | How |
 |---|---|---|
-| Pmod MicroSD | JA, top row | component side up, pin 1 at JA pin 1 |
+| Pmod MicroSD | JA (a 12-pin adapter: both rows) | component side up, pin 1 at JA pin 1; no card in it until SurfBoot runs (WIRING.md U8) |
 | Pmod VGA | JB + JC together | **component side up, the VGA socket pointing away from the board, the adapter's J1 in JB.** Upside down it shorts FPGA outputs together and to ground through the 0 Ω JB/JC ports, which can damage the FPGA (WIRING.md U2) |
 | Pmod PS2 | JD, **top row** | component side up, its pin 1 at JD pin 1; **its jumper JP1 on VB** (the Arty's 3.3 V). Never 5 V from outside: that would pull the lines above the FPGA's limits (WIRING.md section 4) |
 
@@ -157,6 +157,10 @@ Two different jumpers are both called JP1:
   instead of loading Digilent's demo from flash at power-on (that demo could drive the Pmod
   pins).
 * **The Pmod PS2's JP1 (supply)**: **on VB**.
+
+Also leave **the Arty's JP2** open (shorted, opening the serial port could reset the SoC), and
+connect nothing to the Pmod PS2's JP2 header (its silkscreen has VE and GND swapped). BOARD.md
+section 12 is the full checklist.
 
 Bring the adapters up in order: power on with only the USB cable first and load the baseline
 design (section 4), which leaves JB, JC and JD unassigned so the FPGA drives none of their
@@ -205,24 +209,61 @@ keyboard is a real PS/2 keyboard that works at 3.3 V (INVENTORY.md section 4, G4
 
 That is milestone 1's physical test. Please send me the lines you see, or a photo of the LEDs.
 
-## 5. The CPU on the board (milestone 3) **pending: bitstream in progress**
+## 5. The CPU on the board (milestone 3) **pending**
 
-The full SoC with the boot ROM holding `bramdiag` (the CPU and memory diagnostics) is being
-built now. Expected, from simulation, on the UART: the diagnostics' report, ending in
-`BRAMDIAG: PASS (569 checks)` (with DDR not yet in the design, its DDR tests report DDR
-absent).
+The full SoC with the CPU and memory diagnostics in its boot ROM; only the USB cable is
+needed:
+
+```
+make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag   # about 14 minutes
+make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag
+```
+
+Expected, from simulation (the RTL and the bitstream's own synthesized netlist), about 0.17 s
+after the load:
+
+```
+SurfCPU BRAM diagnostics 1.0.0 (build <id>)
+board Arty A7-100T (0x100), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+identity                           ok (7 checks)
+ALU, immediates, x0                ok (33 checks)
+...
+interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+FENCE.I, code written to RAM       ok (2 checks)
+DDR                                skipped: no DDR controller in this bitstream
+
+BRAMDIAG: PASS (203 checks)
+```
+
+Then LD4-LD7 light and LD0 is green (red on a failure); typed characters are echoed. BOARD.md
+section 12 has the whole transcript. This is milestone 3's physical test.
 
 ## 6. SurfBoot and the card reader **pending**
 
-The full SoC with SurfBoot in its boot ROM. Without DDR in the design yet, SurfBoot reports DDR
-absent and stops in its monitor, which already exercises the CPU, the UART, the card reader and
-the VGA output. Its monitor commands (`help` lists them): `boot`, `check`, `ls`, `cat`,
-`chain`, `part`, `fs`, `sd`, `ddr`, `md`, `mw`, `spi`, `info`, `reset`. Expected, from simulation,
-the first lines:
+The full SoC with SurfBoot in its boot ROM (`DESIGN=surfcpu_arty_a7_top`), with the adapters
+plugged in (section 3) and then a FAT32 card (section 7) in the slot. Without DDR in this
+bitstream SurfBoot stops in its monitor, which still exercises the CPU, the UART both ways, the
+card over SPI and the VGA console (the same text appears on the monitor). The keyboard is not
+tested yet: no ROM program reads it; SurfOS does. The monitor's commands (`help` lists them):
+`boot`, `check`, `ls`, `cat`, `chain`, `part`, `fs`, `sd`, `ddr`, `md`, `mw`, `spi`, `info`,
+`reset`. Expected, from simulation (with a simulated 64 MiB card):
 
 ```
-SurfBoot 1.0.0 (build ...), the SurfCPU boot ROM
+SurfBoot 1.0.0 (build <id>), the SurfCPU boot ROM
+soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream <id>
+ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+
+SurfBoot stopped: no DDR controller (DDR_ABSENT)
+...
+surfboot> sd
+sd: SDHC/SDXC, sector addressing, OCR c0ff8000, ready after 5 ms, data CRC on
+sd: SPI 390 kHz for identification, 6250 kHz for data (DIV 1)
+...
+surfboot> ls /
+...
 ```
+
+Your card answers `sd` and `ls /` with its own details. Please send me these lines.
 
 ## 7. Prepare the microSD card (once) and install SurfOS
 
