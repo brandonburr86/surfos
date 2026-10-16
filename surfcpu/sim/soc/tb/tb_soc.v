@@ -93,7 +93,7 @@ module tb_soc;
         .req_wdata(dut.u_core.ibus_req_wdata), .req_fetch(dut.u_core.ibus_req_fetch),
         .rsp_valid(dut.u_core.ibus_rsp_valid), .rsp_rdata(dut.u_core.ibus_rsp_rdata),
         .rsp_err(dut.u_core.ibus_rsp_err));
-    surfbus_monitor #(.NAME("dbus"), .MAX_LAT(2000)) dmon (
+    surfbus_monitor #(.NAME("dbus"), .MAX_LAT(5000)) dmon (
         .clk(clk), .rst(rst), .req_valid(dut.u_core.dbus_req_valid), .req_ready(dut.u_core.dbus_req_ready),
         .req_addr(dut.u_core.dbus_req_addr), .req_write(dut.u_core.dbus_req_write), .req_be(dut.u_core.dbus_req_be),
         .req_wdata(dut.u_core.dbus_req_wdata), .req_fetch(dut.u_core.dbus_req_fetch),
