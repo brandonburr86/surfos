@@ -104,7 +104,8 @@ removed (with RVFI it leaves a trap record).
 
 ## 3. Valid, stall and flush
 
-Each stage has a valid bit; there are no bubbles to inject, only valid bits cleared.
+Each stage has a valid bit. A stall keeps a stage's instruction where it is, a flush clears
+valid bits, and a bubble is just a stage that is not valid: no `nop` is ever inserted.
 
 | Signal | Meaning |
 |---|---|
@@ -332,6 +333,23 @@ revision gave 2694 LUTs, and the same RTL synthesised per module adds up to abou
 largest single item is the ALU's three barrel shifters; one shared shifter would save a
 couple of hundred LUTs if space ever matters.
 
+**Did synthesis keep everything?** Yosys 0.52 can silently delete logic when it packs a
+multiply into DSP48s (another track hit this). Three checks show it did not delete any here:
+
+* Synthesised per module (`docs/evidence/cpu/synth-modules.txt`), the flip-flop counts are
+  exactly what the RTL declares: divider 139, CSRs 265, fetch unit 98, fetch-buffer pointers
+  6, pipeline registers 432 (436 declared, less the 4 always-zero low bits of `ex_pc` and
+  `mem_pc`); the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
+  The flattened run above has 3 flip-flops fewer (more constant address bits found across
+  module boundaries).
+* `make synth-cpu-gate` writes the synthesised netlist (the same flow, with `RESET_PC` set to
+  the testbench's `0x80000000`) and simulates it in Icarus with Yosys's models of the Xilinx
+  cells (LUTs, CARRY4, FDRE, RAM32M, DSP48E1) on the 13 directed tests that need only RAM,
+  including `muldiv` and the exhaustive `muldiv_edges`: they all pass on the netlist.
+* `sim/cpu/gate_mutant.py` gives one DSP48E1 of a copy of that netlist an output register it
+  does not have; the multiply test then fails, so the gate-level check really exercises the
+  DSP mapping and would notice a multiplier that synthesis broke or dropped.
+
 The deepest combinational path is WB/MEM forwarding into the multiplier into the EX/MEM
 result register: 26 levels in a generic 6-LUT mapping where the multiplier is built from
 LUTs (Yosys `ltp`); on the FPGA the multiplier maps to DSP48E1s. The next ones are the
@@ -345,21 +363,23 @@ If it is ever short, the multiplier is the first candidate for a pipeline regist
 `make test-cpu` builds the testbench and runs:
 
 * **Directed tests** `sim/cpu/tests/*.S` (self-checking, riscv-tests style; two generated
-  from `gen_*.py`), each under 14 bus timings and seeds (`sim/cpu/run_tests.py`): latencies
-  from 1:1 up to 20:100 cycles on both ports, `req_ready` waits, one configuration with
-  random reset values. 21 tests: `alu`, `branch`, `ldst`, `muldiv`, `muldiv_edges`, `csr`,
-  `csr_impl` (all 4096 CSR addresses), `counters`, `traps`, `illegal`, `misaligned`,
-  `access_fault`, `hazards_matrix` (420 RAW cases), `hazards`, `flush`, `fencei`, `mmio`,
-  `wrongpath`, `interrupts`, `wfi`, `irq_stress`. The testbench also checks the bus protocol
-  on both ports in every run.
+  from `gen_*.py`) and one C program (`sim/cpu/tests/c/cprogram.c`, GCC -O2 with libgcc),
+  each under 14 bus timings and seeds (`sim/cpu/run_tests.py`): latencies from 1:1 up to
+  20:100 cycles on both ports, `req_ready` waits, one configuration with random reset values.
+  22 tests: `alu`, `branch`, `ldst`, `muldiv`, `muldiv_edges`, `csr`, `csr_impl` (all 4096 CSR
+  addresses), `counters`, `traps`, `illegal`, `misaligned`, `access_fault`, `hazards_matrix`
+  (420 RAW cases), `hazards`, `flush`, `fencei`, `mmio`, `wrongpath`, `interrupts`, `wfi`,
+  `irq_stress`, `c_cprogram`. The testbench also checks the bus protocol on both ports in
+  every run.
 * **riscv-tests** (`sim/cpu/riscv_tests.py`, pinned commit, fetched once): the rv32ui,
   rv32um and rv32mi "p" tests under three timings; three need features ISA.md leaves out
   (debug triggers, PMP entries, hardware misaligned accesses) and must fail as noted.
 * **The testbench itself** (`sim/cpu/tb_selftest.py`): its exit codes, signature and trace
   formats against MODULES.md section 6 and sim/README.md.
 * **Icarus Verilog** (`sim/cpu/run_icarus.py`, `sim/cpu/tb_core_icarus.v`): the core built
-  without RVFI runs the twelve directed tests that need only RAM and bus errors, with
-  random `req_ready` and latencies, three seeds each: the RTL simulates in both simulators.
+  without RVFI runs the thirteen tests that need only RAM and bus errors (the C program
+  among them), with random `req_ready` and latencies, three seeds each: the RTL simulates in
+  both simulators. The same testbench runs the post-synthesis netlist (section 11).
 
 Cross-checks of the tests themselves: `make test-cpu-spike` runs every directed test that
 does not need the testbench's devices on Spike (they all pass there too), and

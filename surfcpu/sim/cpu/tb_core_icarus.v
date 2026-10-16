@@ -13,7 +13,9 @@ hex): 1 prints PASS, anything else FAIL; running past +max_cycles prints TIMEOUT
     vvp tb_core_icarus.vvp +image=prog.hex +tohost=80001000 [+seed=N] [+max_cycles=N]
 
 The Verilator testbench (surfcpu_tb.cpp) is the full one: protocol checks, devices,
-traces. This one only runs the programs that need nothing but RAM and bus errors.
+traces. This one only runs the programs that need nothing but RAM and bus errors. With
+SURFCPU_NETLIST defined it runs the post-synthesis netlist of the core instead (Yosys
+synth_xilinx output with Yosys's Xilinx cell models), which shows synthesis kept the logic.
 */
 `timescale 1ns/1ps
 module tb_core_icarus;
@@ -46,7 +48,12 @@ module tb_core_icarus;
     reg         d_rsp_valid = 1'b0, d_rsp_err = 1'b0;
     reg  [31:0] d_rsp_rdata = 32'd0;
 
+`ifdef SURFCPU_NETLIST
+    // a post-synthesis netlist (make synth-cpu-gate): RESET_PC was set when it was synthesized
+    surfcpu_core core (
+`else
     surfcpu_core #(.RESET_PC(32'h8000_0000)) core (
+`endif
         .clk(clk), .rst(rst),
         .ibus_req_valid(i_req_valid), .ibus_req_ready(i_req_ready), .ibus_req_addr(i_req_addr),
         .ibus_req_write(i_req_write), .ibus_req_be(i_req_be), .ibus_req_wdata(i_req_wdata),

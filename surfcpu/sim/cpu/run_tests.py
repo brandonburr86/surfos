@@ -11,7 +11,7 @@ Exit status 0 when every run passed.
     run_tests.py --tb build/cpu/surfcpu_tb --out build/cpu/runs [--jobs N] ELF...
     run_tests.py --spike --out build/cpu/spike ELF...      (the same ELFs on Spike)
 
-A test can carry options in a comment line of its source:
+A test can carry options in a comment line of its source (.S, or .c for a C test):
     // surf-test: spike=no max-cycles=4000000
 spike=no marks a test that needs the testbench's own devices (docs/CPU.md section 9) or
 checks behaviour where docs/ISA.md and Spike legitimately differ, so it is not run on Spike.
@@ -45,8 +45,12 @@ SPIKE = ["spike", "--isa=rv32im_zicntr_zicsr_zifencei_zihpm", "--priv=m", "--pmp
 
 
 def test_options(elf: Path) -> dict[str, str]:
-    """The `surf-test:` options of the test's source (next to the ELF's name in sim/cpu/tests)."""
-    src = Path(__file__).resolve().parent / "tests" / (elf.stem + ".S")
+    """The `surf-test:` options of the test's source: sim/cpu/tests/<name>.S, or
+    sim/cpu/tests/c/<name>.c for a C test (c_<name>.elf)."""
+    tests = Path(__file__).resolve().parent / "tests"
+    src = tests / (elf.stem + ".S")
+    if elf.stem.startswith("c_"):
+        src = tests / "c" / (elf.stem[2:] + ".c")
     opts: dict[str, str] = {}
     if src.exists():
         for line in src.read_text().splitlines():

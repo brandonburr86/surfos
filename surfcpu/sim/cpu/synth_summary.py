@@ -9,7 +9,7 @@ Reads the `stat` report Yosys writes after `synth_xilinx -flatten` of surfcpu_co
 distributed RAM, flip-flops, carry chains, wide muxes, DSP48E1 and block RAM. These are
 Yosys's mapping estimates for a 7-series part, not Vivado post-route utilisation.
 
-    synth_summary.py build/cpu/synth-stat.txt
+    synth_summary.py build/cpu/synth-stat.txt [LABEL]
 """
 
 from __future__ import annotations
@@ -20,9 +20,10 @@ from pathlib import Path
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         print(__doc__)
         return 2
+    label = sys.argv[2] if len(sys.argv) == 3 else "synth-cpu: surfcpu_core"
     text = Path(sys.argv[1]).read_text()
     # with -flatten there is one module; take the last block of cell counts
     block = text.split("=== ")[-1]
@@ -35,7 +36,7 @@ def main() -> int:
     lutram = sum(cells.get(k, 0) * v for k, v in lutram_cells.items())
     ffs = sum(cells.get(k, 0) for k in ("FDRE", "FDSE", "FDCE", "FDPE"))
     bram36 = cells.get("RAMB36E1", 0) + cells.get("RAMB18E1", 0) / 2
-    print(f"synth-cpu: surfcpu_core (Yosys synth_xilinx -family xc7, estimate): "
+    print(f"{label} (Yosys synth_xilinx -family xc7, estimate): "
           f"{luts} LUTs logic + {lutram} LUTs as distributed RAM, {ffs} FFs, "
           f"{cells.get('CARRY4', 0)} CARRY4, {cells.get('MUXF7', 0)} MUXF7 + {cells.get('MUXF8', 0)} MUXF8, "
           f"{cells.get('DSP48E1', 0)} DSP48E1, {bram36:g} BRAM36")

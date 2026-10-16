@@ -100,6 +100,9 @@ first record after an exception.
 `sim/cpu/tests/*.S` are self-checking programs in the style of riscv-tests, built for
 `rv32im_zicsr_zifencei` with `sim/cpu/tests/link.ld` (everything in the RAM from
 `0x80000000`). `gen_muldiv.py` and `gen_hazards.py` generate two more into `build/cpu/gen/`.
+`sim/cpu/tests/c/*.c` are C programs built with GCC -O2 and libgcc on `crt0.S` and their own
+`link.ld` (stack at the top of the RAM); `main` returns 0 for a pass or the number of the
+failing check; they become `build/cpu/tests/c_<name>.elf`.
 [docs/CPU.md](../docs/CPU.md) section 12 lists them.
 
 The framework is `sim/cpu/tests/surf_test.h`: `TEST_BEGIN`, a `test_main:` body ending in
@@ -122,9 +125,10 @@ differ (reset values, the CSR map, fetching from MMIO).
 | `make test-cpu-tb` | the testbench's own contract: exit codes 0/1/2/3, `--signature` and `--trace` formats (`tb_selftest.py`; on `make test-cpu`) |
 | `make test-cpu-directed` | every directed test under 14 bus timings and seeds (`run_tests.py`; on `make test-cpu`) |
 | `make test-cpu-riscv-tests` | riscv-tests rv32ui/rv32um/rv32mi "p" tests under three timings (`riscv_tests.py`; on `make test-cpu`). The first run fetches the pinned tarballs (SHA-256 checked) into `build/third_party/riscv-tests/`, so it needs the network once |
-| `make test-cpu-icarus` | the twelve directed tests that need only RAM and bus errors on the core under Icarus Verilog (`run_icarus.py`, `tb_core_icarus.v`; on `make test-cpu`) |
+| `make test-cpu-icarus` | the thirteen tests that need only RAM and bus errors on the core under Icarus Verilog (`run_icarus.py`, `tb_core_icarus.v`; on `make test-cpu`) |
 | `make test-cpu-spike` | the directed tests on Spike (`--isa=rv32im_zicntr_zicsr_zifencei_zihpm --priv=m --pmpregions=0`), which checks the tests' own expectations |
 | `make synth-cpu` | the Yosys `synth_xilinx` resource estimate of the core (on `make check`) |
+| `make synth-cpu-gate` | the synthesised netlist simulated in Icarus (Yosys's Xilinx cell models) on the RAM-only tests, to show synthesis dropped nothing (on `make check`); `sim/cpu/gate_mutant.py` shows a broken DSP48E1 would be caught |
 | `python3 sim/cpu/spike_compare.py ELF -- TB-ARGS` | run one ELF on the testbench and on Spike and compare the trace with Spike's commit log instruction by instruction |
 | `python3 sim/cpu/fuzz_spike.py --count N --seed S` | random RV32IM programs compared with Spike under three timings |
 
