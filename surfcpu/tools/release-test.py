@@ -5,19 +5,28 @@ File: release-test.py Date: 10/16/26 (SurfCPU)
 --------------------
 Without Docker, a board or a bitstream build (docs/RELEASE.md section 9):
   * release.py, bitfile.py and this file parse as Python 3.9 (the Mac's /usr/bin/python3);
-  * tools/bitfile.py: its self-test (header stamp, packets, flash image, configuration time);
+  * tools/bitfile.py: its self-test (header stamp, packets, flash image, configuration time), and
+    the one header layout it and tools/program.sh accept (TestBitfileStrict);
   * tools/release.py's TOML subset, its comparison and the likely causes it names for a .bit whose
     header time or frames differ, a SURFOS.BIN whose payload differs (with the ELF's symbol), a
     missing and an extra artifact;
   * tools/release.py make in a scratch git repository, with stand-ins for devenv/run.sh,
-    tools/fpga-build.sh and docker: a dirty tree, a foreign SOURCE_DATE_EPOCH and missing designs
-    without PRERELEASE are refused; a complete release; a DDR design that fails makes a pre-release
-    only with --prerelease; any other design that fails stops the release; the release's own files
-    check against SHA256SUMS and MANIFEST;
+    tools/fpga-build.sh and docker (taken only with SURFCPU_RELEASE_TEST=1): a dirty tree, a
+    foreign SOURCE_DATE_EPOCH and missing designs without PRERELEASE are refused; a complete
+    release; a DDR design that fails makes a pre-release only with --prerelease; any other design
+    that fails stops the release; the release's own files check against SHA256SUMS and MANIFEST;
+  * the review of 2026-10-16 (rel-2), one class per finding: what is shipped is what was checked
+    while other builds, a new commit or a changed staged file come in between (M1); verify's
+    DESIGNS/BOARDS and its PARTIAL verdict (M2); check and compare on damaged releases (m1); the
+    builds' environment and their records (m2); the clean tree whatever git's configuration says
+    (m3); no directory deleted that the tools did not make (m4); host targets with paths that hold
+    spaces (m5); the .bit header rule (c1); the locale MANIFEST records (c2); the version and the
+    flash designs (c3);
   * tools/program.sh's flash path with the board tests' fake openFPGALoader
-    (sim/board/tools/fake), named by OPENFPGALOADER so that a real openFPGALoader is never run even
-    with a board plugged in, on a release's bitstream: written with -f --verify only when
-    confirmed, never the flash image or a bitstream without its build record or with other bytes.
+    (sim/board/tools/fake), named by OPENFPGALOADER and first on a PATH without Homebrew, so that a
+    real openFPGALoader is never run even with a board plugged in, on a release's bitstream:
+    written with -f --verify only when confirmed, never the flash image or a bitstream without its
+    build record or with other bytes.
 """
 from __future__ import annotations
 
