@@ -9,16 +9,18 @@
 #      for LiteDRAM's 100 MHz clock fails, so they stop after place and route, without a
 #      bitstream);
 #   3. DIAGNOSTIC builds of the bramdiag design (the SurfBoot design differs only in its boot
-#      ROM's contents; LVS alone takes over an hour) with build/openxc7-diag/openxc7-build.sh, a copy of
-#      tools/openxc7-build.sh made here that lets nextpnr finish despite the timing failure
-#      (--timing-allow-fail) and runs every check after it anyway, into build/fpga-diag/: they
-#      show what the timing failure hides (bitstream assembly, round trip, block RAM, LVS, the
-#      clock tiles, the board's own checks). tools/fpga-build.sh still gates them on timing, so
-#      their results are fail and tools/program.sh refuses their bitstreams (shown);
+#      ROM's contents; LVS takes most of their time, as their step times show) with
+#      build/openxc7-diag/openxc7-build.sh, a copy of tools/openxc7-build.sh made here that lets
+#      nextpnr finish despite the timing failure (--timing-allow-fail) and runs every check
+#      after it anyway, into build/fpga-diag/: they show what the timing failure hides
+#      (bitstream assembly, round trip, block RAM, LVS, the clock tiles, the board's own checks).
+#      tools/fpga-build.sh still gates them on timing, so their results are fail and
+#      tools/program.sh refuses their bitstreams (shown);
 #   4. make program-volatile against the fake openFPGALoader of sim/board/tools/fake for each
 #      gated build (nothing to load) and each diagnostic bitstream (refused).
 # Writes docs/evidence/board/openxc7-ddr.txt. --report-only writes it again from the last run's
-# outputs. DDR_EVIDENCE_DIAG=0 skips the diagnostic builds (about 25 minutes each with LVS).
+# outputs. DDR_EVIDENCE_DIAG=0 skips the diagnostic builds and reports the last ones again (each
+# with the source its manifest names).
 set -eu
 report_only=0
 [ "${1:-}" != --report-only ] || report_only=1
@@ -64,7 +66,11 @@ fmax() {          # NEXTPNR_LOG: each clock's last "Max frequency" line
 }
 
 if [ "$report_only" = 0 ]; then
-rm -rf "$t"
+if [ "${DDR_EVIDENCE_DIAG:-1}" = 1 ]; then
+    rm -rf "$t"
+elif [ -d "$t" ]; then           # keep the last diagnostic builds' records, drop the rest
+    find "$t" -mindepth 1 -maxdepth 1 ! -name 'diag*' -exec rm -rf {} +
+fi
 mkdir -p "$t"
 echo "$rev ($state)" > "$t/source"
 
@@ -95,6 +101,7 @@ if [ "${DDR_EVIDENCE_DIAG:-1}" = 1 ]; then
         -e 's#--utilization "$out/utilization.txt"$#--utilization "$out/utilization.txt" || echo "DIAGNOSTIC: timing not met; the checks run anyway" >> "$out/times.txt"#' \
         tools/openxc7-build.sh > "$diag"
     chmod +x "$diag"
+    echo "$rev ($state)" > "$t/diag-source"
     diff tools/openxc7-build.sh "$diag" > "$t/diag.diff" || true
     for design in ${DDR_EVIDENCE_DIAG_DESIGNS:-surfcpu_arty_a7_ddr_bramdiag}; do
         for board in $boards; do
@@ -150,7 +157,8 @@ fi
             critical "$ox/nextpnr.log" | sed 's/^/  /'
             echo "slack histogram (nextpnr, after routing; ns are in ps):"
             sed -n '/Slack histogram/,/Hold-fix/p' "$ox/nextpnr.log" | tail -n +2 | grep -v Hold-fix | sed 's/^Info: */  /' | tail -n 24
-            if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=0x13631093 OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
+            case "$board" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
+            if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=$id OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
                make --no-print-directory program-volatile BOARD=$board DESIGN=$design > "$t/program-$board-$design.txt" 2>&1
             then prc=0; else prc=$?; fi
             echo "make program-volatile BOARD=$board DESIGN=$design (fake openFPGALoader): exit $prc, $(tail -n 1 "$t/program-$board-$design.txt" | sed "s|$PWD/||")"
@@ -159,6 +167,8 @@ fi
     [ -f "$t/diag.diff" ] || { echo; echo "(no diagnostic builds in this run)"; exit 0; }
     echo
     echo "#################### DIAGNOSTIC builds: the same, nextpnr allowed to finish (NOT the designs' results)"
+    [ ! -f "$t/diag-source" ] || [ "$(cat "$t/diag-source")" = "$(cat "$t/source")" ] ||
+        echo "(from the run at source $(cat "$t/diag-source"); each build's manifest names its source)"
     echo "build/openxc7-diag/openxc7-build.sh is tools/openxc7-build.sh with these changes only:"
     sed 's/^/  /' "$t/diag.diff"
     for design in $designs; do
@@ -170,6 +180,7 @@ fi
             echo
             echo "== DIAGNOSTIC $design on $board"
             echo "exit $(cut -d' ' -f1 "$t/diag-$board-$design.status"), $(cut -d' ' -f2 "$t/diag-$board-$design.status") s; result = $(top_key result "$m") ($(top_key reason "$m"))"
+            echo "build: BUILD_ID $(top_key build_id "$m"), source $(top_key source_revision "$m"), dirty = $(top_key source_dirty "$m"); generated files match: $(top_key generated_files_match "$m")"
             echo "bitstream (the flow's, not the design's): $ox/surfcpu_arty_a7_top.bit, $(wc -c < "$ox/surfcpu_arty_a7_top.bit" | tr -d ' ') bytes, sha256 $(shasum -a 256 "$ox/surfcpu_arty_a7_top.bit" | cut -d' ' -f1)"
             grep -E '^IDCODE written|^check for' "$ox/check-bitstream.txt" | sed 's/^/  /'
             echo "checks:"
@@ -191,7 +202,7 @@ fi
             sed 's/^/  /' "$ox/times.txt"
             case "$board" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
             for bit in "$b/$design.bit" "$ox/surfcpu_arty_a7_top.bit"; do
-                [ -f "$bit" ] || { echo "program.sh volatile $board $bit: no such file (the gated build wrote none)"; continue; }
+                [ -f "$bit" ] || { echo "program.sh volatile $board $bit: no such file (fpga-build.sh, gating on timing, wrote none)"; continue; }
                 if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=$id OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
                    tools/program.sh volatile $board "$bit" > "$t/program-diag.txt" 2>&1
                 then prc=0; else prc=$?; fi

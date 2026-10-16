@@ -1,17 +1,17 @@
 # SurfCPU: LiteDRAM standalone core for the Arty A7's DDR3L, the open-source flow's alternative
-# to the MIG (docs/DDR.md). File: arty.yml Date: 10/15/26 (SurfCPU)
-# litedram/examples/arty.yml at tag 2026.08 (c454a440) with only one native user port; the
-# memory, PHY, electrical and clock settings are the example's (100 MHz in, 100 MHz core clock,
-# DDR3 at 4 x 100 MHz = 400 MHz, 800 MT/s; IDELAY reference 200 MHz). The core calibrates by
-# itself: its own small VexRiscv runs the LiteX BIOS's sdram_init from an internal ROM and then
-# raises init_done (or init_error).
+# to the MIG (docs/DDR.md). File: arty.yml Date: 10/16/26 (SurfCPU)
+# litedram/examples/arty.yml at tag 2026.08 (c454a440) with only one native user port and the
+# lite calibration CPU; the memory, PHY, electrical and clock settings are the example's (100 MHz
+# in, 100 MHz core clock, DDR3 at 4 x 100 MHz = 400 MHz, 800 MT/s; IDELAY reference 200 MHz).
+# The core calibrates by itself: its own small VexRiscv runs the LiteX BIOS's sdram_init from an
+# internal ROM and then raises init_done (or init_error).
 {
     # General ------------------------------------------------------------------
     "speedgrade": -1,          # FPGA speed grade
     "cpu":        "vexriscv",  # calibration CPU, inside the core
     "cpu_variant": "lite",     # RV32IM with an instruction cache: the BIOS calibrates in about
-                               # 1 s (minimal, without the cache, needs about 2.4 s: longer than
-                               # SurfBoot's 2 s wait; docs/DDR.md section 10)
+                               # 1 s (minimal, without the cache, needs about 2 s: past the
+                               # bridge's 1.5 s and at SurfBoot's 2 s wait; docs/DDR.md 10.1)
     "memtype":    "DDR3",      # DRAM type
     "uart":       "rs232",     # the BIOS console (calibration report) on the core's serial pins
 

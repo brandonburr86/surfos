@@ -1,0 +1,52 @@
+SurfCPU ddr track evidence: LiteDRAM's clock against nextpnr's timing, what was tried
+Recorded 2026-10-16 (round 2) from the open flow (surfcpu-openxc7:2026-10-15: Yosys 0.69, nextpnr-
+himbaechel 1.0.0) on surfcpu_arty_a7_ddr_bramdiag. The gated builds' own records are in
+docs/evidence/board/openxc7-ddr.txt; the runs below are experiments, made with a scratch script
+that is not kept (the same sources, defines and pin constraints as the design, a LiteDRAM core
+generated from ip/litedram/arty.yml with one setting changed, tools/openxc7-build.sh --no-check),
+recorded here for the reasoning.
+Each line is nextpnr's "Max frequency" after routing for dram_clk, LiteDRAM's core clock (the
+controller, the calibration CPU and its bus, the adapter and the bridge's controller side; its
+constraint is the PLL's 100 MHz output, or 80 MHz where the core was asked for 80).
+
+The DDR3L sets the floor: the MT41K128M16's DLL needs a clock period of at most 3.3 ns (at least
+303 MHz); LiteDRAM's A7 PHY runs the memory at 4 x its core clock, so the core clock cannot go
+below about 76 MHz.
+
+calibration CPU   board   seed  change                                      dram_clk
+standard          100T    1     none (the first build)                      80.50 MHz  FAIL at 100
+minimal           100T    1     none                                        80.55 MHz  FAIL at 100
+minimal           100T    2     none                                        80.26 MHz  FAIL at 100
+minimal           35T     1     none                                        77.60 MHz  FAIL at 100
+minimal           100T    1     cmd_buffer_depth 4, cmd_buffer_buffered     82.71 MHz  FAIL at 100
+minimal           100T    1     with_auto_precharge False                   80.87 MHz  FAIL at 100
+minimal           100T    1     sys_clk_freq 80e6 (DDR3 at 640 MT/s)        75.43 MHz  FAIL at 80
+lite              35T     1     none                                        (does not route: router2 at 300-500
+                                                                            overused wires past 300 iterations)
+lite              35T     2     none                                        71.70 MHz  FAIL at 100
+The gated builds (make build-fpga FLOW=openxc7), minimal CPU, seed 1, source c597a65b: 78.86 and
+75.59 MHz for ddr_bramdiag on the 100T and 35T, 75.00 and 81.21 MHz for ddr. Lite CPU, seed 2,
+source 383dba74: 72.98 and 81.03 MHz for ddr_bramdiag, 77.03 and 78.41 MHz for ddr
+(openxc7-ddr.txt). With the minimal CPU the synthesis check passes; with standard and lite it
+reports the CPU's cache tag read registers as lost (docs/DDR.md 10.3).
+
+Where the time goes (nextpnr's critical path report for dram_clk; LUT levels counted from the
+report's O5/O6 sources; the first and the last named net on the path):
+  minimal, 100T, seed 2: 12.46 ns = 3.17 ns logic, 9.29 ns routing; 16 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[0] to u_dram.litedramcore_sdram_zqcs_timer_count0[0]$legal1585
+  minimal, 100T, 80 MHz: 13.26 ns = 2.89 ns logic, 10.36 ns routing; 14 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[0] to u_dram.litedramcore_sdram_bankmachine2_do_read
+  minimal, 100T, no auto-precharge: 12.36 ns = 2.53 ns logic, 9.84 ns routing; 13 LUT levels; from u_dram.VexRiscv._zz_dBus_cmd_payload_data[0] to u_dram.VexRiscv.when_Fetcher_l160
+  minimal, 100T, command buffers 4 buffered: 12.09 ns = 2.78 ns logic, 9.31 ns routing; 17 LUT levels; from u_dram.litedramcore_sdram_zqcs_timer_count0[23] to u_dram.litedramcore_sdram_zqcs_timer_count0[23]
+  minimal, 35T: 12.89 ns = 3.22 ns logic, 9.67 ns routing; 17 LUT levels; from u_dram.grant to u_dram.VexRiscv.IBusSimplePlugin_pending_next[2]
+  lite, 35T, seed 2: 13.94 ns = 2.47 ns logic, 11.47 ns routing; from u_dram.litedramcore_ibus_adr[27]
+    through u_dram.interface0_adr[27] (LiteX's bus decoder) to u_dram.VexRiscv.when_Fetcher_l160
+    (the gated lite builds: the same family, openxc7-ddr.txt)
+
+Reading: the late paths are either inside LiteDRAM's controller (the ZQ-calibration timer
+through the refresher and the command multiplexer to a bank machine's counters) or between the
+calibration CPU and LiteX's bus inside the core; in both, routing is three quarters of the delay
+(long hops of 1 to 1.7 ns between distant placements) and the logic is 13 to 17 LUTs deep as
+Yosys maps it. No generator option touches either structure enough, and the clock cannot go
+below about 76 MHz (the DDR3L's DLL). The flow's rule is that a missed estimate fails the build,
+so the open flow gives the DDR designs no bitstream; nextpnr's delays are an estimate (OPEN-FLOW.md
+6.4) and Vivado routinely closes LiteDRAM at 100 MHz on the Arty, which only a Vivado run (or
+the board) can confirm.
