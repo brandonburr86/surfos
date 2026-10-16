@@ -22,7 +22,8 @@
 # build values and the design's own defines as defines, the constraints nextpnr can apply
 # (boards/arty_a7/nextpnr-xdc.awk; the rest is listed as not checked) and --dsp safe, with its
 # output in build/fpga/BOARD/DESIGN/openxc7. Either way it writes build/fpga/BOARD/DESIGN/
-# manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga). A design may read generated files from
+# manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga; its kernel_sha256 is of SURFCPU_KERNEL, by
+# default the last make build-kernel's SURFOS.BIN, for the record only). A design may read generated files from
 # build/ (the LiteDRAM core of the DDR designs): its "generated" lists (ip/litedram/arty.sha256)
 # give their SHA-256, and the build counts as clean only if they match. Exit 0 only with a bitstream whose checks passed; a new build first removes the
 # previous one's bitstream and results. --dry-run prints every command it would run, without
@@ -512,7 +513,7 @@ run_id="$design-$board-$build_id-$(date -u +%Y%m%dT%H%M%SZ)"
 # ------------------------------------------------------------------------------ manifest (this side)
 cat_sha() { ( cd "$root" && cat "$@" ) | shasum -a 256 | awk '{ print $1 }'; }
 spec_get() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"#]*\)\"\{0,1\}.*/\1/p" "$root/spec/soc.toml" | head -n 1 | sed 's/[[:space:]]*$//'; }
-kernel="$root/../build/riscv32/arty_a7/SURFOS.BIN"
+kernel=${SURFCPU_KERNEL:-$root/../build/riscv32/arty_a7/SURFOS.BIN}   # recorded only (make release names its own)
 [ "$dry" = 1 ] && head="$base/manifest.dry-run.txt"   # a dry run leaves the last real run alone
 write_head() {    # the keys known before the run, the same for every flow
     mkdir -p "$base"

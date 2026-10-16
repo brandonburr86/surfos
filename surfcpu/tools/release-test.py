@@ -30,6 +30,7 @@ import struct
 import subprocess
 import sys
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -282,7 +283,8 @@ if "build-kernel" in args or "arch/riscv32/kernel.mk" in args:
 
 FAKE_FPGA = r"""#!/usr/bin/env python3
 # stand-in for tools/fpga-build.sh --design D BOARD, run in surfcpu/: BOARD/DESIGN/{DESIGN.bit,manifest.txt} under
-# $SURFCPU_FPGA_OUT (default build/fpga), the boot ROM from $ROM or the design list's rom line.
+# $SURFCPU_FPGA_OUT (default build/fpga), the boot ROM from $ROM or the design list's rom line (with the generic
+# BOOTROM_INIT), kernel_sha256 of $SURFCPU_KERNEL (default ../build/riscv32/arty_a7/SURFOS.BIN).
 # $FAKE_FPGA_FAIL=d1,d2 fails those designs; $FAKE_FPGA_HOOK (a shell command) runs first, $FAKE_FPGA_HOOK_ON=
 # design/board limits it to one build; $FAKE_FPGA_NOOP=1 builds nothing and exits 0 (as DRY_RUN=1 does);
 # $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id.
@@ -309,16 +311,20 @@ commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_o
 part, idcode = ("xc7a100tcsg324-1", 0x03631093) if board == "arty_a7_100t" else ("xc7a35tcsg324-1", 0x0362D093)
 fail = design in os.environ.get("FAKE_FPGA_FAIL", "").split(",")
 rom_image = rom_sha = ""
-for line in (root / f"boards/arty_a7/designs/{design}.files").read_text().splitlines():
-    if line.startswith("rom "):
-        src = Path(os.environ["ROM"]) if os.environ.get("ROM") else root / line.split()[1]
-        rom_image, rom_sha = str(src), hashlib.sha256(src.read_bytes()).hexdigest()
+lines = [x.split() for x in (root / f"boards/arty_a7/designs/{design}.files").read_text().splitlines() if x.strip()]
+if any(f[0] == "generic" and "BOOTROM_INIT" in f for f in lines):
+    for f in lines:
+        if f[0] == "rom":
+            src = Path(os.environ["ROM"]) if os.environ.get("ROM") else root / f[1]
+            rom_image, rom_sha = str(src), hashlib.sha256(src.read_bytes()).hexdigest()
+kernel = Path(os.environ.get("SURFCPU_KERNEL") or root.parent / "build/riscv32/arty_a7/SURFOS.BIN")
+kernel_sha = hashlib.sha256(kernel.read_bytes()).hexdigest() if kernel.is_file() else ""
 tag = re.search(r"^IMAGE_TAG=(\S+)$", (root / "tools/openxc7-build.sh").read_text(), re.M).group(1)
 when = os.environ.get("FAKE_RUN_ID_TIME") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 head = [f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
         f'part = "{part}"', f'source_revision = "{commit}"', "source_dirty = false",
         f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
-        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', "placer_seed = 1"]
+        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', f'kernel_sha256 = "{kernel_sha}"', "placer_seed = 1"]
 if fail:
     head += ['result = "fail"', 'reason = "timing not met (nextpnr: dram_clk 63.5 MHz of 100 MHz)"']
 else:
@@ -354,8 +360,9 @@ class ScratchRelease(unittest.TestCase):
         f"docs/{d}" for d in ("SURFBUS.md", "ISA.md", "BOOT-ABI.md", "MODULES.md", "MEMORY-MAP.md"))
     LIST = ("version 2.3.4\nboard arty_a7_100t\nboard arty_a7_35t\ndesign base - -\ndesign top test -\n"
             "design dd boot ddr\ncard-cmdline sd=rw\n")
-    DESIGNS = {"base": "top base\n", "top": "top top\nrom build/fw/surfboot.mem u_soc.u_bootrom\n",
-               "dd": "top dd\nrom build/fw/surfboot.mem u_soc.u_bootrom\n"}
+    DESIGNS = {"base": "top base\ngeneric BOARD BUILD_ID\n",
+               "top": "top top\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n",
+               "dd": "top dd\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n"}
 
     def setUp(self):
         self.dir = fresh(f"{type(self).__name__}-{self._testMethodName}")
@@ -502,6 +509,67 @@ class TestMake(ScratchRelease):
 
 
 # ------------------------------------------------------------------------------- the review's findings (rel-2)
+class TestShippedIsChecked(ScratchRelease):
+    """review M1: what the release ships is what it checked, whatever else happens in the tree meanwhile"""
+    OTHER_SW = ("mkdir -p build/fw ../build/riscv32/arty_a7; printf 'deadbeef\\n' > build/fw/surfboot.mem; "
+                "printf 'other payload' > ../build/riscv32/arty_a7/payload; "
+                "python3 tools/surfimg.py pack --bin ../build/riscv32/arty_a7/payload --load-addr 0x80000000 "
+                "--build-id 0badc0de --version 2.3.4 -o ../build/riscv32/arty_a7/SURFOS.BIN >/dev/null")
+
+    def test_other_software_build_meanwhile(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=self.OTHER_SW, FAKE_FPGA_HOOK_ON="base/arty_a7_35t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        pkg = (rel / "SURFOS.BIN").read_bytes()
+        self.assertEqual(f"{int.from_bytes(pkg[44:48], 'little'):08x}", self.commit[:8])
+        rom = release.sha256(rel / "rom/surfboot.mem")
+        for (b, d), m in self.records(rel).items():
+            if d == "top":
+                self.assertEqual(m["rom_sha256"], rom, f"{d} for {b} was built with another boot ROM")
+        self.assertEqual(self.tool("check", rel).returncode, 0)
+
+    def test_other_bitstream_build_meanwhile(self):
+        tamper = ("mkdir -p build/fpga/arty_a7_100t/base && printf 'not this' > build/fpga/arty_a7_100t/base/base.bit "
+                  "&& printf 'result = \"pass\"\\nsource_dirty = true\\n' > build/fpga/arty_a7_100t/base/manifest.txt")
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=tamper, FAKE_FPGA_HOOK_ON="top/arty_a7_35t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        m = self.records(rel)[("arty_a7_100t", "base")]
+        self.assertIs(m["source_dirty"], False)
+        self.assertEqual(release.sha256(rel / "fpga/arty_a7_100t/base/base.bit"), m["bitstream_sha256"])
+        f, _, _ = bitfile.parse_header((rel / "fpga/arty_a7_100t/base/base.bit").read_bytes())
+        self.assertEqual(f"{f['c']} {f['d']}", time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(
+            int(self.git("log", "-1", "--format=%ct").strip()))))
+
+    def test_new_commit_meanwhile(self):
+        move = "git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m next"
+        r = self.make("--prerelease", FAKE_FPGA_HOOK=move, FAKE_FPGA_HOOK_ON="dd/arty_a7_100t")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("HEAD moved", r.stderr)
+        self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
+
+    def test_staged_file_changed_meanwhile(self):
+        poke = "for f in build/release/.*stage/SURFOS.BIN; do [ -f \"$f\" ] && printf x >> \"$f\"; done; true"
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=poke, FAKE_FPGA_HOOK_ON="top/arty_a7_35t")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("SURFOS.BIN is not the file that was checked", r.stderr)
+
+    def test_one_release_at_a_time(self):
+        lock = self.sc / "build/release-work.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(f"{os.getpid()} now\n")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("another release is running", r.stderr)
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        lock.write_text(f"{gone.pid} then\n")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stale lock", r.stdout)
+        self.assertFalse(lock.exists())
+
+
 class TestCleanTree(ScratchRelease):
     """review m3: the clean-tree check follows the repository's own rules, not the user's git configuration"""
 

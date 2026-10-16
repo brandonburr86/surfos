@@ -9,12 +9,15 @@ the Docker images through devenv/run.sh and tools/fpga-build.sh, as a person wou
     tools/release.py make [--prerelease] [--skip-ddr] [--designs D,..] [--boards B,..] [--out DIR] [--force]
         make -C surfcpu release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=..] [BOARDS=..] [FORCE=1]
         From a clean tree only, with SOURCE_DATE_EPOCH = the commit's time, LC_ALL=C and TZ=UTC: the
-        boot ROMs and the kernel (make build-rom build-kernel, from empty output directories), every
-        design of release/release.txt for every board (tools/fpga-build.sh, FLOW=openxc7, every gate
-        as it is), the QSPI flash images (tools/bitfile.py), the card's /BOOT files as tools/deploy-sd.py
-        installs them, then SHA256SUMS and MANIFEST, in build/release/<version>-<commit>/. A DDR design
-        that does not build makes a pre-release, named <version>-pre-<commit> and only with
-        --prerelease; anything else that does not build stops the release.
+        boot ROMs and the kernel (make build-rom, arch/riscv32/kernel.mk), every design of
+        release/release.txt for every board (tools/fpga-build.sh, FLOW=openxc7, every gate as it is),
+        the QSPI flash images (tools/bitfile.py), the card's /BOOT files as tools/deploy-sd.py installs
+        them, then SHA256SUMS and MANIFEST, in build/release/<version>-<commit>/. A DDR design that
+        does not build makes a pre-release, named <version>-pre-<commit> and only with --prerelease;
+        anything else that does not build stops the release. Everything is built in the release's own
+        empty directory, build/release-work/ (one release at a time in a checkout: build/release-work.lock),
+        and each artifact is copied into the stage directory the moment it passed its checks; before the
+        release is written, HEAD, the tree, the images and every staged file are checked once more.
     tools/release.py verify RELEASE [--designs D,..] [--boards B,..] [--work DIR] [--keep] [--report FILE]
         make -C surfcpu release-verify RELEASE=build/release/<name> [DESIGNS=..] [BOARDS=..] [KEEP=1]
         Clones the release's commit into a new directory (a pristine copy: git clone --shared), runs
@@ -675,17 +678,142 @@ def report_lines(rows: list, notes: list[str], title: str) -> list[str]:
 
 
 # ============================================================================== make
+WORK = ROOT / "build" / "release-work"              # the release's own build directories: nothing else writes there
+LOCK = ROOT / "build" / "release-work.lock"         # one release at a time in a checkout
+WORK_MARK = ".surfcpu-release-work"
+STAGE_MARK = ".surfcpu-release-stage"
+# the software artifacts and where the release's own build makes them (relative to WORK)
+SOFTWARE = {
+    "SURFOS.BIN": "riscv32/arty_a7/SURFOS.BIN",
+    "DDRDIAG.BIN": "fw/DDRDIAG.BIN",
+    "rom/surfboot.mem": "fw/surfboot.mem",
+    "rom/bramdiag.mem": "fw/bramdiag.mem",
+    "debug/surfboot.elf": "fw/surfboot.elf",
+    "debug/bramdiag.elf": "fw/bramdiag.elf",
+    "debug/ddrdiag.elf": "fw/ddrdiag.elf",
+    "debug/surfos.elf": "riscv32/arty_a7/surfos.elf",
+}
+
+
+def own_dir(d: Path, mark: str, what: str) -> Path:
+    """d as a new, empty directory of this tool's: one it made before (it holds the mark) is emptied, a missing
+    or empty one is made or used; one that holds anything else is refused and left as it is"""
+    if d.is_symlink() or (d.exists() and not d.is_dir()):
+        raise Refused(f"{d} is not a directory this tool made: not touching it")
+    if d.is_dir():
+        names = sorted(p.name for p in d.iterdir())
+        if names and mark not in names:
+            raise Refused(f"{d} holds files this tool did not write ({', '.join(names[:3])}"
+                          f"{', ...' if len(names) > 3 else ''}): not deleting them; move them away, or name "
+                          f"another {what} directory")
+        if names:
+            shutil.rmtree(d)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / mark).write_text(f"made by tools/release.py ({what}); it empties this directory when it runs again\n")
+    return d
+
+
+def drop_own_dir(d: Path, mark: str) -> None:
+    """d removed if it is this tool's (it holds the mark)"""
+    if d.is_dir() and not d.is_symlink() and (d / mark).is_file():
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class Lock:
+    """LOCK held while a release runs: a second release in the same checkout would share its build directories"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.held = False
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                held = self.path.read_text(errors="replace").split()
+                pid = int(held[0]) if held and held[0].isdigit() else None
+                if pid is None or pid_alive(pid):
+                    raise Refused(f"another release is running in this checkout ({self.path}: "
+                                  f"{' '.join(held) or 'empty'}); one at a time, since they share "
+                                  f"{WORK.relative_to(ROOT)}/ (if none is running, remove the lock)")
+                say(f"removing a stale lock: process {pid} has ended ({self.path})")
+                self.path.unlink()
+                continue
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()} {utc(int(time.time()))}\n")
+            self.held = True
+            return self
+        raise Refused(f"cannot take the lock {self.path}")
+
+    def __exit__(self, *exc) -> bool:
+        if self.held:
+            try:
+                if self.path.read_text().split()[:1] == [str(os.getpid())]:
+                    self.path.unlink()
+            except OSError:
+                pass
+        return False
+
+
+def design_rom(design: str) -> str | None:
+    """the boot ROM image a design is built with (the file name of its design list's rom line), or None"""
+    generics, rom = [], None
+    for line in (ROOT / "boards/arty_a7/designs" / f"{design}.files").read_text().splitlines():
+        f = line.split("#", 1)[0].split()
+        if f and f[0] == "generic":
+            generics += f[1:]
+        elif f and f[0] == "rom" and len(f) >= 2:
+            rom = Path(f[1]).name
+    if "BOOTROM_INIT" not in generics or rom is None:
+        return None
+    if f"rom/{rom}" not in SOFTWARE:
+        raise Refused(f"{design} is built with the boot ROM {rom}, which the release does not build")
+    return rom
+
+
+def generated_changed(record: dict) -> list[str]:
+    """the files of a build record's generated lists (the LiteDRAM core) whose SHA-256 is no longer the list's"""
+    out = []
+    for name in record.get("generated_lists") or []:
+        lst = ROOT / name
+        if not lst.is_file():
+            out.append(f"{name} (the list itself is gone)")
+            continue
+        for line in lst.read_text().splitlines():
+            f = line.split()
+            if len(f) >= 2 and re.fullmatch(r"[0-9a-f]{64}", f[0]):
+                p = ROOT / f[1].lstrip("*")
+                if not p.is_file() or sha256(p) != f[0]:
+                    out.append(f[1].lstrip("*"))
+    return out
+
+
 class Release:
     def __init__(self, a):
         self.a = a
         self.cfg = read_list()
         self.t0 = time.time()
+        self.shipped: dict = {}         # artifact: the SHA-256 of the bytes that were checked and staged
+        self.records: dict = {}         # a bitstream's build record (next to it; not an artifact): its SHA-256
 
     # ---------------------------------------------------------------- preflight
     def preflight(self) -> None:
         a, cfg = self.a, self.cfg
         if os.environ.get("SURFCPU_FPGA_OUT"):
-            raise Refused("SURFCPU_FPGA_OUT is set: a release builds in build/fpga (its path is in the .bit header)")
+            raise Refused(f"SURFCPU_FPGA_OUT is set: a release builds in {WORK.relative_to(ROOT)}/fpga (the path is "
+                          "in the .bit header)")
         self.commit = git("rev-parse", "HEAD")
         self.short = self.commit[:8]
         self.epoch = int(git("log", "-1", "--format=%ct", "HEAD"))
@@ -737,42 +865,59 @@ class Release:
     def env(self, **extra) -> dict:
         e = dict(os.environ)
         for k in ("DESIGN", "BIT", "ROM", "SURFCPU_FPGA_OUT", "OPENXC7_THREADS", "SURFCPU_BUILD_ID",
-                  "SURFCPU_BUILD_DIRTY", "PYTHONHASHSEED"):
+                  "SURFCPU_BUILD_DIRTY", "PYTHONHASHSEED", "SURFCPU_KERNEL"):
             e.pop(k, None)
         e.update({"SOURCE_DATE_EPOCH": str(self.epoch), "LC_ALL": "C", "TZ": "UTC"})
         e.update(extra)
         return e
 
+    def hook(self, name: str) -> str | None:
+        return os.environ.get(name)
+
+    def ship(self, rel: str, data: bytes, record: bool = False) -> str:
+        """data as the release's file rel, at once: written to the stage and read back. Its SHA-256 is what the
+        end of the release checks the stage against: what is shipped is what was checked"""
+        p = self.stage / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        h = hashlib.sha256(data).hexdigest()
+        if sha256(p) != h:
+            raise Refused(f"{rel}: the copy in {self.stage} is not the bytes that were checked")
+        (self.records if record else self.shipped)[rel] = h
+        return h
+
     # ---------------------------------------------------------------- steps
     def software(self) -> None:
-        for p in (ROOT / "build" / "fw", REPO / "build" / "riscv32" / "arty_a7"):
-            shutil.rmtree(p, ignore_errors=True)
-        run = os.environ.get("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
+        """the boot ROMs, the diagnostics and the kernel, built in the release's own directory (make build-rom
+        BUILD=..., arch/riscv32/kernel.mk OUT=...), checked and staged"""
+        run = self.hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
         log = self.logs / "software.txt"
         t = time.time()
-        rc = run_logged([run, "make", "--no-print-directory", "build-rom", "build-kernel"], log, self.env())
-        if rc != 0:
-            raise Refused(f"make build-rom build-kernel failed (exit {rc}); {log}:\n{tail(log)}")
-        self.sw = {
-            "SURFOS.BIN": REPO / "build/riscv32/arty_a7/SURFOS.BIN",
-            "DDRDIAG.BIN": ROOT / "build/fw/DDRDIAG.BIN",
-            "rom/surfboot.mem": ROOT / "build/fw/surfboot.mem",
-            "rom/bramdiag.mem": ROOT / "build/fw/bramdiag.mem",
-            "debug/surfboot.elf": ROOT / "build/fw/surfboot.elf",
-            "debug/bramdiag.elf": ROOT / "build/fw/bramdiag.elf",
-            "debug/ddrdiag.elf": ROOT / "build/fw/ddrdiag.elf",
-            "debug/surfos.elf": REPO / "build/riscv32/arty_a7/surfos.elf",
-        }
-        for rel, p in self.sw.items():
+        steps = (("make build-rom", [run, "make", "--no-print-directory", "build-rom",
+                                     f"BUILD={self.work.relative_to(ROOT).as_posix()}"]),
+                 ("the kernel (arch/riscv32/kernel.mk KBOARD=arty_a7)",
+                  [run, "make", "--no-print-directory", "-C", "..", "-f", "arch/riscv32/kernel.mk", "KBOARD=arty_a7",
+                   f"OUT={(self.work / SOFTWARE['SURFOS.BIN']).parent.relative_to(REPO).as_posix()}"]))
+        for what, cmd in steps:
+            rc = run_logged(cmd, log, self.env())
+            if rc != 0:
+                raise Refused(f"{what} failed (exit {rc}); {log}:\n{tail(log)}")
+        data = {}
+        for rel, sub in SOFTWARE.items():
+            p = self.work / sub
             if not p.is_file():
                 raise Refused(f"the software build made no {p}")
+            data[rel] = p.read_bytes()
         for rel in ("SURFOS.BIN", "DDRDIAG.BIN"):
-            bid = struct.unpack_from("<I", self.sw[rel].read_bytes(), 44)[0]
-            if f"{bid:08x}" != self.short:
-                raise Refused(f"{rel} carries build id {bid:08x}, not the commit's {self.short}")
-        gen = (ROOT / "build/fw/gen/fw_build.h").read_text()
-        if not re.search(r"FW_BUILD_DIRTY 0\b", gen):
-            raise Refused("the firmware was built as a dirty tree (build/fw/gen/fw_build.h)")
+            bid = f"{struct.unpack_from('<I', data[rel], 44)[0]:08x}" if len(data[rel]) >= 64 else "(none)"
+            if bid != self.short:
+                raise Refused(f"{rel} carries build id {bid}, not the commit's {self.short}")
+        gen = self.work / "fw" / "gen" / "fw_build.h"
+        if not gen.is_file() or not re.search(r"FW_BUILD_DIRTY 0\b", gen.read_text()):
+            raise Refused(f"the firmware was built as a dirty tree ({gen})")
+        for rel, b in data.items():
+            self.ship(rel, b)
+        self.package = data["SURFOS.BIN"]
         say(f"software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build {self.short} "
             f"({minutes(time.time() - t)})")
 
@@ -780,7 +925,7 @@ class Release:
         """make litedram-gen once for the DDR designs: None, or why it failed"""
         if getattr(self, "_litedram", "unset") != "unset":
             return self._litedram
-        run = os.environ.get("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
+        run = self.hook("SURFCPU_RELEASE_RUN") or str(ROOT / "devenv" / "run.sh")
         log = self.logs / "litedram-gen.txt"
         t = time.time()
         rc = run_logged([run, "make", "--no-print-directory", "litedram-gen"], log, self.env())
@@ -808,41 +953,77 @@ class Release:
             waited += 15
 
     def bitstream(self, board: str, d: dict) -> tuple[bool, dict, str]:
+        """one design for one board, built in the release's own directory from the staged boot ROM; when its
+        build record says pass for this commit, ROM and kernel and describes the bitstream, the bitstream (and
+        its flash image) are staged at once"""
         design = d["name"]
-        fpga = os.environ.get("SURFCPU_RELEASE_FPGA") or str(ROOT / "tools" / "fpga-build.sh")
-        base = ROOT / "build" / "fpga" / board / design
+        fpga = self.hook("SURFCPU_RELEASE_FPGA") or str(ROOT / "tools" / "fpga-build.sh")
+        out = self.work / "fpga"
+        base = out / board / design
+        shutil.rmtree(base, ignore_errors=True)
         log = self.logs / f"fpga-{board}-{design}.txt"
+        rom = design_rom(design)
+        env = self.env(FLOW="openxc7", SURFCPU_FPGA_OUT=str(out),
+                       SURFCPU_KERNEL=str(self.work / SOFTWARE["SURFOS.BIN"]))
+        if rom:
+            env["ROM"] = str(self.work / "fw" / rom)
         self.wait_slot()
-        rc = run_logged([fpga, "--design", design, board], log, self.env(FLOW="openxc7"))
-        m = parse_toml((base / "manifest.txt").read_text()) if (base / "manifest.txt").is_file() else {}
-        bit = base / f"{design}.bit"
+        rc = run_logged([fpga, "--design", design, board], log, env)
+        rec = base / "manifest.txt"
+        rec_bytes = rec.read_bytes() if rec.is_file() else None
+        m = parse_toml(rec_bytes.decode(errors="replace")) if rec_bytes else {}
+        bit_path = base / f"{design}.bit"
+        bit = bit_path.read_bytes() if bit_path.is_file() else None
         problems = []
-        if rc != 0:
+        if rec_bytes is None:
+            problems.append(f"no build record from this build (tools/fpga-build.sh exit status {rc})")
+        elif rc != 0:
             problems.append(m.get("reason") or f"tools/fpga-build.sh exit status {rc}")
         elif m.get("result") != "pass":
-            problems.append(m.get("reason") or "its manifest does not say pass")
+            problems.append(m.get("reason") or "its build record does not say pass")
         else:
             checks = {"source_revision": self.commit, "source_dirty": False, "build_time": self.epoch,
-                      "generated_files_match": True, "board": board, "design": design}
-            problems += [f"manifest {k} = {m.get(k)!r}, not {v!r}" for k, v in checks.items() if m.get(k) != v]
-            if not bit.is_file() or sha256(bit) != m.get("bitstream_sha256"):
-                problems.append("the bitstream is not the one its manifest describes")
-        return not problems, m, "; ".join(problems)
+                      "generated_files_match": True, "board": board, "design": design,
+                      "rom_sha256": self.shipped[f"rom/{rom}"] if rom else "",
+                      "kernel_sha256": self.shipped["SURFOS.BIN"]}
+            problems += [f"build record {k} = {m.get(k)!r}, not {v!r}" for k, v in checks.items() if m.get(k) != v]
+            if bit is None or hashlib.sha256(bit).hexdigest() != m.get("bitstream_sha256"):
+                problems.append("the bitstream is not the one its build record describes")
+            changed = generated_changed(m)
+            if changed:
+                problems.append("generated files changed during the build (make litedram-gen ran meanwhile?): "
+                                + ", ".join(changed[:5]))
+        if problems:
+            return False, m, "; ".join(problems)
+        flash = None
+        if d["flash"]:
+            try:
+                flash = bitfile.flash_image(bit, board)
+            except bitfile.BitError as e:
+                return False, m, f"no flash image can be made from it: {e}"
+        self.ship(f"fpga/{board}/{design}/{design}.bit", bit)
+        self.ship(f"fpga/{board}/{design}/manifest.txt", rec_bytes, record=True)
+        if flash:
+            self.ship(f"flash/{board}/{design}.bin", flash[0])
+            m["flash_map"] = bitfile.describe_map(flash[1])[1:]
+        return True, m, ""
 
     # ---------------------------------------------------------------- assembling
-    def card(self, stage: Path, package: Path) -> list[str]:
-        """the card's /BOOT files as tools/deploy-sd.py installs them on a new card, run against a
-        directory standing in for the card (its tests' stand-ins for diskutil and mount), in a temporary
-        directory: deploy-sd's test mode refuses anything under /Volumes, where a checkout may be"""
+    def card(self) -> None:
+        """the card's /BOOT files as tools/deploy-sd.py installs them on a new card, from the checked SURFOS.BIN,
+        run against a directory standing in for the card (its tests' stand-ins for diskutil and mount), in a
+        temporary directory: deploy-sd's test mode refuses anything under /Volumes, where a checkout may be"""
         work = Path(tempfile.mkdtemp(prefix="surfcpu-release-card-")).resolve()   # macOS: /var is /private/var
         try:
-            return self._card(stage, package, work)
+            self._card(work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def _card(self, stage: Path, package: Path, work: Path) -> list[str]:
+    def _card(self, work: Path) -> None:
         view, device = work / "card", work / "device"
         view.mkdir(parents=True)
+        package = work / "SURFOS.BIN"
+        package.write_bytes(self.package)
         cfg = work / "fake.json"
         cfg.write_text(json.dumps({
             "mount": str(view), "device": "/dev/disk9s1", "device_dir": str(device),
@@ -865,14 +1046,49 @@ class Release:
         rc = run_logged(cmd, log, env)
         if rc != 0:
             raise Refused(f"tools/deploy-sd.py did not install the card files (exit {rc}):\n{tail(log)}")
-        names = []
         for p in sorted((device / "BOOT").iterdir()):
             if p.is_file():
-                shutil.copyfile(p, stage / "card" / "BOOT" / p.name)
-                names.append(f"card/BOOT/{p.name}")
-        if (stage / "card/BOOT/SURFOS.BIN").read_bytes() != package.read_bytes():
+                self.ship(f"card/BOOT/{p.name}", p.read_bytes())
+        if self.shipped.get("card/BOOT/SURFOS.BIN") != hashlib.sha256(self.package).hexdigest():
             raise Refused("deploy-sd installed other bytes than SURFOS.BIN")
-        return names
+
+    def final_check(self) -> None:
+        """the last step before the release is written: it is still the commit it started from, built with the
+        images it started with, every file in the stage is the one that was checked, and the artifacts agree
+        with each other (the build ids, and the ROMs and kernel each bitstream was built with)"""
+        head = git("rev-parse", "HEAD")
+        if head != self.commit:
+            raise Refused(f"HEAD moved during the release ({self.short} -> {head[:8]}): its artifacts would not "
+                          "all be one commit's; nothing was written")
+        changed = tree_changes()
+        if changed:
+            raise Refused("the tree changed during the release: " + changed[0])
+        for tag, iid in ((self.tc_image, self.tc_id), (self.ox_image, self.ox_id)):
+            now = image_id(tag)
+            if now != iid:
+                raise Refused(f"the image {tag} changed during the release ({iid[:19]} -> {(now or 'gone')[:19]})")
+        want = dict(self.shipped, **self.records)
+        found = {p.relative_to(self.stage).as_posix() for p in self.stage.rglob("*")
+                 if p.is_file() or p.is_symlink()} - {STAGE_MARK}
+        for rel in sorted(found - set(want)):
+            raise Refused(f"{rel} appeared in {self.stage} during the release, and was never checked")
+        for rel, h in sorted(want.items()):
+            p = self.stage / rel
+            if p.is_symlink() or not p.is_file() or sha256(p) != h:
+                raise Refused(f"{rel} is not the file that was checked: it changed in {self.stage} during the release")
+        for rel in ("SURFOS.BIN", "DDRDIAG.BIN"):
+            if (self.stage / rel).read_bytes()[44:48] != bytes.fromhex(self.short)[::-1]:
+                raise Refused(f"{rel}: not the build id of {self.short}")
+        for rec in sorted(self.records):
+            m = parse_toml((self.stage / rec).read_text())
+            bit = f"{rec.rsplit('/', 1)[0]}/{m.get('design')}.bit"
+            rom = Path(str(m.get("rom_image", ""))).name
+            if m.get("bitstream_sha256") != self.shipped.get(bit):
+                raise Refused(f"{rec} does not describe {bit}")
+            if m.get("rom_sha256") and m.get("rom_sha256") != self.shipped.get(f"rom/{rom}"):
+                raise Refused(f"{bit} was built with a boot ROM other than the release's rom/{rom}")
+            if m.get("kernel_sha256") != self.shipped["SURFOS.BIN"]:
+                raise Refused(f"{rec} names a kernel other than the release's SURFOS.BIN")
 
     def make(self) -> int:
         a = self.a
@@ -882,17 +1098,27 @@ class Release:
         out = out_root / name if not a.out_exact else Path(a.out).resolve()
         if out.exists() and not a.force:
             raise Refused(f"{out} exists (FORCE=1 replaces it)")
-        if not self.logs:
-            self.logs = out.parent / f"{out.name}.logs"
-        shutil.rmtree(self.logs, ignore_errors=True)
-        self.logs.mkdir(parents=True)
+        with Lock(LOCK):
+            if not self.logs:
+                self.logs = out.parent / f"{out.name}.logs"
+            shutil.rmtree(self.logs, ignore_errors=True)
+            self.logs.mkdir(parents=True)
+            self.work = own_dir(WORK, WORK_MARK, "release build")
+            self.stage = own_dir(out.parent / f".{out.name}.stage", STAGE_MARK, "release stage")
+            try:
+                return self._make(name, out, out_root)
+            finally:
+                drop_own_dir(self.stage, STAGE_MARK)            # a release that was not written
+
+    def _make(self, name: str, out: Path, out_root: Path) -> int:
+        a = self.a
         say(f"SurfCPU {self.version} at {self.short} (commit time {utc(self.epoch)} = SOURCE_DATE_EPOCH "
             f"{self.epoch}), clean tree")
         say(f"images: {self.tc_image} ({self.tc_id[:19]}), {self.ox_image} ({self.ox_id[:19]})")
         say(f"plan: {len(self.plan)} bitstreams" + (f"; {len(self.missing)} not attempted" if self.missing else "")
-            + f"; logs in {self.logs}")
+            + f"; built in {self.work}, staged in {self.stage}; logs in {self.logs}")
         steps = 1 + len(self.plan)
-        say(f"[1/{steps}] the software (make build-rom build-kernel, from empty output directories)")
+        say(f"[1/{steps}] the software (make build-rom, the kernel)")
         self.software()
         built, failed = [], []
         for n, (board, d) in enumerate(self.plan, 2):
@@ -924,36 +1150,15 @@ class Release:
             out = out_root / name if not a.out_exact else out
             if out.exists() and not a.force:
                 raise Refused(f"{out} exists (FORCE=1 replaces it)")
-        changed = tree_changes()
-        if changed:
-            raise Refused("the tree changed during the release: " + changed[0])
-        stage = out.parent / f".{out.name}.stage"
-        shutil.rmtree(stage, ignore_errors=True)
-        (stage / "card" / "BOOT").mkdir(parents=True)
-        files: dict = {}
-        for rel, p in self.sw.items():
-            (stage / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(p, stage / rel)
-            files[rel] = None
+        self.card()
         designs = []
         for board, d, m in built:
-            src = ROOT / "build" / "fpga" / board / d["name"]
-            rel = f"fpga/{board}/{d['name']}/{d['name']}.bit"
-            (stage / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src / f"{d['name']}.bit", stage / rel)
-            shutil.copyfile(src / "manifest.txt", stage / Path(rel).parent / "manifest.txt")
-            files[rel] = None
-            flash = None
-            if d["flash"]:
-                stream, desc = bitfile.flash_image((stage / rel).read_bytes(), board)
-                flash = f"flash/{board}/{d['name']}.bin"
-                (stage / flash).parent.mkdir(parents=True, exist_ok=True)
-                (stage / flash).write_bytes(stream)
-                files[flash] = None
             ox = m.get("openxc7", {})
+            rel = f"fpga/{board}/{d['name']}/{d['name']}.bit"
             designs.append({
                 "name": d["name"], "board": board, "status": "built", "flash": d["flash"] or "-", "needs_ddr": d["ddr"],
-                "bitstream": rel, "flash_image": flash or "", "build_record": f"fpga/{board}/{d['name']}/manifest.txt",
+                "bitstream": rel, "flash_image": f"flash/{board}/{d['name']}.bin" if d["flash"] else "",
+                "build_record": f"fpga/{board}/{d['name']}/manifest.txt",
                 "part": m.get("part", ""), "idcode": ox.get("idcode", ""), "rom_sha256": m.get("rom_sha256", ""),
                 "placer_seed": m.get("placer_seed", 1),
                 "gates": [f"{g[6:]} {ox.get(g)}" for g in GATES if g in ox],
@@ -961,19 +1166,19 @@ class Release:
                 "use": [f"{k} {ox.get(k)}" for k in ("lut", "ff", "bram36", "dsp") if k in ox],
                 "constraints_not_checked": len(ox.get("constraints_not_checked", [])),
             })
-            if flash:
-                designs[-1]["flash_map"] = bitfile.describe_map(desc)[1:]
+            if d["flash"]:
+                designs[-1]["flash_map"] = m.get("flash_map", [])
         for b, d, why in self.missing:
             designs.append({"name": d["name"], "board": b, "status": "missing", "flash": d["flash"] or "-",
                             "needs_ddr": d["ddr"], "reason": why})
-        for rel in self.card(stage, stage / "SURFOS.BIN"):
-            files[rel] = None
-        sums = {rel: sha256(stage / rel) for rel in sorted(files)}
-        (stage / "SHA256SUMS").write_text("".join(f"{h}  {rel}\n" for rel, h in sorted(sums.items())))
-        self.write_manifest(stage / "MANIFEST", name, prerelease, sums, designs)
+        self.final_check()
+        sums = dict(sorted(self.shipped.items()))
+        (self.stage / "SHA256SUMS").write_text("".join(f"{h}  {rel}\n" for rel, h in sums.items()))
+        self.write_manifest(self.stage / "MANIFEST", name, prerelease, sums, designs)
+        (self.stage / STAGE_MARK).unlink()
         if out.exists():
             shutil.rmtree(out)
-        os.rename(stage, out)
+        os.rename(self.stage, out)
         say(f"written {out}: " + ("PRE-RELEASE, without:" if prerelease else "complete release") +
             "".join(f"\n    {d['name']} for {b}: {why}" for b, d, why in self.missing))
         say(f"{len(sums)} artifacts in SHA256SUMS (check: cd {out} && shasum -a 256 -c SHA256SUMS); "
