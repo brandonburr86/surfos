@@ -2,7 +2,7 @@
 
 <!-- Generated from spec/soc.toml by tools/socspec.py gen -- do not edit. -->
 
-Memory map version **1**, SoC version **0.1.0**, ISA `rv32im_zicsr_zifencei`, ABI `ilp32`, reset PC `0x0000_0000`, one hart (mhartid 0). Little-endian. The source of truth is [`spec/soc.toml`](../spec/soc.toml); the Verilog, C and linker definitions are generated from it ([`rtl/generated/surfcpu_soc.vh`](../rtl/generated/surfcpu_soc.vh), [`firmware/include/surfcpu/soc.h`](../firmware/include/surfcpu/soc.h), [`firmware/ld/surfcpu_soc.ld`](../firmware/ld/surfcpu_soc.ld)).
+Memory map version **2**, SoC version **0.2.0**, ISA `rv32im_zicsr_zifencei`, ABI `ilp32`, reset PC `0x0000_0000`, one hart (mhartid 0). Little-endian. The source of truth is [`spec/soc.toml`](../spec/soc.toml); the Verilog, C and linker definitions are generated from it ([`rtl/generated/surfcpu_soc.vh`](../rtl/generated/surfcpu_soc.vh), [`firmware/include/surfcpu/soc.h`](../firmware/include/surfcpu/soc.h), [`firmware/ld/surfcpu_soc.ld`](../firmware/ld/surfcpu_soc.ld)).
 
 Unmapped addresses, fetches from regions without *fetch*, and stores to regions without *write* get a SurfBus error, which the CPU raises as an access fault ([SURFBUS.md](SURFBUS.md)). Inside an MMIO window, an offset with no register also answers with an error. Registers are 32-bit and are accessed as aligned words.
 
@@ -31,6 +31,7 @@ Unmapped addresses, fetches from regions without *fetch*, and stores to regions 
 | `0x1000_6000` | `0x1000_6FFF` | 4 KiB | `video` | mmio | no | yes | VGA text display control, cursor, palette |
 | `0x1000_7000` | `0x1000_7FFF` | 4 KiB | `sysinfo` | mmio | no | yes | Board and build identity, clocks, DDR status |
 | `0x1000_8000` | `0x1000_8FFF` | 4 KiB | `eth` | reserved | no | no | Reserved for a later Ethernet MAC (decodes as unmapped until then) |
+| `0x1000_A000` | `0x1000_BFFF` | 8 KiB | `ddrc` | mmio | no | yes | DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0 |
 | `0x2000_0000` | `0x2000_3FFF` | 16 KiB | `textram` | ram | no | yes | Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col) |
 | `0x8000_0000` | `0x8FFF_FFFF` | 256 MiB | `ddr` | ddr | yes | yes | 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS) |
 
@@ -171,11 +172,58 @@ Identity of the board and the build, clock rates and the DDR state. All read onl
 | `0x014` | `BUILD_ID` | ro | 31:0 | First 8 hex digits of the source commit the bitstream was built from. |
 | `0x018` | `BUILD_FLAGS` | ro | 0 `DIRTY` the source tree had uncommitted changes<br>1 `SIM` this is a simulation, not a bitstream | Build properties. |
 | `0x01C` | `FEATURES` | ro | 0 `UART`<br>1 `TIMER`<br>2 `IRQ`<br>3 `GPIO`<br>4 `SPI`<br>5 `PS2`<br>6 `VIDEO`<br>7 `DDR` | Which blocks were built in. |
-| `0x020` | `DDR_STATUS` | ro | 0 `CALIB_DONE` calibration succeeded; DDR is usable<br>1 `CALIB_FAIL` sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0<br>2 `PRESENT` a DDR controller is built in<br>3 `TIMEOUT` sticky until reset: a DDR access was abandoned by the bridge's watchdog | DDR controller state. The DDR window answers with errors until CALIB_DONE. |
+| `0x020` | `DDR_STATUS` | ro | 0 `CALIB_DONE` calibration succeeded; DDR is usable<br>1 `CALIB_FAIL` sticky until reset: calibration had not succeeded within the bridge's limit (CALIB_TIMEOUT_CYCLES, counted from reset, software initialization included); CALIB_DONE then stays 0<br>2 `PRESENT` a DDR controller is built in<br>3 `TIMEOUT` sticky until reset: a DDR access was abandoned by the bridge's watchdog<br>4 `SWINIT` the controller waits for software to initialize and calibrate the DDR3L through the ddrc registers (LiteDRAM without its own CPU); 0: it does so by itself (MIG, the simulation model) | DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself. |
 | `0x024` | `DDR_SIZE` | ro | 31:0 | Bytes of DDR behind the window (0 when not present). |
 | `0x028` | `PIX_HZ` | ro | 31:0 | Pixel clock in Hz (0 without video). |
 | `0x02C` | `SCRATCH` | rw | 31:0 | Free read/write word for bus tests (reset 0). |
 | `0x030` | `BUILD_TIME` | ro | 31:0 | Build time, seconds since 1970-01-01 UTC (0 if unknown). |
+
+### ddrc at `0x1000_A000`
+
+LiteDRAM's control and status registers (litedram_core generated with cpu None from ip/litedram/arty.yml), reached through surf_ddr_csr across the controller's clock domain: each access takes about half a microsecond. Offsets are LiteDRAM's (make litedram-check compares them with the generator's csr.csv); only the DFII and init registers are LiteDRAM's simulation core's too (its PHY model has none of the PHY_ ones). Present only while sysinfo.DDR_STATUS.SWINIT is 1. The sequence that uses them is firmware/common/ddrinit.c (FIRMWARE.md, DDR.md).
+
+| Offset | Register | Access | Fields | Description |
+|---|---|---|---|---|
+| `0x000` | `INIT_DONE` | rw | 0 `DONE` initialization ended | ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows. |
+| `0x004` | `INIT_ERROR` | rw | 0 `ERROR` initialization failed | ddrctrl.init_error: software writes 1 (with INIT_DONE) when initialization failed; the user port stays closed. |
+| `0x800` | `PHY_RST` | rw | 31:0 | ddrphy.rst: 1 holds the PHY in reset. |
+| `0x804` | `PHY_DLY_SEL` | rw | 31:0 | ddrphy.dly_sel: one bit per byte lane (bit 0 DQ7:0, bit 1 DQ15:8): the lanes the delay and bitslip strobes act on. |
+| `0x808` | `PHY_HALF_SYS8X_TAPS` | rw | 31:0 | ddrphy.half_sys8x_taps: delay taps of a quarter controller clock (write leveling; unused by the read-leveling sequence). |
+| `0x80C` | `PHY_WLEVEL_EN` | rw | 31:0 | ddrphy.wlevel_en: write-leveling mode (unused: the Arty's PHY is not write-leveling capable). |
+| `0x810` | `PHY_WLEVEL_STROBE` | rw | 31:0 | ddrphy.wlevel_strobe: write-leveling strobe (unused). |
+| `0x814` | `PHY_RDLY_DQ_RST` | rw | 31:0 | ddrphy.rdly_dq_rst: writing 1 sets the selected lanes' read delays (IDELAYE2) back to tap 0. |
+| `0x818` | `PHY_RDLY_DQ_INC` | rw | 31:0 | ddrphy.rdly_dq_inc: writing 1 moves the selected lanes' read delays one tap up. |
+| `0x81C` | `PHY_RDLY_DQ_BITSLIP_RST` | rw | 31:0 | ddrphy.rdly_dq_bitslip_rst: writing 1 sets the selected lanes' read bitslip back to 0. |
+| `0x820` | `PHY_RDLY_DQ_BITSLIP` | rw | 31:0 | ddrphy.rdly_dq_bitslip: writing 1 moves the selected lanes' read bitslip one step on (8 steps, then round). |
+| `0x824` | `PHY_WDLY_DQ_BITSLIP_RST` | rw | 31:0 | ddrphy.wdly_dq_bitslip_rst: writing 1 sets the selected lanes' write bitslip back to 0. |
+| `0x828` | `PHY_WDLY_DQ_BITSLIP` | rw | 31:0 | ddrphy.wdly_dq_bitslip: writing 1 moves the selected lanes' write bitslip one step on. |
+| `0x82C` | `PHY_RDPHASE` | rw | 31:0 | ddrphy.rdphase: the DFI phase reads are issued on (the generator's SDRAM_PHY_RDPHASE). |
+| `0x830` | `PHY_WRPHASE` | rw | 31:0 | ddrphy.wrphase: the DFI phase writes are issued on (the generator's SDRAM_PHY_WRPHASE). |
+| `0x1000` | `DFII_CONTROL` | rw | 0 `SEL` 1: the controller (hardware control); 0: software, through the phase injectors below<br>1 `CKE` CKE while under software control<br>2 `ODT` ODT while under software control<br>3 `RESET_N` the DRAM's RESET# (1 = released) while under software control | sdram.dfii_control: who drives the DRAM, and its control lines while software does. |
+| `0x1004` | `DFII_P0_COMMAND` | rw | 0 `CS` chip select<br>1 `WE` WE (active: the command's WE# is low)<br>2 `CAS` CAS (active: CAS# low)<br>3 `RAS` RAS (active: RAS# low)<br>4 `WRDATA` the command writes WRDATA<br>5 `RDDATA` the command's read data is captured into RDDATA | sdram.dfii_pi0_command: the command bits of phase 0's next injected command. |
+| `0x1008` | `DFII_P0_COMMAND_ISSUE` | rw | 31:0 | sdram.dfii_pi0_command_issue: writing 1 issues phase 0's command (in the controller's next cycle). |
+| `0x100C` | `DFII_P0_ADDRESS` | rw | 31:0 | sdram.dfii_pi0_address: the row or column address (or mode register value) of phase 0's command. |
+| `0x1010` | `DFII_P0_BADDRESS` | rw | 31:0 | sdram.dfii_pi0_baddress: the bank address (or mode register number) of phase 0's command. |
+| `0x1014` | `DFII_P0_WRDATA` | rw | 31:0 | sdram.dfii_pi0_wrdata: phase 0's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). |
+| `0x1018` | `DFII_P0_RDDATA` | ro | 31:0 | sdram.dfii_pi0_rddata: phase 0's data from the last injected read, in WRDATA's layout. |
+| `0x101C` | `DFII_P1_COMMAND` | rw | 0 `CS` chip select<br>1 `WE` WE (active: the command's WE# is low)<br>2 `CAS` CAS (active: CAS# low)<br>3 `RAS` RAS (active: RAS# low)<br>4 `WRDATA` the command writes WRDATA<br>5 `RDDATA` the command's read data is captured into RDDATA | sdram.dfii_pi1_command: the command bits of phase 1's next injected command. |
+| `0x1020` | `DFII_P1_COMMAND_ISSUE` | rw | 31:0 | sdram.dfii_pi1_command_issue: writing 1 issues phase 1's command (in the controller's next cycle). |
+| `0x1024` | `DFII_P1_ADDRESS` | rw | 31:0 | sdram.dfii_pi1_address: the row or column address (or mode register value) of phase 1's command. |
+| `0x1028` | `DFII_P1_BADDRESS` | rw | 31:0 | sdram.dfii_pi1_baddress: the bank address (or mode register number) of phase 1's command. |
+| `0x102C` | `DFII_P1_WRDATA` | rw | 31:0 | sdram.dfii_pi1_wrdata: phase 1's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). |
+| `0x1030` | `DFII_P1_RDDATA` | ro | 31:0 | sdram.dfii_pi1_rddata: phase 1's data from the last injected read, in WRDATA's layout. |
+| `0x1034` | `DFII_P2_COMMAND` | rw | 0 `CS` chip select<br>1 `WE` WE (active: the command's WE# is low)<br>2 `CAS` CAS (active: CAS# low)<br>3 `RAS` RAS (active: RAS# low)<br>4 `WRDATA` the command writes WRDATA<br>5 `RDDATA` the command's read data is captured into RDDATA | sdram.dfii_pi2_command: the command bits of phase 2's next injected command. |
+| `0x1038` | `DFII_P2_COMMAND_ISSUE` | rw | 31:0 | sdram.dfii_pi2_command_issue: writing 1 issues phase 2's command (in the controller's next cycle). |
+| `0x103C` | `DFII_P2_ADDRESS` | rw | 31:0 | sdram.dfii_pi2_address: the row or column address (or mode register value) of phase 2's command. |
+| `0x1040` | `DFII_P2_BADDRESS` | rw | 31:0 | sdram.dfii_pi2_baddress: the bank address (or mode register number) of phase 2's command. |
+| `0x1044` | `DFII_P2_WRDATA` | rw | 31:0 | sdram.dfii_pi2_wrdata: phase 2's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). |
+| `0x1048` | `DFII_P2_RDDATA` | ro | 31:0 | sdram.dfii_pi2_rddata: phase 2's data from the last injected read, in WRDATA's layout. |
+| `0x104C` | `DFII_P3_COMMAND` | rw | 0 `CS` chip select<br>1 `WE` WE (active: the command's WE# is low)<br>2 `CAS` CAS (active: CAS# low)<br>3 `RAS` RAS (active: RAS# low)<br>4 `WRDATA` the command writes WRDATA<br>5 `RDDATA` the command's read data is captured into RDDATA | sdram.dfii_pi3_command: the command bits of phase 3's next injected command. |
+| `0x1050` | `DFII_P3_COMMAND_ISSUE` | rw | 31:0 | sdram.dfii_pi3_command_issue: writing 1 issues phase 3's command (in the controller's next cycle). |
+| `0x1054` | `DFII_P3_ADDRESS` | rw | 31:0 | sdram.dfii_pi3_address: the row or column address (or mode register value) of phase 3's command. |
+| `0x1058` | `DFII_P3_BADDRESS` | rw | 31:0 | sdram.dfii_pi3_baddress: the bank address (or mode register number) of phase 3's command. |
+| `0x105C` | `DFII_P3_WRDATA` | rw | 31:0 | sdram.dfii_pi3_wrdata: phase 3's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). |
+| `0x1060` | `DFII_P3_RDDATA` | ro | 31:0 | sdram.dfii_pi3_rddata: phase 3's data from the last injected read, in WRDATA's layout. |
 
 ## Boot ABI constants
 

@@ -69,8 +69,3 @@ set_property -dict { PACKAGE_PIN N2   IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM 
 set_property -dict { PACKAGE_PIN U2   IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40 } [get_ports { ddr3_dqs_p[1] }]; # ddr3_dqs_p[1]
 set_property -dict { PACKAGE_PIN N1   IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40 } [get_ports { ddr3_dqs_n[0] }]; # ddr3_dqs_n[0]
 set_property -dict { PACKAGE_PIN V2   IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40 } [get_ports { ddr3_dqs_n[1] }]; # ddr3_dqs_n[1]
-
-## The memory controller's own console: LiteDRAM's calibration BIOS prints its report here,
-## 115200 8N1, on the ChipKit header's IO1 (the Arduino layout's TX pin; 200 ohm series
-## resistor, RM section 11.1). Output only; a 3.3 V USB-serial adapter shows it.
-set_property -dict { PACKAGE_PIN U16   IOSTANDARD LVCMOS33 } [get_ports { dram_uart_tx }];          # ck_io1

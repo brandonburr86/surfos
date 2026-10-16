@@ -7,19 +7,18 @@
 # surfcpu_arty_a7_top with ARTY_HAS_DDR exactly as the DDR designs build it (the real SoC, the
 # bridge, the adapter, the board's clocking and resets; BOARD's BOARD_ID, this commit's BUILD_ID
 # and BUILD_FLAGS, ROM in the boot ROM), with litedram_core either
-#   model  (default) sim/board/litedram_simcore.v: LiteDRAM's real controller generated from the
-#          board's ip/litedram/arty.yml with its DRAM model in place of the PHY and the chip,
-#          and the BIOS's last step written by the stand-in (+dram_init_us=N, +dram_calib_fail);
-#   board  the generated core the bitstream builds (build/litedram/arty/), PHY, calibration CPU
-#          and BIOS ROM included, with sim/board/prims' models of its primitives (PLLE2_ADV,
-#          OSERDESE2, ISERDESE2, IDELAYE2, IDELAYCTRL, IOBUFDS, OBUFDS, FDCE, FDPE) and no
-#          memory on its pins: its BIOS runs and finds nothing to calibrate against, and its
-#          console (dram_uart_tx) is received too.
+#   model  (default) sim/board/litedram_simcore.v: LiteDRAM's real controller and registers
+#          generated from the board's ip/litedram/arty.yml with its DRAM model in place of the
+#          PHY and the chip, at its own 80 MHz; the firmware initializes it through surf_ddr_csr;
+#   board  the generated core the bitstream builds (build/litedram/arty/), PHY included, with
+#          sim/board/prims' models of its primitives (PLLE2_ADV, OSERDESE2, ISERDESE2, IDELAYE2,
+#          IDELAYCTRL, IOBUFDS, OBUFDS, FDCE, FDPE) and no memory on its pins: the firmware's
+#          initialization reaches its real registers and PHY, and its read leveling finds
+#          nothing to read back.
 # Both need make litedram-gen. The clock tiles are sim/board/prims' models. sim/board/tb_netlist.v
 # runs it from its pins until a UART line begins with STOP, or MAX_MS milliseconds of simulated
-# time (default 3000) have passed. Results in build/sim/board/ddr_top/<board>-<rom name><tag>/:
-# uart.txt (the characters as received), dram.txt (the controller's console) and run.txt;
-# DDR_SIM_TAG names a variant (e.g. -calfail).
+# time (default 3000) have passed. Results in build/sim/board/ddr_top/<board>-<rom name>-<core><tag>/:
+# uart.txt (the characters as received) and run.txt; DDR_SIM_TAG names a variant.
 set -eu
 
 board=${1:?usage: ddr_top_sim.sh BOARD ROM STOP [MAX_MS] [plusargs...]}
@@ -35,11 +34,10 @@ case "$mode" in
            corefiles="sim/board/litedram_simcore.v $core"
            what="LiteDRAM's controller and DRAM model" ;;
     board) core="build/litedram/arty/gateware/litedram_core.v"
-           corefiles="$core build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
-                      sim/board/prims/PLLE2_ADV.v sim/board/prims/OSERDESE2.v sim/board/prims/ISERDESE2.v
+           corefiles="$core sim/board/prims/PLLE2_ADV.v sim/board/prims/OSERDESE2.v sim/board/prims/ISERDESE2.v
                       sim/board/prims/IDELAYE2.v sim/board/prims/IDELAYCTRL.v sim/board/prims/IOBUFDS.v
                       sim/board/prims/OBUFDS.v sim/board/prims/FDCE.v sim/board/prims/FDPE.v"
-           what="the board's generated core with its BIOS, primitive models, no memory" ;;
+           what="the board's generated core, primitive models, no memory" ;;
     *) echo "ddr_top_sim: DDR_SIM_CORE is model or board" >&2; exit 2 ;;
 esac
 [ -f "$core" ] || { echo "ddr_top_sim: no $core (make litedram-gen)" >&2; exit 2; }
@@ -71,14 +69,8 @@ verilator --binary --timing -j 4 -O3 --timescale 1ps/1ps --top-module tb_netlist
     --Mdir "$out/obj" -o tb_ddr_top sim/board/tb_netlist.v $srcs $corefiles $prims \
     > "$out/build.txt" 2>&1 || { tail -30 "$out/build.txt"; exit 1; }
 t1=$(date +%s)
-# run where the board core's $readmemh files (its BIOS ROM, by relative name) are
-mkdir -p "$out/run"
-for f in build/litedram/arty/gateware/litedram_core_rom.init build/litedram/arty/gateware/litedram_core_sram.init; do
-    ln -sf "$here/$f" "$out/run/"
-done
 st=0
-( cd "$out/run" && "$here/$out/obj/tb_ddr_top" "+stop=$stop" "+max_ms=$max_ms" "+transcript=$here/$out/uart.txt" \
-    "+dram_transcript=$here/$out/dram.txt" "$@" ) > "$out/run.txt" 2>&1 || st=$?
+"$out/obj/tb_ddr_top" "+stop=$stop" "+max_ms=$max_ms" "+transcript=$out/uart.txt" "$@" > "$out/run.txt" 2>&1 || st=$?
 t2=$(date +%s)
 rm -rf "$out/obj"
 grep -v ' ms simulated' "$out/run.txt" | sed 's/^/ddr_top_sim: /' | tail -60

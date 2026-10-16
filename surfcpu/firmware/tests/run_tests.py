@@ -1015,6 +1015,33 @@ def _(p):
     return std(p)
 
 
+@scenario("ddr_software_init", args=["--ddr", "swinit"],
+          logs=["ddr: initialized by SurfBoot, read leveling lane 0: bitslip 3, delay 16 (window +-10); "
+                "lane 1: bitslip 5, delay 15 (window +-5)", "ddr: calibrated after", "boot: /BOOT/SURFOS.BIN"])
+def _(p):
+    return std(p)
+
+
+@scenario("ddr_software_init_fails", args=["--ddr", "swinit-bad"], expect="DDR_CALIB",
+          msg="DDR initialization failed: read leveling lane 0: bitslip 3, delay 16 (window +-10); lane 1: "
+              "bitslip 0, no working delay")
+def _(p):
+    return std(p)
+
+
+@scenario("ddr_software_init_without_phy_registers", args=["--ddr", "swinit-nophy"],
+          logs=["ddr: initialized by SurfBoot, no read leveling (the PHY has no delay registers)",
+                "ddr: calibrated after", "boot: /BOOT/SURFOS.BIN"])
+def _(p):
+    return std(p)
+
+
+@scenario("ddr_software_init_too_late", args=["--ddr", "swinit", "--ddr-calib-ms", "0"], expect="DDR_CALIB",
+          msg="DDR calibration failed")
+def _(p):
+    return std(p)
+
+
 @scenario("ddr_size_zero", args=["--ddr-size", "0"], expect="DDR_ABSENT", msg="DDR_SIZE")
 def _(p):
     return std(p)
@@ -1032,7 +1059,7 @@ def _(p):
     "chain /BOOT/SURFOS.BIN", "check /BOOT/SURFOS.BIN", "check /BOOT/BROKEN.BIN", "check /BOOT/LONGNAME1.BIN",
     "md 0x80000000 8", "mw 0x80000000 0xdeadbeef", "md 0x80000000 1", "md 0x30000000 1", "spi 3", "bogus",
     "boot"],
-    logs=["boot [PATH]", "SurfBoot 1.0.0", "sd: SDHC/SDXC, sector addressing", "CID manufacturer",
+    logs=["boot [PATH]", "SurfBoot 1.1.0", "sd: SDHC/SDXC, sector addressing", "CID manufacturer",
           "0x0c FAT32 (LBA)", "fs: 126976 clusters", "SURFOS.BIN", "<dir>", "/USERS/NOPE does not exist",
           "hello monitor", "chain:", "fragments", "every check passed", "FAILED", "IMG_CRC",
           "is not an 8.3 name", "80000000:", "deadbeef", "access fault at 0x30000000", "DIV 3",
@@ -1042,6 +1069,14 @@ def _(p):
     bad[5000] ^= 1
     return card(p, {"/BOOT/SURFOS.BIN": pkg(), "/BOOT/CMDLINE.TXT": b"hello monitor\n",
                     "/BOOT/BROKEN.BIN": bytes(bad)}, cluster=512, fragment="interleave")
+
+
+@scenario("monitor_ddr_software_init", args=["--ddr", "swinit"], commands=["info", "ddr", "info", "boot"],
+          logs=["ddr: status 14 (present, software init), size", "ddr: initialized by SurfBoot, read leveling "
+                "lane 0: bitslip 3, delay 16 (window +-10); lane 1: bitslip 5, delay 15 (window +-5)",
+                "ddr: status 15 (present, software init, calibrated), size", "hello"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": pkg(), "/BOOT/CMDLINE.TXT": b"hello\n"})
 
 
 @scenario("monitor_spi_divider", commands=["spi", "spi 0", "sd", "spi 2", "sd", "spi auto", "sd"],

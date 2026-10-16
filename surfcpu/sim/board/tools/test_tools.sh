@@ -489,7 +489,7 @@ run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design 
 check "soc: a missing ROM image refused" has "needs the boot ROM image"
 
 # the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
-ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|pythondata-cpu-vexriscv|arty_a7_ddr3_|surf_ddr_bridge|^lvs-timeout '
+ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|arty_a7_ddr3_|surf_ddr_bridge|surf_ddr_csr|^lvs-timeout '
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_top.files | grep -Ev "$ddr_lines" > "$t/top2.list"
 check "ddr designs: surfcpu_arty_a7_ddr is surfcpu_arty_a7_top plus the DDR lines" cmp -s "$t/ddr.list" "$t/top2.list"
@@ -508,15 +508,14 @@ mkdir -p "$g"
 tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh tools/openxc7-build.sh tools/program.sh boards/arty_a7 rtl spec/soc.toml |
     ( cd "$g" && tar xf - )
 gv=build/litedram/arty/gateware
-gx=build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog
-mkdir -p "$g/$gv" "$g/$gx" "$g/ip/litedram"
+gc=build/litedram/arty
+mkdir -p "$g/$gv" "$g/$gc/software/include/generated" "$g/ip/litedram"
 printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_core.v"
-printf '00000013\n' > "$g/$gv/litedram_core_rom.init"
-: > "$g/$gv/litedram_core_sram.init"
 printf 'set_false_path -quiet -to [get_cells -hierarchical -filter {mr_ff == TRUE}]\n' > "$g/$gv/litedram_core.xdc"
-printf 'module VexRiscv (input wire clk); endmodule\n' > "$g/$gx/VexRiscv_Lite.v"
+printf 'csr_register,ddrctrl_init_done,0x00000000,1,rw\n' > "$g/$gc/csr.csv"
+printf '#define SDRAM_PHY_PHASES 4\n' > "$g/$gc/software/include/generated/sdram_phy.h"
 { echo "# scratch: SHA-256 of the stand-ins"; echo "# generate: make litedram-gen"
-  for f in $gv/litedram_core.v $gv/litedram_core_rom.init $gv/litedram_core_sram.init $gv/litedram_core.xdc $gx/VexRiscv_Lite.v; do
+  for f in $gv/litedram_core.v $gv/litedram_core.xdc $gc/csr.csv $gc/software/include/generated/sdram_phy.h; do
       echo "$(shasum -a 256 "$g/$f" | cut -d' ' -f1)  $f"; done; } > "$g/ip/litedram/arty.sha256"
 printf '/build/\n' > "$g/.gitignore"
 gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
@@ -526,7 +525,7 @@ gb=$base/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
 run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "generated: generated files that match their list leave a clean commit clean" \
     test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gb/manifest.dry-run.txt")"
-check "generated: ... and the build says they match" has "5 generated files match ip/litedram/arty.sha256"
+check "generated: ... and the build says they match" has "2 generated files match ip/litedram/arty.sha256"
 check "generated: the manifest names the list, the match and the design's defines" python3 -c "
 import tomllib,sys
 d=tomllib.load(open(sys.argv[1],'rb'))
@@ -534,7 +533,7 @@ assert d['generated_lists']==['ip/litedram/arty.sha256'] and d['generated_files_
 assert d['defines']==['ARTY_HAS_DDR'], d
 " "$gb/manifest.dry-run.txt"
 check "define: params.tcl gives Vivado the design's defines" grep -q '^set defines {ARTY_HAS_DDR}$' "$gb/stage/params.tcl"
-check "generated: Vivado's stage has the generated files" test -f "$gb/stage/surfcpu/$gv/litedram_core_rom.init"
+check "generated: Vivado's stage has the generated files" test -f "$gb/stage/surfcpu/$gv/litedram_core.xdc"
 printf '// changed\n' >> "$g/$gv/litedram_core.v"
 run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "generated: a generated file that differs from its list makes the build dirty" \
@@ -550,20 +549,28 @@ run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_
 c=$gb/out/calls.txt
 check "define: Vivado (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gb/surfcpu_arty_a7_ddr_bramdiag.bit"
 check "define: build.tcl synthesizes with -verilog_define ARTY_HAS_DDR" grep -q "^synth_design -top surfcpu_arty_a7_top .*-verilog_define ARTY_HAS_DDR" "$c"
-check "define: build.tcl reads the generated ROM image and the bridge's scoped constraints" \
-    eval "grep -q '^read_mem $gv/litedram_core_rom.init' '$c' && grep -q '^read_xdc -ref surf_ddr_bridge -unmanaged rtl/soc/ddr/surf_ddr_bridge.xdc' '$c'"
+check "define: build.tcl reads the generated core's constraints and both DDR crossings' scoped ones" \
+    eval "grep -q '^read_xdc .*$gv/litedram_core.xdc' '$c' && grep -q '^read_xdc -ref surf_ddr_bridge -unmanaged rtl/soc/ddr/surf_ddr_bridge.xdc' '$c' && grep -q '^read_xdc -ref surf_ddr_csr -unmanaged rtl/soc/ddr/surf_ddr_csr.xdc' '$c'"
 mv "$conf" "$t/conf.ddr"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 gd=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
 check "define: the open flow (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
-check "define: ... with -D ARTY_HAS_DDR, the generated sources, the design's LVS limit and seed" \
-    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -q -- ' $gv/litedram_core.v ' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400 --seed 2' '$FAKE_LOG'"
-check "define: ... and the manifest has the seed" grep -q '^placer_seed = 2$' "$gd/manifest.txt"
+check "define: ... with -D ARTY_HAS_DDR, the generated sources, the design's LVS limit and seeds" \
+    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -Eq -- ' $gv/litedram_core.v( |\$)' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400 --seed 1,2,3,4,5,6,7,8' '$FAKE_LOG'"
+check "define: ... and the manifest has the seeds and the one used" \
+    eval "grep -q '^placer_seeds = \[1, 2, 3, 4, 5, 6, 7, 8, \]$' '$gd/manifest.txt' && grep -q '^placer_seed = 1$' '$gd/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_FAIL_SEEDS="1 2" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "seeds: placements that miss a clock are followed by the next seed, whose bitstream passes" \
+    test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^placer_seed = 3$' "$gd/manifest.txt")"
+check "seeds: ... and the manifest records every attempt" \
+    test "$(sed -n '/^placer_attempts = \[/,/^\]/p' "$gd/manifest.txt" | grep -c '"seed [0-9]*: ')" -eq 3 -a \
+         -n "$(grep '"seed 2: fail (nextpnr exit 1), routed; .dram_clk.: 72.98 MHz (FAIL at 80.00 MHz)' "$gd/manifest.txt")"
 check "define: nextpnr is given the DDR3L pins with their slew and termination" \
     grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
 check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \
-    test "$(grep -c 'arty_a7_ddr3_timing.xdc' "$gd/nextpnr-not-checked.txt")" -eq 6
+    test "$(grep -c 'arty_a7_ddr3_timing.xdc' "$gd/nextpnr-not-checked.txt")" -eq 5
 run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
 check "define: program.sh loads the DDR design's bitstream (fake openFPGALoader)" \
     test "$rc" -eq 0 -a -n "$(grep -- "-b arty_a7_100t $gd/surfcpu_arty_a7_ddr_bramdiag.bit" "$FAKE_LOG")"
@@ -572,16 +579,19 @@ run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake
 check "openxc7: a flow that stops at place and route (a clock missed) fails with a complete manifest" \
     test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
 check "openxc7: ... whose reason names the clock and nextpnr's figures" \
-    grep -q '^reason = ".*timing not met (nextpnr: dram_clk 72.98 MHz of 100.00 MHz)' "$gd/manifest.txt"
+    grep -q '^reason = ".*timing not met (nextpnr: dram_clk 72.98 MHz of 80.00 MHz)' "$gd/manifest.txt"
 check "openxc7: ... and records nextpnr's last report per clock" \
-    grep -q "^nextpnr_fmax = \[\"Max frequency for clock 'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)\", \"Max frequency for clock 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)\", \]$" "$gd/manifest.txt"
+    grep -q "^nextpnr_fmax = \[\"Max frequency for clock 'dram_clk': 72.98 MHz (FAIL at 80.00 MHz)\", \"Max frequency for clock 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)\", \]$" "$gd/manifest.txt"
+check "openxc7: ... and every seed it tried, none passing" \
+    test "$(sed -n '/^placer_attempts = \[/,/^\]/p' "$gd/manifest.txt" | grep -c '"seed [0-9]*: fail ')" -eq 8 -a \
+         -z "$(grep '^placer_seed = ' "$gd/manifest.txt")"
 check "openxc7: ... after routing" grep -q '^nextpnr_routed = true$' "$gd/manifest.txt"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_STOP=route \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "openxc7: a flow stopped before routing converged fails with a complete manifest" \
     test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
 check "openxc7: ... whose reason says routing did not finish, not that timing was missed" \
-    grep -q '^reason = ".*nextpnr did not finish routing (router2 after 101 iterations, 786 overused wires); the placer.s timing estimate misses too (dram_clk 84.07 MHz of 100.00 MHz)' "$gd/manifest.txt"
+    grep -q '^reason = ".*nextpnr did not finish routing (router2 after 101 iterations, 786 overused wires); the placer.s timing estimate misses too (dram_clk 84.07 MHz of 80.00 MHz)' "$gd/manifest.txt"
 check "openxc7: ... and marks nextpnr's figures as not routed" grep -q '^nextpnr_routed = false$' "$gd/manifest.txt"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_TIMING=FAIL \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t

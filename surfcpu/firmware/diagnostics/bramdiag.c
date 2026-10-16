@@ -1,7 +1,7 @@
 /*
 SurfCPU diagnostics: the milestone 3 BRAM program
 --------------------
-File: bramdiag.c Date: 10/15/26 (SurfCPU)
+File: bramdiag.c Date: 10/16/26 (SurfCPU)
 --------------------
 A boot ROM image (build/fw/bramdiag.mem, in place of SurfBoot) that needs nothing but the
 CPU, block RAM, the UART and the timer, for the first runs of SurfCPU on the board
@@ -12,14 +12,17 @@ exception kind, each caught and recovered from (illegal instructions, misaligned
 faulting loads, stores and fetches, misaligned jump and branch targets, ECALL, EBREAK);
 the software, timer and external interrupts with their priority, MIE gating and WFI, the
 timer ticking at the right rate; FENCE.I with code written into scratch RAM; and, when the
-bitstream has a calibrated DDR controller, the DDR tests including code copied from the
-ROM into DDR and run there (milestone 4). It ends with "BRAMDIAG: PASS (n checks)" or
+bitstream has a DDR controller, its initialization when the controller waits for software
+(sysinfo.DDR_STATUS.SWINIT: LiteDRAM without its own CPU; common/ddrinit.c, with every lane's
+scan of bitslips and delays printed), its calibration, and the DDR tests including code
+copied from the ROM into DDR and run there (milestone 4). It ends with "BRAMDIAG: PASS (n checks)" or
 "BRAMDIAG: FAIL (...)" and the LEDs (LD0 green or red), then echoes UART input; Ctrl-R runs
 everything again. Its data and stack use the top 8 KiB of scratch RAM; the 56 KiB below are
 tested.
 */
 #include <string.h>
 #include "crc32.h"
+#include "ddrinit.h"
 #include "diag.h"
 #include "version.h"
 
@@ -369,6 +372,33 @@ static void fence_i(uint32_t unused)
     diag_section_end();
 }
 
+static uint32_t ddrc_read(uint32_t off) { return REG(SURF_DDRC_BASE, off); }
+static void ddrc_write(uint32_t off, uint32_t value) { REG(SURF_DDRC_BASE, off) = value; }
+
+static const struct ddrinit_ops diag_ddrc = { ddrc_read, ddrc_write, timer_now32, con_puts, 1 };
+
+/* SWINIT: initialize the controller and level the read path, printing every lane's scan
+ * (one line per bitslip: a 1 for each of the 32 delays that read the pattern back). */
+static int ddr_software_init(void)
+{
+    static struct ddrinit_result r;
+    con_puts("DDR initialization (DDR_STATUS.SWINIT), read leveling:\n");
+    ddrinit_run(&diag_ddrc, &r);
+    for (int m = 0; m < DDRINIT_MODULES; m++) {
+        char d[64];
+        ddrinit_describe(&r, m, d, sizeof d);
+        con_printf("  %s\n", d);
+    }
+    con_printf("  %u ms\n", r.us / 1000u);
+    diag_section("DDR initialization");
+    for (int m = 0; r.leveling && m < DDRINIT_MODULES; m++)
+        diag_check(r.lane[m].window >= 0, "lane %d: no read delay works at bitslip %d, the best", m,
+                   r.lane[m].bitslip);
+    diag_check(r.ok, "read leveling did not succeed: init_error written");
+    diag_section_end();
+    return r.ok;
+}
+
 static void ddr(uint32_t unused)
 {
     (void)unused;
@@ -377,6 +407,8 @@ static void ddr(uint32_t unused)
         con_puts("DDR                                skipped: no DDR controller in this bitstream\n");
         return;
     }
+    if ((st & SURF_SYSINFO_DDR_STATUS_SWINIT_MASK) && !ddr_software_init())
+        return;
     diag_section("DDR calibration");
     int ok = ddr_wait_calibration(2000000u);
     diag_check(ok, "calibration did not succeed within 2 s (DDR_STATUS 0x%08x)", sysinfo(SURF_SYSINFO_DDR_STATUS));

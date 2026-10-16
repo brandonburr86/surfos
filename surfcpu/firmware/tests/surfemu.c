@@ -1,7 +1,7 @@
 /*
 SurfCPU firmware tests: the firmware emulator
 --------------------
-File: surfemu.c Date: 10/15/26 (SurfCPU)
+File: surfemu.c Date: 10/16/26 (SurfCPU)
 --------------------
 Runs a boot ROM image (SurfBoot, the BRAM diagnostics) on an instruction-level model of the
 SurfCPU SoC, so the real RV32 binaries (start-up, traps, drivers, the handoff, the
@@ -15,12 +15,18 @@ the real evidence. What it models:
     to read-only CSRs, SRET/URET/SFENCE.VMA), interrupts MEI > MSI > MTI, WFI, MRET;
   * the memory map of docs/MEMORY-MAP.md: boot ROM (read only), scratch RAM, text RAM (no
     fetch), DDR (errors until calibration), MMIO word access only, unknown offsets and
-    unmapped addresses answering with bus errors (access faults);
+    unmapped addresses answering with bus errors (access faults); with --ddr swinit,
+    swinit-bad or swinit-nophy, the ddrc region with LiteDRAM's model behind it (ddrc_model.h:
+    a controller that SurfBoot or the diagnostics initialize and level; each lane has a read
+    window, none for lane 1 with swinit-bad; LiteDRAM's simulation core, without PHY registers,
+    with swinit-nophy) and DDR data that reads back wrong on a lane leveled outside its window; without, the ddrc region is unmapped as in a bitstream whose controller
+    calibrates by itself;
   * uart (FIFOs at the real baud rate), timer, intc, gpio (buttons, LEDs), spi (with the
     waiting DATA read and the SD card model of sdcard_sim.c), ps2 (idle), video (registers
     and text RAM, dumped as text with --screen), sysinfo (DDR calibration status).
 
-    surfemu --rom build/fw/surfboot.mem [--card IMG] [card options as fwtest] [--ddr ok|absent|fail|never]
+    surfemu --rom build/fw/surfboot.mem [--card IMG] [card options as fwtest]
+            [--ddr ok|absent|fail|never|swinit|swinit-bad|swinit-nophy] [--ddr-calib-ms N]
             [--btn MASK] [--send TRIGGER=TEXT]... [--expect TEXT]... [--fail-on TEXT]...
             [--max-ms N] [--screen FILE] [--trace-traps] [--quiet] [--card-insert-ms N]
             [--ddr-fault-at ADDR] [--ddr-stuck-at ADDR] [--ddr-size BYTES] [--timer-stuck]
@@ -28,7 +34,8 @@ the real evidence. What it models:
 --rom takes a .mem file (docs/MODULES.md section 5, the exact ROM format) or a raw .bin.
 --send queues TEXT (with \\n, \\r, \\e escapes) on the UART receiver once the output
 contains TRIGGER. Exit 0 once every --expect text has appeared in order, 1 when a --fail-on
-text appears, 2 when --max-ms of simulated time pass first, 3 on an emulator error.
+text appears (or the LiteDRAM model saw a protocol violation), 2 when --max-ms of simulated
+time pass first, 3 on an emulator error.
 */
 #define _DEFAULT_SOURCE
 #include <getopt.h>
@@ -36,6 +43,7 @@ text appears, 2 when --max-ms of simulated time pass first, 3 on an emulator err
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ddrc_model.h"
 #include "sdcard_sim.h"
 #include "surfcpu/soc.h"
 
@@ -44,6 +52,7 @@ text appears, 2 when --max-ms of simulated time pass first, 3 on an emulator err
 #define TEXT_SIZE  SURF_TEXTRAM_SIZE
 #define DDR_SIZE   SURF_DDR_SIZE
 #define DDR_EXTRA  10                       /* extra cycles per DDR access */
+#define DDRC_EXTRA 12                       /* ... per ddrc access: two crossings and LiteX's CSR bus */
 
 static uint8_t rom[ROM_SIZE], ram[RAM_SIZE], textram[TEXT_SIZE];
 static uint8_t *ddr;
@@ -61,8 +70,11 @@ static const char *expects[32], *fails[16];
 static int nexpects, nfails, expect_next;
 static size_t expect_pos;
 static uint64_t max_cycles;
-static int ddr_mode;                        /* 0 ok, 1 absent, 2 fail, 3 never */
+static int ddr_mode;                        /* 0 ok, 1 absent, 2 fail, 3 never, 4 swinit (LiteDRAM's model) */
 static uint32_t ddr_calib_us = 150000, ddr_size = DDR_SIZE;
+static int ddr_calib_given;                 /* --ddr-calib-ms: else swinit's limit is the bridge's 1.5 s */
+static struct ddrc_model ddrc;
+static int ddr_cal_ever, ddr_cal_fail;      /* swinit: the bridge's calib status, as surf_ddr_bridge */
 static uint32_t buttons;
 static uint32_t ddr_fault_at = 1;           /* a DDR word that answers with a bus error (1 = none) */
 static uint32_t ddr_stuck_at = 1;           /* a DDR word whose bit 4 is stuck at 1 (1 = none) */
@@ -213,6 +225,15 @@ static uint32_t ddr_status(void)
     uint32_t st = SURF_SYSINFO_DDR_STATUS_PRESENT_MASK;
     switch (ddr_mode) {
     case 1: return 0;
+    case 4:                                 /* CALIB_FAIL when not calibrated within the limit, sticky */
+        st |= SURF_SYSINFO_DDR_STATUS_SWINIT_MASK;
+        if (!ddr_cal_fail && ddrc_model_ready(&ddrc))
+            ddr_cal_ever = 1;
+        else if (!ddr_cal_ever && now_us() >= ddr_calib_us)
+            ddr_cal_fail = 1;
+        if (ddr_cal_fail)
+            return st | SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK;
+        return st | (ddrc_model_ready(&ddrc) ? SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK : 0);
     case 2: return st | (now_us() >= ddr_calib_us ? SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK : 0);
     case 3: return st;
     default: return st | (now_us() >= ddr_calib_us ? SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK : 0);
@@ -467,7 +488,7 @@ static int mmio_write(uint32_t addr, uint32_t v)
 }
 
 /* ---------------- the bus ---------------- */
-enum { REG_NONE, REG_ROM, REG_RAM, REG_TEXT, REG_DDR, REG_MMIO };
+enum { REG_NONE, REG_ROM, REG_RAM, REG_TEXT, REG_DDR, REG_MMIO, REG_DDRC };
 
 static int region(uint32_t a)
 {
@@ -476,6 +497,7 @@ static int region(uint32_t a)
     if (a >= SURF_TEXTRAM_BASE && a < SURF_TEXTRAM_BASE + TEXT_SIZE) return REG_TEXT;
     if (a >= SURF_DDR_BASE && a - SURF_DDR_BASE < DDR_SIZE) return REG_DDR;
     if (a >= SURF_UART_BASE && a < SURF_SYSINFO_BASE + SURF_SYSINFO_SIZE) return REG_MMIO;
+    if (a >= SURF_DDRC_BASE && a - SURF_DDRC_BASE < SURF_DDRC_SIZE && ddr_mode == 4) return REG_DDRC;
     return REG_NONE;
 }
 
@@ -496,7 +518,7 @@ static int bus_read(uint32_t a, int size, uint32_t *v, int fetch)
     int r = region(a);
     if (r == REG_NONE)
         return -1;
-    if (fetch && (r == REG_TEXT || r == REG_MMIO))
+    if (fetch && (r == REG_TEXT || r == REG_MMIO || r == REG_DDRC))
         return -1;
     if (r == REG_DDR) {
         if (!ddr_ready() || a - SURF_DDR_BASE >= ddr_size || (a & ~3u) == ddr_fault_at)
@@ -505,9 +527,20 @@ static int bus_read(uint32_t a, int size, uint32_t *v, int fetch)
     }
     if (r == REG_MMIO)
         return size == 4 ? mmio_read(a, v) : -1;
+    if (r == REG_DDRC) {                    /* surf_ddr_csr carries whole words only */
+        if (size != 4)
+            return -1;
+        cycles += DDRC_EXTRA;
+        *v = ddrc_model_read(&ddrc, a - SURF_DDRC_BASE);
+        return 0;
+    }
     uint8_t *p = mem_ptr(r, a);
     *v = size == 1 ? p[0] : size == 2 ? (uint32_t)(p[0] | p[1] << 8)
        : (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+    if (r == REG_DDR && ddr_mode == 4)      /* byte lane = DQ7:0 for even addresses, DQ15:8 for odd */
+        for (int i = 0; i < size; i++)
+            if (!ddrc_model_lane_ok(&ddrc, (int)((a + (uint32_t)i) & 1u)))
+                *v ^= 0xFFu << (8 * i);
     return 0;
 }
 
@@ -523,6 +556,13 @@ static int bus_write(uint32_t a, int size, uint32_t v)
     }
     if (r == REG_MMIO)
         return size == 4 ? mmio_write(a, v) : -1;
+    if (r == REG_DDRC) {
+        if (size != 4)
+            return -1;
+        cycles += DDRC_EXTRA;
+        ddrc_model_write(&ddrc, a - SURF_DDRC_BASE, v);
+        return 0;
+    }
     uint8_t *p = mem_ptr(r, a);
     for (int i = 0; i < size; i++)
         p[i] = (uint8_t)(v >> (8 * i));
@@ -903,6 +943,16 @@ static void finish(int code)
             (unsigned long long)minstret, (unsigned long long)traps_seen, pc, gpio.led, gpio.rgb);
     if (code == 2 && nexpects)
         fprintf(stderr, "surfemu: still waiting for \"%s\"\n", expects[expect_next]);
+    if (ddr_mode == 4) {
+        fprintf(stderr, "surfemu: ddrc model: %u accesses, %u mode register loads, %u ZQCL, %u writes, %u reads, "
+                "%u violations; lanes at bitslip/delay %d/%d and %d/%d\n", ddrc.accesses, ddrc.mrs, ddrc.zqcl,
+                ddrc.writes, ddrc.reads, ddrc.violations, ddrc.bitslip[0], ddrc.delay[0], ddrc.bitslip[1],
+                ddrc.delay[1]);
+        if (ddrc.violations && code == 0) {
+            fprintf(stderr, "surfemu: the LiteDRAM model saw protocol violations\n");
+            code = 1;
+        }
+    }
     sdsim_close(card);
     free(ddr);
     free(out);
@@ -964,9 +1014,13 @@ int main(int argc, char **argv)
         case 'R': co.remove_after = atoi(optarg); break;
         case 'N': co.no_cd = 1; break;
         case 'd':
-            ddr_mode = !strcmp(optarg, "absent") ? 1 : !strcmp(optarg, "fail") ? 2 : !strcmp(optarg, "never") ? 3 : 0;
+            ddr_mode = !strcmp(optarg, "absent") ? 1 : !strcmp(optarg, "fail") ? 2 : !strcmp(optarg, "never") ? 3
+                     : !strncmp(optarg, "swinit", 6) ? 4 : 0;
+            ddrc.lane[0] = (struct ddrc_lane){ 3, 6, 26 };
+            ddrc.lane[1] = !strcmp(optarg, "swinit-bad") ? (struct ddrc_lane){ 0, 1, 0 } : (struct ddrc_lane){ 5, 10, 20 };
+            ddrc.no_phy = !strcmp(optarg, "swinit-nophy");
             break;
-        case 'D': ddr_calib_us = (uint32_t)strtoul(optarg, 0, 0) * 1000u; break;
+        case 'D': ddr_calib_us = (uint32_t)strtoul(optarg, 0, 0) * 1000u; ddr_calib_given = 1; break;
         case 'b': buttons = (uint32_t)strtoul(optarg, 0, 0); break;
         case 's': {
             if (nsends >= 32) break;
@@ -995,6 +1049,9 @@ int main(int argc, char **argv)
     if (!rom_path)
         emu_fail("--rom is required");
     load_rom(rom_path);
+    ddrc_model_init(&ddrc);
+    if (ddr_mode == 4 && !ddr_calib_given)
+        ddr_calib_us = 1500000;             /* surf_ddr_bridge's limit on the board, from reset */
     ddr = calloc(1, DDR_SIZE);
     if (!ddr)
         emu_fail("no memory for DDR");

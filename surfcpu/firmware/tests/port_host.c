@@ -1,7 +1,7 @@
 /*
 SurfCPU firmware tests: the host side of port.h
 --------------------
-File: port_host.c Date: 10/15/26 (SurfCPU)
+File: port_host.c Date: 10/16/26 (SurfCPU)
 --------------------
 See port_host.h. Time: an SPI byte costs 8 SCLK periods at the current divider plus about
 ten CPU cycles; reading the clock costs a microsecond, so every busy-wait in the firmware
@@ -115,6 +115,14 @@ uint32_t port_sysinfo(uint32_t off)
     case SURF_SYSINFO_DDR_STATUS:
         switch (host.ddr_mode) {
         case DDR_ABSENT: return 0;
+        case DDR_SWINIT: {
+            uint32_t st = SURF_SYSINFO_DDR_STATUS_PRESENT_MASK | SURF_SYSINFO_DDR_STATUS_SWINIT_MASK;
+            if (ddrc_model_ready(&host.ddrc))
+                st |= SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK;
+            else if (us >= host.ddr_calib_us)
+                st |= SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK;
+            return st;
+        }
         case DDR_FAIL:
             return SURF_SYSINFO_DDR_STATUS_PRESENT_MASK | (us >= host.ddr_calib_us ? SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK : 0u);
         case DDR_NEVER: return SURF_SYSINFO_DDR_STATUS_PRESENT_MASK;
@@ -125,6 +133,20 @@ uint32_t port_sysinfo(uint32_t off)
     case SURF_SYSINFO_PIX_HZ: return SURF_PIX_HZ;
     default: return 0;
     }
+}
+
+/* ---- the ddrc registers: LiteDRAM's model (DDR_SWINIT), nothing otherwise ---- */
+uint32_t port_ddrc_read(uint32_t off)
+{
+    advance_ns(500);                                /* about half a microsecond across the crossing */
+    return host.ddr_mode == DDR_SWINIT ? ddrc_model_read(&host.ddrc, off) : 0;
+}
+
+void port_ddrc_write(uint32_t off, uint32_t v)
+{
+    advance_ns(500);
+    if (host.ddr_mode == DDR_SWINIT)
+        ddrc_model_write(&host.ddrc, off, v);
 }
 
 uint32_t port_timebase_hz(void) { return SURF_TIMEBASE_HZ; }

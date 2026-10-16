@@ -12,9 +12,9 @@
 # Yosys's block RAM models have no behaviour, so those of sim/board/prims replace them; the
 # clock tiles are sim/board/prims' too. A DDR design's netlist (ARTY_HAS_DDR: its ports include
 # ddr3_*) also gets sim/board/prims' models of LiteDRAM's primitives and no memory on its DDR3L
-# pins: its calibration BIOS runs from the synthesized ROM and fails, which the netlist's bridge
-# reports as CALIB_FAIL after its limit (1.5 s); dram.txt holds the controller's console.
-# NETLIST_MAX_MS sets the simulated-time limit (default 300 ms, 2500 for a DDR design). Results in
+# pins: the BRAM diagnostics in its boot ROM initialize the controller through the netlist's
+# register bridge and level its read path, which finds no working delay (nothing answers).
+# NETLIST_MAX_MS sets the simulated-time limit (default 300 ms, 1500 for a DDR design). Results in
 # build/sim/board/netlist/<board>-<design>/: uart.txt (the characters as received), run.txt (the
 # console), and the time it took.
 set -eu
@@ -40,7 +40,7 @@ ddr=
 max_ms=${NETLIST_MAX_MS:-300}
 if grep -q 'ddr3_addr' "$net"; then                   # a DDR design
     ddr=-DARTY_HAS_DDR
-    max_ms=${NETLIST_MAX_MS:-2500}
+    max_ms=${NETLIST_MAX_MS:-1500}
     models="$models sim/board/prims/PLLE2_ADV.v sim/board/prims/OSERDESE2.v sim/board/prims/ISERDESE2.v
             sim/board/prims/IDELAYE2.v sim/board/prims/IDELAYCTRL.v sim/board/prims/IOBUFDS.v
             sim/board/prims/OBUFDS.v"
@@ -64,7 +64,7 @@ case "$simulator" in
 esac
 t1=$(date +%s)
 st=0
-$run "+stop=$stop" "+max_ms=$max_ms" "+transcript=$out/uart.txt" "+dram_transcript=$out/dram.txt" > "$out/run.txt" 2>&1 || st=$?
+$run "+stop=$stop" "+max_ms=$max_ms" "+transcript=$out/uart.txt" > "$out/run.txt" 2>&1 || st=$?
 t2=$(date +%s)
 rm -rf "$out/obj"
 grep -v ' ms simulated' "$out/run.txt" | sed 's/^/netlist_sim: /' | tail -40

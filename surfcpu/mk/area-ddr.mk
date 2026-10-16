@@ -1,14 +1,19 @@
 # ddr track: the DDR bridge (rtl/soc/ddr/), its MIG user-interface model and tests (sim/ddr/),
 # the MIG and LiteDRAM recipes (ip/). docs/DDR.md describes all of it.
 #
-#   make lint-ddr        Verilator -Wall lint and an Icarus compile of the bridge RTL
+#   make lint-ddr        Verilator -Wall lint and an Icarus compile of the bridge RTL (and the register bridge)
 #   make test-ddr        every DDR simulation (on test-soc)
+#   make test-ddr-csr    the register bridge (surf_ddr_csr) against a Wishbone slave model, several clock pairs
 #   make check-ddr       test-ddr plus the Yosys synthesis check and check-mig (on check)
 #   make check-mig       the MIG recipe without Vivado (project files, provenance, wiring, Tcl dry run)
 #   make prove-ddr       formal proofs of the mailbox and the bridge (on check)
 #   make test-ddr-mutants  the mutation check of the tests (slow; not on check)
 #   make litedram-gen    generate the LiteDRAM cores for the Arty and simulation, check them against
-#                        ip/litedram/arty.sha256 (fetches pinned sources; on check-openflow)
+#                        ip/litedram/arty.sha256, the register map against spec/soc.toml and the PHY
+#                        settings against firmware/common/ddrinit_phy.h (fetches pinned sources; on
+#                        check-openflow)
+#   make litedram-repro  the generation again in eight differently set up Python processes: one set of
+#                        files, the locked one (ip/litedram/repro.sh; about 6 minutes; not on check)
 
 DDR_RTL      = rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_mailbox.v
 DDR_RTL_ALL  = $(DDR_RTL) rtl/lib/surf_sync.v
@@ -27,12 +32,12 @@ DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initi
                -Wno-DECLFILENAME -Irtl/generated -Irtl/lib -Irtl/soc/ddr --top-module surf_ddr_bridge
 
 # Clocks as sys_ns:ui_ns:jitter, beyond the default 40 / 12.308 (25 MHz and the MIG's 81.25 MHz):
-# LiteDRAM's 100 MHz, equal and nearly equal periods, a ui clock slower than sys, a sys clock
+# LiteDRAM's 100 and 80 MHz, equal and nearly equal periods, a ui clock slower than sys, a sys clock
 # faster than ui, and two pairs with every half period jittered by up to 30%.
-DDR_RATIOS   = 40:10:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
+DDR_RATIOS   = 40:10:0 40:12.5:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
 
 .PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr \
-        test-ddr-icarus test-ddr-mutants check-mig prove-ddr
+        test-ddr-icarus test-ddr-mutants check-mig prove-ddr test-ddr-csr test-ddr-gen-tool litedram-repro
 lint: lint-ddr
 test-soc: test-ddr
 check: check-ddr
@@ -43,7 +48,10 @@ lint-ddr:
 	$(Q)mkdir -p $(DDR_OUT)
 	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -s surf_ddr_bridge \
 	  -o $(DDR_OUT)/bridge_compile.vvp $(DDR_RTL_ALL)
-	@echo "lint-ddr: surf_ddr_bridge, surf_ddr_mailbox clean (Verilator -Wall, Icarus -g2005)"
+	$(Q)$(DDR_LINT) --top-module surf_ddr_csr rtl/soc/ddr/surf_ddr_csr.v rtl/soc/ddr/surf_ddr_mailbox.v
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -s surf_ddr_csr -o $(DDR_OUT)/csr_compile.vvp \
+	  rtl/soc/ddr/surf_ddr_csr.v rtl/soc/ddr/surf_ddr_mailbox.v
+	@echo "lint-ddr: surf_ddr_bridge, surf_ddr_mailbox, surf_ddr_csr clean (Verilator -Wall, Icarus -g2005)"
 
 $(DDR_OUT)/tb_ddr_bridge: $(DDR_RTL_ALL) $(DDR_TB_SRC) $(DDR_TB_HDR) rtl/generated/surfcpu_soc.vh
 	@mkdir -p $(DDR_OUT)
@@ -108,14 +116,46 @@ test-ddr-icarus: $(DDR_OUT)/tb_ddr_mailbox.vvp $(DDR_OUT)/tb_ddr_bridge_icarus.v
 	  grep 'PASS' $(DDR_OUT)/icarus.$$s.txt | sed 's/^/  /'; done
 	@echo "test-ddr-icarus: PASS"
 
-test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus
+# The register bridge (surf_ddr_csr): short limits at four clock pairs (the board's 25 and
+# 80 MHz, a faster controller, equal and jittered, nearly equal), the board's limits at the
+# board's pair and with a slow, jittered controller clock (the SoC side's watchdog then the
+# shorter limit).
+DDR_CSR_SRC  = sim/ddr/tb_ddr_csr.v rtl/soc/ddr/surf_ddr_csr.v rtl/soc/ddr/surf_ddr_mailbox.v \
+               sim/soc/bfm/surfbus_bfm.v sim/soc/bfm/surfbus_monitor.v
+DDR_CSR_FAST = 40000:12500:0 40000:10000:0 40000:40000:30 13100:12500:0
+DDR_CSR_DEF  = 40000:12500:0 10000:41700:30
+
+$(DDR_OUT)/tb_ddr_csr_fast.vvp: $(DDR_CSR_SRC)
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -Ptb_ddr_csr.TIMEOUT=64 -Ptb_ddr_csr.WB_TIMEOUT=16 -o $@ $(DDR_CSR_SRC)
+
+$(DDR_OUT)/tb_ddr_csr.vvp: $(DDR_CSR_SRC)
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -o $@ $(DDR_CSR_SRC)
+
+test-ddr-csr: $(DDR_OUT)/tb_ddr_csr_fast.vvp $(DDR_OUT)/tb_ddr_csr.vvp
+	$(Q)i=0; for r in $(addprefix fast:,$(DDR_CSR_FAST)) $(addprefix def:,$(DDR_CSR_DEF)); do i=$$((i+1)); \
+	  b=$${r%%:*}; rest=$${r#*:}; s=$${rest%%:*}; rest=$${rest#*:}; w=$${rest%%:*}; j=$${rest#*:}; \
+	  vvp=$(DDR_OUT)/tb_ddr_csr$$( [ $$b = fast ] && echo _fast).vvp; \
+	  vvp -n $$vvp +seed=$$i +sys_ps=$$s +wb_ps=$$w +jitter=$$j +count=2000 > $(DDR_OUT)/csr.$$i.txt 2>&1; \
+	  grep -q 'tb_ddr_csr: PASS' $(DDR_OUT)/csr.$$i.txt || { grep -E 'ERROR|fatal' $(DDR_OUT)/csr.$$i.txt | head; \
+	    echo "test-ddr-csr: FAIL ($$r)"; exit 1; }; \
+	  grep -h 'tb_ddr_csr: PASS' $(DDR_OUT)/csr.$$i.txt | sed 's/^/  /'; done
+	@echo "test-ddr-csr: PASS"
+
+# The generator wrapper's removal of LiteX's instance tree comment, without the generator.
+test-ddr-gen-tool:
+	$(Q)$(PYTHON) -I ip/litedram/run_gen.py --self-test
+
+test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus test-ddr-csr test-ddr-gen-tool
 	@echo "test-ddr: PASS"
 
 # ---- LiteDRAM, the open flow's controller (ip/litedram/). litedram-setup fetches the pinned
-# generator (once, network); litedram-gen generates the Arty core (with its calibration BIOS)
-# and the simulation core from the same ip/litedram/arty.yml, records what came out and checks
-# the files against ip/litedram/arty.sha256 (the DDR designs build from them); test-ddr-litedram
-# runs the bridge and the adapter against the simulation core's real controller (on
+# generator (once, network); litedram-gen generates the Arty core (no CPU: SurfCPU initializes
+# it) and the simulation core from the same ip/litedram/arty.yml, records what came out, checks
+# the register map and the PHY settings the firmware relies on, and checks the files against
+# ip/litedram/arty.sha256 (the DDR designs build from them); test-ddr-litedram runs the bridge,
+# the adapter and the register bridge against the simulation core's real controller (on
 # check-openflow: it needs the network the first time and is the open flow's controller).
 LITEDRAM_OUT = $(BUILD)/litedram
 LITEDRAM_ENV = $(BUILD)/third_party/litedram/env.sh
@@ -126,7 +166,7 @@ LITEDRAM_GEN = ip/litedram/generate.sh ip/litedram/run_gen.py $(LITEDRAM_ENV)
 $(LITEDRAM_ENV): ip/litedram/setup.sh
 	$(Q)ip/litedram/setup.sh
 
-$(LITEDRAM_SIM): ip/litedram/arty.yml ip/litedram/sim_config.py $(LITEDRAM_GEN)
+$(LITEDRAM_SIM): ip/litedram/arty.yml $(LITEDRAM_GEN)
 	$(Q)ip/litedram/generate.sh ip/litedram/arty.yml $(LITEDRAM_OUT)/arty_sim --sim --name litedram_sim
 
 $(LITEDRAM_ARTY): ip/litedram/arty.yml $(LITEDRAM_GEN)
@@ -168,12 +208,17 @@ test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
 	  $(DDR_OUT)/tb_ddr_litedram --test all --seed $$s > $(DDR_OUT)/litedram.$$s.txt 2>&1; st=$$?; \
 	  grep -E '^(tb_ddr_litedram|FAIL)' $(DDR_OUT)/litedram.$$s.txt | grep -v ': PASS (' | sed 's/^/  /'; \
 	  [ $$st -eq 0 ] || { echo "test-ddr-litedram: FAIL (seed $$s)"; exit 1; }; done
-	$(Q)$(DDR_OUT)/tb_ddr_litedram --test random --seed 3 --count 3000 --sys-ns 40 --ui-ns 10 --jitter 0.3 \
+	$(Q)$(DDR_OUT)/tb_ddr_litedram --test random --seed 3 --count 3000 --sys-ns 40 --ui-ns 12.5 --jitter 0.3 \
 	  > $(DDR_OUT)/litedram.jitter.txt 2>&1 || { cat $(DDR_OUT)/litedram.jitter.txt; exit 1; }
 	@grep -E '^tb_ddr_litedram: [a-z]' $(DDR_OUT)/litedram.jitter.txt | sed 's/^/  /'
 	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"
 
 check-openflow: test-ddr-litedram litedram-check
+
+# The generation in eight Python processes that differ in what moves LiteX's objects in memory
+# (PYTHONHASHSEED, environment, paths, working directory): one set of files, the locked one.
+litedram-repro: litedram-gen
+	$(Q)sh ip/litedram/repro.sh
 
 # Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
 test-ddr-mutants:

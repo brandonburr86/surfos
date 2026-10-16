@@ -55,6 +55,14 @@ HANDOFF = 'at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)'
 DOCS = '/sd0p1/USERS/DOCUMENTS'
 
 
+def surfboot_version():
+    """SurfBoot's version as its banner prints it, from firmware/surfboot/version.h (1.1.0 since round
+    ddr-3), so the banner check follows the ROM this test boots"""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'firmware', 'surfboot', 'version.h')
+    v = dict(re.findall(r'#define SURFBOOT_VERSION_(MAJOR|MINOR|PATCH) (\d+)', open(p).read()))
+    return '%s.%s.%s' % (v['MAJOR'], v['MINOR'], v['PATCH'])
+
+
 def rx(text):
     """text as an ECMAScript regular expression (std::regex): only its special characters escaped"""
     return re.sub(r'([\\^$.|?*+()\[\]{}])', r'\\\1', text)
@@ -242,7 +250,7 @@ def main():
         return r['out']
 
     def boot_checks(out, what):
-        check(re.search(r'SurfBoot 1\.0\.0 \(build [0-9a-f]{8}[^)]*\), the SurfCPU boot ROM', out) and
+        check(re.search(r'SurfBoot %s \(build [0-9a-f]{8}[^)]*\), the SurfCPU boot ROM' % re.escape(surfboot_version()), out) and
               re.search(r'ddr: calibrated after \d+ ms, 256 MiB, quick test passed', out) and
               re.search(r'sd: SDHC/SDXC, 64 MiB; ready after \d+ ms; SPI \d+ kHz, data CRC checked', out) and
               'fat32: partition 1 (type 0x0c) at sector 2048' in out,

@@ -211,20 +211,13 @@ signals.
 | `ddr3_dqs_n[0]` | DDR3L LDQS# (strobe, complement) | N1 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_n[0]` | unverified (U9) |
 | `ddr3_dqs_n[1]` | DDR3L UDQS# (strobe, complement) | V2 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_n[1]` | unverified (U9) |
 
-The memory controller's own serial console (LiteDRAM's calibration BIOS, 115200 8N1, output only):
-
-| Port | Adapter pin | Board pin | FPGA pin | Dir | I/O standard | Options | Master XDC | Status |
-|---|---|---|---|---|---|---|---|---|
-| `dram_uart_tx` | a 3.3 V USB-serial adapter's RXD (optional) | ChipKit header IO1 (the Arduino layout's TX; 200 Ω series resistor, RM §11.1) | U16 | out | LVCMOS33 | - | `ck_io1` | checked |
-
-Nothing needs to be connected to IO1: the controller calibrates and reports through
-`sysinfo.DDR_STATUS` either way. With a 3.3 V adapter on IO1 and ground, its log shows what
-calibration found (BOARD.md section 12).
+The DDR designs have no second console: until round ddr-3 LiteDRAM's calibration BIOS printed
+on ChipKit IO1 (`dram_uart_tx`); now SurfCPU initializes and levels the memory itself and prints
+what it found on the board's own UART (BOARD.md section 12), so IO1 is unassigned again.
 
 ### 2.6 Pins that are deliberately not used
 
-Pmod pins without a signal (JA10, JC9, JC10, JD7..JD10), the ChipKit header (but IO1 in the DDR
-designs), Ethernet and the quad-SPI flash pins are left unassigned, and so is every DDR3L pin
+Pmod pins without a signal (JA10, JC9, JC10, JD7..JD10), the ChipKit header, Ethernet and the quad-SPI flash pins are left unassigned, and so is every DDR3L pin
 (bank 34) in the designs without DDR: Vivado's default for unused pins is a weak pull-down, and
 the DDR3L's RESET# has its own 4.7 kΩ pull-down (SCH sheet 9), so the memory stays in reset while
 `HAS_DDR = 0`.
@@ -241,7 +234,7 @@ the DDR3L's RESET# has its own 4.7 kΩ pull-down (SCH sheet 9), so the memory st
 | U6 | Adapter models and revisions | the tables follow Pmod MicroSD rev. A (A.1 schematic), Pmod VGA rev. C, Pmod PS2 rev. C; another revision could differ | owner: the labels (INVENTORY.md G4) |
 | U7 | The Arty's JP2 (CK_RST to the FT2232) | shorted, JP2 lets the FT2232's DTR line drive the RESET net (RM §8, §11). **Seen on the owner's board on 2026-10-16**, which came with JP2 fitted: raising DTR pulses RESET (the baseline's count starts again at 1, and the design runs on while DTR stays raised), and the system raises DTR whenever a program opens the port; dropping DTR, and RTS either way, do nothing. With JP2 off, neither line does anything (the count ran on through every change) | owner: take JP2 off (done on 2026-10-16) |
 | U8 | Which way up the 12-pin Pmod MicroSD goes into JA | The right way up (component side up) its pin 1 (~CS) meets JA1, as the table assumes. Upside down, adapter pin p meets JA pin 13 - p: the card's 3.3 V net lands on `sd_cs_n` (an FPGA output) and `sd_dat1`, its ground on `sd_mosi` (an output) and `sd_dat2`, and the Arty's 3.3 V and ground drive the card's ~CS, MOSI, DAT1 and DAT2 pins directly. The 200 Ω resistors on JA limit each FPGA pin to about 16 mA, but the card is then powered through FPGA outputs with its own pins driven from the board's supply, which can damage the card | owner: with the board unpowered and no card in the slot, plug it in component side up, pin 1 at JA pin 1, and check that before powering; insert a card only then. Bring it up after the baseline design, which leaves JA unassigned |
-| U9 | The DDR3L pins' electrical settings and the memory part | the pins come from Digilent's MIG project and agree with LiteX's Arty platform; the termination (40 Ω here, 50 Ω in the MIG project), the slew and the internal VREF are LiteX's choices; Digilent's files are for board revision E.0 and the MT41K128M16 family (INVENTORY.md G1) | only calibration on the board shows they work: CALIB_DONE in `sysinfo.DDR_STATUS`, the controller's log on IO1, then the BRAM diagnostics' DDR tests (BOARD.md section 12) |
+| U9 | The DDR3L pins' electrical settings and the memory part | the pins come from Digilent's MIG project and agree with LiteX's Arty platform; the termination (40 Ω here, 50 Ω in the MIG project), the slew and the internal VREF are LiteX's choices; Digilent's files are for board revision E.0 and the MT41K128M16 family (INVENTORY.md G1) | only calibration on the board shows they work: the read leveling's windows that the BRAM diagnostics print, CALIB_DONE in `sysinfo.DDR_STATUS`, then their DDR tests (BOARD.md section 12) |
 
 ## 4. The PS/2 supply: questions for the owner
 

@@ -53,11 +53,14 @@ lint-soc:
 	$(Q)for f in $(SOC_BUS_RTL) $(SOC_MEM_RTL); do \
 	  $(SOC_VLINT) --top-module $$(basename $$f .v) $(SOC_BUS_RTL) $(SOC_MEM_RTL) || exit 1; done
 	$(Q)$(SOC_VLINT) --top-module surf_interconnect -GHAS_DDR=0 $(SOC_BUS_RTL)
+	$(Q)$(SOC_VLINT) --top-module surf_interconnect -GHAS_DDRC=1 $(SOC_BUS_RTL)
 	$(Q)for f in $(SOC_PER_RTL); do \
 	  $(SOC_VLINT) --top-module $$(basename $$f .v) $$f $(SOC_LIB_RTL) || exit 1; done
 	$(Q)$(SOC_IVERILOG) -o /dev/null $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(SOC_PER_RTL) $(SOC_LIB_RTL)
 	$(Q)$(SOC_VLINT) --top-module surfcpu_soc $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
 	$(Q)$(SOC_VLINT) --top-module surfcpu_soc -GHAS_DDR=0 $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
+	$(Q)$(SOC_VLINT) --top-module surfcpu_soc -GDDR_SWINIT=1 $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
+	$(Q)$(SOC_VLINT) --top-module surfcpu_soc -GHAS_DDR=0 -GDDR_SWINIT=1 $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
 	$(Q)$(SOC_VLINT) --top-module surfcpu_soc -DSURFCPU_RVFI $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
 	$(Q)$(SOC_VLINT) --top-module surfcpu_soc $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC)
 	$(Q)for b in spi ps2 video; do $(SOC_VLINT) --top-module surf_$$b sim/soc/stubs/surf_$$b.v || exit 1; done
@@ -77,6 +80,14 @@ $(SOC_DIR)/tb_sysinfo.vvp: sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.
 $(SOC_DIR)/tb_sysinfo_noddr.vvp: sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.v $(SOC_BFM)
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_sysinfo -Ptb_sysinfo.DDR=0 -o $@ $^
+
+$(SOC_DIR)/tb_sysinfo_swinit.vvp: sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.v $(SOC_BFM)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_sysinfo -Ptb_sysinfo.SWINIT=1 -o $@ $^
+
+$(SOC_DIR)/tb_sysinfo_swinit_noddr.vvp: sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.v $(SOC_BFM)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_sysinfo -Ptb_sysinfo.DDR=0 -Ptb_sysinfo.SWINIT=1 -o $@ $^
 
 $(SOC_DIR)/tb_timer.vvp: sim/soc/tb/tb_timer.v rtl/peripherals/surf_timer.v $(SOC_BFM)
 	@mkdir -p $(dir $@)
@@ -123,6 +134,10 @@ $(SOC_DIR)/tb_interconnect.vvp: $(SOC_IC_TB_SRC)
 $(SOC_DIR)/tb_interconnect_noddr.vvp: $(SOC_IC_TB_SRC)
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_interconnect -Ptb_interconnect.HAS_DDR=0 -o $@ $(SOC_IC_TB_SRC)
+
+$(SOC_DIR)/tb_interconnect_ddrc.vvp: $(SOC_IC_TB_SRC)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_interconnect -Ptb_interconnect.HAS_DDRC=1 -o $@ $(SOC_IC_TB_SRC)
 
 # ---------------------------------------------------------------------------- the SoC, scripted
 SOC_SCRIPTS  := soc_regions soc_errors soc_random soc_periph
@@ -177,7 +192,8 @@ test-soc-system: $(SOC_SYS_DEPS)
 	@echo "  [tb_soc_negative] the three wrong expectations were reported"
 	@echo "test-soc-system: PASS (seeds $(SOC_SEEDS); core: scripted stand-in; io: $(SOC_IO_SRC))"
 
-SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_interconnect.vvp tb_interconnect_noddr.vvp tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
+SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_interconnect.vvp tb_interconnect_noddr.vvp tb_interconnect_ddrc.vvp \
+                 tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp tb_sysinfo_swinit.vvp tb_sysinfo_swinit_noddr.vvp \
                  tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp tb_gpio.vvp tb_gpio_real.vvp \
                  tb_mem.vvp tb_mem_empty.vvp rom_b.mem)
 
@@ -185,6 +201,8 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_intc.vvp,tb_intc)
 	$(call soc_run,$(SOC_DIR)/tb_sysinfo.vvp,tb_sysinfo)
 	$(call soc_run,$(SOC_DIR)/tb_sysinfo_noddr.vvp,tb_sysinfo_noddr)
+	$(call soc_run,$(SOC_DIR)/tb_sysinfo_swinit.vvp,tb_sysinfo_swinit)
+	$(call soc_run,$(SOC_DIR)/tb_sysinfo_swinit_noddr.vvp,tb_sysinfo_swinit_noddr)
 	$(call soc_run,$(SOC_DIR)/tb_timer.vvp,tb_timer)
 	$(call soc_run,$(SOC_DIR)/tb_timer_frac.vvp,tb_timer_frac)
 	$(call soc_run,$(SOC_DIR)/tb_uart.vvp,tb_uart)
@@ -192,6 +210,7 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_mem.vvp,tb_mem)
 	$(call soc_run,$(SOC_DIR)/tb_interconnect.vvp,tb_interconnect)
 	$(call soc_run,$(SOC_DIR)/tb_interconnect_noddr.vvp,tb_interconnect_noddr)
+	$(call soc_run,$(SOC_DIR)/tb_interconnect_ddrc.vvp,tb_interconnect_ddrc)
 	$(Q)$(MAKE) --no-print-directory SOC_SEEDS=1 soc-gpio-real soc-mem-once
 	@echo "test-soc-units: PASS (seeds $(SOC_SEEDS))"
 
@@ -237,9 +256,10 @@ SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O3 --x-assign fast --to
                    -CFLAGS "-std=c++17 -O2 -DSURFCPU_RVFI -I$(CURDIR)/sim/models \
                    -I$(CURDIR)/firmware/include"
 SOC_SIM_MODELS  := $(SOC_MODEL_SRC) sim/models/sdcard_model.cpp sim/models/ps2_keyboard_model.cpp \
-                   sim/models/vga_capture.cpp
+                   sim/models/vga_capture.cpp sim/models/ddrc_model_glue.cpp
 SOC_SIM_HDR     := $(SOC_MODEL_HDR) sim/models/sdcard_model.h sim/models/ps2_keyboard_model.h \
-                   sim/models/vga_capture.h $(SOC_GEN_H) rtl/generated/surfcpu_soc.vh
+                   sim/models/vga_capture.h $(SOC_GEN_H) rtl/generated/surfcpu_soc.vh \
+                   firmware/tests/ddrc_model.h firmware/tests/ddrc_model.c
 SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_SIM_MODELS)
 
 # the build identity is compiled into surfsim (sysinfo) and into the scripts that check it:
@@ -507,7 +527,7 @@ test-soc-system-boot test-soc-system-selftest:
 endif
 
 # ---------------------------------------------------------------------------- the tests' own check
-# 37 one-line bugs planted in copies of the RTL (sim/soc/tools/mutants.py); the unit testbench
+# 41 one-line bugs planted in copies of the RTL (sim/soc/tools/mutants.py); the unit testbench
 # covering each must fail. Not part of test-soc (a few minutes); run it after changing tests.
 test-soc-mutants: $(SOC_DIR)/rom_a.mem
 	$(Q)$(PYTHON) sim/soc/tools/mutants.py --jobs 2

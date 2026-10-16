@@ -243,7 +243,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
-    [ -z "$seed" ] || set -- "$@" --seed "$seed"
+    [ -z "$seed" ] || set -- "$@" --seed "$(echo "$seed" | tr ' ' ',')"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
         --manifest-include "${head#"$root"/}" "$@" $sources
@@ -283,6 +283,14 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         fi
         echo "dsp_mode = \"safe\""
         echo "exit_status = $1"
+        # the placer seed the bitstream comes from, and every placement attempt (seeds.txt)
+        if [ -f "$ox/seeds.txt" ]; then
+            seed_used=$(sed -n 's/^seed \([0-9]*\): pass,.*/\1/p' "$ox/seeds.txt" | tail -n 1)
+            [ -z "$seed_used" ] || echo "placer_seed = $seed_used"
+            printf 'placer_attempts = ['
+            while IFS= read -r l; do printf '\n    %s,' "$(toml_str "$l")"; done < "$ox/seeds.txt"
+            printf '\n]\n'
+        fi
         for c in synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
                  "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
             name=${c%%:*}
@@ -445,8 +453,8 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
-seed=$(items seed)                                      # the open flow's placer seed (default 1)
-case "$seed" in *[!0-9]*) die "$design: seed must be a number" ;; esac
+seed=$(items seed | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')   # the open flow's placer seeds (default 1),
+case "$seed" in *[!0-9\ ]*) die "$design: seed must be a number or numbers" ;; esac   # tried in turn
 set +f
 
 # The boot ROM: the design list's "rom FILE INSTANCE" (FILE relative to surfcpu/), or ROM=.
@@ -535,7 +543,7 @@ write_head() {    # the keys known before the run, the same for every flow
         echo "source_dirty = $( [ "$dirty" = 1 ] && echo true || echo false )"
         echo "build_id = \"$build_id\""
         echo "build_time = $build_time"
-        echo "placer_seed = ${seed:-1}"
+        printf 'placer_seeds = ['; for sd in ${seed:-1}; do printf '%s, ' "$sd"; done; echo ']'
         echo "sources_sha256 = \"$(cat_sha $sources)\""
         printf 'defines = ['; for d in $defines; do printf '"%s", ' "$d"; done; echo ']'
         printf 'generated_lists = ['; for l in $gens; do printf '"%s", ' "$l"; done; echo ']'

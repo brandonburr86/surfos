@@ -6,14 +6,15 @@ File: tb_litedram_top.v Date: 10/16/26 (SurfCPU)
 surf_ddr_bridge -> surf_ddr_litedram_adapter -> litedram_sim, the LiteDRAM core generated from
 the board's own configuration ip/litedram/arty.yml with --sim (ip/litedram/generate.sh: the same
 controller settings, command buffers and native port as the bitstream's core, LiteDRAM's
-behavioural DRAM model in place of the Artix-7 PHY, no calibration CPU). The SurfBus side has the
-bridge's sys-side ports, so tb_ddr_litedram.cpp drives it with the same bench as the MIG model.
-ui_clk is LiteDRAM's clock (its user_clk follows it). Where the board's core runs its BIOS,
-this top writes the BIOS's last step over the core's Wishbone control port when init_go is 1
+behavioural DRAM model in place of the Artix-7 PHY; like the board's core, no CPU). The SurfBus
+side has the bridge's sys-side ports, so tb_ddr_litedram.cpp drives it with the same bench as
+the MIG model. ui_clk is LiteDRAM's clock (its user_clk follows it). Where the firmware
+initializes the board's core (firmware/common/ddrinit.c, through surf_ddr_csr), this top writes
+the initialization's last step over the core's Wishbone control port when init_go is 1
 (control-bus addresses from the generated csr.csv: 0 ddrctrl_init_done, 4 ddrctrl_init_error):
 init_done = 1 after a good calibration, or with init_fail init_error = 1 and then init_done = 1,
-the order in which liblitedram's sdram_init reports a failed memory test. As on the board, the
-native port stays blocked until init_done is 1 with init_error 0. Simulation only.
+the order in which ddrinit.c (as liblitedram's sdram_init) reports a failed leveling. As on the
+board, the native port stays blocked until init_done is 1 with init_error 0. Simulation only.
 */
 module tb_litedram_top #(
     parameter integer TIMEOUT_CYCLES       = 512,

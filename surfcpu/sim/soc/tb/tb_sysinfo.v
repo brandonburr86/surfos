@@ -1,20 +1,22 @@
 /*
 SurfCPU surf_sysinfo testbench
 --------------------
-File: tb_sysinfo.v Date: 10/15/26 (SurfCPU)
+File: tb_sysinfo.v Date: 10/16/26 (SurfCPU)
 --------------------
 Icarus testbench for the system information block through the SurfBus BFM: every register
 against the parameters given (with junk in the undefined BUILD_FLAGS and FEATURES bits to
 check they read 0), DDR_STATUS following the calibration inputs, PRESENT from FEATURES.DDR,
 TIMEOUT latched from a one-cycle pulse and cleared only by reset, SCRATCH read/write, writes
 to read-only registers ignored, and the error rules. The tb parameter DDR selects whether
-FEATURES has the DDR bit. +seed=N. Prints PASS or stops with $fatal.
+FEATURES has the DDR bit, SWINIT the sysinfo's DDR_SWINIT (DDR_STATUS.SWINIT, set only with the
+DDR bit). +seed=N. Prints PASS or stops with $fatal.
 */
 `timescale 1ns/1ps
 module tb_sysinfo;
     `include "surfcpu_soc.vh"
 
     parameter integer DDR = 1;
+    parameter integer SWINIT = 0;
 
     localparam [31:0] P_BOARD   = 32'h0000_0135;
     localparam integer P_SYS    = 12345678;
@@ -47,7 +49,8 @@ module tb_sysinfo;
         .rsp_valid(rsp_valid), .rsp_rdata(rsp_rdata), .rsp_err(rsp_err));
     surf_sysinfo #(
         .BOARD_ID(P_BOARD), .SYS_HZ(P_SYS), .PIX_HZ(P_PIX), .BUILD_ID(P_BUILD),
-        .BUILD_FLAGS(P_FLAGS), .BUILD_TIME(P_TIME), .FEATURES(P_FEAT), .DDR_SIZE(P_DDRSIZE)
+        .BUILD_FLAGS(P_FLAGS), .BUILD_TIME(P_TIME), .FEATURES(P_FEAT), .DDR_SIZE(P_DDRSIZE),
+        .DDR_SWINIT(SWINIT)
     ) dut (
         .clk(clk), .rst(rst),
         .s_req_valid(req_valid), .s_req_ready(req_ready), .s_req_addr(req_addr),
@@ -69,6 +72,7 @@ module tb_sysinfo;
             ddr_status[SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB] = fail;
             ddr_status[SURF_SYSINFO_DDR_STATUS_PRESENT_LSB]    = (DDR != 0);
             ddr_status[SURF_SYSINFO_DDR_STATUS_TIMEOUT_LSB]    = to;
+            ddr_status[SURF_SYSINFO_DDR_STATUS_SWINIT_LSB]     = (DDR != 0) && (SWINIT != 0);
         end
     endfunction
 
@@ -186,8 +190,8 @@ module tb_sysinfo;
             errors = errors + 1;
         end
         if (errors) $fatal(1, "tb_sysinfo: %0d errors", errors);
-        $display("tb_sysinfo: PASS (DDR=%0d, %0d transfers, %0d error responses checked)",
-                 DDR, mon.accepts, nerr_checks);
+        $display("tb_sysinfo: PASS (DDR=%0d SWINIT=%0d, %0d transfers, %0d error responses checked)",
+                 DDR, SWINIT, mon.accepts, nerr_checks);
         $finish;
     end
 endmodule

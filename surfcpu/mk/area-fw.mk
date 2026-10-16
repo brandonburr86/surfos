@@ -58,7 +58,7 @@ FW_LD_DEPS := firmware/common/rom.ld firmware/common/ram.ld firmware/ld/surfcpu_
 # ---- SurfBoot ----
 SURFBOOT_SRC := main.c boot.c sd.c fat32.c image.c monitor.c sberr.c port_surf.c handoff.S
 SURFBOOT_OBJ := $(FW_OBJ)/common/start_rom.o $(patsubst %,$(FW_OBJ)/surfboot/%.o,$(SURFBOOT_SRC)) \
-                $(FW_COMMON_OBJ)
+                $(FW_OBJ)/common/ddrinit.c.o $(FW_COMMON_OBJ)
 
 $(FW)/surfboot.elf: $(SURFBOOT_OBJ) firmware/surfboot/surfboot.ld $(FW_LD_DEPS)
 	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/surfboot/surfboot.ld -Wl,-Map,$(FW)/surfboot.map \
@@ -80,7 +80,7 @@ build-fw-rom: $(FW)/surfboot.mem $(FW)/surfboot.bin $(FW)/bramdiag.mem $(FW)/bra
 # ---- the diagnostics: the BRAM program (a ROM image) and the DDR diagnostic (a SURFOS.BIN) ----
 DIAG_SRC     := diagnostics/report.c diagnostics/cputest.c diagnostics/ddrtest.c diagnostics/probes.S
 BRAMDIAG_OBJ := $(FW_OBJ)/common/start_rom.o $(patsubst %,$(FW_OBJ)/%.o,diagnostics/bramdiag.c $(DIAG_SRC)) \
-                $(FW_COMMON_OBJ)
+                $(FW_OBJ)/common/ddrinit.c.o $(FW_COMMON_OBJ)
 DDRDIAG_OBJ  := $(FW_OBJ)/common/start_ram.o $(patsubst %,$(FW_OBJ)/%.o,diagnostics/ddrdiag.c $(DIAG_SRC)) \
                 $(FW_COMMON_OBJ)
 
@@ -114,10 +114,10 @@ $(FW)/HELLO.BIN: $(FW)/hello.elf tools/surfimg.py
 
 # ---- the firmware emulator ----
 $(FW)/host/surfemu: firmware/tests/surfemu.c firmware/tests/sdcard_sim.c firmware/tests/sdcard_sim.h \
-                    firmware/include/surfcpu/soc.h
+                    firmware/tests/ddrc_model.c firmware/tests/ddrc_model.h firmware/include/surfcpu/soc.h
 	@mkdir -p $(dir $@)
 	$(Q)$(FW_HOST_CC) -std=gnu11 -O2 -g -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/tests \
-	  firmware/tests/surfemu.c firmware/tests/sdcard_sim.c -o $@
+	  firmware/tests/surfemu.c firmware/tests/sdcard_sim.c firmware/tests/ddrc_model.c -o $@
 
 # ---- host build of the portable code, with the sanitizers ----
 FW_HOST_CC     ?= gcc
@@ -126,8 +126,9 @@ FW_HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Werror -DSURF_HOST=1 -fno-omi
                   -Ifirmware/include -Ifirmware/common -Ifirmware/surfboot -Ifirmware/tests
 FW_PORTABLE    := firmware/surfboot/sd.c firmware/surfboot/fat32.c firmware/surfboot/image.c \
                   firmware/surfboot/boot.c firmware/surfboot/monitor.c firmware/surfboot/sberr.c \
-                  firmware/common/fmt.c firmware/common/crc32.c
-FW_HOST_SRC    := $(FW_PORTABLE) firmware/tests/sdcard_sim.c firmware/tests/port_host.c firmware/tests/fwtest.c
+                  firmware/common/fmt.c firmware/common/crc32.c firmware/common/ddrinit.c
+FW_HOST_SRC    := $(FW_PORTABLE) firmware/tests/sdcard_sim.c firmware/tests/ddrc_model.c firmware/tests/port_host.c \
+                  firmware/tests/fwtest.c
 FW_HOST_HDR    := $(wildcard firmware/surfboot/*.h firmware/common/*.h firmware/tests/*.h firmware/include/surfcpu/*.h)
 
 $(FW)/host/fwtest: $(FW_HOST_SRC) $(FW_HOST_HDR)

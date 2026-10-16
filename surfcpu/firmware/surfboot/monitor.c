@@ -112,8 +112,9 @@ static void cmd_info(struct sb_state *s)
     say("clocks: sys %u Hz, timebase %u Hz, pixel %u Hz; features %02x (uart timer irq gpio spi ps2 "
         "video ddr)\n", port_sysinfo(SURF_SYSINFO_SYS_HZ), port_timebase_hz(),
         port_sysinfo(SURF_SYSINFO_PIX_HZ), feat);
-    say("ddr: status %x (%s%s%s%s), size %u MiB%s\n", st,
+    say("ddr: status %x (%s%s%s%s%s), size %u MiB%s\n", st,
         (st & SURF_SYSINFO_DDR_STATUS_PRESENT_MASK) ? "present" : "absent",
+        (st & SURF_SYSINFO_DDR_STATUS_SWINIT_MASK) ? ", software init" : "",
         (st & SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK) ? ", calibrated" : "",
         (st & SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK) ? ", calibration failed" : "",
         (st & SURF_SYSINFO_DDR_STATUS_TIMEOUT_MASK) ? ", watchdog timeout seen" : "",
@@ -411,9 +412,15 @@ int sb_monitor_line(struct sb_state *s, char *line)
         cmd_info(s);
     } else if (!strcmp(cmd, "ddr")) {
         s->ddr_ok = 0;
-        if (need_ddr(s) == 0)
+        if (need_ddr(s) == 0) {
+            if (s->ddr_leveled) {
+                char d[120];
+                sb_ddr_describe(s, d, sizeof d);
+                say("ddr: initialized by SurfBoot, %s\n", d);
+            }
             say("ddr: calibrated after %u ms, %u MiB, quick test passed\n", s->ddr_wait_us / 1000u,
                 s->ram_size >> 20);
+        }
     } else if (!strcmp(cmd, "sd")) {
         cmd_sd(s);
     } else if (!strcmp(cmd, "part")) {

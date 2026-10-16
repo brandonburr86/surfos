@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 1, SoC version 0.1.0.
+ * SurfCPU memory map version 2, SoC version 0.2.0.
  */
 
 /* Symbols for every region and reservation; INCLUDE this before SECTIONS. */
@@ -26,6 +26,8 @@ SURF_SYSINFO_BASE = 0x10007000;
 SURF_SYSINFO_SIZE = 0x00001000;
 SURF_ETH_BASE = 0x10008000;
 SURF_ETH_SIZE = 0x00001000;
+SURF_DDRC_BASE = 0x1000A000;
+SURF_DDRC_SIZE = 0x00002000;
 SURF_TEXTRAM_BASE = 0x20000000;
 SURF_TEXTRAM_SIZE = 0x00004000;
 SURF_DDR_BASE = 0x80000000;

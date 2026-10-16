@@ -10,18 +10,28 @@ SD/FAT/image code natively against card images, the RV32 ROM images in a firmwar
 and the SD code against the io track's pin-level card model. Nothing has run on the RTL SoC
 (that comes at integration, in `surfsim`) or on the board. Physical results are **pending**.
 
+**SurfBoot 1.1.0 (2026-10-16, round ddr-3).** The open flow's DDR designs build LiteDRAM
+without its own calibration CPU (DDR.md): their `sysinfo.DDR_STATUS.SWINIT` is 1, and SurfBoot
+and the BRAM diagnostics initialize the DDR3L and level its read path themselves, through the
+DDR controller's registers (the `ddrc` region), with `firmware/common/ddrinit.c`, LiteX's
+`sdram_init` and read leveling ported (section 5, step 3). Tested in the host model, in the
+emulator and in the RTL simulation of the DDR top against LiteDRAM's own controller; on the
+board, **pending**. With SWINIT 0 (the MIG, the simulation models) nothing changed.
+
 ## 1. Layout
 
 ```
 firmware/common/       start-up, traps and the fault reporter, UART, VGA text console, timer,
-                       LEDs, printf (fmt.c), CRC-32, string functions, rom.ld, ram.ld
+                       LEDs, printf (fmt.c), CRC-32, string functions, rom.ld, ram.ld;
+                       ddrinit.c, ddrinit.h, ddrinit_phy.h (the DDR initialization)
 firmware/surfboot/     SurfBoot: main.c, boot.c, sd.c, fat32.c, image.c, monitor.c, sberr.c,
                        port.h (the platform interface), port_surf.c (the SoC side), handoff.S
 firmware/diagnostics/  bramdiag.c (milestone 3, a ROM image), ddrdiag.c (a SURFOS.BIN),
                        cputest.c, ddrtest.c, probes.S, report.c
 firmware/tests/        host tests: fwtest.c, port_host.c, sdcard_sim.c, surfemu.c (emulator),
-                       hello/ (handoff test kernel), iomodel_glue.cpp, run_tests.py,
-                       run_emu.py, test_tools.py, deploy/ (fake diskutil and mount)
+                       ddrc_model.c (LiteDRAM behind the ddrc registers), hello/ (handoff test
+                       kernel), iomodel_glue.cpp, run_tests.py, run_emu.py, test_tools.py,
+                       deploy/ (fake diskutil and mount)
 tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-sd.py
 ```
 
@@ -31,9 +41,9 @@ tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-s
 
 | File | What | Size |
 |---|---|---|
-| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 40,084 bytes, **61.2 %** of the 64 KiB ROM (code 25,000, constants 15,084) |
-| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,936 bytes, 42.6 % |
-| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 14,992 bytes |
+| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 43,680 bytes, **66.7 %** of the 64 KiB ROM (1.1.0, a clean build; 1.0.0 was 40,084: the DDR initialization takes about 3.6 KB) |
+| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 31,392 bytes, 47.9 % |
+| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 15,012 bytes |
 | `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,340 bytes |
 
 The sizes are for a build from a clean tree; with uncommitted changes the banner's
@@ -114,9 +124,10 @@ green LEDs on and LD0 green (pass) or red (fail).
 ### Boot sequence
 
 ```
-SurfBoot 1.0.0 (build 1cd47417), the SurfCPU boot ROM
-soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 0123abcd
-ddr: calibrated after 129 ms, 256 MiB, quick test passed (data, address, byte lanes)
+SurfBoot 1.1.0 (build 1cd47417), the SurfCPU boot ROM
+soc: Arty A7-100T (0x100), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 0123abcd
+ddr: initialized by SurfBoot, read leveling lane 0: bitslip 3, delay 16 (window +-10); lane 1: bitslip 5, delay 15 (window +-5)
+ddr: calibrated after 240 ms, 256 MiB, quick test passed (data, address, byte lanes)
 sd: SDHC/SDXC, 29.7 GiB; ready after 230 ms; SPI 6250 kHz, data CRC checked
 fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973808 clusters, label "SURFOS"
 boot: /BOOT/SURFOS.BIN
@@ -127,7 +138,8 @@ boot: command line "console=uart"
 boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
 ```
 
-(The sizes and times above are illustrative; the emulator's real transcripts are in
+(The sizes, times and leveling above are illustrative: the leveling line is the host model's
+windows, and there is no such line where SWINIT is 0; the emulator's real transcripts are in
 `docs/evidence/fw/`.)
 
 1. **Banner and self-tests.** The identity registers (a wrong `sysinfo.MAGIC` or memory map
@@ -137,7 +149,22 @@ boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x4946525
    below stays bounded, if approximate.
 2. **Buttons**, read 20 ms after reset (after the debouncers settle): **BTN1** held = stay in
    the monitor; **BTN0** held = boot `/BOOT/BACKUP.BIN` (only that one).
-3. **DDR**: `DDR_STATUS.PRESENT` must be set; `CALIB_DONE` is awaited for at most **2 s**
+3. **DDR**: `DDR_STATUS.PRESENT` must be set. With `DDR_STATUS.SWINIT` set (LiteDRAM
+   without its CPU) SurfBoot first initializes the controller through the `ddrc` registers
+   (`firmware/common/ddrinit.c`: LiteX 2026.08's `sdram_init`, its generated
+   `init_sequence()` and its exhaustive read leveling, ported; DDR.md section 10): the PHY
+   reset, the DDR3L's reset, CKE, mode registers MR2, MR3, MR1, MR0 and ZQ calibration, then
+   for each byte lane every bitslip (8) and read delay (32 taps) scanned with three
+   pseudo-random bursts, the bitslip with the best score chosen and its delay set to the
+   middle of the widest working window and checked, and the controller given the DRAM back
+   with `init_done` (and `init_error` when a lane has no working delay). This takes about
+   0.2 s at 25 MHz and logs one line, `ddr: initialized by SurfBoot, read leveling lane 0:
+   bitslip B, delay D (window +-W); lane 1: ...`; a lane without a window stops with
+   DDR_CALIB, the lanes named; a `CALIB_FAIL` already set (the bridge's 1.5 s from reset
+   passed) stops at once. A PHY whose phase registers do not read back (LiteDRAM's DRAM
+   model in simulation) is initialized without leveling, as LiteX does for a PHY that is
+   not read-leveling capable, and the line says so. Then, and without SWINIT straight away,
+   `CALIB_DONE` is awaited for at most **2 s**
    (`CALIB_FAIL` stops at once); `DDR_SIZE` must be a whole number of MiB up to 256 MiB; then
    a quick destructive test (walking one and zero on the data lines, a distinct word at every
    power-of-two offset for the address lines, byte and halfword lanes). `ram_size` in the
@@ -235,8 +262,8 @@ card-detect switch closing, stable for 250 ms) retries the boot by itself.
 | `boot [PATH]` | boot `/BOOT/SURFOS.BIN` (BACKUP.BIN if it fails), or the 8.3 path given (for example `boot /BOOT/DDRDIAG.BIN`) |
 | `backup` | boot `/BOOT/BACKUP.BIN` |
 | `check PATH` | every package check, loading it into DDR, without starting it |
-| `info` | board, SoC, clocks, DDR and card state, the last boot failure |
-| `ddr` | wait for calibration again and rerun the quick test |
+| `info` | board, SoC, clocks, DDR (with `software init` when SWINIT is set) and card state, the last boot failure |
+| `ddr` | initialize the controller again when SWINIT is set (and print the leveling), wait for calibration again and rerun the quick test |
 | `sd` | initialize the card again: type, addressing, OCR, CSD capacity, CID |
 | `part` / `fs` | the MBR partition table / the FAT32 volume's geometry |
 | `ls [PATH]`, `cat PATH [N]`, `chain PATH` | list a directory; print a file; show a file's clusters by fragment |
@@ -257,9 +284,13 @@ the reserved eth window, stores to the ROM and halfword to MMIO, fetches from un
 MMIO and text RAM, a JALR and a branch to 2-aligned targets; each with its exact `mcause`,
 `mtval` and `mepc`, and no register or memory changed); interrupts (software, timer ticking
 10 x 1 ms, external from the UART, priority MEI > MSI > MTI, MIE gating, WFI, the timer rate
-against `mcycle`); FENCE.I on code written to scratch RAM; DDR when calibrated (milestone 4:
+against `mcycle`); FENCE.I on code written to scratch RAM; with SWINIT, the DDR
+initialization (as SurfBoot's, printing every lane's scan: one line per bitslip with a 1 for
+each of the 32 delays that read the patterns back, then each lane's choice and the time;
+checks: each lane has a window, the leveling succeeded); DDR when calibrated (milestone 4:
 all the DDR tests below, from the ROM, including code copied from the ROM into DDR and run
-there). It ends `BRAMDIAG: PASS (569 checks)` (in the emulator) or `BRAMDIAG: FAIL (...)`, then
+there). It ends `BRAMDIAG: PASS (572 checks)` (in the emulator, with SWINIT) or
+`BRAMDIAG: FAIL (...)`, then
 echoes UART input (Ctrl-R runs it all again). A stray trap fails its section and the rest
 still runs.
 
@@ -287,13 +318,13 @@ Its hot loops run from scratch RAM (`.fast`). The command line picks the depth: 
 
 ## 8. Tests (`make test-fw`)
 
-| Part | What | Result (2026-10-15) |
+| Part | What | Result (2026-10-16) |
 |---|---|---|
 | `test-fw-unit` | CRC-32 vectors, CRC-7/CRC-16 of known frames, printf conversions, 8.3 names, CSD parsing, SPI dividers | pass |
 | `test-fw-tools` | `test_tools.py`: 21 tests (section 7's tools, fsck.fat and mtools on 8 image layouts, isa-audit on 7 bad programs and on the same kind of encodings hidden as `.word` data, the `.text.probes` rule, deploy-sd against a stand-in with a model of the Mac's cache: symbolic links, device binding, every refusal, damage caught only by the remount, unmount and mount failures; Python and C package checks agreeing on 79 packages, 98 verdicts with 256 and 64 MiB of DDR; the Mac tools parsing as Python 3.9) | 21 pass |
-| `test-fw-scenarios` | `run_tests.py`: the portable SurfBoot code under ASan/UBSan on the simulated board, 141 card scenarios (the brief's storage list and more), then 5 seeds x 300 runs of random metadata damage | 141 pass; fuzzing: every run ends with a result |
-| `test-fw-emu` | `run_emu.py`: 29 runs of the real ROM images in `surfemu` (boots, handoff checked from the kernel's side, traps after the handoff, the monitor, buttons, card insertion, DDR failures and injected faults, a dead timer, the diagnostics) | 29 pass |
-| `test-fw-iomodel` | the scenarios against the io track's pin-level SD model (`sim/models/sdcard_model.cpp`), failing on any protocol violation | 124 of 124 pass (the 17 scenarios that need `sdcard_sim`'s own fault options are not run) |
+| `test-fw-scenarios` | `run_tests.py`: the portable SurfBoot code under ASan/UBSan on the simulated board, 146 card scenarios (the brief's storage list and more; the DDR initialization against the LiteDRAM model, `firmware/tests/ddrc_model.c`, which fails a run on any protocol violation: leveled, a lane without a window, too late, no PHY registers, and the monitor), then 5 seeds x 300 runs of random metadata damage | 146 pass; fuzzing: every run ends with a result |
+| `test-fw-emu` | `run_emu.py`: 37 runs of the real ROM images in `surfemu` (boots, handoff checked from the kernel's side, traps after the handoff, the monitor, buttons, card insertion, DDR failures and injected faults, a dead timer, the diagnostics; SurfBoot and the BRAM diagnostics initializing the LiteDRAM model, with DDR data that reads back wrong on a lane leveled outside its window) | 37 pass |
+| `test-fw-iomodel` | the scenarios against the io track's pin-level SD model (`sim/models/sdcard_model.cpp`), failing on any protocol violation | 129 of 129 pass (the 17 scenarios that need `sdcard_sim`'s own fault options are not run) |
 
 The outputs are in `docs/evidence/fw/` (`test-fw.txt`, `build-rom.txt`, `emulator.txt`,
 `iomodel.txt`); `review-fixes.txt` shows the review's repro scripts failing safe after the

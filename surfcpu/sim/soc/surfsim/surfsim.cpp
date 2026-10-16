@@ -1,7 +1,7 @@
 /*
 SurfCPU system simulation
 --------------------
-File: surfsim.cpp Date: 10/15/26 (SurfCPU)
+File: surfsim.cpp Date: 10/16/26 (SurfCPU)
 --------------------
 build/sim/surfsim (docs/MODULES.md section 7): the whole surfcpu_soc in Verilator with the C++
 models at its pins: the UART model on the serial port, the DDR model on the DDR port, the SD
@@ -15,7 +15,7 @@ VGA capture on the video outputs.
           [--uart-loopback] [--gpio-loopback] [--sw N] [--btn N]
           [--sd-flush] [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]
           [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]
-          [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...
+          [--ddr-stall ADDR] [--ddr-swinit] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...
           [--sd-insert REGEX]... [--uart-pty] [+plusarg ...]
 
 Clocks: clk at the spec's sys_hz and pix_clk at its pix_hz (SURF_SYS_HZ, SURF_PIX_HZ from the
@@ -75,7 +75,13 @@ has matched the UART output.
 
 DDR: the C++ DDR model, calibrated after --ddr-calib cycles (default 3000) with random ready
 and latency from --seed; tb_soc's plusargs +ddr_calib= +ddr_lat_min= +ddr_lat_max= +ddr_ready=
-+ddr_seed= +ddr_fail +ddr_stall= work too. Other plusargs go to the RTL (+script=FILE for the
++ddr_seed= +ddr_fail +ddr_stall= work too. --ddr-swinit (+ddr_swinit), for an SoC built with
+DDR_SWINIT=1: the ddrc port answers from LiteDRAM's register model (firmware/tests/
+ddrc_model.h, lane windows as the firmware tests' --ddr swinit), each access 8 cycles after
+acceptance, and the SoC sees calib_done once software has initialized the model (its
+init_done without init_error), or calib_fail when it has not --ddr-calib cycles after reset
+(then the bridge's limit, default 37,500,000: 1.5 s at 25 MHz); a protocol violation the
+model counts fails the run. Other plusargs go to the RTL (+script=FILE for the
 scripted core stand-in). --trace writes the core's RVFI trace (MODULES.md section 5).
 
 Exit status: 0 when every --expect matched, or the run finished cleanly (without --expect, also
@@ -107,6 +113,7 @@ end of its log is printed), or --expect unmatched at $finish; 2 when --max-cycle
 
 #include "Vsurfcpu_soc.h"
 #include "verilated.h"
+#include "../../../firmware/tests/ddrc_model.h"
 
 #include "ddr_model.h"
 #include "ps2_keyboard_model.h"
@@ -140,6 +147,8 @@ struct Options {
     unsigned sw = 0, btn = 0;
     DdrModelOptions ddr;
     bool ddr_seed_given = false;
+    bool ddr_swinit = false;            // the ddrc port and LiteDRAM's register model (10/16/26)
+    bool ddr_calib_given = false;
     std::vector<uint32_t> ddr_stalls;
     std::vector<std::string> plusargs;
 };
@@ -154,7 +163,7 @@ struct Options {
                  "               [--uart-loopback] [--gpio-loopback] [--sw N] [--btn N] [--sd-flush]\n"
                  "               [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]\n"
                  "               [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]\n"
-                 "               [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...\n"
+                 "               [--ddr-stall ADDR] [--ddr-swinit] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...\n"
                  "               [--sd-insert REGEX]... [--uart-pty] [+plusarg ...]\n");
     std::exit(1);
 }
@@ -281,13 +290,14 @@ bool ddr_plusarg(const std::string &a, Options &o) {
         return true;
     };
     std::string v;
-    if (val("ddr_calib", v)) o.ddr.calib_cycles = snumber(v, "+ddr_calib");
+    if (val("ddr_calib", v)) { o.ddr.calib_cycles = snumber(v, "+ddr_calib"); o.ddr_calib_given = true; }
     else if (val("ddr_lat_min", v)) o.ddr.latency_min = unsigned(number(v, "+ddr_lat_min"));
     else if (val("ddr_lat_max", v)) o.ddr.latency_max = unsigned(number(v, "+ddr_lat_max"));
     else if (val("ddr_ready", v)) o.ddr.ready_percent = unsigned(number(v, "+ddr_ready"));
     else if (val("ddr_seed", v)) { o.ddr.seed = number(v, "+ddr_seed"); o.ddr_seed_given = true; }
     else if (val("ddr_stall", v)) o.ddr_stalls.push_back(uint32_t(number("0x" + v, "+ddr_stall")));
     else if (a == "+ddr_fail") o.ddr.calib_fails = true;
+    else if (a == "+ddr_swinit") o.ddr_swinit = true;
     else return false;
     return true;
 }
@@ -328,7 +338,8 @@ Options parse(int argc, char **argv) {
         else if (a == "--uart-pty") o.uart_pty = true;
         else if (a == "--sw") o.sw = unsigned(number(next(), "--sw")) & 0xF;
         else if (a == "--btn") o.btn = unsigned(number(next(), "--btn")) & 0xF;
-        else if (a == "--ddr-calib") o.ddr.calib_cycles = snumber(next(), "--ddr-calib");
+        else if (a == "--ddr-calib") { o.ddr.calib_cycles = snumber(next(), "--ddr-calib"); o.ddr_calib_given = true; }
+        else if (a == "--ddr-swinit") o.ddr_swinit = true;
         else if (a == "--ddr-fail") o.ddr.calib_fails = true;
         else if (a == "--ddr-ready") o.ddr.ready_percent = unsigned(number(next(), "--ddr-ready"));
         else if (a == "--ddr-stall") o.ddr_stalls.push_back(uint32_t(number(next(), "--ddr-stall")));
@@ -442,8 +453,19 @@ int main(int argc, char **argv) {
     // ---------------------------------------------------------------- the models
     const unsigned cpb = (SURF_SYS_HZ + 115200 / 2) / 115200;
     UartModel uart(cpb);
+    // --ddr-swinit: the bridge's calibration limit is --ddr-calib; the data side is usable at once
+    // (the SoC's gate keeps requests away until calib_done, which the register model decides)
+    const int64_t swinit_limit = opt.ddr_calib_given ? opt.ddr.calib_cycles : 37500000;
+    if (opt.ddr_swinit) opt.ddr.calib_cycles = 0;
     DdrModel ddr(opt.ddr);
     for (uint32_t a : opt.ddr_stalls) ddr.stall_at(a);
+    struct ddrc_model ddrc;
+    std::memset(&ddrc, 0, sizeof ddrc);
+    ddrc.lane[0] = ddrc_lane{3, 6, 26};
+    ddrc.lane[1] = ddrc_lane{5, 10, 20};
+    ddrc_model_init(&ddrc);
+    struct { bool busy = false, rsp = false, err = false; unsigned left = 0; uint32_t rdata = 0; } dc;
+    bool swinit_ever = false, swinit_fail = false;
 
     SdCardOptions sdo;
     sdo.seed = unsigned(opt.seed);
@@ -546,6 +568,10 @@ int main(int argc, char **argv) {
     top->ddr_calib_done = 0;
     top->ddr_calib_fail = 0;
     top->ddr_timeout = 0;
+    top->ddrc_req_ready = 0;
+    top->ddrc_rsp_valid = 0;
+    top->ddrc_rsp_rdata = 0;
+    top->ddrc_rsp_err = 0;
     top->eval();
 
     uint64_t next_clk = clk_half, next_pix = pix_half;
@@ -579,6 +605,21 @@ int main(int argc, char **argv) {
             if (!top->rst)
                 ddr.tick(top->ddr_req_valid, top->ddr_req_addr, top->ddr_req_write,
                          top->ddr_req_be, top->ddr_req_wdata, top->ddr_req_fetch);
+            if (opt.ddr_swinit && !top->rst) {      // the ddrc port: one access at a time
+                if (dc.rsp) dc.rsp = false;         // the response was taken at this edge
+                if (top->ddrc_req_valid && top->ddrc_req_ready) {
+                    const uint32_t off = top->ddrc_req_addr & SURF_DDRC_MASK;
+                    dc.err = top->ddrc_req_be != 0xF || (off & 3u);   // surf_ddr_csr: words only
+                    dc.rdata = 0;
+                    if (!dc.err && top->ddrc_req_write) ddrc_model_write(&ddrc, off, top->ddrc_req_wdata);
+                    else if (!dc.err) dc.rdata = ddrc_model_read(&ddrc, off);
+                    dc.busy = true;
+                    dc.left = 8;
+                } else if (dc.busy && --dc.left == 0) {
+                    dc.busy = false;
+                    dc.rsp = true;
+                }
+            }
             uart.tick(top->uart_tx);
         }
         if (do_clk) top->clk = !top->clk;
@@ -626,8 +667,20 @@ int main(int argc, char **argv) {
             top->ddr_rsp_valid = ddr.rsp_valid();
             top->ddr_rsp_rdata = ddr.rsp_rdata();
             top->ddr_rsp_err = ddr.rsp_err();
-            top->ddr_calib_done = ddr.calib_done();
-            top->ddr_calib_fail = ddr.calib_fail();
+            if (opt.ddr_swinit) {                   // as surf_ddr_bridge: CALIB_FAIL sticky, limit from reset
+                const bool ready = ddrc_model_ready(&ddrc);
+                if (!swinit_fail && ready) swinit_ever = true;
+                else if (!swinit_ever && swinit_limit >= 0 && int64_t(cycles) >= swinit_limit) swinit_fail = true;
+                top->ddr_calib_done = !swinit_fail && ready;
+                top->ddr_calib_fail = swinit_fail;
+                top->ddrc_req_ready = !top->rst && !dc.busy && !dc.rsp;
+                top->ddrc_rsp_valid = dc.rsp;
+                top->ddrc_rsp_rdata = dc.rsp ? dc.rdata : 0;
+                top->ddrc_rsp_err = dc.rsp && dc.err;
+            } else {
+                top->ddr_calib_done = ddr.calib_done();
+                top->ddr_calib_fail = ddr.calib_fail();
+            }
             top->ddr_timeout = ddr.timeout();
             top->uart_rx = opt.uart_loopback ? top->uart_tx : uart.rx_pin();
             top->sd_miso = sd.tick(top->sd_cs_n, top->sd_sclk, top->sd_mosi);
@@ -829,6 +882,17 @@ int main(int argc, char **argv) {
     } else if (!opt.expects.empty()) {
         status = 1;
         why = "finished without the expected output";
+    }
+    if (opt.ddr_swinit) {
+        std::fprintf(stderr, "surfsim: ddrc model: %u accesses, %u mode register loads, %u ZQCL, %u writes, %u reads, "
+                             "%u violations; lanes at bitslip/delay %d/%d and %d/%d; %s\n", ddrc.accesses, ddrc.mrs,
+                     ddrc.zqcl, ddrc.writes, ddrc.reads, ddrc.violations, ddrc.bitslip[0], ddrc.delay[0],
+                     ddrc.bitslip[1], ddrc.delay[1],
+                     swinit_fail ? "calibration failed (the limit passed)" : ddrc_model_ready(&ddrc) ? "initialized" : "not initialized");
+        if (ddrc.violations) {
+            std::fprintf(stderr, "surfsim: ERROR LiteDRAM's register model saw protocol violations\n");
+            status = 1;
+        }
     }
     if (ddr.early_requests || ddr.protocol_errors) {
         std::fprintf(stderr, "surfsim: ERROR the SoC sent %" PRIu64 " DDR requests before "

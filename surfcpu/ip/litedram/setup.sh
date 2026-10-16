@@ -4,8 +4,9 @@
 #
 # Builds build/third_party/litedram/ inside the toolchain container (surfcpu/devenv/run.sh
 # ip/litedram/setup.sh, or make litedram-setup): Migen, LiteX and LiteDRAM, and the LiteX data
-# packages the calibration CPU needs (VexRiscv's Verilog, picolibc and compiler-rt sources for
-# its BIOS), each from one pinned git commit; PyYAML, packaging, colorama, meson and ninja from
+# packages a calibration CPU inside the core would need (VexRiscv's Verilog, picolibc and
+# compiler-rt sources for its BIOS; the Arty core has had none since round ddr-3, but liblitedram's
+# sources, which firmware/common/ddrinit.c ports, come with LiteX), each from one pinned git commit; PyYAML, packaging, colorama, meson and ninja from
 # pinned PyPI wheels whose SHA-256 is checked, unpacked with Python's zipfile (the container has
 # no pip). Nothing is installed anywhere else. Prints env.sh, which generate.sh sources.
 # Re-running only fetches what is missing or at the wrong commit.

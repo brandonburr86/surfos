@@ -8,8 +8,10 @@
 #                                change: the generator's pins, arty.yml, or the toolchain image)
 #
 # The DDR designs read the LiteDRAM core from build/ (a build product, never committed):
-# ip/litedram/generate.sh makes it byte for byte the same on every run (SOURCE_DATE_EPOCH, a
-# frozen clock), so its hashes can be committed in arty.sha256 and checked: by make litedram-gen
+# ip/litedram/generate.sh makes it byte for byte the same on every run and in every checkout
+# (SOURCE_DATE_EPOCH, a frozen clock, a fixed environment, and run_gen.py taking out LiteX's
+# instance tree comment, whose order followed the Python process's memory layout; make
+# litedram-repro shows it), so its hashes can be committed in arty.sha256 and checked: by make litedram-gen
 # after generating, and by tools/fpga-build.sh, which counts a bitstream built from files that
 # differ from these hashes as dirty (not reproducible from the commit). Paths are relative to
 # surfcpu/; the format is sha256sum's (two spaces).
@@ -21,10 +23,9 @@ cd "$top"
 sha() { if command -v sha256sum > /dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
 FILES="build/litedram/arty/gateware/litedram_core.v
-build/litedram/arty/gateware/litedram_core_rom.init
-build/litedram/arty/gateware/litedram_core_sram.init
 build/litedram/arty/gateware/litedram_core.xdc
-build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
+build/litedram/arty/csr.csv
+build/litedram/arty/software/include/generated/sdram_phy.h
 build/litedram/arty_sim/gateware/litedram_sim.v"
 
 case "${1:-}" in
@@ -56,12 +57,15 @@ case "${1:-}" in
       echo "# SurfCPU: SHA-256 of the generated LiteDRAM files the DDR designs build from (paths relative"
       echo "# to surfcpu/, sha256sum format). File: arty.sha256, written by ip/litedram/lock.sh write."
       echo "# generate: make litedram-gen"
-      echo "# ip/litedram/generate.sh makes them byte for byte the same on every run, in the toolchain"
-      echo "# image surfcpu-toolchain:$image (whose RISC-V GCC compiles the calibration BIOS) from the"
-      echo "# generator ip/litedram/setup.sh pins, ip/litedram/arty.yml and SOURCE_DATE_EPOCH"
-      echo "# $(git -C build/third_party/litedram/src/litedram log -1 --format=%ct 2>/dev/null || echo '?') (the LiteDRAM commit's time). tools/fpga-build.sh and"
-      echo "# make litedram-gen check them (ip/litedram/lock.sh check). The last line is the simulation"
-      echo "# core (make test-ddr-litedram), not part of any bitstream."
+      echo "# ip/litedram/generate.sh makes them byte for byte the same on every run and in every checkout"
+      echo "# (make litedram-repro), in the toolchain"
+      echo "# image surfcpu-toolchain:$image, from the generator ip/litedram/setup.sh pins,"
+      echo "# ip/litedram/arty.yml and SOURCE_DATE_EPOCH $(git -C build/third_party/litedram/src/litedram log -1 --format=%ct 2>/dev/null || echo '?') (the LiteDRAM commit's"
+      echo "# time). tools/fpga-build.sh and make litedram-gen check them (ip/litedram/lock.sh check)."
+      echo "# csr.csv and sdram_phy.h are the register map and the PHY settings the firmware's DDR"
+      echo "# initialization was written for (make litedram-gen compares them with spec/soc.toml and"
+      echo "# firmware/common/ddrinit_phy.h). The last line is the simulation core (make"
+      echo "# test-ddr-litedram, make board-ddr-sim), not part of any bitstream."
       for path in $FILES; do echo "$(sha "$path")  $path"; done
     } > "$lock.tmp"
     mv "$lock.tmp" "$lock"

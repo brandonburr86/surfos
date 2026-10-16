@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """SurfCPU firmware tests: the ROM images in the firmware emulator
 --------------------
-File: run_emu.py Date: 10/15/26 (SurfCPU)
+File: run_emu.py Date: 10/16/26 (SurfCPU)
 --------------------
 Runs the real RV32 builds (build/fw/surfboot.mem, the exact ROM file, and the diagnostics)
 in build/fw/host/surfemu against card images and checks their UART output: SurfBoot
 booting the handoff test kernel (which verifies the state of docs/BOOT-ABI.md section 4
 from the inside), its fault reporter catching traps after the handoff, the monitor
-(commands, memory faults reported, reset), card insertion, the buttons, DDR failures, a
-trap during boot, the VGA text log, and the diagnostics programs.
+(commands, memory faults reported, reset), card insertion, the buttons, DDR failures, the
+DDR initialization by software against a model of LiteDRAM (ddrc_model.h: SurfBoot and the
+BRAM diagnostics leveling each lane into its window, and a lane without one), a trap during
+boot, the VGA text log, and the diagnostics programs.
 
     python3 firmware/tests/run_emu.py [--jobs 4] [-k NAME] [--keep]
 
@@ -61,13 +63,13 @@ def send(trigger, text):
     return ["--send", f"{trigger}={text}"]
 
 
-BANNER = "SurfBoot 1.0.0"
+BANNER = "SurfBoot 1.1.0"
 
 
 @scenario("boot_and_trap_after_handoff",
           expect=[BANNER, "ddr: calibrated", "sd: SDHC/SDXC", "fat32: partition 1", "boot: starting the kernel",
                   "HELLO: handoff OK", "SurfBoot fault reporter", "mcause 0000000b", "s11 ", "LEDs blink code 8"],
-          screen=["SurfBoot 1.0.0", "boot: starting the kernel"])
+          screen=["SurfBoot 1.1.0", "boot: starting the kernel"])
 def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello(), "/BOOT/CMDLINE.TXT": b"hello trap\n"})
 
@@ -172,6 +174,44 @@ def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": bytes(bad)})
 
 
+LEVELED = ("lane 0: bitslip 3, delay 16 (window +-10); lane 1: bitslip 5, delay 15 (window +-5)")
+
+
+@scenario("surfboot_initializes_ddr", args=["--ddr", "swinit"],
+          expect=[BANNER, "ddr: initialized by SurfBoot, read leveling " + LEVELED, "ddr: calibrated after",
+                  "quick test passed", "boot: starting the kernel", "HELLO: handoff OK"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
+@scenario("surfboot_ddr_without_a_read_window", args=["--ddr", "swinit-bad"],
+          expect=["DDR initialization failed: read leveling lane 0: bitslip 3, delay 16 (window +-10); lane 1: "
+                  "bitslip 0, no working delay", "(DDR_CALIB)", "surfboot> "])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
+@scenario("surfboot_ddr_without_phy_registers", args=["--ddr", "swinit-nophy"],
+          expect=["ddr: initialized by SurfBoot, no read leveling (the PHY has no delay registers)",
+                  "ddr: calibrated after", "HELLO: handoff OK"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
+@scenario("surfboot_ddr_initialization_too_late", args=["--ddr", "swinit", "--ddr-calib-ms", "1"],
+          expect=["DDR calibration failed (DDR_STATUS 0x00000016)", "(DDR_CALIB)"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
+@scenario("monitor_ddr_after_software_init", args=["--ddr", "swinit", "--btn", "2"] +
+          send("surfboot> ", "ddr\r") + send("quick test passed", "info\r"),
+          expect=["surfboot> ", "ddr: initialized by SurfBoot, read leveling " + LEVELED, "quick test passed",
+                  "(present, software init, calibrated)"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
 @scenario("surfboot_finds_a_stuck_ddr_bit", args=["--ddr-stuck-at", "0x80200000"],
           expect=["DDR address line test at 0x80200000", "(DDR_TEST)", "show code 1"])
 def _(p):
@@ -228,6 +268,41 @@ def _(p):
 
 @scenario("bramdiag_reports_ddr_calibration_failure", rom=BRAM, args=["--ddr", "fail"],
           expect=["FAIL calibration did not succeed", "BRAMDIAG: FAIL (1 of"])
+def _(p):
+    return None
+
+
+def scan(module, bitslip, lo=None, hi=None):
+    """bramdiag's scan line for one lane at one bitslip: a 1 for each working delay."""
+    bits = "".join("1" if lo is not None and lo <= d <= hi else "0" for d in range(32))
+    tail = "delays: -" if lo is None else f"delays: {(lo + hi) // 2:02d}+-{(hi - lo) // 2:02d}"
+    return f"  m{module}, b{bitslip:02d}: |{bits}| {tail}"
+
+
+@scenario("bramdiag_initializes_ddr", rom=BRAM, args=["--ddr", "swinit"] + send("Ctrl-R runs", "\x12"),
+          expect=["DDR initialization (DDR_STATUS.SWINIT), read leveling:", scan(0, 0), scan(0, 2),
+                  scan(0, 3, 6, 26), scan(0, 4), scan(0, 7), scan(1, 0), scan(1, 5, 10, 20), scan(1, 7),
+                  "  lane 0: bitslip 3, delay 16 (window +-10)", "  lane 1: bitslip 5, delay 15 (window +-5)",
+                  "DDR initialization                 ok (3 checks)", "DDR calibration                    ok",
+                  "code running from DDR", "BRAMDIAG: PASS",
+                  "DDR initialization (DDR_STATUS.SWINIT), read leveling:", "BRAMDIAG: PASS"])
+def _(p):
+    return None
+
+
+@scenario("bramdiag_ddr_without_phy_registers", rom=BRAM, args=["--ddr", "swinit-nophy"],
+          expect=["DDR initialization (DDR_STATUS.SWINIT), read leveling:",
+                  "  lane 0: not leveled (the PHY has no delay registers)",
+                  "  lane 1: not leveled (the PHY has no delay registers)",
+                  "DDR initialization                 ok (1 checks)", "code running from DDR", "BRAMDIAG: PASS"])
+def _(p):
+    return None
+
+
+@scenario("bramdiag_ddr_without_a_read_window", rom=BRAM, args=["--ddr", "swinit-bad"],
+          expect=[scan(0, 3, 6, 26), scan(1, 5), "  lane 1: bitslip 0, no working delay",
+                  "FAIL lane 1: no read delay works at bitslip 0, the best",
+                  "FAIL read leveling did not succeed: init_error written", "BRAMDIAG: FAIL (2 of"])
 def _(p):
     return None
 

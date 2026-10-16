@@ -1,13 +1,13 @@
 /*
 SurfBoot: the SoC side of port.h
 --------------------
-File: port_surf.c Date: 10/15/26 (SurfCPU)
+File: port_surf.c Date: 10/16/26 (SurfCPU)
 --------------------
 port.h on the real hardware: surf_spi for the card (a DATA read waits for the byte in
-flight, so write-then-read is a whole exchange), mtime for time, sysinfo for identity, and
-DDR at its own addresses. port_peek32/port_poke32 install a trap hook for the one load or
-store they make, so a bad address in the monitor's md/mw is reported instead of stopping
-the machine.
+flight, so write-then-read is a whole exchange), mtime for time, sysinfo for identity, the
+DDR controller's registers at the ddrc region, and DDR at its own addresses.
+port_peek32/port_poke32 install a trap hook for the one load or store they make, so a bad
+address in the monitor's md/mw is reported instead of stopping the machine.
 */
 #include "fw.h"
 #include "port.h"
@@ -70,6 +70,9 @@ void port_spi_set_div(uint32_t div)
 uint32_t port_sysinfo(uint32_t off) { return sysinfo(off); }
 uint32_t port_timebase_hz(void) { return REG(SURF_TIMER_BASE, SURF_TIMER_TIMEBASE); }
 uint32_t port_buttons(void) { return REG(SURF_GPIO_BASE, SURF_GPIO_BTN) & SURF_GPIO_BTN_BTN_MASK; }
+
+uint32_t port_ddrc_read(uint32_t off) { return REG(SURF_DDRC_BASE, off); }
+void port_ddrc_write(uint32_t off, uint32_t value) { REG(SURF_DDRC_BASE, off) = value; }
 
 volatile uint32_t *port_ddr_word(uint32_t addr) { return (volatile uint32_t *)(uintptr_t)addr; }
 
