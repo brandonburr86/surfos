@@ -31,7 +31,7 @@ the first 8 hex digits, the build id every artifact carries:
 | `rom/surfboot.mem`, `rom/bramdiag.mem` | the boot ROM images inside the bitstreams |
 | `debug/*.elf` | SurfBoot, the diagnostics and the kernel with their symbols, for reading a fault address |
 | `SHA256SUMS` | the SHA-256 of every artifact above (not the build records): `shasum -a 256 -c SHA256SUMS` |
-| `MANIFEST` | TOML: the release's name and status, the commit and its time, that the tree was clean, each image with its id and tool versions, the contract versions (`spec/soc.toml`, SURFBUS.md, ISA.md, BOOT-ABI.md, MODULES.md, MEMORY-MAP.md, each with its SHA-256), every design with its gate results, timing and use (or why it is missing), and every artifact with its size and SHA-256 |
+| `MANIFEST` | TOML: the release's name and status, the commit and its time, that the tree was clean, the designs whose flash images it holds (`flash_boot_design`, `flash_test_design`: empty when the release does not have one), each image with its id and tool versions, the contract versions (`spec/soc.toml`, SURFBUS.md, ISA.md, BOOT-ABI.md, MODULES.md, MEMORY-MAP.md, each with its SHA-256), every design with its gate results, timing and use (or why it is missing), and every artifact with its size and SHA-256 |
 
 `release/release.txt` lists the boards and the designs:
 
@@ -71,10 +71,14 @@ make -C surfcpu release PRERELEASE=1      # while the DDR designs do not build
 make -C surfcpu release                   # once they do: a complete release, or nothing
 ```
 
-Variables: `PRERELEASE=1` allows a release without the DDR designs (when every design builds it is
-complete anyway); `SKIP_DDR=1` does not even try them (a pre-release); `DESIGNS=a,b` and
-`BOARDS=a,b` build only some (a pre-release, for trials); `FORCE=1` replaces an existing release
-directory of the same name. The steps and what they print:
+Variables: `PRERELEASE=1` allows a pre-release, a release without some designs (when every design
+builds it is complete anyway). `SKIP_DDR=1` does not even try the DDR designs, and `DESIGNS=a,b` and
+`BOARDS=a,b` build only some (for trials): each leaves designs out, so each needs `PRERELEASE=1`
+as well (`make release SKIP_DDR=1` alone is refused). `FORCE=1` replaces an existing release
+directory of the same name, and nothing else (a directory holding anything a release does not is
+never replaced). The version is `release/release.txt`'s, and `SURFOS.BIN` must carry the same one
+(`arch/riscv32/kernel.mk` packs it with `--version`): a release whose two disagree is refused, so
+change both together. The steps and what they print:
 
 1. **Checks.** The tree must be clean; `SOURCE_DATE_EPOCH` becomes the commit's time (a different
    value in the environment is refused); both images must exist.

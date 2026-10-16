@@ -491,6 +491,8 @@ class TestMake(ScratchRelease):
         self.assertIs(man["complete"], False)
         self.assertEqual(len(man["missing"]), 2)
         self.assertIn("dram_clk", man["missing"][0])
+        self.assertEqual(man["flash_boot_design"], "", "a pre-release without the boot design names none")
+        self.assertEqual(man["flash_test_design"], "top")
         self.assertFalse((rel / "fpga/arty_a7_100t/dd").exists())
         self.assertTrue((rel / "flash/arty_a7_100t/top.bin").is_file())
         r = self.make("--prerelease", "--force", FAKE_LITEDRAM_FAIL="1")
@@ -507,6 +509,13 @@ class TestMake(ScratchRelease):
         self.assertEqual(r.returncode, 1)
         self.assertIn("the release needs it", r.stderr)
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
+
+    def test_version_tied_to_the_kernel(self):
+        """review c3: release.txt's version and SURFOS.BIN's must agree"""
+        r = self.make("--prerelease", "--skip-ddr", FAKE_VERSION="9.9.9")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("9.9.9", r.stderr)
+        self.assertIn("2.3.4", r.stderr)
 
 
 # ------------------------------------------------------------------------------- the review's findings (rel-2)
@@ -661,6 +670,15 @@ class TestCheckStrict(ScratchRelease):
         (e / "flash/arty_a7_100t/top.bin").unlink()
         self.assertEqual(self.check(e).returncode, 1)
         self.assertEqual(self.tool("compare", e, self.pre).returncode, 1)
+
+    def test_version_and_flash_designs(self):
+        """review c3: check holds SURFOS.BIN's version and the flash designs MANIFEST names to the release"""
+        v = self.copy(self.pre.name)
+        (v / "MANIFEST").write_text((v / "MANIFEST").read_text().replace('flash_boot_design = ""',
+                                                                         'flash_boot_design = "dd"'))
+        r = self.check(v)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("flash_boot_design 'dd'", r.stdout)
 
     def test_extra_in_new(self):
         n = self.copy(self.pre.name)

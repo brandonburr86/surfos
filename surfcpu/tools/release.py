@@ -766,6 +766,14 @@ def report_lines(rows: list, notes: list[str], title: str, problems: list[str] =
     return lines
 
 
+def package_version(pkg: bytes) -> str:
+    """a SURFOS.BIN package's image_version as x.y.z (tools/surfimg.py: major << 16 | minor << 8 | patch)"""
+    if len(pkg) < 64:
+        return "(none)"
+    v = struct.unpack_from("<I", pkg, 40)[0]
+    return f"{v >> 16}.{(v >> 8) & 0xFF}.{v & 0xFF}"
+
+
 def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str]]:
     """(problems, the artifacts found intact) of a release directory: its MANIFEST, its SHA256SUMS and its files
     agree with each other and with what make release writes. name is what the directory must be called
@@ -846,6 +854,13 @@ def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str
         b = data(rel)
         if b is not None and (len(b) < 64 or b[44:48] != bytes.fromhex(commit[:8])[::-1]):
             problems.append(f"{rel}: not built from {commit[:8]} (its build id)")
+    if data("SURFOS.BIN") is not None and package_version(data("SURFOS.BIN")) != version:
+        problems.append(f"SURFOS.BIN is version {package_version(data('SURFOS.BIN'))}, the release {version}")
+    for key, kind in (("flash_boot_design", "boot"), ("flash_test_design", "test")):
+        n = man.get(key, "")
+        if n and not any(x.get("name") == n and x.get("flash") == kind and x.get("flash_image")
+                         for x in built.values()):
+            problems.append(f"MANIFEST: {key} {n!r}, but the release has no {kind} flash image of it")
     if data("card/BOOT/SURFOS.BIN") is not None and data("card/BOOT/SURFOS.BIN") != data("SURFOS.BIN"):
         problems.append("card/BOOT/SURFOS.BIN is not SURFOS.BIN")
     if man.get("card_cmdline") and data("card/BOOT/CMDLINE.TXT") not in (None, (man["card_cmdline"] + "\n").encode()):
@@ -1147,6 +1162,10 @@ class Release:
             bid = f"{struct.unpack_from('<I', data[rel], 44)[0]:08x}" if len(data[rel]) >= 64 else "(none)"
             if bid != self.short:
                 raise Refused(f"{rel} carries build id {bid}, not the commit's {self.short}")
+        kv = package_version(data["SURFOS.BIN"])
+        if kv != self.version:
+            raise Refused(f"SURFOS.BIN is version {kv} (arch/riscv32/kernel.mk packs it with --version), but "
+                          f"release/release.txt says {self.version}: make the two agree")
         gen = self.work / "fw" / "gen" / "fw_build.h"
         if not gen.is_file() or not re.search(r"FW_BUILD_DIRTY 0\b", gen.read_text()):
             raise Refused(f"the firmware was built as a dirty tree ({gen})")
@@ -1447,7 +1466,9 @@ class Release:
             "missing": [f"{d['name']} for {b}: {why}" for b, d, why in self.missing],
             "commit": self.commit, "commit_short": self.short, "source_date_epoch": self.epoch,
             "commit_time_utc": utc(self.epoch), "tree_clean": True,
-            "flash_boot_design": next((d["name"] for d in self.cfg["designs"] if d["flash"] == "boot"), ""),
+            # the designs whose flash image this release holds (for some board): none when it was not built
+            "flash_boot_design": next((d["name"] for d in designs if d["status"] == "built" and d["flash"] == "boot"), ""),
+            "flash_test_design": next((d["name"] for d in designs if d["status"] == "built" and d["flash"] == "test"), ""),
             "card_cmdline": self.cfg["card_cmdline"] or "",
         }
         tools = {
