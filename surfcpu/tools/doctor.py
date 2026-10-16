@@ -149,8 +149,16 @@ def probe_cards() -> list[dict]:
     return cards
 
 
+def openxc7_image() -> str:
+    m = re.search(r"^IMAGE_TAG=(\S+)", (ROOT / "tools" / "openxc7-build.sh").read_text(), re.M)
+    return f"surfcpu-openxc7:{m.group(1) if m else 'unknown'}"
+
+
 def probe_build_host() -> dict:
     out = {"config": str(BUILD_HOST_CONF), "present": BUILD_HOST_CONF.exists()}
+    out["openxc7_image"] = openxc7_image()
+    d = docker_bin()
+    out["openxc7_present"] = bool(d) and run([d, "image", "inspect", out["openxc7_image"]])[0] == 0
     if out["present"]:
         conf = dict(re.findall(r"^\s*([A-Z_]+)\s*=\s*(.*?)\s*$", BUILD_HOST_CONF.read_text(), re.M))
         out["flow"] = conf.get("FLOW", "?")
@@ -213,8 +221,14 @@ def main() -> int:
     else:
         print("  Card         pending: no FAT volume mounted")
     bh = report["build_host"]
+    if bh["openxc7_present"]:
+        print(f"  Open flow    {bh['openxc7_image']} present: make build-fpga FLOW=openxc7 builds bitstreams "
+              "on this Mac (docs/OPEN-FLOW.md)")
+    else:
+        print(f"  Open flow    {bh['openxc7_image']} missing: make openxc7-image (docs/OPEN-FLOW.md)")
     if not bh["present"]:
-        print(f"  Build host   pending: no {bh['config']} (docs/BUILD-HOST.md)")
+        print(f"  Vivado host  not configured (optional, for Vivado timing sign-off and the MIG): "
+              f"no {bh['config']} (docs/BUILD-HOST.md)")
     else:
         extra = f", reachable={bh.get('reachable')}" if "reachable" in bh else ""
         print(f"  Build host   FLOW={bh.get('flow')} HOST={bh.get('host')}{extra}")
