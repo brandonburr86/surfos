@@ -39,7 +39,7 @@ make -C surfcpu board-test M=m1 [PORT=/dev/cu.usbserial-<serial>1] [ARGS="..."]
 | M | Milestone | What you do when asked | Time on the board |
 |---|---|---|---|
 | m1 | the baseline design | load it; set the switches to 0101; hold BTN0 for 2 s; say whether the LEDs blink; press RESET | about a minute |
-| m3 | the CPU and its BRAM diagnostics | load the bramdiag design; say whether LD4..LD7 and LD0 are lit | under a minute |
+| m3 | the CPU and its BRAM diagnostics | load the bramdiag design; say whether LD4..LD6 are lit, LD7 blinks and LD0 is green | under a minute |
 | m5 | SurfBoot and the card, the DDR diagnostic | copy `DDRDIAG.BIN` to the card; hold BTN1 and press RESET; later take the card out, press RESET, put it back | a few minutes |
 | m7 | SurfOS from the card | install SurfOS on the card; load the design; type `echo ps2-ok` on the PS/2 keyboard; say whether the VGA monitor shows the shell | a few minutes |
 | m8 | files that persist (OWNER-GUIDE.md section 8) | make a file on the Mac; move the card to the board and back; power-cycle; install the kernel again | 10 to 15 minutes |
@@ -122,7 +122,8 @@ FENCE.I) `ok`, the timer's progress within 20 % of 1 ms a tick, any other sectio
 `skipped` (the bramdiag bitstream has no DDR: `DDR ... skipped`), and `BRAMDIAG: PASS`. Then it
 types `Arty7` and checks each character comes back with its code (`echo 1: 'A' 0x41` ...). If
 the first run came before the port was open, it types Ctrl-R to run the diagnostics again and
-says so. You answer whether LD4..LD7 are lit and LD0 green.
+says so. You answer whether LD4..LD6 are lit, LD7 blinks about once a second (the heartbeat of
+its echo loop; at the summary all four light, then LD7 toggles every half second) and LD0 is green.
 
 On the RTL system (`surfsim` with bramdiag in its ROM; this SoC has the DDR model, so the DDR
 sections run too), PASS in 20 s:
@@ -153,7 +154,7 @@ sections run too), PASS in 20 s:
   ok       code running from DDR: ok (6 checks)
   ok       BRAMDIAG: PASS (569 checks)
   ok       the UART both ways: each byte typed (Arty7) came back with its code
-  skip     not observed: Are LD4..LD7 lit and LD0 green (red would mean a failure)?
+  skip     not observed: Are LD4..LD6 lit, LD7 blinking about once a second (its heartbeat while it echoes), and LD0 green (red would mean a failure)?
 ```
 
 On the board the bramdiag bitstream prints `BRAMDIAG: PASS (203 checks)` with the DDR section

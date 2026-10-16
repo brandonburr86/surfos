@@ -8,7 +8,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
 | 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | **A7-100T** (IDCODE 0x03631093), loaded over JTAG from the Mac: **m1 PASS** on 2026-10-16, 11 checks and the LEDs confirmed by the owner ([evidence](evidence/physical/m1-2026-10-16-2.txt); the first run's FAIL was a test-kit bug: [evidence](evidence/physical/m1-2026-10-16.txt)) | **passed on the board** with the open flow; open: the brief's Vivado post-route timing and DRC reports and the Mac → Vivado host loop (no Vivado host) |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
-| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
+| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | **m3 PASS** on the A7-100T on 2026-10-16: the BRAM diagnostics' 203 checks (identity, ALU, M extension, branches, loads and stores, CSRs, 56 KiB March C-, 34 exceptions each recovered, timer interrupts and WFI at 1.02 ms a tick, FENCE.I), the UART both ways, the LEDs confirmed by the owner; bitstream d174d0f ([evidence](evidence/physical/m3-2026-10-16.txt)) | **done on the board** (open-flow bitstream; nextpnr's timing is an estimate, no Vivado sign-off) |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs; the DDR top with LiteDRAM's generated core and its DRAM model: the BRAM diagnostics' DDR checks pass (569), and SurfBoot calibrates and boots SurfOS to the shell; the 100T DDR diagnostics' synthesized netlist prints the same lines at the same times as the RTL ([evidence](evidence/ddr/), [the DDR top](evidence/ddr/ddr-top-sim.txt)) | open flow: both DDR designs place and route on both boards, but nextpnr's estimate for LiteDRAM's 100 MHz clock is 63.5 to 77.3 MHz, and one build did not finish routing: no DDR bitstream ([evidence](evidence/board/openxc7-ddr.txt)); MIG recipe pending a Vivado host | pending: needs a DDR bitstream | done in simulation; timing closure in progress |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
@@ -302,3 +302,24 @@ physical results are separate columns, so nothing claims more than happened.
 * Milestone 1 is not closed, because the brief also asks for Vivado's post-route timing and
   DRC reports and the Mac → Vivado host → JTAG loop. With no Vivado host, the open flow's
   nextpnr timing is only an estimate.
+* `board-test M=m3`: **PASS** ([evidence](evidence/physical/m3-2026-10-16.txt)).
+  * The bitstream is `surfcpu_arty_a7_bramdiag` built at d174d0f: clean, and every flow check
+    passed. It is not rebuilt at this commit. The top file has changed since, but only to add
+    the DDR design's pins and blocks, which this HAS_DDR=0 design leaves out.
+  * The diagnostics' first run came before the port was open, so the script typed Ctrl-R, and
+    the second run printed every section ok: 203 checks, `BRAMDIAG: PASS`. The checks were:
+    * identity, the ALU, the M extension, branches, loads and stores, CSRs and counters;
+    * a March C- test of the 56 KiB scratch RAM, and the spare text RAM;
+    * 34 exceptions, each one recovered;
+    * timer, software and external interrupts with WFI (10 ticks in 10,186 µs);
+    * FENCE.I with code written to RAM.
+
+    DDR was skipped: this bitstream has no DDR controller.
+  * The identity lines match the manifest: build d174d0f8, clean, board id 0x100, 25,000,000 Hz.
+  * `Arty7` typed came back character by character.
+  * The owner saw LD4..LD6 lit, LD7 blinking and LD0 green. LD7 blinking is the firmware's
+    heartbeat: at the summary all four green LEDs light, then the echo loop toggles LD7 every
+    half second. The test's question said "LD4..LD7 lit"; it now says so.
+* That is milestone 3's exit evidence (brief section 11): a physical UART transcript with the
+  build identity, the arithmetic and memory results, the timer's progress and deliberate fault
+  recovery.

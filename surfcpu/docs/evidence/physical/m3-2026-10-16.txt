@@ -1,0 +1,71 @@
+SurfCPU acceptance test m3: the CPU on the board (milestone 3): the BRAM diagnostics
+Verdict: PASS (19 checks seen by this script passed; the owner confirmed 1)
+Source: the board, through /dev/cu.usbserial-210319C129C61 at 115200 8N1
+Date: 2026-10-16 16:16:48 UTC, 76 s
+Command: tools/board-test.py m3 --port auto --board arty_a7_100t
+Tools: board-test.py sha256 cf3a99d2fb49d5a6, uart.py sha256 dd6dda3bf7893ce1 (commit cca12d0b23ec); Python 3.14.7 on Darwin arm64
+
+Build identity read from the port, and what it was compared with:
+  BRAM diagnostics 1.0.0, ROM build 6c89831a
+  bitstream build d174d0f8, flags 0, board id 0x100
+    the bitstream's build id d174d0f8 is the manifest's (d174d0f8, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-surfcpu/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_bramdiag/manifest.txt)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.5  program        done, answered at +28.8
+              | Load the CPU with its diagnostics, in another Terminal window:
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag
+              | and press Enter here once it says done.
+  +    39.0  leds           done, answered at +74.3
+              | Are LD4..LD7 lit and LD0 green (red would mean a failure)?
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /dev/cu.usbserial-210319C129C61 opened at 115200 8N1
+  note     the diagnostics' first run was not seen (the port was not open yet?): Ctrl-R typed to run them again
+  ok       board id 0x100 is arty_a7_100t's (0x100)
+  ok       the bitstream's build id d174d0f8 is the manifest's (d174d0f8, /Users/brandonburr/Documents/SurfOS Restoration Project/06-restoration-surfcpu/surfcpu/build/fpga/arty_a7_100t/surfcpu_arty_a7_bramdiag/manifest.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       the system clock is 25,000,000 Hz (25000000)
+  ok       identity: ok
+  ok       ALU, immediates, x0: ok
+  ok       M extension: ok
+  ok       branches and jumps: ok
+  ok       loads and stores: ok
+  ok       CSRs and counters: ok
+  ok       scratch RAM: ok (56 KiB)
+  ok       exceptions, each recovered: ok
+  ok       interrupts, timer and WFI: ok (10 timer ticks in 10186 us)
+  ok       FENCE.I, code written to RAM: ok
+  ok       the timer's progress: 10 timer ticks in 10186 us (1 ms a tick, +- 20 %)
+  ok       text RAM (cells 2400-4095): ok (1 checks)
+  ok       DDR: skipped: no DDR controller in this bitstream
+  ok       BRAMDIAG: PASS (203 checks)
+  ok       the UART both ways: each byte typed (Arty7) came back with its code
+  owner    Are LD4..LD7 lit and LD0 green (red would mean a failure)?
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 1115 bytes received;
+"*": the port going away and coming back):
+  +   38.798 | 
+  +   38.798 | SurfCPU BRAM diagnostics 1.0.0 (build 6c89831a)
+  +   38.798 | board Arty A7-100T (0x100), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+  +   38.814 | bitstream build d174d0f8 flags 0, features 7f, DDR status 0 size 0 MiB
+  +   38.814 | identity                           ok (7 checks)
+  +   38.814 | ALU, immediates, x0                ok (33 checks)
+  +   38.830 | M extension                        ok (23 checks)
+  +   38.830 | branches and jumps                 ok (9 checks)
+  +   38.830 | loads and stores                   ok (8 checks)
+  +   38.830 | CSRs and counters                  ok (30 checks)
+  +   38.846 | scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  +   38.910 | text RAM (cells 2400-4095)         ok (1 checks)
+  +   38.910 | exceptions, each recovered         ok (34 checks)
+  +   38.926 | interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  +   38.942 | FENCE.I, code written to RAM       ok (2 checks)
+  +   38.942 | DDR                                skipped: no DDR controller in this bitstream
+  +   38.958 | 
+  +   38.958 | BRAMDIAG: PASS (203 checks)
+  +   38.958 | 
+  +   38.958 | UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+  +   38.990 | echo   1: 'A' 0x41
+  +   38.990 | echo   2: 'r' 0x72
+  +   38.990 | echo   3: 't' 0x74
+  +   38.990 | echo   4: 'y' 0x79
+  +   38.990 | echo   5: '7' 0x37

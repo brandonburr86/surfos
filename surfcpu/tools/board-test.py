@@ -566,7 +566,8 @@ def m3(r):
     for ch in typed:
         r.expect(r"echo\s+\d+: '%s' 0x%02x\n" % (re.escape(ch), ord(ch)), 'the typed %r echoed' % ch, 5)
     r.check(True, 'the UART both ways: each byte typed (%s) came back with its code' % typed)
-    r.observe('leds', 'Are LD4..LD7 lit and LD0 green (red would mean a failure)?')
+    r.observe('leds', 'Are LD4..LD6 lit, LD7 blinking about once a second (its heartbeat while it echoes), and LD0\n'
+                      'green (red would mean a failure)?')
 
 
 # ============================================================================== SurfBoot and SurfOS
