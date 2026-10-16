@@ -28,7 +28,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
               -Irtl/generated -I$(BD)/rtl
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
-        board-baseline-rt board-baseline board-top board-digilent
+        board-baseline-rt board-baseline board-top board-digilent board-wiring
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -109,7 +109,7 @@ board-top: $(BSIM)/tb_top.vvp
 	@echo "board-top: PASS (seeds 1 7 123, $(if $(SOC_REAL),real SoC,SoC stand-in))"
 
 # ------------------------------------------------------------------------------------ checks
-check-board: board-clockplan board-digilent
+check-board: board-clockplan board-digilent board-wiring
 	@echo "check-board: PASS"
 
 board-clockplan:
@@ -119,3 +119,10 @@ board-clockplan:
 board-digilent:
 	$(Q)$(BD)/digilent/fetch.sh verify
 
+# every port has one pin, agreeing with docs/WIRING.md and Digilent's master XDC files
+board-wiring:
+	@mkdir -p $(BSIM)
+	$(Q)$(PYTHON) tools/check-wiring.py
+	$(Q)$(PYTHON) tools/check-wiring.py --self-test > $(BSIM)/check-wiring-self-test.txt 2>&1 \
+	  || { cat $(BSIM)/check-wiring-self-test.txt; exit 1; }
+	@tail -1 $(BSIM)/check-wiring-self-test.txt
