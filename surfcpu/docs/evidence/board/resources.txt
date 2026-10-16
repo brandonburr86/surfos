@@ -5,10 +5,10 @@ Yosys counts, not Vivado's: an estimate. LUT includes LUTRAM/SRL; RAMB36 counts 
 design                                                                LUT     FF RAMB36  DSP CARRY4 BUFG MMCM PLL   IO
 ----------------------------------------------------------------------------------------------------------------------
 arty_a7_baseline (milestone 1, whole design)                          290    412      0    0     49    2    1   1   28
-surfcpu_arty_a7_top (whole SoC, HAS_DDR = 0)                         5277   2662     21    4    302    2    1   1   53
-  ... the same with -nodsp                                           7957   2662     21    0   consistent
-surfcpu_soc alone                                                    5597   2669     21    4    306    0    0   0    0
-  ... the same with -nodsp                                           8209   2669     21    0   consistent
+surfcpu_arty_a7_top (whole SoC, HAS_DDR = 0)                         5267   2662     21    4    302    2    1   1   53
+  ... the same with -nodsp                                           7664   2662     21    0   consistent
+surfcpu_soc alone                                                    5559   2669     21    4    306    0    0   0    0
+  ... the same with -nodsp                                           8591   2669     21    0   consistent
 arty_a7_clocks (the board's clocks and resets)                          2      6      0    0      0    2    1   1    0
 rtl/lib/surf_cdc_word.v (default parameters)                           35     70      0    0      0    0    0   0    0
 rtl/lib/surf_fifo.v (default parameters)                               19     10      0    0      6    0    0   0    0
@@ -19,9 +19,9 @@ rtl/lib/surf_sync.v (default parameters)                                0      2
 Share of each part (DS180 v2.6.1 table 4):
   arty_a7_baseline (milestone 1, whole design)     XC7A35T (Arty A7-35T)    LUT   1.4%  FF   1.0%  RAMB36   0.0%  DSP   0.0%  1 MMCM + 1 PLL (of 5 CMTs, one of each per CMT)
   arty_a7_baseline (milestone 1, whole design)     XC7A100T (Arty A7-100T)  LUT   0.5%  FF   0.3%  RAMB36   0.0%  DSP   0.0%  1 MMCM + 1 PLL (of 6 CMTs, one of each per CMT)
-  surfcpu_arty_a7_top (whole SoC, HAS_DDR = 0)     XC7A35T (Arty A7-35T)    LUT  25.4%  FF   6.4%  RAMB36  42.0%  DSP   4.4%  1 MMCM + 1 PLL (of 5 CMTs, one of each per CMT)
+  surfcpu_arty_a7_top (whole SoC, HAS_DDR = 0)     XC7A35T (Arty A7-35T)    LUT  25.3%  FF   6.4%  RAMB36  42.0%  DSP   4.4%  1 MMCM + 1 PLL (of 5 CMTs, one of each per CMT)
   surfcpu_arty_a7_top (whole SoC, HAS_DDR = 0)     XC7A100T (Arty A7-100T)  LUT   8.3%  FF   2.1%  RAMB36  15.6%  DSP   1.7%  1 MMCM + 1 PLL (of 6 CMTs, one of each per CMT)
-  surfcpu_soc alone                                XC7A35T (Arty A7-35T)    LUT  26.9%  FF   6.4%  RAMB36  42.0%  DSP   4.4%  0 MMCM + 0 PLL (of 5 CMTs, one of each per CMT)
+  surfcpu_soc alone                                XC7A35T (Arty A7-35T)    LUT  26.7%  FF   6.4%  RAMB36  42.0%  DSP   4.4%  0 MMCM + 0 PLL (of 5 CMTs, one of each per CMT)
   surfcpu_soc alone                                XC7A100T (Arty A7-100T)  LUT   8.8%  FF   2.1%  RAMB36  15.6%  DSP   1.7%  0 MMCM + 0 PLL (of 6 CMTs, one of each per CMT)
 
 Block RAM budget from spec/soc.toml (RAMB36 = 36 Kb, used as 1024 x 32 data bits):
