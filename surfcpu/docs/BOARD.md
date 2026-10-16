@@ -121,7 +121,8 @@ in `report_cdc` and `report_clock_interaction`, not disappear.
 | `surf_sync` (level into a two-flop synchronizer) | the same, this domain's period, from every other clock into `sync_ff[0]`; a pin's false path covers pins |
 | `surf_reset_sync` | false path to the presets (asynchronous assertion) |
 
-The synchronizer flops carry `ASYNC_REG` in the RTL. The files are Tcl (`read_xdc -ref
+The synchronizer flops carry `ASYNC_REG` in the RTL, and the scoped files set it again (so a
+lost attribute cannot split a chain). The files are Tcl (`read_xdc -ref
 <module> -unmanaged`) and processed late, after the clocks exist; they compare the clocks at
 the instance's ports and add nothing when both sides share a clock. `cdc_xdc_test.tcl` runs
 them with stand-in queries and checks every constraint they issue; `check-wiring.py` checks
@@ -160,12 +161,12 @@ card changes MISO after SCLK's falling edge, so within one cycle: the edge to th
 14 ns in data transfer mode, the SD specification), so MISO is at the pin by 32 ns (the input
 delay), leaving the pin-to-IOB-flop path the rest. MOSI changes with SCLK's falling edge and is
 sampled by the card at the next rising edge, 40 ns later: over 20 ns of setup (5 ns needed).
-The board delays are estimates, to be confirmed with the Pmod MicroSD and a card; DIV 1
-(6.25 MHz) doubles every margin.
+The board delays are estimates, to be confirmed with the Pmod MicroSD and a card; at DIV 1
+(6.25 MHz) the round trip has two cycles.
 
-Vivado's `check_timing` reports such ports separately from unconstrained ones (as ports
-"with no input delay but user has a false path constraint", and likewise for outputs); that
-category is deliberate and the only one `build.tcl` accepts. Any other `check_timing` finding
+Vivado's `check_timing` reports the ports that have a false path separately from unconstrained
+ones (as ports "with no input delay but user has a false path constraint", and likewise for
+outputs); that category is deliberate and the only one `build.tcl` accepts. Any other `check_timing` finding
 fails the build (section 8).
 
 ## 5. Milestone 1: `arty_a7_baseline`
