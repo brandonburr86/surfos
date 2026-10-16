@@ -15,10 +15,10 @@ and 8 for the bridge, and two DDR_STATUS rules):
   * no request waits more than TIMEOUT_CYCLES + 1 sys cycles;
   * calib_done and calib_fail are never both 1;
   * timeout, once set, stays set until rst;
-  * (task stale, defining STALE_CHECK) a successful response only after the controller
-    accepted a command (app_en with app_rdy) since its request was accepted: no stale answer
-    from an earlier request, for example one cut short by rst or abandoned by the watchdog, is
-    ever delivered as the answer to a later one.
+  * a successful response only after the controller accepted a command (app_en with app_rdy)
+    since its request was accepted: no stale answer from an earlier request, for example one
+    cut short by rst or abandoned by the watchdog, is ever delivered as the answer to a later
+    one, however many resets come in between.
 Synchronizers are plain flip-flops here: metastability is outside the proof.
 */
 module bridge_formal (
@@ -109,9 +109,7 @@ module bridge_formal (
         assert (waited <= TIMEOUT + 1);
         assert (!(calib_done && calib_fail));
         if (was_timeout && !rst) assert (timeout);
-`ifdef STALE_CHECK
         if (s_rsp_valid && !s_rsp_err) assert (cmds != cmds_at_acc);
-`endif
         cover (s_rsp_valid && !s_rsp_err);   // a real answer from the controller side
     end
 endmodule

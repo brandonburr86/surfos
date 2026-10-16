@@ -19,7 +19,7 @@ controller; no write command ever lost by a controller reset (its data always ca
 usage: tb_ddr_bridge [--test NAME|all] [--seed N] [--count N] [--sys-ns P] [--ui-ns P]
                      [--jitter F] [--lat MIN:MAX] [--rdy PCT] [--wdf PCT] [--no-refresh] [-v]
 tests: basic lanes bounds alias random stream precal calfail calfail-stopped watchdog
-       abandon sysreset uireset all (calfail-stopped is not part of all)
+       abandon wrap sysreset uireset all (calfail-stopped is not part of all)
 Exit status 0 when every selected test passes.
 */
 #include <cstdio>
@@ -433,6 +433,55 @@ bool t_abandon(const Options &o) {
     return ok;
 }
 
+// A stuck controller held through many resets: a read waits forever (the ui clock stopped),
+// then k more resets each with an access that times out, then the clock runs again and the next
+// read must get its own data, never the first read's late answer. (A request-id counter that
+// wraps around would deliver that stale answer for one k; the bridge keeps one request in flight
+// instead, so no k can.) k = 13..18.
+bool t_wrap(const Options &o) {
+    bool all = true;
+    for (int k = 13; k <= 18; ++k) {
+        Options oo = o;
+        oo.seed = o.seed * 101 + k;
+        MigUiConfig m = model_config(oo);
+        MigBench b(oo, MigSide(m), "wrap-" + std::to_string(k));
+        if (!b.wait_calib(calib_wait(oo, m))) b.fail("no calibration");
+        const uint32_t x = 0x80500000, y = 0x80500040;
+        b.write(x, 0xF, 0x11111111);
+        b.write(y, 0xF, 0x22222222);
+        b.stop_ui_clock();
+        Req rx; rx.addr = x;
+        Rsp s = b.access(rx);           // never answered: watchdog
+        if (!s.got || !s.err) b.fail("stuck read not timed out");
+        for (int i = 0; i < k; ++i) {
+            b.sys_reset(2);
+            b.wait_calib(16);
+            Req r; r.addr = 0x80510000 + 4 * i;
+            Rsp t = b.access(r);
+            if (!t.got || !t.err || (t.latency != kTimeout && t.latency != 0))
+                b.fail("access %d with the controller stuck: got=%d err=%d latency=%llu", i, t.got, t.err,
+                       (unsigned long long)t.latency);
+        }
+        b.sys_reset(2);
+        b.wait_calib(16);
+        b.start_ui_clock();             // the controller recovers; the first read finishes late
+        Req ry; ry.addr = y;
+        Rsp t = b.access(ry);
+        if (!t.got || t.err) b.fail("read after recovery: got=%d err=%d", t.got, t.err);
+        else if (t.rdata != 0x22222222) b.fail("read of y returned %08x (x holds 11111111)", t.rdata);
+        for (int i = 0; i < 50; ++i) {
+            uint32_t st = 0x0520000;
+            Rsp u = b.access(random_req(b.rng(), st));
+            if (!u.got || u.err) b.fail("access after recovery failed");
+        }
+        all = b.finish(true) && all;
+        if (k == 13 || b.failures) b.summary();
+    }
+    std::printf("tb_ddr_bridge: %-15s %s cases=6 (k = 13..18 resets with the controller stuck)\n", "wrap",
+                all ? "PASS" : "FAIL");
+    return all;
+}
+
 // Random traffic with rst at random moments, also in the middle of accesses at every stage.
 bool t_sysreset(const Options &o) {
     MigUiConfig m = model_config(o);
@@ -475,7 +524,8 @@ bool t_sysreset(const Options &o) {
 }
 
 // Random traffic while the controller itself resets (calibration lost and regained), at
-// random moments, also in the middle of accesses.
+// random moments, also in the middle of accesses: an access the reset cuts short is answered
+// by the ui side with an error, and afterwards everything works again.
 bool t_uireset(const Options &o) {
     MigUiConfig m = model_config(o);
     m.calib_cycles = 100;
@@ -495,21 +545,29 @@ bool t_uireset(const Options &o) {
             b.fail("no response");
         } else if (s.err) {
             if (s.latency == 0) ++at_once;               // calib_done already low
-            else if (s.latency < kTimeout) ++by_ui;      // the ui side refused it untouched
-            else ++by_watchdog;                          // a reset lost it inside the ui side
+            else if (s.latency < kTimeout) ++by_ui;      // the ui side: uncalibrated, or reset mid-access
+            else ++by_watchdog;                          // none expected: the ui side always answers
             if (b.timeout()) b.sys_reset(2);
             b.wait_calib(calib_wait(o, m) + 64);
         }
     }
-    for (int i = 0; i < 64; ++i) { Req r; r.addr = 0x80123450 + 4 * i; b.access(r); }
+    // after the last controller reset everything must work again, with nothing stuck in flight
+    b.ticks(200);
+    if (b.timeout()) b.sys_reset(2);
+    if (!b.wait_calib(calib_wait(o, m) + 64)) b.fail("no calibration after the last controller reset");
+    for (int i = 0; i < 64; ++i) { Req r; r.addr = 0x80123450 + 4 * i; if (!b.access(r).got) b.fail("no response"); }
+    for (int i = 0; i < 200; ++i) {
+        Rsp s = b.access(random_req(b.rng(), stream), b.rng().percent(50) ? 0 : 1);
+        if (!s.got || s.err) b.fail("access after the controller resets failed");
+    }
     bool ok = b.finish(true);
     char extra[160];
-    std::snprintf(extra, sizeof extra, "ui_resets=%llu refused_at_once=%llu refused_by_ui=%llu watchdog=%llu maybes=%llu",
+    std::snprintf(extra, sizeof extra, "ui_resets=%llu refused_at_once=%llu answered_by_ui=%llu watchdog=%llu maybes=%llu",
                   (unsigned long long)b.ui_resets_applied, (unsigned long long)at_once, (unsigned long long)by_ui,
                   (unsigned long long)by_watchdog, (unsigned long long)b.ref.maybes);
     b.summary(extra);
-    if (at_once == 0 || by_ui == 0 || by_watchdog == 0) {
-        std::printf("FAIL uireset: controller resets did not produce every kind of refusal\n");
+    if (at_once == 0 || by_ui == 0) {
+        std::printf("FAIL uireset: controller resets did not produce both kinds of error answer\n");
         ok = false;
     }
     return ok;
@@ -527,6 +585,7 @@ bool run(const std::string &t, const Options &o) {
     if (t == "calfail-stopped") return t_calfail(o, true);
     if (t == "watchdog") return t_watchdog(o);
     if (t == "abandon") return t_abandon(o);
+    if (t == "wrap") return t_wrap(o);
     if (t == "sysreset") return t_sysreset(o);
     if (t == "uireset") return t_uireset(o);
     std::printf("tb_ddr_bridge: unknown test %s\n", t.c_str());
@@ -539,7 +598,7 @@ int main(int argc, char **argv) {
     Options o;
     if (!parse_options(argc, argv, o)) return 2;
     const char *all[] = {"basic", "lanes", "bounds", "alias", "random", "stream", "precal", "calfail",
-                         "watchdog", "abandon", "sysreset", "uireset"};
+                         "watchdog", "abandon", "wrap", "sysreset", "uireset"};
     bool ok = true;
     if (o.test == "all") {
         for (const char *t : all) ok = run(t, o) && ok;

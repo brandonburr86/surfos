@@ -13,8 +13,7 @@ bridge never asks it to do some things (take an empty box) that it must still ge
 mutants remove a synchronizer stage: metastability is not simulated, so they are expected to
 survive, and say so (the clock crossings rest on review and on the timing constraints of
 docs/DDR.md instead). Equivalent mutants (no behaviour change, such as dropping the busy term
-of the response handling, which only runs while busy, or rs_got, since rs_q always holds the
-latest response and ids are not reused while one is outstanding) are left out.
+of the response handling, which only runs while busy) are left out.
 
     python3 sim/ddr/ddr_mutants.py [--only NAME ...] [--jobs N]
 
@@ -45,11 +44,15 @@ MUTANTS = [
     ("addr-shift", BRIDGE, "u_beat} << (BEAT_LSB - UNIT_LSB);", "u_beat} << (BEAT_LSB - UNIT_LSB - 1);", False),
     ("addr-bit27", BRIDGE, "s_req_addr[OFFSET_BITS-1:2], s_req_wdata}", "1'b0, s_req_addr[OFFSET_BITS-2:2], s_req_wdata}", False),
     ("cmd-swap", BRIDGE, "u_write ? 3'b000 : 3'b001", "u_write ? 3'b001 : 3'b000", False),
-    ("no-id-check", BRIDGE, "rs_mine = rs_got && busy && sent && (rs_q[RS_W-1 -: 4] == cur_id);",
-     "rs_mine = rs_got && busy && sent;", False),
-    ("id-reset", BRIDGE, "        if (!rst && accept && usable)\n            next_id <= next_id + 1'b1;",
-     "        if (rst) next_id <= 4'd0;\n        else if (accept && usable)\n            next_id <= next_id + 1'b1;", False),
-    ("err-bit", BRIDGE, "rsp_err_q   <= rs_q[32];", "rsp_err_q   <= rs_q[31];", False),
+    ("no-inflight-wait", BRIDGE, "wire             can_send = !inflight && rq_ready;",
+     "wire             can_send = rq_ready;", False),
+    ("inflight-reset", BRIDGE, "        if (rq_send)      inflight <= 1'b1;",
+     "        if (rst)          inflight <= 1'b0;\n        else if (rq_send) inflight <= 1'b1;", False),
+    ("no-owed-answer", BRIDGE, "                    if (u_owe) begin                         // a reset cut the last request",
+     "                    if (1'b0) begin                          // a reset cut the last request", False),
+    ("owe-reset", BRIDGE, "        if (rq_take)                 u_owe <= 1'b1;",
+     "        if (ui_rst)                  u_owe <= 1'b0;\n        else if (rq_take)            u_owe <= 1'b1;", False),
+    ("err-bit", BRIDGE, "rsp_err_q   <= rs_q[RS_W-1];", "rsp_err_q   <= rs_q[31];", False),
     ("watchdog-early", BRIDGE, "TO_LAST32  = TIMEOUT_CYCLES - 1;", "TO_LAST32  = TIMEOUT_CYCLES - 2;", False),
     ("no-fail-stop", BRIDGE, "usable  = cal_done_q && !timeout_q;", "usable  = cal_done_q;", False),
     ("no-precal-refusal", BRIDGE, "usable  = cal_done_q && !timeout_q;", "usable  = !timeout_q;", False),
@@ -61,7 +64,7 @@ MUTANTS = [
     ("wcmd-rdy-ignored", BRIDGE, "U_WCMD:\n                    if (app_rdy) begin", "U_WCMD:\n                    if (1'b1) begin", False),
     ("rcmd-rdy-ignored", BRIDGE, "U_RCMD:\n                    if (app_rdy) begin", "U_RCMD:\n                    if (1'b1) begin", False),
     ("ui-no-refusal", BRIDGE, "if (!init_calib_complete) begin", "if (1'b0) begin", False),
-    ("no-take", BRIDGE, "assign rq_take = !ui_rst && u_state == U_IDLE && rq_valid;", "assign rq_take = 1'b0;", False),
+    ("no-take", BRIDGE, "assign rq_take = !ui_rst && u_state == U_IDLE && !u_owe && rq_valid;", "assign rq_take = 1'b0;", False),
     ("rsp-in-reset", BRIDGE, "assign s_rsp_valid = rsp_valid_q && !rst;", "assign s_rsp_valid = rsp_valid_q;", False),
     ("box-send-unchecked", MAILBOX, "if (src_send && src_ready) begin", "if (src_send) begin", False),
     ("box-take-unchecked", MAILBOX, "if (dst_take && dst_valid)", "if (dst_take)", False),

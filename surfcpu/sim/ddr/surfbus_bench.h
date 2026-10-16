@@ -395,8 +395,11 @@ private:
                 if (s.err) {
                     ++errors;
                     if (s.latency == kTimeout) ++timeouts;
-                    if (out_req_.write && s.latency >= kTimeout) {
-                        ref.write(off, out_req_.be, out_req_.wdata, false);   // may have happened
+                    // Refused in the next cycle: never reached the controller. Later errors (the
+                    // watchdog, or the ui side answering an access its reset cut short) may
+                    // come after the controller already wrote.
+                    if (out_req_.write && s.latency > 0) {
+                        ref.write(off, out_req_.be, out_req_.wdata, false);
                         ++ref.maybes;
                     }
                     if (!dut_->timeout && s.latency == kTimeout) fail("watchdog error without TIMEOUT");

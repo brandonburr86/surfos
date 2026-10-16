@@ -23,22 +23,27 @@ side also refuses a request with an error, without touching the controller, if
 init_calib_complete is low when it arrives. The watchdog answers an access that has not
 completed TIMEOUT_CYCLES sys cycles after acceptance with an error, sets the sticky timeout
 output and from then on refuses every access at once (fail-stop) until rst: a controller that
-stopped answering is reported, never waited on for ever, and a late answer is never mistaken
-for the answer to a later access (each request carries an id, and a response whose id is not
-the outstanding one is dropped). An access the watchdog abandons while it still waits for the
-request mailbox is never carried out; one already in the mailbox or beyond may still be
-carried out later, in order (docs/DDR.md).
+stopped answering is reported, never waited on for ever. An access the watchdog abandons while
+it still waits to be sent is never carried out; one already sent may still be carried out later,
+in order (docs/DDR.md).
+
+At most one request is ever between the two clock domains, across resets too: the sys side
+keeps a never-reset flag for "a request was sent and its answer has not come back" and sends
+nothing new until that answer has come (and been dropped, if nobody waits for it any more), so
+the next answer is always the current request's; the ui side keeps a never-reset flag for "a
+request was taken and not yet answered" and, if its reset interrupted that request, answers it
+with an error as soon as the reset ends, so every request sent gets exactly one answer and the
+sys side's flag always clears.
 
 calib_done follows init_calib_complete (synchronized), unless calibration did not succeed
 within CALIB_TIMEOUT_CYCLES sys cycles of reset: then calib_fail is set and calib_done stays
 0 until rst, even if the controller finishes later (0 disables the limit).
 
 Resets: rst and ui_rst (the MIG's ui_clk_sync_rst) may come and go independently. The two
-mailboxes have no reset (surf_ddr_mailbox.v), the request id counter is not reset, and each
-side only sends and takes messages outside its own reset, so a reset of one side never
-invents, loses or mixes up a message. A request already handed to the ui side when rst comes
-is still carried out by it; its response is dropped, and every later access is ordered after
-it.
+mailboxes and the two flags above have no reset (surf_ddr_mailbox.v), and each side only sends
+and takes messages outside its own reset, so a reset of one side never invents, loses or mixes
+up a message. A request already sent to the ui side when rst comes is still carried out by it;
+its answer is dropped, and every later access waits for it.
 */
 module surf_ddr_bridge #(
     parameter integer TIMEOUT_CYCLES       = 4096,      // watchdog, sys_clk cycles after acceptance
@@ -101,9 +106,9 @@ module surf_ddr_bridge #(
     localparam [TO_W-1:0]  TO_LAST    = TO_LAST32[TO_W-1:0];      // last count before the watchdog
     localparam [CAL_W-1:0] CAL_LAST   = CAL_LAST32[CAL_W-1:0];
 
-    // request: id, write, be, word address, write data; response: id, error, read data
-    localparam integer RQ_W = 4 + 1 + 4 + WADDR_BITS + 32;
-    localparam integer RS_W = 4 + 1 + 32;
+    // request: write, be, word address, write data; response: error, read data
+    localparam integer RQ_W = 1 + 4 + WADDR_BITS + 32;
+    localparam integer RS_W = 1 + 32;
 
     // Parameters this bridge cannot serve stop the elaboration (an undefined module on purpose).
     generate
@@ -153,8 +158,7 @@ module surf_ddr_bridge #(
     // ---------------------------------------------------------------- SurfBus side
     reg              busy        = 1'b0;    // an accepted access waits for its response
     reg              sent        = 1'b0;    // ... and has gone into the request mailbox
-    reg  [3:0]       cur_id      = 4'd0;
-    reg  [3:0]       next_id     = 4'd0;    // never reset: ids stay unique across resets
+    reg              inflight    = 1'b0;    // never reset: a sent request's answer is still due
     reg  [RQ_W-1:0]  pend        = {RQ_W{1'b0}};
     reg  [TO_W-1:0]  wd_count    = {TO_W{1'b0}};
     reg              timeout_q   = 1'b0;
@@ -170,17 +174,18 @@ module surf_ddr_bridge #(
 
     wire             accept  = s_req_valid && s_req_ready;
     wire             usable  = cal_done_q && !timeout_q;
-    wire [RQ_W-1:0]  new_req = {next_id, s_req_write, s_req_be, s_req_addr[OFFSET_BITS-1:2], s_req_wdata};
+    wire [RQ_W-1:0]  new_req = {s_req_write, s_req_be, s_req_addr[OFFSET_BITS-1:2], s_req_wdata};
     wire             retry   = busy && !sent;
     wire             expire  = busy && wd_count == TO_LAST;   // the watchdog's last cycle
-    wire             rq_send = !rst && ((accept && usable) || (retry && !expire));
+    wire             can_send = !inflight && rq_ready;        // every earlier request answered
+    wire             rq_send = !rst && can_send && ((accept && usable) || (retry && !expire));
     wire [RQ_W-1:0]  rq_din  = retry ? pend : new_req;
-    wire             rs_take = !rst && rs_valid;          // every response is taken; stale ones dropped
-    wire             rs_mine = rs_got && busy && sent && (rs_q[RS_W-1 -: 4] == cur_id);
+    wire             rs_take = !rst && rs_valid;          // every answer is taken; stale ones dropped
+    wire             rs_mine = rs_got && busy && sent;    // only the current request's answer can come
 
     always @(posedge clk) begin
-        if (!rst && accept && usable)
-            next_id <= next_id + 1'b1;
+        if (rq_send)      inflight <= 1'b1;
+        else if (rs_take) inflight <= 1'b0;
     end
 
     always @(posedge clk) begin
@@ -202,8 +207,7 @@ module surf_ddr_bridge #(
             if (accept) begin
                 if (usable) begin
                     busy     <= 1'b1;
-                    sent     <= rq_ready;               // in the mailbox now, or retried
-                    cur_id   <= next_id;
+                    sent     <= can_send;               // in the mailbox now, or retried
                     pend     <= new_req;
                     wd_count <= {TO_W{1'b0}};
                 end else begin
@@ -212,12 +216,12 @@ module surf_ddr_bridge #(
                     rsp_rdata_q <= 32'h0;
                 end
             end else if (busy) begin
-                if (retry && rq_ready && !expire)
+                if (retry && can_send && !expire)
                     sent <= 1'b1;
                 if (rs_mine) begin
                     busy        <= 1'b0;
                     rsp_valid_q <= 1'b1;
-                    rsp_err_q   <= rs_q[32];
+                    rsp_err_q   <= rs_q[RS_W-1];
                     rsp_rdata_q <= rs_q[31:0];
                 end else if (expire) begin
                     busy        <= 1'b0;                // watchdog: answer, report, stop
@@ -264,7 +268,7 @@ module surf_ddr_bridge #(
                      U_RESP  = 3'd6;    // put the response into the mailbox
 
     reg  [2:0]            u_state    = U_IDLE;
-    reg  [3:0]            u_id       = 4'd0;
+    reg                   u_owe      = 1'b0;    // never reset: a taken request is not yet answered
     reg                   u_write    = 1'b0;
     reg  [3:0]            u_be       = 4'h0;
     reg  [WADDR_BITS-1:0] u_waddr    = {WADDR_BITS{1'b0}};
@@ -277,9 +281,14 @@ module surf_ddr_bridge #(
     wire [LANE_BITS-1:0]     u_lane = u_waddr[LANE_BITS-1:0];
     wire [BEAT_IDX_BITS-1:0] u_beat = u_waddr[WADDR_BITS-1:LANE_BITS];
 
-    assign rq_take = !ui_rst && u_state == U_IDLE && rq_valid;
+    assign rq_take = !ui_rst && u_state == U_IDLE && !u_owe && rq_valid;
     assign rs_send = !ui_rst && u_state == U_RESP;
-    assign rs_din  = {u_id, u_err, u_rdata};
+    assign rs_din  = {u_err, u_rdata};
+
+    always @(posedge ui_clk) begin
+        if (rq_take)                 u_owe <= 1'b1;
+        else if (rs_send && rs_ready) u_owe <= 1'b0;
+    end
 
     always @(posedge ui_clk) begin
         if (ui_rst) begin
@@ -289,8 +298,12 @@ module surf_ddr_bridge #(
         end else begin
             case (u_state)
                 U_IDLE:
-                    if (rq_valid) begin                      // the crossing ends in registers
-                        {u_id, u_write, u_be, u_waddr, u_wdata} <= rq_dout;
+                    if (u_owe) begin                         // a reset cut the last request
+                        u_err   <= 1'b1;                     // short: answer it, with an error
+                        u_rdata <= 32'h0;
+                        u_state <= U_RESP;
+                    end else if (rq_valid) begin             // the crossing ends in registers
+                        {u_write, u_be, u_waddr, u_wdata} <= rq_dout;
                         u_rdata <= 32'h0;
                         u_state <= U_START;
                     end
