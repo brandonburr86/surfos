@@ -130,9 +130,13 @@ the register and port names against the RTL (Vivado names a register `<name>_reg
 
 Crossings in the designs: the baseline sends its one-second gate into the pixel domain
 (`surf_pulse_sync`), brings the pixel count back (`surf_cdc_word`) and the pixel heartbeat
-(`surf_sync`). In the full top every crossing is inside the SoC (`surf_video` and the text
-RAM's two ports, io and soc tracks); the text RAM is a true dual-port block RAM with one port
-per clock, which has no timing path between its ports.
+(`surf_sync`). In the full top every crossing is inside the SoC: `surf_video` (IO.md section 3)
+sends its 214-bit settings word (CTRL, CURSOR, SCROLL, palette) from sys to pix through
+`surf_cdc_word` (so `hold` to `dst_data` is bounded by one pixel period, 39.718 ns, the smaller
+period), and brings the vertical blanking level (`surf_sync`) and the start-of-blanking pulse
+(`surf_pulse_sync`) back; the text RAM (soc track) has one port per clock. As a true dual-port
+block RAM it has no timing path between its ports; built from distributed RAM it would have
+one, which `report_cdc` would flag (to check at integration).
 
 **I/O.** Every port has a timing constraint (`check-wiring.py` proves it statically):
 
@@ -141,11 +145,23 @@ per clock, which has no timing path between its ports.
 | `clk100` | `create_clock` 10 ns | the oscillator |
 | `sw`, `btn`, `ck_rst_n`, `uart_rx` | false path from | no relation to any FPGA clock; each enters a synchronizer |
 | `led`, `rgb`, `uart_tx` | false path to | eyes, and the FT2232's own 8.7 µs bit clock |
-| `sd_sclk`, `sd_mosi`, `sd_cs_n` | output delay on `sys_clk`, -max 20 ns, -min 0 | all three settle within 20 ns of their edge; SCLK's half period is at least 40 ns |
-| `sd_miso` | false path from | it changes after SCLK falls and is taken at the next rising SCLK, at least one `sys_clk` cycle later (a rule `surf_spi` must keep) |
-| `sd_cd_n`, `sd_dat1`, `sd_dat2` | false path from | a mechanical switch; parked lines |
+| `sd_sclk`, `sd_mosi` | output delay on `sys_clk`, -max 28 ns, -min 0; MOSI's flop in the IOB | each pin within 12 ns of its `sys_clk` edge (the SPI budget below) |
+| `sd_miso` | input delay on `sys_clk`, -max 32 ns, -min 2 ns; the sampling flop in the IOB | the round trip SCLK out, card, MISO in must fit one `sys_clk` cycle at DIV = 0 (below) |
+| `sd_cs_n` | output delay on `sys_clk`, -max 20 ns, -min 0 | changes only between transfers, when software writes CTRL |
+| `sd_cd_n`, `sd_dat1`, `sd_dat2` | false path from | a mechanical switch (through `surf_sync`); parked lines |
 | `vga_r/g/b`, `vga_hs`, `vga_vs` | output delay on `pix_clk`, -max 20 ns, -min 0 | every color bit and sync settles within 20 ns of the pixel edge (a pixel is 39.7 ns) |
 | `ps2_clk`, `ps2_data` (and the parked spare pair) | false path from and to | open drain at 10-16.7 kHz, clocked by the keyboard; `surf_ps2` synchronizes |
+
+**The SPI budget.** `surf_spi` samples MISO, without a synchronizer, on the `sys_clk` edge
+that raises SCLK (IO.md section 1). At DIV = 0 each SCLK half period is one 40 ns cycle, and the
+card changes MISO after SCLK's falling edge, so within one cycle: the edge to the SCLK pin
+(at most 12 ns, the output delay), the board both ways (traces, JA's 200 Ω, the Pmod, about
+10 pF: estimated at most 3 ns each way), the card's output delay after SCLK falls (at most
+14 ns in data transfer mode, the SD specification), so MISO is at the pin by 32 ns (the input
+delay), leaving the pin-to-IOB-flop path the rest. MOSI changes with SCLK's falling edge and is
+sampled by the card at the next rising edge, 40 ns later: over 20 ns of setup (5 ns needed).
+The board delays are estimates, to be confirmed with the Pmod MicroSD and a card; DIV 1
+(6.25 MHz) doubles every margin.
 
 Vivado's `check_timing` reports such ports separately from unconstrained ones (as ports
 "with no input delay but user has a false path constraint", and likewise for outputs); that

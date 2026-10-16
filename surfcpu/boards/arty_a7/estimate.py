@@ -12,7 +12,9 @@ together with the block RAM budget the memory map implies (docs/BOARD.md section
                                                   docs/evidence/board/resources.txt)
 
 Yosys is not Vivado: its counts are estimates (Vivado usually needs fewer LUTs after its own
-optimization, and packs differently). The device capacities are AMD DS180 v2.6.1 table 4:
+optimization, and packs differently). Yosys 0.52 has also been seen to delete logic when it
+packs a multiply into a DSP48 (io commit 534de7b), so every design that uses DSP48s is also
+synthesized with -nodsp and the two flip-flop counts are compared. The device capacities are AMD DS180 v2.6.1 table 4:
 XC7A35T 5,200 slices (20,800 LUTs, 41,600 flip-flops), 50 RAMB36 (1,800 Kb), 90 DSP48E1,
 5 CMTs; XC7A100T 15,850 slices (63,400 LUTs, 126,800 flip-flops), 135 RAMB36 (4,860 Kb),
 240 DSP48E1, 6 CMTs (each slice 4 LUTs and 8 flip-flops; each CMT one MMCM and one PLL).
@@ -50,13 +52,14 @@ def design_files(design: str, kind: str) -> list[str]:
     return out
 
 
-def synth(name: str, top: str, files: list[str], incs: list[str], pads: bool) -> dict:
+def synth(name: str, top: str, files: list[str], incs: list[str], pads: bool, dsp: bool = True) -> dict:
     """Yosys synth_xilinx; returns {cell type: count} for the flattened top. pads = False for a
-    block inside the chip (no I/O buffers or clock buffers on its ports)."""
+    block inside the chip (no I/O buffers or clock buffers on its ports); dsp = False keeps
+    multiplies in LUTs."""
     with tempfile.TemporaryDirectory() as tmp:
         js = Path(tmp) / "stat.json"
         inc = " ".join(f"-I{i}" for i in incs)
-        opts = "" if pads else " -noiopad -noclkbuf"
+        opts = ("" if pads else " -noiopad -noclkbuf") + ("" if dsp else " -nodsp")
         script = (f"read_verilog {inc} {' '.join(files)}; "
                   f"synth_xilinx -family xc7 -flatten{opts} -top {top}; tee -q -o {js} stat -json")
         r = subprocess.run(["yosys", "-q", "-p", script], cwd=ROOT, capture_output=True, text=True)
@@ -119,11 +122,22 @@ def main(argv: list[str]) -> int:
     out.append(head)
     out.append("-" * len(head))
     results = {}
+    suspects = []
     for name, top, files, pads in runs:
         r = resources(synth(name, top, files, incs, pads))
         results[name] = r
         out.append(f"{name:66s} {r['LUT']:6d} {r['FF']:6d} {r['RAMB36']:6g} {r['DSP']:4d} {r['CARRY4']:6d} "
                    f"{r['BUFG']:4d} {r['MMCM']:4d} {r['PLL']:3d} {r['IO']:4d}")
+        if r["DSP"]:
+            # Yosys 0.52 can lose logic when it packs a multiply into a DSP48 (io commit 534de7b):
+            # with multiplies kept in LUTs the flip-flops may only grow by what DSP48E1s can
+            # absorb (A, B, C, M and P registers, under 150 bits each).
+            n = resources(synth(name, top, files, incs, pads, dsp=False))
+            ok = n["FF"] - r["FF"] <= 150 * r["DSP"]
+            out.append(f"{'  ... the same with -nodsp':66s} {n['LUT']:6d} {n['FF']:6d} {n['RAMB36']:6g} "
+                       f"{n['DSP']:4d}   {'consistent' if ok else 'SUSPECT: logic may have vanished in DSP packing'}")
+            if not ok:
+                suspects.append(name)
     out.append("")
     out.append("Share of each part (DS180 v2.6.1 table 4):")
     for name in [n for n in results if n.startswith(("arty_a7_baseline", "surfcpu_"))]:
@@ -143,6 +157,11 @@ def main(argv: list[str]) -> int:
     for part, cap in PARTS.items():
         out.append(f"  {part:24s} {cap['RAMB36']:3d} RAMB36: {total} used ({100 * total / cap['RAMB36']:.0f}%), "
                    f"{cap['RAMB36'] - total} free")
+    out.append("")
+    out.append("DSP48 check (designs with DSP48s are synthesized again with -nodsp; Yosys 0.52 lost logic "
+               "packing a multiply in io commit 534de7b): " +
+               (f"SUSPECT in {', '.join(suspects)}" if suspects else
+                "no design here uses a DSP48" if not any(r["DSP"] for r in results.values()) else "consistent"))
     text = "\n".join(out) + "\n"
     if len(argv) > 1:
         Path(argv[1]).write_text(text)

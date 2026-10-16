@@ -15,8 +15,8 @@ Checks that the Arty A7 designs' pins agree everywhere (brief section 4, docs/WI
   * the row's Digilent name has that pin and I/O standard in both master XDC files
     (boards/arty_a7/digilent/xdc, A7-35 and A7-100), and the pin is in one of the 3.3 V
     banks 14, 15, 16, 35 (Arty A7 schematic Rev. E.0 sheet 7), never the 1.35 V DDR bank 34;
-  * no unconstrained I/O: every input is a clock, has an input delay or a false path from it,
-    every output has -max and -min output delays or a false path to it (inouts both), and
+  * no unconstrained I/O: every input is a clock, has -max and -min input delays or a false
+    path from it, every output -max and -min output delays or a false path to it (inouts both), and
     every get_ports pattern in the design's XDC files matches one of its ports;
   * the scoped CDC constraints (boards/arty_a7/xdc/cdc) name registers and ports their
     rtl/lib modules really have (Vivado's names: <reg>_reg, <reg>_reg[i] for vectors), and
@@ -210,8 +210,8 @@ def wiring_options(text: str) -> set[str]:
 
 def read_timing(paths: list[Path]) -> list[tuple[str, str, list[str], str]]:
     """[(command, role, port patterns, where)] for every timing command naming ports.
-    role: 'clock' (create_clock), 'from'/'to' (set_false_path), 'in' (set_input_delay),
-    'out-max'/'out-min'/'out' (set_output_delay), 'pin' (a pin property line)."""
+    role: 'clock' (create_clock), 'from'/'to' (set_false_path), 'in-max'/'in-min'/'in'
+    (set_input_delay), 'out-max'/'out-min'/'out' (set_output_delay), 'pin' (a pin property)."""
     out = []
     for path in paths:
         for n, raw in enumerate(path.read_text().splitlines(), 1):
@@ -228,7 +228,7 @@ def read_timing(paths: list[Path]) -> list[tuple[str, str, list[str], str]]:
                 elif cmd == "set_false_path":
                     role = (m.group(1) or "").lstrip("-") or "?"
                 elif cmd == "set_input_delay":
-                    role = "in"
+                    role = "in-max" if "-max" in words else "in-min" if "-min" in words else "in"
                 elif cmd == "set_output_delay":
                     role = "out-max" if "-max" in words else "out-min" if "-min" in words else "out"
                 elif cmd == "set_property":
@@ -269,10 +269,10 @@ def check_timing_coverage(data: dict) -> list[str]:
                     cover[h].add(role)
         for port, dirn in sorted(ports.items()):
             roles = cover[port]
-            ins = bool(roles & {"clock", "from", "in"})
+            ins = bool(roles & {"clock", "from", "in"}) or {"in-max", "in-min"} <= roles
             outs = "to" in roles or "out" in roles or {"out-max", "out-min"} <= roles
             if dirn in ("in", "inout") and not ins:
-                errors.append(f"{name}: input {port} has no clock, input delay or false path (unconstrained I/O)")
+                errors.append(f"{name}: input {port} has no clock, -max/-min input delay or false path (unconstrained I/O)")
             if dirn in ("out", "inout") and not outs:
                 errors.append(f"{name}: output {port} has no -max/-min output delay or false path (unconstrained I/O)")
         # clock renaming: the hierarchy the get_pins paths name must exist
@@ -444,7 +444,11 @@ def self_test() -> int:
     def m_nofp(data):         # an input without any timing constraint
         t = data["designs"][d0]["timing"]
         data["designs"][d0]["timing"] = [x for x in t if not (x[1] == "from" and "sd_cd_n" in " ".join(x[2]))]
-        data["designs"][d0]["timing"].append(("set_false_path", "from", ["sd_miso", "sd_dat1", "sd_dat2"], "t.xdc:1"))
+        data["designs"][d0]["timing"].append(("set_false_path", "from", ["sd_dat1", "sd_dat2"], "t.xdc:1"))
+
+    def m_noimin(data):       # an input with only a -max input delay
+        t = data["designs"][d0]["timing"]
+        data["designs"][d0]["timing"] = [x for x in t if x[1] != "in-min"]
 
     def m_noomin(data):       # an output with only a -max output delay
         t = data["designs"][d0]["timing"]
@@ -468,6 +472,7 @@ def self_test() -> int:
              ("options", m_opt, "sd_cd_n"), ("Digilent name", m_master, "vga_g[0]"),
              ("DDR bank", m_bank, "bank 34"), ("35T/100T", m_variant, "jd[2]"),
              ("stray row", m_unlisted, "sw[9]"), ("no false path", m_nofp, "sd_cd_n has no clock"),
+             ("only -max input delay", m_noimin, "sd_miso has no clock"),
              ("only -max delay", m_noomin, "output delay or false path"),
              ("dangling get_ports", m_dangling, "vga_q[*] matches no port"),
              ("CDC cell name", m_cell, "src_toggel_reg")]

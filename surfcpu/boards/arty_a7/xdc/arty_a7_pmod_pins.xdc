@@ -4,10 +4,12 @@
 ## checked by tools/check-wiring.py against the master XDC files, the top-level ports and
 ## docs/WIRING.md sections 2.2-2.4, which also list what is unverified.
 
-## Pmod JA: Pmod MicroSD, SPI mode (JA has 200 ohm series resistors)
+## Pmod JA: Pmod MicroSD, SPI mode (JA has 200 ohm series resistors). MOSI's output flop and
+## MISO's sampling flop go into the I/O blocks (IOB), for the one-cycle SPI budget of
+## arty_a7_pmod_timing.xdc.
 set_property -dict { PACKAGE_PIN G13   IOSTANDARD LVCMOS33 } [get_ports { sd_cs_n }];               # ja[0] J1-1 ~CS
-set_property -dict { PACKAGE_PIN B11   IOSTANDARD LVCMOS33 } [get_ports { sd_mosi }];               # ja[1] J1-2 MOSI
-set_property -dict { PACKAGE_PIN A11   IOSTANDARD LVCMOS33 PULLUP true } [get_ports { sd_miso }];   # ja[2] J1-3 MISO
+set_property -dict { PACKAGE_PIN B11   IOSTANDARD LVCMOS33 IOB TRUE } [get_ports { sd_mosi }];                # ja[1] J1-2 MOSI
+set_property -dict { PACKAGE_PIN A11   IOSTANDARD LVCMOS33 PULLUP true IOB TRUE } [get_ports { sd_miso }];    # ja[2] J1-3 MISO
 set_property -dict { PACKAGE_PIN D12   IOSTANDARD LVCMOS33 } [get_ports { sd_sclk }];               # ja[3] J1-4 SCK
 set_property -dict { PACKAGE_PIN D13   IOSTANDARD LVCMOS33 PULLUP true } [get_ports { sd_dat1 }];   # ja[4] J1-7 DAT1 (parked)
 set_property -dict { PACKAGE_PIN B18   IOSTANDARD LVCMOS33 PULLUP true } [get_ports { sd_dat2 }];   # ja[5] J1-8 DAT2 (parked)

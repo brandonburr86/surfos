@@ -41,7 +41,8 @@ Status: **checked** = the master XDC, the reference manual and the schematic agr
 ## 2. The table
 
 Directions are the FPGA's. *Options* are the extra pin properties in the XDC (the defaults
-otherwise: no pull, 12 mA, slow slew). The baseline design uses the base pins only; the full
+otherwise: no pull, 12 mA, slow slew); IOB puts the pin's flip-flop into the I/O block (the
+SPI timing of BOARD.md section 4). The baseline design uses the base pins only; the full
 top (`surfcpu_arty_a7_top`) uses all of them.
 
 ### 2.1 Base: clock, reset, switches, buttons, LEDs, UART
@@ -86,8 +87,8 @@ full drive).
 | Port | Adapter pin | Board pin | FPGA pin | Dir | I/O standard | Options | Master XDC | Status |
 |---|---|---|---|---|---|---|---|---|
 | `sd_cs_n` | J1-1 ~CS (CS/CD/DAT3) | JA1 (200 Ω) | G13 | out | LVCMOS33 | - | `ja[0]` | unverified (adapter revision) |
-| `sd_mosi` | J1-2 MOSI (CMD/DI) | JA2 (200 Ω) | B11 | out | LVCMOS33 | - | `ja[1]` | unverified (adapter revision) |
-| `sd_miso` | J1-3 MISO (DAT0/DO) | JA3 (200 Ω) | A11 | in | LVCMOS33 | PULLUP | `ja[2]` | unverified (adapter revision) |
+| `sd_mosi` | J1-2 MOSI (CMD/DI) | JA2 (200 Ω) | B11 | out | LVCMOS33 | IOB | `ja[1]` | unverified (adapter revision) |
+| `sd_miso` | J1-3 MISO (DAT0/DO) | JA3 (200 Ω) | A11 | in | LVCMOS33 | PULLUP IOB | `ja[2]` | unverified (adapter revision) |
 | `sd_sclk` | J1-4 SCK | JA4 (200 Ω) | D12 | out | LVCMOS33 | - | `ja[3]` | unverified (adapter revision) |
 | `sd_dat1` | J1-7 DAT1 (unused in SPI mode; parked) | JA7 (200 Ω) | D13 | in | LVCMOS33 | PULLUP | `ja[4]` | unverified (adapter revision) |
 | `sd_dat2` | J1-8 DAT2 (unused in SPI mode; parked) | JA8 (200 Ω) | B18 | in | LVCMOS33 | PULLUP | `ja[5]` | unverified (adapter revision) |
