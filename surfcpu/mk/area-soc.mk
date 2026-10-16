@@ -218,18 +218,29 @@ test-soc-models: $(SOC_DIR)/test_models
 
 # ---------------------------------------------------------------------------- surfsim
 # build/sim/surfsim: the whole SoC (the real core and io blocks once they exist) with the C++
-# models; build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for
-# the tests. Built with RVFI so --trace works with the real core. The Verilator object
+# models at its pins (UART, DDR, the io track's SD card, PS/2 keyboard and VGA capture);
+# build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for the
+# tests. Built with RVFI so --trace works with the real core, with Verilator -O3 and
+# --x-assign fast for speed (the system boot runs hundreds of millions of cycles), and with
+# SYS_HZ/PIX_HZ from the generated header, as the board top passes them. The Verilator object
 # directories are deleted once the binaries are copied (disk space); a rebuild starts afresh.
 SOC_BUILD_FLAGS := $(shell echo $$(( 2 + ($(SURFCPU_BUILD_DIRTY) & 1) )))
 SOC_SIM_DEFS    := --define build_id=0x$(BUILD_ID_HEX) --define build_flags=$(SOC_BUILD_FLAGS) \
                    --define build_time=0
-SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O2 --top-module surfcpu_soc \
+SOC_GEN_H       := firmware/include/surfcpu/soc.h
+SOC_SYS_HZ      := $(shell awk '$$2 == "SURF_SYS_HZ" { print $$3 }' $(SOC_GEN_H))
+SOC_PIX_HZ      := $(shell awk '$$2 == "SURF_PIX_HZ" { print $$3 }' $(SOC_GEN_H))
+SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O3 --x-assign fast --top-module surfcpu_soc \
                    +define+SURFCPU_RVFI $(SOC_INC) \
                    -GBUILD_ID=32\'h$(BUILD_ID_HEX) -GBUILD_FLAGS=32\'h$(SOC_BUILD_FLAGS) \
+                   -GSYS_HZ=$(SOC_SYS_HZ) -GPIX_HZ=$(SOC_PIX_HZ) \
                    -CFLAGS "-std=c++17 -O2 -DSURFCPU_RVFI -I$(CURDIR)/sim/models \
                    -I$(CURDIR)/firmware/include"
-SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_MODEL_SRC)
+SOC_SIM_MODELS  := $(SOC_MODEL_SRC) sim/models/sdcard_model.cpp sim/models/ps2_keyboard_model.cpp \
+                   sim/models/vga_capture.cpp
+SOC_SIM_HDR     := $(SOC_MODEL_HDR) sim/models/sdcard_model.h sim/models/ps2_keyboard_model.h \
+                   sim/models/vga_capture.h $(SOC_GEN_H) rtl/generated/surfcpu_soc.vh
+SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_SIM_MODELS)
 
 # the build identity is compiled into surfsim (sysinfo) and into the scripts that check it:
 # a stamp per identity rebuilds both together when the commit or the dirty state changes
@@ -239,7 +250,7 @@ $(SOC_ID_STAMP):
 	@rm -f $(SOC_DIR)/build-id.*.stamp
 	@touch $@
 
-$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_MODEL_HDR) \
+$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_SIM_HDR) \
                      $(SOC_ID_STAMP)
 	@mkdir -p $(BUILD)/sim/obj_surfsim
 	$(Q)$(SOC_VERILATE) --Mdir $(BUILD)/sim/obj_surfsim -o surfsim \
@@ -248,7 +259,7 @@ $(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP
 	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim
 
 $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
-                                   $(SOC_MODEL_HDR) $(SOC_ID_STAMP)
+                                   $(SOC_SIM_HDR) $(SOC_ID_STAMP)
 	@mkdir -p $(SOC_DIR)/surfsim_script/obj
 	$(Q)$(SOC_VERILATE) --Mdir $(SOC_DIR)/surfsim_script/obj -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
@@ -470,6 +481,7 @@ else
 	@echo "  [surfboot] $$(grep -m1 '^SurfBoot ' $(SOC_DIR)/boot-surfboot.txt); the monitor answered help"
 	@echo "test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)"
 endif
+
 
 # ---------------------------------------------------------------------------- the tests' own check
 # 37 one-line bugs planted in copies of the RTL (sim/soc/tools/mutants.py); the unit testbench
