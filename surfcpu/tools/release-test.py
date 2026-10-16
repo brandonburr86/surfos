@@ -426,15 +426,19 @@ class TestMake(unittest.TestCase):
 
 # ------------------------------------------------------------------------------- program.sh flash path
 FAKE_OFL = (ROOT / "sim" / "board" / "tools" / "fake" / "openFPGALoader").resolve()
+# the stand-in first, then only the system's own directories: never Homebrew's, where the real one lives
+SAFE_PATH = f"{FAKE_OFL.parent}:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-class TestProgramFlash(unittest.TestCase):
-    """tools/program.sh flash on a release's bitstream, with sim/board/tools/fake/openFPGALoader named by
-    OPENFPGALOADER (program.sh's override), never the real openFPGALoader: a board may be plugged in"""
+class FlashFixture(unittest.TestCase):
+    """a release's bitstream and build record for tools/program.sh, with sim/board/tools/fake/openFPGALoader named
+    by OPENFPGALOADER (program.sh's override) and first on a PATH without Homebrew: never the real openFPGALoader,
+    since a board may be plugged in"""
+    REL = "release"
 
     def setUp(self):
-        self.dir = fresh(f"flash-{self._testMethodName}")
-        self.rel = self.dir / "release"
+        self.dir = fresh(f"flash-{type(self).__name__}-{self._testMethodName}")
+        self.rel = self.dir / self.REL
         self.d = self.rel / "fpga/arty_a7_100t/surfcpu_arty_a7_ddr"
         self.d.mkdir(parents=True)
         self.bit = self.d / "surfcpu_arty_a7_ddr.bit"
@@ -445,10 +449,10 @@ class TestProgramFlash(unittest.TestCase):
         self.bin = self.rel / "flash/arty_a7_100t/surfcpu_arty_a7_ddr.bin"
         self.bin.write_bytes(stream)
         self.log = self.dir / "calls.log"
-        self.env = {k: v for k, v in os.environ.items() if k not in ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL",
-                                                                       "OPENFPGALOADER", "BIT", "DESIGN")}
-        self.env.update(PATH=f"{ROOT / 'sim/board/tools/fake'}:{os.environ['PATH']}", FAKE_LOG=str(self.log),
-                        FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL", "OPENFPGALOADER", "BIT", "DESIGN", "BOARD",
+                                 "SURFCPU_FPGA_OUT", "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "SURFCPU_IN_CONTAINER")}
+        self.env.update(PATH=SAFE_PATH, FAKE_LOG=str(self.log), FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
 
     def record(self, bit: Path, **over):
         m = {"design": "surfcpu_arty_a7_ddr", "board": "arty_a7_100t", "part": "xc7a100tcsg324-1",
@@ -458,16 +462,31 @@ class TestProgramFlash(unittest.TestCase):
             "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n"
             + "".join(f'{k} = "{v}"\n' for k, v in m.items()))
 
-    def program(self, *args, **env):
-        self.log.write_text("")
-        e = dict(self.env, **env)
-        # never a real programmer: the stand-in by its full path, and it must be the stand-in
+    def safe(self, e: dict) -> None:
+        """never a real programmer: the stand-in by its full path, and the only openFPGALoader on PATH"""
         assert e["OPENFPGALOADER"] == str(FAKE_OFL), e["OPENFPGALOADER"]
         assert FAKE_OFL.read_text().startswith("#!/bin/sh\n# Fake openFPGALoader"), FAKE_OFL
-        r = subprocess.run(["sh", ROOT / "tools/program.sh"] + [str(a) for a in args], env=e, capture_output=True,
-                           text=True, stdin=subprocess.DEVNULL)
+        assert e["PATH"] == SAFE_PATH, e["PATH"]
+        found = subprocess.run(["sh", "-c", "command -v openFPGALoader"], env=e, capture_output=True,
+                               text=True).stdout.strip()
+        assert found == str(FAKE_OFL), found
+
+    def run_logged(self, cmd: list, **env):
+        self.log.write_text("")
+        e = dict(self.env, **env)
+        self.safe(e)
+        r = subprocess.run([str(a) for a in cmd], env=e, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         return r, self.log.read_text()
 
+    def program(self, *args, **env):
+        return self.run_logged(["sh", ROOT / "tools/program.sh"] + list(args), **env)
+
+    def make(self, *args, **env):
+        return self.run_logged(["make", "--no-print-directory", "-C", ROOT, "-f", "mk/host.mk"] + list(args),
+                               PYTHON_HOST=PY, **env)
+
+
+class TestProgramFlash(FlashFixture):
     def test_confirmed_write(self):
         r, calls = self.program("flash", "arty_a7_100t", self.bit, SURFCPU_FLASH_CONFIRM="write-flash-arty_a7_100t")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -513,6 +532,98 @@ class TestProgramFlash(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}", calls)
         self.assertNotIn(" -f ", calls)
+
+
+class TestBitfileStrict(FlashFixture):
+    """review c1: one rule for a .bit header in tools/bitfile.py and tools/program.sh, fields a, b, c, d once each
+    and in this order, then e; anything else, and a stream with no IDCODE or DESYNC, fails cleanly"""
+
+    @staticmethod
+    def field(k: str, s: str) -> bytes:
+        raw = s.encode() + b"\0"
+        return k.encode() + struct.pack(">H", len(raw)) + raw
+
+    def header(self, keys: list, stream: bytes) -> bytes:
+        val = {"a": "top.frames;Generator=xc7frames2bit", "b": "xc7a100tcsg324-1", "B": "xc7a35tcsg324-1",
+               "c": "2026/10/16", "d": "13:41:43"}
+        return (bitfile.MAGIC + b"".join(self.field(k.lower(), val[k]) for k in keys) + b"e"
+                + struct.pack(">I", len(stream)) + stream)
+
+    def cases(self) -> dict:
+        _, _, start = bitfile.parse_header(bitfile.synthetic())
+        stream = bitfile.synthetic()[start:]
+        return {name: self.header(keys, stream) for name, keys in (
+            ("no field b", ["a", "c", "d"]), ("field b twice", ["a", "b", "B", "c", "d"]),
+            ("field b twice, the other part first", ["a", "B", "b", "c", "d"]),
+            ("field c twice", ["a", "b", "c", "c", "d"]), ("b before a", ["b", "a", "c", "d"]),
+            ("no field d", ["a", "b", "c"]))}
+
+    def test_header_rule(self):
+        ok = self.header(["a", "b", "c", "d"], bitfile.synthetic()[bitfile.parse_header(bitfile.synthetic())[2]:])
+        self.assertEqual(bitfile.parse_header(ok)[0]["b"], "xc7a100tcsg324-1")
+        for name, data in self.cases().items():
+            with self.subTest(name):
+                p = self.dir / "case.bit"
+                p.write_bytes(data)
+                for fn in (bitfile.parse_header, lambda d: bitfile.stamp(d, 7), bitfile.report,
+                           lambda d: bitfile.flash_image(d, "arty_a7_100t")):
+                    self.assertRaises(bitfile.BitError, fn, data)
+                for args in (["stamp", p, "--epoch", "7"], ["flash", p, "-o", self.dir / "x.bin", "--board",
+                                                            "arty_a7_100t"], ["info", p]):
+                    r = subprocess.run([PY, ROOT / "tools/bitfile.py"] + [str(a) for a in args], capture_output=True,
+                                       text=True)
+                    self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
+                    self.assertTrue(r.stderr.startswith("bitfile: "), r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(p.read_bytes(), data, "stamp leaves a file it refuses alone")
+                r, calls = self.program("volatile", "arty_a7_100t", p)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("refusing", r.stderr)
+                self.assertNotIn(str(p), calls)
+
+    def test_random_damage(self):
+        import random
+        good = bitfile.synthetic()
+        _, _, start = bitfile.parse_header(good)
+        rng = random.Random(1)
+        odd = []
+        for n in range(3000):
+            d = bytearray(good)
+            if n % 3 == 0:
+                d[rng.randrange(0, start)] = rng.randrange(256)
+            elif n % 3 == 1:
+                d = d[:rng.randrange(0, start + 64)]
+            else:
+                k = rng.randrange(13, start)
+                d = d[:k] + bytes([rng.randrange(256)]) + d[k:]
+            for fn in (bitfile.parse_header, bitfile.report, lambda x: bitfile.stamp(x, 7),
+                       lambda x: bitfile.flash_image(x, "arty_a7_100t")):
+                try:
+                    fn(bytes(d))
+                except bitfile.BitError:
+                    pass
+                except Exception as e:                                          # noqa: BLE001
+                    odd.append((n, type(e).__name__, str(e)))
+        self.assertEqual(odd, [])
+
+    def test_info_on_an_incomplete_stream(self):
+        good = bitfile.synthetic()
+        _, _, start = bitfile.parse_header(good)
+        cut = good[start:start + 80]
+        p = self.dir / "short.bit"
+        p.write_bytes(good[:start - 4] + struct.pack(">I", len(cut)) + cut)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("PROBLEM: no IDCODE", r.stdout)
+        self.assertIn("PROBLEM: no DESYNC", r.stdout)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p.with_name("whole.bit")], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 1)
+        p.with_name("whole.bit").write_bytes(good)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p.with_name("whole.bit")], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("PROBLEM", r.stdout)
 
 
 if __name__ == "__main__":
