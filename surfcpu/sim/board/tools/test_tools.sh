@@ -282,11 +282,11 @@ run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 CABLE_SERIAL=210319A28C7F tools/pr
 check "cable: ... and accepted with one" is "$rc" 0
 
 # the bitstream's header: device and package (UG470 .bit fields a and b, as Vivado writes them)
-mkbit() {     # FILE PART: a .bit header with fields a and b, then filler
+mkbit() {     # FILE PART: a .bit header (fields a, b, c, d once each, then e: the length of the rest), then filler
     n=$(( ${#2} + 1 ))
     { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\016other_project\000b\000'
       printf "\\$(printf '%03o' "$n")"
-      printf '%s\000c\000\01310/01/2026\000 not a real bitstream\n' "$2"; } > "$1"
+      printf '%s\000c\000\01310/01/2026\000d\000\01112:00:00\000e\000\000\000\026 not a real bitstream\n' "$2"; } > "$1"
 }
 mkdir -p "$t/bits"
 for c in "7a35tcpg236:arty_a7_35t:refuse" "7a100tfgg484:arty_a7_100t:refuse" "7a50tcsg324:arty_a7_35t:refuse" \

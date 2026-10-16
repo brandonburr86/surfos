@@ -25,8 +25,11 @@ get a 'p' (usb0p1).
 10/16/26 (audit B9): a device carries the block cache's account of it (the
 bc_ fields, kept by fs/bcache.c alone): its dirty cached blocks by write order,
 how many of them failed their last write, whether the console was told it
-refuses writes. It goes with the device: a disk put in again is a new struct
-bdev with a fresh account, and one that is gone has had its blocks dropped.
+refuses writes; since B12-B16 also the lists of its dirty blocks in the order of
+their first unwritten change, how many are set aside, and a sync's count of the
+requests it refused and took. It goes with the device: a disk put in again is a
+new struct bdev with a fresh account, and one that is gone has had its blocks
+dropped.
 */
 
 #ifndef _SYS_BDEV_H
@@ -38,6 +41,7 @@ bdev with a fresh account, and one that is gone has had its blocks dropped.
 #define BDEV_BLOCK_SIZE 512
 
 struct bdev;
+struct buf;                     /* fs/bcache.h */
 
 /* the bus a disk is on (a partition has its disk's); 0, what a driver that says
    nothing gets, is never formatted */
@@ -85,7 +89,11 @@ struct bdev {
     u_int bc_dirty[4];          /* its dirty cached blocks, by write order (BORDER_* in fs/bcache.h) */
     u_int bc_failed;            /* of them, those whose last write failed */
     bool bc_said;               /* the console was told it refuses writes (until one works again) */
-    u32 bc_bad_pass;            /* the bsync() call in which a write of it last failed */
+    struct buf *bc_head[4];     /* B12: its dirty blocks of each order, oldest first unwritten change first */
+    struct buf *bc_tail[4];
+    u_int bc_aside;             /* B16: of its dirty blocks, those a file system set aside */
+    u32 bc_pass;                /* B13: the sync call whose requests the next two count */
+    u_int bc_refused, bc_taken; /*      (a device that refused DEAD_TRIES and took none is asked no more in it) */
     struct bdev *next;
 };
 

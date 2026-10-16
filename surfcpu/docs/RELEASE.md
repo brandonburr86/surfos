@@ -13,7 +13,12 @@ hash check on a fresh checkout, section 4, and past that they miss nextpnr's tim
 section 8), so the release has no bitstream that boots SurfOS from the card, and so no flash image
 to boot from. The owner's A7-100T has run designs loaded over JTAG (milestones 1 and 3,
 PROGRESS.md), but **nothing has been written to its configuration flash and no release has been
-on it**: the board steps of section 10 are pending.
+on it**: the board steps of section 10 are pending. A review of the tooling followed
+(`review-fixes.txt`): the release now builds in a directory of its own, ships only what it
+checked, and its checks and comparisons refuse damaged releases; a reduced release made with it,
+`1.0.0-pre-147fe813` (the baseline design on the 100T, 11 artifacts), reproduces byte for byte
+from a pristine copy too. A release made before that fails today's `release-check` on one point
+(its `MANIFEST` names a boot design it does not have): make it again.
 
 ## 1. What a release is
 
@@ -31,7 +36,7 @@ the first 8 hex digits, the build id every artifact carries:
 | `rom/surfboot.mem`, `rom/bramdiag.mem` | the boot ROM images inside the bitstreams |
 | `debug/*.elf` | SurfBoot, the diagnostics and the kernel with their symbols, for reading a fault address |
 | `SHA256SUMS` | the SHA-256 of every artifact above (not the build records): `shasum -a 256 -c SHA256SUMS` |
-| `MANIFEST` | TOML: the release's name and status, the commit and its time, that the tree was clean, each image with its id and tool versions, the contract versions (`spec/soc.toml`, SURFBUS.md, ISA.md, BOOT-ABI.md, MODULES.md, MEMORY-MAP.md, each with its SHA-256), every design with its gate results, timing and use (or why it is missing), and every artifact with its size and SHA-256 |
+| `MANIFEST` | TOML: the release's name and status, the commit and its time, that the tree was clean, the designs whose flash images it holds (`flash_boot_design`, `flash_test_design`: empty when the release does not have one), each image with its id and tool versions, the contract versions (`spec/soc.toml`, SURFBUS.md, ISA.md, BOOT-ABI.md, MODULES.md, MEMORY-MAP.md, each with its SHA-256), every design with its gate results, timing and use (or why it is missing), and every artifact with its size and SHA-256 |
 
 `release/release.txt` lists the boards and the designs:
 
@@ -53,14 +58,24 @@ design is in it only if `tools/fpga-build.sh` passed it as it is.
 
 * Docker Desktop running, with the two images of `devenv/` (`make -C surfcpu image openxc7-image`
   once; section 8). `make release` refuses to start without them.
-* A clean tree: everything committed, nothing untracked that git does not ignore (`git status`
-  shows nothing). The release is the commit, so a dirty tree is refused.
+* A clean tree: everything committed, nothing untracked that the repository's own `.gitignore`
+  files do not ignore. The release is the commit, so anything else is refused, whatever your git
+  configuration hides: `status.showUntrackedFiles=no`, a global excludes file or
+  `.git/info/exclude` (a Finder `.DS_Store` counts: delete it), and files marked
+  `git update-index --assume-unchanged` or `--skip-worktree`.
+* Nothing set that would change what the builds make: `DRY_RUN`, `SURFCPU_FPGA_OUT`,
+  `SURFCPU_IMAGE`, `SURFCPU_OPENXC7_IMAGE`, `SURFCPU_OPENXC7_BUILD`, `SURFCPU_ROMCHECK`, `ROM`,
+  `SURFCPU_BUILD_ID` or `SURFCPU_BUILD_DIRTY` in the environment is refused. Everything else is
+  simply not passed on: the builds get `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`
+  and Docker's own settings from your shell, and what the release sets.
 * About an hour for the six bitstreams without DDR (the SoC ones take 10 to 17 minutes each, most
   of it the LVS proof), plus the DDR designs once they get as far as nextpnr (3 to 25 minutes each
   to fail its timing so far), and about 1 GB of disk (the bitstream builds about 0.5 GB, LiteDRAM's
   sources 200 MB, the release 27 MB).
 * The machine to itself, ideally: a bitstream build waits while three or more `surfcpu-openxc7`
-  containers run (other builds), and builds one design at a time.
+  containers run (other builds), and builds one design at a time. Other builds cannot get into the
+  release (it builds in its own directory, step 2), but they slow it down. One release at a time
+  in a checkout: a second one is refused while `build/release-work.lock` names a running process.
 
 Nothing here touches the board or a card: they come in sections 6, 7 and 10.
 
@@ -71,10 +86,14 @@ make -C surfcpu release PRERELEASE=1      # while the DDR designs do not build
 make -C surfcpu release                   # once they do: a complete release, or nothing
 ```
 
-Variables: `PRERELEASE=1` allows a release without the DDR designs (when every design builds it is
-complete anyway); `SKIP_DDR=1` does not even try them (a pre-release); `DESIGNS=a,b` and
-`BOARDS=a,b` build only some (a pre-release, for trials); `FORCE=1` replaces an existing release
-directory of the same name. The steps and what they print:
+Variables: `PRERELEASE=1` allows a pre-release, a release without some designs (when every design
+builds it is complete anyway). `SKIP_DDR=1` does not even try the DDR designs, and `DESIGNS=a,b` and
+`BOARDS=a,b` build only some (for trials): each leaves designs out, so each needs `PRERELEASE=1`
+as well (`make release SKIP_DDR=1` alone is refused). `FORCE=1` replaces an existing release
+directory of the same name, and nothing else (a directory holding anything a release does not is
+never replaced). The version is `release/release.txt`'s, and `SURFOS.BIN` must carry the same one
+(`arch/riscv32/kernel.mk` packs it with `--version`): a release whose two disagree is refused, so
+change both together. The steps and what they print:
 
 1. **Checks.** The tree must be clean; `SOURCE_DATE_EPOCH` becomes the commit's time (a different
    value in the environment is refused); both images must exist.
@@ -82,23 +101,36 @@ directory of the same name. The steps and what they print:
    ```
    release: SurfCPU 1.0.0 at bb066932 (commit time 2026-10-16T14:33:34Z = SOURCE_DATE_EPOCH 1792161214), clean tree
    release: images: surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d93), surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37)
-   release: plan: 10 bitstreams; logs in .../build/release/1.0.0-pre-bb066932.logs
+   release: plan: 10 bitstreams; built in .../build/release-work, staged in .../build/release/.1.0.0-pre-bb066932.stage; logs in .../build/release/1.0.0-pre-bb066932.logs
    ```
 
-2. **The software**, from empty output directories (`build/fw`, `build/riscv32/arty_a7`):
-   `make build-rom build-kernel` in the toolchain image, with `SOURCE_DATE_EPOCH`, `LC_ALL=C` and
-   `TZ=UTC`. Checked: the packages carry the commit's build id, the firmware was not built dirty.
+2. **The software**, in the release's own directory `build/release-work/`, emptied first; nothing
+   else writes there, so another session's `make build-rom` or `make build-fpga` meanwhile cannot
+   get into the release: `make build-rom BUILD=build/release-work` and `arch/riscv32/kernel.mk
+   KBOARD=arty_a7 OUT=surfcpu/build/release-work/riscv32/arty_a7` in the toolchain image.
+   `SOURCE_DATE_EPOCH` goes into the container (`devenv/run.sh`); `LC_ALL=C` and `TZ=UTC` hold on
+   the Mac only: the containers run with their images' own environment, which sets no locale and
+   no time zone (so the POSIX locale and UTC), and MANIFEST's `[tools] locale` records what each
+   image sets. Checked: the packages carry the commit's build id and `release.txt`'s version, the
+   firmware was not built dirty. Each file is read once, checked, and copied at once into the
+   stage directory (`build/release/.<name>.stage`), with its SHA-256 kept.
 
    ```
-   release: [1/11] the software (make build-rom build-kernel, from empty output directories)
+   release: [1/11] the software (make build-rom, the kernel)
    release: software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build bb066932 (12 s)
    ```
 
 3. **The bitstreams**, one design and board at a time, the DDR designs last:
-   `FLOW=openxc7 tools/fpga-build.sh --design <design> <board>`, exactly as `make build-fpga`.
-   A design counts only if the script passed it and its build record says the commit, a clean
-   tree, the commit's time and the generated files' recorded hashes. The DDR designs first run
-   `make litedram-gen` (it fetches pinned sources the first time).
+   `FLOW=openxc7 tools/fpga-build.sh --design <design> <board>`, as `make build-fpga` runs it, but
+   into `build/release-work/fpga/<board>/<design>/` (`SURFCPU_FPGA_OUT`, emptied first), with the
+   release's own boot ROM (`ROM=`) and kernel (`SURFCPU_KERNEL=`, recorded only). A design counts
+   only if the script passed it and its build record is from this build (its `run_id`), says the
+   commit, a clean tree, the commit's time, the commit's openXC7 image, the generated files'
+   recorded hashes (still true after the build), the release's boot ROM and kernel, and describes
+   the bitstream's bytes; then the bitstream, its build record and its flash image (section 6) are
+   staged at once. The DDR designs first run `make litedram-gen` (it fetches pinned sources the
+   first time; the core goes to `build/litedram/`, shared, and is checked against
+   `ip/litedram/arty.sha256` before and after each DDR build).
 
    ```
    release: [2/11] arty_a7_baseline for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
@@ -106,10 +138,16 @@ directory of the same name. The steps and what they print:
    ...
    ```
 
-4. **The flash images** (section 6), **the card files** (`tools/deploy-sd.py --new-card --cmdline
-   sd=rw` against a directory standing in for the card, as its tests run it: the files it installed
-   are copied, and `card/BOOT/SURFOS.BIN` must be `SURFOS.BIN`), `SHA256SUMS` and `MANIFEST`. The
-   tree must still be clean. The directory appears only at the end, complete.
+4. **The card files** (`tools/deploy-sd.py --new-card --cmdline sd=rw` on the checked
+   `SURFOS.BIN`, against a directory standing in for the card, as its tests run it: the files it
+   installed are staged, and `card/BOOT/SURFOS.BIN` must be `SURFOS.BIN`), then a last check before
+   anything is written: `HEAD` is still the commit, the tree is still clean, both images still have
+   the IDs they started with, every staged file still has the SHA-256 it had when it was checked
+   (and nothing else is there), both packages carry the commit's build id and every bitstream's
+   record names the staged ROM and kernel. Then `SHA256SUMS` and `MANIFEST`, the release's own
+   `release-check` on the stage, and the stage becomes the release directory: it appears only at
+   the end, complete. A failed release leaves no stage behind; its logs and `build/release-work/`
+   stay for reading (the next release empties them).
 
    ```
    release: written .../build/release/1.0.0-pre-bb066932: PRE-RELEASE, without:
@@ -118,8 +156,20 @@ directory of the same name. The steps and what they print:
    release: 18 artifacts in SHA256SUMS (check: cd ... && shasum -a 256 -c SHA256SUMS); 53.3 min in all
    ```
 
-`make release-check RELEASE=build/release/<name>` checks a release's files against its
-`SHA256SUMS` and `MANIFEST` later (after a copy, for example).
+`make release-check RELEASE=build/release/<name>` checks a release later (after a copy, for
+example): `MANIFEST`, `SHA256SUMS` and the files on disk list the same artifacts (nothing more,
+nothing missing, nothing empty) with the listed SHA-256 and size; the directory's name, the
+version and pre-release or not agree with `MANIFEST`; both packages are the commit's and the
+release's version, the card files are what `MANIFEST` says; every built design has its bitstream,
+its build record (pass, clean, this commit and time, these bytes, the release's boot ROM) and its
+flash image exactly when it has one, which must be the bitstream's stream; nothing belongs to a
+design that was not built. It exits 1 on any problem.
+
+The tools delete only what they made. The logs directory, `build/release-work/` and the stage carry
+a mark (`.surfcpu-release-logs`, `-work`, `-stage`); one without it that holds anything is refused,
+never emptied. `FORCE=1` replaces only a release (a directory holding nothing but what a release
+holds). `release-verify` and `fresh-checkout` keep a work directory you gave them and remove only
+what they put in it.
 
 **Using a release.** Its files go where the usual commands take them (paths relative to
 `surfcpu/`; `R=build/release/<name>`):
@@ -144,10 +194,10 @@ What made two builds of one commit differ, and what was done about it:
 |---|---|---|
 | `SURFOS.BIN`, `debug/surfos.elf` | the kernel compiles its build time in (`SURFOS_BUILD_TIME` in `arch/riscv32/kernel.mk`, from `SOURCE_DATE_EPOCH` or the date), but `devenv/run.sh` did not pass `SOURCE_DATE_EPOCH` into the container: two builds differed in the payload CRC, the header CRC and two words of `time_now` | `devenv/run.sh` passes it when it is set (`dad4607`); the release sets it to the commit's time |
 | every `.bit` | `xc7frames2bit` writes the time of the build into the `.bit` header (fields c and d); the FASM, frames and netlists of two builds were already the same | `tools/openxc7-build.sh` runs `tools/bitfile.py stamp` with `SOURCE_DATE_EPOCH` right after `xc7frames2bit`, before the checks (`b3741f2`) |
-| every `.bit` | the header's design field names the frames file, so the output directory is in it | the release builds where `make build-fpga` does (`build/fpga/<board>/<design>`) and refuses `SURFCPU_FPGA_OUT` |
+| every `.bit` | the header's design field names the frames file, so the output directory is in it | the release always builds in its own `build/release-work/fpga/<board>/<design>` (the same relative path in every checkout) and refuses `SURFCPU_FPGA_OUT`; so a release's bitstreams differ from `make build-fpga`'s in that field |
 | the bitstreams' build identity | `BUILD_TIME` is a generic of the tops (sysinfo's build time) | `tools/fpga-build.sh` already took `SOURCE_DATE_EPOCH`; the release sets it |
 | build paths | none found: the containers mount the tree at `/work` wherever it is, so the debug information and the `.bit` header's relative path are the same from any checkout (`-ffile-prefix-map` is not needed) | the verify runs build in other directories and compare the ELF files too |
-| file order | none found: GNU Make 4.4.1 in the image sorts `$(wildcard)`; `tools/fpga-build.sh` sorts its source lists, and the Mac's `en_US.UTF-8` order equals `C` order for every file there | the release runs everything with `LC_ALL=C` |
+| file order | none found: GNU Make 4.4.1 in the image sorts `$(wildcard)`; `tools/fpga-build.sh` sorts its source lists, and the Mac's `en_US.UTF-8` order equals `C` order for every file there | the release runs the Mac-side scripts with `LC_ALL=C`; the images set no locale, so the containers use the POSIX locale (`MANIFEST` records it) |
 | the generated LiteDRAM core (DDR designs) | LiteX lists the core's instances in a block comment of `litedram_core.v` in an order that follows the Python interpreter's memory: a fresh checkout's first `make litedram-gen` wrote a file that fails its own check against `ip/litedram/arty.sha256`, while every line of Verilog outside that comment was the same in the five different files 16 runs produced | not fixed here (`ip/litedram` is the ddr track's): `run_gen.py` should drop or sort that comment before writing the file (evidence `determinism.txt` section 6). The release names the failed check as the DDR designs' reason |
 | threads and seeds | none found: nextpnr runs with 4 threads (`OPENXC7_THREADS` inside the image; `devenv/run.sh` does not pass it, so the release always gets 4), placer seeds come from the design lists, and two SoC builds gave the same netlist, placement, FASM and frames | recorded in `MANIFEST` (`nextpnr_threads`) |
 
@@ -157,12 +207,15 @@ Check a release with:
 make -C surfcpu release-verify RELEASE=build/release/<name> [DESIGNS=a,b] [BOARDS=a,b] [KEEP=1] [REPORT=file]
 ```
 
-It clones the release's commit into `build/release-verify/<name>-<time>/src` (`git clone
---shared`: a checkout of its own that borrows this repository's objects), runs the same release
-there for the designs the release has (or only those named), and compares every artifact of the
-release's `SHA256SUMS` byte for byte. Each artifact is `match`, `DIFFERS`, `MISSING` or `not
-rebuilt` (its design was not requested). A difference names the first differing byte and its
-likely cause:
+It first checks the release as `release-check` does (a damaged one is refused, exit 2), then
+clones its commit into `build/release-verify/<name>-<time>/src` (`git clone --shared`: a checkout
+of its own that borrows this repository's objects), runs the same release there for the designs
+the release has, and compares every artifact of the release's `SHA256SUMS` byte for byte, hashing
+both sides' files. `DESIGNS` and `BOARDS` name some of them: a name the release's `MANIFEST` does
+not know, or a design it did not build, is refused (exit 2) before anything is cloned. Each
+artifact is `match`, `DIFFERS`, `MISSING`, `DAMAGED` (a file that is not the one its own
+`SHA256SUMS` lists, on either side), `EXTRA` (only the rebuild has it) or `not rebuilt` (its
+design was not asked for). A difference names the first differing byte and its likely cause:
 
 * a `.bit`: the header field (the date and time: `SOURCE_DATE_EPOCH` missing; the design path: the
   output directory), or the configuration packet (an option) or frame (the placed design or a
@@ -174,10 +227,14 @@ likely cause:
 * a ROM image: the word address and function; an ELF file: the section (debug information points
   at a build path or the compiler).
 
-The `MANIFEST`s are compared too (commit, tools, contracts, every design's gates and timing).
-The work directory is removed at the end unless `KEEP=1`; the report is in it and with
-`REPORT=file` where you say. Exit status 0 only when every compared artifact matched.
-`tools/release.py compare A B` compares two release directories the same way, without building.
+The `MANIFEST`s are compared too (commit, tools, contracts, every design's gates and timing), and
+the rebuild must pass `release-check`. The last line is the verdict: `PASS` (every artifact
+rebuilt and the same), `PARTIAL` (every rebuilt one the same, but `DESIGNS`/`BOARDS` left some
+out: the line says how many were NOT verified; exit 0, since everything asked for matched) or
+`FAIL` (exit 1). The work directory is removed at the end unless `KEEP=1`; the report is in it and
+with `REPORT=file` where you say. `tools/release.py compare A B` compares two release directories
+the same way, without building; there `PARTIAL` (the new release did not build some of the
+reference's designs) exits 1.
 
 ## 5. A fresh checkout
 
@@ -191,8 +248,9 @@ says, nothing else: checks the two images (with `--build-images` it builds missi
 `make image openxc7-image`; otherwise it stops), runs `make -C surfcpu release` with `ARGS`, and
 compares the result with `REFERENCE` (a release directory, or a `SHA256SUMS` file) artifact by
 artifact. Designs the new release did not attempt (`DESIGNS`, `BOARDS`, `SKIP_DDR`) are listed as
-not rebuilt. `EVIDENCE=file` keeps a summary; the clone is removed unless `KEEP=1` or something
-failed.
+not rebuilt, and the comparison is then `PARTIAL`, not a match (exit 1). `EVIDENCE=file` keeps a
+summary; the clone is removed unless `KEEP=1` or something failed (with `--work DIR`, a new or
+empty directory, only what the script put there).
 
 The release `1.0.0-pre-bb066932` was made this way, with no reference yet
 (`tools/fresh-checkout.sh --commit bb06693 --keep -- PRERELEASE=1`, evidence `release.txt`): from
@@ -362,10 +420,11 @@ the same; its `MANIFEST` comparison names the new image ids.
 
 | | What |
 |---|---|
-| `make test-release` (on `make check`, about 5 s), and `make release-selftest` (the same with the Mac's own Python, 10 s) | `tools/release-test.py`: `tools/bitfile.py`'s self-test and flash image; `tools/release.py`'s TOML subset, its comparison and the causes it names for planted differences (the `.bit` header's time, a frame, a kernel word with its symbol, a missing and an extra file); `make` in a scratch repository with stand-ins for the builds (a dirty tree, a foreign `SOURCE_DATE_EPOCH` and missing designs without `PRERELEASE` refused; a complete release; a DDR design that fails gives a pre-release only with `PRERELEASE`; another design that fails stops it; two releases of one commit are the same bytes); `tools/program.sh flash` on a release's bitstream with the board tests' fake openFPGALoader |
+| `make test-release` (on `make check`, about a minute), and `make release-selftest` (the same with the Mac's own Python) | `tools/release-test.py`: `tools/bitfile.py`'s self-test, flash image and header rule (shared with `tools/program.sh`); `tools/release.py`'s TOML subset, its comparison and the causes it names for planted differences (the `.bit` header's time, a frame, a kernel word with its symbol, a missing and an extra file); `make` in a scratch repository with stand-ins for the builds: a dirty tree (also one git's configuration hides), a foreign `SOURCE_DATE_EPOCH`, settings that would change the builds and missing designs without `PRERELEASE` refused; a complete release; a DDR design that fails gives a pre-release only with `PRERELEASE`; another design that fails stops it; two releases of one commit are the same bytes; other builds, a new commit or a changed staged file during the release; build records from another run or image; the builds' environment; a damaged, renamed, padded or cut release refused by `check` and `compare`; `verify` with names it does not know, and a partial one; the tools never deleting a directory they did not make; `tools/program.sh flash` on a release's bitstream with the board tests' fake openFPGALoader, and the host targets with paths that hold spaces |
 | `evidence/release/release.txt` | the release made from a fresh checkout (`tools/fresh-checkout.sh`): the output, `SHA256SUMS`, the gates of every bitstream, the missing DDR designs and why |
 | `evidence/release/verify.txt` | `make release-verify` of it: every artifact, with what it found |
 | `evidence/release/tests.txt` | `make test-release` in the container and `make release-selftest` with both of the Mac's Pythons |
+| `evidence/release/review-fixes.txt` | the review's findings: each one's tests failing on the code it saw and passing after its fix, the reduced release `1.0.0-pre-147fe813` with its check and verify, and verify's refusals |
 | `evidence/release/determinism.txt` | the nondeterminism found (section 4), before and after, and the generated LiteDRAM core's |
 | `evidence/release/images.txt` | both images rebuilt from their pinned sources with no cache, and the artifacts built with them |
 | `evidence/release/flash.txt` | the flash images, the configuration options and times, the sources behind them, and `program.sh flash` with the fake programmer |

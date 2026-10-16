@@ -110,27 +110,37 @@ design=${DESIGN:-surfcpu_arty_a7_top}
 bit=${3:-${BIT:-${SURFCPU_FPGA_OUT:-$root/build/fpga}/$board/$design/$design.bit}}
 [ -f "$bit" ] || die "no bitstream $bit (make build-fpga BOARD=$board DESIGN=$design)"
 
-bit_header_part() {   # FILE: the part field ('b') of a .bit header (UG470's fields a, b, c, d, e)
+bit_header_part() {   # FILE: the part field ('b') of a .bit header. The header must be the magic, then the
+                      # fields a, b, c, d once each and in this order (NUL-terminated strings), then e: the
+                      # layout tools/bitfile.py reads too, so that both always name the same part (bitfile.py
+                      # also checks e against the file's length; here the bytes are the build manifest's
+                      # SHA-256's business, and openFPGALoader's)
     od -An -v -tu1 -N 1024 "$1" | LC_ALL=C awk '
         { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
         END {
             split("0 9 15 240 15 240 15 240 15 240 0 0 1", m, " ")
             for (i = 1; i <= 13; i++) if (b[i - 1] != m[i] + 0) exit 1
+            split("97 98 99 100", want, " ")              # a, b, c, d
             p = 13
-            while (p + 3 <= n) {
-                key = b[p]; len = b[p + 1] * 256 + b[p + 2]; p += 3
-                if (key != 97 && key != 98) exit 1        # the design (a) comes first, then the part (b)
-                if (p + len > n) exit 1
-                s = ""
-                for (i = 0; i < len && b[p + i] != 0; i++) s = s sprintf("%c", b[p + i])
+            for (k = 1; k <= 4; k++) {
+                if (p + 3 > n || b[p] != want[k] + 0) exit 1
+                len = b[p + 1] * 256 + b[p + 2]; p += 3
+                if (len < 1 || p + len > n || b[p + len - 1] != 0) exit 1
+                v = ""
+                for (i = 0; i < len - 1; i++) {
+                    if (b[p + i] == 0) exit 1                 # one string, no NUL inside
+                    v = v sprintf("%c", b[p + i])
+                }
+                if (k == 2) part = v
                 p += len
-                if (key == 98) { print s; exit 0 }
             }
-            exit 1
+            if (p >= n || b[p] != 101) exit 1             # then e, the stream length
+            print part
+            exit 0
         }'
 }
 hdr_part=$(bit_header_part "$bit") ||
-    die "$bit has no .bit header naming its part (a raw .bin, or a damaged file?); refusing"
+    die "$bit has no .bit header naming its part (fields a, b, c, d once each, then e): a raw .bin, or a damaged file?; refusing"
 norm=$(printf '%s' "$hdr_part" | tr 'A-Z' 'a-z' | sed -e 's/^xc//' -e 's/-.*$//')
 case "$norm" in
     ''|*[!a-z0-9]*) die "$bit's header names the part '$hdr_part', which is not a part name; refusing" ;;

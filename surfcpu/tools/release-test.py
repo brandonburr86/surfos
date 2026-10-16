@@ -5,19 +5,28 @@ File: release-test.py Date: 10/16/26 (SurfCPU)
 --------------------
 Without Docker, a board or a bitstream build (docs/RELEASE.md section 9):
   * release.py, bitfile.py and this file parse as Python 3.9 (the Mac's /usr/bin/python3);
-  * tools/bitfile.py: its self-test (header stamp, packets, flash image, configuration time);
+  * tools/bitfile.py: its self-test (header stamp, packets, flash image, configuration time), and
+    the one header layout it and tools/program.sh accept (TestBitfileStrict);
   * tools/release.py's TOML subset, its comparison and the likely causes it names for a .bit whose
     header time or frames differ, a SURFOS.BIN whose payload differs (with the ELF's symbol), a
     missing and an extra artifact;
   * tools/release.py make in a scratch git repository, with stand-ins for devenv/run.sh,
-    tools/fpga-build.sh and docker: a dirty tree, a foreign SOURCE_DATE_EPOCH and missing designs
-    without PRERELEASE are refused; a complete release; a DDR design that fails makes a pre-release
-    only with --prerelease; any other design that fails stops the release; the release's own files
-    check against SHA256SUMS and MANIFEST;
+    tools/fpga-build.sh and docker (taken only with SURFCPU_RELEASE_TEST=1): a dirty tree, a
+    foreign SOURCE_DATE_EPOCH and missing designs without PRERELEASE are refused; a complete
+    release; a DDR design that fails makes a pre-release only with --prerelease; any other design
+    that fails stops the release; the release's own files check against SHA256SUMS and MANIFEST;
+  * the review of 2026-10-16 (rel-2), one class per finding: what is shipped is what was checked
+    while other builds, a new commit or a changed staged file come in between (M1); verify's
+    DESIGNS/BOARDS and its PARTIAL verdict (M2); check and compare on damaged releases (m1); the
+    builds' environment and their records (m2); the clean tree whatever git's configuration says
+    (m3); no directory deleted that the tools did not make (m4); host targets with paths that hold
+    spaces (m5); the .bit header rule (c1); the locale MANIFEST records (c2); the version and the
+    flash designs (c3);
   * tools/program.sh's flash path with the board tests' fake openFPGALoader
-    (sim/board/tools/fake), named by OPENFPGALOADER so that a real openFPGALoader is never run even
-    with a board plugged in, on a release's bitstream: written with -f --verify only when
-    confirmed, never the flash image or a bitstream without its build record or with other bytes.
+    (sim/board/tools/fake), named by OPENFPGALOADER and first on a PATH without Homebrew, so that a
+    real openFPGALoader is never run even with a board plugged in, on a release's bitstream:
+    written with -f --verify only when confirmed, never the flash image or a bitstream without its
+    build record or with other bytes.
 """
 from __future__ import annotations
 
@@ -30,6 +39,7 @@ import struct
 import subprocess
 import sys
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -197,8 +207,8 @@ class TestCompare(unittest.TestCase):
         self.assertIn("time_now+0x4", rows["SURFOS.BIN"][2])
         self.assertIn("payload_crc32", rows["SURFOS.BIN"][2])
         self.assertEqual(rows["same.txt"][1], "MISSING")
-        notes = release.compare(self.ref, self.new)[1]
-        self.assertTrue(any("only in the rebuild: extra.txt" in n for n in notes))
+        self.assertEqual(rows["extra.txt"][1], "EXTRA")
+        self.assertTrue(release.report_lines(list(rows.values()), [], "t")[-1].startswith("FAIL"))
 
     def test_frames_and_records(self):
         bit = self.new / "fpga/arty_a7_100t/top/top.bit"
@@ -232,117 +242,207 @@ class TestCompare(unittest.TestCase):
 
 
 # ------------------------------------------------------------------------------- make, with stand-ins
-FAKE_RUN = r'''#!/bin/sh
-# stand-in for devenv/run.sh: the software build, or litedram-gen ($FAKE_LITEDRAM_FAIL)
-set -eu
-repo=$(git rev-parse --show-toplevel)
-id=$(git -C "$repo" rev-parse HEAD | cut -c1-8)
-case " $* " in
-  *" litedram-gen "*)
-    case "${FAKE_LITEDRAM_FAIL:-}" in
-      '')   exit 0 ;;
-      lock) echo "lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92, arty.sha256 has 150b)"
-            exit 2 ;;
-      *)    echo "setup.sh: cannot fetch"; exit 1 ;;
-    esac ;;
-esac
-fw=$repo/surfcpu/build/fw
-k=$repo/build/riscv32/arty_a7
-mkdir -p "$fw/gen" "$k"
-printf '#define FW_BUILD_ID 0x%sU\n#define FW_BUILD_DIRTY 0\n' "$id" > "$fw/gen/fw_build.h"
-for f in surfboot bramdiag; do printf '%08x\n' "$SOURCE_DATE_EPOCH" > "$fw/$f.mem"; printf 'ELF %s\n' "$f" > "$fw/$f.elf"; done
-printf 'ELF ddrdiag\n' > "$fw/ddrdiag.elf"
-printf 'ELF surfos\n' > "$k/surfos.elf"
-printf 'payload %s' "$SOURCE_DATE_EPOCH" > "$k/payload"
-python3 "$repo/surfcpu/tools/surfimg.py" pack --bin "$k/payload" --load-addr 0x80000000 --build-id "$id" -o "$k/SURFOS.BIN" >/dev/null
-python3 "$repo/surfcpu/tools/surfimg.py" pack --bin "$k/payload" --load-addr 0x80000000 --build-id "$id" --name DDRdiag -o "$fw/DDRDIAG.BIN" >/dev/null
-'''
+FAKE_RUN = r"""#!/usr/bin/env python3
+# stand-in for devenv/run.sh: the software build (make build-rom [BUILD=dir], make build-kernel, or kernel.mk with
+# OUT=dir, all relative as make takes them), or litedram-gen ($FAKE_LITEDRAM_FAIL: lock, or anything for a fetch
+# failure). The packages carry the commit's build id and the version $FAKE_VERSION (default 2.3.4).
+import os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+repo = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip())
+sc = repo / "surfcpu"
+bid = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()[:8]
+epoch = os.environ["SOURCE_DATE_EPOCH"]
+if "litedram-gen" in args:
+    fail = os.environ.get("FAKE_LITEDRAM_FAIL", "")
+    if fail == "lock":
+        print("lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92, arty.sha256 has 150b)")
+        sys.exit(2)
+    if fail:
+        print("setup.sh: cannot fetch")
+        sys.exit(1)
+    sys.exit(0)
+val = dict(a.split("=", 1) for a in args if "=" in a)
+version = os.environ.get("FAKE_VERSION", "2.3.4")
 
-FAKE_FPGA = r'''#!/usr/bin/env python3
-# stand-in for tools/fpga-build.sh: --design D BOARD; fails the designs named in $FAKE_FPGA_FAIL
-import hashlib, os, subprocess, sys
+
+def pack(payload, out, name):
+    subprocess.run([sys.executable, str(sc / "tools/surfimg.py"), "pack", "--bin", str(payload), "--load-addr",
+                    "0x80000000", "--build-id", bid, "--version", version, "--name", name, "-o", str(out)],
+                   check=True, capture_output=True)
+
+
+if "build-rom" in args:
+    fw = sc / val.get("BUILD", "build") / "fw"
+    (fw / "gen").mkdir(parents=True, exist_ok=True)
+    (fw / "gen/fw_build.h").write_text(f"#define FW_BUILD_ID 0x{bid}U\n#define FW_BUILD_DIRTY 0\n")
+    for f in ("surfboot", "bramdiag"):
+        (fw / f"{f}.mem").write_text(f"{int(epoch):08x}\n")
+        (fw / f"{f}.elf").write_text(f"ELF {f}\n")
+    (fw / "ddrdiag.elf").write_text("ELF ddrdiag\n")
+    (fw / "payload").write_text(f"ddrdiag {epoch}")
+    pack(fw / "payload", fw / "DDRDIAG.BIN", "DDRdiag")
+if "build-kernel" in args or "arch/riscv32/kernel.mk" in args:
+    k = repo / val.get("OUT", "build/riscv32/arty_a7")
+    k.mkdir(parents=True, exist_ok=True)
+    (k / "surfos.elf").write_text("ELF surfos\n")
+    (k / "payload").write_text(f"payload {epoch}")
+    pack(k / "payload", k / "SURFOS.BIN", "SurfOS")
+"""
+
+FAKE_FPGA = r"""#!/usr/bin/env python3
+# stand-in for tools/fpga-build.sh --design D BOARD, run in surfcpu/: BOARD/DESIGN/{DESIGN.bit,manifest.txt} under
+# $SURFCPU_FPGA_OUT (default build/fpga), the boot ROM from $ROM or the design list's rom line (with the generic
+# BOOTROM_INIT), kernel_sha256 of $SURFCPU_KERNEL (default ../build/riscv32/arty_a7/SURFOS.BIN).
+# $FAKE_FPGA_FAIL=d1,d2 fails those designs; $FAKE_FPGA_HOOK (a shell command) runs first, $FAKE_FPGA_HOOK_ON=
+# design/board limits it to one build; $FAKE_FPGA_NOOP=1 builds nothing and exits 0 (as DRY_RUN=1 does);
+# $FAKE_OX_IMAGE records another image (as SURFCPU_OPENXC7_IMAGE would);
+# $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id.
+import hashlib, os, re, subprocess, sys, time
 from pathlib import Path
 design, board = sys.argv[2], sys.argv[3]
-root = Path(os.environ["FAKE_ROOT"])
+root = Path.cwd()
+if os.environ.get("FAKE_FPGA_ENV"):
+    with open(os.environ["FAKE_FPGA_ENV"], "a") as f:
+        f.write(" ".join(sorted(os.environ)) + "\n")
+hook, on = os.environ.get("FAKE_FPGA_HOOK"), os.environ.get("FAKE_FPGA_HOOK_ON")
+if hook and (not on or on == f"{design}/{board}"):
+    subprocess.run(["sh", "-c", hook], check=True, cwd=str(root))
+if os.environ.get("FAKE_FPGA_NOOP") == "1":
+    sys.exit(0)
 sys.path.insert(0, str(root / "tools"))
 import bitfile
-base = root / "build" / "fpga" / board / design
+base = Path(os.environ.get("SURFCPU_FPGA_OUT") or root / "build" / "fpga") / board / design
 base.mkdir(parents=True, exist_ok=True)
+for p in (base / f"{design}.bit", base / "manifest.txt"):
+    if p.exists():
+        p.unlink()
 commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 part, idcode = ("xc7a100tcsg324-1", 0x03631093) if board == "arty_a7_100t" else ("xc7a35tcsg324-1", 0x0362D093)
 fail = design in os.environ.get("FAKE_FPGA_FAIL", "").split(",")
-bit = base / f"{design}.bit"
-if bit.exists():
-    bit.unlink()
-head = [f'design = "{design}"', f'board = "{board}"', f'part = "{part}"', f'source_revision = "{commit}"',
-        "source_dirty = false", f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
-        'rom_sha256 = ""', 'kernel_sha256 = ""', "placer_seed = 1"]
+rom_image = rom_sha = ""
+lines = [x.split() for x in (root / f"boards/arty_a7/designs/{design}.files").read_text().splitlines() if x.strip()]
+if any(f[0] == "generic" and "BOOTROM_INIT" in f for f in lines):
+    for f in lines:
+        if f[0] == "rom":
+            src = Path(os.environ["ROM"]) if os.environ.get("ROM") else root / f[1]
+            inside = str(src).startswith(str(root) + "/")             # as fpga-build.sh writes it
+            rom_image = str(src)[len(str(root)) + 1:] if inside else str(src)
+            rom_sha = hashlib.sha256(src.read_bytes()).hexdigest()
+kernel = Path(os.environ.get("SURFCPU_KERNEL") or root.parent / "build/riscv32/arty_a7/SURFOS.BIN")
+kernel_sha = hashlib.sha256(kernel.read_bytes()).hexdigest() if kernel.is_file() else ""
+tag = re.search(r"^IMAGE_TAG=(\S+)$", (root / "tools/openxc7-build.sh").read_text(), re.M).group(1)
+when = os.environ.get("FAKE_RUN_ID_TIME") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+head = [f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
+        f'part = "{part}"', f'source_revision = "{commit}"', "source_dirty = false",
+        f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
+        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', f'kernel_sha256 = "{kernel_sha}"', "placer_seed = 1"]
 if fail:
     head += ['result = "fail"', 'reason = "timing not met (nextpnr: dram_clk 63.5 MHz of 100 MHz)"']
 else:
     data = bitfile.stamp(bitfile.synthetic(idcode=idcode, part=part), int(os.environ["SOURCE_DATE_EPOCH"]))
-    bit.write_bytes(data)
+    (base / f"{design}.bit").write_bytes(data)
     head += ['result = "pass"', f'bitstream_sha256 = "{hashlib.sha256(data).hexdigest()}"']
-head += ["", "[openxc7]", 'check_synthesis = "PASS"', 'check_lvs = "PASS"', 'timing = ["clock sys_clk: PASS", ]',
-         "wns_ns = 10.5"]
-(base / "manifest.txt").write_text("# SurfCPU bitstream build manifest\n" + "\n".join(head) + "\n")
+head += ["", "[openxc7]", f'image = "{os.environ.get("FAKE_OX_IMAGE") or "surfcpu-openxc7:" + tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
+         'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5"]
+(base / "manifest.txt").write_text("# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by "
+                                   "tools/fpga-build.sh\n" + "\n".join(head) + "\n")
 sys.exit(1 if fail else 0)
-'''
+"""
 
-FAKE_DOCKER = r'''#!/bin/sh
-# stand-in for docker: image inspect, ps, run ... cat
+FAKE_DOCKER = r"""#!/bin/sh
+# stand-in for docker: info, image inspect, ps, run ... cat; with FAKE_DOCKER_ARGS, `run` prints its arguments
 case "$1" in
-  image) echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+  info)  exit 0 ;;
+  image) case "$*" in
+           *Config.Env*) echo '["PATH=/usr/local/bin:/usr/bin:/bin","SURFCPU_IN_CONTAINER=1"]' ;;
+           *)            echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+         esac ;;
   ps)    ;;
-  run)   echo "fake-tool 1.0" ;;
+  run)   if [ -n "${FAKE_DOCKER_ARGS:-}" ]; then printf '%s\n' "$@"; else echo "fake-tool 1.0"; fi ;;
   *)     exit 1 ;;
 esac
-'''
+"""
 
 
-class TestMake(unittest.TestCase):
+class ScratchRelease(unittest.TestCase):
+    """a scratch git repository holding the release tooling, with stand-ins for devenv/run.sh (the software),
+    tools/fpga-build.sh (one bitstream) and docker, which tools/release.py takes only with SURFCPU_RELEASE_TEST=1"""
     COPY = ("tools/release.py", "tools/bitfile.py", "tools/deploy-sd.py", "tools/surfimg.py", "tools/socspec.py",
             "spec/soc.toml", "boards/arty_a7/boards.txt", "devenv/run.sh", "tools/openxc7-build.sh",
-            "firmware/tests/deploy/fake_diskutil.py", "firmware/tests/deploy/fake_mount.py") + tuple(
+            "firmware/tests/deploy/fake_diskutil.py", "firmware/tests/deploy/fake_mount.py", "tools/fresh-checkout.sh",
+            "Makefile", "mk/host.mk") + tuple(
         f"docs/{d}" for d in ("SURFBUS.md", "ISA.md", "BOOT-ABI.md", "MODULES.md", "MEMORY-MAP.md"))
+    LIST = ("version 2.3.4\nboard arty_a7_100t\nboard arty_a7_35t\ndesign base - -\ndesign top test -\n"
+            "design dd boot ddr\ncard-cmdline sd=rw\n")
+    DESIGNS = {"base": "top base\ngeneric BOARD BUILD_ID\n",
+               "top": "top top\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n",
+               "dd": "top dd\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n"}
+
+    PLACE = ""                                                  # a subdirectory to put the repository in
 
     def setUp(self):
-        self.dir = fresh(f"make-{self._testMethodName}")
+        self.dir = fresh(f"{type(self).__name__}-{self._testMethodName}")
+        if self.PLACE:
+            self.dir = self.dir / self.PLACE
+            self.dir.mkdir(parents=True)
         self.repo = self.dir / "repo"
         self.sc = self.repo / "surfcpu"
         for rel in self.COPY:
             (self.sc / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / rel, self.sc / rel)
-        for d in ("base", "top", "dd"):
-            (self.sc / "boards/arty_a7/designs").mkdir(parents=True, exist_ok=True)
-            (self.sc / f"boards/arty_a7/designs/{d}.files").write_text(f"top {d}\n")
+        (self.sc / "devenv/run.sh").chmod(0o755)
+        (self.sc / "tools/fresh-checkout.sh").chmod(0o755)
+        (self.sc / "boards/arty_a7/designs").mkdir(parents=True, exist_ok=True)
+        for d, text in self.DESIGNS.items():
+            (self.sc / f"boards/arty_a7/designs/{d}.files").write_text(text)
         (self.sc / "release").mkdir()
-        (self.sc / "release/release.txt").write_text(
-            "version 2.3.4\nboard arty_a7_100t\nboard arty_a7_35t\ndesign base - -\ndesign top test -\n"
-            "design dd boot ddr\ncard-cmdline sd=rw\n")
+        (self.sc / "release/release.txt").write_text(self.LIST)
         (self.repo / ".gitignore").write_text("build/\n__pycache__/\n")
-        fakes = self.dir / "fakes"
-        fakes.mkdir()
+        self.fakes = self.dir / "fakes"
+        self.fakes.mkdir()
         for name, text in (("run.sh", FAKE_RUN), ("fpga-build", FAKE_FPGA), ("docker", FAKE_DOCKER)):
-            (fakes / name).write_text(text)
-            (fakes / name).chmod(0o755)
+            (self.fakes / name).write_text(text)
+            (self.fakes / name).chmod(0o755)
         self.git("init", "-q")
         self.git("add", "-A")
-        self.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "scratch")
-        self.env = {k: v for k, v in os.environ.items() if k not in ("SOURCE_DATE_EPOCH", "SURFCPU_FPGA_OUT")}
-        self.env.update(SURFCPU_RELEASE_RUN=str(fakes / "run.sh"), SURFCPU_RELEASE_FPGA=str(fakes / "fpga-build"),
-                        SURFCPU_RELEASE_DOCKER=str(fakes / "docker"), FAKE_ROOT=str(self.sc), HOME=str(self.dir))
+        self.commit_all("scratch")
+        # (in the container, devenv/run.sh sets SURFCPU_BUILD_ID and SURFCPU_BUILD_DIRTY: the release refuses them)
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in release.REFUSE_ENV + release.HOOKS + ("SOURCE_DATE_EPOCH", "SURFCPU_IN_CONTAINER",
+                                                                      "BIT", "MAKEFLAGS", "MFLAGS", "MAKELEVEL")}
+        self.env.update(SURFCPU_RELEASE_TEST="1", SURFCPU_RELEASE_RUN=str(self.fakes / "run.sh"),
+                        SURFCPU_RELEASE_FPGA=str(self.fakes / "fpga-build"),
+                        SURFCPU_RELEASE_DOCKER=str(self.fakes / "docker"), DOCKER=str(self.fakes / "docker"),
+                        HOME=str(self.dir), PYTHON_HOST=PY)
+
+    def commit_all(self, msg):
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", msg)
         self.commit = self.git("rev-parse", "HEAD").strip()
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(self.repo)] + list(args), capture_output=True, text=True,
                               check=True).stdout
 
-    def make(self, *args, **env):
+    def tool(self, *args, **env):
         e = dict(self.env, **env)
-        return subprocess.run([PY, self.sc / "tools/release.py", "make"] + list(args), cwd=self.sc, env=e,
-                              capture_output=True, text=True)
+        for k in [k for k, v in e.items() if v is None]:
+            del e[k]
+        return subprocess.run([PY, self.sc / "tools/release.py"] + [str(a) for a in args], cwd=self.sc, env=e,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
+    def make(self, *args, **env):
+        return self.tool("make", *args, **env)
+
+    def rel_dir(self, pre: bool) -> Path:
+        return self.sc / "build" / "release" / f"2.3.4{'-pre' if pre else ''}-{self.commit[:8]}"
+
+    def records(self, rel: Path) -> dict:
+        return {(p.parts[-3], p.parts[-2]): release.parse_toml(p.read_text())
+                for p in (rel / "fpga").glob("*/*/manifest.txt")}
+
+
+class TestMake(ScratchRelease):
     def test_refusals(self):
         (self.sc / "new.txt").write_text("x")
         r = self.make("--prerelease")
@@ -364,13 +464,14 @@ class TestMake(unittest.TestCase):
     def test_complete(self):
         r = self.make()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        rel = self.sc / f"build/release/2.3.4-{self.commit[:8]}"
+        rel = self.rel_dir(False)
         self.assertTrue((rel / "MANIFEST").is_file(), r.stdout)
         man = release.parse_toml((rel / "MANIFEST").read_text())
         self.assertEqual(man["status"], "complete")
         self.assertIs(man["complete"], True)
         self.assertEqual(man["commit"], self.commit)
         self.assertEqual(man["missing"], [])
+        self.assertEqual(man["flash_boot_design"], "dd")
         listed = release.read_sums(rel / "SHA256SUMS")
         for p in ("SURFOS.BIN", "DDRDIAG.BIN", "card/BOOT/SURFOS.BIN", "card/BOOT/CMDLINE.TXT",
                   "fpga/arty_a7_100t/dd/dd.bit", "fpga/arty_a7_35t/base/base.bit", "flash/arty_a7_100t/dd.bin",
@@ -380,17 +481,21 @@ class TestMake(unittest.TestCase):
         self.assertTrue((rel / "fpga/arty_a7_100t/dd/manifest.txt").is_file())
         self.assertEqual((rel / "card/BOOT/CMDLINE.TXT").read_text(), "sd=rw\n")
         self.assertEqual((rel / "card/BOOT/SURFOS.BIN").read_bytes(), (rel / "SURFOS.BIN").read_bytes())
-        r = subprocess.run([PY, self.sc / "tools/release.py", "check", rel], capture_output=True, text=True)
+        r = self.tool("check", rel)
         self.assertEqual(r.returncode, 0, r.stdout)
         # a second release of the same commit is the same bytes, and replaces nothing without --force
         r = self.make()
         self.assertEqual(r.returncode, 1)
         self.assertIn("exists", r.stderr)
-        r = self.make("--out", str(self.dir / "again"))
+        r = self.make("--out", self.dir / "again")
         self.assertEqual(r.returncode, 0, r.stderr)
         again = self.dir / "again" / rel.name
         rows, _ = release.compare(rel, again)
         self.assertTrue(rows and all(s == "match" for _, s, _ in rows), rows)
+        self.assertEqual(self.tool("check", again).returncode, 0)
+        # --force replaces a release this tool made
+        r = self.make("--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_ddr_failure(self):
         r = self.make(FAKE_FPGA_FAIL="dd")
@@ -400,12 +505,14 @@ class TestMake(unittest.TestCase):
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
         r = self.make("--prerelease", FAKE_FPGA_FAIL="dd")
         self.assertEqual(r.returncode, 0, r.stderr)
-        rel = self.sc / f"build/release/2.3.4-pre-{self.commit[:8]}"
+        rel = self.rel_dir(True)
         man = release.parse_toml((rel / "MANIFEST").read_text())
         self.assertEqual(man["status"], "prerelease")
         self.assertIs(man["complete"], False)
         self.assertEqual(len(man["missing"]), 2)
         self.assertIn("dram_clk", man["missing"][0])
+        self.assertEqual(man["flash_boot_design"], "", "a pre-release without the boot design names none")
+        self.assertEqual(man["flash_test_design"], "top")
         self.assertFalse((rel / "fpga/arty_a7_100t/dd").exists())
         self.assertTrue((rel / "flash/arty_a7_100t/top.bin").is_file())
         r = self.make("--prerelease", "--force", FAKE_LITEDRAM_FAIL="1")
@@ -423,18 +530,369 @@ class TestMake(unittest.TestCase):
         self.assertIn("the release needs it", r.stderr)
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
 
+    def test_locale_recorded_truthfully(self):
+        """review c2: the MANIFEST does not claim LC_ALL/TZ reach the containers"""
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        man = release.parse_toml((self.rel_dir(True) / "MANIFEST").read_text())
+        self.assertIn("the containers get only SOURCE_DATE_EPOCH", man["tools"]["locale"])
+        self.assertIn("no LANG, LC_* or TZ set (the POSIX locale, UTC)", man["tools"]["locale"])
+
+    def test_version_tied_to_the_kernel(self):
+        """review c3: release.txt's version and SURFOS.BIN's must agree"""
+        r = self.make("--prerelease", "--skip-ddr", FAKE_VERSION="9.9.9")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("9.9.9", r.stderr)
+        self.assertIn("2.3.4", r.stderr)
+
+
+# ------------------------------------------------------------------------------- the review's findings (rel-2)
+class TestShippedIsChecked(ScratchRelease):
+    """review M1: what the release ships is what it checked, whatever else happens in the tree meanwhile"""
+    OTHER_SW = ("mkdir -p build/fw ../build/riscv32/arty_a7; printf 'deadbeef\\n' > build/fw/surfboot.mem; "
+                "printf 'other payload' > ../build/riscv32/arty_a7/payload; "
+                "python3 tools/surfimg.py pack --bin ../build/riscv32/arty_a7/payload --load-addr 0x80000000 "
+                "--build-id 0badc0de --version 2.3.4 -o ../build/riscv32/arty_a7/SURFOS.BIN >/dev/null")
+
+    def test_other_software_build_meanwhile(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=self.OTHER_SW, FAKE_FPGA_HOOK_ON="base/arty_a7_35t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        pkg = (rel / "SURFOS.BIN").read_bytes()
+        self.assertEqual(f"{int.from_bytes(pkg[44:48], 'little'):08x}", self.commit[:8])
+        rom = release.sha256(rel / "rom/surfboot.mem")
+        for (b, d), m in self.records(rel).items():
+            if d == "top":
+                self.assertEqual(m["rom_sha256"], rom, f"{d} for {b} was built with another boot ROM")
+        self.assertEqual(self.tool("check", rel).returncode, 0)
+
+    def test_other_bitstream_build_meanwhile(self):
+        tamper = ("mkdir -p build/fpga/arty_a7_100t/base && printf 'not this' > build/fpga/arty_a7_100t/base/base.bit "
+                  "&& printf 'result = \"pass\"\\nsource_dirty = true\\n' > build/fpga/arty_a7_100t/base/manifest.txt")
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=tamper, FAKE_FPGA_HOOK_ON="top/arty_a7_35t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        m = self.records(rel)[("arty_a7_100t", "base")]
+        self.assertIs(m["source_dirty"], False)
+        self.assertEqual(release.sha256(rel / "fpga/arty_a7_100t/base/base.bit"), m["bitstream_sha256"])
+        f, _, _ = bitfile.parse_header((rel / "fpga/arty_a7_100t/base/base.bit").read_bytes())
+        self.assertEqual(f"{f['c']} {f['d']}", time.strftime("%Y/%m/%d %H:%M:%S", time.gmtime(
+            int(self.git("log", "-1", "--format=%ct").strip()))))
+
+    def test_new_commit_meanwhile(self):
+        move = "git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m next"
+        r = self.make("--prerelease", FAKE_FPGA_HOOK=move, FAKE_FPGA_HOOK_ON="dd/arty_a7_100t")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("HEAD moved", r.stderr)
+        self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
+
+    def test_staged_file_changed_meanwhile(self):
+        poke = "for f in build/release/.*stage/SURFOS.BIN; do [ -f \"$f\" ] && printf x >> \"$f\"; done; true"
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_HOOK=poke, FAKE_FPGA_HOOK_ON="top/arty_a7_35t")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("SURFOS.BIN is not the file that was checked", r.stderr)
+
+    def test_one_release_at_a_time(self):
+        lock = self.sc / "build/release-work.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(f"{os.getpid()} now\n")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("another release is running", r.stderr)
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        lock.write_text(f"{gone.pid} then\n")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stale lock", r.stdout)
+        self.assertFalse(lock.exists())
+
+
+class TestVerifyScope(ScratchRelease):
+    """review M2: release-verify refuses names it does not know, and a partial check never reads as PASS"""
+
+    def test_scope(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        rel = self.rel_dir(True)
+        for args, words in ((["--designs", "tpo"], "unknown design"), (["--boards", "arty_a7_10t"], "unknown board"),
+                            (["--designs", "dd"], "no bitstream of dd")):
+            r = self.tool("verify", rel, *args)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn(words, r.stderr)
+        r = self.tool("verify", rel, "--designs", "top", "--boards", "arty_a7_100t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        verdict = r.stdout.strip().splitlines()[-1]
+        self.assertTrue(verdict.startswith("PARTIAL"), verdict)
+        self.assertIn("NOT verified", verdict)
+        self.assertIn("not rebuilt  fpga/arty_a7_35t/top/top.bit", r.stdout)
+        r = self.tool("verify", rel)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stdout.strip().splitlines()[-1].startswith("PASS:"), r.stdout)
+        self.assertNotIn("not rebuilt", r.stdout)
+
+
+class TestCheckStrict(ScratchRelease):
+    """review m1: release-check and compare fail a damaged or inconsistent release"""
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        self.pre = self.rel_dir(True)
+
+    def copy(self, name: str) -> Path:
+        d = self.dir / "copies" / name
+        shutil.copytree(self.pre, d)
+        return d
+
+    def check(self, d: Path):
+        return self.tool("check", d)
+
+    def test_intact(self):
+        self.assertEqual(self.check(self.pre).returncode, 0)
+
+    def test_empty_lists(self):
+        a = self.copy("a")
+        (a / "SHA256SUMS").write_text("")
+        (a / "MANIFEST").write_text("")
+        self.assertEqual(self.check(a).returncode, 1)
+        b = self.dir / "copies" / "b"
+        b.mkdir(parents=True)
+        (b / "SHA256SUMS").write_text("")
+        (b / "MANIFEST").write_text("")
+        self.assertEqual(self.check(b).returncode, 1)
+
+    def test_planted_file(self):
+        b = self.copy(self.pre.name)
+        d = b / "fpga/arty_a7_100t/dd"
+        d.mkdir(parents=True)
+        shutil.copyfile(b / "fpga/arty_a7_100t/top/top.bit", d / "dd.bit")
+        shutil.copyfile(b / "fpga/arty_a7_100t/top/manifest.txt", d / "manifest.txt")
+        r = self.check(b)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("fpga/arty_a7_100t/dd", r.stdout)
+
+    def test_renamed(self):
+        c = self.dir / "copies" / f"2.3.4-{self.commit[:8]}"
+        shutil.copytree(self.pre, c)
+        r = self.check(c)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("named", r.stdout)
+
+    def test_reference_bytes(self):
+        d = self.copy(self.pre.name)
+        p = d / "fpga/arty_a7_100t/top/top.bit"
+        p.write_bytes(p.read_bytes()[:100])
+        r = self.tool("compare", d, self.pre)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("DAMAGED", r.stdout)
+
+    def test_dropped_design(self):
+        e = self.copy(self.pre.name)
+        sums = [ln for ln in (e / "SHA256SUMS").read_text().splitlines()
+                if "fpga/arty_a7_100t/top/" not in ln and "flash/arty_a7_100t/top" not in ln]
+        (e / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+        blocks = [x for x in (e / "MANIFEST").read_text().split("\n\n")
+                  if not (x.startswith("[[artifact]]") and ("fpga/arty_a7_100t/top/" in x or "flash/arty_a7_100t/top" in x))]
+        (e / "MANIFEST").write_text("\n\n".join(blocks))
+        shutil.rmtree(e / "fpga/arty_a7_100t/top")
+        (e / "flash/arty_a7_100t/top.bin").unlink()
+        self.assertEqual(self.check(e).returncode, 1)
+        self.assertEqual(self.tool("compare", e, self.pre).returncode, 1)
+
+    def test_version_and_flash_designs(self):
+        """review c3: check holds SURFOS.BIN's version and the flash designs MANIFEST names to the release"""
+        v = self.copy(self.pre.name)
+        (v / "MANIFEST").write_text((v / "MANIFEST").read_text().replace('flash_boot_design = ""',
+                                                                         'flash_boot_design = "dd"'))
+        r = self.check(v)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("flash_boot_design 'dd'", r.stdout)
+
+    def test_extra_in_new(self):
+        n = self.copy(self.pre.name)
+        (n / "extra.txt").write_text("x")
+        lines = (n / "SHA256SUMS").read_text() + f"{release.sha256(n / 'extra.txt')}  extra.txt\n"
+        (n / "SHA256SUMS").write_text(lines)
+        r = self.tool("compare", self.pre, n)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("EXTRA", r.stdout)
+
+
+class TestEnvironment(ScratchRelease):
+    """review m2: the builds get an allow-listed environment, fresh output directories and records from this run"""
+
+    def test_stale_results_never_shipped(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        r = self.make("--prerelease", "--skip-ddr", "--out", self.dir / "second", FAKE_FPGA_NOOP="1")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no build record from this build", r.stderr)
+
+    def test_record_from_another_run(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_RUN_ID_TIME="20200101T000000Z")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("not from this build", r.stderr)
+
+    def test_record_from_another_image(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_OX_IMAGE="surfcpu-openxc7:other")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("built in the image 'surfcpu-openxc7:other'", r.stderr)
+
+    def test_settings_that_change_the_builds_are_refused(self):
+        for var, val in (("DRY_RUN", "1"), ("SURFCPU_OPENXC7_IMAGE", "x:y"), ("SURFCPU_IMAGE", "x:y"),
+                         ("SURFCPU_OPENXC7_BUILD", "/bin/true"), ("SURFCPU_ROMCHECK", "/bin/true"), ("ROM", "/x")):
+            r = self.make("--prerelease", "--skip-ddr", **{var: val})
+            self.assertEqual(r.returncode, 1, f"{var}: {r.stdout}")
+            self.assertIn(var, r.stderr)
+
+    def test_allow_listed_environment(self):
+        dump = self.dir / "env.txt"
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_ENV=str(dump), JUNK_SETTING="1", DESIGN="other")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        names = set(dump.read_text().split())
+        for gone in ("JUNK_SETTING", "DESIGN"):
+            self.assertNotIn(gone, names)
+        for there in ("SOURCE_DATE_EPOCH", "FLOW", "SURFCPU_FPGA_OUT", "PATH", "LC_ALL", "TZ"):
+            self.assertIn(there, names)
+
+    def test_stand_ins_only_for_the_tests(self):
+        r = self.make("--prerelease", "--skip-ddr", SURFCPU_RELEASE_TEST=None)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("SURFCPU_RELEASE_TEST", r.stderr)
+
+
+class TestCleanTree(ScratchRelease):
+    """review m3: the clean-tree check follows the repository's own rules, not the user's git configuration"""
+
+    def plant(self):
+        (self.repo / "arch/riscv32").mkdir(parents=True)
+        (self.repo / "arch/riscv32/extra.c").write_text("int planted;\n")
+
+    def test_show_untracked_no(self):
+        self.plant()
+        self.git("config", "status.showUntrackedFiles", "no")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("arch/riscv32/extra.c", r.stderr)
+
+    def test_global_excludes(self):
+        self.plant()
+        ex = self.dir / "excludes"
+        ex.write_text("*.c\n")
+        self.git("config", "core.excludesFile", str(ex))
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("arch/riscv32/extra.c", r.stderr)
+
+    def test_assume_unchanged(self):
+        self.git("update-index", "--assume-unchanged", "surfcpu/release/release.txt")
+        (self.sc / "release/release.txt").write_text(self.LIST.replace("2.3.4", "2.3.5"))
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("release.txt", r.stderr)
+
+    def test_run_sh_dirty_flag(self):
+        self.plant()
+        self.git("config", "status.showUntrackedFiles", "no")
+        e = dict(self.env, FAKE_DOCKER_ARGS="1")
+        r = subprocess.run(["sh", str(self.sc / "devenv/run.sh"), "true"], cwd=self.sc, env=e, capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("SURFCPU_BUILD_DIRTY=1", r.stdout.split())
+
+
+class TestNoForeignDeletes(ScratchRelease):
+    """review m4: the tool deletes only what it made"""
+
+    def precious(self, name: str) -> Path:
+        d = self.dir / name
+        d.mkdir()
+        (d / "precious.txt").write_text("keep me\n")
+        return d
+
+    def test_logs(self):
+        d = self.precious("notes")
+        r = self.make("--prerelease", "--skip-ddr", "--logs", d)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertTrue((d / "precious.txt").is_file())
+
+    def test_out_force(self):
+        d = self.dir / "project" / self.rel_dir(True).name
+        d.mkdir(parents=True)
+        (d / "precious.txt").write_text("keep me\n")
+        r = self.make("--prerelease", "--skip-ddr", "--out", d.parent, "--force")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("not a release", r.stderr)
+        self.assertTrue((d / "precious.txt").is_file())
+        r = self.make("--prerelease", "--skip-ddr", "--out", d.parent / "x", "--out-exact")
+        self.assertEqual(r.returncode, 2, "--out-exact is gone: a release directory is named by its MANIFEST")
+
+    def test_verify_work(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        w = self.dir / "work"
+        w.mkdir()
+        r = self.tool("verify", self.rel_dir(True), "--work", w)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(w.is_dir(), "the directory the user gave is kept")
+        self.assertEqual(list(w.iterdir()), [])
+
+    def test_fresh_checkout_work(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        w = self.dir / "fc"
+        w.mkdir()
+        e = dict(self.env)
+        r = subprocess.run(["sh", str(self.sc / "tools/fresh-checkout.sh"), "--work", str(w), "--reference",
+                            str(self.rel_dir(True)), "--", "PRERELEASE=1", "SKIP_DDR=1"], cwd=self.sc, env=e,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(w.is_dir())
+        self.assertEqual(list(w.iterdir()), [])
+        p = self.precious("fc2")
+        r = subprocess.run(["sh", str(self.sc / "tools/fresh-checkout.sh"), "--work", str(p)], cwd=self.sc, env=e,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertTrue((p / "precious.txt").is_file())
+
+
+class TestOddPaths(ScratchRelease):
+    """what the review confirmed (its s5), kept: the whole cycle through make, in a checkout whose path holds
+    spaces, quotes, a dollar sign, an ampersand, parentheses and a hash"""
+    PLACE = 'it\'s "q" $HOME & (co) #1/SurfOS Restoration Project'
+
+    def mk(self, *args):
+        return subprocess.run(["make", "--no-print-directory", "-C", str(self.sc)] + list(args), env=self.env,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+    def test_cycle(self):
+        r = self.mk("release", "PRERELEASE=1", "SKIP_DDR=1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        name = self.rel_dir(True).name
+        r = self.mk("release-check", f"RELEASE=build/release/{name}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.mk("release-verify", f"RELEASE=build/release/{name}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stdout.strip().splitlines()[-1].startswith("PASS:"), r.stdout)
+        r = self.mk("fresh-checkout", f"REFERENCE=build/release/{name}", "ARGS=PRERELEASE=1 SKIP_DDR=1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("the release matches the reference", r.stdout)
+        self.assertEqual([p.name for p in (self.sc / "build").iterdir()
+                          if p.name in ("release-verify", "fresh-checkout") and any(p.iterdir())], [])
+
 
 # ------------------------------------------------------------------------------- program.sh flash path
 FAKE_OFL = (ROOT / "sim" / "board" / "tools" / "fake" / "openFPGALoader").resolve()
+# the stand-in first, then only the system's own directories: never Homebrew's, where the real one lives
+SAFE_PATH = f"{FAKE_OFL.parent}:/usr/bin:/bin:/usr/sbin:/sbin"
 
 
-class TestProgramFlash(unittest.TestCase):
-    """tools/program.sh flash on a release's bitstream, with sim/board/tools/fake/openFPGALoader named by
-    OPENFPGALOADER (program.sh's override), never the real openFPGALoader: a board may be plugged in"""
+class FlashFixture(unittest.TestCase):
+    """a release's bitstream and build record for tools/program.sh, with sim/board/tools/fake/openFPGALoader named
+    by OPENFPGALOADER (program.sh's override) and first on a PATH without Homebrew: never the real openFPGALoader,
+    since a board may be plugged in"""
+    REL = "release"
 
     def setUp(self):
-        self.dir = fresh(f"flash-{self._testMethodName}")
-        self.rel = self.dir / "release"
+        self.dir = fresh(f"flash-{type(self).__name__}-{self._testMethodName}")
+        self.rel = self.dir / self.REL
         self.d = self.rel / "fpga/arty_a7_100t/surfcpu_arty_a7_ddr"
         self.d.mkdir(parents=True)
         self.bit = self.d / "surfcpu_arty_a7_ddr.bit"
@@ -445,10 +903,11 @@ class TestProgramFlash(unittest.TestCase):
         self.bin = self.rel / "flash/arty_a7_100t/surfcpu_arty_a7_ddr.bin"
         self.bin.write_bytes(stream)
         self.log = self.dir / "calls.log"
-        self.env = {k: v for k, v in os.environ.items() if k not in ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL",
-                                                                       "OPENFPGALOADER", "BIT", "DESIGN")}
-        self.env.update(PATH=f"{ROOT / 'sim/board/tools/fake'}:{os.environ['PATH']}", FAKE_LOG=str(self.log),
-                        FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in release.REFUSE_ENV + ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL", "OPENFPGALOADER", "BIT",
+                                                      "DESIGN", "BOARD", "MAKEFLAGS", "MFLAGS", "MAKELEVEL",
+                                                      "SURFCPU_IN_CONTAINER")}
+        self.env.update(PATH=SAFE_PATH, FAKE_LOG=str(self.log), FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
 
     def record(self, bit: Path, **over):
         m = {"design": "surfcpu_arty_a7_ddr", "board": "arty_a7_100t", "part": "xc7a100tcsg324-1",
@@ -458,16 +917,31 @@ class TestProgramFlash(unittest.TestCase):
             "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh\n"
             + "".join(f'{k} = "{v}"\n' for k, v in m.items()))
 
-    def program(self, *args, **env):
-        self.log.write_text("")
-        e = dict(self.env, **env)
-        # never a real programmer: the stand-in by its full path, and it must be the stand-in
+    def safe(self, e: dict) -> None:
+        """never a real programmer: the stand-in by its full path, and the only openFPGALoader on PATH"""
         assert e["OPENFPGALOADER"] == str(FAKE_OFL), e["OPENFPGALOADER"]
         assert FAKE_OFL.read_text().startswith("#!/bin/sh\n# Fake openFPGALoader"), FAKE_OFL
-        r = subprocess.run(["sh", ROOT / "tools/program.sh"] + [str(a) for a in args], env=e, capture_output=True,
-                           text=True, stdin=subprocess.DEVNULL)
+        assert e["PATH"] == SAFE_PATH, e["PATH"]
+        found = subprocess.run(["sh", "-c", "command -v openFPGALoader"], env=e, capture_output=True,
+                               text=True).stdout.strip()
+        assert found == str(FAKE_OFL), found
+
+    def run_logged(self, cmd: list, **env):
+        self.log.write_text("")
+        e = dict(self.env, **env)
+        self.safe(e)
+        r = subprocess.run([str(a) for a in cmd], env=e, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         return r, self.log.read_text()
 
+    def program(self, *args, **env):
+        return self.run_logged(["sh", ROOT / "tools/program.sh"] + list(args), **env)
+
+    def make(self, *args, **env):
+        return self.run_logged(["make", "--no-print-directory", "-C", ROOT, "-f", "mk/host.mk"] + list(args),
+                               PYTHON_HOST=PY, **env)
+
+
+class TestProgramFlash(FlashFixture):
     def test_confirmed_write(self):
         r, calls = self.program("flash", "arty_a7_100t", self.bit, SURFCPU_FLASH_CONFIRM="write-flash-arty_a7_100t")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -513,6 +987,137 @@ class TestProgramFlash(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}", calls)
         self.assertNotIn(" -f ", calls)
+
+
+class TestHostQuoting(FlashFixture):
+    """review m5: mk/host.mk's targets take a path with spaces in BIT, RELEASE, MOUNT, ..."""
+    REL = "SurfOS Restoration Project/release 1"
+
+    def test_program_targets(self):
+        r, calls = self.make("program-flash", "BOARD=arty_a7_100t", f"BIT={self.bit}",
+                             SURFCPU_FLASH_CONFIRM="write-flash-arty_a7_100t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t -f --verify {self.bit}\n", calls)
+        r, calls = self.make("program-volatile", "BOARD=arty_a7_100t", f"BIT={self.bit}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}\n", calls)
+        self.assertNotIn(" -f ", calls)
+        # without BIT, program.sh's own default (the last build of DESIGN under SURFCPU_FPGA_OUT)
+        r, calls = self.make("program-volatile", "BOARD=arty_a7_100t", "DESIGN=surfcpu_arty_a7_ddr",
+                             SURFCPU_FPGA_OUT=str(self.rel / "fpga"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}\n", calls)
+
+    def test_release_and_card_targets(self):
+        gone = self.dir / "no such dir" / "2.3.4-pre-01234567"
+        for target in ("release-check", "release-verify"):
+            r, calls = self.make(target, f"RELEASE={gone}")
+            self.assertNotEqual(r.returncode, 0, target)
+            self.assertIn(str(gone), r.stdout + r.stderr, target)
+        # deploy-sd in its test mode (never diskutil): MOUNT and a path inside DEPLOY_ARGS, quoted in the value
+        pkg = self.dir / "SurfOS Restoration Project" / "SURFOS.BIN"
+        r, calls = self.make("deploy-sd", f"MOUNT={self.dir / 'my card'}", f'DEPLOY_ARGS=--image "{pkg}"',
+                             SURFCPU_DEPLOY_TEST="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"no package at {pkg}", r.stdout + r.stderr)
+        pkg.write_bytes(release.load("surfimg").make_package(bytes(256), 0x80000000, build_id=0x1234abcd))
+        r, calls = self.make("deploy-sd", f"MOUNT={self.dir / 'my card'}", f'DEPLOY_ARGS=--image "{pkg}"',
+                             SURFCPU_DEPLOY_TEST="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"{self.dir / 'my card'} is not a directory", r.stdout + r.stderr)
+        self.assertEqual(calls, "")
+
+
+class TestBitfileStrict(FlashFixture):
+    """review c1: one rule for a .bit header in tools/bitfile.py and tools/program.sh, fields a, b, c, d once each
+    and in this order, then e; anything else, and a stream with no IDCODE or DESYNC, fails cleanly"""
+
+    @staticmethod
+    def field(k: str, s: str) -> bytes:
+        raw = s.encode() + b"\0"
+        return k.encode() + struct.pack(">H", len(raw)) + raw
+
+    def header(self, keys: list, stream: bytes) -> bytes:
+        val = {"a": "top.frames;Generator=xc7frames2bit", "b": "xc7a100tcsg324-1", "B": "xc7a35tcsg324-1",
+               "c": "2026/10/16", "d": "13:41:43"}
+        return (bitfile.MAGIC + b"".join(self.field(k.lower(), val[k]) for k in keys) + b"e"
+                + struct.pack(">I", len(stream)) + stream)
+
+    def cases(self) -> dict:
+        _, _, start = bitfile.parse_header(bitfile.synthetic())
+        stream = bitfile.synthetic()[start:]
+        return {name: self.header(keys, stream) for name, keys in (
+            ("no field b", ["a", "c", "d"]), ("field b twice", ["a", "b", "B", "c", "d"]),
+            ("field b twice, the other part first", ["a", "B", "b", "c", "d"]),
+            ("field c twice", ["a", "b", "c", "c", "d"]), ("b before a", ["b", "a", "c", "d"]),
+            ("no field d", ["a", "b", "c"]))}
+
+    def test_header_rule(self):
+        ok = self.header(["a", "b", "c", "d"], bitfile.synthetic()[bitfile.parse_header(bitfile.synthetic())[2]:])
+        self.assertEqual(bitfile.parse_header(ok)[0]["b"], "xc7a100tcsg324-1")
+        for name, data in self.cases().items():
+            with self.subTest(name):
+                p = self.dir / "case.bit"
+                p.write_bytes(data)
+                for fn in (bitfile.parse_header, lambda d: bitfile.stamp(d, 7), bitfile.report,
+                           lambda d: bitfile.flash_image(d, "arty_a7_100t")):
+                    self.assertRaises(bitfile.BitError, fn, data)
+                for args in (["stamp", p, "--epoch", "7"], ["flash", p, "-o", self.dir / "x.bin", "--board",
+                                                            "arty_a7_100t"], ["info", p]):
+                    r = subprocess.run([PY, ROOT / "tools/bitfile.py"] + [str(a) for a in args], capture_output=True,
+                                       text=True)
+                    self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
+                    self.assertTrue(r.stderr.startswith("bitfile: "), r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(p.read_bytes(), data, "stamp leaves a file it refuses alone")
+                r, calls = self.program("volatile", "arty_a7_100t", p)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("refusing", r.stderr)
+                self.assertNotIn(str(p), calls)
+
+    def test_random_damage(self):
+        import random
+        good = bitfile.synthetic()
+        _, _, start = bitfile.parse_header(good)
+        rng = random.Random(1)
+        odd = []
+        for n in range(3000):
+            d = bytearray(good)
+            if n % 3 == 0:
+                d[rng.randrange(0, start)] = rng.randrange(256)
+            elif n % 3 == 1:
+                d = d[:rng.randrange(0, start + 64)]
+            else:
+                k = rng.randrange(13, start)
+                d = d[:k] + bytes([rng.randrange(256)]) + d[k:]
+            for fn in (bitfile.parse_header, bitfile.report, lambda x: bitfile.stamp(x, 7),
+                       lambda x: bitfile.flash_image(x, "arty_a7_100t")):
+                try:
+                    fn(bytes(d))
+                except bitfile.BitError:
+                    pass
+                except Exception as e:                                          # noqa: BLE001
+                    odd.append((n, type(e).__name__, str(e)))
+        self.assertEqual(odd, [])
+
+    def test_info_on_an_incomplete_stream(self):
+        good = bitfile.synthetic()
+        _, _, start = bitfile.parse_header(good)
+        cut = good[start:start + 80]
+        p = self.dir / "short.bit"
+        p.write_bytes(good[:start - 4] + struct.pack(">I", len(cut)) + cut)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("PROBLEM: no IDCODE", r.stdout)
+        self.assertIn("PROBLEM: no DESYNC", r.stdout)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p.with_name("whole.bit")], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 1)
+        p.with_name("whole.bit").write_bytes(good)
+        r = subprocess.run([PY, ROOT / "tools/bitfile.py", "info", p.with_name("whole.bit")], capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("PROBLEM", r.stdout)
 
 
 if __name__ == "__main__":

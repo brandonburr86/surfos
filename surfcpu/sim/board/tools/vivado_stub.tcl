@@ -157,9 +157,11 @@ proc get_drc_violations {args} {
 proc get_msg_config {args} { log_call get_msg_config {*}$args; return [env_or FAKE_CRIT 0] }
 proc write_bitstream {args} {
     log_call write_bitstream {*}$args
-    # a .bit header starts with a fixed preamble and the design and part fields
+    # a .bit header: a fixed preamble, the fields a (design), b (part), c (date) and d (time) once each,
+    # then e (the length of the rest), as Vivado writes them
     set part [string range [regsub {^xc} $::fake_part ""] 0 [expr {[string first - [regsub {^xc} $::fake_part ""]] - 1}]]
-    write_text [lindex $args end] "\x00\x09\x0f\xf0\x0f\xf0\x0f\xf0\x0f\xf0\x00\x00\x01a\x00\x05fake\x00b\x00\x0d$part\x00 fake bitstream\n"
+    set body " fake bitstream\n"
+    write_text [lindex $args end] "\x00\x09\x0f\xf0\x0f\xf0\x0f\xf0\x0f\xf0\x00\x00\x01a\x00\x05fake\x00b\x00[format %c [expr {[string length $part] + 1}]]$part\x00c\x00\x0b2026/10/16\x00d\x00\x0912:00:00\x00e[binary format I [string length $body]]$body"
 }
 
 set argv [list $::env(FAKE_TCLARGS)]
