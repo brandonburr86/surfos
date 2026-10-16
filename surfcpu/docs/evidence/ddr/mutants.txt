@@ -1,8 +1,9 @@
-# DDR mutation check, 2026-10-15: make test-ddr-mutants (python3 sim/ddr/ddr_mutants.py --jobs 3)
+# DDR mutation check, 2026-10-16 (round ddr-3, at 0964f875): make test-ddr-mutants (python3 sim/ddr/ddr_mutants.py --jobs 4)
 # each mutant: one deliberate bug in a copy of the RTL; the fast testbench (tb_ddr_bridge --test all
-# --seed 1), the LiteDRAM testbench (tb_ddr_litedram, for lite-*), and tb_ddr_mailbox (seeds 1, 2,
-# for box-*) must fail. The text after 'killed:' is the first failure reported. (no-take was rerun
-# alone after its mutation text was updated for the u_owe term.)
+# --seed 1), the LiteDRAM testbench (tb_ddr_litedram, at 80 MHz, for lite-*), tb_ddr_mailbox (seeds 1, 2,
+# for box-*) and, new in round ddr-3, the register bridge's tb_ddr_csr (Icarus, two clock pairs, for
+# csr-*) must fail. The text after 'killed' is the first failure reported. box-no-req-sync removes a
+# synchronizer stage and may survive: metastability is not simulated.
 
 lane-select               killed: FAIL basic (sys cycle 156): read 8ffffffc (be f) returned 7c430943, expected cafef00d  [ok]
 mask-polarity             killed: FAIL basic (sys cycle 120): read 80000000 (be f) returned 8ac82d05, expected 11223344  [ok]
@@ -31,9 +32,18 @@ box-send-unchecked        killed by tb_ddr_mailbox: mailbox: data changed while 
 box-take-unchecked        killed by tb_ddr_mailbox: mailbox: data changed while waiting: 4d4fcf97 -> ef16155f  [ok]
 box-no-req-sync           survived  [ok (expected: metastability is not simulated)]
 box-no-ack-sync           killed by tb_ddr_mailbox: mailbox: message 1 is deadbeef, expected c46d56b7  [ok]
-lite-we-polarity          killed: FAIL basic (sys cycle 33): read 80000000 (be f) returned 00000000, expected 11223344  [ok]
-lite-addr-shift           killed: FAIL bounds (sys cycle 1710): read 80000000 (be f) returned 6ed72c56, expected c0ac339b  [ok]
+lite-we-polarity          killed: FAIL basic (sys cycle 35): read 80000000 (be f) returned 00000000, expected 11223344  [ok]
+lite-addr-shift           killed: FAIL bounds (sys cycle 1917): read 80000000 (be f) returned 6ed72c56, expected c0ac339b  [ok]
 lite-cmd-we               killed: FAIL basic (sys cycle 521): read 80000000: error response  [ok]
-lite-no-buffer            killed: FAIL basic (sys cycle 531): write 80000000: error response  [ok]
+lite-no-buffer            killed: FAIL basic (sys cycle 532): write 80000000: error response  [ok]
 lite-calib                killed: FAIL precal (sys cycle 8): calib_done before init_done  [ok]
-ddr_mutants: 31 killed, 1 survived as expected, 0 not caught
+csr-no-word-check         killed by tb_ddr_csr: ERROR access 0 that is not a whole word: err 0 rdata 00000000  [ok]
+csr-fetch-carried         killed by tb_ddr_csr: ERROR access 3 that is not a whole word: err 0 rdata 00000000  [ok]
+csr-no-inflight-wait      killed by tb_ddr_csr: ERROR read 25e: 00000000, expected bec5867d  [ok]
+csr-stale-answer          killed by tb_ddr_csr: ERROR read 1dc: 00000000, expected 960e6e2c  [ok]
+csr-no-watchdog           killed by tb_ddr_csr: mon: PROTOCOL ERROR at 193540000: no response within MAX_LAT cycles  [ok]
+csr-owe-ignored           killed by tb_ddr_csr: ERROR write 119: error answer  [ok]
+csr-addr-bit2             killed by tb_ddr_csr: ERROR read 4c1: 46e91f8d, expected 00000000  [ok]
+csr-wb-err-ignored        killed by tb_ddr_csr: ERROR read 25e: 00000000, expected bec5867d  [ok]
+csr-no-wb-limit           killed by tb_ddr_csr: ERROR the muted slave's access was answered by the SoC side's watchdog (65 cycles), not the Wishbone limit  [ok]
+ddr_mutants: 40 killed, 1 survived as expected, 0 not caught
