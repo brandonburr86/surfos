@@ -84,8 +84,9 @@ bitstream differently from AMD's XAPP888 algorithm and from Vivado (docs/OPEN-FL
 6.2; the flow's `cmtcheck.py` catches it, and what the chip would make of it is unknown). The
 new setting, 100 MHz / 2 x 18.125 / 36, has an even integer part in its one fractional divider
 and an integer output divider, so both flows encode it alike; the flow track proved it through
-`cmtcheck.py` in a real build (evidence `../flow/mmcm.txt`). `clockplan.py` now refuses a
-fractional M or O0 with an odd integer part (or 2.125). `clockplan.py report` lists closer
+`cmtcheck.py` in a real build (evidence `../flow/mmcm.txt`), and the baseline's open-flow
+builds check it again (evidence `openxc7.txt`). `clockplan.py` now refuses a fractional M or
+O0 with an odd integer part (or 2.125). `clockplan.py report` lists closer
 settings (evidence `clocks.txt`), such as D = 5, M = 58.375, O0 = 46.375 at +8.0 ppm, but with
 two fractional dividers and a VCO 32.5 MHz below its maximum; 55 ppm is far inside what a
 monitor accepts.
@@ -324,6 +325,25 @@ build passes only if `tools/openxc7-build.sh` exits 0, all six of its checks pas
 bitstream, round trip, block RAM, LVS, clocks; block RAM and clocks may be absent from a
 design, but an LVS that could not be proved fails), and every clock meets nextpnr's timing
 estimate. It is not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot show.
+
+**Milestone 1 bitstreams, open flow** (evidence `openxc7.txt`, 2026-10-16, source 10807ee1,
+clean): `make build-fpga FLOW=openxc7 DESIGN=arty_a7_baseline` for each board, with no
+build-host.conf.
+
+| | arty_a7_100t | arty_a7_35t (placed as xc7a35tcsg324-1) |
+|---|---|---|
+| result, wall clock | pass, 23 s | pass, 19 s |
+| bitstream | 3,825,952 bytes | 2,192,174 bytes |
+| IDCODE in the bitstream | 0x03631093 (XC7A100T) | 0x0362D093 (XC7A35T) |
+| checks | synthesis, bitstream, round trip, LVS (429 proved, 0 differ) and clocks PASS; no block RAM | the same |
+| clock tiles (cmtcheck) | MMCM 2 / 18.125 / 36 and PLL 1 / 10 / 40: 34 fields as XAPP888 | the same |
+| timing, nextpnr's estimate | pix_clk 202.6 MHz, sys_clk 122.3 MHz (need 25.17 and 25) | 203.1 and 135.4 MHz |
+| Yosys LUTs, flip-flops | 303, 412 (0.5 %) | 293, 412 (1.4 %) |
+
+The SHA-256 of each file is in the evidence; it changes with every build, because the build
+identity and time are part of the banner (and so the LUT count moves by a few). Not loaded on a
+board: that is the owner's step (section 9), with the baseline as the first design because it
+drives no Pmod pin (WIRING.md U2).
 
 `build.tcl` (non-project): `read_verilog`, `read_mem`, `read_xdc` (then the CDC files scoped and
 late), `synth_design` with the generics and `-flatten_hierarchy rebuilt`, `opt_design`,
