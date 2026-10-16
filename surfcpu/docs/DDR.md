@@ -29,7 +29,7 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
 
 Nothing here has run on an FPGA. Milestone 4's physical evidence (calibration, address and data
 patterns, byte lanes, boundaries and aliases, sustained transfers, code running from DDR) is all
-pending (section 9).
+pending (section 11).
 
 ## 1. The bridge's ports
 
@@ -125,7 +125,7 @@ LiteDRAM's native port counts 128-bit beats, so the adapter sends `app_addr[26:3
   taken: from then on the write is ordered before anything sent later.
 * **Read**: the command, then the bridge waits for `app_rd_data_valid` and takes its lane.
 * The bridge never has more than one command in the controller (the model checks this).
-* **Ordering**: our MIG configuration asks for strict ordering (section 6), so a read after a
+* **Ordering**: our MIG configuration asks for strict ordering (section 9.1), so a read after a
   write to the same address can never pass it. With the controller's default ("Normal") that
   would still hold, because requests to the same rank and bank queue in one bank machine in
   order (MIG 7 `bank_queue.v`: "a new request places itself in the existing queue for a
@@ -251,7 +251,7 @@ All run in the toolchain container; `make test-ddr` is on `test-soc`, `make lint
 | `make test-ddr-icarus` | the mailbox in Icarus (5 clock pairs x 5000 messages, clock stops, misuse) and a four-state smoke test of the bridge with a Verilog MIG stand-in (3 seeds x 1094 accesses) | pass |
 | `make test-ddr-litedram` | `tb_ddr_litedram --test all`, seeds 1, 2, plus a jittered run: the bridge and adapter against LiteDRAM's controller | 2 x 8 tests + 1 pass |
 | `make synth-ddr` | Yosys 0.52 `synth_xilinx` of the bridge | 247 LUTs, 387 flip-flops, 11 CARRY4 (estimate) |
-| `make check-mig` | the MIG recipe without Vivado (section 6.4) | pass |
+| `make check-mig` | the MIG recipe without Vivado (section 9.4) | pass |
 | `make prove-ddr` | SymbiYosys 0.52: the mailbox and bridge proofs (ABC PDR, no depth bound) with covers | proved, covers reached (about 20 s) |
 | `make test-ddr-mutants` | 32 deliberately broken copies of the RTL (slow, not on check) | 31 caught, 1 survives as expected |
 
