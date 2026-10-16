@@ -79,6 +79,7 @@ void bdirty_order(struct buf *b, u8 order);          /* bdirty(), written in tha
 void brelse(struct buf *b);
 int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed.
                                                         Never with a block of the device held (10/16/26, B7: it waits for holders) */
+int bsync_order(struct bdev *dev, u8 top);           /* 10/16/26 (B7): bsync() of the orders 0 .. top only */
 /* 10/16/26 (B6): before a file system makes blocks of dev dirty: 0, or -1 when dev refuses writes and
    already holds BCACHE_HOLD dirty blocks (the write must fail: EIO). A device that works and holds
    that many writes some out first. bget() asks the same. */

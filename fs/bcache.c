@@ -594,6 +594,12 @@ static int write_singly(struct bdev *dev, u32 first, u32 n, u8 order, u32 pass) 
    dirty while it runs (by another task) it goes round again, up to 8 times: the order is
    checked by write_run() for each request. */
 int bsync(struct bdev *dev) {
+    return bsync_order(dev, BORDER_MAX);
+}
+
+/* 10/16/26 (B7): bsync() up to an order: the dirty blocks of orders 0 .. top (an order point that
+   needs no more, such as a new cluster's FAT entry before the link to it, leaves the entries be) */
+int bsync_order(struct bdev *dev, u8 top) {
     int i, r = 0, w, rounds;
     u32 pass, first, n;
     u8 order;
@@ -602,7 +608,7 @@ int bsync(struct bdev *dev) {
     pass = sync_passes;
     for(rounds = 0; rounds < 8; rounds++) {
         bool again = false;
-        for(order = 0; order <= BORDER_MAX; order++) {
+        for(order = 0; order <= top && order <= BORDER_MAX; order++) {
             for(i = 0; i < BCACHE_BLOCKS; i++) {
                 struct buf *b = &bufs[i];
                 if(dev && b->dev != dev) continue;

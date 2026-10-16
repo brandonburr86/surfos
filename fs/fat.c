@@ -68,8 +68,10 @@ in no order among themselves, so two cases needed one more order point (a sync):
    reach the disk before the clusters past it are freed, as unlink does; a truncate that
    cannot do that changes nothing (B5); trim_chain() frees them all the same when the
    device refuses (the links into them reached the disk only if it took writes meanwhile).
-A file that grows sector by sector costs one sync each time its chain crosses into another
-FAT sector (every 128 or 256 clusters); on a fragmented volume, more often.
+A file that grows costs a sync of the data and the tables (bsync_order(), not the entries:
+fat_table_point()) each time its chain crosses into another FAT sector: every 128
+clusters on FAT32, 256 on FAT16 (every 4 MB with 32 KB clusters; every 64 KB with the
+512-byte clusters of a small test card); on a fragmented volume, more often.
 
 10/16/26 (audit B11): fat_set() has every FAT copy's block in hand before it changes any,
 so both copies change or neither does (a copy whose block could not be read was left
@@ -366,7 +368,7 @@ static int zero_cluster(struct fat_fs *fs, u32 c) {
     return 0;
 }
 
-static int fat_order_point(struct fat_fs *fs);
+static int fat_table_point(struct fat_fs *fs);
 
 /* 10/16/26 (B7): are the FAT entries of clusters a and b in one sector (in each copy)? An entry
    that straddles two sectors (FAT12) counts as not */
@@ -407,7 +409,7 @@ found:
        file's to take; for a directory, whose entries it would show). One sync when the link crosses
        a FAT sector, or the chain is a directory's (entries later written into its new cluster then
        carry the directory order, not the order of its zeros) */
-    if(r == 0 && prev && (dir || !same_fat_sector(fs, prev, c))) r = fat_order_point(fs);
+    if(r == 0 && prev && (dir || !same_fat_sector(fs, prev, c))) r = fat_table_point(fs);
     if(r == 0 && prev) r = fat_set(fs, prev, c);
     if(r) {
         fat_set(fs, c, 0);                                   /* c is free again (best effort) */
@@ -424,6 +426,12 @@ found:
    (the cache writes data, tables, entries in that order; taking away needs entries first) */
 static int fat_order_point(struct fat_fs *fs) {
     return bsync(fs->dev) ? -EIO : 0;
+}
+
+/* 10/16/26 (B7): an order point for a new cluster: its zeros and its FAT entry (data and tables) on the
+   disk before the link to it; the entries wait for the next sync */
+static int fat_table_point(struct fat_fs *fs) {
+    return bsync_order(fs->dev, BORDER_TABLE) ? -EIO : 0;
 }
 
 static int fat_free_chain(struct fat_fs *fs, u32 c) {
@@ -1336,7 +1344,7 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
         put16(p + 22, t); put16(p + 24, d); put16(p + 26, (u16)parent); put16(p + 20, (u16)(fs->type == 32 ? parent >> 16 : 0));
         bdirty(b);
         brelse(b);
-        r = fat_order_point(fs);                             /* 10/16/26 (B7): the new directory on the disk before */
+        r = fat_table_point(fs);                             /* 10/16/26 (B7): the new directory on the disk before */
         if(r) { fat_free_chain(fs, first); goto out; }       /* anything names it or is written into it */
     }
     r = build_entries(fs, dn, name, type == VN_DIR ? ATTR_DIR : ATTR_ARCHIVE, first, NULL, NO_IDX, entries, &n);
