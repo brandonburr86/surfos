@@ -40,6 +40,8 @@ confirm.
 | `arty_a7_baseline` | `boards/arty_a7/rtl/arty_a7_baseline.v` | the base set: clock, RESET, switches, buttons, LEDs, UART | milestone 1: no CPU; shows the board, the clocks, the reset and the serial link work (section 5) |
 | `surfcpu_arty_a7_top` | `boards/arty_a7/rtl/surfcpu_arty_a7_top.v` | base + Pmod microSD (JA), VGA (JB+JC), PS/2 (JD) | the whole SoC (section 6) with SurfBoot (`build/fw/surfboot.mem`) in its boot ROM |
 | `surfcpu_arty_a7_bramdiag` | the same top | the same | the same SoC with the BRAM diagnostics (`build/fw/bramdiag.mem`) in its boot ROM: milestone 3 (section 6) |
+| `surfcpu_arty_a7_ddr_bramdiag` | the same top with `ARTY_HAS_DDR` | the same + the DDR3L (bank 34) + ChipKit IO1 | the SoC with the DDR3L memory (LiteDRAM, section 7) and the BRAM diagnostics, which then test the DDR3L: milestone 4 |
+| `surfcpu_arty_a7_ddr` | the same | the same | the SoC with the DDR3L and SurfBoot, which loads SurfOS into it |
 
 All take `BOARD` (`arty_a7_35t` or `arty_a7_100t`, the spec's `[boards]` names; the top turns
 it into sysinfo's `BOARD_ID` from `surfcpu_soc.vh`) and the build identity `BUILD_ID`,
@@ -252,8 +254,9 @@ the first half, and RESET restarting the uptime.
   pull-ups and nothing behind them, so they do not fight the adapters' pull-ups (Vivado's
   default for unused pins is a pull-down).
 * With `HAS_DDR = 0` the SoC answers the DDR window with errors and its DDR master port is idle
-  (ready, response and calibration inputs tied low). The DDR3L pins are not in the top yet; the
-  DDR3L's RESET# has its own pull-down on the board, so the memory stays in reset.
+  (ready, response and calibration inputs tied low). The DDR3L pins are not in this top; the
+  DDR3L's RESET# has its own pull-down on the board, so the memory stays in reset. The DDR
+  designs build the same top with `ARTY_HAS_DDR` (section 7).
 
 The soc track's `rtl/soc/surfcpu_soc.v` is merged. `sim/board/stubs/surfcpu_soc.v`, a stand-in
 with exactly the contract's parameters and ports and its outputs at idle levels, is used by
@@ -275,16 +278,63 @@ line; `board-tools` compares them), and both images come from `make build-rom` (
   (203 checks: the instructions, CSRs, scratch RAM with March C-, every exception, the
   interrupts and WFI, FENCE.I) and prints PASS or FAIL.
 
-## 7. For the ddr track
+## 7. The DDR top (`ARTY_HAS_DDR`)
 
-The top will need: the DDR3L pins (bank 34, 1.35 V: the MIG generates their constraints), the
-MIG instance and `surf_ddr_bridge` between `surfcpu_soc`'s DDR port and it, `HAS_DDR = 1`, and
-the controller's clocks. The sys PLL's VCO (1000 MHz) divides to 166.667 MHz and 200 MHz on
-its spare outputs if a clock wizard is not wanted; the MIG's own MMCM and PLL take the CMT of
-bank 34's clock region, separate from this design's (bank 35's). Its UI clock is a third
-domain: every crossing into it needs the same treatment as section 4 (and a constraint file
-for whatever synchronizer it uses), and its calibration status reaches sysinfo through
-`surf_sync`.
+`surfcpu_arty_a7_top.v` built with the define `ARTY_HAS_DDR` (the DDR design lists' `define`
+line: Yosys `-D`, Vivado `-verilog_define`) is the top of the two DDR designs. The define adds
+the DDR3L ports and the controller and makes `HAS_DDR` 1 (a localparam that follows the port
+list, so the two cannot disagree); without it the top is exactly the HAS_DDR = 0 top of section
+6. The ddr track wrote this variant (docs/DDR.md section 10):
+
+* **The path**: `surfcpu_soc`'s DDR master port -> `surf_ddr_bridge` (sys_clk to the
+  controller's clock; `TIMEOUT_CYCLES` 4096, `CALIB_TIMEOUT_CYCLES` from `DDR_CALIB_LIMIT`) ->
+  `surf_ddr_litedram_adapter` -> `litedram_core`, the LiteDRAM controller and Artix-7 PHY
+  generated from `ip/litedram/arty.yml` (`make litedram-gen`; a build product in
+  `build/litedram/arty/`, never committed: `ip/litedram/arty.sha256` holds the SHA-256 of the
+  files the designs read, and `tools/fpga-build.sh` counts a build from files that differ as
+  dirty).
+* **Clocks**: one input buffer on the oscillator pin E3 (synthesis puts it on `clk100`). It
+  feeds `arty_a7_clocks`' PLL and MMCM as before and, through one more BUFG
+  (`u_dram_clkbuf`), LiteDRAM's PLLE2_ADV. The generator takes `clk` straight into its PLL with
+  no buffer of its own, so the board top chooses: through a BUFG the third clock tile may sit
+  in any CMT, with no dedicated-route constraint, and the pin has one IBUF. LiteDRAM's PLL
+  (VCO 1600 MHz) makes 100 MHz (its core and user port: the bridge's `ui_clk`, `dram_clk` in
+  the netlist), 400 MHz and 400 MHz at 90 degrees (the PHY's serializers; DDR3 at 800 MT/s) and
+  200 MHz (the IDELAYCTRL reference), each through its own BUFG. **Clock tiles: three** (two
+  PLLE2, one MMCME2) in three of the 6 (100T) or 5 (35T) CMTs; BUFGs: 7 of 32; one IDELAYCTRL
+  (bank 34).
+* **Resets**: the RESET button resets all three tiles; LiteDRAM's own resets follow its PLL's
+  lock, so its BIOS calibrates again after RESET. The bridge resets with sys_rst on one side
+  and LiteDRAM's `user_rst` on the other (its never-reset in-flight flags keep the crossing
+  consistent, docs/DDR.md section 5).
+* **Calibration status**: the core's BIOS writes `init_done` and, on a failure, `init_error`;
+  the adapter turns them into `init_calib_complete` (done and not error), which the bridge
+  synchronizes into sys_clk as `calib_done`, or turns into `calib_fail` when calibration has
+  not succeeded `DDR_CALIB_LIMIT` sys_clk cycles after reset. Both reach
+  `sysinfo.DDR_STATUS` (CALIB_DONE, CALIB_FAIL) through the SoC's ports. The core's user port
+  stays blocked until init_done without init_error (LiteDRAM's `block_until_ready`).
+* **Pins**: `arty_a7_ddr3_pins.xdc` (WIRING.md section 2.5): Digilent's MIG pin list, SSTL135
+  and DIFF_SSTL135, fast slew, UNTUNED_SPLIT_40 termination on DQ and DQS, bank 34's internal
+  VREF (0.675 V, `arty_a7_ddr3_timing.xdc`), and `dram_uart_tx` on ChipKit IO1: the
+  controller's own console (115200 8N1, output only; its input is held idle so nobody can
+  type into the controller). A 3.3 V USB-serial adapter there shows the BIOS's calibration
+  report (section 12).
+* **Constraints and CDC**: `arty_a7_ddr3_timing.xdc` declares the DDR3L pins' paths false (the
+  PHY's serializers and the BIOS's read leveling own their timing; the fabric paths into the
+  I/O tiles stay timed) and sets the VREF; the bridge's crossings are bounded by its scoped
+  `rtl/soc/ddr/surf_ddr_bridge.xdc` (`cdc surf_ddr_bridge`, seven `set_max_delay
+  -datapath_only`); LiteX's own reset synchronizers by the generated `litedram_core.xdc`.
+  **The open flow checks none of these**: nextpnr's XDC reader ignores `set_max_delay`,
+  `set_false_path` and `INTERNAL_VREF` (it sets the bank's VREF to 675 mV by itself when an
+  SSTL135 input is used); they are listed as not checked in every build (34 lines for a DDR
+  design). nextpnr times the paths between sys_clk and LiteDRAM's clock as unconstrained
+  cross-domain paths and reports their delays (about 1.5 ns) without a requirement; only Vivado
+  checks the bounds.
+* **Lint and simulation**: `make lint` lints the DDR top with `sim/board/stubs/litedram_core.v`,
+  the generated core's ports without behaviour (`inspect_core.py` checks they match). `make
+  board-ddr-sim` runs the DDR top in RTL with LiteDRAM's own controller and DRAM model, and with
+  the board's generated core and its BIOS (section 12); `make board-netlist-sim` takes a DDR
+  design's netlist too.
 
 ## 8. Building a bitstream
 

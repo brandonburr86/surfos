@@ -72,14 +72,17 @@ make --no-print-directory build-rom > "$t/build-rom.txt" 2>&1 || { tail -20 "$t/
 for r in bramdiag surfboot; do shasum -a 256 "build/fw/$r.mem" | awk '{ print $1 }' > "$t/$r.sha"; done
 make --no-print-directory litedram-gen > "$t/litedram-gen.txt" 2>&1 || { tail -20 "$t/litedram-gen.txt"; exit 1; }
 
-# ------------------------------------------------------------------ 2. the gated builds
+# ------------------------------------------------------------------ 2. the gated builds (both boards at once)
 for design in $designs; do
     for board in $boards; do
-        t0=$(date +%s)
-        if make --no-print-directory build-fpga FLOW=openxc7 BOARD=$board DESIGN=$design > "$t/$board-$design.txt" 2>&1
-        then rc=0; else rc=$?; fi
-        echo "$rc $(( $(date +%s) - t0 ))" > "$t/$board-$design.status"
+        (
+            t0=$(date +%s)
+            if make --no-print-directory build-fpga FLOW=openxc7 BOARD=$board DESIGN=$design > "$t/$board-$design.txt" 2>&1
+            then rc=0; else rc=$?; fi
+            echo "$rc $(( $(date +%s) - t0 ))" > "$t/$board-$design.status"
+        ) &
     done
+    wait
 done
 
 # ------------------------------------------------------------------ 3. the diagnostic builds
@@ -95,12 +98,15 @@ if [ "${DDR_EVIDENCE_DIAG:-1}" = 1 ]; then
     rm -rf build/fpga-diag
     for design in $designs; do
         for board in $boards; do
-            t0=$(date +%s)
-            if SURFCPU_FPGA_OUT=$PWD/build/fpga-diag SURFCPU_OPENXC7_BUILD=$PWD/$diag FLOW=openxc7 \
-                   tools/fpga-build.sh --design $design $board > "$t/diag-$board-$design.txt" 2>&1
-            then rc=0; else rc=$?; fi
-            echo "$rc $(( $(date +%s) - t0 ))" > "$t/diag-$board-$design.status"
+            (
+                t0=$(date +%s)
+                if SURFCPU_FPGA_OUT=$PWD/build/fpga-diag SURFCPU_OPENXC7_BUILD=$PWD/$diag FLOW=openxc7 \
+                       tools/fpga-build.sh --design $design $board > "$t/diag-$board-$design.txt" 2>&1
+                then rc=0; else rc=$?; fi
+                echo "$rc $(( $(date +%s) - t0 ))" > "$t/diag-$board-$design.status"
+            ) &
         done
+        wait
     done
 fi
 echo "$(( ($(date +%s) - started) / 60 ))" > "$t/minutes"
