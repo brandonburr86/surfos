@@ -195,7 +195,7 @@ confirms the sources, that the ROM is current and that all 256 glyphs equal the 
 |---|---|---|---|---|
 | surf_spi | 83 | 70 | 0 | 0 |
 | surf_ps2 | 209 | 189 | 2 (FIFO) | 0 |
-| surf_video | 848 | 862 | 0 | 1 RAMB36 (font) |
+| surf_video | 843 | 862 | 0 | 1 RAMB36 (font) |
 
 Most of surf_video's flip-flops are the 214-bit settings crossing (hold and destination
 copies) and the palette. The text RAM is the soc track's (`surf_textram`, 16 KiB).
