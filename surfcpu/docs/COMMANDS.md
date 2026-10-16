@@ -13,12 +13,12 @@ full commands.
 | `make doctor` | Mac | probes the Mac, Docker and the container, the board's USB (FTDI, JTAG IDCODE), the serial port, mounted FAT volumes and the build-host settings; changes nothing | works |
 | `make gen` / `make check-generated` | container | regenerate / verify the files made from `spec/soc.toml` | works |
 | `make lint` | container | Verilator `-Wall` lint of every RTL module | works for the merged areas (lib, io, board); grows with the tracks |
-| `make test-cpu` | container | CPU directed tests, random and reference-model (Spike) comparisons, architecture tests | track cpu, verif |
-| `make test-soc` | container | building blocks, interconnect, peripherals, the SoC and the whole-system simulation | tracks soc, io, board, ddr |
+| `make test-cpu` | container | CPU directed tests, riscv-tests, Icarus, a gate-level run of the synthesized core; random and reference-model (Spike) comparisons and architecture tests come with the verif track | works (simulation); verif pending |
+| `make test-soc` | container | building blocks, interconnect, peripherals, the DDR bridge (with proofs), the board's clocks and tops, the SoC, and `surfsim` running the real core with the diagnostics and SurfBoot | works (simulation); SD, PS/2 and VGA models in `surfsim` pending |
 | `make test-fw` | container | SurfBoot and the card tools on the host, against card images (and through the io track's SD card model), plus the ROM in a firmware emulator | works (host and emulator; not yet on the RTL SoC) |
-| `make test-os` | container | the riscv32 SurfOS kernel under QEMU `virt` | track os |
+| `make test-os` | container | the riscv32 SurfOS kernel: host tests, its SD driver against the io SD card model, QEMU `virt` at -O2 and -O0, and the Arty `SURFOS.BIN` booted by SurfBoot in the fw emulator | works (not yet on the RTL SoC or the board) |
 | `make build-rom` | container | `build/fw/surfboot.{elf,bin,mem}`, the BRAM diagnostics `bramdiag.mem` and `DDRDIAG.BIN` | works |
-| `make build-kernel` | container | `../build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` | track os |
+| `make build-kernel` | container | `../build/riscv32/{arty_a7,qemu_virt}/...`; `SURFOS.BIN` packed by `tools/surfimg.py` | works (never booted on the board) |
 | `make build-fpga` | Mac → build host | the bitstream, reports and manifest of `DESIGN` in `build/fpga/BOARD/DESIGN/` (docs/BUILD-HOST.md, BOARD.md section 8); `DRY_RUN=1` stages it and prints every command without contacting the host | blocked: no build host |
 | `tools/program.sh detect BOARD` | Mac | shows the IDCODE on the JTAG chain and whether it is `BOARD`'s FPGA; loads nothing | pending: board, openFPGALoader |
 | `make program-volatile` | Mac | checks for one device on the JTAG chain with `BOARD`'s IDCODE, a bitstream built for that FPGA (`DESIGN`'s last build, or `BIT=`) whose manifest passed, then loads it into FPGA RAM over USB/JTAG (lost at power-off) | pending: board, openFPGALoader |
