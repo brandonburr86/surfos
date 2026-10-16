@@ -288,7 +288,10 @@ def check_timing_coverage(data: dict) -> list[str]:
         for module, xdc in d["cdc"]:
             regs, mports = module_regs(module)
             text = xdc.read_text()
-            for cell in re.findall(r"get_cells\s+(?:-quiet\s+)?\{?([\w\[\]*]+)\}?\]", text):
+            cells = []
+            for arg in re.findall(r"get_cells\s+(?:-quiet\s+)?(\{[^}]*\}|[^\]\s]+)", text):
+                cells += arg.strip("{}").split()
+            for cell in cells:
                 m = re.fullmatch(r"(\w+)_reg(\[[^\]]+\])?", cell)
                 if not m or m.group(1) not in regs:
                     errors.append(f"{name}: {xdc.name}: cell {cell} is not a register of {module}")

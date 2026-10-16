@@ -6,4 +6,6 @@
 # RESET button) and releases synchronously through the chain. The assertion has no timing
 # relation to any clock; the release path inside the chain and from its last stage to the
 # domain's logic is ordinary same-clock timing and stays timed.
+# The chain is ASYNC_REG in the RTL already; repeated here so placement keeps it together.
+set_property ASYNC_REG TRUE [get_cells {rst_ff_reg[*]}]
 set_false_path -to [get_pins -quiet -filter {REF_PIN_NAME == PRE} -of_objects [get_cells {rst_ff_reg[*]}]]

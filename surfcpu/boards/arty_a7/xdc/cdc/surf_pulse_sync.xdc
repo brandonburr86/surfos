@@ -5,6 +5,10 @@
 # A pulse crosses as a toggle into a two-flop synchronizer (ASYNC_REG). The toggle-to-first-
 # stage path gets a datapath-only maximum delay of the smaller clock period, so the toggle is
 # never seen later than one destination cycle after a stable value would have been.
+# The synchronizer flops are ASYNC_REG in the RTL already; repeated here so placement keeps
+# the pair together even if an attribute were lost in synthesis.
+set_property ASYNC_REG TRUE [get_cells {dst_sync_reg[*]}]
+
 set src_clk [get_clocks -quiet -of_objects [get_ports src_clk]]
 set dst_clk [get_clocks -quiet -of_objects [get_ports dst_clk]]
 if {[llength $src_clk] == 1 && [llength $dst_clk] == 1 &&
