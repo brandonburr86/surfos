@@ -21,7 +21,7 @@ ISA_AUDIT   := $(PYTHON) tools/isa-audit.py
 BIN2MEM     := $(PYTHON) tools/bin2mem.py
 SURFIMG     := $(PYTHON) tools/surfimg.py
 
-.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios test-fw-emu test-fw-iomodel FORCE
+.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-tools test-fw-scenarios test-fw-emu test-fw-iomodel FORCE
 build-rom: build-fw-rom
 test-fw: test-fw-host
 check: build-rom
@@ -168,6 +168,9 @@ test-fw-scenarios: $(FW)/host/fwtest
 test-fw-emu: $(FW)/host/surfemu $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/DDRDIAG.BIN $(FW)/HELLO.BIN
 	$(Q)$(PYTHON) firmware/tests/run_emu.py $(if $(FW_JOBS),--jobs $(FW_JOBS))
 
-test-fw-host: test-fw-unit test-fw-scenarios test-fw-emu test-fw-iomodel
+test-fw-tools: $(FW)/host/fwtest $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/DDRDIAG.BIN $(FW)/HELLO.BIN
+	$(Q)$(PYTHON) firmware/tests/test_tools.py
+
+test-fw-host: test-fw-unit test-fw-tools test-fw-scenarios test-fw-emu test-fw-iomodel
 
 -include $(shell find $(FW_OBJ) -name '*.d' 2>/dev/null)
