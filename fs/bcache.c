@@ -50,6 +50,11 @@ dirty, order or failed state. The console line about a device that refuses write
 said once per device and the line about it working again follows it, whatever other
 devices failed and went away before (the table of eight failing devices is gone).
 bcache_audit() recounts a device's blocks against its account, for the tests.
+
+10/16/26 (audit B8): making room writes a block's lower orders first, which lets the lock
+go; the block may be written, dropped or taken for another block meanwhile. evict_write()
+looks at it again and leaves it alone if it is not still the same dirty block, and
+write_run() never sends an empty request.
 */
 
 #include <surfos/types.h>
@@ -198,6 +203,7 @@ static int write_run(struct buf *b, u32 pass) {
     u_long f;
     int r;
 
+    if(!dev || !b->valid || !b->dirty || b->writing) return 0;   /* 10/16/26 (B8): nothing to write: no empty request */
     while(first > 0 && b->lba - first < BCACHE_RUN - 1) {
         struct buf *p = find(dev, first - 1);
         if(!p || !p->valid || !p->dirty || p->writing || p->order != b->order || (pass && p->fail_pass == pass)) break;
@@ -428,16 +434,22 @@ static int write_below(struct bdev *dev, u8 order) {
 }
 
 /* reuse()'s write of a dirty block: what it may point at first (B3); when that cannot be
-   written, neither is b: it waits for a sync like a failed block */
+   written, neither is b: it waits for a sync like a failed block. 10/16/26 (B8): write_below()
+   lets the lock go, and meanwhile b may have been written, dropped or taken for another block:
+   b is written (or held back) only if it is still that dirty block. */
 static int evict_write(struct buf *b) {
-    if(b->order > BORDER_DATA && write_below(b->dev, b->order) != 0) {
-        if(b->valid && b->dirty && !b->writing) {
-            u_long f = irq_save();
-            account(b, -1);
-            b->wfail = true;
-            account(b, +1);
-            irq_restore(f);
-        }
+    struct bdev *dev = b->dev;
+    u32 lba = b->lba;
+    u8 order = b->order;
+    int r = 0;
+    if(order > BORDER_DATA) r = write_below(dev, order);
+    if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty || b->writing || b->order != order) return 0;  /* look again */
+    if(r != 0) {
+        u_long f = irq_save();
+        account(b, -1);
+        b->wfail = true;
+        account(b, +1);
+        irq_restore(f);
         return -1;
     }
     return write_run(b, 0);

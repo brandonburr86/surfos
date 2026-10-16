@@ -66,6 +66,7 @@ stores), which fails on the code before the fixes (`surfcpu/docs/evidence/os/bca
 
 | ID | Where | Problem | Fix |
 |---|---|---|---|
+| B8 | `fs/bcache.c` (`evict_write()`) | Making room wrote a block's lower orders first, which let the lock go, then wrote the block without looking at it again: written or dropped meanwhile, it went out as a zero-length request (and "takes writes again" was said of a device that took nothing); taken for another device's block, that block was written without its own device's order | the block is written only if it is still the same dirty block; `write_run()` sends no empty request |
 | B9 | `fs/bcache.c`, `include/sys/bdev.h` | The console's "write of ... failed" was said once per device through a table of eight devices that only a write cleared: a device that failed and was then unplugged kept its slot for ever, and after eight such devices every failure was printed and "takes writes again" never was | each device carries the cache's account of it (`bc_dirty[]` by order, `bc_failed`, `bc_said`), kept at every change of a block's state and gone with the device; `bcache_audit()` checks the account against the blocks |
 
 Found and fixed by the USB boot work (milestone M7, October 2026), all of them harmless
