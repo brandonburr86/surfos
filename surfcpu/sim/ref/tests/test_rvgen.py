@@ -63,11 +63,15 @@ class Reproducible(unittest.TestCase):
 
     def test_illegal_words_are_illegal(self):
         g = rvgen.Gen(99, 10)
+        short = upper = 0
         for _ in range(5000):
             w = g.illegal_word()
             self.assertTrue(rvisa.traps_on_surfcpu(w), f"{w:08x}")
             if w & 3 != 3:
-                self.assertEqual(w >> 16, 0, "16-bit encodings keep a zero upper half")
+                short += 1
+                upper += bool(w >> 16)
+        self.assertGreater(short, 300)
+        self.assertGreater(upper, 100)          # 16-bit encodings with a non-zero upper half
 
     def test_no_forbidden_csrs(self):
         """docs/VERIFICATION.md section 4: what random programs must never do."""
@@ -118,6 +122,8 @@ class OnSpike(unittest.TestCase):
         self.assertGreaterEqual(len(traps), 2900)
         for r in traps:
             self.assertEqual(r.note("trap", "cause"), "2", f"{r.insn:08x}")
+            # mtval = the instruction bits; a 16-bit encoding's 16 bits (ISA.md section 3),
+            # which is also what the trace's insn holds for it
             self.assertEqual(int(r.note("trap", "tval"), 16), r.insn, f"{r.insn:08x}")
 
     def test_fault_addresses_fault_on_spike(self):

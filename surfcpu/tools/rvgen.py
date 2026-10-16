@@ -24,8 +24,8 @@ The program is for an M-mode-only RV32IM + Zicsr + Zifencei core without PMP ent
     section 4): mscratch, mtval, mepc, mcause (legal values only: WLRL), mstatus, mie (only
     cleared), mtvec (rewritten with its own value), mcountinhibit (CY and IR), minstret,
     the id CSRs that agree, mstatush and the hpm CSRs whose writes are ignored;
-  * deliberate traps: ECALL, EBREAK, illegal words (fixed contract cases, 16-bit encodings
-    with a zero upper half, random words with undefined fields), illegal CSR accesses
+  * deliberate traps: ECALL, EBREAK, illegal words (fixed contract cases, 16-bit encodings,
+    random words with undefined fields), illegal CSR accesses
     (unknown CSRs, writes to read-only ones), misaligned loads/stores and jump targets,
     load/store/fetch access faults at addresses unmapped on Spike and on the testbench;
     the handler reads mcause, mtval and mepc (compared through the trace) and resumes at
@@ -47,7 +47,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rvisa  # noqa: E402
 
-VERSION = "rvgen 1"
+VERSION = "rvgen 2"
 MASK32 = 0xFFFFFFFF
 MASK64 = (1 << 64) - 1
 
@@ -431,10 +431,11 @@ class Gen:
                 0x00000073 | (self.r.range(1, 31) << 15),                   # ecall, rs1
             ))
         if k == "short":
-            # 16-bit encodings with a zero upper half: mtval is the same whether the core
-            # reports 16 or 32 bits (docs/VERIFICATION.md section 4).
+            # 16-bit encodings, any upper half: mtval holds only the 16 bits (ISA.md section
+            # 3 and its clarification of 2026-10-15; Spike does the same). Half of them keep
+            # a zero upper half.
             while True:
-                w = self.r.below(1 << 16)
+                w = self.r.u32() if self.r.chance(0.5) else self.r.below(1 << 16)
                 if w & 3 != 3:
                     return w
         while True:
