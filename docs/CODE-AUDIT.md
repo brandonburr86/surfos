@@ -47,6 +47,17 @@ an interrupt handler that finds the lock held leaves its characters for the hold
 scroll moves words, not bytes). Checked by `scrolltest` (riscv32 kernel shell, under QEMU
 slowed to SurfCPU's pace and in the fw emulator) and `tests/host/test_pager.c`.
 
+Found and closed by milestone 8 of the riscv32 port (SurfCPU, October 2026: files on a card
+that can be pulled out at any moment), **verified** with the card model's injected faults under
+QEMU (`boards/qemu_virt/test_os.py`: refused writes, a card that stops answering, the card taken
+out after the nth block); the files are shared, so both kernels have the fixes:
+
+| ID | Where | Problem | Fix |
+|---|---|---|---|
+| B1 | `fs/bcache.c` (`reuse()`, `bsync()`) | A dirty block that had to make room and could not be written was dropped ("lost, and said so"): the next sync found nothing wrong, so the command that wrote never heard of it, and a dropped FAT or directory block let FAT read its old copy back and hand out clusters a file already had. `bsync()` sent a failed run again for each of its blocks (up to 128 tries and console lines in one sync) and returned a failure even when a later try had written everything | the block stays dirty while its device is there and is passed over when room is needed; when nothing else is free one refused run is tried again, else the caller gets an I/O error; `bsync()` tries each run once and fails when one did; the console hears of a device's first failure and of its first good write after |
+| B2 | `shell/fscmd.c` (`cmd_eject()`) | `eject` unmounted a disk whose writes failed, which dropped the blocks it could not write, and said "safe to remove" | each mount is written out first; a disk that refuses keeps its mounts, and eject says so ("sync tries the writes again; umount gives them up") |
+| B3 | `fs/bcache.c`, `fs/fat.c` | Dirty blocks reached the disk in the order of the buffer table: a card pulled during a sync could keep a new file's directory entry while its cluster was still free in the FAT, or the entry and the FAT without the file's bytes (a file reading another's old data); unlink freed the clusters before the entry was gone | a write order (file data, FAT, directory entries, FSInfo: `bdirty_order()`), kept by `bsync()` and when room is made; FAT's order points (a sync) take an entry away before its clusters are freed and put a new name on the disk before the old one goes. What FAT32 can still leave behind is in `surfcpu/docs/CARD.md` section 8 |
+
 Found and fixed by the USB boot work (milestone M7, October 2026), all of them harmless
 under QEMU's loader and dangerous on a UEFI PC:
 

@@ -20,6 +20,13 @@ the change.
 10/16/26 (SurfCPU, milestone 8; audit B1): a block whose write failed stays
 dirty while its device is there, for the next bsync() to try again, and is not
 reused meanwhile; bsync() tries each run once and fails when one did.
+
+10/16/26 (audit B3): blocks are written in an order a file system gives them
+(bdirty_order()): a device's blocks of one order reach it only after every
+dirty block of a lower order has, by bsync() and when a block is written to
+make room. FAT gives file data 0, its tables 1, directory entries 2, FSInfo 3,
+so whatever an interruption stops, nothing on the disk points at data that is
+not there yet.
 */
 
 #ifndef _FS_BCACHE_H
@@ -41,6 +48,7 @@ struct buf {
     bool writing;                       /* being written out: usable, but not reused or written by another */
     bool hashed;
     bool wfail;                         /* its last write failed: dirty until a sync writes it, never reused before */
+    u8 order;                           /* BORDER_*: when it is written (the lowest it was dirtied with) */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
     u_int refs;
@@ -54,6 +62,13 @@ struct buf *breada(struct bdev *dev, u32 lba, u32 n);/* bread; a miss also reads
 struct buf *bpeek(struct bdev *dev, u32 lba);        /* the block if it is cached (held), else NULL; no I/O */
 struct buf *bget(struct bdev *dev, u32 lba);         /* the buffer without reading (it will be fully overwritten) */
 void bdirty(struct buf *b);                          /* changed: write it back later */
+/* 10/16/26 (B3): the order a device's dirty blocks are written in, lowest first */
+#define BORDER_DATA    0                /* file contents, a new directory's cluster (bdirty()) */
+#define BORDER_TABLE   1                /* allocation tables */
+#define BORDER_DIR     2                /* directory entries, which point at both */
+#define BORDER_SUMMARY 3                /* free counts and hints */
+#define BORDER_MAX     3
+void bdirty_order(struct buf *b, u8 order);          /* bdirty(), written in that order (the lower, if dirty already) */
 void brelse(struct buf *b);
 int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed */
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
