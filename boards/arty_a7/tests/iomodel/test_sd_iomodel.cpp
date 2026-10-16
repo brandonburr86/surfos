@@ -13,6 +13,14 @@ backdoor, every injected fault the model has (a bad read CRC, a rejected write, 
 token, a missing response, a write error, a slow card, an initialization that never ends,
 no card), and the model's count of host protocol mistakes, which must stay at zero.
 
+10/16/26 (milestone 8): the faults a write can meet, as the kernel meets them: a write error
+on the first block of a multiple-block write (the stop token, a card error, nothing of it
+written), a write command without a response, and the card taken out in the middle of a
+multiple-block write (set_present(false) after a number of bytes): the write fails within
+the driver's bounds, card detect then fails every transfer at once (SD_ENOCARD), the card
+put back has lost its power and answers nothing until it is initialized again, and what was
+written before it went is still on it.
+
     test_sd_iomodel [seed...]       (make -C surfcpu test-os-iomodel)
 */
 
@@ -57,6 +65,7 @@ static SdCardModel *card;
 static int half = 32;
 static bool cs_n = true, mosi = true, miso = true;
 static unsigned long long ticks;
+static unsigned long long xfers, pull_at;       /* 10/16/26: the card comes out after byte pull_at */
 
 static void tick(bool sclk) {
     miso = card->tick(cs_n, sclk, mosi);
@@ -65,6 +74,7 @@ static void tick(bool sclk) {
 
 extern "C" unsigned char io_xfer(unsigned char out) {
     unsigned char in = 0;
+    if (pull_at && ++xfers == pull_at) card->set_present(false);
     for (int b = 7; b >= 0; b--) {
         mosi = (out >> b) & 1;
         for (int i = 0; i < half; i++) tick(false);
@@ -152,10 +162,47 @@ static void run_kind(SdCardOptions::Kind kind, unsigned seed) {
     check(glue_read(0, 8, buf.data()) == SD_OK && !std::memcmp(buf.data(), shadow.data(), 8 * 512),
           tag + "the card works on after every fault");
     check(glue_read(static_cast<unsigned int>(blocks - 1), 2, buf.data()) != SD_OK, tag + "a read past the end is refused");
+
+    /* 10/16/26: the faults of a write (milestone 8) */
+    for (int i = 0; i < 4 * 512; i++) buf[i] = static_cast<uint8_t>(i * 5 + 1);
+    model.faults.write_error = 1;
+    r = glue_write(400, 4, buf.data());
+    ok = r == SD_EIO;
+    for (unsigned i = 0; i < 4 && ok; i++) ok = model.read_block(400 + i, back.data()) && !std::memcmp(back.data(), &shadow[(400 + i) * 512], 512);
+    check(ok, tag + "a write error on the first block of a multiple write: a card error, none of it written (" + glue_strerror(r) + ")");
+    model.faults.no_response = 1;
+    r = glue_write(404, 2, buf.data());
+    check(r == SD_ETIMEOUT, tag + "a write command without a response times out (" + std::string(glue_strerror(r)) + ")");
+    r = glue_write(400, 4, buf.data());
+    std::memcpy(&shadow[400 * 512], buf.data(), 4 * 512);
+    std::vector<uint8_t> got(16 * 512), pulled(16 * 512);
+    check(r == SD_OK && glue_read(400, 4, got.data()) == SD_OK && !std::memcmp(got.data(), &shadow[400 * 512], 4 * 512),
+          tag + "and the same write goes through afterwards");
+    for (int i = 0; i < 16 * 512; i++) pulled[i] = static_cast<uint8_t>(i * 11 + 7);
+    uint64_t w0 = model.stats.blocks_written;
+    xfers = 0;
+    pull_at = 8 * 520;                          /* some blocks into sixteen */
+    unsigned long long t0 = ticks;
+    r = glue_write(500, 16, pulled.data());
+    pull_at = 0;
+    unsigned stored = static_cast<unsigned>(model.stats.blocks_written - w0);
+    check(r != SD_OK && stored > 0 && stored < 16 && (ticks - t0) / 25000 < 1100,
+          tag + "taken out after " + std::to_string(stored) + " of 16 blocks: the write fails (" + glue_strerror(r) + ", " +
+          glue_why() + ") within the driver's bounds (" + std::to_string((ticks - t0) / 25000) + " ms)");
+    check(glue_read(0, 1, got.data()) == SD_ENOCARD && glue_write(0, 1, got.data()) == SD_ENOCARD,
+          tag + "while it is out, card detect fails every read and write at once");
+    model.set_present(true);
+    r = glue_read(0, 1, got.data());
+    check(r != SD_OK, tag + "put back, it lost its power: nothing it answers is taken for data (" + std::string(glue_strerror(r)) + ")");
+    r = glue_init();
+    ok = r == SD_OK && glue_read(0, 8, got.data()) == SD_OK && !std::memcmp(got.data(), shadow.data(), 8 * 512);
+    for (unsigned i = 0; i < stored && ok; i++) ok = model.read_block(500 + i, back.data()) && !std::memcmp(back.data(), &pulled[i * 512], 512);
+    check(ok, tag + "initialized again it works, and the " + std::to_string(stored) + " blocks written before it went are on it");
     check(model.stats.violations == 0, tag + "no protocol mistakes by the driver (" + std::to_string(model.stats.violations) + ")");
     if (model.stats.violations)
-        for (const std::string &l : model.log) if (l.find("violation") != std::string::npos || l.find("mistake") != std::string::npos)
-            std::printf("    %s\n", l.c_str());
+        for (size_t i = 0; i < model.log.size(); i++)
+            if (model.log[i].compare(0, 9, "VIOLATION") == 0)     /* the mistake and what came before it */
+                for (size_t j = i < 6 ? 0 : i - 6; j <= i; j++) std::printf("    %s\n", model.log[j].c_str());
 }
 
 int main(int argc, char **argv) {

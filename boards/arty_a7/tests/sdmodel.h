@@ -14,6 +14,14 @@ model sends them (0xE5, 0xEB, 0xED, busy after each), and faults on request: a c
 read CRC, a data token that never comes, a rejected write CRC, no card. Like that model it
 counts the host's mistakes: a command while the card is busy (ignored, as a card would), and
 chip select released inside a written block.
+
+10/16/26 (milestone 8): the io track's write faults as well (sim/models/sdcard_model.h,
+SdFaults.write_error and no_response): a block answered "write error" (0xED, and an error in
+CMD13's status after it) and commands that get no answer; and a card taken out and put back
+(sdmodel_set_present(), as its set_present()): out, MISO stays high; back in, the card has
+lost its power, so it is in SD mode and answers nothing but CMD0, which with CS low puts it
+in SPI mode. pull_after takes it out right after the nth block it accepts, in the middle of
+whatever the host was doing, which is how the kernel's tests pull it at a known point.
 */
 
 #ifndef _SDMODEL_H
@@ -31,8 +39,13 @@ struct sdmodel {
     int no_token;                       /* reads never send their data token */
     int reject_writes;                  /* the next n written blocks get a CRC error response */
     int no_multi;                       /* CMD18 and CMD25 are illegal commands (as in a card without them) */
+    int write_errors;                   /* the next n written blocks are answered "write error" and not kept */
+    int mute;                           /* the next n commands get no response at all */
+    int pull_after;                     /* > 0: the card comes out right after the nth block it accepts from now */
     /* state */
+    int spi;                            /* in SPI mode: CMD0 with CS low after the card got power */
     int selected, idle, crc_on, app, acmd41_left;
+    uint8_t status2;                    /* CMD13's second byte: errors since the last CMD13 (0x04 a write error) */
     int mode;                           /* receiving a command, a write token, write data */
     int multi;                          /* CMD18 streaming, or CMD25 */
     uint32_t block;                     /* the next block of a transfer */
@@ -44,11 +57,13 @@ struct sdmodel {
     uint8_t wbuf[514];
     int wpos;
     unsigned long commands, crc_errors_seen, bytes;
+    unsigned long blocks_written, write_errors_sent, pulls;
     unsigned long violations;           /* the host's mistakes (above): the tests want none */
 };
 
 void sdmodel_init(struct sdmodel *m, uint8_t *img, uint32_t blocks, int v2, int high_capacity, unsigned seed);
 uint8_t sdmodel_xfer(struct sdmodel *m, uint8_t in);
 void sdmodel_select(struct sdmodel *m, int on);
+void sdmodel_set_present(struct sdmodel *m, int present);   /* taken out (0) or put back (1): power lost either way */
 
 #endif
