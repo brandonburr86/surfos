@@ -8,7 +8,7 @@ buttons and LEDs, as LiteX's VexRiscv instruction-cache tags were (round ddr-2).
 to one RAMB18E1 with the 36-bit write port, WEBWE = {0, we, we, we}: three byte lanes on one
 enable and the fourth tied to 0. nextpnr gives each byte enable two site pins (WEBWE 2i and
 2i+1); the LVS extractor read them one to one and reported WEBWE[3] different until
-devenv/openxc7/bramwe.py (tools/openxc7-lvs-bram-test.sh, docs/evidence/flow/lvs-bram.txt).
+devenv/openxc7/bramwe.py (tools/openxc7-checks-test.sh, docs/evidence/flow/checkers.txt).
 */
 module bram_we_sdp (
     input  wire       clk100,

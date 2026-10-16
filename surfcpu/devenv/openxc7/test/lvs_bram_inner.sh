@@ -1,5 +1,5 @@
 #!/bin/sh
-# SurfCPU open-flow test, the part inside the openXC7 image (tools/openxc7-lvs-bram-test.sh):
+# SurfCPU open-flow test, the part inside the openXC7 image (tools/openxc7-checks-test.sh):
 # DIR is an openxc7-build.sh output of devenv/openxc7/test/bram_we_sdp.v. Checks what the LVS
 # step concludes from the extractor's own netlist (fabric.raw.v, one to one: a difference that
 # is not in the bitstream) and from two deliberately wrong routings: WEBWE7 on the first byte

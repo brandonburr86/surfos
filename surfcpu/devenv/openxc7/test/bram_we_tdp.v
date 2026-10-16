@@ -7,7 +7,7 @@ A flow test, not for a board: a 1024 x 16 memory with a write enable per byte be
 Arty's switches, buttons and LEDs. Yosys maps it to one RAMB18E1 whose 18-bit port A writes,
 WEA = {we[1], we[0]}; nextpnr gives each byte enable two site pins (WEA0/1 and WEA2/3), and
 the LVS extractor read WEA[1] from WEA1 and reported it different until
-devenv/openxc7/bramwe.py (tools/openxc7-lvs-bram-test.sh, docs/evidence/flow/lvs-bram.txt).
+devenv/openxc7/bramwe.py (tools/openxc7-checks-test.sh, docs/evidence/flow/checkers.txt).
 */
 module bram_we_tdp (
     input  wire       clk100,

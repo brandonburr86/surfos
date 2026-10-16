@@ -8,11 +8,11 @@
 # Wishbone control port (wb_ctrl_*), through which SurfCPU runs LiteX's sdram_init and read
 # leveling (firmware/common/ddrinit.c, docs/DDR.md section 10) and then writes init_done (and
 # init_error on a failure). A CPU inside the core would run in the controller's clock domain,
-# where it made the critical paths nextpnr could not route in time (docs/DDR.md section 9).
+# where it made the critical paths nextpnr could not route in time (docs/DDR.md section 10.3).
 #
 # 80 MHz, not the example's 100 MHz: LiteDRAM's controller (the ZQ calibration timer, the
 # refresher and the bank machines) does not close at 100 MHz in nextpnr even without a CPU
-# (90.2 MHz at best over 20 placements and every setting tried; docs/DDR.md section 9). 80 MHz
+# (90.2 MHz at best over 20 placements and every setting tried; docs/DDR.md section 10.3). 80 MHz
 # closes with margin and keeps the DDR3L's DLL in its range (tCK at most 3.3 ns: a DDR clock of
 # at least 303 MHz, a controller clock of at least 76 MHz); the generator's timings follow the
 # clock, the mode registers stay as at 100 MHz (CL 6, CWL 5). The PLL runs its VCO at 1600 MHz:

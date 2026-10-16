@@ -41,8 +41,8 @@ tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-s
 
 | File | What | Size |
 |---|---|---|
-| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 43,776 bytes, **66.8 %** of the 64 KiB ROM (1.1.0; 1.0.0 was 40,084: the DDR initialization takes about 3.7 KB) |
-| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 31,428 bytes, 48.0 % |
+| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 43,680 bytes, **66.7 %** of the 64 KiB ROM (1.1.0, a clean build; 1.0.0 was 40,084: the DDR initialization takes about 3.6 KB) |
+| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 31,392 bytes, 47.9 % |
 | `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 15,012 bytes |
 | `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,340 bytes |
 
