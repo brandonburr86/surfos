@@ -10,11 +10,11 @@ physical results are separate columns, so nothing claims more than happened.
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | **m3 PASS** on the A7-100T on 2026-10-16: the BRAM diagnostics' 203 checks (identity, ALU, M extension, branches, loads and stores, CSRs, 56 KiB March C-, 34 exceptions each recovered, timer interrupts and WFI at 1.02 ms a tick, FENCE.I), the UART both ways, the LEDs confirmed by the owner; bitstream d174d0f ([evidence](evidence/physical/m3-2026-10-16.txt)) | **done on the board** (open-flow bitstream; nextpnr's timing is an estimate, no Vivado sign-off) |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs; the DDR top with LiteDRAM's generated core and its DRAM model: the BRAM diagnostics' DDR checks pass (569), and SurfBoot calibrates and boots SurfOS to the shell; the 100T DDR diagnostics' synthesized netlist prints the same lines at the same times as the RTL ([evidence](evidence/ddr/), [the DDR top](evidence/ddr/ddr-top-sim.txt)) | open flow: both DDR designs place and route on both boards, but nextpnr's estimate for LiteDRAM's 100 MHz clock is 63.5 to 77.3 MHz, and one build did not finish routing: no DDR bitstream ([evidence](evidence/board/openxc7-ddr.txt)); MIG recipe pending a Vivado host | pending: needs a DDR bitstream | done in simulation; timing closure in progress |
-| 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T (no DDR, no card adapter yet): its banner, then it stops in its monitor with the reason (DDR_ABSENT, code 1 on the LEDs); `info` and `sd` (no card) answer ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); the card over SPI and the DDR boot pending | software done on the host; RTL SoC done; on the board in progress |
-| 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
+| 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); booting a DDR image pending (no DDR bitstream) | software done on the host; RTL SoC done; on the board: card reads done, the DDR boot pending |
+| 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) and the owner's monitor shows a picture once its input is set to VGA; the text's readability not yet confirmed. PS/2: the owner's keyboard (a USB keyboard on a passive USB-to-PS/2 adapter) never answers a reset (TX_NAK, no clock pulses): it does not speak PS/2; a real PS/2 keyboard is needed | done in simulation; on the board in progress |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the storage review's findings, being fixed in fs-fix-2) |
-| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done, pre-release only (open: the review's findings, being fixed in rel-2) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the third storage review's findings, being fixed in fs-fix-3) |
+| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done and reviewed (its findings fixed in rel-2); the pre-release must be made again |
 
 ## Log
 
@@ -410,4 +410,93 @@ physical results are separate columns, so nothing claims more than happened.
   * Checkout paths with spaces and quotes, the PRERELEASE logic, and the recovery procedure.
   * The MultiBoot reasoning and the boot time.
 * Being fixed in rel-2, with the reviewer's scenarios turned into regression tests.
+
+### 2026-10-16: the storage round fs-fix-2, its review; the release fixes
+
+* fs-fix-2 was merged as fd37406 and closes the second storage review's findings as audit
+  B12-B19 (docs/CODE-AUDIT.md):
+  * B12: a sync's 0 now means everything that was dirty at its start reached the card, even
+    while others write. Each change is numbered, and each device keeps per-order lists of its
+    dirty blocks. A block that keeps changing is written as a copy.
+  * B13: a failed run counts as unwritten.
+  * B14: a refusing card is asked again.
+  * B15: the dirty share holds for file data, and a refused write changes nothing.
+  * B16: a refusing block no longer blocks rm of its own file.
+  * B17: mv and create undo their steps.
+  * B18: a sync gives up on a stuck holder after 10 s.
+
+  15 new host scenarios fail on d7452f4 and pass now; randomized and threaded campaigns ran
+  clean ([evidence](evidence/os/bcache-review.txt)).
+* The integrator's runs at fd37406:
+  * `make check` passes in 24 minutes, and x86 test-all passes.
+  * x86 unittest stopped at an Undertow fixture test, `test_trickle_client_leaves`, which this
+    round does not touch. That test closes a client after 0.3 s and expects the server to have
+    seen it; the Mac had three other agents' containers busy. Because make stops at the first
+    failure, the FAT tests did not run in that pass, so it is run again.
+* A third independent review found B12's core sound: copies are never torn, the lists stay
+  consistent, and there is no lock inversion. It found two major defects, both reproduced:
+  * **M1**, a regression from B16: `mv a b` sets b's refused blocks aside before the first order
+    point while b's entry is still live. That point can write b's directory block over data
+    that never reached the card, and after a second failure the card keeps two names on one
+    chain.
+  * **M2**: a stack buffer overflow in `aside_failed()` on a damaged volume whose chain loops,
+    found with AddressSanitizer.
+
+  It also found five minor ones:
+  * the aside list is capped at 16 failed blocks;
+  * a partial multi-block write on the Arty's card driver leaves the cache disagreeing with
+    the card;
+  * `grow_zeros` grows the file on a refused zero-fill;
+  * mv's undo is best effort under a double fault;
+  * the documented `trim_chain` window shows in the threaded test, 2 of 9 runs at one setting.
+
+  fs-fix-3 is fixing them on a branch from b81ccc9.
+* rel-2 was merged as b81ccc9 and closes the release review's findings:
+  * M1: everything is built in `build/release-work` under a lock. Each artifact is checked
+    when it is read and staged at once, and HEAD, the tree, the images and every staged file
+    are checked again before writing.
+  * M2: `release-verify` refuses unknown or unbuilt designs and never says PASS for a partial
+    check.
+  * m1: `release-check` is strict, and `compare` hashes both sides.
+  * m2: the builds get an allow-listed environment.
+  * m3: the clean-tree check ignores the user's git configuration.
+  * m4: only directories the tools marked are ever emptied.
+  * m5: `BOARD` and `BIT` are quoted.
+  * c1-c3: strict `.bit` headers, a truthful locale record, and the version tied to
+    `SURFOS.BIN`.
+
+  37 new tests fail before and pass after, and `test-release` gives 52 OK
+  ([evidence](evidence/release/review-fixes.txt)). The round-1 pre-release fails today's
+  stricter check, because its MANIFEST names a boot design it lacks: the release has to be
+  made again. `make test-release` fails in the container at the intermediate commits
+  ebbcebe..8835b31 (fixed in 147fe81).
+
+### 2026-10-16: the adapters on the board
+
+The owner wired the board as in the owner's guide section 3:
+* JP1 and JP2 off;
+* the Pmod MicroSD in JA, the Pmod VGA in JB+JC with J1 in JB, the Pmod PS2 in JD (its JP1
+  corrected to VB later);
+* a VGA monitor, and a keyboard;
+* the owner's 32 GB card.
+
+The integrator's own captures, not board-test runs
+([evidence](evidence/physical/surfboot-card-2026-10-16.txt)):
+* The baseline, which drives no Pmod pin, runs normally with the adapters attached.
+* SurfBoot (d174d0f) starts as before. With the card in, its monitor reads the card over SPI:
+  * a SanDisk SD32G SDHC card, ready in 173 ms, data at 6.25 MHz with CRC checked;
+  * its MBR, with one FAT32 partition of 30,432 MiB, 32 KiB clusters, label "NO NAME";
+  * an empty root directory. The card was as it came from the shop; SurfOS is not installed
+    on it yet.
+* VGA:
+  * the video block's registers show text mode, 80x30, the frame counter advancing at 60 Hz
+    and a 25,173,611 Hz pixel clock;
+  * the owner's monitor showed nothing until its input was switched to VGA, then started to
+    show a picture. The text's readability is still to be confirmed.
+* PS/2: the keyboard is an Amazon Basics USB keyboard on a passive USB-to-PS/2 adapter.
+  * A reset command (0xFF, through SurfBoot's `mw` into the port's TXDATA) gets no
+    acknowledge: STATUS shows TX_NAK, there are no bytes and no error counts. This held both
+    before and after the owner corrected the Pmod PS2's JP1 to VB.
+  * A USB-only keyboard does not speak PS/2 through a passive adapter, so a real PS/2 keyboard
+    is needed. Whether that one runs at 3.3 V is the next question (WIRING.md section 4).
 
