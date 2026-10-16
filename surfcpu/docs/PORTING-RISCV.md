@@ -511,7 +511,10 @@ test-os-surfemu`) and in the soc track's RTL system simulation (`test-soc-system
 models of the card, the keyboard and the DDR: not on the FPGA (no board connected), so brief
 milestone 7's "real board boots SurfOS from microSD" and milestone 8 on a real card are open.
 The SD write path stays off by default (read-only, `sd=rw` to allow it) until it is tried on a
-real card.
+real card. The board's acceptance tests are ready as one command each (10/16/26: `make -C surfcpu
+board-test M=m1|m3|m5|m7|m8|m9`, docs/PHYSICAL-TESTS.md), each writing its own evidence file;
+they have run against the RTL system through `surfsim --uart-pty` and against fake boards
+(`make test-os-kit`, `make test-os-kit-rtl`), never against the board.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by
@@ -547,3 +550,8 @@ Found while building to them; nothing was changed in the frozen files.
   `--sd-insert REGEX` in `sim/soc/surfsim/surfsim.cpp` (the soc track's file, changed by the os
   track with the coordinator's leave; a test-harness change, no RTL), documented in MODULES.md
   section 7. `test-os-faults` uses them (section 6).
+* Done (10/16/26, round 5): `surfsim --uart-pty` puts the UART on a pseudo-terminal, so the
+  physical test kit (`tools/uart.py`, `tools/board-test.py`) talks to the RTL system as to the
+  board's USB serial port; with it SIGTERM ends the run as a power cut (`--sd-flush` keeps the
+  card) and SIGUSR1/SIGUSR2 take the card out and put it back (MODULES.md section 7; a
+  test-harness change in the soc track's file, no RTL).
