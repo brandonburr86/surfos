@@ -18,9 +18,11 @@ container (make test-fw):
               unknown-CSR, read-only-CSR-write and RV64-shift instructions fail, also when
               written as .word/.4byte/.half data in code (the review's hidden.S); data words
               pass only in the output section .text.probes
-  deploy-sd   against a directory standing in for a card, with fake diskutil and mount: every
-              refusal, dry run, first install, update with backup, user files kept, corrupted
-              copies caught, system files, explicit backup
+  deploy-sd   against a directory standing in for a card, with fake diskutil (a cache model:
+              the card is written only on unmount) and mount: every refusal, symbolic links
+              on the card, dry run, first install, update with backup, user files kept,
+              damage on the way to the card caught by the remount, unmount and mount
+              failures reported as not verified, --verify-only, system files, explicit backup
 
     python3 firmware/tests/test_tools.py [-v] [-k PATTERN]
 """
@@ -423,10 +425,18 @@ class TestIsaAudit(unittest.TestCase):
 
 
 class TestDeploySd(unittest.TestCase):
+    """deploy-sd against a directory standing in for the card. fake_diskutil.py models the
+    Mac's cache: the stand-in is the mounted view, `device/` is the card, and unmount/mount
+    move data between them (damaging files named by corrupt_on_flush on the way), so a
+    verification that does not remount the card cannot pass the corruption tests."""
+
     def setUp(self):
         self.dir = fresh(f"deploy_{self._testMethodName}")
         self.card = self.dir / "card"
         self.card.mkdir()
+        self.device = self.dir / "device"
+        self.outside = self.dir / "outside"
+        self.outside.mkdir()
         self.cfg = self.dir / "cfg.json"
         self.conf()
         self.env = dict(os.environ, SURFCPU_DEPLOY_TEST="1", FAKE_DEPLOY_CONFIG=str(self.cfg),
@@ -435,24 +445,30 @@ class TestDeploySd(unittest.TestCase):
         self.pkg_a = FW / "HELLO.BIN"
         self.pkg_b = FW / "DDRDIAG.BIN"
 
-    def conf(self, volume=None, whole=None, **kw):
+    def conf(self, volume=None, whole=None, drop=(), **kw):
         vol = {"FilesystemType": "msdos", "FilesystemName": "MS-DOS FAT32", "FilesystemUserVisibleName":
                "MS-DOS (FAT32)", "RemovableMedia": True, "Removable": True, "Ejectable": True, "Internal": True,
-               "BusProtocol": "Secure Digital", "WritableVolume": True, "VolumeName": "SURFOS",
-               "MediaName": "SDXC Reader", "TotalSize": 31914983424, "MountPoint": str(self.card)}
+               "BusProtocol": "Secure Digital", "VirtualOrPhysical": "Physical", "WritableVolume": True,
+               "VolumeName": "SURFOS", "MediaName": "SDXC Reader", "TotalSize": 31914983424}
         vol.update(volume or {})
-        wh = {"Content": "FDisk_partition_scheme", "Internal": True, "RemovableMedia": True}
+        wh = {"Content": "FDisk_partition_scheme", "Internal": True, "RemovableMedia": True,
+              "BusProtocol": "Secure Digital", "VirtualOrPhysical": "Physical"}
         wh.update(whole or {})
-        cfg = {"mount": str(self.card), "device": "/dev/disk9s1", "volume": vol, "whole": wh}
+        cfg = {"mount": str(self.card), "device": "/dev/disk9s1", "volume": vol, "whole": wh,
+               "device_dir": str(self.device)}
         cfg.update(kw)
+        if drop:
+            cfg["volume"] = {k: v for k, v in vol.items() if k not in drop}
+            cfg["drop"] = list(drop)
         self.cfg.write_text(json.dumps(cfg))
 
     def deploy(self, *args, env=None):
         return tool("deploy-sd.py", "--mount", self.card, *args, env=env or self.env)
 
-    def snapshot(self):
-        return sorted((str(p.relative_to(self.card)), p.read_bytes() if p.is_file() else None)
-                      for p in self.card.rglob("*"))
+    def snapshot(self, d=None):
+        d = d or self.card
+        return sorted((str(p.relative_to(d)), p.read_bytes() if p.is_file() and not p.is_symlink() else None)
+                      for p in d.rglob("*"))
 
     def assertRefused(self, r, words):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
@@ -463,6 +479,11 @@ class TestDeploySd(unittest.TestCase):
         no_test = {k: v for k, v in self.env.items() if k != "SURFCPU_DEPLOY_TEST"}
         self.assertRefused(self.deploy("--image", self.pkg_a, env=no_test), "runs on the Mac")
         self.assertRefused(tool("deploy-sd.py", "--mount", "/Volumes/SURFOS", env=self.env), "never touches /Volumes")
+        self.assertRefused(tool("deploy-sd.py", "--mount", "/System/Volumes/Data/Volumes/SURFOS", env=self.env),
+                           "never touches /Volumes")
+        if os.stat("/work").st_dev != os.stat("/").st_dev:  # a real mount point (the container's bind mount)
+            self.assertRefused(tool("deploy-sd.py", "--mount", "/work", "--image", self.pkg_a, env=self.env),
+                               "is a mount point")
         self.conf(mounted=False)
         self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "not a mount point")
         self.conf(fstype="exfat")
@@ -471,17 +492,68 @@ class TestDeploySd(unittest.TestCase):
         self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "SurfBoot needs FAT32")
         self.conf(volume={"RemovableMedia": False, "Removable": False, "Ejectable": False, "Internal": True})
         self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "fixed internal disk")
+        self.conf(volume={"RemovableMedia": False, "Removable": False, "Ejectable": True, "Internal": False,
+                          "BusProtocol": "USB"})                  # an external SSD: ejectable, not removable media
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "fixed external disk")
+        self.conf(volume={"BusProtocol": "Disk Image"})
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "disk image")
+        self.conf(volume={"VirtualOrPhysical": "Virtual"})
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "disk image")
+        self.conf(whole={"BusProtocol": "Disk Image"})
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "disk image")
         self.conf(whole={"Content": "GUID_partition_scheme"})
         self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "GUID_partition_scheme")
+        self.conf(drop=("ParentWholeDisk",), volume={"ParentWholeDisk": ""})
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "did not name the whole disk")
         self.conf(volume={"WritableVolume": False})
         self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "read-only")
+        self.conf(devnum_offset=1)                               # the directory is not on that device
+        self.assertRefused(self.deploy("--image", self.pkg_a, "--new-card"), "is not on /dev/disk9s1")
         self.conf()
         self.assertRefused(self.deploy("--image", self.pkg_a), "has no /SYSTEM/SURFCARD.TXT")
         x86 = self.dir / "surfos.bin"
         x86.write_bytes(b"\xeb\x63\x90" + bytes(2000))
         self.assertRefused(self.deploy("--image", x86, "--new-card"), "IMG_MAGIC")
+        noi = surfimg.make_package(bytes(4096), 0x80000000, isa=0x0E)
+        (self.dir / "noi.bin").write_bytes(noi)
+        self.assertRefused(self.deploy("--image", self.dir / "noi.bin", "--new-card"), "IMG_ISA")
         self.assertRefused(self.deploy("--image", self.dir / "missing.bin", "--new-card"), "no package")
         self.assertEqual(self.snapshot(), [], "a refusal wrote something")
+
+    def test_symlinks_are_refused(self):
+        """The review's cases and the rest: no link on the card leads anywhere, nothing is written."""
+        victim = self.outside / "precious.txt"
+        victim.write_text("the owner's file, not on the card\n")
+        cases = {
+            "BOOT is a link to a directory": [("BOOT", self.outside)],
+            "SURFOS.BIN is a link to a file": [("BOOT/", None), ("SYSTEM/", None), ("BOOT/SURFOS.BIN", victim)],
+            "BACKUP.BIN is a link": [("BOOT/", None), ("SYSTEM/", None), ("BOOT/BACKUP.BIN", victim)],
+            "a stray link in /BOOT (the old SURFOS.NEW name)": [("BOOT/", None), ("SYSTEM/", None),
+                                                               ("BOOT/SURFOS.NEW", victim)],
+            "SYSTEM is a link": [("BOOT/", None), ("SYSTEM", self.outside)],
+            "the marker is a link": [("BOOT/", None), ("SYSTEM/", None), ("SYSTEM/SURFCARD.TXT", victim)],
+            "USERS is a link": [("USERS", self.outside)],
+            "USERS/DOCUMENTS is a link": [("USERS/", None), ("USERS/DOCUMENTS", self.outside)],
+        }
+        for name, entries in cases.items():
+            with self.subTest(name):
+                shutil.rmtree(self.card)
+                self.card.mkdir()
+                for rel, target in entries:
+                    if rel.endswith("/"):
+                        (self.card / rel).mkdir(parents=True, exist_ok=True)
+                    else:
+                        (self.card / rel).symlink_to(target)
+                if (self.card / "SYSTEM").is_dir() and not (self.card / "SYSTEM").is_symlink() and \
+                        not (self.card / "SYSTEM/SURFCARD.TXT").is_symlink():
+                    (self.card / "SYSTEM/SURFCARD.TXT").write_text("SurfOS card\nid=0123456789abcdef\n")
+                before_card, before_out = self.snapshot(), self.snapshot(self.outside)
+                for extra in ((), ("--dry-run",), ("--new-card",)):
+                    r = self.deploy("--image", self.pkg_a, *extra)
+                    self.assertRefused(r, "symbolic link")
+                self.assertEqual(self.snapshot(self.outside), before_out, "something outside the card changed")
+                self.assertEqual(self.snapshot(), before_card, "the card changed")
+                self.assertEqual(victim.read_text(), "the owner's file, not on the card\n")
 
     def test_dry_run_writes_nothing(self):
         r = self.deploy("--image", self.pkg_a, "--new-card", "--cmdline", "console=uart", "--dry-run")
@@ -489,14 +561,18 @@ class TestDeploySd(unittest.TestCase):
         self.assertIn("dry run: nothing was written", r.stdout)
         self.assertIn("write /BOOT/SURFOS.BIN", r.stdout)
         self.assertEqual(self.snapshot(), [])
+        self.assertFalse(self.device.exists(), "a dry run unmounted the card")
 
     def test_install_update_backup_and_user_files(self):
         r = self.deploy("--image", self.pkg_a, "--new-card", "--cmdline", "console=uart")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("unmounting and mounting the card again", r.stdout)
         for d in mkcard.STANDARD_DIRS:
             self.assertTrue((self.card / d.strip("/")).is_dir(), d)
-        self.assertEqual((self.card / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_a.read_bytes())
-        self.assertEqual((self.card / "BOOT/CMDLINE.TXT").read_bytes(), b"console=uart\n")
+            self.assertTrue((self.device / d.strip("/")).is_dir(), f"{d} did not reach the card")
+        for side in (self.card, self.device):                   # the view after the remount, and the card
+            self.assertEqual((side / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_a.read_bytes())
+            self.assertEqual((side / "BOOT/CMDLINE.TXT").read_bytes(), b"console=uart\n")
         self.assertIn("id=", (self.card / "SYSTEM/SURFCARD.TXT").read_text())
         self.assertFalse((self.card / "BOOT/BACKUP.BIN").exists())
         self.assertIn("Eject the card", r.stdout)
@@ -506,13 +582,13 @@ class TestDeploySd(unittest.TestCase):
         (self.card / "photo.jpg").write_bytes(b"\xff\xd8" * 100)
         r = self.deploy("--image", self.pkg_b)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual((self.card / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_b.read_bytes())
-        self.assertEqual((self.card / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_a.read_bytes())
-        self.assertEqual((self.card / "USERS/DOCUMENTS/letter.txt").read_text(), "mine")
-        self.assertEqual((self.card / "photo.jpg").read_bytes(), b"\xff\xd8" * 100)
+        self.assertIn("verified 2 file(s)", r.stdout)
+        self.assertEqual((self.device / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_b.read_bytes())
+        self.assertEqual((self.device / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_a.read_bytes())
+        self.assertEqual((self.device / "USERS/DOCUMENTS/letter.txt").read_text(), "mine")
+        self.assertEqual((self.device / "photo.jpg").read_bytes(), b"\xff\xd8" * 100)
         self.assertEqual((self.card / "SYSTEM/SURFCARD.TXT").read_bytes(), marker, "the marker changed")
         self.assertEqual((self.card / "BOOT/CMDLINE.TXT").read_bytes(), b"console=uart\n", "CMDLINE.TXT was lost")
-        self.assertFalse((self.card / "BOOT/SURFOS.NEW").exists())
         r = self.deploy("--image", self.pkg_b)              # the same package again: backup untouched
         self.assertEqual(r.returncode, 0)
         self.assertIn("already has this SURFOS.BIN", r.stdout)
@@ -521,20 +597,69 @@ class TestDeploySd(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual((self.card / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_a.read_bytes())
         self.assertEqual((self.card / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_a.read_bytes())
-        for p in self.card.rglob("~DEPLOY*"):
+        for p in list(self.card.rglob("~DP*")) + list(self.card.rglob("*.NEW")):
             self.fail(f"temporary file left behind: {p}")
 
-    def test_corrupted_copy_is_caught(self):
+    def test_damage_on_the_way_to_the_card_is_caught(self):
+        """The written bytes reach the Mac's cache intact but the card damaged: only a
+        verification that reads the card itself (after the remount) sees it."""
         self.assertEqual(self.deploy("--image", self.pkg_a, "--new-card").returncode, 0)
-        env = dict(self.env, SURFCPU_DEPLOY_TEST_CORRUPT="BOOT/SURFOS.BIN")
-        r = self.deploy("--image", self.pkg_b, env=env)
-        self.assertRefused(r, "read back differ")
-        self.assertEqual((self.card / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_a.read_bytes(), "the old package changed")
-        self.assertFalse((self.card / "BOOT/SURFOS.NEW").exists())
-        self.assertFalse((self.card / "BOOT/BACKUP.BIN").exists())
-        env = dict(self.env, SURFCPU_DEPLOY_TEST_CORRUPT="BOOT/CMDLINE.TXT")
-        r = self.deploy("--image", self.pkg_a, "--cmdline", "x", env=env)
-        self.assertRefused(r, "/BOOT/CMDLINE.TXT")
+        self.conf(corrupt_on_flush=["BOOT/SURFOS.BIN"])
+        r = self.deploy("--image", self.pkg_b)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("does NOT hold what was written", r.stderr)
+        self.assertIn("/BOOT/SURFOS.BIN", r.stderr)
+        self.assertNotIn("verified", r.stdout.split("written:")[-1].replace("NOT verified", ""))
+        self.assertNotEqual((self.device / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_b.read_bytes())
+        self.assertEqual((self.device / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_a.read_bytes(),
+                         "the previous package must survive as the backup")
+        self.conf(corrupt_on_flush=["BOOT/CMDLINE.TXT"])
+        r = self.deploy("--image", self.pkg_a, "--cmdline", "console=uart")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("/BOOT/CMDLINE.TXT", r.stderr)
+
+    def test_unmount_or_mount_failure_is_not_verified(self):
+        self.conf(unmount_fails=True)
+        r = self.deploy("--image", self.pkg_a, "--new-card")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("written but NOT verified", r.stderr)
+        self.assertIn("could not be unmounted", r.stderr)
+        self.assertIn("--verify-only", r.stderr)
+        self.assertEqual((self.card / "BOOT/SURFOS.BIN").read_bytes(), self.pkg_a.read_bytes())
+        self.conf(mount_fails=True)
+        r = self.deploy("--image", self.pkg_b)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("could not be mounted again", r.stderr)
+        self.assertIn("diskutil eject disk9", r.stderr)
+        fake = [PY, ROOT / "firmware/tests/deploy/fake_diskutil.py"]
+        self.conf(devnum_offset_after_mount=1)              # the remount brings up another device
+        self.assertEqual(run(*fake, "mount", "/dev/disk9s1", env=self.env).returncode, 0)
+        Path(f"{self.cfg}.remounted").unlink()              # the card as first found; deploy-sd remounts it
+        r = self.deploy("--image", self.pkg_a)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("written but NOT verified: after mounting it again", r.stderr)
+        self.assertIn("is not on /dev/disk9s1", r.stderr)
+        self.conf(unmount_fails=True)                       # --verify-only writes nothing
+        r = self.deploy("--image", self.pkg_a, "--verify-only")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("NOT verified (nothing was written)", r.stderr)
+        self.assertIn("run the same command again", r.stderr)
+
+    def test_verify_only_reads_the_card(self):
+        self.assertEqual(self.deploy("--image", self.pkg_a, "--new-card", "--cmdline", "x").returncode, 0)
+        before = self.snapshot()
+        r = self.deploy("--image", self.pkg_a, "--cmdline", "x", "--verify-only")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verified 2 file(s)", r.stdout)
+        self.assertEqual(self.snapshot(), before, "--verify-only changed the card")
+        b = bytearray((self.device / "BOOT/SURFOS.BIN").read_bytes())   # the card differs from the Mac's view
+        b[100] ^= 0xFF
+        (self.device / "BOOT/SURFOS.BIN").write_bytes(bytes(b))
+        r = self.deploy("--image", self.pkg_a, "--verify-only")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("first difference at byte 100", r.stderr)
+        r = self.deploy("--image", self.pkg_b, "--verify-only")
+        self.assertEqual(r.returncode, 3)
 
     def test_system_files_and_explicit_backup(self):
         sysdir = self.dir / "system"
@@ -544,10 +669,10 @@ class TestDeploySd(unittest.TestCase):
         (sysdir / ".DS_Store").write_bytes(b"junk")
         r = self.deploy("--image", self.pkg_a, "--new-card", "--system-dir", sysdir, "--backup-image", self.pkg_b)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual((self.card / "SYSTEM/MOTD.TXT").read_text(), "Welcome to SurfOS\n")
-        self.assertEqual((self.card / "SYSTEM/KEYMAP.CFG").read_bytes(), b"us\n")
+        self.assertEqual((self.device / "SYSTEM/MOTD.TXT").read_text(), "Welcome to SurfOS\n")
+        self.assertEqual((self.device / "SYSTEM/KEYMAP.CFG").read_bytes(), b"us\n")
         self.assertFalse((self.card / "SYSTEM/.DS_Store").exists())
-        self.assertEqual((self.card / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_b.read_bytes())
+        self.assertEqual((self.device / "BOOT/BACKUP.BIN").read_bytes(), self.pkg_b.read_bytes())
         bad = self.dir / "bad.bin"
         bad.write_bytes(self.pkg_b.read_bytes()[:-3])
         self.assertRefused(self.deploy("--image", self.pkg_a, "--backup-image", bad), "IMG_SIZE")

@@ -6,9 +6,11 @@ a USB card reader, then move it to the board. How SurfBoot reads it is in
 [FIRMWARE.md](FIRMWARE.md); the format rules are in [BOOT-ABI.md](BOOT-ABI.md) section 5.
 
 **Status (2026-10-15):** `deploy-sd` has been tested in the container against a directory
-standing in for a card, with simulated `diskutil` and `mount` answers, and its argument
-handling with the Mac's Python 3.14. It has not been run on a real card yet: the first real
-use is part of milestone 5, which is pending.
+standing in for a card, with simulated `diskutil` and `mount` answers (including a model of
+the Mac's cache, in which the card itself changes only when it is unmounted), and its
+argument handling with the Mac's Homebrew Python 3.14 and its `/usr/bin/python3` (3.9.6). It
+has not been run on a real card yet: the first real use is part of milestone 5, which is
+pending.
 
 ## 1. What is on the card
 
@@ -74,14 +76,18 @@ card: /Volumes/SURFOS (/dev/disk4s1, MS-DOS FAT32, SDXC Reader, Secure Digital)
 package: .../build/riscv32/arty_a7/SURFOS.BIN (812345 bytes, SurfOS 0.1.0 build 1a2b3c4d, CRC 0x12345678): valid
 create directory /BOOT
 ...
-write /BOOT/SURFOS.BIN (812345 bytes, sha256 ...) via /BOOT/SURFOS.NEW
-write /SYSTEM/SURFCARD.TXT (94 bytes, sha256 ...) via /SYSTEM/~DEPLOY.002
-verified 2 file(s), 812439 bytes, read back from the card
-done. Eject the card before you take it out: diskutil eject /Volumes/SURFOS (or the eject button next to it in Finder).
+write /BOOT/SURFOS.BIN (812345 bytes, sha256 ...) via a temporary file
+write /SYSTEM/SURFCARD.TXT (94 bytes, sha256 ...) via a temporary file
+written: 2 file(s); unmounting and mounting the card again to read them back
+verified 2 file(s), 812439 bytes, read back from the card after unmounting and mounting it again (so from the card, not from the Mac's memory)
+done. Eject the card before you take it out: diskutil eject /Volumes/SURFOS (or the eject button next to it in Finder). Do not use it on the Mac and the board at once.
 ```
 
-Then **eject** (`diskutil eject /Volumes/SURFOS`, or Finder's eject button) and only then take
-the card out.
+The card disappears from Finder for a moment near the end: `deploy-sd` unmounts it, which
+makes the Mac write everything out and forget what it had cached, and mounts it again, so
+that the comparison reads the card itself. If macOS mounts it under another name (such as
+`/Volumes/SURFOS 1`), `deploy-sd` follows it and names it in the last line. Then **eject**
+(`diskutil eject /Volumes/SURFOS`, or Finder's eject button) and only then take the card out.
 
 ## 4. Updating
 
@@ -92,24 +98,48 @@ make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS
 ```
 
 The previous `SURFOS.BIN` becomes `/BOOT/BACKUP.BIN` (if it was a valid package and
-different), the new one is written under a temporary name, read back and compared byte for
-byte, and only then renamed. Your directories and files are left as they are. Options go in
-`DEPLOY_ARGS`:
+different). Each new file is written under a fresh temporary name, flushed to the card and
+then renamed into place. When everything is written, the card is unmounted and mounted again,
+checked once more, and every installed file is read back from it and compared byte for byte
+with what was meant to be written. Your directories and files are left as they are. The last
+lines say how it went, and so does the exit status:
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | written, then read back from the remounted card: every byte matches | eject, take the card to the board |
+| 1 | refused (the reason is printed): nothing was written | fix what it says |
+| 2 | **written but NOT verified**: the card could not be unmounted or mounted again (or an error stopped the update part way) | eject the card (or take it out if the Mac no longer shows it), put it back, run the same command with `--verify-only` added |
+| 3 | read back from the card and found **different** | deploy again; if it repeats, the card or the reader is failing (SurfBoot would refuse a damaged `SURFOS.BIN` by its CRC and boot `BACKUP.BIN`) |
+
+Options go in `DEPLOY_ARGS`:
 
 | Option | Effect |
 |---|---|
 | `--dry-run` | check everything and print what would be done; write nothing |
+| `--verify-only` | write nothing: unmount and mount the card again and compare it with the files the same command would install |
+| `--new-card` | the first install: write the card marker `/SYSTEM/SURFCARD.TXT` |
 | `--cmdline "console=uart"` | write `/BOOT/CMDLINE.TXT` with this line (`--cmdline-file F` copies a file) |
 | `--no-backup` | leave `/BOOT/BACKUP.BIN` as it is |
 | `--backup-image PATH` | install this package as `/BOOT/BACKUP.BIN` |
 | `--image PATH` | install another package (for example `build/fw/DDRDIAG.BIN`; paths are relative to `surfcpu/`) |
 | `--system-dir DIR` | copy the files of DIR into `/SYSTEM/` |
 
-Before writing anything `deploy-sd` checks, and refuses with the reason if one fails: that
-the mount point you named is a mounted FAT32 volume on removable media (the built-in SD slot
-counts; a fixed disk does not), that the card has an MBR partition table, that the package
-would pass SurfBoot's checks (an x86 `surfos.bin`, an ELF or a disk image is refused), that
-the card carries the marker, and that there is room.
+Before writing anything `deploy-sd` checks, and refuses with the reason if one fails:
+
+* the mount point you named is a mounted FAT32 volume, writable, on removable media: the
+  built-in SD slot or a USB card reader counts; a fixed internal or external disk, a disk
+  image or another virtual device does not;
+* `diskutil` names the card's whole disk, and it has an MBR partition table;
+* the folder it writes through is on that very device (its device number is compared with
+  the device node `diskutil` reports);
+* nothing it would use on the card is a symbolic link, and `/BOOT` and `/SYSTEM` hold none
+  (macOS shows FAT "XSym" files as links; following one could write outside the card);
+* the package would pass SurfBoot's checks (an x86 `surfos.bin`, an ELF, a disk image or a
+  package without the base ISA is refused);
+* the card carries the marker (unless `--new-card`), and there is room.
+
+Every folder and file on the card is opened relative to the folder above it without
+following links, and new files are created under fresh names that must not exist yet.
 
 ## 5. Booting
 

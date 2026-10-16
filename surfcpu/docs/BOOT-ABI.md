@@ -146,9 +146,11 @@ name. SurfBoot needs no long names: everything it reads is under `/BOOT/`.
 
 SurfBoot only reads the card. After the handoff the kernel owns it, mounting it read-write
 once its SD write path is validated. Updates from the Mac (`make deploy-sd`) replace files in
-`/BOOT/` and `/SYSTEM/` only, keep the user directories, never repartition or format, and verify
-every copied byte. FAT32 is not journaled: an interrupted update can damage the file system,
-and a backup file does not make an update atomic.
+`/BOOT/` and `/SYSTEM/` only, keep the user directories, never repartition or format, and then
+unmount and remount the card and compare every installed byte read back from it; an update
+whose remount fails is reported as written but not verified, never as verified. FAT32 is not
+journaled: an interrupted update can damage the file system, and a backup file does not make
+an update atomic.
 
 ## 6. Clarifications (version 1 unchanged)
 
