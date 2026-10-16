@@ -1,6 +1,6 @@
 SurfCPU io track: test evidence (simulation only; nothing here ran on the board)
-date (UTC): 2026-10-16T02:29:37Z
-source: 238e1c2d4875 (dirty=0)
+date (UTC): 2026-10-16T02:33:41Z
+source: 9c74c4780fed (dirty=0)
 verilator                    Verilator 5.032 2025-01-01 rev (Debian 5.032-1+b2)
 iverilog                     Icarus Verilog version 12.0 (stable) ()
 yosys                        Yosys 0.52 (git sha1 fee39a3284c90249e1d9684cf6944ffbbcbb8f90)
