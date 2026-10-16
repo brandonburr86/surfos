@@ -217,7 +217,10 @@ formats the card: do that on the Mac (section 2).
 **Write.** Every shell command that changes files (`write`, `append`, `cp`, `mv`, `rm`,
 `mkdir`, `rmdir`) puts everything on the card before the prompt comes back. If the card
 refuses, the command says `... not all of it reached /sd0p1: I/O error` and fails ($? 1); what
-it wrote stays in memory, and `sync` tries again.
+it wrote stays in memory, and `sync` tries again. SurfOS keeps at most a quarter of its block
+cache (128 KiB) waiting for a card that refuses; past that, further writes to it fail at once
+with `I/O error`, and nothing already kept is dropped. An `mv` or `rm` the card refuses changes
+nothing (the file keeps its one name and its bytes), so the same command later is safe.
 
 **Before taking the card out or switching off**, type `eject sd0` and wait for
 `sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
@@ -233,9 +236,11 @@ power and answers nothing, so every read and write fails until it has been out f
 **What FAT32 cannot make safe.** FAT32 keeps no journal, so a card that comes out in the
 middle of a write leaves the volume half-changed. SurfOS writes in an order chosen so that the
 damage stays small: a file's bytes first, then the FAT (both copies), then the directory
-entry, then the free-space count; and when something is deleted, the entry goes before its
-clusters are freed. Tested by taking the card out after each block of a write, `rm`, `mv` and
-an overwrite, the most `fsck.fat` found was:
+entry, then the free-space count; when something is deleted, the entry goes before its
+clusters are freed; when a file is cut shorter, its new end goes before the clusters past it
+are freed; and when a file or folder grows into another sector of the FAT, that sector is
+written before the link into it. It is an order, not atomicity. Tested by taking the card out
+after each block of a write, `rm`, `mv` and an overwrite, the most `fsck.fat` found was:
 
 * the "not cleanly unmounted" mark;
 * clusters marked used that no file points at (space lost until a check frees it), or the
@@ -245,7 +250,14 @@ an overwrite, the most `fsck.fat` found was:
 * when the card refused writes in the middle of a large copy: the copy's last clusters
   allocated beyond its size.
 
-Never, in those tests, a file pointing at free space or at bytes that were not written. But:
+Never, in those tests, a file pointing at free space or at bytes that were not written. The
+host test of the same code (`tests/host/test_fatfs.c`, `make unittest`) checks the image after
+every block written, for writes, deletes, renames, truncates, folders that grow and two tasks
+writing at once, and finds none either. Two narrow cases are left: a copy that stopped because
+the card began to refuse after taking part of it (pulled during the sync that later writes its
+end, its clusters may still be linked past the end), and FAT12's entries that straddle two
+sectors (FAT12 is for floppies, never a SurfOS card). A truncate cut short can also leave a
+file whose size runs past its clusters. But:
 
 * the file being written comes out either whole or not at all only if it is new: a file being
   overwritten (`write` over it, `cp` onto it) can be left empty, and one being appended to keeps
