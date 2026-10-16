@@ -70,6 +70,11 @@ in no order among themselves, so two cases needed one more order point (a sync):
    device refuses (the links into them reached the disk only if it took writes meanwhile).
 A file that grows sector by sector costs one sync each time its chain crosses into another
 FAT sector (every 128 or 256 clusters); on a fragmented volume, more often.
+
+10/16/26 (audit B11): fat_set() has every FAT copy's block in hand before it changes any,
+so both copies change or neither does (a copy whose block could not be read was left
+behind, and the FATs differed); trim_chain() lets go of a write's chain only once its head
+is free, so a chain it could not free stays the file's for its next write.
 */
 
 #include <surfos/types.h>
@@ -317,31 +322,36 @@ static int fat_get(struct fat_fs *fs, u32 c, u32 *val) {
     return 0;
 }
 
+/* 10/16/26 (B11): every copy's blocks are in hand before any is changed, so both FATs change or
+   neither does (a copy whose block could not be read was left behind before: the FATs differed) */
 static int fat_set(struct fat_fs *fs, u32 c, u32 val) {
+    struct buf *b[2] = { NULL, NULL }, *b2[2] = { NULL, NULL };
     u32 off, o, i;
+    int r = 0;
     if(c < 2 || c >= fs->nclusters + 2) return -EIO;
     off = fs->type == 12 ? c + c / 2 : fs->type == 16 ? c * 2 : c * 4;
     o = off % 512;
-    for(i = 0; i < fs->nfats; i++) {
+    for(i = 0; i < fs->nfats && i < 2 && !r; i++) {
         u32 lba = fs->fat_lba + i * fs->spf + off / 512, end = fs->fat_lba + (i + 1) * fs->spf;
-        struct buf *b = breada(fs->dev, lba, end - lba < META_AHEAD ? end - lba : META_AHEAD), *b2 = NULL;
-        if(!b) return -EIO;
-        if(fs->type == 12) {
-            u8 *lo = b->data + o, *hi;
-            if(o == 511) {
-                b2 = bread(fs->dev, lba + 1);
-                if(!b2) { brelse(b); return -EIO; }
-                hi = b2->data;
-            } else hi = b->data + o + 1;
-            if(c & 1) { *lo = (*lo & 0x0F) | ((val << 4) & 0xF0); *hi = (val >> 4) & 0xFF; }
-            else { *lo = val & 0xFF; *hi = (*hi & 0xF0) | ((val >> 8) & 0x0F); }
-            if(b2) { bdirty_order(b2, BORDER_TABLE); brelse(b2); }
-        } else if(fs->type == 16) put16(b->data + o, (u16)val);
-        else put32(b->data + o, (le32(b->data + o) & 0xF0000000) | (val & 0x0FFFFFFF));
-        bdirty_order(b, BORDER_TABLE);
-        brelse(b);
+        b[i] = breada(fs->dev, lba, end - lba < META_AHEAD ? end - lba : META_AHEAD);
+        if(!b[i]) r = -EIO;
+        else if(fs->type == 12 && o == 511 && !(b2[i] = bread(fs->dev, lba + 1))) r = -EIO;
     }
-    return 0;
+    for(i = 0; i < 2; i++) {
+        if(!r && b[i]) {
+            if(fs->type == 12) {
+                u8 *lo = b[i]->data + o, *hi = b2[i] ? b2[i]->data : b[i]->data + o + 1;
+                if(c & 1) { *lo = (*lo & 0x0F) | ((val << 4) & 0xF0); *hi = (val >> 4) & 0xFF; }
+                else { *lo = val & 0xFF; *hi = (*hi & 0xF0) | ((val >> 8) & 0x0F); }
+                if(b2[i]) bdirty_order(b2[i], BORDER_TABLE);
+            } else if(fs->type == 16) put16(b[i]->data + o, (u16)val);
+            else put32(b[i]->data + o, (le32(b[i]->data + o) & 0xF0000000) | (val & 0x0FFFFFFF));
+            bdirty_order(b[i], BORDER_TABLE);
+        }
+        if(b2[i]) brelse(b2[i]);
+        if(b[i]) brelse(b[i]);
+    }
+    return r;
 }
 
 static int zero_cluster(struct fat_fs *fs, u32 c) {
@@ -1178,8 +1188,10 @@ static void trim_chain(struct fat_fs *fs, struct fat_node *n, u32 size, u32 firs
         n->pos_c = 0;
         if(first0) keep = 1;                                 /* the entry has it: it stays */
         else {                                               /* taken by this write: all of it goes */
-            n->first = 0;
-            fat_free_chain(fs, c);
+            u32 v;
+            /* 10/16/26 (B11): the file lets go of it once its head is free; a chain that could not be
+               freed from its head stays the file's, for its next write */
+            if(fat_free_chain(fs, c) == 0 || fat_get(fs, c, &v) != 0 || v == 0) n->first = 0;
             return;
         }
     }
