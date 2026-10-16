@@ -391,22 +391,29 @@ cache, and then every read of every device failed; there is no share across devi
 B14 the card is asked again at each such call, with one write of its oldest block: once it
 takes writes, they work at once. What the share counts (B15): file data (each block through the
 cache asks first, and a write straight to the card changes no cached copy before the card has
-the bytes, so a refused one changes nothing, in the cache either); an operation's own FAT,
-directory and FSInfo blocks come on top. A sync tries every block it may, in every sync (B13:
-blocks that never failed first, a refused run again block by block; a card that refused 4
-requests in one sync and took none is asked nothing more in it), so one bad block does not hold
-back its neighbours. A sync returns 0 only when every block that was dirty when it began reached
-the card (B12; before, after 8 rounds of another task's writing it returned 0 with a directory
-block still dirty), and gives up on such a block once syncs have waited 10 s for its hold (B18:
-a task killed with buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
+the bytes; B22: a refused request may still have stored its first blocks on the card, as
+`sd_write()`'s CMD25 does, so the cache drops its clean copies of it and a file reads what the
+card holds); an operation's own FAT, directory and FSInfo blocks come on top. A sync tries every
+block it may, in every sync (B13: blocks that never failed first, a refused run again block by
+block; a card that refused 4 requests in one sync and took none is asked nothing more in it,
+B26: counted by each sync for itself), so one bad block does not hold back its neighbours. A
+sync returns 0 only when every block that was dirty when it began reached the card (B12; before,
+after 8 rounds of another task's writing it returned 0 with a directory block still dirty), and
+gives up on such a block once syncs have waited 10 s for its hold (B18: a task killed with
+buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
 both names on one chain, and the next `mv` or `rm` freed the chain under the other name). Since
 B16 the refused blocks of the clusters such a command frees do not hold its order point back
-(`rm` of the file whose block refuses works; other refused blocks still do: an operation that
-needs an order point fails while they refuse), and since B17 a `mv` that fails at any step
-changes nothing, none failing once the replaced file is freed.
+(`rm` of the file whose block refuses works, B21: however many refuse; other refused blocks
+still do: an operation that needs an order point fails while they refuse, and B20: so does a
+`mv` onto that file, whose first order point must not write the replaced entry ahead of them;
+B26: another task's sync waits for them while they are set aside), and since B17 a `mv` that
+fails at any step changes nothing, none failing once the replaced file is freed. Since B24 an
+undo that cannot be done (a block it needs cannot be read back) makes the volume refuse every
+change (EROFS) until it is unmounted, says so, and leaves it marked as not clean. A write that
+fails leaves the file's size as it was (B23: a gap of zeros past the end included).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
@@ -542,11 +549,13 @@ on the card that refuses 3.7 % more and its full card 0.3 % fewer; the commands 
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
 overwritten (O_TRUNC) can be left empty, and an append can lose its new bytes. A rename can
-leave a name too many, a truncate cut short a size that runs past the chain. Two narrow cases
-can still leave a chain running into free clusters: a write that stopped early on a card that
-refused after taking part of it (its end goes out in a later sync, in the order of the FAT
-sectors), and a FAT12 entry that straddles two sectors. A card taken out and put back within
-half a second is not seen. What the card itself does with a block it was programming when its power
+leave a name too many, a truncate cut short a size that runs past the chain. One narrow case
+can still leave a chain running into a free cluster: a FAT12 entry that straddles two sectors
+(B25 closed the other: a write cut back while the card refused now frees the clusters past
+its cut only once the cut is on the card). A write that fails or comes up short may have
+changed, on the card, the file's bytes in the request it stopped in (B22: up to 64 KiB past
+what it returned). A card taken out and put back within half a second is not seen. What the
+card itself does with a block it was programming when its power
 went is beyond the kernel.
 
 ## 7. What is done, pending and later
