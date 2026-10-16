@@ -94,7 +94,17 @@ $(SOC_DIR)/tb_mem_empty.vvp: $(SOC_MEM_TB_SRC)
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_mem -o $@ $(SOC_MEM_TB_SRC)
 
-SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
+SOC_IC_TB_SRC = sim/soc/tb/tb_interconnect.v $(SOC_BUS_RTL) $(SOC_BFM) sim/soc/bfm/surfbus_slave_model.v
+
+$(SOC_DIR)/tb_interconnect.vvp: $(SOC_IC_TB_SRC)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_interconnect -o $@ $(SOC_IC_TB_SRC)
+
+$(SOC_DIR)/tb_interconnect_noddr.vvp: $(SOC_IC_TB_SRC)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_interconnect -Ptb_interconnect.HAS_DDR=0 -o $@ $(SOC_IC_TB_SRC)
+
+SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_interconnect.vvp tb_interconnect_noddr.vvp tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
                  tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp tb_gpio.vvp tb_gpio_real.vvp \
                  tb_mem.vvp tb_mem_empty.vvp rom_b.mem)
 
@@ -107,6 +117,8 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_uart.vvp,tb_uart)
 	$(call soc_run,$(SOC_DIR)/tb_gpio.vvp,tb_gpio)
 	$(call soc_run,$(SOC_DIR)/tb_mem.vvp,tb_mem)
+	$(call soc_run,$(SOC_DIR)/tb_interconnect.vvp,tb_interconnect)
+	$(call soc_run,$(SOC_DIR)/tb_interconnect_noddr.vvp,tb_interconnect_noddr)
 	$(Q)$(MAKE) --no-print-directory SOC_SEEDS=1 soc-gpio-real soc-mem-once
 	@echo "test-soc-units: PASS (seeds $(SOC_SEEDS))"
 
