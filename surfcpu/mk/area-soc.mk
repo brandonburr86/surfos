@@ -66,8 +66,12 @@ $(SOC_DIR)/tb_timer_frac.vvp: sim/soc/tb/tb_timer.v rtl/peripherals/surf_timer.v
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_timer -Ptb_timer.SYS_HZ=33333333 -o $@ $^
 
+$(SOC_DIR)/tb_uart.vvp: sim/soc/tb/tb_uart.v rtl/peripherals/surf_uart.v $(SOC_LIB_RTL) $(SOC_BFM)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_uart -o $@ $^
+
 SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
-                 tb_timer.vvp tb_timer_frac.vvp)
+                 tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp)
 
 test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_intc.vvp,tb_intc)
@@ -75,4 +79,5 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_sysinfo_noddr.vvp,tb_sysinfo_noddr)
 	$(call soc_run,$(SOC_DIR)/tb_timer.vvp,tb_timer)
 	$(call soc_run,$(SOC_DIR)/tb_timer_frac.vvp,tb_timer_frac)
+	$(call soc_run,$(SOC_DIR)/tb_uart.vvp,tb_uart)
 	@echo "test-soc-units: PASS (seeds $(SOC_SEEDS))"
