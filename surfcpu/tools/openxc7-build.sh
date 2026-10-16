@@ -12,13 +12,20 @@
 #   -D NAME[=VALUE]    a Verilog define for synthesis (repeatable)
 #   -I <dir>           an include directory for synthesis (repeatable)
 #   --seed <n>         placer seed (default 1)
+#   --dsp safe|full|none   multipliers: safe (default) maps them to DSP48E1 but lets Yosys pack
+#                      no registers or adders into the DSPs (scratchpad xilinx_dsp.multonly),
+#                      because its packing can delete logic (docs/OPEN-FLOW.md); full is
+#                      openXC7's plain synth_xilinx; none keeps multipliers out of DSPs (-nodsp)
+#   --expect <file>    minimum flip-flops per instance for the synthesis check (synthcheck.py)
+#   --synth-only       stop after synthesis and its check (no pins needed, --xdc optional)
 #   --manifest-include <file>  append this file (ROM hashes, ISA/ABI versions...) to the manifest
 #   --no-lvs           skip the LVS proof (it can take long on a large design)
 #   --no-check         skip every check after the bitstream
 #   --dry-run          print what would run, without the image
 #
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
-# utilization.txt, check-bitstream.txt, check-roundtrip.txt, check-lvs.txt, the logs and
+# utilization.txt, check-bitstream.txt, check-roundtrip.txt, check-lvs.txt,
+# check-clocks.txt, the logs and
 # manifest.txt, and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation. Exit status 0 only if every step and every check passed. A bitstream made
 # here has not been on a board: its physical behaviour is pending until it has.
 #
@@ -31,7 +38,7 @@ here=$(cd "$(dirname "$0")/.." && pwd -P)            # surfcpu/
 
 die_usage() { echo "openxc7-build.sh: $*" >&2; echo "usage: see the top of $0" >&2; exit 2; }
 
-top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0
+top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonly=0
 defs= incs= srcs= extras=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,16 +53,20 @@ while [ $# -gt 0 ]; do
     -I)      [ $# -ge 2 ] || die_usage "-I needs a value";      incs="$incs $2"; shift 2 ;;
     -I*)     incs="$incs ${1#-I}"; shift ;;
     --manifest-include) [ $# -ge 2 ] || die_usage "--manifest-include needs a value"; extras="$extras $2"; shift 2 ;;
+    --dsp)   [ $# -ge 2 ] || die_usage "--dsp needs a value";   dsp=$2; shift 2 ;;
+    --expect) [ $# -ge 2 ] || die_usage "--expect needs a value"; expect=$2; shift 2 ;;
+    --synth-only) synthonly=1; shift ;;
     --no-lvs)   lvs=0; shift ;;
     --no-check) check=0; shift ;;
     --dry-run)  dry=1; shift ;;
-    -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,39p' "$0"; exit 0 ;;
     -*)      die_usage "unknown option $1" ;;
     *)       srcs="$srcs $1"; shift ;;
   esac
 done
 [ -n "$top" ] || die_usage "--top is required"
-[ -n "$xdc" ] || die_usage "--xdc is required"
+[ -n "$xdc" ] || [ "$synthonly" = 1 ] || die_usage "--xdc is required"
+case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none" ;; esac
 [ -n "$srcs" ] || die_usage "no Verilog sources given"
 case "$seed" in ''|*[!0-9]*) die_usage "--seed must be a number" ;; esac
 
@@ -92,7 +103,10 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
       *) echo "openxc7-build.sh: $1 is outside the repository's surfcpu/ directory" >&2; exit 2 ;;
     esac
   }
-  set -- --top "$top" --xdc "$(rel "$xdc")" --part "$part" --out "$(rel "$out" mkdir)" --seed "$seed"
+  set -- --top "$top" --part "$part" --out "$(rel "$out" mkdir)" --seed "$seed" --dsp "$dsp"
+  [ -n "$xdc" ] && set -- "$@" --xdc "$(rel "$xdc")"
+  [ -n "$expect" ] && set -- "$@" --expect "$(rel "$expect")"
+  [ "$synthonly" = 1 ] && set -- "$@" --synth-only
   [ -n "$board" ] && set -- "$@" --board "$board"
   for d in $defs; do set -- "$@" -D "$d"; done
   for i in $incs; do set -- "$@" -I "$(rel "$i")"; done
@@ -141,7 +155,7 @@ run() {   # run <step> <log> <command...>: time it, keep its output, stop on fai
 if [ "$dry" = 0 ]; then
   command -v nextpnr-himbaechel >/dev/null || { echo "openxc7-build.sh: not in the openXC7 image" >&2; exit 2; }
   [ -f "$chipdb" ] || { echo "openxc7-build.sh: no chip database $chipdb" >&2; exit 2; }
-  [ -f "$xdc" ] || { echo "openxc7-build.sh: no such XDC: $xdc" >&2; exit 2; }
+  [ -z "$xdc" ] || [ -f "$xdc" ] || { echo "openxc7-build.sh: no such XDC: $xdc" >&2; exit 2; }
   for s in $srcs; do [ -f "$s" ] || { echo "openxc7-build.sh: no such source: $s" >&2; exit 2; }; done
   rm -rf "$out/lvs"
   mkdir -p "$out/lvs"
@@ -149,13 +163,32 @@ if [ "$dry" = 0 ]; then
   echo "openxc7-build.sh: $top for $part ($device, chip database $chipdie) in $out"
 fi
 
-# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7).
+# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7), with the DSP mode.
 rv="read_verilog"
 for d in $defs; do rv="$rv -D$d"; done
 for i in $incs; do rv="$rv -I$i"; done
 rv="$rv$srcs"
+case "$dsp" in
+  safe) dsp_pre="scratchpad -set xilinx_dsp.multonly 1
+" dsp_opt= ;;
+  full) dsp_pre= dsp_opt= ;;
+  none) dsp_pre= dsp_opt=" -nodsp" ;;
+esac
+# The elaborated RTL before any mapping, for the synthesis check (synthcheck.py).
+pre="$rv
+hierarchy -top $top
+proc
+flatten
+opt -full
+wreduce
+opt_clean
+memory -nomap
+opt_clean
+write_json $out/pre.json"
+if [ "$dry" = 1 ]; then printf '[pre.ys]\n%s\n' "$pre"; else printf '%s\n' "$pre" > "$out/pre.ys"; fi
+run presynth presynth.log yosys -q -s "$out/pre.ys"
 ys="$rv
-synth_xilinx -flatten -abc9 -arch xc7 -top $top
+${dsp_pre}synth_xilinx -flatten -abc9 -arch xc7 -top $top$dsp_opt
 tee -q -o $out/stat.json stat -json -tech xilinx
 write_json $out/$top.json
 write_verilog -noattr $out/$top.netlist.v"
@@ -163,6 +196,21 @@ if [ "$dry" = 1 ]; then printf '[synth.ys]\n%s\n' "$ys"; else printf '%s\n' "$ys
 run synth yosys.log yosys -q -l "$out/yosys.full.log" -s "$out/synth.ys"
 # the primitive models of this Yosys, for simulating <top>.netlist.v elsewhere (Icarus)
 run models cells_sim.log cp /opt/openxc7/share/yosys/xilinx/cells_sim.v "$out/cells_sim.v"
+
+# The synthesized netlist against the RTL: lost flip-flops, memories or outputs fail it.
+result_syn=skipped
+if [ "$check" = 1 ] || [ "$synthonly" = 1 ]; then
+  if run check-synth check-synthesis.txt python3 -I $tools/synthcheck.py --top "$top" --pre "$out/pre.json" \
+       --post "$out/$top.json" ${expect:+--expect "$expect"}
+  then result_syn=PASS; else result_syn=FAIL; fi
+fi
+if [ "$synthonly" = 1 ]; then
+  [ "$dry" = 1 ] && exit 0
+  grep -E '^whole design|^memories|^outputs constant|^PROBLEM|^synthcheck' "$out/check-synthesis.txt" | sed 's/^/openxc7-build.sh: /'
+  echo "openxc7-build.sh: synthesis only ($dsp DSP mode): check synthesis $result_syn; $out/$top.json"
+  [ "$result_syn" = PASS ]
+  exit $?
+fi
 
 # Placement and routing: the settings openXC7/nextpnr's CI uses for hardware-tested designs.
 run pnr nextpnr.out nextpnr-himbaechel --device "$part" --chipdb "$chipdb" --threads "$threads" \
@@ -179,9 +227,16 @@ run report report.out python3 -I $tools/report.py --device "$device" --report "$
   --log "$out/nextpnr.log" --stat "$out/stat.json" --timing "$out/timing.txt" --utilization "$out/utilization.txt"
 
 # Checks without a board.
-result_bit=skipped result_rt=skipped result_lvs=skipped
+result_bit=skipped result_rt=skipped result_lvs=skipped result_clk=skipped
 fail=0
+[ "$result_syn" = FAIL ] && fail=1
 if [ "$check" = 1 ]; then
+  # The clock managers' dividers against AMD's XAPP888 (LVS does not model MMCM/PLL).
+  if run check-clk check-clocks.txt python3 $tools/cmtcheck.py --json "$out/$top.json" \
+       --placement "$out/placement.json" --fasm "$out/$top.fasm"
+  then
+    if [ "$dry" = 0 ] && grep -q 'no MMCME2/PLLE2' "$out/check-clocks.txt"; then result_clk="none in the design"; else result_clk=PASS; fi
+  else result_clk=FAIL; fail=1; fi
   if run check-bit check-bitstream.txt python3 -I $tools/bitinfo.py --expect-device "$device" "$out/$top.bit"
   then result_bit=PASS; else result_bit=FAIL; fail=1; fi
   if run decode bit2fasm.log decode_bitstream &&
@@ -225,13 +280,17 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "build host          ${SURFCPU_HOST:-unknown}, container $(uname -m)"
   echo "date (UTC)          $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "seed                $seed"
+  echo "DSP mode            $dsp (safe: multipliers in DSP48E1 without Yosys's register/adder packing)"
   echo "defines            ${defs:- (none)}"
+  [ -n "$expect" ] && echo "expectations        $expect sha256:$(sha "$expect")"
   echo "xdc                 $xdc sha256:$(sha "$xdc")"
   for s in $srcs; do echo "source              $s sha256:$(sha "$s")"; done
   echo "bitstream           $out/$top.bit sha256:$(sha "$out/$top.bit") $(wc -c < "$out/$top.bit" | tr -d ' ') bytes"
+  echo "check synthesis     $result_syn (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     $result_bit (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    $result_rt (bitstream decoded back to FASM: check-roundtrip.txt)"
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
+  echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
   echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"
   echo "## step times"; cat "$out/times.txt"
@@ -240,6 +299,6 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 } > "$out/manifest.txt"
 
 grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /'
-echo "openxc7-build.sh: checks: bitstream $result_bit, round trip $result_rt, LVS $result_lvs"
+echo "openxc7-build.sh: checks: synthesis $result_syn, bitstream $result_bit, round trip $result_rt, LVS $result_lvs, clocks $result_clk"
 echo "openxc7-build.sh: $out/$top.bit ($(wc -c < "$out/$top.bit" | tr -d ' ') bytes); manifest $out/manifest.txt"
 exit $fail
