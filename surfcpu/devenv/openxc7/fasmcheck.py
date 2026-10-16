@@ -11,7 +11,12 @@ feature bit, and accounts for every difference with the database:
   * a feature only in nextpnr's FASM must be a pseudo-pip (ppips_*.db: ALWAYS, DEFAULT or
     HINT), a connection with no configuration bits, which no bitstream decoder can see; or a
     feature with no bits in a tile whose bits alias another tile type (the SING I/O tiles at
-    the ends of a bank) where that type lists it as an ALWAYS pseudo-pip;
+    the ends of a bank) where that type lists it as an ALWAYS pseudo-pip; or a feature whose
+    bits are all "clear" (such as NOCLKINV), which bit2fasm leaves out for a tile in which
+    nothing is set (the whole SoC has a CLB tile holding only a constant-0 LUT, all-zero
+    INIT, with NOCLKINV in both slices): such a feature is what the bitstream holds unless
+    one of its bits is set, and then bit2fasm reports the feature that sets it, which the
+    next rule catches;
   * a feature only in the decoded FASM must be one whose bits are all "clear" (a default
     that bit2fasm reports for a tile in use and nextpnr leaves out), or a STEPDOWN that
     fasm2frames itself adds, as Vivado does, to every unused IOB of a bank in which nextpnr
@@ -112,7 +117,8 @@ def main() -> int:
     print(f"only in the decoded FASM: {len(only_decoded)} "
           + ", ".join(f"{k} {v}" for k, v in sorted(kinds_d.items())))
     bad = [(f, a, k) for f, a in only_routed
-           if not ((k := classify(db, grid, f, a)).startswith("pseudo-pip") or k.startswith("no bits, ALWAYS"))]
+           if not ((k := classify(db, grid, f, a)).startswith("pseudo-pip") or k.startswith("no bits, ALWAYS")
+                   or k == "clear bits only")]
     bad += [(f, a, k) for f, a in only_decoded
             if (k := kind_decoded(f, a)) not in ("clear bits only", "STEPDOWN spread to the bank by fasm2frames")]
     for f, a, k in bad[:50]:

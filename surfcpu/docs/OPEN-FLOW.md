@@ -53,8 +53,8 @@ into its manifest. Details: [evidence/flow/image.txt](evidence/flow/image.txt).
 ```sh
 surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t --xdc <file> \
     [-D NAME[=VALUE]] [-I dir] [--seed N] [--dsp safe|full|none] [--expect file] \
-    [--manifest-include file] [--out dir] [--no-lvs] [--no-check] [--synth-only] [--dry-run] \
-    <source.v>...
+    [--manifest-include file] [--out dir] [--lvs-timeout s] [--no-lvs] [--no-check] [--synth-only] \
+    [--dry-run] <source.v>...
 ```
 
 It runs on the Mac and re-runs itself in the image with the repository at `/work` (paths must
@@ -66,7 +66,9 @@ section 4. Outputs in `build/openxc7/<top>-<board>/`: `<top>.bit`, `timing.txt`,
 models, and `manifest.txt` (source revision, part, hashes of the sources and the XDC, DSP mode,
 check results, timing, utilization against the device's documented capacity, step times, tool
 versions, and any `--manifest-include` file such as ROM hashes). The exit status is 0 only if
-every step and every check passed.
+every step and every check passed. LVS gives up after 1800 s (`--lvs-timeout`, or
+`OPENXC7_LVS_TIMEOUT` when the script is run directly), and a proof that times out fails the
+build; the whole SoC needs 9 to 12 minutes, and its design lists allow 7200 s.
 
 * `tools/openxc7-demo.sh` is the proof run behind this page (both parts, the demo, the feature
   probe, the expected failures, gate-level simulation, a determinism rebuild; about 7 minutes).
@@ -218,9 +220,17 @@ are for a reader to judge. Hold violations are fixed after routing (`-o hold-fix
   their pins, with block RAM contents checked separately.
 * Synthesis uses Yosys 0.69, the main image 0.52: resource estimates from the other tracks and
   open-flow builds differ slightly.
-* The full SoC has not been through the flow yet (its RTL is still with the other tracks). Run
-  `openxc7-build.sh` on `surfcpu_arty_a7_top` at integration and read the synthesis and clock
-  checks first.
+* The full SoC (HAS_DDR = 0) went through the flow at integration, 2026-10-16 (board-3 round;
+  BOARD.md section 8, `docs/evidence/board/openxc7-soc.txt`): every check passes on both parts,
+  LVS proving 6119 items. Its first build showed four gaps, since fixed in this flow's files:
+  `synthcheck.py` credited a register driving a top-level output to the top instead of its own
+  instance (it now prefers internal net names); `fasmcheck.py` called the NOCLKINV feature of an
+  empty CLB tile, all of whose bits are clear, unexplained; `bramcheck.py` did not pair the two
+  RAMB18 halves `fasm2netlist` decodes a RAMB36 into (bits 2k and 2k+1 interleaved); and LVS
+  could not prove a routed pin equal to a synthesized input Yosys left undefined (`x`, an unused
+  bit of a 63-bit FIFO), so `openxc7-build.sh` now runs `setundef -zero` after synthesis.
+  `make test-flow-tools` tests the synthcheck, bramcheck and build script changes; the fasmcheck
+  change was checked against the SoC build with a planted CLKINV feature, which still fails.
 
 ### 6.6 What scales
 

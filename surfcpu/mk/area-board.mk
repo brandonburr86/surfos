@@ -7,6 +7,11 @@
 #   make estimate-board    Yosys synth_xilinx resource estimates and the block RAM budget
 #                          (writes docs/evidence/board/resources.txt)
 #   make evidence-board    rerun the board tests and write docs/evidence/board/*.txt
+#   make board-uart-expect what the board prints with the SoC designs, from RTL simulation
+#                          (BOARD=arty_a7_100t or arty_a7_35t; not part of check)
+#   make board-netlist-sim the post-synthesis simulation of an open-flow build of the full top
+#                          (BOARD=..., DESIGN=surfcpu_arty_a7_bramdiag or surfcpu_arty_a7_top;
+#                          needs that build; not part of check)
 
 BD          = boards/arty_a7
 BSIM        = $(BUILD)/sim/board
@@ -32,7 +37,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
         board-baseline-rt board-baseline board-top board-digilent board-wiring \
-        board-cdc-xdc board-tools estimate-board evidence-board
+        board-cdc-xdc board-tools estimate-board evidence-board board-uart-expect board-netlist-sim
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -151,6 +156,23 @@ board-tools:
 	@mkdir -p $(BSIM)
 	$(Q)sh sim/board/tools/test_tools.sh > $(BSIM)/test_tools.txt 2>&1 || { grep -v '^ok' $(BSIM)/test_tools.txt; exit 1; }
 	@tail -1 $(BSIM)/test_tools.txt
+
+# --------------------------------------------------------------------------- expected UART output
+# The soc track's surfsim harness built with the SoC as surfcpu_arty_a7_top configures it on the
+# board (HAS_DDR=0, the board's BOARD_ID, the bitstream's BUILD_FLAGS) runs the BRAM diagnostics
+# to their end and SurfBoot to its monitor with a card (sim/board/uart_expect.sh).
+board-uart-expect: build-rom
+	$(Q)SOC_SRC="$(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)" SOC_INC="$(SOC_INC)" SIM_CPP="$(SOC_SIM_CPP)" \
+	  sh sim/board/uart_expect.sh $(BOARD)
+
+# ------------------------------------------------------------------- post-synthesis simulation
+# The Yosys netlist of an open-flow build (make build-fpga FLOW=openxc7 BOARD=... DESIGN=...),
+# with its boot ROM inside, run from its pins in Verilator until the UART prints the line the
+# design ends on (sim/board/netlist_sim.sh; BOARD_NETLIST_SIM=icarus for Icarus).
+BOARD_NETLIST_DESIGN = $(or $(DESIGN),surfcpu_arty_a7_bramdiag)
+board-netlist-sim:
+	$(Q)sh sim/board/netlist_sim.sh $(BUILD)/fpga/$(BOARD)/$(BOARD_NETLIST_DESIGN)/openxc7 \
+	  "$(if $(filter surfcpu_arty_a7_top,$(BOARD_NETLIST_DESIGN)),The LEDs,BRAMDIAG:)" $(BOARD_NETLIST_SIM)
 
 # ------------------------------------------------------------------------------------ estimates
 estimate-board:

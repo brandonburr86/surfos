@@ -20,6 +20,8 @@
 #   --synth-only       stop after synthesis and its check (no pins needed, --xdc optional)
 #   --manifest-include <file>  append this file (ROM hashes, ISA/ABI versions...) to the manifest
 #   --no-lvs           skip the LVS proof (it can take long on a large design)
+#   --lvs-timeout <s>  how long the LVS proof may run before it counts as BLOCKED (default
+#                      1800, or OPENXC7_LVS_TIMEOUT inside the image); the whole SoC needs more
 #   --no-check         skip every check after the bitstream
 #   --dry-run          print what would run, without the image
 #
@@ -39,6 +41,7 @@ here=$(cd "$(dirname "$0")/.." && pwd -P)            # surfcpu/
 die_usage() { echo "openxc7-build.sh: $*" >&2; echo "usage: see the top of $0" >&2; exit 2; }
 
 top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonly=0
+lvs_timeout=${OPENXC7_LVS_TIMEOUT:-1800}
 defs= incs= srcs= extras=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +60,7 @@ while [ $# -gt 0 ]; do
     --expect) [ $# -ge 2 ] || die_usage "--expect needs a value"; expect=$2; shift 2 ;;
     --synth-only) synthonly=1; shift ;;
     --no-lvs)   lvs=0; shift ;;
+    --lvs-timeout) [ $# -ge 2 ] || die_usage "--lvs-timeout needs a value"; lvs_timeout=$2; shift 2 ;;
     --no-check) check=0; shift ;;
     --dry-run)  dry=1; shift ;;
     -h|--help)  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -69,6 +73,7 @@ done
 case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none" ;; esac
 [ -n "$srcs" ] || die_usage "no Verilog sources given"
 case "$seed" in ''|*[!0-9]*) die_usage "--seed must be a number" ;; esac
+case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
 
 if [ -z "$part" ]; then
   case "$board" in
@@ -112,6 +117,7 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
   for i in $incs; do set -- "$@" -I "$(rel "$i")"; done
   for e in $extras; do set -- "$@" --manifest-include "$(rel "$e")"; done
   [ "$lvs" = 0 ] && set -- "$@" --no-lvs
+  set -- "$@" --lvs-timeout "$lvs_timeout"
   [ "$check" = 0 ] && set -- "$@" --no-check
   for s in $srcs; do set -- "$@" "$(rel "$s")"; done
   cd "$here"
@@ -164,7 +170,11 @@ if [ "$dry" = 0 ]; then
   echo "openxc7-build.sh: $top for $part ($device, chip database $chipdie) in $out"
 fi
 
-# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7), with the DSP mode.
+# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7), with the DSP mode, then
+# setundef -zero: Yosys leaves the data inputs of unused memory bits undefined (x; the CPU's
+# 63-bit fetch FIFO in 11 RAM32M has three), nextpnr routes them to something, and LVS cannot
+# prove a routed pin equal to an x (one DIFFER on the whole SoC). Zeros are a valid choice for
+# a don't-care, and with them LVS checks every pin exactly.
 rv="read_verilog"
 for d in $defs; do rv="$rv -D$d"; done
 for i in $incs; do rv="$rv -I$i"; done
@@ -190,6 +200,7 @@ if [ "$dry" = 1 ]; then printf '[pre.ys]\n%s\n' "$pre"; else printf '%s\n' "$pre
 run presynth presynth.log yosys -q -s "$out/pre.ys"
 ys="$rv
 ${dsp_pre}synth_xilinx -flatten -abc9 -arch xc7 -top $top$dsp_opt
+setundef -zero
 tee -q -o $out/stat.json stat -json -tech xilinx
 write_json $out/$top.json
 write_verilog -noattr $out/$top.netlist.v"
@@ -265,7 +276,7 @@ if [ "$check" = 1 ]; then
          --xdc "$xdc" --part "$part" --placement "$out/placement.json" --out "$out/lvs/fabric.v" \
          --model-out "$out/lvs/tile_model.v"
     then
-      if run lvs-prove check-lvs.txt timeout "${OPENXC7_LVS_TIMEOUT:-1800}" lvs_equiv --gold "$out/lvs/gold.v" \
+      if run lvs-prove check-lvs.txt timeout "$lvs_timeout" lvs_equiv --gold "$out/lvs/gold.v" \
            --gold-top "$top" --gate "$out/lvs/fabric.v" --gate-top fabric --placement "$out/placement.json" \
            --gold-json "$out/$top.json" --db "$db" --device "$chipdie"
       then result_lvs=PASS
@@ -303,6 +314,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check round trip    $result_rt (bitstream decoded back to FASM: check-roundtrip.txt)"
   echo "check block RAM     $result_bram (contents decoded from the bitstream: check-bram.txt)"
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
+  echo "lvs timeout         $lvs_timeout s"
   echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
   echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"

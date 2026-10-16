@@ -5,12 +5,16 @@ milestone 1 design, the top for the whole SoC, the Vivado and open-flow builds a
 programming wrapper.
 Pins and adapters are in [WIRING.md](WIRING.md); the build host in [BUILD-HOST.md](BUILD-HOST.md).
 
-**Status (2026-10-16).** The milestone 1 design has been built into bitstreams for both
-boards with the open-source flow (`make build-fpga FLOW=openxc7`), every check of that flow
-passing (section 8); its timing is nextpnr's estimate. **Nothing has been built with Vivado**
-(there is no Vivado host yet, gap G2) and **nothing has been programmed** (the board is not
-connected, G1/G3): every physical result is pending. The first real run of `build.tcl` will
-also be the first time Vivado reads these constraints; section 8 lists what that run must
+**Status (2026-10-16).** Built into bitstreams for both boards with the open-source flow
+(`make build-fpga FLOW=openxc7`), every check of that flow passing (section 8): the milestone 1
+design, and the whole SoC without DDR in two designs, with the BRAM diagnostics (milestone 3)
+or SurfBoot in its boot ROM. Their timing is nextpnr's estimate. The SoC's synthesized netlist,
+simulated from its pins, prints the same characters as the RTL: the diagnostics' PASS line and
+SurfBoot's stop in its monitor. **Nothing has been built with Vivado** (there is no Vivado host
+yet, gap G2) and **nothing has been programmed** (the board is not connected, G1/G3): every
+physical result is pending. Section 12 is the owner's checklist for the first power-up, with
+what the serial port should show according to simulation. The first real run of `build.tcl`
+will also be the first time Vivado reads these constraints; section 8 lists what that run must
 confirm.
 
 | | Where |
@@ -23,19 +27,21 @@ confirm.
 | Vivado flow | `boards/arty_a7/vivado/build.tcl` |
 | Open flow: the constraints nextpnr applies | `boards/arty_a7/nextpnr-xdc.awk` (the flow itself: `tools/openxc7-build.sh`, OPEN-FLOW.md) |
 | Wrappers | `tools/fpga-build.sh`, `tools/program.sh`, `tools/check-wiring.py` |
+| The SoC builds' own checks: every RTL memory still in RAM cells and the multiplier in its DSP48E1s; the boot ROM's contents | `boards/arty_a7/netlist_check.py`; `boards/arty_a7/romcheck.py` with `sim/board/tb_rom_read.v` and the block RAM models `sim/board/prims/RAMB36E1.v`, `RAMB18E1.v` |
 | Digilent's master XDC (in git) and manuals and schematics (a local cache, `fetch.sh fetch`), with SHA-256 | `boards/arty_a7/digilent/` |
-| Simulation: primitive models, stand-in SoC, tests; the open-flow evidence script | `sim/board/` (`openxc7_evidence.sh`) |
+| Simulation: primitive models, stand-in SoC, tests; the expected serial output and the post-synthesis simulation; the open-flow evidence scripts | `sim/board/` (`uart_expect.sh`; `tb_netlist.v`, `netlist_sim.sh`; `openxc7_evidence.sh`, `openxc7_soc_evidence.sh`) |
 | Make targets | `mk/area-board.mk` |
 | Evidence | `docs/evidence/board/` |
 
-## 1. The two designs
+## 1. The designs
 
 | Design | Top | Pins | Use |
 |---|---|---|---|
 | `arty_a7_baseline` | `boards/arty_a7/rtl/arty_a7_baseline.v` | the base set: clock, RESET, switches, buttons, LEDs, UART | milestone 1: no CPU; shows the board, the clocks, the reset and the serial link work (section 5) |
-| `surfcpu_arty_a7_top` | `boards/arty_a7/rtl/surfcpu_arty_a7_top.v` | base + Pmod microSD (JA), VGA (JB+JC), PS/2 (JD) | the whole SoC (section 6); buildable once the soc, cpu and io tracks are merged |
+| `surfcpu_arty_a7_top` | `boards/arty_a7/rtl/surfcpu_arty_a7_top.v` | base + Pmod microSD (JA), VGA (JB+JC), PS/2 (JD) | the whole SoC (section 6) with SurfBoot (`build/fw/surfboot.mem`) in its boot ROM |
+| `surfcpu_arty_a7_bramdiag` | the same top | the same | the same SoC with the BRAM diagnostics (`build/fw/bramdiag.mem`) in its boot ROM: milestone 3 (section 6) |
 
-Both take `BOARD` (`arty_a7_35t` or `arty_a7_100t`, the spec's `[boards]` names; the top turns
+All take `BOARD` (`arty_a7_35t` or `arty_a7_100t`, the spec's `[boards]` names; the top turns
 it into sysinfo's `BOARD_ID` from `surfcpu_soc.vh`) and the build identity `BUILD_ID`,
 `BUILD_FLAGS`, `BUILD_TIME`, which `tools/fpga-build.sh` passes as Vivado generics, or for the
 open flow as the defines `ARTY_BUILD_*` that the tops take as their parameters' defaults
@@ -249,14 +255,25 @@ the first half, and RESET restarting the uptime.
   (ready, response and calibration inputs tied low). The DDR3L pins are not in the top yet; the
   DDR3L's RESET# has its own pull-down on the board, so the memory stays in reset.
 
-Until the soc track merges `rtl/soc/surfcpu_soc.v`, `sim/board/stubs/surfcpu_soc.v` stands
-in, with exactly the contract's parameters and ports, its outputs at idle levels. Make uses
-it only while the real file is absent, and `tools/fpga-build.sh` refuses to build the full top
-without the real one. `tb_top` checks the clocks, resets and parameters the SoC receives, every
-input pin into its SoC port (200 random patterns), the open-drain PS/2 lines both ways, the
-RESET button and, with the stand-in, every SoC output onto its pin (Icarus on seeds 1, 7, 123,
-Verilator `--timing` on seed 5). With the real SoC the same test runs without the output part
-(the stand-in's driver registers are gone).
+The soc track's `rtl/soc/surfcpu_soc.v` is merged. `sim/board/stubs/surfcpu_soc.v`, a stand-in
+with exactly the contract's parameters and ports and its outputs at idle levels, is used by
+make only if that file is absent, and `tools/fpga-build.sh` never builds with it. `tb_top`
+checks the clocks, resets and parameters the SoC receives, every input pin into its SoC port
+(200 random patterns), the open-drain PS/2 lines both ways and the RESET button (Icarus on
+seeds 1, 7, 123, Verilator `--timing` on seed 5); with the stand-in it also drives every SoC
+output onto its pin.
+
+Two designs build this top. Their lists are identical but for the boot ROM image (the `rom`
+line; `board-tools` compares them), and both images come from `make build-rom` (fw track):
+
+* `surfcpu_arty_a7_top`: SurfBoot. Without DDR it reports the DDR controller absent and stops
+  in its monitor, which still works the CPU, the UART both ways, the card over SPI and the VGA
+  console (section 12). Not the PS/2 port: no ROM program reads the keyboard yet (SurfBoot's
+  monitor takes input from the UART only, FIRMWARE.md).
+* `surfcpu_arty_a7_bramdiag`: the BRAM diagnostics (`firmware/diagnostics/bramdiag.c`), the
+  milestone 3 design. It needs only the CPU, block RAM, the UART and the timer, checks them
+  (203 checks: the instructions, CSRs, scratch RAM with March C-, every exception, the
+  interrupts and WFI, FENCE.I) and prints PASS or FAIL.
 
 ## 7. For the ddr track
 
@@ -326,11 +343,13 @@ is listed in `nextpnr-not-checked.txt`, in the build's output and in the manifes
 derived clocks' names, the false paths, the I/O delays (SPI, VGA), `IOB TRUE` (the SPI
 registers stay in the fabric), the configuration properties (`CFGBVS`, `CONFIG_VOLTAGE`,
 compression: the bitstream keeps its defaults) and every scoped CDC file (the
-`set_max_delay -datapath_only` bounds and `ASYNC_REG`): for the baseline, 11 entries. The
-build passes only if `tools/openxc7-build.sh` exits 0, all six of its checks pass (synthesis,
-bitstream, round trip, block RAM, LVS, clocks; block RAM and clocks may be absent from a
-design, but an LVS that could not be proved fails), and every clock meets nextpnr's timing
-estimate. It is not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot show.
+`set_max_delay -datapath_only` bounds and `ASYNC_REG`): for the baseline, 11 entries; for the
+SoC, 24. The build passes only if `tools/openxc7-build.sh` exits 0, all six of its checks pass
+(synthesis, bitstream, round trip, block RAM, LVS, clocks; block RAM and clocks may be absent
+from a design, but an LVS that could not be proved fails), every clock meets nextpnr's timing
+estimate, and, for a design with a boot ROM or a `dsp` line, the board's two checks of the
+SoC builds pass (below). It is not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot
+show.
 
 **Milestone 1 bitstreams, open flow** (evidence `openxc7.txt`, 2026-10-16, source 10807ee1,
 clean): `make build-fpga FLOW=openxc7 DESIGN=arty_a7_baseline` for each board, with no
@@ -351,6 +370,86 @@ identity and time are part of the banner (and so the LUT count moves by a few). 
 board: that is the owner's step (section 9), with the baseline as the first design because it
 drives no Pmod pin (WIRING.md U2).
 
+**The whole SoC, open flow** (evidence `openxc7-soc.txt`, 2026-10-16, source 8c70845e, clean;
+HAS_DDR = 0): `make build-rom`, then `make build-fpga FLOW=openxc7 BOARD=<board>
+DESIGN=<design>` for both SoC designs on both boards. Their design lists add three kinds of
+line: `rom FILE INSTANCE` (the boot ROM image, relative to `surfcpu/`, and the ROM's instance;
+required with `generic BOOTROM_INIT`, and `ROM=` overrides the file), `dsp INSTANCE N` (the
+multiplier's DSP48E1 count) and `lvs-timeout S` (LVS of the SoC takes 9 to 12 minutes; the
+lists allow 7200 s). The ROM is copied to `build/fpga/<board>/<design>/rom/` first, and
+synthesis, the manifest's `rom_sha256` and the checks all read that copy, which stays beside
+the bitstream: a `make build-rom` during a build cannot slip a second ROM into it (a trial
+build showed it could, and the boot ROM check caught it). After the flow's six checks,
+`tools/fpga-build.sh` runs two of its own on the SoC:
+
+* **netlist** (`boards/arty_a7/netlist_check.py`): every memory of the elaborated RTL is still in
+  RAM cells of the synthesized netlist, with at least its bits (boot ROM 15 RAMB36E1, scratch
+  RAM 16, text RAM 4, font ROM 1; the register file in 12 RAM32M, the fetch, UART and PS/2
+  FIFOs in 15 RAM32M and 3 RAM64M), and the 4 DSP48E1 the multiplier needs under `--dsp safe`
+  take their operands from `u_soc.u_core.muldiv`;
+* **boot ROM** (`boards/arty_a7/romcheck.py`): the flow's Yosys synthesizes `surf_bootrom` alone
+  from the `.mem` with the flow's commands; its 15 blocks must be the design's ROM blocks
+  (contents, widths and modes), and Icarus reads all 16384 words of that ROM netlist on both
+  ports, through the block RAM models of `sim/board/prims` (Yosys's have no behaviour), against
+  the `.mem`. With bramcheck (the bitstream's block RAM contents are the netlist's, block for
+  block) this carries the `.mem` file into the bitstream.
+
+| | bramdiag, 100T | bramdiag, 35T | SurfBoot (top), 100T | SurfBoot (top), 35T |
+|---|---|---|---|---|
+| result, wall clock | pass, 860 s | pass, 788 s | pass, 662 s | pass, 849 s |
+| bitstream | 3,825,963 bytes | 2,192,185 bytes | 3,825,958 bytes | 2,192,180 bytes |
+| SHA-256, first 12 digits | `8fc81197e777` | `e705662e35f9` | `ed76520d309b` | `cd2a9ef4835d` |
+| boot ROM, SHA-256 first 12 digits | `bramdiag.mem`, `d12f2822193b` | the same | `surfboot.mem`, `82b5466e5582` | the same |
+| checks | the six of the flow, netlist and boot ROM: PASS | the same | the same | the same |
+| LVS | 6119 proved, 0 differ (649 s) | 6119, 0 (588 s) | 6119, 0 (447 s) | 6119, 0 (648 s) |
+| timing, nextpnr's estimate (need 25.00 and 25.17 MHz) | sys 57.2, pix 152.3 MHz | sys 64.9, pix 157.0 | sys 65.5, pix 143.5 | sys 72.4, pix 158.4 |
+| Yosys LUTs, flip-flops | 4222 (6.7 %), 2666 (2.1 %) | 4274 (20.5 %), 2666 (6.4 %) | 4235 (6.7 %), 2666 | 4199 (20.2 %), 2666 |
+| block RAM, DSP48E1 | 36 of 135 (26.7 %), 4 of 240 | 36 of 50 (72 %), 4 of 90 | as the bramdiag build | as the bramdiag build |
+| post-synthesis simulation (below) | `BRAMDIAG: PASS (203 checks)` at 163.8 ms, in 149 s | the same at 163.7 ms, in 147 s | SurfBoot stops in its monitor at 51.2 ms, in 45 s | the same, in 47 s |
+
+The bitstreams carry BUILD_ID 8c70845e (clean); their full SHA-256 and the manifests' are in the
+evidence. Each one passes `make program-volatile` against the fake openFPGALoader and is refused
+on the other board (section 9). The 35T fits: a fifth of its LUTs and 36 of its 50 block RAMs
+(section 10).
+
+nextpnr's critical paths, each with more than twice the margin needed:
+
+* sys_clk: 13.8 to 17.5 ns of its 40 ns (57.2 to 72.4 MHz), 2.3 to 3.1 ns of it logic and the
+  rest routing, into the CPU's pipeline control (`id_advance`, `ex_advance` in
+  `rtl/cpu/surfcpu_core.v`) from its instruction, CSR and write-back registers or the timer's
+  `mtime`;
+* pix_clk: 6.3 to 7.0 ns of its 39.7 ns (143.5 to 158.4 MHz), the text address arithmetic of
+  `rtl/peripherals/surf_video.v` (scroll row to cell index) or its cursor compare.
+
+nextpnr also reports the paths between the two clock domains (1.1 to 2.4 ns) but checks them
+against nothing: the crossings are the synchronizers of section 4, whose bounds only Vivado
+checks. LVS matches all 2666 registers by name, checks 126 memories at their boundary and the 4
+DSP48E1 and 36 RAMB36E1 at their pins; it does not model the MMCM and PLL, whose settings
+cmtcheck checks.
+
+**Post-synthesis simulation** (`make board-netlist-sim BOARD=<board> DESIGN=<design>`,
+`sim/board/tb_netlist.v`): the synthesized netlist of a build, the one LVS proves the bitstream
+equal to, with its ROM inside as block RAM contents, runs from its pins in Verilator with
+Yosys's cell models and the block RAM and clock tile models of `sim/board/prims`, clocked at
+100 MHz on `clk100`; `uart_tx` is decoded at 115200 8N1. All four netlists print exactly the
+characters the RTL simulation prints (section 12) and stop where it stops: the two bramdiag
+netlists run all 203 checks to `BRAMDIAG: PASS` with LD4-LD7 lit, in about 150 s for 164 ms of
+simulated time (1.1 ms a second, about 27,000 sys_clk cycles); the two SurfBoot netlists report
+the DDR controller absent and stop in the monitor with LED code 1, in about 45 s; the VGA syncs
+run at 31.779 µs and 16.684 ms (640 x 480 at 59.94 Hz). Icarus runs the same netlist about 90
+times slower (12 µs of simulated time a second: the banner line after 7 minutes). This catches
+synthesis breaking the logic, which RTL simulation cannot; it does not cover timing (nextpnr's
+estimate only), the real clock tiles or the I/O.
+
+**What the first SoC builds found** (trial builds of the same RTL, before these): four gaps in
+the flow's checkers and LVS, all on correct bitstreams, fixed in the flow track's files
+(OPEN-FLOW.md 6.5): synthcheck credited the output registers to the top instead of
+`u_soc`; fasmcheck called the all-clear NOCLKINV of an empty CLB tile unexplained; bramcheck did
+not pair the two RAMB18 halves a RAMB36 decodes into; and LVS could not prove a pin fed by an
+undefined (`x`) bit of the fetch FIFO's unused width, now tied to 0 by `setundef -zero` after
+synthesis. And a `make build-rom` run during a build rewrote the ROM it was reading: the boot
+ROM check failed (7 of the 15 ROM blocks differed from the new file), which led to the ROM copy.
+
 `build.tcl` (non-project): `read_verilog`, `read_mem`, `read_xdc` (then the CDC files scoped and
 late), `synth_design` with the generics and `-flatten_hierarchy rebuilt`, `opt_design`,
 `place_design`, `phys_opt_design`, `route_design`, a post-route checkpoint, then the reports
@@ -369,13 +468,15 @@ in any letter case.
 **The manifest** `build/fpga/<board>/<design>/manifest.txt` (TOML), the same keys for every
 flow: run id, design, top, board, part, flow, build host alias, Vivado binary (empty for the
 open flow), source revision and dirty state, build ID and time, SHA-256 of the sources, of
-the constraint files (in reading order), of the ROM and of the kernel package if present,
+the constraint files (in reading order), the ROM's source path and SHA-256 (`rom_image`,
+`rom_sha256`: of the copy the build read) and of the kernel package if present,
 ISA, ABI, map and SoC versions, platform ABI, the Mac; the result (`pass` or `fail` with a
 `reason`) and, with a bitstream, its SHA-256 and size, which `tools/program.sh` compares with
 the file. Then the flow's table: `[vivado]` from `out/build-results.txt` (Vivado version,
 build host name, WNS, WHS, LUT/FF/BRAM/DSP/BUFG/MMCM/PLL/IO use, DRC errors, critical warnings,
 critical CDC findings, `check_timing` issues) or `[openxc7]` (image and tool versions, the part
-placed, the DSP mode, the six checks, nextpnr's timing per clock and the worst slack, use
+placed, the DSP mode, the six checks and the board's `check_netlist` and `check_boot_rom`,
+nextpnr's timing per clock and the worst slack, use
 against the part's documented capacity, the IDCODE and part in the bitstream, and the
 constraints given and not checked).
 
@@ -393,16 +494,18 @@ The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vi
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
 locally, a fake `openxc7-build.sh` writes the open flow's outputs (its dry runs use the real
 script), and a fake `openFPGALoader` answers like the real one, with a temporary HOME and
-output directory. 200 checks with fetch.sh's: refusals, dry runs, all three flows, the staged
+output directory. 215 checks with fetch.sh's: refusals, dry runs, all three flows, the staged
 files, `params.tcl`, the TOML manifest, each gate stopping the bitstream (a report format
 Vivado might change among them), the dropped ssh connection and `--fetch`, the dirty flag
-from a scratch git repository, the open flow's constraint subset and manifest, and
-`tools/program.sh`'s cable, IDCODE, header and manifest checks.
+from a scratch git repository, the open flow's constraint subset and manifest, the SoC
+designs' ROM selection, ROM copy and two board checks (a fake `romcheck`, a netlist that lost
+a memory), and `tools/program.sh`'s cable, IDCODE, header and manifest checks.
 
 ## 9. Programming
 
 ```sh
 make program-volatile BOARD=arty_a7_100t DESIGN=arty_a7_baseline     # configuration RAM only
+make program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag   # then the SoC (section 12)
 tools/program.sh detect arty_a7_100t
 make program-volatile BOARD=arty_a7_100t CABLE_SERIAL=210319A28C7F    # with two boards on USB
 ```
@@ -434,32 +537,38 @@ typed at the prompt, and only a bitstream whose `tools/fpga-build.sh` manifest s
 `result = "pass"` for this file (`bitstream_sha256`), this board and its part; the board's
 flash part depends on its revision (RM §5.2: Micron N25Q128A13ESF40, Spansion
 S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested with a fake openFPGALoader that
-answers like the real one (in the checks above). Nothing has been programmed.
+answers like the real one (in the checks above), and the four SoC bitstreams of section 8 pass
+`make program-volatile BOARD=... DESIGN=...` against it, each refused on the other board
+(evidence `openxc7-soc.txt`). Nothing has been programmed.
 
 ## 10. Budgets
 
 Yosys `synth_xilinx -family xc7` estimates (evidence `resources.txt`; Vivado will differ): the
 baseline uses 290 LUTs, 412 flip-flops, no block RAM or DSP, 1 MMCM, 1 PLL and 2 BUFGs: 1.4 %
-of the 35T's LUTs, 0.5 % of the 100T's. The SoC is not on this branch yet; `make
-estimate-board` estimates the whole top once it is.
+of the 35T's LUTs, 0.5 % of the 100T's. The whole SoC without DDR, as the open flow built it
+(section 8; Yosys 0.69, `--dsp safe`): about 4,200 LUTs, 2,666 flip-flops, 36 RAMB36, 4 DSP48E1,
+27 RAM32M and 3 RAM64M, 1 MMCM, 1 PLL and 2 BUFGs: on the 35T 20 % of the LUTs, 6.4 % of the
+flip-flops, 72 % of the block RAM and 4.4 % of the DSPs; on the 100T 6.7 %, 2.1 %, 26.7 % and
+1.7 %.
 
 Block RAM implied by the memory map (a RAMB36 holds 1024 x 32 data bits):
 
 | User | RAMB36 |
 |---|---|
-| boot ROM, 64 KiB, true dual port | 16 |
+| boot ROM, 64 KiB, true dual port | 16 (Yosys: 15, using the parity bits in 4K x 9 mode) |
 | scratch RAM, 64 KiB, true dual port | 16 |
 | text RAM, 16 KiB, dual clock | 4 |
 | font ROM, 4 KiB (256 x 16 x 8 bits) | 1 |
 | register file, FIFOs (distributed RAM) | 0 |
 | DDR3L controller (to be confirmed by the ddr track) | 0 |
-| **total** | **37** |
+| **total** | **37** (the open flow: 36) |
 
-The XC7A35T has 50 RAMB36 (74 % used, 13 free), the XC7A100T 135 (27 %, 98 free) (DS180
-v2.6.1 table 4). The 35T fits with little room: caches or a frame buffer would need the 100T
-or a smaller boot ROM. Clock resources: this design uses one MMCM, one PLL and two BUFGs; the
-memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs and the 100T
-6, each with one MMCM and one PLL, and every 7-series device has 32 BUFGs (UG472).
+The XC7A35T has 50 RAMB36 (74 % used, 13 free; the open flow's 36 leave 14), the XC7A100T 135
+(27 %, 98 free) (DS180 v2.6.1 table 4). The 35T fits with little room: caches or a frame buffer
+would need the 100T or a smaller boot ROM. Clock resources: this design uses one MMCM, one PLL
+and two BUFGs; the memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5
+CMTs and the 100T 6, each with one MMCM and one PLL, and every 7-series device has 32 BUFGs
+(UG472).
 
 ## 11. Make targets and tests
 
@@ -467,5 +576,134 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (200 wrapper and fetch.sh checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (215 wrapper and fetch.sh checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
+| `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
+| `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`; section 8) |
+| `sim/board/openxc7_soc_evidence.sh` | (Mac, explicit) | both SoC designs for both boards with the open flow, both simulations and `program-volatile` with the fake programmer: `docs/evidence/board/openxc7-soc.txt`, `uart-expect.txt` (about 40 minutes) |
+
+## 12. First power-up
+
+A checklist for the owner. WIRING.md has the reasons and the adapters' pin tables; nothing here
+has been tried on a board yet. Two jumpers are called JP1: **the Arty's JP1 is its MODE
+jumper**; the Pmod PS2 has its own JP1, the PS/2 supply selector. "JP1 off" in earlier reports
+meant the Arty's MODE jumper.
+
+**Before the first power-up** (USB unplugged, nothing in the Pmod headers):
+
+| Jumper | Set to | Why |
+|---|---|---|
+| Arty JP1 (MODE) | **off** (no jumper) | the FPGA is then not configured from the Quad-SPI flash at power-up and waits for a JTAG load (RM section 4), so nothing old or unknown drives the Pmod pins (WIRING.md U2) |
+| Arty JP2 (CK_RST to the FT2232) | **open** | shorted, the FT2232's DTR line could reset the SoC when a terminal opens the port (WIRING.md U7) |
+| Pmod PS2 JP1 (PS/2 supply) | **VB** (3.3 V from the Arty) | VE with a 5 V supply puts 5 V on FPGA pins (WIRING.md section 4) |
+| Pmod PS2 JP2 (external supply header) | nothing connected | its silkscreen has VE and GND swapped (WIRING.md section 4) |
+
+**Adapters**, each plugged in only with the board unpowered, component side up, adapter pin 1
+at the header's pin 1, and checked before power is applied:
+
+* Pmod MicroSD in JA, with no card in the slot until it is checked (WIRING.md U8);
+* Pmod VGA across JB (its J1, red and blue) and JC (its J2, green and syncs); **upside down it
+  can damage the FPGA** (WIRING.md U2);
+* Pmod PS2 in the top row of JD (pins 1-6) (WIRING.md U5).
+
+**The order of the designs.** Each is built with `make build-fpga FLOW=openxc7 BOARD=<board>
+DESIGN=<design>` and loaded with `make program-volatile BOARD=<board> DESIGN=<design>`
+(configuration RAM only: a power cycle or PROG forgets it). The serial port is the FT2232's
+second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbserial-<serial>
+115200`).
+
+1. **`arty_a7_baseline`, with no adapters plugged in.** It drives none of the Pmod pins. What
+   it shows is in section 5: LD0 and LD1 blink green once a second, one serial line a second.
+2. **`surfcpu_arty_a7_bramdiag`**, the milestone 3 design: the CPU and every block RAM, with
+   only the USB cable needed (the adapters may stay out). It prints the lines below, about
+   0.17 s after the load, and ends with LD4-LD7 on and LD0 green (LD0 red on a failure); then
+   it echoes typed characters and blinks LD7.
+3. **`surfcpu_arty_a7_top`** (SurfBoot), with the adapters plugged in as above, then a
+   FAT32-formatted microSD card in the slot. With no DDR controller in this bitstream
+   SurfBoot stops in its monitor (`DDR_ABSENT`, LED code 1: LD4 on, LD0 red), which still
+   exercises the CPU, the UART in both directions, the card over SPI (`sd`, `part`, `fs`, `ls`)
+   and the VGA console (the same text on the monitor). Inserting a card retries the boot. The
+   PS/2 port is not exercised: no ROM program reads the keyboard yet, so with the Pmod PS2
+   plugged in the design only keeps its lines released.
+
+On an A7-35T the open flow places the design on the whole xc7a50t die, possibly outside the
+region Vivado offers on a 35T, which AMD does not document as usable (OPEN-FLOW.md 6.3). If a
+35T misbehaves where the simulations pass, suspect that first; the 100T has no such question.
+
+**What the serial port should show, expected from simulation** (never observed on a board yet).
+These come from `make board-uart-expect BOARD=arty_a7_100t` (sim/board/uart_expect.sh): the soc
+track's surfsim with `surfcpu_soc` configured exactly as `surfcpu_arty_a7_top` configures it on
+that board, running the same ROM images; the full transcripts for both boards are in
+`docs/evidence/board/uart-expect.txt`. On the 35T the board reads `Arty A7-35T (0x135)` and
+`info` says `board 00000135`; nothing else differs. `<id>` is the build's commit (the ROM's and
+the bitstream's; `, dirty tree` or `dirty` follows when built from uncommitted changes), and
+the bitstream's build time replaces `time 0`.
+
+`surfcpu_arty_a7_bramdiag`, all of it (about 0.17 s):
+
+```
+
+SurfCPU BRAM diagnostics 1.0.0 (build <id>)
+board Arty A7-100T (0x100), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+bitstream build <id> flags 0, features 7f, DDR status 0 size 0 MiB
+identity                           ok (7 checks)
+ALU, immediates, x0                ok (33 checks)
+M extension                        ok (23 checks)
+branches and jumps                 ok (9 checks)
+loads and stores                   ok (8 checks)
+CSRs and counters                  ok (30 checks)
+scratch RAM (March C-)             (56 KiB) ok (49 checks)
+text RAM (cells 2400-4095)         ok (1 checks)
+exceptions, each recovered         ok (34 checks)
+interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+FENCE.I, code written to RAM       ok (2 checks)
+DDR                                skipped: no DDR controller in this bitstream
+
+BRAMDIAG: PASS (203 checks)
+```
+
+`surfcpu_arty_a7_top`, SurfBoot, with a card in the socket and `info`, `sd` and `ls /` typed at
+the monitor. The `sd` and `ls /` answers describe the simulation's 64 MiB card (its manufacturer,
+OEM, product and serial are the card model's, its files those `tools/mkcard.py` made); a real
+card answers with its own:
+
+```
+
+SurfBoot 1.0.0 (build <id>), the SurfCPU boot ROM
+soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream <id>
+ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+
+SurfBoot stopped: no DDR controller (DDR_ABSENT)
+  this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+The LEDs LD4-LD7 show code 1. Type help for the monitor's commands; inserting a card retries the boot.
+surfboot> info
+SurfBoot 1.0.0 build <id>
+sysinfo: magic 46525553, SoC 00000100, map 1, board 00000100, bitstream build <id> flags 0, time 0
+clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features 7f (uart timer irq gpio spi ps2 video ddr)
+ddr: status 0 (absent), size 0 MiB
+card: present; buttons 0
+last boot failure: DDR_ABSENT: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+surfboot> sd
+sd: SDHC/SDXC, sector addressing, OCR c0ff8000, ready after 5 ms, data CRC on
+sd: SPI 390 kHz for identification, 6250 kHz for data (DIV 1)
+sd: CSD version 2, 131072 sectors (64 MiB)
+sd: CID manufacturer 5c, OEM SF, product SURFC rev 1.0, serial 0badf00d, made 2026-10
+surfboot> ls /
+sd: SDHC/SDXC, 64 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+  (volume label SURFOS     )
+  d----  BOOT               <dir>  cluster 3
+  d----  SYSTEM             <dir>  cluster 5
+  d----  PROGRAMS           <dir>  cluster 4
+  d----  USERS              <dir>  cluster 6
+  0 files (0 bytes), 4 directories
+surfboot>
+```
+
+The VGA monitor shows the same console text, 80 x 30 characters at 640 x 480 and 59.94 Hz (the
+screen the simulation decoded from the pixels is in the same evidence file). The post-synthesis
+simulation of every one of the four bitstreams' netlists printed the same characters up to its
+stop (section 8). If the board prints something else, or nothing: the serial settings and port
+first, then `make doctor`; the LEDs say how far it got (bramdiag lights LD4, then LD5, then LD6
+as it moves through its sections, and all four with LD0 green or red at the end; SurfBoot shows
+its error code on LD4-LD7 with LD0 red).
