@@ -20,18 +20,22 @@ the Docker images through devenv/run.sh and tools/fpga-build.sh, as a person wou
         release is written, HEAD, the tree, the images and every staged file are checked once more.
     tools/release.py verify RELEASE [--designs D,..] [--boards B,..] [--work DIR] [--keep] [--report FILE]
         make -C surfcpu release-verify RELEASE=build/release/<name> [DESIGNS=..] [BOARDS=..] [KEEP=1]
-        Clones the release's commit into a new directory (a pristine copy: git clone --shared), runs
-        the release there with the same settings, and compares every artifact of the release's
-        SHA256SUMS byte for byte, with the first differing offset and the likely cause of each
-        difference. --designs/--boards rebuild only some of the bitstreams (the others are listed
-        as not rebuilt); the software artifacts are always rebuilt.
+        Checks the release (as check does), clones its commit into a new directory (a pristine copy:
+        git clone --shared), runs the release there with the same settings, and compares every
+        artifact of the release's SHA256SUMS byte for byte, with the first differing offset and the
+        likely cause of each difference. --designs/--boards rebuild only some of the bitstreams: names
+        the release's MANIFEST does not know, or designs it did not build, are refused; the others
+        are listed as not rebuilt and the verdict is PARTIAL, never PASS. The software artifacts are
+        always rebuilt.
     tools/release.py compare REFERENCE NEW [--report FILE]
         The same comparison of two release directories (or a SHA256SUMS file and a release directory).
     tools/release.py check RELEASE
         The release's files against its SHA256SUMS and MANIFEST (what shasum -a 256 -c does, and more).
 
 Exit status: make 0 written, 1 refused or failed; verify and compare 0 when every compared artifact
-matched, 1 when one differed or is missing, 2 when the comparison could not be made.
+matched (verify: PASS, or PARTIAL when DESIGNS/BOARDS asked for only some; compare: PASS only), 1
+when one differed, is missing, damaged or extra, or a release does not pass check, 2 when the
+comparison could not be made.
 
 The builds get an environment of their own: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, TERM and
 Docker's settings (DOCKER, DOCKER_HOST, DOCKER_CONFIG, DOCKER_CONTEXT, DOCKER_CERT_PATH,
@@ -385,13 +389,15 @@ def read_list(path: Path = LIST) -> dict:
     return cfg
 
 
-def pick(given: str | None, allowed: list[str], what: str) -> list[str]:
+def pick(given: str | None, allowed: list[str], what: str, where: str = "release/release.txt") -> list[str]:
     if not given:
         return list(allowed)
     want = [x for x in re.split(r"[,\s]+", given) if x]
+    if not want:
+        raise Refused(f"no {what} named in {given!r}")
     for x in want:
         if x not in allowed:
-            raise Refused(f"unknown {what} {x!r} (release/release.txt: {', '.join(allowed)})")
+            raise Refused(f"unknown {what} {x!r} ({where}: {', '.join(allowed)})")
     return [x for x in allowed if x in want]
 
 
@@ -724,7 +730,10 @@ def compare_manifests(a_path: Path, b_path: Path, rebuilt: set | None) -> list[s
     return out
 
 
-def report_lines(rows: list, notes: list[str], title: str, problems: list[str] = ()) -> list[str]:
+def report_lines(rows: list, notes: list[str], title: str, problems: list[str] = (), subset: bool = False) -> list[str]:
+    """the report of a comparison; its last line is the verdict: PASS (every artifact rebuilt and the same),
+    PARTIAL (every rebuilt one the same, but some were not rebuilt: never a pass by default; subset says the
+    caller asked for only some designs or boards) or FAIL"""
     kinds = ("match", "DIFFERS", "MISSING", "DAMAGED", "EXTRA", "not rebuilt")
     n = {k: sum(1 for r in rows if r[1] == k) for k in kinds}
     lines = [title, ""]
@@ -741,10 +750,18 @@ def report_lines(rows: list, notes: list[str], title: str, problems: list[str] =
     lines += [""] + [f"  note: {x}" for x in notes] + [""]
     compared = n["match"] + n["DIFFERS"] + n["MISSING"]
     bad = n["DIFFERS"] + n["MISSING"] + n["DAMAGED"] + n["EXTRA"] + len(problems)
-    verdict = "PASS" if compared and not bad else "FAIL"
+    if bad or not compared:
+        verdict = "FAIL"
+    elif n["not rebuilt"]:
+        verdict = "PARTIAL"
+    else:
+        verdict = "PASS"
+    tail_ = (f"; {n['not rebuilt']} artifacts NOT verified (not rebuilt: "
+             + ("DESIGNS/BOARDS asked for only some)" if subset else "the new release did not build their designs)")
+             if n["not rebuilt"] else "")
     lines.append(f"{verdict}: {n['match']} of {compared} compared artifacts are byte for byte the same; "
                  f"{n['DIFFERS']} differ, {n['MISSING']} missing, {n['DAMAGED']} damaged, {n['EXTRA']} extra, "
-                 f"{len(problems)} problems with the releases themselves, {n['not rebuilt']} not rebuilt")
+                 f"{len(problems)} problems with the releases themselves" + tail_)
     return lines
 
 
@@ -1036,6 +1053,8 @@ class Release:
         self.only = None
         if a.only is not None:                         # release-verify: exactly these board/design pairs
             self.only = {tuple(x.split("/", 1)) for x in re.split(r"[,\s]+", a.only) if x}
+            if not self.only:
+                raise Refused("--only names no board/design pair")
             for b, n in self.only:
                 if b not in cfg["boards"] or n not in names:
                     raise Refused(f"--only {b}/{n}: no such board and design in release/release.txt")
@@ -1457,14 +1476,23 @@ def cmd_verify(a) -> int:
         git("cat-file", "-e", commit + "^{commit}")
     except Refused:
         raise Refused(f"the commit {commit} is not in this repository")
-    built = [(d["board"], d["name"]) for d in man.get("design", []) if d.get("status") == "built"]
-    boards = sorted({b for b, _ in built})
-    names = sorted({n for _, n in built})
-    if a.boards:
-        boards = [b for b in re.split(r"[,\s]+", a.boards) if b]
-    if a.designs:
-        names = [n for n in re.split(r"[,\s]+", a.designs) if n]
+    entries = man.get("design", [])
+    built = [(d["board"], d["name"]) for d in entries if d.get("status") == "built"]
+    where = f"{ref.name}'s MANIFEST"
+    boards = pick(a.boards, sorted({d.get("board") for d in entries}), "board", where)
+    names = pick(a.designs, list(dict.fromkeys(d.get("name") for d in entries)), "design", where)
+    for n in names if a.designs else []:
+        if not any((b, n) in built for b in boards):
+            why = "; ".join(f"{d.get('board')}: {d.get('reason', '')}" for d in entries
+                            if d.get("name") == n and d.get("board") in boards)
+            raise Refused(f"no bitstream of {n} in {ref.name} for {', '.join(boards)} to rebuild ({why})")
+    for b in boards if a.boards else []:
+        if not any((b, n) in built for n in names):
+            raise Refused(f"no bitstream for {b} among {', '.join(names)} in {ref.name} to rebuild")
     rebuilt = {(b, n) for b, n in built if b in boards and n in names}
+    if not rebuilt:
+        raise Refused(f"nothing of {ref.name} to rebuild")
+    subset = len(rebuilt) < len(built)
     work = Path(a.work).resolve() if a.work else ROOT / "build" / "release-verify" / f"{ref.name}-{time.strftime('%Y%m%dT%H%M%S')}"
     if work.exists() and any(work.iterdir()):
         raise Refused(f"{work} exists and is not empty")
@@ -1493,17 +1521,17 @@ def cmd_verify(a) -> int:
         rows, notes = [(rel, "MISSING", "the rebuild wrote no release") for rel in sorted(read_sums(ref / "SHA256SUMS"))], []
         problems = []
     lines = report_lines(rows, notes, f"release-verify {ref.name}: commit {commit}, rebuilt in {src} "
-                                      f"({minutes(time.time() - t0)})", problems)
+                                      f"({minutes(time.time() - t0)})", problems, subset)
     text = "\n".join(lines) + "\n"
     (work / "verify-report.txt").write_text(text)
     if a.report:
         Path(a.report).write_text(text)
-    print(text, end="")
-    verdict = lines[-1].startswith("PASS")
     if not a.keep:
         shutil.rmtree(work, ignore_errors=True)
         say(f"removed {work} (KEEP=1 keeps it)")
-    return 0 if verdict else 1
+    print(text, end="")
+    verdict = lines[-1].split(":", 1)[0]
+    return 0 if verdict == "PASS" or (verdict == "PARTIAL" and subset) else 1
 
 
 def cmd_compare(a) -> int:

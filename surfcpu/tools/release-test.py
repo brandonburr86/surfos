@@ -571,6 +571,29 @@ class TestShippedIsChecked(ScratchRelease):
         self.assertFalse(lock.exists())
 
 
+class TestVerifyScope(ScratchRelease):
+    """review M2: release-verify refuses names it does not know, and a partial check never reads as PASS"""
+
+    def test_scope(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        rel = self.rel_dir(True)
+        for args, words in ((["--designs", "tpo"], "unknown design"), (["--boards", "arty_a7_10t"], "unknown board"),
+                            (["--designs", "dd"], "no bitstream of dd")):
+            r = self.tool("verify", rel, *args)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn(words, r.stderr)
+        r = self.tool("verify", rel, "--designs", "top", "--boards", "arty_a7_100t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        verdict = r.stdout.strip().splitlines()[-1]
+        self.assertTrue(verdict.startswith("PARTIAL"), verdict)
+        self.assertIn("NOT verified", verdict)
+        self.assertIn("not rebuilt  fpga/arty_a7_35t/top/top.bit", r.stdout)
+        r = self.tool("verify", rel)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stdout.strip().splitlines()[-1].startswith("PASS:"), r.stdout)
+        self.assertNotIn("not rebuilt", r.stdout)
+
+
 class TestCheckStrict(ScratchRelease):
     """review m1: release-check and compare fail a damaged or inconsistent release"""
 
