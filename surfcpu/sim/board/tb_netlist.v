@@ -6,7 +6,11 @@ File: tb_netlist.v Date: 10/16/26 (SurfCPU)
 The post-synthesis simulation (sim/board/netlist_sim.sh, make board-netlist-sim): the open
 flow's Yosys netlist of surfcpu_arty_a7_top, with Yosys's cell models and the block RAM and
 clock tile models of sim/board/prims, clocked at 100 MHz on its clk100 pin as the board's
-oscillator does. Nothing inside the netlist is touched; only its pins are seen.
+oscillator does. Nothing inside the netlist is touched; only its pins are seen. With
+ARTY_HAS_DDR it takes the DDR top's pins too (the DDR designs, and the RTL simulation of the
+DDR top, sim/board/ddr_top_sim.sh): no memory is on the DDR3L pins (DQ and DQS weakly pulled
+low, nothing answers), and dram_uart_tx, the memory controller's console, is received like
+uart_tx: "tb_netlist: <time> dram| <line>", the characters to +dram_transcript=FILE.
   * uart_tx is received at 115200 8N1 (the start bit checked at its middle, each bit sampled
     at its middle, the stop bit checked); each character goes to +transcript=FILE as it came
     and each line is printed as "tb_netlist: <time> uart| <line>";
@@ -34,6 +38,25 @@ module tb_netlist;
     wire       ps2_clk, ps2_data;
     pullup (ps2_clk);
     pullup (ps2_data);
+`ifdef ARTY_HAS_DDR
+    wire [13:0] ddr3_addr;
+    wire [2:0]  ddr3_ba;
+    wire        ddr3_ras_n, ddr3_cas_n, ddr3_we_n, ddr3_reset_n, ddr3_ck_p, ddr3_ck_n;
+    wire        ddr3_cke, ddr3_cs_n, ddr3_odt, dram_uart_tx;
+    wire [1:0]  ddr3_dm;
+    wire [15:0] ddr3_dq;
+    wire [1:0]  ddr3_dqs_p, ddr3_dqs_n;
+    genvar gq;
+    generate
+        for (gq = 0; gq < 16; gq = gq + 1) begin : g_dq
+            pulldown (ddr3_dq[gq]);
+        end
+        for (gq = 0; gq < 2; gq = gq + 1) begin : g_dqs
+            pulldown (ddr3_dqs_p[gq]);
+            pulldown (ddr3_dqs_n[gq]);
+        end
+    endgenerate
+`endif
 
     surfcpu_arty_a7_top dut (
         .clk100(clk100), .ck_rst_n(ck_rst_n), .sw(sw), .btn(btn), .led(led), .rgb(rgb),
@@ -42,6 +65,13 @@ module tb_netlist;
         .sd_cd_n(sd_cd_n), .sd_dat1(sd_dat1), .sd_dat2(sd_dat2),
         .vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b), .vga_hs(vga_hs), .vga_vs(vga_vs),
         .ps2_clk(ps2_clk), .ps2_data(ps2_data), .ps2_clk2(ps2_clk2), .ps2_data2(ps2_data2)
+`ifdef ARTY_HAS_DDR
+        ,
+        .ddr3_addr(ddr3_addr), .ddr3_ba(ddr3_ba), .ddr3_ras_n(ddr3_ras_n), .ddr3_cas_n(ddr3_cas_n),
+        .ddr3_we_n(ddr3_we_n), .ddr3_reset_n(ddr3_reset_n), .ddr3_ck_p(ddr3_ck_p), .ddr3_ck_n(ddr3_ck_n),
+        .ddr3_cke(ddr3_cke), .ddr3_cs_n(ddr3_cs_n), .ddr3_dm(ddr3_dm), .ddr3_odt(ddr3_odt),
+        .ddr3_dq(ddr3_dq), .ddr3_dqs_p(ddr3_dqs_p), .ddr3_dqs_n(ddr3_dqs_n), .dram_uart_tx(dram_uart_tx)
+`endif
     );
 
     // ------------------------------------------------------------------ settings
@@ -109,6 +139,42 @@ module tb_netlist;
         end
     end
 
+`ifdef ARTY_HAS_DDR
+    // ------------------------------------------------------------------ the memory controller's console
+    reg  [8*1024-1:0] dfile;
+    reg  [7:0] dline [0:255];
+    reg  [7:0] dch;
+    integer dfd = 0, dlen = 0, dlines = 0, dchars = 0, dk, dj;
+    initial begin
+        if ($value$plusargs("dram_transcript=%s", dfile)) dfd = $fopen(dfile, "wb");
+        wait (dram_uart_tx === 1'b1);
+        forever begin
+            @(negedge dram_uart_tx);
+            #(BIT_PS / 2.0);
+            if (dram_uart_tx === 1'b0) begin
+                for (dk = 0; dk < 8; dk = dk + 1) begin
+                    #(BIT_PS);
+                    dch[dk] = dram_uart_tx;
+                end
+                #(BIT_PS);
+                dchars = dchars + 1;
+                if (dfd != 0) begin $fwrite(dfd, "%c", dch); $fflush(dfd); end
+                if (dch == 8'h0a) begin
+                    $write("tb_netlist: %0d us dram| ", $time / 1000000);
+                    for (dj = 0; dj < dlen; dj = dj + 1) $write("%c", dline[dj]);
+                    $write("\n");
+                    $fflush;
+                    dlines = dlines + 1;
+                    dlen = 0;
+                end else if (dch != 8'h0d && dlen < 256) begin
+                    dline[dlen] = dch;
+                    dlen = dlen + 1;
+                end
+            end
+        end
+    end
+`endif
+
     // ------------------------------------------------------------------ the VGA syncs
     realtime hs_last = 0, hs_period = 0, vs_last = 0, vs_period = 0;
     integer  hs_edges = 0, vs_edges = 0;
@@ -128,6 +194,10 @@ module tb_netlist;
             $display("tb_netlist: %0d lines, %0d characters, %0d framing errors, at %0d us of simulated time",
                      nlines, nchars, nframing, $time / 1000000);
             $display("tb_netlist: LEDs %b, RGB LEDs %h", led, rgb);
+`ifdef ARTY_HAS_DDR
+            $display("tb_netlist: the memory controller's console: %0d lines, %0d characters", dlines, dchars);
+            if (dfd != 0) $fclose(dfd);
+`endif
             if (hs_edges > 1 && vs_edges > 1)
                 $display("tb_netlist: VGA hsync every %0.3f us (%0d), vsync every %0.3f ms (%0d)",
                          hs_period / 1.0e6, hs_edges, vs_period / 1.0e9, vs_edges);

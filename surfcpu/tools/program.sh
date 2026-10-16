@@ -18,7 +18,8 @@
 #   bitstream  its header names BOARD's FPGA and package (boards.txt, bit_parts)
 #   manifest   the build manifest next to it (manifest.txt), if any, says every check passed and
 #              describes this file (SHA-256); flash needs one from tools/fpga-build.sh, for this
-#              board and part
+#              board and part. A flow manifest (tools/openxc7-build.sh's own) must also show
+#              every clock meeting nextpnr's timing
 # OPENFPGALOADER overrides the program's path.
 set -eu
 
@@ -31,7 +32,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --ftdi-serial)   [ $# -ge 2 ] || die "--ftdi-serial needs the cable's serial number"; serial=$2; shift 2 ;;
         --ftdi-serial=*) serial=${1#*=}; shift ;;
-        -h|--help)       sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)       sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)              die "unknown option $1" ;;
         *)               break ;;
     esac
@@ -166,6 +167,10 @@ case "$kind" in
                                if (r != "PASS" && r != "none in the design") print substr($0, 1, 20) r }' "$manifest")
         [ -n "$(grep '^check ' "$manifest")" ] || die "$manifest lists no checks; refusing"
         [ -z "$bad" ] || die "$manifest does not say the build passed its checks ($(echo "$bad" | sed 's/  */ /g' | tr '\n' ';')); refusing"
+        # and every clock met nextpnr's timing (a build that let nextpnr finish anyway, as a
+        # diagnostic run can, has its bitstream and checks but a FAIL clock line)
+        late=$(grep '^clock ' "$manifest" | grep -v ' PASS$' || true)
+        [ -z "$late" ] || die "$manifest shows a clock missing its timing ($(echo "$late" | sed -e 's/: constraint .*, achieved/:/' -e 's/, slack.*$//' | tr '\n' ';')); refusing"
         msha=$(sed -n 's/^bitstream .* sha256:\([0-9a-f]*\) .*/\1/p' "$manifest" | head -n 1)
         [ "$msha" = "$sha" ] || die "$manifest describes another bitstream (sha256 ${msha:-missing}, the file's is $sha); refusing" ;;
 esac

@@ -368,7 +368,9 @@ oxmanifest() {   # BLOCK_RAM_RESULT: an openxc7-build.sh manifest for $ox/flow_d
       echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"
       echo "check block RAM     $1 (contents decoded from the bitstream: check-bram.txt)"
       echo "check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)"
-      echo "check clocks        none in the design (MMCM/PLL dividers against XAPP888: check-clocks.txt)"; } > "$ox/manifest.txt"
+      echo "check clocks        none in the design (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+      echo "## timing"
+      echo "clock clk: constraint 100.00 MHz, achieved ${2:-200.00} MHz, slack +5.000 ns  ${3:-PASS}"; } > "$ox/manifest.txt"
 }
 oxmanifest "none in the design"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
@@ -378,6 +380,10 @@ check "openxc7 manifest: ... but no flash without tools/fpga-build.sh's manifest
 oxmanifest "FAIL"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
 check "openxc7 manifest: a failed check refused" has "does not say the build passed its checks (check block RAM FAIL"
+oxmanifest "PASS" 80.50 FAIL
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: a clock that misses nextpnr's timing refused (a diagnostic run's bitstream)" \
+    has "shows a clock missing its timing (clock clk: 80.50 MHz"
 oxmanifest "PASS"
 printf 'x' >> "$ox/flow_demo.bit"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
@@ -499,7 +505,7 @@ check "ddr designs: both define ARTY_HAS_DDR and read their generated files thro
 # ip/litedram/arty.sha256 with their hashes. build/ is ignored there, as in the repository.
 g=$t/gitrepo-ddr
 mkdir -p "$g"
-tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh tools/openxc7-build.sh boards/arty_a7 rtl spec/soc.toml |
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh tools/openxc7-build.sh tools/program.sh boards/arty_a7 rtl spec/soc.toml |
     ( cd "$g" && tar xf - )
 gv=build/litedram/arty/gateware
 gx=build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog
@@ -508,9 +514,9 @@ printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_c
 printf '00000013\n' > "$g/$gv/litedram_core_rom.init"
 : > "$g/$gv/litedram_core_sram.init"
 printf 'set_false_path -quiet -to [get_cells -hierarchical -filter {mr_ff == TRUE}]\n' > "$g/$gv/litedram_core.xdc"
-printf 'module VexRiscv (input wire clk); endmodule\n' > "$g/$gx/VexRiscv_Min.v"
+printf 'module VexRiscv (input wire clk); endmodule\n' > "$g/$gx/VexRiscv_Lite.v"
 { echo "# scratch: SHA-256 of the stand-ins"; echo "# generate: make litedram-gen"
-  for f in $gv/litedram_core.v $gv/litedram_core_rom.init $gv/litedram_core_sram.init $gv/litedram_core.xdc $gx/VexRiscv_Min.v; do
+  for f in $gv/litedram_core.v $gv/litedram_core_rom.init $gv/litedram_core_sram.init $gv/litedram_core.xdc $gx/VexRiscv_Lite.v; do
       echo "$(shasum -a 256 "$g/$f" | cut -d' ' -f1)  $f"; done; } > "$g/ip/litedram/arty.sha256"
 printf '/build/\n' > "$g/.gitignore"
 gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
@@ -557,6 +563,19 @@ check "define: nextpnr is given the DDR3L pins with their slew and termination" 
     grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
 check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \
     test "$(grep -c 'arty_a7_ddr3_timing.xdc' "$gd/nextpnr-not-checked.txt")" -eq 6
+run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: program.sh loads the DDR design's bitstream (fake openFPGALoader)" \
+    test "$rc" -eq 0 -a -n "$(grep -- "-b arty_a7_100t $gd/surfcpu_arty_a7_ddr_bramdiag.bit" "$FAKE_LOG")"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_TIMING=FAIL \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "define: a DDR build that misses timing fails, with no bitstream under the design's name" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^reason = ".*timing not met' "$gd/manifest.txt")"
+cp "$gd/openxc7/surfcpu_arty_a7_top.bit" "$t/ddr-failed.bit"
+cp "$gd/manifest.txt" "$t/manifest.txt"
+run env FAKE_IDCODE=0x13631093 "$g/tools/program.sh" volatile arty_a7_100t "$t/ddr-failed.bit"
+check "define: ... and program.sh refuses that run's bitstream (its manifest says fail)" \
+    test "$rc" -ne 0 -a -z "$(grep -- '-b arty_a7_100t' "$FAKE_LOG")"
+rm -f "$t/manifest.txt" "$t/ddr-failed.bit"
 rm -f "$t/conf.ddr"                                     # no build-host.conf again
 rm -rf "$g"
 
