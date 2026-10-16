@@ -1,0 +1,15 @@
+# SurfCPU: SHA-256 of the generated LiteDRAM files the DDR designs build from (paths relative
+# to surfcpu/, sha256sum format). File: arty.sha256, written by ip/litedram/lock.sh write.
+# generate: make litedram-gen
+# ip/litedram/generate.sh makes them byte for byte the same on every run, in the toolchain
+# image surfcpu-toolchain:2026-10-15 (whose RISC-V GCC compiles the calibration BIOS) from the
+# generator ip/litedram/setup.sh pins, ip/litedram/arty.yml and SOURCE_DATE_EPOCH
+# 1790239353 (the LiteDRAM commit's time). tools/fpga-build.sh and
+# make litedram-gen check them (ip/litedram/lock.sh check). The last line is the simulation
+# core (make test-ddr-litedram), not part of any bitstream.
+846ad2e1b6bff54e40d126fcc05f134400aecd2b3a597047c0c8929a6fe388e3  build/litedram/arty/gateware/litedram_core.v
+5af71820b81869ba1df03301012d47c371390ccb8020f54cfa5bbe6122d5623a  build/litedram/arty/gateware/litedram_core_rom.init
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  build/litedram/arty/gateware/litedram_core_sram.init
+7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef  build/litedram/arty/gateware/litedram_core.xdc
+758874a989724fe2b92a5413b43265c9a5129638fee9d7358fcd6724992b598f  build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Min.v
+22b66255841e7bdde20a8a30cd9be71ba191d7cacfa4b3c0e68c87cc7f385c87  build/litedram/arty_sim/gateware/litedram_sim.v

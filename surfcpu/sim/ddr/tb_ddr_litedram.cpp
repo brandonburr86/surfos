@@ -1,17 +1,17 @@
 /*
 SurfCPU DDR bridge with LiteDRAM testbench
 --------------------
-File: tb_ddr_litedram.cpp Date: 10/15/26 (SurfCPU)
+File: tb_ddr_litedram.cpp Date: 10/16/26 (SurfCPU)
 --------------------
 Verilator testbench for tb_litedram_top.v: surf_ddr_bridge and surf_ddr_litedram_adapter in
-front of the LiteDRAM controller generated from ip/litedram/arty_sim.yml (its real controller,
-crossbar and native port; LiteDRAM's behavioural DRAM model in place of the PHY, all memory
-zero at the start). The same bench as tb_ddr_bridge.cpp (surfbus_bench.h): every response is
+front of the LiteDRAM controller generated from the board's ip/litedram/arty.yml with --sim (its
+real controller, crossbar and native port with the bitstream's settings; LiteDRAM's behavioural
+DRAM model in place of the PHY, all memory zero at the start). The same bench as tb_ddr_bridge.cpp (surfbus_bench.h): every response is
 checked against a reference memory, with the SURFBUS.md rules checked on every cycle. The
 default clocks are the open flow's: sys_clk 25 MHz, LiteDRAM's clock 100 MHz.
 
 usage: tb_ddr_litedram [--test NAME|all] [--seed N] [--count N] [--sys-ns P] [--ui-ns P] [--jitter F]
-tests: basic lanes bounds alias random stream precal sysreset all
+tests: basic lanes bounds alias random stream precal calerror sysreset all
 */
 #include <cstdio>
 #include <cstdlib>
@@ -26,12 +26,14 @@ using namespace surfddr;
 
 namespace {
 
-// The controller lives inside the top; the only input is "calibration finished".
+// The controller lives inside the top; the only inputs are "calibration finished" and whether
+// it failed (the BIOS's report on the board).
 struct LiteSide {
     bool init_go = true;
-    void init(Vtb_litedram_top &t) { t.init_go = init_go; }
+    bool init_fail = false;
+    void init(Vtb_litedram_top &t) { t.init_go = init_go; t.init_fail = init_fail; }
     void pre_ui_rise(Vtb_litedram_top &) {}
-    void post_ui_rise(Vtb_litedram_top &t) { t.init_go = init_go; }
+    void post_ui_rise(Vtb_litedram_top &t) { t.init_go = init_go; t.init_fail = init_fail; }
     uint64_t done() const { return 0; }
     bool idle() const { return true; }
     bool observable() const { return false; }
@@ -45,6 +47,7 @@ struct LiteSide {
 using LiteBench = Bench<Vtb_litedram_top, LiteSide>;
 
 constexpr uint64_t kCalibWait = 2000;   // sys cycles for the init_done write to come through
+constexpr uint64_t kCalibLimit = 20000; // tb_litedram_top's CALIB_TIMEOUT_CYCLES
 
 bool t_basic(const Options &o) {
     LiteBench b(o, LiteSide(), "basic", true, 0);
@@ -164,6 +167,37 @@ bool t_precal(const Options &o) {
     return ok;
 }
 
+// The BIOS's failure report (init_error, then init_done, as liblitedram writes them when its
+// memory test fails on the board): the bridge never calibrates and refuses every access at once,
+// the controller's native port stays blocked, and calib_fail comes when the bridge's limit runs
+// out (CALIB_TIMEOUT_CYCLES after reset), with calib_done 0 for good.
+bool t_calerror(const Options &o) {
+    LiteSide side;
+    side.init_fail = true;
+    LiteBench b(o, side, "calerror", true, 0);
+    uint32_t stream = 0;
+    for (int i = 0; i < 200; ++i) {
+        Rsp s = b.access(random_req(b.rng(), stream), static_cast<int>(b.rng().range(0, 40)));
+        if (!s.got || !s.err || s.latency != 0) b.fail("access after init_error not refused at once");
+        if (b.calib_done()) b.fail("calib_done after init_error");
+        if (b.failures) break;
+    }
+    while (!b.calib_fail() && b.cycle() < kCalibLimit + 100) b.tick();
+    const uint64_t seen = b.cycle();
+    if (!b.calib_fail()) b.fail("calib_fail not set %llu sys cycles after reset", (unsigned long long)seen);
+    else if (seen < kCalibLimit) b.fail("calib_fail before the limit (sys cycle %llu)", (unsigned long long)seen);
+    for (int i = 0; i < 50; ++i) {
+        Rsp s = b.access(random_req(b.rng(), stream));
+        if (!s.got || !s.err || s.latency != 0) b.fail("access after calib_fail not refused at once");
+        if (b.calib_done() || !b.calib_fail()) b.fail("calib_done/calib_fail changed after the failure");
+    }
+    bool ok = b.finish();
+    char extra[64];
+    std::snprintf(extra, sizeof extra, "calib_fail_seen_at_cycle=%llu", (unsigned long long)seen);
+    b.summary(extra);
+    return ok;
+}
+
 // Random traffic with rst at random moments, in the middle of accesses too.
 bool t_sysreset(const Options &o) {
     LiteBench b(o, LiteSide(), "sysreset", true, 0);
@@ -202,6 +236,7 @@ bool run(const std::string &t, const Options &o) {
     if (t == "random") return t_random(o);
     if (t == "stream") return t_stream(o);
     if (t == "precal") return t_precal(o);
+    if (t == "calerror") return t_calerror(o);
     if (t == "sysreset") return t_sysreset(o);
     std::printf("tb_ddr_litedram: unknown test %s\n", t.c_str());
     return false;
@@ -213,13 +248,13 @@ int main(int argc, char **argv) {
     Options o;
     o.ui_ns = 10.0;                     // LiteDRAM's 100 MHz clock unless told otherwise
     if (!parse_options(argc, argv, o)) return 2;
-    const char *all[] = {"basic", "lanes", "bounds", "alias", "random", "stream", "precal", "sysreset"};
+    const char *all[] = {"basic", "lanes", "bounds", "alias", "random", "stream", "precal", "calerror", "sysreset"};
     bool ok = true;
     if (o.test == "all") {
         for (const char *t : all) ok = run(t, o) && ok;
     } else {
         ok = run(o.test, o);
     }
-    std::printf("tb_ddr_litedram: %s (LiteDRAM 2026.08 controller with its DRAM model)\n", ok ? "PASS" : "FAIL");
+    std::printf("tb_ddr_litedram: %s (LiteDRAM 2026.08 controller, ip/litedram/arty.yml, with its DRAM model)\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

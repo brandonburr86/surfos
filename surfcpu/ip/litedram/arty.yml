@@ -9,6 +9,7 @@
     # General ------------------------------------------------------------------
     "speedgrade": -1,          # FPGA speed grade
     "cpu":        "vexriscv",  # calibration CPU, inside the core
+    "cpu_variant": "minimal",  # RV32I without caches: enough for the BIOS's calibration
     "memtype":    "DDR3",      # DRAM type
     "uart":       "rs232",     # the BIOS console (calibration report) on the core's serial pins
 
