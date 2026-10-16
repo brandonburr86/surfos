@@ -1,5 +1,5 @@
 # surfcpu_tb: its own contract (exit codes, signature, trace)
-# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
 # command: make --no-print-directory test-cpu-tb
 
   ok   a passing program exits 0
@@ -17,4 +17,6 @@
   ok   --trace: 13 fields per record, order from 0
   ok   --trace: the last record is the store of 1 to tohost
   ok   --trace: execution starts at 0x80000000
-tb_selftest: 15/15 checks pass
+  ok   --trace-tail 3 keeps only the last 3 records of a long run
+  ok   --trace-tail 0 exits 3
+tb_selftest: 17/17 checks pass

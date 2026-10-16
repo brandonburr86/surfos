@@ -1,5 +1,5 @@
 # surfcpu_core: riscv-tests rv32ui/rv32um/rv32mi p tests on surfcpu_tb
-# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
 # command: make --no-print-directory test-cpu-riscv-tests
 
   rv32mi-p-breakpoint          not applicable: needs debug triggers (tselect/tdata), which SurfCPU does not have (fails as expected: surfcpu_tb: FAIL (test 2, tohost 0x00000005) after 173 cycles, 114 retired; seed 1 ilat 1:1 dlat 1:1; ibus 168 req 0 wait 0 err, dbus 1 req 0 wait 0 err; probes rd 0 wr 0)

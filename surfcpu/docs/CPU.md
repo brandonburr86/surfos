@@ -318,23 +318,23 @@ only one request in flight per port (SURFBUS.md version 1).
 ## 11. Resources (Yosys estimate)
 
 `make synth-cpu` runs Yosys 0.52 `synth_xilinx -family xc7 -flatten -noiopad` on
-`surfcpu_core` alone (without RVFI). Estimate (2026-10-15, the commit of this document):
+`surfcpu_core` alone (without RVFI). Estimate (2026-10-16, the commit of this document):
 
 | Resource | Count |
 |---|---|
-| LUTs (logic) | 3094 |
+| LUTs (logic) | 2740 |
 | LUTs as distributed RAM | 92 (23 RAM32M: register file 12, fetch buffer 11) |
-| Flip-flops | 937 |
+| Flip-flops | 938 |
 | CARRY4 | 151 |
-| MUXF7 / MUXF8 | 646 / 278 |
+| MUXF7 / MUXF8 | 412 / 158 |
 | DSP48E1 | 4 (the 33 x 33 multiplier) |
 | Block RAM | 0 |
 
-That is about 15 % of the LUTs of an xc7a35t (20,800) and 5 % of an xc7a100t (63,400).
+That is about 13 % of the LUTs of an xc7a35t (20,800) and 4 % of an xc7a100t (63,400).
 These are Yosys's numbers, not Vivado's post-route utilisation, which is pending. They move
-by 10-15 % with small RTL changes (the flattened ABC mapping is sensitive): an earlier
-revision gave 2694 LUTs, and the same RTL synthesised per module adds up to about 2830
-(core 1160, CSRs 632, ALU 487, multiplier/divider 330, decoder 106, fetch 111). The
+by 10-15 % with small RTL changes (the flattened ABC mapping is sensitive): earlier
+revisions gave 2694 and 3094 LUTs, and the RTL synthesised per module adds up to about
+2830 (core about 1160, CSRs 632, ALU 487, multiplier/divider 330, decoder 106, fetch 111). The
 largest single item is the ALU's three barrel shifters; one shared shifter would save a
 couple of hundred LUTs if space ever matters.
 
@@ -344,9 +344,9 @@ multiply into DSP48s (another track hit this). Three checks show it did not dele
 * Synthesised per module (`make synth-cpu-modules`, `docs/evidence/cpu/synth-modules.txt`),
   every register keeps its full width, listed bit by bit by the net on each flip-flop's
   output (`sim/cpu/synth_regs.py`): divider 139, CSRs 265, fetch unit 98, fetch-buffer
-  pointers 6, pipeline registers 433 (436 declared, less 3 bits of the exception-cause
+  pointers 6, pipeline registers 434 (437 declared, less 3 bits of the exception-cause
   fields that can never be 1: ID only produces causes 1, 2, 3 and 11, EX adds 0, 4 and 6),
-  941 in all; the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
+  942 in all; the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
   The flattened run above has 4 fewer, the always-zero low bits of `ex_pc` and `mem_pc`,
   which only show up as constants across the fetch unit's boundary.
 * `make synth-cpu-gate` writes the synthesised netlist (the same flow, with `RESET_PC` set to

@@ -1,5 +1,5 @@
 # surfcpu_core: Yosys synth_xilinx per module (no -flatten): the registers, DSPs and LUTRAMs are all there
-# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
+# commit c90fa98c03a0, dirty=0; 2026-10-16T04:54Z; container aarch64
 # command: make --no-print-directory synth-cpu-modules
 
 === $paramod$5e409397f8125c10efdfc50d62b8100b25ea7b9d\surf_fifo ===
@@ -11,7 +11,7 @@
      FDRE                           98
 === surfcpu_alu ===
 === surfcpu_core ===
-     FDRE                          432
+     FDRE                          433
      FDSE                            1
 === surfcpu_decode ===
 === surfcpu_muldiv ===
@@ -21,7 +21,7 @@
      RAM32M                         12
 === design hierarchy ===
      DSP48E1                         4
-     FDRE                          940
+     FDRE                          941
      FDSE                            1
      RAM32M                         23
 $paramod$5e409397f8125c10efdfc50d62b8100b25ea7b9d\surf_fifo: 6 flip-flops (FDRE 6)
@@ -51,7 +51,7 @@ $paramod\surfcpu_fetch\RESET_PC=32'00000000000000000000000000000000: 98 flip-flo
     out_drop_q               1
     out_q                    1
     pc_q                     32
-surfcpu_core: 433 flip-flops (FDRE 432, FDSE 1)
+surfcpu_core: 434 flip-flops (FDRE 433, FDSE 1)
     ex_a_pc                  1
     ex_a_zero                1
     ex_alu_op                4
@@ -98,6 +98,7 @@ surfcpu_core: 433 flip-flops (FDRE 432, FDSE 1)
     mem_valid                1
     mem_waiting              1
     mem_wfi                  1
+    mem_wfi_wait             1
     wb_rd                    5
     wb_wdata                 32
     wb_wen                   1
@@ -113,4 +114,4 @@ surfcpu_muldiv: 139 flip-flops (FDRE 139)
     quo                      32
     rem                      32
     want_rem                 1
-total: 941 flip-flops
+total: 942 flip-flops
