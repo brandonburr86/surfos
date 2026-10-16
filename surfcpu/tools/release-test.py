@@ -400,9 +400,10 @@ class ScratchRelease(unittest.TestCase):
         self.git("init", "-q")
         self.git("add", "-A")
         self.commit_all("scratch")
+        # (in the container, devenv/run.sh sets SURFCPU_BUILD_ID and SURFCPU_BUILD_DIRTY: the release refuses them)
         self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("SOURCE_DATE_EPOCH", "SURFCPU_FPGA_OUT", "SURFCPU_IN_CONTAINER", "DRY_RUN", "ROM",
-                                 "BIT", "SURFCPU_IMAGE", "SURFCPU_OPENXC7_IMAGE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL")}
+                    if k not in release.REFUSE_ENV + release.HOOKS + ("SOURCE_DATE_EPOCH", "SURFCPU_IN_CONTAINER",
+                                                                      "BIT", "MAKEFLAGS", "MFLAGS", "MAKELEVEL")}
         self.env.update(SURFCPU_RELEASE_TEST="1", SURFCPU_RELEASE_RUN=str(self.fakes / "run.sh"),
                         SURFCPU_RELEASE_FPGA=str(self.fakes / "fpga-build"),
                         SURFCPU_RELEASE_DOCKER=str(self.fakes / "docker"), DOCKER=str(self.fakes / "docker"),
@@ -871,8 +872,9 @@ class FlashFixture(unittest.TestCase):
         self.bin.write_bytes(stream)
         self.log = self.dir / "calls.log"
         self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL", "OPENFPGALOADER", "BIT", "DESIGN", "BOARD",
-                                 "SURFCPU_FPGA_OUT", "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "SURFCPU_IN_CONTAINER")}
+                    if k not in release.REFUSE_ENV + ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL", "OPENFPGALOADER", "BIT",
+                                                      "DESIGN", "BOARD", "MAKEFLAGS", "MFLAGS", "MAKELEVEL",
+                                                      "SURFCPU_IN_CONTAINER")}
         self.env.update(PATH=SAFE_PATH, FAKE_LOG=str(self.log), FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
 
     def record(self, bit: Path, **over):
