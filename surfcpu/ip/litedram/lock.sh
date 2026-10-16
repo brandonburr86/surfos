@@ -24,7 +24,7 @@ FILES="build/litedram/arty/gateware/litedram_core.v
 build/litedram/arty/gateware/litedram_core_rom.init
 build/litedram/arty/gateware/litedram_core_sram.init
 build/litedram/arty/gateware/litedram_core.xdc
-build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Min.v
+build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
 build/litedram/arty_sim/gateware/litedram_sim.v"
 
 case "${1:-}" in

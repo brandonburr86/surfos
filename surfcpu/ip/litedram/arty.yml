@@ -9,7 +9,9 @@
     # General ------------------------------------------------------------------
     "speedgrade": -1,          # FPGA speed grade
     "cpu":        "vexriscv",  # calibration CPU, inside the core
-    "cpu_variant": "minimal",  # RV32I without caches: enough for the BIOS's calibration
+    "cpu_variant": "lite",     # RV32IM with an instruction cache: the BIOS calibrates in about
+                               # 1 s (minimal, without the cache, needs about 2.4 s: longer than
+                               # SurfBoot's 2 s wait; docs/DDR.md section 10)
     "memtype":    "DDR3",      # DRAM type
     "uart":       "rs232",     # the BIOS console (calibration report) on the core's serial pins
 

@@ -157,9 +157,9 @@ def main() -> int:
     allx = []
     allx += report(out / "arty", "litedram_core")
     allx += report(out / "arty_sim", "litedram_sim")
-    vex = Path("build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Min.v")
+    vex = Path("build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v")
     if vex.exists():
-        allx.append(f"VexRiscv_Min.v (the arty core's calibration CPU, the minimal variant, read beside it): sha256 {sha(vex)}")
+        allx.append(f"VexRiscv_Lite.v (the arty core's calibration CPU, the lite variant, read beside it): sha256 {sha(vex)}")
     allx += compare(out)
     print("\n".join(allx))
     return 1 if any(l.startswith("PROBLEM") for l in allx) else 0

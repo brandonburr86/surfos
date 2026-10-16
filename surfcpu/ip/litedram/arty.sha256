@@ -7,9 +7,9 @@
 # 1790239353 (the LiteDRAM commit's time). tools/fpga-build.sh and
 # make litedram-gen check them (ip/litedram/lock.sh check). The last line is the simulation
 # core (make test-ddr-litedram), not part of any bitstream.
-846ad2e1b6bff54e40d126fcc05f134400aecd2b3a597047c0c8929a6fe388e3  build/litedram/arty/gateware/litedram_core.v
-5af71820b81869ba1df03301012d47c371390ccb8020f54cfa5bbe6122d5623a  build/litedram/arty/gateware/litedram_core_rom.init
+150b86df5d61bb67ef4983d26e0a6528b41d5dacdf38883b23795ded09a325f4  build/litedram/arty/gateware/litedram_core.v
+9a7e0bb03b7133a1c2befacff4268893fff53c1d575eefc5cb88fcab81056a7d  build/litedram/arty/gateware/litedram_core_rom.init
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  build/litedram/arty/gateware/litedram_core_sram.init
 7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef  build/litedram/arty/gateware/litedram_core.xdc
-758874a989724fe2b92a5413b43265c9a5129638fee9d7358fcd6724992b598f  build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Min.v
+90e0b8f5912df2532d12bc766b110a632c1b85dd82b8aecd431d715c25f4cbbe  build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
 22b66255841e7bdde20a8a30cd9be71ba191d7cacfa4b3c0e68c87cc7f385c87  build/litedram/arty_sim/gateware/litedram_sim.v
