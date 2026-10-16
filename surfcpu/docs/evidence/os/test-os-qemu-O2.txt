@@ -1,5 +1,5 @@
-# test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 123 of 123 checks passed in 43 s
-# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 09:07:32 UTC
+# test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 132 of 132 checks passed in 46 s
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 10:33:08 UTC
 ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
 ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
 ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1
@@ -72,9 +72,9 @@ ok   sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LF
 ok   sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT
 ok   sdsim: fsck.fat -n finds the volume clean
 ok   sdsim: poweroff
-ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 375216 bytes, CRC 94cf1e4b, build 4423f13c
+ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 375856 bytes, CRC 42b9b14a, build b5d7fd29
 ok   package: SURFOS.BIN copied to its load address boots to the shell
-ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1174096)
+ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1174736)
 ok   package: poweroff
 ok   card: mkcard.py makes a 48 MiB card image with the standard directories and /BOOT/SURFOS.BIN
 ok   card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1
@@ -96,7 +96,7 @@ ok   faults: ERR.BIN holds what cp wrote before the card refused everything: the
 ok   faults: eject once the card works: safe to remove; the card image saved
 ok   faults: on the host every file the commands wrote is there and whole (MUTE.TXT not made: its open had failed)
 ok   faults: BIG.BIN untouched, ERR.BIN the first 514560 bytes of it
-ok   faults: fsck.fat -n: /ERR.BIN; File size is 514560 bytes, cluster chain length is > 514560 bytes.; Truncating file to 514560 bytes.; Free cluster summary wrong (123936 vs. really 123939); Auto-correcting. (the clusters cp had taken when the card refused the rest stay in ERR.BIN's chain past its size; nothing else)
+ok   faults: fsck.fat -n finds the volume clean (audit B4: the clusters cp had taken past what it could write went back to the free pool)
 ok   faults: poweroff
 ok   pull: the card taken out while mounted read-write: within half a second the kernel says so, and that what was not yet written is lost
 ok   pull: a write afterwards is refused (I/O error), the mount stays, marked "unplugged: umount it"
@@ -123,3 +123,12 @@ ok   pull in mv into a folder: "mv" says "not all of it reached /sd0p1", the car
 ok   pull in mv into a folder: fsck.fat -n finds Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; /MOVES.TXT  and; /Folder/Moved-file.txt; share clusters.; Truncating second to 0 bytes.; /Folder/Moved-file.txt; File size is 18 bytes, cluster chain length is 0 bytes.; Truncating file to 0 bytes. (a name too many: the moved file under both names, never under none)
 ok   pull in write over a file: "write" says "not all of it reached /sd0p1", the card is out after its first block
 ok   pull in write over a file: fsck.fat -n finds Reclaimed 1 unused cluster (512 bytes).; Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.; Automatically removing dirty bit.; Free cluster summary wrong (124946 vs. really 124947); Auto-correcting.
+ok   full: a stick 3003 clusters of 512 bytes from full (mtools filled the rest): df says 1.4 MB free
+ok   full: a 1 MB cp fits; the next one says "cp: write: No space left on device" when the space runs out (0.1 s, no hang)
+ok   full: the copy that did not fit is whole up to what fitted: the first 488960 bytes of BIG.BIN (955 clusters, every free one)
+ok   full: df says 0 KB free; a write ("write: No space left on device") and a mkdir (the same) fail at once, no NEWDIR left behind
+ok   full: rm gives the space back (df: 477 KB free) and a write works again
+ok   full: eject: safe to remove; the card image saved
+ok   full: fsck.fat -n finds the volume clean
+ok   full: on the host BIG.BIN, the copy that fitted, the filler and the stick's own files are whole, MORE.TXT holds what was written after the rm, TWO.BIN is gone
+ok   full: poweroff

@@ -1,14 +1,14 @@
-# test-os-persist: 17 of 17 checks passed in 144 s (write 274516515 cycles = 10.981 s simulated in 79.7 s wall; reboot 220117221 cycles = 8.805 s simulated in 63.7 s wall; the RTL of surfcpu_soc with the C++ models, not the board)
-# 2026-10-16 09:10:51 UTC
+# test-os-persist: 17 of 17 checks passed in 147 s (write 274686596 cycles = 10.987 s simulated in 80.9 s wall; reboot 220304945 cycles = 8.812 s simulated in 65.5 s wall; the RTL of surfcpu_soc with the C++ models, not the board)
+# 2026-10-16 10:36:34 UTC
 ok   card: mkcard.py makes it (/BOOT/CMDLINE.TXT "ascii sd=rw"; in /USERS/DOCUMENTS HELLO.TXT, a 160 KiB DATA.BIN, LOG.TXT, OLD.TXT, RENAME.TXT and DELETE.TXT)
-ok   write: every expected line in order (output matched after 274516515 cycles (10.981 s simulated) in 79.7 s wall (3.45 M cycles/s); UART 307 bytes in, 3483 out, 0 framing errors; DDR calibrated, 3727541 reads 2130787 writes 21430220 fetches 0 errors; exit 0)
+ok   write: every expected line in order (output matched after 274686596 cycles (10.987 s simulated) in 80.9 s wall (3.40 M cycles/s); UART 307 bytes in, 3501 out, 0 framing errors; DDR calibrated, 3729244 reads 2131833 writes 21439602 fetches 0 errors; exit 0)
 ok   write: SurfBoot boots the kernel with sd=rw from /BOOT/CMDLINE.TXT; /sd0p1 mounted read-write
 ok   write: mkdir, write, cp (163840 bytes), write over, append, mv, rm: each done without a word of error, each followed by the shell's sync
 ok   write: ls /sd0p1/USERS/DOCUMENTS/Saved-notes: note.txt, Big-copy.bin and Renamed-file.txt with their sizes
 ok   write: sync, then eject sd0: "/sd0p1 unmounted", "sd0: safe to remove"
 ok   write: surfsim --sd-flush wrote 334 card blocks back into the image
 ok   write: no panic, no killed task, no I/O or read-only error
-ok   reboot: every expected line in order (output matched after 220117221 cycles (8.805 s simulated) in 63.7 s wall (3.46 M cycles/s); UART 174 bytes in, 3650 out, 0 framing errors; DDR calibrated, 2743872 reads 1626495 writes 16464899 fetches 0 errors; exit 0)
+ok   reboot: every expected line in order (output matched after 220304945 cycles (8.812 s simulated) in 65.5 s wall (3.36 M cycles/s); UART 174 bytes in, 3668 out, 0 framing errors; DDR calibrated, 2747228 reads 1627438 writes 16474791 fetches 0 errors; exit 0)
 ok   reboot: the card mounts again, clean (eject set the clean-shutdown bit)
 ok   reboot: the names and sizes: Saved-notes/ with note.txt, Big-copy.bin, Renamed-file.txt; RENAME.TXT moved away, DELETE.TXT gone
 ok   reboot: every file read back through the SD driver has the CRC it was written with (6 files, the 160 KiB copy among them)
@@ -19,48 +19,48 @@ ok   host: mdir lists the folder: Big-copy.bin and Renamed-file.txt by their lon
 ok   host: mcopy gives back all 7 files byte for byte; RENAME.TXT and DELETE.TXT are not in /USERS/DOCUMENTS
 
 write run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
-  SurfBoot opens the package         1347216  (0.054 s)
-  SurfBoot loads it                 47435182  (1.897 s)
-  SurfBoot checks it                47715112  (1.909 s)
-  the command line                  47905876  (1.916 s)
-  the handoff                       48088156  (1.924 s)
-  the card, read-write              74767256  (2.991 s)
-  the card mounted                  86837057  (3.473 s)
-  the banner                        95995285  (3.840 s)
-  the shell prompt                 100745684  (4.030 s)
-  cd                               102871486  (4.115 s)
-  mkdir                            108996606  (4.360 s)
-  write                            115152347  (4.606 s)
-  cp                               229005847  (9.160 s)
-  write over                       236992806  (9.480 s)
-  append                           241913467  (9.677 s)
-  mv                               247612424  (9.904 s)
-  rm                               252303742  (10.092 s)
-  ls                               259181519  (10.367 s)
-  sync                             263276166  (10.531 s)
-  eject: unmounted                 271279718  (10.851 s)
-  eject: safe                      273252174  (10.930 s)
-  models: card build/os/system_persist/card.img: 1105 blocks read, 356 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+  SurfBoot opens the package         1347308  (0.054 s)
+  SurfBoot loads it                 47507967  (1.900 s)
+  SurfBoot checks it                47787897  (1.912 s)
+  the command line                  47978661  (1.919 s)
+  the handoff                       48160941  (1.926 s)
+  the card, read-write              74844560  (2.994 s)
+  the card mounted                  86914488  (3.477 s)
+  the banner                        96071312  (3.843 s)
+  the shell prompt                  98954070  (3.958 s)
+  cd                               102987122  (4.119 s)
+  mkdir                            109114994  (4.365 s)
+  write                            115271258  (4.611 s)
+  cp                               229169131  (9.167 s)
+  write over                       237157208  (9.486 s)
+  append                           242072474  (9.683 s)
+  mv                               247782867  (9.911 s)
+  rm                               252469740  (10.099 s)
+  ls                               259346295  (10.374 s)
+  sync                             263437803  (10.538 s)
+  eject: unmounted                 271441271  (10.858 s)
+  eject: safe                      273420266  (10.937 s)
+  models: card build/os/system_persist/card.img: 1106 blocks read, 356 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
 
 reboot run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
-  SurfBoot opens the package         1347216  (0.054 s)
-  SurfBoot loads it                 47435182  (1.897 s)
-  SurfBoot checks it                47715112  (1.909 s)
-  the command line                  47905876  (1.916 s)
-  the handoff                       48088156  (1.924 s)
-  the card, read-write              74767256  (2.991 s)
-  the card mounted                  86837057  (3.473 s)
-  the banner                        95995285  (3.840 s)
-  the shell prompt                 100745684  (4.030 s)
-  cd                               102871486  (4.115 s)
-  ls                               112390226  (4.496 s)
-  crc32                            120390629  (4.816 s)
-  cat                              126791396  (5.072 s)
-  cd the folder                    130291998  (5.212 s)
-  ls the folder                    137111152  (5.484 s)
-  crc32 the folder                 212820961  (8.513 s)
-  cat the folder                   218589840  (8.744 s)
-  models: card build/os/system_persist/card.img: 1097 blocks read, 2 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+  SurfBoot opens the package         1347308  (0.054 s)
+  SurfBoot loads it                 47507967  (1.900 s)
+  SurfBoot checks it                47787897  (1.912 s)
+  the command line                  47978661  (1.919 s)
+  the handoff                       48160941  (1.926 s)
+  the card, read-write              74844560  (2.994 s)
+  the card mounted                  86914488  (3.477 s)
+  the banner                        96071312  (3.843 s)
+  the shell prompt                  98954070  (3.958 s)
+  cd                               102987122  (4.119 s)
+  ls                               112504445  (4.500 s)
+  crc32                            120503412  (4.820 s)
+  cat                              126904383  (5.076 s)
+  cd the folder                    130404467  (5.216 s)
+  ls the folder                    137230079  (5.489 s)
+  crc32 the folder                 213002779  (8.520 s)
+  cat the folder                   218770726  (8.751 s)
+  models: card build/os/system_persist/card.img: 1098 blocks read, 2 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
 
 the write run, from the prompt (escape sequences removed):
   ~#> cd /sd0p1/USERS/DOCUMENTS

@@ -456,7 +456,7 @@ block answered "write error": the console says so and "takes writes again" at th
 the write succeeds; every block refused: `write: not all of it reached /sd0p1: I/O error` 348 ms
 after the prompt it was typed at, `eject sd0 stays mounted`; the fault cleared, `sync` writes
 what the cache kept; the card taken out after that sync: the watch says "the card was taken out"
-276 ms later (its two looks are 200 ms apart), `sdinfo` reads `card absent` from STATUS.CARD, a
+286 ms later (its two looks are 200 ms apart), `sdinfo` reads `card absent` from STATUS.CARD, a
 write is refused (`I/O error`); `umount`, the card put back: sd0 again, `mount sd0p1` says "not
 unmounted cleanly", and the files read back by CRC; then the card out right after the 2nd block
 of a new file's write: the write fails and the watch says so. On the host the card as it came
