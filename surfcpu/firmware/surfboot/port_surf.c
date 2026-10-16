@@ -14,7 +14,28 @@ the machine.
 
 #define SPI(off) REG(SURF_SPI_BASE, off)
 
-uint32_t port_now_us(void) { return timer_now32(); }
+static int timer_dead;
+static uint32_t soft_us;
+
+/* mtime in microseconds; with a timer found not to run (port_timer_check), a software count
+ * of about 4 us per call instead, so that every bounded wait in SurfBoot stays bounded. */
+uint32_t port_now_us(void)
+{
+    if (!timer_dead)
+        return timer_now32();
+    soft_us += 4u;
+    return soft_us;
+}
+
+int port_timer_check(void)
+{
+    uint32_t t0 = timer_now32();
+    for (uint32_t i = 0; i < 200000u; i++)          /* about 25 ms at 25 MHz: mtime must move */
+        if (timer_now32() != t0)
+            return 1;
+    timer_dead = 1;
+    return 0;
+}
 
 int port_card_present(void)
 {

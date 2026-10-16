@@ -23,7 +23,7 @@ the real evidence. What it models:
     surfemu --rom build/fw/surfboot.mem [--card IMG] [card options as fwtest] [--ddr ok|absent|fail|never]
             [--btn MASK] [--send TRIGGER=TEXT]... [--expect TEXT]... [--fail-on TEXT]...
             [--max-ms N] [--screen FILE] [--trace-traps] [--quiet] [--card-insert-ms N]
-            [--ddr-fault-at ADDR] [--ddr-stuck-at ADDR] [--ddr-size BYTES]
+            [--ddr-fault-at ADDR] [--ddr-stuck-at ADDR] [--ddr-size BYTES] [--timer-stuck]
 
 --rom takes a .mem file (docs/MODULES.md section 5, the exact ROM format) or a raw .bin.
 --send queues TEXT (with \\n, \\r, \\e escapes) on the UART receiver once the output
@@ -107,7 +107,8 @@ static void emu_fail(const char *fmt, ...)
 }
 
 static uint64_t now_us(void) { return cycles * SURF_TIMEBASE_HZ / sys_hz; }
-static uint64_t mtime(void) { return now_us() + timer.mtime_offset; }
+static int timer_stuck;
+static uint64_t mtime(void) { return timer_stuck ? 0 : now_us() + timer.mtime_offset; }
 
 /* ---------------- console output and the expect/send script ---------------- */
 static void finish(int code);
@@ -941,6 +942,7 @@ int main(int argc, char **argv)
         { "trace-traps", no_argument, 0, 'T' }, { "quiet", no_argument, 0, 'q' },
         { "card-insert-ms", required_argument, 0, 'I' }, { "ddr-fault-at", required_argument, 0, 'F' },
         { "ddr-size", required_argument, 0, 'Z' }, { "ddr-stuck-at", required_argument, 0, 'K' },
+        { "timer-stuck", no_argument, 0, 'X' },
         { 0, 0, 0, 0 },
     };
     struct sdsim_opts co;
@@ -986,6 +988,7 @@ int main(int argc, char **argv)
         case 'F': ddr_fault_at = (uint32_t)strtoul(optarg, 0, 0) & ~3u; break;
         case 'Z': ddr_size = (uint32_t)strtoul(optarg, 0, 0); break;
         case 'K': ddr_stuck_at = (uint32_t)strtoul(optarg, 0, 0) & ~3u; break;
+        case 'X': timer_stuck = 1; break;
         default: return 3;
         }
     }

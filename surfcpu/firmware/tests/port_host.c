@@ -63,6 +63,8 @@ uint32_t port_now_us(void)
     return (uint32_t)(host.now_ns / 1000u);
 }
 
+int port_timer_check(void) { return 1; }
+
 int port_card_present(void)
 {
     if (host.present_hook)

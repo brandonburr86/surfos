@@ -17,6 +17,7 @@ image files.
 
 /* A free-running microsecond counter (mtime's low word; wraps after about 71 minutes). */
 uint32_t port_now_us(void);
+int port_timer_check(void);                     /* 0: mtime does not run (a software count is used) */
 
 /* The microSD socket behind the SPI master (docs/MEMORY-MAP.md, spi). */
 int port_card_present(void);                    /* card-detect switch; 1 if the adapter has none */

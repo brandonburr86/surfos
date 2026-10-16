@@ -172,8 +172,12 @@ int main(void)
                       "the CPU or the ROM is faulty, and no package could be checked"));
         monitor(err);
     }
-    while (timer_now() < 20000u)                    /* let the button debouncers settle */
-        ;
+    if (!port_timer_check())
+        con_printf("timer: mtime does not advance (stuck at 0x%08x): the SoC's timer is faulty; SurfBoot goes "
+                   "on with approximate timeouts\n", timer_now32());
+    uint32_t t0 = port_now_us();
+    while ((uint32_t)(port_now_us() - t0) < 20000u && timer_now() < 20000u)
+        ;                                           /* let the button debouncers settle */
     uint32_t btn = port_buttons();
     if (fw_setjmp(recover) == 0) {
         fw_trap_recover(&recover);

@@ -178,6 +178,18 @@ def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello()})
 
 
+@scenario("dead_timer_still_boots", args=["--timer-stuck"],
+          expect=["timer: mtime does not advance", "ddr: calibrated", "HELLO: handoff OK"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
+@scenario("dead_timer_and_no_card_still_reaches_the_monitor", args=["--timer-stuck"] + send("surfboot> ", "info\\r"),
+          expect=["timer: mtime does not advance", "(NO_CARD)", "surfboot> ", "sysinfo: magic 46525553"])
+def _(p):
+    return None
+
+
 @scenario("card_never_finishes_init", args=["--acmd41-busy", "-1"], expect=["still initializing after 2 s", "(SD_INIT)"])
 def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello()})
