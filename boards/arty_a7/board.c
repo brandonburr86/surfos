@@ -221,6 +221,7 @@ static int drv_gpio(void) {
 
 static struct driver drivers[] = {
     { "gpio",    drv_gpio,      0, 0 },
+    { "ps2kbd",  arty_ps2_init, 0, 0 },
 };
 
 struct driver *board_drivers(u_int *count) {
@@ -229,6 +230,8 @@ struct driver *board_drivers(u_int *count) {
 }
 
 void board_print_devices(void) {
+    char buf[160];
+    printf("    keyboard  %s\n", arty_ps2_describe(buf, sizeof(buf)));
 }
 
 /**** the board's commands ****/
@@ -254,6 +257,7 @@ static int cmd_leds(int argc, char **argv) {
 
 static const struct command board_cmds[] = {
     { "leds",    "[0-15]",   "the LEDs, switches and buttons (set LD4..LD7)", cmd_leds, 0 },
+    { "kbdinfo", "",         "the PS/2 keyboard: state and error counters", arty_cmd_kbdinfo, 0 },
     { NULL, NULL, NULL, NULL, 0 }
 };
 

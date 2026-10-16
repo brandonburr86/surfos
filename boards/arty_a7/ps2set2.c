@@ -1,0 +1,81 @@
+/*
+SurfOS board: SurfCPU on the Arty A7 -- PS/2 scan code set 2 to set 1
+--------------------
+File: ps2set2.c Date: 10/15/26 (SurfCPU)
+--------------------
+See ps2set2.h. The table is the 8042's translation for the keys of a 102-key keyboard
+(IBM's set 1 and set 2 make codes, key by key); a byte it does not list is no key.
+*/
+
+#include "ps2set2.h"
+
+static const u8 set2_to_set1[0x85] = {
+    [0x01] = 0x43, [0x03] = 0x3F, [0x04] = 0x3D, [0x05] = 0x3B, [0x06] = 0x3C, [0x07] = 0x58,  /* F9 F5 F3 F1 F2 F12 */
+    [0x09] = 0x44, [0x0A] = 0x42, [0x0B] = 0x40, [0x0C] = 0x3E, [0x0D] = 0x0F, [0x0E] = 0x29,  /* F10 F8 F6 F4 Tab ` */
+    [0x11] = 0x38, [0x12] = 0x2A, [0x14] = 0x1D, [0x15] = 0x10, [0x16] = 0x02,                 /* Alt LShift Ctrl Q 1 */
+    [0x1A] = 0x2C, [0x1B] = 0x1F, [0x1C] = 0x1E, [0x1D] = 0x11, [0x1E] = 0x03, [0x1F] = 0x5B,  /* Z S A W 2 (E0: LWin) */
+    [0x21] = 0x2E, [0x22] = 0x2D, [0x23] = 0x20, [0x24] = 0x12, [0x25] = 0x05, [0x26] = 0x04,  /* C X D E 4 3 */
+    [0x27] = 0x5C, [0x29] = 0x39, [0x2A] = 0x2F, [0x2B] = 0x21, [0x2C] = 0x14, [0x2D] = 0x13,  /* (E0: RWin) Space V F T R */
+    [0x2E] = 0x06, [0x2F] = 0x5D, [0x31] = 0x31, [0x32] = 0x30, [0x33] = 0x23, [0x34] = 0x22,  /* 5 (E0: Menu) N B H G */
+    [0x35] = 0x15, [0x36] = 0x07, [0x3A] = 0x32, [0x3B] = 0x24, [0x3C] = 0x16, [0x3D] = 0x08,  /* Y 6 M J U 7 */
+    [0x3E] = 0x09, [0x41] = 0x33, [0x42] = 0x25, [0x43] = 0x17, [0x44] = 0x18, [0x45] = 0x0B,  /* 8 , K I O 0 */
+    [0x46] = 0x0A, [0x49] = 0x34, [0x4A] = 0x35, [0x4B] = 0x26, [0x4C] = 0x27, [0x4D] = 0x19,  /* 9 . / L ; P */
+    [0x4E] = 0x0C, [0x52] = 0x28, [0x54] = 0x1A, [0x55] = 0x0D, [0x58] = 0x3A, [0x59] = 0x36,  /* - ' [ = Caps RShift */
+    [0x5A] = 0x1C, [0x5B] = 0x1B, [0x5D] = 0x2B, [0x61] = 0x56, [0x66] = 0x0E, [0x69] = 0x4F,  /* Enter ] \ (102nd) BS KP1 */
+    [0x6B] = 0x4B, [0x6C] = 0x47, [0x70] = 0x52, [0x71] = 0x53, [0x72] = 0x50, [0x73] = 0x4C,  /* KP4 KP7 KP0 KP. KP2 KP5 */
+    [0x74] = 0x4D, [0x75] = 0x48, [0x76] = 0x01, [0x77] = 0x45, [0x78] = 0x57, [0x79] = 0x4E,  /* KP6 KP8 Esc Num F11 KP+ */
+    [0x7A] = 0x51, [0x7B] = 0x4A, [0x7C] = 0x37, [0x7D] = 0x49, [0x7E] = 0x46, [0x83] = 0x41,  /* KP3 KP- KP* KP9 Scroll F7 */
+    [0x84] = 0x54,                                                                             /* Alt+SysRq */
+};
+
+void ps2_set2_reset(struct ps2_set2 *s) {
+    s->e0 = s->f0 = false;
+    s->pause_left = 0;
+}
+
+u8 ps2_set2_translate(u8 code) {
+    return code < sizeof(set2_to_set1) ? set2_to_set1[code] : 0;
+}
+
+int ps2_set2_byte(struct ps2_set2 *s, u8 b, u8 out[2], int *reply) {
+    u8 code;
+    int n = 0;
+    *reply = -1;
+    if(s->pause_left) {                     /* E1 14 77 E1 F0 14 F0 77: nothing for the keyboard code */
+        s->pause_left--;
+        return 0;
+    }
+    switch(b) {
+    case 0xE1:
+        s->pause_left = 7;
+        s->e0 = s->f0 = false;
+        return 0;
+    case 0xE0:
+        s->e0 = true;
+        return 0;
+    case 0xF0:
+        s->f0 = true;
+        return 0;
+    case PS2_ACK: case PS2_RESEND: case PS2_BAT_OK: case PS2_BAT_FAIL1: case PS2_BAT_FAIL2:
+    case PS2_ECHO: case PS2_ERROR0: case PS2_ERROR1:
+        if(!s->e0 && !s->f0) {              /* none of these is a key byte */
+            *reply = b;
+            s->replies++;
+            return 0;
+        }
+        s->e0 = s->f0 = false;
+        s->unknown++;
+        return 0;
+    }
+    code = ps2_set2_translate(b);
+    if(!code) {
+        s->e0 = s->f0 = false;
+        s->unknown++;
+        return 0;
+    }
+    if(s->e0) out[n++] = 0xE0;
+    out[n++] = code | (s->f0 ? 0x80 : 0);
+    s->e0 = s->f0 = false;
+    s->keys++;
+    return n;
+}
