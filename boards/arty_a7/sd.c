@@ -154,7 +154,9 @@ int arty_cmd_sdinfo(int argc, char **argv) {
     printf("    surf_spi at 0x%08lx: card %s, divider %lu (identification %lu)\n", (u_long)SURF_SPI_BASE,
            spi_present(NULL) ? "present" : "absent", (u_long)(mmio_read32(SREG(SURF_SPI_DIV)) & SURF_SPI_DIV_DIV_MASK),
            (u_long)slow_div);
-    if(sd.taken_out || sd.put_in) printf("    card detect: taken out %lu times, put in %lu times since boot\n", sd.taken_out, sd.put_in);
+    if(sd.taken_out || sd.put_in)
+        printf("    card detect: taken out %lu time%s, put in %lu time%s since boot\n", sd.taken_out, sd.taken_out == 1 ? "" : "s",
+               sd.put_in, sd.put_in == 1 ? "" : "s");
     if(!sd.disk || !sd.card.ready) {
         if(!spi_present(NULL)) printf("    no card in the socket\n");
         else printf("    not initialized: %s (%s)\n", sd_strerror(sd.status), sd.card.why ? sd.card.why : "-");
