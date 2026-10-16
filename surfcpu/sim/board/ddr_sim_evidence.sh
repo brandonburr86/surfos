@@ -6,15 +6,16 @@
 #      generated board core, its BIOS and no memory (sim/board/ddr_top_sim.sh);
 #   2. make board-uart-expect-ddr BOARD=arty_a7_100t: SurfBoot booting SurfOS with the C++ DDR
 #      model (sim/board/uart_expect_ddr.sh);
-#   3. with DDR_SIM_NETLIST=1, make board-netlist-sim BOARD=arty_a7_100t
-#      DESIGN=surfcpu_arty_a7_ddr_bramdiag: the synthesized netlist of the last open-flow build of
-#      that design (the build stops after place and route, but its netlist is written), from its
-#      pins, with no memory (about an hour).
+#   3. with DDR_SIM_NETLIST=1, or alone with --netlist-only, make board-netlist-sim
+#      BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_bramdiag: the synthesized netlist of the last
+#      open-flow build of that design (the build stops after place and route, or earlier, but its
+#      netlist is written first), from its pins, with no memory (about an hour). A run without it
+#      keeps the last netlist simulation's record, which names its own source.
 # Writes docs/evidence/ddr/ddr-top-sim.txt and docs/evidence/board/uart-expect-ddr.txt.
 # --report-only writes them again from the last run's outputs.
 set -eu
-report_only=0
-[ "${1:-}" != --report-only ] || report_only=1
+mode=run
+case "${1:-}" in --report-only) mode=report ;; --netlist-only) mode=netlist ;; esac
 board=arty_a7_100t
 t=build/sim/board/ddr_sim_evidence
 out=docs/evidence/ddr/ddr-top-sim.txt
@@ -25,20 +26,34 @@ state=clean
 started=$(date +%s)
 d=build/sim/board/ddr_top
 
-if [ "$report_only" = 0 ]; then
-rm -rf "$t"
-mkdir -p "$t"
-echo "$rev ($state)" > "$t/source"
-if make --no-print-directory board-ddr-sim BOARD=$board > "$t/board-ddr-sim.txt" 2>&1; then rc=0; else rc=$?; fi
-echo "$rc" > "$t/board-ddr-sim.rc"
-if make --no-print-directory board-uart-expect-ddr BOARD=$board > "$t/uart-expect-ddr.txt" 2>&1; then rc=0; else rc=$?; fi
-echo "$rc" > "$t/uart-expect-ddr.rc"
-if [ "${DDR_SIM_NETLIST:-0}" = 1 ]; then
+netlist() {        # the post-synthesis simulation, into $t/netlist.*
+    rm -f "$t"/netlist*
+    n0=$(date +%s)
+    echo "$rev ($state)" > "$t/netlist.source"
     if make --no-print-directory board-netlist-sim BOARD=$board DESIGN=surfcpu_arty_a7_ddr_bramdiag \
            > "$t/netlist.txt" 2>&1; then rc=0; else rc=$?; fi
     echo "$rc" > "$t/netlist.rc"
-fi
-echo "$(( ($(date +%s) - started) / 60 ))" > "$t/minutes"
+    echo "$(( ($(date +%s) - n0) / 60 ))" > "$t/netlist.minutes"
+}
+if [ "$mode" = run ]; then
+    if [ "${DDR_SIM_NETLIST:-0}" = 1 ]; then
+        rm -rf "$t"
+    elif [ -d "$t" ]; then           # keep the last netlist simulation's record
+        find "$t" -mindepth 1 -maxdepth 1 ! -name 'netlist*' -exec rm -rf {} +
+    fi
+    mkdir -p "$t"
+    echo "$rev ($state)" > "$t/source"
+    if make --no-print-directory board-ddr-sim BOARD=$board > "$t/board-ddr-sim.txt" 2>&1; then rc=0; else rc=$?; fi
+    echo "$rc" > "$t/board-ddr-sim.rc"
+    if make --no-print-directory board-uart-expect-ddr BOARD=$board > "$t/uart-expect-ddr.txt" 2>&1; then rc=0; else rc=$?; fi
+    echo "$rc" > "$t/uart-expect-ddr.rc"
+    [ "${DDR_SIM_NETLIST:-0}" != 1 ] || netlist
+    echo "$(( ($(date +%s) - started) / 60 ))" > "$t/minutes"
+elif [ "$mode" = netlist ]; then
+    mkdir -p "$t"
+    netlist
+    echo "ddr_sim_evidence: netlist simulation exit $(cat "$t/netlist.rc") (records written by the next run or --report-only)"
+    exit 0
 fi
 [ -f "$t/minutes" ] || { echo "ddr_sim_evidence: no complete run in $t" >&2; exit 1; }
 
@@ -68,8 +83,11 @@ run() {           # DIR TITLE: one ddr_top_sim run
     run "$d/$board-surfboot-model" "SurfBoot with LiteDRAM's controller and DRAM model, no card"
     run "$d/$board-bramdiag-board" "the BRAM diagnostics with the generated board core (PHY, VexRiscv lite, BIOS ROM; models of its primitives), nothing on the DDR3L pins"
     if [ -f "$t/netlist.rc" ]; then
+        m=build/fpga/$board/surfcpu_arty_a7_ddr_bramdiag/manifest.txt
         echo
         echo "== the synthesized netlist of surfcpu_arty_a7_ddr_bramdiag ($board), nothing on the DDR3L pins: make board-netlist-sim exit $(cat "$t/netlist.rc")"
+        echo "   (simulated at source $(cat "$t/netlist.source") in $(cat "$t/netlist.minutes") minutes; the netlist of the open-flow build"
+        echo "   at $(sed -n 's/^source_revision = "\(.\{12\}\).*/\1/p' "$m" 2>/dev/null) with BUILD_ID $(sed -n 's/^build_id = "\(.*\)"/\1/p' "$m" 2>/dev/null), its boot ROM inside)"
         grep -E 'netlist_sim: (arty|tb_netlist: [0-9]+ lines|tb_netlist: LEDs|tb_netlist: the memory|tb_netlist: VGA|built in)' "$t/netlist.txt" | sed 's/^/  /'
         grep 'uart|\|dram|' "$t/netlist.txt" | sed -e 's/^netlist_sim: tb_netlist: */  /' | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'
     fi
