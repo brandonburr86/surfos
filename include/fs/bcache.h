@@ -25,8 +25,16 @@ reused meanwhile; bsync() tries each run once and fails when one did.
 (bdirty_order()): a device's blocks of one order reach it only after every
 dirty block of a lower order has, by bsync() and when a block is written to
 make room. FAT gives file data 0, its tables 1, directory entries 2, FSInfo 3,
-so whatever an interruption stops, nothing on the disk points at data that is
-not there yet.
+so that an interruption leaves what fsck.fat repairs rather than an entry
+pointing at data that is not there yet (fs/fat.c says what can still be left;
+10/16/26, B7: the order is checked at every write). An order, not atomicity: a
+request of several blocks can stop in the middle, and a card can lose the block
+it was writing when its power went.
+
+10/16/26 (audit B6): a device whose blocks fail keeps at most BCACHE_HOLD dirty
+blocks; past that its new writes fail at once (bcache_room(), bget()), and the
+rest of the cache stays the other devices'. Making room never writes to a
+device that refuses: a sync tries again, a failed run block by block.
 */
 
 #ifndef _FS_BCACHE_H
@@ -36,6 +44,7 @@ not there yet.
 
 #define BCACHE_BLOCKS 1024
 #define BCACHE_RUN    128               /* the most blocks one device request moves: 64 KB */
+#define BCACHE_HOLD   (BCACHE_BLOCKS / 4)   /* 10/16/26 (B6): a device's share of dirty blocks (bcache_room()) */
 
 struct bdev;
 
@@ -50,6 +59,7 @@ struct buf {
     bool wfail;                         /* its last write failed: dirty until a sync writes it, never reused before */
     u8 order;                           /* BORDER_*: when it is written (the lowest it was dirtied with) */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
+    u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
     u_int refs;
     struct buf *hnext, *hprev;          /* hash chain */
@@ -70,9 +80,17 @@ void bdirty(struct buf *b);                          /* changed: write it back l
 #define BORDER_MAX     3
 void bdirty_order(struct buf *b, u8 order);          /* bdirty(), written in that order (the lower, if dirty already) */
 void brelse(struct buf *b);
-int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed */
+int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed.
+                                                        Never with a block of the device held (10/16/26, B7: it waits for holders) */
+int bsync_order(struct bdev *dev, u8 top);           /* 10/16/26 (B7): bsync() of the orders 0 .. top only */
+/* 10/16/26 (B6): before a file system makes blocks of dev dirty: 0, or -1 when dev refuses writes and
+   already holds BCACHE_HOLD dirty blocks (the write must fail: EIO). A device that works and holds
+   that many writes some out first. bget() asks the same. */
+int bcache_room(struct bdev *dev);
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
+u_int bdirty_count(struct bdev *dev);                /* 10/16/26 (B10): dev's dirty blocks (umount says what it gives up) */
+int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
 
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache

@@ -1,8 +1,79 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
-Four rounds, newest first. Round 4 (10/16/26) changes the x86 kernel on purpose: a FAT write that stops early gives
-its clusters back (audit B4), and cp says why a write came up short.
+Five rounds, newest first. Round fs-fix (10/16/26) changes the x86 kernel on purpose: the review of B1-B4 and its fixes
+(audit B5-B11: the block cache's write order, a refusing device's share of the cache, failed order points put back,
+close and umount report what was not written). Round 4 (10/16/26) changes the x86 kernel on purpose: a FAT write that
+stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix, 10/16/26: the block cache and FAT after a review of B1-B4 (audit B5-B11)
+date: 2026-10-16 (local)
+tree: sc/fs-fix (from surfcpu 9b8621c) at f007529 (802442f for the O0 USB image: evidence files only between them);
+      the baseline is surfcpu 9b8621c's x86 code (git archive)
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-fs, surfos-sc-fs-o2 (and surfos-sc-fs-base for the baseline)
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B5-B11):
+  fs/bcache.c              blob 4e5dd5e8 (was b2ea4a8d)  B6-B9: the order checked at each write, a refusing device's
+                                                         share, untried is not failed, one-by-one retry, read-ahead,
+                                                         eviction looks again, each device's account; bsync_order()
+  include/fs/bcache.h      blob 6689aa8a (was 7e9a48ee)  buf.skip, BCACHE_HOLD, bcache_room(), bsync_order(),
+                                                         bdirty_count(), bcache_audit()
+  include/sys/bdev.h       blob a4c408d3 (was 8b5a8215)  struct bdev's bc_ fields (the cache's account, B9)
+  fs/fat.c                 blob cf7c0397 (was c80323f5)  B5 failed order points put back; B6 bcache_room(); B7 links,
+                                                         new folders and cuts in order; B11 fat_set() both FATs or none
+  fs/vfs.c                 blob cbc30957 (was 1118a157)  B10 close returns its sync's error; vfs_umount_lost()
+  include/fs/vfs.h         blob 1fb81339 (was 21e638b1)  vfs_umount_lost()
+  shell/fscmd.c            blob 6763f600 (was 4081d970)  B10 umount and eject say what they gave up
+x86 only:
+  shell/selftest.c         blob 4e7aa16d (was 52b41e92)  refused writes: close says EIO, umount says what it gave up
+  user/surfsh/run.c        blob 8c06f5c9 (was c725bb00)  B10 a > file closed by surfsh itself, its failure reported
+  tests/host/test_fatfs.c  blob 10620cc0 (new)           the block cache and FAT over disks that refuse writes
+  Makefile                 blob 6935096c (was a8f958e7)  test_fatfs in make unittest
+Every x86 tree tested below was checked to hold exactly these blobs.
+
+== 1. The compiled kernel (arch/riscv32/elfcmp.py BASE/build/O<n> NEW/build/O<n>: every object, allocated sections)
+  O2: 231 kernel objects identical, 14 different: fs/bcache.o, fs/fat.o, fs/vfs.o, shell/fscmd.o, shell/selftest.o,
+      user/surfsh/run.o (the changed files); driver/bdev.o, driver/part.o, driver/ata.o, driver/ramdisk.o,
+      driver/usb/msc.o, shell/fdisk.o (users of struct bdev, which gained the cache's account: its size and the
+      offsets after reads/writes moved); ksyms.o (the symbol table) and surfos.bin
+  O0: the same 231 identical, the same 14 different (the new O0 tree also held 122 host unit-test objects that the
+      unit-test runs left in the build volume; they are not part of the kernel and were not compared)
+
+== 2. make test-all (devenv/build.sh test-all): exit 0
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks (selftest's new checks among them: a RAM stick that refuses writes, its close
+                                     says EIO, umount gives the blocks up and says how many)
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+  selftest once more on the O0 kernel with the Mac's QEMU (tools/qemu-run.py --shell selftest), the new lines:
+      ok   refused writes: mkfs and mount a RAM stick
+      bcache: write of stick8 blocks 97-97 failed (-3); kept for the next sync (more failures are not shown)
+      ok   refused writes: the write goes into the cache, and its close says EIO
+      ok   refused writes: the file reads back from the cache
+      +FAT16: stick8: write errors, the volume stays marked as not cleanly unmounted
+      ok   refused writes: umount gives the blocks up and says how many
+      SELFTEST PASS (all checks passed)
+
+== 3. make unittest (devenv/build.sh unittest): exit 0, no failures
+    FATFS 91 (new: tests/host/test_fatfs.c, surfcpu/docs/evidence/os/bcache-review.txt), PAGER 177, CRYPTO 129,
+    WPA 118, IEEE80211 144, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP 467, AML FIELD 5120, TOUCHPAD PLATFORM 454,
+    BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143, PARTITION TOOL 33, LIBC 195, MKFS 115, PROMPT 55,
+    CP437 69, TELNET 58, TELNETD SERVER 750 runs (0 bugs), PCIINFO 55, IWLFW 16 (no firmware/ fetched in this
+    tree: the hand-made files only), UNDERTOW URL 382, UTIL 72, HTTP 835, HTML 672 (twice), SESSION 78, VIEW 127,
+    COMMAND 94, TRANSPORT 426 (checks, 0 failures each); python unittest: Ran 19, 60, 28, 11, 5, 18, 1, 5 tests: OK each
+
+== 4. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs-o2, with devenv/build.sh O=2 images for the
+      test disks the storage scenarios use; without them the first run counted 246 of 248, the two checks being
+      that those images exist)
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+eject, mkfs, fdisk, the smoke test's concurrent FAT writers); what it fixes is shown by tests/host/test_fatfs.c (the
+same files under the x86 build's own flags, section 3) and where the same files run under the riscv32 kernel
+(test_os.py, test-os-persist, test-os-faults: surfcpu/docs/evidence/os/bcache-review.txt section 4).
 
 ======================================================================================================================
 Round 4, 10/16/26: a FAT write that stops early gives its clusters back (audit B4); cp says why

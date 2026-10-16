@@ -21,6 +21,12 @@ get a 'p' (usb0p1).
 10/5/26 (partitions): tables are MBR (with logical partitions) or GPT
 (driver/part.c, sys/part.h); the disk that holds the SurfOS boot volume
 (label SURFOSUSB) is protected; fdisk rescans a disk after changing it.
+
+10/16/26 (audit B9): a device carries the block cache's account of it (the
+bc_ fields, kept by fs/bcache.c alone): its dirty cached blocks by write order,
+how many of them failed their last write, whether the console was told it
+refuses writes. It goes with the device: a disk put in again is a new struct
+bdev with a fresh account, and one that is gone has had its blocks dropped.
 */
 
 #ifndef _SYS_BDEV_H
@@ -75,6 +81,11 @@ struct bdev {
     const struct bdev_ops *ops; /* NULL for a partition (the parent's are used) */
     void *priv;                 /* driver data; not touched once gone */
     u_long reads, writes;       /* blocks moved, for lsblk */
+    /* 10/16/26 (audit B9): fs/bcache.c's account of this device (header comment) */
+    u_int bc_dirty[4];          /* its dirty cached blocks, by write order (BORDER_* in fs/bcache.h) */
+    u_int bc_failed;            /* of them, those whose last write failed */
+    bool bc_said;               /* the console was told it refuses writes (until one works again) */
+    u32 bc_bad_pass;            /* the bsync() call in which a write of it last failed */
     struct bdev *next;
 };
 

@@ -15,6 +15,11 @@ instead of freeing it under them; vfs_busy() says who.
 lookup, statfs, sync) holds its root vnode first, under the lock: umount then
 says the mount is busy instead of freeing it under them. vfs_open_vnode() makes
 a file of a vnode that has no path (a network connection, net/sock.c).
+
+10/16/26 (audit B10): the last close of a file that was written returns the
+error of its sync (it returned 0 whatever happened, so cp and edit said a file
+was saved that was only in the cache); umount says how many changed blocks it
+gave up because they could not be written (vfs_umount_lost()).
 */
 
 #include <surfos/types.h>
@@ -251,10 +256,18 @@ int vfs_busy(const char *path, char *why, size_t size) {
 }
 
 int vfs_umount(const char *path) {
+    return vfs_umount_lost(path, NULL);
+}
+
+/* 10/16/26 (audit B10): umount gives up what could not be written (its blocks are dropped), and says
+   how many blocks that was: in *lost, or on the console when the caller does not ask */
+int vfs_umount_lost(const char *path, u_int *lost) {
     struct mount *m, **pp;
     struct superblock *sb;
     char abs[VFS_PATH_MAX];
+    u_int gave_up = 0;
     int r = vfs_normalize("/", path, abs, sizeof(abs));
+    if(lost) *lost = 0;
     if(r) return r;
     if(!strcmp(abs, "/")) return -EBUSY;
     mutex_lock(&mount_lock);
@@ -272,9 +285,13 @@ int vfs_umount(const char *path) {
     vput(sb->root);
     if(sb->ops && sb->ops->unmount) sb->ops->unmount(sb);
     if(sb->dev) {
+        gave_up = sb->dev->gone ? 0 : bdirty_count(sb->dev);
         binvalidate(sb->dev);
         bdev_put(sb->dev);
     }
+    if(lost) *lost = gave_up;
+    else if(gave_up) kprintf("+VFS: %s: %u changed block%s could not be written and %s given up\n", abs, gave_up,
+                             gave_up == 1 ? "" : "s", gave_up == 1 ? "was" : "were");
     kfree(sb);
     kfree(m);
     return 0;
@@ -531,10 +548,20 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
     return 0;
 }
 
+/* 10/16/26 (audit B10): a file system's state and its device's blocks out to the device; 0 when
+   everything reached it by the end (a block refused by the first sync and written by the second
+   counts as written), else -EIO */
+static int write_back(struct superblock *sb) {
+    int r = sb->ops && sb->ops->sync ? sb->ops->sync(sb) : 0;
+    if(!sb->dev) return r ? -EIO : 0;
+    return bsync(sb->dev) != 0 || sb->dev->gone ? -EIO : 0;
+}
+
 int vfs_close(struct file *f) {
     struct superblock *sb;
     u_long fl;
     bool last;
+    int r = 0;
     if(!f) return -EBADF;
     fl = irq_save();                                /* tasks share files (spawnfd): the count is atomic */
     last = --f->refs == 0;
@@ -546,13 +573,12 @@ int vfs_close(struct file *f) {
     irq_restore(fl);
     if(!last) return 0;
     sb = f->v->sb;
-    if((f->flags & O_ACCMODE) != O_RDONLY) {      /* a written file reaches the disk when it is closed */
-        if(sb->ops && sb->ops->sync) sb->ops->sync(sb);
-        if(sb->dev) bsync(sb->dev);
-    }
+    if((f->flags & O_ACCMODE) != O_RDONLY) r = write_back(sb);   /* a written file reaches the disk when it is
+                                                                     closed; 10/16/26 (B10): and close says
+                                                                     when it did not */
     vput(f->v);
     kfree(f);
-    return 0;
+    return r;
 }
 
 int vfs_read(struct file *f, void *buf, u32 len) {
@@ -716,11 +742,8 @@ int vfs_fsync(struct file *f) {
     struct superblock *sb;
     if(!f) return -EBADF;
     sb = f->v->sb;
-    if(sb->ops && sb->ops->sync && sb->ops->sync(sb) != 0) return -EIO;
-    if(sb->dev) {
-        if(bsync(sb->dev) != 0) return -EIO;
-        if(bdev_flush(sb->dev) != 0) return -EIO;
-    }
+    if(write_back(sb) != 0) return -EIO;            /* 10/16/26 (B10): as close says it */
+    if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;
 }
 

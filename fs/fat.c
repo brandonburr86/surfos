@@ -29,12 +29,17 @@ then the FAT copies, then directory entries, then FSInfo. Taking away needs the
 reverse, so unlink, truncate to zero and rename put an order point in the middle
 (fat_order_point(): a sync of the volume): the entry is gone from the disk before
 its clusters are freed, and a renamed file's new entry is on the disk before the
-old one goes. A card pulled or a write refused in the middle then leaves at worst
-clusters marked used that no entry points at, a name too many, or a free count
-that is off (fsck.fat finds and fixes them), never an entry pointing at a free
-cluster or at bytes not yet written. An overwrite in place (append, or a write
-into a file's existing bytes) can still leave old and new bytes mixed: FAT32 has
-no journal (surfcpu/docs/CARD.md, "Writing from SurfOS").
+old one goes. A card pulled in the middle then leaves at worst (10/16/26, as B5-B11
+below made it) clusters marked used that no entry points at, a name too many, a
+free count that is off, the two FATs differing, or a file whose size runs past its
+chain (a truncate cut short): fsck.fat finds and fixes them. Not an entry, or a
+link on the way, pointing at a free cluster or at bytes not yet written, except in
+the two narrow cases B7's note below names (a write that stopped early on a device
+that refused after taking part of it; FAT12's entries that straddle two sectors). A
+write the device refuses changes nothing on it. An overwrite in place (append, or a
+write into a file's existing bytes) can still leave old and new bytes mixed: FAT32
+has no journal (surfcpu/docs/CARD.md, "Writing from SurfOS"). It is an order, not
+atomicity: nothing here is power-fail atomic.
 
 10/16/26 (audit B4): a write that stops early leaves no clusters behind. A run of
 blocks is allocated ahead of the data, and when the volume ran out in the middle
@@ -43,6 +48,44 @@ file's chain past its size: fsck.fat found the chain longer than the file and th
 free count low. Now a run ends where the volume does (the write puts in what fits
 and returns the bytes it wrote; the next one gets ENOSPC), and after a write that
 stopped early the chain is cut back to the file's size.
+
+10/16/26 (audit B5): an order point that fails (the device refuses a write) puts back
+what the operation changed so far, in the cache, and the operation fails with EIO:
+nothing changed. Before, rename left both names on one cluster chain (and the same mv
+again, or an rm of either name, then freed the chain under the other: a file reading
+another's bytes), unlink left the entry gone and the clusters lost, truncate to zero
+the file empty and its clusters lost. The slots a name takes or gives up are noted
+(struct slot_undo: their first bytes) and put back; truncate puts the short entry back.
+A cluster a directory grew by stays (empty). An error after the last order point (a
+FAT block that cannot be read while clusters are freed) loses clusters, which fsck.fat
+finds, but never leaves two names for a file or a name on freed clusters.
+
+10/16/26 (audit B7): the order within the FAT. The cache writes the sectors of one order
+in no order among themselves, so two cases needed one more order point (a sync):
+ - a link into a new cluster (prev -> c) that is in another FAT sector than c's own value
+   (end of chain), and every link that grows a directory: c's value (and a directory's
+   zeros) reach the disk first, so a chain there never runs into a cluster that is free
+   there; a new directory (mkdir) is on the disk before anything names it or goes into it,
+   so entries written into a directory's new cluster carry the directory order, never the
+   data order of its zeros (bdirty_order() keeps the lower of two orders: a block's earlier
+   content must not go after what points at it, and FAT now never mixes two in one block);
+ - a cut (truncate to a smaller size, and trim_chain()): the end of chain and the new size
+   reach the disk before the clusters past it are freed, as unlink does; a truncate that
+   cannot do that changes nothing (B5); trim_chain() frees them all the same when the
+   device refuses (the links into them reached the disk only if it took writes meanwhile,
+   and then a card pulled in the sync that writes the cut and the frees, in the order of
+   their FAT sectors, may leave the chain running into freed clusters: the first narrow case).
+The second: a FAT12 entry that straddles two sectors goes out in two blocks and can be cut
+in half (a FAT16 or FAT32 entry never straddles).
+A file that grows costs a sync of the data and the tables (bsync_order(), not the entries:
+fat_table_point()) each time its chain crosses into another FAT sector: every 128
+clusters on FAT32, 256 on FAT16 (every 4 MB with 32 KB clusters; every 64 KB with the
+512-byte clusters of a small test card); on a fragmented volume, more often.
+
+10/16/26 (audit B11): fat_set() has every FAT copy's block in hand before it changes any,
+so both copies change or neither does (a copy whose block could not be read was left
+behind, and the FATs differed); trim_chain() lets go of a write's chain only once its head
+is free, so a chain it could not free stays the file's for its next write.
 */
 
 #include <surfos/types.h>
@@ -290,31 +333,36 @@ static int fat_get(struct fat_fs *fs, u32 c, u32 *val) {
     return 0;
 }
 
+/* 10/16/26 (B11): every copy's blocks are in hand before any is changed, so both FATs change or
+   neither does (a copy whose block could not be read was left behind before: the FATs differed) */
 static int fat_set(struct fat_fs *fs, u32 c, u32 val) {
+    struct buf *b[2] = { NULL, NULL }, *b2[2] = { NULL, NULL };
     u32 off, o, i;
+    int r = 0;
     if(c < 2 || c >= fs->nclusters + 2) return -EIO;
     off = fs->type == 12 ? c + c / 2 : fs->type == 16 ? c * 2 : c * 4;
     o = off % 512;
-    for(i = 0; i < fs->nfats; i++) {
+    for(i = 0; i < fs->nfats && i < 2 && !r; i++) {
         u32 lba = fs->fat_lba + i * fs->spf + off / 512, end = fs->fat_lba + (i + 1) * fs->spf;
-        struct buf *b = breada(fs->dev, lba, end - lba < META_AHEAD ? end - lba : META_AHEAD), *b2 = NULL;
-        if(!b) return -EIO;
-        if(fs->type == 12) {
-            u8 *lo = b->data + o, *hi;
-            if(o == 511) {
-                b2 = bread(fs->dev, lba + 1);
-                if(!b2) { brelse(b); return -EIO; }
-                hi = b2->data;
-            } else hi = b->data + o + 1;
-            if(c & 1) { *lo = (*lo & 0x0F) | ((val << 4) & 0xF0); *hi = (val >> 4) & 0xFF; }
-            else { *lo = val & 0xFF; *hi = (*hi & 0xF0) | ((val >> 8) & 0x0F); }
-            if(b2) { bdirty_order(b2, BORDER_TABLE); brelse(b2); }
-        } else if(fs->type == 16) put16(b->data + o, (u16)val);
-        else put32(b->data + o, (le32(b->data + o) & 0xF0000000) | (val & 0x0FFFFFFF));
-        bdirty_order(b, BORDER_TABLE);
-        brelse(b);
+        b[i] = breada(fs->dev, lba, end - lba < META_AHEAD ? end - lba : META_AHEAD);
+        if(!b[i]) r = -EIO;
+        else if(fs->type == 12 && o == 511 && !(b2[i] = bread(fs->dev, lba + 1))) r = -EIO;
     }
-    return 0;
+    for(i = 0; i < 2; i++) {
+        if(!r && b[i]) {
+            if(fs->type == 12) {
+                u8 *lo = b[i]->data + o, *hi = b2[i] ? b2[i]->data : b[i]->data + o + 1;
+                if(c & 1) { *lo = (*lo & 0x0F) | ((val << 4) & 0xF0); *hi = (val >> 4) & 0xFF; }
+                else { *lo = val & 0xFF; *hi = (*hi & 0xF0) | ((val >> 8) & 0x0F); }
+                if(b2[i]) bdirty_order(b2[i], BORDER_TABLE);
+            } else if(fs->type == 16) put16(b[i]->data + o, (u16)val);
+            else put32(b[i]->data + o, (le32(b[i]->data + o) & 0xF0000000) | (val & 0x0FFFFFFF));
+            bdirty_order(b[i], BORDER_TABLE);
+        }
+        if(b2[i]) brelse(b2[i]);
+        if(b[i]) brelse(b[i]);
+    }
+    return r;
 }
 
 static int zero_cluster(struct fat_fs *fs, u32 c) {
@@ -327,6 +375,17 @@ static int zero_cluster(struct fat_fs *fs, u32 c) {
         brelse(b);
     }
     return 0;
+}
+
+static int fat_table_point(struct fat_fs *fs);
+
+/* 10/16/26 (B7): are the FAT entries of clusters a and b in one sector (in each copy)? An entry
+   that straddles two sectors (FAT12) counts as not */
+static bool same_fat_sector(struct fat_fs *fs, u32 a, u32 b) {
+    u32 oa = fs->type == 12 ? a + a / 2 : fs->type == 16 ? a * 2 : a * 4;
+    u32 ob = fs->type == 12 ? b + b / 2 : fs->type == 16 ? b * 2 : b * 4;
+    u32 len = fs->type == 32 ? 4 : 2;
+    return oa / 512 == (oa + len - 1) / 512 && ob / 512 == (ob + len - 1) / 512 && oa / 512 == ob / 512;
 }
 
 /* A free cluster, chained after prev (0: a new chain): prev + 1 when that is free, so files
@@ -353,8 +412,18 @@ static int fat_alloc(struct fat_fs *fs, u32 prev, bool dir, u32 *out) {
 found:
     r = fat_set(fs, c, fs->eoc);
     if(r == 0 && dir) r = zero_cluster(fs, c);
+    /* 10/16/26 (B7): c's own FAT value (and a directory's zeros) on the disk before the link to it.
+       The cache writes FAT sectors in no order among themselves, so a link in another sector could
+       reach the disk first, and a chain there would run into a cluster that is free there (the next
+       file's to take; for a directory, whose entries it would show). One sync when the link crosses
+       a FAT sector, or the chain is a directory's (entries later written into its new cluster then
+       carry the directory order, not the order of its zeros) */
+    if(r == 0 && prev && (dir || !same_fat_sector(fs, prev, c))) r = fat_table_point(fs);
     if(r == 0 && prev) r = fat_set(fs, prev, c);
-    if(r) return r;
+    if(r) {
+        fat_set(fs, c, 0);                                   /* c is free again (best effort) */
+        return r;
+    }
     fs->next_free = c + 1;
     if(fs->free != FREE_UNKNOWN && fs->free) fs->free--;
     fs->fsinfo_dirty = true;
@@ -366,6 +435,12 @@ found:
    (the cache writes data, tables, entries in that order; taking away needs entries first) */
 static int fat_order_point(struct fat_fs *fs) {
     return bsync(fs->dev) ? -EIO : 0;
+}
+
+/* 10/16/26 (B7): an order point for a new cluster: its zeros and its FAT entry (data and tables) on the
+   disk before the link to it; the entries wait for the next sync */
+static int fat_table_point(struct fat_fs *fs) {
+    return bsync_order(fs->dev, BORDER_TABLE) ? -EIO : 0;
 }
 
 static int fat_free_chain(struct fat_fs *fs, u32 c) {
@@ -622,16 +697,43 @@ static int dir_find_free(struct fat_fs *fs, struct fat_node *dir, u32 need, stru
     }
 }
 
+/* 10/16/26 (B5): a directory slot's first byte before a change, to put back when the change cannot
+   go on (the first byte says whether a slot is in use: 0x00 or 0xE5 frees it again) */
+struct slot_undo {
+    u32 lba;
+    u16 off;
+    u8 first;
+};
+#define UNDO_MAX (LFN_MAX_ENTRIES + 1)
+
+/* put the slots back as they were, the last changed first; best effort: a block that cannot be
+   read stays as it is */
+static void slots_restore(struct fat_fs *fs, const struct slot_undo *u, u32 n) {
+    while(n--) {
+        struct buf *b = bread(fs->dev, u[n].lba);
+        if(!b) continue;
+        b->data[u[n].off] = u[n].first;
+        bdirty_order(b, BORDER_DIR);
+        brelse(b);
+    }
+}
+
 /* write n raw entries at pos (the space was found by dir_find_free); *lba and *off (when
-   given) say where the last one, the short entry, went */
-static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n, u32 *lba, u32 *off) {
+   given) say where the last one, the short entry, went. 10/16/26 (B5): each slot written is
+   noted in undo (*nundo of them), also when it stops early */
+static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n, u32 *lba, u32 *off,
+                             struct slot_undo *undo, u32 *nundo) {
     u32 i;
+    *nundo = 0;
     for(i = 0; i < n; i++) {
         struct buf *b;
         int r;
         if(pos->at_end) { r = diter_extend(pos); if(r) return r; }
         b = bread(pos->fs->dev, pos->lba);
         if(!b) return -EIO;
+        undo[*nundo].lba = pos->lba;
+        undo[*nundo].off = (u16)pos->off;
+        undo[(*nundo)++].first = b->data[pos->off];
         memcpy(b->data + pos->off, entries + i * 32, 32);
         bdirty_order(b, BORDER_DIR);
         brelse(b);
@@ -642,14 +744,21 @@ static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n, u32 *l
     return 0;
 }
 
-/* mark the entries idx_from..idx_to of dir as deleted */
-static int dir_delete_entries(struct fat_fs *fs, struct fat_node *dir, u32 idx_from, u32 idx_to) {
+/* mark the entries idx_from..idx_to of dir as deleted; 10/16/26 (B5): noted in undo, as above */
+static int dir_delete_entries(struct fat_fs *fs, struct fat_node *dir, u32 idx_from, u32 idx_to,
+                              struct slot_undo *undo, u32 *nundo) {
     struct diter it;
+    *nundo = 0;
     diter_init(&it, fs, dir);
     while(!it.at_end && it.idx <= idx_to) {
         if(it.idx >= idx_from) {
             struct buf *b = bread(fs->dev, it.lba);
             if(!b) return -EIO;
+            if(*nundo < UNDO_MAX) {
+                undo[*nundo].lba = it.lba;
+                undo[*nundo].off = (u16)it.off;
+                undo[(*nundo)++].first = b->data[it.off];
+            }
             b->data[it.off] = 0xE5;
             bdirty_order(b, BORDER_DIR);
             brelse(b);
@@ -657,6 +766,24 @@ static int dir_delete_entries(struct fat_fs *fs, struct fat_node *dir, u32 idx_f
         if(diter_next(&it)) return -EIO;
     }
     return 0;
+}
+
+/* 10/16/26 (B5): a file's short entry, as it is, and put back */
+static int entry_get(struct fat_fs *fs, struct fat_node *n, u8 *raw) {
+    struct buf *b;
+    if(n->is_root) return 0;
+    if(!(b = bread(fs->dev, n->dir_lba))) return -EIO;
+    memcpy(raw, b->data + n->dir_off, 32);
+    brelse(b);
+    return 0;
+}
+
+static void entry_put(struct fat_fs *fs, struct fat_node *n, const u8 *raw) {
+    struct buf *b;
+    if(n->is_root || !(b = bread(fs->dev, n->dir_lba))) return;
+    memcpy(b->data + n->dir_off, raw, 32);
+    bdirty_order(b, BORDER_DIR);
+    brelse(b);
 }
 
 /* the short entry of a file after its size, first cluster or time changed */
@@ -1008,6 +1135,7 @@ static int block_rw(struct fat_fs *fs, struct vnode *v, u32 c, u32 s, u32 so, u8
         if(!b) return -EIO;
         memcpy(buf, b->data + so, chunk);
     } else {
+        if(bcache_room(fs->dev)) return -EIO;                /* 10/16/26 (B6): the device refuses, past its share */
         b = (chunk == 512 || pos - so >= v->size) ? bget(fs->dev, lba) : bread(fs->dev, lba);
         if(!b) return -EIO;
         if(mode == RW_WRITE) memcpy(b->data + so, buf, chunk);
@@ -1063,24 +1191,36 @@ static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 l
 /* 10/16/26 (B4): after a write that stopped early, the clusters it linked past the file's end go
    back: the chain ends at size again. first0 is the first cluster the entry had before the write
    (an entry is never left pointing at a freed cluster). Best effort: if this fails as well, the
-   next fsck finds the chain longer than the file. sb->lock */
+   next fsck finds the chain longer than the file. sb->lock. 10/16/26 (B7): the cut is put on the
+   disk before the clusters past it are freed (a sync, or making room, may have put the links into
+   them there during the write). When the device refuses that, they are freed all the same (B4: a
+   refused copy leaves nothing taken): the links into them reached the disk only if the device took
+   writes during this write, and then the cut and the frees go out in one later sync, in the order
+   of their FAT sectors (a card pulled in it may leave the chain running into freed clusters). The
+   walk starts where the write was, when that is not past the cut. */
 static void trim_chain(struct fat_fs *fs, struct fat_node *n, u32 size, u32 first0) {
-    u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next;
+    u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next, i = 0;
     if(!c) return;
-    n->pos_c = 0;                                            /* the remembered position may go */
     if(!keep) {
+        n->pos_c = 0;
         if(first0) keep = 1;                                 /* the entry has it: it stays */
         else {                                               /* taken by this write: all of it goes */
-            n->first = 0;
-            fat_free_chain(fs, c);
+            u32 v;
+            /* 10/16/26 (B11): the file lets go of it once its head is free; a chain that could not be
+               freed from its head stays the file's, for its next write */
+            if(fat_free_chain(fs, c) == 0 || fat_get(fs, c, &v) != 0 || v == 0) n->first = 0;
             return;
         }
     }
-    while(--keep) {
+    if(n->pos_c && n->pos_ci < keep) { i = n->pos_ci; c = n->pos_c; }
+    n->pos_c = 0;                                            /* the remembered position may go */
+    for(; i + 1 < keep; i++) {
         if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) return;
         c = next;
     }
-    if(fat_get(fs, c, &next) == 0 && !is_eoc(fs, next) && fat_set(fs, c, fs->eoc) == 0) fat_free_chain(fs, next);
+    if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next) || fat_set(fs, c, fs->eoc) != 0) return;
+    fat_order_point(fs);
+    fat_free_chain(fs, next);
 }
 
 /* the file grows to size with zeros (a write past its end, a truncate that grows); sb->lock */
@@ -1103,6 +1243,7 @@ static int fat_rw(struct vnode *v, u32 off, u8 *buf, u32 len, bool write) {
     if(!len) return 0;
     if(write && off + len < off) return -EFBIG;
     if(fs->dev->gone) return -EIO;
+    if(write && bcache_room(fs->dev)) return -EIO;          /* 10/16/26 (B6): back-pressure from a refusing device */
     mutex_lock(&v->sb->lock);
     size = v->size;
     first0 = n->first;
@@ -1127,7 +1268,7 @@ static int fat_truncate(struct vnode *v, u32 size) {
     struct fat_fs *fs = (struct fat_fs *)v->sb->priv;
     struct fat_node *n = (struct fat_node *)v->priv;
     int r = 0;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&v->sb->lock);
     if(size > v->size) {                                     /* growing: zeros */
         u32 first0 = n->first;
@@ -1139,20 +1280,39 @@ static int fat_truncate(struct vnode *v, u32 size) {
     }
     n->pos_c = 0;                                            /* the remembered position may be freed */
     if(size == 0) {                                          /* 10/16/26 (B3): the entry says empty on the */
-        u32 old = n->first;                                  /* disk before its clusters are freed */
-        n->first = 0;
-        v->size = 0;
-        r = update_entry(fs, n, 0, true);
-        if(r == 0 && old) r = fat_order_point(fs);
-        if(r == 0 && old) r = fat_free_chain(fs, old);
+        u32 old = n->first, oldsize = v->size;               /* disk before its clusters are freed */
+        u8 raw[32];
+        r = entry_get(fs, n, raw);
+        if(r == 0) {
+            n->first = 0;
+            v->size = 0;
+            r = update_entry(fs, n, 0, true);
+            if(r == 0 && old) r = fat_order_point(fs);
+            if(r) {                                          /* B5: it cannot go on: nothing changed */
+                n->first = old;
+                v->size = oldsize;
+                entry_put(fs, n, raw);
+            } else if(old) r = fat_free_chain(fs, old);
+        }
     } else {
-        u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next;
+        u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next, oldsize = v->size;
+        u8 raw[32];
         while(--keep && !r) { if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) r = -EIO; else c = next; }
         if(!r && fat_get(fs, c, &next) == 0 && !is_eoc(fs, next)) {
-            r = fat_set(fs, c, fs->eoc);
-            if(!r) r = fat_free_chain(fs, next);
-        }
-        if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
+            /* 10/16/26 (B7): the cut and the new size on the disk before the clusters past it are free,
+               as unlink does: a chain on the disk never runs into a cluster the next file may take.
+               When that cannot be done, nothing changed (B5) */
+            bool cut = false;
+            r = entry_get(fs, n, raw);
+            if(!r && !(r = fat_set(fs, c, fs->eoc))) cut = true;
+            if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
+            if(!r) r = fat_order_point(fs);
+            if(r) {
+                if(cut) fat_set(fs, c, next);
+                v->size = oldsize;
+                entry_put(fs, n, raw);
+            } else r = fat_free_chain(fs, next);
+        } else if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
     }
     mutex_unlock(&v->sb->lock);
     return r;
@@ -1164,11 +1324,12 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
     struct fat_dirent e;
     struct diter pos;
     u8 entries[(LFN_MAX_ENTRIES + 1) * 32];
-    u32 n, first = 0;
+    struct slot_undo undo[UNDO_MAX];
+    u32 n, first = 0, nundo = 0;
     int r = validate_name(name);
 
     if(r) return r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
@@ -1192,11 +1353,17 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
         put16(p + 22, t); put16(p + 24, d); put16(p + 26, (u16)parent); put16(p + 20, (u16)(fs->type == 32 ? parent >> 16 : 0));
         bdirty(b);
         brelse(b);
+        r = fat_table_point(fs);                             /* 10/16/26 (B7): the new directory on the disk before */
+        if(r) { fat_free_chain(fs, first); goto out; }       /* anything names it or is written into it */
     }
     r = build_entries(fs, dn, name, type == VN_DIR ? ATTR_DIR : ATTR_ARCHIVE, first, NULL, NO_IDX, entries, &n);
     if(r == 0) r = dir_find_free(fs, dn, n, &pos);
-    if(r == 0) r = dir_write_entries(&pos, entries, n, NULL, NULL);
-    if(r) { if(first) fat_free_chain(fs, first); goto out; }
+    if(r == 0) r = dir_write_entries(&pos, entries, n, NULL, NULL, undo, &nundo);
+    if(r) {                                                  /* B5: what was written of the name goes again */
+        slots_restore(fs, undo, nundo);
+        if(first) fat_free_chain(fs, first);
+        goto out;
+    }
     r = dir_find(fs, dn, name, &e);                          /* read it back for the vnode */
     if(r == 0) {
         *out = fat_vnode(dir->sb, &e);
@@ -1226,16 +1393,19 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     struct fat_fs *fs = (struct fat_fs *)dir->sb->priv;
     struct fat_node *dn = (struct fat_node *)dir->priv;
     struct fat_dirent e;
+    struct slot_undo undo[UNDO_MAX];
+    u32 nundo = 0;
     int r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&dir->sb->lock);
     dn->rd_valid = false;
     r = dir_find(fs, dn, name, &e);
     if(r) goto out;
     if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
-    r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx);
+    r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx, undo, &nundo);
     if(r == 0 && e.first) r = fat_order_point(fs);          /* B3: the entry gone on the disk first */
-    if(r == 0 && e.first) r = fat_free_chain(fs, e.first);
+    if(r) slots_restore(fs, undo, nundo);                    /* 10/16/26 (B5): it cannot go on: the name is back */
+    else if(e.first) r = fat_free_chain(fs, e.first);        /* (a failure here loses clusters: fsck.fat finds them) */
 out:
     mutex_unlock(&dir->sb->lock);
     return r;
@@ -1277,12 +1447,13 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     struct fat_dirent src, dst;
     struct diter pos;
     u8 entries[(LFN_MAX_ENTRIES + 1) * 32];
-    u32 n, new_lba = 0, new_off = 0;
+    struct slot_undo nu[UNDO_MAX], du[UNDO_MAX];
+    u32 n, new_lba = 0, new_off = 0, nnu = 0, ndu = 0;
     bool same = dir_same(on, nn), is_dir, replace = false;
     int r = validate_name(nname);
 
     if(r) return r;
-    if(fs->dev->gone) return -EIO;
+    if(fs->dev->gone || bcache_room(fs->dev)) return -EIO;   /* B6 */
     mutex_lock(&odir->sb->lock);
     on->rd_valid = nn->rd_valid = false;
     r = dir_find(fs, on, oname, &src);
@@ -1298,17 +1469,29 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     } else if(r != 0 && r != -ENOENT) goto out;
     r = build_entries(fs, nn, nname, 0, 0, src.raw, same ? src.idx : NO_IDX, entries, &n);
     if(r == 0) r = dir_find_free(fs, nn, n, &pos);
-    if(r == 0) r = dir_write_entries(&pos, entries, n, &new_lba, &new_off);
+    if(r == 0) r = dir_write_entries(&pos, entries, n, &new_lba, &new_off, nu, &nnu);
     if(r == 0) r = fat_order_point(fs);                      /* B3: the new name on the disk before any goes */
-    if(r) goto out;
-    if(replace) {
-        r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx);
-        if(r == 0 && dst.first) r = fat_order_point(fs);    /* the replaced entry gone before its clusters */
-        if(r == 0 && dst.first) r = fat_free_chain(fs, dst.first);
-        if(r) goto out;
+    if(r) {                                                  /* 10/16/26 (B5): it cannot go on: the new name goes */
+        slots_restore(fs, nu, nnu);                          /* again, one name for the file as before */
+        goto out;
     }
-    r = dir_delete_entries(fs, on, src.lfn_idx, src.idx);
-    if(r == 0 && is_dir && !same) r = set_dotdot(fs, src.first, nn);
+    if(replace) {
+        r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx, du, &ndu);
+        if(r == 0 && dst.first) r = fat_order_point(fs);    /* the replaced entry gone before its clusters */
+        if(r) {                                              /* B5: both names as they were */
+            slots_restore(fs, du, ndu);
+            slots_restore(fs, nu, nnu);
+            goto out;
+        }
+        if(dst.first) fat_free_chain(fs, dst.first);         /* a failure loses clusters (fsck.fat finds them); */
+    }                                                        /* the rename goes on: never two names for a file */
+    r = dir_delete_entries(fs, on, src.lfn_idx, src.idx, du, &ndu);
+    if(r) {                                                  /* B5: the old name stays: then the new one goes */
+        slots_restore(fs, du, ndu);
+        slots_restore(fs, nu, nnu);
+        goto out;
+    }
+    if(is_dir && !same) r = set_dotdot(fs, src.first, nn);
     for(x = fs->live; x; x = x->next) {                      /* an open file or directory follows its entry */
         if(x->dir_lba == src.lba && x->dir_off == src.off) { x->dir_lba = new_lba; x->dir_off = new_off; }
     }

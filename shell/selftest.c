@@ -674,7 +674,10 @@ static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     return 0;
 }
 
+static bool ram_refuse;                              /* 10/16/26 (B10): the test's RAM disks refuse every write */
+
 static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
+    if(ram_refuse) return BDEV_EIO;
     memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
     return 0;
 }
@@ -727,6 +730,37 @@ static void test_fat_unplug(void) {
           "plugged in again: the file written before is there, the volume says not cleanly unmounted");
     if(r == 0) vfs_umount("/selftest-stick");
     if(d2) { binvalidate(d2); kfree(d2); }
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/16/26 (audit B10): a stick that refuses every write once a file is written: the file's close says
+   EIO (it said nothing: cp and edit reported a save that was only in the cache), and umount gives the
+   blocks up and says how many */
+static void test_fat_refused(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    struct file *f;
+    char msg[160];
+    u_int lost = 0;
+    int r, c = 0;
+    if(!d) { check(false, "refused writes: 4 MB of memory"); kfree(mem); return; }
+    strlcpy(d->name, "stick8", sizeof(d->name));
+    r = fat_mkfs(d, "REFUSED", 0, msg, sizeof(msg));
+    check(r == 0 && (r = vfs_mount_flags(d, "/selftest-refused", "fat", 0)) == 0, "refused writes: mkfs and mount a RAM stick");
+    if(r) { kfree(d); kfree(mem); return; }
+    ram_refuse = true;
+    r = vfs_open("/selftest-refused/a.txt", O_WRONLY | O_CREAT, &f);
+    if(r == 0) {
+        r = vfs_write(f, "refused", 7) == 7 ? 0 : -EIO;
+        c = vfs_close(f);
+    }
+    check(r == 0 && c == -EIO, "refused writes: the write goes into the cache, and its close says EIO");
+    check(file_is("/selftest-refused/a.txt", "refused"), "refused writes: the file reads back from the cache");
+    r = vfs_umount_lost("/selftest-refused", &lost);
+    check(r == 0 && lost > 0, "refused writes: umount gives the blocks up and says how many");
+    ram_refuse = false;
     binvalidate(d);
     kfree(d);
     kfree(mem);
@@ -1027,7 +1061,7 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 

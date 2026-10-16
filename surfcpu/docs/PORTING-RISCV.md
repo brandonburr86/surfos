@@ -375,15 +375,24 @@ is on the card, and a write the card refused is that command's failure: `cp: not
 reached /sd0p1: I/O error`, status 1. A volume whose disk was taken out before the command
 began is left out (that was said when it went); one taken out during the command is a failure.
 `append <file> <text>...` exists because the shell has no redirection. A program (there are none
-on riscv32 yet) learns of a failed write from `vfs_fsync()`; `vfs_close()` syncs but does not
-return the error (shared code, unchanged).
+on riscv32 yet) learns of a failed write from `vfs_fsync()` and, since audit B10, from the last
+`vfs_close()` of a file it wrote (it returned 0 before, whatever its sync found); `umount` and
+`eject` say how many changed blocks they gave up because they could not be written.
 
 **Errors** (block cache B1, eject B2): a block the card refuses stays dirty and is tried again by
 the next sync; the console says `bcache: write of sd0p1 blocks ... failed (-3); kept for the
-next sync` once, and `bcache: sd0p1 takes writes again` when a write works again. A card that
-refuses everything fills the cache with such blocks; then a command that needs a buffer gets an
-I/O error (after one more try of a refused run) instead of waiting: nothing hangs (a 1 MB `cp`
-returns at once with its error). `eject` keeps a volume it could not write.
+next sync` once, and `bcache: sd0p1 takes writes again` when none of its blocks waits after a
+failure any more. Since audit B6 a card that refuses keeps at most a quarter of the cache (256
+blocks) of such blocks: its dirty blocks are held back (making room sends it no write bound to
+fail, and a block held back because one below it failed is not marked failed), past that share
+its new writes fail at once with EIO (`bcache_room()`, `bget()`), and the rest of the cache stays
+the other devices' (before, a card that refused everything filled the cache, and then every
+read of every device failed). A sync tries a refused run again block by block, once, so one bad
+block does not hold back its neighbours. Nothing hangs (a 1 MB `cp` returns at once with its
+error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose order
+point (below) the card refuses puts back what it changed in the cache and fails with EIO
+(audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
+both names on one chain, and the next `mv` or `rm` freed the chain under the other name).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
@@ -404,7 +413,15 @@ an order point (a sync) in unlink, truncate to zero and rename so that taking aw
 other way round (entry first). Before B3, a card pulled after the first block of a new file's
 sync left its directory entry pointing at a free cluster (`fsck.fat`: "Contains a free
 cluster"), and after the third the FAT and entry written without the file's bytes (a file
-reading whatever its cluster held before, which no check can see).
+reading whatever its cluster held before, which no check can see). Since audit B7 the order is
+checked where each write is issued (`write_run()`: no block of order k while its device has a
+dirty block below k), so it also holds when another task writes during a sync or while room is
+made; a block is not written while someone holds it, nor handed out while it is written. Within
+the FAT, a link into a new cluster in another FAT sector (and every link that grows a folder)
+waits for the cluster's own entry to be on the card (`fat_table_point()`, a sync of data and
+tables), a new folder is on the card before anything names it, and a cut (truncate to a smaller
+size, the end of a write that stopped early) is on the card before the clusters past it are
+freed. `tests/host/test_fatfs.c` checks the image after every write the disk stores.
 
 **Tests, QEMU** (`boards/qemu_virt/test_os.py`, 37 checks per build; the kernel word `sdsim`
 makes the RAM disk a simulated card behind `sdcard.c` and `sdblk.c`, and the `sdsim` command
@@ -412,8 +429,10 @@ arms the card model's faults, which follow the io track's `SdFaults`): one block
 error" (retried at the file's close, the command succeeds); a card that refuses every block
 (`write` and a 1 MB `cp` say "not all of it reached /sd0p1", return at once, `eject` says "stays
 mounted"; after `sdsim fault clear`, `sync` writes everything, and on the host every file is
-whole and the copy holds the first 514560 bytes of its source); a card that answers no command
-(the write fails at once); the card taken out after a sync (the messages, writes refused, the
+whole and the copy holds the first 57344 bytes of its source: since B6 the refusing card gets
+its share of the cache and then EIO, where before it took 514560 bytes, nearly the whole cache);
+a card that answers no command (the write fails at once, and since B10 its close says so: `write:
+close: I/O error`); the card taken out after a sync (the messages, writes refused, the
 mount marked unplugged; `fsck.fat -n` finds only the dirty bit; put back, mounted with "not
 unmounted cleanly", the files there); and taken out right after the nth block a new file's write
 sends, n = 1 to 4, and after the first block of an `rm`, an `mv` into a folder and a write over a
@@ -476,11 +495,27 @@ instead of a function call per byte, and `memcpy`/`memmove`/`memset` moving word
 (`arch/riscv32/memory.c`; never a misaligned access: SurfCPU traps them). The 160 KiB `cp` now
 takes about 113 million cycles (4.5 s at 25 MHz), some 700 cycles a byte read and written.
 
+**The cost of the order** (audit B6, B7). The order points B7 adds cost requests, not data: a
+file that grows has its chain's FAT sector written each time the chain crosses into the next
+one (every 128 clusters on FAT32: every 4 MiB with 32 KiB clusters, every 64 KiB with a test
+card's 512-byte clusters). Counted on the host with the real code (`tests/host` stand-ins, a
+RAM disk): 4 MiB written in 4 KiB pieces on a 1 GiB FAT32 volume takes 119 device requests
+instead of 96 before (84 instead of 68 in 64 KiB pieces), 0.2-0.4 % more blocks; on a 64 MiB
+volume with 512-byte clusters, 197 instead of 99. `rm` (3 requests a file), `mv` (2) and a
+write over a file (5) take the same as before. A device keeps at most 256 dirty blocks: a long
+write through the cache writes half of them out when it reaches that (much as making room did
+when the cache was full). `trim_chain()` walks a short write's chain from where the write was,
+not from the file's first cluster.
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
 overwritten (O_TRUNC) can be left empty, and an append can lose its new bytes. A rename can
-leave a name too many. A card taken out and put back within half a second is not seen. What the card itself does with a block it was programming when its power
+leave a name too many, a truncate cut short a size that runs past the chain. Two narrow cases
+can still leave a chain running into free clusters: a write that stopped early on a card that
+refused after taking part of it (its end goes out in a later sync, in the order of the FAT
+sectors), and a FAT12 entry that straddles two sectors. A card taken out and put back within
+half a second is not seen. What the card itself does with a block it was programming when its power
 went is beyond the kernel.
 
 ## 7. What is done, pending and later

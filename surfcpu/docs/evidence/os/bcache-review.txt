@@ -1,0 +1,75 @@
+SurfOS: a review of the block cache and FAT after audit B1-B4, and its fixes (audit B5-B11)
+date: 2026-10-16 (local)
+test: tests/host/test_fatfs.c (make unittest): fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they are, with stand-ins for
+      the rest of the kernel, over RAM disks that refuse writes (all, or those touching some blocks) and reads on
+      request. "Another task" is a hook that runs inside a device write, while the cache's lock is let go. An oracle
+      reads the FAT16 image after every write the disk stores (every point at which a card could be pulled) and checks
+      that no entry, and no FAT link on the way, reaches a cluster the first FAT says is free; a census counts lost
+      clusters; bcache_audit() checks each disk's account (B9).
+before: surfcpu 9b8621c's fs/, include/ and lib/blibc (git archive) built with this test (bcache_audit() stubbed: 9b8621c
+        has no account to check)
+after:  sc/fs-fix (the commits below)
+host:   the Mac (Apple clang, arm64: long is 64 bits), the project's host-test flags, tests/host/pager_shim; and the
+        devenv container (gcc -m32) through make unittest (section 3)
+
+== 1. Before and after, scenario by scenario (91 checks: before 37 fail, 34 of them defects and T15's 3 a new behaviour; after 0)
+scenario audit what                                                   before (9b8621c)                                       after
+T1       B7    a file created in a full directory (it grows by a      FAIL: after the disk's write 22 a directory's chain   pass
+               cluster) whose new cluster's FAT entry is two           reaches cluster 603, which is free
+               sectors away from the link, written, synced
+T2       B7    bsync() (a close's, no sb->lock) while another task     FAIL: after write 20 entry LATE -> cluster 6, free     pass
+               creates a file in a subdirectory                         (its FAT and data dirtied after their order passed)
+T3       B7,B8 a reader of another disk evicts a directory block;      FAIL: after write 20 entry LATE -> cluster 5, free     pass
+               another task adds an entry to it during write_below()
+T4a      B5    mv a b on a card that refuses, then the same mv again   FAIL: both names after the refused mv; the second mv   pass: EIO, the directory holds a;
+                                                                        freed the chain: b read a new file's bytes             the second mv works, b intact
+T4b      B5    the same, then rm b                                     FAIL: rm b freed a's chain: a read a new file's bytes  pass: rm b is ENOENT, a intact
+T5       B6    a card that refuses every write; 2 MB in 4 KiB pieces;  FAIL: 508 KiB accepted, then a healthy disk's bread()  pass: 124 KiB accepted, then EIO;
+               then a healthy disk is read                              is NULL ("every buffer is busy"), and each miss sent   the other disk reads; no write sent
+                                                                        one more write to the refusing card                    to the card while it is read
+T6       B6    one data sector refuses; 21 one-block files             FAIL: two syncs stored nothing (the run of 21 always   pass: the 20 good blocks are written
+                                                                        failed whole)                                          one by one; sync says EIO
+T7       B7    an append whose new cluster is two FAT sectors away     FAIL: after write 22 entry A -> cluster 603 (step 1),  pass
+                                                                        free
+T8       B6    bget()+bdirty() 1100 blocks of a refusing card, then    FAIL: 1023 accepted; with the card working again a     pass: 255 accepted; the other disk
+               the card works and another disk is read                  healthy disk's bread() is NULL until a sync           reads at once
+T9       B5    rm and truncate to 0 on a refusing card                 FAIL: EIO, but a gone and t empty; 16 clusters lost    pass: EIO, nothing changed, none lost
+T10      B6    sequential reads with a failed block at the LRU's      FAIL: 512 requests for 512 blocks (read-ahead off)     pass: 64 requests
+               old end, breada(8) every 8th block
+T11      B8    the block being evicted is dropped while write_below()  FAIL: a zero-length write request                    pass: none
+               writes
+T12      B6    an entry block held back by its data's failure          FAIL: marked failed although never tried              pass: dirty, not failed; one write tried
+T13      B9    eight devices fail and go away; a ninth fails 3 times   FAIL: said 3 times; "takes writes again" never said   pass: said once, and once again
+T14      B7    truncate to a smaller size, the cut and the frees in    FAIL: after write 23 entry F -> cluster 802 (step 300),pass
+               non-adjacent FAT sectors                                 free
+T15      B5,B7 truncate to a smaller size on a refusing card           (not a defect: the truncate succeeded in the cache,   pass: EIO, nothing changed
+                                                                        its cut and frees going out in FAT-sector order as in
+                                                                        T14; the checks are B7's new behaviour, so they fail)
+T16      B7    mkdir and a file in it before any sync                  pass                                                   pass
+B4a-c    B4    a write that does not fit; a refused new file; a        pass                                                   pass
+               refused append (B4's own scenarios)
+B11      B11   an allocation whose second FAT sector cannot be read    FAIL: the FATs differ, a cluster lost                  pass
+B11b     B11   a cut whose second FAT sector cannot be read            FAIL: the FATs differ, the file lost 14 clusters       pass
+(each)   B9    the cache's account of each disk matches its blocks     (stubbed)                                              pass
+
+== 2. Costs, counted on the host with the same stand-ins (device write requests, and blocks)
+                                                    before (9b8621c)          after
+  rm of 200 files, a sync after each                600 (600 blocks)          600 (600 blocks)
+  mv of 200 files in one directory                  400 (400)                 400 (400)
+  200 x open O_TRUNC, write 512 bytes, close        1000 (1000)               1000 (1000)
+  4 MiB in 4 KiB pieces, FAT16, 512-byte clusters   101 (8241)                115 (8291)
+  4 MiB in 4 KiB pieces, FAT32 64 MiB (512 B cl.)   99 (8338)                 197 (8580)
+  4 MiB in 64 KiB pieces, FAT32 64 MiB              68 (8324)                 196 (8580)
+  4 MiB in 4 KiB pieces, FAT32 1 GiB                96 (8226)                 119 (8244)
+  4 MiB in 64 KiB pieces, FAT32 1 GiB               68 (8212)                 84 (8244)
+  The increase is B7's order point each time a growing chain crosses into another FAT sector (every 128 clusters on
+  FAT32): its sector, both copies, goes out before the link into it.
+
+== 3. make unittest in the devenv container (gcc -m32, sc/fs-fix f007529): "FATFS: 91 checks, 0 failures"
+  (with every other unit test passing: surfcpu/docs/evidence/os/x86.txt, round fs-fix)
+
+== 4. Where the same code runs under the riscv32 kernel (make -C surfcpu: test-os, test-os-persist, test-os-faults)
+  boards/qemu_virt/test_os.py, 132 of 132 at -O2 and at -O0: a card that refuses every block now keeps what cp wrote
+  until its share of the cache was full, the first 57344 bytes of BIG.BIN (514560 before B6); a card that answers no
+  command: "write: close: I/O error" (B10) and the sync's "not all of it reached"; after the faults fsck.fat -n finds
+  the volume clean. RTL: test-os-persist 17 of 17, test-os-faults 25 of 25.

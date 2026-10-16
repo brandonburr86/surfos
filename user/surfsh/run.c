@@ -160,11 +160,20 @@ static int redirect_out(const struct command *c) {
 /* After a command with > or >> that ran in this task: what stdout still holds goes into the
    file. When it cannot (a full disk) it is dropped, so it never reaches the console later,
    and the command failed. Then descriptor 1 is what it was: the copy kept at the start, or
-   the console. */
+   the console. 10/16/26 (audit B10): the file is closed first, on its own, so a write-back
+   that fails at the close fails the command too (dup2() would close it without a word). */
 static int restore_out(const struct command *c, int status) {
+    int failed = 0, e = 0;
     if(fflush(stdout) == EOF) {
-        int e = errno;
+        e = errno;
         fpurge(stdout);
+        failed = 1;
+    }
+    if(close(1) < 0 && !failed) {
+        e = errno;
+        failed = 1;
+    }
+    if(failed) {
         fprintf(stderr, "surfsh: %s: %s\n", c->out, strerror(e));
         if(!status) status = STATUS_FAIL;
     }
@@ -272,7 +281,9 @@ static int run_program(struct command *c) {
     pid = (c->in || c->out) ? spawnfd(path, c->argv, fds) : spawn(path, c->argv);
     e = errno;
     if(fds[0] >= 0) close(fds[0]);          /* the program has its own references */
-    if(fds[1] >= 0) close(fds[1]);
+    /* 10/16/26 (audit B10): a foreground program's > file is closed here once it has ended (the last
+       reference), so a write-back that fails at the close is said and fails the command */
+    if(fds[1] >= 0 && (pid < 0 || c->bg)) { close(fds[1]); fds[1] = -1; }
     if(pid < 0) {
         if(!c->bg) page(0);
         fprintf(stderr, "surfsh: %s: %s\n", name, strerror(e));
@@ -286,10 +297,15 @@ static int run_program(struct command *c) {
     if(waitpid(pid, &status, 0) != pid) {
         e = errno;
         page(0);
+        if(fds[1] >= 0) close(fds[1]);
         fprintf(stderr, "surfsh: waiting for %d: %s\n", pid, strerror(e));
         return STATUS_FAIL;
     }
     page(0);                                /* the lines below are not paged: q cannot hide them */
+    if(fds[1] >= 0 && close(fds[1]) < 0) {
+        fprintf(stderr, "surfsh: %s: %s\n", c->out, strerror(errno));
+        if(!status) status = STATUS_FAIL;
+    }
     if(status == -1) {
         printf("[pid %d killed]\n", pid);
         return STATUS_KILLED;

@@ -8,7 +8,7 @@
 #   make test         boot headless and run the smoke test over the serial console
 #   make test-all     smoke test at -O0 and -O2
 #   make test-tcp     TCP against hand-made segments on a raw link (tools/qemu-tcp.py; the smoke test runs it too)
-#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs too)
+#   make unittest     host-side unit tests for blibc (formatter, strings) and pure kernel code (mkfs, the block cache and FAT too)
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
@@ -405,6 +405,20 @@ $(BUILD)/host/test_pager: tests/host/test_pager.c $(PAGER_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -pthread $^ -o $@
 
+# 10/16/26 (audit B5-B11): the block cache and FAT together, fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they are, over
+# RAM disks that refuse writes on request, with a check of the image after every write the disk stores
+# (tests/host/test_fatfs.c); tests/host/pager_shim stands in for the interrupt flag
+FATFS_FLAGS = -Itests/host/pager_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+FATFS_OBJ   = $(BUILD)/host/fatfs/fs/bcache.o $(BUILD)/host/fatfs/fs/fat.o $(BUILD)/host/fatfs/fs/fat_mkfs.o
+$(BUILD)/host/fatfs/%.o: %.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatfs test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) -c $< -o $@
+
+$(BUILD)/host/test_fatfs: tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) $^ -o $@
+
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
 $(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
@@ -441,7 +455,7 @@ $(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -450,6 +464,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(PYTHON) tests/test_part_tools.py $(BUILD)/host/test_part
 	$(BUILD)/host/test_libc
 	$(BUILD)/host/test_mkfs
+	$(BUILD)/host/test_fatfs
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
