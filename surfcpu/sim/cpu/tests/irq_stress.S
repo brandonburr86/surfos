@@ -5,12 +5,14 @@ File: irq_stress.S Date: 10/15/26 (SurfCPU)
 --------------------
 A loop of 200 iterations mixing RAM loads and stores, an MMIO read with a side effect
 (PROBE_RD returns how often it was read) and an MMIO write (PROBE_WR, adding into
-PROBE_SUM), multiply, divide, CSR writes and reads, and data-dependent branches runs once
+PROBE_SUM), multiply, divide, CSR writes and reads, an ECALL (handled by the framework's
+trap handler) and data-dependent branches runs once
 without interrupts (the reference) and once while the testbench raises external
 interrupts at random (from --seed, at a rate scaled to the reference run's length so that
 about 300 come whatever the bus timing; the handler counts them and drops the level). Both runs must compute the same checksum, read and write the probes
-exactly 200 times each with the same sum, and the handler must have run at least 100
-times, always with mepc inside the interrupted region.
+exactly 200 times each with the same sum, take exactly 200 ECALL traps (an interrupt
+landing on the ECALL is taken first, then the ECALL traps after MRET), and the handler must
+have run at least 100 times, always with mepc inside the interrupted region.
 */
 // surf-test: spike=no max-cycles=40000000
 #define TEST_IRQ_HANDLER
@@ -29,12 +31,16 @@ test_main:
         sw      x0, TB_PROBE_RD(x9)
         sw      x0, TB_PROBE_SUM(x9)
         lw      x20, TB_PROBE_WR(x9)
+        mv      x25, t3                         // traps so far (t3 counts every trap)
         lw      x4, TB_CYCLE(x9)
         jal     ra, work
         lw      x2, TB_CYCLE(x9)
         sub     x2, x2, x4                      // cycles the work took at this bus speed
         mv      x21, x15                        // reference checksum
         mv      x22, x16                        // reference probe sum
+        sub     x25, t3, x25                    // one ECALL per iteration
+        li      x7, ITER
+        bne     x25, x7, fail
         lw      x14, TB_PROBE_RD(x9)
         li      x7, ITER
         bne     x14, x7, fail
@@ -50,6 +56,7 @@ test_main:
         sw      x0, TB_PROBE_SUM(x9)
         lw      x20, TB_PROBE_WR(x9)
         li      x24, 0                          // interrupts taken
+        mv      x25, t3                         // traps so far
         li      x7, MIP_MEIP
         csrw    mie, x7
         li      x7, 300                         // about 300 interrupts during the work,
@@ -80,6 +87,11 @@ stress_end:
         li      TESTNUM, 5                      // and the interrupts really came
         li      x7, 100
         bltu    x24, x7, fail
+        li      TESTNUM, 6                      // every ECALL trapped exactly once:
+        sub     x25, t3, x25                    // traps = ECALLs + interrupts
+        sub     x25, x25, x24
+        li      x7, ITER
+        bne     x25, x7, fail
         j       pass
 
         // x15 = checksum, x16 = sum of the values written to PROBE_WR. Uses x10..x19, x6.
@@ -120,7 +132,8 @@ work:
         add     x15, x15, x14
         add     x15, x15, x19
         csrw    mscratch, x15
-        csrr    x19, mscratch
+        ecall                                   // an exception every iteration; the trap
+        csrr    x19, mscratch                   // handler skips it (an interrupt may come first)
         bne     x19, x15, fail
         andi    x6, x13, 1
         beqz    x6, 3f
