@@ -7,11 +7,12 @@
 #   make test-io-models   the SD card model on its own (software SPI master)
 #   make test-io-spi      surf_spi against the SD card model through SurfBus
 #   make test-io-ps2      surf_ps2 against the PS/2 keyboard model through SurfBus
+#   make test-io-video    surf_video measured and decoded by the VGA capture model
 #
 # IO_SEEDS="1 2 3" chooses the seeds; IO_JOBS the parallel C++ compiles per Verilator build.
 
 IO_PERIPH    = rtl/peripherals
-IO_TOPS      = surf_spi surf_ps2
+IO_TOPS      = surf_spi surf_ps2 surf_video
 IO_RTL       = $(foreach m,$(IO_TOPS),$(IO_PERIPH)/$(m).v) \
                $(wildcard $(IO_PERIPH)/surf_spi_*.v $(IO_PERIPH)/surf_ps2_*.v $(IO_PERIPH)/surf_video_*.v)
 IO_BUILD     = $(BUILD)/sim/io
@@ -28,8 +29,10 @@ SD_MODEL_SRC = sim/models/sdcard_model.cpp
 SD_MODEL_HDR = sim/models/sdcard_model.h sim/io/sd_host.h
 KB_MODEL_SRC = sim/models/ps2_keyboard_model.cpp
 KB_MODEL_HDR = sim/models/ps2_keyboard_model.h
+VGA_MODEL_SRC = sim/models/vga_capture.cpp
+VGA_MODEL_HDR = sim/models/vga_capture.h
 
-.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2
+.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video
 lint: lint-io
 test-soc: test-io
 check: check-io
@@ -44,7 +47,7 @@ lint-io:
 # the font ROM is part of check: its sources are pinned and it must match the x86 font
 check-io: test-io-font
 
-test-io: test-io-font test-io-models test-io-spi test-io-ps2
+test-io: test-io-font test-io-models test-io-spi test-io-ps2 test-io-video
 	@echo "test-io: PASS"
 
 test-io-font:
@@ -91,3 +94,21 @@ test-io-ps2: $(IO_BUILD)/ps2/Vsurf_ps2
 	  $< --seed $$s +verilator+rand+reset+2 +verilator+seed+$$s > $(IO_BUILD)/ps2/run.$$s.txt 2>&1; \
 	  st=$$?; tail -1 $(IO_BUILD)/ps2/run.$$s.txt; \
 	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/ps2/run.$$s.txt; exit 1; }; done
+
+# ---------------------------------------------------------------- surf_video
+VIDEO_RTL = $(IO_PERIPH)/surf_video.v $(IO_PERIPH)/surf_video_font.v rtl/lib/surf_sync.v \
+            rtl/lib/surf_pulse_sync.v rtl/lib/surf_cdc_word.v
+
+$(IO_BUILD)/video/Vtb_video: $(VIDEO_RTL) sim/io/tb_video.v sim/io/test_video.cpp sim/io/surfbus_master.h \
+                             $(VGA_MODEL_SRC) $(VGA_MODEL_HDR)
+	@mkdir -p $(dir $@)
+	$(Q)$(IO_VERILATE) --top-module tb_video -Mdir $(IO_BUILD)/video/obj -o ../Vtb_video \
+	  sim/io/tb_video.v $(CURDIR)/sim/io/test_video.cpp $(CURDIR)/$(VGA_MODEL_SRC) > $(IO_BUILD)/video/build.txt 2>&1 \
+	  || { cat $(IO_BUILD)/video/build.txt; exit 1; }
+
+test-io-video: $(IO_BUILD)/video/Vtb_video
+	$(Q)for s in $(IO_SEEDS); do \
+	  $< --seed $$s --font $(CURDIR)/../driver/font8x16.c --out $(IO_BUILD)/video \
+	    +verilator+rand+reset+2 +verilator+seed+$$s > $(IO_BUILD)/video/run.$$s.txt 2>&1; \
+	  st=$$?; tail -1 $(IO_BUILD)/video/run.$$s.txt; \
+	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/video/run.$$s.txt; exit 1; }; done
