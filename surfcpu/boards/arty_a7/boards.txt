@@ -6,8 +6,12 @@
 #   ofl_board     openFPGALoader's board name (its compatibility list)
 #   idcode        JTAG IDCODE bits 27:0 (bits 31:28 are the silicon revision): AMD UG470 v1.17
 #                 table 1-1, XC7A35T X362D093, XC7A100T X3631093
-#   bit_device    the device a .bit file's header must name (its part field starts with it)
+#   bit_parts     the parts a .bit file's header may name in its field b, compared in lower case
+#                 without a leading "xc" and the speed grade, so device and package: the
+#                 board's part (Vivado builds) and, for the A7-35T, xc7a35tcsg324-1, which the
+#                 open flow writes because Project X-Ray has no -1L/-1LI part (same die, package
+#                 and bitstream; docs/OPEN-FLOW.md section 6.3). Comma-separated, no spaces.
 #
-# board          part                 ofl_board       idcode      bit_device
-arty_a7_35t      xc7a35ticsg324-1L    arty_a7_35t     0x0362D093  7a35t
-arty_a7_100t     xc7a100tcsg324-1     arty_a7_100t    0x03631093  7a100t
+# board          part                 ofl_board       idcode      bit_parts
+arty_a7_35t      xc7a35ticsg324-1L    arty_a7_35t     0x0362D093  7a35ticsg324,7a35tcsg324
+arty_a7_100t     xc7a100tcsg324-1     arty_a7_100t    0x03631093  7a100tcsg324

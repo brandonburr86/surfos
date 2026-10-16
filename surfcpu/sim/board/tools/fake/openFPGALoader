@@ -1,14 +1,46 @@
 #!/bin/sh
-# Fake openFPGALoader for the board track's wrapper tests: logs the call, answers --detect with
-# $FAKE_IDCODE (and $FAKE_IDCODE2 for a second device), and "programs" with $FAKE_PROGRAM_RC.
+# Fake openFPGALoader for the board track's wrapper tests: logs the call and answers like the
+# real program (src/main.cpp, src/libusb_ll.cpp):
+#   --scan-usb   one row per cable in $FAKE_CABLES (serial numbers, default one cable
+#                210319A28C7F) as "bus device 0x0403:0x6010 ..."; $FAKE_SCAN_RC makes it fail
+#   --detect     "idcode 0x%x" (no leading zeros) for $FAKE_IDCODE and $FAKE_IDCODE2, or
+#                $FAKE_DETECT_TEXT verbatim; "No cable found" without $FAKE_IDCODE
+#   --ftdi-serial S   fails unless S is one of the cables
+#   anything else     "programs", with exit status $FAKE_PROGRAM_RC
 echo "openFPGALoader $*" >> "$FAKE_LOG"
+cables=${FAKE_CABLES-210319A28C7F}
+serial=
+prev=
+for a in "$@"; do
+    [ "$prev" = --ftdi-serial ] && serial=$a
+    prev=$a
+done
+if [ -n "$serial" ]; then
+    case " $cables " in
+        *" $serial "*) ;;
+        *) echo "Error: no cable with serial number $serial" >&2; exit 1 ;;
+    esac
+fi
 case " $* " in
+    *" --scan-usb "*)
+        [ "${FAKE_SCAN_RC:-0}" = 0 ] || { echo "unknown option --scan-usb" >&2; exit "$FAKE_SCAN_RC"; }
+        n=0
+        for c in $cables; do n=$((n + 1)); done
+        echo "found $n USB device"
+        printf '%3s %3s %-13s %-15s %-12s %-20s %s\n' Bus device vid:pid "probe type" manufacturer serial product
+        d=7
+        for c in $cables; do
+            printf '%03d %03d    0x%04x:0x%04x %-15s %-12s %-20s %s\n' 1 "$d" 1027 24592 FTDI2232 Digilent "$c" "Digilent USB Device"
+            d=$((d + 1))
+        done
+        exit 0 ;;
     *" --detect "*)
+        if [ -n "${FAKE_DETECT_TEXT:-}" ]; then printf '%s\n' "$FAKE_DETECT_TEXT"; exit 0; fi
         if [ -n "${FAKE_IDCODE:-}" ]; then
-            printf 'index 0:\n\tidcode %s\n\tmanufacturer xilinx\n\tfamily artix a7\n\tirlength 6\n' "$FAKE_IDCODE"
+            printf 'index 0:\n\tidcode 0x%x\n\tmanufacturer xilinx\n\tfamily artix a7 35t/100t\n\tmodel  xc7a\n\tirlength 6\n' "$FAKE_IDCODE"
         fi
         if [ -n "${FAKE_IDCODE2:-}" ]; then
-            printf 'index 1:\n\tidcode %s\n\tirlength 6\n' "$FAKE_IDCODE2"
+            printf 'index 1:\n\tidcode 0x%x\n\tirlength 6\n' "$FAKE_IDCODE2"
         fi
         [ -n "${FAKE_IDCODE:-}" ] || { echo "No cable found" >&2; exit 1; }
         exit 0 ;;

@@ -213,6 +213,7 @@ cat_sha() { ( cd "$root" && cat "$@" ) | shasum -a 256 | awk '{ print $1 }'; }
 spec_get() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"#]*\)\"\{0,1\}.*/\1/p" "$root/spec/soc.toml" | head -n 1 | sed 's/[[:space:]]*$//'; }
 kernel="$root/../build/riscv32/arty_a7/SURFOS.BIN"
 if [ "$dry" = 1 ]; then manifest="$base/manifest.dry-run.txt"; else manifest="$base/manifest.txt"; fi
+head="$stage/manifest-head.txt"         # the keys known before the run; finish() adds the results
 {
     echo "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh"
     echo "run_id = \"$run_id\""
@@ -240,7 +241,8 @@ if [ "$dry" = 1 ]; then manifest="$base/manifest.dry-run.txt"; else manifest="$b
     echo "soc_version = \"$(spec_get soc_version)\""
     echo "platform_abi = $(spec_get platform_abi)"
     echo "mac = \"$(uname -s)-$(uname -m)\""
-} > "$manifest"
+} > "$head"
+cp "$head" "$manifest"                  # until finish(): no result, so tools/program.sh refuses it
 
 echo "$me: $design for $board ($part), build $build_id$( [ "$dirty" = 1 ] && echo ' dirty'), flow $FLOW"
 echo "$me: staged in ${stage#$root/} ($(echo $sources | wc -w | tr -d ' ') sources, $(echo $xdcs $cdc_files | wc -w | tr -d ' ') constraint files)"
@@ -283,20 +285,35 @@ case "$FLOW" in
 esac
 
 # ------------------------------------------------------------------------------ results
+# The manifest: the keys known before the run, the outcome (result, and the bitstream's SHA-256
+# and size, which tools/program.sh compares with the file), then the flow's own results.
+finish() {        # RESULT REASON SECTION FILE: write the final manifest
+    {
+        cat "$head"
+        echo "result = \"$1\""
+        if [ "$1" = pass ]; then
+            echo "bitstream_sha256 = \"$(sha "$base/$design.bit")\""
+            echo "bitstream_bytes = $(wc -c < "$base/$design.bit" | tr -d ' ')"
+        else
+            echo "reason = \"$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')\""
+        fi
+        echo
+        echo "[$3]"
+        cat "$4"
+    } > "$manifest.tmp"
+    mv "$manifest.tmp" "$manifest"
+}
 results="$base/out/build-results.txt"
 [ -f "$results" ] || die "Vivado left no build-results.txt (exit status $status; see ${base#$root/}/out/vivado.log)"
-{
-    echo
-    echo "[vivado]"
-    cat "$results"
-} >> "$manifest"
 if grep -q '^result = "pass"' "$results" && [ -f "$base/out/$design.bit" ] && [ "$status" = 0 ]; then
     cp "$base/out/$design.bit" "$base/$design.bit"
-    echo "bitstream_sha256 = \"$(sha "$base/$design.bit")\"" >> "$manifest"
+    finish pass "" vivado "$results"
     echo "$me: PASS: ${base#$root/}/$design.bit"
     grep -E '^(wns_ns|whs_ns|lut|ff|bram_tiles|dsp) ' "$results" | sed "s/^/$me:   /"
     exit 0
 fi
-echo "$me: FAIL (Vivado exit status $status): $(sed -n 's/^reason = //p' "$results")" >&2
+why=$(sed -n 's/^reason = "\(.*\)"$/\1/p' "$results")
+finish fail "Vivado exit status $status${why:+: $why}" vivado "$results"
+echo "$me: FAIL (Vivado exit status $status): $why" >&2
 echo "$me: reports in ${base#$root/}/out/reports, log ${base#$root/}/out/vivado.log" >&2
 exit 1

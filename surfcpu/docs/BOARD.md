@@ -316,20 +316,37 @@ the staged files, `params.tcl`, the TOML manifest, and each gate stopping the bi
 ```sh
 make program-volatile BOARD=arty_a7_100t DESIGN=arty_a7_baseline     # configuration RAM only
 tools/program.sh detect arty_a7_100t
+make program-volatile BOARD=arty_a7_100t CABLE_SERIAL=210319A28C7F    # with two boards on USB
 ```
 
 `tools/program.sh` needs openFPGALoader on the Mac (`brew install openfpgaloader`, gap G3; it
-exits 2 "pending" without it). Before loading it runs `openFPGALoader -c digilent --detect`
-and refuses unless exactly one device answers and its IDCODE (bits 27:0) is the board's:
-`0x0362D093` for the A7-35T, `0x03631093` for the A7-100T (UG470 v1.17 table 1-1; bits 31:28
-are the silicon revision). It refuses a bitstream whose header names another device, and one
-whose manifest says the build failed. `volatile` runs `openFPGALoader -b arty_a7_100t <bit>`:
-configuration RAM, lost at power-off (PROG or a power cycle returns to the flash). `flash`
-(milestone 9) writes the configuration flash with `-f --verify` only with
-`SURFCPU_FLASH_CONFIRM=write-flash-<board>` or the board name typed at the prompt, and only a
-bitstream with a passing manifest; the board's flash part depends on its revision (RM §5.2:
-Micron N25Q128A13ESF40, Spansion S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested
-with a fake openFPGALoader (in the checks above). Nothing has been programmed.
+exits 2 "pending" without it). Before loading anything it checks, and refuses on a mismatch:
+
+* **The cable.** openFPGALoader takes the first FT2232H (USB 0403:6010) it finds, so with a
+  second board or another FT2232H device connected it could load the wrong one. Unless a
+  serial number is given (`CABLE_SERIAL=` or `--ftdi-serial`, passed on to every
+  openFPGALoader call), `openFPGALoader --scan-usb` must list at most one.
+* **The chain.** `openFPGALoader -c digilent --detect` must show exactly one device, with the
+  board's IDCODE in bits 27:0: `0x0362D093` for the A7-35T, `0x03631093` for the A7-100T
+  (UG470 v1.17 table 1-1; bits 31:28 are the silicon revision). openFPGALoader prints it as
+  `idcode 0x%x`, without leading zeros (`0x362d093`), and for these parts without the revision.
+* **The bitstream.** The part in the `.bit` header (field b), without `xc` and the speed grade,
+  must be one of the board's `bit_parts` in `boards.txt`: device and package, so a bitstream
+  for another package of the same die is refused. The A7-35T accepts `7a35ticsg324` (its part)
+  and `7a35tcsg324`, which the open flow writes (Project X-Ray has no -1L part; same die,
+  package and bitstream).
+* **The manifest** next to the bitstream, if there is one: it must say every check passed and
+  carry the file's SHA-256. `tools/openxc7-build.sh`'s own manifest (a flow track build) is
+  accepted for a volatile load when every check line says PASS.
+
+`volatile` runs `openFPGALoader -b arty_a7_100t <bit>`: configuration RAM, lost at power-off
+(PROG or a power cycle returns to the flash). `flash` (milestone 9) writes the configuration
+flash with `-f --verify` only with `SURFCPU_FLASH_CONFIRM=write-flash-<board>` or the board name
+typed at the prompt, and only a bitstream whose `tools/fpga-build.sh` manifest says
+`result = "pass"` for this file (`bitstream_sha256`), this board and its part; the board's
+flash part depends on its revision (RM §5.2: Micron N25Q128A13ESF40, Spansion
+S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested with a fake openFPGALoader that
+answers like the real one (in the checks above). Nothing has been programmed.
 
 ## 10. Budgets
 

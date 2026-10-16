@@ -144,22 +144,79 @@ check "docker: the bitstream" test -f "$base/arty_a7_100t/arty_a7_baseline/arty_
 # ============================================================================== program.sh
 bit100=$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
 bit35=$base/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit
+m100=$base/arty_a7_100t/arty_a7_baseline/manifest.txt
 export DESIGN=arty_a7_baseline
 run env PATH=/usr/bin:/bin "$root/tools/program.sh" volatile arty_a7_100t
 check "program: no openFPGALoader -> pending, exit 2" is "$rc" 2
 run env FAKE_IDCODE= tools/program.sh volatile arty_a7_100t
 check "program: no cable/device refused" has "found no JTAG cable"
+
+# the IDCODE as the real openFPGALoader prints it: printf("0x%x"), so 7 digits for revision 0
+check "program: the fake prints IDCODEs like openFPGALoader (0x362d093)" \
+    test "$(FAKE_IDCODE=0x0362d093 sh sim/board/tools/fake/openFPGALoader --detect | sed -n 's/^.idcode //p')" = 0x362d093
+run env FAKE_IDCODE=0x0362d093 tools/program.sh detect arty_a7_35t
+check "program: detect reads 'idcode 0x362d093' as the 35T" has "IDCODE 0x0362D093 = BOARD arty_a7_35t"
+run env FAKE_IDCODE=0x03631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads 'idcode 0x3631093' as the 100T" has "IDCODE 0x03631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x13631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads the 100T with revision 1 (0x13631093)" has "IDCODE 0x13631093 = BOARD arty_a7_100t"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_100t
 check "program: 35T IDCODE with BOARD=arty_a7_100t refused" has "refusing"
 check "program: ... and nothing was loaded" test "$(grep -c -- ' -b ' "$FAKE_LOG")" -eq 0
 run env FAKE_IDCODE=0x13631093 FAKE_IDCODE2=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: two devices on the chain refused" has "refusing to guess"
-run env FAKE_IDCODE=0x13631093 tools/program.sh detect arty_a7_100t
-check "program: detect reads the 100T (revision 1)" has "IDCODE 0x13631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x1 FAKE_DETECT_TEXT="$(printf 'index 0:\n\tidcode 0x136310930')" tools/program.sh detect arty_a7_100t
+check "program: an IDCODE longer than 8 digits is not read as one" has "cannot read the IDCODE"
+
+# the cable: one FT2232H, or the one named by its serial number
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh volatile arty_a7_100t
+check "cable: two FT2232H cables refused" has "2 FT2232H cables"
+check "cable: ... after only listing them (no detect, no load)" test "$(grep -vc -- '--scan-usb' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" CABLE_SERIAL=210319B0C8A6 tools/program.sh volatile arty_a7_100t
+check "cable: CABLE_SERIAL chooses one, the load exits 0" is "$rc" 0
+check "cable: ... detect on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -c digilent --detect"
+check "cable: ... and the load on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -b arty_a7_100t $bit100"
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh --ftdi-serial 210319A28C7F detect arty_a7_100t
+check "cable: --ftdi-serial chooses one too" test "$rc" -eq 0 -a -n "$(grep -- '--ftdi-serial 210319A28C7F -c digilent --detect' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL=0123NOSUCH tools/program.sh detect arty_a7_100t
+check "cable: a serial number no cable has finds no cable" has "found no JTAG cable"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL='21;rm' tools/program.sh detect arty_a7_100t
+check "cable: a serial number with shell characters refused" test "$rc" -eq 1 -a ! -s "$FAKE_LOG"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 tools/program.sh detect arty_a7_100t
+check "cable: no USB list (--scan-usb failed) refused without a serial number" has "cannot be counted"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 CABLE_SERIAL=210319A28C7F tools/program.sh detect arty_a7_100t
+check "cable: ... and accepted with one" is "$rc" 0
+
+# the bitstream's header: device and package (UG470 .bit fields a and b, as Vivado writes them)
+mkbit() {     # FILE PART: a .bit header with fields a and b, then filler
+    n=$(( ${#2} + 1 ))
+    { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\016other_project\000b\000'
+      printf "\\$(printf '%03o' "$n")"
+      printf '%s\000c\000\01310/01/2026\000 not a real bitstream\n' "$2"; } > "$1"
+}
+mkdir -p "$t/bits"
+for c in "7a35tcpg236:arty_a7_35t:refuse" "7a100tfgg484:arty_a7_100t:refuse" "7a50tcsg324:arty_a7_35t:refuse" \
+         "7a35ticsg324:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_100t:refuse" \
+         "xc7a100tcsg324-1:arty_a7_100t:load" "XC7A100TCSG324-1:arty_a7_100t:load"; do
+    bp=${c%%:*}; rest=${c#*:}; bb=${rest%%:*}; want=${rest#*:}
+    mkbit "$t/bits/$bp.bit" "$bp"
+    case "$bb" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
+    run env FAKE_IDCODE=$id tools/program.sh volatile "$bb" "$t/bits/$bp.bit"
+    if [ "$want" = load ]; then
+        check "header: $bp on $bb loads" test "$rc" -eq 0 -a -n "$(grep -- " -b $bb " "$FAKE_LOG")"
+    else
+        check "header: $bp on $bb refused" test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")"
+    fi
+done
+printf 'no header at all\n' > "$t/bits/raw.bit"
+run env FAKE_IDCODE=0x03631093 tools/program.sh volatile arty_a7_100t "$t/bits/raw.bit"
+check "header: a file without a .bit header refused" has "no .bit header"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$bit35"
 check "program: a 35T bitstream on the 100T refused" has "was built for 7a35t"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/nosuch.bit"
 check "program: missing bitstream refused" has "no bitstream"
+
+# loading, with the build manifest next to the bitstream
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: volatile load exits 0" is "$rc" 0
 check "program: loads configuration RAM with the board's name" logged "openFPGALoader -b arty_a7_100t $bit100"
@@ -176,11 +233,61 @@ check "flash: confirmation for another board refused" has "not confirmed"
 run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
 check "flash: confirmed write exits 0" is "$rc" 0
 check "flash: writes and verifies the flash" logged "openFPGALoader -b arty_a7_100t -f --verify $bit100"
-sed -i 's/^result = "pass"/result = "fail"/' "$base/arty_a7_100t/arty_a7_baseline/manifest.txt"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t "$t/bits/xc7a100tcsg324-1.bit" < /dev/null
+check "flash: a bitstream without a build manifest refused" has "flash needs the bitstream's build manifest"
+
+# the manifest must describe this file, this board and its part
+cp "$bit100" "$t/bit100.saved"
+cp "$m100" "$t/m100.saved"
+printf 'x' >> "$bit100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a bitstream that is not the one the manifest describes refused" has "describes another bitstream"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: ... also for a volatile load" has "describes another bitstream"
+cp "$t/bit100.saved" "$bit100"
+sed -i 's/^board = "arty_a7_100t"/board = "arty_a7_35t"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another board refused" has "is for board 'arty_a7_35t'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^part = "xc7a100tcsg324-1"/part = "xc7a100tcsg324-2"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another part refused" has "is for part 'xc7a100tcsg324-2'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^result = "pass"/result = "fail"/' "$m100"
 run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
 check "flash: a bitstream whose build failed its checks refused" has "does not say the build passed"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: ... also for a volatile load" has "does not say the build passed"
+cp "$t/m100.saved" "$m100"
+
+# tools/openxc7-build.sh's own manifest (a flow track build, docs/OPEN-FLOW.md section 8)
+ox=$t/openxc7/flow_demo-arty_a7_35t
+mkdir -p "$ox"
+mkbit "$ox/flow_demo.bit" xc7a35tcsg324-1
+oxmanifest() {   # BLOCK_RAM_RESULT: an openxc7-build.sh manifest for $ox/flow_demo.bit
+    { echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+      echo "top                 flow_demo"
+      echo "part                xc7a35tcsg324-1 (device xc7a35t, chip database chipdb-xc7a50t.bin)"
+      echo "bitstream           $ox/flow_demo.bit sha256:$(shasum -a 256 "$ox/flow_demo.bit" | cut -d' ' -f1) 99 bytes"
+      echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
+      echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
+      echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"
+      echo "check block RAM     $1 (contents decoded from the bitstream: check-bram.txt)"
+      echo "check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)"
+      echo "check clocks        none in the design (MMCM/PLL dividers against XAPP888: check-clocks.txt)"; } > "$ox/manifest.txt"
+}
+oxmanifest "none in the design"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: every check passed, the volatile load exits 0" test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x0362d093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_35t tools/program.sh flash arty_a7_35t "$ox/flow_demo.bit" < /dev/null
+check "openxc7 manifest: ... but no flash without tools/fpga-build.sh's manifest" has "flash needs the bitstream's build manifest from tools/fpga-build.sh"
+oxmanifest "FAIL"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: a failed check refused" has "does not say the build passed its checks (check block RAM FAIL"
+oxmanifest "PASS"
+printf 'x' >> "$ox/flow_demo.bit"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: another bitstream refused" has "describes another bitstream"
 
 # ============================================================================== digilent/fetch.sh
 # A copy of the digilent directory whose SHA256SUMS lists three made-up manuals: one saved
