@@ -178,3 +178,27 @@ physical results are separate columns, so nothing claims more than happened.
     and `test-os-faults` 25 of 25.
   * One riscv32 -O0 timing check failed once under load and passed on the rerun.
 * A second independent review of this round is running.
+* The integrator's `make check` after the merge stopped on that same check at -O0 ("mtime moved
+  as much as the ticks did"). It runs right after boot, before any file is written. The tick
+  count was 10 to 15, but mtime had moved more than 16 periods: QEMU was held up between the two
+  reads on a loaded Mac. The test now reads both clocks together and gets three tries (6c89831).
+
+### 2026-10-16: the board test kit
+
+* os-5 (merged as c6ff037) gives one command per board milestone,
+  `make -C surfcpu board-test M=m1` (also m3, m5, m7, m8 and m9). It uses `tools/uart.py` and
+  `tools/board-test.py`, which need only the Mac's own python3. Each run:
+  * leads the owner through the steps and reads the board's serial port the whole time;
+  * writes `docs/evidence/physical/<m>-<date>.txt` with the transcript.
+
+  Runs against the RTL system say SIMULATION and never go to the physical folder
+  ([PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)).
+* Rehearsed before there is a board:
+  * Against the RTL system through `surfsim --uart-pty`: m3, m5, m7, m8, and m9 with two cold
+    boots and a one-minute soak.
+  * Against fake boards on pseudo-terminals: m1, and the failure cases (the port going away,
+    garbage, silence, a wrong build manifest, a lost second). Each failure case ends in a FAIL
+    within seconds.
+
+  `test-os-kit` is on `make check` (about a minute; [evidence](evidence/os/test-os-kit.txt)).
+* Nothing has run on the board yet.

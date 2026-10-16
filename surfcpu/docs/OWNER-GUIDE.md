@@ -21,6 +21,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Files written by SurfOS | pass in simulation: written on the RTL system, ejected, read back after a second boot and by the Mac's tools; write errors, a card taken out and a full card tested on the RTL system too |
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the bridge is done; the memory controller in the bitstream is a later step, so booting SurfOS on the board waits for it |
+| The board tests | one command per board milestone (`make -C surfcpu board-test M=m1`, [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)), rehearsed against the RTL system and fake boards; it reads the board's serial port itself and writes the evidence file |
 | The board itself | nothing has been connected or programmed yet |
 
 ## 1. Set up the Mac (once)
@@ -89,6 +90,9 @@ Docker Desktop must be running (whale icon in the menu bar).
    openFPGALoader lines change from `pending` to the board's cable, its two serial ports and the
    FPGA's IDCODE: `0x0362D093` is an A7-35T, `0x03631093` an A7-100T. **Tell me which one you
    have**; every command below takes `BOARD=arty_a7_35t` or `BOARD=arty_a7_100t` (the default).
+5. Optional, before the board: `make -C surfcpu board-test-selftest` (15 seconds) runs the board
+   test kit against fake boards on the Mac's own pseudo-terminals. It checks that the Mac's own
+   `python3` runs the kit; nothing needs installing.
 
 ## 2. Check and build
 
@@ -194,9 +198,11 @@ keyboard is a real PS/2 keyboard that works at 3.3 V (INVENTORY.md section 4, G4
    BOARD=arty_a7_100t means 0x03631093 (bits 27:0); refusing`. It also refuses a bitstream
    built for another board, one whose build checks failed, and more than one Arty on the USB
    bus unless you name one (`CABLE_SERIAL=...`).
-3. Watch the UART: `screen /dev/cu.usbserial-<serial>1 115200`. The second of the two ports
-   is the UART; quit `screen` with Ctrl-A then K, then Y. Expected one line a second, in this
-   format (BOARD.md; simulation prints `sim` where the board prints `clean` or `dirty`):
+3. Watch the UART: `make -C surfcpu uart-console`. It finds the board's UART by itself (the
+   second of its two ports) and needs nothing installed; Ctrl-] quits. `screen
+   /dev/cu.usbserial-<serial>1 115200` works too; quit it with Ctrl-A, then K, then Y. Expected:
+   one line a second, in this format (BOARD.md; simulation prints `sim` where the board prints
+   `clean` or `dirty`):
 
    ```
    SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty 1760560000 | up 000012 s | pix 25173611 Hz | sw 0101 btn 0000 rx 41
@@ -209,6 +215,12 @@ keyboard is a real PS/2 keyboard that works at 3.3 V (INVENTORY.md section 4, G4
    LD4..LD7, buttons light the RGB LEDs blue, RESET restarts the count.
 
 That is milestone 1's physical test. Please send me the lines you see, or a photo of the LEDs.
+
+Or run the whole test as one command: `make -C surfcpu board-test M=m1`. It asks for each step,
+for example "load the design", "set the switches to 0101" or "do the LEDs blink?". It checks the
+UART lines itself and writes `surfcpu/docs/evidence/physical/m1-<date>.txt`, transcript
+included. [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md) describes the six tests (m1, m3, m5, m7, m8,
+m9).
 
 ## 5. The CPU on the board (milestone 3) **pending**
 
@@ -237,7 +249,8 @@ BRAMDIAG: PASS (203 checks)
 ```
 
 Then LD4-LD7 light and LD0 is green (red on a failure); typed characters are echoed. BOARD.md
-section 12 has the whole transcript. This is milestone 3's physical test.
+section 12 has the whole transcript. This is milestone 3's physical test; as one command:
+`make -C surfcpu board-test M=m3`.
 
 ## 6. SurfBoot and the card reader **pending**
 
@@ -265,6 +278,9 @@ surfboot> ls /
 ```
 
 Your card answers `sd` and `ls /` with its own details. Please send me these lines.
+
+Milestone 5's whole test, `make -C surfcpu board-test M=m5`, needs the DDR design: it also runs
+the DDR diagnostic `DDRDIAG.BIN` from the card, then takes the card out and puts it back.
 
 ## 7. Prepare the microSD card (once) and install SurfOS
 
@@ -313,7 +329,8 @@ SURF ~#>
 
 The same console appears on the VGA monitor (640x480 at 60 Hz), and the PS/2 keyboard types
 into it. The card stays read-only in SurfOS until the write path has been tried on your card
-(`sd=rw` on the kernel command line, `/BOOT/CMDLINE.TXT`).
+(`sd=rw` on the kernel command line, `/BOOT/CMDLINE.TXT`). Milestone 7's test as one command:
+`make -C surfcpu board-test M=m7`.
 
 ### Writing files from SurfOS (milestone 8) **pending: needs the DDR design**
 
@@ -365,7 +382,12 @@ The Mac's `crc32` command prints the same CRC-32 as SurfOS's `crc32`:
 5. Install a new kernel with `deploy-sd` (section 7): the files in `/USERS/DOCUMENTS` keep
    their CRCs (a kernel update leaves your files alone).
 
-Send me the CRCs from each step, or the transcripts.
+Send me the CRCs from each step, or the transcripts. Or let the kit lead you through these
+steps and compare the CRCs itself: `make -C surfcpu board-test M=m8 ARGS="--mount
+/Volumes/SURFOS"`. It reads the card's files on the Mac, read only.
+
+Milestone 9's ten cold boots and one-hour soak are `make -C surfcpu board-test M=m9`. They
+need the configuration flash programmed first, which waits for your go-ahead.
 
 ## 9. Recovery
 
@@ -384,5 +406,5 @@ Send me the CRCs from each step, or the transcripts.
 
 1. **Your board.** A7-35T or A7-100T, plus the PCB revision printed on it.
 2. **The adapters.** Their revisions, and whether the keyboard is a real PS/2 keyboard.
-3. **Bring-up.** Run `brew install openfpgaloader`, connect the board, and run steps 1.4 and 4. Send me the doctor output and the UART lines.
+3. **Bring-up.** Run `brew install openfpgaloader`, connect the board, and run steps 1.4 and 4 (or `make -C surfcpu board-test M=m1`). Send me the doctor output and the UART lines.
 4. **The card.** Its size and type, when you get to section 7.
