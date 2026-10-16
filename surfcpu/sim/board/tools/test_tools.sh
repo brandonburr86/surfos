@@ -141,6 +141,39 @@ check "docker: passing build exits 0" is "$rc" 0
 check "docker: ran in an amd64 container" logged "docker run --rm --platform linux/amd64 -v"
 check "docker: the bitstream" test -f "$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit"
 
+# ------------------------------------------------------------------------------ build identity from git
+# A scratch repository with the files the baseline build reads (this container cannot use the
+# worktree's own git): clean, an unrelated untracked file, a file the build reads made untracked,
+# committed again, a tracked file changed.
+g=$t/gitrepo
+mkdir -p "$g"
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh boards/arty_a7 rtl/lib rtl/generated spec/soc.toml |
+    ( cd "$g" && tar xf - )
+gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
+gitq init -q && gitq add -A && gitq commit -q -m scratch
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+gm=$base/arty_a7_100t/arty_a7_baseline/manifest.dry-run.txt
+gp=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a clean scratch commit is clean" test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gm")"
+check "identity: ... BUILD_FLAGS 0 and the commit as BUILD_ID" \
+    grep -q "BUILD_ID 32'h$(git -C "$g" rev-parse HEAD | cut -c1-8) BUILD_FLAGS 32'h00000000" "$gp"
+printf 'notes\n' > "$g/notes.txt"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: an untracked file the build does not read leaves it clean" grep -q '^source_dirty = false' "$gm"
+gitq rm -q --cached rtl/lib/surf_sync.v
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a source git does not track makes it dirty" grep -q '^source_dirty = true' "$gm"
+check "identity: ... BUILD_FLAGS bit 0" grep -q "BUILD_FLAGS 32'h00000001" "$gp"
+check "identity: ... and the file is named" has "not in git, so the build counts as dirty: rtl/lib/surf_sync.v"
+gitq add rtl/lib/surf_sync.v && gitq commit -q -m again
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: committed again, clean" grep -q '^source_dirty = false' "$gm"
+printf '// changed\n' >> "$g/rtl/lib/surf_sync.v"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a changed tracked file makes it dirty" grep -q '^source_dirty = true' "$gm"
+rm -rf "$g"
+
 # ============================================================================== program.sh
 bit100=$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
 bit35=$base/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit

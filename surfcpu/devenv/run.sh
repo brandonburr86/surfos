@@ -8,7 +8,9 @@
 #
 # The build identity (git commit, dirty state) is worked out here on the Mac, because a git
 # worktree's metadata lives outside the mounted tree, and passed in as SURFCPU_BUILD_ID /
-# SURFCPU_BUILD_DIRTY. SURFCPU_IMAGE overrides the image; DOCKER the docker binary.
+# SURFCPU_BUILD_DIRTY. Dirty means a tracked file changed or a file git does not track and does
+# not ignore is present (a new source not yet committed is not in the commit either).
+# SURFCPU_IMAGE overrides the image; DOCKER the docker binary.
 set -eu
 
 IMAGE_TAG=2026-10-15
@@ -37,7 +39,7 @@ fi
 
 build_id=${SURFCPU_BUILD_ID:-$(git -C "$repo" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}
 if [ -z "${SURFCPU_BUILD_DIRTY:-}" ]; then
-  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  if [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then
     SURFCPU_BUILD_DIRTY=1
   else
     SURFCPU_BUILD_DIRTY=0

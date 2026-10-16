@@ -122,11 +122,15 @@ for pat in $(items 'src?'); do
 done
 incdirs=$(items inc)
 for d in $incdirs; do [ -d "$root/$d" ] || die "$design: include directory $d is missing"; done
+incfiles=
+for d in $incdirs; do incfiles="$incfiles $(set +f; expand "$d/*.vh"; expand "$d/*.svh")"; done
 mems=
 for pat in $(items mem); do mems="$mems $(set +f; expand "$pat")"; done
 xdcs=$(items xdc)
 for x in $xdcs; do [ -f "$root/$x" ] || die "$design: constraint file $x is missing"; done
 cdcs=$(items cdc)
+cdc_files=$(echo "$cdcs" | awk 'NF == 2 { print $2 }')
+for x in $cdc_files; do [ -f "$root/$x" ] || die "$design: constraint file $x is missing"; done
 generics=$(items generic)
 set +f
 
@@ -139,8 +143,18 @@ case " $generics " in
 esac
 
 # ------------------------------------------------------------------------------ build identity
+# Clean means the bitstream is exactly the commit: no tracked file changed, and every file the
+# build reads is in git (a new source that was never added is not in the commit either).
 if rev=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
     if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then dirty=1; else dirty=0; fi
+    untracked=
+    for f in $sources $incfiles $mems $xdcs $cdc_files boards/arty_a7/vivado/build.tcl; do
+        git -C "$root" ls-files --error-unmatch -- "$f" > /dev/null 2>&1 || untracked="$untracked $f"
+    done
+    if [ -n "$untracked" ]; then
+        dirty=1
+        echo "$me: not in git, so the build counts as dirty:$untracked"
+    fi
 else                                                    # no git here (a container): devenv/run.sh's values
     rev=${SURFCPU_BUILD_ID:-unknown}
     dirty=${SURFCPU_BUILD_DIRTY:-1}
@@ -165,14 +179,7 @@ copy() {          # PATH relative to surfcpu/
     mkdir -p "$stage/surfcpu/$(dirname "$1")"
     cp "$root/$1" "$stage/surfcpu/$1"
 }
-for f in $sources $mems $xdcs boards/arty_a7/vivado/build.tcl; do copy "$f"; done
-cdc_files=$(echo "$cdcs" | awk 'NF == 2 { print $2 }')
-for f in $cdc_files; do copy "$f"; done
-for d in $incdirs; do
-    for f in "$root/$d"/*.vh "$root/$d"/*.svh; do
-        if [ -f "$f" ]; then copy "$d/$(basename "$f")"; fi
-    done
-done
+for f in $sources $incfiles $mems $xdcs $cdc_files boards/arty_a7/vivado/build.tcl; do copy "$f"; done
 if [ -n "$rom" ]; then
     mkdir -p "$stage/surfcpu/rom"
     cp "$romsrc" "$stage/surfcpu/$rom"
