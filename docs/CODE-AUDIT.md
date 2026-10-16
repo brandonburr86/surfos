@@ -100,7 +100,8 @@ settings, AddressSanitizer, on fd37406; it found B12's core sound: no copy torn,
 inversion) and fixed; every one is **verified** by `tests/host/test_fatfs.c` (S1-S6 under the IDs below, and new
 scenarios for B25 and B26), each scenario failing on the code before the fixes; S6 under AddressSanitizer shows the
 overflow before and nothing after, and every host test of the cache and FAT runs clean under AddressSanitizer and
-UndefinedBehaviorSanitizer. `make unittest` runs the threaded test in the review's setting too.
+UndefinedBehaviorSanitizer. `make unittest` runs the threaded test in the review's setting too, its threads now tasks
+of their own to the cache (so B26's waits run there).
 `surfcpu/docs/evidence/os/bcache-review.txt` section 11 has the numbers:
 
 | ID | Where | Problem | Fix |
