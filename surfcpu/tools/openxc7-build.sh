@@ -24,8 +24,8 @@
 #   --dry-run          print what would run, without the image
 #
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
-# utilization.txt, check-bitstream.txt, check-roundtrip.txt, check-lvs.txt,
-# check-clocks.txt, the logs and
+# utilization.txt, check-synthesis.txt, check-bitstream.txt, check-roundtrip.txt,
+# check-bram.txt, check-lvs.txt, check-clocks.txt, the logs and
 # manifest.txt, and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation. Exit status 0 only if every step and every check passed. A bitstream made
 # here has not been on a board: its physical behaviour is pending until it has.
 #
@@ -126,7 +126,8 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
 fi
 
 # ------------------------------------------------------------------ the flow (in the image, or --dry-run)
-db=${PRJXRAY_DB_DIR:-/opt/openxc7/share/prjxray-db}/$family
+dbroot=${PRJXRAY_DB_DIR:-/opt/openxc7/share/prjxray-db}
+db=$dbroot/$family
 chipdb=${OPENXC7_CHIPDB_DIR:-/opt/openxc7/share/chipdb}/chipdb-$chipdie.bin
 threads=${OPENXC7_THREADS:-4}
 tools=devenv/openxc7
@@ -227,7 +228,7 @@ run report report.out python3 -I $tools/report.py --device "$device" --report "$
   --log "$out/nextpnr.log" --stat "$out/stat.json" --timing "$out/timing.txt" --utilization "$out/utilization.txt"
 
 # Checks without a board.
-result_bit=skipped result_rt=skipped result_lvs=skipped result_clk=skipped
+result_bit=skipped result_rt=skipped result_lvs=skipped result_clk=skipped result_bram=skipped
 fail=0
 [ "$result_syn" = FAIL ] && fail=1
 if [ "$check" = 1 ]; then
@@ -243,6 +244,17 @@ if [ "$check" = 1 ]; then
      run roundtrip check-roundtrip.txt python3 $tools/fasmcheck.py --db-root "$db" --part "$part" \
        "$out/$top.fasm" "$out/$top.decoded.fasm"
   then result_rt=PASS; else result_rt=FAIL; fail=1; fi
+  # Block RAM contents: fasm2netlist reads them out of the decoded bitstream; they must be
+  # the synthesized netlist's, block for block (LVS checks block RAMs only at their pins).
+  if [ "$dry" = 1 ] || grep -Eq '"type": "RAMB(18|36)E1"' "$out/$top.json"; then
+    if run bram-extract bram-extract.log fasm2netlist --fasm "$out/$top.decoded.fasm" --db "$dbroot" \
+         --family "$family" --device "$chipdie" --out "$out/bram-extracted.v" &&
+       run check-bram check-bram.txt python3 -I $tools/bramcheck.py --netlist "$out/$top.json" --top "$top" \
+         --extracted "$out/bram-extracted.v"
+    then result_bram=PASS; else result_bram=FAIL; fail=1; fi
+  else
+    result_bram="none in the design"
+  fi
   # LVS (openXC7's lvs-equiv flow): the routed FASM read back into a fabric netlist by
   # fasm2netlist's tile model and proved equal to the synthesis, register by register. A
   # primitive the tile model lacks, or a proof that runs out of time, leaves it BLOCKED:
@@ -289,6 +301,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check synthesis     $result_syn (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     $result_bit (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    $result_rt (bitstream decoded back to FASM: check-roundtrip.txt)"
+  echo "check block RAM     $result_bram (contents decoded from the bitstream: check-bram.txt)"
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
   echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
@@ -299,6 +312,6 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 } > "$out/manifest.txt"
 
 grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /'
-echo "openxc7-build.sh: checks: synthesis $result_syn, bitstream $result_bit, round trip $result_rt, LVS $result_lvs, clocks $result_clk"
+echo "openxc7-build.sh: checks: synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk"
 echo "openxc7-build.sh: $out/$top.bit ($(wc -c < "$out/$top.bit" | tr -d ' ') bytes); manifest $out/manifest.txt"
 exit $fail

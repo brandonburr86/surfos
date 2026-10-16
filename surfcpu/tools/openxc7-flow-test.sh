@@ -52,7 +52,8 @@ expect_in "build: the 35T is placed with the 50T die's database and checked as a
   "--expect-device xc7a35t" "--part_file /opt/openxc7/share/prjxray-db/artix7/xc7a35tcsg324-1/part.yaml" \
   "tileverilog --fasm build/openxc7/t-arty_a7_35t/t.fasm" "--device xc7a50t" "read_verilog a.v b.v" \
   "cmtcheck.py --json build/openxc7/t-arty_a7_35t/t.json" \
-  "scratchpad -set xilinx_dsp.multonly 1" "synthcheck.py --top t --pre build/openxc7/t-arty_a7_35t/pre.json"
+  "scratchpad -set xilinx_dsp.multonly 1" "synthcheck.py --top t --pre build/openxc7/t-arty_a7_35t/pre.json" \
+  "fasm2netlist --fasm build/openxc7/t-arty_a7_35t/t.decoded.fasm" "bramcheck.py --netlist"
 o=$(dry --board arty_a7_100t)
 expect_in "build: the 100T uses its own database" "$o" \
   "--device xc7a100tcsg324-1 --chipdb /opt/openxc7/share/chipdb/chipdb-xc7a100t.bin" \
@@ -63,7 +64,7 @@ expect_in "build: part, defines, includes, seed and output directory" "$o" \
 o=$(dry --board arty_a7_35t --no-lvs)
 if printf '%s\n' "$o" | grep -q lvs_equiv; then bad "build: --no-lvs still runs LVS"; else ok "build: --no-lvs"; fi
 o=$(dry --board arty_a7_35t --no-check)
-if printf '%s\n' "$o" | grep -qE 'bitinfo|fasmcheck|lvs_equiv|cmtcheck'; then bad "build: --no-check still checks"; else ok "build: --no-check"; fi
+if printf '%s\n' "$o" | grep -qE 'bitinfo|fasmcheck|lvs_equiv|cmtcheck|synthcheck|bramcheck'; then bad "build: --no-check still checks"; else ok "build: --no-check"; fi
 o=$(dry --board arty_a7_35t --dsp none)
 if printf '%s\n' "$o" | grep -q 'synth_xilinx .*-nodsp' && ! printf '%s\n' "$o" | grep -q multonly
 then ok "build: --dsp none synthesizes with -nodsp"; else bad "build: --dsp none"; fi
