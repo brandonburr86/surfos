@@ -10,9 +10,11 @@
 #   2. the synthesis check and registers merged into a memory read port: LiteX's VexRiscv
 #      (lite, build/third_party/litedram, make litedram-setup) synthesized alone (--synth-only),
 #      which must pass with its 22 instruction-cache tag bits counted as merged;
-#   3. the clock-tile check and Yosys's short bit strings: devenv/openxc7/test/pll_sized.v
+#   3. the clock-tile check, Yosys's short bit strings and phases: devenv/openxc7/test/pll_sized.v
 #      (LiteDRAM's PLL, its parameters as the generator writes them) through the whole flow,
-#      whose clock check must pass with LiteDRAM's dividers read right (16, 8, 20, 5).
+#      whose clock check must pass with LiteDRAM's dividers read right (16, 8, 20, 5) and its
+#      90-degree output's phase checked; then two wrong phases written into its FASM must fail
+#      the check (devenv/openxc7/test/cmt_phase_inner.sh).
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -61,6 +63,15 @@ echo "pll_sized: openxc7-build.sh exit $st; $(grep 'checks:' "$out/pll_sized.log
 sed 's/^/  /' "$out/pll_sized/check-clocks.txt"
 ok "LiteDRAM's PLL dividers read as 16, 8, 20 and 5 and match XAPP888" \
    "grep -q '^check clocks        PASS' '$out/pll_sized/manifest.txt' && grep -q 'CLKFBOUT_MULT 16: matches' '$out/pll_sized/check-clocks.txt' && grep -q 'CLKOUT1_DIVIDE 20: matches' '$out/pll_sized/check-clocks.txt'"
+ok "the 90-degree output's phase is checked and matches XAPP888 (DELAY_TIME 1, PHASE_MUX 2)" \
+   "grep -q 'CLKOUT3_DIVIDE 5, phase 90: matches XAPP888' '$out/pll_sized/check-clocks.txt' && grep -q ' 0 unchecked: PASS' '$out/pll_sized/check-clocks.txt'"
+SURFCPU_IMAGE=$image devenv/run.sh sh devenv/openxc7/test/cmt_phase_inner.sh "$out/pll_sized" pll_sized \
+    > "$out/cmt-inner.txt" 2>&1 || true
+sed 's/^/  /' "$out/cmt-inner.txt"
+ok "a PHASE_MUX an eighth of a VCO cycle late fails the check" \
+   "grep -q '^phase-mux: cmtcheck exit 1; .*MISMATCH PHASE_MUX 3 (XAPP888: 2)' '$out/cmt-inner.txt'"
+ok "a DELAY_TIME a whole cycle early fails the check" \
+   "grep -q '^delay-time: cmtcheck exit 1; .*MISMATCH DELAY_TIME 0 (XAPP888: 1)' '$out/cmt-inner.txt'"
 } > "$out/report.txt" 2>&1 || true
 grep -q '^FAIL' "$out/report.txt" && rc=1
 {

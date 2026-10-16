@@ -10,7 +10,8 @@ fields (HIGH_TIME, LOW_TIME, EDGE, NO_COUNT and, for fractional MMCM dividers, F
 FRAC_WF_R, FRAC_WF_F, PHASE_MUX_F) the way AMD's XAPP888 reference functions do (the integer
 divider and mmcm_frac_count_calc, here as ported in F4PGA's f4pga-arch-defs
 xilinx/xc7/techmap/cells_map.v, which takes EDGE from the integer calculation as Vivado
-does), and compares them with the fields nextpnr wrote into the routed FASM.
+does), and the phase fields (DELAY_TIME, PHASE_MUX, MX) as XAPP888's mmcm_phase_calc does,
+and compares them with the fields nextpnr wrote into the routed FASM.
 
 The functions are checked against register values Vivado produced for divide ratios 4.000
 to 5.875 in steps of 1/8 (published by Eli Billauer, "Reprogramming a Series-7 MMCM for
@@ -22,7 +23,12 @@ values whenever the integer part of a fractional CLKFBOUT_MULT_F or CLKOUT0_DIVI
     cmtcheck.py --table                      XAPP888 against nextpnr 1.0.0's rule, 2.000-9.875
     cmtcheck.py --json top.json --placement placement.json --fasm top.fasm
 
-Only 50 % duty cycles and zero phases are recomputed; anything else is reported unchecked.
+Only 50 % duty cycles are recomputed, and phases only on integer dividers (a fractional MMCM
+divider at zero phase only); anything else is reported unchecked. Until round ddr-3 every
+output with a phase was unchecked, and no output's phase fields were compared: LiteDRAM's
+90-degree DQS clock (CLKOUT3) is now checked. nextpnr 1.0.0 floors the phase to an eighth of
+a VCO cycle where XAPP888 rounds to the nearest (see the self-test), so a phase that is not a
+whole number of eighths can fail here.
 The parameters are read as Yosys's JSON writes them: a constant as its bits, most significant
 first, at its own width (LiteDRAM's 5'd16 is "10000", a plain 16 thirty-two bits); a real or a
 string as text, with a space appended to a string that would look like bits ("10 "). Until
@@ -73,6 +79,25 @@ def frac_divider(divide: float) -> dict:
         "FRAC_WF_F": int(2 <= odd_and_frac <= 9 or (d_frac == 1 and d_int == 2)),
         "PHASE_MUX_F": (4 * odd + (d_frac >> 1)) % 8,
     }
+
+
+def phase_fields(divide: int, phase: float) -> dict:
+    """XAPP888's mmcm_phase_calc: the phase as whole VCO cycles (DELAY_TIME) and eighths of one
+    (PHASE_MUX), in its 22.10 fixed point, rounded to the nearest eighth by round_frac; MX 0."""
+    p = int(round(phase * 1000))                  # XAPP888 takes thousandths of a degree
+    if p < 0:
+        p += 360000
+    fixed = (p << 10) // 1000
+    cycles = (fixed * divide) // 360
+    if cycles & (1 << 6):                         # round_frac(cycles, 3)
+        cycles += 1 << 7
+    return {"DELAY_TIME": (cycles >> 10) & 0x3F, "PHASE_MUX": (cycles >> 7) & 7, "MX": 0}
+
+
+def nextpnr_phase(divide: int, phase: float) -> dict:
+    """What nextpnr 1.0.0 writes (fasm.cc, write_pll_clkout): the phase floored to an eighth."""
+    eighths = math.floor((phase / 360) * divide * 8)
+    return {"DELAY_TIME": eighths // 8, "PHASE_MUX": eighths % 8, "MX": 0}
 
 
 def expected(divide: float, fractional_ok: bool) -> dict:
@@ -127,6 +152,18 @@ def self_test() -> int:
     if divider(1)["NO_COUNT"] != 1 or divider(35) != {"HIGH_TIME": 17, "LOW_TIME": 18, "EDGE": 1, "NO_COUNT": 0}:
         bad += 1
         print("self-test FAIL: integer divider")
+    # phases (XAPP888's mmcm_phase_calc): LiteDRAM's DQS clock, 90 degrees of divide 5 (VCO 1600 MHz,
+    # 320 MHz) is 1.25 VCO cycles, and of divide 4 (400 MHz) 1 cycle; -90 degrees is 270; 50 degrees of
+    # divide 5 is 5.56 eighths, which XAPP888 rounds to 6 and nextpnr floors to 5
+    for div, ph, dt, pm in ((5, 90.0, 1, 2), (4, 90.0, 1, 0), (10, -90.0, 7, 4), (8, 45.0, 1, 0),
+                            (5, 0.0, 0, 0), (5, 50.0, 0, 6), (64, 180.0, 32, 0)):
+        got = phase_fields(div, ph)
+        if (got["DELAY_TIME"], got["PHASE_MUX"], got["MX"]) != (dt, pm, 0):
+            bad += 1
+            print(f"self-test FAIL: phase {ph} of divide {div}: {got}, not DELAY_TIME {dt} PHASE_MUX {pm}")
+    if nextpnr_phase(5, 90.0) != phase_fields(5, 90.0) or nextpnr_phase(5, 50.0) == phase_fields(5, 50.0):
+        bad += 1
+        print("self-test FAIL: nextpnr's phase rule")
     # parameters as Yosys's JSON writes them (a PLLE2_ADV of LiteDRAM's, read by this image's Yosys)
     for raw, want in (("10000", 16), ("111", 7), ("1", 1), ("0", 0), ("10100", 20),
                       ("00000000000000000000000000001010", 10), ("10.000000", 10.0), ("90.000000", 90.0),
@@ -135,8 +172,8 @@ def self_test() -> int:
         if got != want or type(got) is not type(want):
             bad += 1
             print(f"self-test FAIL: parameter {raw!r} read as {got!r}, not {want!r}")
-    print("cmtcheck self-test: " + ("PASS (XAPP888 functions reproduce Vivado's 16 values; Yosys's parameter "
-                                    "formats read)" if not bad else f"{bad} failures"))
+    print("cmtcheck self-test: " + ("PASS (XAPP888 functions reproduce Vivado's 16 values; phases; Yosys's "
+                                    "parameter formats read)" if not bad else f"{bad} failures"))
     return 1 if bad else 0
 
 
@@ -225,24 +262,28 @@ def check_design(netlist: str, placement: str, fasm_path: str) -> int:
                      "CLKOUT0": "CLKOUT0_DIVIDE_F" if is_mmcm else "CLKOUT0_DIVIDE"}.get(out, f"{out}_DIVIDE")
             value = param(cell, pname, 5.0 if out == "CLKFBOUT" else 1.0)
             duty = param(cell, f"{out}_DUTY_CYCLE", 0.5) if out != "CLKFBOUT" else 0.5
-            phase = param(cell, f"{out}_PHASE", 0.0)
-            if float(duty) != 0.5 or float(phase) != 0.0:
+            phase = float(param(cell, f"{out}_PHASE", 0.0))
+            frac_ok = is_mmcm and out in ("CLKFBOUT", "CLKOUT0")
+            fractional = frac_ok and round(float(value) * 8) % 8 != 0
+            if float(duty) != 0.5 or (phase != 0.0 and fractional):
                 unchecked += 1
                 print(f"  {pname} {value}: unchecked (duty {duty}, phase {phase})")
                 continue
-            frac_ok = is_mmcm and out in ("CLKFBOUT", "CLKOUT0")
             want = expected(float(value), frac_ok)
+            want.update(phase_fields(int(round(float(value))), phase))
             own = "CLKOUT2_FRACTIONAL_" if out in ("CLKOUT5", "CLKOUT6") and is_mmcm else "CLKOUT2_"
             regs = {"HIGH_TIME": f"{out}_CLKOUT1_HIGH_TIME", "LOW_TIME": f"{out}_CLKOUT1_LOW_TIME",
-                    "EDGE": f"{out}_{own}EDGE", "NO_COUNT": f"{out}_{own}NO_COUNT"}
+                    "EDGE": f"{out}_{own}EDGE", "NO_COUNT": f"{out}_{own}NO_COUNT",
+                    "PHASE_MUX": f"{out}_CLKOUT1_PHASE_MUX", "DELAY_TIME": f"{out}_{own}DELAY_TIME",
+                    "MX": f"{out}_{own}MX"}
             if frac_ok:
                 shared = "CLKOUT5" if out == "CLKOUT0" else "CLKOUT6"
                 regs.update({"FRAC": f"{out}_CLKOUT2_FRAC", "FRAC_EN": f"{out}_CLKOUT2_FRAC_EN",
                              "FRAC_WF_R": f"{out}_CLKOUT2_FRAC_WF_R",
                              "FRAC_WF_F": f"{shared}_CLKOUT2_FRACTIONAL_FRAC_WF_F",
                              "PHASE_MUX_F": f"{shared}_CLKOUT2_FRACTIONAL_PHASE_MUX_F"})
-            compare(f"{pname} {value:g}", want, regs)
-    print(f"cmtcheck: {checked} fields compared, {mismatches} dividers differ from XAPP888, {unchecked} unchecked: "
+            compare(f"{pname} {value:g}" + (f", phase {phase:g}" if phase else ""), want, regs)
+    print(f"cmtcheck: {checked} fields compared, {mismatches} counters differ from XAPP888, {unchecked} unchecked: "
           + ("PASS" if not mismatches else "FAIL"))
     return 1 if mismatches else 0
 
