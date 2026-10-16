@@ -75,7 +75,27 @@ static u32 spi_ms(void *ctx) {
     return (u32)(board_mtime() / (board_timebase_hz() / 1000));
 }
 
-static const struct sd_host host = { NULL, spi_xfer, spi_select, spi_slow, spi_present, spi_ms };
+/* 10/16/26: a data block in a tight loop: on SurfCPU every instruction is fetched from DDR, and the
+   byte at a time through xfer cost several times what the SPI transfer itself takes */
+static void spi_rx(void *ctx, u8 *buf, u_int len) {
+    volatile u32 *data = (volatile u32 *)SREG(SURF_SPI_DATA);
+    (void)ctx;
+    while(len--) {
+        *data = 0xFF;
+        *buf++ = (u8)*data;                 /* the read waits for the exchange */
+    }
+}
+
+static void spi_tx(void *ctx, const u8 *buf, u_int len) {
+    volatile u32 *data = (volatile u32 *)SREG(SURF_SPI_DATA);
+    (void)ctx;
+    while(len--) {
+        *data = *buf++;
+        (void)*data;
+    }
+}
+
+static const struct sd_host host = { NULL, spi_xfer, spi_select, spi_slow, spi_present, spi_ms, spi_rx, spi_tx };
 
 /**** the block device ****/
 

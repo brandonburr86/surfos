@@ -92,7 +92,8 @@ static u8 wait_token(struct sdcard *sd, u32 ms) {
 static bool read_data(struct sdcard *sd, u8 *buf, u_int len) {
     u_int i;
     u16 crc;
-    for(i = 0; i < len; i++) buf[i] = xf(sd, 0xFF);
+    if(sd->host->rx) sd->host->rx(sd->host->ctx, buf, len);
+    else for(i = 0; i < len; i++) buf[i] = xf(sd, 0xFF);
     crc = (u16)(xf(sd, 0xFF) << 8);
     crc |= xf(sd, 0xFF);
     return crc == sd_crc16(buf, len);
@@ -305,7 +306,8 @@ static int write_once(struct sdcard *sd, u32 lba, u32 count, const u8 *buf, u32 
         const u8 *b = buf + i * 512;
         xf(sd, 0xFF);                       /* at least one byte before the token */
         xf(sd, count > 1 ? SD_TOKEN_START_MULTI : SD_TOKEN_START);
-        for(j = 0; j < 512; j++) xf(sd, b[j]);
+        if(sd->host->tx) sd->host->tx(sd->host->ctx, b, 512);
+        else for(j = 0; j < 512; j++) xf(sd, b[j]);
         crc = sd_crc16(b, 512);
         xf(sd, (u8)(crc >> 8));
         xf(sd, (u8)crc);

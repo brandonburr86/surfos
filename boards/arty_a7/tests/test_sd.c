@@ -63,7 +63,7 @@ static void h_select(void *ctx, bool on) { (void)ctx; sdmodel_select(&model, on)
 static void h_slow(void *ctx, bool slow) { (void)ctx; (void)slow; }
 static bool h_present(void *ctx) { (void)ctx; return model.present; }
 static u32 h_ms(void *ctx) { (void)ctx; return (u32)(fake_bytes / 1000); }    /* 1000 byte times a millisecond */
-static const struct sd_host host = { NULL, h_xfer, h_select, h_slow, h_present, h_ms };
+static const struct sd_host host = { NULL, h_xfer, h_select, h_slow, h_present, h_ms, NULL, NULL };
 
 static void sd_case(const char *what, int v2, int hc, u32 blocks, unsigned seed) {
     u8 *img = malloc((size_t)blocks * 512), *shadow = malloc((size_t)blocks * 512), *buf = malloc(64 * 512);

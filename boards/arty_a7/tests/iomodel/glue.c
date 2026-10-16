@@ -22,7 +22,7 @@ static void h_slow(void *ctx, bool slow) { (void)ctx; io_slow(slow != 0); }
 static bool h_present(void *ctx) { (void)ctx; return io_present() != 0; }
 static u32 h_ms(void *ctx) { (void)ctx; return io_ms(); }
 
-static const struct sd_host host = { 0, h_xfer, h_select, h_slow, h_present, h_ms };
+static const struct sd_host host = { 0, h_xfer, h_select, h_slow, h_present, h_ms, 0, 0 };
 static struct sdcard card;
 
 int glue_init(void) { return sd_init(&card, &host); }

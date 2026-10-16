@@ -32,7 +32,7 @@ static void m_select(void *ctx, bool on) { (void)ctx; sdmodel_select(&model, on)
 static void m_slow(void *ctx, bool slow) { (void)ctx; (void)slow; }
 static bool m_present(void *ctx) { (void)ctx; return model.present; }
 static u32 m_ms(void *ctx) { (void)ctx; return (u32)(board_mtime() / (board_timebase_hz() / 1000)); }
-static const struct sd_host host = { NULL, m_xfer, m_select, m_slow, m_present, m_ms };
+static const struct sd_host host = { NULL, m_xfer, m_select, m_slow, m_present, m_ms, NULL, NULL };
 
 static int s_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     int r;
