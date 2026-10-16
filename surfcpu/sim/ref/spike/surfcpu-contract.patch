@@ -1,0 +1,160 @@
+SurfCPU contract patch for Spike (riscv-isa-sim) at commit 5a760667bf0d0ab893173b9eeff9c109c8d7dd9a
+File: surfcpu-contract.patch Date: 10/15/26 (SurfCPU)
+
+Spike is the reference model for SurfCPU's verification (docs/VERIFICATION.md). Where the
+RISC-V specification leaves a choice to the implementation (WARL/WLRL fields, the ID CSRs,
+whether unimplemented-PMP and trigger CSRs exist), docs/ISA.md fixes SurfCPU's choice and
+this patch makes Spike make the same one, so a comparison never fails on a choice the
+contract allows. Nothing else changes: instruction semantics, traps and every other CSR
+are Spike's. Applied by sim/ref/spike/build-spike.sh (git apply).
+
+  * marchid reads 0 and mimpid 0x00000100 (SURF_SOC_VERSION), as ISA.md section 2.
+  * With --pmpregions=0, pmpcfg0-15 and pmpaddr0-63 exist and read as zero; writes are
+    ignored (stock Spike makes them illegal).
+  * With --triggers=0, tselect, tdata1-3, tinfo and mcontext do not exist (stock Spike
+    keeps tselect and read-only-zero tdata/tinfo and a writable mcontext).
+  * misa ignores writes (stock Spike lets software clear M, A, F, D, C, ...).
+  * mtvec.MODE is fixed at 0 (stock Spike keeps vectored mode).
+  * mcountinhibit keeps only CY and IR (stock Spike also has the HPM bits with Zihpm).
+  * mcause keeps bit 31 and bits 4:0 (stock Spike keeps every bit).
+
+diff --git a/riscv/csr_init.cc b/riscv/csr_init.cc
+index 372464e..518a49c 100644
+--- a/riscv/csr_init.cc
++++ b/riscv/csr_init.cc
+@@ -194,7 +194,8 @@ void state_t::csr_init(processor_t* const proc, reg_t max_isa)
+   }
+   const reg_t counteren_mask = (proc->extension_enabled_const(EXT_ZICNTR) ? 0x7UL : 0x0) | (proc->extension_enabled_const(EXT_ZIHPM) ? 0xfffffff8ULL : 0x0);
+   add_user_csr(CSR_MCOUNTEREN, mcounteren = std::make_shared<masked_csr_t>(proc, CSR_MCOUNTEREN, counteren_mask, 0));
+-  add_csr(CSR_MCOUNTINHIBIT, mcountinhibit = std::make_shared<masked_csr_t>(proc, CSR_MCOUNTINHIBIT, counteren_mask & (~MCOUNTEREN_TIME), 0));
++  // SurfCPU (docs/ISA.md section 2): only mcountinhibit.CY and .IR are writable.
++  add_csr(CSR_MCOUNTINHIBIT, mcountinhibit = std::make_shared<masked_csr_t>(proc, CSR_MCOUNTINHIBIT, counteren_mask & (MCOUNTINHIBIT_CY | MCOUNTINHIBIT_IR), 0));
+   add_supervisor_csr(CSR_SCOUNTEREN, scounteren = std::make_shared<masked_csr_t>(proc, CSR_SCOUNTEREN, counteren_mask, 0));
+   nonvirtual_sepc = std::make_shared<epc_csr_t>(proc, CSR_SEPC);
+   add_hypervisor_csr(CSR_VSEPC, vsepc = std::make_shared<epc_csr_t>(proc, CSR_VSEPC));
+@@ -303,7 +304,11 @@ void state_t::csr_init(processor_t* const proc, reg_t max_isa)
+   add_csr(CSR_DSCRATCH1, std::make_shared<debug_mode_csr_t>(proc, CSR_DSCRATCH1));
+   add_csr(CSR_DCSR, dcsr = std::make_shared<dcsr_csr_t>(proc, CSR_DCSR));
+ 
+-  add_csr(CSR_TSELECT, tselect = std::make_shared<tselect_csr_t>(proc, CSR_TSELECT));
++  tselect = std::make_shared<tselect_csr_t>(proc, CSR_TSELECT);
++  // SurfCPU (docs/ISA.md section 1): no triggers, so with --triggers=0 the trigger CSRs
++  // (tselect, tdata1-3, tinfo, mcontext) do not exist and accesses are illegal.
++  if (proc->get_cfg().trigger_count > 0)
++    add_csr(CSR_TSELECT, tselect);
+   if (proc->get_cfg().trigger_count > 0) {
+     add_csr(CSR_TDATA1, std::make_shared<tdata1_csr_t>(proc, CSR_TDATA1));
+     add_csr(CSR_TDATA2, tdata2 = std::make_shared<tdata2_csr_t>(proc, CSR_TDATA2));
+@@ -313,17 +318,16 @@ void state_t::csr_init(processor_t* const proc, reg_t max_isa)
+       add_csr(CSR_TCONTROL, tcontrol = std::make_shared<masked_csr_t>(proc, CSR_TCONTROL, CSR_TCONTROL_MPTE | CSR_TCONTROL_MTE, 0));
+     }
+   } else {
+-    add_csr(CSR_TDATA1, std::make_shared<const_csr_t>(proc, CSR_TDATA1, 0));
+-    add_csr(CSR_TDATA2, tdata2 = std::make_shared<const_csr_t>(proc, CSR_TDATA2, 0));
+-    add_csr(CSR_TDATA3, std::make_shared<const_csr_t>(proc, CSR_TDATA3, 0));
+-    add_csr(CSR_TINFO, std::make_shared<const_csr_t>(proc, CSR_TINFO, 0));
++    tdata2 = std::make_shared<const_csr_t>(proc, CSR_TDATA2, 0);
+   }
+   unsigned scontext_length = (xlen == 32 ? 16 : 32); // debug spec suggests 16-bit for RV32 and 32-bit for RV64
+   add_supervisor_csr(CSR_SCONTEXT, scontext = std::make_shared<context_csr_t>(proc, CSR_SCONTEXT, (reg_t(1) << scontext_length) - 1, 0));
+   unsigned hcontext_length = (xlen == 32 ? 6 : 13) + (proc->extension_enabled('H') ? 1 : 0); // debug spec suggest 7-bit (6-bit) for RV32 and 14-bit (13-bit) for RV64 with (without) H extension
+   auto hcontext = std::make_shared<context_csr_t>(proc, CSR_HCONTEXT, (reg_t(1) << hcontext_length) - 1, 0);
+   add_hypervisor_csr(CSR_HCONTEXT, hcontext);
+-  add_csr(CSR_MCONTEXT, mcontext = std::make_shared<proxy_csr_t>(proc, CSR_MCONTEXT, hcontext));
++  mcontext = std::make_shared<proxy_csr_t>(proc, CSR_MCONTEXT, hcontext);
++  if (proc->get_cfg().trigger_count > 0)
++    add_csr(CSR_MCONTEXT, mcontext);
+ 
+   mseccfg = std::make_shared<mseccfg_csr_t>(proc, CSR_MSECCFG);
+   if (xlen == 32) {
+@@ -352,8 +356,9 @@ void state_t::csr_init(processor_t* const proc, reg_t max_isa)
+ 
+   add_ext_csr(EXT_ZKR, CSR_SEED, std::make_shared<seed_csr_t>(proc, CSR_SEED));
+ 
+-  add_csr(CSR_MARCHID, std::make_shared<const_csr_t>(proc, CSR_MARCHID, 5));
+-  add_csr(CSR_MIMPID, std::make_shared<const_csr_t>(proc, CSR_MIMPID, 0));
++  // SurfCPU (docs/ISA.md section 2): marchid 0, mimpid SURF_SOC_VERSION (0x00000100).
++  add_csr(CSR_MARCHID, std::make_shared<const_csr_t>(proc, CSR_MARCHID, 0));
++  add_csr(CSR_MIMPID, std::make_shared<const_csr_t>(proc, CSR_MIMPID, 0x00000100));
+   add_csr(CSR_MVENDORID, std::make_shared<const_csr_t>(proc, CSR_MVENDORID, 0));
+   add_csr(CSR_MHARTID, std::make_shared<const_csr_t>(proc, CSR_MHARTID, proc->get_id()));
+   add_csr(CSR_MCONFIGPTR, std::make_shared<const_csr_t>(proc, CSR_MCONFIGPTR, 0));
+diff --git a/riscv/csrs.cc b/riscv/csrs.cc
+index 538cd7f..f88d9d7 100644
+--- a/riscv/csrs.cc
++++ b/riscv/csrs.cc
+@@ -161,12 +161,8 @@ pmpaddr_csr_t::pmpaddr_csr_t(processor_t* const proc, const reg_t addr, const si
+ 
+ void pmpaddr_csr_t::verify_permissions(insn_t insn, bool write) const {
+   csr_t::verify_permissions(insn, write);
+-  // If n_pmp is zero, that means pmp is not implemented hence raise
+-  // trap if it tries to access the csr. I would prefer to implement
+-  // this by not instantiating any base_pmpaddr_csr_t for these regs, but
+-  // n_pmp can change after reset() is run.
+-  if (proc->n_pmp == 0)
+-    throw trap_illegal_instruction(insn.bits());
++  // SurfCPU (docs/ISA.md section 2): with zero PMP entries the PMP CSRs still exist and
++  // read as zero; writes are ignored (read() and unlogged_write() already do that).
+ }
+ 
+ reg_t pmpaddr_csr_t::read() const noexcept {
+@@ -242,12 +238,7 @@ pmpcfg_csr_t::pmpcfg_csr_t(processor_t* const proc, const reg_t addr):
+ 
+ void pmpcfg_csr_t::verify_permissions(insn_t insn, bool write) const {
+   csr_t::verify_permissions(insn, write);
+-  // If n_pmp is zero, that means pmp is not implemented hence raise
+-  // trap if it tries to access the csr. I would prefer to implement
+-  // this by not instantiating any pmpcfg_csr_t for these regs, but
+-  // n_pmp can change after reset() is run.
+-  if (proc->n_pmp == 0)
+-    throw trap_illegal_instruction(insn.bits());
++  // SurfCPU (docs/ISA.md section 2): see pmpaddr_csr_t::verify_permissions.
+ }
+ 
+ reg_t pmpcfg_csr_t::read() const noexcept {
+@@ -559,7 +550,8 @@ reg_t tvec_csr_t::read() const noexcept {
+ }
+ 
+ bool tvec_csr_t::unlogged_write(const reg_t val) noexcept {
+-  this->val = val & ~(reg_t)2;
++  // SurfCPU (docs/ISA.md section 2): mtvec.MODE is fixed at 0 (direct mode only).
++  this->val = val & ~(reg_t)(address == CSR_MTVEC ? 3 : 2);
+   return true;
+ }
+ 
+@@ -568,6 +560,13 @@ cause_csr_t::cause_csr_t(processor_t* const proc, const reg_t addr):
+   basic_csr_t(proc, addr, 0) {
+ }
+ 
++bool cause_csr_t::unlogged_write(const reg_t val) noexcept {
++  // SurfCPU (docs/ISA.md section 2): mcause keeps bit 31 and bits 4:0.
++  if (address == CSR_MCAUSE)
++    return basic_csr_t::unlogged_write(val & (((reg_t)1 << (proc->get_xlen() - 1)) | 0x1f));
++  return basic_csr_t::unlogged_write(val);
++}
++
+ reg_t cause_csr_t::read() const noexcept {
+   reg_t val = basic_csr_t::read();
+   // When reading, the interrupt bit needs to adjust to xlen. Spike does
+@@ -887,6 +886,8 @@ reg_t misa_csr_t::dependency(const reg_t val, const char feature, const char dep
+ }
+ 
+ bool misa_csr_t::unlogged_write(const reg_t val) noexcept {
++  // SurfCPU (docs/ISA.md section 2): misa ignores writes.
++  return false;
+   const reg_t old_misa = read();
+ 
+   // the write is ignored if increasing IALIGN would misalign the PC
+diff --git a/riscv/csrs.h b/riscv/csrs.h
+index 6c1fa43..54d97bf 100644
+--- a/riscv/csrs.h
++++ b/riscv/csrs.h
+@@ -231,6 +231,8 @@ class cause_csr_t: public basic_csr_t {
+   cause_csr_t(processor_t* const proc, const reg_t addr);
+ 
+   reg_t read() const noexcept override;
++ protected:
++  virtual bool unlogged_write(const reg_t val) noexcept override;
+ };
+ 
+ // For *status family of CSRs
