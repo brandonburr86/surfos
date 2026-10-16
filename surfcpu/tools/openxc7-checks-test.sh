@@ -27,6 +27,8 @@ ev=docs/evidence/flow/checkers.txt
 rm -rf "$out"
 mkdir -p "$out"
 image=surfcpu-openxc7:$(sed -n 's/^IMAGE_TAG=//p' tools/openxc7-build.sh)
+rev=$(git rev-parse --short=12 HEAD)                  # the tree as it was at the start, this record aside
+state=$( [ -z "$(git status --porcelain | grep -v ' docs/evidence/flow/checkers.txt$')" ] || echo ' (uncommitted changes)')
 rc=0
 ok() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; rc=1; fi; }
 {
@@ -89,7 +91,7 @@ grep -q '^FAIL' "$out/report.txt" && rc=1
 {
     echo "SurfCPU flow evidence: the open flow's checks on the cases round ddr-3 found them misreading"
     echo "(tools/openxc7-checks-test.sh; devenv/openxc7/bramwe.py, synthcheck.py, cmtcheck.py; docs/OPEN-FLOW.md)."
-    echo "Generated on $(date -u +%Y-%m-%d) at $(git rev-parse --short=12 HEAD)$( [ -z "$(git status --porcelain)" ] || echo ' (uncommitted changes)'), image $image."
+    echo "Generated on $(date -u +%Y-%m-%d) at $rev$state, image $image."
     echo "Result: $( [ $rc = 0 ] && echo PASS || echo FAIL)"
     echo
     cat "$out/report.txt"
