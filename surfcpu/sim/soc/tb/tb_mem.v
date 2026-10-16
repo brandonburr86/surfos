@@ -14,8 +14,9 @@ Icarus testbench for the three block RAMs through SurfBus BFMs, one per port:
 * surf_textram: random byte-enabled writes and reads on the bus port; the pixel port (its own
   25.18 MHz clock) reads every cell one pix_clk edge later, both in a sweep and while the bus
   writes other cells; a fetch answers with an error and does not write.
-A protocol monitor on every port checks the next-cycle answer. +seed=N. Prints PASS or stops
-with $fatal.
+A protocol monitor on every port checks the next-cycle answer. With SURF_GATE defined it runs
+on the synthesized netlists of the three memories (make test-soc-gate). +seed=N. Prints PASS or
+stops with $fatal.
 */
 `timescale 1ns/1ps
 module tb_mem;
@@ -62,7 +63,11 @@ module tb_mem;
         .PFX``_req_wdata(P``_req_wdata), .PFX``_req_fetch(P``_req_fetch), \
         .PFX``_rsp_valid(P``_rsp_valid), .PFX``_rsp_rdata(P``_rsp_rdata), .PFX``_rsp_err(P``_rsp_err)
 
+`ifdef SURF_GATE   // a synthesized netlist: the image is already in the block RAMs' INIT
+    surf_bootrom u_rom (.clk(clk), .rst(rst), `SLAVE(a, ra), `SLAVE(b, rb));
+`else
     surf_bootrom #(.INIT_FILE(ROMFILE)) u_rom (.clk(clk), .rst(rst), `SLAVE(a, ra), `SLAVE(b, rb));
+`endif
     surf_scratch u_scr (.clk(clk), .rst(rst), `SLAVE(a, sa), `SLAVE(b, sb));
 
     reg  [11:0] pix_addr = 12'h0;

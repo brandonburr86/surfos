@@ -32,9 +32,9 @@ SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
-        synth-soc soc-gpio-real soc-mem-once
+        synth-soc test-soc-verilator soc-gpio-real soc-mem-once
 lint: lint-soc
-test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim
+test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator
 check: synth-soc
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
@@ -345,3 +345,34 @@ synth-soc: $(SOC_DIR)/rom_a.mem
 	@grep -E "^ +(LUT[1-6]|FD[CPRS]E|RAMB(18|36)E1|RAM(32|64|128)[MXD1]*|DSP48E1|CARRY4|SRL16E|SRLC32E|MUXF[78]) " \
 	  $(SOC_SYN_DIR)/soc_stat.txt | sed 's/^ */    /'
 	@grep -h "mapping memory" $(SOC_SYN_DIR)/soc.log | sed 's/^/    /'
+
+# ---------------------------------------------------------------------------- second simulator
+# The unit testbenches again under Verilator (--binary --timing): two-state instead of
+# four-state, another scheduler, and other random sequences (the order in which a simulator
+# evaluates several $random arguments is its own). One seed each.
+SOC_VL      = $(VERILATOR) --binary --timing -j 2 -O1 -Wno-lint -Wno-style $(SOC_INC)
+SOC_VL_DIR := $(SOC_DIR)/vl
+
+# $(call soc_vl,<name>,<top>,<sources>,<extra verilator args>,<plusargs>)
+define soc_vl
+	@mkdir -p $(SOC_VL_DIR)/$(1)
+	$(Q)$(SOC_VL) --top-module $(2) --Mdir $(SOC_VL_DIR)/$(1) -o $(1) $(4) $(3) \
+	  > $(SOC_VL_DIR)/$(1).build.txt 2>&1 || { tail -30 $(SOC_VL_DIR)/$(1).build.txt; exit 1; }
+	$(Q)$(SOC_VL_DIR)/$(1)/$(1) +seed=1 $(5) > $(SOC_VL_DIR)/$(1).txt 2>&1; \
+	  grep -q "PASS" $(SOC_VL_DIR)/$(1).txt || { cat $(SOC_VL_DIR)/$(1).txt; exit 1; }
+	@grep -h "PASS" $(SOC_VL_DIR)/$(1).txt | sed "s/^/  [verilator] /"
+
+endef
+
+test-soc-verilator: $(SOC_DIR)/rom_a.mem $(SOC_DIR)/rom_b.mem
+	$(call soc_vl,tb_intc,tb_intc,sim/soc/tb/tb_intc.v rtl/peripherals/surf_intc.v $(SOC_BFM))
+	$(call soc_vl,tb_sysinfo,tb_sysinfo,sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.v $(SOC_BFM))
+	$(call soc_vl,tb_sysinfo_noddr,tb_sysinfo,sim/soc/tb/tb_sysinfo.v rtl/peripherals/surf_sysinfo.v $(SOC_BFM),-GDDR=0)
+	$(call soc_vl,tb_timer,tb_timer,sim/soc/tb/tb_timer.v rtl/peripherals/surf_timer.v $(SOC_BFM))
+	$(call soc_vl,tb_timer_frac,tb_timer,sim/soc/tb/tb_timer.v rtl/peripherals/surf_timer.v $(SOC_BFM),-GSYS_HZ=33333333)
+	$(call soc_vl,tb_uart,tb_uart,sim/soc/tb/tb_uart.v rtl/peripherals/surf_uart.v $(SOC_LIB_RTL) $(SOC_BFM))
+	$(call soc_vl,tb_gpio,tb_gpio,sim/soc/tb/tb_gpio.v rtl/peripherals/surf_gpio.v rtl/lib/surf_sync.v $(SOC_BFM))
+	$(call soc_vl,tb_mem,tb_mem,$(SOC_MEM_TB_SRC),-GROMFILE='"$(SOC_DIR)/rom_a.mem"',+bootrom=$(SOC_DIR)/rom_b.mem)
+	$(call soc_vl,tb_interconnect,tb_interconnect,$(SOC_IC_TB_SRC))
+	$(call soc_vl,tb_interconnect_noddr,tb_interconnect,$(SOC_IC_TB_SRC),-GHAS_DDR=0)
+	@echo "test-soc-verilator: PASS (10 unit testbenches under Verilator --timing, seed 1)"

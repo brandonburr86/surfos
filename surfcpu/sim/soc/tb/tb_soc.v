@@ -12,7 +12,9 @@ and keyboard pins idle; the DDR port on the Verilog DDR model (calibration delay
 ready and latency, the watchdog emulation: see surfbus_ddr_model.v). Protocol monitors watch
 the core's two ports and the DDR port. Parameters: ROM (BOOTROM_INIT), HAS_DDR. The stand-in
 prints SCRIPT PASS or SCRIPT FAIL; this bench then prints its own summary, and any monitor or
-model complaint contains "ERROR". +max_cycles=N bounds the run (default 6,000,000).
+model complaint contains "ERROR". +max_cycles=N bounds the run (default 6,000,000). With
+SURF_GATE defined the SoC is the synthesized netlist (make test-soc-gate); the monitors sit on
+the core stand-in's ports, which exist in both.
 */
 `timescale 1ns/1ps
 module tb_soc;
@@ -53,11 +55,15 @@ module tb_soc;
     wire [3:0]  ddr_req_be;
     wire        ddr_calib_done, ddr_calib_fail, ddr_timeout;
 
+`ifdef SURF_GATE   // a synthesized netlist, made with these same parameter values
+    surfcpu_soc dut (
+`else
     surfcpu_soc #(
         .BOOTROM_INIT(ROM), .BOARD_ID(SURF_BOARD_SIM), .SYS_HZ(SURF_SYS_HZ), .PIX_HZ(SURF_PIX_HZ),
         .BUILD_ID(32'h1234_ABCD), .BUILD_FLAGS(SURF_SYSINFO_BUILD_FLAGS_SIM_MASK),
         .BUILD_TIME(32'h6720_0000), .HAS_DDR(HAS_DDR), .DDR_SIZE(SURF_DDR_SIZE)
     ) dut (
+`endif
         .clk(clk), .rst(rst), .pix_clk(pix_clk), .pix_rst(pix_rst),
         .uart_rx(uart_rx), .uart_tx(uart_tx),
         .led(led), .rgb(rgb), .sw(sw), .btn(btn),
@@ -82,17 +88,17 @@ module tb_soc;
 
     // ---------------------------------------------------------------- monitors
     surfbus_monitor #(.NAME("ibus"), .MAX_LAT(2000)) imon (
-        .clk(clk), .rst(rst), .req_valid(dut.ibus_req_valid), .req_ready(dut.ibus_req_ready),
-        .req_addr(dut.ibus_req_addr), .req_write(dut.ibus_req_write), .req_be(dut.ibus_req_be),
-        .req_wdata(dut.ibus_req_wdata), .req_fetch(dut.ibus_req_fetch),
-        .rsp_valid(dut.ibus_rsp_valid), .rsp_rdata(dut.ibus_rsp_rdata),
-        .rsp_err(dut.ibus_rsp_err));
+        .clk(clk), .rst(rst), .req_valid(dut.u_core.ibus_req_valid), .req_ready(dut.u_core.ibus_req_ready),
+        .req_addr(dut.u_core.ibus_req_addr), .req_write(dut.u_core.ibus_req_write), .req_be(dut.u_core.ibus_req_be),
+        .req_wdata(dut.u_core.ibus_req_wdata), .req_fetch(dut.u_core.ibus_req_fetch),
+        .rsp_valid(dut.u_core.ibus_rsp_valid), .rsp_rdata(dut.u_core.ibus_rsp_rdata),
+        .rsp_err(dut.u_core.ibus_rsp_err));
     surfbus_monitor #(.NAME("dbus"), .MAX_LAT(2000)) dmon (
-        .clk(clk), .rst(rst), .req_valid(dut.dbus_req_valid), .req_ready(dut.dbus_req_ready),
-        .req_addr(dut.dbus_req_addr), .req_write(dut.dbus_req_write), .req_be(dut.dbus_req_be),
-        .req_wdata(dut.dbus_req_wdata), .req_fetch(dut.dbus_req_fetch),
-        .rsp_valid(dut.dbus_rsp_valid), .rsp_rdata(dut.dbus_rsp_rdata),
-        .rsp_err(dut.dbus_rsp_err));
+        .clk(clk), .rst(rst), .req_valid(dut.u_core.dbus_req_valid), .req_ready(dut.u_core.dbus_req_ready),
+        .req_addr(dut.u_core.dbus_req_addr), .req_write(dut.u_core.dbus_req_write), .req_be(dut.u_core.dbus_req_be),
+        .req_wdata(dut.u_core.dbus_req_wdata), .req_fetch(dut.u_core.dbus_req_fetch),
+        .rsp_valid(dut.u_core.dbus_rsp_valid), .rsp_rdata(dut.u_core.dbus_rsp_rdata),
+        .rsp_err(dut.u_core.dbus_rsp_err));
     surfbus_monitor #(.NAME("ddr"), .MAX_LAT(1000)) ddrmon (
         .clk(clk), .rst(rst), .req_valid(ddr_req_valid), .req_ready(ddr_req_ready),
         .req_addr(ddr_req_addr), .req_write(ddr_req_write), .req_be(ddr_req_be),
@@ -101,8 +107,8 @@ module tb_soc;
 
     // the instruction port never writes; nothing reaches DDR without it
     always @(posedge clk) begin
-        if (!rst && dut.ibus_req_valid && (dut.ibus_req_write !== 1'b0 ||
-            dut.ibus_req_be !== 4'hF || dut.ibus_req_fetch !== 1'b1)) begin
+        if (!rst && dut.u_core.ibus_req_valid && (dut.u_core.ibus_req_write !== 1'b0 ||
+            dut.u_core.ibus_req_be !== 4'hF || dut.u_core.ibus_req_fetch !== 1'b1)) begin
             $display("tb_soc: ERROR the instruction port offered a non-fetch request");
         end
         if (!rst && HAS_DDR == 0 && ddr_req_valid !== 1'b0)
