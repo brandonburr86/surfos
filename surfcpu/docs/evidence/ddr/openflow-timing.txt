@@ -26,9 +26,14 @@ lite              35T     1     none                                        (doe
 lite              35T     2     none                                        71.70 MHz  FAIL at 100
 The gated builds (make build-fpga FLOW=openxc7), minimal CPU, seed 1, source c597a65b: 78.86 and
 75.59 MHz for ddr_bramdiag on the 100T and 35T, 75.00 and 81.21 MHz for ddr. Lite CPU, seed 2,
-source 383dba74: 72.98 and 81.03 MHz for ddr_bramdiag, 77.03 and 78.41 MHz for ddr
-(openxc7-ddr.txt). With the minimal CPU the synthesis check passes; with standard and lite it
-reports the CPU's cache tag read registers as lost (docs/DDR.md 10.3).
+source 383dba74: 72.98 and 81.03 MHz for ddr_bramdiag, 77.03 and 78.41 MHz for ddr (that run's
+records were not kept; its build directories were reused). Lite CPU, seed 2, source a338e7a3
+(docs/evidence/board/openxc7-ddr.txt): ddr_bramdiag on the 100T not routed (router2 at 750 to
+980 overused wires through 100 iterations, stopped; the placer estimated 84.07 MHz), 77.31 MHz
+on the 35T; 63.47 and 73.82 MHz for ddr. The same design but for its 32-bit build ID: the
+figure, and whether the design routes at all, move with the placement. With the minimal CPU the
+synthesis check passes; with standard and lite it reports the CPU's cache tag read registers as
+lost (docs/DDR.md 10.3).
 
 Where the time goes (nextpnr's critical path report for dram_clk; LUT levels counted from the
 report's O5/O6 sources; the first and the last named net on the path):

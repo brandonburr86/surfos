@@ -8,9 +8,13 @@ Pins and adapters are in [WIRING.md](WIRING.md); the build host in [BUILD-HOST.m
 **Status (2026-10-16).** Built into bitstreams for both boards with the open-source flow
 (`make build-fpga FLOW=openxc7`), every check of that flow passing (section 8): the milestone 1
 design, and the whole SoC without DDR in two designs, with the BRAM diagnostics (milestone 3)
-or SurfBoot in its boot ROM. Their timing is nextpnr's estimate. The SoC's synthesized netlist,
+or SurfBoot in its boot ROM; their timing is nextpnr's estimate. The SoC's synthesized netlist,
 simulated from its pins, prints the same characters as the RTL: the diagnostics' PASS line and
-SurfBoot's stop in its monitor. **Nothing has been built with Vivado** (there is no Vivado host
+SurfBoot's stop in its monitor. The two DDR designs (milestone 4, LiteDRAM, section 7) place
+and, mostly, route, PHY included, but **miss nextpnr's timing for LiteDRAM's 100 MHz clock
+(63 to 81 MHz), so the open flow gives them no bitstream** (section 8); in simulation their top
+passes the BRAM diagnostics' DDR tests with LiteDRAM's controller and its DRAM model (section
+12). **Nothing has been built with Vivado** (there is no Vivado host
 yet, gap G2) and **nothing has been programmed** (the board is not connected, G1/G3): every
 physical result is pending. Section 12 is the owner's checklist for the first power-up, with
 what the serial port should show according to simulation. The first real run of `build.tcl`
@@ -500,6 +504,80 @@ undefined (`x`) bit of the fetch FIFO's unused width, now tied to 0 by `setundef
 synthesis. And a `make build-rom` run during a build rewrote the ROM it was reading: the boot
 ROM check failed (7 of the 15 ROM blocks differed from the new file), which led to the ROM copy.
 
+**The DDR designs, open flow** (evidence `openxc7-ddr.txt`, 2026-10-16: the gated builds at
+source a338e7a3, clean, the diagnostic builds at 383dba74; HAS_DDR = 1): `make litedram-gen`,
+then `make build-fpga FLOW=openxc7 BOARD=<board> DESIGN=surfcpu_arty_a7_ddr_bramdiag` (or
+`surfcpu_arty_a7_ddr`). Their lists add to the SoC lists `define ARTY_HAS_DDR`, the generated
+LiteDRAM files (core, `VexRiscv_Lite.v`, its BIOS ROM and SRAM images, its constraints) checked
+through `generated ip/litedram/arty.sha256`, the DDR3L XDC files, `cdc surf_ddr_bridge`,
+`lvs-timeout 14400` and `seed 2`. **None of the builds passes, so there is no DDR bitstream:
+nextpnr's estimate for LiteDRAM's 100 MHz clock (`dram_clk`) misses it on every build that
+routes**, and nextpnr stops the flow after routing; one build did not route at all:
+
+| | ddr_bramdiag, 100T | ddr_bramdiag, 35T | ddr (SurfBoot), 100T | ddr, 35T |
+|---|---|---|---|---|
+| result, wall clock | fail: **not routed** (router2 stopped after 100 iterations), 1537 s | fail (timing), 183 s | fail (timing), 159 s | fail (timing), 159 s |
+| `dram_clk`: LiteDRAM, its CPU, the adapter, the bridge's controller side (need 100 MHz) | (84.1 MHz, the placer's estimate) | **77.3 MHz** | **63.5 MHz** | **73.8 MHz** |
+| sys_clk (need 25 MHz), pix_clk (need 25.17) | (77.8, 153.6) | 65.9, 134.6 | 66.6, 156.8 | 59.9, 116.3 |
+| LiteDRAM's 200 MHz (IDELAYCTRL reset logic), the oscillator's BUFG (LiteDRAM's PLL reset counter) | (350.4, 1003.0) | 373.0, 742.9 | 374.1, 956.9 | 373.1, 780.6 |
+| `dram_clk` in the previous run (383dba74), where all four routed | 73.0 MHz | 81.0 | 77.0 | 78.4 |
+| synthesis check; the board's netlist and boot ROM checks | FAIL (a false finding, below); PASS, PASS | the same | the same | the same |
+
+LiteDRAM's 400 MHz clocks reach only the serializers' clock pins: nextpnr derives them but has no
+register-to-register path on them to time. The worst `dram_clk` paths run through LiteDRAM's
+calibration CPU and its bus (from its instruction or data bus address through LiteX's bus
+decoder back into the CPU's fetch stage, 12.7 to 15.8 ns, 2.5 to 2.8 ns of it logic) and inside
+LiteDRAM's controller (the ZQ timer through the refresher and the command multiplexer to a bank
+machine, 12.1 to 13.6 ns, 13 to 17 LUT levels): a few hundred endpoints are late, and the figure
+moves by several MHz with any change to the netlist, the build ID included. Seeds, LiteDRAM's
+controller options, the 35T and a slower memory clock (80 MHz, the DDR3L's floor being about 76)
+did not close it (docs/DDR.md 10.3, docs/evidence/ddr/openflow-timing.txt). The gate stays: the
+fix is a flow or a design that meets the clock (Vivado closes LiteDRAM at 100 MHz on the Arty
+routinely), not a waiver.
+
+Routing converges only for some placements. With the placer's seed 1 the 35T did not route at an
+earlier commit (router2 at 300 to 500 overused wires past 300 iterations), hence `seed 2`, with
+which all four builds routed at 383dba74; at a338e7a3, whose netlist differs only by the build
+ID, the 100T ddr_bramdiag build did not (750 to 980 overused wires through 100 iterations; the
+others routed in 18 to 45). A seed is therefore no fix: nextpnr's congestion-driven placement
+(`--placer-heap-congestion-spread`) is a flow setting for the flow track to try.
+
+| Use (Yosys 0.69, `--dsp safe`; the four builds) | 100T | 35T |
+|---|---|---|
+| LUTs (Yosys LUT1-6 and INV) | 10,219 to 10,333 (16.1 to 16.3 %) | 10,247 to 10,262 (49.3 %) |
+| flip-flops | 6,428 (5.1 %) | 6,428 (15.5 %) |
+| block RAM (RAMB36 + RAMB18 / 2): the SoC's 36, LiteDRAM's BIOS ROM, SRAM, CPU and FIFOs 10.5 | 46.5 of 135 (34 %) | 46.5 of 50 (**93 %**) |
+| DSP48E1 (the SoC's multiplier; lite's is iterative) | 4 | 4 |
+| clock tiles: PLLE2 (the board's sys, LiteDRAM's), MMCME2 (pix) | 2 + 1 of 6 CMTs | 2 + 1 of 5 |
+| BUFG | 7 of 32 | 7 of 32 |
+| I/O logic: ISERDESE2, OSERDESE2, IDELAYE2, IDELAYCTRL | 16, 45, 16, 1 | the same |
+
+**Diagnostic builds** (`sim/board/openxc7_ddr_evidence.sh`; not the designs' results): the same
+flow with nextpnr allowed to finish (`--timing-allow-fail` in a copy of `tools/openxc7-build.sh`
+the script makes and records), so that the checks after it run, on `surfcpu_arty_a7_ddr_bramdiag`
+for both boards at 383dba74 (35 and 38 minutes, 30 of them LVS): `dram_clk` 73.7 and 79.0 MHz;
+the bitstream checks pass (IDCODE and part, frames, commands; 3,825,972 and 2,192,194 bytes),
+the FASM round trip passes, all 55 block RAMs (38 RAMB36E1, 17 RAMB18E1, LiteDRAM's BIOS ROM among
+them) hold their contents in the bitstream, the board's netlist and boot ROM checks pass, the
+clock-tile check fails only by misreading LiteDRAM's PLL (below), and **LVS proves 14,148 points
+and finds one different**, on both boards: write enable WEBWE[3] of the calibration CPU's
+instruction-cache tag memory (a RAMB18E1 in simple dual port mode, 23 of its 36 bits used), which
+the netlist ties to 0 and the routed bitstream drives from the write enable of the other three
+byte lanes. That lane's data inputs are 0 and nothing reads it, so the extra writes should change
+nothing, but the bitstream is not the netlist there and LVS fails it rightly; whether nextpnr's
+handling of that pin or the LVS tile model is at fault is the flow track's to find (docs/DDR.md
+10.3). `tools/fpga-build.sh` fails these builds too, so they have no bitstream under the
+design's name, and `tools/program.sh` refuses the flow's own bitstream (its manifest lists the
+failing checks).
+
+Two of the flow's checks misread these designs, and are reported for the flow track rather than
+waived: `synthcheck.py` counts the 22 bits of the calibration CPU's instruction-cache tag read
+register as lost (synthesis puts them in the tag memory's RAMB18E1, whose read port is
+synchronous; the check credits a block RAM's output register only when its optional DOA_REG or
+DOB_REG is on), and `cmtcheck.py` reads LiteDRAM's PLL parameters, which Yosys writes as short bit
+strings (`5'd16` as "10000"), as decimal numbers (docs/evidence/ddr/openflow-cmtcheck.txt: read as
+binary, every divider matches XAPP888).
+
 `build.tcl` (non-project): `read_verilog`, `read_mem`, `read_xdc` (then the CDC files scoped and
 late), `synth_design` with the generics and `-flatten_hierarchy rebuilt`, `opt_design`,
 `place_design`, `phys_opt_design`, `route_design`, a post-route checkpoint, then the reports
@@ -578,7 +656,8 @@ exits 2 "pending" without it). Before loading anything it checks, and refuses on
   package and bitstream).
 * **The manifest** next to the bitstream, if there is one: it must say every check passed and
   carry the file's SHA-256. `tools/openxc7-build.sh`'s own manifest (a flow track build) is
-  accepted for a volatile load when every check line says PASS.
+  accepted for a volatile load when every check line says PASS and every clock met nextpnr's
+  timing (a diagnostic run that let nextpnr finish has its checks but a late clock).
 
 `volatile` runs `openFPGALoader -b arty_a7_100t <bit>`: configuration RAM, lost at power-off
 (PROG or a power cycle returns to the flash). `flash` (milestone 9) writes the configuration
@@ -610,15 +689,18 @@ Block RAM implied by the memory map (a RAMB36 holds 1024 x 32 data bits):
 | text RAM, 16 KiB, dual clock | 4 |
 | font ROM, 4 KiB (256 x 16 x 8 bits) | 1 |
 | register file, FIFOs (distributed RAM) | 0 |
-| DDR3L controller (to be confirmed by the ddr track) | 0 |
-| **total** | **37** (the open flow: 36) |
+| **total without DDR** | **37** (the open flow: 36) |
+| LiteDRAM, in the DDR designs: its BIOS ROM (48 KiB region, 27.3 KiB used), SRAM 8 KiB, the calibration CPU's instruction cache and FIFOs (the open flow: 2 RAMB36 + 17 RAMB18) | 10.5 |
+| **total with DDR** (the open flow) | **46.5** |
 
 The XC7A35T has 50 RAMB36 (74 % used, 13 free; the open flow's 36 leave 14), the XC7A100T 135
-(27 %, 98 free) (DS180 v2.6.1 table 4). The 35T fits with little room: caches or a frame buffer
-would need the 100T or a smaller boot ROM. Clock resources: this design uses one MMCM, one PLL
-and two BUFGs; the memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5
-CMTs and the 100T 6, each with one MMCM and one PLL, and every 7-series device has 32 BUFGs
-(UG472).
+(27 %, 98 free) (DS180 v2.6.1 table 4). The 35T fits with little room: with the DDR3L controller
+93 % of its block RAM is used (3.5 free); caches or a frame buffer would need the 100T or a
+smaller boot ROM. Clock resources: the SoC without DDR uses one MMCM, one PLL and two BUFGs; the
+DDR designs add LiteDRAM's PLL (a second PLLE2), five BUFGs (the oscillator's for LiteDRAM's PLL
+and LiteDRAM's four) and an IDELAYCTRL (section 7); the 35T has 5 CMTs and the 100T 6, each with
+one MMCM and one PLL, and every 7-series device has 32 BUFGs (UG472). The DDR designs as the open
+flow builds them (section 8): about 10,300 LUTs and 6,430 flip-flops, half of the 35T's LUTs.
 
 ## 11. Make targets and tests
 
@@ -626,7 +708,7 @@ CMTs and the 100T 6, each with one MMCM and one PLL, and every 7-series device h
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the bridge's mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (238 wrapper and fetch.sh checks, the DDR designs' defines and generated files among them) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the bridge's mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (241 wrapper and fetch.sh checks, the DDR designs' defines and generated files among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
 | `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |
@@ -680,7 +762,8 @@ second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbser
    plugged in the design only keeps its lines released.
 4. **`surfcpu_arty_a7_ddr_bramdiag`**, milestone 4: the DDR3L (sections 1 and 7). **Not
    available yet**: the open flow's DDR builds miss nextpnr's timing for LiteDRAM's 100 MHz
-   clock and stop without a bitstream (section 8); this step waits for a build that passes
+   clock (one did not even route) and stop without a bitstream (section 8), and LVS finds one
+   block RAM pin of LiteDRAM's CPU different; this step waits for a build that passes
    (Vivado, BUILD-HOST.md, or a flow that closes that timing). Same adapters as step 3, card
    optional. Optionally a 3.3 V USB-serial adapter on the ChipKit header (its RXD to IO1, ground
    to GND) at 115200 8N1 shows the memory controller's own calibration log. The memory
