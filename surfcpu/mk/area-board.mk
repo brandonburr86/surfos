@@ -29,7 +29,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
         board-baseline-rt board-baseline board-top board-digilent board-wiring \
-        board-cdc-xdc
+        board-cdc-xdc board-tools
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -110,7 +110,7 @@ board-top: $(BSIM)/tb_top.vvp
 	@echo "board-top: PASS (seeds 1 7 123, $(if $(SOC_REAL),real SoC,SoC stand-in))"
 
 # ------------------------------------------------------------------------------------ checks
-check-board: board-clockplan board-digilent board-wiring board-cdc-xdc
+check-board: board-clockplan board-digilent board-wiring board-cdc-xdc board-tools
 	@echo "check-board: PASS"
 
 board-clockplan:
@@ -133,3 +133,10 @@ board-cdc-xdc:
 	$(Q)$(YOSYS) -q -c sim/board/tools/cdc_xdc_test.tcl > $(BSIM)/cdc_xdc_test.txt 2>&1 \
 	  || { cat $(BSIM)/cdc_xdc_test.txt; exit 1; }
 	@tail -1 $(BSIM)/cdc_xdc_test.txt
+
+# tools/fpga-build.sh and tools/program.sh against fake ssh, docker, vivado (running the real
+# build.tcl with stubbed Vivado commands) and openFPGALoader, with a temporary HOME
+board-tools:
+	@mkdir -p $(BSIM)
+	$(Q)sh sim/board/tools/test_tools.sh > $(BSIM)/test_tools.txt 2>&1 || { grep -v '^ok' $(BSIM)/test_tools.txt; exit 1; }
+	@tail -1 $(BSIM)/test_tools.txt

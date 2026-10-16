@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake openFPGALoader for the board track's wrapper tests: logs the call, answers --detect with
+# $FAKE_IDCODE (and $FAKE_IDCODE2 for a second device), and "programs" with $FAKE_PROGRAM_RC.
+echo "openFPGALoader $*" >> "$FAKE_LOG"
+case " $* " in
+    *" --detect "*)
+        if [ -n "${FAKE_IDCODE:-}" ]; then
+            printf 'index 0:\n\tidcode %s\n\tmanufacturer xilinx\n\tfamily artix a7\n\tirlength 6\n' "$FAKE_IDCODE"
+        fi
+        if [ -n "${FAKE_IDCODE2:-}" ]; then
+            printf 'index 1:\n\tidcode %s\n\tirlength 6\n' "$FAKE_IDCODE2"
+        fi
+        [ -n "${FAKE_IDCODE:-}" ] || { echo "No cable found" >&2; exit 1; }
+        exit 0 ;;
+esac
+exit "${FAKE_PROGRAM_RC:-0}"

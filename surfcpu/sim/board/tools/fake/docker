@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fake docker for the board track's wrapper tests: "docker run ... -v SRC:/build -w /build
+# IMAGE CMD..." runs CMD locally in SRC. Logs the call; starts no container.
+echo "docker $*" >> "$FAKE_LOG"
+[ "$1" = run ] || exit 1
+shift
+vol=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --rm) shift ;;
+        --platform) shift 2 ;;
+        -v) vol=$2; shift 2 ;;
+        -w) shift 2 ;;
+        *)  break ;;
+    esac
+done
+shift                                   # the image
+cd "${vol%%:*}" || exit 125
+exec "$@"
