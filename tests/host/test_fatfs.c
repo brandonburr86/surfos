@@ -1602,7 +1602,7 @@ static void b18(void) {
         memset(held[k]->data, 1 + k, 512);
         bdirty(held[k]);
     }
-    t0 = clock_ms;                                  /* (its holds began) */
+    t0 = clock_ms;
     b = bread(&x->bd, 11);
     memset(b->data, 9, 512);
     bdirty(b);
@@ -1611,9 +1611,9 @@ static void b18(void) {
     t1 = clock_ms;
     r2 = bsync(&x->bd);
     t2 = clock_ms;
-    if(verbose) printf("      syncs %d (%lu ms after the holds began) and %d (%lu ms)\n", r1, t1 - t0, r2, t2 - t1);
+    if(verbose) printf("      syncs %d (%lu ms) and %d (%lu ms)\n", r1, t1 - t0, r2, t2 - t1);
     check(r1 == -1 && t1 - t0 >= 10000 && t1 - t0 < 12000,
-          "B18: a sync waits until the holds have lasted 10 s (once for the three), then says their blocks were not written");
+          "B18: a sync waits 10 s for the holds (once for the three), then says their blocks were not written");
     check(r2 == -1 && t2 - t1 < 1000, "B18: the next sync gives up on those holds at once");
     check(x->mem[11 * 512] == 9 && x->mem[10 * 512] == 0 && x->mem[14 * 512] == 0, "B18: the other block is written, the held ones are not");
     check(said("by a task that does not let go") == 3, "B18: the console says it once for each");

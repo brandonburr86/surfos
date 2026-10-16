@@ -156,11 +156,11 @@ device's failed blocks.
 
 10/16/26 (audit B18): a holder that does not let go. bsync() waited for a held block for ever: a task
 killed while it held one (kernel/task.c's kill_escalate(): still in a call 2 s after a kill, killed at
-once with what it holds) left every later sync of that device hanging. Now a block records when its
-present hold began, and a sync waits for a block it owes until that hold has lasted HOLD_WAIT_MS (10 s;
-a dead task's holds all began before it died, so a sync waits once for all of them), then gives up on it:
-not written (-1), said on the console; later syncs give up on that hold at once (stuck, until the block
-is let go).
+once with what it holds) left every later sync of that device hanging. Now a sync waits HOLD_WAIT_MS
+(10 s) for a hold of a block it owes, counted from when a sync first had to wait for one of the device's
+holds (each hold is stamped then, all at once: a dead task's several holds cost one wait, and taking a
+block costs no clock), then gives up on it: not written (-1), said on the console; later syncs give up on
+that hold at once (stuck, until the block is let go).
 
 10/16/26 (audit B19): bpeek() hands out a block that is being written as well (its contents are
 what goes to the device): for readers only, as fs/bcache.h says now.
@@ -325,6 +325,7 @@ static void drop(struct buf *b) {
     b->fail_pass = 0;
     b->order = BORDER_DATA;
     b->stuck = false;
+    b->held_since = 0;
     lru_oldest(b);
 }
 
@@ -371,22 +372,35 @@ static void sleep_unlocked_ms(u_long ms) {
     mutex_lock(&bcache_lock);
 }
 
+/* (bcache_lock held) 10/16/26 (B18): the holds of dev's blocks start their clocks now, every one that has
+   none: a sync waits for one of them. Not when a hold begins (that is every read and write of a block,
+   and a clock costs SurfCPU a few hundred cycles each time); a task killed with several blocks in hand
+   has them all stamped at the first wait, so the sync that meets them waits once */
+static void stamp_holds(struct bdev *dev, u_long now) {
+    int i;
+    for(i = 0; i < BCACHE_BLOCKS; i++) {
+        struct buf *p = &bufs[i];
+        if(p->dev == dev && p->refs && !p->held_since) p->held_since = now;
+    }
+}
+
 /* (bcache_lock held) 10/16/26 (B18): wait until b, a dirty block a sync owes, is in nobody's hands and
-   under no write. A write ends; a hold may not: once it has lasted HOLD_WAIT_MS since it began (a task
-   killed in the middle of a change: all of its holds began before it died, so the sync that meets them
-   waits once, not for each) it is given up on: false, b stays dirty (not written), and later syncs give
-   up on that hold at once (b->stuck, until it is let go). true also when b was written or dropped
-   meanwhile (look again) */
+   under no write. A write ends; a hold may not: once a sync has waited HOLD_WAIT_MS for it (stamp_holds())
+   it is given up on: false, b stays dirty (not written), and later syncs give up on that hold at once
+   (b->stuck, until it is let go). true also when b was written or dropped meanwhile (look again) */
 static bool wait_for(struct buf *b) {
     struct bdev *dev = b->dev;
     u32 lba = b->lba;
     for(;;) {
-        u_long held;
+        u_long held, now;
         if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty) return true;
         if(b->writing || b->copying) { sleep_unlocked(); continue; }
         if(!b->refs || dev->gone) return true;
         if(b->stuck) return false;
-        held = uptime_ms() - b->held_since;
+        now = uptime_ms();
+        if(!now) now = 1;                       /* (0 stands for no clock yet) */
+        if(!b->held_since) stamp_holds(dev, now);
+        held = now - b->held_since;
         if(held >= HOLD_WAIT_MS) {
             b->stuck = true;
             kprintf("bcache: %s block %lu held for %lu s by a task that does not let go of it: not written\n",
@@ -604,7 +618,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
         if(b && (b->loading || b->writing)) { sleep_unlocked(); continue; }   /* being read, or (B7) written: wait for it */
         if(b) {
             hits++;
-            if(!b->refs++) b->held_since = uptime_ms();     /* (B18: a hold begins) */
+            b->refs++;
             lru_newest(b);
             mutex_unlock(&bcache_lock);
             return b;
@@ -617,7 +631,6 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
     b->dev = dev;
     b->lba = lba;
     b->refs = 1;
-    b->held_since = uptime_ms();
     hash_in(b);
     lru_newest(b);
     if(!fill) {
@@ -701,7 +714,7 @@ struct buf *bpeek(struct bdev *dev, u32 lba) {
     b = find(dev, lba);
     if(b && b->valid) {
         hits++;
-        if(!b->refs++) b->held_since = uptime_ms();
+        b->refs++;
         lru_newest(b);
     } else b = NULL;
     mutex_unlock(&bcache_lock);
@@ -776,6 +789,7 @@ void brelse(struct buf *b) {
     if(b->refs) b->refs--;
     if(!b->refs) {
         b->stuck = false;                       /* 10/16/26 (B18): that hold is over */
+        b->held_since = 0;
         if(b->dev && b->dev->gone && !b->loading && !b->writing && !b->copying) drop(b);
         wake_up_all(&bwait);                    /* someone may wait for a free buffer */
     }
@@ -994,6 +1008,7 @@ int bsync_order(struct bdev *dev, u8 top) {
         for(order = 0; order <= top; order++) {
             if(dev && !dev->bc_dirty[order]) continue;
             for(sweep = 0; sweep < 2; sweep++) {
+                if(sweep && dev && !dev->bc_failed) break;   /* no block of it failed: no second look */
                 for(i = 0; i < BCACHE_BLOCKS; i++) {
                     struct buf *b = &bufs[i];
                     int w;

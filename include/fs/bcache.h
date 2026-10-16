@@ -44,7 +44,7 @@ B15: what the share holds back exactly (fs/bcache.c).
 began reached the device (other tasks' later changes are not waited for), and a block
 goes only after the lower-order changes older than its own last change. B16: a file
 system may set the failed blocks of clusters it is freeing aside (baside(), bdiscard()).
-B18: a block a sync owes whose present hold has lasted 10 s is given up on (not written).
+B18: a block a sync owes is given up on (not written) once syncs have waited 10 s for its hold.
 */
 
 #ifndef _FS_BCACHE_H
@@ -74,7 +74,7 @@ struct buf {
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
-    u_long held_since;                  /* 10/16/26 (B18): when its present hold began (refs from 0 to 1) */
+    u_long held_since;                  /* 10/16/26 (B18): when a sync first waited for its present hold (0: none) */
     u64 first_seq;                      /* 10/16/26 (B12): its first change the device does not have (dirty) */
     u64 last_seq;                       /*      its last change */
     u64 next_seq;                       /*      its first change since a write or a copy of it began */
@@ -101,7 +101,7 @@ void bdirty_order(struct buf *b, u8 order);          /* bdirty(), written in tha
 void brelse(struct buf *b);
 int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed.
                                                         Never with a block of the device held (10/16/26, B7: it waits for holders;
-                                                        B18: until a hold has lasted 10 s). 10/16/26 (B12): 0 when every block dirty
+                                                        B18: 10 s for a hold). 10/16/26 (B12): 0 when every block dirty
                                                         at the call reached the device, else -1 */
 int bsync_order(struct bdev *dev, u8 top);           /* 10/16/26 (B7): bsync() of the orders 0 .. top only */
 /* 10/16/26 (B6): before a file system makes blocks of dev dirty: 0, or -1 when dev refuses writes and
