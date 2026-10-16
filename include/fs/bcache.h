@@ -73,6 +73,7 @@ void brelse(struct buf *b);
 int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed */
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
+int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
 
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache

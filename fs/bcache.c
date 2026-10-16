@@ -43,6 +43,13 @@ run never mixes two, bsync() writes a device's blocks order by order and stops a
 the first order that fails, and a block of a higher order is written to make room
 only after every dirty block of a lower order of its device (or not at all, until a
 sync). What a file system can still leave behind is said in surfcpu/docs/CARD.md.
+
+10/16/26 (audit B9): each device keeps the cache's account of it in its struct bdev
+(bc_dirty[] by order, bc_failed, bc_said), kept by account() at every change of a block's
+dirty, order or failed state. The console line about a device that refuses writes is
+said once per device and the line about it working again follows it, whatever other
+devices failed and went away before (the table of eight failing devices is gone).
+bcache_audit() recounts a device's blocks against its account, for the tests.
 */
 
 #include <surfos/types.h>
@@ -69,8 +76,9 @@ static u8 bounce[BCACHE_RUN * 512];
 static u_long hits, misses, writes;
 static struct bcache_io io;
 static u32 sync_passes;                         /* bsync() calls; 0 stands for reuse()'s writes */
-static struct bdev *failing[8];                 /* devices whose last write failed (said once) */
 static int evict_write(struct buf *b);
+/* 10/16/26 (B9): a device's account (struct bdev's bc_dirty[]) has a counter for each write order */
+typedef char bc_orders_fit[(BORDER_MAX + 1) * sizeof(u_int) == sizeof(((struct bdev *)0)->bc_dirty) ? 1 : -1];
 
 /**** the table (all of this holds bcache_lock) ****/
 
@@ -126,10 +134,23 @@ static void lru_oldest(struct buf *b) {         /* reused first */
     oldest = b;
 }
 
+/* 10/16/26 (B9): b's part in its device's account: sign -1 before a change of dirty, order or wfail,
+   +1 after it, both with interrupts off (bdirty() runs without bcache_lock, and a task may be
+   preempted between a counter's read and its write) */
+static void account(struct buf *b, int sign) {
+    if(!b->dirty || !b->dev) return;
+    b->dev->bc_dirty[b->order] += sign;
+    if(b->wfail) b->dev->bc_failed += sign;
+}
+
 /* forget a block: not found any more, its buffer the next to be reused */
 static void drop(struct buf *b) {
+    u_long f;
     hash_out(b);
+    f = irq_save();
+    account(b, -1);
     b->valid = b->dirty = b->wfail = false;
+    irq_restore(f);
     b->fail_pass = 0;
     b->order = BORDER_DATA;
     lru_oldest(b);
@@ -188,11 +209,14 @@ static int write_run(struct buf *b, u32 pass) {
         run[n++] = p;
     }
     if(dev->gone) {
+        f = irq_save();
         for(i = 0; i < n; i++) {
-            run[i]->dirty = false;
-            if(!run[i]->refs) drop(run[i]);
+            account(run[i], -1);
+            run[i]->dirty = run[i]->wfail = false;
         }
-        for(i = 0; i < 8; i++) if(failing[i] == dev) failing[i] = NULL;
+        irq_restore(f);
+        for(i = 0; i < n; i++) if(!run[i]->refs) drop(run[i]);
+        dev->bc_said = false;
         return BDEV_EGONE;
     }
     for(i = 0; i < n; i++) { run[i]->writing = true; gen[i] = run[i]->gen; }
@@ -210,21 +234,22 @@ static int write_run(struct buf *b, u32 pass) {
     io.writes++;
     f = irq_save();                             /* against a bdirty() between the test and the clearing */
     for(i = 0; i < n; i++) {
+        account(run[i], -1);
         run[i]->writing = false;
         if((r == 0 && run[i]->gen == gen[i]) || dev->gone) run[i]->dirty = false;
         run[i]->wfail = r != 0 && !dev->gone;   /* kept dirty for the next sync (B1) */
         if(run[i]->wfail) run[i]->fail_pass = pass;
+        account(run[i], +1);
     }
     irq_restore(f);
     for(i = 0; i < n; i++) if(dev->gone && !run[i]->refs) drop(run[i]);
     if(r == 0) { writes += n; io.written_blocks += n; }
-    for(i = 0; i < 8 && failing[i] != dev; i++) ;
-    if(i < 8 && (r == 0 || dev->gone)) {        /* working again, or gone */
-        failing[i] = NULL;
-        if(r == 0) kprintf("bcache: %s takes writes again\n", dev->name);
-    } else if(r != 0 && i == 8 && !dev->gone) {
-        for(i = 0; i < 8 && failing[i]; i++) ;
-        if(i < 8) failing[i] = dev;
+    if(dev->gone) dev->bc_said = false;         /* 10/16/26 (B9): said once per device, in its own account */
+    else if(r == 0 && dev->bc_said) {
+        dev->bc_said = false;
+        kprintf("bcache: %s takes writes again\n", dev->name);
+    } else if(r != 0 && !dev->bc_said) {
+        dev->bc_said = true;
         kprintf("bcache: write of %s blocks %lu-%lu failed (%i); kept for the next sync (more failures are not shown)\n",
                 dev->name, (u_long)first, (u_long)(first + n - 1), r);
     }
@@ -380,9 +405,11 @@ void bdirty(struct buf *b) {
 
 void bdirty_order(struct buf *b, u8 order) {
     u_long f = irq_save();
+    account(b, -1);
     if(!b->dirty || order < b->order) b->order = order;
     b->gen++;
     b->dirty = true;
+    account(b, +1);
     irq_restore(f);
 }
 
@@ -404,7 +431,13 @@ static int write_below(struct bdev *dev, u8 order) {
    written, neither is b: it waits for a sync like a failed block */
 static int evict_write(struct buf *b) {
     if(b->order > BORDER_DATA && write_below(b->dev, b->order) != 0) {
-        if(b->valid && b->dirty && !b->writing) b->wfail = true;
+        if(b->valid && b->dirty && !b->writing) {
+            u_long f = irq_save();
+            account(b, -1);
+            b->wfail = true;
+            account(b, +1);
+            irq_restore(f);
+        }
         return -1;
     }
     return write_run(b, 0);
@@ -423,8 +456,7 @@ void brelse(struct buf *b) {
 /* order by order (B3); a device that failed in one order has nothing of a higher order
    written in this call */
 int bsync(struct bdev *dev) {
-    struct bdev *bad[8];
-    int i, r = 0, nbad = 0, k;
+    int i, r = 0;
     u32 pass;
     u8 order;
     mutex_lock(&bcache_lock);
@@ -436,11 +468,10 @@ int bsync(struct bdev *dev) {
             if(dev && b->dev != dev) continue;
             while(b->valid && b->dirty && b->writing && (!dev || b->dev == dev)) sleep_unlocked();   /* another task writes it */
             if(!b->valid || !b->dirty || b->order != order || (dev && b->dev != dev) || b->fail_pass == pass) continue;
-            for(k = 0; k < nbad && bad[k] != b->dev; k++) ;
-            if(k < nbad || (nbad == 8 && order > 0)) continue;  /* its device failed a lower order */
+            if(b->dev->bc_bad_pass == pass) continue;           /* its device failed in this call (B9: its own mark) */
             if(write_run(b, pass) != 0) {
                 r = -1;
-                if(nbad < 8) bad[nbad++] = b->dev;
+                b->dev->bc_bad_pass = pass;
             }
         }
     }
@@ -455,7 +486,26 @@ void binvalidate(struct bdev *dev) {
         struct buf *b = &bufs[i];
         if(b->dev == dev && (b->valid || b->hashed) && !b->refs && !b->loading && !b->writing) drop(b);
     }
+    if(dev && dev->gone) dev->bc_said = false;
     mutex_unlock(&bcache_lock);
+}
+
+/* 10/16/26 (B9): how many of dev's counters differ from a count of its blocks (0: none) */
+int bcache_audit(struct bdev *dev) {
+    u_int dirty[BORDER_MAX + 1], failed = 0;
+    int i, off = 0;
+    memset(dirty, 0, sizeof(dirty));
+    mutex_lock(&bcache_lock);
+    for(i = 0; i < BCACHE_BLOCKS; i++) {
+        struct buf *b = &bufs[i];
+        if(b->dev != dev || !b->dirty) continue;
+        dirty[b->order]++;
+        if(b->wfail) failed++;
+    }
+    for(i = 0; i <= BORDER_MAX; i++) if(dirty[i] != dev->bc_dirty[i]) off++;
+    if(failed != dev->bc_failed) off++;
+    mutex_unlock(&bcache_lock);
+    return off;
 }
 
 void bcache_stats(u_long *h, u_long *m, u_long *w) {
@@ -542,7 +592,10 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         f = irq_save();
         for(i = 0; r == 0 && i < n; i++) {
             struct buf *p = upd[i] ? find(dev, lba + i) : NULL;
-            if(p && p->valid && !p->writing && p->gen == gen[i]) p->dirty = p->wfail = false;
+            if(p && p->valid && !p->writing && p->gen == gen[i]) {
+                account(p, -1);
+                p->dirty = p->wfail = false;
+            }
         }
         irq_restore(f);
         mutex_unlock(&bcache_lock);
