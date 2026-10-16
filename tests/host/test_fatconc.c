@@ -86,7 +86,17 @@ u_int bdirty_count(struct bdev *dev);
 
 volatile int in_irq;
 static surf_task the_task;
-surf_task *curTask = &the_task, *idle_task;
+surf_task *curTask = &the_task, *idle_task;     /* (for fs/ built without the definition below: one task for all) */
+
+/* 10/16/26 (round fs-fix-3): make unittest builds fs/ with curTask standing for *fatconc_task(): each thread is a
+   task of its own, so a block one thread's operation sets aside (B16) is another thread's sync's debt (B26), which
+   that sync waits for as for a hold */
+static __thread surf_task thread_task;
+static __thread surf_task *thread_cur;
+surf_task **fatconc_task(void) {
+    if(!thread_cur) thread_cur = &thread_task;
+    return &thread_cur;
+}
 
 void mutex_init(mutex_t *m, const char *name) { m->locked = 0; m->owner = NULL; m->name = name; }
 void mutex_lock(mutex_t *m) {
