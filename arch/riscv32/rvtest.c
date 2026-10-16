@@ -281,6 +281,33 @@ static void test_math(void) {
           "strcmp, strtol, atoi");
 }
 
+/* 10/16/26: arch/riscv32/memory.c moves words where it can: every alignment of both ends, every
+   length up to 70, both directions of an overlap, against a byte at a time; nothing outside touched */
+static void test_memory(void) {
+    static u8 a[112], b[112], ref[112];
+    int so, d, n, i, bad = 0;
+    for(so = 0; so < 4 && !bad; so++) {
+        for(d = -6; d <= 6 && !bad; d++) {
+            for(n = 0; n <= 70 && !bad; n++) {
+                int from = 16 + so, to = from + d;
+                for(i = 0; i < 112; i++) a[i] = ref[i] = (u8)(i * 7 + n);
+                memmove(a + to, a + from, (size_t)n);
+                if(to < from) for(i = 0; i < n; i++) ref[to + i] = ref[from + i];
+                else for(i = n - 1; i >= 0; i--) ref[to + i] = ref[from + i];
+                if(memcmp(a, ref, 112)) bad = 1;
+                for(i = 0; i < 112; i++) b[i] = ref[i] = 0xEE;
+                memcpy(b + to, a, (size_t)n);
+                for(i = 0; i < n; i++) ref[to + i] = a[i];
+                if(memcmp(b, ref, 112)) bad = 2;
+                memset(b + to, 0xA5, (size_t)n);
+                for(i = 0; i < n; i++) ref[to + i] = 0xA5;
+                if(memcmp(b, ref, 112)) bad = 3;
+            }
+        }
+    }
+    check(!bad, "memcpy, memmove (both overlaps) and memset at every alignment and length up to 70 (word moves)");
+}
+
 static void test_crc(void) {
     static const u8 seq[] = "123456789";
     u8 all[256];
@@ -498,7 +525,7 @@ static void test_fat(void) {
 }
 
 static void (*const tests[])(void) = {
-    test_abi, test_registers, test_stack, test_math, test_crc, test_time, test_timers, test_tasks,
+    test_abi, test_registers, test_stack, test_math, test_memory, test_crc, test_time, test_timers, test_tasks,
     test_mutex_fn, test_semaphore, test_event_fn, test_fat
 };
 
