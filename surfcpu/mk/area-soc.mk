@@ -22,7 +22,7 @@ SOC_BFM     := sim/soc/bfm/surfbus_bfm.v sim/soc/bfm/surfbus_monitor.v
 SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
-.PHONY: lint-soc test-soc-units
+.PHONY: lint-soc test-soc-units soc-gpio-real
 lint: lint-soc
 test-soc: test-soc-units
 
@@ -70,8 +70,16 @@ $(SOC_DIR)/tb_uart.vvp: sim/soc/tb/tb_uart.v rtl/peripherals/surf_uart.v $(SOC_L
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_uart -o $@ $^
 
+$(SOC_DIR)/tb_gpio.vvp: sim/soc/tb/tb_gpio.v rtl/peripherals/surf_gpio.v rtl/lib/surf_sync.v $(SOC_BFM)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_gpio -o $@ $^
+
+$(SOC_DIR)/tb_gpio_real.vvp: sim/soc/tb/tb_gpio.v rtl/peripherals/surf_gpio.v rtl/lib/surf_sync.v $(SOC_BFM)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_gpio -Ptb_gpio.SYS_HZ=25000000 -o $@ $^
+
 SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
-                 tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp)
+                 tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp tb_gpio.vvp tb_gpio_real.vvp)
 
 test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_intc.vvp,tb_intc)
@@ -80,4 +88,10 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_timer.vvp,tb_timer)
 	$(call soc_run,$(SOC_DIR)/tb_timer_frac.vvp,tb_timer_frac)
 	$(call soc_run,$(SOC_DIR)/tb_uart.vvp,tb_uart)
+	$(call soc_run,$(SOC_DIR)/tb_gpio.vvp,tb_gpio)
+	$(Q)$(MAKE) --no-print-directory SOC_SEEDS=1 soc-gpio-real
 	@echo "test-soc-units: PASS (seeds $(SOC_SEEDS))"
+
+# the GPIO test at the real 25 MHz (10 ms debounce = 250,000 cycles): one seed is enough
+soc-gpio-real: $(SOC_DIR)/tb_gpio_real.vvp
+	$(call soc_run,$(SOC_DIR)/tb_gpio_real.vvp,tb_gpio_real)
