@@ -1,0 +1,10 @@
+SurfCPU io track: Yosys synth_xilinx estimates (xc7, flattened, per block)
+An estimate from the open-source flow, not a Vivado result; nothing was placed or routed.
+date (UTC): 2026-10-16T02:29:37Z
+source: 238e1c2d4875 (dirty=0)
+yosys                        Yosys 0.52 (git sha1 fee39a3284c90249e1d9684cf6944ffbbcbb8f90)
+command: make synth-io
+
+surf_spi       83 LUTs    70 flip-flops   0 LUTRAM  0 RAMB36  0 RAMB18  0 DSP48   3 CARRY4
+surf_ps2      209 LUTs   189 flip-flops   2 LUTRAM  0 RAMB36  0 RAMB18  0 DSP48  30 CARRY4
+surf_video    848 LUTs   862 flip-flops   0 LUTRAM  1 RAMB36  0 RAMB18  0 DSP48  33 CARRY4
