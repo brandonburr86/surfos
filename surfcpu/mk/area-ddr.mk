@@ -3,7 +3,8 @@
 #
 #   make lint-ddr        Verilator -Wall lint and an Icarus compile of the bridge RTL
 #   make test-ddr        every DDR simulation (on test-soc)
-#   make check-ddr       test-ddr plus the Yosys synthesis check and the recipe checks (on check)
+#   make check-ddr       test-ddr plus the Yosys synthesis check and check-mig (on check)
+#   make check-mig       the MIG recipe without Vivado (project files, provenance, wiring, Tcl dry run)
 #   make test-ddr-mutants  the mutation check of the tests (slow; not on check)
 #   make litedram-gen    generate the LiteDRAM core for the Arty (fetches pinned sources; not on check)
 
@@ -29,7 +30,7 @@ DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initi
 DDR_RATIOS   = 40:10:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
 
 .PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr \
-        test-ddr-icarus test-ddr-mutants
+        test-ddr-icarus test-ddr-mutants check-mig
 lint: lint-ddr
 test-soc: test-ddr
 check: check-ddr
@@ -115,10 +116,24 @@ test-ddr-mutants:
 # Synthesizable with an open tool, no vendor primitives needed; a resource estimate.
 synth-ddr:
 	@mkdir -p $(DDR_OUT)
-	$(Q)$(YOSYS) -q -p "read_verilog -Irtl/generated $(DDR_RTL_ALL); synth_xilinx -top surf_ddr_bridge -family xc7 -noiopad; tee -q -o $(DDR_OUT)/synth_stat.txt stat" \
+	$(Q)$(YOSYS) -q -p "read_verilog -Irtl/generated $(DDR_RTL_ALL); synth_xilinx -top surf_ddr_bridge -family xc7 -noiopad -flatten; tee -q -o $(DDR_OUT)/synth_stat.txt stat" \
 	  > $(DDR_OUT)/synth.txt 2>&1 || { cat $(DDR_OUT)/synth.txt; exit 1; }
-	@grep -E 'Number of cells|LUT[1-6] |FDRE|CARRY4|RAM' $(DDR_OUT)/synth_stat.txt | tail -n 12 | sed 's/^/  /'
-	@echo "synth-ddr: surf_ddr_bridge synthesizes (yosys synth_xilinx)"
+	@grep -E 'Number of cells|LUT[1-6] |FD[A-Z]+ |CARRY4|RAM|SRL' $(DDR_OUT)/synth_stat.txt | sed 's/^ */  /'
+	@echo "synth-ddr: surf_ddr_bridge synthesizes (yosys synth_xilinx, no vendor primitives in the RTL)"
 
-check-ddr: test-ddr synth-ddr
+# The MIG recipe, without Vivado: the derived project files are up to date and fit the bridge,
+# the kept Digilent files match their recorded SHA-256, the wiring example lints against the
+# expected MIG port list, and the Tcl recipe and the bridge's XDC survive a dry run.
+check-mig:
+	$(Q)$(PYTHON) ip/mig/make_prj.py --check
+	$(Q)grep -E '^[0-9a-f]{64}  ' ip/mig/digilent/SOURCE.txt | (cd ip/mig/digilent && sha256sum -c --quiet) \
+	  && echo "check-mig: Digilent's files match ip/mig/digilent/SOURCE.txt"
+	$(Q)$(DDR_LINT) -Iip/mig --top-module mig_ddr3_wiring_example ip/mig/mig_ddr3_wiring_example.v ip/mig/mig_ddr3_stub.v
+	$(Q)mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -s mig_ddr3_wiring_example -o $(DDR_OUT)/wiring.vvp \
+	  ip/mig/mig_ddr3_wiring_example.v ip/mig/mig_ddr3_stub.v $(DDR_RTL_ALL) rtl/lib/surf_reset_sync.v
+	@echo "check-mig: wiring example clean (Verilator -Wall, Icarus)"
+	$(Q)$(YOSYS) -q -c sim/ddr/vivado_dryrun.tcl | grep -v 'generated in'
+
+check-ddr: test-ddr synth-ddr check-mig
 	@echo "check-ddr: PASS"
