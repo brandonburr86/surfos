@@ -144,8 +144,8 @@ Memory: 4 MiB of RAM at `0x80000000` loaded from the ELF; the core starts at `0x
 `0x02000000` (`msip` +0, `mtimecmp` +0x4000, `mtime` +0xBFF8, as in Spike) and the testbench's
 interrupt and console registers that docs/CPU.md lists. With `--ilat`/`--dlat MIN:MAX` each request
 waits 0..MAX-MIN cycles for `req_ready` and its response comes MIN..MAX cycles after acceptance
-(half the draws take the shortest value), from `--seed`. The program ends by storing to its `tohost`
-symbol: 1 = pass (exit 0); any other value = fail, test number `value >> 1` (exit 1); running
+(half the draws take the shortest value), from `--seed`. The program ends with its first non-zero store to
+its `tohost` symbol: 1 = pass (exit 0); any other value = fail, test number `value >> 1` (exit 1); running
 past `--max-cycles` exits 2; a testbench error (bad arguments or ELF, no `tohost`, a bus protocol
 violation by the core) exits 3. `--signature` dumps the words between the two symbols, one per
 line (the riscv-arch-test format).
@@ -174,3 +174,5 @@ details.
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
   interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6); `surf_ddr_bridge`'s parameters
   (section 3); the surfsim command line as built (section 7).
+* 2026-10-16: the program ends with its first non-zero store to `tohost` (section 6), as the
+  testbench, Spike and the trace comparator already treat it.

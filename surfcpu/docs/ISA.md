@@ -52,7 +52,7 @@ address (bits 11:10 = `11`) raises an illegal-instruction exception and changes 
 | `mhpmevent3`..`31` | `0x323`..`0x33F` | 0 | none | |
 | `mscratch` | `0x340` | 0 | all | |
 | `mepc` | `0x341` | 0 | 31:2 | bits 1:0 read as 0 |
-| `mcause` | `0x342` | 0 | bit 31 and 4:0 | WLRL; only legal values need to round-trip |
+| `mcause` | `0x342` | 0 | bit 31 and 4:0 | WLRL; only legal values need to round-trip (SurfCPU keeps bits 31 and 4:0 of any value written) |
 | `mtval` | `0x343` | 0 | all | see section 3 |
 | `mip` | `0x344` | 0 | none | `MSIP` (3) = timer.MSIP, `MTIP` (7) = mtime >= mtimecmp, `MEIP` (11) = intc; all read only |
 | `pmpcfg0`..`15` | `0x3A0`..`0x3AF` | 0 | none | zero PMP entries |
@@ -66,8 +66,9 @@ address (bits 11:10 = `11`) raises an illegal-instruction exception and changes 
 | `hpmcounter3`..`31` (`h`) | `0xC03`..`0xC1F`, `0xC83`..`0xC9F` | | read only | 0 |
 
 64-bit counters on RV32: read `xh`, then `x`, then `xh` again, and retry if the two high
-reads differ. A write to `mcycle` (or `minstret`) replaces the low half; the counter's own
-increment in that cycle is lost. A CSR instruction that writes `minstret` is not counted.
+reads differ. A write to `mcycle`, `mcycleh`, `minstret` or `minstreth` replaces that half; the
+counter's own increment in that cycle is lost. A CSR instruction that writes `minstret` or
+`minstreth` is not counted.
 
 ## 3. Traps
 
@@ -174,3 +175,5 @@ instruction: pc, instruction, register write, memory access, trap.
 
 * 2026-10-15: `mtval` for an illegal 16-bit encoding holds only its 16 bits, zero-extended (the
   privileged specification's rule, and Spike's).
+* 2026-10-16: a write to `minstreth` is not counted, like one to `minstret`; `mcause` keeps bits
+  31 and 4:0 of any value written (what the core and the contract-patched Spike do).
