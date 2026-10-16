@@ -1,7 +1,7 @@
 /*
 SurfBoot: what the portable boot code needs from the platform
 --------------------
-File: port.h Date: 10/15/26 (SurfCPU)
+File: port.h Date: 10/16/26 (SurfCPU)
 --------------------
 sd.c, fat32.c, image.c, boot.c and monitor.c use only these functions, so they compile both
 for the SoC (port_surf.c: the surf_spi controller, mtime, sysinfo, DDR at its real address)
@@ -30,6 +30,11 @@ void port_spi_set_div(uint32_t div);            /* SCLK = sys_hz / (2 * (div + 1
 uint32_t port_sysinfo(uint32_t off);            /* a sysinfo register (SURF_SYSINFO_*) */
 uint32_t port_timebase_hz(void);                /* timer.TIMEBASE */
 uint32_t port_buttons(void);                    /* gpio.BTN, debounced, 1 = pressed */
+
+/* The DDR controller's registers (the ddrc region, SURF_DDRC_* offsets), for the software
+ * initialization a controller with sysinfo.DDR_STATUS.SWINIT needs (common/ddrinit.c). */
+uint32_t port_ddrc_read(uint32_t off);
+void port_ddrc_write(uint32_t off, uint32_t value);
 
 /* DDR, through pointers the platform hands out. The callers check every range first. */
 volatile uint32_t *port_ddr_word(uint32_t addr); /* one aligned DDR word */

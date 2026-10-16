@@ -1,7 +1,7 @@
 /*
 SurfCPU firmware tests: the host test driver
 --------------------
-File: fwtest.c Date: 10/15/26 (SurfCPU)
+File: fwtest.c Date: 10/16/26 (SurfCPU)
 --------------------
 Runs SurfBoot's portable code (sd.c, fat32.c, image.c, boot.c, monitor.c, compiled natively
 with AddressSanitizer and UBSan) on the simulated board of port_host.c:
@@ -20,8 +20,11 @@ Card options: --type sdhc|sdsc2|sdsc1|mmc, --absent, --no-cd, --dead, --miso-low
 --crc-errors N, --crc-every N, --token-errors N, --read-timeouts N, --remove-after N, --busy-bytes N,
 --min-div N; --io-model runs the io track's pin-level model instead (built with
 IO_MODEL_DIR; --type, --absent, --crc-errors and --token-errors carry over, and any protocol
-violation it logs fails the run). Board options: --ddr ok|absent|fail|never, --ddr-size BYTES, --ddr-calib-ms N,
---ddr-flip, --btn0, --path PATH. Checks: --expect NAME (OK or an error name such as
+violation it logs fails the run). Board options: --ddr
+ok|absent|fail|never|swinit|swinit-bad|swinit-nophy (swinit: a controller that software
+initializes, with a read window per lane; swinit-bad: lane 1 has none; swinit-nophy: LiteDRAM's
+simulation core, without PHY registers), --ddr-size BYTES, --ddr-calib-ms N, --ddr-flip,
+--btn0, --path PATH. Checks: --expect NAME (OK or an error name such as
 FAT_CYCLE), --expect-msg TEXT, --expect-log TEXT (repeatable), --expect-flags N,
 --expect-cmdline TEXT. Exit 0 when every expectation holds, 1 otherwise, 2 on bad usage,
 3 on a runaway (a loop that did not end within the simulated budget).
@@ -232,6 +235,9 @@ static int parse_options(int argc, char **argv)
             else if (!strcmp(optarg, "absent")) ddr_mode = DDR_ABSENT;
             else if (!strcmp(optarg, "fail")) ddr_mode = DDR_FAIL;
             else if (!strcmp(optarg, "never")) ddr_mode = DDR_NEVER;
+            else if (!strcmp(optarg, "swinit")) ddr_mode = DDR_SWINIT;      /* lanes level */
+            else if (!strcmp(optarg, "swinit-bad")) ddr_mode = DDR_SWINIT + 100;  /* lane 1 never */
+            else if (!strcmp(optarg, "swinit-nophy")) ddr_mode = DDR_SWINIT + 200;  /* the sim core */
             else { fprintf(stderr, "fwtest: unknown DDR mode %s\n", optarg); return -1; }
             break;
         case O_DDRSIZE: ddr_size = (uint32_t)strtoul(optarg, 0, 0); break;
@@ -261,6 +267,15 @@ static int setup_board(void)
     host.ddr_mode = (int)ddr_mode;
     host.ddr_size = ddr_size;
     host.ddr_calib_us = ddr_calib_ms * 1000u;
+    if (ddr_mode >= DDR_SWINIT) {                   /* LiteDRAM's model: each lane's window */
+        host.ddr_mode = DDR_SWINIT;
+        host.ddrc.lane[0] = (struct ddrc_lane){ 3, 6, 26 };
+        host.ddrc.lane[1] = ddr_mode == DDR_SWINIT + 100 ? (struct ddrc_lane){ 0, 1, 0 } : (struct ddrc_lane){ 5, 10, 20 };
+        host.ddrc.no_phy = ddr_mode == DDR_SWINIT + 200;
+        ddrc_model_init(&host.ddrc);
+        if (ddr_calib_ms == 150)                    /* the bridge's limit, from reset */
+            host.ddr_calib_us = 1500000u;
+    }
     host.ddr_flip = (int)ddr_flip;
     host.buttons = btn;
     host.spi_budget = 400000000ull;
@@ -363,6 +378,21 @@ static int io_model_done(void)
     return 0;
 }
 
+/* With --ddr swinit*: the LiteDRAM model's counts; a protocol violation is a failure. */
+static int ddrc_model_done(void)
+{
+    if (host.ddr_mode != DDR_SWINIT)
+        return 0;
+    const struct ddrc_model *m = &host.ddrc;
+    printf("ddrc model: %u accesses, %u mode register loads, %u ZQCL, %u writes, %u reads, %u violations\n",
+           m->accesses, m->mrs, m->zqcl, m->writes, m->reads, m->violations);
+    if (m->violations) {
+        printf("EXPECTATION FAILED: the LiteDRAM model saw %u protocol violation(s)\n", m->violations);
+        return 1;
+    }
+    return 0;
+}
+
 static int run_boot(void)
 {
     if (setup_board() != 0)
@@ -382,6 +412,7 @@ static int run_boot(void)
     }
     bad += check_expectations(err);
     bad += io_model_done();
+    bad += ddrc_model_done();
     host_free();
     return bad ? 1 : 0;
 }
@@ -405,6 +436,7 @@ static int run_monitor(void)
            sb_err_name(sb_last_err));
     int bad = check_expectations(ex.code ? sb_last_err : 0);
     bad += io_model_done();
+    bad += ddrc_model_done();
     host_free();
     return bad ? 1 : 0;
 }

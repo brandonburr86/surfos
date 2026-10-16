@@ -154,6 +154,14 @@ an update atomic.
 
 ## 6. Clarifications (version 1 unchanged)
 
+* 2026-10-16 (round ddr-3, SurfBoot 1.1.0): on a bitstream whose DDR controller waits for
+  software (`sysinfo.DDR_STATUS.SWINIT`, memory map 2), SurfBoot initializes and levels the
+  DDR3L before everything in section 4; at the handoff the DDR is calibrated exactly as
+  before (`CALIB_DONE`), the controller in charge of it, and the kernel must leave the `ddrc`
+  registers alone (writing them can take the DRAM away from the controller). Nothing in the
+  image, the boot information or the handoff changes; `map_version` and `soc_version` there
+  read 2 and 0.2.0 (spec/soc.toml), `surfboot_version` 0x010100.
+
 * 2026-10-15: the payload is laid out by load address; `flags` nonzero is logged and
   ignored; check 2 requires `SURF_ISA_I`; `ram_size` means SurfBoot's quick test only;
   `ddr_top` follows the calibrated DDR size; BTN1 stops in the monitor; `/USERS/DOCUMENTS/`

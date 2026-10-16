@@ -13,6 +13,7 @@ host tests run exactly this code against card images.
 #define SURFBOOT_BOOT_H
 
 #include <stdint.h>
+#include "ddrinit.h"
 #include "fat32.h"
 #include "image.h"
 #include "sd.h"
@@ -28,6 +29,8 @@ struct sb_state {
     int ddr_ok;
     uint32_t ram_base, ram_size, ram_limit;     /* usable DDR for images: [base, size - 16 MiB) */
     uint32_t ddr_wait_us;
+    int ddr_leveled;                            /* SurfBoot initialized the controller (SWINIT) */
+    struct ddrinit_result ddr_lev;              /* ... and what its read leveling chose */
     int card_ok, vol_ok;
     struct sd_card card;
     struct fat_vol vol;
@@ -49,6 +52,9 @@ int sb_note_boot_failure(struct sb_state *s, int err);
 enum sb_choice { SB_BOOT_NORMAL = 0, SB_BOOT_BACKUP = 1 };
 
 int sb_ddr_init(struct sb_state *s);
+/* After sb_ddr_init on a controller with SWINIT: "read leveling lane 0: ...; lane 1: ..." (each
+ * lane's choice), or that the PHY had nothing to level. */
+void sb_ddr_describe(const struct sb_state *s, char *buf, unsigned len);
 int sb_card_init(struct sb_state *s);
 int sb_load_path(struct sb_state *s, const char *path);
 int sb_read_cmdline(struct sb_state *s);

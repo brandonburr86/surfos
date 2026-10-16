@@ -1,23 +1,25 @@
 /*
 SurfCPU firmware tests: the host side of port.h
 --------------------
-File: port_host.h Date: 10/15/26 (SurfCPU)
+File: port_host.h Date: 10/16/26 (SurfCPU)
 --------------------
 The simulated board the portable SurfBoot code runs on in the host tests: an SD card model
 behind the SPI calls, a clock that advances with every SPI byte (at the divider in use) and
 every time read, sysinfo registers with a DDR controller that calibrates (or fails, or
-never finishes), a 256 MiB buffer standing in for DDR, buttons, the boot information page
-and a captured console.
+never finishes, or waits for software: a model of LiteDRAM's ddrc registers whose read path
+works only inside a window of bitslips and delays per lane), a 256 MiB buffer standing in
+for DDR, buttons, the boot information page and a captured console.
 */
 #ifndef SURFCPU_PORT_HOST_H
 #define SURFCPU_PORT_HOST_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include "ddrc_model.h"
 #include "sdcard_sim.h"
 #include "surfcpu/bootabi.h"
 
-enum ddr_mode { DDR_OK = 0, DDR_ABSENT, DDR_FAIL, DDR_NEVER };
+enum ddr_mode { DDR_OK = 0, DDR_ABSENT, DDR_FAIL, DDR_NEVER, DDR_SWINIT };
 
 struct host_env {
     struct sdsim *card;         /* NULL: an empty socket without a model */
@@ -26,7 +28,9 @@ struct host_env {
     uint32_t spi_div;
     int cs;
     int ddr_mode;
-    uint32_t ddr_calib_us;      /* calibration finishes this long after start */
+    uint32_t ddr_calib_us;      /* calibration finishes this long after start; with DDR_SWINIT,
+                                   CALIB_FAIL comes then unless software has calibrated */
+    struct ddrc_model ddrc;     /* DDR_SWINIT: LiteDRAM behind the ddrc registers */
     uint32_t ddr_size;
     uint8_t *ddr;               /* SURF_DDR_SIZE bytes */
     int ddr_flip;               /* flip a payload bit between the copy and the read-back */

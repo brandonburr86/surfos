@@ -1,7 +1,7 @@
 /*
 SurfBoot: the boot sequence
 --------------------
-File: boot.c Date: 10/15/26 (SurfCPU)
+File: boot.c Date: 10/16/26 (SurfCPU)
 --------------------
 See boot.h. Each step logs one line saying what it found; a failure is logged with its
 sentence and returned, and the caller (main.c on the device, the host tests) decides what
@@ -71,14 +71,51 @@ static int ddr_quick_test(uint32_t base, uint32_t size)
     return SB_OK;
 }
 
+static const struct ddrinit_ops sb_ddrc = {
+    port_ddrc_read, port_ddrc_write, port_now_us, 0, 0
+};
+
+/* The leveling's choice, for the log: "read leveling lane 0: bitslip 3, delay 16 (window +-7);
+ * lane 1: ...", or "no read leveling (the PHY has no delay registers)" */
+void sb_ddr_describe(const struct sb_state *s, char *buf, unsigned len)
+{
+    unsigned n = 0;
+    const char *head = s->ddr_lev.leveling ? "read leveling " : "no read leveling (the PHY has no delay registers)";
+    for (; *head && n + 1 < len; head++)
+        buf[n++] = *head;
+    for (int m = 0; s->ddr_lev.leveling && m < DDRINIT_MODULES && n + 1 < len; m++) {
+        if (m) {
+            buf[n++] = ';';
+            if (n + 1 < len) buf[n++] = ' ';
+        }
+        ddrinit_describe(&s->ddr_lev, m, buf + n, len - n);
+        while (buf[n]) n++;
+    }
+    buf[n < len ? n : len - 1] = 0;
+}
+
 int sb_ddr_init(struct sb_state *s)
 {
     s->ddr_ok = 0;
+    s->ddr_leveled = 0;
     uint32_t st = port_sysinfo(SURF_SYSINFO_DDR_STATUS);
     if (!(st & SURF_SYSINFO_DDR_STATUS_PRESENT_MASK))
         return sb_fail(SB_E_DDR_ABSENT, "this bitstream has no DDR controller (DDR_STATUS 0x%08x): there "
                        "is nowhere to load a kernel", st);
     uint32_t t0 = port_now_us();
+    if (st & SURF_SYSINFO_DDR_STATUS_SWINIT_MASK) {
+        /* The controller waits for software (LiteDRAM without its own CPU): initialize the
+         * DDR3L and level its read path through the ddrc registers; CALIB_DONE follows. */
+        if (st & SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK)
+            return sb_fail(SB_E_DDR_CALIB, "DDR calibration failed (DDR_STATUS 0x%08x)", st);
+        s->ddr_leveled = 1;
+        if (!ddrinit_run(&sb_ddrc, &s->ddr_lev)) {
+            char d[120];
+            sb_ddr_describe(s, d, sizeof d);
+            return sb_fail(SB_E_DDR_CALIB, "DDR initialization failed: %s", d);
+        }
+        st = port_sysinfo(SURF_SYSINFO_DDR_STATUS);
+    }
     while (!(st & SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK)) {
         if (st & SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK)
             return sb_fail(SB_E_DDR_CALIB, "DDR calibration failed (DDR_STATUS 0x%08x)", st);
@@ -281,6 +318,11 @@ static int boot_once(struct sb_state *s, const char *path, int choice)
         if (e) {
             sb_log("ddr: %s\n", sb_last_msg);
             return e;
+        }
+        if (s->ddr_leveled) {
+            char d[120];
+            sb_ddr_describe(s, d, sizeof d);
+            sb_log("ddr: initialized by SurfBoot, %s\n", d);
         }
         sb_log("ddr: calibrated after %u ms, %u MiB, quick test passed (data, address, byte lanes)\n",
                s->ddr_wait_us / 1000u, s->ram_size >> 20);
