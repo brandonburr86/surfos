@@ -18,7 +18,7 @@ bmc: depth 14
 cover: mode cover
 cover: depth 14
 timeout 900
-aigsmt z3
+bmc: aigsmt z3
 
 [engines]
 bmc: abc bmc3
