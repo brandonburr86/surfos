@@ -19,7 +19,7 @@ controller; no write command ever lost by a controller reset (its data always ca
 usage: tb_ddr_bridge [--test NAME|all] [--seed N] [--count N] [--sys-ns P] [--ui-ns P]
                      [--jitter F] [--lat MIN:MAX] [--rdy PCT] [--wdf PCT] [--no-refresh] [-v]
 tests: basic lanes bounds alias random stream precal calfail calfail-stopped watchdog
-       sysreset uireset all (calfail-stopped is not part of all)
+       abandon sysreset uireset all (calfail-stopped is not part of all)
 Exit status 0 when every selected test passes.
 */
 #include <algorithm>
@@ -785,6 +785,43 @@ bool t_watchdog(const Options &o) {
     return all;
 }
 
+// An access abandoned by the watchdog before it could enter the request mailbox (still
+// occupied by an earlier request that the stopped controller clock never took) is never
+// carried out; the earlier one is, once the clock runs again.
+bool t_abandon(const Options &o) {
+    MigUiConfig m = model_config(o);
+    Bench b(o, m, "abandon");
+    if (!b.wait_calib(calib_wait(o, m))) b.fail("no calibration");
+    uint32_t st = 0x90000;
+    for (int i = 0; i < 20; ++i) b.access(random_req(b.rng(), st));
+    const uint32_t a_addr = 0x80400000, b_addr = 0x80400040;
+    const uint32_t b_before = b.mig.word(b_addr & kDdrMask);
+    b.stop_ui_clock();
+    Req qa; qa.write = true; qa.addr = a_addr; qa.wdata = 0xAAAA5555;
+    Rsp sa = b.access(qa);              // into the mailbox, never taken: watchdog
+    if (!sa.got || !sa.err || sa.latency != kTimeout) b.fail("first stuck access not timed out");
+    b.sys_reset(2);
+    if (!b.wait_calib(16)) b.fail("calib_done did not return after reset");
+    const uint64_t writes_before = b.mig.stats().writes;
+    Req qb; qb.write = true; qb.addr = b_addr; qb.wdata = 0xBBBB6666;
+    Rsp sb = b.access(qb);              // waits behind the first: watchdog again
+    if (!sb.got || !sb.err || sb.latency != kTimeout) b.fail("second stuck access not timed out");
+    b.start_ui_clock();
+    b.ticks(200);
+    if (b.mig.stats().writes != writes_before + 1)
+        b.fail("controller carried out %llu writes, expected 1 (the first only)",
+               (unsigned long long)(b.mig.stats().writes - writes_before));
+    if (b.mig.word(a_addr & kDdrMask) != 0xAAAA5555) b.fail("the first write did not happen");
+    if (b.mig.word(b_addr & kDdrMask) != b_before) b.fail("the abandoned second write happened");
+    b.sys_reset(2);
+    if (!b.wait_calib(16)) b.fail("no calibration after recovery");
+    for (int i = 0; i < 100; ++i) b.access(random_req(b.rng(), st));
+    if (b.timeouts != 2) b.fail("%llu timeouts, expected 2", (unsigned long long)b.timeouts);
+    bool ok = b.finish(true);
+    b.summary();
+    return ok;
+}
+
 // Random traffic with rst at random moments, also in the middle of accesses at every stage.
 bool t_sysreset(const Options &o) {
     MigUiConfig m = model_config(o);
@@ -878,6 +915,7 @@ bool run(const std::string &t, const Options &o) {
     if (t == "calfail") return t_calfail(o, false);
     if (t == "calfail-stopped") return t_calfail(o, true);
     if (t == "watchdog") return t_watchdog(o);
+    if (t == "abandon") return t_abandon(o);
     if (t == "sysreset") return t_sysreset(o);
     if (t == "uireset") return t_uireset(o);
     std::printf("tb_ddr_bridge: unknown test %s\n", t.c_str());
@@ -916,7 +954,7 @@ int main(int argc, char **argv) {
         }
     }
     const char *all[] = {"basic", "lanes", "bounds", "alias", "random", "stream", "precal", "calfail",
-                         "watchdog", "sysreset", "uireset"};
+                         "watchdog", "abandon", "sysreset", "uireset"};
     bool ok = true;
     if (o.test == "all") {
         for (const char *t : all) ok = run(t, o) && ok;

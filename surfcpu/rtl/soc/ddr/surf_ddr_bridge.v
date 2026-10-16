@@ -25,8 +25,9 @@ completed TIMEOUT_CYCLES sys cycles after acceptance with an error, sets the sti
 output and from then on refuses every access at once (fail-stop) until rst: a controller that
 stopped answering is reported, never waited on for ever, and a late answer is never mistaken
 for the answer to a later access (each request carries an id, and a response whose id is not
-the outstanding one is dropped). An access the watchdog abandoned after it reached the ui
-side may still be carried out later; docs/DDR.md says what that means.
+the outstanding one is dropped). An access the watchdog abandons while it still waits for the
+request mailbox is never carried out; one already in the mailbox or beyond may still be
+carried out later, in order (docs/DDR.md).
 
 calib_done follows init_calib_complete (synchronized), unless calibration did not succeed
 within CALIB_TIMEOUT_CYCLES sys cycles of reset: then calib_fail is set and calib_done stays
@@ -169,7 +170,8 @@ module surf_ddr_bridge #(
     wire             usable  = cal_done_q && !timeout_q;
     wire [RQ_W-1:0]  new_req = {next_id, s_req_write, s_req_be, s_req_addr[OFFSET_BITS-1:2], s_req_wdata};
     wire             retry   = busy && !sent;
-    wire             rq_send = !rst && ((accept && usable) || retry);
+    wire             expire  = busy && wd_count == TO_LAST;   // the watchdog's last cycle
+    wire             rq_send = !rst && ((accept && usable) || (retry && !expire));
     wire [RQ_W-1:0]  rq_din  = retry ? pend : new_req;
     wire             rs_take = !rst && rs_valid;          // stale responses are taken and dropped
     wire             rs_mine = busy && sent && (rs_dout[RS_W-1 -: 4] == cur_id);
@@ -203,14 +205,14 @@ module surf_ddr_bridge #(
                     rsp_rdata_q <= 32'h0;
                 end
             end else if (busy) begin
-                if (retry && rq_ready)
+                if (retry && rq_ready && !expire)
                     sent <= 1'b1;
                 if (rs_take && rs_mine) begin
                     busy        <= 1'b0;
                     rsp_valid_q <= 1'b1;
                     rsp_err_q   <= rs_dout[32];
                     rsp_rdata_q <= rs_dout[31:0];
-                end else if (wd_count == TO_LAST) begin
+                end else if (expire) begin
                     busy        <= 1'b0;                // watchdog: answer, report, stop
                     timeout_q   <= 1'b1;
                     rsp_valid_q <= 1'b1;

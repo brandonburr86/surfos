@@ -4,6 +4,7 @@
 #   make lint-ddr        Verilator -Wall lint and an Icarus compile of the bridge RTL
 #   make test-ddr        every DDR simulation (on test-soc)
 #   make check-ddr       test-ddr plus the Yosys synthesis check and the recipe checks (on check)
+#   make test-ddr-mutants  the mutation check of the tests (slow; not on check)
 #   make litedram-gen    generate the LiteDRAM core for the Arty (fetches pinned sources; not on check)
 
 DDR_RTL      = rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_mailbox.v
@@ -27,7 +28,8 @@ DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initi
 # faster than ui, and two pairs with every half period jittered by up to 30%.
 DDR_RATIOS   = 40:10:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
 
-.PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr
+.PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr \
+        test-ddr-icarus test-ddr-mutants
 lint: lint-ddr
 test-soc: test-ddr
 check: check-ddr
@@ -81,8 +83,34 @@ test-ddr-defaults: $(DDR_OUT)/tb_ddr_bridge_defaults
 	  [ $$st -eq 0 ] || { echo "test-ddr-defaults: FAIL ($$t)"; exit 1; }; done
 	@echo "test-ddr-defaults: PASS"
 
-test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults
+# The second simulator: the mailbox under random clocks, stops and misuse, and a smoke test of
+# the whole bridge with a small Verilog MIG stand-in (four-state: no X anywhere).
+$(DDR_OUT)/tb_ddr_mailbox.vvp: sim/ddr/tb_ddr_mailbox.v rtl/soc/ddr/surf_ddr_mailbox.v
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -o $@ $^
+
+$(DDR_OUT)/tb_ddr_bridge_icarus.vvp: sim/ddr/tb_ddr_bridge_icarus.v sim/ddr/mig_ui_bfm.v $(DDR_RTL_ALL) rtl/generated/surfcpu_soc.vh
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -o $@ $(filter %.v,$^)
+
+test-ddr-icarus: $(DDR_OUT)/tb_ddr_mailbox.vvp $(DDR_OUT)/tb_ddr_bridge_icarus.vvp
+	$(Q)for c in 1:40000:12307 2:12307:40000 3:40000:40000 4:10000:97000 5:41700:13100; do \
+	  s=$${c%%:*}; r=$${c#*:}; a=$${r%%:*}; b=$${r#*:}; \
+	  vvp -n $(DDR_OUT)/tb_ddr_mailbox.vvp +seed=$$s +src_ps=$$a +dst_ps=$$b > $(DDR_OUT)/mailbox.$$s.txt 2>&1; \
+	  grep -q 'tb_ddr_mailbox: PASS' $(DDR_OUT)/mailbox.$$s.txt || { cat $(DDR_OUT)/mailbox.$$s.txt; exit 1; }; \
+	  grep 'PASS' $(DDR_OUT)/mailbox.$$s.txt | sed 's/^/  /'; done
+	$(Q)for s in 1 2 3; do \
+	  vvp -n $(DDR_OUT)/tb_ddr_bridge_icarus.vvp +seed=$$s > $(DDR_OUT)/icarus.$$s.txt 2>&1; \
+	  grep -q 'tb_ddr_bridge_icarus: PASS' $(DDR_OUT)/icarus.$$s.txt || { cat $(DDR_OUT)/icarus.$$s.txt; exit 1; }; \
+	  grep 'PASS' $(DDR_OUT)/icarus.$$s.txt | sed 's/^/  /'; done
+	@echo "test-ddr-icarus: PASS"
+
+test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus
 	@echo "test-ddr: PASS"
+
+# Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
+test-ddr-mutants:
+	$(Q)$(PYTHON) sim/ddr/ddr_mutants.py --jobs $(DDR_JOBS)
 
 # Synthesizable with an open tool, no vendor primitives needed; a resource estimate.
 synth-ddr:
