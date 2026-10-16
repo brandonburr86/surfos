@@ -23,7 +23,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | DDR memory on the board | the memory controller works in simulation, and SurfBoot boots SurfOS from it there; the open-source flow does not yet meet its 100 MHz timing, so there is no DDR bitstream yet, and booting SurfOS on the board waits for one |
 | The board tests | one command per board milestone (`make -C surfcpu board-test M=m1`, [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)), rehearsed against the RTL system and fake boards; it reads the board's serial port itself and writes the evidence file |
 | The release (milestone 9) | `make -C surfcpu release` builds every image from a clean commit with fixed time stamps, and `make -C surfcpu release-verify` rebuilds it from a fresh clone and compares. A pre-release made from a fresh checkout (1.0.0-pre-bb066932) rebuilt byte for byte, 18 files of 18. The DDR designs are missing until LiteDRAM's generated code is made reproducible (in progress). Nothing has been written to the board's flash ([RELEASE.md](RELEASE.md)) |
-| The board itself | an A7-100T (IDCODE 0x03631093), with JP2 taken off. Loaded over USB from this Mac (configuration RAM only; the flash is untouched): the baseline passes m1, and the CPU passes m3 with all 203 BRAM diagnostics ([evidence](evidence/physical/)) |
+| The board itself | an A7-100T (IDCODE 0x03631093), with JP2 taken off. Loaded over USB from this Mac (configuration RAM only; the flash is untouched): the baseline passes m1, and the CPU passes m3 with all 203 BRAM diagnostics. With the adapters on, SurfBoot reads your 32 GB card (the whole `SURFOS.BIN` matches the Mac's copy), and the VGA monitor shows its text and the colour-bar test pattern correctly. Your keyboard (a USB keyboard on a passive PS/2 adapter) does not speak PS/2: a real PS/2 keyboard is needed ([evidence](evidence/physical/)) |
 
 ## 1. Set up the Mac (once)
 
@@ -256,7 +256,7 @@ second, the heartbeat of the loop that echoes typed characters. BOARD.md
 section 12 has the whole transcript. This is milestone 3's physical test; as one command:
 `make -C surfcpu board-test M=m3`.
 
-## 6. SurfBoot and the card reader **pending**
+## 6. SurfBoot and the card reader **passed on 2026-10-16 (without DDR)**
 
 The full SoC with SurfBoot in its boot ROM (`DESIGN=surfcpu_arty_a7_top`), with the adapters
 plugged in (section 3) and then a FAT32 card (section 7) in the slot. Without DDR in this
