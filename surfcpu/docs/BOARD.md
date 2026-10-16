@@ -232,8 +232,9 @@ in, with exactly the contract's parameters and ports, its outputs at idle levels
 it only while the real file is absent, and `tools/fpga-build.sh` refuses to build the full top
 without the real one. `tb_top` checks the clocks, resets and parameters the SoC receives, every
 input pin into its SoC port (200 random patterns), the open-drain PS/2 lines both ways, the
-RESET button and, with the stand-in, every SoC output onto its pin (seeds 1, 7, 123). With the
-real SoC the same test runs without the output part (the stand-in's driver registers are gone).
+RESET button and, with the stand-in, every SoC output onto its pin (Icarus on seeds 1, 7, 123,
+Verilator `--timing` on seed 5). With the real SoC the same test runs without the output part
+(the stand-in's driver registers are gone).
 
 ## 7. For the ddr track
 
@@ -357,6 +358,6 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 | Target | On | What |
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
-| `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (3 seeds) |
+| `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
 | `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (12 SHA-256), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (89 wrapper checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |

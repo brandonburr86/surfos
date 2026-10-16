@@ -13,7 +13,7 @@ sim/board/prims, and checks the board-level wiring around surfcpu_soc:
     drives a PS/2 line high;
 With the stand-in SoC (SURFCPU_SOC_STUB, until rtl/soc/surfcpu_soc.v exists) it also drives
 every SoC output through the stand-in's drive_* registers and checks the pin it lands on.
-Prints PASS or stops with $fatal.
+Runs in Icarus and in Verilator --timing. Prints PASS or stops with $fatal.
 */
 `timescale 1ps/1ps
 module tb_top;

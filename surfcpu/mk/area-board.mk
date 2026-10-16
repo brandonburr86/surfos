@@ -103,14 +103,21 @@ board-baseline: $(BSIM)/tb_baseline.vvp $(BSIM)/vl_baseline/tb_baseline
 	@grep -h "tb_baseline: line 2\|after RESET\|tb_baseline: pix" $(BSIM)/tb_baseline.verilator.txt
 	@echo "board-baseline: PASS (Verilator with RESET, Icarus short run)"
 
-# the full top's board wiring (Icarus; with the stand-in it also drives every SoC output)
+# the full top's board wiring: Icarus on three seeds and Verilator --timing (with the stand-in
+# the test also drives every SoC output)
 $(BSIM)/tb_top.vvp: $(TOP_SRC) $(BOARD_PRIMS) sim/board/tb_top.v
 	@mkdir -p $(dir $@)
 	$(Q)$(BOARD_IVL) $(TOP_INCS) $(TOP_DEFS) -o $@ $(BOARD_PRIMS) $(TOP_SRC) sim/board/tb_top.v
-board-top: $(BSIM)/tb_top.vvp
+$(BSIM)/vl_top/tb_top: $(TOP_SRC) $(BOARD_PRIMS) sim/board/tb_top.v
+	@mkdir -p $(BSIM)
+	$(Q)$(BOARD_VLSIM) $(TOP_INCS) $(TOP_DEFS) --Mdir $(dir $@) -o tb_top --top-module tb_top $(BOARD_PRIMS) \
+	  $(TOP_SRC) sim/board/tb_top.v > $(BSIM)/vl_top.build.txt 2>&1 || { tail -30 $(BSIM)/vl_top.build.txt; exit 1; }
+board-top: $(BSIM)/tb_top.vvp $(BSIM)/vl_top/tb_top
 	$(Q)for s in 1 7 123; do vvp -n $< +seed=$$s > $(BSIM)/tb_top.$$s.txt 2>&1; \
 	  grep -q "tb_top: PASS" $(BSIM)/tb_top.$$s.txt || { cat $(BSIM)/tb_top.$$s.txt; exit 1; }; done
-	@echo "board-top: PASS (seeds 1 7 123, $(if $(SOC_REAL),real SoC,SoC stand-in))"
+	$(Q)$(BSIM)/vl_top/tb_top +seed=5 > $(BSIM)/tb_top.verilator.txt 2>&1; \
+	  grep -q "tb_top: PASS" $(BSIM)/tb_top.verilator.txt || { cat $(BSIM)/tb_top.verilator.txt; exit 1; }
+	@echo "board-top: PASS (Icarus seeds 1 7 123, Verilator seed 5, $(if $(SOC_REAL),real SoC,SoC stand-in))"
 
 # ------------------------------------------------------------------------------------ checks
 check-board: board-clockplan board-digilent board-wiring board-cdc-xdc board-tools

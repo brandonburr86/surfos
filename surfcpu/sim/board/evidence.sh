@@ -54,11 +54,13 @@ header "$out/baseline.txt" "milestone 1 baseline in simulation" "make board-base
 } >> "$out/baseline.txt"
 
 make --no-print-directory board-top > "$b/top-make.txt" 2>&1
-header "$out/top.txt" "surfcpu_arty_a7_top board wiring" "make board-top (seeds 1 7 123)"
+header "$out/top.txt" "surfcpu_arty_a7_top board wiring" "make board-top (Icarus seeds 1 7 123, Verilator seed 5)"
 for s in 1 7 123; do
-    echo "seed $s:" >> "$out/top.txt"
+    echo "Icarus, seed $s:" >> "$out/top.txt"
     grep 'tb_top:' "$b/tb_top.$s.txt" | sed 's/^/  /' >> "$out/top.txt"
 done
+echo "Verilator --timing, seed 5:" >> "$out/top.txt"
+grep 'tb_top:' "$b/tb_top.verilator.txt" | sed 's/^/  /' >> "$out/top.txt"
 tail -n 1 "$b/top-make.txt" >> "$out/top.txt"
 
 header "$out/wiring.txt" "pins, WIRING.md, master XDC, I/O timing, CDC names" \
