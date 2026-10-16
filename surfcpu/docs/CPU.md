@@ -312,20 +312,25 @@ only one request in flight per port (SURFBUS.md version 1).
 ## 11. Resources (Yosys estimate)
 
 `make synth-cpu` runs Yosys 0.52 `synth_xilinx -family xc7 -flatten -noiopad` on
-`surfcpu_core` alone (without RVFI). Estimate (2026-10-15):
+`surfcpu_core` alone (without RVFI). Estimate (2026-10-15, the commit of this document):
 
 | Resource | Count |
 |---|---|
-| LUTs (logic) | 2694 |
+| LUTs (logic) | 3094 |
 | LUTs as distributed RAM | 92 (23 RAM32M: register file 12, fetch buffer 11) |
-| Flip-flops | 936 |
+| Flip-flops | 937 |
 | CARRY4 | 151 |
-| MUXF7 / MUXF8 | 377 / 153 |
+| MUXF7 / MUXF8 | 646 / 278 |
 | DSP48E1 | 4 (the 33 x 33 multiplier) |
 | Block RAM | 0 |
 
-That is about 13 % of the LUTs of an xc7a35t (20,800) and 4 % of an xc7a100t (63,400).
-These are Yosys's numbers, not Vivado's post-route utilisation, which is pending.
+That is about 15 % of the LUTs of an xc7a35t (20,800) and 5 % of an xc7a100t (63,400).
+These are Yosys's numbers, not Vivado's post-route utilisation, which is pending. They move
+by 10-15 % with small RTL changes (the flattened ABC mapping is sensitive): an earlier
+revision gave 2694 LUTs, and the same RTL synthesised per module adds up to about 2830
+(core 1160, CSRs 632, ALU 487, multiplier/divider 330, decoder 106, fetch 111). The
+largest single item is the ALU's three barrel shifters; one shared shifter would save a
+couple of hundred LUTs if space ever matters.
 
 The deepest combinational path is WB/MEM forwarding into the multiplier into the EX/MEM
 result register: 26 levels in a generic 6-LUT mapping where the multiplier is built from
@@ -350,6 +355,9 @@ If it is ever short, the multiplier is the first candidate for a pipeline regist
 * **riscv-tests** (`sim/cpu/riscv_tests.py`, pinned commit, fetched once): the rv32ui,
   rv32um and rv32mi "p" tests under three timings; three need features ISA.md leaves out
   (debug triggers, PMP entries, hardware misaligned accesses) and must fail as noted.
+* **Icarus Verilog** (`sim/cpu/run_icarus.py`, `sim/cpu/tb_core_icarus.v`): the core built
+  without RVFI runs the twelve directed tests that need only RAM and bus errors, with
+  random `req_ready` and latencies, three seeds each: the RTL simulates in both simulators.
 
 Cross-checks of the tests themselves: `make test-cpu-spike` runs every directed test that
 does not need the testbench's devices on Spike (they all pass there too), and

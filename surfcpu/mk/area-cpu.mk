@@ -6,6 +6,7 @@
 #   make test-cpu-directed   every sim/cpu/tests/*.S under several bus timings and seeds
 #   make test-cpu-spike      the same test programs on Spike (checks the tests themselves)
 #   make test-cpu-riscv-tests  riscv-tests rv32ui/um/mi (fetched once, pinned, SHA-256 checked)
+#   make test-cpu-icarus     the RAM-only directed tests on the core under Icarus Verilog
 #   make synth-cpu           Yosys synth_xilinx estimate of the core alone
 #
 # Hung on the aggregates: lint, test-cpu, check.
@@ -22,9 +23,9 @@ CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_
 CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
-.PHONY: lint-cpu build-cpu test-cpu-directed test-cpu-spike test-cpu-riscv-tests synth-cpu
+.PHONY: lint-cpu build-cpu test-cpu-directed test-cpu-spike test-cpu-riscv-tests test-cpu-icarus synth-cpu
 lint: lint-cpu
-test-cpu: test-cpu-directed test-cpu-riscv-tests
+test-cpu: test-cpu-directed test-cpu-riscv-tests test-cpu-icarus
 check: synth-cpu
 
 lint-cpu:
@@ -70,6 +71,11 @@ test-cpu-directed: $(CPU_TB) $(CPU_ELFS)
 
 test-cpu-riscv-tests: $(CPU_TB)
 	$(Q)$(PYTHON) sim/cpu/riscv_tests.py --tb $(CPU_TB) --jobs $(CPU_JOBS)
+
+# the tests that need only RAM and bus errors (no timer, no testbench registers)
+CPU_ICARUS_TESTS := alu branch ldst muldiv csr traps illegal misaligned access_fault hazards flush fencei
+test-cpu-icarus: $(patsubst %,$(CPU_BUILD)/tests/%.elf,$(CPU_ICARUS_TESTS))
+	$(Q)$(PYTHON) sim/cpu/run_icarus.py --jobs $(CPU_JOBS) $^
 
 test-cpu-spike: $(CPU_ELFS)
 	$(Q)$(PYTHON) sim/cpu/run_tests.py --spike --out $(CPU_BUILD)/spike --jobs $(CPU_JOBS) $(CPU_ELFS)
