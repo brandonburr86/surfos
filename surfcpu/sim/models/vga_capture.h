@@ -48,7 +48,7 @@ struct VgaMeasured {
     int v_total = -1, v_sync = -1;    // lines
     bool hsync_negative = false, vsync_negative = false, polarity_known = false;
     uint64_t lines_seen = 0;
-    uint64_t lines_odd = 0;           // lines whose total differed from the frame's first line
+    uint64_t lines_odd = 0;           // lines whose total differed from the line before
     uint64_t frames_odd = 0;          // frames whose line count differed from the one before
     int x0 = -1, x1 = -1, y0 = -1, y1 = -1;  // non-black bounding box in sync coordinates (last frame)
     int h_back = -1, h_front = -1, v_back = -1, v_front = -1;   // from that box and the syncs
@@ -96,7 +96,7 @@ private:
     // position
     int64_t hpos_ = -1, line_ = -1;
     uint64_t last_hs_edge_ = 0;
-    int64_t line_len_first_ = -1;
+    int64_t prev_len_ = -1;          // the previous line's total
     int vsync_lines_ = 0;
     // the frame being captured and the last whole one
     std::vector<uint16_t> cur_, last_;

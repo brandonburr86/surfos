@@ -73,8 +73,8 @@ void VgaCapture::on_hsync() {
     if (last_hs_edge_) {
         const int64_t len = static_cast<int64_t>(n_ - last_hs_edge_);
         m_.lines_seen++;
-        if (line_len_first_ < 0) line_len_first_ = len;
-        else if (len != line_len_first_) m_.lines_odd++;
+        if (prev_len_ >= 0 && len != prev_len_) m_.lines_odd++;
+        prev_len_ = len;
         m_.h_total = static_cast<int>(len);
     }
     last_hs_edge_ = n_;
@@ -106,7 +106,6 @@ void VgaCapture::on_vsync(bool line_starts_here) {
     }
     bx0_ = by0_ = 1 << 30;
     bx1_ = by1_ = -1;
-    line_len_first_ = -1;
     line_ = 0;
     vsync_lines_ = line_starts_here ? 1 : 0;        // a line starting with the pulse is inside it
     std::fill(cur_.begin(), cur_.end(), 0);

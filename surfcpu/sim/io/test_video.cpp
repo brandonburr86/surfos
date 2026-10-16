@@ -20,6 +20,8 @@ Checks:
     acting as 0); the cursor in display coordinates, out of range, and blinking with a
     16-frame half period; palette changes;
   * STATUS.VBLANK duty, VBLANK_EV once per frame with the interrupt, the FRAME counter;
+  * a reset of the pixel domain alone (its settings come back over the crossing) and of the
+    sys domain alone (registers back to reset values, the syncs undisturbed);
 all at the board's clocks (25 MHz / 25.1773 MHz) or, by seed, at other ratios for the
 clock crossings.
 
@@ -425,6 +427,57 @@ static void test_blink(Tb &tb, Bus &bus) {
     bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
 }
 
+// one clock domain reset alone: the pixel clock's MMCM losing lock, or a sys reset
+static uint64_t g_odd_lines_allowed = 0, g_odd_frames_allowed = 0, g_blank_allowed = 0;
+
+static void test_domain_resets(Tb &tb, Bus &bus, Screen &s) {
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+    bus.wr(B + SURF_VIDEO_PALETTE + 4 * 1, 0x123);       // a setting the pixel side must get back
+    wait_frames(tb, bus, 2);
+    const uint64_t lines0 = tb.cap.measured().lines_odd, frames0 = tb.cap.measured().frames_odd;
+    const uint64_t blank0 = tb.cap.measured().blank_pixels;
+    tb.top->pix_rst = 1;
+    bus.idle(300);
+    tb.top->pix_rst = 0;
+    wait_frames(tb, bus, 3);
+    uint16_t pal[16];
+    std::memcpy(pal, CGA, sizeof pal);
+    pal[1] = 0x123;
+    View v{&s, pal};
+    compare_view(tb, v, "after a reset of the pixel domain alone");
+    // the restart breaks the line and frame lengths once, then they are steady again
+    const uint64_t lines1 = tb.cap.measured().lines_odd, frames1 = tb.cap.measured().frames_odd;
+    CHECK(lines1 - lines0 <= 4 && frames1 - frames0 <= 2, "pixel reset: %llu odd lines, %llu odd frames",
+          (unsigned long long)(lines1 - lines0), (unsigned long long)(frames1 - frames0));
+    g_odd_lines_allowed = lines1 - lines0;
+    g_odd_frames_allowed = frames1 - frames0;
+    // the picture restarted in the middle of the capture's frame, so that one frame's picture
+    // lies outside the window the old syncs give: counted once, never again
+    const uint64_t blank1 = tb.cap.measured().blank_pixels;
+    g_blank_allowed = blank1 - blank0;
+    wait_frames(tb, bus, 2);
+    CHECK(tb.cap.measured().lines_odd == lines1 && tb.cap.measured().frames_odd == frames1, "timing not steady again");
+    CHECK(tb.cap.measured().blank_pixels == blank1, "pixels in the blanking after the pixel reset");
+    // a sys reset alone: the registers go back to their reset values (bars, CGA), the syncs run on
+    bus.idle(1);
+    tb.top->rst = 1;
+    bus.idle(10);
+    tb.top->rst = 0;
+    bus.idle(2);
+    CHECK(bus.rd(B + SURF_VIDEO_CTRL) == CTRL_EN && bus.rd(B + SURF_VIDEO_PALETTE + 4) == CGA[1],
+          "registers after a sys reset");
+    wait_frames(tb, bus, 2);
+    int bad = 0;
+    for (int y = 0; y < 480; y++)
+        for (int x = 0; x < 640; x++) bad += tb.cap.pixel(x, y) != pattern(x, y);
+    CHECK(bad == 0, "after a sys reset: %d pixels differ from the test pattern", bad);
+    CHECK(tb.cap.measured().lines_odd == lines1 && tb.cap.measured().frames_odd == frames1,
+          "a sys reset disturbed the syncs");
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+    std::printf("resets: the pixel domain alone recovers its settings (%llu odd lines at the restart); "
+                "a sys reset alone leaves the syncs untouched\n", (unsigned long long)g_odd_lines_allowed);
+}
+
 static void test_vblank(Tb &tb, Bus &bus) {
     bus.wr(B + SURF_VIDEO_STATUS, SURF_VIDEO_STATUS_VBLANK_EV_MASK);
     // VBLANK duty over exactly two frames from a frame edge, sampled from the bus
@@ -524,14 +577,18 @@ int main(int argc, char **argv) {
     test_banner_scroll_cursor(tb, bus, screen, rng);
     test_blink(tb, bus);
     test_vblank(tb, bus);
+    test_domain_resets(tb, bus, screen);
 
     const VgaMeasured &m = tb.cap.measured();
-    CHECK(m.blank_pixels == 0, "%llu non-black pixels in the blanking", (unsigned long long)m.blank_pixels);
-    CHECK(m.lines_odd == 0 && m.frames_odd == 0, "unstable timing: %llu odd lines, %llu odd frames",
-          (unsigned long long)m.lines_odd, (unsigned long long)m.frames_odd);
+    CHECK(m.blank_pixels == g_blank_allowed, "%llu non-black pixels in the blanking (%llu in the frame of the pixel reset)",
+          (unsigned long long)m.blank_pixels, (unsigned long long)g_blank_allowed);
+    CHECK(m.lines_odd == g_odd_lines_allowed && m.frames_odd == g_odd_frames_allowed,
+          "unstable timing: %llu odd lines, %llu odd frames (the pixel reset accounts for %llu, %llu)",
+          (unsigned long long)m.lines_odd, (unsigned long long)m.frames_odd, (unsigned long long)g_odd_lines_allowed,
+          (unsigned long long)g_odd_frames_allowed);
     CHECK(bus.problems.empty(), "SurfBus protocol: %s", bus.problems.empty() ? "" : bus.problems[0].c_str());
-    std::printf("capture: %llu frames, %llu lines, all %d x %d; no pixel in the blanking\n", (unsigned long long)m.frames,
-                (unsigned long long)m.lines_seen, m.h_total, m.v_total);
+    std::printf("capture: %llu frames, %llu lines, %d x %d; no pixel in the blanking outside the frame of the pixel "
+                "reset\n", (unsigned long long)m.frames, (unsigned long long)m.lines_seen, m.h_total, m.v_total);
     top->final();
     if (failures) {
         std::printf("test_video: FAIL (%d of %d checks failed, seed %u, %llu pix cycles)\n", failures, checks, seed,
