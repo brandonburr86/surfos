@@ -11,7 +11,7 @@
 DDR_RTL      = rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_mailbox.v
 DDR_RTL_ALL  = $(DDR_RTL) rtl/lib/surf_sync.v
 DDR_TB_SRC   = sim/ddr/tb_ddr_bridge.cpp sim/ddr/mig_ui_model.cpp
-DDR_TB_HDR   = sim/ddr/mig_ui_model.h sim/ddr/ddr_rng.h
+DDR_TB_HDR   = sim/ddr/mig_ui_model.h sim/ddr/ddr_rng.h sim/ddr/surfbus_bench.h
 DDR_OUT      = $(BUILD)/ddr
 DDR_JOBS    ?= 4
 DDR_LINT     = $(VERILATOR_LINT) -Irtl/soc/ddr
