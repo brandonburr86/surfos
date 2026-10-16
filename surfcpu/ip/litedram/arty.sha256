@@ -1,7 +1,8 @@
 # SurfCPU: SHA-256 of the generated LiteDRAM files the DDR designs build from (paths relative
 # to surfcpu/, sha256sum format). File: arty.sha256, written by ip/litedram/lock.sh write.
 # generate: make litedram-gen
-# ip/litedram/generate.sh makes them byte for byte the same on every run, in the toolchain
+# ip/litedram/generate.sh makes them byte for byte the same on every run and in every checkout
+# (make litedram-repro), in the toolchain
 # image surfcpu-toolchain:2026-10-15, from the generator ip/litedram/setup.sh pins,
 # ip/litedram/arty.yml and SOURCE_DATE_EPOCH 1790239353 (the LiteDRAM commit's
 # time). tools/fpga-build.sh and make litedram-gen check them (ip/litedram/lock.sh check).
@@ -9,8 +10,8 @@
 # initialization was written for (make litedram-gen compares them with spec/soc.toml and
 # firmware/common/ddrinit_phy.h). The last line is the simulation core (make
 # test-ddr-litedram, make board-ddr-sim), not part of any bitstream.
-0cc39800c123f3ea5b00820ab622519d38fc95208f8d829abd4f756c1d7cbb07  build/litedram/arty/gateware/litedram_core.v
+c34b56801e05d3301ac82093e491c69df0fe713904f091983ca0b0d6507ed40c  build/litedram/arty/gateware/litedram_core.v
 7d666677604e172c9bb55a2a18cfe69668fc3384e29b0f7f59050152bb092fef  build/litedram/arty/gateware/litedram_core.xdc
 8a658abc53f883fe7779bd2c83020eb313637c431943a911288c1ada231bf20b  build/litedram/arty/csr.csv
 e825f2f6ce755ea0c172d2ed7888cd53f74b3b45d20818ab1d44ede1bca83dfd  build/litedram/arty/software/include/generated/sdram_phy.h
-63b2566b96f95f3e3838e14abc02b5a175bf5658dc114899adeeab936ff2025f  build/litedram/arty_sim/gateware/litedram_sim.v
+d5e82b7b83d9bcb8f5ff28460648b78966a72d490b24f8c7b509f9f458651131  build/litedram/arty_sim/gateware/litedram_sim.v

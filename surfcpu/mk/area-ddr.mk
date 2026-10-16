@@ -12,6 +12,8 @@
 #                        ip/litedram/arty.sha256, the register map against spec/soc.toml and the PHY
 #                        settings against firmware/common/ddrinit_phy.h (fetches pinned sources; on
 #                        check-openflow)
+#   make litedram-repro  the generation again in eight differently set up Python processes: one set of
+#                        files, the locked one (ip/litedram/repro.sh; about 6 minutes; not on check)
 
 DDR_RTL      = rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_mailbox.v
 DDR_RTL_ALL  = $(DDR_RTL) rtl/lib/surf_sync.v
@@ -35,7 +37,7 @@ DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initi
 DDR_RATIOS   = 40:10:0 40:12.5:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
 
 .PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr \
-        test-ddr-icarus test-ddr-mutants check-mig prove-ddr test-ddr-csr
+        test-ddr-icarus test-ddr-mutants check-mig prove-ddr test-ddr-csr test-ddr-gen-tool litedram-repro
 lint: lint-ddr
 test-soc: test-ddr
 check: check-ddr
@@ -141,7 +143,11 @@ test-ddr-csr: $(DDR_OUT)/tb_ddr_csr_fast.vvp $(DDR_OUT)/tb_ddr_csr.vvp
 	  grep -h 'tb_ddr_csr: PASS' $(DDR_OUT)/csr.$$i.txt | sed 's/^/  /'; done
 	@echo "test-ddr-csr: PASS"
 
-test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus test-ddr-csr
+# The generator wrapper's removal of LiteX's instance tree comment, without the generator.
+test-ddr-gen-tool:
+	$(Q)$(PYTHON) -I ip/litedram/run_gen.py --self-test
+
+test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus test-ddr-csr test-ddr-gen-tool
 	@echo "test-ddr: PASS"
 
 # ---- LiteDRAM, the open flow's controller (ip/litedram/). litedram-setup fetches the pinned
@@ -208,6 +214,11 @@ test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
 	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"
 
 check-openflow: test-ddr-litedram litedram-check
+
+# The generation in eight Python processes that differ in what moves LiteX's objects in memory
+# (PYTHONHASHSEED, environment, paths, working directory): one set of files, the locked one.
+litedram-repro: litedram-gen
+	$(Q)sh ip/litedram/repro.sh
 
 # Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
 test-ddr-mutants:

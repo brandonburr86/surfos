@@ -16,12 +16,13 @@
 # model has no PHY registers), through which SurfCPU, or a testbench, initializes it.
 #
 # The output is reproducible: SOURCE_DATE_EPOCH is the pinned LiteDRAM commit's time, Python's
-# clock is frozen at it for LiteX's "Date" lines (ip/litedram/run_gen.py), TZ is UTC, and the
-# generator starts in a fixed environment (env -i: the same variables with the same values from
-# make or a shell), because LiteX sorts the instance tree in the Verilog header by the instances'
-# printed addresses, which move with the size of the environment Python starts in (round ddr-3
-# found make's extra variables reordering it). Two runs write the same bytes;
-# ip/litedram/arty.sha256 records them (ip/litedram/lock.sh).
+# clock is frozen at it for LiteX's "Date" lines (ip/litedram/run_gen.py), TZ is UTC, the
+# generator starts in a fixed environment (env -i, PYTHONHASHSEED 0), and run_gen.py takes out
+# the instance tree LiteX writes into the Verilog as a comment: it lists black-box instances in
+# the order of their addresses in the Python process, which moved with the environment, the
+# paths and the interpreter (round ddr-3: make's extra variables reordered it in one checkout,
+# and a fresh checkout elsewhere still got another order). The Verilog itself never varied. Runs
+# in any checkout write the same bytes; ip/litedram/arty.sha256 records them (ip/litedram/lock.sh).
 set -eu
 [ $# -ge 2 ] || { echo "usage: $0 <config.yml> <out_dir> [--sim] [--name NAME]" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd -P)

@@ -8,8 +8,10 @@
 #                                change: the generator's pins, arty.yml, or the toolchain image)
 #
 # The DDR designs read the LiteDRAM core from build/ (a build product, never committed):
-# ip/litedram/generate.sh makes it byte for byte the same on every run (SOURCE_DATE_EPOCH, a
-# frozen clock), so its hashes can be committed in arty.sha256 and checked: by make litedram-gen
+# ip/litedram/generate.sh makes it byte for byte the same on every run and in every checkout
+# (SOURCE_DATE_EPOCH, a frozen clock, a fixed environment, and run_gen.py taking out LiteX's
+# instance tree comment, whose order followed the Python process's memory layout; make
+# litedram-repro shows it), so its hashes can be committed in arty.sha256 and checked: by make litedram-gen
 # after generating, and by tools/fpga-build.sh, which counts a bitstream built from files that
 # differ from these hashes as dirty (not reproducible from the commit). Paths are relative to
 # surfcpu/; the format is sha256sum's (two spaces).
@@ -55,7 +57,8 @@ case "${1:-}" in
       echo "# SurfCPU: SHA-256 of the generated LiteDRAM files the DDR designs build from (paths relative"
       echo "# to surfcpu/, sha256sum format). File: arty.sha256, written by ip/litedram/lock.sh write."
       echo "# generate: make litedram-gen"
-      echo "# ip/litedram/generate.sh makes them byte for byte the same on every run, in the toolchain"
+      echo "# ip/litedram/generate.sh makes them byte for byte the same on every run and in every checkout"
+      echo "# (make litedram-repro), in the toolchain"
       echo "# image surfcpu-toolchain:$image, from the generator ip/litedram/setup.sh pins,"
       echo "# ip/litedram/arty.yml and SOURCE_DATE_EPOCH $(git -C build/third_party/litedram/src/litedram log -1 --format=%ct 2>/dev/null || echo '?') (the LiteDRAM commit's"
       echo "# time). tools/fpga-build.sh and make litedram-gen check them (ip/litedram/lock.sh check)."
