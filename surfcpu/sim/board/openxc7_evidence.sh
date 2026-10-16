@@ -56,7 +56,8 @@ done
         grep -E '^IDCODE written|^  = |stream [0-9]+ bits|^frame data|^commands|^CRC checks|^check for' "$ox/check-bitstream.txt" | sed 's/^/  /'
         echo "checks (tools/openxc7-build.sh):"
         grep '^check ' "$ox/manifest.txt" | sed 's/^/  /'
-        echo "  synthesis: $(grep '^whole design' "$ox/check-synthesis.txt" | tr -s ' ')"
+        echo "  synthesis: flip-flops in the RTL / in the netlist / held in DSP, RAM or SRL: $(grep '^whole design' "$ox/check-synthesis.txt" | tr -s ' ' | sed 's/^whole design //')"
+        grep -E '^memories|^outputs constant|^synthcheck' "$ox/check-synthesis.txt" | sed 's/^/    /'
         echo "  LVS: $(grep -E 'proved' "$ox/check-lvs.txt" | tail -n 1)"
         echo "  round trip: $(tail -n 1 "$ox/check-roundtrip.txt")"
         sed 's/^/  clocks: /' "$ox/check-clocks.txt"
