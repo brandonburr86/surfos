@@ -434,6 +434,8 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
+	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
+	$(PYTHON) -m unittest discover -s tests -p test_devenv.py
 
 # ---- Wi-Fi, track C (10/9/26): lib/crypto/ and the WPA2 supplicant, on the host ---------------
 # The kernel builds lib/crypto/ and net/wlan/ through SRC_C; here they are built against the SurfOS
@@ -489,3 +491,66 @@ test-files: $(KERNEL) images
 	$(PYTHON) tools/qemu-files.py --qemu $(QEMU) --kernel $(KERNEL) --disk $(DISKIMG) --initrd $(INITRD)
 .PHONY: test-files
 test: test-files
+
+# Native GUI input and application behavior (10/10/26).
+$(BUILD)/host/pointer.o: driver/pointer.c include/sys/pointer.h
+	@mkdir -p $(dir $@)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/gui_stubs $(HOSTKERN_FLAGS) -c $< -o $@
+$(BUILD)/host/test_pointer: tests/host/test_pointer.c $(BUILD)/host/pointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-gui
+unittest-gui: $(BUILD)/host/test_pointer
+.PHONY: unittest-gui
+$(BUILD)/host/test_gui: tests/host/test_gui.c $(BUILD)/host/kernel/shell/guicore.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest-gui: $(BUILD)/host/test_gui
+	$(BUILD)/host/test_pointer
+	$(BUILD)/host/test_gui
+
+$(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_usbmouse: tests/host/test_usbmouse.c driver/usb/mouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_usbmouse.c $(BUILD)/host/kernel/driver/usb/mousedesc.o $(HOSTLIB_OBJ) -o $@
+unittest-mouse: $(BUILD)/host/test_ps2mouse $(BUILD)/host/test_usbmouse
+	$(BUILD)/host/test_ps2mouse
+	$(BUILD)/host/test_usbmouse
+unittest: unittest-mouse
+.PHONY: unittest-mouse
+
+# Read-only firmware AML export, including runtime mapping ownership.
+$(BUILD)/host/test_acpidump: tests/host/test_acpidump.c $(BUILD)/host/kernel/kernel/acpi.o $(BUILD)/host/kernel/shell/acpidump.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_acpidump $(BUILD)/host/kernel/kernel/acpi.o: HOSTKERN_FLAGS += -fgnu89-inline
+unittest-acpi: $(BUILD)/host/test_acpidump
+	$(BUILD)/host/test_acpidump
+	$(PYTHON) -m unittest discover -s tests -p test_acpi_fetch.py
+unittest: unittest-acpi
+.PHONY: unittest-acpi
+
+# Bounded DesignWare I2C PIO over a simulated finite-FIFO controller.
+$(BUILD)/host/test_i2cdw: tests/host/test_i2cdw.c $(BUILD)/host/kernel/driver/i2cdw.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest-i2c: $(BUILD)/host/test_i2cdw
+	$(BUILD)/host/test_i2cdw
+unittest: unittest-i2c
+.PHONY: unittest-i2c
+
+# Bounded firmware fields and HID reports used by the native touchpad binding.
+$(BUILD)/host/test_amlfield: tests/host/test_amlfield.c $(BUILD)/host/kernel/driver/amlfield.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_i2chid: tests/host/test_i2chid.c $(BUILD)/host/kernel/driver/i2chid.o
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+$(BUILD)/host/test_hidpointer: tests/host/test_hidpointer.c $(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+TOUCHPAD_TEST_OBJ = $(BUILD)/host/kernel/driver/amlfield.o $(BUILD)/host/kernel/driver/i2chid.o \
+	$(BUILD)/host/kernel/driver/hidpointer.o $(HOSTLIB_OBJ)
+$(BUILD)/host/test_touchpad: tests/host/test_touchpad.c driver/touchpad.c $(TOUCHPAD_TEST_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -fgnu89-inline -ffunction-sections -fdata-sections \
+		tests/host/test_touchpad.c $(TOUCHPAD_TEST_OBJ) -Wl,--gc-sections -o $@
+unittest-touchpad: $(BUILD)/host/test_amlfield $(BUILD)/host/test_i2chid $(BUILD)/host/test_hidpointer $(BUILD)/host/test_touchpad
+	$(BUILD)/host/test_amlfield
+	$(BUILD)/host/test_i2chid
+	$(BUILD)/host/test_hidpointer
+	$(BUILD)/host/test_touchpad
+unittest: unittest-touchpad
+.PHONY: unittest-touchpad

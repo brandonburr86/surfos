@@ -726,8 +726,10 @@ firmware -> USB stick, GPT, FAT32 system partition (label SURFOSUSB)
   channel 2, ACPI PM timer, HPET; the HPET's legacy routing is switched off so IRQ 0 is the
   PIT's) and `timer_confirm()` falls back to the local APIC timer (vector 0x30) when the
   PIT's tick never arrives. `kernel/keyboard.c` rewrites the 8042's command byte (IRQ 1,
-  set-1 translation, mouse off) with bounded waits and also polls it on every tick; the
-  IRQ handler checks the status register first, so no byte is taken twice. Only the
+  set-1 translation) with bounded waits, probes the auxiliary port for a PS/2
+  mouse, and also polls both ports on every tick. IRQ 1/12 share a status-aware
+  demultiplexer so no byte is taken twice. USB boot mice use the xHCI interrupt
+  transfer path. Both feed the [desktop pointer queue](GUI.md). Only the
   initrd is mounted. Debug words: `timer=lapic`, `kbd=poll`, `kbd=irq`, `clock=pmtmr`,
   `clock=hpet`.
 * **The framebuffer lock.** Whoever draws holds a busy flag and cannot be preempted until

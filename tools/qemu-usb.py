@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test runs fourteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs fifteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -30,6 +30,7 @@ comes out of the framebuffer.
              code page 437 font (▸ ≋ … café), the pager answered on the keyboard
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
+  gui        SurfOS desktop, native mouse input, apps and console recovery
   graphics   software 2D at 1920x1080: color bars and image pixels, text restoration
              after completion, Ctrl+C, console switching, and a full pager
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -129,6 +130,11 @@ PORTABLE = [
     ('sleep 300', ['slept 300 ms']),
     ('heaptest', ['HEAPTEST PASS']),
     ('acpi', ['FADT', 'MADT', 'I/O APIC']),
+    ('acpidump SSDT 4294967295', ['not found']),
+    ('acpinvs 0 16', ['refused']),
+    ('touchpad', ['not present on this platform']),
+    ('touchpad up', ['not present on this platform']),
+    ('acpidump MSDM', ['usage: acpidump']),
     ('cpuinfo', ['physical address bits', '4 MB pages on']),
     ('selftest', ['skip FAT', 'skip network', 'ok   USB: endpoint 0 works again after a stalled request', 'SELFTEST PASS']),
 ]
@@ -728,6 +734,11 @@ def scenario_keyboard(args, image, firmware, outdir):
     return results
 
 
+def scenario_gui(args, image, firmware, outdir):
+    from gui_scenario import run
+    return run(Vm, PROMPT, args, image, firmware, outdir)
+
+
 def scenario_graphics(args, image, firmware, outdir):
     """Real framebuffer pixels and recovery from normal exit, Ctrl+C and F2."""
     results = []
@@ -1048,6 +1059,21 @@ def telnet_session(vm, qr, port):
         finally:
             t.close()
     results.append(('telnet: a session over the adapter (telnetd on, the banner, lsusb in it, exit)', ok))
+    if ok:
+        # Use the exact host-side export path used on the laptop, including paging,
+        # byte offsets, lengths, checksum validation and on-disk manifest.
+        with tempfile.TemporaryDirectory(prefix='surfos-acpi-') as tables:
+            with Draining(vm):
+                exported = subprocess.run([sys.executable, os.path.join(REPO, 'tools', 'acpi-fetch.py'),
+                                           '--host', '127.0.0.1', '--port', str(port),
+                                           '--output-dir', tables], capture_output=True, text=True, timeout=180)
+            valid = exported.returncode == 0 and os.path.isfile(os.path.join(tables, 'dsdt.aml'))
+            valid = valid and any(os.path.getsize(p) > 32 * 1024 for p in glob.glob(os.path.join(tables, 'ssdt-*.aml')))
+            results.append(('ACPI: DSDT and a large SSDT exported and checked over telnet', valid))
+            if vm.outdir:
+                shutil.copytree(tables, os.path.join(vm.outdir, 'acpi'), dirs_exist_ok=True)
+            if not valid:
+                print(exported.stdout + exported.stderr, flush=True)
     ok, _ = run_cmd(vm, 'telnetd off', ['telnetd: stopped (0 session shells ended)'])
     results.append(('telnetd off', ok))
     return results
@@ -1060,9 +1086,20 @@ def scenario_usbnet(args, image, firmware, outdir):
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     qr = load_smoke_harness()
     telnet_port = qr.free_port()
+    # QEMU limits injected tables to 65535 bytes. Exercise a large export here;
+    # host tests cover multi-chunk tables up to 1 MiB. Noop AML has no side effects.
+    large_table = bytearray(b'SSDT' + struct.pack('<I', 60 * 1024 + 37) +
+                            b'\x02\x00SURFOSTESTLARG' + struct.pack('<I', 1) +
+                            b'SURF' + struct.pack('<I', 1))
+    large_table.extend(b'\xa3' * (60 * 1024 + 37 - len(large_table)))
+    large_table[9] = (-sum(large_table)) & 255
+    table_file = tempfile.NamedTemporaryFile(prefix='surfos-large-ssdt-', suffix='.aml')
+    table_file.write(large_table)
+    table_file.flush()
     vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
             extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23',
-                   '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV])
+                   '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV,
+                   '-acpitable', 'file=' + table_file.name])
     try:
         if boot_serial(vm, results, args.boot_timeout):
             boot = vm.text()
@@ -1121,6 +1158,7 @@ def scenario_usbnet(args, image, firmware, outdir):
     finally:
         vm.close()
         httpd.shutdown()
+        table_file.close()
     return results
 
 
@@ -1617,7 +1655,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
     return results
 
 
-SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics,
+SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
@@ -1724,7 +1762,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

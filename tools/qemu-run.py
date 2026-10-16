@@ -222,6 +222,15 @@ SMOKE = [
     ('uptime',  ['tasks']),
     ('date',    ['CMOS clock']),
     ('bootinfo', ['multiboot:', 'profile emulator', 'screen: VGA text mode']),
+    ('pointerinfo', ['PS/2', 'pointing devices:']),
+    ('pointerinfo extra', ['usage: pointerinfo']),
+    ('touchpad', ['not present on this platform']),
+    ('touchpad up', ['not present on this platform']),
+    ('touchpad report', ['last HID input: 0 bytes']),
+    ('touchpad descriptor', ['HID report descriptor: 0 bytes']),
+    ('touchpad invalid', ['usage: touchpad']),
+    ('gui', ['gui needs the active local UEFI framebuffer console']),
+    ('gui extra', ['usage: gui']),
     ('gfxinfo', ['software 2D', 'no framebuffer']),
     ('gfxtest', ['graphics unavailable']),
     ('gfxtest 4294967301', ['usage: gfxtest']),
@@ -230,6 +239,12 @@ SMOKE = [
                  'timer     PIT channel 0']),   # in the order printed; 10/10/26: iwlwifi only with profile=laptop
     ('cpuinfo', ['physical address bits', 'from the boot loader: CR0']),
     ('acpi',    ['read with profile=laptop']),         # the USB/UEFI tests (tools/qemu-usb.py) cover the laptop profile
+    ('acpidump DSDT', ['not found']),
+    ('acpidump MSDM', ['usage: acpidump']),
+    ('acpidump SSDT -1', ['usage: acpidump']),
+    ('acpidump DSDT 1', ['usage: acpidump']),
+    ('acpinvs 0 16', ['refused']),
+    ('acpinvs 1000 257', ['usage: acpinvs']),
     ('himem',   ['no RAM above 4 GB']),
     ('dhcp',    ['lease 10.0.2.15', 'inet 10.0.2.15', 'gateway 10.0.2.2']),
     ('ping 10.0.2.2 2', ['64 bytes from 10.0.2.2', '2 packets transmitted, 2 received']),
@@ -399,6 +414,7 @@ SMOKE = [
     # started again twice, then the recovery console; one that is not an executable: the recovery console at once;
     # one that runs (sh): an exit after 2 s with status 3 is said, with 0 not, a kill is said ('@sleep n' waits)
     # 10/6/26: Ctrl+C there cuts a command short with status 130: a sleep, and a program it runs (killed)
+    ('@boot profile=laptop mouse=off', [PROMPT], [('pointerinfo', ['disabled (mouse=off)', 'pointing devices: 0']), ('echo keyboard-survives', ['keyboard-survives'])], []),
     ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')], [('cd /initrd/bin', [surf_prompt(b'initrd \xe2\x96\xb8 bin', b'#')]),
                                                           (b'sleep 10000\r', []), ('@sleep 2', []),
                                                           (b'\x03', ['sleep cut short', surf_prompt(b'bin', b'#')]),
