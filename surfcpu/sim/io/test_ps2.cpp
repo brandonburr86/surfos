@@ -16,8 +16,11 @@ Checks:
     one arrives; the counters saturate at 255;
   * FIFO overflow (16 kept, the rest counted lost), RX_EN, both interrupt sources;
   * host commands with the keyboard's acknowledge and answers (LEDs, ID, echo, reset),
-    TXDATA ignored while busy, a missing acknowledge and a missing keyboard (TX_NAK), a
-    command in the middle of a keyboard frame (the keyboard sends it again);
+    TXDATA ignored while busy, a missing acknowledge, a keyboard that stops clocking and a
+    missing keyboard (TX_NAK), a command written in the middle of a keyboard frame (it waits
+    for the gap: no resend), and TXDATA at every cycle around the parity and stop edges with
+    the keyboard committing at either point (no byte ever lost);
+  * refused accesses (partial words, fetches) with live state: no pop, no clear;
   * the open-drain discipline at the pins: the clock is pulled low only for the inhibit of
     a send (125 + 5 us, never toggled), data changes only while the clock line is low,
     and the keyboard model reports no protocol violation by the host.
@@ -48,6 +51,19 @@ static int failures = 0, checks = 0;
             std::printf("FAIL %s:%d: ", __FILE__, __LINE__);               \
             std::printf(__VA_ARGS__);                                      \
             std::printf("\n");                                             \
+        }                                                                  \
+    } while (0)
+
+// A port that is stuck (a send that never ends, a keyboard that never gets its lines back)
+// makes everything after it meaningless: report it and stop at once.
+#define REQUIRE(cond, ...)                                                 \
+    do {                                                                   \
+        checks++;                                                          \
+        if (!(cond)) {                                                     \
+            std::printf("FAIL %s:%d: ", __FILE__, __LINE__);               \
+            std::printf(__VA_ARGS__);                                      \
+            std::printf("\ntest_ps2: FAIL (stopped: the port is stuck)\n");  \
+            std::exit(1);                                                  \
         }                                                                  \
     } while (0)
 
@@ -124,11 +140,13 @@ struct Host {
     std::vector<uint8_t> got;
     Host(Tb &t, Bus &b) : tb(t), bus(b) {}
 
-    // Collect bytes until the keyboard is idle and the FIFO empty (or a timeout).
-    void drain(uint64_t timeout = 400000000) {
+    // Collect bytes until the keyboard is idle and the FIFO empty. The timeouts (2 s simulated)
+    // are several times the longest burst any test sends.
+    void drain(uint64_t timeout = 50000000) {
         const uint64_t end = tb.cycle + timeout;
         int quiet = 0;
-        while (tb.cycle < end) {
+        for (;;) {
+            REQUIRE(tb.cycle < end, "the keyboard never went idle while draining");
             const uint32_t d = bus.rd(B + SURF_PS2_DATA);
             if (!(d & SURF_PS2_DATA_EMPTY_MASK)) {
                 CHECK((d & ~0xFFu) == 0, "DATA with EMPTY clear has stray bits: %08x", d);
@@ -141,10 +159,30 @@ struct Host {
             bus.idle(300);
         }
     }
-    void wait_kb_idle(uint64_t timeout = 400000000) {
+    void wait_kb_idle(uint64_t timeout = 50000000) {
         const uint64_t end = tb.cycle + timeout;
-        while (!tb.kb->idle() && tb.cycle < end) bus.idle(500);
+        while (!tb.kb->idle()) {
+            REQUIRE(tb.cycle < end, "the keyboard never went idle");
+            bus.idle(500);
+        }
         bus.idle(400 * US);                           // the last frame's stop bit and the filter
+    }
+    // write TXDATA, follow it cycle by cycle: when the clock was first pulled (0: never), when
+    // TX_BUSY dropped; false if it never did
+    bool send_traced(uint8_t b, uint64_t &oe_at, uint64_t &done_at, uint64_t timeout = 30000 * US) {
+        bus.wr(B + SURF_PS2_TXDATA, b);
+        const uint64_t t0 = tb.cycle, end = tb.cycle + timeout;
+        oe_at = 0;
+        while (tb.cycle < end) {
+            if (!oe_at && tb.top->ps2_clk_oe) oe_at = tb.cycle;
+            if (((tb.cycle - t0) & 63) == 0 && !(bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK)) {
+                done_at = tb.cycle;
+                return true;
+            }
+            bus.idle(1);
+        }
+        REQUIRE(false, "TX_BUSY still set %llu us after writing TXDATA %02x", (unsigned long long)(timeout / US), b);
+        return false;
     }
     bool send(uint8_t b, uint64_t timeout = 30000 * US) {   // write TXDATA, wait for TX_BUSY to drop
         bus.wr(B + SURF_PS2_TXDATA, b);
@@ -153,6 +191,7 @@ struct Host {
             if (!(bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK)) return true;
             bus.idle(200);
         }
+        REQUIRE(false, "TX_BUSY still set %llu us after writing TXDATA %02x", (unsigned long long)(timeout / US), b);
         return false;
     }
 };
@@ -355,6 +394,24 @@ static void test_overflow_and_irq(Tb &tb, Bus &bus, Host &host) {
               (SURF_PS2_STATUS_RX_FULL_MASK | SURF_PS2_STATUS_OVF_MASK | SURF_PS2_STATUS_RX_AVAIL_MASK),
           "overflow: STATUS %08x", st);
     CHECK((ec >> 24) == (ec0 >> 24) + 4, "overflow: ERRCOUNT.OVF %u, want +4", ec >> 24);
+    // live state for the error rules: the FIFO full, OVF and now PARITY set. Refused accesses
+    // (partial words, fetches) must not pop, clear or change anything.
+    kb.queue_frame(0x99, Ps2KeyboardModel::Fault::PARITY);
+    host.wait_kb_idle();
+    st = bus.rd(B + SURF_PS2_STATUS);
+    ec = bus.rd(B + SURF_PS2_ERRCOUNT);
+    const uint32_t ctrl = bus.rd(B + SURF_PS2_CTRL);
+    CHECK(st & SURF_PS2_STATUS_PARITY_MASK, "no PARITY for the live-state checks: %08x", st);
+    const uint8_t bes[] = {0x1, 0x3, 0x7, 0xE, 0x8, 0x0};
+    for (uint8_t be : bes) {
+        CHECK(bus.read(B + SURF_PS2_DATA, be).err, "partial DATA read (be %x) not an error", be);
+        CHECK(bus.write(B + SURF_PS2_STATUS, 0xFFFFFFFF, be).err, "partial STATUS write (be %x) not an error", be);
+        CHECK(bus.write(B + SURF_PS2_CTRL, 0, be).err, "partial CTRL write (be %x) not an error", be);
+    }
+    CHECK(bus.fetch(B + SURF_PS2_DATA).err && bus.fetch(B + SURF_PS2_STATUS).err, "fetches not errors");
+    CHECK(bus.rd(B + SURF_PS2_STATUS) == st && bus.rd(B + SURF_PS2_ERRCOUNT) == ec && bus.rd(B + SURF_PS2_CTRL) == ctrl,
+          "refused accesses changed STATUS %08x (was %08x), ERRCOUNT or CTRL", bus.rd(B + SURF_PS2_STATUS), st);
+    bus.wr(B + SURF_PS2_STATUS, SURF_PS2_STATUS_PARITY_MASK);
     std::vector<uint8_t> got;
     for (int i = 0; i < 17; i++) {
         uint32_t d = bus.rd(B + SURF_PS2_DATA);
@@ -433,7 +490,11 @@ static void test_commands(Tb &tb, Bus &bus, Host &host) {
     bus.wr(B + SURF_PS2_TXDATA, 0xF4);
     bus.wr(B + SURF_PS2_TXDATA, 0xF5);              // ignored: TX_BUSY
     CHECK(bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK, "TX_BUSY not set during a send");
-    while (bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK) bus.idle(200);
+    const uint64_t busy_end = tb.cycle + 30000 * US;
+    while (bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK) {
+        REQUIRE(tb.cycle < busy_end, "TX_BUSY stuck after a write during a send");
+        bus.idle(200);
+    }
     host.drain();
     CHECK(kb.host_bytes.size() == before + 1 && kb.host_bytes.back() == 0xF4, "write during TX_BUSY was sent");
     // a missing acknowledge
@@ -445,6 +506,27 @@ static void test_commands(Tb &tb, Bus &bus, Host &host) {
     host.drain();
     bus.wr(B + SURF_PS2_STATUS, SURF_PS2_STATUS_TX_NAK_MASK);
     CHECK(bus.rd(B + SURF_PS2_STATUS) == 0, "TX_NAK not cleared");
+    // the keyboard stops clocking after 4 bits of a host byte: the 2 ms frame limit gives
+    // TX_NAK (the clock was pulled 130 us, then 100 us until the keyboard's first clock)
+    kb.host_stall_bits = 4;
+    uint64_t oe_at = 0, done_at = 0;
+    const uint64_t ts = tb.cycle, bad_stall0 = tb.dat_oe_bad;
+    const bool stall_done = host.send_traced(0xF4, oe_at, done_at, 40000 * US);
+    st = bus.rd(B + SURF_PS2_STATUS);
+    const uint64_t stall_us = (done_at - ts) / US;
+    CHECK(stall_done && (st & SURF_PS2_STATUS_TX_NAK_MASK) && stall_us > 2200 && stall_us < 2400,
+          "keyboard stopped clocking: done %d after %llu us, STATUS %08x", stall_done, (unsigned long long)stall_us, st);
+    CHECK(tb.top->ps2_clk_oe == 0 && tb.top->ps2_data_oe == 0, "lines still pulled after the 2 ms limit");
+    // the one data change outside a low clock: letting data go when the send is given up
+    CHECK(tb.dat_oe_bad - bad_stall0 <= 1, "%llu data_oe changes with the clock high in the stalled send",
+          (unsigned long long)(tb.dat_oe_bad - bad_stall0));
+    tb.dat_oe_bad = bad_stall0;
+    bus.wr(B + SURF_PS2_STATUS, SURF_PS2_STATUS_TX_NAK_MASK);
+    host.wait_kb_idle();
+    host.got.clear();
+    CHECK(host.send(0xF4) && !(bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_NAK_MASK), "send after the stall");
+    host.drain();
+    CHECK(host.got == std::vector<uint8_t>{0xFA}, "answer after the stall: %s", hexs(host.got).c_str());
     // a keyboard that does not answer: TX_NAK after 15 ms, lines released (data is let go with
     // the clock high then: the one change of data_oe allowed outside a low clock)
     const uint64_t bad0 = tb.dat_oe_bad;
@@ -469,22 +551,38 @@ static void test_commands(Tb &tb, Bus &bus, Host &host) {
 }
 
 static void test_command_while_typing(Tb &tb, Bus &bus, Host &host) {
+    // A command written in the middle of a keyboard frame waits for the gap after it: TX_BUSY
+    // at once, the inhibit only after the frame; the keyboard never has to send it again.
     Ps2KeyboardModel &kb = *tb.kb;
     bus.wr(B + SURF_PS2_STATUS, 0xFF);
     host.got.clear();
-    const std::string text = "the keyboard sends this again";
+    const std::string text = "a command waits for the frame";
     kb.type_text(text);
-    // wait until the keyboard is in the middle of a frame, then send a command
     const uint64_t aborted0 = kb.stats.frames_aborted;
     uint64_t n = 0;
     while (kb.sending_bit() != 5 && n++ < 1000000) bus.idle(1);
+    const uint64_t t0 = tb.cycle;
     bus.wr(B + SURF_PS2_TXDATA, 0xED);
-    while (bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK) bus.idle(100);
-    bus.wr(B + SURF_PS2_TXDATA, 0x01);
-    while (bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK) bus.idle(100);
+    CHECK(bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK, "TX_BUSY not set while the command waits");
+    uint64_t oe_at = 0;
+    const uint64_t busy_end = tb.cycle + 30000 * US;
+    while (bus.rd(B + SURF_PS2_STATUS) & SURF_PS2_STATUS_TX_BUSY_MASK) {
+        REQUIRE(tb.cycle < busy_end, "TX_BUSY stuck after a command written in mid-frame");
+        for (int i = 0; i < 32; i++) {
+            if (!oe_at && tb.top->ps2_clk_oe) oe_at = tb.cycle;
+            bus.idle(1);
+        }
+    }
+    const uint64_t waited = oe_at - t0;
+    // the rest of the frame (bits 5..10, then the stop bit's clock high) and the filter
+    CHECK(oe_at && waited > 5 * kb.ticks_per_bit() && waited < 7 * kb.ticks_per_bit(),
+          "the inhibit came %llu cycles after the write, want after the frame (%u per bit)",
+          (unsigned long long)waited, kb.ticks_per_bit());
+    CHECK(host.send(0x01), "LED argument");
     host.drain();
-    CHECK(kb.stats.frames_aborted > aborted0, "the inhibit did not interrupt a keyboard frame");
-    // the answers come first or in between, the scan codes complete and in order
+    CHECK(kb.stats.frames_aborted == aborted0, "the host interrupted a keyboard frame (%llu resends)",
+          (unsigned long long)(kb.stats.frames_aborted - aborted0));
+    // the answers come in between, the scan codes complete and in order
     std::vector<uint8_t> codes;
     int fa = 0;
     for (uint8_t b : host.got) {
@@ -496,6 +594,108 @@ static void test_command_while_typing(Tb &tb, Bus &bus, Host &host) {
     CHECK(decode_set2(codes) == text, "decoded '%s'", decode_set2(codes).c_str());
     CHECK(kb.leds == 1, "LEDs %u", kb.leds);
     CHECK(bus.rd(B + SURF_PS2_STATUS) == 0, "STATUS %08x", bus.rd(B + SURF_PS2_STATUS));
+    std::printf("command in mid-frame: waited %llu us for the gap, no resend\n", (unsigned long long)(waited / US));
+}
+
+// TXDATA written at every clock cycle around the end of a keyboard frame: around the rising
+// edge of the parity bit's clock (where an IBM keyboard commits the frame) and the falling
+// edge of the stop bit's clock (where this model commits by default), and every 16 cycles in
+// between, with the keyboard in both commit modes. The send must wait for the gap: the byte
+// arrives exactly once, the keyboard never resends or cuts the frame short, the command gets
+// through, no error.
+static void test_txdata_race(Tb &tb, Bus &bus, Host &host) {
+    Ps2KeyboardModel &kb = *tb.kb;
+    const uint32_t gap0 = kb.gap_us;
+    const int max_gap0 = bus.max_gap;
+    bus.max_gap = 0;                       // the write lands exactly where the trial puts it
+    kb.answer_commands = false;            // only the byte matters: shorter trials
+    kb.gap_us = 100;
+    bus.wr(B + SURF_PS2_STATUS, 0xFF);
+    host.wait_kb_idle();
+    // where the edges are, from the parity bit's falling edge
+    auto find_parity_fall = [&]() -> uint64_t {
+        bool prev = tb.clk_line;
+        for (uint64_t n = 0; n < 1000000; n++) {
+            bus.idle(1);
+            if (kb.sending_bit() == 9 && prev && !tb.clk_line) return tb.cycle;
+            prev = tb.clk_line;
+        }
+        return 0;
+    };
+    kb.queue_bytes({0x1C});
+    const uint64_t f = find_parity_fall();
+    uint64_t rise = 0, stop = 0;
+    bool prev = tb.clk_line;
+    while (!stop && tb.cycle < f + 10 * kb.ticks_per_bit()) {
+        bus.idle(1);
+        if (!rise && !prev && tb.clk_line) rise = tb.cycle;
+        if (rise && prev && !tb.clk_line) stop = tb.cycle;
+        prev = tb.clk_line;
+    }
+    CHECK(f && rise && stop, "could not find the parity and stop edges");
+    host.wait_kb_idle();
+    host.drain();
+    const int64_t d_rise = static_cast<int64_t>(rise - f), d_stop = static_cast<int64_t>(stop - f);
+    struct Win { int64_t base; int from, to, step; };
+    const Win wins[] = {{d_rise, -64, 64, 1}, {d_rise, 80, static_cast<int>(d_stop - d_rise) - 80, 16},
+                        {d_stop, -64, 160, 1}};
+    const char *modes[] = {"stop-edge commit", "IBM parity-clock commit"};
+    for (int mode = 0; mode < 2; mode++) {
+        kb.commit = mode ? Ps2KeyboardModel::Commit::AFTER_PARITY_CLOCK : Ps2KeyboardModel::Commit::AFTER_STOP_EDGE;
+        int trials = 0, bad = 0, lost = 0, dup = 0, resent = 0, cut = 0, cmd_lost = 0, errs = 0;
+        uint64_t max_wait = 0;
+        for (const Win &w : wins) {
+            for (int off = w.from; off <= w.to; off += w.step) {
+                const uint64_t aborted0 = kb.stats.frames_aborted, cut0 = kb.stats.frames_cut_short;
+                const size_t hb0 = kb.host_bytes.size();
+                kb.queue_bytes({0x1C});
+                const uint64_t pf = find_parity_fall();
+                REQUIRE(pf != 0, "the keyboard's frame never reached its parity bit");
+                const int64_t at = w.base + off;      // cycles after the parity bit's falling edge
+                while (static_cast<int64_t>(tb.cycle - pf) < at) bus.idle(1);
+                uint64_t oe_at = 0, done_at = 0;
+                const uint64_t t0 = tb.cycle;
+                const bool done = host.send_traced(0xF4, oe_at, done_at);
+                if (oe_at > t0 && oe_at - t0 > max_wait) max_wait = oe_at - t0;
+                host.wait_kb_idle();
+                host.got.clear();
+                host.drain();
+                const uint32_t st = bus.rd(B + SURF_PS2_STATUS);
+                int copies = 0;
+                for (uint8_t b : host.got) copies += b == 0x1C;
+                const bool t_lost = copies == 0, t_dup = copies > 1 || host.got.size() != static_cast<size_t>(copies);
+                const bool t_resent = kb.stats.frames_aborted != aborted0, t_cut = kb.stats.frames_cut_short != cut0;
+                const bool t_cmd = !(done && kb.host_bytes.size() == hb0 + 1 && kb.host_bytes.back() == 0xF4);
+                lost += t_lost;
+                dup += t_dup;
+                resent += t_resent;
+                cut += t_cut;
+                cmd_lost += t_cmd;
+                errs += st != 0;
+                const bool ok = !t_lost && !t_dup && !t_resent && !t_cut && !t_cmd && st == 0;
+                if (!ok) {
+                    if (bad < 4)
+                        std::printf("  %s: TXDATA %+lld cycles from the %s edge: got %s, resent %llu, cut %llu, "
+                                    "command %s, STATUS %08x\n", modes[mode], static_cast<long long>(off),
+                                    w.base == d_stop ? "stop" : "parity", hexs(host.got).c_str(),
+                                    (unsigned long long)(kb.stats.frames_aborted - aborted0),
+                                    (unsigned long long)(kb.stats.frames_cut_short - cut0),
+                                    kb.host_bytes.size() == hb0 + 1 ? "through" : "lost", st);
+                    bad++;
+                    bus.wr(B + SURF_PS2_STATUS, 0xFF);
+                }
+                trials++;
+            }
+        }
+        CHECK(bad == 0, "%s: %d of %d TXDATA timings lost or disturbed the keyboard's byte", modes[mode], bad, trials);
+        std::printf("txdata race, %s: %d timings around the parity and stop edges: %d bytes lost, %d duplicated, "
+                    "%d resent, %d cut short, %d commands lost, %d with errors; longest wait for the gap %llu us\n",
+                    modes[mode], trials, lost, dup, resent, cut, cmd_lost, errs, (unsigned long long)(max_wait / US));
+    }
+    kb.commit = Ps2KeyboardModel::Commit::AFTER_STOP_EDGE;
+    kb.answer_commands = true;
+    kb.gap_us = gap0;
+    bus.max_gap = max_gap0;
 }
 
 static void test_saturation(Tb &tb, Bus &bus, Host &host) {
@@ -539,6 +739,7 @@ int main(int argc, char **argv) {
     test_overflow_and_irq(tb, bus, host);
     test_commands(tb, bus, host);
     test_command_while_typing(tb, bus, host);
+    test_txdata_race(tb, bus, host);
     const uint64_t period_min = tb.period_min, period_max = tb.period_max;
     CHECK(period_min + 2 >= kb->ticks_per_bit() && period_max <= kb->ticks_per_bit() + 2,
           "keyboard bit period %llu..%llu ticks, want %u", (unsigned long long)period_min,

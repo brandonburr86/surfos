@@ -77,6 +77,7 @@ public:
     const VgaMeasured &measured() const { return m_; }
     uint64_t frames() const { return m_.frames; }
     uint64_t ticks() const { return n_; }
+    int64_t line() const { return line_; }      // the line being captured (0 = the vsync edge's), -1 before
     int width() const { return t_.h_active; }
     int height() const { return t_.v_active; }
     uint16_t pixel(int x, int y) const { return last_[static_cast<size_t>(y) * t_.h_active + x]; }   // RGB444

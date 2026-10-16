@@ -7,9 +7,11 @@ Ps2KeyboardModel on its own, against a software host on the two open-drain lines
 code set 2 tables (checked against values written out here), all 256 byte values framed
 correctly with the right timing (bit period, half-period clock phases, data changing only
 while the clock is high and a quarter period before the falling edge), each injected
-fault seen as such, a frame abandoned on a host inhibit and sent again, host commands
-clocked in and answered, and the model's checks of the host (short inhibit, data changed
-while the clock is high, no acknowledge, no keyboard).
+fault seen as such, a frame abandoned on a host inhibit and sent again, the two commit
+points (an inhibit after the parity clock: resent, or with IBM's rule delivered as it is),
+host commands clocked in and answered, a keyboard that stops clocking a host byte, and the
+model's checks of the host (short inhibit, data changed while the clock is high, no
+acknowledge, no keyboard).
 
     test_ps2_model [seed]
 */
@@ -50,6 +52,7 @@ struct SoftHost {
     uint64_t last_fall = 0, last_rise = 0, last_dat_change = 0;
     uint64_t per_min = ~0ull, per_max = 0, low_min = ~0ull, low_max = 0, setup_min = ~0ull;
     int dat_change_clock_low = 0;
+    int send_falls = 0;                                    // keyboard clock edges in the last send()
 
     explicit SoftHost(Ps2KeyboardModel &k) : kb(k) {}
 
@@ -131,6 +134,7 @@ struct SoftHost {
             }
             if (wiggle && i == 4 && clk) data_oe = !data_oe, wiggle = false;   // a mistake on purpose
         }
+        send_falls = i + (acked ? 1 : 0);
         data_oe = false;
         for (uint64_t t = 0; t < 1000 * US && !(clk && dat); t++) tick();
         sending = false;
@@ -278,12 +282,55 @@ static void test_inhibit_and_commands() {
           (unsigned long long)kb.stats.host_clock_pulls, (unsigned long long)kb.stats.host_clock_min);
 }
 
+// The commit point: an inhibit after the parity bit's clock rose makes the default keyboard
+// abandon the frame and send it again, and an IBM-rule keyboard count it delivered.
+static void test_commit_points() {
+    for (int mode = 0; mode < 2; mode++) {
+        Ps2KeyboardModel kb(SYS, 12500);
+        kb.commit = mode ? Ps2KeyboardModel::Commit::AFTER_PARITY_CLOCK : Ps2KeyboardModel::Commit::AFTER_STOP_EDGE;
+        SoftHost h(kb);
+        kb.queue_bytes({0x3C});
+        bool pc = h.clk;
+        uint64_t t = 0;
+        while (t++ < 100000 && !(kb.sending_bit() == 9 && !pc && h.clk)) {   // the parity clock rises
+            pc = h.clk;
+            h.tick();
+        }
+        h.run(100);
+        h.clk_oe = true;
+        h.run(200 * US);
+        h.clk_oe = false;
+        h.n = 0;
+        h.sh = 0;
+        h.run_until_idle();
+        if (mode == 0)
+            CHECK(kb.stats.frames_aborted == 1 && kb.stats.frames_cut_short == 0 && h.got == std::vector<uint8_t>{0x3C},
+                  "stop-edge commit: aborted %llu, cut %llu, got %zu bytes", (unsigned long long)kb.stats.frames_aborted,
+                  (unsigned long long)kb.stats.frames_cut_short, h.got.size());
+        else
+            CHECK(kb.stats.frames_aborted == 0 && kb.stats.frames_cut_short == 1 && kb.stats.frames_sent == 1 &&
+                      h.got.empty(),
+                  "IBM commit: aborted %llu, cut %llu, sent %llu, got %zu bytes", (unsigned long long)kb.stats.frames_aborted,
+                  (unsigned long long)kb.stats.frames_cut_short, (unsigned long long)kb.stats.frames_sent, h.got.size());
+    }
+    // a keyboard that stops clocking a host byte after 3 bits, then recovers
+    Ps2KeyboardModel kb(SYS, 12500);
+    SoftHost h(kb);
+    kb.host_stall_bits = 3;
+    CHECK(!h.send(0xF4) && h.send_falls == 3 && kb.host_bytes.empty(), "stalled host byte: %d clock edges, %zu bytes",
+          h.send_falls, kb.host_bytes.size());
+    h.run_until_idle();
+    CHECK(h.send(0xF4) && kb.host_bytes == std::vector<uint8_t>{0xF4}, "send after the stall");
+    CHECK(kb.stats.violations == 0, "violations %llu", (unsigned long long)kb.stats.violations);
+}
+
 int main(int argc, char **argv) {
     const unsigned seed = argc > 1 ? static_cast<unsigned>(std::strtoul(argv[1], nullptr, 0)) : 1;
     test_tables();
     test_frames(seed);
     test_faults();
     test_inhibit_and_commands();
+    test_commit_points();
     if (failures) {
         std::printf("test_ps2_model: FAIL (%d of %d checks failed, seed %u)\n", failures, checks, seed);
         return 1;

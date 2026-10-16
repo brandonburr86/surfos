@@ -12,8 +12,12 @@ Device to host: scan code set 2 frames (start 0, eight data bits LSB first, odd 
 stop 1) on a clock the keyboard makes at ps2_hz (10 to 16.7 kHz for a real one); the data
 line changes a quarter period before each falling edge and is held a quarter period after
 the rising one. A frame starts only after the bus was idle for 50 us. If the host pulls
-the clock low before the stop bit's clock pulse is over, the keyboard abandons the frame
-and sends it again later, as the protocol says.
+the clock low (inhibits) before the frame's commit point, the keyboard abandons the frame
+and sends it again later, as the protocol says; after it, the frame counts as delivered and
+is never sent again. The commit point is chosen by `commit`: AFTER_STOP_EDGE (default) once
+the stop bit's clock has fallen, the 11th edge; AFTER_PARITY_CLOCK, IBM's rule, once the
+parity bit's clock (the 10th) has risen: an inhibit after that ends the frame there, without
+the stop bit's clock pulse.
 
 Host to device: when the host has pulled the clock low and then releases it with data
 held low (request to send), the keyboard clocks the byte in (eleven pulses: d0..d7,
@@ -25,7 +29,8 @@ the host must not pull the clock while the keyboard clocks, and must change data
 while the clock is low; mistakes are counted in stats.violations and logged.
 
 Error injection: queue_frame() with a fault (bad parity, bad start or stop bit, a partial
-frame followed by a pause, a sub-microsecond glitch on the clock), no_ack, present=false.
+frame followed by a pause, a sub-microsecond glitch on the clock), no_ack, host_stall_bits
+(stop clocking a host byte after N bits), present=false.
 No Verilator dependency: plain C++17.
 */
 #ifndef SURFCPU_PS2_KEYBOARD_MODEL_H
@@ -69,8 +74,11 @@ public:
     size_t pending() const { return resp_q_.size() + key_q_.size(); }
 
     // behaviour
+    enum class Commit { AFTER_STOP_EDGE, AFTER_PARITY_CLOCK };
+    Commit commit = Commit::AFTER_STOP_EDGE;   // when an inhibit stops causing a resend
     bool present = true;            // false: a missing keyboard, never clocks or answers
     int no_ack = 0;                 // leave out the acknowledge of the next N host bytes
+    int host_stall_bits = 0;        // the next host byte: stop clocking after N bits (0 = off)
     bool answer_commands = true;
     uint32_t gap_us = 200;          // idle line after each frame it sends
     uint32_t partial_gap_us = 3000; // pause after a partial frame (longer than the host's 2 ms)
@@ -83,6 +91,7 @@ public:
     bool scanning = true;              // 0xF5 stops sending key codes, 0xF4 resumes
     struct Stats {
         uint64_t frames_sent = 0, frames_aborted = 0, faults_sent = 0;
+        uint64_t frames_cut_short = 0;            // delivered at an inhibit after the commit point
         uint64_t host_frames = 0, host_parity_errors = 0, host_stop_errors = 0;
         uint64_t host_clock_pulls = 0;            // times the host pulled the clock low
         uint64_t host_clock_min = 0, host_clock_max = 0;   // their lengths in ticks
@@ -99,7 +108,7 @@ public:
 private:
     enum class S {
         IDLE, TX_SETUP, TX_LOW, TX_HIGH, GAP,
-        RX_DELAY, RX_LOW, RX_HIGH, RX_ACK_PRE, RX_ACK_LOW, RX_ACK_HIGH
+        RX_DELAY, RX_LOW, RX_HIGH, RX_ACK_PRE, RX_ACK_LOW, RX_ACK_HIGH, RX_STALL
     };
     struct Frame {
         uint8_t byte;
@@ -137,6 +146,7 @@ private:
     void respond(uint8_t b) { resp_q_.push_back(Frame{b, Fault::NONE, 11, true, 0}); }
     void start_frame();
     void abort_frame();
+    void end_committed();
     void finish_rx();
     void command(uint8_t b);
     void step(bool clk_oe, bool data_oe);

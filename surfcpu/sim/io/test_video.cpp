@@ -19,6 +19,9 @@ Checks:
     decode_text; a readable screen decoded row by row; hardware scroll (and SCROLL 30/31
     acting as 0); the cursor in display coordinates, out of range, and blinking with a
     16-frame half period; palette changes;
+  * CTRL, CURSOR and SCROLL written in mid-frame apply from the next frame, wholly (a mode
+    change too); a palette write applies as it arrives;
+  * refused writes and fetches with live state (VBLANK_EV, palette, settings): no effect;
   * STATUS.VBLANK duty, VBLANK_EV once per frame with the interrupt, the FRAME counter;
   * a reset of the pixel domain alone (its settings come back over the crossing) and of the
     sys domain alone (registers back to reset values, the syncs undisturbed);
@@ -427,6 +430,112 @@ static void test_blink(Tb &tb, Bus &bus) {
     bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
 }
 
+// Refused writes (partial words) and fetches with live state: VBLANK_EV set with its
+// interrupt enabled, a palette entry, CTRL, CURSOR and SCROLL away from their reset values.
+static void test_refused_writes(Tb &tb, Bus &bus) {
+    bus.wr(B + SURF_VIDEO_PALETTE + 4 * 3, 0x123);
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT | CUR_EN);
+    bus.wr(B + SURF_VIDEO_CURSOR, 4u << 8 | 6u);
+    bus.wr(B + SURF_VIDEO_SCROLL, 5);
+    bus.wr(B + SURF_VIDEO_IE, 1);
+    bus.wr(B + SURF_VIDEO_STATUS, SURF_VIDEO_STATUS_VBLANK_EV_MASK);
+    uint64_t n = 0;
+    while (!(bus.rd(B + SURF_VIDEO_STATUS) & SURF_VIDEO_STATUS_VBLANK_EV_MASK) && n++ < 2000000) bus.idle(50);
+    const uint32_t regs[] = {SURF_VIDEO_CTRL, SURF_VIDEO_CURSOR, SURF_VIDEO_SCROLL, SURF_VIDEO_IE,
+                             SURF_VIDEO_PALETTE + 4 * 3};
+    uint32_t before[5];
+    for (int i = 0; i < 5; i++) before[i] = bus.rd(B + regs[i]);
+    const uint8_t bes[] = {0x1, 0x3, 0x7, 0xE, 0x8, 0x0};
+    for (uint8_t be : bes) {
+        CHECK(bus.write(B + SURF_VIDEO_STATUS, 0xFFFFFFFF, be).err, "partial STATUS write (be %x) not an error", be);
+        for (uint32_t r : regs) CHECK(bus.write(B + r, 0, be).err, "partial write (be %x) to %03x not an error", be, r);
+    }
+    CHECK(bus.fetch(B + SURF_VIDEO_STATUS).err && bus.fetch(B + SURF_VIDEO_PALETTE + 4 * 3).err, "fetches not errors");
+    bus.idle(2);
+    CHECK((bus.rd(B + SURF_VIDEO_STATUS) & SURF_VIDEO_STATUS_VBLANK_EV_MASK) && tb.top->irq,
+          "a refused STATUS write cleared VBLANK_EV");
+    int changed = 0;
+    for (int i = 0; i < 5; i++) changed += bus.rd(B + regs[i]) != before[i];
+    CHECK(changed == 0, "refused writes changed %d registers (palette entry 3 now %03x)", changed,
+          bus.rd(B + SURF_VIDEO_PALETTE + 4 * 3));
+    bus.wr(B + SURF_VIDEO_IE, 0);
+    bus.wr(B + SURF_VIDEO_STATUS, SURF_VIDEO_STATUS_VBLANK_EV_MASK);
+    bus.wr(B + SURF_VIDEO_PALETTE + 4 * 3, CGA[3]);
+    bus.wr(B + SURF_VIDEO_CURSOR, 0);
+    bus.wr(B + SURF_VIDEO_SCROLL, 0);
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+}
+
+// wait for the capture's next frame edge, then until it reaches this line of the frame
+static void sync_to_line(Tb &tb, Bus &bus, int64_t line) {
+    const uint64_t f = tb.cap.frames();
+    while (tb.cap.frames() == f) bus.idle(16);
+    while (tb.cap.line() < line) bus.idle(16);
+}
+
+static void wait_frame_edge(Tb &tb, Bus &bus, uint64_t frames) {
+    while (tb.cap.frames() < frames) bus.idle(64);
+}
+
+// CTRL, CURSOR and SCROLL written in the middle of a frame (at picture line 240): that frame
+// is drawn wholly with the old values and the very next one wholly with the new ones. A palette
+// write applies as it arrives: the frame it lands in changes partway, the next is all new.
+static void test_frame_latch(Tb &tb, Bus &bus, Screen &s) {
+    const int64_t mid = 35 + 240;                     // capture line of picture line 240
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+    bus.wr(B + SURF_VIDEO_SCROLL, 0);
+    wait_frames(tb, bus, 2);
+    View old_v{&s, CGA};
+    View new_v{&s, CGA};
+    new_v.scroll = 9;
+    new_v.cursor = true;
+    new_v.cur_col = 12;
+    new_v.cur_row = 3;
+    sync_to_line(tb, bus, mid);
+    bus.wr(B + SURF_VIDEO_SCROLL, 9);
+    bus.wr(B + SURF_VIDEO_CURSOR, 3u << 8 | 12u);
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT | CUR_EN);
+    uint64_t f0 = tb.cap.frames();
+    CHECK(tb.cap.line() < 35 + 480, "the writes did not land inside the picture (line %lld)",
+          static_cast<long long>(tb.cap.line()));
+    wait_frame_edge(tb, bus, f0 + 1);
+    compare_view(tb, old_v, "the frame SCROLL, CURSOR and CTRL were written in");
+    wait_frame_edge(tb, bus, f0 + 2);
+    compare_view(tb, new_v, "the next frame, with the new SCROLL, CURSOR and CTRL");
+    // a mode change in mid-frame: this frame stays text, the next is the test pattern
+    sync_to_line(tb, bus, mid);
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_BARS);
+    f0 = tb.cap.frames();
+    wait_frame_edge(tb, bus, f0 + 1);
+    compare_view(tb, new_v, "the frame MODE was changed in");
+    wait_frame_edge(tb, bus, f0 + 2);
+    int bad = 0;
+    for (int y = 0; y < 480; y++)
+        for (int x = 0; x < 640; x++) bad += tb.cap.pixel(x, y) != pattern(x, y);
+    CHECK(bad == 0, "the frame after the MODE change: %d pixels differ from the test pattern", bad);
+    // a palette write applies as it arrives
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+    bus.wr(B + SURF_VIDEO_SCROLL, 0);
+    wait_frames(tb, bus, 2);
+    sync_to_line(tb, bus, mid);
+    bus.wr(B + SURF_VIDEO_PALETTE + 4 * 1, 0x0C0);
+    f0 = tb.cap.frames();
+    wait_frame_edge(tb, bus, f0 + 1);
+    CHECK(tb.cap.pixel(639, 0) == CGA[1] && tb.cap.pixel(639, 479) == 0x0C0,
+          "palette written in mid-frame: top %03x (want the old %03x), bottom %03x (want 0c0)", tb.cap.pixel(639, 0),
+          CGA[1], tb.cap.pixel(639, 479));
+    wait_frame_edge(tb, bus, f0 + 2);
+    uint16_t pal2[16];
+    std::memcpy(pal2, CGA, sizeof pal2);
+    pal2[1] = 0x0C0;
+    View vp{&s, pal2};
+    compare_view(tb, vp, "the frame after a mid-frame palette write");
+    bus.wr(B + SURF_VIDEO_PALETTE + 4 * 1, CGA[1]);
+    bus.wr(B + SURF_VIDEO_CURSOR, 0);
+    std::printf("frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never "
+                "the current one; a palette write applies at once\n");
+}
+
 // one clock domain reset alone: the pixel clock's MMCM losing lock, or a sys reset
 static uint64_t g_odd_lines_allowed = 0, g_odd_frames_allowed = 0, g_blank_allowed = 0;
 
@@ -576,7 +685,9 @@ int main(int argc, char **argv) {
     test_text(tb, bus, screen, rng);
     test_banner_scroll_cursor(tb, bus, screen, rng);
     test_blink(tb, bus);
+    test_frame_latch(tb, bus, screen);
     test_vblank(tb, bus);
+    test_refused_writes(tb, bus);
     test_domain_resets(tb, bus, screen);
 
     const VgaMeasured &m = tb.cap.measured();

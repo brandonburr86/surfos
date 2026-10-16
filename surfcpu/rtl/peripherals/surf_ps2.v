@@ -17,14 +17,20 @@ noise. Each error also counts in ERRCOUNT (saturating). A bad start bit is rejec
 once, so a stop bit taken for a start bit after a lost clock edge resynchronizes at the
 next frame.
 
-Sending (host to device, TXDATA): pull the clock low for 125 us (inhibit), pull data low
-(start bit, request to send), release the clock 5 us later and let the device clock the
-byte in: after each falling edge of the device's clock the next bit goes out (d0..d7,
-odd parity, then data released for the stop bit); at the 11th falling edge the device must
-hold data low (its acknowledge); then both lines must come back high. The device must start
-clocking within 15 ms and finish within 2 ms, else TX_NAK; so does a missing acknowledge.
-The clock is pulled low only during the inhibit, never toggled. While a byte is being sent
-the receiver rests (a frame in progress is dropped: the device sends it again).
+Sending (host to device, TXDATA): first wait for a gap between frames (no frame being
+received, both lines high after the synchronizer and after the filter, so no edge is still
+in the filter; at most 4 ms), so a frame the keyboard already counts as delivered is never
+cut off: an IBM keyboard commits a frame once the parity bit's clock has risen and does not
+send it again. (An edge still inside the two synchronizer stages can only be a keyboard
+starting a frame; it sees the inhibit at its first clock and sends the frame again.) Then
+pull the clock low for 125 us (inhibit), pull data low (start bit, request to send),
+release the clock 5 us later and let the device clock the byte in: after each falling edge
+of the device's clock the next bit goes out (d0..d7, odd parity, then data released for the
+stop bit); at the 11th falling edge the device must hold data low (its acknowledge); then
+both lines must come back high. The device must start clocking within 15 ms and finish
+within 2 ms, else TX_NAK; so does a missing acknowledge. The clock is pulled low only during
+the inhibit, never toggled. TX_BUSY covers the wait too. The receiver runs during the wait
+and rests from the inhibit to the end of the send.
 */
 module surf_ps2 #(
     parameter integer SYS_HZ = 25000000
@@ -59,6 +65,7 @@ module surf_ps2 #(
     localparam integer T_RTS      = SYS_HZ / 200000;         // 5 us data low before the release
     localparam integer T_TX_START = (SYS_HZ / 1000) * 15;    // 15 ms for the device to start
     localparam integer T_TX_FRAME = SYS_HZ / 500;            // 2 ms for the whole frame
+    localparam integer T_TX_PEND  = SYS_HZ / 250;            // 4 ms at most waiting for a gap
     localparam integer TW         = 24;                      // timer width (enough below 1 GHz)
     localparam integer FW         = $clog2(FILT + 1);
 
@@ -67,12 +74,14 @@ module surf_ps2 #(
     localparam [31:0]   RTS_32      = T_RTS - 1;
     localparam [31:0]   TX_START_32 = T_TX_START - 1;
     localparam [31:0]   TX_FRAME_32 = T_TX_FRAME - 1;
+    localparam [31:0]   TX_PEND_32  = T_TX_PEND - 1;
     localparam [31:0]   FILT_32     = FILT - 1;
     localparam [TW-1:0] RX_TO_M1    = RX_TO_32[TW-1:0];
     localparam [TW-1:0] INHIBIT_M1  = INHIBIT_32[TW-1:0];
     localparam [TW-1:0] RTS_M1      = RTS_32[TW-1:0];
     localparam [TW-1:0] TX_START_M1 = TX_START_32[TW-1:0];
     localparam [TW-1:0] TX_FRAME_M1 = TX_FRAME_32[TW-1:0];
+    localparam [TW-1:0] TX_PEND_M1  = TX_PEND_32[TW-1:0];
     localparam [FW-1:0] FILT_M1     = FILT_32[FW-1:0];
 
     // ---------------------------------------------------------------- bus decode
@@ -120,9 +129,20 @@ module surf_ps2 #(
     reg ctrl_rx_ie  = 1'b0;
     reg ctrl_err_ie = 1'b0;
 
+    // ---------------------------------------------------------------- receiver state
+    reg [3:0]    rx_n     = 4'd0;         // bits of the frame so far; 0 = waiting for a start bit
+    reg [8:0]    rx_sh    = 9'd0;         // parity and data, shifted in from the top
+    reg [TW-1:0] rx_timer = {TW{1'b0}};
+    reg          push     = 1'b0;         // one-cycle events
+    reg          ev_par   = 1'b0, ev_frm = 1'b0, ev_to = 1'b0;
+
+    // Between frames: no frame being received, and both lines high after the synchronizer and
+    // after the filter (no edge still being filtered). A send begins only then.
+    wire bus_quiet = (rx_n == 4'd0) && clk_f && dat_f && clk_s && dat_s;
+
     // ---------------------------------------------------------------- transmitter
     localparam [2:0] TX_IDLE = 3'd0, TX_INHIBIT = 3'd1, TX_RTS = 3'd2, TX_WAIT = 3'd3,
-                     TX_BITS = 3'd4, TX_ACK = 3'd5, TX_RELEASE = 3'd6;
+                     TX_BITS = 3'd4, TX_ACK = 3'd5, TX_RELEASE = 3'd6, TX_PEND = 3'd7;
     reg [2:0]    tx_state = TX_IDLE;
     reg [TW-1:0] tx_timer = {TW{1'b0}};
     reg [3:0]    tx_n     = 4'd0;         // bits presented so far
@@ -155,9 +175,15 @@ module surf_ps2 #(
                         tx_timer <= {TW{1'b0}};
                         tx_n     <= 4'd0;
                         tx_nakd  <= 1'b0;
+                        tx_state <= TX_PEND;
+                    end
+                end
+                TX_PEND: begin                                // wait for a gap between frames
+                    if (bus_quiet || tx_timer == TX_PEND_M1) begin
+                        tx_timer <= {TW{1'b0}};
                         clk_oe_q <= 1'b1;                     // inhibit
                         tx_state <= TX_INHIBIT;
-                    end
+                    end else tx_timer <= tx_timer + 1'b1;
                 end
                 TX_INHIBIT: begin
                     if (tx_timer == INHIBIT_M1) begin
@@ -213,15 +239,11 @@ module surf_ps2 #(
         end
     end
 
-    wire tx_busy = (tx_state != TX_IDLE);
+    wire tx_busy = (tx_state != TX_IDLE);   // STATUS.TX_BUSY: from the write to the end
 
     // ---------------------------------------------------------------- receiver
-    reg [3:0]    rx_n     = 4'd0;         // bits of the frame so far; 0 = waiting for a start bit
-    reg [8:0]    rx_sh    = 9'd0;         // parity and data, shifted in from the top
-    reg [TW-1:0] rx_timer = {TW{1'b0}};
-    reg          push     = 1'b0;         // one-cycle events
-    reg          ev_par   = 1'b0, ev_frm = 1'b0, ev_to = 1'b0;
-    wire         rx_on    = ctrl_rx_en && !tx_busy;
+    // it runs while a send waits for its gap, and rests from the inhibit on
+    wire rx_on = ctrl_rx_en && (tx_state == TX_IDLE || tx_state == TX_PEND);
 
     always @(posedge clk) begin
         if (rst) begin
