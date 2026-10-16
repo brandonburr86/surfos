@@ -754,6 +754,59 @@ class TestCleanTree(ScratchRelease):
         self.assertIn("SURFCPU_BUILD_DIRTY=1", r.stdout.split())
 
 
+class TestNoForeignDeletes(ScratchRelease):
+    """review m4: the tool deletes only what it made"""
+
+    def precious(self, name: str) -> Path:
+        d = self.dir / name
+        d.mkdir()
+        (d / "precious.txt").write_text("keep me\n")
+        return d
+
+    def test_logs(self):
+        d = self.precious("notes")
+        r = self.make("--prerelease", "--skip-ddr", "--logs", d)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertTrue((d / "precious.txt").is_file())
+
+    def test_out_force(self):
+        d = self.dir / "project" / self.rel_dir(True).name
+        d.mkdir(parents=True)
+        (d / "precious.txt").write_text("keep me\n")
+        r = self.make("--prerelease", "--skip-ddr", "--out", d.parent, "--force")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("not a release", r.stderr)
+        self.assertTrue((d / "precious.txt").is_file())
+        r = self.make("--prerelease", "--skip-ddr", "--out", d.parent / "x", "--out-exact")
+        self.assertEqual(r.returncode, 2, "--out-exact is gone: a release directory is named by its MANIFEST")
+
+    def test_verify_work(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        w = self.dir / "work"
+        w.mkdir()
+        r = self.tool("verify", self.rel_dir(True), "--work", w)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(w.is_dir(), "the directory the user gave is kept")
+        self.assertEqual(list(w.iterdir()), [])
+
+    def test_fresh_checkout_work(self):
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        w = self.dir / "fc"
+        w.mkdir()
+        e = dict(self.env)
+        r = subprocess.run(["sh", str(self.sc / "tools/fresh-checkout.sh"), "--work", str(w), "--reference",
+                            str(self.rel_dir(True)), "--", "PRERELEASE=1", "SKIP_DDR=1"], cwd=self.sc, env=e,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(w.is_dir())
+        self.assertEqual(list(w.iterdir()), [])
+        p = self.precious("fc2")
+        r = subprocess.run(["sh", str(self.sc / "tools/fresh-checkout.sh"), "--work", str(p)], cwd=self.sc, env=e,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertTrue((p / "precious.txt").is_file())
+
+
 # ------------------------------------------------------------------------------- program.sh flash path
 FAKE_OFL = (ROOT / "sim" / "board" / "tools" / "fake" / "openFPGALoader").resolve()
 # the stand-in first, then only the system's own directories: never Homebrew's, where the real one lives

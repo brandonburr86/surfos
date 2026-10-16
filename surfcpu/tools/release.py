@@ -6,7 +6,8 @@ File: release.py Date: 10/16/26 (SurfCPU)
 Milestone 9 (docs/RELEASE.md). Runs on the Mac with its own python3 (3.9) and drives the builds in
 the Docker images through devenv/run.sh and tools/fpga-build.sh, as a person would:
 
-    tools/release.py make [--prerelease] [--skip-ddr] [--designs D,..] [--boards B,..] [--out DIR] [--force]
+    tools/release.py make [--prerelease] [--skip-ddr] [--designs D,..] [--boards B,..] [--out DIR] [--logs DIR]
+                          [--force]
         make -C surfcpu release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=..] [BOARDS=..] [FORCE=1]
         From a clean tree only, with SOURCE_DATE_EPOCH = the commit's time, LC_ALL=C and TZ=UTC: the
         boot ROMs and the kernel (make build-rom, arch/riscv32/kernel.mk), every design of
@@ -904,6 +905,8 @@ WORK = ROOT / "build" / "release-work"              # the release's own build di
 LOCK = ROOT / "build" / "release-work.lock"         # one release at a time in a checkout
 WORK_MARK = ".surfcpu-release-work"
 STAGE_MARK = ".surfcpu-release-stage"
+LOGS_MARK = ".surfcpu-release-logs"
+VERIFY_MARK = ".surfcpu-release-verify"
 # the software artifacts and where the release's own build makes them (relative to WORK)
 SOFTWARE = {
     "SURFOS.BIN": "riscv32/arty_a7/SURFOS.BIN",
@@ -933,6 +936,25 @@ def own_dir(d: Path, mark: str, what: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     (d / mark).write_text(f"made by tools/release.py ({what}); it empties this directory when it runs again\n")
     return d
+
+
+def foreign_file(d: Path) -> str | None:
+    """None if d holds only what a release holds (MANIFEST, SHA256SUMS, the artifacts it lists and their
+    build records), else the first other thing in it: FORCE replaces nothing but a release"""
+    try:
+        sums = read_sums(d / "SHA256SUMS")
+    except (OSError, Refused):
+        return "no readable SHA256SUMS"
+    if not (d / "MANIFEST").is_file():
+        return "no MANIFEST"
+    allowed = {"MANIFEST", "SHA256SUMS"} | set(sums)
+    allowed |= {f"{Path(rel).parent.as_posix()}/manifest.txt" for rel in sums
+                if rel.startswith("fpga/") and rel.endswith(".bit")}
+    for p in sorted(d.rglob("*")):
+        rel = p.relative_to(d).as_posix()
+        if p.is_symlink() or (p.is_file() and rel not in allowed):
+            return rel
+    return None
 
 
 def drop_own_dir(d: Path, mark: str) -> None:
@@ -1316,20 +1338,27 @@ class Release:
         self.preflight()
         name = self.name(a.prerelease)
         out_root = self.out_root or ROOT / "build" / "release"
-        out = out_root / name if not a.out_exact else Path(a.out).resolve()
-        if out.exists() and not a.force:
-            raise Refused(f"{out} exists (FORCE=1 replaces it)")
+        out = out_root / name
+        self.replaceable(out)
         with Lock(LOCK):
-            if not self.logs:
-                self.logs = out.parent / f"{out.name}.logs"
-            shutil.rmtree(self.logs, ignore_errors=True)
-            self.logs.mkdir(parents=True)
+            self.logs = own_dir(self.logs or out.parent / f"{out.name}.logs", LOGS_MARK, "release logs")
             self.work = own_dir(WORK, WORK_MARK, "release build")
             self.stage = own_dir(out.parent / f".{out.name}.stage", STAGE_MARK, "release stage")
             try:
                 return self._make(name, out, out_root)
             finally:
                 drop_own_dir(self.stage, STAGE_MARK)            # a release that was not written
+
+    def replaceable(self, out: Path) -> None:
+        """refuses an existing out unless FORCE=1 and it is a release (nothing in it but what a release holds)"""
+        if not out.exists() and not out.is_symlink():
+            return
+        if not self.a.force:
+            raise Refused(f"{out} exists (FORCE=1 replaces it)")
+        what = "a symbolic link" if out.is_symlink() else None if not out.is_dir() else foreign_file(out)
+        if out.is_symlink() or not out.is_dir() or what:
+            raise Refused(f"{out} exists but is not a release this tool wrote ({what or 'not a directory'}): not "
+                          "replacing it, FORCE=1 or not")
 
     def _make(self, name: str, out: Path, out_root: Path) -> int:
         a = self.a
@@ -1368,9 +1397,8 @@ class Release:
         prerelease = bool(self.missing)
         if prerelease != a.prerelease:                 # every design built: a complete release
             name = self.name(prerelease)
-            out = out_root / name if not a.out_exact else out
-            if out.exists() and not a.force:
-                raise Refused(f"{out} exists (FORCE=1 replaces it)")
+            out = out_root / name
+            self.replaceable(out)
         self.card()
         designs = []
         for board, d, m in built:
@@ -1403,6 +1431,7 @@ class Release:
             raise Refused("the release does not pass its own check (tools/release.py check), so it was not "
                           "written:\n" + "\n".join("    " + p for p in problems[:20]))
         if out.exists():
+            self.replaceable(out)                       # still nothing in it but a release
             shutil.rmtree(out)
         os.rename(self.stage, out)
         say(f"written {out}: " + ("PRE-RELEASE, without:" if prerelease else "complete release") +
@@ -1494,9 +1523,8 @@ def cmd_verify(a) -> int:
         raise Refused(f"nothing of {ref.name} to rebuild")
     subset = len(rebuilt) < len(built)
     work = Path(a.work).resolve() if a.work else ROOT / "build" / "release-verify" / f"{ref.name}-{time.strftime('%Y%m%dT%H%M%S')}"
-    if work.exists() and any(work.iterdir()):
-        raise Refused(f"{work} exists and is not empty")
-    work.mkdir(parents=True, exist_ok=True)
+    made = not work.exists()                            # a directory the user gave is kept (emptied of ours)
+    own_dir(work, VERIFY_MARK, "release-verify work")
     src = work / "src"
     t0 = time.time()
     say(f"verify {ref.name}: a pristine copy of {commit[:8]} in {src} (git clone --shared)")
@@ -1527,8 +1555,16 @@ def cmd_verify(a) -> int:
     if a.report:
         Path(a.report).write_text(text)
     if not a.keep:
-        shutil.rmtree(work, ignore_errors=True)
-        say(f"removed {work} (KEEP=1 keeps it)")
+        if made:
+            shutil.rmtree(work, ignore_errors=True)
+        else:
+            for x in ("src", "rebuild", "logs", "verify-report.txt", VERIFY_MARK):
+                p = work / x
+                if p.is_dir() and not p.is_symlink():
+                    shutil.rmtree(p, ignore_errors=True)
+                elif p.exists() or p.is_symlink():
+                    p.unlink()
+        say(f"removed {work if made else 'what it wrote in ' + str(work)} (KEEP=1 keeps it)")
     print(text, end="")
     verdict = lines[-1].split(":", 1)[0]
     return 0 if verdict == "PASS" or (verdict == "PARTIAL" and subset) else 1
@@ -1574,9 +1610,9 @@ def main(argv=None) -> int:
     p.add_argument("--designs", help="only these designs (comma-separated; a pre-release)")
     p.add_argument("--boards", help="only these boards (comma-separated; a pre-release)")
     p.add_argument("--out", help="the directory for the release directory (default build/release)")
-    p.add_argument("--out-exact", action="store_true", help="--out is the release directory itself")
-    p.add_argument("--logs", help="where the build logs go (default next to the release)")
-    p.add_argument("--force", action="store_true", help="replace an existing release directory")
+    p.add_argument("--logs", help="where the build logs go (default next to the release): a new or empty "
+                                  "directory, or one this tool made before")
+    p.add_argument("--force", action="store_true", help="replace an existing release directory (only a release)")
     p.add_argument("--only", help="exactly these BOARD/DESIGN pairs (comma-separated; release-verify uses it)")
     p.add_argument("--max-flow-containers", type=int, default=3,
                    help="start a bitstream build only while fewer surfcpu-openxc7 containers run (0: no limit)")
