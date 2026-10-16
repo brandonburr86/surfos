@@ -534,6 +534,45 @@ class TestProgramFlash(FlashFixture):
         self.assertNotIn(" -f ", calls)
 
 
+class TestHostQuoting(FlashFixture):
+    """review m5: mk/host.mk's targets take a path with spaces in BIT, RELEASE, MOUNT, ..."""
+    REL = "SurfOS Restoration Project/release 1"
+
+    def test_program_targets(self):
+        r, calls = self.make("program-flash", "BOARD=arty_a7_100t", f"BIT={self.bit}",
+                             SURFCPU_FLASH_CONFIRM="write-flash-arty_a7_100t")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t -f --verify {self.bit}\n", calls)
+        r, calls = self.make("program-volatile", "BOARD=arty_a7_100t", f"BIT={self.bit}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}\n", calls)
+        self.assertNotIn(" -f ", calls)
+        # without BIT, program.sh's own default (the last build of DESIGN under SURFCPU_FPGA_OUT)
+        r, calls = self.make("program-volatile", "BOARD=arty_a7_100t", "DESIGN=surfcpu_arty_a7_ddr",
+                             SURFCPU_FPGA_OUT=str(self.rel / "fpga"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"openFPGALoader -b arty_a7_100t {self.bit}\n", calls)
+
+    def test_release_and_card_targets(self):
+        gone = self.dir / "no such dir" / "2.3.4-pre-01234567"
+        for target in ("release-check", "release-verify"):
+            r, calls = self.make(target, f"RELEASE={gone}")
+            self.assertNotEqual(r.returncode, 0, target)
+            self.assertIn(str(gone), r.stdout + r.stderr, target)
+        # deploy-sd in its test mode (never diskutil): MOUNT and a path inside DEPLOY_ARGS, quoted in the value
+        pkg = self.dir / "SurfOS Restoration Project" / "SURFOS.BIN"
+        r, calls = self.make("deploy-sd", f"MOUNT={self.dir / 'my card'}", f'DEPLOY_ARGS=--image "{pkg}"',
+                             SURFCPU_DEPLOY_TEST="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"no package at {pkg}", r.stdout + r.stderr)
+        pkg.write_bytes(release.load("surfimg").make_package(bytes(256), 0x80000000, build_id=0x1234abcd))
+        r, calls = self.make("deploy-sd", f"MOUNT={self.dir / 'my card'}", f'DEPLOY_ARGS=--image "{pkg}"',
+                             SURFCPU_DEPLOY_TEST="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"{self.dir / 'my card'} is not a directory", r.stdout + r.stderr)
+        self.assertEqual(calls, "")
+
+
 class TestBitfileStrict(FlashFixture):
     """review c1: one rule for a .bit header in tools/bitfile.py and tools/program.sh, fields a, b, c, d once each
     and in this order, then e; anything else, and a stream with no IDCODE or DESYNC, fails cleanly"""

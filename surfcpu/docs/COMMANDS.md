@@ -7,7 +7,11 @@ or `arty_a7_35t`; `DESIGN=arty_a7_baseline` (the milestone 1 design), `surfcpu_a
 (the SoC with the BRAM diagnostics, milestone 3) or `surfcpu_arty_a7_top` (the SoC with SurfBoot;
 default) for the bitstream targets; `BIT=file.bit` to program a particular file;
 `CABLE_SERIAL=` the serial number of the board's USB cable when more than one FT2232H is
-connected; `V=1` shows full commands.
+connected; `V=1` shows full commands. A path may hold spaces: quote it as usual
+(`BIT="/Users/me/My Releases/top.bit"`); `ARGS` and `DEPLOY_ARGS` are lists of arguments, so a
+path with spaces inside them needs quotes of its own
+(`DEPLOY_ARGS='--image "/Users/me/My Releases/SURFOS.BIN"'`). No value may hold `"`, `\`, `$` or
+a backquote (mk/host.mk).
 
 | Command | Runs on | What it does | Status |
 |---|---|---|---|
