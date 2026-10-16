@@ -9,6 +9,7 @@
 #   make test-io-ps2      surf_ps2 against the PS/2 keyboard model through SurfBus
 #   make test-io-video    surf_video measured and decoded by the VGA capture model
 #   make test-io-icarus   the three blocks together in Icarus (SPI, PS/2, video timing)
+#   make synth-io         Yosys synth_xilinx estimates of the three blocks (not part of check)
 #
 # IO_SEEDS="1 2 3" chooses the seeds; IO_JOBS the parallel C++ compiles per Verilator build.
 
@@ -33,7 +34,8 @@ KB_MODEL_HDR = sim/models/ps2_keyboard_model.h
 VGA_MODEL_SRC = sim/models/vga_capture.cpp
 VGA_MODEL_HDR = sim/models/vga_capture.h
 
-.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus
+.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus \
+        synth-io
 lint: lint-io
 test-soc: test-io
 check: check-io
@@ -139,3 +141,19 @@ $(IO_BUILD)/tb_io_icarus.vvp: sim/io/tb_io_icarus.v $(IO_ALL_RTL)
 test-io-icarus: $(IO_BUILD)/tb_io_icarus.vvp
 	$(Q)vvp -n $< > $(IO_BUILD)/tb_io_icarus.txt 2>&1; st=$$?; \
 	  if [ $$st -eq 0 ] && grep PASS $(IO_BUILD)/tb_io_icarus.txt; then :; else cat $(IO_BUILD)/tb_io_icarus.txt; exit 1; fi
+
+# ---------------------------------------------------------------- resource estimates
+# Yosys synth_xilinx (flattened, xc7) per block; an estimate, not a Vivado result. Yosys's
+# notes about resizing the font ROM's RAMB36 data ports (it uses 8 of 32 bits) are left out.
+synth-io:
+	@mkdir -p $(IO_BUILD)/synth
+	$(Q)for m in $(IO_TOPS); do \
+	  $(YOSYS) -q -l $(IO_BUILD)/synth/$$m.txt -p "read_verilog -Irtl/generated rtl/lib/surf_sync.v \
+	    rtl/lib/surf_fifo.v rtl/lib/surf_pulse_sync.v rtl/lib/surf_cdc_word.v $(IO_PERIPH)/surf_video_font.v \
+	    $(IO_PERIPH)/$$m.v; synth_xilinx -top $$m -family xc7 -flatten; tee -q -o $(IO_BUILD)/synth/$$m.stat.txt stat" \
+	    > $(IO_BUILD)/synth/$$m.out 2>&1 || { cat $(IO_BUILD)/synth/$$m.out; exit 1; }; \
+	  grep -v 'Resizing cell port .*u_font.rom' $(IO_BUILD)/synth/$$m.out; \
+	  awk -v m=$$m '/ LUT[1-6] /{l+=$$2} / FD[RSCP]E /{f+=$$2} / RAMB18E1 /{b18+=$$2} / RAMB36E1 /{b36+=$$2} \
+	    / DSP48E1 /{d+=$$2} / CARRY4 /{c+=$$2} / RAM(32|64)[MX]/{lr+=$$2} \
+	    END{printf "%-11s %5d LUTs %5d flip-flops %3d LUTRAM %2d RAMB36 %2d RAMB18 %2d DSP48 %3d CARRY4\n", \
+	        m, l, f, lr, b36, b18, d, c}' $(IO_BUILD)/synth/$$m.stat.txt; done

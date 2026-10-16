@@ -227,10 +227,23 @@ module surf_video #(
     wire       blink_on = !f_blink || pframe[4];
     wire       cur0  = f_curen && blink_on && (col0 == f_curcol) && (srow0 == f_currow) && (gl0 >= CURSOR_TOP);
 
-    // the test pattern
-    wire [17:0] h205  = {8'd0, hcnt} * 18'd205;   // h*205 >> 14 = h/80, >> 13 = h/40, exact below 640
-    wire [2:0]  bar   = h205[16:14];
-    wire [3:0]  level = h205[16:13];
+    // the test pattern: step = hcnt / 40 kept by a counter beside hcnt (no multiplier: Yosys
+    // 0.52 packed a multiply of hcnt into a DSP48 together with the counter and lost both)
+    reg  [5:0]  step_px = 6'd0;                   // hcnt mod 40 while hcnt < 640
+    reg  [4:0]  step    = 5'd0;                   // hcnt / 40
+    always @(posedge pix_clk) begin
+        if (pix_rst || hcnt == H_TOT - 10'd1) begin
+            step_px <= 6'd0;
+            step    <= 5'd0;
+        end else if (step_px == 6'd39) begin
+            step_px <= 6'd0;
+            step    <= step + 5'd1;
+        end else begin
+            step_px <= step_px + 6'd1;
+        end
+    end
+    wire [2:0]  bar   = step[3:1];                // hcnt / 80: the colour bar
+    wire [3:0]  level = step[3:0];                // hcnt / 40: the ramp level
     wire        border = (hcnt == 10'd0) || (hcnt == H_VIS - 10'd1) || (vcnt == 10'd0) || (vcnt == V_VIS - 10'd1);
     reg  [11:0] pat0;
     always @(*) begin
@@ -378,7 +391,7 @@ module surf_video #(
     assign irq         = st_ev && ie_q;
 
     // unused: address bits above the window, write data above the fields, the reserved
-    // half of each text cell, and the counter bits the pattern does not need
+    // half of each text cell, and the step counter's top bit (it passes 15 in the blanking)
     wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata[31:13], text_data[31:16],
-                       h205[17], h205[12:0], pal_off[11:6], pal_off[1:0], vcnt[9]};
+                       step[4], pal_off[11:6], pal_off[1:0], vcnt[9]};
 endmodule
