@@ -16,6 +16,10 @@ are written out together, and bread_blocks/bwrite_blocks move runs of blocks
 straight between a device and the caller without filling the cache, coherent
 with the copies it holds. A holder that changes a block calls bdirty() after
 the change.
+
+10/16/26 (SurfCPU, milestone 8; audit B1): a block whose write failed stays
+dirty while its device is there, for the next bsync() to try again, and is not
+reused meanwhile; bsync() tries each run once and fails when one did.
 */
 
 #ifndef _FS_BCACHE_H
@@ -36,6 +40,8 @@ struct buf {
     bool loading;                       /* being read in: wait for it (the contents are not there yet) */
     bool writing;                       /* being written out: usable, but not reused or written by another */
     bool hashed;
+    bool wfail;                         /* its last write failed: dirty until a sync writes it, never reused before */
+    u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
     u_int refs;
     struct buf *hnext, *hprev;          /* hash chain */
@@ -49,7 +55,7 @@ struct buf *bpeek(struct bdev *dev, u32 lba);        /* the block if it is cache
 struct buf *bget(struct bdev *dev, u32 lba);         /* the buffer without reading (it will be fully overwritten) */
 void bdirty(struct buf *b);                          /* changed: write it back later */
 void brelse(struct buf *b);
-int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device) */
+int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed */
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
 
