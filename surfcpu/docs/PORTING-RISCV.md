@@ -385,14 +385,28 @@ next sync` once, and `bcache: sd0p1 takes writes again` when none of its blocks 
 failure any more. Since audit B6 a card that refuses keeps at most a quarter of the cache (256
 blocks) of such blocks: its dirty blocks are held back (making room sends it no write bound to
 fail, and a block held back because one below it failed is not marked failed), past that share
-its new writes fail at once with EIO (`bcache_room()`, `bget()`), and the rest of the cache stays
-the other devices' (before, a card that refused everything filled the cache, and then every
-read of every device failed). A sync tries a refused run again block by block, once, so one bad
-block does not hold back its neighbours. Nothing hangs (a 1 MB `cp` returns at once with its
-error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose order
-point (below) the card refuses puts back what it changed in the cache and fails with EIO
+its new writes fail at once with EIO (`bcache_room()`, `bget()`), and one refusing card leaves
+the rest of the cache to the other devices (before, a card that refused everything filled the
+cache, and then every read of every device failed; there is no share across devices). Since
+B14 the card is asked again at each such call, with one write of its oldest block: once it
+takes writes, they work at once. What the share counts (B15): file data (each block through the
+cache asks first, and a write straight to the card changes no cached copy before the card has
+the bytes, so a refused one changes nothing, in the cache either); an operation's own FAT,
+directory and FSInfo blocks come on top. A sync tries every block it may, in every sync (B13:
+blocks that never failed first, a refused run again block by block; a card that refused 4
+requests in one sync and took none is asked nothing more in it), so one bad block does not hold
+back its neighbours. A sync returns 0 only when every block that was dirty when it began reached
+the card (B12; before, after 8 rounds of another task's writing it returned 0 with a directory
+block still dirty), and gives up on such a block once its present hold has lasted 10 s (B18: a
+task killed with buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
+its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
+order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
-both names on one chain, and the next `mv` or `rm` freed the chain under the other name).
+both names on one chain, and the next `mv` or `rm` freed the chain under the other name). Since
+B16 the refused blocks of the clusters such a command frees do not hold its order point back
+(`rm` of the file whose block refuses works; other refused blocks still do: an operation that
+needs an order point fails while they refuse), and since B17 a `mv` that fails at any step
+changes nothing, none failing once the replaced file is freed.
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
@@ -408,15 +422,19 @@ nothing, and every transfer fails until it is out for a moment.
 
 **The write order** (B3) is what keeps an interrupted write repairable: the block cache writes a
 device's dirty blocks file data first, then the FAT copies, then directory entries, then FSInfo,
-and a block written to make room has every dirty block of a lower order written first; FAT puts
+and a block written to make room has the dirty blocks of a lower order it may point at written
+first (B12: those with a change older than its own last change); FAT puts
 an order point (a sync) in unlink, truncate to zero and rename so that taking away goes the
 other way round (entry first). Before B3, a card pulled after the first block of a new file's
 sync left its directory entry pointing at a free cluster (`fsck.fat`: "Contains a free
 cluster"), and after the third the FAT and entry written without the file's bytes (a file
 reading whatever its cluster held before, which no check can see). Since audit B7 the order is
 checked where each write is issued (`write_run()`: no block of order k while its device has a
-dirty block below k), so it also holds when another task writes during a sync or while room is
-made; a block is not written while someone holds it, nor handed out while it is written. Within
+dirty block below k; since B12, below k with a change older than the block's last one: each
+change is numbered, and each device lists its dirty blocks of each order by their first
+unwritten change), so it also holds when another task writes during a sync or while room is
+made; a block is not written while someone holds it, nor handed out while it is written (B12's
+copies, for a block other tasks keep changing, write what was checked). Within
 the FAT, a link into a new cluster in another FAT sector (and every link that grows a folder)
 waits for the cluster's own entry to be on the card (`fat_table_point()`, a sync of data and
 tables), a new folder is on the card before anything names it, and a cut (truncate to a smaller
@@ -506,6 +524,13 @@ write over a file (5) take the same as before. A device keeps at most 256 dirty 
 write through the cache writes half of them out when it reaches that (much as making room did
 when the cache was full). `trim_chain()` walks a short write's chain from where the write was,
 not from the file's first cluster.
+
+Since audit B12-B19 (counted the same way, before = d7452f4): every workload above sends the
+same requests and blocks, but 4 MiB in 4 KiB pieces on a 1 GiB FAT32 volume, 105 requests
+instead of 119 (a block waits only for older changes, so making room writes fewer small runs);
+the host's CPU time is within 5 % on each (bcache-review.txt section 5). The bookkeeping costs
+memory: each of the cache's 1024 buffers grows from 580 to 628 bytes on i386 (the change
+numbers and the list links: 48 KiB), each struct bdev by 44 bytes.
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
