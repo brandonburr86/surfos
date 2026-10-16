@@ -85,11 +85,14 @@ class FakeBoard(threading.Thread):
 
     def __init__(self, link, control, mode='baseline', **kw):
         super().__init__(daemon=True)
-        self.master, slave = pty.openpty()
+        self.master, self.slave = pty.openpty()
+        import fcntl
         import tty
-        tty.setraw(slave)
-        self.slave_name = os.ttyname(slave)
-        os.close(slave)
+        tty.setraw(self.slave)
+        self.slave_name = os.ttyname(self.slave)
+        # The slave stays open here and the master never blocks, as a UART sends whether anyone
+        # listens or not: on macOS a write to a master whose slave nobody has open can wait for ever
+        fcntl.fcntl(self.master, fcntl.F_SETFL, fcntl.fcntl(self.master, fcntl.F_GETFL) | os.O_NONBLOCK)
         self.link, self.control, self.mode, self.kw = link, control, mode, kw
         relink(link, self.slave_name)
         self.stop = False
@@ -149,6 +152,7 @@ class FakeBoard(threading.Thread):
                     25173611 if lines > 1 else 25173604, st.get('sw', '0000'), btn, rx)
                 self.emit(line.encode())
                 if self.mode == 'vanish' and lines == self.kw.get('vanish_after', 2):
+                    time.sleep(0.2)                         # the line on its way, then the cable is pulled
                     os.close(self.master)
                     self.closed = True
                     return
@@ -156,9 +160,9 @@ class FakeBoard(threading.Thread):
     def close(self):
         self.stop = True
         self.join(2)
-        if not self.closed:
+        for fd in ([] if self.closed else [self.master]) + [self.slave]:
             try:
-                os.close(self.master)
+                os.close(fd)
             except OSError:
                 pass
 
@@ -671,8 +675,9 @@ def main():
     print(head)
     if a.evidence:
         with open(a.evidence, 'w') as f:
-            f.write('# %s\n# %s UTC, kit_test.py --set %s%s (%s)\n' % (
+            f.write('# %s\n# %s UTC, kit_test.py --set %s%s, Python %s on %s %s (%s)\n' % (
                 head, time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()), a.set, ' --only ' + a.only if a.only else '',
+                sys.version.split()[0], os.uname().sysname, os.uname().machine,
                 'the RTL system: surfsim --uart-pty; fake boards: pseudo-terminals in kit_test.py; the owner\'s '
                 'steps answered by kit_test.py owner'))
             for ok, what in sorted(k.results, key=lambda x: x[1]):
