@@ -339,7 +339,7 @@ synth-soc: $(SOC_DIR)/rom_a.mem
 	  "check -assert" \
 	  "tee -q -o $(SOC_SYN_DIR)/soc_stat.txt stat" \
 	  "write_verilog -noattr $(SOC_SYN_DIR)/surfcpu_soc_net.v" > $(SOC_SYN_DIR)/soc.ys
-	$(Q)$(YOSYS) -qq -l $(SOC_SYN_DIR)/soc.log $(SOC_SYN_DIR)/soc.ys > /dev/null \
+	$(Q)$(YOSYS) -qq -l $(SOC_SYN_DIR)/soc.log $(SOC_SYN_DIR)/soc.ys > $(SOC_SYN_DIR)/soc.out 2>&1 \
 	  || { tail -30 $(SOC_SYN_DIR)/soc.log; exit 1; }
 	@echo "synth-soc: $$(grep '^Warning: ' $(SOC_SYN_DIR)/soc.log | grep -vc 'Resizing cell port') warnings besides block-RAM port resizing (see $(SOC_SYN_DIR)/soc.log)"
 	@echo "synth-soc: $(words $(SOC_SYN_LOGIC)) logic modules synthesize and $(words $(SOC_SYN_MEMS)) memories infer (Yosys, check -assert)"
