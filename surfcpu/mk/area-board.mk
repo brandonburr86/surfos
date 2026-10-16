@@ -14,12 +14,12 @@ BOARD_PRIMS = sim/board/prims/surf_sim_cmt.v sim/board/prims/MMCME2_BASE.v \
               sim/board/prims/PLLE2_BASE.v sim/board/prims/BUFG.v sim/board/prims/IOBUF.v
 
 # The files of one kind in a design list: $(call board_list,<design>,<kind>)
-board_list = $(wildcard $(shell sed -n 's/^$(2)[[:space:]][[:space:]]*//p' $(BD)/designs/$(1).files))
+board_list = $(wildcard $(shell sed -n -e 's/[[:space:]]*\#.*//' -e 's/^$(2)[[:space:]][[:space:]]*//p' $(BD)/designs/$(1).files))
 BASELINE_SRC = $(call board_list,arty_a7_baseline,src)
 # The full top uses the real SoC once the soc track has merged it, else the stand-in
 # (sim/board/stubs/surfcpu_soc.v, never used for a bitstream: tools/fpga-build.sh refuses).
 SOC_REAL  = $(wildcard rtl/soc/surfcpu_soc.v)
-TOP_SRC   = $(if $(SOC_REAL),$(call board_list,surfcpu_arty_a7_top,src),\
+TOP_SRC   = $(if $(SOC_REAL),$(call board_list,surfcpu_arty_a7_top,src) $(call board_list,surfcpu_arty_a7_top,src?),\
               $(wildcard rtl/lib/*.v) $(BD)/rtl/arty_a7_clocks.v $(BD)/rtl/surfcpu_arty_a7_top.v \
               sim/board/stubs/surfcpu_soc.v)
 TOP_DEFS  = $(if $(SOC_REAL),,-DSURFCPU_SOC_STUB)

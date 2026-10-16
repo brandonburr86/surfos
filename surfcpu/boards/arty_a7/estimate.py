@@ -45,7 +45,7 @@ def design_files(design: str, kind: str) -> list[str]:
     out = []
     for line in (BD / "designs" / f"{design}.files").read_text().splitlines():
         line = line.split("#", 1)[0].split()
-        if line and line[0] == kind:
+        if line and line[0] in (kind, kind + "?"):
             out += sorted(str(p.relative_to(ROOT)) for p in ROOT.glob(line[1]))
     return out
 

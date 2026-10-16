@@ -4,7 +4,8 @@
 # tools/check-wiring.py. Kinds:
 #   top <module>              the top-level module
 #   require <file>            the build stops unless this file exists
-#   src <file>                Verilog source (synthesis)
+#   src <file>                Verilog source (synthesis); the build stops if a pattern matches nothing
+#   src? <file>               the same, but may match nothing (a later track's files)
 #   inc <dir>                 include directory
 #   mem <file>                $readmemh data the sources load by name
 #   xdc <file>                top-level constraints, read in this order

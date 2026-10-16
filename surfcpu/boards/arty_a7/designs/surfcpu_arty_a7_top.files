@@ -6,7 +6,7 @@ require  rtl/soc/surfcpu_soc.v
 src      rtl/lib/*.v
 src      rtl/cpu/*.v
 src      rtl/soc/*.v
-src      rtl/soc/ddr/*.v
+src?     rtl/soc/ddr/*.v                  # the ddr track's bridge, when merged
 src      rtl/peripherals/*.v
 src      boards/arty_a7/rtl/arty_a7_clocks.v
 src      boards/arty_a7/rtl/surfcpu_arty_a7_top.v
