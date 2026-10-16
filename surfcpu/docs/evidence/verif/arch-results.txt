@@ -1,0 +1,203 @@
+# riscv-arch-test 4.1.0 on the reference (Spike, contract patch), 2026-10-15
+# python3 tools/rvarch.py build --jobs 4; python3 tools/rvarch.py check;
+# python3 tools/rvrun.py --dut "python3 tools/rvspike_tb.py" --suites arch
+# reference: contract Spike, --isa=rv32im_zicsr_zifencei_zicntr_zihpm --priv=m --pmpregions=0 --triggers=0 -m0x80000000:0x400000
+
+177 tests built; each passes its self-check on Spike; 167 also compared by trace.
+retirements on Spike: total 2451871, longest Sm_csr_ro-00 and Sm_csr_ro-01 (83362 each), shortest ExceptionsSm_medeleg_m-00 (418)
+reference signatures: 177/177 as recorded in sim/ref/arch/reference.sha256
+runner against the Spike stand-in: arch 177 passed 0 failed; 2451871 retirements compared in 32.9 s (4 jobs)
+
+judged by self-check only (they read a timing CSR):
+  Sm_mcsr_access-00      reads mip: judged by its self-check, not the trace
+  Sm_mcsr_cntr-00        reads mcycle: judged by its self-check, not the trace
+  Sm_mcsr_walk-02        reads mip: judged by its self-check, not the trace
+  SsstrictSm_CSR-08      reads mip: judged by its self-check, not the trace
+  SsstrictSm_CSR-21      reads mcycle: judged by its self-check, not the trace
+  SsstrictSm_CSR-22      reads mcycleh: judged by its self-check, not the trace
+  SsstrictSm_CSR-23      reads cycle: judged by its self-check, not the trace
+  SsstrictSm_CSR-24      reads cycleh: judged by its self-check, not the trace
+  Zicntr-csrrc-00        reads cycle: judged by its self-check, not the trace
+  Zicntr-csrrs-00        reads cycle: judged by its self-check, not the trace
+
+reference signatures that the stock Spike (no contract patch) gets different, i.e. tests whose expected results depend on ISA.md's implementation choices:
+  32 of 177: Sm_mcsr_access-00, SsstrictSm_CSR-00 .. SsstrictSm_CSR-30
+
+per test (group, name, retirements, signature words, trace compared):
+  priv/ExceptionsSm  ExceptionsSm-00                  22092    3224 trace
+  priv/ExceptionsSm  ExceptionsSm_medeleg_m-00          418    3036 trace
+  priv/ExceptionsSm  ExceptionsSm_medeleg_s-00          418    3036 trace
+  priv/ExceptionsSm  ExceptionsSm_medeleg_u-00          418    3036 trace
+  priv/Sm            Sm_csr_insufficient_priv-00       2994   15020 trace
+  priv/Sm            Sm_csr_ro-00                     83362   15020 trace
+  priv/Sm            Sm_csr_ro-01                     83362   15020 trace
+  priv/Sm            Sm_inst-00                         641   15020 trace
+  priv/Sm            Sm_mcause-00                       588   15052 trace
+  priv/Sm            Sm_mcsr_access-00                15350   15224 self-check
+  priv/Sm            Sm_mcsr_cntr-00                   5197   15276 self-check
+  priv/Sm            Sm_mcsr_walk-00                  64158   15408 trace
+  priv/Sm            Sm_mcsr_walk-01                  33402   15532 trace
+  priv/Sm            Sm_mcsr_walk-02                   2362   15532 self-check
+  priv/Sm            Sm_mcsr_walk-03                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-04                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-05                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-06                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-07                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-08                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-09                   2490   15532 trace
+  priv/Sm            Sm_mcsr_walk-10                  32900   15408 trace
+  priv/Sm            Sm_mcsr_walk-11                  64178   15532 trace
+  priv/Sm            Sm_misa-00                         588   15040 trace
+  priv/Sm            Sm_mstatus_sd-00                  1474   15148 trace
+  priv/Sm            Sm_scsr_from_m-00                  418   15056 trace
+  priv/Sm            Sm_shadow-00                       418   15032 trace
+  priv/Sm            Sm_xret-00                       14106   15164 trace
+  priv/SsstrictSm    SsstrictSm_CSR-00                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-01                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-02                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-03                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-04                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-05                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-06                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-07                19948   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-08                14404   17020 self-check
+  priv/SsstrictSm    SsstrictSm_CSR-09                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-10                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-11                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-12                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-13                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-14                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-15                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-16                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-17                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-18                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-19                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-20                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-21                14800   17020 self-check
+  priv/SsstrictSm    SsstrictSm_CSR-22                14800   17020 self-check
+  priv/SsstrictSm    SsstrictSm_CSR-23                19882   17020 self-check
+  priv/SsstrictSm    SsstrictSm_CSR-24                19882   17020 self-check
+  priv/SsstrictSm    SsstrictSm_CSR-25                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-26                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-27                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-28                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-29                20773   17020 trace
+  priv/SsstrictSm    SsstrictSm_CSR-30                20938   17020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-00        1677   15204 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-01       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-02       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-03       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-04       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-05       10423   16192 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-06       32330   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-07       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-08       33386   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-09       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-10       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-11       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-12       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-13       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-14       17124   17004 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-15       33848   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-16        1258   15116 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-17       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-18       14074   16620 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-19       17858   17068 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-20       10134   16156 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-21       34578   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-22       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-23       34442   19020 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-24       20125   17336 trace
+  priv/SsstrictSm    SsstrictSm_IllegalInstr-25        8800   16692 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-00        16958   16896 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-01        17998   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-02        18072   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-03        18105   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-04        17998   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-05        18072   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-06        18105   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-07        17998   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-08        18072   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-09        18105   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-10        17998   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-11        18072   17068 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-12        13720   16556 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-13        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-14         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-15        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-16         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-17        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-18         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-19        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-20         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-21        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-22         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-23        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-24         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-25        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-26         1291   15116 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-27        34475   19020 trace
+  priv/SsstrictSm    SsstrictSm_VectorInstr-28         1291   15116 trace
+  rv32i/I            I-add-00                          3610   15412 trace
+  rv32i/I            I-addi-00                         2650   15388 trace
+  rv32i/I            I-and-00                          3618   15412 trace
+  rv32i/I            I-andi-00                         2650   15388 trace
+  rv32i/I            I-auipc-00                         673   15076 trace
+  rv32i/I            I-beq-00                          3948   15428 trace
+  rv32i/I            I-bge-00                          3972   15428 trace
+  rv32i/I            I-bgeu-00                         3972   15428 trace
+  rv32i/I            I-blt-00                          3984   15428 trace
+  rv32i/I            I-bltu-00                         3982   15428 trace
+  rv32i/I            I-bne-00                          4012   15428 trace
+  rv32i/I            I-fence-00                         434   15020 trace
+  rv32i/I            I-jal-00                         16471   15128 trace
+  rv32i/I            I-jalr-00                         3401   15256 trace
+  rv32i/I            I-lb-00                           1325   15144 trace
+  rv32i/I            I-lbu-00                          1325   15144 trace
+  rv32i/I            I-lh-00                           1241   15140 trace
+  rv32i/I            I-lhu-00                          1241   15140 trace
+  rv32i/I            I-lui-00                           665   15076 trace
+  rv32i/I            I-lw-00                           1199   15140 trace
+  rv32i/I            I-nop-00                           418   15020 trace
+  rv32i/I            I-or-00                           3610   15412 trace
+  rv32i/I            I-ori-00                          2650   15388 trace
+  rv32i/I            I-sb-00                           1573   15248 trace
+  rv32i/I            I-sh-00                           1525   15228 trace
+  rv32i/I            I-sll-00                          3602   15412 trace
+  rv32i/I            I-slli-00                         1632   15216 trace
+  rv32i/I            I-slt-00                          3582   15408 trace
+  rv32i/I            I-slti-00                         2640   15384 trace
+  rv32i/I            I-sltiu-00                        2640   15384 trace
+  rv32i/I            I-sltu-00                         3582   15408 trace
+  rv32i/I            I-sra-00                          3610   15412 trace
+  rv32i/I            I-srai-00                         1632   15216 trace
+  rv32i/I            I-srl-00                          3610   15412 trace
+  rv32i/I            I-srli-00                         1632   15216 trace
+  rv32i/I            I-sub-00                          3610   15412 trace
+  rv32i/I            I-sw-00                           1505   15220 trace
+  rv32i/I            I-xor-00                          3610   15412 trace
+  rv32i/I            I-xori-00                         2658   15388 trace
+  rv32i/M            M-div-00                          3618   15412 trace
+  rv32i/M            M-divu-00                         3610   15412 trace
+  rv32i/M            M-mul-00                          3618   15412 trace
+  rv32i/M            M-mulh-00                         3618   15412 trace
+  rv32i/M            M-mulhsu-00                       3618   15412 trace
+  rv32i/M            M-mulhu-00                        3618   15412 trace
+  rv32i/M            M-rem-00                          3610   15412 trace
+  rv32i/M            M-remu-00                         3602   15412 trace
+  rv32i/Zicntr       Zicntr-csrrc-00                   5244   15024 self-check
+  rv32i/Zicntr       Zicntr-csrrs-00                   5244   15024 self-check
+  rv32i/Zicsr        Zicsr-csrrc-00                    1850   15236 trace
+  rv32i/Zicsr        Zicsr-csrrci-00                   1130   15148 trace
+  rv32i/Zicsr        Zicsr-csrrs-00                    1850   15236 trace
+  rv32i/Zicsr        Zicsr-csrrsi-00                   1130   15148 trace
+  rv32i/Zicsr        Zicsr-csrrw-00                    1850   15236 trace
+  rv32i/Zicsr        Zicsr-csrrwi-00                   1130   15148 trace
+  rv32i/Zifencei     Zifencei-fence.i-00                502   15024 trace
+  rv32i/Zihintpause  Zihintpause-pause-00               418   15020 trace
+  rv32i/Zihpm        Zihpm-csrrc-00                    1204   15076 trace
+  rv32i/Zihpm        Zihpm-csrrs-00                    1204   15076 trace
+  rv32i/Zmmul        Zmmul-mul-00                      3618   15412 trace
+  rv32i/Zmmul        Zmmul-mulh-00                     3618   15412 trace
+  rv32i/Zmmul        Zmmul-mulhsu-00                   3618   15412 trace
+  rv32i/Zmmul        Zmmul-mulhu-00                    3618   15412 trace

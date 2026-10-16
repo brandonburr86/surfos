@@ -1,0 +1,18 @@
+# Random programs on the reference, 2026-10-15
+# python3 tools/rvrun.py --dut "python3 tools/rvspike_tb.py" --suites random --seeds 200 --jobs 4
+# generator: tools/rvgen.py (rvgen 1), --length 3000 (static instructions in the body), seeds 1..200;
+# reference: Spike with surfcpu-contract.patch; DUT: the Spike stand-in (so every run must pass)
+
+rvrun summary: random 200 passed 0 failed; 1021781 retirements compared in 17.3 s
+PASS lines: 200
+
+what the 200 reference traces contain (sum over all programs):
+  200 programs, 1021781 retirements
+  traps by mcause: {'0': 4659, '1': 2674, '2': 15722, '3': 4821, '4': 4982, '5': 3819, '6': 4796, '7': 3727, 'b': 4992} total 50192
+  branches 88156, taken 23039; loads into x0 2413
+  55 distinct mnemonics retired: add=7019 addi=197136 and=6866 andi=10019 auipc=30248 beq=53303 bge=3084 bgeu=3107 blt=3400 bltu=3370 bne=21892 csrrc=4921 csrrci=3961 csrrs=156153 csrrsi=4075 csrrw=60697 csrrwi=4800 div=6765 divu=6795 fence=2425 fence.i=1967 fence.tso=289 jal=14862 jalr=17511 lb=9944 lbu=9926 lh=9774 lhu=10041 lui=32516 lw=10045 mret=52088 mul=6951 mulh=6702 mulhsu=6823 mulhu=6908 or=6840 ori=9953 rem=6802 remu=6810 sb=16368 sh=16731 sll=7019 slli=6554 slt=7010 slti=10269 sltiu=9904 sltu=6913 sra=7068 srai=6488 srl=6918 srli=6612 sub=6896 sw=22657 xor=6912 xori=10482
+
+make test-ref runs the same with 12 seeds (REF_SEEDS), plus the generator's own tests on Spike:
+  every illegal word of a 3000-word illegal-only program (seed 4242) traps with mcause 2 and mtval = the word;
+  each of the 6 fault addresses faults for lw, lb, sw, sb (mcause 5/7) and, when 4-aligned, for a fetch (mcause 1);
+  seeds 101 and 102 pass with traps of all nine causes; reproducibility; the never-list.

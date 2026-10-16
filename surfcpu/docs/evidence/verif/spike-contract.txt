@@ -1,0 +1,26 @@
+# Spike against docs/ISA.md section 2: the CSR probe (tools/rvcsrmap.py), 2026-10-15
+# 4096 CSR reads, 4 write patterns + read-back on every contract CSR and 20 others (legal
+# values only for mcause), 32 checks of which CSR instructions count as writes: 5212 probes.
+# Spike commit 5a760667bf0d0ab893173b9eeff9c109c8d7dd9a (devenv/Dockerfile), flags:
+#   --isa=rv32im_zicsr_zifencei_zicntr_zihpm --priv=m --pmpregions=0 --triggers=0 -m0x80000000:0x400000
+
+$ python3 tools/rvcsrmap.py spike --stock     (the container's /opt/spike/bin/spike)
+rvcsrmap: stock Spike: 5212 probes; 423 differ from docs/ISA.md, all of them known:
+  pmp             400 probes  pmpcfg0-15 and pmpaddr0-63 are illegal on Spike with --pmpregions=0; the contract has them as read-only zero
+  triggers         14 probes  tselect, tdata1-3, tinfo and mcontext exist on Spike even with --triggers=0; SurfCPU has no trigger CSRs (illegal)
+  marchid           1 probes  marchid is 5 on Spike (its registered id); 0 on SurfCPU
+  mimpid            1 probes  mimpid is 0 on Spike; 0x00000100 on SurfCPU
+  misa              2 probes  writes to misa can clear M on Spike; SurfCPU ignores them
+  mtvec             2 probes  mtvec MODE bit 0 (vectored) sticks on Spike; SurfCPU's MODE is fixed at 0
+  mcountinhibit     3 probes  mcountinhibit bits 3-31 (hpm counters) are writable on Spike with Zihpm; SurfCPU has only CY and IR
+
+$ python3 tools/rvcsrmap.py spike             (build/third_party/spike-surfcpu: same commit + sim/ref/spike/surfcpu-contract.patch)
+rvcsrmap: Spike with surfcpu-contract.patch: 5212 probes, 0 differ from docs/ISA.md
+
+patch SHA-256 70d43995f7284ec112fdfbda52105f93a3da666c9039318f37ee274434eced71; Spike source tarball SHA-256
+7e59ed05df857727a9f3c07ab99502351a649f9f41e37ecaeeb20a50a3988446; build about 4 minutes (JOBS=4), binary 11 MB.
+
+Before the flags were chosen (stock Spike, --isa=rv32im_zicsr_zifencei_zicntr only): 479 probes differed,
+also hpmcounter3-31(h) illegal (fixed by adding zihpm, which in turn made the mcountinhibit HPM bits writable).
+Without --priv=m (observed in the first experiment): mstatus read 0 at the program's start (MPP = 0) and
+misa 0x40141100 (S and U present). --pmpregions and --triggers default to 16 and 4 (spike --help); not probed.
