@@ -32,9 +32,10 @@ SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
-        synth-soc test-soc-verilator test-soc-gate soc-gpio-real soc-mem-once
+        synth-soc test-soc-verilator test-soc-gate test-soc-boot soc-gpio-real soc-mem-once
 lint: lint-soc
-test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator
+test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator \
+          test-soc-boot
 check: synth-soc test-soc-gate
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
@@ -441,3 +442,27 @@ test-soc-verilator: $(SOC_DIR)/rom_a.mem $(SOC_DIR)/rom_b.mem
 	$(call soc_vl,tb_interconnect,tb_interconnect,$(SOC_IC_TB_SRC))
 	$(call soc_vl,tb_interconnect_noddr,tb_interconnect,$(SOC_IC_TB_SRC),-GHAS_DDR=0)
 	@echo "test-soc-verilator: PASS (10 unit testbenches under Verilator --timing, seed 1)"
+
+# ---------------------------------------------------------------------------- the real system
+# Once the real core and the firmware exist (cpu and fw tracks): build/sim/surfsim runs the fw
+# track's BRAM diagnostics to BRAMDIAG: PASS, and SurfBoot to its banner and, without a card,
+# its monitor, which must answer `help` typed through the UART model. Skipped until then.
+SOC_BOOT_READY := $(and $(wildcard rtl/cpu/surfcpu_core.v),$(wildcard mk/area-fw.mk))
+
+test-soc-boot:
+ifeq ($(SOC_BOOT_READY),)
+	@echo "test-soc-boot: skipped (needs the real core and the firmware of the cpu and fw tracks)"
+else
+	$(Q)$(MAKE) --no-print-directory build-rom $(BUILD)/sim/surfsim > $(SOC_DIR)/boot-build.txt 2>&1 \
+	  || { tail -20 $(SOC_DIR)/boot-build.txt; exit 1; }
+	$(Q)$(BUILD)/sim/surfsim --rom $(BUILD)/fw/bramdiag.mem --max-cycles 400000000 \
+	  --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*' > $(SOC_DIR)/boot-bramdiag.txt 2>&1; \
+	  grep -q "BRAMDIAG: PASS" $(SOC_DIR)/boot-bramdiag.txt || { tail -30 $(SOC_DIR)/boot-bramdiag.txt; exit 1; }
+	@echo "  [bramdiag] $$(grep -o 'BRAMDIAG: PASS ([0-9]* checks)' $(SOC_DIR)/boot-bramdiag.txt), $$(grep -o 'after [0-9]* cycles' $(SOC_DIR)/boot-bramdiag.txt | head -1)"
+	$(Q)printf 'help\r' > $(SOC_DIR)/boot-help.txt
+	$(Q)$(BUILD)/sim/surfsim --rom $(BUILD)/fw/surfboot.mem --uart-in $(SOC_DIR)/boot-help.txt \
+	  --max-cycles 100000000 --expect 'SurfBoot [0-9][\s\S]*monitor commands' \
+	  > $(SOC_DIR)/boot-surfboot.txt 2>&1 || { tail -30 $(SOC_DIR)/boot-surfboot.txt; exit 1; }
+	@echo "  [surfboot] $$(grep -m1 '^SurfBoot ' $(SOC_DIR)/boot-surfboot.txt); the monitor answered help"
+	@echo "test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)"
+endif
