@@ -88,8 +88,11 @@ run() {           # DIR TITLE: one ddr_top_sim run
         echo "== the synthesized netlist of surfcpu_arty_a7_ddr_bramdiag ($board), nothing on the DDR3L pins: make board-netlist-sim exit $(cat "$t/netlist.rc")"
         echo "   (simulated at source $(cat "$t/netlist.source") in $(cat "$t/netlist.minutes") minutes; the netlist of the open-flow build"
         echo "   at $(sed -n 's/^source_revision = "\(.\{12\}\).*/\1/p' "$m" 2>/dev/null) with BUILD_ID $(sed -n 's/^build_id = "\(.*\)"/\1/p' "$m" 2>/dev/null), its boot ROM inside)"
-        grep -E 'netlist_sim: (arty|tb_netlist: [0-9]+ lines|tb_netlist: LEDs|tb_netlist: the memory|tb_netlist: VGA|built in)' "$t/netlist.txt" | sed 's/^/  /'
-        grep 'uart|\|dram|' "$t/netlist.txt" | sed -e 's/^netlist_sim: tb_netlist: */  /' | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'
+        grep -E '^netlist_sim: (arty|built in)' "$t/netlist.txt" | sed 's/^/  /'
+        n=build/sim/board/netlist/$board-surfcpu_arty_a7_ddr_bramdiag
+        grep -q 'Verilator: \$finish' "$n/run.txt" 2>/dev/null ||
+            echo "  stopped before its end, after $(grep -o '[0-9]* ms simulated' "$n/run.txt" | tail -n 1): what follows is as far as it went"
+        run "$n" "the netlist's run (sim/board/netlist_sim.sh, Verilator)"
     fi
 } > "$out"
 {
