@@ -626,6 +626,10 @@ second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbser
    PS/2 port is not exercised: no ROM program reads the keyboard yet, so with the Pmod PS2
    plugged in the design only keeps its lines released.
 
+On an A7-35T the open flow places the design on the whole xc7a50t die, possibly outside the
+region Vivado offers on a 35T, which AMD does not document as usable (OPEN-FLOW.md 6.3). If a
+35T misbehaves where the simulations pass, suspect that first; the 100T has no such question.
+
 **What the serial port should show, expected from simulation** (never observed on a board yet).
 These come from `make board-uart-expect BOARD=arty_a7_100t` (sim/board/uart_expect.sh): the soc
 track's surfsim with `surfcpu_soc` configured exactly as `surfcpu_arty_a7_top` configures it on
