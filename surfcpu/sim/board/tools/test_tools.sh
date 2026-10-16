@@ -489,7 +489,7 @@ run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design 
 check "soc: a missing ROM image refused" has "needs the boot ROM image"
 
 # the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
-ddr_lines='^(define|generated) |rtl/soc/ddr/|build/litedram/|pythondata-cpu-vexriscv|arty_a7_ddr3_|surf_ddr_bridge|^lvs-timeout '
+ddr_lines='^(define|generated|seed) |rtl/soc/ddr/|build/litedram/|pythondata-cpu-vexriscv|arty_a7_ddr3_|surf_ddr_bridge|^lvs-timeout '
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_top.files | grep -Ev "$ddr_lines" > "$t/top2.list"
 check "ddr designs: surfcpu_arty_a7_ddr is surfcpu_arty_a7_top plus the DDR lines" cmp -s "$t/ddr.list" "$t/top2.list"
@@ -557,8 +557,9 @@ run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 gd=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
 check "define: the open flow (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
-check "define: ... with -D ARTY_HAS_DDR, the generated sources and the design's LVS limit" \
-    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -q -- ' $gv/litedram_core.v ' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400' '$FAKE_LOG'"
+check "define: ... with -D ARTY_HAS_DDR, the generated sources, the design's LVS limit and seed" \
+    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -q -- ' $gv/litedram_core.v ' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400 --seed 2' '$FAKE_LOG'"
+check "define: ... and the manifest has the seed" grep -q '^placer_seed = 2$' "$gd/manifest.txt"
 check "define: nextpnr is given the DDR3L pins with their slew and termination" \
     grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
 check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \

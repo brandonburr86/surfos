@@ -1,0 +1,78 @@
+SurfCPU ddr track evidence: the DDR3L pin options reach the open flow's bitstream
+Generated 2026-10-16 by hand (round 2), in surfcpu-openxc7:2026-10-15 (Yosys 0.69, nextpnr-himbaechel
+1.0.0, Project X-Ray), with
+    tools/openxc7-build.sh --top probe --board arty_a7_100t --xdc probe.xdc --out out --no-lvs probe.v
+on the probe below (a flow experiment, not a design). Question: does nextpnr apply SLEW and
+IN_TERM, which boards/arty_a7/nextpnr-xdc.awk now passes on for the DDR3L pins, and what does it
+do with bank 34's VREF? Answer, from the routed FASM: yes, both, and the VREF is set to 675 mV.
+The flow's checks on the probe: synthesis, bitstream, round trip PASS (LVS skipped).
+
+-- probe.v
+  module probe (
+      input  wire       clk100,
+      output wire       a0,        // SSTL135 output, SLEW FAST
+      output wire       a1,        // SSTL135 output, default slew
+      inout  wire       dq0,       // SSTL135 inout, IN_TERM 40
+      inout  wire       dq1,       // SSTL135 inout, no IN_TERM
+      inout  wire       dqs_p, dqs_n,  // DIFF_SSTL135 inout, IN_TERM 40
+      output wire       ck_p, ck_n,    // DIFF_SSTL135 output
+      output wire       led
+  );
+      reg [3:0] c = 0;
+      always @(posedge clk100) c <= c + 1;
+      assign a0 = c[0];
+      assign a1 = c[1];
+      wire i0, i1, is;
+      IOBUF b0 (.IO(dq0), .I(c[2]), .T(c[3]), .O(i0));
+      IOBUF b1 (.IO(dq1), .I(c[3]), .T(c[2]), .O(i1));
+      IOBUFDS bs (.IO(dqs_p), .IOB(dqs_n), .I(c[1]), .T(c[0]), .O(is));
+      OBUFDS oc (.I(c[0]), .O(ck_p), .OB(ck_n));
+      assign led = i0 ^ i1 ^ is;
+  endmodule
+-- probe.xdc
+  set_property -dict {PACKAGE_PIN E3 IOSTANDARD LVCMOS33} [get_ports {clk100}]
+  create_clock -period 10.000 [get_ports {clk100}]
+  set_property -dict {PACKAGE_PIN H5 IOSTANDARD LVCMOS33} [get_ports {led}]
+  set_property -dict {PACKAGE_PIN R2 IOSTANDARD SSTL135 SLEW FAST} [get_ports {a0}]
+  set_property -dict {PACKAGE_PIN M6 IOSTANDARD SSTL135} [get_ports {a1}]
+  set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} [get_ports {dq0}]
+  set_property -dict {PACKAGE_PIN L3 IOSTANDARD SSTL135 SLEW FAST} [get_ports {dq1}]
+  set_property -dict {PACKAGE_PIN N2 IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} [get_ports {dqs_p}]
+  set_property -dict {PACKAGE_PIN N1 IOSTANDARD DIFF_SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} [get_ports {dqs_n}]
+  set_property -dict {PACKAGE_PIN U9 IOSTANDARD DIFF_SSTL135 SLEW FAST} [get_ports {ck_p}]
+  set_property -dict {PACKAGE_PIN V9 IOSTANDARD DIFF_SSTL135 SLEW FAST} [get_ports {ck_n}]
+-- the pins' I/O tiles (prjxray-db artix7/xc7a100tcsg324-1/package_pins.csv)
+  K5 dq0  RIOB33_X57Y89  IOB_Y0     L3 dq1  RIOB33_X57Y95 IOB_Y1     N2/N1 dqs  RIOB33_X57Y93 IOB_Y0/Y1
+  U9/V9 ck  RIOB33_X57Y57 IOB_Y1/Y0  R2 a0  RIOB33_X57Y69 IOB_Y1     M6 a1      RIOB33_X57Y63 IOB_Y0
+  H5 led  RIOB33_X57Y101 IOB_Y1 (bank 35, LVCMOS33)
+-- every I/O standard, slew, termination and VREF feature in the routed FASM (out/probe.fasm):
+  HCLK_IOI3_X146Y78.VREF.V_675_MV
+  RIOB33_X57Y101.IOB_Y1.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVTTL_SSTL135_SSTL15.SLEW.SLOW
+  RIOB33_X57Y57.IOB_Y0.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y57.IOB_Y0.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y57.IOB_Y1.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y57.IOB_Y1.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y63.IOB_Y0.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVTTL_SSTL135_SSTL15.SLEW.SLOW
+  RIOB33_X57Y63.IOB_Y0.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y69.IOB_Y1.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y69.IOB_Y1.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y89.IOB_Y0.IN_TERM.UNTUNED_SPLIT_40
+  RIOB33_X57Y89.IOB_Y0.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y89.IOB_Y0.SSTL135_SSTL15.IN
+  RIOB33_X57Y89.IOB_Y0.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y93.IOB_Y0.IN_TERM.UNTUNED_SPLIT_40
+  RIOB33_X57Y93.IOB_Y0.LVDS_25_SSTL135_SSTL15.IN_DIFF
+  RIOB33_X57Y93.IOB_Y0.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y93.IOB_Y0.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y93.IOB_Y1.IN_TERM.UNTUNED_SPLIT_40
+  RIOB33_X57Y93.IOB_Y1.LVDS_25_SSTL135_SSTL15.IN_DIFF
+  RIOB33_X57Y93.IOB_Y1.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y93.IOB_Y1.SSTL135_SSTL15.SLEW.FAST
+  RIOB33_X57Y95.IOB_Y1.SSTL135.DRIVE.I_FIXED
+  RIOB33_X57Y95.IOB_Y1.SSTL135_SSTL15.IN
+  RIOB33_X57Y95.IOB_Y1.SSTL135_SSTL15.SLEW.FAST
+Reading: a0 and every DQ/DQS/CK pin with SLEW FAST get SSTL135_SSTL15.SLEW.FAST; a1 without it
+gets SLEW.SLOW; dq0 and the DQS pair with IN_TERM UNTUNED_SPLIT_40 get IN_TERM.UNTUNED_SPLIT_40,
+dq1 without it gets none; the DQS pair is a differential input (IN_DIFF); bank 34's HCLK tile
+gets VREF.V_675_MV, half of the DDR3L's 1.35 V, although the XDC reader ignores INTERNAL_VREF.
+The DDR designs' arty_a7_ddr3_pins.xdc uses exactly these options (WIRING.md section 2.5).

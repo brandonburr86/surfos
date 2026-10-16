@@ -624,12 +624,15 @@ CMTs and the 100T 6, each with one MMCM and one PLL, and every 7-series device h
 
 | Target | On | What |
 |---|---|---|
-| `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
+| `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (215 wrapper and fetch.sh checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the bridge's mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (238 wrapper and fetch.sh checks, the DDR designs' defines and generated files among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
-| `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`; section 8) |
+| `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |
+| `board-ddr-sim` | (explicit) | the DDR top in RTL (section 7): with LiteDRAM's controller and DRAM model the BRAM diagnostics' DDR tests, a failed calibration and SurfBoot; with the generated core and its BIOS, no memory (`BOARD=`; needs `make litedram-gen`; about 25 minutes) |
+| `board-uart-expect-ddr` | (explicit) | SurfBoot booting SurfOS with the C++ DDR model, the SoC as the DDR designs configure it (`BOARD=`; section 12) |
+| `sim/board/openxc7_ddr_evidence.sh` | (Mac, explicit) | the DDR designs through the open flow on both boards, diagnostic builds, `program-volatile` with the fake programmer: `docs/evidence/board/openxc7-ddr.txt` |
 | `sim/board/openxc7_soc_evidence.sh` | (Mac, explicit) | both SoC designs for both boards with the open flow, both simulations and `program-volatile` with the fake programmer: `docs/evidence/board/openxc7-soc.txt`, `uart-expect.txt` (about 40 minutes) |
 
 ## 12. First power-up
@@ -675,6 +678,17 @@ second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbser
    and the VGA console (the same text on the monitor). Inserting a card retries the boot. The
    PS/2 port is not exercised: no ROM program reads the keyboard yet, so with the Pmod PS2
    plugged in the design only keeps its lines released.
+4. **`surfcpu_arty_a7_ddr_bramdiag`**, milestone 4: the DDR3L (sections 1 and 7). **Not
+   available yet**: the open flow's DDR builds miss nextpnr's timing for LiteDRAM's 100 MHz
+   clock and stop without a bitstream (section 8); this step waits for a build that passes
+   (Vivado, BUILD-HOST.md, or a flow that closes that timing). Same adapters as step 3, card
+   optional. Optionally a 3.3 V USB-serial adapter on the ChipKit header (its RXD to IO1, ground
+   to GND) at 115200 8N1 shows the memory controller's own calibration log. The memory
+   controller calibrates by itself in about 1 s; the diagnostics wait for it (up to 2 s), then
+   test the DDR3L. If calibration fails, they say so at 1.5 s (`CALIB_FAIL`) and end with FAIL.
+5. **`surfcpu_arty_a7_ddr`** (SurfBoot), with a card that holds SurfOS (`make deploy-sd`): SurfBoot
+   waits for calibration, tests the DDR3L briefly, loads `/BOOT/SURFOS.BIN` into it and starts
+   SurfOS, which ends at its shell prompt. Same wait as step 4 for a bitstream.
 
 On an A7-35T the open flow places the design on the whole xc7a50t die, possibly outside the
 region Vivado offers on a 35T, which AMD does not document as usable (OPEN-FLOW.md 6.3). If a
@@ -749,6 +763,129 @@ fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 cluster
   0 files (0 bytes), 4 directories
 surfboot>
 ```
+
+**The DDR designs, expected from simulation** (never observed on a board; no DDR3 model exists
+here, so these come from LiteDRAM's controller with its behavioural DRAM model, from the exact
+generated core with nothing on its memory pins, and from the C++ DDR model; docs/DDR.md 10.4,
+evidence `docs/evidence/ddr/ddr-top-sim.txt` and `docs/evidence/board/uart-expect-ddr.txt`).
+
+`surfcpu_arty_a7_ddr_bramdiag` with a working DDR3L (`make board-ddr-sim`: the board top in RTL,
+LiteDRAM's controller and its DRAM model in place of the PHY and the chip, calibration done
+2 ms after start where the board's BIOS takes about 1 s; about 2.8 s in all):
+
+```
+
+SurfCPU BRAM diagnostics 1.0.0 (build <id>)
+board Arty A7-100T (0x100), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+bitstream build <id> flags 0, features ff, DDR status 5 size 256 MiB
+identity                           ok (7 checks)
+  ... the same eleven lines as surfcpu_arty_a7_bramdiag ...
+FENCE.I, code written to RAM       ok (2 checks)
+DDR calibration                    ok (1 checks)
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      ok (54 checks)
+DDR boundaries                     ok (98 checks)
+DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+DDR sustained copies               (4 x 256 KiB copied and checked, 738 KiB/s) ok (4 checks)
+code running from DDR              ok (6 checks)
+
+BRAMDIAG: PASS (569 checks)
+```
+
+The copy rate is the simulation's (LiteDRAM's model answers at once; the real memory's latency
+adds little at one 32-bit access at a time). If calibration fails, the DDR lines become, at
+about 1.5 s (the same simulation with the BIOS's failure report, and the exact generated core
+with nothing on its pins, both print this):
+
+```
+DDR calibration                    
+  FAIL calibration did not succeed within 2 s (DDR_STATUS 0x00000006)
+  DDR calibration: 1 of 1 checks failed
+
+BRAMDIAG: FAIL (1 of 204 checks failed)
+```
+
+`DDR_STATUS 0x00000006` is PRESENT and CALIB_FAIL (the bridge's limit, 1.5 s, ran out); `5`
+would be PRESENT and CALIB_DONE. The memory controller's console on IO1 in that simulation (the
+generated core's own BIOS, nothing on the memory pins, so every leveling scan is empty; on a
+working board each byte lane, `m0` and `m1`, shows a run of 1s in one bitslip line, a best
+choice with delays, `Memtest OK` and two speed lines instead):
+
+```
+        __   _ __      _  __
+       / /  (_) /____ | |/_/
+      / /__/ / __/ -_)>  <
+     /____/_/\__/\__/_/|_|
+   Build your hardware, easily!
+ (c) Copyright 2012-2026 Enjoy-Digital
+ (c) Copyright 2007-2015 M-Labs
+ BIOS built on Sep 24 2026 08:42:33
+ BIOS CRC passed (137f0028)
+ LiteX git sha1: b6ae9e0
+--================ SoC =================--
+CPU:		VexRiscv_Lite @ 100MHz
+BUS:		wishbone 32-bit data/32-bit addr
+CSR:		32-bit data big ordering
+ROM:		48.0KiB
+SRAM:		8.0KiB
+L2:		32B
+SDRAM:		256.0MiB 16-bit @ 800MT/s (CL-6 CWL-5)
+MAIN RAM:	16.0MiB
+--=========== Initialization ===========--
+Initializing SDRAM @0x40000000...
+Switching SDRAM to software control.
+Read leveling:
+  m0, b00: |00000000000000000000000000000000| delays: -
+  ... b01 to b07 the same ...
+  best: m0, b00 delays: -
+  m1, b00: |00000000000000000000000000000000| delays: -
+  ... b01 to b07 the same ...
+  best: m1, b00 delays: -
+Switching SDRAM to hardware control.
+Memtest at 0x40000000 (2.0MiB)...
+  bus errors:  256/256
+  addr errors: 8191/8192
+  data errors: 524288/524288
+Memtest KO
+Memory initialization failed
+--============== Console ===============--
+litex> 
+```
+
+(The banner and the section titles carry terminal colour codes; the `Write:`/`Read:` progress
+lines of the memory test overwrite themselves with carriage returns.)
+
+`surfcpu_arty_a7_ddr`, SurfBoot with a card holding SurfOS, through to the shell prompt (`make
+board-uart-expect-ddr`: the soc track's surfsim with the C++ DDR model, calibrated after 0.5 s
+where the board's BIOS takes about 1 s, so `calibrated after` reads about 1000 ms on the board;
+the card's read time is the simulation's card model's; 5.4 s in all):
+
+```
+
+SurfBoot 1.0.0 (build <id>), the SurfCPU boot ROM
+soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream <id>
+ddr: calibrated after 479 ms, 256 MiB, quick test passed (data, address, byte lanes)
+sd: SDHC/SDXC, 64 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+boot: /BOOT/SURFOS.BIN
+boot: loading 358 KiB .....
+boot: SurfOS 1.0.0 build <id>: 367192 bytes in 1 fragment, read in 1791 ms
+boot: load 0x80000000, entry 0x80000000, mem_size 1151152, ISA IM_Zicsr_Zifencei; payload CRC 0xb1726a48 matches (card and DDR)
+boot: command line "ascii"
+boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+
+SurfOS: serial console on the arty_a7 UART (115200 8N1)
+Memory: kernel 0x80000000-0x801190af, DMA heap 0x8011a000-0x80219fff, kernel heap 0x8021a000-0x8effffff (237 MB)
+Booting SurfOS Kernel.....
+  ... the kernel's start-up messages (docs/evidence/board/uart-expect-ddr.txt) ...
+Brandon Burr's SurfOS
+Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+SURF ~#> 
+```
+
+(Sizes, CRCs and the build depend on the kernel built; the prompt is coloured.) With no card,
+SurfBoot calibrates and stops: `SurfBoot stopped: no card (NO_CARD)`, LED code 2.
 
 The VGA monitor shows the same console text, 80 x 30 characters at 640 x 480 and 59.94 Hz (the
 screen the simulation decoded from the pixels is in the same evidence file). The post-synthesis

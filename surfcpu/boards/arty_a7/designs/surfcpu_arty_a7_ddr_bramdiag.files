@@ -46,3 +46,6 @@ generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME BOOTROM_INIT
 rom      build/fw/bramdiag.mem   u_soc.u_bootrom     # the BRAM diagnostics (make build-rom)
 dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --dsp safe
 lvs-timeout 14400                                    # the SoC and LiteDRAM: more than twice the registers
+# The open flow's placer seed: with seed 1 the 35T does not route (router2 stays at 300 to 500
+# overused wires past 300 iterations); seed 2 routes it in 30 (docs/evidence/ddr/openflow-timing.txt)
+seed     2

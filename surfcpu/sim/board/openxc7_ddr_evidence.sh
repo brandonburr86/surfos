@@ -8,7 +8,8 @@
 #      both boards: the gated builds, whose results are the designs' (2026-10-16: nextpnr's timing
 #      for LiteDRAM's 100 MHz clock fails, so they stop after place and route, without a
 #      bitstream);
-#   3. DIAGNOSTIC builds of the same designs with build/openxc7-diag/openxc7-build.sh, a copy of
+#   3. DIAGNOSTIC builds of the bramdiag design (the SurfBoot design differs only in its boot
+#      ROM's contents; LVS alone takes over an hour) with build/openxc7-diag/openxc7-build.sh, a copy of
 #      tools/openxc7-build.sh made here that lets nextpnr finish despite the timing failure
 #      (--timing-allow-fail) and runs every check after it anyway, into build/fpga-diag/: they
 #      show what the timing failure hides (bitstream assembly, round trip, block RAM, LVS, the
@@ -95,8 +96,7 @@ if [ "${DDR_EVIDENCE_DIAG:-1}" = 1 ]; then
         tools/openxc7-build.sh > "$diag"
     chmod +x "$diag"
     diff tools/openxc7-build.sh "$diag" > "$t/diag.diff" || true
-    rm -rf build/fpga-diag
-    for design in $designs; do
+    for design in ${DDR_EVIDENCE_DIAG_DESIGNS:-surfcpu_arty_a7_ddr_bramdiag}; do
         for board in $boards; do
             (
                 t0=$(date +%s)

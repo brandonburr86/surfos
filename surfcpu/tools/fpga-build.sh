@@ -242,6 +242,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
+    [ -z "$seed" ] || set -- "$@" --seed "$seed"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
         --manifest-include "${head#"$root"/}" "$@" $sources
@@ -421,6 +422,8 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
+seed=$(items seed)                                      # the open flow's placer seed (default 1)
+case "$seed" in *[!0-9]*) die "$design: seed must be a number" ;; esac
 set +f
 
 # The boot ROM: the design list's "rom FILE INSTANCE" (FILE relative to surfcpu/), or ROM=.
@@ -509,6 +512,7 @@ write_head() {    # the keys known before the run, the same for every flow
         echo "source_dirty = $( [ "$dirty" = 1 ] && echo true || echo false )"
         echo "build_id = \"$build_id\""
         echo "build_time = $build_time"
+        echo "placer_seed = ${seed:-1}"
         echo "sources_sha256 = \"$(cat_sha $sources)\""
         printf 'defines = ['; for d in $defines; do printf '"%s", ' "$d"; done; echo ']'
         printf 'generated_lists = ['; for l in $gens; do printf '"%s", ' "$l"; done; echo ']'
