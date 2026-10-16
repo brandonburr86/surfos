@@ -1,0 +1,9 @@
+# make -C surfcpu build-kernel: sizes, the ISA audit, the packages (2026-10-16, build 25e64da3f934)
+   text	   data	    bss	    dec	    hex	filename
+ 360793	    616	 779856	1141265	 116a11	../build/riscv32/arty_a7/surfos.elf
+ 357613	    544	 781968	1140125	 11659d	../build/riscv32/qemu_virt/surfos.elf
+ 410185	    544	 781968	1192697	 1232f9	../build/riscv32/qemu_virt-O0/surfos.elf
+isacheck: ../build/riscv32/arty_a7/surfos.elf: 47989 instructions, 53 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+isacheck: ../build/riscv32/qemu_virt/surfos.elf: 47762 instructions, 51 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+isacheck: ../build/riscv32/qemu_virt-O0/surfos.elf: 60895 instructions, 50 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+SURFOS.BIN not built: no tools/surfimg.py (the fw track's packer) in this tree
