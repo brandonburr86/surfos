@@ -1,7 +1,7 @@
 #!/bin/sh
 # SurfCPU board track: the whole SoC through the open flow, for the record. On the Mac, from
 # surfcpu/, with Docker and both images, on a committed tree (the ROMs and bitstreams carry the
-# commit); about 45 minutes. Nothing is programmed and nothing leaves the Mac.
+# commit); about 40 minutes. Nothing is programmed and nothing leaves the Mac.
 #   1. make build-rom, once: the boot ROM images of this commit (nothing rebuilds them later);
 #   2. make build-fpga FLOW=openxc7 for surfcpu_arty_a7_bramdiag (the BRAM diagnostics,
 #      milestone 3) and surfcpu_arty_a7_top (SurfBoot) on both boards, the two boards of a
@@ -124,7 +124,7 @@ EOF
             echo "image: $(field image "$m"); $(field yosys "$m" | cut -d'(' -f1)/ $(field nextpnr "$m" | sed 's/.*(\(.*\))/nextpnr-himbaechel \1/')"
             echo "build: BUILD_ID $(top_key build_id "$m"), source $(top_key source_revision "$m"), dirty = $(top_key source_dirty "$m"), BUILD_TIME $(top_key build_time "$m")"
             echo "boot ROM: $(top_key rom_image "$m"), sha256 $(top_key rom_sha256 "$m")"
-            echo "  built from the copy $b/$(ls "$b/rom")$(cmp -s "$b/rom/$(ls "$b/rom")" "$(top_key rom_image "$m")" && echo ', identical to the file make build-rom wrote')"
+            echo "  built from the copy $b/rom/$(ls "$b/rom")$(cmp -s "$b/rom/$(ls "$b/rom")" "$(top_key rom_image "$m")" && echo ', identical to the file make build-rom wrote')"
             echo "bitstream: $b/$design.bit"
             echo "  $(wc -c < "$b/$design.bit" | tr -d ' ') bytes, sha256 $(shasum -a 256 "$b/$design.bit" | cut -d' ' -f1)"
             echo "  manifest bitstream_sha256 $(top_key bitstream_sha256 "$m")"
@@ -166,7 +166,7 @@ EOF
                 else echo "  its $nb UART characters DIFFER from the RTL simulation's:"; head -c "$nb" "$rtl" | diff - "$n" | head -n 20 | sed 's/^/    /'
                 fi
                 echo "  the netlist's UART output:"
-                tr -d '\r' < "$n" | sed 's/^/    | /'
+                tr -d '\r' < "$n" | awk '{ print "    | " $0 }'
             fi
             case "$board" in arty_a7_35t) id=0x0362d093; other=arty_a7_100t; oid=0x03631093 ;; *) id=0x03631093; other=arty_a7_35t; oid=0x0362d093 ;; esac
             if FAKE_LOG="$t/ofl.log" FAKE_IDCODE=$id OPENFPGALOADER=sim/board/tools/fake/openFPGALoader \
@@ -197,10 +197,10 @@ EOF
         echo "== $board: make board-uart-expect exit $(cat "$t/uart-expect-$board.rc")"
         grep '^uart_expect:' "$t/uart-expect-$board.txt" | sed 's/^/  /'
         echo "-- surfcpu_arty_a7_bramdiag (build/fw/bramdiag.mem):"
-        tr -d '\r' < "$t/uart-$board/bramdiag.txt" | sed 's/^/  | /'
+        tr -d '\r' < "$t/uart-$board/bramdiag.txt" | awk '{ print "  | " $0 }'
         echo "-- surfcpu_arty_a7_top (build/fw/surfboot.mem), the card:"
         sed 's/^/  /' "$t/uart-$board/mkcard.txt"
-        tr -d '\r' < "$t/uart-$board/surfboot.txt" | sed 's/^/  | /'
+        tr -d '\r' < "$t/uart-$board/surfboot.txt" | awk '{ print "  | " $0 }'
         if [ -f "$t/uart-$board/screen.txt" ]; then
             echo "-- the VGA screen at the end of the SurfBoot run (text decoded from the pixels):"
             sed 's/^/  | /' "$t/uart-$board/screen.txt"

@@ -132,7 +132,8 @@ module tb_netlist;
                 $display("tb_netlist: VGA hsync every %0.3f us (%0d), vsync every %0.3f ms (%0d)",
                          hs_period / 1.0e6, hs_edges, vs_period / 1.0e9, vs_edges);
             else
-                $display("tb_netlist: VGA syncs not running (%0d hsync, %0d vsync edges)", hs_edges, vs_edges);
+                $display("tb_netlist: VGA syncs: %0d hsync and %0d vsync edges, too few to measure both periods",
+                         hs_edges, vs_edges);
             if (fd != 0) $fclose(fd);
         end
     endtask
