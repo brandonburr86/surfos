@@ -16,7 +16,8 @@
 #
 # Variables: REF_SEEDS (random programs, default 12 for test-ref, 50 for test-cpu-ref),
 # REF_DUT_SEEDS (the testbench's --seed values, default 1,2,3), REF_JOBS (default 4),
-# REF_DUT (default $(BUILD)/cpu/surfcpu_tb), REF_ILAT / REF_DLAT (MIN:MAX latencies),
+# REF_DUT (default $(BUILD)/cpu/surfcpu_tb), REF_ILAT / REF_DLAT (MIN:MAX latencies, default
+# 1:4 and 1:6 so that the testbench seeds vary the bus timing; empty = the testbench's 1:1),
 # REF_FORMAL_CHECKS (default all), REF_FORMAL_TIMEOUT (seconds), REF_FORMAL_OPTS (for gen).
 # Passing runs leave no traces on disk (tools/rvrun.py); failures keep a cut-down pair.
 
@@ -27,8 +28,8 @@ REF_CFLAGS    = -march=$(RV_ARCH) -mabi=$(RV_ABI) -nostdlib -nostartfiles -Wl,--
 REF_JOBS     ?= 4
 REF_DUT      ?= $(BUILD)/cpu/surfcpu_tb
 REF_DUT_SEEDS ?= 1,2,3
-REF_ILAT     ?=
-REF_DLAT     ?=
+REF_ILAT     ?= 1:4
+REF_DLAT     ?= 1:6
 REF_STANDIN   = $(PYTHON) tools/rvspike_tb.py
 
 REF_DIRECTED_SRC = $(sort $(wildcard sim/ref/directed/*.S))

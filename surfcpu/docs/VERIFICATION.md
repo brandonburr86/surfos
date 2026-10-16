@@ -17,13 +17,14 @@ agree on these programs. Simulation only; nothing here touches the board.
 | Command (from `surfcpu/`) | What it does | Needs |
 |---|---|---|
 | `make test-ref` | the machinery's own tests (on `make test-cpu`): unit tests, the CSR probe on both Spikes, the runner against the Spike stand-in (directed, random, riscv-arch-test, CSR probe), the runner's injected-fault self-test, the riscv-formal smoke check | the container; network once (Spike, riscv-arch-test and riscv-formal sources, SHA-256 checked) |
-| `make test-cpu-ref` | the comparison that matters: `build/cpu/surfcpu_tb` against Spike, all suites, 50 random seeds, testbench seeds 1,2,3 | the core (cpu track) |
+| `make test-cpu-ref` | the comparison that matters: `build/cpu/surfcpu_tb` against Spike, all suites, 50 random seeds, testbench seeds 1,2,3 with `--ilat 1:4 --dlat 1:6` | the core (cpu track) |
 | `make ref-spike` / `make ref-arch` | build the contract-patched Spike / the riscv-arch-test programs and their references | |
 | `make ref-formal` | riscv-formal on the core (slow: [section 10](#10-riscv-formal)) | the core |
 | `python3 tools/rvrun.py --help` | the runner, with every option | |
 
 Variables for `make test-cpu-ref`: `REF_SEEDS` (random programs, default 50),
-`REF_DUT_SEEDS` (default `1,2,3`), `REF_ILAT`/`REF_DLAT` (`MIN:MAX` bus latencies),
+`REF_DUT_SEEDS` (default `1,2,3`), `REF_ILAT`/`REF_DLAT` (`MIN:MAX` bus latencies, default
+`1:4` and `1:6`; empty for the testbench's 1:1),
 `REF_DUT` (another testbench command), `REF_JOBS` (default 4). For `make ref-formal`:
 `REF_FORMAL_CHECKS`, `REF_FORMAL_TIMEOUT` (seconds), `REF_FORMAL_OPTS`.
 
