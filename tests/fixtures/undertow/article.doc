@@ -1,0 +1,50 @@
+# a realistic article: navigation, a search form, headings, a figure, lists, a table, a quotation, a footer
+url: https://surfnews.example.test/reports/2026-10-11-north-shore.html
+type: text/html
+charset:
+title: North Shore surf report: a big swell arrives | Surf News
+notice: forms are not supported
+truncated:
+link 1: https://surfnews.example.test/reports/2026-10-11-north-shore.html#main
+  label: Skip to content
+link 2: https://surfnews.example.test/
+  label: Surf News
+link 3: https://surfnews.example.test/
+  label: Home
+link 4: https://surfnews.example.test/reports/
+  label: Reports
+link 5: https://surfnews.example.test/forecasts/
+  label: Forecasts
+link 6: https://surfnews.example.test/about/
+  label: About
+link 7: https://surfnews.example.test/authors/kai
+  label: Kai Makoa
+link 8: https://surfnews.example.test/spots/pipeline
+  label: Pipeline
+link 9: https://surfnews.example.test/spots/sunset
+  label: Sunset Beach
+link 10: https://surfnews.example.test/spots/waimea
+  label: Waimea Bay
+link 11: https://surfnews.example.test/guides/big-waves
+  label: guide to big waves
+link 12: https://surfnews.example.test/forecasts/north-shore
+  label: See the full forecast
+link 13: https://surfnews.example.test/reports/2026-10-04
+  label: Last week’s report
+link 14: https://tides.example.test/honolulu
+  label: Tide tables
+link 15: https://surfnews.example.test/privacy
+  label: Privacy
+link 16 (unusable): mailto:tips@surfnews.example.test
+  label: Send us a tip
+link 17: https://surfnews.example.test/reports/2026-10-11-north-shore.html#top
+  label: Back to top
+anchor main: 11:1
+anchor conditions: 20:1
+anchor spots: 26:1
+anchor safety: 33:1
+heading 11: North Shore surf report: a big swell arrives
+heading 20: Conditions
+heading 26: Spot by spot
+heading 33: Safety
+heading 43: Related

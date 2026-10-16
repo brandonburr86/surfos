@@ -145,6 +145,8 @@ int kcmdinfo(int index, struct kcmd_info *out) { return (int)ret(sc(SYS_kcmdinfo
 int tcp_listen(unsigned short port) { return (int)ret(sc(SYS_listen, port, 0, 0)); }
 int tcp_accept(int fd, struct netaddr *peer) { return (int)ret(sc(SYS_accept, fd, (long)peer, 0)); }
 int tcp_connect(unsigned int ip, unsigned short port) { return (int)ret(sc(SYS_connect, (long)ip, port, 0)); }
+int getentropy(void *buf, size_t len) { return (int)ret(sc(SYS_getentropy, (long)buf, (long)len, 0)); }
+int net_resolve(const char *host, unsigned int *ip) { return (int)ret(sc(SYS_resolve, (long)host, (long)ip, 0)); }
 int netinfo(struct netinfo *ni) { return (int)ret(sc(SYS_netinfo, (long)ni, 0, 0)); }
 int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) { return (int)ret(sc(SYS_poll, (long)fds, (long)nfds, timeout_ms)); }
 int openpty(void) { return (int)ret(sc(SYS_openpty, 0, 0, 0)); }

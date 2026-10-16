@@ -1,0 +1,24 @@
+{
+  "description": "Free child cipher contexts before freeing a failed TLS 1.3 transform. Applied only to a build-directory copy; original vendor extraction is unchanged.",
+  "source": "library/ssl_tls13_keys.c",
+  "source_sha256": "9a38abaa2bd372fca190f018786a1001c831e8db31010c6a88e2987f66125a68",
+  "patched_sha256": "ecab3acc14377aa7df89ea1a7c7dbbf010268b66ffc5a169fc0b8460a4addc5c",
+  "replacements": [
+    {
+      "old": " *  TLS 1.3 key schedule\n",
+      "new": " *  TLS 1.3 key schedule\n *  SurfOS 2026-10-12: free partially initialized TLS 1.3 transforms on failure.\n"
+    },
+    {
+      "old": "        mbedtls_free(transform_earlydata);\n",
+      "new": "        mbedtls_ssl_transform_free(transform_earlydata);\n        mbedtls_free(transform_earlydata);\n"
+    },
+    {
+      "old": "        mbedtls_free(transform_handshake);\n",
+      "new": "        mbedtls_ssl_transform_free(transform_handshake);\n        mbedtls_free(transform_handshake);\n"
+    },
+    {
+      "old": "        mbedtls_free(transform_application);\n",
+      "new": "        mbedtls_ssl_transform_free(transform_application);\n        mbedtls_free(transform_application);\n"
+    }
+  ]
+}

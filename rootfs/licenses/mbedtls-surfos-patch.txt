@@ -1,0 +1,12 @@
+SurfOS local change to Mbed TLS 3.6.7 (2026-10-12)
+
+The compiled ssl_tls13_keys.c includes mbedtls_ssl_transform_free() before the
+raw free in the early-data, handshake and application-transform failure paths.
+This releases child cipher contexts after a partial allocation failure.
+
+The original release archive and extracted vendor files remain unchanged.
+The reviewed changes and input/output SHA-256 hashes are recorded in source at
+third_party/patches/mbedtls-3.6.7-tls13-cleanup.json. tools/patch-webdeps.py creates
+the checked build-directory copy used by both the target and host tests.
+
+The original Mbed TLS license is included beside this notice.

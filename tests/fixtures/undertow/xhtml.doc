@@ -1,0 +1,10 @@
+# application/xhtml+xml: <tag /> is a whole element (an empty <script /> hides nothing)
+url: https://example.test/dir/page.html
+type: application/xhtml+xml
+charset:
+title: XHTML
+notice:
+truncated:
+link 1: https://example.test/dir/next.html
+  label:
+anchor top: 1:1

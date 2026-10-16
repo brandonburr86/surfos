@@ -25,6 +25,8 @@ Thin wrappers over int 0x80 (user/libsurf/syscalls.c): -1 and errno on failure.
 ssize_t read(int fd, void *buf, size_t n);
 ssize_t write(int fd, const void *buf, size_t n);
 int close(int fd);
+/* Strict hardware entropy, at most 256 bytes; zero length succeeds. */
+int getentropy(void *buf, size_t len);
 off_t lseek(int fd, off_t off, int whence);
 int unlink(const char *path);
 int rmdir(const char *path);

@@ -10,7 +10,7 @@ on:
 jobs:
   build-and-boot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential gcc-multilib libc6-dev-i386 nasm qemu-system-x86 python3 \
-            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk
+            grub-pc-bin grub-common grub-efi-amd64-bin xorriso mtools ovmf dosfstools fdisk gdisk openssl
 
       - name: Unit tests (host)
         run: make unittest
@@ -29,6 +29,11 @@ jobs:
 
       - name: Build and smoke test at -O0 and -O2
         run: make test-all
+
+      - name: Deterministic browser tests at -O0 and -O2
+        run: |
+          make O=0 test-web
+          make O=2 test-web
 
       - name: GRUB ISO
         run: make iso
@@ -51,4 +56,5 @@ jobs:
             build/O0/surfos.sym
             build/usb/
             build/usb-test/
+            build/web-test/
           if-no-files-found: ignore

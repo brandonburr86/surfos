@@ -28,6 +28,7 @@ make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for
 make test-usb     # boot that image under OVMF from emulated USB sticks: 15 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
+make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
 make test-tcp     # the TCP stack against hand-made segments: tools/qemu-tcp.py (+ rawnet.py), QEMU 7.2 or later
 make debug        # QEMU paused with the gdb stub; gdb build/O0/surfos.bin -ex 'target remote :1234'
 make iso          # GRUB ISO for real hardware or other emulators (carries the initrd as a module)
@@ -84,6 +85,7 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            standard headers and surf.h), bin/*.c (built into the initrd's /bin: sh, edit, ls, cp, mv, rm, mkdir, df, fstest,
            pagetest, kcmdtest, nettest, ptytest, rx (one file from the network), ...), surfsh/ (the SurfOS shell: main,
            editor, complete, parse, run, builtins),
+           undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
            telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
@@ -235,3 +237,13 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   it through `user/libsurf/sysnum.h`); errors come back as negative POSIX `errno` values.
   The editor uses only `ttyctl(TTY_RAW)`, `ttyctl(TTY_GETSIZE)` and the ANSI subset that
   `include/surfos/tty.h` lists; `rawkeys` and `ansi` in the shell show both sides.
+
+## Undertow validation
+
+The browser and its dependencies are described in `docs/UNDERTOW.md`. Changes must
+retain TLS verification, the production/test-root boundary, the 2048 link/anchor
+limits and separate 1 MiB string budget. Run `make unittest` and `make test-web` at
+O0/O2, plus the normal smoke/Files and USB tests. Public interoperability is a
+separate online check (`tools/qemu-web.py --public`), never a deterministic CI gate.
+On the Undertow worktree use `SURFOS_VOLUME=surfos-undertow-build` for every Docker
+build, and keep O0/O2 exports separate because `build/images` is shared by levels.

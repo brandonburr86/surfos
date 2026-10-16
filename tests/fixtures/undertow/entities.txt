@@ -1,0 +1,15 @@
+Named: © 2026 – café crème brûlée, «guillemets», 5 €, ½ × 4 ÷ 2 ± 1°.
+
+Arrows ← → ↑ ↓ ↔, maths − ≤ ≥ ≠ ′ ″, marks † ‡ § ¶ • · … ‰.
+
+Quotes: ‘single’ “double” ‚low’ „low“ ‹angle› it's "so".
+
+Numeric: © © ☺ 😀 – (a windows-1252 dash) � (a replacement character).
+
+Without semicolons: © 2026, fish & chips, x < y > z.
+
+Unknown names stay: &bogus; &unknownname; AT&T &c.
+
+A legacy name starts a longer word: ¬anentity; but ∉ is a name.
+
+Soft hyphens vanish; spaces: a b c d.

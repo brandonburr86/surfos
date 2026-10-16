@@ -1,0 +1,28 @@
+Main heading
+
+Text under it.
+
+Second level
+
+Text right after a heading, without a paragraph.
+
+Third with a link[1] inside
+
+Fourth
+on two lines
+
+Fifth
+
+Sixth
+
+Unclosed heading
+
+The next heading closes it
+
+A heading inside
+
+another
+
+closes the first
+
+The end.

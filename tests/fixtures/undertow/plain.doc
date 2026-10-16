@@ -1,0 +1,7 @@
+# text/plain as it is: tabs to 8-column stops, CR LF line ends, no trailing spaces, one blank line at most
+url: https://example.test/dir/page.html
+type: text/plain
+charset:
+title:
+notice:
+truncated:

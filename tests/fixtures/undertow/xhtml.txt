@@ -1,0 +1,4 @@
+Self-closing tags close themselves in XHTML.
+Line two.
+
+[1]An empty link stands alone.

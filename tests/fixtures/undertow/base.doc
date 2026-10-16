@@ -1,0 +1,13 @@
+# the first <base href> that resolves counts for every link, even those before it; a fragment stays on the page
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Base
+notice:
+truncated:
+link 1: https://mirror.example.test/docs/page2.html
+  label: A relative link before the base
+link 2: https://example.test/dir/page.html#top
+  label: A fragment stays on this page
+link 3: https://mirror.example.test/docs/page3.html
+  label: A relative link after the base

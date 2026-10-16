@@ -1,0 +1,7 @@
+# UTF-8: any script, combining characters, references above U+FFFF; U+2028 is a space
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: UTF-8 — ünïcödé
+notice:
+truncated:

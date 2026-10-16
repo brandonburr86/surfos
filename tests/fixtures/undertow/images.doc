@@ -1,0 +1,13 @@
+# images: alt text in brackets, nothing without it; in a link the alt text is the label
+url: https://example.test/dir/page.html
+type: text/html
+charset:
+title: Images
+notice:
+truncated:
+link 1: https://example.test/home
+  label: Home
+link 2: https://example.test/shop
+  label: Cart Shop
+link 3: https://example.test/blank
+  label:

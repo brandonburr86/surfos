@@ -1,0 +1,17 @@
+Code follows.
+
+int main(void) {
+        printf("tab stops every 8 columns\n");
+    return 0;           /* two tabs */
+}
+
+/* two blank lines above become one */
+<b>entities</b> and tags work inside pre
+
+Text after the pre.
+
+  indented
+    pre
+
+x       y       z
+ab      cd      e

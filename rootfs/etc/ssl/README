@@ -1,0 +1,23 @@
+cert.pem: the certificate authorities Undertow trusts for HTTPS (/initrd/etc/ssl/cert.pem)
+
+Source:   curl's extraction of Mozilla's CA certificate store, the bundle dated 2026-09-25
+          (data from Mozilla as of Fri Sep 25 03:12:01 2026 GMT)
+          https://curl.se/ca/cacert-2026-09-25.pem (from https://curl.se/docs/caextract.html)
+SHA-256:  a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505  (188900 bytes, 121 certificates)
+          checked on 2026-10-11 against curl's published https://curl.se/ca/cacert-2026-09-25.pem.sha256
+          and a fresh download; third_party/undertow-lock.json records the same values, and
+          "tools/fetch-webdeps.py --check" compares this file with them.
+Licence:  MPL-2.0, as Mozilla's certdata.txt it is made from (https://mozilla.org/MPL/2.0/).
+          The file is unchanged, header included.
+
+Undertow reads the file once per run, at the first HTTPS address, and accepts a server's
+certificate chain only when it ends at one of these roots (Mbed TLS 3.6.7, third_party/README.md).
+All 121 load: one root has a P-521 key and some are signed with SHA-512 or (three old roots) SHA-1,
+which Undertow's Mbed TLS can read; a root's own signature is never what is checked.
+
+Updating is a deliberate change, never a download at run time: take a newer dated file from curl,
+check it against its .sha256, replace cert.pem, and update the values above and the "ca_bundle"
+entry of third_party/undertow-lock.json in the same commit.
+
+Only these production roots belong here. Test certificate authorities (the host tests', the
+QEMU fixtures') never go under rootfs/: tools/qemu-web.py builds its own test initrd.

@@ -16,6 +16,15 @@ fi
 docker build --platform "$PLATFORM" -t "$IMAGE" "$ROOT/devenv"
 docker volume create "$VOLUME" > /dev/null
 
+# 10/11/26 (Undertow): Mbed TLS for the browser's HTTPS, pinned in third_party/undertow-lock.json, is fetched and
+# checked here, on this machine (tools/fetch-webdeps.py, third_party/README.md): the volume's copy of the tree is
+# replaced by this one below, so anything fetched only inside Docker would be gone at the next build. When this
+# fails, make runs the tool again in Docker and says what is missing there. A tree without the tool has none.
+if [ -f "$ROOT/tools/fetch-webdeps.py" ]; then
+    python3 "$ROOT/tools/fetch-webdeps.py" \
+        || echo "build: Mbed TLS was not fetched here (above); the build in Docker will try again" >&2
+fi
+
 # Synchronize deletions as well as edits, preserving only generated build output.
 # macOS metadata must not enter the source archive; GNU tar needs no BSD switches.
 TAR_OPTIONS=()

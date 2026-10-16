@@ -1,0 +1,15 @@
+<title>Mismatched tags</title>
+<p>Bold <b>and <i>italic</b> overlap</i> without harm.
+<p>An unclosed paragraph is closed by the next one.
+<div>A div closes the paragraph before it.</div>
+<ul><li>An item in a list that is never closed
+<li>Another
+</div>
+<p>The stray end tag above closed nothing; this paragraph is still in the list.</p>
+</ul>
+<div><ul><li>Item in a div</div>
+<p>The div's end tag closed its list too.</p>
+<p>Stray end tags: </span></table></li></b> are ignored.</p>
+</p>
+<p>A lone end tag of a paragraph is an empty paragraph.</p>
+<div><table><tr><td>Cell</div> still in the cell</td><td>next</td></tr></table>After the table, still in the div.</div>

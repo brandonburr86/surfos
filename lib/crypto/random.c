@@ -27,6 +27,7 @@ A mutex guards the generator: task context only.
 #include <surfos/sync.h>
 #include <crypto/crypto.h>
 #include <blibc_common.h>
+#include <fs/vfs.h>
 
 #define CPUID_1_ECX_RDRAND  (1u << 30)
 
@@ -93,13 +94,21 @@ static bool rdrand_checked, rdrand_ok;
 
 /* RDRAND r32 is 0f c7 /6; written as bytes so no assembler option is needed. The carry flag
    says whether a value came; Intel advises ten tries before calling the unit broken. */
+#ifdef CRYPTO_RANDOM_TEST
+/* Linked only into host tests, never the kernel or its public API. */
+extern bool crypto_test_rdrand32(u32 *value);
+#endif
 static bool rdrand32(u32 *v) {
     u32 x;
     u8 ok;
     int i;
     for(i = 0; i < 10; i++) {
+#ifdef CRYPTO_RANDOM_TEST
+        ok = crypto_test_rdrand32(&x);
+#else
         asm volatile(".byte 0x0f, 0xc7, 0xf0\n\t"      /* rdrand %eax */
                      "setc %1" : "=a"(x), "=qm"(ok) : : "cc");
+#endif
         if(ok) {
             *v = x;
             return true;
@@ -192,4 +201,36 @@ void crypto_random_source(crypto_entropy_fn fn) {
     rdrand_checked = false;                 /* the kernel's source looks at CPUID again */
     crypto_wipe(&drbg, sizeof(drbg));
     mutex_unlock(&random_lock);
+}
+
+/* Strict entropy for TLS (10/10/26). Each call checks eight hardware samples, then
+   fills private storage before publishing any bytes. There is no cached health bit,
+   DRBG, lock or other shared mutable state: Wi-Fi and simultaneous callers cannot
+   influence this path. A failed startup check is EIO; missing instruction is ENOSYS. */
+int crypto_random_strong(void *buf, size_t len) {
+    struct { u8 bytes[256]; u32 value, previous; } tmp;
+    size_t offset, n;
+    int i, changed = 0, result = 0;
+    if(len > sizeof(tmp.bytes)) { result = -EINVAL; goto out; }
+    if(!len) goto out;
+    if(!buf) { result = -EFAULT; goto out; }
+    if(!cpu.has_cpuid || !(cpu.features_ecx & CPUID_1_ECX_RDRAND)) {
+        result = -ENOSYS; goto out;
+    }
+    tmp.previous = 0;
+    for(i = 0; i < 8; i++) {
+        if(!rdrand32(&tmp.value)) { result = -EIO; goto out; }
+        if(i && tmp.value != tmp.previous) changed = 1;
+        tmp.previous = tmp.value;
+    }
+    if(!changed) { result = -EIO; goto out; }
+    for(offset = 0; offset < len; offset += n) {
+        if(!rdrand32(&tmp.value)) { result = -EIO; goto out; }
+        n = len - offset < 4 ? len - offset : 4;
+        put32(tmp.bytes + offset, tmp.value, n);
+    }
+    memcpy(buf, tmp.bytes, len);
+out:
+    crypto_wipe(&tmp, sizeof(tmp));
+    return result;
 }

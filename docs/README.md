@@ -12,6 +12,7 @@ as the restoration; new work happens here.
 | [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [GUI.md](GUI.md) | SurfOS desktop, Calculator, Sketch, mouse input and current touchpad limits |
+| [UNDERTOW.md](UNDERTOW.md) | The HTTP/HTTPS text browser: commands, certificate checks, limits, testing and interoperability |
 | [GRAPHICS.md](GRAPHICS.md) | Basic 2D framebuffer drawing, `gfxinfo`, `gfxtest`, the kernel interface and text-console recovery |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
@@ -28,6 +29,7 @@ make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
 make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (15 scenarios)
 make unittest     # host unit tests
+make test-web     # deterministic HTTP/HTTPS browser scenarios in QEMU
 make test-tcp     # TCP against hand-made segments (tools/qemu-tcp.py)
 ```
 

@@ -1,0 +1,19 @@
+Tide times
+Day | High water | Low water
+Monday | 06:12 | 12:31
+Tuesday | 06:55 | 13:14
+Wednesday | - | 14:02
+Thursday | 07:40 | -
+- | Morning | Evening
+Sat | 06:10 | 18:40
+
+A table for layout:
+
+Home[1]
+News[2] | The article is in the second cell.
+
+Its second paragraph.
+
+Outer cell | inner one | inner two
+inner row two
+A cell outside any table is just text.

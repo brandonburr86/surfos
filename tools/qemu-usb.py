@@ -1112,6 +1112,17 @@ def scenario_usbnet(args, image, firmware, outdir):
                                  (f'httpget 10.0.2.2 {port} /usbnet', ['200 OK', 'SurfOS HTTP test OK: /usbnet', 'bytes received'])]:
                 ok, _ = run_cmd(vm, cmd, expects)
                 results.append((cmd.replace(str(port), '<port>'), ok))
+            # 10/11/26 (track F): Undertow over the adapter, a page by --dump and one in the browser. HTTP only: these
+            # guests have QEMU's default CPU, without RDRAND, so HTTPS would refuse to start (tools/qemu-web.py tests it)
+            ok, _ = run_cmd(vm, f'undertow --dump http://10.0.2.2:{port}/usbnet-undertow',
+                            ['SurfOS HTTP test OK: /usbnet-undertow', 'HTTP 200 OK, HTTP unencrypted'])
+            results.append(('undertow --dump http://10.0.2.2:<port>/usbnet-undertow', ok))
+            vm.send(f'undertow http://10.0.2.2:{port}/usbnet-view\n')
+            ok = all(vm.expect(e, 30) for e in ('Loading http://10.0.2.2:', '[HTTP unencrypted]',
+                                                 'SurfOS HTTP test OK: /usbnet-view', 'undertow> '))
+            vm.send('q\n')
+            ok = vm.expect(PROMPT, 30) and ok
+            results.append(('undertow: a page in the browser over the adapter, then q', ok))
             ok, out = run_cmd(vm, f'httpget 10.0.2.2 {port} /big', ['line 00000 of 16384', 'bytes received'], timeout=120)
             m = re.search(r'(\d+) bytes received in (\d+) ms(.*)', out)
             got = int(m.group(1)) if m else 0
