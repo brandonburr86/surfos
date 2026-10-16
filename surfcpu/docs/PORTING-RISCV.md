@@ -397,8 +397,8 @@ blocks that never failed first, a refused run again block by block; a card that 
 requests in one sync and took none is asked nothing more in it), so one bad block does not hold
 back its neighbours. A sync returns 0 only when every block that was dirty when it began reached
 the card (B12; before, after 8 rounds of another task's writing it returned 0 with a directory
-block still dirty), and gives up on such a block once its present hold has lasted 10 s (B18: a
-task killed with buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
+block still dirty), and gives up on such a block once syncs have waited 10 s for its hold (B18:
+a task killed with buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
@@ -527,10 +527,16 @@ not from the file's first cluster.
 
 Since audit B12-B19 (counted the same way, before = d7452f4): every workload above sends the
 same requests and blocks, but 4 MiB in 4 KiB pieces on a 1 GiB FAT32 volume, 105 requests
-instead of 119 (a block waits only for older changes, so making room writes fewer small runs);
-the host's CPU time is within 5 % on each (bcache-review.txt section 5). The bookkeeping costs
-memory: each of the cache's 1024 buffers grows from 580 to 628 bytes on i386 (the change
-numbers and the list links: 48 KiB), each struct bdev by 44 bytes.
+instead of 119 (a FAT sector no longer waits for every dirty data block, only for the older
+ones, so the run of data still being filled is no longer cut in pieces); the host's CPU time
+is within 5 % on each (bcache-review.txt section 8). The bookkeeping costs memory: each of the
+cache's 1024 buffers grows from 580 to 628 bytes on i386 (the change numbers, the list links,
+three flags and when a sync began to wait for its hold: 48 KiB), each struct bdev by 44 bytes.
+On SurfCPU (the RTL system, the same simulator and ROM, d7452f4's kernel against this one):
+test-os-persist's write run 0.9 % fewer cycles, its reboot run 1.0 % more, test-os-faults' run
+on the card that refuses 3.7 % more and its full card 0.3 % fewer; the commands that sync take
+4-19 % fewer cycles, the 160 KiB `cp` 1.7 % more, and a boot about 2 million more (a package
+6.5 KB larger to load, a larger cache to clear; bcache-review.txt section 10).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
