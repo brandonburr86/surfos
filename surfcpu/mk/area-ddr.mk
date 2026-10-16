@@ -7,7 +7,8 @@
 #   make check-mig       the MIG recipe without Vivado (project files, provenance, wiring, Tcl dry run)
 #   make prove-ddr       formal proofs of the mailbox and the bridge (on check)
 #   make test-ddr-mutants  the mutation check of the tests (slow; not on check)
-#   make litedram-gen    generate the LiteDRAM core for the Arty (fetches pinned sources; not on check)
+#   make litedram-gen    generate the LiteDRAM cores for the Arty and simulation, check them against
+#                        ip/litedram/arty.sha256 (fetches pinned sources; on check-openflow)
 
 DDR_RTL      = rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_mailbox.v
 DDR_RTL_ALL  = $(DDR_RTL) rtl/lib/surf_sync.v
@@ -18,10 +19,10 @@ DDR_JOBS    ?= 4
 DDR_LINT     = $(VERILATOR_LINT) -Irtl/soc/ddr
 
 # The fast testbench uses short limits so the watchdog and calibration tests run quickly;
-# the defaults build checks the bridge exactly as the SoC instantiates it.
+# the defaults build checks the bridge exactly as the board top instantiates it.
 DDR_FAST_G   = -GTIMEOUT_CYCLES=512 -GCALIB_TIMEOUT_CYCLES=20000
 DDR_FAST_D   = -DTB_TIMEOUT_CYCLES=512 -DTB_CALIB_TIMEOUT_CYCLES=20000
-DDR_DEF_D    = -DTB_TIMEOUT_CYCLES=4096 -DTB_CALIB_TIMEOUT_CYCLES=25000000
+DDR_DEF_D    = -DTB_TIMEOUT_CYCLES=4096 -DTB_CALIB_TIMEOUT_CYCLES=37500000
 DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initial unique -Wall \
                -Wno-DECLFILENAME -Irtl/generated -Irtl/lib -Irtl/soc/ddr --top-module surf_ddr_bridge
 
@@ -112,30 +113,37 @@ test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-ic
 
 # ---- LiteDRAM, the open flow's controller (ip/litedram/). litedram-setup fetches the pinned
 # generator (once, network); litedram-gen generates the Arty core (with its calibration BIOS)
-# and the simulation core, and records what came out; test-ddr-litedram runs the bridge and the
-# adapter against the simulation core's real controller (on check-openflow: it needs the network
-# the first time and is the open flow's controller).
+# and the simulation core from the same ip/litedram/arty.yml, records what came out and checks
+# the files against ip/litedram/arty.sha256 (the DDR designs build from them); test-ddr-litedram
+# runs the bridge and the adapter against the simulation core's real controller (on
+# check-openflow: it needs the network the first time and is the open flow's controller).
 LITEDRAM_OUT = $(BUILD)/litedram
 LITEDRAM_ENV = $(BUILD)/third_party/litedram/env.sh
-LITEDRAM_SIM = $(LITEDRAM_OUT)/arty_sim/gateware/litedram_core.v
+LITEDRAM_SIM = $(LITEDRAM_OUT)/arty_sim/gateware/litedram_sim.v
 LITEDRAM_ARTY = $(LITEDRAM_OUT)/arty/gateware/litedram_core.v
+LITEDRAM_GEN = ip/litedram/generate.sh ip/litedram/run_gen.py $(LITEDRAM_ENV)
 
 $(LITEDRAM_ENV): ip/litedram/setup.sh
 	$(Q)ip/litedram/setup.sh
 
-$(LITEDRAM_SIM): ip/litedram/arty_sim.yml ip/litedram/generate.sh $(LITEDRAM_ENV)
-	$(Q)ip/litedram/generate.sh ip/litedram/arty_sim.yml $(LITEDRAM_OUT)/arty_sim --sim
+$(LITEDRAM_SIM): ip/litedram/arty.yml ip/litedram/sim_config.py $(LITEDRAM_GEN)
+	$(Q)ip/litedram/generate.sh ip/litedram/arty.yml $(LITEDRAM_OUT)/arty_sim --sim --name litedram_sim
 
-$(LITEDRAM_ARTY): ip/litedram/arty.yml ip/litedram/generate.sh $(LITEDRAM_ENV)
+$(LITEDRAM_ARTY): ip/litedram/arty.yml $(LITEDRAM_GEN)
 	$(Q)ip/litedram/generate.sh ip/litedram/arty.yml $(LITEDRAM_OUT)/arty
 
-.PHONY: litedram-setup litedram-gen test-ddr-litedram lint-ddr-adapter
+.PHONY: litedram-setup litedram-gen litedram-check test-ddr-litedram lint-ddr-adapter
 litedram-setup: $(LITEDRAM_ENV)
 
 litedram-gen: $(LITEDRAM_ARTY) $(LITEDRAM_SIM)
-	$(Q)$(PYTHON) ip/litedram/inspect_core.py $(LITEDRAM_OUT) > $(LITEDRAM_OUT)/summary.txt
+	$(Q). $(LITEDRAM_ENV) && python3 ip/litedram/inspect_core.py $(LITEDRAM_OUT) > $(LITEDRAM_OUT)/summary.txt \
+	  || { cat $(LITEDRAM_OUT)/summary.txt; exit 1; }
 	$(Q)ip/litedram/estimate.sh $(LITEDRAM_OUT)/arty >> $(LITEDRAM_OUT)/summary.txt
 	@cat $(LITEDRAM_OUT)/summary.txt
+	$(Q)ip/litedram/lock.sh check
+
+# the generated files are those ip/litedram/arty.sha256 records (as tools/fpga-build.sh checks)
+litedram-check: litedram-gen
 
 lint: lint-ddr-adapter
 lint-ddr-adapter:
@@ -165,7 +173,7 @@ test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
 	@grep -E '^tb_ddr_litedram: [a-z]' $(DDR_OUT)/litedram.jitter.txt | sed 's/^/  /'
 	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"
 
-check-openflow: test-ddr-litedram
+check-openflow: test-ddr-litedram litedram-check
 
 # Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
 test-ddr-mutants:

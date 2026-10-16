@@ -1,7 +1,7 @@
 /*
 SurfCPU DDR bridge
 --------------------
-File: surf_ddr_bridge.v Date: 10/15/26 (SurfCPU)
+File: surf_ddr_bridge.v Date: 10/16/26 (SurfCPU)
 --------------------
 The SurfBus slave in front of the DDR3L controller (docs/DDR.md). The SurfBus side runs on
 the SoC clock (clk, sys_clk); the controller side is the AMD MIG 7-series native user
@@ -47,7 +47,7 @@ its answer is dropped, and every later access waits for it.
 */
 module surf_ddr_bridge #(
     parameter integer TIMEOUT_CYCLES       = 4096,      // watchdog, sys_clk cycles after acceptance
-    parameter integer CALIB_TIMEOUT_CYCLES = 25000000,  // calibration limit, sys_clk cycles (1 s at 25 MHz); 0 = none
+    parameter integer CALIB_TIMEOUT_CYCLES = 37500000,  // calibration limit, sys_clk cycles (1.5 s at 25 MHz); 0 = none
     parameter integer APP_ADDR_WIDTH       = 28,        // MIG app_addr: rank + bank + row + column bits
     parameter integer APP_DATA_WIDTH       = 128,       // MIG app_wdf_data / app_rd_data
     parameter integer DQ_WIDTH             = 16         // memory data width; app_addr counts DQ_WIDTH-bit words

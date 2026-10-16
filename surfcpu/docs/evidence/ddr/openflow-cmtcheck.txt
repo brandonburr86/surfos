@@ -1,0 +1,101 @@
+SurfCPU ddr track evidence: the open flow's clock-tile check on LiteDRAM's PLL
+Generated 2026-10-16 (round 2) from a DIAGNOSTIC build of surfcpu_arty_a7_ddr_bramdiag for the
+arty_a7_100t (sim/board/openxc7_ddr_evidence.sh's diagnostic copy of the flow, nextpnr allowed to
+finish despite its timing failure; the calibration CPU was VexRiscv minimal then, which does not
+change the PLL). devenv/openxc7/cmtcheck.py compares each MMCM/PLL divider of the netlist with
+the FASM fields nextpnr wrote, by AMD's XAPP888 rules.
+
+What cmtcheck reports (check-clocks.txt):
+  u_clocks.u_pix_mmcm (MMCME2_BASE at CMT_TOP_L_LOWER_B_X139Y113):
+    DIVCLK_DIVIDE 2: matches XAPP888
+    CLKFBOUT_MULT_F 18.125: matches XAPP888
+    CLKOUT0_DIVIDE_F 36: matches XAPP888
+  u_clocks.u_sys_pll (PLLE2_BASE at CMT_TOP_R_UPPER_T_X8Y148):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 10: matches XAPP888
+    CLKOUT0_DIVIDE 40: matches XAPP888
+  u_dram.PLLE2_ADV (PLLE2_ADV at CMT_TOP_L_UPPER_T_X139Y148):
+    DIVCLK_DIVIDE 1.0: matches XAPP888
+    CLKFBOUT_MULT 10000: MISMATCH HIGH_TIME 8 (XAPP888: 5000), LOW_TIME 8 (XAPP888: 5000)
+    CLKOUT0_DIVIDE 1000: MISMATCH HIGH_TIME 4 (XAPP888: 500), LOW_TIME 4 (XAPP888: 500)
+    CLKOUT1_DIVIDE 10000: MISMATCH HIGH_TIME 8 (XAPP888: 5000), LOW_TIME 8 (XAPP888: 5000)
+    CLKOUT2_DIVIDE 100: MISMATCH HIGH_TIME 2 (XAPP888: 50), LOW_TIME 2 (XAPP888: 50)
+    CLKOUT3_DIVIDE 100.0: unchecked (duty 0.5, phase 1011010.0)
+  cmtcheck: 54 fields compared, 4 dividers differ from XAPP888, 1 unchecked: FAIL
+
+LiteDRAM's generated Verilog gives the PLL sized literals (`.CLKFBOUT_MULT (5'd16)`,
+`.CLKOUT0_DIVIDE (4'd8)`, `.CLKOUT3_PHASE (7'd90)`), which Yosys's JSON writes as bit strings of
+their width. The netlist's parameters (surfcpu_arty_a7_top.json, cell u_dram.PLLE2_ADV):
+  CLKFBOUT_MULT = '10000'
+  CLKOUT0_DIVIDE = '1000'
+  CLKOUT0_PHASE = '0'
+  CLKOUT1_DIVIDE = '10000'
+  CLKOUT1_PHASE = '0'
+  CLKOUT2_DIVIDE = '100'
+  CLKOUT2_PHASE = '0'
+  CLKOUT3_DIVIDE = '100'
+  CLKOUT3_PHASE = '1011010'
+  DIVCLK_DIVIDE = '1'
+cmtcheck.py's param() takes a 0/1 string as binary only when it has 8 or more characters, so
+"10000" (16) reads as ten thousand, "1000" (8) as a thousand, "100" (4) as a hundred and the
+phase "1011010" (90) as 1011010.0. The FASM nextpnr wrote for the PLL (its tile at
+CMT_TOP_L_UPPER_T_X139Y148) holds the dividers the RTL asks for:
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.DIVCLK_DIVCLK_HIGH_TIME[5:0] = 6'b000001
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.DIVCLK_DIVCLK_LOW_TIME[5:0] = 6'b000001
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.DIVCLK_DIVCLK_NO_COUNT[0]
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKFBOUT_CLKOUT1_HIGH_TIME[5:0] = 6'b001000
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKFBOUT_CLKOUT1_LOW_TIME[5:0] = 6'b001000
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT0_CLKOUT1_HIGH_TIME[5:0] = 6'b000100
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT0_CLKOUT1_LOW_TIME[5:0] = 6'b000100
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT1_CLKOUT1_HIGH_TIME[5:0] = 6'b001000
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT1_CLKOUT1_LOW_TIME[5:0] = 6'b001000
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT2_CLKOUT1_HIGH_TIME[5:0] = 6'b000010
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT2_CLKOUT1_LOW_TIME[5:0] = 6'b000010
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT3_CLKOUT1_HIGH_TIME[5:0] = 6'b000010
+  CMT_TOP_L_UPPER_T_X139Y148.PLLE2_ADV.CLKOUT3_CLKOUT1_LOW_TIME[5:0] = 6'b000010
+  (x16 feedback: 8 + 8; /8: 4 + 4; /16: 8 + 8; /4: 2 + 2; DIVCLK 1: no count)
+
+The same check with only that rule changed (a 0/1 string of any length is binary, as Yosys's JSON
+means it; a string parameter that happens to be 0/1 carries a trailing space there), run as a
+one-off script that imports cmtcheck.py and replaces param(), nothing else:
+  u_clocks.u_pix_mmcm (MMCME2_BASE at CMT_TOP_L_LOWER_B_X139Y113):
+    DIVCLK_DIVIDE 2: matches XAPP888
+    CLKFBOUT_MULT_F 18.125: matches XAPP888
+    CLKOUT0_DIVIDE_F 36: matches XAPP888
+  u_clocks.u_sys_pll (PLLE2_BASE at CMT_TOP_R_UPPER_T_X8Y148):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 10: matches XAPP888
+    CLKOUT0_DIVIDE 40: matches XAPP888
+  u_dram.PLLE2_ADV (PLLE2_ADV at CMT_TOP_L_UPPER_T_X139Y148):
+    DIVCLK_DIVIDE 1: matches XAPP888
+    CLKFBOUT_MULT 16: matches XAPP888
+    CLKOUT0_DIVIDE 8: matches XAPP888
+    CLKOUT1_DIVIDE 16: matches XAPP888
+    CLKOUT2_DIVIDE 4: matches XAPP888
+    CLKOUT3_DIVIDE 4: unchecked (duty 0.5, phase 90)
+  cmtcheck: 54 fields compared, 0 dividers differ from XAPP888, 1 unchecked: PASS
+
+So the clock tiles are encoded as XAPP888 says, and the FAIL is the check's reading of the
+netlist. The fix is the flow track's (devenv/openxc7/cmtcheck.py, param()); it is not changed here.
+The 90-degree output stays "unchecked", as cmtcheck intends for any phase other than 0.
+
+The one-off script (run from surfcpu/ in surfcpu-openxc7:2026-10-15 with the build's --json, --placement
+and --fasm):
+  """One-off analysis (not part of any flow): devenv/openxc7/cmtcheck.py with one change, a
+  parameter that Yosys's JSON writes as a bit string (only 0 and 1, any length) read as binary,
+  so LiteDRAM's sized literals (5'd16 -> "10000") are not read as decimal numbers."""
+  import importlib.util, sys
+  spec = importlib.util.spec_from_file_location("cmtcheck", "devenv/openxc7/cmtcheck.py")
+  m = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(m)
+  orig = m.param
+  def param(cell, name, default):
+      v = cell.get("parameters", {}).get(name)
+      if isinstance(v, str):
+          s = v.strip('"')
+          if s and set(s) <= {"0", "1"} and not v.endswith(" "):
+              return int(s, 2)
+      return orig(cell, name, default)
+  m.param = param
+  sys.argv = ["cmtcheck.py"] + sys.argv[1:]
+  sys.exit(m.main())

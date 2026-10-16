@@ -2,25 +2,29 @@
 """
 SurfCPU wiring checker
 --------------------
-File: check-wiring.py Date: 10/15/26 (SurfCPU)
+File: check-wiring.py Date: 10/16/26 (SurfCPU)
 --------------------
 Checks that the Arty A7 designs' pins agree everywhere (brief section 4, docs/WIRING.md):
 
-  * every top-level port bit of each design (boards/arty_a7/designs/*.files, its `top` module)
-    has exactly one PACKAGE_PIN and an IOSTANDARD in the design's XDC files, and the XDC
-    constrains no port the top does not have;
+  * every top-level port bit of each design (boards/arty_a7/designs/*.files, its `top` module,
+    with the design's `define`s applied to its `ifdef`s) has exactly one PACKAGE_PIN and an
+    IOSTANDARD in the design's XDC files, and the XDC constrains no port the top does not have;
   * no two ports share a pin;
   * docs/WIRING.md has a row for every such port with the same pin, direction (from the
     Verilog), I/O standard and pin options;
   * the row's Digilent name has that pin and I/O standard in both master XDC files
     (boards/arty_a7/digilent/xdc, A7-35 and A7-100), and the pin is in one of the 3.3 V
     banks 14, 15, 16, 35 (Arty A7 schematic Rev. E.0 sheet 7), never the 1.35 V DDR bank 34;
+    a DDR3L row (a "MIG pin" in place of the master XDC's name) has that pin and I/O standard
+    in both of Digilent's MIG projects (ip/mig/digilent/arty-a7-{35,100}/mig.prj, which place
+    the memory in bank 34), and an SSTL135 standard;
   * no unconstrained I/O: every input is a clock, has -max and -min input delays or a false
     path from it, every output -max and -min output delays or a false path to it (inouts both), and
     every get_ports pattern in the design's XDC files matches one of its ports;
-  * the scoped CDC constraints (boards/arty_a7/xdc/cdc) name registers and ports their
-    rtl/lib modules really have (Vivado's names: <reg>_reg, <reg>_reg[i] for vectors), and
-    the clock-renaming get_pins paths exist in the RTL hierarchy.
+  * the scoped CDC constraints (boards/arty_a7/xdc/cdc, and those beside their modules under
+    rtl/) name registers and ports their modules really have (Vivado's names: <reg>_reg,
+    <reg>_reg[i] for vectors, <instance>/<reg>_reg inside a submodule), and the
+    clock-renaming get_pins paths exist in the RTL hierarchy.
 
     python3 tools/check-wiring.py              check every design (exit 1 on any problem)
     python3 tools/check-wiring.py --self-test  show that each kind of mistake is caught
@@ -44,6 +48,11 @@ MASTERS = {
     "A7-35": BOARD / "digilent" / "xdc" / "Arty-A7-35-Master.xdc",
     "A7-100": BOARD / "digilent" / "xdc" / "Arty-A7-100-Master.xdc",
 }
+MIG_PROJECTS = {
+    "A7-35": ROOT / "ip" / "mig" / "digilent" / "arty-a7-35" / "mig.prj",
+    "A7-100": ROOT / "ip" / "mig" / "digilent" / "arty-a7-100" / "mig.prj",
+}
+DDR_STANDARDS = {"SSTL135", "DIFF_SSTL135"}                # bank 34's 1.35 V (MIG projects)
 BANKS_3V3 = {14, 15, 16, 35}                              # VCCO = VCC3V3 (schematic sheet 7)
 BANK_DDR = 34                                             # VCCO = DDRVCC, 1.35 V
 
@@ -85,10 +94,35 @@ def _matching(text: str, start: int) -> int:
     raise WiringError("unbalanced parentheses")
 
 
-def top_ports(sources: list[Path], top: str) -> dict[str, str]:
+def apply_ifdefs(text: str, defines: set[str]) -> str:
+    """The text with `ifdef/`ifndef/`elsif/`else/`endif applied for these defines (nested)."""
+    out, stack = [], []                      # stack: (this branch on, some branch taken)
+    for line in text.split("\n"):
+        m = re.match(r"\s*`(ifdef|ifndef|elsif|else|endif)\b\s*(\w*)", line)
+        if not m:
+            out.append(line if all(on for on, _ in stack) else "")
+            continue
+        kind, name = m.groups()
+        if kind in ("ifdef", "ifndef"):
+            on = (name in defines) == (kind == "ifdef")
+            stack.append((on, on))
+        elif kind == "elsif":
+            _, taken = stack.pop()
+            on = not taken and name in defines
+            stack.append((on, taken or on))
+        elif kind == "else":
+            _, taken = stack.pop()
+            stack.append((not taken, True))
+        else:
+            stack.pop()
+        out.append("")
+    return "\n".join(out)
+
+
+def top_ports(sources: list[Path], top: str, defines: set[str] = frozenset()) -> dict[str, str]:
     """{port bit: direction} for an ANSI-style module header (literal ranges only)."""
     for src in sources:
-        text = strip_comments(src.read_text())
+        text = apply_ifdefs(strip_comments(src.read_text()), set(defines))
         m = re.search(rf"\bmodule\s+{re.escape(top)}\b", text)
         if not m:
             continue
@@ -171,6 +205,17 @@ def read_master(path: Path) -> dict[str, tuple[str, str, int]]:
     return out
 
 
+def read_mig(path: Path) -> dict[str, tuple[str, str]]:
+    """{MIG pin name: (pin, iostandard)} from a MIG project's <PinSelection>."""
+    out: dict[str, tuple[str, str]] = {}
+    for m in re.finditer(r'<Pin\b[^>]*\bIOSTANDARD="(\w+)"[^>]*\bPADName="(\w+)"[^>]*\bname="([^"]+)"',
+                         path.read_text(encoding="utf-8-sig")):
+        out[m.group(3)] = (m.group(2), m.group(1))
+    if not out:
+        raise WiringError(f"{path}: no MIG pins found")
+    return out
+
+
 def read_wiring(path: Path) -> dict[str, dict[str, str]]:
     """{port: row} from the tables of WIRING.md whose header names Port and FPGA pin."""
     rows: dict[str, dict[str, str]] = {}
@@ -190,6 +235,7 @@ def read_wiring(path: Path) -> dict[str, dict[str, str]]:
         if port in rows:
             raise WiringError(f"WIRING.md:{n}: port {port} listed twice")
         row["Master XDC"] = row.get("Master XDC", "").strip("`")
+        row["MIG pin"] = row.get("MIG pin", "").strip("`")
         row["_line"] = str(n)
         rows[port] = row
     return rows
@@ -244,15 +290,28 @@ def port_match(pattern: str, ports) -> list[str]:
     return [p for p in ports if rx.match(p)]
 
 
-def module_regs(module: str) -> tuple[dict[str, bool], set[str]]:
-    """({register name: is a vector}, {port names}) of rtl/lib/<module>.v."""
-    text = strip_comments((ROOT / "rtl" / "lib" / f"{module}.v").read_text())
+def module_file(module: str) -> Path:
+    """The rtl/ file that defines module (rtl/lib/<module>.v first)."""
+    lib = ROOT / "rtl" / "lib" / f"{module}.v"
+    if lib.exists():
+        return lib
+    for f in sorted((ROOT / "rtl").rglob(f"{module}.v")):
+        return f
+    raise WiringError(f"no rtl/ file for module {module}")
+
+
+def module_regs(module: str) -> tuple[dict[str, bool], set[str], dict[str, str]]:
+    """({register name: is a vector}, {port names}, {instance: module}) of the module's file."""
+    text = strip_comments(module_file(module).read_text())
     regs = {}
     for m in re.finditer(r"\breg\b\s*(\[[^\]]+\])?\s*([^;=]+)", text):
         for name in re.findall(r"\b([A-Za-z_]\w*)\b", m.group(2).split("=")[0]):
             regs[name] = m.group(1) is not None
     ports = set(re.findall(r"\b(?:input|output|inout)\s+(?:wire|reg)?\s*(?:\[[^\]]+\])?\s*(\w+)", text))
-    return regs, ports
+    insts = {i: mod for mod, i in re.findall(r"^\s*([A-Za-z_]\w*)\s*(?:#\s*\([^;]*?\))?\s+([A-Za-z_]\w*)\s*\(",
+                                              text, re.M | re.S)
+             if mod not in ("module", "if", "for", "case", "assign", "always", "begin", "end", "else")}
+    return regs, ports, insts
 
 
 def check_timing_coverage(data: dict) -> list[str]:
@@ -276,28 +335,40 @@ def check_timing_coverage(data: dict) -> list[str]:
             if dirn in ("out", "inout") and not outs:
                 errors.append(f"{name}: output {port} has no -max/-min output delay or false path (unconstrained I/O)")
         # clock renaming: the hierarchy the get_pins paths name must exist
-        rtl = "\n".join(strip_comments(sp.read_text()) for sp in d["sources"])
-        for xdc in d["xdc_files"]:
-            text = (BOARD / "xdc" / xdc).read_text()
+        rtl = "\n".join(strip_comments(sp.read_text()) for sp in d["sources"] if "build" not in sp.parts)
+        for xdc in d["xdc_paths"]:
+            text = xdc.read_text()
             for path in re.findall(r"\[get_pins\s+([\w/]+)\]", text):
                 inst = path.split("/")[:-1]
                 ok = all(re.search(rf"\b{re.escape(i)}\s*\(", rtl) for i in inst)
                 if not ok:
-                    errors.append(f"{name}: {xdc}: get_pins {path}: instance path not found in the sources")
-        # scoped CDC constraints: registers and ports of the module
+                    errors.append(f"{name}: {xdc.name}: get_pins {path}: instance path not found in the sources")
+        # scoped CDC constraints: registers and ports of the module (or of its submodules)
         for module, xdc in d["cdc"]:
-            regs, mports = module_regs(module)
-            text = xdc.read_text()
+            regs, mports, insts = module_regs(module)
+            text = "\n".join(l for l in xdc.read_text().splitlines() if not l.lstrip().startswith("#"))
             cells = []
             for arg in re.findall(r"get_cells\s+(?:-quiet\s+)?(\{[^}]*\}|[^\]\s]+)", text):
                 cells += arg.strip("{}").split()
             for cell in cells:
-                m = re.fullmatch(r"(\w+)_reg(\[[^\]]+\])?", cell)
-                if not m or m.group(1) not in regs:
-                    errors.append(f"{name}: {xdc.name}: cell {cell} is not a register of {module}")
-                elif bool(m.group(2)) != regs[m.group(1)]:
+                *path, leaf = cell.split("/")
+                owner, owner_regs = module, regs
+                for inst in path:                   # <instance>/.../<reg>_reg: the submodule's register
+                    sub = insts.get(inst) if owner == module else module_regs(owner)[2].get(inst)
+                    if sub is None:
+                        owner_regs = None
+                        break
+                    owner = sub
+                    owner_regs = module_regs(owner)[0]
+                if owner_regs is None:
+                    errors.append(f"{name}: {xdc.name}: cell {cell}: no instance {'/'.join(path)} in {module}")
+                    continue
+                m = re.fullmatch(r"(\w+)_reg(\[[^\]]+\])?", leaf)
+                if not m or m.group(1) not in owner_regs:
+                    errors.append(f"{name}: {xdc.name}: cell {cell} is not a register of {owner}")
+                elif bool(m.group(2)) != owner_regs[m.group(1)]:
                     errors.append(f"{name}: {xdc.name}: cell {cell}: {m.group(1)} is "
-                                  f"{'a vector' if regs[m.group(1)] else 'a single bit'} in {module}")
+                                  f"{'a vector' if owner_regs[m.group(1)] else 'a single bit'} in {owner}")
             for port in re.findall(r"get_ports\s+(\w+)\]", text):
                 if port not in mports:
                     errors.append(f"{name}: {xdc.name}: {module} has no port {port}")
@@ -310,22 +381,25 @@ def load_all() -> dict:
     for f in sorted(DESIGNS.glob("*.files")):
         items = design_list(f)
         top = items["top"][0][0]
+        defines = {d[0].split("=")[0] for d in items.get("define", [])}
+        # generated sources (build/, e.g. the LiteDRAM core) need not exist for the pins
         srcs = [p for pat in items.get("src", []) for p in expand(pat[0])]
         if not any(re.search(rf"\bmodule\s+{top}\b", strip_comments(s.read_text())) for s in srcs):
             srcs += expand(f"boards/arty_a7/rtl/{top}.v")
         xdcs = [p for pat in items.get("xdc", []) for p in expand(pat[0])]
-        designs[f.stem] = {"top": top, "ports": top_ports(srcs, top), "xdc": read_xdc(xdcs),
-                           "xdc_files": [x.name for x in xdcs], "timing": read_timing(xdcs),
+        designs[f.stem] = {"top": top, "ports": top_ports(srcs, top, defines), "xdc": read_xdc(xdcs),
+                           "xdc_files": [x.name for x in xdcs], "xdc_paths": xdcs, "timing": read_timing(xdcs),
                            "cdc": [(m, ROOT / x) for m, x in items.get("cdc", [])],
                            "sources": srcs}
     return {"designs": designs, "wiring": read_wiring(WIRING),
-            "masters": {k: read_master(v) for k, v in MASTERS.items()}}
+            "masters": {k: read_master(v) for k, v in MASTERS.items()},
+            "migs": {k: read_mig(v) for k, v in MIG_PROJECTS.items()}}
 
 
 def check(data: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     notes: list[str] = []
-    wiring, masters = data["wiring"], data["masters"]
+    wiring, masters, migs = data["wiring"], data["masters"], data["migs"]
     used_ports: set[str] = set()
     for name, d in data["designs"].items():
         ports, xdc = d["ports"], d["xdc"]
@@ -362,6 +436,19 @@ def check(data: dict) -> tuple[list[str], list[str]]:
             if wiring_options(row.get("Options", "-")) != options_of(props):
                 errors.append(f"{name}: {port} options {sorted(options_of(props))} in the XDC but "
                               f"{row.get('Options')} in {where}")
+            if row.get("MIG pin"):                   # a DDR3L pin: Digilent's MIG projects
+                if iostd not in DDR_STANDARDS:
+                    errors.append(f"{name}: {port} is {iostd}, not a 1.35 V DDR3L standard ({where})")
+                for board, mig in migs.items():
+                    m = mig.get(row["MIG pin"])
+                    if not m:
+                        errors.append(f"{name}: {port}: {row['MIG pin']!r} ({where}) is not in the {board} MIG project")
+                    elif m != (pin, iostd):
+                        errors.append(f"{name}: {port} on {pin} {iostd}, but the {board} MIG project has "
+                                      f"{row['MIG pin']} on {m[0]} {m[1]}")
+                continue
+            if iostd in DDR_STANDARDS:
+                errors.append(f"{name}: {port} is {iostd} but has no MIG pin in {where} (only DDR3L pins are 1.35 V)")
             for board, master in masters.items():
                 m = master.get(row["Master XDC"])
                 if not m:
@@ -468,6 +555,30 @@ def self_test() -> int:
         data["designs"][d0]["cdc"] = [(m, tmp if m == "surf_pulse_sync" else x)
                                       for m, x in data["designs"][d0]["cdc"]]
 
+    d1 = "surfcpu_arty_a7_ddr_bramdiag"
+
+    def m_mig(data):          # a DDR3L pin that is not the MIG project's
+        data["designs"][d1]["xdc"]["ddr3_dq[3]"][0][1]["PACKAGE_PIN"] = "L5"
+        data["wiring"]["ddr3_dq[3]"]["FPGA pin"] = "L5"
+
+    def m_ddrstd(data):       # a DDR3L pin with a 3.3 V standard
+        data["designs"][d1]["xdc"]["ddr3_dm[0]"][0][1]["IOSTANDARD"] = "LVCMOS33"
+        data["wiring"]["ddr3_dm[0]"]["I/O standard"] = "LVCMOS33"
+
+    def m_ddrnomig(data):     # an SSTL135 pin without a MIG pin (a 3.3 V bank pin made 1.35 V)
+        data["designs"][d1]["xdc"]["led[2]"][0][1]["IOSTANDARD"] = "SSTL135"
+        data["wiring"]["led[2]"]["I/O standard"] = "SSTL135"
+
+    def m_ifdef(data):        # the DDR ports leak into the design without DDR
+        data["designs"][d0]["ports"]["ddr3_odt"] = "out"
+
+    def m_nested(data):       # a scoped CDC file naming a submodule's register that does not exist
+        import tempfile
+        tmp = Path(tempfile.mkdtemp()) / "surf_ddr_bridge.xdc"
+        tmp.write_text("set_max_delay -datapath_only -from [get_cells {req_box/hodl_reg[*]}] 10\n")
+        data["designs"][d1]["cdc"] = [(m, tmp if m == "surf_ddr_bridge" else x)
+                                      for m, x in data["designs"][d1]["cdc"]]
+
     cases = [("wrong pin", m_pin, "sd_sclk"), ("constrained twice", m_dup, "vga_hs"),
              ("no pin", m_missing, "vga_vs"), ("unknown port", m_extra, "vga_x"),
              ("shared pin", m_shared, "H5"), ("WIRING.md pin", m_wiring, "uart_tx"),
@@ -478,7 +589,12 @@ def self_test() -> int:
              ("only -max input delay", m_noimin, "sd_miso has no clock"),
              ("only -max delay", m_noomin, "output delay or false path"),
              ("dangling get_ports", m_dangling, "vga_q[*] matches no port"),
-             ("CDC cell name", m_cell, "src_toggel_reg")]
+             ("CDC cell name", m_cell, "src_toggel_reg"),
+             ("DDR3L pin vs MIG", m_mig, "MIG project has ddr3_dq[3] on L6"),
+             ("DDR3L standard", m_ddrstd, "not a 1.35 V DDR3L standard"),
+             ("SSTL135 off DDR", m_ddrnomig, "has no MIG pin"),
+             ("ifdef ports", m_ifdef, "ddr3_odt has 0 PACKAGE_PIN"),
+             ("CDC submodule cell", m_nested, "req_box/hodl_reg[*] is not a register of surf_ddr_mailbox")]
     failed = 0
     for label, mutate, word in cases:
         data = copy.deepcopy(base)

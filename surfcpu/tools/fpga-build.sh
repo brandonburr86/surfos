@@ -19,10 +19,12 @@
 # params.tcl in build/fpga/BOARD/DESIGN/stage, runs the non-project flow on the host (over ssh,
 # or in Docker) and brings back out/ (bitstream, reports, vivado.log, build-results.txt).
 # openxc7: it gives tools/openxc7-build.sh the design's sources, include directories, the top's
-# build values as defines, the constraints nextpnr can apply (boards/arty_a7/nextpnr-xdc.awk;
-# the rest is listed as not checked) and --dsp safe, with its output in build/fpga/BOARD/DESIGN/
-# openxc7. Either way it writes build/fpga/BOARD/DESIGN/manifest.txt (SURFCPU_FPGA_OUT replaces
-# build/fpga). Exit 0 only with a bitstream whose checks passed; a new build first removes the
+# build values and the design's own defines as defines, the constraints nextpnr can apply
+# (boards/arty_a7/nextpnr-xdc.awk; the rest is listed as not checked) and --dsp safe, with its
+# output in build/fpga/BOARD/DESIGN/openxc7. Either way it writes build/fpga/BOARD/DESIGN/
+# manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga). A design may read generated files from
+# build/ (the LiteDRAM core of the DDR designs): its "generated" lists (ip/litedram/arty.sha256)
+# give their SHA-256, and the build counts as clean only if they match. Exit 0 only with a bitstream whose checks passed; a new build first removes the
 # previous one's bitstream and results. --dry-run prints every command it would run, without
 # contacting a host or starting Docker, and leaves the last build's results alone.
 # No passwords anywhere: ssh uses your keys, checks the host's key strictly (known_hosts), gives
@@ -236,9 +238,11 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
             *) die "$design: no value for generic $g" ;;
         esac
     done
+    for d in $defines; do set -- "$@" -D "$d"; done
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
+    [ -z "$seed" ] || set -- "$@" --seed "$seed"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
         --manifest-include "${head#"$root"/}" "$@" $sources
@@ -262,8 +266,9 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
     res="$base/openxc7-results.txt"
     problems=
     [ "$1" = 0 ] || problems="tools/openxc7-build.sh exit status $1"
-    check() {         # NAME: the result on the manifest's "check NAME" line
-        [ -f "$om" ] && awk -v n="check $1" 'substr($0, 1, length(n) + 1) == n " " {
+    check() {         # NAME: the result on the manifest's "check NAME" line (nothing without one)
+        [ -f "$om" ] || return 0
+        awk -v n="check $1" 'substr($0, 1, length(n) + 1) == n " " {
             r = substr($0, 21); sub(/ \([^()]*\)$/, "", r); print r; exit }' "$om"
     }
     {
@@ -317,6 +322,27 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             [ -z "$wns" ] || echo "wns_ns = ${wns#+}"
             grep '^clock ' "$ox/timing.txt" | grep -qv ' PASS$' && problems="${problems:+$problems; }timing not met (nextpnr)"
             grep -q '^clock ' "$ox/timing.txt" || problems="${problems:+$problems; }no timing result"
+        elif [ -f "$ox/nextpnr.log" ] && grep -q 'Max frequency for clock' "$ox/nextpnr.log"; then
+            # nextpnr stopped the flow, a clock having missed its constraint, or it was stopped
+            # before routing converged: its last report per clock (after routing, or else the
+            # placer's estimate)
+            fm=$(awk '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c); last[c] = $0
+                      if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
+                      END { for (i = 0; i < n; i++) { l = last[order[i]]; sub(/^(Info|ERROR): */, "", l); gsub(/ +/, " ", l); print l } }' "$ox/nextpnr.log")
+            routed=false
+            grep -q 'Routing complete' "$ox/nextpnr.log" && routed=true
+            echo "nextpnr_routed = $routed"
+            printf 'nextpnr_fmax = ['
+            echo "$fm" | while IFS= read -r l; do printf '%s, ' "$(toml_str "$l")"; done
+            echo ']'
+            late=$(echo "$fm" | sed -n "s/^Max frequency for clock '\{0,1\}\([^': ]*\)'\{0,1\}: \([0-9.]* MHz\) (FAIL at \([0-9.]* MHz\))$/\1 \2 of \3/p" | tr '\n' ',' | sed 's/,$//')
+            if [ "$routed" = true ]; then
+                [ -z "$late" ] || problems="${problems:+$problems; }timing not met (nextpnr: $late)"
+            else
+                it=$(grep 'iter=' "$ox/nextpnr.log" | tail -n 1 | sed -n 's/.*iter=\([0-9]*\) .*overused=\([0-9]*\).*/\1 iterations, \2 overused wires/p')
+                problems="${problems:+$problems; }nextpnr did not finish routing${it:+ (router2 after $it)}"
+                [ -z "$late" ] || problems="$problems; the placer's timing estimate misses too ($late)"
+            fi
         fi
         if [ -f "$ox/utilization.txt" ]; then
             for u in "lut:LUTs (" "lut_positions:LUT positions" "ff:flip-flops" "carry4:carry chains" \
@@ -366,6 +392,32 @@ top=$(items top)
 for r in $(items require); do
     [ -f "$root/$r" ] || die "$design needs $r, which is not on this branch yet; refusing to build (the simulation stand-in sim/board/stubs/surfcpu_soc.v is never built into a bitstream)"
 done
+defines=$(items define)
+for d in $defines; do
+    case "$d" in
+        [A-Za-z_]*) ;;
+        *) die "$design: bad define '$d'" ;;
+    esac
+    case "$d" in *[!A-Za-z0-9_=]*) die "$design: bad define '$d' (NAME or NAME=VALUE: letters, digits, _)" ;; esac
+done
+# Generated files (under build/, never in git): each "generated" list gives their SHA-256 and,
+# on a "# generate:" line, the command that makes them.
+gens=$(items generated)
+for l in $gens; do [ -f "$root/$l" ] || die "$design: the generated-file list $l is missing"; done
+gen_sha() {       # FILE: its SHA-256 in the design's generated lists, or nothing
+    for l in $gens; do awk -v f="$1" '$1 !~ /^#/ && $2 == f { print $1; exit }' "$root/$l"; done | head -n 1
+}
+gen_hint() {      # the command that makes the generated files
+    for l in $gens; do sed -n 's/^# generate: //p' "$root/$l"; done | head -n 1
+}
+for kind in src mem xdc; do
+    for pat in $(items "$kind"); do
+        case "$pat" in
+            build/*) [ -n "$(set +f; expand "$pat")" ] ||
+                die "$design needs $pat, a generated file$( [ -n "$gens" ] && echo " ($(gen_hint))"); refusing to build" ;;
+        esac
+    done
+done
 sources=
 for pat in $(items src); do
     found=$(set +f; expand "$pat")
@@ -392,6 +444,8 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
+seed=$(items seed)                                      # the open flow's placer seed (default 1)
+case "$seed" in *[!0-9]*) die "$design: seed must be a number" ;; esac
 set +f
 
 # The boot ROM: the design list's "rom FILE INSTANCE" (FILE relative to surfcpu/), or ROM=.
@@ -419,10 +473,19 @@ ROMCHECK=${SURFCPU_ROMCHECK:-$root/boards/arty_a7/romcheck.py}
 # ------------------------------------------------------------------------------ build identity
 # Clean means the bitstream is exactly the commit: no tracked file changed, and every file the
 # build reads is in git (a new source that was never added is not in the commit either).
+# A generated file is part of the commit when its SHA-256 is the one its generated list (in
+# git) records: the generator makes the same bytes from the committed inputs.
+gen_ok= gen_bad=
+for f in $sources $incfiles $mems $xdcs; do
+    want=$(gen_sha "$f")
+    [ -n "$want" ] || continue
+    if [ "$(sha "$root/$f")" = "$want" ]; then gen_ok="$gen_ok $f"; else gen_bad="$gen_bad $f"; fi
+done
 if rev=$(git -C "$root" rev-parse HEAD 2>/dev/null); then
     if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then dirty=1; else dirty=0; fi
     untracked=
     for f in $sources $incfiles $mems $xdcs $cdc_files boards/arty_a7/vivado/build.tcl; do
+        case " $gen_ok $gen_bad " in *" $f "*) continue ;; esac
         git -C "$root" ls-files --error-unmatch -- "$f" > /dev/null 2>&1 || untracked="$untracked $f"
     done
     if [ -n "$untracked" ]; then
@@ -433,6 +496,12 @@ else                                                    # no git here (a contain
     rev=${SURFCPU_BUILD_ID:-unknown}
     dirty=${SURFCPU_BUILD_DIRTY:-1}
 fi
+if [ -n "$gen_bad" ]; then
+    dirty=1
+    echo "$me: generated files that differ from the SHA-256 in$( for l in $gens; do printf ' %s' "$l"; done), so the build counts as dirty:$gen_bad"
+    echo "$me: (regenerate them: $(gen_hint))"
+fi
+[ -z "$gen_ok" ] || echo "$me: $(echo $gen_ok | wc -w | tr -d ' ') generated files match$( for l in $gens; do printf ' %s' "$l"; done)"
 build_time=${SOURCE_DATE_EPOCH:-$(date +%s)}
 case "$rev" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) build_id=$(printf '%.8s' "$rev") ;;
@@ -465,7 +534,11 @@ write_head() {    # the keys known before the run, the same for every flow
         echo "source_dirty = $( [ "$dirty" = 1 ] && echo true || echo false )"
         echo "build_id = \"$build_id\""
         echo "build_time = $build_time"
+        echo "placer_seed = ${seed:-1}"
         echo "sources_sha256 = \"$(cat_sha $sources)\""
+        printf 'defines = ['; for d in $defines; do printf '"%s", ' "$d"; done; echo ']'
+        printf 'generated_lists = ['; for l in $gens; do printf '"%s", ' "$l"; done; echo ']'
+        echo "generated_files_match = $( [ -z "$gen_bad" ] && echo true || echo false )"
         echo "constraints_sha256 = \"$(cat_sha $xdcs $cdc_files)\""
         echo "rom_image = \"$rom_image\""
         echo "rom_sha256 = \"$( [ -n "$rom" ] && sha "$romsrc" || true )\""
@@ -507,6 +580,7 @@ tcl_list() { printf '%s' "$*" | tr '\n' ' ' | sed -e 's/  */ /g' -e 's/^ //' -e 
     echo "set part {$part}"
     echo "set sources {$(tcl_list $sources)}"
     echo "set incdirs {$(tcl_list $incdirs)}"
+    echo "set defines {$(tcl_list $defines)}"
     echo "set mems {$(tcl_list $mems)}"
     echo "set xdcs {$(tcl_list $xdcs)}"
     printf 'set cdcs {'

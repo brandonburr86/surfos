@@ -1,7 +1,7 @@
 # SurfCPU: stand-ins for the Vivado Tcl commands boards/arty_a7/vivado/build.tcl uses, so the
 # real build.tcl can run without Vivado (in Yosys's Tcl interpreter) for the wrapper tests.
 # It checks what Vivado would check of the inputs (files exist, the part and top are set, the
-# generics are well formed), logs every call to $FAKE_CALLS, writes small reports in the
+# generics and defines are well formed), logs every call to $FAKE_CALLS, writes small reports in the
 # formats build.tcl parses, and makes the results the test asks for through the environment:
 #   FAKE_WNS, FAKE_WHS      slack in ns (default 10.0 / 0.05)
 #   FAKE_DRC                number of DRC errors (default 0)
@@ -62,6 +62,14 @@ proc synth_design {args} {
         set g [lindex $args [incr i]]
         if {![regexp {^[A-Z_]+=(\"[^\"]*\"|32'h[0-9a-f]{8}|[0-9]+)$} $g]} {
             puts "ERROR: \[synth_design\] malformed -generic $g"
+            exit 1
+        }
+    }
+    set i 0
+    while {[set i [lsearch -start $i -exact $args -verilog_define]] >= 0} {
+        set d [lindex $args [incr i]]
+        if {![regexp {^[A-Za-z_][A-Za-z0-9_]*(=[A-Za-z0-9_]+)?$} $d]} {
+            puts "ERROR: \[synth_design\] malformed -verilog_define $d"
             exit 1
         }
     }

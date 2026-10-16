@@ -4,14 +4,14 @@
 #
 #   ip/litedram/estimate.sh build/litedram/arty
 #
-# Synthesizes litedram_core.v with its calibration CPU (VexRiscv.v from the pinned
+# Synthesizes litedram_core.v with its calibration CPU (VexRiscv_Lite.v from the pinned
 # pythondata-cpu-vexriscv) for the 7 series and prints the cell counts. An estimate from an open
 # tool, not Vivado's: the user port is the top level here, so its pins become OBUF/IBUF cells
 # that would not exist inside the SoC.
 set -eu
 core=$(cd "$1" && pwd -P)
 top=$(cd "$(dirname "$0")/../.." && pwd -P)
-vex=$top/build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv.v
+vex=$top/build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_Lite.v
 cd "$core/gateware"          # the ROM's $readmemh file is found from here
 yosys -q -p "read_verilog $vex litedram_core.v; synth_xilinx -top litedram_core -family xc7 -flatten; tee -q -o $core/synth_stat.txt stat" \
   > "$core/synth.log" 2>&1 || { tail -20 "$core/synth.log"; exit 1; }

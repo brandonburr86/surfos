@@ -6,6 +6,7 @@
 # params.tcl, the sources under surfcpu/ and an out/ directory for the results. params.tcl sets
 #   design top board part      names (the board's part from boards/arty_a7/boards.txt)
 #   sources incdirs mems xdcs  paths relative to surfcpu/
+#   defines                    Verilog defines for synthesis (NAME or NAME=VALUE; ARTY_HAS_DDR)
 #   cdcs                       {module xdc} pairs: constraints scoped to every instance of module
 #   generics                   {NAME value ...} top-level parameters (BOARD, the build identity, ...)
 #   rom                        a $readmemh file for BOOTROM_INIT, relative to surfcpu/ ("" = none)
@@ -87,6 +88,12 @@ foreach {name value} $generics {
 }
 if {$rom ne ""} {
     lappend gen -generic "BOOTROM_INIT=\"[file normalize $rom]\""
+}
+if {![info exists defines]} {
+    set defines [list]
+}
+foreach d $defines {
+    lappend gen -verilog_define $d
 }
 
 # ---------------------------------------------------------------------------- implement
