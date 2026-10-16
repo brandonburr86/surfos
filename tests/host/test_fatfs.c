@@ -1593,30 +1593,33 @@ static void b17d(void) {
 
 static void b18(void) {
     struct ram *x = ram_new("b18", 1024);
-    struct buf *b, *held;
+    struct buf *b, *held[3];
     u_long t0, t1, t2;
-    int r1, r2, r3;
-    fresh("B18: a dirty block whose holder never lets go");
-    held = bread(&x->bd, 10);                       /* "another task" changes block 10, and is killed holding it */
-    memset(held->data, 1, 512);
-    bdirty(held);
+    int r1, r2, r3, k;
+    fresh("B18: dirty blocks whose holder never lets go");
+    for(k = 0; k < 3; k++) {                        /* "another task" changes blocks 10, 12 and 14, and is killed holding them */
+        held[k] = bread(&x->bd, 10 + 2 * k);
+        memset(held[k]->data, 1 + k, 512);
+        bdirty(held[k]);
+    }
+    t0 = clock_ms;                                  /* (its holds began) */
     b = bread(&x->bd, 11);
-    memset(b->data, 2, 512);
+    memset(b->data, 9, 512);
     bdirty(b);
     brelse(b);
-    t0 = clock_ms;
     r1 = bsync(&x->bd);
     t1 = clock_ms;
     r2 = bsync(&x->bd);
     t2 = clock_ms;
-    if(verbose) printf("      syncs %d (%lu ms) and %d (%lu ms)\n", r1, t1 - t0, r2, t2 - t1);
-    check(r1 == -1 && t1 - t0 >= 10000 && t1 - t0 < 12000, "B18: a sync waits 10 s for a holder that never lets go, then says the block was not written");
-    check(r2 == -1 && t2 - t1 < 1000, "B18: the next sync gives up on that hold at once");
-    check(x->mem[11 * 512] == 2 && x->mem[10 * 512] == 0, "B18: the other block is written, the held one is not");
-    check(said("held for 10 s") == 1, "B18: the console says it once");
-    brelse(held);
+    if(verbose) printf("      syncs %d (%lu ms after the holds began) and %d (%lu ms)\n", r1, t1 - t0, r2, t2 - t1);
+    check(r1 == -1 && t1 - t0 >= 10000 && t1 - t0 < 12000,
+          "B18: a sync waits until the holds have lasted 10 s (once for the three), then says their blocks were not written");
+    check(r2 == -1 && t2 - t1 < 1000, "B18: the next sync gives up on those holds at once");
+    check(x->mem[11 * 512] == 9 && x->mem[10 * 512] == 0 && x->mem[14 * 512] == 0, "B18: the other block is written, the held ones are not");
+    check(said("by a task that does not let go") == 3, "B18: the console says it once for each");
+    for(k = 0; k < 3; k++) brelse(held[k]);
     r3 = bsync(&x->bd);
-    check(r3 == 0 && x->mem[10 * 512] == 1, "B18: once it is let go, a sync writes it");
+    check(r3 == 0 && x->mem[10 * 512] == 1 && x->mem[14 * 512] == 3, "B18: once they are let go, a sync writes them");
 }
 
 int main(int argc, char **argv) {
