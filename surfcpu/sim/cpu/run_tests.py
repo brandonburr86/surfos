@@ -15,6 +15,8 @@ A test can carry options in a comment line of its source (.S, or .c for a C test
     // surf-test: spike=no max-cycles=4000000
 spike=no marks a test that needs the testbench's own devices (docs/CPU.md section 9) or
 checks behaviour where docs/ISA.md and Spike legitimately differ, so it is not run on Spike.
+For each test that fails, its first failing run is repeated once with a trace of only the
+last TRACE_TAIL records (--trace-tail), so a runaway program cannot fill the disk.
 Spike runs with Zicntr and Zihpm added to the ISA string, because surfcpu_core implements
 the cycle/time/instret and hpmcounter CSRs (docs/ISA.md section 2). A failing run is repeated with --trace and its trace is kept in --out.
 """
@@ -41,6 +43,8 @@ CONFIGS = [
     ("huge",   "20:100", "20:100", [7],              []),
 ]
 
+TRACE_TAIL = 5000          # records kept in the trace of a failing run
+
 SPIKE = ["spike", "--isa=rv32im_zicntr_zicsr_zifencei_zihpm", "--priv=m", "--pmpregions=0", "-m0x80000000:0x400000"]
 
 
@@ -62,18 +66,30 @@ def test_options(elf: Path) -> dict[str, str]:
     return opts
 
 
-def run_tb(tb: str, elf: Path, cfg: tuple, seed: int, out: Path, max_cycles: int) -> tuple[bool, str]:
-    name, ilat, dlat, _, extra = cfg
-    base = [tb, "--elf", str(elf), "--seed", str(seed), "--ilat", ilat, "--dlat", dlat,
+def tb_command(tb: str, elf: Path, cfg: tuple, seed: int, max_cycles: int) -> list[str]:
+    _, ilat, dlat, _, extra = cfg
+    return [tb, "--elf", str(elf), "--seed", str(seed), "--ilat", ilat, "--dlat", dlat,
             "--max-cycles", str(max_cycles), "--quiet"] + extra
-    r = subprocess.run(base, capture_output=True, text=True, timeout=600)
+
+
+def run_tb(cmd: list[str], label: str) -> tuple[bool, str]:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return False, f"{label}: no result within 600 s"
     if r.returncode == 0:
         return True, ""
-    # keep a trace of the failure for debugging
-    tr = out / f"{elf.stem}.{name}.{seed}.trace"
-    subprocess.run(base + ["--trace", str(tr)], capture_output=True, text=True, timeout=600)
     msg = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
-    return False, f"{name} seed {seed}: exit {r.returncode}: {msg} (trace {tr})"
+    return False, f"{label}: exit {r.returncode}: {msg}"
+
+
+def trace_failure(cmd: list[str], trace: Path) -> None:
+    """Repeat a failing run once, keeping only the last TRACE_TAIL records of its trace."""
+    try:
+        subprocess.run(cmd + ["--trace", str(trace), "--trace-tail", str(TRACE_TAIL)],
+                       capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def run_spike(elf: Path, timeout: int) -> tuple[bool, str]:
@@ -108,19 +124,27 @@ def main() -> int:
             if args.spike:
                 if opts.get("spike", "yes") == "no":
                     continue
-                jobs.append((elf, "spike", pool.submit(run_spike, elf, 120)))
+                jobs.append((elf, [], "spike", pool.submit(run_spike, elf, 120)))
             else:
                 for cfg in CONFIGS:
                     for seed in cfg[3]:
-                        jobs.append((elf, cfg[0], pool.submit(run_tb, args.tb, elf, cfg, seed, out, max_cycles)))
+                        cmd = tb_command(args.tb, elf, cfg, seed, max_cycles)
+                        label = f"{cfg[0]} seed {seed}"
+                        jobs.append((elf, cmd, label, pool.submit(run_tb, cmd, label)))
 
         per_test: dict[str, list[tuple[bool, str]]] = {}
-        for elf, _, fut in jobs:
-            try:
-                ok, msg = fut.result()
-            except subprocess.TimeoutExpired:
-                ok, msg = False, "timeout"
+        first_failure: dict[str, tuple[list[str], str]] = {}
+        for elf, cmd, label, fut in jobs:
+            ok, msg = fut.result()
             per_test.setdefault(elf.stem, []).append((ok, msg))
+            if not ok and elf.stem not in first_failure and cmd:
+                first_failure[elf.stem] = (cmd, label)
+        # one capped trace per failing test, for debugging
+        traces = {}
+        for stem, (cmd, label) in first_failure.items():
+            tr = out / f"{stem}.{label.replace(' seed ', '.')}.trace"
+            trace_failure(cmd, tr)
+            traces[stem] = tr
 
     total = passed = 0
     for name in sorted(per_test):
@@ -132,6 +156,8 @@ def main() -> int:
         for ok, msg in res:
             if not ok:
                 print(f"      {msg}")
+        if name in traces:
+            print(f"      (last {TRACE_TAIL} records of the first failing run: {traces[name]})")
     what = "spike" if args.spike else "surfcpu_tb"
     print(f"{what}: {len(per_test)} tests, {passed}/{total} runs passed ({time.time() - start:.1f} s)")
     if not args.spike:

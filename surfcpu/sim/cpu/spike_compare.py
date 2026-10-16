@@ -140,6 +140,8 @@ def main() -> int:
     elf = Path(a.elf)
     trace = out / (elf.stem + ".trace")
     extra = [x for x in a.tbargs if x != "--"]
+    if "--max-cycles" not in extra:
+        extra += ["--max-cycles", "2000000"]       # bounds the trace of a runaway program
     r = subprocess.run([a.tb, "--elf", str(elf), "--trace", str(trace), "--quiet"] + extra,
                        capture_output=True, text=True)
     if r.returncode != 0:

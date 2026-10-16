@@ -18,7 +18,7 @@ memory, the bus timing, the devices, the ELF loader and the trace writer. Build 
 `make build-cpu` (or `make -C surfcpu build/cpu/surfcpu_tb` inside the container).
 
 ```
-surfcpu_tb --elf FILE [--trace FILE] [--seed N] [--max-cycles N]
+surfcpu_tb --elf FILE [--trace FILE [--trace-tail N]] [--seed N] [--max-cycles N]
            [--ilat MIN:MAX] [--dlat MIN:MAX] [--signature FILE --sig-begin SYM --sig-end SYM]
            [--vcd FILE] [--rand-reset] [--quiet]
 ```
@@ -27,6 +27,7 @@ surfcpu_tb --elf FILE [--trace FILE] [--seed N] [--max-cycles N]
 |---|---|
 | `--elf FILE` | a 32-bit little-endian RISC-V ELF; its `PT_LOAD` segments (by physical address) must lie in the RAM; it must define `tohost` |
 | `--trace FILE` | write the retirement trace (section 2) |
+| `--trace-tail N` | keep only the last N records of the trace (held in memory, written when the run ends, after a comment saying how many were left out), so a runaway program cannot fill the disk; `run_tests.py` uses it for the one trace it keeps of a failing test |
 | `--seed N` | seed of every random choice (bus timing, `IRQ_RANDOM`); default 1 |
 | `--max-cycles N` | give up after N cycles (exit 2); default 10,000,000 |
 | `--ilat MIN:MAX`, `--dlat MIN:MAX` | instruction / data port timing: each request waits 0..(MAX-MIN) cycles for `req_ready`, and its response comes MIN..MAX cycles after acceptance; half of the draws take the shortest value, the rest are uniform. Default 1:1 (no wait states). MIN >= 1 |
@@ -136,6 +137,7 @@ differ (reset values, the CSR map, fetching from MMIO).
 official Spike trace converter, comparator and random generator belong to the verif track
 (`tools/`, docs/VERIFICATION.md).
 
-To debug a failure: the runner keeps a trace of each failing run in `build/cpu/runs/`; rerun
-it with `--vcd FILE` for a waveform, and read the disassembly next to the ELF
-(`build/cpu/tests/<test>.dis`).
+To debug a failure: for each failing test the runner repeats its first failing run once and
+keeps the last 5000 records of its trace in `build/cpu/runs/`; rerun it by hand with
+`--trace` (or `--vcd FILE` for a waveform, both large for long runs) and read the
+disassembly next to the ELF (`build/cpu/tests/<test>.dis`).
