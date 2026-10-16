@@ -174,11 +174,6 @@ void board_print_info(void) {
     if(!boot) printf("  (no SurfBoot boot information: RAM is the linker script's)\n");
 }
 
-/* the 80x30 text display comes with boards/arty_a7/textcon.c */
-const struct board_display *board_display(void) {
-    return NULL;
-}
-
 /* no real-time clock on the Arty */
 bool board_rtc(u64 *seconds) {
     (void)seconds;
