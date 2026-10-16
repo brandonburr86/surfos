@@ -7,6 +7,14 @@ See sdcard.h. Plain C over struct sd_host: no kernel calls, so the same file run
 kernel and in the host test against a simulated card. Timeouts follow the SD Physical
 Layer Simplified Specification's limits with room to spare: 1 s for initialization,
 100 ms for a read's data token, 500 ms of busy after a write.
+
+10/16/26 (milestone 8): card detect is the first thing a read or write looks at, so a card
+that was taken out fails at once (SD_ENOCARD) instead of in a timeout; whoever watches the
+socket (boards/arty_a7/sdblk.c) sets ready to false, and a card put back is initialized
+again before it is used. And after a written block the card refused (a write error, a CRC
+error) the driver waits for the card's busy time before the stop token, as after a block
+it took: the io track's model found the token sent into the busy time, the write-fault
+test (boards/arty_a7/tests/iomodel) being the first to refuse a block inside CMD25.
 */
 
 #include "sdcard.h"
@@ -92,7 +100,8 @@ static u8 wait_token(struct sdcard *sd, u32 ms) {
 static bool read_data(struct sdcard *sd, u8 *buf, u_int len) {
     u_int i;
     u16 crc;
-    for(i = 0; i < len; i++) buf[i] = xf(sd, 0xFF);
+    if(sd->host->rx) sd->host->rx(sd->host->ctx, buf, len);
+    else for(i = 0; i < len; i++) buf[i] = xf(sd, 0xFF);
     crc = (u16)(xf(sd, 0xFF) << 8);
     crc |= xf(sd, 0xFF);
     return crc == sd_crc16(buf, len);
@@ -210,6 +219,7 @@ static int card_status(struct sdcard *sd) {
 }
 
 static int check_range(struct sdcard *sd, u32 lba, u32 count) {
+    if(!sd->host->present(sd->host->ctx)) return fail(sd, SD_ENOCARD, "the card is not in the socket (card detect)");
     if(!sd->ready) return fail(sd, SD_EIO, "the card is not initialized");
     if(!count || (u64)lba + count > sd->blocks) return fail(sd, SD_ERANGE, "a block outside the card");
     if(!sd->block_addr && (u64)(lba + count) * 512 > 0xFFFFFFFFull) return fail(sd, SD_ERANGE, "beyond 4 GB of byte addresses");
@@ -305,7 +315,8 @@ static int write_once(struct sdcard *sd, u32 lba, u32 count, const u8 *buf, u32 
         const u8 *b = buf + i * 512;
         xf(sd, 0xFF);                       /* at least one byte before the token */
         xf(sd, count > 1 ? SD_TOKEN_START_MULTI : SD_TOKEN_START);
-        for(j = 0; j < 512; j++) xf(sd, b[j]);
+        if(sd->host->tx) sd->host->tx(sd->host->ctx, b, 512);
+        else for(j = 0; j < 512; j++) xf(sd, b[j]);
         crc = sd_crc16(b, 512);
         xf(sd, (u8)(crc >> 8));
         xf(sd, (u8)crc);
@@ -313,7 +324,8 @@ static int write_once(struct sdcard *sd, u32 lba, u32 count, const u8 *buf, u32 
         dr = sd_data_response(resp);
         if(dr != SD_DATA_ACCEPTED) {
             err = dr == SD_DATA_CRC_ERROR ? SD_ECRC : fail(sd, SD_EIO, "the card refused a written block");
-            break;
+            wait_ready(sd, T_BUSY_MS);      /* 10/16/26: a card may be busy after refusing a block too: */
+            break;                          /* the stop token waits for it (the io track's model said so) */
         }
         if(!wait_ready(sd, T_BUSY_MS)) {
             err = fail(sd, SD_ETIMEOUT, "busy for more than 500 ms after a write");

@@ -5,6 +5,8 @@ File: test_sd.c   Date: 10/15/26 (SurfCPU)
 --------------------
 boards/arty_a7/sdproto.c against the specification's examples, and sdcard.c against
 the simulated card of sdmodel.c: both capacities and versions, random traffic, faults.
+10/16/26 (milestone 8): the faults of a write and a card taken out in the middle of one,
+as the kernel's sdsim command arms them under QEMU (test_sd_write_faults).
 */
 
 #include <stdio.h>
@@ -63,7 +65,7 @@ static void h_select(void *ctx, bool on) { (void)ctx; sdmodel_select(&model, on)
 static void h_slow(void *ctx, bool slow) { (void)ctx; (void)slow; }
 static bool h_present(void *ctx) { (void)ctx; return model.present; }
 static u32 h_ms(void *ctx) { (void)ctx; return (u32)(fake_bytes / 1000); }    /* 1000 byte times a millisecond */
-static const struct sd_host host = { NULL, h_xfer, h_select, h_slow, h_present, h_ms };
+static const struct sd_host host = { NULL, h_xfer, h_select, h_slow, h_present, h_ms, NULL, NULL };
 
 static void sd_case(const char *what, int v2, int hc, u32 blocks, unsigned seed) {
     u8 *img = malloc((size_t)blocks * 512), *shadow = malloc((size_t)blocks * 512), *buf = malloc(64 * 512);
@@ -146,5 +148,55 @@ static void test_sdcard(unsigned seed) {
     check(sd_init(&sd, &host) == SD_ENOCARD, "no card in the socket");
 }
 
+/* 10/16/26 (milestone 8): a write error, a write command without an answer, and the card taken
+   out after the third of sixteen blocks, then put back */
+static void test_sd_write_faults(unsigned seed) {
+    u32 blocks = 2048, i;
+    u8 *img = calloc(blocks, 512), *buf = malloc(16 * 512), *old = malloc(16 * 512);
+    struct sdcard sd;
+    unsigned long w0;
+    int r;
+    for(i = 0; i < blocks * 512; i++) img[i] = (u8)(i * 13 + seed);
+    sdmodel_init(&model, img, blocks, 1, 1, seed);
+    memset(&sd, 0, sizeof(sd));
+    r = sd_init(&sd, &host);
+    check(r == SD_OK, "write faults: the card initializes");
+    if(r) goto out;
+    memcpy(old, img + 100 * 512, 8 * 512);
+    memset(buf, 0x77, 8 * 512);
+    model.write_errors = 1;
+    r = sd_write(&sd, 100, 8, buf);
+    check(r == SD_EIO && !memcmp(img + 100 * 512, old, 8 * 512) && model.write_errors_sent == 1 && model.status2 == 0,
+          "a write error on the first of 8 blocks: a card error, none of it written, CMD13's error bit read (and so cleared)");
+    model.mute = 1;
+    r = sd_write(&sd, 100, 8, buf);
+    check(r == SD_ETIMEOUT, "a write command that gets no answer times out");
+    r = sd_write(&sd, 100, 8, buf);
+    check(r == SD_OK && !memcmp(img + 100 * 512, buf, 8 * 512), "and the same write goes through afterwards");
+    for(i = 0; i < 16 * 512; i++) buf[i] = (u8)(i * 3 + 1);
+    memcpy(old, img + 200 * 512, 16 * 512);
+    w0 = model.blocks_written;
+    model.pull_after = 3;
+    fake_bytes = 0;
+    r = sd_write(&sd, 200, 16, buf);
+    check(r != SD_OK && model.blocks_written - w0 == 3 && !model.present && fake_bytes < 100000 &&
+          !memcmp(img + 200 * 512, buf, 3 * 512) && !memcmp(img + 203 * 512, old + 3 * 512, 13 * 512),
+          "taken out after 3 of 16 blocks: the write fails at once, the 3 are on the card, the other 13 untouched");
+    check(sd_read(&sd, 0, 1, old) == SD_ENOCARD && sd_write(&sd, 0, 1, old) == SD_ENOCARD,
+          "while it is out, card detect fails every read and write before a byte is sent");
+    sdmodel_set_present(&model, 1);
+    r = sd_read(&sd, 0, 1, old);
+    check(r != SD_OK && !model.spi, "put back, it lost its power: in SD mode it answers nothing until it is initialized");
+    r = sd_init(&sd, &host);
+    check(r == SD_OK && sd_read(&sd, 200, 3, old) == SD_OK && !memcmp(old, buf, 3 * 512) && model.pulls == 1,
+          "initialized again, it reads back the blocks written before it went");
+    check(model.violations == 0, "write faults: no protocol mistakes by the driver");
+out:
+    free(img);
+    free(buf);
+    free(old);
+}
+
 TEST(test_sdproto)
 TEST(test_sdcard)
+TEST(test_sd_write_faults)

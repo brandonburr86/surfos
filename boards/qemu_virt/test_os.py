@@ -34,6 +34,16 @@ image made by tools/mkcard.py (--mkcard: MBR, FAT32, the standard directories of
 section 5, the package in /BOOT) mounted through the SD driver, /USERS/DOCUMENTS found by its
 long name and written to.
 
+10/16/26 (milestone 8, files that persist): on the same simulated card the kernel's sdsim
+command arms the card model's faults (boards/arty_a7/tests/sdmodel.c, after the io track's
+SdFaults): a block answered "write error", a card that refuses every block or answers no
+command, the card taken out and put back, and taken out right after the nth block of a new
+file's write, an rm, an mv and an overwrite. Checked: what the kernel and the command say,
+that nothing hangs, that eject keeps a volume it could not write, what fsck.fat -n finds on
+the card as it was left (with the block cache's write order, audit B3, nothing that points
+at a free cluster or at bytes not written), and, booting the pulled card again, that the
+files read back whole or not at all.
+
 QEMU's virt machine is not SurfCPU: this tests the portable kernel and the qemu_virt HAL
 (boards/qemu_virt), not the Arty's hardware.
 
@@ -552,6 +562,271 @@ def card_boot(args, check, work):
     return transcript
 
 
+# fsck.fat -n findings an interrupted FAT32 write may leave with the block cache's write order (audit B3): clusters
+# marked used that nothing points at, the two FATs differing, a stale free count, the dirty bit. Anything else
+# (an entry pointing at a free cluster, a chain shorter or longer than a size, shared clusters) would be damage.
+FSCK_HARMLESS = ('Dirty bit is set', 'Automatically removing dirty bit', 'FATs differ but appear to be intact',
+                 'Using first FAT', 'Reclaimed ', 'Free cluster summary wrong', 'Auto-correcting')
+FSCK_NOISE = ('fsck.fat ', 'Leaving filesystem unchanged', 'part.img: ')
+
+
+def fsck_findings(report):
+    """fsck.fat -n's report as (harmless findings, other findings), its noise lines left out"""
+    harmless, other = [], []
+    for line in report.splitlines():
+        s = line.strip()
+        if not s or any(s.startswith(n) or n in s for n in FSCK_NOISE):
+            continue
+        (harmless if any(s.startswith(h) for h in FSCK_HARMLESS) else other).append(s)
+    return harmless, other
+
+
+def short(lines):
+    return '; '.join(lines) if lines else 'nothing'
+
+
+def sdsim_card(q, disk):
+    """the card's blocks as they are now (the RAM disk, also while the card is out), or None"""
+    return save_ramdisk(q, os.path.getsize(disk))
+
+
+def seen(q, mark, text, timeout=5):
+    """text anywhere in what the kernel printed since mark (before or after a prompt), waiting up to timeout"""
+    deadline = time.time() + timeout
+    while text.encode() not in q.transcript[mark:]:
+        if time.time() > deadline or not q.alive():
+            return False
+        q.pump(0.1)
+    return True
+
+
+def fault_boot(args, disk, check, work):
+    """milestone 8, under QEMU (sdsim): write faults of the card model (boards/arty_a7/tests/sdmodel.c, the io track's
+    SdFaults write_error and no_response) during file writes. A refused block is written again by the next sync; a card
+    that refuses everything makes the command that wrote say so, nothing hangs, eject keeps the volume mounted; once the
+    card works again sync writes it all, and the host finds every other file as it was"""
+    q, _, _ = stub_boot(args, disk, work, 'sdsim')
+    big = mkimage.foreign_big()
+    bad = re.compile(r'Kernel panic|Wipeout|killed')
+    try:
+        ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+        check(ok and '+VFS: sd0p1 mounted on /sd0p1 (fat)' in q.since(0), 'faults: sdsim, /sd0p1 mounted read-write')
+        ok, _ = q.cmd('write /sd0p1/KEEP.TXT written before the faults', forbid=['not all of it'])
+        ok2, out = q.cmd('sdsim fault write-error 1', ['the next 1 written block is answered "write error"'])
+        ok3, out3 = q.cmd('write /sd0p1/ONCE.TXT one block refused, then written again',
+                          ['bcache: write of sd0p1 blocks', 'kept for the next sync', 'bcache: sd0p1 takes writes again'],
+                          forbid=['not all of it', bad])
+        ok4, out4 = q.cmd('cat /sd0p1/ONCE.TXT', ['one block refused, then written again'])
+        check(ok and ok2 and ok3 and ok4, 'faults: one block answered "write error": the console says so, the next sync '
+              '(at the file\'s close) writes it again, the command succeeds and the file reads back')
+        ok, out = q.cmd('sdsim fault write-error 1000000', ['written blocks are answered "write error"'])
+        t0 = time.time()
+        ok2, out2 = q.cmd('write /sd0p1/STUCK.TXT written while every block is refused',
+                          ['write: not all of it reached /sd0p1: I/O error'], timeout=60, forbid=[bad])
+        ok3, out3 = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/ERR.BIN', ['cp: not all of it reached /sd0p1: I/O error'], timeout=120,
+                          forbid=[bad, 'bytes copied'])
+        dt = time.time() - t0
+        check(ok and ok2 and ok3 and dt < 100,
+              'faults: a card that refuses every block: write and cp (1 MB, more than the cache holds) both say "not '
+              'all of it reached /sd0p1: I/O error", and return (%.0f s; the cache keeps the refused blocks, no hang)' % dt)
+        ok, out = q.cmd('eject sd0', ['eject: sd0: /sd0p1 could not be written: I/O error', 'eject: sd0 stays mounted'],
+                        forbid=['safe to remove'])
+        ok2, out2 = q.cmd('mount', ['sd0p1  on /sd0p1'])
+        check(ok and ok2, 'faults: eject with blocks the card refused: "stays mounted", not "safe to remove" (audit B2)')
+        ok, _ = q.cmd('sdsim fault clear', ['no faults armed'])
+        ok2, out2 = q.cmd('sync', ['bcache: sd0p1 takes writes again', 'synced'], timeout=60)
+        check(ok and ok2, 'faults: the card works again: sync writes everything the cache kept')
+        ok, out = q.cmd('sdsim fault no-response 1000000', ['commands get no answer'])
+        t0 = time.time()
+        ok2, out2 = q.cmd('write /sd0p1/MUTE.TXT written while the card answers nothing',
+                          [re.compile(rb'write: /sd0p1/MUTE.TXT: I/O error|write: not all of it reached /sd0p1: I/O error')],
+                          timeout=60, forbid=[bad])
+        dt = time.time() - t0
+        ok3, _ = q.cmd('sdsim fault clear', ['no faults armed'])
+        ok4, out4 = q.cmd('sync', ['synced'], timeout=60)
+        m = re.search(r'(\d+) timeouts', q.cmd('sdsim')[1])
+        said = re.search(r'write: .*I/O error', out2)
+        check(ok and ok2 and ok3 and ok4 and dt < 30 and m and int(m.group(1)) > 0,
+              'faults: a card that answers no command: the write fails at once (no response within NCR: "%s", %.1f s, %s '
+              'driver timeouts), and sync works once the card answers' % (said.group(0) if said else '?', dt,
+                                                                         m.group(1) if m else '?'))
+        ok, out = q.cmd('crc32 /sd0p1/ERR.BIN', ['ERR.BIN'], timeout=60)
+        m = re.search(r'([0-9a-f]{8})\s+(\d+)\s+/sd0p1/ERR.BIN', out)
+        err_len = int(m.group(2)) if m else -1
+        check(ok and m and 0 < err_len < len(big) and int(m.group(1), 16) == zlib.crc32(big[:err_len]) & 0xFFFFFFFF,
+              'faults: ERR.BIN holds what cp wrote before the card refused everything: the first %d bytes of BIG.BIN' % err_len)
+        ok, out = q.cmd('eject sd0', ['/sd0p1 unmounted', 'sd0: safe to remove'])
+        dump = sdsim_card(q, disk) if ok else None
+        if check(dump, 'faults: eject once the card works: safe to remove; the card image saved'):
+            part = dump + '@@%d' % PART_OFFSET
+            got = {}
+            for name in ('KEEP.TXT', 'ONCE.TXT', 'STUCK.TXT', 'MUTE.TXT'):
+                r = run_mtools(['mtype', '-i', part, '::/' + name])
+                got[name] = r.stdout.strip() if r.returncode == 0 else None
+            mute = got.pop('MUTE.TXT')
+            check(got == {'KEEP.TXT': 'written before the faults', 'ONCE.TXT': 'one block refused, then written again',
+                          'STUCK.TXT': 'written while every block is refused'} and
+                  mute in (None, 'written while the card answers nothing'),
+                  'faults: on the host every file the commands wrote is there and whole (MUTE.TXT %s: its open had failed)'
+                  % ('not made' if mute is None else 'whole'))
+            r = run_mtools(['mcopy', '-n', '-i', part, '::/BIG.BIN', os.path.join(q.workdir, 'big.bin')])
+            r2 = run_mtools(['mcopy', '-n', '-i', part, '::/ERR.BIN', os.path.join(q.workdir, 'err.bin')])
+            b1 = open(os.path.join(q.workdir, 'big.bin'), 'rb').read() if r.returncode == 0 else b''
+            b2 = open(os.path.join(q.workdir, 'err.bin'), 'rb').read() if r2.returncode == 0 else b''
+            check(b1 == big and b2 == big[:err_len], 'faults: BIG.BIN untouched, ERR.BIN the first %d bytes of it' % err_len)
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            harmless, other = fsck_findings(report)
+            tail = [l for l in other if not l.startswith(('/ERR.BIN', 'File size is', 'Truncating file to'))]
+            check(not tail, 'faults: fsck.fat -n: %s (the clusters cp had taken when the card refused the rest stay in '
+                  'ERR.BIN\'s chain past its size; nothing else)' % short(other + harmless))
+            if tail:
+                print(report)
+        check(q.poweroff() == 0, 'faults: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
+def pull_boot(args, disk, check, work):
+    """milestone 8, under QEMU (sdsim): the card taken out while mounted read-write (card detect off). The kernel says
+    so, refuses further writes, keeps the mount until umount; fsck.fat then finds only the dirty bit. Put back, it is
+    sd0 again, mounts with a warning, and its files are there"""
+    q, _, _ = stub_boot(args, disk, work, 'sdsim')
+    try:
+        ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+        ok2, _ = q.cmd('write /sd0p1/KEEP.TXT written before the card came out', forbid=['not all of it'])
+        mark = len(q.transcript)
+        ok3, _ = q.cmd('sdsim pull', ['the card is out'])
+        ok4 = seen(q, mark, '+SDSIM: sd0: the card was taken out') and \
+            seen(q, mark, '+SDSIM: /sd0p1 was mounted read-write: what was not yet written to the card is lost; umount /sd0p1')
+        check(ok and ok2 and ok3 and ok4, 'pull: the card taken out while mounted read-write: within half a second the '
+              'kernel says so, and that what was not yet written is lost')
+        ok, out = q.cmd('write /sd0p1/AFTER.TXT written after it came out', ['write: /sd0p1/AFTER.TXT: I/O error'])
+        ok2, out2 = q.cmd('mount', ['sd0p1  on /sd0p1       type fat (unplugged: umount it)'])
+        check(ok and ok2, 'pull: a write afterwards is refused (I/O error), the mount stays, marked "unplugged: umount it"')
+        dump = sdsim_card(q, disk)
+        if check(dump, 'pull: the card image as it was taken out, saved'):
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            harmless, other = fsck_findings(report)
+            check(not other and any(h.startswith('Dirty bit is set') for h in harmless),
+                  'pull: fsck.fat -n on it finds %s (pulled after a sync: only the mark of a volume mounted read-write)'
+                  % short(harmless + other))
+        ok, _ = q.cmd('umount /sd0p1')
+        mark = len(q.transcript)
+        ok2, _ = q.cmd('sdsim insert', ['the card is back in'])
+        ok3 = seen(q, mark, '+SDSIM: sd0: a card was put in: mount sd0p1 to use it')
+        ok4, out4 = q.cmd('mount sd0p1', ['sd0p1 was not unmounted cleanly', 'sd0p1 on /sd0p1: fat32'])
+        ok5, _ = q.cmd('cat /sd0p1/KEEP.TXT', ['written before the card came out'])
+        ok6, out6 = q.cmd('ls /sd0p1', ['entries'])
+        check(ok and ok2 and ok3 and ok4 and ok5 and ok6 and 'AFTER.TXT' not in out6,
+              'pull: umount, put back: sd0 again, mounted with "not unmounted cleanly", KEEP.TXT there, AFTER.TXT not')
+        ok, _ = q.cmd('eject sd0', ['sd0: safe to remove'])
+        dump = sdsim_card(q, disk) if ok else None
+        if dump:
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            check(clean, 'pull: after eject the card is clean again (fsck.fat -n)')
+            if not clean:
+                print(report)
+        check(q.poweroff() == 0, 'pull: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
+def pull_points(args, disk, check, work):
+    """milestone 8: the card taken out after n of the blocks a new file's write sends (sdsim pull n), n = 1 to 4: its
+    data, FAT copy 1, FAT copy 2, its directory entry (the block cache's write order, audit B3). fsck.fat -n on what is
+    left must find nothing that points at a free cluster or at bytes not written; then the image is booted again (the
+    reboot), mounted, and read back: the file there in full or not at all, the files before it untouched"""
+    transcript = b''
+    text = 'a new file with a long name'
+    name = 'Notes-from-SurfOS.txt'
+    for n in (1, 2, 3, 4):
+        tag = 'pull after %d: ' % n
+        q, _, _ = stub_boot(args, disk, work, 'sdsim')
+        dump = None
+        try:
+            ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+            ok2, _ = q.cmd('write /sd0p1/KEEP.TXT written before the card came out', forbid=['not all of it'])
+            ok3, _ = q.cmd('sdsim pull %d' % n, ['the card comes out right after'])
+            mark = len(q.transcript)
+            ok4, out4 = q.cmd('write /sd0p1/%s %s' % (name, text), ['write: not all of it reached /sd0p1'], timeout=30)
+            ok5 = seen(q, mark, '+SDSIM: sd0: the card was taken out')
+            if check(ok and ok2 and ok3 and ok4 and ok5, tag + 'the write says "not all of it reached /sd0p1", the card is out'):
+                dump = sdsim_card(q, disk)
+                if dump:
+                    keep = os.path.join(work, 'pulled.img')
+                    shutil.copyfile(dump, keep)
+                    clean, report = fsck_partition(q, dump, PART_OFFSET)
+                    harmless, other = fsck_findings(report)
+                    check(not other, tag + 'fsck.fat -n finds %s' % short(harmless + other))
+                    if other:
+                        print(report)
+                    dump = keep
+        finally:
+            transcript += q.transcript
+            q.close()
+        if not dump:
+            continue
+        q, _, _ = stub_boot(args, dump, work, 'sdsim')          # the reboot, from the card as it was pulled
+        try:
+            ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+            log = q.since(0)
+            ok2, out2 = q.cmd('ls /sd0p1', ['entries'])
+            present = name in out2
+            ok3, out3 = q.cmd('crc32 /sd0p1/KEEP.TXT' + (' /sd0p1/' + name if present else ''), ['KEEP.TXT'])
+            keep_crc = zlib.crc32(b'written before the card came out\n') & 0xFFFFFFFF
+            new_ok = not present or re.search(r'%08x\s+%d\s+/sd0p1/%s' % (zlib.crc32((text + '\n').encode()) & 0xFFFFFFFF,
+                                                                            len(text) + 1, re.escape(name)), out3)
+            check(ok and 'not unmounted cleanly' in log and ok2 and ok3 and re.search(r'%08x\s+' % keep_crc, out3) and new_ok,
+                  tag + 'rebooted from it: mounted ("not unmounted cleanly"), KEEP.TXT whole, the new file %s'
+                  % ('there and whole' if present else 'not there'))
+        finally:
+            transcript += q.transcript
+            q.close()
+    return transcript
+
+
+def pull_others(args, disk, check, work):
+    """milestone 8: the card taken out right after the first block that rm, mv into a folder, and a write over a file
+    send (sdsim pull 1): what is gone must be gone from its entry before its clusters are free (an order point, audit
+    B3), and a moved file must keep at least one name. fsck.fat -n on the card as it came out"""
+    transcript = b''
+    cases = [('rm', ['write /sd0p1/GOES.TXT a file to delete'], 'rm /sd0p1/GOES.TXT', None),
+             ('mv into a folder', ['mkdir /sd0p1/Folder', 'write /sd0p1/MOVES.TXT a file that moves'],
+              'mv /sd0p1/MOVES.TXT /sd0p1/Folder/Moved-file.txt', 'MOVES.TXT|Moved-file.txt|share clusters|Truncating '
+              'second|File size is \\d+ bytes, cluster chain length is 0|Truncating file to 0'),
+             ('write over a file', ['write /sd0p1/OVER.TXT the first text, a long one, longer than the second'],
+              'write /sd0p1/OVER.TXT second text', None)]
+    for what, setup, command, name_too_many in cases:
+        tag = 'pull in %s: ' % what
+        q, _, _ = stub_boot(args, disk, work, 'sdsim')
+        try:
+            ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+            for c in setup:
+                ok = q.cmd(c, forbid=['not all of it', 'I/O error'])[0] and ok
+            ok2, _ = q.cmd('sdsim pull 1', ['the card comes out right after'])
+            mark = len(q.transcript)
+            ok3, out3 = q.cmd(command, ['not all of it reached /sd0p1'], timeout=30)
+            ok4 = seen(q, mark, '+SDSIM: sd0: the card was taken out')
+            dump = sdsim_card(q, disk) if ok and ok2 and ok3 and ok4 else None
+            if check(dump, tag + '"%s" says "not all of it reached /sd0p1", the card is out after its first block'
+                     % command.split()[0]):
+                clean, report = fsck_partition(q, dump, PART_OFFSET)
+                harmless, other = fsck_findings(report)
+                rest = [l for l in other if not (name_too_many and re.search(name_too_many, l))]
+                check(not rest, tag + 'fsck.fat -n finds %s%s' % (short(harmless + other),
+                      ' (a name too many: the moved file under both names, never under none)' if other and not rest else ''))
+                if rest:
+                    print(report)
+        finally:
+            transcript += q.transcript
+            q.close()
+    return transcript
+
+
 def add_documents(img):
     """/USERS/DOCUMENTS/NOTES.TXT put on a disk image by mtools: DOCUMENTS is not an 8.3 name, so mtools writes a
     long-name entry and the alias DOCUME~1, as the Mac does. Returns mdir's listing of /USERS."""
@@ -776,6 +1051,10 @@ def main():
                 transcript += card_boot(args, check, work)
             else:
                 skip("card: no tools/mkcard.py (the fw track's card images) in this tree")
+            transcript += fault_boot(args, disk, check, work)
+            transcript += pull_boot(args, disk, check, work)
+            transcript += pull_points(args, disk, check, work)
+            transcript += pull_others(args, disk, check, work)
         else:
             skip('handoff, sdsim, package and card: no --stub')
     finally:

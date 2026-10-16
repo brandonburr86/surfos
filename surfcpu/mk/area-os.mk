@@ -9,7 +9,10 @@
 #   make test-os-host     only the host tests
 #   make test-os-surfemu  the Arty kernel booted by SurfBoot from a mkcard.py card in the fw track's firmware
 #                         emulator (where the tree has it; part of test-os)
-#   make evidence-os      test-os, with its summaries written to docs/evidence/os/ (OS_EVIDENCE_DIR)
+#   make test-os-persist  files that persist (milestone 8) on the RTL system in surfsim: written, synced and
+#                         ejected over the UART, read back after a second boot, checked by fsck.fat and mtools
+#                         (about 2.5 minutes; on make check, not in test-os)
+#   make evidence-os      test-os and test-os-persist, their summaries written to docs/evidence/os/ (OS_EVIDENCE_DIR)
 #
 # The kernel is built from the repository root (one level up); the x86 kernel's Makefile and outputs
 # are never touched. QEMU's virt machine is not SurfCPU: test-os says nothing about the FPGA.
@@ -37,10 +40,10 @@ OS_IOMODEL_DIR ?= sim/models
 OS_HOSTCXX     ?= c++
 OS_IO_C         = ../boards/arty_a7/sdcard.c ../boards/arty_a7/sdproto.c ../boards/arty_a7/tests/iomodel/glue.c
 
-.PHONY: build-kernel-os test-os-host test-os-qemu test-os-iomodel test-os-surfemu evidence-os
+.PHONY: build-kernel-os test-os-host test-os-qemu test-os-iomodel test-os-surfemu test-os-persist evidence-os
 build-kernel: build-kernel-os
 test-os: test-os-host test-os-iomodel test-os-qemu test-os-surfemu
-check: build-kernel test-os
+check: build-kernel test-os test-os-persist
 
 build-kernel-os:
 	$(OS_MAKE) KBOARD=arty_a7
@@ -107,11 +110,29 @@ test-os-surfemu:
 	@echo "test-os-surfemu: skipped: this tree has no fw firmware emulator (firmware/tests/surfemu.c), packer or card tool"
 endif
 
+# Files that persist (milestone 8) on the RTL system (sim/soc/tools/system_persist_test.py): build/sim/surfsim,
+# the soc track's whole SoC with the io track's card model, boots the Arty kernel from a mkcard.py card with
+# sd=rw; the shell writes (mkdir, write, a 160 KiB cp, write over, append, mv, rm), syncs and ejects; surfsim's
+# --sd-flush keeps what the card got; a second boot reads it all back by name, size and CRC; fsck.fat and
+# mtools check the image. Two runs one after the other.
+OS_PERSIST_READY := $(and $(wildcard sim/soc/surfsim/surfsim.cpp),$(wildcard sim/soc/tools/system_boot_test.py),\
+                      $(wildcard tools/mkcard.py),$(wildcard tools/surfimg.py))
+ifneq ($(OS_PERSIST_READY),)
+test-os-persist: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/sim/surfsim
+	@mkdir -p $(OS_OUT) $(OS_EVIDENCE)
+	$(Q)$(PYTHON) sim/soc/tools/system_persist_test.py --surfsim $(BUILD)/sim/surfsim --rom $(BUILD)/fw/surfboot.mem \
+	    --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN --work $(OS_OUT)/system_persist \
+	    --evidence $(OS_EVIDENCE)/test-os-persist.txt
+else
+test-os-persist:
+	@echo "test-os-persist: skipped: this tree has no surfsim, system_boot_test.py, mkcard.py or surfimg.py"
+endif
+
 OS_ELFS = ../build/riscv32/arty_a7/surfos.elf ../build/riscv32/qemu_virt/surfos.elf ../build/riscv32/qemu_virt-O0/surfos.elf
 OS_EVIDENCE_DIR ?= docs/evidence/os
 
 evidence-os:
-	$(MAKE) --no-print-directory test-os OS_EVIDENCE=$(OS_EVIDENCE_DIR)
+	$(MAKE) --no-print-directory test-os test-os-persist OS_EVIDENCE=$(OS_EVIDENCE_DIR)
 	$(Q)( echo "# make -C surfcpu build-kernel: sizes, the ISA audit, the packages ($$(date -u +%Y-%m-%d), build $(SURFCPU_BUILD_ID))"; \
 	  $(RV_SIZE) $(OS_ELFS); \
 	  for e in $(OS_ELFS); do $(PYTHON) ../arch/riscv32/isacheck.py --objdump $(RV_OBJDUMP) $$e; done; \
@@ -120,4 +141,4 @@ evidence-os:
 	    for p in $(OS_ELFS:surfos.elf=SURFOS.BIN); do $(PYTHON) $(OS_SURFIMG) verify $$p; done; \
 	  else echo "SURFOS.BIN not built: no $(OS_SURFIMG) (the fw track's packer) in this tree"; fi ) \
 	  > $(OS_EVIDENCE_DIR)/build.txt
-	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0,test-os-surfemu}.txt"
+	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0,test-os-surfemu,test-os-persist}.txt"

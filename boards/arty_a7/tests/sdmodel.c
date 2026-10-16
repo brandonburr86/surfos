@@ -6,6 +6,9 @@ File: sdmodel.c Date: 10/15/26 (SurfCPU)
 See sdmodel.h. Its CRCs are computed its own way (a bit-serial register for CRC7, a table
 for CRC16), not with boards/arty_a7/sdproto.c, so the two check each other; the test
 also checks both against the specification's examples.
+
+10/16/26: write errors, commands without an answer, and a card taken out and put back (see
+sdmodel.h).
 */
 
 #include <string.h>
@@ -126,6 +129,24 @@ void sdmodel_init(struct sdmodel *m, uint8_t *img, uint32_t blocks, int v2, int 
     m->acmd41_left = 3;
 }
 
+/* out or back in: either way the card lost its power and starts over, in SD mode */
+void sdmodel_set_present(struct sdmodel *m, int present) {
+    if(!present && m->present) m->pulls++;
+    m->present = present;
+    m->spi = 0;
+    m->idle = 1;
+    m->crc_on = 0;
+    m->app = 0;
+    m->acmd41_left = 3;
+    m->mode = M_CMD;
+    m->multi = 0;
+    m->cmd_len = 0;
+    m->busy = 0;
+    m->status2 = 0;
+    m->pull_after = 0;
+    queue_reset(m);
+}
+
 void sdmodel_select(struct sdmodel *m, int on) {
     if(!on && m->selected && m->mode == M_WR_DATA) m->violations++;    /* CS released inside a block */
     m->selected = on;
@@ -148,6 +169,15 @@ static void command(struct sdmodel *m) {
     uint8_t idle = m->idle ? 0x01 : 0x00;
     m->commands++;
     m->app = 0;
+    if(m->mute > 0) {                               /* no response: MISO stays high */
+        m->mute--;
+        queue_reset(m);
+        return;
+    }
+    if(!m->spi) {                                   /* SD mode: only CMD0 (CS is low: it is selected) counts */
+        if(cmd != 0 || m->cmd[5] != (uint8_t)((m_crc7(m->cmd, 5) << 1) | 1)) { queue_reset(m); return; }
+        m->spi = 1;
+    }
     if((cmd == 0 || cmd == 8 || m->crc_on) && m->cmd[5] != (uint8_t)((m_crc7(m->cmd, 5) << 1) | 1)) {
         m->crc_errors_seen++;
         r1(m, idle | 0x08);                         /* command CRC error */
@@ -201,7 +231,8 @@ static void command(struct sdmodel *m) {
         data_block(m, reg, 16);
         return;
     case 13:
-        r[0] = 0; r[1] = 0;
+        r[0] = 0; r[1] = m->status2;
+        m->status2 = 0;
         respond(m, r, 2);
         return;
     case 17:
@@ -283,16 +314,20 @@ uint8_t sdmodel_xfer(struct sdmodel *m, uint8_t in) {
                 put(m, 0xEB);                       /* data rejected: CRC error */
                 m->busy = 1 + (int)(rnd(m) % 4);
                 m->mode = m->multi ? M_WR_TOKEN : M_CMD;   /* CMD25 waits for the stop token */
-            } else if(m->block >= m->blocks) {
-                put(m, 0xED);                       /* write error: past the end */
+            } else if(m->block >= m->blocks || m->write_errors > 0) {
+                if(m->block < m->blocks) { m->write_errors--; m->write_errors_sent++; }
+                put(m, 0xED);                       /* write error: past the end, or asked for */
+                m->status2 |= 0x04;                 /* and CMD13 says so (as the io track's model) */
                 m->busy = 1 + (int)(rnd(m) % 4);
                 m->mode = m->multi ? M_WR_TOKEN : M_CMD;
             } else {
                 memcpy(m->img + (size_t)m->block * 512, m->wbuf, 512);
                 m->block++;
+                m->blocks_written++;
                 put(m, 0xE5);                       /* accepted */
                 m->busy = 2 + (int)(rnd(m) % 30);
                 m->mode = m->multi ? M_WR_TOKEN : M_CMD;
+                if(m->pull_after > 0 && --m->pull_after == 0) sdmodel_set_present(m, 0);   /* out, mid-transfer */
             }
         }
         break;

@@ -26,6 +26,10 @@ struct sd_host {
     void (*slow)(void *ctx, bool slow);     /* at most 400 kHz (identification), or the fastest */
     bool (*present)(void *ctx);             /* card detect (true when the socket cannot tell) */
     u32 (*ms)(void *ctx);                   /* a millisecond clock for the timeouts */
+    /* 10/16/26, optional (NULL: a byte at a time through xfer): a data block's bytes in a tight loop,
+       received (0xFF out) or sent (MISO not looked at) */
+    void (*rx)(void *ctx, u8 *buf, u_int len);
+    void (*tx)(void *ctx, const u8 *buf, u_int len);
 };
 
 #define SD_OK        0

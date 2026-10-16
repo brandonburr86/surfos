@@ -69,10 +69,12 @@ LIBGCC      = -lgcc
 # devfs and tarfs, the block layer and partition tables, and the shell's file system commands
 # and prompt. Each compiles unchanged except kernel/task.c and lib/blibc/vsnprintf.c, whose
 # few x86 lines have riscv32 alternatives under #ifdef SURFOS_RISCV32.
+# lib/blibc/memory.c is not built: arch/riscv32/memory.c has the same functions moving words
+# (10/16/26: SurfCPU fetches every instruction from DDR).
 SHARED_C    = kernel/task.c kernel/wait.c kernel/sync.c kernel/ktimer.c kernel/klog.c \
               kernel/console.c kernel/tty.c \
               mm/kalloc.c \
-              lib/blibc/chars.c lib/blibc/ctype.c lib/blibc/memory.c lib/blibc/printf.c \
+              lib/blibc/chars.c lib/blibc/ctype.c lib/blibc/printf.c \
               lib/blibc/stdlib.c lib/blibc/string.c lib/blibc/strings.c lib/blibc/vsnprintf.c \
               fs/vfs.c fs/bcache.c fs/fat.c fs/fat_mkfs.c fs/devfs.c fs/poll.c fs/tarfs.c \
               driver/bdev.c driver/part.c driver/parttab.c driver/cp437.c \
@@ -81,10 +83,10 @@ ARCH_C      = $(wildcard arch/riscv32/*.c)
 ARCH_S      = $(wildcard arch/riscv32/*.S)
 BOARD_C     = $(wildcard boards/$(KBOARD)/*.c)
 ifeq ($(KBOARD),qemu_virt)
-# the Arty's SD protocol driver and the simulated card of its host test, for the word sdsim
-# (boards/qemu_virt/sdsim.c): plain C, no hardware
+# the Arty's SD protocol driver, its block device and card watch, and the simulated card of its
+# host test, for the word sdsim (boards/qemu_virt/sdsim.c): plain C, no hardware
 BOARD_C    += $(if $(wildcard boards/qemu_virt/sdsim.c),boards/arty_a7/sdcard.c boards/arty_a7/sdproto.c \
-                   boards/arty_a7/tests/sdmodel.c)
+                   boards/arty_a7/sdblk.c boards/arty_a7/tests/sdmodel.c)
 endif
 BOARD_S     = $(wildcard boards/$(KBOARD)/*.S)
 

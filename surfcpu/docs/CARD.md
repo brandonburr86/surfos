@@ -193,3 +193,64 @@ card: when you go back to the kernel, deploy with `--cmdline ""` (or the kernel'
   once its write path is validated.
 * For tests, card images are made with `surfcpu/tools/mkcard.py` (regular files only):
   `python3 surfcpu/tools/mkcard.py card.img --standard-dirs --file /BOOT/SURFOS.BIN=build/riscv32/arty_a7/SURFOS.BIN`.
+
+## 8. Writing from SurfOS
+
+**Status (2026-10-16):** tested in simulation only, not on a real card or the board (pending):
+on the RTL system in surfsim, with the io track's card model (`make -C surfcpu
+test-os-persist`: files written, ejected, read back after a second boot, the image checked by
+`fsck.fat` and mtools), and under QEMU with the same driver and a card model that fails on
+request (`make -C surfcpu test-os`: refused writes, a card that stops answering, the card
+taken out). How it works and the test results are in [PORTING-RISCV.md](PORTING-RISCV.md)
+section 6.
+
+**Allow it.** SurfOS mounts the card read-only unless `/BOOT/CMDLINE.TXT` holds the word
+`sd=rw`:
+
+```sh
+make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS DEPLOY_ARGS="--cmdline sd=rw"
+```
+
+Or, at the prompt: `umount /sd0p1`, `sdmode rw`, `mount sd0p1`. SurfOS never partitions or
+formats the card: do that on the Mac (section 2).
+
+**Write.** Every shell command that changes files (`write`, `append`, `cp`, `mv`, `rm`,
+`mkdir`, `rmdir`) puts everything on the card before the prompt comes back. If the card
+refuses, the command says `... not all of it reached /sd0p1: I/O error` and fails ($? 1); what
+it wrote stays in memory, and `sync` tries again.
+
+**Before taking the card out or switching off**, type `eject sd0` and wait for
+`sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
+type `sync` to try again, or `umount /sd0p1` to give those changes up.
+
+**Taken out while mounted** (or the board switched off): SurfOS says so within half a second
+(`+SD: sd0: the card was taken out`, and for a read-write mount that what was not yet written
+is lost), refuses every further read and write (`I/O error`), and keeps `/sd0p1` until you
+type `umount /sd0p1`. Put the card back and type `mount sd0p1`: it says `was not unmounted
+cleanly`. A card taken out and put back in less than half a second is not noticed: it lost its
+power and answers nothing, so every read and write fails until it has been out for a moment.
+
+**What FAT32 cannot make safe.** FAT32 keeps no journal, so a card that comes out in the
+middle of a write leaves the volume half-changed. SurfOS writes in an order chosen so that the
+damage stays small: a file's bytes first, then the FAT (both copies), then the directory
+entry, then the free-space count; and when something is deleted, the entry goes before its
+clusters are freed. Tested by taking the card out after each block of a write, `rm`, `mv` and
+an overwrite, the most `fsck.fat` found was:
+
+* the "not cleanly unmounted" mark;
+* clusters marked used that no file points at (space lost until a check frees it), or the
+  two FATs differing;
+* a wrong free-space count;
+* a file moved into another folder under both names (`fsck.fat` keeps the first);
+* when the card refused writes in the middle of a large copy: the copy's last clusters
+  allocated beyond its size.
+
+Never, in those tests, a file pointing at free space or at bytes that were not written. But:
+
+* the file being written comes out either whole or not at all only if it is new: a file being
+  overwritten (`write` over it, `cp` onto it) can be left empty, and one being appended to keeps
+  its old bytes and may lose the new ones;
+* SurfOS does not repair a volume; it mounts one that was not cleanly unmounted and warns.
+  Check such a card on the Mac (Disk Utility, First Aid) before trusting it;
+* the card itself may lose or damage the block it was writing when its power went: no file
+  system can know.

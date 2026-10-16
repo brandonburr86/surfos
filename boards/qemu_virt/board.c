@@ -231,6 +231,7 @@ static const struct bdev_ops rd_ops = { rd_read, rd_write, NULL };
 int qv_sdsim_init(u8 *base, u32 blocks);
 void qv_sdsim_stats(void);
 bool qv_sdsim_active(void);
+int qv_cmd_sdsim(int argc, char **argv);
 
 static int qv_ramdisk(void) {
     struct bdev *d;
@@ -285,6 +286,7 @@ static int cmd_poweroff(int argc, char **argv) {
 
 static const struct command board_cmds[] = {
     { "poweroff", "[status]", "leave QEMU (sifive_test), 0 for a pass", cmd_poweroff, 0 },
+    { "sdsim",    "[fault|pull|insert]", "the simulated card: faults, taken out, put back", qv_cmd_sdsim, 0 },
     { NULL, NULL, NULL, NULL, 0 }
 };
 

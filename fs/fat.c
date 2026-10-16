@@ -22,6 +22,19 @@ counted, and written back to FSInfo at sync and unmount; the clean-shutdown bit
 in FAT[1]: cleared while mounted read-write, set again at unmount, so macOS and
 Windows check a volume that was unplugged while mounted. A read-only mount
 writes nothing.
+
+10/16/26 (SurfCPU, milestone 8; audit B3): the blocks it changes carry the order
+the block cache writes them in: file data and a new directory's cluster first,
+then the FAT copies, then directory entries, then FSInfo. Taking away needs the
+reverse, so unlink, truncate to zero and rename put an order point in the middle
+(fat_order_point(): a sync of the volume): the entry is gone from the disk before
+its clusters are freed, and a renamed file's new entry is on the disk before the
+old one goes. A card pulled or a write refused in the middle then leaves at worst
+clusters marked used that no entry points at, a name too many, or a free count
+that is off (fsck.fat finds and fixes them), never an entry pointing at a free
+cluster or at bytes not yet written. An overwrite in place (append, or a write
+into a file's existing bytes) can still leave old and new bytes mixed: FAT32 has
+no journal (surfcpu/docs/CARD.md, "Writing from SurfOS").
 */
 
 #include <surfos/types.h>
@@ -287,10 +300,10 @@ static int fat_set(struct fat_fs *fs, u32 c, u32 val) {
             } else hi = b->data + o + 1;
             if(c & 1) { *lo = (*lo & 0x0F) | ((val << 4) & 0xF0); *hi = (val >> 4) & 0xFF; }
             else { *lo = val & 0xFF; *hi = (*hi & 0xF0) | ((val >> 8) & 0x0F); }
-            if(b2) { bdirty(b2); brelse(b2); }
+            if(b2) { bdirty_order(b2, BORDER_TABLE); brelse(b2); }
         } else if(fs->type == 16) put16(b->data + o, (u16)val);
         else put32(b->data + o, (le32(b->data + o) & 0xF0000000) | (val & 0x0FFFFFFF));
-        bdirty(b);
+        bdirty_order(b, BORDER_TABLE);
         brelse(b);
     }
     return 0;
@@ -339,6 +352,12 @@ found:
     fs->fsinfo_dirty = true;
     *out = c;
     return 0;
+}
+
+/* 10/16/26 (B3): what this operation changed so far is on the disk before what it changes next
+   (the cache writes data, tables, entries in that order; taking away needs entries first) */
+static int fat_order_point(struct fat_fs *fs) {
+    return bsync(fs->dev) ? -EIO : 0;
 }
 
 static int fat_free_chain(struct fat_fs *fs, u32 c) {
@@ -398,7 +417,7 @@ static int fat_mark(struct fat_fs *fs, bool clean) {
             u16 v = le16(b->data + 2);
             put16(b->data + 2, (u16)(clean ? v | FAT16_CLEAN : v & ~FAT16_CLEAN));
         }
-        bdirty(b);
+        bdirty_order(b, BORDER_TABLE);
         brelse(b);
     }
     return 0;
@@ -413,7 +432,7 @@ static int write_fsinfo(struct fat_fs *fs) {
     if(le32(b->data) == FSINFO_LEAD && le32(b->data + 484) == FSINFO_STRUCT) {
         put32(b->data + 488, fs->free);
         put32(b->data + 492, fs->next_free >= 2 && fs->next_free < fs->nclusters + 2 ? fs->next_free : 2);
-        bdirty(b);
+        bdirty_order(b, BORDER_SUMMARY);
     }
     brelse(b);
     fs->fsinfo_dirty = false;
@@ -606,7 +625,7 @@ static int dir_write_entries(struct diter *pos, const u8 *entries, u32 n, u32 *l
         b = bread(pos->fs->dev, pos->lba);
         if(!b) return -EIO;
         memcpy(b->data + pos->off, entries + i * 32, 32);
-        bdirty(b);
+        bdirty_order(b, BORDER_DIR);
         brelse(b);
         if(i == n - 1 && lba) { *lba = pos->lba; *off = pos->off; }
         r = diter_next(pos);
@@ -624,7 +643,7 @@ static int dir_delete_entries(struct fat_fs *fs, struct fat_node *dir, u32 idx_f
             struct buf *b = bread(fs->dev, it.lba);
             if(!b) return -EIO;
             b->data[it.off] = 0xE5;
-            bdirty(b);
+            bdirty_order(b, BORDER_DIR);
             brelse(b);
         }
         if(diter_next(&it)) return -EIO;
@@ -651,7 +670,7 @@ static int update_entry(struct fat_fs *fs, struct fat_node *n, u32 size, bool to
         put16(p + 18, d);
         p[11] |= ATTR_ARCHIVE;
     }
-    bdirty(b);
+    bdirty_order(b, BORDER_DIR);
     brelse(b);
     return 0;
 }
@@ -1083,9 +1102,13 @@ static int fat_truncate(struct vnode *v, u32 size) {
         return r;
     }
     n->pos_c = 0;                                            /* the remembered position may be freed */
-    if(size == 0) {
-        if(n->first) r = fat_free_chain(fs, n->first);
+    if(size == 0) {                                          /* 10/16/26 (B3): the entry says empty on the */
+        u32 old = n->first;                                  /* disk before its clusters are freed */
         n->first = 0;
+        v->size = 0;
+        r = update_entry(fs, n, 0, true);
+        if(r == 0 && old) r = fat_order_point(fs);
+        if(r == 0 && old) r = fat_free_chain(fs, old);
     } else {
         u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next;
         while(--keep && !r) { if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) r = -EIO; else c = next; }
@@ -1093,8 +1116,8 @@ static int fat_truncate(struct vnode *v, u32 size) {
             r = fat_set(fs, c, fs->eoc);
             if(!r) r = fat_free_chain(fs, next);
         }
+        if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
     }
-    if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
     mutex_unlock(&v->sb->lock);
     return r;
 }
@@ -1174,8 +1197,9 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     r = dir_find(fs, dn, name, &e);
     if(r) goto out;
     if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
-    if(e.first) r = fat_free_chain(fs, e.first);
-    if(r == 0) r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx);
+    r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx);
+    if(r == 0 && e.first) r = fat_order_point(fs);          /* B3: the entry gone on the disk first */
+    if(r == 0 && e.first) r = fat_free_chain(fs, e.first);
 out:
     mutex_unlock(&dir->sb->lock);
     return r;
@@ -1199,7 +1223,7 @@ static int set_dotdot(struct fat_fs *fs, u32 first, const struct fat_node *paren
     if(p[0] == '.' && p[1] == '.' && p[2] == ' ' && (p[11] & ATTR_DIR)) {
         put16(p + 26, (u16)(pc & 0xFFFF));
         put16(p + 20, (u16)(fs->type == 32 ? pc >> 16 : 0));
-        bdirty(b);
+        bdirty_order(b, BORDER_DIR);
     }
     brelse(b);
     return 0;
@@ -1207,9 +1231,10 @@ static int set_dotdot(struct fat_fs *fs, u32 first, const struct fat_node *paren
 
 /* 10/5/26: rename within the volume. The new entries (a fresh short alias, the long name if
    one is needed, everything else copied from the old short entry) are written before the
-   old ones are deleted, so an interruption leaves two names rather than none. A file at the
-   target is replaced (POSIX), so is an empty directory; a directory that moves to another
-   parent gets its ".." pointed there. The VFS has refused moving a directory into itself. */
+   old ones are deleted, so an interruption leaves two names rather than none (10/16/26, B3:
+   on the disk too, an order point between them). A file at the target is replaced (POSIX),
+   so is an empty directory; a directory that moves to another parent gets its ".." pointed
+   there. The VFS has refused moving a directory into itself. */
 static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir, const char *nname) {
     struct fat_fs *fs = (struct fat_fs *)odir->sb->priv;
     struct fat_node *on = (struct fat_node *)odir->priv, *nn = (struct fat_node *)ndir->priv, *x;
@@ -1238,9 +1263,11 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     r = build_entries(fs, nn, nname, 0, 0, src.raw, same ? src.idx : NO_IDX, entries, &n);
     if(r == 0) r = dir_find_free(fs, nn, n, &pos);
     if(r == 0) r = dir_write_entries(&pos, entries, n, &new_lba, &new_off);
+    if(r == 0) r = fat_order_point(fs);                      /* B3: the new name on the disk before any goes */
     if(r) goto out;
     if(replace) {
         r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx);
+        if(r == 0 && dst.first) r = fat_order_point(fs);    /* the replaced entry gone before its clusters */
         if(r == 0 && dst.first) r = fat_free_chain(fs, dst.first);
         if(r) goto out;
     }
