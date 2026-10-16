@@ -5,8 +5,9 @@
 #
 # Given to nextpnr, rewritten the way its reader needs (no ";" or comment after a command,
 # brace lists without inner padding):
-#   set_property on [get_ports ...] with PACKAGE_PIN, IOSTANDARD, DRIVE and PULLTYPE, each
-#     shown to reach the bitstream (FASM) by a probe build. Vivado's PULLUP (PULLDOWN, KEEPER)
+#   set_property on [get_ports ...] with PACKAGE_PIN, IOSTANDARD, DRIVE, PULLTYPE, SLEW and
+#     IN_TERM, each shown to reach the bitstream (FASM) by a probe build (SLEW and IN_TERM on
+#     SSTL135 pins: docs/evidence/ddr/openflow-pins.txt). Vivado's PULLUP (PULLDOWN, KEEPER)
 #     true becomes PULLTYPE PULLUP (...): nextpnr 1.0.0 sets the pull from PULLTYPE only and
 #     drops PULLUP true without a word;
 #   create_clock -period on a port, without -name, -add and -waveform (nextpnr ignores them).
@@ -20,6 +21,7 @@ BEGIN {
     if (notgiven == "") { print "nextpnr-xdc.awk: -v notgiven=FILE is required" > "/dev/stderr"; exit 2 }
     printf "" > notgiven
     keep["PACKAGE_PIN"] = 1; keep["IOSTANDARD"] = 1; keep["DRIVE"] = 1; keep["PULLTYPE"] = 1
+    keep["SLEW"] = 1; keep["IN_TERM"] = 1
     pull["PULLUP"] = 1; pull["PULLDOWN"] = 1; pull["KEEPER"] = 1
 }
 function skip(why) {
@@ -64,6 +66,7 @@ function skip(why) {
     }
     if (match(line, /\[get_ports (\{[^}]*\}|[^] ]*)\]$/) == 0) {
         if (line ~ /\[current_design\]$/) skip("configuration or bitstream option: not applied, the bitstream keeps its defaults")
+        else if (line ~ /INTERNAL_VREF/) skip("bank reference voltage: not applied; nextpnr sets the bank's VREF itself (675 mV) when an SSTL135 input is used")
         else skip("property of something other than a port: not applied")
         next
     }

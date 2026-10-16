@@ -29,6 +29,10 @@ TOP_SRC   = $(if $(SOC_REAL),$(call board_list,surfcpu_arty_a7_top,src) $(call b
               sim/board/stubs/surfcpu_soc.v)
 TOP_DEFS  = $(if $(SOC_REAL),,-DSURFCPU_SOC_STUB)
 TOP_INCS  = $(addprefix -I,$(call board_list,surfcpu_arty_a7_top,inc))
+# The DDR variant (ARTY_HAS_DDR: the DDR designs) with the bridge and, for lint, the LiteDRAM
+# core's port stand-in (the real core is generated: make litedram-gen; inspect_core.py checks
+# the stand-in has its ports).
+DDR_TOP_SRC = $(sort $(TOP_SRC) $(wildcard rtl/soc/ddr/*.v)) sim/board/stubs/litedram_core.v
 
 BOARD_VLINT = $(VERILATOR_LINT) --timing --timescale 1ps/1ps -I$(BD)/rtl
 BOARD_IVL   = $(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -I$(BD)/rtl
@@ -47,7 +51,8 @@ lint-board:
 	$(Q)for t in arty_a7_clocks arty_a7_uart_tx arty_a7_uart_rx arty_a7_baseline_core arty_a7_baseline; do \
 	  $(BOARD_VLINT) --top-module $$t $(BASELINE_SRC) $(BOARD_PRIMS) || exit 1; done
 	$(Q)$(BOARD_VLINT) $(TOP_INCS) $(TOP_DEFS) --top-module surfcpu_arty_a7_top $(TOP_SRC) $(BOARD_PRIMS)
-	@echo "lint-board: 6 board modules clean ($(if $(SOC_REAL),real SoC,SoC stand-in))"
+	$(Q)$(BOARD_VLINT) $(TOP_INCS) $(TOP_DEFS) -DARTY_HAS_DDR --top-module surfcpu_arty_a7_top $(DDR_TOP_SRC) $(BOARD_PRIMS)
+	@echo "lint-board: 6 board modules and the DDR top clean ($(if $(SOC_REAL),real SoC,SoC stand-in); LiteDRAM's ports stand in for the core)"
 
 # ------------------------------------------------------------------------------- simulations
 test-board: board-clocks board-prims-bad board-baseline-rt board-baseline board-top

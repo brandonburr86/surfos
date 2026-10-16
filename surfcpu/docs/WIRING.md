@@ -3,8 +3,9 @@
 Every pin the SurfCPU designs use, from the adapter's pin to the FPGA ball, with its direction
 and I/O standard (brief section 4). It is checked by `tools/check-wiring.py` (on `make check`)
 against the designs' top-level ports, their constraint files (`boards/arty_a7/xdc/`) and
-Digilent's master XDC files for both board variants: every port has exactly one pin, no two
-ports share a pin, and pin, direction, I/O standard and pin options agree everywhere.
+Digilent's master XDC files for both board variants (for the DDR3L pins, Digilent's MIG projects):
+every port has exactly one pin, no two ports share a pin, and pin, direction, I/O standard and pin
+options agree everywhere.
 
 **Nothing here has been checked on the hardware.** The board and the adapters are not
 connected and their revisions are not confirmed (INVENTORY.md gaps G1, G4). The allocation
@@ -30,9 +31,10 @@ whose SHA-256 matches `SHA256SUMS` in `boards/arty_a7/digilent/manuals/` (it say
 | PS2-RM | Pmod PS2 Reference Manual (Revision C) | J2 (Pmod), J1 (mini-DIN), JP1 and JP2 tables; the JP2 silkscreen error |
 | PS2-SCH | Pmod PS2 schematic Rev C (500-094, 2006-12-20) | 10 kΩ pull-ups from DATA, DATA-, CLK, CLK- to the PS/2 supply chosen by JP1; 200 Ω in series to the connector |
 
-Facts every row relies on: all used pins are in banks 14, 15, 16 and 35, whose VCCO is the
-board's 3.3 V (SCH sheet 7), so every pin is LVCMOS33; bank 34 is the DDR3L bank at 1.35 V and
-no SurfCPU pin may be placed there (the checker refuses it). JA and JD connect through 200 Ω
+Facts every row relies on: all used pins but the DDR3L's are in banks 14, 15, 16 and 35, whose
+VCCO is the board's 3.3 V (SCH sheet 7), so every such pin is LVCMOS33; bank 34 is the DDR3L bank
+at 1.35 V and holds only the memory's pins of section 2.5, with SSTL135 standards (the checker
+refuses any other pin there, and an SSTL135 pin anywhere else). JA and JD connect through 200 Ω
 series resistors, JB and JC through 0 Ω (SCH sheet 1, RM §10). Pmod pins 6 and 12 are the
 board's 3.3 V, pins 5 and 11 ground (RM §10). The voltage limits of the Arty's
 FPGA-connected header pins are -0.2..3.4 V recommended and 3.75 V absolute maximum while the
@@ -142,13 +144,90 @@ J2-5 is ground and J2-6 (VB) the board's 3.3 V. JD7..JD10 (E2, D2, H2, G2) are n
 `ps2_clk` and `ps2_data` are open drain: an IOBUF drives 0 or lets go, never 1 (the high
 level comes from the pull-ups; `surfcpu_arty_a7_top`).
 
-### 2.5 Pins that are deliberately not used
+### 2.5 DDR3L (the DDR designs only)
 
-Pmod pins without a signal (JA10, JC9, JC10, JD7..JD10), the ChipKit header, Ethernet, the
-quad-SPI flash pins and every DDR3L pin (bank 34) are left unassigned: Vivado's default for
-unused pins is a weak pull-down, and the DDR3L's RESET# has its own 4.7 kΩ pull-down (SCH
-sheet 9), so the memory stays in reset while `HAS_DDR = 0`. The ddr track adds the DDR3L pins
-with the memory controller.
+The designs with `ARTY_HAS_DDR` (`surfcpu_arty_a7_ddr_bramdiag`, `surfcpu_arty_a7_ddr`; docs/DDR.md)
+also use the DDR3L memory and one ChipKit header pin. The memory's pins are not in the master XDC:
+the authority is Digilent's MIG project for each board (`ip/mig/digilent/arty-a7-35/mig.prj`,
+`arty-a7-100/mig.prj`, their `<PinSelection>`; the two agree), and the checker compares every row
+with both. They are all in bank 34, whose VCCO is the DDR3L's 1.35 V (SCH sheet 7), so the I/O
+standards are SSTL135 and, for the differential clock and strobes, DIFF_SSTL135. The pin options
+are those of LiteX's Arty platform, which LiteDRAM's Arty example is run with (Migen's
+`build/platforms/arty_a7.py` at `e19524c9`, the commit `ip/litedram/setup.sh` pins): fast slew on
+every pin and the split input termination UNTUNED_SPLIT_40 on DQ, and on DQS as LiteDRAM's own
+`phy/rpc/arty.py` does. Digilent's MIG project asks for 50 Ω (UNTUNED_SPLIT_50) on the same pins.
+The bank's input reference is internal, 0.675 V (`arty_a7_ddr3_timing.xdc` for Vivado; the open
+flow's nextpnr sets it by itself). Port names are the MIG's, without its `[0]` on the one-bit
+signals.
+
+| Port | Board pin | FPGA pin | Dir | I/O standard | Options | MIG pin | Status |
+|---|---|---|---|---|---|---|---|
+| `ddr3_addr[0]` | DDR3L address A0 | R2 | out | SSTL135 | SLEW=FAST | `ddr3_addr[0]` | unverified (U9) |
+| `ddr3_addr[1]` | DDR3L address A1 | M6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[1]` | unverified (U9) |
+| `ddr3_addr[2]` | DDR3L address A2 | N4 | out | SSTL135 | SLEW=FAST | `ddr3_addr[2]` | unverified (U9) |
+| `ddr3_addr[3]` | DDR3L address A3 | T1 | out | SSTL135 | SLEW=FAST | `ddr3_addr[3]` | unverified (U9) |
+| `ddr3_addr[4]` | DDR3L address A4 | N6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[4]` | unverified (U9) |
+| `ddr3_addr[5]` | DDR3L address A5 | R7 | out | SSTL135 | SLEW=FAST | `ddr3_addr[5]` | unverified (U9) |
+| `ddr3_addr[6]` | DDR3L address A6 | V6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[6]` | unverified (U9) |
+| `ddr3_addr[7]` | DDR3L address A7 | U7 | out | SSTL135 | SLEW=FAST | `ddr3_addr[7]` | unverified (U9) |
+| `ddr3_addr[8]` | DDR3L address A8 | R8 | out | SSTL135 | SLEW=FAST | `ddr3_addr[8]` | unverified (U9) |
+| `ddr3_addr[9]` | DDR3L address A9 | V7 | out | SSTL135 | SLEW=FAST | `ddr3_addr[9]` | unverified (U9) |
+| `ddr3_addr[10]` | DDR3L address A10 | R6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[10]` | unverified (U9) |
+| `ddr3_addr[11]` | DDR3L address A11 | U6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[11]` | unverified (U9) |
+| `ddr3_addr[12]` | DDR3L address A12 | T6 | out | SSTL135 | SLEW=FAST | `ddr3_addr[12]` | unverified (U9) |
+| `ddr3_addr[13]` | DDR3L address A13 | T8 | out | SSTL135 | SLEW=FAST | `ddr3_addr[13]` | unverified (U9) |
+| `ddr3_ba[0]` | DDR3L bank address BA0 | R1 | out | SSTL135 | SLEW=FAST | `ddr3_ba[0]` | unverified (U9) |
+| `ddr3_ba[1]` | DDR3L bank address BA1 | P4 | out | SSTL135 | SLEW=FAST | `ddr3_ba[1]` | unverified (U9) |
+| `ddr3_ba[2]` | DDR3L bank address BA2 | P2 | out | SSTL135 | SLEW=FAST | `ddr3_ba[2]` | unverified (U9) |
+| `ddr3_ras_n` | DDR3L RAS# | P3 | out | SSTL135 | SLEW=FAST | `ddr3_ras_n` | unverified (U9) |
+| `ddr3_cas_n` | DDR3L CAS# | M4 | out | SSTL135 | SLEW=FAST | `ddr3_cas_n` | unverified (U9) |
+| `ddr3_we_n` | DDR3L WE# | P5 | out | SSTL135 | SLEW=FAST | `ddr3_we_n` | unverified (U9) |
+| `ddr3_reset_n` | DDR3L RESET# (4.7 kOhm pull-down, SCH sheet 9) | K6 | out | SSTL135 | SLEW=FAST | `ddr3_reset_n` | unverified (U9) |
+| `ddr3_cke` | DDR3L CKE | N5 | out | SSTL135 | SLEW=FAST | `ddr3_cke[0]` | unverified (U9) |
+| `ddr3_cs_n` | DDR3L CS# | U8 | out | SSTL135 | SLEW=FAST | `ddr3_cs_n[0]` | unverified (U9) |
+| `ddr3_odt` | DDR3L ODT | R5 | out | SSTL135 | SLEW=FAST | `ddr3_odt[0]` | unverified (U9) |
+| `ddr3_ck_p` | DDR3L CK (clock, true) | U9 | out | DIFF_SSTL135 | SLEW=FAST | `ddr3_ck_p[0]` | unverified (U9) |
+| `ddr3_ck_n` | DDR3L CK# (clock, complement) | V9 | out | DIFF_SSTL135 | SLEW=FAST | `ddr3_ck_n[0]` | unverified (U9) |
+| `ddr3_dm[0]` | DDR3L data mask LDM | L1 | out | SSTL135 | SLEW=FAST | `ddr3_dm[0]` | unverified (U9) |
+| `ddr3_dm[1]` | DDR3L data mask UDM | U1 | out | SSTL135 | SLEW=FAST | `ddr3_dm[1]` | unverified (U9) |
+| `ddr3_dq[0]` | DDR3L data DQ0 | K5 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[0]` | unverified (U9) |
+| `ddr3_dq[1]` | DDR3L data DQ1 | L3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[1]` | unverified (U9) |
+| `ddr3_dq[2]` | DDR3L data DQ2 | K3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[2]` | unverified (U9) |
+| `ddr3_dq[3]` | DDR3L data DQ3 | L6 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[3]` | unverified (U9) |
+| `ddr3_dq[4]` | DDR3L data DQ4 | M3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[4]` | unverified (U9) |
+| `ddr3_dq[5]` | DDR3L data DQ5 | M1 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[5]` | unverified (U9) |
+| `ddr3_dq[6]` | DDR3L data DQ6 | L4 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[6]` | unverified (U9) |
+| `ddr3_dq[7]` | DDR3L data DQ7 | M2 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[7]` | unverified (U9) |
+| `ddr3_dq[8]` | DDR3L data DQ8 | V4 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[8]` | unverified (U9) |
+| `ddr3_dq[9]` | DDR3L data DQ9 | T5 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[9]` | unverified (U9) |
+| `ddr3_dq[10]` | DDR3L data DQ10 | U4 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[10]` | unverified (U9) |
+| `ddr3_dq[11]` | DDR3L data DQ11 | V5 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[11]` | unverified (U9) |
+| `ddr3_dq[12]` | DDR3L data DQ12 | V1 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[12]` | unverified (U9) |
+| `ddr3_dq[13]` | DDR3L data DQ13 | T3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[13]` | unverified (U9) |
+| `ddr3_dq[14]` | DDR3L data DQ14 | U3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[14]` | unverified (U9) |
+| `ddr3_dq[15]` | DDR3L data DQ15 | R3 | inout | SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dq[15]` | unverified (U9) |
+| `ddr3_dqs_p[0]` | DDR3L LDQS (strobe, true) | N2 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_p[0]` | unverified (U9) |
+| `ddr3_dqs_p[1]` | DDR3L UDQS (strobe, true) | U2 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_p[1]` | unverified (U9) |
+| `ddr3_dqs_n[0]` | DDR3L LDQS# (strobe, complement) | N1 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_n[0]` | unverified (U9) |
+| `ddr3_dqs_n[1]` | DDR3L UDQS# (strobe, complement) | V2 | inout | DIFF_SSTL135 | SLEW=FAST IN_TERM=UNTUNED_SPLIT_40 | `ddr3_dqs_n[1]` | unverified (U9) |
+
+The memory controller's own serial console (LiteDRAM's calibration BIOS, 115200 8N1, output only):
+
+| Port | Adapter pin | Board pin | FPGA pin | Dir | I/O standard | Options | Master XDC | Status |
+|---|---|---|---|---|---|---|---|---|
+| `dram_uart_tx` | a 3.3 V USB-serial adapter's RXD (optional) | ChipKit header IO1 (the Arduino layout's TX; 200 Ω series resistor, RM §11.1) | U16 | out | LVCMOS33 | - | `ck_io1` | checked |
+
+Nothing needs to be connected to IO1: the controller calibrates and reports through
+`sysinfo.DDR_STATUS` either way. With a 3.3 V adapter on IO1 and ground, its log shows what
+calibration found (BOARD.md section 12).
+
+### 2.6 Pins that are deliberately not used
+
+Pmod pins without a signal (JA10, JC9, JC10, JD7..JD10), the ChipKit header (but IO1 in the DDR
+designs), Ethernet and the quad-SPI flash pins are left unassigned, and so is every DDR3L pin
+(bank 34) in the designs without DDR: Vivado's default for unused pins is a weak pull-down, and
+the DDR3L's RESET# has its own 4.7 kΩ pull-down (SCH sheet 9), so the memory stays in reset while
+`HAS_DDR = 0`.
 
 ## 3. Unverified points
 
@@ -162,6 +241,7 @@ with the memory controller.
 | U6 | Adapter models and revisions | the tables follow Pmod MicroSD rev. A (A.1 schematic), Pmod VGA rev. C, Pmod PS2 rev. C; another revision could differ | owner: the labels (INVENTORY.md G4) |
 | U7 | The Arty's JP2 (CK_RST to the FT2232) | shorted, JP2 lets the FT2232's DTR line drive the RESET net (RM §8, §11); the USB/UART sheet of the schematic is not published, so whether opening a serial terminal would pulse or hold the reset is unknown | owner: leave JP2 open (not shorted) |
 | U8 | Which way up the 12-pin Pmod MicroSD goes into JA | The right way up (component side up) its pin 1 (~CS) meets JA1, as the table assumes. Upside down, adapter pin p meets JA pin 13 - p: the card's 3.3 V net lands on `sd_cs_n` (an FPGA output) and `sd_dat1`, its ground on `sd_mosi` (an output) and `sd_dat2`, and the Arty's 3.3 V and ground drive the card's ~CS, MOSI, DAT1 and DAT2 pins directly. The 200 Ω resistors on JA limit each FPGA pin to about 16 mA, but the card is then powered through FPGA outputs with its own pins driven from the board's supply, which can damage the card | owner: with the board unpowered and no card in the slot, plug it in component side up, pin 1 at JA pin 1, and check that before powering; insert a card only then. Bring it up after the baseline design, which leaves JA unassigned |
+| U9 | The DDR3L pins' electrical settings and the memory part | the pins come from Digilent's MIG project and agree with LiteX's Arty platform; the termination (40 Ω here, 50 Ω in the MIG project), the slew and the internal VREF are LiteX's choices; Digilent's files are for board revision E.0 and the MT41K128M16 family (INVENTORY.md G1) | only calibration on the board shows they work: CALIB_DONE in `sysinfo.DDR_STATUS`, the controller's log on IO1, then the BRAM diagnostics' DDR tests (BOARD.md section 12) |
 
 ## 4. The PS/2 supply: questions for the owner
 

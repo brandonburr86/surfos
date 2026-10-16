@@ -1,5 +1,6 @@
 #!/bin/sh
 # SurfCPU board track: tests of tools/fpga-build.sh, tools/program.sh and the Digilent fetch.sh.
+# (The DDR designs' generated files and defines: a scratch repository with stand-ins.)
 #
 # Fake ssh, docker, vivado, openxc7-build.sh and openFPGALoader (sim/board/tools/fake) stand in
 # for the build host, Docker, Vivado, the open flow and the board: the fake vivado runs the real
@@ -480,6 +481,84 @@ check "soc: a memory synthesis dropped fails the build (netlist check)" test "$r
 check "soc: ... and says which" grep -q "PROBLEM: memory u_soc.u_bootrom.rom" "$d/openxc7/check-netlist.txt"
 run env FLOW=openxc7 ROM="$t/nosuch.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_100t
 check "soc: a missing ROM image refused" has "needs the boot ROM image"
+
+# the DDR designs: the HAS_DDR = 0 ones plus the DDR lines, and alike but for the boot ROM
+ddr_lines='^(define|generated) |rtl/soc/ddr/|build/litedram/|pythondata-cpu-vexriscv|arty_a7_ddr3_|surf_ddr_bridge|^lvs-timeout '
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files | grep -Ev "$ddr_lines" > "$t/ddr.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_top.files | grep -Ev "$ddr_lines" > "$t/top2.list"
+check "ddr designs: surfcpu_arty_a7_ddr is surfcpu_arty_a7_top plus the DDR lines" cmp -s "$t/ddr.list" "$t/top2.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files > "$t/ddr2.list"
+grep -v -e '^#' -e '^rom ' boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files > "$t/ddrdiag.list"
+check "ddr designs: surfcpu_arty_a7_ddr_bramdiag is surfcpu_arty_a7_ddr but for its boot ROM" cmp -s "$t/ddr2.list" "$t/ddrdiag.list"
+check "ddr designs: both define ARTY_HAS_DDR and read their generated files through ip/litedram/arty.sha256" test \
+    "$(grep -c -E '^define +ARTY_HAS_DDR|^generated +ip/litedram/arty.sha256' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files | awk -F: '{ s += $2 } END { print s }')" -eq 4
+
+# ------------------------------------------------------------------------------ generated files and defines
+# A scratch repository with what the DDR design reads, but stand-ins for the generated LiteDRAM
+# files (the real ones need the pinned generator, make litedram-gen) and a scratch copy of
+# ip/litedram/arty.sha256 with their hashes. build/ is ignored there, as in the repository.
+g=$t/gitrepo-ddr
+mkdir -p "$g"
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh tools/openxc7-build.sh boards/arty_a7 rtl spec/soc.toml |
+    ( cd "$g" && tar xf - )
+gv=build/litedram/arty/gateware
+gx=build/third_party/litedram/src/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog
+mkdir -p "$g/$gv" "$g/$gx" "$g/ip/litedram"
+printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_core.v"
+printf '00000013\n' > "$g/$gv/litedram_core_rom.init"
+: > "$g/$gv/litedram_core_sram.init"
+printf 'set_false_path -quiet -to [get_cells -hierarchical -filter {mr_ff == TRUE}]\n' > "$g/$gv/litedram_core.xdc"
+printf 'module VexRiscv (input wire clk); endmodule\n' > "$g/$gx/VexRiscv_Min.v"
+{ echo "# scratch: SHA-256 of the stand-ins"; echo "# generate: make litedram-gen"
+  for f in $gv/litedram_core.v $gv/litedram_core_rom.init $gv/litedram_core_sram.init $gv/litedram_core.xdc $gx/VexRiscv_Min.v; do
+      echo "$(shasum -a 256 "$g/$f" | cut -d' ' -f1)  $f"; done; } > "$g/ip/litedram/arty.sha256"
+printf '/build/\n' > "$g/.gitignore"
+gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
+gitq init -q && gitq add -A && gitq commit -q -m scratch
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+gb=$base/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: generated files that match their list leave a clean commit clean" \
+    test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gb/manifest.dry-run.txt")"
+check "generated: ... and the build says they match" has "5 generated files match ip/litedram/arty.sha256"
+check "generated: the manifest names the list, the match and the design's defines" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+assert d['generated_lists']==['ip/litedram/arty.sha256'] and d['generated_files_match'] is True, d
+assert d['defines']==['ARTY_HAS_DDR'], d
+" "$gb/manifest.dry-run.txt"
+check "define: params.tcl gives Vivado the design's defines" grep -q '^set defines {ARTY_HAS_DDR}$' "$gb/stage/params.tcl"
+check "generated: Vivado's stage has the generated files" test -f "$gb/stage/surfcpu/$gv/litedram_core_rom.init"
+printf '// changed\n' >> "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: a generated file that differs from its list makes the build dirty" \
+    test -n "$(grep '^source_dirty = true' "$gb/manifest.dry-run.txt")" -a -n "$(grep '^generated_files_match = false' "$gb/manifest.dry-run.txt")"
+check "generated: ... and the build names it and how to make it again" \
+    eval "grep -q 'so the build counts as dirty: $gv/litedram_core.v' '$t/out.txt' && grep -q 'regenerate them: make litedram-gen' '$t/out.txt'"
+rm "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "generated: a missing generated file stops the build, saying how to make it" \
+    test "$rc" -eq 1 -a -n "$(grep "needs $gv/litedram_core.v, a generated file (make litedram-gen)" "$t/out.txt")"
+printf 'module litedram_core (input wire clk); endmodule\n' > "$g/$gv/litedram_core.v"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+c=$gb/out/calls.txt
+check "define: Vivado (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gb/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: build.tcl synthesizes with -verilog_define ARTY_HAS_DDR" grep -q "^synth_design -top surfcpu_arty_a7_top .*-verilog_define ARTY_HAS_DDR" "$c"
+check "define: build.tcl reads the generated ROM image and the bridge's scoped constraints" \
+    eval "grep -q '^read_mem $gv/litedram_core_rom.init' '$c' && grep -q '^read_xdc -ref surf_ddr_bridge -unmanaged rtl/soc/ddr/surf_ddr_bridge.xdc' '$c'"
+mv "$conf" "$t/conf.ddr"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+gd=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+check "define: the open flow (fake) builds the DDR design" test "$rc" -eq 0 -a -f "$gd/surfcpu_arty_a7_ddr_bramdiag.bit"
+check "define: ... with -D ARTY_HAS_DDR, the generated sources and the design's LVS limit" \
+    eval "grep -q -- '-D ARTY_HAS_DDR ' '$FAKE_LOG' && grep -q -- ' $gv/litedram_core.v ' '$FAKE_LOG' && grep -q -- '--lvs-timeout 14400' '$FAKE_LOG'"
+check "define: nextpnr is given the DDR3L pins with their slew and termination" \
+    grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
+check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \
+    test "$(grep -c 'arty_a7_ddr3_timing.xdc' "$gd/nextpnr-not-checked.txt")" -eq 6
+rm -f "$t/conf.ddr"                                     # no build-host.conf again
+rm -rf "$g"
 
 run env FLOW=openxc7 SURFCPU_FPGA_OUT=/nonexistent/fpga tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
 check "openxc7: an output directory outside surfcpu/ refused (the container sees only the repository)" has "is outside it"
