@@ -128,10 +128,12 @@ def generate() -> str:
 _X_WRITES = {0: False, 1: False, 2: False, 3: False, 4: True, 5: True, 6: True, 7: True}
 
 
-def check(elf_path: Path, trace_path: Path) -> dict:
-    """Compare one trace of the probe program with the contract. Returns a report dict."""
+def check(elf_path: Path, trace: Path | list[tracefmt.Rec]) -> dict:
+    """Compare one trace of the probe program (a file, or its records) with the contract.
+    Returns a report dict."""
     elf = rvelf.read_elf(elf_path)
-    recs = tracefmt.read_trace(trace_path)
+    on_disk = isinstance(trace, (str, Path))
+    recs = tracefmt.read_trace(trace) if on_disk else trace
     by_pc: dict[int, tracefmt.Rec] = {}
     for r in recs:
         by_pc.setdefault(r.pc, r)          # each probe runs once
@@ -218,8 +220,8 @@ def check(elf_path: Path, trace_path: Path) -> dict:
             exp = "trap" if writes else "no trap"
             if (got == "trap") != writes or got == "not executed":
                 issue(a, f"rule variant {v}", exp, got)
-    return {"elf": str(elf_path), "trace": str(trace_path), "probes": counts,
-            "issues": issues}
+    return {"elf": str(elf_path), "trace": str(trace) if on_disk else "(records)",
+            "probes": counts, "issues": issues}
 
 
 # Where the pinned Spike, configured as tools/trace_spike.py does, differs from docs/ISA.md
@@ -306,6 +308,7 @@ def main(argv: list[str]) -> int:
     s = sub.add_parser("spike")
     s.add_argument("--build", default=str(ROOT / "build" / "ref" / "csrmap"))
     s.add_argument("--json")
+    s.add_argument("--trace", help="also save Spike's trace of the probe here")
     s.add_argument("-v", "--verbose", action="store_true", help="list every difference")
     s.add_argument("--stock", action="store_true",
                    help="use the container's stock Spike, not the contract-patched one")
@@ -321,7 +324,7 @@ def main(argv: list[str]) -> int:
         import trace_spike
         d = Path(a.build)
         d.mkdir(parents=True, exist_ok=True)
-        asm, elf, trace = d / "csrmap.S", d / "csrmap.elf", d / "csrmap.spike.trace"
+        asm, elf = d / "csrmap.S", d / "csrmap.elf"
         asm.write_text(generate())
         build(asm, elf)
         binary = "spike" if a.stock else None
@@ -329,8 +332,9 @@ def main(argv: list[str]) -> int:
         if res.status != "pass":
             print(f"rvcsrmap: the probe did not finish on Spike ({res.status})")
             return 1
-        tracefmt.save_trace(res.records, trace, trace_spike.trace_comments(res, elf))
-        rep = check(elf, trace)
+        if a.trace:
+            tracefmt.save_trace(res.records, a.trace, trace_spike.trace_comments(res, elf))
+        rep = check(elf, res.records)
         if a.verbose:
             print_report(rep, "Spike (" + " ".join(res.command[1:6]) + ")")
         n = sum(rep["probes"].values())

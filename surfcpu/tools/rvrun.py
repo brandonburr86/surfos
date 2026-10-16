@@ -17,12 +17,19 @@ against Spike's. Suites:
 
     python3 tools/rvrun.py [--dut CMD] [--suites directed,random,arch,csrmap]
         [--seeds N | --seed-list 1,5,9] [--length L] [--dut-seeds 1,2,3]
-        [--ilat MIN:MAX] [--dlat MIN:MAX] [--max-cycles N] [--jobs J]
-        [--elf FILE ...] [--out DIR] [--json FILE] [--show N]
+        [--ilat MIN:MAX] [--dlat MIN:MAX] [--max-cycles N] [--jobs J] [--keep-programs]
+        [--elf FILE ...] [--out DIR] [--json FILE] [--show N] [-v]
     python3 tools/rvrun.py selftest [--jobs J]
         the runner against tools/rvspike_tb.py injecting each kind of fault: every one
-        must be caught, and the allowed variations (aligned memory layout, no final
-        tohost store) must pass
+        must be caught, and the allowed variations (riscv-formal's default memory layout
+        with --lenient-layout, no final tohost store with --lenient-final-store) must pass
+
+Each program runs once on Spike (its trace kept in memory, never written) and then on the
+DUT once per DUT seed. A pass leaves nothing on disk, and a passing random program's
+generated files are removed too (--keep-programs keeps them). A failure leaves its report,
+the DUT's signature and both traces cut to 20000 records before the divergence and 2000
+after it. DUT runs are bounded: --max-cycles defaults to a multiple of Spike's retirement
+count (cycle_limit), and a DUT whose trace grows far past Spike's is stopped.
 
 Exit status: 0 every run passed, 1 something failed, 2 the setup is broken.
 Run it inside the toolchain container (make test-cpu-ref / make test-ref do).
@@ -34,6 +41,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import dataclasses
+import itertools
 import json
 import os
 import shlex
@@ -177,44 +185,69 @@ def suite_elf(paths: list[str]) -> list[Program]:
 
 # --- reference and DUT runs ------------------------------------------------------------
 
-_ref_locks: dict[Path, threading.Lock] = {}
-_ref_locks_guard = threading.Lock()
-
-
 def reference(prog: Program) -> tuple[list[tracefmt.Rec], dict]:
-    """Spike's trace (and status, signature) for a program, cached next to the ELF."""
-    with _ref_locks_guard:
-        lock = _ref_locks.setdefault(prog.elf, threading.Lock())
-    with lock:
-        tr = prog.elf.with_suffix(".ref.trace")
-        meta = prog.elf.with_suffix(".ref.json")
-        if not _stale(tr, prog.elf) and not _stale(meta, prog.elf):
-            info = json.loads(meta.read_text())
-            if (info.get("converter") == trace_spike.CONVERTER_VERSION
-                    and info.get("spike") == trace_spike.SPIKE):
-                return tracefmt.read_trace(tr), info
-        res = trace_spike.run_spike(prog.elf, sig_symbols=prog.sig,
-                                    max_records=prog.max_records or
-                                    trace_spike.DEFAULT_MAX_RECORDS)
-        if res.status == "error":
-            raise RuntimeError(f"Spike failed on {prog.elf}: {'; '.join(res.warnings)}")
-        tracefmt.save_trace(res.records, tr, trace_spike.trace_comments(res, prog.elf))
-        info = {"status": res.status, "exit": res.exit_code, "tohost": res.tohost,
-                "records": len(res.records), "warnings": res.warnings,
-                "signature": res.signature, "converter": trace_spike.CONVERTER_VERSION,
-                "spike": trace_spike.SPIKE}
-        meta.write_text(json.dumps(info) + "\n")
-        return res.records, info
+    """Spike's trace, status and signature for a program, in memory only (the runner keeps no
+    reference trace on disk except next to a failure)."""
+    res = trace_spike.run_spike(prog.elf, sig_symbols=prog.sig,
+                                max_records=prog.max_records or trace_spike.DEFAULT_MAX_RECORDS)
+    if res.status == "error":
+        raise RuntimeError(f"Spike failed on {prog.elf}: {'; '.join(res.warnings)}")
+    info = {"status": res.status, "exit": res.exit_code, "tohost": res.tohost,
+            "records": len(res.records), "warnings": res.warnings,
+            "signature": res.signature, "comments": trace_spike.trace_comments(res, prog.elf)}
+    return res.records, info
 
 
-def run_dut(dut: list[str], prog: Program, seed: int, args, workdir: Path):
+# What a run leaves on disk. A pass: nothing. A failure: its report, the DUT's signature and
+# both traces cut to KEEP_BEFORE records before the divergence and KEEP_AFTER after it.
+KEEP_BEFORE = 20_000
+KEEP_AFTER = 2_000
+# The testbench writes about 85 bytes per record; a DUT whose trace grows past this many
+# bytes per reference record (plus KEEP_AFTER + 1000 records of slack) is stopped.
+TRACE_BYTES_PER_RECORD = 200
+
+
+def _lat_max(spec: str | None) -> int:
+    return int(spec.split(":")[-1]) if spec else 1      # the testbench's default is 1:1
+
+
+def cycle_limit(prog: Program, args, records: int) -> int:
+    """The DUT's --max-cycles unless one is given. Measured on the core (surfcpu@e792960):
+    at most 5.4 cycles per retirement with the default 1:1 latencies, 6.7 at 1:4 and 22.6 at
+    --ilat/--dlat 6:30. This allows 64 plus twice the two maximum latencies per reference
+    retirement (68 at 1:1, 184 at 6:30), plus 200000 for short programs."""
+    if args.max_cycles:
+        return args.max_cycles
+    if prog.fixed_latency:
+        lat = 2
+    else:
+        lat = _lat_max(args.ilat) + _lat_max(args.dlat)
+    return (64 + 2 * lat) * max(records, 1) + 200_000
+
+
+def _tail(path: Path, limit: int = 16384) -> str:
+    with path.open("rb") as fh:
+        fh.seek(max(0, path.stat().st_size - limit))
+        return fh.read().decode("utf-8", "replace").strip()
+
+
+def trace_byte_limit(ref_records: int) -> int:
+    return TRACE_BYTES_PER_RECORD * (ref_records + KEEP_AFTER + 1000) + 65536
+
+
+def run_dut(dut: list[str], prog: Program, seed: int, args, workdir: Path, max_cycles: int,
+            ref_records: int):
+    """One DUT run, watched: stopped after --timeout seconds, or once its trace passes
+    trace_byte_limit (a runaway core would otherwise fill the disk before --max-cycles)."""
+    max_trace_bytes = trace_byte_limit(ref_records)
     trace = workdir / f"{prog.name}.s{seed}.dut.trace"
     sigf = workdir / f"{prog.name}.s{seed}.dut.sig"
-    for f in (trace, sigf):
+    log = workdir / f"{prog.name}.s{seed}.dut.log"
+    for f in (trace, sigf, log):
         if f.exists():
             f.unlink()
     cmd = dut + ["--elf", str(prog.elf), "--trace", str(trace), "--seed", str(seed),
-                 "--max-cycles", str(args.max_cycles)]
+                 "--max-cycles", str(max_cycles)]
     if args.ilat and not prog.fixed_latency:
         cmd += ["--ilat", args.ilat]
     if args.dlat and not prog.fixed_latency:
@@ -222,35 +255,71 @@ def run_dut(dut: list[str], prog: Program, seed: int, args, workdir: Path):
     if prog.sig:
         cmd += ["--signature", str(sigf), "--sig-begin", prog.sig[0], "--sig-end", prog.sig[1]]
     t0 = time.monotonic()
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout,
-                           cwd=ROOT)
-        code, err = p.returncode, (p.stderr or "") + (p.stdout or "")
-    except subprocess.TimeoutExpired:
-        code, err = None, f"killed after {args.timeout} s"
-    return code, trace, sigf, err.strip(), time.monotonic() - t0
+    stopped = None
+    with log.open("wb") as fh:
+        p = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
+        while True:
+            try:
+                code = p.wait(timeout=0.05)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() - t0 > args.timeout:
+                stopped = ("timeout", f"the DUT did not finish within {args.timeout:g} s")
+            elif trace.exists() and trace.stat().st_size > max_trace_bytes:
+                stopped = ("runaway", f"stopped: the DUT's trace passed {max_trace_bytes} "
+                                      f"bytes, while Spike's run has {ref_records} records "
+                                      f"(the testbench writes about 85 bytes each)")
+            if stopped:
+                p.kill()
+                p.wait()
+                code = None
+                break
+    err = _tail(log)
+    log.unlink()
+    return code, trace, sigf, err, time.monotonic() - t0, stopped
 
 
-def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outcome:
+def _complete_lines(fh):
+    """The lines of a file whose writer was killed: a last line cut short is dropped."""
+    for line in fh:
+        if line.endswith("\n"):
+            yield line
+
+
+def read_dut_trace(trace: Path, limit: int, killed: bool) -> list[tracefmt.Rec]:
+    """At most limit records of the DUT's trace (more are never needed to judge it)."""
+    with trace.open("r", encoding="utf-8", errors="replace") as fh:
+        lines = _complete_lines(fh) if killed else fh
+        return list(itertools.islice(tracefmt.parse_lines(lines, str(trace)), limit))
+
+
+def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path,
+          refinfo: tuple[list[tracefmt.Rec], dict] | None = None) -> Outcome:
     t0 = time.monotonic()
     out = Outcome(prog.suite, prog.name, seed, "FAIL", "")
     try:
-        ref, info = reference(prog)
-    except RuntimeError as e:
+        ref, info = refinfo if refinfo is not None else reference(prog)
+    except (RuntimeError, trace_spike.ConvertError) as e:
         out.verdict, out.reason, out.kind = "ERROR", str(e), "reference"
         return out
-    code, trace, sigf, err, _ = run_dut(dut, prog, seed, args, workdir)
+    n_ref = info["records"]
+    limit = n_ref + KEEP_AFTER + 16                 # DUT records read: enough to judge
+    code, trace, sigf, err, _, stopped = run_dut(dut, prog, seed, args, workdir,
+                                                 cycle_limit(prog, args, n_ref), n_ref)
     out.seconds = time.monotonic() - t0
     report_path = workdir / f"{prog.name}.s{seed}.report.txt"
-    lines: list[str] = [f"program {prog.elf}", f"dut seed {seed}", f"dut exit {code}"]
+    ref_path = workdir / f"{prog.name}.s{seed}.ref.trace"
+    lines: list[str] = [f"program {prog.elf}", f"dut seed {seed}",
+                        f"dut exit {code if code is not None else '(none: stopped)'}"]
     if prog.fixed_latency and (args.ilat or args.dlat):
         lines.append(f"run with the testbench's default latencies: {prog.fixed_latency}")
     if err:
         lines.append("dut output (last lines):")
         lines += ["  " + x for x in err.splitlines()[-15:]]
     problems: list[tuple[str, str]] = []
-    if code is None:
-        problems.append(("timeout", f"the DUT did not finish within {args.timeout} s"))
+    if stopped:
+        problems.append(stopped)
     elif code == 3:
         problems.append(("exit", "exit 3: a testbench error (bad arguments or ELF, no tohost, "
                                  "a bus protocol violation by the core, or a tohost store "
@@ -262,17 +331,22 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
         problems.append(("exit", f"exit {code} ({what}); Spike's run gives "
                                  f"{info['exit']} ({info['status']})"))
     dut_recs = None
+    diverged_at = None
     if trace.exists():
         try:
-            dut_recs = tracefmt.read_trace(trace)
+            dut_recs = read_dut_trace(trace, limit + 1, stopped is not None)
         except tracefmt.TraceError as e:
             problems.append(("format", f"the DUT's trace cannot be read: {e}"))
-    elif code is not None:
+    elif not stopped:
         problems.append(("trace", "the DUT wrote no trace"))
     if dut_recs is not None:
+        if len(dut_recs) > limit:
+            dut_recs = dut_recs[:limit]
+            lines.append(f"the DUT's trace has more than {limit} records; the first {limit} "
+                         f"were read")
         out.retirements = len(dut_recs)
         if prog.check == "csrmap":
-            rep = rvcsrmap.check(prog.elf, trace)
+            rep = rvcsrmap.check(prog.elf, dut_recs)
             if rep["issues"]:
                 first = rep["issues"][0]
                 problems.append(("csrmap", f"{len(rep['issues'])} CSR probes differ from "
@@ -286,10 +360,10 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
             res = trace_compare.compare(ref, dut_recs, tohost=tohost,
                                         lenient_final_store=args.lenient_final_store,
                                         lenient_layout=args.lenient_layout)
-            lines.append(trace_compare.report(res, str(prog.elf.with_suffix(".ref.trace")),
-                                              str(trace)))
+            lines.append(trace_compare.report(res, str(ref_path), str(trace)))
             if not res.ok:
                 problems.append((res.kind, res.summary()))
+                diverged_at = res.index
         else:
             lines.append(f"trace not compared: {prog.note or 'timing-dependent program'}")
     if prog.sig and code is not None and prog.check == "trace":
@@ -311,23 +385,71 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
                     detail = f"word {k} (0x{begin + 4 * k:08x}) is missing in one of them"
                 problems.append(("signature", f"signature differs ({len(got)} words, Spike "
                                               f"{len(want)}): first at {detail}"))
-    report_path.write_text("\n".join(lines) + "\n")
-    out.report = str(report_path)
     if problems:
         out.kind, out.reason = problems[0]
         if len(problems) > 1:
             out.reason += "; also " + "; ".join(f"{k}: {r}" for k, r in problems[1:])
+        lines[3:3] = [f"FAIL ({k}): {r}" for k, r in problems]
+        report_path.write_text("\n".join(lines) + "\n")
+        out.report = str(report_path)
+        _keep_failure(prog, trace, ref, dut_recs, diverged_at, info, ref_path)
+        return out
+    for f in (trace, sigf, report_path, ref_path):      # a pass leaves nothing on disk
+        if f.exists():
+            f.unlink()
+    out.verdict = "PASS"
+    if prog.check == "csrmap":
+        out.reason = "every CSR probe as docs/ISA.md says"
+    elif prog.compare_trace:
+        out.reason = f"{out.retirements} retirements agree" + (
+            ", signature agrees" if prog.sig else "")
     else:
-        out.verdict = "PASS"
-        if prog.check == "csrmap":
-            out.reason = "every CSR probe as docs/ISA.md says"
-        elif prog.compare_trace:
-            out.reason = f"{out.retirements} retirements agree" + (
-                ", signature agrees" if prog.sig else "")
-        else:
-            out.reason = f"exit status agrees ({out.retirements} retirements; trace not " \
-                         f"compared: {prog.note or 'timing'})"
+        out.reason = f"exit status agrees ({out.retirements} retirements; trace not " \
+                     f"compared: {prog.note or 'timing'})"
     return out
+
+
+def _keep_failure(prog: Program, trace: Path, ref: list[tracefmt.Rec], dut_recs,
+                  diverged_at: int | None, info: dict, ref_path: Path) -> None:
+    """Cut a failing run's traces down to what explains it: KEEP_BEFORE records before the
+    divergence and KEEP_AFTER after it, or the last KEEP_AFTER when the traces agree (an exit
+    status or signature failure). The CSR probe's trace is kept whole (it is checked whole)."""
+    if dut_recs is None:
+        if trace.exists() and trace.stat().st_size > 1_000_000:
+            with trace.open("rb") as fh:                # unreadable: keep its first 1 MB
+                head = fh.read(1_000_000)
+            trace.write_bytes(head)
+        lo, hi = max(0, len(ref) - KEEP_AFTER), len(ref)
+        what = f"records {lo}..{hi - 1}, the end of the run"
+    elif prog.check == "csrmap":
+        tracefmt.save_trace(dut_recs, trace, ["the DUT's trace, as read by the runner"])
+        return
+    else:
+        if diverged_at is not None:
+            lo, hi = max(0, diverged_at - KEEP_BEFORE), diverged_at + KEEP_AFTER
+            what = f"records {lo}..{hi - 1}, around the divergence at {diverged_at}"
+        else:
+            n = max(len(ref), len(dut_recs))
+            lo, hi = max(0, n - KEEP_AFTER), n
+            what = f"records {lo}..{hi - 1}, the end of the run"
+        tracefmt.save_trace(dut_recs[lo:hi], trace, [f"the DUT's trace: {what}"])
+    tracefmt.save_trace(ref[lo:hi], ref_path, [f"Spike's trace: {what}", *info["comments"]])
+
+
+def run_program(prog: Program, seeds: list[int], dut: list[str], args,
+                workdir: Path) -> list[Outcome]:
+    """Every DUT seed of one program against one Spike run, which is kept in memory."""
+    try:
+        refinfo = reference(prog)
+    except (RuntimeError, trace_spike.ConvertError, OSError) as e:
+        return [Outcome(prog.suite, prog.name, s, "ERROR", str(e), "reference") for s in seeds]
+    outs = [judge(prog, s, dut, args, workdir, refinfo) for s in seeds]
+    if (prog.suite == "random" and not args.keep_programs
+            and all(o.verdict == "PASS" for o in outs)):
+        for f in (prog.elf, prog.elf.with_suffix(".S")):
+            if f.exists():
+                f.unlink()
+    return outs
 
 
 # --- the run ----------------------------------------------------------------------------
@@ -372,19 +494,19 @@ def run(args) -> int:
     dut_seeds = [int(x) for x in args.dut_seeds.split(",")]
     say(f"rvrun: {len(progs)} programs x {len(dut_seeds)} DUT seed(s) on {args.dut} "
         f"(jobs {args.jobs}, results in {out})")
-    jobs = [(p, s) for p in progs for s in dut_seeds]
     outcomes: list[Outcome] = []
     t0 = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = {}
-        for p, s in jobs:
+        futs = []
+        for p in progs:
             wd = out / p.suite
             wd.mkdir(parents=True, exist_ok=True)
-            futs[ex.submit(judge, p, s, dut, args, wd)] = (p, s)
+            futs.append(ex.submit(run_program, p, dut_seeds, dut, args, wd))
         for f in concurrent.futures.as_completed(futs):
-            o = f.result()
-            outcomes.append(o)
-            say(f"{o.verdict:5} {o.suite}/{o.name} seed {o.dut_seed}: {o.reason}")
+            for o in f.result():
+                outcomes.append(o)
+                if o.verdict != "PASS" or args.verbose:
+                    say(f"{o.verdict:5} {o.suite}/{o.name} seed {o.dut_seed}: {o.reason}")
     outcomes.sort(key=lambda o: (o.suite, o.name, o.dut_seed))
     failed = [o for o in outcomes if o.verdict != "PASS"]
     for o in failed[:args.show]:
@@ -421,7 +543,18 @@ SELFTEST_FAULTS = [
     ("--exit 2", "", "FAIL", "exit"),
     ("--exit 3", "", "FAIL", "exit"),
     ("--exit 139", "", "FAIL", "exit"),
+    ("--runaway", "", "FAIL", "runaway"),
 ]
+
+_RUN_FILES = ("*.dut.trace", "*.dut.sig", "*.dut.log", "*.ref.trace", "*.report.txt")
+
+
+def _clean(wd: Path) -> None:
+    """Remove the runner's own files left in a work directory by an earlier run."""
+    wd.mkdir(parents=True, exist_ok=True)
+    for pat in _RUN_FILES:
+        for f in wd.glob(pat):
+            f.unlink()
 
 
 def selftest(args) -> int:
@@ -429,9 +562,16 @@ def selftest(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     progs = [p for p in suite_directed(out) if p.name in ("traps", "mem")]
     progs += suite_random(out, [7], 1500)
-    bad = []
+    refs = {p.name: reference(p) for p in progs}
+    bad: list[str] = []
     n = 0
     lock = threading.Lock()
+    # The most a failing run may leave: two traces of KEEP_BEFORE + KEEP_AFTER records, a
+    # report and a signature.
+    most = 2 * TRACE_BYTES_PER_RECORD * (KEEP_BEFORE + KEEP_AFTER) + 1_000_000
+
+    def workdir(opts: str, ropts: str) -> Path:
+        return out / ((opts + ropts).replace(" ", "").replace("-", "") or "clean")
 
     def one(opts, ropts, verdict, kind, prog):
         nonlocal n
@@ -439,41 +579,65 @@ def selftest(args) -> int:
         sub.dut = f"{STANDIN} {opts}".strip()
         sub.lenient_layout = "--lenient-layout" in ropts
         sub.lenient_final_store = "--lenient-final-store" in ropts
-        wd = out / ((opts + ropts).replace(" ", "").replace("-", "") or "clean")
-        wd.mkdir(parents=True, exist_ok=True)
-        o = judge(prog, 1, shlex.split(sub.dut), sub, wd)
+        wd = workdir(opts, ropts)
+        o = judge(prog, 1, shlex.split(sub.dut), sub, wd, refs[prog.name])
+        left = sorted(wd.glob(f"{prog.name}.s1.*"))
+        size = sum(f.stat().st_size for f in left)
         ok = o.verdict == verdict and (kind is None or o.kind == kind)
+        why = ""
+        if ok and verdict == "PASS" and left:
+            ok, why = False, f"; the pass left {[f.name for f in left]}"
+        if ok and verdict == "FAIL" and (o.report is None or size > most):
+            ok, why = False, f"; the failure left {size} bytes in {[f.name for f in left]}"
         with lock:
             n += 1
             if not ok:
                 bad.append(f"{opts or '(clean)'} {ropts} on {prog.name}: got {o.verdict} "
-                           f"{o.kind} ({o.reason}), expected {verdict} {kind}")
+                           f"{o.kind} ({o.reason}), expected {verdict} {kind}{why}")
         return ok
 
+    for opts, ropts, _, _ in SELFTEST_FAULTS:
+        _clean(workdir(opts, ropts))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futs = [ex.submit(one, opts, ropts, v, k, p)
                 for opts, ropts, v, k in SELFTEST_FAULTS for p in progs]
         for f in futs:
             f.result()
-    # Several DUT seeds of one program at once: each run keeps its own files.
-    wd = out / "seeds"
-    wd.mkdir(parents=True, exist_ok=True)
     sub = argparse.Namespace(**vars(args))
-    sub.dut = f"{STANDIN} --inject rd_data"
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        outs = list(ex.map(lambda s: judge(progs[0], s, shlex.split(sub.dut), sub, wd),
-                           (1, 2, 3)))
-    names = {Path(o.report).name for o in outs}
-    traces = sorted(wd.glob(f"{progs[0].name}.s*.dut.trace"))
+    sub.lenient_layout = sub.lenient_final_store = False
+    # Several DUT seeds of one program, as a run does them: each failing run keeps its own
+    # files, and passing runs keep none.
+    wd = out / "seeds"
+    _clean(wd)
+    outs = run_program(progs[0], [1, 2, 3], shlex.split(f"{STANDIN} --inject rd_data"), sub, wd)
+    reports = sorted(Path(o.report).name for o in outs if o.report)
+    kept = sorted(f.name for f in wd.glob(f"{progs[0].name}.s*.trace"))
     n += 1
-    if len(names) != 3 or len(traces) != 3 or any(o.kind != "rd" for o in outs):
-        bad.append(f"three DUT seeds at once: reports {sorted(names)}, traces "
-                   f"{[t.name for t in traces]}, kinds {[o.kind for o in outs]}")
+    if len(set(reports)) != 3 or len(kept) != 6 or any(o.kind != "rd" for o in outs):
+        bad.append(f"three failing DUT seeds: reports {reports}, traces {kept}, kinds "
+                   f"{[o.kind for o in outs]}")
+    wd = out / "seeds-pass"
+    _clean(wd)
+    outs = run_program(progs[0], [1, 2, 3], shlex.split(STANDIN), sub, wd)
+    left = sorted(f.name for f in wd.iterdir())
+    n += 1
+    if any(o.verdict != "PASS" for o in outs) or left:
+        bad.append(f"three passing DUT seeds: {[o.verdict for o in outs]}, left {left}")
+    # A random program that passes is removed unless --keep-programs.
+    rnd = progs[-1]
+    for keep in (True, False):
+        sub.keep_programs = keep
+        outs = run_program(rnd, [1], shlex.split(STANDIN), sub, out / "random")
+        n += 1
+        if outs[0].verdict != "PASS" or rnd.elf.exists() != keep:
+            bad.append(f"random program, keep_programs={keep}: {outs[0].verdict}, ELF "
+                       f"{'still there' if rnd.elf.exists() else 'removed'}")
     for b in bad:
         say("rvrun selftest: " + b)
-    say(f"rvrun selftest: {n - len(bad)}/{n} runs judged as expected "
-        f"({len(SELFTEST_FAULTS)} stand-in behaviours x {len(progs)} programs, and three DUT "
-        f"seeds of one program at once)")
+    say(f"rvrun selftest: {n - len(bad)}/{n} checks as expected ({len(SELFTEST_FAULTS)} "
+        f"stand-in behaviours x {len(progs)} programs, including what each run leaves on "
+        f"disk; three DUT seeds of one program failing and passing; a passing random program "
+        f"kept and removed)")
     return 1 if bad else 0
 
 
@@ -488,7 +652,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--dut-seeds", default="1", help="the DUT's --seed values, e.g. 1,2,3")
     ap.add_argument("--ilat", help="instruction-port latency MIN:MAX for the DUT")
     ap.add_argument("--dlat", help="data-port latency MIN:MAX for the DUT")
-    ap.add_argument("--max-cycles", type=int, default=20_000_000)
+    ap.add_argument("--max-cycles", type=int, default=None,
+                    help="the DUT's cycle limit (default: 64 per reference retirement "
+                         "+ 200000)")
+    ap.add_argument("--keep-programs", action="store_true",
+                    help="keep generated random programs that passed")
+    ap.add_argument("-v", "--verbose", action="store_true", help="print passing runs too")
     ap.add_argument("--timeout", type=float, default=900.0, help="seconds per DUT run")
     ap.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1))
     ap.add_argument("--elf", action="append", help="also run this ELF (suite 'elf')")

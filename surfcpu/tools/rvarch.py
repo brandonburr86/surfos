@@ -375,7 +375,6 @@ def build_one(t: Test) -> dict:
                            f"({chk.status}, tohost {chk.tohost})")
     timing = _reads_timing_csr(chk.records)
     entry = {"name": t.name, "group": t.group, "elf": str(elf.relative_to(ROOT)),
-            "sig_elf": str(sig_elf.relative_to(ROOT)),
             "ref_sig": str(sig_file.relative_to(ROOT)),
             "ref_sig_sha256": hashlib.sha256(sig_file.read_bytes()).hexdigest(),
             "sig_words": len(sig), "retirements": len(chk.records),
@@ -384,6 +383,10 @@ def build_one(t: Test) -> dict:
                      if timing else ""),
             "latency_sensitive": LATENCY_SENSITIVE.get(t.name, "")}
     done.write_text(json.dumps({"key": key, "entry": entry}) + "\n")
+    # Kept: the self-checking ELF and Spike's signature. The signature-mode ELF and the
+    # results file compiled into the self-checking one are rebuilt when needed.
+    for f in (sig_elf, results):
+        f.unlink()
     return entry
 
 

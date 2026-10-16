@@ -21,6 +21,9 @@ verdicts are proven on the same interface the real testbench will have.
                   [--no-final-store]    stop before logging the tohost store
                   [--bad-signature]     flip a bit of the signature's first word
                   [--exit N]            exit with N whatever happened
+                  [--runaway]           never store to tohost: after the program, loop on a
+                                        jump to itself until --max-cycles (slowly, so the
+                                        runner's trace-size watchdog can be seen to act)
 --seed, --ilat and --dlat are accepted and ignored: Spike has no bus latency.
 Only the Python standard library is used.
 """
@@ -32,6 +35,7 @@ import copy
 import os
 import shlex
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -55,6 +59,23 @@ def _lsb(r: tracefmt.Rec) -> tracefmt.Rec:
     return r
 
 
+def _run_away(path: str, recs: list[tracefmt.Rec], max_cycles: int) -> int:
+    """Append jumps to self until max_cycles retirements, 20000 records every 0.1 s."""
+    last = recs[-1] if recs else None
+    order = last.order + 1 if last else 0
+    pc = last.pc_next if last else 0x80000000
+    n = len(recs)
+    with open(path, "a", encoding="utf-8") as fh:
+        while n < max_cycles:
+            k = min(20000, max_cycles - n)
+            fh.write("".join(tracefmt.Rec(order + j, pc, 0x0000006F, pc_next=pc).text() + "\n"
+                             for j in range(k)))
+            fh.flush()
+            order, n = order + k, n + k
+            time.sleep(0.1)
+    return n
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--elf", required=True)
@@ -71,6 +92,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--no-final-store", action="store_true")
     ap.add_argument("--bad-signature", action="store_true")
     ap.add_argument("--exit", type=int)
+    ap.add_argument("--runaway", action="store_true")
     env = os.environ.get("SURFCPU_STANDIN", "")
     extra = []
     for item in shlex.split(env.replace(",", " ")):
@@ -97,7 +119,7 @@ def main(argv: list[str]) -> int:
     recs = res.records
     for r in recs:
         r.notes = None
-    if a.no_final_store and res.status != "timeout" and recs:
+    if (a.no_final_store or a.runaway) and res.status != "timeout" and recs:
         recs = recs[:-1]
     if a.inject:
         kind, _, n = a.inject.partition("@")
@@ -109,6 +131,10 @@ def main(argv: list[str]) -> int:
     if a.trace:
         tracefmt.save_trace(recs, a.trace, ["stand-in testbench: Spike via tools/rvspike_tb.py"],
                             with_notes=False)
+    if a.runaway:
+        n = _run_away(a.trace, recs, a.max_cycles) if a.trace else a.max_cycles
+        print(f"rvspike_tb: no tohost store within {n} retirements", file=sys.stderr)
+        return 2
     if a.signature and res.signature is not None:
         words = list(res.signature)
         if a.bad_signature and words:
