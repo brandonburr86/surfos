@@ -3,7 +3,8 @@
 What SurfBoot (the boot ROM firmware) and a kernel agree on. The constants come from
 `[bootabi]` in [`spec/soc.toml`](../spec/soc.toml); the C structures are in
 [`firmware/include/surfcpu/bootabi.h`](../firmware/include/surfcpu/bootabi.h); the packer is
-`tools/surfimg.py`. Version 1, frozen 2026-10-15. This is a SurfCPU board ABI, not an SBI or
+`tools/surfimg.py`. Version 1, frozen 2026-10-15; clarifications that change no image or
+kernel are listed in section 6. This is a SurfCPU board ABI, not an SBI or
 OpenSBI boot protocol.
 
 ## 1. Build artifacts
@@ -12,7 +13,7 @@ OpenSBI boot protocol.
 |---|---|
 | `surfboot.elf` | SurfBoot with symbols; `surfboot.mem` initializes the boot ROM in the bitstream and in simulation |
 | `surfos.elf` | the RISC-V kernel with symbols, sections and debug information |
-| `surfos.payload.bin` | `surfos.elf` as a raw image from its first loadable byte to the end of its initialized data (intermediate) |
+| `surfos.payload.bin` | `surfos.elf` as a raw image by load (physical) address, from its lowest loadable byte to the end of its initialized data (intermediate) |
 | `SURFOS.BIN` | the package installed on the card: a 64-byte header followed by the payload |
 
 RISC-V outputs live under `build/riscv32/arty_a7/` (kernel) and `surfcpu/build/` (hardware and
@@ -33,7 +34,7 @@ never a RISC-V kernel and the tools refuse them (they have no `SIMG` header).
 | `0x18` | 4 | `mem_size` | bytes the image spans once running, payload plus BSS; >= `payload_size` |
 | `0x1C` | 4 | `entry` | first instruction; 4-byte aligned, inside the payload |
 | `0x20` | 4 | `payload_crc32` | CRC-32 of the payload bytes (section 3) |
-| `0x24` | 4 | `flags` | 0 (reserved) |
+| `0x24` | 4 | `flags` | 0 (reserved); SurfBoot logs a nonzero value and otherwise ignores it |
 | `0x28` | 4 | `image_version` | the kernel's version, `major << 16 \| minor << 8 \| patch` |
 | `0x2C` | 4 | `build_id` | first 8 hex digits of the source commit |
 | `0x30` | 12 | `name` | ASCII, NUL-padded, e.g. `SurfOS` |
@@ -42,14 +43,20 @@ never a RISC-V kernel and the tools refuse them (they have no `SIMG` header).
 SurfBoot accepts an image only if all of these hold, and says which check failed otherwise:
 
 1. The file is at least 64 bytes; `magic`, `version` and `header_size` are as above; `header_crc32` matches.
-2. `isa` has no bit SurfBoot's CPU lacks (it has I, M, Zicsr, Zifencei); `platform` = 1.
+2. `isa` includes `SURF_ISA_I` and has no bit SurfBoot's CPU lacks (it has I, M, Zicsr,
+   Zifencei); `platform` = 1.
 3. The file is exactly `64 + payload_size` bytes (a truncated or padded file is refused).
 4. `load_addr` is aligned; `mem_size >= payload_size`; the range `[load_addr, load_addr + mem_size)`
    computed without overflow lies inside the DDR that calibrated, and outside SurfBoot's own
-   reservations (`ddr_top` in the memory map).
+   reservations (`ddr_top`: the top 16 MiB of the DDR that calibrated, which is the memory
+   map's `0x8F000000` for the 256 MiB part).
 5. `entry` is aligned and inside `[load_addr, load_addr + payload_size)`.
 6. The CRC of the payload as read from the card matches `payload_crc32`, and so does the CRC
    of the bytes read back from DDR after copying.
+
+Segments are placed by their load (physical) addresses. A program may copy parts of itself
+elsewhere after it starts (for example code into scratch RAM), but `entry` runs where the
+payload was loaded.
 
 The image's BSS is not cleared by SurfBoot: the kernel's startup clears `[end of payload,
 load_addr + mem_size)` from its own linker symbols.
@@ -104,7 +111,7 @@ it uses scratch RAM for anything else. Version 1, 256 bytes:
 | `0x18` | 4 | `sys_hz` | `sysinfo.SYS_HZ` |
 | `0x1C` | 4 | `timebase_hz` | `timer.TIMEBASE` |
 | `0x20` | 4 | `ram_base` | DDR base (`0x80000000`) |
-| `0x24` | 4 | `ram_size` | bytes of DDR SurfBoot verified usable |
+| `0x24` | 4 | `ram_size` | bytes of DDR that calibrated and passed SurfBoot's quick test (not an exhaustive memory test) |
 | `0x28` | 4 | `image_base` | the header's `load_addr` |
 | `0x2C` | 4 | `image_mem_size` | the header's `mem_size` |
 | `0x30` | 4 | `boot_device` | `SURF_BOOT_DEVICE_SD` (1) |
@@ -125,15 +132,27 @@ sizes, saying why. It reads 8.3 names only, so boot paths are short:
 ```
 /BOOT/SURFOS.BIN     the kernel package SurfBoot loads
 /BOOT/BACKUP.BIN     optional last known-good package (tried when SURFOS.BIN fails a check,
-                     or chosen by holding BTN0 at power-on)
+                     or chosen by holding BTN0 at power-on; holding BTN1 instead stops
+                     in SurfBoot's UART monitor)
 /BOOT/CMDLINE.TXT    optional kernel command line
 /SYSTEM/             configuration and supporting data
 /PROGRAMS/           later RISC-V programs
 /USERS/DOCUMENTS/    the owner's files
 ```
 
+`DOCUMENTS` is longer than an 8.3 name: on the card it is a long (VFAT) name with a short
+alias such as `DOCUME~1`, as macOS writes it, and the kernel's FAT driver finds it by its long
+name. SurfBoot needs no long names: everything it reads is under `/BOOT/`.
+
 SurfBoot only reads the card. After the handoff the kernel owns it, mounting it read-write
 once its SD write path is validated. Updates from the Mac (`make deploy-sd`) replace files in
 `/BOOT/` and `/SYSTEM/` only, keep the user directories, never repartition or format, and verify
 every copied byte. FAT32 is not journaled: an interrupted update can damage the file system,
 and a backup file does not make an update atomic.
+
+## 6. Clarifications (version 1 unchanged)
+
+* 2026-10-15: the payload is laid out by load address; `flags` nonzero is logged and
+  ignored; check 2 requires `SURF_ISA_I`; `ram_size` means SurfBoot's quick test only;
+  `ddr_top` follows the calibrated DDR size; BTN1 stops in the monitor; `/USERS/DOCUMENTS/`
+  is a long name.

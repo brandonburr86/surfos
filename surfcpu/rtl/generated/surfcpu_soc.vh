@@ -229,7 +229,7 @@ localparam integer SURF_PS2_STATUS_TX_NAK_LSB = 7;  // sticky: the device did no
 localparam integer SURF_PS2_STATUS_TX_NAK_WIDTH = 1;
 localparam [31:0] SURF_PS2_STATUS_TX_NAK_MASK = 32'h0000_0080;  // in place
 localparam [31:0] SURF_PS2_CTRL = 32'h0000_0008;  // rw: Receiver enable and interrupt enable.
-localparam integer SURF_PS2_CTRL_RX_EN_LSB = 0;  // 1 = receive (reset 1)
+localparam integer SURF_PS2_CTRL_RX_EN_LSB = 0;  // 1 = receive (reset 1); 0 ignores the lines (the keyboard is not inhibited)
 localparam integer SURF_PS2_CTRL_RX_EN_WIDTH = 1;
 localparam [31:0] SURF_PS2_CTRL_RX_EN_MASK = 32'h0000_0001;  // in place
 localparam integer SURF_PS2_CTRL_RX_IE_LSB = 1;  // interrupt while RX_AVAIL
@@ -275,7 +275,7 @@ localparam [31:0] SURF_VIDEO_STATUS_VBLANK_MASK = 32'h0000_0001;  // in place
 localparam integer SURF_VIDEO_STATUS_VBLANK_EV_LSB = 1;  // sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)
 localparam integer SURF_VIDEO_STATUS_VBLANK_EV_WIDTH = 1;
 localparam [31:0] SURF_VIDEO_STATUS_VBLANK_EV_MASK = 32'h0000_0002;  // in place
-localparam integer SURF_VIDEO_STATUS_FRAME_LSB = 16;  // frame counter (wraps)
+localparam integer SURF_VIDEO_STATUS_FRAME_LSB = 16;  // frame counter (wraps); counts when vertical blanking begins
 localparam integer SURF_VIDEO_STATUS_FRAME_WIDTH = 16;
 localparam [31:0] SURF_VIDEO_STATUS_FRAME_MASK = 32'hFFFF_0000;  // in place
 localparam [31:0] SURF_VIDEO_CURSOR = 32'h0000_0008;  // rw: Cursor position on the screen (display coordinates, after SCROLL).

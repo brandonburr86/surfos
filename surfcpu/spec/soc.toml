@@ -483,7 +483,7 @@ offset = 0x08
 access = "rw"
 desc = "Receiver enable and interrupt enable."
 fields = [
-  { name = "RX_EN", bits = "0", desc = "1 = receive (reset 1)" },
+  { name = "RX_EN", bits = "0", desc = "1 = receive (reset 1); 0 ignores the lines (the keyboard is not inhibited)" },
   { name = "RX_IE", bits = "1", desc = "interrupt while RX_AVAIL" },
   { name = "ERR_IE", bits = "2", desc = "interrupt while a sticky error is set" },
 ]
@@ -511,7 +511,7 @@ fields = [
 
 [[periph]]
 name = "video"
-desc = "VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30."
+desc = "VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame."
 irq = "video"
 
 [[periph.reg]]
@@ -534,7 +534,7 @@ desc = "Frame state."
 fields = [
   { name = "VBLANK", bits = "0", desc = "in vertical blanking now" },
   { name = "VBLANK_EV", bits = "1", desc = "sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)" },
-  { name = "FRAME", bits = "31:16", desc = "frame counter (wraps)" },
+  { name = "FRAME", bits = "31:16", desc = "frame counter (wraps); counts when vertical blanking begins" },
 ]
 
 [[periph.reg]]

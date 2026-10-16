@@ -138,18 +138,18 @@ PS/2 port (keyboard). Receives device-to-host frames into a 16-byte FIFO, checki
 |---|---|---|---|---|
 | `0x000` | `DATA` | rc | 7:0 `DATA` received byte (scan code set 2 from a keyboard)<br>31 `EMPTY` FIFO was empty | Read pops the FIFO. EMPTY = 1 means there was nothing. |
 | `0x004` | `STATUS` | w1c | 0 `RX_AVAIL` FIFO not empty<br>1 `RX_FULL` FIFO full<br>2 `OVF` sticky: a byte was lost because the FIFO was full<br>3 `PARITY` sticky: a frame failed odd parity (dropped)<br>4 `FRAME` sticky: bad start or stop bit (dropped)<br>5 `TIMEOUT` sticky: a partial frame was abandoned<br>6 `TX_BUSY` a host-to-device byte is being sent<br>7 `TX_NAK` sticky: the device did not acknowledge, or the send timed out | State and sticky errors; write 1 to clear a sticky bit. |
-| `0x008` | `CTRL` | rw | 0 `RX_EN` 1 = receive (reset 1)<br>1 `RX_IE` interrupt while RX_AVAIL<br>2 `ERR_IE` interrupt while a sticky error is set | Receiver enable and interrupt enable. |
+| `0x008` | `CTRL` | rw | 0 `RX_EN` 1 = receive (reset 1); 0 ignores the lines (the keyboard is not inhibited)<br>1 `RX_IE` interrupt while RX_AVAIL<br>2 `ERR_IE` interrupt while a sticky error is set | Receiver enable and interrupt enable. |
 | `0x00C` | `TXDATA` | wo | 7:0 `DATA` command byte | Write bits 7:0 to send a command byte to the device (ignored while TX_BUSY). |
 | `0x010` | `ERRCOUNT` | ro | 7:0 `PARITY` parity errors<br>15:8 `FRAME` framing errors<br>23:16 `TIMEOUT` abandoned frames<br>31:24 `OVF` bytes lost to a full FIFO | Saturating error counters since reset (diagnostics). |
 
 ### video at `0x1000_6000`
 
-VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Interrupt source 3 (video).
+VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. Interrupt source 3 (video).
 
 | Offset | Register | Access | Fields | Description |
 |---|---|---|---|---|
 | `0x000` | `CTRL` | rw | 0 `ENABLE` 0 = black picture (syncs keep running)<br>2:1 `MODE` 0 = color-bar test pattern, 1 = text, 2..3 reserved (black)<br>3 `CURSOR_EN` show the cursor<br>4 `CURSOR_BLINK` blink it (about 2 Hz) | Display mode. Reset: ENABLE=1, MODE=0 (test pattern), so a monitor shows bars before any software runs. |
-| `0x004` | `STATUS` | w1c | 0 `VBLANK` in vertical blanking now<br>1 `VBLANK_EV` sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)<br>31:16 `FRAME` frame counter (wraps) | Frame state. |
+| `0x004` | `STATUS` | w1c | 0 `VBLANK` in vertical blanking now<br>1 `VBLANK_EV` sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)<br>31:16 `FRAME` frame counter (wraps); counts when vertical blanking begins | Frame state. |
 | `0x008` | `CURSOR` | rw | 6:0 `COL` column 0..79<br>12:8 `ROW` row 0..29 | Cursor position on the screen (display coordinates, after SCROLL). |
 | `0x00C` | `SCROLL` | rw | 4:0 `ROW` 0..29 (values 30..31 act as 0) | First text row shown at the top of the screen. |
 | `0x010` | `IE` | rw | 0 `VBLANK` interrupt while STATUS.VBLANK_EV | Interrupt enable. |

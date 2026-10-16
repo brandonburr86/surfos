@@ -6,6 +6,7 @@ Group's Open Bus Interface): one request channel with a valid/ready handshake, o
 channel without backpressure, byte enables, and an error response. This document is the
 contract: the CPU, the interconnect, every slave and the DDR bridge implement exactly this.
 Frozen at version 1 on 2026-10-15; a change needs a new version number here and in every user.
+Clarifications that change no implementation are listed in section 8.
 
 ## 1. Signals
 
@@ -49,7 +50,8 @@ The instruction port always drives `req_write = 0`, `req_be = 4'b1111`, `req_wda
    access per cycle.
 7. **Bounded latency.** Every slave answers within a bounded number of cycles. MMIO and block
    RAM answer in 1 cycle (an MMIO register may take longer when its peripheral says so: the SPI
-   `DATA` read waits for a running transfer, at most 16 x (DIV + 1) cycles). The DDR bridge has
+   `DATA` read waits for a running transfer, at most 16 x (DIV + 1) cycles, where DIV is the
+   value latched when that transfer started, so never more than 16 x 256 = 4096 cycles). The DDR bridge has
    a watchdog that turns a stuck access into an error response (`sysinfo.DDR_STATUS.TIMEOUT`).
 8. **Reset.** In reset, masters drive `req_valid = 0` and slaves drive `rsp_valid = 0`. The
    whole SoC resets together; no request survives a reset.
@@ -116,3 +118,8 @@ video clock domain.
   exactly once however long the bus stalls.
 * Instruction fetches have no side effects, so wrong-path fetches are harmless; their
   responses are dropped.
+
+## 8. Clarifications (version 1 unchanged)
+
+* 2026-10-15: rule 7's SPI bound uses the DIV latched at the start of the transfer (a DIV
+  write during a transfer applies to the next one), as `surf_spi` implements it.

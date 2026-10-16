@@ -105,8 +105,8 @@ boot ROM can also be loaded at run time with `+bootrom=<file>`.
 
 ## 5. File formats
 
-**ROM image (`*.mem`).** For `$readmemh`: one 32-bit word per line, 8 hex digits, no address
-markers; line *i* is bytes 4*i*..4*i*+3 of the binary, little-endian. The boot ROM's file has
+**ROM image (`*.mem`).** For `$readmemh`: one 32-bit word per line, 8 hex digits (written in lower case;
+readers accept either), no address markers; line *i* is bytes 4*i*..4*i*+3 of the binary, little-endian. The boot ROM's file has
 exactly 16384 lines (64 KiB, zero padded). Made by `tools/bin2mem.py`.
 
 **Retirement trace (`*.trace`).** One line per `rvfi_valid`, written by every CPU and SoC

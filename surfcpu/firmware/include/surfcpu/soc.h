@@ -232,7 +232,7 @@
 #define SURF_PS2_STATUS_TX_NAK_WIDTH 1
 #define SURF_PS2_STATUS_TX_NAK_MASK 0x00000080u /* in place */
 #define SURF_PS2_CTRL 0x00000008u /* rw: Receiver enable and interrupt enable. */
-#define SURF_PS2_CTRL_RX_EN_LSB 0 /* 1 = receive (reset 1) */
+#define SURF_PS2_CTRL_RX_EN_LSB 0 /* 1 = receive (reset 1); 0 ignores the lines (the keyboard is not inhibited) */
 #define SURF_PS2_CTRL_RX_EN_WIDTH 1
 #define SURF_PS2_CTRL_RX_EN_MASK 0x00000001u /* in place */
 #define SURF_PS2_CTRL_RX_IE_LSB 1 /* interrupt while RX_AVAIL */
@@ -278,7 +278,7 @@
 #define SURF_VIDEO_STATUS_VBLANK_EV_LSB 1 /* sticky: a vertical blanking interval began (interrupt source when IE.VBLANK) */
 #define SURF_VIDEO_STATUS_VBLANK_EV_WIDTH 1
 #define SURF_VIDEO_STATUS_VBLANK_EV_MASK 0x00000002u /* in place */
-#define SURF_VIDEO_STATUS_FRAME_LSB 16 /* frame counter (wraps) */
+#define SURF_VIDEO_STATUS_FRAME_LSB 16 /* frame counter (wraps); counts when vertical blanking begins */
 #define SURF_VIDEO_STATUS_FRAME_WIDTH 16
 #define SURF_VIDEO_STATUS_FRAME_MASK 0xFFFF0000u /* in place */
 #define SURF_VIDEO_CURSOR 0x00000008u /* rw: Cursor position on the screen (display coordinates, after SCROLL). */
