@@ -324,6 +324,11 @@ CARD.md section 8 has the details and what FAT32 cannot make safe. In short:
 2. Boot, then work in `/sd0p1/USERS/DOCUMENTS`. Every command that changes files puts it on
    the card before the prompt returns; a refused write makes the command fail with
    `... not all of it reached /sd0p1: I/O error`, and `sync` tries again.
+   - SurfOS holds at most 128 KiB of changes for a card that keeps refusing; after that,
+     writes fail at once.
+   - `eject` then keeps the volume mounted:
+     `eject: sd0 stays mounted: sync tries the writes again; umount gives them up`.
+   - `umount` gives the changes up and says how many blocks were lost.
 3. **Always `eject sd0` before taking the card out or switching off**, and wait for
    `sd0: safe to remove`.
 
