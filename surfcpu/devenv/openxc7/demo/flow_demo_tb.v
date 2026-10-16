@@ -5,13 +5,15 @@ File: flow_demo_tb.v Date: 10/15/26 (SurfCPU)
 --------------------
 Icarus testbench for flow_demo, for the RTL and (with -DNETLIST) for a gate-level netlist of
 the same module made by the openXC7 flow, which cannot take parameters. It decodes the UART
-output with its own 8N1 receiver and checks every line's text and counter, the exact bit
-time (characters of a line start exactly 10 bit times and one clock apart), the line period, the LED
-counter and the heartbeat, and that the RESET button restarts the count: it is pressed at a
-random moment (+seed=N) for a random time while a line is being sent.
+output with its own 8N1 receiver and checks every line's text and counter, the exact bit time
+(the characters of a line start exactly 10 bit times and one clock apart), the line period,
+the LED counter and the heartbeat, and that the RESET button restarts the count: it is
+pressed at a random moment (+seed=N) for a random time while a line is being sent.
 
-Plusargs: +seed=N (default 1), +lines=N lines to check before the reset press (default 3,
-1 with NETLIST), +noreset skips the reset press. Prints PASS or stops with $fatal.
+Plusargs: +seed=N (default 1), +lines=N lines to check before the reset press (default 3;
+1 with NETLIST, where the press comes right after the first line, because a second of
+gate-level simulation takes too long), +noreset skips the press. Prints PASS or stops with
+$fatal.
 */
 `timescale 1ns/1ps
 module flow_demo_tb;
@@ -158,10 +160,14 @@ module flow_demo_tb;
             check_start(start, n * PERIOD, n);
         end
 
-`ifndef NETLIST
         if (!$test$plusargs("noreset")) begin
+`ifdef NETLIST
+            // A second takes far too long at gate level: press RESET soon after the first line.
+            press_at  = cyc + 10 + ({$random(seed)} % 1000);
+`else
             // press RESET in the middle of line `lines`, then expect #0000 again
             press_at  = lines * PERIOD + 10 + ({$random(seed)} % (LINE_LEN * CHAR_CYCLES - 20));
+`endif
             press_len = 1 + ({$random(seed)} % 50);
             $display("reset: pressed at cycle %0d for %0d cycles", press_at, press_len);
             wait (cyc == press_at);
@@ -175,9 +181,12 @@ module flow_demo_tb;
             cyc = 0;
             receive_line(0, start);
             check_start(start, 0, 0);
+`ifndef NETLIST
             receive_line(1, start);
             check_start(start, PERIOD, 1);
+`endif
         end
+`ifndef NETLIST
         if (hb_checks < 2) begin $display("heartbeat checked only %0d times", hb_checks); errors = errors + 1; end
 `endif
         if (errors) $fatal(1, "flow_demo_tb: %0d errors", errors);

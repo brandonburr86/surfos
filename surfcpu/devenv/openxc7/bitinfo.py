@@ -15,8 +15,9 @@ Project X-Ray's Vivado 2016.3 test bitstreams (lib/test_data/configuration_test*
 
     bitinfo.py design.bit                          print a summary
     bitinfo.py --json design.bit                   the same as JSON
-    bitinfo.py --expect-device xc7a100t design.bit check it is a complete bitstream for that
-                                                   device; exit 1 (with the reasons) if not
+    bitinfo.py --expect-device xc7a100t design.bit check it is a complete standard bitstream for
+                                                   that device (length, IDCODE, frames, commands,
+                                                   CRC); exit 1 (with the reasons) if not
     bitinfo.py --self-test                         check the parser on synthetic bitstreams
 
 The IDCODE check uses the JTAG IDCODEs of the devices, not Project X-Ray's database, and
@@ -46,6 +47,12 @@ CMDS = {0: "NULL", 1: "WCFG", 2: "MFW", 3: "LFRM", 4: "RCFG", 5: "START", 6: "RC
         8: "AGHIGH", 9: "SWITCH", 10: "GRESTORE", 11: "SHUTDOWN", 12: "GCAPTURE", 13: "DESYNC",
         15: "IPROG", 16: "CRCC", 17: "LTIMER", 18: "BSPI_READ", 19: "FALL_EDGE"}
 CRC32C_REFLECTED = 0x82F63B78                       # Castagnoli polynomial, bit-reversed
+CONFIG_BITS = {                                     # UG470 table 1-1, configuration bitstream
+    "xc7a35t": 17536096,                            # length of a standard (uncompressed,
+    "xc7a50t": 17536096,                            # non-debug) bitstream
+    "xc7a100t": 30606304,
+    "xc7a200t": 77845216,
+}
 
 
 def crc_step(crc: int, reg: int, word: int) -> int:
@@ -171,9 +178,12 @@ def analyse(data: bytes) -> dict:
     return info
 
 
-def check(info: dict, device: str) -> list[str]:
+def check(info: dict, device: str, standard_length: bool = True) -> list[str]:
     """Reasons why `info` is not a complete bitstream for `device` (empty: none found)."""
     problems = []
+    if standard_length and info["stream_bytes"] * 8 != CONFIG_BITS[device]:
+        problems.append(f"the stream is {info['stream_bytes'] * 8} bits, not the {CONFIG_BITS[device]} "
+                        f"of a standard {device} bitstream (UG470 table 1-1)")
     want = JTAG_IDCODES[device] & 0x0FFFFFFF
     ids = [v & 0x0FFFFFFF for v in info["idcodes"]]
     if not ids:
@@ -209,7 +219,10 @@ def summary(info: dict) -> str:
                      f"date {h.get('date')} {h.get('time')}, stream {h.get('length')} bytes")
     else:
         lines.append(f"no .bit header, stream {info['stream_bytes']} bytes")
-    lines.append(f"sync word at word {info['sync_word_index']}")
+    lines.append(f"sync word at word {info['sync_word_index']}; stream {info['stream_bytes'] * 8} bits")
+    for dev, bits in CONFIG_BITS.items():
+        if info["stream_bytes"] * 8 == bits:
+            lines.append(f"  = the standard bitstream length of the {dev} (UG470 table 1-1)")
     lines.append("IDCODE written: " + (", ".join(f"0x{v:08X}" for v in info["idcodes"]) or "none"))
     for dev, code in JTAG_IDCODES.items():
         if any((v & 0x0FFFFFFF) == (code & 0x0FFFFFFF) for v in info["idcodes"]):
@@ -285,12 +298,13 @@ def self_test() -> int:
     expect(info["frames"] == 2, "frame count")
     expect(info["commands"] == ["RCRC", "WCFG", "START", "DESYNC"], f"commands {info['commands']}")
     expect(len(info["crc_checks"]) == 1 and info["crc_checks"][0]["ok"], "CRC recomputed")
-    expect(check(info, "xc7a35t") == [], f"clean check {check(info, 'xc7a35t')}")
-    expect(any("IDCODE" in p for p in check(info, "xc7a100t")), "wrong device refused")
+    expect(check(info, "xc7a35t", False) == [], f"clean check {check(info, 'xc7a35t', False)}")
+    expect(any("bits, not the" in p for p in check(info, "xc7a35t")), "short stream refused")
+    expect(any("IDCODE" in p for p in check(info, "xc7a100t", False)), "wrong device refused")
     info = analyse(_synthetic(0x0362D093, crc_ok=False))
-    expect(any("CRC" in p for p in check(info, "xc7a35t")), "bad CRC refused")
+    expect(any("CRC" in p for p in check(info, "xc7a35t", False)), "bad CRC refused")
     info = analyse(_synthetic(0x03631093, header=False))
-    expect(info["header"] == {} and check(info, "xc7a100t") == [], "100T without header, revision 0")
+    expect(info["header"] == {} and check(info, "xc7a100t", False) == [], "100T without header, revision 0")
     try:
         analyse(_synthetic(0x0362D093)[:-37])
         expect(False, "truncated stream refused")
