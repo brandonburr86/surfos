@@ -29,7 +29,11 @@ soc round 2: the whole system in surfsim (2026-10-16)
   crc32 of the 353 KiB package 23 s (584 million cycles, measured on the first run of the test,
   before it was replaced by an 8 KiB file), the self test 64 s (it passes on the RTL:
   test-soc-system-selftest.txt).
-* The screen during `tasks` shows partly written and blank rows where the UART has whole lines
+* The screen during `tasks` shows blank and partly written rows where the UART has whole lines
   (two kernel tasks printing at once); the fw emulator's text screen shows the same kind of
-  damage at that point, so it is the kernel's console and not the RTL. Reported for the os track.
+  damage at that point, so it is the kernel's console and not the RTL: kputch() sends each
+  character to the serial mirror first and then updates the grid without excluding other tasks,
+  and sscroll() copies the 4,800-byte grid byte by byte (about 10 ms here by estimate, a timer
+  tick), so a task preempted inside a scroll lets the other task's line land in rows the resumed
+  scroll then moves or clears. Reported for the os track.
 * pix_clk and the VGA capture cost about 1 % of the run time, so the pixel domain always runs.

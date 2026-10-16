@@ -314,7 +314,7 @@ test-soc-surfsim: $(BUILD)/sim/surfsim $(SOC_SIMX) $(SOC_DIR)/rom_a.mem \
 	  || { cat $(SOC_DIR)/surfsim_smoke.txt; exit 1; }
 	$(Q)head -1 $(SOC_DIR)/surfsim_smoke.trace | grep -q "^# surfcpu-trace v1: order pc insn" \
 	  || { echo "bad trace header"; exit 1; }
-	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim:' $(SOC_DIR)/surfsim_smoke.txt)"
+	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim: .* after ' $(SOC_DIR)/surfsim_smoke.txt)"
 	@echo "test-soc-surfsim: PASS (seeds $(SOC_SEEDS))"
 
 # ---------------------------------------------------------------------------- synthesis check
@@ -487,7 +487,7 @@ endif
 # with HAS_DDR=1, the DDR model and the io track's models: the boot to the shell prompt, a UART
 # session (bootinfo, ls, cat, ps, tasks, crc32), a command typed on the PS/2 keyboard model checked
 # on the screen decoded from the VGA pixels, and SurfBoot falling back to /BOOT/BACKUP.BIN. Two runs
-# side by side, about 300 and 200 million cycles: some two minutes. test-soc-system-selftest boots
+# side by side, about 315 and 196 million cycles: about 95 s. test-soc-system-selftest boots
 # and runs the kernel self test (1.7 billion cycles, about 8.5 minutes): not part of test-soc.
 SOC_SYS_TEST = $(PYTHON) sim/soc/tools/system_boot_test.py --surfsim $(BUILD)/sim/surfsim \
                --rom $(BUILD)/fw/surfboot.mem --mkcard tools/mkcard.py \

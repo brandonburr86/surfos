@@ -1,0 +1,159 @@
+soc round 2 evidence: make test-soc-system-boot inside make check, 2026-10-16 00:18-00:20 CDT
+Branch sc/soc-2 at b4717a6 (clean tree: SurfBoot, the kernel package and the sysinfo build id all
+say b4717a6a); container surfcpu-toolchain:2026-10-15 (Verilator 5.032, -O3 --x-assign fast).
+build/sim/surfsim: surfcpu_soc with HAS_DDR=1, the real core and io blocks, the DDR and UART
+models and the io track's SD card, PS/2 keyboard and VGA capture. Simulation with models, not
+the board. Seed 1 (the DDR model's ready/latency and the card's response delays).
+
+# test-soc-system-boot: 21 of 21 checks passed in 95 s (boot 314275871 cycles = 12.571 s simulated in 94.8 s wall (3.32 M cycles/s); recovery 195786552 cycles = 7.831 s simulated in 58.4 s wall (3.35 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+# 2026-10-16 05:19:55 UTC
+ok   cards: mkcard.py makes them (standard directories, /BOOT/CMDLINE.TXT, HELLO.TXT and DATA.BIN in /USERS/DOCUMENTS; SURFOS.BIN, or a damaged SURFOS.BIN and BACKUP.BIN)
+ok   boot: every expected line in order (output matched after 314275871 cycles (12.571 s simulated) in 94.8 s wall (3.32 M cycles/s); UART 152 bytes in, 5365 out, 0 framing errors; DDR calibrated, 3608212 reads 2480405 writes 24351741 fetches 0 errors; exit 0)
+ok   boot: SurfBoot from the boot ROM: the DDR model calibrated and the quick test passed, the card initialized through surf_spi, its FAT32 partition found
+ok   boot: SurfBoot loads /BOOT/SURFOS.BIN over surf_spi and checks it: payload CRC 0x59afede3 (as zlib computes it here), as read from the card and from DDR
+ok   boot: SurfBoot hands over: entry 0x80000000, a0 = 0, a1 = 0x0001f000 (boot information), a2 = the magic
+ok   boot: the kernel boots to the shell, its console on surf_uart (ascii, from /BOOT/CMDLINE.TXT)
+ok   boot: the kernel's SD driver on surf_spi and the card model: sd0, its FAT32 partition on /sd0p1
+ok   bootinfo: SurfBoot's block taken (its CRC checked), the handoff registers, the command line
+ok   ls and cat: /sd0p1/USERS/DOCUMENTS holds DATA.BIN and HELLO.TXT (8213 bytes), HELLO.TXT read
+ok   ps: 7 kernel tasks (Kernel Idle Task, init, heartbeat, Shell 0, Shell 1, Shell 2, Shell 3)
+ok   tasks: two more kernel tasks count, sleep and wake on the machine timer, then end
+ok   crc32: both files read back through the kernel's SD driver have their CRCs (3436d7c7, 9c9bbf10)
+ok   drivers, typed on the PS/2 keyboard model (open-drain lines): serial, gpio, ps2kbd and sdcard ok; the keyboard answered the kernel and its keys were counted
+ok   boot: no panic, no killed task, no boot problem
+ok   VGA: 800x525 timing, negative syncs, about 59.9 Hz; every cell matches a glyph of the font ROM
+ok   VGA: the screen shows the console: the command typed on the keyboard and its output
+ok   VGA: the cursor is on the new prompt
+ok   recovery: every expected line in order (output matched after 195786552 cycles (7.831 s simulated) in 58.4 s wall (3.35 M cycles/s); UART 9 bytes in, 3160 out, 0 framing errors; DDR calibrated, 1532390 reads 1655241 writes 10886950 fetches 0 errors; exit 0)
+ok   recovery: SurfBoot refuses the damaged SURFOS.BIN (payload CRC), loads /BOOT/BACKUP.BIN and starts it
+ok   recovery: the kernel boots to the shell and bootinfo reports the backup
+ok   recovery: no panic, no boot problem
+
+boot run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
+  SurfBoot opens the package               1347206  (0.054 s)
+  SurfBoot loads it                       45706734  (1.828 s)
+  SurfBoot checks it                      45986664  (1.839 s)
+  the command line                        46164295  (1.847 s)
+  the handoff                             46346575  (1.854 s)
+  the kernel on the serial console        56346129  (2.254 s)
+  the card mounted                       106936716  (4.277 s)
+  the banner                             126067599  (5.043 s)
+  the shell prompt                       128452228  (5.138 s)
+  bootinfo                               133765103  (5.351 s)
+  bootinfo: command line                 145152450  (5.806 s)
+  ls                                     167408538  (6.696 s)
+  cat                                    177952264  (7.118 s)
+  ps                                     183795979  (7.352 s)
+  ps: the count                          208320395  (8.333 s)
+  tasks                                  241360183  (9.654 s)
+  crc32                                  262473683  (10.499 s)
+  drivers (typed on PS/2)                299846500  (11.994 s)
+  models: card build/soc/system_boot/card-boot.img: 757 blocks read, 0 written, 0 protocol violations; keyboard: 26 frames sent, 2 host bytes, 0 violations; VGA: 751 frames captured
+
+recovery run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
+  SurfBoot opens the package               1347206  (0.054 s)
+  SurfBoot finds the damage               36275407  (1.451 s)
+  SurfBoot tries the backup               36360037  (1.454 s)
+  SurfBoot opens the backup               36412117  (1.456 s)
+  SurfBoot loads it                       80768632  (3.231 s)
+  SurfBoot checks it                      81048562  (3.242 s)
+  the command line                        81190222  (3.248 s)
+  the handoff                             81372502  (3.255 s)
+  the kernel on the serial console        91378306  (3.655 s)
+  the card mounted                       141946758  (5.678 s)
+  the banner                             161509068  (6.460 s)
+  the shell prompt                       163820143  (6.553 s)
+  bootinfo: from the backup              180116881  (7.205 s)
+  models: card build/soc/system_boot/card-recovery.img: 1443 blocks read, 0 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+
+the screen at the end of the boot run, decoded from the VGA pixels:
+# surfsim VGA capture: 751 frames; line 800 pixels (sync 96 negative), frame 525 lines (sync 2 negative), 59.946 Hz at 25177305 Hz; text 80x30, cursor at column 9 row 29, 0 unmatched cells
+  |                                                                                |
+  |                                                                                |
+  |    task A: round 3 of 4, tick 438, sleeping 100 ms                             |
+  |                                                                                |
+  |    task A: round 4 of 4, tick 463, sleeping 100 ms                             |
+  |                                                                                |
+  |    task A ran 4 rounds, task B 3, in 114 ticks; both ended (status 0, 0)       |
+  |SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/HELLO.TXT /sd0p1/USERS/DOCUMENTS/DATA.BIN |
+  |    3436d7c7       21  /sd0p1/USERS/DOCUMENTS/HELLO.TXT                         |
+  |    9c9bbf10     8192  /sd0p1/USERS/DOCUMENTS/DATA.BIN                          |
+  |SURF ~#> drivers                                                                |
+  |    driver    status                                                            |
+  |    serial    ok                                                                |
+  |    gpio      ok                                                                |
+  |    ps2kbd    ok                                                                |
+  |    sdcard    ok                                                                |
+  |    board     arty_a7 (SurfCPU on the Arty A7)                                  |
+  |    console   surf_video text, 80x30 cells of 8x16, 640x480 at a 25177305 Hz pix|
+  |el clock; 14313 cells written, 56 hardware scrolls                              |
+  |    serial    surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz),|
+  | intc source 0                                                                  |
+  |    timer     machine timer, 1000000 Hz timebase, 100 Hz tick, 198 ticks counted|
+  | late                                                                           |
+  |    irq       surf_intc at 0x10002000, 5 level sources, enabled 0x03, pending 0x|
+  |00                                                                              |
+  |    keyboard  PS/2 on surf_ps2 (set 2 translated to set 1), 16 keys, a keyboard |
+  |answered                                                                        |
+  |    sdcard    sd0, 64 MB, read-only, 12 reads, 0 writes, 0 CRC retries, 0 timeou|
+  |ts, 0 errors                                                                    |
+  |SURF ~#>                                                                        |
+
+the same with --seed 7 (2026-10-16 05:10 UTC, d8e31b2's surfsim): test-soc-system-boot: 21 of 21 checks passed in 96 s (boot 313785947 cycles = 12.551 s simulated in 95.3 s wall (3.29 M cycles/s); recovery 195865833 cycles = 7.835 s simulated in 58.0 s wall (3.38 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+
+boot run, the UART (escape sequences removed), SurfBoot and the end of the kernel's boot:
+  
+  SurfBoot 1.0.0 (build b4717a6a), the SurfCPU boot ROM
+  soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream b4717a6a (simulation)
+  ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  sd: SDHC/SDXC, 64 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+  boot: /BOOT/SURFOS.BIN
+  boot: loading 353 KiB .....
+  boot: SurfOS 1.0.0 build b4717a6a: 361800 bytes in 1 fragment, read in 1765 ms
+  boot: load 0x80000000, entry 0x80000000, mem_size 1141616, ISA IM_Zicsr_Zifencei; payload CRC 0x59afede3 matches (card and DDR)
+  boot: command line "ascii"
+  ...
+  Brandon Burr's SurfOS
+  Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  SURF ~#> bootinfo
+    board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
+    boot information: SurfBoot 1.0.0 (b4717a6a), version 1, CRC 0xa0be45d8 ok
+    board id 0x00f0 (simulation), SoC 0.1.0, memory map 1, sys clock 25000000 Hz, timebase 1000000 Hz
+    RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
+    image 0x80000000 + 1141616 bytes; boot device SD, FAT32 at LBA 2048
+    command line: 'ascii'
+    sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream b4717a6a (simulation), features 0xff
+    DDR status 0x5, 256 MB; pixel clock 25177305 Hz
+    screen: surf_video text, 80x30 cells of 8x16, 640x480 at a 25177305 Hz pixel clock; 5699 cells written, 21 hardware scrolls
+  SURF ~#> ls /sd0p1/USERS/DOCUMENTS
+  ...
+  SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/HELLO.TXT /sd0p1/USERS/DOCUMENTS/DATA.BIN
+      3436d7c7       21  /sd0p1/USERS/DOCUMENTS/HELLO.TXT
+      9c9bbf10     8192  /sd0p1/USERS/DOCUMENTS/DATA.BIN
+  SURF ~#> drivers
+      driver    status
+      serial    ok
+      gpio      ok
+      ps2kbd    ok
+      sdcard    ok
+      board     arty_a7 (SurfCPU on the Arty A7)
+      console   surf_video text, 80x30 cells of 8x16, 640x480 at a 25177305 Hz pixel clock; 14313 cells written, 56 hardware scrolls
+      serial    surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+      timer     machine timer, 1000000 Hz timebase, 100 Hz tick, 198 ticks counted late
+      irq       surf_intc at 0x10002000, 5 level sources, enabled 0x03, pending 0x00
+      keyboard  PS/2 on surf_ps2 (set 2 translated to set 1), 16 keys, a keyboard answered
+      sdcard    sd0, 64 MB, read-only, 12 reads, 0 writes, 0 CRC retries, 0 timeouts, 0 errors
+  SURF ~#> 
+recovery run, SurfBoot and the kernel's bootinfo:
+  boot: /BOOT/SURFOS.BIN
+  boot: loading 353 KiB .....
+  boot: /BOOT/SURFOS.BIN: the payload CRC as read from the card is 0x09b3e963, the header says 0x59afede3 (a damaged file)
+  boot: trying /BOOT/BACKUP.BIN instead
+  boot: /BOOT/BACKUP.BIN
+  boot: loading 353 KiB .....
+  boot: SurfOS 1.0.0 build b4717a6a: 361800 bytes in 1 fragment, read in 1764 ms
+  boot: load 0x80000000, entry 0x80000000, mem_size 1141616, ISA IM_Zicsr_Zifencei; payload CRC 0x59afede3 matches (card and DDR)
+  boot: command line "ascii"
+  boot: starting BACKUP.BIN at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+    image 0x80000000 + 1141616 bytes; boot device SD, FAT32 at LBA 2048, from BACKUP.BIN

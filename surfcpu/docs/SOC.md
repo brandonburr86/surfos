@@ -267,9 +267,10 @@ side by side; expectations follow `boards/arty_a7/tests/surfemu_test.py` where t
   starting BACKUP.BIN at 0x80000000 ..."); the kernel boots to the prompt and `bootinfo` says
   "from BACKUP.BIN".
 
-Results (2026-10-16, SURFOS.BIN of 361,800 bytes): 21 of 21 checks; boot 306.8 million cycles
-(12.27 s simulated) in 100 s, recovery 195.9 million cycles (7.83 s) in 62 s, so about 100 s
-for the target. Where the simulated time goes (cycles after reset, at 25 MHz):
+Results (2026-10-16, in `make check` at b4717a6, SURFOS.BIN of 361,800 bytes): 21 of 21
+checks; boot 314.3 million cycles (12.57 s simulated) in 95 s, recovery 195.8 million cycles
+(7.83 s) in 58 s, so 95 s for the target; with `--seed 7` (other DDR and card timing) 21 of 21
+as well. Where the simulated time goes (cycles after reset, at 25 MHz, in that run):
 
 | Milestone | boot run | recovery run |
 |---|---|---|
@@ -278,8 +279,8 @@ for the target. Where the simulated time goes (cycles after reset, at 25 MHz):
 | the kernel's first line | 56.3 M (2.25 s) | 91.4 M (3.66 s) |
 | card mounted | 106.9 M (4.28 s) | 141.9 M (5.68 s) |
 | shell prompt | 128.5 M (5.14 s) | 163.8 M (6.55 s) |
-| bootinfo, ls, cat, ps, tasks, crc32 done | 262.0 M (10.48 s) | (bootinfo: 180.1 M) |
-| `drivers` typed on PS/2, output complete | 299.4 M (11.97 s) | |
+| bootinfo, ls, cat, ps, tasks, crc32 done | 262.5 M (10.50 s) | (bootinfo: 180.1 M) |
+| `drivers` typed on PS/2, output complete | 299.8 M (11.99 s) | |
 
 The kernel runs from DDR, fetched one word at a time (the core keeps one fetch outstanding and
 has no cache) with the DDR model's latency of 2 to 12 cycles: 24.3 million DDR fetches in the
@@ -294,12 +295,12 @@ The decoded screen and the transcripts are kept in `build/soc/system_boot/`, the
 
 ## 10. Synthesis estimate and post-synthesis simulation
 
-`make synth-soc` runs Yosys 0.52 `synth_xilinx` (out of context, `-noiopad -noclkbuf`). With
-the stand-ins as black boxes the soc part comes to 1,144 LUTs, 618 flip-flops, 85 CARRY4,
-35 RAMB36 and 5 LUTRAM primitives (the UART FIFOs). With the cpu and io tracks' blocks (tried in
-a scratch export, section 11) the whole SoC without DDR bridge and board top is about 5,400 LUTs,
-2,670 flip-flops, 36 RAMB36, 4 DSP48E1 and 30 LUTRAM primitives. These are Yosys estimates, not
-Vivado results; BRAM fits the 35T's 50 RAMB36.
+`make synth-soc` runs Yosys 0.52 `synth_xilinx` (out of context, `-noiopad -noclkbuf`). Since
+the merges it synthesizes the whole SoC with the real core and io blocks (no black boxes) but
+without the DDR bridge and board top: 5,412 LUTs, 2,673 flip-flops, 306 CARRY4, 36 RAMB36,
+4 DSP48E1 and 30 LUTRAM primitives (2026-10-16). The soc part alone, with the stand-ins as black
+boxes (round 1): 1,144 LUTs, 618 flip-flops, 85 CARRY4, 35 RAMB36 and 5 LUTRAM primitives (the
+UART FIFOs). These are Yosys estimates, not Vivado results; BRAM fits the 35T's 50 RAMB36.
 
 Yosys can drop logic silently, so `make test-soc-gate` simulates what it produced: `tb_mem` on
 the three memories synthesized alone, and the four SoC scripts on the whole synthesized SoC with
@@ -310,6 +311,9 @@ three write modes, the INIT/INITP layout) and stops on anything it does not mode
 multiplier (the 4 DSP48E1, where the io track saw Yosys delete logic) is outside this check.
 
 ## 11. Integration preview (scratch export, simulation only)
+
+Superseded since the merges: `make check` runs all of this on the merged tree (`synth-soc` with
+no black boxes, `test-soc-boot`, `test-soc-system-boot`). Kept as the round 1 record.
 
 With the cpu and io tracks' RTL from `surfcpu` at 9b8a93b, put into this worktree only for the
 run (untracked, removed afterwards), the makefile picked the real files by itself and:
@@ -334,9 +338,13 @@ files laid over it, under the ignored `build/`, removed afterwards (`make test-s
 * The DDR arbiter loses one cycle per DDR access (section 2).
 * The system runs are simulation with models, not the board: the card, keyboard and DDR models
   answer as the io and soc tracks wrote them, and the DDR model is not the MIG.
-* The screen during `tasks` (two kernel tasks printing at once) shows partly written and blank
-  rows where the UART has whole lines; the fw track's emulator shows the same kind of damage there,
-  so it comes from the kernel's console, not from the RTL (reported to the os track).
+* The screen during `tasks` (two kernel tasks printing at once) shows blank and partly written
+  rows where the UART has whole lines; the fw track's emulator shows the same kind of damage. It
+  is the kernel's console, not the RTL: `kputch()` mirrors each character to the serial line and
+  then updates the console's grid without excluding other tasks, and `sscroll()` copies the
+  4,800-byte grid one byte at a time (by my estimate about 10 ms on SurfCPU running from DDR,
+  as long as a timer tick), so a task preempted inside a scroll lets the other task write its
+  line into rows that the resumed scroll then moves or clears (reported to the os track).
 * Not tested: a reset in the middle of traffic (the whole SoC resets together, SURFBUS.md rule
   8, so no request survives).
 
