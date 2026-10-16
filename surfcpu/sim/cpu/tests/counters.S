@@ -7,8 +7,9 @@ minstret counts exactly the retired instructions: one per instruction, none for 
 instruction that traps (ECALL), every instruction of the handler; a write to minstret
 replaces the value and is not itself counted; instret shadows minstret; the carry from
 minstret into minstreth. mcycle runs, can be written (both halves) and carries;
-mcountinhibit's IR and CY bits stop the counters; the 64-bit hi/lo/hi read sequence; time
-follows the timer's mtime; hpmcounters read 0.
+mcountinhibit's IR and CY bits stop the counters, and a write to a stopped counter sets
+exactly the value written; the 64-bit hi/lo/hi read sequence; time follows the timer's
+mtime; hpmcounters read 0.
 */
 #include "surf_test.h"
 
@@ -144,6 +145,31 @@ test_main:
         bne     x11, x13, 1b
         li      x7, 0x00000abd
         bltu    x11, x7, fail
+
+        li      TESTNUM, 16                     // counters stopped: a write sets exactly the
+        csrwi   mcountinhibit, 5                // value written, half by half
+        li      x11, 0x00012345
+        csrw    mcycle, x11
+        csrr    x12, mcycle
+        bne     x12, x11, fail
+        li      x13, 0x00000abc
+        csrw    mcycleh, x13
+        csrr    x12, mcycleh
+        bne     x12, x13, fail
+        csrr    x12, mcycle                     // (the low half is untouched)
+        bne     x12, x11, fail
+        li      TESTNUM, 17
+        li      x11, 0x00054321
+        csrw    minstret, x11
+        csrr    x12, minstret
+        bne     x12, x11, fail
+        li      x13, 0x00000def
+        csrw    minstreth, x13
+        csrr    x12, minstreth
+        bne     x12, x13, fail
+        csrr    x12, minstret
+        bne     x12, x11, fail
+        csrwi   mcountinhibit, 0
 
         li      TESTNUM, 20                     // time follows the timer's mtime
 1:      csrr    x11, timeh
