@@ -22,7 +22,7 @@ SOC_BFM     := sim/soc/bfm/surfbus_bfm.v sim/soc/bfm/surfbus_monitor.v
 SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
-.PHONY: lint-soc test-soc-units soc-gpio-real
+.PHONY: lint-soc test-soc-units soc-gpio-real soc-mem-once
 lint: lint-soc
 test-soc: test-soc-units
 
@@ -78,8 +78,25 @@ $(SOC_DIR)/tb_gpio_real.vvp: sim/soc/tb/tb_gpio.v rtl/peripherals/surf_gpio.v rt
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_IVERILOG) -s tb_gpio -Ptb_gpio.SYS_HZ=25000000 -o $@ $^
 
+# test ROM images: two different patterns and an empty one
+$(SOC_DIR)/rom_a.mem $(SOC_DIR)/rom_b.mem: sim/soc/tools/mkrom.py spec/soc.toml
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) sim/soc/tools/mkrom.py $(SOC_DIR)/rom_a.mem --seed 1
+	$(Q)$(PYTHON) sim/soc/tools/mkrom.py $(SOC_DIR)/rom_b.mem --seed 2
+
+SOC_MEM_TB_SRC = sim/soc/tb/tb_mem.v $(SOC_MEM_RTL) $(SOC_BFM)
+
+$(SOC_DIR)/tb_mem.vvp: $(SOC_MEM_TB_SRC) $(SOC_DIR)/rom_a.mem
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_mem -Ptb_mem.ROMFILE='"$(SOC_DIR)/rom_a.mem"' -o $@ $(SOC_MEM_TB_SRC)
+
+$(SOC_DIR)/tb_mem_empty.vvp: $(SOC_MEM_TB_SRC)
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_IVERILOG) -s tb_mem -o $@ $(SOC_MEM_TB_SRC)
+
 SOC_UNIT_VVP = $(addprefix $(SOC_DIR)/,tb_intc.vvp tb_sysinfo.vvp tb_sysinfo_noddr.vvp \
-                 tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp tb_gpio.vvp tb_gpio_real.vvp)
+                 tb_timer.vvp tb_timer_frac.vvp tb_uart.vvp tb_gpio.vvp tb_gpio_real.vvp \
+                 tb_mem.vvp tb_mem_empty.vvp rom_b.mem)
 
 test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_intc.vvp,tb_intc)
@@ -89,9 +106,15 @@ test-soc-units: $(SOC_UNIT_VVP)
 	$(call soc_run,$(SOC_DIR)/tb_timer_frac.vvp,tb_timer_frac)
 	$(call soc_run,$(SOC_DIR)/tb_uart.vvp,tb_uart)
 	$(call soc_run,$(SOC_DIR)/tb_gpio.vvp,tb_gpio)
-	$(Q)$(MAKE) --no-print-directory SOC_SEEDS=1 soc-gpio-real
+	$(call soc_run,$(SOC_DIR)/tb_mem.vvp,tb_mem)
+	$(Q)$(MAKE) --no-print-directory SOC_SEEDS=1 soc-gpio-real soc-mem-once
 	@echo "test-soc-units: PASS (seeds $(SOC_SEEDS))"
 
 # the GPIO test at the real 25 MHz (10 ms debounce = 250,000 cycles): one seed is enough
 soc-gpio-real: $(SOC_DIR)/tb_gpio_real.vvp
 	$(call soc_run,$(SOC_DIR)/tb_gpio_real.vvp,tb_gpio_real)
+
+# the memories with +bootrom= overriding BOOTROM_INIT, and with no ROM image (all zero)
+soc-mem-once: $(SOC_DIR)/tb_mem.vvp $(SOC_DIR)/tb_mem_empty.vvp $(SOC_DIR)/rom_b.mem
+	$(call soc_run,$(SOC_DIR)/tb_mem.vvp,tb_mem_plusarg,+bootrom=$(SOC_DIR)/rom_b.mem)
+	$(call soc_run,$(SOC_DIR)/tb_mem_empty.vvp,tb_mem_empty)
