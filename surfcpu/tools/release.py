@@ -765,7 +765,16 @@ class Release:
         log = self.logs / "litedram-gen.txt"
         t = time.time()
         rc = run_logged([run, "make", "--no-print-directory", "litedram-gen"], log, self.env())
-        self._litedram = None if rc == 0 else f"make litedram-gen failed (exit {rc}; it fetches pinned sources the first time)"
+        self._litedram = None
+        if rc != 0:
+            text = log.read_text(errors="replace")
+            differs = re.findall(r"lock\.sh: DIFFERS\s+(\S+)", text)
+            if differs:
+                self._litedram = (f"make litedram-gen: the generated {', '.join(differs)} differs from ip/litedram/arty.sha256 "
+                                  "(its lock check; docs/RELEASE.md section 4)")
+            else:
+                last = [x for x in text.splitlines() if x.strip()][-1:] or [""]
+                self._litedram = f"make litedram-gen failed (exit {rc}): {last[0].strip()}"
         say(f"LiteDRAM core generated and checked against ip/litedram/arty.sha256 ({minutes(time.time() - t)})"
             if rc == 0 else f"{self._litedram}:\n{tail(log)}")
         return self._litedram

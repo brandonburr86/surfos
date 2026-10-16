@@ -237,7 +237,13 @@ set -eu
 repo=$(git rev-parse --show-toplevel)
 id=$(git -C "$repo" rev-parse HEAD | cut -c1-8)
 case " $* " in
-  *" litedram-gen "*) [ -z "${FAKE_LITEDRAM_FAIL:-}" ] || exit 1; exit 0 ;;
+  *" litedram-gen "*)
+    case "${FAKE_LITEDRAM_FAIL:-}" in
+      '')   exit 0 ;;
+      lock) echo "lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92, arty.sha256 has 150b)"
+            exit 2 ;;
+      *)    echo "setup.sh: cannot fetch"; exit 1 ;;
+    esac ;;
 esac
 fw=$repo/surfcpu/build/fw
 k=$repo/build/riscv32/arty_a7
@@ -404,7 +410,11 @@ class TestMake(unittest.TestCase):
         r = self.make("--prerelease", "--force", FAKE_LITEDRAM_FAIL="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         man = release.parse_toml((rel / "MANIFEST").read_text())
-        self.assertIn("litedram-gen failed", man["missing"][0])
+        self.assertIn("litedram-gen failed (exit 1): setup.sh: cannot fetch", man["missing"][0])
+        r = self.make("--prerelease", "--force", FAKE_LITEDRAM_FAIL="lock")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        man = release.parse_toml((rel / "MANIFEST").read_text())
+        self.assertIn("litedram_core.v differs from ip/litedram/arty.sha256", man["missing"][0])
 
     def test_other_failure(self):
         r = self.make("--prerelease", FAKE_FPGA_FAIL="top")
