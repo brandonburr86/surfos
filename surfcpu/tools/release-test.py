@@ -198,8 +198,8 @@ class TestCompare(unittest.TestCase):
         self.assertIn("time_now+0x4", rows["SURFOS.BIN"][2])
         self.assertIn("payload_crc32", rows["SURFOS.BIN"][2])
         self.assertEqual(rows["same.txt"][1], "MISSING")
-        notes = release.compare(self.ref, self.new)[1]
-        self.assertTrue(any("only in the rebuild: extra.txt" in n for n in notes))
+        self.assertEqual(rows["extra.txt"][1], "EXTRA")
+        self.assertTrue(release.report_lines(list(rows.values()), [], "t")[-1].startswith("FAIL"))
 
     def test_frames_and_records(self):
         bit = self.new / "fpga/arty_a7_100t/top/top.bit"
@@ -569,6 +569,84 @@ class TestShippedIsChecked(ScratchRelease):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("stale lock", r.stdout)
         self.assertFalse(lock.exists())
+
+
+class TestCheckStrict(ScratchRelease):
+    """review m1: release-check and compare fail a damaged or inconsistent release"""
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.make("--prerelease", "--skip-ddr").returncode, 0)
+        self.pre = self.rel_dir(True)
+
+    def copy(self, name: str) -> Path:
+        d = self.dir / "copies" / name
+        shutil.copytree(self.pre, d)
+        return d
+
+    def check(self, d: Path):
+        return self.tool("check", d)
+
+    def test_intact(self):
+        self.assertEqual(self.check(self.pre).returncode, 0)
+
+    def test_empty_lists(self):
+        a = self.copy("a")
+        (a / "SHA256SUMS").write_text("")
+        (a / "MANIFEST").write_text("")
+        self.assertEqual(self.check(a).returncode, 1)
+        b = self.dir / "copies" / "b"
+        b.mkdir(parents=True)
+        (b / "SHA256SUMS").write_text("")
+        (b / "MANIFEST").write_text("")
+        self.assertEqual(self.check(b).returncode, 1)
+
+    def test_planted_file(self):
+        b = self.copy(self.pre.name)
+        d = b / "fpga/arty_a7_100t/dd"
+        d.mkdir(parents=True)
+        shutil.copyfile(b / "fpga/arty_a7_100t/top/top.bit", d / "dd.bit")
+        shutil.copyfile(b / "fpga/arty_a7_100t/top/manifest.txt", d / "manifest.txt")
+        r = self.check(b)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("fpga/arty_a7_100t/dd", r.stdout)
+
+    def test_renamed(self):
+        c = self.dir / "copies" / f"2.3.4-{self.commit[:8]}"
+        shutil.copytree(self.pre, c)
+        r = self.check(c)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("named", r.stdout)
+
+    def test_reference_bytes(self):
+        d = self.copy(self.pre.name)
+        p = d / "fpga/arty_a7_100t/top/top.bit"
+        p.write_bytes(p.read_bytes()[:100])
+        r = self.tool("compare", d, self.pre)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("DAMAGED", r.stdout)
+
+    def test_dropped_design(self):
+        e = self.copy(self.pre.name)
+        sums = [ln for ln in (e / "SHA256SUMS").read_text().splitlines()
+                if "fpga/arty_a7_100t/top/" not in ln and "flash/arty_a7_100t/top" not in ln]
+        (e / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+        blocks = [x for x in (e / "MANIFEST").read_text().split("\n\n")
+                  if not (x.startswith("[[artifact]]") and ("fpga/arty_a7_100t/top/" in x or "flash/arty_a7_100t/top" in x))]
+        (e / "MANIFEST").write_text("\n\n".join(blocks))
+        shutil.rmtree(e / "fpga/arty_a7_100t/top")
+        (e / "flash/arty_a7_100t/top.bin").unlink()
+        self.assertEqual(self.check(e).returncode, 1)
+        self.assertEqual(self.tool("compare", e, self.pre).returncode, 1)
+
+    def test_extra_in_new(self):
+        n = self.copy(self.pre.name)
+        (n / "extra.txt").write_text("x")
+        lines = (n / "SHA256SUMS").read_text() + f"{release.sha256(n / 'extra.txt')}  extra.txt\n"
+        (n / "SHA256SUMS").write_text(lines)
+        r = self.tool("compare", self.pre, n)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("EXTRA", r.stdout)
 
 
 class TestEnvironment(ScratchRelease):

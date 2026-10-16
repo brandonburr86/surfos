@@ -639,9 +639,13 @@ def scope_of(rel: str) -> tuple[str, str] | None:
 
 
 def compare(ref: Path, new: Path, rebuilt: set | None = None) -> tuple[list, list[str]]:
-    """rows (path, status, detail) for every artifact of the reference's SHA256SUMS, and notes"""
-    ref_sums = read_sums(ref / "SHA256SUMS" if ref.is_dir() else ref)
-    ref_dir = ref if ref.is_dir() else ref.parent
+    """rows (path, status, detail) for every artifact the reference's SHA256SUMS lists and every one only the new
+    release lists, and notes. Both sides' files are hashed: a reference file that is not the one its SHA256SUMS
+    lists, or a new one that is not its own SHA256SUMS's, is DAMAGED. A SHA256SUMS file as the reference is
+    hashes only."""
+    ref_dir = ref if ref.is_dir() else None
+    ref_list = ref / "SHA256SUMS" if ref_dir else ref
+    ref_sums = read_sums(ref_list) if ref_list.is_file() else {}
     new_sums = read_sums(new / "SHA256SUMS") if (new / "SHA256SUMS").is_file() else {}
     skipped = set()                         # designs the new release did not attempt (DESIGNS, BOARDS, SKIP_DDR)
     if rebuilt is None and (new / "MANIFEST").is_file():
@@ -650,6 +654,16 @@ def compare(ref: Path, new: Path, rebuilt: set | None = None) -> tuple[list, lis
     rows = []
     for rel in sorted(ref_sums):
         want = ref_sums[rel]
+        ra = ref_dir / rel if ref_dir else None
+        if ra is not None:
+            if not ra.is_file():
+                rows.append((rel, "DAMAGED", "the reference lists it but has no such file"))
+                continue
+            have = sha256(ra)
+            if have != want:
+                rows.append((rel, "DAMAGED", f"the reference's file is not the one its SHA256SUMS lists (sha256 "
+                                             f"{have[:16]}..., listed {want[:16]}...)"))
+                continue
         sc = scope_of(rel)
         if sc is not None and ((rebuilt is not None and sc not in rebuilt) or sc in skipped):
             rows.append((rel, "not rebuilt", "its design was not attempted in the new build (DESIGNS, BOARDS or "
@@ -657,23 +671,27 @@ def compare(ref: Path, new: Path, rebuilt: set | None = None) -> tuple[list, lis
             continue
         f = new / rel
         if not f.is_file():
-            rows.append((rel, "MISSING", "the rebuild has no such file" + (" (its design did not build: see the "
-                                                                           "rebuild's MANIFEST)" if sc else "")))
+            rows.append((rel, "MISSING", "the new release has no such file" + (" (its design did not build: see "
+                                                                               "its MANIFEST)" if sc else "")))
             continue
         got = sha256(f)
+        if new_sums.get(rel, got) != got:
+            rows.append((rel, "DAMAGED", f"the new release's file is not the one its SHA256SUMS lists"))
+            continue
         if got == want:
             rows.append((rel, "match", want))
             continue
-        ra = ref_dir / rel
-        if not ra.is_file() or sha256(ra) != want:
+        if ra is None:
             rows.append((rel, "DIFFERS", f"sha256 {got}, the reference says {want} (no reference copy of the file "
                                          "to compare byte by byte)"))
             continue
         rows.append((rel, "DIFFERS", explain(rel, ra.read_bytes(), f.read_bytes(), ref_dir, new)))
-    notes = []
     for rel in sorted(set(new_sums) - set(ref_sums)):
-        notes.append(f"only in the rebuild: {rel}")
-    if (ref_dir / "MANIFEST").is_file() and (new / "MANIFEST").is_file():
+        rows.append((rel, "EXTRA", "only the new release lists it"))
+    notes = []
+    if ref_dir is None:
+        notes.append(f"the reference is a list of SHA-256s ({ref}): its files were not checked")
+    elif (ref_dir / "MANIFEST").is_file() and (new / "MANIFEST").is_file():
         notes += compare_manifests(ref_dir / "MANIFEST", new / "MANIFEST", rebuilt)
     return rows, notes
 
@@ -706,9 +724,14 @@ def compare_manifests(a_path: Path, b_path: Path, rebuilt: set | None) -> list[s
     return out
 
 
-def report_lines(rows: list, notes: list[str], title: str) -> list[str]:
-    n = {s: sum(1 for r in rows if r[1] == s) for s in ("match", "DIFFERS", "MISSING", "not rebuilt")}
+def report_lines(rows: list, notes: list[str], title: str, problems: list[str] = ()) -> list[str]:
+    kinds = ("match", "DIFFERS", "MISSING", "DAMAGED", "EXTRA", "not rebuilt")
+    n = {k: sum(1 for r in rows if r[1] == k) for k in kinds}
     lines = [title, ""]
+    for p in problems:
+        lines.append(f"  PROBLEM      {p}")
+    if problems:
+        lines.append("")
     for rel, status, detail in rows:
         if status == "match":
             lines.append(f"  match        {rel}  sha256 {detail[:16]}...")
@@ -717,10 +740,146 @@ def report_lines(rows: list, notes: list[str], title: str) -> list[str]:
             lines.append(f"               {detail}")
     lines += [""] + [f"  note: {x}" for x in notes] + [""]
     compared = n["match"] + n["DIFFERS"] + n["MISSING"]
-    verdict = "PASS" if compared and n["DIFFERS"] == 0 and n["MISSING"] == 0 else "FAIL"
+    bad = n["DIFFERS"] + n["MISSING"] + n["DAMAGED"] + n["EXTRA"] + len(problems)
+    verdict = "PASS" if compared and not bad else "FAIL"
     lines.append(f"{verdict}: {n['match']} of {compared} compared artifacts are byte for byte the same; "
-                 f"{n['DIFFERS']} differ, {n['MISSING']} missing, {n['not rebuilt']} not rebuilt")
+                 f"{n['DIFFERS']} differ, {n['MISSING']} missing, {n['DAMAGED']} damaged, {n['EXTRA']} extra, "
+                 f"{len(problems)} problems with the releases themselves, {n['not rebuilt']} not rebuilt")
     return lines
+
+
+def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str]]:
+    """(problems, the artifacts found intact) of a release directory: its MANIFEST, its SHA256SUMS and its files
+    agree with each other and with what make release writes. name is what the directory must be called
+    (default: what it is called)."""
+    problems: list[str] = []
+    if not d.is_dir():
+        return [f"{d}: no release directory there"], []
+    for f in ("MANIFEST", "SHA256SUMS"):
+        p = d / f
+        if p.is_symlink() or not p.is_file() or p.stat().st_size == 0:
+            problems.append(f"{f} is missing or empty")
+    if problems:
+        return problems, []
+    try:
+        sums = read_sums(d / "SHA256SUMS")
+        man = parse_toml((d / "MANIFEST").read_text())
+    except Exception as e:                                  # noqa: BLE001 (a damaged file, whatever its damage)
+        return [f"cannot read MANIFEST or SHA256SUMS: {e}"], []
+    version, commit, status, complete = man.get("version"), man.get("commit"), man.get("status"), man.get("complete")
+    if not (isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version)):
+        problems.append(f"MANIFEST: version {version!r} is not a version")
+    if not (isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)):
+        problems.append(f"MANIFEST: commit {commit!r} is not a commit")
+    if status not in ("complete", "prerelease") or complete is not (status == "complete"):
+        problems.append(f"MANIFEST: status {status!r} and complete {complete!r} do not agree")
+    if problems:
+        return problems, []
+    want = f"{version}{'' if complete else '-pre'}-{commit[:8]}"
+    if man.get("release") != want:
+        problems.append(f"MANIFEST: release {man.get('release')!r}, but a {status} release of {commit[:8]} is {want}")
+    if (name or d.name) != want:
+        problems.append(f"the directory is named {name or d.name}, but its MANIFEST makes it {want}")
+    if (man.get("commit_short") != commit[:8] or man.get("tree_clean") is not True
+            or not isinstance(man.get("source_date_epoch"), int)):
+        problems.append("MANIFEST: commit_short, tree_clean or source_date_epoch is not what make release writes")
+    # the artifacts: MANIFEST's list, SHA256SUMS and the files are the same, and every file is intact
+    listed: dict = {}
+    for x in man.get("artifact", []):
+        if x.get("path") in listed:
+            problems.append(f"MANIFEST lists {x.get('path')} twice")
+        listed[x.get("path")] = x
+    problems += [f"{rel}: in SHA256SUMS, not in MANIFEST" for rel in sorted(set(sums) - set(listed))]
+    problems += [f"{rel}: in MANIFEST, not in SHA256SUMS" for rel in sorted(set(listed) - set(sums))]
+    designs = man.get("design", [])
+    built = {(x.get("board"), x.get("name")): x for x in designs if x.get("status") == "built"}
+    records = {f"fpga/{b}/{n}/manifest.txt" for b, n in built}
+    files = {p.relative_to(d).as_posix() for p in d.rglob("*") if p.is_file() or p.is_symlink()}
+    problems += [f"{rel}: a file the release does not list (SHA256SUMS)"
+                 for rel in sorted(files - set(sums) - records - {"MANIFEST", "SHA256SUMS"})]
+    problems += [f"{rel}: the build record of a built design is missing" for rel in sorted(records - files)]
+    intact = []
+    for rel, h in sorted(sums.items()):
+        p = d / rel
+        if rel not in files or p.is_symlink():
+            problems.append(f"{rel}: listed, but " + ("a symbolic link" if p.is_symlink() else "not there"))
+            continue
+        bad = []
+        size = p.stat().st_size
+        if size == 0:
+            bad.append("empty")
+        got = sha256(p)
+        if got != h:
+            bad.append(f"its sha256 is {got[:16]}..., SHA256SUMS says {h[:16]}...")
+        x = listed.get(rel)
+        if x is not None and (x.get("sha256") != h or x.get("bytes") != size):
+            bad.append("MANIFEST gives another sha256 or size")
+        if bad:
+            problems.append(f"{rel}: " + "; ".join(bad))
+        else:
+            intact.append(rel)
+    # what every release holds, and how its parts agree
+    required = list(SOFTWARE) + ["card/BOOT/SURFOS.BIN"] + (["card/BOOT/CMDLINE.TXT"] if man.get("card_cmdline") else [])
+    problems += [f"{rel}: every release has it, this one does not list it" for rel in required if rel not in sums]
+
+    def data(rel: str) -> bytes | None:
+        return (d / rel).read_bytes() if rel in intact else None
+    for rel in ("SURFOS.BIN", "DDRDIAG.BIN"):
+        b = data(rel)
+        if b is not None and (len(b) < 64 or b[44:48] != bytes.fromhex(commit[:8])[::-1]):
+            problems.append(f"{rel}: not built from {commit[:8]} (its build id)")
+    if data("card/BOOT/SURFOS.BIN") is not None and data("card/BOOT/SURFOS.BIN") != data("SURFOS.BIN"):
+        problems.append("card/BOOT/SURFOS.BIN is not SURFOS.BIN")
+    if man.get("card_cmdline") and data("card/BOOT/CMDLINE.TXT") not in (None, (man["card_cmdline"] + "\n").encode()):
+        problems.append("card/BOOT/CMDLINE.TXT is not MANIFEST's card_cmdline")
+    seen = set()
+    for x in designs:
+        key = (x.get("board"), x.get("name"))
+        if key in seen:
+            problems.append(f"MANIFEST lists {key[1]} for {key[0]} twice")
+        seen.add(key)
+        if x.get("status") not in ("built", "missing") or (x.get("status") == "missing" and not x.get("reason")):
+            problems.append(f"MANIFEST: {key[1]} for {key[0]}: status {x.get('status')!r} without a reason")
+    missing = [x for x in designs if x.get("status") != "built"]
+    if complete == bool(missing) or len(man.get("missing", [])) != len(missing):
+        problems.append(f"MANIFEST: a {status} release, with {len(missing)} designs missing and "
+                        f"{len(man.get('missing', []))} listed as missing")
+    for (b, n), x in sorted(built.items()):
+        bit, rec, flash = f"fpga/{b}/{n}/{n}.bit", f"fpga/{b}/{n}/manifest.txt", f"flash/{b}/{n}.bin"
+        has_flash = x.get("flash", "-") != "-"
+        if x.get("bitstream") != bit or bit not in sums:
+            problems.append(f"{n} for {b} is built, but its bitstream {bit} is not listed")
+            continue
+        if has_flash != (flash in sums) or x.get("flash_image", "") != (flash if has_flash else ""):
+            problems.append(f"{n} for {b}: " + (f"its flash image {flash} is not listed" if has_flash
+                                                 else f"{flash} is listed, but the design has no flash image"))
+        if rec not in files:
+            continue
+        try:
+            m = parse_toml((d / rec).read_text())
+        except Exception as e:                              # noqa: BLE001
+            problems.append(f"{rec}: cannot be read ({e})")
+            continue
+        for k, v in (("result", "pass"), ("design", n), ("board", b), ("source_revision", commit),
+                     ("source_dirty", False), ("build_time", man.get("source_date_epoch")),
+                     ("bitstream_sha256", sums[bit])):
+            if m.get(k) != v:
+                problems.append(f"{rec}: {k} = {m.get(k)!r}, not {v!r}")
+        if m.get("rom_sha256", "") != x.get("rom_sha256", ""):
+            problems.append(f"{rec} and MANIFEST give {n} for {b} different boot ROMs")
+        if m.get("rom_sha256"):
+            rom = f"rom/{Path(str(m.get('rom_image', ''))).name}"
+            if sums.get(rom) != m.get("rom_sha256"):
+                problems.append(f"{bit} was built with a boot ROM that is not the release's {rom}")
+        if flash in intact and bit in intact:
+            try:
+                if bitfile.flash_image(data(bit), b)[0] != data(flash):
+                    problems.append(f"{flash} is not the configuration stream of {bit}")
+            except bitfile.BitError as e:
+                problems.append(f"{bit}: {e}")
+    problems += [f"{rel}: belongs to no design the release built" for rel in sorted(sums)
+                 if scope_of(rel) is not None and scope_of(rel) not in built]
+    return problems, intact
 
 
 # ============================================================================== make
@@ -1219,6 +1378,11 @@ class Release:
         (self.stage / "SHA256SUMS").write_text("".join(f"{h}  {rel}\n" for rel, h in sums.items()))
         self.write_manifest(self.stage / "MANIFEST", name, prerelease, sums, designs)
         (self.stage / STAGE_MARK).unlink()
+        problems, _ = check_release(self.stage, name)
+        if problems:
+            (self.stage / STAGE_MARK).write_text("made by tools/release.py (release stage)\n")
+            raise Refused("the release does not pass its own check (tools/release.py check), so it was not "
+                          "written:\n" + "\n".join("    " + p for p in problems[:20]))
         if out.exists():
             shutil.rmtree(out)
         os.rename(self.stage, out)
@@ -1280,7 +1444,11 @@ def cmd_verify(a) -> int:
     check_environment()
     ref = Path(a.release).resolve()
     if not (ref / "MANIFEST").is_file() or not (ref / "SHA256SUMS").is_file():
-        raise Refused(f"{ref} is not a release directory (no MANIFEST and SHA256SUMS)")
+        raise Refused(f"no release at {ref} (no MANIFEST and SHA256SUMS)")
+    problems, _ = check_release(ref)
+    if problems:
+        raise Refused(f"{ref} does not pass tools/release.py check, so there is nothing sound to compare with:\n"
+                      + "\n".join("    " + p for p in problems[:20]))
     man = parse_toml((ref / "MANIFEST").read_text())
     commit = man.get("commit", "")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -1309,17 +1477,23 @@ def cmd_verify(a) -> int:
     st = tree_changes(src)
     if st:
         raise Refused(f"the pristine copy is not clean: {st[0]}")
-    out = work / "release"
-    cmd = [sys.executable, str(src / "surfcpu" / "tools" / "release.py"), "make", "--prerelease", "--out", str(out),
-           "--out-exact", "--logs", str(work / "logs")]
+    rebuild = work / "rebuild"
+    cmd = [sys.executable, str(src / "surfcpu" / "tools" / "release.py"), "make", "--prerelease", "--out",
+           str(rebuild), "--logs", str(work / "logs")]
     cmd += ["--only", ",".join(f"{b}/{n}" for b, n in sorted(rebuilt))]
     say(f"rebuilding there: {len(rebuilt)} of the release's {len(built)} bitstreams and every other artifact")
     rc = subprocess.run(cmd, cwd=str(src / "surfcpu"), env=clean_env()).returncode
     say(f"the rebuild ended with exit status {rc} after {minutes(time.time() - t0)}")
-    rows, notes = compare(ref, out, {(b, n) for b, n in rebuilt}) if out.is_dir() else (
-        [(rel, "MISSING", "the rebuild wrote no release") for rel in sorted(read_sums(ref / "SHA256SUMS"))], [])
+    outs = sorted(p for p in rebuild.iterdir() if (p / "MANIFEST").is_file()) if rebuild.is_dir() else []
+    if len(outs) == 1:
+        out = outs[0]
+        rows, notes = compare(ref, out, {(b, n) for b, n in rebuilt})
+        problems = [f"the rebuild: {p}" for p in check_release(out)[0]]
+    else:
+        rows, notes = [(rel, "MISSING", "the rebuild wrote no release") for rel in sorted(read_sums(ref / "SHA256SUMS"))], []
+        problems = []
     lines = report_lines(rows, notes, f"release-verify {ref.name}: commit {commit}, rebuilt in {src} "
-                                      f"({minutes(time.time() - t0)})")
+                                      f"({minutes(time.time() - t0)})", problems)
     text = "\n".join(lines) + "\n"
     (work / "verify-report.txt").write_text(text)
     if a.report:
@@ -1334,8 +1508,12 @@ def cmd_verify(a) -> int:
 
 def cmd_compare(a) -> int:
     ref, new = Path(a.reference).resolve(), Path(a.new).resolve()
+    if not ref.exists():
+        raise Refused(f"no reference {ref}")
+    problems = [f"the reference: {p}" for p in check_release(ref)[0]] if ref.is_dir() else []
+    problems += [f"the new release: {p}" for p in check_release(new)[0]]
     rows, notes = compare(ref, new)
-    lines = report_lines(rows, notes, f"compare {ref} with {new}")
+    lines = report_lines(rows, notes, f"compare {ref} with {new}", problems)
     text = "\n".join(lines) + "\n"
     if a.report:
         Path(a.report).write_text(text)
@@ -1344,23 +1522,19 @@ def cmd_compare(a) -> int:
 
 
 def cmd_check(a) -> int:
-    rel_dir = Path(a.release).resolve()
-    sums = read_sums(rel_dir / "SHA256SUMS")
-    man = parse_toml((rel_dir / "MANIFEST").read_text())
-    bad = 0
-    listed = {x["path"]: x for x in man.get("artifact", [])}
-    for rel, h in sorted(sums.items()):
-        p = rel_dir / rel
-        ok = p.is_file() and sha256(p) == h and listed.get(rel, {}).get("sha256") == h
-        bad += not ok
-        print(f"{'ok  ' if ok else 'FAIL'} {rel}")
-    for rel in sorted(set(listed) - set(sums)):
-        bad += 1
-        print(f"FAIL {rel}: in MANIFEST, not in SHA256SUMS")
-    status = man.get("status")
-    print(f"{rel_dir.name}: {status}" + ("" if man.get("complete") else " (missing: " + "; ".join(man.get("missing", [])) + ")"))
-    print(f"check: {'PASS' if not bad else f'{bad} FAILED'}: {len(sums)} artifacts")
-    return 1 if bad else 0
+    d = Path(a.release).resolve()
+    problems, intact = check_release(d)
+    for rel in intact:
+        print(f"ok   {rel}")
+    for p in problems:
+        print(f"FAIL {p}")
+    if (d / "MANIFEST").is_file() and not problems:
+        man = parse_toml((d / "MANIFEST").read_text())
+        print(f"{d.name}: {man.get('status')}" + ("" if man.get("complete") else
+                                                  " (missing: " + "; ".join(man.get("missing", [])) + ")"))
+    print(f"check {d}: " + (f"PASS: {len(intact)} artifacts, every one listed, intact and consistent" if not problems
+                            else f"FAIL: {len(problems)} problems"))
+    return 1 if problems else 0
 
 
 def main(argv=None) -> int:
