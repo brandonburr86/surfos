@@ -429,8 +429,10 @@ arms the card model's faults, which follow the io track's `SdFaults`): one block
 error" (retried at the file's close, the command succeeds); a card that refuses every block
 (`write` and a 1 MB `cp` say "not all of it reached /sd0p1", return at once, `eject` says "stays
 mounted"; after `sdsim fault clear`, `sync` writes everything, and on the host every file is
-whole and the copy holds the first 514560 bytes of its source); a card that answers no command
-(the write fails at once); the card taken out after a sync (the messages, writes refused, the
+whole and the copy holds the first 57344 bytes of its source: since B6 the refusing card gets
+its share of the cache and then EIO, where before it took 514560 bytes, nearly the whole cache);
+a card that answers no command (the write fails at once, and since B10 its close says so: `write:
+close: I/O error`); the card taken out after a sync (the messages, writes refused, the
 mount marked unplugged; `fsck.fat -n` finds only the dirty bit; put back, mounted with "not
 unmounted cleanly", the files there); and taken out right after the nth block a new file's write
 sends, n = 1 to 4, and after the first block of an `rm`, an `mv` into a folder and a write over a
