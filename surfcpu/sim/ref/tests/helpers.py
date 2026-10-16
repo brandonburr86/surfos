@@ -21,7 +21,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 TRAPS_TRACE = DATA / "traps.ref.trace"
-TRAPS_LOG = DATA / "traps.spike.log"
+TRAPS_LOG = DATA / "traps.spike.txt"         # not .log: the repository ignores *.log
 TRAPS_ELF = DATA / "traps.elf"
 TRAPS_TOHOST = 0x80001000
 
