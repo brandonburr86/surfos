@@ -10,7 +10,7 @@
 # HEAD) into a new temporary directory and follows what docs/RELEASE.md tells a person to do there:
 #   1. the setup: the two Docker images. Present (docker image inspect) they are used as they are;
 #      missing, the script stops, or with --build-images runs `make -C surfcpu image openxc7-image`
-#      in the clone (docs/RELEASE.md section 8: about 15 minutes, from pinned sources);
+#      in the clone (docs/RELEASE.md section 8: about 10 minutes, from pinned sources);
 #   2. `make -C surfcpu release` with the given variables (PRERELEASE=1 while the DDR designs do not
 #      build), nothing else;
 #   3. with --reference, the new release compared with the reference artifact by artifact

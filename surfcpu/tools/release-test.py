@@ -4,6 +4,7 @@
 File: release-test.py Date: 10/16/26 (SurfCPU)
 --------------------
 Without Docker, a board or a bitstream build (docs/RELEASE.md section 9):
+  * release.py, bitfile.py and this file parse as Python 3.9 (the Mac's /usr/bin/python3);
   * tools/bitfile.py: its self-test (header stamp, packets, flash image, configuration time);
   * tools/release.py's TOML subset, its comparison and the likely causes it names for a .bit whose
     header time or frames differ, a SURFOS.BIN whose payload differs (with the ELF's symbol), a
@@ -19,6 +20,7 @@ Without Docker, a board or a bitstream build (docs/RELEASE.md section 9):
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -81,6 +83,18 @@ def elf32(symbols: list[tuple[str, int, int]]) -> bytes:
     hdr = b"\x7fELF\x01\x01\x01" + b"\0" * 9 + struct.pack("<HHIIIIIHHHHHH", 2, 243, 1, 0x80000000, 0, shoff, 0,
                                                             52, 0, 0, 40, 5, 4)
     return hdr + body + sh
+
+
+class TestPython39(unittest.TestCase):
+    """release.py and bitfile.py run on the Mac, maybe with its /usr/bin/python3 (3.9.6)"""
+
+    def test_parse_as_python_3_9(self):
+        for name in ("release.py", "bitfile.py", "release-test.py"):
+            with self.subTest(name):
+                tree = ast.parse((ROOT / "tools" / name).read_text(), filename=name, feature_version=(3, 9))
+                future = {a.name for n in tree.body if isinstance(n, ast.ImportFrom) and n.module == "__future__"
+                          for a in n.names}
+                self.assertIn("annotations", future, f"{name}: `X | None` annotations need the __future__ import")
 
 
 class TestBitfile(unittest.TestCase):

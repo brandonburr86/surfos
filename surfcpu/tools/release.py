@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -803,13 +804,18 @@ class Release:
     # ---------------------------------------------------------------- assembling
     def card(self, stage: Path, package: Path) -> list[str]:
         """the card's /BOOT files as tools/deploy-sd.py installs them on a new card, run against a
-        directory standing in for the card (its tests' stand-ins for diskutil and mount)"""
-        work = self.logs / "card"
-        shutil.rmtree(work, ignore_errors=True)
+        directory standing in for the card (its tests' stand-ins for diskutil and mount), in a temporary
+        directory: deploy-sd's test mode refuses anything under /Volumes, where a checkout may be"""
+        work = Path(tempfile.mkdtemp(prefix="surfcpu-release-card-"))
+        try:
+            return self._card(stage, package, work)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _card(self, stage: Path, package: Path, work: Path) -> list[str]:
         view, device = work / "card", work / "device"
         view.mkdir(parents=True)
         cfg = work / "fake.json"
-        import json
         cfg.write_text(json.dumps({
             "mount": str(view), "device": "/dev/disk9s1", "device_dir": str(device),
             "volume": {"FilesystemType": "msdos", "FilesystemName": "MS-DOS FAT32", "RemovableMedia": True,
