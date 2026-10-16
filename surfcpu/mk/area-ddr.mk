@@ -109,6 +109,62 @@ test-ddr-icarus: $(DDR_OUT)/tb_ddr_mailbox.vvp $(DDR_OUT)/tb_ddr_bridge_icarus.v
 test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-icarus
 	@echo "test-ddr: PASS"
 
+# ---- LiteDRAM, the open flow's controller (ip/litedram/). litedram-setup fetches the pinned
+# generator (once, network); litedram-gen generates the Arty core (with its calibration BIOS)
+# and the simulation core, and records what came out; test-ddr-litedram runs the bridge and the
+# adapter against the simulation core's real controller (on check).
+LITEDRAM_OUT = $(BUILD)/litedram
+LITEDRAM_ENV = $(BUILD)/third_party/litedram/env.sh
+LITEDRAM_SIM = $(LITEDRAM_OUT)/arty_sim/gateware/litedram_core.v
+LITEDRAM_ARTY = $(LITEDRAM_OUT)/arty/gateware/litedram_core.v
+
+$(LITEDRAM_ENV): ip/litedram/setup.sh
+	$(Q)ip/litedram/setup.sh
+
+$(LITEDRAM_SIM): ip/litedram/arty_sim.yml ip/litedram/generate.sh $(LITEDRAM_ENV)
+	$(Q)ip/litedram/generate.sh ip/litedram/arty_sim.yml $(LITEDRAM_OUT)/arty_sim --sim
+
+$(LITEDRAM_ARTY): ip/litedram/arty.yml ip/litedram/generate.sh $(LITEDRAM_ENV)
+	$(Q)ip/litedram/generate.sh ip/litedram/arty.yml $(LITEDRAM_OUT)/arty
+
+.PHONY: litedram-setup litedram-gen test-ddr-litedram lint-ddr-adapter
+litedram-setup: $(LITEDRAM_ENV)
+
+litedram-gen: $(LITEDRAM_ARTY) $(LITEDRAM_SIM)
+	$(Q)$(PYTHON) ip/litedram/inspect_core.py $(LITEDRAM_OUT) > $(LITEDRAM_OUT)/summary.txt
+	$(Q)ip/litedram/estimate.sh $(LITEDRAM_OUT)/arty >> $(LITEDRAM_OUT)/summary.txt
+	@cat $(LITEDRAM_OUT)/summary.txt
+
+lint: lint-ddr-adapter
+lint-ddr-adapter:
+	$(Q)$(DDR_LINT) --top-module surf_ddr_litedram_adapter rtl/soc/ddr/surf_ddr_litedram_adapter.v
+	$(Q)mkdir -p $(DDR_OUT)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -s surf_ddr_litedram_adapter -o $(DDR_OUT)/adapter_compile.vvp \
+	  rtl/soc/ddr/surf_ddr_litedram_adapter.v rtl/lib/surf_fifo.v
+	@echo "lint-ddr-adapter: surf_ddr_litedram_adapter clean (Verilator -Wall, Icarus -g2005)"
+
+$(DDR_OUT)/tb_ddr_litedram: $(LITEDRAM_SIM) sim/ddr/tb_litedram_top.v sim/ddr/tb_ddr_litedram.cpp $(DDR_TB_HDR) \
+                            $(DDR_RTL_ALL) rtl/soc/ddr/surf_ddr_litedram_adapter.v rtl/lib/surf_fifo.v
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(VERILATOR) --cc --exe --build -j $(DDR_JOBS) -O2 -Wno-fatal -Wno-lint -Wno-style \
+	  -Irtl/generated -Irtl/lib -Irtl/soc/ddr --top-module tb_litedram_top --Mdir $(DDR_OUT)/obj_litedram \
+	  -CFLAGS "-std=c++17 -O2 $(DDR_FAST_D) -I$(CURDIR)/sim/ddr" -o $(abspath $@) \
+	  sim/ddr/tb_litedram_top.v $(LITEDRAM_SIM) rtl/soc/ddr/surf_ddr_bridge.v rtl/soc/ddr/surf_ddr_litedram_adapter.v \
+	  sim/ddr/tb_ddr_litedram.cpp > $(DDR_OUT)/build_litedram.txt 2>&1 \
+	  || { tail -40 $(DDR_OUT)/build_litedram.txt; exit 1; }
+
+test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
+	$(Q)for s in 1 2; do \
+	  $(DDR_OUT)/tb_ddr_litedram --test all --seed $$s > $(DDR_OUT)/litedram.$$s.txt 2>&1; st=$$?; \
+	  grep -E '^(tb_ddr_litedram|FAIL)' $(DDR_OUT)/litedram.$$s.txt | grep -v ': PASS (' | sed 's/^/  /'; \
+	  [ $$st -eq 0 ] || { echo "test-ddr-litedram: FAIL (seed $$s)"; exit 1; }; done
+	$(Q)$(DDR_OUT)/tb_ddr_litedram --test random --seed 3 --count 3000 --sys-ns 40 --ui-ns 10 --jitter 0.3 \
+	  > $(DDR_OUT)/litedram.jitter.txt 2>&1 || { cat $(DDR_OUT)/litedram.jitter.txt; exit 1; }
+	@grep -E '^tb_ddr_litedram: [a-z]' $(DDR_OUT)/litedram.jitter.txt | sed 's/^/  /'
+	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"
+
+check: test-ddr-litedram
+
 # Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
 test-ddr-mutants:
 	$(Q)$(PYTHON) sim/ddr/ddr_mutants.py --jobs $(DDR_JOBS)

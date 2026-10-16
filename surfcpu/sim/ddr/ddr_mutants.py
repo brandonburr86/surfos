@@ -34,6 +34,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent      # surfcpu/
 BRIDGE = "rtl/soc/ddr/surf_ddr_bridge.v"
 MAILBOX = "rtl/soc/ddr/surf_ddr_mailbox.v"
+ADAPTER = "rtl/soc/ddr/surf_ddr_litedram_adapter.v"
+LITEDRAM_SIM = "build/litedram/arty_sim/gateware/litedram_core.v"   # make litedram-gen
 
 # name, file, old text, new text, expected to survive (simulation cannot see it)
 MUTANTS = [
@@ -65,6 +67,12 @@ MUTANTS = [
     ("box-take-unchecked", MAILBOX, "if (dst_take && dst_valid)", "if (dst_take)", False),
     ("box-no-req-sync", MAILBOX, "assign dst_valid = (req_sync[1] != ack);", "assign dst_valid = (req != ack);", True),
     ("box-no-ack-sync", MAILBOX, "assign src_ready = (req == ack_sync[1]);", "assign src_ready = (req == ack);", True),
+    # the LiteDRAM adapter, run against LiteDRAM's controller (tb_ddr_litedram)
+    ("lite-we-polarity", ADAPTER, ".wr_data({~app_wdf_mask, app_wdf_data})", ".wr_data({app_wdf_mask, app_wdf_data})", False),
+    ("lite-addr-shift", ADAPTER, "app_addr[BURST_BITS +: CMD_ADDR_WIDTH]", "app_addr[BURST_BITS-1 +: CMD_ADDR_WIDTH]", False),
+    ("lite-cmd-we", ADAPTER, "assign cmd_we    = (app_cmd == 3'b000);", "assign cmd_we    = (app_cmd == 3'b001);", False),
+    ("lite-no-buffer", ADAPTER, "assign app_wdf_rdy = !wf_full;", "assign app_wdf_rdy = !wf_full && wdata_ready;", False),
+    ("lite-calib", ADAPTER, "assign init_calib_complete = init_done && !init_error;", "assign init_calib_complete = 1'b1;", False),
 ]
 
 VFLAGS = ["--cc", "--exe", "--build", "-O2", "--x-assign", "unique", "--x-initial", "unique",
@@ -79,7 +87,7 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    for f in (BRIDGE, MAILBOX):
+    for f in (BRIDGE, MAILBOX, ADAPTER):
         text = (ROOT / f).read_text()
         if f == path:
             if text.count(old) != 1:
@@ -87,9 +95,19 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
             text = text.replace(old, new)
         (out / Path(f).name).write_text(text)
     exe = out / "tb"
-    cmd = (["verilator"] + VFLAGS + ["-j", str(jobs), "--Mdir", str(out / "obj"), "-CFLAGS", CFLAGS,
-                                    "-o", str(exe), str(out / "surf_ddr_bridge.v"), str(out / "surf_ddr_mailbox.v"),
-                                    "rtl/lib/surf_sync.v"] + TB)
+    if path == ADAPTER:                 # the LiteDRAM bench
+        if not (ROOT / LITEDRAM_SIM).exists():
+            return False, "not run: no LiteDRAM simulation core (make litedram-gen)"
+        cmd = (["verilator", "--cc", "--exe", "--build", "-O2", "-Wno-fatal", "-Wno-lint", "-Wno-style",
+                "-Irtl/generated", "-Irtl/lib", "--top-module", "tb_litedram_top", "-j", str(jobs),
+                "--Mdir", str(out / "obj"), "-CFLAGS", CFLAGS, "-o", str(exe), "sim/ddr/tb_litedram_top.v",
+                LITEDRAM_SIM, str(out / "surf_ddr_bridge.v"), str(out / "surf_ddr_mailbox.v"),
+                str(out / "surf_ddr_litedram_adapter.v"), "rtl/lib/surf_sync.v", "rtl/lib/surf_fifo.v",
+                "sim/ddr/tb_ddr_litedram.cpp"])
+    else:
+        cmd = (["verilator"] + VFLAGS + ["-j", str(jobs), "--Mdir", str(out / "obj"), "-CFLAGS", CFLAGS,
+                                        "-o", str(exe), str(out / "surf_ddr_bridge.v"), str(out / "surf_ddr_mailbox.v"),
+                                        "rtl/lib/surf_sync.v"] + TB)
     b = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if b.returncode != 0:
         return True, "killed (does not build)"
@@ -115,6 +133,8 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
         return True, "killed (testbench hung, timeout)"
     if r.returncode == 0:
         return False, "survived"
+    if "FAIL" not in r.stdout and r.returncode != 1:
+        return True, "killed (testbench exit {})".format(r.returncode)
     first = next((l for l in r.stdout.splitlines() if l.startswith("FAIL")), "exit {}".format(r.returncode))
     return True, "killed: " + first[:150]
 
@@ -133,6 +153,9 @@ def main() -> int:
         if was_killed:
             killed += 1
             verdict = "ok"
+        elif what.startswith("not run"):
+            verdict = "SKIPPED"
+            bad += 1
         elif may_survive and what == "survived":
             survived_expected += 1
             verdict = "ok (expected: metastability is not simulated)"
