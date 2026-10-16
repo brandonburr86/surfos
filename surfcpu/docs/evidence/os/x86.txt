@@ -1,5 +1,7 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
-Five rounds, newest first. Round fs-fix (10/16/26) changes the x86 kernel on purpose: the review of B1-B4 and its fixes
+Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
+surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
+Five rounds with x86 runs, newest first. Round fs-fix (10/16/26) changes the x86 kernel on purpose: the review of B1-B4 and its fixes
 (audit B5-B11: the block cache's write order, a refusing device's share of the cache, failed order points put back,
 close and umount report what was not written). Round 4 (10/16/26) changes the x86 kernel on purpose: a FAT write that
 stops early gives its clusters back (audit B4), and cp says why a write came up short.

@@ -16,7 +16,7 @@ VGA capture on the video outputs.
           [--sd-flush] [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]
           [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]
           [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...
-          [--sd-insert REGEX]... [+plusarg ...]
+          [--sd-insert REGEX]... [--uart-pty] [+plusarg ...]
 
 Clocks: clk at the spec's sys_hz and pix_clk at its pix_hz (SURF_SYS_HZ, SURF_PIX_HZ from the
 generated soc.h), scheduled in femtoseconds on two independent clocks, both held in reset for
@@ -50,6 +50,17 @@ puts it back (powered up afresh). The actions go in the --send list, in order wi
 each REGEX is searched after the previous entry's match, and an action does not move that
 point, so the entry after it may match the same text (arm a fault at a prompt, then type the
 command at that prompt). Each is logged on stderr with its cycle.
+
+UART on a pseudo-terminal (--uart-pty, 10/16/26, for the os track's physical test kit): the
+UART also goes to a pseudo-terminal, whose path is printed on stderr ("surfsim: --uart-pty
+/dev/pts/N"), so tools/uart.py and tools/board-test.py talk to the RTL system exactly as to
+the board's serial port. Its far side is raw. The run starts only once a program has opened
+it, so nothing the SoC prints is lost; what is typed there goes to the SoC's receive pin (with
+--uart-in, --send and --ps2-send as well), and what the SoC prints goes there (and to stdout,
+--expect and the transcript as always), held while nobody reads it. SIGTERM or SIGINT then
+ends the run as running out of --max-cycles would, so --sd-flush keeps what the card got: a
+power cut, with the card's contents kept. SIGUSR1 takes the card out and SIGUSR2 puts it back
+(a test's stand-in for the owner's hands).
 
 PS/2 keyboard: the io track's model on the open-drain lines (a line is low when the SoC's
 _oe or the keyboard pulls it, high otherwise); --ps2-keys TEXT is typed after reset.
@@ -88,6 +99,12 @@ end of its log is printed), or --expect unmatched at $finish; 2 when --max-cycle
 #include <string>
 #include <vector>
 
+#include <csignal>
+#include <fcntl.h>
+#include <poll.h>
+#include <termios.h>
+#include <unistd.h>
+
 #include "Vsurfcpu_soc.h"
 #include "verilated.h"
 
@@ -119,6 +136,7 @@ struct Options {
     uint64_t settle = 0;                // cycles run on after the last --expect matched
     unsigned vga_frames = 0;            // also write every Nth frame
     bool quiet = false, uart_loopback = false, gpio_loopback = false, sd_flush = false;
+    bool uart_pty = false;              // the UART on a pseudo-terminal too (10/16/26)
     unsigned sw = 0, btn = 0;
     DdrModelOptions ddr;
     bool ddr_seed_given = false;
@@ -137,7 +155,7 @@ struct Options {
                  "               [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]\n"
                  "               [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]\n"
                  "               [--ddr-stall ADDR] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...\n"
-                 "               [--sd-insert REGEX]... [+plusarg ...]\n");
+                 "               [--sd-insert REGEX]... [--uart-pty] [+plusarg ...]\n");
     std::exit(1);
 }
 
@@ -307,6 +325,7 @@ Options parse(int argc, char **argv) {
         else if (a == "--uart-loopback") o.uart_loopback = true;
         else if (a == "--gpio-loopback") o.gpio_loopback = true;
         else if (a == "--sd-flush") o.sd_flush = true;
+        else if (a == "--uart-pty") o.uart_pty = true;
         else if (a == "--sw") o.sw = unsigned(number(next(), "--sw")) & 0xF;
         else if (a == "--btn") o.btn = unsigned(number(next(), "--btn")) & 0xF;
         else if (a == "--ddr-calib") o.ddr.calib_cycles = snumber(next(), "--ddr-calib");
@@ -354,6 +373,33 @@ std::string shown(const std::string &t) {
         } else out += char(c);
     }
     return out;
+}
+
+// --uart-pty: SIGTERM or SIGINT ends the run as --max-cycles would
+volatile std::sig_atomic_t stop_requested = 0, card_out_requested = 0, card_in_requested = 0;
+void on_stop(int) { stop_requested = 1; }
+void on_card(int sig) { (sig == SIGUSR1 ? card_out_requested : card_in_requested) = 1; }
+
+// --uart-pty: a pseudo-terminal whose far side is raw; its path, or "" with the reason in why
+int open_pty(std::string &path, std::string &why) {
+    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0 || grantpt(m) != 0 || unlockpt(m) != 0) {
+        why = std::strerror(errno);
+        if (m >= 0) close(m);
+        return -1;
+    }
+    path = ptsname(m);
+    int s = open(path.c_str(), O_RDWR | O_NOCTTY);       // raw: the setting outlives this open
+    if (s >= 0) {
+        termios t;
+        if (tcgetattr(s, &t) == 0) {
+            cfmakeraw(&t);
+            tcsetattr(s, TCSANOW, &t);
+        }
+        close(s);
+    }
+    fcntl(m, F_SETFL, fcntl(m, F_GETFL) | O_NONBLOCK);
+    return m;
 }
 
 // an ordered list of patterns, each searched after the previous one's match
@@ -431,6 +477,32 @@ int main(int argc, char **argv) {
 
     // --sd-remove N@: out once the card has taken this many blocks in all (0: not armed)
     uint64_t sd_out_at = 0, sd_faults_set = 0, sd_removals = 0, sd_insertions = 0;
+
+    // --uart-pty: the run waits for a program to open the pseudo-terminal
+    int pty = -1;
+    std::string pty_pending;                      // output the pseudo-terminal has not taken yet
+    uint64_t pty_in = 0, pty_dropped = 0;
+    if (opt.uart_pty) {
+        std::string path, why;
+        pty = open_pty(path, why);
+        if (pty < 0) {
+            std::fprintf(stderr, "surfsim: --uart-pty: %s\n", why.c_str());
+            return 1;
+        }
+        std::signal(SIGTERM, on_stop);
+        std::signal(SIGINT, on_stop);
+        std::signal(SIGUSR1, on_card);
+        std::signal(SIGUSR2, on_card);
+        std::fprintf(stderr, "surfsim: --uart-pty %s\n", path.c_str());
+        std::fflush(stderr);
+        for (;;) {                                // POLLHUP while nobody has the far side open
+            pollfd p{pty, POLLIN, 0};
+            poll(&p, 1, 100);
+            if (!(p.revents & POLLHUP) || stop_requested) break;
+        }
+        std::fprintf(stderr, "surfsim: --uart-pty: %s\n", stop_requested ? "stopped before anyone opened it"
+                                                                            : "opened: the run starts");
+    }
 
     FILE *trace = nullptr;
     if (!opt.trace.empty()) {
@@ -522,6 +594,32 @@ int main(int argc, char **argv) {
                 if (!opt.ps2_keys.empty()) kbd.type_text(opt.ps2_keys);
             }
             if (!top->rst) cycles++;
+            if (pty >= 0 && (cycles & 1023) == 0 && !top->rst) {
+                // the pseudo-terminal: what was typed to the receive pin, what was printed out
+                char buf[256];
+                ssize_t n = read(pty, buf, sizeof buf); // (EAGAIN: nothing typed; EIO: nobody there now)
+                if (n > 0) {
+                    uart.send(std::string(buf, size_t(n)));
+                    uart_sent += size_t(n);
+                    pty_in += uint64_t(n);
+                }
+                if (!pty_pending.empty()) {
+                    ssize_t w = write(pty, pty_pending.data(), pty_pending.size());
+                    if (w > 0) pty_pending.erase(0, size_t(w));
+                }
+                if (card_out_requested || card_in_requested) {    // the owner's hands (SIGUSR1/2)
+                    const bool in = card_in_requested;
+                    card_out_requested = card_in_requested = 0;
+                    sd.set_present(in);
+                    (in ? sd_insertions : sd_removals)++;
+                    std::fprintf(stderr, "surfsim: cycle %" PRIu64 ": %s\n", cycles,
+                                 in ? "SIGUSR2: the card is in" : "SIGUSR1: the card is out");
+                }
+                if (stop_requested) {
+                    out_of_cycles = true;
+                    break;
+                }
+            }
             // the models' answers for the next cycle (the SD card and the keyboard react to
             // the SoC's registered outputs of the cycle that starts here, docs/IO.md section 6)
             top->ddr_req_ready = ddr.req_ready();
@@ -561,6 +659,13 @@ int main(int argc, char **argv) {
                     std::fflush(stdout);
                 }
                 if (transcript) std::fwrite(got.data(), 1, got.size(), transcript);
+                if (pty >= 0) {
+                    pty_pending += got;
+                    if (pty_pending.size() > (1u << 20)) {     // nobody has read for a long while
+                        pty_dropped += pty_pending.size() - (1u << 20);
+                        pty_pending.erase(0, pty_pending.size() - (1u << 20));
+                    }
+                }
                 output += got;
                 size_t end;
                 // each match and send is logged on stderr with its cycle
@@ -661,6 +766,16 @@ int main(int argc, char **argv) {
     }
 
     top->final();
+    if (pty >= 0) {
+        if (!pty_pending.empty()) {               // what is left, if the reader takes it now
+            ssize_t w = write(pty, pty_pending.data(), pty_pending.size());
+            if (w > 0) pty_pending.erase(0, size_t(w));
+        }
+        std::fprintf(stderr, "surfsim: --uart-pty: %" PRIu64 " bytes typed%s; %zu printed bytes not taken, %" PRIu64
+                             " dropped\n", pty_in, stop_requested ? "; stopped by a signal" : "",
+                     pty_pending.size(), pty_dropped);
+        close(pty);
+    }
     if (trace) std::fclose(trace);
     if (transcript) std::fclose(transcript);
 
@@ -709,7 +824,8 @@ int main(int argc, char **argv) {
         why = "output matched";
     } else if (out_of_cycles) {
         status = opt.expects.empty() ? 0 : 2;
-        why = opt.expects.empty() ? "max-cycles reached" : "max-cycles reached before the output matched";
+        why = stop_requested ? (opt.expects.empty() ? "stopped by a signal" : "stopped by a signal before the output matched")
+                             : opt.expects.empty() ? "max-cycles reached" : "max-cycles reached before the output matched";
     } else if (!opt.expects.empty()) {
         status = 1;
         why = "finished without the expected output";

@@ -1,0 +1,310 @@
+SurfCPU acceptance test m9: the standalone release (milestone 9): cold boots and a soak
+Verdict: PASS (9 checks seen by this script passed)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit-rtl/m9/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m9/state.json)
+Date: 2026-10-16 12:37:56 UTC, 180 s
+Command: /work/surfcpu/tools/board-test.py m9 --port /work/surfcpu/build/os/kit-rtl/m9/port --evidence-dir /work/surfcpu/build/os/kit-rtl/m9/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m9/state.json' --boots 2 --minutes 1.0 --slow 10 --manifest /work/surfcpu/build/os/kit-rtl/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  SurfBoot 1.0.0, ROM build 2355dba2
+  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  SurfBoot: ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  SurfOS 1.0.0 build 2355dba2, 376596 bytes, payload CRC 0x9794518d
+    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  flash          done
+              | Make sure the board starts from its configuration flash by itself: programmed with make -C
+              | surfcpu program-flash, the Arty's JP1 (MODE) jumper on, the SurfOS card (with sd=rw in
+              | /BOOT/CMDLINE.TXT) in the Pmod MicroSD. Then press Enter.
+  +     0.0  power-cycle    done
+              | Cold boot 1 of 2: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
+              | programming, no button held), then press Enter.
+  +    37.0  power-cycle    done
+              | Cold boot 2 of 2: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
+              | programming, no button held), then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit-rtl/m9/port opened at 115200 8N1
+  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
+  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.19 s, a fresh boot; bitstream 2355dba2
+  ok       cold boot 2: SurfBoot, the kernel and the shell; up 0.29 s, a fresh boot; bitstream 2355dba2
+  ok       2 cold boots in a row, each one checked, all from the bitstream 2355dba2
+  ok       the soak: /sd0p1 is mounted read-write (sd=rw)
+  ok       the soak: 3 rounds of uptime, ps, tasks, write, cp, crc32, rm and memstat in 1.4 minutes, every CRC right, the heap checked every round, no panic and no killed task
+  note     the soak: 8 tasks at each uptime
+  note     the soak: the kernel heap's use went from 144304 to 144304 bytes (between 144304 and 144304)
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 13170 bytes received;
+"*": the port going away and coming back):
+  +    0.136 | 
+  +    0.137 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
+  +    0.172 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
+  +    0.275 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    0.386 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  +    0.446 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +    0.509 | boot: /BOOT/SURFOS.BIN
+  +    0.537 | boot: loading 367 KiB .....
+  +   13.876 | boot: SurfOS 1.0.0 build 2355dba2: 376596 bytes in 1 fragment, read in 1837 ms
+  +   13.926 | boot: load 0x80000000, entry 0x80000000, mem_size 1173280, ISA IM_Zicsr_Zifencei; payload CRC 0x9794518d matches (card and DDR)
+  +   14.043 | boot: command line "ascii sd=rw"
+  +   14.065 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   14.120 | 
+  +   16.970 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   17.103 | Memory: kernel 0x80000000-0x8011e71f, DMA heap 0x8011f000-0x8021efff, kernel heap 0x8021f000-0x8effffff (237 MB)
+  +   18.357 | Booting SurfOS Kernel.....
+  +   18.424 | 
+  +   18.428 | 
+  +   18.429 | Interrupt Initialization
+  +   18.503 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +   18.679 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  +   18.853 | *Interrupts Enabled
+  +   20.284 | 
+  +   20.285 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +   20.531 | 
+  +   20.533 | Serial Console
+  +   20.594 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +   20.812 | *receive interrupt, source 0
+  +   20.889 | *DONE
+  +   20.910 | +GPIO: LEDs, switches 0x0, buttons; LD4 is the heartbeat
+  +   21.072 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +   21.458 | +SD: sd0: SDHC 36 MB, SURFC rev 1.0, manufacturer 0x5c 'SF', serial 0badf00d, made 2026-10, CRC checked; read-write (sd=rw on the command line writes)
+  +   21.951 | +PART: sd0p1: MBR partition 1, blocks 2048-73727 (35M), type 0c FAT32 LBA
+  +   22.281 | 
+  +   22.283 | Drivers: serial gpio ps2kbd sdcard
+  +   22.382 | 
+  +   22.383 | File Systems
+  +   24.627 | +FAT32: sd0p1: label SURFOS, 70528 clusters of 512 bytes, 560 FAT sectors x 2, data at block 1152; 69783 free (FSInfo)
+  +   25.250 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +   25.645 | *DONE
+  +   25.960 | 
+  +   26.259 | Timer
+  +   26.584 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +   27.339 | 
+  +   27.647 | 
+  +   27.952 | Brandon Burr's SurfOS
+  +   28.320 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   29.371 | SURF ~#> bootinfo
+  +   29.789 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
+  +   30.268 |   boot information: SurfBoot 1.0.0 (2355dba2), version 1, CRC 0x7ed5f161 ok
+  +   30.795 |   board id 0x00f0 (simulation), SoC 0.1.0, memory map 1, sys clock 25000000 Hz, timebase 1000000 Hz
+  +   31.686 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
+  +   32.197 |   image 0x80000000 + 1173280 bytes; boot device SD, FAT32 at LBA 2048
+  +   32.724 |   command line: 'ascii sd=rw'
+  +   33.149 |   sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation), features 0xff
+  +   34.096 |   DDR status 0x5, 256 MB; pixel clock 25173611 Hz
+  +   34.565 |   screen: surf_video text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 5691 cells written, 21 hardware scrolls
+  +   35.556 | SURF ~#> uptime
+  +   35.969 |     up 1.19 s (119 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +   36.465 |     mtime 4971457 at 1000000 Hz; heartbeat 3
+  +   36.909 | SURF ~#> 
+  +   36.979 * the port went away (/work/surfcpu/build/os/kit-rtl/m9/port hung up)
+  +   37.181 * the port is back: opened again
+  +   37.296 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
+  +   37.334 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
+  +   37.438 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +   37.560 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  +   37.619 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +   37.682 | boot: /BOOT/SURFOS.BIN
+  +   37.710 | boot: loading 367 KiB .....
+  +   51.036 | boot: SurfOS 1.0.0 build 2355dba2: 376596 bytes in 1 fragment, read in 1837 ms
+  +   51.086 | boot: load 0x80000000, entry 0x80000000, mem_size 1173280, ISA IM_Zicsr_Zifencei; payload CRC 0x9794518d matches (card and DDR)
+  +   51.202 | boot: command line "ascii sd=rw"
+  +   51.224 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   51.278 | 
+  +   54.118 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   54.250 | Memory: kernel 0x80000000-0x8011e71f, DMA heap 0x8011f000-0x8021efff, kernel heap 0x8021f000-0x8effffff (237 MB)
+  +   55.508 | Booting SurfOS Kernel.....
+  +   55.573 | 
+  +   55.577 | 
+  +   55.579 | Interrupt Initialization
+  +   55.650 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +   55.813 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  +   55.984 | *Interrupts Enabled
+  +   57.388 | 
+  +   57.389 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +   57.632 | 
+  +   57.634 | Serial Console
+  +   57.694 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +   57.911 | *receive interrupt, source 0
+  +   57.987 | *DONE
+  +   58.007 | +GPIO: LEDs, switches 0x0, buttons; LD4 is the heartbeat
+  +   58.167 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +   58.548 | +SD: sd0: SDHC 36 MB, SURFC rev 1.0, manufacturer 0x5c 'SF', serial 0badf00d, made 2026-10, CRC checked; read-write (sd=rw on the command line writes)
+  +   59.037 | +PART: sd0p1: MBR partition 1, blocks 2048-73727 (35M), type 0c FAT32 LBA
+  +   59.362 | 
+  +   59.364 | Drivers: serial gpio ps2kbd sdcard
+  +   59.461 | 
+  +   59.463 | File Systems
+  +   61.492 | +FAT32: sd0p1 was not unmounted cleanly (check it on another computer if files look wrong)
+  +   85.654 | +FAT32: sd0p1: label SURFOS, 70528 clusters of 512 bytes, 560 FAT sectors x 2, data at block 1152; 69783 free (counted)
+  +   86.590 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +   86.988 | *DONE
+  +   87.317 | 
+  +   87.621 | Timer
+  +   87.948 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +   88.707 | 
+  +   89.018 | 
+  +   89.320 | Brandon Burr's SurfOS
+  +   89.685 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   90.180 | SURF ~#> uptime
+  +   90.590 |     up 0.29 s (29 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +   91.075 |     mtime 7382806 at 1000000 Hz; heartbeat 1
+  +   91.521 | SURF ~#> mount
+  +   91.925 |     none   on /            type rootfs (ro)
+  +   92.358 |     none   on /dev         type devfs
+  +   92.773 |     sd0p1  on /sd0p1       type fat
+  +   93.223 | SURF ~#> uptime
+  +   93.635 |     up 0.71 s (71 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +   94.125 |     mtime 7797660 at 1000000 Hz; heartbeat 2
+  +   95.154 | SURF ~#> ps
+  +   95.529 | 
+  +   95.835 | SurfOS Task List
+  +   96.182 | --------------------------
+  +   96.558 |   PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME
+  +   97.029 |     0  ready     LOW              1         0      -1  Kernel Idle Task
+  +   97.540 |     1  blocked   HIGH             3         1      -1  init
+  +   98.025 |     2  sleeping  LOW              0         3       1  heartbeat
+  +   98.522 |     3  sleeping  LOW              0         5       1  sdwatch
+  +   99.010 |     4  running   HIGH           106        18       1  Shell 0
+  +   99.493 |     5  blocked   HIGH             2        15       1  Shell 1
+  +   99.980 |     6  blocked   HIGH             3        15       1  Shell 2
+  +  100.467 |     7  blocked   HIGH             2        15       1  Shell 3
+  +  100.951 | 
+  +  101.253 | 8 tasks
+  +  101.594 | SURF ~#> tasks
+  +  102.099 |     started task A (pid 8) and task B (pid 9)
+  +  102.532 |     task A: round 1 of 4, tick 192, sleeping 100 ms
+  +  102.986 |     task B: round 1 of 3, tick 194, sleeping 170 ms
+  +  103.681 |     task A: round 2 of 4, tick 209, sleeping 100 ms
+  +  104.602 |     task B: round 2 of 3, tick 222, sleeping 170 ms
+  +  105.062 |     task A: round 3 of 4, tick 226, sleeping 100 ms
+  +  106.157 |     task A: round 4 of 4, tick 244, sleeping 100 ms
+  +  106.612 |     task B: round 3 of 3, tick 247, sleeping 170 ms
+  +  108.229 |     task A ran 4 rounds, task B 3, in 88 ticks; both ended (status 0, 0)
+  +  108.743 | SURF ~#> write /sd0p1/USERS/DOCUMENTS/SOAK.TXT soak iteration 1
+  +  110.732 | SURF ~#> cp /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  112.073 |     17 bytes copied
+  +  112.611 | SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  113.424 |     256c7e2d       17  /sd0p1/USERS/DOCUMENTS/SOAK.TXT
+  +  113.952 |     256c7e2d       17  /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  114.435 | SURF ~#> rm /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  115.615 | SURF ~#> memstat
+  +  116.015 | 
+  +  116.317 | SurfOS Memory Statistics
+  +  116.685 | --------------------------
+  +  117.068 | Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
+  +  117.955 | Kernel: 0x80000000-0x8011e71f (BSS 0x8005bee0-0x8011e71f)
+  +  118.427 | Memstart: 0x8011e720  Memend: 0x90000000
+  +  118.842 | 
+  +  119.163 | kernel heap: 0x8021f000-0x80250000 (196 KB grown in 3 steps, room to 0x8f000000)
+  +  119.996 |   used: 144304 bytes in 29 blocks   free: 55904 bytes in 2 blocks
+  +  120.491 | dma heap: 0x8011f000-0x8011f000 (0 KB grown in 0 steps, room to 0x8021f000)
+  +  121.005 |   used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
+  +  121.462 | heap check: ok
+  +  121.800 | 
+  +  122.118 | SURF ~#> uptime
+  +  122.527 |     up 4.70 s (470 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +  123.010 |     mtime 11785583 at 1000000 Hz; heartbeat 9
+  +  123.453 | SURF ~#> ps
+  +  123.831 | 
+  +  124.134 | SurfOS Task List
+  +  124.483 | --------------------------
+  +  124.862 |   PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME
+  +  125.330 |     0  ready     LOW             39         6      -1  Kernel Idle Task
+  +  125.844 |     1  blocked   HIGH             3         3      -1  init
+  +  126.323 |     2  sleeping  LOW              0         9       1  heartbeat
+  +  126.815 |     3  sleeping  LOW              0        19       1  sdwatch
+  +  127.309 |     4  running   HIGH           363        34       1  Shell 0
+  +  127.794 |     5  blocked   HIGH             2        15       1  Shell 1
+  +  128.280 |     6  blocked   HIGH             3        15       1  Shell 2
+  +  128.770 |     7  blocked   HIGH             2        15       1  Shell 3
+  +  129.253 | 
+  +  129.553 | 8 tasks
+  +  129.890 | SURF ~#> tasks
+  +  130.392 |     started task A (pid 10) and task B (pid 11)
+  +  130.833 |     task A: round 1 of 4, tick 584, sleeping 100 ms
+  +  131.290 |     task B: round 1 of 3, tick 588, sleeping 170 ms
+  +  131.967 |     task A: round 2 of 4, tick 600, sleeping 100 ms
+  +  132.868 |     task B: round 2 of 3, tick 613, sleeping 170 ms
+  +  133.323 |     task A: round 3 of 4, tick 617, sleeping 100 ms
+  +  134.443 |     task A: round 4 of 4, tick 635, sleeping 100 ms
+  +  134.908 |     task B: round 3 of 3, tick 638, sleeping 170 ms
+  +  136.755 |     task A ran 4 rounds, task B 3, in 88 ticks; both ended (status 0, 0)
+  +  137.278 | SURF ~#> write /sd0p1/USERS/DOCUMENTS/SOAK.TXT soak iteration 2
+  +  138.990 | SURF ~#> cp /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  140.935 |     17 bytes copied
+  +  141.711 | SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  142.831 |     0e412dee       17  /sd0p1/USERS/DOCUMENTS/SOAK.TXT
+  +  143.411 |     0e412dee       17  /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  143.897 | SURF ~#> rm /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  145.111 | SURF ~#> memstat
+  +  145.514 | 
+  +  145.817 | SurfOS Memory Statistics
+  +  146.200 | --------------------------
+  +  146.587 | Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
+  +  147.481 | Kernel: 0x80000000-0x8011e71f (BSS 0x8005bee0-0x8011e71f)
+  +  147.949 | Memstart: 0x8011e720  Memend: 0x90000000
+  +  148.362 | 
+  +  148.687 | kernel heap: 0x8021f000-0x80250000 (196 KB grown in 3 steps, room to 0x8f000000)
+  +  149.513 |   used: 144304 bytes in 29 blocks   free: 55904 bytes in 2 blocks
+  +  150.009 | dma heap: 0x8011f000-0x8011f000 (0 KB grown in 0 steps, room to 0x8021f000)
+  +  150.527 |   used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
+  +  150.982 | heap check: ok
+  +  151.324 | 
+  +  151.641 | SURF ~#> uptime
+  +  152.047 |     up 8.52 s (852 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +  152.528 |     mtime 15608786 at 1000000 Hz; heartbeat 15
+  +  152.979 | SURF ~#> ps
+  +  153.353 | 
+  +  153.658 | SurfOS Task List
+  +  154.009 | --------------------------
+  +  154.386 |   PID  STATE     PRIO    CPU(ticks)  SWITCHES  PARENT  NAME
+  +  154.863 |     0  ready     LOW             77        14      -1  Kernel Idle Task
+  +  155.381 |     1  blocked   HIGH             3         5      -1  init
+  +  155.866 |     2  sleeping  LOW              0        15       1  heartbeat
+  +  156.364 |     3  sleeping  LOW              0        32       1  sdwatch
+  +  156.855 |     4  running   HIGH           612        50       1  Shell 0
+  +  157.345 |     5  blocked   HIGH             2        15       1  Shell 1
+  +  157.838 |     6  blocked   HIGH             3        15       1  Shell 2
+  +  158.326 |     7  blocked   HIGH             2        15       1  Shell 3
+  +  158.828 | 
+  +  159.130 | 8 tasks
+  +  159.465 | SURF ~#> tasks
+  +  159.968 |     started task A (pid 12) and task B (pid 13)
+  +  160.417 |     task B: round 1 of 3, tick 966, sleeping 170 ms
+  +  160.865 |     task A: round 1 of 4, tick 961, sleeping 100 ms
+  +  161.985 |     task B: round 2 of 3, tick 989, sleeping 170 ms
+  +  162.442 |     task A: round 2 of 4, tick 992, sleeping 100 ms
+  +  163.530 |     task A: round 3 of 4, tick 1011, sleeping 100 ms
+  +  163.986 |     task B: round 3 of 3, tick 1014, sleeping 170 ms
+  +  164.698 |     task A: round 4 of 4, tick 1027, sleeping 100 ms
+  +  165.923 |     task A ran 4 rounds, task B 3, in 85 ticks; both ended (status 0, 0)
+  +  166.433 | SURF ~#> write /sd0p1/USERS/DOCUMENTS/SOAK.TXT soak iteration 3
+  +  167.885 | SURF ~#> cp /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  169.235 |     17 bytes copied
+  +  169.776 | SURF ~#> crc32 /sd0p1/USERS/DOCUMENTS/SOAK.TXT /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  170.581 |     175a1caf       17  /sd0p1/USERS/DOCUMENTS/SOAK.TXT
+  +  171.107 |     175a1caf       17  /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  171.586 | SURF ~#> rm /sd0p1/USERS/DOCUMENTS/SOAK2.TXT
+  +  172.776 | SURF ~#> memstat
+  +  173.179 | 
+  +  173.483 | SurfOS Memory Statistics
+  +  173.854 | --------------------------
+  +  174.239 | Physical memory: 262144KB at 0x80000000 (machine mode: no paging, no protection between tasks)
+  +  175.123 | Kernel: 0x80000000-0x8011e71f (BSS 0x8005bee0-0x8011e71f)
+  +  175.598 | Memstart: 0x8011e720  Memend: 0x90000000
+  +  176.015 | 
+  +  176.334 | kernel heap: 0x8021f000-0x80250000 (196 KB grown in 3 steps, room to 0x8f000000)
+  +  177.168 |   used: 144304 bytes in 29 blocks   free: 55904 bytes in 2 blocks
+  +  177.670 | dma heap: 0x8011f000-0x8011f000 (0 KB grown in 0 steps, room to 0x8021f000)
+  +  178.186 |   used: 0 bytes in 0 blocks   free: 0 bytes in 0 blocks
+  +  178.640 | heap check: ok
+  +  178.980 | 
+  +  179.301 | SURF ~#> 

@@ -1,0 +1,41 @@
+SurfCPU acceptance test m7: SurfOS from the card (milestone 7): the shell, two kernel tasks, the uptime, the keyboard
+Verdict: FAIL (0 checks seen by this script passed, 1 failed)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-no-kernel/state.json)
+Date: 2026-10-16 12:37:00 UTC, 1 s
+Command: /work/surfcpu/tools/board-test.py m7 --port /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port --evidence-dir /work/surfcpu/build/os/kit/edge-rtl-no-kernel/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-no-kernel/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  (none read)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  card           done
+              | Install SurfOS on the card (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject it, put it in
+              | the Arty, and press Enter.
+  +     0.0  boot           done
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top), or press and release
+              | RESET if it is loaded already; hold no button. Then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port opened at 115200 8N1
+  FAIL     SurfBoot reading the kernel from the card: the board printed "SurfBoot stopped: file not found (NOT_FOUND)" instead (then: "/BOOT/SURFOS.BIN does not exist")
+
+Transcript (seconds since the port was opened; escape sequences and CR removed; 805 bytes received;
+"*": the port going away and coming back):
+  +    0.114 | 
+  +    0.115 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
+  +    0.150 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
+  +    0.256 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    0.368 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  +    0.428 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +    0.492 | boot: /BOOT/SURFOS.BIN
+  +    0.521 | boot: /BOOT/SURFOS.BIN: /BOOT/SURFOS.BIN does not exist
+  +    0.557 | boot: trying /BOOT/BACKUP.BIN instead
+  +    0.583 | boot: /BOOT/BACKUP.BIN
+  +    0.612 | boot: /BOOT/BACKUP.BIN: /BOOT/BACKUP.BIN does not exist
+  +    0.649 | 
+  +    0.650 | SurfBoot stopped: file not found (NOT_FOUND)
+  +    0.679 |   /BOOT/SURFOS.BIN does not exist
+  +    0.702 | The LEDs LD4-LD7 show code 6. Type help for the monitor's commands; inserting a card retries the boot.
+  +    0.768 | surfboot> 

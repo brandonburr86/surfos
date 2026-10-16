@@ -179,6 +179,15 @@ puts it back. They are entries of the `--send` list, in order with the sends, bu
 does not move the list's search point, so the entry after it may match the same text. Each is
 logged with its cycle; without them surfsim behaves as before.
 
+The UART on a pseudo-terminal (2026-10-16, added by the os track for its physical test kit,
+docs/PHYSICAL-TESTS.md): `--uart-pty` also connects the UART to a pseudo-terminal whose path
+surfsim prints on stderr (`surfsim: --uart-pty /dev/pts/N`), so `tools/uart.py` and
+`tools/board-test.py` use it as the board's serial port. The run starts only once a program
+has opened it; what is typed there goes to the SoC's receive pin, and what the SoC prints goes
+there too (held while nobody reads, up to 1 MiB). With `--uart-pty`, SIGTERM or SIGINT ends
+the run as `--max-cycles` would (so `--sd-flush` writes the card back: a power cut), SIGUSR1
+takes the card out and SIGUSR2 puts it back. Without it surfsim behaves as before.
+
 ## 8. Clarifications (version 1 unchanged)
 
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and

@@ -1,0 +1,181 @@
+# test-os-kit (check): 20 of 20 checks passed in 57 s
+# 2026-10-16 12:37:56 UTC, kit_test.py --set check, Python 3.13.5 on Linux aarch64 (the RTL system: surfsim --uart-pty; fake boards: pseudo-terminals in kit_test.py; the owner's steps answered by kit_test.py owner)
+ok   edge-garbage: board-test m1 against a fake board (garbage): FAIL in 5 s (0 checks seen by this script passed, 1 failed)
+ok   edge-lost-second: board-test m1 against a fake board (skip): FAIL in 10 s (9 checks seen by this script passed, 1 failed; 2 not done or not compared)
+ok   edge-rtl-no-kernel: board-test m7 against the RTL system: FAIL in 1 s (0 checks seen by this script passed, 1 failed)
+ok   edge-rtl-unplugged: board-test m5 against the RTL system: FAIL in 32 s (8 checks seen by this script passed, 1 failed)
+ok   edge-silent: board-test m1 against a fake board (silent): FAIL in 5 s (0 checks seen by this script passed, 1 failed)
+ok   edge-unplugged: board-test m1 against a fake board (vanish): FAIL in 3 s (0 checks seen by this script passed, 1 failed)
+ok   m1-baseline: board-test m1 against a fake board (baseline): PASS in 10 s (11 checks seen by this script passed; 1 not done or not compared)
+ok   m1-wrong-bitstream: board-test m1 against a fake board (baseline): FAIL in 9 s (10 checks seen by this script passed, 1 failed; 1 not done or not compared)
+ok   m3: board-test m3 against the RTL system: PASS in 20 s (25 checks seen by this script passed; 1 not done or not compared)
+ok   m7: board-test m7 against the RTL system: PASS in 56 s (10 checks seen by this script passed; 1 not done or not compared)
+ok   uart.py capture: --timeout ends it: exit 2 in 2.1 s
+ok   uart.py capture: a port that goes away ends it at once: exit 1 in 1.3 s, not at the 20 s limit
+ok   uart.py capture: baseline lines recorded with their times, ended by --until (exit 0, 2.2 s)
+ok   uart.py console: a port that goes away ends it: exit 1, "the port went away"
+ok   uart.py console: keys typed go out, what comes back is shown and logged, Ctrl-] quits (exit 0)
+ok   uart.py list runs here (exit 1: uart.py: no /dev/cu.usbserial-* port: is the Arty plugged in (its USB cable powers it)?)
+ok   uart.py script: --fail-on ends it: exit 1 in 0.1 s
+ok   uart.py script: --send and --expect in order, typed with pacing: exit 0 in 0.2 s
+ok   uart.py script: its --timeout ends it: exit 2 in 2.1 s
+ok   uart.py: a port that is not there: exit 1, and why
+
+==== edge-rtl-no-kernel: board-test.py m7 against the RTL system, FAIL in 1 s: its evidence, up to the transcript ====
+SurfCPU acceptance test m7: SurfOS from the card (milestone 7): the shell, two kernel tasks, the uptime, the keyboard
+Verdict: FAIL (0 checks seen by this script passed, 1 failed)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-no-kernel/state.json)
+Date: 2026-10-16 12:37:00 UTC, 1 s
+Command: /work/surfcpu/tools/board-test.py m7 --port /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port --evidence-dir /work/surfcpu/build/os/kit/edge-rtl-no-kernel/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-no-kernel/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  (none read)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  card           done
+              | Install SurfOS on the card (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject it, put it in
+              | the Arty, and press Enter.
+  +     0.0  boot           done
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top), or press and release
+              | RESET if it is loaded already; hold no button. Then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/edge-rtl-no-kernel/port opened at 115200 8N1
+  FAIL     SurfBoot reading the kernel from the card: the board printed "SurfBoot stopped: file not found (NOT_FOUND)" instead (then: "/BOOT/SURFOS.BIN does not exist")
+
+==== edge-rtl-unplugged: board-test.py m5 against the RTL system, FAIL in 32 s: its evidence, up to the transcript ====
+SurfCPU acceptance test m5: SurfBoot and the card (milestone 5): the DDR diagnostic from the card, missing and invalid images
+Verdict: FAIL (8 checks seen by this script passed, 1 failed)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/edge-rtl-unplugged/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-unplugged/state.json)
+Date: 2026-10-16 12:37:00 UTC, 32 s
+Command: /work/surfcpu/tools/board-test.py m5 --port /work/surfcpu/build/os/kit/edge-rtl-unplugged/port --evidence-dir /work/surfcpu/build/os/kit/edge-rtl-unplugged/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-unplugged/state.json' --ddrdiag /work/surfcpu/build/fw/DDRDIAG.BIN --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  SurfBoot 1.0.0, ROM build 2355dba2
+  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  DDRDIAG.BIN build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a
+    DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  card           done
+              | On the Mac, with the SurfOS card mounted (SurfOS installed with make deploy-sd, OWNER-GUIDE.md
+              | section 7), copy the DDR diagnostic next to the kernel:
+              |   cp surfcpu/build/fw/DDRDIAG.BIN /Volumes/<card>/BOOT/
+              | then eject the card (diskutil eject /Volumes/<card>), put it in the Arty, and press Enter.
+  +     0.0  monitor        done
+              | Load the design if it is not loaded (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top).
+              | Then hold BTN1 down, press and release RESET, and keep holding BTN1 until surfboot> appears;
+              | then press Enter.
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/edge-rtl-unplugged/port opened at 115200 8N1
+  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       info: DDR calibrated (the DDR bitstream): ddr: status 5 (present, calibrated), size 256 MiB
+  ok       info: the card is present (card: present; buttons 2)
+  ok       a missing image: boot /BOOT/NOSUCH.BIN is diagnosed (NOT_FOUND) and the monitor is back
+  ok       an invalid image: check /SYSTEM/SURFCARD.TXT (not a package) is diagnosed (IMG_SHORT), the monitor is back
+  ok       check /BOOT/DDRDIAG.BIN: every package check passes
+  ok       DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+  FAIL     DDRDIAG's end: the port went away at +31.7 s (/work/surfcpu/build/os/kit/edge-rtl-unplugged/port hung up): USB unplugged, or the board lost power?
+
+==== m3: board-test.py m3 against the RTL system, PASS in 20 s: its evidence, up to the transcript ====
+SurfCPU acceptance test m3: the CPU on the board (milestone 3): the BRAM diagnostics
+Verdict: PASS (25 checks seen by this script passed; 1 not done or not compared)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/m3/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m3/state.json)
+Date: 2026-10-16 12:37:00 UTC, 20 s
+Command: /work/surfcpu/tools/board-test.py m3 --port /work/surfcpu/build/os/kit/m3/port --evidence-dir /work/surfcpu/build/os/kit/m3/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m3/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  BRAM diagnostics 1.0.0, ROM build 2355dba2
+  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  program        done
+              | Load the CPU with its diagnostics, in another Terminal window:
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag
+              | and press Enter here once it says done.
+  +    19.3  leds           skipped
+              | Are LD4..LD7 lit and LD0 green (red would mean a failure)?
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/m3/port opened at 115200 8N1
+  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       the system clock is 25,000,000 Hz (25000000)
+  ok       identity: ok
+  ok       ALU, immediates, x0: ok
+  ok       M extension: ok
+  ok       branches and jumps: ok
+  ok       loads and stores: ok
+  ok       CSRs and counters: ok
+  ok       scratch RAM: ok (56 KiB)
+  ok       exceptions, each recovered: ok
+  ok       interrupts, timer and WFI: ok (10 timer ticks in 10186 us)
+  ok       FENCE.I, code written to RAM: ok
+  ok       the timer's progress: 10 timer ticks in 10186 us (1 ms a tick, +- 20 %)
+  ok       text RAM (cells 2400-4095): ok (1 checks)
+  ok       DDR calibration: ok (1 checks)
+  ok       DDR data lines: ok (192 checks)
+  ok       DDR byte lanes: ok (9 checks)
+  ok       DDR address lines and aliases: ok (54 checks)
+  ok       DDR boundaries: ok (98 checks)
+  ok       DDR patterns: ok (2 checks)
+  ok       DDR sustained copies: ok (4 checks)
+  ok       code running from DDR: ok (6 checks)
+  ok       BRAMDIAG: PASS (569 checks)
+  ok       the UART both ways: each byte typed (Arty7) came back with its code
+  skip     not observed: Are LD4..LD7 lit and LD0 green (red would mean a failure)?
+
+==== m7: board-test.py m7 against the RTL system, PASS in 56 s: its evidence, up to the transcript ====
+SurfCPU acceptance test m7: SurfOS from the card (milestone 7): the shell, two kernel tasks, the uptime, the keyboard
+Verdict: PASS (10 checks seen by this script passed; 1 not done or not compared)
+Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/m7/port)
+Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m7/state.json)
+Date: 2026-10-16 12:37:00 UTC, 56 s
+Command: /work/surfcpu/tools/board-test.py m7 --port /work/surfcpu/build/os/kit/m7/port --evidence-dir /work/surfcpu/build/os/kit/m7/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m7/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
+Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+
+Build identity read from the port, and what it was compared with:
+  SurfBoot 1.0.0, ROM build 2355dba2
+  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  SurfBoot: ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  SurfOS 1.0.0 build 2355dba2, 376596 bytes, payload CRC 0x9794518d
+    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation)
+
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
+  +     0.0  card           done
+              | Install SurfOS on the card (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject it, put it in
+              | the Arty, and press Enter.
+  +     0.0  boot           done
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top), or press and release
+              | RESET if it is loaded already; hold no button. Then press Enter.
+  +    55.5  keyboard       done
+              | On the PS/2 keyboard, type:  echo ps2-ok  and Enter, then press Enter here.
+  +    55.9  vga            skipped
+              | Does the VGA monitor show the same shell: the banner and the commands just run?
+
+Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
+  note     port /work/surfcpu/build/os/kit/m7/port opened at 115200 8N1
+  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       its dirty flag (0) matches the manifest's source_dirty = false
+  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       SurfOS booted from the card to the shell (SurfBoot, the kernel read and checked, the card mounted read-write)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
+  ok       two kernel tasks make progress, sleep and wake (run 1: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
+  ok       two kernel tasks make progress, sleep and wake (run 2: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
+  ok       uptime twice
+  ok       the uptime advances: 3.09 s then 3.72 s, ticks 309 then 372, heartbeat 6 then 7
+  note     the uptime's rate not checked against the clock: --slow 10
+  ok       the PS/2 keyboard types into the shell: echo ps2-ok answered ps2-ok
+  skip     not observed: Does the VGA monitor show the same shell: the banner and the commands just run?
