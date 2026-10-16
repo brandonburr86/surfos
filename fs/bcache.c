@@ -399,7 +399,7 @@ static void sleep_unlocked_ms(u_long ms) {
 /* (bcache_lock held) 10/16/26 (B26): is b set aside (B16) by an operation of another task than the caller
    (a file system sets blocks of a device aside only within one operation, under its volume's lock: the
    device records whose it is) */
-static bool aside_other(const struct buf *b) {
+static inline bool aside_other(const struct buf *b) {
     return b->aside && b->dev && b->dev->bc_aside_by != (const void *)curTask;
 }
 
@@ -841,7 +841,7 @@ void brelse(struct buf *b) {
         b->held_since = 0;
         /* a gone device's block; 10/16/26 (B22): a clean copy taken out of the table while it was held (it may
            hold what its device no longer does: write_blocks()) */
-        if(b->dev && (b->dev->gone || (b->valid && !b->hashed && !b->dirty)) && !b->loading && !b->writing && !b->copying)
+        if(b->dev && (b->dev->gone || (!b->hashed && b->valid && !b->dirty)) && !b->loading && !b->writing && !b->copying)
             drop(b);
         wake_up_all(&bwait);                    /* someone may wait for a free buffer */
     }
@@ -922,10 +922,12 @@ static int write_singly(struct bdev *dev, u32 first, u32 n, u8 order, u32 pass, 
 /* (bcache_lock held) 10/16/26 (B12): does a sync of dev (NULL: every device) up to order top, begun at
    change `start`, owe b: a change of it up to `start` is not on its device. 10/16/26 (B26): a block set
    aside (B16) is not the debt of the calling task's sync when that task set it aside (its order point must
-   not wait for it); it is the debt of every other task's (it may be put back, still not written) */
-static bool owed(const struct buf *b, const struct bdev *dev, u8 top, u64 start) {
-    return b->valid && b->dirty && (!b->aside || aside_other(b)) && b->order <= top && b->first_seq <= start &&
-           (!dev || b->dev == dev);
+   not wait for it); it is the debt of every other task's (it may be put back, still not written). Inline:
+   each sync asks it of every buffer, twice (on SurfCPU, which fetches every instruction from DDR, a call
+   for each cost about 0.4 million cycles a sync) */
+static inline bool owed(const struct buf *b, const struct bdev *dev, u8 top, u64 start) {
+    return b->valid && b->dirty && b->order <= top && b->first_seq <= start && (!dev || b->dev == dev) &&
+           (!b->aside || aside_other(b));
 }
 
 /* (bcache_lock held) 10/16/26 (B12): an owed block that one more try could write: not failed in this call,
