@@ -1,0 +1,103 @@
+SurfCPU release: what made two builds of one commit differ, and the checks after the fixes
+2026-10-16, release track (branch sc/rel), MacBook Pro M4 Max, Docker Desktop (14 CPUs, 7.7 GiB)
+Images: surfcpu-toolchain:2026-10-15 sha256:e4389c3c6d93..., surfcpu-openxc7:2026-10-15 sha256:b802ed1bac37...
+docs/RELEASE.md section 4 sums this up.
+
+1. The kernel: SOURCE_DATE_EPOCH did not reach the container
+   arch/riscv32/kernel.mk compiles SURFOS_BUILD_TIME = $(or $(SOURCE_DATE_EPOCH),$(shell date -u +%s))
+   into the kernel, but devenv/run.sh passed only SURFCPU_BUILD_ID/DIRTY into the container.
+   Before (420f756): make -C surfcpu build-kernel twice, 2 s apart, output directory emptied first:
+     SURFOS.BIN 4e60207d310efcae... and 2e91bc0bb0650318..., 382148 bytes each
+     cmp -l (1-based): bytes 33-36 (payload_crc32), 61-64 (header_crc32), 37039 and 37179 (payload)
+     tools/release.py's diagnosis of the pair:
+       382148 against 382148 bytes, first difference at byte 32 (0x20): header fields: payload_crc32
+       0xa3ebfe4d against 0x8bc3995e; header_crc32 0x4efe9d6 against 0x9728c47e; payload: first
+       difference at payload byte 36974 = address 0x8000906e, 2 bytes differ: a value compiled into the
+       code differs (the build time: ...)
+       (with the kernel's ELF beside it, as in a release, it adds: "in time_now+0x52")
+   Fix dad4607: run.sh passes SOURCE_DATE_EPOCH when it is set.
+   After: make build-rom build-kernel twice from empty output directories (build/fw,
+   build/riscv32/arty_a7) with SOURCE_DATE_EPOCH=1792158292: every file the same
+     surfboot.mem 53ba5447f96eadea...  bramdiag.mem 1764b937446a7388...  DDRDIAG.BIN bc5ba276c0256a6a...
+     surfboot.elf d6082cc4807acc32...  bramdiag.elf 4ab9ae5fa037ad40...  ddrdiag.elf 33d9fe9aa0a0bea3...
+     SURFOS.BIN   3a2493a869b73cee...  surfos.elf   1485aa6a341ccab5...
+
+2. The .bit header's date and time
+   Project X-Ray's xc7frames2bit writes the time of the build into the .bit header (fields c and d).
+   Before: FLOW=openxc7 tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t twice, a minute
+   apart, the same SOURCE_DATE_EPOCH (so the same BUILD_TIME generic):
+     arty_a7_baseline.bit          9008ab10010d8d80  e03e2cc354c0f27d   differ: 3 bytes from byte 153
+     arty_a7_baseline.json         73395468c8e18bba  73395468c8e18bba   (the synthesized netlist)
+     arty_a7_baseline.fasm         9a22a055ef71e148  9a22a055ef71e148
+     arty_a7_baseline.frames       bdd41303d5702964  bdd41303d5702964
+     arty_a7_baseline.decoded.fasm a5f4e2fc31ee6391  a5f4e2fc31ee6391
+     tools/release.py's diagnosis of the two .bit files:
+       3825952 against 3825952 bytes, first difference at byte 153 (0x99): the .bit header's date and
+       time ('2026/10/16 14:08:53' against '2026/10/16 14:10:22'): xc7frames2bit writes the time of the
+       build there; ... The configuration streams are identical: only the header differs.
+   Fix b3741f2: tools/openxc7-build.sh runs tools/bitfile.py stamp with SOURCE_DATE_EPOCH right after
+   xc7frames2bit (before the checks, so every check and the build record see the final file).
+
+3. Threads, seeds, placement: the whole SoC twice
+   tools/openxc7-build.sh for surfcpu_arty_a7_top on the 100T (SurfBoot ROM, the release's settings:
+   --dsp safe, placer seed 1, nextpnr with 4 threads), twice, into two output directories, without
+   LVS (a check, not part of the bitstream), 3 minutes each:
+     file                       bytes       run a             run b
+     pre.json (elaborated RTL)  3453677     1ceae994954a3f18  1ceae994954a3f18
+     surfcpu_arty_a7_top.json   19448510    502e873a1a37eea5  502e873a1a37eea5
+     placement.json             1271795     3e778b9b32db052b  3e778b9b32db052b
+     surfcpu_arty_a7_top.fasm   8397840     adc31762ac90e99d  adc31762ac90e99d
+     surfcpu_arty_a7_top.frames 10111464    483dac5513a807ee  483dac5513a807ee
+     surfcpu_arty_a7_top.bit    3825926     82b0d2eb3a43c05b  29edaae051a055e4   4 bytes differ: the
+                                            header's design field (".../a/..." against ".../b/...", the
+                                            output directory) and its time field
+   nextpnr's 4 threads (OPENXC7_THREADS inside the image; devenv/run.sh does not pass it, so every
+   build gets 4) gave the same placement and routing both times. The release builds in the fixed
+   directory build/fpga/<board>/<design> (it refuses SURFCPU_FPGA_OUT), so the design field is the
+   same in any checkout; the time field is stamped (2).
+
+4. File order and locale
+   The toolchain image's GNU Make 4.4.1 returns $(wildcard ...) sorted: arch/riscv32/*.c came out
+   as absent.c bootinfo.c cpu.c crc32.c ... while the directory's own order (ls -U) is
+   isacheck.py drivers.c kshell.c elfcmp.py serial.c ...; the link order is therefore fixed.
+   tools/fpga-build.sh sorts each source pattern's matches with sort(1), which follows the locale:
+   every source, include and ROM pattern of the SoC design lists sorts the same under LC_ALL=C and
+   the Mac's LANG=en_US.UTF-8 (sha1 of the sorted list 6a4c525a50486295... both ways). The release
+   runs everything with LC_ALL=C and TZ=UTC anyway.
+
+5. Build paths
+   The containers mount the tree at /work wherever it is (devenv/run.sh), so the ELF files' debug
+   information and the .bit header's relative path do not depend on the checkout's directory, and
+   -ffile-prefix-map is not needed. Shown by the comparisons: the release was built in a fresh clone
+   and the verify rebuild in another directory, and their debug/*.elf files matched (verify.txt), as
+   did those of a trial release of a scratch commit (f1981f2c): its 14
+   artifacts, baseline bitstreams and flash images included, were rebuilt by release-verify in
+   build/release-verify/.../src and all 14 matched.
+
+6. The generated LiteDRAM core (found, not fixed here: ip/litedram belongs to the ddr track)
+   The release of bb066932 from a fresh checkout ran `make litedram-gen` for the DDR designs, and its
+   own lock check failed:
+     lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92cd190648ca07...,
+     arty.sha256 has 150b86df5d61bb67...)
+   so the release marked the four DDR designs missing without building them (they do not pass
+   nextpnr's timing anyway; BOARD.md section 8). The same commit's generator, run again and again,
+   gives different files:
+     how it ran (all from the same sources, arty.yml and SOURCE_DATE_EPOCH)  litedram_core.v   without the /*...*/ block
+     first generation in a fresh clone (the release, Run A)                   bc92cd190648ca07  e21f1b4307653bad
+     first generation in this worktree, right after setup.sh fetched           bc92cd190648ca07  e21f1b4307653bad
+     later generations here: 10 runs, plain or with 9 to 4000 more bytes of
+       environment, into two output directories, directly and through make,
+       one of them with 3e3f9ea's arty.yml (other comments)                   150b86df5d61bb67  e21f1b4307653bad
+     Python bytecode cache prefix empty (PYTHONPYCACHEPREFIX)                 fe05abba506fe836  e21f1b4307653bad
+     the same prefix, now filled                                              6434f5ca19e191b8  e21f1b4307653bad
+     no bytecode cache at all (PYTHONDONTWRITEBYTECODE)                       a351dbae7fe6b023  e21f1b4307653bad
+   Only the block comment of lines 66-453 differs: LiteX lists the core's instances there
+   ("[BB:OSERDESE2]", "[BB:IOBUFDS]", ...) in an order that follows the interpreter's object
+   addresses; the same lines sorted are the same (sha256 056709de6a6b8382 every time), and every line
+   of Verilog outside the comment is the same. So the core's logic, and the bitstreams synthesized
+   from it, reproduce; the recorded file hash does not, which makes `make litedram-gen` fail on a
+   fresh checkout's first run and makes tools/fpga-build.sh count a DDR build from such a core as
+   dirty. (An experiment with the arty.yml of 3e3f9ea first seemed to tie the change to a338e7a's
+   comment edit; the runs above show the generator's own order is what moves.)
+   Suggested fix, for the ddr track: run_gen.py drops or sorts that comment block before the file is
+   written (or lock.sh hashes the file without it), then ip/litedram/lock.sh write.
