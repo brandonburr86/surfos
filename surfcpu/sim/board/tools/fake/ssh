@@ -1,7 +1,14 @@
 #!/bin/sh
 # Fake ssh for the board track's wrapper tests: logs the call and runs the "remote" command
 # locally in $FAKE_REMOTE (standing in for the build host's home). Contacts nothing.
+#   FAKE_SSH_DROP=1   the connection drops during the Vivado run: the command still runs to its
+#                     end (as nohup lets it on a real host), but ssh exits 255
+#   FAKE_SSH_DOWN=1   every connection fails (ssh exit 255)
 echo "ssh $*" >> "$FAKE_LOG"
+if [ "${FAKE_SSH_DOWN:-0}" != 0 ]; then
+    echo "ssh: connect to host builder port 22: Operation timed out" >&2
+    exit 255
+fi
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) shift 2 ;;
@@ -13,4 +20,9 @@ host=$1
 shift
 [ "$host" = "$FAKE_HOST" ] || { echo "fake ssh: unexpected host $host" >&2; exit 255; }
 cd "$FAKE_REMOTE" || exit 255
-exec sh -c "$*"
+sh -c "$*"
+rc=$?
+case "$*" in
+    *nohup*) if [ "${FAKE_SSH_DROP:-0}" != 0 ]; then echo "Connection to builder closed by remote host." >&2; exit 255; fi ;;
+esac
+exit $rc

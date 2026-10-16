@@ -263,7 +263,7 @@ tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t   # or: make
 | Key | Flows | Meaning |
 |---|---|---|
 | `FLOW` | all | `vivado-ssh`, `vivado-docker` or `openxc7` (the flow track's `tools/openxc7-build.sh`) |
-| `HOST` | vivado-ssh | an ssh alias; key authentication only (`BatchMode=yes`) |
+| `HOST` | vivado-ssh | an ssh alias; key authentication only (`BatchMode=yes`), and its host key must already be known (`StrictHostKeyChecking=yes`) |
 | `REMOTE_DIR` | vivado-ssh | working directory on the host (default `surfcpu-build`) |
 | `VIVADO` | vivado-* | the pinned Vivado binary |
 | `IMAGE` | vivado-docker | an x86-64 Linux image containing Vivado (new in this track; BUILD-HOST.md lists only the first four keys) |
@@ -276,7 +276,16 @@ in `build/fpga/<board>/<design>/stage`, then runs `vivado -mode batch -source
 surfcpu/boards/arty_a7/vivado/build.tcl -tclargs params.tcl` there: over ssh (copying the
 stage with tar, fetching `out/` back without checkpoints), or in an amd64 container
 (`docker run --platform linux/amd64`). `--dry-run` stages and prints every command, contacting
-nothing. A new build removes the previous bitstream and results first.
+nothing. A new build removes the previous bitstream and results first. The build counts as
+dirty if a tracked file changed or a file it stages is not in git.
+
+Over ssh, every connection gives up after 20 s to connect or two minutes of silence
+(`ConnectTimeout=20`, `ServerAliveInterval=30`, `ServerAliveCountMax=4`), and Vivado runs
+under `nohup`, writing its pid, output and exit status to `out/` on the host. A connection
+lost during the run (the Mac sleeps, the network changes) therefore does not stop Vivado:
+the script exits 3, and `tools/fpga-build.sh --fetch [--design D] BOARD` later brings back
+the results of that run and gates them as usual (exit 4 while Vivado still runs). The
+manifest of a run that has not been fetched has no result, so `tools/program.sh` refuses it.
 
 `build.tcl` (non-project): `read_verilog`, `read_mem`, `read_xdc` (then the CDC files scoped and
 late), `synth_design` with the generics and `-flatten_hierarchy rebuilt`, `opt_design`,

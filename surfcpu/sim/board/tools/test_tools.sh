@@ -43,6 +43,7 @@ nolog() { ! [ -s "$FAKE_LOG" ]; }
 is() { [ "$1" = "$2" ]; }
 base=$SURFCPU_FPGA_OUT
 time_hex=$(printf '%08x' "$SOURCE_DATE_EPOCH")
+sshopts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=4"
 
 # ============================================================================== fpga-build.sh
 run tools/fpga-build.sh arty_a7_100t
@@ -70,7 +71,8 @@ printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n
 run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_100t
 check "dry run: exit 0" is "$rc" 0
 check "dry run: contacts nothing (no ssh/vivado call)" nolog
-check "dry run: prints the ssh commands" has "ssh -o BatchMode=yes builder"
+check "dry run: prints the ssh commands, with the strict options" has "ssh $sshopts builder"
+check "dry run: Vivado under nohup, its pid and exit status in out/" has "nohup sh -c 'echo \$\$ > out/vivado.pid; vivado -mode batch"
 check "dry run: prints the Vivado command" has "vivado -mode batch"
 p=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
 check "dry run: params.tcl has the 100T part" grep -q "set part {xc7a100tcsg324-1}" "$p"
@@ -89,11 +91,15 @@ check "dry run: DRY_RUN other than 0 or 1 refused" has "DRY_RUN must be 0 or 1"
 run tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
 b=$base/arty_a7_35t/arty_a7_baseline
 check "ssh: passing build exits 0" is "$rc" 0
-check "ssh: made the remote directory" logged "ssh -o BatchMode=yes builder mkdir -p surfcpu-build/arty_a7_baseline-arty_a7_35t-"
+check "ssh: made the remote directory" logged "ssh $sshopts builder mkdir -p surfcpu-build/arty_a7_baseline-arty_a7_35t-"
+check "ssh: every ssh call checks the host key, times out, keeps the connection alive" \
+    test "$(grep -c '^ssh ' "$FAKE_LOG")" -ge 4 -a "$(grep -c '^ssh ' "$FAKE_LOG")" -eq "$(grep -c "^ssh $sshopts builder " "$FAKE_LOG")"
+check "ssh: Vivado ran under nohup" logged "nohup sh -c"
 check "ssh: ran Vivado on the host" logged "vivado -mode batch -nojournal -log out/vivado.log -source surfcpu/boards/arty_a7/vivado/build.tcl -tclargs params.tcl"
 check "ssh: the bitstream came back" test -f "$b/arty_a7_baseline.bit"
 check "ssh: no checkpoint came back" test ! -e "$b/out/post_route.dcp"
 check "ssh: reports came back" test -f "$b/out/reports/timing_summary.rpt"
+check "ssh: ... with the run's own log and exit status" test -f "$b/out/vivado.nohup.txt" -a "$(cat "$b/out/vivado.exit")" = 0
 c=$b/out/calls.txt
 check "build.tcl: set_part with the 35T's -1L part" grep -q "^set_part xc7a35ticsg324-1L$" "$c"
 check "build.tcl: reads all four XDC files" test "$(grep -c '^read_xdc boards/arty_a7/xdc/arty_a7_' "$c")" -eq 4
@@ -116,6 +122,46 @@ assert v['result']=='pass' and v['wns_ns']==10.0 and v['lut']=='312 / 63400' and
 assert d['isa']=='rv32im_zicsr_zifencei' and d['abi']=='ilp32' and d['part']=='xc7a35ticsg324-1L'
 " "$m"
 check "manifest: the bitstream's SHA-256" grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$m"
+
+# ------------------------------------------------------------------------------ ssh flow, lost connection and --fetch
+b=$base/arty_a7_35t/arty_a7_baseline
+run env FAKE_SSH_DROP=1 tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "drop: a connection lost during the run exits 3" is "$rc" 3
+check "drop: ... and says how to fetch the results later" has "tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t"
+check "drop: ... no bitstream yet, and a manifest without a result" \
+    test ! -e "$b/arty_a7_baseline.bit" -a -z "$(grep '^result' "$b/manifest.txt")"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: brings back the finished run, which passed" is "$rc" 0
+check "fetch: ... the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "fetch: ... without running Vivado again" test -z "$(grep '^vivado ' "$FAKE_LOG")"
+check "fetch: ... and a manifest with the result and the bitstream's SHA-256" \
+    grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$b/manifest.txt"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a second fetch gives the same manifest" test "$rc" -eq 0 -a "$(grep -c '^result = ' "$b/manifest.txt")" -eq 2
+rid=$(sed -n 's/^run_id = "\(.*\)"$/\1/p' "$b/manifest-head.txt")
+ro=$t/remote/surfcpu-build/$rid/out
+mv "$ro/vivado.exit" "$ro/vivado.exit.saved"
+sleep 60 &
+spid=$!
+echo "$spid" > "$ro/vivado.pid"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: Vivado still running exits 4" test "$rc" -eq 4 -a -n "$(grep 'still running' "$t/out.txt")"
+kill "$spid" 2>/dev/null
+wait "$spid" 2>/dev/null
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: no exit status and no Vivado running: start a new build" has "start a new build"
+mv "$ro/vivado.exit.saved" "$ro/vivado.exit"
+run env FAKE_SSH_DOWN=1 tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: host unreachable exits 3" test "$rc" -eq 3 -a -n "$(grep 'run --fetch again later' "$t/out.txt")"
+run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a dry run in between leaves the last run fetchable" is "$rc" 0
+run tools/fpga-build.sh --fetch --design surfcpu_arty_a7_top arty_a7_35t
+check "fetch: nothing started for that design" has "was started here"
+printf 'FLOW=vivado-ssh\nHOST=other\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a run on another host is not fetched from this one" has "ran on 'builder'"
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
 
 # ------------------------------------------------------------------------------ failing checks stop the bitstream
 for case in "FAKE_WNS=-0.250:setup timing" "FAKE_WHS=-0.010:hold timing" "FAKE_DRC=2:DRC errors" \

@@ -39,6 +39,12 @@ DOCKER=docker                # B only, optional: the docker binary (default dock
 SoC, and `DRY_RUN=1` stages the build and prints every command without contacting the host or
 starting Docker (`tools/fpga-build.sh`, docs/BOARD.md section 8).
 
+For option A, connect once by hand (`ssh builder.example`) and check the host key's
+fingerprint: the wrapper's ssh accepts only hosts already in `~/.ssh/known_hosts`
+(`StrictHostKeyChecking=yes`) and only key authentication. Vivado runs on the host under
+`nohup`, so a dropped connection does not stop it; `tools/fpga-build.sh --fetch [--design D]
+BOARD` brings back the results of the last run later.
+
 Every build writes a manifest next to the bitstream: source revision and dirty state, FPGA
 part, constraint-file hash, ROM and kernel hashes, ISA/ABI versions, tool versions, build
 host, the timing summary and utilization. The DDR controller and clocking IP are generated
