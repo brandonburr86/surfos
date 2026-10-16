@@ -85,6 +85,7 @@ int bsync(struct bdev *dev);                         /* write dirty blocks of de
 int bcache_room(struct bdev *dev);
 void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
+u_int bdirty_count(struct bdev *dev);                /* 10/16/26 (B10): dev's dirty blocks (umount says what it gives up) */
 int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
 
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB

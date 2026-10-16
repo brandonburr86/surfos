@@ -22,6 +22,11 @@ question and a busy volume are failures; df fails when a volume cannot say its s
 anything. A disk that refuses the writes keeps its mounts, and eject says so instead of
 "safe to remove": unmounting would drop what could not be written. sync tries again;
 umount gives the changes up.
+
+10/16/26 (audit B10): umount and eject say how many changed blocks they gave up because
+they could not be written (written between eject's check and its unmount, or by the
+unmount itself, such as the clean-shutdown mark), and fail; eject then does not say
+"safe to remove".
 */
 
 #include <blibc_common.h>
@@ -220,21 +225,27 @@ int cmd_mount(int argc, char **argv) {
     return r ? CMD_FAIL : CMD_OK;
 }
 
-/* unmount the mount at path, saying why not */
-static int unmount(const char *cmd, const char *path) {
+/* unmount the mount at path, saying why not; 10/16/26 (B10): and how many changed blocks it gave up
+   because they could not be written (added to *lost) */
+static int unmount(const char *cmd, const char *path, u_int *lost) {
     char why[128];
-    int r = vfs_umount(path);
+    u_int l = 0;
+    int r = vfs_umount_lost(path, &l);
     if(r == -EBUSY && vfs_busy(path, why, sizeof(why)) == -EBUSY) printf("    %s: %s is busy: %s\n", cmd, path, why);
     else if(r) printf("    %s: %s: %s\n", cmd, path, strerror(r));
+    else if(l) printf("    %s: %s: %u changed block%s could not be written and %s given up\n", cmd, path, l,
+                      l == 1 ? "" : "s", l == 1 ? "was" : "were");
+    *lost += l;
     return r;
 }
 
 int cmd_umount(int argc, char **argv) {
     char path[VFS_PATH_MAX];
+    u_int lost = 0;
     if(argc != 2) { printf("    usage: umount <path|device>\n"); return CMD_USAGE; }
     if(argv[1][0] == '/' || !mount_of(argv[1], path, sizeof(path)))   /* a device name stands for its mount */
         strlcpy(path, argv[1], sizeof(path));
-    return unmount("umount", path) ? CMD_FAIL : CMD_OK;
+    return unmount("umount", path, &lost) || lost ? CMD_FAIL : CMD_OK;
 }
 
 /* eject <disk>: every mount of the disk and its partitions goes (all of them, or none when one
@@ -244,7 +255,7 @@ int cmd_eject(int argc, char **argv) {
     struct bdev *d, *disk = NULL, *p;
     char paths[8][VFS_PATH_MAX], why[128];
     bool ro[8];
-    u_int n = 0, i;
+    u_int n = 0, i, lost = 0;
     int r = 0, nv, total, j;
 
     if(argc != 2) { printf("    usage: eject <disk>   (usb0, or one of its partitions)\n"); return CMD_USAGE; }
@@ -288,14 +299,21 @@ int cmd_eject(int argc, char **argv) {
         return CMD_FAIL;
     }
     for(i = 0; i < n && !r; i++) {
-        r = unmount("eject", paths[i]);
+        r = unmount("eject", paths[i], &lost);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
     if(r) return CMD_FAIL;
-    for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); binvalidate(p); }
+    /* 10/16/26 (B10): what the disk's devices still had could not be written: given up, and said */
+    for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); lost += bdirty_count(p); binvalidate(p); }
     bsync(disk);
+    lost += bdirty_count(disk);
     binvalidate(disk);
     if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return CMD_OK; }
+    if(lost) {                                               /* written after the check above, and refused */
+        printf("    eject: %s: %u changed block%s could not be written: check the disk elsewhere before trusting it\n",
+               disk->name, lost, lost == 1 ? "" : "s");
+        return CMD_FAIL;
+    }
     if(bdev_flush(disk) != 0) {
         printf("    eject: %s: the disk did not confirm that its cache was written (check it elsewhere)\n", disk->name);
         return CMD_FAIL;

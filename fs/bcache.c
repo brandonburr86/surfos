@@ -636,6 +636,14 @@ void binvalidate(struct bdev *dev) {
     mutex_unlock(&bcache_lock);
 }
 
+u_int bdirty_count(struct bdev *dev) {
+    u_int n;
+    mutex_lock(&bcache_lock);
+    n = dev ? dirty_count(dev) : 0;
+    mutex_unlock(&bcache_lock);
+    return n;
+}
+
 /* 10/16/26 (B9): how many of dev's counters differ from a count of its blocks (0: none) */
 int bcache_audit(struct bdev *dev) {
     u_int dirty[BORDER_MAX + 1], failed = 0;
