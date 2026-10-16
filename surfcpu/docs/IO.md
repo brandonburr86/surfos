@@ -33,7 +33,8 @@ edge), MSB first, one byte per transfer, chip select by software (CTRL.CS).
   byte takes exactly 16 x (DIV + 1) cycles. At 25 MHz: DIV 31 (the reset value, the smallest
   giving at most 400 kHz) = 390.625 kHz for identification; DIV 0 = 12.5 MHz, DIV 1 = 6.25
   MHz for data (default-speed cards allow 25 MHz). The DIV in force is copied when a transfer
-  starts: writing DIV during a transfer changes the next one.
+  starts: writing DIV during a transfer changes the next one, and a waiting DATA read is
+  bounded by the copied DIV, at worst 16 x 256 = 4,096 cycles.
 * **Exchanging a byte.** Write DATA: MOSI shows bit 7 at once, half a period before the first
   rising edge. Read DATA: the read is accepted at once and answered when the transfer ends
   with the byte received, so firmware does `DATA = b; r = DATA;`. Only while such a read waits
@@ -87,6 +88,7 @@ make the high level. It never drives a line high.
 
 | Step | Lines | Time |
 |---|---|---|
+| wait for a gap | nothing pulled; the receiver keeps receiving | until no frame is being received and both lines are high, at most 4 ms |
 | inhibit | clock pulled low | 125 us |
 | request to send | data pulled low (start bit), clock still low | 5 us |
 | release | clock released; the device clocks from now on | device starts within 15 ms |
@@ -98,12 +100,26 @@ No clock edge within 15 ms, a frame longer than 2 ms, or data high at the 11th e
 STATUS.TX_NAK and releases both lines. TX_BUSY is set throughout; TXDATA writes while busy
 are ignored. The clock is pulled low only for the 130 us of each send, never toggled by the
 host. Data changes only while the clock line is low (the tests check every change; the one
-exception is letting data go after a send nobody clocked). While a
-byte is being sent the receiver rests; a frame the keyboard was sending is dropped, and the
-keyboard sends it again after the inhibit (the protocol's rule; tested). The device's answer
-(0xFA, or 0xFE for a resend) arrives as an ordinary received byte. There is no "send done"
-interrupt: software polls TX_BUSY (a send takes about 1.1 ms plus the keyboard's delay in
-starting its clock, at most 15 ms).
+exception is letting data go after a send the keyboard did not finish clocking). The device's
+answer (0xFA, or 0xFE for a resend) arrives as an ordinary received byte. There is no "send
+done" interrupt: software polls TX_BUSY (a send takes about 1.1 ms plus the keyboard's delay
+in starting its clock, at most 15 ms, plus the wait for a gap).
+
+**Why a send waits for a gap** (fixed after the integration review). A keyboard counts a
+frame as delivered at a commit point and never sends it again: IBM's keyboards once the
+parity bit's clock (the 10th) has risen; the model's default is the stop bit's falling edge.
+The first version inhibited as soon as TXDATA was written and reset its receiver, so a frame
+past that point (or whose last edge was still in the 2 us filter) was lost without a trace.
+Now TXDATA waits, with TX_BUSY set and the receiver running, until the receiver is between
+frames and both lines are high both after the synchronizer and after the filter, so no edge
+is still on its way through the filter. (An edge still inside the two synchronizer stages can
+only be a keyboard starting a frame; it sees the inhibit at its first clock and sends the
+frame again.) The wait is at most the rest of a frame (about 1 ms) and is capped at 4 ms so a
+stuck line cannot hang a send. The receiver rests only from the inhibit to the end of the send, when the keyboard is
+not sending. `test_txdata_race` writes TXDATA at every cycle around the parity and stop
+edges with the keyboard model committing at either point: the old RTL lost the byte in 52
+(stop-edge commit) and 234 (IBM commit) of 407 timings; now no byte is lost, resent or cut
+short, and the longest wait is 84 us.
 
 Scan code set 2 decoding (make/break, E0/E1, Shift/Ctrl/Alt, typematic) is software's job:
 the os track's keyboard driver. `decode_set2()` in `sim/io/test_ps2.cpp` is a minimal example.
@@ -194,7 +210,7 @@ confirms the sources, that the ROM is current and that all 256 glyphs equal the 
 | Block | LUTs | Flip-flops | LUTRAM | Block RAM |
 |---|---|---|---|---|
 | surf_spi | 83 | 70 | 0 | 0 |
-| surf_ps2 | 209 | 189 | 2 (FIFO) | 0 |
+| surf_ps2 | 212 | 189 | 2 (FIFO) | 0 |
 | surf_video | 843 | 862 | 0 | 1 RAMB36 (font) |
 
 Most of surf_video's flip-flops are the 214-bit settings crossing (hold and destination
@@ -242,13 +258,17 @@ keyboard on the open-drain lines (the lines are low when either side pulls):
   modifiers, arrows, Home/End/PgUp/PgDn/Insert/Delete, F1-F12, the keypad, Print Screen,
   Pause), `key_hold()` for typematic repeat, `queue_bytes()`, `queue_frame(byte, fault)`;
 * frames on its own clock at `ps2_hz`: data changes a quarter period before each falling edge;
-  a frame starts after 50 us of idle bus; if the host inhibits before the stop bit's clock
-  pulse the frame is abandoned and sent again;
+  a frame starts after 50 us of idle bus; an inhibit before the commit point abandons the frame
+  and it is sent again, after it the frame counts as delivered; `commit` chooses the point:
+  `AFTER_STOP_EDGE` (default, the stop bit's falling edge) or `AFTER_PARITY_CLOCK` (IBM's
+  rule: once the parity clock has risen, an inhibit ends the frame there without the stop
+  bit's clock; `stats.frames_cut_short`);
 * host commands: request to send detected after an inhibit, eleven clock pulses, acknowledge,
   then the answer (0xFA; ED/F3/F0 take an argument; FF gives FA then AA after `bat_delay_us`;
   F2 gives FA AB 83; EE echoes; FE resends; a bad parity gets FE); `leds`, `host_bytes`;
 * faults: bad parity, start or stop bit, a partial frame followed by a 3 ms pause, a 0.2 us
-  clock glitch, `no_ack`, `present = false`;
+  clock glitch, `no_ack`, `host_stall_bits` (stop clocking a host byte after N bits),
+  `present = false`;
 * it checks the host: inhibit shorter than 100 us, the clock pulled while the keyboard clocks,
   data changed while the clock is high (`stats.violations`, `log`).
 
@@ -273,22 +293,37 @@ keyboard on the open-drain lines (the lines are low when either side pulls):
 |---|---|---|
 | `make lint-io` | Verilator `-Wall` lint of each block (no `lint_off`; deliberately unused bits are named in an `unused_ok` wire with a comment), Icarus `-g2005 -Wall` compile | clean |
 | `make test-io-font` | font sources match their pins, ROM current, 256 glyphs equal `driver/font8x16.c` | pass |
-| `make test-io-models` | SD model against a software SPI master (240 checks); keyboard model against a software host (36); capture against generated signals (36) | pass |
-| `make test-io-spi` | surf_spi on SurfBus: register rules, mode 0 timing at DIV 0..255, then with the SD model: full initialization and block reads/writes for SDHC, SDSC v2 and SDSC v1 cards, injected errors, an absent card, interrupt-driven transfers (801 checks) | pass |
-| `make test-io-ps2` | surf_ps2 with the keyboard model: typing at 10, 12.5 and 16.7 kHz decoded back to text, extended keys, every receive error with recovery, FIFO overflow, RX_EN, interrupts, counter saturation, host commands with acknowledge, TX_NAK, a command in mid-frame, the open-drain discipline | pass |
-| `make test-io-video` | surf_video with the capture: timing and porches, the test pattern and random text pixel-exact, decode_text, scroll, cursor, blink, palette, black modes, VBLANK, VBLANK_EV, FRAME, single-domain resets; sys clock 25, 50, 10 or 30 MHz by seed | pass |
+| `make test-io-models` | SD model against a software SPI master (240 checks); keyboard model against a software host, both commit points and the stall fault included (41); capture against generated signals (36) | pass |
+| `make test-io-spi` | surf_spi on SurfBus: register rules (refused accesses also with DONE, OVR and DIV live), mode 0 timing at DIV 0..255, then with the SD model: full initialization and block reads/writes for SDHC, SDSC v2 and SDSC v1 cards, injected errors, an absent card, interrupt-driven transfers (829 checks) | pass |
+| `make test-io-ps2` | surf_ps2 with the keyboard model: typing at 10, 12.5 and 16.7 kHz decoded back to text, extended keys, every receive error with recovery, FIFO overflow, refused accesses with a full FIFO and live stickies, RX_EN, interrupts, counter saturation, host commands with acknowledge, TX_NAK (no acknowledge, a keyboard that stops clocking: 2 ms limit, no keyboard: 15 ms), a command written in mid-frame waiting for the gap, TXDATA at 407 timings around the parity and stop edges in both commit modes, the open-drain discipline | pass |
+| `make test-io-video` | surf_video with the capture: timing and porches, the test pattern and random text pixel-exact, decode_text, scroll, cursor, blink, palette, black modes, CTRL/CURSOR/SCROLL written in mid-frame (that frame wholly old, the next wholly new; the palette at once), refused writes with live state, VBLANK, VBLANK_EV, FRAME, single-domain resets; sys clock 25, 50, 10 or 30 MHz by seed (123 checks) | pass |
 | `make test-io-icarus` | the three blocks together in Icarus | pass |
 | `make test-io` | all of the above (`IO_SEEDS`, default 1 2 3) | on `test-soc` |
 | `make check-io` | the font check | on `check` |
 | `make synth-io` | Yosys estimates | section 3 |
 | `make evidence-io` | reruns everything on seeds 1-5 and rewrites `docs/evidence/io/` | |
 
-The whole of `make test-io` takes about 30 seconds. The testbenches check the SurfBus rules
+The whole of `make test-io` takes about a minute. The testbenches check the SurfBus rules
 from the master's side on every access (no response without a request, none in the
 acceptance cycle, request fields scrambled after acceptance, back-to-back requests) and run
-with Verilator's random initial values (`+verilator+rand+reset+2`). Mutation checks during
-development: sampling MISO on the falling edge made 222 SPI checks fail; a 2-cycle PS/2
-filter let the glitch through and the glitch test failed.
+with Verilator's random initial values (`+verilator+rand+reset+2`).
+
+Mutation checks: each mutated RTL, applied alone and never committed, must make the suite
+fail. During development: MISO sampled on the falling edge (222 SPI checks failed), a 2-cycle
+PS/2 filter (the glitch test failed). After the integration review, which found that the
+suite missed eight of them, each is now caught by a test:
+
+| Mutation | Caught by |
+|---|---|
+| a send inhibits at once, cutting a frame (the original defect) | the TXDATA race sweep, the mid-frame command |
+| P1 an errored PS/2 DATA read pops the FIFO | the refused reads with a full FIFO |
+| P2 an errored PS/2 STATUS write clears sticky bits | the refused writes with OVF and PARITY set |
+| P3 the 2 ms host-to-device frame limit never fires | the keyboard that stops clocking after 4 bits |
+| S1 an errored SPI STATUS write clears DONE/OVR | the refused writes with DONE and OVR set |
+| S2 an errored SPI DIV write changes DIV | the refused writes with DIV = 2 |
+| V1 an errored video STATUS write clears VBLANK_EV | the refused writes with VBLANK_EV set |
+| V2 CTRL/CURSOR/SCROLL apply at once, not per frame | the mid-frame write and the very next frame |
+| V3 an errored PALETTE write changes the palette | the refused writes with entry 3 set |
 
 ## 6. Notes for integration
 
@@ -312,14 +347,15 @@ filter let the glitch through and the glitch test failed.
   limits, as `sd_host.h` does. CMD1, CMD6 (high speed), CMD42 locking, erase commands and
   ACMD13 are not modelled.
 * No inhibit-based flow control: a full PS/2 FIFO drops bytes (OVF) rather than holding the
-  keyboard off. There is no "send done" interrupt (poll TX_BUSY).
+  keyboard off. There is no "send done" interrupt (poll TX_BUSY). A send waits up to 4 ms for
+  a gap between keyboard frames before it starts.
 
 ## 8. Contract notes (proposals for the integrator)
 
 1. SURFBUS.md section 2 rule 7 bounds the SPI DATA wait by 16 x (DIV + 1): with DIV copied at
    the start of a transfer, the bound is the DIV of the running transfer, not the current
-   register. Suggested wording: "16 x (DIV + 1) cycles, DIV as it was when the transfer
-   started".
+   register (worst case 16 x 256 = 4,096 cycles). The integrator is adopting this wording in
+   SURFBUS.md; no RTL change.
 2. MEMORY-MAP.md could say when STATUS.FRAME counts (at the start of vertical blanking, with
    VBLANK_EV) and that CTRL, CURSOR and SCROLL take effect at the next frame.
 3. MEMORY-MAP.md ps2 CTRL.RX_EN: state that 0 ignores the lines (it does not inhibit the
