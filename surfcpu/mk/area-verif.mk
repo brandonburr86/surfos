@@ -5,7 +5,8 @@
 #   make test-ref        the checking machinery's own tests, no core needed (on test-cpu):
 #                        unit tests, the CSR probe on both Spikes, the runner against a Spike
 #                        stand-in for the testbench (directed, REF_SEEDS random programs,
-#                        riscv-arch-test) and its injected-fault self-test
+#                        riscv-arch-test, the CSR probe) and its injected-fault self-test,
+#                        the riscv-formal smoke check
 #   make test-cpu-ref    the real comparison: build/cpu/surfcpu_tb against Spike (needs the core)
 #   make ref-spike       the contract-patched Spike (build/third_party/spike-surfcpu)
 #   make ref-arch        riscv-arch-test 4.1.0: fetch, build the tests in scope, references
@@ -58,7 +59,7 @@ ref-csrmap: ref-spike
 	$(Q)$(PYTHON) tools/rvcsrmap.py spike --stock --build $(REF_BUILD)/csrmap-stock
 
 ref-standin: ref-spike ref-arch
-	$(Q)$(PYTHON) tools/rvrun.py --dut "$(REF_STANDIN)" --suites directed,random,arch \
+	$(Q)$(PYTHON) tools/rvrun.py --dut "$(REF_STANDIN)" --suites directed,random,arch,csrmap \
 	  --seeds $(or $(REF_SEEDS),12) --dut-seeds 1 --jobs $(REF_JOBS) \
 	  --out $(REF_BUILD)/standin --json $(REF_BUILD)/standin/results.json --show 1
 

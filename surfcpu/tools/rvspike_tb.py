@@ -74,7 +74,14 @@ def main(argv: list[str]) -> int:
         k, _, v = item.partition("=")
         extra += [f"--{k}"] + ([v] if v else [])
     a = ap.parse_args(argv + extra)
-    elf = rvelf.read_elf(a.elf)
+    try:
+        elf = rvelf.read_elf(a.elf)
+    except (OSError, rvelf.ElfError) as e:
+        print(f"rvspike_tb: {e}", file=sys.stderr)
+        return 3
+    if "tohost" not in elf.symbols:
+        print(f"rvspike_tb: {a.elf} has no tohost symbol", file=sys.stderr)
+        return 3
     sig = (a.sig_begin, a.sig_end) if a.signature else None
     try:
         # --max-cycles counts retirements here, capped so a runaway program cannot fill

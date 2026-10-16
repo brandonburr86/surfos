@@ -130,12 +130,10 @@ class SpikeResult:
         return {"pass": 0, "fail": 1, "timeout": 2}.get(self.status, 3)
 
 
-def spike_command(elf: Path, log: Path, max_instructions: int | None,
-                  sigfile: Path | None, binary: str | None = None) -> list[str]:
+def spike_command(elf: Path, log: Path, sigfile: Path | None,
+                  binary: str | None = None) -> list[str]:
     cmd = [binary or SPIKE, f"--isa={SPIKE_ISA}", *SPIKE_FLAGS, "-l", "--log-commits",
            f"--log={log}"]
-    if max_instructions:
-        cmd.append(f"--instructions={max_instructions}")
     if sigfile is not None:
         cmd += [f"+signature={sigfile}", "+signature-granularity=4"]
     cmd.append(str(elf))
@@ -408,7 +406,7 @@ def run_spike(elf_path: str | Path, *, max_records: int | None = DEFAULT_MAX_REC
         if "begin_signature" in elf.symbols and "end_signature" in elf.symbols:
             sigfile = Path(tmp) / "spike.sig"
         errfile = Path(tmp) / "spike.err"
-        cmd = spike_command(elf_path, Path("/dev/stdout"), None, sigfile, binary)
+        cmd = spike_command(elf_path, Path("/dev/stdout"), sigfile, binary)
         try:
             with errfile.open("w") as err:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True,

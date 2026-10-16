@@ -246,7 +246,7 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
     elif code not in (0, 1, 2):
         problems.append(("exit", f"the DUT exited with {code} (not 0/1/2: it crashed or "
                                  "refused the command line)"))
-    elif prog.check == "trace" and code != info["exit"]:
+    elif code != info["exit"]:
         what = {0: "pass", 1: "fail", 2: "run past --max-cycles"}[code]
         problems.append(("exit", f"exit {code} ({what}); Spike's run gives "
                                  f"{info['exit']} ({info['status']})"))
