@@ -54,9 +54,17 @@ run tools/fpga-build.sh arty_a7_50t
 check "build: unknown BOARD refused" is "$rc" 1
 run tools/fpga-build.sh --design nosuch arty_a7_100t
 check "build: unknown design refused" is "$rc" 1
-run tools/fpga-build.sh arty_a7_100t
-check "build: the full top without rtl/soc/surfcpu_soc.v is refused" has "refusing to build"
-check "build: ... and nothing was contacted" nolog
+if [ -f rtl/soc/surfcpu_soc.v ]; then
+    # the soc track is merged: the full top stages with the real SoC, never the stand-in
+    run tools/fpga-build.sh --dry-run arty_a7_100t
+    check "build: the full top stages with the real rtl/soc/surfcpu_soc.v (dry run)" is "$rc" 0
+    check "build: ... without the simulation stand-in" eval '! grep -rq "sim/board/stubs" "$t/out.txt" "$base"'
+    check "build: ... and nothing was contacted" nolog
+else
+    run tools/fpga-build.sh arty_a7_100t
+    check "build: the full top without rtl/soc/surfcpu_soc.v is refused" has "refusing to build"
+    check "build: ... and nothing was contacted" nolog
+fi
 
 printf 'FLOW=vivado-ssh\nHOST=builder;rm\nVIVADO=vivado\n' > "$conf"
 run tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
