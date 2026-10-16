@@ -6,7 +6,7 @@ BOARD       ?= arty_a7_100t
 
 .PHONY: help doctor image openxc7-image program-volatile program-flash deploy-sd build-fpga \
         board-test board-test-selftest uart-list uart-console release release-verify release-check \
-        fresh-checkout
+        fresh-checkout release-selftest
 
 help:
 	@sed -n '3,15p' Makefile | sed 's/^# //'
@@ -78,6 +78,8 @@ board-test-selftest:
 #   make fresh-checkout [COMMIT=..] [REFERENCE=build/release/<name>] [EVIDENCE=file] [KEEP=1]
 #                       [ARGS="PRERELEASE=1 SKIP_DDR=1"]
 #                    clone, follow docs/RELEASE.md, make the release, compare it with REFERENCE
+#   make release-selftest   tools/release-test.py with the Mac's own python3 (make check runs it in the
+#                    container; the release itself runs on the Mac, whose paths and Python differ)
 release:
 	@$(PYTHON_HOST) tools/release.py make $(if $(filter 1,$(PRERELEASE)),--prerelease) \
 	    $(if $(filter 1,$(SKIP_DDR)),--skip-ddr) $(if $(DESIGNS),--designs "$(DESIGNS)") \
@@ -101,3 +103,7 @@ endif
 fresh-checkout:
 	@tools/fresh-checkout.sh $(if $(COMMIT),--commit "$(COMMIT)") $(if $(REFERENCE),--reference "$(REFERENCE)") \
 	    $(if $(EVIDENCE),--evidence "$(EVIDENCE)") $(if $(filter 1,$(KEEP)),--keep) -- $(ARGS)
+
+release-selftest:
+	@mkdir -p build/release-test; $(PYTHON_HOST) tools/release-test.py > build/release-test/mac.txt 2>&1; s=$$?; \
+	    grep -E '^(Ran|OK|FAILED|FAIL:|ERROR:)' build/release-test/mac.txt; exit $$s
