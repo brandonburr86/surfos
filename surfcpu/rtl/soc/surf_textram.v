@@ -5,7 +5,8 @@ File: surf_textram.v Date: 10/15/26 (SurfCPU)
 --------------------
 The 16 KiB text memory (textram at 0x2000_0000, docs/MEMORY-MAP.md): 4096 32-bit cells in a
 dual-clock block RAM. Port A is a SurfBus slave in the clk domain (reads and writes with byte
-enables, read-first, answer in the next cycle); port B is the video scan-out in the pix_clk
+enables, answer in the next cycle; a write's read data are don't-care, so the port reads only
+when it does not write); port B is the video scan-out in the pix_clk
 domain: pix_data is the cell at pix_addr one pix_clk edge later (docs/MODULES.md section 3).
 Cells 0..2399 are the 80x30 screen (cell = row * 80 + col), 2400..4095 ordinary RAM. The
 memory is the only thing shared by the two clocks, so no other crossing is needed; a cell
@@ -45,7 +46,9 @@ module surf_textram (
     wire [AW-1:0] ai = s_req_addr[AW+1:2];
     wire          we = s_req_valid && s_req_write && !s_req_fetch;
 
-    // port A (clk): read-first, byte-enabled writes
+    // port A (clk): byte-enabled writes; reads only when not writing (NO_CHANGE: a write's
+    // read data are don't-care on SurfBus, and the 7-series block RAM's READ_FIRST mode is not
+    // safe with the other port on another clock, so synthesis would refuse a block RAM)
     reg [31:0] a_q;
     always @(posedge clk) begin
         if (s_req_valid) begin
@@ -54,8 +57,9 @@ module surf_textram (
                 if (s_req_be[1]) mem[ai][15:8]  <= s_req_wdata[15:8];
                 if (s_req_be[2]) mem[ai][23:16] <= s_req_wdata[23:16];
                 if (s_req_be[3]) mem[ai][31:24] <= s_req_wdata[31:24];
+            end else begin
+                a_q <= mem[ai];
             end
-            a_q <= mem[ai];
         end
     end
 

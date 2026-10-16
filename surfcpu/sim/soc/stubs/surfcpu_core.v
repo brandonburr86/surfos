@@ -14,7 +14,8 @@ writes and polls, wait for interrupt levels, meet at barriers, and check every r
 When both have reached their END it prints "SCRIPT PASS" and calls $finish, or prints
 "SCRIPT FAIL" and stops with $fatal; with +script_nofinish it only prints the verdict and
 raises `reported`, so a testbench can finish the run itself. Without +script it issues
-nothing. The RVFI outputs are present (with SURFCPU_RVFI) and never valid.
+nothing. The RVFI outputs are present (with SURFCPU_RVFI) and never valid. With SYNTHESIS
+defined only the port list is left (a black box for synthesis estimates).
 */
 `include "surfcpu_rvfi.vh"
 
@@ -55,6 +56,7 @@ module surfcpu_core #(
     , `SURFCPU_RVFI_OUTPUTS             // section 5
 `endif
 );
+`ifndef SYNTHESIS
     wire [2:0]  irqs = {irq_software, irq_timer, irq_external};
     wire [31:0] i_syncs, d_syncs, i_fails, d_fails, i_bus, d_bus, i_ops, d_ops;
     wire        i_done, d_done;
@@ -103,6 +105,11 @@ module surfcpu_core #(
             end
         end
     end
+
+`else
+    // A stand-in is never synthesized: the synthesis estimate (make synth-soc) reads this file
+    // with read_verilog -lib, as the core's port list only.
+`endif
 
 `ifdef SURFCPU_RVFI
     assign rvfi_valid     = 1'b0;

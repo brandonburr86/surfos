@@ -32,9 +32,10 @@ SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
-        soc-gpio-real soc-mem-once
+        synth-soc soc-gpio-real soc-mem-once
 lint: lint-soc
 test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim
+check: synth-soc
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
 # stop with the log on the first failure
@@ -227,7 +228,16 @@ SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O2 --top-module surfcpu
                    -I$(CURDIR)/firmware/include"
 SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_MODEL_SRC)
 
-$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_MODEL_HDR)
+# the build identity is compiled into surfsim (sysinfo) and into the scripts that check it:
+# a stamp per identity rebuilds both together when the commit or the dirty state changes
+SOC_ID_STAMP    := $(SOC_DIR)/build-id.$(BUILD_ID_HEX).$(SOC_BUILD_FLAGS).stamp
+$(SOC_ID_STAMP):
+	@mkdir -p $(SOC_DIR)
+	@rm -f $(SOC_DIR)/build-id.*.stamp
+	@touch $@
+
+$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_MODEL_HDR) \
+                     $(SOC_ID_STAMP)
 	@mkdir -p $(BUILD)/sim/obj_surfsim
 	$(Q)$(SOC_VERILATE) --Mdir $(BUILD)/sim/obj_surfsim -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim.txt 2>&1 \
@@ -235,7 +245,7 @@ $(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP
 	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@
 
 $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
-                                   $(SOC_MODEL_HDR)
+                                   $(SOC_MODEL_HDR) $(SOC_ID_STAMP)
 	@mkdir -p $(SOC_DIR)/surfsim_script/obj
 	$(Q)$(SOC_VERILATE) --Mdir $(SOC_DIR)/surfsim_script/obj -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
@@ -244,7 +254,8 @@ $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SR
 
 surfsim: $(BUILD)/sim/surfsim
 
-$(SOC_DIR)/scripts/%.sim.hex: sim/soc/scripts/%.sbs $(SOC_DIR)/rom_a.mem sim/soc/tools/surfscript.py
+$(SOC_DIR)/scripts/%.sim.hex: sim/soc/scripts/%.sbs $(SOC_DIR)/rom_a.mem sim/soc/tools/surfscript.py \
+                              $(SOC_ID_STAMP)
 	@mkdir -p $(dir $@)
 	$(Q)$(SOC_SCRIPTC) $< -o $@ --rom $(SOC_DIR)/rom_a.mem --define ddr=1 $(SOC_SIM_DEFS) \
 	  --listing $(@:.hex=.lst) > /dev/null
@@ -291,3 +302,46 @@ test-soc-surfsim: $(BUILD)/sim/surfsim $(SOC_SIMX) $(SOC_DIR)/rom_a.mem \
 	  || { echo "bad trace header"; exit 1; }
 	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim:' $(SOC_DIR)/surfsim_smoke.txt)"
 	@echo "test-soc-surfsim: PASS (seeds $(SOC_SEEDS))"
+
+# ---------------------------------------------------------------------------- synthesis check
+# Every soc RTL module through Yosys: the logic modules with the generic synth (check -assert),
+# the three memories elaborated as memories (memory -nomap, check -assert: no flip-flop arrays),
+# then the whole SoC through synth_xilinx with the boot ROM image, the core and the io blocks
+# as black boxes while they are stand-ins (the real modules as soon as they exist). That shows
+# the RTL synthesizes without vendor primitives, the memories become block RAM, and gives the
+# LUT/FF/BRAM estimate in build/soc/syn/soc_stat.txt.
+SOC_SYN_DIR  := $(SOC_DIR)/syn
+SOC_SYN_RTL   = $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(SOC_PER_RTL) rtl/soc/surfcpu_soc.v $(SOC_LIB_RTL)
+SOC_SYN_LOGIC = $(basename $(notdir $(SOC_BUS_RTL) $(SOC_PER_RTL)))
+SOC_SYN_MEMS  = $(basename $(notdir $(SOC_MEM_RTL)))
+SOC_SYN_READ  = read_verilog -DSYNTHESIS $(SOC_INC)
+SOC_SYN_BB    = $(filter sim/soc/stubs/%,$(SOC_CORE_SRC) $(SOC_IO_SRC))
+SOC_SYN_REAL  = $(filter-out sim/%,$(SOC_CORE_SRC) $(SOC_IO_SRC))
+
+synth-soc: $(SOC_DIR)/rom_a.mem
+	@mkdir -p $(SOC_SYN_DIR)
+	$(Q)for m in $(SOC_SYN_LOGIC); do \
+	  $(YOSYS) -q -l $(SOC_SYN_DIR)/$$m.log -p "$(SOC_SYN_READ) $(SOC_SYN_RTL); \
+	    synth -flatten -top $$m; check -assert; tee -q -o $(SOC_SYN_DIR)/$$m.stat stat" \
+	    > /dev/null || { tail -20 $(SOC_SYN_DIR)/$$m.log; exit 1; }; done
+	$(Q)for m in $(SOC_SYN_MEMS); do \
+	  $(YOSYS) -q -l $(SOC_SYN_DIR)/$$m.log -p "$(SOC_SYN_READ) $(SOC_SYN_RTL); \
+	    chparam -set INIT_FILE \"$(SOC_DIR)/rom_a.mem\" surf_bootrom; \
+	    prep -flatten -top $$m; memory -nomap; check -assert; tee -q -o $(SOC_SYN_DIR)/$$m.stat stat" \
+	    > /dev/null || { tail -20 $(SOC_SYN_DIR)/$$m.log; exit 1; }; \
+	  grep -q 'mem_v2' $(SOC_SYN_DIR)/$$m.stat || { echo "$$m: no memory inferred"; exit 1; }; done
+	$(Q)printf '%s\n' \
+	  "$(if $(SOC_SYN_BB),read_verilog -lib -DSYNTHESIS $(SOC_INC) $(SOC_SYN_BB))" \
+	  "$(SOC_SYN_READ) $(SOC_SYN_RTL) $(SOC_SYN_REAL) $(filter-out $(SOC_LIB_RTL),$(wildcard rtl/lib/*.v))" \
+	  "chparam -set BOOTROM_INIT \"$(SOC_DIR)/rom_a.mem\" surfcpu_soc" \
+	  "synth_xilinx -top surfcpu_soc -flatten" \
+	  "check -assert" \
+	  "tee -q -o $(SOC_SYN_DIR)/soc_stat.txt stat" > $(SOC_SYN_DIR)/soc.ys
+	$(Q)$(YOSYS) -qq -l $(SOC_SYN_DIR)/soc.log $(SOC_SYN_DIR)/soc.ys > /dev/null \
+	  || { tail -30 $(SOC_SYN_DIR)/soc.log; exit 1; }
+	@echo "synth-soc: $$(grep '^Warning: ' $(SOC_SYN_DIR)/soc.log | grep -vc 'Resizing cell port') warnings besides block-RAM port resizing (see $(SOC_SYN_DIR)/soc.log)"
+	@echo "synth-soc: $(words $(SOC_SYN_LOGIC)) logic modules synthesize and $(words $(SOC_SYN_MEMS)) memories infer (Yosys, check -assert)"
+	@echo "synth-soc: surfcpu_soc with synth_xilinx (black boxes: $(or $(SOC_SYN_BB),none)):"
+	@grep -E "^ +(LUT[1-6]|FD[CPRS]E|RAMB(18|36)E1|RAM(32|64|128)[MXD1]*|DSP48E1|CARRY4|SRL16E|SRLC32E|MUXF[78]) " \
+	  $(SOC_SYN_DIR)/soc_stat.txt | sed 's/^ */    /'
+	@grep -h "mapping memory" $(SOC_SYN_DIR)/soc.log | sed 's/^/    /'
