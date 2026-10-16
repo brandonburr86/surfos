@@ -1,0 +1,20 @@
+# surfcpu_tb: its own contract (exit codes, signature, trace)
+# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
+# command: make --no-print-directory test-cpu-tb
+
+  ok   a passing program exits 0
+  ok   ... also with random latencies
+  ok   a failing program exits 1 and names test 5
+  ok   running past --max-cycles exits 2
+  ok   no --elf exits 3
+  ok   a file that is not an ELF exits 3
+  ok   a segment outside the RAM exits 3
+  ok   a latency range starting at 0 exits 3
+  ok   an unknown option exits 3
+  ok   --signature without the symbols exits 3
+  ok   --signature writes the four words, 8 hex digits per line
+  ok   --trace: the header line
+  ok   --trace: 13 fields per record, order from 0
+  ok   --trace: the last record is the store of 1 to tohost
+  ok   --trace: execution starts at 0x80000000
+tb_selftest: 15/15 checks pass

@@ -1,10 +1,11 @@
 # surfcpu_core: RAM-only directed tests under Icarus Verilog
-# commit 564ea5944b74, dirty=0; 2026-10-16T02:30Z; container aarch64
+# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
 # command: make --no-print-directory test-cpu-icarus
 
   access_fault           PASS
   alu                    PASS
   branch                 PASS
+  c_cprogram             PASS
   csr                    PASS
   fencei                 PASS
   flush                  PASS
@@ -14,4 +15,4 @@
   misaligned             PASS
   muldiv                 PASS
   traps                  PASS
-icarus: 12/12 tests pass with seeds 1 2 3
+icarus: 13/13 tests pass with seeds 1 2 3

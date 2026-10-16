@@ -1,5 +1,5 @@
 # surfcpu_core: Yosys synth_xilinx resource estimate
-# commit 564ea5944b74, dirty=0; 2026-10-16T02:30Z; container aarch64
+# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
 # command: sh -c yosys -V; make --no-print-directory synth-cpu
 
 Yosys 0.52 (git sha1 fee39a3284c90249e1d9684cf6944ffbbcbb8f90)
