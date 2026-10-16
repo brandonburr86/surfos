@@ -1,0 +1,8 @@
+# SurfCPU SoC test of the test: a script with three wrong expectations, which the scripted
+# stand-in must report (sim/soc/scripts/soc_negative.sbs). The bench expects SCRIPT FAIL with
+# exactly 2 data-port and 1 fetch-port failed checks.
+D read    sysinfo.MAGIC expect 0x12345678        # wrong data
+D read    scratch.end                            # expects OK, gets an error
+I fetch   bootrom error                          # expects an error, gets data
+D read    sysinfo.MAGIC expect 0x46525553        # right
+sync

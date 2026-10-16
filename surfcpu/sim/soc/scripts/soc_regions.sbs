@@ -1,0 +1,130 @@
+# SurfCPU SoC test: every region of docs/MEMORY-MAP.md from both core ports, through the real
+# interconnect (sim/soc/scripts/soc_regions.sbs, compiled by sim/soc/tools/surfscript.py).
+# Defines: ddr (HAS_DDR). Needs --rom (the image the bench loads). DDR calibrates a few
+# thousand cycles after reset, so the first block runs before it.
+
+# ---- DDR before calibration: errors from both ports; nothing reaches the bridge
+if ddr
+D read    ddr error
+D write   ddr 0x12345678 error
+D write8  ddr.last+3 0x5A error
+D read16  ddr+0x1002 error
+I fetch   ddr error
+I fetch   ddr.last error
+D read    sysinfo.DDR_STATUS expect sysinfo.DDR_STATUS.PRESENT
+endif
+sync
+
+# ---- boot ROM: data reads of every width and fetches see the image; writes are refused
+D read    bootrom expect rom
+D read    bootrom.last expect rom
+D read8   bootrom+5 expect rom
+D read16  bootrom+0x102 expect rom
+D read8   bootrom.last+3 expect rom
+I fetch   bootrom expect rom
+I fetch   bootrom+4 expect rom
+I fetch   bootrom+0x7FFC expect rom
+I fetch   bootrom.last expect rom
+D write   bootrom 0 error
+D write8  bootrom+1 0xFF error
+D write16 bootrom.last+2 0xFFFF error
+D read    bootrom expect rom
+D read    bootrom.last expect rom
+
+# ---- scratch RAM: data writes and reads of every width, then fetches of what was written
+D write   scratch 0x11223344
+D write8  scratch+4 0xAA
+D write8  scratch+5 0xBB
+D write16 scratch+6 0xBEEF
+D write   scratch.last 0xCAFEF00D
+D write   scratch+0x8000 0x00000013
+D read    scratch expect mem
+D read    scratch+4 expect mem
+D read8   scratch+7 expect mem
+D read16  scratch+4 expect mem
+D read    scratch.last expect mem
+sync
+I fetch   scratch expect mem
+I fetch   scratch+4 expect mem
+I fetch   scratch+0x8000 expect mem
+I fetch   scratch.last expect mem
+
+# ---- one register in each MMIO window (values the real io blocks must also have at reset)
+D read    uart.DIV expect (clocks.sys_hz+57600)//115200
+D read    uart.STATUS expect uart.STATUS.TX_IDLE
+D read    timer.TIMEBASE expect clocks.timebase_hz
+D read    timer.MTIMECMP_HI expect 0xFFFFFFFF
+D read    intc.ENABLE expect 0
+D read    gpio.LED expect 0
+D read    spi.DIV expect (clocks.sys_hz+799999)//800000-1
+D read    ps2.CTRL expect ps2.CTRL.RX_EN
+D read    ps2.DATA expect ps2.DATA.EMPTY
+D read    video.CTRL expect video.CTRL.ENABLE
+D read    video.INFO expect 80<<video.INFO.COLS.lsb|30<<video.INFO.ROWS.lsb|8<<video.INFO.GLYPH_W.lsb|16<<video.INFO.GLYPH_H.lsb
+D read    video.PIXCLK expect clocks.pix_hz
+D read    sysinfo.MAGIC expect 0x46525553
+# ... and their ends: the last word of each window has no register
+D read    uart.end-4 error
+D read    video.end-4 error
+D read    sysinfo.end-4 error
+
+# ---- text RAM: data accesses of every width; no fetch
+D write   textram 0x00000F41
+D write16 textram+4 0x1F42
+D write8  textram+8 0x43
+D write   textram.last 0x12345678
+D read    textram expect mem
+D read    textram+4 expect mem
+D read8   textram+8 expect mem
+D read16  textram.last+2 expect mem
+I fetch   textram error
+I fetch   textram+0x2580 error
+I fetch   textram.last error
+
+# ---- no fetch from MMIO; the reserved window and the gaps are unmapped
+I fetch   uart error
+I fetch   timer.MTIME_LO error
+I fetch   sysinfo.MAGIC error
+I fetch   video.PALETTE error
+D read    eth error
+D write   eth 1 error
+I fetch   eth error
+D read    scratch.end error
+I fetch   scratch.end error
+D read    textram.end error
+D read    sysinfo.end+0x1000 error
+D read    textram-4 error
+I fetch   uart-4 error
+
+# ---- DDR after calibration
+if ddr
+D poll    sysinfo.DDR_STATUS mask sysinfo.DDR_STATUS.CALIB_DONE equal sysinfo.DDR_STATUS.CALIB_DONE within 100000 every 8
+endif
+sync
+if ddr
+assume ddr=1
+D write   ddr 0xA5A5A5A5
+D write   ddr.last 0x5A5A5A5A
+D write8  ddr+4 0x77
+D write16 ddr+6 0x8899
+D read    ddr expect mem
+D read    ddr.last expect mem
+D read    ddr+4 expect mem
+D read8   ddr.last+1 expect mem
+D read    sysinfo.DDR_STATUS expect sysinfo.DDR_STATUS.CALIB_DONE|sysinfo.DDR_STATUS.PRESENT
+D read    ddr.end error
+endif
+sync
+if ddr
+I fetch   ddr expect mem
+I fetch   ddr+4 expect mem
+I fetch   ddr.last expect mem
+I fetch   ddr.end error
+else
+D read    ddr error
+D write   ddr 1 error
+I fetch   ddr error
+D read    sysinfo.DDR_STATUS expect 0
+D read    sysinfo.DDR_SIZE expect 0
+D read    sysinfo.FEATURES expect 0x7F
+endif
