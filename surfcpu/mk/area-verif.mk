@@ -83,7 +83,9 @@ ref-formal:
 test-ref: test-ref-unit ref-directed ref-csrmap ref-standin ref-selftest ref-formal-smoke
 	@echo "test-ref: PASS"
 
-# Needs the core: the cpu track's build/cpu/surfcpu_tb (its makefile builds it).
+# Needs the core: the cpu track's build/cpu/surfcpu_tb (its makefile builds it). On test-cpu (and
+# so on check) since the core and this track were merged (2026-10-16): about 2 minutes.
+test-cpu: test-cpu-ref
 test-cpu-ref: ref-spike ref-arch
 	$(Q)if [ "$(REF_DUT)" = "$(BUILD)/cpu/surfcpu_tb" ]; then \
 	  $(MAKE) --no-print-directory $(REF_DUT) || { \
