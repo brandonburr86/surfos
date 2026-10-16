@@ -1,0 +1,72 @@
+soc round 2 evidence: make test-soc-system-selftest, 2026-10-16 00:00-00:08 CDT
+Branch sc/soc-2 at cb07cf9 (clean tree: SurfBoot, the kernel package and the sysinfo build id all
+say cb07cf9c); container surfcpu-toolchain:2026-10-15 (Verilator 5.032). Simulation with models,
+not the board. The kernel's self test on the RTL: boot as in test-soc-system-boot, then
+`selftest` typed on the UART. Not part of make check (about 8.5 minutes).
+
+# test-soc-system-selftest: 9 of 9 checks passed in 505 s (selftest 1734585338 cycles = 69.383 s simulated in 504.5 s wall (3.44 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+# 2026-10-16 05:08:33 UTC
+ok   cards: mkcard.py makes them (standard directories, /BOOT/CMDLINE.TXT, HELLO.TXT and DATA.BIN in /USERS/DOCUMENTS; SURFOS.BIN)
+ok   selftest: every expected line in order (output matched after 1734585338 cycles (69.383 s simulated) in 504.5 s wall (3.44 M cycles/s); UART 9 bytes in, 4329 out, 0 framing errors; DDR calibrated, 12534975 reads 21141101 writes 165321030 fetches 0 errors; exit 0)
+ok   selftest: SurfBoot from the boot ROM: the DDR model calibrated and the quick test passed, the card initialized through surf_spi, its FAT32 partition found
+ok   selftest: SurfBoot loads /BOOT/SURFOS.BIN over surf_spi and checks it: payload CRC 0x59afede3 (as zlib computes it here), as read from the card and from DDR
+ok   selftest: SurfBoot hands over: entry 0x80000000, a0 = 0, a1 = 0x0001f000 (boot information), a2 = the magic
+ok   selftest: the kernel boots to the shell, its console on surf_uart (ascii, from /BOOT/CMDLINE.TXT)
+ok   selftest: the kernel's SD driver on surf_spi and the card model: sd0, its FAT32 partition on /sd0p1
+ok   selftest: the kernel self test passes on the RTL (35 ok, 1 skipped)
+ok   selftest: no panic, no killed task, no boot problem
+
+selftest run: the cycle (after reset, at 25000000 Hz) when each expected line had arrived:
+  SurfBoot opens the package               1347206  (0.054 s)
+  SurfBoot loads it                       45706734  (1.828 s)
+  SurfBoot checks it                      45986664  (1.839 s)
+  the command line                        46164295  (1.847 s)
+  the handoff                             46346575  (1.854 s)
+  the kernel on the serial console        56346129  (2.254 s)
+  the card mounted                       106936716  (4.277 s)
+  the banner                             126067599  (5.043 s)
+  the shell prompt                       128452228  (5.138 s)
+  selftest                              1730778235  (69.231 s)
+  models: card build/soc/system_selftest/card-boot.img: 728 blocks read, 0 written, 0 protocol violations; keyboard: 2 frames sent, 2 host bytes, 0 violations; VGA: off
+
+the self test's output on the UART:
+  SurfOS self test (riscv32, arty_a7)
+  ----------------
+  heaptest: 10053 allocs, 10053 frees, 123 live at peak, used 128960 -> 128960 bytes, 2 free blocks: HEAPTEST PASS
+    ok   heap
+    ok   ilp32: int, long and pointers are 32 bits, long long 64
+    ok   long long is 8-byte aligned in a struct (RV32, not i386's 4)
+    ok   char is signed (-fsigned-char, as the shared code expects)
+    ok   the boot ABI's structures: 256 and 64 bytes
+    ok   the trap frame matches traps.S and keeps the stack aligned
+    ok   every register kept across 28 timer interrupts (200000 rounds)
+    ok   every register kept across 300 ECALLs (yield)
+    ok   two tasks, spinning and yielding, keep their own registers (8 and 1 rounds, 51 and 50 switches)
+    ok   the task's stack is 16-byte aligned, in nested calls too
+    ok   sp is inside the task's own stack
+    ok   gp is the kernel's global pointer, tp is zero
+    ok   in the timer interrupt: the stack 16-byte aligned, gp the kernel's
+    ok   the stack's canary is intact
+    ok   64-bit divide and remainder (libgcc)
+    ok   32x32 to 64-bit multiply (mulhu)
+    ok   the formatter's 64-bit numbers
+    ok   snprintf widths and flags
+    ok   strcmp, strtol, atoi
+    ok   CRC-32 test vectors of BOOT-ABI.md section 3
+    ok   sleep_ms(100) takes 10-15 ticks (late ticks on a busy host count at once)
+    ok   mtime moved as much as the ticks did
+    ok   tick differences survive the 32-bit wrap
+    ok   periodic 10 ms timer fires about 20 times in 205 ms (fewer when ticks come late)
+    ok   cancelled timer stays quiet
+    ok   32 kthreads created
+    ok   all 32 collected by task_wait, task count back
+    ok   exit code 42 reaches task_wait
+    ok   two kernel tasks sleep and wake 5 times each
+    ok   the heartbeat task keeps waking
+    ok   two tasks under a mutex count to exactly 4000
+    ok   500 items through an 8-slot ring arrive in order
+    ok   event_wait_timeout(50 ms) times out on time
+    ok   event set by another task wakes the waiter
+    skip FAT (no FAT volume mounted read-write)
+    ok   kernel log has the boot messages
+  SELFTEST PASS (all checks passed)

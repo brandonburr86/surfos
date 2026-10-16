@@ -33,10 +33,10 @@ SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
         synth-soc test-soc-verilator test-soc-gate test-soc-boot test-soc-mutants soc-gpio-real \
-        soc-mem-once
+        soc-mem-once test-soc-system-boot test-soc-system-selftest
 lint: lint-soc
 test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator \
-          test-soc-boot
+          test-soc-boot test-soc-system-boot
 check: synth-soc test-soc-gate
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
@@ -63,7 +63,7 @@ lint-soc:
 	$(Q)for b in spi ps2 video; do $(SOC_VLINT) --top-module surf_$$b sim/soc/stubs/surf_$$b.v || exit 1; done
 	$(Q)$(SOC_IVERILOG) -s surfcpu_soc -o /dev/null $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
 	$(Q)$(SOC_IVERILOG) -s surfcpu_soc -DSURFCPU_RVFI -o /dev/null $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
-	@echo "lint-soc: $(words $(sort $(SOC_TOP_RTL))) RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: $(firstword $(SOC_CORE_SRC)), io: $(SOC_IO_SRC)"
+	@echo "lint-soc: $(words $(sort $(SOC_TOP_RTL))) RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: $(if $(filter sim/soc/stubs/%,$(SOC_CORE_SRC)),the scripted stand-in,$(dir $(firstword $(SOC_CORE_SRC)))*.v), io: $(strip $(SOC_IO_SRC))"
 
 # ---------------------------------------------------------------------------- unit tests
 $(SOC_DIR)/tb_intc.vvp: sim/soc/tb/tb_intc.v rtl/peripherals/surf_intc.v $(SOC_BFM)
@@ -218,18 +218,29 @@ test-soc-models: $(SOC_DIR)/test_models
 
 # ---------------------------------------------------------------------------- surfsim
 # build/sim/surfsim: the whole SoC (the real core and io blocks once they exist) with the C++
-# models; build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for
-# the tests. Built with RVFI so --trace works with the real core. The Verilator object
+# models at its pins (UART, DDR, the io track's SD card, PS/2 keyboard and VGA capture);
+# build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for the
+# tests. Built with RVFI so --trace works with the real core, with Verilator -O3 and
+# --x-assign fast for speed (the system boot runs hundreds of millions of cycles), and with
+# SYS_HZ/PIX_HZ from the generated header, as the board top passes them. The Verilator object
 # directories are deleted once the binaries are copied (disk space); a rebuild starts afresh.
 SOC_BUILD_FLAGS := $(shell echo $$(( 2 + ($(SURFCPU_BUILD_DIRTY) & 1) )))
 SOC_SIM_DEFS    := --define build_id=0x$(BUILD_ID_HEX) --define build_flags=$(SOC_BUILD_FLAGS) \
                    --define build_time=0
-SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O2 --top-module surfcpu_soc \
+SOC_GEN_H       := firmware/include/surfcpu/soc.h
+SOC_SYS_HZ      := $(shell awk '$$2 == "SURF_SYS_HZ" { print $$3 }' $(SOC_GEN_H))
+SOC_PIX_HZ      := $(shell awk '$$2 == "SURF_PIX_HZ" { print $$3 }' $(SOC_GEN_H))
+SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O3 --x-assign fast --top-module surfcpu_soc \
                    +define+SURFCPU_RVFI $(SOC_INC) \
                    -GBUILD_ID=32\'h$(BUILD_ID_HEX) -GBUILD_FLAGS=32\'h$(SOC_BUILD_FLAGS) \
+                   -GSYS_HZ=$(SOC_SYS_HZ) -GPIX_HZ=$(SOC_PIX_HZ) \
                    -CFLAGS "-std=c++17 -O2 -DSURFCPU_RVFI -I$(CURDIR)/sim/models \
                    -I$(CURDIR)/firmware/include"
-SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_MODEL_SRC)
+SOC_SIM_MODELS  := $(SOC_MODEL_SRC) sim/models/sdcard_model.cpp sim/models/ps2_keyboard_model.cpp \
+                   sim/models/vga_capture.cpp
+SOC_SIM_HDR     := $(SOC_MODEL_HDR) sim/models/sdcard_model.h sim/models/ps2_keyboard_model.h \
+                   sim/models/vga_capture.h $(SOC_GEN_H) rtl/generated/surfcpu_soc.vh
+SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_SIM_MODELS)
 
 # the build identity is compiled into surfsim (sysinfo) and into the scripts that check it:
 # a stamp per identity rebuilds both together when the commit or the dirty state changes
@@ -239,7 +250,7 @@ $(SOC_ID_STAMP):
 	@rm -f $(SOC_DIR)/build-id.*.stamp
 	@touch $@
 
-$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_MODEL_HDR) \
+$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_SIM_HDR) \
                      $(SOC_ID_STAMP)
 	@mkdir -p $(BUILD)/sim/obj_surfsim
 	$(Q)$(SOC_VERILATE) --Mdir $(BUILD)/sim/obj_surfsim -o surfsim \
@@ -248,7 +259,7 @@ $(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP
 	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim
 
 $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
-                                   $(SOC_MODEL_HDR) $(SOC_ID_STAMP)
+                                   $(SOC_SIM_HDR) $(SOC_ID_STAMP)
 	@mkdir -p $(SOC_DIR)/surfsim_script/obj
 	$(Q)$(SOC_VERILATE) --Mdir $(SOC_DIR)/surfsim_script/obj -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
@@ -303,7 +314,7 @@ test-soc-surfsim: $(BUILD)/sim/surfsim $(SOC_SIMX) $(SOC_DIR)/rom_a.mem \
 	  || { cat $(SOC_DIR)/surfsim_smoke.txt; exit 1; }
 	$(Q)head -1 $(SOC_DIR)/surfsim_smoke.trace | grep -q "^# surfcpu-trace v1: order pc insn" \
 	  || { echo "bad trace header"; exit 1; }
-	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim:' $(SOC_DIR)/surfsim_smoke.txt)"
+	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim: .* after ' $(SOC_DIR)/surfsim_smoke.txt)"
 	@echo "test-soc-surfsim: PASS (seeds $(SOC_SEEDS))"
 
 # ---------------------------------------------------------------------------- synthesis check
@@ -469,6 +480,30 @@ else
 	  > $(SOC_DIR)/boot-surfboot.txt 2>&1 || { tail -30 $(SOC_DIR)/boot-surfboot.txt; exit 1; }
 	@echo "  [surfboot] $$(grep -m1 '^SurfBoot ' $(SOC_DIR)/boot-surfboot.txt); the monitor answered help"
 	@echo "test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)"
+endif
+
+# The whole system (sim/soc/tools/system_boot_test.py): SurfBoot (build-rom) loads the Arty kernel
+# package (build-kernel, packed by tools/surfimg.py) from a tools/mkcard.py card in build/sim/surfsim
+# with HAS_DDR=1, the DDR model and the io track's models: the boot to the shell prompt, a UART
+# session (bootinfo, ls, cat, ps, tasks, crc32), a command typed on the PS/2 keyboard model checked
+# on the screen decoded from the VGA pixels, and SurfBoot falling back to /BOOT/BACKUP.BIN. Two runs
+# side by side, about 315 and 196 million cycles: about 95 s. test-soc-system-selftest boots
+# and runs the kernel self test (1.7 billion cycles, about 8.5 minutes): not part of test-soc.
+SOC_SYS_TEST = $(PYTHON) sim/soc/tools/system_boot_test.py --surfsim $(BUILD)/sim/surfsim \
+               --rom $(BUILD)/fw/surfboot.mem --mkcard tools/mkcard.py \
+               --package ../build/riscv32/arty_a7/SURFOS.BIN
+SOC_SYS_READY := $(and $(SOC_BOOT_READY),$(wildcard tools/mkcard.py),$(wildcard tools/surfimg.py),\
+                   $(wildcard ../arch/riscv32/kernel.mk))
+ifneq ($(SOC_SYS_READY),)
+test-soc-system-boot: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/sim/surfsim
+	$(Q)$(SOC_SYS_TEST) --work $(SOC_DIR)/system_boot --evidence $(SOC_DIR)/system_boot/summary.txt
+
+test-soc-system-selftest: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/sim/surfsim
+	$(Q)$(SOC_SYS_TEST) --selftest --work $(SOC_DIR)/system_selftest \
+	  --evidence $(SOC_DIR)/system_selftest/summary.txt
+else
+test-soc-system-boot test-soc-system-selftest:
+	@echo "$@: skipped (needs the real core, SurfBoot, the riscv32 kernel, surfimg.py and mkcard.py)"
 endif
 
 # ---------------------------------------------------------------------------- the tests' own check

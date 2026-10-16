@@ -3,13 +3,16 @@
 The system SurfCPU lives in: the SurfBus interconnect of [SURFBUS.md](SURFBUS.md) section 6,
 the three block RAMs, the five base peripherals of [MEMORY-MAP.md](MEMORY-MAP.md),
 `surfcpu_soc` as [MODULES.md](MODULES.md) section 4, the stand-ins that let it build before the
-core and the io blocks existed, the C++ UART and DDR models and the `surfsim` harness. Owned by
-the soc track ([plans/2026-10-15-tracks.md](plans/2026-10-15-tracks.md)).
+core and the io blocks existed, the C++ UART and DDR models and the `surfsim` harness with the io
+track's SD card, PS/2 keyboard and VGA capture models. Owned by the soc track
+([plans/2026-10-15-tracks.md](plans/2026-10-15-tracks.md)).
 
-**Status (2026-10-15).** Simulation: everything below passes (section 8). Synthesis: Yosys
-estimates only, and the synthesized netlists simulate like the RTL (section 10); no Vivado run
-has happened (no build host). Board: nothing has run on the Arty; all physical results are
-**pending**.
+**Status (2026-10-16).** Simulation: everything below passes (section 8), and the whole system
+runs in `surfsim`: SurfBoot loads the Arty kernel from a card image, the kernel boots to its
+shell, answers commands on the UART and on the PS/2 keyboard and draws its console on the VGA
+output, and SurfBoot falls back to `BACKUP.BIN` (section 9.2). Synthesis: Yosys estimates only,
+and the synthesized netlists simulate like the RTL (section 10); no Vivado run has happened (no
+build host). Board: nothing has run on the Arty; all physical results are **pending**.
 
 ## 1. The system
 
@@ -167,9 +170,13 @@ the same cycle as the previous response.
 | `test-soc-system` | `tb_soc` (Icarus): the whole SoC with the scripted core, UART and GPIO looped back, a Verilog DDR model with calibration delay, random ready and latency and a watchdog case; scripts `soc_regions`, `soc_errors`, `soc_random` (also back to back), `soc_periph`, with and without DDR; a negative script must fail with exactly its three wrong expectations |
 | `test-soc-models` | `sim/soc/test_models.cpp`: the UART model's waveform, exchanges, errors and baud tolerance; the DDR model against a reference over the whole window |
 | `test-soc-surfsim` | the same four scripts in `surfsim` (Verilator, C++ models), a UART exchange with the model matched by `--expect`, the exit codes, a smoke run of the deliverable build with a trace |
-| `test-soc-boot` | once the real core and firmware exist: the BRAM diagnostics to `BRAMDIAG: PASS` and SurfBoot to its monitor in `surfsim` (skipped until then) |
+| `test-soc-boot` | the real core in `surfsim`: the fw track's BRAM diagnostics to `BRAMDIAG: PASS`, and SurfBoot without a card to its monitor, which answers `help` |
+| `test-soc-system-boot` | the whole system in `surfsim` (section 9.2): SurfBoot, the Arty kernel from a card image, a UART session, a PS/2 command checked on the decoded VGA screen, the BACKUP.BIN fallback; about 100 s |
 | `synth-soc` (check) | Yosys: the logic modules synthesize (check -assert), the memories infer as memories, the SoC through synth_xilinx (section 10) |
 | `test-soc-gate` (check) | the synthesized memories under `tb_mem` and the synthesized SoC under the four scripts |
+
+`make test-soc-system-selftest` (not in `test-soc`: 1.7 billion cycles, about 8.5 minutes) boots
+the same way and runs the kernel's `selftest` (section 9.2).
 
 `make test-soc-mutants` (not in `test-soc`, about a minute) checks the tests themselves: 37
 one-line bugs planted in copies of the RTL (`sim/soc/tools/mutants.py`: intc 2, uart 9, gpio 6,
@@ -181,31 +188,119 @@ the fetch through before calibration dropped.
 Large outputs are cleaned up: the Verilator object directories (about 170 MB each) are deleted
 after use; no target writes waveforms, and traces are bounded by `--max-cycles`.
 
-## 9. `surfsim`
+## 9. `surfsim` and the whole system
 
-`build/sim/surfsim` (`make surfsim`): the whole SoC in Verilator with the UART model on the
-serial pins and the DDR model on the DDR port, at the spec's clock rates. Options of MODULES.md
-section 7 (`--rom --sd --uart-in --ps2-keys --vga-dir --trace --max-cycles --expect`) plus
-`--seed`, `--quiet`, `--uart-loopback`, `--gpio-loopback`, `--sw`, `--btn`, `--ddr-calib N`,
-`--ddr-fail`, `--ddr-latency MIN:MAX`, `--ddr-ready PCT`, `--ddr-stall ADDR`; tb_soc's `+ddr_*`
-plusargs work too, and other plusargs go to the RTL (`+script=` for the scripted core). The SoC
-output is echoed on stdout. `--expect` is an ECMAScript regular expression tried after every
-received byte (end it with what must follow, such as `\n`; `.` does not match the `\r` of CRLF).
-Exit: 0 when the output matched, or a clean finish (without `--expect`, also when
-`--max-cycles` ran out); 1 on `$fatal`, a DDR protocol violation seen by the model, or an
-unmatched `--expect` at `$finish`; 2 when `--max-cycles` ran out before `--expect` matched.
-`--trace` writes the RVFI trace of MODULES.md section 5. `--sd`, `--ps2-keys` and `--vga-dir`
-are accepted but their models (io track) are wired in at integration: until then the card is
-absent (`sd_cd_n` = 1) and the PS/2 lines idle; the hook points are marked in `surfsim.cpp`.
+### 9.1 The harness
+
+`build/sim/surfsim` (`make surfsim`, `sim/soc/surfsim/surfsim.cpp`): the whole `surfcpu_soc`
+in Verilator with C++ models at its pins, wired as [IO.md](IO.md) section 6 says:
+
+| Pins | Model | Options |
+|---|---|---|
+| `uart_tx`, `uart_rx` | UART model (115200 8N1), sampled before each clk edge | `--uart-in FILE`, `--send`, `--uart-loopback` |
+| `ddr_*` | DDR model: calibration after `--ddr-calib` cycles, random ready and latency | `--ddr-calib N`, `--ddr-fail`, `--ddr-latency MIN:MAX`, `--ddr-ready PCT`, `--ddr-stall ADDR`, `+ddr_*` |
+| `sd_sclk`, `sd_mosi`, `sd_cs_n`, `sd_miso`, `sd_cd_n` | io's SD card model, ticked after each clk edge with the SoC's registered outputs, MISO and card detect fed back before the next edge | `--sd IMAGE` (absent without it), `--sd-flush` |
+| `ps2_clk_oe/_i`, `ps2_data_oe/_i` | io's PS/2 keyboard model with the open-drain resolution (a line is low when the SoC's `_oe` or the keyboard pulls it) | `--ps2-keys TEXT`, `--ps2-send` |
+| `vga_r/g/b`, `vga_hs`, `vga_vs` | io's VGA capture, ticked on every pix_clk rising edge | `--vga-dir DIR`, `--vga-font`, `--vga-frames N`, `--vga-after REGEX` |
+| `led`, `sw`, `btn` | fixed levels or looped back | `--sw`, `--btn`, `--gpio-loopback` |
+
+`clk` runs at `SURF_SYS_HZ` and `pix_clk` at `SURF_PIX_HZ`, both taken from the generated
+`soc.h` and scheduled in femtoseconds on two independent clocks (the Makefile passes the same
+values to the RTL as `SYS_HZ`/`PIX_HZ`, as the board top does), each held in reset for 8 of its
+cycles. Nothing in the SoC uses a falling edge, so the inputs set after a rising edge are
+settled by the falling edge's evaluation. `--rom` loads the boot ROM image (`+bootrom=`).
+
+UART output is echoed on stdout (unless `--quiet`) and kept by `--transcript FILE`. Patterns are
+ECMAScript regular expressions tried after every received byte over at most the last 16 KiB
+(`--fail-on`: 4 KiB); end one with what must follow it, such as `\n` (`.` does not match the `\r`
+of CRLF):
+
+* `--expect REGEX`, repeatable: all must match, in order, each after the previous match; then the
+  run ends (exit 0), or runs `--settle N` cycles more (to let the screen catch up).
+* `--send REGEX=TEXT` sends TEXT to the UART once REGEX has matched; `--ps2-send REGEX=TEXT`
+  types it on the keyboard. Each kind goes in order, each REGEX searched after the previous one's
+  match, so a session answers a prompt with a command and the next prompt with the next. TEXT
+  takes `\r \n \t \e \b \\ \xHH`; the first `=` ends REGEX (write `\x3d` for one in it).
+* `--fail-on REGEX` ends the run with exit 1.
+* Every match and send is logged on stderr with its cycle; `--progress N` prints a line every N
+  cycles.
+
+`--vga-dir DIR` writes, at the end, `DIR/screen.ppm` (the last whole frame) and `DIR/screen.txt`:
+the measured timing and the 80x30 text decoded from the pixels with the font ROM
+(`rtl/peripherals/surf_video_font.v`), the cursor's cell and the count of cells that match no
+glyph. The cursor blinks (16 frames dark of 32), so while `--settle` runs every whole frame is
+decoded and, when the last frame is a dark one, the cell where the cursor was last seen is
+given. `--vga-frames N` also writes every Nth frame. `--trace` writes the RVFI trace of MODULES.md
+section 5; other plusargs go to the RTL (`+script=` for the scripted core).
+
+Exit: 0 when every `--expect` matched, or a clean finish (without `--expect`, also when
+`--max-cycles` ran out); 1 on `$fatal`/`$stop`, a `--fail-on` match, a DDR handshake error, an SD
+or PS/2 protocol violation seen by the card or keyboard model (the end of its log is printed), or
+an unmatched `--expect` at `$finish`; 2 when `--max-cycles` ran out before the `--expect`
+patterns matched. The summary on stderr gives cycles, simulated and wall time, and the models'
+counters.
+
+Speed (container on the owner's Mac, Verilator 5.032 `-O3 --x-assign fast`, one thread): about
+3.3 million cycles a second with the real core, 7.6 times slower than real time. The pixel clock
+domain and the VGA capture cost about 1 %, so `pix_clk` always runs.
+
+### 9.2 The whole system: `make test-soc-system-boot`
+
+`sim/soc/tools/system_boot_test.py` builds two cards with `tools/mkcard.py` (64 MiB, the standard
+directories, `/BOOT/CMDLINE.TXT` = `ascii`, `/USERS/DOCUMENTS/HELLO.TXT` and an 8 KiB `DATA.BIN`)
+and runs `surfsim` with `HAS_DDR=1`, the DDR model and SurfBoot (`build/fw/surfboot.mem`) twice,
+side by side; expectations follow `boards/arty_a7/tests/surfemu_test.py` where they fit:
+
+* **boot** (card with `/BOOT/SURFOS.BIN` from `build-kernel`): in order on the UART, SurfBoot
+  finds the package, loads it over `surf_spi` and checks its payload CRC (as read from the card
+  and from DDR); the handoff (entry 0x80000000, a1 = the boot information, a2 = the magic); the
+  kernel's boot messages (its card driver, the FAT32 partition mounted) and banner; the prompt.
+  Typed on the UART: `bootinfo`, `ls` and `cat` in `/sd0p1/USERS/DOCUMENTS`, `ps` (7 kernel
+  tasks: idle, init, heartbeat, four shells), `tasks` (two more tasks count, sleep and wake on the
+  machine timer), `crc32` of both files (zlib's values). Then `drivers` typed on the PS/2 keyboard
+  model: on the UART its table (the keyboard answered, its keys counted), and on the screen decoded
+  from the VGA pixels the command line and its output, the cursor on the new prompt (the run
+  settles 8 million cycles, about 19 frames, to see it through its blink), 800x525 timing at
+  59.95 Hz, every cell a glyph of the font ROM.
+* **recovery** (card with a `SURFOS.BIN` whose payload has one byte flipped and the good package as
+  `/BOOT/BACKUP.BIN`): SurfBoot reports the CRC mismatch, tries `BACKUP.BIN`, starts it ("boot:
+  starting BACKUP.BIN at 0x80000000 ..."); the kernel boots to the prompt and `bootinfo` says
+  "from BACKUP.BIN".
+
+Results (2026-10-16, in `make check` at b4717a6, SURFOS.BIN of 361,800 bytes): 21 of 21
+checks; boot 314.3 million cycles (12.57 s simulated) in 95 s, recovery 195.8 million cycles
+(7.83 s) in 58 s, so 95 s for the target; with `--seed 7` (other DDR and card timing) 21 of 21
+as well. Where the simulated time goes (cycles after reset, at 25 MHz, in that run):
+
+| Milestone | boot run | recovery run |
+|---|---|---|
+| SurfBoot has loaded the package (SPI at 6.25 MHz) | 45.7 M (1.83 s) | 80.8 M (3.23 s), after reading the damaged file once (36.3 M) |
+| handoff | 46.3 M (1.85 s) | 81.4 M (3.26 s) |
+| the kernel's first line | 56.3 M (2.25 s) | 91.4 M (3.66 s) |
+| card mounted | 106.9 M (4.28 s) | 141.9 M (5.68 s) |
+| shell prompt | 128.5 M (5.14 s) | 163.8 M (6.55 s) |
+| bootinfo, ls, cat, ps, tasks, crc32 done | 262.5 M (10.50 s) | (bootinfo: 180.1 M) |
+| `drivers` typed on PS/2, output complete | 299.8 M (11.99 s) | |
+
+The kernel runs from DDR, fetched one word at a time (the core keeps one fetch outstanding and
+has no cache) with the DDR model's latency of 2 to 12 cycles: 24.3 million DDR fetches in the
+260 million cycles after the handoff, idle time included. So it is slow in simulated time, as on
+the fw track's emulator, and two steps of `surfemu_test.py` are left out for wall time: `crc32`
+of the 353 KiB package (23 s simulated, 584 million cycles, measured here) and the self test,
+which `make test-soc-system-selftest` runs on its own: `SELFTEST PASS` (35 checks ok, the FAT
+write check skipped on the read-only card) after 1.73 billion cycles (69.4 s simulated, 64 s of
+them the self test) in 505 s ([record](evidence/soc/test-soc-system-selftest.txt)).
+The decoded screen and the transcripts are kept in `build/soc/system_boot/`, the record in
+[evidence/soc/test-soc-system-boot.txt](evidence/soc/test-soc-system-boot.txt).
 
 ## 10. Synthesis estimate and post-synthesis simulation
 
-`make synth-soc` runs Yosys 0.52 `synth_xilinx` (out of context, `-noiopad -noclkbuf`). With
-the stand-ins as black boxes the soc part comes to 1,144 LUTs, 618 flip-flops, 85 CARRY4,
-35 RAMB36 and 5 LUTRAM primitives (the UART FIFOs). With the cpu and io tracks' blocks (tried in
-a scratch export, section 11) the whole SoC without DDR bridge and board top is about 5,400 LUTs,
-2,670 flip-flops, 36 RAMB36, 4 DSP48E1 and 30 LUTRAM primitives. These are Yosys estimates, not
-Vivado results; BRAM fits the 35T's 50 RAMB36.
+`make synth-soc` runs Yosys 0.52 `synth_xilinx` (out of context, `-noiopad -noclkbuf`). Since
+the merges it synthesizes the whole SoC with the real core and io blocks (no black boxes) but
+without the DDR bridge and board top: 5,412 LUTs, 2,673 flip-flops, 306 CARRY4, 36 RAMB36,
+4 DSP48E1 and 30 LUTRAM primitives (2026-10-16). The soc part alone, with the stand-ins as black
+boxes (round 1): 1,144 LUTs, 618 flip-flops, 85 CARRY4, 35 RAMB36 and 5 LUTRAM primitives (the
+UART FIFOs). These are Yosys estimates, not Vivado results; BRAM fits the 35T's 50 RAMB36.
 
 Yosys can drop logic silently, so `make test-soc-gate` simulates what it produced: `tb_mem` on
 the three memories synthesized alone, and the four SoC scripts on the whole synthesized SoC with
@@ -216,6 +311,9 @@ three write modes, the INIT/INITP layout) and stops on anything it does not mode
 multiplier (the 4 DSP48E1, where the io track saw Yosys delete logic) is outside this check.
 
 ## 11. Integration preview (scratch export, simulation only)
+
+Superseded since the merges: `make check` runs all of this on the merged tree (`synth-soc` with
+no black boxes, `test-soc-boot`, `test-soc-system-boot`). Kept as the round 1 record.
 
 With the cpu and io tracks' RTL from `surfcpu` at 9b8a93b, put into this worktree only for the
 run (untracked, removed afterwards), the makefile picked the real files by itself and:
@@ -238,7 +336,15 @@ files laid over it, under the ignored `build/`, removed afterwards (`make test-s
 * Physical: nothing has run on the board. Timing closure, Vivado's BRAM inference and the
   bitstream are pending a build host.
 * The DDR arbiter loses one cycle per DDR access (section 2).
-* `surfsim` lacks the SD, PS/2 and VGA models until integration.
+* The system runs are simulation with models, not the board: the card, keyboard and DDR models
+  answer as the io and soc tracks wrote them, and the DDR model is not the MIG.
+* The screen during `tasks` (two kernel tasks printing at once) shows blank and partly written
+  rows where the UART has whole lines; the fw track's emulator shows the same kind of damage. It
+  is the kernel's console, not the RTL: `kputch()` mirrors each character to the serial line and
+  then updates the console's grid without excluding other tasks, and `sscroll()` copies the
+  4,800-byte grid one byte at a time (by my estimate about 10 ms on SurfCPU running from DDR,
+  as long as a timer tick), so a task preempted inside a scroll lets the other task write its
+  line into rows that the resumed scroll then moves or clears (reported to the os track).
 * Not tested: a reset in the middle of traffic (the whole SoC resets together, SURFBUS.md rule
   8, so no request survives).
 
@@ -254,3 +360,11 @@ Built exactly to the frozen contracts; points where they leave room or could be 
 * `surf_ddr_bridge`'s `timeout` output: pulse or level is not specified (sysinfo handles both).
 * `timer`: a tick in the cycle of a write to MTIME_LO/HI (here: lost, like mcycle).
 * MODULES.md section 3 gives no parameter types for `surf_sysinfo` (here: as `surfcpu_soc`'s).
+* MODULES.md section 4 gives `PIX_HZ = 25177305` (and `SYS_HZ = 25000000`) as literal defaults,
+  kept so in `surfcpu_soc`; the board top and `surfsim` pass the generated `SURF_PIX_HZ` and
+  `SURF_SYS_HZ`, so a change of `clocks.pix_hz` reaches them, but the defaults (here, in
+  `surf_sysinfo` and `surf_video`) would then disagree with the spec until MODULES.md changes them.
+* MODULES.md section 7 lists the `surfsim` options of version 1; the ones added for the system
+  runs (repeatable `--expect` in order, `--send`, `--ps2-send`, `--fail-on`, `--settle`,
+  `--transcript`, `--sd-flush`, the `--vga-dir` outputs, exit 2) are proposed for it in the soc
+  round 2 report.

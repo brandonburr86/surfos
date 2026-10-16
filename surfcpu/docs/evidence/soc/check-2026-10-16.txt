@@ -1,0 +1,276 @@
+soc round 2 evidence: make -C surfcpu check, 2026-10-16 00:11:58-00:29:55 CDT (17 min 57 s)
+Branch sc/soc-2 at b4717a6 (clean tree), from the Mac (make dispatches into the container
+surfcpu-toolchain:2026-10-15: Verilator 5.032, Icarus 12.0, Yosys 0.52, g++ 14.2). The real core and
+io blocks everywhere except the interconnect script tests (scripted stand-in core). Simulation and
+Yosys only; nothing ran on the board. Result: "check: all automated SurfCPU checks passed", exit 0.
+
+Every target's summary line:
+  lint-board: 6 board modules clean (real SoC)
+  lint-cpu: surfcpu_core clean (-Wall, with and without SURFCPU_RVFI)
+  lint-ddr: surf_ddr_bridge, surf_ddr_mailbox clean (Verilator -Wall, Icarus -g2005)
+  lint-ddr-adapter: surf_ddr_litedram_adapter clean (Verilator -Wall, Icarus -g2005)
+  lint-flow: flow_demo and flow_features_core clean (default and testbench parameters)
+  lint-io: surf_spi surf_ps2 surf_video: Verilator -Wall clean, Icarus -g2005 compiles
+  lint-lib: 5 modules clean
+  lint-soc: 21 RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: rtl/cpu/*.v, io: rtl/peripherals/surf_spi.v rtl/peripherals/surf_ps2.v rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v
+  tb_selftest: 15/15 checks pass
+  surfcpu_tb: 22 tests, 308/308 runs passed (3.0 s)
+  configurations: zero (ilat 1:1, dlat 1:1, seeds 1), short (ilat 1:3, dlat 1:3, seeds 2 12), mixed (ilat 1:12, dlat 1:12, seeds 3 13 23 33), dslow (ilat 1:2, dlat 4:40, seeds 4 14), islow (ilat 4:40, dlat 1:2, seeds 5 15), slow (ilat 6:30, dlat 6:30, seeds 6 16, --rand-reset), huge (ilat 20:100, dlat 20:100, seeds 7)
+  icarus: 13/13 tests pass with seeds 1 2 3
+  tb_clocks: sys_clk 25000000.0000 Hz (spec 25000000)
+  tb_clocks: pix_clk 25177304.9672 Hz (spec 25177305)
+  board-clocks: PASS (Icarus and Verilator)
+  board-prims-bad: PASS (6 illegal settings refused)
+  baseline_rt: 2.050 s simulated, 51250000 sys cycles, UART 217 cycles a bit
+  baseline_rt: sys heartbeat period 25000000 cycles
+  baseline_rt: sys heartbeat period 25000000 cycles
+  baseline_rt: pix heartbeat period 25000000 sys cycles
+  baseline_rt: pix heartbeat period 25000000 sys cycles
+  baseline_rt: line 1 at cycle 25000272: SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty sim 1760560000 | up 000001 s | pix 25177306 Hz | sw 0101 btn 0000 rx --
+  baseline_rt: line 2 at cycle 50000272: SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty sim 1760560000 | up 000002 s | pix 25177305 Hz | sw 0101 btn 0100 rx 41
+  baseline_rt: first line starts 25000256 cycles after reset
+  baseline_rt: PASS
+  tb_baseline: line 2 at 26.011 ms: SurfCPU baseline arty_a7_35t 0x00000135 build cafe0123 clean sim 1760000000 | up 000002 s | pix 00327305 Hz | sw 0101 btn 0100 rx 5a
+  tb_baseline: pix 327305 in a 325000-cycle tick; RGB duty 1024/8192; heartbeat halves 61004/0
+  tb_baseline: after RESET: SurfCPU baseline arty_a7_35t 0x00000135 build cafe0123 clean sim 1760000000 | up 000001 s | pix 00327306 Hz | sw 0101 btn 0000 rx --
+  board-baseline: PASS (Verilator with RESET, Icarus short run)
+  board-top: PASS (Icarus seeds 1 7 123, Verilator seed 5, real SoC)
+  test-board: PASS
+  test-ddr-bridge: PASS (all tests, seeds 1 2 3)
+  test-ddr-ratios: PASS (40:10:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3)
+  test-ddr-defaults: PASS
+  test-ddr-icarus: PASS
+  test-ddr: PASS
+  fontrom: check passed: sources match their pins, rtl/peripherals/surf_video_font.v is current, all 256 glyphs equal driver/font8x16.c (4 from the symbols font, 3 blank)
+  test_sdcard_model: PASS (240 checks, seed 1)
+  test_sdcard_model: PASS (240 checks, seed 2)
+  test_sdcard_model: PASS (240 checks, seed 3)
+  test_ps2_model: PASS (41 checks, seed 1)
+  test_ps2_model: PASS (41 checks, seed 2)
+  test_ps2_model: PASS (41 checks, seed 3)
+  test_vga_capture: PASS (36 checks, seed 1)
+  test_vga_capture: PASS (36 checks, seed 2)
+  test_vga_capture: PASS (36 checks, seed 3)
+  test_spi: PASS (829 checks, seed 1, 2945995 cycles)
+  test_spi: PASS (829 checks, seed 2, 2771784 cycles)
+  test_spi: PASS (829 checks, seed 3, 2625882 cycles)
+  test_ps2: PASS (163250 checks, seed 1, 79863938 cycles = 3194.6 ms simulated)
+  test_ps2: PASS (176378 checks, seed 2, 81963324 cycles = 3278.5 ms simulated)
+  test_ps2: PASS (169597 checks, seed 3, 80831301 cycles = 3233.3 ms simulated)
+  test_video: PASS (123 checks, seed 1, 108 frames, 46146029 pix cycles)
+  test_video: PASS (123 checks, seed 2, 108 frames, 46144785 pix cycles)
+  test_video: PASS (123 checks, seed 3, 108 frames, 46148649 pix cycles)
+  tb_io_icarus: PASS (SPI loopback, PS/2 receive and TX_NAK, video 800 x 525 = 420000 pixels per frame)
+  test-io: PASS
+  test-lib: PASS (seeds 1 7 123)
+  test-soc-units: PASS (seeds 1 7 123)
+  test-soc-system: PASS (seeds 1 7 123; core: scripted stand-in; io:  rtl/peripherals/surf_spi.v  rtl/peripherals/surf_ps2.v  rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v)
+  test_models: PASS (seed 1: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  test_models: PASS (seed 7: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  test_models: PASS (seed 123: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  test-soc-surfsim: PASS (seeds 1 7 123)
+  test-soc-verilator: PASS (10 unit testbenches under Verilator --timing, seed 1)
+  test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)
+  surfimg: build/riscv32/arty_a7/SURFOS.BIN: SurfOS 1.0.0 build b4717a6a, load 0x80000000, entry 0x80000000, payload 361736 bytes, mem_size 1141616, payload CRC 0x59afede3
+  surfimg: build/riscv32/qemu_virt/SURFOS.BIN: SurfOS 1.0.0 build b4717a6a, load 0x80000000, entry 0x80000000, payload 358416 bytes, mem_size 1140400, payload CRC 0xf7527e94
+  test-soc-system-boot: 21 of 21 checks passed in 95 s (boot 314275871 cycles = 12.571 s simulated in 94.8 s wall (3.32 M cycles/s); recovery 195786552 cycles = 7.831 s simulated in 58.4 s wall (3.35 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+  unit: PASS (0 failures)
+  surfimg: build/fw/HELLO.BIN: Hello 1.0.0 build b4717a6a, load 0x80000000, entry 0x80000000, payload 4268 bytes, mem_size 21728, payload CRC 0x82bd7c0b
+  fuzz: seed 1, 300 runs, 6 mutations at most each; outcomes: OK=233 MBR=3 PART_RANGE=3 BPB=9 FAT_CHAIN=1 NOT_FOUND=8 IMG_MAGIC=2 IMG_HCRC=5 IMG_CRC=36
+  fuzz: PASS (every run ended with a result)
+  fuzz: seed 2, 300 runs, 6 mutations at most each; outcomes: OK=235 MBR=2 PART_RANGE=2 BPB=7 FAT_CHAIN=1 NOT_FOUND=7 NOT_DIR=1 IMG_HCRC=6 IMG_CRC=39
+  fuzz: PASS (every run ended with a result)
+  fuzz: seed 3, 300 runs, 6 mutations at most each; outcomes: OK=245 MBR=1 NO_FAT32_PART=1 PART_RANGE=2 BPB=3 FAT_CHAIN=2 FAT_CYCLE=1 NOT_FOUND=9 IMG_HCRC=5 IMG_CRC=31
+  fuzz: PASS (every run ended with a result)
+  fuzz: seed 4, 300 runs, 6 mutations at most each; outcomes: OK=234 MBR=1 PART_RANGE=2 BPB=7 FAT_CHAIN=1 DIR=1 NOT_FOUND=9 IMG_VERSION=1 IMG_HCRC=5 IMG_CRC=39
+  fuzz: PASS (every run ended with a result)
+  fuzz: seed 5, 300 runs, 6 mutations at most each; outcomes: OK=234 MBR=2 PART_RANGE=1 BPB=9 FAT_CHAIN=2 DIR=1 NOT_FOUND=5 IMG_HCRC=3 IMG_SIZE=1 IMG_CRC=42
+  fuzz: PASS (every run ended with a result)
+  run_tests: 137 of 137 scenarios passed, fuzzing passed in 6 s
+  run_emu: 29 of 29 emulator scenarios passed in 3 s
+  run_tests: 17 scenarios need sdcard_sim's own fault options and were not run: acmd41_never_ready card_removed_while_loading cmd8_bad_echo dead_card empty_socket_without_card_detect every_read_bad_crc miso_stuck_low mmc_card no_3v3 ok_acmd41_slow ok_card_busy_from_before_a_reset ok_card_too_slow_for_fast_clock ok_no_cmd59 ok_read_timeout_retried ok_slow_card_timing ok_socket_without_card_detect reads_never_send_data
+  run_tests: 120 of 120 scenarios passed through the io track SD card model in 4 s
+  clockplan: sys_clk and pix_clk settings legal for -1 and -1LI; generated files current
+  digilent: 3 files in git match SHA256SUMS; manuals: 0 of 9 present and matching
+  digilent: not fetched (boards/arty_a7/digilent/fetch.sh fetch): manuals/Arty_A7_RM_Web.pdf manuals/arty-a7-reference-manual.html manuals/arty_a7_sch.pdf manuals/Pmod_MircoSD_RM_Web.pdf manuals/pmodmicrosd_sch.pdf manuals/pmodvga_rm.pdf manuals/pmodvga_sch.pdf manuals/pmodps2_rm.pdf manuals/pmodps2_sch.pdf
+  check-wiring: arty_a7_baseline: 28 port bits on 28 pins (arty_a7_clocks.xdc, arty_a7_base_pins.xdc, arty_a7_base_timing.xdc, arty_a7_config.xdc)
+  check-wiring: surfcpu_arty_a7_top: 53 port bits on 53 pins (arty_a7_clocks.xdc, arty_a7_base_pins.xdc, arty_a7_pmod_pins.xdc, arty_a7_base_timing.xdc, arty_a7_pmod_timing.xdc, arty_a7_config.xdc)
+  check-wiring: every port has one pin, matching docs/WIRING.md and both master XDC files;
+  check-wiring: every port has a timing constraint; the CDC and clock constraints name real cells
+  cdc_xdc_test: PASS
+  test_tools: 101 passed, 0 failed
+  check-board: PASS
+  synth-cpu: surfcpu_core (Yosys synth_xilinx -family xc7, estimate): 3094 LUTs logic + 92 LUTs as distributed RAM, 937 FFs, 151 CARRY4, 646 MUXF7 + 278 MUXF8, 4 DSP48E1, 0 BRAM36
+  synth-cpu-gate: netlist with RESET_PC 0x80000000 (Yosys synth_xilinx -family xc7, estimate): 3125 LUTs logic + 92 LUTs as distributed RAM, 937 FFs, 151 CARRY4, 662 MUXF7 + 268 MUXF8, 4 DSP48E1, 0 BRAM36
+  gate_mutant: as expected, the mutant netlist (first DSP48E1 with PREG = 1) fails the multiply test (seed 1: tb_core_icarus: FAIL (test 11) after 228 cycles): the gate-level check is sensitive to the DSP mapping
+  synth-ddr: surf_ddr_bridge synthesizes (yosys synth_xilinx, no vendor primitives in the RTL)
+  make_prj: ip/mig/*/mig_ddr3.prj up to date; MIG native UI 28-bit app_addr, 128-bit data, ui_clk 81.25 MHz match surf_ddr_bridge
+  check-mig: Digilent's files match ip/mig/digilent/SOURCE.txt
+  check-mig: wiring example clean (Verilator -Wall, Icarus)
+  vivado_dryrun: PASS (mig_ddr3.tcl for both boards and its refusals; surf_ddr_bridge.xdc: 7 crossings, 11 cell patterns, all real registers)
+  prove-ddr: PASS (mailbox and bridge proved without a depth bound, covers reached)
+  check-ddr: PASS
+  test-flow-sim: flow_demo RTL PASS (seeds 1 7 123 at 10 clocks per bit; seed 5 at 868)
+  test-flow-sim: flow_features_core RTL PASS (3 lines, 64 KiB ROM, 25 and 25.17 MHz)
+  test-flow-tools: PASS
+  test-flow: PASS
+  build-rom: surfboot.elf text 39760 data 0 bss 7600: ROM 39760 of 65536 bytes (60.7%)
+  build-rom: bramdiag.elf ROM 27936 of 65536 bytes (42.6%)
+  test_arty: 177 of 177 checks passed, 4 tests x 3 seeds (1 7 123)
+  test_sd_iomodel: 101 of 101 checks passed (SdCardModel, seeds 1 7 123)
+  isacheck: build/riscv32/qemu_virt-O0/surfos.elf: 60968 instructions, 50 distinct mnemonics, all rv32im_zicsr_zifencei (+ mret, wfi)
+  surfimg: build/riscv32/qemu_virt-O0/SURFOS.BIN: SurfOS 1.0.0 build b4717a6a, load 0x80000000, entry 0x80000000, payload 411056 bytes, mem_size 1193040, payload CRC 0xd3e2f43b
+  synth-soc: 0 warnings besides block-RAM port resizing (see build/soc/syn/soc.log)
+  synth-soc: 12 logic modules synthesize and 3 memories infer (Yosys, check -assert)
+  synth-soc: surfcpu_soc with synth_xilinx (black boxes: none):
+  test-soc-gate: PASS (the synthesized memories and SoC behave as the RTL)
+  check: all automated SurfCPU checks passed
+
+The soc targets in full (build commands left out):
+    [seed 1] tb_intc: PASS (3194 transfers, 860 error responses checked, 1580 back-to-back)
+    [seed 7] tb_intc: PASS (3205 transfers, 860 error responses checked, 1567 back-to-back)
+    [seed 123] tb_intc: PASS (3179 transfers, 856 error responses checked, 1676 back-to-back)
+    [seed 1] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+    [seed 7] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+    [seed 123] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+    [seed 1] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+    [seed 7] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+    [seed 123] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+    [seed 1] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 15 hi/lo/hi retries, 21033 MTIP cycle checks, 2035 transfers, 621 error responses checked)
+    [seed 7] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 21 hi/lo/hi retries, 21027 MTIP cycle checks, 2047 transfers, 621 error responses checked)
+    [seed 123] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 14 hi/lo/hi retries, 20655 MTIP cycle checks, 2033 transfers, 621 error responses checked)
+    [seed 1] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 12 hi/lo/hi retries, 28091 MTIP cycle checks, 2029 transfers, 621 error responses checked)
+    [seed 7] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 13 hi/lo/hi retries, 28087 MTIP cycle checks, 2031 transfers, 621 error responses checked)
+    [seed 123] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 17 hi/lo/hi retries, 27562 MTIP cycle checks, 2039 transfers, 621 error responses checked)
+    [seed 1] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13167 transfers, 427 error responses checked)
+    [seed 7] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13055 transfers, 423 error responses checked)
+    [seed 123] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13407 transfers, 421 error responses checked)
+    [seed 1] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 908..1002 cycles = 9080..10020 us, 12 presses, 649 transfers, 421 error responses checked)
+    [seed 7] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 904..1000 cycles = 9040..10000 us, 12 presses, 647 transfers, 419 error responses checked)
+    [seed 123] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 904..1000 cycles = 9040..10000 us, 12 presses, 645 transfers, 417 error responses checked)
+    [seed 1] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+    [seed 7] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1654+3104 back-to-back)
+    [seed 123] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1788+3051 back-to-back)
+    [seed 1] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10652 answered by targets, 14280 errors expected and seen, 556 DDR errors before calibration; DDR 590 fetches + 759 data; 5753+6717 back-to-back)
+    [seed 7] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10712 answered by targets, 14220 errors expected and seen, 550 DDR errors before calibration; DDR 611 fetches + 680 data; 5691+6634 back-to-back)
+    [seed 123] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10559 answered by targets, 14373 errors expected and seen, 569 DDR errors before calibration; DDR 598 fetches + 738 data; 5830+6813 back-to-back)
+    [seed 1] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8246 answered by targets, 13054 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4850+5749 back-to-back)
+    [seed 7] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8391 answered by targets, 12909 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4781+5704 back-to-back)
+    [seed 123] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8292 answered by targets, 13008 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4934+5821 back-to-back)
+    [seed 1] tb_gpio: PASS (SYS_HZ 25000000, debounced changes after 228030..249992 cycles = 9121..9999 us, 1 presses, 583 transfers, 421 error responses checked)
+    [seed 1] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+    [seed 1] tb_mem: PASS (ROM empty: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+  test-soc-units: PASS (seeds 1 7 123)
+    [tb_soc_soc_regions seed 1] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3114 cycles)
+    [tb_soc_soc_regions seed 7] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3130 cycles)
+    [tb_soc_soc_regions seed 123] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3124 cycles)
+    [tb_soc_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+    [tb_soc_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+    [tb_soc_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+    [tb_soc_soc_random seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+    [tb_soc_soc_random seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38074 cycles)
+    [tb_soc_soc_random seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 37957 cycles)
+    [tb_soc_soc_periph seed 1] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+    [tb_soc_soc_periph seed 7] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250355 cycles)
+    [tb_soc_soc_periph seed 123] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250367 cycles)
+    [tb_soc_random_b2b seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32350 cycles)
+    [tb_soc_random_b2b seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32114 cycles)
+    [tb_soc_random_b2b seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32246 cycles)
+    [tb_soc_noddr_soc_regions seed 1] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 144 cycles)
+    [tb_soc_noddr_soc_regions seed 7] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 128 cycles)
+    [tb_soc_noddr_soc_regions seed 123] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 125 cycles)
+    [tb_soc_noddr_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+    [tb_soc_noddr_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+    [tb_soc_noddr_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+    [tb_soc_noddr_soc_random seed 1] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 9986 cycles)
+    [tb_soc_noddr_soc_random seed 7] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 9894 cycles)
+    [tb_soc_noddr_soc_random seed 123] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 10131 cycles)
+    [tb_soc_noddr_soc_periph seed 1] SCRIPT PASS (329 data + 0 fetch transfers, 81 + 1 operations, 250029 cycles)
+    [tb_soc_noddr_soc_periph seed 7] SCRIPT PASS (330 data + 0 fetch transfers, 81 + 1 operations, 250025 cycles)
+    [tb_soc_noddr_soc_periph seed 123] SCRIPT PASS (330 data + 0 fetch transfers, 81 + 1 operations, 250030 cycles)
+    [tb_soc_negative] the three wrong expectations were reported
+  test-soc-system: PASS (seeds 1 7 123; core: scripted stand-in; io:  rtl/peripherals/surf_spi.v  rtl/peripherals/surf_ps2.v  rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v)
+  test_models: PASS (seed 1: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  test_models: PASS (seed 7: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  test_models: PASS (seed 123: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+    [surfsim_soc_regions seed 1] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3123 cycles)
+    [surfsim_soc_regions seed 7] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3138 cycles)
+    [surfsim_soc_regions seed 123] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3107 cycles)
+    [surfsim_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+    [surfsim_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+    [surfsim_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+    [surfsim_soc_random seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 37829 cycles)
+    [surfsim_soc_random seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+    [surfsim_soc_random seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38277 cycles)
+    [surfsim_soc_periph seed 1] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+    [surfsim_soc_periph seed 7] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250349 cycles)
+    [surfsim_soc_periph seed 123] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250362 cycles)
+    [surfsim_random_b2b seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32239 cycles)
+    [surfsim_random_b2b seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32124 cycles)
+    [surfsim_random_b2b seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32491 cycles)
+    [surfsim_uart] the SoC said HI and echoed the model's bytes: surfsim: output matched after 28045 cycles (0.001 s simulated) in 0.0 s wall (2.20 M cycles/s); UART 5 bytes in, 11 out, 0 framing errors; DDR calibrated, 0 reads 0 writes 0 fetches 0 errors; exit 0
+    [surfsim exit codes] failing script 1, unmet --expect 2
+    [build/sim/surfsim] surfsim: card absent: 0 blocks read, 0 written, 0 protocol violations; keyboard: 0 frames sent, 0 host bytes, 0 violations; VGA: off
+  surfsim: max-cycles reached after 20000 cycles (0.001 s simulated) in 0.0 s wall (1.59 M cycles/s); UART 0 bytes in, 0 out, 0 framing errors; DDR calibrated, 0 reads 0 writes 0 fetches 0 errors; exit 0
+  test-soc-surfsim: PASS (seeds 1 7 123)
+    [verilator] tb_intc: PASS (3969 transfers, 790 error responses checked, 2427 back-to-back)
+    [verilator] tb_sysinfo: PASS (DDR=1, 1257 transfers, 742 error responses checked)
+    [verilator] tb_sysinfo: PASS (DDR=0, 1257 transfers, 742 error responses checked)
+    [verilator] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 17 hi/lo/hi retries, 21748 MTIP cycle checks, 2039 transfers, 621 error responses checked)
+    [verilator] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 16 hi/lo/hi retries, 29054 MTIP cycle checks, 2037 transfers, 621 error responses checked)
+    [verilator] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 21443 transfers, 391 error responses checked)
+    [verilator] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 903..994 cycles = 9030..9940 us, 12 presses, 613 transfers, 385 error responses checked)
+    [verilator] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 2078+2666 back-to-back)
+    [verilator] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 11521 answered by targets, 13411 errors expected and seen, 583 DDR errors before calibration; DDR 580 fetches + 1056 data; 7085+8180 back-to-back)
+    [verilator] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8934 answered by targets, 12366 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 5988+7026 back-to-back)
+  test-soc-verilator: PASS (10 unit testbenches under Verilator --timing, seed 1)
+    [bramdiag] BRAMDIAG: PASS (569 checks), after 66470235 cycles
+    [surfboot] SurfBoot 1.0.0 (build b4717a6a), the SurfCPU boot ROM
+  ; the monitor answered help
+  test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)
+  ok   cards: mkcard.py makes them (standard directories, /BOOT/CMDLINE.TXT, HELLO.TXT and DATA.BIN in /USERS/DOCUMENTS; SURFOS.BIN, or a damaged SURFOS.BIN and BACKUP.BIN)
+  ok   boot: every expected line in order (output matched after 314275871 cycles (12.571 s simulated) in 94.8 s wall (3.32 M cycles/s); UART 152 bytes in, 5365 out, 0 framing errors; DDR calibrated, 3608212 reads 2480405 writes 24351741 fetches 0 errors; exit 0)
+  ok   boot: SurfBoot from the boot ROM: the DDR model calibrated and the quick test passed, the card initialized through surf_spi, its FAT32 partition found
+  ok   boot: SurfBoot loads /BOOT/SURFOS.BIN over surf_spi and checks it: payload CRC 0x59afede3 (as zlib computes it here), as read from the card and from DDR
+  ok   boot: SurfBoot hands over: entry 0x80000000, a0 = 0, a1 = 0x0001f000 (boot information), a2 = the magic
+  ok   boot: the kernel boots to the shell, its console on surf_uart (ascii, from /BOOT/CMDLINE.TXT)
+  ok   boot: the kernel's SD driver on surf_spi and the card model: sd0, its FAT32 partition on /sd0p1
+  ok   bootinfo: SurfBoot's block taken (its CRC checked), the handoff registers, the command line
+  ok   ls and cat: /sd0p1/USERS/DOCUMENTS holds DATA.BIN and HELLO.TXT (8213 bytes), HELLO.TXT read
+  ok   ps: 7 kernel tasks (Kernel Idle Task, init, heartbeat, Shell 0, Shell 1, Shell 2, Shell 3)
+  ok   tasks: two more kernel tasks count, sleep and wake on the machine timer, then end
+  ok   crc32: both files read back through the kernel's SD driver have their CRCs (3436d7c7, 9c9bbf10)
+  ok   drivers, typed on the PS/2 keyboard model (open-drain lines): serial, gpio, ps2kbd and sdcard ok; the keyboard answered the kernel and its keys were counted
+  ok   boot: no panic, no killed task, no boot problem
+  ok   VGA: 800x525 timing, negative syncs, about 59.9 Hz; every cell matches a glyph of the font ROM
+  ok   VGA: the screen shows the console: the command typed on the keyboard and its output
+  ok   VGA: the cursor is on the new prompt
+  ok   recovery: every expected line in order (output matched after 195786552 cycles (7.831 s simulated) in 58.4 s wall (3.35 M cycles/s); UART 9 bytes in, 3160 out, 0 framing errors; DDR calibrated, 1532390 reads 1655241 writes 10886950 fetches 0 errors; exit 0)
+  ok   recovery: SurfBoot refuses the damaged SURFOS.BIN (payload CRC), loads /BOOT/BACKUP.BIN and starts it
+  ok   recovery: the kernel boots to the shell and bootinfo reports the backup
+  ok   recovery: no panic, no boot problem
+  test-soc-system-boot: 21 of 21 checks passed in 95 s (boot 314275871 cycles = 12.571 s simulated in 94.8 s wall (3.32 M cycles/s); recovery 195786552 cycles = 7.831 s simulated in 58.4 s wall (3.35 M cycles/s); the RTL of surfcpu_soc with the C++ models, not the board)
+  synth-soc: 0 warnings besides block-RAM port resizing (see build/soc/syn/soc.log)
+  synth-soc: 12 logic modules synthesize and 3 memories infer (Yosys, check -assert)
+  synth-soc: surfcpu_soc with synth_xilinx (black boxes: none):
+      CARRY4                        306
+      DSP48E1                         4
+      FDRE                         2276
+      FDSE                          397
+      LUT1                          251
+      LUT2                         1066
+      LUT3                          743
+      LUT4                          584
+      LUT5                          792
+      LUT6                         1976
+      MUXF7                         690
+      MUXF8                         279
+      RAM32M                         27
+      RAM64M                          3
+      RAMB36E1                       36
+    [netlist] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+    [netlist soc_regions] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3114 cycles)
+    [netlist soc_errors] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+    [netlist soc_random] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+    [netlist soc_periph] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+  test-soc-gate: PASS (the synthesized memories and SoC behave as the RTL)

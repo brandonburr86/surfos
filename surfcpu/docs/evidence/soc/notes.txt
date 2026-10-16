@@ -16,3 +16,24 @@ soc track: issues found by the tests and fixed (2026-10-15)
   other's arguments (the task body runs as a scheduled child thread). Hit in the RAMB36E1
   simulation model, whose task is now automatic; the RTL has no tasks and every testbench task
   has a single caller.
+
+soc round 2: the whole system in surfsim (2026-10-16)
+
+* Nothing in the RTL had to change: SurfBoot and the Arty kernel ran on the first try with the
+  io models wired in (test-soc-system-boot.txt). No SD, PS/2 or SurfBus protocol violation was
+  seen by the models in any run.
+* The kernel runs from DDR, fetched one word at a time (the core keeps one fetch outstanding and
+  has no cache; the DDR model answers in 2 to 12 cycles, ready 70 %): 24.3 million DDR fetches in
+  the 260 million cycles after the handoff, idle time included. Simulated times are therefore
+  long, as in the fw track's emulator: the boot to the prompt is 5.1 s,
+  crc32 of the 353 KiB package 23 s (584 million cycles, measured on the first run of the test,
+  before it was replaced by an 8 KiB file), the self test 64 s (it passes on the RTL:
+  test-soc-system-selftest.txt).
+* The screen during `tasks` shows blank and partly written rows where the UART has whole lines
+  (two kernel tasks printing at once); the fw emulator's text screen shows the same kind of
+  damage at that point, so it is the kernel's console and not the RTL: kputch() sends each
+  character to the serial mirror first and then updates the grid without excluding other tasks,
+  and sscroll() copies the 4,800-byte grid byte by byte (about 10 ms here by estimate, a timer
+  tick), so a task preempted inside a scroll lets the other task's line land in rows the resumed
+  scroll then moves or clears. Reported for the os track.
+* pix_clk and the VGA capture cost about 1 % of the run time, so the pixel domain always runs.

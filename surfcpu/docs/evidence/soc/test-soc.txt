@@ -1,4 +1,4 @@
-soc track evidence: make check and make test-soc-mutants, 2026-10-15 22:49-22:55 CDT
+soc track evidence (round 1, superseded by check-2026-10-16.txt): make check and make test-soc-mutants, 2026-10-15 22:49-22:55 CDT
 Branch sc/soc at b23fead plus the move of test_models.cpp under sim/soc/ (rerun: PASS);
 container surfcpu-toolchain:2026-10-15 (Verilator 5.032, Icarus 12.0, Yosys 0.52, g++ 14.2).
 Configuration: the core and the io blocks are the stand-ins (their real files are not on this
