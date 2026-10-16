@@ -6,13 +6,13 @@ physical results are separate columns, so nothing claims more than happened.
 | Milestone | Simulation / host tests | Synthesis / bitstream | On the board | State |
 |---|---|---|---|---|
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
-| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | Yosys estimate only; no bitstream: no build host (G2) | pending: board not connected (G1, G3) | design ready; bitstream blocked |
+| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
 | 2 CPU correctness in simulation | 308 directed runs, 63 riscv-tests, Icarus, 200 random programs against Spike, the synthesized netlist at gate level ([evidence](evidence/cpu/)) | Yosys estimate (3,094 LUTs, 4 DSP48E1) | | core done in simulation; independent review and the verif track pending |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS (569 checks) and starts SurfBoot ([evidence](evidence/soc/)) | | pending | simulation done; bitstream and board pending |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs ([evidence](evidence/ddr/)) | MIG recipe pending a Vivado host; LiteDRAM generated | pending | bridge done; board top wiring pending |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | Yosys estimates | pending | RTL in simulation; review fixes in progress |
-| 7 SurfOS kernel port | host tests, QEMU `virt`, and `SURFOS.BIN` booted by SurfBoot in the fw emulator to the shell ([evidence](evidence/os/)) | | pending | kernel done in emulation; RTL SoC boot pending |
+| 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation; console scroll race being fixed |
 | 8 Persistent files | | | | later |
 | 9 Reproducible standalone release | | | | later |
 
@@ -70,3 +70,20 @@ physical results are separate columns, so nothing claims more than happened.
   passes 569 checks and SurfBoot starts and answers its monitor.
 * Reviews: io (one PS/2 defect, fixed), board (wrapper defects and one unsafe wiring note, being
   fixed), fw (deploy-sd symlink and verification defects, being fixed), cpu (running).
+
+### 2026-10-16: review rounds, open-flow bitstreams, the whole system in simulation
+
+* fw-2 (c198306): deploy-sd stays on the card (no symlinks followed, bound to the device node)
+  and verifies after a remount; isa-audit sees words hidden in code; check 2 requires I.
+* cpu-2 (fbb250e): an interrupt enabled just before a WFI is taken before it; a bounded formal
+  check of the core's RVFI on `make check`; no interrupt input depends combinationally on a bus
+  request (Yosys cone check on the full SoC).
+* board-2 (1acdc69): `program.sh` reads openFPGALoader's real output and checks the full part,
+  the manifest and the cable; WIRING.md's orientation notes corrected (an upside-down Pmod VGA
+  shorts FPGA outputs); `make build-fpga FLOW=openxc7 DESIGN=arty_a7_baseline` builds both boards'
+  bitstreams on the Mac; the pixel clock is 25,173,611 Hz.
+* soc-2 (5c11ea4): `surfsim` has the SD, PS/2 and VGA models; `test-soc-system-boot` boots SurfOS
+  from a card image on the RTL SoC with the real core (about 95 s of wall time, 314 M cycles).
+* Found: the kernel console's scroll is not protected against preemption, so concurrent
+  printing can leave partial rows on the screen (UART is unaffected); and code fetched from DDR
+  one word at a time is slow (no instruction cache yet).

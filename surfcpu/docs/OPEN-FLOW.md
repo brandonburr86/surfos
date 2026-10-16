@@ -85,7 +85,8 @@ every step and every check passed.
                --manifest-include <ROM/kernel manifest> <the SoC's sources> ;;
   ```
 
-  That wiring is the integrator's (the script is not in this track's paths).
+  `tools/fpga-build.sh` now does this translation (board-2 round, 2026-10-16): `make build-fpga
+  FLOW=openxc7 DESIGN=...` builds a design from its `boards/arty_a7/designs/*.files` list.
 * The XDC reader takes `set_property` (with `-dict`) on `[get_ports {name}]` or `[get_cells]`,
   `create_clock -period` (it warns about and ignores `-add`, `-name`, `-waveform`), and
   setup `set_multicycle_path`. It ignores `set_false_path`, `set_max_delay`, `set_clock_groups`
@@ -180,7 +181,8 @@ the probe built with the planned setting (`-D FLOW_PIX_PLANNED`), the bitstream,
 LVS checks all pass and only this check catches it. **For the open flow, use 100 MHz × 18.125 /
 2 / 36 = 25.17361 MHz** (VCO 906.25 MHz, PFD 50 MHz). It is 0.0055 % from VGA's 25.175 MHz (the
 planned setting is 0.009 % off) and both of its dividers encode correctly. Alternatively keep
-the planned setting under Vivado. The clocking is the board track's: this is a proposal.
+the planned setting under Vivado. Adopted for both flows on 2026-10-16: `clocks.pix_hz` is now
+25,173,611 Hz (BOARD.md has the note).
 Evidence: [evidence/flow/mmcm.txt](evidence/flow/mmcm.txt).
 
 ### 6.3 The xc7a35t is placed on the whole xc7a50t die

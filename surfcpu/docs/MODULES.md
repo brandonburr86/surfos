@@ -160,12 +160,17 @@ line (the riscv-arch-test format).
 | `sim/models/ps2_keyboard_model.h` | io | `Ps2KeyboardModel(sys_hz, ps2_hz)`; `type_text(std::string)` (scan code set 2 make/break), `queue_bytes(...)`, error injection; `void tick(bool clk_oe, bool data_oe, bool &clk_line, bool &data_line)` every `clk` (open-drain lines, so host and device both pull low); answers host commands with `0xFA` |
 | `sim/models/vga_capture.h` | io | `void tick(r4, g4, b4, hs, vs)` every `pix_clk`; measured timing (totals, sync widths, polarity); `write_ppm(path)` of the last whole frame; `decode_text(font)` returns the 80x30 characters by matching glyph bitmaps |
 
-`build/sim/surfsim` (soc track, completed at integration) is the whole SoC with these models:
-`--rom FILE --sd IMAGE --uart-in FILE --ps2-keys TEXT --vga-dir DIR --trace FILE
---max-cycles N --expect REGEX` (exit 0 when the UART output matches REGEX).
+`build/sim/surfsim` (soc track) is the whole SoC with these models, its clocks at `SURF_SYS_HZ`
+and `SURF_PIX_HZ`: `--rom FILE --sd IMAGE --uart-in FILE --ps2-keys TEXT --vga-dir DIR --trace
+FILE --max-cycles N --expect REGEX` (repeatable: all must match the UART output in order; exit
+0), `--send REGEX=TEXT` / `--ps2-send REGEX=TEXT` (type on the UART or the keyboard once REGEX
+has matched, each list in order), `--fail-on REGEX` (exit 1), `--settle N`, `--transcript
+FILE`, `--sd-flush`; exit 2 when `--max-cycles` runs out first. `--vga-dir` writes `screen.ppm`
+and `screen.txt` (timing, the decoded 80x30 text, the cursor). docs/SOC.md section 9 has the
+details.
 
 ## 8. Clarifications (version 1 unchanged)
 
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
   interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6); `surf_ddr_bridge`'s parameters
-  (section 3).
+  (section 3); the surfsim command line as built (section 7).
