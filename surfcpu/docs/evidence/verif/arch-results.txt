@@ -1,12 +1,22 @@
-# riscv-arch-test 4.1.0 on the reference (Spike, contract patch), 2026-10-15
-# python3 tools/rvarch.py build --jobs 4; python3 tools/rvarch.py check;
-# python3 tools/rvrun.py --dut "python3 tools/rvspike_tb.py" --suites arch
+# riscv-arch-test 4.1.0 on the reference (Spike, contract patch) and on the real core, 2026-10-15
+# python3 tools/rvarch.py build --jobs 3; python3 tools/rvarch.py check;
+# python3 tools/rvrun.py --dut "python3 tools/rvspike_tb.py" --suites arch          (make test-ref)
+# python3 tools/rvrun.py --dut build/verif/core-snapshot/surfcpu/build/cpu/surfcpu_tb --suites arch ...
 # reference: contract Spike, --isa=rv32im_zicsr_zifencei_zicntr_zihpm --priv=m --pmpregions=0 --triggers=0 -m0x80000000:0x400000
 
 177 tests built; each passes its self-check on Spike; 167 also compared by trace.
 retirements on Spike: total 2451871, longest Sm_csr_ro-00 and Sm_csr_ro-01 (83362 each), shortest ExceptionsSm_medeleg_m-00 (418)
 reference signatures: 177/177 as recorded in sim/ref/arch/reference.sha256
-runner against the Spike stand-in: arch 177 passed 0 failed; 2451871 retirements compared in 32.9 s (4 jobs)
+runner against the Spike stand-in: arch 177 passed 0 failed; 2451871 retirements compared (make test-ref)
+
+on the real core (the cpu track's surfcpu_core, build and provenance in core-results.txt):
+  DUT seeds 1, 2, 3 with --ilat 1:4 --dlat 1:6     arch 531 passed 0 failed
+  DUT seed 1, the testbench's default 1:1          arch 177 passed 0 failed
+  DUT seed 7 with --ilat 6:30 --dlat 6:30          arch 177 passed 0 failed
+  each: exit status 0 (the self-check found every result equal to Spike's signature) and, for the
+  167 trace-compared tests, every retirement equal to Spike's; Sm_mcsr_cntr-00 runs at 1:1 in all
+  three (its self-check needs mcycle < 1000 after a 300-instruction loop; the core needs about 1200
+  cycles at 1:4/1:6).
 
 judged by self-check only (they read a timing CSR):
   Sm_mcsr_access-00      reads mip: judged by its self-check, not the trace

@@ -79,9 +79,10 @@ PARAMS = {"MXLEN": 32, "MISALIGNED_LDST": False, "NUM_PMP_ENTRIES": 0}
 PRIV_SUITES = ("ExceptionsSm", "Sm", "SsstrictSm", "InterruptsSm")
 # Tests in scope by their requirements but left out, with the reason.
 EXCLUDED = {
-    "InterruptsSm": "raises machine external interrupts through RVMODEL_SET_MEXT_INT, the "
-                    "CPU testbench's interrupt register (docs/CPU.md, cpu track), not known "
-                    "yet; its timer interrupts also depend on mtime's rate",
+    "InterruptsSm": "raises machine external interrupts through RVMODEL_SET_MEXT_INT: the "
+                    "CPU testbench has a register for that (IRQ_EXT, docs/CPU.md section 9) "
+                    "but Spike does not, so Spike cannot make its reference signature; its "
+                    "timer interrupts also depend on mtime's rate",
     "SsstrictSm_CompressedInstr": "the suite's fast illegal-instruction handler resumes a "
                     "16-bit encoding at mepc + 2, but with IALIGN = 32 mepc[1] is always 0 "
                     "(ISA.md section 2, as on Spike), so the test traps on the same word "

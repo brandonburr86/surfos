@@ -18,7 +18,7 @@ against Spike's. Suites:
     python3 tools/rvrun.py [--dut CMD] [--suites directed,random,arch,csrmap]
         [--seeds N | --seed-list 1,5,9] [--length L] [--dut-seeds 1,2,3]
         [--ilat MIN:MAX] [--dlat MIN:MAX] [--max-cycles N] [--jobs J] [--keep-programs]
-        [--elf FILE ...] [--out DIR] [--json FILE] [--show N] [-v]
+        [--elf FILE ...] [--out DIR] [--json FILE] [--show N] [-v] [--coverage]
     python3 tools/rvrun.py selftest [--jobs J]
         the runner against tools/rvspike_tb.py injecting each kind of fault: every one
         must be caught, and the allowed variations (riscv-formal's default memory layout
@@ -39,8 +39,10 @@ Only the Python standard library is used.
 from __future__ import annotations
 
 import argparse
+import collections
 import concurrent.futures
 import dataclasses
+import functools
 import itertools
 import json
 import os
@@ -56,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rvcsrmap        # noqa: E402
 import rvelf           # noqa: E402
 import rvgen           # noqa: E402
+import rvisa           # noqa: E402
 import trace_compare   # noqa: E402
 import trace_inject    # noqa: E402
 import trace_spike     # noqa: E402
@@ -213,7 +216,7 @@ def _lat_max(spec: str | None) -> int:
 
 def cycle_limit(prog: Program, args, records: int) -> int:
     """The DUT's --max-cycles unless one is given. Measured on the core (surfcpu@e792960):
-    at most 5.4 cycles per retirement with the default 1:1 latencies, 6.7 at 1:4 and 22.6 at
+    at most 5.4 cycles per retirement with the default 1:1 latencies, 6.7 at 1:4 and 22.7 at
     --ilat/--dlat 6:30. This allows 64 plus twice the two maximum latencies per reference
     retirement (68 at 1:1, 184 at 6:30), plus 200000 for short programs."""
     if args.max_cycles:
@@ -436,20 +439,61 @@ def _keep_failure(prog: Program, trace: Path, ref: list[tracefmt.Rec], dut_recs,
     tracefmt.save_trace(ref[lo:hi], ref_path, [f"Spike's trace: {what}", *info["comments"]])
 
 
+@functools.lru_cache(maxsize=65536)
+def _decoded(word: int) -> tuple[str, str]:
+    d = rvisa.decode(word)
+    return d.mnemonic, d.kind
+
+
+def coverage(ref: list[tracefmt.Rec]) -> collections.Counter:
+    """What Spike's trace of a program exercised: retirements, traps by mcause, mnemonics,
+    branches (and how many were taken), loads into x0."""
+    c: collections.Counter = collections.Counter()
+    c["retirements"] = len(ref)
+    for r in ref:
+        if r.trap:
+            c["trap " + (r.note("trap", "cause") or "?")] += 1
+            continue
+        m, kind = _decoded(r.insn)
+        c["insn " + m] += 1
+        if kind == "branch":
+            c["branches"] += 1
+            c["branches taken"] += r.pc_next != r.pc + 4
+        elif kind == "load" and r.rd == 0:
+            c["loads into x0"] += 1
+    return c
+
+
 def run_program(prog: Program, seeds: list[int], dut: list[str], args,
-                workdir: Path) -> list[Outcome]:
-    """Every DUT seed of one program against one Spike run, which is kept in memory."""
+                workdir: Path) -> tuple[list[Outcome], collections.Counter | None]:
+    """Every DUT seed of one program against one Spike run, which is kept in memory; with
+    --coverage also what that run exercised."""
     try:
         refinfo = reference(prog)
     except (RuntimeError, trace_spike.ConvertError, OSError) as e:
-        return [Outcome(prog.suite, prog.name, s, "ERROR", str(e), "reference") for s in seeds]
+        return [Outcome(prog.suite, prog.name, s, "ERROR", str(e), "reference")
+                for s in seeds], None
+    cov = coverage(refinfo[0]) if getattr(args, "coverage", False) else None
     outs = [judge(prog, s, dut, args, workdir, refinfo) for s in seeds]
     if (prog.suite == "random" and not args.keep_programs
             and all(o.verdict == "PASS" for o in outs)):
         for f in (prog.elf, prog.elf.with_suffix(".S")):
             if f.exists():
                 f.unlink()
-    return outs
+    return outs, cov
+
+
+def coverage_lines(suite: str, nprogs: int, c: collections.Counter) -> list[str]:
+    traps = {k[5:]: v for k, v in c.items() if k.startswith("trap ")}
+    insns = {k[5:]: v for k, v in c.items() if k.startswith("insn ")}
+    order = sorted(traps, key=lambda k: int(k, 16) if k != "?" else 99)
+    return [f"coverage of {suite} (Spike's traces of its {nprogs} programs): "
+            f"{c['retirements']} retirements; traps by mcause "
+            + " ".join(f"{k}:{traps[k]}" for k in order) + f" (total {sum(traps.values())}); "
+            f"branches {c['branches']}, taken {c['branches taken']}; "
+            f"loads into x0 {c['loads into x0']}",
+            f"  {len(insns)} distinct mnemonics retired: "
+            + " ".join(f"{k}={insns[k]}" for k in sorted(insns))]
 
 
 # --- the run ----------------------------------------------------------------------------
@@ -495,15 +539,19 @@ def run(args) -> int:
     say(f"rvrun: {len(progs)} programs x {len(dut_seeds)} DUT seed(s) on {args.dut} "
         f"(jobs {args.jobs}, results in {out})")
     outcomes: list[Outcome] = []
+    covs: dict[str, collections.Counter] = {}
     t0 = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = []
+        futs = {}
         for p in progs:
             wd = out / p.suite
             wd.mkdir(parents=True, exist_ok=True)
-            futs.append(ex.submit(run_program, p, dut_seeds, dut, args, wd))
+            futs[ex.submit(run_program, p, dut_seeds, dut, args, wd)] = p
         for f in concurrent.futures.as_completed(futs):
-            for o in f.result():
+            outs, cov = f.result()
+            if cov is not None:
+                covs.setdefault(futs[f].suite, collections.Counter()).update(cov)
+            for o in outs:
                 outcomes.append(o)
                 if o.verdict != "PASS" or args.verbose:
                     say(f"{o.verdict:5} {o.suite}/{o.name} seed {o.dut_seed}: {o.reason}")
@@ -520,10 +568,14 @@ def run(args) -> int:
     say("\nrvrun summary: " + ", ".join(f"{s} {c[0]} passed {c[1]} failed"
                                         for s, c in sorted(by_suite.items()))
         + f"; {total_ret} retirements compared in {time.monotonic() - t0:.1f} s")
+    for suite, c in sorted(covs.items()):
+        for line in coverage_lines(suite, sum(1 for p in progs if p.suite == suite), c):
+            say(line)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps({
             "dut": args.dut, "dut_seeds": dut_seeds, "suites": args.suites,
+            "coverage": {s: dict(c) for s, c in covs.items()},
             "outcomes": [dataclasses.asdict(o) for o in outcomes]}, indent=1) + "\n")
     return 1 if failed else 0
 
@@ -609,7 +661,8 @@ def selftest(args) -> int:
     # files, and passing runs keep none.
     wd = out / "seeds"
     _clean(wd)
-    outs = run_program(progs[0], [1, 2, 3], shlex.split(f"{STANDIN} --inject rd_data"), sub, wd)
+    outs, _ = run_program(progs[0], [1, 2, 3], shlex.split(f"{STANDIN} --inject rd_data"), sub,
+                          wd)
     reports = sorted(Path(o.report).name for o in outs if o.report)
     kept = sorted(f.name for f in wd.glob(f"{progs[0].name}.s*.trace"))
     n += 1
@@ -618,7 +671,7 @@ def selftest(args) -> int:
                    f"{[o.kind for o in outs]}")
     wd = out / "seeds-pass"
     _clean(wd)
-    outs = run_program(progs[0], [1, 2, 3], shlex.split(STANDIN), sub, wd)
+    outs, _ = run_program(progs[0], [1, 2, 3], shlex.split(STANDIN), sub, wd)
     left = sorted(f.name for f in wd.iterdir())
     n += 1
     if any(o.verdict != "PASS" for o in outs) or left:
@@ -627,7 +680,7 @@ def selftest(args) -> int:
     rnd = progs[-1]
     for keep in (True, False):
         sub.keep_programs = keep
-        outs = run_program(rnd, [1], shlex.split(STANDIN), sub, out / "random")
+        outs, _ = run_program(rnd, [1], shlex.split(STANDIN), sub, out / "random")
         n += 1
         if outs[0].verdict != "PASS" or rnd.elf.exists() != keep:
             bad.append(f"random program, keep_programs={keep}: {outs[0].verdict}, ELF "
@@ -658,6 +711,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--keep-programs", action="store_true",
                     help="keep generated random programs that passed")
     ap.add_argument("-v", "--verbose", action="store_true", help="print passing runs too")
+    ap.add_argument("--coverage", action="store_true",
+                    help="summarize what Spike's traces exercised, per suite")
     ap.add_argument("--timeout", type=float, default=900.0, help="seconds per DUT run")
     ap.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1))
     ap.add_argument("--elf", action="append", help="also run this ELF (suite 'elf')")

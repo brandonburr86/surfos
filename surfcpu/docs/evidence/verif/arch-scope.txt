@@ -21,7 +21,7 @@ Out of scope (957 tests looked at):
   priv/ExceptionsSvZaamo   3  needs Sv39, which SurfCPU does not implement (docs/ISA.md section 1)
   priv/ExceptionsSvZalrsc   3  needs Sv32, which SurfCPU does not implement (docs/ISA.md section 1)
   priv/ExceptionsSvZalrsc   3  needs Sv39, which SurfCPU does not implement (docs/ISA.md section 1)
-  priv/InterruptsSm        1  raises machine external interrupts through RVMODEL_SET_MEXT_INT, the CPU testbench's interrupt register (docs/CPU.md, cpu track), not known yet; its timer interrupts also depend on mtime's rate
+  priv/InterruptsSm        1  raises machine external interrupts through RVMODEL_SET_MEXT_INT: the CPU testbench has a register for that (IRQ_EXT, docs/CPU.md section 9) but Spike does not, so Spike cannot make its reference signature; its timer interrupts also depend on mtime's rate
   priv/PMPF                1  needs F, which SurfCPU does not implement (docs/ISA.md section 1)
   priv/PMPS               11  needs S, which SurfCPU does not implement (docs/ISA.md section 1)
   priv/PMPSm               5  needs MXLEN=64; SurfCPU has 32

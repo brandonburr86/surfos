@@ -1,0 +1,62 @@
+# The real core against Spike, 2026-10-15 (all inside the toolchain container)
+#
+# DUT: the cpu track's surfcpu_core in its testbench build/cpu/surfcpu_tb, from a read-only copy of
+# branch surfcpu at e792960 (git archive of rtl/, sim/cpu, mk/ into build/verif/core-snapshot; the
+# merge of sc/cpu is 160aa0c). rtl/cpu, rtl/lib, sim/cpu and mk/area-cpu.mk are unchanged from
+# e792960 up to surfcpu c3fb0e0 (git diff --stat e792960 c3fb0e0 on those paths is empty).
+# Built with the cpu track's Verilator rule (mk/area-cpu.mk, CPU_RTL, -DSURFCPU_RVFI, --x-assign
+# unique --x-initial unique, -O3) except --trace (VCD support, which changes no behaviour).
+# Reference: Spike 5a760667 with sim/ref/spike/surfcpu-contract.patch, flags of docs/VERIFICATION.md 3.
+# Runner: tools/rvrun.py at sc/verif (this commit); strict conventions (no --lenient-* option);
+# --max-cycles from cycle_limit(); traces of passing runs deleted, none failed.
+
+TB=build/verif/core-snapshot/surfcpu/build/cpu/surfcpu_tb
+
+== 1. all suites, 50 random seeds, DUT seeds 1,2,3, --ilat 1:4 --dlat 1:6 (what make test-cpu-ref runs)
+$ python3 tools/rvrun.py --dut $TB --jobs 3 --suites directed,random,arch,csrmap --seeds 50 \
+    --dut-seeds 1,2,3 --ilat 1:4 --dlat 1:6 --coverage
+rvrun summary: arch 531 passed 0 failed, csrmap 3 passed 0 failed, directed 21 passed 0 failed,
+  random 150 passed 0 failed; 8196852 retirements compared in 47.1 s
+  (Sm_mcsr_cntr-00 ran at the testbench's default 1:1 latencies: section 7 of VERIFICATION.md)
+
+== 2. all suites, 50 random seeds, DUT seed 1, the testbench's default latencies (1:1)
+$ python3 tools/rvrun.py --dut $TB --jobs 3 --suites directed,random,arch,csrmap --seeds 50 --dut-seeds 1
+rvrun summary: arch 177 passed 0 failed, csrmap 1 passed 0 failed, directed 7 passed 0 failed,
+  random 50 passed 0 failed; 2732284 retirements compared in 26.2 s
+
+== 3. all suites, random seeds 51-150, DUT seed 7, --ilat 6:30 --dlat 6:30
+$ python3 tools/rvrun.py --dut $TB --jobs 3 --suites directed,random,arch,csrmap --seed-list 51,...,150 \
+    --dut-seeds 7 --ilat 6:30 --dlat 6:30
+rvrun summary: arch 177 passed 0 failed, csrmap 1 passed 0 failed, directed 7 passed 0 failed,
+  random 100 passed 0 failed; 2984569 retirements compared in 30.2 s
+
+== 4. random seeds 1001-2000, DUT seed 1, --ilat 1:4 --dlat 1:6
+$ python3 tools/rvrun.py --dut $TB --jobs 3 --suites random --seed-list 1001,...,2000 --dut-seeds 1 \
+    --ilat 1:4 --dlat 1:6 --coverage
+rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 58.0 s
+(coverage of these 1000 programs: docs/evidence/verif/random.txt)
+
+Total: 2,225 runs, 19,034,685 retirements compared, 0 failures; 3 min 52 s for all four (3 jobs).
+Left on disk afterwards: the 7 directed ELFs and the CSR probe (.S, .elf) per run directory and the
+JSON outcome files: build/ref/core 2.5 MB; build/ in all 455 MB (third-party sources 346 MB).
+
+What the CSR probe establishes on the core (csrmap passed in all three runs): all 4096 CSR addresses
+read as ISA.md section 2 says (or trap), every writable CSR keeps exactly its write mask (mcause bits
+31 and 4:0, mtvec MODE fixed 0, mcountinhibit CY and IR, misa and marchid/mimpid read-only), and the
+write rules of the CSR instructions (csrrs/csrrc with x0 or zero immediate do not write).
+
+Cycles per retirement measured with the testbench's own count (no traces written; build/verif/scratch/
+cpi.sh), the basis of the runner's cycle limit:
+  program (retirements) 1:1    1:4     6:30
+  rand-101 (5093)      2.50    4.02    21.05
+  rand-102 (5295)      2.53    4.07    21.25
+  csrmap (34294)       2.16    3.83    22.66
+  directed mem (154)   1.49    2.82    18.15
+  Sm_csr_ro-00 (83362) 1.66    3.16    20.47
+  Sm_mcsr_walk-11 (64178) 1.67 3.17   20.52
+  I-lw-00 (1199)       1.72    3.47    21.33
+  M-div-00 (3618)      5.37    6.69    22.55
+  (the worst of three testbench seeds; 1:1 does not depend on the seed)
+
+Earlier the same runs passed against a read-only snapshot of sc/cpu at 0f222fd (before the merge),
+after the runner's per-seed file names were fixed (two seeds of one program had shared a trace file).

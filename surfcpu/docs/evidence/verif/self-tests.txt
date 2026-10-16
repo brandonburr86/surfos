@@ -1,21 +1,25 @@
 # The checking machinery checked, 2026-10-15 (all inside the toolchain container)
 
 $ python3 -m unittest discover -s sim/ref/tests        (make test-ref-unit)
-Ran 45 tests: OK
-  test_trace_compare (17): every one of the 21 trace mutations of tools/trace_inject.py, injected into
+Ran 47 tests: OK
+  test_trace_compare (19): every one of the 25 trace mutations of tools/trace_inject.py, injected into
     Spike's trace of sim/ref/directed/traps.S (894 records, 39 traps of every cause) at the first
     applicable record after 16 and again near records 100, 400 and the end, is reported with the
     expected kind at the injected record:
       pc, insn, trap (added), trap (removed), intr, rd value, rd number, rd_wdata with rd = x0,
       register write by a trapping instruction, store address, store mask, store data, load data,
-      load address, load not reported, store by a trapping instruction, pc_next, a dropped
-      retirement (missing), a repeated retirement (extra), an rvfi_order gap (order), a truncated
-      trace (missing at the end); plus an extra record at the end without tohost;
-    and the allowed variations pass: the RISCV_FORMAL_ALIGNED_MEM layout for every record, reads
-    widened to the whole word, trap records with pc_next = pc + 4 and reads, 16-bit encodings as
-    their low half, the final tohost store missing (and failing with --strict-final-store),
-    records after the tohost store, rvfi_order starting at 1; record rules for byte lanes, exact
-    writes, unknown read data, reads reported by non-loads.
+      load address, load not reported, store by a trapping instruction, read reported by a trapping
+      instruction, riscv-formal's default memory layout (mem_layout), a byte load reported as a word
+      read (mem_layout), pc_next, a trap's pc_next not the handler, a dropped retirement (missing), a
+      repeated retirement (extra), an rvfi_order gap (order), a truncated trace (missing at the end);
+      plus an extra record at the end without tohost;
+    and the conventions of MODULES.md section 5: Spike's trace itself follows all of them (aligned
+    fields, unused lanes 0, trap records with no rd or memory access and pc_next = mtvec, intr after
+    every trap, 16-bit encodings as their 16 bits, insn 0 on fetch faults); the default layout fails
+    and passes with --lenient-layout, as do wider reads; unused lanes must be 0; the final tohost
+    store is required (--lenient-final-store accepts its absence); records after it are ignored; an
+    rvfi_order offset passes; record rules for byte lanes, exact writes, unknown read data, reads
+    reported by non-loads.
   test_trace_spike (7): every Spike log line shape (boot ROM, symbol and "Executed" lines, x/CSR
     writes, loads into x0, stores of each size, exceptions with and without tval, a 16-bit illegal
     encoding, a fetch fault, an interrupt, tohost writes of 0 and non-zero, malformed lines, a load
@@ -28,12 +32,16 @@ Ran 45 tests: OK
     the rest privileged instructions SurfCPU does not have or RV64 shift amounts objdump accepts.
   test_tracefmt (5), test_rvgen (8): see docs/evidence/verif/random.txt for the generator.
 
-$ python3 tools/rvrun.py selftest --jobs 4               (make ref-selftest)
-rvrun selftest: 84/84 runs judged as expected (28 stand-in behaviours x 3 programs)
+$ python3 tools/rvrun.py selftest --jobs 3               (make ref-selftest)
+rvrun selftest: 112/112 checks as expected (36 stand-in behaviours x 3 programs, including what each
+  run leaves on disk; three DUT seeds of one program failing and passing; a passing random program
+  kept and removed)
   programs: directed/traps, directed/mem, random seed 7 (length 1500)
-  must pass: clean, --aligned-mem, --no-final-store
-  must fail with this kind: the 21 trace mutations, --bad-signature (signature), --exit 1, --exit 2,
-  --exit 139 (exit)
+  must pass: clean; --lsb-mem with --lenient-layout; --no-final-store with --lenient-final-store
+  must fail with this kind: --lsb-mem (mem_layout), --no-final-store (missing), the 25 trace
+  mutations (their kinds), --bad-signature (signature), --exit 1, 2, 3, 139 (exit), --runaway
+  (runaway: the trace-size watchdog stopped the stand-in, which writes 20000 records every 0.1 s)
+  on disk: nothing after each pass; after each failure a report and traces of at most 22000 records
 
 $ make test-ref                                           (all of the above, plus:)
 test-ref-unit: PASS
@@ -41,9 +49,9 @@ rvcsrmap: Spike with surfcpu-contract.patch: 5212 probes, 0 differ from docs/ISA
 rvcsrmap: stock Spike: 5212 probes; 423 differ from docs/ISA.md, all of them known (7 kinds)
 rvarch: 177 built and passing their self-check on Spike (167 also compared by trace), 0 failed
 rvarch: 177/177 reference signatures as recorded in sim/ref/arch/reference.sha256
-rvrun summary: arch 177 passed 0 failed, directed 7 passed 0 failed, random 12 passed 0 failed;
-  2515471 retirements compared in 31.0 s
-rvrun selftest: 84/84 runs judged as expected (28 stand-in behaviours x 3 programs)
+rvrun summary: arch 177 passed 0 failed, csrmap 1 passed 0 failed, directed 7 passed 0 failed,
+  random 12 passed 0 failed; 2549696 retirements compared in 27.7 s
+rvrun selftest: 112/112 checks as expected
 rvformal smoke: the wrapper elaborates with surfcpu_core's ISA.md port list
 rvformal smoke: insn_add_ch0 ran through yosys, sby and z3 (vacuous on the stand-in, as expected:
   it retires nothing)

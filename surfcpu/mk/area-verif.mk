@@ -10,11 +10,14 @@
 #   make test-cpu-ref    the real comparison: build/cpu/surfcpu_tb against Spike (needs the core)
 #   make ref-spike       the contract-patched Spike (build/third_party/spike-surfcpu)
 #   make ref-arch        riscv-arch-test 4.1.0: fetch, build the tests in scope, references
-#   make ref-formal      riscv-formal on the real core (needs the core; slow)
+#   make ref-formal      riscv-formal on the real core (needs the core; slow: about 10 minutes
+#                        per instruction check, longer for the others)
 #
 # Variables: REF_SEEDS (random programs, default 12 for test-ref, 50 for test-cpu-ref),
 # REF_DUT_SEEDS (the testbench's --seed values, default 1,2,3), REF_JOBS (default 4),
-# REF_DUT (default $(BUILD)/cpu/surfcpu_tb), REF_ILAT / REF_DLAT (MIN:MAX latencies).
+# REF_DUT (default $(BUILD)/cpu/surfcpu_tb), REF_ILAT / REF_DLAT (MIN:MAX latencies),
+# REF_FORMAL_CHECKS (default all), REF_FORMAL_TIMEOUT (seconds), REF_FORMAL_OPTS (for gen).
+# Passing runs leave no traces on disk (tools/rvrun.py); failures keep a cut-down pair.
 
 REF_BUILD     = $(BUILD)/ref
 REF_LD        = sim/ref/common/link.ld
@@ -72,7 +75,8 @@ ref-formal-smoke:
 
 ref-formal:
 	$(Q)$(PYTHON) tools/rvformal.py gen $(REF_FORMAL_OPTS)
-	$(Q)$(PYTHON) tools/rvformal.py run -j $(REF_JOBS)
+	$(Q)$(PYTHON) tools/rvformal.py run -j $(REF_JOBS) \
+	  $(if $(REF_FORMAL_TIMEOUT),--timeout $(REF_FORMAL_TIMEOUT)) $(REF_FORMAL_CHECKS)
 
 test-ref: test-ref-unit ref-directed ref-csrmap ref-standin ref-selftest ref-formal-smoke
 	@echo "test-ref: PASS"
@@ -84,5 +88,5 @@ test-cpu-ref: ref-spike ref-arch
 	    echo "test-cpu-ref: no rule to build $(REF_DUT) yet (the cpu track's testbench)"; exit 1; }; fi
 	$(Q)$(PYTHON) tools/rvrun.py --dut "$(REF_DUT)" --suites directed,random,arch,csrmap \
 	  --seeds $(or $(REF_SEEDS),50) --dut-seeds $(REF_DUT_SEEDS) --jobs $(REF_JOBS) \
-	  $(if $(REF_ILAT),--ilat $(REF_ILAT)) $(if $(REF_DLAT),--dlat $(REF_DLAT)) \
+	  $(if $(REF_ILAT),--ilat $(REF_ILAT)) $(if $(REF_DLAT),--dlat $(REF_DLAT)) --coverage \
 	  --out $(REF_BUILD)/cpu --json $(REF_BUILD)/cpu/results.json
