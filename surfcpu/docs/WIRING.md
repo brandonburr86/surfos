@@ -32,8 +32,10 @@ Facts every row relies on: all used pins are in banks 14, 15, 16 and 35, whose V
 board's 3.3 V (SCH sheet 7), so every pin is LVCMOS33; bank 34 is the DDR3L bank at 1.35 V and
 no SurfCPU pin may be placed there (the checker refuses it). JA and JD connect through 200 Ω
 series resistors, JB and JC through 0 Ω (SCH sheet 1, RM §10). Pmod pins 6 and 12 are the
-board's 3.3 V, pins 5 and 11 ground (RM §10). The FPGA pins' limits are -0.2..3.4 V
-recommended and 3.75 V absolute maximum while powered, 0.55 V while the board is off (RM §11.1).
+board's 3.3 V, pins 5 and 11 ground (RM §10). The voltage limits of the Arty's
+FPGA-connected header pins are -0.2..3.4 V recommended and 3.75 V absolute maximum while the
+board is powered, 0.55 V while it is off (RM §11.1, given for the shield header, whose pins
+have the same 200 Ω series resistors as JA and JD).
 
 Status: **checked** = the master XDC, the reference manual and the schematic agree on it;
 **unverified** = it also depends on something only the hardware can show (named in section 3).
@@ -168,10 +170,10 @@ its supply. The lines reach the FPGA through 200 Ω on the adapter and 200 Ω on
 * **JP1 on VB (3.3 V from the Arty): safe for the FPGA.** Every pull-up ends at 3.3 V, within
   the pins' limits. The open question is the keyboard: PS/2 keyboards are specified for 5 V and
   many, not all, work at 3.3 V.
-* **JP1 on VE with a 5 V supply: not safe.** The adapter's pull-ups and the keyboard's own put
-  5 V on JD1 and JD3 through 400 Ω, above the 3.75 V absolute maximum while the board is on and
-  far above the 0.55 V allowed while it is off (RM §11.1). Do not do this without a level
-  shifter.
+* **JP1 on VE with a 5 V supply: not safe.** The adapter's pull-ups and the keyboard's own pull
+  JD1 and JD3 toward 5 V through about 400 Ω: above the 3.75 V absolute maximum while the board
+  is on (the FPGA's clamp diodes would carry the current into its 3.3 V supply) and far above
+  the 0.55 V allowed while it is off (RM §11.1). Do not do this without a level shifter.
 * The adapter's JP2 silkscreen is wrong: VE and GND are swapped (PS2-RM).
 
 Please tell us:

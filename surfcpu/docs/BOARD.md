@@ -358,5 +358,5 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (3 seeds) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (12 SHA-256), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 17 mutations), `board-cdc-xdc`, `board-tools` (89 wrapper checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (12 SHA-256), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (89 wrapper checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
