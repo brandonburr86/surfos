@@ -806,7 +806,7 @@ class Release:
         """the card's /BOOT files as tools/deploy-sd.py installs them on a new card, run against a
         directory standing in for the card (its tests' stand-ins for diskutil and mount), in a temporary
         directory: deploy-sd's test mode refuses anything under /Volumes, where a checkout may be"""
-        work = Path(tempfile.mkdtemp(prefix="surfcpu-release-card-"))
+        work = Path(tempfile.mkdtemp(prefix="surfcpu-release-card-")).resolve()   # macOS: /var is /private/var
         try:
             return self._card(stage, package, work)
         finally:
