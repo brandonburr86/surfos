@@ -51,6 +51,7 @@ matched, 1 on a --fail-on match or a port that went away, 2 when the time ran ou
 """
 
 import argparse
+import bisect
 import codecs
 import errno
 import glob
@@ -238,6 +239,14 @@ class Link:
 
     def now(self):
         return time.time() - self.t0
+
+    def arrival(self, offset):
+        """when (now()'s clock) the line holding text offset began to arrive: a line read from the
+        buffer long after it came, while the caller waited for a person, keeps its own time"""
+        with self.cond:
+            times = self.text.line_times
+            i = bisect.bisect_right(times, (offset, float('inf'))) - 1
+            return times[i][1] if i >= 0 else self.now()
 
     def _run(self):
         while not self.stop:

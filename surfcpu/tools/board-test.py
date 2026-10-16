@@ -137,7 +137,7 @@ class Run:
         self.a, self.milestone, self.title, self.design = a, milestone, title, design
         self.slow = a.slow
         self.checks = []                # (status, text): ok, FAIL, owner, owner-no, skip, note
-        self.steps = []                 # (time, step, question, answer)
+        self.steps = []                 # (time asked, step, question, answer, time answered)
         self.identity = []              # what was read and how it compared
         self.sim = False
         self.link = None
@@ -249,7 +249,7 @@ class Run:
         if power and self.link:
             self.link.allow_reopen(15)
             self.power_pending = True
-        self.steps.append((t, step, question, answer))
+        self.steps.append((t, step, question, answer, self.link.now() if self.link else 0.0))
         return answer
 
     def do(self, step, question, power=False):
@@ -378,9 +378,11 @@ class Run:
         L.append('Build identity read from the port, and what it was compared with:')
         L += ['  ' + x for x in (self.identity or ['(none read)'])]
         L.append('')
-        L.append('Steps the owner was asked to do, and the answers (+ seconds since the port was opened):')
-        for t, step, q, ans in self.steps:
-            L.append('  +%8.1f  %-14s %s' % (t, step, {'yes': 'done', 'no': 'NOT DONE / NO', 'skip': 'skipped'}[ans]))
+        L.append('Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, '
+                 'and when answered):')
+        for t, step, q, ans, t_ans in self.steps:
+            L.append('  +%8.1f  %-14s %s, answered at +%.1f' % (
+                t, step, {'yes': 'done', 'no': 'NOT DONE / NO', 'skip': 'skipped'}[ans], t_ans))
             for ql in q.split('\n'):
                 L.append('              | %s' % ql)
         if not self.steps:
@@ -432,11 +434,11 @@ BASELINE = re.compile(r'SurfCPU baseline (\S+) 0x([0-9a-f]{8}) build ([0-9a-f]{8
 
 
 def baseline_lines(r, n, timeout_each=3.0):
-    """n consecutive baseline lines: [(host time, match)]"""
+    """n consecutive baseline lines: [(host time the line arrived, match)]"""
     got = []
     for i in range(n):
         m = r.expect(BASELINE, 'baseline line %d of %d' % (i + 1, n), timeout_each if got else 5.0)
-        got.append((r.link.now(), m))
+        got.append((r.link.arrival(m.start()), m))      # not now(): lines wait in the buffer while the owner reads
     return got
 
 
