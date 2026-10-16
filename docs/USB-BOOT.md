@@ -700,7 +700,7 @@ without a FAT file system stops it with what to do.
 |---|---|
 | UEFI boot from USB, GRUB, Multiboot 2 | Secure Boot (GRUB is unsigned) |
 | Framebuffer console filling the screen (120x33 cells at 1920x1080), VGA colours, 4 consoles | USB keyboards and mice; USB hubs and docks |
-| Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | The touchpad |
+| Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | Touchpad gestures such as two-finger scrolling (the touchpad works as a two-button mouse: [GUI](GUI.md)) |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
 | Delays calibrated on the PIT, the ACPI PM timer or the HPET | Wi-Fi, Bluetooth, sound, battery, suspend, ACPI power-off |
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |

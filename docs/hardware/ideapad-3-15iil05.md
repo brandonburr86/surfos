@@ -26,7 +26,7 @@ laptop itself counts as native evidence; QEMU results are recorded separately.
 | Networking | "No onboard Ethernet"; Wi-Fi + Bluetooth on an M.2 card (802.11ac or ax, varies) | observed 2026-10-12: Intel 9560, firmware `77.8dbafb52.0`, associated over 2.4 GHz WPA2 with DHCP address `10.0.0.164`; no USB Ethernet adapter attached |
 | USB | one USB 2.0, two USB 3.2 Gen 1, on the chipset's xHCI controller | **record which port was used, and `lsusb`** |
 | Keyboard | built-in, behind the embedded controller | observed 2026-10-10: 8042, IRQ 1 plus polling, command byte `0x65` in the pre-GUI kernel |
-| Touchpad | Precision TouchPad (I2C HID on this generation) | observed 2026-10-13: Synaptics 06cb:ce2d at I2C1 0x2c, report descriptor read natively; it refused GET_REPORT for InputMode. Fix (set the mode directly) built 2026-10-15; movement/click verification pending ([GUI](../GUI.md)) |
+| Touchpad | Precision TouchPad (I2C HID on this generation) | works as a two-button mouse since 2026-10-15: Synaptics 06cb:ce2d at I2C1 0x2c, mouse mode set directly (it refuses GET_REPORT for InputMode); movement, both buttons, dragging. No multi-touch gestures ([GUI](../GUI.md)) |
 | Firmware | UEFI | **record**: Secure Boot setting, any CSM option, firmware version |
 
 Sources: [Lenovo PSREF](https://psref.lenovo.com/syspool/Sys/PDF/IdeaPad/IdeaPad_3_15IIL05/IdeaPad_3_15IIL05_Spec.pdf),
@@ -289,7 +289,7 @@ with valid checksums. Native evidence is under
   reserved DRAM rather than NVS, so the public `acpinvs` command refuses it.
   Only the matching platform binding may read that bounded AML-named region.
 
-The native driver is implemented and awaits physical report/movement validation.
+The native driver followed; it works on the laptop since 2026-10-15 (below).
 The diagnostic R2 image passed all 311 USB/UEFI checks at O0 and O2; those results
 do not establish support by the newer native driver.
 
@@ -323,5 +323,27 @@ only for mode reports that share other data. A refused SET is recorded in
 `touchpad info`'s mode line and is not fatal. The host suite now replays this
 device: a simulated Synaptics that NACKs that GET runs the real start-up and
 input code. `pointerinfo`'s device count also now includes the I2C touchpad.
-**Pending:** deploy this build, then the owner checks movement and both buttons
-in `gui`.
+
+### Native touchpad works (2026-10-15)
+
+Build `784b294ab7d9 2026-10-15T22:47:22Z` (O0, development entry, pushed with
+`tools/devloop.py deploy`; `build/validation/laptop-touchpad-n3/`):
+
+- Before: the 2026-10-13 build still stopped at "HID read input mode" (abort
+  0x03000008, tx 6, rx 0), the same failure as above.
+- After: `+TOUCHPAD: ready (I2C HID mouse reports); variant=2 address=2c
+  device=06cb:ce2d`. The device accepted SET_REPORT(Feature 4, mode 0): mode line
+  "mouse (InputMode 0 set)", interrupt line high before and after (0x80100102).
+  No transfer error, abort or controller re-init.
+- The owner tested the touchpad in `gui`. A telnet sampler (`live.txt`) read
+  `touchpad info` about three times a second meanwhile (349 samples): the left
+  button in 21 samples (16 presses, some held while reports kept coming:
+  drags), the right button in 6 (three presses), no other value.
+- At the end: 2,374 reports, all decoded as report 2 (the mouse collection);
+  0 ignored, 0 errors, 0 zero-length reads, 0 pointer queue drops;
+  `pointerinfo`: 1 pointing device. While a finger moved, reports came at
+  roughly 50-80 a second; the driver reads up to 300.
+
+Not covered: multi-touch gestures (two-finger scrolling) and tap-to-click
+behaviour in this mode, both decided by the device's firmware unless SurfOS
+switches it to the Precision Touchpad collection (report 3).

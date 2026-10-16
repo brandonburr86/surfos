@@ -137,10 +137,21 @@ in `build/validation/commit-b88d8b7/`. Known flake, not touchpad code:
 `tools/qemu-files.py`'s "fragmented arrow is parsed" fails now and then,
 because `keys()` reads the screen after a fixed 250 ms. A rerun passes.
 
-Laptop: not yet deployed (it was offline on 2026-10-15). The deploy pair is
-built from the commit into `build/validation/touchpad-n3-O0/`. Deploying needs
-the owner at the laptop: after devloop's reboot, join Wi-Fi within 90 s and
-autonet starts telnetd. Then check:
-1. `touchpad info`: "ready", and "mode: mouse (InputMode 0 set)" or a recorded refusal.
-2. Move a finger: `reports`/`decoded` rise, and `touchpad report` shows report 2.
-3. `gui`: movement, both buttons, dragging a window, drawing in Sketch.
+Laptop (2026-10-15, evening): **the touchpad works.** `build/validation/touchpad-n3-O0/`
+(build `784b294ab7d9 2026-10-15T22:47:22Z`) was pushed with devloop; the
+evidence is in `build/validation/laptop-touchpad-n3/` (before, deploy,
+after-boot, live, after, dmesg).
+1. Before, the 2026-10-13 build still stopped at "HID read input mode".
+2. After: "ready (I2C HID mouse reports)", "mode: mouse (InputMode 0 set)",
+   no transfer error, no re-init.
+3. The owner's test in `gui`: 2,374 reports, all decoded; 0 errors, 0
+   zero-length, 0 queue drops; left button (16 presses, drags) and right
+   button (3 presses) seen by a telnet sampler. Details in the hardware record.
+
+Deploying over Wi-Fi: devloop's 180 s wait after the reboot ran out before the
+laptop was back on the network (autonet allows 90 s to join); a telnet check
+once the owner had joined confirmed the build id.
+
+Next candidates: the Precision Touchpad collection (report 3) for two-finger
+scrolling and tap-to-click; a steady Files "fragmented arrow" check; merging
+into `ai-dev` when the owner says.

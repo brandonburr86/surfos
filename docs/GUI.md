@@ -76,9 +76,12 @@ dropping the report.
 The owner confirmed the desktop works on the laptop with the original GUI
 build, but its touchpad did not. The first native build (2026-10-13) found the
 device and read its report descriptor, then stopped at the refused GET_REPORT.
-The 2026-10-15 build sets the mode directly; physical movement/click acceptance
-is still pending. See the [hardware record](hardware/ideapad-3-15iil05.md) for
-the collected firmware facts and current validation evidence.
+The 2026-10-15 build sets the mode directly, and the touchpad now drives the
+pointer on the laptop as a two-button mouse: during the owner's test in `gui`
+every report was decoded, both buttons and drags registered, and nothing failed.
+Multi-touch gestures (two-finger scrolling) would need the Precision Touchpad
+collection. See the [hardware record](hardware/ideapad-3-15iil05.md) for the
+collected firmware facts and validation evidence.
 
 ## Implementation and checks
 
@@ -105,4 +108,6 @@ Emulator results do not establish laptop touchpad compatibility.
 The 2026-10-12 desktop validation passed the host suite, 286 smoke checks and
 51 Files checks at both O0 and O2, plus all 15 USB/UEFI scenarios at both levels
 (307 checks each, including 48 GUI checks). The deployed O0 desktop was confirmed
-working by the laptop owner; native touchpad input remains under development.
+working by the laptop owner. With the touchpad (2026-10-15) the host suite,
+297 smoke checks and 51 Files checks passed at O0 and O2, and 313 USB/UEFI
+checks at both levels; the owner then used the touchpad in the desktop.
