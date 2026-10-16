@@ -1,9 +1,10 @@
 #!/bin/sh
 # SurfCPU board track: tests of tools/fpga-build.sh, tools/program.sh and the Digilent fetch.sh.
 #
-# Fake ssh, docker, vivado and openFPGALoader (sim/board/tools/fake) stand in for the build host,
-# Docker, Vivado and the board: the fake vivado runs the real boards/arty_a7/vivado/build.tcl in
-# Yosys's Tcl with stubbed Vivado commands (vivado_stub.tcl). HOME is a temporary directory, so
+# Fake ssh, docker, vivado, openxc7-build.sh and openFPGALoader (sim/board/tools/fake) stand in
+# for the build host, Docker, Vivado, the open flow and the board: the fake vivado runs the real
+# boards/arty_a7/vivado/build.tcl in Yosys's Tcl with stubbed Vivado commands (vivado_stub.tcl);
+# the open flow's dry runs use the real tools/openxc7-build.sh. HOME is a temporary directory, so
 # the build-host.conf files here are never the user's; the "remote" is a local directory.
 # Nothing leaves this machine and nothing is programmed. Run from surfcpu/ in the toolchain
 # container (mk/area-board.mk: board-tools). Prints one line per check and exits 1 on a failure.
@@ -18,7 +19,8 @@ export FAKE_STUB="$root/sim/board/tools/vivado_stub.tcl" SOURCE_DATE_EPOCH=17605
 export SURFCPU_FPGA_OUT="$t/fpga"                     # never the real build/fpga
 PATH="$root/sim/board/tools/fake:$PATH"
 export PATH
-unset DESIGN BIT SURFCPU_BUILD_HOST_CONF SURFCPU_FLASH_CONFIRM OPENFPGALOADER 2>/dev/null || true
+unset DESIGN BIT FLOW CABLE_SERIAL SURFCPU_BUILD_HOST_CONF SURFCPU_FLASH_CONFIRM OPENFPGALOADER \
+      SURFCPU_OPENXC7_BUILD SURFCPU_OPENXC7_IMAGE 2>/dev/null || true
 conf="$HOME/.config/surfcpu/build-host.conf"
 
 pass=0
@@ -371,6 +373,72 @@ oxmanifest "PASS"
 printf 'x' >> "$ox/flow_demo.bit"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
 check "openxc7 manifest: another bitstream refused" has "describes another bitstream"
+
+# ============================================================================== open flow (FLOW=openxc7)
+b=$base/arty_a7_35t/arty_a7_baseline
+cp "$b/manifest.txt" "$t/vivado-manifest.txt"          # the 35T's last Vivado (ssh) build
+mv "$conf" "$t/conf.saved"                              # no build-host.conf at all
+run env FLOW=openxc7 tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7 dry run: needs no build-host.conf (FLOW from the environment)" is "$rc" 0
+check "openxc7 dry run: top, board, constraints, output directory, safe DSP mode" \
+    has "--top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc --out ${b#$root/}/openxc7 --dsp safe"
+check "openxc7 dry run: the build values as defines" has "-D ARTY_BUILD_BOARD=\"arty_a7_35t\" -D ARTY_BUILD_ID=32'h[0-9a-f]\{8\} -D ARTY_BUILD_FLAGS=32'h0000000[01] -D ARTY_BUILD_TIME=32'h$time_hex"
+check "openxc7 dry run: include directories, then the sources" has "-I rtl/generated -I boards/arty_a7/rtl rtl/lib/surf_sync.v"
+check "openxc7 dry run: the real script's dry run (nextpnr for the 35T's die)" has "nextpnr-himbaechel --device xc7a35tcsg324-1"
+check "openxc7 dry run: contacts nothing" nolog
+nx=$b/nextpnr.xdc
+check "nextpnr constraints: the 28 base pins and the oscillator's clock" \
+    test "$(grep -c 'PACKAGE_PIN' "$nx")" -eq 28 -a "$(grep -c '^create_clock -period 10.000 \[get_ports clk100\]$' "$nx")" -eq 1
+check "nextpnr constraints: no ';', comment, timing exception or design property" \
+    test -z "$(grep -E ';|#|current_design|false_path|generated_clock|max_delay' "$nx")"
+check "nextpnr constraints: 11 not checked (2 generated clocks, 2 false paths, 3 design properties, 4 CDC files)" \
+    test "$(grep -c . "$b/nextpnr-not-checked.txt")" -eq 11
+check "nextpnr constraints: ... and the build says so" has "it cannot check these 11, which only Vivado does"
+check "nextpnr constraints: ... naming the clock-crossing bounds" has "cdc/surf_cdc_word.xdc: scoped to every surf_cdc_word: 3 set_max_delay"
+awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$t/pmod-not.txt" boards/arty_a7/xdc/arty_a7_pmod_pins.xdc > "$t/pmod.xdc"
+check "nextpnr constraints: Vivado's PULLUP true becomes PULLTYPE PULLUP (DRIVE kept)" \
+    grep -q '^set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33 PULLTYPE PULLUP DRIVE 4} \[get_ports {ps2_data}\]$' "$t/pmod.xdc"
+check "nextpnr constraints: IOB TRUE is listed as not applied" test "$(grep -c 'IOB TRUE.*pin option nextpnr does not apply' "$t/pmod-not.txt")" -eq 2
+
+fake_ox=$root/sim/board/tools/fake/openxc7-build.sh
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "openxc7: a passing build exits 0" is "$rc" 0
+check "openxc7: the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "openxc7: the open flow ran on the nextpnr constraints" logged "openxc7-build.sh --top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc"
+check "openxc7: the manifest is TOML, with the result and the open flow's checks and numbers" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+o=d['openxc7']
+assert d['result']=='pass' and d['flow']=='openxc7' and d['part']=='xc7a35ticsg324-1L', d
+assert d['bitstream_bytes']>0 and len(d['bitstream_sha256'])==64
+assert o['part']=='xc7a35tcsg324-1' and o['check_lvs']=='PASS' and o['check_block_ram']=='none in the design'
+assert o['idcode']=='0x0362D093' and o['lut']=='285 / 20800' and o['wns_ns']==33.033 and len(o['timing'])==2
+assert len(o['constraints_not_checked'])==11 and o['constraints_given']==29 and o['dsp_mode']=='safe'
+" "$b/manifest.txt"
+check "openxc7: the same top-level manifest keys as the Vivado flow's" python3 -c "
+import tomllib,sys
+a=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+ka={k for k,v in a.items() if not isinstance(v,dict)}; kb={k for k,v in b.items() if not isinstance(v,dict)}
+assert ka==kb, ka ^ kb
+" "$t/vivado-manifest.txt" "$b/manifest.txt"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$b/arty_a7_baseline.bit"
+check "openxc7: program.sh loads its bitstream on the 35T (header xc7a35tcsg324-1)" \
+    test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+for case in "FAKE_OX_LVS=BLOCKED (timeout):check LVS BLOCKED (timeout)" "FAKE_OX_CLOCKS=FAIL:check clocks FAIL" \
+            "FAKE_OX_TIMING=FAIL:timing not met" "FAKE_OX_RC=1:exit status 1"; do
+    setting=${case%%:*}
+    why=${case#*:}
+    run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+    check "openxc7 gate ${setting%%=*}: build fails, no bitstream" test "$rc" -eq 1 -a ! -e "$b/arty_a7_baseline.bit"
+    check "openxc7 gate ${setting%%=*}: the manifest says fail and why" grep -q "^reason = \".*$why" "$b/manifest.txt"
+done
+run env FLOW=openxc7 SURFCPU_FPGA_OUT=/nonexistent/fpga tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7: an output directory outside surfcpu/ refused (the container sees only the repository)" has "is outside it"
+mv "$t/conf.saved" "$conf"                              # FLOW=vivado-ssh in the file again
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "openxc7: FLOW from the environment overrides build-host.conf (no ssh)" test "$rc" -eq 0 -a -z "$(grep '^ssh ' "$FAKE_LOG")"
+run env FLOW=quartus tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "build: an unknown FLOW from the environment refused" has "unknown FLOW 'quartus' from the environment"
 
 # ============================================================================== digilent/fetch.sh
 # A copy of the digilent directory whose SHA256SUMS lists three made-up manuals: one saved

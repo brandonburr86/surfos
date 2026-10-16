@@ -13,11 +13,27 @@ BOARD is a spec/soc.toml [boards] name (arty_a7_35t or arty_a7_100t); the build 
 the build identity (tools/fpga-build.sh, docs/BOARD.md). TICK_CYCLES and PIX_TICK_CYCLES stay
 0 (one real second) in every bitstream; only simulations shorten them.
 */
+// The build sets BOARD and the build identity. Vivado takes them as generics (build.tcl);
+// the open flow has no top-level parameter option, so tools/fpga-build.sh passes the same
+// values to Yosys as these defines (FLOW=openxc7), which become the defaults. With neither,
+// they are the defaults below (simulation, lint).
+`ifndef ARTY_BUILD_BOARD
+`define ARTY_BUILD_BOARD "arty_a7_100t"
+`endif
+`ifndef ARTY_BUILD_ID
+`define ARTY_BUILD_ID 32'h0
+`endif
+`ifndef ARTY_BUILD_FLAGS
+`define ARTY_BUILD_FLAGS 32'h0
+`endif
+`ifndef ARTY_BUILD_TIME
+`define ARTY_BUILD_TIME 32'h0
+`endif
 module arty_a7_baseline #(
-    parameter         BOARD           = "arty_a7_100t",
-    parameter [31:0]  BUILD_ID        = 32'h0,
-    parameter [31:0]  BUILD_FLAGS     = 32'h0,
-    parameter [31:0]  BUILD_TIME      = 32'h0,
+    parameter         BOARD           = `ARTY_BUILD_BOARD,
+    parameter [31:0]  BUILD_ID        = `ARTY_BUILD_ID,
+    parameter [31:0]  BUILD_FLAGS     = `ARTY_BUILD_FLAGS,
+    parameter [31:0]  BUILD_TIME      = `ARTY_BUILD_TIME,
     parameter integer TICK_CYCLES     = 0,
     parameter integer PIX_TICK_CYCLES = 0
 ) (

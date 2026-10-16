@@ -25,12 +25,31 @@ error and its DDR master port is left idle; the ddr track adds the ddr3_* pins, 
 controller and its clocks here (docs/BOARD.md section 7). Vendor primitives (IOBUF, and the
 clock tiles in arty_a7_clocks): this file belongs under boards/ only.
 */
+// The build sets BOARD and the build identity. Vivado takes them as generics (build.tcl);
+// the open flow has no top-level parameter option, so tools/fpga-build.sh passes the same
+// values to Yosys as these defines (FLOW=openxc7), which become the defaults. With neither,
+// they are the defaults below (simulation, lint).
+`ifndef ARTY_BUILD_BOARD
+`define ARTY_BUILD_BOARD "arty_a7_100t"
+`endif
+`ifndef ARTY_BUILD_ID
+`define ARTY_BUILD_ID 32'h0
+`endif
+`ifndef ARTY_BUILD_FLAGS
+`define ARTY_BUILD_FLAGS 32'h0
+`endif
+`ifndef ARTY_BUILD_TIME
+`define ARTY_BUILD_TIME 32'h0
+`endif
+`ifndef ARTY_BOOTROM_INIT
+`define ARTY_BOOTROM_INIT ""
+`endif
 module surfcpu_arty_a7_top #(
-    parameter         BOARD        = "arty_a7_100t",   // spec/soc.toml [boards] name
-    parameter         BOOTROM_INIT = "",               // $readmemh file for the boot ROM
-    parameter [31:0]  BUILD_ID     = 32'h0,
-    parameter [31:0]  BUILD_FLAGS  = 32'h0,
-    parameter [31:0]  BUILD_TIME   = 32'h0,
+    parameter         BOARD        = `ARTY_BUILD_BOARD,    // spec/soc.toml [boards] name
+    parameter         BOOTROM_INIT = `ARTY_BOOTROM_INIT,   // $readmemh file for the boot ROM
+    parameter [31:0]  BUILD_ID     = `ARTY_BUILD_ID,
+    parameter [31:0]  BUILD_FLAGS  = `ARTY_BUILD_FLAGS,
+    parameter [31:0]  BUILD_TIME   = `ARTY_BUILD_TIME,
     parameter integer HAS_DDR      = 0
 ) (
     input  wire        clk100,

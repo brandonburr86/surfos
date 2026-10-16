@@ -7,19 +7,24 @@
 #
 # BOARD is a line of boards/arty_a7/boards.txt (arty_a7_35t, arty_a7_100t). The design is
 # surfcpu_arty_a7_top unless --design or $DESIGN names another boards/arty_a7/designs/*.files.
-# The build host comes from ~/.config/surfcpu/build-host.conf (never committed; tests point
-# SURFCPU_BUILD_HOST_CONF elsewhere):
+# FLOW comes from the environment (make build-fpga FLOW=openxc7) or else from
+# ~/.config/surfcpu/build-host.conf (never committed; tests point SURFCPU_BUILD_HOST_CONF
+# elsewhere), which also holds the settings of the Vivado flows:
 #   FLOW=vivado-ssh      HOST (an ssh alias using key authentication), REMOTE_DIR, VIVADO
 #   FLOW=vivado-docker   VIVADO, IMAGE (an x86-64 Linux image with Vivado), DOCKER (optional)
-#   FLOW=openxc7         the flow track's tools/openxc7-build.sh
+#   FLOW=openxc7         the open flow on this Mac (tools/openxc7-build.sh, docs/OPEN-FLOW.md);
+#                        needs only its image (make openxc7-image), no build-host.conf
 #
-# It stages the design's sources and constraints, boards/arty_a7/vivado/build.tcl and a
-# params.tcl in build/fpga/BOARD/DESIGN/stage, runs the Vivado non-project flow on the host
-# (over ssh, or in Docker), brings back out/ (bitstream, reports, vivado.log, build-results.txt)
-# and writes build/fpga/BOARD/DESIGN/manifest.txt (SURFCPU_FPGA_OUT replaces build/fpga). Exit 0
-# only with a bitstream whose checks passed; a new build first removes the previous one's
-# bitstream and results. --dry-run stages locally and prints every command it would run,
-# without contacting a host or starting Docker, and leaves the last build's results alone.
+# Vivado: it stages the design's sources and constraints, boards/arty_a7/vivado/build.tcl and a
+# params.tcl in build/fpga/BOARD/DESIGN/stage, runs the non-project flow on the host (over ssh,
+# or in Docker) and brings back out/ (bitstream, reports, vivado.log, build-results.txt).
+# openxc7: it gives tools/openxc7-build.sh the design's sources, include directories, the top's
+# build values as defines, the constraints nextpnr can apply (boards/arty_a7/nextpnr-xdc.awk;
+# the rest is listed as not checked) and --dsp safe, with its output in build/fpga/BOARD/DESIGN/
+# openxc7. Either way it writes build/fpga/BOARD/DESIGN/manifest.txt (SURFCPU_FPGA_OUT replaces
+# build/fpga). Exit 0 only with a bitstream whose checks passed; a new build first removes the
+# previous one's bitstream and results. --dry-run prints every command it would run, without
+# contacting a host or starting Docker, and leaves the last build's results alone.
 # No passwords anywhere: ssh uses your keys, checks the host's key strictly (known_hosts), gives
 # up on a silent connection after two minutes. Vivado runs on the host under nohup, with its
 # own log and exit status in out/, so a dropped connection does not stop it: --fetch brings
@@ -44,7 +49,7 @@ while [ $# -gt 0 ]; do
         --dry-run) dry=1 ;;
         --fetch)   fetch=1 ;;
         --design)  [ $# -ge 2 ] || die "--design needs a name"; design=$2; shift ;;
-        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*)        die "unknown option $1" ;;
         *)         [ -z "$board" ] || die "one BOARD only"; board=$1 ;;
     esac
@@ -67,16 +72,17 @@ head="$base/manifest-head.txt"          # a real run's keys known before it; fin
 
 # ------------------------------------------------------------------------------ build host
 conf=${SURFCPU_BUILD_HOST_CONF:-$HOME/.config/surfcpu/build-host.conf}
-if [ ! -f "$conf" ]; then
-    echo "$me: no build host configured ($conf): bitstream generation is pending." >&2
-    echo "$me: docs/BUILD-HOST.md describes the options and the file." >&2
-    exit 2
-fi
 conf_get() {      # KEY: the last KEY=value line, without comments or surrounding quotes
+    [ -f "$conf" ] || return 0
     sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$conf" | tail -n 1 |
         sed -e 's/[[:space:]]*#.*$//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
-FLOW=$(conf_get FLOW)
+if [ -n "${FLOW:-}" ]; then flow_from=environment; else FLOW=$(conf_get FLOW); flow_from=$conf; fi
+if [ "$FLOW" != openxc7 ] && [ ! -f "$conf" ]; then      # the open flow needs no build host
+    echo "$me: no build host configured ($conf): bitstream generation is pending." >&2
+    echo "$me: docs/BUILD-HOST.md describes the options and the file; FLOW=openxc7 needs none." >&2
+    exit 2
+fi
 HOST=$(conf_get HOST)
 REMOTE_DIR=$(conf_get REMOTE_DIR)
 VIVADO=$(conf_get VIVADO)
@@ -100,13 +106,12 @@ case "$FLOW" in
         safe IMAGE "$IMAGE" 'A-Za-z0-9._/:@-'
         DOCKER=${DOCKER:-docker}
         safe DOCKER "$DOCKER" 'A-Za-z0-9._/~+-' ;;
-    openxc7)
-        [ -x "$root/tools/openxc7-build.sh" ] ||
-            die "FLOW=openxc7 needs tools/openxc7-build.sh (the flow track, docs/OPEN-FLOW.md), not on this branch"
-        [ "$dry" = 1 ] && exec "$root/tools/openxc7-build.sh" --dry-run "$board" "$design"
-        exec "$root/tools/openxc7-build.sh" "$board" "$design" ;;
+    openxc7)                    # SURFCPU_OPENXC7_BUILD: a stand-in, for the wrapper tests only
+        OPENXC7=${SURFCPU_OPENXC7_BUILD:-$root/tools/openxc7-build.sh}
+        [ -x "$OPENXC7" ] || die "FLOW=openxc7 needs $OPENXC7 (docs/OPEN-FLOW.md)"
+        ox_image=${SURFCPU_OPENXC7_IMAGE:-surfcpu-openxc7:$(sed -n 's/^IMAGE_TAG=//p' "$root/tools/openxc7-build.sh")} ;;
     '') die "$conf: FLOW is not set (vivado-ssh, vivado-docker or openxc7)" ;;
-    *)  die "$conf: unknown FLOW '$FLOW' (vivado-ssh, vivado-docker or openxc7)" ;;
+    *)  die "unknown FLOW '$FLOW' from the $flow_from (vivado-ssh, vivado-docker or openxc7)" ;;
 esac
 # Key authentication only, the host key must already be known (no trust on first use), and a
 # connection that goes quiet is given up after 20 s to connect or 4 x 30 s without an answer.
@@ -183,6 +188,144 @@ if [ "$fetch" = 1 ]; then
     vivado_results "$status"
 fi
 
+# ------------------------------------------------------------------------------ the open flow (functions)
+toml_str() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
+openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, then gate its results
+    case "$base/" in
+        "$root"/*) ;;
+        *) die "FLOW=openxc7 builds inside surfcpu/ (its container sees only the repository), but SURFCPU_FPGA_OUT=$fpga_out is outside it" ;;
+    esac
+    ox="$base/openxc7"
+    xdc_nx="$base/nextpnr.xdc"
+    notgiven="$base/nextpnr-not-checked.txt"
+    mkdir -p "$base"
+    if [ "$dry" = 0 ]; then                             # a new build replaces the last one's results
+        rm -rf "${base:?}/openxc7" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest"
+    fi
+    # The constraints nextpnr applies (pins, the oscillator's clock), and a list of the rest.
+    ( cd "$root" && awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$notgiven" $xdcs ) > "$xdc_nx" ||
+        die "could not turn the constraints into nextpnr's (boards/arty_a7/nextpnr-xdc.awk)"
+    echo "$cdcs" | while read -r mod file; do
+        [ -n "$file" ] || continue
+        n_md=$(grep -v '^[[:space:]]*#' "$root/$file" | grep -c 'set_max_delay' || true)
+        n_fp=$(grep -v '^[[:space:]]*#' "$root/$file" | grep -c 'set_false_path' || true)
+        n_ar=$(grep -v '^[[:space:]]*#' "$root/$file" | grep -c 'ASYNC_REG' || true)
+        echo "$file: scoped to every $mod: $n_md set_max_delay -datapath_only, $n_fp set_false_path, $n_ar ASYNC_REG  [clock-domain crossing bounds: Vivado only, not checked]"
+    done >> "$notgiven"
+    n_given=$(grep -c . "$xdc_nx" || true)
+    n_not=$(grep -c . "$notgiven" || true)
+    # The top's build values as defines (the RTL turns them into its parameters' defaults).
+    rom_ox=
+    if [ -n "$rom" ]; then
+        case "$romsrc" in
+            "$root"/*) rom_ox=${romsrc#"$root"/} ;;
+            *) mkdir -p "$base/rom"; cp "$romsrc" "$base/rom/surfboot.mem"; rom_ox=${base#"$root"/}/rom/surfboot.mem ;;
+        esac
+    fi
+    set --
+    for g in $generics; do
+        case "$g" in
+            BOARD)        set -- "$@" -D "ARTY_BUILD_BOARD=\"$board\"" ;;
+            BUILD_ID)     set -- "$@" -D "ARTY_BUILD_ID=32'h$build_id" ;;
+            BUILD_FLAGS)  set -- "$@" -D "ARTY_BUILD_FLAGS=32'h$(printf '%08x' "$dirty")" ;;
+            BUILD_TIME)   set -- "$@" -D "ARTY_BUILD_TIME=32'h$(printf '%08x' "$build_time")" ;;
+            BOOTROM_INIT) set -- "$@" -D "ARTY_BOOTROM_INIT=\"$rom_ox\"" ;;
+            *) die "$design: no value for generic $g" ;;
+        esac
+    done
+    for d in $incdirs; do set -- "$@" -I "$d"; done
+    write_head
+    # shellcheck disable=SC2086
+    set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
+        --manifest-include "${head#"$root"/}" "$@" $sources
+    echo "$me: $design for $board ($part), build $build_id$( [ "$dirty" = 1 ] && echo ' dirty'), flow openxc7 ($ox_image)"
+    echo "$me: nextpnr is given $n_given constraint lines (${xdc_nx#"$root"/}); it cannot check these $n_not, which only Vivado does:"
+    sed "s/^/$me:   /" "$notgiven"
+    cd "$root"
+    if [ "$dry" = 1 ]; then
+        echo "$me: --dry-run: would run:"
+        echo "  ${OPENXC7#"$root"/} $*"
+        "$OPENXC7" --dry-run "$@" | sed 's/^/  | /'
+        echo "$me: --dry-run: nothing was built; manifest so far in ${head#"$root"/}"
+        exit 0
+    fi
+    if "$OPENXC7" "$@"; then st=0; else st=$?; fi
+    openxc7_results "$st"
+}
+openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write the manifest, exit
+    om="$ox/manifest.txt"
+    res="$base/openxc7-results.txt"
+    problems=
+    [ "$1" = 0 ] || problems="tools/openxc7-build.sh exit status $1"
+    check() {         # NAME: the result on the manifest's "check NAME" line
+        [ -f "$om" ] && awk -v n="check $1" 'substr($0, 1, length(n) + 1) == n " " {
+            r = substr($0, 21); sub(/ \([^()]*\)$/, "", r); print r; exit }' "$om"
+    }
+    {
+        echo "image = $(toml_str "$ox_image")"
+        if [ -f "$om" ]; then
+            for tool in yosys nextpnr; do
+                v=$(awk -v t="$tool" '$1 == t { $1 = ""; sub(/^ +/, ""); print; exit }' "$om")
+                [ -z "$v" ] || echo "$tool = $(toml_str "$v")"
+            done
+            echo "part = $(toml_str "$(sed -n 's/^part  *\([^ ]*\).*/\1/p' "$om" | head -n 1)")"
+        fi
+        echo "dsp_mode = \"safe\""
+        echo "exit_status = $1"
+        for c in synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
+                 "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
+            name=${c%%:*}
+            v=$(check "$name")
+            echo "${c#*:} = $(toml_str "${v:-missing}")"
+            case "$name:${v:-missing}" in
+                *:PASS|"block RAM:none in the design"|"clocks:none in the design") ;;
+                *) problems="${problems:+$problems; }check $name ${v:-missing}" ;;
+            esac
+        done
+        if [ -f "$ox/timing.txt" ]; then
+            printf 'timing = ['
+            grep '^clock ' "$ox/timing.txt" | while IFS= read -r l; do printf '%s, ' "$(toml_str "$l")"; done
+            echo ']'
+            wns=$(sed -n 's/^clock .*slack \([-+][0-9.]*\) ns.*/\1/p' "$ox/timing.txt" | sort -g | head -n 1)
+            [ -z "$wns" ] || echo "wns_ns = ${wns#+}"
+            grep '^clock ' "$ox/timing.txt" | grep -qv ' PASS$' && problems="${problems:+$problems; }timing not met (nextpnr)"
+            grep -q '^clock ' "$ox/timing.txt" || problems="${problems:+$problems; }no timing result"
+        fi
+        if [ -f "$ox/utilization.txt" ]; then
+            for u in "lut:LUTs (" "lut_positions:LUT positions" "ff:flip-flops" "carry4:carry chains" \
+                     "bram36:36 Kb block RAMs" "dsp:DSP48E1"; do
+                v=$(grep -F "  ${u#*:}" "$ox/utilization.txt" | sed -n 's/.* \([0-9][0-9]*\) \/ \([0-9][0-9]*\) .*/\1 \/ \2/p' | head -n 1)
+                [ -z "$v" ] || echo "${u%%:*} = \"$v\""
+            done
+        fi
+        if [ -f "$ox/check-bitstream.txt" ]; then
+            v=$(sed -n 's/^IDCODE written: \(0x[0-9A-Fa-f]*\).*/\1/p' "$ox/check-bitstream.txt" | head -n 1)
+            [ -z "$v" ] || echo "idcode = \"$v\""
+            v=$(sed -n "s/^header: .* part '\([^']*\)'.*/\1/p" "$ox/check-bitstream.txt" | head -n 1)
+            [ -z "$v" ] || echo "bitstream_header_part = \"$v\""
+        fi
+        echo "constraints_given = $(grep -c . "$xdc_nx" || true)"
+        printf 'constraints_not_checked = ['
+        while IFS= read -r l; do printf '\n    %s,' "$(toml_str "$l")"; done < "$notgiven"
+        printf '\n]\n'
+        echo "openxc7_manifest = $(toml_str "${om#"$root"/}")"
+    } > "$res"
+    [ -f "$ox/$top.bit" ] || problems="${problems:+$problems; }no bitstream"
+    if [ -z "$problems" ]; then
+        cp "$ox/$top.bit" "$base/$design.bit"
+        echo "result = \"pass\"" >> "$res"
+        finish pass "" openxc7 "$res"
+        echo "$me: PASS: ${base#"$root"/}/$design.bit (open flow: nextpnr's timing is an estimate; the $n_not constraints above are not checked)"
+        grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode) ' "$res" | sed "s/^/$me:   /"
+        exit 0
+    fi
+    echo "result = \"fail\"" >> "$res"
+    finish fail "$problems" openxc7 "$res"
+    echo "$me: FAIL: $problems" >&2
+    echo "$me: logs and reports in ${ox#"$root"/}${om:+ (manifest ${om#"$root"/})}" >&2
+    exit 1
+}
+
 # ------------------------------------------------------------------------------ the design's files
 items() {         # KIND: the lines of that kind, without the kind word
     awk -v k="$1" '{ sub(/#.*/, "") } $1 == k { $1 = ""; sub(/^ +/, ""); print }' "$list"
@@ -251,11 +394,52 @@ case "$rev" in
 esac
 run_id="$design-$board-$build_id-$(date -u +%Y%m%dT%H%M%SZ)"
 
+# ------------------------------------------------------------------------------ manifest (this side)
+cat_sha() { ( cd "$root" && cat "$@" ) | shasum -a 256 | awk '{ print $1 }'; }
+spec_get() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"#]*\)\"\{0,1\}.*/\1/p" "$root/spec/soc.toml" | head -n 1 | sed 's/[[:space:]]*$//'; }
+kernel="$root/../build/riscv32/arty_a7/SURFOS.BIN"
+[ "$dry" = 1 ] && head="$base/manifest.dry-run.txt"   # a dry run leaves the last real run alone
+write_head() {    # the keys known before the run, the same for every flow
+    mkdir -p "$base"
+    {
+        echo "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh"
+        echo "run_id = \"$run_id\""
+        echo "design = \"$design\""
+        echo "top = \"$top\""
+        echo "board = \"$board\""
+        echo "part = \"$part\""
+        echo "flow = \"$FLOW\""
+        case "$FLOW" in
+            vivado-ssh)    echo "build_host_alias = \"$HOST\"" ;;
+            vivado-docker) echo "build_host_alias = \"docker $IMAGE\"" ;;
+            openxc7)       echo "build_host_alias = \"this Mac, docker $ox_image\"" ;;
+        esac
+        echo "vivado_binary = \"$VIVADO\""
+        echo "source_revision = \"$rev\""
+        echo "source_dirty = $( [ "$dirty" = 1 ] && echo true || echo false )"
+        echo "build_id = \"$build_id\""
+        echo "build_time = $build_time"
+        echo "sources_sha256 = \"$(cat_sha $sources)\""
+        echo "constraints_sha256 = \"$(cat_sha $xdcs $cdc_files)\""
+        echo "rom_sha256 = \"$( [ -n "$rom" ] && sha "$romsrc" || true )\""
+        echo "kernel_sha256 = \"$( [ -f "$kernel" ] && sha "$kernel" || true )\""
+        echo "isa = \"$(spec_get isa)\""
+        echo "abi = \"$(spec_get abi)\""
+        echo "map_version = $(spec_get map_version)"
+        echo "soc_version = \"$(spec_get soc_version)\""
+        echo "platform_abi = $(spec_get platform_abi)"
+        echo "mac = \"$(uname -s)-$(uname -m)\""
+    } > "$head"
+    [ "$dry" = 1 ] || cp "$head" "$manifest"   # until finish(): no result, so tools/program.sh refuses it
+}
+
+[ "$FLOW" = openxc7 ] && openxc7_build             # does not return
+
 # ------------------------------------------------------------------------------ stage
 rm -rf "$stage"
 mkdir -p "$stage/surfcpu" "$stage/out" "$base"
 if [ "$dry" = 0 ]; then                                 # a new build replaces the last one's results
-    rm -rf "$base/out" "$base/$design.bit" "$base/manifest.txt"
+    rm -rf "${base:?}/out" "${base:?}/${design:?}.bit" "$manifest"
 fi
 copy() {          # PATH relative to surfcpu/
     mkdir -p "$stage/surfcpu/$(dirname "$1")"
@@ -296,40 +480,7 @@ tcl_list() { printf '%s' "$*" | tr '\n' ' ' | sed -e 's/  */ /g' -e 's/^ //' -e 
     echo "set rom {$rom}"
 } > "$stage/params.tcl"
 
-# ------------------------------------------------------------------------------ manifest (this side)
-cat_sha() { ( cd "$root" && cat "$@" ) | shasum -a 256 | awk '{ print $1 }'; }
-spec_get() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"#]*\)\"\{0,1\}.*/\1/p" "$root/spec/soc.toml" | head -n 1 | sed 's/[[:space:]]*$//'; }
-kernel="$root/../build/riscv32/arty_a7/SURFOS.BIN"
-[ "$dry" = 1 ] && head="$base/manifest.dry-run.txt"   # a dry run leaves the last real run alone
-{
-    echo "# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by tools/fpga-build.sh"
-    echo "run_id = \"$run_id\""
-    echo "design = \"$design\""
-    echo "top = \"$top\""
-    echo "board = \"$board\""
-    echo "part = \"$part\""
-    echo "flow = \"$FLOW\""
-    case "$FLOW" in
-        vivado-ssh)    echo "build_host_alias = \"$HOST\"" ;;
-        vivado-docker) echo "build_host_alias = \"docker $IMAGE\"" ;;
-    esac
-    echo "vivado_binary = \"$VIVADO\""
-    echo "source_revision = \"$rev\""
-    echo "source_dirty = $( [ "$dirty" = 1 ] && echo true || echo false )"
-    echo "build_id = \"$build_id\""
-    echo "build_time = $build_time"
-    echo "sources_sha256 = \"$(cat_sha $sources)\""
-    echo "constraints_sha256 = \"$(cat_sha $xdcs $cdc_files)\""
-    echo "rom_sha256 = \"$( [ -n "$rom" ] && sha "$romsrc" || true )\""
-    echo "kernel_sha256 = \"$( [ -f "$kernel" ] && sha "$kernel" || true )\""
-    echo "isa = \"$(spec_get isa)\""
-    echo "abi = \"$(spec_get abi)\""
-    echo "map_version = $(spec_get map_version)"
-    echo "soc_version = \"$(spec_get soc_version)\""
-    echo "platform_abi = $(spec_get platform_abi)"
-    echo "mac = \"$(uname -s)-$(uname -m)\""
-} > "$head"
-[ "$dry" = 1 ] || cp "$head" "$manifest"   # until finish(): no result, so tools/program.sh refuses it
+write_head
 
 echo "$me: $design for $board ($part), build $build_id$( [ "$dirty" = 1 ] && echo ' dirty'), flow $FLOW"
 echo "$me: staged in ${stage#$root/} ($(echo $sources | wc -w | tr -d ' ') sources, $(echo $xdcs $cdc_files | wc -w | tr -d ' ') constraint files)"

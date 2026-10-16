@@ -268,13 +268,16 @@ for whatever synchronizer it uses), and its calibration status reaches sysinfo t
 make build-fpga BOARD=arty_a7_100t DESIGN=arty_a7_baseline      # milestone 1
 make build-fpga BOARD=arty_a7_100t                              # the whole SoC (needs build/fw/surfboot.mem)
 tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t   # or: make build-fpga ... DRY_RUN=1
+make build-fpga FLOW=openxc7 BOARD=arty_a7_35t DESIGN=arty_a7_baseline   # the open flow, on this Mac
 ```
 
-`tools/fpga-build.sh` reads `~/.config/surfcpu/build-host.conf` (BUILD-HOST.md):
+`tools/fpga-build.sh` takes `FLOW` from the environment (`make build-fpga FLOW=...`) or else
+from `~/.config/surfcpu/build-host.conf` (BUILD-HOST.md), which also holds the Vivado flows'
+settings; `FLOW=openxc7` needs no such file:
 
 | Key | Flows | Meaning |
 |---|---|---|
-| `FLOW` | all | `vivado-ssh`, `vivado-docker` or `openxc7` (the flow track's `tools/openxc7-build.sh`) |
+| `FLOW` | all | `vivado-ssh`, `vivado-docker` or `openxc7` (the open flow, `tools/openxc7-build.sh`; below) |
 | `HOST` | vivado-ssh | an ssh alias; key authentication only (`BatchMode=yes`), and its host key must already be known (`StrictHostKeyChecking=yes`) |
 | `REMOTE_DIR` | vivado-ssh | working directory on the host (default `surfcpu-build`) |
 | `VIVADO` | vivado-* | the pinned Vivado binary |
@@ -299,6 +302,29 @@ the script exits 3, and `tools/fpga-build.sh --fetch [--design D] BOARD` later b
 the results of that run and gates them as usual (exit 4 while Vivado still runs). The
 manifest of a run that has not been fetched has no result, so `tools/program.sh` refuses it.
 
+**The open flow** (`FLOW=openxc7`, docs/OPEN-FLOW.md) runs on this Mac in the
+`surfcpu-openxc7` image (`make openxc7-image`). The script turns the design list into
+`tools/openxc7-build.sh`'s arguments: `--top`, the sources, `-I` for each include directory,
+the top's build values as defines (`ARTY_BUILD_BOARD`, `ARTY_BUILD_ID`, `ARTY_BUILD_FLAGS`,
+`ARTY_BUILD_TIME`, `ARTY_BOOTROM_INIT`: the open flow has no option for top-level parameters,
+so the tops take these defines as their parameters' defaults, and Vivado's generics still
+override them), `--board`, `--dsp safe` (Yosys's DSP packing can delete logic, OPEN-FLOW.md
+6.1) and `--out build/fpga/<board>/<design>/openxc7`. nextpnr's XDC reader applies only pin
+placement and options and `create_clock`, and passes over the rest, mostly with a warning,
+sometimes silently; so `boards/arty_a7/nextpnr-xdc.awk` gives it only what it applies:
+`PACKAGE_PIN`, `IOSTANDARD`, `DRIVE`, `PULLTYPE` (Vivado's `PULLUP true` becomes `PULLTYPE
+PULLUP`: nextpnr 1.0.0 drops `PULLUP true` without a word, as a probe build's FASM showed)
+and the oscillator's `create_clock`. Everything else is **not checked by the open flow** and
+is listed in `nextpnr-not-checked.txt`, in the build's output and in the manifest: the
+derived clocks' names, the false paths, the I/O delays (SPI, VGA), `IOB TRUE` (the SPI
+registers stay in the fabric), the configuration properties (`CFGBVS`, `CONFIG_VOLTAGE`,
+compression: the bitstream keeps its defaults) and every scoped CDC file (the
+`set_max_delay -datapath_only` bounds and `ASYNC_REG`): for the baseline, 11 entries. The
+build passes only if `tools/openxc7-build.sh` exits 0, all six of its checks pass (synthesis,
+bitstream, round trip, block RAM, LVS, clocks; block RAM and clocks may be absent from a
+design, but an LVS that could not be proved fails), and every clock meets nextpnr's timing
+estimate. It is not Vivado signoff; OPEN-FLOW.md section 6 lists what it cannot show.
+
 `build.tcl` (non-project): `read_verilog`, `read_mem`, `read_xdc` (then the CDC files scoped and
 late), `synth_design` with the generics and `-flatten_hierarchy rebuilt`, `opt_design`,
 `place_design`, `phys_opt_design`, `route_design`, a post-route checkpoint, then the reports
@@ -314,13 +340,18 @@ and `cdc.rpt` its summary table (Severity, ID, Count); a missing section, header
 fails the build rather than reading as "no findings", and a row starting with Critical counts
 in any letter case.
 
-**The manifest** `build/fpga/<board>/<design>/manifest.txt` (TOML): run id, design, top,
-board, part, flow, build host alias, Vivado binary, source revision and dirty state, build ID
-and time, SHA-256 of the sources, of the constraint files (in reading order), of the ROM and
-of the kernel package if present, ISA, ABI, map and SoC versions, platform ABI, the Mac; then a
-`[vivado]` table from `out/build-results.txt`: Vivado version, build host name, WNS, WHS,
-LUT/FF/BRAM/DSP/BUFG/MMCM/PLL/IO use, DRC errors, critical warnings, critical CDC findings,
-`check_timing` issues, the result, and the bitstream's SHA-256.
+**The manifest** `build/fpga/<board>/<design>/manifest.txt` (TOML), the same keys for every
+flow: run id, design, top, board, part, flow, build host alias, Vivado binary (empty for the
+open flow), source revision and dirty state, build ID and time, SHA-256 of the sources, of
+the constraint files (in reading order), of the ROM and of the kernel package if present,
+ISA, ABI, map and SoC versions, platform ABI, the Mac; the result (`pass` or `fail` with a
+`reason`) and, with a bitstream, its SHA-256 and size, which `tools/program.sh` compares with
+the file. Then the flow's table: `[vivado]` from `out/build-results.txt` (Vivado version,
+build host name, WNS, WHS, LUT/FF/BRAM/DSP/BUFG/MMCM/PLL/IO use, DRC errors, critical warnings,
+critical CDC findings, `check_timing` issues) or `[openxc7]` (image and tool versions, the part
+placed, the DSP mode, the six checks, nextpnr's timing per clock and the worst slack, use
+against the part's documented capacity, the IDCODE and part in the bitstream, and the
+constraints given and not checked).
 
 **To confirm on the first real Vivado run** (none of this can be run here):
 the generic syntax (`-generic BOARD="arty_a7_100t"`, `-generic BUILD_ID=32'h...`); the names

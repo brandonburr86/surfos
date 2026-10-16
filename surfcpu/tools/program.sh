@@ -162,7 +162,7 @@ case "$kind" in
         [ "$(top_key part)" = "$part" ] || die "$manifest is for part '$(top_key part)', but $board carries $part; refusing" ;;
     openxc7)
         # Every check line must say PASS (block RAM and clocks may be absent from the design).
-        bad=$(awk '/^check / { r = substr($0, 21); sub(/ \(.*$/, "", r)
+        bad=$(awk '/^check / { r = substr($0, 21); sub(/ \([^()]*\)$/, "", r)
                                if (r != "PASS" && r != "none in the design") print substr($0, 1, 20) r }' "$manifest")
         [ -n "$(grep '^check ' "$manifest")" ] || die "$manifest lists no checks; refusing"
         [ -z "$bad" ] || die "$manifest does not say the build passed its checks ($(echo "$bad" | sed 's/  */ /g' | tr '\n' ';')); refusing"
