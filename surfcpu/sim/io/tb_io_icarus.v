@@ -13,7 +13,7 @@ timing measured over a frame. Prints PASS or stops with $fatal.
 module tb_io_icarus;
     reg clk = 0, pix_clk = 0;
     always #20 clk = ~clk;                // 25 MHz
-    always #19.859 pix_clk = ~pix_clk;    // 25.1773 MHz
+    always #19.862 pix_clk = ~pix_clk;    // 25.1736 MHz (clocks.pix_hz 25,173,611 Hz)
     reg rst = 1, pix_rst = 1;
     integer errors = 0;
 
@@ -63,7 +63,8 @@ module tb_io_icarus;
     always @(posedge pix_clk) text_data <= tram[text_addr];
     wire [3:0] vr, vg, vb;
     wire       hs, vs, vid_irq;
-    surf_video #(.PIX_HZ(25177305)) video (
+`include "surfcpu_soc.vh"
+    surf_video #(.PIX_HZ(SURF_PIX_HZ)) video (
         .clk(clk), .rst(rst),
         .s_req_valid(req_valid && sel == 3'd3), .s_req_ready(vid_ready), .s_req_addr(req_addr),
         .s_req_write(req_write), .s_req_be(req_be), .s_req_wdata(req_wdata), .s_req_fetch(req_fetch),
@@ -157,7 +158,7 @@ module tb_io_icarus;
         if (ps2_clk_oe || ps2_data_oe) begin $display("FAIL lines still pulled"); errors = errors + 1; end
         // video: geometry registers, then the timing of the test pattern over a whole frame
         expect(32'h1000_6014, 32'h1008_1E50, 32'hFFFF_FFFF);
-        expect(32'h1000_6018, 32'd25177305, 32'hFFFF_FFFF);
+        expect(32'h1000_6018, SURF_PIX_HZ, 32'hFFFF_FFFF);
         wait (vs_falls >= 2);
         if (line_len != 800 || hs_width != 96 || frame_len != 420000 || first_lit != 144) begin
             $display("FAIL video: line %0d, hsync %0d, frame %0d, first lit pixel %0d after hsync",

@@ -137,9 +137,9 @@ within 3.3 V (INVENTORY.md G4, the board track's WIRING.md).
 | Horizontal (pixels) | 640 | 16 | 96 (negative) | 48 | 800 |
 | Vertical (lines) | 480 | 10 | 2 (negative) | 33 | 525 |
 
-With pix_clk = 25,177,305 Hz (`SURF_PIX_HZ`, 100 MHz x 8.875 / 35.25 from the board track's
-MMCM) the line rate is 31.4716 kHz and the **refresh rate 59.9460 Hz** (the standard's 25.175
-MHz gives 59.9405 Hz). These rates are computed from the measured totals and the nominal
+With pix_clk = 25,173,611 Hz (`SURF_PIX_HZ`, 100 MHz / 2 x 18.125 / 36 from the board track's
+MMCM; 25,177,305 Hz until 2026-10-15, docs/BOARD.md section 2) the line rate is 31.4670 kHz
+and the **refresh rate 59.9372 Hz** (the standard's 25.175 MHz gives 59.9405 Hz). These rates are computed from the measured totals and the nominal
 clock; the clock itself is the board track's to verify.
 
 **Modes** (CTRL): MODE 0 the colour-bar test pattern (the reset mode, so a monitor shows a
@@ -341,7 +341,7 @@ suite missed eight of them, each is now caught by a test:
 
 * Everything physical: SCLK and MISO timing with the Pmod MicroSD and a real card, the card
   detect switch's polarity, PS/2 levels and a real keyboard's timing, a monitor locking to
-  59.946 Hz. Vivado synthesis and timing of these blocks: pending a build host.
+  59.937 Hz. Vivado synthesis and timing of these blocks: pending a build host.
 * The SD model is not a particular card: real cards differ in NCR, NAC, busy times and in how
   they report errors such as an out-of-range address; SurfBoot should allow the spec's
   limits, as `sd_host.h` does. CMD1, CMD6 (high speed), CMD42 locking, erase commands and

@@ -30,7 +30,7 @@ osc_hz = 100_000_000        # the Arty's 100 MHz oscillator (pin E3)
 sys_hz = 25_000_000         # CPU and SurfBus clock: the conservative first target (brief section 5)
 timebase_hz = 1_000_000     # mtime counts microseconds
 pix_hz_nominal = 25_175_000 # VGA 640x480@60 standard pixel clock
-pix_hz = 25_177_305         # what the pixel MMCM makes: 100 MHz x 8.875 / 35.25 (board track verifies)
+pix_hz = 25_173_611         # what the pixel MMCM makes: 100 MHz / 2 x 18.125 / 36 (board track verifies)
 
 [boards]
 # sysinfo.BOARD_ID values

@@ -1,9 +1,10 @@
 #!/bin/sh
 # SurfCPU board track: tests of tools/fpga-build.sh, tools/program.sh and the Digilent fetch.sh.
 #
-# Fake ssh, docker, vivado and openFPGALoader (sim/board/tools/fake) stand in for the build host,
-# Docker, Vivado and the board: the fake vivado runs the real boards/arty_a7/vivado/build.tcl in
-# Yosys's Tcl with stubbed Vivado commands (vivado_stub.tcl). HOME is a temporary directory, so
+# Fake ssh, docker, vivado, openxc7-build.sh and openFPGALoader (sim/board/tools/fake) stand in
+# for the build host, Docker, Vivado, the open flow and the board: the fake vivado runs the real
+# boards/arty_a7/vivado/build.tcl in Yosys's Tcl with stubbed Vivado commands (vivado_stub.tcl);
+# the open flow's dry runs use the real tools/openxc7-build.sh. HOME is a temporary directory, so
 # the build-host.conf files here are never the user's; the "remote" is a local directory.
 # Nothing leaves this machine and nothing is programmed. Run from surfcpu/ in the toolchain
 # container (mk/area-board.mk: board-tools). Prints one line per check and exits 1 on a failure.
@@ -18,7 +19,8 @@ export FAKE_STUB="$root/sim/board/tools/vivado_stub.tcl" SOURCE_DATE_EPOCH=17605
 export SURFCPU_FPGA_OUT="$t/fpga"                     # never the real build/fpga
 PATH="$root/sim/board/tools/fake:$PATH"
 export PATH
-unset DESIGN BIT SURFCPU_BUILD_HOST_CONF SURFCPU_FLASH_CONFIRM OPENFPGALOADER 2>/dev/null || true
+unset DESIGN BIT FLOW CABLE_SERIAL SURFCPU_BUILD_HOST_CONF SURFCPU_FLASH_CONFIRM OPENFPGALOADER \
+      SURFCPU_OPENXC7_BUILD SURFCPU_OPENXC7_IMAGE 2>/dev/null || true
 conf="$HOME/.config/surfcpu/build-host.conf"
 
 pass=0
@@ -43,6 +45,7 @@ nolog() { ! [ -s "$FAKE_LOG" ]; }
 is() { [ "$1" = "$2" ]; }
 base=$SURFCPU_FPGA_OUT
 time_hex=$(printf '%08x' "$SOURCE_DATE_EPOCH")
+sshopts="-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=4"
 
 # ============================================================================== fpga-build.sh
 run tools/fpga-build.sh arty_a7_100t
@@ -78,7 +81,8 @@ printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n
 run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_100t
 check "dry run: exit 0" is "$rc" 0
 check "dry run: contacts nothing (no ssh/vivado call)" nolog
-check "dry run: prints the ssh commands" has "ssh -o BatchMode=yes builder"
+check "dry run: prints the ssh commands, with the strict options" has "ssh $sshopts builder"
+check "dry run: Vivado under nohup, its pid and exit status in out/" has "nohup sh -c 'echo \$\$ > out/vivado.pid; vivado -mode batch"
 check "dry run: prints the Vivado command" has "vivado -mode batch"
 p=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
 check "dry run: params.tcl has the 100T part" grep -q "set part {xc7a100tcsg324-1}" "$p"
@@ -97,11 +101,15 @@ check "dry run: DRY_RUN other than 0 or 1 refused" has "DRY_RUN must be 0 or 1"
 run tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
 b=$base/arty_a7_35t/arty_a7_baseline
 check "ssh: passing build exits 0" is "$rc" 0
-check "ssh: made the remote directory" logged "ssh -o BatchMode=yes builder mkdir -p surfcpu-build/arty_a7_baseline-arty_a7_35t-"
+check "ssh: made the remote directory" logged "ssh $sshopts builder mkdir -p surfcpu-build/arty_a7_baseline-arty_a7_35t-"
+check "ssh: every ssh call checks the host key, times out, keeps the connection alive" \
+    test "$(grep -c '^ssh ' "$FAKE_LOG")" -ge 4 -a "$(grep -c '^ssh ' "$FAKE_LOG")" -eq "$(grep -c "^ssh $sshopts builder " "$FAKE_LOG")"
+check "ssh: Vivado ran under nohup" logged "nohup sh -c"
 check "ssh: ran Vivado on the host" logged "vivado -mode batch -nojournal -log out/vivado.log -source surfcpu/boards/arty_a7/vivado/build.tcl -tclargs params.tcl"
 check "ssh: the bitstream came back" test -f "$b/arty_a7_baseline.bit"
 check "ssh: no checkpoint came back" test ! -e "$b/out/post_route.dcp"
 check "ssh: reports came back" test -f "$b/out/reports/timing_summary.rpt"
+check "ssh: ... with the run's own log and exit status" test -f "$b/out/vivado.nohup.txt" -a "$(cat "$b/out/vivado.exit")" = 0
 c=$b/out/calls.txt
 check "build.tcl: set_part with the 35T's -1L part" grep -q "^set_part xc7a35ticsg324-1L$" "$c"
 check "build.tcl: reads all four XDC files" test "$(grep -c '^read_xdc boards/arty_a7/xdc/arty_a7_' "$c")" -eq 4
@@ -125,9 +133,53 @@ assert d['isa']=='rv32im_zicsr_zifencei' and d['abi']=='ilp32' and d['part']=='x
 " "$m"
 check "manifest: the bitstream's SHA-256" grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$m"
 
+# ------------------------------------------------------------------------------ ssh flow, lost connection and --fetch
+b=$base/arty_a7_35t/arty_a7_baseline
+run env FAKE_SSH_DROP=1 tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "drop: a connection lost during the run exits 3" is "$rc" 3
+check "drop: ... and says how to fetch the results later" has "tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t"
+check "drop: ... no bitstream yet, and a manifest without a result" \
+    test ! -e "$b/arty_a7_baseline.bit" -a -z "$(grep '^result' "$b/manifest.txt")"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: brings back the finished run, which passed" is "$rc" 0
+check "fetch: ... the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "fetch: ... without running Vivado again" test -z "$(grep '^vivado ' "$FAKE_LOG")"
+check "fetch: ... and a manifest with the result and the bitstream's SHA-256" \
+    grep -q "^bitstream_sha256 = \"$(shasum -a 256 "$b/arty_a7_baseline.bit" | cut -d' ' -f1)\"" "$b/manifest.txt"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a second fetch gives the same manifest" test "$rc" -eq 0 -a "$(grep -c '^result = ' "$b/manifest.txt")" -eq 2
+rid=$(sed -n 's/^run_id = "\(.*\)"$/\1/p' "$b/manifest-head.txt")
+ro=$t/remote/surfcpu-build/$rid/out
+mv "$ro/vivado.exit" "$ro/vivado.exit.saved"
+sleep 60 &
+spid=$!
+echo "$spid" > "$ro/vivado.pid"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: Vivado still running exits 4" test "$rc" -eq 4 -a -n "$(grep 'still running' "$t/out.txt")"
+kill "$spid" 2>/dev/null
+wait "$spid" 2>/dev/null
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: no exit status and no Vivado running: start a new build" has "start a new build"
+mv "$ro/vivado.exit.saved" "$ro/vivado.exit"
+run env FAKE_SSH_DOWN=1 tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: host unreachable exits 3" test "$rc" -eq 3 -a -n "$(grep 'run --fetch again later' "$t/out.txt")"
+run tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a dry run in between leaves the last run fetchable" is "$rc" 0
+run tools/fpga-build.sh --fetch --design surfcpu_arty_a7_top arty_a7_35t
+check "fetch: nothing started for that design" has "was started here"
+printf 'FLOW=vivado-ssh\nHOST=other\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+run tools/fpga-build.sh --fetch --design arty_a7_baseline arty_a7_35t
+check "fetch: a run on another host is not fetched from this one" has "ran on 'builder'"
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+
 # ------------------------------------------------------------------------------ failing checks stop the bitstream
 for case in "FAKE_WNS=-0.250:setup timing" "FAKE_WHS=-0.010:hold timing" "FAKE_DRC=2:DRC errors" \
-            "FAKE_CRIT=3:critical warnings" "FAKE_CDC=1:critical CDC" "FAKE_NO_INPUT_DELAY=4:check_timing"; do
+            "FAKE_CRIT=3:critical warnings" "FAKE_CDC=1:critical CDC" "FAKE_NO_INPUT_DELAY=4:check_timing" \
+            "FAKE_CT_FORMAT=renamed:no section 'checking no_input_delay'" \
+            "FAKE_CT_FORMAT=wording:a line without its number" \
+            "FAKE_CDC_FORMAT=noheader:cdc.rpt is not in the expected format" \
+            "FAKE_CDC_FORMAT=caps:2 critical CDC findings"; do
     setting=${case%%:*}
     why=${case#*:}
     run env "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
@@ -149,25 +201,115 @@ check "docker: passing build exits 0" is "$rc" 0
 check "docker: ran in an amd64 container" logged "docker run --rm --platform linux/amd64 -v"
 check "docker: the bitstream" test -f "$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit"
 
+# ------------------------------------------------------------------------------ build identity from git
+# A scratch repository with the files the baseline build reads (this container cannot use the
+# worktree's own git): clean, an unrelated untracked file, a file the build reads made untracked,
+# committed again, a tracked file changed.
+g=$t/gitrepo
+mkdir -p "$g"
+tar cf - --exclude=manuals --exclude=__pycache__ tools/fpga-build.sh boards/arty_a7 rtl/lib rtl/generated spec/soc.toml |
+    ( cd "$g" && tar xf - )
+gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
+gitq init -q && gitq add -A && gitq commit -q -m scratch
+printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+gm=$base/arty_a7_100t/arty_a7_baseline/manifest.dry-run.txt
+gp=$base/arty_a7_100t/arty_a7_baseline/stage/params.tcl
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a clean scratch commit is clean" test "$rc" -eq 0 -a -n "$(grep '^source_dirty = false' "$gm")"
+check "identity: ... BUILD_FLAGS 0 and the commit as BUILD_ID" \
+    grep -q "BUILD_ID 32'h$(git -C "$g" rev-parse HEAD | cut -c1-8) BUILD_FLAGS 32'h00000000" "$gp"
+printf 'notes\n' > "$g/notes.txt"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: an untracked file the build does not read leaves it clean" grep -q '^source_dirty = false' "$gm"
+gitq rm -q --cached rtl/lib/surf_sync.v
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a source git does not track makes it dirty" grep -q '^source_dirty = true' "$gm"
+check "identity: ... BUILD_FLAGS bit 0" grep -q "BUILD_FLAGS 32'h00000001" "$gp"
+check "identity: ... and the file is named" has "not in git, so the build counts as dirty: rtl/lib/surf_sync.v"
+gitq add rtl/lib/surf_sync.v && gitq commit -q -m again
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: committed again, clean" grep -q '^source_dirty = false' "$gm"
+printf '// changed\n' >> "$g/rtl/lib/surf_sync.v"
+run "$g/tools/fpga-build.sh" --dry-run --design arty_a7_baseline arty_a7_100t
+check "identity: a changed tracked file makes it dirty" grep -q '^source_dirty = true' "$gm"
+rm -rf "$g"
+
 # ============================================================================== program.sh
 bit100=$base/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
 bit35=$base/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit
+m100=$base/arty_a7_100t/arty_a7_baseline/manifest.txt
 export DESIGN=arty_a7_baseline
 run env PATH=/usr/bin:/bin "$root/tools/program.sh" volatile arty_a7_100t
 check "program: no openFPGALoader -> pending, exit 2" is "$rc" 2
 run env FAKE_IDCODE= tools/program.sh volatile arty_a7_100t
 check "program: no cable/device refused" has "found no JTAG cable"
+
+# the IDCODE as the real openFPGALoader prints it: printf("0x%x"), so 7 digits for revision 0
+check "program: the fake prints IDCODEs like openFPGALoader (0x362d093)" \
+    test "$(FAKE_IDCODE=0x0362d093 sh sim/board/tools/fake/openFPGALoader --detect | sed -n 's/^.idcode //p')" = 0x362d093
+run env FAKE_IDCODE=0x0362d093 tools/program.sh detect arty_a7_35t
+check "program: detect reads 'idcode 0x362d093' as the 35T" has "IDCODE 0x0362D093 = BOARD arty_a7_35t"
+run env FAKE_IDCODE=0x03631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads 'idcode 0x3631093' as the 100T" has "IDCODE 0x03631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x13631093 tools/program.sh detect arty_a7_100t
+check "program: detect reads the 100T with revision 1 (0x13631093)" has "IDCODE 0x13631093 = BOARD arty_a7_100t"
 run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_100t
 check "program: 35T IDCODE with BOARD=arty_a7_100t refused" has "refusing"
 check "program: ... and nothing was loaded" test "$(grep -c -- ' -b ' "$FAKE_LOG")" -eq 0
 run env FAKE_IDCODE=0x13631093 FAKE_IDCODE2=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: two devices on the chain refused" has "refusing to guess"
-run env FAKE_IDCODE=0x13631093 tools/program.sh detect arty_a7_100t
-check "program: detect reads the 100T (revision 1)" has "IDCODE 0x13631093 = BOARD arty_a7_100t"
+run env FAKE_IDCODE=0x1 FAKE_DETECT_TEXT="$(printf 'index 0:\n\tidcode 0x136310930')" tools/program.sh detect arty_a7_100t
+check "program: an IDCODE longer than 8 digits is not read as one" has "cannot read the IDCODE"
+
+# the cable: one FT2232H, or the one named by its serial number
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh volatile arty_a7_100t
+check "cable: two FT2232H cables refused" has "2 FT2232H cables"
+check "cable: ... after only listing them (no detect, no load)" test "$(grep -vc -- '--scan-usb' "$FAKE_LOG")" -eq 0
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" CABLE_SERIAL=210319B0C8A6 tools/program.sh volatile arty_a7_100t
+check "cable: CABLE_SERIAL chooses one, the load exits 0" is "$rc" 0
+check "cable: ... detect on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -c digilent --detect"
+check "cable: ... and the load on that cable" logged "openFPGALoader --ftdi-serial 210319B0C8A6 -b arty_a7_100t $bit100"
+run env FAKE_IDCODE=0x03631093 FAKE_CABLES="210319A28C7F 210319B0C8A6" tools/program.sh --ftdi-serial 210319A28C7F detect arty_a7_100t
+check "cable: --ftdi-serial chooses one too" test "$rc" -eq 0 -a -n "$(grep -- '--ftdi-serial 210319A28C7F -c digilent --detect' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL=0123NOSUCH tools/program.sh detect arty_a7_100t
+check "cable: a serial number no cable has finds no cable" has "found no JTAG cable"
+run env FAKE_IDCODE=0x03631093 CABLE_SERIAL='21;rm' tools/program.sh detect arty_a7_100t
+check "cable: a serial number with shell characters refused" test "$rc" -eq 1 -a ! -s "$FAKE_LOG"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 tools/program.sh detect arty_a7_100t
+check "cable: no USB list (--scan-usb failed) refused without a serial number" has "cannot be counted"
+run env FAKE_IDCODE=0x03631093 FAKE_SCAN_RC=1 CABLE_SERIAL=210319A28C7F tools/program.sh detect arty_a7_100t
+check "cable: ... and accepted with one" is "$rc" 0
+
+# the bitstream's header: device and package (UG470 .bit fields a and b, as Vivado writes them)
+mkbit() {     # FILE PART: a .bit header with fields a and b, then filler
+    n=$(( ${#2} + 1 ))
+    { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\016other_project\000b\000'
+      printf "\\$(printf '%03o' "$n")"
+      printf '%s\000c\000\01310/01/2026\000 not a real bitstream\n' "$2"; } > "$1"
+}
+mkdir -p "$t/bits"
+for c in "7a35tcpg236:arty_a7_35t:refuse" "7a100tfgg484:arty_a7_100t:refuse" "7a50tcsg324:arty_a7_35t:refuse" \
+         "7a35ticsg324:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_35t:load" "xc7a35tcsg324-1:arty_a7_100t:refuse" \
+         "xc7a100tcsg324-1:arty_a7_100t:load" "XC7A100TCSG324-1:arty_a7_100t:load"; do
+    bp=${c%%:*}; rest=${c#*:}; bb=${rest%%:*}; want=${rest#*:}
+    mkbit "$t/bits/$bp.bit" "$bp"
+    case "$bb" in arty_a7_35t) id=0x0362d093 ;; *) id=0x03631093 ;; esac
+    run env FAKE_IDCODE=$id tools/program.sh volatile "$bb" "$t/bits/$bp.bit"
+    if [ "$want" = load ]; then
+        check "header: $bp on $bb loads" test "$rc" -eq 0 -a -n "$(grep -- " -b $bb " "$FAKE_LOG")"
+    else
+        check "header: $bp on $bb refused" test "$rc" -eq 1 -a -z "$(grep -- ' -b ' "$FAKE_LOG")"
+    fi
+done
+printf 'no header at all\n' > "$t/bits/raw.bit"
+run env FAKE_IDCODE=0x03631093 tools/program.sh volatile arty_a7_100t "$t/bits/raw.bit"
+check "header: a file without a .bit header refused" has "no .bit header"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$bit35"
 check "program: a 35T bitstream on the 100T refused" has "was built for 7a35t"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t "$t/nosuch.bit"
 check "program: missing bitstream refused" has "no bitstream"
+
+# loading, with the build manifest next to the bitstream
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: volatile load exits 0" is "$rc" 0
 check "program: loads configuration RAM with the board's name" logged "openFPGALoader -b arty_a7_100t $bit100"
@@ -184,11 +326,127 @@ check "flash: confirmation for another board refused" has "not confirmed"
 run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
 check "flash: confirmed write exits 0" is "$rc" 0
 check "flash: writes and verifies the flash" logged "openFPGALoader -b arty_a7_100t -f --verify $bit100"
-sed -i 's/^result = "pass"/result = "fail"/' "$base/arty_a7_100t/arty_a7_baseline/manifest.txt"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t "$t/bits/xc7a100tcsg324-1.bit" < /dev/null
+check "flash: a bitstream without a build manifest refused" has "flash needs the bitstream's build manifest"
+
+# the manifest must describe this file, this board and its part
+cp "$bit100" "$t/bit100.saved"
+cp "$m100" "$t/m100.saved"
+printf 'x' >> "$bit100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a bitstream that is not the one the manifest describes refused" has "describes another bitstream"
+run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
+check "program: ... also for a volatile load" has "describes another bitstream"
+cp "$t/bit100.saved" "$bit100"
+sed -i 's/^board = "arty_a7_100t"/board = "arty_a7_35t"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another board refused" has "is for board 'arty_a7_35t'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^part = "xc7a100tcsg324-1"/part = "xc7a100tcsg324-2"/' "$m100"
+run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
+check "flash: a manifest for another part refused" has "is for part 'xc7a100tcsg324-2'"
+cp "$t/m100.saved" "$m100"
+sed -i 's/^result = "pass"/result = "fail"/' "$m100"
 run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t tools/program.sh flash arty_a7_100t < /dev/null
 check "flash: a bitstream whose build failed its checks refused" has "does not say the build passed"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: ... also for a volatile load" has "does not say the build passed"
+cp "$t/m100.saved" "$m100"
+
+# tools/openxc7-build.sh's own manifest (a flow track build, docs/OPEN-FLOW.md section 8)
+ox=$t/openxc7/flow_demo-arty_a7_35t
+mkdir -p "$ox"
+mkbit "$ox/flow_demo.bit" xc7a35tcsg324-1
+oxmanifest() {   # BLOCK_RAM_RESULT: an openxc7-build.sh manifest for $ox/flow_demo.bit
+    { echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
+      echo "top                 flow_demo"
+      echo "part                xc7a35tcsg324-1 (device xc7a35t, chip database chipdb-xc7a50t.bin)"
+      echo "bitstream           $ox/flow_demo.bit sha256:$(shasum -a 256 "$ox/flow_demo.bit" | cut -d' ' -f1) 99 bytes"
+      echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
+      echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
+      echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"
+      echo "check block RAM     $1 (contents decoded from the bitstream: check-bram.txt)"
+      echo "check LVS           PASS (routed netlist equivalent to the synthesis: check-lvs.txt)"
+      echo "check clocks        none in the design (MMCM/PLL dividers against XAPP888: check-clocks.txt)"; } > "$ox/manifest.txt"
+}
+oxmanifest "none in the design"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: every check passed, the volatile load exits 0" test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+run env FAKE_IDCODE=0x0362d093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_35t tools/program.sh flash arty_a7_35t "$ox/flow_demo.bit" < /dev/null
+check "openxc7 manifest: ... but no flash without tools/fpga-build.sh's manifest" has "flash needs the bitstream's build manifest from tools/fpga-build.sh"
+oxmanifest "FAIL"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: a failed check refused" has "does not say the build passed its checks (check block RAM FAIL"
+oxmanifest "PASS"
+printf 'x' >> "$ox/flow_demo.bit"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$ox/flow_demo.bit"
+check "openxc7 manifest: another bitstream refused" has "describes another bitstream"
+
+# ============================================================================== open flow (FLOW=openxc7)
+b=$base/arty_a7_35t/arty_a7_baseline
+cp "$b/manifest.txt" "$t/vivado-manifest.txt"          # the 35T's last Vivado (ssh) build
+mv "$conf" "$t/conf.saved"                              # no build-host.conf at all
+run env FLOW=openxc7 tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7 dry run: needs no build-host.conf (FLOW from the environment)" is "$rc" 0
+check "openxc7 dry run: top, board, constraints, output directory, safe DSP mode" \
+    has "--top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc --out ${b#$root/}/openxc7 --dsp safe"
+check "openxc7 dry run: the build values as defines" has "-D ARTY_BUILD_BOARD=\"arty_a7_35t\" -D ARTY_BUILD_ID=32'h[0-9a-f]\{8\} -D ARTY_BUILD_FLAGS=32'h0000000[01] -D ARTY_BUILD_TIME=32'h$time_hex"
+check "openxc7 dry run: include directories, then the sources" has "-I rtl/generated -I boards/arty_a7/rtl rtl/lib/surf_sync.v"
+check "openxc7 dry run: the real script's dry run (nextpnr for the 35T's die)" has "nextpnr-himbaechel --device xc7a35tcsg324-1"
+check "openxc7 dry run: contacts nothing" nolog
+nx=$b/nextpnr.xdc
+check "nextpnr constraints: the 28 base pins and the oscillator's clock" \
+    test "$(grep -c 'PACKAGE_PIN' "$nx")" -eq 28 -a "$(grep -c '^create_clock -period 10.000 \[get_ports clk100\]$' "$nx")" -eq 1
+check "nextpnr constraints: no ';', comment, timing exception or design property" \
+    test -z "$(grep -E ';|#|current_design|false_path|generated_clock|max_delay' "$nx")"
+check "nextpnr constraints: 11 not checked (2 generated clocks, 2 false paths, 3 design properties, 4 CDC files)" \
+    test "$(grep -c . "$b/nextpnr-not-checked.txt")" -eq 11
+check "nextpnr constraints: ... and the build says so" has "it cannot check these 11, which only Vivado does"
+check "nextpnr constraints: ... naming the clock-crossing bounds" has "cdc/surf_cdc_word.xdc: scoped to every surf_cdc_word: 3 set_max_delay"
+awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$t/pmod-not.txt" boards/arty_a7/xdc/arty_a7_pmod_pins.xdc > "$t/pmod.xdc"
+check "nextpnr constraints: Vivado's PULLUP true becomes PULLTYPE PULLUP (DRIVE kept)" \
+    grep -q '^set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33 PULLTYPE PULLUP DRIVE 4} \[get_ports {ps2_data}\]$' "$t/pmod.xdc"
+check "nextpnr constraints: IOB TRUE is listed as not applied" test "$(grep -c 'IOB TRUE.*pin option nextpnr does not apply' "$t/pmod-not.txt")" -eq 2
+
+fake_ox=$root/sim/board/tools/fake/openxc7-build.sh
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+check "openxc7: a passing build exits 0" is "$rc" 0
+check "openxc7: the bitstream" test -f "$b/arty_a7_baseline.bit"
+check "openxc7: the open flow ran on the nextpnr constraints" logged "openxc7-build.sh --top arty_a7_baseline --board arty_a7_35t --xdc ${b#$root/}/nextpnr.xdc"
+check "openxc7: the manifest is TOML, with the result and the open flow's checks and numbers" python3 -c "
+import tomllib,sys
+d=tomllib.load(open(sys.argv[1],'rb'))
+o=d['openxc7']
+assert d['result']=='pass' and d['flow']=='openxc7' and d['part']=='xc7a35ticsg324-1L', d
+assert d['bitstream_bytes']>0 and len(d['bitstream_sha256'])==64
+assert o['part']=='xc7a35tcsg324-1' and o['check_lvs']=='PASS' and o['check_block_ram']=='none in the design'
+assert o['idcode']=='0x0362D093' and o['lut']=='285 / 20800' and o['wns_ns']==33.033 and len(o['timing'])==2
+assert len(o['constraints_not_checked'])==11 and o['constraints_given']==29 and o['dsp_mode']=='safe'
+" "$b/manifest.txt"
+check "openxc7: the same top-level manifest keys as the Vivado flow's" python3 -c "
+import tomllib,sys
+a=tomllib.load(open(sys.argv[1],'rb')); b=tomllib.load(open(sys.argv[2],'rb'))
+ka={k for k,v in a.items() if not isinstance(v,dict)}; kb={k for k,v in b.items() if not isinstance(v,dict)}
+assert ka==kb, ka ^ kb
+" "$t/vivado-manifest.txt" "$b/manifest.txt"
+run env FAKE_IDCODE=0x0362d093 tools/program.sh volatile arty_a7_35t "$b/arty_a7_baseline.bit"
+check "openxc7: program.sh loads its bitstream on the 35T (header xc7a35tcsg324-1)" \
+    test "$rc" -eq 0 -a -n "$(grep -- ' -b arty_a7_35t ' "$FAKE_LOG")"
+for case in "FAKE_OX_LVS=BLOCKED (timeout):check LVS BLOCKED (timeout)" "FAKE_OX_CLOCKS=FAIL:check clocks FAIL" \
+            "FAKE_OX_TIMING=FAIL:timing not met" "FAKE_OX_RC=1:exit status 1"; do
+    setting=${case%%:*}
+    why=${case#*:}
+    run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_35t
+    check "openxc7 gate ${setting%%=*}: build fails, no bitstream" test "$rc" -eq 1 -a ! -e "$b/arty_a7_baseline.bit"
+    check "openxc7 gate ${setting%%=*}: the manifest says fail and why" grep -q "^reason = \".*$why" "$b/manifest.txt"
+done
+run env FLOW=openxc7 SURFCPU_FPGA_OUT=/nonexistent/fpga tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t
+check "openxc7: an output directory outside surfcpu/ refused (the container sees only the repository)" has "is outside it"
+mv "$t/conf.saved" "$conf"                              # FLOW=vivado-ssh in the file again
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "openxc7: FLOW from the environment overrides build-host.conf (no ssh)" test "$rc" -eq 0 -a -z "$(grep '^ssh ' "$FAKE_LOG")"
+run env FLOW=quartus tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t
+check "build: an unknown FLOW from the environment refused" has "unknown FLOW 'quartus' from the environment"
 
 # ============================================================================== digilent/fetch.sh
 # A copy of the digilent directory whose SHA256SUMS lists three made-up manuals: one saved

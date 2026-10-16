@@ -145,7 +145,8 @@ board-cdc-xdc:
 	@tail -1 $(BSIM)/cdc_xdc_test.txt
 
 # tools/fpga-build.sh and tools/program.sh against fake ssh, docker, vivado (running the real
-# build.tcl with stubbed Vivado commands) and openFPGALoader, with a temporary HOME
+# build.tcl with stubbed Vivado commands), openxc7-build.sh and openFPGALoader, with a temporary
+# HOME; and boards/arty_a7/digilent/fetch.sh on made-up manuals
 board-tools:
 	@mkdir -p $(BSIM)
 	$(Q)sh sim/board/tools/test_tools.sh > $(BSIM)/test_tools.txt 2>&1 || { grep -v '^ok' $(BSIM)/test_tools.txt; exit 1; }

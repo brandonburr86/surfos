@@ -25,7 +25,7 @@ Checks:
   * STATUS.VBLANK duty, VBLANK_EV once per frame with the interrupt, the FRAME counter;
   * a reset of the pixel domain alone (its settings come back over the crossing) and of the
     sys domain alone (registers back to reset values, the syncs undisturbed);
-all at the board's clocks (25 MHz / 25.1773 MHz) or, by seed, at other ratios for the
+all at the board's clocks (SURF_SYS_HZ / SURF_PIX_HZ) or, by seed, at other ratios for the
 clock crossings.
 
     Vtb_video --font driver/font8x16.c --out DIR [--seed N]
@@ -657,7 +657,7 @@ int main(int argc, char **argv) {
     }
     std::mt19937 rng(seed);
     // the board's clocks, or by seed a faster or slower sys clock against the pixel clock
-    const uint64_t pix_ps = 39718;                         // 25.1773 MHz
+    const uint64_t pix_ps = (1000000000000ull + SURF_PIX_HZ / 2) / SURF_PIX_HZ;   // 39724 ps
     const uint64_t sys_choices[] = {40000, 40000, 20000, 100000, 33333};
     const uint64_t sys_ps = sys_choices[seed % 5];
     auto top = std::make_unique<Vtb_video>();

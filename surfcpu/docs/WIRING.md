@@ -9,7 +9,8 @@ ports share a pin, and pin, direction, I/O standard and pin options agree everyw
 **Nothing here has been checked on the hardware.** The board and the adapters are not
 connected and their revisions are not confirmed (INVENTORY.md gaps G1, G4). The allocation
 (microSD on JA, VGA on JB + JC, PS/2 on JD) is the brief's proposal, not permission to plug
-anything in. Read section 4 before connecting the PS/2 adapter.
+anything in. Read U2, U5 and U8 (which way up each adapter goes) before plugging any of them
+in, and section 4 before connecting the PS/2 adapter.
 
 ## 1. Sources
 
@@ -125,7 +126,8 @@ each color is the most significant (VGA-SCH: the R-2R ladder's bit 3 sits next t
 The adapter buffers every input with SN74ALVC245s powered from the Pmod's 3.3 V and pulls them
 down with 100 kΩ, so the FPGA drives 3.3 V CMOS loads only and an unconfigured FPGA gives a
 black screen (VGA-SCH). JB and JC have no series resistors (0 Ω): those pins must never be
-driven against anything, which holds while the Pmod VGA is the only thing plugged in.
+driven against anything, which holds only while the Pmod VGA is the only thing plugged in, and
+plugged in the right way up (U2: upside down, its supply pins meet FPGA outputs).
 
 ### 2.4 Pmod JD: Pmod PS2 (6-pin, in the top row of JD)
 
@@ -153,12 +155,13 @@ with the memory controller.
 | # | What | Why it matters | How to settle it |
 |---|---|---|---|
 | U1 | The board's revision (the master XDC covers Rev. D and E; the schematic is Rev. E.0) and variant (35T or 100T) | the pins are the same on both variants and both revisions; the FPGA part and flash differ | owner: the label; `make doctor`: the IDCODE (`tools/program.sh` refuses a mismatch) |
-| U2 | Which Pmod VGA header goes into which Arty connector | the table assumes the adapter's J1 (red, blue) in JB and J2 (green, syncs) in JC; turned the other way, the syncs land on JB7/JB8 and nothing is displayed | owner: with the adapter plugged in, its J1 silkscreen must sit in JB. The color-bar test pattern (milestone 6) then shows red, green and blue in place |
+| U2 | **Which way up the Pmod VGA goes in** (one adapter across JB and JC) | The right way up (component side up, the VGA socket pointing away from the Arty) its J1 (red, blue) sits in JB and J2 (green, syncs) in JC, pin 1 at pin 1, as the table assumes. Upside down, J2 lands in JB and J1 in JC, and adapter pin p meets connector pin 13 - p: the adapter's 3.3 V net then joins `vga_r[0]`, `vga_b[0]`, `vga_g[0]` and `vga_hs`, its ground net (also the monitor's ground through the cable) joins `vga_r[1]`, `vga_b[1]`, `vga_g[1]` and `vga_vs`, and the Arty's own 3.3 V and ground pins drive adapter inputs. JB and JC have no series resistors, so FPGA outputs would drive against each other and against ground: **this can damage the FPGA**, not just leave the screen black | owner: plug it in with the board unpowered, component side up, J1 (silkscreen) in JB, and check that before powering. Power up with the MODE jumper JP1 off, so nothing from the flash configures the FPGA (RM §4.1), and load the baseline design (milestone 1) first: it leaves JB and JC unassigned, so the FPGA drives none of their pins. Only then load a design that drives the VGA pins; its colour bars (milestone 6) show red, green and blue in place |
 | U3 | microSD card-detect polarity | CD is pulled up by 20 kΩ and the socket's switch connects it to the grounded shell (SD-SCH), so low = card present, as `surf_spi`'s `cd_n` expects; the socket's own data sheet was not checked | owner: read `spi.STATUS.CARD` with and without a card (SurfBoot prints it) |
 | U4 | **PS/2 supply and signal levels** | see section 4: with the adapter's JP1 on external power the clock and data lines are pulled up to that supply | owner: the questions in section 4, before connecting |
-| U5 | The 6-pin Pmod PS2 in the top row of JD (pins 1-6) | in the bottom row its DATA and CLK would land on JD7/JD9, which are not assigned | owner: plug it into the upper row, its pin 1 at JD pin 1 |
+| U5 | The 6-pin Pmod PS2: top row of JD (pins 1-6), component side up | In the bottom row its DATA and CLK would land on JD7/JD9, which are not assigned (the supply pins still match). Upside down its pins arrive in reverse order: its VB and GND land on FPGA pins (JD1/JD2 in the top row, JD7/JD8 in the bottom row) and the Arty's 3.3 V and ground on its DATA and DATA- lines. JD has 200 Ω series resistors and the FPGA never drives a PS/2 line high (open drain), so with JP1 on VB (section 4) this is harmless for the FPGA, but the keyboard sees nothing sensible | owner: with the board unpowered, plug it into the upper row, component side up, its pin 1 at JD pin 1; check before powering. Bring it up after the baseline design, which leaves JD unassigned |
 | U6 | Adapter models and revisions | the tables follow Pmod MicroSD rev. A (A.1 schematic), Pmod VGA rev. C, Pmod PS2 rev. C; another revision could differ | owner: the labels (INVENTORY.md G4) |
 | U7 | The Arty's JP2 (CK_RST to the FT2232) | shorted, JP2 lets the FT2232's DTR line drive the RESET net (RM §8, §11); the USB/UART sheet of the schematic is not published, so whether opening a serial terminal would pulse or hold the reset is unknown | owner: leave JP2 open (not shorted) |
+| U8 | Which way up the 12-pin Pmod MicroSD goes into JA | The right way up (component side up) its pin 1 (~CS) meets JA1, as the table assumes. Upside down, adapter pin p meets JA pin 13 - p: the card's 3.3 V net lands on `sd_cs_n` (an FPGA output) and `sd_dat1`, its ground on `sd_mosi` (an output) and `sd_dat2`, and the Arty's 3.3 V and ground drive the card's ~CS, MOSI, DAT1 and DAT2 pins directly. The 200 Ω resistors on JA limit each FPGA pin to about 16 mA, but the card is then powered through FPGA outputs with its own pins driven from the board's supply, which can damage the card | owner: with the board unpowered and no card in the slot, plug it in component side up, pin 1 at JA pin 1, and check that before powering; insert a card only then. Bring it up after the baseline design, which leaves JA unassigned |
 
 ## 4. The PS/2 supply: questions for the owner
 

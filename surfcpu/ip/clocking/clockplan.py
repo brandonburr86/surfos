@@ -22,6 +22,11 @@ Limits (both parts have the same CMT limits; each is checked separately all the 
   attributes) and Table 3-8 (PLL attributes). The Arty A7-35T carries XC7A35TICSG324-1L
   (the -1LI grade, VCCINT 0.95 V) and the A7-100T XC7A100TCSG324-1 (-1, 1.0 V), per the
   Digilent Arty A7 reference manual, sections 1 and 3.
+The open flow: nextpnr 1.0.0 encodes a fractional MMCM divider (CLKFBOUT_MULT_F,
+  CLKOUT0_DIVIDE_F) with an odd integer part, and 2.125, unlike AMD's XAPP888 algorithm and
+  Vivado (docs/OPEN-FLOW.md section 6.2, docs/evidence/flow/mmcm.txt). Every setting here must
+  build correctly with both flows, so such values are refused; the flow's cmtcheck.py checks
+  the encoded dividers of each open-flow build.
 Only the Python standard library is used.
 """
 
@@ -74,6 +79,12 @@ ATTRS = {
     },
 }
 KIND = {"MMCME2_BASE": "MMCM", "PLLE2_BASE": "PLL"}
+
+
+def open_flow_ok(v: F) -> bool:
+    """Whether nextpnr 1.0.0 encodes this MMCM divider as XAPP888 does: integers, and fractions
+    with an even integer part except 2.125 (docs/evidence/flow/mmcm.txt)."""
+    return v.denominator == 1 or (int(v) % 2 == 0 and v != F(17, 8))
 MULT_KEY = {"MMCME2_BASE": "clkfbout_mult_f", "PLLE2_BASE": "clkfbout_mult"}
 DIV_KEY = {"MMCME2_BASE": "clkout0_divide_f", "PLLE2_BASE": "clkout0_divide"}
 
@@ -114,6 +125,11 @@ def check_domain(name: str, dom: dict, fin: F, spec) -> tuple[dict, list[str]]:
             errs.append(f"{name}: {key} = {float(v)} is not a multiple of {step} (UG472)")
     if prim == "MMCME2_BASE" and o.denominator != 1 and o < 2:
         errs.append(f"{name}: a fractional clkout0_divide_f must be at least 2.000 (UG472 Table 3-7)")
+    if prim == "MMCME2_BASE":
+        for key, v in ((MULT_KEY[prim], m), (DIV_KEY[prim], o)):
+            if not open_flow_ok(v):
+                errs.append(f"{name}: {key} = {float(v):g} is fractional with an odd integer part "
+                            f"(or 2.125), which nextpnr 1.0.0 encodes wrongly (docs/OPEN-FLOW.md 6.2)")
     fpfd = fin / d
     fvco = fin * m / d
     fout = fvco / o
@@ -242,7 +258,7 @@ def report(n: dict) -> str:
     nominal = spec.clocks["pix_hz_nominal"]
     p = n["pix"]["fout"]
     out.append(f"pix_clk error against the 25.175 MHz standard: {float((p - nominal) / nominal * 10**6):+.1f} ppm; "
-               f"frame rate {float(p / (800 * 525)):.4f} Hz (800 x 525)")
+               f"line rate {float(p / 800) / 1000:.4f} kHz, frame rate {float(p / (800 * 525)):.4f} Hz (800 x 525)")
     out.append("legal MMCM settings nearest clocks.pix_hz_nominal, one line per frequency (smallest D):")
     seen: dict[F, tuple] = {}
     for alt in alternatives(n["fin"], spec.clocks["pix_hz"], nominal):
@@ -254,9 +270,11 @@ def report(n: dict) -> str:
             continue
         fvco = n["fin"] * m / d
         one = (fvco / sys_hz).denominator == 1 and 1 <= fvco / sys_hz <= 128
+        bad = not (open_flow_ok(m) and open_flow_ok(o))
         out.append(f"    #{rank}: D={d} M={float(m):g} O={float(o):g}  VCO {float(fvco) / MHZ:g} MHz  "
                    f"{float(f):.1f} Hz  {float(ppm):+.1f} ppm"
                    f"{'  (VCO/' + str(int(fvco / sys_hz)) + ' also gives sys_hz: one MMCM for both)' if one else ''}"
+                   f"{'  [open flow: mis-encoded, odd fractional divider]' if bad else ''}"
                    f"{'  <- the spec (clocks.pix_hz)' if same else ''}")
     return "\n".join(out)
 

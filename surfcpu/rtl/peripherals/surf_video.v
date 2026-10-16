@@ -35,7 +35,7 @@ red, blue, black); below, four bands of 30 lines with 16 steps of 40 pixels of g
 green and blue (every level of each 4-bit channel).
 */
 module surf_video #(
-    parameter integer PIX_HZ = 25177305
+    parameter integer PIX_HZ = 25173611
 ) (
     input  wire        clk,
     input  wire        rst,

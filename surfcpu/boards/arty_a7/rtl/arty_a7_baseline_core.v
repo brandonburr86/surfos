@@ -13,7 +13,7 @@ and the serial link work (docs/BOARD.md section 5).
   LD1 green             pix_clk heartbeat: 1 Hz, counted in the pixel clock domain
   UART TX, 115200 8N1   one line a second (the first one second after reset):
 
-  SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty 1760560000 | up 000001 s | pix 25177305 Hz | sw 0101 btn 0000 rx --
+  SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty 1760560000 | up 000001 s | pix 25173611 Hz | sw 0101 btn 0000 rx --
 
 The line holds the board and its sysinfo BOARD_ID, the build identity (commit, clean or dirty,
 "sim" in simulation, the build time in seconds since 1970), the seconds since reset, the pixel

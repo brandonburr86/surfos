@@ -81,7 +81,7 @@ physical step named.
 | # | Gap | Blocks | Who resolves |
 |---|---|---|---|
 | G1 | Exact Arty variant and PCB revision | final pin/part choice for the bitstream (the 35T and 100T pinouts are the same; the part differs) | owner (label) or doctor (IDCODE) |
-| G2 | A build host for bitstreams (Vivado on x86-64 Linux/Windows, or a proven alternative) | milestone 1 bitstream and every later FPGA step | owner's choice from docs/BUILD-HOST.md |
+| G2 | A build host for bitstreams (Vivado on x86-64 Linux/Windows, or a proven alternative). Since 2026-10-16 the open flow (BUILD-HOST.md option C, `make build-fpga FLOW=openxc7`) builds checked bitstreams on this Mac, so bitstreams no longer wait for a build host; but its timing is only nextpnr's estimate, it cannot check the clock-crossing and I/O constraints, the DDR3L would need LiteDRAM (MIG is Vivado's), and nothing it made has been on a board | Vivado timing signoff and MIG; whether C is enough is the owner's decision | owner's choice from docs/BUILD-HOST.md |
 | G3 | `openFPGALoader` on the Mac | programming the board (milestone 1) | owner: `brew install openfpgaloader` (the doctor checks it) |
 | G4 | Pmod models/revisions and the PS/2 power and level arrangement: where is the Pmod PS2's supply jumper JP1? It must be on VB (the Arty's 3.3 V), not VE (an external 5 V supply would pull the FPGA's PS/2 pins above 3.3 V); and does the keyboard work at 3.3 V (WIRING.md section 4)? | connecting adapters; the PS/2 pins especially | owner (labels, jumpers); board track (schematics) |
 | G5 | Keyboard type (true PS/2) | milestone 6 keyboard tests | owner |

@@ -40,7 +40,8 @@ module tb_video (
     reg [31:0] text_data = 32'd0;
     always @(posedge pix_clk) text_data <= tram[text_addr];
 
-    surf_video #(.PIX_HZ(25177305)) dut (
+`include "surfcpu_soc.vh"
+    surf_video #(.PIX_HZ(SURF_PIX_HZ)) dut (
         .clk(clk), .rst(rst),
         .s_req_valid(s_req_valid), .s_req_ready(s_req_ready), .s_req_addr(s_req_addr),
         .s_req_write(s_req_write), .s_req_be(s_req_be), .s_req_wdata(s_req_wdata),

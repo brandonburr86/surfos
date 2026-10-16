@@ -12,9 +12,9 @@ localparam integer ARTY_SYS_CLKFBOUT_MULT  = 10;
 localparam integer ARTY_SYS_CLKOUT0_DIVIDE = 40;
 localparam integer ARTY_SYS_HZ = 25000000;  // exactly 25000000.000 Hz
 
-// pix_clk: MMCME2_BASE, VCO 887.5 MHz, PFD 100 MHz
-localparam integer ARTY_PIX_DIVCLK_DIVIDE   = 1;
-localparam real    ARTY_PIX_CLKFBOUT_MULT_F  = 8.875;
-localparam real    ARTY_PIX_CLKOUT0_DIVIDE_F = 35.250;
-localparam integer ARTY_PIX_HZ = 25177305;  // 25177304.965 Hz
+// pix_clk: MMCME2_BASE, VCO 906.25 MHz, PFD 50 MHz
+localparam integer ARTY_PIX_DIVCLK_DIVIDE   = 2;
+localparam real    ARTY_PIX_CLKFBOUT_MULT_F  = 18.125;
+localparam real    ARTY_PIX_CLKOUT0_DIVIDE_F = 36.000;
+localparam integer ARTY_PIX_HZ = 25173611;  // 25173611.111 Hz
 /* verilator lint_on UNUSEDPARAM */
