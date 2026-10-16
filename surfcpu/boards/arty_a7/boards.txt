@@ -1,0 +1,13 @@
+# The Arty A7 variants, for tools/fpga-build.sh and tools/program.sh (one line each).
+#
+#   board         the spec/soc.toml [boards] name (make BOARD=...)
+#   part          the Vivado part: Arty A7 reference manual section 1 (the A7-35T carries the
+#                 -1L grade, which runs at VCCINT 0.95 V: DS181's -1LI column)
+#   ofl_board     openFPGALoader's board name (its compatibility list)
+#   idcode        JTAG IDCODE bits 27:0 (bits 31:28 are the silicon revision): AMD UG470 v1.17
+#                 table 1-1, XC7A35T X362D093, XC7A100T X3631093
+#   bit_device    the device a .bit file's header must name (its part field starts with it)
+#
+# board          part                 ofl_board       idcode      bit_device
+arty_a7_35t      xc7a35ticsg324-1L    arty_a7_35t     0x0362D093  7a35t
+arty_a7_100t     xc7a100tcsg324-1     arty_a7_100t    0x03631093  7a100t

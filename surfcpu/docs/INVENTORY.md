@@ -83,8 +83,8 @@ physical step named.
 | G1 | Exact Arty variant and PCB revision | final pin/part choice for the bitstream (the 35T and 100T pinouts are the same; the part differs) | owner (label) or doctor (IDCODE) |
 | G2 | A build host for bitstreams (Vivado on x86-64 Linux/Windows, or a proven alternative) | milestone 1 bitstream and every later FPGA step | owner's choice from docs/BUILD-HOST.md |
 | G3 | `openFPGALoader` on the Mac | programming the board (milestone 1) | owner: `brew install openfpgaloader` (the doctor checks it) |
-| G4 | Pmod models/revisions and the PS/2 power and level arrangement | connecting adapters; the PS/2 pins especially | owner (labels, jumpers); board track (schematics) |
+| G4 | Pmod models/revisions and the PS/2 power and level arrangement: where is the Pmod PS2's supply jumper JP1? It must be on VB (the Arty's 3.3 V), not VE (an external 5 V supply would pull the FPGA's PS/2 pins above 3.3 V); and does the keyboard work at 3.3 V (WIRING.md section 4)? | connecting adapters; the PS/2 pins especially | owner (labels, jumpers); board track (schematics) |
 | G5 | Keyboard type (true PS/2) | milestone 6 keyboard tests | owner |
 | G6 | Card capacity and format | milestone 5 boot from the card | owner, with the card in the Mac's reader |
-| G7 | Configuration-flash part number | milestone 9 (persistent configuration) | owner (chip marking) |
+| G7 | Configuration-flash part number. By PCB revision (Arty A7 reference manual section 5.2): Micron N25Q128A13ESF40 on Rev. C and earlier without a sticker; Spansion/Infineon S25FL128SAG[M\|N]FI00 on later revisions up to E without a sticker; Rev. E and later with a sticker, the part the sticker names (S25FL128SAG[M\|N]FI00 or S25FL127SABMFx00) | milestone 9 (persistent configuration) | owner (chip marking, revision, sticker) |
 | G8 | A VGA monitor that shows 640x480 | milestone 6 picture tests | owner |

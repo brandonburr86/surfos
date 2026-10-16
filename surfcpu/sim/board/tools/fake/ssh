@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake ssh for the board track's wrapper tests: logs the call and runs the "remote" command
+# locally in $FAKE_REMOTE (standing in for the build host's home). Contacts nothing.
+echo "ssh $*" >> "$FAKE_LOG"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) shift 2 ;;
+        -*) shift ;;
+        *)  break ;;
+    esac
+done
+host=$1
+shift
+[ "$host" = "$FAKE_HOST" ] || { echo "fake ssh: unexpected host $host" >&2; exit 255; }
+cd "$FAKE_REMOTE" || exit 255
+exec sh -c "$*"
