@@ -42,7 +42,10 @@ file's write, an rm, an mv and an overwrite. Checked: what the kernel and the co
 that nothing hangs, that eject keeps a volume it could not write, what fsck.fat -n finds on
 the card as it was left (with the block cache's write order, audit B3, nothing that points
 at a free cluster or at bytes not written), and, booting the pulled card again, that the
-files read back whole or not at all.
+files read back whole or not at all. And a full volume: the stick made nearly full on the
+host, a copy that does not fit says "No space left on device" and keeps what fitted (audit
+B4: no cluster is left past its end), a write and a mkdir fail the same way, rm gives the
+space back; fsck.fat and mtools check the result.
 
 QEMU's virt machine is not SurfCPU: this tests the portable kernel and the qemu_virt HAL
 (boards/qemu_virt), not the Arty's hardware.
@@ -676,10 +679,9 @@ def fault_boot(args, disk, check, work):
             check(b1 == big and b2 == big[:err_len], 'faults: BIG.BIN untouched, ERR.BIN the first %d bytes of it' % err_len)
             clean, report = fsck_partition(q, dump, PART_OFFSET)
             harmless, other = fsck_findings(report)
-            tail = [l for l in other if not l.startswith(('/ERR.BIN', 'File size is', 'Truncating file to'))]
-            check(not tail, 'faults: fsck.fat -n: %s (the clusters cp had taken when the card refused the rest stay in '
-                  'ERR.BIN\'s chain past its size; nothing else)' % short(other + harmless))
-            if tail:
+            check(clean, 'faults: fsck.fat -n finds %s (audit B4: the clusters cp had taken past what it could write '
+                  'went back to the free pool)' % ('the volume clean' if clean else short(other + harmless)))
+            if not clean:
                 print(report)
         check(q.poweroff() == 0, 'faults: poweroff')
     finally:
@@ -824,6 +826,97 @@ def pull_others(args, disk, check, work):
         finally:
             transcript += q.transcript
             q.close()
+    return transcript
+
+
+def fill_image(src, dst, free_left, work):
+    """dst: the image src with /FILLER.BIN added by mtools so that free_left clusters stay free (mtools keeps FAT32's
+    FSInfo count). (the cluster size, the filler's bytes)"""
+    shutil.copyfile(src, dst)
+    with open(dst, 'rb') as f:
+        f.seek(PART_OFFSET)
+        bs = f.read(512)
+        f.seek(PART_OFFSET + 512)
+        free, = struct.unpack_from('<I', f.read(512), 488)
+    cluster = bs[13] * 512
+    filler = os.path.join(work, 'filler.bin')
+    size = (free - free_left) * cluster
+    with open(filler, 'wb') as f:
+        f.write(b'\x5a' * size)
+    r = run_mtools(['mcopy', '-i', dst + '@@%d' % PART_OFFSET, filler, '::/FILLER.BIN'])
+    os.remove(filler)
+    if r.returncode:
+        raise RuntimeError('mcopy of the filler: %s' % r.stderr)
+    return cluster, size
+
+
+def full_boot(args, disk, check, work):
+    """milestone 8: a full volume under QEMU (sdsim). The stick made nearly full on the host (mtools adds /FILLER.BIN,
+    3003 clusters stay free: about 1.5 MB); then a 1 MB copy fits, the next does not: cp must say "No space left on
+    device" at once, the part that fitted must be the source's first bytes, a write and a mkdir on the full volume
+    fail the same way, rm gives the space back, and a write then works. The host checks the card"""
+    img = os.path.join(work, 'full.img')
+    cluster, filler_size = fill_image(disk, img, 3003, work)
+    big = mkimage.foreign_big()
+    q, _, _ = stub_boot(args, img, work, 'sdsim')
+    try:
+        ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+        ok2, out2 = q.cmd('df', ['sd0p1'])
+        m = re.search(r'sd0p1\s+fat32\s+\S+ MB\s+\S+ \S+\s+(\S+ \S+)\s', out2)
+        check(ok and ok2 and m, 'full: a stick %d clusters of %d bytes from full (mtools filled the rest): df says %s free'
+              % (3003, cluster, m.group(1) if m else '?'))
+        ok, out = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/ONE.BIN', ['1048576 bytes copied'], timeout=60)
+        t0 = time.time()
+        ok2, out2 = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/TWO.BIN', ['cp: write: No space left on device'], timeout=60,
+                          forbid=['bytes copied', 'not all of it'])
+        dt = time.time() - t0
+        check(ok and ok2 and dt < 30, 'full: a 1 MB cp fits; the next one says "cp: write: No space left on device" '
+              'when the space runs out (%.1f s, no hang)' % dt)
+        ok, out = q.cmd('crc32 /sd0p1/TWO.BIN', ['TWO.BIN'])
+        m = re.search(r'([0-9a-f]{8})\s+(\d+)\s+/sd0p1/TWO.BIN', out)
+        part = int(m.group(2)) if m else -1
+        check(ok and m and 0 < part < len(big) and part % cluster == 0 and
+              int(m.group(1), 16) == zlib.crc32(big[:part]) & 0xFFFFFFFF,
+              'full: the copy that did not fit is whole up to what fitted: the first %d bytes of BIG.BIN (%d clusters, '
+              'every free one)' % (part, part // cluster if part > 0 else 0))
+        ok, out = q.cmd('df', ['sd0p1'])
+        ok2, out2 = q.cmd('write /sd0p1/MORE.TXT one more file', ['write: No space left on device'])
+        ok3, out3 = q.cmd('mkdir /sd0p1/NEWDIR', ['mkdir: /sd0p1/NEWDIR: No space left on device'])
+        ok4, out4 = q.cmd('ls /sd0p1', ['entries'])
+        check(ok and re.search(r'\s0 KB\s+100%', out) and ok2 and ok3 and ok4 and 'NEWDIR' not in out4,
+              'full: df says 0 KB free; a write ("write: No space left on device") and a mkdir (the same) fail at once, '
+              'no NEWDIR left behind')
+        ok, _ = q.cmd('rm /sd0p1/TWO.BIN', forbid=['rm:', 'not all of it'])
+        ok2, _ = q.cmd('write /sd0p1/MORE.TXT written after the rm', forbid=['write:', 'not all of it'])
+        ok3, out3 = q.cmd('df', ['sd0p1'])
+        m = re.search(r'sd0p1\s+fat32\s+\S+ MB\s+\S+ \S+\s+(\S+ \S+)\s', out3)
+        check(ok and ok2 and ok3 and m and m.group(1) != '0 KB',
+              'full: rm gives the space back (df: %s free) and a write works again' % (m.group(1) if m else '?'))
+        ok, _ = q.cmd('eject sd0', ['sd0: safe to remove'])
+        dump = save_ramdisk(q, os.path.getsize(img)) if ok else None
+        if check(dump, 'full: eject: safe to remove; the card image saved'):
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            harmless, other = fsck_findings(report)
+            check(clean, 'full: fsck.fat -n finds %s' % ('the volume clean' if clean else short(harmless + other)))
+            if not clean:
+                print(report)
+            part_img = dump + '@@%d' % PART_OFFSET
+            got = {}
+            for name in ('BIG.BIN', 'ONE.BIN', 'MORE.TXT', 'README.TXT'):
+                path = os.path.join(q.workdir, 'got.bin')
+                r = run_mtools(['mcopy', '-n', '-i', part_img, '::/' + name, path])
+                got[name] = open(path, 'rb').read() if r.returncode == 0 else None
+            r = run_mtools(['mcopy', '-n', '-i', part_img, '::/FILLER.BIN', os.path.join(q.workdir, 'filler.bin')])
+            filler_ok = r.returncode == 0 and open(os.path.join(q.workdir, 'filler.bin'), 'rb').read() == b'\x5a' * filler_size
+            r = run_mtools(['mdir', '-i', part_img, '::/'])
+            check(got['BIG.BIN'] == big and got['ONE.BIN'] == big and got['MORE.TXT'] == b'written after the rm\n' and
+                  got['README.TXT'] is not None and filler_ok and 'TWO' not in r.stdout,
+                  'full: on the host BIG.BIN, the copy that fitted, the filler and the stick\'s own files are whole, '
+                  'MORE.TXT holds what was written after the rm, TWO.BIN is gone')
+        check(q.poweroff() == 0, 'full: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
     return transcript
 
 
@@ -1055,6 +1148,7 @@ def main():
             transcript += pull_boot(args, disk, check, work)
             transcript += pull_points(args, disk, check, work)
             transcript += pull_others(args, disk, check, work)
+            transcript += full_boot(args, disk, check, work)
         else:
             skip('handoff, sdsim, package and card: no --stub')
     finally:
