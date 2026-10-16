@@ -7,6 +7,7 @@ See sd.h. The protocol is the SD Association's Physical Layer Simplified Specifi
 (SPI mode, chapter 7). Limits used here, all generous against the specification:
 
     power-up wait before the first clocks     1 ms, then 80 clocks with CS high
+    a card still busy (MISO low) before CMD0  500 ms
     CMD0 attempts                             10
     response (NCR)                            up to 8 bytes after the command
     card ready (DO high) before a command     500 ms
@@ -257,6 +258,14 @@ int sd_init(struct sd_card *c, uint32_t fast_div)
         ;
     for (int i = 0; i < 10; i++)                    /* 80 clocks with CS high */
         port_spi_xfer(0xFF);
+
+    /* A card still busy (MISO held low) from a write before a reset ignores commands: wait,
+     * up to 500 ms, for it to let go before the first CMD0. */
+    port_spi_select(1);
+    t0 = port_now_us();
+    while (port_spi_xfer(0xFF) == 0x00 && (uint32_t)(port_now_us() - t0) < READY_US)
+        ;
+    deselect();
 
     uint8_t r = R1_NONE;
     for (int i = 0; i < 10; i++) {

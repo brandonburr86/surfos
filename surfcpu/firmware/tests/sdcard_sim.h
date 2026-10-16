@@ -42,6 +42,7 @@ struct sdsim_opts {
     int remove_after;       /* the card is pulled out after this many reads (0 = never) */
     int min_div;            /* the card garbles data at SPI dividers below this (0 = any speed) */
     int no_powerup_check;   /* do not insist on 74 clocks with CS high before CMD0 */
+    int busy_bytes;         /* busy at power-on: MISO low and commands ignored for this many bytes */
 };
 
 struct sdsim_stats {

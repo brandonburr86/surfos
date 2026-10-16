@@ -444,6 +444,10 @@ uint8_t sdsim_xfer(struct sdsim *c, int cs, uint8_t mosi)
     c->prev_cs = 1;
     if (c->o.dead)
         return 0xFF;
+    if (c->o.busy_bytes > 0) {                      /* still busy from before: MISO low, input ignored */
+        c->o.busy_bytes--;
+        return 0x00;
+    }
     uint8_t miso = 0xFF;
     if (c->out_len) {
         miso = c->out[c->out_head++];

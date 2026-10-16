@@ -17,7 +17,7 @@ with AddressSanitizer and UBSan) on the simulated board of port_host.c:
 
 Card options: --type sdhc|sdsc2|sdsc1|mmc, --absent, --no-cd, --dead, --miso-low,
 --acmd41-busy N (-1 = forever), --cmd8-bad-echo, --no-33v, --no-cmd59, --ncr N, --nac N,
---crc-errors N, --crc-every N, --token-errors N, --read-timeouts N, --remove-after N,
+--crc-errors N, --crc-every N, --token-errors N, --read-timeouts N, --remove-after N, --busy-bytes N,
 --min-div N; --io-model runs the io track's pin-level model instead (built with
 IO_MODEL_DIR; --type, --absent, --crc-errors and --token-errors carry over, and any protocol
 violation it logs fails the run). Board options: --ddr ok|absent|fail|never, --ddr-size BYTES, --ddr-calib-ms N,
@@ -167,7 +167,7 @@ enum {
     O_TYPE = 256, O_ABSENT, O_NOCD, O_DEAD, O_MISOLOW, O_ACMD41, O_CMD8, O_NO33, O_NOCMD59, O_NCR, O_NAC,
     O_CRCERR, O_CRCEVERY, O_TOKERR, O_TIMEOUTS, O_REMOVE, O_MINDIV, O_DDR, O_DDRSIZE, O_DDRCAL, O_DDRFLIP,
     O_BTN0, O_PATH, O_EXPECT, O_EXPMSG, O_EXPLOG, O_EXPNOLOG, O_EXPFLAGS, O_EXPCMD, O_SEED, O_ITER, O_MUT,
-    O_IOMODEL,
+    O_IOMODEL, O_BUSY,
 };
 
 static const struct option longopts[] = {
@@ -188,7 +188,8 @@ static const struct option longopts[] = {
     { "expect-flags", required_argument, 0, O_EXPFLAGS }, { "expect-cmdline", required_argument, 0, O_EXPCMD },
     { "seed", required_argument, 0, O_SEED }, { "iterations", required_argument, 0, O_ITER },
     { "mutations", required_argument, 0, O_MUT }, { "quiet", no_argument, 0, 'q' },
-    { "command", required_argument, 0, 'c' }, { "io-model", no_argument, 0, O_IOMODEL }, { 0, 0, 0, 0 },
+    { "command", required_argument, 0, 'c' }, { "io-model", no_argument, 0, O_IOMODEL },
+    { "busy-bytes", required_argument, 0, O_BUSY }, { 0, 0, 0, 0 },
 };
 
 static int parse_options(int argc, char **argv)
@@ -201,6 +202,7 @@ static int parse_options(int argc, char **argv)
         case 'c': if (nlines < 32) lines[nlines++] = optarg; break;
         case 'q': quiet = 1; break;
         case O_IOMODEL: io_model = 1; break;
+        case O_BUSY: card_opts.busy_bytes = atoi(optarg); break;
         case O_TYPE:
             io_kind = optarg;
             if (!strcmp(optarg, "sdhc")) card_opts.type = SDSIM_SDHC;
@@ -267,7 +269,8 @@ static int setup_board(void)
 #ifdef FWTEST_IO_MODEL
         if (card_opts.no_cd || card_opts.dead || card_opts.miso_low || card_opts.acmd41_busy != 3 ||
             card_opts.cmd8_bad_echo || card_opts.no_33v || card_opts.no_cmd59 || card_opts.crc_every ||
-            card_opts.read_timeouts || card_opts.remove_after || card_opts.min_div || card_opts.type == SDSIM_MMC) {
+            card_opts.read_timeouts || card_opts.remove_after || card_opts.min_div || card_opts.type == SDSIM_MMC ||
+            card_opts.busy_bytes) {
             fprintf(stderr, "fwtest: that card option exists only in sdcard_sim, not in the io model\n");
             return -1;
         }

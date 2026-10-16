@@ -261,6 +261,11 @@ def _(p):
     return std(p)
 
 
+@scenario("ok_card_busy_from_before_a_reset", args=["--busy-bytes", "4000"])
+def _(p):
+    return std(p)
+
+
 @scenario("ok_read_timeout_retried", args=["--read-timeouts", "1"])
 def _(p):
     return std(p)
@@ -1034,7 +1039,7 @@ def run(cmd, env=None, timeout=300):
 
 # card options only sdcard_sim has (the io model is run without these scenarios)
 SIM_ONLY = {"--no-cd", "--dead", "--miso-low", "--acmd41-busy", "--cmd8-bad-echo", "--no-33v", "--no-cmd59",
-            "--crc-every", "--read-timeouts", "--remove-after", "--min-div", "--ncr", "--nac"}
+            "--crc-every", "--read-timeouts", "--remove-after", "--min-div", "--ncr", "--nac", "--busy-bytes"}
 
 
 def sim_only(sc):
