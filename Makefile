@@ -419,6 +419,13 @@ $(BUILD)/host/test_fatfs: tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) $^ -o $@
 
+# 10/16/26 (round fs-fix-2, audit B12-B19): the randomized harness of the review of B5-B11, kept as a test: random
+# FAT operations over a disk that refuses writes, and reads, at random, with test_fatfs.c's oracle and checks of the
+# image (tests/host/test_fatfuzz.c: a fixed set of seeds, about 10 s in the devenv)
+$(BUILD)/host/test_fatfuzz: tests/host/test_fatfuzz.c tests/host/test_fatfs.c $(FATFS_OBJ) $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fatfuzz.c $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
+
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
 $(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
@@ -455,7 +462,7 @@ $(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs $(BUILD)/host/test_fatfuzz
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -465,6 +472,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_libc
 	$(BUILD)/host/test_mkfs
 	$(BUILD)/host/test_fatfs
+	$(BUILD)/host/test_fatfuzz
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
@@ -526,7 +534,7 @@ help:
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
-                           $(BUILD)/host/pager/tests/host/*.d)
+                           $(BUILD)/host/pager/tests/host/*.d $(BUILD)/host/fatfs/fs/*.d)
 
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
 $(BUILD)/host/test_dns: tests/host/test_dns.c $(BUILD)/host/kernel/net/dns_wire.o $(HOSTLIB_OBJ)
