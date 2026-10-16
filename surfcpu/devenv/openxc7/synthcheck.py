@@ -51,15 +51,24 @@ def load(path: str, top: str) -> dict:
 
 
 def namer(module: dict):
-    """bit -> the shortest public net name carrying it (hierarchical names keep the path)."""
-    names: dict = {}
+    """bit -> the shortest public net name carrying it (hierarchical names keep the path).
+
+    A top-level port's own name counts only when nothing else names the bit. In the RTL, a
+    flip-flop inside an instance that drives an output port carries the port's name as
+    well, the shortest; in the netlist an OBUF stands between them and the port's name
+    moves to the pad side. Preferring the port name would credit the flip-flop to (top) in
+    the RTL and to its instance in the netlist, and an instance that keeps every flip-flop
+    would show as having lost them (the whole SoC: 37 output registers)."""
+    ports = set(module.get("ports", {}))
+    best: dict = {}
     for name, net in module.get("netnames", {}).items():
         if net.get("hide_name"):
             continue
+        rank = (name in ports, len(name))
         for b in net["bits"]:
-            if isinstance(b, int) and (b not in names or len(name) < len(names[b])):
-                names[b] = name
-    return names
+            if isinstance(b, int) and (b not in best or rank < best[b][0]):
+                best[b] = (rank, name)
+    return {b: name for b, (_, name) in best.items()}
 
 
 def instance_of(name: str | None) -> str:

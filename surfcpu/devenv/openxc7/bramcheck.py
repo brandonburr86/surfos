@@ -11,6 +11,13 @@ be exactly those of the synthesized netlist, block for block, as multisets: the 
 may put any block in any site, but no contents may go missing, change or appear. This is
 what SurfBoot's ROM relies on. Only the standard library is used.
 
+fasm2netlist decodes every block RAM site as RAMB18E1 halves: a RAMB36E1 comes back as the two
+RAMB18 of its tile, its INIT and INITP bits interleaved between them (bit 2k in the half with
+the lower Y, bit 2k+1 in the upper one, as nextpnr writes the FASM and as the SoC's 36 blocks
+showed, 36 of 36 matching). So the two halves of each tile are woven back into one 36 Kbit
+block and compared with the netlist's RAMB36E1; the halves of tiles that match none are
+compared with its RAMB18E1 (two independent RAMB18 in one tile).
+
     bramcheck.py --netlist top.json --top top --extracted fasm2netlist.v
 """
 
@@ -43,17 +50,41 @@ def netlist_contents(path: str, top: str) -> dict:
     return found
 
 
-def extracted_contents(path: str) -> dict:
+def weave(lo: int, hi: int, bits: int) -> int:
+    """Interleave two halves: lo's bit k becomes bit 2k, hi's bit k bit 2k+1."""
+    out = 0
+    for k in range(bits):
+        out |= ((lo >> k) & 1) << (2 * k) | ((hi >> k) & 1) << (2 * k + 1)
+    return out
+
+
+def ramb36_from_halves(lo: tuple, hi: tuple) -> tuple:
+    """The RAMB36E1 contents (128 INIT + 16 INITP words) that two RAMB18 halves hold."""
+    def whole(words: tuple, n: int) -> int:
+        return sum(w << (256 * i) for i, w in enumerate(words[:n]))
+    data = weave(whole(lo, 64), whole(hi, 64), 64 * 256)
+    par = weave(whole(lo[64:], 8), whole(hi[64:], 8), 8 * 256)
+    mask = (1 << 256) - 1
+    return tuple([(data >> (256 * i)) & mask for i in range(128)] + [(par >> (256 * i)) & mask for i in range(16)])
+
+
+def extracted_contents(path: str) -> tuple[dict, dict]:
+    """(contents by kind as decoded, RAMB18 halves by tile: {tile: {y: contents}})."""
     with open(path) as f:
         text = f.read()
     found = {t: Counter() for t in WORDS}
-    for m in re.finditer(r"\b(RAMB18E1|RAMB36E1)\s*#\((.*?)\)\s*[\\\w$.\[\]]+\s*\(", text, re.S):
-        kind, params = m.group(1), m.group(2)
+    tiles: dict = {}
+    for m in re.finditer(r"\b(RAMB18E1|RAMB36E1)\s*#\((.*?)\)\s*([\\\w$.\[\]]+)\s*\(", text, re.S):
+        kind, params, inst = m.group(1), m.group(2), m.group(3)
         vals = {k.upper(): int(v, 16) for k, v in re.findall(r"\.(INITP?_[0-9A-Fa-f]{2})\(\d+'h([0-9a-fA-F]+)\)", params)}
         n_init, n_initp = WORDS[kind]
-        found[kind][tuple([vals.get(f"INIT_{i:02X}", 0) for i in range(n_init)]
-                          + [vals.get(f"INITP_{i:02X}", 0) for i in range(n_initp)])] += 1
-    return found
+        contents = tuple([vals.get(f"INIT_{i:02X}", 0) for i in range(n_init)]
+                         + [vals.get(f"INITP_{i:02X}", 0) for i in range(n_initp)])
+        found[kind][contents] += 1
+        site = re.fullmatch(r"\\?bram18_(\w+)_RAMB18_X\d+Y(\d+)", inst)
+        if kind == "RAMB18E1" and site:
+            tiles.setdefault(site.group(1), {})[int(site.group(2))] = contents
+    return found, tiles
 
 
 def main() -> int:
@@ -63,7 +94,22 @@ def main() -> int:
     ap.add_argument("--extracted", required=True)
     args = ap.parse_args()
     want = netlist_contents(args.netlist, args.top)
-    got = extracted_contents(args.extracted)
+    got, tiles = extracted_contents(args.extracted)
+    # Each tile's two halves woven into a RAMB36E1 the netlist has: those count as one
+    # RAMB36E1 decoded; the halves of other tiles stay RAMB18E1.
+    need36 = Counter(want["RAMB36E1"])
+    for tile, halves in sorted(tiles.items()):
+        if len(halves) != 2:
+            continue
+        lo_y, hi_y = sorted(halves)
+        whole = ramb36_from_halves(halves[lo_y], halves[hi_y])
+        if need36[whole] > 0:
+            need36[whole] -= 1
+            got["RAMB36E1"][whole] += 1
+            for half in (halves[lo_y], halves[hi_y]):
+                got["RAMB18E1"][half] -= 1
+                if got["RAMB18E1"][half] == 0:
+                    del got["RAMB18E1"][half]
     bad = 0
     for kind in WORDS:
         nw, ng = sum(want[kind].values()), sum(got[kind].values())
