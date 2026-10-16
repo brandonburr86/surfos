@@ -52,7 +52,7 @@ expect_in "build: the 35T is placed with the 50T die's database and checked as a
   "--expect-device xc7a35t" "--part_file /opt/openxc7/share/prjxray-db/artix7/xc7a35tcsg324-1/part.yaml" \
   "tileverilog --fasm build/openxc7/t-arty_a7_35t/t.fasm" "--device xc7a50t" "read_verilog a.v b.v" \
   "cmtcheck.py --json build/openxc7/t-arty_a7_35t/t.json" \
-  "scratchpad -set xilinx_dsp.multonly 1" "synthcheck.py --top t --pre build/openxc7/t-arty_a7_35t/pre.json" \
+  "scratchpad -set xilinx_dsp.multonly 1" "setundef -zero" "synthcheck.py --top t --pre build/openxc7/t-arty_a7_35t/pre.json" \
   "fasm2netlist --fasm build/openxc7/t-arty_a7_35t/t.decoded.fasm" "bramcheck.py --netlist"
 o=$(dry --board arty_a7_100t)
 expect_in "build: the 100T uses its own database" "$o" \

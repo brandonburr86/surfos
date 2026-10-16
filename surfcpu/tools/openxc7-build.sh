@@ -170,7 +170,11 @@ if [ "$dry" = 0 ]; then
   echo "openxc7-build.sh: $top for $part ($device, chip database $chipdie) in $out"
 fi
 
-# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7), with the DSP mode.
+# Synthesis: openXC7's recipe (synth_xilinx -flatten -abc9 -arch xc7), with the DSP mode, then
+# setundef -zero: Yosys leaves the data inputs of unused memory bits undefined (x; the CPU's
+# 63-bit fetch FIFO in 11 RAM32M has three), nextpnr routes them to something, and LVS cannot
+# prove a routed pin equal to an x (one DIFFER on the whole SoC). Zeros are a valid choice for
+# a don't-care, and with them LVS checks every pin exactly.
 rv="read_verilog"
 for d in $defs; do rv="$rv -D$d"; done
 for i in $incs; do rv="$rv -I$i"; done
@@ -196,6 +200,7 @@ if [ "$dry" = 1 ]; then printf '[pre.ys]\n%s\n' "$pre"; else printf '%s\n' "$pre
 run presynth presynth.log yosys -q -s "$out/pre.ys"
 ys="$rv
 ${dsp_pre}synth_xilinx -flatten -abc9 -arch xc7 -top $top$dsp_opt
+setundef -zero
 tee -q -o $out/stat.json stat -json -tech xilinx
 write_json $out/$top.json
 write_verilog -noattr $out/$top.netlist.v"
