@@ -209,9 +209,9 @@ SOC_MODEL_SRC := sim/models/uart_model.cpp sim/models/ddr_model.cpp
 SOC_MODEL_HDR := sim/models/uart_model.h sim/models/ddr_model.h
 SOC_CXX        = g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isim/models -Ifirmware/include
 
-$(SOC_DIR)/test_models: sim/models/test_models.cpp $(SOC_MODEL_SRC) $(SOC_MODEL_HDR)
+$(SOC_DIR)/test_models: sim/soc/test_models.cpp $(SOC_MODEL_SRC) $(SOC_MODEL_HDR)
 	@mkdir -p $(dir $@)
-	$(Q)$(SOC_CXX) -o $@ sim/models/test_models.cpp $(SOC_MODEL_SRC)
+	$(Q)$(SOC_CXX) -o $@ sim/soc/test_models.cpp $(SOC_MODEL_SRC)
 
 test-soc-models: $(SOC_DIR)/test_models
 	$(Q)for s in $(SOC_SEEDS); do $(SOC_DIR)/test_models $$s || exit 1; done

@@ -1,0 +1,18 @@
+soc track: issues found by the tests and fixed (2026-10-15)
+
+* sysinfo DDR_STATUS.TIMEOUT: the sticky bit appeared one cycle after the bridge's pulse, so a
+  load right behind the abandoned DDR access (back to back, the pulse comes with the error
+  response) read 0. Found by soc_periph.sbs on tb_soc; now the read value is (sticky | pulse).
+* surf_textram: Yosys mapped it to 4096 LUTs of distributed RAM, because it refuses READ_FIRST
+  on a 7-series true dual-port block RAM with different port clocks (UG473's read-first
+  collision erratum). Found by synth-soc; port A now reads only when it does not write
+  (NO_CHANGE), which maps to 4 RAMB36 and can never corrupt memory on a collision.
+* tb_uart did not check TX_IE while the shifter is busy and the FIFO empty (a mutant survived);
+  tb_interconnect's calibration-lost case could start while the DDR slave was still ready from
+  its random state (a mutant survived on one run). Both tests were tightened.
+* The build identity compiled into surfsim and into the scripts that check sysinfo got out of
+  step between commits; they now share a stamp.
+* Icarus: two processes calling the same static task in one time step can overwrite each
+  other's arguments (the task body runs as a scheduled child thread). Hit in the RAMB36E1
+  simulation model, whose task is now automatic; the RTL has no tasks and every testbench task
+  has a single caller.

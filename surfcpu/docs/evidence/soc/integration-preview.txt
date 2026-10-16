@@ -1,0 +1,65 @@
+soc track: integration preview, 2026-10-15 (simulation only; nothing ran on the board)
+
+Where: the cpu and io tracks' RTL taken from branch surfcpu at 9b8a93b (cpu, io, fw merged).
+  (a) Put into the sc/soc worktree only for the run (untracked, removed afterwards); the soc
+      makefile switched to the real files by itself:
+        make lint-soc          clean (Verilator -Wall, both HAS_DDR, with RVFI; Icarus -g2005)
+        make test-soc-system   PASS, 3 seeds, the four scripts with and without DDR, real io blocks
+        make test-soc-surfsim  PASS, 3 seeds (surfsim with the scripted core, real io blocks)
+        make test-soc-gate     PASS (synthesized SoC with the real io blocks inside)
+        make synth-soc         Yosys estimate with the real core and io blocks, no DDR bridge or
+                               board top: LUT 5390, FF 2673 (FDRE 2276 + FDSE 397), CARRY4 306,
+                               DSP48E1 4, RAMB36E1 36, RAM32M 27, RAM64M 3, MUXF7 689, MUXF8 282
+  (b) An export of surfcpu (git archive) with this branch's soc files laid over it, under the
+      ignored build/ (removed afterwards); make build-rom, then build/sim/surfsim with the real
+      core (this is what make test-soc-boot runs once the core and firmware exist):
+
+$ build/sim/surfsim --rom build/fw/bramdiag.mem --max-cycles 1500000000 --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n'
+SurfCPU BRAM diagnostics 1.0.0 (build ce211339, dirty tree)
+board simulation (0xf0), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+bitstream build ce211339 flags 3, features ff, DDR status 5 size 256 MiB
+identity                           ok (7 checks)
+ALU, immediates, x0                ok (33 checks)
+M extension                        ok (23 checks)
+branches and jumps                 ok (9 checks)
+loads and stores                   ok (8 checks)
+CSRs and counters                  ok (30 checks)
+scratch RAM (March C-)             (56 KiB) ok (49 checks)
+text RAM (cells 2400-4095)         ok (1 checks)
+exceptions, each recovered         ok (34 checks)
+interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+FENCE.I, code written to RAM       ok (2 checks)
+DDR calibration                    ok (1 checks)
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      ok (54 checks)
+DDR boundaries                     ok (98 checks)
+DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+DDR sustained copies               (4 x 256 KiB copied and checked, 805 KiB/s) ok (4 checks)
+code running from DDR              ok (6 checks)
+BRAMDIAG: PASS (569 checks)
+surfsim: output matched after 66496937 cycles; UART 0 bytes in, 1337 out, 0 framing errors;
+DDR calibrated, 2106356 reads 860553 writes 30 fetches 0 errors; exit 0
+
+$ printf 'help\r' > help.txt
+$ build/sim/surfsim --rom build/fw/surfboot.mem --uart-in help.txt --max-cycles 60000000 --expect 'reset[^\n]*\n'
+SurfBoot 1.0.0 (build ce211339, dirty tree), the SurfCPU boot ROM
+soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream ce211339 dirty (simulation)
+ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+sd: no card in the socket (the card-detect switch is open)
+SurfBoot stopped: no card (NO_CARD)
+  ...
+surfboot> help
+SurfBoot 1.0.0 monitor commands:
+  boot [PATH] ... (16 commands) ... reset           restart SurfBoot
+surfsim: output matched after 3261657 cycles; UART 5 bytes in, 1441 out, 0 framing errors; exit 0
+
+$ build/sim/surfsim --rom build/fw/surfboot.mem --quiet --max-cycles 3000 --trace surfboot.trace
+1524 lines; the first ones (format of MODULES.md section 5, matching surfboot.elf's disassembly):
+# surfcpu-trace v1: order pc insn trap intr rd rd_wdata mem_addr rmask wmask mem_rdata mem_wdata pc_next
+0 00000000 30401073 0 0 0 00000000 00000000 0 0 00000000 00000000 00000004
+1 00000004 30047073 0 0 0 00000000 00000000 0 0 00000000 00000000 00000008
+2 00000008 00010197 0 0 3 00010008 00000000 0 0 00000000 00000000 0000000c
+
+make test-soc-boot in the same export: PASS (BRAMDIAG: PASS (569 checks), after 66496937 cycles;
+SurfBoot 1.0.0 banner and monitor answered help).

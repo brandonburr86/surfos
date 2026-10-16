@@ -1,0 +1,135 @@
+soc track evidence: make check and make test-soc-mutants, 2026-10-15 22:49-22:55 CDT
+Branch sc/soc at b23fead plus the move of test_models.cpp under sim/soc/ (rerun: PASS);
+container surfcpu-toolchain:2026-10-15 (Verilator 5.032, Icarus 12.0, Yosys 0.52, g++ 14.2).
+Configuration: the core and the io blocks are the stand-ins (their real files are not on this
+branch); see integration-preview.txt for the run with the real ones. Simulation and Yosys only;
+nothing ran on the board. make check took 5 min 8 s, the mutation check 41 s.
+
+Commands (from surfcpu/, in the container or via make on the Mac):
+  make check              = check-generated lint test-cpu test-soc test-fw + synth-soc test-soc-gate
+  make test-soc-mutants
+Seeds 1 7 123 (SOC_SEEDS) for the randomized Icarus and surfsim runs; seed 1 for the GPIO run at
+the real 25 MHz, the +bootrom= and empty-ROM memory runs, the Verilator runs and the netlists.
+
+lint-lib: 5 modules clean
+lint-soc: 21 RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: sim/soc/stubs/surfcpu_core.v, io: sim/soc/stubs/surf_spi.v sim/soc/stubs/surf_ps2.v sim/soc/stubs/surf_video.v
+test-lib: PASS (seeds 1 7 123)
+  [seed 1] tb_intc: PASS (3194 transfers, 860 error responses checked, 1580 back-to-back)
+  [seed 7] tb_intc: PASS (3205 transfers, 860 error responses checked, 1567 back-to-back)
+  [seed 123] tb_intc: PASS (3179 transfers, 856 error responses checked, 1676 back-to-back)
+  [seed 1] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+  [seed 7] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+  [seed 123] tb_sysinfo: PASS (DDR=1, 1319 transfers, 804 error responses checked)
+  [seed 1] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+  [seed 7] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+  [seed 123] tb_sysinfo: PASS (DDR=0, 1319 transfers, 804 error responses checked)
+  [seed 1] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 15 hi/lo/hi retries, 21033 MTIP cycle checks, 2035 transfers, 621 error responses checked)
+  [seed 7] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 21 hi/lo/hi retries, 21027 MTIP cycle checks, 2047 transfers, 621 error responses checked)
+  [seed 123] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 14 hi/lo/hi retries, 20655 MTIP cycle checks, 2033 transfers, 621 error responses checked)
+  [seed 1] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 12 hi/lo/hi retries, 28091 MTIP cycle checks, 2029 transfers, 621 error responses checked)
+  [seed 7] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 13 hi/lo/hi retries, 28087 MTIP cycle checks, 2031 transfers, 621 error responses checked)
+  [seed 123] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 17 hi/lo/hi retries, 27562 MTIP cycle checks, 2039 transfers, 621 error responses checked)
+  [seed 1] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13167 transfers, 427 error responses checked)
+  [seed 7] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13055 transfers, 423 error responses checked)
+  [seed 123] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 13407 transfers, 421 error responses checked)
+  [seed 1] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 908..1002 cycles = 9080..10020 us, 12 presses, 649 transfers, 421 error responses checked)
+  [seed 7] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 904..1000 cycles = 9040..10000 us, 12 presses, 647 transfers, 419 error responses checked)
+  [seed 123] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 904..1000 cycles = 9040..10000 us, 12 presses, 645 transfers, 417 error responses checked)
+  [seed 1] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+  [seed 7] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1654+3104 back-to-back)
+  [seed 123] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1788+3051 back-to-back)
+  [seed 1] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10652 answered by targets, 14280 errors expected and seen, 556 DDR errors before calibration; DDR 590 fetches + 759 data; 5753+6717 back-to-back)
+  [seed 7] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10712 answered by targets, 14220 errors expected and seen, 550 DDR errors before calibration; DDR 611 fetches + 680 data; 5691+6634 back-to-back)
+  [seed 123] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 10559 answered by targets, 14373 errors expected and seen, 569 DDR errors before calibration; DDR 598 fetches + 738 data; 5830+6813 back-to-back)
+  [seed 1] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8246 answered by targets, 13054 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4850+5749 back-to-back)
+  [seed 7] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8391 answered by targets, 12909 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4781+5704 back-to-back)
+  [seed 123] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8292 answered by targets, 13008 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 4934+5821 back-to-back)
+  [seed 1] tb_gpio: PASS (SYS_HZ 25000000, debounced changes after 228030..249992 cycles = 9121..9999 us, 1 presses, 583 transfers, 421 error responses checked)
+  [seed 1] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+  [seed 1] tb_mem: PASS (ROM empty: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+test-soc-units: PASS (seeds 1 7 123)
+  [tb_soc_soc_regions seed 1] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3114 cycles)
+  [tb_soc_soc_regions seed 7] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3130 cycles)
+  [tb_soc_soc_regions seed 123] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3124 cycles)
+  [tb_soc_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+  [tb_soc_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+  [tb_soc_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+  [tb_soc_soc_random seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+  [tb_soc_soc_random seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38074 cycles)
+  [tb_soc_soc_random seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 37957 cycles)
+  [tb_soc_soc_periph seed 1] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+  [tb_soc_soc_periph seed 7] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250355 cycles)
+  [tb_soc_soc_periph seed 123] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250367 cycles)
+  [tb_soc_random_b2b seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32350 cycles)
+  [tb_soc_random_b2b seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32114 cycles)
+  [tb_soc_random_b2b seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32246 cycles)
+  [tb_soc_noddr_soc_regions seed 1] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 144 cycles)
+  [tb_soc_noddr_soc_regions seed 7] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 128 cycles)
+  [tb_soc_noddr_soc_regions seed 123] SCRIPT PASS (56 data + 19 fetch transfers, 60 + 23 operations, 125 cycles)
+  [tb_soc_noddr_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+  [tb_soc_noddr_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+  [tb_soc_noddr_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+  [tb_soc_noddr_soc_random seed 1] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 9986 cycles)
+  [tb_soc_noddr_soc_random seed 7] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 9894 cycles)
+  [tb_soc_noddr_soc_random seed 123] SCRIPT PASS (3400 data + 3500 fetch transfers, 3404 + 3504 operations, 10131 cycles)
+  [tb_soc_noddr_soc_periph seed 1] SCRIPT PASS (329 data + 0 fetch transfers, 81 + 1 operations, 250029 cycles)
+  [tb_soc_noddr_soc_periph seed 7] SCRIPT PASS (330 data + 0 fetch transfers, 81 + 1 operations, 250025 cycles)
+  [tb_soc_noddr_soc_periph seed 123] SCRIPT PASS (330 data + 0 fetch transfers, 81 + 1 operations, 250030 cycles)
+  [tb_soc_negative] the three wrong expectations were reported
+test-soc-system: PASS (seeds 1 7 123; core: scripted stand-in; io: sim/soc/stubs/surf_spi.v sim/soc/stubs/surf_ps2.v sim/soc/stubs/surf_video.v)
+test_models: PASS (seed 1: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+test_models: PASS (seed 7: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+test_models: PASS (seed 123: UART waveform, 700 bytes back to back, errors, +-3% baud; DDR calibration, 20000 random accesses, edges, stalls, errors)
+  [surfsim_soc_regions seed 1] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3123 cycles)
+  [surfsim_soc_regions seed 7] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3138 cycles)
+  [surfsim_soc_regions seed 123] SCRIPT PASS (355 data + 24 fetch transfers, 71 + 28 operations, 3107 cycles)
+  [surfsim_soc_errors seed 1] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+  [surfsim_soc_errors seed 7] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6847 cycles)
+  [surfsim_soc_errors seed 123] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6886 cycles)
+  [surfsim_soc_random seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 37829 cycles)
+  [surfsim_soc_random seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+  [surfsim_soc_random seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38277 cycles)
+  [surfsim_soc_periph seed 1] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+  [surfsim_soc_periph seed 7] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250349 cycles)
+  [surfsim_soc_periph seed 123] SCRIPT PASS (337 data + 0 fetch transfers, 88 + 1 operations, 250362 cycles)
+  [surfsim_random_b2b seed 1] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32239 cycles)
+  [surfsim_random_b2b seed 7] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32124 cycles)
+  [surfsim_random_b2b seed 123] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 32491 cycles)
+test-soc-surfsim: PASS (seeds 1 7 123)
+  [verilator] tb_intc: PASS (3969 transfers, 790 error responses checked, 2427 back-to-back)
+  [verilator] tb_sysinfo: PASS (DDR=1, 1257 transfers, 742 error responses checked)
+  [verilator] tb_sysinfo: PASS (DDR=0, 1257 transfers, 742 error responses checked)
+  [verilator] tb_timer: PASS (25000000/1000000 Hz, 400 ticks with gaps 25..25, 17 hi/lo/hi retries, 21748 MTIP cycle checks, 2039 transfers, 621 error responses checked)
+  [verilator] tb_timer: PASS (33333333/1000000 Hz, 408 ticks with gaps 33..34, 16 hi/lo/hi retries, 29054 MTIP cycle checks, 2037 transfers, 621 error responses checked)
+  [verilator] tb_uart: PASS (DIV 217, 321 frames sent and timed, 311 back to back, 428 bytes received, 21443 transfers, 391 error responses checked)
+  [verilator] tb_gpio: PASS (SYS_HZ 100000, debounced changes after 903..994 cycles = 9030..9940 us, 12 presses, 613 transfers, 385 error responses checked)
+  [verilator] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 2078+2666 back-to-back)
+  [verilator] tb_interconnect: PASS (HAS_DDR=1, 24932 accesses: 11521 answered by targets, 13411 errors expected and seen, 583 DDR errors before calibration; DDR 580 fetches + 1056 data; 7085+8180 back-to-back)
+  [verilator] tb_interconnect: PASS (HAS_DDR=0, 21300 accesses: 8934 answered by targets, 12366 errors expected and seen, 0 DDR errors before calibration; DDR 0 fetches + 0 data; 5988+7026 back-to-back)
+test-soc-verilator: PASS (10 unit testbenches under Verilator --timing, seed 1)
+test-soc-boot: skipped (needs the real core and the firmware of the cpu and fw tracks)
+synth-soc: 0 warnings besides block-RAM port resizing (see build/soc/syn/soc.log)
+synth-soc: 12 logic modules synthesize and 3 memories infer (Yosys, check -assert)
+synth-soc: surfcpu_soc with synth_xilinx (black boxes: sim/soc/stubs/surfcpu_core.v sim/soc/stubs/surf_spi.v sim/soc/stubs/surf_ps2.v sim/soc/stubs/surf_video.v):
+    CARRY4                         85
+    FDRE                          538
+    FDSE                           80
+    LUT1                           32
+    LUT2                          285
+    LUT3                          139
+    LUT4                           54
+    LUT5                           64
+    LUT6                          570
+    MUXF7                          65
+    MUXF8                           9
+    RAM32M                          2
+    RAM64M                          3
+    RAMB36E1                       35
+  [netlist] tb_mem: PASS (ROM image: 3000 port A + 3000 port B reads; scratch 4000 port A + 4000 port B; text RAM 4000 bus + 20336 pixel reads; 550 error responses checked; 1674+3088 back-to-back)
+  [netlist soc_regions] SCRIPT PASS (353 data + 24 fetch transfers, 71 + 28 operations, 3114 cycles)
+  [netlist soc_errors] SCRIPT PASS (1541 data + 310 fetch transfers, 1545 + 312 operations, 6929 cycles)
+  [netlist soc_random] SCRIPT PASS (6001 data + 4300 fetch transfers, 5705 + 4304 operations, 38129 cycles)
+  [netlist soc_periph] SCRIPT PASS (336 data + 0 fetch transfers, 88 + 1 operations, 250351 cycles)
+test-soc-gate: PASS (the synthesized memories and SoC behave as the RTL)
+check: all automated SurfCPU checks passed
+test-soc-mutants: PASS (all 37 mutants caught: intc 2, uart 9, gpio 6, timer 3, sysinfo 2, mem 5, bus 10)

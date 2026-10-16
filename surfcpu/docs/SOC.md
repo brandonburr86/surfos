@@ -165,7 +165,7 @@ the same cycle as the previous response.
 | `test-soc-units` | Icarus testbenches through a SurfBus BFM (random gaps, back-to-back requests, junk on the fields after acceptance) with a protocol monitor on every link: `tb_intc`, `tb_sysinfo` (with and without DDR), `tb_timer` (25 MHz and a fractional 33.33 MHz), `tb_uart` (real divisor, bit timing to the cycle, both FIFOs' overflow, framing errors, break, glitch, +-3 % baud, interrupts, error rules), `tb_gpio` (bouncing buttons at 100 kHz and at the real 25 MHz, the debounce delay measured), `tb_mem` (three memories, `+bootrom=`, empty ROM, pixel port), `tb_interconnect` (every target a random-stall slave, a reference decoder written as address ranges, 17 monitored links, both ports alone and together, DDR before, after and losing calibration, DDR errors, arbitration and the offer lock; with and without DDR) |
 | `test-soc-verilator` | the same ten unit testbench configurations under Verilator --timing |
 | `test-soc-system` | `tb_soc` (Icarus): the whole SoC with the scripted core, UART and GPIO looped back, a Verilog DDR model with calibration delay, random ready and latency and a watchdog case; scripts `soc_regions`, `soc_errors`, `soc_random` (also back to back), `soc_periph`, with and without DDR; a negative script must fail with exactly its three wrong expectations |
-| `test-soc-models` | `test_models`: the UART model's waveform, exchanges, errors and baud tolerance; the DDR model against a reference over the whole window |
+| `test-soc-models` | `sim/soc/test_models.cpp`: the UART model's waveform, exchanges, errors and baud tolerance; the DDR model against a reference over the whole window |
 | `test-soc-surfsim` | the same four scripts in `surfsim` (Verilator, C++ models), a UART exchange with the model matched by `--expect`, the exit codes, a smoke run of the deliverable build with a trace |
 | `test-soc-boot` | once the real core and firmware exist: the BRAM diagnostics to `BRAMDIAG: PASS` and SurfBoot to its monitor in `surfsim` (skipped until then) |
 | `synth-soc` (check) | Yosys: the logic modules synthesize (check -assert), the memories infer as memories, the SoC through synth_xilinx (section 10) |
@@ -201,7 +201,7 @@ absent (`sd_cd_n` = 1) and the PS/2 lines idle; the hook points are marked in `s
 ## 10. Synthesis estimate and post-synthesis simulation
 
 `make synth-soc` runs Yosys 0.52 `synth_xilinx` (out of context, `-noiopad -noclkbuf`). With
-the stand-ins as black boxes the soc part comes to about 1,200 LUTs, 620 flip-flops, 85 CARRY4,
+the stand-ins as black boxes the soc part comes to 1,144 LUTs, 618 flip-flops, 85 CARRY4,
 35 RAMB36 and 5 LUTRAM primitives (the UART FIFOs). With the cpu and io tracks' blocks (tried in
 a scratch export, section 11) the whole SoC without DDR bridge and board top is about 5,400 LUTs,
 2,670 flip-flops, 36 RAMB36, 4 DSP48E1 and 30 LUTRAM primitives. These are Yosys estimates, not
@@ -217,11 +217,16 @@ multiplier (the 4 DSP48E1, where the io track saw Yosys delete logic) is outside
 
 ## 11. Integration preview (scratch export, simulation only)
 
-Run in an export of `surfcpu` at 9b8a93b (with the cpu, io and fw merges) with this branch's
-soc files laid over it, under the ignored `build/integ/`; nothing was committed from it:
+With the cpu and io tracks' RTL from `surfcpu` at 9b8a93b, put into this worktree only for the
+run (untracked, removed afterwards), the makefile picked the real files by itself and:
 
-* `lint-soc` clean with the real core and io blocks; `test-soc-system`, `test-soc-surfsim` and
-  `test-soc-gate` pass with the real io blocks (their reset values and error rules match).
+* `lint-soc` is clean with the real core and io blocks; `test-soc-system`, `test-soc-surfsim` and
+  `test-soc-gate` pass with the real io blocks (their reset values and error rules match the
+  stand-ins'); the synthesis estimate of section 10 includes them.
+
+In an export of `surfcpu` at 9b8a93b (with the cpu, io and fw merges) with this branch's soc
+files laid over it, under the ignored `build/`, removed afterwards (`make test-soc-boot`):
+
 * `build/sim/surfsim` with the real core runs the fw track's BRAM diagnostics to
   `BRAMDIAG: PASS (569 checks)` after 66.5 million cycles (exceptions from the interconnect's
   error responses, timer and UART interrupts, FENCE.I, the DDR tests through the DDR model and
@@ -236,8 +241,6 @@ soc files laid over it, under the ignored `build/integ/`; nothing was committed 
 * `surfsim` lacks the SD, PS/2 and VGA models until integration.
 * Not tested: a reset in the middle of traffic (the whole SoC resets together, SURFBUS.md rule
   8, so no request survives).
-* A stray container from an early `synth-soc` version (it mapped the 64 KiB memories to
-  flip-flops) may still be running in this session's Docker; see the track report.
 
 ## 13. Contract notes
 
