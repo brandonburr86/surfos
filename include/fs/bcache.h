@@ -50,6 +50,7 @@ struct buf {
     bool wfail;                         /* its last write failed: dirty until a sync writes it, never reused before */
     u8 order;                           /* BORDER_*: when it is written (the lowest it was dirtied with) */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
+    u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
     u_int refs;
     struct buf *hnext, *hprev;          /* hash chain */
