@@ -192,6 +192,10 @@ physical results are separate columns, so nothing claims more than happened.
   as much as the ticks did"). It runs right after boot, before any file is written. The tick
   count was 10 to 15, but mtime had moved more than 16 periods: QEMU was held up between the two
   reads on a loaded Mac. The test now reads both clocks together and gets three tries (6c89831).
+* After that fix, on the merged tree (d174d0f):
+  * `make check` passes (26 minutes);
+  * x86 `test-all` passes at O0 and O2 (smoke 311, files 51);
+  * `unittest` passes (37 suites, including the storage test's 91 checks).
 
 ### 2026-10-16: the board test kit
 
@@ -243,6 +247,7 @@ physical results are separate columns, so nothing claims more than happened.
   * a parsing bug in the clock-tile check;
   * a false synthesis-check finding on block RAM read registers.
 * The HAS_DDR=0 designs still pass every check on both boards.
+* `make check` passes with the round merged (26c2bd2, 25 minutes).
 * Next, ddr-3 (running):
   * take the calibration CPU out of the 100 MHz domain, so that SurfCPU calibrates over
     LiteDRAM's control bus;
