@@ -14,7 +14,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the storage review's findings, being fixed in fs-fix-2) |
-| 9 Reproducible standalone release | | | | later |
+| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done; pre-release only |
 
 ## Log
 
@@ -335,3 +335,53 @@ physical results are separate columns, so nothing claims more than happened.
   * Cosmetic, for the next firmware round: `info` prints `features 7f (uart timer irq gpio spi
     ps2 video ddr)`. The parentheses are a fixed legend of bits 0 to 7, not the bits that are
     set, so it reads as if DDR were there.
+
+### 2026-10-16: the release tooling (milestone 9)
+
+* rel was merged as a05b879 and is described in [RELEASE.md](RELEASE.md).
+  * `make release` refuses a dirty tree and builds from empty output directories, with
+    `SOURCE_DATE_EPOCH` set to the commit's time. It builds:
+    * the ROMs and the kernel;
+    * every design for both boards, through every gate;
+    * the QSPI flash images, and the card's `/BOOT` files as `deploy-sd` installs them;
+    * `SHA256SUMS` and a `MANIFEST`: commit, contract versions, each design's gates, timing
+      and resources.
+  * A missing DDR design makes it a `-pre-<commit>` pre-release, and only when asked
+    (`PRERELEASE=1`). Any other failure stops it.
+  * `make release-verify` clones the commit, rebuilds and compares byte for byte, and names the
+    first difference and its likely cause. `make release-check` and `make fresh-checkout` are
+    also new, and `tools/bitfile.py` reads a bitstream's header and configuration options.
+* Results ([evidence](evidence/release/)):
+  * The pre-release 1.0.0-pre-bb066932 was made from a fresh checkout in 53 minutes; the six
+    HAS_DDR=0 bitstreams pass every gate.
+  * `release-verify` rebuilt it from a new clone in 59 minutes: all 18 artifacts and the
+    `MANIFEST` match byte for byte.
+  * The toolchain and open-flow images, rebuilt with no cache, have the same version records
+    and build the same software and baseline bitstreams.
+* Nondeterminism found and fixed:
+  * the kernel took its build time, because `SOURCE_DATE_EPOCH` never reached the container;
+  * `xc7frames2bit` writes the current time into the `.bit` header.
+
+  A SoC built twice gave the same netlist, placement and frames.
+* Found for the DDR track, and sent to ddr-3: LiteX writes a hierarchy comment into the
+  generated LiteDRAM core in an order that follows the Python interpreter's memory layout (5
+  different files from 16 generations; the Verilog is identical in all of them). A fresh
+  checkout's `make litedram-gen` therefore fails its own SHA-256 lock, which is why the DDR
+  designs are missing from the release.
+* The configuration flash ([evidence](evidence/release/flash.txt)):
+  * The image is the bitstream without its header, written at address 0: 3,825,788 bytes on
+    the 100T, 2,192,012 on the 35T. These are the bytes openFPGALoader `-f` writes.
+  * The open flow's bitstreams cannot set configuration options, so the FPGA reads its flash
+    over one data line at about 3 MHz: 10.2 s to start on a 100T, 5.8 s on a 35T. Vivado's x4
+    at 33 MHz would take a quarter of a second.
+  * There is no golden and update (MultiBoot) layout: these streams carry no CRC check, so a
+    damaged update would configure instead of falling back. Recovery is JTAG with JP1 off
+    (RELEASE.md section 7, and the owner's guide section 9).
+  * Nothing was programmed: the flash path was tested against a fake openFPGALoader only.
+* For the board (RELEASE.md section 10), all with the owner's go-ahead:
+  * writing the flash, and its JEDEC id;
+  * starting from it with JP1 on, and the real start-up time;
+  * the recovery procedure;
+  * m9's ten cold boots and one-hour soak, once a DDR boot design exists.
+* An independent review of the round is running.
+

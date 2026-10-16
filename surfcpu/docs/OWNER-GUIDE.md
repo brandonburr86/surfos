@@ -22,6 +22,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the memory controller works in simulation, and SurfBoot boots SurfOS from it there; the open-source flow does not yet meet its 100 MHz timing, so there is no DDR bitstream yet, and booting SurfOS on the board waits for one |
 | The board tests | one command per board milestone (`make -C surfcpu board-test M=m1`, [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)), rehearsed against the RTL system and fake boards; it reads the board's serial port itself and writes the evidence file |
+| The release (milestone 9) | `make -C surfcpu release` builds every image from a clean commit with fixed time stamps, and `make -C surfcpu release-verify` rebuilds it from a fresh clone and compares. A pre-release made from a fresh checkout (1.0.0-pre-bb066932) rebuilt byte for byte, 18 files of 18. The DDR designs are missing until LiteDRAM's generated code is made reproducible (in progress). Nothing has been written to the board's flash ([RELEASE.md](RELEASE.md)) |
 | The board itself | an A7-100T (IDCODE 0x03631093), with JP2 taken off. Loaded over USB from this Mac (configuration RAM only; the flash is untouched): the baseline passes m1, and the CPU passes m3 with all 203 BRAM diagnostics ([evidence](evidence/physical/)) |
 
 ## 1. Set up the Mac (once)
@@ -390,7 +391,11 @@ steps and compare the CRCs itself: `make -C surfcpu board-test M=m8 ARGS="--moun
 /Volumes/SURFOS"`. It reads the card's files on the Mac, read only.
 
 Milestone 9's ten cold boots and one-hour soak are `make -C surfcpu board-test M=m9`. They
-need the configuration flash programmed first, which waits for your go-ahead.
+need the configuration flash programmed first, which waits for your go-ahead. With a release,
+the test takes the release's manifest and kernel (RELEASE.md section 10):
+`make -C surfcpu board-test M=m9 ARGS="--manifest build/release/<name>/fpga/arty_a7_100t/surfcpu_arty_a7_ddr/manifest.txt --kernel build/release/<name>/SURFOS.BIN"`.
+From the flash, a 100T takes about 10 s to start: the open flow's bitstreams cannot set the
+faster loading options, so the FPGA reads its flash over one data line at about 3 MHz.
 
 ## 9. Recovery
 
@@ -403,7 +408,8 @@ need the configuration flash programmed first, which waits for your go-ahead.
 | Any SurfBoot failure | It never stops silently: it prints the reason on the UART and stops in its monitor, with the failure's code in binary on the green LEDs LD4..LD7 and LD0 red (FIRMWARE.md lists the codes) |
 | deploy-sd exit 2 | Eject, reinsert, `make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS DEPLOY_ARGS=--verify-only` |
 | The card's file system is damaged | On the Mac: `diskutil verifyVolume /Volumes/SURFOS`, then copy your files off; reformat (section 7) only as a last resort. FAT32 is not journaled: an update cut off by pulling the card can damage it, and a backup file does not make an update atomic |
-| Flash | Not used yet. Writing the board's configuration flash (milestone 9) will be a separate command that asks you to type the board's name |
+| Writing the flash | `make -C surfcpu program-flash BOARD=arty_a7_100t BIT=<file.bit>`: a separate command that checks the board, the bitstream and its build manifest, then asks you to type the board's name. I never run it without your go-ahead. Not used yet |
+| A bad design in the flash | JTAG recovers it, whatever the flash holds (RELEASE.md section 7): unplug the USB cable and take **JP1 off**, plug it back in, `make -C surfcpu program-volatile BOARD=arty_a7_100t BIT=<a known-good .bit>` to see the board work, then `make -C surfcpu program-flash` with that file. Put JP1 back on and power-cycle: SurfBoot's banner comes after about 10 s. Keep the previous release until a new one has passed m9: its bitstream is the known-good one |
 
 ## 10. What I need from you
 
