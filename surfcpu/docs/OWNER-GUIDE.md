@@ -18,7 +18,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Step | State |
 |---|---|
 | CPU, SoC, SurfBoot and the SurfOS kernel | pass in simulation, including SurfBoot booting SurfOS from a card image on the RTL with the real CPU |
-| Files written by SurfOS | pass in simulation: written on the RTL system, ejected, read back after a second boot and by the Mac's tools; write errors and a card taken out tested under QEMU |
+| Files written by SurfOS | pass in simulation: written on the RTL system, ejected, read back after a second boot and by the Mac's tools; write errors, a card taken out and a full card tested on the RTL system too |
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the bridge is done; the memory controller in the bitstream is a later step, so booting SurfOS on the board waits for it |
 | The board itself | nothing has been connected or programmed yet |

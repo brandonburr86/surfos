@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`, on `make check`); under QEMU with the same driver: write errors, a card that stops answering, the card taken out after each block, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation; faults and a full volume on the RTL in progress |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation |
 | 9 Reproducible standalone release | | | | later |
 
 ## Log
@@ -125,3 +125,17 @@ physical results are separate columns, so nothing claims more than happened.
   one TCP timing check failed once while the Mac was loaded by other builds (a burst spread over
   411 ms against a limit of 100 ms; the change does not touch the network stack), and the full
   run passed on the rerun (smoke 311 and files 51 at O0 and O2, that burst 1 ms).
+
+### 2026-10-16: card faults and a full card on the RTL system
+
+* os-4 (88ed9bd): `surfsim` can make the card model fail on cue (`--sd-fault`, `--sd-remove`,
+  `--sd-insert`, also "after the nth block"), so `test-os-faults` (on `make check`, about 90 s)
+  runs on the RTL system:
+  * a refused write is retried;
+  * a card that refuses everything makes the command fail at once and keeps `eject` from
+    unmounting;
+  * a card taken out is seen through surf_spi's card detect within 0.3 s;
+  * a card pulled in the middle of a write leaves only what `fsck.fat` repairs;
+  * a full card ends a copy with "No space left on device", and `rm` gives the space back.
+* Shared fix B4 (`fs/fat.c`, both kernels; x86 suites pass at O0 and O2): a write that runs out
+  of space keeps what fitted and gives back the clusters it had linked past the file's end.
