@@ -1,6 +1,6 @@
 SurfCPU io track: test evidence (simulation only; nothing here ran on the board)
-date (UTC): 2026-10-16T03:40:30Z
-source: bee263701b58 (dirty=0)
+date (UTC): 2026-10-16T04:31:13Z
+source: aaf1306f12d7 (dirty=0)
 verilator                    Verilator 5.032 2025-01-01 rev (Debian 5.032-1+b2)
 iverilog                     Icarus Verilog version 12.0 (stable) ()
 yosys                        Yosys 0.52 (git sha1 fee39a3284c90249e1d9684cf6944ffbbcbb8f90)
@@ -119,56 +119,56 @@ bus: 447526 requests, 34 error responses
 test_ps2: PASS (165472 checks, seed 5, 79156413 cycles = 3166.3 ms simulated)
 
 == surf_video + VGA capture (Verilator; sys clock by seed: 1,5 = 25 MHz, 2 = 50, 3 = 10, 4 = 30)
-clocks: sys 25.000 MHz, pix 25.1775 MHz (simulated periods 40000 / 39718 ps)
-timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4716 kHz line, 59.9460 Hz frame at 25177305 Hz; test pattern: 307200 pixels exact
+clocks: sys 25.000 MHz, pix 25.1737 MHz (simulated periods 40000 / 39724 ps)
+timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4670 kHz line, 59.9372 Hz frame at 25173611 Hz; test pattern: 307200 pixels exact
 text: 2400 random cells (all 256 glyphs) exact pixel by pixel; decode_text read 2362 of 2362 two-colour cells right (37 as the inverse glyph with the colours swapped)
 banner: 'SurfOS 1.0 on SurfCPU (RV32IM), Arty A7 -- VGA text console,'
 blink: whole on/off runs of 16 frames (period 32 frames = 1.87 Hz)
 frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never the current one; a palette write applies at once
-vblank: duty 0.0858, VBLANK_EV every 417039 sys cycles with the interrupt, FRAME +5
+vblank: duty 0.0857, VBLANK_EV every 417102 sys cycles with the interrupt, FRAME +5
 resets: the pixel domain alone recovers its settings (2 odd lines at the restart); a sys reset alone leaves the syncs untouched
 capture: 108 frames, 57679 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
-test_video: PASS (123 checks, seed 1, 108 frames, 46146029 pix cycles)
-clocks: sys 50.000 MHz, pix 25.1775 MHz (simulated periods 20000 / 39718 ps)
-timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4716 kHz line, 59.9460 Hz frame at 25177305 Hz; test pattern: 307200 pixels exact
+test_video: PASS (123 checks, seed 1, 108 frames, 46145503 pix cycles)
+clocks: sys 50.000 MHz, pix 25.1737 MHz (simulated periods 20000 / 39724 ps)
+timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4670 kHz line, 59.9372 Hz frame at 25173611 Hz; test pattern: 307200 pixels exact
 text: 2400 random cells (all 256 glyphs) exact pixel by pixel; decode_text read 2362 of 2362 two-colour cells right (37 as the inverse glyph with the colours swapped)
 banner: 'SurfOS 1.0 on SurfCPU (RV32IM), Arty A7 -- VGA text console,'
 blink: whole on/off runs of 16 frames (period 32 frames = 1.87 Hz)
 frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never the current one; a palette write applies at once
-vblank: duty 0.0857, VBLANK_EV every 834078 sys cycles with the interrupt, FRAME +5
+vblank: duty 0.0857, VBLANK_EV every 834204 sys cycles with the interrupt, FRAME +5
 resets: the pixel domain alone recovers its settings (2 odd lines at the restart); a sys reset alone leaves the syncs untouched
 capture: 108 frames, 57678 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
-test_video: PASS (123 checks, seed 2, 108 frames, 46144785 pix cycles)
-clocks: sys 10.000 MHz, pix 25.1775 MHz (simulated periods 100000 / 39718 ps)
-timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4716 kHz line, 59.9460 Hz frame at 25177305 Hz; test pattern: 307200 pixels exact
+test_video: PASS (123 checks, seed 2, 108 frames, 46144276 pix cycles)
+clocks: sys 10.000 MHz, pix 25.1737 MHz (simulated periods 100000 / 39724 ps)
+timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4670 kHz line, 59.9372 Hz frame at 25173611 Hz; test pattern: 307200 pixels exact
 text: 2400 random cells (all 256 glyphs) exact pixel by pixel; decode_text read 2362 of 2362 two-colour cells right (43 as the inverse glyph with the colours swapped)
 banner: 'SurfOS 1.0 on SurfCPU (RV32IM), Arty A7 -- VGA text console,'
 blink: whole on/off runs of 16 frames (period 32 frames = 1.87 Hz)
 frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never the current one; a palette write applies at once
-vblank: duty 0.0863, VBLANK_EV every 166816 sys cycles with the interrupt, FRAME +5
+vblank: duty 0.0857, VBLANK_EV every 166841 sys cycles with the interrupt, FRAME +5
 resets: the pixel domain alone recovers its settings (2 odd lines at the restart); a sys reset alone leaves the syncs untouched
 capture: 108 frames, 57682 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
-test_video: PASS (123 checks, seed 3, 108 frames, 46148649 pix cycles)
-clocks: sys 30.000 MHz, pix 25.1775 MHz (simulated periods 33333 / 39718 ps)
-timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4716 kHz line, 59.9460 Hz frame at 25177305 Hz; test pattern: 307200 pixels exact
+test_video: PASS (123 checks, seed 3, 108 frames, 46148224 pix cycles)
+clocks: sys 30.000 MHz, pix 25.1737 MHz (simulated periods 33333 / 39724 ps)
+timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4670 kHz line, 59.9372 Hz frame at 25173611 Hz; test pattern: 307200 pixels exact
 text: 2400 random cells (all 256 glyphs) exact pixel by pixel; decode_text read 2362 of 2362 two-colour cells right (36 as the inverse glyph with the colours swapped)
 banner: 'SurfOS 1.0 on SurfCPU (RV32IM), Arty A7 -- VGA text console,'
 blink: whole on/off runs of 16 frames (period 32 frames = 1.87 Hz)
 frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never the current one; a palette write applies at once
-vblank: duty 0.0858, VBLANK_EV every 500467 sys cycles with the interrupt, FRAME +5
+vblank: duty 0.0858, VBLANK_EV every 500542 sys cycles with the interrupt, FRAME +5
 resets: the pixel domain alone recovers its settings (2 odd lines at the restart); a sys reset alone leaves the syncs untouched
-capture: 108 frames, 57678 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
-test_video: PASS (123 checks, seed 4, 108 frames, 46144469 pix cycles)
-clocks: sys 25.000 MHz, pix 25.1775 MHz (simulated periods 40000 / 39718 ps)
-timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4716 kHz line, 59.9460 Hz frame at 25177305 Hz; test pattern: 307200 pixels exact
+capture: 108 frames, 57679 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
+test_video: PASS (123 checks, seed 4, 108 frames, 46145631 pix cycles)
+clocks: sys 25.000 MHz, pix 25.1737 MHz (simulated periods 40000 / 39724 ps)
+timing: 800 x 525 total, hsync 96 px, vsync 2 lines, both negative; porches h 16/48 v 10/33; 31.4670 kHz line, 59.9372 Hz frame at 25173611 Hz; test pattern: 307200 pixels exact
 text: 2400 random cells (all 256 glyphs) exact pixel by pixel; decode_text read 2362 of 2362 two-colour cells right (37 as the inverse glyph with the colours swapped)
 banner: 'SurfOS 1.0 on SurfCPU (RV32IM), Arty A7 -- VGA text console,'
 blink: whole on/off runs of 16 frames (period 32 frames = 1.87 Hz)
 frame latch: CTRL, CURSOR and SCROLL written at picture line 240 change the next frame, never the current one; a palette write applies at once
-vblank: duty 0.0857, VBLANK_EV every 417039 sys cycles with the interrupt, FRAME +5
+vblank: duty 0.0858, VBLANK_EV every 417102 sys cycles with the interrupt, FRAME +5
 resets: the pixel domain alone recovers its settings (2 odd lines at the restart); a sys reset alone leaves the syncs untouched
 capture: 108 frames, 57679 lines, 800 x 525; no pixel in the blanking outside the frame of the pixel reset
-test_video: PASS (123 checks, seed 5, 108 frames, 46146037 pix cycles)
+test_video: PASS (123 checks, seed 5, 108 frames, 46145529 pix cycles)
 
 == the three blocks in Icarus
 tb_io_icarus: PASS (SPI loopback, PS/2 receive and TX_NAK, video 800 x 525 = 420000 pixels per frame)

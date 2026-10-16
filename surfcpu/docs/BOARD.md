@@ -377,7 +377,7 @@ answers like the real one (in the checks above). Nothing has been programmed.
 ## 10. Budgets
 
 Yosys `synth_xilinx -family xc7` estimates (evidence `resources.txt`; Vivado will differ): the
-baseline uses 286 LUTs, 412 flip-flops, no block RAM or DSP, 1 MMCM, 1 PLL and 2 BUFGs: 1.4 %
+baseline uses 290 LUTs, 412 flip-flops, no block RAM or DSP, 1 MMCM, 1 PLL and 2 BUFGs: 1.4 %
 of the 35T's LUTs, 0.5 % of the 100T's. The SoC is not on this branch yet; `make
 estimate-board` estimates the whole top once it is.
 
