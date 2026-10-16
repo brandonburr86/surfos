@@ -478,6 +478,7 @@ module tb_interconnect;
 
             // calibration lost while a fetch waits at the bridge: it stays offered and completes
             u_ddr.force_ready = 0;
+            repeat (2) @(negedge clk);       // the slave's ready is 0 before the fetch is offered
             ib.max_gap = 0;
             fork
                 i_access(SURF_DDR_BASE + 32'h100, 1'b0);
@@ -489,8 +490,9 @@ module tb_interconnect;
                 end
             join
             ib.max_gap = 2;
-            if (ib.err !== 1'b0) begin
-                $display("ERROR the waiting DDR fetch failed after calibration was lost");
+            if (ib.err !== 1'b0 || ib.wait_acc < 5) begin
+                $display("ERROR the waiting DDR fetch failed after calibration was lost (err %b, waited %0d cycles)",
+                         ib.err, ib.wait_acc);
                 errors = errors + 1;
             end
             ddr_offers_uncal = 0;
@@ -519,8 +521,8 @@ module tb_interconnect;
 
             // arbiter: both ask in the same cycle -> data first
             for (n = 0; n < 20; n = n + 1) begin
-                repeat (3) @(negedge clk);     // the arbiter idle (it regrants after the response cycle)
-                u_ddr.force_ready = 0;
+                u_ddr.force_ready = 0;         // the DDR slave not ready, and the arbiter idle
+                repeat (3) @(negedge clk);     // (it regrants after the response cycle)
                 ib.max_gap = 0; db.max_gap = 0;
                 ddr_log_n = 0;
                 fork
@@ -536,8 +538,8 @@ module tb_interconnect;
             end
             // an offered fetch is not overtaken by a later data request
             for (n = 0; n < 20; n = n + 1) begin
-                repeat (3) @(negedge clk);     // the arbiter idle, so the fetch is offered at once
-                u_ddr.force_ready = 0;
+                u_ddr.force_ready = 0;         // the DDR slave not ready, and the arbiter idle so
+                repeat (3) @(negedge clk);     // the fetch is offered (and locked) at once
                 ib.max_gap = 0; db.max_gap = 0;
                 ddr_log_n = 0;
                 fork

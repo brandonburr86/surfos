@@ -32,7 +32,8 @@ SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
-        synth-soc test-soc-verilator test-soc-gate test-soc-boot soc-gpio-real soc-mem-once
+        synth-soc test-soc-verilator test-soc-gate test-soc-boot test-soc-mutants soc-gpio-real \
+        soc-mem-once
 lint: lint-soc
 test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator \
           test-soc-boot
@@ -218,7 +219,8 @@ test-soc-models: $(SOC_DIR)/test_models
 # ---------------------------------------------------------------------------- surfsim
 # build/sim/surfsim: the whole SoC (the real core and io blocks once they exist) with the C++
 # models; build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for
-# the tests. Built with RVFI so --trace works with the real core.
+# the tests. Built with RVFI so --trace works with the real core. The Verilator object
+# directories are deleted once the binaries are copied (disk space); a rebuild starts afresh.
 SOC_BUILD_FLAGS := $(shell echo $$(( 2 + ($(SURFCPU_BUILD_DIRTY) & 1) )))
 SOC_SIM_DEFS    := --define build_id=0x$(BUILD_ID_HEX) --define build_flags=$(SOC_BUILD_FLAGS) \
                    --define build_time=0
@@ -243,7 +245,7 @@ $(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP
 	$(Q)$(SOC_VERILATE) --Mdir $(BUILD)/sim/obj_surfsim -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim.txt 2>&1 \
 	  || { tail -40 $(BUILD)/sim/obj_surfsim.txt; exit 1; }
-	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@
+	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim
 
 $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
                                    $(SOC_MODEL_HDR) $(SOC_ID_STAMP)
@@ -251,7 +253,7 @@ $(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SR
 	$(Q)$(SOC_VERILATE) --Mdir $(SOC_DIR)/surfsim_script/obj -o surfsim \
 	  $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
 	  > $(SOC_DIR)/surfsim_script/build.txt 2>&1 || { tail -40 $(SOC_DIR)/surfsim_script/build.txt; exit 1; }
-	$(Q)cp $(SOC_DIR)/surfsim_script/obj/surfsim $@
+	$(Q)cp $(SOC_DIR)/surfsim_script/obj/surfsim $@ && rm -rf $(SOC_DIR)/surfsim_script/obj
 
 surfsim: $(BUILD)/sim/surfsim
 
@@ -415,7 +417,8 @@ test-soc-gate: $(SOC_GATE_DIR)/tb_mem_gate.vvp $(SOC_GATE_DIR)/tb_soc_gate.vvp \
 # ---------------------------------------------------------------------------- second simulator
 # The unit testbenches again under Verilator (--binary --timing): two-state instead of
 # four-state, another scheduler, and other random sequences (the order in which a simulator
-# evaluates several $random arguments is its own). One seed each.
+# evaluates several $random arguments is its own). One seed each; each build's object directory
+# (about 170 MB) is deleted after its run.
 SOC_VL      = $(VERILATOR) --binary --timing -j 2 -O1 -Wno-lint -Wno-style $(SOC_INC)
 SOC_VL_DIR := $(SOC_DIR)/vl
 
@@ -425,6 +428,7 @@ define soc_vl
 	$(Q)$(SOC_VL) --top-module $(2) --Mdir $(SOC_VL_DIR)/$(1) -o $(1) $(4) $(3) \
 	  > $(SOC_VL_DIR)/$(1).build.txt 2>&1 || { tail -30 $(SOC_VL_DIR)/$(1).build.txt; exit 1; }
 	$(Q)$(SOC_VL_DIR)/$(1)/$(1) +seed=1 $(5) > $(SOC_VL_DIR)/$(1).txt 2>&1; \
+	  rm -rf $(SOC_VL_DIR)/$(1); \
 	  grep -q "PASS" $(SOC_VL_DIR)/$(1).txt || { cat $(SOC_VL_DIR)/$(1).txt; exit 1; }
 	@grep -h "PASS" $(SOC_VL_DIR)/$(1).txt | sed "s/^/  [verilator] /"
 
@@ -466,3 +470,9 @@ else
 	@echo "  [surfboot] $$(grep -m1 '^SurfBoot ' $(SOC_DIR)/boot-surfboot.txt); the monitor answered help"
 	@echo "test-soc-boot: PASS (the real core runs the diagnostics and SurfBoot in surfsim)"
 endif
+
+# ---------------------------------------------------------------------------- the tests' own check
+# 37 one-line bugs planted in copies of the RTL (sim/soc/tools/mutants.py); the unit testbench
+# covering each must fail. Not part of test-soc (a few minutes); run it after changing tests.
+test-soc-mutants: $(SOC_DIR)/rom_a.mem
+	$(Q)$(PYTHON) sim/soc/tools/mutants.py --jobs 2
