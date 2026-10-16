@@ -1,15 +1,16 @@
 # Synthesis estimates, 2026-10-15: Yosys 0.52 synth_xilinx -family xc7 (open tool, NOT Vivado; no timing)
 
 ## surf_ddr_bridge (default parameters): make synth-ddr (-noiopad -noclkbuf -flatten)
-  Number of cells:                683
-  CARRY4                         11
-  FDRE                          409
-  LUT2                           43
-  LUT3                          109
+  Number of cells:                661
+  CARRY4                         10
+  FDRE                          384
+  FDSE                            3
+  LUT2                           77
+  LUT3                           74
   LUT4                            3
-  LUT5                           40
-  LUT6                           52
-  total LUTs: 247; no vendor primitive in the RTL, no block RAM
+  LUT5                           43
+  LUT6                           50
+  total LUTs: 247, flip-flops: 387; no vendor primitive in the RTL, no block RAM
 
 ## LiteDRAM Arty core with its VexRiscv: ip/litedram/estimate.sh (user port as top-level pins, so IBUF/OBUF are artifacts)
   Number of cells:              10577

@@ -50,5 +50,12 @@ tb_ddr_litedram: alias           PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.0
 tb_ddr_litedram: random          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=10000 reads=4917 writes=5083 err=0 aborted=0 timeouts=0 lat=5/7.2/22 cycles=94676
 tb_ddr_litedram: stream          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=2048 reads=1024 writes=1024 err=0 aborted=0 timeouts=0 lat=5/6.7/15 cycles=15711 sys_cycles_per_write=6.02 per_read=9.31
 tb_ddr_litedram: precal          PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=300 reads=114 writes=86 err=100 aborted=0 timeouts=0 lat=5/7.5/19 cycles=1965
-tb_ddr_litedram: sysreset        PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5064 reads=2404 writes=2436 err=0 aborted=224 timeouts=0 lat=5/7.3/21 cycles=46377 resets=224 maybes=90
+tb_ddr_litedram: sysreset        PASS seed=2 sys=40.000ns ui=10.000ns jitter=0.00 accesses=5064 reads=2405 writes=2436 err=0 aborted=223 timeouts=0 lat=5/7.3/21 cycles=46377 resets=223 maybes=90
 tb_ddr_litedram: random          PASS seed=3 sys=40.000ns ui=10.000ns jitter=0.30 accesses=3000 reads=1550 writes=1450 err=0 aborted=0 timeouts=0 lat=5/7.4/23 cycles=28880
+
+## open-flow support, read from source (not run)
+openXC7/nextpnr-xilinx bc9b234634cf80756b04ad4ea5f8e7a83293c425 (2026-09-25, archived; development in openXC7/nextpnr):
+  xilinx/pack_io_xc7.cc packs ISERDESE2, OSERDESE2, IDELAYE2, IDELAYCTRL, IOBUF, IOBUFDS, OBUFDS
+  xilinx/pack_clocking_xc7.cc packs PLLE2_ADV (and PLLE2_BASE), BUFG (as BUFGCTRL)
+  .github/workflows/demos.yml builds litex-ddr-arty-s7 (xc7s50) and litex-ddr-qmtech-kintex7 with regression: false;
+  the only Artix-7 demo is blinky-digilent-arty. Placing, routing and timing this core on the A7: flow track, pending.

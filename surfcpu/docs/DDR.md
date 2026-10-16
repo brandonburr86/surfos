@@ -22,7 +22,7 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
 
 | Part | Simulation | Synthesis | On the board |
 |---|---|---|---|
-| `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 409 flip-flops, no vendor primitives (an open-tool estimate) | **pending** |
+| `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 387 flip-flops, no vendor primitives (an open-tool estimate) | **pending** |
 | MIG recipe (`ip/mig/`) | the bridge is tested against a behavioural model of the MIG's user interface, not the MIG | **pending**: needs Vivado (no build host, BUILD-HOST.md); recipe dry-run only | **pending** |
 | LiteDRAM core (`ip/litedram/`) | its real controller (with LiteDRAM's DRAM model in place of the PHY) passes the bridge tests through the adapter | generated in the container; Yosys estimate 5,606 LUTs, 3,634 flip-flops; place and route in the open flow **pending** (flow track) | **pending** |
 | `surf_ddr_litedram_adapter` | tested against LiteDRAM's controller; 5 of 5 mutants caught | lints and compiles; not synthesized on its own | **pending** |
@@ -135,35 +135,40 @@ LiteDRAM's native port counts 128-bit beats, so the adapter sends `app_addr[26:3
 ## 5. Errors, resets and what they mean
 
 SURFBUS.md section 3 says an error response means the access had no effect. That holds for
-every refusal (before calibration, after a failure or a timeout, and the ui side's own refusal
-when `init_calib_complete` is low as a request arrives). For the watchdog there are two cases:
+every refusal in the cycle after acceptance (before calibration, after a failure or a timeout)
+and for the ui side's refusal when `init_calib_complete` is low as a request arrives. Two
+errors are different:
 
-* an access abandoned **while still waiting for the request mailbox** is never carried out
-  (tested: `abandon`);
-* an access abandoned **after it entered the mailbox** may still be carried out later, in
-  order, if the controller recovers. Software sees `DDR_STATUS.TIMEOUT` and the DDR refuses
+* **The watchdog.** An access abandoned **while still waiting to be sent** is never carried out
+  (tested: `abandon`). An access abandoned **after it was sent** may still be carried out later,
+  in order, if the controller recovers. Software sees `DDR_STATUS.TIMEOUT` and the DDR refuses
   everything until reset, so nothing can observe it before the reset; after a reset (which does
-  not erase DDR) the late write may be visible. This is a documented exception to SURFBUS.md
-  section 3 (proposed wording below).
+  not erase DDR) the late write may be visible.
+* **A controller reset in the middle of an access.** The ui side answers the access it was
+  working on with an error as soon as its reset ends (it never leaves a request unanswered); a
+  write may or may not have reached the memory before the controller was reset.
+
+Both are documented exceptions to SURFBUS.md section 3 (proposed wording below). They only arise
+when the controller stops answering or is reset, which on the board means a fault or the RESET
+button.
 
 Resets: `rst` (the SoC's) and `ui_rst` (the controller's) may come and go independently and at
-any moment. Neither the mailboxes nor the request-id counter has a reset, and each side only
-sends and takes messages outside its own reset, so a reset of one side never invents, loses or
-mixes up a message. A request that has already gone to the ui side when `rst` comes is still
-carried out; its response is dropped, and every access after the reset is ordered after it
+any moment. Neither the mailboxes nor the two flags of section 6 have a reset, and each side
+only sends and takes messages outside its own reset, so a reset of one side never invents, loses
+or mixes up a message. A request already sent to the ui side when `rst` comes is still carried
+out; its answer is dropped, and the first access after the reset waits until it has come
 (SURFBUS.md rule 8 says no request survives a reset; this is the one exception, proposed wording
-below). A controller reset (`ui_rst`) in the middle of an access loses that access; the watchdog
-answers it with an error, and `rst` recovers the bridge. In the real board both resets come
-from the same button, so in practice they happen together.
+below). In the real board both resets come from the same button, so in practice they happen
+together.
 
 ## 6. The clock-domain crossing
 
 ```
  sys_clk domain                                   ui_clk domain
- accept --> req_box.hold (request, id) ------data------> capture u_id u_write u_be u_waddr u_wdata
-            req_box.req ---toggle--> 2-flop sync --> valid (take: flip ack)
+ accept --> req_box.hold (request) ----------data------> capture u_write u_be u_waddr u_wdata
+ inflight   req_box.req ---toggle--> 2-flop sync --> valid (take: flip ack, set u_owe)
             2-flop sync <--toggle--- req_box.ack
- rs_q  <------data------ rsp_box.hold (id, err, rdata) <-- the ui side's answer
+ rs_q  <------data------ rsp_box.hold (err, rdata) <---- the ui side's answer (clears u_owe)
             2-flop sync <--toggle--- rsp_box.req
             rsp_box.ack ---toggle--> 2-flop sync
 ```
@@ -176,10 +181,22 @@ from the same button, so in practice they happen together.
 * **No reset in the mailbox** (deliberate): resetting a toggle on one side would look like a new
   message on the other. The toggles and synchronizers start from their initial values (FPGA
   configuration, or time 0 in simulation) and keep their relationship for ever.
-* **Ids**: each request carries a 4-bit id from a counter that is never reset; the ui side
-  echoes it, and the sys side delivers a response only if its id is the outstanding one. A
-  response to a request cut short by `rst` or abandoned by the watchdog is taken and dropped. At
-  most three stale ids can be in flight, so four bits never collide.
+* **One request in flight, across resets too**: the sys side keeps `inflight`, a flag with no
+  reset that is set when a request is sent and cleared when an answer is taken, and sends a new
+  request only while it is clear. So the next answer is always the current request's: an answer
+  to a request cut short by `rst` or abandoned by the watchdog arrives (and is dropped) before
+  the next request is even sent, and a new request after a reset waits for it.
+* **Every request answered**: the ui side keeps `u_owe`, a flag with no reset that is set when it
+  takes a request and cleared when its answer is in the mailbox. If its reset interrupts the
+  request, it answers it with an error as soon as the reset ends, before taking anything new, so
+  `inflight` always clears (unless the controller's clock stops for good, which the watchdog
+  covers).
+* An earlier version tagged requests with a 4-bit id instead. That was wrong in a corner: with
+  the controller stuck through 15 resets, each with an access that timed out, the id wrapped
+  around while the first request was still inside, and when the controller recovered its late
+  answer was taken for the current request's. The `wrap` test reproduces this on the old RTL
+  (k = 15) and passes on this one; the bridge proof (section 8) shows no stale answer is ever
+  delivered, without a bound on the number of resets.
 * **Capture registers**: crossing data lands only in registers enabled by synchronized signals
   (`u_*` on the ui side, `rs_q` on the sys side); no logic sits between `hold` and those
   registers. This is the form CDC reviews and Vivado's `report_cdc` expect.
@@ -188,10 +205,11 @@ from the same button, so in practice they happen together.
   destination clock; nothing assumes which clock is faster (tested from ui 2.4 times slower than
   sys to ui 4 times faster, and with 30% jitter on every half period).
 
-What is proven, what is not: the mailbox protocol is proved for every interleaving of the two
-clocks' edges (any frequencies and phases, edges at the same instant, either clock stopping)
-and every input sequence (section 8, formal). Simulation cannot show metastability: that rests
-on the two-flop synchronizers with `ASYNC_REG` and on the timing constraints below.
+What is proven, what is not: the mailbox protocol, and the bridge's SurfBus obligations
+including "no stale answer", are proved for every interleaving of the two clocks' edges (any
+frequencies and phases, edges at the same instant, either clock stopping), every input sequence
+and every pattern of resets (section 8, formal). Simulation cannot show metastability: that
+rests on the two-flop synchronizers with `ASYNC_REG` and on the timing constraints below.
 
 ## 7. Timing constraints for the board top
 
@@ -227,16 +245,15 @@ All run in the toolchain container; `make test-ddr` is on `test-soc`, `make lint
 | Command | What runs | Result (2026-10-15) |
 |---|---|---|
 | `make lint-ddr`, `lint-ddr-adapter` | Verilator 5.032 `--lint-only -Wall` (default and four other parameter sets for the bridge), Icarus 12 `-g2005 -Wall` | clean |
-| `make test-ddr-bridge` | `tb_ddr_bridge --test all`, seeds 1, 2, 3, at 25 MHz / 81.25 MHz | 3 x 12 tests pass |
+| `make test-ddr-bridge` | `tb_ddr_bridge --test all`, seeds 1, 2, 3, at 25 MHz / 81.25 MHz | 3 x 13 tests pass |
 | `make test-ddr-ratios` | random, sysreset, uireset and lanes at 7 more clock pairs (below) | 28 runs pass |
 | `make test-ddr-defaults` | the bridge with its default parameters: calibration limit of 25,000,000 cycles (ui clock stopped), the 4096-cycle watchdog (18 cases), 5000 random accesses | pass; `calib_fail` after 25,000,001 cycles |
 | `make test-ddr-icarus` | the mailbox in Icarus (5 clock pairs x 5000 messages, clock stops, misuse) and a four-state smoke test of the bridge with a Verilog MIG stand-in (3 seeds x 1094 accesses) | pass |
 | `make test-ddr-litedram` | `tb_ddr_litedram --test all`, seeds 1, 2, plus a jittered run: the bridge and adapter against LiteDRAM's controller | 2 x 8 tests + 1 pass |
-| `make synth-ddr` | Yosys 0.52 `synth_xilinx` of the bridge | 247 LUTs, 409 FFs, 11 CARRY4 (estimate) |
+| `make synth-ddr` | Yosys 0.52 `synth_xilinx` of the bridge | 247 LUTs, 387 flip-flops, 11 CARRY4 (estimate) |
 | `make check-mig` | the MIG recipe without Vivado (section 6.4) | pass |
-| `make prove-ddr` | SymbiYosys 0.52: the mailbox and bridge proofs (ABC PDR, unbounded) with covers, and "no stale answer" to 40 steps | proved, covers reached, bounded check passes (about 80 s) |
-| `make prove-ddr-stale` | "no stale answer" unbounded (slow, not on check) | see `docs/evidence/ddr/formal.txt` |
-| `make test-ddr-mutants` | 30 deliberately broken copies of the RTL (slow, not on check) | 29 caught, 1 survives as expected |
+| `make prove-ddr` | SymbiYosys 0.52: the mailbox and bridge proofs (ABC PDR, no depth bound) with covers | proved, covers reached (about 20 s) |
+| `make test-ddr-mutants` | 32 deliberately broken copies of the RTL (slow, not on check) | 31 caught, 1 survives as expected |
 
 The Verilator testbench (`sim/ddr/tb_ddr_bridge.cpp` with `surfbus_bench.h`) runs the bridge
 against `sim/ddr/mig_ui_model.{h,cpp}`, a C++ model of the MIG user interface on its own
@@ -263,8 +280,9 @@ never both 1; `timeout` sticky; at most one command in the controller; no acknow
 | `calfail` | calibration never comes: `calib_fail` exactly at the limit, accesses refused, a late calibration changes nothing, a reset recovers |
 | `watchdog` | 6 faults x 3 seeds (`app_rdy` stuck for a read and a write, `app_wdf_rdy` stuck, read data dropped, ui clock stopped for a read and a write): error exactly at `TIMEOUT_CYCLES`, `timeout` set and kept, later accesses refused at once, the late answer dropped, recovery by reset, the abandoned write settled by a read |
 | `abandon` | an access abandoned while the mailbox still holds an earlier one is never carried out; the earlier one is |
+| `wrap` | a read stuck behind a stopped controller clock, then k = 13..18 resets each with an access that times out, then recovery: the next read gets its own data, never the stuck read's late answer |
 | `sysreset` | 10,000 accesses with `rst` at random moments (about 490 times), cutting accesses before the controller (about 120), inside it (about 150) and after it (about 210) |
-| `uireset` | 6000 accesses with about 300 controller resets: refusals at once, refusals by the ui side, and watchdog recoveries all occur |
+| `uireset` | 6000 accesses with about 300 controller resets: refusals at once and error answers from the ui side both occur (accesses cut short are answered, not timed out), and 200 accesses after the last reset all work |
 
 Clock pairs (sys ns : ui ns : jitter): 40 : 12.308 : 0 (the MIG, default), 40 : 10 : 0
 (LiteDRAM), 40 : 40 : 0, 40 : 37.3 : 0, 40 : 97 : 0 (ui slower than sys), 10 : 12.3077 : 0 (sys
@@ -278,12 +296,13 @@ bridge, the adapter and LiteDRAM's controller, crossbar and native port, generat
 
 The mutation check (`sim/ddr/ddr_mutants.py`) builds each deliberately broken copy and runs the
 tests: wrong read lane, inverted or misplaced write mask, shifted `app_addr`, a lost address bit,
-swapped read/write command, no id check, a resetting id counter, the error bit taken from the
-wrong place, the watchdog one cycle early, no fail-stop, no refusal before calibration,
+swapped read/write command, a new request sent while one is in flight, the in-flight flag reset
+by `rst`, no answer for a request a controller reset interrupted (or that flag reset by `ui_rst`),
+the error bit taken from the wrong place, the watchdog one cycle early, no fail-stop, no refusal before calibration,
 calibration failure ignored, `calib_done` latched, no calibration limit, `app_wdf_rdy`/`app_rdy`
 ignored, the ui side not refusing when uncalibrated, the request never taken, a response in
 reset, the mailbox sending while full or taking while empty, and five adapter faults (mask
-polarity, address shift, command, no write buffer, calibration). 29 are caught. The one that
+polarity, address shift, command, no write buffer, calibration). 31 of 32 are caught. The one that
 survives removes the first synchronizer stage of the request toggle: metastability is not
 simulated, which is why the synchronizers rest on review and constraints.
 
@@ -294,22 +313,25 @@ flip-flops):
   `dst_valid` only while there is one and `dst_data` is then that message, `src_ready` only when
   the box is empty. Proved; a cover shows three messages getting through; the proof fails, as it
   must, on a mailbox that sends while full.
-* `bridge.sby`, task `prove`: the whole bridge with a legal SurfBus master, a completely free
-  controller (any `app_rdy`, `app_wdf_rdy`, read data at any time or never, `init_calib_complete`
-  and `ui_rst` at any time), free clocks and a free `rst`, with `TIMEOUT_CYCLES` = 4 and a
-  calibration limit of 3: a response only while an accepted request waits for one and never in
-  reset (so exactly one response per request); no request waits more than `TIMEOUT_CYCLES` + 1
-  cycles; `calib_done` and `calib_fail` never both 1; `timeout` sticky until `rst`. Proved; a
-  cover reaches a successful answer from the controller side; the proof fails on bridges with a
-  response in reset, no watchdog, or calibration failure ignored. These are SURFBUS.md rules 4,
-  7 and 8 for any controller behaviour, which is what the watchdog is for.
-* `bridge.sby`, tasks `stalebmc` and `stale`: the same plus "a successful response only after
-  the controller accepted a command since its request was accepted", which catches a stale
-  answer (from a request cut short by `rst` or abandoned by the watchdog) delivered for a later
-  one. Checked to 40 steps (bounded, on `check`): passes; with the id check removed it fails
-  within those 40 steps, so the depth reaches the reset scenario. Unbounded (PDR, `stale`): see
-  the evidence; PDR has to relate the ids and mailbox states, and is much slower. Simulation
-  covers the same ground (sysreset, uireset, watchdog, abandon, and the `no-id-check` mutant).
+* `bridge.sby`: the whole bridge with a legal SurfBus master, a completely free controller (any
+  `app_rdy`, `app_wdf_rdy`, read data at any time or never, `init_calib_complete` and `ui_rst` at
+  any time), free clocks and a free `rst`, with `TIMEOUT_CYCLES` = 4 and a calibration limit of
+  3. Proved:
+  * a response only while an accepted request waits for one, never in reset (so exactly one
+    response per request);
+  * no request waits more than `TIMEOUT_CYCLES` + 1 cycles;
+  * a successful response only after the controller accepted a command since its request was
+    accepted: no stale answer (from a request cut short by `rst` or abandoned by the watchdog) is
+    ever delivered for a later one, however many resets come in between;
+  * `calib_done` and `calib_fail` never both 1; `timeout` sticky until `rst`.
+
+  These are SURFBUS.md rules 4, 7 and 8 for any controller behaviour, which is what the watchdog
+  and the in-flight flag are for. A cover reaches a successful answer. The proof fails, as it
+  must, on bridges with a response in reset, no watchdog, calibration failure ignored, `timeout`
+  cleared by a refused access, a request sent while another is in flight, or the in-flight flag
+  reset by `rst`. A bridge that never answers an interrupted request still passes (it only
+  stops recovering: every later access times out), which is why `uireset` and `watchdog` check
+  recovery in simulation.
 
 ## 9. The MIG (Vivado flow)
 
@@ -436,9 +458,15 @@ What came out, for the Arty (2026-10-15, in the container):
 * Clocking inside: one `PLLE2_ADV`, 100 MHz in, VCO 1600 MHz, giving 200 MHz (IDELAYCTRL
   reference), 100 MHz (core, user port), 400 MHz and 400 MHz at 90° (DDR3 at 800 MT/s).
 * Vendor primitives: ISERDESE2 x16, OSERDESE2 x45, IDELAYE2 x16, IDELAYCTRL x1, IOBUF x16,
-  IOBUFDS x2, OBUFDS x1, BUFG x4, PLLE2_ADV x1, FDCE x8, FDPE x8. Whether the openXC7 flow places
-  and routes all of these correctly (IDELAYE2/ISERDESE2 and their timing especially) is for the
-  flow track to prove; the simulation core uses none of them.
+  IOBUFDS x2, OBUFDS x1, BUFG x4, PLLE2_ADV x1, FDCE x8, FDPE x8; the simulation core uses none.
+  The openXC7 nextpnr-xilinx source (openXC7/nextpnr-xilinx at `bc9b2346`, 2026-09-25, archived
+  with development moved to openXC7/nextpnr) has packing rules for every one of them
+  (`pack_io_xc7.cc`: ISERDESE2, OSERDESE2, IDELAYE2, IDELAYCTRL, IOBUF/IOBUFDS, OBUFDS;
+  `pack_clocking_xc7.cc`: PLLE2_ADV, BUFG), and its CI builds LiteX DDR3 demos for the Arty S7
+  (Spartan-7, the same I/O logic) and a Kintex-7 board, as non-gating jobs, but none for the Arty
+  A7. That is read from the source, not run: whether the open flow places, routes and times this
+  core correctly on the A7 (the IDELAYE2/ISERDESE2 paths especially) is for the flow track to
+  prove.
 * Calibration: the core has its own small VexRiscv running the LiteX BIOS's `sdram_init` from an
   internal ROM (27.4 KiB, 57% of 48 KiB), which raises `init_done` (or `init_error`). It needs
   `VexRiscv.v` from pythondata-cpu-vexriscv next to the core. This is a second CPU inside the
@@ -502,7 +530,8 @@ board top: oscillator → IBUF → BUFG → `litedram_core.clk` and the board's 
    controller side is the MIG native UI of section 1 above.
 2. SURFBUS.md section 3: "...a write with an error changed nothing, **except a DDR access
    abandoned by the bridge's watchdog after it was handed to the memory controller, which may
-   still complete (DDR_STATUS.TIMEOUT; the DDR then refuses every access until reset)**."
+   still complete (DDR_STATUS.TIMEOUT; the DDR then refuses every access until reset), and a DDR
+   access cut short by a reset of the memory controller, which may have completed**."
 3. SURFBUS.md rule 8: "...no request survives a reset, **except that a DDR access already
    passed to the memory controller's clock domain completes after the SoC's reset; its response
    is discarded and it is ordered before every later DDR access**."

@@ -1,10 +1,10 @@
 # DDR formal checks, 2026-10-15: SymbiYosys v0.52 with Yosys 0.52 (surfcpu-toolchain:2026-10-15)
-# multiclock: both clocks free (any interleaving of edges); synchronizers as plain flip-flops
+# multiclock: both clocks free (any interleaving of edges); synchronizers as plain flip-flops;
+# ABC PDR proofs have no depth bound
 
-## make prove-ddr (on check)
+## make prove-ddr (on check, about 20 s)
 --- mailbox_prove
 [build/ddr/formal_mailbox_prove] summary: engine_0 (abc pdr) returned PASS
-[build/ddr/formal_mailbox_prove] summary: engine_0 did not produce any traces
 [build/ddr/formal_mailbox_prove] DONE (PASS, rc=0)
 --- mailbox_cover
 [build/ddr/formal_mailbox_cover] engine_0: ##   0:00:00  Reached cover statement in step 26 at mailbox_formal: mailbox_formal.sv:53.9-53.30 (_witness_.check_cover_mailbox_formal_sv_53_17)
@@ -12,25 +12,24 @@
 [build/ddr/formal_mailbox_cover] DONE (PASS, rc=0)
 --- bridge_prove
 [build/ddr/formal_bridge_prove] summary: engine_0 (abc pdr) returned PASS
-[build/ddr/formal_bridge_prove] summary: engine_0 did not produce any traces
 [build/ddr/formal_bridge_prove] DONE (PASS, rc=0)
 --- bridge_cover
-[build/ddr/formal_bridge_cover] engine_0: ##   0:00:00  Reached cover statement in step 27 at bridge_formal: bridge_formal.sv:115.9-115.42 (_witness_.check_cover_bridge_formal_sv_115_27)
+[build/ddr/formal_bridge_cover] engine_0: ##   0:00:00  Reached cover statement in step 27 at bridge_formal: bridge_formal.sv:113.9-113.42 (_witness_.check_cover_bridge_formal_sv_113_31)
 [build/ddr/formal_bridge_cover] summary: engine_0 (smtbmc z3) returned pass
 [build/ddr/formal_bridge_cover] DONE (PASS, rc=0)
---- bridge_stalebmc
-[build/ddr/formal_bridge_stalebmc] summary: engine_0 (smtbmc z3) returned pass
-[build/ddr/formal_bridge_stalebmc] summary: engine_0 did not produce any traces
-[build/ddr/formal_bridge_stalebmc] DONE (PASS, rc=0)
 
-## the checks are not vacuous: they fail on broken designs (build/tmp scripts, same harnesses)
-mailbox prove, mailbox sending while full (src_ready ignored): FAIL (asserts in mailbox_formal.sv lines 51-52)
+## the checks are not vacuous: they fail on broken designs (same harnesses, mutated RTL)
+mailbox prove, mailbox sending while full (src_ready ignored): FAIL
 bridge prove, s_rsp_valid not gated by rst: FAIL
 bridge prove, watchdog removed (expire = 0): FAIL
 bridge prove, calibration failure ignored (cal_done_q <= calib_seen): FAIL
 bridge prove, timeout cleared by a refused access: FAIL
-bridge prove, id check removed: PASS (as expected: those properties do not cover stale answers)
-bridge stalebmc (depth 40), id check removed: FAIL
-bridge stalebmc (depth 40), the real bridge: PASS
-(an equivalent mutant, timeout_q toggled instead of set by the watchdog, passes: after a timeout the
- bridge refuses every access, so the watchdog never fires again)
+bridge prove, a request sent while another is in flight (can_send = rq_ready): FAIL
+bridge prove, the in-flight flag reset by rst: FAIL
+bridge prove, no answer for a request a controller reset interrupted: PASS (only recovery suffers:
+  every later access times out; caught in simulation by watchdog-drop-read)
+
+## the earlier design (4-bit request ids, commit cbabe86)
+the 'no stale answer' property did not converge in over an hour of PDR; to 40 steps it passed.
+It was in fact false beyond that depth: the wrap test shows the stale answer after 15 resets.
+With one request in flight the same property is proved in seconds.

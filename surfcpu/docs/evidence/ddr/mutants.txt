@@ -1,7 +1,8 @@
 # DDR mutation check, 2026-10-15: make test-ddr-mutants (python3 sim/ddr/ddr_mutants.py --jobs 3)
 # each mutant: one deliberate bug in a copy of the RTL; the fast testbench (tb_ddr_bridge --test all
 # --seed 1), the LiteDRAM testbench (tb_ddr_litedram, for lite-*), and tb_ddr_mailbox (seeds 1, 2,
-# for box-*) must fail. The text after 'killed:' is the first failure reported.
+# for box-*) must fail. The text after 'killed:' is the first failure reported. (no-take was rerun
+# alone after its mutation text was updated for the u_owe term.)
 
 lane-select               killed: FAIL basic (sys cycle 156): read 8ffffffc (be f) returned 7c430943, expected cafef00d  [ok]
 mask-polarity             killed: FAIL basic (sys cycle 120): read 80000000 (be f) returned 8ac82d05, expected 11223344  [ok]
@@ -9,19 +10,21 @@ mask-shift                killed: FAIL basic (sys cycle 156): read 8ffffffc (be 
 addr-shift                killed: FAIL basic (sys cycle 136): read 80000100 (be f) returned eab9f754, expected 23b5e8a3  [ok]
 addr-bit27                killed: FAIL lanes (sys cycle 3502): beat 8abcdef0 byte 0 is 73, expected f6 after be 1 lane 0  [ok]
 cmd-swap                  killed: FAIL basic (sys cycle 620): read 80000000: error response  [ok]
-no-id-check               killed: FAIL watchdog-rdy-read (sys cycle 1157): read 8e9889d8 (be 3) returned 00000000, expected ae2535ad  [ok]
-id-reset                  killed: FAIL sysreset (sys cycle 7136): read 8fffffd4 (be f) returned 4c2219a3, expected abc92fcc  [ok]
+no-inflight-wait          killed: FAIL watchdog-rdy-read (sys cycle 1157): read 8e9889d8 (be 3) returned 00000000, expected ae2535ad  [ok]
+inflight-reset            killed: FAIL wrap-13 (sys cycle 7390): read 80500040 (be f) returned 11111111, expected 22222222  [ok]
+no-owed-answer            killed: FAIL watchdog-drop-read (sys cycle 1781): access after recovery failed  [ok]
+owe-reset                 killed: FAIL watchdog-drop-read (sys cycle 1781): access after recovery failed  [ok]
 err-bit                   killed: FAIL basic (sys cycle 156): read 8ffffffc: error response  [ok]
 watchdog-early            killed: FAIL watchdog-rdy-read (sys cycle 1116): stuck access: got=1 err=1 latency=511 (want error at 512)  [ok]
 no-fail-stop              killed: FAIL watchdog-rdy-read (sys cycle 1630): access after a timeout not refused at once  [ok]
 no-precal-refusal         killed: FAIL precal (sys cycle 11): access before calibration: got=1 err=1 latency=5  [ok]
 calib-fail-ignored        killed: FAIL calfail (sys cycle 20028): calib_done and calib_fail both 1  [ok]
-calib-done-latched        killed: FAIL uireset: controller resets did not produce every kind of refusal  [ok]
+calib-done-latched        killed: FAIL uireset: controller resets did not produce both kinds of error answer  [ok]
 no-calib-limit            killed: FAIL calfail (sys cycle 20104): calib_fail not set  [ok]
 wdf-rdy-ignored           killed: FAIL basic (sys cycle 656): read 8ffffffc: error response  [ok]
 wcmd-rdy-ignored          killed: FAIL lanes (sys cycle 236): beat 80000000 byte 2 is c8, expected cb after be 4 lane 0  [ok]
 rcmd-rdy-ignored          killed: FAIL basic (sys cycle 633): read 80000100: error response  [ok]
-ui-no-refusal             killed: FAIL uireset (sys cycle 143415): mig ui cycle 26331: app_en before init_calib_complete  [ok]
+ui-no-refusal             killed: FAIL uireset (sys cycle 76078): mig ui cycle 13753: app_en before init_calib_complete  [ok]
 no-take                   killed: FAIL basic (sys cycle 620): read 80000000: error response  [ok]
 rsp-in-reset              killed: FAIL sysreset (sys cycle 4811): s_rsp_valid during reset  [ok]
 box-send-unchecked        killed by tb_ddr_mailbox: mailbox: data changed while waiting: 5a5a0f0f -> deadbeef  [ok]
@@ -33,4 +36,4 @@ lite-addr-shift           killed: FAIL bounds (sys cycle 1710): read 80000000 (b
 lite-cmd-we               killed: FAIL basic (sys cycle 521): read 80000000: error response  [ok]
 lite-no-buffer            killed: FAIL basic (sys cycle 531): write 80000000: error response  [ok]
 lite-calib                killed: FAIL precal (sys cycle 8): calib_done before init_done  [ok]
-ddr_mutants: 29 killed, 1 survived as expected, 0 not caught
+ddr_mutants: 31 killed, 1 survived as expected, 0 not caught
