@@ -6,11 +6,12 @@
 #   make test-io-font     the font ROM is current and equals driver/font8x16.c
 #   make test-io-models   the SD card model on its own (software SPI master)
 #   make test-io-spi      surf_spi against the SD card model through SurfBus
+#   make test-io-ps2      surf_ps2 against the PS/2 keyboard model through SurfBus
 #
 # IO_SEEDS="1 2 3" chooses the seeds; IO_JOBS the parallel C++ compiles per Verilator build.
 
 IO_PERIPH    = rtl/peripherals
-IO_TOPS      = surf_spi
+IO_TOPS      = surf_spi surf_ps2
 IO_RTL       = $(foreach m,$(IO_TOPS),$(IO_PERIPH)/$(m).v) \
                $(wildcard $(IO_PERIPH)/surf_spi_*.v $(IO_PERIPH)/surf_ps2_*.v $(IO_PERIPH)/surf_video_*.v)
 IO_BUILD     = $(BUILD)/sim/io
@@ -25,8 +26,10 @@ IO_VERILATE  = $(VERILATOR) --cc --exe --build -j $(IO_JOBS) $(IO_VFLAGS) \
 
 SD_MODEL_SRC = sim/models/sdcard_model.cpp
 SD_MODEL_HDR = sim/models/sdcard_model.h sim/io/sd_host.h
+KB_MODEL_SRC = sim/models/ps2_keyboard_model.cpp
+KB_MODEL_HDR = sim/models/ps2_keyboard_model.h
 
-.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi
+.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2
 lint: lint-io
 test-soc: test-io
 check: check-io
@@ -41,7 +44,7 @@ lint-io:
 # the font ROM is part of check: its sources are pinned and it must match the x86 font
 check-io: test-io-font
 
-test-io: test-io-font test-io-models test-io-spi
+test-io: test-io-font test-io-models test-io-spi test-io-ps2
 	@echo "test-io: PASS"
 
 test-io-font:
@@ -74,3 +77,17 @@ test-io-spi: $(IO_BUILD)/spi/Vsurf_spi
 	    > $(IO_BUILD)/spi/run.$$s.txt 2>&1; \
 	  st=$$?; tail -1 $(IO_BUILD)/spi/run.$$s.txt; \
 	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/spi/run.$$s.txt; exit 1; }; done
+
+# ---------------------------------------------------------------- surf_ps2
+$(IO_BUILD)/ps2/Vsurf_ps2: $(IO_PERIPH)/surf_ps2.v sim/io/test_ps2.cpp sim/io/surfbus_master.h \
+                           $(KB_MODEL_SRC) $(KB_MODEL_HDR) rtl/lib/surf_sync.v rtl/lib/surf_fifo.v
+	@mkdir -p $(dir $@)
+	$(Q)$(IO_VERILATE) --top-module surf_ps2 -Mdir $(IO_BUILD)/ps2/obj -o ../Vsurf_ps2 \
+	  $(IO_PERIPH)/surf_ps2.v $(CURDIR)/sim/io/test_ps2.cpp $(CURDIR)/$(KB_MODEL_SRC) > $(IO_BUILD)/ps2/build.txt 2>&1 \
+	  || { cat $(IO_BUILD)/ps2/build.txt; exit 1; }
+
+test-io-ps2: $(IO_BUILD)/ps2/Vsurf_ps2
+	$(Q)for s in $(IO_SEEDS); do \
+	  $< --seed $$s +verilator+rand+reset+2 +verilator+seed+$$s > $(IO_BUILD)/ps2/run.$$s.txt 2>&1; \
+	  st=$$?; tail -1 $(IO_BUILD)/ps2/run.$$s.txt; \
+	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/ps2/run.$$s.txt; exit 1; }; done
