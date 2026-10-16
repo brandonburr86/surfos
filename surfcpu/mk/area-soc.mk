@@ -32,10 +32,10 @@ SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
 .PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
-        synth-soc test-soc-verilator soc-gpio-real soc-mem-once
+        synth-soc test-soc-verilator test-soc-gate soc-gpio-real soc-mem-once
 lint: lint-soc
 test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim test-soc-verilator
-check: synth-soc
+check: synth-soc test-soc-gate
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
 # stop with the log on the first failure
@@ -334,9 +334,11 @@ synth-soc: $(SOC_DIR)/rom_a.mem
 	  "$(if $(SOC_SYN_BB),read_verilog -lib -DSYNTHESIS $(SOC_INC) $(SOC_SYN_BB))" \
 	  "$(SOC_SYN_READ) $(SOC_SYN_RTL) $(SOC_SYN_REAL) $(filter-out $(SOC_LIB_RTL),$(wildcard rtl/lib/*.v))" \
 	  "chparam -set BOOTROM_INIT \"$(SOC_DIR)/rom_a.mem\" surfcpu_soc" \
-	  "synth_xilinx -top surfcpu_soc -flatten" \
+	  "chparam -set BUILD_ID 32'h1234ABCD -set BUILD_FLAGS 2 -set BUILD_TIME 32'h67200000 surfcpu_soc" \
+	  "synth_xilinx -top surfcpu_soc -flatten -noiopad -noclkbuf" \
 	  "check -assert" \
-	  "tee -q -o $(SOC_SYN_DIR)/soc_stat.txt stat" > $(SOC_SYN_DIR)/soc.ys
+	  "tee -q -o $(SOC_SYN_DIR)/soc_stat.txt stat" \
+	  "write_verilog -noattr $(SOC_SYN_DIR)/surfcpu_soc_net.v" > $(SOC_SYN_DIR)/soc.ys
 	$(Q)$(YOSYS) -qq -l $(SOC_SYN_DIR)/soc.log $(SOC_SYN_DIR)/soc.ys > /dev/null \
 	  || { tail -30 $(SOC_SYN_DIR)/soc.log; exit 1; }
 	@echo "synth-soc: $$(grep '^Warning: ' $(SOC_SYN_DIR)/soc.log | grep -vc 'Resizing cell port') warnings besides block-RAM port resizing (see $(SOC_SYN_DIR)/soc.log)"
@@ -345,6 +347,58 @@ synth-soc: $(SOC_DIR)/rom_a.mem
 	@grep -E "^ +(LUT[1-6]|FD[CPRS]E|RAMB(18|36)E1|RAM(32|64|128)[MXD1]*|DSP48E1|CARRY4|SRL16E|SRLC32E|MUXF[78]) " \
 	  $(SOC_SYN_DIR)/soc_stat.txt | sed 's/^ */    /'
 	@grep -h "mapping memory" $(SOC_SYN_DIR)/soc.log | sed 's/^/    /'
+
+# ---------------------------------------------------------------------------- post-synthesis simulation
+# Yosys can drop logic silently, so the synthesized netlists are simulated: tb_mem on the three
+# memories synthesized alone, and the SoC scripts on the whole synthesized SoC (the stand-ins
+# supplied as RTL for the black boxes; the netlist has the parameters tb_soc uses). The cell
+# models are Yosys's cells_sim.v, except RAMB36E1, which is only a timing shell there and comes
+# from sim/soc/synth/surf_ramb36e1_model.v. Needs make synth-soc first.
+SOC_GATE_DIR  := $(SOC_DIR)/gate
+SOC_CELLS_SIM := $(SOC_GATE_DIR)/cells_sim_nobram.v
+SOC_GATE_LIB   = $(SOC_CELLS_SIM) sim/soc/synth/surf_ramb36e1_model.v
+SOC_GATE_IVL   = $(IVERILOG) -g2012 -Wno-timescale -Wno-portbind -DSURF_GATE $(SOC_INC)
+
+$(SOC_CELLS_SIM): sim/soc/synth/strip_cells.py
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) sim/soc/synth/strip_cells.py $$($(YOSYS)-config --datdir 2>/dev/null || \
+	  echo /usr/share/yosys)/xilinx/cells_sim.v $@
+
+$(SOC_GATE_DIR)/%_net.v: rtl/soc/%.v $(SOC_DIR)/rom_a.mem
+	@mkdir -p $(dir $@)
+	$(Q)$(YOSYS) -qq -l $(@:.v=.log) -p "read_verilog -DSYNTHESIS $(SOC_INC) $<; \
+	  chparam -set INIT_FILE \"$(SOC_DIR)/rom_a.mem\" surf_bootrom; \
+	  synth_xilinx -top $* -flatten -noiopad -noclkbuf; write_verilog -noattr $@" > /dev/null 2>&1 \
+	  || { tail -20 $(@:.v=.log); exit 1; }
+
+SOC_GATE_MEMS = $(addprefix $(SOC_GATE_DIR)/,surf_bootrom_net.v surf_scratch_net.v surf_textram_net.v)
+
+$(SOC_GATE_DIR)/tb_mem_gate.vvp: sim/soc/tb/tb_mem.v $(SOC_GATE_MEMS) $(SOC_GATE_LIB) $(SOC_BFM)
+	$(Q)$(SOC_GATE_IVL) -s tb_mem -Ptb_mem.ROMFILE='"$(SOC_DIR)/rom_a.mem"' -o $@ sim/soc/tb/tb_mem.v \
+	  $(SOC_GATE_MEMS) $(SOC_GATE_LIB) $(SOC_BFM)
+
+$(SOC_GATE_DIR)/tb_soc_gate.vvp: sim/soc/tb/tb_soc.v $(SOC_SYN_DIR)/surfcpu_soc_net.v $(SOC_GATE_LIB) \
+                                 $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_BFM) sim/soc/bfm/surfbus_ddr_model.v
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_GATE_IVL) -s tb_soc -o $@ sim/soc/tb/tb_soc.v $(SOC_SYN_DIR)/surfcpu_soc_net.v \
+	  $(SOC_GATE_LIB) $(SOC_CORE_SCRIPT) $(filter sim/%,$(SOC_IO_SRC)) $(SOC_BFM) \
+	  sim/soc/bfm/surfbus_ddr_model.v
+
+$(SOC_SYN_DIR)/surfcpu_soc_net.v:
+	$(Q)$(MAKE) --no-print-directory synth-soc > /dev/null
+
+test-soc-gate: $(SOC_GATE_DIR)/tb_mem_gate.vvp $(SOC_GATE_DIR)/tb_soc_gate.vvp \
+               $(foreach t,$(SOC_SCRIPTS),$(SOC_DIR)/scripts/$(t).ddr.hex)
+	$(Q)vvp -n $(SOC_GATE_DIR)/tb_mem_gate.vvp +seed=1 > $(SOC_GATE_DIR)/tb_mem_gate.txt 2>&1; \
+	  grep -q PASS $(SOC_GATE_DIR)/tb_mem_gate.txt || { cat $(SOC_GATE_DIR)/tb_mem_gate.txt; exit 1; }
+	@grep -h PASS $(SOC_GATE_DIR)/tb_mem_gate.txt | sed 's/^/  [netlist] /'
+	$(Q)for t in $(SOC_SCRIPTS); do \
+	  vvp -n $(SOC_GATE_DIR)/tb_soc_gate.vvp +script=$(SOC_DIR)/scripts/$$t.ddr.hex +script_nofinish \
+	    +seed=1 +ddr_seed=1 $$(cat $(SOC_DIR)/scripts/$$t.ddr.args) > $(SOC_GATE_DIR)/$$t.txt 2>&1; \
+	  if ! grep -q "SCRIPT PASS" $(SOC_GATE_DIR)/$$t.txt || grep -q "ERROR\|FAIL" $(SOC_GATE_DIR)/$$t.txt; \
+	  then cat $(SOC_GATE_DIR)/$$t.txt; exit 1; fi; \
+	  grep -h "SCRIPT PASS" $(SOC_GATE_DIR)/$$t.txt | sed "s/^/  [netlist $$t] /"; done
+	@echo "test-soc-gate: PASS (the synthesized memories and SoC behave as the RTL)"
 
 # ---------------------------------------------------------------------------- second simulator
 # The unit testbenches again under Verilator (--binary --timing): two-state instead of
