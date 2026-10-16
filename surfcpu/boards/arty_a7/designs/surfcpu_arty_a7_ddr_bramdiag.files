@@ -47,5 +47,5 @@ dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --d
 lvs-timeout 14400                                    # the SoC and LiteDRAM: more than twice the registers
 # The open flow's placer seeds, tried in turn until a placement routes with every clock within
 # its constraint (the same gate for each; every attempt is in the manifest): at 80 MHz about three
-# placements in four meet dram_clk's (docs/DDR.md section 9, docs/evidence/ddr/openflow-timing.txt)
+# placements in four meet dram_clk's (docs/DDR.md section 10.3, docs/evidence/ddr/openflow-timing.txt)
 seed     1 2 3 4 5 6 7 8
