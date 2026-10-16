@@ -43,11 +43,13 @@ def main() -> int:
     mutant.write_text(text[:at] + ".PREG(32'sd1)" + text[at + len(key):])
     r = subprocess.run([sys.executable, str(HERE / "run_icarus.py"), "--out", str(mutant.parent / "mutant"),
                         "--seeds", "1", "--netlist", str(mutant), a.elf], capture_output=True, text=True)
-    print(r.stdout.strip())
     if r.returncode == 0:
+        print(r.stdout.strip())
         print("gate_mutant: the mutant PASSED: the gate-level check would not notice a broken multiplier")
         return 1
-    print("gate_mutant: the mutant (first DSP48E1 with PREG = 1) fails, as it must: the check is sensitive")
+    detail = next((l.strip() for l in r.stdout.splitlines() if "tb_core_icarus:" in l), "no result")
+    print(f"gate_mutant: as expected, the mutant netlist (first DSP48E1 with PREG = 1) fails the multiply "
+          f"test ({detail}): the gate-level check is sensitive to the DSP mapping")
     return 0
 
 
