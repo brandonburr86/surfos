@@ -977,7 +977,9 @@ SurfBoot calibrates and stops: `SurfBoot stopped: no card (NO_CARD)`, LED code 2
 The VGA monitor shows the same console text, 80 x 30 characters at 640 x 480 and 59.94 Hz (the
 screen the simulation decoded from the pixels is in the same evidence file). The post-synthesis
 simulation of every one of the four bitstreams' netlists printed the same characters up to its
-stop (section 8). If the board prints something else, or nothing: the serial settings and port
+stop (section 8), and the netlist of the DDR bramdiag design, with nothing on its memory pins,
+printed the same lines on both consoles, at the same microseconds, as its RTL simulation with
+the generated core (docs/DDR.md 10.4). If the board prints something else, or nothing: the serial settings and port
 first, then `make doctor`; the LEDs say how far it got (bramdiag lights LD4, then LD5, then LD6
 as it moves through its sections, and all four with LD0 green or red at the end; SurfBoot shows
 its error code on LD4-LD7 with LD0 red).

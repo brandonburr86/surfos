@@ -26,7 +26,7 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
 |---|---|---|---|
 | `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 387 flip-flops, no vendor primitives (an open-tool estimate); in the DDR designs, placed and routed by the open flow | **pending** |
 | MIG recipe (`ip/mig/`) | the bridge is tested against a behavioural model of the MIG's user interface, not the MIG | **pending**: needs Vivado (no build host, BUILD-HOST.md); recipe dry-run only | **pending** |
-| LiteDRAM core (`ip/litedram/`) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, BIOS included, runs its calibration and fails it cleanly with no memory on its pins (sections 10.2, 10.4) | generated reproducibly, its hashes recorded; in the DDR designs (BOARD.md section 7) the open flow places and routes it, PHY in bank 34 included, but **misses nextpnr's timing for its 100 MHz clock: no bitstream**; routing converges only for some placements, and LVS finds one block RAM write enable of the calibration CPU different (section 10.3) | **pending** |
+| LiteDRAM core (`ip/litedram/`) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, BIOS included, runs its calibration and fails it cleanly with no memory on its pins, in RTL and, identically, as the synthesized netlist (sections 10.2, 10.4) | generated reproducibly, its hashes recorded; in the DDR designs (BOARD.md section 7) the open flow places and routes it, PHY in bank 34 included, but **misses nextpnr's timing for its 100 MHz clock: no bitstream**; routing converges only for some placements, and LVS finds one block RAM write enable of the calibration CPU different (section 10.3) | **pending** |
 | `surf_ddr_litedram_adapter` | tested against LiteDRAM's controller; 5 of 5 mutants caught | in the DDR designs | **pending** |
 
 Nothing here has run on an FPGA. Milestone 4's physical evidence (calibration, address and data
@@ -662,9 +662,16 @@ the real SoC, bridge and adapter, the board's clocking and resets:
 * `make board-netlist-sim DESIGN=<a DDR design>` runs a DDR build's synthesized netlist the same
   way (the second bullet's case): the core's CPU in gates runs its BIOS from the synthesized ROM,
   with `sim/board/prims/RAMB18E1.v` modelling the simple dual port block RAMs of its register
-  file and instruction cache. It is slow, about 0.17 ms of simulated time a second: some 2.5
-  hours to the diagnostics' end at 1.5 s (`sh sim/board/ddr_sim_evidence.sh --netlist-only` runs
-  it alone; the record is in docs/evidence/ddr/ddr-top-sim.txt).
+  file and instruction cache. For surfcpu_arty_a7_ddr_bramdiag on the 100T (the netlist of the
+  gated build at a338e7a3, 17,680 cells, its boot ROM inside) **it printed the same 78 lines on
+  the two consoles, each at the same microsecond, as the RTL run of the second bullet**; the
+  two consoles' characters are identical but for the build ID: the diagnostics' sections, the
+  BIOS's banner, every leveling line, `Memtest KO` at 0.823 s and `BRAMDIAG: FAIL` at 1.514 s
+  after the bridge's CALIB_FAIL, and the same LEDs and VGA timing. So the synthesized DDR top,
+  LiteDRAM's controller, PHY logic and calibration CPU with its block RAM caches and register
+  file included (synthcheck's finding, 10.3), behaves as its RTL on this path. It is slow, 0.17
+  ms of simulated time a second, 146 minutes for the 1.5 s (`sh sim/board/ddr_sim_evidence.sh
+  --netlist-only` runs it alone; the record is in docs/evidence/ddr/ddr-top-sim.txt).
 * `make board-uart-expect-ddr` boots SurfOS through SurfBoot with the C++ DDR model in place of
   the bridge, adapter and LiteDRAM (the soc track's surfsim with the SoC as the DDR designs
   configure it): the only model fast enough for a kernel boot (5.4 s of simulated time to the
@@ -681,7 +688,8 @@ Shown without a board:
   calibration-error report), and in the whole SoC with the real board top (board-ddr-sim:
   569 diagnostic checks over the DDR window);
 * the board top's DDR wiring, clocking, resets and calibration-status path, from the pins, in
-  RTL with the model and with the exact generated core (failure path);
+  RTL with the model and with the exact generated core (failure path), and the synthesized
+  netlist of the DDR bramdiag design doing exactly what that RTL does (10.4);
 * that the generated core is the pinned generator's output (hashes) and that the open flow
   places and routes its PHY in bank 34 and assembles a bitstream from it (diagnostic: round
   trip, block RAM contents including the BIOS ROM, the clock tiles' dividers, and LVS but for
