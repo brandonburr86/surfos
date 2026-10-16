@@ -64,6 +64,9 @@ task while a sync runs send bsync() round again (up to 8 times); write_below() g
 by order. A block is not written while someone holds it (it may be in the middle of a
 change; bsync() waits for it, making room passes it over), and getblk() hands out no block
 while it is being written, so what reaches the device is what was checked.
+bdirty_order() still keeps the lower of two orders: a block's earlier content must not
+reach the disk after what points at it, and FAT no longer makes one block dirty with two
+orders (fs/fat.c, B7).
 
 10/16/26 (audit B6): a device that refuses writes no longer fills the cache that every
 device shares. Once one of its blocks failed (bc_failed), its dirty blocks are held back:
