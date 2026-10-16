@@ -336,12 +336,14 @@ couple of hundred LUTs if space ever matters.
 **Did synthesis keep everything?** Yosys 0.52 can silently delete logic when it packs a
 multiply into DSP48s (another track hit this). Three checks show it did not delete any here:
 
-* Synthesised per module (`docs/evidence/cpu/synth-modules.txt`), the flip-flop counts are
-  exactly what the RTL declares: divider 139, CSRs 265, fetch unit 98, fetch-buffer pointers
-  6, pipeline registers 432 (436 declared, less the 4 always-zero low bits of `ex_pc` and
-  `mem_pc`); the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
-  The flattened run above has 3 flip-flops fewer (more constant address bits found across
-  module boundaries).
+* Synthesised per module (`make synth-cpu-modules`, `docs/evidence/cpu/synth-modules.txt`),
+  every register keeps its full width, listed bit by bit by the net on each flip-flop's
+  output (`sim/cpu/synth_regs.py`): divider 139, CSRs 265, fetch unit 98, fetch-buffer
+  pointers 6, pipeline registers 433 (436 declared, less 3 bits of the exception-cause
+  fields that can never be 1: ID only produces causes 1, 2, 3 and 11, EX adds 0, 4 and 6),
+  941 in all; the multiplier is 4 DSP48E1, the register file 12 RAM32M, the fetch buffer 11.
+  The flattened run above has 4 fewer, the always-zero low bits of `ex_pc` and `mem_pc`,
+  which only show up as constants across the fetch unit's boundary.
 * `make synth-cpu-gate` writes the synthesised netlist (the same flow, with `RESET_PC` set to
   the testbench's `0x80000000`) and simulates it in Icarus with Yosys's models of the Xilinx
   cells (LUTs, CARRY4, FDRE, RAM32M, DSP48E1) on the 13 directed tests that need only RAM,

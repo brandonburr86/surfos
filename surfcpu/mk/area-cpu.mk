@@ -30,7 +30,7 @@ CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
 .PHONY: lint-cpu build-cpu test-cpu-tb test-cpu-directed test-cpu-spike test-cpu-riscv-tests \
-        test-cpu-icarus synth-cpu synth-cpu-gate
+        test-cpu-icarus synth-cpu synth-cpu-modules synth-cpu-gate
 lint: lint-cpu
 test-cpu: test-cpu-tb test-cpu-directed test-cpu-riscv-tests test-cpu-icarus
 check: synth-cpu synth-cpu-gate
@@ -101,6 +101,14 @@ synth-cpu: $(CPU_RTL) $(CPU_INC)
 	@mkdir -p $(CPU_BUILD)
 	$(Q)$(YOSYS) -q -l $(CPU_BUILD)/synth.txt -p "read_verilog -DSYNTHESIS -Irtl/generated -Irtl/cpu -Irtl/lib $(CPU_RTL); synth_xilinx -family xc7 -flatten -noiopad -top surfcpu_core; tee -o $(CPU_BUILD)/synth-stat.txt stat"
 	$(Q)$(PYTHON) sim/cpu/synth_summary.py $(CPU_BUILD)/synth-stat.txt
+
+# The same synthesis per module (no -flatten): each module's flip-flops, DSPs and LUTRAMs, and
+# the flip-flops left for every register (to compare with the RTL's declarations).
+synth-cpu-modules: $(CPU_RTL) $(CPU_INC)
+	@mkdir -p $(CPU_BUILD)
+	$(Q)$(YOSYS) -q -p "read_verilog -DSYNTHESIS -Irtl/generated -Irtl/cpu -Irtl/lib $(CPU_RTL); synth_xilinx -family xc7 -noiopad -top surfcpu_core; tee -q -o $(CPU_BUILD)/synth-modules.txt stat; write_verilog -noattr $(CPU_BUILD)/synth-modules.v"
+	$(Q)grep -E "^=== |FDRE|FDSE|DSP48E1|RAM32M" $(CPU_BUILD)/synth-modules.txt
+	$(Q)$(PYTHON) sim/cpu/synth_regs.py $(CPU_BUILD)/synth-modules.v
 
 # Gate-level check of synthesis (Yosys can drop logic silently, for example around a multiply it
 # packs into DSP48s): synthesize exactly as synth-cpu but with RESET_PC = 0x80000000, write the

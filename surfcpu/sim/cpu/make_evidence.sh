@@ -40,6 +40,6 @@ run spike-fuzz.txt "random programs: surfcpu_tb traces against Spike's commit lo
 run synth.txt "surfcpu_core: Yosys synth_xilinx resource estimate" \
     sh -c 'yosys -V; make --no-print-directory synth-cpu'
 run synth-modules.txt "surfcpu_core: Yosys synth_xilinx per module (no -flatten): the registers, DSPs and LUTRAMs are all there" \
-    sh -c 'yosys -q -p "read_verilog -DSYNTHESIS -Irtl/generated -Irtl/cpu -Irtl/lib $(ls rtl/cpu/surfcpu_*.v) rtl/lib/surf_fifo.v; synth_xilinx -family xc7 -noiopad -top surfcpu_core; tee -q -o build/cpu/synth-modules.txt stat" && grep -E "^=== |FDRE|FDSE|DSP48E1|RAM32M" build/cpu/synth-modules.txt'
+    make --no-print-directory synth-cpu-modules
 run synth-gate.txt "surfcpu_core: the synthesized netlist simulated (Icarus, Yosys Xilinx cell models) on RAM-only tests, then a broken copy that must fail" \
     make --no-print-directory synth-cpu-gate
