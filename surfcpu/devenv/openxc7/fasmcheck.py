@@ -9,9 +9,13 @@ that Project X-Ray's bit2fasm decodes back out of the finished bitstream, featur
 feature bit, and accounts for every difference with the database:
 
   * a feature only in nextpnr's FASM must be a pseudo-pip (ppips_*.db: ALWAYS, DEFAULT or
-    HINT), a connection with no configuration bits, which no bitstream decoder can see;
+    HINT), a connection with no configuration bits, which no bitstream decoder can see; or a
+    feature with no bits in a tile whose bits alias another tile type (the SING I/O tiles at
+    the ends of a bank) where that type lists it as an ALWAYS pseudo-pip;
   * a feature only in the decoded FASM must be one whose bits are all "clear" (a default
-    that bit2fasm reports for a tile in use and nextpnr leaves out).
+    that bit2fasm reports for a tile in use and nextpnr leaves out), or a STEPDOWN that
+    fasm2frames itself adds, as Vivado does, to every unused IOB of a bank in which nextpnr
+    set STEPDOWN on some IOB (prjxray utils/fasm2frames.py).
 
 Anything else (a feature with configuration bits that went missing, or a set bit nobody
 asked for) fails the check. It runs in the surfcpu-openxc7 image (fasm, prjxray):
@@ -22,6 +26,8 @@ asked for) fails the check. It runs in the surfcpu-openxc7 image (fasm, prjxray)
 from __future__ import annotations
 
 import argparse
+import csv
+import os
 import sys
 import warnings
 from collections import Counter
@@ -41,7 +47,7 @@ def features(path: str) -> set[tuple[str, int]]:
     return out
 
 
-def classify(grid, feature: str, address: int) -> str:
+def classify(db, grid, feature: str, address: int) -> str:
     tile, rest = feature.split(".", 1)
     info = grid.gridinfo_at_tilename(tile)
     segbits = grid.get_tile_segbits_at_tilename(tile)
@@ -53,8 +59,26 @@ def classify(grid, feature: str, address: int) -> str:
     except KeyError:
         return "not in the database"
     if not bits:
+        for b in info.bits.values():          # an aliased tile: ask the type it borrows from
+            alias = getattr(b, "alias", None)
+            base = getattr(alias, "tile_type", None) if alias else None
+            if base and str(db.get_tile_segbits(base).ppips.get(f"{base}.{rest}", "")).lower().endswith("always"):
+                return f"no bits, ALWAYS in {base}"
         return "no bits"
     return "sets bits" if any(bit.isset for _, bit in bits) else "clear bits only"
+
+
+def stepdown_banks(db_root: str, part: str, routed: set) -> tuple[dict, set]:
+    """(tile -> bank from package_pins.csv, banks where nextpnr set a STEPDOWN on an IOB)."""
+    tile_bank: dict = {}
+    path = os.path.join(db_root, part, "package_pins.csv")
+    if os.path.exists(path):
+        with open(path) as f:
+            for row in csv.DictReader(f):
+                tile_bank[row["tile"]] = row["bank"]
+    banks = {tile_bank[f.split(".")[0]] for f, _ in routed
+             if "STEPDOWN" in f and "IOB33" in f.split(".")[0] and f.split(".")[0] in tile_bank}
+    return tile_bank, banks
 
 
 def main() -> int:
@@ -66,11 +90,20 @@ def main() -> int:
     args = ap.parse_args()
 
     routed, decoded = features(args.routed), features(args.decoded)
-    grid = Database(args.db_root, args.part).grid()
+    db = Database(args.db_root, args.part)
+    grid = db.grid()
+    tile_bank, sd_banks = stepdown_banks(args.db_root, args.part, routed)
+
+    def kind_decoded(f: str, a: int) -> str:
+        tile = f.split(".")[0]
+        if "STEPDOWN" in f and "IOB33" in tile and tile_bank.get(tile) in sd_banks:
+            return "STEPDOWN spread to the bank by fasm2frames"
+        return classify(db, grid, f, a)
+
     only_routed = sorted(routed - decoded)
     only_decoded = sorted(decoded - routed)
-    kinds_r = Counter(classify(grid, f, a) for f, a in only_routed)
-    kinds_d = Counter(classify(grid, f, a) for f, a in only_decoded)
+    kinds_r = Counter(classify(db, grid, f, a) for f, a in only_routed)
+    kinds_d = Counter(kind_decoded(f, a) for f, a in only_decoded)
 
     print(f"routed FASM {len(routed)} feature bits, decoded from the bitstream {len(decoded)}, "
           f"in both {len(routed & decoded)}")
@@ -78,11 +111,14 @@ def main() -> int:
           + ", ".join(f"{k} {v}" for k, v in sorted(kinds_r.items())))
     print(f"only in the decoded FASM: {len(only_decoded)} "
           + ", ".join(f"{k} {v}" for k, v in sorted(kinds_d.items())))
-    bad = [(f, a, k) for f, a in only_routed if not (k := classify(grid, f, a)).startswith("pseudo-pip")]
-    bad += [(f, a, k) for f, a in only_decoded if (k := classify(grid, f, a)) != "clear bits only"]
+    bad = [(f, a, k) for f, a in only_routed
+           if not ((k := classify(db, grid, f, a)).startswith("pseudo-pip") or k.startswith("no bits, ALWAYS"))]
+    bad += [(f, a, k) for f, a in only_decoded
+            if (k := kind_decoded(f, a)) not in ("clear bits only", "STEPDOWN spread to the bank by fasm2frames")]
     for f, a, k in bad[:50]:
         print(f"  UNEXPLAINED {f}[{a}]: {k}")
-    print("fasmcheck: " + ("PASS (every difference is a pseudo-pip or an all-clear default)"
+    print("fasmcheck: " + ("PASS (every difference is a connection without bits, an all-clear default or a "
+                           "STEPDOWN fasm2frames spreads)"
                            if not bad else f"FAIL ({len(bad)} unexplained differences)"))
     return 1 if bad else 0
 
