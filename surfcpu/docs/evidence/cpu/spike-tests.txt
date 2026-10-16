@@ -1,0 +1,20 @@
+# the directed tests on Spike (checks the tests' own expectations)
+# commit 564ea5944b74, dirty=0; 2026-10-16T02:30Z; container aarch64
+# command: make --no-print-directory test-cpu-spike
+
+  access_fault           1/1 PASS
+  alu                    1/1 PASS
+  branch                 1/1 PASS
+  counters               1/1 PASS
+  csr                    1/1 PASS
+  fencei                 1/1 PASS
+  flush                  1/1 PASS
+  hazards                1/1 PASS
+  hazards_matrix         1/1 PASS
+  illegal                1/1 PASS
+  ldst                   1/1 PASS
+  misaligned             1/1 PASS
+  muldiv                 1/1 PASS
+  muldiv_edges           1/1 PASS
+  traps                  1/1 PASS
+spike: 15 tests, 15/15 runs passed (0.0 s)
