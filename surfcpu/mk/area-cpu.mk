@@ -5,6 +5,7 @@
 #   make build/cpu/surfcpu_tb
 #   make test-cpu-directed   every sim/cpu/tests/*.S under several bus timings and seeds
 #   make test-cpu-spike      the same test programs on Spike (checks the tests themselves)
+#   make test-cpu-riscv-tests  riscv-tests rv32ui/um/mi (fetched once, pinned, SHA-256 checked)
 #   make synth-cpu           Yosys synth_xilinx estimate of the core alone
 #
 # Hung on the aggregates: lint, test-cpu, check.
@@ -21,9 +22,9 @@ CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_
 CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
-.PHONY: lint-cpu build-cpu test-cpu-directed test-cpu-spike synth-cpu
+.PHONY: lint-cpu build-cpu test-cpu-directed test-cpu-spike test-cpu-riscv-tests synth-cpu
 lint: lint-cpu
-test-cpu: test-cpu-directed
+test-cpu: test-cpu-directed test-cpu-riscv-tests
 check: synth-cpu
 
 lint-cpu:
@@ -66,6 +67,9 @@ $(CPU_BUILD)/tests/%.elf: $(CPU_BUILD)/gen/%.S sim/cpu/tests/surf_test.h sim/cpu
 
 test-cpu-directed: $(CPU_TB) $(CPU_ELFS)
 	$(Q)$(PYTHON) sim/cpu/run_tests.py --tb $(CPU_TB) --out $(CPU_BUILD)/runs --jobs $(CPU_JOBS) $(CPU_ELFS)
+
+test-cpu-riscv-tests: $(CPU_TB)
+	$(Q)$(PYTHON) sim/cpu/riscv_tests.py --tb $(CPU_TB) --jobs $(CPU_JOBS)
 
 test-cpu-spike: $(CPU_ELFS)
 	$(Q)$(PYTHON) sim/cpu/run_tests.py --spike --out $(CPU_BUILD)/spike --jobs $(CPU_JOBS) $(CPU_ELFS)
