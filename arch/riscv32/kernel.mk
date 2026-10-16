@@ -96,6 +96,11 @@ SYMS        = $(OUT)/surfos.sym
 PACKER      = arch/riscv32/surfimg_tmp.py
 ISACHECK    = arch/riscv32/isacheck.py
 
+# SURFOS.BIN records the commit it was built from (its build ID). The stamp is rewritten only when
+# the ID changes, so a new commit repacks the kernel even when no source file changed.
+BUILD_ID_STAMP = $(OUT)/build-id.txt
+$(shell mkdir -p $(OUT); [ "`cat $(BUILD_ID_STAMP) 2>/dev/null`" = "$(BUILD_ID_HEX)" ] || echo "$(BUILD_ID_HEX)" > $(BUILD_ID_STAMP))
+
 .PHONY: all clean
 .DELETE_ON_ERROR:
 all: $(PACKAGE)
@@ -140,7 +145,7 @@ $(ELF): $(OBJS) $(OBJ)/ksyms.o arch/riscv32/linker.ld boards/$(KBOARD)/board.ld
 $(PAYLOAD): $(ELF)
 	$(Q)$(OBJCOPY) -O binary $< $@
 
-$(PACKAGE): $(ELF) $(PAYLOAD) $(PACKER)
+$(PACKAGE): $(ELF) $(PAYLOAD) $(PACKER) $(BUILD_ID_STAMP)
 	$(Q)$(PYTHON) $(PACKER) pack --elf $(ELF) --payload $(PAYLOAD) --out $@ \
 	    --version 1.0.0 --build-id $(BUILD_ID_HEX) --name SurfOS
 	$(Q)$(PYTHON) $(PACKER) verify $@
