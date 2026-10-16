@@ -30,6 +30,7 @@ struct sdmodel {
     int corrupt_reads;                  /* the next n data blocks sent have a wrong CRC */
     int no_token;                       /* reads never send their data token */
     int reject_writes;                  /* the next n written blocks get a CRC error response */
+    int no_multi;                       /* CMD18 and CMD25 are illegal commands (as in a card without them) */
     /* state */
     int selected, idle, crc_on, app, acmd41_left;
     int mode;                           /* receiving a command, a write token, write data */

@@ -45,6 +45,7 @@ struct sdcard {
     u32 ocr;
     u64 blocks;             /* 512-byte blocks */
     u8 csd[16], cid[16];
+    bool single;            /* CMD18/CMD25 refused as illegal: one block per command from then on */
     const char *why;        /* the last failure, in words */
     u_long reads, writes, crc_retries, timeouts, errors;
 };

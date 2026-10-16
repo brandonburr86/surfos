@@ -112,7 +112,7 @@ static void size_text(u64 blocks, char *buf, size_t size) {
 }
 
 int arty_sd_init(void) {
-    char name[64], size[16];
+    char name[96], size[16];                /* the CID in words is up to about 70 characters */
     int r;
     if(!arty_has(SURF_SYSINFO_FEATURES_SPI_MASK)) return 1;
     slow_div = (arty_sys_hz() + 2 * 400000 - 1) / (2 * 400000) - 1;
@@ -153,15 +153,16 @@ const char *arty_sd_describe(char *buf, size_t size) {
         return buf;
     }
     size_text(card.blocks, sz, sizeof(sz));
-    snprintf(buf, size, "sd0, %s, %s, %lu reads, %lu writes, %lu CRC retries, %lu timeouts, %lu errors", sz,
-             disk->readonly ? "read-only" : "read-write", card.reads, card.writes, card.crc_retries, card.timeouts, card.errors);
+    snprintf(buf, size, "sd0, %s, %s, %lu reads, %lu writes, %lu CRC retries, %lu timeouts, %lu errors%s", sz,
+             disk->readonly ? "read-only" : "read-write", card.reads, card.writes, card.crc_retries, card.timeouts, card.errors,
+             card.single ? "; one block per command (the card refused CMD18/CMD25)" : "");
     return buf;
 }
 
 /**** commands ****/
 
 int arty_cmd_sdinfo(int argc, char **argv) {
-    char name[64], buf[160];
+    char name[96], buf[160];
     int i;
     (void)argc;
     (void)argv;

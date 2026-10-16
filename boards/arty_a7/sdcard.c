@@ -16,6 +16,7 @@ Layer Simplified Specification's limits with room to spare: 1 s for initializati
 #define T_TOKEN_MS  100
 #define T_BUSY_MS   500
 #define CRC_TRIES   3
+#define E_NO_MULTI  1           /* (internal) CMD18 or CMD25 refused as an illegal command */
 
 static u8 xf(struct sdcard *sd, u8 out) {
     return sd->host->xfer(sd->host->ctx, out);
@@ -227,7 +228,11 @@ static int read_once(struct sdcard *sd, u32 lba, u32 count, u8 *buf, u32 *bad) {
     *bad = count;
     if(!select_card(sd)) return fail(sd, SD_ETIMEOUT, "busy before a read");
     r = command(sd, count > 1 ? SD_CMD18 : SD_CMD17, address(sd, lba));
-    if(r) { deselect(sd); return r1_error(sd, r, "the read command was refused"); }
+    if(r) {
+        deselect(sd);
+        if(count > 1 && r == SD_R1_ILLEGAL) return E_NO_MULTI;
+        return r1_error(sd, r, "the read command was refused");
+    }
     for(i = 0; i < count; i++) {
         t = wait_token(sd, T_TOKEN_MS);
         if(t != SD_TOKEN_START) {
@@ -248,22 +253,33 @@ static int read_once(struct sdcard *sd, u32 lba, u32 count, u8 *buf, u32 *bad) {
     return err;
 }
 
+/* Every SD card has CMD18 and CMD25 (command classes 2 and 4), but a simulated card may lack
+   them (the fw track's, whose SurfBoot reads with CMD17 only): one refused as an illegal
+   command switches the driver to one block per command for good. */
 int sd_read(struct sdcard *sd, u32 lba, u32 count, u8 *buf) {
     int err = check_range(sd, lba, count), tries = 0;
-    u32 bad;
+    u32 n, bad;
     if(err) return err;
     while(count) {
-        err = read_once(sd, lba, count, buf, &bad);
-        if(err != SD_ECRC) break;
-        if(++tries >= CRC_TRIES) {
-            err = fail(sd, SD_ECRC, "a block's CRC stayed wrong after 3 reads");
-            break;
+        n = sd->single ? 1 : count;
+        err = read_once(sd, lba, n, buf, &bad);
+        if(err == E_NO_MULTI) {
+            sd->single = true;
+            card_status(sd);
+            continue;
         }
-        sd->crc_retries++;
-        lba += bad;                         /* the blocks before the bad one are good */
+        if(err == SD_ECRC) {
+            if(++tries >= CRC_TRIES) {
+                err = fail(sd, SD_ECRC, "a block's CRC stayed wrong after 3 reads");
+                break;
+            }
+            sd->crc_retries++;
+            err = SD_OK;
+        } else if(err) break;
+        else bad = n;
+        lba += bad;                         /* the blocks before a bad one are good */
         buf += bad * 512;
         count -= bad;
-        err = SD_OK;
     }
     if(err) card_status(sd);                /* the card's error status, read so that it is clear for the next command */
     else sd->reads++;
@@ -279,7 +295,12 @@ static int write_once(struct sdcard *sd, u32 lba, u32 count, const u8 *buf, u32 
     *done = 0;
     if(!select_card(sd)) return fail(sd, SD_ETIMEOUT, "busy before a write");
     r = command(sd, count > 1 ? SD_CMD25 : SD_CMD24, address(sd, lba));
-    if(r) { deselect(sd); card_status(sd); return r1_error(sd, r, "the write command was refused"); }
+    if(r) {
+        deselect(sd);
+        card_status(sd);
+        if(count > 1 && r == SD_R1_ILLEGAL) return E_NO_MULTI;
+        return r1_error(sd, r, "the write command was refused");
+    }
     for(i = 0; i < count; i++) {
         const u8 *b = buf + i * 512;
         xf(sd, 0xFF);                       /* at least one byte before the token */
@@ -315,17 +336,24 @@ static int write_once(struct sdcard *sd, u32 lba, u32 count, const u8 *buf, u32 
 
 int sd_write(struct sdcard *sd, u32 lba, u32 count, const u8 *buf) {
     int err = check_range(sd, lba, count), tries = 0;
-    u32 done;
+    u32 n, done;
     if(err) return err;
     while(count) {
-        err = write_once(sd, lba, count, buf, &done);
-        if(err != SD_ECRC) break;
-        if(++tries >= CRC_TRIES) return fail(sd, SD_ECRC, "the card kept rejecting a block's CRC");
-        sd->crc_retries++;
+        n = sd->single ? 1 : count;
+        err = write_once(sd, lba, n, buf, &done);
+        if(err == E_NO_MULTI) {             /* (see sd_read) */
+            sd->single = true;
+            continue;
+        }
+        if(err == SD_ECRC) {
+            if(++tries >= CRC_TRIES) return fail(sd, SD_ECRC, "the card kept rejecting a block's CRC");
+            sd->crc_retries++;
+            err = SD_OK;
+        } else if(err) break;
+        else done = n;
         lba += done;
         buf += done * 512;
         count -= done;
-        err = SD_OK;
     }
     if(!err) sd->writes++;
     return err;

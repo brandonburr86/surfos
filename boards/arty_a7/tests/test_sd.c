@@ -116,6 +116,18 @@ static void sd_case(const char *what, int v2, int hc, u32 blocks, unsigned seed)
     r = sd_write(&sd, 30, 3, buf);
     memcpy(shadow + 30 * 512, buf, 3 * 512);
     check(r == SD_OK && !memcmp(img + 30 * 512, buf, 3 * 512), "a rejected block in a multiple write: the stop token, then the rest again");
+    model.no_multi = 1;                         /* a card without CMD18 and CMD25 */
+    {
+        u_long errors = sd.errors;
+        memset(buf, 0x3C, 8 * 512);
+        r = sd_write(&sd, 40, 8, buf);
+        memcpy(shadow + 40 * 512, buf, 8 * 512);
+        memset(buf, 0, 12 * 512);
+        check(r == SD_OK && sd_read(&sd, 38, 12, buf) == SD_OK && !memcmp(buf, shadow + 38 * 512, 12 * 512) &&
+              !memcmp(img + 40 * 512, shadow + 40 * 512, 8 * 512) && sd.single && sd.errors == errors,
+              "a card that refuses CMD18 and CMD25: one block per command, no error");
+    }
+    model.no_multi = 0;
     check(model.violations == 0, "the driver never sent a command while the card was busy, nor let CS go inside a block");
 out:
     free(img);

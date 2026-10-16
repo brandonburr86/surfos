@@ -103,12 +103,14 @@ void init_timer(void) {
     timebase = board_timebase_hz();
     period = timebase / HZ;
     kprintf("\nTimer\n");
+    /* said before the first tick: that starts the shells, whose output would land inside this
+       line on a slow serial line */
+    kprintf("*machine timer at %lu Hz, %i Hz tick (%lu units each)\n", timebase, HZ, period);
     tick_base = board_mtime();
     next_tick = tick_base + period;
     board_set_mtimecmp(next_tick);
     running = true;
     csr_set(mie, MIE_MTIE);
-    kprintf("*machine timer at %lu Hz, %i Hz tick (%lu units each)\n", timebase, HZ, period);
 }
 
 /* The first tick must come, or nothing will ever run: wait up to 100 ms of mtime for it. */

@@ -206,6 +206,7 @@ static void command(struct sdmodel *m) {
         return;
     case 17:
     case 18:
+        if(cmd == 18 && m->no_multi) break;
         if((r[0] = address(m, arg, &m->block))) { r1(m, r[0]); return; }
         r1(m, 0x00);
         data_block(m, m->img + (size_t)m->block * 512, 512);
@@ -214,6 +215,7 @@ static void command(struct sdmodel *m) {
         return;
     case 24:
     case 25:
+        if(cmd == 25 && m->no_multi) break;
         if((r[0] = address(m, arg, &m->block))) { r1(m, r[0]); return; }
         r1(m, 0x00);
         m->multi = cmd == 25;
