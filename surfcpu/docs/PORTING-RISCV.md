@@ -8,8 +8,8 @@ dependency, what replaces it, what is left out, and the plan.
 
 | | |
 |---|---|
-| Build | `make -C surfcpu build-kernel` → `build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` (and `qemu_virt`); `arch/riscv32/kernel.mk` |
-| Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and as `SURFOS.BIN` through a SurfBoot stand-in (`boards/qemu_virt/test_os.py`) |
+| Build | `make -C surfcpu build-kernel` → `build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` (and `qemu_virt`); `arch/riscv32/kernel.mk`; `SURFOS.BIN` packed by the fw track's `tools/surfimg.py` where the tree has it |
+| Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and through a SurfBoot stand-in (the handoff, FAT over the SD driver, and `SURFOS.BIN` and a `mkcard.py` card where the fw track's tools are present) (`boards/qemu_virt/test_os.py`) |
 | ISA, ABI | `rv32im_zicsr_zifencei`, `ilp32`, machine mode only (ISA.md); every linked instruction checked (`arch/riscv32/isacheck.py`) |
 | Boards | `boards/qemu_virt/` (QEMU's virt machine, for tests now) and `boards/arty_a7/` (SurfCPU's SoC, MEMORY-MAP.md) |
 | State | boots to the kernel shell under QEMU and passes its tests; **nothing has run on the FPGA** (no board connected): every Arty result is pending |
@@ -79,10 +79,14 @@ command that does not need PC hardware or processes.
   x86, for the backtrace symbol table (`tools/gensyms.py`, shared); its room is fixed so linker
   relaxation cannot move code between the passes, and kernel.mk checks that it did not.
 * **Packaging**: `surfos.payload.bin` (objcopy) and `SURFOS.BIN`, the 64-byte header of
-  BOOT-ABI.md section 2. Until the fw track's `surfcpu/tools/surfimg.py` is merged, a temporary
-  packer written to BOOT-ABI.md does it (`arch/riscv32/surfimg_tmp.py`: pack, verify with
-  SurfBoot's checks in order, the CRC test vectors); every constant comes from the generated
-  `soc.h`.
+  BOOT-ABI.md section 2, packed by the fw track's `surfcpu/tools/surfimg.py` (`pack --elf`),
+  which puts the ELF through its `tools/isa-audit.py` and refuses to write a package SurfBoot
+  would refuse; kernel.mk also requires the payload it packed to be objcopy's bytes. There is no
+  other packer: on a tree without surfimg.py (`sc/os` before integration) kernel.mk builds
+  `surfos.elf` and `surfos.payload.bin` and says that `SURFOS.BIN` was skipped. `SURFIMG=` (or
+  `OS_SURFIMG=` for `make -C surfcpu`) names another copy, which is how the package was tested
+  here, with surfimg.py taken from `surfcpu` (b555bb6) by `git show`. Card images come from the
+  fw track's `tools/mkcard.py` the same way (`OS_MKCARD=`).
 
 ## 3. The inventory: every x86 dependency and what replaces it
 
@@ -187,22 +191,40 @@ The timing windows of the self test (sleeps, kernel timers, timeouts) allow a fe
 since an emulator on a busy host can stall for a while and the tick then catches up with mtime
 at once.
 
-The rest of `make test-os` (`boards/qemu_virt/test_os.py`, 60 checks per build): the banner and
-identity, help, ps (idle, init, heartbeat, a kernel shell on each of F1-F4), the tick against a
-1000 ms sleep, the heartbeat task, two kernel tasks that count, sleep and wake (`tasks`),
-interrupt counts, the CPU, the self test and heaptest; FAT32 on the RAM disk: long, accented
-and 8.3 names, three folders deep, a 1 MB file read back by CRC, write, mkdir, a 1 MB copy
-under a long name, mv, rm, sync, umount, then the image saved through QEMU's monitor and
-checked on the host (fsck.fat clean, mtools reads back what SurfOS wrote); faults that kill
-the shell with a backtrace and init restarting it, EBREAK stepped over, RISC-V's division by
-zero; the kernel package: `SURFOS.BIN` checked as SurfBoot will, copied to its load address
-by a stand-in for SurfBoot's last step (`boards/qemu_virt/stub/`), entered with a1/a2 as
+The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 68 checks per build on a tree without
+the fw track's tools, 82 with them): the banner and identity, help, ps (idle, init, heartbeat, a
+kernel shell on each of F1-F4), the tick against a 1000 ms sleep, the heartbeat task, two kernel
+tasks that count, sleep and wake (`tasks`), interrupt counts, the CPU, the self test and
+heaptest; FAT32 on the RAM disk: long, accented and 8.3 names, three folders deep, a 1 MB file
+read back by CRC, `/USERS/DOCUMENTS/` (below), write, mkdir, a 1 MB copy under a long name, mv,
+rm, sync, umount, then the image saved through QEMU's monitor and checked on the host (fsck.fat
+clean, mtools reads back what SurfOS wrote); faults that kill the shell with a backtrace and
+init restarting it, EBREAK stepped over, RISC-V's division by zero; the boot ABI's handoff: a
+stand-in for SurfBoot's last step (`boards/qemu_virt/stub/`) enters the kernel with a0/a1/a2 as
 BOOT-ABI.md says, its boot information's command line taking effect, and a corrupted boot
-information block refused; and FAT32 over the SD driver: with the kernel word `sdsim`
+information block refused; FAT32 over the SD driver: with the kernel word `sdsim`
 (`boards/qemu_virt/sdsim.c`) the RAM disk becomes `sd0` through the Arty's own `sdcard.c` and
 the simulated card of its host test, so the partition code, the block cache (runs of up to 128
 blocks: CMD18, CMD25), the VFS and fs/fat.c run over the real SD code path under the kernel; a
-1 MB file read and copied, a file written, the image checked by fsck.fat and mtools.
+1 MB file read and copied, files written, `/USERS/DOCUMENTS` made, the image checked by fsck.fat
+and mtools. The handoff and sdsim boots put `surfos.elf` in place with QEMU's loader, so they
+need no packer. Where the fw track's tools are present: `SURFOS.BIN` checked with `surfimg.py
+verify` and booted by the stand-in, which copies its payload to the load address; and a card
+image made by `mkcard.py` (MBR, FAT32, the standard directories of BOOT-ABI.md section 5, the
+package in `/BOOT`) mounted through the SD driver, `/USERS/DOCUMENTS` read and written, the
+image read back by `mkcard.py --inspect`, mtools and fsck.fat. Without them those two parts are
+reported as skipped.
+
+**Long names and `/USERS/DOCUMENTS/`.** "DOCUMENTS" has nine letters, so on FAT it exists only as
+a long-name (VFAT) entry with a short alias such as `DOCUME~1`, as the Mac makes it. fs/fat.c
+(unchanged) reads and writes long names: a lookup compares the long name when an entry has a
+valid one (its checksum matching the short entry), folding ASCII case, and a name that is not
+8.3 is created with its long-name entries and a `~N` alias. The tests show both directions: the
+directory made by mtools (and by mkcard.py) is found as `DOCUMENTS` (also as `documents`), read
+and written; `mkdir /sd0p1/USERS/DOCUMENTS` through the SD driver leaves entries that mtools
+lists as `DOCUME~1` with the long name `DOCUMENTS`, and fsck.fat finds the volume clean. A
+lookup by the alias itself (`DOCUME~1`) is not supported; SurfBoot, which reads 8.3 names only,
+never needs this directory.
 
 `make test-os-host` (`boards/arty_a7/tests/`, seeds 1, 7, 123): the Arty drivers' logic on the
 host, from the same sources: the text screen (present, hardware scroll across the wrap, random
@@ -262,7 +284,7 @@ generated `soc.h`:
   token also after an error, and CMD13; a wait for 0xFF before every command (a card ignores
   commands while busy); every wait bounded. FAT
   through the existing block layer, cache, VFS and fs/fat.c: init_fs() mounts the card's FAT32
-  partition on /sd0p1. Read-only until writing has been tried on the real board (the brief's
+  partition on /sd0p1, long names included (`/sd0p1/USERS/DOCUMENTS`). Read-only until writing has been tried on the real board (the brief's
   "read-only first"): `sd=rw` in /BOOT/CMDLINE.TXT, or `sdmode rw` while unmounted, enables it;
   `eject sd0` flushes and unmounts. Never partitioned or formatted (bdev_may_format() refuses
   its bus). `sdinfo` shows the card.
@@ -271,18 +293,23 @@ generated `soc.h`:
 
 Done and tested under QEMU (qemu_virt, emulation only): the build, the arch core, the
 machine-mode kernel with its shell, tasks, timer and interrupts, the self test with the port
-checks, FAT read/write on a RAM disk checked from the host, the kernel package through the boot
-ABI, FAT over the SD protocol driver and a simulated card. Done and tested on the host: the
+checks, FAT read/write on a RAM disk checked from the host, the boot ABI's handoff, FAT over the
+SD protocol driver and a simulated card, `/USERS/DOCUMENTS` by its long name both ways, and,
+with copies of the fw track's surfimg.py and mkcard.py, the kernel package and a card image
+laid out as SurfBoot expects. Done and tested on the host: the
 Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
 the SD driver against the io track's card model with surf_spi's timing.
 
 **Pending (needs the board, a bitstream build host, or integration):** everything on the Arty
 itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and links into
-`build/riscv32/arty_a7/SURFOS.BIN` but its register accesses have run nowhere: not in RTL
+`build/riscv32/arty_a7/surfos.elf` (and `SURFOS.BIN` with the fw track's packer, tested with a
+copy) but its register accesses have run nowhere: not in RTL
 simulation (the SoC, its peripherals and SurfBoot are other tracks' work, joined at
 integration: brief milestone 7's "real board boots SurfOS from microSD" and milestone 8's
 persistent files are open), not on the FPGA (no board connected). The SD write path in
-particular stays off (read-only) until it is tried on a real card.
+particular stays off (read-only) until it is tried on a real card. On `sc/os` itself
+`SURFOS.BIN` is not built (no surfimg.py in this branch); it is, and the package and card parts
+of test-os run, once the branch meets the fw track's tools at integration.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by

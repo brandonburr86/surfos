@@ -4,14 +4,21 @@
 #                         for QEMU's virt machine in ../build/riscv32/qemu_virt/ (../arch/riscv32/kernel.mk)
 #   make test-os          the host tests of the port's pure code, then the qemu_virt kernel at -O2 and -O0
 #                         in qemu-system-riscv32, driven over its serial console (boards/qemu_virt/test_os.py),
-#                         booted as an ELF and as the SURFOS.BIN package through a SurfBoot stand-in
+#                         booted as an ELF and through a SurfBoot stand-in (the boot ABI's handoff, FAT over
+#                         the SD driver; SURFOS.BIN and a card image where the fw track's tools are present)
 #   make test-os-host     only the host tests
-#   make evidence-os      test-os, with its summaries written to docs/evidence/os/
+#   make evidence-os      test-os, with its summaries written to docs/evidence/os/ (OS_EVIDENCE_DIR)
 #
 # The kernel is built from the repository root (one level up); the x86 kernel's Makefile and outputs
 # are never touched. QEMU's virt machine is not SurfCPU: test-os says nothing about the FPGA.
+#
+# SURFOS.BIN is packed by the fw track's tools/surfimg.py and card images are made by its tools/mkcard.py;
+# where this tree lacks them (sc/os before integration) those steps say they are skipped. OS_SURFIMG and
+# OS_MKCARD name other copies.
 
-OS_MAKE     = $(MAKE) --no-print-directory -C .. -f arch/riscv32/kernel.mk
+OS_SURFIMG ?= tools/surfimg.py
+OS_MKCARD  ?= tools/mkcard.py
+OS_MAKE     = $(MAKE) --no-print-directory -C .. -f arch/riscv32/kernel.mk SURFIMG=$(abspath $(OS_SURFIMG))
 OS_OUT      = $(BUILD)/os
 OS_EVIDENCE ?= $(OS_OUT)
 OS_HOSTCC  ?= cc
@@ -41,17 +48,21 @@ $(OS_OUT)/test_arty: $(OS_ARTY_PURE) $(OS_ARTY_TESTS) $(wildcard ../boards/arty_
 	@mkdir -p $(dir $@)
 	$(Q)$(OS_HOSTCC) $(OS_HOST_CFLAGS) -o $@ $(OS_ARTY_PURE) $(OS_ARTY_TESTS)
 
-# the Arty board's pure code on the host (several seeds), the temporary packer's CRC vectors and
-# corruption checks (until tools/surfimg.py merges), and the Arty package checked as SurfBoot will
+# the Arty board's pure code on the host (several seeds), and the Arty package checked as SurfBoot will
+# (the fw track's surfimg.py verify) where the tree has the packer
 test-os-host: build-kernel-os $(if $(OS_ARTY_TESTS),$(OS_OUT)/test_arty)
 	@mkdir -p $(OS_EVIDENCE)
 	$(Q): > $(OS_OUT)/host.txt
 ifneq ($(OS_ARTY_TESTS),)
 	$(Q)$(OS_OUT)/test_arty $(OS_SEEDS) > $(OS_OUT)/host.txt; s=$$?; cat $(OS_OUT)/host.txt; exit $$s
 endif
-	$(Q)$(PYTHON) ../arch/riscv32/surfimg_tmp.py selftest >> $(OS_OUT)/host.txt
-	$(Q)$(PYTHON) ../arch/riscv32/surfimg_tmp.py verify ../build/riscv32/arty_a7/SURFOS.BIN >> $(OS_OUT)/host.txt
-	$(Q)tail -n 2 $(OS_OUT)/host.txt
+ifneq ($(wildcard $(OS_SURFIMG)),)
+	$(Q)$(PYTHON) $(OS_SURFIMG) verify ../build/riscv32/arty_a7/SURFOS.BIN >> $(OS_OUT)/host.txt; s=$$?; \
+	    tail -n 1 $(OS_OUT)/host.txt; exit $$s
+else
+	$(Q)echo "test-os-host: the Arty package not checked: no $(OS_SURFIMG) (the fw track's packer) in this tree" \
+	    | tee -a $(OS_OUT)/host.txt
+endif
 	$(Q)cp $(OS_OUT)/host.txt $(OS_EVIDENCE)/test-os-host.txt 2>/dev/null || true
 
 test-os-iomodel:
@@ -71,19 +82,25 @@ test-os-qemu:
 	$(OS_MAKE) KBOARD=qemu_virt
 	$(OS_MAKE) KBOARD=qemu_virt O=0
 	$(Q)cd .. && $(PYTHON) boards/qemu_virt/test_os.py --kernel build/riscv32/qemu_virt/surfos.elf \
-	    --package build/riscv32/qemu_virt/SURFOS.BIN --stub build/riscv32/qemu_virt/surfboot_stub.elf \
+	    --stub build/riscv32/qemu_virt/surfboot_stub.elf --package build/riscv32/qemu_virt/SURFOS.BIN \
+	    --surfimg $(abspath $(OS_SURFIMG)) --mkcard $(abspath $(OS_MKCARD)) \
 	    --evidence surfcpu/$(OS_EVIDENCE)/test-os-qemu-O2.txt --transcript surfcpu/$(OS_OUT)/transcript-O2.txt
 	$(Q)cd .. && $(PYTHON) boards/qemu_virt/test_os.py --kernel build/riscv32/qemu_virt-O0/surfos.elf \
-	    --package build/riscv32/qemu_virt-O0/SURFOS.BIN --stub build/riscv32/qemu_virt-O0/surfboot_stub.elf \
+	    --stub build/riscv32/qemu_virt-O0/surfboot_stub.elf --package build/riscv32/qemu_virt-O0/SURFOS.BIN \
+	    --surfimg $(abspath $(OS_SURFIMG)) --mkcard $(abspath $(OS_MKCARD)) \
 	    --evidence surfcpu/$(OS_EVIDENCE)/test-os-qemu-O0.txt --transcript surfcpu/$(OS_OUT)/transcript-O0.txt
 
 OS_ELFS = ../build/riscv32/arty_a7/surfos.elf ../build/riscv32/qemu_virt/surfos.elf ../build/riscv32/qemu_virt-O0/surfos.elf
+OS_EVIDENCE_DIR ?= docs/evidence/os
 
 evidence-os:
-	$(MAKE) --no-print-directory test-os OS_EVIDENCE=docs/evidence/os
+	$(MAKE) --no-print-directory test-os OS_EVIDENCE=$(OS_EVIDENCE_DIR)
 	$(Q)( echo "# make -C surfcpu build-kernel: sizes, the ISA audit, the packages ($$(date -u +%Y-%m-%d), build $(SURFCPU_BUILD_ID))"; \
 	  $(RV_SIZE) $(OS_ELFS); \
 	  for e in $(OS_ELFS); do $(PYTHON) ../arch/riscv32/isacheck.py --objdump $(RV_OBJDUMP) $$e; done; \
-	  for p in $(OS_ELFS:surfos.elf=SURFOS.BIN); do $(PYTHON) ../arch/riscv32/surfimg_tmp.py verify $$p; done ) \
-	  > docs/evidence/os/build.txt
-	@echo "evidence-os: docs/evidence/os/{build,test-os-host,test-os-qemu-O2,test-os-qemu-O0}.txt"
+	  for t in $(OS_SURFIMG) $(OS_MKCARD); do if [ -f $$t ]; then echo "fw tool $$t: sha256 $$(sha256sum < $$t | cut -c1-64)"; fi; done; \
+	  if [ -f $(OS_SURFIMG) ]; then $(PYTHON) $(OS_SURFIMG) info ../build/riscv32/arty_a7/SURFOS.BIN; \
+	    for p in $(OS_ELFS:surfos.elf=SURFOS.BIN); do $(PYTHON) $(OS_SURFIMG) verify $$p; done; \
+	  else echo "SURFOS.BIN not built: no $(OS_SURFIMG) (the fw track's packer) in this tree"; fi ) \
+	  > $(OS_EVIDENCE_DIR)/build.txt
+	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0}.txt"

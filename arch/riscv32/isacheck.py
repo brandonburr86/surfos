@@ -9,7 +9,9 @@ rv32im_zicsr_zifencei plus MRET and WFI (surfcpu/docs/ISA.md). This disassembles
 code section with objdump (canonical names, -M no-aliases) and refuses any other
 mnemonic, any 16-bit (compressed) encoding and anything objdump cannot decode. (The
 shell's crashill uses unimp, a CSR write the CPU refuses, which objdump shows as csrrw.)
-The fw track's surfcpu/tools/isa-audit.py replaces it once it is merged.
+It runs on every link. The fw track's surfcpu/tools/isa-audit.py, which decodes the
+instructions itself and checks the CSRs as well, runs too where the tree has it: its
+surfimg.py audits the ELF before packing SURFOS.BIN.
 
   isacheck.py [--objdump riscv64-unknown-elf-objdump] surfos.elf
 """

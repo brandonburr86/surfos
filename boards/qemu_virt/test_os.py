@@ -6,28 +6,39 @@ File: test_os.py Date: 10/15/26 (SurfCPU)
 Boots the machine-mode kernel (build/riscv32/qemu_virt/surfos.elf) in qemu-system-riscv32,
 with a FAT32 disk image as a RAM disk (-device loader at 0x88000000: tools/mkimage.py's
 "foreign" stick, long and accented names, folders and a 1 MB file, made by mkfs.fat and
-mtools), and drives the kernel shell over the serial console: the banner, help, the
-tasks running and sleeping, the timer, interrupts, the self test (registers across traps,
-stack alignment, tasks, locks), faults that kill a shell which init restarts, and FAT
-read and write. At the end the RAM disk is saved through QEMU's monitor (pmemsave) and
-checked on the host: fsck.fat finds it clean and mtools reads back what SurfOS wrote.
+mtools, with /USERS/DOCUMENTS/ added by mtools: not an 8.3 name, so a long-name entry with
+the alias DOCUME~1, as the Mac makes it), and drives the kernel shell over the serial
+console: the banner, help, the tasks running and sleeping, the timer, interrupts, the self
+test (registers across traps, stack alignment, tasks, locks), faults that kill a shell which
+init restarts, and FAT read and write. At the end the RAM disk is saved through QEMU's
+monitor (pmemsave) and checked on the host: fsck.fat finds it clean and mtools reads back
+what SurfOS wrote.
 
-With --package it then boots the kernel package itself, SURFOS.BIN, the way SurfBoot hands
-over (BOOT-ABI.md section 4): a stand-in for SurfBoot's last step (boards/qemu_virt/stub)
-copies the payload to its load address and jumps to the entry with a1 pointing at a
-struct surf_boot_info the harness made (its command line, RAM size and CRC), and the
-kernel must take it; a second boot with a corrupted CRC must refuse the block and carry on;
-a third passes the word sdsim, which makes the RAM disk sd0, through the Arty's SD driver
-(boards/arty_a7/sdcard.c) and a simulated card, for FAT32 over the real SD code path.
+With --stub it then tests the boot ABI's handoff (BOOT-ABI.md section 4): a stand-in for
+SurfBoot's last step (boards/qemu_virt/stub) enters the kernel with a0 = 0, a1 pointing at
+a struct surf_boot_info the harness made (its command line, RAM size and CRC) and a2 = the
+magic, and the kernel must take it; a second boot with a corrupted CRC must refuse the
+block and carry on; a third passes the word sdsim, which makes the RAM disk sd0, through
+the Arty's SD driver (boards/arty_a7/sdcard.c) and a simulated card, for FAT32 over the real
+SD code path, where SurfOS also makes /USERS/DOCUMENTS itself. These boots put surfos.elf in
+place with QEMU's loader, so they need no packer.
+
+Where the fw track's tools are in the tree, two more parts run (each says when it is
+skipped): SURFOS.BIN (packed by tools/surfimg.py, --package) checked with surfimg.py verify
+and booted through the stand-in, which copies its payload to the load address; and a card
+image made by tools/mkcard.py (--mkcard: MBR, FAT32, the standard directories of BOOT-ABI.md
+section 5, the package in /BOOT) mounted through the SD driver, /USERS/DOCUMENTS found by its
+long name and written to.
 
 QEMU's virt machine is not SurfCPU: this tests the portable kernel and the qemu_virt HAL
 (boards/qemu_virt), not the Arty's hardware.
 
   test_os.py --kernel build/riscv32/qemu_virt/surfos.elf [--qemu qemu-system-riscv32]
-             [--package build/riscv32/qemu_virt/SURFOS.BIN --stub build/riscv32/qemu_virt/surfboot_stub.elf]
+             [--stub build/riscv32/qemu_virt/surfboot_stub.elf] [--package build/riscv32/qemu_virt/SURFOS.BIN]
+             [--surfimg surfcpu/tools/surfimg.py] [--mkcard surfcpu/tools/mkcard.py]
              [--evidence surfcpu/docs/evidence/os/test-os-O2.txt] [--transcript FILE] [--verbose]
 
-Exit status 0 when every check passed.
+Exit status 0 when every check that ran passed.
 """
 
 import argparse
@@ -47,8 +58,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import mkimage  # noqa: E402  (tools/mkimage.py: the foreign stick, FOREIGN_FILES, foreign_big)
-sys.path.insert(0, os.path.join(ROOT, 'arch', 'riscv32'))
-import surfimg_tmp  # noqa: E402  (the constants of the generated soc.h, the package checks)
+SOC_H = os.path.join(ROOT, 'surfcpu', 'firmware', 'include', 'surfcpu', 'soc.h')
+
+
+def soc_constants(path=SOC_H):
+    """the SURF_* numbers of the generated soc.h: the boot information is built from them, never typed here"""
+    consts = {}
+    with open(path) as f:
+        for line in f:
+            m = re.match(r'#define\s+(SURF_\w+)\s+(0x[0-9A-Fa-f]+|\d+)u?\b', line)
+            if m:
+                consts[m.group(1)] = int(m.group(2), 0)
+    return consts
+
+
+C = soc_constants()
 
 RAMDISK_ADDR = 0x88000000
 # QEMU's rv32 CPU with everything SurfCPU lacks switched off (surfcpu/docs/ISA.md): misa 0x40001100,
@@ -64,9 +88,10 @@ PART_OFFSET = mkimage.PART_START * 512
 
 
 class Qemu:
-    def __init__(self, qemu, boot, disk, verbose=False, loads=()):
+    def __init__(self, qemu, boot, disk, verbose=False, loads=(), elf=None):
         """boot: QEMU's arguments for what runs first (-bios none -kernel ELF, or -bios the stub);
-        loads: (file, address) pairs put into RAM with -device loader, as the disk image is"""
+        loads: (file, address) pairs put into RAM with -device loader, as the disk image is;
+        elf: an ELF the loader puts at its own addresses (the kernel, for the stub to enter)"""
         base = '/tmp' if os.path.isdir('/tmp') else tempfile.gettempdir()
         self.workdir = tempfile.mkdtemp(prefix='surfrv-', dir=base)
         self.mon_path = os.path.join(self.workdir, 'mon.sock')
@@ -78,6 +103,9 @@ class Qemu:
             name = 'load%d.bin' % i
             shutil.copyfile(path, os.path.join(self.workdir, name))
             extra += ['-device', 'loader,file=%s,addr=0x%x,force-raw=on' % (name, addr)]
+        if elf:
+            shutil.copyfile(elf, os.path.join(self.workdir, 'kernel.elf'))
+            extra += ['-device', 'loader,file=kernel.elf']
         self.argv = [qemu, '-machine', 'virt', '-cpu', SURFCPU_LIKE, '-m', '256M', '-smp', '1'] + boot + [
                     '-display', 'none', '-no-reboot',
                     '-device', 'loader,file=disk.img,addr=0x%x,force-raw=on' % RAMDISK_ADDR] + extra + [
@@ -232,14 +260,14 @@ def run_mtools(args, env_extra=None):
 
 STUB_STAGE = 0x8D000000          # boards/qemu_virt/stub/surfboot_stub.S: where SURFOS.BIN is loaded
 STUB_BOOTINFO = 0x8C000000       # and the boot information
+PACKAGE_HEADER = struct.Struct('<IHHIIIIIIIIII12sI')     # BOOT-ABI.md section 2: the 64-byte SIMG header
 
 
 def bootinfo_blob(cmdline, ram_size, image_base, image_mem, corrupt=False):
     """struct surf_boot_info, BOOT-ABI.md section 4, as SurfBoot fills it (this harness plays SurfBoot)"""
-    c = surfimg_tmp.C
-    head = struct.pack('<IHH16I', c['SURF_BOOTINFO_MAGIC'], c['SURF_BOOTINFO_VERSION'], 256,
-                       0, c['SURF_BOARD_SIM'], c['SURF_SOC_VERSION'], c['SURF_MAP_VERSION'], c['SURF_SYS_HZ'],
-                       10000000, c['SURF_DDR_BASE'], ram_size, image_base, image_mem, c['SURF_BOOT_DEVICE_SD'], 2048, 0,
+    head = struct.pack('<IHH16I', C['SURF_BOOTINFO_MAGIC'], C['SURF_BOOTINFO_VERSION'], 256,
+                       0, C['SURF_BOARD_SIM'], C['SURF_SOC_VERSION'], C['SURF_MAP_VERSION'], C['SURF_SYS_HZ'],
+                       10000000, C['SURF_DDR_BASE'], ram_size, image_base, image_mem, C['SURF_BOOT_DEVICE_SD'], 2048, 0,
                        0x000001, 0x53545542, 0)
     blob = bytearray(head + bytes(56) + cmdline.encode().ljust(128, b'\0'))
     assert len(blob) == 256
@@ -249,56 +277,104 @@ def bootinfo_blob(cmdline, ram_size, image_base, image_mem, corrupt=False):
     return bytes(blob)
 
 
-def package_boots(args, disk, check):
-    """SURFOS.BIN through the SurfBoot stand-in: with good boot information, then with a corrupted one"""
-    with open(args.package, 'rb') as f:
-        package = f.read()
-    hdr = surfimg_tmp.check(package)                        # what SurfBoot checks before it copies anything
-    check(True, 'the package passes SurfBoot\'s checks: load 0x%08x, entry 0x%08x, %d bytes, CRC %08x'
-          % (hdr['load'], hdr['entry'], hdr['payload'], hdr['crc']))
+def package_header(path):
+    """the fields of SURFOS.BIN's header the boot information repeats (surfimg.py verify does the checking)"""
+    with open(path, 'rb') as f:
+        f = PACKAGE_HEADER.unpack(f.read(64))
+    return {'magic': f[0], 'load': f[5], 'payload': f[6], 'mem': f[7], 'entry': f[8], 'crc': f[9], 'build': f[12]}
+
+
+def elf_image(path):
+    """where an ELF's loadable segments go: the lowest address and the bytes to the end of the last one in
+    memory (BSS included), what SurfBoot reports for a package as load_addr and mem_size"""
+    with open(path, 'rb') as f:
+        d = f.read()
+    phoff, = struct.unpack_from('<I', d, 0x1C)
+    phentsize, phnum = struct.unpack_from('<HH', d, 0x2A)
+    segs = []
+    for i in range(phnum):
+        p_type, _, _, p_paddr, _, p_memsz = struct.unpack_from('<6I', d, phoff + i * phentsize)
+        if p_type == 1 and p_memsz:                         # PT_LOAD
+            segs.append((p_paddr, p_memsz))
+    base = min(a for a, _ in segs)
+    return base, max(a + n for a, n in segs) - base
+
+
+def stub_boot(args, disk, work, cmdline, package=None, corrupt=False):
+    """the kernel entered as SurfBoot hands over, by the stand-in (boards/qemu_virt/stub): SURFOS.BIN copied from
+    STUB_STAGE to its load address or, without a package, surfos.elf put in place by QEMU's loader; a1 points at a
+    boot information block with this command line. (QEMU, the image's base and memory size)"""
+    if package:
+        hdr = package_header(package)
+        base, mem, loads, elf = hdr['load'], hdr['mem'], [(package, STUB_STAGE)], None
+    else:
+        (base, mem), loads, elf = elf_image(args.kernel), [], args.kernel
+    info = os.path.join(work, 'bootinfo.bin')
+    with open(info, 'wb') as f:
+        f.write(bootinfo_blob(cmdline, 256 << 20, base, mem, corrupt))
+    q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
+             loads=loads + [(info, STUB_BOOTINFO)], elf=elf)
+    return q, base, mem
+
+
+def handoff_boots(args, disk, check, work):
+    """the boot ABI's handoff: a0, a1 and a2 and a boot information block with a command line, then a corrupted one"""
     transcript = b''
-    work = tempfile.mkdtemp(prefix='surfrv-pkg-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    for corrupt in (False, True):
+        q, base, mem = stub_boot(args, disk, work, 'ascii surftest=1', corrupt=corrupt)
+        try:
+            ok = q.expect("Brandon Burr's SurfOS", 30) and q.expect(PROMPT, 30)
+            boot_log = q.since(0)
+            if not corrupt:
+                check(ok and 'BOOT PROBLEM' not in boot_log,
+                      'handoff: entered as SurfBoot hands over (a0, a1, a2), the kernel boots to the shell')
+                check('SURF ~#>' in boot_log and '≋' not in boot_log,
+                      'handoff: the command line from the boot information arrives (ascii: an ASCII prompt)')
+                ok, out = q.cmd('bootinfo', ['boot information: SurfBoot 0.0.1 (53545542)'])
+                check(ok and "command line: 'ascii surftest=1'" in out and 'handoff a0 0, a1 0x8c000000, a2 0x49465253' in out,
+                      'handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot\'s block and its command line')
+                check('RAM 0x80000000 + 256 MB verified; image 0x%08x + %d bytes' % (base, mem) in out,
+                      'handoff: the RAM size and the image\'s memory size come from the boot information')
+                ok, out = q.cmd('ls /rd0p1', ['README.TXT'])
+                check(ok, 'handoff: the RAM disk works as before')
+                check(q.poweroff() == 0, 'handoff: poweroff')
+            else:
+                ok2, out = q.cmd('bootinfo', ['boot information: none'])
+                check(ok and ok2 and "the boot information's CRC does not match" in out and '≋' in boot_log,
+                      'handoff: a corrupted boot information block is refused (CRC), the kernel boots on without it')
+                q.send('reboot\r')                  # QEMU runs with -no-reboot: a reset ends it
+                seen = q.expect('SurfOS System Reboot Sequence', 10)
+                try:
+                    q.proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    pass
+                check(seen and q.proc.poll() is not None, 'reboot: the reset register resets the machine (QEMU ends)')
+        finally:
+            transcript += q.transcript
+            q.close()
+    return transcript
+
+
+def package_boot(args, disk, check, work):
+    """SURFOS.BIN, packed by the fw track's tools/surfimg.py: its verify, then copied to its load address"""
+    hdr = package_header(args.package)
+    if args.surfimg and os.path.exists(args.surfimg):
+        r = subprocess.run([sys.executable, args.surfimg, 'verify', args.package], capture_output=True, text=True)
+        check(r.returncode == 0, 'package: surfimg.py verify passes SurfBoot\'s checks: load 0x%08x, entry 0x%08x, '
+              '%d bytes, CRC %08x, build %08x' % (hdr['load'], hdr['entry'], hdr['payload'], hdr['crc'], hdr['build']))
+        if r.returncode:
+            print(r.stdout + r.stderr)
+    q, base, mem = stub_boot(args, disk, work, 'surftest=1', package=args.package)
     try:
-        for corrupt in (False, True):
-            info = os.path.join(work, 'bootinfo.bin')
-            with open(info, 'wb') as f:
-                f.write(bootinfo_blob('ascii surftest=1', 256 << 20, hdr['load'], hdr['mem'], corrupt))
-            q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
-                     loads=[(args.package, STUB_STAGE), (info, STUB_BOOTINFO)])
-            try:
-                ok = q.expect("Brandon Burr's SurfOS", 30) and q.expect(PROMPT, 30)
-                boot_log = q.since(0)
-                if not corrupt:
-                    check(ok and 'BOOT PROBLEM' not in boot_log, 'package: SURFOS.BIN copied to its load address boots to the shell')
-                    check('SURF ~#>' in boot_log and '\u224b' not in boot_log,
-                          'package: the command line from the boot information arrives (ascii: an ASCII prompt)')
-                    ok, out = q.cmd('bootinfo', ['boot information: SurfBoot 0.0.1 (53545542)'])
-                    check(ok and "command line: 'ascii surftest=1'" in out and 'handoff a0 0, a1 0x8c000000, a2 0x49465253' in out,
-                          'package: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot\'s block and its command line')
-                    check('RAM 0x80000000 + 256 MB verified; image 0x80000000 + %d bytes' % hdr['mem'] in out,
-                          'package: the RAM size and the image\'s memory size come from the boot information')
-                    ok, out = q.cmd('ls /rd0p1', ['README.TXT'])
-                    check(ok, 'package: the RAM disk works as before')
-                else:
-                    ok2, out = q.cmd('bootinfo', ['boot information: none'])
-                    check(ok and ok2 and "the boot information's CRC does not match" in out and '\u224b' in boot_log,
-                          'package: a corrupted boot information block is refused (CRC), the kernel boots on without it')
-                if not corrupt:
-                    check(q.poweroff() == 0, 'package: poweroff')
-                else:                               # QEMU runs with -no-reboot: a reset ends it
-                    q.send('reboot\r')
-                    seen = q.expect('SurfOS System Reboot Sequence', 10)
-                    try:
-                        q.proc.wait(10)
-                    except subprocess.TimeoutExpired:
-                        pass
-                    check(seen and q.proc.poll() is not None, 'reboot: the reset register resets the machine (QEMU ends)')
-            finally:
-                transcript += q.transcript
-                q.close()
-        transcript += sdsim_boot(args, disk, hdr, check, work)
+        ok = q.expect("Brandon Burr's SurfOS", 30) and q.expect(PROMPT, 30)
+        check(ok and 'BOOT PROBLEM' not in q.since(0), 'package: SURFOS.BIN copied to its load address boots to the shell')
+        ok, out = q.cmd('bootinfo', ['boot information: SurfBoot'])
+        check(ok and 'image 0x%08x + %d bytes' % (base, mem) in out,
+              'package: bootinfo shows the package\'s image (load 0x%08x, mem_size %d)' % (base, mem))
+        check(q.poweroff() == 0, 'package: poweroff')
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        transcript = q.transcript
+        q.close()
     return transcript
 
 
@@ -313,14 +389,20 @@ def save_ramdisk(q, size):
     return None
 
 
-def sdsim_boot(args, disk, hdr, check, work):
-    """the package again with the word sdsim: the RAM disk is sd0, through the Arty's SD driver
-    (boards/arty_a7/sdcard.c) and a simulated SDHC card; FAT32 on /sd0p1, then the host checks it"""
-    info = os.path.join(work, 'bootinfo-sdsim.bin')
-    with open(info, 'wb') as f:
-        f.write(bootinfo_blob('sdsim', 256 << 20, hdr['load'], hdr['mem']))
-    q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
-             loads=[(args.package, STUB_STAGE), (info, STUB_BOOTINFO)])
+def fsck_partition(q, dump, offset):
+    """fsck.fat -n on the partition of a saved image: (clean, its report)"""
+    with open(dump, 'rb') as f:
+        f.seek(offset)
+        with open(os.path.join(q.workdir, 'part.img'), 'wb') as p:
+            p.write(f.read())
+    r = subprocess.run(['fsck.fat', '-n', os.path.join(q.workdir, 'part.img')], capture_output=True, text=True)
+    return r.returncode == 0, r.stdout + r.stderr
+
+
+def sdsim_boot(args, disk, check, work):
+    """the word sdsim: the RAM disk is sd0, through the Arty's SD driver (boards/arty_a7/sdcard.c) and a simulated
+    SDHC card; FAT32 on /sd0p1, /USERS/DOCUMENTS made by SurfOS, then the host checks it"""
+    q, _, _ = stub_boot(args, disk, work, 'sdsim')
     big = mkimage.foreign_big()
     big_crc = zlib.crc32(big) & 0xFFFFFFFF
     try:
@@ -336,6 +418,13 @@ def sdsim_boot(args, disk, hdr, check, work):
         ok2, _ = q.cmd('write /sd0p1/SDSIM.TXT written through the SD driver')
         ok3, out3 = q.cmd('sync', ['synced'])
         check(ok and ok2 and ok3, 'sdsim: a 1 MB copy and a new file written through the SD driver (CMD24/CMD25), synced')
+        # the card's user directory made by SurfOS: DOCUMENTS is not an 8.3 name, so long-name entries and an alias
+        ok, _ = q.cmd('mkdir /sd0p1/USERS')
+        ok2, _ = q.cmd('mkdir /sd0p1/USERS/DOCUMENTS')
+        ok3, _ = q.cmd('write /sd0p1/USERS/DOCUMENTS/NOTE.TXT made by SurfOS in its own DOCUMENTS')
+        ok4, out4 = q.cmd('ls /sd0p1/USERS', ['entries'])
+        check(ok and ok2 and ok3 and ok4 and 'DOCUMENTS/' in out4,
+              'sdsim: mkdir /sd0p1/USERS/DOCUMENTS (longer than 8.3) and a file written in it')
         ok, out = q.cmd('drivers', ['sdsim'])
         m = re.search(r'sdsim\s+(\d+) reads, (\d+) writes, (\d+) CRC retries, (\d+) timeouts, (\d+) errors', out)
         check(ok and m and int(m.group(1)) > 0 and int(m.group(2)) > 0 and m.group(4) == '0' and m.group(5) == '0',
@@ -349,12 +438,18 @@ def sdsim_boot(args, disk, hdr, check, work):
             r = run_mtools(['mcopy', '-n', '-i', part, '::/SDCOPY.BIN', os.path.join(q.workdir, 'sdcopy.bin')])
             got = open(os.path.join(q.workdir, 'sdcopy.bin'), 'rb').read() if r.returncode == 0 else b''
             check(got == big, 'sdsim: mtools reads the 1 MB copy byte for byte')
-            with open(dump, 'rb') as f:
-                f.seek(PART_OFFSET)
-                with open(os.path.join(q.workdir, 'part.img'), 'wb') as p:
-                    p.write(f.read())
-            r = subprocess.run(['fsck.fat', '-n', os.path.join(q.workdir, 'part.img')], capture_output=True, text=True)
-            check(r.returncode == 0, 'sdsim: fsck.fat -n finds the volume clean')
+            r = run_mtools(['mdir', '-i', part, '::/USERS'])
+            check(r.returncode == 0 and re.search(r'DOCUME~1\s+<DIR>.*\bDOCUMENTS\s*$', r.stdout, re.M),
+                  'sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LFN entries SurfOS wrote)')
+            if r.returncode == 0 and 'DOCUMENTS' not in r.stdout:
+                print(r.stdout)
+            r = run_mtools(['mtype', '-i', part, '::/USERS/DOCUMENTS/NOTE.TXT'])
+            check(r.returncode == 0 and r.stdout.strip() == 'made by SurfOS in its own DOCUMENTS',
+                  'sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT')
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            check(clean, 'sdsim: fsck.fat -n finds the volume clean')
+            if not clean:
+                print(report)
         check(q.poweroff() == 0, 'sdsim: poweroff')
     finally:
         transcript = q.transcript
@@ -362,23 +457,104 @@ def sdsim_boot(args, disk, hdr, check, work):
     return transcript
 
 
+def card_boot(args, check, work):
+    """a card image made by the fw track's tools/mkcard.py, laid out as BOOT-ABI.md section 5 says (MBR, one FAT32
+    partition, /BOOT /SYSTEM /PROGRAMS /USERS/DOCUMENTS, the package in /BOOT when there is one), mounted through the
+    SD driver (sdsim): /USERS/DOCUMENTS found by its long name, read and written, then checked on the host"""
+    card = os.path.join(work, 'card.img')
+    hello = os.path.join(work, 'hello.txt')
+    notes = os.path.join(work, 'notes.txt')
+    with open(hello, 'w') as f:
+        f.write('Hello from the card image.\n')
+    with open(notes, 'w') as f:
+        f.write('Notes kept under a long name.\n')
+    argv = [sys.executable, args.mkcard, card, '--size', '48M', '--standard-dirs',
+            '--file', '/USERS/DOCUMENTS/HELLO.TXT=' + hello, '--file', '/USERS/DOCUMENTS/Notes-from-the-Mac.txt=' + notes]
+    with_package = bool(args.package and os.path.exists(args.package))
+    if with_package:
+        argv += ['--file', '/BOOT/SURFOS.BIN=' + args.package]
+    r = subprocess.run(argv, capture_output=True, text=True)
+    if not check(r.returncode == 0, 'card: mkcard.py makes a 48 MiB card image with the standard directories%s'
+                 % (' and /BOOT/SURFOS.BIN' if with_package else '')):
+        print(r.stdout + r.stderr)
+        return b''
+    with open(card, 'rb') as f:
+        part_lba, = struct.unpack_from('<I', f.read(512), 0x1C6)
+    q, _, _ = stub_boot(args, card, work, 'sdsim')
+    try:
+        ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+        check(ok and '+VFS: sd0p1 mounted on /sd0p1 (fat)' in q.since(0),
+              'card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1')
+        ok, out = q.cmd('ls /sd0p1/USERS/DOCUMENTS', ['entries'])
+        check(ok and 'HELLO.TXT' in out and 'Notes-from-the-Mac.txt' in out,
+              'card: /sd0p1/USERS/DOCUMENTS found by its long name (alias DOCUME~1), both files listed')
+        ok, _ = q.cmd('cat /sd0p1/USERS/DOCUMENTS/Notes-from-the-Mac.txt', ['Notes kept under a long name.'])
+        ok2, _ = q.cmd('cat /sd0p1/USERS/DOCUMENTS/HELLO.TXT', ['Hello from the card image.'])
+        check(ok and ok2, 'card: the files in DOCUMENTS read through the SD driver')
+        if with_package:
+            size = os.path.getsize(args.package)
+            crc = zlib.crc32(open(args.package, 'rb').read()) & 0xFFFFFFFF
+            ok, out = q.cmd('crc32 /sd0p1/BOOT/SURFOS.BIN', ['SURFOS.BIN'], timeout=60)
+            check(ok and re.search(r'%08x\s+%d' % (crc, size), out), 'card: /BOOT/SURFOS.BIN on the card is the package')
+        ok, _ = q.cmd('write /sd0p1/USERS/DOCUMENTS/FROMRV.TXT written on the card by SurfOS')
+        ok2, _ = q.cmd('umount /sd0p1')
+        dump = save_ramdisk(q, os.path.getsize(card)) if ok and ok2 else None
+        if check(dump, 'card: a file written into DOCUMENTS, unmounted, the card image saved'):
+            r = subprocess.run([sys.executable, args.mkcard, '--inspect', dump], capture_output=True, text=True)
+            check(r.returncode == 0 and '/USERS/DOCUME~1/FROMRV.TXT' in r.stdout and '(DOCUMENTS)' in r.stdout,
+                  'card: mkcard.py --inspect reads /USERS/DOCUMENTS/FROMRV.TXT back')
+            r = run_mtools(['mtype', '-i', dump + '@@%d' % (part_lba * 512), '::/USERS/DOCUMENTS/FROMRV.TXT'])
+            check(r.returncode == 0 and r.stdout.strip() == 'written on the card by SurfOS', 'card: mtools reads it too')
+            clean, report = fsck_partition(q, dump, part_lba * 512)
+            check(clean, 'card: fsck.fat -n finds the card clean')
+            if not clean:
+                print(report)
+        check(q.poweroff() == 0, 'card: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
+def add_documents(img):
+    """/USERS/DOCUMENTS/NOTES.TXT put on a disk image by mtools: DOCUMENTS is not an 8.3 name, so mtools writes a
+    long-name entry and the alias DOCUME~1, as the Mac does. Returns mdir's listing of /USERS."""
+    part = img + '@@%d' % PART_OFFSET
+    note = os.path.join(os.path.dirname(img), 'notes.txt')
+    with open(note, 'w') as f:
+        f.write("The owner's files live here.\n")
+    for argv in (['mmd', '-i', part, '::/USERS'], ['mmd', '-i', part, '::/USERS/DOCUMENTS'],
+                 ['mcopy', '-i', part, note, '::/USERS/DOCUMENTS/NOTES.TXT']):
+        r = run_mtools(argv)
+        if r.returncode:
+            raise RuntimeError('%s: %s' % (' '.join(argv), r.stderr))
+    return run_mtools(['mdir', '-i', part, '::/USERS']).stdout
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--kernel', default=os.path.join(ROOT, 'build/riscv32/qemu_virt/surfos.elf'))
     ap.add_argument('--qemu', default='qemu-system-riscv32')
-    ap.add_argument('--package', help='SURFOS.BIN, booted through the SurfBoot stand-in (--stub)')
-    ap.add_argument('--stub')
+    ap.add_argument('--stub', help='boards/qemu_virt/stub: the SurfBoot stand-in, for the handoff, sdsim, package and card')
+    ap.add_argument('--package', help='SURFOS.BIN, booted through the stand-in where it exists (the fw track packs it)')
+    ap.add_argument('--surfimg', help="the fw track's tools/surfimg.py, to verify the package")
+    ap.add_argument('--mkcard', help="the fw track's tools/mkcard.py, to make a card image (skipped where absent)")
     ap.add_argument('--evidence')
     ap.add_argument('--transcript')
     ap.add_argument('--verbose', action='store_true')
     args = ap.parse_args()
 
     results = []
+    skipped = []
 
     def check(ok, what):
         results.append((bool(ok), what))
         print('%s %s' % ('ok  ' if ok else 'FAIL', what), flush=True)
         return bool(ok)
+
+    def skip(what):
+        skipped.append(what)
+        print('skip %s' % what, flush=True)
 
     work = tempfile.mkdtemp(prefix='surfrv-img-', dir='/tmp' if os.path.isdir('/tmp') else None)
     disk = os.path.join(work, 'foreign.img')
@@ -386,7 +562,12 @@ def main():
                    stdout=subprocess.DEVNULL)
     big_crc = zlib.crc32(mkimage.foreign_big()) & 0xFFFFFFFF
     t_start = time.time()
-    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], disk, args.verbose)
+    users = os.path.join(work, 'users.img')                 # the same stick with /USERS/DOCUMENTS/ on it
+    shutil.copyfile(disk, users)
+    listing = add_documents(users)
+    check(re.search(r'DOCUME~1\s+<DIR>.*\bDOCUMENTS\s*$', listing, re.M),
+          'image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1')
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], users, args.verbose)
     try:
         cmd = q.cmd
 
@@ -458,6 +639,17 @@ def main():
         check(ok and re.search(r'%08x\s+1048576' % big_crc, out),
               'crc32: the 1 MB file reads back exactly (CRC %08x, a 2048-cluster chain)' % big_crc)
 
+        # /USERS/DOCUMENTS (BOOT-ABI.md section 5) is not an 8.3 name: only its long-name entry says DOCUMENTS
+        ok, out = cmd('ls /rd0p1/USERS', ['entries'])
+        check(ok and 'DOCUMENTS/' in out and 'DOCUME~1' not in out, 'ls /rd0p1/USERS: DOCUMENTS by its long name')
+        ok, out = cmd('cat /rd0p1/USERS/DOCUMENTS/NOTES.TXT', ["The owner's files live here."])
+        check(ok, 'cat /rd0p1/USERS/DOCUMENTS/NOTES.TXT: a path through the long name')
+        ok, out = cmd('ls /rd0p1/users/documents', ['NOTES.TXT'])
+        check(ok and 'entries' in out, 'ls /rd0p1/users/documents: the long name is found in any case')
+        ok, out = cmd('write /rd0p1/USERS/DOCUMENTS/FROMRV.TXT written into DOCUMENTS on riscv32')
+        ok2, out2 = cmd('cat /rd0p1/USERS/DOCUMENTS/FROMRV.TXT', ['written into DOCUMENTS on riscv32'])
+        check(ok and ok2, 'write /rd0p1/USERS/DOCUMENTS/FROMRV.TXT and cat it')
+
         # FAT: write
         ok, out = cmd('write /rd0p1/RISCV.TXT SurfOS wrote this on riscv32')
         ok2, out2 = cmd('cat /rd0p1/RISCV.TXT', ['SurfOS wrote this on riscv32'])
@@ -499,13 +691,8 @@ def main():
         # unmount, save the RAM disk and check it on the host
         ok, out = cmd('umount /rd0p1')
         check(ok and 'busy' not in out.lower(), 'umount /rd0p1')
-        q.monitor('pmemsave 0x%x %d ramdisk.bin' % (RAMDISK_ADDR, os.path.getsize(disk)), 2.0)
-        dump = os.path.join(q.workdir, 'ramdisk.bin')
-        for _ in range(100):
-            if os.path.exists(dump) and os.path.getsize(dump) == os.path.getsize(disk):
-                break
-            time.sleep(0.1)
-        if check(os.path.exists(dump) and os.path.getsize(dump) == os.path.getsize(disk), 'the RAM disk saved through the monitor'):
+        dump = save_ramdisk(q, os.path.getsize(users))
+        if check(dump, 'the RAM disk saved through the monitor'):
             part = dump + '@@%d' % PART_OFFSET
             r = run_mtools(['mtype', '-i', part, '::/RISCV.TXT'])
             check(r.returncode == 0 and r.stdout.strip() == 'SurfOS wrote this on riscv32', 'mtools reads RISCV.TXT as SurfOS wrote it')
@@ -514,14 +701,13 @@ def main():
             check(got == mkimage.foreign_big(), 'mtools reads the 1 MB copy under its long name, byte for byte')
             r = run_mtools(['mdir', '-i', part, '::/rvdir'])
             check(r.returncode == 0 and 'renamed' not in r.stdout, 'mtools: the removed file is gone')
-            with open(dump, 'rb') as f:
-                f.seek(PART_OFFSET)
-                with open(os.path.join(q.workdir, 'part.img'), 'wb') as p:
-                    p.write(f.read())
-            r = subprocess.run(['fsck.fat', '-n', os.path.join(q.workdir, 'part.img')], capture_output=True, text=True)
-            check(r.returncode == 0, 'fsck.fat -n: the volume is clean after the riscv32 kernel wrote it')
-            if r.returncode:
-                print(r.stdout + r.stderr)
+            r = run_mtools(['mtype', '-i', part, '::/USERS/DOCUMENTS/FROMRV.TXT'])
+            check(r.returncode == 0 and r.stdout.strip() == 'written into DOCUMENTS on riscv32',
+                  'mtools reads /USERS/DOCUMENTS/FROMRV.TXT as SurfOS wrote it')
+            clean, report = fsck_partition(q, dump, PART_OFFSET)
+            check(clean, 'fsck.fat -n: the volume is clean after the riscv32 kernel wrote it')
+            if not clean:
+                print(report)
 
         ok, out = cmd('mount rd0p1', ['rd0p1 on /rd0p1: fat32'])
         check(ok and 'not unmounted cleanly' not in out, 'mount again: clean (umount set the clean bit)')
@@ -540,18 +726,30 @@ def main():
         transcript = q.transcript
         q.close()
 
-    if args.package:
-        try:
-            transcript += package_boots(args, disk, check)
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
-    else:
+    try:
+        if args.stub:
+            transcript += handoff_boots(args, disk, check, work)
+            transcript += sdsim_boot(args, disk, check, work)
+            if args.package and os.path.exists(args.package):
+                transcript += package_boot(args, disk, check, work)
+            else:
+                skip('package: no %s: SURFOS.BIN is packed by the fw track\'s tools/surfimg.py, which this tree does '
+                     'not have' % (os.path.relpath(args.package, ROOT) if args.package else 'SURFOS.BIN'))
+            if args.mkcard and os.path.exists(args.mkcard):
+                transcript += card_boot(args, check, work)
+            else:
+                skip("card: no tools/mkcard.py (the fw track's card images) in this tree")
+        else:
+            skip('handoff, sdsim, package and card: no --stub')
+    finally:
         shutil.rmtree(work, ignore_errors=True)
 
     passed = sum(1 for ok, _ in results if ok)
     elapsed = time.time() - t_start
     summary = 'test-os qemu_virt %s: %d of %d checks passed in %.0f s' % (os.path.relpath(args.kernel, ROOT), passed,
                                                                        len(results), elapsed)
+    if skipped:
+        summary += ' (%d part%s skipped)' % (len(skipped), '' if len(skipped) == 1 else 's')
     print(summary)
     if args.transcript:
         with open(args.transcript, 'wb') as f:
@@ -564,6 +762,8 @@ def main():
                                     time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())))
             for ok, what in results:
                 f.write('%s %s\n' % ('ok  ' if ok else 'FAIL', what))
+            for what in skipped:
+                f.write('skip %s\n' % what)
     sys.exit(0 if passed == len(results) else 1)
 
 

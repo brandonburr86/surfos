@@ -7,6 +7,10 @@
 #   make -f arch/riscv32/kernel.mk KBOARD=qemu_virt    build/riscv32/qemu_virt/... (QEMU's virt machine, for the tests)
 #   make -f arch/riscv32/kernel.mk KBOARD=qemu_virt O=0   an unoptimised build, in build/riscv32/qemu_virt-O0/
 #
+# SURFOS.BIN is packed by the fw track's surfcpu/tools/surfimg.py (SURFIMG names another copy).
+# Where the tree has no surfimg.py, surfos.elf and surfos.payload.bin are built and the package
+# is skipped with a message saying so: there is no other packer.
+#
 # KBOARD (not BOARD: the SurfCPU makefiles use BOARD for the FPGA part) is arty_a7 (both
 # Arty parts run the same SoC map and image) or qemu_virt. The x86 kernel's Makefile never
 # reaches arch/riscv32, include/arch/riscv32 or boards/, and nothing here writes outside
@@ -93,17 +97,21 @@ STAGE1      = $(OUT)/surfos.stage1
 PAYLOAD     = $(OUT)/surfos.payload.bin
 PACKAGE     = $(OUT)/SURFOS.BIN
 SYMS        = $(OUT)/surfos.sym
-PACKER      = arch/riscv32/surfimg_tmp.py
 ISACHECK    = arch/riscv32/isacheck.py
+SURFIMG    ?= surfcpu/tools/surfimg.py
 
 # SURFOS.BIN records the commit it was built from (its build ID). The stamp is rewritten only when
 # the ID changes, so a new commit repacks the kernel even when no source file changed.
 BUILD_ID_STAMP = $(OUT)/build-id.txt
 $(shell mkdir -p $(OUT); [ "`cat $(BUILD_ID_STAMP) 2>/dev/null`" = "$(BUILD_ID_HEX)" ] || echo "$(BUILD_ID_HEX)" > $(BUILD_ID_STAMP))
 
-.PHONY: all clean
+.PHONY: all clean no-package
 .DELETE_ON_ERROR:
+ifneq ($(wildcard $(SURFIMG)),)
 all: $(PACKAGE)
+else
+all: $(PAYLOAD) no-package
+endif
 
 $(OBJ)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -145,11 +153,19 @@ $(ELF): $(OBJS) $(OBJ)/ksyms.o arch/riscv32/linker.ld boards/$(KBOARD)/board.ld
 $(PAYLOAD): $(ELF)
 	$(Q)$(OBJCOPY) -O binary $< $@
 
-$(PACKAGE): $(ELF) $(PAYLOAD) $(PACKER) $(BUILD_ID_STAMP)
-	$(Q)$(PYTHON) $(PACKER) pack --elf $(ELF) --payload $(PAYLOAD) --out $@ \
-	    --version 1.0.0 --build-id $(BUILD_ID_HEX) --name SurfOS
-	$(Q)$(PYTHON) $(PACKER) verify $@
+# The fw track's packer (BOOT-ABI.md section 2): it puts the ELF through tools/isa-audit.py and
+# refuses to write a package SurfBoot would refuse. The payload it packs must be the same bytes as
+# objcopy's surfos.payload.bin.
+$(PACKAGE): $(ELF) $(PAYLOAD) $(SURFIMG) $(BUILD_ID_STAMP)
+	$(Q)$(PYTHON) $(SURFIMG) pack --elf $(ELF) -o $@ --payload-out $(OUT)/surfimg.payload.bin \
+	    --name SurfOS --version 1.0.0 --build-id $(BUILD_ID_HEX)
+	$(Q)cmp -s $(OUT)/surfimg.payload.bin $(PAYLOAD) || { echo "kernel.mk: surfimg.py packed other bytes than $(PAYLOAD)"; \
+	    rm -f $@; exit 1; }
 	@echo "built $@ ($(KBOARD), -O$(O))"
+
+no-package: $(PAYLOAD)
+	@rm -f $(PACKAGE)
+	@echo "kernel.mk: SURFOS.BIN skipped: no $(SURFIMG) (the fw track's packer) in this tree; built $(ELF) and $(PAYLOAD)"
 
 # QEMU virt only: a stand-in for SurfBoot's last step (copy the payload of SURFOS.BIN, hand over
 # with a0/a1/a2 as BOOT-ABI.md says), so the tests can boot the package and not only the ELF
