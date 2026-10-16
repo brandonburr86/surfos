@@ -231,7 +231,11 @@ against the closest edges of 25 MHz and 81.25 MHz, a meaningless requirement.
 One destination period leaves a whole period of margin, since a message is read two or more
 destination edges after its toggle is first sampled. The file is scoped to the module; the
 board's Vivado script reads it with `read_xdc -ref surf_ddr_bridge rtl/soc/ddr/surf_ddr_bridge.xdc`,
-and it finds the clocks through the module's `clk` and `ui_clk` ports. Any other path between
+and it finds the clocks through the module's `clk` and `ui_clk` ports. With the board track's
+build (merged on `surfcpu` meanwhile) that is one line in
+`boards/arty_a7/designs/surfcpu_arty_a7_top.files`: `cdc surf_ddr_bridge
+rtl/soc/ddr/surf_ddr_bridge.xdc`, beside its `cdc` lines for `rtl/lib`. Its `surf_sync.xdc` also
+bounds the bridge's `calib_sync` stage, with the same value as the line above; the two agree. Any other path between
 sys_clk and ui_clk would still be timed as synchronous and fail, which is the point: there must
 be none. At the first build, check `report_cdc` (only these crossings, no "unsafe" entries) and
 `report_clock_interaction`. Not yet read by Vivado: `sim/ddr/vivado_dryrun.tcl` only checks that
