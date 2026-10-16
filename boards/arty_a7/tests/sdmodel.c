@@ -150,6 +150,7 @@ void sdmodel_set_present(struct sdmodel *m, int present) {
 void sdmodel_select(struct sdmodel *m, int on) {
     if(!on && m->selected && m->mode == M_WR_DATA) m->violations++;    /* CS released inside a block */
     m->selected = on;
+    m->resp_end = 0;                                /* a CS change separates commands as well as 8 clocks do */
 }
 
 /* the block an address names: 0x00, or the R1 error: 0x20 a misaligned SDSC address, 0x40 past the end */
@@ -261,10 +262,16 @@ static void command(struct sdmodel *m) {
 
 uint8_t sdmodel_xfer(struct sdmodel *m, uint8_t in) {
     uint8_t out = 0xFF;
+    int after_resp;
     m->bytes++;
     if(!m->present || !m->selected) return 0xFF;
+    after_resp = m->resp_end;                       /* the previous byte out was a response's last */
+    m->resp_end = 0;
     /* MISO: what is queued, then busy, then the next block of CMD18 */
-    if(m->out_pos < m->out_len) out = m->out[m->out_pos++];
+    if(m->out_pos < m->out_len) {
+        out = m->out[m->out_pos++];
+        if(m->out_pos == m->out_len && m->mode == M_CMD && !m->multi && m->busy == 0) m->resp_end = 1;
+    }
     else if(m->busy > 0) { m->busy--; out = 0x00; }
     else if(m->multi && m->mode == M_CMD && !m->no_token) {
         queue_reset(m);
@@ -276,6 +283,10 @@ uint8_t sdmodel_xfer(struct sdmodel *m, uint8_t in) {
     switch(m->mode) {
     case M_CMD:
         if(m->cmd_len == 0 && (in & 0xC0) != 0x40) break;
+        if(m->cmd_len == 0 && after_resp) {         /* N_RC: a real card needs 8 clocks after its response */
+            m->violations++;
+            m->nrc_violations++;
+        }
         if(m->cmd_len == 0 && out == 0x00 && m->busy >= 0 && m->out_pos >= m->out_len && !m->multi) {
             m->violations++;                /* a command while the card holds MISO low (busy): ignored */
             break;

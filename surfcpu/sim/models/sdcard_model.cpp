@@ -233,12 +233,14 @@ void SdCardModel::on_select() {
     out_bit_ = 7;
     cmd_nbits_ = 0;
     rx_nbits_ = 0;
+    nrc_armed_ = false;
     miso_ = !(now_ < busy_until_);
 }
 
 void SdCardModel::on_deselect() {
     cmd_nbits_ = 0;
     rx_nbits_ = 0;
+    nrc_armed_ = false;
     if (!out_.empty()) note("CS released with " + std::to_string(out_.size()) + " bytes unsent");
     out_.clear();
     out_bit_ = 7;
@@ -275,6 +277,11 @@ void SdCardModel::on_rising(bool mosi) {
     if (in_write) return;                    // MOSI carries data, not commands
     if (cmd_nbits_ == 0) {                   // hunt for a start bit
         if (!mosi) {
+            // the clock after the response's last bit reads that bit; then 8 more must pass (N_RC)
+            if (nrc_armed_ && stats.sclk_rising - nrc_from_ <= 9)
+                violation("a command started " + std::to_string(stats.sclk_rising - nrc_from_ - 2) +
+                          " clocks after a response; a card needs at least 8 (N_RC)");
+            nrc_armed_ = false;
             cmd_frame_ = 0;
             cmd_nbits_ = 1;
         }
@@ -300,6 +307,10 @@ void SdCardModel::on_falling() {
         if (out_bit_ == 0) {
             out_bit_ = 7;
             out_.pop_front();
+            if (out_.empty() && st_ == St::TRAN) {   // a response's last bit: N_RC starts
+                nrc_armed_ = true;
+                nrc_from_ = stats.sclk_rising;
+            }
         } else {
             --out_bit_;
         }
