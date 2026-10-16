@@ -884,7 +884,7 @@ The copy rate is the simulation's (LiteDRAM's model answers at once; the real me
 adds little at one 32-bit access at a time). On the board the header line will most likely read
 `DDR status 4` (present, calibration still running: the BIOS takes about 1 s, the model 2 ms),
 and the `DDR calibration` line ends when calibration does, about 1 s after the load, so the
-whole run takes about 3.8 s. If calibration fails, the DDR lines become, at
+whole run takes about 3.6 s (1 s of calibration and the simulation's 2.65 s of DDR tests). If calibration fails, the DDR lines become, at
 about 1.5 s (the same simulation with the BIOS's failure report, and the exact generated core
 with nothing on its pins, both print this):
 
