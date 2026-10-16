@@ -23,7 +23,7 @@ says how much DDR passed its check, and the heap must end inside it.
 extern char __ram_start[], __ram_end[];     /* the board's RAM, from the linker script */
 extern char __bss_start[], __bss_end[];
 
-/* the RAM the kernel may use: SurfBoot's verified DDR when it said, else the board's */
+/* the RAM the kernel may use: the DDR SurfBoot reports (calibrated and through its quick test, BOOT-ABI.md), else the board's */
 static void ram_range(u_long *start, u_long *end) {
     *start = (u_long)__ram_start;
     *end = (u_long)__ram_end;

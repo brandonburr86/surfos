@@ -333,7 +333,8 @@ def handoff_boots(args, disk, check, work):
                 ok, out = q.cmd('bootinfo', ['boot information: SurfBoot 0.0.1 (53545542)'])
                 check(ok and "command line: 'ascii surftest=1'" in out and 'handoff a0 0, a1 0x8c000000, a2 0x49465253' in out,
                       'handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot\'s block and its command line')
-                check('RAM 0x80000000 + 256 MB verified; image 0x%08x + %d bytes' % (base, mem) in out,
+                check('RAM 0x80000000 + 256 MB (calibrated, SurfBoot\'s quick test passed)' in out and
+                      'image 0x%08x + %d bytes' % (base, mem) in out,
                       'handoff: the RAM size and the image\'s memory size come from the boot information')
                 ok, out = q.cmd('ls /rd0p1', ['README.TXT'])
                 check(ok, 'handoff: the RAM disk works as before')

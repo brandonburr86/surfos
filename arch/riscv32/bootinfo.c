@@ -116,8 +116,10 @@ void bootinfo_print(void) {
                (u_long)sbi.board_id, board_id_name(sbi.board_id), (u_long)(sbi.soc_version >> 16),
                (u_long)((sbi.soc_version >> 8) & 0xFF), (u_long)(sbi.soc_version & 0xFF), (u_long)sbi.map_version,
                (u_long)sbi.sys_hz, (u_long)sbi.timebase_hz);
-        printf("  RAM 0x%08lx + %lu MB verified; image 0x%08lx + %lu bytes; boot device %s, FAT32 at LBA %lu%s%s\n",
-               (u_long)sbi.ram_base, (u_long)(sbi.ram_size >> 20), (u_long)sbi.image_base, (u_long)sbi.image_mem_size,
+        printf("  RAM 0x%08lx + %lu MB (calibrated, SurfBoot's quick test passed)\n", (u_long)sbi.ram_base,
+               (u_long)(sbi.ram_size >> 20));
+        printf("  image 0x%08lx + %lu bytes; boot device %s, FAT32 at LBA %lu%s%s\n", (u_long)sbi.image_base,
+               (u_long)sbi.image_mem_size,
                sbi.boot_device == SURF_BOOT_DEVICE_SD ? "SD" : "?", (u_long)sbi.part_lba,
                (sbi.boot_flags & SURF_BOOTFLAG_BACKUP) ? ", from BACKUP.BIN" : "",
                (sbi.boot_flags & SURF_BOOTFLAG_CMDLINE_TRUNC) ? ", command line truncated" : "");
