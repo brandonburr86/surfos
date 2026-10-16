@@ -5,22 +5,23 @@
 #   ip/litedram/generate.sh <config.yml> <out_dir> [--sim] [--name NAME]
 #
 # Runs ip/litedram/setup.sh if needed, then litedram_gen (LiteDRAM 2026.08) on the configuration,
-# writing the core to <out_dir>/gateware/NAME.v (NAME: litedram_core unless given; with a CPU
-# also the BIOS under <out_dir>/software/ and its ROM image NAME_rom.init). The log goes to
+# writing the core to <out_dir>/gateware/NAME.v (NAME: litedram_core unless given), its register
+# map (<out_dir>/csr.csv) and the headers LiteX's software would use (<out_dir>/software/include/
+# generated/: sdram_phy.h with the PHY's settings and the DRAM's init_sequence). The log goes to
 # <out_dir>/generate.log.
 #
-# --sim: the same configuration with LiteDRAM's DRAM model (SDRAMPHYModel) in place of the PHY
-# and a plain clock in place of the PLL, for simulation. The configuration is used as it is but
-# for two keys, as written to <out_dir>/config.yml: "cpu" becomes None and "uart" goes, because
-# the model needs no calibration and LiteX 2026.08 cannot build the calibration BIOS for it (its
-# liblitedram then calls the A7 PHY's delay registers, which the model lacks). Without the CPU
-# the core has a Wishbone control port (wb_ctrl_*) through which the testbench writes the
-# init_done/init_error registers that the BIOS writes on the board.
+# --sim: the same configuration, unchanged, with LiteDRAM's DRAM model (SDRAMPHYModel) in place
+# of the PHY and a plain clock in place of the PLL, for simulation. Like the board's core it has
+# no CPU: its Wishbone control port (wb_ctrl_*) carries the same DFII and init registers (the
+# model has no PHY registers), through which SurfCPU, or a testbench, initializes it.
 #
-# The output is reproducible: SOURCE_DATE_EPOCH is the pinned LiteDRAM commit's time, which GCC
-# uses for the BIOS's __DATE__ and __TIME__, Python's clock is frozen at it for LiteX's "Date"
-# lines (ip/litedram/run_gen.py), and TZ is UTC. Two runs write the same bytes; ip/litedram/
-# arty.sha256 records them (ip/litedram/lock.sh).
+# The output is reproducible: SOURCE_DATE_EPOCH is the pinned LiteDRAM commit's time, Python's
+# clock is frozen at it for LiteX's "Date" lines (ip/litedram/run_gen.py), TZ is UTC, and the
+# generator starts in a fixed environment (env -i: the same variables with the same values from
+# make or a shell), because LiteX sorts the instance tree in the Verilog header by the instances'
+# printed addresses, which move with the size of the environment Python starts in (round ddr-3
+# found make's extra variables reordering it). Two runs write the same bytes;
+# ip/litedram/arty.sha256 records them (ip/litedram/lock.sh).
 set -eu
 [ $# -ge 2 ] || { echo "usage: $0 <config.yml> <out_dir> [--sim] [--name NAME]" >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -47,14 +48,11 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
 rm -rf "$out/gateware" "$out/software"
 cd "$out"
-if [ -n "$sim" ]; then                 # the configuration for the model: no CPU, no console
-  python3 "$here/sim_config.py" "$cfg" "$out/config.yml"
-  cfg_used=$out/config.yml
-else
-  cfg_used=$cfg
-fi
+rm -f "$out/config.yml"                # a leftover of the generator before round ddr-3
 # shellcheck disable=SC2086
-if python3 "$here/run_gen.py" "$cfg_used" --name "$name" --output-dir "$out" $sim > "$out/generate.log" 2>&1; then
+if env -i PATH="$top/build/third_party/litedram/bin:/usr/local/bin:/usr/bin:/bin" PYTHONPATH="$PYTHONPATH" \
+     HOME=/tmp LANG=C.UTF-8 TZ=UTC PYTHONHASHSEED=0 SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+     python3 "$here/run_gen.py" "$cfg" --name "$name" --output-dir "$out" $sim > "$out/generate.log" 2>&1; then
   echo "generate.sh: ${cfg#"$top"/}${sim:+ (--sim)} -> ${out#"$top"/}/gateware/$name.v (SOURCE_DATE_EPOCH $SOURCE_DATE_EPOCH)"
 else
   tail -30 "$out/generate.log" >&2

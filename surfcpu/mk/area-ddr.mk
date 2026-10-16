@@ -160,7 +160,7 @@ LITEDRAM_GEN = ip/litedram/generate.sh ip/litedram/run_gen.py $(LITEDRAM_ENV)
 $(LITEDRAM_ENV): ip/litedram/setup.sh
 	$(Q)ip/litedram/setup.sh
 
-$(LITEDRAM_SIM): ip/litedram/arty.yml ip/litedram/sim_config.py $(LITEDRAM_GEN)
+$(LITEDRAM_SIM): ip/litedram/arty.yml $(LITEDRAM_GEN)
 	$(Q)ip/litedram/generate.sh ip/litedram/arty.yml $(LITEDRAM_OUT)/arty_sim --sim --name litedram_sim
 
 $(LITEDRAM_ARTY): ip/litedram/arty.yml $(LITEDRAM_GEN)
@@ -202,7 +202,7 @@ test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
 	  $(DDR_OUT)/tb_ddr_litedram --test all --seed $$s > $(DDR_OUT)/litedram.$$s.txt 2>&1; st=$$?; \
 	  grep -E '^(tb_ddr_litedram|FAIL)' $(DDR_OUT)/litedram.$$s.txt | grep -v ': PASS (' | sed 's/^/  /'; \
 	  [ $$st -eq 0 ] || { echo "test-ddr-litedram: FAIL (seed $$s)"; exit 1; }; done
-	$(Q)$(DDR_OUT)/tb_ddr_litedram --test random --seed 3 --count 3000 --sys-ns 40 --ui-ns 10 --jitter 0.3 \
+	$(Q)$(DDR_OUT)/tb_ddr_litedram --test random --seed 3 --count 3000 --sys-ns 40 --ui-ns 12.5 --jitter 0.3 \
 	  > $(DDR_OUT)/litedram.jitter.txt 2>&1 || { cat $(DDR_OUT)/litedram.jitter.txt; exit 1; }
 	@grep -E '^tb_ddr_litedram: [a-z]' $(DDR_OUT)/litedram.jitter.txt | sed 's/^/  /'
 	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"

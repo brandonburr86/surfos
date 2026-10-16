@@ -11,7 +11,9 @@
 #   --out <dir>        where everything goes (default build/openxc7/<top>-<board or part>)
 #   -D NAME[=VALUE]    a Verilog define for synthesis (repeatable)
 #   -I <dir>           an include directory for synthesis (repeatable)
-#   --seed <n>         placer seed (default 1)
+#   --seed <n>[,<n>...]  placer seed (default 1); a list: placement and routing with each seed in
+#                      turn until one routes with every clock meeting its constraint (the gate is
+#                      the same for each; every attempt is recorded in seeds.txt and the manifest)
 #   --dsp safe|full|none   multipliers: safe (default) maps them to DSP48E1 but lets Yosys pack
 #                      no registers or adders into the DSPs (scratchpad xilinx_dsp.multonly),
 #                      because its packing can delete logic (docs/OPEN-FLOW.md); full is
@@ -27,9 +29,10 @@
 #
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
 # utilization.txt, check-synthesis.txt, check-bitstream.txt, check-roundtrip.txt,
-# check-bram.txt, check-lvs.txt, check-clocks.txt, the logs and
-# manifest.txt, and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation. Exit status 0 only if every step and every check passed. A bitstream made
-# here has not been on a board: its physical behaviour is pending until it has.
+# check-bram.txt, check-lvs.txt, check-clocks.txt, the logs and manifest.txt, seeds.txt (each
+# placement attempt), and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation.
+# Exit status 0 only if every step and every check passed. A bitstream made here has not been
+# on a board: its physical behaviour is pending until it has.
 #
 # On the Mac it runs itself in the surfcpu-openxc7 image (devenv/openxc7/build-image.sh)
 # with the repository at /work; paths must lie inside the repository. OPENXC7_THREADS
@@ -72,7 +75,8 @@ done
 [ -n "$xdc" ] || [ "$synthonly" = 1 ] || die_usage "--xdc is required"
 case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none" ;; esac
 [ -n "$srcs" ] || die_usage "no Verilog sources given"
-case "$seed" in ''|*[!0-9]*) die_usage "--seed must be a number" ;; esac
+case "$seed" in ''|*[!0-9,]*|,*|*,|*,,*) die_usage "--seed must be a number or a list of numbers (2,3,4)" ;; esac
+seeds=$(echo "$seed" | tr ',' ' ')
 case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
 
 if [ -z "$part" ]; then
@@ -166,7 +170,7 @@ if [ "$dry" = 0 ]; then
   for s in $srcs; do [ -f "$s" ] || { echo "openxc7-build.sh: no such source: $s" >&2; exit 2; }; done
   rm -rf "$out/lvs"
   mkdir -p "$out/lvs"
-  rm -f "$out/times.txt" "$out/$top.bit" "$out/manifest.txt" "$out"/check-*.txt
+  rm -f "$out/times.txt" "$out/$top.bit" "$out/manifest.txt" "$out"/check-*.txt "$out/seeds.txt" "$out"/nextpnr-seed*.log
   echo "openxc7-build.sh: $top for $part ($device, chip database $chipdie) in $out"
 fi
 
@@ -225,10 +229,32 @@ if [ "$synthonly" = 1 ]; then
 fi
 
 # Placement and routing: the settings openXC7/nextpnr's CI uses for hardware-tested designs.
-run pnr nextpnr.out nextpnr-himbaechel --device "$part" --chipdb "$chipdb" --threads "$threads" \
-  --json "$out/$top.json" -o xdc="$xdc" -o fasm="$out/$top.fasm" -o placement="$out/placement.json" \
-  --router router2 -o hold-fix --placer-heap-timingweight 60 --seed "$seed" \
-  --report "$out/report.json" --detailed-timing-report -l "$out/nextpnr.log"
+# With a list of seeds, each in turn until nextpnr succeeds: it fails when routing does not
+# converge or a clock misses its constraint after routing, the same gate for every seed. Each
+# attempt's log is kept (nextpnr-seed<n>.log) and summarized in seeds.txt; nextpnr.log is the
+# last attempt's, the one that succeeded if any did.
+pnr_summary() {   # SEED STATUS: one line on that attempt, from nextpnr.log
+  awk -v s="$1" -v st="$2" '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c)
+        l = $0; sub(/^(Info|ERROR|Warning): */, "", l); sub(/^Max frequency for clock +/, "", l); gsub(/ +/, " ", l)
+        last[c] = l; if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
+      /Routing complete/ { routed = 1 }
+      END { printf "seed %s: %s, %s;", s, st == 0 ? "pass" : "fail (nextpnr exit " st ")", routed ? "routed" : "not routed"
+            for (i = 0; i < n; i++) printf " %s%s", last[order[i]], i < n - 1 ? "," : ""
+            printf "\n" }' "$out/nextpnr.log"
+}
+pnr_ok=0
+for seed in $seeds; do
+  if run pnr nextpnr.out nextpnr-himbaechel --device "$part" --chipdb "$chipdb" --threads "$threads" \
+       --json "$out/$top.json" -o xdc="$xdc" -o fasm="$out/$top.fasm" -o placement="$out/placement.json" \
+       --router router2 -o hold-fix --placer-heap-timingweight 60 --seed "$seed" \
+       --report "$out/report.json" --detailed-timing-report -l "$out/nextpnr.log"
+  then st=0; else st=$?; fi
+  [ "$dry" = 1 ] && { pnr_ok=1; break; }
+  cp "$out/nextpnr.log" "$out/nextpnr-seed$seed.log"
+  pnr_summary "$seed" "$st" | tee -a "$out/seeds.txt" | sed 's/^/openxc7-build.sh: placement and routing, /'
+  [ "$st" = 0 ] && { pnr_ok=1; break; }
+done
+[ "$pnr_ok" = 1 ] || { echo "openxc7-build.sh: no placer seed of $seeds placed and routed within its constraints" >&2; exit 1; }
 
 # Bitstream: FASM -> frames -> .bit with Project X-Ray.
 run frames fasm2frames.log env PYTHONWARNINGS=ignore::RuntimeWarning \
@@ -302,7 +328,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "source revision     ${SURFCPU_BUILD_ID:-unknown} dirty=${SURFCPU_BUILD_DIRTY:-unknown}"
   echo "build host          ${SURFCPU_HOST:-unknown}, container $(uname -m)"
   echo "date (UTC)          $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "seed                $seed"
+  echo "seed                $seed$( [ "$seed" = "$seeds" ] || echo " (of $seeds: $(grep -c . "$out/seeds.txt") tried, seeds.txt)")"
   echo "DSP mode            $dsp (safe: multipliers in DSP48E1 without Yosys's register/adder packing)"
   echo "defines            ${defs:- (none)}"
   [ -n "$expect" ] && echo "expectations        $expect sha256:$(sha "$expect")"
@@ -316,6 +342,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
   echo "lvs timeout         $lvs_timeout s"
   echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+  echo "## placement attempts"; cat "$out/seeds.txt"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
   echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"
   echo "## step times"; cat "$out/times.txt"

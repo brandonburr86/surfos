@@ -8,7 +8,7 @@ front of the LiteDRAM controller generated from the board's ip/litedram/arty.yml
 real controller, crossbar and native port with the bitstream's settings; LiteDRAM's behavioural
 DRAM model in place of the PHY, all memory zero at the start). The same bench as tb_ddr_bridge.cpp (surfbus_bench.h): every response is
 checked against a reference memory, with the SURFBUS.md rules checked on every cycle. The
-default clocks are the open flow's: sys_clk 25 MHz, LiteDRAM's clock 100 MHz.
+default clocks are the open flow's: sys_clk 25 MHz, LiteDRAM's clock 80 MHz.
 
 usage: tb_ddr_litedram [--test NAME|all] [--seed N] [--count N] [--sys-ns P] [--ui-ns P] [--jitter F]
 tests: basic lanes bounds alias random stream precal calerror sysreset all
@@ -27,7 +27,7 @@ using namespace surfddr;
 namespace {
 
 // The controller lives inside the top; the only inputs are "calibration finished" and whether
-// it failed (the BIOS's report on the board).
+// it failed (what the firmware's initialization writes on the board).
 struct LiteSide {
     bool init_go = true;
     bool init_fail = false;
@@ -167,8 +167,8 @@ bool t_precal(const Options &o) {
     return ok;
 }
 
-// The BIOS's failure report (init_error, then init_done, as liblitedram writes them when its
-// memory test fails on the board): the bridge never calibrates and refuses every access at once,
+// The failure report (init_error, then init_done, as the firmware's initialization writes them
+// when its read leveling fails on the board): the bridge never calibrates and refuses every access at once,
 // the controller's native port stays blocked, and calib_fail comes when the bridge's limit runs
 // out (CALIB_TIMEOUT_CYCLES after reset), with calib_done 0 for good.
 bool t_calerror(const Options &o) {
@@ -246,7 +246,7 @@ bool run(const std::string &t, const Options &o) {
 
 int main(int argc, char **argv) {
     Options o;
-    o.ui_ns = 10.0;                     // LiteDRAM's 100 MHz clock unless told otherwise
+    o.ui_ns = 12.5;                     // LiteDRAM's 80 MHz clock unless told otherwise
     if (!parse_options(argc, argv, o)) return 2;
     const char *all[] = {"basic", "lanes", "bounds", "alias", "random", "stream", "precal", "calerror", "sysreset"};
     bool ok = true;

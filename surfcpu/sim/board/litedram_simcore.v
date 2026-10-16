@@ -6,20 +6,21 @@ File: litedram_simcore.v Date: 10/16/26 (SurfCPU)
 A litedram_core with exactly the ports of the board's core (ip/litedram/arty.yml), for the RTL
 simulation of the DDR top (sim/board/ddr_top_sim.sh): inside is litedram_sim, the core
 generated from the same arty.yml with --sim (make litedram-gen): LiteDRAM's real controller,
-crossbar and native port with the board's settings, and LiteDRAM's behavioural DRAM model in
-place of the Artix-7 PHY, the DDR3L chip and the PLL. Simulation only.
+crossbar, native port and control and status registers (the DFII injectors, init_done,
+init_error) with the board's settings, and LiteDRAM's behavioural DRAM model in place of the
+Artix-7 PHY, the DDR3L chip and the PLL. Simulation only.
 
-What it cannot be: the PHY (ISERDESE2/OSERDESE2/IDELAYE2), the pins, the PLL, and the
-calibration BIOS. In their place:
+Like the board's core it has no CPU: the control port (wb_ctrl) goes straight to litedram_sim's,
+so the firmware in the SoC's boot ROM initializes it through surf_ddr_csr exactly as on the
+board (firmware/common/ddrinit.c): the mode registers, ZQ calibration and read leveling go to
+LiteDRAM's DFII and the DRAM model (the model has no PHY registers: its delays and bitslips are
+absent, so every delay works and leveling finds lane windows of the full 32 taps at bitslip 0),
+and init_done (or init_error) is the firmware's to write. What it cannot be: the PHY
+(ISERDESE2/OSERDESE2/IDELAYE2), the pins and the PLL. In their place:
   * the DDR3L pins stay idle (outputs at their reset levels, DQ and DQS released);
-  * the core runs on clk itself (the board's PLL makes its 100 MHz from the same oscillator),
-    pll_locked is 1, and rst (the RESET button) does not reach it: the simulation core has no
-    reset input;
-  * the BIOS's last step is done here: +dram_init_us=N microseconds after start (default 2000,
-    instead of the real BIOS's half second or so) it writes init_done = 1 over the core's
-    control port, or, with +dram_calib_fail, init_error = 1 and then init_done = 1, as
-    liblitedram's sdram_init does when its memory test fails;
-  * uart_tx stays idle: there is no BIOS to print.
+  * the core runs on its own 80 MHz clock (the board's PLL makes 80 MHz from the oscillator on
+    clk; here a free-running 12.5 ns clock, phase unrelated), pll_locked is 1, and rst (the
+    RESET button) does not reach it: the simulation core has no reset input.
 */
 `timescale 1ps/1ps
 /* verilator lint_off UNUSEDSIGNAL */
@@ -44,8 +45,6 @@ module litedram_core (
     output wire          init_error,
     output wire          pll_locked,
     input  wire          rst,
-    input  wire          uart_rx,
-    output reg           uart_tx,
     output wire          user_clk,
     input  wire   [23:0] user_port_native_0_cmd_addr,
     output wire          user_port_native_0_cmd_ready,
@@ -58,9 +57,19 @@ module litedram_core (
     output wire          user_port_native_0_wdata_ready,
     input  wire          user_port_native_0_wdata_valid,
     input  wire   [15:0] user_port_native_0_wdata_we,
-    output wire          user_rst
+    output wire          user_rst,
+    output wire          wb_ctrl_ack,
+    input  wire   [29:0] wb_ctrl_adr,
+    input  wire    [1:0] wb_ctrl_bte,
+    input  wire    [2:0] wb_ctrl_cti,
+    input  wire          wb_ctrl_cyc,
+    output wire   [31:0] wb_ctrl_dat_r,
+    input  wire   [31:0] wb_ctrl_dat_w,
+    output wire          wb_ctrl_err,
+    input  wire    [3:0] wb_ctrl_sel,
+    input  wire          wb_ctrl_stb,
+    input  wire          wb_ctrl_we
 );
-    initial uart_tx = 1'b1;
     assign {ddram_a, ddram_ba} = 17'h0;
     assign {ddram_cas_n, ddram_ras_n, ddram_we_n, ddram_cs_n} = 4'hF;
     assign {ddram_cke, ddram_odt, ddram_reset_n} = 3'b000;
@@ -71,38 +80,12 @@ module litedram_core (
     assign ddram_dqs_n = 2'bzz;
     assign pll_locked = 1'b1;
 
-    // ---------------------------------------------------------------- the BIOS's last step
-    integer init_us = 2000;
-    reg     calib_fail = 1'b0;
-    reg     go = 1'b0;
-    initial begin
-        if ($value$plusargs("dram_init_us=%d", init_us)) begin end
-        if ($test$plusargs("dram_calib_fail")) calib_fail = 1'b1;
-        #(init_us * 1000000.0);
-        go = 1'b1;
-    end
-
-    reg        wb_cyc = 1'b0, wb_adr2 = 1'b0, started = 1'b0;
-    reg  [1:0] left = 2'd0;
-    wire       wb_ack, wb_err;
-    wire [31:0] wb_dat_r;
-    always @(posedge user_clk) begin
-        if (user_rst) begin
-            wb_cyc <= 1'b0; wb_adr2 <= 1'b0; left <= 2'd0; started <= 1'b0;
-        end else if (wb_cyc) begin
-            if (wb_ack || wb_err) begin
-                wb_cyc <= 1'b0; wb_adr2 <= 1'b0; left <= left - 2'd1;
-            end
-        end else if (go && !started) begin
-            started <= 1'b1; wb_cyc <= 1'b1; wb_adr2 <= calib_fail;
-            left <= calib_fail ? 2'd2 : 2'd1;
-        end else if (left != 2'd0) begin
-            wb_cyc <= 1'b1;                     // init_done after init_error
-        end
-    end
+    // ---------------------------------------------------------------- the core's own 80 MHz
+    reg clk80 = 1'b0;
+    always #6250 clk80 = ~clk80;
 
     litedram_sim core (
-        .clk(clk), .sim_trace(1'b0),
+        .clk(clk80), .sim_trace(1'b0),
         .init_done(init_done), .init_error(init_error),
         .user_clk(user_clk), .user_rst(user_rst),
         .user_port_native_0_cmd_addr(user_port_native_0_cmd_addr),
@@ -116,8 +99,9 @@ module litedram_core (
         .user_port_native_0_wdata_ready(user_port_native_0_wdata_ready),
         .user_port_native_0_wdata_valid(user_port_native_0_wdata_valid),
         .user_port_native_0_wdata_we(user_port_native_0_wdata_we),
-        .wb_ctrl_adr({29'd0, wb_adr2}), .wb_ctrl_dat_w(32'd1), .wb_ctrl_sel(4'hF), .wb_ctrl_cyc(wb_cyc),
-        .wb_ctrl_stb(wb_cyc), .wb_ctrl_we(1'b1), .wb_ctrl_cti(3'd0), .wb_ctrl_bte(2'd0),
-        .wb_ctrl_ack(wb_ack), .wb_ctrl_dat_r(wb_dat_r), .wb_ctrl_err(wb_err));
+        .wb_ctrl_adr(wb_ctrl_adr), .wb_ctrl_dat_w(wb_ctrl_dat_w), .wb_ctrl_sel(wb_ctrl_sel),
+        .wb_ctrl_cyc(wb_ctrl_cyc), .wb_ctrl_stb(wb_ctrl_stb), .wb_ctrl_we(wb_ctrl_we),
+        .wb_ctrl_cti(wb_ctrl_cti), .wb_ctrl_bte(wb_ctrl_bte), .wb_ctrl_ack(wb_ctrl_ack),
+        .wb_ctrl_dat_r(wb_ctrl_dat_r), .wb_ctrl_err(wb_ctrl_err));
 endmodule
 /* verilator lint_on UNUSEDSIGNAL */

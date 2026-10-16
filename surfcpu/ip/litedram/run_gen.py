@@ -5,11 +5,11 @@ SurfCPU: litedram_gen with a fixed clock
 File: run_gen.py Date: 10/16/26 (SurfCPU)
 --------------------
 Runs LiteDRAM's generator (python3 -m litedram.gen, the same arguments) with Python's clock
-frozen at SOURCE_DATE_EPOCH, so the "Date" lines LiteX writes into the Verilog and the build
-scripts are the same on every run. ip/litedram/generate.sh calls it with SOURCE_DATE_EPOCH set
-to the pinned LiteDRAM commit's time, which GCC also uses for the calibration BIOS's __DATE__
-and __TIME__: the generated files are then byte-identical from run to run (ip/litedram/
-arty.sha256 holds their hashes). Nothing else in the generator is changed.
+frozen at SOURCE_DATE_EPOCH, so the "Date" lines LiteX writes into the Verilog, the register map
+and the build scripts are the same on every run. ip/litedram/generate.sh calls it with
+SOURCE_DATE_EPOCH set to the pinned LiteDRAM commit's time: the generated files are then
+byte-identical from run to run (ip/litedram/arty.sha256 holds their hashes). Nothing else in the
+generator is changed.
 
     SOURCE_DATE_EPOCH=<seconds> python3 ip/litedram/run_gen.py <config.yml> [litedram_gen options]
 """

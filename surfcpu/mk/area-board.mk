@@ -13,12 +13,13 @@
 #                          (BOARD=..., DESIGN=surfcpu_arty_a7_bramdiag or surfcpu_arty_a7_top, or
 #                          a DDR design; needs that build; not part of check)
 #   make board-ddr-sim     the DDR top in RTL: with LiteDRAM's controller and DRAM model, the BRAM
-#                          diagnostics (DDR tests included), the same with a failed calibration, and
-#                          SurfBoot; with the generated core and its BIOS but no memory, the BRAM
-#                          diagnostics to their CALIB_FAIL (BOARD=...; needs make litedram-gen; about
-#                          25 minutes; not part of check)
-#   make board-uart-expect-ddr  SurfBoot through to SurfOS's prompt with the C++ DDR model, the SoC
-#                          as the DDR designs configure it (BOARD=...; not part of check)
+#                          diagnostics (the DDR initialization through surf_ddr_csr and the DDR tests)
+#                          and SurfBoot; with the generated board core but no memory, the BRAM
+#                          diagnostics to a failed read leveling (BOARD=...; needs make litedram-gen;
+#                          not part of check)
+#   make board-uart-expect-ddr  SurfBoot through to SurfOS's prompt with the C++ DDR model and
+#                          LiteDRAM's register model, the SoC as the DDR designs configure it
+#                          (BOARD=...; not part of check)
 
 BD          = boards/arty_a7
 BSIM        = $(BUILD)/sim/board
@@ -186,16 +187,14 @@ board-uart-expect-ddr: build-rom build-kernel
 
 # ------------------------------------------------------------------- the DDR top in RTL
 # surfcpu_arty_a7_top with ARTY_HAS_DDR (sim/board/ddr_top_sim.sh): with LiteDRAM's controller and
-# DRAM model the BRAM diagnostics pass their DDR tests, fail them when calibration fails (the
-# bridge's limit, 1.5 s), and SurfBoot calibrates and stops for want of a card; with the board's
-# generated core, its BIOS and no memory, the BIOS's calibration fails and the diagnostics report
-# CALIB_FAIL.
+# DRAM model the BRAM diagnostics initialize the controller through surf_ddr_csr (every delay
+# works: the model has no PHY) and pass their DDR tests, and SurfBoot initializes it, calibrates
+# and stops for want of a card; with the board's generated core (PHY, primitive models) and no
+# memory on its pins, the diagnostics' read leveling finds no working delay and they report it.
 board-ddr-sim: build-rom
 	$(Q)sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/bramdiag.mem "BRAMDIAG: PASS" 4000
-	$(Q)DDR_SIM_TAG=-calfail sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/bramdiag.mem "BRAMDIAG: FAIL" 2500 \
-	  +dram_calib_fail
-	$(Q)sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/surfboot.mem "The LEDs" 1000
-	$(Q)DDR_SIM_CORE=board sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/bramdiag.mem "BRAMDIAG: FAIL" 2500
+	$(Q)sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/surfboot.mem "The LEDs" 1500
+	$(Q)DDR_SIM_CORE=board sh sim/board/ddr_top_sim.sh $(BOARD) build/fw/bramdiag.mem "BRAMDIAG: FAIL" 1500
 
 # ------------------------------------------------------------------- post-synthesis simulation
 # The Yosys netlist of an open-flow build (make build-fpga FLOW=openxc7 BOARD=... DESIGN=...),
