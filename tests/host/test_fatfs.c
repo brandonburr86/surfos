@@ -1880,8 +1880,9 @@ static void b21b(void) {
     struct geo g;
     struct buf *b;
     struct statfs st;
+    u8 *e;
     u32 i, fc = 7, fat_off, free0;
-    int r, r2;
+    int r, r2, there;
     fresh("B21b (S6): rm of a file whose chain loops, with failed blocks in the loop");
     mkfs(x);
     sb = mount(x);
@@ -1912,14 +1913,32 @@ static void b21b(void) {
     brelse(b);
     r = root->ops->unlink(root, "f");               /* (g's refused blocks hold its order point back: EIO) */
     v = lookup(root, "f");
+    if(verbose) printf("      rm f = %d; f is %s\n", r, v ? "there" : "not there");
     check((r == 0 && !v) || (r == -EIO && v), "B21b (S6): rm of the file whose chain loops says what it did (no crash)");
+    there = v != NULL;
     if(v) vput(v);
     x->bad_hi = 0;                                  /* the card takes writes again */
-    if(fsync_sb(sb) != 0 || sb->ops->statfs(sb, &st) != 0) die("B21b: sync");
+    if(fsync_sb(sb) != 0) die("B21b: sync");
+    r2 = there ? root->ops->unlink(root, "f") : -ENOENT;
+    check(r2 == 0 && fsync_sb(sb) == 0, "B21b: once the card works, the rm works");
+    if(root->ops->create(root, "h", VN_FILE, &v)) die("B21b: h");   /* a file of one cluster whose chain loops, */
+    if(v->ops->write(v, 0, pat, 512) != 512 || fsync_sb(sb)) die("B21b: h write");   /* no failed block this time */
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "H          ");
+    if(!e) die("B21b: h on the disk");
+    vput(v);
+    fc = g16(e + 26);
+    fat_off = fc * 2;
+    if(!(b = bread(&x->bd, g.fat_lba + fat_off / 512))) die("B21b: FAT");
+    b->data[fat_off % 512] = fc & 0xFF;
+    b->data[fat_off % 512 + 1] = fc >> 8;
+    bdirty_order(b, BORDER_TABLE);
+    brelse(b);
+    if(fsync_sb(sb) != 0 || sb->ops->statfs(sb, &st) != 0) die("B21b: sync 2");
     free0 = st.free_units;
-    r2 = root->ops->unlink(root, "f");
-    check(r2 == 0 && sb->ops->statfs(sb, &st) == 0 && st.free_units == free0 + 1 && fsync_sb(sb) == 0,
-          "B21b: then the rm works, and counts the looping cluster free once");
+    r2 = root->ops->unlink(root, "h");
+    if(sb->ops->statfs(sb, &st) != 0) die("B21b: statfs");
+    if(verbose) printf("      rm of a file whose one cluster loops = %d; free clusters %u before, %u after\n", r2, free0, st.free_units);
+    check(r2 == 0 && st.free_units == free0 + 1 && fsync_sb(sb) == 0, "B21b: the rm of a looping chain counts its cluster free once");
 }
 
 /**** B22 (S5): a card that fails in the middle of a multi-block write (as sdcard.c's sd_write does: CMD25, the
