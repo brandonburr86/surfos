@@ -50,8 +50,9 @@ commands and transport (transport and command sources are unchanged since those 
 was not repeated for this revision. Evidence is under
 `build/undertow-review-fixes/` (generated, not tracked).
 
-Still outstanding: integration into `ai-dev` (the owner's decision) and a physical laptop
-boot. The release image is built with `devenv/build-usb.sh` from the final commit.
+Merged into `ai-dev` on 2026-10-15 at the owner's word, together with the desktop and the
+native touchpad. Still outstanding: a physical laptop boot. The release image is built
+with `devenv/build-usb.sh` from the final commit.
 
 ## Completion and next steps (2026-10-12, America/Chicago)
 

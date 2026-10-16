@@ -122,7 +122,7 @@ and `touchpad-n2-O2`. Source and build outputs remain on disk.
 
 ## Status (2026-10-15)
 
-Commits on `codex/surfos-desktop` (not pushed, not merged into `ai-dev`):
+Commits on `codex/surfos-desktop` (not pushed; merged into `ai-dev` on 2026-10-15):
 `b88d8b7` (the read-only ACPI export, verified on its own) and the touchpad
 commit that carries this file.
 
@@ -152,6 +152,9 @@ Deploying over Wi-Fi: devloop's 180 s wait after the reboot ran out before the
 laptop was back on the network (autonet allows 90 s to join); a telnet check
 once the owner had joined confirmed the build id.
 
+Merged into `ai-dev` on 2026-10-15 at the owner's word, followed by Undertow
+(`codex/undertow`). The merged tree passed unittest, and at O0 and O2 smoke 311,
+files 51, web 59, USB/UEFI 315 and TCP 24, all on the first run.
+
 Next candidates: the Precision Touchpad collection (report 3) for two-finger
-scrolling and tap-to-click; a steady Files "fragmented arrow" check; merging
-into `ai-dev` when the owner says.
+scrolling and tap-to-click; a steady Files "fragmented arrow" check.
