@@ -672,7 +672,10 @@ flash part depends on its revision (RM §5.2: Micron N25Q128A13ESF40, Spansion
 S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested with a fake openFPGALoader that
 answers like the real one (in the checks above), and the four SoC bitstreams of section 8 pass
 `make program-volatile BOARD=... DESIGN=...` against it, each refused on the other board
-(evidence `openxc7-soc.txt`). Nothing has been programmed.
+(evidence `openxc7-soc.txt`). Nothing has been programmed. The release (milestone 9) keeps a
+build record next to each bitstream, so `program-flash` takes its bitstreams as they are; the
+flash image, the flash's address map, the configuration time and the recovery procedure are in
+[RELEASE.md](RELEASE.md) sections 6 and 7.
 
 ## 10. Budgets
 
