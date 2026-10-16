@@ -249,7 +249,7 @@ are for a reader to judge. Hold violations are fixed after routing (`-o hold-fix
   change was checked against the SoC build with a planted CLKINV feature, which still fails.
 * The DDR designs (round ddr-2) showed three more checks misreading correct results; round
   ddr-3 fixed each where it went wrong, with a self-test on `make check` and a regression
-  through the real flow (`tools/openxc7-checks-test.sh`, which builds three small probes from
+  through the real flow (`tools/openxc7-checks-test.sh`, which builds four small probes from
   `devenv/openxc7/test/` and one CPU; [evidence/flow/checkers.txt](evidence/flow/checkers.txt)):
   * **LVS and block RAM write enables.** `fasm2netlist`'s extractor (`src/bram_ports.hpp`)
     reads a RAMB18E1's byte write enables one to one from the site's first pins (WEA[1:0] from
@@ -268,11 +268,13 @@ are for a reader to judge. Hold violations are fixed after routing (`-o hold-fix
     and 98 points, no difference); the extractor's own reading still fails, a pin pair that
     disagrees fails, and a byte lane really enabled against the netlist's 0 still fails the
     proof. The proper fix is in fasm2netlist (the tile model's port table); this step does
-    its work until the image carries it. Read from nextpnr's packer, not shown by a build:
-    for an 18-bit write on port B in true dual port mode nextpnr routes the two byte enables
-    to WEBWE0..3 as we0, we1, we0, we1, where Vivado's pairing is we0, we0, we1, we1;
-    `bramwe.py` reports such a design as different, which it would then be. No SurfCPU design
-    has one.
+    its work until the image carries it. One shape nextpnr does get wrong: an
+    18-bit write on port B in true dual port mode. A probe (`devenv/openxc7/test/bram_we_tdpb.v`,
+    the checks' case 4) shows nextpnr routing its two byte enables to WEBWE0..3 as we0, we1,
+    we0, we1, where the silicon pairs pins 0-1 and 2-3 (Vivado: we0, we0, we1, we1); LVS,
+    through `bramwe.py`, names both pin pairs and fails the build, so such a design gets no
+    bitstream. No SurfCPU design has one (the SoC's byte-written memories are RAMB36E1, whose
+    byte writes passed on the board in m3).
   * **`cmtcheck.py` and Yosys's short bit strings.** Yosys's JSON writes a constant parameter
     as its bits at its own width (LiteDRAM's `5'd16` is "10000"), a real or a string as text
     (a space appended to a string that looks like bits). The check read bit strings of fewer
@@ -393,7 +395,7 @@ USB-UART at 115200 8N1:
 | `devenv/openxc7/bramwe.py` | the RAMB18E1 write enables of the LVS proof, with `--self-test` |
 | `devenv/openxc7/report.py` | `timing.txt` and `utilization.txt` |
 | `devenv/openxc7/demo/` | flow_demo and flow_features (RTL, testbenches, XDC) |
-| `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
+| `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `bram_we_tdpb.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
 | `tools/openxc7-build.sh`, `openxc7-demo.sh`, `openxc7-checks-test.sh` | the build entry, the proof run, the checkers' regression (round ddr-3) |
 | `tools/openxc7-fetch.sh`, `openxc7-xdc.sh`, `openxc7-flow-test.sh` | Digilent's XDC (pinned), its conversion, the script tests |
 | `mk/area-flow.mk` | `lint-flow`, `test-flow`, `flow-xdc-check` |

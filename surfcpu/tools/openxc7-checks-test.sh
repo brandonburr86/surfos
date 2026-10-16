@@ -14,7 +14,11 @@
 #      (LiteDRAM's PLL, its parameters as the generator writes them) through the whole flow,
 #      whose clock check must pass with LiteDRAM's dividers read right (16, 8, 20, 5) and its
 #      90-degree output's phase checked; then two wrong phases written into its FASM must fail
-#      the check (devenv/openxc7/test/cmt_phase_inner.sh).
+#      the check (devenv/openxc7/test/cmt_phase_inner.sh);
+#   4. nextpnr and an 18-bit port B in true dual port mode: devenv/openxc7/test/bram_we_tdpb.v,
+#      whose two byte enables nextpnr 1.0.0 routes to the wrong site pins; LVS must refuse it, with
+#      bramwe.py naming both pin pairs. (Should a later nextpnr pair them as Vivado does, LVS
+#      passes and this case fails: then the case, the probe and OPEN-FLOW.md 6.5 change.)
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -72,6 +76,14 @@ ok "a PHASE_MUX an eighth of a VCO cycle late fails the check" \
    "grep -q '^phase-mux: cmtcheck exit 1; .*MISMATCH PHASE_MUX 3 (XAPP888: 2)' '$out/cmt-inner.txt'"
 ok "a DELAY_TIME a whole cycle early fails the check" \
    "grep -q '^delay-time: cmtcheck exit 1; .*MISMATCH DELAY_TIME 0 (XAPP888: 1)' '$out/cmt-inner.txt'"
+echo
+echo "== 4. nextpnr and the byte enables of an 18-bit port B in true dual port mode"
+if tools/openxc7-build.sh --top bram_we_tdpb --board arty_a7_100t --xdc devenv/openxc7/test/bram_we.xdc \
+       --out "$out/bram_we_tdpb" devenv/openxc7/test/bram_we_tdpb.v > "$out/bram_we_tdpb.log" 2>&1; then st=0; else st=$?; fi
+echo "bram_we_tdpb: openxc7-build.sh exit $st; $(grep 'checks:' "$out/bram_we_tdpb.log" | sed 's/^openxc7-build.sh: //')"
+grep -E 'proved,|DIFFER|^bramwe:' "$out/bram_we_tdpb/check-lvs.txt" | sed 's/^/  /'
+ok "nextpnr's port-B pairing (we0, we1, we0, we1 on WEBWE0..3) is refused: LVS fails and bramwe names both pin pairs" \
+   "[ $st != 0 ] && grep -q '^check LVS           FAIL' '$out/bram_we_tdpb/manifest.txt' && grep -q '^bramwe: 1 block RAM(s), 2 enable(s) re-read, 2 difference(s)$' '$out/bram_we_tdpb/check-lvs.txt'"
 } > "$out/report.txt" 2>&1 || true
 grep -q '^FAIL' "$out/report.txt" && rc=1
 {

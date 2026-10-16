@@ -779,7 +779,9 @@ Only the board can show:
   kernel must leave the `ddrc` registers alone (BOOT-ABI.md section 6).
 * **flow**: the seed lists, the three checker fixes and the clock check's phases of this round
   are in the flow's files (OPEN-FLOW.md 3 and 6.5); open is fasm2netlist's own RAMB18E1 port
-  table (bramwe.py does its work until then) and nextpnr's pairing of an 18-bit port B's byte enables in true dual port mode (OPEN-FLOW.md 6.5).
+  table (bramwe.py does its work until then) and nextpnr's wrong pairing of an 18-bit port B's
+  byte enables in true dual port mode, which LVS refuses (OPEN-FLOW.md 6.5; no SurfCPU design has
+  one).
 * **release**: the DDR designs now build, and a fresh checkout's `make litedram-gen` matches its
   lock (10.1); `release/release.txt`'s and RELEASE.md's notes that the DDR designs do not build
   and that `run_gen.py` should drop the tree comment are the release track's to update.
