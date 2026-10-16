@@ -1,0 +1,6 @@
+# surfcpu_core: Yosys synth_xilinx resource estimate
+# commit dc0da7a49b2f, dirty=1; 2026-10-16T03:02Z; container aarch64
+# command: sh -c yosys -V; make --no-print-directory synth-cpu
+
+Yosys 0.52 (git sha1 fee39a3284c90249e1d9684cf6944ffbbcbb8f90)
+synth-cpu: surfcpu_core (Yosys synth_xilinx -family xc7, estimate): 3094 LUTs logic + 92 LUTs as distributed RAM, 937 FFs, 151 CARRY4, 646 MUXF7 + 278 MUXF8, 4 DSP48E1, 0 BRAM36
