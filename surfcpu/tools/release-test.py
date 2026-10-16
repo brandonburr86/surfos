@@ -207,6 +207,13 @@ class TestCompare(unittest.TestCase):
         sums(self.new)
         rows = {r[0]: r for r in release.compare(self.ref, self.new, rebuilt=set())[0]}
         self.assertEqual(rows["fpga/arty_a7_100t/top/top.bit"][1], "not rebuilt")
+        rows = {r[0]: r for r in release.compare(self.ref, self.new)[0]}
+        self.assertEqual(rows["fpga/arty_a7_100t/top/top.bit"][1], "MISSING")
+        for reason, status in (("not built: SKIP_DDR=1", "not rebuilt"), ("did not build: timing", "MISSING")):
+            (self.new / "MANIFEST").write_text(f'commit = "x"\n\n[[design]]\nname = "top"\nboard = "arty_a7_100t"\n'
+                                               f'status = "missing"\nreason = "{reason}"\n')
+            rows = {r[0]: r for r in release.compare(self.ref, self.new)[0]}
+            self.assertEqual(rows["fpga/arty_a7_100t/top/top.bit"][1], status, reason)
 
 
 # ------------------------------------------------------------------------------- make, with stand-ins

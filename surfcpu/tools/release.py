@@ -575,12 +575,17 @@ def compare(ref: Path, new: Path, rebuilt: set | None = None) -> tuple[list, lis
     ref_sums = read_sums(ref / "SHA256SUMS" if ref.is_dir() else ref)
     ref_dir = ref if ref.is_dir() else ref.parent
     new_sums = read_sums(new / "SHA256SUMS") if (new / "SHA256SUMS").is_file() else {}
+    skipped = set()                         # designs the new release did not attempt (DESIGNS, BOARDS, SKIP_DDR)
+    if rebuilt is None and (new / "MANIFEST").is_file():
+        skipped = {(d.get("board"), d.get("name")) for d in parse_toml((new / "MANIFEST").read_text()).get("design", [])
+                   if d.get("status") == "missing" and str(d.get("reason", "")).startswith("not built:")}
     rows = []
     for rel in sorted(ref_sums):
         want = ref_sums[rel]
         sc = scope_of(rel)
-        if rebuilt is not None and sc is not None and sc not in rebuilt:
-            rows.append((rel, "not rebuilt", "its design was not rebuilt (--designs/--boards)"))
+        if sc is not None and ((rebuilt is not None and sc not in rebuilt) or sc in skipped):
+            rows.append((rel, "not rebuilt", "its design was not attempted in the new build (DESIGNS, BOARDS or "
+                                             "SKIP_DDR)"))
             continue
         f = new / rel
         if not f.is_file():
