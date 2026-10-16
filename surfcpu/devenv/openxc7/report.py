@@ -70,15 +70,35 @@ def main() -> int:
     t += [""] + [ln.replace("Info: ", "") for ln in holdfix]
     warns = [ln for ln in log if ln.startswith("Warning:")]
     t += ["", f"nextpnr warnings: {len(warns)}"] + [f"  {w}" for w in warns]
-    # the last critical-path report in the log is the post-routing one
-    starts = [i for i, ln in enumerate(log) if "Critical path report for clock" in ln]
-    if starts:
-        i = starts[-1]
-        block = []
-        while i < len(log) and not log[i].startswith("Info: Max frequency"):
-            block.append(log[i].replace("Info: ", "", 1))
+    # Cross-domain paths: nextpnr reports their longest delay but checks nothing (its XDC reader
+    # has no set_max_delay or set_clock_groups), so list them for a reader to judge against
+    # the CDC design (rtl/lib's synchronizers).
+    cross = {}
+    for ln in log:
+        if ln.startswith("Info: Max delay ") and "->" in ln:
+            pair, delay = ln[len("Info: Max delay "):].rsplit(":", 1)
+            cross[pair.strip()] = delay.strip()
+    if cross:
+        t += ["", "Cross-domain paths (reported by nextpnr, not checked against any constraint):"]
+        t += [f"  {pair}: {delay}" for pair, delay in sorted(cross.items())]
+    # The last report of each kind in the log is the one after routing.
+    blocks = {}
+    i = 0
+    while i < len(log):
+        if "Critical path report for" in log[i]:
+            key = log[i].split("Critical path report for", 1)[1].strip()
+            block = [log[i].replace("Info: ", "", 1)]
             i += 1
-        t += ["", "Critical path after routing:"] + block
+            while i < len(log) and log[i].startswith("Info: ") and "Critical path report for" not in log[i] \
+                    and not log[i].startswith("Info: Max frequency") and not log[i].startswith("Info: Max delay") \
+                    and not log[i].startswith("Info: Slack histogram"):
+                block.append(log[i].replace("Info: ", "", 1))
+                i += 1
+            blocks[key] = block
+            continue
+        i += 1
+    for key in sorted(blocks):
+        t += [""] + blocks[key]
     with open(args.timing, "w") as f:
         f.write("\n".join(t) + "\n")
 
