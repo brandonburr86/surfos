@@ -1,0 +1,42 @@
+# Synthesis estimates, 2026-10-15: Yosys 0.52 synth_xilinx -family xc7 (open tool, NOT Vivado; no timing)
+
+## surf_ddr_bridge (default parameters): make synth-ddr (-noiopad -noclkbuf -flatten)
+  Number of cells:                683
+  CARRY4                         11
+  FDRE                          409
+  LUT2                           43
+  LUT3                          109
+  LUT4                            3
+  LUT5                           40
+  LUT6                           52
+  total LUTs: 247; no vendor primitive in the RTL, no block RAM
+
+## LiteDRAM Arty core with its VexRiscv: ip/litedram/estimate.sh (user port as top-level pins, so IBUF/OBUF are artifacts)
+  Number of cells:              10577
+  BUFG                            5
+  CARRY4                        256
+  DSP48E1                         4
+  FDCE                            8
+  FDPE                            4
+  FDRE                         3389
+  FDSE                          233
+  IDELAYCTRL                      1
+  IDELAYE2                       16
+  IOBUF                          16
+  IOBUFDS                         2
+  ISERDESE2                      16
+  LUT1                           36
+  LUT2                         1199
+  LUT3                         1480
+  LUT4                          447
+  LUT5                          739
+  LUT6                         1705
+  OBUFDS                          1
+  OSERDESE2                      45
+  PLLE2_ADV                       1
+  RAM32M                         56
+  RAMB18E1                       21
+  RAMB36E1                        3
+estimate (yosys synth_xilinx, litedram_core + VexRiscv): LUTs 5606, flip-flops 3634, DSP48E1 4, RAM32M 56, RAMB18E1 21, RAMB36E1 3
+
+Device sizes for comparison: XC7A35T 20,800 LUTs / 41,600 FFs / 50 RAMB36; XC7A100T 63,400 LUTs / 126,800 FFs / 135 RAMB36.
