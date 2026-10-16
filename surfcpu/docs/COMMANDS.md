@@ -12,16 +12,16 @@ full commands.
 | `make image` | Mac | builds the toolchain container from `devenv/Dockerfile` | works |
 | `make doctor` | Mac | probes the Mac, Docker and the container, the board's USB (FTDI, JTAG IDCODE), the serial port, mounted FAT volumes and the build-host settings; changes nothing | works |
 | `make gen` / `make check-generated` | container | regenerate / verify the files made from `spec/soc.toml` | works |
-| `make lint` | container | Verilator `-Wall` lint of every RTL module | grows with the tracks |
+| `make lint` | container | Verilator `-Wall` lint of every RTL module | works for the merged areas (lib, io, board); grows with the tracks |
 | `make test-cpu` | container | CPU directed tests, random and reference-model (Spike) comparisons, architecture tests | track cpu, verif |
 | `make test-soc` | container | building blocks, interconnect, peripherals, the SoC and the whole-system simulation | tracks soc, io, board, ddr |
-| `make test-fw` | container | SurfBoot and the card tools on the host, against card images | track fw |
+| `make test-fw` | container | SurfBoot and the card tools on the host, against card images (and through the io track's SD card model), plus the ROM in a firmware emulator | works (host and emulator; not yet on the RTL SoC) |
 | `make test-os` | container | the riscv32 SurfOS kernel under QEMU `virt` | track os |
-| `make build-rom` | container | `build/fw/surfboot.{elf,bin,mem}` (and the diagnostics) | track fw |
+| `make build-rom` | container | `build/fw/surfboot.{elf,bin,mem}`, the BRAM diagnostics `bramdiag.mem` and `DDRDIAG.BIN` | works |
 | `make build-kernel` | container | `../build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` | track os |
 | `make build-fpga` | Mac → build host | the bitstream, reports and manifest of `DESIGN` in `build/fpga/BOARD/DESIGN/` (docs/BUILD-HOST.md, BOARD.md section 8); `DRY_RUN=1` stages it and prints every command without contacting the host | blocked: no build host |
 | `tools/program.sh detect BOARD` | Mac | shows the IDCODE on the JTAG chain and whether it is `BOARD`'s FPGA; loads nothing | pending: board, openFPGALoader |
 | `make program-volatile` | Mac | checks for one device on the JTAG chain with `BOARD`'s IDCODE, a bitstream built for that FPGA (`DESIGN`'s last build, or `BIT=`) whose manifest passed, then loads it into FPGA RAM over USB/JTAG (lost at power-off) | pending: board, openFPGALoader |
 | `make program-flash` | Mac | writes the configuration flash (milestone 9): refused unless `SURFCPU_FLASH_CONFIRM=write-flash-BOARD` is given (or the board name typed at the prompt) and the bitstream's manifest passed | later |
-| `make deploy-sd MOUNT=/Volumes/X` | Mac | installs `SURFOS.BIN` and system files on a mounted FAT32 card, verifies them, keeps user files; never formats | track fw |
+| `make deploy-sd MOUNT=/Volumes/X` | Mac | installs `SURFOS.BIN` and system files on a mounted FAT32 card, verifies them, keeps user files; never formats; `DEPLOY_ARGS=--dry-run` shows what it would do | written and tested against a stand-in volume; never yet run on a real card |
 | `make check` | container | every automated pre-release check | grows with the tracks |
