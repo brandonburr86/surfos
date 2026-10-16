@@ -79,6 +79,51 @@ for args in "--board arty_s7_50" "--part xc7a200tfbg484-1" "" "--board arty_a7_3
 done
 if sh tools/openxc7-build.sh --dry-run --xdc x.xdc --board arty_a7_35t a.v > /dev/null 2>&1
 then bad "build: accepted a missing --top"; else ok "build: refuses a missing --top"; fi
+o=$(dry --board arty_a7_35t --lvs-timeout 7200)
+expect_in "build: --lvs-timeout bounds the LVS proof" "$o" "timeout 7200 lvs_equiv"
+if dry --board arty_a7_35t --lvs-timeout 2h > /dev/null 2>&1
+then bad "build: accepted --lvs-timeout 2h"; else ok "build: refuses a --lvs-timeout that is not seconds"; fi
+
+# ---------------------------------------------------------------- bramcheck.py: a RAMB36E1 as two RAMB18 halves
+# fasm2netlist decodes a RAMB36E1 as the two RAMB18 of its tile, bits interleaved (even bits
+# in the lower Y). A made-up block: woven back it must match; halves swapped or one bit
+# changed must not.
+cat > "$t/bram_fixture.py" <<'PYEOF'
+import json, random, sys
+out, mode = sys.argv[1], sys.argv[2]
+rnd = random.Random(7)
+data = rnd.getrandbits(128 * 256)
+par = rnd.getrandbits(16 * 256)
+cell = {"type": "RAMB36E1", "parameters": {}, "connections": {}}
+for i in range(128):
+    cell["parameters"][f"INIT_{i:02X}"] = format((data >> (256 * i)) & ((1 << 256) - 1), "0256b")
+for i in range(16):
+    cell["parameters"][f"INITP_{i:02X}"] = format((par >> (256 * i)) & ((1 << 256) - 1), "0256b")
+json.dump({"modules": {"t": {"cells": {"u_rom.0.0": cell}}}}, open(out + ".json", "w"))
+def half(x, nbits, h):
+    v = 0
+    for k in range(nbits // 2):
+        v |= ((x >> (2 * k + h)) & 1) << k
+    return v
+halves = [(half(data, 128 * 256, h), half(par, 16 * 256, h)) for h in (0, 1)]
+if mode == "swapped":
+    halves.reverse()
+if mode == "flipped":
+    halves[1] = (halves[1][0] ^ (1 << 1000), halves[1][1])
+with open(out + ".v", "w") as f:
+    for y, (d, p) in zip((40, 41), halves):
+        params = ", ".join([f".INIT_{i:02X}(256'h{(d >> (256 * i)) & ((1 << 256) - 1):064x})" for i in range(64)]
+                           + [f".INITP_{i:02X}(256'h{(p >> (256 * i)) & ((1 << 256) - 1):064x})" for i in range(8)])
+        f.write(f"  RAMB18E1 #({params}) \\bram18_BRAM_L_X38Y100_RAMB18_X1Y{y} (.CLKARDCLK(c));\n")
+PYEOF
+for mode in right swapped flipped; do
+  python3 -I "$t/bram_fixture.py" "$t/bram_$mode" "$mode"
+  if python3 -I devenv/openxc7/bramcheck.py --netlist "$t/bram_$mode.json" --top t --extracted "$t/bram_$mode.v" > "$t/bram_$mode.txt"
+  then got=PASS; else got=FAIL; fi
+  want=FAIL; [ "$mode" = right ] && want=PASS
+  if [ "$got" = "$want" ]; then ok "bramcheck: a RAMB36E1 decoded as two halves, $mode: $got as expected"
+  else bad "bramcheck: $mode: $got, expected $want"; cat "$t/bram_$mode.txt"; fi
+done
 
 # ---------------------------------------------------------------- synthcheck.py on the reproducer
 r=devenv/openxc7/test/dsp_counter.v
@@ -100,6 +145,17 @@ for mode in full safe none; do
   if [ "$got" = "$want" ]; then ok "synthcheck: Yosys $v, DSP mode $mode: $got as expected"
   else bad "synthcheck: Yosys $v, DSP mode $mode: $got, expected $want"; cat "$t/$mode.txt"; fi
 done
+fi
+
+# ---------------------------------------------------------------- synthcheck.py: registers that drive output ports
+if command -v yosys > /dev/null 2>&1; then
+  r=devenv/openxc7/test/port_register.v
+  yosys -q -p "read_verilog $r; hierarchy -top port_register; proc; flatten; opt -full; wreduce; opt_clean; memory -nomap; opt_clean; write_json $t/pr_pre.json" > "$t/pr_pre.log" 2>&1
+  yosys -q -p "read_verilog $r; synth_xilinx -top port_register -flatten -abc9 -arch xc7; write_json $t/pr_post.json" > "$t/pr_post.log" 2>&1
+  if python3 -I devenv/openxc7/synthcheck.py --top port_register --pre "$t/pr_pre.json" --post "$t/pr_post.json" > "$t/pr.txt" &&
+     grep -Eq '^u_sub +32 +32 ' "$t/pr.txt"
+  then ok "synthcheck: an instance's register that drives an output port counts in its instance, RTL and netlist"
+  else bad "synthcheck: the output register's flip-flops"; cat "$t/pr.txt"; fi
 fi
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }
