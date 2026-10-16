@@ -14,7 +14,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the storage review's findings, being fixed in fs-fix-2) |
-| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done; pre-release only |
+| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done, pre-release only (open: the review's findings, being fixed in rel-2) |
 
 ## Log
 
@@ -383,6 +383,31 @@ physical results are separate columns, so nothing claims more than happened.
   * starting from it with JP1 on, and the real start-up time;
   * the recovery procedure;
   * m9's ten cold boots and one-hour soak, once a DDR boot design exists.
-* `make check` passes with the round merged (a05b879, 25 minutes). An independent review of
-  the round is running.
+* `make check` passes with the round merged (a05b879, 25 minutes).
+* The independent review found two major defects, both reproduced:
+  * **M1.** A release checks each artifact when it is built, but copies them about 50 minutes
+    later from shared build directories without checking again. A commit or a `make check` in
+    the same worktree during `make release` produced a release named for one commit that
+    shipped another commit's kernel and mismatched ROM hashes, and `release-check` passed it.
+    Fresh-checkout releases are immune, because they build in their own clone.
+  * **M2.** `release-verify` does not check the DESIGNS and BOARDS it is given: a typo rebuilt
+    nothing and reported PASS.
+* It also found smaller defects:
+  * `release-check` and `compare` pass a damaged release: empty sums, unlisted or truncated
+    files, a renamed pre-release.
+  * The builds inherit the whole environment, so `DRY_RUN=1` shipped an earlier attempt's
+    bitstreams.
+  * The clean-tree check follows the user's git configuration.
+  * Two command-line options delete the directory they are given.
+  * `mk/host.mk` does not quote `BIT`, so `program-volatile` or `program-flash` with an absolute
+    path under this checkout (it has spaces) is refused. RELEASE.md's recovery needs that path.
+  * Small `bitfile.py` and documentation issues.
+* What held:
+  * `program.sh`'s flash path: the exact arguments, the confirmation, every refusal.
+  * The flash image's bytes, against openFPGALoader 1.1.1's parser.
+  * The header stamp's place before the checks.
+  * A reduced real release and `release-verify`: 11 of 11 artifacts match.
+  * Checkout paths with spaces and quotes, the PRERELEASE logic, and the recovery procedure.
+  * The MultiBoot reasoning and the boot time.
+* Being fixed in rel-2, with the reviewer's scenarios turned into regression tests.
 
