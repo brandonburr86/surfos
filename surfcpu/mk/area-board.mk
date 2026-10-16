@@ -20,7 +20,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
               -Irtl/generated -I$(BD)/rtl
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
-        board-baseline-rt board-baseline
+        board-baseline-rt board-baseline board-digilent
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -91,8 +91,12 @@ board-baseline: $(BSIM)/tb_baseline.vvp $(BSIM)/vl_baseline/tb_baseline
 	@echo "board-baseline: PASS (Verilator with RESET, Icarus short run)"
 
 # ------------------------------------------------------------------------------------ checks
-check-board: board-clockplan
+check-board: board-clockplan board-digilent
 	@echo "check-board: PASS"
 
 board-clockplan:
 	$(Q)$(PYTHON) ip/clocking/clockplan.py check
+
+# Digilent's master XDC files, manuals and schematics are unchanged since they were fetched
+board-digilent:
+	$(Q)$(BD)/digilent/fetch.sh verify
