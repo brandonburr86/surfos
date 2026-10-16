@@ -677,21 +677,26 @@ a regression through the real flow, and one gap is closed:
 pins, Verilator; docs/evidence/ddr/ddr-top-sim.txt) runs the real board top with `ARTY_HAS_DDR`,
 the real SoC, bridge, adapter and register bridge, the board's clocking and resets:
 
-* with LiteDRAM's controller and DRAM model (`sim/board/litedram_simcore.v` around the
-  simulation core of 10.2, on its own 80 MHz, its control port straight through): **the BRAM
-  diagnostics initialize the controller through `surf_ddr_csr`** (the PHY reset, the mode
-  registers and ZQ calibration through LiteDRAM's DFII; no leveling against the model, 10.2)
-  **and pass all their DDR tests** (data and address lines, byte lanes, boundaries and aliases,
-  1 MiB of patterns, 4 x 256 KiB copies at 720 KiB/s, code run from DDR: `BRAMDIAG: PASS (570
-  checks)` at 2.90 s); SurfBoot initializes it, calibrates, passes its quick DDR test and stops
-  for want of a card (`ddr: initialized by SurfBoot, no read leveling (the PHY has no delay registers)`, `ddr: calibrated after 1 ms`, then `SurfBoot stopped: no card (NO_CARD)` at 59 ms of simulated time);
-* with the generated board core itself (its PHY, its registers; `sim/board/prims` models of
-  its primitives) and nothing on the DDR3L pins: the diagnostics' initialization reaches the
-  real PHY's registers and strobes, scans every bitslip and delay of both lanes, finds no window
-  (nothing answers), writes `init_error` and reports it (all 16 scan lines 0, `lane N: bitslip 0, no working delay`, then `BRAMDIAG: FAIL (3 of 206 checks failed)` at 0.42 s of simulated time). This is the failure path
-  the board would print with no working memory.
+* with LiteDRAM's controller and DRAM model (`sim/board/litedram_simcore.v` around the simulation
+  core of 10.2, on its own 80 MHz, its control port straight through): **the BRAM diagnostics
+  initialize the controller through `surf_ddr_csr`** (the PHY reset, the mode registers and ZQ
+  calibration through LiteDRAM's DFII; no leveling against the model, 10.2) **and pass all their
+  DDR tests** (data and address lines, byte lanes, boundaries and aliases, 1 MiB of patterns, 4 x
+  256 KiB copies at 720 KiB/s, code run from DDR: `BRAMDIAG: PASS (570 checks)` at 2.90 s);
+  SurfBoot initializes it, calibrates, passes its quick DDR test and stops for want of a card
+  (`ddr: initialized by SurfBoot, no read leveling (the PHY has no delay registers)`, `ddr:
+  calibrated after 1 ms`, then `SurfBoot stopped: no card (NO_CARD)` at 59 ms of simulated time);
+* with the generated board core itself (its PHY, its registers; `sim/board/prims` models of its
+  primitives) and nothing on the DDR3L pins: the diagnostics' initialization reaches the real
+  PHY's registers and strobes, scans every bitslip and delay of both lanes, finds no window
+  (nothing answers), writes `init_error` and reports it (all 16 scan lines 0, `lane N: bitslip 0,
+  no working delay`, then `BRAMDIAG: FAIL (3 of 206 checks failed)` at 0.42 s of simulated time).
+  This is the failure path the board would print with no working memory.
 * `make board-netlist-sim DESIGN=<a DDR design>` runs a DDR build's synthesized netlist the same
-  way (the 100T diagnostics build's netlist at 92a2b510, the one LVS proves its bitstream equal to, with nothing on its memory pins, printed the same 2,166 characters at the same microseconds as the RTL run with the board core: the whole failed leveling included; 26 minutes in Verilator).
+  way (the 100T diagnostics build's netlist at 92a2b510, the one LVS proves its bitstream equal
+  to, with nothing on its memory pins, printed the same 2,166 characters at the same microseconds
+  as the RTL run with the board core and the ROM of the same commit: the whole failed leveling
+  included; 26 minutes in Verilator).
 * `make board-uart-expect-ddr` boots SurfOS through SurfBoot with the C++ DDR model in place of
   the bridge, adapter and LiteDRAM's data path and LiteDRAM's register model
   (`firmware/tests/ddrc_model.c`, surfsim `--ddr-swinit`) for its registers: the soc track's
