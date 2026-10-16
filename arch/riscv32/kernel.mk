@@ -83,10 +83,10 @@ ARCH_C      = $(wildcard arch/riscv32/*.c)
 ARCH_S      = $(wildcard arch/riscv32/*.S)
 BOARD_C     = $(wildcard boards/$(KBOARD)/*.c)
 ifeq ($(KBOARD),qemu_virt)
-# the Arty's SD protocol driver and the simulated card of its host test, for the word sdsim
-# (boards/qemu_virt/sdsim.c): plain C, no hardware
+# the Arty's SD protocol driver, its block device and card watch, and the simulated card of its
+# host test, for the word sdsim (boards/qemu_virt/sdsim.c): plain C, no hardware
 BOARD_C    += $(if $(wildcard boards/qemu_virt/sdsim.c),boards/arty_a7/sdcard.c boards/arty_a7/sdproto.c \
-                   boards/arty_a7/tests/sdmodel.c)
+                   boards/arty_a7/sdblk.c boards/arty_a7/tests/sdmodel.c)
 endif
 BOARD_S     = $(wildcard boards/$(KBOARD)/*.S)
 

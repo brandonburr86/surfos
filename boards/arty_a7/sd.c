@@ -19,6 +19,10 @@ makes it writable from boot, and `sdmode rw` while it is not mounted. It is neve
 partitioned or formatted from SurfOS (bdev_may_format() refuses its bus), only its files
 are written; `eject sd0` writes everything out and unmounts it before the card is taken
 out or the board switched off.
+
+10/16/26 (milestone 8): the block device and card detect are boards/arty_a7/sdblk.c's, which
+QEMU's sdsim shares: a card taken out is noticed within half a second (surf_spi has no
+interrupt for card detect: a task looks), its disk goes, and a card put back is sd0 again.
 */
 
 #include <surfos/types.h>
@@ -35,15 +39,14 @@ out or the board switched off.
 #include "arty.h"
 #include "sdcard.h"
 #include "sdproto.h"
+#include "sdblk.h"
 #include "../../shell/shell.h"
 #include <blibc_common.h>
 
 #define SREG(off) ((u_long)SURF_SPI_BASE + (off))
 
-static struct sdcard card;
-static mutex_t sd_lock = MUTEX_INIT("sd");
-static struct bdev *disk;
-static int init_status = 1;
+static struct sdblk sd;
+static bool have_spi;
 static u32 slow_div;
 
 /**** surf_spi as the card's host ****/
@@ -97,85 +100,46 @@ static void spi_tx(void *ctx, const u8 *buf, u_int len) {
 
 static const struct sd_host host = { NULL, spi_xfer, spi_select, spi_slow, spi_present, spi_ms, spi_rx, spi_tx };
 
-/**** the block device ****/
+/**** the card ****/
 
-static int sdb_read(struct bdev *d, u32 lba, u32 count, void *buf) {
-    int r;
-    (void)d;
-    mutex_lock(&sd_lock);
-    r = sd_read(&card, lba, count, (u8 *)buf);
-    mutex_unlock(&sd_lock);
-    return r == SD_OK ? 0 : (r == SD_ERANGE ? BDEV_ERANGE : BDEV_EIO);
-}
-
-static int sdb_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
-    int r;
-    (void)d;
-    mutex_lock(&sd_lock);
-    r = sd_write(&card, lba, count, (const u8 *)buf);
-    mutex_unlock(&sd_lock);
-    return r == SD_OK ? 0 : (r == SD_ERANGE ? BDEV_ERANGE : BDEV_EIO);
-}
-
-/* every write already waited for the card's busy time and checked CMD13: SPI mode has no cache to flush */
-static int sdb_flush(struct bdev *d) {
-    (void)d;
-    return 0;
-}
-
-static const struct bdev_ops sd_ops = { sdb_read, sdb_write, sdb_flush };
-
-static void size_text(u64 blocks, char *buf, size_t size) {
-    u64 mb = blocks / 2048;
-    if(mb >= 10240) snprintf(buf, size, "%lu GB", (u_long)(mb / 1024));
-    else snprintf(buf, size, "%lu MB", (u_long)mb);
+/* the line the soc track's system test and the owner read at boot, and again when a card is put in */
+static void announce(struct sdblk *s) {
+    char name[96], size[16];                /* the CID in words is up to about 70 characters */
+    sd_cid_describe(s->card.cid, name, sizeof(name));
+    sdblk_size(s->card.blocks, size, sizeof(size));
+    kprintf("+SD: %s: %s %s, %s, %s; %s (sd=rw on the command line writes)\n", s->disk->name,
+            s->card.block_addr ? (s->card.blocks > 64ull * 1024 * 2048 ? "SDXC" : "SDHC") : "SDSC", size, name,
+            s->card.crc_on ? "CRC checked" : "no CRC", s->disk->readonly ? "read-only" : "read-write");
 }
 
 int arty_sd_init(void) {
-    char name[96], size[16];                /* the CID in words is up to about 70 characters */
     int r;
     if(!arty_has(SURF_SYSINFO_FEATURES_SPI_MASK)) return 1;
+    have_spi = true;
     slow_div = (arty_sys_hz() + 2 * 400000 - 1) / (2 * 400000) - 1;
     if(slow_div > SURF_SPI_DIV_DIV_MASK) slow_div = SURF_SPI_DIV_DIV_MASK;
     mmio_write32(SREG(SURF_SPI_STATUS), SURF_SPI_STATUS_DONE_MASK | SURF_SPI_STATUS_OVR_MASK);
-    mutex_lock(&sd_lock);
-    r = sd_init(&card, &host);
-    mutex_unlock(&sd_lock);
-    init_status = r;
-    if(r) {
-        kprintf("+SD: %s (%s)\n", sd_strerror(r), card.why ? card.why : "?");
-        return r == SD_ENOCARD ? 1 : -1;
-    }
-    disk = (struct bdev *)kcalloc(1, sizeof(struct bdev));
-    if(!disk) return -1;
-    sd_cid_describe(card.cid, name, sizeof(name));
-    strlcpy(disk->name, "sd0", sizeof(disk->name));
-    strlcpy(disk->model, name, sizeof(disk->model));
-    disk->block_size = BDEV_BLOCK_SIZE;
-    disk->nblocks = card.blocks > 0xFFFFFFFFull ? 0xFFFFFFFFu : (u32)card.blocks;
-    disk->bus = BDEV_BUS_OTHER;             /* never partitioned or formatted from SurfOS */
-    disk->removable = true;
-    disk->readonly = !bootinfo_has_arg(&bootinfo, "sd=rw");
-    disk->ops = &sd_ops;
-    if(bdev_register(disk) != 0) { kfree(disk); disk = NULL; return -1; }
-    size_text(card.blocks, size, sizeof(size));
-    kprintf("+SD: sd0: %s %s, %s, %s; %s (sd=rw on the command line writes)\n",
-            card.block_addr ? (card.blocks > 64ull * 1024 * 2048 ? "SDXC" : "SDHC") : "SDSC", size, name,
-            card.crc_on ? "CRC checked" : "no CRC", disk->readonly ? "read-only" : "read-write");
-    bdev_scan_partitions(disk);
-    return 0;
+    sd.tag = "SD";
+    sd.host = &host;
+    sd.announce = announce;
+    sd.readonly = !bootinfo_has_arg(&bootinfo, "sd=rw");
+    r = sdblk_attach(&sd);
+    sdblk_watch(&sd);                       /* a card put in later, or this one taken out */
+    return r;
 }
 
 const char *arty_sd_describe(char *buf, size_t size) {
     char sz[16];
-    if(!disk) {
-        snprintf(buf, size, "%s", init_status == 1 ? "none (no SPI block or no card)" : card.why ? card.why : sd_strerror(init_status));
+    if(!sd.disk) {
+        if(!have_spi) snprintf(buf, size, "none (no SPI block)");
+        else if(!spi_present(NULL)) snprintf(buf, size, "none (no card in the socket)");
+        else snprintf(buf, size, "%s", sd.card.why ? sd.card.why : sd_strerror(sd.status));
         return buf;
     }
-    size_text(card.blocks, sz, sizeof(sz));
-    snprintf(buf, size, "sd0, %s, %s, %lu reads, %lu writes, %lu CRC retries, %lu timeouts, %lu errors%s", sz,
-             disk->readonly ? "read-only" : "read-write", card.reads, card.writes, card.crc_retries, card.timeouts, card.errors,
-             card.single ? "; one block per command (the card refused CMD18/CMD25)" : "");
+    sdblk_size(sd.card.blocks, sz, sizeof(sz));
+    snprintf(buf, size, "%s, %s, %s, %lu reads, %lu writes, %lu CRC retries, %lu timeouts, %lu errors%s", sd.disk->name, sz,
+             sd.disk->readonly ? "read-only" : "read-write", sd.card.reads, sd.card.writes, sd.card.crc_retries,
+             sd.card.timeouts, sd.card.errors, sd.card.single ? "; one block per command (the card refused CMD18/CMD25)" : "");
     return buf;
 }
 
@@ -190,34 +154,36 @@ int arty_cmd_sdinfo(int argc, char **argv) {
     printf("    surf_spi at 0x%08lx: card %s, divider %lu (identification %lu)\n", (u_long)SURF_SPI_BASE,
            spi_present(NULL) ? "present" : "absent", (u_long)(mmio_read32(SREG(SURF_SPI_DIV)) & SURF_SPI_DIV_DIV_MASK),
            (u_long)slow_div);
-    if(!card.ready) {
-        printf("    not initialized: %s (%s)\n", sd_strerror(init_status), card.why ? card.why : "-");
+    if(sd.taken_out || sd.put_in) printf("    card detect: taken out %lu times, put in %lu times since boot\n", sd.taken_out, sd.put_in);
+    if(!sd.disk || !sd.card.ready) {
+        if(!spi_present(NULL)) printf("    no card in the socket\n");
+        else printf("    not initialized: %s (%s)\n", sd_strerror(sd.status), sd.card.why ? sd.card.why : "-");
         return CMD_FAIL;
     }
-    sd_cid_describe(card.cid, name, sizeof(name));
-    printf("    %s, physical layer %s, %s addressing, OCR 0x%08lx, %s\n", name, card.v2 ? "2.0+" : "1.x",
-           card.block_addr ? "block" : "byte", (u_long)card.ocr, card.crc_on ? "CRC on" : "CRC off");
-    printf("    CSD version %d, %lu blocks of 512 bytes:", sd_csd_version(card.csd), (u_long)card.blocks);
-    for(i = 0; i < 16; i++) printf(" %02x", card.csd[i]);
+    sd_cid_describe(sd.card.cid, name, sizeof(name));
+    printf("    %s, physical layer %s, %s addressing, OCR 0x%08lx, %s\n", name, sd.card.v2 ? "2.0+" : "1.x",
+           sd.card.block_addr ? "block" : "byte", (u_long)sd.card.ocr, sd.card.crc_on ? "CRC on" : "CRC off");
+    printf("    CSD version %d, %lu blocks of 512 bytes:", sd_csd_version(sd.card.csd), (u_long)sd.card.blocks);
+    for(i = 0; i < 16; i++) printf(" %02x", sd.card.csd[i]);
     printf("\n    %s\n", arty_sd_describe(buf, sizeof(buf)));
-    if(card.why) printf("    last problem: %s\n", card.why);
+    if(sd.card.why) printf("    last problem: %s\n", sd.card.why);
     return CMD_OK;
 }
 
 /* sdmode ro|rw: whether the card may be written, while nothing on it is mounted */
 int arty_cmd_sdmode(int argc, char **argv) {
-    struct bdev *p;
+    struct bdev *d = sd.disk;
     bool ro;
-    if(!disk) { printf("    no card\n"); return CMD_FAIL; }
+    if(!have_spi) { printf("    no SPI block in this bitstream\n"); return CMD_FAIL; }
     if(argc != 2 || (strcmp(argv[1], "ro") && strcmp(argv[1], "rw"))) {
-        printf("    sd0 is %s; usage: sdmode ro|rw   (while nothing on it is mounted: umount /sd0p1 first)\n",
-               disk->readonly ? "read-only" : "read-write");
+        printf("    %s is %s; usage: sdmode ro|rw   (while nothing on it is mounted: umount /%sp1 first)\n",
+               d ? d->name : "the card", sd.readonly ? "read-only" : "read-write", d ? d->name : "sd0");
         return CMD_USAGE;
     }
-    if(vfs_bdev_busy(disk)) { printf("    sd0 or a partition of it is mounted: umount it first\n"); return CMD_FAIL; }
+    if(d && vfs_bdev_busy(d)) { printf("    %s or a partition of it is mounted: umount it first\n", d->name); return CMD_FAIL; }
     ro = !strcmp(argv[1], "ro");
-    disk->readonly = ro;
-    for(p = bdev_first(); p; p = p->next) if(p->parent == disk) p->readonly = ro;
-    printf("    sd0 is now %s; mount sd0p1 to use it\n", ro ? "read-only" : "read-write");
+    sdblk_set_readonly(&sd, ro);
+    if(d) printf("    %s is now %s; mount %sp1 to use it\n", d->name, ro ? "read-only" : "read-write", d->name);
+    else printf("    no card in; a card put in will be %s\n", ro ? "read-only" : "read-write");
     return CMD_OK;
 }
