@@ -2,7 +2,8 @@
 
 This is the contract SurfCPU's RTL, its tests, SurfBoot and the SurfOS port share. It says
 what is implemented and how; [CPU.md](CPU.md) (written with the RTL) says how the pipeline
-does it. Frozen at version 1 on 2026-10-15.
+does it. Frozen at version 1 on 2026-10-15; clarifications that change no implementation are
+listed in section 6.
 
 ## 1. ISA
 
@@ -80,7 +81,7 @@ has changed architectural state, memory or a peripheral.
 |---|---|---|---|
 | Instruction address misaligned | 0 | the target address | a taken branch, `JAL` or `JALR` whose target is not 4-byte aligned; reported on that instruction, which writes no register |
 | Instruction access fault | 1 | the fetch address | a fetch error response (unmapped or non-fetch region) |
-| Illegal instruction | 2 | the instruction bits | section 1 and section 2 |
+| Illegal instruction | 2 | the instruction bits: all 32 of a 32-bit encoding; of a 16-bit encoding (bits 1:0 not `11`) only its 16 bits, zero-extended | section 1 and section 2 |
 | Breakpoint | 3 | the `EBREAK`'s address | `EBREAK` |
 | Load address misaligned | 4 | the address | a halfword load at an odd address, a word load not 4-aligned |
 | Load access fault | 5 | the address | an error response to a load |
@@ -168,3 +169,8 @@ instruction and every trap on the RISC-V Formal Interface, one retirement per cy
 testbenches write the trace as text, one line per `rvfi_valid` (`sim/README.md` gives the
 format), and `tools/` compares it with a pinned reference model (Spike) instruction by
 instruction: pc, instruction, register write, memory access, trap.
+
+## 6. Clarifications (version 1 unchanged)
+
+* 2026-10-15: `mtval` for an illegal 16-bit encoding holds only its 16 bits, zero-extended (the
+  privileged specification's rule, and Spike's).

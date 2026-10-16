@@ -2,7 +2,8 @@
 
 The interfaces between the parts that are built in parallel: RTL module port lists, the
 simulation models' C++ APIs, file formats and command lines. Each part is free inside; these
-edges are fixed (version 1, 2026-10-15) so the parts plug together without rework. A needed
+edges are fixed (version 1, 2026-10-15; clarifications in section 8) so the parts plug together
+without rework. A needed
 change is proposed to the integrator, not made unilaterally.
 
 ## 1. RTL conventions
@@ -119,7 +120,12 @@ testbench that has RVFI; `#` starts a comment line. Fields, space separated, hex
 ```
 
 `rd` is 0 when no register is written; `rmask`/`wmask` are one hex digit; `pc_next` is
-`rvfi_pc_wdata`.
+`rvfi_pc_wdata`. Memory fields follow riscv-formal's aligned convention
+(`RISCV_FORMAL_ALIGNED_MEM`): `mem_addr` is word aligned, the masks select byte lanes and unused
+lanes are 0. A trapping instruction gives a record with `trap` = 1, no register write, no
+memory access and `pc_next` = the handler (`mtvec`). An interrupt has no record of its own: the
+handler's first record has `intr` = 1, as has the first record after any trap. A test's trace
+ends with its store to `tohost`. `sim/README.md` (cpu track) has the details.
 
 **Card images.** Raw files of 512-byte sectors (MBR + FAT32), as `tools/mkcard.py` makes them;
 the SD card model and the host firmware tests read them; nothing writes a real device.
@@ -136,10 +142,12 @@ surfcpu_tb --elf FILE [--trace FILE] [--seed N] [--max-cycles N]
 Memory: 4 MiB of RAM at `0x80000000` loaded from the ELF; the core starts at `0x80000000`
 (`RESET_PC`); every other address answers with a bus error, except a CLINT-compatible timer at
 `0x02000000` (`msip` +0, `mtimecmp` +0x4000, `mtime` +0xBFF8, as in Spike) and the testbench's
-interrupt and console registers that docs/CPU.md lists. Bus latency and `req_ready` stalls are
-random within the given ranges, from `--seed`. The program ends by storing to its `tohost`
+interrupt and console registers that docs/CPU.md lists. With `--ilat`/`--dlat MIN:MAX` each request
+waits 0..MAX-MIN cycles for `req_ready` and its response comes MIN..MAX cycles after acceptance
+(half the draws take the shortest value), from `--seed`. The program ends by storing to its `tohost`
 symbol: 1 = pass (exit 0); any other value = fail, test number `value >> 1` (exit 1); running
-past `--max-cycles` exits 2. `--signature` dumps the words between the two symbols, one per
+past `--max-cycles` exits 2; a testbench error (bad arguments or ELF, no `tohost`, a bus protocol
+violation by the core) exits 3. `--signature` dumps the words between the two symbols, one per
 line (the riscv-arch-test format).
 
 ## 7. Simulation models (C++17, no Verilator dependency inside the model)
@@ -155,3 +163,8 @@ line (the riscv-arch-test format).
 `build/sim/surfsim` (soc track, completed at integration) is the whole SoC with these models:
 `--rom FILE --sd IMAGE --uart-in FILE --ps2-keys TEXT --vga-dir DIR --trace FILE
 --max-cycles N --expect REGEX` (exit 0 when the UART output matches REGEX).
+
+## 8. Clarifications (version 1 unchanged)
+
+* 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
+  interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6).
