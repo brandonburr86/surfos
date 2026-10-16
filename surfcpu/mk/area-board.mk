@@ -13,6 +13,14 @@ BOARD_PRIMS = sim/board/prims/surf_sim_cmt.v sim/board/prims/MMCME2_BASE.v \
 # The files of one kind in a design list: $(call board_list,<design>,<kind>)
 board_list = $(wildcard $(shell sed -n 's/^$(2)[[:space:]][[:space:]]*//p' $(BD)/designs/$(1).files))
 BASELINE_SRC = $(call board_list,arty_a7_baseline,src)
+# The full top uses the real SoC once the soc track has merged it, else the stand-in
+# (sim/board/stubs/surfcpu_soc.v, never used for a bitstream: tools/fpga-build.sh refuses).
+SOC_REAL  = $(wildcard rtl/soc/surfcpu_soc.v)
+TOP_SRC   = $(if $(SOC_REAL),$(call board_list,surfcpu_arty_a7_top,src),\
+              $(wildcard rtl/lib/*.v) $(BD)/rtl/arty_a7_clocks.v $(BD)/rtl/surfcpu_arty_a7_top.v \
+              sim/board/stubs/surfcpu_soc.v)
+TOP_DEFS  = $(if $(SOC_REAL),,-DSURFCPU_SOC_STUB)
+TOP_INCS  = $(addprefix -I,$(call board_list,surfcpu_arty_a7_top,inc))
 
 BOARD_VLINT = $(VERILATOR_LINT) --timing --timescale 1ps/1ps -I$(BD)/rtl
 BOARD_IVL   = $(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -I$(BD)/rtl
@@ -20,7 +28,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
               -Irtl/generated -I$(BD)/rtl
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
-        board-baseline-rt board-baseline board-digilent
+        board-baseline-rt board-baseline board-top board-digilent
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -29,10 +37,11 @@ check: check-board
 lint-board:
 	$(Q)for t in arty_a7_clocks arty_a7_uart_tx arty_a7_uart_rx arty_a7_baseline_core arty_a7_baseline; do \
 	  $(BOARD_VLINT) --top-module $$t $(BASELINE_SRC) $(BOARD_PRIMS) || exit 1; done
-	@echo "lint-board: 5 board modules clean"
+	$(Q)$(BOARD_VLINT) $(TOP_INCS) $(TOP_DEFS) --top-module surfcpu_arty_a7_top $(TOP_SRC) $(BOARD_PRIMS)
+	@echo "lint-board: 6 board modules clean ($(if $(SOC_REAL),real SoC,SoC stand-in))"
 
 # ------------------------------------------------------------------------------- simulations
-test-board: board-clocks board-prims-bad board-baseline-rt board-baseline
+test-board: board-clocks board-prims-bad board-baseline-rt board-baseline board-top
 	@echo "test-board: PASS"
 
 # clocks and resets: Icarus and Verilator --timing
@@ -90,6 +99,15 @@ board-baseline: $(BSIM)/tb_baseline.vvp $(BSIM)/vl_baseline/tb_baseline
 	@grep -h "tb_baseline: line 2\|after RESET\|tb_baseline: pix" $(BSIM)/tb_baseline.verilator.txt
 	@echo "board-baseline: PASS (Verilator with RESET, Icarus short run)"
 
+# the full top's board wiring (Icarus; with the stand-in it also drives every SoC output)
+$(BSIM)/tb_top.vvp: $(TOP_SRC) $(BOARD_PRIMS) sim/board/tb_top.v
+	@mkdir -p $(dir $@)
+	$(Q)$(BOARD_IVL) $(TOP_INCS) $(TOP_DEFS) -o $@ $(BOARD_PRIMS) $(TOP_SRC) sim/board/tb_top.v
+board-top: $(BSIM)/tb_top.vvp
+	$(Q)for s in 1 7 123; do vvp -n $< +seed=$$s > $(BSIM)/tb_top.$$s.txt 2>&1; \
+	  grep -q "tb_top: PASS" $(BSIM)/tb_top.$$s.txt || { cat $(BSIM)/tb_top.$$s.txt; exit 1; }; done
+	@echo "board-top: PASS (seeds 1 7 123, $(if $(SOC_REAL),real SoC,SoC stand-in))"
+
 # ------------------------------------------------------------------------------------ checks
 check-board: board-clockplan board-digilent
 	@echo "check-board: PASS"
@@ -100,3 +118,4 @@ board-clockplan:
 # Digilent's master XDC files, manuals and schematics are unchanged since they were fetched
 board-digilent:
 	$(Q)$(BD)/digilent/fetch.sh verify
+
