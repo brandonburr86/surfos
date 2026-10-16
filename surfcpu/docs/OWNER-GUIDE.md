@@ -20,7 +20,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | CPU, SoC, SurfBoot and the SurfOS kernel | pass in simulation, including SurfBoot booting SurfOS from a card image on the RTL with the real CPU |
 | Files written by SurfOS | pass in simulation: written on the RTL system, ejected, read back after a second boot and by the Mac's tools; write errors, a card taken out and a full card tested on the RTL system too |
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
-| DDR memory on the board | the bridge is done; the memory controller in the bitstream is a later step, so booting SurfOS on the board waits for it |
+| DDR memory on the board | the memory controller works in simulation, and SurfBoot boots SurfOS from it there; the open-source flow does not yet meet its 100 MHz timing, so there is no DDR bitstream yet, and booting SurfOS on the board waits for one |
 | The board tests | one command per board milestone (`make -C surfcpu board-test M=m1`, [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)), rehearsed against the RTL system and fake boards; it reads the board's serial port itself and writes the evidence file |
 | The board itself | nothing has been connected or programmed yet |
 
@@ -408,3 +408,4 @@ need the configuration flash programmed first, which waits for your go-ahead.
 2. **The adapters.** Their revisions, and whether the keyboard is a real PS/2 keyboard.
 3. **Bring-up.** Run `brew install openfpgaloader`, connect the board, and run steps 1.4 and 4 (or `make -C surfcpu board-test M=m1`). Send me the doctor output and the UART lines.
 4. **The card.** Its size and type, when you get to section 7.
+5. **A Vivado host, if you have one.** An x86-64 Linux machine (a PC, or a cloud VM) with AMD's free Vivado, reached over ssh. It is the fallback if the open-source flow cannot meet the DDR controller's timing (`FLOW=vivado-ssh`). Vivado in a Linux container on this Mac also exists as an option, unsupported and tens of GB ([BUILD-HOST.md](BUILD-HOST.md)).

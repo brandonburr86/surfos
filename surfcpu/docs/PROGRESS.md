@@ -9,7 +9,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
-| 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs ([evidence](evidence/ddr/)) | MIG recipe pending a Vivado host; LiteDRAM generated | pending | bridge done; board top wiring pending |
+| 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs; the DDR top with LiteDRAM's generated core and its DRAM model: the BRAM diagnostics' DDR checks pass (569), and SurfBoot calibrates and boots SurfOS to the shell; the 100T DDR diagnostics' synthesized netlist prints the same lines at the same times as the RTL ([evidence](evidence/ddr/), [the DDR top](evidence/ddr/ddr-top-sim.txt)) | open flow: both DDR designs place and route on both boards, but nextpnr's estimate for LiteDRAM's 100 MHz clock is 63.5 to 77.3 MHz, and one build did not finish routing: no DDR bitstream ([evidence](evidence/board/openxc7-ddr.txt)); MIG recipe pending a Vivado host | pending: needs a DDR bitstream | done in simulation; timing closure in progress |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
@@ -202,3 +202,42 @@ physical results are separate columns, so nothing claims more than happened.
 
   `test-os-kit` is on `make check` (about a minute; [evidence](evidence/os/test-os-kit.txt)).
 * Nothing has run on the board yet.
+
+### 2026-10-16: DDR through the open-source flow (milestone 4)
+
+* ddr-2 (merged as 08081cb):
+  * LiteDRAM is generated reproducibly, its files checked against recorded SHA-256 hashes.
+  * The board top gains the DDR3L pins and two DDR designs: the BRAM diagnostics with DDR
+    checks, and SurfBoot.
+  * A small VexRiscv CPU inside LiteDRAM calibrates the memory in about 1 s.
+* In simulation, LiteDRAM's controller with its DRAM model:
+  * passes the diagnostics' DDR checks (569 in all);
+  * reports a failed calibration correctly;
+  * lets SurfBoot load SurfOS and reach the shell, at 5.4 s.
+
+  The 100T DDR diagnostics' synthesized netlist prints the same 78 lines, each at the same
+  microsecond, as the RTL.
+* The open flow places and routes both designs on both boards, but misses the 100 MHz timing of
+  LiteDRAM's clock:
+  * 100T SurfBoot 63.5 MHz;
+  * 35T SurfBoot 73.8 MHz;
+  * 35T diagnostics 77.3 MHz;
+  * the 100T diagnostics did not finish routing.
+
+  The worst paths are the calibration CPU's bus into its own instruction fetch, and LiteDRAM's
+  refresh timer into a bank machine. The gate holds, so no DDR bitstream was written.
+  `program.sh` also refuses any bitstream whose flow shows a clock missing timing
+  ([evidence](evidence/board/openxc7-ddr.txt), [timing](evidence/ddr/openflow-timing.txt)).
+* Found on the way, all in the flow's own checks:
+  * a one-pin difference between netlist and bitstream on a block RAM of the calibration CPU;
+  * a parsing bug in the clock-tile check;
+  * a false synthesis-check finding on block RAM read registers.
+* The HAS_DDR=0 designs still pass every check on both boards.
+* Next, ddr-3 (running):
+  * take the calibration CPU out of the 100 MHz domain, so that SurfCPU calibrates over
+    LiteDRAM's control bus;
+  * shorten the refresh path;
+  * fix the three findings in the flow's checks.
+
+  Timing is not relaxed to get there. If the open flow cannot close it, the choices go to the
+  owner, Vivado among them.
