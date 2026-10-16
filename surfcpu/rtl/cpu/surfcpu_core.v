@@ -28,8 +28,8 @@ Hazards:
     and wins over a branch in EX in the same cycle (it is older).
 Precise traps: an instruction carries its exception from IF/ID/EX to MEM and traps only
 there, when everything older has completed; an interrupt is taken in place of the
-instruction in MEM before it does anything (never once its bus access has been offered;
-not on a WFI, which completes and lets the next instruction take it).
+instruction in MEM before it has started (never once its bus access has been offered, nor
+once a WFI has begun to wait: the WFI then completes and the next instruction takes it).
 */
 `include "surfcpu_rvfi.vh"
 
@@ -68,6 +68,18 @@ module surfcpu_core #(
     input  wire [63:0] mtime            // for the time/timeh CSRs
 `ifdef SURFCPU_RVFI
     , `SURFCPU_RVFI_OUTPUTS             // ISA.md section 5
+`endif
+`ifdef SURFCPU_FV
+    // formal verification only (sim/cpu/formal/fv_top.sv): the commit point's decisions
+    , output wire        fv_irq_take,       // an interrupt replaces the MEM instruction now
+      output wire [31:0] fv_mtvec,          // the trap target
+      output wire [31:0] fv_mem_pc,         // pc of the MEM instruction
+      output wire        fv_wb_wen,         // WB writes a register now ...
+      output wire [4:0]  fv_wb_rd,          // ... this one
+      output wire        fv_mem_started,    // the MEM instruction has started
+      output wire        fv_exc_take,       // the MEM instruction traps now
+      output wire [31:0] fv_mepc,           // mepc
+      output wire        fv_irq_pending     // an interrupt is pending, enabled and MIE set
 `endif
 );
 `include "surfcpu_defs.vh"
@@ -131,6 +143,7 @@ module surfcpu_core #(
     reg  [31:0] mem_tval;
     reg         mem_offered;         // the data request was offered and not yet accepted
     reg         mem_waiting;         // the data request was accepted; its response is due
+    reg         mem_wfi_wait;        // the WFI in MEM has been there a cycle: it is waiting
 
     // WB stage registers (loaded from MEM)
     reg         wb_wen;              // write wb_wdata to register wb_rd at this edge
@@ -381,11 +394,15 @@ module surfcpu_core #(
     wire [2:0]  mem_f3   = mem_insn[14:12];
     wire [1:0]  mem_off  = mem_result[1:0];
     wire        mem_ldst = mem_valid && (mem_load || mem_store) && !mem_exc;
-    wire        mem_started = mem_offered || mem_waiting;
+    wire        mem_started = mem_offered || mem_waiting || mem_wfi_wait;
 
     // An interrupt replaces the instruction in MEM, but only before that instruction has
-    // done anything: never once its bus request has been offered, and never on a WFI.
-    wire irq_take = mem_valid && !mem_started && !mem_wfi && csr_irq_pending;
+    // started: a load or store once its bus request has been offered, a WFI once it has
+    // begun to wait (after its first cycle in MEM). So an interrupt already pending and
+    // enabled when a WFI arrives (say MRET or a CSR write just set MIE) is taken before it,
+    // mepc = the WFI (privileged spec 3.1.9); one that comes while the WFI waits wakes it,
+    // the WFI completes and the next instruction takes the interrupt (mepc = the WFI + 4).
+    wire irq_take = mem_valid && !mem_started && csr_irq_pending;
 
     // The data request: offered from MEM only, where nothing older can trap any more, and
     // not in a cycle where an interrupt is taken instead; then held until accepted.
@@ -469,6 +486,7 @@ module surfcpu_core #(
             mem_valid   <= 1'b0;
             mem_offered <= 1'b0;
             mem_waiting <= 1'b0;
+            mem_wfi_wait <= 1'b0;
         end else begin
             if (ex_advance)
                 mem_valid <= 1'b1;
@@ -483,6 +501,11 @@ module surfcpu_core #(
             end else if (mem_rsp) begin
                 mem_waiting <= 1'b0;
             end
+
+            if (ex_advance || mem_done)
+                mem_wfi_wait <= 1'b0;
+            else if (mem_valid && mem_wfi)
+                mem_wfi_wait <= 1'b1;
         end
 
         if (ex_advance) begin
@@ -598,5 +621,17 @@ module surfcpu_core #(
     assign rvfi_mem_wmask = rv_wmask;
     assign rvfi_mem_rdata = rv_mem_rdata;
     assign rvfi_mem_wdata = rv_mem_wdata;
+`endif
+
+`ifdef SURFCPU_FV
+    assign fv_irq_take    = irq_take;
+    assign fv_mtvec       = csr_mtvec;
+    assign fv_mem_pc      = mem_pc;
+    assign fv_wb_wen      = wb_wen;
+    assign fv_wb_rd       = wb_rd;
+    assign fv_mem_started = mem_started;
+    assign fv_exc_take    = exc_take;
+    assign fv_mepc        = csr_mepc;
+    assign fv_irq_pending = csr_irq_pending;
 `endif
 endmodule

@@ -4,10 +4,12 @@ SurfCPU directed test: WFI
 File: wfi.S Date: 10/15/26 (SurfCPU)
 --------------------
 WFI waits until (mip & mie) != 0, whatever mstatus.MIE is. With MIE = 0 it then simply
-completes (no trap), so code after it sees the timer has passed; with MIE = 1 the
-interrupt is taken with mepc = the instruction after the WFI. An interrupt already pending
-and enabled in mie lets WFI complete at once (with MIE = 1 the next instruction takes it).
-A pending interrupt that is not enabled in mie does not wake WFI; a later enabled one does.
+completes (no trap), so code after it sees the timer has passed; with MIE = 1 an interrupt
+that comes while the WFI waits is taken with mepc = the instruction after the WFI. An
+interrupt already pending and enabled in mie lets WFI complete at once when MIE = 0; when
+MIE = 1 (set by MRET just before), it is taken before the WFI, mepc = the WFI (privileged
+spec 3.1.9). A pending interrupt that is not enabled in mie does not wake WFI; a later
+enabled one does.
 */
 // surf-test: spike=no
 #define TEST_IRQ_HANDLER
@@ -74,7 +76,7 @@ wfi_next_10:
         wfi
         LOGGED(0)
         sw      x0, 0(x5)
-        li      TESTNUM, 22                     // reached with the interrupt pending: next one
+        li      TESTNUM, 22                     // a CSR write that sets MIE: taken at once
         mv      x22, x24
         csrw    mie, x0
         li      x11, 1
@@ -85,21 +87,37 @@ wfi_next_10:
         nop
         csrci   mstatus, MSTATUS_MIE
         LOGGED(1)
-        li      x11, 1                          // now arrange it so that the WFI itself is
-        sw      x11, 0(x5)                      // the first instruction with MIE = 1
-        mv      x22, x24
-        la      x7, 1f
+        li      TESTNUM, 23                     // an interrupt pending and enabled when the WFI
+        mv      x22, x24                        // arrives is taken before it (mepc = the WFI);
+        li      x7, MIP_MSIP | MIP_MEIP         // one that comes while the WFI waits is taken
+        csrw    mie, x7                         // after it (mepc = the WFI + 4)
+        li      x11, 1
+        sw      x11, 0(x5)                      // MSIP pending and enabled, MIE still 0
+        li      x11, 20000                      // the external interrupt long after the
+        sw      x11, TB_IRQ_DELAY(x9)           // software one's handler has returned
+        la      x7, wfi_23
         csrw    mepc, x7
         li      x7, MSTATUS_MPIE
         csrs    mstatus, x7
         mret                                    // MIE = 1 from the WFI on
-1:      wfi
-wfi_next_22:
+wfi_23: wfi
+wfi_next_23:
         nop
         csrci   mstatus, MSTATUS_MIE
-        LOGGED(1)
-        lw      x14, 4(x22)                     // WFI completed; its successor took it
-        la      x7, wfi_next_22
+        LOGGED(2)
+        li      TESTNUM, 24                     // first the software interrupt, at the WFI
+        lw      x14, 0(x22)
+        li      x7, 0x80000003
+        bne     x14, x7, fail
+        lw      x14, 4(x22)
+        la      x7, wfi_23
+        bne     x14, x7, fail
+        li      TESTNUM, 25                     // then the external one, after the WFI
+        lw      x14, 8(x22)
+        li      x7, 0x8000000b
+        bne     x14, x7, fail
+        lw      x14, 12(x22)
+        la      x7, wfi_next_23
         bne     x14, x7, fail
 
         // ---------------------------------------------------------- only enabled ones wake it
