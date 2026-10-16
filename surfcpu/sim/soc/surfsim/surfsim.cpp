@@ -14,7 +14,9 @@ C++ models around it, the UART model on the serial pins and the DDR model on the
 
 --rom loads the boot ROM image at time 0 (+bootrom=FILE for the RTL). The UART model sends
 the bytes of --uart-in after reset and echoes what the SoC sends on stdout (unless --quiet);
---expect ends the run with exit 0 as soon as that output matches the regular expression.
+--expect ends the run with exit 0 as soon as that output matches the regular expression
+(ECMAScript syntax, tried after every byte received: end the pattern with what must follow,
+such as \n, and note that . does not match the \r of CRLF line ends).
 --trace writes the core's RVFI retirement trace (docs/MODULES.md section 5). sys_clk runs at
 spec's sys_hz and pix_clk at pix_hz, both held in reset for 8 cycles. The DDR model calibrates
 after --ddr-calib cycles (default 3000) with random ready and latency from --seed; the

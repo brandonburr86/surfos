@@ -456,7 +456,7 @@ else
 	$(Q)$(MAKE) --no-print-directory build-rom $(BUILD)/sim/surfsim > $(SOC_DIR)/boot-build.txt 2>&1 \
 	  || { tail -20 $(SOC_DIR)/boot-build.txt; exit 1; }
 	$(Q)$(BUILD)/sim/surfsim --rom $(BUILD)/fw/bramdiag.mem --max-cycles 400000000 \
-	  --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*' > $(SOC_DIR)/boot-bramdiag.txt 2>&1; \
+	  --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n' > $(SOC_DIR)/boot-bramdiag.txt 2>&1; \
 	  grep -q "BRAMDIAG: PASS" $(SOC_DIR)/boot-bramdiag.txt || { tail -30 $(SOC_DIR)/boot-bramdiag.txt; exit 1; }
 	@echo "  [bramdiag] $$(grep -o 'BRAMDIAG: PASS ([0-9]* checks)' $(SOC_DIR)/boot-bramdiag.txt), $$(grep -o 'after [0-9]* cycles' $(SOC_DIR)/boot-bramdiag.txt | head -1)"
 	$(Q)printf 'help\r' > $(SOC_DIR)/boot-help.txt
