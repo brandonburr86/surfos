@@ -15,7 +15,7 @@ connected; `V=1` shows full commands.
 | `make doctor` | Mac | probes the Mac, Docker and the container, the board's USB (FTDI, JTAG IDCODE), the serial port, mounted FAT volumes and the build-host settings; changes nothing | works |
 | `make gen` / `make check-generated` | container | regenerate / verify the files made from `spec/soc.toml` | works |
 | `make lint` | container | Verilator `-Wall` lint of every RTL module | works for the merged areas (lib, io, board); grows with the tracks |
-| `make test-cpu` | container | CPU directed tests, riscv-tests, Icarus, a gate-level run of the synthesized core; random and reference-model (Spike) comparisons and architecture tests come with the verif track | works (simulation); verif pending |
+| `make test-cpu` | container | CPU directed tests, riscv-tests, Icarus, a gate-level run of the synthesized core, a bounded formal check, and the real core compared with Spike on riscv-arch-test, random programs and CSR probes (`test-cpu-ref`) | works (simulation) |
 | `make test-soc` | container | building blocks, interconnect, peripherals, the DDR bridge (with proofs), the board's clocks and tops, the SoC, and `surfsim` running the real core with the diagnostics and SurfBoot | works (simulation); SD, PS/2 and VGA models in `surfsim` pending |
 | `make test-fw` | container | SurfBoot and the card tools on the host, against card images (and through the io track's SD card model), plus the ROM in a firmware emulator | works (host and emulator; not yet on the RTL SoC) |
 | `make test-os` | container | the riscv32 SurfOS kernel: host tests, its SD driver against the io SD card model, QEMU `virt` at -O2 and -O0, and the Arty `SURFOS.BIN` booted by SurfBoot in the fw emulator | works (not yet on the RTL SoC or the board) |

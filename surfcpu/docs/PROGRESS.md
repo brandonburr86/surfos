@@ -7,7 +7,7 @@ physical results are separate columns, so nothing claims more than happened.
 |---|---|---|---|---|
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
 | 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
-| 2 CPU correctness in simulation | 308 directed runs, 63 riscv-tests, Icarus, 200 random programs against Spike, the synthesized netlist at gate level ([evidence](evidence/cpu/)) | Yosys estimate (3,094 LUTs, 4 DSP48E1) | | core done in simulation; independent review and the verif track pending |
+| 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS (569 checks) and starts SurfBoot ([evidence](evidence/soc/)) | | pending | simulation done; bitstream and board pending |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs ([evidence](evidence/ddr/)) | MIG recipe pending a Vivado host; LiteDRAM generated | pending | bridge done; board top wiring pending |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
@@ -87,3 +87,11 @@ physical results are separate columns, so nothing claims more than happened.
 * Found: the kernel console's scroll is not protected against preemption, so concurrent
   printing can leave partial rows on the screen (UART is unaffected); and code fetched from DDR
   one word at a time is slow (no instruction cache yet).
+
+### 2026-10-16: verif merged; every track in
+
+* verif (0992632): Spike's commit log converted to the retirement trace, a strict comparator,
+  random programs, CSR probes, riscv-arch-test 4.1.0 and riscv-formal. `make check` now runs
+  the real core against Spike (6b71d73): 705 programs, 8.2 million retirements, no divergence.
+* All nine tracks are merged; `make check` passes in about 22 minutes on the Mac.
+* The owner's guide: [OWNER-GUIDE.md](OWNER-GUIDE.md).
