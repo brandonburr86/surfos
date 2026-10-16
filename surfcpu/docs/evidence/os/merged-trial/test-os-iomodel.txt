@@ -1,0 +1,1 @@
+test_sd_iomodel: 101 of 101 checks passed (SdCardModel, seeds 1 7 123)

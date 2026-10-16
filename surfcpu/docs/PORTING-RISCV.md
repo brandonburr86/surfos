@@ -262,7 +262,7 @@ surf_spi with FAT32 on /sd0p1, `/USERS/DOCUMENTS` by its long name, the package 
 the card by CRC, two tasks, the drivers, the self test, and surf_video's text RAM showing the
 console with hardware scroll: 15 checks, about 120 s of simulated time in 2 s. It needs the
 emulator, surfimg.py and mkcard.py, so on `sc/os` it says it is skipped; it was run on a trial
-of the branch merged with `surfcpu` (b555bb6), a tree made by `git merge-tree` and unpacked
+of the branch merged with `surfcpu` (2dd26c9, after the fw, ddr and flow merges), a tree made by `git merge-tree` and unpacked
 under `build/` with nothing merged or committed (evidence in `merged-trial/`). The emulator is
 a test aid, not the RTL and not the board. Its card has no CMD18 or CMD25 (SurfBoot reads with
 CMD17 only), which is why the SD driver learned to fall back to one block per command.
@@ -353,3 +353,11 @@ Found while building to them; nothing was changed in the frozen files.
   SurfBoot sets them up. Proposal for a later map version: a reset register in sysinfo.
 * The Arty has no real-time clock: FAT time stamps on the card are the kernel's build time plus
   the uptime. A clock (or a time set over the UART or the network) is for later.
+* BOOT-ABI.md's clarifications (on `surfcpu`, version 1 unchanged) make `ddr_top` the top 16 MiB
+  of the DDR that calibrated. The kernel's heap ends at the map's `ddr_top` (`0x8F000000`), which
+  is right for the Arty's 256 MiB; with less DDR, `run_memcheck()` stops the boot with a report
+  (the heap would not lie inside `ram_size`) instead of using memory that is not there. Taking
+  the heap's end from the boot information is a small change for when a smaller part matters.
+* The fw track's simulated SD card (its emulator's) has no CMD18 or CMD25; real cards all do.
+  The kernel copes (one block per command), but a run in that emulator says nothing about the
+  driver's multiple-block paths, which the io track's card model and the host model test.

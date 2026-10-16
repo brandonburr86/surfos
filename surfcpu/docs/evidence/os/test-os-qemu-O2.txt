@@ -1,5 +1,5 @@
 # test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 68 of 68 checks passed in 10 s (2 parts skipped)
-# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:25:05 UTC
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:44:08 UTC
 ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
 ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
 ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1

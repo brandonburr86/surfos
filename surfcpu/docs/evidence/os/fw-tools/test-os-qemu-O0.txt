@@ -1,5 +1,5 @@
 # test-os qemu_virt build/riscv32/qemu_virt-O0/surfos.elf: 82 of 82 checks passed in 14 s
-# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:25:46 UTC
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:44:51 UTC
 ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
 ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
 ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1
@@ -68,9 +68,9 @@ ok   sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LF
 ok   sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT
 ok   sdsim: fsck.fat -n finds the volume clean
 ok   sdsim: poweroff
-ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 410736 bytes, CRC 8148f8c8, build 25e64da3
+ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 411056 bytes, CRC 3fc779f6, build d0b656f5
 ok   package: SURFOS.BIN copied to its load address boots to the shell
-ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1192704)
+ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1193040)
 ok   package: poweroff
 ok   card: mkcard.py makes a 48 MiB card image with the standard directories and /BOOT/SURFOS.BIN
 ok   card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1
