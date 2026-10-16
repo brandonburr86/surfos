@@ -247,6 +247,19 @@ void Ps2KeyboardModel::abort_frame() {
     s_ = S::IDLE;
 }
 
+void Ps2KeyboardModel::end_committed() {
+    // IBM's rule: the inhibit came after the parity bit's clock rose, so the frame counts
+    // as delivered; it ends here without the stop bit's clock and is not sent again
+    drv_clk_ = false;
+    drv_dat_ = false;
+    stats.frames_sent++;
+    stats.frames_cut_short++;
+    last_sent_ = cur_.byte;
+    log.push_back("frame " + std::to_string(cur_.byte) + " delivered at an inhibit after the parity clock");
+    s_ = S::GAP;
+    t_ = us(gap_us);
+}
+
 void Ps2KeyboardModel::step(bool clk_oe, bool data_oe) {
     if (t_ > 0) --t_;
     switch (s_) {
@@ -279,7 +292,11 @@ void Ps2KeyboardModel::step(bool clk_oe, bool data_oe) {
         break;
     }
     case S::TX_SETUP:                                // data set, clock high
-        if (clk_oe) { abort_frame(); break; }
+        if (clk_oe) {
+            if (commit == Commit::AFTER_PARITY_CLOCK && bit_ >= 10) end_committed();
+            else abort_frame();
+            break;
+        }
         if (cur_.fault == Fault::GLITCH && bit_ == 4) {
             // a 0.2 us spike on the clock halfway through the setup time, far below the
             // host's filter; the bit timing is not changed
@@ -306,7 +323,11 @@ void Ps2KeyboardModel::step(bool clk_oe, bool data_oe) {
         }
         break;
     case S::TX_HIGH:
-        if (clk_oe && bit_ < 10) { abort_frame(); break; }
+        if (clk_oe && bit_ < 10) {
+            if (commit == Commit::AFTER_PARITY_CLOCK && bit_ == 9) end_committed();
+            else abort_frame();
+            break;
+        }
         if (t_ == 0) {
             bit_++;
             if (bit_ >= cur_.bits) {
@@ -359,7 +380,11 @@ void Ps2KeyboardModel::step(bool clk_oe, bool data_oe) {
             rx_dat_ = data_oe;
         }
         if (t_ == 0) {
-            if (rx_bit_ < 10) {
+            if (rx_bit_ < 10 && host_stall_bits > 0 && rx_bit_ >= host_stall_bits) {
+                host_stall_bits = 0;                 // the keyboard stops clocking (injected)
+                log.push_back("stopped clocking a host byte after " + std::to_string(rx_bit_) + " bits (injected)");
+                s_ = S::RX_STALL;
+            } else if (rx_bit_ < 10) {
                 drv_clk_ = true;
                 s_ = S::RX_LOW;
                 t_ = half_;
@@ -396,6 +421,13 @@ void Ps2KeyboardModel::step(bool clk_oe, bool data_oe) {
             finish_rx();
             s_ = S::GAP;
             t_ = us(gap_us);
+        }
+        break;
+    case S::RX_STALL:                                // silent until the host gives the byte up
+        if (!data_oe && !clk_oe) {
+            log.push_back("host gave up the stalled byte");
+            inhibited_ = false;
+            s_ = S::IDLE;
         }
         break;
     }
