@@ -135,7 +135,9 @@ module surf_video #(
             end
             if (wr && hit_scr) scroll_q <= s_req_wdata[SURF_VIDEO_SCROLL_ROW_LSB +: 5];
             if (wr && hit_ie)  ie_q     <= s_req_wdata[SURF_VIDEO_IE_VBLANK_LSB];
-            if (wr && hit_pal) pal_q[pal_idx * 12 +: 12] <= s_req_wdata[11:0];
+            if (wr && hit_pal) pal_q[pal_idx * 12 +: 12] <= {s_req_wdata[SURF_VIDEO_PALETTE_R_LSB +: 4],
+                                                             s_req_wdata[SURF_VIDEO_PALETTE_G_LSB +: 4],
+                                                             s_req_wdata[SURF_VIDEO_PALETTE_B_LSB +: 4]};
             if (wr && hit_stat && s_req_wdata[SURF_VIDEO_STATUS_VBLANK_EV_LSB]) st_ev <= 1'b0;
             if (vb_start) begin                 // a new blanking interval: set wins over clear
                 st_ev   <= 1'b1;
@@ -367,7 +369,11 @@ module surf_video #(
             rdata[SURF_VIDEO_INFO_GLYPH_H_LSB +: 5] = 5'd16;
         end
         if (hit_pclk) rdata = PIX_HZ_32;
-        if (hit_pal)  rdata[11:0] = pal_q[pal_idx * 12 +: 12];
+        if (hit_pal) begin                      // entries are kept as {R, G, B}
+            rdata[SURF_VIDEO_PALETTE_R_LSB +: 4] = pal_q[pal_idx * 12 + 8 +: 4];
+            rdata[SURF_VIDEO_PALETTE_G_LSB +: 4] = pal_q[pal_idx * 12 + 4 +: 4];
+            rdata[SURF_VIDEO_PALETTE_B_LSB +: 4] = pal_q[pal_idx * 12 +: 4];
+        end
     end
 
     reg        rsp_valid_q = 1'b0;

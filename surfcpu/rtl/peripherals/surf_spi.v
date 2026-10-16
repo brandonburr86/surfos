@@ -86,6 +86,7 @@ module surf_spi #(
     reg [7:0] rx_sh   = 8'd0;
     reg [7:0] rx_byte = 8'd0;            // the byte the last finished transfer received
 
+    wire [7:0] wbyte = s_req_wdata[SURF_SPI_DATA_DATA_LSB +: 8];   // the byte a DATA write sends
     wire half_end = busy && (cnt == 8'd0);
     wire xfer_end = half_end && sclk_q && (nbit == 3'd7);   // the last falling edge
     wire start    = wr && hit_data && !busy;
@@ -107,8 +108,8 @@ module surf_spi #(
             cur_div <= div_q;
             nbit    <= 3'd0;
             sclk_q  <= 1'b0;
-            tx_sh   <= s_req_wdata[6:0];
-            mosi_q  <= s_req_wdata[7];
+            tx_sh   <= wbyte[6:0];
+            mosi_q  <= wbyte[7];
         end else if (busy) begin
             if (!half_end) begin
                 cnt <= cnt - 8'd1;
