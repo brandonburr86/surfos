@@ -16,7 +16,9 @@ With --package it then boots the kernel package itself, SURFOS.BIN, the way Surf
 over (BOOT-ABI.md section 4): a stand-in for SurfBoot's last step (boards/qemu_virt/stub)
 copies the payload to its load address and jumps to the entry with a1 pointing at a
 struct surf_boot_info the harness made (its command line, RAM size and CRC), and the
-kernel must take it; a second boot with a corrupted CRC must refuse the block and carry on.
+kernel must take it; a second boot with a corrupted CRC must refuse the block and carry on;
+a third passes the word sdsim, which makes the RAM disk sd0, through the Arty's SD driver
+(boards/arty_a7/sdcard.c) and a simulated card, for FAT32 over the real SD code path.
 
 QEMU's virt machine is not SurfCPU: this tests the portable kernel and the qemu_virt HAL
 (boards/qemu_virt), not the Arty's hardware.
@@ -294,8 +296,69 @@ def package_boots(args, disk, check):
             finally:
                 transcript += q.transcript
                 q.close()
+        transcript += sdsim_boot(args, disk, hdr, check, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    return transcript
+
+
+def save_ramdisk(q, size):
+    """the RAM disk image as it is in the guest now (QEMU's monitor), or None"""
+    q.monitor('pmemsave 0x%x %d ramdisk.bin' % (RAMDISK_ADDR, size), 2.0)
+    dump = os.path.join(q.workdir, 'ramdisk.bin')
+    for _ in range(100):
+        if os.path.exists(dump) and os.path.getsize(dump) == size:
+            return dump
+        time.sleep(0.1)
+    return None
+
+
+def sdsim_boot(args, disk, hdr, check, work):
+    """the package again with the word sdsim: the RAM disk is sd0, through the Arty's SD driver
+    (boards/arty_a7/sdcard.c) and a simulated SDHC card; FAT32 on /sd0p1, then the host checks it"""
+    info = os.path.join(work, 'bootinfo-sdsim.bin')
+    with open(info, 'wb') as f:
+        f.write(bootinfo_blob('sdsim', 256 << 20, hdr['load'], hdr['mem']))
+    q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
+             loads=[(args.package, STUB_STAGE), (info, STUB_BOOTINFO)])
+    big = mkimage.foreign_big()
+    big_crc = zlib.crc32(big) & 0xFFFFFFFF
+    try:
+        ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
+        log = q.since(0)
+        check(ok and '+VFS: sd0p1 mounted on /sd0p1 (fat)' in log,
+              'sdsim: the RAM disk through the SD driver and a simulated card is sd0; its FAT32 partition mounted')
+        ok, out = q.cmd('ls /sd0p1', ['entries'])
+        check(ok and 'A long file name written elsewhere.txt' in out and 'BIG.BIN' in out, 'sdsim: ls /sd0p1 over the SD driver')
+        ok, out = q.cmd('crc32 /sd0p1/BIG.BIN', ['BIG.BIN'], timeout=90)
+        check(ok and re.search(r'%08x\s+1048576' % big_crc, out), 'sdsim: the 1 MB file read through the SD driver (CMD17/CMD18)')
+        ok, out = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/SDCOPY.BIN', ['1048576 bytes copied'], timeout=120)
+        ok2, _ = q.cmd('write /sd0p1/SDSIM.TXT written through the SD driver')
+        ok3, out3 = q.cmd('sync', ['synced'])
+        check(ok and ok2 and ok3, 'sdsim: a 1 MB copy and a new file written through the SD driver (CMD24/CMD25), synced')
+        ok, out = q.cmd('drivers', ['sdsim'])
+        m = re.search(r'sdsim\s+(\d+) reads, (\d+) writes, (\d+) CRC retries, (\d+) timeouts, (\d+) errors', out)
+        check(ok and m and int(m.group(1)) > 0 and int(m.group(2)) > 0 and m.group(4) == '0' and m.group(5) == '0',
+              'sdsim: the driver counted %s reads and %s writes, no timeouts or errors' % (m.group(1), m.group(2)) if m else 'sdsim: counters')
+        ok, out = q.cmd('umount /sd0p1')
+        dump = save_ramdisk(q, os.path.getsize(disk)) if ok else None
+        if check(dump, 'sdsim: umount, and the card image saved through the monitor'):
+            part = dump + '@@%d' % PART_OFFSET
+            r = run_mtools(['mtype', '-i', part, '::/SDSIM.TXT'])
+            check(r.returncode == 0 and r.stdout.strip() == 'written through the SD driver', 'sdsim: mtools reads SDSIM.TXT')
+            r = run_mtools(['mcopy', '-n', '-i', part, '::/SDCOPY.BIN', os.path.join(q.workdir, 'sdcopy.bin')])
+            got = open(os.path.join(q.workdir, 'sdcopy.bin'), 'rb').read() if r.returncode == 0 else b''
+            check(got == big, 'sdsim: mtools reads the 1 MB copy byte for byte')
+            with open(dump, 'rb') as f:
+                f.seek(PART_OFFSET)
+                with open(os.path.join(q.workdir, 'part.img'), 'wb') as p:
+                    p.write(f.read())
+            r = subprocess.run(['fsck.fat', '-n', os.path.join(q.workdir, 'part.img')], capture_output=True, text=True)
+            check(r.returncode == 0, 'sdsim: fsck.fat -n finds the volume clean')
+        check(q.poweroff() == 0, 'sdsim: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
     return transcript
 
 

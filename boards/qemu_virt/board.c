@@ -19,6 +19,7 @@ information: RAM is the linker script's (board.ld), and the command line is empt
 #include <surfos/task.h>
 #include <surfos/system.h>
 #include <surfos/irq.h>
+#include <surfos/multiboot.h>
 #include <sys/driver.h>
 #include <sys/bdev.h>
 #include <mm/kalloc.h>
@@ -226,6 +227,11 @@ static int rd_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
 
 static const struct bdev_ops rd_ops = { rd_read, rd_write, NULL };
 
+/* sdsim.c: the RAM disk as sd0, through the Arty's SD driver and a simulated card (the word sdsim) */
+int qv_sdsim_init(u8 *base, u32 blocks);
+void qv_sdsim_stats(void);
+bool qv_sdsim_active(void);
+
 static int qv_ramdisk(void) {
     struct bdev *d;
     rd.base = (u8 *)QV_RAMDISK_BASE;
@@ -234,6 +240,7 @@ static int qv_ramdisk(void) {
         kprintf("+RAMDISK: no disk image at 0x%08lx (the harness loads one with -device loader)\n", QV_RAMDISK_BASE);
         return 1;
     }
+    if(bootinfo_has_arg(&bootinfo, "sdsim")) return qv_sdsim_init(rd.base, rd.blocks) ? -1 : 0;
     d = (struct bdev *)kcalloc(1, sizeof(struct bdev));
     if(!d) return -1;
     strlcpy(d->name, "rd0", sizeof(d->name));
@@ -261,7 +268,8 @@ struct driver *board_drivers(u_int *count) {
 
 void board_print_devices(void) {
     printf("    keyboard  none (QEMU virt: the serial console is the keyboard)\n");
-    if(rd.blocks) printf("    ramdisk   rd0: %lu blocks at 0x%08lx\n", (u_long)rd.blocks, QV_RAMDISK_BASE);
+    if(qv_sdsim_active()) qv_sdsim_stats();
+    else if(rd.blocks) printf("    ramdisk   rd0: %lu blocks at 0x%08lx\n", (u_long)rd.blocks, QV_RAMDISK_BASE);
     else printf("    ramdisk   none\n");
 }
 
