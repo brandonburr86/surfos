@@ -50,6 +50,7 @@ cycle and has no other state. Targets are numbered in `surf_bus_targets.vh`.
 | data port, scratch, an MMIO window, text RAM | that target |
 | data port marked as a fetch (the core never does it) to MMIO or text RAM | error |
 | data port, DDR | the arbiter's data side (error with HAS_DDR = 0) |
+| data port, ddrc window (the DDR controller's registers), not a fetch | the `ddrc_*` master port with HAS_DDR = 1 and DDR_SWINIT = 1 (HAS_DDRC in the interconnect), else error |
 | either port, eth window or unmapped | error |
 
 **Response routing** (`surf_bus_demux`). The request fields go to every target; only the
@@ -113,13 +114,15 @@ so a write that clears a cause has taken effect by the time its response arrives
 | `surf_timer` | The rate comes from a fractional accumulator (exactly TIMEBASE_HZ ticks per SYS_HZ cycles for any ratio; every 25 cycles at 25 MHz). A write to MTIME_LO or MTIME_HI replaces that half; a tick in the same cycle is lost (the ISA.md rule for mcycle). MTIP = mtime >= mtimecmp straight from the registers. |
 | `surf_intc` | ENABLE stores all 32 bits; PENDING shows all 32 source levels. |
 | `surf_gpio` | Two-flip-flop synchronizers on every input. Buttons: a shared 1 ms tick; the debounced state follows the pin after it has differed for 10 consecutive ticks (9 to 10 ms of stable level; a bounce restarts the count). A debounced press sets BTN_EDGE (a press in the same cycle as the clear wins). RGB at 1/8 duty: on for 256 of every 2048 cycles (about 12 kHz at 25 MHz). LED and RGB outputs are registered. |
-| `surf_sysinfo` | MAGIC is typed as 0x46525553 (the map gives it only as text). BUILD_FLAGS and FEATURES show only their defined bits. PRESENT = FEATURES.DDR. TIMEOUT latches the bridge's `ddr_timeout` (pulse or level) until reset and reads 1 already in the cycle of the pulse, so a load right behind the abandoned access sees it. |
+| `surf_sysinfo` | MAGIC is typed as 0x46525553 (the map gives it only as text). BUILD_FLAGS and FEATURES show only their defined bits. PRESENT = FEATURES.DDR; SWINIT = the DDR_SWINIT parameter, with PRESENT only. TIMEOUT latches the bridge's `ddr_timeout` (pulse or level) until reset and reads 1 already in the cycle of the pulse, so a load right behind the abandoned access sees it. |
 
 ## 5. `surfcpu_soc`
 
 Ports and parameters exactly as MODULES.md section 4 (the board track's top instantiates it
-with `HAS_DDR = 0`). FEATURES = all eight blocks, DDR only with `HAS_DDR = 1`; DDR_SIZE is 0
-without DDR. sysinfo sees the calibration inputs only with `HAS_DDR = 1`. `rst` and `pix_rst`
+with `HAS_DDR = 0`, and its DDR designs with `HAS_DDR = 1` and `DDR_SWINIT = 1`: LiteDRAM
+without a CPU, whose registers the `ddrc_*` port reaches through `surf_ddr_csr`). FEATURES = all
+eight blocks, DDR only with `HAS_DDR = 1`; DDR_SIZE is 0 without DDR. sysinfo sees the
+calibration inputs only with `HAS_DDR = 1`; DDR_STATUS.SWINIT is `DDR_SWINIT` with DDR. `rst` and `pix_rst`
 are expected from a `surf_reset_sync` per domain; `ddr_calib_*` and `ddr_timeout` already in
 the clk domain. Interrupt sources by spec/soc.toml [irqs]: uart 0, ps2 1, gpio 2, video 3, spi 4.
 `surf_ps2`'s `*_oe` outputs go straight to the ports (the board drives the lines only low).
@@ -164,8 +167,8 @@ the same cycle as the previous response.
 
 | Target | What |
 |---|---|
-| `lint-soc` | Verilator -Wall of every module, the SoC with both HAS_DDR and with RVFI, the stand-ins; Icarus -g2005 |
-| `test-soc-units` | Icarus testbenches through a SurfBus BFM (random gaps, back-to-back requests, junk on the fields after acceptance) with a protocol monitor on every link: `tb_intc`, `tb_sysinfo` (with and without DDR), `tb_timer` (25 MHz and a fractional 33.33 MHz), `tb_uart` (real divisor, bit timing to the cycle, both FIFOs' overflow, framing errors, break, glitch, +-3 % baud, interrupts, error rules), `tb_gpio` (bouncing buttons at 100 kHz and at the real 25 MHz, the debounce delay measured), `tb_mem` (three memories, `+bootrom=`, empty ROM, pixel port), `tb_interconnect` (every target a random-stall slave, a reference decoder written as address ranges, 17 monitored links, both ports alone and together, DDR before, after and losing calibration, DDR errors, arbitration and the offer lock; with and without DDR) |
+| `lint-soc` | Verilator -Wall of every module, the interconnect with HAS_DDR 0 and HAS_DDRC 1, the SoC with both HAS_DDR, with DDR_SWINIT and with RVFI, the stand-ins; Icarus -g2005 |
+| `test-soc-units` | Icarus testbenches through a SurfBus BFM (random gaps, back-to-back requests, junk on the fields after acceptance) with a protocol monitor on every link: `tb_intc`, `tb_sysinfo` (with and without DDR, each with and without SWINIT), `tb_timer` (25 MHz and a fractional 33.33 MHz), `tb_uart` (real divisor, bit timing to the cycle, both FIFOs' overflow, framing errors, break, glitch, +-3 % baud, interrupts, error rules), `tb_gpio` (bouncing buttons at 100 kHz and at the real 25 MHz, the debounce delay measured), `tb_mem` (three memories, `+bootrom=`, empty ROM, pixel port), `tb_interconnect` (every target a random-stall slave, a reference decoder written as address ranges, 17 monitored links, both ports alone and together, DDR before, after and losing calibration, DDR errors, arbitration and the offer lock; with and without DDR, and with the ddrc window mapped) |
 | `test-soc-verilator` | the same ten unit testbench configurations under Verilator --timing |
 | `test-soc-system` | `tb_soc` (Icarus): the whole SoC with the scripted core, UART and GPIO looped back, a Verilog DDR model with calibration delay, random ready and latency and a watchdog case; scripts `soc_regions`, `soc_errors`, `soc_random` (also back to back), `soc_periph`, with and without DDR; a negative script must fail with exactly its three wrong expectations |
 | `test-soc-models` | `sim/soc/test_models.cpp`: the UART model's waveform, exchanges, errors and baud tolerance; the DDR model against a reference over the whole window |
@@ -178,9 +181,10 @@ the same cycle as the previous response.
 `make test-soc-system-selftest` (not in `test-soc`: 1.7 billion cycles, about 8.5 minutes) boots
 the same way and runs the kernel's `selftest` (section 9.2).
 
-`make test-soc-mutants` (not in `test-soc`, about a minute) checks the tests themselves: 37
+`make test-soc-mutants` (not in `test-soc`, about a minute) checks the tests themselves: 41
 one-line bugs planted in copies of the RTL (`sim/soc/tools/mutants.py`: intc 2, uart 9, gpio 6,
-timer 3, sysinfo 2, memories 5, interconnect 10) must each make the covering unit testbench
+timer 3, sysinfo 3, memories 5, interconnect 13, of which two run against the variant with the
+DDR controller's register window, `HAS_DDRC = 1`) must each make the covering unit testbench
 fail. All are caught. Surviving mutants found two gaps on the way, both closed: `tb_uart` did not
 look at TX_IE while the shifter is busy, and `tb_interconnect`'s calibration-lost case could let
 the fetch through before calibration dropped.

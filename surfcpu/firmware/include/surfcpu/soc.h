@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 1, SoC version 0.1.0.
+ * SurfCPU memory map version 2, SoC version 0.2.0.
  */
 
 #ifndef SURFCPU_SOC_H
@@ -9,8 +9,8 @@
 /* Register access: SURF_REG(SURF_UART_BASE, SURF_UART_STATUS). */
 #define SURF_REG(base, off) (*(volatile unsigned int *)((base) + (off)))
 
-#define SURF_MAP_VERSION 1 /* memory map version */
-#define SURF_SOC_VERSION 0x00000100u /* SoC version 0.1.0 */
+#define SURF_MAP_VERSION 2 /* memory map version */
+#define SURF_SOC_VERSION 0x00000200u /* SoC version 0.2.0 */
 #define SURF_RESET_PC 0x00000000u /* reset vector */
 #define SURF_HART_ID 0 /* mhartid */
 #define SURF_OSC_HZ 100000000 /* Hz */
@@ -54,6 +54,9 @@
 #define SURF_ETH_BASE 0x10008000u /* Reserved for a later Ethernet MAC (decodes as unmapped until then) */
 #define SURF_ETH_SIZE 0x00001000u
 #define SURF_ETH_MASK 0x00000FFFu /* address bits inside the region */
+#define SURF_DDRC_BASE 0x1000A000u /* DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0 */
+#define SURF_DDRC_SIZE 0x00002000u
+#define SURF_DDRC_MASK 0x00001FFFu /* address bits inside the region */
 #define SURF_TEXTRAM_BASE 0x20000000u /* Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col) */
 #define SURF_TEXTRAM_SIZE 0x00004000u
 #define SURF_TEXTRAM_MASK 0x00003FFFu /* address bits inside the region */
@@ -359,11 +362,11 @@
 #define SURF_SYSINFO_FEATURES_DDR_LSB 7
 #define SURF_SYSINFO_FEATURES_DDR_WIDTH 1
 #define SURF_SYSINFO_FEATURES_DDR_MASK 0x00000080u /* in place */
-#define SURF_SYSINFO_DDR_STATUS 0x00000020u /* ro: DDR controller state. The DDR window answers with errors until CALIB_DONE. */
+#define SURF_SYSINFO_DDR_STATUS 0x00000020u /* ro: DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself. */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_LSB 0 /* calibration succeeded; DDR is usable */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_WIDTH 1
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_MASK 0x00000001u /* in place */
-#define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB 1 /* sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0 */
+#define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB 1 /* sticky until reset: calibration had not succeeded within the bridge's limit (CALIB_TIMEOUT_CYCLES, counted from reset, software initialization included); CALIB_DONE then stays 0 */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_WIDTH 1
 #define SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_MASK 0x00000002u /* in place */
 #define SURF_SYSINFO_DDR_STATUS_PRESENT_LSB 2 /* a DDR controller is built in */
@@ -372,10 +375,143 @@
 #define SURF_SYSINFO_DDR_STATUS_TIMEOUT_LSB 3 /* sticky until reset: a DDR access was abandoned by the bridge's watchdog */
 #define SURF_SYSINFO_DDR_STATUS_TIMEOUT_WIDTH 1
 #define SURF_SYSINFO_DDR_STATUS_TIMEOUT_MASK 0x00000008u /* in place */
+#define SURF_SYSINFO_DDR_STATUS_SWINIT_LSB 4 /* the controller waits for software to initialize and calibrate the DDR3L through the ddrc registers (LiteDRAM without its own CPU); 0: it does so by itself (MIG, the simulation model) */
+#define SURF_SYSINFO_DDR_STATUS_SWINIT_WIDTH 1
+#define SURF_SYSINFO_DDR_STATUS_SWINIT_MASK 0x00000010u /* in place */
 #define SURF_SYSINFO_DDR_SIZE 0x00000024u /* ro: Bytes of DDR behind the window (0 when not present). */
 #define SURF_SYSINFO_PIX_HZ 0x00000028u /* ro: Pixel clock in Hz (0 without video). */
 #define SURF_SYSINFO_SCRATCH 0x0000002Cu /* rw: Free read/write word for bus tests (reset 0). */
 #define SURF_SYSINFO_BUILD_TIME 0x00000030u /* ro: Build time, seconds since 1970-01-01 UTC (0 if unknown). */
+#define SURF_DDRC_INIT_DONE 0x00000000u /* rw: ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows. */
+#define SURF_DDRC_INIT_DONE_DONE_LSB 0 /* initialization ended */
+#define SURF_DDRC_INIT_DONE_DONE_WIDTH 1
+#define SURF_DDRC_INIT_DONE_DONE_MASK 0x00000001u /* in place */
+#define SURF_DDRC_INIT_ERROR 0x00000004u /* rw: ddrctrl.init_error: software writes 1 (with INIT_DONE) when initialization failed; the user port stays closed. */
+#define SURF_DDRC_INIT_ERROR_ERROR_LSB 0 /* initialization failed */
+#define SURF_DDRC_INIT_ERROR_ERROR_WIDTH 1
+#define SURF_DDRC_INIT_ERROR_ERROR_MASK 0x00000001u /* in place */
+#define SURF_DDRC_PHY_RST 0x00000800u /* rw: ddrphy.rst: 1 holds the PHY in reset. */
+#define SURF_DDRC_PHY_DLY_SEL 0x00000804u /* rw: ddrphy.dly_sel: one bit per byte lane (bit 0 DQ7:0, bit 1 DQ15:8): the lanes the delay and bitslip strobes act on. */
+#define SURF_DDRC_PHY_HALF_SYS8X_TAPS 0x00000808u /* rw: ddrphy.half_sys8x_taps: delay taps of a quarter controller clock (write leveling; unused by the read-leveling sequence). */
+#define SURF_DDRC_PHY_WLEVEL_EN 0x0000080Cu /* rw: ddrphy.wlevel_en: write-leveling mode (unused: the Arty's PHY is not write-leveling capable). */
+#define SURF_DDRC_PHY_WLEVEL_STROBE 0x00000810u /* rw: ddrphy.wlevel_strobe: write-leveling strobe (unused). */
+#define SURF_DDRC_PHY_RDLY_DQ_RST 0x00000814u /* rw: ddrphy.rdly_dq_rst: writing 1 sets the selected lanes' read delays (IDELAYE2) back to tap 0. */
+#define SURF_DDRC_PHY_RDLY_DQ_INC 0x00000818u /* rw: ddrphy.rdly_dq_inc: writing 1 moves the selected lanes' read delays one tap up. */
+#define SURF_DDRC_PHY_RDLY_DQ_BITSLIP_RST 0x0000081Cu /* rw: ddrphy.rdly_dq_bitslip_rst: writing 1 sets the selected lanes' read bitslip back to 0. */
+#define SURF_DDRC_PHY_RDLY_DQ_BITSLIP 0x00000820u /* rw: ddrphy.rdly_dq_bitslip: writing 1 moves the selected lanes' read bitslip one step on (8 steps, then round). */
+#define SURF_DDRC_PHY_WDLY_DQ_BITSLIP_RST 0x00000824u /* rw: ddrphy.wdly_dq_bitslip_rst: writing 1 sets the selected lanes' write bitslip back to 0. */
+#define SURF_DDRC_PHY_WDLY_DQ_BITSLIP 0x00000828u /* rw: ddrphy.wdly_dq_bitslip: writing 1 moves the selected lanes' write bitslip one step on. */
+#define SURF_DDRC_PHY_RDPHASE 0x0000082Cu /* rw: ddrphy.rdphase: the DFI phase reads are issued on (the generator's SDRAM_PHY_RDPHASE). */
+#define SURF_DDRC_PHY_WRPHASE 0x00000830u /* rw: ddrphy.wrphase: the DFI phase writes are issued on (the generator's SDRAM_PHY_WRPHASE). */
+#define SURF_DDRC_DFII_CONTROL 0x00001000u /* rw: sdram.dfii_control: who drives the DRAM, and its control lines while software does. */
+#define SURF_DDRC_DFII_CONTROL_SEL_LSB 0 /* 1: the controller (hardware control); 0: software, through the phase injectors below */
+#define SURF_DDRC_DFII_CONTROL_SEL_WIDTH 1
+#define SURF_DDRC_DFII_CONTROL_SEL_MASK 0x00000001u /* in place */
+#define SURF_DDRC_DFII_CONTROL_CKE_LSB 1 /* CKE while under software control */
+#define SURF_DDRC_DFII_CONTROL_CKE_WIDTH 1
+#define SURF_DDRC_DFII_CONTROL_CKE_MASK 0x00000002u /* in place */
+#define SURF_DDRC_DFII_CONTROL_ODT_LSB 2 /* ODT while under software control */
+#define SURF_DDRC_DFII_CONTROL_ODT_WIDTH 1
+#define SURF_DDRC_DFII_CONTROL_ODT_MASK 0x00000004u /* in place */
+#define SURF_DDRC_DFII_CONTROL_RESET_N_LSB 3 /* the DRAM's RESET# (1 = released) while under software control */
+#define SURF_DDRC_DFII_CONTROL_RESET_N_WIDTH 1
+#define SURF_DDRC_DFII_CONTROL_RESET_N_MASK 0x00000008u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND 0x00001004u /* rw: sdram.dfii_pi0_command: the command bits of phase 0's next injected command. */
+#define SURF_DDRC_DFII_P0_COMMAND_CS_LSB 0 /* chip select */
+#define SURF_DDRC_DFII_P0_COMMAND_CS_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_CS_MASK 0x00000001u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_WE_LSB 1 /* WE (active: the command's WE# is low) */
+#define SURF_DDRC_DFII_P0_COMMAND_WE_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_WE_MASK 0x00000002u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_CAS_LSB 2 /* CAS (active: CAS# low) */
+#define SURF_DDRC_DFII_P0_COMMAND_CAS_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_CAS_MASK 0x00000004u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_RAS_LSB 3 /* RAS (active: RAS# low) */
+#define SURF_DDRC_DFII_P0_COMMAND_RAS_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_RAS_MASK 0x00000008u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_WRDATA_LSB 4 /* the command writes WRDATA */
+#define SURF_DDRC_DFII_P0_COMMAND_WRDATA_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_WRDATA_MASK 0x00000010u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_RDDATA_LSB 5 /* the command's read data is captured into RDDATA */
+#define SURF_DDRC_DFII_P0_COMMAND_RDDATA_WIDTH 1
+#define SURF_DDRC_DFII_P0_COMMAND_RDDATA_MASK 0x00000020u /* in place */
+#define SURF_DDRC_DFII_P0_COMMAND_ISSUE 0x00001008u /* rw: sdram.dfii_pi0_command_issue: writing 1 issues phase 0's command (in the controller's next cycle). */
+#define SURF_DDRC_DFII_P0_ADDRESS 0x0000100Cu /* rw: sdram.dfii_pi0_address: the row or column address (or mode register value) of phase 0's command. */
+#define SURF_DDRC_DFII_P0_BADDRESS 0x00001010u /* rw: sdram.dfii_pi0_baddress: the bank address (or mode register number) of phase 0's command. */
+#define SURF_DDRC_DFII_P0_WRDATA 0x00001014u /* rw: sdram.dfii_pi0_wrdata: phase 0's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). */
+#define SURF_DDRC_DFII_P0_RDDATA 0x00001018u /* ro: sdram.dfii_pi0_rddata: phase 0's data from the last injected read, in WRDATA's layout. */
+#define SURF_DDRC_DFII_P1_COMMAND 0x0000101Cu /* rw: sdram.dfii_pi1_command: the command bits of phase 1's next injected command. */
+#define SURF_DDRC_DFII_P1_COMMAND_CS_LSB 0 /* chip select */
+#define SURF_DDRC_DFII_P1_COMMAND_CS_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_CS_MASK 0x00000001u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_WE_LSB 1 /* WE (active: the command's WE# is low) */
+#define SURF_DDRC_DFII_P1_COMMAND_WE_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_WE_MASK 0x00000002u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_CAS_LSB 2 /* CAS (active: CAS# low) */
+#define SURF_DDRC_DFII_P1_COMMAND_CAS_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_CAS_MASK 0x00000004u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_RAS_LSB 3 /* RAS (active: RAS# low) */
+#define SURF_DDRC_DFII_P1_COMMAND_RAS_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_RAS_MASK 0x00000008u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_WRDATA_LSB 4 /* the command writes WRDATA */
+#define SURF_DDRC_DFII_P1_COMMAND_WRDATA_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_WRDATA_MASK 0x00000010u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_RDDATA_LSB 5 /* the command's read data is captured into RDDATA */
+#define SURF_DDRC_DFII_P1_COMMAND_RDDATA_WIDTH 1
+#define SURF_DDRC_DFII_P1_COMMAND_RDDATA_MASK 0x00000020u /* in place */
+#define SURF_DDRC_DFII_P1_COMMAND_ISSUE 0x00001020u /* rw: sdram.dfii_pi1_command_issue: writing 1 issues phase 1's command (in the controller's next cycle). */
+#define SURF_DDRC_DFII_P1_ADDRESS 0x00001024u /* rw: sdram.dfii_pi1_address: the row or column address (or mode register value) of phase 1's command. */
+#define SURF_DDRC_DFII_P1_BADDRESS 0x00001028u /* rw: sdram.dfii_pi1_baddress: the bank address (or mode register number) of phase 1's command. */
+#define SURF_DDRC_DFII_P1_WRDATA 0x0000102Cu /* rw: sdram.dfii_pi1_wrdata: phase 1's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). */
+#define SURF_DDRC_DFII_P1_RDDATA 0x00001030u /* ro: sdram.dfii_pi1_rddata: phase 1's data from the last injected read, in WRDATA's layout. */
+#define SURF_DDRC_DFII_P2_COMMAND 0x00001034u /* rw: sdram.dfii_pi2_command: the command bits of phase 2's next injected command. */
+#define SURF_DDRC_DFII_P2_COMMAND_CS_LSB 0 /* chip select */
+#define SURF_DDRC_DFII_P2_COMMAND_CS_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_CS_MASK 0x00000001u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_WE_LSB 1 /* WE (active: the command's WE# is low) */
+#define SURF_DDRC_DFII_P2_COMMAND_WE_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_WE_MASK 0x00000002u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_CAS_LSB 2 /* CAS (active: CAS# low) */
+#define SURF_DDRC_DFII_P2_COMMAND_CAS_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_CAS_MASK 0x00000004u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_RAS_LSB 3 /* RAS (active: RAS# low) */
+#define SURF_DDRC_DFII_P2_COMMAND_RAS_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_RAS_MASK 0x00000008u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_WRDATA_LSB 4 /* the command writes WRDATA */
+#define SURF_DDRC_DFII_P2_COMMAND_WRDATA_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_WRDATA_MASK 0x00000010u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_RDDATA_LSB 5 /* the command's read data is captured into RDDATA */
+#define SURF_DDRC_DFII_P2_COMMAND_RDDATA_WIDTH 1
+#define SURF_DDRC_DFII_P2_COMMAND_RDDATA_MASK 0x00000020u /* in place */
+#define SURF_DDRC_DFII_P2_COMMAND_ISSUE 0x00001038u /* rw: sdram.dfii_pi2_command_issue: writing 1 issues phase 2's command (in the controller's next cycle). */
+#define SURF_DDRC_DFII_P2_ADDRESS 0x0000103Cu /* rw: sdram.dfii_pi2_address: the row or column address (or mode register value) of phase 2's command. */
+#define SURF_DDRC_DFII_P2_BADDRESS 0x00001040u /* rw: sdram.dfii_pi2_baddress: the bank address (or mode register number) of phase 2's command. */
+#define SURF_DDRC_DFII_P2_WRDATA 0x00001044u /* rw: sdram.dfii_pi2_wrdata: phase 2's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). */
+#define SURF_DDRC_DFII_P2_RDDATA 0x00001048u /* ro: sdram.dfii_pi2_rddata: phase 2's data from the last injected read, in WRDATA's layout. */
+#define SURF_DDRC_DFII_P3_COMMAND 0x0000104Cu /* rw: sdram.dfii_pi3_command: the command bits of phase 3's next injected command. */
+#define SURF_DDRC_DFII_P3_COMMAND_CS_LSB 0 /* chip select */
+#define SURF_DDRC_DFII_P3_COMMAND_CS_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_CS_MASK 0x00000001u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_WE_LSB 1 /* WE (active: the command's WE# is low) */
+#define SURF_DDRC_DFII_P3_COMMAND_WE_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_WE_MASK 0x00000002u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_CAS_LSB 2 /* CAS (active: CAS# low) */
+#define SURF_DDRC_DFII_P3_COMMAND_CAS_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_CAS_MASK 0x00000004u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_RAS_LSB 3 /* RAS (active: RAS# low) */
+#define SURF_DDRC_DFII_P3_COMMAND_RAS_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_RAS_MASK 0x00000008u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_WRDATA_LSB 4 /* the command writes WRDATA */
+#define SURF_DDRC_DFII_P3_COMMAND_WRDATA_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_WRDATA_MASK 0x00000010u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_RDDATA_LSB 5 /* the command's read data is captured into RDDATA */
+#define SURF_DDRC_DFII_P3_COMMAND_RDDATA_WIDTH 1
+#define SURF_DDRC_DFII_P3_COMMAND_RDDATA_MASK 0x00000020u /* in place */
+#define SURF_DDRC_DFII_P3_COMMAND_ISSUE 0x00001050u /* rw: sdram.dfii_pi3_command_issue: writing 1 issues phase 3's command (in the controller's next cycle). */
+#define SURF_DDRC_DFII_P3_ADDRESS 0x00001054u /* rw: sdram.dfii_pi3_address: the row or column address (or mode register value) of phase 3's command. */
+#define SURF_DDRC_DFII_P3_BADDRESS 0x00001058u /* rw: sdram.dfii_pi3_baddress: the bank address (or mode register number) of phase 3's command. */
+#define SURF_DDRC_DFII_P3_WRDATA 0x0000105Cu /* rw: sdram.dfii_pi3_wrdata: phase 3's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2). */
+#define SURF_DDRC_DFII_P3_RDDATA 0x00001060u /* ro: sdram.dfii_pi3_rddata: phase 3's data from the last injected read, in WRDATA's layout. */
 #define SURF_IMAGE_MAGIC 0x474D4953u /* boot ABI */
 #define SURF_IMAGE_HEADER_VERSION 0x00000001u /* boot ABI */
 #define SURF_IMAGE_HEADER_SIZE 0x00000040u /* boot ABI */

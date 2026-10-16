@@ -1,7 +1,7 @@
 /*
 SurfCPU SoC
 --------------------
-File: surfcpu_soc.v Date: 10/15/26 (SurfCPU)
+File: surfcpu_soc.v Date: 10/16/26 (SurfCPU)
 --------------------
 The system around SurfCPU (docs/MODULES.md section 4, docs/SOC.md): the core, the SurfBus
 interconnect of docs/SURFBUS.md section 6, the boot ROM, scratch RAM and text RAM, and the
@@ -9,7 +9,10 @@ peripherals of docs/MEMORY-MAP.md (uart, timer, intc, gpio, spi, ps2, video, sys
 the clk domain except the video scan-out and the text RAM's pixel port (pix_clk). The DDR
 window leaves as a SurfBus master port toward surf_ddr_bridge (or a simulation model); the
 SoC answers every DDR-window access with an error while HAS_DDR is 0 or ddr_calib_done is 0,
-so nothing reaches the bridge before calibration. rst and pix_rst come from a
+so nothing reaches the bridge before calibration. With DDR_SWINIT (and HAS_DDR) the DDR
+controller's registers (the ddrc region, LiteDRAM's CSRs) leave as a second SurfBus master
+port, ddrc_*, toward surf_ddr_csr, through which software initializes and calibrates the
+memory; without, the ddrc region is unmapped and that port stays idle. rst and pix_rst come from a
 surf_reset_sync in each domain (the board top); ddr_calib_done, ddr_calib_fail and
 ddr_timeout come from the bridge, already in the clk domain. In simulation the boot ROM can
 also be loaded with +bootrom=<file>.
@@ -28,7 +31,8 @@ module surfcpu_soc #(
     parameter [31:0]  BUILD_FLAGS  = 32'h0,
     parameter [31:0]  BUILD_TIME   = 32'h0,
     parameter integer HAS_DDR      = 1,
-    parameter [31:0]  DDR_SIZE     = 32'h1000_0000
+    parameter [31:0]  DDR_SIZE     = 32'h1000_0000,
+    parameter integer DDR_SWINIT   = 0             // 1: the DDR controller needs software init (ddrc)
 ) (
     input  wire        clk, rst, pix_clk, pix_rst,
     input  wire        uart_rx,  output wire uart_tx,
@@ -41,7 +45,11 @@ module surfcpu_soc #(
     output wire        ddr_req_write, output wire [3:0] ddr_req_be, output wire [31:0] ddr_req_wdata,
     output wire        ddr_req_fetch,
     input  wire        ddr_rsp_valid, input wire [31:0] ddr_rsp_rdata, input wire ddr_rsp_err,
-    input  wire        ddr_calib_done, ddr_calib_fail, ddr_timeout
+    input  wire        ddr_calib_done, ddr_calib_fail, ddr_timeout,
+    // the DDR controller's registers: a SurfBus master port toward surf_ddr_csr (DDR_SWINIT only)
+    output wire        ddrc_req_valid, input wire ddrc_req_ready, output wire [31:0] ddrc_req_addr,
+    output wire        ddrc_req_write, output wire [3:0] ddrc_req_be, output wire [31:0] ddrc_req_wdata,
+    input  wire        ddrc_rsp_valid, input wire [31:0] ddrc_rsp_rdata, input wire ddrc_rsp_err
 `ifdef SURFCPU_RVFI
     , `SURFCPU_RVFI_OUTPUTS
 `endif
@@ -57,6 +65,7 @@ module surfcpu_soc #(
                                   SURF_SYSINFO_FEATURES_VIDEO_MASK |
                                   ((HAS_DDR != 0) ? SURF_SYSINFO_FEATURES_DDR_MASK : 32'h0);
     localparam [31:0] DDR_BYTES = (HAS_DDR != 0) ? DDR_SIZE : 32'h0;
+    localparam integer HAS_DDRC = ((HAS_DDR != 0) && (DDR_SWINIT != 0)) ? 1 : 0;
 
     // ---------------------------------------------------------------- the core
     wire        ibus_req_valid, ibus_req_ready, ibus_req_write, ibus_req_fetch;
@@ -101,7 +110,7 @@ module surfcpu_soc #(
     wire [3:0]       dt_req_be;
     wire [32*KD-1:0] dt_rsp_rdata;
 
-    surf_interconnect #(.HAS_DDR(HAS_DDR)) u_bus (
+    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC)) u_bus (
         .clk(clk), .rst(rst), .ddr_calib_done(ddr_calib_done),
         .i_req_valid(ibus_req_valid), .i_req_ready(ibus_req_ready), .i_req_addr(ibus_req_addr),
         .i_req_write(ibus_req_write), .i_req_be(ibus_req_be), .i_req_wdata(ibus_req_wdata),
@@ -141,6 +150,19 @@ module surfcpu_soc #(
     .s_req_write(dt_req_write), .s_req_be(dt_req_be), .s_req_wdata(dt_req_wdata), \
     .s_req_fetch(dt_req_fetch), .s_rsp_valid(dt_rsp_valid[T]), \
     .s_rsp_rdata(dt_rsp_rdata[32*(T) +: 32]), .s_rsp_err(dt_rsp_err[T])
+
+    // ---------------------------------------------------------------- the DDR controller's registers
+    // The ddrc target goes out as it is; the decoder selects it only with HAS_DDRC, and the
+    // port's answers count only then, so an idle or unconnected port is harmless.
+    assign ddrc_req_valid                         = dt_req_valid[`SURF_DT_DDRC];
+    assign dt_req_ready[`SURF_DT_DDRC]            = (HAS_DDRC != 0) && ddrc_req_ready;
+    assign ddrc_req_addr                          = dt_req_addr;
+    assign ddrc_req_write                         = dt_req_write;
+    assign ddrc_req_be                            = dt_req_be;
+    assign ddrc_req_wdata                         = dt_req_wdata;
+    assign dt_rsp_valid[`SURF_DT_DDRC]            = (HAS_DDRC != 0) && ddrc_rsp_valid;
+    assign dt_rsp_rdata[32*`SURF_DT_DDRC +: 32]   = (HAS_DDRC != 0) ? ddrc_rsp_rdata : 32'h0;
+    assign dt_rsp_err[`SURF_DT_DDRC]              = (HAS_DDRC != 0) && ddrc_rsp_err;
 
     // ---------------------------------------------------------------- memories
     surf_bootrom #(.INIT_FILE(BOOTROM_INIT)) u_bootrom (
@@ -203,7 +225,7 @@ module surfcpu_soc #(
     surf_sysinfo #(
         .BOARD_ID(BOARD_ID), .SYS_HZ(SYS_HZ), .PIX_HZ(PIX_HZ), .BUILD_ID(BUILD_ID),
         .BUILD_FLAGS(BUILD_FLAGS), .BUILD_TIME(BUILD_TIME), .FEATURES(FEATURES),
-        .DDR_SIZE(DDR_BYTES)
+        .DDR_SIZE(DDR_BYTES), .DDR_SWINIT(DDR_SWINIT)
     ) u_sysinfo (
         .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_SYSINFO),
         .ddr_calib_done((HAS_DDR != 0) && ddr_calib_done),

@@ -1,13 +1,14 @@
 /*
 SurfCPU system information
 --------------------
-File: surf_sysinfo.v Date: 10/15/26 (SurfCPU)
+File: surf_sysinfo.v Date: 10/16/26 (SurfCPU)
 --------------------
 sysinfo at 0x1000_7000 (docs/MEMORY-MAP.md): the identity of the board and the build, the
 clock rates and the DDR state, all read only except SCRATCH. MAGIC reads 0x46525553 ("SURF"
 in memory order); the versions come from spec/soc.toml; the build values are parameters set
 by the board top or the simulation. DDR_STATUS shows the bridge's calibration levels
-(CALIB_DONE, CALIB_FAIL), PRESENT = FEATURES.DDR, and TIMEOUT, which latches any
+(CALIB_DONE, CALIB_FAIL), PRESENT = FEATURES.DDR, SWINIT = DDR_SWINIT with PRESENT (the
+controller waits for software through the ddrc registers), and TIMEOUT, which latches any
 ddr_timeout from the bridge's watchdog and stays set until reset; it reads 1 already in the
 cycle of the pulse, so a read right behind the abandoned access (which the bridge answers in
 that same cycle) sees it. BUILD_FLAGS and FEATURES
@@ -23,7 +24,8 @@ module surf_sysinfo #(
     parameter [31:0]  BUILD_FLAGS = 32'h0,
     parameter [31:0]  BUILD_TIME  = 32'h0,
     parameter [31:0]  FEATURES    = 32'h0000_00FF,
-    parameter [31:0]  DDR_SIZE    = 32'h1000_0000
+    parameter [31:0]  DDR_SIZE    = 32'h1000_0000,
+    parameter integer DDR_SWINIT  = 0          // the DDR controller needs software initialization
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -70,6 +72,8 @@ module surf_sysinfo #(
         ddr_status[SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB] = ddr_calib_fail;
         ddr_status[SURF_SYSINFO_DDR_STATUS_PRESENT_LSB]    = FEATURES[SURF_SYSINFO_FEATURES_DDR_LSB];
         ddr_status[SURF_SYSINFO_DDR_STATUS_TIMEOUT_LSB]    = timeout_q | ddr_timeout;
+        ddr_status[SURF_SYSINFO_DDR_STATUS_SWINIT_LSB]     = (DDR_SWINIT != 0) &&
+                                                             FEATURES[SURF_SYSINFO_FEATURES_DDR_LSB];
     end
 
     // ---------------------------------------------------------------- SurfBus slave

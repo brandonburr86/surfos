@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SurfCPU soc mutation check
 --------------------
-File: mutants.py Date: 10/15/26 (SurfCPU)
+File: mutants.py Date: 10/16/26 (SurfCPU)
 --------------------
 Checks the soc testbenches catch bugs (make test-soc-mutants): each mutant changes one line of
 an RTL file the way a plausible bug would, the unit testbench that covers it is compiled with
@@ -38,6 +38,10 @@ BENCH = {
     "mem": ("tb_mem", "sim/soc/tb/tb_mem.v", MEM, ['-Ptb_mem.ROMFILE="build/soc/rom_a.mem"']),
     "bus": ("tb_interconnect", "sim/soc/tb/tb_interconnect.v",
             BUS + ["sim/soc/bfm/surfbus_slave_model.v"], []),
+    "bus_ddrc": ("tb_interconnect", "sim/soc/tb/tb_interconnect.v",
+                 BUS + ["sim/soc/bfm/surfbus_slave_model.v"], ["-Ptb_interconnect.HAS_DDRC=1"]),
+    "sysinfo_swinit": ("tb_sysinfo", "sim/soc/tb/tb_sysinfo.v", ["rtl/peripherals/surf_sysinfo.v"],
+                       ["-Ptb_sysinfo.DDR=0", "-Ptb_sysinfo.SWINIT=1"]),
 }
 
 # (bench, file, original text, mutated text): the original must occur exactly once
@@ -133,6 +137,19 @@ MUTANTS = [
     ("bus", "rtl/soc/surf_interconnect.v",
      "                .clk(clk), .rst(rst), .ddr_ok(ddr_calib_done),",
      "                .clk(clk), .rst(rst), .ddr_ok(1'b1),"),
+    ("bus", "rtl/soc/surf_dbus_decoder.v",
+     "assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE) && nf;",
+     "assign hit[`SURF_DT_DDRC]    = ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE) && nf;"),
+    ("bus_ddrc", "rtl/soc/surf_dbus_decoder.v",
+     "assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE) && nf;",
+     "assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE);"),
+    ("bus_ddrc", "rtl/soc/surf_dbus_decoder.v",
+     "assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE) && nf;",
+     "assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~(SURF_DDRC_MASK >> 1)) == SURF_DDRC_BASE) && nf;"),
+    ("sysinfo_swinit", "rtl/peripherals/surf_sysinfo.v",
+     "ddr_status[SURF_SYSINFO_DDR_STATUS_SWINIT_LSB]     = (DDR_SWINIT != 0) &&\n"
+     "                                                             FEATURES[SURF_SYSINFO_FEATURES_DDR_LSB];",
+     "ddr_status[SURF_SYSINFO_DDR_STATUS_SWINIT_LSB]     = (DDR_SWINIT != 0);"),
 ]
 
 

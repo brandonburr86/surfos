@@ -2,9 +2,9 @@
 
 The interfaces between the parts that are built in parallel: RTL module port lists, the
 simulation models' C++ APIs, file formats and command lines. Each part is free inside; these
-edges are fixed (version 1, 2026-10-15; clarifications in section 8) so the parts plug together
-without rework. A needed
-change is proposed to the integrator, not made unilaterally.
+edges are fixed (version 2, 2026-10-16; what changed from version 1 of 2026-10-15, and the
+clarifications, in section 8) so the parts plug together without rework. A needed change is
+proposed to the integrator, not made unilaterally.
 
 ## 1. RTL conventions
 
@@ -56,12 +56,13 @@ A master port is the same list with `m_` and directions reversed.
 | `surf_timer` | soc | `SYS_HZ`, `TIMEBASE_HZ` | `output [63:0] mtime`, `output irq_timer`, `output irq_software` |
 | `surf_intc` | soc | | `input [31:0] sources`, `output irq_external` |
 | `surf_gpio` | soc | `SYS_HZ` | `output irq`, `output [3:0] led`, `output [11:0] rgb`, `input [3:0] sw`, `input [3:0] btn` (raw pins; synchronized and debounced inside) |
-| `surf_sysinfo` | soc | `BOARD_ID`, `SYS_HZ`, `PIX_HZ`, `BUILD_ID`, `BUILD_FLAGS`, `BUILD_TIME`, `FEATURES`, `DDR_SIZE` | `input ddr_calib_done`, `input ddr_calib_fail`, `input ddr_timeout` |
+| `surf_sysinfo` | soc | `BOARD_ID`, `SYS_HZ`, `PIX_HZ`, `BUILD_ID`, `BUILD_FLAGS`, `BUILD_TIME`, `FEATURES`, `DDR_SIZE`, `DDR_SWINIT` | `input ddr_calib_done`, `input ddr_calib_fail`, `input ddr_timeout` |
 | `surf_textram` | soc | | `input pix_clk`, `input [11:0] pix_addr`, `output [31:0] pix_data` (registered: the word for `pix_addr` appears after one `pix_clk` edge) |
 | `surf_spi` | io | `SYS_HZ` | `output irq`, `output sclk`, `output mosi`, `input miso`, `output cs_n`, `input cd_n` (card detect, low = card present; tie 0 without one) |
 | `surf_ps2` | io | `SYS_HZ` | `output irq`, `input ps2_clk_i`, `input ps2_data_i`, `output ps2_clk_oe`, `output ps2_data_oe` (open drain: `_oe` = 1 pulls the line low, 0 releases it) |
 | `surf_video` | io | `PIX_HZ` | `output irq`; `input pix_clk`, `input pix_rst`; `output [11:0] text_addr`, `input [31:0] text_data` (to `surf_textram`'s pixel port); `output [3:0] vga_r`, `vga_g`, `vga_b`, `output vga_hs`, `vga_vs` (registered in the `pix_clk` domain) |
 | `surf_ddr_bridge` | ddr | `TIMEOUT_CYCLES`, `CALIB_TIMEOUT_CYCLES`, `APP_ADDR_WIDTH`, `APP_DATA_WIDTH`, `DQ_WIDTH` | `output calib_done`, `calib_fail`, `timeout` (sys domain); controller side in the `ui_clk` domain, as the ddr track documents in docs/DDR.md |
+| `surf_ddr_csr` | ddr | `ADDR_BITS`, `TIMEOUT_CYCLES`, `WB_TIMEOUT_CYCLES` | `<slave>` in the sys domain (the SoC's `ddrc_*` port); `wb_clk`, `wb_rst` and a Wishbone classic master (`wb_adr` [29:0] word address, `wb_dat_w`, `wb_dat_r`, `wb_sel`, `wb_cyc`, `wb_stb`, `wb_we`, `wb_cti`, `wb_bte`, `wb_ack`, `wb_err`) in the controller's domain (docs/DDR.md) |
 | `surfcpu_soc` | soc | section 4 | section 4 |
 | `surfcpu_arty_a7_top` | board | `BOARD`, ROM file, build identity | the board's pins (WIRING.md) |
 
@@ -80,7 +81,8 @@ module surfcpu_soc #(
     parameter [31:0]  BUILD_FLAGS  = 32'h0,
     parameter [31:0]  BUILD_TIME   = 32'h0,
     parameter integer HAS_DDR      = 1,
-    parameter [31:0]  DDR_SIZE     = 32'h1000_0000
+    parameter [31:0]  DDR_SIZE     = 32'h1000_0000,
+    parameter integer DDR_SWINIT   = 0             // 1: the DDR controller needs software init (ddrc)
 ) (
     input  wire        clk, rst, pix_clk, pix_rst,
     input  wire        uart_rx,  output wire uart_tx,
@@ -93,7 +95,11 @@ module surfcpu_soc #(
     output wire        ddr_req_write, output wire [3:0] ddr_req_be, output wire [31:0] ddr_req_wdata,
     output wire        ddr_req_fetch,
     input  wire        ddr_rsp_valid, input wire [31:0] ddr_rsp_rdata, input wire ddr_rsp_err,
-    input  wire        ddr_calib_done, ddr_calib_fail, ddr_timeout
+    input  wire        ddr_calib_done, ddr_calib_fail, ddr_timeout,
+    // the DDR controller's registers: a SurfBus master port toward surf_ddr_csr (DDR_SWINIT only)
+    output wire        ddrc_req_valid, input wire ddrc_req_ready, output wire [31:0] ddrc_req_addr,
+    output wire        ddrc_req_write, output wire [3:0] ddrc_req_be, output wire [31:0] ddrc_req_wdata,
+    input  wire        ddrc_rsp_valid, input wire [31:0] ddrc_rsp_rdata, input wire ddrc_rsp_err
 `ifdef SURFCPU_RVFI
     , `SURFCPU_RVFI_OUTPUTS
 `endif
@@ -101,7 +107,12 @@ module surfcpu_soc #(
 ```
 
 The SoC itself answers every DDR-window access with an error while `HAS_DDR` is 0 or
-`ddr_calib_done` is 0, so nothing reaches the bridge before calibration. In simulation the
+`ddr_calib_done` is 0, so nothing reaches the bridge before calibration. With `HAS_DDR` and
+`DDR_SWINIT` both 1 the ddrc region (the controller's registers, MEMORY-MAP.md) is the
+`ddrc_*` master port and sysinfo.DDR_STATUS.SWINIT is 1: software initializes and calibrates the
+memory through it (FIRMWARE.md, DDR.md). Otherwise the ddrc region is unmapped (every access an
+error), the `ddrc_*` outputs stay 0 and the inputs are ignored; a top without the port ties
+`ddrc_req_ready`, `ddrc_rsp_valid`, `ddrc_rsp_rdata` and `ddrc_rsp_err` to 0. In simulation the
 boot ROM can also be loaded at run time with `+bootrom=<file>`.
 
 ## 5. File formats
@@ -188,7 +199,16 @@ there too (held while nobody reads, up to 1 MiB). With `--uart-pty`, SIGTERM or 
 the run as `--max-cycles` would (so `--sd-flush` writes the card back: a power cut), SIGUSR1
 takes the card out and SIGUSR2 puts it back. Without it surfsim behaves as before.
 
-## 8. Clarifications (version 1 unchanged)
+## 8. Changes and clarifications
+
+Version 2 (2026-10-16, round ddr-3, asked for by the integrator): `surfcpu_soc` has the
+parameter `DDR_SWINIT` and the `ddrc_*` master port (section 4); `surf_sysinfo` has
+`DDR_SWINIT` (sysinfo.DDR_STATUS.SWINIT); `surf_ddr_csr` is new (section 3). With the default
+`DDR_SWINIT = 0` a version 1 user only has to tie the new port's inputs to 0. Every user was
+changed with it: the board top, the soc track's testbenches and surfsim, the board track's
+stand-ins.
+
+Clarifications of version 1:
 
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
   interrupt conventions (section 5); the testbench's exit code 3 and latency ranges (section 6); `surf_ddr_bridge`'s parameters

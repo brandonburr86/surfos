@@ -1,7 +1,7 @@
 /*
 SurfCPU surf_interconnect testbench
 --------------------
-File: tb_interconnect.v Date: 10/15/26 (SurfCPU)
+File: tb_interconnect.v Date: 10/16/26 (SurfCPU)
 --------------------
 Icarus testbench for the interconnect of docs/SURFBUS.md section 6. Two BFMs play the core's
 instruction and data ports; every target (boot ROM A/B, scratch A/B, the eight MMIO windows,
@@ -15,8 +15,9 @@ the fetch port, data-port fetches), with per-target request counts checked; DDR 
 after calibration, calibration lost while a request waits at the bridge (it must stay
 offered), errors from the DDR slave itself, and the arbiter: data first when both ask in the
 same cycle, an already offered fetch not overtaken. The HAS_DDR parameter builds the variant
-without DDR, where the window is unmapped and the DDR port never moves. +seed=N. Prints PASS
-or stops with $fatal.
+without DDR, where the window is unmapped and the DDR port never moves; HAS_DDRC the one whose
+ddrc window (the DDR controller's registers, a controller initialized by software) reaches its
+target, unmapped otherwise. +seed=N. Prints PASS or stops with $fatal.
 */
 `timescale 1ns/1ps
 `include "surf_bus_targets.vh"
@@ -24,6 +25,7 @@ module tb_interconnect;
     `include "surfcpu_soc.vh"
 
     parameter integer HAS_DDR = 1;
+    parameter integer HAS_DDRC = 0;
     localparam integer KI = `SURF_IT_DDR;     // I targets outside the interconnect
     localparam integer KD = `SURF_DT_DDR;     // D targets outside the interconnect
     localparam integer T_DDR = 98;
@@ -82,7 +84,7 @@ module tb_interconnect;
     wire [31:0]      ddr_req_addr, ddr_req_wdata, ddr_rsp_rdata;
     wire [3:0]       ddr_req_be;
 
-    surf_interconnect #(.HAS_DDR(HAS_DDR)) dut (
+    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC)) dut (
         .clk(clk), .rst(rst), .ddr_calib_done(calib),
         .i_req_valid(i_req_valid), .i_req_ready(i_req_ready), .i_req_addr(i_req_addr),
         .i_req_write(i_req_write), .i_req_be(i_req_be), .i_req_wdata(i_req_wdata),
@@ -236,13 +238,14 @@ module tb_interconnect;
             else if (in_rgn(a, SURF_PS2_BASE, SURF_PS2_SIZE))         ref_d = `SURF_DT_PS2;
             else if (in_rgn(a, SURF_VIDEO_BASE, SURF_VIDEO_SIZE))     ref_d = `SURF_DT_VIDEO;
             else if (in_rgn(a, SURF_SYSINFO_BASE, SURF_SYSINFO_SIZE)) ref_d = `SURF_DT_SYSINFO;
+            else if (in_rgn(a, SURF_DDRC_BASE, SURF_DDRC_SIZE))       ref_d = HAS_DDRC ? `SURF_DT_DDRC : T_ERR;
             else if (in_rgn(a, SURF_TEXTRAM_BASE, SURF_TEXTRAM_SIZE)) ref_d = `SURF_DT_TEXTRAM;
         end
     endfunction
 
     // ---------------------------------------------------------------- address generator
-    reg [31:0] rbase [0:12];
-    reg [31:0] rsize [0:12];
+    reg [31:0] rbase [0:13];
+    reg [31:0] rsize [0:13];
     initial begin
         rbase[0]  = SURF_BOOTROM_BASE; rsize[0]  = SURF_BOOTROM_SIZE;
         rbase[1]  = SURF_SCRATCH_BASE; rsize[1]  = SURF_SCRATCH_SIZE;
@@ -257,6 +260,7 @@ module tb_interconnect;
         rbase[10] = SURF_ETH_BASE;     rsize[10] = SURF_ETH_SIZE;
         rbase[11] = SURF_TEXTRAM_BASE; rsize[11] = SURF_TEXTRAM_SIZE;
         rbase[12] = SURF_DDR_BASE;     rsize[12] = SURF_DDR_SIZE;
+        rbase[13] = SURF_DDRC_BASE;    rsize[13] = SURF_DDRC_SIZE;
     end
 
     function [31:0] rand_addr;
@@ -265,7 +269,7 @@ module tb_interconnect;
         input integer r3;
         integer k;
         begin
-            k = {r2} % 13;
+            k = {r2} % 14;
             case ({r1} % 20)
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11:
                             case ({r3} % 4)
@@ -574,8 +578,9 @@ module tb_interconnect;
             $display("ERROR unanswered requests"); errors = errors + 1;
         end
         if (errors) $fatal(1, "tb_interconnect: %0d errors", errors);
-        $display("tb_interconnect: PASS (HAS_DDR=%0d, %0d accesses: %0d answered by targets, %0d errors expected and seen, %0d DDR errors before calibration; DDR %0d fetches + %0d data; %0d+%0d back-to-back)",
-                 HAS_DDR, n_ok + n_err, n_ok, n_err, n_ddr_err, acc_ddr_f, acc_ddr_d, ib.n_b2b, db.n_b2b);
+        $display("tb_interconnect: PASS (HAS_DDR=%0d HAS_DDRC=%0d, %0d accesses: %0d answered by targets, %0d errors expected and seen, %0d DDR errors before calibration; DDR %0d fetches + %0d data; ddrc %0d; %0d+%0d back-to-back)",
+                 HAS_DDR, HAS_DDRC, n_ok + n_err, n_ok, n_err, n_ddr_err, acc_ddr_f, acc_ddr_d, acc_d[`SURF_DT_DDRC],
+                 ib.n_b2b, db.n_b2b);
         $finish;
     end
 endmodule

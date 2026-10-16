@@ -18,8 +18,8 @@
 
 [soc]
 name = "SurfCPU SoC"
-map_version = 1
-soc_version = "0.1.0"
+map_version = 2
+soc_version = "0.2.0"
 isa = "rv32im_zicsr_zifencei"
 abi = "ilp32"
 reset_pc = 0x0000_0000
@@ -140,6 +140,15 @@ kind = "reserved"
 fetch = false
 write = false
 desc = "Reserved for a later Ethernet MAC (decodes as unmapped until then)"
+
+[[region]]
+name = "ddrc"
+base = 0x1000_A000
+size = 0x2000
+kind = "mmio"
+fetch = false
+write = true
+desc = "DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0"
 
 [[region]]
 name = "textram"
@@ -665,12 +674,13 @@ fields = [
 name = "DDR_STATUS"
 offset = 0x20
 access = "ro"
-desc = "DDR controller state. The DDR window answers with errors until CALIB_DONE."
+desc = "DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself."
 fields = [
   { name = "CALIB_DONE", bits = "0", desc = "calibration succeeded; DDR is usable" },
-  { name = "CALIB_FAIL", bits = "1", desc = "sticky until reset: calibration did not finish within the bridge's limit (CALIB_TIMEOUT_CYCLES); CALIB_DONE then stays 0" },
+  { name = "CALIB_FAIL", bits = "1", desc = "sticky until reset: calibration had not succeeded within the bridge's limit (CALIB_TIMEOUT_CYCLES, counted from reset, software initialization included); CALIB_DONE then stays 0" },
   { name = "PRESENT", bits = "2", desc = "a DDR controller is built in" },
   { name = "TIMEOUT", bits = "3", desc = "sticky until reset: a DDR access was abandoned by the bridge's watchdog" },
+  { name = "SWINIT", bits = "4", desc = "the controller waits for software to initialize and calibrate the DDR3L through the ddrc registers (LiteDRAM without its own CPU); 0: it does so by itself (MIG, the simulation model)" },
 ]
 
 [[periph.reg]]
@@ -696,6 +706,294 @@ name = "BUILD_TIME"
 offset = 0x30
 access = "ro"
 desc = "Build time, seconds since 1970-01-01 UTC (0 if unknown)."
+
+[[periph]]
+name = "ddrc"
+desc = "LiteDRAM's control and status registers (litedram_core generated with cpu None from ip/litedram/arty.yml), reached through surf_ddr_csr across the controller's clock domain: each access takes about half a microsecond. Offsets are LiteDRAM's (make litedram-check compares them with the generator's csr.csv); only the DFII and init registers are LiteDRAM's simulation core's too (its PHY model has none of the PHY_ ones). Present only while sysinfo.DDR_STATUS.SWINIT is 1. The sequence that uses them is firmware/common/ddrinit.c (FIRMWARE.md, DDR.md)."
+
+[[periph.reg]]
+name = "INIT_DONE"
+offset = 0x000
+access = "rw"
+desc = "ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows."
+fields = [
+  { name = "DONE", bits = "0", desc = "initialization ended" },
+]
+
+[[periph.reg]]
+name = "INIT_ERROR"
+offset = 0x004
+access = "rw"
+desc = "ddrctrl.init_error: software writes 1 (with INIT_DONE) when initialization failed; the user port stays closed."
+fields = [
+  { name = "ERROR", bits = "0", desc = "initialization failed" },
+]
+
+[[periph.reg]]
+name = "PHY_RST"
+offset = 0x800
+access = "rw"
+desc = "ddrphy.rst: 1 holds the PHY in reset."
+
+[[periph.reg]]
+name = "PHY_DLY_SEL"
+offset = 0x804
+access = "rw"
+desc = "ddrphy.dly_sel: one bit per byte lane (bit 0 DQ7:0, bit 1 DQ15:8): the lanes the delay and bitslip strobes act on."
+
+[[periph.reg]]
+name = "PHY_HALF_SYS8X_TAPS"
+offset = 0x808
+access = "rw"
+desc = "ddrphy.half_sys8x_taps: delay taps of a quarter controller clock (write leveling; unused by the read-leveling sequence)."
+
+[[periph.reg]]
+name = "PHY_WLEVEL_EN"
+offset = 0x80C
+access = "rw"
+desc = "ddrphy.wlevel_en: write-leveling mode (unused: the Arty's PHY is not write-leveling capable)."
+
+[[periph.reg]]
+name = "PHY_WLEVEL_STROBE"
+offset = 0x810
+access = "rw"
+desc = "ddrphy.wlevel_strobe: write-leveling strobe (unused)."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_RST"
+offset = 0x814
+access = "rw"
+desc = "ddrphy.rdly_dq_rst: writing 1 sets the selected lanes' read delays (IDELAYE2) back to tap 0."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_INC"
+offset = 0x818
+access = "rw"
+desc = "ddrphy.rdly_dq_inc: writing 1 moves the selected lanes' read delays one tap up."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_BITSLIP_RST"
+offset = 0x81C
+access = "rw"
+desc = "ddrphy.rdly_dq_bitslip_rst: writing 1 sets the selected lanes' read bitslip back to 0."
+
+[[periph.reg]]
+name = "PHY_RDLY_DQ_BITSLIP"
+offset = 0x820
+access = "rw"
+desc = "ddrphy.rdly_dq_bitslip: writing 1 moves the selected lanes' read bitslip one step on (8 steps, then round)."
+
+[[periph.reg]]
+name = "PHY_WDLY_DQ_BITSLIP_RST"
+offset = 0x824
+access = "rw"
+desc = "ddrphy.wdly_dq_bitslip_rst: writing 1 sets the selected lanes' write bitslip back to 0."
+
+[[periph.reg]]
+name = "PHY_WDLY_DQ_BITSLIP"
+offset = 0x828
+access = "rw"
+desc = "ddrphy.wdly_dq_bitslip: writing 1 moves the selected lanes' write bitslip one step on."
+
+[[periph.reg]]
+name = "PHY_RDPHASE"
+offset = 0x82C
+access = "rw"
+desc = "ddrphy.rdphase: the DFI phase reads are issued on (the generator's SDRAM_PHY_RDPHASE)."
+
+[[periph.reg]]
+name = "PHY_WRPHASE"
+offset = 0x830
+access = "rw"
+desc = "ddrphy.wrphase: the DFI phase writes are issued on (the generator's SDRAM_PHY_WRPHASE)."
+
+[[periph.reg]]
+name = "DFII_CONTROL"
+offset = 0x1000
+access = "rw"
+desc = "sdram.dfii_control: who drives the DRAM, and its control lines while software does."
+fields = [
+  { name = "SEL", bits = "0", desc = "1: the controller (hardware control); 0: software, through the phase injectors below" },
+  { name = "CKE", bits = "1", desc = "CKE while under software control" },
+  { name = "ODT", bits = "2", desc = "ODT while under software control" },
+  { name = "RESET_N", bits = "3", desc = "the DRAM's RESET# (1 = released) while under software control" },
+]
+
+[[periph.reg]]
+name = "DFII_P0_COMMAND"
+offset = 0x1004
+access = "rw"
+desc = "sdram.dfii_pi0_command: the command bits of phase 0's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P0_COMMAND_ISSUE"
+offset = 0x1008
+access = "rw"
+desc = "sdram.dfii_pi0_command_issue: writing 1 issues phase 0's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P0_ADDRESS"
+offset = 0x100C
+access = "rw"
+desc = "sdram.dfii_pi0_address: the row or column address (or mode register value) of phase 0's command."
+
+[[periph.reg]]
+name = "DFII_P0_BADDRESS"
+offset = 0x1010
+access = "rw"
+desc = "sdram.dfii_pi0_baddress: the bank address (or mode register number) of phase 0's command."
+
+[[periph.reg]]
+name = "DFII_P0_WRDATA"
+offset = 0x1014
+access = "rw"
+desc = "sdram.dfii_pi0_wrdata: phase 0's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P0_RDDATA"
+offset = 0x1018
+access = "ro"
+desc = "sdram.dfii_pi0_rddata: phase 0's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P1_COMMAND"
+offset = 0x101C
+access = "rw"
+desc = "sdram.dfii_pi1_command: the command bits of phase 1's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P1_COMMAND_ISSUE"
+offset = 0x1020
+access = "rw"
+desc = "sdram.dfii_pi1_command_issue: writing 1 issues phase 1's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P1_ADDRESS"
+offset = 0x1024
+access = "rw"
+desc = "sdram.dfii_pi1_address: the row or column address (or mode register value) of phase 1's command."
+
+[[periph.reg]]
+name = "DFII_P1_BADDRESS"
+offset = 0x1028
+access = "rw"
+desc = "sdram.dfii_pi1_baddress: the bank address (or mode register number) of phase 1's command."
+
+[[periph.reg]]
+name = "DFII_P1_WRDATA"
+offset = 0x102C
+access = "rw"
+desc = "sdram.dfii_pi1_wrdata: phase 1's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P1_RDDATA"
+offset = 0x1030
+access = "ro"
+desc = "sdram.dfii_pi1_rddata: phase 1's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P2_COMMAND"
+offset = 0x1034
+access = "rw"
+desc = "sdram.dfii_pi2_command: the command bits of phase 2's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P2_COMMAND_ISSUE"
+offset = 0x1038
+access = "rw"
+desc = "sdram.dfii_pi2_command_issue: writing 1 issues phase 2's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P2_ADDRESS"
+offset = 0x103C
+access = "rw"
+desc = "sdram.dfii_pi2_address: the row or column address (or mode register value) of phase 2's command."
+
+[[periph.reg]]
+name = "DFII_P2_BADDRESS"
+offset = 0x1040
+access = "rw"
+desc = "sdram.dfii_pi2_baddress: the bank address (or mode register number) of phase 2's command."
+
+[[periph.reg]]
+name = "DFII_P2_WRDATA"
+offset = 0x1044
+access = "rw"
+desc = "sdram.dfii_pi2_wrdata: phase 2's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P2_RDDATA"
+offset = 0x1048
+access = "ro"
+desc = "sdram.dfii_pi2_rddata: phase 2's data from the last injected read, in WRDATA's layout."
+
+[[periph.reg]]
+name = "DFII_P3_COMMAND"
+offset = 0x104C
+access = "rw"
+desc = "sdram.dfii_pi3_command: the command bits of phase 3's next injected command."
+fields = [
+  { name = "CS", bits = "0", desc = "chip select" },
+  { name = "WE", bits = "1", desc = "WE (active: the command's WE# is low)" },
+  { name = "CAS", bits = "2", desc = "CAS (active: CAS# low)" },
+  { name = "RAS", bits = "3", desc = "RAS (active: RAS# low)" },
+  { name = "WRDATA", bits = "4", desc = "the command writes WRDATA" },
+  { name = "RDDATA", bits = "5", desc = "the command's read data is captured into RDDATA" },
+]
+
+[[periph.reg]]
+name = "DFII_P3_COMMAND_ISSUE"
+offset = 0x1050
+access = "rw"
+desc = "sdram.dfii_pi3_command_issue: writing 1 issues phase 3's command (in the controller's next cycle)."
+
+[[periph.reg]]
+name = "DFII_P3_ADDRESS"
+offset = 0x1054
+access = "rw"
+desc = "sdram.dfii_pi3_address: the row or column address (or mode register value) of phase 3's command."
+
+[[periph.reg]]
+name = "DFII_P3_BADDRESS"
+offset = 0x1058
+access = "rw"
+desc = "sdram.dfii_pi3_baddress: the bank address (or mode register number) of phase 3's command."
+
+[[periph.reg]]
+name = "DFII_P3_WRDATA"
+offset = 0x105C
+access = "rw"
+desc = "sdram.dfii_pi3_wrdata: phase 3's write data, 32 bits: DQ15:0 on the first edge in bits 15:0, on the second in bits 31:16 (byte k of a little-endian word: lane k mod 2)."
+
+[[periph.reg]]
+name = "DFII_P3_RDDATA"
+offset = 0x1060
+access = "ro"
+desc = "sdram.dfii_pi3_rddata: phase 3's data from the last injected read, in WRDATA's layout."
 
 # ---------------------------------------------------------------------------------------------
 # Boot ABI constants (BOOT-ABI.md defines the structures; firmware/include/surfcpu/bootabi.h).

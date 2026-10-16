@@ -2,7 +2,7 @@
 """
 SurfCPU DDR bridge mutation check
 --------------------
-File: ddr_mutants.py Date: 10/15/26 (SurfCPU)
+File: ddr_mutants.py Date: 10/16/26 (SurfCPU)
 --------------------
 Measures whether the DDR bridge tests can tell a broken bridge from a working one: each
 mutant is a copy of the RTL with one deliberate bug (a wrong lane, an inverted mask, a lost
@@ -13,7 +13,8 @@ bridge never asks it to do some things (take an empty box) that it must still ge
 mutants remove a synchronizer stage: metastability is not simulated, so they are expected to
 survive, and say so (the clock crossings rest on review and on the timing constraints of
 docs/DDR.md instead). Equivalent mutants (no behaviour change, such as dropping the busy term
-of the response handling, which only runs while busy) are left out.
+of the response handling, which only runs while busy) are left out. Mutants of the register
+bridge (surf_ddr_csr) run against its own testbench (tb_ddr_csr.v, Icarus) at two clock pairs.
 
     python3 sim/ddr/ddr_mutants.py [--only NAME ...] [--jobs N]
 
@@ -34,7 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent      # surfcpu/
 BRIDGE = "rtl/soc/ddr/surf_ddr_bridge.v"
 MAILBOX = "rtl/soc/ddr/surf_ddr_mailbox.v"
 ADAPTER = "rtl/soc/ddr/surf_ddr_litedram_adapter.v"
-LITEDRAM_SIM = "build/litedram/arty_sim/gateware/litedram_core.v"   # make litedram-gen
+CSR = "rtl/soc/ddr/surf_ddr_csr.v"
+LITEDRAM_SIM = "build/litedram/arty_sim/gateware/litedram_sim.v"    # make litedram-gen
 
 # name, file, old text, new text, expected to survive (simulation cannot see it)
 MUTANTS = [
@@ -76,7 +78,28 @@ MUTANTS = [
     ("lite-cmd-we", ADAPTER, "assign cmd_we    = (app_cmd == 3'b000);", "assign cmd_we    = (app_cmd == 3'b001);", False),
     ("lite-no-buffer", ADAPTER, "assign app_wdf_rdy = !wf_full;", "assign app_wdf_rdy = !wf_full && wdata_ready;", False),
     ("lite-calib", ADAPTER, "assign init_calib_complete = init_done && !init_error;", "assign init_calib_complete = 1'b1;", False),
+    # the register bridge, run against its own testbench (tb_ddr_csr.v)
+    ("csr-no-word-check", CSR, "wire             word_acc = (s_req_be == 4'b1111) && (s_req_addr[1:0] == 2'b00) && !s_req_fetch;",
+     "wire             word_acc = !s_req_fetch;", False),
+    ("csr-fetch-carried", CSR, "wire             word_acc = (s_req_be == 4'b1111) && (s_req_addr[1:0] == 2'b00) && !s_req_fetch;",
+     "wire             word_acc = (s_req_be == 4'b1111) && (s_req_addr[1:0] == 2'b00);", False),
+    ("csr-no-inflight-wait", CSR, "wire             can_send = !inflight && rq_ready;",
+     "wire             can_send = rq_ready;", False),
+    ("csr-stale-answer", CSR, "wire             rs_mine  = rs_got && busy && sent;",
+     "wire             rs_mine  = rs_got && busy;", False),
+    ("csr-no-watchdog", CSR, "wire             expire   = busy && wd_count == TO_LAST;",
+     "wire             expire   = 1'b0;", False),
+    ("csr-owe-ignored", CSR, "                    if (w_owe) begin                    // a reset cut the last request short:",
+     "                    if (1'b0) begin                     // a reset cut the last request short:", False),
+    ("csr-addr-bit2", CSR, "wire [RQ_W-1:0]  new_req  = {s_req_write, s_req_addr[ADDR_BITS-1:2], s_req_wdata};",
+     "wire [RQ_W-1:0]  new_req  = {s_req_write, s_req_addr[ADDR_BITS-1:3], 1'b0, s_req_wdata};", False),
+    ("csr-wb-err-ignored", CSR, "                        w_err   <= wb_err;", "                        w_err   <= 1'b0;", False),
+    ("csr-no-wb-limit", CSR, "                    end else if (w_count == WTO_LAST) begin",
+     "                    end else if (1'b0) begin", False),
 ]
+# tb_ddr_csr's runs for a register bridge mutant: (iverilog parameters, plusargs)
+CSR_RUNS = [(["-Ptb_ddr_csr.TIMEOUT=64", "-Ptb_ddr_csr.WB_TIMEOUT=16"], ["+seed=1", "+sys_ps=40000", "+wb_ps=12500", "+count=400"]),
+            ([], ["+seed=2", "+sys_ps=10000", "+wb_ps=41700", "+jitter=30", "+count=400"])]
 
 VFLAGS = ["--cc", "--exe", "--build", "-O2", "--x-assign", "unique", "--x-initial", "unique",
           "-Wno-fatal", "-Wno-lint", "-Wno-style", "-Irtl/generated", "-Irtl/lib",
@@ -90,7 +113,7 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    for f in (BRIDGE, MAILBOX, ADAPTER):
+    for f in (BRIDGE, MAILBOX, ADAPTER, CSR):
         text = (ROOT / f).read_text()
         if f == path:
             if text.count(old) != 1:
@@ -98,6 +121,24 @@ def run_mutant(name: str, path: str, old: str, new: str, jobs: int) -> tuple[boo
             text = text.replace(old, new)
         (out / Path(f).name).write_text(text)
     exe = out / "tb"
+    if path == CSR:                     # the register bridge's own bench, two clock pairs
+        for k, (params, plus) in enumerate(CSR_RUNS):
+            vvp = out / "tb_ddr_csr{}.vvp".format(k)
+            c = subprocess.run(["iverilog", "-g2005", "-Wno-timescale", "-Irtl/generated", *params, "-o", str(vvp),
+                                "sim/ddr/tb_ddr_csr.v", str(out / "surf_ddr_csr.v"), str(out / "surf_ddr_mailbox.v"),
+                                "sim/soc/bfm/surfbus_bfm.v", "sim/soc/bfm/surfbus_monitor.v"],
+                               cwd=ROOT, capture_output=True, text=True)
+            if c.returncode != 0:
+                return False, "error: does not build: " + c.stderr.strip()[-200:]
+            try:
+                m = subprocess.run(["vvp", "-n", str(vvp), *plus], cwd=ROOT, capture_output=True, text=True,
+                                   timeout=600)
+            except subprocess.TimeoutExpired:
+                return True, "killed by tb_ddr_csr (hung)"
+            if "tb_ddr_csr: PASS" not in m.stdout:
+                first = next((l for l in m.stdout.splitlines() if l.startswith(("ERROR", "bfm", "mon"))), "failed")
+                return True, "killed by tb_ddr_csr: " + first[:120]
+        return False, "survived"
     if path == ADAPTER:                 # the LiteDRAM bench
         if not (ROOT / LITEDRAM_SIM).exists():
             return False, "not run: no LiteDRAM simulation core (make litedram-gen)"

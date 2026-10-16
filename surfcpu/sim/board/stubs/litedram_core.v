@@ -5,9 +5,10 @@ File: litedram_core.v Date: 10/16/26 (SurfCPU)
 --------------------
 The ports of litedram_core, the LiteDRAM core ip/litedram/generate.sh makes from
 ip/litedram/arty.yml (build/litedram/arty/gateware/litedram_core.v, which needs the pinned
-generator and the network the first time). With it, make lint (lint-board) checks the top's DDR
-variant (ARTY_HAS_DDR) without generating anything. Its outputs are constants: calibration never
-finishes, no user-port handshake, the DDR3 pins idle. ip/litedram/inspect_core.py checks that
+generator and the network the first time): generated without a CPU, so with a Wishbone control
+port (wb_ctrl) for the firmware's initialization. With it, make lint (lint-board) checks the top's
+DDR variant (ARTY_HAS_DDR) without generating anything. Its outputs are constants: calibration
+never finishes, no user-port or control-bus handshake, the DDR3 pins idle. ip/litedram/inspect_core.py checks that
 these ports are exactly the generated core's (make litedram-gen). Lint and simulation only:
 tools/fpga-build.sh builds the generated core, never this file.
 */
@@ -33,8 +34,6 @@ module litedram_core (
     output wire          init_error,
     output wire          pll_locked,
     input  wire          rst,
-    input  wire          uart_rx,
-    output reg           uart_tx,
     output wire          user_clk,
     input  wire   [23:0] user_port_native_0_cmd_addr,
     output wire          user_port_native_0_cmd_ready,
@@ -47,9 +46,19 @@ module litedram_core (
     output wire          user_port_native_0_wdata_ready,
     input  wire          user_port_native_0_wdata_valid,
     input  wire   [15:0] user_port_native_0_wdata_we,
-    output wire          user_rst
+    output wire          user_rst,
+    output wire          wb_ctrl_ack,
+    input  wire   [29:0] wb_ctrl_adr,
+    input  wire    [1:0] wb_ctrl_bte,
+    input  wire    [2:0] wb_ctrl_cti,
+    input  wire          wb_ctrl_cyc,
+    output wire   [31:0] wb_ctrl_dat_r,
+    input  wire   [31:0] wb_ctrl_dat_w,
+    output wire          wb_ctrl_err,
+    input  wire    [3:0] wb_ctrl_sel,
+    input  wire          wb_ctrl_stb,
+    input  wire          wb_ctrl_we
 );
-    initial uart_tx = 1'b1;
     assign {ddram_a, ddram_ba} = 17'h0;
     assign {ddram_cas_n, ddram_ras_n, ddram_we_n, ddram_cs_n} = 4'hF;
     assign {ddram_cke, ddram_odt, ddram_reset_n} = 3'b000;
@@ -65,5 +74,7 @@ module litedram_core (
     assign user_port_native_0_wdata_ready = 1'b0;
     assign user_port_native_0_rdata_valid = 1'b0;
     assign user_port_native_0_rdata_data = 128'h0;
+    assign {wb_ctrl_ack, wb_ctrl_err} = 2'b00;
+    assign wb_ctrl_dat_r = 32'h0;
 endmodule
 /* verilator lint_on UNUSEDSIGNAL */

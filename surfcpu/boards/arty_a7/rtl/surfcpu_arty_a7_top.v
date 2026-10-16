@@ -14,8 +14,7 @@ boards/arty_a7/xdc/arty_a7_{base,pmod,ddr3}_pins.xdc (tools/check-wiring.py chec
   Pmod JC  Pmod VGA J2: vga_g[3:0], vga_hs, vga_vs
   Pmod JD  Pmod PS2 (6-pin, top row): ps2_data, ps2_clk (open drain through IOBUFs);
            ps2_data2, ps2_clk2 (the connector's spare pair) are only parked
-  DDR3L    with ARTY_HAS_DDR defined only: ddr3_* (bank 34), and dram_uart_tx (ChipKit IO1),
-           the memory controller's own console
+  DDR3L    with ARTY_HAS_DDR defined only: ddr3_* (bank 34)
 
 PS/2 is open drain: an IOBUF per line drives 0 while the SoC's _oe is 1 and otherwise lets go,
 so the adapter's and the keyboard's pull-ups make the high level (never more than the PS/2
@@ -27,13 +26,14 @@ HAS_DDR is 0, the SoC answers every DDR-window access with an error and its DDR 
 idle. With ARTY_HAS_DDR (the design lists' "define" line) HAS_DDR is 1 and the SoC's DDR port
 goes through surf_ddr_bridge (sys_clk to the controller's clock) and surf_ddr_litedram_adapter
 to litedram_core, the LiteDRAM controller and Artix-7 PHY generated from ip/litedram/arty.yml
-(make litedram-gen; ip/litedram/arty.sha256 holds the generated files' hashes). The core
-calibrates by itself: its own small CPU runs LiteX's BIOS from a ROM inside the core and writes
-init_done (and init_error on a failure), which reach sysinfo.DDR_STATUS through the adapter
+(make litedram-gen; ip/litedram/arty.sha256 holds the generated files' hashes). The core has no
+CPU of its own: SurfCPU initializes and calibrates the DDR3L itself (firmware/common/ddrinit.c,
+in SurfBoot and the diagnostics), through the SoC's ddrc port, surf_ddr_csr (sys_clk to the
+controller's clock) and LiteDRAM's control bus (wb_ctrl), and writes LiteDRAM's init_done (and
+init_error on a failure) there; those reach sysinfo.DDR_STATUS through the adapter
 (init_calib_complete = init_done and not init_error) and the bridge (calib_done, or calib_fail
-when calibration has not succeeded within DDR_CALIB_LIMIT sys_clk cycles). The BIOS reports on
-its own serial output, dram_uart_tx (115200 8N1, out only: its input is held idle, so nobody
-can type commands into the controller).
+when calibration has not succeeded within DDR_CALIB_LIMIT sys_clk cycles of reset).
+sysinfo.DDR_STATUS.SWINIT (DDR_SWINIT = 1 here) tells the firmware to do so.
 
 Clocks: the oscillator pin has one input buffer (inserted by synthesis on clk100). It drives
 arty_a7_clocks' two tiles directly, as without DDR, and, through u_dram_clkbuf (a BUFG),
@@ -121,9 +121,7 @@ module surfcpu_arty_a7_top #(
     output wire        ddr3_odt,
     inout  wire [15:0] ddr3_dq,
     inout  wire [1:0]  ddr3_dqs_p,
-    inout  wire [1:0]  ddr3_dqs_n,
-    // ChipKit IO1: the memory controller's calibration console (LiteDRAM's BIOS), 115200 8N1
-    output wire        dram_uart_tx
+    inout  wire [1:0]  ddr3_dqs_n
 `endif
 );
     `include "surfcpu_soc.vh"
@@ -157,6 +155,9 @@ module surfcpu_arty_a7_top #(
     wire [31:0] ddr_req_addr, ddr_req_wdata, ddr_rsp_rdata;
     wire [3:0]  ddr_req_be;
     wire        ddr_rsp_valid, ddr_rsp_err, ddr_calib_done, ddr_calib_fail, ddr_timeout;
+    wire        ddrc_req_valid, ddrc_req_ready, ddrc_req_write, ddrc_rsp_valid, ddrc_rsp_err;
+    wire [31:0] ddrc_req_addr, ddrc_req_wdata, ddrc_rsp_rdata;
+    wire [3:0]  ddrc_req_be;
 
     surfcpu_soc #(
         .BOOTROM_INIT (BOOTROM_INIT),
@@ -167,7 +168,8 @@ module surfcpu_arty_a7_top #(
         .BUILD_FLAGS  (BUILD_FLAGS),
         .BUILD_TIME   (BUILD_TIME),
         .HAS_DDR      (HAS_DDR),
-        .DDR_SIZE     (SURF_DDR_SIZE)
+        .DDR_SIZE     (SURF_DDR_SIZE),
+        .DDR_SWINIT   (HAS_DDR)          // LiteDRAM without a CPU: SurfCPU initializes it
     ) u_soc (
         .clk(sys_clk), .rst(sys_rst), .pix_clk(pix_clk), .pix_rst(pix_rst),
         .uart_rx(uart_rx), .uart_tx(uart_tx),
@@ -179,15 +181,22 @@ module surfcpu_arty_a7_top #(
         .ddr_req_write(ddr_req_write), .ddr_req_be(ddr_req_be), .ddr_req_wdata(ddr_req_wdata),
         .ddr_req_fetch(ddr_req_fetch),
         .ddr_rsp_valid(ddr_rsp_valid), .ddr_rsp_rdata(ddr_rsp_rdata), .ddr_rsp_err(ddr_rsp_err),
-        .ddr_calib_done(ddr_calib_done), .ddr_calib_fail(ddr_calib_fail), .ddr_timeout(ddr_timeout)
+        .ddr_calib_done(ddr_calib_done), .ddr_calib_fail(ddr_calib_fail), .ddr_timeout(ddr_timeout),
+        .ddrc_req_valid(ddrc_req_valid), .ddrc_req_ready(ddrc_req_ready), .ddrc_req_addr(ddrc_req_addr),
+        .ddrc_req_write(ddrc_req_write), .ddrc_req_be(ddrc_req_be), .ddrc_req_wdata(ddrc_req_wdata),
+        .ddrc_rsp_valid(ddrc_rsp_valid), .ddrc_rsp_rdata(ddrc_rsp_rdata), .ddrc_rsp_err(ddrc_rsp_err)
     );
 
 `ifdef ARTY_HAS_DDR
     // ---------------------------------------------------------------- DDR3L: bridge, adapter, LiteDRAM
-    // How long the memory controller may take to calibrate before DDR_STATUS.CALIB_FAIL: 1.5 s,
-    // the bridge's default (LiteDRAM's BIOS needs about half a second, printing included;
-    // docs/DDR.md section 10), under SurfBoot's and the BRAM diagnostics' own 2 s, so they see
-    // CALIB_FAIL first; and the watchdog's limit for one access, 4096 cycles (164 us).
+    // How long calibration may take before DDR_STATUS.CALIB_FAIL, counted from reset and
+    // including the firmware's start and its initialization of the controller: 1.5 s, the
+    // bridge's default (the BRAM diagnostics start it after their 0.15 s of BRAM tests, and the
+    // initialization takes a fraction of a second; docs/DDR.md section 10), under SurfBoot's and
+    // the diagnostics' own 2 s, so they see CALIB_FAIL first; and the watchdog's limit for one
+    // access, 4096 cycles (164 us). The register bridge's own limits: an access answered within
+    // 1024 sys_clk cycles (41 us; one takes about half a microsecond), a bus answer within 256
+    // controller cycles.
     localparam integer DDR_CALIB_LIMIT = SURF_SYS_HZ / 2 * 3;
     localparam integer DDR_WATCHDOG    = 4096;
 
@@ -195,6 +204,12 @@ module surfcpu_arty_a7_top #(
     BUFG u_dram_clkbuf (.I(clk100), .O(clk100_g));
 
     wire         dram_clk, dram_rst, dram_init_done, dram_init_error, dram_pll_locked;
+    wire [29:0]  dram_wb_adr;
+    wire [31:0]  dram_wb_dat_w, dram_wb_dat_r;
+    wire [3:0]   dram_wb_sel;
+    wire [2:0]   dram_wb_cti;
+    wire [1:0]   dram_wb_bte;
+    wire         dram_wb_cyc, dram_wb_stb, dram_wb_we, dram_wb_ack, dram_wb_err;
     wire [23:0]  dram_cmd_addr;
     wire         dram_cmd_valid, dram_cmd_ready, dram_cmd_we;
     wire [127:0] dram_wdata, dram_rdata;
@@ -208,7 +223,10 @@ module surfcpu_arty_a7_top #(
         .ddram_clk_n(ddr3_ck_n), .ddram_cke(ddr3_cke), .ddram_cs_n(ddr3_cs_n), .ddram_dm(ddr3_dm),
         .ddram_odt(ddr3_odt), .ddram_dq(ddr3_dq), .ddram_dqs_p(ddr3_dqs_p), .ddram_dqs_n(ddr3_dqs_n),
         .init_done(dram_init_done), .init_error(dram_init_error),
-        .uart_rx(1'b1), .uart_tx(dram_uart_tx),
+        .wb_ctrl_adr(dram_wb_adr), .wb_ctrl_dat_w(dram_wb_dat_w), .wb_ctrl_dat_r(dram_wb_dat_r),
+        .wb_ctrl_sel(dram_wb_sel), .wb_ctrl_cyc(dram_wb_cyc), .wb_ctrl_stb(dram_wb_stb),
+        .wb_ctrl_we(dram_wb_we), .wb_ctrl_cti(dram_wb_cti), .wb_ctrl_bte(dram_wb_bte),
+        .wb_ctrl_ack(dram_wb_ack), .wb_ctrl_err(dram_wb_err),
         .user_clk(dram_clk), .user_rst(dram_rst),
         .user_port_native_0_cmd_addr(dram_cmd_addr), .user_port_native_0_cmd_ready(dram_cmd_ready),
         .user_port_native_0_cmd_valid(dram_cmd_valid), .user_port_native_0_cmd_we(dram_cmd_we),
@@ -258,6 +276,24 @@ module surfcpu_arty_a7_top #(
         .app_sr_req(app_sr_req), .app_ref_req(app_ref_req), .app_zq_req(app_zq_req)
     );
 
+    // The SoC's ddrc port: LiteDRAM's control and status registers, for the firmware's
+    // initialization and calibration (surf_ddr_csr: sys_clk to the controller's clock).
+    surf_ddr_csr #(
+        .ADDR_BITS         ($clog2(SURF_DDRC_SIZE)),
+        .TIMEOUT_CYCLES    (1024),
+        .WB_TIMEOUT_CYCLES (256)
+    ) u_ddrc (
+        .clk(sys_clk), .rst(sys_rst),
+        .s_req_valid(ddrc_req_valid), .s_req_ready(ddrc_req_ready), .s_req_addr(ddrc_req_addr),
+        .s_req_write(ddrc_req_write), .s_req_be(ddrc_req_be), .s_req_wdata(ddrc_req_wdata),
+        .s_req_fetch(1'b0), .s_rsp_valid(ddrc_rsp_valid), .s_rsp_rdata(ddrc_rsp_rdata),
+        .s_rsp_err(ddrc_rsp_err),
+        .wb_clk(dram_clk), .wb_rst(dram_rst),
+        .wb_adr(dram_wb_adr), .wb_dat_w(dram_wb_dat_w), .wb_dat_r(dram_wb_dat_r), .wb_sel(dram_wb_sel),
+        .wb_cyc(dram_wb_cyc), .wb_stb(dram_wb_stb), .wb_we(dram_wb_we), .wb_cti(dram_wb_cti),
+        .wb_bte(dram_wb_bte), .wb_ack(dram_wb_ack), .wb_err(dram_wb_err)
+    );
+
     // pll_locked is LiteDRAM's own business (its resets follow it); nothing else reads it.
     wire unused_dram = &{1'b0, dram_pll_locked};
 `else
@@ -269,8 +305,13 @@ module surfcpu_arty_a7_top #(
     assign ddr_calib_done = 1'b0;
     assign ddr_calib_fail = 1'b0;
     assign ddr_timeout    = 1'b0;
+    assign ddrc_req_ready = 1'b0;
+    assign ddrc_rsp_valid = 1'b0;
+    assign ddrc_rsp_rdata = 32'h0;
+    assign ddrc_rsp_err   = 1'b0;
     wire unused_ddr = &{1'b0, ddr_req_valid, ddr_req_addr, ddr_req_write, ddr_req_be, ddr_req_wdata,
-                        ddr_req_fetch};
+                        ddr_req_fetch, ddrc_req_valid, ddrc_req_addr, ddrc_req_write, ddrc_req_be,
+                        ddrc_req_wdata};
 `endif
 
     // The parked inputs (pulled up in the XDC) have no logic behind them.
