@@ -71,6 +71,9 @@ int img_check_header(const uint8_t *b, uint32_t file_size, uint32_t ram_base, ui
         return sb_fail(SB_E_IMG_HCRC, "the header CRC is 0x%08x but the header says 0x%08x (a damaged header)",
                        hcrc, h->header_crc32);
     /* 2 */
+    if (!(h->isa & SURF_ISA_I))
+        return sb_fail(SB_E_IMG_ISA, "the ISA bits 0x%08x do not include I (SURF_ISA_I): every SurfCPU program "
+                       "needs the base ISA", h->isa);
     if (h->isa & ~SURFBOOT_ISA)
         return sb_fail(SB_E_IMG_ISA, "the payload needs ISA bits 0x%08x; SurfCPU has I, M, Zicsr and "
                        "Zifencei (0x%02x)", h->isa & ~SURFBOOT_ISA, (unsigned)SURFBOOT_ISA);
@@ -94,7 +97,7 @@ int img_check_header(const uint8_t *b, uint32_t file_size, uint32_t ram_base, ui
     uint64_t end = (uint64_t)h->load_addr + h->mem_size;
     if (h->load_addr < ram_base || end > ram_limit)
         return sb_fail(SB_E_IMG_RANGE, "the image would occupy [0x%08x, 0x%08x%s), outside usable DDR "
-                       "[0x%08x, 0x%08x) (the top 16 MiB, ddr_top, is reserved)", h->load_addr,
+                       "[0x%08x, 0x%08x) (the top 16 MiB of DDR, ddr_top, is reserved)", h->load_addr,
                        (uint32_t)end, end > 0xFFFFFFFFull ? "+4G" : "", ram_base, ram_limit);
     /* 5 */
     if (h->entry & 3u)

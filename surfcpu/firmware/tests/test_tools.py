@@ -175,6 +175,12 @@ class TestSurfimg(unittest.TestCase):
             "version": surfimg.make_package(base, 0x80000000, version=3),
             "hcrc": surfimg.make_package(base, 0x80000000, header_crc32=1),
             "isa": surfimg.make_package(base, 0x80000000, isa=0x20 | 0xF),
+            "isa_no_i": surfimg.make_package(base, 0x80000000, isa=0xE),
+            "isa_zero": surfimg.make_package(base, 0x80000000, isa=0),
+            "isa_i_only": surfimg.make_package(base, 0x80000000, isa=1),
+            "flags": surfimg.make_package(base, 0x80000000, flags=0x80000001),
+            "below_small_top": surfimg.make_package(base, 0x83000000 - 4096, 0x83000000 - 4096, 4096),
+            "in_small_top": surfimg.make_package(base, 0x83000000 - 2048, 0x83000000 - 2048, 4096),
             "platform": surfimg.make_package(base, 0x80000000, platform=7),
             "align": surfimg.make_package(base, 0x80000001, 0x80000004),
             "range_low": surfimg.make_package(base, 0x7FFF0000, 0x7FFF0000),
@@ -201,13 +207,21 @@ class TestSurfimg(unittest.TestCase):
         img = d / "card.img"
         c.build(str(img))
         disagree = []
-        for k, v in pkgs.items():
-            want, _ = surfimg.verdict(surfimg.check(v))
-            r = run(fwtest, "boot", "--card", img, "--path", names[k], "--quiet")
+        verdicts = {}
+        runs = [(k, 256 << 20) for k in pkgs] + [(k, 64 << 20) for k in pkgs if not k.startswith("random")]
+        for k, ddr in runs:                                 # ddr_top is the top 16 MiB of either size
+            want, _ = surfimg.verdict(surfimg.check(pkgs[k], ram_size=ddr))
+            r = run(fwtest, "boot", "--card", img, "--path", names[k], "--ddr-size", str(ddr), "--quiet")
             got = "OK" if "RESULT OK" in r.stdout else r.stdout.split("code=")[1].split()[0]
+            verdicts[k, ddr] = got
             if (want or "OK") != got:
-                disagree.append(f"{k}: surfimg {want or 'OK'}, SurfBoot {got}")
+                disagree.append(f"{k} with {ddr >> 20} MiB: surfimg {want or 'OK'}, SurfBoot {got}")
         self.assertEqual(disagree, [], "\n".join(disagree))
+        for k, ddr, code in (("isa_no_i", 256 << 20, "IMG_ISA"), ("isa_zero", 256 << 20, "IMG_ISA"),
+                             ("isa_i_only", 256 << 20, "OK"), ("flags", 256 << 20, "OK"),
+                             ("below_small_top", 64 << 20, "OK"), ("in_small_top", 64 << 20, "IMG_RANGE"),
+                             ("in_small_top", 256 << 20, "OK")):
+            self.assertEqual(verdicts[k, ddr], code, f"{k} with {ddr >> 20} MiB")
         img.unlink()
 
 
