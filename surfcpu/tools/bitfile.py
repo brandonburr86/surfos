@@ -57,7 +57,7 @@ JTAG_IDCODES = {"xc7a35t": 0x0362D093, "xc7a50t": 0x0362C093, "xc7a100t": 0x0363
 # docs/INVENTORY.md gap G7: Micron N25Q128A13ESF40, Spansion S25FL128SAG[M|N]FI00 or S25FL127SABMFx00).
 FLASH_BYTES = 16 << 20
 SLOT_BYTES = 4 << 20            # slot 0, from address 0: where the FPGA reads at power-on
-STARTUP_CCLK_HZ = 3_000_000     # UG470 figure 2-13 note 2: "The CCLK frequency starts at 3 MHz typical"
+STARTUP_CCLK_HZ = 3_000_000     # UG470 v1.17 figure 2-13 note 2: "The CCLK frequency starts at 3 MHz typical"
 BUS_WIDTHS = {0: 1, 1: 2, 2: 4}  # BSPI[9:8] (UG470 table 5-41)
 
 
@@ -203,6 +203,7 @@ def options(info: dict) -> dict:
     timer = last_write(info, "TIMER")
     wbstar = last_write(info, "WBSTAR")
     crc_checks = sum(1 for _, r, _ in info["writes"] if r == "CRC")
+    ctl0 = last_write(info, "CTL0")
     oscfsel = (cor0 >> 17) & 0x3F if cor0 is not None else None
     width = BUS_WIDTHS.get((bspi >> 8) & 3, 1) if bspi is not None and "BSPI_READ" in info["commands"] else 1
     return {
@@ -212,6 +213,7 @@ def options(info: dict) -> dict:
         "spi_read_opcode": (bspi & 0xFF) if bspi is not None else None,
         "timer": timer, "watchdog": bool(timer and (timer >> 30) & 3),
         "wbstar": wbstar, "iprog": "IPROG" in info["commands"],
+        "ctl0": ctl0, "fallback": None if ctl0 is None else not (ctl0 >> 10) & 1,
         "crc_checks": crc_checks,
         "commands": info["commands"],
         "idcode": last_write(info, "IDCODE"),
@@ -328,6 +330,9 @@ def print_report(path: str, r: dict) -> None:
           else "  TIMER: not written")
     print(f"  WBSTAR = {o['wbstar']:#010x}; IPROG {'present' if o['iprog'] else 'absent'} (MultiBoot: "
           f"{'a jump to another image' if o['iprog'] else 'none'})" if o["wbstar"] is not None else "  WBSTAR: not written")
+    if o["ctl0"] is not None:
+        print(f"  CTL0 = {o['ctl0']:#010x}: ConfigFallback {'enabled' if o['fallback'] else 'disabled'} (bit 10, UG470 v1.17 "
+              "table 5-27)")
     print(f"  CRC checks: {o['crc_checks']}" + ("" if o["crc_checks"] else " (the FPGA cannot catch a corrupted stream)"))
     print(f"  commands: {' '.join(o['commands'])}")
     print(f"  configuration time from the flash, {r['bits']:,} bits (plus power-on reset and initialization):")
@@ -443,6 +448,8 @@ def self_test() -> int:
     expect(o["cor0"] == 0x02003FE5 and o["oscfsel"] == 0 and o["spi_width"] == 1, "COR0 and the x1 default read")
     expect(o["timer"] == 0 and o["wbstar"] == 0 and not o["iprog"] and o["crc_checks"] == 0,
            "TIMER and WBSTAR placeholders, no IPROG, no CRC check")
+    fb = options(walk(synthetic(header=False, extra=_type1(6, [0x401]) + _type1(5, [0x501]))))
+    expect(fb["ctl0"] == 0x501 and fb["fallback"] is False, "CTL0 0x501: ConfigFallback disabled")
     expect(o["commands"][-1] == "DESYNC", "commands up to DESYNC")
     x4 = walk(synthetic(header=False, extra=_type1(31, [0x0000026B]) + _type1(4, [18])))
     expect(options(x4)["spi_width"] == 4 and options(x4)["spi_read_opcode"] == 0x6B, "a BSPI x4 write is read")
