@@ -1,0 +1,27 @@
+SurfBoot on the board without DDR or a card adapter: the integrator's own capture, not a board-test run
+Board: Arty A7-100T (IDCODE 0x03631093), nothing in the Pmod headers; design surfcpu_arty_a7_top built at d174d0f (clean,
+every flow check passed), loaded into configuration RAM with make program-volatile while tools/uart.py capture listened.
+Then 'info' and 'sd' typed at the monitor (115200 8N1, 3 ms between characters).
+
+Boot, as captured (seconds since the port was opened):
+  +    4.912 | 
+  +    4.912 | SurfBoot 1.0.0 (build 6c89831a), the SurfCPU boot ROM
+  +    4.928 | soc: Arty A7-100T (0x100), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream d174d0f8
+  +    4.944 | ddr: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    4.944 | 
+  +    4.944 | SurfBoot stopped: no DDR controller (DDR_ABSENT)
+  +    4.944 |   this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  +    4.960 | The LEDs LD4-LD7 show code 1. Type help for the monitor's commands; inserting a card retries the boot.
+  +    4.976 | surfboot> 
+
+info and sd:
+  info
+  SurfBoot 1.0.0 build 6c89831a
+  sysinfo: magic 46525553, SoC 00000100, map 1, board 00000100, bitstream build d174d0f8 flags 0, time 1792158798
+  clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features 7f (uart timer irq gpio spi ps2 video ddr)
+  ddr: status 0 (absent), size 0 MiB
+  card: absent (card-detect open); buttons 0
+  last boot failure: DDR_ABSENT: this bitstream has no DDR controller (DDR_STATUS 0x00000000): there is nowhere to load a kernel
+  surfboot>   sd
+  sd: no card in the socket (the card-detect switch is open)
+  surfboot> 

@@ -6,14 +6,14 @@ physical results are separate columns, so nothing claims more than happened.
 | Milestone | Simulation / host tests | Synthesis / bitstream | On the board | State |
 |---|---|---|---|---|
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
-| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
+| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | **A7-100T** (IDCODE 0x03631093), loaded over JTAG from the Mac: **m1 PASS** on 2026-10-16, 11 checks and the LEDs confirmed by the owner ([evidence](evidence/physical/m1-2026-10-16-2.txt); the first run's FAIL was a test-kit bug: [evidence](evidence/physical/m1-2026-10-16.txt)) | **passed on the board** with the open flow; open: the brief's Vivado post-route timing and DRC reports and the Mac → Vivado host loop (no Vivado host) |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
-| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
+| 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | **m3 PASS** on the A7-100T on 2026-10-16: the BRAM diagnostics' 203 checks (identity, ALU, M extension, branches, loads and stores, CSRs, 56 KiB March C-, 34 exceptions each recovered, timer interrupts and WFI at 1.02 ms a tick, FENCE.I), the UART both ways, the LEDs confirmed by the owner; bitstream d174d0f ([evidence](evidence/physical/m3-2026-10-16.txt)) | **done on the board** (open-flow bitstream; nextpnr's timing is an estimate, no Vivado sign-off) |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs; the DDR top with LiteDRAM's generated core and its DRAM model: the BRAM diagnostics' DDR checks pass (569), and SurfBoot calibrates and boots SurfOS to the shell; the 100T DDR diagnostics' synthesized netlist prints the same lines at the same times as the RTL ([evidence](evidence/ddr/), [the DDR top](evidence/ddr/ddr-top-sim.txt)) | open flow: both DDR designs place and route on both boards, but nextpnr's estimate for LiteDRAM's 100 MHz clock is 63.5 to 77.3 MHz, and one build did not finish routing: no DDR bitstream ([evidence](evidence/board/openxc7-ddr.txt)); MIG recipe pending a Vivado host | pending: needs a DDR bitstream | done in simulation; timing closure in progress |
-| 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
+| 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T (no DDR, no card adapter yet): its banner, then it stops in its monitor with the reason (DDR_ABSENT, code 1 on the LEDs); `info` and `sd` (no card) answer ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); the card over SPI and the DDR boot pending | software done on the host; RTL SoC done; on the board in progress |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the storage review's findings, being fixed in fs-fix-2) |
 | 9 Reproducible standalone release | | | | later |
 
 ## Log
@@ -177,11 +177,25 @@ physical results are separate columns, so nothing claims more than happened.
   * surfcpu: QEMU 132 of 132 at both levels, the emulator 18 of 18, `test-os-persist` 17 of 17
     and `test-os-faults` 25 of 25.
   * One riscv32 -O0 timing check failed once under load and passed on the rerun.
-* A second independent review of this round is running.
+* A second independent review of this round tested it on the host with scenarios, a fuzzer
+  (274,000 random operations with refused writes and read errors) and real threads.
+  * It found no deadlock, no order violation on the disk, and no drift in the cache's counters.
+  * It found three major defects:
+    * A sync can report success while blocks are still unwritten, when other tasks keep
+      writing to the same volume. A regression: `close` can say a file is saved when it is not.
+    * A failed write can be forgotten when its retries are held back. Also a regression.
+    * After one refused write, writes can keep failing without the card being asked again.
+
+  There are also six minor findings. The same author is fixing them in fs-fix-2, with the
+  review's tests carried into the repository.
 * The integrator's `make check` after the merge stopped on that same check at -O0 ("mtime moved
   as much as the ticks did"). It runs right after boot, before any file is written. The tick
   count was 10 to 15, but mtime had moved more than 16 periods: QEMU was held up between the two
   reads on a loaded Mac. The test now reads both clocks together and gets three tries (6c89831).
+* After that fix, on the merged tree (d174d0f):
+  * `make check` passes (26 minutes);
+  * x86 `test-all` passes at O0 and O2 (smoke 311, files 51);
+  * `unittest` passes (37 suites, including the storage test's 91 checks).
 
 ### 2026-10-16: the board test kit
 
@@ -233,6 +247,7 @@ physical results are separate columns, so nothing claims more than happened.
   * a parsing bug in the clock-tile check;
   * a false synthesis-check finding on block RAM read registers.
 * The HAS_DDR=0 designs still pass every check on both boards.
+* `make check` passes with the round merged (26c2bd2, 25 minutes).
 * Next, ddr-3 (running):
   * take the calibration CPU out of the 100 MHz domain, so that SurfCPU calibrates over
     LiteDRAM's control bus;
@@ -241,3 +256,82 @@ physical results are separate columns, so nothing claims more than happened.
 
   Timing is not relaxed to get there. If the open flow cannot close it, the choices go to the
   owner, Vivado among them.
+
+### 2026-10-16: the board, milestone 1
+
+* The Arty enumerates on the Mac as Digilent's FT2232 (serial 210319C129C6):
+  `/dev/cu.usbserial-210319C129C60` is JTAG and `...C61` the UART. macOS's own FTDI driver
+  holds both channels, yet openFPGALoader 1.1.1 (installed by the owner) claims the JTAG
+  channel without sudo.
+* Programming:
+  * `tools/program.sh detect` read IDCODE 0x03631093: the board is an **A7-100T**
+    (INVENTORY.md G1).
+  * The baseline was rebuilt at 2d1f32b, and every flow check passed (nextpnr's estimates:
+    sys 115 MHz and pix 183 MHz, both constrained to 25 MHz).
+  * `make program-volatile` loaded it into configuration RAM (DONE high). The flash was not
+    touched.
+* The Arty's JP2 was fitted (WIRING.md U7). Raising DTR pulses RESET, and the system raises
+  DTR whenever a program opens the port, so every opening restarted the design: the count
+  began at 1 each time. Dropping DTR, and RTS either way, did nothing. The owner took JP2 off,
+  and after that the count ran on through every DTR and RTS change. The owner's guide and the
+  checklists now say the board can come with JP2 fitted.
+* `board-test M=m1`, first run: FAIL ([evidence](evidence/physical/m1-2026-10-16.txt)).
+  * 10 checks passed and the owner confirmed the LEDs. Only "a line every second by the Mac's
+    clock" failed, with gaps of 0.00 s, though the transcript shows the lines a second apart.
+  * The cause was a test-kit bug. The owner took a few seconds over the first step, and the
+    lines that came meanwhile waited in the buffer; each was stamped with the time the script
+    read it.
+  * Fixed in f85079e: lines keep the time they arrived (`uart.Link.arrival`), and the evidence
+    says when each step was answered. A new self-test case, a stand-in owner who takes 3.5 s
+    over the first step, failed the same way before the fix (0.00, 0.00, 0.37, 1.03, 0.98 s).
+  * A second kit bug was found on the way (309fd37). The self-test split the stand-in owner's
+    command at the spaces in this checkout's path, so `make board-test-selftest` failed on the
+    Mac. `make check` runs in a container whose path has no spaces, so it never saw this.
+  * The kit's tests pass: 17 of 17 on the Mac, and 21 of 21 in the container
+    (`test-os-kit`).
+* `board-test M=m1`, second run: **PASS** ([evidence](evidence/physical/m1-2026-10-16-2.txt)).
+  The owner confirmed the LEDs, and 11 checks passed:
+  * the line's form and its count;
+  * a line every 0.99 to 1.01 s;
+  * the pixel clock at 25,173,611 Hz (25,173,612 on some lines);
+  * the board, id, build and build time against the manifest;
+  * the receive pin (`rx 53`), the switches at 0101, BTN0, and RESET restarting the count.
+
+  The tools it ran are those of f85079e (board-test.py sha256 cf3a99d2fb49d5a6, uart.py
+  dd6dda3bf7893ce1). The uncommitted changes it notes were these documentation edits.
+* Milestone 1 is not closed, because the brief also asks for Vivado's post-route timing and
+  DRC reports and the Mac → Vivado host → JTAG loop. With no Vivado host, the open flow's
+  nextpnr timing is only an estimate.
+* `board-test M=m3`: **PASS** ([evidence](evidence/physical/m3-2026-10-16.txt)).
+  * The bitstream is `surfcpu_arty_a7_bramdiag` built at d174d0f: clean, and every flow check
+    passed. It is not rebuilt at this commit. The top file has changed since, but only to add
+    the DDR design's pins and blocks, which this HAS_DDR=0 design leaves out.
+  * The diagnostics' first run came before the port was open, so the script typed Ctrl-R, and
+    the second run printed every section ok: 203 checks, `BRAMDIAG: PASS`. The checks were:
+    * identity, the ALU, the M extension, branches, loads and stores, CSRs and counters;
+    * a March C- test of the 56 KiB scratch RAM, and the spare text RAM;
+    * 34 exceptions, each one recovered;
+    * timer, software and external interrupts with WFI (10 ticks in 10,186 µs);
+    * FENCE.I with code written to RAM.
+
+    DDR was skipped: this bitstream has no DDR controller.
+  * The identity lines match the manifest: build d174d0f8, clean, board id 0x100, 25,000,000 Hz.
+  * `Arty7` typed came back character by character.
+  * The owner saw LD4..LD6 lit, LD7 blinking and LD0 green. LD7 blinking is the firmware's
+    heartbeat: at the summary all four green LEDs light, then the echo loop toggles LD7 every
+    half second. The test's question said "LD4..LD7 lit"; it now says so.
+* That is milestone 3's exit evidence (brief section 11): a physical UART transcript with the
+  build identity, the arithmetic and memory results, the timer's progress and deliberate fault
+  recovery.
+* SurfBoot on the board (`surfcpu_arty_a7_top`, d174d0f, nothing in the Pmod headers): the
+  integrator's own capture, not a board-test run
+  ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)).
+  * It prints its banner 0.02 s into the capture's first second and says the bitstream has no
+    DDR controller, so there is nowhere to load a kernel.
+  * It stops in its monitor with DDR_ABSENT (code 1 on LD4-LD7) instead of hanging, which
+    matches the owner's guide section 6.
+  * `help`, `info` and `sd` answer. `sd` says there is no card, from the open card-detect
+    switch. `info` reports 25 MHz sys, a 1 MHz timebase and a 25,173,611 Hz pixel clock.
+  * Cosmetic, for the next firmware round: `info` prints `features 7f (uart timer irq gpio spi
+    ps2 video ddr)`. The parentheses are a fixed legend of bits 0 to 7, not the bits that are
+    set, so it reads as if DDR were there.

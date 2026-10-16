@@ -22,7 +22,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the memory controller works in simulation, and SurfBoot boots SurfOS from it there; the open-source flow does not yet meet its 100 MHz timing, so there is no DDR bitstream yet, and booting SurfOS on the board waits for one |
 | The board tests | one command per board milestone (`make -C surfcpu board-test M=m1`, [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md)), rehearsed against the RTL system and fake boards; it reads the board's serial port itself and writes the evidence file |
-| The board itself | nothing has been connected or programmed yet |
+| The board itself | an A7-100T (IDCODE 0x03631093), with JP2 taken off. Loaded over USB from this Mac (configuration RAM only; the flash is untouched): the baseline passes m1, and the CPU passes m3 with all 203 BRAM diagnostics ([evidence](evidence/physical/)) |
 
 ## 1. Set up the Mac (once)
 
@@ -162,10 +162,12 @@ Two different jumpers are both called JP1:
   instead of loading Digilent's demo from flash at power-on (that demo could drive the Pmod
   pins).
 * **The Pmod PS2's JP1 (supply)**: **on VB**.
+* **The Arty's JP2**: **off**. Your board came with it fitted, and then every program that opens
+  the serial port (the test kit, the console, `screen`) resets the board: the first bring-up saw
+  the count start again at 1 each time. You took it off on 2026-10-16; keep it off.
 
-Also leave **the Arty's JP2** open (shorted, opening the serial port could reset the SoC), and
-connect nothing to the Pmod PS2's JP2 header (its silkscreen has VE and GND swapped). BOARD.md
-section 12 is the full checklist.
+Also connect nothing to the Pmod PS2's JP2 header (its silkscreen has VE and GND swapped).
+BOARD.md section 12 is the full checklist.
 
 Bring the adapters up in order: power on with only the USB cable first and load the baseline
 design (section 4), which leaves JB, JC and JD unassigned so the FPGA drives none of their
@@ -175,7 +177,7 @@ running (section 6).
 Also open: the PCB revision printed on the Arty, the adapters' revisions, and whether your
 keyboard is a real PS/2 keyboard that works at 3.3 V (INVENTORY.md section 4, G4).
 
-## 4. First power-up: the baseline design (milestone 1) **pending**
+## 4. First power-up: the baseline design (milestone 1) **passed on 2026-10-16**
 
 1. Plug the Arty's USB cable into the Mac (it powers the board). `make -C surfcpu doctor` should
    now show the cable, two `/dev/cu.usbserial-...` ports and the IDCODE.
@@ -222,7 +224,7 @@ UART lines itself and writes `surfcpu/docs/evidence/physical/m1-<date>.txt`, tra
 included. [PHYSICAL-TESTS.md](PHYSICAL-TESTS.md) describes the six tests (m1, m3, m5, m7, m8,
 m9).
 
-## 5. The CPU on the board (milestone 3) **pending**
+## 5. The CPU on the board (milestone 3) **passed on 2026-10-16**
 
 The full SoC with the CPU and memory diagnostics in its boot ROM; only the USB cable is
 needed:
@@ -248,7 +250,8 @@ DDR                                skipped: no DDR controller in this bitstream
 BRAMDIAG: PASS (203 checks)
 ```
 
-Then LD4-LD7 light and LD0 is green (red on a failure); typed characters are echoed. BOARD.md
+Then LD4-LD7 light and LD0 is green (red on a failure); from then on LD7 blinks about once a
+second, the heartbeat of the loop that echoes typed characters. BOARD.md
 section 12 has the whole transcript. This is milestone 3's physical test; as one command:
 `make -C surfcpu board-test M=m3`.
 
