@@ -9,10 +9,10 @@ dependency, what replaces it, what is left out, and the plan.
 | | |
 |---|---|
 | Build | `make -C surfcpu build-kernel` → `build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` (and `qemu_virt`); `arch/riscv32/kernel.mk`; `SURFOS.BIN` packed by the fw track's `tools/surfimg.py` where the tree has it |
-| Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and through a SurfBoot stand-in (the handoff, FAT over the SD driver, and `SURFOS.BIN` and a `mkcard.py` card where the fw track's tools are present) (`boards/qemu_virt/test_os.py`) |
+| Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and through a SurfBoot stand-in (the handoff, FAT over the SD driver with injected write faults and the card taken out, and `SURFOS.BIN` and a `mkcard.py` card where the fw track's tools are present) (`boards/qemu_virt/test_os.py`); `make -C surfcpu test-os-persist`: files written on the RTL system in surfsim, ejected, and read back after a second boot (section 6) |
 | ISA, ABI | `rv32im_zicsr_zifencei`, `ilp32`, machine mode only (ISA.md); every linked instruction checked (`arch/riscv32/isacheck.py`) |
 | Boards | `boards/qemu_virt/` (QEMU's virt machine, for tests now) and `boards/arty_a7/` (SurfCPU's SoC, MEMORY-MAP.md) |
-| State | boots to the kernel shell under QEMU and passes its tests; **nothing has run on the FPGA** (no board connected): every Arty result is pending |
+| State | boots to the kernel shell under QEMU, in the fw emulator and on the RTL system in simulation, and passes its tests; files written on the card persist across a reboot in the RTL simulation; **nothing has run on the FPGA** (no board connected): every Arty result is pending |
 
 ## 1. The machine-mode model, and what it does not have
 
@@ -54,7 +54,8 @@ command that does not need PC hardware or processes.
 
 * **Shared files are compiled from where they are** (the list is `SHARED_C` in kernel.mk):
   `kernel/{task,wait,sync,ktimer,klog,console,tty}.c`, `mm/kalloc.c`, `lib/blibc/*` (but
-  `time.c`), `fs/{vfs,bcache,fat,fat_mkfs,devfs,poll,tarfs}.c`,
+  `time.c`, and `memory.c`, which `arch/riscv32/memory.c` replaces with word moves),
+  `fs/{vfs,bcache,fat,fat_mkfs,devfs,poll,tarfs}.c`,
   `driver/{bdev,part,parttab,cp437}.c`, `shell/{prompt,fscmd,fdisk}.c`.
 * **Header shadowing.** `-Iinclude/arch/riscv32` comes before `-Iinclude`. A header there
   replaces the x86 header of the same name for the riscv32 build only: `surfos/irq.h`
@@ -173,6 +174,15 @@ doubled rows during `tasks`; on x86 the same race was there, but a scroll takes 
 | `include/surfos/console.h` | `console_print_begin()`, `console_print_end()` |
 | `tests/host/test_pager.c`, `pager_bridge.c` | three scenarios with a hook that stops a task inside its line (a preemption) or prints as an interrupt handler: the other task's line waits, the handler's line comes after, a paged line gives the lock back at the question (the old console fails the first two) |
 
+Then fixes for both kernels (10/16/26) that milestone 8's fault tests found (section 6), audit
+**B1, B2, B3** in `docs/CODE-AUDIT.md`:
+
+| File | Change |
+|---|---|
+| `fs/bcache.c`, `include/fs/bcache.h` | B1: a block whose write failed stays dirty (`wfail`) while its device is there, instead of being dropped when it had to make room (the command that wrote never heard of it, and a dropped FAT or directory block let FAT read its old copy back); the buffer search passes over it, one failed run is tried again when nothing else is free, and else the caller gets no buffer (an I/O error); `bsync()` tries each run once per call and fails when one did; the console hears of a device's first failure and of its first good write after. B3: a write order (`bdirty_order()`, `BORDER_DATA` < `TABLE` < `DIR` < `SUMMARY`): a run is of one order, `bsync()` writes a device order by order and stops it at the order that fails, and a block written to make room has every dirty block of a lower order of its device written first |
+| `fs/fat.c` | B3: the FAT copies are written as tables, directory entries as `DIR`, FSInfo last, file data and a new directory's cluster first; unlink, truncate to zero and rename put an order point (a sync of the volume) between the entry and the clusters, so an entry leaves the disk before its clusters are freed and a new name is on it before the old one goes |
+| `shell/fscmd.c` | B2: `eject` writes each mount out first and keeps them all when that fails ("stays mounted: sync tries the writes again; umount gives them up") instead of unmounting, which dropped the blocks it could not write, and saying "safe to remove" |
+
 How the first set was shown unchanged (`surfcpu/docs/evidence/os/x86.txt`): the x86 kernel
 built before and after (`devenv/build.sh`, O0 and O2) has byte-identical allocated sections
 (code, data, rodata, the symbol table, BSS) in `kernel/task.o`, `lib/blibc/vsnprintf.o` and
@@ -181,7 +191,7 @@ numbers. With the changed files, `make unittest` passed, `make test-usb` passed 
 O0 and at O2, and `make test-all` passed at O0 (smoke test 311 checks); its O2 smoke run failed
 once (32 of 306, all following one step on the loaded host) and passed 311 when run again, with
 a kernel image identical to the one built before the change. The console fix changes the x86
-kernel on purpose; it passed the same suites (`x86.txt`, round 2).
+kernel on purpose; it passed the same suites (`x86.txt`, round 2), and so did B1-B3 (round 3).
 
 ## 4. The port checks (AGENT-INSTRUCTIONS.md section 10)
 
@@ -202,7 +212,10 @@ kernel on purpose; it passed the same suites (`x86.txt`, round 2).
 
 The timing windows of the self test (sleeps, kernel timers, timeouts) allow a few late ticks,
 since an emulator on a busy host can stall for a while and the tick then catches up with mtime
-at once.
+at once. The two-task register test runs until both tasks were switched out twice, for at most
+300 ticks (it was 400 rounds, which an idle host sometimes finished within two time slices).
+`test_memory` checks `arch/riscv32/memory.c` (memcpy, memmove both ways, memset) at every
+alignment, offset and length up to 70 bytes against byte loops.
 
 `scrolltest` (arch/riscv32/kshell.c, audit C10): two kernel tasks print 60 numbered lines each
 at once, as fast as they can, while the console scrolls; then every row of the console's cells
@@ -213,8 +226,8 @@ The console before the lock fails it in both (rows half written, doubled or blan
 lock it passes, and the scroll is faster (892 ticks instead of 1430 for the 120 lines in the
 emulator).
 
-The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 72 checks per build on a tree without
-the fw track's tools, 86 with them): the banner and identity, help, ps (idle, init, heartbeat, a
+The rest of `make test-os` (`boards/qemu_virt/test_os.py`; 109 checks per build on a tree without
+the fw track's tools, 123 with them): the banner and identity, help, ps (idle, init, heartbeat, a
 kernel shell on each of F1-F4), the tick against a 1000 ms sleep, the heartbeat task, two kernel
 tasks that count, sleep and wake (`tasks`), interrupt counts, the CPU, the self test and
 heaptest; FAT32 on the RAM disk: long, accented and 8.3 names, three folders deep, a 1 MB file
@@ -235,7 +248,7 @@ verify` and booted by the stand-in, which copies its payload to the load address
 image made by `mkcard.py` (MBR, FAT32, the standard directories of BOOT-ABI.md section 5, the
 package in `/BOOT`) mounted through the SD driver, `/USERS/DOCUMENTS` read and written, the
 image read back by `mkcard.py --inspect`, mtools and fsck.fat. Without them those two parts are
-reported as skipped.
+reported as skipped. Then milestone 8's faults on the simulated card (37 checks, section 6).
 
 **Long names and `/USERS/DOCUMENTS/`.** "DOCUMENTS" has nine letters, so on FAT it exists only as
 a long-name (VFAT) entry with a short alias such as `DOCUME~1`, as the Mac makes it. fs/fat.c
@@ -256,12 +269,14 @@ helpers against the specification's examples (CRC7 of CMD0/CMD8/..., CRC16 0x7FA
 2.0, CID), and the SD driver against a simulated card (`sdmodel.c`, its own CRCs) of three kinds
 (SDHC, SDSC version 2, SDSC version 1): 300 random reads and writes of 1-64 blocks, a corrupted
 block read again, a block that stays corrupted, a write rejected for its CRC and sent again, a
-read past the end, a data token that never comes, no card. The model behaves as the io
+read past the end, a data token that never comes, no card; and (10/16/26) a write error on the
+first of eight blocks, a write command without an answer, and the card taken out after the third
+of sixteen blocks and put back. The model behaves as the io
 track's card model (`surfcpu/sim/models/sdcard_model`, merged into `surfcpu`, documented in
 IO.md): data responses 0xE5/0xEB/0xED followed by busy, R1 0x40 past the end, commands sent
 while the card is busy ignored; it counts the host's mistakes (a command while busy, chip select
 released inside a block) and the tests require none; and a card that refuses CMD18 and CMD25
-(the driver goes on one block per command). 177 checks over the three seeds.
+(the driver goes on one block per command). 204 checks over the three seeds.
 
 `make test-os-iomodel` (`boards/arty_a7/tests/iomodel/`): the same `sdcard.c` against the io
 track's own bit-level card model (`sim/models/sdcard_model.{h,cpp}`), through a software SPI
@@ -270,7 +285,12 @@ master with surf_spi's timing (390.625 kHz for identification, 12.5 MHz after; a
 shadow copy and the card's backdoor, every fault the model can inject (a bad read CRC, a write
 rejected for its CRC, a read error token, no response, a write error, a slow card, an
 initialization that never ends, no card), and the model's count of protocol mistakes, which must
-stay zero: 101 checks over seeds 1, 7 and 123. It runs where the model is in the tree (on
+stay zero; and (10/16/26) a write error on the first block of a multiple write, a write command
+without a response, and the card taken out in the middle of a 16-block write (by `set_present()`
+after a number of bytes), then put back and initialized again: 164 checks over seeds 1, 7 and
+123. The first of these found a driver mistake the C model had let pass: after a block the card
+refused, the stop token went into the card's busy time (fixed: the driver waits for it, as after
+a block it took). It runs where the model is in the tree (on
 `surfcpu` since the io merge; `OS_IOMODEL_DIR` names another copy), and says it is skipped
 otherwise.
 
@@ -315,21 +335,120 @@ generated `soc.h`:
   consoles, Ctrl+Alt+Del rebooting; line errors forget half-received sequences; the lock keys'
   LEDs set through surf_ps2's host-to-device path (0xED, the value, each ACKed, a state machine
   driven by the replies, 100 ms timeout); a keyboard plugged in gets its LEDs again (`kbdinfo`).
-* `sd.c` + `sdcard.c` + `sdproto.c`: the microSD card through `surf_spi` as the block device
-  `sd0`, its partitions `sd0p1`...: initialization at 390 kHz (CMD0, CMD8, CMD59 CRC on, ACMD41,
+* `sd.c` + `sdblk.c` + `sdcard.c` + `sdproto.c`: the microSD card through `surf_spi` as the block
+  device `sd0`, its partitions `sd0p1`... (`sdblk.c`, shared with QEMU's sdsim: the block device
+  and a task that looks at card detect five times a second, surf_spi having no interrupt for
+  it; section 6): initialization at 390 kHz (CMD0, CMD8, CMD59 CRC on, ACMD41,
   CMD58, CMD16 for SDSC, CSD, CID), then 12.5 MHz; SDHC/SDXC block and SDSC byte addressing;
   single and multiple block reads with every CRC16 checked and a bad block read again; single
   and multiple block writes with data responses (the low five bits), busy waits, the stop
-  token also after an error, and CMD13; a wait for 0xFF before every command (a card ignores
+  token also after an error (after the card's busy time), and CMD13; card detect looked at
+  before every transfer; a data block moved in a tight loop (`spi_rx`, `spi_tx`); a wait for
+  0xFF before every command (a card ignores
   commands while busy); every wait bounded; one block per command from then on if a card
   refuses CMD18 or CMD25 as illegal (every SD card has them; the fw emulator's does not). FAT
   through the existing block layer, cache, VFS and fs/fat.c: init_fs() mounts the card's FAT32
-  partition on /sd0p1, long names included (`/sd0p1/USERS/DOCUMENTS`). Read-only until writing has been tried on the real board (the brief's
-  "read-only first"): `sd=rw` in /BOOT/CMDLINE.TXT, or `sdmode rw` while unmounted, enables it;
-  `eject sd0` flushes and unmounts. Never partitioned or formatted (bdev_may_format() refuses
-  its bus). `sdinfo` shows the card.
+  partition on /sd0p1, long names included (`/sd0p1/USERS/DOCUMENTS`). Read-only unless
+  allowed (the brief's "read-only first"; writing is tested in simulation, not yet on a real
+  card): `sd=rw` in /BOOT/CMDLINE.TXT, or `sdmode rw` while unmounted, enables it; `eject sd0`
+  flushes and unmounts. Never partitioned or formatted (bdev_may_format() refuses its bus).
+  `sdinfo` shows the card and how often it was taken out and put in.
 
-## 6. What is done, pending and later
+## 6. Writing to the card (milestone 8)
+
+The brief's milestone 8 is on-device writes with flush, unmount and eject, useful errors and
+persistence across a reboot. All of it is tested in simulation; **none of it on a real card or
+the board** (pending).
+
+**What a command does.** The kernel shell follows every command that changes a file system
+(`write`, `append`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `fsbench`) with a sync of each mounted
+volume that can be written, one at a time (`vfs_fsync()` on its root), so at the prompt its work
+is on the card, and a write the card refused is that command's failure: `cp: not all of it
+reached /sd0p1: I/O error`, status 1. A volume whose disk was taken out before the command
+began is left out (that was said when it went); one taken out during the command is a failure.
+`append <file> <text>...` exists because the shell has no redirection. A program (there are none
+on riscv32 yet) learns of a failed write from `vfs_fsync()`; `vfs_close()` syncs but does not
+return the error (shared code, unchanged).
+
+**Errors** (block cache B1, eject B2): a block the card refuses stays dirty and is tried again by
+the next sync; the console says `bcache: write of sd0p1 blocks ... failed (-3); kept for the
+next sync` once, and `bcache: sd0p1 takes writes again` when a write works again. A card that
+refuses everything fills the cache with such blocks; then a command that needs a buffer gets an
+I/O error (after one more try of a refused run) instead of waiting: nothing hangs (a 1 MB `cp`
+returns at once with its error). `eject` keeps a volume it could not write.
+
+**The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
+fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
+bouncing switch is not a removal) unregisters the disk and its partitions (`bdev_unregister()`:
+every I/O fails, the cache drops their blocks, a mount stays until umount), marks the driver not
+ready, and says `+SD: sd0: the card was taken out` and, per mount, `+SD: /sd0p1 was mounted
+read-write: what was not yet written to the card is lost; umount /sd0p1`. A card put in is
+initialized and registered as `sd0` again (as `sd1` while a mount of the old `sd0` is left), its
+partitions read, not mounted: `+SD: sd0: a card was put in: mount sd0p1 to use it`. A transfer
+begun for the old disk never reaches the new card (it must be for the disk the card has now). A
+card taken out and put back between two looks is not noticed: it lost its power, answers
+nothing, and every transfer fails until it is out for a moment.
+
+**The write order** (B3) is what keeps an interrupted write repairable: the block cache writes a
+device's dirty blocks file data first, then the FAT copies, then directory entries, then FSInfo,
+and a block written to make room has every dirty block of a lower order written first; FAT puts
+an order point (a sync) in unlink, truncate to zero and rename so that taking away goes the
+other way round (entry first). Before B3, a card pulled after the first block of a new file's
+sync left its directory entry pointing at a free cluster (`fsck.fat`: "Contains a free
+cluster"), and after the third the FAT and entry written without the file's bytes (a file
+reading whatever its cluster held before, which no check can see).
+
+**Tests, QEMU** (`boards/qemu_virt/test_os.py`, 37 checks per build; the kernel word `sdsim`
+makes the RAM disk a simulated card behind `sdcard.c` and `sdblk.c`, and the `sdsim` command
+arms the card model's faults, which follow the io track's `SdFaults`): one block answered "write
+error" (retried at the file's close, the command succeeds); a card that refuses every block
+(`write` and a 1 MB `cp` say "not all of it reached /sd0p1", return at once, `eject` says "stays
+mounted"; after `sdsim fault clear`, `sync` writes everything, and on the host every file is
+whole and the copy holds the first 514560 bytes of its source); a card that answers no command
+(the write fails at once); the card taken out after a sync (the messages, writes refused, the
+mount marked unplugged; `fsck.fat -n` finds only the dirty bit; put back, mounted with "not
+unmounted cleanly", the files there); and taken out right after the nth block a new file's write
+sends, n = 1 to 4, and after the first block of an `rm`, an `mv` into a folder and a write over a
+file. What `fsck.fat -n` found on those cards: the dirty bit; "Reclaimed 1 unused cluster"; the
+FATs differing; a stale free count; for the `mv`, the file under both names ("share clusters",
+fsck keeps the first). Each new-file card was booted again (the reboot): mounted with a warning,
+the earlier file whole, the new one whole (n = 4) or absent.
+
+**Tests, RTL** (`make -C surfcpu test-os-persist`, `sim/soc/tools/system_persist_test.py`, on
+`make check`): the soc track's whole SoC in surfsim with the io track's card model, booted by
+SurfBoot from a `mkcard.py` card with `/BOOT/CMDLINE.TXT` "ascii sd=rw". Over the UART, in
+`/sd0p1/USERS/DOCUMENTS`: `mkdir Saved-notes`, a small file in it, a 160 KiB `cp` into it (320
+clusters of 512 bytes: entries in three FAT sectors and more), a file written over with shorter
+text, a line appended to another, one moved into the folder under a long name, one deleted, then
+`sync`, `cd /`, `eject sd0` ("/sd0p1 unmounted", "sd0: safe to remove"); `--sd-flush` writes the
+model's blocks into the image. A second boot from that image (the reboot) mounts it clean and
+reads every name, size and CRC back; then `fsck.fat -n` finds the image clean and mtools lists
+the folder (long names and their aliases) and returns all seven files byte for byte. 17 checks,
+about 2.5 minutes (two runs of about 11 and 9 s simulated, at about 3.5 million cycles a second
+of wall time); it is on
+`make check`, because it is the one test of the write path through the RTL and stays within a
+few minutes. Faults cannot be injected there yet: surfsim has no option for the card model's
+`SdFaults` or `set_present()` (section 8 has the proposal).
+
+**Speed.** On SurfCPU every instruction is fetched from DDR without a cache, so the instruction
+count is the time. Four changes in the port's own code took the test above from 402 s to 158 s
+of wall time (and leaving the 160 KiB source file's read-back to the host, to about 145 s):
+CRC-16 (`sdproto.c`) and CRC-32 (`crc32.c`) from 256-entry tables instead of bit by bit and by
+nibbles, a data block moved in a tight loop on surf_spi's DATA register (`spi_rx`, `spi_tx`)
+instead of a function call per byte, and `memcpy`/`memmove`/`memset` moving words
+(`arch/riscv32/memory.c`; never a misaligned access: SurfCPU traps them). The 160 KiB `cp` now
+takes about 113 million cycles (4.5 s at 25 MHz), some 700 cycles a byte read and written.
+
+**Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
+so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
+`fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
+overwritten (O_TRUNC) can be left empty, and an append can lose its new bytes. A rename can
+leave a name too many. A card that refuses writes in the middle of a large copy leaves the
+copy's last clusters allocated past its size. A card taken out and put back within half a
+second is not seen. What the card itself does with a block it was programming when its power
+went is beyond the kernel.
+
+## 7. What is done, pending and later
 
 Done and tested under QEMU (qemu_virt, emulation only): the build, the arch core, the
 machine-mode kernel with its shell, tasks, timer and interrupts, the self test with the port
@@ -341,7 +460,9 @@ kernel booted by SurfBoot from a card, to the shell, through its self test and `
 In the RTL system simulation (the soc track's `test-soc-system-boot`): SurfBoot loads the Arty
 `SURFOS.BIN` from a card image on the real core, and the kernel reaches its shell over the UART
 and the PS/2 keyboard model, its console decoded from the VGA pixels; that run found the console
-race fixed as C10. Done and tested on the host: the
+race fixed as C10. Milestone 8 in simulation (section 6): files written, ejected and read back
+after a second boot on the RTL system; write errors, a card that stops answering and the card
+taken out, under QEMU, with what fsck.fat finds afterwards. Done and tested on the host: the
 Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
 the SD driver against the io track's card model with surf_spi's timing.
 
@@ -351,15 +472,16 @@ itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and l
 copy). Its register accesses have run in the fw track's instruction-level emulator (`make
 test-os-surfemu`) and in the soc track's RTL system simulation (`test-soc-system-boot`), with
 models of the card, the keyboard and the DDR: not on the FPGA (no board connected), so brief
-milestone 7's "real board boots SurfOS from microSD" and milestone 8's persistent files are open.
-The SD write path in particular stays off (read-only) until it is tried on a real card.
+milestone 7's "real board boots SurfOS from microSD" and milestone 8 on a real card are open.
+The SD write path stays off by default (read-only, `sd=rw` to allow it) until it is tried on a
+real card.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by
 ECALL from U mode, `libsurf` and `surfsh` rebuilt for RV32; the Ethernet MAC and the network
 stack; a graphics mode.
 
-## 7. Notes on the contracts
+## 8. Notes on the contracts
 
 Found while building to them; nothing was changed in the frozen files.
 
@@ -383,3 +505,12 @@ Found while building to them; nothing was changed in the frozen files.
 * The fw track's simulated SD card (its emulator's) has no CMD18 or CMD25; real cards all do.
   The kernel copes (one block per command), but a run in that emulator says nothing about the
   driver's multiple-block paths, which the io track's card model and the host model test.
+* surfsim cannot inject the card model's faults (`SdFaults`) or take the card out
+  (`set_present()`) during a run, so milestone 8's fault tests run under QEMU and on the host
+  instead of on the RTL. Proposal for the soc track (surfsim.cpp, not changed here): options
+  `--sd-fault KIND=N@REGEX` (arm `faults.KIND = N`, KIND one of write_error, no_response,
+  write_crc_reject, read_error_token, read_bad_crc, busy_extra, when the UART output first
+  matches REGEX), `--sd-remove REGEX` and `--sd-insert REGEX` (`set_present(false/true)` when
+  it matches), each matched in order like `--send`, so a test can arm a fault after it typed a
+  command. With them `system_persist_test.py` would add the QEMU fault cases on the RTL, card
+  detect through surf_spi's STATUS.CARD included.
