@@ -34,7 +34,7 @@ SURFCPU_BUILD_DIRTY ?= 1
 BUILD_ID_HEX        = $(shell printf '%.8s' '$(SURFCPU_BUILD_ID)' | grep -E '^[0-9a-f]{8}$$' || echo 00000000)
 
 .PHONY: all gen check-generated lint test-cpu test-soc test-fw test-os build-rom build-kernel \
-        check clean versions
+        check check-openflow clean versions
 all: build-rom
 
 gen:
@@ -58,6 +58,11 @@ build-kernel:
 # Every automated pre-release check (brief section 9). Areas add theirs with `check: ...`.
 check: check-generated lint test-cpu test-soc test-fw
 	@echo "check: all automated SurfCPU checks passed"
+
+# The open-source flow's extras (LiteDRAM's controller, Digilent's files fetched again): they
+# need the network the first time and matter only for that flow (docs/BUILD-HOST.md option C).
+check-openflow:
+	@echo "check-openflow: the open flow's checks passed"
 
 clean:
 	rm -rf $(BUILD)/cpu $(BUILD)/soc $(BUILD)/fw $(BUILD)/sim $(BUILD)/smoke

@@ -113,7 +113,8 @@ test-ddr: lint-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults test-ddr-ic
 # ---- LiteDRAM, the open flow's controller (ip/litedram/). litedram-setup fetches the pinned
 # generator (once, network); litedram-gen generates the Arty core (with its calibration BIOS)
 # and the simulation core, and records what came out; test-ddr-litedram runs the bridge and the
-# adapter against the simulation core's real controller (on check).
+# adapter against the simulation core's real controller (on check-openflow: it needs the network
+# the first time and is the open flow's controller).
 LITEDRAM_OUT = $(BUILD)/litedram
 LITEDRAM_ENV = $(BUILD)/third_party/litedram/env.sh
 LITEDRAM_SIM = $(LITEDRAM_OUT)/arty_sim/gateware/litedram_core.v
@@ -164,7 +165,7 @@ test-ddr-litedram: lint-ddr-adapter $(DDR_OUT)/tb_ddr_litedram
 	@grep -E '^tb_ddr_litedram: [a-z]' $(DDR_OUT)/litedram.jitter.txt | sed 's/^/  /'
 	@echo "test-ddr-litedram: PASS (bridge + adapter + LiteDRAM 2026.08 controller, seeds 1 2 3)"
 
-check: test-ddr-litedram
+check-openflow: test-ddr-litedram
 
 # Deliberately broken copies of the RTL that the tests must catch (about 10 minutes; not on check).
 test-ddr-mutants:
