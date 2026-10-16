@@ -1,0 +1,518 @@
+/*
+SurfOS riscv32 Self Test
+--------------------
+File: rvtest.c  Date: 10/15/26 (SurfCPU), after shell/selftest.c
+--------------------
+`selftest` and `heaptest` for the machine-mode port. The portable checks of the x86 self
+test (tasks and their exit codes, sleeps, kernel timers, mutex, semaphore, event, the
+formatter, the heap) run as they do there; the x86 ones that need PC hardware, user
+programs or the network are left out. Added for riscv32, the brief's port checks
+(surfcpu/docs/AGENT-INSTRUCTIONS.md section 10):
+
+  * every register survives traps: arch/riscv32/rvregs.S fills them all with a pattern
+    while timer interrupts arrive and tasks switch, or while it yields with ECALL, and
+    two tasks do it at once with different patterns;
+  * the stack is 16-byte aligned in tasks and in interrupt context (the psABI's rule);
+  * sp is inside its task's stack, gp is the kernel's, tp is zero;
+  * structure sizes and the ABI: ilp32 types, the boot ABI's layouts, signed char;
+  * 64-bit arithmetic through libgcc and the formatter (the riscv32 divide path);
+  * the CRC-32 test vectors of BOOT-ABI.md;
+  * timer rollover of the 32-bit tick arithmetic, and mtime against the tick count;
+    (the timing windows allow for an emulator stalled by a busy host: the ticks that
+    come late are counted at once, arch/riscv32/timer.c)
+  * a FAT round trip on the first mounted FAT volume, when there is one.
+
+It prints "SELFTEST PASS" or "SELFTEST FAIL", as on x86, for the test harness.
+*/
+
+#include <blibc_common.h>
+#include <surfos/types.h>
+#include <surfos/task.h>
+#include <surfos/wait.h>
+#include <surfos/sync.h>
+#include <surfos/ktimer.h>
+#include <surfos/timer.h>
+#include <surfos/klog.h>
+#include <surfos/interrupt.h>
+#include <surfos/irq.h>
+#include <surfos/trap.h>
+#include <sys/bdev.h>
+#include <fs/vfs.h>
+#include <mm/kalloc.h>
+#include <surfcpu/bootabi.h>
+#include <riscv/csr.h>
+#include <riscv/board.h>
+#include <riscv/arch.h>
+
+static int fails;
+
+static void check(bool ok, const char *what) {
+    printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
+    if(!ok) fails++;
+}
+
+/* one at a time, as shell/selftest.c */
+static u_long busy_pid;
+
+static bool claim(const char *what) {
+    u_long flags = irq_save(), pid = busy_pid;
+    surf_task *t = pid ? task_find(pid) : NULL;
+    if(!pid || !t || t->state == TS_DEAD) {
+        busy_pid = curTask->pid;
+        irq_restore(flags);
+        return true;
+    }
+    irq_restore(flags);
+    printf("    %s: pid %lu is running a test: one at a time\n", what, pid);
+    return false;
+}
+
+static void unclaim(void) {
+    busy_pid = 0;
+}
+
+/**** heap (as shell/selftest.c's heap_round) ****/
+
+static int heap_round(void) {
+    enum { SLOTS = 192, ROUNDS = 20000 };
+    struct { void *ptrs[SLOTS]; u_int sizes[SLOTS]; } *s = kcalloc(1, sizeof(*s));
+    struct heap_stats before, after;
+    u_int i, r, allocs = 0, frees = 0, maxlive = 0, live = 0, bad = 0;
+
+    if(!s) {
+        printf("heaptest: no memory for its tables: HEAPTEST FAIL\n");
+        return 1;
+    }
+    kheap_stats(&before);
+    srand(getticks() + 7);
+    for(r = 0; r < ROUNDS && !task_interrupted(); r++) {
+        i = rand() % SLOTS;
+        if(s->ptrs[i]) {
+            u_char *p = s->ptrs[i];
+            u_int k;
+            for(k = 0; k < s->sizes[i]; k++) if(p[k] != (u_char)(i + k)) { bad++; break; }
+            kfree(s->ptrs[i]);
+            s->ptrs[i] = NULL;
+            frees++; live--;
+        } else {
+            u_int sz = (rand() % 16 == 0) ? 1 + rand() % 20000 : 1 + rand() % 512;
+            u_char *p = kalloc(sz);
+            u_int k;
+            if(!p) { bad++; continue; }
+            for(k = 0; k < sz; k++) p[k] = (u_char)(i + k);
+            s->ptrs[i] = p; s->sizes[i] = sz;
+            allocs++; live++;
+            if(live > maxlive) maxlive = live;
+        }
+    }
+    for(i = 0; i < SLOTS; i++) if(s->ptrs[i]) { kfree(s->ptrs[i]); s->ptrs[i] = NULL; frees++; }
+    kheap_stats(&after);
+    if(!kheap_check()) bad++;
+    if(after.bytes_used != before.bytes_used || after.blocks_used != before.blocks_used) bad++;
+    kfree(s);
+    printf("heaptest: %u allocs, %u frees, %u live at peak, used %lu -> %lu bytes, %lu free blocks: %s\n",
+           allocs, frees, maxlive, before.bytes_used, after.bytes_used, after.blocks_free, bad ? "HEAPTEST FAIL" : "HEAPTEST PASS");
+    return bad ? 1 : 0;
+}
+
+int rv_heaptest(void) {
+    int r;
+    if(!claim("heaptest")) return 1;
+    r = heap_round();
+    unclaim();
+    return r;
+}
+
+/**** registers across traps ****/
+
+static u_long reg_expect(u_long seed, int n) {
+    if(n == 10) return seed ^ 0x2a;
+    if(n == 31) return 0;
+    return (u_long)n * 0x01010101UL ^ seed;
+}
+
+/* the registers that differ from the pattern (x0 and sp are not compared) */
+static int reg_diff(u_long seed, const u_long *out, char *first, size_t size) {
+    int n, bad = 0;
+    for(n = 1; n < 32; n++) {
+        if(n == 2) continue;
+        if(out[n] != reg_expect(seed, n)) {
+            if(!bad) snprintf(first, size, "x%d = 0x%08lx, not 0x%08lx", n, out[n], reg_expect(seed, n));
+            bad++;
+        }
+    }
+    return bad;
+}
+
+struct regjob {
+    u_long seed, spins, ticks;
+    volatile u_long switches;           /* times this task was switched away from and back to */
+    int bad, ecall, rounds;
+    struct regjob *other;
+    char first[64];
+    u_long out[32];
+};
+
+/* Rounds of the pattern (short ones, so how fast the CPU is does not matter) until both tasks
+   of the pair have been switched out and back at least twice: a register of one left in the
+   other would show. At most 400 rounds. */
+static void reg_task(void *arg) {
+    struct regjob *j = (struct regjob *)arg;
+    u_long t0 = timer_irq_count, s0 = curTask->switches;
+    while(!j->bad && (j->switches < 2 || j->other->switches < 2) && j->rounds < 400) {
+        if(j->ecall) rv_regs_ecall(j->seed + j->rounds, j->spins, j->out);
+        else rv_regs_spin(j->seed + j->rounds, j->spins, j->out);
+        j->bad = reg_diff(j->seed + j->rounds, j->out, j->first, sizeof(j->first));
+        j->rounds++;
+        j->switches = curTask->switches - s0;
+    }
+    j->ticks = timer_irq_count - t0;
+}
+
+static void test_registers(void) {
+    struct regjob *a = kcalloc(2, sizeof(struct regjob)), *b;
+    surf_task *ta, *tb;
+    u_long spins = 200000, t0;
+    int status, tries;
+    char line[160];
+    if(!a) { check(false, "register test memory"); return; }
+    b = a + 1;
+    /* spinning in this task until at least 3 timer interrupts came in the middle */
+    for(tries = 0; tries < 6; tries++) {
+        a->seed = 0xA5A50000UL + tries;
+        a->spins = spins;
+        t0 = timer_irq_count;
+        rv_regs_spin(a->seed, spins, a->out);
+        a->ticks = timer_irq_count - t0;
+        a->bad = reg_diff(a->seed, a->out, a->first, sizeof(a->first));
+        if(a->bad || a->ticks >= 3) break;
+        spins *= 4;
+    }
+    snprintf(line, sizeof(line), "every register kept across %lu timer interrupts (%lu rounds)%s%s", a->ticks, a->spins,
+             a->bad ? ": " : "", a->bad ? a->first : "");
+    check(!a->bad && a->ticks >= 3, line);
+
+    /* yield by ECALL on every round: the trap path that switches tasks on purpose */
+    a->seed = 0x5A5A1234UL;
+    rv_regs_ecall(a->seed, 300, a->out);
+    a->bad = reg_diff(a->seed, a->out, a->first, sizeof(a->first));
+    snprintf(line, sizeof(line), "every register kept across 300 ECALLs (yield)%s%s", a->bad ? ": " : "", a->bad ? a->first : "");
+    check(!a->bad, line);
+
+    /* two tasks at once, different patterns, switched by the tick and by yield */
+    memset(a, 0, 2 * sizeof(struct regjob));
+    a->seed = 0x13579BDFUL; a->spins = 100000; a->ecall = 0; a->other = b;
+    b->seed = 0x2468ACE0UL; b->spins = 50; b->ecall = 1; b->other = a;
+    ta = kthread_create("regs A", reg_task, a, PL_NORMAL, 0);
+    tb = kthread_create("regs B", reg_task, b, PL_NORMAL, 0);
+    if(ta) task_wait(ta->pid, &status);
+    if(tb) task_wait(tb->pid, &status);
+    snprintf(line, sizeof(line), "two tasks, spinning and yielding, keep their own registers (%d and %d rounds, %lu and %lu "
+             "switches)%s%s", a->rounds, b->rounds, a->switches, b->switches, (a->bad || b->bad) ? ": " : "",
+             a->bad ? a->first : b->first);
+    check(ta && tb && !a->bad && !b->bad && a->switches >= 2 && b->switches >= 2, line);
+    kfree(a);
+}
+
+/**** stack, gp, tp ****/
+
+static volatile u_long irq_sp, irq_gp;
+static volatile int irq_seen;
+static void sample_sp(void *arg) {
+    (void)arg;
+    irq_sp = rv_read_sp();
+    irq_gp = rv_read_gp();
+    irq_seen = 1;
+}
+
+static u_long __attribute__((noinline)) deeper_sp(int n) {
+    volatile char pad[24];
+    pad[0] = (char)n;
+    return n ? deeper_sp(n - 1) + pad[0] * 0 : rv_read_sp();
+}
+
+static void test_stack(void) {
+    struct ktimer t;
+    u_long sp = rv_read_sp(), gp = rv_read_gp();
+    extern char __global_pointer$[];
+    check(!(sp & 15) && !(deeper_sp(3) & 15), "the task's stack is 16-byte aligned, in nested calls too");
+    check(sp > curTask->stack_top - KSTACK_SIZE && sp <= curTask->stack_top, "sp is inside the task's own stack");
+    check(gp == (u_long)__global_pointer$ && rv_read_tp() == 0, "gp is the kernel's global pointer, tp is zero");
+    irq_seen = 0;
+    ktimer_init(&t, sample_sp, NULL);
+    ktimer_start(&t, 10, false);
+    sleep_ms(40);
+    ktimer_cancel(&t);
+    check(irq_seen && !(irq_sp & 15) && irq_gp == (u_long)__global_pointer$,
+          "in the timer interrupt: the stack 16-byte aligned, gp the kernel's");
+    check(*(u32 *)(curTask->stack_top - KSTACK_SIZE) == STACK_CANARY, "the stack's canary is intact");
+}
+
+/**** ABI ****/
+
+static void test_abi(void) {
+    struct { char c; long long ll; } s;
+    char minus = (char)0xFF;
+    check(sizeof(int) == 4 && sizeof(long) == 4 && sizeof(void *) == 4 && sizeof(long long) == 8 &&
+          sizeof(size_t) == 4, "ilp32: int, long and pointers are 32 bits, long long 64");
+    check((u_long)&s.ll - (u_long)&s == 8, "long long is 8-byte aligned in a struct (RV32, not i386's 4)");
+    check(minus < 0, "char is signed (-fsigned-char, as the shared code expects)");
+    check(sizeof(struct surf_boot_info) == 256 && sizeof(struct surf_img_header) == 64 &&
+          offsetof(struct surf_boot_info, cmdline) == 0x80, "the boot ABI's structures: 256 and 64 bytes");
+    check(sizeof(struct trapframe) == TF_SIZE && (TF_SIZE % 16) == 0 && offsetof(struct trapframe, mepc) == TF_MEPC,
+          "the trap frame matches traps.S and keeps the stack aligned");
+}
+
+/**** arithmetic and the formatter ****/
+
+static void test_math(void) {
+    volatile u64 a = 0x123456789ABCDEF0ULL, b = 1000000007ULL;
+    volatile i64 n = -9000000000LL;
+    volatile u32 x = 0xFFFFFFFFu, y = 0xFFFFFFFEu;
+    char buf[64];
+    check(a / b == 0x123456789ABCDEF0ULL / 1000000007ULL && a % b == 0x123456789ABCDEF0ULL % 1000000007ULL &&
+          n / 7 == -1285714285LL && n % 7 == -5, "64-bit divide and remainder (libgcc)");
+    check((u64)x * y == 0xFFFFFFFD00000002ULL, "32x32 to 64-bit multiply (mulhu)");
+    snprintf(buf, sizeof buf, "%llu %lld %llx", (unsigned long long)a, (long long)n, (unsigned long long)a);
+    check(!strcmp(buf, "1311768467463790320 -9000000000 123456789abcdef0"), "the formatter's 64-bit numbers");
+    snprintf(buf, sizeof buf, "%5d|%-5d|%05d|%x|%s", 42, 42, 42, 0xbeef, "ok");
+    check(!strcmp(buf, "   42|42   |00042|beef|ok"), "snprintf widths and flags");
+    check(strcmp("abc", "abd") < 0 && strcmp("b", "a") > 0 && strtol("-0x1F", NULL, 0) == -31 && atoi("123") == 123,
+          "strcmp, strtol, atoi");
+}
+
+static void test_crc(void) {
+    static const u8 seq[] = "123456789";
+    u8 all[256];
+    int i;
+    for(i = 0; i < 256; i++) all[i] = (u8)i;
+    check(crc32("", 0) == 0x00000000 && crc32("a", 1) == 0xE8B7BE43 && crc32(seq, 9) == 0xCBF43926 &&
+          crc32(all, 256) == 0x29058C73, "CRC-32 test vectors of BOOT-ABI.md section 3");
+}
+
+/**** time ****/
+
+static void test_time(void) {
+    u_long t0 = getticks(), dt, per = timer_period();
+    u64 m0 = board_mtime(), dm;
+    u_long a = 0xFFFFFFF0UL, b = a + 0x20;      /* the tick counter wrapping, as getticks() - t0 does */
+    sleep_ms(100);
+    dt = getticks() - t0;
+    dm = board_mtime() - m0;
+    check(dt >= 10 && dt <= 15, "sleep_ms(100) takes 10-15 ticks (late ticks on a busy host count at once)");
+    check(dm >= (u64)per * 9 && dm <= (u64)per * 16, "mtime moved as much as the ticks did");
+    check(b - a == 0x20, "tick differences survive the 32-bit wrap");
+}
+
+static volatile u_int timer_fires;
+static void count_fire(void *arg) { (void)arg; timer_fires++; }
+
+static void test_timers(void) {
+    struct ktimer t;
+    u_int after_cancel;
+    timer_fires = 0;
+    ktimer_init(&t, count_fire, NULL);
+    ktimer_start(&t, 10, true);
+    sleep_ms(205);
+    ktimer_cancel(&t);
+    check(timer_fires >= 15 && timer_fires <= 22, "periodic 10 ms timer fires about 20 times in 205 ms (fewer when ticks come late)");
+    after_cancel = timer_fires;
+    sleep_ms(50);
+    check(timer_fires == after_cancel, "cancelled timer stays quiet");
+}
+
+/**** tasks (as shell/selftest.c) ****/
+
+static void exit_with_arg(void *arg) {
+    task_exit((int)(u_long)arg);
+}
+
+struct sleeper {
+    u_int wakes;
+    u_long slept_ticks;
+};
+
+static void sleeper_task(void *arg) {
+    struct sleeper *s = (struct sleeper *)arg;
+    u_int i;
+    for(i = 0; i < 5; i++) {
+        u_long t0 = getticks();
+        sleep_ms(30);
+        s->slept_ticks += getticks() - t0;
+        s->wakes++;
+    }
+}
+
+static void test_tasks(void) {
+    u_int before = task_count(), i, n, collected = 0;
+    u_long pids[32];
+    int status = 0;
+    surf_task *t, *s1, *s2;
+    struct sleeper sa = { 0, 0 }, sb = { 0, 0 };
+
+    for(n = 0; n < 32; n++) {
+        t = kthread_create("churn", exit_with_arg, (void *)(u_long)n, PL_NORMAL, 0);
+        if(!t) break;
+        pids[n] = t->pid;
+    }
+    check(n == 32, "32 kthreads created");
+    for(i = 0; i < n; i++) {
+        if(task_wait(pids[i], &status) < 0) break;
+        collected++;
+    }
+    check(collected == 32 && task_count() == before, "all 32 collected by task_wait, task count back");
+    t = kthread_create("exit42", exit_with_arg, (void *)42, PL_HIGH, 0);
+    if(t) {
+        u_long pid = t->pid;
+        check(task_wait(pid, &status) == (int)pid && status == 42, "exit code 42 reaches task_wait");
+    } else check(false, "exit code 42 reaches task_wait");
+
+    s1 = kthread_create("sleeper 1", sleeper_task, &sa, PL_NORMAL, 0);
+    s2 = kthread_create("sleeper 2", sleeper_task, &sb, PL_LOW, 0);
+    if(s1) task_wait(s1->pid, &status);
+    if(s2) task_wait(s2->pid, &status);
+    check(s1 && s2 && sa.wakes == 5 && sb.wakes == 5 && sa.slept_ticks >= 15 && sb.slept_ticks >= 15,
+          "two kernel tasks sleep and wake 5 times each");
+    check(heartbeat_count > 0, "the heartbeat task keeps waking");
+}
+
+static mutex_t test_mutex = MUTEX_INIT("selftest");
+static volatile u_long shared_counter;
+
+static void mutex_worker(void *arg) {
+    u_int i;
+    (void)arg;
+    for(i = 0; i < 2000; i++) {
+        u_long v;
+        mutex_lock(&test_mutex);
+        v = shared_counter;
+        if((i % 7) == 0) yield();
+        shared_counter = v + 1;
+        mutex_unlock(&test_mutex);
+    }
+}
+
+static void test_mutex_fn(void) {
+    surf_task *a, *b;
+    int status;
+    shared_counter = 0;
+    a = kthread_create("mutexA", mutex_worker, NULL, PL_NORMAL, 0);
+    b = kthread_create("mutexB", mutex_worker, NULL, PL_NORMAL, 0);
+    if(a) task_wait(a->pid, &status);
+    if(b) task_wait(b->pid, &status);
+    check(a && b && shared_counter == 4000, "two tasks under a mutex count to exactly 4000");
+}
+
+#define RING 8
+static u_int ring[RING], ring_head, ring_tail;
+static semaphore_t items, slots;
+
+static void producer(void *arg) {
+    u_int i;
+    (void)arg;
+    for(i = 1; i <= 500; i++) {
+        sem_wait(&slots);
+        ring[ring_head++ % RING] = i;
+        sem_post(&items);
+    }
+}
+
+static void test_semaphore(void) {
+    surf_task *p;
+    u_long sum = 0;
+    u_int i;
+    int status;
+    ring_head = ring_tail = 0;
+    sem_init(&items, 0);
+    sem_init(&slots, RING);
+    p = kthread_create("producer", producer, NULL, PL_NORMAL, 0);
+    for(i = 0; i < 500; i++) {
+        sem_wait(&items);
+        sum += ring[ring_tail++ % RING];
+        sem_post(&slots);
+    }
+    if(p) task_wait(p->pid, &status);
+    check(sum == 500UL * 501 / 2, "500 items through an 8-slot ring arrive in order");
+}
+
+static event_t test_event;
+static void setter(void *arg) {
+    (void)arg;
+    sleep_ms(20);
+    event_set(&test_event);
+}
+
+static void test_event_fn(void) {
+    surf_task *s;
+    u_long t0;
+    int rc, status;
+    event_init(&test_event);
+    t0 = getticks();
+    rc = event_wait_timeout(&test_event, 50);
+    check(rc == -1 && getticks() - t0 >= 5 && getticks() - t0 <= 10, "event_wait_timeout(50 ms) times out on time");
+    s = kthread_create("setter", setter, NULL, PL_NORMAL, 0);
+    rc = event_wait_timeout(&test_event, 500);
+    check(rc == 0 && test_event.set, "event set by another task wakes the waiter");
+    if(s) task_wait(s->pid, &status);
+}
+
+/**** FAT on the first mounted FAT volume ****/
+
+#define FAT_VIEWS 16
+
+static void test_fat(void) {
+    struct vfs_mount_view *views;
+    struct file *f;
+    struct stat st;
+    char dir[VFS_PATH_MAX], path[VFS_PATH_MAX];
+    u8 *w, *rb;
+    int r, n, i, found = -1;
+
+    views = (struct vfs_mount_view *)kcalloc(FAT_VIEWS, sizeof(struct vfs_mount_view));
+    if(!views) { check(false, "FAT test memory"); return; }
+    n = vfs_mount_views(views, FAT_VIEWS);
+    for(i = 0; i < n && i < FAT_VIEWS; i++) {
+        if(views[i].type && !strncmp(views[i].type, "fat", 3) && !views[i].readonly) { found = i; break; }
+    }
+    if(found < 0) {
+        printf("  skip FAT (no FAT volume mounted read-write)\n");
+        kfree(views);
+        return;
+    }
+    strlcpy(dir, views[found].path, sizeof(dir));
+    kfree(views);
+    w = (u8 *)kalloc(10240);
+    rb = (u8 *)kalloc(10240);
+    if(!w || !rb) { check(false, "FAT test buffers"); kfree(w); kfree(rb); return; }
+    for(i = 0; i < 10240; i++) w[i] = (u8)(i * 13 + (i >> 8));
+    snprintf(path, sizeof(path), "%s/selftest.bin", dir);
+    r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
+    if(r == 0) { r = vfs_write(f, w, 10240); vfs_close(f); }
+    check(r == 10240, "write 10 KB to selftest.bin on the FAT volume");
+    r = vfs_open(path, O_RDONLY, &f);
+    if(r == 0) { memset(rb, 0, 10240); r = vfs_read(f, rb, 10240); vfs_close(f); }
+    check(r == 10240 && !memcmp(w, rb, 10240), "read it back identically");
+    check(vfs_unlink(path) == 0 && vfs_stat(path, &st) == -ENOENT, "unlink removes it");
+    kfree(w);
+    kfree(rb);
+}
+
+static void (*const tests[])(void) = {
+    test_abi, test_registers, test_stack, test_math, test_crc, test_time, test_timers, test_tasks,
+    test_mutex_fn, test_semaphore, test_event_fn, test_fat
+};
+
+int rv_selftest(void) {
+    u_int i;
+    if(!claim("selftest")) return 1;
+    fails = 0;
+    printf("\nSurfOS self test (riscv32, %s)\n----------------\n", board_name());
+    check(heap_round() == 0, "heap");
+    for(i = 0; i < sizeof(tests) / sizeof(tests[0]) && !task_interrupted(); i++) tests[i]();
+    check(klog_length() > 0, "kernel log has the boot messages");
+    if(task_interrupted()) printf("SELFTEST STOPPED (cut short by a kill or Ctrl+C after %u of %u tests)\n\n", i,
+                                  (u_int)(sizeof(tests) / sizeof(tests[0])));
+    else printf("%s (%s)\n\n", fails ? "SELFTEST FAIL" : "SELFTEST PASS", fails ? "see above" : "all checks passed");
+    unclaim();
+    return fails || task_interrupted();
+}

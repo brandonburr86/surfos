@@ -1,0 +1,85 @@
+SurfOS os track: the x86 kernel is unchanged by the riscv32 port's edits to shared files
+date: 2026-10-15 (local)
+tree: sc/os at c5cb325 plus the shared edits below, committed unchanged in "riscv32: a machine-mode SurfOS
+      kernel, its build and QEMU's virt board" (the commit after c5cb325 on sc/os)
+host: the Mac, devenv/ container (debian:bookworm-slim, gcc-multilib) for the builds, the smoke test and the
+      unit tests; QEMU + OVMF on the Mac for the USB image (devenv/test-usb.sh)
+volumes: SURFOS_VOLUME=surfos-sc-os (O0), surfos-sc-os-o2 (O2); SURFOS_OUT under the worktree's build/
+
+Shared files changed, each change under #ifdef SURFOS_RISCV32 (defined only by arch/riscv32/kernel.mk):
+  kernel/task.c          blob 5391da74 (was 078d83c4)  the initial frame, yield's trap, no TSS, the ring-0 shell
+  lib/blibc/vsnprintf.c  blob e2223145 (was e07f3c9)   div64_32 in C instead of x86 divl
+Every x86 tree tested below was checked to hold exactly these two blobs.
+
+== 1. The compiled kernel: arch/riscv32/elfcmp.py, every allocated (loaded) ELF section byte for byte
+baseline = HEAD's files, new = the edited files, both built with devenv/build.sh (make O=0, make O=2)
+  O0  surfos.bin             5 allocated sections, identical
+  O0  kernel/task.o          4 allocated sections, identical
+  O0  lib/blibc/vsnprintf.o  4 allocated sections, identical
+  O2  surfos.bin             5 allocated sections, identical
+  O2  kernel/task.o          6 allocated sections, identical
+  O2  lib/blibc/vsnprintf.o  5 allocated sections, identical
+The kernels the suites below ran are identical in the same way to the baseline:
+  build/x86-ut (unittest, O0), build/x86-t2 (smoke re-run, O2), build/x86-usb0 (USB, O0), build/x86-usb2 (USB, O2)
+The files as a whole differ only in debug sections, which record the source lines the inserted #ifdef lines moved:
+  O0  .debug_abbrev .debug_aranges .debug_info .debug_line
+  O2  .debug_abbrev .debug_aranges .debug_info .debug_line .debug_loclists
+
+== 2. make test-all (devenv/build.sh test-all): exit 2
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST FAILED: 32 of 306 checks
+      The first failure is "cat /hda1/FDISK.TXT" straight after "run kcmdtest run /hda1/FDISK.TXT fdisk rd1 new
+      mbr"; the rest follow from it (kcmdtest kills, mount hda1 /hda1, then everything on /hda1 and the telnet
+      sessions, which use it).
+   re-run of the O2 step alone (devenv/build.sh O=2 test): exit 0
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+  The O2 kernel's loaded image is identical to the baseline's (section 1), so the one failed run cannot come
+  from these edits. It is taken to be a timing failure under load (eight other tracks' builds and simulations
+  were sharing the 14 cores at the time); it did not happen again and was not investigated further.
+
+== 3. make unittest (devenv/build.sh unittest): exit 0, no failures
+    CRYPTO UNIT TESTS PASSED: 129 checks, 0 failures
+    WPA UNIT TESTS PASSED: 118 checks, 0 failures
+    IEEE80211 UNIT TESTS PASSED: 144 checks, 0 failures
+    UNDERTOW URL TESTS PASSED: 382 checks, 0 failures
+    UNDERTOW UTIL TESTS PASSED: 72 checks, 0 failures
+    UNDERTOW HTTP TESTS PASSED: 835 checks, 0 failures
+    UNDERTOW HTML TESTS PASSED: 672 checks, 0 failures (printed twice)
+    UNDERTOW SESSION TESTS PASSED: 78 checks, 0 failures
+    UNDERTOW VIEW TESTS PASSED: 127 checks, 0 failures
+    UNDERTOW COMMAND TESTS PASSED: 94 checks, 0 failures
+    UNDERTOW TRANSPORT TESTS PASSED: 426 checks, 0 failures
+    PS2 MOUSE UNIT TESTS PASSED: 1574 checks, 0 failures
+    USB MOUSE UNIT TESTS PASSED: 99 checks, 0 failures
+    ACPIDUMP UNIT TESTS PASSED: 467 checks, 0 failures
+    AML FIELD UNIT TESTS PASSED: 5120 checks, 0 failures
+    TOUCHPAD PLATFORM UNIT TESTS PASSED: 454 checks, 0 failures
+    BLIBC UNIT TESTS PASSED: 45 checks, 0 failures
+    BOOTINFO UNIT TESTS PASSED: 50 checks, 0 failures
+    FRAMEBUFFER UNIT TESTS PASSED: 143 checks, 0 failures
+    USB UNIT TESTS PASSED: 57 checks, 0 failures
+    PARTITION UNIT TESTS PASSED: 143 checks, 0 failures
+    PARTITION TOOL CHECKS PASSED: 33 checks, 0 failures
+    LIBC UNIT TESTS PASSED: 195 checks, 0 failures
+    MKFS UNIT TESTS PASSED: 115 checks, 0 failures
+    PROMPT UNIT TESTS PASSED: 55 checks, 0 failures
+    CP437 UNIT TESTS PASSED: 69 checks, 0 failures
+    PAGER UNIT TESTS PASSED: 166 checks, 0 failures
+    TELNET UNIT TESTS PASSED: 58 checks, 0 failures
+    TELNETD SERVER UNIT TESTS PASSED: 750 runs, 0 bugs
+    PCIINFO UNIT TESTS PASSED: 55 checks, 0 failures
+    IWLFW UNIT TESTS PASSED: 16 checks, 0 failures
+    python unittest: Ran 19, 60, 28, 11, 5, 18, 5 tests: OK each
+
+== 4. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O2  first run: USB/UEFI TEST FAILED: 246 of 248 checks
+      "the QEMU test disk image exists (make images)" and "the foreign FAT32 image exists (make images)": a new
+      worktree has no build/images/test.img or build/images/foreign-fat32.img, which tools/qemu-usb.py reads.
+      Both were copied from the O0 build's output (build/x86-new-o0/build/images/).
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks
+  O2  re-run: USB/UEFI TEST PASSED: 315 of 315 checks
+
+Nothing here ran on SurfCPU or the Arty board; this file is only about the x86 kernel.

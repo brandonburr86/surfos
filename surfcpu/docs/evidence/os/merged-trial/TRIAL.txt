@@ -1,0 +1,8 @@
+A trial of sc/os after integration; nothing was merged or committed anywhere.
+trial tree f18db4fe50fb443e50009681daa8df213ebd037f = merge of surfcpu 2dd26c9 and sc/os d0b656f
+Made with: git merge-tree --write-tree surfcpu HEAD (no conflicts), git archive <tree> unpacked under the
+worktree's build/merged, then in that tree: surfcpu/devenv/run.sh make -C surfcpu evidence-os
+OS_EVIDENCE_DIR=docs/evidence/os/merged-trial (build/merged-evidence.sh). The build ID in build.txt is sc/os's
+HEAD. That tree has the fw track's surfimg.py, isa-audit.py, mkcard.py and firmware emulator and the io track's
+card model, so every os test ran there, test-os-surfemu included. Emulation and host only: nothing here ran on
+the FPGA.

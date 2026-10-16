@@ -150,6 +150,10 @@ const char *task_state_name(task_state s) {
 
 /**** Creation ****/
 
+#ifdef SURFOS_RISCV32
+/* 10/15/26 (SurfCPU): riscv32 builds the frame its trap exit starts a task from (arch/riscv32/trap.c) */
+#define build_initial_frame(stack_top, ring, eip) arch_task_frame(stack_top, ring, eip)
+#else
 /* Build the first trap frame of a task at the top of its stack, so that "returning"
    from a trap into it starts task_stublet() with the right segments and flags. The frame
    has no useresp/ss for a ring-0 task because iret does not pop them within ring 0. */
@@ -169,6 +173,7 @@ static struct trapframe *build_initial_frame(u_char *stack_top, u_int ring, u_lo
     }
     return tf;
 }
+#endif
 
 /* Every task starts here: call its entry and exit when that returns, so a task function
    may simply return (the 2004 "task stublet"). */
@@ -596,7 +601,11 @@ int task_wait_opts(u_long pid, int *status, int options) {
 /**** Blocking ****/
 
 void yield(void) {
+#ifdef SURFOS_RISCV32
+    asm volatile("ecall" : : : "memory");   /* 10/15/26 (SurfCPU): riscv32's int $0x40 (arch/riscv32/trap.c) */
+#else
     asm volatile("int $0x40"); //  :)
+#endif
 }
 
 void sleep_ms(u_long ms) {
@@ -670,7 +679,9 @@ u_long *schedule(struct trapframe *tf) {
     if(next != cur) {
         next->switches++;
         curTask = next;
+#ifndef SURFOS_RISCV32                      /* 10/15/26 (SurfCPU): machine mode has no TSS and no ring change */
         tss_set_kernel_stack(next->stack_top);
+#endif
         if(next->uvm != cur->uvm) uvm_switch(next->uvm);   /* another process: its page directory */
     }
     return next->esp;
@@ -854,7 +865,11 @@ static void shell_ended(int i, int status, u_int flags) {
 }
 
 static void init_main(void *arg) {
+#ifdef SURFOS_RISCV32
+    bool kernel = true;     /* 10/15/26 (SurfCPU): machine mode runs no programs: the ring-0 shell everywhere */
+#else
     bool kernel = bootinfo_has_arg(&bootinfo, "shell=kernel");
+#endif
     int i;
     for(i = 0; i < NUM_CONSOLES; i++) {                      /* F1..F4 */
         cshell[i].kernel = kernel;

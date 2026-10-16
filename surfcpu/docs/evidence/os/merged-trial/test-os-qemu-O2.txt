@@ -1,0 +1,84 @@
+# test-os qemu_virt build/riscv32/qemu_virt/surfos.elf: 82 of 82 checks passed in 13 s
+# QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1), 2026-10-16 03:43:35 UTC
+ok   image: mtools put /USERS/DOCUMENTS on the stick as a long name with the alias DOCUME~1
+ok   boot: the banner (SurfOS 1.0 on a RISC-V) and the kernel shell prompt
+ok   boot: the FAT32 partition of the RAM disk mounted on /rd0p1
+ok   boot: no panic
+ok   help: the kernel shell 1.0, portable commands, no PCI
+ok   ps: idle, init, heartbeat and a kernel shell on each of F1-F4
+ok   sleep 1000: the shell sleeps 100 ticks (100; a busy host may add a few)
+ok   the tick advances: 102 ticks across the sleep
+ok   uptime: the heartbeat task woke 3 times (every 500 ms)
+ok   tasks: two kernel tasks count, sleep and wake, interleaved, and end
+ok   irqstat: timer interrupts and the UART (PLIC 10)
+ok   cpuinfo: the hart is RV32IM, misa 0x40001100 as on SurfCPU (QEMU restricted to its ISA)
+ok   selftest: SELFTEST PASS
+ok   heaptest: HEAPTEST PASS
+ok   lsblk: the RAM disk rd0 and its partition rd0p1
+ok   df: the FAT32 volume FOREIGN
+ok   ls: long, accented and 8.3 names, a folder, BIG.BIN
+ok   cat: a file another computer wrote
+ok   cat: three folders down
+ok   crc32: the 1 MB file reads back exactly (CRC 802be6ea, a 2048-cluster chain)
+ok   ls /rd0p1/USERS: DOCUMENTS by its long name
+ok   cat /rd0p1/USERS/DOCUMENTS/NOTES.TXT: a path through the long name
+ok   ls /rd0p1/users/documents: the long name is found in any case
+ok   write /rd0p1/USERS/DOCUMENTS/FROMRV.TXT and cat it
+ok   write and cat: a new file
+ok   mkdir, cp 1 MB into it under a long name, same CRC
+ok   mv and rm
+ok   sync: the block cache written out
+ok   cd and pwd
+ok   fdisk rd0 shows the MBR partition table (reading only)
+ok   ansi: the console parses the escape sequences of tty.h (80x25 grid)
+ok   crashint: ebreak is reported and stepped over
+ok   crashill: the shell is killed with a backtrace (cmd_crashill, startShell, shell), init restarts it
+ok   crashnull: a store to address 0 is an access fault that kills the shell; init restarts it
+ok   crashdiv: RISC-V division by zero gives -1 without a trap
+ok   the file system is still there after the faults
+ok   umount /rd0p1
+ok   the RAM disk saved through the monitor
+ok   mtools reads RISCV.TXT as SurfOS wrote it
+ok   mtools reads the 1 MB copy under its long name, byte for byte
+ok   mtools: the removed file is gone
+ok   mtools reads /USERS/DOCUMENTS/FROMRV.TXT as SurfOS wrote it
+ok   fsck.fat -n: the volume is clean after the riscv32 kernel wrote it
+ok   mount again: clean (umount set the clean bit)
+ok   ps: the heartbeat task sleeps between its beats
+ok   kill: the sleeping heartbeat task is killed and collected (by init)
+ok   poweroff: QEMU exits with status 0 (sifive_test)
+ok   handoff: entered as SurfBoot hands over (a0, a1, a2), the kernel boots to the shell
+ok   handoff: the command line from the boot information arrives (ascii: an ASCII prompt)
+ok   handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot's block and its command line
+ok   handoff: the RAM size and the image's memory size come from the boot information
+ok   handoff: the RAM disk works as before
+ok   handoff: poweroff
+ok   handoff: a corrupted boot information block is refused (CRC), the kernel boots on without it
+ok   reboot: the reset register resets the machine (QEMU ends)
+ok   sdsim: the RAM disk through the SD driver and a simulated card is sd0; its FAT32 partition mounted
+ok   sdsim: ls /sd0p1 over the SD driver
+ok   sdsim: the 1 MB file read through the SD driver (CMD17/CMD18)
+ok   sdsim: a 1 MB copy and a new file written through the SD driver (CMD24/CMD25), synced
+ok   sdsim: mkdir /sd0p1/USERS/DOCUMENTS (longer than 8.3) and a file written in it
+ok   sdsim: the driver counted 61 reads and 47 writes, no timeouts or errors
+ok   sdsim: umount, and the card image saved through the monitor
+ok   sdsim: mtools reads SDSIM.TXT
+ok   sdsim: mtools reads the 1 MB copy byte for byte
+ok   sdsim: mtools sees DOCUMENTS as a long name with the alias DOCUME~1 (the LFN entries SurfOS wrote)
+ok   sdsim: mtools reads /USERS/DOCUMENTS/NOTE.TXT
+ok   sdsim: fsck.fat -n finds the volume clean
+ok   sdsim: poweroff
+ok   package: surfimg.py verify passes SurfBoot's checks: load 0x80000000, entry 0x80000000, 358416 bytes, CRC 78516f77, build d0b656f5
+ok   package: SURFOS.BIN copied to its load address boots to the shell
+ok   package: bootinfo shows the package's image (load 0x80000000, mem_size 1140400)
+ok   package: poweroff
+ok   card: mkcard.py makes a 48 MiB card image with the standard directories and /BOOT/SURFOS.BIN
+ok   card: the mkcard.py image is sd0 through the SD driver; its FAT32 partition mounted on /sd0p1
+ok   card: /sd0p1/USERS/DOCUMENTS found by its long name (alias DOCUME~1), both files listed
+ok   card: the files in DOCUMENTS read through the SD driver
+ok   card: /BOOT/SURFOS.BIN on the card is the package
+ok   card: a file written into DOCUMENTS, unmounted, the card image saved
+ok   card: mkcard.py --inspect reads /USERS/DOCUMENTS/FROMRV.TXT back
+ok   card: mtools reads it too
+ok   card: fsck.fat -n finds the card clean
+ok   card: poweroff
