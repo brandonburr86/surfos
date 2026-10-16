@@ -238,7 +238,8 @@ read past the end, a data token that never comes, no card. The model behaves as 
 track's card model (`surfcpu/sim/models/sdcard_model`, merged into `surfcpu`, documented in
 IO.md): data responses 0xE5/0xEB/0xED followed by busy, R1 0x40 past the end, commands sent
 while the card is busy ignored; it counts the host's mistakes (a command while busy, chip select
-released inside a block) and the tests require none. 168 checks over the three seeds.
+released inside a block) and the tests require none; and a card that refuses CMD18 and CMD25
+(the driver goes on one block per command). 177 checks over the three seeds.
 
 `make test-os-iomodel` (`boards/arty_a7/tests/iomodel/`): the same `sdcard.c` against the io
 track's own bit-level card model (`sim/models/sdcard_model.{h,cpp}`), through a software SPI
@@ -250,6 +251,21 @@ initialization that never ends, no card), and the model's count of protocol mist
 stay zero: 101 checks over seeds 1, 7 and 123. It runs where the model is in the tree (on
 `surfcpu` since the io merge; on `sc/os` from a copy, `OS_IOMODEL_DIR`), and says it is skipped
 otherwise.
+
+`make test-os-surfemu` (`boards/arty_a7/tests/surfemu_test.py`): the Arty kernel itself, in the
+fw track's firmware emulator (`firmware/tests/surfemu.c`, an instruction-level model of the SoC:
+the core of ISA.md, the memory map, uart at its baud rate, timer, intc, gpio, spi with a simulated
+card, ps2, video, sysinfo), booted by the real SurfBoot ROM from a `mkcard.py` card holding
+`/BOOT/SURFOS.BIN`, `/BOOT/CMDLINE.TXT` and `/USERS/DOCUMENTS/HELLO.TXT`: SurfBoot's checks and
+handoff, the kernel's console on surf_uart, SurfBoot's boot information taken, the card through
+surf_spi with FAT32 on /sd0p1, `/USERS/DOCUMENTS` by its long name, the package read back from
+the card by CRC, two tasks, the drivers, the self test, and surf_video's text RAM showing the
+console with hardware scroll: 15 checks, about 120 s of simulated time in 2 s. It needs the
+emulator, surfimg.py and mkcard.py, so on `sc/os` it says it is skipped; it was run on a trial
+of the branch merged with `surfcpu` (b555bb6), a tree made by `git merge-tree` and unpacked
+under `build/` with nothing merged or committed (evidence in `merged-trial/`). The emulator is
+a test aid, not the RTL and not the board. Its card has no CMD18 or CMD25 (SurfBoot reads with
+CMD17 only), which is why the SD driver learned to fall back to one block per command.
 
 ## 5. The boards
 
@@ -282,7 +298,8 @@ generated `soc.h`:
   single and multiple block reads with every CRC16 checked and a bad block read again; single
   and multiple block writes with data responses (the low five bits), busy waits, the stop
   token also after an error, and CMD13; a wait for 0xFF before every command (a card ignores
-  commands while busy); every wait bounded. FAT
+  commands while busy); every wait bounded; one block per command from then on if a card
+  refuses CMD18 or CMD25 as illegal (every SD card has them; the fw emulator's does not). FAT
   through the existing block layer, cache, VFS and fs/fat.c: init_fs() mounts the card's FAT32
   partition on /sd0p1, long names included (`/sd0p1/USERS/DOCUMENTS`). Read-only until writing has been tried on the real board (the brief's
   "read-only first"): `sd=rw` in /BOOT/CMDLINE.TXT, or `sdmode rw` while unmounted, enables it;
@@ -296,15 +313,19 @@ machine-mode kernel with its shell, tasks, timer and interrupts, the self test w
 checks, FAT read/write on a RAM disk checked from the host, the boot ABI's handoff, FAT over the
 SD protocol driver and a simulated card, `/USERS/DOCUMENTS` by its long name both ways, and,
 with copies of the fw track's surfimg.py and mkcard.py, the kernel package and a card image
-laid out as SurfBoot expects. Done and tested on the host: the
+laid out as SurfBoot expects. Done and tested in the fw track's firmware emulator, on a trial
+merge with `surfcpu`: the Arty kernel booted by SurfBoot from a card, to the shell and through
+its self test. Done and tested on the host: the
 Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
 the SD driver against the io track's card model with surf_spi's timing.
 
 **Pending (needs the board, a bitstream build host, or integration):** everything on the Arty
 itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and links into
 `build/riscv32/arty_a7/surfos.elf` (and `SURFOS.BIN` with the fw track's packer, tested with a
-copy) but its register accesses have run nowhere: not in RTL
-simulation (the SoC, its peripherals and SurfBoot are other tracks' work, joined at
+copy). Its register accesses have run only in the fw track's instruction-level emulator, in a
+trial merge (`make test-os-surfemu`: surf_uart, surf_timer, surf_intc, surf_gpio, surf_spi with
+the emulator's read-only card, surf_video's text RAM; surf_ps2 only idle, with no keyboard): not
+in RTL simulation (the SoC, its peripherals and SurfBoot are other tracks' work, joined at
 integration: brief milestone 7's "real board boots SurfOS from microSD" and milestone 8's
 persistent files are open), not on the FPGA (no board connected). The SD write path in
 particular stays off (read-only) until it is tried on a real card. On `sc/os` itself

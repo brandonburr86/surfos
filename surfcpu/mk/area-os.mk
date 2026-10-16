@@ -7,6 +7,8 @@
 #                         booted as an ELF and through a SurfBoot stand-in (the boot ABI's handoff, FAT over
 #                         the SD driver; SURFOS.BIN and a card image where the fw track's tools are present)
 #   make test-os-host     only the host tests
+#   make test-os-surfemu  the Arty kernel booted by SurfBoot from a mkcard.py card in the fw track's firmware
+#                         emulator (where the tree has it; part of test-os)
 #   make evidence-os      test-os, with its summaries written to docs/evidence/os/ (OS_EVIDENCE_DIR)
 #
 # The kernel is built from the repository root (one level up); the x86 kernel's Makefile and outputs
@@ -35,9 +37,9 @@ OS_IOMODEL_DIR ?= sim/models
 OS_HOSTCXX     ?= c++
 OS_IO_C         = ../boards/arty_a7/sdcard.c ../boards/arty_a7/sdproto.c ../boards/arty_a7/tests/iomodel/glue.c
 
-.PHONY: build-kernel-os test-os-host test-os-qemu test-os-iomodel evidence-os
+.PHONY: build-kernel-os test-os-host test-os-qemu test-os-iomodel test-os-surfemu evidence-os
 build-kernel: build-kernel-os
-test-os: test-os-host test-os-iomodel test-os-qemu
+test-os: test-os-host test-os-iomodel test-os-qemu test-os-surfemu
 check: build-kernel test-os
 
 build-kernel-os:
@@ -90,6 +92,21 @@ test-os-qemu:
 	    --surfimg $(abspath $(OS_SURFIMG)) --mkcard $(abspath $(OS_MKCARD)) \
 	    --evidence surfcpu/$(OS_EVIDENCE)/test-os-qemu-O0.txt --transcript surfcpu/$(OS_OUT)/transcript-O0.txt
 
+# The Arty kernel package booted by SurfBoot from a mkcard.py card in the fw track's firmware emulator, an
+# instruction-level model of the SoC (firmware/tests/surfemu.c): the handoff, the console on surf_uart and surf_video,
+# the card over surf_spi with FAT and /USERS/DOCUMENTS, tasks and the self test (boards/arty_a7/tests/surfemu_test.py).
+# A test aid, not the RTL and not the board. Skipped where the tree lacks the emulator, the packer or the card tool.
+ifneq ($(and $(wildcard firmware/tests/surfemu.c),$(wildcard $(OS_SURFIMG)),$(wildcard $(OS_MKCARD))),)
+test-os-surfemu: build-kernel-os $(BUILD)/fw/surfboot.mem $(BUILD)/fw/host/surfemu
+	@mkdir -p $(OS_OUT) $(OS_EVIDENCE)
+	$(Q)$(PYTHON) ../boards/arty_a7/tests/surfemu_test.py --surfemu $(BUILD)/fw/host/surfemu \
+	    --rom $(BUILD)/fw/surfboot.mem --mkcard $(OS_MKCARD) --package ../build/riscv32/arty_a7/SURFOS.BIN \
+	    --evidence $(OS_EVIDENCE)/test-os-surfemu.txt --transcript $(OS_OUT)/transcript-surfemu.txt
+else
+test-os-surfemu:
+	@echo "test-os-surfemu: skipped: this tree has no fw firmware emulator (firmware/tests/surfemu.c), packer or card tool"
+endif
+
 OS_ELFS = ../build/riscv32/arty_a7/surfos.elf ../build/riscv32/qemu_virt/surfos.elf ../build/riscv32/qemu_virt-O0/surfos.elf
 OS_EVIDENCE_DIR ?= docs/evidence/os
 
@@ -103,4 +120,4 @@ evidence-os:
 	    for p in $(OS_ELFS:surfos.elf=SURFOS.BIN); do $(PYTHON) $(OS_SURFIMG) verify $$p; done; \
 	  else echo "SURFOS.BIN not built: no $(OS_SURFIMG) (the fw track's packer) in this tree"; fi ) \
 	  > $(OS_EVIDENCE_DIR)/build.txt
-	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0}.txt"
+	@echo "evidence-os: $(OS_EVIDENCE_DIR)/{build,test-os-host,test-os-iomodel,test-os-qemu-O2,test-os-qemu-O0,test-os-surfemu}.txt"
