@@ -12,9 +12,11 @@ projects held together by one set of contracts.
 
 ## Status
 
-[docs/PROGRESS.md](docs/PROGRESS.md) is the running record. In short: milestone 0 (inventory
-and contracts) is done; nothing has run on the board yet (it is not connected, and no
-bitstream build host is set up: see [docs/BUILD-HOST.md](docs/BUILD-HOST.md)).
+[docs/PROGRESS.md](docs/PROGRESS.md) is the running record. In short: the CPU, the SoC,
+SurfBoot and the SurfOS kernel pass in simulation, up to SurfBoot booting SurfOS from a card
+image on the RTL with the real CPU; bitstreams build on the Mac with the open-source flow
+([docs/OPEN-FLOW.md](docs/OPEN-FLOW.md)); nothing has run on the board yet (it is not
+connected). **The owner's step-by-step guide is [docs/OWNER-GUIDE.md](docs/OWNER-GUIDE.md).**
 
 ## Getting started on the Mac
 
