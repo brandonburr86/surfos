@@ -1,24 +1,24 @@
-# fw track evidence: build-rom (2026-10-15, tree at 417565e, dirty only by these evidence files)
+# fw track evidence: build-rom (2026-10-15, tree at db2e3df plus an uncommitted edit of docs/FIRMWARE.md, hence "dirty tree")
 
 Command (toolchain container surfcpu-toolchain:2026-10-15, riscv64-unknown-elf-gcc 14.2.0,
 binutils 2.44): rm -rf build/fw; make build-rom; then bin2mem.py --check on both ROM images,
 wc -l, the first words of surfboot.mem, surfimg.py info DDRDIAG.BIN. Output as printed:
 
-isa-audit: build/fw/surfboot.elf.tmp: 6185 instructions, all rv32im_zicsr_zifencei; objdump agrees on all 6185
+isa-audit: build/fw/surfboot.elf.tmp: 6232 instructions, all rv32im_zicsr_zifencei; objdump agrees on all 6232
 isa-audit:   arch rv32i2p1_m2p0_zicsr2p0_zifencei2p0_zmmul1p0; e_flags 0x0; CSRs: mcause mepc mie mscratch mstatus mtval mtvec
-bin2mem: build/fw/surfboot.mem: 39512 bytes of 65536 (60.3%)
+bin2mem: build/fw/surfboot.mem: 39848 bytes of 65536 (60.8%)
 isa-audit: build/fw/bramdiag.elf.tmp: 5018 instructions, all rv32im_zicsr_zifencei; objdump agrees on all 5018
 isa-audit:   arch rv32i2p1_m2p0_zicsr2p0_zifencei2p0_zmmul1p0; e_flags 0x0; CSRs: cycle hpmcounter3 instret marchid mcause mconfigptr mcountinhibit mcycle mcycleh mepc mhartid mhpmcounter3 mie mimpid minstret mip misa mscratch mstatus mstatush mtval mtvec mvendorid pmpaddr0 pmpcfg0 time
-bin2mem: build/fw/bramdiag.mem: 27936 bytes of 65536 (42.6%)
+bin2mem: build/fw/bramdiag.mem: 27968 bytes of 65536 (42.7%)
 isa-audit: build/fw/ddrdiag.elf.tmp: 2785 instructions, all rv32im_zicsr_zifencei; objdump agrees on all 2785
 isa-audit:   arch rv32i2p1_m2p0_zicsr2p0_zifencei2p0_zmmul1p0; e_flags 0x0; CSRs: mcause mepc mie mscratch mstatus mtval mtvec
-surfimg: note: 288 bytes loaded at 0x80003930 run at 0x00010000 (the program copies them there)
-surfimg: build/fw/DDRDIAG.BIN: DDRdiag 1.0.0 build 417565e6, load 0x80000000, entry 0x80000000, payload 14928 bytes, mem_size 35456, payload CRC 0x0ec2aee5
-build-rom: surfboot.elf text 39512 data 0 bss 7584: ROM 39512 of 65536 bytes (60.3%)
-build-rom: bramdiag.elf ROM 27936 of 65536 bytes (42.6%)
+surfimg: note: 288 bytes loaded at 0x80003944 run at 0x00010000 (the program copies them there)
+surfimg: build/fw/DDRDIAG.BIN: DDRdiag 1.0.0 build db2e3df3, load 0x80000000, entry 0x80000000, payload 14948 bytes, mem_size 35488, payload CRC 0xee87a584
+build-rom: surfboot.elf text 39848 data 0 bss 7600: ROM 39848 of 65536 bytes (60.8%)
+build-rom: bramdiag.elf ROM 27968 of 65536 bytes (42.7%)
 build-rom exit 0
-bin2mem: build/fw/surfboot.mem matches build/fw/surfboot.bin (39512 bytes in 16384 words)
-bin2mem: build/fw/bramdiag.mem matches build/fw/bramdiag.bin (27936 bytes in 16384 words)
+bin2mem: build/fw/surfboot.mem matches build/fw/surfboot.bin (39848 bytes in 16384 words)
+bin2mem: build/fw/bramdiag.mem matches build/fw/bramdiag.bin (27968 bytes in 16384 words)
  16384 build/fw/surfboot.mem
  16384 build/fw/bramdiag.mem
  32768 total
@@ -26,19 +26,19 @@ bin2mem: build/fw/bramdiag.mem matches build/fw/bramdiag.bin (27936 bytes in 163
 30047073
 00010197
 7f818193
-build/fw/DDRDIAG.BIN: 14992 bytes
+build/fw/DDRDIAG.BIN: 15012 bytes
   magic        0x474d4953 b'SIMG'
   version      1, header size 64
   isa          0x0000000f (i m zicsr zifencei)
   platform     1
   load_addr    0x80000000
-  payload_size 14928
-  mem_size     35456
+  payload_size 14948
+  mem_size     35488
   entry        0x80000000
-  payload_crc  0x0ec2aee5
+  payload_crc  0xee87a584
   flags        0x0
-  image        DDRdiag 1.0.0 build 417565e6
-  header_crc   0x87b5413c
+  image        DDRdiag 1.0.0 build db2e3df3
+  header_crc   0x97e94db7
 checks (as SurfBoot, usable DDR [0x80000000, 0x8f000000)):
   1 size, magic, version, header CRC ok
   2 ISA and platform                 ok

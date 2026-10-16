@@ -31,9 +31,9 @@ tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-s
 
 | File | What | Size |
 |---|---|---|
-| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 39,512 bytes, **60.3 %** of the 64 KiB ROM (code 24,740, constants 14,772) |
-| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,936 bytes, 42.6 % |
-| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 14,992 bytes |
+| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 39,848 bytes, **60.8 %** of the 64 KiB ROM (code 24,928, constants 14,920) |
+| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,968 bytes, 42.7 % |
+| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 15,012 bytes |
 | `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,332 bytes |
 
 Flags: `-march=rv32im_zicsr_zifencei -mabi=ilp32` (`RV_CFLAGS`), `-Os -msave-restore`
@@ -56,7 +56,7 @@ lowercase hex digits, line *i* = bytes 4*i*..4*i*+3 little-endian, zero padded
 | Range | SurfBoot | BRAM diagnostics | SURFOS.BIN programs (`ram.ld`) |
 |---|---|---|---|
 | ROM `0x0000_0000` | code, constants (`.data` image if any) | code, constants | (SurfBoot) |
-| scratch `0x0001_0000`... | `.data` + `.bss` (7,584 bytes incl. the 1.5 KiB trap stack, the CRC table, sector buffers) | 56 KiB tested destructively | `.fast` code at `0x0001_0000` (copied by start.S) |
+| scratch `0x0001_0000`... | `.data` + `.bss` (7,600 bytes incl. the 1.5 KiB trap stack, the CRC table, sector buffers) | 56 KiB tested destructively | `.fast` code at `0x0001_0000` (copied by start.S) |
 | ... `0x0001_EFFF` | stack, growing down from `0x0001_F000` (53 KiB free) | `.data`, `.bss`, stack in the top 8 KiB | |
 | `0x0001_F000` | `struct surf_boot_info`, written just before the handoff | | read (copied) first thing |
 | DDR `0x8000_0000` | the image, wherever its header says | DDR tests when calibrated | the program, then `.bss` and a 16 KiB stack |
@@ -124,9 +124,11 @@ boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x4946525
 (The sizes and times above are illustrative; the emulator's real transcripts are in
 `docs/evidence/fw/`.)
 
-1. **Banner and self-test.** The identity registers (a wrong `sysinfo.MAGIC` or memory map
-   version is reported) and the CRC-32 test vectors of BOOT-ABI.md section 3 (a failure means
-   a faulty CPU or ROM: SurfBoot stops in the monitor).
+1. **Banner and self-tests.** The identity registers (a wrong `sysinfo.MAGIC` or memory map
+   version is reported), the CRC-32 test vectors of BOOT-ABI.md section 3 (a failure means a
+   faulty CPU or ROM: SurfBoot stops in the monitor), and the timer: if `mtime` does not move,
+   SurfBoot says so and counts time in software (about 4 us per read) so that every wait
+   below stays bounded, if approximate.
 2. **Buttons**, read 20 ms after reset (after the debouncers settle): **BTN1** held = stay in
    the monitor; **BTN0** held = boot `/BOOT/BACKUP.BIN` (only that one).
 3. **DDR**: `DDR_STATUS.PRESENT` must be set; `CALIB_DONE` is awaited for at most **2 s**
@@ -281,7 +283,7 @@ Its hot loops run from scratch RAM (`.fast`). The command line picks the depth: 
 | `test-fw-unit` | CRC-32 vectors, CRC-7/CRC-16 of known frames, printf conversions, 8.3 names, CSD parsing, SPI dividers | pass |
 | `test-fw-tools` | `test_tools.py`: 16 tests (section 7's tools, fsck.fat and mtools on 8 image layouts, isa-audit on 7 bad programs, deploy-sd against a stand-in, Python and C package checks agreeing on 73 packages) | 16 pass |
 | `test-fw-scenarios` | `run_tests.py`: the portable SurfBoot code under ASan/UBSan on the simulated board, 137 card scenarios (the brief's storage list and more), then 5 seeds x 300 runs of random metadata damage | 137 pass; fuzzing: every run ends with a result |
-| `test-fw-emu` | `run_emu.py`: 27 runs of the real ROM images in `surfemu` (boots, handoff checked from the kernel's side, traps after the handoff, the monitor, buttons, card insertion, DDR failures and injected faults, the diagnostics) | 27 pass |
+| `test-fw-emu` | `run_emu.py`: 29 runs of the real ROM images in `surfemu` (boots, handoff checked from the kernel's side, traps after the handoff, the monitor, buttons, card insertion, DDR failures and injected faults, a dead timer, the diagnostics) | 29 pass |
 | `test-fw-iomodel` | the scenarios against the io track's pin-level SD model (`sim/models/sdcard_model.cpp`), failing on any protocol violation | skipped until the model is in the tree; 120 of 120 pass against fde641f's model (evidence) |
 
 `surfemu` is an instruction-level model of the SoC written for these tests (the core as
