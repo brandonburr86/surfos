@@ -548,6 +548,15 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
     return 0;
 }
 
+/* 10/16/26 (audit B10): a file system's state and its device's blocks out to the device; 0 when
+   everything reached it by the end (a block refused by the first sync and written by the second
+   counts as written), else -EIO */
+static int write_back(struct superblock *sb) {
+    int r = sb->ops && sb->ops->sync ? sb->ops->sync(sb) : 0;
+    if(!sb->dev) return r ? -EIO : 0;
+    return bsync(sb->dev) != 0 || sb->dev->gone ? -EIO : 0;
+}
+
 int vfs_close(struct file *f) {
     struct superblock *sb;
     u_long fl;
@@ -564,10 +573,9 @@ int vfs_close(struct file *f) {
     irq_restore(fl);
     if(!last) return 0;
     sb = f->v->sb;
-    if((f->flags & O_ACCMODE) != O_RDONLY) {      /* a written file reaches the disk when it is closed */
-        if(sb->ops && sb->ops->sync && sb->ops->sync(sb) != 0) r = -EIO;   /* 10/16/26 (B10): and close says */
-        if(sb->dev && bsync(sb->dev) != 0) r = -EIO;                        /* when it did not */
-    }
+    if((f->flags & O_ACCMODE) != O_RDONLY) r = write_back(sb);   /* a written file reaches the disk when it is
+                                                                     closed; 10/16/26 (B10): and close says
+                                                                     when it did not */
     vput(f->v);
     kfree(f);
     return r;
@@ -734,11 +742,8 @@ int vfs_fsync(struct file *f) {
     struct superblock *sb;
     if(!f) return -EBADF;
     sb = f->v->sb;
-    if(sb->ops && sb->ops->sync && sb->ops->sync(sb) != 0) return -EIO;
-    if(sb->dev) {
-        if(bsync(sb->dev) != 0) return -EIO;
-        if(bdev_flush(sb->dev) != 0) return -EIO;
-    }
+    if(write_back(sb) != 0) return -EIO;            /* 10/16/26 (B10): as close says it */
+    if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;
 }
 
