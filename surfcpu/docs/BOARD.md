@@ -14,8 +14,9 @@ nextpnr), initialized and read-leveled by SurfCPU's firmware through the control
 registers. Their timing is nextpnr's estimate. The synthesized netlists, simulated from their
 pins, print the same characters as the RTL. **On the owner's Arty A7-100T** (2026-10-16,
 PHYSICAL-TESTS.md, `docs/evidence/physical/`) the baseline (m1) and the BRAM diagnostics (m3)
-passed and SurfBoot without DDR ran to its monitor, all loaded with `make program-volatile`
-from bitstreams of the earlier SoC (0.1.0). **The DDR designs have not been on a board yet**:
+passed, and SurfBoot without DDR ran to its monitor, read SurfOS's files from the owner's card
+and drove the VGA monitor, all loaded with `make program-volatile` from bitstreams of the earlier
+SoC (0.1.0). **The DDR designs have not been on a board yet**:
 section 12 has their first test, with what the serial port should show according to simulation.
 **Nothing has been built with Vivado** (there is no Vivado host yet, gap G2). The first real run
 of `build.tcl` will also be the first time Vivado reads these constraints; section 8 lists what
@@ -759,7 +760,8 @@ second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbser
 115200`). The DDR designs need `make litedram-gen` once before their build (the generated core
 is a build product, checked against `ip/litedram/arty.sha256`). Steps 1 to 3 have run on the
 owner's A7-100T (2026-10-16: m1 and m3 passed, SurfBoot without DDR stopped in its monitor as
-expected; PHYSICAL-TESTS.md) with bitstreams of the earlier SoC 0.1.0; the first DDR test
+expected and read the card's files; PHYSICAL-TESTS.md) with bitstreams of the earlier SoC 0.1.0,
+and the owner's card already holds SurfOS (`make deploy-sd`); the first DDR test
 repeats step 2 with this SoC (0.2.0, memory map 2: `tools/board-test.py m3`), then goes on to
 steps 4 and 5.
 
