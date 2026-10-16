@@ -6,7 +6,10 @@ File: surfbus_formal_slave.sv Date: 10/15/26 (SurfCPU)
 The memory for formal checks: it keeps every rule of docs/SURFBUS.md section 2 a slave must
 keep (a response only for an accepted request, exactly one, in order, no earlier than the
 cycle after acceptance; one request outstanding) and leaves everything else to the solver:
-when it accepts, when it answers, the read data and the error flag. With
+when it accepts, when it answers and the read data. The error flag is set exactly for
+requests to addresses riscv-formal considers invalid (RISCV_FORMAL_VALIDADDR, defined in
+checks.cfg): the instruction checks expect a trap there and none elsewhere, and the core's
+RVFI has no rvfi_mem_fault signals that would let them accept a bus error anywhere. With
 SURFCPU_FORMAL_FAIRNESS it accepts within 4 cycles and answers within 4 (for liveness).
 It also checks the master side: a request is not withdrawn or changed before it is
 accepted, and no new request is offered while one is outstanding.
@@ -28,21 +31,23 @@ module surfbus_formal_slave (
     (* keep *) `rvformal_rand_reg        any_ready;
     (* keep *) `rvformal_rand_reg        any_rsp;
     (* keep *) `rvformal_rand_reg [31:0] any_rdata;
-    (* keep *) `rvformal_rand_reg        any_err;
 
     reg pending = 0;
+    reg pending_err = 0;
     assign req_ready = !reset && !pending && any_ready;
     assign rsp_valid = !reset && pending && any_rsp;
     assign rsp_rdata = any_rdata;
-    assign rsp_err   = any_err;
+    assign rsp_err   = pending_err;
 
     always @(posedge clock) begin
-        if (reset)
+        if (reset) begin
             pending <= 0;
-        else if (req_valid && req_ready)
+        end else if (req_valid && req_ready) begin
             pending <= 1;
-        else if (rsp_valid)
+            pending_err <= !`rvformal_addr_valid(req_addr);
+        end else if (rsp_valid) begin
             pending <= 0;
+        end
     end
 
 `ifdef SURFCPU_FORMAL_FAIRNESS

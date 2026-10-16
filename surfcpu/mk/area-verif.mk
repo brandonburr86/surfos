@@ -10,8 +10,9 @@
 #   make test-cpu-ref    the real comparison: build/cpu/surfcpu_tb against Spike (needs the core)
 #   make ref-spike       the contract-patched Spike (build/third_party/spike-surfcpu)
 #   make ref-arch        riscv-arch-test 4.1.0: fetch, build the tests in scope, references
-#   make ref-formal      riscv-formal on the real core (needs the core; slow: about 10 minutes
-#                        per instruction check, longer for the others)
+#   make ref-formal      riscv-formal on the real core (needs the core): with ABC bmc3, 43 of
+#                        its 44 checks pass within 40 minutes (4 jobs); reg_ch0 runs on until
+#                        REF_FORMAL_TIMEOUT (docs/evidence/verif/formal.txt)
 #
 # Variables: REF_SEEDS (random programs, default 12 for test-ref, 50 for test-cpu-ref),
 # REF_DUT_SEEDS (the testbench's --seed values, default 1,2,3), REF_JOBS (default 4),
