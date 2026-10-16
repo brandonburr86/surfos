@@ -22,6 +22,10 @@ CMD13's status after it) and commands that get no answer; and a card taken out a
 lost its power, so it is in SD mode and answers nothing but CMD0, which with CS low puts it
 in SPI mode. pull_after takes it out right after the nth block it accepts, in the middle of
 whatever the host was doing, which is how the kernel's tests pull it at a known point.
+10/16/26 (the board): a command that starts in the byte right after a response, with no 8 clocks
+in between (N_RC in the specification's SPI timing), is a host mistake too. The owner's SanDisk
+card answered such an ACMD41 (sent straight after CMD55's R1) with a parameter error, which no
+model had shown.
 */
 
 #ifndef _SDMODEL_H
@@ -59,6 +63,8 @@ struct sdmodel {
     unsigned long commands, crc_errors_seen, bytes;
     unsigned long blocks_written, write_errors_sent, pulls;
     unsigned long violations;           /* the host's mistakes (above): the tests want none */
+    int resp_end;                       /* the last byte out ended a response: the next byte must not start a command */
+    unsigned long nrc_violations;       /* commands sent without 8 clocks after the last response (N_RC), also in violations */
 };
 
 void sdmodel_init(struct sdmodel *m, uint8_t *img, uint32_t blocks, int v2, int high_capacity, unsigned seed);

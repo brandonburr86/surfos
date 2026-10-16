@@ -27,7 +27,10 @@ What it does, after the SD Physical Layer Simplified Specification's SPI mode:
 Storage is the image file (raw 512-byte blocks, as tools/mkcard.py makes them), opened read
 only; writes stay in memory until flush() is called (or with write_through). An empty
 image path makes a blank in-memory card of `blank_blocks` blocks. Nothing here writes a
-real device. Protocol mistakes by the host are counted (stats.violations) and logged.
+real device. Protocol mistakes by the host are counted (stats.violations) and logged; one of
+them is a command whose start bit comes within 8 clocks of a response's last bit (N_RC in the
+specification's SPI timing): the owner's SanDisk card answered such an ACMD41, sent straight
+after CMD55's response, with a parameter error (2026-10-16, on the board).
 No Verilator dependency: plain C++17.
 */
 #ifndef SURFCPU_SDCARD_MODEL_H
@@ -155,6 +158,8 @@ private:
     std::deque<uint8_t> out_;
     int      out_bit_ = 7;
     bool     miso_ = true;
+    bool     nrc_armed_ = false;        // a response just ended: the next 8 clocks must not start a command
+    uint64_t nrc_from_ = 0;             // stats.sclk_rising when its last bit went out
     uint64_t busy_pending_ = 0;         // busy to start once out_ has drained
     uint64_t busy_until_ = 0;
 

@@ -5,8 +5,9 @@ File: sdcard.c  Date: 10/15/26 (SurfCPU)
 --------------------
 See sdcard.h. Plain C over struct sd_host: no kernel calls, so the same file runs in the
 kernel and in the host test against a simulated card. Timeouts follow the SD Physical
-Layer Simplified Specification's limits with room to spare: 1 s for initialization,
-100 ms for a read's data token, 500 ms of busy after a write.
+Layer Simplified Specification's limits with room to spare: 2 s for initialization (the
+specification says 1 s; SurfBoot allows 2 as well), 100 ms for a read's data token, 500 ms of
+busy after a write.
 
 10/16/26 (milestone 8): card detect is the first thing a read or write looks at, so a card
 that was taken out fails at once (SD_ENOCARD) instead of in a timeout; whoever watches the
@@ -15,12 +16,15 @@ again before it is used. And after a written block the card refused (a write err
 error) the driver waits for the card's busy time before the stop token, as after a block
 it took: the io track's model found the token sent into the busy time, the write-fault
 test (boards/arty_a7/tests/iomodel) being the first to refuse a block inside CMD25.
+10/16/26 (the board): 8 clocks between CMD55's response and the application command that
+follows (N_RC); without them the owner's SanDisk card refused ACMD41 with a parameter error,
+so SurfOS came up without its card. Both card models now count a command sent sooner.
 */
 
 #include "sdcard.h"
 #include "sdproto.h"
 
-#define T_INIT_MS   1000
+#define T_INIT_MS   2000
 #define T_TOKEN_MS  100
 #define T_BUSY_MS   500
 #define CRC_TRIES   3
@@ -77,10 +81,13 @@ static u8 command(struct sdcard *sd, u8 cmd, u32 arg) {
     return r;
 }
 
-/* an application command: CMD55, then cmd; the second R1 (or the first, if CMD55 failed) */
+/* an application command: CMD55, then cmd; the second R1 (or the first, if CMD55 failed). A real
+   card needs 8 clocks after a response before the next command (N_RC): the owner's SanDisk card
+   answered an ACMD41 sent straight after CMD55's R1 with a parameter error */
 static u8 app_command(struct sdcard *sd, u8 cmd, u32 arg) {
     u8 r = command(sd, SD_CMD55, 0);
     if(r > SD_R1_IDLE) return r;
+    xf(sd, 0xFF);
     return command(sd, cmd, arg);
 }
 
@@ -178,7 +185,7 @@ int sd_init(struct sdcard *sd, const struct sd_host *host) {
         r = app_command(sd, SD_ACMD41, sd->v2 ? 0x40000000u : 0);
         deselect(sd);
     } while(r == SD_R1_IDLE && now(sd) - t0 < T_INIT_MS);
-    if(r) return r == SD_R1_IDLE ? fail(sd, SD_ETIMEOUT, "ACMD41: still initializing after 1 s") : r1_error(sd, r, "ACMD41 failed");
+    if(r) return r == SD_R1_IDLE ? fail(sd, SD_ETIMEOUT, "ACMD41: still initializing after 2 s") : r1_error(sd, r, "ACMD41 failed");
 
     if(sd->v2) {
         if(!select_card(sd)) return fail(sd, SD_ETIMEOUT, "busy before CMD58");
