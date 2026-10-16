@@ -1,0 +1,37 @@
+# fw track evidence: SurfBoot's SD/FAT code against the io track's SD card model (2026-10-15, tree at db2e3df plus an uncommitted edit of docs/FIRMWARE.md, hence "dirty tree")
+
+The model was not merged into this branch: its two files were read from branch surfcpu with
+git show into build/iomodel-src/ (surfcpu at fde641ffa41809b4285f2dd6024d0a9cd0a0d52c, the merge of sc/io;
+sdcard_model.cpp blob 292c332aadd73038a4e54eef3628d5b0b0788d4d, sdcard_model.h blob 84acd581de47fcefaa9f38f3c9c71478dd44fe26) and built with
+make build/fw/host/fwtest-io IO_MODEL_DIR=build/iomodel-src. fwtest --io-model clocks every
+byte in SPI mode 0 at surf_spi's SCLK = sys/(2(DIV+1)) through SdCardModel::tick() and fails
+on any protocol violation the model counts.
+
+Command: python3 firmware/tests/run_tests.py --io-model --fwtest build/fw/host/fwtest-io
+
+run_tests: 17 scenarios need sdcard_sim's own fault options and were not run: acmd41_never_ready card_removed_while_loading cmd8_bad_echo dead_card empty_socket_without_card_detect every_read_bad_crc miso_stuck_low mmc_card no_3v3 ok_acmd41_slow ok_card_busy_from_before_a_reset ok_card_too_slow_for_fast_clock ok_no_cmd59 ok_read_timeout_retried ok_slow_card_timing ok_socket_without_card_detect reads_never_send_data
+run_tests: 120 of 120 scenarios passed through the io track SD card model in 6 s
+exit 0
+
+Passed (120): ok_sdsc_v2 ok_cmdline ok_sdsc_v1 ok_sdhc ok_cmdline_127 ok_cmdline_truncated ok_cmdline_empty_file ok_cmdline_bom_tab ok_4k_clusters ok_32k_clusters_2g ok_long_names_like_macos ok_cmdline_damaged_is_ignored ok_type_0b ok_partition_at_63 ok_one_fat ok_active_fat_2 ok_load_just_below_ddr_top ok_hybrid_mbr_with_gpt_entry ok_second_partition ok_entry_last_word ok_reserved_flags_ignored ok_token_error_retried ok_crc_errors_retried ok_ddr_slow_calibration ok_path_option no_card reads_always_error_token blank_card ok_mkfs_fat_and_mcopy superfloppy gpt_only exfat_partition exfat_without_partition_table exfat_in_fat32_typed_partition fat16_partition_type ntfs_partition fat12_volume fat16_volume_in_fat32_partition empty_partition_table only_linux_partition bad_partition_status partition_beyond_card bpb_4096_byte_sectors partition_at_sector_0 bpb_3_sectors_per_cluster bpb_no_fats bpb_no_reserved_sectors bpb_no_signature bpb_no_jump bpb_volume_bigger_than_partition bpb_root_cluster_out_of_range bpb_fat_too_small bpb_unknown_fat32_version bpb_active_fat_out_of_range no_boot_directory bpb_fat16_fields_set nothing_to_boot only_backup_present surfos_is_a_directory boot_is_a_file multi_cluster_boot_directory multi_cluster_boot_directory_fragmented multi_cluster_root_directory deleted_entry_before_the_file fragmented_reverse_chain fragmented_interleaved fragmented_random_seed1 fragmented_random_seed2 fragmented_random_seed3 fragmented_random_seed4 fragmented_random_seed5 file_chain_loops file_chain_points_to_itself directory_chain_loops chain_points_to_free_cluster chain_points_beyond_last_cluster chain_reaches_bad_cluster_mark chain_points_to_reserved_cluster chain_shorter_than_size chain_longer_than_size first_cluster_out_of_range first_cluster_zero_with_data size_bigger_than_volume package_shorter_than_header package_is_an_elf package_is_x86_boot_code package_version_2 package_header_size_128 package_header_crc_wrong package_header_damaged_after_packing package_needs_unknown_isa package_other_platform package_truncated package_padded package_empty_payload load_address_misaligned load_address_below_ddr load_address_in_ddr_top load_range_crosses_ddr_top load_range_overflows_32_bits mem_size_smaller_than_payload load_range_beyond_small_ddr entry_misaligned entry_past_payload entry_below_load_address payload_damaged ddr_loses_a_bit bad_main_good_backup both_bad_reports_the_main_error ok_large_4m_payload btn0_without_backup_stops btn0_boots_backup ddr_absent ddr_calibration_never_ends ddr_calibration_fails ddr_size_zero ddr_size_not_whole_mib monitor_commands directory_longer_than_65536_entries ok_full_volume
+
+Single runs with the model's statistics (fwtest-io boot --io-model ...):
+
+== ok_sdhc: fwtest-io boot --io-model 
+RESULT OK path=/BOOT/SURFOS.BIN entry=0x80000000 load=0x80000000 payload=50000 flags=0x0 cmdline="" fragments=1 spi_bytes=55670 sim_ms=250
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 0 CMD17 105 CMD58 2 CMD59 1 ACMD41 4; blocks read 105; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0
+== ok_sdsc_v1: fwtest-io boot --io-model --type sdsc1
+RESULT OK path=/BOOT/SURFOS.BIN entry=0x80000000 load=0x80000000 payload=50000 flags=0x0 cmdline="" fragments=1 spi_bytes=55662 sim_ms=250
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 1 CMD17 105 CMD58 1 CMD59 1 ACMD41 4; blocks read 105; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0
+== ok_sdsc_v2: fwtest-io boot --io-model --type sdsc2
+RESULT OK path=/BOOT/SURFOS.BIN entry=0x80000000 load=0x80000000 payload=50000 flags=0x0 cmdline="" fragments=1 spi_bytes=55684 sim_ms=251
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 1 CMD17 105 CMD58 2 CMD59 1 ACMD41 4; blocks read 105; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0
+== ok_crc_errors_retried: fwtest-io boot --io-model --crc-errors 3
+RESULT OK path=/BOOT/SURFOS.BIN entry=0x80000000 load=0x80000000 payload=50000 flags=0x0 cmdline="" fragments=1 spi_bytes=57255 sim_ms=752
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 0 CMD17 108 CMD58 2 CMD59 1 ACMD41 4; blocks read 108; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0
+== reads_always_error_token: fwtest-io boot --io-model --token-errors 1000
+RESULT FAIL code=SD_READ led=3 msg=reading sector 0: the card sent error token 0x08 (out of range)
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 0 CMD17 4 CMD58 2 CMD59 1 ACMD41 4; blocks read 0; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0
+== fragmented_interleaved: fwtest-io boot --io-model 
+RESULT OK path=/BOOT/SURFOS.BIN entry=0x80000000 load=0x80000000 payload=80000 flags=0x0 cmdline="" fragments=157 spi_bytes=87863 sim_ms=305
+IOMODEL commands CMD0 1 CMD8 1 CMD9 1 CMD10 1 CMD16 0 CMD17 166 CMD58 2 CMD59 1 ACMD41 4; blocks read 166; ignored: power-up 0 busy 0 sd-mode 0; command CRC errors 0; violations 0

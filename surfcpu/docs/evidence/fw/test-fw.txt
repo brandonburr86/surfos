@@ -1,0 +1,138 @@
+# fw track evidence: make test-fw (2026-10-15, tree at db2e3df plus an uncommitted edit of docs/FIRMWARE.md, hence "dirty tree")
+
+All in the toolchain container; host builds with gcc 14.2 -fsanitize=address,undefined.
+Nothing here ran on the RTL SoC or on the board: simulation and host results only.
+
+## test-fw-unit (fwtest unit: CRC-32 vectors, CRC-7/CRC-16 frames, printf, 8.3 names, CSD, dividers)
+
+unit: PASS (0 failures)
+exit 0
+
+## test-fw-tools (firmware/tests/test_tools.py)
+
+test_format (__main__.TestBin2mem.test_format) ... ok
+test_corrupted_copy_is_caught (__main__.TestDeploySd.test_corrupted_copy_is_caught) ... ok
+test_dry_run_writes_nothing (__main__.TestDeploySd.test_dry_run_writes_nothing) ... ok
+test_install_update_backup_and_user_files (__main__.TestDeploySd.test_install_update_backup_and_user_files) ... ok
+test_refusals (__main__.TestDeploySd.test_refusals) ... ok
+test_system_files_and_explicit_backup (__main__.TestDeploySd.test_system_files_and_explicit_backup) ... ok
+test_catches_each_violation (__main__.TestIsaAudit.test_catches_each_violation) ... ok
+test_firmware_passes (__main__.TestIsaAudit.test_firmware_passes) ... ok
+test_images_pass_fsck_and_mtools (__main__.TestMkcard.test_images_pass_fsck_and_mtools) ... ok
+test_refusals (__main__.TestMkcard.test_refusals) ... ok
+test_pack_from_elf_matches_objcopy (__main__.TestSurfimg.test_pack_from_elf_matches_objcopy) ... ok
+test_pack_raw_payload_and_refusals (__main__.TestSurfimg.test_pack_raw_payload_and_refusals) ... ok
+The same packages through surfimg.check and through SurfBoot's image.c (fwtest). ... ok
+test_refuses_foreign_elves (__main__.TestSurfimg.test_refuses_foreign_elves) ... ok
+test_selftest_and_crc_vectors (__main__.TestSurfimg.test_selftest_and_crc_vectors) ... ok
+test_verify_refuses_non_packages (__main__.TestSurfimg.test_verify_refuses_non_packages) ... ok
+Ran 16 tests in 8.414s
+OK
+
+## test-fw-scenarios (firmware/tests/run_tests.py: SurfBoot's portable code on card images)
+
+137 scenarios passed, 0 failed:
+  ok_sdsc_v2 ok_sdhc ok_sdsc_v1
+  ok_cmdline ok_cmdline_bom_tab ok_cmdline_127
+  ok_cmdline_truncated ok_cmdline_empty_file ok_32k_clusters_2g
+  ok_4k_clusters ok_long_names_like_macos ok_cmdline_damaged_is_ignored
+  ok_type_0b ok_active_fat_2 ok_one_fat
+  ok_partition_at_63 ok_second_partition ok_hybrid_mbr_with_gpt_entry
+  ok_load_just_below_ddr_top ok_reserved_flags_ignored ok_entry_last_word
+  ok_slow_card_timing ok_acmd41_slow ok_card_too_slow_for_fast_clock
+  ok_no_cmd59 ok_crc_errors_retried ok_token_error_retried
+  ok_card_busy_from_before_a_reset ok_socket_without_card_detect ok_read_timeout_retried
+  ok_ddr_slow_calibration ok_path_option no_card
+  empty_socket_without_card_detect dead_card miso_stuck_low
+  acmd41_never_ready ok_mkfs_fat_and_mcopy no_3v3
+  cmd8_bad_echo mmc_card reads_always_error_token
+  every_read_bad_crc reads_never_send_data card_removed_while_loading
+  blank_card gpt_only exfat_partition
+  superfloppy exfat_in_fat32_typed_partition exfat_without_partition_table
+  ntfs_partition fat16_partition_type ok_large_4m_payload
+  fat16_volume_in_fat32_partition fat12_volume empty_partition_table
+  only_linux_partition bad_partition_status partition_beyond_card
+  bpb_4096_byte_sectors partition_at_sector_0 bpb_3_sectors_per_cluster
+  bpb_no_fats bpb_no_reserved_sectors bpb_no_jump
+  bpb_volume_bigger_than_partition bpb_no_signature bpb_root_cluster_out_of_range
+  bpb_fat_too_small bpb_unknown_fat32_version bpb_active_fat_out_of_range
+  no_boot_directory bpb_fat16_fields_set only_backup_present
+  nothing_to_boot surfos_is_a_directory boot_is_a_file
+  multi_cluster_boot_directory multi_cluster_boot_directory_fragmented multi_cluster_root_directory
+  fragmented_interleaved deleted_entry_before_the_file fragmented_reverse_chain
+  fragmented_random_seed2 fragmented_random_seed1 fragmented_random_seed3
+  fragmented_random_seed4 fragmented_random_seed5 file_chain_loops
+  directory_chain_loops chain_points_to_free_cluster file_chain_points_to_itself
+  chain_points_beyond_last_cluster chain_reaches_bad_cluster_mark chain_points_to_reserved_cluster
+  chain_shorter_than_size first_cluster_out_of_range chain_longer_than_size
+  first_cluster_zero_with_data size_bigger_than_volume package_shorter_than_header
+  package_is_an_elf package_is_x86_boot_code package_version_2
+  package_header_size_128 package_header_crc_wrong package_needs_unknown_isa
+  package_header_damaged_after_packing package_truncated package_other_platform
+  package_padded package_empty_payload load_address_misaligned
+  load_address_below_ddr load_address_in_ddr_top load_range_crosses_ddr_top
+  load_range_overflows_32_bits mem_size_smaller_than_payload load_range_beyond_small_ddr
+  entry_past_payload entry_misaligned entry_below_load_address
+  payload_damaged ddr_loses_a_bit bad_main_good_backup
+  btn0_boots_backup both_bad_reports_the_main_error ddr_absent
+  btn0_without_backup_stops ddr_calibration_never_ends ddr_calibration_fails
+  ddr_size_not_whole_mib ddr_size_zero monitor_commands
+  directory_longer_than_65536_entries ok_full_volume
+
+Random metadata damage (fwtest fuzz on a fragmented 40 MiB card; MBR, boot sector, FAT,
+root and /BOOT directories, both packages' first sectors; up to 6 byte changes per run):
+
+fuzz: seed 1, 300 runs, 6 mutations at most each; outcomes: OK=233 MBR=3 PART_RANGE=3 BPB=9 FAT_CHAIN=1 NOT_FOUND=8 IMG_MAGIC=2 IMG_HCRC=5 IMG_CRC=36
+fuzz: seed 2, 300 runs, 6 mutations at most each; outcomes: OK=235 MBR=2 PART_RANGE=2 BPB=7 FAT_CHAIN=1 NOT_FOUND=7 NOT_DIR=1 IMG_HCRC=6 IMG_CRC=39
+fuzz: seed 3, 300 runs, 6 mutations at most each; outcomes: OK=245 MBR=1 NO_FAT32_PART=1 PART_RANGE=2 BPB=3 FAT_CHAIN=2 FAT_CYCLE=1 NOT_FOUND=9 IMG_HCRC=5 IMG_CRC=31
+fuzz: seed 4, 300 runs, 6 mutations at most each; outcomes: OK=234 MBR=1 PART_RANGE=2 BPB=7 FAT_CHAIN=1 DIR=1 NOT_FOUND=9 IMG_VERSION=1 IMG_HCRC=5 IMG_CRC=39
+fuzz: seed 5, 300 runs, 6 mutations at most each; outcomes: OK=234 MBR=2 PART_RANGE=1 BPB=9 FAT_CHAIN=2 DIR=1 NOT_FOUND=5 IMG_HCRC=3 IMG_SIZE=1 IMG_CRC=42
+run_tests: 137 of 137 scenarios passed, fuzzing passed in 7 s
+
+## test-fw-emu (firmware/tests/run_emu.py: the ROM images in the firmware emulator)
+
+PASS illegal_instruction_after_handoff                  0.281 s simulated     3448095 instructions    1 traps
+PASS sdsc_v1_card                                       0.265 s simulated     3221925 instructions    0 traps
+PASS load_fault_after_handoff                           0.282 s simulated     3445813 instructions    1 traps
+PASS boot_and_trap_after_handoff                        0.314 s simulated     3992437 instructions    1 traps
+PASS sdsc_v2_card                                       0.265 s simulated     3222707 instructions    0 traps
+PASS no_card_then_monitor                               0.292 s simulated     3933948 instructions    0 traps
+PASS btn1_stays_in_monitor                              0.263 s simulated     3042228 instructions    0 traps
+PASS btn0_boots_backup                                  0.264 s simulated     3214554 instructions    0 traps
+PASS bad_main_falls_back_to_backup                      0.297 s simulated     3589072 instructions    0 traps
+PASS no_ddr_controller                                  0.035 s simulated      448420 instructions    0 traps
+PASS trap_during_boot_recovers_to_monitor               0.256 s simulated     3480385 instructions    1 traps
+PASS card_inserted_later                                1.859 s simulated    24272717 instructions    0 traps
+PASS surfboot_finds_a_stuck_ddr_bit                     0.177 s simulated     2489533 instructions    0 traps
+PASS monitor_on_a_bad_image                             0.423 s simulated     5386983 instructions    2 traps
+PASS dead_timer_and_no_card_still_reaches_the_monitor   0.188 s simulated     2681364 instructions    0 traps
+PASS dead_timer_still_boots                             0.261 s simulated     3220744 instructions    0 traps
+PASS ddr_never_calibrates                               2.048 s simulated    29583790 instructions    0 traps
+PASS fragmented_kernel_large                            2.947 s simulated    32231200 instructions    0 traps
+PASS bramdiag_without_ddr                               0.148 s simulated     1912337 instructions   39 traps
+PASS bramdiag_reports_ddr_calibration_failure           0.163 s simulated     2180818 instructions   39 traps
+PASS superfloppy_refused                                0.203 s simulated     2779445 instructions    0 traps
+PASS card_never_finishes_init                           2.172 s simulated    23496112 instructions    0 traps
+PASS bramdiag_finds_a_stuck_ddr_bit                     2.698 s simulated    24233456 instructions   39 traps
+PASS bramdiag_passes                                    5.386 s simulated    48272331 instructions   78 traps
+PASS ddrdiag_reports_a_ddr_fault                        1.078 s simulated     5586678 instructions    3 traps
+PASS ddrdiag_booted_by_surfboot                        13.035 s simulated    89567457 instructions    0 traps
+PASS ddrdiag_booted_from_the_monitor                   13.031 s simulated    89528702 instructions    0 traps
+PASS ddrdiag_full_mode                                 15.337 s simulated   102533756 instructions    0 traps
+PASS ddrdiag_finds_a_stuck_bit                         13.043 s simulated    89582055 instructions    0 traps
+run_emu: 29 of 29 emulator scenarios passed in 3 s
+
+## make check (the whole surfcpu aggregate on this branch)
+
+lint-lib: 5 modules clean
+test-lib: PASS (seeds 1 7 123)
+unit: PASS (0 failures)
+Ran 16 tests in 9.262s
+OK
+run_tests: 137 of 137 scenarios passed, fuzzing passed in 7 s
+run_emu: 29 of 29 emulator scenarios passed in 3 s
+test-fw-iomodel: skipped: the io track's SD card model (sim/models/sdcard_model.cpp) is not in this tree
+build-rom: surfboot.elf text 39848 data 0 bss 7600: ROM 39848 of 65536 bytes (60.8%)
+build-rom: bramdiag.elf ROM 27968 of 65536 bytes (42.7%)
+check: all automated SurfCPU checks passed
+make check exit 0

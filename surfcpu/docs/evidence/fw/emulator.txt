@@ -1,0 +1,179 @@
+# fw track evidence: firmware emulator transcripts (2026-10-15, tree at db2e3df plus an uncommitted edit of docs/FIRMWARE.md, hence "dirty tree")
+
+build/fw/host/surfemu runs the real ROM file build/fw/surfboot.mem (or bramdiag.mem) on an
+instruction-level model of the SoC (firmware/tests/surfemu.c), with card images made by
+mkcard.py behind the SD card model. These are simulated runs of the firmware, not of the
+RTL; the RTL system simulation and the board are pending. The UART output, as printed:
+
+## SurfBoot boots the handoff test kernel, which checks the handoff, then traps (boot_and_trap_after_handoff)
+
+
+SurfBoot 1.0.0 (build db2e3df3, dirty tree), the SurfCPU boot ROM
+soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 5e5e5e5e (simulation)
+ddr: calibrated after 129 ms, 256 MiB, quick test passed (data, address, byte lanes)
+sd: SDHC/SDXC, 64 MiB; ready after 4 ms; SPI 6250 kHz, data CRC checked
+fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+boot: /BOOT/SURFOS.BIN
+boot: Hello 1.0.0 build db2e3df3: 4332 bytes in 1 fragment, read in 20 ms
+boot: load 0x80000000, entry 0x80000000, mem_size 21728, ISA IM_Zicsr_Zifencei; payload CRC 0x82bd7c0b matches (card and DDR)
+boot: command line "hello trap"
+boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+
+
+HELLO: a0=00000000 a1=0001f000 a2=49465253 mtvec=00000138 mstatus=00001800 mie=00000000 mscratch=00000000
+HELLO: boot_flags 0x00000000 part_lba 2048 ram 256 MiB surfboot 010000 build db2e3df3 cmdline "hello trap"
+HELLO: handoff OK
+HELLO: ECALL with no handler of my own
+
+*** SurfBoot fault reporter: trap with no handler (after the handoff, or inside a trap handler)
+mcause 0000000b  mepc 800004b0  mtval 00000000  sp 800052d0
+ra 800004b0  gp 800018ac  tp 00000000  s0 3ece2af5  s1 00000002
+a0 00000027  a1 00000000  a2 80000ffc  a3 800052b4
+a4 00000000  a5 10000000  a6 80005238  a7 00000000
+s2 49465253  s3 00000138  s4 00001800  s5 00000000
+s6 00000000  s7 00000000  s8 00000000  s9 00000000
+s10 00000000  s11 00000000
+(t0..t6 were used by this report) stopped; LEDs blink code 8
+
+surfemu: all expected output seen after 0.314 s simulated (7853462 cycles, 3992437 instructions, 1 traps); pc 000004ec; LEDs 8 RGB 001
+
+## The monitor after a damaged package: check, md/mw faults, chain, reset (monitor_on_a_bad_image)
+
+SurfBoot stopped: payload checksum (IMG_CRC)
+  the payload CRC as read from the card is 0x02ebb15d, the header says 0x82bd7c0b (a damaged file)
+The LEDs LD4-LD7 show code 7. Type help for the monitor's commands; inserting a card retries the boot.
+surfboot> check /BOOT/SURFOS.BIN
+  magic 474d4953 version 1 header 64, header CRC f8a90793
+  name "Hello" version 1.0.0 build db2e3df3 flags 00000000
+  isa 0000000f (IM_Zicsr_Zifencei) platform 1
+  load 80000000 payload 4268 mem 21728 entry 80000000 payload CRC 82bd7c0b
+check: /BOOT/SURFOS.BIN: FAILED: the payload CRC as read from the card is 0x02ebb15d, the header says 0x82bd7c0b (a damaged file) (IMG_CRC)
+surfboot> md 0x30000000 1
+30000000: (access fault at 0x30000000)
+surfboot> mw 0x00000100 5
+mw: access fault at 0x00000100
+surfboot> md 0x00000000 4
+00000000: 30401073 30047073 00010197 7f818193
+surfboot> chain /BOOT/SURFOS.BIN
+chain: 8-16
+chain: 9 clusters in 1 fragment; the size needs 9
+surfboot> reset
+restarting
+
+SurfBoot 1.0.0 (build db2e3df3, dirty tree), the SurfCPU boot ROM
+soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 5e5e5e5e (simulation)
+ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+sd: SDHC/SDXC, 64 MiB; ready after 4 ms; SPI 6250 kHz, data CRC checked
+fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+boot: /BOOT/SURFOS.BIN
+boot: /BOOT/SURFOS.BIN: the payload CRC as read from the card is 0x02ebb15d, the header says 0x82bd7c0b (a damaged file)
+boot: trying /BOOT/BACKUP.BIN instead
+boot: /BOOT/BACKUP.BIN
+boot: /BOOT/BACKUP.BIN: /BOOT/BACKUP.BIN does not exist
+
+SurfBoot stopped: payload checksum (IMG_CRC)
+  the payload
+surfemu: all expected output seen after 0.423 s simulated (10582666 cycles, 5386983 instructions, 2 traps); pc 000053e4; LEDs 7 RGB 001
+
+## A dead timer (dead_timer_still_boots)
+
+
+SurfBoot 1.0.0 (build db2e3df3, dirty tree), the SurfCPU boot ROM
+soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 5e5e5e5e (simulation)
+timer: mtime does not advance (stuck at 0x00000000): the SoC's timer is faulty; SurfBoot goes on with approximate timeouts
+ddr: calibrated after 174 ms, 256 MiB, quick test passed (data, address, byte lanes)
+sd: SDHC/SDXC, 64 MiB; ready after 3 ms; SPI 6250 kHz, data CRC checked
+fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 clusters, label "SURFOS"
+boot: /BOOT/SURFOS.BIN
+boot: Hello 1.0.0 build db2e3df3: 4332 bytes in 1 fragment, read in 0 ms
+boot: load 0x80000000, entry 0x80000000, mem_size 21728, ISA IM_Zicsr_Zifencei; payload CRC 0x82bd7c0b matches (card and DDR)
+boot: no /BOOT/CMDLINE.TXT; empty command line
+boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+
+
+HELLO: a0=00000000 a1=0001f000 a2=49465253 mtvec=00000138 mstatus=00001800 mie=00000000 mscratch=00000000
+HELLO: boot_flags 0x00000000 part_lba 2048 ram 256 MiB surfboot 010000 build db2e3df3 cmdline ""
+HELLO: handoff OK
+
+## The BRAM diagnostics (bramdiag_passes, first run)
+
+SurfCPU BRAM diagnostics 1.0.0 (build db2e3df3, dirty tree)
+board simulation (0xf0), SoC 0.1.0, memory map 1, sys 25000000 Hz, timebase 1000000 Hz
+bitstream build 5e5e5e5e flags 2, features ff, DDR status 4 size 256 MiB
+identity                           ok (7 checks)
+ALU, immediates, x0                ok (33 checks)
+M extension                        ok (23 checks)
+branches and jumps                 ok (9 checks)
+loads and stores                   ok (8 checks)
+CSRs and counters                  ok (30 checks)
+scratch RAM (March C-)             (56 KiB) ok (49 checks)
+text RAM (cells 2400-4095)         ok (1 checks)
+exceptions, each recovered         ok (34 checks)
+interrupts, timer and WFI          (10 timer ticks in 10114 us) ok (7 checks)
+FENCE.I, code written to RAM       ok (2 checks)
+DDR calibration                    ok (1 checks)
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      ok (54 checks)
+DDR boundaries                     ok (98 checks)
+DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+DDR sustained copies               (4 x 256 KiB copied and checked, 785 KiB/s) ok (4 checks)
+code running from DDR              ok (6 checks)
+
+BRAMDIAG: PASS (569 checks)
+
+## The DDR diagnostic loaded from the card by SurfBoot (ddrdiag_booted_by_surfboot)
+
+boot: /BOOT/SURFOS.BIN
+boot: DDRdiag 1.0.0 build db2e3df3: 15012 bytes in 1 fragment, read in 67 ms
+boot: load 0x80000000, entry 0x80000000, mem_size 35488, ISA IM_Zicsr_Zifencei; payload CRC 0xee87a584 matches (card and DDR)
+boot: command line "size=16M"
+boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+
+
+SurfCPU DDR diagnostic 1.0.0 (build db2e3df3, dirty tree), running from DDR at 0x80000000
+boot information                   ok (6 checks)
+started by SurfBoot 010000 build db2e3df3 from partition sector 2048, flags 0, command line "size=16M"
+testing DDR [0x80100000, 0x81100000) (16 MiB) of [0x80000000, 0x90000000); quick mode
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      (5 address lines skipped: outside the test area) ok (44 checks)
+DDR boundaries                     ok (64 checks)
+DDR patterns                       (4096 KiB in full, 256 blocks sampled) ok (2 checks)
+DDR sustained copies               (4 x 1024 KiB copied and checked, 594 KiB/s) ok (4 checks)
+code running from DDR              ok (6 checks)
+
+DDRDIAG: PASS (327 checks)
+
+## A DDR fault injected at 0x80180000 (ddrdiag_reports_a_ddr_fault)
+
+testing DDR [0x80100000, 0x80900000) (8 MiB) of [0x80000000, 0x90000000); quick mode
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      
+*** trap: store access fault (mcause 0x00000007)
+    mepc 0x8000105c  mtval 0x80180000  mstatus 0x00001800
+    ra   80000f98  sp   800089a0  gp   80004144  tp   00000000
+    t0   80001c90  t1   80900000  t2   00000000  s0   80100000
+    s1   80003ab0  a0   a5000000  a1   80180000  a2   01010101
+    a3   800089e4  a4   00000013  a5   b7231313  a6   01300000
+    a7   00000001  s2   00000017  s3   00000006  s4   00000000
+    s5   00000000  s6   00000066  s7   00000003  s8   00000007
+    s9   80000000  s10  00000002  s11  00000000  t3   80008a50
+    t4   00000100  t5   00000000  t6   00000000
+
+  FAIL unexpected trap: store access fault, mepc 0x8000105c, mtval 0x80180000 (the section was abandoned)
+  DDR address lines and aliases: 1 of 2 checks failed
+DDR boundaries                     ok (64 checks)
+DDR patterns                       
+*** trap: store access fault (mcause 0x00000007)
+    mepc 0x000100ec  mtval 0x80180000  mstatus 0x00001800
+    ra   8000136c  sp   80008a10  gp   80004144  tp   00000000
+    t0   80001c90  t1   00000000  t2   00000000  s0   80003ab0
+    s1   00400000  a0   80180000  a1   80500000  a2   00000000
+    a3   80008a1c  a4   80180000  a5   80100000  a6   80008998
+    a7   00000000  s2   00000000  s3   80500000  s4   00000001
+    s5   00000000  s6   00000066  s7   00000005  s8   00000007
+    s9   80000000  s10  00000004  s11  00000000  t3   800046a0
+    t4   00000007  t5   8000105c  t6   00000000
+
