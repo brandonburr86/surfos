@@ -20,9 +20,10 @@ programming, physical) stay apart.
   (channel B: the UART). `make -C surfcpu uart-list` says which is which. The commands find the
   UART by themselves when one Arty is plugged in; with more than one, give `PORT=`. A port that
   shows only garbage or nothing at all is usually channel A, or the wrong baud rate.
-* Leave the Arty's JP2 open (BOARD.md section 12). Opening a serial port raises DTR and RTS, as
-  every terminal program does; with JP2 open they reach nothing on the Arty. Shorted, JP2 lets
-  DTR drive the RESET net (WIRING.md U7), so opening the port could reset the SoC. The tools
+* Take the Arty's JP2 off (BOARD.md section 12). Opening a serial port raises DTR and RTS, as
+  every terminal program does; with JP2 off they reach nothing on the Arty. Fitted, JP2 lets
+  DTR pulse the RESET net (WIRING.md U7): on the owner's board, which came with JP2 fitted, each
+  opening of the port restarted the design (the baseline's count began again at 1). The tools
   never change DTR or RTS unless asked (`uart.py console --dtr on|off --rts on|off`).
 * Close other programs that hold the port (`screen`, `make uart-console`): a test needs it to
   itself.

@@ -162,10 +162,12 @@ Two different jumpers are both called JP1:
   instead of loading Digilent's demo from flash at power-on (that demo could drive the Pmod
   pins).
 * **The Pmod PS2's JP1 (supply)**: **on VB**.
+* **The Arty's JP2**: **off**. Your board came with it fitted, and then every program that opens
+  the serial port (the test kit, the console, `screen`) resets the board: the first bring-up saw
+  the count start again at 1 each time. You took it off on 2026-10-16; keep it off.
 
-Also leave **the Arty's JP2** open (shorted, opening the serial port could reset the SoC), and
-connect nothing to the Pmod PS2's JP2 header (its silkscreen has VE and GND swapped). BOARD.md
-section 12 is the full checklist.
+Also connect nothing to the Pmod PS2's JP2 header (its silkscreen has VE and GND swapped).
+BOARD.md section 12 is the full checklist.
 
 Bring the adapters up in order: power on with only the USB cable first and load the baseline
 design (section 4), which leaves JB, JC and JD unassigned so the FPGA drives none of their

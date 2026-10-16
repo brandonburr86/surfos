@@ -6,7 +6,7 @@ physical results are separate columns, so nothing claims more than happened.
 | Milestone | Simulation / host tests | Synthesis / bitstream | On the board | State |
 |---|---|---|---|---|
 | 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (owner's hardware facts still to confirm: INVENTORY.md section 4) |
-| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | pending: board not connected (G1, G3) | bitstream ready; waiting for the board |
+| 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | **A7-100T** (IDCODE 0x03631093), loaded over JTAG from the Mac: **m1 PASS** on 2026-10-16, 11 checks and the LEDs confirmed by the owner ([evidence](evidence/physical/m1-2026-10-16-2.txt); the first run's FAIL was a test-kit bug: [evidence](evidence/physical/m1-2026-10-16.txt)) | **passed on the board** with the open flow; open: the brief's Vivado post-route timing and DRC reports and the Mac → Vivado host loop (no Vivado host) |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs; the DDR top with LiteDRAM's generated core and its DRAM model: the BRAM diagnostics' DDR checks pass (569), and SurfBoot calibrates and boots SurfOS to the shell; the 100T DDR diagnostics' synthesized netlist prints the same lines at the same times as the RTL ([evidence](evidence/ddr/), [the DDR top](evidence/ddr/ddr-top-sim.txt)) | open flow: both DDR designs place and route on both boards, but nextpnr's estimate for LiteDRAM's 100 MHz clock is 63.5 to 77.3 MHz, and one build did not finish routing: no DDR bitstream ([evidence](evidence/board/openxc7-ddr.txt)); MIG recipe pending a Vivado host | pending: needs a DDR bitstream | done in simulation; timing closure in progress |
@@ -256,3 +256,49 @@ physical results are separate columns, so nothing claims more than happened.
 
   Timing is not relaxed to get there. If the open flow cannot close it, the choices go to the
   owner, Vivado among them.
+
+### 2026-10-16: the board, milestone 1
+
+* The Arty enumerates on the Mac as Digilent's FT2232 (serial 210319C129C6):
+  `/dev/cu.usbserial-210319C129C60` is JTAG and `...C61` the UART. macOS's own FTDI driver
+  holds both channels, yet openFPGALoader 1.1.1 (installed by the owner) claims the JTAG
+  channel without sudo.
+* Programming:
+  * `tools/program.sh detect` read IDCODE 0x03631093: the board is an **A7-100T**
+    (INVENTORY.md G1).
+  * The baseline was rebuilt at 2d1f32b, and every flow check passed (nextpnr's estimates:
+    sys 115 MHz and pix 183 MHz, both constrained to 25 MHz).
+  * `make program-volatile` loaded it into configuration RAM (DONE high). The flash was not
+    touched.
+* The Arty's JP2 was fitted (WIRING.md U7). Raising DTR pulses RESET, and the system raises
+  DTR whenever a program opens the port, so every opening restarted the design: the count
+  began at 1 each time. Dropping DTR, and RTS either way, did nothing. The owner took JP2 off,
+  and after that the count ran on through every DTR and RTS change. The owner's guide and the
+  checklists now say the board can come with JP2 fitted.
+* `board-test M=m1`, first run: FAIL ([evidence](evidence/physical/m1-2026-10-16.txt)).
+  * 10 checks passed and the owner confirmed the LEDs. Only "a line every second by the Mac's
+    clock" failed, with gaps of 0.00 s, though the transcript shows the lines a second apart.
+  * The cause was a test-kit bug. The owner took a few seconds over the first step, and the
+    lines that came meanwhile waited in the buffer; each was stamped with the time the script
+    read it.
+  * Fixed in f85079e: lines keep the time they arrived (`uart.Link.arrival`), and the evidence
+    says when each step was answered. A new self-test case, a stand-in owner who takes 3.5 s
+    over the first step, failed the same way before the fix (0.00, 0.00, 0.37, 1.03, 0.98 s).
+  * A second kit bug was found on the way (309fd37). The self-test split the stand-in owner's
+    command at the spaces in this checkout's path, so `make board-test-selftest` failed on the
+    Mac. `make check` runs in a container whose path has no spaces, so it never saw this.
+  * The kit's tests pass: 17 of 17 on the Mac, and 21 of 21 in the container
+    (`test-os-kit`).
+* `board-test M=m1`, second run: **PASS** ([evidence](evidence/physical/m1-2026-10-16-2.txt)).
+  The owner confirmed the LEDs, and 11 checks passed:
+  * the line's form and its count;
+  * a line every 0.99 to 1.01 s;
+  * the pixel clock at 25,173,611 Hz (25,173,612 on some lines);
+  * the board, id, build and build time against the manifest;
+  * the receive pin (`rx 53`), the switches at 0101, BTN0, and RESET restarting the count.
+
+  The tools it ran are those of f85079e (board-test.py sha256 cf3a99d2fb49d5a6, uart.py
+  dd6dda3bf7893ce1). The uncommitted changes it notes were these documentation edits.
+* Milestone 1 is not closed, because the brief also asks for Vivado's post-route timing and
+  DRC reports and the Mac → Vivado host → JTAG loop. With no Vivado host, the open flow's
+  nextpnr timing is only an estimate.
