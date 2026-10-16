@@ -15,7 +15,8 @@ Without Docker, a board or a bitstream build (docs/RELEASE.md section 9):
     only with --prerelease; any other design that fails stops the release; the release's own files
     check against SHA256SUMS and MANIFEST;
   * tools/program.sh's flash path with the board tests' fake openFPGALoader
-    (sim/board/tools/fake), on a release's bitstream: written with -f --verify only when
+    (sim/board/tools/fake), named by OPENFPGALOADER so that a real openFPGALoader is never run even
+    with a board plugged in, on a release's bitstream: written with -f --verify only when
     confirmed, never the flash image or a bitstream without its build record or with other bytes.
 """
 from __future__ import annotations
@@ -424,8 +425,12 @@ class TestMake(unittest.TestCase):
 
 
 # ------------------------------------------------------------------------------- program.sh flash path
+FAKE_OFL = (ROOT / "sim" / "board" / "tools" / "fake" / "openFPGALoader").resolve()
+
+
 class TestProgramFlash(unittest.TestCase):
-    """tools/program.sh flash on a release's bitstream, with sim/board/tools/fake/openFPGALoader"""
+    """tools/program.sh flash on a release's bitstream, with sim/board/tools/fake/openFPGALoader named by
+    OPENFPGALOADER (program.sh's override), never the real openFPGALoader: a board may be plugged in"""
 
     def setUp(self):
         self.dir = fresh(f"flash-{self._testMethodName}")
@@ -443,7 +448,7 @@ class TestProgramFlash(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if k not in ("SURFCPU_FLASH_CONFIRM", "CABLE_SERIAL",
                                                                        "OPENFPGALOADER", "BIT", "DESIGN")}
         self.env.update(PATH=f"{ROOT / 'sim/board/tools/fake'}:{os.environ['PATH']}", FAKE_LOG=str(self.log),
-                        FAKE_IDCODE="0x13631093")
+                        FAKE_IDCODE="0x13631093", OPENFPGALOADER=str(FAKE_OFL))
 
     def record(self, bit: Path, **over):
         m = {"design": "surfcpu_arty_a7_ddr", "board": "arty_a7_100t", "part": "xc7a100tcsg324-1",
@@ -456,6 +461,9 @@ class TestProgramFlash(unittest.TestCase):
     def program(self, *args, **env):
         self.log.write_text("")
         e = dict(self.env, **env)
+        # never a real programmer: the stand-in by its full path, and it must be the stand-in
+        assert e["OPENFPGALOADER"] == str(FAKE_OFL), e["OPENFPGALOADER"]
+        assert FAKE_OFL.read_text().startswith("#!/bin/sh\n# Fake openFPGALoader"), FAKE_OFL
         r = subprocess.run(["sh", ROOT / "tools/program.sh"] + [str(a) for a in args], env=e, capture_output=True,
                            text=True, stdin=subprocess.DEVNULL)
         return r, self.log.read_text()
