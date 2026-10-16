@@ -8,6 +8,7 @@
 #   make test-io-spi      surf_spi against the SD card model through SurfBus
 #   make test-io-ps2      surf_ps2 against the PS/2 keyboard model through SurfBus
 #   make test-io-video    surf_video measured and decoded by the VGA capture model
+#   make test-io-icarus   the three blocks together in Icarus (SPI, PS/2, video timing)
 #
 # IO_SEEDS="1 2 3" chooses the seeds; IO_JOBS the parallel C++ compiles per Verilator build.
 
@@ -32,7 +33,7 @@ KB_MODEL_HDR = sim/models/ps2_keyboard_model.h
 VGA_MODEL_SRC = sim/models/vga_capture.cpp
 VGA_MODEL_HDR = sim/models/vga_capture.h
 
-.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video
+.PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus
 lint: lint-io
 test-soc: test-io
 check: check-io
@@ -47,7 +48,7 @@ lint-io:
 # the font ROM is part of check: its sources are pinned and it must match the x86 font
 check-io: test-io-font
 
-test-io: test-io-font test-io-models test-io-spi test-io-ps2 test-io-video
+test-io: test-io-font test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus
 	@echo "test-io: PASS"
 
 test-io-font:
@@ -127,3 +128,14 @@ test-io-video: $(IO_BUILD)/video/Vtb_video
 	    +verilator+rand+reset+2 +verilator+seed+$$s > $(IO_BUILD)/video/run.$$s.txt 2>&1; \
 	  st=$$?; tail -1 $(IO_BUILD)/video/run.$$s.txt; \
 	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/video/run.$$s.txt; exit 1; }; done
+
+# ---------------------------------------------------------------- Icarus
+IO_ALL_RTL = $(IO_PERIPH)/surf_spi.v $(IO_PERIPH)/surf_ps2.v $(VIDEO_RTL) rtl/lib/surf_fifo.v
+
+$(IO_BUILD)/tb_io_icarus.vvp: sim/io/tb_io_icarus.v $(IO_ALL_RTL)
+	@mkdir -p $(dir $@)
+	$(Q)$(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -y rtl/lib -y $(IO_PERIPH) -o $@ sim/io/tb_io_icarus.v
+
+test-io-icarus: $(IO_BUILD)/tb_io_icarus.vvp
+	$(Q)vvp -n $< > $(IO_BUILD)/tb_io_icarus.txt 2>&1; st=$$?; \
+	  if [ $$st -eq 0 ] && grep PASS $(IO_BUILD)/tb_io_icarus.txt; then :; else cat $(IO_BUILD)/tb_io_icarus.txt; exit 1; fi
