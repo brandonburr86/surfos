@@ -29,12 +29,17 @@ then the FAT copies, then directory entries, then FSInfo. Taking away needs the
 reverse, so unlink, truncate to zero and rename put an order point in the middle
 (fat_order_point(): a sync of the volume): the entry is gone from the disk before
 its clusters are freed, and a renamed file's new entry is on the disk before the
-old one goes. A card pulled or a write refused in the middle then leaves at worst
-clusters marked used that no entry points at, a name too many, or a free count
-that is off (fsck.fat finds and fixes them), never an entry pointing at a free
-cluster or at bytes not yet written. An overwrite in place (append, or a write
-into a file's existing bytes) can still leave old and new bytes mixed: FAT32 has
-no journal (surfcpu/docs/CARD.md, "Writing from SurfOS").
+old one goes. A card pulled in the middle then leaves at worst (10/16/26, as B5-B11
+below made it) clusters marked used that no entry points at, a name too many, a
+free count that is off, the two FATs differing, or a file whose size runs past its
+chain (a truncate cut short): fsck.fat finds and fixes them. Not an entry, or a
+link on the way, pointing at a free cluster or at bytes not yet written, except in
+the two narrow cases B7's note below names (a write that stopped early on a device
+that refused after taking part of it; FAT12's entries that straddle two sectors). A
+write the device refuses changes nothing on it. An overwrite in place (append, or a
+write into a file's existing bytes) can still leave old and new bytes mixed: FAT32
+has no journal (surfcpu/docs/CARD.md, "Writing from SurfOS"). It is an order, not
+atomicity: nothing here is power-fail atomic.
 
 10/16/26 (audit B4): a write that stops early leaves no clusters behind. A run of
 blocks is allocated ahead of the data, and when the volume ran out in the middle
@@ -67,7 +72,11 @@ in no order among themselves, so two cases needed one more order point (a sync):
  - a cut (truncate to a smaller size, and trim_chain()): the end of chain and the new size
    reach the disk before the clusters past it are freed, as unlink does; a truncate that
    cannot do that changes nothing (B5); trim_chain() frees them all the same when the
-   device refuses (the links into them reached the disk only if it took writes meanwhile).
+   device refuses (the links into them reached the disk only if it took writes meanwhile,
+   and then a card pulled in the sync that writes the cut and the frees, in the order of
+   their FAT sectors, may leave the chain running into freed clusters: the first narrow case).
+The second: a FAT12 entry that straddles two sectors goes out in two blocks and can be cut
+in half (a FAT16 or FAT32 entry never straddles).
 A file that grows costs a sync of the data and the tables (bsync_order(), not the entries:
 fat_table_point()) each time its chain crosses into another FAT sector: every 128
 clusters on FAT32, 256 on FAT16 (every 4 MB with 32 KB clusters; every 64 KB with the

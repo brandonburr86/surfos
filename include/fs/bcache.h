@@ -25,8 +25,11 @@ reused meanwhile; bsync() tries each run once and fails when one did.
 (bdirty_order()): a device's blocks of one order reach it only after every
 dirty block of a lower order has, by bsync() and when a block is written to
 make room. FAT gives file data 0, its tables 1, directory entries 2, FSInfo 3,
-so whatever an interruption stops, nothing on the disk points at data that is
-not there yet.
+so that an interruption leaves what fsck.fat repairs rather than an entry
+pointing at data that is not there yet (fs/fat.c says what can still be left;
+10/16/26, B7: the order is checked at every write). An order, not atomicity: a
+request of several blocks can stop in the middle, and a card can lose the block
+it was writing when its power went.
 
 10/16/26 (audit B6): a device whose blocks fail keeps at most BCACHE_HOLD dirty
 blocks; past that its new writes fail at once (bcache_room(), bget()), and the
