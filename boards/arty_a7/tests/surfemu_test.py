@@ -109,6 +109,8 @@ def main():
                   re.search(r'irq\s+surf_intc at 0x[0-9a-f]{8}', out),
                   'drivers: serial, gpio, ps2kbd and sdcard started; surf_intc and the timer listed')
             check('SELFTEST PASS' in out, 'selftest: SELFTEST PASS on the emulated SoC')
+            check(re.search(r'kernel heap 0x8[0-9a-f]{7}-0x8effffff', out),
+                  'the kernel heap ends 16 MiB below the 256 MiB SurfBoot reports (0x8F000000, as before)')
             check(re.search(r'up [\d.]+ s \(\d+ ticks at 100 Hz', out), 'uptime: the tick counts at 100 Hz')
             check('Kernel panic' not in out and 'Wipeout' not in out and 'killed by' not in out and 'BOOT PROBLEM' not in out,
                   'no panic, no killed task, no boot problem')

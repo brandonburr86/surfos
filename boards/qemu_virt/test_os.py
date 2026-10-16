@@ -300,10 +300,10 @@ def elf_image(path):
     return base, max(a + n for a, n in segs) - base
 
 
-def stub_boot(args, disk, work, cmdline, package=None, corrupt=False):
+def stub_boot(args, disk, work, cmdline, package=None, corrupt=False, ram_mb=256):
     """the kernel entered as SurfBoot hands over, by the stand-in (boards/qemu_virt/stub): SURFOS.BIN copied from
     STUB_STAGE to its load address or, without a package, surfos.elf put in place by QEMU's loader; a1 points at a
-    boot information block with this command line. (QEMU, the image's base and memory size)"""
+    boot information block with this command line and RAM size. (QEMU, the image's base and memory size)"""
     if package:
         hdr = package_header(package)
         base, mem, loads, elf = hdr['load'], hdr['mem'], [(package, STUB_STAGE)], None
@@ -311,7 +311,7 @@ def stub_boot(args, disk, work, cmdline, package=None, corrupt=False):
         (base, mem), loads, elf = elf_image(args.kernel), [], args.kernel
     info = os.path.join(work, 'bootinfo.bin')
     with open(info, 'wb') as f:
-        f.write(bootinfo_blob(cmdline, 256 << 20, base, mem, corrupt))
+        f.write(bootinfo_blob(cmdline, ram_mb << 20, base, mem, corrupt))
     q = Qemu(args.qemu, ['-bios', os.path.abspath(args.stub)], disk, args.verbose,
              loads=loads + [(info, STUB_BOOTINFO)], elf=elf)
     return q, base, mem
@@ -321,7 +321,8 @@ def handoff_boots(args, disk, check, work):
     """the boot ABI's handoff: a0, a1 and a2 and a boot information block with a command line, then a corrupted one"""
     transcript = b''
     for corrupt in (False, True):
-        q, base, mem = stub_boot(args, disk, work, 'ascii surftest=1', corrupt=corrupt)
+        # 128 MiB of DDR in the boot information: the heap ends 16 MiB below it (BOOT-ABI.md's ddr_top)
+        q, base, mem = stub_boot(args, disk, work, 'ascii surftest=1', corrupt=corrupt, ram_mb=128)
         try:
             ok = q.expect("Brandon Burr's SurfOS", 30) and q.expect(PROMPT, 30)
             boot_log = q.since(0)
@@ -333,9 +334,11 @@ def handoff_boots(args, disk, check, work):
                 ok, out = q.cmd('bootinfo', ['boot information: SurfBoot 0.0.1 (53545542)'])
                 check(ok and "command line: 'ascii surftest=1'" in out and 'handoff a0 0, a1 0x8c000000, a2 0x49465253' in out,
                       'handoff: bootinfo shows the handoff (a0 0, a1, a2 = the magic), SurfBoot\'s block and its command line')
-                check('RAM 0x80000000 + 256 MB (calibrated, SurfBoot\'s quick test passed)' in out and
+                check('RAM 0x80000000 + 128 MB (calibrated, SurfBoot\'s quick test passed)' in out and
                       'image 0x%08x + %d bytes' % (base, mem) in out,
                       'handoff: the RAM size and the image\'s memory size come from the boot information')
+                check(re.search(r'kernel heap 0x8[0-9a-f]{7}-0x86ffffff', boot_log),
+                      'handoff: 128 MiB of DDR: the kernel heap ends at 0x87000000, 16 MiB below it (ddr_top)')
                 ok, out = q.cmd('ls /rd0p1', ['README.TXT'])
                 check(ok, 'handoff: the RAM disk works as before')
                 check(q.poweroff() == 0, 'handoff: poweroff')

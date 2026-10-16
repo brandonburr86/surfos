@@ -48,7 +48,13 @@ struct heap {
     u_long bytes_used, bytes_free, blocks_used, blocks_free, grows;
 };
 
+#ifdef SURFOS_RISCV32
+/* 10/16/26 (SurfCPU): the kernel heap ends where the boot information says (arch/riscv32/mem.c), known
+   only at run time: heap_init() sets the bounds */
+static struct heap kheap = { "kernel", 1, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, 0 };
+#else
 static struct heap kheap = { "kernel", 1, KHEAP_START, KHEAP_END, KHEAP_START, NULL, NULL, 0, 0, 0, 0, 0 };
+#endif
 static struct heap dmaheap = { "dma", 2, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, 0 };  /* the arena's address is set by heap_init() */
 
 static inline struct hblock *hdr_of(void *payload) { return (struct hblock *)((u_long)payload - HEAP_HDR); }
@@ -268,6 +274,9 @@ void dmaheap_stats(struct heap_stats *st) { heap_fill_stats(&dmaheap, st); }
 bool kheap_check(void) { return heap_check(&kheap) && heap_check(&dmaheap); }
 
 void heap_init(void) {
+#ifdef SURFOS_RISCV32
+    kheap.start = KHEAP_START; kheap.limit = KHEAP_END;             /* 10/16/26 (SurfCPU): known now */
+#endif
     kheap.brk = kheap.start; kheap.free_list = NULL; kheap.last = NULL;
     dmaheap.start = PHEAP_START; dmaheap.limit = PHEAP_END;      /* placed by pmm_init(), mapped 1:1 */
     dmaheap.brk = dmaheap.start; dmaheap.free_list = NULL; dmaheap.last = NULL;
