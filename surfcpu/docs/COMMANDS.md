@@ -11,6 +11,7 @@ connected; `V=1` shows full commands.
 | Command | Runs on | What it does | Status |
 |---|---|---|---|
 | `make image` | Mac | builds the toolchain container from `devenv/Dockerfile` | works |
+| `make openxc7-image` | Mac | builds the open-source bitstream flow's image `surfcpu-openxc7` from `devenv/openxc7/Dockerfile` (about 6 minutes; `devenv/openxc7/build-image.sh --rm-builder` frees its build cache afterwards) | works |
 | `make doctor` | Mac | probes the Mac, Docker and the container, the board's USB (FTDI, JTAG IDCODE), the serial port, mounted FAT volumes and the build-host settings; changes nothing | works |
 | `make gen` / `make check-generated` | container | regenerate / verify the files made from `spec/soc.toml` | works |
 | `make lint` | container | Verilator `-Wall` lint of every RTL module | works for the merged areas (lib, io, board); grows with the tracks |
@@ -20,7 +21,9 @@ connected; `V=1` shows full commands.
 | `make test-os` | container | the riscv32 SurfOS kernel under QEMU `virt` | track os |
 | `make build-rom` | container | `build/fw/surfboot.{elf,bin,mem}`, the BRAM diagnostics `bramdiag.mem` and `DDRDIAG.BIN` | works |
 | `make build-kernel` | container | `../build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` | track os |
-| `make build-fpga` | Mac → build host | the bitstream, reports and manifest of `DESIGN` in `build/fpga/BOARD/DESIGN/` (docs/BUILD-HOST.md, BOARD.md section 8); `DRY_RUN=1` stages it and prints every command without contacting the host | blocked: no build host |
+| `make build-fpga` | Mac → build host | the bitstream, reports and manifest of `DESIGN` in `build/fpga/BOARD/DESIGN/` with Vivado on the host of `~/.config/surfcpu/build-host.conf` (docs/BUILD-HOST.md, BOARD.md section 8); `DRY_RUN=1` stages it and prints every command without contacting the host | blocked: no build host |
+| `make build-fpga FLOW=openxc7` | Mac (Docker) | the same with the open-source flow on this Mac (docs/OPEN-FLOW.md), no build-host.conf needed: Yosys, nextpnr and Project X-Ray in the `surfcpu-openxc7` image, every check of the flow, the constraints nextpnr cannot check listed in the output and the manifest; `DRY_RUN=1` prints the commands | works for `DESIGN=arty_a7_baseline` on both boards; never yet on a board; the full SoC waits for the soc track |
+| `tools/fpga-build.sh --fetch [--design D] BOARD` | Mac → build host | brings back the results of the last Vivado run over ssh after a lost connection (Vivado keeps running there under nohup) and gates them as usual | blocked: no build host |
 | `tools/program.sh detect BOARD` | Mac | shows the IDCODE on the JTAG chain and whether it is `BOARD`'s FPGA; loads nothing | pending: board, openFPGALoader |
 | `make program-volatile` | Mac | checks for one FT2232H cable (or the one `CABLE_SERIAL=` names), one device on its JTAG chain with `BOARD`'s IDCODE, a bitstream built for that FPGA and package (`DESIGN`'s last build, or `BIT=`) whose manifest passed and matches the file, then loads it into FPGA RAM over USB/JTAG (lost at power-off) | pending: board, openFPGALoader |
 | `make program-flash` | Mac | writes the configuration flash (milestone 9): refused unless `SURFCPU_FLASH_CONFIRM=write-flash-BOARD` is given (or the board name typed at the prompt) and the bitstream's `tools/fpga-build.sh` manifest passed for this file, board and part | later |
