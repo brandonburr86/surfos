@@ -6,7 +6,8 @@ File: test_spi.cpp Date: 10/15/26 (SurfCPU)
 Verilator harness for surf_spi (top module) with a SurfBus master standing in for the CPU
 and, on the pins, either a loopback (MISO = MOSI) or SdCardModel. Checks:
   * reset values (DIV for 400 kHz, CS released, SCLK low, MOSI high) and the register rules:
-    error responses for unknown offsets, partial words and fetches, with no side effect;
+    error responses for unknown offsets, partial words and fetches, with no side effect, also
+    with live state (DONE and OVR set, DIV not at its reset value);
   * mode 0 at the pins for every DIV tried: SCLK idles low, MOSI never changes on a rising
     edge, half periods of exactly DIV + 1 cycles, 8 rising edges per byte, CS changing only
     with SCLK low; a byte takes 16 x (DIV + 1) cycles and the waiting DATA read returns it;
@@ -206,6 +207,28 @@ static void test_loopback(Tb &tb, Bus &bus, unsigned seed) {
     st = bus.rd(B + SURF_SPI_STATUS);
     CHECK((st & SURF_SPI_STATUS_DONE_MASK) && !(st & SURF_SPI_STATUS_BUSY_MASK), "DONE after the transfer: %08x", st);
     CHECK(tb.top->irq == 0, "irq without DONE_IE");
+    // live state for the error rules: DONE and OVR set, DIV = 2. Refused writes (partial words)
+    // and fetches must not clear a sticky bit, change DIV or CTRL, or start a transfer.
+    bus.wr(B + SURF_SPI_DIV, 2);
+    const uint32_t live = bus.rd(B + SURF_SPI_STATUS);
+    CHECK((live & (SURF_SPI_STATUS_DONE_MASK | SURF_SPI_STATUS_OVR_MASK)) ==
+              (SURF_SPI_STATUS_DONE_MASK | SURF_SPI_STATUS_OVR_MASK), "DONE and OVR not both set: %08x", live);
+    const uint8_t pbes[] = {0x1, 0x3, 0x7, 0xE, 0xC, 0x0};
+    for (uint8_t be : pbes) {
+        CHECK(bus.write(B + SURF_SPI_STATUS, 0xFFFFFFFF, be).err, "partial STATUS write (be %x) not an error", be);
+        CHECK(bus.write(B + SURF_SPI_DIV, 0x55, be).err, "partial DIV write (be %x) not an error", be);
+        CHECK(bus.write(B + SURF_SPI_CTRL, SURF_SPI_CTRL_CS_MASK | SURF_SPI_CTRL_DONE_IE_MASK, be).err,
+              "partial CTRL write (be %x) not an error", be);
+        CHECK(bus.write(B + SURF_SPI_DATA, 0x77, be).err, "partial DATA write (be %x) not an error", be);
+    }
+    CHECK(bus.fetch(B + SURF_SPI_STATUS).err && bus.fetch(B + SURF_SPI_DIV).err, "fetches not errors");
+    bus.idle(2);
+    CHECK(bus.rd(B + SURF_SPI_STATUS) == live && bus.rd(B + SURF_SPI_DIV) == 2 && bus.rd(B + SURF_SPI_CTRL) == 0 &&
+              tb.top->cs_n == 1 && tb.top->irq == 0,
+          "refused writes changed STATUS %08x (was %08x), DIV %u or CTRL %08x", bus.rd(B + SURF_SPI_STATUS), live,
+          bus.rd(B + SURF_SPI_DIV), bus.rd(B + SURF_SPI_CTRL));
+    CHECK((bus.rd(B + SURF_SPI_DATA) & 0xFF) == 0xA5, "a refused DATA write started a transfer");
+    bus.wr(B + SURF_SPI_DIV, 3);
     bus.wr(B + SURF_SPI_CTRL, SURF_SPI_CTRL_DONE_IE_MASK);
     bus.idle(1);
     CHECK(tb.top->irq == 1, "irq with DONE and DONE_IE");
