@@ -3,8 +3,9 @@
 Run from `surfcpu/` (`make <target>`) or from the repository root (`make -C surfcpu <target>`).
 On the Mac, toolchain targets re-run themselves inside the `surfcpu-toolchain` container;
 board, card and build-host targets run on the Mac. Variables: `BOARD=arty_a7_100t` (default)
-or `arty_a7_35t`; `DESIGN=arty_a7_baseline` (the milestone 1 design) or `surfcpu_arty_a7_top`
-(default) for the bitstream targets; `BIT=file.bit` to program a particular file;
+or `arty_a7_35t`; `DESIGN=arty_a7_baseline` (the milestone 1 design), `surfcpu_arty_a7_bramdiag`
+(the SoC with the BRAM diagnostics, milestone 3) or `surfcpu_arty_a7_top` (the SoC with SurfBoot;
+default) for the bitstream targets; `BIT=file.bit` to program a particular file;
 `CABLE_SERIAL=` the serial number of the board's USB cable when more than one FT2232H is
 connected; `V=1` shows full commands.
 
@@ -22,7 +23,7 @@ connected; `V=1` shows full commands.
 | `make build-rom` | container | `build/fw/surfboot.{elf,bin,mem}`, the BRAM diagnostics `bramdiag.mem` and `DDRDIAG.BIN` | works |
 | `make build-kernel` | container | `../build/riscv32/{arty_a7,qemu_virt}/...`; `SURFOS.BIN` packed by `tools/surfimg.py` | works (never booted on the board) |
 | `make build-fpga` | Mac → build host | the bitstream, reports and manifest of `DESIGN` in `build/fpga/BOARD/DESIGN/` with Vivado on the host of `~/.config/surfcpu/build-host.conf` (docs/BUILD-HOST.md, BOARD.md section 8); `DRY_RUN=1` stages it and prints every command without contacting the host | blocked: no build host |
-| `make build-fpga FLOW=openxc7` | Mac (Docker) | the same with the open-source flow on this Mac (docs/OPEN-FLOW.md), no build-host.conf needed: Yosys, nextpnr and Project X-Ray in the `surfcpu-openxc7` image, every check of the flow, the constraints nextpnr cannot check listed in the output and the manifest; `DRY_RUN=1` prints the commands | works for `DESIGN=arty_a7_baseline` on both boards; never yet on a board; the full SoC top is next |
+| `make build-fpga FLOW=openxc7` | Mac (Docker) | the same with the open-source flow on this Mac (docs/OPEN-FLOW.md), no build-host.conf needed: Yosys, nextpnr and Project X-Ray in the `surfcpu-openxc7` image, every check of the flow, the constraints nextpnr cannot check listed in the output and the manifest; `DRY_RUN=1` prints the commands | works for `arty_a7_baseline`, `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (no DDR yet) on both boards; never yet on a board |
 | `tools/fpga-build.sh --fetch [--design D] BOARD` | Mac → build host | brings back the results of the last Vivado run over ssh after a lost connection (Vivado keeps running there under nohup) and gates them as usual | blocked: no build host |
 | `tools/program.sh detect BOARD` | Mac | shows the IDCODE on the JTAG chain and whether it is `BOARD`'s FPGA; loads nothing | pending: board, openFPGALoader |
 | `make program-volatile` | Mac | checks for one FT2232H cable (or the one `CABLE_SERIAL=` names), one device on its JTAG chain with `BOARD`'s IDCODE, a bitstream built for that FPGA and package (`DESIGN`'s last build, or `BIT=`) whose manifest passed and matches the file, then loads it into FPGA RAM over USB/JTAG (lost at power-off) | pending: board, openFPGALoader |
