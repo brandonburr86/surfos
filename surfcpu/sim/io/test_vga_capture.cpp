@@ -112,8 +112,8 @@ static void test_timings() {
     g.run(cap, 4);                         // frame 0 finds the polarity; 2 and 3 count the stray pixel
     CHECK(cap.measured().blank_pixels >= 2, "blank pixels %llu", (unsigned long long)cap.measured().blank_pixels);
     // the refresh rate of the board's timing
-    CHECK(std::abs(cap.measured().frame_hz(25177305) - 59.94596) < 0.0001, "frame rate %.5f",
-          cap.measured().frame_hz(25177305));
+    CHECK(std::abs(cap.measured().frame_hz(25173611) - 59.93717) < 0.0001, "frame rate %.5f",
+          cap.measured().frame_hz(25173611));
 }
 
 static void test_decode(unsigned seed, const std::string &dir) {

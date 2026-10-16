@@ -14,7 +14,7 @@ Unmapped addresses, fetches from regions without *fetch*, and stores to regions 
 | `sys_hz` | 25,000,000 |
 | `timebase_hz` | 1,000,000 |
 | `pix_hz_nominal` | 25,175,000 |
-| `pix_hz` | 25,177,305 |
+| `pix_hz` | 25,173,611 |
 
 ## Regions
 

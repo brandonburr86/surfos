@@ -14,7 +14,7 @@
 [input]
 clock = "osc_hz"            # the board's 100 MHz oscillator (pin E3, an MRCC input of bank 35)
 
-# sys_clk: the CPU and SurfBus clock. A PLL, because the pixel MMCM's VCO (887.5 MHz) has no
+# sys_clk: the CPU and SurfBus clock. A PLL, because the pixel MMCM's VCO (906.25 MHz) has no
 # integer divide that gives 25 MHz and only CLKOUT0 of an MMCM can divide fractionally.
 # VCO 1000 MHz sits well inside 800..1600 MHz and also divides to 200 MHz (/5) and
 # 166.667 MHz (/6), the reference and system clocks AMD's MIG wants on the Arty, should the
@@ -26,12 +26,16 @@ divclk_divide = 1
 clkfbout_mult = 10
 clkout0_divide = 40
 
-# pix_clk: the VGA pixel clock. The MMCM's fractional feedback and CLKOUT0 dividers (steps of
-# 1/8) get within 92 ppm of the 25.175 MHz standard; a 640x480 monitor accepts that easily
-# (VESA allows +-0.5%).
+# pix_clk: the VGA pixel clock. 100 MHz / 2 x 18.125 / 36 = 25,173,611.1 Hz (PFD 50 MHz, VCO
+# 906.25 MHz), 55 ppm below the 25.175 MHz standard; a 640x480 monitor accepts that easily
+# (VESA allows +-0.5%). Until 2026-10-15 it was 100 MHz x 8.875 / 35.25 = 25,177,305 Hz
+# (+92 ppm), but nextpnr 1.0.0, the open flow's place and route, writes a fractional divider
+# with an odd integer part (35.25) into the bitstream unlike AMD's algorithm and Vivado
+# (docs/OPEN-FLOW.md section 6.2). Both dividers here are encoded alike by both flows, and
+# clockplan.py refuses fractional settings with an odd integer part.
 [pix]
 spec_hz = "pix_hz"
 primitive = "MMCME2_BASE"
-divclk_divide = 1
-clkfbout_mult_f = 8.875
-clkout0_divide_f = 35.25
+divclk_divide = 2
+clkfbout_mult_f = 18.125
+clkout0_divide_f = 36.0

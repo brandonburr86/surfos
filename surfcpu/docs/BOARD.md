@@ -46,7 +46,7 @@ each output reaches its domain through a BUFG.
 |---|---|---|---|---|---|
 | `clk100` | `clocks.osc_hz` = 100 MHz | oscillator | `create_clock -period 10.000` (generated) | | |
 | `sys_clk` | `clocks.sys_hz` = 25,000,000 Hz, exactly | PLLE2_BASE | D = 1, M = 10, O0 = 40 | 1000 MHz | 100 MHz |
-| `pix_clk` | `clocks.pix_hz` = 25,177,305 Hz (25,177,304.965) | MMCME2_BASE | D = 1, M = 8.875, O0 = 35.25 | 887.5 MHz | 100 MHz |
+| `pix_clk` | `clocks.pix_hz` = 25,173,611 Hz (25,173,611.11) | MMCME2_BASE | D = 2, M = 18.125, O0 = 36 | 906.25 MHz | 50 MHz |
 
 The numbers are not typed anywhere by hand: `ip/clocking/arty_a7_clocks.toml` chooses the
 settings, and `ip/clocking/clockplan.py` checks them and generates
@@ -63,23 +63,35 @@ settings, and `ip/clocking/clockplan.py` checks them and generates
 | D | 1..106 | 1..56 | same |
 | O0 | 1..128, or 2.000..128.000 in steps of 0.125 | 1..128 | same |
 | CLKIN1_PERIOD | 0.938..100 ns | 0.938..52.631 ns | same |
+| Fractional M or O0 (open flow) | integer part even, not 2.125 | - | docs/OPEN-FLOW.md 6.2 |
 
 The Arty A7-100T carries XC7A100TCSG324-1 (the -1 grade at VCCINT 1.0 V) and the A7-35T
 XC7A35TICSG324-1L (the -1LI grade, VCCINT 0.95 V; RM §1 and §3, schematic sheet 11). DS181
-gives both grades the same clock-tile limits. Margins: the MMCM's VCO is 287.5 MHz above its
-minimum and 312.5 MHz below its maximum, the PLL's 200 and 600 MHz. Only CLKOUT0 and the
-feedback of an MMCM divide fractionally, and 887.5 MHz has no integer divide giving 25 MHz,
+gives both grades the same clock-tile limits. Margins: the MMCM's VCO is 306.25 MHz above its
+minimum and 293.75 MHz below its maximum, the PLL's 200 and 600 MHz. Only CLKOUT0 and the
+feedback of an MMCM divide fractionally, and 906.25 MHz has no integer divide giving 25 MHz,
 hence the separate PLL for `sys_clk`. Its VCO of 1000 MHz also divides to 200 MHz (/5) and
 166.667 MHz (/6), the reference and system clocks AMD's memory controller wants on this board
 (RM §5.1), should the ddr track take them from here.
 
-`pix_clk` is +91.6 ppm from the 25.175 MHz standard; a frame lasts 800 x 525 pixels, so the
-monitor sees 59.946 Hz. `clockplan.py report` lists the legal alternatives (evidence
-`clocks.txt`): D = 1, M = 9, O0 = 35.75 gives 25,174,825.2 Hz (-6.9 ppm) with a 900 MHz VCO
-that also divides to exactly 25 MHz (/36), so one MMCM could make both clocks and free a CMT.
-That would change `clocks.pix_hz`, a frozen contract, which stays at 25,177,305 Hz (+91.6 ppm
-is far inside what a monitor accepts, and both parts have clock tiles to spare): noted here only
-as a possible later change.
+`pix_clk` is -55.2 ppm from the 25.175 MHz standard; a line lasts 800 pixels and a frame
+800 x 525, so the monitor sees 31.4670 kHz and 59.9372 Hz (VESA allows +-0.5 %).
+
+**Changed 2026-10-15** (the contract `clocks.pix_hz`, with the integrator's authorization):
+`pix_clk` was 100 MHz x 8.875 / 35.25 = 25,177,305 Hz (+91.6 ppm, 59.946 Hz). The open flow's
+nextpnr 1.0.0 writes an MMCM fractional divider whose integer part is odd (35.25) into the
+bitstream differently from AMD's XAPP888 algorithm and from Vivado (docs/OPEN-FLOW.md section
+6.2; the flow's `cmtcheck.py` catches it, and what the chip would make of it is unknown). The
+new setting, 100 MHz / 2 x 18.125 / 36, has an even integer part in its one fractional divider
+and an integer output divider, so both flows encode it alike; the flow track proved it through
+`cmtcheck.py` in a real build (evidence `../flow/mmcm.txt`). `clockplan.py` now refuses a
+fractional M or O0 with an odd integer part (or 2.125). `clockplan.py report` lists closer
+settings (evidence `clocks.txt`), such as D = 5, M = 58.375, O0 = 46.375 at +8.0 ppm, but with
+two fractional dividers and a VCO 32.5 MHz below its maximum; 55 ppm is far inside what a
+monitor accepts.
+The one-MMCM-for-both option noted before (D = 1, M = 9, O0 = 35.75: -6.9 ppm, its 900 MHz VCO
+also divides to 25 MHz) has an odd fractional divider too, so it is out while the open flow is
+in use.
 
 **Simulation.** `sim/board/prims/` models MMCME2_BASE, PLLE2_BASE, BUFG and IOBUF with AMD's
 names, parameters and ports, for Icarus and Verilator (`--timing`). The tile models check their
@@ -186,12 +198,12 @@ No CPU. After configuration it shows:
 The RGB LEDs are lit 1/8 of the time (RM §9.1 advises against full drive). A line looks like:
 
 ```
-SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty 1760560000 | up 000012 s | pix 25177305 Hz | sw 0101 btn 0000 rx 41
+SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d dirty 1760560000 | up 000012 s | pix 25173611 Hz | sw 0101 btn 0000 rx 41
 ```
 
 board and sysinfo `BOARD_ID`; the build's commit, `clean` or `dirty` (`sim` in a simulation)
 and build time (seconds since 1970); seconds since reset; the pixel clock measured against
-`sys_clk` over the last second (25,177,305 ± 1 when the MMCM is right; the first line covers
+`sys_clk` over the last second (25,173,611 ± 1 when the MMCM is right; the first line covers
 the time since reset and may be off by a few counts); the switches and buttons (SW3..SW0,
 BTN3..BTN0); the last byte received on the RX pin in hex (`--` before the first one), which
 checks the FPGA's receive pin too. The UART runs at `sys_hz / round(sys_hz / 115200)` =
@@ -208,7 +220,7 @@ Milestone 1 closes only with that physical result plus the post-route timing and
 **Tests.** `baseline_rt` (Verilator, C++) runs the logic with its real one-second timing for
 2.05 s at the exact `sys_clk` and `pix_clk` frequencies: heartbeat periods of exactly
 25,000,000 cycles, the pixel heartbeat within 3 cycles, two decoded lines exactly one second
-apart with the exact text, the pixel figure 25,177,305 ± 2, and the switch, button and RX echo.
+apart with the exact text, the pixel figure 25,173,611 ± 2, and the switch, button and RX echo.
 `tb_baseline` runs the whole top from its pins with the clock tile models and a 13 ms "second"
 (Verilator, with a RESET press; Icarus, a shorter run): lines decoded at the real 115200 baud,
 the pixel count for the shortened second ± 1, the 1/8 RGB duty cycle, the heartbeat lit only in

@@ -17,7 +17,7 @@
 #define SURF_SYS_HZ 25000000 /* Hz */
 #define SURF_TIMEBASE_HZ 1000000 /* Hz */
 #define SURF_PIX_HZ_NOMINAL 25175000 /* Hz */
-#define SURF_PIX_HZ 25177305 /* Hz */
+#define SURF_PIX_HZ 25173611 /* Hz */
 #define SURF_BOARD_SIM 0x000000F0u /* sysinfo.BOARD_ID */
 #define SURF_BOARD_ARTY_A7_35T 0x00000135u /* sysinfo.BOARD_ID */
 #define SURF_BOARD_ARTY_A7_100T 0x00000100u /* sysinfo.BOARD_ID */
