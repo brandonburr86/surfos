@@ -14,6 +14,8 @@ for the 64 KiB boot ROM).
 
 Refuses a binary larger than the ROM. Only the Python standard library is used.
 """
+from __future__ import annotations
+
 import argparse
 import os
 import struct

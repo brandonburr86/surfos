@@ -23,9 +23,12 @@ container (make test-fw):
               on the card, dry run, first install, update with backup, user files kept,
               damage on the way to the card caught by the remount, unmount and mount
               failures reported as not verified, --verify-only, system files, explicit backup
+  Python 3.9  the tools the Mac may run with /usr/bin/python3 (3.9.6) parse with 3.9's grammar
+              and postpone annotations; --help runs under a python3.9 when one is on PATH
 
     python3 firmware/tests/test_tools.py [-v] [-k PATTERN]
 """
+import ast
 import json
 import os
 import random
@@ -422,6 +425,25 @@ class TestIsaAudit(unittest.TestCase):
                 else:
                     self.assertEqual(a.returncode, 1, a.stdout)
                     self.assertIn(problem, a.stdout)
+
+
+class TestPython39(unittest.TestCase):
+    """deploy-sd.py runs on the Mac, maybe with its /usr/bin/python3 (3.9.6), and imports
+    surfimg.py (which imports isa-audit.py); mkcard.py and bin2mem.py may run there too."""
+    MAC_TOOLS = ("deploy-sd.py", "surfimg.py", "isa-audit.py", "mkcard.py", "bin2mem.py")
+
+    def test_tools_parse_as_python_3_9(self):
+        for name in self.MAC_TOOLS:
+            with self.subTest(name):
+                tree = ast.parse((TOOLS / name).read_text(), filename=name, feature_version=(3, 9))
+                future = {a.name for n in tree.body if isinstance(n, ast.ImportFrom) and n.module == "__future__"
+                          for a in n.names}
+                self.assertIn("annotations", future, f"{name}: `X | None` annotations need the __future__ import")
+        py39 = shutil.which("python3.9")
+        for name in self.MAC_TOOLS if py39 else ():
+            with self.subTest(f"{name} --help under {py39}"):
+                r = run(py39, TOOLS / name, "--help", env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+                self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class TestDeploySd(unittest.TestCase):
