@@ -1,0 +1,41 @@
+# Random programs on the real core, 2026-10-15/16
+# python3 tools/rvrun.py --dut $TB --suites random --seed-list 1001,...,2000 --dut-seeds 1 \
+#     --ilat 1:4 --dlat 1:6 --coverage --jobs 3
+# generator: tools/rvgen.py (rvgen 2: 16-bit encodings with any upper half), --length 3000 (static
+# instructions in the body); reference: Spike with surfcpu-contract.patch; DUT: the cpu track's core,
+# the current one (surfcpu 231ad56) and before it e792960 (docs/evidence/verif/core-results.txt says
+# which builds). Traces of passing runs and the passing programs' files are deleted as the run goes;
+# nothing failed, so nothing was kept.
+
+current core:  rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 54.4 s
+e792960 core:  rvrun summary: random 1000 passed 0 failed; 5120980 retirements compared in 58.0 s
+
+what Spike's 1000 traces contain (the runner's --coverage, counted in memory):
+  5120980 retirements
+  traps by mcause 0:23483 1:12933 2:79501 3:24810 4:24734 5:18474 6:24832 7:18670 b:24588 (total 252025)
+    (0 misaligned fetch, 1 fetch access fault, 2 illegal instruction, 3 breakpoint, 4 misaligned
+    load, 5 load access fault, 6 misaligned store, 7 store access fault, b ECALL from M)
+  branches 442728, taken 115341; loads into x0 12354
+  55 distinct mnemonics retired: add=34783 addi=987412 and=35035 andi=49777 auipc=151449 beq=267402
+    bge=15739 bgeu=15496 blt=17003 bltu=17072 bne=110016 csrrc=24918 csrrci=19726 csrrs=784149
+    csrrsi=19689 csrrw=305088 csrrwi=23515 div=34210 divu=34269 fence=11944 fence.i=9787
+    fence.tso=1434 jal=74565 jalr=87199 lb=49956 lbu=49391 lh=49320 lhu=50010 lui=162198 lw=49453
+    mret=261242 mul=34025 mulh=33912 mulhsu=33892 mulhu=34224 or=34553 ori=49747 rem=34200
+    remu=34046 sb=82602 sh=82927 sll=34340 slli=33229 slt=35013 slti=51969 sltiu=49637 sltu=34857
+    sra=34636 srai=33096 srl=35154 srli=33094 sub=34967 sw=114589 xor=34284 xori=52715
+  (ECALL and EBREAK always trap, so they show as causes b and 3, not as retirements; the generator
+  never uses WFI; PAUSE, a FENCE encoding, is not singled out)
+
+The other random runs on the core (core-results.txt): seeds 1-50 with DUT seeds 1, 2, 3 at
+--ilat 1:4 --dlat 1:6 (150 runs) and at 1:1 (50 runs), seeds 51-150 at --ilat 6:30 --dlat 6:30
+(100 runs): all pass. Seeds 1-50 hold 255956 retirements and 12552 traps of all nine causes.
+
+make test-ref runs 12 seeds against the Spike stand-in, plus the generator's own tests on Spike
+(sim/ref/tests/test_rvgen.py):
+  every illegal word of a 3000-word illegal-only program (seed 4242) traps with mcause 2 and mtval =
+    the word (its 16 bits for a 16-bit encoding);
+  each of the 6 fault addresses faults for lw, lb, sw, sb (mcause 5/7) and, when 4-aligned, for a
+    fetch (mcause 1);
+  seeds 101 and 102 pass with traps of all nine causes; the same seed gives the same text; the
+    never-list (no WFI, timing CSRs, marchid/mimpid reads, pmp*, trigger CSRs, misa/minstreth writes,
+    mtvec MODE bits, stores outside the data area).
