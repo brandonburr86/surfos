@@ -161,6 +161,8 @@ module surf_ddr_bridge #(
     reg              rsp_valid_q = 1'b0;
     reg  [31:0]      rsp_rdata_q = 32'h0;
     reg              rsp_err_q   = 1'b0;
+    reg              rs_got      = 1'b0;    // a response was taken last cycle ...
+    reg  [RS_W-1:0]  rs_q        = {RS_W{1'b0}};   // ... into here (the crossing ends in registers)
 
     wire             rq_ready;              // request mailbox, source side
     wire             rs_valid;              // response mailbox, destination side
@@ -173,12 +175,17 @@ module surf_ddr_bridge #(
     wire             expire  = busy && wd_count == TO_LAST;   // the watchdog's last cycle
     wire             rq_send = !rst && ((accept && usable) || (retry && !expire));
     wire [RQ_W-1:0]  rq_din  = retry ? pend : new_req;
-    wire             rs_take = !rst && rs_valid;          // stale responses are taken and dropped
-    wire             rs_mine = busy && sent && (rs_dout[RS_W-1 -: 4] == cur_id);
+    wire             rs_take = !rst && rs_valid;          // every response is taken; stale ones dropped
+    wire             rs_mine = rs_got && busy && sent && (rs_q[RS_W-1 -: 4] == cur_id);
 
     always @(posedge clk) begin
         if (!rst && accept && usable)
             next_id <= next_id + 1'b1;
+    end
+
+    always @(posedge clk) begin
+        if (rs_take) rs_q <= rs_dout;
+        rs_got <= rs_take;
     end
 
     always @(posedge clk) begin
@@ -207,11 +214,11 @@ module surf_ddr_bridge #(
             end else if (busy) begin
                 if (retry && rq_ready && !expire)
                     sent <= 1'b1;
-                if (rs_take && rs_mine) begin
+                if (rs_mine) begin
                     busy        <= 1'b0;
                     rsp_valid_q <= 1'b1;
-                    rsp_err_q   <= rs_dout[32];
-                    rsp_rdata_q <= rs_dout[31:0];
+                    rsp_err_q   <= rs_q[32];
+                    rsp_rdata_q <= rs_q[31:0];
                 end else if (expire) begin
                     busy        <= 1'b0;                // watchdog: answer, report, stop
                     timeout_q   <= 1'b1;
@@ -248,12 +255,13 @@ module surf_ddr_bridge #(
         .dst_clk(clk),    .dst_valid(rs_valid), .dst_data(rs_dout), .dst_take(rs_take));
 
     // ================================================================ ui_clk domain
-    localparam [2:0] U_IDLE  = 3'd0,    // wait for a request
-                     U_WDATA = 3'd1,    // write data into the MIG's write FIFO
-                     U_WCMD  = 3'd2,    // then the write command
-                     U_RCMD  = 3'd3,    // read command
-                     U_RDATA = 3'd4,    // wait for the read data
-                     U_RESP  = 3'd5;    // put the response into the mailbox
+    localparam [2:0] U_IDLE  = 3'd0,    // wait for a request and capture it
+                     U_START = 3'd1,    // decide from the captured request
+                     U_WDATA = 3'd2,    // write data into the MIG's write FIFO
+                     U_WCMD  = 3'd3,    // then the write command
+                     U_RCMD  = 3'd4,    // read command
+                     U_RDATA = 3'd5,    // wait for the read data
+                     U_RESP  = 3'd6;    // put the response into the mailbox
 
     reg  [2:0]            u_state    = U_IDLE;
     reg  [3:0]            u_id       = 4'd0;
@@ -281,21 +289,23 @@ module surf_ddr_bridge #(
         end else begin
             case (u_state)
                 U_IDLE:
-                    if (rq_valid) begin
+                    if (rq_valid) begin                      // the crossing ends in registers
                         {u_id, u_write, u_be, u_waddr, u_wdata} <= rq_dout;
                         u_rdata <= 32'h0;
-                        if (!init_calib_complete) begin
-                            u_err   <= 1'b1;                 // not calibrated: refuse untouched
-                            u_state <= U_RESP;
-                        end else if (rq_dout[RQ_W-5]) begin  // the write bit
-                            u_err      <= 1'b0;
-                            u_wdf_wren <= 1'b1;
-                            u_state    <= U_WDATA;
-                        end else begin
-                            u_err    <= 1'b0;
-                            u_app_en <= 1'b1;
-                            u_state  <= U_RCMD;
-                        end
+                        u_state <= U_START;
+                    end
+                U_START:
+                    if (!init_calib_complete) begin
+                        u_err   <= 1'b1;                     // not calibrated: refuse untouched
+                        u_state <= U_RESP;
+                    end else if (u_write) begin
+                        u_err      <= 1'b0;
+                        u_wdf_wren <= 1'b1;
+                        u_state    <= U_WDATA;
+                    end else begin
+                        u_err    <= 1'b0;
+                        u_app_en <= 1'b1;
+                        u_state  <= U_RCMD;
                     end
                 U_WDATA:
                     if (app_wdf_rdy) begin                   // data first, so the command

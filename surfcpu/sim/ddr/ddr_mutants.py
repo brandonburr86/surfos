@@ -13,7 +13,8 @@ bridge never asks it to do some things (take an empty box) that it must still ge
 mutants remove a synchronizer stage: metastability is not simulated, so they are expected to
 survive, and say so (the clock crossings rest on review and on the timing constraints of
 docs/DDR.md instead). Equivalent mutants (no behaviour change, such as dropping the busy term
-of rs_mine, which is only looked at while busy) are left out.
+of the response handling, which only runs while busy, or rs_got, since rs_q always holds the
+latest response and ids are not reused while one is outstanding) are left out.
 
     python3 sim/ddr/ddr_mutants.py [--only NAME ...] [--jobs N]
 
@@ -42,10 +43,11 @@ MUTANTS = [
     ("addr-shift", BRIDGE, "u_beat} << (BEAT_LSB - UNIT_LSB);", "u_beat} << (BEAT_LSB - UNIT_LSB - 1);", False),
     ("addr-bit27", BRIDGE, "s_req_addr[OFFSET_BITS-1:2], s_req_wdata}", "1'b0, s_req_addr[OFFSET_BITS-2:2], s_req_wdata}", False),
     ("cmd-swap", BRIDGE, "u_write ? 3'b000 : 3'b001", "u_write ? 3'b001 : 3'b000", False),
-    ("no-id-check", BRIDGE, "rs_mine = busy && sent && (rs_dout[RS_W-1 -: 4] == cur_id);", "rs_mine = busy && sent;", False),
+    ("no-id-check", BRIDGE, "rs_mine = rs_got && busy && sent && (rs_q[RS_W-1 -: 4] == cur_id);",
+     "rs_mine = rs_got && busy && sent;", False),
     ("id-reset", BRIDGE, "        if (!rst && accept && usable)\n            next_id <= next_id + 1'b1;",
      "        if (rst) next_id <= 4'd0;\n        else if (accept && usable)\n            next_id <= next_id + 1'b1;", False),
-    ("err-bit", BRIDGE, "rsp_err_q   <= rs_dout[32];", "rsp_err_q   <= rs_dout[31];", False),
+    ("err-bit", BRIDGE, "rsp_err_q   <= rs_q[32];", "rsp_err_q   <= rs_q[31];", False),
     ("watchdog-early", BRIDGE, "TO_LAST32  = TIMEOUT_CYCLES - 1;", "TO_LAST32  = TIMEOUT_CYCLES - 2;", False),
     ("no-fail-stop", BRIDGE, "usable  = cal_done_q && !timeout_q;", "usable  = cal_done_q;", False),
     ("no-precal-refusal", BRIDGE, "usable  = cal_done_q && !timeout_q;", "usable  = !timeout_q;", False),
