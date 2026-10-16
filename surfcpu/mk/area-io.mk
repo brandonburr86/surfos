@@ -10,6 +10,7 @@
 #   make test-io-video    surf_video measured and decoded by the VGA capture model
 #   make test-io-icarus   the three blocks together in Icarus (SPI, PS/2, video timing)
 #   make synth-io         Yosys synth_xilinx estimates of the three blocks (not part of check)
+#   make evidence-io      rerun everything on IO_EVIDENCE_SEEDS and rewrite docs/evidence/io/
 #
 # IO_SEEDS="1 2 3" chooses the seeds; IO_JOBS the parallel C++ compiles per Verilator build.
 
@@ -19,6 +20,7 @@ IO_RTL       = $(foreach m,$(IO_TOPS),$(IO_PERIPH)/$(m).v) \
                $(wildcard $(IO_PERIPH)/surf_spi_*.v $(IO_PERIPH)/surf_ps2_*.v $(IO_PERIPH)/surf_video_*.v)
 IO_BUILD     = $(BUILD)/sim/io
 IO_SEEDS    ?= 1 2 3
+IO_EVIDENCE_SEEDS ?= 1 2 3 4 5
 IO_JOBS     ?= 2
 IO_CXX      ?= g++
 IO_CXXFLAGS  = -std=c++17 -O2 -g -Wall -Wextra -I$(CURDIR)/sim/models -I$(CURDIR)/sim/io -I$(CURDIR)/firmware/include
@@ -35,7 +37,7 @@ VGA_MODEL_SRC = sim/models/vga_capture.cpp
 VGA_MODEL_HDR = sim/models/vga_capture.h
 
 .PHONY: lint-io check-io test-io test-io-font test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus \
-        synth-io
+        synth-io evidence-io
 lint: lint-io
 test-soc: test-io
 check: check-io
@@ -157,3 +159,12 @@ synth-io:
 	    / DSP48E1 /{d+=$$2} / CARRY4 /{c+=$$2} / RAM(32|64)[MX]/{lr+=$$2} \
 	    END{printf "%-11s %5d LUTs %5d flip-flops %3d LUTRAM %2d RAMB36 %2d RAMB18 %2d DSP48 %3d CARRY4\n", \
 	        m, l, f, lr, b36, b18, d, c}' $(IO_BUILD)/synth/$$m.stat.txt; done
+
+# ---------------------------------------------------------------- evidence
+evidence-io:
+	@mkdir -p $(IO_BUILD)/synth
+	$(Q)$(MAKE) --no-print-directory lint-io test-io-font > $(IO_BUILD)/lint.txt
+	$(Q)$(MAKE) --no-print-directory test-io-models test-io-spi test-io-ps2 test-io-video test-io-icarus \
+	  IO_SEEDS="$(IO_EVIDENCE_SEEDS)"
+	$(Q)$(MAKE) --no-print-directory synth-io > $(IO_BUILD)/synth/summary.txt
+	$(Q)IO_SEEDS="$(IO_EVIDENCE_SEEDS)" BUILD=$(BUILD) sh sim/io/evidence.sh
