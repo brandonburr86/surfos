@@ -1404,7 +1404,7 @@ static void b15b(void) {
           "B15b: and a sync once the card works does not write the refused bytes either");
 }
 
-/**** B16b: mv over the file whose block refuses; truncate past a block that refuses ****/
+/**** B16b: mv over the file whose block refuses (10/16/26, B20: EIO, then rm and mv); truncate past a block that refuses ****/
 
 static void b16b(void) {
     struct ram *x = ram_new("b16b", 8192);
@@ -1425,8 +1425,11 @@ static void b16b(void) {
     x->bad_lo = x->bad_hi = clus_lba(&g, 2);
     v = lookup(root, "a"); fill(pat, 512, 56); v->ops->write(v, 0, pat, 512); vput(v);
     if(fsync_sb(sb) != -EIO) die("B16b: the refused sync");
-    r1 = root->ops->rename(root, "src", root, "a");
-    check(r1 == 0 && file_is(root, "a", pat2, 512), "B16b: mv over the file whose block refuses works");
+    r1 = root->ops->rename(root, "src", root, "a");     /* 10/16/26 (B20): EIO, as it is not B16's to set them aside */
+    check(r1 == -EIO && file_is(root, "src", pat2, 512) && file_is(root, "a", pat, 512),
+          "B16b (B20): mv over the file whose block refuses says EIO while it refuses, and changes nothing");
+    check(root->ops->unlink(root, "a") == 0 && root->ops->rename(root, "src", root, "a") == 0 && file_is(root, "a", pat2, 512),
+          "B16b: an rm of that file works, then the mv");
     check(fsync_sb(sb) == 0, "B16b: then a sync, the block still refusing (nothing left for it)");
     x->bad_lo = x->bad_hi = clus_lba(&g, 4);
     v = lookup(root, "t"); fill(pat, 1024, 57); v->ops->write(v, 512, pat + 512, 512); vput(v);   /* t's second cluster */

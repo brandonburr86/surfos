@@ -1070,15 +1070,19 @@ u_int bdirty_count(struct bdev *dev) {
 }
 
 /* 10/16/26 (B16): the blocks of dev whose last write failed (up to max of them, into lbas): a file system
-   about to free clusters looks for its own among them. How many */
+   about to free clusters looks for its own among them. How many there are (10/16/26, B21: all of them,
+   also past max: at most BCACHE_BLOCKS) */
 u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max) {
     u_int n = 0;
     int i;
     if(!dev) return 0;
     mutex_lock(&bcache_lock);
-    for(i = 0; i < BCACHE_BLOCKS && n < max && dev->bc_failed; i++) {
+    for(i = 0; i < BCACHE_BLOCKS && dev->bc_failed; i++) {
         struct buf *b = &bufs[i];
-        if(b->dev == dev && b->valid && b->dirty && b->wfail) lbas[n++] = b->lba;
+        if(b->dev == dev && b->valid && b->dirty && b->wfail) {
+            if(n < max) lbas[n] = b->lba;
+            n++;
+        }
     }
     mutex_unlock(&bcache_lock);
     return n;
