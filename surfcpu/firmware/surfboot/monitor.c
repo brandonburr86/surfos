@@ -74,7 +74,7 @@ void sb_monitor_help(void)
         "  chain PATH      a file's clusters, fragment by fragment\n"
         "  md ADDR [N]     show N memory words (default 16)\n"
         "  mw ADDR VALUE   write a memory word\n"
-        "  spi [DIV]       show or set the SPI divider used after card initialization\n"
+        "  spi [DIV|auto]  show or set the SPI divider used after card initialization\n"
         "  reset           restart SurfBoot\n",
         SURFBOOT_VERSION_MAJOR, SURFBOOT_VERSION_MINOR, SURFBOOT_VERSION_PATCH);
 }
@@ -130,7 +130,7 @@ static void cmd_sd(struct sb_state *s)
     uint32_t sys_hz = port_sysinfo(SURF_SYSINFO_SYS_HZ);
     if (sys_hz == 0)
         sys_hz = SURF_SYS_HZ;
-    uint32_t div = s->spi_fast_div ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
+    uint32_t div = s->spi_fast_set ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
     int e = sd_init(&s->card, div);
     if (e) {
         say("sd: %s\n", sb_last_msg);
@@ -439,20 +439,22 @@ int sb_monitor_line(struct sb_state *s, char *line)
         fmt_snprintf(rest, sizeof rest, "%s %s", arg ? arg : "", p);
         cmd_mw(rest);
     } else if (!strcmp(cmd, "spi")) {
-        uint32_t div;
-        if (arg && (number(arg, &div) || div > 255)) {
-            say("usage: spi [DIV 0..255]\n");
+        uint32_t div = 0;
+        int auto_div = arg && !strcmp(arg, "auto");
+        if (arg && !auto_div && (number(arg, &div) || div > 255)) {
+            say("usage: spi [DIV 0..255 | auto]\n");
         } else {
             if (arg) {
+                s->spi_fast_set = !auto_div;            /* DIV 0 (12.5 MHz) is a valid choice */
                 s->spi_fast_div = div;
                 s->card_ok = s->vol_ok = 0;
             }
             uint32_t sys_hz = port_sysinfo(SURF_SYSINFO_SYS_HZ);
             if (sys_hz == 0)
                 sys_hz = SURF_SYS_HZ;
-            uint32_t d = s->spi_fast_div ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
-            say("spi: data clock DIV %u = %u kHz (applies from the next card initialization)\n", d,
-                sd_div_hz(sys_hz, d) / 1000u);
+            uint32_t d = s->spi_fast_set ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
+            say("spi: data clock DIV %u = %u kHz%s (applies from the next card initialization)\n", d,
+                sd_div_hz(sys_hz, d) / 1000u, s->spi_fast_set ? "" : ", the default");
         }
     } else if (!strcmp(cmd, "reset")) {
         return MON_RESET;

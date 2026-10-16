@@ -6,14 +6,15 @@ File: probes.S Date: 10/15/26 (SurfCPU)
 Each probe causes exactly one trap of a known kind at a known address; the diagnostics'
 trap hook checks mcause, mtval and mepc and steps over it (or, for a fetch fault, resumes
 at ra). The encodings SurfCPU must refuse are written as .word, which the assembler marks
-as data, so tools/isa-audit.py does not count them as instructions. A probe that takes a
+as data, and the link scripts put this file's .probes section into the output section
+.text.probes, the only place where tools/isa-audit.py accepts data words. A probe that takes a
 sentinel returns it unchanged when the faulting instruction wrote no register, as
 docs/ISA.md requires.
 
 ddr_probe_start..ddr_probe_end is a position-independent leaf function (x * 3 + 0x234)
 that the diagnostics copy into DDR and scratch RAM and run there after FENCE.I.
 */
-    .section .text.probes, "ax"
+    .section .probes, "ax"              /* linked into the output section .text.probes */
     .balign 4
 
     .globl probe_illegal_zero, probe_illegal_zero_at

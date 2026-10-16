@@ -25,6 +25,12 @@ SECTIONS
         *(.fast .fast.*)                /* the ROM is block RAM already: nothing to copy */
     } > bootrom
 
+    /* probes.S's deliberately illegal words (.word): the one output section where
+     * tools/isa-audit.py accepts data marked $d */
+    .text.probes : ALIGN(4) {
+        *(.probes)
+    } > bootrom
+
     .rodata : ALIGN(4) {
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)

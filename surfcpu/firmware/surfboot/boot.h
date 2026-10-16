@@ -26,12 +26,13 @@ host tests run exactly this code against card images.
 
 struct sb_state {
     int ddr_ok;
-    uint32_t ram_base, ram_size, ram_limit;     /* usable DDR for images: [base, limit) */
+    uint32_t ram_base, ram_size, ram_limit;     /* usable DDR for images: [base, size - 16 MiB) */
     uint32_t ddr_wait_us;
     int card_ok, vol_ok;
     struct sd_card card;
     struct fat_vol vol;
-    uint32_t spi_fast_div;                      /* 0 = from SB_SPI_FAST_HZ */
+    uint32_t spi_fast_div;                      /* the monitor's `spi DIV`, when spi_fast_set */
+    int spi_fast_set;                           /* 0: the data clock comes from SB_SPI_FAST_HZ */
     struct img_info img;
     const char *image_path;
     int used_backup;

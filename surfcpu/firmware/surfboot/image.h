@@ -6,9 +6,10 @@ File: image.h Date: 10/15/26 (SurfCPU)
 The acceptance checks of docs/BOOT-ABI.md section 2, in its order, each failing with its
 own code and a sentence that gives the numbers: (1) size, magic, version, header size and
 header CRC; (2) ISA bits and platform; (3) file size = 64 + payload_size; (4) alignment,
-mem_size >= payload_size and the load range inside usable DDR, below ddr_top, computed
-without overflow; (5) the entry inside the payload; (6) the payload CRC as read from the
-card, and again as read back from DDR after copying.
+mem_size >= payload_size and the load range inside usable DDR, below ddr_top (the top
+16 MiB of the DDR that calibrated), computed without overflow; (5) the entry inside the
+payload; (6) the payload CRC as read from the card, and again as read back from DDR after
+copying. Check 2 requires SURF_ISA_I (the 2026-10-15 clarification).
 */
 #ifndef SURFBOOT_IMAGE_H
 #define SURFBOOT_IMAGE_H

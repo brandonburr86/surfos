@@ -95,11 +95,11 @@ int sb_ddr_init(struct sb_state *s)
     int e = ddr_quick_test(SURF_DDR_BASE, size);
     if (e)
         return e;
+    if (size <= SURF_DDR_TOP_SIZE)
+        return sb_fail(SB_E_DDR_ABSENT, "DDR_SIZE 0x%08x leaves nothing below ddr_top (the top 16 MiB)", size);
     s->ram_base = SURF_DDR_BASE;
     s->ram_size = size;
-    s->ram_limit = SURF_DDR_BASE + size;
-    if (s->ram_limit > SURF_DDR_TOP_BASE)
-        s->ram_limit = SURF_DDR_TOP_BASE;
+    s->ram_limit = SURF_DDR_BASE + size - SURF_DDR_TOP_SIZE;   /* ddr_top: the top 16 MiB of what calibrated */
     s->ddr_ok = 1;
     return SB_OK;
 }
@@ -118,7 +118,7 @@ int sb_card_init(struct sb_state *s)
     uint32_t sys_hz = port_sysinfo(SURF_SYSINFO_SYS_HZ);
     if (sys_hz == 0)
         sys_hz = SURF_SYS_HZ;
-    uint32_t div = s->spi_fast_div ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
+    uint32_t div = s->spi_fast_set ? s->spi_fast_div : sd_div_for(sys_hz, SB_SPI_FAST_HZ);
     int e = sd_init(&s->card, div);
     if (e)
         return e;

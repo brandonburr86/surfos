@@ -29,6 +29,8 @@ Constants come from spec/soc.toml through tools/socspec.py (the built-in version
 are used, and checked against the spec by selftest, when it cannot be loaded). Only the
 Python standard library is used: this runs on the Mac (deploy-sd.py) and in the container.
 """
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import os
@@ -45,8 +47,8 @@ ABI = {
     "image_magic": 0x474D4953, "image_header_version": 1, "image_header_size": 64,
     "platform_abi": 1, "isa_i": 1, "isa_m": 2, "isa_zicsr": 4, "isa_zifencei": 8,
 }
-DDR_BASE, DDR_SIZE, DDR_TOP_BASE = 0x80000000, 0x10000000, 0x8F000000
-BUILTIN = (dict(ABI), DDR_BASE, DDR_SIZE, DDR_TOP_BASE)
+DDR_BASE, DDR_SIZE, DDR_TOP_BASE, DDR_TOP_SIZE = 0x80000000, 0x10000000, 0x8F000000, 0x01000000
+BUILTIN = (dict(ABI), DDR_BASE, DDR_SIZE, DDR_TOP_BASE, DDR_TOP_SIZE)
 SPEC_LOADED = False
 try:
     sys.path.insert(0, str(HERE))
@@ -55,7 +57,7 @@ try:
     for _k in ABI:
         ABI[_k] = int(_spec.bootabi[_k])
     DDR_BASE, DDR_SIZE = _spec.regions["ddr"].base, _spec.regions["ddr"].size
-    DDR_TOP_BASE = _spec.reserves["ddr_top"].base
+    DDR_TOP_BASE, DDR_TOP_SIZE = _spec.reserves["ddr_top"].base, _spec.reserves["ddr_top"].size
     SPEC_LOADED = True
 except Exception:                                 # pragma: no cover - fallback only
     pass
@@ -166,11 +168,17 @@ def parse_header(data: bytes) -> dict:
     return dict(zip(FIELDS, HEADER.unpack_from(data, 0)))
 
 
+def usable_end(ram_base: int, ram_size: int) -> int:
+    """End of the DDR images may use: below ddr_top, the top 16 MiB of the DDR that calibrated
+    (0x8F000000 for the 256 MiB part; BOOT-ABI.md section 2, check 4)."""
+    return ram_base + max(ram_size - DDR_TOP_SIZE, 0)
+
+
 def check(data: bytes, ram_size: int = DDR_SIZE, ram_base: int = DDR_BASE) -> list[tuple[str, str | None, str]]:
     """SurfBoot's checks (firmware/surfboot/image.c), in order. Returns a list of
     (check, error name or None, sentence); it stops at the first failure, as SurfBoot does."""
     out = []
-    ram_limit = min(ram_base + ram_size, DDR_TOP_BASE)
+    ram_limit = usable_end(ram_base, ram_size)
     size = len(data)
 
     def fail(step, code, msg):
@@ -196,6 +204,9 @@ def check(data: bytes, ram_size: int = DDR_SIZE, ram_base: int = DDR_BASE) -> li
         return fail(step, "IMG_HCRC", f"the header CRC is {hcrc:#010x} but the header says {h['header_crc32']:#010x}")
     out.append((step, None, "ok"))
     step = "2 ISA and platform"
+    if not h["isa"] & ABI["isa_i"]:
+        return fail(step, "IMG_ISA", f"the ISA bits {h['isa']:#010x} do not include I (SURF_ISA_I): every SurfCPU "
+                    "program needs the base ISA")
     if h["isa"] & ~ISA_ALL:
         return fail(step, "IMG_ISA", f"the payload needs ISA bits {h['isa'] & ~ISA_ALL:#010x} that SurfCPU lacks")
     if h["platform"] != ABI["platform_abi"]:
@@ -216,7 +227,7 @@ def check(data: bytes, ram_size: int = DDR_SIZE, ram_base: int = DDR_BASE) -> li
     end = h["load_addr"] + h["mem_size"]
     if h["load_addr"] < ram_base or end > ram_limit:
         return fail(step, "IMG_RANGE", f"the image would occupy [{h['load_addr']:#010x}, {end:#010x}), outside usable "
-                    f"DDR [{ram_base:#010x}, {ram_limit:#010x}) (the top 16 MiB, ddr_top, is reserved)")
+                    f"DDR [{ram_base:#010x}, {ram_limit:#010x}) (the top 16 MiB of DDR, ddr_top, is reserved)")
     out.append((step, None, "ok"))
     step = "5 entry inside the payload"
     if h["entry"] & 3:
@@ -365,7 +376,7 @@ def describe(path: str, data: bytes, ram_size: int) -> int:
         print(f"  image        {h['name'].rstrip(bytes(1)).decode('ascii', 'replace')} {iv >> 16}.{(iv >> 8) & 255}."
               f"{iv & 255} build {h['build_id']:08x}")
         print(f"  header_crc   {h['header_crc32']:#010x}")
-    ram_limit = min(DDR_BASE + ram_size, DDR_TOP_BASE)
+    ram_limit = usable_end(DDR_BASE, ram_size)
     print(f"checks (as SurfBoot, usable DDR [{DDR_BASE:#010x}, {ram_limit:#010x})):")
     results = check(data, ram_size)
     for step, code, msg in results:
@@ -418,7 +429,7 @@ def cmd_selftest(a) -> int:
     failures += code != "IMG_CRC"
     print(f"  a flipped payload bit is caught: {'ok' if code == 'IMG_CRC' else 'FAIL ' + str(code)}")
     if SPEC_LOADED:
-        same = (BUILTIN[0] == ABI and BUILTIN[1:] == (DDR_BASE, DDR_SIZE, DDR_TOP_BASE))
+        same = (BUILTIN[0] == ABI and BUILTIN[1:] == (DDR_BASE, DDR_SIZE, DDR_TOP_BASE, DDR_TOP_SIZE))
         failures += not same
         print(f"  built-in constants match spec/soc.toml: {'ok' if same else 'FAIL'}")
     else:

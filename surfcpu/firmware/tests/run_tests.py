@@ -871,6 +871,11 @@ def _(p):
     return with_package(p, pkg(isa=0x1F))
 
 
+@scenario("package_without_base_isa", expect="IMG_ISA", msg="do not include I (SURF_ISA_I)")
+def _(p):
+    return with_package(p, pkg(isa=0x0E))                  # M, Zicsr and Zifencei, but not I
+
+
 @scenario("package_other_platform", expect="IMG_PLATFORM", msg="platform ABI 2")
 def _(p):
     return with_package(p, pkg(platform=2))
@@ -922,9 +927,20 @@ def _(p):
 
 
 @scenario("load_range_beyond_small_ddr", args=["--ddr-size", str(64 << 20)], expect="IMG_RANGE",
-          msg="0x84000000)")
+          msg="0x83000000)")                               # 64 MiB: ddr_top is [0x83000000, 0x84000000)
 def _(p):
     return with_package(p, pkg(4000, load=0x84000000 - 2048, mem=8192))
+
+
+@scenario("load_range_in_small_ddr_top", args=["--ddr-size", str(64 << 20)], expect="IMG_RANGE",
+          msg="ddr_top")
+def _(p):
+    return with_package(p, pkg(4000, load=0x83000000, mem=8192))
+
+
+@scenario("ok_small_ddr_up_to_its_top", args=["--ddr-size", str(64 << 20)], logs=["matches (card and DDR)"])
+def _(p):
+    return with_package(p, pkg(4000, load=0x83000000 - 8192, mem=8192))
 
 
 @scenario("entry_misaligned", expect="IMG_ENTRY", msg="not 4-byte aligned")
@@ -1026,6 +1042,13 @@ def _(p):
     bad[5000] ^= 1
     return card(p, {"/BOOT/SURFOS.BIN": pkg(), "/BOOT/CMDLINE.TXT": b"hello monitor\n",
                     "/BOOT/BROKEN.BIN": bytes(bad)}, cluster=512, fragment="interleave")
+
+
+@scenario("monitor_spi_divider", commands=["spi", "spi 0", "sd", "spi 2", "sd", "spi auto", "sd"],
+          logs=["DIV 1 = 6250 kHz, the default", "DIV 0 = 12500 kHz (applies", "12500 kHz for data (DIV 0)",
+                "DIV 2 = 4166 kHz (applies", "4166 kHz for data (DIV 2)", "6250 kHz for data (DIV 1)"])
+def _(p):
+    return std(p)
 
 
 # ---------------------------------------------------------------- running

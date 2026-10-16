@@ -10,11 +10,15 @@ Used on every firmware build (mk/area-fw.mk) and meant for every kernel build:
 
     tools/isa-audit.py build/fw/surfboot.elf [more.elf ...] [--quiet] [--no-objdump]
 
-The audit decodes the instruction words itself, from the executable sections, skipping the
-data that the assembler marks with `$d` mapping symbols, so it does not depend on a
-disassembler knowing the ISA. When riscv64-unknown-elf-objdump is available (the
+The audit decodes the instruction words itself, from the executable sections, so it does not
+depend on a disassembler knowing the ISA. Every word of every executable section is decoded,
+including `.word`/`.4byte`/`.half` data that the assembler marks with `$d` mapping symbols, so
+a disallowed instruction cannot hide as data. The one exception is the output section
+`.text.probes` (DATA_ALLOWED_SECTIONS), where `$d` words are skipped: the diagnostics keep
+their deliberately illegal words there (input section `.probes`, placed by the link scripts),
+and its instructions are still checked. When riscv64-unknown-elf-objdump is available (the
 toolchain container) it also disassembles the file and requires the two to agree on every
-instruction address and encoding, and every mnemonic to be in the allowed set. It also
+address objdump shows as an instruction, and every mnemonic to be in the allowed set. It also
 checks the ELF header (32-bit, little-endian, RISC-V, soft-float ABI, no RVC/RVE flags) and
 the arch attribute.
 
@@ -22,6 +26,8 @@ Allowed exception: `unimp` (0xc0001073, csrrw zero, cycle, zero), the deliberate
 instruction GCC emits for __builtin_trap(); it traps as ISA.md says. Exit status 0 when
 every file passes, 1 otherwise. Only the Python standard library is used.
 """
+from __future__ import annotations
+
 import argparse
 import os
 import re
@@ -68,6 +74,10 @@ ALLOWED_MNEMONICS = {
     "mul", "mulh", "mulhsu", "mulhu", "div", "divu", "rem", "remu",
 }
 ALLOWED_EXTENSIONS = {"i", "m", "zicsr", "zifencei", "zmmul"}
+# The only output sections whose `$d` (data) marks are honoured: firmware/diagnostics/probes.S
+# keeps its deliberately illegal words there (input section .probes, see rom.ld and ram.ld).
+# In every other executable section each word is decoded as an instruction, data or not.
+DATA_ALLOWED_SECTIONS = {".text.probes"}
 
 
 def decode(word: int) -> tuple[str | None, str | None, int | None]:
@@ -330,11 +340,17 @@ def audit(path: str, use_objdump: bool, objdump: str, quiet: bool) -> int:
     found = {}
     csrs = set()
     count = 0
+    data_words = 0
     texts = [s for s in elf.sections if (s["flags"] & (SHF_ALLOC | SHF_EXECINSTR)) == (SHF_ALLOC | SHF_EXECINSTR)
              and s["type"] != 8 and s["size"]]
     for s in texts:
         data = elf.section_bytes(s)
-        for lo, hi in code_ranges(elf, s):
+        if s.get("name") in DATA_ALLOWED_SECTIONS:
+            ranges = code_ranges(elf, s)
+            data_words += (s["size"] - sum(hi - lo for lo, hi in ranges)) // 4
+        else:
+            ranges = [(s["addr"], s["addr"] + s["size"])]   # `.word` in code is decoded like any word
+        for lo, hi in ranges:
             pos = lo
             while pos + 2 <= hi:
                 off = pos - s["addr"]
@@ -372,13 +388,10 @@ def audit(path: str, use_objdump: bool, objdump: str, quiet: bool) -> int:
                 ours = found.get(addr)
                 if ours is None:
                     problems.append(f"{addr:#010x}: objdump shows an instruction ({mnem} {raw}) where the audit "
-                                    "found data")
+                                    "decoded none")
                 elif ours[0] != raw:
                     problems.append(f"{addr:#010x}: objdump reads {raw}, the audit {ours[0]}")
-            missing = set(found) - set(listing)
-            for addr in sorted(missing)[:10]:
-                problems.append(f"{addr:#010x}: the audit decoded {found[addr][0]} where objdump shows no instruction")
-            agree = len(listing)
+            agree = len(listing)                            # words objdump shows as data were decoded above
     if problems:
         print(f"isa-audit: {path}: FAILED, {len(problems)} problem(s)")
         for p in problems[:60]:
@@ -388,7 +401,8 @@ def audit(path: str, use_objdump: bool, objdump: str, quiet: bool) -> int:
         return 1
     if not quiet:
         extra = f"; objdump agrees on all {agree}" if agree is not None else "; objdump cross-check skipped"
-        print(f"isa-audit: {path}: {count} instructions, all rv32im_zicsr_zifencei{extra}")
+        dw = f"; {data_words} data words in {', '.join(sorted(DATA_ALLOWED_SECTIONS))}" if data_words else ""
+        print(f"isa-audit: {path}: {count} instructions, all rv32im_zicsr_zifencei{extra}{dw}")
         print(f"isa-audit:   arch {arch or '(no attribute)'}; e_flags {elf.e_flags:#x}; "
               f"CSRs: {' '.join(sorted(csrs)) or 'none'}")
     return 0

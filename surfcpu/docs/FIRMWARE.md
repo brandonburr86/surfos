@@ -31,10 +31,13 @@ tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-s
 
 | File | What | Size |
 |---|---|---|
-| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 39,848 bytes, **60.8 %** of the 64 KiB ROM (code 24,928, constants 14,920) |
-| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,968 bytes, 42.7 % |
-| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 15,012 bytes |
-| `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,332 bytes |
+| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 40,084 bytes, **61.2 %** of the 64 KiB ROM (code 25,000, constants 15,084) |
+| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,936 bytes, 42.6 % |
+| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 14,992 bytes |
+| `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,340 bytes |
+
+The sizes are for a build from a clean tree; with uncommitted changes the banner's
+"dirty tree" text adds about 90 bytes.
 
 Flags: `-march=rv32im_zicsr_zifencei -mabi=ilp32` (`RV_CFLAGS`), `-Os -msave-restore`
 (shared prologues: 2.9 KB less ROM; the hot loops are leaf functions and do not use them),
@@ -44,7 +47,10 @@ time), `-fno-tree-loop-distribute-patterns` (no memcpy calls inside memcpy),
 0 is valid memory), no C library (`firmware/common/libc/string.h` declares what `string.c`
 provides), libgcc for the rv32im/ilp32 multilib. Every ELF is put through
 `tools/isa-audit.py` before it is installed; the build stops if one instruction or CSR is
-outside the ISA of [ISA.md](ISA.md). The build identity (first 8 hex digits of the commit,
+outside the ISA of [ISA.md](ISA.md). Words written as data in code (`.word`) are decoded like
+any other: only the output section `.text.probes` (input section `.probes`, placed by
+`rom.ld` and `ram.ld`) may hold data words, which is where the diagnostics' probes and the
+test kernel keep their deliberately illegal instructions. The build identity (first 8 hex digits of the commit,
 dirty flag) is generated into `build/fw/gen/fw_build.h` only when it changes.
 
 The `.mem` files follow [MODULES.md](MODULES.md) section 5: exactly 16,384 lines of 8
@@ -136,7 +142,9 @@ boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x4946525
    a quick destructive test (walking one and zero on the data lines, a distinct word at every
    power-of-two offset for the address lines, byte and halfword lanes). `ram_size` in the
    boot information is the size that passed this test. Images may use
-   `[0x8000_0000, min(0x8000_0000 + size, 0x8F00_0000))`: `ddr_top` stays free.
+   `[0x8000_0000, 0x8000_0000 + size - 16 MiB)`: `ddr_top`, the top 16 MiB of the DDR that
+   calibrated (from `0x8F00_0000` with 256 MiB, from `0x8300_0000` with 64 MiB), stays free;
+   a `DDR_SIZE` of 16 MiB or less leaves nothing below it and stops (DDR_ABSENT).
 4. **The card** (`sd.c`), always initialized afresh (it may have been swapped):
 
    | Step | Limit |
@@ -179,7 +187,8 @@ boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x4946525
    directory may not exceed FAT's 65,536 entries (2 MiB). No walk can run away.
 6. **The package** (`image.c`), the checks of BOOT-ABI.md section 2 in its order: size,
    magic (an ELF or x86 boot code is named as such), version and header size, header CRC;
-   ISA bits and platform; file size = 64 + `payload_size` (truncated/extra bytes); load
+   ISA bits (`SURF_ISA_I` required, no bit SurfCPU lacks) and platform; file size = 64 +
+   `payload_size` (truncated/extra bytes); load
    alignment, `mem_size` >= `payload_size`, the range inside usable DDR without overflow;
    entry aligned inside the payload. Then the payload is copied sector by sector through a
    scratch buffer into DDR with its CRC-32 updated as it goes, compared with the header, and
@@ -232,7 +241,7 @@ card-detect switch closing, stable for 250 ms) retries the boot by itself.
 | `part` / `fs` | the MBR partition table / the FAT32 volume's geometry |
 | `ls [PATH]`, `cat PATH [N]`, `chain PATH` | list a directory; print a file; show a file's clusters by fragment |
 | `md ADDR [N]`, `mw ADDR VALUE` | read / write memory words |
-| `spi [DIV]` | show or set the data clock (DIV 0 = 12.5 MHz to try a faster card link) |
+| `spi [DIV\|auto]` | show or set the data clock used from the next card initialization: DIV 0-255 (DIV 0 = 12.5 MHz, to try a faster card link), `auto` = back to the default (DIV 1, 6.25 MHz) |
 | `reset` | restart SurfBoot |
 
 ## 6. The diagnostics
@@ -273,18 +282,23 @@ Its hot loops run from scratch RAM (`.fast`). The command line picks the depth: 
 | `tools/surfimg.py` | `pack --elf surfos.elf -o SURFOS.BIN [--payload-out surfos.payload.bin] --name SurfOS --version X.Y.Z [--build-id HEX]`; `pack --bin` with `--load-addr`, `--entry`, `--mem-size`; `info`, `verify`, `crc`, `selftest`. The payload is the PT_LOAD segments by load address; a segment the program copies elsewhere itself (`.fast`) is allowed and noted; the entry must run where it loads. `pack` audits the ELF and refuses to write a package SurfBoot would refuse; `verify` applies SurfBoot's checks in its order with its error names (a test keeps the two in agreement). Constants come from `spec/soc.toml`. |
 | `tools/bin2mem.py` | `bin2mem.py IN.bin OUT.mem [--words 16384]`, `--check` |
 | `tools/mkcard.py` | `mkcard.py OUT.img --standard-dirs --file /BOOT/SURFOS.BIN=PATH [--size 64M] [--cluster 4K] [--fragment interleave|reverse|random] [--lfn] [--fill]`; `--inspect IMG`. Pure Python; image files only. Long names get short aliases (`/USERS/DOCUMENTS` is not an 8.3 name). Imported by the tests to damage images precisely. |
-| `tools/isa-audit.py` | `isa-audit.py FILE.elf...`: decodes every instruction word of the executable sections (skipping `$d` data), checks RV32I/M/Zicsr/Zifencei + ECALL/EBREAK/MRET/WFI, the CSR table and read-only CSR writes, the ELF flags and arch attribute, and cross-checks with objdump. **For the kernel build**: run it on `surfos.elf` (`surfimg.py pack --elf` does by default). |
-| `tools/deploy-sd.py` | the Mac installer: [CARD.md](CARD.md) |
+| `tools/isa-audit.py` | `isa-audit.py FILE.elf...`: decodes every word of the executable sections, `.word`/`.4byte`/`.half` data (`$d`) included, except `$d` words in the output section `.text.probes`; checks RV32I/M/Zicsr/Zifencei + ECALL/EBREAK/MRET/WFI, the CSR table and read-only CSR writes, the ELF flags and arch attribute, and cross-checks with objdump. **For the kernel build**: run it on `surfos.elf` (`surfimg.py pack --elf` does by default); deliberately illegal words belong in an input section the link script places in `.text.probes`, and constants in non-executable sections (`.rodata`), as GCC and these link scripts place them. |
+| `tools/deploy-sd.py` | the Mac installer ([CARD.md](CARD.md)): refuses anything but a FAT32 volume on removable, physical media whose whole disk has an MBR, binds the mount point to diskutil's device node (st_dev = st_rdev), refuses symbolic links, writes through directory descriptors with O_NOFOLLOW and O_EXCL temporary files, then unmounts and remounts the card and compares every installed byte. Exit 0 verified, 1 refused, 2 written but NOT verified, 3 different; `--verify-only`. Runs with Python 3.9 (the Mac's `/usr/bin/python3`) and later. |
 
 ## 8. Tests (`make test-fw`)
 
 | Part | What | Result (2026-10-15) |
 |---|---|---|
 | `test-fw-unit` | CRC-32 vectors, CRC-7/CRC-16 of known frames, printf conversions, 8.3 names, CSD parsing, SPI dividers | pass |
-| `test-fw-tools` | `test_tools.py`: 16 tests (section 7's tools, fsck.fat and mtools on 8 image layouts, isa-audit on 7 bad programs, deploy-sd against a stand-in, Python and C package checks agreeing on 73 packages) | 16 pass |
-| `test-fw-scenarios` | `run_tests.py`: the portable SurfBoot code under ASan/UBSan on the simulated board, 137 card scenarios (the brief's storage list and more), then 5 seeds x 300 runs of random metadata damage | 137 pass; fuzzing: every run ends with a result |
+| `test-fw-tools` | `test_tools.py`: 21 tests (section 7's tools, fsck.fat and mtools on 8 image layouts, isa-audit on 7 bad programs and on the same kind of encodings hidden as `.word` data, the `.text.probes` rule, deploy-sd against a stand-in with a model of the Mac's cache: symbolic links, device binding, every refusal, damage caught only by the remount, unmount and mount failures; Python and C package checks agreeing on 79 packages, 98 verdicts with 256 and 64 MiB of DDR; the Mac tools parsing as Python 3.9) | 21 pass |
+| `test-fw-scenarios` | `run_tests.py`: the portable SurfBoot code under ASan/UBSan on the simulated board, 141 card scenarios (the brief's storage list and more), then 5 seeds x 300 runs of random metadata damage | 141 pass; fuzzing: every run ends with a result |
 | `test-fw-emu` | `run_emu.py`: 29 runs of the real ROM images in `surfemu` (boots, handoff checked from the kernel's side, traps after the handoff, the monitor, buttons, card insertion, DDR failures and injected faults, a dead timer, the diagnostics) | 29 pass |
-| `test-fw-iomodel` | the scenarios against the io track's pin-level SD model (`sim/models/sdcard_model.cpp`), failing on any protocol violation | skipped until the model is in the tree; 120 of 120 pass against fde641f's model (evidence) |
+| `test-fw-iomodel` | the scenarios against the io track's pin-level SD model (`sim/models/sdcard_model.cpp`), failing on any protocol violation | 124 of 124 pass (the 17 scenarios that need `sdcard_sim`'s own fault options are not run) |
+
+The outputs are in `docs/evidence/fw/` (`test-fw.txt`, `build-rom.txt`, `emulator.txt`,
+`iomodel.txt`); `review-fixes.txt` shows the review's repro scripts failing safe after the
+fix round (symbolic links on the card, the unchecked partition table, `spi 0`, instructions
+hidden as `.word`).
 
 `surfemu` is an instruction-level model of the SoC written for these tests (the core as
 ISA.md describes it, the memory map with its bus errors, every peripheral SurfBoot uses, the
@@ -304,4 +318,3 @@ coincidence). The ISA audit caught another: a CRC table placed among the ROM's c
   faster; the round-trip margin at 12.5 MHz is a board question (docs/IO.md).
 * SDSC cards above 4 GiB, SDUC and MMC cards are not supported (MMC is refused by name).
 * The monitor takes input from the UART only (not the PS/2 keyboard).
-* `make test-fw-iomodel` runs only once `sim/models/sdcard_model.cpp` is in the tree.

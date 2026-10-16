@@ -25,6 +25,8 @@ to 260 MB, 4 KiB to 8 GB, 8 KiB to 16 GB, 16 KiB to 32 GB, 32 KiB above); a volu
 than 65525 clusters is refused (it would not be FAT32). The tests import this module: Card
 builds images, Image reads and damages them. Only the Python standard library is used.
 """
+from __future__ import annotations
+
 import argparse
 import random
 import struct

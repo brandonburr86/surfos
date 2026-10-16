@@ -27,6 +27,12 @@ SECTIONS
         *(.text .text.*)
     } > ddr
 
+    /* probes.S's deliberately illegal words (.word): the one output section where
+     * tools/isa-audit.py accepts data marked $d */
+    .text.probes : ALIGN(4) {
+        *(.probes)
+    } > ddr
+
     .rodata : ALIGN(4) {
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
