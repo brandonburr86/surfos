@@ -1,14 +1,17 @@
 # SurfCPU on the Arty A7: the board
 
 The board track's part of SurfCPU: the clocks and resets, the pins and constraints, the
-milestone 1 design, the top for the whole SoC, the Vivado flow and the programming wrapper.
+milestone 1 design, the top for the whole SoC, the Vivado and open-flow builds and the
+programming wrapper.
 Pins and adapters are in [WIRING.md](WIRING.md); the build host in [BUILD-HOST.md](BUILD-HOST.md).
 
-**Status (2026-10-15).** Everything here is proven in simulation, by Yosys synthesis and by
-dry runs only. **No bitstream has been built** (there is no Vivado host yet, gap G2) and
-**nothing has been programmed** (the board is not connected, G1/G3): every FPGA and physical
-result is pending. The first real run of `build.tcl` will also be the first time Vivado reads
-these constraints; section 8 lists what that run must confirm.
+**Status (2026-10-16).** The milestone 1 design has been built into bitstreams for both
+boards with the open-source flow (`make build-fpga FLOW=openxc7`), every check of that flow
+passing (section 8); its timing is nextpnr's estimate. **Nothing has been built with Vivado**
+(there is no Vivado host yet, gap G2) and **nothing has been programmed** (the board is not
+connected, G1/G3): every physical result is pending. The first real run of `build.tcl` will
+also be the first time Vivado reads these constraints; section 8 lists what that run must
+confirm.
 
 | | Where |
 |---|---|
@@ -18,9 +21,10 @@ these constraints; section 8 lists what that run must confirm.
 | Design file lists | `boards/arty_a7/designs/*.files` |
 | Board variants (part, IDCODE, openFPGALoader name) | `boards/arty_a7/boards.txt` |
 | Vivado flow | `boards/arty_a7/vivado/build.tcl` |
+| Open flow: the constraints nextpnr applies | `boards/arty_a7/nextpnr-xdc.awk` (the flow itself: `tools/openxc7-build.sh`, OPEN-FLOW.md) |
 | Wrappers | `tools/fpga-build.sh`, `tools/program.sh`, `tools/check-wiring.py` |
 | Digilent's master XDC (in git) and manuals and schematics (a local cache, `fetch.sh fetch`), with SHA-256 | `boards/arty_a7/digilent/` |
-| Simulation: primitive models, stand-in SoC, tests | `sim/board/` |
+| Simulation: primitive models, stand-in SoC, tests; the open-flow evidence script | `sim/board/` (`openxc7_evidence.sh`) |
 | Make targets | `mk/area-board.mk` |
 | Evidence | `docs/evidence/board/` |
 
@@ -33,8 +37,10 @@ these constraints; section 8 lists what that run must confirm.
 
 Both take `BOARD` (`arty_a7_35t` or `arty_a7_100t`, the spec's `[boards]` names; the top turns
 it into sysinfo's `BOARD_ID` from `surfcpu_soc.vh`) and the build identity `BUILD_ID`,
-`BUILD_FLAGS`, `BUILD_TIME`, which `tools/fpga-build.sh` passes as Vivado generics. The pins of
-both variants are the same (checked against both master XDC files); only the part differs.
+`BUILD_FLAGS`, `BUILD_TIME`, which `tools/fpga-build.sh` passes as Vivado generics, or for the
+open flow as the defines `ARTY_BUILD_*` that the tops take as their parameters' defaults
+(section 8). The pins of both variants are the same (checked against both master XDC files);
+only the part differs.
 
 ## 2. Clocks
 
@@ -385,8 +391,13 @@ the script or the constraints, never a waiver to get a bitstream.
 
 The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vivado` runs the
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
-locally, with a temporary HOME and output directory (100 checks with fetch.sh's: refusals, dry runs, both flows,
-the staged files, `params.tcl`, the TOML manifest, and each gate stopping the bitstream).
+locally, a fake `openxc7-build.sh` writes the open flow's outputs (its dry runs use the real
+script), and a fake `openFPGALoader` answers like the real one, with a temporary HOME and
+output directory. 200 checks with fetch.sh's: refusals, dry runs, all three flows, the staged
+files, `params.tcl`, the TOML manifest, each gate stopping the bitstream (a report format
+Vivado might change among them), the dropped ssh connection and `--fetch`, the dirty flag
+from a scratch git repository, the open flow's constraint subset and manifest, and
+`tools/program.sh`'s cable, IDCODE, header and manifest checks.
 
 ## 9. Programming
 
@@ -456,5 +467,5 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (100 wrapper and fetch.sh checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (200 wrapper and fetch.sh checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
