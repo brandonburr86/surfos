@@ -4,6 +4,9 @@
 #   make lint-board        Verilator -Wall lint of every board module            (on lint)
 #   make test-board        clock, baseline, top-level and model tests            (on test-soc)
 #   make check-board       clock plan, wiring, vendor files, wrapper and flow tests (on check)
+#   make estimate-board    Yosys synth_xilinx resource estimates and the block RAM budget
+#                          (writes docs/evidence/board/resources.txt)
+#   make evidence-board    rerun the board tests and write docs/evidence/board/*.txt
 
 BD          = boards/arty_a7
 BSIM        = $(BUILD)/sim/board
@@ -29,7 +32,7 @@ BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal
 
 .PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
         board-baseline-rt board-baseline board-top board-digilent board-wiring \
-        board-cdc-xdc board-tools
+        board-cdc-xdc board-tools estimate-board evidence-board
 lint: lint-board
 test-soc: test-board
 check: check-board
@@ -140,3 +143,10 @@ board-tools:
 	@mkdir -p $(BSIM)
 	$(Q)sh sim/board/tools/test_tools.sh > $(BSIM)/test_tools.txt 2>&1 || { grep -v '^ok' $(BSIM)/test_tools.txt; exit 1; }
 	@tail -1 $(BSIM)/test_tools.txt
+
+# ------------------------------------------------------------------------------------ estimates
+estimate-board:
+	$(Q)$(PYTHON) $(BD)/estimate.py docs/evidence/board/resources.txt
+
+evidence-board: estimate-board
+	$(Q)sh sim/board/evidence.sh
