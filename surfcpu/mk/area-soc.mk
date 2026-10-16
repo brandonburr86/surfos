@@ -63,7 +63,7 @@ lint-soc:
 	$(Q)for b in spi ps2 video; do $(SOC_VLINT) --top-module surf_$$b sim/soc/stubs/surf_$$b.v || exit 1; done
 	$(Q)$(SOC_IVERILOG) -s surfcpu_soc -o /dev/null $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
 	$(Q)$(SOC_IVERILOG) -s surfcpu_soc -DSURFCPU_RVFI -o /dev/null $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC)
-	@echo "lint-soc: $(words $(sort $(SOC_TOP_RTL))) RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: $(firstword $(SOC_CORE_SRC)), io: $(SOC_IO_SRC)"
+	@echo "lint-soc: $(words $(sort $(SOC_TOP_RTL))) RTL files, the SoC and the stand-ins clean (Verilator -Wall, Icarus -g2005); core: $(if $(filter sim/soc/stubs/%,$(SOC_CORE_SRC)),the scripted stand-in,$(dir $(firstword $(SOC_CORE_SRC)))*.v), io: $(strip $(SOC_IO_SRC))"
 
 # ---------------------------------------------------------------------------- unit tests
 $(SOC_DIR)/tb_intc.vvp: sim/soc/tb/tb_intc.v rtl/peripherals/surf_intc.v $(SOC_BFM)

@@ -137,10 +137,11 @@ def main():
     for name, data in files.items():
         with open(os.path.join(w, name), 'wb') as f:
             f.write(data)
-    damaged = bytearray(pkg)
-    damaged[64 + (len(pkg) - 64) // 2] ^= 0xFF          # one payload byte: the header stays good
-    with open(os.path.join(w, 'SURFOS.BAD'), 'wb') as f:
-        f.write(damaged)
+    if not a.selftest:
+        damaged = bytearray(pkg)
+        damaged[64 + (len(pkg) - 64) // 2] ^= 0xFF      # one payload byte: the header stays good
+        with open(os.path.join(w, 'SURFOS.BAD'), 'wb') as f:
+            f.write(damaged)
     common = ['--size', '64M', '--standard-dirs', '--file', '/BOOT/CMDLINE.TXT=' + os.path.join(w, 'CMDLINE.TXT'),
               '--file', '/USERS/DOCUMENTS/HELLO.TXT=' + os.path.join(w, 'HELLO.TXT'),
               '--file', '/USERS/DOCUMENTS/DATA.BIN=' + os.path.join(w, 'DATA.BIN')]
@@ -219,7 +220,8 @@ def main():
         r['status'] = p.wait()
         out.close()
         err.close()
-        raw = open(os.path.join(w, name + '.raw'), 'rb').read().decode('utf-8', 'replace')
+        rawp = os.path.join(w, name + '.raw')
+        raw = open(rawp, 'rb').read().decode('utf-8', 'replace') if os.path.exists(rawp) else ''
         r['out'] = ANSI.sub('', raw).replace('\r', '')
         with open(os.path.join(w, name + '-transcript.txt'), 'w') as f:
             f.write(r['out'])
