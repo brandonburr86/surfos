@@ -5,6 +5,7 @@
 #   make test-ddr        every DDR simulation (on test-soc)
 #   make check-ddr       test-ddr plus the Yosys synthesis check and check-mig (on check)
 #   make check-mig       the MIG recipe without Vivado (project files, provenance, wiring, Tcl dry run)
+#   make prove-ddr       formal proofs of the mailbox and the bridge (on check); prove-ddr-stale (slow)
 #   make test-ddr-mutants  the mutation check of the tests (slow; not on check)
 #   make litedram-gen    generate the LiteDRAM core for the Arty (fetches pinned sources; not on check)
 
@@ -30,7 +31,7 @@ DDR_VFLAGS   = --cc --exe --build -j $(DDR_JOBS) -O2 --x-assign unique --x-initi
 DDR_RATIOS   = 40:10:0 40:40:0 40:37.3:0 40:97:0 10:12.3077:0 40:12.3077:0.3 13.1:41.7:0.3
 
 .PHONY: lint-ddr test-ddr check-ddr test-ddr-bridge test-ddr-ratios test-ddr-defaults synth-ddr \
-        test-ddr-icarus test-ddr-mutants check-mig
+        test-ddr-icarus test-ddr-mutants check-mig prove-ddr prove-ddr-stale
 lint: lint-ddr
 test-soc: test-ddr
 check: check-ddr
@@ -191,5 +192,25 @@ check-mig:
 	@echo "check-mig: wiring example clean (Verilator -Wall, Icarus)"
 	$(Q)$(YOSYS) -q -c sim/ddr/vivado_dryrun.tcl | grep -v 'generated in'
 
-check-ddr: test-ddr synth-ddr check-mig
+# Formal (SymbiYosys; ABC PDR, unbounded): the mailbox's protocol for every interleaving of the
+# two clocks, and the bridge's SurfBus obligations for any controller behaviour and any resets,
+# with covers that show the properties are not vacuous, plus the "no stale answer" property to
+# 40 steps (bounded, about a minute). prove-ddr-stale tries that property unbounded; PDR needs
+# far longer for it, so it is not on check.
+SBY ?= sby
+prove-ddr:
+	@mkdir -p $(DDR_OUT)
+	$(Q)for j in mailbox:prove mailbox:cover bridge:prove bridge:cover bridge:stalebmc; do \
+	  f=$${j%%:*}; t=$${j#*:}; \
+	  $(SBY) -f -d $(DDR_OUT)/formal_$${f}_$$t sim/ddr/formal/$$f.sby $$t > $(DDR_OUT)/formal_$${f}_$$t.txt 2>&1 \
+	    || { tail -20 $(DDR_OUT)/formal_$${f}_$$t.txt; echo "prove-ddr: FAIL ($$f $$t)"; exit 1; }; done
+	@echo "prove-ddr: PASS (mailbox and bridge proved, covers reached, no stale answer within 40 steps)"
+
+prove-ddr-stale:
+	@mkdir -p $(DDR_OUT)
+	$(Q)$(SBY) -f -d $(DDR_OUT)/formal_bridge_stale sim/ddr/formal/bridge.sby stale > $(DDR_OUT)/formal_bridge_stale.txt 2>&1 \
+	  || { tail -20 $(DDR_OUT)/formal_bridge_stale.txt; exit 1; }
+	@echo "prove-ddr-stale: PASS"
+
+check-ddr: test-ddr synth-ddr check-mig prove-ddr
 	@echo "check-ddr: PASS"
