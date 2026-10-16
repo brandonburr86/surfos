@@ -1,0 +1,57 @@
+# SurfCPU SoC test: decode errors and the permission rules from both ports, with no side
+# effects (sim/soc/scripts/soc_errors.sbs). Needs --rom.
+
+# unmapped addresses from both ports at once
+D random-holes 300
+I random-holes 300
+sync
+
+# every MMIO register with every non-word byte enable, and offsets with no register
+D mmio-rules uart
+D mmio-rules timer
+D mmio-rules intc
+D mmio-rules gpio
+D mmio-rules spi
+D mmio-rules ps2
+D mmio-rules video
+D mmio-rules sysinfo
+D read    uart.end-4 error
+D read16  timer+2 error
+
+# ... none of which changed anything (the UART is looped back, so a byte sent would arrive)
+D idle    3000
+D read    uart.LEVEL expect 0
+D read    uart.STATUS expect uart.STATUS.TX_IDLE
+D read    uart.CTRL expect 0
+D read    uart.DIV expect (clocks.sys_hz+57600)//115200
+D read    gpio.LED expect 0
+D read    gpio.IE expect 0
+D read    intc.ENABLE expect 0
+D read    timer.MSIP expect 0
+D read    timer.MTIMECMP_LO expect 0xFFFFFFFF
+D read    sysinfo.SCRATCH expect 0
+checkirq  ext=0 timer=0 soft=0
+
+# the boot ROM refuses writes of every width, anywhere
+D write   bootrom 0 error
+D write16 bootrom+2 0 error
+D write8  bootrom.last+3 0 error
+D rawwrite bootrom+0x40 be=0101 0xFFFFFFFF error
+D write   bootrom+0x8000 0xFFFFFFFF error
+D read    bootrom expect rom
+D read    bootrom.last expect rom
+D read    bootrom+0x40 expect rom
+D read    bootrom+0x8000 expect rom
+
+# no fetch from MMIO, text RAM or the reserved window
+I fetch   uart.TXDATA error
+I fetch   gpio error
+I fetch   intc.NEXT error
+I fetch   spi error
+I fetch   ps2.DATA error
+I fetch   video.PALETTE error
+I fetch   sysinfo.BUILD_TIME error
+I fetch   textram error
+I fetch   textram.last error
+I fetch   eth error
+sync

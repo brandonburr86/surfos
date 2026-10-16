@@ -4,7 +4,8 @@ SurfCPU SurfBus protocol monitor
 File: surfbus_monitor.v Date: 10/15/26 (SurfCPU)
 --------------------
 Testbench-only checker for one SurfBus link (docs/SURFBUS.md section 2), sampled at every
-rising edge out of reset: no X on the handshake signals; a request offered and not accepted
+rising edge out of reset: no X on req_valid and rsp_valid (nor on req_ready and rsp_err while
+they matter); a request offered and not accepted
 is offered again, unchanged, in the next cycle (rule 2); every response answers an earlier
 accepted request, never one accepted at the same edge (rule 4); a master offers no new
 request while one is outstanding, except in the cycle its response arrives (rule 6); every
@@ -56,8 +57,8 @@ module surfbus_monitor #(
             held        = 1'b0;
             age         = 0;
         end else begin
-            if (req_valid === 1'bx || req_ready === 1'bx || rsp_valid === 1'bx ||
-                (rsp_valid === 1'b1 && rsp_err === 1'bx))
+            if (req_valid === 1'bx || (req_valid === 1'b1 && req_ready === 1'bx) ||
+                rsp_valid === 1'bx || (rsp_valid === 1'b1 && rsp_err === 1'bx))
                 violation("X on a handshake signal");
             if (held && req_valid !== 1'b1)
                 violation("request withdrawn before acceptance");

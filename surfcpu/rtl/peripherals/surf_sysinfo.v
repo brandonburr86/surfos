@@ -8,7 +8,9 @@ clock rates and the DDR state, all read only except SCRATCH. MAGIC reads 0x46525
 in memory order); the versions come from spec/soc.toml; the build values are parameters set
 by the board top or the simulation. DDR_STATUS shows the bridge's calibration levels
 (CALIB_DONE, CALIB_FAIL), PRESENT = FEATURES.DDR, and TIMEOUT, which latches any
-ddr_timeout from the bridge's watchdog and stays set until reset. BUILD_FLAGS and FEATURES
+ddr_timeout from the bridge's watchdog and stays set until reset; it reads 1 already in the
+cycle of the pulse, so a read right behind the abandoned access (which the bridge answers in
+that same cycle) sees it. BUILD_FLAGS and FEATURES
 show only their defined bits. A SurfBus slave (docs/SURFBUS.md) that accepts every request
 and answers in the next cycle; an unknown offset, a non-word access or a fetch gets an error
 and has no effect; writes to read-only registers are ignored.
@@ -67,7 +69,7 @@ module surf_sysinfo #(
         ddr_status[SURF_SYSINFO_DDR_STATUS_CALIB_DONE_LSB] = ddr_calib_done;
         ddr_status[SURF_SYSINFO_DDR_STATUS_CALIB_FAIL_LSB] = ddr_calib_fail;
         ddr_status[SURF_SYSINFO_DDR_STATUS_PRESENT_LSB]    = FEATURES[SURF_SYSINFO_FEATURES_DDR_LSB];
-        ddr_status[SURF_SYSINFO_DDR_STATUS_TIMEOUT_LSB]    = timeout_q;
+        ddr_status[SURF_SYSINFO_DDR_STATUS_TIMEOUT_LSB]    = timeout_q | ddr_timeout;
     end
 
     // ---------------------------------------------------------------- SurfBus slave

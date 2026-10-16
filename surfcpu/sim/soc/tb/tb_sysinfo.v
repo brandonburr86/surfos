@@ -117,9 +117,15 @@ module tb_sysinfo;
             bfm.read_check(B + SURF_SYSINFO_DDR_STATUS, 4'hF, ddr_status(d, f, 0), ALL);
         end
 
-        // TIMEOUT: a one-cycle pulse latches until reset
+        // TIMEOUT: a one-cycle pulse latches until reset, and a read accepted in the cycle of
+        // the pulse already sees it
+        bfm.max_gap = 0;
         @(negedge clk) timeout = 1'b1;
-        @(negedge clk) timeout = 1'b0;
+        fork
+            bfm.read_check(B + SURF_SYSINFO_DDR_STATUS, 4'hF, ddr_status(d, f, 1), ALL);
+            @(negedge clk) timeout = 1'b0;
+        join
+        bfm.max_gap = 2;
         for (n = 0; n < 10; n = n + 1) begin
             d = $random(seed); f = $random(seed);
             calib_done = d; calib_fail = f;
