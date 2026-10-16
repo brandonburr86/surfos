@@ -16,6 +16,15 @@ become RISC-V ones here. The board adds its own commands (boards/<board>/board.c
 
 shell/main.c's small commands are static there, so the ones shared are repeated here
 with the same words; a change to one belongs in both.
+
+10/16/26 (milestone 8, files that persist): the card is taken out of an Arty, or the board
+switched off, without a word. So a command that changes a file system (write, append, cp,
+mv, rm, mkdir, rmdir, fsbench) is followed by a sync of every mounted volume, one at a time:
+at the prompt what it did is on the card, and a write the card refuses is that command's
+failure, said on its console with the volume it was for, not a surprise at the next eject.
+A volume whose disk was taken out before the command began is left out (that was said when
+it went); one taken out during the command is a failure. append adds a line to a file (this
+shell has no redirection).
 */
 
 #include <blibc_common.h>
@@ -48,6 +57,10 @@ with the same words; a change to one belongs in both.
 
 static const struct command commands[];
 static const u_int ncommands;
+
+/* 10/16/26: a command that changes a file system: the shell syncs them all after it (above) */
+#define KCMD_SYNC 0x100
+#define SYNC_MOUNTS 16                          /* the mounts it looks at; more are synced together */
 
 u64 time_now(const char **source);             /* arch/riscv32/time.c */
 
@@ -528,6 +541,24 @@ static int cmd_write(int argc, char **argv) {
     return r < 0 || c ? CMD_FAIL : CMD_OK;
 }
 
+/* append <file> <text>...: the words, space separated, plus a newline, at the end of the file
+   (made when it is not there) */
+static int cmd_append(int argc, char **argv) {
+    struct file *f;
+    int r, c, i;
+    if(argc < 3) { printf("    usage: append <file> <text>...\n"); return CMD_USAGE; }
+    r = vfs_open(argv[1], O_WRONLY | O_CREAT | O_APPEND, &f);
+    if(r) { printf("    append: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
+    for(i = 2; i < argc && r >= 0; i++) {
+        r = vfs_write(f, argv[i], strlen(argv[i]));
+        if(r >= 0) r = vfs_write(f, i + 1 < argc ? " " : "\n", 1);
+    }
+    if(r < 0) printf("    append: %s\n", strerror(r));
+    c = vfs_close(f);
+    if(c) printf("    append: close: %s\n", strerror(c));
+    return r < 0 || c ? CMD_FAIL : CMD_OK;
+}
+
 static int cmd_cp(int argc, char **argv) {
     struct file *in, *out;
     char *buf;
@@ -724,14 +755,15 @@ static const struct command commands[] = {
     { "cd",        "[dir]",     "change the current directory", cmd_cd },
     { "pwd",       "",          "print the current directory", cmd_pwd },
     { "stat",      "<path>",    "size, time and location of a file", cmd_stat },
-    { "cp",        "<src> <dst>", "copy a file", cmd_cp },
-    { "mv",        "<from> <to>", "rename or move a file or directory", cmd_mv },
-    { "write",     "<file> <text>...", "create a file with one line of text", cmd_write },
-    { "mkdir",     "<dir>",     "create a directory", cmd_mkdir },
-    { "rm",        "<file>...", "delete files", cmd_rm },
-    { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir },
+    { "cp",        "<src> <dst>", "copy a file", cmd_cp, KCMD_SYNC },
+    { "mv",        "<from> <to>", "rename or move a file or directory", cmd_mv, KCMD_SYNC },
+    { "write",     "<file> <text>...", "create a file with one line of text", cmd_write, KCMD_SYNC },
+    { "append",    "<file> <text>...", "add a line of text to the end of a file", cmd_append, KCMD_SYNC },
+    { "mkdir",     "<dir>",     "create a directory", cmd_mkdir, KCMD_SYNC },
+    { "rm",        "<file>...", "delete files", cmd_rm, KCMD_SYNC },
+    { "rmdir",     "<dir>",     "delete an empty directory", cmd_rmdir, KCMD_SYNC },
     { "sync",      "",          "write cached blocks to the disks", cmd_sync },
-    { "fsbench",   "<dir> [MB]", "time writing and reading a file", cmd_fsbench },
+    { "fsbench",   "<dir> [MB]", "time writing and reading a file", cmd_fsbench, KCMD_SYNC },
     { "crc32",     "<file>...", "CRC-32 (as zlib) and size of files", cmd_crc32 },
     { "hexdump",   "<dev> [blk] [n]", "dump blocks of a block device", cmd_hexdump },
     { "readbench", "<dev> [MB]", "read speed of a block device (reads only)", cmd_readbench },
@@ -769,9 +801,62 @@ static const struct command *find_command(const char *name) {
     return NULL;
 }
 
+/* the disks of the mounts that are unplugged now (their mounts stay until umount): up to max */
+static int gone_disks(struct bdev **gone, int max) {
+    struct vfs_mount_view *v = (struct vfs_mount_view *)kalloc(SYNC_MOUNTS * sizeof(struct vfs_mount_view));
+    int n, i, k = 0;
+    if(!v) return 0;
+    n = vfs_mount_views(v, SYNC_MOUNTS);
+    for(i = 0; i < n && i < SYNC_MOUNTS && k < max; i++) if(v[i].dev && v[i].dev->gone) gone[k++] = v[i].dev;
+    kfree(v);
+    return k;
+}
+
+/* After a KCMD_SYNC command: each mounted volume that can be written goes to its disk (vfs_fsync
+   on its root: the file system's own state, the cached blocks, the disk's cache), and a failure
+   says which. gone[] are the disks that were unplugged before the command. 0, or an error. */
+static int sync_mounts(const char *cmd, struct bdev **gone, int ngone) {
+    struct vfs_mount_view *v = (struct vfs_mount_view *)kalloc(SYNC_MOUNTS * sizeof(struct vfs_mount_view));
+    int n, i, j, bad = 0;
+    if(!v) {
+        bad = vfs_sync();
+        if(bad) printf("    %s: not all of it reached the disk: %s\n", cmd, strerror(bad));
+        return bad;
+    }
+    n = vfs_mount_views(v, SYNC_MOUNTS);
+    for(i = 0; i < n && i < SYNC_MOUNTS; i++) {
+        struct file *f;
+        int r;
+        if(!v[i].dev || v[i].readonly) continue;
+        for(j = 0; j < ngone && gone[j] != v[i].dev; j++) ;
+        if(j < ngone) continue;                                 /* unplugged before the command */
+        if(v[i].dev->gone) {
+            printf("    %s: not all of it reached %s: its disk was taken out\n", cmd, v[i].path);
+            bad = -ENODEV;
+            continue;
+        }
+        r = vfs_open(v[i].path, O_RDONLY, &f);
+        if(!r) {
+            r = vfs_fsync(f);
+            vfs_close(f);
+        }
+        if(r) {
+            printf("    %s: not all of it reached %s: %s\n", cmd, v[i].path, strerror(r));
+            bad = r;
+        }
+    }
+    kfree(v);
+    if(n > SYNC_MOUNTS && vfs_sync() && !bad) {                 /* the rest, all at once */
+        printf("    %s: not all of it reached the disks\n", cmd);
+        bad = -EIO;
+    }
+    return bad;
+}
+
 int shell_run_command(int argc, char **argv) {
     const struct command *c;
-    int r;
+    struct bdev *gone[SYNC_MOUNTS];
+    int r, ngone = 0;
     if(argc < 1 || !argv[0]) return -ENOENT;
     c = find_command(argv[0]);
     if(!c) return -ENOENT;
@@ -782,7 +867,9 @@ int shell_run_command(int argc, char **argv) {
         console_capture_begin(kept);
         return CMD_USAGE;
     }
+    if(c->flags & KCMD_SYNC) ngone = gone_disks(gone, SYNC_MOUNTS);
     r = c->fn(argc, argv);
+    if((c->flags & KCMD_SYNC) && sync_mounts(argv[0], gone, ngone) && r == CMD_OK) r = CMD_FAIL;  /* 10/16/26 (above) */
     return r < 0 ? CMD_FAIL : r;
 }
 
