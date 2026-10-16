@@ -31,10 +31,13 @@ tools/                 surfimg.py, bin2mem.py, mkcard.py, isa-audit.py, deploy-s
 
 | File | What | Size |
 |---|---|---|
-| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 40,172 bytes, **61.3 %** of the 64 KiB ROM (code 25,060, constants 15,112) |
-| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,968 bytes, 42.7 % |
-| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 15,012 bytes |
+| `build/fw/surfboot.{elf,bin,mem}` | SurfBoot; `.mem` is the boot ROM image | 40,084 bytes, **61.2 %** of the 64 KiB ROM (code 25,000, constants 15,084) |
+| `build/fw/bramdiag.{elf,bin,mem}` | the BRAM diagnostics, an alternative ROM image | 27,936 bytes, 42.6 % |
+| `build/fw/ddrdiag.elf`, `DDRDIAG.BIN`, `ddrdiag.payload.bin` | the DDR diagnostic package | 14,992 bytes |
 | `build/fw/hello.elf`, `HELLO.BIN` | the handoff test kernel (tests only) | 4,340 bytes |
+
+The sizes are for a build from a clean tree; with uncommitted changes the banner's
+"dirty tree" text adds about 90 bytes.
 
 Flags: `-march=rv32im_zicsr_zifencei -mabi=ilp32` (`RV_CFLAGS`), `-Os -msave-restore`
 (shared prologues: 2.9 KB less ROM; the hot loops are leaf functions and do not use them),

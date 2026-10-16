@@ -1,0 +1,65 @@
+# fw track evidence: the review's repro scripts after the fix round (2026-10-15, tree at 9e31b68)
+
+The reviewer's repro scripts (deploy_symlink_repro.py, deploy_failopen_repro.py, spi0_repro.sh,
+isa/hidden.S with isa/run.sh; kept outside the tree, not committed) run unchanged in the
+toolchain container against this tree. Each now fails safe: the symlink repro exits 1
+("safe"), the fail-open case is refused before anything is written, `spi 0` selects DIV 0,
+and the audit refuses hidden.elf (control.elf, the same instructions written as mnemonics,
+fails too). Output as printed:
+
+######## deploy_symlink_repro
+A. /BOOT -> a directory outside the card
+  deploy-sd exit 1
+  | card: /work/surfcpu/build/fw/review_deploy/A/card (/dev/disk9s1, MS-DOS FAT32, media, Secure Digital)
+  | package: /work/surfcpu/build/fw/HELLO.BIN (4340 bytes, Hello 1.0.0 build 9e31b683, CRC 0x76f1f667): valid
+  | deploy-sd: /BOOT is a symbolic link (FAT "XSym" file); refusing to follow it
+  card holds:    ['BOOT@']
+  outside holds: []
+B. /BOOT/SURFOS.NEW -> an unrelated file outside the card (keep_old path: an older SURFOS.BIN exists)
+  deploy-sd exit 1
+  | card: /work/surfcpu/build/fw/review_deploy/B/card (/dev/disk9s1, MS-DOS FAT32, media, Secure Digital)
+  | package: /work/surfcpu/build/fw/HELLO.BIN (4340 bytes, Hello 1.0.0 build 9e31b683, CRC 0x76f1f667): valid
+  | deploy-sd: /BOOT/SURFOS.NEW is a symbolic link (FAT "XSym" file); the card's /BOOT must hold none: refusing
+  victim is now 34 bytes, starts b'the '; equals the package: False
+C. /SYSTEM/SURFCARD.TXT -> any file outside the card (no --new-card given)
+  deploy-sd exit 1
+  | card: /work/surfcpu/build/fw/review_deploy/C/card (/dev/disk9s1, MS-DOS FAT32, media, Secure Digital)
+  | package: /work/surfcpu/build/fw/HELLO.BIN (4340 bytes, Hello 1.0.0 build 9e31b683, CRC 0x76f1f667): valid
+  | deploy-sd: /SYSTEM/SURFCARD.TXT is a symbolic link (FAT "XSym" file); the card's /SYSTEM must hold none: refusing
+
+A: package written outside the card, reported success: False
+B: unrelated file outside the card overwritten:        False
+C: marker check satisfied through a symlink:           False
+repro exit 1 (0 = vulnerable, 1 = safe)
+######## deploy_failopen_repro
+deploy-sd exit 1
+  | deploy-sd: diskutil did not name the whole disk of /dev/disk9s1, so its partition table cannot be checked; refusing
+whole disk (partition scheme) queried: False
+package installed on a card whose scheme was never checked: False
+######## spi0_repro
+surfboot> spi 0
+spi: data clock DIV 0 = 12500 kHz (applies from the next card initialization)
+surfboot> sd
+sd: SPI 390 kHz for identification, 12500 kHz for data (DIV 0)
+surfboot> spi 2
+spi: data clock DIV 2 = 4166 kHz (applies from the next card initialization)
+surfboot> sd
+sd: SPI 390 kHz for identification, 4166 kHz for data (DIV 2)
+######## isa
+== hidden.elf: objdump
+== hidden.elf: isa-audit
+isa-audit: hidden.elf: FAILED, 4 problem(s)
+isa-audit exit 1
+== control.elf: objdump
+== control.elf: isa-audit
+isa-audit: control.elf: FAILED, 4 problem(s)
+isa-audit exit 1
+
+## The audit's full report on hidden.elf (python3 tools/isa-audit.py review/isa/hidden.elf)
+
+isa-audit: /work/review/isa/hidden.elf: FAILED, 4 problem(s)
+  0x80000004 (?): 00b5252f: atomic (A extension)
+  0x80000008 (?): 00052007: floating point (F/D extension)
+  0x8000000c (?): 0001 is a 16-bit (compressed) instruction
+  0x8000000e (?): 0001 is a 16-bit (compressed) instruction
+isa-audit exit 1
