@@ -17,6 +17,11 @@ on another console frees mount records meanwhile.
 
 10/6/26: every command returns its status (shell.h): a refused device, a Cancelled
 question and a busy volume are failures; df fails when a volume cannot say its size.
+
+10/16/26 (SurfCPU, milestone 8; audit B2): eject writes each mount out before it unmounts
+anything. A disk that refuses the writes keeps its mounts, and eject says so instead of
+"safe to remove": unmounting would drop what could not be written. sync tries again;
+umount gives the changes up.
 */
 
 #include <blibc_common.h>
@@ -238,6 +243,7 @@ int cmd_eject(int argc, char **argv) {
     struct vfs_mount_view *v;
     struct bdev *d, *disk = NULL, *p;
     char paths[8][VFS_PATH_MAX], why[128];
+    bool ro[8];
     u_int n = 0, i;
     int r = 0, nv, total, j;
 
@@ -250,7 +256,10 @@ int cmd_eject(int argc, char **argv) {
         if(x && (!strcmp(x->name, argv[1]) || !strcmp(bdev_disk(x)->name, argv[1]))) disk = bdev_disk(x);
     }
     for(j = 0; j < nv && disk; j++) {
-        if(v[j].dev && bdev_disk(v[j].dev) == disk && n < 8) strlcpy(paths[n++], v[j].path, sizeof(paths[0]));
+        if(v[j].dev && bdev_disk(v[j].dev) == disk && n < 8) {
+            ro[n] = v[j].readonly;
+            strlcpy(paths[n++], v[j].path, sizeof(paths[0]));
+        }
     }
     kfree(v);
     if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
@@ -259,6 +268,24 @@ int cmd_eject(int argc, char **argv) {
             printf("    eject: %s: %s is busy: %s\n", disk->name, paths[i], why);
             return CMD_FAIL;
         }
+    }
+    for(i = 0; i < n && !disk->gone; i++) {                  /* out to the disk first (B2) */
+        struct file *f;
+        int w;
+        if(ro[i]) continue;
+        w = vfs_open(paths[i], O_RDONLY, &f);
+        if(!w) {
+            w = vfs_fsync(f);
+            vfs_close(f);
+        }
+        if(w) {
+            printf("    eject: %s: %s could not be written: %s\n", disk->name, paths[i], strerror(w));
+            r = w;
+        }
+    }
+    if(r) {
+        printf("    eject: %s stays mounted: sync tries the writes again; umount gives them up\n", disk->name);
+        return CMD_FAIL;
     }
     for(i = 0; i < n && !r; i++) {
         r = unmount("eject", paths[i]);
