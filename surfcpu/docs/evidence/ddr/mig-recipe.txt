@@ -1,0 +1,54 @@
+# MIG recipe for the Arty A7 DDR3L, 2026-10-15. PENDING: never run in Vivado (no build host).
+# Everything below was checked without Vivado (make check-mig, in surfcpu-toolchain:2026-10-15).
+
+## provenance (ip/mig/digilent/SOURCE.txt)
+Repository: https://github.com/Digilent/vivado-boards
+Commit:     d8d43ed9f3f7e367ee3de82782ed601d88305677 (2026-10-13, master)
+Licence:    MIT, Copyright (c) 2021 Digilent, Inc. (License.txt, from the repository root)
+Board:      Arty A7, board revision E.0 (board.xml: compatible_board_revisions E.0), board-file
+28a42137bb9c77a6aa931c5ca670134620f448051dbd708a05921280a7b277ba  License.txt
+3f72593b115e717bbc9a2e219cc321b36c2b7a5786ec32d9c6178390560862ec  arty-a7-100/mig.prj
+8c0922bb8e5723db8f5ac075cf4831c43ac74bb64b9313a6ac962171b2888f89  arty-a7-35/mig.prj
+
+## the four changes (diff of Digilent's arty-a7-100 file and ip/mig/arty_a7_100t/mig_ddr3.prj)
+8c8
+<   <ModuleName>design_1_mig_7series_0_0</ModuleName>
+---
+> <!-- SurfCPU: made from Digilent's vivado-boards file (ip/mig/digilent/SOURCE.txt) by ip/mig/make_prj.py; the four changes are listed there and in docs/DDR.md. -->
+9a10,11
+>   <ModuleName>mig_ddr3</ModuleName>
+> 
+26c28
+<   <SystemClock>Single-Ended</SystemClock>
+---
+>   <SystemClock>No Buffer</SystemClock>
+57c59
+<     <Ordering>Normal</Ordering>
+---
+>     <Ordering>Strict</Ordering>
+117,119d118
+<     <System_Clock>
+<       <Pin Bank="35" PADName="E3(MRCC_P)" name="sys_clk_i"/>
+<     </System_Clock>
+148,155c147
+<     <PortInterface>AXI</PortInterface>
+<     <AXIParameters>
+<       <C0_C_RD_WR_ARB_ALGORITHM>RD_PRI_REG</C0_C_RD_WR_ARB_ALGORITHM>
+<       <C0_S_AXI_ADDR_WIDTH>28</C0_S_AXI_ADDR_WIDTH>
+<       <C0_S_AXI_DATA_WIDTH>128</C0_S_AXI_DATA_WIDTH>
+<       <C0_S_AXI_ID_WIDTH>4</C0_S_AXI_ID_WIDTH>
+<       <C0_S_AXI_SUPPORTS_NARROW_BURST>0</C0_S_AXI_SUPPORTS_NARROW_BURST>
+<     </AXIParameters>
+---
+>     <PortInterface>NATIVE</PortInterface>
+
+## make check-mig
+make_prj: ip/mig/*/mig_ddr3.prj up to date; MIG native UI 28-bit app_addr, 128-bit data, ui_clk 81.25 MHz match surf_ddr_bridge
+check-mig: Digilent's files match ip/mig/digilent/SOURCE.txt
+check-mig: wiring example clean (Verilator -Wall, Icarus)
+vivado_dryrun: PASS (mig_ddr3.tcl for both boards and its refusals; surf_ddr_bridge.xdc: 7 crossings, 11 cell patterns, all real registers)
+
+## ip/mig/fetch-digilent.sh (re-fetch at the pinned commit and compare, network)
+fetch-digilent: License.txt = License.txt at d8d43ed9f3f7e367ee3de82782ed601d88305677 (28a42137bb9c77a6aa931c5ca670134620f448051dbd708a05921280a7b277ba)
+fetch-digilent: arty-a7-100/mig.prj = new/board_files/arty-a7-100/E.0/1.1/mig.prj at d8d43ed9f3f7e367ee3de82782ed601d88305677 (3f72593b115e717bbc9a2e219cc321b36c2b7a5786ec32d9c6178390560862ec)
+fetch-digilent: arty-a7-35/mig.prj = new/board_files/arty-a7-35/E.0/1.1/mig.prj at d8d43ed9f3f7e367ee3de82782ed601d88305677 (8c0922bb8e5723db8f5ac075cf4831c43ac74bb64b9313a6ac962171b2888f89)

@@ -1,0 +1,36 @@
+# SurfCPU: proofs of surf_ddr_bridge's SurfBus obligations (bridge_formal.sv)
+# File: bridge.sby Date: 10/15/26 (SurfCPU)
+#   run from surfcpu/: sby -f -d build/ddr/formal_bridge_<task> sim/ddr/formal/bridge.sby <task>
+#   prove  every property of bridge_formal.sv, unbounded (ABC PDR; seconds)
+#   cover  a real answer from the controller side is reachable
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+prove: aigsmt z3
+cover: mode cover
+cover: depth 60
+multiclock on
+
+[engines]
+prove: abc pdr
+cover: smtbmc z3
+
+[script]
+read -formal -Irtl/generated surf_sync.v surf_ddr_mailbox.v surf_ddr_bridge.v
+read -formal bridge_formal.sv
+prep -top bridge_formal
+# bit-blast, so the data bits no assertion depends on (addresses, write data, read data) go
+flatten
+techmap
+opt -fast
+opt_clean -purge
+
+[files]
+rtl/lib/surf_sync.v
+rtl/soc/ddr/surf_ddr_mailbox.v
+rtl/soc/ddr/surf_ddr_bridge.v
+rtl/generated/surfcpu_soc.vh
+sim/ddr/formal/bridge_formal.sv

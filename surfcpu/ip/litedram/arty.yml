@@ -1,0 +1,41 @@
+# SurfCPU: LiteDRAM standalone core for the Arty A7's DDR3L, the open-source flow's alternative
+# to the MIG (docs/DDR.md). File: arty.yml Date: 10/15/26 (SurfCPU)
+# litedram/examples/arty.yml at tag 2026.08 (c454a440) with only one native user port; the
+# memory, PHY, electrical and clock settings are the example's (100 MHz in, 100 MHz core clock,
+# DDR3 at 4 x 100 MHz = 400 MHz, 800 MT/s; IDELAY reference 200 MHz). The core calibrates by
+# itself: its own small VexRiscv runs the LiteX BIOS's sdram_init from an internal ROM and then
+# raises init_done (or init_error).
+{
+    # General ------------------------------------------------------------------
+    "speedgrade": -1,          # FPGA speed grade
+    "cpu":        "vexriscv",  # calibration CPU, inside the core
+    "memtype":    "DDR3",      # DRAM type
+    "uart":       "rs232",     # the BIOS console (calibration report) on the core's serial pins
+
+    # PHY ----------------------------------------------------------------------
+    "cmd_latency":     0,             # command additional latency
+    "sdram_module":    "MT41K128M16", # the Arty's 2 Gbit x16 DDR3L
+    "sdram_module_nb": 2,             # byte groups (x16)
+    "sdram_rank_nb":   1,             # ranks
+    "sdram_phy":       "A7DDRPHY",    # Artix-7 PHY (ISERDESE2/OSERDESE2/IDELAYE2)
+
+    # Electrical ---------------------------------------------------------------
+    "rtt_nom": "60ohm",  # nominal termination
+    "rtt_wr":  "60ohm",  # write termination
+    "ron":     "34ohm",  # output driver impedance
+
+    # Frequency ----------------------------------------------------------------
+    "input_clk_freq":   100e6, # the board's oscillator
+    "sys_clk_freq":     100e6, # core and user-port clock (DDR clock = 4 x sys_clk)
+    "iodelay_clk_freq": 200e6, # IDELAYCTRL reference
+
+    # Core ---------------------------------------------------------------------
+    "cmd_buffer_depth": 16,
+
+    # User ports ---------------------------------------------------------------
+    "user_ports": {
+        "native_0": {
+            "type": "native",          # cmd/wdata/rdata streams, 128-bit data at 4:1 x16
+        },
+    },
+}
