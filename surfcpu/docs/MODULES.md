@@ -169,6 +169,16 @@ FILE`, `--sd-flush`; exit 2 when `--max-cycles` runs out first. `--vga-dir` writ
 and `screen.txt` (timing, the decoded 80x30 text, the cursor). docs/SOC.md section 9 has the
 details.
 
+Card actions (2026-10-16, added by the os track for its fault tests): `--sd-fault
+KIND=N@REGEX` sets the card model's `faults.KIND` (an `SdFaults` member: `no_response`,
+`cmd_crc_error`, `read_error_token`, `error_token`, `read_bad_crc`, `write_crc_reject`,
+`write_error`, `busy_extra`, `init_never_ready`) to N once REGEX has matched, N=0 clearing it;
+`--sd-remove [N@]REGEX` takes the card out (card detect off, the card's state lost, what it was
+given kept), with `N@` right after the Nth block it accepts from then on; `--sd-insert REGEX`
+puts it back. They are entries of the `--send` list, in order with the sends, but an action
+does not move the list's search point, so the entry after it may match the same text. Each is
+logged with its cycle; without them surfsim behaves as before.
+
 ## 8. Clarifications (version 1 unchanged)
 
 * 2026-10-15: `.mem` files are written in lower case (section 5); the trace's memory, trap and
