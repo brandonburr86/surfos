@@ -14,10 +14,13 @@ At start the palette is set to the VGA colours the framebuffer console uses
 pattern to text with a blinking cursor. Its cursor register is in display coordinates,
 as the console's are. A bitstream built without video (sysinfo.FEATURES) has no display:
 the console is the serial line alone.
+
+10/16/26: kernel/console.c calls in here holding its console lock (audit C10), one caller at
+a time, so interrupts stay on while a whole screen is compared and written: that takes
+milliseconds on SurfCPU, and the UART must be heard meanwhile.
 */
 
 #include <surfos/types.h>
-#include <surfos/irq.h>
 #include <asm/io.h>
 #include <surfcpu/soc.h>
 #include <riscv/board.h>
@@ -51,15 +54,11 @@ static void tc_init(void) {
 }
 
 static void tc_draw_cell(u32 col, u32 row, u8 ch, u8 attr) {
-    u_long flags = irq_save();
     textscreen_put(&screen, col, row, ch, attr);
-    irq_restore(flags);
 }
 
 static void tc_present(const u8 *cells, u32 cols, u32 rows) {
-    u_long flags = irq_save();
     textscreen_present(&screen, cells, cols, rows);
-    irq_restore(flags);
 }
 
 static void tc_set_cursor(u32 col, u32 row, bool visible) {

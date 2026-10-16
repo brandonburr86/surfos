@@ -14,6 +14,10 @@ init restarts, and FAT read and write. At the end the RAM disk is saved through 
 monitor (pmemsave) and checked on the host: fsck.fat finds it clean and mtools reads back
 what SurfOS wrote.
 
+10/16/26: a second boot runs QEMU slowed with -icount to about SurfCPU's pace for scrolltest:
+two kernel tasks print at once while the console scrolls, and every row must stay whole (the
+console lock, kernel/console.c, audit C10; the console before it fails here).
+
 With --stub it then tests the boot ABI's handoff (BOOT-ABI.md section 4): a stand-in for
 SurfBoot's last step (boards/qemu_virt/stub) enters the kernel with a0 = 0, a1 pointing at
 a struct surf_boot_info the harness made (its command line, RAM size and CRC) and a2 = the
@@ -356,6 +360,34 @@ def handoff_boots(args, disk, check, work):
         finally:
             transcript += q.transcript
             q.close()
+    return transcript
+
+
+SCROLL_LINE = re.compile(r'^scroll [AB] \d{3} ')
+SCROLL_WHOLE = re.compile(r'^scroll [AB] \d{3} abcdefghijklmnopqrstuvwxyz0123456789 end$')
+
+
+def scroll_boot(args, disk, check):
+    """scrolltest (arch/riscv32/kshell.c, audit C10): two kernel tasks print 60 lines each at once while the console
+    scrolls, then the kernel checks every row of the console's cells. QEMU runs with -icount shift=7 (one instruction
+    every 128 ns of virtual time, near SurfCPU's pace), so a 10 ms tick often lands inside a scroll or a line: before
+    the console lock the rows came out blank, cut short or twice (the old console fails this check)."""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel), '-icount', 'shift=7,align=off,sleep=off'],
+             disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        ok, out = q.cmd('scrolltest', ['scrolltest: 2 tasks'], timeout=120)
+        m = re.search(r'scrolltest: (.*)', out)
+        check(ok and 'SCROLLTEST PASS' in out, 'scrolltest: two tasks printing at once while the console scrolls leave '
+              'every row whole, each task\'s lines in order (QEMU slowed with -icount)%s' % ('' if 'SCROLLTEST PASS' in out
+                                                                                            else ': ' + (m.group(1) if m else '?')))
+        lines = [l for l in out.splitlines() if SCROLL_LINE.match(l)]
+        check(len(lines) == 120 and all(SCROLL_WHOLE.match(l) for l in lines),
+              'scrolltest: the serial line got the same 120 lines, each whole (%d)' % len(lines))
+        check(q.poweroff() == 0, 'scrolltest: poweroff')
+    finally:
+        transcript = q.transcript
+        q.close()
     return transcript
 
 
@@ -731,6 +763,7 @@ def main():
         q.close()
 
     try:
+        transcript += scroll_boot(args, disk, check)
         if args.stub:
             transcript += handoff_boots(args, disk, check, work)
             transcript += sdsim_boot(args, disk, check, work)
