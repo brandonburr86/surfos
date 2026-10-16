@@ -5,6 +5,9 @@ tasks, demand-paged kernel heaps) that was restored from printouts in 2026. Bran
 `master` is the restoration; `ai-dev` is where the kernel grows. Read `docs/README.md`
 first; it points to the architecture map, the code audit and the roadmap.
 
+On branch `surfcpu`, `surfcpu/` holds SurfCPU (a RISC-V CPU and SoC for the Arty A7 FPGA) and
+`arch/riscv32/` + `boards/` the RISC-V port of SurfOS; read `surfcpu/CLAUDE.md` for that work.
+
 ## Build, run, test
 
 Requirements: `gcc` with 32-bit support (`gcc-multilib` on Debian/Ubuntu), `binutils`,
