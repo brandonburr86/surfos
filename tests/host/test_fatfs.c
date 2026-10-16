@@ -1177,6 +1177,48 @@ static void b12b(void) {
     check(fsync_sb(sb) == 0 && count_dirty(x) == 0 && x->violations == 0, "B12b: a sync without the other task writes the rest");
 }
 
+/**** B13a, B16a (R2): one sector that refuses, files written after the first sync, and the file it is in ****/
+
+static void b13a(void) {
+    struct ram *x = ram_new("b13a", 8192);
+    struct superblock *sb;
+    struct vnode *root;
+    struct geo g;
+    char name[8];
+    u32 i, good_m = 0, before;
+    int s3, rm_a;
+    fresh("B13a, B16a (R2): one data sector that refuses writes, and files written after the first sync");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    x->bad_lo = x->bad_hi = clus_lba(&g, 2);        /* the first data cluster: file a's */
+    fill(pat, 512, 11);
+    put_file(root, "a", pat, 512);
+    for(i = 0; i < 20; i++) { snprintf(name, sizeof(name), "n%02u", i); fill(pat, 512, 100 + i); put_file(root, name, pat, 512); }
+    fsync_sb(sb);
+    fsync_sb(sb);
+    for(i = 0; i < 20; i++) { snprintf(name, sizeof(name), "m%02u", i); fill(pat, 512, 200 + i); put_file(root, name, pat, 512); }
+    s3 = fsync_sb(sb);
+    before = x->failed;
+    fsync_sb(sb);
+    for(i = 0; i < 20; i++) { fill(pat, 512, 200 + i); if(!memcmp(x->mem + clus_lba(&g, 23 + i) * 512, pat, 512)) good_m++; }
+    check(s3 == -EIO && good_m == 20,
+          "B13a (R2): data written after the first failed sync reaches the disk (one bad block does not hold back the others)");
+    check(x->failed - before <= 2, "B13a: a sync asks the refusing sector once, not for every block");
+    rm_a = root->ops->unlink(root, "a");
+    check(rm_a == 0 && x->bd.bc_failed == 0, "B16a (R2): rm of the file whose block refuses works (its block is dropped)");
+    check(root->ops->unlink(root, "n00") == 0 && root->ops->rename(root, "n01", root, "zz") == 0,
+          "B16a (R2): and so do the volume's other operations");
+    check(fsync_sb(sb) == 0 && x->violations == 0, "B16a: then a sync, the sector still refusing (nothing left for it)");
+    x->bad_hi = 0;
+    {
+        u32 used, reached;
+        census(x, &used, &reached);
+        check(fsync_sb(sb) == 0 && used == reached, "B13a: once the sector takes writes, sync; no cluster lost");
+    }
+}
+
 /**** B13b (R2b): two refusing sectors at the head of a run ****/
 
 static void b13b(void) {
@@ -1362,6 +1404,191 @@ static void b15b(void) {
           "B15b: and a sync once the card works does not write the refused bytes either");
 }
 
+/**** B16b: mv over the file whose block refuses; truncate past a block that refuses ****/
+
+static void b16b(void) {
+    struct ram *x = ram_new("b16b", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    u32 used, reached;
+    int r1, r2;
+    fresh("B16b: mv over the file whose block refuses, truncate past a block that refuses");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 1024, 54);
+    fill(pat2, 512, 55);
+    if(put_file(root, "a", pat, 512) || put_file(root, "t", pat, 1024) || put_file(root, "src", pat2, 512) || fsync_sb(sb))
+        die("B16b: setup");                         /* a: cluster 2; t: 3-4; src: 5 */
+    x->bad_lo = x->bad_hi = clus_lba(&g, 2);
+    v = lookup(root, "a"); fill(pat, 512, 56); v->ops->write(v, 0, pat, 512); vput(v);
+    if(fsync_sb(sb) != -EIO) die("B16b: the refused sync");
+    r1 = root->ops->rename(root, "src", root, "a");
+    check(r1 == 0 && file_is(root, "a", pat2, 512), "B16b: mv over the file whose block refuses works");
+    check(fsync_sb(sb) == 0, "B16b: then a sync, the block still refusing (nothing left for it)");
+    x->bad_lo = x->bad_hi = clus_lba(&g, 4);
+    v = lookup(root, "t"); fill(pat, 1024, 57); v->ops->write(v, 512, pat + 512, 512); vput(v);   /* t's second cluster */
+    if(fsync_sb(sb) != -EIO) die("B16b: the second refused sync");
+    v = lookup(root, "t");
+    r2 = v ? v->ops->truncate(v, 512) : -999;
+    if(v) vput(v);
+    fill(pat, 1024, 54);
+    check(r2 == 0 && file_is(root, "t", pat, 512), "B16b: truncate past the block that refuses works");
+    check(fsync_sb(sb) == 0, "B16b: then a sync, the block still refusing (nothing left for it)");
+    x->bad_hi = 0;
+    census(x, &used, &reached);
+    check(used == reached && used == 2 && x->violations == 0, "B16b: no cluster lost");
+}
+
+/**** B17a (R6): mv over an existing file whose source directory cannot be read after the replace ****/
+
+static struct ram *r6_y;
+static u32 r6_dirlba, r6_rootlba, r6_root_writes, r6_armed, r6_done, r6_at;
+static void r6_hook(struct ram *r, u32 lba, u32 count) {
+    struct buf *b;
+    u32 i;
+    if(!r6_armed || r6_done || !(lba <= r6_rootlba && r6_rootlba < lba + count)) return;
+    if(++r6_root_writes < r6_at) return;            /* R6: the second order point (the replaced name gone) */
+    r6_done = 1;
+    for(i = 0; i < 2100; i++) if((b = bread(&r6_y->bd, i)) != NULL) brelse(b);   /* another task's reads make room */
+    r->rbad = r6_dirlba;                            /* and the source directory's block cannot be read now */
+}
+
+static void r6_run(const char *title, u32 at, int variant) {
+    struct ram *x = ram_new("b17a", 8192), *y = ram_new("b17ay", 8192);
+    struct superblock *sb;
+    struct vnode *root, *s;
+    struct geo g;
+    u8 *e;
+    char list[256], slist[256];
+    u32 used, reached;
+    int r;
+    fresh(title);
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    if(root->ops->create(root, "s", VN_DIR, &s)) die("B17a: mkdir");
+    fill(pat, 2048, 60);
+    if(put_file(s, "a", pat, 2048)) die("B17a: a");
+    fill(pat2, 4096, 61);
+    if(put_file(root, "b", pat2, 4096) || fsync_sb(sb)) die("B17a: b");
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "S          ");
+    if(!e) die("B17a: s on the disk");
+    r6_dirlba = clus_lba(&g, g16(e + 26));
+    r6_rootlba = g.root_lba;
+    r6_y = y;
+    r6_root_writes = r6_done = 0;
+    r6_at = at;
+    r6_armed = 1;
+    x->hook = r6_hook;
+    x->oracle = 1;
+    r = root->ops->rename(s, "a", root, "b");
+    x->hook = NULL;
+    x->rbad = 0;
+    names(root, list, sizeof(list));
+    names(s, slist, sizeof(slist));
+    if(verbose) printf("      mv s/a b = %d (the hook ran: %u); the root now: '%s'; s now: '%s'\n", r, r6_done, list, slist);
+    if(!variant) check(r6_done && (r == 0 || (strstr(list, "b") && file_is(root, "b", pat2, 4096))),
+                       "B17a (R6): a mv that fails leaves the file it would have replaced");
+    else check(r6_done && r == -EIO && !strcmp(list, "s b") && !strcmp(slist, "a") && file_is(root, "b", pat2, 4096) &&
+               file_is(s, "a", pat, 2048), "B17b: a mv whose old name cannot be deleted changes nothing (EIO)");
+    check(fsync_sb(sb) == 0 && x->violations == 0, variant ? "B17b: sync" : "B17a: sync");
+    census(x, &used, &reached);                     /* (the census reaches into the root's files only: a, in s, is 4 more) */
+    check(used == reached + (variant ? 4 : 0), variant ? "B17b: no cluster lost" : "B17a: no cluster lost");
+    vput(s);
+}
+
+/**** B17c: mv of a directory to another parent whose first block cannot be read ****/
+
+static void b17c(void) {
+    struct ram *x = ram_new("b17c", 8192);
+    struct superblock *sb;
+    struct vnode *root, *s, *d = NULL;
+    struct geo g;
+    char list[256], slist[256];
+    u8 *e;
+    u32 dlba;
+    int r;
+    fresh("B17c: mv s/d d2 when d's own block cannot be read");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    if(root->ops->create(root, "s", VN_DIR, &s) || s->ops->create(s, "d", VN_DIR, &d)) die("B17c: mkdir");
+    vput(d);
+    if(fsync_sb(sb)) die("B17c: sync");
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "S          ");
+    e = e ? disk_entry(x, clus_lba(&g, g16(e + 26)), 16, "D          ") : NULL;
+    if(!e) die("B17c: d on the disk");
+    dlba = clus_lba(&g, g16(e + 26));
+    init_bcache();                                  /* nothing cached (the volume is synced) */
+    x->rbad = dlba;                                 /* d's first block, with its "..", cannot be read */
+    r = root->ops->rename(s, "d", root, "d2");
+    x->rbad = 0;
+    names(root, list, sizeof(list));
+    names(s, slist, sizeof(slist));
+    if(verbose) printf("      mv = %d; the root: '%s'; s: '%s'\n", r, list, slist);
+    check(r == -EIO && !strcmp(list, "s") && !strcmp(slist, "d"), "B17c: the mv says EIO, and nothing changed");
+    r = root->ops->rename(s, "d", root, "d2");
+    check(r == 0 && fsync_sb(sb) == 0, "B17c: the same mv once the block can be read");
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "D2         ");
+    check(e && g16(x->mem + clus_lba(&g, g16(e + 26)) * 512 + 32 + 26) == 0, "B17c: d2's \"..\" points at the root");
+    vput(s);
+}
+
+/**** B17d: a file made in a full directory whose first block cannot be read once the directory grew ****/
+
+static struct ram *b17d_y;
+static u32 b17d_lba, b17d_writes;
+static int b17d_done;
+static void b17d_hook(struct ram *r, u32 lba, u32 count) {
+    struct buf *b;
+    u32 i;
+    (void)lba; (void)count;
+    if(b17d_done || ++b17d_writes < 2) return;      /* the new cluster's zeros are written: the FAT goes now */
+    b17d_done = 1;
+    for(i = 0; i < 2100; i++) if((b = bread(&b17d_y->bd, i)) != NULL) brelse(b);   /* another task's reads make room */
+    r->rbad = b17d_lba;                             /* and d's first block cannot be read from now on */
+}
+
+static void b17d(void) {
+    struct ram *x = ram_new("b17d", 8192), *y = ram_new("b17dy", 8192);
+    struct superblock *sb;
+    struct vnode *root, *d, *v = NULL;
+    struct geo g;
+    char name[8];
+    u8 *e;
+    int i, r = 0;
+    fresh("B17d: a file made in a full directory that grows, its first block unreadable meanwhile");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    if(root->ops->create(root, "d", VN_DIR, &d)) die("B17d: mkdir");
+    for(i = 0; i < 14 && !r; i++) { snprintf(name, sizeof(name), "f%02d", i); r = put_file(d, name, NULL, 0); }   /* d's cluster full */
+    if(r || fsync_sb(sb)) die("B17d: setup");
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "D          ");
+    if(!e) die("B17d: d on the disk");
+    b17d_lba = clus_lba(&g, g16(e + 26));
+    b17d_y = y;
+    b17d_done = 0;
+    b17d_writes = 0;
+    x->hook = b17d_hook;                            /* in the order point of d's new cluster */
+    r = d->ops->create(d, "x", VN_FILE, &v);
+    x->hook = NULL;
+    x->rbad = 0;
+    if(verbose) printf("      create = %d (the hook ran: %d)\n", r, b17d_done);
+    check(b17d_done && r == 0, "B17d: the create says it made the file (it does not read the directory back)");
+    if(r == 0) vput(v);
+    v = lookup(d, "x");
+    check(v != NULL && fsync_sb(sb) == 0, "B17d: the file is there; sync");
+    if(v) vput(v);
+    vput(d);
+}
+
 /**** B18: a dirty block whose holder never lets go (a task killed in the middle of a change) ****/
 
 static void b18(void) {
@@ -1418,12 +1645,18 @@ int main(int argc, char **argv) {
     RUN("b11b", b11b());
     RUN("b12a", b12a());
     RUN("b12b", b12b());
+    RUN("b13a", b13a());
     RUN("b13b", b13b());
     RUN("b13c", b13c());
     RUN("b14a", b14a());
     RUN("b14b", b14b());
     RUN("b15a", b15a());
     RUN("b15b", b15b());
+    RUN("b16b", b16b());
+    RUN("b17a", r6_run("B17a (R6): mv s/a b (b exists) when s's block cannot be read after b went", 2, 0));
+    RUN("b17b", r6_run("B17b: mv s/a b (b exists) when s's block cannot be read after the new name is on the disk", 1, 1));
+    RUN("b17c", b17c());
+    RUN("b17d", b17d());
     RUN("b18", b18());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
