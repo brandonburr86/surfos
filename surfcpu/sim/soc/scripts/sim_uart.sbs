@@ -1,0 +1,24 @@
+# SurfCPU surfsim test: the UART model on the real pins (sim/soc/scripts/sim_uart.sbs). surfsim
+# runs it with --uart-in holding "surf!" and --expect matching the reply: the SoC sends a
+# greeting, receives the five bytes the model sends, sends them back in brackets, and waits
+# until everything has left the shifter.
+D write   uart.TXDATA 0x48           # H
+D write   uart.TXDATA 0x49           # I
+D write   uart.TXDATA 0x0A           # newline
+D poll    uart.LEVEL mask uart.LEVEL.RX equal 5<<uart.LEVEL.RX.lsb within 20000 every 50
+D read    uart.RXDATA expect 0x73    # s
+D read    uart.RXDATA expect 0x75    # u
+D read    uart.RXDATA expect 0x72    # r
+D read    uart.RXDATA expect 0x66    # f
+D read    uart.RXDATA expect 0x21    # !
+D read    uart.RXDATA expect uart.RXDATA.EMPTY
+D read    uart.STATUS expect 0 mask uart.STATUS.RX_OVF|uart.STATUS.RX_FRAME|uart.STATUS.RX_BREAK
+D write   uart.TXDATA 0x5B           # [
+D write   uart.TXDATA 0x73
+D write   uart.TXDATA 0x75
+D write   uart.TXDATA 0x72
+D write   uart.TXDATA 0x66
+D write   uart.TXDATA 0x21
+D write   uart.TXDATA 0x5D           # ]
+D write   uart.TXDATA 0x0A
+D poll    uart.STATUS mask uart.STATUS.TX_IDLE equal uart.STATUS.TX_IDLE within 20000 every 50

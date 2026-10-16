@@ -31,9 +31,10 @@ SOC_TOP_RTL     := rtl/soc/surfcpu_soc.v $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(SOC_PER
 SOC_IVERILOG = $(IVERILOG) -g2005 -Wall -Wno-timescale $(SOC_INC)
 SOC_VLINT    = $(VERILATOR_LINT) -Irtl/soc -Irtl/peripherals
 
-.PHONY: lint-soc test-soc-units test-soc-system test-soc-models soc-gpio-real soc-mem-once
+.PHONY: lint-soc test-soc-units test-soc-system test-soc-models test-soc-surfsim surfsim \
+        soc-gpio-real soc-mem-once
 lint: lint-soc
-test-soc: test-soc-units test-soc-system test-soc-models
+test-soc: test-soc-units test-soc-system test-soc-models test-soc-surfsim
 
 # $(call soc_run,<vvp file>,<log name>,<extra plusargs>): run once per seed, keep the logs,
 # stop with the log on the first failure
@@ -211,3 +212,82 @@ $(SOC_DIR)/test_models: sim/models/test_models.cpp $(SOC_MODEL_SRC) $(SOC_MODEL_
 
 test-soc-models: $(SOC_DIR)/test_models
 	$(Q)for s in $(SOC_SEEDS); do $(SOC_DIR)/test_models $$s || exit 1; done
+
+# ---------------------------------------------------------------------------- surfsim
+# build/sim/surfsim: the whole SoC (the real core and io blocks once they exist) with the C++
+# models; build/soc/surfsim_script/surfsim: the same harness around the scripted stand-in, for
+# the tests. Built with RVFI so --trace works with the real core.
+SOC_BUILD_FLAGS := $(shell echo $$(( 2 + ($(SURFCPU_BUILD_DIRTY) & 1) )))
+SOC_SIM_DEFS    := --define build_id=0x$(BUILD_ID_HEX) --define build_flags=$(SOC_BUILD_FLAGS) \
+                   --define build_time=0
+SOC_VERILATE     = $(VERILATOR) --cc --exe --build -j 2 -O2 --top-module surfcpu_soc \
+                   +define+SURFCPU_RVFI $(SOC_INC) \
+                   -GBUILD_ID=32\'h$(BUILD_ID_HEX) -GBUILD_FLAGS=32\'h$(SOC_BUILD_FLAGS) \
+                   -CFLAGS "-std=c++17 -O2 -DSURFCPU_RVFI -I$(CURDIR)/sim/models \
+                   -I$(CURDIR)/firmware/include"
+SOC_SIM_CPP     := sim/soc/surfsim/surfsim.cpp $(SOC_MODEL_SRC)
+
+$(BUILD)/sim/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) $(SOC_MODEL_HDR)
+	@mkdir -p $(BUILD)/sim/obj_surfsim
+	$(Q)$(SOC_VERILATE) --Mdir $(BUILD)/sim/obj_surfsim -o surfsim \
+	  $(SOC_TOP_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim.txt 2>&1 \
+	  || { tail -40 $(BUILD)/sim/obj_surfsim.txt; exit 1; }
+	$(Q)cp $(BUILD)/sim/obj_surfsim/surfsim $@
+
+$(SOC_DIR)/surfsim_script/surfsim: $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
+                                   $(SOC_MODEL_HDR)
+	@mkdir -p $(SOC_DIR)/surfsim_script/obj
+	$(Q)$(SOC_VERILATE) --Mdir $(SOC_DIR)/surfsim_script/obj -o surfsim \
+	  $(SOC_TOP_RTL) $(SOC_CORE_SCRIPT) $(SOC_IO_SRC) $(SOC_SIM_CPP) \
+	  > $(SOC_DIR)/surfsim_script/build.txt 2>&1 || { tail -40 $(SOC_DIR)/surfsim_script/build.txt; exit 1; }
+	$(Q)cp $(SOC_DIR)/surfsim_script/obj/surfsim $@
+
+surfsim: $(BUILD)/sim/surfsim
+
+$(SOC_DIR)/scripts/%.sim.hex: sim/soc/scripts/%.sbs $(SOC_DIR)/rom_a.mem sim/soc/tools/surfscript.py
+	@mkdir -p $(dir $@)
+	$(Q)$(SOC_SCRIPTC) $< -o $@ --rom $(SOC_DIR)/rom_a.mem --define ddr=1 $(SOC_SIM_DEFS) \
+	  --listing $(@:.hex=.lst) > /dev/null
+
+SOC_SIMX = $(SOC_DIR)/surfsim_script/surfsim
+SOC_SIM_TESTS := soc_regions soc_errors soc_random soc_periph
+
+# $(call soc_simrun,<script>,<log>,<extra args>): every seed, exit 0 and SCRIPT PASS
+define soc_simrun
+	$(Q)for s in $(SOC_SEEDS); do \
+	  $(SOC_SIMX) --rom $(SOC_DIR)/rom_a.mem --uart-loopback --gpio-loopback --quiet --seed $$s \
+	    --max-cycles 3000000 +script=$(SOC_DIR)/scripts/$(1).sim.hex +seed=$$s \
+	    $$(cat $(SOC_DIR)/scripts/$(1).sim.args) $(3) > $(SOC_DIR)/$(2).$$s.txt 2>&1 \
+	    && grep -q "SCRIPT PASS" $(SOC_DIR)/$(2).$$s.txt \
+	    || { cat $(SOC_DIR)/$(2).$$s.txt; exit 1; }; \
+	  grep -h "SCRIPT PASS" $(SOC_DIR)/$(2).$$s.txt | sed "s/^/  [$(2) seed $$s] /"; done
+
+endef
+
+test-soc-surfsim: $(BUILD)/sim/surfsim $(SOC_SIMX) $(SOC_DIR)/rom_a.mem \
+                  $(foreach t,$(SOC_SIM_TESTS) sim_uart soc_negative,$(SOC_DIR)/scripts/$(t).sim.hex)
+	$(foreach t,$(SOC_SIM_TESTS),$(call soc_simrun,$(t),surfsim_$(t)))
+	$(call soc_simrun,soc_random,surfsim_random_b2b,+gap=0)
+	@# the UART model on the real pins: in from --uart-in, out matched by --expect
+	$(Q)printf 'surf!' > $(SOC_DIR)/surfsim_uart_in.txt
+	$(Q)$(SOC_SIMX) --rom $(SOC_DIR)/rom_a.mem --uart-in $(SOC_DIR)/surfsim_uart_in.txt \
+	  --expect 'HI\n\[surf!\]\n' --max-cycles 400000 +script=$(SOC_DIR)/scripts/sim_uart.sim.hex \
+	  > $(SOC_DIR)/surfsim_uart.txt 2>&1 || { cat $(SOC_DIR)/surfsim_uart.txt; exit 1; }
+	$(Q)grep -q "output matched" $(SOC_DIR)/surfsim_uart.txt || { cat $(SOC_DIR)/surfsim_uart.txt; exit 1; }
+	@echo "  [surfsim_uart] the SoC said HI and echoed the model's bytes: $$(tail -1 $(SOC_DIR)/surfsim_uart.txt)"
+	@# exit codes: a failing script is 1, an expectation never met is 2
+	$(Q)$(SOC_SIMX) --rom $(SOC_DIR)/rom_a.mem --quiet --max-cycles 100000 \
+	  +script=$(SOC_DIR)/scripts/soc_negative.sim.hex > $(SOC_DIR)/surfsim_negative.txt 2>&1; \
+	  test $$? -eq 1 || { cat $(SOC_DIR)/surfsim_negative.txt; echo "expected exit 1"; exit 1; }
+	$(Q)$(SOC_SIMX) --quiet --max-cycles 5000 --expect 'never printed' \
+	  > $(SOC_DIR)/surfsim_noexpect.txt 2>&1; \
+	  test $$? -eq 2 || { cat $(SOC_DIR)/surfsim_noexpect.txt; echo "expected exit 2"; exit 1; }
+	@echo "  [surfsim exit codes] failing script 1, unmet --expect 2"
+	@# the deliverable build runs (with the stand-in it idles; with the real core it runs the ROM)
+	$(Q)$(BUILD)/sim/surfsim --rom $(SOC_DIR)/rom_a.mem --quiet --max-cycles 20000 \
+	  --trace $(SOC_DIR)/surfsim_smoke.trace > $(SOC_DIR)/surfsim_smoke.txt 2>&1 \
+	  || { cat $(SOC_DIR)/surfsim_smoke.txt; exit 1; }
+	$(Q)head -1 $(SOC_DIR)/surfsim_smoke.trace | grep -q "^# surfcpu-trace v1: order pc insn" \
+	  || { echo "bad trace header"; exit 1; }
+	@echo "  [build/sim/surfsim] $$(grep -h '^surfsim:' $(SOC_DIR)/surfsim_smoke.txt)"
+	@echo "test-soc-surfsim: PASS (seeds $(SOC_SEEDS))"
