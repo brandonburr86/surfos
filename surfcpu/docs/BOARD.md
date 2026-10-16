@@ -134,7 +134,9 @@ also resets both clock tiles, which is how to recover a tile that lost lock (UG4
 be reset after LOCKED falls); the outputs stop and both domains stay in reset until the tiles
 lock again (at most 100 µs, DS181). `tb_clocks` checks the release on the third edge, the
 asynchronous assertion, the button and a stopped oscillator. The CK_RST net also reaches the
-shield's RST pin and, through jumper JP2, the FT2232: keep JP2 open (WIRING.md U7).
+shield's RST pin and, through jumper JP2, the FT2232: keep JP2 off. Fitted, it lets the FT2232's DTR
+line pulse RESET, so every program that opens the serial port resets the design (seen on the owner's
+board, which came with JP2 fitted: WIRING.md U7).
 
 The tops never use a reset from another domain; everything that crosses between `sys_clk` and
 `pix_clk` goes through an `rtl/lib` synchronizer whose two sides recover on their own resets.
@@ -672,7 +674,10 @@ flash part depends on its revision (RM §5.2: Micron N25Q128A13ESF40, Spansion
 S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested with a fake openFPGALoader that
 answers like the real one (in the checks above), and the four SoC bitstreams of section 8 pass
 `make program-volatile BOARD=... DESIGN=...` against it, each refused on the other board
-(evidence `openxc7-soc.txt`). Nothing has been programmed.
+(evidence `openxc7-soc.txt`). Nothing has been programmed. The release (milestone 9) keeps a
+build record next to each bitstream, so `program-flash` takes its bitstreams as they are; the
+flash image, the flash's address map, the configuration time and the recovery procedure are in
+[RELEASE.md](RELEASE.md) sections 6 and 7.
 
 ## 10. Budgets
 
@@ -723,8 +728,8 @@ flow builds them (section 8): about 10,300 LUTs and 6,430 flip-flops, half of th
 
 ## 12. First power-up
 
-A checklist for the owner. WIRING.md has the reasons and the adapters' pin tables; nothing here
-has been tried on a board yet. Two jumpers are called JP1: **the Arty's JP1 is its MODE
+A checklist for the owner. WIRING.md has the reasons and the adapters' pin tables; of these rows
+only JP2's has been tried on the board so far (2026-10-16). Two jumpers are called JP1: **the Arty's JP1 is its MODE
 jumper**; the Pmod PS2 has its own JP1, the PS/2 supply selector. "JP1 off" in earlier reports
 meant the Arty's MODE jumper.
 
@@ -733,7 +738,7 @@ meant the Arty's MODE jumper.
 | Jumper | Set to | Why |
 |---|---|---|
 | Arty JP1 (MODE) | **off** (no jumper) | the FPGA is then not configured from the Quad-SPI flash at power-up and waits for a JTAG load (RM section 4), so nothing old or unknown drives the Pmod pins (WIRING.md U2) |
-| Arty JP2 (CK_RST to the FT2232) | **open** | shorted, the FT2232's DTR line could reset the SoC when a terminal opens the port (WIRING.md U7) |
+| Arty JP2 (CK_RST to the FT2232) | **off** (no jumper) | fitted, the FT2232's DTR line resets the SoC whenever a program opens the serial port: seen on the owner's board, which came with JP2 fitted (WIRING.md U7) |
 | Pmod PS2 JP1 (PS/2 supply) | **VB** (3.3 V from the Arty) | VE with a 5 V supply puts 5 V on FPGA pins (WIRING.md section 4) |
 | Pmod PS2 JP2 (external supply header) | nothing connected | its silkscreen has VE and GND swapped (WIRING.md section 4) |
 

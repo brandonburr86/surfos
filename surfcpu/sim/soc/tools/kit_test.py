@@ -48,6 +48,7 @@ import os
 import pty
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -254,15 +255,15 @@ def owner(state_path, step):
     elif st['mode'] == 'fake':
         c = st['control']
         cs = json.load(open(c)) if os.path.exists(c) else {}
-        hold = 0
+        hold = st.get('slow', {}).get(step, 0)                  # an owner who takes a while (seconds)
         if step == 'switches':
             cs['sw'] = '0101'
         elif step == 'button':
             cs['btn_until'] = time.time() + 2.5                 # held for 2.5 s, then released
-            hold = 2.6
+            hold = max(hold, 2.6)
         elif step == 'reset':
             cs['reset'] = cs.get('reset', 0) + 1
-            hold = 0.5
+            hold = max(hold, 0.5)
         tmp = c + '.tmp'
         json.dump(cs, open(tmp, 'w'))
         os.replace(tmp, c)
@@ -329,7 +330,8 @@ class Kit:
         ev = os.path.join(d, 'evidence')
         os.makedirs(ev, exist_ok=True)
         argv = [sys.executable, BOARD_TEST, milestone, '--port', link, '--evidence-dir', ev,
-                '--owner', '%s %s owner %s' % (sys.executable, os.path.abspath(__file__), state)] + list(args)
+                '--owner', ' '.join(shlex.quote(x) for x in (sys.executable, os.path.abspath(__file__), 'owner', state))
+                ] + list(args)                  # board-test.py splits --owner as a shell would: paths with spaces quoted
         t0 = time.time()
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -362,14 +364,15 @@ class Kit:
             self.runs.append((name, milestone, against, v, dt, text))
 
     # ---------------------------------------------------------------- fake boards
-    def fake(self, name, milestone, mode, args=(), manifest=None, expect='PASS', must=(), within=60, **kw):
+    def fake(self, name, milestone, mode, args=(), manifest=None, expect='PASS', must=(), within=60, slow=None, **kw):
+        """slow: {step: seconds} the stand-in owner takes over a step"""
         d = os.path.join(self.work, name)
         os.makedirs(d, exist_ok=True)
         link = os.path.join(d, 'port')
         control = os.path.join(d, 'control.json')
         json.dump({}, open(control, 'w'))
         state = os.path.join(d, 'state.json')
-        save(state, {'mode': 'fake', 'control': control, 'dir': d})
+        save(state, {'mode': 'fake', 'control': control, 'dir': d, 'slow': slow or {}})
         fb = FakeBoard(link, control, mode, **kw)
         fb.start()
         extra = list(args)
@@ -395,6 +398,14 @@ class Kit:
                       r'ok\s+the switches: a line shows sw 0101', r'ok\s+the buttons: a line shows BTN0 pressed',
                       r'ok\s+RESET restarts the count', r'ok\s+the line\'s build .* match the manifest',
                       r'skip\s+not observed: Do LD0 and LD1 blink', r'(?m)^Owner: the steps were answered by a program'])),
+            # the owner presses Enter 3.5 s after being asked to load the design: the lines that came
+            # meanwhile wait in the buffer and must keep the times they arrived (the first board run,
+            # 2026-10-16, saw 0.00 s gaps)
+            ('m1-slow-owner', lambda: self.fake(
+                'm1-slow-owner', 'm1', 'baseline', ['--lines', '6'], manifest=good, within=45,
+                slow={'program': 3.5},
+                must=[r'ok\s+a line every second by the Mac\'s clock', r'ok\s+6 lines a second',
+                      r'(?m)^  \+\s+0\.\d  program\s+done, answered at \+\s*[3-5]\.\d'])),
             ('m1-wrong-bitstream', lambda: self.fake(
                 'm1-wrong-bitstream', 'm1', 'baseline', ['--lines', '3'], within=40, expect='FAIL',
                 manifest=good.replace('1a2b3c4d', '9999aaaa'), must=[r'FAIL\s+the line\'s build .* do NOT match'])),

@@ -261,6 +261,11 @@ run frames fasm2frames.log env PYTHONWARNINGS=ignore::RuntimeWarning \
   fasm2frames --part "$part" --db-root "$db" "$out/$top.fasm" "$out/$top.frames"
 run bit xc7frames2bit.log xc7frames2bit --part_file "$db/$part/part.yaml" --part_name "$part" \
   --frm_file "$out/$top.frames" --output_file "$out/$top.bit"
+# xc7frames2bit writes the time of the build into the .bit header (fields c and d): with
+# SOURCE_DATE_EPOCH set (make release: the commit's time) they take that time instead, so two
+# builds of one commit are the same bytes (docs/RELEASE.md section 4). The stream is untouched.
+[ -z "${SOURCE_DATE_EPOCH:-}" ] || run stamp bitstamp.log python3 -I tools/bitfile.py stamp "$out/$top.bit" \
+  --epoch "$SOURCE_DATE_EPOCH"
 run report report.out python3 -I $tools/report.py --device "$device" --report "$out/report.json" \
   --log "$out/nextpnr.log" --stat "$out/stat.json" --timing "$out/timing.txt" --utilization "$out/utilization.txt"
 

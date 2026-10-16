@@ -10,7 +10,9 @@
 # worktree's metadata lives outside the mounted tree, and passed in as SURFCPU_BUILD_ID /
 # SURFCPU_BUILD_DIRTY. Dirty means a tracked file changed or a file git does not track and does
 # not ignore is present (a new source not yet committed is not in the commit either).
-# SURFCPU_IMAGE overrides the image; DOCKER the docker binary.
+# SURFCPU_IMAGE overrides the image; DOCKER the docker binary. SOURCE_DATE_EPOCH, when set,
+# goes in too: builds use it in place of the time of the build (make release sets it to the
+# commit's time, docs/RELEASE.md).
 set -eu
 
 IMAGE_TAG=2026-10-15
@@ -60,4 +62,5 @@ exec "$docker" run --rm $tty \
   -e HOME=/tmp -e SURFCPU_IN_CONTAINER=1 \
   -e SURFCPU_BUILD_ID="$build_id" -e SURFCPU_BUILD_DIRTY="$SURFCPU_BUILD_DIRTY" \
   -e SURFCPU_HOST="$(uname -s)-$(uname -m)" \
+  ${SOURCE_DATE_EPOCH:+-e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH"} \
   "$image" "$@"
