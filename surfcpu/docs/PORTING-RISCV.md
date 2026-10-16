@@ -545,6 +545,19 @@ on the card that refuses 3.7 % more and its full card 0.3 % fewer; the commands 
 4-20 % fewer cycles, the 160 KiB `cp` 1.7 % more, and a boot about 2 million more (a package
 6.4 KB larger to load, a larger cache to clear; bcache-review.txt section 10).
 
+Since audit B20-B26 (counted the same way, before = fd37406): every workload above sends the
+same requests and blocks (nothing refuses there, so no list of failed blocks is made), the host's
+CPU time the same on the long writes and under 1.5 us more an operation on the short ones
+(bcache-review.txt section 15). struct bdev is 8 bytes smaller, each mounted FAT volume 76 bytes
+larger, a sync keeps a 68-byte count on its stack, and while an rm, mv, truncate or cut-back runs
+on a device with failed blocks a list of them is allocated (5 bytes each, 1024 at most). On
+SurfCPU (b81ccc9's kernel against this one, the same simulator and ROM): test-os-persist's write
+run 0.3 % more cycles, its reboot run 0.3 %, test-os-faults' run on the card that refuses 0.1 %
+and its full card 0.4 %, most of it the package, 3.7 KB larger, that SurfBoot loads (+0.44
+million cycles). B26 had first made the check of what a sync owes too large for gcc to inline,
+and each command that syncs cost 0.78 million cycles more (3.4 % on the write run): it is inline
+again (bcache-review.txt section 17).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
