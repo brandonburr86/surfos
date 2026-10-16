@@ -22,7 +22,8 @@ Registers reserved for the framework (tests use x1..x24 except gp):
 The default trap handler records mcause/mepc/mtval in t5/t6/t4, counts the trap in t3 and
 returns to s11 (then clears it) or, when s11 is 0, to mepc + 4. An interrupt goes to the
 test's `irq_handler` when the test defines TEST_IRQ_HANDLER before including this file, and
-fails the test otherwise. More than TRAP_LIMIT traps fail the test (a runaway trap loop).
+fails the test otherwise. More than TRAP_LIMIT traps fail the test as test 1022 (a runaway
+trap loop); a failure with TESTNUM still 0 reports test 1023.
 
 At reset, before anything else, the startup code saves the CSRs a test may want to see in
 their reset state into `reset_csrs` (offsets RESET_*).
@@ -104,7 +105,7 @@ trap_entry:                                                             \
         csrr    t4, mtval;                                              \
         addi    t3, t3, 1;                                              \
         li      s10, TRAP_LIMIT;                                        \
-        bgeu    t3, s10, fail;                                          \
+        bgeu    t3, s10, trap_runaway;                                  \
         bltz    t5, trap_interrupt;                                     \
         mv      s10, s11;                                               \
         li      s11, 0;                                                 \
@@ -114,6 +115,9 @@ trap_entry:                                                             \
         mret;                                                           \
 trap_interrupt:                                                         \
         TRAP_IRQ_JUMP;                                                  \
+trap_runaway:                                                           \
+        li      TESTNUM, 1022;                                          \
+        j       fail;                                                   \
                                                                         \
 pass:                                                                   \
         fence;                                                          \

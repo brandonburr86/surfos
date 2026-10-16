@@ -13,8 +13,10 @@ Exit status 0 when every run passed.
 
 A test can carry options in a comment line of its source:
     // surf-test: spike=no max-cycles=4000000
-spike=no marks a test that needs the testbench's own devices (docs/CPU.md section 9), so it
-is not run on Spike. A failing run is repeated with --trace and its trace is kept in --out.
+spike=no marks a test that needs the testbench's own devices (docs/CPU.md section 9) or
+checks behaviour where docs/ISA.md and Spike legitimately differ, so it is not run on Spike.
+Spike runs with Zicntr and Zihpm added to the ISA string, because surfcpu_core implements
+the cycle/time/instret and hpmcounter CSRs (docs/ISA.md section 2). A failing run is repeated with --trace and its trace is kept in --out.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ CONFIGS = [
     ("slow",   "6:30", "6:30", [6],     ["--rand-reset"]),
 ]
 
-SPIKE = ["spike", "--isa=rv32im_zicsr_zifencei", "--priv=m", "--pmpregions=0", "-m0x80000000:0x400000"]
+SPIKE = ["spike", "--isa=rv32im_zicntr_zicsr_zifencei_zihpm", "--priv=m", "--pmpregions=0", "-m0x80000000:0x400000"]
 
 
 def test_options(elf: Path) -> dict[str, str]:

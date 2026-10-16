@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SPIKE = ["spike", "--isa=rv32im_zicsr_zifencei", "--priv=m", "--pmpregions=0",
+SPIKE = ["spike", "--isa=rv32im_zicntr_zicsr_zifencei_zihpm", "--priv=m", "--pmpregions=0",
          "-m0x80000000:0x400000", "--log-commits"]
 # CSR reads whose values legitimately differ between Spike and the testbench
 UNCOMPARED_CSRS = {0x344, 0xF13, 0xB00, 0xB80, 0xC00, 0xC80, 0xC01, 0xC81, 0xB02, 0xB82, 0xC02, 0xC82}

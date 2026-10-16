@@ -14,7 +14,10 @@ CPU_INC     := $(wildcard rtl/cpu/*.vh)
 CPU_BUILD   := $(BUILD)/cpu
 CPU_TB      := $(CPU_BUILD)/surfcpu_tb
 CPU_TEST_SRC := $(sort $(wildcard sim/cpu/tests/*.S))
-CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_SRC))
+# generated tests: build/cpu/gen/<name>.S from sim/cpu/tests/gen_<kind>.py
+CPU_GEN     := muldiv_edges
+CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_SRC)) \
+               $(patsubst %,$(CPU_BUILD)/tests/%.elf,$(CPU_GEN))
 CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
@@ -42,6 +45,16 @@ $(CPU_TB): $(CPU_RTL) $(CPU_INC) sim/cpu/surfcpu_tb_top.v sim/cpu/surfcpu_tb.cpp
 	@echo "built $@"
 
 $(CPU_BUILD)/tests/%.elf: sim/cpu/tests/%.S sim/cpu/tests/surf_test.h sim/cpu/tests/link.ld
+	@mkdir -p $(dir $@)
+	$(Q)$(RV_CC) -march=$(RV_ARCH) -mabi=$(RV_ABI) -nostdlib -nostartfiles -static -Wl,--no-warn-rwx-segments \
+	  -Isim/cpu/tests -T sim/cpu/tests/link.ld $< -o $@
+	$(Q)$(RV_OBJDUMP) -d $@ > $(@:.elf=.dis)
+
+$(CPU_BUILD)/gen/muldiv_edges.S: sim/cpu/tests/gen_muldiv.py
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) $< > $@
+
+$(CPU_BUILD)/tests/%.elf: $(CPU_BUILD)/gen/%.S sim/cpu/tests/surf_test.h sim/cpu/tests/link.ld
 	@mkdir -p $(dir $@)
 	$(Q)$(RV_CC) -march=$(RV_ARCH) -mabi=$(RV_ABI) -nostdlib -nostartfiles -static -Wl,--no-warn-rwx-segments \
 	  -Isim/cpu/tests -T sim/cpu/tests/link.ld $< -o $@

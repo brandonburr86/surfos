@@ -196,6 +196,10 @@ module surfcpu_core #(
         .is_fencei(d_fencei)
     );
 
+    // The instruction's own bits: a word whose bits 1:0 are not 11 holds a 16-bit encoding
+    // (illegal here), which is only its low half; mtval and RVFI report it zero-extended.
+    wire [31:0] id_bits  = (id_insn[1:0] == 2'b11) ? id_insn : {16'd0, id_insn[15:0]};
+
     // A fetch fault comes first; the decoder already zeroes its controls for the others.
     wire        id_ok    = !id_fault;
     wire        id_exc   = id_fault || d_illegal || d_ecall || d_ebreak;
@@ -203,7 +207,7 @@ module surfcpu_core #(
                            d_illegal ? CAUSE_ILLEGAL :
                            d_ecall   ? CAUSE_ECALL_M : CAUSE_BREAKPOINT;
     wire [31:0] id_tval  = id_fault  ? id_pc :          // the fetch address
-                           d_illegal ? id_insn :        // the instruction bits
+                           d_illegal ? id_bits :        // the instruction bits
                            d_ebreak  ? id_pc : 32'd0;   // EBREAK's address; ECALL: 0
 
     wire [4:0]  id_rs1 = id_insn[19:15];
@@ -332,7 +336,7 @@ module surfcpu_core #(
 
         if (id_advance) begin
             ex_pc        <= id_pc;
-            ex_insn      <= id_insn;
+            ex_insn      <= id_bits;
             ex_use_rs1   <= id_ok && d_use_rs1;
             ex_use_rs2   <= id_ok && d_use_rs2;
             ex_rd_wen    <= id_ok && d_rd_wen;
@@ -493,7 +497,9 @@ module surfcpu_core #(
             mem_wfi       <= ex_wfi;
             mem_fencei    <= ex_fencei;
             mem_result    <= ex_result;
-            mem_opnd      <= (ex_csr && ex_f3[2]) ? {27'd0, ex_rs1} : ex_b;   // CSR uimm / store data
+            mem_opnd      <= !ex_csr  ? ex_b :                // store data (rs2)
+                             ex_f3[2] ? {27'd0, ex_rs1} :     // CSR uimm (the rs1 field)
+                                        ex_a;                 // CSR source register rs1
             mem_exc       <= ex_exc_all;
             mem_cause     <= ex_cause_all;
             mem_tval      <= ex_tval_all;
