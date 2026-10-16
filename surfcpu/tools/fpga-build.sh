@@ -200,7 +200,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     notgiven="$base/nextpnr-not-checked.txt"
     mkdir -p "$base"
     if [ "$dry" = 0 ]; then                             # a new build replaces the last one's results
-        rm -rf "${base:?}/openxc7" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest"
+        rm -rf "${base:?}/openxc7" "${base:?}/rom" "${base:?}/${design:?}.bit" "${base:?}/openxc7-results.txt" "$manifest"
     fi
     # The constraints nextpnr applies (pins, the oscillator's clock), and a list of the rest.
     ( cd "$root" && awk -f boards/arty_a7/nextpnr-xdc.awk -v notgiven="$notgiven" $xdcs ) > "$xdc_nx" ||
@@ -214,14 +214,17 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     done >> "$notgiven"
     n_given=$(grep -c . "$xdc_nx" || true)
     n_not=$(grep -c . "$notgiven" || true)
-    # The top's build values as defines (the RTL turns them into its parameters' defaults).
+    # The boot ROM goes in from a copy kept beside the bitstream: synthesis, the manifest's
+    # rom_sha256 and romcheck read that one file even if make build-rom rewrites build/fw/
+    # during the build (rom_image still names where it came from).
     rom_ox=
     if [ -n "$rom" ]; then
-        case "$romsrc" in
-            "$root"/*) rom_ox=${romsrc#"$root"/} ;;
-            *) mkdir -p "$base/rom"; cp "$romsrc" "$base/$rom"; rom_ox=${base#"$root"/}/$rom ;;
-        esac
+        mkdir -p "$base/rom"
+        cp "$romsrc" "$base/$rom"
+        romsrc=$base/$rom
+        rom_ox=${base#"$root"/}/$rom
     fi
+    # The top's build values as defines (the RTL turns them into its parameters' defaults).
     set --
     for g in $generics; do
         case "$g" in
@@ -240,7 +243,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
         --manifest-include "${head#"$root"/}" "$@" $sources
     echo "$me: $design for $board ($part), build $build_id$( [ "$dirty" = 1 ] && echo ' dirty'), flow openxc7 ($ox_image)"
-    [ -z "$rom" ] || echo "$me: boot ROM $rom_ox, sha256 $(sha "$romsrc")"
+    [ -z "$rom" ] || echo "$me: boot ROM $rom_image (as $rom_ox), sha256 $(sha "$romsrc")"
     echo "$me: nextpnr is given $n_given constraint lines (${xdc_nx#"$root"/}); it cannot check these $n_not, which only Vivado does:"
     sed "s/^/$me:   /" "$notgiven"
     cd "$root"

@@ -453,10 +453,12 @@ romfake=$root/sim/board/tools/fake/romcheck
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
     tools/fpga-build.sh --design surfcpu_arty_a7_bramdiag arty_a7_100t
 check "soc: the bramdiag design through the open flow (fake) passes" is "$rc" 0
-check "soc: ... its ROM (ROM=) as the boot ROM define" logged "-D ARTY_BOOTROM_INIT=\"${t#$root/}/diag.mem\""
+check "soc: ... its ROM (ROM=), copied beside the bitstream, as the boot ROM define" \
+    logged "-D ARTY_BOOTROM_INIT=\"${d#$root/}/rom/diag.mem\""
+check "soc: ... the copy is the ROM" cmp -s "$d/rom/diag.mem" "$t/diag.mem"
 check "soc: ... the design list's LVS limit" logged "--lvs-timeout 7200"
 check "soc: ... the boot ROM check on that file and the ROM's instance" \
-    logged "romcheck --rom ${t#$root/}/diag.mem --netlist ${d#$root/}/openxc7/surfcpu_arty_a7_top.json --top surfcpu_arty_a7_top --instance u_soc.u_bootrom"
+    logged "romcheck --rom ${d#$root/}/rom/diag.mem --netlist ${d#$root/}/openxc7/surfcpu_arty_a7_top.json --top surfcpu_arty_a7_top --instance u_soc.u_bootrom"
 check "soc: ... the bitstream under the design's name" test -f "$d/surfcpu_arty_a7_bramdiag.bit"
 check "soc: the manifest names the ROM and has the netlist and boot ROM checks" python3 -c "
 import tomllib,sys,hashlib
