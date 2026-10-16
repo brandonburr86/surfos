@@ -38,7 +38,12 @@ struct sb_state {
     char cmdline[SURF_BOOTINFO_CMDLINE_LEN];
     int cmdline_trunc;
     int loaded;                                 /* an image is in DDR and verified */
+    int boot_err;                               /* the last boot attempt's failure (SB_OK if none) */
+    char boot_msg[200];
 };
+
+/* Records err (with sb_last_msg) as the last boot failure; returns err. */
+int sb_note_boot_failure(struct sb_state *s, int err);
 
 enum sb_choice { SB_BOOT_NORMAL = 0, SB_BOOT_BACKUP = 1 };
 

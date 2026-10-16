@@ -120,8 +120,8 @@ static void cmd_info(struct sb_state *s)
         port_sysinfo(SURF_SYSINFO_DDR_SIZE) >> 20, s->ddr_ok ? ", tested" : "");
     say("card: %s%s; buttons %x\n", port_card_present() ? "present" : "absent (card-detect open)",
         s->card_ok ? (s->vol_ok ? ", FAT32 mounted" : ", initialized") : "", port_buttons());
-    if (sb_last_err)
-        say("last error: %s: %s\n", sb_err_name(sb_last_err), sb_last_msg);
+    if (s->boot_err)
+        say("last boot failure: %s: %s\n", sb_err_name(s->boot_err), s->boot_msg);
 }
 
 static void cmd_sd(struct sb_state *s)

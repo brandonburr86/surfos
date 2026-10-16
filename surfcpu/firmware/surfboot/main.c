@@ -81,7 +81,7 @@ static void run_line(void)
         uart_drain(100000);
         ((void (*)(void))SURF_RESET_PC)();
     }
-    led_code(sb_last_err ? sb_err_led(sb_last_err) : LED_CODE_MONITOR);
+    led_code(st.boot_err ? sb_err_led(st.boot_err) : LED_CODE_MONITOR);     /* why booting failed */
 }
 
 /* State of the monitor loop; static so a trap's longjmp back into the loop finds it intact. */
@@ -107,8 +107,8 @@ static void card_watch(void)
         con_puts("\ncard inserted: booting\n");
         if (sb_boot(&st, 0, SB_BOOT_NORMAL) == SB_OK)
             handoff();
-        led_code(sb_err_led(sb_last_err));
-        con_printf("boot failed: %s (%s)\n", sb_err_text(sb_last_err), sb_err_name(sb_last_err));
+        led_code(sb_err_led(st.boot_err));
+        con_printf("boot failed: %s (%s)\n", sb_err_text(st.boot_err), sb_err_name(st.boot_err));
         prompt();
     }
 }
@@ -168,8 +168,8 @@ int main(void)
     banner();
     int err;
     if (crc32_selftest() != 0) {
-        err = sb_fail(SB_E_CRC_SELFTEST, "the CRC-32 test vectors do not match: the CPU or the ROM is "
-                      "faulty, and no package could be checked");
+        err = sb_note_boot_failure(&st, sb_fail(SB_E_CRC_SELFTEST, "the CRC-32 test vectors do not match: "
+                      "the CPU or the ROM is faulty, and no package could be checked"));
         monitor(err);
     }
     while (timer_now() < 20000u)                    /* let the button debouncers settle */
@@ -179,7 +179,7 @@ int main(void)
         fw_trap_recover(&recover);
         if (btn & 2u) {
             con_puts("BTN1 held: staying in the monitor\n");
-            err = sb_fail(SB_E_STOPPED, "BTN1 was held at power-on");
+            err = sb_note_boot_failure(&st, sb_fail(SB_E_STOPPED, "BTN1 was held at power-on"));
         } else {
             if (btn & 1u)
                 con_puts("BTN0 held: booting /BOOT/BACKUP.BIN\n");
@@ -188,8 +188,8 @@ int main(void)
                 handoff();
         }
     } else {
-        err = sb_fail(SB_E_TRAP, "%s at 0x%08x (mtval 0x%08x) while booting",
-                      fw_cause_name(fw_last_trap.mcause), fw_last_trap.mepc, fw_last_trap.mtval);
+        err = sb_note_boot_failure(&st, sb_fail(SB_E_TRAP, "%s at 0x%08x (mtval 0x%08x) while booting",
+                      fw_cause_name(fw_last_trap.mcause), fw_last_trap.mepc, fw_last_trap.mtval));
     }
     monitor(err);
 }

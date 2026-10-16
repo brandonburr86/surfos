@@ -254,7 +254,26 @@ static void log_image(struct sb_state *s)
         sb_log("boot: header flags 0x%08x are reserved and ignored\n", h->flags);
 }
 
+int sb_note_boot_failure(struct sb_state *s, int err)
+{
+    s->boot_err = err;
+    memcpy(s->boot_msg, sb_last_msg, sizeof s->boot_msg);
+    return err;
+}
+
+static int boot_once(struct sb_state *s, const char *path, int choice);
+
 int sb_boot(struct sb_state *s, const char *path, int choice)
+{
+    int e = boot_once(s, path, choice);
+    if (e)
+        return sb_note_boot_failure(s, e);
+    s->boot_err = SB_OK;
+    s->boot_msg[0] = 0;
+    return SB_OK;
+}
+
+static int boot_once(struct sb_state *s, const char *path, int choice)
 {
     int e;
     if (!s->ddr_ok) {

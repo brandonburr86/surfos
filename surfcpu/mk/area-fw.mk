@@ -19,7 +19,7 @@ ISA_AUDIT   := $(PYTHON) tools/isa-audit.py
 BIN2MEM     := $(PYTHON) tools/bin2mem.py
 SURFIMG     := $(PYTHON) tools/surfimg.py
 
-.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios FORCE
+.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios test-fw-emu FORCE
 build-rom: build-fw-rom
 test-fw: test-fw-host
 check: build-rom
@@ -73,6 +73,25 @@ $(FW)/%.mem: $(FW)/%.bin
 build-fw-rom: $(FW)/surfboot.mem
 	@$(RV_SIZE) $(FW)/surfboot.elf | tail -n 1 | awk '{ printf "build-rom: surfboot.elf text %u data %u bss %u: ROM %u of 65536 bytes (%.1f%%)\n", $$1, $$2, $$3, $$1 + $$2, ($$1 + $$2) * 100 / 65536 }'
 
+# ---- test kernel for the handoff (a SURFOS.BIN) ----
+HELLO_SRC := tests/hello/hello_start.S tests/hello/hello.c common/fmt.c common/crc32.c common/string.c
+HELLO_OBJ := $(patsubst %,$(FW_OBJ)/%.o,$(HELLO_SRC))
+
+$(FW)/hello.elf: $(HELLO_OBJ) $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/common/ram.ld -Wl,-Map,$(FW)/hello.map $(HELLO_OBJ) $(RV_LIBGCC) -o $@.tmp
+	$(Q)$(ISA_AUDIT) --quiet $@.tmp
+	$(Q)mv $@.tmp $@
+
+$(FW)/HELLO.BIN: $(FW)/hello.elf tools/surfimg.py
+	$(Q)$(SURFIMG) pack --elf $< -o $@ --name Hello --version 1.0.0 --build-id $(BUILD_ID_HEX) --no-audit
+
+# ---- the firmware emulator ----
+$(FW)/host/surfemu: firmware/tests/surfemu.c firmware/tests/sdcard_sim.c firmware/tests/sdcard_sim.h \
+                    firmware/include/surfcpu/soc.h
+	@mkdir -p $(dir $@)
+	$(Q)$(FW_HOST_CC) -std=gnu11 -O2 -g -Wall -Wextra -Werror -Ifirmware/include -Ifirmware/tests \
+	  firmware/tests/surfemu.c firmware/tests/sdcard_sim.c -o $@
+
 # ---- host build of the portable code, with the sanitizers ----
 FW_HOST_CC     ?= gcc
 FW_HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Werror -DSURF_HOST=1 -fno-omit-frame-pointer \
@@ -94,6 +113,9 @@ test-fw-unit: $(FW)/host/fwtest
 test-fw-scenarios: $(FW)/host/fwtest
 	$(Q)$(PYTHON) firmware/tests/run_tests.py --fwtest $(FW)/host/fwtest $(if $(FW_JOBS),--jobs $(FW_JOBS))
 
-test-fw-host: test-fw-unit test-fw-scenarios
+test-fw-emu: $(FW)/host/surfemu $(FW)/surfboot.mem $(FW)/HELLO.BIN
+	$(Q)$(PYTHON) firmware/tests/run_emu.py $(if $(FW_JOBS),--jobs $(FW_JOBS))
+
+test-fw-host: test-fw-unit test-fw-scenarios test-fw-emu
 
 -include $(shell find $(FW_OBJ) -name '*.d' 2>/dev/null)
