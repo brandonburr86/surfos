@@ -426,6 +426,23 @@ $(BUILD)/host/test_fatfuzz: tests/host/test_fatfuzz.c tests/host/test_fatfs.c $(
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATFS_FLAGS) tests/host/test_fatfuzz.c $(FATFS_OBJ) $(HOSTLIB_OBJ) -o $@
 
+# and its threaded one: the cache and FAT run by host threads at once with the kernel's waits made real
+# (tests/host/test_fatconc.c; its host side fatconc_host.c is built with the host's headers, fatconc_shim/ stands in
+# for the interrupt lock): three settings, 3 s each
+FATCONC_FLAGS = -Itests/host/fatconc_shim $(HOSTKERN_FLAGS) -fgnu89-inline
+FATCONC_OBJ   = $(BUILD)/host/fatconc/fs/bcache.o $(BUILD)/host/fatconc/fs/fat.o $(BUILD)/host/fatconc/fs/fat_mkfs.o
+$(BUILD)/host/fatconc/fs/%.o: fs/%.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatconc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATCONC_FLAGS) -c $< -o $@
+$(BUILD)/host/fatconc/fatconc_host.o: tests/host/fatconc_host.c
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (fatconc test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -c $< -o $@
+$(BUILD)/host/test_fatconc: tests/host/test_fatconc.c $(FATCONC_OBJ) $(BUILD)/host/fatconc/fatconc_host.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(FATCONC_FLAGS) -pthread $^ -o $@
+
 # mkfs writes image files (a temporary directory, sparse, removed afterwards); fsck.fat and mtools check them.
 # fs/vfs.h reaches console.h's 2004 inline declarations, so these two use the kernel's inline rules.
 $(BUILD)/host/test_mkfs $(BUILD)/host/kernel/fs/fat_mkfs.o: HOSTKERN_FLAGS += -fgnu89-inline
@@ -462,7 +479,8 @@ $(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
           $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
-          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs $(BUILD)/host/test_fatfuzz
+          $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs $(BUILD)/host/test_fatfuzz \
+          $(BUILD)/host/test_fatconc
 	$(BUILD)/host/test_blibc
 	$(BUILD)/host/test_bootinfo
 	$(BUILD)/host/test_framebuffer
@@ -473,6 +491,9 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_mkfs
 	$(BUILD)/host/test_fatfs
 	$(BUILD)/host/test_fatfuzz
+	$(BUILD)/host/test_fatconc 11 3 3 1 30 0
+	$(BUILD)/host/test_fatconc 12 3 4 1 0 1
+	$(BUILD)/host/test_fatconc 21 3 3 1 100 1 1 1 1 16384 0
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
@@ -534,7 +555,7 @@ help:
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
-                           $(BUILD)/host/pager/tests/host/*.d $(BUILD)/host/fatfs/fs/*.d)
+                           $(BUILD)/host/pager/tests/host/*.d $(BUILD)/host/fatfs/fs/*.d $(BUILD)/host/fatconc/fs/*.d)
 
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
 $(BUILD)/host/test_dns: tests/host/test_dns.c $(BUILD)/host/kernel/net/dns_wire.o $(HOSTLIB_OBJ)
