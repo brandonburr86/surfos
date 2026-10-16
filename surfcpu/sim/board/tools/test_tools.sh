@@ -1,5 +1,5 @@
 #!/bin/sh
-# SurfCPU board track: tests of tools/fpga-build.sh and tools/program.sh.
+# SurfCPU board track: tests of tools/fpga-build.sh, tools/program.sh and the Digilent fetch.sh.
 #
 # Fake ssh, docker, vivado and openFPGALoader (sim/board/tools/fake) stand in for the build host,
 # Docker, Vivado and the board: the fake vivado runs the real boards/arty_a7/vivado/build.tcl in
@@ -177,6 +177,39 @@ run env FAKE_IDCODE=0x13631093 SURFCPU_FLASH_CONFIRM=write-flash-arty_a7_100t to
 check "flash: a bitstream whose build failed its checks refused" has "does not say the build passed"
 run env FAKE_IDCODE=0x13631093 tools/program.sh volatile arty_a7_100t
 check "program: ... also for a volatile load" has "does not say the build passed"
+
+# ============================================================================== digilent/fetch.sh
+# A copy of the digilent directory whose SHA256SUMS lists three made-up manuals: one saved
+# copy matches, one differs, one is not there. Nothing is downloaded.
+dd=$t/digilent
+mkdir -p "$dd/xdc" "$t/saved"
+cp boards/arty_a7/digilent/fetch.sh "$dd/"
+cp boards/arty_a7/digilent/xdc/* "$dd/xdc/"
+printf 'a schematic\n' > "$t/saved/arty_a7_sch.pdf"
+printf 'a manual, damaged\n' > "$t/saved/pmodps2_rm.pdf"
+{
+    grep -v ' manuals/' boards/arty_a7/digilent/SHA256SUMS
+    echo "$(shasum -a 256 "$t/saved/arty_a7_sch.pdf" | cut -d' ' -f1)  manuals/arty_a7_sch.pdf"
+    echo "$(printf 'a manual\n' | shasum -a 256 | cut -d' ' -f1)  manuals/pmodps2_rm.pdf"
+    echo "$(printf 'a reference\n' | shasum -a 256 | cut -d' ' -f1)  manuals/pmodvga_rm.pdf"
+} > "$dd/SHA256SUMS"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: no manuals fetched still passes (a fresh checkout)" is "$rc" 0
+check "digilent verify: ... and lists the manuals not fetched" has "not fetched (boards/arty_a7/digilent/fetch.sh fetch): manuals/arty_a7_sch.pdf manuals/pmodps2_rm.pdf manuals/pmodvga_rm.pdf"
+run sh "$dd/fetch.sh" fetch --from "$t/saved"
+check "digilent fetch: a copy that differs is reported, the run fails" test "$rc" -eq 1
+check "digilent fetch: the matching copy is installed" test -f "$dd/manuals/arty_a7_sch.pdf"
+check "digilent fetch: the differing copy is not installed" test ! -e "$dd/manuals/pmodps2_rm.pdf"
+check "digilent fetch: the missing one is named" has "absent  manuals/pmodvga_rm.pdf"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: counts the installed manual" has "manuals: 1 of 3 present and matching"
+printf 'changed\n' >> "$dd/manuals/arty_a7_sch.pdf"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: a present manual that changed fails" test "$rc" -eq 1
+rm "$dd/manuals/arty_a7_sch.pdf"
+printf '# edited\n' >> "$dd/xdc/Arty-A7-35-Master.xdc"
+run sh "$dd/fetch.sh" verify
+check "digilent verify: a changed XDC file fails" test "$rc" -eq 1
 
 # ============================================================================== boards.txt
 check "boards.txt: every board is a spec/soc.toml board" python3 -c "

@@ -13,8 +13,9 @@ anything in. Read section 4 before connecting the PS/2 adapter.
 
 ## 1. Sources
 
-All kept unmodified, with their SHA-256, in `boards/arty_a7/digilent/` (`fetch.sh` says where
-each came from).
+Digilent's master XDC files are in git (`boards/arty_a7/digilent/xdc/`, MIT); the manuals and
+schematics are (c) Digilent and not in git: `boards/arty_a7/digilent/fetch.sh fetch` puts copies
+whose SHA-256 matches `SHA256SUMS` in `boards/arty_a7/digilent/manuals/` (it says where each comes from).
 
 | Key | Document | Used for |
 |---|---|---|

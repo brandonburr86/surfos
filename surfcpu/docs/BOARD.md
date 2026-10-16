@@ -19,7 +19,7 @@ these constraints; section 8 lists what that run must confirm.
 | Board variants (part, IDCODE, openFPGALoader name) | `boards/arty_a7/boards.txt` |
 | Vivado flow | `boards/arty_a7/vivado/build.tcl` |
 | Wrappers | `tools/fpga-build.sh`, `tools/program.sh`, `tools/check-wiring.py` |
-| Digilent's files (XDC, manuals, schematics; SHA-256) | `boards/arty_a7/digilent/` |
+| Digilent's master XDC (in git) and manuals and schematics (a local cache, `fetch.sh fetch`), with SHA-256 | `boards/arty_a7/digilent/` |
 | Simulation: primitive models, stand-in SoC, tests | `sim/board/` |
 | Make targets | `mk/area-board.mk` |
 | Evidence | `docs/evidence/board/` |
@@ -77,7 +77,9 @@ hence the separate PLL for `sys_clk`. Its VCO of 1000 MHz also divides to 200 MH
 monitor sees 59.946 Hz. `clockplan.py report` lists the legal alternatives (evidence
 `clocks.txt`): D = 1, M = 9, O0 = 35.75 gives 25,174,825.2 Hz (-6.9 ppm) with a 900 MHz VCO
 that also divides to exactly 25 MHz (/36), so one MMCM could make both clocks and free a CMT.
-That would change `clocks.pix_hz`, a frozen contract, so it is a proposal only.
+That would change `clocks.pix_hz`, a frozen contract, which stays at 25,177,305 Hz (+91.6 ppm
+is far inside what a monitor accepts, and both parts have clock tiles to spare): noted here only
+as a possible later change.
 
 **Simulation.** `sim/board/prims/` models MMCME2_BASE, PLLE2_BASE, BUFG and IOBUF with AMD's
 names, parameters and ports, for Icarus and Verilator (`--timing`). The tile models check their
@@ -306,7 +308,7 @@ the script or the constraints, never a waiver to get a bitstream.
 
 The wrappers are tested without Vivado (`make check`, `board-tools`): a fake `vivado` runs the
 real `build.tcl` in Yosys's Tcl with stand-in Vivado commands, fake `ssh` and `docker` run
-locally, with a temporary HOME and output directory (89 checks: refusals, dry runs, both flows,
+locally, with a temporary HOME and output directory (98 checks with fetch.sh's: refusals, dry runs, both flows,
 the staged files, `params.tcl`, the TOML manifest, and each gate stopping the bitstream).
 
 ## 9. Programming
@@ -327,7 +329,7 @@ configuration RAM, lost at power-off (PROG or a power cycle returns to the flash
 `SURFCPU_FLASH_CONFIRM=write-flash-<board>` or the board name typed at the prompt, and only a
 bitstream with a passing manifest; the board's flash part depends on its revision (RM §5.2:
 Micron N25Q128A13ESF40, Spansion S25FL128SAG[M|N]FI00 or S25FL127SABMFx00; gap G7). Tested
-with a fake openFPGALoader (in the 89 checks above). Nothing has been programmed.
+with a fake openFPGALoader (in the checks above). Nothing has been programmed.
 
 ## 10. Budgets
 
@@ -360,5 +362,5 @@ memory controller adds its own MMCM and PLL in bank 34's CMT; the 35T has 5 CMTs
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (12 SHA-256), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (89 wrapper checks) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC, I/O timing, CDC names; self-test 18 mutations), `board-cdc-xdc` (15 checks), `board-tools` (98 wrapper and fetch.sh checks) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |

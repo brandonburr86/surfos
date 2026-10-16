@@ -126,7 +126,7 @@ check-board: board-clockplan board-digilent board-wiring board-cdc-xdc board-too
 board-clockplan:
 	$(Q)$(PYTHON) ip/clocking/clockplan.py check
 
-# Digilent's master XDC files, manuals and schematics are unchanged since they were fetched
+# Digilent's master XDC files and licence are unchanged; fetched manuals, when present, match
 board-digilent:
 	$(Q)$(BD)/digilent/fetch.sh verify
 
