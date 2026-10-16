@@ -1,0 +1,43 @@
+The DDR BRAM diagnostics on the board: a fault before any DDR access (the integrator's own captures)
+Board: Arty A7-100T, as above. surfcpu_arty_a7_ddr_bramdiag built at 92a2b51 (clean, every gate passed, seed 1), loaded twice;
+each run printed the banner's first characters and stopped with the same report (deterministic):
+  +    4.864 | 
+  +    4.864 | S
+  +    4.864 | *
+  +    4.864 | *** SurfBoot fault reporter: trap with no handler (after the handoff, or inside a trap handler)
+  +    4.864 | mcause 00000000  mepc 00005880  mtval 00005451  sp 0001c850
+  +    4.864 | ra 00004c50  gp 0001c840  tp 00000000  s0 0000000c  s1 00000004
+  +    4.880 | a0 0000000c  a1 0000000c  a2 00005448  a3 00000000
+  +    4.880 | a4 10000000  a5 00000000  a6 00000005  a7 00000000
+  +    4.880 | s2 00005449  s3 00004c50  s4 10001000  s5 00000000
+  +    4.896 | s6 00000014  s7 00000000  s8 00000000  s9 00000001
+  +    4.896 | s10 00000000  s11 00000000
+  +    4.896 | (t0..t6 were used by this report) stopped; LEDs blink code 8
+
+mepc 0x5880 is 'lw s0,8(sp)' in __riscv_restore_0, reached from con_putc (ra 0x4c50) after video_putc; no jump or branch can
+produce the odd target 0x5451 (JALR clears bit 0, branch and JAL offsets are even). The ROM in the bitstream (sha256 3f0a834f...)
+differs from the later firmware build only in the two build-id words. The SoC 0.2.0 diagnostics without DDR (surfcpu_arty_a7_bramdiag,
+e396177) pass on the same board right after (203 checks), and SurfBoot's DDR design (92a2b51) runs, calibrates the DDR3L and
+boots SurfOS: the fault belongs to this one build. Under investigation.
+
+The SoC 0.2.0 diagnostics without DDR, for comparison:
+  +    4.864 | 
+  +    4.864 | SurfCPU BRAM diagnostics 1.0.0 (build e3961772)
+  +    4.880 | board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  +    4.880 | bitstream build e3961772 flags 0, features 7f, DDR status 0 size 0 MiB
+  +    4.880 | identity                           ok (7 checks)
+  +    4.896 | ALU, immediates, x0                ok (33 checks)
+  +    4.896 | M extension                        ok (23 checks)
+  +    4.896 | branches and jumps                 ok (9 checks)
+  +    4.912 | loads and stores                   ok (8 checks)
+  +    4.912 | CSRs and counters                  ok (30 checks)
+  +    4.912 | scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  +    4.976 | text RAM (cells 2400-4095)         ok (1 checks)
+  +    4.994 | exceptions, each recovered         ok (34 checks)
+  +    4.994 | interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  +    5.024 | FENCE.I, code written to RAM       ok (2 checks)
+  +    5.024 | DDR                                skipped: no DDR controller in this bitstream
+  +    5.024 | 
+  +    5.024 | BRAMDIAG: PASS (203 checks)
+  +    5.024 | 
+  +    5.024 | UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
