@@ -535,8 +535,8 @@ three flags and when a sync began to wait for its hold: 48 KiB), each struct bde
 On SurfCPU (the RTL system, the same simulator and ROM, d7452f4's kernel against this one):
 test-os-persist's write run 0.9 % fewer cycles, its reboot run 1.0 % more, test-os-faults' run
 on the card that refuses 3.7 % more and its full card 0.3 % fewer; the commands that sync take
-4-19 % fewer cycles, the 160 KiB `cp` 1.7 % more, and a boot about 2 million more (a package
-6.5 KB larger to load, a larger cache to clear; bcache-review.txt section 10).
+4-20 % fewer cycles, the 160 KiB `cp` 1.7 % more, and a boot about 2 million more (a package
+6.4 KB larger to load, a larger cache to clear; bcache-review.txt section 10).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
