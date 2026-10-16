@@ -119,6 +119,7 @@ differ (reset values, the CSR map, fetching from MMIO).
 | Command | What it does |
 |---|---|
 | `make lint-cpu` | Verilator `-Wall` lint of `surfcpu_core` with and without `SURFCPU_RVFI` (on `make lint`) |
+| `make test-cpu-tb` | the testbench's own contract: exit codes 0/1/2/3, `--signature` and `--trace` formats (`tb_selftest.py`; on `make test-cpu`) |
 | `make test-cpu-directed` | every directed test under 14 bus timings and seeds (`run_tests.py`; on `make test-cpu`) |
 | `make test-cpu-riscv-tests` | riscv-tests rv32ui/rv32um/rv32mi "p" tests under three timings (`riscv_tests.py`; on `make test-cpu`). The first run fetches the pinned tarballs (SHA-256 checked) into `build/third_party/riscv-tests/`, so it needs the network once |
 | `make test-cpu-icarus` | the twelve directed tests that need only RAM and bus errors on the core under Icarus Verilog (`run_icarus.py`, `tb_core_icarus.v`; on `make test-cpu`) |

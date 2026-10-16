@@ -7,6 +7,7 @@
 #   make test-cpu-spike      the same test programs on Spike (checks the tests themselves)
 #   make test-cpu-riscv-tests  riscv-tests rv32ui/um/mi (fetched once, pinned, SHA-256 checked)
 #   make test-cpu-icarus     the RAM-only directed tests on the core under Icarus Verilog
+#   make test-cpu-tb         the testbench's own contract (exit codes, signature, trace)
 #   make synth-cpu           Yosys synth_xilinx estimate of the core alone
 #
 # Hung on the aggregates: lint, test-cpu, check.
@@ -23,9 +24,10 @@ CPU_ELFS    := $(patsubst sim/cpu/tests/%.S,$(CPU_BUILD)/tests/%.elf,$(CPU_TEST_
 CPU_JOBS    ?= 6
 CPU_VFLAGS  := -Wall -Wno-DECLFILENAME -Irtl/generated -Irtl/cpu -Irtl/lib
 
-.PHONY: lint-cpu build-cpu test-cpu-directed test-cpu-spike test-cpu-riscv-tests test-cpu-icarus synth-cpu
+.PHONY: lint-cpu build-cpu test-cpu-tb test-cpu-directed test-cpu-spike test-cpu-riscv-tests \
+        test-cpu-icarus synth-cpu
 lint: lint-cpu
-test-cpu: test-cpu-directed test-cpu-riscv-tests test-cpu-icarus
+test-cpu: test-cpu-tb test-cpu-directed test-cpu-riscv-tests test-cpu-icarus
 check: synth-cpu
 
 lint-cpu:
@@ -65,6 +67,9 @@ $(CPU_BUILD)/tests/%.elf: $(CPU_BUILD)/gen/%.S sim/cpu/tests/surf_test.h sim/cpu
 	$(Q)$(RV_CC) -march=$(RV_ARCH) -mabi=$(RV_ABI) -nostdlib -nostartfiles -static -Wl,--no-warn-rwx-segments \
 	  -Isim/cpu/tests -T sim/cpu/tests/link.ld $< -o $@
 	$(Q)$(RV_OBJDUMP) -d $@ > $(@:.elf=.dis)
+
+test-cpu-tb: $(CPU_TB)
+	$(Q)$(PYTHON) sim/cpu/tb_selftest.py --tb $(CPU_TB)
 
 test-cpu-directed: $(CPU_TB) $(CPU_ELFS)
 	$(Q)$(PYTHON) sim/cpu/run_tests.py --tb $(CPU_TB) --out $(CPU_BUILD)/runs --jobs $(CPU_JOBS) $(CPU_ELFS)

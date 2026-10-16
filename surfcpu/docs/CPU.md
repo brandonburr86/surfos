@@ -355,6 +355,8 @@ If it is ever short, the multiplier is the first candidate for a pipeline regist
 * **riscv-tests** (`sim/cpu/riscv_tests.py`, pinned commit, fetched once): the rv32ui,
   rv32um and rv32mi "p" tests under three timings; three need features ISA.md leaves out
   (debug triggers, PMP entries, hardware misaligned accesses) and must fail as noted.
+* **The testbench itself** (`sim/cpu/tb_selftest.py`): its exit codes, signature and trace
+  formats against MODULES.md section 6 and sim/README.md.
 * **Icarus Verilog** (`sim/cpu/run_icarus.py`, `sim/cpu/tb_core_icarus.v`): the core built
   without RVFI runs the twelve directed tests that need only RAM and bus errors, with
   random `req_ready` and latencies, three seeds each: the RTL simulates in both simulators.

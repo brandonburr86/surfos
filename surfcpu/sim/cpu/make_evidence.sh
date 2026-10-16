@@ -25,6 +25,8 @@ run() {     # run FILE TITLE COMMAND...
 }
 
 run lint.txt "surfcpu_core: Verilator -Wall lint" make --no-print-directory lint-cpu
+run tb-selftest.txt "surfcpu_tb: its own contract (exit codes, signature, trace)" \
+    make --no-print-directory test-cpu-tb
 run directed-tests.txt "surfcpu_core: directed tests on surfcpu_tb (Verilator), every timing and seed" \
     make --no-print-directory test-cpu-directed
 run riscv-tests.txt "surfcpu_core: riscv-tests rv32ui/rv32um/rv32mi p tests on surfcpu_tb" \
