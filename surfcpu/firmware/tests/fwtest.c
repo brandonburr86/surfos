@@ -18,7 +18,9 @@ with AddressSanitizer and UBSan) on the simulated board of port_host.c:
 Card options: --type sdhc|sdsc2|sdsc1|mmc, --absent, --no-cd, --dead, --miso-low,
 --acmd41-busy N (-1 = forever), --cmd8-bad-echo, --no-33v, --no-cmd59, --ncr N, --nac N,
 --crc-errors N, --crc-every N, --token-errors N, --read-timeouts N, --remove-after N,
---min-div N. Board options: --ddr ok|absent|fail|never, --ddr-size BYTES, --ddr-calib-ms N,
+--min-div N; --io-model runs the io track's pin-level model instead (built with
+IO_MODEL_DIR; --type, --absent, --crc-errors and --token-errors carry over, and any protocol
+violation it logs fails the run). Board options: --ddr ok|absent|fail|never, --ddr-size BYTES, --ddr-calib-ms N,
 --ddr-flip, --btn0, --path PATH. Checks: --expect NAME (OK or an error name such as
 FAT_CYCLE), --expect-msg TEXT, --expect-log TEXT (repeatable), --expect-flags N,
 --expect-cmdline TEXT. Exit 0 when every expectation holds, 1 otherwise, 2 on bad usage,
@@ -40,6 +42,16 @@ FAT_CYCLE), --expect-msg TEXT, --expect-log TEXT (repeatable), --expect-flags N,
 #include "sd.h"
 
 static int failures;
+
+#ifdef FWTEST_IO_MODEL
+int iomodel_attach(const char *image, const char *kind, unsigned seed, int absent, int read_bad_crc,
+                   int error_tokens);
+unsigned long iomodel_violations(void);
+void iomodel_report(int all);
+void iomodel_detach(void);
+#endif
+static int io_model;                    /* --io-model: the io track's card instead of sdcard_sim */
+static const char *io_kind = "sdhc";
 
 #define CHECK(cond, ...) do { if (!(cond)) { failures++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
     printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -155,6 +167,7 @@ enum {
     O_TYPE = 256, O_ABSENT, O_NOCD, O_DEAD, O_MISOLOW, O_ACMD41, O_CMD8, O_NO33, O_NOCMD59, O_NCR, O_NAC,
     O_CRCERR, O_CRCEVERY, O_TOKERR, O_TIMEOUTS, O_REMOVE, O_MINDIV, O_DDR, O_DDRSIZE, O_DDRCAL, O_DDRFLIP,
     O_BTN0, O_PATH, O_EXPECT, O_EXPMSG, O_EXPLOG, O_EXPNOLOG, O_EXPFLAGS, O_EXPCMD, O_SEED, O_ITER, O_MUT,
+    O_IOMODEL,
 };
 
 static const struct option longopts[] = {
@@ -175,7 +188,7 @@ static const struct option longopts[] = {
     { "expect-flags", required_argument, 0, O_EXPFLAGS }, { "expect-cmdline", required_argument, 0, O_EXPCMD },
     { "seed", required_argument, 0, O_SEED }, { "iterations", required_argument, 0, O_ITER },
     { "mutations", required_argument, 0, O_MUT }, { "quiet", no_argument, 0, 'q' },
-    { "command", required_argument, 0, 'c' }, { 0, 0, 0, 0 },
+    { "command", required_argument, 0, 'c' }, { "io-model", no_argument, 0, O_IOMODEL }, { 0, 0, 0, 0 },
 };
 
 static int parse_options(int argc, char **argv)
@@ -187,7 +200,9 @@ static int parse_options(int argc, char **argv)
         case 'C': card_path = optarg; break;
         case 'c': if (nlines < 32) lines[nlines++] = optarg; break;
         case 'q': quiet = 1; break;
+        case O_IOMODEL: io_model = 1; break;
         case O_TYPE:
+            io_kind = optarg;
             if (!strcmp(optarg, "sdhc")) card_opts.type = SDSIM_SDHC;
             else if (!strcmp(optarg, "sdsc2")) card_opts.type = SDSIM_SDSC2;
             else if (!strcmp(optarg, "sdsc1")) card_opts.type = SDSIM_SDSC1;
@@ -248,7 +263,22 @@ static int setup_board(void)
     host.buttons = btn;
     host.spi_budget = 400000000ull;
     host.time_budget_ns = 3600ull * 1000000000ull;
-    if (card_path || card_opts.absent || card_opts.no_cd) {
+    if (io_model) {
+#ifdef FWTEST_IO_MODEL
+        if (card_opts.no_cd || card_opts.dead || card_opts.miso_low || card_opts.acmd41_busy != 3 ||
+            card_opts.cmd8_bad_echo || card_opts.no_33v || card_opts.no_cmd59 || card_opts.crc_every ||
+            card_opts.read_timeouts || card_opts.remove_after || card_opts.min_div || card_opts.type == SDSIM_MMC) {
+            fprintf(stderr, "fwtest: that card option exists only in sdcard_sim, not in the io model\n");
+            return -1;
+        }
+        if (iomodel_attach(card_path, io_kind, (unsigned)seed, card_opts.absent || !card_path,
+                           card_opts.crc_errors, card_opts.token_errors) != 0)
+            return -1;
+#else
+        fprintf(stderr, "fwtest: built without the io track's SD model (make IO_MODEL_DIR=...)\n");
+        return -1;
+#endif
+    } else if (card_path || card_opts.absent || card_opts.no_cd) {
         host.card = sdsim_open(card_path, &card_opts);
         if (!host.card)
             return -1;
@@ -313,6 +343,23 @@ static int check_boot_result(struct sb_state *s)
     return bad;
 }
 
+/* With --io-model: report the model's statistics; any protocol violation is a failure. */
+static int io_model_done(void)
+{
+#ifdef FWTEST_IO_MODEL
+    if (!io_model)
+        return 0;
+    unsigned long v = iomodel_violations();
+    iomodel_report(0);
+    iomodel_detach();
+    if (v) {
+        printf("EXPECTATION FAILED: the io model saw %lu protocol violation(s)\n", v);
+        return 1;
+    }
+#endif
+    return 0;
+}
+
 static int run_boot(void)
 {
     if (setup_board() != 0)
@@ -331,6 +378,7 @@ static int run_boot(void)
         printf("RESULT FAIL code=%s led=%u msg=%s\n", sb_err_name(err), sb_err_led(err), sb_last_msg);
     }
     bad += check_expectations(err);
+    bad += io_model_done();
     host_free();
     return bad ? 1 : 0;
 }
@@ -353,6 +401,7 @@ static int run_monitor(void)
     printf("RESULT %s last_err=%s\n", last == MON_BOOT ? "BOOT" : last == MON_RESET ? "RESET" : "CONTINUE",
            sb_err_name(sb_last_err));
     int bad = check_expectations(ex.code ? sb_last_err : 0);
+    bad += io_model_done();
     host_free();
     return bad ? 1 : 0;
 }

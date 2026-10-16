@@ -21,7 +21,7 @@ ISA_AUDIT   := $(PYTHON) tools/isa-audit.py
 BIN2MEM     := $(PYTHON) tools/bin2mem.py
 SURFIMG     := $(PYTHON) tools/surfimg.py
 
-.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios test-fw-emu FORCE
+.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios test-fw-emu test-fw-iomodel FORCE
 build-rom: build-fw-rom
 test-fw: test-fw-host
 check: build-rom
@@ -134,6 +134,31 @@ $(FW)/host/fwtest: $(FW_HOST_SRC) $(FW_HOST_HDR)
 	@mkdir -p $(dir $@)
 	$(Q)$(FW_HOST_CC) $(FW_HOST_CFLAGS) $(FW_HOST_SRC) -o $@
 
+# The same tests against the io track's pin-level SD card model (sim/models/sdcard_model.cpp,
+# arriving with the integration): skipped while it is not in the tree.
+IO_MODEL_DIR ?= sim/models
+FW_IO_MODEL  := $(wildcard $(IO_MODEL_DIR)/sdcard_model.cpp)
+FW_IO_OBJ    := $(FW)/host/io
+FW_IO_SAN    := -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all
+
+$(FW)/host/fwtest-io: $(FW_HOST_SRC) $(FW_HOST_HDR) firmware/tests/iomodel_glue.cpp $(FW_IO_MODEL)
+	@mkdir -p $(FW_IO_OBJ)
+	$(Q)for f in $(FW_HOST_SRC); do \
+	  $(FW_HOST_CC) $(FW_HOST_CFLAGS) -DFWTEST_IO_MODEL -c $$f -o $(FW_IO_OBJ)/$$(basename $$f .c).o || exit 1; done
+	$(Q)g++ -std=c++17 -O1 -g -Wall -Wextra $(FW_IO_SAN) -I$(IO_MODEL_DIR) -Ifirmware/include -Ifirmware/common \
+	  -Ifirmware/surfboot -Ifirmware/tests -c firmware/tests/iomodel_glue.cpp -o $(FW_IO_OBJ)/iomodel_glue.o
+	$(Q)g++ -std=c++17 -O1 -g $(FW_IO_SAN) -I$(IO_MODEL_DIR) -c $(IO_MODEL_DIR)/sdcard_model.cpp \
+	  -o $(FW_IO_OBJ)/sdcard_model.o
+	$(Q)g++ $(FW_IO_SAN) $(FW_IO_OBJ)/*.o -o $@
+
+test-fw-iomodel:
+ifeq ($(FW_IO_MODEL),)
+	@echo "test-fw-iomodel: skipped: the io track's SD card model ($(IO_MODEL_DIR)/sdcard_model.cpp) is not in this tree"
+else
+	$(Q)$(MAKE) --no-print-directory $(FW)/host/fwtest-io
+	$(Q)$(PYTHON) firmware/tests/run_tests.py --io-model --fwtest $(FW)/host/fwtest-io $(if $(FW_JOBS),--jobs $(FW_JOBS))
+endif
+
 test-fw-unit: $(FW)/host/fwtest
 	$(Q)ASAN_OPTIONS=detect_leaks=1 $(FW)/host/fwtest unit
 
@@ -143,6 +168,6 @@ test-fw-scenarios: $(FW)/host/fwtest
 test-fw-emu: $(FW)/host/surfemu $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/DDRDIAG.BIN $(FW)/HELLO.BIN
 	$(Q)$(PYTHON) firmware/tests/run_emu.py $(if $(FW_JOBS),--jobs $(FW_JOBS))
 
-test-fw-host: test-fw-unit test-fw-scenarios test-fw-emu
+test-fw-host: test-fw-unit test-fw-scenarios test-fw-emu test-fw-iomodel
 
 -include $(shell find $(FW_OBJ) -name '*.d' 2>/dev/null)

@@ -37,6 +37,10 @@ struct host_env {
     const char *in;             /* console input still to deliver */
     int echo;                   /* copy the console to stdout */
     uint64_t spi_bytes;
+    /* Another card model at the pins (the io track's, iomodel_glue.cpp): when set, these
+     * replace the sdcard_sim card. */
+    uint8_t (*xfer_hook)(int cs, uint8_t out);
+    int (*present_hook)(void);
     uint64_t spi_budget;        /* abort (exit 3) after this many SPI bytes: a runaway loop */
     uint64_t time_budget_ns;    /* abort (exit 3) after this much simulated time */
 };

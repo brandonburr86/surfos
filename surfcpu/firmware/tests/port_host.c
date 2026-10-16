@@ -63,7 +63,12 @@ uint32_t port_now_us(void)
     return (uint32_t)(host.now_ns / 1000u);
 }
 
-int port_card_present(void) { return host.card ? sdsim_present(host.card) : 0; }
+int port_card_present(void)
+{
+    if (host.present_hook)
+        return host.present_hook();
+    return host.card ? sdsim_present(host.card) : 0;
+}
 void port_spi_select(int on) { host.cs = on; }
 
 uint8_t port_spi_xfer(uint8_t out)
@@ -75,6 +80,8 @@ uint8_t port_spi_xfer(uint8_t out)
         fprintf(stderr, "RUNAWAY: more than %llu SPI bytes\n", (unsigned long long)host.spi_budget);
         exit(3);
     }
+    if (host.xfer_hook)
+        return host.xfer_hook(host.cs, out);
     return host.card ? sdsim_xfer(host.card, host.cs, out) : 0xFF;
 }
 

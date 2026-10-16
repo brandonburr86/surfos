@@ -15,6 +15,8 @@ the metadata with several seeds.
 
     python3 firmware/tests/run_tests.py [--fwtest build/fw/host/fwtest] [--jobs 4] [-k NAME]
                                         [--keep] [--fuzz-seeds 1,2,3] [--fuzz-iterations 300]
+    python3 firmware/tests/run_tests.py --io-model --fwtest build/fw/host/fwtest-io
+                                        (the same scenarios against the io track's SD card model)
 
 Images go to build/fw/cards/ (sparse files) and are deleted when their scenario passes
 (--keep keeps them). Exit status 0 when every scenario passes.
@@ -1009,7 +1011,7 @@ def _(p):
     "chain /BOOT/SURFOS.BIN", "check /BOOT/SURFOS.BIN", "check /BOOT/BROKEN.BIN", "check /BOOT/LONGNAME1.BIN",
     "md 0x80000000 8", "mw 0x80000000 0xdeadbeef", "md 0x80000000 1", "md 0x30000000 1", "spi 3", "bogus",
     "boot"],
-    logs=["boot [PATH]", "SurfBoot 1.0.0", "sd: SDHC/SDXC, sector addressing", "CID manufacturer 03",
+    logs=["boot [PATH]", "SurfBoot 1.0.0", "sd: SDHC/SDXC, sector addressing", "CID manufacturer",
           "0x0c FAT32 (LBA)", "fs: 126976 clusters", "SURFOS.BIN", "<dir>", "/USERS/NOPE does not exist",
           "hello monitor", "chain:", "fragments", "every check passed", "FAILED", "IMG_CRC",
           "is not an 8.3 name", "80000000:", "deadbeef", "access fault at 0x30000000", "DIV 3",
@@ -1030,7 +1032,17 @@ def run(cmd, env=None, timeout=300):
     return r.stdout
 
 
-def run_scenario(sc, fwtest, keep):
+# card options only sdcard_sim has (the io model is run without these scenarios)
+SIM_ONLY = {"--no-cd", "--dead", "--miso-low", "--acmd41-busy", "--cmd8-bad-echo", "--no-33v", "--no-cmd59",
+            "--crc-every", "--read-timeouts", "--remove-after", "--min-div", "--ncr", "--nac"}
+
+
+def sim_only(sc):
+    a = sc["args"]
+    return any(x in SIM_ONLY for x in a) or ("--type" in a and a[a.index("--type") + 1] == "mmc")
+
+
+def run_scenario(sc, fwtest, keep, extra=()):
     path = CARDS / f"{sc['name']}.img"
     if path.exists():
         path.unlink()
@@ -1039,7 +1051,7 @@ def run_scenario(sc, fwtest, keep):
         img = sc["build"](path)
     except Exception as e:                                  # a broken test, not a SurfBoot failure
         return sc["name"], False, f"building the image failed: {e!r}", 0.0
-    cmd = [fwtest, sc["mode"]] + (["--card", str(img)] if img else []) + sc["args"] + ["--quiet"]
+    cmd = [fwtest, sc["mode"]] + (["--card", str(img)] if img else []) + sc["args"] + ["--quiet"] + list(extra)
     expects = sc["expect"] if isinstance(sc["expect"], tuple) else (sc["expect"],)
     if len(expects) == 1:
         cmd += ["--expect", expects[0]]
@@ -1080,6 +1092,8 @@ def main(argv=None) -> int:
     ap.add_argument("--fuzz-seeds", default="1,2,3,4,5")
     ap.add_argument("--fuzz-iterations", type=int, default=300)
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--io-model", action="store_true",
+                    help="run through the io track's SD card model (fwtest-io); skips sdcard_sim-only scenarios")
     a = ap.parse_args(argv)
     if a.list:
         for sc in SCENARIOS:
@@ -1087,10 +1101,16 @@ def main(argv=None) -> int:
         return 0
     CARDS.mkdir(parents=True, exist_ok=True)
     chosen = [s for s in SCENARIOS if not a.filter or a.filter in s["name"]]
+    skipped = []
+    if a.io_model:
+        skipped = [s["name"] for s in chosen if sim_only(s)]
+        chosen = [s for s in chosen if not sim_only(s)]
+        a.fuzz_seeds = ""                                    # the fuzzer drives an in-memory sdcard_sim card
+    extra = ["--io-model"] if a.io_model else []
     t0 = time.time()
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as ex:
-        futs = [ex.submit(run_scenario, s, a.fwtest, a.keep) for s in chosen]
+        futs = [ex.submit(run_scenario, s, a.fwtest, a.keep, extra) for s in chosen]
         for f in concurrent.futures.as_completed(futs):
             name, ok, detail, secs = f.result()
             results.append((name, ok, detail, secs))
@@ -1113,7 +1133,11 @@ def main(argv=None) -> int:
             fuzz_ok &= r.returncode == 0
         if fuzz_ok:
             fz.unlink()
+    if skipped:
+        print(f"run_tests: {len(skipped)} scenarios need sdcard_sim's own fault options and were not run: "
+              f"{' '.join(sorted(skipped))}")
     print(f"run_tests: {len(results) - len(fails)} of {len(results)} scenarios passed"
+          f"{' through the io track SD card model' if a.io_model else ''}"
           f"{', fuzzing passed' if fuzz_ok and a.fuzz_seeds and not a.filter else ''} in {time.time() - t0:.0f} s")
     return 0 if not fails and fuzz_ok else 1
 

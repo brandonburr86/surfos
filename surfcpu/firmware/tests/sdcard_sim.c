@@ -253,6 +253,10 @@ static void read_block(struct sdsim *c, uint32_t arg, uint8_t r1)
         respond_r1(c, r1 | R1_ADDRESS);
         return;
     }
+    if (addr + 512u > c->size) {
+        respond_r1(c, r1 | R1_PARAM);               /* outside the card: parameter error */
+        return;
+    }
     if (c->o.remove_after && c->reads >= (uint32_t)c->o.remove_after) {
         c->inserted = 0;                            /* pulled out: nothing answers any more */
         c->out_len = 0;
@@ -264,9 +268,8 @@ static void read_block(struct sdsim *c, uint32_t arg, uint8_t r1)
         c->o.read_timeouts--;
         return;                                     /* never a token */
     }
-    if (c->o.token_errors > 0 || addr + 512u > c->size) {
-        if (c->o.token_errors > 0)
-            c->o.token_errors--;
+    if (c->o.token_errors > 0) {
+        c->o.token_errors--;
         for (int i = 0; i < c->o.nac; i++)
             put(c, 0xFF);
         put(c, 0x08);                               /* data error token: out of range */
