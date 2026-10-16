@@ -394,6 +394,8 @@ int sb_monitor_line(struct sb_state *s, char *line)
     char *cmd = word(&p);
     if (!cmd)
         return MON_CONTINUE;
+    sb_last_err = SB_OK;                            /* from here on: this command's outcome */
+    sb_last_msg[0] = 0;
     char *arg = word(&p);
     if (!strcmp(cmd, "help") || !strcmp(cmd, "?")) {
         sb_monitor_help();

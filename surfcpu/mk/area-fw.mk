@@ -19,7 +19,7 @@ ISA_AUDIT   := $(PYTHON) tools/isa-audit.py
 BIN2MEM     := $(PYTHON) tools/bin2mem.py
 SURFIMG     := $(PYTHON) tools/surfimg.py
 
-.PHONY: build-fw-rom test-fw-host test-fw-unit fw-sizes FORCE
+.PHONY: build-fw-rom test-fw-host test-fw-unit test-fw-scenarios FORCE
 build-rom: build-fw-rom
 test-fw: test-fw-host
 check: build-rom
@@ -91,6 +91,9 @@ $(FW)/host/fwtest: $(FW_HOST_SRC) $(FW_HOST_HDR)
 test-fw-unit: $(FW)/host/fwtest
 	$(Q)ASAN_OPTIONS=detect_leaks=1 $(FW)/host/fwtest unit
 
-test-fw-host: test-fw-unit
+test-fw-scenarios: $(FW)/host/fwtest
+	$(Q)$(PYTHON) firmware/tests/run_tests.py --fwtest $(FW)/host/fwtest $(if $(FW_JOBS),--jobs $(FW_JOBS))
+
+test-fw-host: test-fw-unit test-fw-scenarios
 
 -include $(shell find $(FW_OBJ) -name '*.d' 2>/dev/null)
