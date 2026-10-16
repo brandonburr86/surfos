@@ -215,12 +215,23 @@ Or, at the prompt: `umount /sd0p1`, `sdmode rw`, `mount sd0p1`. SurfOS never par
 formats the card: do that on the Mac (section 2).
 
 **Write.** Every shell command that changes files (`write`, `append`, `cp`, `mv`, `rm`,
-`mkdir`, `rmdir`) puts everything on the card before the prompt comes back. If the card
-refuses, the command says `... not all of it reached /sd0p1: I/O error` and fails ($? 1); what
-it wrote stays in memory, and `sync` tries again. SurfOS keeps at most a quarter of its block
-cache (128 KiB) waiting for a card that refuses; past that, further writes to it fail at once
-with `I/O error`, and nothing already kept is dropped. An `mv` or `rm` the card refuses changes
-nothing (the file keeps its one name and its bytes), so the same command later is safe.
+`mkdir`, `rmdir`) puts everything on the card before the prompt comes back, also when another
+program writes to the card at the same time (since 2026-10-16; before, such a command could
+report success with its folder entry still in memory). If the card refuses, the command says
+`... not all of it reached /sd0p1: I/O error` and fails ($? 1); what it wrote stays in memory,
+and `sync` tries again. SurfOS keeps at most a quarter of its block cache (128 KiB) of file
+data waiting for a card that refuses (each command's own FAT and folder blocks come on top of
+that: a few); past that, further writes to it fail at once with `I/O error`, and nothing
+already kept is dropped. It asks the card again at each command, so once the card takes
+writes again the next command works, without a `sync` first. A write the card refuses changes
+nothing: a command that writes less than it was given changed only what it says it wrote. An
+`mv` or `rm` the card refuses changes nothing (the file keeps its one name and its bytes), so
+the same command later is safe. While a block of one file refuses, an `rm` of that file works
+(its unwritten bytes go with it), but `rm`, `mv`, `mkdir` and truncations of other files on the
+card fail with `I/O error` until the card takes that block: they must not reach the card before
+bytes they might point at. A `sync` waits about 10 seconds for a program that holds part of
+what it must write and does not let go (one killed in the middle of a write), then says `I/O
+error` for that part; later syncs say so at once.
 
 **Before taking the card out or switching off**, type `eject sd0` and wait for
 `sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
@@ -253,7 +264,9 @@ after each block of a write, `rm`, `mv` and an overwrite, the most `fsck.fat` fo
 Never, in those tests, a file pointing at free space or at bytes that were not written. The
 host test of the same code (`tests/host/test_fatfs.c`, `make unittest`) checks the image after
 every block written, for writes, deletes, renames, truncates, folders that grow and two tasks
-writing at once, and finds none either. Two narrow cases are left: a copy that stopped because
+writing at once, and finds none either; nor do thousands of random operations on a card that
+refuses writes and reads at random (`tests/host/test_fatfuzz.c`), nor several tasks at once on
+real threads (`tests/host/test_fatconc.c`). Two narrow cases are left: a copy that stopped because
 the card began to refuse after taking part of it (pulled during the sync that later writes its
 end, its clusters may still be linked past the end), and FAT12's entries that straddle two
 sectors (FAT12 is for floppies, never a SurfOS card). A truncate cut short can also leave a

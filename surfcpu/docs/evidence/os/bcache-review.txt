@@ -1,4 +1,5 @@
-SurfOS: a review of the block cache and FAT after audit B1-B4, and its fixes (audit B5-B11)
+SurfOS: a review of the block cache and FAT after audit B1-B4, and its fixes (audit B5-B11, sections 1-4); a second
+review, of B5-B11, and its fixes (audit B12-B19, sections 5-10, round fs-fix-2 below)
 date: 2026-10-16 (local)
 test: tests/host/test_fatfs.c (make unittest): fs/bcache.c, fs/fat.c and fs/fat_mkfs.c as they are, with stand-ins for
       the rest of the kernel, over RAM disks that refuse writes (all, or those touching some blocks) and reads on
@@ -73,3 +74,162 @@ B11b     B11   a cut whose second FAT sector cannot be read            FAIL: the
   until its share of the cache was full, the first 57344 bytes of BIG.BIN (514560 before B6); a card that answers no
   command: "write: close: I/O error" (B10) and the sync's "not all of it reached"; after the faults fsck.fat -n finds
   the volume clean. RTL: test-os-persist 17 of 17, test-os-faults 25 of 25.
+
+======================================================================================================================
+Round fs-fix-2 (10/16/26): an independent review of B5-B11 (d7452f4), and its fixes (audit B12-B19)
+date:   2026-10-16 (local)
+review: by another agent, read-only, on d7452f4: nine scenarios (fsrev-tests/review.c, R1-R9), a randomized test (fuzz.c)
+        and a threaded one (conc.c, conc_host.c, conc_shim/), each against d7452f4's fs/bcache.c, fs/fat.c and
+        fs/fat_mkfs.c with tests/host/test_fatfs.c's stand-ins. Its findings M1-M3, m1-m6 and four small ones are
+        docs/CODE-AUDIT.md's B12-B19. R7 (255-character names after a refused mv and rm) passed on d7452f4 and was not
+        ported.
+before: d7452f4's fs/, include/, lib/ and tests/host (git archive), built with this round's tests/host/test_fatfs.c (its
+        stand-ins; the scenarios call nothing d7452f4 lacks), test_fatfuzz.c and the review's own files
+after:  sc/fs-fix-2 (from surfcpu 420f756): 19d935c bcache, 66df38d fat, ac09229 and 81d3b5b the two harnesses as tests,
+        00abef4 and 08965ef B18's clock (08965ef: read only when a sync has to wait; a second sweep only when a block
+        failed), 7993a24 and 821430b docs; every result below is of 821430b unless it says otherwise
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32, tests/host/pager_shim); and the
+        devenv container (gcc -m32) through make unittest (section 9)
+
+== 5. Before and after, scenario by scenario (tests/host/test_fatfs.c: 154 checks; the 91 of round fs-fix pass on both)
+scenario  audit review what                                             before (d7452f4)                                after
+B12a      B12   R1     a close's write-back (fat_sync(), then bsync(),  FAIL: both syncs 0; the other task wrote 31      pass: both 0, a's entry on the disk with
+                       no sb->lock) while another task keeps writing    times, and a's entry on the disk still says 600  its new size; the other task wrote 9 times;
+                       two other files whenever the device works        bytes (B7 gave up after 8 rounds, returned 0)    the oracle saw nothing at any write
+B12b      B12   -      the same while the other task keeps rewriting    FAIL: both syncs 0, a's entry still 600 bytes    pass: both 0, a's entry right; the root
+                       two files whose entries share the closed file's                                                  block went out from a copy (twice: once
+                       directory block                                                                                  per sync); the oracle saw nothing
+B13a      B13,  R2     one data sector refuses (file a's); 20 files,    FAIL: m's data on the disk: 0 of 20 (after its   pass: 20 of 20 (the bad sector asked once
+ B16a     B16          two syncs; 20 more files, two syncs; then rm a,  first failure in a sync the device was asked    in a sync); rm a works and the card has no
+                       rm n00, mv n01 zz                                nothing more); rm a, rm n00, mv: EIO             failed block left; the rest works; nothing
+                                                                                                                         lost
+B13b      B13   R2b    two refusing sectors at the head of a 22-block   FAIL: 0 of the 20 good blocks after three syncs  pass: 20 of 20
+                       run of new files                                 (two failures ended the one-by-one retry)
+B13c      B13   R8     a refused 2-block FAT run; another task dirties  FAIL: the first sync returned 0 (the retries     pass: -1 and -1; the FAT sector that works
+                       a data block during it                           were RUN_BLOCKED, counted as written)            and the data written, the entry waits
+B14a      B14   R4     a card refuses until its share fills, then       FAIL: create, rm and write: EIO, no request      pass: 0, 0, 512
+                       works: a create, an rm, a write                  sent (room() never asked it again)
+B14b      B14   R9     a directory block refused by one sync; the card  FAIL: stopped at 126 KiB (room() said no; the    pass: all 1024 KiB
+                       works; a 1 MiB write in 2 KiB pieces             table points never retried the directory block)
+B15a      B15   R5     a refusing card: 250 cached blocks written over, FAIL: 379 dirty blocks (BCACHE_HOLD 256)         pass: 251
+                       then 64 KB straight over three cached files
+B15b      B15   -      a refused 64 KB straight write over a file the   FAIL: 128 dirty blocks holding the refused       pass: EIO, nothing dirty, the file reads
+                       cache holds                                      bytes; the file read them; the next sync wrote   as it was, and the next sync writes nothing
+                                                                        them                                             of the refused write
+B16b      B16   -      mv over the file whose block refuses; then a     FAIL: both EIO, and the syncs EIO for as long    pass: both work; the syncs then say 0 with
+                       truncate past another block that refuses         as the blocks refuse                             the sectors still refusing (nothing left
+                                                                                                                         for them); nothing lost
+B17a      B17   R6     mv s/a b (b exists) when s's block cannot be     FAIL: EIO, and b gone (its entry deleted and     pass: the mv is done (the old name went
+                       read once b's entry went (the second order point) its clusters freed before the old name failed) before b's): the root holds s and b (a's
+                                                                                                                         bytes), s is empty; nothing lost
+B17b      B17   -      the same, s's block unreadable from the first    FAIL: EIO, b gone                                pass: EIO, nothing changed: s holds a, the
+                       order point on                                                                                    root s and b, each with its bytes
+B17c      B17   -      mv s/d d2 when d's own block (its "..") cannot   FAIL: EIO with the rename done (d2 in the root,  pass: EIO, nothing changed; the same mv
+                       be read                                          s empty), d2's ".." still pointing at s          works once the block can be read, and
+                                                                                                                         d2's ".." points at the root
+B17d      B17   -      a file made in a full directory that grows; the  FAIL: create says EIO; the file was made         pass: 0, the file is there
+                       directory's first block unreadable meanwhile
+B18       B18   -      three dirty blocks held by a task that never     FAIL: the sync never returns (the stand-ins stop pass: -1 once it has waited 10 s (10.15 s of
+                       lets go; one other dirty block                   it after 200 million lock operations)            the stand-ins' 50 ms steps), one wait for
+                                                                                                                         the three; the next sync -1 at once; the
+                                                                                                                         other block written; let go, they are
+                                                                                                                         written
+T12       B6    -      (changed) an entry block held back by its data's pass (as before)                                  pass: the data is now dirtied first: since
+                       failure, not marked failed                                                                        B12 an entry block waits only for older
+                                                                                                                         changes, and T12 needs one that waits
+(each)    B9,         the cache's account of each disk matches its      pass                                             pass, now also the lists: each in the order
+          B12          blocks                                                                                            of first changes, as many as the counts
+Every new scenario fails on d7452f4 (15 of 15); every scenario of round fs-fix passes on both.
+
+== 6. The review's randomized test (tests/host/test_fatfuzz.c in make unittest; the review's campaign.sh by hand)
+  make unittest's fixed set (seed, operations): FAT16 8192 blocks 100/3000 and 202/3000 (with blocks unreadable for one
+  operation), FAT16 40000 blocks 300/800, FAT32 70000 blocks 400/500. Each run checks the oracle after every write the
+  disk stores, both disks' accounts after every operation, that an operation that failed changed nothing (B5), the
+  image mounted afresh at every clean point against the model, and (B15) that a short write changed nothing past what
+  it returned.
+    d7452f4:  2 of 4 runs fail: short writes that changed more than they returned, 2 (seed 100) and 1 (seed 202)
+    after:    0 of 4 (about 1 s natively, 10 s in the devenv's emulated container)
+  The review's campaign (campaign.sh, unchanged, with fuzz.c built against each tree: 96 runs, 274,000 operations, 21 %
+  of them with the disk refusing in 19,577 episodes, the image checked at 15,623 clean points), 35 s each on the Mac:
+    after:    every run: oracle 0, B5 0, audit 0, image 0, sync 0, short writes that changed more 0
+    d7452f4:  oracle, B5, audit, image and sync 0 in every run; short writes that changed more: 227, in 81 of the 96 runs.
+              (The review's own campaign.out, 08:29, shows B5 failures for seeds 202, 211 and 213-215; its fuzz.c was
+              edited at 08:30, and with that file those seeds show B5 0 on d7452f4 and the short writes counted apart.)
+
+== 7. The review's threaded test (tests/host/test_fatconc.c in make unittest; conc_campaign.sh, conc_campaign2.sh)
+  Host threads run the real cache and FAT with a SurfOS mutex that blocks, a wait for a block that blocks until woken,
+  irq_save() as one host lock, a watchdog (30 s with no operation finished: exit 3); workers in their own directories
+  check B5 after each failed operation and, after a close's write-back that says 0, the file's entry on the disk (B10);
+  a reader of another disk makes room, a syncer runs bsync(NULL), chaos makes the disk refuse for milliseconds.
+  make unittest: three settings, 3 s each (exit 1 when a check found something).
+  The review's two campaigns, unchanged but for `head -2` raised to 4 (the harness now prints its "before the final
+  sync" line and its verdict, and the final checks would be cut off):
+    d7452f4 (the review's run, 08:45 and 08:49): 44 runs, 8,776,531 operations, 51,372 checked closes: nothing found
+    after (11:58-12:08): 44 runs, 1,783,304 operations, 47,810 checked closes: no watchdog, the final syncs 0 and no
+              dirty block left, oracle 0, both accounts right, B5 0, the models and the end comparison right, no close
+              whose write-back said 0 with the entry not on the disk, no zero-length write, in every run
+  The operations differ for two reasons, both of the fixes. In the settings with no syncer and a streaming writer
+  (conc_campaign2.sh "3 1 100 1 1 1 1"), d7452f4's two workers failed 53-79 % of their operations and the disk took
+  298-2,023 writes in 15 s: after a refusal the volume stayed refused (M3; no sync came to clear it), so writes failed
+  at once and the streamer's appends went nowhere fast (2.2-2.4 million "operations"); now the workers fail 2-5 % and
+  the disk takes 44,000-46,000 writes (each 100 us). In conc_campaign.sh, where a syncer clears the failures:
+      setting (workers, chaos, io, heavy)   operations         failed operations   disk writes          refused writes
+                                            d7452f4   after    d7452f4   after     d7452f4    after     d7452f4  after
+      2 1 200 0                             201,526   166,227  3.6 %     1.9 %     236,449    195,391   33,010   40,758
+      3 1 30 0                              854,448   715,172  3.1 %     1.2 %     1,061,406  903,060   134,741  287,172
+      4 1 0 1                               129,841   129,345  1.4 %     1.5 %     217,477    209,816   14,960   22,828
+      5 1 10 1                               95,753    97,428  1.6 %     1.4 %     178,993    173,872   13,061   28,244
+  While the chaos makes the disk refuse (2-10 ms in every 20-80 ms), a sync now goes on after a refusal (B13: up to 4
+  refused requests with none taken) and room() asks again (B14): the disk gets up to twice the refused requests, which
+  cost their io time, and operations fail about half as often. Where requests cost 30-200 us that is 16-18 % fewer
+  operations in the same 10 s; with 0-10 us requests the same (-0.4 % and +1.7 %).
+
+== 8. Costs (the program of round fs-fix, section 2, with its 1 GiB rows; device write requests, blocks, host CPU time)
+                                                    d7452f4                   after
+  (requests (blocks), host CPU time: the least of three runs)
+  unlink of 200 files, a sync after each            600 (  600)   1.1 ms    600 (  600)   0.8 ms
+  mv of 200 files in one directory                  400 (  400)   3.8 ms    400 (  400)   3.6 ms
+  200 x open O_TRUNC, write 512 bytes, close       1000 ( 1000)   1.8 ms   1000 ( 1000)   1.6 ms
+  4 MiB in 4 KiB pieces, FAT16, 512-byte clusters   115 ( 8291)   5.6 ms    115 ( 8291)   5.5 ms
+  4 MiB in 4 KiB pieces, FAT32 64 MiB (512 B cl.)   197 ( 8580)   6.2 ms    197 ( 8580)   6.4 ms
+  4 MiB in 64 KiB pieces, FAT32 64 MiB              196 ( 8580)   3.3 ms    196 ( 8580)   3.4 ms
+  4 MiB in 4 KiB pieces, FAT32 1 GiB                119 ( 8244)   5.3 ms    105 ( 8244)   5.3 ms
+  4 MiB in 64 KiB pieces, FAT32 1 GiB                84 ( 8244)   2.5 ms     84 ( 8244)   2.5 ms
+  The one difference in requests, the 4 KiB pieces on 1 GiB, is B12's rule: on d7452f4 each FAT sector waited for every
+  dirty data block, so the run of data still being filled went out in pieces (8048+123, then 8171+1 and 8172+4 after
+  the FAT); now the FAT sectors go once the older data is out, and that run goes whole (8048+128): the same 8244
+  blocks in 105 requests (16 of one block and none of four, against 23 and 7). The host CPU time is the same within
+  the run-to-run spread (about 5 %), or less where syncs are most of the work (the 200 unlinks -27 %, the 200 small
+  writes -11 %: a sync skips the orders its device has nothing dirty in).
+  Memory: struct buf 580 -> 628 bytes on i386 (first, last and next change numbers, the list links, three flags,
+  when a sync began to wait for its hold): 48 KiB more for the 1024 buffers; struct bdev 192 -> 236 bytes.
+
+== 9. make unittest in the devenv container (gcc -m32)
+  O0 (volume surfos-sc-fs2, 12:19-12:25): "FATFS: 154 checks, 0 failures", "FATFUZZ: 4 runs, 0 with failures" (25 s for
+  the first set of six runs in the emulated container, hence the four of about 10 s), "CONC: ok" for each of the three
+  settings; every other unit test passing (surfcpu/docs/evidence/os/x86.txt, round fs-fix-2). O2 (volume
+  surfos-sc-fs2-o2, 12:30-12:35): the same three; the run's exit 2 is tests/test_devenv.py with O=2 in its environment
+  (x86.txt).
+
+== 10. Where the same code runs under the riscv32 kernel (make -C surfcpu check, 12:41-13:06, sc/fs-fix-2 at 821430b;
+       it had passed at 7993a24 too, 11:12-11:43)
+  "check: all automated SurfCPU checks passed". Among them: boards/qemu_virt/test_os.py 132 of 132 at -O2 and at -O0
+  (the card that refuses every block keeps what cp wrote until its share was full, the first 57344 bytes of BIG.BIN, as
+  before; the full card keeps the first 488960 bytes, every free cluster; after the faults fsck.fat -n finds the volume
+  clean); on the RTL system (surfsim, with the io track's card model) test-os-persist 17 of 17, test-os-faults 25 of
+  25, test-os-kit 20 of 20, test-soc-system-boot 21 of 21.
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against d7452f4's (420f756's tree from git
+  archive, built the same way, with the same surfsim and SurfBoot ROM: this round changes neither; 11:44-11:49;
+  after: the check above):
+                                         d7452f4 (420f756)    after (821430b)
+    test-os-persist, the write run          278,691,799         276,201,810    -0.9 %
+    test-os-persist, the reboot run         220,940,120         223,224,613    +1.0 %
+    test-os-faults, the refusing card       301,907,337         313,123,520    +3.7 %
+    test-os-faults, the full card           201,671,732         200,981,047    -0.3 %
+  Step by step (each expected line's cycle, from the runs' evidence files): a boot takes about 2.0 million more (SurfBoot
+  loads a package 6.4 KB larger, 382,148 -> 388,724 bytes, +0.84 M; the kernel clears and sets up a cache 48 KiB larger,
+  +0.69 M; the mount, +0.50 M); the commands that sync take 4-20 % fewer cycles (mkdir -4 %, write -5 %, write over,
+  append, mv, rm and eject -17 to -20 %: a sync skips the orders its device has nothing dirty in, where B7 walked the
+  cache for each); the 160 KiB cp +1.7 %, reading it back +0.3 %. The refusing card's run asks the card more (B13: up
+  to 4 refused requests a sync, B14: room() asks again). Before 08965ef the hold's clock was read each time a block was
+  taken: the reboot run's read-back cost +0.95 M (1.3 %), the write run +0.5 %, the faults run +4.9 %.
