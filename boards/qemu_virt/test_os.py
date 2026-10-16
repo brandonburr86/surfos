@@ -1116,9 +1116,14 @@ def main():
         ok, out = cmd('mount rd0p1', ['rd0p1 on /rd0p1: fat32'])
         check(ok and 'not unmounted cleanly' not in out, 'mount again: clean (umount set the clean bit)')
 
-        # a sleeping task killed: off the sleep list and gone
-        ok, out = cmd('ps', ['heartbeat'])
-        m = re.search(r'^\s*(\d+)\s+sleeping\s+LOW\s+.*heartbeat$', out, re.M)
+        # a sleeping task killed: off the sleep list and gone. ps may catch it just woken ("ready", on a busy
+        # host it can wait a while for its turn): looked at again until it sleeps, a few times at most
+        for _ in range(10):
+            ok, out = cmd('ps', ['heartbeat'])
+            m = re.search(r'^\s*(\d+)\s+sleeping\s+LOW\s+.*heartbeat$', out, re.M)
+            if m or not ok:
+                break
+            q.wait(0.2)
         if check(ok and m, 'ps: the heartbeat task sleeps between its beats'):
             ok, out = cmd('kill %s' % m.group(1), ["killing 'heartbeat'"])
             cmd('sleep 200', ['slept'])             # init collects the zombie when it next runs
