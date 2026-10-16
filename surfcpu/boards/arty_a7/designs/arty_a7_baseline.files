@@ -1,0 +1,33 @@
+# arty_a7_baseline: the milestone 1 design (no CPU; docs/BOARD.md section 5).
+# One line per item, paths relative to surfcpu/, shell globs allowed; read by
+# tools/fpga-build.sh (the Vivado build), mk/area-board.mk (lint, Yosys) and
+# tools/check-wiring.py. Kinds:
+#   top <module>              the top-level module
+#   require <file>            the build stops unless this file exists
+#   src <file>                Verilog source (synthesis)
+#   inc <dir>                 include directory
+#   mem <file>                $readmemh data the sources load by name
+#   xdc <file>                top-level constraints, read in this order
+#   cdc <module> <file>       constraints scoped to every instance of <module> (Tcl, unmanaged)
+#   generic <name>...         top-level parameters the build sets
+top      arty_a7_baseline
+src      rtl/lib/surf_sync.v
+src      rtl/lib/surf_reset_sync.v
+src      rtl/lib/surf_pulse_sync.v
+src      rtl/lib/surf_cdc_word.v
+src      boards/arty_a7/rtl/arty_a7_clocks.v
+src      boards/arty_a7/rtl/arty_a7_uart_tx.v
+src      boards/arty_a7/rtl/arty_a7_uart_rx.v
+src      boards/arty_a7/rtl/arty_a7_baseline_core.v
+src      boards/arty_a7/rtl/arty_a7_baseline.v
+inc      rtl/generated
+inc      boards/arty_a7/rtl
+xdc      boards/arty_a7/xdc/arty_a7_clocks.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_config.xdc
+cdc      surf_sync        boards/arty_a7/xdc/cdc/surf_sync.xdc
+cdc      surf_reset_sync  boards/arty_a7/xdc/cdc/surf_reset_sync.xdc
+cdc      surf_pulse_sync  boards/arty_a7/xdc/cdc/surf_pulse_sync.xdc
+cdc      surf_cdc_word    boards/arty_a7/xdc/cdc/surf_cdc_word.xdc
+generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME

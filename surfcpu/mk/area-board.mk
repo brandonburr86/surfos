@@ -10,23 +10,29 @@ BSIM        = $(BUILD)/sim/board
 BOARD_PRIMS = sim/board/prims/surf_sim_cmt.v sim/board/prims/MMCME2_BASE.v \
               sim/board/prims/PLLE2_BASE.v sim/board/prims/BUFG.v sim/board/prims/IOBUF.v
 
+# The files of one kind in a design list: $(call board_list,<design>,<kind>)
+board_list = $(wildcard $(shell sed -n 's/^$(2)[[:space:]][[:space:]]*//p' $(BD)/designs/$(1).files))
+BASELINE_SRC = $(call board_list,arty_a7_baseline,src)
+
 BOARD_VLINT = $(VERILATOR_LINT) --timing --timescale 1ps/1ps -I$(BD)/rtl
 BOARD_IVL   = $(IVERILOG) -g2005 -Wall -Wno-timescale -Irtl/generated -I$(BD)/rtl
 BOARD_VLSIM = $(VERILATOR) --binary --timing -j 2 --timescale 1ps/1ps -Wno-fatal -Wno-lint -Wno-style \
               -Irtl/generated -I$(BD)/rtl
 
-.PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan
+.PHONY: lint-board test-board check-board board-clocks board-prims-bad board-clockplan \
+        board-baseline-rt board-baseline
 lint: lint-board
 test-soc: test-board
 check: check-board
 
 # ------------------------------------------------------------------------------------------- lint
 lint-board:
-	$(Q)$(BOARD_VLINT) --top-module arty_a7_clocks rtl/lib/surf_reset_sync.v $(BD)/rtl/arty_a7_clocks.v $(BOARD_PRIMS)
-	@echo "lint-board: arty_a7_clocks clean"
+	$(Q)for t in arty_a7_clocks arty_a7_uart_tx arty_a7_uart_rx arty_a7_baseline_core arty_a7_baseline; do \
+	  $(BOARD_VLINT) --top-module $$t $(BASELINE_SRC) $(BOARD_PRIMS) || exit 1; done
+	@echo "lint-board: 5 board modules clean"
 
 # ------------------------------------------------------------------------------- simulations
-test-board: board-clocks board-prims-bad
+test-board: board-clocks board-prims-bad board-baseline-rt board-baseline
 	@echo "test-board: PASS"
 
 # clocks and resets: Icarus and Verilator --timing
@@ -56,6 +62,33 @@ board-prims-bad: $(BOARD_PRIMS) sim/board/tb_prims_bad.v
 	    echo "board-prims-bad: case $$n was not refused with '$$want'"; cat $(BSIM)/tb_prims_bad.$$n.txt; exit 1; fi; \
 	done
 	@echo "board-prims-bad: PASS (6 illegal settings refused)"
+
+# the baseline logic in real time (Verilator, C++ harness)
+BASELINE_RT_G = -GBOARD='"arty_a7_100t"' "-GBUILD_ID=32'h1a2b3c4d" -GBUILD_FLAGS=3 -GBUILD_TIME=1760560000 -GRGB_DIM_SHIFT=0
+$(BSIM)/baseline_rt/baseline_rt: sim/board/baseline_rt.cpp $(BASELINE_SRC) firmware/include/surfcpu/soc.h
+	@mkdir -p $(dir $@)
+	$(Q)$(VERILATOR) --cc --exe --build -j 2 -O3 --Mdir $(dir $@) -o baseline_rt -Wno-fatal \
+	  -Irtl/generated -I$(BD)/rtl --top-module arty_a7_baseline_core $(BASELINE_RT_G) \
+	  -CFLAGS "-O2 -I$(abspath firmware/include)" $(filter-out $(BD)/rtl/arty_a7_baseline.v $(BD)/rtl/arty_a7_clocks.v,$(BASELINE_SRC)) \
+	  sim/board/baseline_rt.cpp > $(BSIM)/baseline_rt.build.txt 2>&1 || { tail -30 $(BSIM)/baseline_rt.build.txt; exit 1; }
+board-baseline-rt: $(BSIM)/baseline_rt/baseline_rt
+	$(Q)$< > $(BSIM)/baseline_rt.txt 2>&1; s=$$?; cat $(BSIM)/baseline_rt.txt; [ $$s -eq 0 ]
+
+# the whole baseline top from its pins: Icarus (short run) and Verilator --timing (with RESET)
+BASELINE_TB = $(BOARD_PRIMS) $(BASELINE_SRC) sim/board/tb_baseline.v
+$(BSIM)/tb_baseline.vvp: $(BASELINE_TB) $(BD)/rtl/arty_a7_clock_params.vh
+	@mkdir -p $(dir $@)
+	$(Q)$(BOARD_IVL) -o $@ $(BASELINE_TB)
+$(BSIM)/vl_baseline/tb_baseline: $(BASELINE_TB) $(BD)/rtl/arty_a7_clock_params.vh
+	$(Q)$(BOARD_VLSIM) --Mdir $(dir $@) -o tb_baseline --top-module tb_baseline $(BASELINE_TB) \
+	  > $(BSIM)/vl_baseline.build.txt 2>&1 || { tail -30 $(BSIM)/vl_baseline.build.txt; exit 1; }
+board-baseline: $(BSIM)/tb_baseline.vvp $(BSIM)/vl_baseline/tb_baseline
+	$(Q)$(BSIM)/vl_baseline/tb_baseline > $(BSIM)/tb_baseline.verilator.txt 2>&1; \
+	  grep -q "tb_baseline: PASS" $(BSIM)/tb_baseline.verilator.txt || { cat $(BSIM)/tb_baseline.verilator.txt; exit 1; }
+	$(Q)vvp -n $< +short > $(BSIM)/tb_baseline.icarus.txt 2>&1; \
+	  grep -q "tb_baseline: PASS" $(BSIM)/tb_baseline.icarus.txt || { cat $(BSIM)/tb_baseline.icarus.txt; exit 1; }
+	@grep -h "tb_baseline: line 2\|after RESET\|tb_baseline: pix" $(BSIM)/tb_baseline.verilator.txt
+	@echo "board-baseline: PASS (Verilator with RESET, Icarus short run)"
 
 # ------------------------------------------------------------------------------------ checks
 check-board: board-clockplan
