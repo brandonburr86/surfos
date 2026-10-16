@@ -7,10 +7,13 @@ The riscv32 port changes a few shared files under #ifdef SURFOS_RISCV32 (kernel/
 lib/blibc/vsnprintf.c). This compares two builds of an ELF32 object or kernel section by
 section: every allocated section (code, read-only data, data, the symbol table, BSS)
 byte for byte, debug information ignored (moved line numbers change it). Used on the x86
-kernel built before and after a guarded change (surfcpu/docs/evidence/os/x86-unchanged.txt).
+kernel built before and after a guarded change (surfcpu/docs/evidence/os/x86.txt).
 
   elfcmp.py before/build/O2/surfos.bin after/build/O2/surfos.bin     exit status 0 when identical
+  elfcmp.py before/build/O2 after/build/O2       10/16/26: every object (and surfos.bin) of two build
+                                                 trees; prints the ones that differ and a count
 """
+import os
 import struct
 import sys
 
@@ -32,9 +35,29 @@ def sections(path):
     return out
 
 
+def trees(base, new):
+    same = differ = 0
+    for root, _, files in os.walk(new):
+        for f in sorted(files):
+            if not (f.endswith('.o') or f == 'surfos.bin'):
+                continue
+            n = os.path.join(root, f)
+            rel = os.path.relpath(n, new)
+            b = os.path.join(base, rel)
+            if os.path.exists(b) and sections(b) == sections(n):
+                same += 1
+            else:
+                differ += 1
+                print('  differs: %s%s' % (rel, '' if os.path.exists(b) else ' (only in the second tree)'))
+    print('%s vs %s: %d identical, %d different' % (base, new, same, differ))
+    sys.exit(0 if not differ else 1)
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
+    if os.path.isdir(sys.argv[1]) and os.path.isdir(sys.argv[2]):
+        trees(sys.argv[1], sys.argv[2])
     a, b = sections(sys.argv[1]), sections(sys.argv[2])
     same = True
     for n in sorted(set(a) | set(b)):

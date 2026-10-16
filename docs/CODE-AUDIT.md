@@ -40,6 +40,12 @@ P2 (user address spaces, system calls, ELF loader, user programs); the ring-3 de
 and TSS from **I8, I9** now carry real processes. Milestone M6 added roadmap N1 and N2 (e1000,
 the IPv4 stack with TCP, DHCP and DNS); **D4** stays open for the 3c905B code itself, which
 QEMU cannot exercise.
+Found and closed by the riscv32 port (SurfCPU, October 2026): **C10** (the console lock in
+`kernel/console.c`: one writer at a time on the grids, the screen and the serial mirror; a
+task waits its turn with interrupts on, a whole `kprintf()`/`printf()` call is drawn as one,
+an interrupt handler that finds the lock held leaves its characters for the holder; the
+scroll moves words, not bytes). Checked by `scrolltest` (riscv32 kernel shell, under QEMU
+slowed to SurfCPU's pace and in the fw emulator) and `tests/host/test_pager.c`.
 
 Found and fixed by the USB boot work (milestone M7, October 2026), all of them harmless
 under QEMU's loader and dangerous on a UEFI PC:
@@ -155,6 +161,7 @@ Built with GCC 13.3 (`-m32`), binutils 2.42 and NASM 2.16, run with
 | C7 | `kernel/console.c:162` | `itoa` treats `%d` as unsigned (negative numbers print as large values) and `%u` as decimal `d` |
 | C8 | `include/time.h:16` | `time_t` is a struct here (collides with the C type name); `get_time()` never checks CMOS status B for BCD/24-hour mode |
 | C9 | `kernel/console.c:26` | Console count is fixed at 3 (`NUM_CONSOLES`); the 2004 TODO notes odd output with more. No scrollback |
+| C10 | `kernel/console.c` (`kputch()`, `sscroll()`) | Nothing keeps two tasks apart on a console: `kputch()` sends a character to the serial mirror, then changes the grid, and `sscroll()` moves the grid up one byte at a time with preemption on, so a task preempted inside a scroll lets another task's line land in rows that the scroll then moves or clears; two tasks' lines can also split each other. Latent on x86, where a scroll takes microseconds; **verified** on SurfCPU, where one takes about a timer tick (the RTL system boot and the fw emulator: blank, half-written and doubled rows during `tasks`, the serial line whole) |
 
 ## D. Drivers
 

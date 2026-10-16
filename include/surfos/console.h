@@ -90,6 +90,10 @@ inline void setpos(surf_console *con);
 void kputch(surf_console* con,TEXTCOLOR color, int c);
 void kprintf(const char *format, ...);
 void kcprintf(surf_console *con, const char *format, ...);
+/* 10/16/26 (audit C10): a whole kprintf() or printf() call drawn as one, the console lock held for
+   it (kernel/console.c); begin returns what end takes, 0 when nothing was taken */
+int console_print_begin(surf_console *con);
+void console_print_end(int how);
 
 void clearScreen();
 void clearConsole(surf_console *con);
