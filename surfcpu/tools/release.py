@@ -9,7 +9,7 @@ the Docker images through devenv/run.sh and tools/fpga-build.sh, as a person wou
     tools/release.py make [--prerelease] [--skip-ddr] [--designs D,..] [--boards B,..] [--out DIR] [--logs DIR]
                           [--force]
         make -C surfcpu release [PRERELEASE=1] [SKIP_DDR=1] [DESIGNS=..] [BOARDS=..] [FORCE=1]
-        From a clean tree only, with SOURCE_DATE_EPOCH = the commit's time, LC_ALL=C and TZ=UTC: the
+        From a clean tree only, with SOURCE_DATE_EPOCH = the commit's time: the
         boot ROMs and the kernel (make build-rom, arch/riscv32/kernel.mk), every design of
         release/release.txt for every board (tools/fpga-build.sh, FLOW=openxc7, every gate as it is),
         the QSPI flash images (tools/bitfile.py), the card's /BOOT files as tools/deploy-sd.py installs
@@ -38,7 +38,9 @@ matched (verify: PASS, or PARTIAL when DESIGNS/BOARDS asked for only some; compa
 when one differed, is missing, damaged or extra, or a release does not pass check, 2 when the
 comparison could not be made.
 
-The builds get an environment of their own: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, TERM and
+LC_ALL=C and TZ=UTC hold on the Mac; devenv/run.sh passes only SOURCE_DATE_EPOCH into the containers,
+which run with their images' own environment (no LANG, LC_* or TZ: the POSIX locale and UTC), and
+MANIFEST says so. The builds get an environment of their own: PATH, HOME, USER, LOGNAME, SHELL, TMPDIR, TERM and
 Docker's settings (DOCKER, DOCKER_HOST, DOCKER_CONFIG, DOCKER_CONTEXT, DOCKER_CERT_PATH,
 DOCKER_TLS_VERIFY) from the caller's, and what the release sets (SOURCE_DATE_EPOCH, LC_ALL=C,
 TZ=UTC, FLOW, SURFCPU_FPGA_OUT, ROM, SURFCPU_KERNEL); nothing else. Settings that would change what a
@@ -214,6 +216,20 @@ def image_versions(tag: str, path: str) -> list[str]:
     if p.returncode != 0:
         raise Refused(f"cannot read {path} in {tag}: {p.stderr.strip()}")
     return [" ".join(line.split()) for line in p.stdout.splitlines() if line.strip()]
+
+
+def image_locale(tag: str) -> str:
+    """what an image's own environment sets of the locale and the time zone (docker image inspect)"""
+    p = subprocess.run([docker(), "image", "inspect", "--format", "{{json .Config.Env}}", tag], capture_output=True,
+                       text=True)
+    try:
+        env = json.loads(p.stdout) if p.returncode == 0 else None
+    except ValueError:
+        env = None
+    if not isinstance(env, list):
+        return "unknown (docker image inspect gave no environment)"
+    found = [e for e in env if e.split("=", 1)[0] in ("LANG", "LANGUAGE", "TZ") or e.startswith("LC_")]
+    return ", ".join(found) if found else "no LANG, LC_* or TZ set (the POSIX locale, UTC)"
 
 
 def flow_containers(tag: str) -> int:
@@ -1477,7 +1493,10 @@ class Release:
             "openxc7_image": self.ox_image, "openxc7_image_id": self.ox_id,
             "openxc7_versions": image_versions(self.ox_image, "/etc/surfcpu-openxc7.txt"),
             "flow": "openxc7 (tools/fpga-build.sh FLOW=openxc7, every gate of docs/BOARD.md section 8)",
-            "nextpnr_threads": nextpnr_threads(), "locale": "LC_ALL=C TZ=UTC",
+            "nextpnr_threads": nextpnr_threads(),
+            "locale": ("LC_ALL=C TZ=UTC for tools/release.py and the scripts it runs on the Mac; the containers get "
+                       "only SOURCE_DATE_EPOCH from them (devenv/run.sh) and run with their images' environment: "
+                       f"{self.tc_image}: {image_locale(self.tc_image)}; {self.ox_image}: {image_locale(self.ox_image)}"),
         }
         what = {
             "SURFOS.BIN": "the SurfOS kernel package for the card (make build-kernel; BOOT-ABI.md section 2)",

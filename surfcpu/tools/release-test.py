@@ -343,7 +343,10 @@ FAKE_DOCKER = r"""#!/bin/sh
 # stand-in for docker: info, image inspect, ps, run ... cat; with FAKE_DOCKER_ARGS, `run` prints its arguments
 case "$1" in
   info)  exit 0 ;;
-  image) echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+  image) case "$*" in
+           *Config.Env*) echo '["PATH=/usr/local/bin:/usr/bin:/bin","SURFCPU_IN_CONTAINER=1"]' ;;
+           *)            echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+         esac ;;
   ps)    ;;
   run)   if [ -n "${FAKE_DOCKER_ARGS:-}" ]; then printf '%s\n' "$@"; else echo "fake-tool 1.0"; fi ;;
   *)     exit 1 ;;
@@ -509,6 +512,14 @@ class TestMake(ScratchRelease):
         self.assertEqual(r.returncode, 1)
         self.assertIn("the release needs it", r.stderr)
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
+
+    def test_locale_recorded_truthfully(self):
+        """review c2: the MANIFEST does not claim LC_ALL/TZ reach the containers"""
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        man = release.parse_toml((self.rel_dir(True) / "MANIFEST").read_text())
+        self.assertIn("the containers get only SOURCE_DATE_EPOCH", man["tools"]["locale"])
+        self.assertIn("no LANG, LC_* or TZ set (the POSIX locale, UTC)", man["tools"]["locale"])
 
     def test_version_tied_to_the_kernel(self):
         """review c3: release.txt's version and SURFOS.BIN's must agree"""

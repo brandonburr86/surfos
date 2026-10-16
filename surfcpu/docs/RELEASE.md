@@ -90,8 +90,11 @@ change both together. The steps and what they print:
    ```
 
 2. **The software**, from empty output directories (`build/fw`, `build/riscv32/arty_a7`):
-   `make build-rom build-kernel` in the toolchain image, with `SOURCE_DATE_EPOCH`, `LC_ALL=C` and
-   `TZ=UTC`. Checked: the packages carry the commit's build id, the firmware was not built dirty.
+   `make build-rom build-kernel` in the toolchain image. `SOURCE_DATE_EPOCH` goes into the
+   container (`devenv/run.sh`); `LC_ALL=C` and `TZ=UTC` hold on the Mac only: the containers run
+   with their images' own environment, which sets no locale and no time zone (so the POSIX locale
+   and UTC), and MANIFEST's `[tools] locale` records what each image sets. Checked: the packages
+   carry the commit's build id, the firmware was not built dirty.
 
    ```
    release: [1/11] the software (make build-rom build-kernel, from empty output directories)
