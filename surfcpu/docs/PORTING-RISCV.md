@@ -9,7 +9,7 @@ dependency, what replaces it, what is left out, and the plan.
 | | |
 |---|---|
 | Build | `make -C surfcpu build-kernel` → `build/riscv32/arty_a7/{surfos.elf,surfos.payload.bin,SURFOS.BIN}` (and `qemu_virt`); `arch/riscv32/kernel.mk` |
-| Test | `make -C surfcpu test-os`: the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32`, driven over its serial console (`boards/qemu_virt/test_os.py`), plus host tests |
+| Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and as `SURFOS.BIN` through a SurfBoot stand-in (`boards/qemu_virt/test_os.py`) |
 | ISA, ABI | `rv32im_zicsr_zifencei`, `ilp32`, machine mode only (ISA.md); every linked instruction checked (`arch/riscv32/isacheck.py`) |
 | Boards | `boards/qemu_virt/` (QEMU's virt machine, for tests now) and `boards/arty_a7/` (SurfCPU's SoC, MEMORY-MAP.md) |
 | State | boots to the kernel shell under QEMU and passes its tests; **nothing has run on the FPGA** (no board connected): every Arty result is pending |
@@ -109,13 +109,14 @@ command that does not need PC hardware or processes.
 | Console: VGA text at 0xB8000, CRTC cursor, framebuffer | `kernel/console.c`, `driver/framebuffer.c` | console.c unchanged, always on its framebuffer path (a RAM grid): `arch/riscv32/fbcon.c` hands the cells to the board's text display (the Arty's 80x30 text RAM) or to none (QEMU), so 0xB8000 and the VGA ports are never touched |
 | Serial console on COM1 | `driver/serial.c` | `arch/riscv32/serial.c`: the same mirroring and input rules (`tty_term_input()`), on the board's UART (16550 on QEMU, `surf_uart` on the Arty) |
 | ttys, line editor, pager | `kernel/tty.c` | unchanged |
-| PS/2 keyboard via the 8042, scan code set 1 | `kernel/keyboard.c` | the Arty's `surf_ps2` delivers set 2: `boards/arty_a7/` translates it (planned in this document's section 6) |
+| PS/2 keyboard via the 8042, scan code set 1 | `kernel/keyboard.c` | the Arty's `surf_ps2` delivers set 2: `boards/arty_a7/ps2set2.c` does the 8042's translation to set 1, `kbdset1.c` is keyboard.c's set-1 decoding (its tables, unchanged) without the 8042, `ps2kbd.c` the driver (section 5) |
 | CMOS clock | `lib/blibc/time.c` | `arch/riscv32/time.c`: QEMU's Goldfish RTC; the Arty has no clock (kernel build time + uptime) |
 | Reboot (ACPI, 0xCF9, 8042, triple fault) | `kernel/sys.c` | `board_reset()`: QEMU's reset register; on the Arty a jump to SurfBoot at the reset vector (a warm start) |
 | PC speaker | `kernel/sys.c`, `shell/demos.c` | nothing (`sysbeep()` does nothing; the demos are not built) |
 | `divl` 64/32 division | `lib/blibc/vsnprintf.c`, `include/surfos/math64.h` | C division through libgcc (guarded in vsnprintf.c; math64.h shadowed) |
 | Driver table (PCI, ATA, USB, NICs, ...) | `driver/drivers.c` | `arch/riscv32/drivers.c`: the serial input, then the board's table |
-| RAM disks from Multiboot modules | `driver/ramdisk.c` | QEMU: `boards/qemu_virt/board.c`'s rd0, the image `-device loader` puts at 0x88000000. Arty: the microSD card |
+| RAM disks from Multiboot modules | `driver/ramdisk.c` | QEMU: `boards/qemu_virt/board.c`'s rd0, the image `-device loader` puts at 0x88000000 |
+| ATA and USB disks | `driver/ata.c`, `driver/usb/msc.c` | the Arty's microSD card over `surf_spi`: `boards/arty_a7/sdcard.c` (SD protocol) and `sd.c` (the block device `sd0`) |
 | ELF loader, processes, system calls, kernel commands for programs | `kernel/process.c`, `kernel/syscall.c`, `mm/uvm.c` | absent (`arch/riscv32/absent.c`: `process_spawn()` says ENOSYS, a user pointer is refused) |
 | Pseudo-terminals, telnetd, sockets | `kernel/pty.c`, `net/` | absent (`pty_out()` drops, nothing ever opens a pty) |
 | The ring-0 shell | `shell/main.c` | `arch/riscv32/kshell.c`: the same line handling, prompt, paging, help and output for every shared command; RISC-V crash commands; the board's commands |
@@ -156,11 +157,14 @@ under ilp32, but the speaker tune that used floats is not built).
 | `kernel/task.c` | four `#ifdef SURFOS_RISCV32` blocks: `build_initial_frame()` becomes `arch_task_frame()`; `yield()` is `ecall`; no `tss_set_kernel_stack()`; init starts the kernel shell on every console |
 | `lib/blibc/vsnprintf.c` | one: the 64/32 division in C instead of `divl` |
 
-How "unchanged" was checked: the x86 kernel built before and after (`devenv/build.sh`, O0 and
-O2) has byte-identical allocated sections (code, data, rodata, the symbol table, BSS) in
-`kernel/task.o`, `lib/blibc/vsnprintf.o` and `surfos.bin`; only debug line numbers moved. Then
-`make test-all`, `make unittest` and `make test-usb` (O0 and O2) passed (evidence in
-`surfcpu/docs/evidence/os/`).
+How "unchanged" was checked (`surfcpu/docs/evidence/os/x86-unchanged.txt`): the x86 kernel
+built before and after (`devenv/build.sh`, O0 and O2) has byte-identical allocated sections
+(code, data, rodata, the symbol table, BSS) in `kernel/task.o`, `lib/blibc/vsnprintf.o` and
+`surfos.bin` (`arch/riscv32/elfcmp.py`); only the debug information moved with the line
+numbers. With the changed files, `make unittest` passed, `make test-usb` passed 315 of 315 at
+O0 and at O2, and `make test-all` passed at O0 (smoke test 311 checks); its O2 smoke run failed
+once (32 of 306, all following one step on the loaded host) and passed 311 when run again, with
+a kernel image identical to the one built before the change.
 
 ## 4. The port checks (AGENT-INSTRUCTIONS.md section 10)
 
@@ -172,12 +176,58 @@ O2) has byte-identical allocated sections (code, data, rodata, the symbol table,
 | Stack alignment (16 bytes) | sampled in a task, in nested calls and inside the timer interrupt; the trap frame is a multiple of 16 and is aligned whatever `sp` was |
 | `sp`, `gp`, `tp` | `sp` inside its task's stack at every trap (trap.c) and in the test; `gp` the kernel's global pointer in tasks and interrupts; `tp` zero |
 | ABI and structure sizes | ilp32 sizes, 8-byte alignment of `long long`, signed `char`, the boot ABI's 64- and 256-byte structures, the trap frame against traps.S |
-| Runtime helper ISA | `isacheck.py` on every link (libgcc included) |
+| Runtime helper ISA | `isacheck.py` on every link (libgcc included); QEMU runs a CPU restricted to SurfCPU's ISA (`misa` 0x40001100), where anything else would trap |
 | BSS and data initialization | start.S clears the BSS; the kernel runs on initialized data (any wrong value shows) |
 | Allocator limits | heap churn with patterns and a heap walk (`heaptest`, `heap`); `run_memcheck()` |
 | Timer rollover | the tick difference across the 32-bit wrap; mtime against the tick count; 64-bit mtime read hi/lo/hi |
 | Task switching under load | 32 tasks created and collected, exit codes, two sleepers, a mutex between two tasks, a semaphore ring, an event with a timeout, the two-task register test |
 | 64-bit arithmetic | division, remainder, 32x32 multiply, the formatter's 64-bit numbers |
+
+The timing windows of the self test (sleeps, kernel timers, timeouts) allow a few late ticks,
+since an emulator on a busy host can stall for a while and the tick then catches up with mtime
+at once.
+
+The rest of `make test-os` (`boards/qemu_virt/test_os.py`, 60 checks per build): the banner and
+identity, help, ps (idle, init, heartbeat, a kernel shell on each of F1-F4), the tick against a
+1000 ms sleep, the heartbeat task, two kernel tasks that count, sleep and wake (`tasks`),
+interrupt counts, the CPU, the self test and heaptest; FAT32 on the RAM disk: long, accented
+and 8.3 names, three folders deep, a 1 MB file read back by CRC, write, mkdir, a 1 MB copy
+under a long name, mv, rm, sync, umount, then the image saved through QEMU's monitor and
+checked on the host (fsck.fat clean, mtools reads back what SurfOS wrote); faults that kill
+the shell with a backtrace and init restarting it, EBREAK stepped over, RISC-V's division by
+zero; the kernel package: `SURFOS.BIN` checked as SurfBoot will, copied to its load address
+by a stand-in for SurfBoot's last step (`boards/qemu_virt/stub/`), entered with a1/a2 as
+BOOT-ABI.md says, its boot information's command line taking effect, and a corrupted boot
+information block refused; and FAT32 over the SD driver: with the kernel word `sdsim`
+(`boards/qemu_virt/sdsim.c`) the RAM disk becomes `sd0` through the Arty's own `sdcard.c` and
+the simulated card of its host test, so the partition code, the block cache (runs of up to 128
+blocks: CMD18, CMD25), the VFS and fs/fat.c run over the real SD code path under the kernel; a
+1 MB file read and copied, a file written, the image checked by fsck.fat and mtools.
+
+`make test-os-host` (`boards/arty_a7/tests/`, seeds 1, 7, 123): the Arty drivers' logic on the
+host, from the same sources: the text screen (present, hardware scroll across the wrap, random
+changes), the keyboard (every character typed through set 2, modifiers, locks, the E0 keys,
+F1-F4, Ctrl+Alt+Del, Pause, Print Screen, the keyboard's replies, line errors, raw mode), the SD
+helpers against the specification's examples (CRC7 of CMD0/CMD8/..., CRC16 0x7FA1, CSD 1.0 and
+2.0, CID), and the SD driver against a simulated card (`sdmodel.c`, its own CRCs) of three kinds
+(SDHC, SDSC version 2, SDSC version 1): 300 random reads and writes of 1-64 blocks, a corrupted
+block read again, a block that stays corrupted, a write rejected for its CRC and sent again, a
+read past the end, a data token that never comes, no card. The model behaves as the io
+track's card model (`surfcpu/sim/models/sdcard_model`, merged into `surfcpu`, documented in
+IO.md): data responses 0xE5/0xEB/0xED followed by busy, R1 0x40 past the end, commands sent
+while the card is busy ignored; it counts the host's mistakes (a command while busy, chip select
+released inside a block) and the tests require none. 168 checks over the three seeds.
+
+`make test-os-iomodel` (`boards/arty_a7/tests/iomodel/`): the same `sdcard.c` against the io
+track's own bit-level card model (`sim/models/sdcard_model.{h,cpp}`), through a software SPI
+master with surf_spi's timing (390.625 kHz for identification, 12.5 MHz after; a millisecond is
+25,000 clock cycles): three kinds of card per seed, 200 random reads and writes checked against a
+shadow copy and the card's backdoor, every fault the model can inject (a bad read CRC, a write
+rejected for its CRC, a read error token, no response, a write error, a slow card, an
+initialization that never ends, no card), and the model's count of protocol mistakes, which must
+stay zero: 101 checks over seeds 1, 7 and 123. It runs where the model is in the tree (on
+`surfcpu` since the io merge; on `sc/os` from a copy, `OS_IOMODEL_DIR`), and says it is skipped
+otherwise.
 
 ## 5. The boards
 
@@ -189,26 +239,69 @@ read from its partition table. It is a separate HAL so the portable kernel can b
 models none of SurfCPU's peripherals and says nothing about the FPGA.
 
 **arty_a7** (`boards/arty_a7/`): SurfCPU's SoC, MEMORY-MAP.md, every address and bit from the
-generated `soc.h`: `surf_uart`, `surf_timer` (timebase from the register), `surf_intc`,
-`surf_gpio` (LD4 blinks with the heartbeat task), `surf_sysinfo`. The microSD card, the PS/2
-keyboard and the text display: section 6.
+generated `soc.h`:
 
-## 6. Plan and what is still to come
+* `board.c`: `surf_uart` (the console; receive interrupt), `surf_timer` (timebase from its
+  register), `surf_intc` (levels, no claim/complete), `surf_gpio` (LD4 blinks with the heartbeat
+  task; `leds`), `surf_sysinfo` (`bootinfo`), the reset as a jump to SurfBoot at the reset vector.
+* `textcon.c` + `textscreen.c`: the 80x30 text display as the console's screen: VGA cells to
+  32-bit cells (glyph, foreground, background), the VGA palette as RGB444, the hardware cursor,
+  and hardware scroll (a present that finds the picture moved up one row moves SCROLL on and
+  rewrites one row: the new bottom row first, then SCROLL, which surf_video takes once per
+  frame, as IO.md describes). Text mode replaces the reset test pattern at start.
+* `ps2kbd.c` + `ps2set2.c` + `kbdset1.c`: the PS/2 keyboard (interrupt source 1): set 2
+  translated to set 1, decoded as kernel/keyboard.c does, to the active tty, F1-F4 switching
+  consoles, Ctrl+Alt+Del rebooting; line errors forget half-received sequences; the lock keys'
+  LEDs set through surf_ps2's host-to-device path (0xED, the value, each ACKed, a state machine
+  driven by the replies, 100 ms timeout); a keyboard plugged in gets its LEDs again (`kbdinfo`).
+* `sd.c` + `sdcard.c` + `sdproto.c`: the microSD card through `surf_spi` as the block device
+  `sd0`, its partitions `sd0p1`...: initialization at 390 kHz (CMD0, CMD8, CMD59 CRC on, ACMD41,
+  CMD58, CMD16 for SDSC, CSD, CID), then 12.5 MHz; SDHC/SDXC block and SDSC byte addressing;
+  single and multiple block reads with every CRC16 checked and a bad block read again; single
+  and multiple block writes with data responses (the low five bits), busy waits, the stop
+  token also after an error, and CMD13; a wait for 0xFF before every command (a card ignores
+  commands while busy); every wait bounded. FAT
+  through the existing block layer, cache, VFS and fs/fat.c: init_fs() mounts the card's FAT32
+  partition on /sd0p1. Read-only until writing has been tried on the real board (the brief's
+  "read-only first"): `sd=rw` in /BOOT/CMDLINE.TXT, or `sdmode rw` while unmounted, enables it;
+  `eject sd0` flushes and unmounts. Never partitioned or formatted (bdev_may_format() refuses
+  its bus). `sdinfo` shows the card.
 
-Done (tested under QEMU): the build, the arch core, the shell, tasks, the timer, interrupts,
-the self test, FAT read/write on a RAM disk with the host checking the result.
+## 6. What is done, pending and later
 
-Next, in this order (each host-tested where its logic allows):
+Done and tested under QEMU (qemu_virt, emulation only): the build, the arch core, the
+machine-mode kernel with its shell, tasks, timer and interrupts, the self test with the port
+checks, FAT read/write on a RAM disk checked from the host, the kernel package through the boot
+ABI, FAT over the SD protocol driver and a simulated card. Done and tested on the host: the
+Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
+the SD driver against the io track's card model with surf_spi's timing.
 
-1. The Arty's 80x30 text display as the console backend (32-bit cells, palette, hardware scroll).
-2. The PS/2 keyboard: scan code set 2 translated for the keyboard code, F1-F4, LEDs.
-3. The microSD card over `surf_spi` as a block device (`sd0`, partitions `sd0p1`): SD commands,
-   CRC7/CRC16, SDHC/SDSC addressing, read, then write with flush; FAT through the VFS, mounted
-   read-only first and read-write once tested, with `eject` (flush and unmount).
+**Pending (needs the board, a bitstream build host, or integration):** everything on the Arty
+itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and links into
+`build/riscv32/arty_a7/SURFOS.BIN` but its register accesses have run nowhere: not in RTL
+simulation (the SoC, its peripherals and SurfBoot are other tracks' work, joined at
+integration: brief milestone 7's "real board boots SurfOS from microSD" and milestone 8's
+persistent files are open), not on the FPGA (no board connected). The SD write path in
+particular stays off (read-only) until it is tried on a real card.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by
 ECALL from U mode, `libsurf` and `surfsh` rebuilt for RV32; the Ethernet MAC and the network
 stack; a graphics mode.
 
-Pending on hardware: everything on the Arty (no board, no bitstream build host yet).
+## 7. Notes on the contracts
+
+Found while building to them; nothing was changed in the frozen files.
+
+* `firmware/ld/surfcpu_soc.ld` holds both the symbols and a `MEMORY` block. A kernel script that
+  INCLUDEs it for the symbols gets the regions too, and GNU ld then puts sections without an
+  explicit region into the first one that fits (`.text` into `bootrom`). The kernel names its
+  region (`REGION_ALIAS("kernel_ram", ddr)` in boards/arty_a7/board.ld). Proposal: the generator
+  writes the symbols and the `MEMORY` block to two files.
+* `firmware/include/surfcpu/bootabi.h` includes `<stdint.h>`, which a freestanding kernel built
+  with `-nostdinc` must provide (include/arch/riscv32/stdint.h does).
+* There is no way for software to reset the SoC (no reset register): `reboot` jumps to the reset
+  vector, a warm start in which SurfBoot runs again but the peripherals keep their state until
+  SurfBoot sets them up. Proposal for a later map version: a reset register in sysinfo.
+* The Arty has no real-time clock: FAT time stamps on the card are the kernel's build time plus
+  the uptime. A clock (or a time set over the UART or the network) is for later.
