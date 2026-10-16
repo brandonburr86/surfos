@@ -1738,7 +1738,8 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     struct fat_dirent src, dst;
     struct diter pos;
     u8 entries[(LFN_MAX_ENTRIES + 1) * 32];
-    struct slot_undo nu[UNDO_MAX], su[UNDO_MAX], du[UNDO_MAX];
+    struct slot_undo nu[UNDO_MAX] = { { 0 } }, su[UNDO_MAX] = { { 0 } },   /* (zeroed: gcc -O2 cannot tell that */
+                     du[UNDO_MAX] = { { 0 } };                              /* the undo reads only what was noted) */
     u32 n, new_lba = 0, new_off = 0, nnu = 0, nsu = 0, ndu = 0, old_parent = 0, lost;
     struct aside aside = { NULL, NULL, 0 };
     bool same = dir_same(on, nn), is_dir, replace = false, dotdot = false;
