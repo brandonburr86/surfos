@@ -101,6 +101,24 @@ def git(*args: str, cwd: Path = REPO) -> str:
     return p.stdout.rstrip()
 
 
+def tree_changes(cwd: Path = REPO) -> list[str]:
+    """what makes the checkout differ from its commit, by the repository's rules and not the user's git
+    configuration: tracked files that changed (whatever status.showUntrackedFiles says), files git does not
+    track that the repository's own .gitignore files do not ignore (a global excludes file or
+    .git/info/exclude does not count: the release is the commit, and a file only they hide could still reach
+    a build), and tracked files git was told not to look at (update-index --assume-unchanged or
+    --skip-worktree), whose changes git status would not show"""
+    out = git("status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none", cwd=cwd).splitlines()
+    out += [f"?? {p}" for p in git("ls-files", "--others", "--exclude-per-directory=.gitignore",
+                                   cwd=cwd).splitlines() if p]
+    for line in git("ls-files", "-v", cwd=cwd).splitlines():
+        tag, _, path = line.partition(" ")
+        if tag.islower() or tag == "S":
+            out.append(f"{tag} {path}  (git update-index --{'skip-worktree' if tag == 'S' else 'assume-unchanged'}: "
+                       "git status does not look at it)")
+    return out
+
+
 def utc(epoch: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
 
@@ -671,10 +689,11 @@ class Release:
         self.commit = git("rev-parse", "HEAD")
         self.short = self.commit[:8]
         self.epoch = int(git("log", "-1", "--format=%ct", "HEAD"))
-        dirty = git("status", "--porcelain").splitlines()
+        dirty = tree_changes()
         if dirty:
             raise Refused("the tree is not clean, so the release would not be the commit (commit or remove "
-                          "these first):\n" + "\n".join("    " + x for x in dirty[:20])
+                          "these first; an untracked file counts unless the repository's own .gitignore files "
+                          "ignore it):\n" + "\n".join("    " + x for x in dirty[:20])
                           + ("\n    ..." if len(dirty) > 20 else ""))
         sde = os.environ.get("SOURCE_DATE_EPOCH")
         if sde and sde != str(self.epoch):
@@ -905,8 +924,9 @@ class Release:
             out = out_root / name if not a.out_exact else out
             if out.exists() and not a.force:
                 raise Refused(f"{out} exists (FORCE=1 replaces it)")
-        if git("status", "--porcelain"):
-            raise Refused("the tree changed during the release: " + git("status", "--porcelain").splitlines()[0])
+        changed = tree_changes()
+        if changed:
+            raise Refused("the tree changed during the release: " + changed[0])
         stage = out.parent / f".{out.name}.stage"
         shutil.rmtree(stage, ignore_errors=True)
         (stage / "card" / "BOOT").mkdir(parents=True)
@@ -1037,9 +1057,9 @@ def cmd_verify(a) -> int:
     say(f"verify {ref.name}: a pristine copy of {commit[:8]} in {src} (git clone --shared)")
     subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(REPO), str(src)], check=True)
     subprocess.run(["git", "-C", str(src), "checkout", "-q", "--detach", commit], check=True)
-    st = subprocess.run(["git", "-C", str(src), "status", "--porcelain"], capture_output=True, text=True).stdout
-    if st.strip():
-        raise Refused(f"the pristine copy is not clean: {st.splitlines()[0]}")
+    st = tree_changes(src)
+    if st:
+        raise Refused(f"the pristine copy is not clean: {st[0]}")
     out = work / "release"
     cmd = [sys.executable, str(src / "surfcpu" / "tools" / "release.py"), "make", "--prerelease", "--out", str(out),
            "--out-exact", "--logs", str(work / "logs")]

@@ -232,117 +232,189 @@ class TestCompare(unittest.TestCase):
 
 
 # ------------------------------------------------------------------------------- make, with stand-ins
-FAKE_RUN = r'''#!/bin/sh
-# stand-in for devenv/run.sh: the software build, or litedram-gen ($FAKE_LITEDRAM_FAIL)
-set -eu
-repo=$(git rev-parse --show-toplevel)
-id=$(git -C "$repo" rev-parse HEAD | cut -c1-8)
-case " $* " in
-  *" litedram-gen "*)
-    case "${FAKE_LITEDRAM_FAIL:-}" in
-      '')   exit 0 ;;
-      lock) echo "lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92, arty.sha256 has 150b)"
-            exit 2 ;;
-      *)    echo "setup.sh: cannot fetch"; exit 1 ;;
-    esac ;;
-esac
-fw=$repo/surfcpu/build/fw
-k=$repo/build/riscv32/arty_a7
-mkdir -p "$fw/gen" "$k"
-printf '#define FW_BUILD_ID 0x%sU\n#define FW_BUILD_DIRTY 0\n' "$id" > "$fw/gen/fw_build.h"
-for f in surfboot bramdiag; do printf '%08x\n' "$SOURCE_DATE_EPOCH" > "$fw/$f.mem"; printf 'ELF %s\n' "$f" > "$fw/$f.elf"; done
-printf 'ELF ddrdiag\n' > "$fw/ddrdiag.elf"
-printf 'ELF surfos\n' > "$k/surfos.elf"
-printf 'payload %s' "$SOURCE_DATE_EPOCH" > "$k/payload"
-python3 "$repo/surfcpu/tools/surfimg.py" pack --bin "$k/payload" --load-addr 0x80000000 --build-id "$id" -o "$k/SURFOS.BIN" >/dev/null
-python3 "$repo/surfcpu/tools/surfimg.py" pack --bin "$k/payload" --load-addr 0x80000000 --build-id "$id" --name DDRdiag -o "$fw/DDRDIAG.BIN" >/dev/null
-'''
+FAKE_RUN = r"""#!/usr/bin/env python3
+# stand-in for devenv/run.sh: the software build (make build-rom [BUILD=dir], make build-kernel, or kernel.mk with
+# OUT=dir, all relative as make takes them), or litedram-gen ($FAKE_LITEDRAM_FAIL: lock, or anything for a fetch
+# failure). The packages carry the commit's build id and the version $FAKE_VERSION (default 2.3.4).
+import os, subprocess, sys
+from pathlib import Path
+args = sys.argv[1:]
+repo = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip())
+sc = repo / "surfcpu"
+bid = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()[:8]
+epoch = os.environ["SOURCE_DATE_EPOCH"]
+if "litedram-gen" in args:
+    fail = os.environ.get("FAKE_LITEDRAM_FAIL", "")
+    if fail == "lock":
+        print("lock.sh: DIFFERS   build/litedram/arty/gateware/litedram_core.v (sha256 bc92, arty.sha256 has 150b)")
+        sys.exit(2)
+    if fail:
+        print("setup.sh: cannot fetch")
+        sys.exit(1)
+    sys.exit(0)
+val = dict(a.split("=", 1) for a in args if "=" in a)
+version = os.environ.get("FAKE_VERSION", "2.3.4")
 
-FAKE_FPGA = r'''#!/usr/bin/env python3
-# stand-in for tools/fpga-build.sh: --design D BOARD; fails the designs named in $FAKE_FPGA_FAIL
-import hashlib, os, subprocess, sys
+
+def pack(payload, out, name):
+    subprocess.run([sys.executable, str(sc / "tools/surfimg.py"), "pack", "--bin", str(payload), "--load-addr",
+                    "0x80000000", "--build-id", bid, "--version", version, "--name", name, "-o", str(out)],
+                   check=True, capture_output=True)
+
+
+if "build-rom" in args:
+    fw = sc / val.get("BUILD", "build") / "fw"
+    (fw / "gen").mkdir(parents=True, exist_ok=True)
+    (fw / "gen/fw_build.h").write_text(f"#define FW_BUILD_ID 0x{bid}U\n#define FW_BUILD_DIRTY 0\n")
+    for f in ("surfboot", "bramdiag"):
+        (fw / f"{f}.mem").write_text(f"{int(epoch):08x}\n")
+        (fw / f"{f}.elf").write_text(f"ELF {f}\n")
+    (fw / "ddrdiag.elf").write_text("ELF ddrdiag\n")
+    (fw / "payload").write_text(f"ddrdiag {epoch}")
+    pack(fw / "payload", fw / "DDRDIAG.BIN", "DDRdiag")
+if "build-kernel" in args or "arch/riscv32/kernel.mk" in args:
+    k = repo / val.get("OUT", "build/riscv32/arty_a7")
+    k.mkdir(parents=True, exist_ok=True)
+    (k / "surfos.elf").write_text("ELF surfos\n")
+    (k / "payload").write_text(f"payload {epoch}")
+    pack(k / "payload", k / "SURFOS.BIN", "SurfOS")
+"""
+
+FAKE_FPGA = r"""#!/usr/bin/env python3
+# stand-in for tools/fpga-build.sh --design D BOARD, run in surfcpu/: BOARD/DESIGN/{DESIGN.bit,manifest.txt} under
+# $SURFCPU_FPGA_OUT (default build/fpga), the boot ROM from $ROM or the design list's rom line.
+# $FAKE_FPGA_FAIL=d1,d2 fails those designs; $FAKE_FPGA_HOOK (a shell command) runs first, $FAKE_FPGA_HOOK_ON=
+# design/board limits it to one build; $FAKE_FPGA_NOOP=1 builds nothing and exits 0 (as DRY_RUN=1 does);
+# $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id.
+import hashlib, os, re, subprocess, sys, time
 from pathlib import Path
 design, board = sys.argv[2], sys.argv[3]
-root = Path(os.environ["FAKE_ROOT"])
+root = Path.cwd()
+if os.environ.get("FAKE_FPGA_ENV"):
+    with open(os.environ["FAKE_FPGA_ENV"], "a") as f:
+        f.write(" ".join(sorted(os.environ)) + "\n")
+hook, on = os.environ.get("FAKE_FPGA_HOOK"), os.environ.get("FAKE_FPGA_HOOK_ON")
+if hook and (not on or on == f"{design}/{board}"):
+    subprocess.run(["sh", "-c", hook], check=True, cwd=str(root))
+if os.environ.get("FAKE_FPGA_NOOP") == "1":
+    sys.exit(0)
 sys.path.insert(0, str(root / "tools"))
 import bitfile
-base = root / "build" / "fpga" / board / design
+base = Path(os.environ.get("SURFCPU_FPGA_OUT") or root / "build" / "fpga") / board / design
 base.mkdir(parents=True, exist_ok=True)
+for p in (base / f"{design}.bit", base / "manifest.txt"):
+    if p.exists():
+        p.unlink()
 commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 part, idcode = ("xc7a100tcsg324-1", 0x03631093) if board == "arty_a7_100t" else ("xc7a35tcsg324-1", 0x0362D093)
 fail = design in os.environ.get("FAKE_FPGA_FAIL", "").split(",")
-bit = base / f"{design}.bit"
-if bit.exists():
-    bit.unlink()
-head = [f'design = "{design}"', f'board = "{board}"', f'part = "{part}"', f'source_revision = "{commit}"',
-        "source_dirty = false", f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
-        'rom_sha256 = ""', 'kernel_sha256 = ""', "placer_seed = 1"]
+rom_image = rom_sha = ""
+for line in (root / f"boards/arty_a7/designs/{design}.files").read_text().splitlines():
+    if line.startswith("rom "):
+        src = Path(os.environ["ROM"]) if os.environ.get("ROM") else root / line.split()[1]
+        rom_image, rom_sha = str(src), hashlib.sha256(src.read_bytes()).hexdigest()
+tag = re.search(r"^IMAGE_TAG=(\S+)$", (root / "tools/openxc7-build.sh").read_text(), re.M).group(1)
+when = os.environ.get("FAKE_RUN_ID_TIME") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+head = [f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
+        f'part = "{part}"', f'source_revision = "{commit}"', "source_dirty = false",
+        f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
+        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', "placer_seed = 1"]
 if fail:
     head += ['result = "fail"', 'reason = "timing not met (nextpnr: dram_clk 63.5 MHz of 100 MHz)"']
 else:
     data = bitfile.stamp(bitfile.synthetic(idcode=idcode, part=part), int(os.environ["SOURCE_DATE_EPOCH"]))
-    bit.write_bytes(data)
+    (base / f"{design}.bit").write_bytes(data)
     head += ['result = "pass"', f'bitstream_sha256 = "{hashlib.sha256(data).hexdigest()}"']
-head += ["", "[openxc7]", 'check_synthesis = "PASS"', 'check_lvs = "PASS"', 'timing = ["clock sys_clk: PASS", ]',
-         "wns_ns = 10.5"]
-(base / "manifest.txt").write_text("# SurfCPU bitstream build manifest\n" + "\n".join(head) + "\n")
+head += ["", "[openxc7]", f'image = "surfcpu-openxc7:{tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
+         'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5"]
+(base / "manifest.txt").write_text("# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by "
+                                   "tools/fpga-build.sh\n" + "\n".join(head) + "\n")
 sys.exit(1 if fail else 0)
-'''
+"""
 
-FAKE_DOCKER = r'''#!/bin/sh
-# stand-in for docker: image inspect, ps, run ... cat
+FAKE_DOCKER = r"""#!/bin/sh
+# stand-in for docker: info, image inspect, ps, run ... cat; with FAKE_DOCKER_ARGS, `run` prints its arguments
 case "$1" in
+  info)  exit 0 ;;
   image) echo "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
   ps)    ;;
-  run)   echo "fake-tool 1.0" ;;
+  run)   if [ -n "${FAKE_DOCKER_ARGS:-}" ]; then printf '%s\n' "$@"; else echo "fake-tool 1.0"; fi ;;
   *)     exit 1 ;;
 esac
-'''
+"""
 
 
-class TestMake(unittest.TestCase):
+class ScratchRelease(unittest.TestCase):
+    """a scratch git repository holding the release tooling, with stand-ins for devenv/run.sh (the software),
+    tools/fpga-build.sh (one bitstream) and docker, which tools/release.py takes only with SURFCPU_RELEASE_TEST=1"""
     COPY = ("tools/release.py", "tools/bitfile.py", "tools/deploy-sd.py", "tools/surfimg.py", "tools/socspec.py",
             "spec/soc.toml", "boards/arty_a7/boards.txt", "devenv/run.sh", "tools/openxc7-build.sh",
-            "firmware/tests/deploy/fake_diskutil.py", "firmware/tests/deploy/fake_mount.py") + tuple(
+            "firmware/tests/deploy/fake_diskutil.py", "firmware/tests/deploy/fake_mount.py", "tools/fresh-checkout.sh",
+            "Makefile", "mk/host.mk") + tuple(
         f"docs/{d}" for d in ("SURFBUS.md", "ISA.md", "BOOT-ABI.md", "MODULES.md", "MEMORY-MAP.md"))
+    LIST = ("version 2.3.4\nboard arty_a7_100t\nboard arty_a7_35t\ndesign base - -\ndesign top test -\n"
+            "design dd boot ddr\ncard-cmdline sd=rw\n")
+    DESIGNS = {"base": "top base\n", "top": "top top\nrom build/fw/surfboot.mem u_soc.u_bootrom\n",
+               "dd": "top dd\nrom build/fw/surfboot.mem u_soc.u_bootrom\n"}
 
     def setUp(self):
-        self.dir = fresh(f"make-{self._testMethodName}")
+        self.dir = fresh(f"{type(self).__name__}-{self._testMethodName}")
         self.repo = self.dir / "repo"
         self.sc = self.repo / "surfcpu"
         for rel in self.COPY:
             (self.sc / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / rel, self.sc / rel)
-        for d in ("base", "top", "dd"):
-            (self.sc / "boards/arty_a7/designs").mkdir(parents=True, exist_ok=True)
-            (self.sc / f"boards/arty_a7/designs/{d}.files").write_text(f"top {d}\n")
+        (self.sc / "devenv/run.sh").chmod(0o755)
+        (self.sc / "tools/fresh-checkout.sh").chmod(0o755)
+        (self.sc / "boards/arty_a7/designs").mkdir(parents=True, exist_ok=True)
+        for d, text in self.DESIGNS.items():
+            (self.sc / f"boards/arty_a7/designs/{d}.files").write_text(text)
         (self.sc / "release").mkdir()
-        (self.sc / "release/release.txt").write_text(
-            "version 2.3.4\nboard arty_a7_100t\nboard arty_a7_35t\ndesign base - -\ndesign top test -\n"
-            "design dd boot ddr\ncard-cmdline sd=rw\n")
+        (self.sc / "release/release.txt").write_text(self.LIST)
         (self.repo / ".gitignore").write_text("build/\n__pycache__/\n")
-        fakes = self.dir / "fakes"
-        fakes.mkdir()
+        self.fakes = self.dir / "fakes"
+        self.fakes.mkdir()
         for name, text in (("run.sh", FAKE_RUN), ("fpga-build", FAKE_FPGA), ("docker", FAKE_DOCKER)):
-            (fakes / name).write_text(text)
-            (fakes / name).chmod(0o755)
+            (self.fakes / name).write_text(text)
+            (self.fakes / name).chmod(0o755)
         self.git("init", "-q")
         self.git("add", "-A")
-        self.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "scratch")
-        self.env = {k: v for k, v in os.environ.items() if k not in ("SOURCE_DATE_EPOCH", "SURFCPU_FPGA_OUT")}
-        self.env.update(SURFCPU_RELEASE_RUN=str(fakes / "run.sh"), SURFCPU_RELEASE_FPGA=str(fakes / "fpga-build"),
-                        SURFCPU_RELEASE_DOCKER=str(fakes / "docker"), FAKE_ROOT=str(self.sc), HOME=str(self.dir))
+        self.commit_all("scratch")
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("SOURCE_DATE_EPOCH", "SURFCPU_FPGA_OUT", "SURFCPU_IN_CONTAINER", "DRY_RUN", "ROM",
+                                 "BIT", "SURFCPU_IMAGE", "SURFCPU_OPENXC7_IMAGE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL")}
+        self.env.update(SURFCPU_RELEASE_TEST="1", SURFCPU_RELEASE_RUN=str(self.fakes / "run.sh"),
+                        SURFCPU_RELEASE_FPGA=str(self.fakes / "fpga-build"),
+                        SURFCPU_RELEASE_DOCKER=str(self.fakes / "docker"), DOCKER=str(self.fakes / "docker"),
+                        HOME=str(self.dir), PYTHON_HOST=PY)
+
+    def commit_all(self, msg):
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", msg)
         self.commit = self.git("rev-parse", "HEAD").strip()
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(self.repo)] + list(args), capture_output=True, text=True,
                               check=True).stdout
 
-    def make(self, *args, **env):
+    def tool(self, *args, **env):
         e = dict(self.env, **env)
-        return subprocess.run([PY, self.sc / "tools/release.py", "make"] + list(args), cwd=self.sc, env=e,
-                              capture_output=True, text=True)
+        for k in [k for k, v in e.items() if v is None]:
+            del e[k]
+        return subprocess.run([PY, self.sc / "tools/release.py"] + [str(a) for a in args], cwd=self.sc, env=e,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
+    def make(self, *args, **env):
+        return self.tool("make", *args, **env)
+
+    def rel_dir(self, pre: bool) -> Path:
+        return self.sc / "build" / "release" / f"2.3.4{'-pre' if pre else ''}-{self.commit[:8]}"
+
+    def records(self, rel: Path) -> dict:
+        return {(p.parts[-3], p.parts[-2]): release.parse_toml(p.read_text())
+                for p in (rel / "fpga").glob("*/*/manifest.txt")}
+
+
+class TestMake(ScratchRelease):
     def test_refusals(self):
         (self.sc / "new.txt").write_text("x")
         r = self.make("--prerelease")
@@ -364,13 +436,14 @@ class TestMake(unittest.TestCase):
     def test_complete(self):
         r = self.make()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        rel = self.sc / f"build/release/2.3.4-{self.commit[:8]}"
+        rel = self.rel_dir(False)
         self.assertTrue((rel / "MANIFEST").is_file(), r.stdout)
         man = release.parse_toml((rel / "MANIFEST").read_text())
         self.assertEqual(man["status"], "complete")
         self.assertIs(man["complete"], True)
         self.assertEqual(man["commit"], self.commit)
         self.assertEqual(man["missing"], [])
+        self.assertEqual(man["flash_boot_design"], "dd")
         listed = release.read_sums(rel / "SHA256SUMS")
         for p in ("SURFOS.BIN", "DDRDIAG.BIN", "card/BOOT/SURFOS.BIN", "card/BOOT/CMDLINE.TXT",
                   "fpga/arty_a7_100t/dd/dd.bit", "fpga/arty_a7_35t/base/base.bit", "flash/arty_a7_100t/dd.bin",
@@ -380,17 +453,21 @@ class TestMake(unittest.TestCase):
         self.assertTrue((rel / "fpga/arty_a7_100t/dd/manifest.txt").is_file())
         self.assertEqual((rel / "card/BOOT/CMDLINE.TXT").read_text(), "sd=rw\n")
         self.assertEqual((rel / "card/BOOT/SURFOS.BIN").read_bytes(), (rel / "SURFOS.BIN").read_bytes())
-        r = subprocess.run([PY, self.sc / "tools/release.py", "check", rel], capture_output=True, text=True)
+        r = self.tool("check", rel)
         self.assertEqual(r.returncode, 0, r.stdout)
         # a second release of the same commit is the same bytes, and replaces nothing without --force
         r = self.make()
         self.assertEqual(r.returncode, 1)
         self.assertIn("exists", r.stderr)
-        r = self.make("--out", str(self.dir / "again"))
+        r = self.make("--out", self.dir / "again")
         self.assertEqual(r.returncode, 0, r.stderr)
         again = self.dir / "again" / rel.name
         rows, _ = release.compare(rel, again)
         self.assertTrue(rows and all(s == "match" for _, s, _ in rows), rows)
+        self.assertEqual(self.tool("check", again).returncode, 0)
+        # --force replaces a release this tool made
+        r = self.make("--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_ddr_failure(self):
         r = self.make(FAKE_FPGA_FAIL="dd")
@@ -400,7 +477,7 @@ class TestMake(unittest.TestCase):
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
         r = self.make("--prerelease", FAKE_FPGA_FAIL="dd")
         self.assertEqual(r.returncode, 0, r.stderr)
-        rel = self.sc / f"build/release/2.3.4-pre-{self.commit[:8]}"
+        rel = self.rel_dir(True)
         man = release.parse_toml((rel / "MANIFEST").read_text())
         self.assertEqual(man["status"], "prerelease")
         self.assertIs(man["complete"], False)
@@ -422,6 +499,47 @@ class TestMake(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("the release needs it", r.stderr)
         self.assertFalse(list((self.sc / "build/release").glob("*/MANIFEST")))
+
+
+# ------------------------------------------------------------------------------- the review's findings (rel-2)
+class TestCleanTree(ScratchRelease):
+    """review m3: the clean-tree check follows the repository's own rules, not the user's git configuration"""
+
+    def plant(self):
+        (self.repo / "arch/riscv32").mkdir(parents=True)
+        (self.repo / "arch/riscv32/extra.c").write_text("int planted;\n")
+
+    def test_show_untracked_no(self):
+        self.plant()
+        self.git("config", "status.showUntrackedFiles", "no")
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("arch/riscv32/extra.c", r.stderr)
+
+    def test_global_excludes(self):
+        self.plant()
+        ex = self.dir / "excludes"
+        ex.write_text("*.c\n")
+        self.git("config", "core.excludesFile", str(ex))
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("arch/riscv32/extra.c", r.stderr)
+
+    def test_assume_unchanged(self):
+        self.git("update-index", "--assume-unchanged", "surfcpu/release/release.txt")
+        (self.sc / "release/release.txt").write_text(self.LIST.replace("2.3.4", "2.3.5"))
+        r = self.make("--prerelease", "--skip-ddr")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("release.txt", r.stderr)
+
+    def test_run_sh_dirty_flag(self):
+        self.plant()
+        self.git("config", "status.showUntrackedFiles", "no")
+        e = dict(self.env, FAKE_DOCKER_ARGS="1")
+        r = subprocess.run(["sh", str(self.sc / "devenv/run.sh"), "true"], cwd=self.sc, env=e, capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("SURFCPU_BUILD_DIRTY=1", r.stdout.split())
 
 
 # ------------------------------------------------------------------------------- program.sh flash path

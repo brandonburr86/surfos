@@ -76,7 +76,7 @@ note "$(date -u +%Y-%m-%dT%H:%M:%SZ): commit $commit of $repo, in $clone"
 # 1. a checkout of its own: a full clone (local objects, hard-linked), then the commit, detached
 git clone -q --no-checkout "$repo" "$clone"
 git -C "$clone" checkout -q --detach "$commit"
-[ -z "$(git -C "$clone" status --porcelain)" ] || die "the clone is not clean"
+[ -z "$(git -C "$clone" status --porcelain --untracked-files=normal)" ] || die "the clone is not clean"
 note "cloned: $(git -C "$clone" log -1 --format='%h %ci %s') ($(stamp))"
 
 # 2. the setup (docs/RELEASE.md section 2): the images the scripts of this commit name
