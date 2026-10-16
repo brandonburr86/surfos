@@ -49,6 +49,7 @@ import rvcsrmap        # noqa: E402
 import rvelf           # noqa: E402
 import rvgen           # noqa: E402
 import trace_compare   # noqa: E402
+import trace_inject    # noqa: E402
 import trace_spike     # noqa: E402
 import tracefmt        # noqa: E402
 
@@ -75,6 +76,7 @@ class Program:
     max_records: int | None = None
     compare_trace: bool = True           # False: judged by exit status (and signature) only
     note: str = ""
+    fixed_latency: str = ""              # why --ilat/--dlat are not passed for this program
 
 
 @dataclasses.dataclass
@@ -164,7 +166,8 @@ def suite_arch(manifest: Path) -> list[Program]:
     progs = []
     for t in m["tests"]:
         progs.append(Program("arch", t["name"], ROOT / t["elf"], None,
-                             compare_trace=t["compare_trace"], note=t.get("note", "")))
+                             compare_trace=t["compare_trace"], note=t.get("note", ""),
+                             fixed_latency=t.get("latency_sensitive", "")))
     return progs
 
 
@@ -186,7 +189,10 @@ def reference(prog: Program) -> tuple[list[tracefmt.Rec], dict]:
         tr = prog.elf.with_suffix(".ref.trace")
         meta = prog.elf.with_suffix(".ref.json")
         if not _stale(tr, prog.elf) and not _stale(meta, prog.elf):
-            return tracefmt.read_trace(tr), json.loads(meta.read_text())
+            info = json.loads(meta.read_text())
+            if (info.get("converter") == trace_spike.CONVERTER_VERSION
+                    and info.get("spike") == trace_spike.SPIKE):
+                return tracefmt.read_trace(tr), info
         res = trace_spike.run_spike(prog.elf, sig_symbols=prog.sig,
                                     max_records=prog.max_records or
                                     trace_spike.DEFAULT_MAX_RECORDS)
@@ -195,23 +201,23 @@ def reference(prog: Program) -> tuple[list[tracefmt.Rec], dict]:
         tracefmt.save_trace(res.records, tr, trace_spike.trace_comments(res, prog.elf))
         info = {"status": res.status, "exit": res.exit_code, "tohost": res.tohost,
                 "records": len(res.records), "warnings": res.warnings,
-                "signature": res.signature}
+                "signature": res.signature, "converter": trace_spike.CONVERTER_VERSION,
+                "spike": trace_spike.SPIKE}
         meta.write_text(json.dumps(info) + "\n")
         return res.records, info
 
 
 def run_dut(dut: list[str], prog: Program, seed: int, args, workdir: Path):
-    stem = workdir / f"{prog.name}.s{seed}"
-    trace = stem.with_suffix(".dut.trace")
-    sigf = stem.with_suffix(".dut.sig")
+    trace = workdir / f"{prog.name}.s{seed}.dut.trace"
+    sigf = workdir / f"{prog.name}.s{seed}.dut.sig"
     for f in (trace, sigf):
         if f.exists():
             f.unlink()
     cmd = dut + ["--elf", str(prog.elf), "--trace", str(trace), "--seed", str(seed),
                  "--max-cycles", str(args.max_cycles)]
-    if args.ilat:
+    if args.ilat and not prog.fixed_latency:
         cmd += ["--ilat", args.ilat]
-    if args.dlat:
+    if args.dlat and not prog.fixed_latency:
         cmd += ["--dlat", args.dlat]
     if prog.sig:
         cmd += ["--signature", str(sigf), "--sig-begin", prog.sig[0], "--sig-end", prog.sig[1]]
@@ -237,15 +243,20 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
     out.seconds = time.monotonic() - t0
     report_path = workdir / f"{prog.name}.s{seed}.report.txt"
     lines: list[str] = [f"program {prog.elf}", f"dut seed {seed}", f"dut exit {code}"]
+    if prog.fixed_latency and (args.ilat or args.dlat):
+        lines.append(f"run with the testbench's default latencies: {prog.fixed_latency}")
     if err:
         lines.append("dut output (last lines):")
         lines += ["  " + x for x in err.splitlines()[-15:]]
     problems: list[tuple[str, str]] = []
     if code is None:
         problems.append(("timeout", f"the DUT did not finish within {args.timeout} s"))
+    elif code == 3:
+        problems.append(("exit", "exit 3: a testbench error (bad arguments or ELF, no tohost, "
+                                 "a bus protocol violation by the core, or a tohost store "
+                                 "that never retired; MODULES.md section 6)"))
     elif code not in (0, 1, 2):
-        problems.append(("exit", f"the DUT exited with {code} (not 0/1/2: it crashed or "
-                                 "refused the command line)"))
+        problems.append(("exit", f"the DUT exited with {code} (not 0-3: it crashed)"))
     elif code != info["exit"]:
         what = {0: "pass", 1: "fail", 2: "run past --max-cycles"}[code]
         problems.append(("exit", f"exit {code} ({what}); Spike's run gives "
@@ -273,7 +284,8 @@ def judge(prog: Program, seed: int, dut: list[str], args, workdir: Path) -> Outc
         elif prog.compare_trace:
             tohost = rvelf.read_elf(prog.elf).symbols.get("tohost")
             res = trace_compare.compare(ref, dut_recs, tohost=tohost,
-                                        strict_final_store=args.strict_final_store)
+                                        lenient_final_store=args.lenient_final_store,
+                                        lenient_layout=args.lenient_layout)
             lines.append(trace_compare.report(res, str(prog.elf.with_suffix(".ref.trace")),
                                               str(trace)))
             if not res.ok:
@@ -397,21 +409,18 @@ def run(args) -> int:
 # --- self-test --------------------------------------------------------------------------
 
 SELFTEST_FAULTS = [
-    # (stand-in options, expected verdict, expected kind or None)
-    ("", "PASS", None),
-    ("--aligned-mem", "PASS", None),
-    ("--no-final-store", "PASS", None),
-] + [(f"--inject {k}", "FAIL", e) for k, e in (
-    ("pc", "pc"), ("insn", "insn"), ("trap", "trap"), ("notrap", "trap"), ("intr", "intr"),
-    ("rd_data", "rd"), ("rd_addr", "rd"), ("rd_x0", "rd"), ("trap_write", "rd"),
-    ("mem_addr", "mem_addr"), ("mem_mask", "mem_mask"), ("mem_wdata", "mem_data"),
-    ("mem_rdata", "mem_data"), ("load_addr", "mem_addr"), ("load_unreported", "mem_mask"),
-    ("trap_store", "mem_mask"), ("pc_next", "pc_next"), ("missing", "missing"),
-    ("extra", "extra"), ("order", "order"), ("truncate", "missing"))] + [
-    ("--bad-signature", "FAIL", "signature"),
-    ("--exit 1", "FAIL", "exit"),
-    ("--exit 2", "FAIL", "exit"),
-    ("--exit 139", "FAIL", "exit"),
+    # (stand-in options, runner options, expected verdict, expected kind or None)
+    ("", "", "PASS", None),
+    ("--lsb-mem", "", "FAIL", "mem_layout"),
+    ("--lsb-mem", "--lenient-layout", "PASS", None),
+    ("--no-final-store", "", "FAIL", "missing"),
+    ("--no-final-store", "--lenient-final-store", "PASS", None),
+] + [(f"--inject {k}", "", "FAIL", trace_inject.KINDS[k][1]) for k in trace_inject.KINDS] + [
+    ("--bad-signature", "", "FAIL", "signature"),
+    ("--exit 1", "", "FAIL", "exit"),
+    ("--exit 2", "", "FAIL", "exit"),
+    ("--exit 3", "", "FAIL", "exit"),
+    ("--exit 139", "", "FAIL", "exit"),
 ]
 
 
@@ -424,29 +433,47 @@ def selftest(args) -> int:
     n = 0
     lock = threading.Lock()
 
-    def one(opts, verdict, kind, prog):
+    def one(opts, ropts, verdict, kind, prog):
         nonlocal n
         sub = argparse.Namespace(**vars(args))
         sub.dut = f"{STANDIN} {opts}".strip()
-        wd = out / (opts.replace(" ", "").replace("-", "") or "clean")
+        sub.lenient_layout = "--lenient-layout" in ropts
+        sub.lenient_final_store = "--lenient-final-store" in ropts
+        wd = out / ((opts + ropts).replace(" ", "").replace("-", "") or "clean")
         wd.mkdir(parents=True, exist_ok=True)
         o = judge(prog, 1, shlex.split(sub.dut), sub, wd)
         ok = o.verdict == verdict and (kind is None or o.kind == kind)
         with lock:
             n += 1
             if not ok:
-                bad.append(f"{opts or '(clean)'} on {prog.name}: got {o.verdict} {o.kind} "
-                           f"({o.reason}), expected {verdict} {kind}")
+                bad.append(f"{opts or '(clean)'} {ropts} on {prog.name}: got {o.verdict} "
+                           f"{o.kind} ({o.reason}), expected {verdict} {kind}")
         return ok
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futs = [ex.submit(one, opts, v, k, p) for opts, v, k in SELFTEST_FAULTS for p in progs]
+        futs = [ex.submit(one, opts, ropts, v, k, p)
+                for opts, ropts, v, k in SELFTEST_FAULTS for p in progs]
         for f in futs:
             f.result()
+    # Several DUT seeds of one program at once: each run keeps its own files.
+    wd = out / "seeds"
+    wd.mkdir(parents=True, exist_ok=True)
+    sub = argparse.Namespace(**vars(args))
+    sub.dut = f"{STANDIN} --inject rd_data"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
+        outs = list(ex.map(lambda s: judge(progs[0], s, shlex.split(sub.dut), sub, wd),
+                           (1, 2, 3)))
+    names = {Path(o.report).name for o in outs}
+    traces = sorted(wd.glob(f"{progs[0].name}.s*.dut.trace"))
+    n += 1
+    if len(names) != 3 or len(traces) != 3 or any(o.kind != "rd" for o in outs):
+        bad.append(f"three DUT seeds at once: reports {sorted(names)}, traces "
+                   f"{[t.name for t in traces]}, kinds {[o.kind for o in outs]}")
     for b in bad:
         say("rvrun selftest: " + b)
     say(f"rvrun selftest: {n - len(bad)}/{n} runs judged as expected "
-        f"({len(SELFTEST_FAULTS)} stand-in behaviours x {len(progs)} programs)")
+        f"({len(SELFTEST_FAULTS)} stand-in behaviours x {len(progs)} programs, and three DUT "
+        f"seeds of one program at once)")
     return 1 if bad else 0
 
 
@@ -469,8 +496,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out", default=str(ROOT / "build" / "ref" / "run"))
     ap.add_argument("--json", help="write every outcome here")
     ap.add_argument("--show", type=int, default=3, help="print this many failure reports")
-    ap.add_argument("--strict-final-store", action="store_true",
-                    help="the DUT's trace must contain the final tohost store")
+    ap.add_argument("--lenient-final-store", action="store_true",
+                    help="accept a DUT trace that stops just before the final tohost store")
+    ap.add_argument("--lenient-layout", action="store_true",
+                    help="compare memory as bytes only, for another RVFI memory convention")
     a = ap.parse_args(argv)
     if a.command == "selftest":
         return selftest(a)

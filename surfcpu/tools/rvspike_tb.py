@@ -16,7 +16,8 @@ verdicts are proven on the same interface the real testbench will have.
                   [--signature FILE --sig-begin SYM --sig-end SYM]
   stand-in only (also from SURFCPU_STANDIN, e.g. SURFCPU_STANDIN="inject=rd_data@40"):
                   [--inject KIND[@N]]   damage the trace (tools/trace_inject.py kinds)
-                  [--aligned-mem]       RVFI's RISCV_FORMAL_ALIGNED_MEM memory layout
+                  [--lsb-mem]           riscv-formal's default memory layout instead of the
+                                        RISCV_FORMAL_ALIGNED_MEM convention of MODULES.md 5
                   [--no-final-store]    stop before logging the tohost store
                   [--bad-signature]     flip a bit of the signature's first word
                   [--exit N]            exit with N whatever happened
@@ -40,15 +41,17 @@ import trace_spike    # noqa: E402
 import tracefmt       # noqa: E402
 
 
-def _aligned(r: tracefmt.Rec) -> tracefmt.Rec:
+def _lsb(r: tracefmt.Rec) -> tracefmt.Rec:
+    """riscv-formal's default layout: mem_addr is the first byte, masks and data at bit 0."""
     r = copy.deepcopy(r)
-    if r.rmask or r.wmask:
-        sh = r.mem_addr & 3
-        r.mem_addr &= ~3
-        r.rmask = (r.rmask << sh) & 0xF
-        r.wmask = (r.wmask << sh) & 0xF
-        r.mem_rdata = (r.mem_rdata << (8 * sh)) & 0xFFFFFFFF
-        r.mem_wdata = (r.mem_wdata << (8 * sh)) & 0xFFFFFFFF
+    m = r.rmask | r.wmask
+    if m:
+        sh = (m & -m).bit_length() - 1
+        r.mem_addr += sh
+        r.rmask >>= sh
+        r.wmask >>= sh
+        r.mem_rdata >>= 8 * sh
+        r.mem_wdata >>= 8 * sh
     return r
 
 
@@ -64,7 +67,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--sig-begin", default="begin_signature")
     ap.add_argument("--sig-end", default="end_signature")
     ap.add_argument("--inject")
-    ap.add_argument("--aligned-mem", action="store_true")
+    ap.add_argument("--lsb-mem", action="store_true")
     ap.add_argument("--no-final-store", action="store_true")
     ap.add_argument("--bad-signature", action="store_true")
     ap.add_argument("--exit", type=int)
@@ -101,8 +104,8 @@ def main(argv: list[str]) -> int:
         recs, i, expect = trace_inject.inject(recs, kind, int(n) if n else None)
         print(f"rvspike_tb: injected {kind} at retirement {i} (expect {expect})",
               file=sys.stderr)
-    if a.aligned_mem:
-        recs = [_aligned(r) for r in recs]
+    if a.lsb_mem:
+        recs = [_lsb(r) for r in recs]
     if a.trace:
         tracefmt.save_trace(recs, a.trace, ["stand-in testbench: Spike via tools/rvspike_tb.py"],
                             with_notes=False)

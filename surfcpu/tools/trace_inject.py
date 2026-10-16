@@ -45,7 +45,11 @@ KINDS = {
     "load_addr": ("load from another address", "mem_addr"),
     "load_unreported": ("do not report a load's read", "mem_mask"),
     "trap_store": ("let a trapping instruction store", "mem_mask"),
+    "trap_read": ("let a trapping instruction report a read", "mem_mask"),
+    "lsb_layout": ("write a load or store in riscv-formal's default layout", "mem_layout"),
+    "wide_read": ("report a byte or halfword load as a whole-word read", "mem_layout"),
     "pc_next": ("report a wrong next pc", "pc_next"),
+    "trap_pc_next": ("give a trap record the next pc instead of the handler", "pc_next"),
     "missing": ("drop one retirement", "missing"),
     "extra": ("retire one instruction twice", "extra"),
     "order": ("skip an rvfi_order number", "order"),
@@ -64,8 +68,12 @@ def _applies(kind: str, r: Rec) -> bool:
         return not r.trap and r.rd == 0
     if kind == "extra":
         return not r.trap
-    if kind in ("trap_write", "trap_store"):
+    if kind in ("trap_write", "trap_store", "trap_read", "trap_pc_next"):
         return bool(r.trap)
+    if kind == "lsb_layout":
+        return not r.trap and (r.rmask or r.wmask) and (r.rmask | r.wmask) & 1 == 0
+    if kind == "wide_read":
+        return not r.trap and r.rmask not in (0, 0xF)
     if kind in ("mem_addr", "mem_mask", "mem_wdata"):
         return not r.trap and r.wmask == 0xF
     if kind in ("mem_rdata", "load_addr", "load_unreported"):
@@ -119,13 +127,28 @@ def inject(recs: list[Rec], kind: str, at: int | None = None) -> tuple[list[Rec]
     elif kind == "mem_wdata":
         r.mem_wdata ^= 0x80
     elif kind == "mem_rdata":
-        r.mem_rdata ^= 0x1
+        lane = (r.rmask & -r.rmask).bit_length() - 1          # the lowest lane read
+        r.mem_rdata ^= 1 << (8 * lane)
     elif kind == "load_addr":
         r.mem_addr = (r.mem_addr + 0x100) & 0xFFFFFFFF
     elif kind == "load_unreported":
         r.rmask, r.mem_rdata = 0, 0
     elif kind == "trap_store":
         r.mem_addr, r.wmask, r.mem_wdata = 0x80001000, 0xF, 0x12345678
+    elif kind == "trap_read":
+        r.mem_addr, r.rmask, r.mem_rdata = 0x80001000, 0xF, 0x12345678
+    elif kind == "lsb_layout":
+        sh = ((r.rmask | r.wmask) & -(r.rmask | r.wmask)).bit_length() - 1
+        r.mem_addr += sh
+        r.rmask >>= sh
+        r.wmask >>= sh
+        r.mem_rdata >>= 8 * sh
+        r.mem_wdata >>= 8 * sh
+    elif kind == "wide_read":
+        r.mem_rdata |= 0xA5A5A5A5 & ~sum(0xFF << (8 * k) for k in range(4) if r.rmask >> k & 1)
+        r.rmask = 0xF
+    elif kind == "trap_pc_next":
+        r.pc_next = (r.pc + 4) & 0xFFFFFFFF
     elif kind == "pc_next":
         r.pc_next = (r.pc_next + 8) & 0xFFFFFFFF
     elif kind == "missing":

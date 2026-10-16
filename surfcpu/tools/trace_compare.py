@@ -10,30 +10,35 @@ Prints MATCH, or the first divergence with its kind, the fields that differ and 
 lines from both traces.
 
     python3 tools/trace_compare.py REF DUT [--elf PROG.elf | --tohost ADDR]
-                                   [--context N] [--json FILE] [--strict-final-store]
+                                   [--context N] [--json FILE]
+                                   [--lenient-layout] [--lenient-final-store]
 
 Exit status: 0 the traces agree, 1 they diverge, 2 a trace cannot be read.
 
 Mismatch kinds: order (rvfi_order skips or repeats), pc, insn, trap, intr, rd (register
 write: number, value, a write by a trapping instruction, or a value with rd = x0),
-mem_addr, mem_mask (which bytes; a missing or extra access), mem_data (read or written
-bytes differ), pc_next, missing (the core retired fewer instructions: its trace ends early
-or skips one), extra (it retired more: a longer trace, or an inserted or repeated record).
+mem_addr, mem_mask (which bytes; a missing or extra access, also any access by a trapping
+instruction), mem_data (read or written bytes differ), mem_layout (the same bytes, but the
+fields break the trace's memory convention), pc_next, missing (the core retired fewer
+instructions: its trace ends early or skips one), extra (it retired more: a longer trace,
+or an inserted or repeated record).
 
-The rules, and why (docs/VERIFICATION.md section 3):
-  * Memory fields are compared as byte maps (tracefmt.mem_bytes), so riscv-formal's default
-    layout and its RISCV_FORMAL_ALIGNED_MEM layout both work. A load may report more bytes
-    than it needs (riscv-formal allows wider reads); a store must write exactly its bytes.
-  * A trap record must have no register write and no store; its reads, mem_addr and
-    pc_next are not compared (RVFI leaves them open: the handler's address is checked as
-    the next record's pc). Its insn is compared, except that a 16-bit encoding may also be
-    reported as its low 16 bits (RVFI's rule for short instructions), and a fetch fault
-    must report 0 (riscv-formal's rule).
+The rules are the trace conventions of docs/MODULES.md sections 5 and 8 (the CPU testbench's,
+sim/README.md); docs/VERIFICATION.md section 4 has the reasons:
+  * Memory accesses are first compared as byte maps (tracefmt.mem_bytes: address -> value of
+    each byte read or written), which says what went wrong in architectural terms; then the
+    fields themselves must follow RISCV_FORMAL_ALIGNED_MEM: word-aligned mem_addr, masks
+    selecting exactly the bytes accessed, unused lanes 0 (else mem_layout).
+    --lenient-layout drops that second step and also lets a load report more bytes than it
+    needs (riscv-formal's rule), for RVFI producers with another convention.
+  * A trap record has no register write and no memory access, and pc_next is the handler
+    (mtvec). Its insn is the instruction word; a 16-bit encoding has its upper half 0 and a
+    fetch fault reports 0.
+  * The record after a trap, and the first one of an interrupt handler, has intr = 1.
   * With a tohost address (from --elf), both traces end at the first store that writes
-    tohost; records after it are ignored. The core's trace may stop just before that
-    store (a testbench that ends the run on the bus write never logs it) unless
-    --strict-final-store is given; the testbench's exit status still reports the value.
-  * The reference's "#@ mem rdata=unknown" note (an MMIO load into x0) skips that rdata.
+    non-zero data to tohost, and records after it are ignored; the core's trace must contain
+    that store (--lenient-final-store accepts a trace that stops just before it).
+  * The reference's "#@ mem rdata=unknown" note (a device load into x0) skips that rdata.
 Only the Python standard library is used.
 """
 
@@ -52,7 +57,7 @@ import tracefmt   # noqa: E402
 from tracefmt import Rec  # noqa: E402
 
 KINDS = ("order", "pc", "insn", "trap", "intr", "rd", "mem_addr", "mem_mask", "mem_data",
-         "pc_next", "missing", "extra")
+         "mem_layout", "pc_next", "missing", "extra")
 
 
 @dataclasses.dataclass
@@ -93,11 +98,12 @@ def cut_at_tohost(recs: list[Rec], tohost: int | None) -> list[Rec]:
     return recs
 
 
-def _is_fetch_fault(ref: Rec) -> bool:
-    return ref.trap == 1 and ref.note("trap", "cause") == "1"
+def _lanes(mask: int) -> int:
+    return sum(0xFF << (8 * k) for k in range(4) if mask >> k & 1)
 
 
-def compare_records(ref: Rec, dut: Rec) -> list[tuple[str, str]]:
+def compare_records(ref: Rec, dut: Rec, lenient_layout: bool = False
+                    ) -> list[tuple[str, str]]:
     """The kinds in which dut differs from ref, each with a detail line, in priority order."""
     out: list[tuple[str, str]] = []
     if ref.pc != dut.pc:
@@ -107,17 +113,16 @@ def compare_records(ref: Rec, dut: Rec) -> list[tuple[str, str]]:
         what = "trapped" if ref.trap else "completed"
         out.append(("trap", f"the instruction at {ref.pc:08x} should have {what} "
                             f"(reference trap={ref.trap}, core trap={dut.trap})"))
-    if _is_fetch_fault(ref):
-        if dut.insn != 0:
-            out.append(("insn", f"a fetch fault reports insn 0 (riscv-formal), not "
-                                f"{dut.insn:08x}"))
-    elif ref.insn != dut.insn:
-        short_ok = (ref.trap and ref.insn & 3 != 3 and dut.insn == ref.insn & 0xFFFF)
-        if not short_ok:
-            out.append(("insn", f"insn {ref.insn:08x} expected, {dut.insn:08x} retired"))
+    if ref.insn != dut.insn:
+        why = ""
+        if ref.trap and ref.note("trap", "cause") == "1":
+            why = " (a fetch fault reports insn 0)"
+        elif ref.insn & 3 != 3:
+            why = " (a 16-bit encoding has its upper half 0)"
+        out.append(("insn", f"insn {ref.insn:08x} expected, {dut.insn:08x} retired{why}"))
     if ref.intr != dut.intr:
         out.append(("intr", f"intr {ref.intr} expected, {dut.intr} retired "
-                            "(set on the first instruction of a trap handler)"))
+                            "(1 on the first record of a trap handler)"))
     # register write
     if dut.rd == 0 and dut.rd_wdata != 0:
         out.append(("rd", f"rd_wdata {dut.rd_wdata:08x} with rd = x0 (RVFI: must be 0)"))
@@ -128,29 +133,60 @@ def compare_records(ref: Rec, dut: Rec) -> list[tuple[str, str]]:
         exp = f"x{ref.rd} = {ref.rd_wdata:08x}" if ref.rd else "no register write"
         got = f"x{dut.rd} = {dut.rd_wdata:08x}" if dut.rd else "no register write"
         out.append(("rd", f"{exp} expected, {got} retired"))
-    # stores
-    rw, dw = tracefmt.writes(ref), tracefmt.writes(dut)
+    unknown = ref.note("mem", "rdata") == "unknown"
     if ref.trap:
-        if dw:
-            out.append(("mem_mask", f"a trapping instruction stored to {_bytes(dw)}"))
-    elif rw != dw:
-        out.append(_classify("store", rw, dw))
-    # loads (the core may read more bytes than the instruction needs)
-    if not ref.trap:
+        # MODULES.md section 5: a trapping instruction made no memory access.
+        if dut.wmask or (dut.rmask and not lenient_layout):
+            m = tracefmt.writes(dut) or tracefmt.reads(dut)
+            what = "stored to" if dut.wmask else "read"
+            out.append(("mem_mask", f"a trapping instruction {what} {_bytes(m)}"))
+    else:
+        # stores: exactly the bytes and values
+        rw, dw = tracefmt.writes(ref), tracefmt.writes(dut)
+        if rw != dw:
+            out.append(_classify("store", rw, dw))
+        # loads: the bytes and values the instruction needs
         rr, dr = tracefmt.reads(ref), tracefmt.reads(dut)
-        unknown = ref.note("mem", "rdata") == "unknown"
         if not rr and dr:
             out.append(("mem_mask", f"a read of {_bytes(dr)} reported by an instruction "
                                     "that reads no memory"))
         elif rr and not set(rr) <= set(dr):
-            out.append(_classify("load", rr, {a: v for a, v in dr.items()}))
+            out.append(_classify("load", rr, dr))
         elif rr and not unknown and any(dr[a] != v for a, v in rr.items()):
             got = {a: dr[a] for a in rr}
             out.append(("mem_data", f"load read {_bytes(got)}, expected {_bytes(rr)}"))
-    if not ref.trap and ref.pc_next != dut.pc_next:
+        elif not lenient_layout:
+            lay = _layout(ref, dut, unknown)
+            if lay:
+                out.append(("mem_layout", lay))
+    if ref.pc_next != dut.pc_next:
         out.append(("pc_next", f"pc_next {ref.pc_next:08x} expected, {dut.pc_next:08x} "
-                               "retired"))
+                               "retired" + (" (a trap's pc_next is the handler, mtvec)"
+                                            if ref.trap else "")))
     return out
+
+
+def _layout(ref: Rec, dut: Rec, unknown: bool) -> str | None:
+    """The same bytes as the reference: do the fields follow RISCV_FORMAL_ALIGNED_MEM?"""
+    if not (dut.rmask or dut.wmask):
+        return None
+    if dut.mem_addr & 3:
+        return (f"mem_addr {dut.mem_addr:08x} is not word aligned (RISCV_FORMAL_ALIGNED_MEM, "
+                "MODULES.md section 5)")
+    if dut.rmask != ref.rmask:
+        return (f"rmask {dut.rmask:x}: the lanes read are {ref.rmask:x} (the bytes the load "
+                "uses)")
+    if dut.wmask != ref.wmask:
+        return f"wmask {dut.wmask:x}, expected {ref.wmask:x}"
+    if dut.mem_rdata & ~_lanes(dut.rmask) or dut.mem_wdata & ~_lanes(dut.wmask):
+        return (f"unused lanes not 0 (mem_rdata {dut.mem_rdata:08x}, mem_wdata "
+                f"{dut.mem_wdata:08x})")
+    if (dut.mem_addr != ref.mem_addr
+            or (not unknown and dut.mem_rdata != ref.mem_rdata)
+            or dut.mem_wdata != ref.mem_wdata):
+        return (f"fields {dut.mem_addr:08x}/{dut.mem_rdata:08x}/{dut.mem_wdata:08x}, expected "
+                f"{ref.mem_addr:08x}/{ref.mem_rdata:08x}/{ref.mem_wdata:08x}")
+    return None
 
 
 def _bytes(m: dict[int, int]) -> str:
@@ -173,8 +209,8 @@ def _classify(what: str, exp: dict[int, int], got: dict[int, int]) -> tuple[str,
     return ("mem_data", f"{what} of {_bytes(exp)} expected, {_bytes(got)} reported")
 
 
-def _same(a: Rec, b: Rec) -> bool:
-    return not compare_records(a, b)
+def _same(a: Rec, b: Rec, lenient_layout: bool = False) -> bool:
+    return not compare_records(a, b, lenient_layout)
 
 
 def _fmt(r: Rec | None) -> str:
@@ -212,7 +248,8 @@ def _context(ref: list[Rec], dut: list[Rec], i: int, before: int, after: int) ->
 
 
 def compare(ref: list[Rec], dut: list[Rec], *, tohost: int | None = None,
-            strict_final_store: bool = False, context: int = 8) -> Result:
+            lenient_final_store: bool = False, lenient_layout: bool = False,
+            context: int = 8) -> Result:
     ref = cut_at_tohost(ref, tohost)
     dut = cut_at_tohost(dut, tohost)
     res = Result(True, 0, len(ref), len(dut))
@@ -228,18 +265,19 @@ def compare(ref: list[Rec], dut: list[Rec], *, tohost: int | None = None,
                          f"rvfi_order {how}: {dut[i].order} after "
                          f"{prev if prev is not None else '(start)'} (expected {base + i})",
                          [], context)
-        diffs = compare_records(ref[i], dut[i])
+        diffs = compare_records(ref[i], dut[i], lenient_layout)
         if diffs:
             kind, detail = diffs[0]
+            same = lambda a, b: _same(a, b, lenient_layout)   # noqa: E731
             # A skipped or an inserted retirement shows as a pc/insn divergence: look ahead.
-            if i + 1 < len(ref) and _same(ref[i + 1], dut[i]) and (
-                    i + 2 >= len(ref) or i + 1 >= len(dut) or _same(ref[i + 2], dut[i + 1])):
+            if i + 1 < len(ref) and same(ref[i + 1], dut[i]) and (
+                    i + 2 >= len(ref) or i + 1 >= len(dut) or same(ref[i + 2], dut[i + 1])):
                 return _fail(res, ref, dut, i, "missing",
                              f"the core did not retire {ref[i].pc:08x} "
                              f"({rvisa.disasm(ref[i].insn, ref[i].pc)}): its next record "
                              f"is the reference's next", diffs, context)
-            if i + 1 < len(dut) and _same(ref[i], dut[i + 1]) and (
-                    i + 2 >= len(dut) or i + 1 >= len(ref) or _same(ref[i + 1], dut[i + 2])):
+            if i + 1 < len(dut) and same(ref[i], dut[i + 1]) and (
+                    i + 2 >= len(dut) or i + 1 >= len(ref) or same(ref[i + 1], dut[i + 2])):
                 return _fail(res, ref, dut, i, "extra",
                              f"the core retired an extra {dut[i].pc:08x} "
                              f"({rvisa.disasm(dut[i].insn, dut[i].pc)}) before the expected "
@@ -249,7 +287,7 @@ def compare(ref: list[Rec], dut: list[Rec], *, tohost: int | None = None,
     if len(dut) < len(ref):
         missing = len(ref) - len(dut)
         last = ref[-1]
-        if (missing == 1 and tohost is not None and not strict_final_store
+        if (missing == 1 and tohost is not None and lenient_final_store
                 and last.wmask and _hits(last, tohost)):
             res.notes.append("the core's trace stops before the final tohost store")
             return res
@@ -291,8 +329,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--tohost", help="tohost address (hex), instead of --elf")
     ap.add_argument("--context", type=int, default=8)
     ap.add_argument("--json", help="also write the result as JSON")
-    ap.add_argument("--strict-final-store", action="store_true",
-                    help="the core's trace must include the final tohost store")
+    ap.add_argument("--lenient-final-store", action="store_true",
+                    help="accept a core trace that stops just before the final tohost store")
+    ap.add_argument("--lenient-layout", action="store_true",
+                    help="compare memory as bytes only (another RVFI memory convention)")
     a = ap.parse_args(argv)
     try:
         ref = tracefmt.read_trace(a.ref)
@@ -305,8 +345,8 @@ def main(argv: list[str]) -> int:
     except (OSError, tracefmt.TraceError, rvelf.ElfError) as e:
         print(f"trace_compare: {e}", file=sys.stderr)
         return 2
-    res = compare(ref, dut, tohost=tohost, strict_final_store=a.strict_final_store,
-                  context=a.context)
+    res = compare(ref, dut, tohost=tohost, lenient_final_store=a.lenient_final_store,
+                  lenient_layout=a.lenient_layout, context=a.context)
     print(report(res, a.ref, a.dut))
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)

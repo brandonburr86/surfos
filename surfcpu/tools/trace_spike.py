@@ -25,15 +25,16 @@ How the log becomes a trace (docs/VERIFICATION.md section 3 has the reasons):
     are dropped, so the trace starts at 0x80000000 like the CPU testbench's.
   * The trace ends with the first store that makes tohost non-zero (Spike notices tohost
     only every few thousand instructions; what it runs after the store is dropped).
-  * insn is the 32-bit word in memory at pc, as a core without the C extension fetches it,
-    also for a trapping 16-bit encoding (Spike's log shows only its 16 bits).
+  * insn is the 32-bit word in memory at pc, as a core without the C extension fetches it;
+    a trapping 16-bit encoding (bits 1:0 not 11) has its upper half 0 and a fetch fault 0
+    (MODULES.md section 5, the CPU testbench's convention).
   * A shadow memory (the ELF image plus every logged store) gives each load's mem_rdata,
     also for a load into x0, whose value Spike does not print; every other load is checked
     against the value Spike wrote to rd.
-  * pc_next is the pc of the next instruction (the handler's first for a trap; the epc of
-    an interrupt for the record before it).
-  * Memory fields use riscv-formal's default layout: mem_addr is the first byte, masks and
-    data start at bit 0.
+  * pc_next is the pc of the next instruction: for a trap the handler's address (mtvec), for
+    the record before an interrupt the interrupt's epc.
+  * Memory fields follow riscv-formal's RISCV_FORMAL_ALIGNED_MEM convention, as MODULES.md
+    section 5 says: mem_addr word aligned, masks select byte lanes, unused lanes are 0.
 Only the Python standard library is used.
 """
 
@@ -91,6 +92,9 @@ SPIKE_ISA = "rv32im_zicsr_zifencei_zicntr_zihpm"
 SPIKE_FLAGS = ["--priv=m", "--pmpregions=0", "--triggers=0", "-m0x80000000:0x400000"]
 RAM_BASE = 0x80000000
 RAM_SIZE = 0x400000
+# Changes whenever the trace a given Spike run converts to changes (cached references are
+# remade when it differs): 2 = aligned memory fields and 16-bit insn of MODULES.md 8.
+CONVERTER_VERSION = 2
 DEFAULT_MAX_RECORDS = 4_000_000
 DRAIN_LINES = 400_000
 
@@ -286,12 +290,12 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
                 if val is None:
                     r.add_note("mem", rdata="unknown")
                     val = 0
-                r.mem_addr, r.rmask, r.mem_rdata = addr, (1 << size) - 1, val
+                r.mem_addr, r.rmask, r.mem_rdata = _aligned(addr, size, val)
             if stores:
                 addr, size, data = stores[0]
                 if d.kind == "store" and d.size != size:
                     raise ConvertError(f"{where}: store size {size} but {d.mnemonic}")
-                r.mem_addr, r.wmask, r.mem_wdata = addr, (1 << size) - 1, data
+                r.mem_addr, r.wmask, r.mem_wdata = _aligned(addr, size, data)
                 mem.store(addr, size, data)
             close_previous(pc)
             recs.append(r)
@@ -338,9 +342,11 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
                 raise ConvertError(f"{where}: unknown trap {name!r}")
             fetched = pending is not None and pending[0] == epc
             if cause == 1:
-                insn = 0
+                insn = 0                          # nothing was fetched
             else:
                 insn = word_at(epc, pending[1] if fetched else 0)
+                if insn & 3 != 3:
+                    insn &= 0xFFFF                # a 16-bit encoding: its 16 bits only
             r = Rec(order=len(recs), pc=epc, insn=insn, trap=1, intr=next_intr,
                     pc_next=epc)
             r.add_note("trap", cause=f"{cause:x}", tval=f"{(tval or 0):08x}",
@@ -358,6 +364,14 @@ def convert_log(lines, elf: rvelf.Elf, warnings: list[str] | None = None,
     for r in recs:
         r.drop_note("intr_after")
     return recs, tohost_value, mem
+
+
+def _aligned(addr: int, size: int, data: int) -> tuple[int, int, int]:
+    """RVFI memory fields in the RISCV_FORMAL_ALIGNED_MEM convention: (word address, lane
+    mask, data in its lanes with the others 0)."""
+    sh = addr & 3
+    return (addr & ~3 & 0xFFFFFFFF, ((1 << size) - 1) << sh,
+            ((data & ((1 << (8 * size)) - 1)) << (8 * sh)) & 0xFFFFFFFF)
 
 
 def _extend(val: int, size: int, mnemonic: str) -> int:

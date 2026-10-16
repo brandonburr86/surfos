@@ -82,8 +82,9 @@ core   0: 3 0x80000010 (0x00138e83) x29 0x00000000 mem 0x80002001
         self.assertEqual((recs[2].rmask, recs[2].mem_rdata), (0xF, 0x2a))
         # a load into x0: the value comes from the shadow memory
         self.assertEqual((recs[3].rd, recs[3].rmask, recs[3].mem_rdata), (0, 0xF, 0x2a))
+        # aligned convention: word address, lane mask, data in its lane (MODULES.md 5)
         self.assertEqual((recs[4].mem_addr, recs[4].rmask, recs[4].mem_rdata),
-                         (0x80002001, 0x1, 0x00))
+                         (0x80002000, 0x2, 0x00))
         self.assertEqual([r.pc_next for r in recs[:4]], [r.pc for r in recs[1:]])
 
     def test_store_sizes_and_tohost_cut(self):
@@ -97,8 +98,10 @@ core   0: 3 0x8000000c (0x00532023) mem 0x80001000 0x00000003
         recs, tohost, _ = self.convert(log, elf)
         self.assertEqual(tohost, 3)
         self.assertEqual(len(recs), 3)                 # cut after the first tohost store
-        self.assertEqual((recs[0].wmask, recs[0].mem_wdata), (0x1, 0x2a))
-        self.assertEqual((recs[1].wmask, recs[1].mem_wdata), (0x3, 0x2a))
+        self.assertEqual((recs[0].mem_addr, recs[0].wmask, recs[0].mem_wdata),
+                         (0x80002000, 0x8, 0x2a000000))
+        self.assertEqual((recs[1].mem_addr, recs[1].wmask, recs[1].mem_wdata),
+                         (0x80002000, 0xC, 0x002a0000))
 
     def test_zero_store_to_tohost_does_not_end(self):
         code = words(0x00532023, 0x00532023)
@@ -140,7 +143,7 @@ core   0: 3 0x80000100 (0x34202f73) x30 0x00000004
         t = [r for r in recs if r.trap]
         self.assertEqual([r.pc for r in t], [0x80000000, 0x80000004, 0x60000000, 0x8000000c])
         self.assertEqual([r.note("trap", "cause") for r in t], ["b", "2", "1", "4"])
-        self.assertEqual(t[1].insn, 0x12340001)        # the word in memory, not Spike's 16 bits
+        self.assertEqual(t[1].insn, 0x0001)            # a 16-bit encoding: upper half 0
         self.assertEqual(t[1].note("trap", "tval"), "00000001")
         self.assertEqual(t[2].insn, 0)                 # a fetch fault fetched nothing
         for r in t:
