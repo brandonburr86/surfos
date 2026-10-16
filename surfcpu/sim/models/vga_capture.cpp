@@ -83,7 +83,7 @@ void VgaCapture::on_hsync() {
     if (vs_level_ >= 0 && vs_prev_ == (vs_level_ == 1)) vsync_lines_++;   // a line start inside the vsync pulse
 }
 
-void VgaCapture::on_vsync() {
+void VgaCapture::on_vsync(bool line_starts_here) {
     if (line_ >= 0) {                                // a whole frame ended here
         const int64_t total = line_;                 // line starts since the last vsync edge
         if (last_v_total_ >= 0 && total != last_v_total_) m_.frames_odd++;
@@ -108,7 +108,7 @@ void VgaCapture::on_vsync() {
     bx1_ = by1_ = -1;
     line_len_first_ = -1;
     line_ = 0;
-    vsync_lines_ = 0;
+    vsync_lines_ = line_starts_here ? 1 : 0;        // a line starting with the pulse is inside it
     std::fill(cur_.begin(), cur_.end(), 0);
 }
 
@@ -142,7 +142,7 @@ void VgaCapture::tick(uint8_t r4, uint8_t g4, uint8_t b4, bool hs, bool vs) {
     vs_prev_ = vs;
     // a line starting with the vsync edge belongs to the new frame
     if (hs_lead) on_hsync();
-    if (vs_lead) on_vsync();
+    if (vs_lead) on_vsync(hs_lead);
     if (hpos_ >= 0) {
         const uint16_t px = static_cast<uint16_t>((r4 & 15) << 8 | (g4 & 15) << 4 | (b4 & 15));
         if (line_ >= 0) {

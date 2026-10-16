@@ -104,7 +104,7 @@ private:
     int64_t last_v_total_ = -1;
 
     void on_hsync();
-    void on_vsync();
+    void on_vsync(bool line_starts_here);
 };
 
 #endif

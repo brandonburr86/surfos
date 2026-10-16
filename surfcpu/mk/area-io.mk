@@ -4,7 +4,7 @@
 #   make lint-io          Verilator -Wall lint and an Icarus compile of every io module
 #   make test-io          all io tests below, IO_SEEDS seeds each
 #   make test-io-font     the font ROM is current and equals driver/font8x16.c
-#   make test-io-models   the SD card model on its own (software SPI master)
+#   make test-io-models   the SD card, PS/2 keyboard and VGA capture models on their own
 #   make test-io-spi      surf_spi against the SD card model through SurfBus
 #   make test-io-ps2      surf_ps2 against the PS/2 keyboard model through SurfBus
 #   make test-io-video    surf_video measured and decoded by the VGA capture model
@@ -58,12 +58,27 @@ $(IO_BUILD)/test_sdcard_model: sim/io/test_sdcard_model.cpp $(SD_MODEL_SRC) $(SD
 	@mkdir -p $(dir $@)
 	$(Q)$(IO_CXX) $(IO_CXXFLAGS) -o $@ sim/io/test_sdcard_model.cpp $(SD_MODEL_SRC)
 
-test-io-models: $(IO_BUILD)/test_sdcard_model
-	@mkdir -p $(IO_BUILD)/work
+$(IO_BUILD)/test_ps2_model: sim/io/test_ps2_model.cpp $(KB_MODEL_SRC) $(KB_MODEL_HDR)
+	@mkdir -p $(dir $@)
+	$(Q)$(IO_CXX) $(IO_CXXFLAGS) -o $@ sim/io/test_ps2_model.cpp $(KB_MODEL_SRC)
+
+$(IO_BUILD)/test_vga_capture: sim/io/test_vga_capture.cpp $(VGA_MODEL_SRC) $(VGA_MODEL_HDR)
+	@mkdir -p $(dir $@)
+	$(Q)$(IO_CXX) $(IO_CXXFLAGS) -o $@ sim/io/test_vga_capture.cpp $(VGA_MODEL_SRC)
+
+# run one test binary per seed: $(call io_run,name,binary and arguments before the seed)
+define io_run
 	$(Q)for s in $(IO_SEEDS); do \
-	  $(IO_BUILD)/test_sdcard_model $(IO_BUILD)/work $$s > $(IO_BUILD)/test_sdcard_model.$$s.txt 2>&1; \
-	  st=$$?; tail -1 $(IO_BUILD)/test_sdcard_model.$$s.txt; \
-	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/test_sdcard_model.$$s.txt; exit 1; }; done
+	  $(2) $$s > $(IO_BUILD)/$(1).$$s.txt 2>&1; \
+	  st=$$?; tail -1 $(IO_BUILD)/$(1).$$s.txt; \
+	  [ $$st -eq 0 ] || { cat $(IO_BUILD)/$(1).$$s.txt; exit 1; }; done
+endef
+
+test-io-models: $(IO_BUILD)/test_sdcard_model $(IO_BUILD)/test_ps2_model $(IO_BUILD)/test_vga_capture
+	@mkdir -p $(IO_BUILD)/work
+	$(call io_run,test_sdcard_model,$(IO_BUILD)/test_sdcard_model $(IO_BUILD)/work)
+	$(call io_run,test_ps2_model,$(IO_BUILD)/test_ps2_model)
+	$(call io_run,test_vga_capture,$(IO_BUILD)/test_vga_capture $(CURDIR)/../driver/font8x16.c $(IO_BUILD)/work)
 
 # ---------------------------------------------------------------- surf_spi
 $(IO_BUILD)/spi/Vsurf_spi: $(IO_PERIPH)/surf_spi.v sim/io/test_spi.cpp sim/io/surfbus_master.h \
