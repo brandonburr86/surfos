@@ -12,7 +12,9 @@ FW_GEN      := $(FW)/gen
 FW_OBJ      := $(FW)/obj
 FW_INC      := -Ifirmware/include -Ifirmware/common -Ifirmware/surfboot -Ifirmware/diagnostics \
                -Ifirmware/common/libc
+# The boot ROM is at address 0, so address 0 is valid memory here: no null-pointer assumptions.
 FW_CFLAGS   := $(RV_CFLAGS) -Os -msave-restore -std=gnu11 -mstrict-align -fno-tree-loop-distribute-patterns \
+               -fno-delete-null-pointer-checks --param=min-pagesize=0 \
                -fno-asynchronous-unwind-tables -fno-unwind-tables -Werror $(FW_INC) -I$(FW_GEN) -MMD -MP
 FW_LDFLAGS  := $(RV_LDFLAGS) -Lfirmware/ld -Lfirmware/common -Wl,--no-warn-rwx-segments
 ISA_AUDIT   := $(PYTHON) tools/isa-audit.py
@@ -70,8 +72,33 @@ $(FW)/%.bin: $(FW)/%.elf
 $(FW)/%.mem: $(FW)/%.bin
 	$(Q)$(BIN2MEM) $< $@
 
-build-fw-rom: $(FW)/surfboot.mem
+.SECONDARY: $(FW)/surfboot.bin $(FW)/bramdiag.bin
+build-fw-rom: $(FW)/surfboot.mem $(FW)/surfboot.bin $(FW)/bramdiag.mem $(FW)/bramdiag.bin $(FW)/DDRDIAG.BIN
 	@$(RV_SIZE) $(FW)/surfboot.elf | tail -n 1 | awk '{ printf "build-rom: surfboot.elf text %u data %u bss %u: ROM %u of 65536 bytes (%.1f%%)\n", $$1, $$2, $$3, $$1 + $$2, ($$1 + $$2) * 100 / 65536 }'
+	@$(RV_SIZE) $(FW)/bramdiag.elf | tail -n 1 | awk '{ printf "build-rom: bramdiag.elf ROM %u of 65536 bytes (%.1f%%)\n", $$1 + $$2, ($$1 + $$2) * 100 / 65536 }'
+
+# ---- the diagnostics: the BRAM program (a ROM image) and the DDR diagnostic (a SURFOS.BIN) ----
+DIAG_SRC     := diagnostics/report.c diagnostics/cputest.c diagnostics/ddrtest.c diagnostics/probes.S
+BRAMDIAG_OBJ := $(FW_OBJ)/common/start_rom.o $(patsubst %,$(FW_OBJ)/%.o,diagnostics/bramdiag.c $(DIAG_SRC)) \
+                $(FW_COMMON_OBJ)
+DDRDIAG_OBJ  := $(FW_OBJ)/common/start_ram.o $(patsubst %,$(FW_OBJ)/%.o,diagnostics/ddrdiag.c $(DIAG_SRC)) \
+                $(FW_COMMON_OBJ)
+
+$(FW)/bramdiag.elf: $(BRAMDIAG_OBJ) firmware/diagnostics/bramdiag.ld $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/diagnostics/bramdiag.ld -Wl,-Map,$(FW)/bramdiag.map \
+	  $(BRAMDIAG_OBJ) $(RV_LIBGCC) -o $@.tmp
+	$(Q)$(ISA_AUDIT) $@.tmp
+	$(Q)mv $@.tmp $@
+
+$(FW)/ddrdiag.elf: $(DDRDIAG_OBJ) $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/common/ram.ld -Wl,-Map,$(FW)/ddrdiag.map \
+	  $(DDRDIAG_OBJ) $(RV_LIBGCC) -o $@.tmp
+	$(Q)$(ISA_AUDIT) $@.tmp
+	$(Q)mv $@.tmp $@
+
+$(FW)/DDRDIAG.BIN: $(FW)/ddrdiag.elf tools/surfimg.py
+	$(Q)$(SURFIMG) pack --elf $< -o $@ --payload-out $(FW)/ddrdiag.payload.bin --name DDRdiag \
+	  --version 1.0.0 --build-id $(BUILD_ID_HEX) --no-audit
 
 # ---- test kernel for the handoff (a SURFOS.BIN) ----
 HELLO_SRC := tests/hello/hello_start.S tests/hello/hello.c common/fmt.c common/crc32.c common/string.c

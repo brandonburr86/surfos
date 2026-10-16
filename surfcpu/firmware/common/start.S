@@ -11,7 +11,8 @@ are passed on to main(hart, bootinfo, magic).
 
 Order: interrupts off, gp, sp, the trap vector (mscratch = FW_TRAP_MAGIC marks firmware
 context for trap.S), registers zeroed (their reset value is undefined, ISA.md section 3),
-.data copied from its load address when that differs, .bss cleared, then main().
+.data copied from its load address when that differs, .fast copied to scratch RAM (with
+FENCE.I) when there is one, .bss cleared, then main().
 */
 #include "fwdefs.h"
 
@@ -79,6 +80,19 @@ _start:
     addi    t1, t1, 4
     j       1b
 2:
+    /* .fast: code linked to run in scratch RAM, stored after .data (RAM images only) */
+    la      t0, __fast_load
+    la      t1, __fast_start
+    la      t2, __fast_end
+    beq     t0, t1, 6f
+5:  bgeu    t1, t2, 7f
+    lw      t3, 0(t0)
+    sw      t3, 0(t1)
+    addi    t0, t0, 4
+    addi    t1, t1, 4
+    j       5b
+7:  fence.i
+6:
     /* .bss */
     la      t0, __bss_start
     la      t1, __bss_end

@@ -172,6 +172,12 @@ def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": bytes(bad)})
 
 
+@scenario("surfboot_finds_a_stuck_ddr_bit", args=["--ddr-stuck-at", "0x80200000"],
+          expect=["DDR address line test at 0x80200000", "(DDR_TEST)", "show code 1"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello()})
+
+
 @scenario("card_never_finishes_init", args=["--acmd41-busy", "-1"], expect=["still initializing after 2 s", "(SD_INIT)"])
 def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello()})
@@ -183,6 +189,73 @@ def _(p):
         f.truncate(64 << 20)
     subprocess.run(["mkfs.fat", "-F", "32", str(p)], check=True, capture_output=True)
     return p
+
+
+# ---------------------------------------------------------------- the diagnostics
+
+BRAM = FW / "bramdiag.mem"
+
+
+def ddrdiag():
+    return (FW / "DDRDIAG.BIN").read_bytes()
+
+
+@scenario("bramdiag_passes", rom=BRAM, args=send("Ctrl-R runs", "ok\\x12") + send("Ctrl-R runs", "!"),
+          expect=["SurfCPU BRAM diagnostics", "exceptions, each recovered", "ok", "interrupts, timer and WFI",
+                  "code running from DDR", "BRAMDIAG: PASS", "echo   1: 'o' 0x6f", "echo   2: 'k' 0x6b",
+                  "SurfCPU BRAM diagnostics", "BRAMDIAG: PASS", "echo   1: '!'"], screen=["BRAMDIAG: PASS"])
+def _(p):
+    return None
+
+
+@scenario("bramdiag_without_ddr", rom=BRAM, args=["--ddr", "absent"],
+          expect=["skipped: no DDR controller", "BRAMDIAG: PASS"])
+def _(p):
+    return None
+
+
+@scenario("bramdiag_reports_ddr_calibration_failure", rom=BRAM, args=["--ddr", "fail"],
+          expect=["FAIL calibration did not succeed", "BRAMDIAG: FAIL (1 of"])
+def _(p):
+    return None
+
+
+@scenario("bramdiag_finds_a_stuck_ddr_bit", rom=BRAM, args=["--ddr-stuck-at", "0x80000400"],
+          expect=["FAIL", "0x80000400", "BRAMDIAG: FAIL"])
+def _(p):
+    return None
+
+
+@scenario("ddrdiag_booted_by_surfboot", max_ms=30000,
+          expect=["boot: DDRdiag 1.0.0", "boot: starting the kernel", "SurfCPU DDR diagnostic",
+                  "boot information", "ok", "testing DDR [0x80100000, 0x81100000)", "code running from DDR",
+                  "DDRDIAG: PASS"], screen=["DDRDIAG: PASS", "SurfCPU DDR diagnostic"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": ddrdiag(), "/BOOT/CMDLINE.TXT": b"size=16M\n"})
+
+
+@scenario("ddrdiag_full_mode", max_ms=60000, expect=["full mode", "(4096 KiB in full", "DDRDIAG: PASS"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": ddrdiag(), "/BOOT/CMDLINE.TXT": b"full size=4M loops=2\n"})
+
+
+@scenario("ddrdiag_booted_from_the_monitor", args=["--btn", "2"] + send("surfboot> ", "boot /BOOT/DDRDIAG.BIN\\r"),
+          max_ms=30000, expect=["BTN1 held", "boot: /BOOT/DDRDIAG.BIN", "SurfCPU DDR diagnostic", "DDRDIAG: PASS"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": hello(), "/BOOT/DDRDIAG.BIN": ddrdiag(), "/BOOT/CMDLINE.TXT": b"size=8M\n"})
+
+
+@scenario("ddrdiag_reports_a_ddr_fault", args=["--ddr-fault-at", "0x80180000"], max_ms=30000,
+          expect=["SurfCPU DDR diagnostic", "unexpected trap: store access fault", "mtval 0x80180000",
+                  "DDRDIAG: FAIL"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": ddrdiag(), "/BOOT/CMDLINE.TXT": b"size=8M\n"})
+
+
+@scenario("ddrdiag_finds_a_stuck_bit", args=["--ddr-stuck-at", "0x80180004"], max_ms=30000,
+          expect=["SurfCPU DDR diagnostic", "0x80180004 reads", "DDRDIAG: FAIL"])
+def _(p):
+    return card(p, {"/BOOT/SURFOS.BIN": ddrdiag(), "/BOOT/CMDLINE.TXT": b"size=8M\n"})
 
 
 def run_scenario(sc, keep):

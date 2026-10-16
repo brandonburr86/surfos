@@ -22,6 +22,7 @@ SECTIONS
         KEEP(*(.text.start))
         *(.text.trap)
         *(.text .text.*)
+        *(.fast .fast.*)                /* the ROM is block RAM already: nothing to copy */
     } > bootrom
 
     .rodata : ALIGN(4) {
@@ -42,7 +43,9 @@ SECTIONS
     __data_load = LOADADDR(.data);
     __rom_end = __data_load + SIZEOF(.data);
 
-    .bss (NOLOAD) : ALIGN(16) {
+    /* An explicit address: with MEMORY regions, ld would otherwise put .bss at the start of
+     * scratch RAM instead of after .data. */
+    .bss (ADDR(.data) + SIZEOF(.data)) (NOLOAD) : ALIGN(16) {
         __bss_start = .;
         *(.sbss .sbss.*)
         *(.bss .bss.*)
@@ -52,6 +55,9 @@ SECTIONS
     }
     __stack_bottom = __bss_end;
     __stack_top = FW_RAM_END;
+    __fast_start = 0;
+    __fast_end = 0;
+    __fast_load = 0;
 
     /DISCARD/ : { *(.comment) *(.note .note.*) *(.eh_frame .eh_frame_hdr) }
 }
@@ -59,3 +65,4 @@ SECTIONS
 ASSERT(__rom_end <= SURF_BOOTROM_BASE + SURF_BOOTROM_SIZE, "rom.ld: the image does not fit the 64 KiB boot ROM")
 ASSERT(__bss_end + FW_STACK_MIN <= FW_RAM_END, "rom.ld: .data + .bss + the minimum stack do not fit the RAM area")
 ASSERT(FW_RAM_BASE >= SURF_SCRATCH_BASE && FW_RAM_END <= SURF_SCRATCH_BASE + SURF_SCRATCH_SIZE, "rom.ld: RAM area outside scratch RAM")
+ASSERT(__bss_start >= __data_end && __bss_start < FW_RAM_END, "rom.ld: .bss is not after .data in the RAM area")

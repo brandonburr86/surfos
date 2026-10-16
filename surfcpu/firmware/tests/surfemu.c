@@ -23,7 +23,7 @@ the real evidence. What it models:
     surfemu --rom build/fw/surfboot.mem [--card IMG] [card options as fwtest] [--ddr ok|absent|fail|never]
             [--btn MASK] [--send TRIGGER=TEXT]... [--expect TEXT]... [--fail-on TEXT]...
             [--max-ms N] [--screen FILE] [--trace-traps] [--quiet] [--card-insert-ms N]
-            [--ddr-fault-at ADDR] [--ddr-size BYTES]
+            [--ddr-fault-at ADDR] [--ddr-stuck-at ADDR] [--ddr-size BYTES]
 
 --rom takes a .mem file (docs/MODULES.md section 5, the exact ROM format) or a raw .bin.
 --send queues TEXT (with \\n, \\r, \\e escapes) on the UART receiver once the output
@@ -65,6 +65,7 @@ static int ddr_mode;                        /* 0 ok, 1 absent, 2 fail, 3 never *
 static uint32_t ddr_calib_us = 150000, ddr_size = DDR_SIZE;
 static uint32_t buttons;
 static uint32_t ddr_fault_at = 1;           /* a DDR word that answers with a bus error (1 = none) */
+static uint32_t ddr_stuck_at = 1;           /* a DDR word whose bit 4 is stuck at 1 (1 = none) */
 static uint64_t card_insert_cycle;          /* 0 = present from the start (if --card) */
 static struct sdsim *card;
 static uint64_t traps_seen;
@@ -524,6 +525,8 @@ static int bus_write(uint32_t a, int size, uint32_t v)
     uint8_t *p = mem_ptr(r, a);
     for (int i = 0; i < size; i++)
         p[i] = (uint8_t)(v >> (8 * i));
+    if (r == REG_DDR && (a & ~3u) == ddr_stuck_at)
+        ddr[ddr_stuck_at - SURF_DDR_BASE] |= 0x10;          /* a data bit that cannot hold 0 */
     return 0;
 }
 
@@ -909,7 +912,11 @@ static void unescape(char *dst, size_t size, const char *s)
 {
     size_t n = 0;
     for (; *s && n + 1 < size; s++) {
-        if (*s == '\\' && s[1]) {
+        if (*s == '\\' && s[1] == 'x' && s[2] && s[3]) {
+            char hex[3] = { s[2], s[3], 0 };
+            dst[n++] = (char)strtoul(hex, 0, 16);
+            s += 3;
+        } else if (*s == '\\' && s[1]) {
             s++;
             *s == 'n' ? (dst[n++] = '\n') : *s == 'r' ? (dst[n++] = '\r') : *s == 'e' ? (dst[n++] = 27)
                 : *s == 't' ? (dst[n++] = '\t') : (dst[n++] = *s);
@@ -933,7 +940,8 @@ int main(int argc, char **argv)
         { "max-ms", required_argument, 0, 'm' }, { "screen", required_argument, 0, 'S' },
         { "trace-traps", no_argument, 0, 'T' }, { "quiet", no_argument, 0, 'q' },
         { "card-insert-ms", required_argument, 0, 'I' }, { "ddr-fault-at", required_argument, 0, 'F' },
-        { "ddr-size", required_argument, 0, 'Z' }, { 0, 0, 0, 0 },
+        { "ddr-size", required_argument, 0, 'Z' }, { "ddr-stuck-at", required_argument, 0, 'K' },
+        { 0, 0, 0, 0 },
     };
     struct sdsim_opts co;
     sdsim_default_opts(&co);
@@ -977,6 +985,7 @@ int main(int argc, char **argv)
         case 'I': insert_ms = strtoull(optarg, 0, 0); break;
         case 'F': ddr_fault_at = (uint32_t)strtoul(optarg, 0, 0) & ~3u; break;
         case 'Z': ddr_size = (uint32_t)strtoul(optarg, 0, 0); break;
+        case 'K': ddr_stuck_at = (uint32_t)strtoul(optarg, 0, 0) & ~3u; break;
         default: return 3;
         }
     }

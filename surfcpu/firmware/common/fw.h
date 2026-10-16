@@ -69,6 +69,7 @@ void uart_drain(uint32_t timeout_us);
 
 /* ---- VGA text console (video.c); does nothing when the SoC has no video ---- */
 void video_init(void);
+void video_attach(void);            /* continue the text SurfBoot left on screen */
 void video_putc(char c);
 int video_present(void);
 
@@ -93,6 +94,9 @@ void led_code(unsigned code);       /* a failure code 1..15 on LD4..LD7, LD0 red
 /* ---- identity ---- */
 static inline uint32_t sysinfo(uint32_t off) { return REG(SURF_SYSINFO_BASE, off); }
 const char *fw_board_name(uint32_t board_id);
+
+/* Hot code for RAM images: runs from scratch RAM (ram.ld .fast), ordinary code in ROM images. */
+#define FW_FAST __attribute__((section(".fast"), noinline))
 
 /* ---- linker symbols ---- */
 extern char __rom_end[], __data_start[], __data_end[], __bss_start[], __bss_end[];

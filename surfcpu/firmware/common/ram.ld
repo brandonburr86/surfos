@@ -9,7 +9,9 @@ load address = run address, so the package payload is the bytes from the first s
 the end of .data, and mem_size (payload + .bss + stack) comes from the ELF. start.S
 (built with -DFW_RAM_IMAGE) clears .bss itself: SurfBoot does not (BOOT-ABI.md section 2).
 
-FW_STACK_SIZE may be set with --defsym; the default is 16 KiB.
+FW_STACK_SIZE may be set with --defsym; the default is 16 KiB. Functions marked FW_FAST go to
+.fast, which runs from scratch RAM at 0x0001_0000 (load address in the payload, run address
+in scratch RAM: start.S copies it and runs FENCE.I), well below the boot information page.
 */
 INCLUDE surfcpu_soc.ld
 OUTPUT_ARCH(riscv)
@@ -41,9 +43,19 @@ SECTIONS
         __data_end = .;
     } > ddr
     __data_load = __data_start;
-    __payload_end = .;
 
-    .bss : ALIGN(16) {
+    /* Hot loops (FW_FAST functions) run from scratch RAM, where a fetch takes one cycle;
+     * they are stored in the payload after .data and copied there by start.S. */
+    .fast SURF_SCRATCH_BASE : ALIGN(4) {
+        __fast_start = .;
+        *(.fast .fast.*)
+        . = ALIGN(4);
+        __fast_end = .;
+    } > scratch AT> ddr
+    __fast_load = LOADADDR(.fast);
+    __payload_end = __fast_load + SIZEOF(.fast);
+
+    .bss (__payload_end + 15) & ~15 : {
         __bss_start = .;
         *(.sbss .sbss.*)
         *(.bss .bss.*)
@@ -64,3 +76,4 @@ SECTIONS
 }
 
 ASSERT(__image_end <= SURF_DDR_TOP_BASE, "ram.ld: the image reaches into ddr_top, which SurfBoot refuses")
+ASSERT(__fast_end <= SURF_BOOTINFO_BASE, "ram.ld: .fast would overwrite the boot information page")

@@ -8,6 +8,8 @@ the video block in text mode (docs/MEMORY-MAP.md, video at 0x1000_6000). Scrolli
 the hardware SCROLL register: display row r shows text row (r + SCROLL) mod 30, so a new
 line clears one text row and moves SCROLL on by one. The cursor register is in display
 coordinates. Everything is skipped when sysinfo.FEATURES says there is no video.
+video_init() clears the screen and switches to text mode (SurfBoot, the BRAM diagnostics);
+video_attach() goes on below what is already there (a program SurfBoot started).
 */
 #include "fw.h"
 
@@ -55,6 +57,22 @@ void video_init(void)
     REG(SURF_VIDEO_BASE, SURF_VIDEO_CTRL) = SURF_VIDEO_CTRL_ENABLE_MASK
         | (1u << SURF_VIDEO_CTRL_MODE_LSB) | SURF_VIDEO_CTRL_CURSOR_EN_MASK
         | SURF_VIDEO_CTRL_CURSOR_BLINK_MASK;
+}
+
+void video_attach(void)
+{
+    on = video_present() &&
+         ((REG(SURF_VIDEO_BASE, SURF_VIDEO_CTRL) & SURF_VIDEO_CTRL_MODE_MASK) >> SURF_VIDEO_CTRL_MODE_LSB) == 1;
+    if (!on)
+        return;
+    uint32_t cur = REG(SURF_VIDEO_BASE, SURF_VIDEO_CURSOR);
+    top = REG(SURF_VIDEO_BASE, SURF_VIDEO_SCROLL) % ROWS;
+    row = (cur & SURF_VIDEO_CURSOR_ROW_MASK) >> SURF_VIDEO_CURSOR_ROW_LSB;
+    col = (cur & SURF_VIDEO_CURSOR_COL_MASK) >> SURF_VIDEO_CURSOR_COL_LSB;
+    if (row >= ROWS)
+        row = ROWS - 1;
+    if (col >= COLS)
+        col = 0;
 }
 
 static void newline(void)

@@ -18,8 +18,9 @@ entry, payload CRC-32, image version, build ID, name, header CRC-32) followed by
 From an ELF the payload is every PT_LOAD segment from its first loadable byte to the end of
 its initialized data (gaps zero-filled), load_addr is the lowest physical address, mem_size
 reaches the end of the last segment in memory (BSS and stack included) and entry is e_entry;
-the ELF must be 32-bit little-endian RISC-V with load address = run address, and it is put
-through tools/isa-audit.py unless --no-audit. The checks are SurfBoot's (image.c), in its
+the ELF must be 32-bit little-endian RISC-V, its entry point in a segment that runs where it
+is loaded (a segment the program copies elsewhere itself is noted), and it is put through
+tools/isa-audit.py unless --no-audit. The checks are SurfBoot's (image.c), in its
 order and with its error names, so a package that passes `verify` passes on the board (with
 the same usable DDR). The x86 surfos.bin, a GRUB disk image or an ELF are refused: they have
 no SIMG header. A CRC detects accidental damage; it is not authentication.
@@ -241,8 +242,15 @@ def verdict(results) -> tuple[str | None, str]:
 
 # ---- ELF input ----
 
+RELOCATED_NOTES: list[str] = []
+
+
 def elf_payload(path: str) -> tuple[bytes, int, int, int]:
-    """(payload, load_addr, mem_size, entry) from a linked RV32 ELF."""
+    """(payload, load_addr, mem_size, entry) from a linked RV32 ELF. The payload is laid out
+    by load (physical) address. A segment whose run address differs (code the program copies
+    elsewhere itself, such as firmware's .fast) is allowed and noted; the entry point must lie
+    in a segment that runs where it is loaded."""
+    RELOCATED_NOTES.clear()
     d = open(path, "rb").read()
     if d[:4] != b"\x7fELF":
         raise PackError(f"{path}: not an ELF file")
@@ -264,8 +272,11 @@ def elf_payload(path: str) -> tuple[bytes, int, int, int]:
             "<8I", d, e_phoff + i * e_phentsize)
         if p_type == PT_LOAD and p_memsz:
             if p_vaddr != p_paddr:
-                raise PackError(f"{path}: a segment runs at {p_vaddr:#x} but loads at {p_paddr:#x}; SurfBoot copies "
-                                "the payload to its load address and runs it there")
+                if p_vaddr <= e_entry < p_vaddr + p_memsz:
+                    raise PackError(f"{path}: the entry point is in a segment that runs at {p_vaddr:#x} but loads at "
+                                    f"{p_paddr:#x}; SurfBoot jumps to the load address")
+                RELOCATED_NOTES.append(f"{p_filesz} bytes loaded at {p_paddr:#010x} run at {p_vaddr:#010x} "
+                                       "(the program copies them there)")
             loads.append((p_paddr, p_offset, p_filesz, p_memsz))
     if not loads:
         raise PackError(f"{path}: no loadable segments")
@@ -328,6 +339,8 @@ def cmd_pack(a) -> int:
     open(tmp, "wb").write(pkg)
     os.replace(tmp, a.output)
     h = parse_header(pkg)
+    for note in RELOCATED_NOTES if a.elf else ():
+        print(f"surfimg: note: {note}")
     print(f"surfimg: {a.output}: {a.name} {a.version} build {h['build_id']:08x}, load {load_addr:#010x}, "
           f"entry {entry:#010x}, payload {len(payload)} bytes, mem_size {mem_size}, payload CRC {h['payload_crc32']:#010x}")
     return 0
