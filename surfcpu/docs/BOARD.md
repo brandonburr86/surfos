@@ -539,8 +539,10 @@ Routing converges only for some placements. With the placer's seed 1 the 35T did
 earlier commit (router2 at 300 to 500 overused wires past 300 iterations), hence `seed 2`, with
 which all four builds routed at 383dba74; at a338e7a3, whose netlist differs only by the build
 ID, the 100T ddr_bramdiag build did not (750 to 980 overused wires through 100 iterations; the
-others routed in 18 to 45). A seed is therefore no fix: nextpnr's congestion-driven placement
-(`--placer-heap-congestion-spread`) is a flow setting for the flow track to try.
+others routed in 18 to 45). Its manifest, written by that commit's `tools/fpga-build.sh`, gives
+the placer's timing estimate as the reason; the script now says when nextpnr did not finish
+routing (`nextpnr_routed = false`). A seed is therefore no fix: nextpnr's congestion-driven
+placement (`--placer-heap-congestion-spread`) is a flow setting for the flow track to try.
 
 | Use (Yosys 0.69, `--dsp safe`; the four builds) | 100T | 35T |
 |---|---|---|
@@ -604,7 +606,9 @@ the file. Then the flow's table: `[vivado]` from `out/build-results.txt` (Vivado
 build host name, WNS, WHS, LUT/FF/BRAM/DSP/BUFG/MMCM/PLL/IO use, DRC errors, critical warnings,
 critical CDC findings, `check_timing` issues) or `[openxc7]` (image and tool versions, the part
 placed, the DSP mode, the six checks and the board's `check_netlist` and `check_boot_rom`,
-nextpnr's timing per clock and the worst slack, use
+nextpnr's timing per clock and the worst slack (or, when nextpnr stopped the flow,
+`nextpnr_fmax`, its last report per clock, and `nextpnr_routed`: a build stopped before routing
+converged has only the placer's estimates, and its reason says routing did not finish), use
 against the part's documented capacity, the IDCODE and part in the bitstream, and the
 constraints given and not checked).
 
@@ -708,7 +712,7 @@ flow builds them (section 8): about 10,300 LUTs and 6,430 flip-flops, half of th
 |---|---|---|
 | `lint-board` | `lint` | Verilator `-Wall` lint of `arty_a7_clocks`, the UART helpers, the baseline core and top, and the SoC top (with the stand-in or the real SoC), with and without `ARTY_HAS_DDR` (the DDR top with `sim/board/stubs/litedram_core.v`, the generated core's ports) |
 | `test-board` | `test-soc` | `board-clocks` (Icarus and Verilator), `board-prims-bad`, `board-baseline-rt`, `board-baseline` (Verilator and Icarus), `board-top` (Icarus, 3 seeds, and Verilator) |
-| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the bridge's mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (241 wrapper and fetch.sh checks, the DDR designs' defines and generated files among them) |
+| `check-board` | `check` | `board-clockplan` (settings and generated files), `board-digilent` (the XDC files and licence; the manuals when fetched), `board-wiring` (pins, WIRING.md, master XDC and, for the DDR3L, Digilent's MIG projects, I/O timing, CDC names including the bridge's mailboxes; self-test 23 mutations), `board-cdc-xdc` (15 checks), `board-tools` (245 wrapper and fetch.sh checks, the DDR designs' defines and generated files among them) |
 | `estimate-board` | (explicit) | Yosys estimates and the block RAM budget into `docs/evidence/board/resources.txt` |
 | `board-uart-expect` | (explicit) | what the serial port should show with the two SoC designs, from RTL simulation (`BOARD=`; section 12) |
 | `board-netlist-sim` | (explicit) | the post-synthesis simulation of an open-flow build of the SoC (`BOARD=`, `DESIGN=`, a DDR design too; section 8) |

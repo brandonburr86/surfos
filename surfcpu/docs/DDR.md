@@ -605,7 +605,9 @@ build ID):
   netlist differs only by the build ID, the 100T ddr_bramdiag build did not route at seed 2
   (router2 between 750 and 980 overused wires through 100 iterations, where it was stopped; the
   other three routed in 18 to 45 iterations); its record shows the placer's estimates instead
-  (dram_clk 84.1 MHz before routing). So whether a DDR build routes is, for now, a matter of the
+  (dram_clk 84.1 MHz before routing), and its manifest, from that commit's
+  `tools/fpga-build.sh`, gives them as the reason (the script now records that routing did not
+  finish). So whether a DDR build routes is, for now, a matter of the
   placement's luck, and no seed fixes it for the next commit; a congestion-aware placement
   (nextpnr's `--placer-heap-congestion-spread`) is a flow setting, the flow track's to try.
 * **Diagnostic builds** (not the designs' results): the same flow with nextpnr allowed to finish

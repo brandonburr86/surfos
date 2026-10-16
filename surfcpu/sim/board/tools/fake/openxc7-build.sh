@@ -10,7 +10,9 @@
 #   FAKE_OX_RC       the exit status (default 0)
 #   FAKE_OX_NETLIST  lost: the synthesized netlist (top.json) has lost the boot ROM's block RAM
 #   FAKE_OX_STOP     pnr: stop as the real script does when nextpnr misses a clock's constraint:
-#                    the synthesis outputs and nextpnr.log only, no bitstream, no manifest, exit 1
+#                    the synthesis outputs and nextpnr.log only, no bitstream, no manifest, exit 1;
+#                    route: the same, but stopped (exit 137) while router2 had not converged, so
+#                    nextpnr.log holds only the placer's estimates and the router's iterations
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
@@ -44,9 +46,16 @@ mkdir -p "$out"
 if [ "${FAKE_OX_STOP:-}" = pnr ]; then
     { echo "Info: Max frequency for clock               'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)"
       echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
+      echo "Info:     iter=45 wires=421923 overused=0 overuse=0 archfail=0"
+      echo "Info: Routing complete."
       echo "ERROR: Max frequency for clock               'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)"
       echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
       echo "0 warnings, 2 errors"; } > "$out/nextpnr.log"
+elif [ "${FAKE_OX_STOP:-}" = route ]; then
+    { echo "Info: Max frequency for clock               'dram_clk': 84.07 MHz (FAIL at 100.00 MHz)"
+      echo "Info: Max frequency for clock                'sys_clk': 77.83 MHz (PASS at 25.00 MHz)"
+      echo "Info:     iter=100 wires=494177 overused=839 overuse=839 archfail=NA"
+      echo "Info:     iter=101 wires=494496 overused=786 overuse=786 archfail=NA"; } > "$out/nextpnr.log"
 fi
 n=$(( ${#part} + 1 ))
 { printf '\000\011\017\360\017\360\017\360\017\360\000\000\001a\000\005fake\000b\000'
@@ -100,8 +109,9 @@ else
     printf '{"modules": {"%s": {"cells": {}, "netnames": {}}}}\n' "$top" > "$out/pre.json"
     cp "$out/pre.json" "$out/$top.json"
 fi
-if [ "${FAKE_OX_STOP:-}" = pnr ]; then
+if [ "${FAKE_OX_STOP:-}" = pnr ] || [ "${FAKE_OX_STOP:-}" = route ]; then
     rm -f "$out/$top.bit" "$out/manifest.txt" "$out/timing.txt" "$out/utilization.txt" "$out/check-bitstream.txt"
+    if [ "$FAKE_OX_STOP" = route ]; then echo "fake openxc7: stopped while routing" >&2; exit 137; fi
     echo "openxc7-build.sh: pnr failed (exit 1)" >&2
     exit 1
 fi

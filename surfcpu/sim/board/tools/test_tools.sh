@@ -575,6 +575,14 @@ check "openxc7: ... whose reason names the clock and nextpnr's figures" \
     grep -q '^reason = ".*timing not met (nextpnr: dram_clk 72.98 MHz of 100.00 MHz)' "$gd/manifest.txt"
 check "openxc7: ... and records nextpnr's last report per clock" \
     grep -q "^nextpnr_fmax = \[\"Max frequency for clock 'dram_clk': 72.98 MHz (FAIL at 100.00 MHz)\", \"Max frequency for clock 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)\", \]$" "$gd/manifest.txt"
+check "openxc7: ... after routing" grep -q '^nextpnr_routed = true$' "$gd/manifest.txt"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_STOP=route \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "openxc7: a flow stopped before routing converged fails with a complete manifest" \
+    test "$rc" -eq 1 -a ! -e "$gd/surfcpu_arty_a7_ddr_bramdiag.bit" -a -n "$(grep '^result = "fail"' "$gd/manifest.txt")"
+check "openxc7: ... whose reason says routing did not finish, not that timing was missed" \
+    grep -q '^reason = ".*nextpnr did not finish routing (router2 after 101 iterations, 786 overused wires); the placer.s timing estimate misses too (dram_clk 84.07 MHz of 100.00 MHz)' "$gd/manifest.txt"
+check "openxc7: ... and marks nextpnr's figures as not routed" grep -q '^nextpnr_routed = false$' "$gd/manifest.txt"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_TIMING=FAIL \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "define: a DDR build that misses timing fails, with no bitstream under the design's name" \

@@ -323,15 +323,26 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             grep '^clock ' "$ox/timing.txt" | grep -qv ' PASS$' && problems="${problems:+$problems; }timing not met (nextpnr)"
             grep -q '^clock ' "$ox/timing.txt" || problems="${problems:+$problems; }no timing result"
         elif [ -f "$ox/nextpnr.log" ] && grep -q 'Max frequency for clock' "$ox/nextpnr.log"; then
-            # nextpnr stopped the flow, a clock having missed its constraint: its last report per clock
+            # nextpnr stopped the flow, a clock having missed its constraint, or it was stopped
+            # before routing converged: its last report per clock (after routing, or else the
+            # placer's estimate)
             fm=$(awk '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c); last[c] = $0
                       if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
                       END { for (i = 0; i < n; i++) { l = last[order[i]]; sub(/^(Info|ERROR): */, "", l); gsub(/ +/, " ", l); print l } }' "$ox/nextpnr.log")
+            routed=false
+            grep -q 'Routing complete' "$ox/nextpnr.log" && routed=true
+            echo "nextpnr_routed = $routed"
             printf 'nextpnr_fmax = ['
             echo "$fm" | while IFS= read -r l; do printf '%s, ' "$(toml_str "$l")"; done
             echo ']'
             late=$(echo "$fm" | sed -n "s/^Max frequency for clock '\{0,1\}\([^': ]*\)'\{0,1\}: \([0-9.]* MHz\) (FAIL at \([0-9.]* MHz\))$/\1 \2 of \3/p" | tr '\n' ',' | sed 's/,$//')
-            [ -z "$late" ] || problems="${problems:+$problems; }timing not met (nextpnr: $late)"
+            if [ "$routed" = true ]; then
+                [ -z "$late" ] || problems="${problems:+$problems; }timing not met (nextpnr: $late)"
+            else
+                it=$(grep 'iter=' "$ox/nextpnr.log" | tail -n 1 | sed -n 's/.*iter=\([0-9]*\) .*overused=\([0-9]*\).*/\1 iterations, \2 overused wires/p')
+                problems="${problems:+$problems; }nextpnr did not finish routing${it:+ (router2 after $it)}"
+                [ -z "$late" ] || problems="$problems; the placer's timing estimate misses too ($late)"
+            fi
         fi
         if [ -f "$ox/utilization.txt" ]; then
             for u in "lut:LUTs (" "lut_positions:LUT positions" "ff:flip-flops" "carry4:carry chains" \
