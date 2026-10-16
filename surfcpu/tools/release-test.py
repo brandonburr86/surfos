@@ -326,7 +326,9 @@ if any(f[0] == "generic" and "BOOTROM_INIT" in f for f in lines):
     for f in lines:
         if f[0] == "rom":
             src = Path(os.environ["ROM"]) if os.environ.get("ROM") else root / f[1]
-            rom_image, rom_sha = str(src), hashlib.sha256(src.read_bytes()).hexdigest()
+            inside = str(src).startswith(str(root) + "/")             # as fpga-build.sh writes it
+            rom_image = str(src)[len(str(root)) + 1:] if inside else str(src)
+            rom_sha = hashlib.sha256(src.read_bytes()).hexdigest()
 kernel = Path(os.environ.get("SURFCPU_KERNEL") or root.parent / "build/riscv32/arty_a7/SURFOS.BIN")
 kernel_sha = hashlib.sha256(kernel.read_bytes()).hexdigest() if kernel.is_file() else ""
 tag = re.search(r"^IMAGE_TAG=(\S+)$", (root / "tools/openxc7-build.sh").read_text(), re.M).group(1)
@@ -377,8 +379,13 @@ class ScratchRelease(unittest.TestCase):
                "top": "top top\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n",
                "dd": "top dd\ngeneric BOARD BUILD_ID BOOTROM_INIT\nrom build/fw/surfboot.mem u_soc.u_bootrom\n"}
 
+    PLACE = ""                                                  # a subdirectory to put the repository in
+
     def setUp(self):
         self.dir = fresh(f"{type(self).__name__}-{self._testMethodName}")
+        if self.PLACE:
+            self.dir = self.dir / self.PLACE
+            self.dir.mkdir(parents=True)
         self.repo = self.dir / "repo"
         self.sc = self.repo / "surfcpu"
         for rel in self.COPY:
@@ -844,6 +851,31 @@ class TestNoForeignDeletes(ScratchRelease):
                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertTrue((p / "precious.txt").is_file())
+
+
+class TestOddPaths(ScratchRelease):
+    """what the review confirmed (its s5), kept: the whole cycle through make, in a checkout whose path holds
+    spaces, quotes, a dollar sign, an ampersand, parentheses and a hash"""
+    PLACE = 'it\'s "q" $HOME & (co) #1/SurfOS Restoration Project'
+
+    def mk(self, *args):
+        return subprocess.run(["make", "--no-print-directory", "-C", str(self.sc)] + list(args), env=self.env,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+    def test_cycle(self):
+        r = self.mk("release", "PRERELEASE=1", "SKIP_DDR=1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        name = self.rel_dir(True).name
+        r = self.mk("release-check", f"RELEASE=build/release/{name}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.mk("release-verify", f"RELEASE=build/release/{name}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stdout.strip().splitlines()[-1].startswith("PASS:"), r.stdout)
+        r = self.mk("fresh-checkout", f"REFERENCE=build/release/{name}", "ARGS=PRERELEASE=1 SKIP_DDR=1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("the release matches the reference", r.stdout)
+        self.assertEqual([p.name for p in (self.sc / "build").iterdir()
+                          if p.name in ("release-verify", "fresh-checkout") and any(p.iterdir())], [])
 
 
 # ------------------------------------------------------------------------------- program.sh flash path

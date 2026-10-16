@@ -71,10 +71,11 @@ SurfCPU release tooling: the review's findings (rel-2), their tests, and a reduc
      after: exit 1; program: .../dupb.bit has no .bit header naming its part (...); refusing
      bitfile.py after: BitError: the .bit header has a field 'b' at byte 38 where field c belongs
 
-2. After the fixes (147fe81):
-   make test-release (the toolchain image, Python 3.13.5): Ran 51 tests in 24.1s, OK
-   make release-selftest (Homebrew's Python 3.14.7):        Ran 51 tests in 51.8s, OK
-   make release-selftest PYTHON_HOST=/usr/bin/python3 (3.9.6): Ran 51 tests in 53.0s, OK
+2. After the fixes (147fe81, and TestOddPaths after it: the review's own s5, the whole cycle through
+   make in a checkout under 'it's "q" $HOME & (co) #1/SurfOS Restoration Project'):
+   make test-release (the toolchain image, Python 3.13.5): Ran 52 tests in 27.9s, OK
+   make release-selftest (Homebrew's Python 3.14.7):        Ran 52 tests in 56.4s, OK
+   make release-selftest PYTHON_HOST=/usr/bin/python3 (3.9.6): Ran 52 tests in 57.2s, OK
    make board-tools (program.sh, fpga-build.sh and the board track's fake bitstreams changed):
      test_tools: 245 passed, 0 failed
    make test-flow: test-flow: PASS
