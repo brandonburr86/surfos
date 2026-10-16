@@ -82,6 +82,9 @@ then bad "build: accepted a missing --top"; else ok "build: refuses a missing --
 
 # ---------------------------------------------------------------- synthcheck.py on the reproducer
 r=devenv/openxc7/test/dsp_counter.v
+if ! command -v yosys > /dev/null 2>&1; then
+  echo "  skip  synthcheck on the reproducer: no Yosys here (make test-flow runs it in the container)"
+else
 yosys -q -p "read_verilog $r; hierarchy -top dsp_counter; proc; flatten; opt -full; wreduce; opt_clean; memory -nomap; opt_clean; write_json $t/pre.json" > "$t/pre.log" 2>&1
 for mode in full safe none; do
   case $mode in
@@ -97,6 +100,7 @@ for mode in full safe none; do
   if [ "$got" = "$want" ]; then ok "synthcheck: Yosys $v, DSP mode $mode: $got as expected"
   else bad "synthcheck: Yosys $v, DSP mode $mode: $got, expected $want"; cat "$t/$mode.txt"; fi
 done
+fi
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }
 echo "openxc7-flow-test.sh: PASS"

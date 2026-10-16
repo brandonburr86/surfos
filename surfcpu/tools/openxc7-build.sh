@@ -59,7 +59,7 @@ while [ $# -gt 0 ]; do
     --no-lvs)   lvs=0; shift ;;
     --no-check) check=0; shift ;;
     --dry-run)  dry=1; shift ;;
-    -h|--help)  sed -n '2,39p' "$0"; exit 0 ;;
+    -h|--help)  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     -*)      die_usage "unknown option $1" ;;
     *)       srcs="$srcs $1"; shift ;;
   esac
