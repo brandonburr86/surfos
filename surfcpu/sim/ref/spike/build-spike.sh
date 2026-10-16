@@ -25,8 +25,9 @@ if [ -x "$prefix/bin/spike" ] && [ "$(cat "$prefix/.surfcpu-stamp" 2>/dev/null)"
   exit 0
 fi
 
-mkdir -p "$third/downloads"
-tarball=$third/downloads/riscv-isa-sim-$COMMIT.tar.gz
+# The cpu track's layout (sim/cpu/riscv_tests.py): build/third_party/<name>/<archive>.
+mkdir -p "$third/riscv-isa-sim"
+tarball=$third/riscv-isa-sim/riscv-isa-sim-$COMMIT.tar.gz
 if [ ! -f "$tarball" ] || [ "$(sha256sum "$tarball" | cut -d' ' -f1)" != "$SHA256" ]; then
   echo "build-spike: downloading $URL"
   curl -fsSL -o "$tarball.part" "$URL"
@@ -39,7 +40,7 @@ if [ ! -f "$tarball" ] || [ "$(sha256sum "$tarball" | cut -d' ' -f1)" != "$SHA25
   mv "$tarball.part" "$tarball"
 fi
 
-src=$third/spike-src
+src=$third/riscv-isa-sim/src
 rm -rf "$src" "$prefix"
 mkdir -p "$src"
 tar xzf "$tarball" -C "$src" --strip-components=1

@@ -5,10 +5,11 @@ SurfCPU riscv-formal setup: pinned framework, wrapper, checks for surfcpu_core
 File: rvformal.py Date: 10/15/26 (SurfCPU)
 --------------------
     python3 tools/rvformal.py fetch               riscv-formal at a pinned commit (SHA-256)
-    python3 tools/rvformal.py gen [--stub] [--no-altops] [--aligned-mem]
+    python3 tools/rvformal.py gen [--stub] [--altops] [--lsb-mem]
                                                   copy the wrapper, the SurfBus slave model and
-                                                  the core's RTL into riscv-formal's
-                                                  cores/surfcpu/ and generate the checks
+                                                  the core's RTL (CPU_RTL of mk/area-cpu.mk)
+                                                  into riscv-formal's cores/surfcpu/ and
+                                                  generate the checks
     python3 tools/rvformal.py run [-j N] [CHECK...]  run them with SymbiYosys (all, or some)
     python3 tools/rvformal.py smoke               before the core exists: elaborate the wrapper
                                                   with sim/ref/formal/stub_core.v (the ISA.md
@@ -16,14 +17,12 @@ File: rvformal.py Date: 10/15/26 (SurfCPU)
 
 riscv-formal (github.com/YosysHQ/riscv-formal) proves each instruction's RVFI record against
 its formal ISA model, and the consistency of pc, registers and order over bounded depths. The
-configuration is sim/ref/formal/checks.cfg; the core needs SURFCPU_RVFI. Two choices are
-the cpu track's to make at integration (docs/VERIFICATION.md section 8):
-  --aligned-mem   the core's RVFI memory fields use RISCV_FORMAL_ALIGNED_MEM (word address,
-                  masks and data in their byte lanes) instead of riscv-formal's default;
-  --no-altops     the core does not implement riscv-formal's alternative M operations under
-                  RISCV_FORMAL_ALTOPS (then the M instruction checks are left out: real
-                  multipliers and dividers are beyond a bounded proof).
-Everything goes under build/third_party/riscv-formal-<commit>/.
+configuration is sim/ref/formal/checks.cfg; the core needs SURFCPU_RVFI. The core's RVFI
+memory fields follow RISCV_FORMAL_ALIGNED_MEM (MODULES.md section 5), so that is defined
+(--lsb-mem drops it). The core does not implement riscv-formal's alternative M operations
+(RISCV_FORMAL_ALTOPS), so the eight M instruction checks are left out (real multipliers and
+dividers are beyond a bounded proof); --altops puts them back once it does.
+Everything goes under build/third_party/riscv-formal/.
 Only the Python standard library is used (the checks need yosys, sby and a solver: the
 toolchain container has yosys 0.52, sby and boolector).
 """
@@ -31,13 +30,13 @@ toolchain container has yosys 0.52, sby and boolector).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shutil
 import subprocess
 import sys
-import tarfile
-import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rvfetch   # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent            # surfcpu/
 THIRD = ROOT / "build" / "third_party"
@@ -46,52 +45,36 @@ FORMAL = ROOT / "sim" / "ref" / "formal"
 COMMIT = "c992aa61fdfe0846c5ed90324c596202a1c69b76"
 URL = f"https://codeload.github.com/YosysHQ/riscv-formal/tar.gz/{COMMIT}"
 SHA256 = "0e357116da2aaa0b57e6dab6fd9ff7612e04d4fdc37372754f72ec963b01e000"
-DIR = THIRD / f"riscv-formal-{COMMIT}"
+DIR = THIRD / "riscv-formal" / "src" / f"riscv-formal-{COMMIT}"
 CORE = DIR / "cores" / "surfcpu"
 M_INSNS = ("mul", "mulh", "mulhsu", "mulhu", "div", "divu", "rem", "remu")
 
 
 def fetch() -> Path:
-    stamp = DIR / ".surfcpu-fetched"
-    if stamp.exists() and stamp.read_text().strip() == SHA256:
-        return DIR
-    dl = THIRD / "downloads" / f"riscv-formal-{COMMIT}.tar.gz"
-    dl.parent.mkdir(parents=True, exist_ok=True)
-    if not dl.exists() or _sha256(dl) != SHA256:
-        print(f"rvformal: downloading {URL}")
-        tmp = dl.with_suffix(".part")
-        with urllib.request.urlopen(URL, timeout=300) as r, tmp.open("wb") as f:
-            shutil.copyfileobj(r, f)
-        if _sha256(tmp) != SHA256:
-            tmp.unlink()
-            raise SystemExit(f"rvformal: SHA-256 mismatch for {URL}; not using it")
-        tmp.rename(dl)
-    if DIR.exists():
-        shutil.rmtree(DIR)
-    with tarfile.open(dl) as t:
-        t.extractall(THIRD, filter="data")
-    stamp.write_text(SHA256 + "\n")
-    return DIR
+    """riscv-formal at the pinned commit, the cpu track's way (tools/rvfetch.py)."""
+    archive = rvfetch.fetch(URL, SHA256, THIRD / "riscv-formal" / f"riscv-formal-{COMMIT}.tar.gz",
+                            "rvformal")
+    return rvfetch.unpack(archive, THIRD / "riscv-formal" / "src")
 
 
-def _sha256(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest()
-
-
-def gen(stub: bool, altops: bool, aligned: bool) -> Path:
+def gen(stub: bool, altops: bool, aligned: bool, rtl_root: Path = ROOT) -> Path:
     fetch()
     if CORE.exists():
         shutil.rmtree(CORE)
     CORE.mkdir(parents=True)
-    rtl = [] if stub else sorted((ROOT / "rtl" / "cpu").glob("*.v"))
+    # CPU_RTL of mk/area-cpu.mk: the core's modules and the FIFO it uses.
+    rtl = [] if stub else (sorted((rtl_root / "rtl" / "cpu").glob("surfcpu_*.v"))
+                           + [rtl_root / "rtl" / "lib" / "surf_fifo.v"])
     if not stub and not rtl:
         raise SystemExit("rvformal: rtl/cpu has no core yet (the cpu track's surfcpu_core); "
                          "use `smoke` to check the setup against the port list")
     files = ["wrapper.sv", "surfbus_formal_slave.sv"]
     for f in files:
         shutil.copy(FORMAL / f, CORE / f)
-    shutil.copy(ROOT / "rtl" / "cpu" / "surfcpu_rvfi.vh", CORE / "surfcpu_rvfi.vh")
-    shutil.copy(ROOT / "rtl" / "generated" / "surfcpu_soc.vh", CORE / "surfcpu_soc.vh")
+    for inc in [*sorted((rtl_root / "rtl" / "cpu").glob("*.vh")),
+                *sorted((rtl_root / "rtl" / "lib").glob("*.vh")),
+                ROOT / "rtl" / "generated" / "surfcpu_soc.vh"]:
+        shutil.copy(inc, CORE / inc.name)
     if stub:
         shutil.copy(FORMAL / "stub_core.v", CORE / "stub_core.v")
         files.append("stub_core.v")
@@ -136,7 +119,7 @@ def run(jobs: int, which: list[str]) -> int:
 
 
 def smoke() -> int:
-    gen(stub=True, altops=True, aligned=False)
+    gen(stub=True, altops=True, aligned=True)
     # Elaborate rvfi_wrapper alone with riscv-formal's macros: checks the wrapper, the slave
     # model and the core's port list (docs/ISA.md section 4) fit together.
     script = (f"read -sv -D SURFCPU_RVFI -D RISCV_FORMAL -D RISCV_FORMAL_NRET=1 "
@@ -171,14 +154,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("checks", nargs="*")
     ap.add_argument("-j", "--jobs", type=int, default=4)
     ap.add_argument("--stub", action="store_true")
-    ap.add_argument("--no-altops", action="store_true")
-    ap.add_argument("--aligned-mem", action="store_true")
+    ap.add_argument("--altops", action="store_true")
+    ap.add_argument("--lsb-mem", action="store_true")
+    ap.add_argument("--root", help="another surfcpu tree to take the core's RTL from")
     a = ap.parse_args(argv)
     if a.command == "fetch":
         print(f"rvformal: {fetch()}")
         return 0
     if a.command == "gen":
-        gen(a.stub, not a.no_altops, a.aligned_mem)
+        gen(a.stub, a.altops, not a.lsb_mem, Path(a.root) if a.root else ROOT)
         return 0
     if a.command == "run":
         return run(a.jobs, a.checks)

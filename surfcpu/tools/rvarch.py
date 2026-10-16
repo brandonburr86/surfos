@@ -45,13 +45,12 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rvelf          # noqa: E402
 import rvisa          # noqa: E402
+import rvfetch        # noqa: E402
 import trace_spike    # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent            # surfcpu/
@@ -89,6 +88,15 @@ EXCLUDED = {
                     "forever (and -04 does not link: undefined trap_sigptr); a suite bug "
                     "for cores without C",
 }
+# Tests whose self-check assumes the core is fast: run with the testbench's default bus
+# latency even when the runner is given --ilat/--dlat.
+LATENCY_SENSITIVE = {
+    "Sm_mcsr_cntr-00": "its mcycle wrap-around check sets mcycle to all ones, runs a "
+                       "300-instruction loop and requires mcycle < 1000: it fails when the "
+                       "loop takes more than 3.3 cycles per instruction (with --ilat 1:4 "
+                       "--dlat 1:6 a pipelined core needs about 1200)",
+}
+
 # Reads of these CSRs depend on time or cycles (mcycle, cycle, time, mip), or on the
 # instructions run since reset (minstret, instret: Spike's count includes its boot ROM):
 # tests that read them are judged by their self-check only, not by retirement traces.
@@ -111,45 +119,15 @@ KEEP = ("tests/env/", "tests/rv32i/", "tests/priv/", "generators/testgen/", "COP
 
 
 def act_root() -> Path:
-    return THIRD / SUITE["dir"]
+    return THIRD / "riscv-arch-test" / "src" / SUITE["dir"]
 
 
 def fetch() -> Path:
-    dest = act_root()
-    stamp = dest / ".surfcpu-fetched"
-    if stamp.exists() and stamp.read_text().strip() == SUITE["sha256"]:
-        return dest
-    dl = THIRD / "downloads" / f"{SUITE['dir']}.tar.gz"
-    dl.parent.mkdir(parents=True, exist_ok=True)
-    if not dl.exists() or _sha256(dl) != SUITE["sha256"]:
-        print(f"rvarch: downloading riscv-arch-test {SUITE['version']} ({SUITE['url']})")
-        tmp = dl.with_suffix(".part")
-        with urllib.request.urlopen(SUITE["url"], timeout=300) as r, tmp.open("wb") as f:
-            shutil.copyfileobj(r, f)
-        got = _sha256(tmp)
-        if got != SUITE["sha256"]:
-            tmp.unlink()
-            raise SystemExit(f"rvarch: SHA-256 mismatch for {SUITE['url']}: got {got}, "
-                             f"pinned {SUITE['sha256']}. Not using it.")
-        tmp.rename(dl)
-    if dest.exists():
-        shutil.rmtree(dest)
-    print(f"rvarch: unpacking the parts used into {dest}")
-    top = SUITE["dir"] + "/"
-    keep = tuple(top + k for k in KEEP)
-    with tarfile.open(dl) as t:
-        members = [m for m in t.getmembers() if m.name.startswith(keep)]
-        t.extractall(THIRD, members=members, filter="data")
-    stamp.write_text(SUITE["sha256"] + "\n")
-    return dest
-
-
-def _sha256(p: Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    """riscv-arch-test at the pinned tag, the cpu track's way (tools/rvfetch.py), unpacking
+    only the parts used."""
+    archive = rvfetch.fetch(SUITE["url"], SUITE["sha256"],
+                            THIRD / "riscv-arch-test" / f"{SUITE['dir']}.tar.gz", "rvarch")
+    return rvfetch.unpack(archive, THIRD / "riscv-arch-test" / "src", KEEP)
 
 
 # --- selection --------------------------------------------------------------------------
@@ -403,7 +381,8 @@ def build_one(t: Test) -> dict:
             "sig_words": len(sig), "retirements": len(chk.records),
             "compare_trace": not timing,
             "note": (f"reads {timing}: judged by its self-check, not the trace"
-                     if timing else "")}
+                     if timing else ""),
+            "latency_sensitive": LATENCY_SENSITIVE.get(t.name, "")}
     done.write_text(json.dumps({"key": key, "entry": entry}) + "\n")
     return entry
 
