@@ -11,9 +11,9 @@ physical results are separate columns, so nothing claims more than happened.
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | pending | bitstreams ready; waiting for the board |
 | 4 DDR integration | bridge tests against a MIG model and LiteDRAM's controller, unbounded proofs ([evidence](evidence/ddr/)) | MIG recipe pending a Vivado host; LiteDRAM generated | pending | bridge done; board top wiring pending |
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | pending | software done on the host; RTL SoC and board pending |
-| 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | Yosys estimates | pending | RTL in simulation; review fixes in progress |
-| 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation; console scroll race being fixed |
-| 8 Persistent files | | | | later |
+| 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | pending | done in simulation (review findings fixed) |
+| 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | pending | done in simulation (the console race it found is fixed: audit C10) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`, on `make check`); under QEMU with the same driver: write errors, a card that stops answering, the card taken out after each block, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation; faults and a full volume on the RTL in progress |
 | 9 Reproducible standalone release | | | | later |
 
 ## Log
@@ -105,3 +105,19 @@ physical results are separate columns, so nothing claims more than happened.
   bramdiag or SurfBoot in the boot ROM: every flow check plus the board's netlist and ROM checks;
   the synthesized netlists reach `BRAMDIAG: PASS (203 checks)` and SurfBoot's DDR-absent stop in
   simulation. Expected UART transcripts for the owner are in BOARD.md section 12.
+
+### 2026-10-16: files on the card (milestone 8 in simulation)
+
+* os-3 (cd36aa0): SurfOS writes to the card. Every shell command that changes files syncs
+  before the prompt returns and fails when the card refused; `append`; `eject` keeps a volume
+  it could not write; the card-detect watch says when the card was taken out or put back.
+* Three shared kernel fixes (both kernels; x86 `test-all`, `unittest` and `test-usb` pass at
+  O0 and O2): a failed block write is kept for the next sync instead of dropped (audit B1),
+  `eject` no longer says "safe to remove" after losing writes (B2), and blocks reach the card in
+  an order that an interruption leaves repairable: data, FAT, directory entries, free count
+  (B3).
+* `test-os-persist` on `make check`: on the RTL system, mkdir, write, a 160 KiB copy, write
+  over, append, mv and rm, then eject; a second boot reads every file back with its CRC, and
+  `fsck.fat` finds the image clean. The port's own code got faster for it (CRC tables, word
+  copies, a tight SD data loop): 402 s of wall time became 145 s.
+* What FAT32 cannot make safe is written down for the owner in CARD.md section 8.

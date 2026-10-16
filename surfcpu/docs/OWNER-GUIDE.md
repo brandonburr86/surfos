@@ -18,6 +18,7 @@ Nothing in this guide has run on the Arty yet: those steps are marked **pending*
 | Step | State |
 |---|---|
 | CPU, SoC, SurfBoot and the SurfOS kernel | pass in simulation, including SurfBoot booting SurfOS from a card image on the RTL with the real CPU |
+| Files written by SurfOS | pass in simulation: written on the RTL system, ejected, read back after a second boot and by the Mac's tools; write errors and a card taken out tested under QEMU |
 | Bitstreams | built on this Mac with the open-source flow, for both boards: the milestone 1 design, and the full SoC with the CPU diagnostics or SurfBoot in its boot ROM (no DDR controller yet). Every flow check passes, and their synthesized netlists run the same programs in simulation |
 | DDR memory on the board | the bridge is done; the memory controller in the bitstream is a later step, so booting SurfOS on the board waits for it |
 | The board itself | nothing has been connected or programmed yet |
@@ -313,6 +314,53 @@ SURF ~#>
 The same console appears on the VGA monitor (640x480 at 60 Hz), and the PS/2 keyboard types
 into it. The card stays read-only in SurfOS until the write path has been tried on your card
 (`sd=rw` on the kernel command line, `/BOOT/CMDLINE.TXT`).
+
+### Writing files from SurfOS (milestone 8) **pending: needs the DDR design**
+
+CARD.md section 8 has the details and what FAT32 cannot make safe. In short:
+
+1. Allow writing (on the Mac, card mounted):
+   `make -C surfcpu deploy-sd MOUNT=/Volumes/SURFOS DEPLOY_ARGS="--cmdline sd=rw"`.
+2. Boot, then work in `/sd0p1/USERS/DOCUMENTS`. Every command that changes files puts it on
+   the card before the prompt returns; a refused write makes the command fail with
+   `... not all of it reached /sd0p1: I/O error`, and `sync` tries again.
+3. **Always `eject sd0` before taking the card out or switching off**, and wait for
+   `sd0: safe to remove`.
+
+Expected, from simulation (the RTL system, with a card image made on the Mac):
+
+```
+SURF ~#> cd /sd0p1/USERS/DOCUMENTS
+sd0p1 > USERS > DOCUMENTS ~#> mkdir Saved-notes
+sd0p1 > USERS > DOCUMENTS ~#> write Saved-notes/note.txt Written on the RTL by SurfOS.
+sd0p1 > USERS > DOCUMENTS ~#> cp DATA.BIN Saved-notes/Big-copy.bin
+    163840 bytes copied
+sd0p1 > USERS > DOCUMENTS ~#> append LOG.TXT second line, appended by SurfOS
+sd0p1 > USERS > DOCUMENTS ~#> cd /
+SURF ~#> eject sd0
+    /sd0p1 unmounted
+    sd0: safe to remove
+```
+
+After a second boot, `crc32 Big-copy.bin` in that folder printed `081761ac   163840  Big-copy.bin`.
+
+**The board test for milestone 8** (the brief's exit evidence), once SurfOS boots on the board.
+The Mac's `crc32` command prints the same CRC-32 as SurfOS's `crc32`:
+
+1. On the Mac, make a file on the card and note its CRC:
+   `printf 'made on the Mac\n' > /Volumes/SURFOS/USERS/DOCUMENTS/MAC.TXT`, then
+   `crc32 /Volumes/SURFOS/USERS/DOCUMENTS/MAC.TXT`. Eject: `diskutil eject /Volumes/SURFOS`.
+2. On the board: `crc32 /sd0p1/USERS/DOCUMENTS/MAC.TXT` gives the same CRC (a file made on
+   the Mac, read on the board).
+3. Make and change files (`write`, `append`, `cp`) and note their `crc32`. Then `eject sd0`,
+   switch the board off and on, and boot again: the same CRCs (persistence through a power
+   cycle after a clean eject).
+4. `eject sd0` again and take the card to the Mac: `crc32` of each file there gives the same
+   CRCs (the Mac reads matching bytes).
+5. Install a new kernel with `deploy-sd` (section 7): the files in `/USERS/DOCUMENTS` keep
+   their CRCs (a kernel update leaves your files alone).
+
+Send me the CRCs from each step, or the transcripts.
 
 ## 9. Recovery
 
