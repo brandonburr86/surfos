@@ -148,29 +148,79 @@ set drc_bad [get_drc_violations -quiet -filter {SEVERITY == "Error" || SEVERITY 
 result drc_errors [llength $drc_bad]
 if {[llength $drc_bad] > 0} { lappend problems "[llength $drc_bad] DRC errors or critical warnings (drc.rpt)" }
 
-# check_timing: every "There are N ..." line with N > 0 is a problem, except input or output
-# ports without a delay that carry a deliberate false path (the asynchronous I/O of the
-# timing XDC files, docs/BOARD.md section 4).
+# The two reports below are read as text, so they are read fail-closed: a section, header or
+# line the parser expects but cannot find fails the build, and a changed wording can never
+# read as "no findings".
+#
+# check_timing: the report has a section "N. checking <name> (count)" for each of the twelve
+# checks UG835 lists for check_timing; each section must be there and hold at least one
+# "There is/are N ..." line, and every such line must carry its number. A line with N > 0 is
+# a problem, except input or output ports without a delay that carry a deliberate false path
+# (the asynchronous I/O of the timing XDC files, docs/BOARD.md section 4).
 set ct [read_file [file join $rptdir check_timing.rpt]]
+set ct_checks {no_clock constant_clock pulse_width_clock unconstrained_internal_endpoints
+               no_input_delay no_output_delay multiple_clock generated_clocks loops
+               partial_input_delay partial_output_delay latch_loops}
 set ct_issues 0
+set ct_format [list]
+set section ""
 foreach line [split $ct "\n"] {
-    if {[regexp {There (?:is|are) ([0-9]+) } $line -> n] && $n > 0 && ![string match "*false path*" $line]} {
-        incr ct_issues
-        puts "surfcpu-build: check_timing: [string trim $line]"
+    if {[regexp {^\s*[0-9]+\.\s+checking\s+([A-Za-z_]+)} $line -> name]} {
+        set section $name
+        set ct_lines($name) 0
+        continue
+    }
+    if {![regexp -nocase {\mthere\s+(is|are|were|was)\M} $line]} { continue }
+    if {$section eq ""} {
+        lappend ct_format "a finding before the first section: [string trim $line]"
+    } elseif {![regexp {There (?:is|are) ([0-9]+) } $line -> n]} {
+        lappend ct_format "a line without its number: [string trim $line]"
+    } else {
+        incr ct_lines($section)
+        if {$n > 0 && ![string match "*false path*" $line]} {
+            incr ct_issues
+            puts "surfcpu-build: check_timing: [string trim $line]"
+        }
+    }
+}
+foreach c $ct_checks {
+    if {![info exists ct_lines($c)]} {
+        lappend ct_format "no section 'checking $c'"
+    } elseif {$ct_lines($c) == 0} {
+        lappend ct_format "section 'checking $c' has no 'There are N' line"
     }
 }
 result check_timing_issues $ct_issues
+if {[llength $ct_format] > 0} {
+    foreach f $ct_format { puts "surfcpu-build: check_timing.rpt format: $f" }
+    lappend problems "check_timing.rpt is not in the expected format ([lindex $ct_format 0]): not read as clean"
+}
 if {$ct_issues > 0} { lappend problems "check_timing found unconstrained or ambiguous timing (check_timing.rpt)" }
 
+# report_cdc: its summary table (Severity, ID, Count, Description) must be there. Every row
+# that starts with the severity Critical, in any letter case, is a finding: its count when the
+# row reads "Critical CDC-n count", else 1.
 set cdc [read_file [file join $rptdir cdc.rpt]]
 set cdc_critical 0
+set cdc_header 0
 foreach line [split $cdc "\n"] {
-    if {[regexp {^\s*\|?\s*Critical\s*\|?\s*(CDC-[0-9]+)\s*\|?\s*([0-9]+)} $line -> id n]} {
-        incr cdc_critical $n
-        puts "surfcpu-build: report_cdc: $n critical $id"
+    if {[regexp -nocase {^\s*\|?\s*Severity\s*\|?\s*ID\s*\|?\s*Count\M} $line]} {
+        set cdc_header 1
+    } elseif {[regexp -nocase {^\s*\|?\s*Critical\M} $line]} {
+        if {[regexp -nocase {^\s*\|?\s*Critical\s*\|?\s*(CDC-[0-9]+)\s*\|?\s*([0-9]+)} $line -> id n]} {
+            incr cdc_critical $n
+            puts "surfcpu-build: report_cdc: $n critical $id"
+        } else {
+            incr cdc_critical
+            puts "surfcpu-build: report_cdc: a critical row: [string trim $line]"
+        }
     }
 }
 result cdc_critical $cdc_critical
+if {!$cdc_header} {
+    puts "surfcpu-build: cdc.rpt format: no summary table (Severity ID Count)"
+    lappend problems "cdc.rpt is not in the expected format (no summary table): not read as clean"
+}
 if {$cdc_critical > 0} { lappend problems "$cdc_critical critical CDC findings (cdc.rpt)" }
 
 set crit [get_msg_config -count -severity {CRITICAL WARNING}]

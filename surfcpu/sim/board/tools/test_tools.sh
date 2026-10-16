@@ -165,7 +165,11 @@ printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n
 
 # ------------------------------------------------------------------------------ failing checks stop the bitstream
 for case in "FAKE_WNS=-0.250:setup timing" "FAKE_WHS=-0.010:hold timing" "FAKE_DRC=2:DRC errors" \
-            "FAKE_CRIT=3:critical warnings" "FAKE_CDC=1:critical CDC" "FAKE_NO_INPUT_DELAY=4:check_timing"; do
+            "FAKE_CRIT=3:critical warnings" "FAKE_CDC=1:critical CDC" "FAKE_NO_INPUT_DELAY=4:check_timing" \
+            "FAKE_CT_FORMAT=renamed:no section 'checking no_input_delay'" \
+            "FAKE_CT_FORMAT=wording:a line without its number" \
+            "FAKE_CDC_FORMAT=noheader:cdc.rpt is not in the expected format" \
+            "FAKE_CDC_FORMAT=caps:2 critical CDC findings"; do
     setting=${case%%:*}
     why=${case#*:}
     run env "$setting" tools/fpga-build.sh --design arty_a7_baseline arty_a7_100t

@@ -295,7 +295,12 @@ hierarchical), DRC, clock interaction, CDC, methodology, clocks, I/O, exceptions
 `check_timing`. It writes the bitstream only if: setup and hold slack are not negative; no DRC
 error or critical warning; no critical CDC finding; no `check_timing` finding other than the
 deliberate false-path I/O; and no critical warning anywhere in the run. Nothing is waived; a
-failed check fails the build with the reason.
+failed check fails the build with the reason. The two reports it reads as text are read
+fail-closed: `check_timing.rpt` must have a section for each of the twelve checks UG835 lists
+for `check_timing` (`no_clock` to `latch_loops`), each with its "There is/are N ..." lines,
+and `cdc.rpt` its summary table (Severity, ID, Count); a missing section, header or number
+fails the build rather than reading as "no findings", and a row starting with Critical counts
+in any letter case.
 
 **The manifest** `build/fpga/<board>/<design>/manifest.txt` (TOML): run id, design, top,
 board, part, flow, build host alias, Vivado binary, source revision and dirty state, build ID
@@ -307,8 +312,8 @@ LUT/FF/BRAM/DSP/BUFG/MMCM/PLL/IO use, DRC errors, critical warnings, critical CD
 
 **To confirm on the first real Vivado run** (none of this can be run here):
 the generic syntax (`-generic BOARD="arty_a7_100t"`, `-generic BUILD_ID=32'h...`); the names
-`build.tcl` reads from Vivado's reports (`check_timing`'s "There are N ..." lines, the CDC
-summary's "Critical" rows, the utilization rows); that renaming the derived clocks with
+`build.tcl` reads from Vivado's reports (`check_timing`'s section titles and "There are N ..."
+lines, the CDC summary's header and "Critical" rows, the utilization rows); that renaming the derived clocks with
 `create_generated_clock -name` finds `u_clocks/u_sys_pll/CLKOUT0` after synthesis (the
 PLLE2_BASE becomes a PLLE2_ADV); that the scoped CDC files see the derived clocks; and how
 Vivado's CDC report classifies `surf_cdc_word`'s data bus (an enable-controlled capture after a

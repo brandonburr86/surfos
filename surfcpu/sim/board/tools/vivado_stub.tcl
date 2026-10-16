@@ -8,6 +8,10 @@
 #   FAKE_CRIT               number of critical warnings (default 0)
 #   FAKE_CDC                number of critical CDC findings (default 0)
 #   FAKE_NO_INPUT_DELAY     ports with no input delay and no false path (default 0)
+#   FAKE_CT_FORMAT          renamed: a check_timing section under another name; wording: a
+#                           section whose finding is worded differently ("There were ...")
+#   FAKE_CDC_FORMAT         noheader: report_cdc without its summary table header;
+#                           caps: a critical row written "CRITICAL" with its count
 # Run as: yosys -c vivado_stub.tcl, with FAKE_SOURCE (build.tcl) and FAKE_TCLARGS (params.tcl).
 # This is a test aid: it proves the script's logic, not Vivado's behaviour.
 
@@ -82,9 +86,12 @@ proc report_clock_interaction {args} { log_call report_clock_interaction {*}$arg
 proc report_cdc {args} {
     log_call report_cdc {*}$args
     set n [env_or FAKE_CDC 0]
-    set text "| Severity | ID | Count | Description |\n"
+    set fmt [env_or FAKE_CDC_FORMAT ""]
+    set text "CDC Report\n\n"
+    if {$fmt ne "noheader"} { append text "| Severity | ID | Count | Description |\n" }
     append text "| Info | CDC-15 | 1 | Clock enable controlled CDC structure detected |\n"
     if {$n > 0} { append text "| Critical | CDC-1 | $n | 1-bit unknown CDC circuitry |\n" }
+    if {$fmt eq "caps"} { append text "CRITICAL  CDC-4  2  Multi-bit unknown CDC circuitry\n" }
     write_text [opt_value $args -file] $text
 }
 proc report_methodology {args} { log_call report_methodology {*}$args; write_text [opt_value $args -file] "fake\n" }
@@ -95,10 +102,35 @@ proc report_power {args} { log_call report_power {*}$args; write_text [opt_value
 proc check_timing {args} {
     log_call check_timing {*}$args
     set n [env_or FAKE_NO_INPUT_DELAY 0]
-    set text "1. checking no_clock (0)\n  There are 0 register/latch pins with no clock.\n"
-    append text "  There are 0 unconstrained internal endpoints.\n"
-    append text "  There are 11 input ports with no input delay but user has a false path constraint. (MEDIUM)\n"
-    append text "  There are $n input ports with no input delay specified. (HIGH)\n"
+    set fmt [env_or FAKE_CT_FORMAT ""]
+    # the twelve sections of Vivado's check_timing report, in its order
+    set sections {
+        no_clock {There are 0 register/latch pins with no clock.}
+        constant_clock {There are 0 register/latch pins with constant_clock.}
+        pulse_width_clock {There are 0 register/latch pins which need pulse_width check}
+        unconstrained_internal_endpoints {There are 0 pins that are not constrained for maximum delay.}
+        no_input_delay {There are N input ports with no input delay specified. (HIGH)}
+        no_output_delay {There are 0 ports with no output delay specified. (HIGH)}
+        multiple_clock {There are 0 register/latch pins with multiple clocks.}
+        generated_clocks {There are 0 generated clocks that are not connected to a clock source.}
+        loops {There are 0 combinational loops in the design.}
+        partial_input_delay {There are 0 input ports with partial input delay specified.}
+        partial_output_delay {There are 0 ports with partial output delay specified.}
+        latch_loops {There are 0 combinational latch loops in the design through latch input}
+    }
+    set text "Timing Report\n\n"
+    set i 0
+    foreach {name finding} $sections {
+        incr i
+        if {$fmt eq "renamed" && $name eq "no_input_delay"} { set name no_input_delays }
+        set finding [string map [list N $n] $finding]
+        if {$fmt eq "wording" && $name eq "no_output_delay"} { set finding "There were 3 ports with no output delay specified. (HIGH)" }
+        append text "$i. checking $name (0)\n[string repeat - 30]\n $finding\n"
+        if {$name eq "no_input_delay"} {
+            append text " There are 11 input ports with no input delay but user has a false path constraint. (MEDIUM)\n"
+        }
+        append text "\n"
+    }
     write_text [opt_value $args -file] $text
 }
 proc get_timing_paths {args} { log_call get_timing_paths {*}$args; return [expr {"-hold" in $args ? "hold" : "setup"}] }
