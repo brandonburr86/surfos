@@ -121,3 +121,7 @@ physical results are separate columns, so nothing claims more than happened.
   `fsck.fat` finds the image clean. The port's own code got faster for it (CRC tables, word
   copies, a tight SD data loop): 402 s of wall time became 145 s.
 * What FAT32 cannot make safe is written down for the owner in CARD.md section 8.
+* Integrator's runs on the merged tree: `make check` passes (23 minutes). x86 `test-all`:
+  one TCP timing check failed once while the Mac was loaded by other builds (a burst spread over
+  411 ms against a limit of 100 ms; the change does not touch the network stack), and the full
+  run passed on the rerun (smoke 311 and files 51 at O0 and O2, that burst 1 ms).
