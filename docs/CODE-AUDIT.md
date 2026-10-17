@@ -118,9 +118,11 @@ Found by a review of B20-B26 (October 16, 2026, round fs-fix-4: scenarios R1-R6 
 with a census of lost clusters, on 15f0f3c; it confirmed B20-B24 and B25's frees, and B26 free of deadlock, in 1.4 M
 operations clean under AddressSanitizer and UndefinedBehaviorSanitizer) and fixed; every one is **verified** by
 `tests/host/test_fatfs.c` (R1-R5 under the IDs below, R6 as B22b, and scenarios of the fixes' own: B28c, B28d, B30b,
-B31b, B32), each failing on the code before the fixes but B22b (B22 held: the wording is now exact) and B30b (a mkdir
-that wrote nothing frees its cluster at once, as it did). The review's R3 also checked the documented loss of the ninth
-chain; nothing is lost there now. `surfcpu/docs/evidence/os/bcache-review.txt` section 18 has the numbers:
+B31b, B32, B33), each failing on the code before the fixes but B22b (B22 held: the wording is now exact) and B30b (a
+mkdir that wrote nothing frees its cluster at once, as it did). The review's R3 also checked the documented loss of the
+ninth chain; nothing is lost there now. B33 was found while looking into a watchdog of the review's threaded campaign
+(one run of 24; not seen again: bcache-review.txt section 21). `surfcpu/docs/evidence/os/bcache-review.txt` section 18
+has the numbers:
 
 | ID | Where | Problem | Fix |
 |---|---|---|---|
@@ -130,6 +132,7 @@ chain; nothing is lost there now. `surfcpu/docs/evidence/os/bcache-review.txt` s
 | B30 | `fs/fat.c` (`fat_create()`) | A mkdir that failed after writing its entry (ENOMEM) put the slot back and freed the new directory's cluster with no order point between; when another task's sync had written the entry meanwhile, the next sync wrote the FAT's free first (tables go before entries) and the card named a free cluster | when something of the name was written, the cluster waits with B25's chains (its blocks dropped): freed once a sync begun after the slot was put back has worked; a mkdir that wrote nothing of its name frees it at once, as before |
 | B31 | `fs/fat.c` (`pend_chain()`, `fat_unmount()`) | B25 kept 8 chains to free later and lost the ninth without a word (16 clusters lost until fsck) | 64 can wait; one more is said lost on the console (its blocks dropped all the same), and the unmount says how many clusters may be left so (allocated, nothing pointing at them, fsck.fat frees them) |
 | B32 | `fs/fat.c` (`aside_collect()`, `aside_begin()`, `aside_end()`) | Blocks set aside stayed so from the walk to the end of the chain's free, and another task's sync owes them (B26) and waits 10 s at most: an rm of a long chain whose failed block was near its end kept them aside longer, and the other sync gave up ("an operation that does not end") | collected first, set aside right before the order point, dropped or put back right after it |
+| B33 | `fs/bcache.c` (`write_copy()`, `wait_for()`) | A sync writing a block from a copy (B12) waited, with that block held open, for a block the copy needs written first that another task's operation had set aside (B26 makes that a hold to wait for); that operation's order point may owe the copied block and wait for the copy: each waited for the other, and after 10 s the copy was given up and the sync failed ("set aside for 10 s by an operation that does not end"). B28, which sets aside every dirty block of a chain an rm takes away, made it likelier | such a block ends the wait: the copy lets its block go and looks at it again from the start (a block set aside is nobody's dependency: nothing in the cache names it); a copy below the top whose own block was set aside says so to the copy above |
 
 
 Found and fixed by the USB boot work (milestone M7, October 2026), all of them harmless

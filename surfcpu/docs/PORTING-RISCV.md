@@ -411,7 +411,8 @@ B16 the refused blocks of the clusters such a command frees do not hold its orde
 refused or never tried, set aside for that order point only, B32; other refused blocks still do:
 an operation that needs an order point fails while they refuse, and B20: so does a `mv` onto
 that file, whose first order point must not write the replaced entry ahead of them; B26: another
-task's sync waits for them while they are set aside). Since B28 the bytes nobody will read (a
+task's sync waits for them while they are set aside, B33: but not one writing a block from a copy that
+needs one: it lets that block go and looks again). Since B28 the bytes nobody will read (a
 part cut off past the end of a write that stopped, a gap of zeros given up) are dropped, never
 written, and hold no order point or sync back while their clusters wait to be freed (only a
 block another task was writing at that moment is written as any other; an `rm` it fails in can
