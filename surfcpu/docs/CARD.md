@@ -247,11 +247,12 @@ part; later syncs say so at once.
 
 If a failed `mv`, `rm`, `mkdir` or truncation cannot be undone (the card refuses to read back,
 in the middle of putting things back, a block the command had changed; a block it could not read
-in the first place it never changed, and there is nothing to put back), SurfOS says `+FAT32: sd0p1: a rename that failed could not be undone
-(...): read-only until unmounted`, refuses every further change on that volume (`Read-only file
-system`), and leaves it marked as not cleanly unmounted: unmount it, and check the card on the
-Mac (Disk Utility, First Aid) before writing to it again (the file may be under two names, and
-deleting either would free the other's bytes).
+in the first place it never changed, and there is nothing to put back), SurfOS says
+`+FAT32: sd0p1: a rename that failed could not be undone (...): read-only until unmounted`,
+refuses every further change on that volume (`Read-only file system`), and leaves it marked as
+not cleanly unmounted: unmount it, and check the card on the Mac (Disk Utility, First Aid) before
+writing to it again (the file may be under two names, and deleting either would free the other's
+bytes).
 
 **Before taking the card out or switching off**, type `eject sd0` and wait for
 `sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
@@ -293,10 +294,10 @@ once it is). One narrow case is left: FAT12's entries that straddle two sectors 
 floppies, never a SurfOS card). A copy that stopped because the card began to refuse keeps
 its last clusters linked past its end until a sync works (pulled before that, they are space
 lost until a check frees it). SurfOS keeps up to 64 such runs of clusters waiting to be freed;
-one more (64 copies cut short while the card keeps refusing) it cannot free, and says so:
-`... cannot wait to be freed ...: lost until the volume is checked (fsck.fat)`, and again
-when the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`). A truncate cut short can also leave a file whose size runs past
-its clusters. But:
+a 65th (65 copies cut short while the card keeps refusing) it cannot free, and says so:
+`... cannot wait to be freed ...: lost until the volume is checked (fsck.fat)`, and again when
+the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`). A
+truncate cut short can also leave a file whose size runs past its clusters. But:
 
 * the file being written comes out either whole or not at all only if it is new: a file being
   overwritten (`write` over it, `cp` onto it) can be left empty, and one being appended to keeps
