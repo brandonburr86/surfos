@@ -463,14 +463,17 @@ static void spoil_copies(const struct buf *d) {
    aside spoiled the copies under way when it was set aside (baside()), and no copy taken since needs it: dropped,
    it spoils none (it took the copies of every rm, truncate and mv over a file again, and enough of them failed a
    sync on a card that took every write) */
-static void discard_now(struct buf *b) {
+static bool discard_one(struct buf *b) {         /* (true: dropped, the caller wakes the waiters) */
     if(!b->discard && b->dirty && !b->aside) spoil_copies(b);   /* (once, when its bytes became nobody's: B45 may */
     if(b->refs || b->loading || b->writing || b->copying) {      /* give the block a new owner before it is dropped) */
         b->discard = true;
-        return;
+        return false;
     }
     drop(b);
-    wake_up_all(&bwait);
+    return true;
+}
+static void discard_now(struct buf *b) {
+    if(discard_one(b)) wake_up_all(&bwait);
 }
 
 /* 10/17/26 (B39): is the calling task's call to end? A kill (TI_KILL) or, in a kernel command, Ctrl+C (TI_INT)
@@ -1341,11 +1344,13 @@ int bsync_order(struct bdev *dev, u8 top) {
    or its I/O ends (before, it stayed: dirty, it was written after its device's umount) */
 void binvalidate(struct bdev *dev) {
     int i;
+    bool dropped = false;
     lock();
     for(i = 0; i < BCACHE_BLOCKS; i++) {
         struct buf *b = &bufs[i];
-        if(b->dev == dev && (b->valid || b->hashed)) discard_now(b);
+        if(b->dev == dev && (b->valid || b->hashed) && discard_one(b)) dropped = true;
     }
+    if(dropped) wake_up_all(&bwait);            /* (once: a wake-up for each block cost SurfCPU's eject 5 %) */
     if(dev && dev->gone) dev->bc_said = false;
     unlock();
 }
