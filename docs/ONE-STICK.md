@@ -53,8 +53,9 @@ A build is two files that belong together, `surfos.bin` (the kernel) and `initrd
   ```
 
   `deploy` writes the build onto the stick SurfOS started from, ejects it and restarts
-  the laptop into it. With the USB Ethernet adapter the laptop comes back by itself; over
-  Wi-Fi it needs `wifi join` again after the restart.
+  the laptop into it. With the USB Ethernet adapter the laptop comes back by itself, and
+  over Wi-Fi too once the network is saved on the stick (`wifi save`:
+  [USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
 
 * **On the Mac:**
 
@@ -79,6 +80,10 @@ To make a development build that has proved itself the fallback too:
   SurfOS (`eject usb0`).
 * `tools/stick.py check /Volumes/<stick>` tells you what is on a stick, which builds
   they are, and whether SurfOS starts from it.
+* *Added 10/17/26:* the stick also keeps your settings and saved Wi-Fi networks, in its
+  `surfos-config` folder: `wifi save` while joined, `settings telnetd on` and the rest
+  ([USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
+  The saved network's key is in that folder: whoever has the stick can join your Wi-Fi.
 
 ## What to tell Claude after the first try on the laptop
 

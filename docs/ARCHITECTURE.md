@@ -616,8 +616,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   16 sockets, partial writes, a persist timer, keepalive, no silly windows, and the
   connections of programs as descriptors (section 18).
 * **DHCP and DNS** (`dhcp.c`, `dns.c`): DISCOVER/OFFER/REQUEST/ACK on port 68 applies
-  address, netmask, router and DNS server (the lease is reported, not renewed); one A
-  query with name compression on the answer.
+  address, netmask, router and DNS server (the lease is kept per interface and renewed
+  since 10/17/26: section 19); one A query with name compression on the answer.
 * **Shell**: `ifconfig [if ip mask [gw] [dns]]`, `arp`, `ping <ip|name> [n]`, `dhcp`,
   `nslookup`, `tcpecho [port]` (a server task), `httpget <host> <port> [path]`,
   `netstat`. Under QEMU's user network the gateway is 10.0.2.2, DHCP gives 10.0.2.15,
@@ -1318,6 +1318,89 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   text. The window size follows NAWS, but no terminal type (TTYPE) is asked for: a session
   always speaks the console's ANSI subset. surfsh has no type-ahead (section 17), so a
   pasted block of several lines runs only its first line.
+
+## 19. The network manager and the settings on the stick (ai-dev, October 2026)
+
+The owner asked (2026-10-17) for the Wi-Fi network they join to be saved as a file, joined
+by itself at every start with DHCP after it, and for a settings file, telnet on at startup
+for one, kept on the USB stick SurfOS runs from and read at boot (`docs/USB-BOOT.md` section
+15; the brief is `docs/superpowers/plans/2026-10-17-network-manager.md`).
+
+```
+commands                 shell/settings.c (settings), shell/wifi.c (wifi save | saved | forget | connect), dhcp renew
+the manager              kernel/netman.c: the settings and the saved networks in RAM, the stick read and written,
+                         the netman thread (boot, Ethernet's DHCP, lease renewals, telnetd) and wifiman (the keeper)
+the files' text          net/netcfg.c: settings.conf edited line by line, networks.conf written anew, SSIDs quoted,
+                         the lease timers (pure, host-tested: tests/host/test_netcfg.c)
+what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_station(); net/dhcp.c leases per
+                         interface, dhcp_renew(), option 12; kernel/autonet.c for the development entry
+```
+
+* **Where.** GRUB's menu names the volume it was started from (`bootvol=`, section 16, "One
+  stick"); `driver/part.c` keeps it as `bdev_boot_vol()`: the one-stick volume, which may be
+  written (`bdev_boot_volume`), or a SURFOSUSB image, which is only read. Its folder
+  `surfos-config/` holds `settings.conf` and `networks.conf`. The volume is mounted only for
+  the moment a file is read or written, on `/.netman`, or used where the owner mounted it;
+  `stick_lock` keeps that to one at a time. Without `bootvol=` (QEMU's `-kernel`, the ISO)
+  nothing is read; the kernel word `settings=off` (the menu's entry "without the settings on
+  the stick") skips the reading.
+* **Writing.** Every change first reads the file from the stick, so nothing another
+  computer added is lost: `settings.conf` is edited one line at a time (the line of the key
+  changed in place with its comment, others setting it dropped, a commented-out `#key = value`
+  of the new file's template made the setting, or a line added), `networks.conf` is written
+  anew from the list read and changed. The text goes to `<name>.new`, which is synced,
+  renamed over the file (FAT's rename writes the new entry before it deletes the old) and
+  read back and compared; then the short mount goes (its unmount syncs the cache and the
+  stick's own).
+* **Keys, not passwords.** A saved WPA2 network holds its PSK, the PMK (PBKDF2 of the
+  password and the SSID). `wifi save` takes the one the station joined with
+  (`wlan_station(..., want_key)`: the station keeps it for its reconnects); `wifi save
+  <ssid>` asks the password with `shell_ask_secret()` and makes it at once. A password typed
+  into the file on another computer is made into the key when the file is read and is never
+  written back. Keys stay in RAM for the keeper; `netman_networks()` gives the commands
+  everything but the key, nothing logs one, and buffers that held one are wiped.
+* **At boot** (the `netman` thread on F1, started after `init_autonet()`): it waits up to 20
+  seconds for the volume (USB sticks are found during the boot; the laptop's take a few
+  seconds), reads both files (each line it does not understand said with its number, the
+  rest used) and sets the host name of DHCP requests (option 12). Then, every second:
+  Ethernet interfaces whose link came up get a lease when `ethernet = dhcp` (30 s, doubling
+  to 5 minutes, between tries without one; not while autonet runs), every lease is kept
+  (`netcfg_lease_step()`: at half its time `dhcp_renew()` asks the server that granted it,
+  ciaddr set and no server identifier, as RFC 2131 4.4.5 has it, at seven eighths any
+  server, with half the time left between tries; a NAK or the end drops the address,
+  `dhcp_drop()`), and `telnetd = on` starts `telnetd on [port]` as a process on F1 once an
+  interface has an address, or after 60 s without one. The kernel word `autonet` (GRUB's
+  development entry) still starts telnetd itself, on 23.
+* **The Wi-Fi keeper** (`wifiman`, when `wifi = on`, a network is saved and a Wi-Fi device
+  exists). It brings the card up, scans, and joins the first saved network heard in that
+  scan (the scan list keeps a network a minute: one gone silent must not be picked), then
+  a hidden one by a probe for its name, then asks for its address; a key the network
+  refuses (`-EACCES` from the 4-way handshake) is skipped for 10 minutes. Afterwards it reads
+  `wlan_station()` every second, a snapshot that makes no request (so no `wifi` command is
+  ever told the device is busy by it): while the station is up, joining or reconnecting it
+  does nothing but get an address for an association of its own whose address went; idle
+  after `wifi leave` or `wifi down` (`WLAN_IDLE_LEFT`) it stays out; when the station gives
+  up a network (`WLAN_IDLE_GAVE_UP`, after its five reconnects in 45 s) it looks for a saved
+  one every 30 s, every 2 minutes after 20 tries. An association is its own when the
+  station's `join_requests` count is the one its join left. `wifi connect` runs the same
+  connect on the command's console, under the same `connect_lock`.
+* **autonet** keeps its lines and its order for Ethernet. Its link search now looks at
+  Ethernet first and then at any interface, so a wlan0 the keeper joined counts (on the
+  laptop wlan0 registers before the USB adapter's eth0, and was never looked at); for such a
+  link it waits up to 30 s for the keeper's address instead of asking a second time.
+  `SYS_netinfo` gives the first interface that has an address when the default one (eth0)
+  has none, so telnetd's line names the address that answers.
+* **Tests.** `tests/host/test_netcfg.c` (the files' text, every SSID byte through the
+  quoting, the lease timers); in `make test` boots from a settings disk kept from boot to
+  boot (the boot word `settingsdisk=`): the hand-written file read, joined and leased with
+  nobody typing, saving, forgetting, a restart that joins the saved network and starts
+  telnetd, `wifi leave` left alone, the access point switched off (`wlansim off`, a test
+  command of the simulated chip) and the next saved network joined, `settings=off`, leases
+  of 8 s (`dhcplease=8`) renewed; the disk read on the host afterwards. `make test-usb`'s
+  `settings` scenario does it through GRUB's menu on a one-stick, under the laptop profile.
+* **Limits.** One Wi-Fi device; DHCP only (an address by hand is `ifconfig`, not a setting);
+  no per-network priorities beyond the file's order; settings are read at boot, so a stick
+  plugged in later is not read until the next start.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 
