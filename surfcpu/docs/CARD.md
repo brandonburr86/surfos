@@ -252,8 +252,8 @@ own writing out, fail on a card that takes every write: it waits until they paus
 another program holds, or for another program's write) ends the wait at once: the command fails
 with `I/O error`, and what it had not written stays in memory for the next `sync`; one writing or
 reading a large piece stops at the next 64 KiB (it wrote what it says). One in the middle of the
-card's own write ends when that write does (a few seconds at most), and one in the middle of
-changing a folder or the FAT finishes that change first: stopped at once there, it left the card
+card's own write ends when that write does (a card that stops answering times out), and one in the
+middle of changing a folder or the FAT finishes that change first: stopped at once there, it left the card
 locked for every other program and SurfOS's records of its writes in a mess (since 2026-10-17). A
 program that is ending by itself still writes its files out.
 

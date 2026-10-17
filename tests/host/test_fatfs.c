@@ -2966,7 +2966,7 @@ static void b34(int mode) {
 static void b36(void) {
     struct ram *x = ram_new("b36", 8192);
     struct superblock *sb;
-    struct vnode *root, *d, *v;
+    struct vnode *root, *d;
     struct geo g;
     u8 *e;
     u32 dfirst, ext, i, per, used, reached;
