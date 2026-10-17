@@ -1,7 +1,11 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Eight rounds with x86 runs, newest first. Round fs-fix-4 (10/16/26) changes the x86 kernel on purpose: a review of
+Nine rounds with x86 runs, newest first. Round fs-fix-5 (10/17/26) changes the x86 kernel on purpose: a review of
+B27-B33 and its fixes (audit B34-B38: a copy is written only when nothing it needed was set aside or dropped since it
+was taken; a block that cannot be dropped then is dropped when let go or when its I/O ends; a cluster fat_alloc()
+gives back leaves no block owed; table points drop the waiting chains' blocks; lost clusters keep the volume unclean).
+Round fs-fix-4 (10/16/26) changes the x86 kernel on purpose: a review of
 B20-B26 and its fixes (audit B27-B33: an undo puts back only what it saved and changed, and makes the volume read-only
 only for a change made; every dirty block of a chain given up dropped or set aside for its order point only, never
 owed; a failed mkdir's cluster freed once its slot put back is on the disk; 64 chains wait to be freed, the 65th said;
@@ -21,6 +25,61 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-5, 10/17/26: the block cache and FAT after a review of B27-B33 (audit B34-B38)
+date: 2026-10-17 (local)
+tree: sc/fs-fix-5 (from surfcpu 42a45d4): the code final at 34a1f74 (5f13a6a and 34a1f74; after them tests, comments
+      and docs: 58b6aa2 adds the files' histories, comments only); the "was" blobs below are 42a45d4's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-fs5 (O0) and surfos-sc-fs5-o2 (O2), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B34-B38):
+  fs/bcache.c              blob c50f8995 (was 3cb07c82)  B34 copies recorded, spoiled by what they need leaving the
+                                                         lists unwritten, checked right before their write; B35 a
+                                                         block bdiscard() cannot drop then is dropped when let go or
+                                                         when its I/O ends
+  include/fs/bcache.h      blob 1a5be655 (was c6a67244)  struct buf's discard flag; what B34 and B35 change, said
+  fs/fat.c                 blob 93b9aeee (was 14f69bbf)  B36 a given-back cluster's blocks dropped, each block looked
+                                                         up without a list; B37 table points drop the waiting chains'
+                                                         blocks; B38 lost clusters keep the volume unclean; messages
+x86 only:
+  tests/host/test_fatfs.c  blob d55d022f (was 958e82c1)  the review's P1-P3 (B36, B34a/b, B38) and B36b, B37
+  tests/host/test_fatconc.c blob 86650f1a (was d6c0c3bb) each data block tagged with its file; the oracle checks that
+                                                         no named file shows another file's bytes
+  tests/host/test_fatfuzz.c blob 46bf94ad (was 500e90c7) the same
+Every run below was of sc/fs-fix-5 with a clean worktree (the devenv streams it into its volume), at the commit it names.
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs5): exit 0 at 1c495cb (00:21-00:35; the code final,
+      the tests and comments after it not used by test-all)
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks (selftest among them: the FAT checks, the concurrent writers, the RAM stick that
+                                     refuses writes)
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+  The telnet check that failed 2 of 7 O2 runs in round fs-fix-3 passed here too, while the review's threaded campaigns
+  ran on the Mac.
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs5, 00:35-00:42 at cbd9bd3): exit 0, no failures. FATFS 274 (the review's scenarios and the new
+    ones, bcache-review.txt section 25), FATFUZZ 4 runs, 0 with failures, CONC ok 4 times (both with the stale-data
+    tags, sections 27-28), and every other host test passing as in round fs-fix-4 (x86.txt there); python unittest OK
+    each.
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs5-o2, 00:49-00:55 at cbd9bd3): every host test the same, FATFS
+    274, FATFUZZ 4 runs with no failure, CONC ok 4 times, IWLFW 38 (the firmware files are in that volume); the run
+    exits 2 because two of tests/test_devenv.py's tests fail with O=2 in their environment, as in the rounds before
+    (`make O=2` hands O to them); this round changes neither tests/test_devenv.py nor devenv/.
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs5, after test-all and unittest: its test images
+      there; devenv/build-usb.sh O=0: the image's manifest says source cbd9bd3f35e9, not dirty; 00:42-00:48)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs5-o2, with devenv/build.sh O=2 images first for the
+      test disks the storage scenarios use; source cbd9bd3f35e9, not dirty; 00:48-01:01)
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+eject, mkfs, fdisk, the smoke test's concurrent FAT writers, selftest's RAM stick that refuses writes); what it fixes
+is shown by the host tests (section 2, under the x86 build's own flags) and where the same files run under the riscv32
+kernel (surfcpu/docs/evidence/os/bcache-review.txt, sections 25-31).
 
 ======================================================================================================================
 Round fs-fix-4, 10/16/26: the block cache and FAT after a review of B20-B26 (audit B27-B33)

@@ -412,10 +412,13 @@ refused or never tried, set aside for that order point only, B32; other refused 
 an operation that needs an order point fails while they refuse, and B20: so does a `mv` onto
 that file, whose first order point must not write the replaced entry ahead of them; B26: another
 task's sync waits for them while they are set aside, B33: but not one writing a block from a copy that
-needs one: it lets that block go and looks again). Since B28 the bytes nobody will read (a
-part cut off past the end of a write that stopped, a gap of zeros given up) are dropped, never
-written, and hold no order point or sync back while their clusters wait to be freed (only a
-block another task was writing at that moment is written as any other; an `rm` it fails in can
+needs one: it lets that block go and looks again; B34: and a copy is written only when nothing
+it needed was set aside or dropped since it was taken, else it is taken again). Since B28 the
+bytes nobody will read (a part cut off past the end of a write that stopped, a gap of zeros
+given up, B36: a folder's new cluster given back) are dropped, never written, and hold no order
+point, table point (B37) or sync back while their clusters wait to be freed (B35: one another
+task holds or is writing then is dropped when let go or when that write ends; only a block of an
+rm's own file that cannot be set aside then is written as any other, and an `rm` it fails in can
 say EIO once). Since B17 a `mv` that fails at any step changes nothing, none failing once the
 replaced file is freed. Since B24 an undo that cannot be done (a block it changed cannot be read
 back) makes the volume refuse every change (EROFS) until it is unmounted, says so, and leaves it
@@ -424,7 +427,7 @@ made). A write that fails leaves the file's size as it was (B23: a gap of zeros 
 included). Clusters given back while the card refused (B25: a cut-back's; B30: a failed mkdir's
 new folder, once something of its name was written) wait to be freed until a sync that began
 after them works; 64 such chains can wait (B31), one more is said lost on the console and again
-at unmount (fsck.fat frees it).
+at unmount (fsck.fat frees it), and the volume stays marked as not cleanly unmounted (B38).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
@@ -583,6 +586,16 @@ command is within 0.4 % either way. Two drafts cost more and were taken back: ea
 over a file looked over the cache's 1024 buffers twice, and an rm walked its file's whole chain for its
 own directory block (in the data area on FAT32: +0.5 million cycles, 9.7 %, on the full card's rm of a
 few thousand clusters) (bcache-review.txt section 24).
+
+Since audit B34-B38 (counted the same way, before = 42a45d4): every workload above sends the same
+requests and blocks, and the host's CPU time is the same within the noise of a loaded Mac
+(bcache-review.txt section 29). A copy under way (B12) keeps a record on its writer's stack, and
+setting aside or dropping a block looks at those records (none most of the time); struct buf's new
+flag fits in its padding. On SurfCPU (42a45d4's kernel against this one, the same simulator and ROM):
+test-os-persist's write run 0.21 % more cycles, its reboot run 0.24 %, test-os-faults' full card
+0.20 % and its refusing card 0.37 % fewer (the card-detect task meeting the removal one 200 ms look
+sooner; 0.11 % more without those steps); SurfBoot loads a package 1.1 KB larger (+0.13 million
+cycles), and each command is within 0.2 % (bcache-review.txt section 31).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by

@@ -198,6 +198,23 @@ is said lost on the console, until the volume is checked, and the unmount says h
 first, set aside right before it, dropped or put back right after. B16 kept them aside until the chain was
 freed; another task's sync owes them (B26) and waits for them, 10 s at most, and a long chain's free outlasted
 that (the sync said "an operation that does not end").
+
+10/16/26 (audit B36): B28's "every dirty block of a part given back is dropped" did not cover fat_alloc(): a
+folder growing whose new cluster's table point was refused gave the cluster back and left its dirty, failed
+zero blocks, and every later order point and sync failed while that sector of a free cluster refused. They
+are dropped now; fat_free_chain() and drop_chain() drop each block of the chain when there is no memory for
+the list of the device's dirty blocks; a mkdir whose new cluster's block cannot be read frees the cluster. A
+block in a task's hands or under I/O then is dropped when let go or when its I/O ends (fs/bcache.c, B35), so
+B28's exception remains for an rm's, truncate's or mv's own order point only: a block of its chain that cannot
+be set aside then is owed by it (an rm it fails in says EIO, nothing changed, and the next rm works).
+
+10/16/26 (audit B37): a table point drops the waiting chains' blocks first, as order points and syncs do; it
+owed one that could not be dropped when given up, and a file crossing into another FAT sector, a folder
+growing and mkdir failed while it refused.
+
+10/16/26 (audit B38): the unmount counts the clusters given back that could not be freed before it marks the
+volume; with any, the volume stays marked as not cleanly unmounted (as a damaged one, B24), so that the next
+mount says so and the next computer checks it. B31 marked it clean right after saying "check the volume".
 */
 
 #include <surfos/types.h>
@@ -506,6 +523,8 @@ static bool same_fat_sector(struct fat_fs *fs, u32 a, u32 b) {
     return oa / 512 == (oa + len - 1) / 512 && ob / 512 == (ob + len - 1) / 512 && oa / 512 == ob / 512;
 }
 
+static void drop_blocks(struct fat_fs *fs, u32 c);
+
 /* A free cluster, chained after prev (0: a new chain): prev + 1 when that is free, so files
    stay contiguous, else the first free one from the hint on. Only a directory's is zeroed: a
    file's bytes past its end are never read, and a gap is written as zeros (grow_zeros).
@@ -540,6 +559,7 @@ found:
     if(r == 0 && prev) r = fat_set(fs, prev, c);
     if(r) {
         fat_set(fs, c, 0);                                   /* c is free again (best effort) */
+        drop_blocks(fs, c);                                  /* 10/16/26 (B36): and its zeros nobody's */
         return r;
     }
     fs->next_free = c + 1;
@@ -564,8 +584,11 @@ static int fat_order_point(struct fat_fs *fs) {
 }
 
 /* 10/16/26 (B7): an order point for a new cluster: its zeros and its FAT entry (data and tables) on the
-   disk before the link to it; the entries wait for the next sync */
+   disk before the link to it; the entries wait for the next sync. 10/16/26 (B37): it owes none of the waiting
+   chains' blocks either (B28 dropped them before order points and syncs only: a table point owed one that could
+   not be dropped then, and a file crossing into another FAT sector or a folder growing failed while it refused) */
 static int fat_table_point(struct fat_fs *fs) {
+    if(fs->npending) drop_pending(fs);
     return bsync_order(fs->dev, BORDER_TABLE) ? -EIO : 0;
 }
 
@@ -612,17 +635,27 @@ static void drop_cluster(struct fat_fs *fs, u32 c, const u32 *l, u32 n) {
     for(i = first_at(l, n, lo); i < n && l[i] < lo + fs->spc; i++) bdiscard(fs->dev, l[i]);
 }
 
+/* 10/16/26 (B36): every block of cluster c is dropped where the cache has it dirty (bdiscard()): a cluster given
+   back with no list of the device's dirty blocks to look in (fat_alloc()'s, one cluster; or no memory for the list) */
+static void drop_blocks(struct fat_fs *fs, u32 c) {
+    u32 s;
+    if(c < 2 || c >= fs->nclusters + 2) return;
+    for(s = 0; s < fs->spc; s++) bdiscard(fs->dev, clus_lba(fs, c) + s);
+}
+
 /* the clusters of the chain from c on are free. 10/16/26 (B21): a chain that runs back into itself (a
    damaged volume) ends at the first cluster that is free already: each is counted once. 10/16/26 (B28): the
    dirty blocks of every cluster it frees are dropped, failed or not (B16 dropped the failed ones only) */
 static int fat_free_chain(struct fat_fs *fs, u32 c) {
     u32 n = 0, next, nl, *l = dirty_list(fs, &nl);
+    bool each = !l && bdirty_count(fs->dev);                 /* 10/16/26 (B36): no memory for the list */
     int r = 0;
     while(!is_eoc(fs, c) && n++ < fs->nclusters) {
         if(fat_get(fs, c, &next) != 0) { r = -EIO; break; }
         if(!next) break;                                     /* free already */
         if(fat_set(fs, c, 0) != 0) { r = -EIO; break; }
         if(nl) drop_cluster(fs, c, l, nl);
+        else if(each) drop_blocks(fs, c);
         if(c < fs->next_free) fs->next_free = c;
         if(fs->free != FREE_UNKNOWN) fs->free++;
         fs->fsinfo_dirty = true;
@@ -639,6 +672,14 @@ static int fat_free_chain(struct fat_fs *fs, u32 c) {
 static void drop_chain(struct fat_fs *fs, u32 c) {
     u32 nl, steps = 0, next, left, i, *l = dirty_list(fs, &nl);
     u8 *done = l ? (u8 *)(l + nl) : NULL;
+    if(!l && bdirty_count(fs->dev)) {                        /* 10/16/26 (B36): no memory for the list: each block */
+        while(c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
+            drop_blocks(fs, c);
+            if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) break;
+            c = next;
+        }
+        return;
+    }
     if(done) memset(done, 0, nl);
     left = nl - first_at(l, nl, fs->data_lba);
     while(left && c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
@@ -708,9 +749,8 @@ static void pend_chain(struct fat_fs *fs, u32 c) {
     }
     n = chain_length(fs, c);
     fs->lost_clusters += n;
-    kprintf("+FAT%i: %s: %lu cluster%s given back while the card refused writes cannot wait to be freed (%u wait"
-            " already): lost until the volume is checked (fsck.fat)\n", fs->type, fs->dev->name, (u_long)n,
-            n == 1 ? "" : "s", PENDING_MAX);
+    kprintf("+FAT%i: %s: %lu cluster%s given back cannot wait to be freed (%u wait already): lost until the volume"
+            " is checked (fsck.fat)\n", fs->type, fs->dev->name, (u_long)n, n == 1 ? "" : "s", PENDING_MAX);
 }
 
 /* 10/16/26 (B5): a directory slot's first byte before a change, to put back when the change cannot
@@ -1753,7 +1793,7 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
         r = fat_alloc(fs, 0, true, &first);
         if(r) goto out;
         b = bread(fs->dev, clus_lba(fs, first));
-        if(!b) { r = -EIO; goto out; }
+        if(!b) { fat_free_chain(fs, first); r = -EIO; goto out; }   /* 10/16/26 (B36): (it was lost, its zeros owed) */
         fat_now(&d, &t);
         p = b->data;
         memset(p, ' ', 11); p[0] = '.'; p[11] = ATTR_DIR;
@@ -2075,24 +2115,31 @@ static int fat_sync(struct superblock *sb) {
    (B24) a damaged volume stays marked as not cleanly unmounted */
 static int fat_unmount(struct superblock *sb) {
     struct fat_fs *fs = (struct fat_fs *)sb->priv;
-    u32 i, lost;
+    u32 i, lost = 0;
+    bool ok = false;
     if(fs->marked && !fs->dev->gone) {
-        bool ok = !fs->damaged;
+        ok = !fs->damaged;
         if(ok && fs->npending) {
             drop_pending(fs);                                /* 10/16/26 (B28) */
             ok = bsync(fs->dev) == 0;
             if(ok) free_pending(fs, fs->pend_added);
         }
-        if(ok && write_fsinfo(fs) == 0 && bsync(fs->dev) == 0 && fat_mark(fs, true) == 0 && bsync(fs->dev) == 0)
-            bdev_flush(fs->dev);
-        else kprintf("+FAT%i: %s: %s, the volume stays marked as not cleanly unmounted\n", fs->type, fs->dev->name,
-                     fs->damaged ? "damaged (an undo failed)" : "write errors");
     }
     /* 10/16/26 (B31): clusters given back that could not be freed: allocated, nothing pointing at them (those that
-       waited in vain may not have reached the card at all, or still hang off a file's chain there past its size) */
+       waited in vain may not have reached the card at all, or still hang off a file's chain there past its size).
+       10/16/26 (B38): counted first: a volume with such clusters stays marked as not cleanly unmounted, as a
+       damaged one does (B24), so that the next computer checks it (B31 marked it clean right after saying so) */
     for(lost = fs->lost_clusters, i = 0; i < fs->npending && !fs->dev->gone; i++) lost += chain_length(fs, fs->pending[i]);
-    if(lost) kprintf("+FAT%i: %s: %lu cluster%s given back while the card refused writes may stay allocated with"
-                     " nothing pointing at them: check the volume (fsck.fat frees them)\n", fs->type, fs->dev->name,
+    if(fs->marked && !fs->dev->gone) {
+        if(ok && write_fsinfo(fs) == 0 && bsync(fs->dev) == 0 && (lost || (fat_mark(fs, true) == 0 && bsync(fs->dev) == 0)))
+            bdev_flush(fs->dev);
+        else ok = false;
+        if(!ok || lost)
+            kprintf("+FAT%i: %s: %s, the volume stays marked as not cleanly unmounted\n", fs->type, fs->dev->name,
+                    fs->damaged ? "damaged (an undo failed)" : !ok ? "write errors" : "clusters lost (below)");
+    }
+    if(lost) kprintf("+FAT%i: %s: %lu cluster%s given back could not be freed and may stay allocated with nothing"
+                     " pointing at them: check the volume (fsck.fat frees them)\n", fs->type, fs->dev->name,
                      (u_long)lost, lost == 1 ? "" : "s");
     kfree(fs);
     return 0;

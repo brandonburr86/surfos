@@ -50,6 +50,8 @@ its clean copies of them (a dirty one keeps its bytes, the next sync's to write 
 B26: a block set aside is still the debt of other tasks' syncs (they wait for it as for a hold);
 each sync counts its own requests (B13). B28: bdirty_blocks() lists a device's dirty blocks.
 B33: a block written from a copy is let go when another task sets aside a block the copy needs.
+B34: a copy is written only when nothing it needed was set aside or dropped since it was taken.
+B35: a block bdiscard() could not drop then (held, under I/O) is dropped when let go or its I/O ends.
 */
 
 #ifndef _FS_BCACHE_H
@@ -76,6 +78,7 @@ struct buf {
     bool copying;                       /* 10/16/26 (B12): a copy of it is being written: other writes of it wait */
     bool aside;                         /* 10/16/26 (B16): set aside (baside()): not written, nobody's dependency */
     bool stuck;                         /* 10/16/26 (B18): a sync gave up on its present hold */
+    bool discard;                       /* 10/16/26 (B35): nobody's bytes: dropped when let go or its I/O ends */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */

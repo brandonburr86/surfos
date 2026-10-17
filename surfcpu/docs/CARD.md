@@ -237,11 +237,12 @@ file refuse, an `rm` of that file works (its unwritten bytes go with it, however
 before or not yet tried), but an `mv` onto that file, and `rm`, `mv`, `mkdir` and truncations
 of other files on the card, fail with `I/O error` until the card takes those blocks: they must
 not reach the card before bytes they might point at (to replace such a file, `rm` it first).
-Bytes nobody will read (past the end of a copy that stopped, a gap of zeros given up) are
-dropped, never written, and hold nothing back. The one exception: a block that another
-program's write or the cache was writing at that very moment is written like any other, so an
-`rm` whose file it belongs to can fail once with `I/O error` (nothing changed; the same `rm`
-then works). A `sync` waits about 10 seconds for a program that holds part of what it must
+Bytes nobody will read (past the end of a copy that stopped, a gap of zeros given up, the new
+cluster of a folder that could not grow) are dropped, never written, and hold nothing back; one
+that another program or the cache was writing at that very moment is dropped once that write
+ends (since 2026-10-17). The one exception: an `rm` of a file whose block another program or
+the cache was writing at that very moment can fail once with `I/O error` (nothing changed; the
+same `rm` then works). A `sync` waits about 10 seconds for a program that holds part of what it must
 write and does not let go (one killed in the middle of a write), then says `I/O error` for that
 part; later syncs say so at once.
 
@@ -290,14 +291,19 @@ refuses writes and reads at random (`tests/host/test_fatfuzz.c`), nor several ta
 real threads (`tests/host/test_fatconc.c`; since 2026-10-16 also with six writers on a small
 card, the setting in which a review found one such moment: a copy cut back while the card
 refused, its last clusters freed before its new end was on the card; fixed, they are freed
-once it is). One narrow case is left: FAT12's entries that straddle two sectors (FAT12 is for
+once it is). Since 2026-10-17 the last two also check, after every block written, that no file
+shows another file's bytes; a review had found, by a targeted test, a moment when a folder
+block could reach the card naming a file just deleted by another program over a block that
+file never wrote (fixed). One narrow case is left: FAT12's entries that straddle two sectors (FAT12 is for
 floppies, never a SurfOS card). A copy that stopped because the card began to refuse keeps
 its last clusters linked past its end until a sync works (pulled before that, they are space
 lost until a check frees it). SurfOS keeps up to 64 such runs of clusters waiting to be freed;
 a 65th (65 copies cut short while the card keeps refusing) it cannot free, and says so:
 `... cannot wait to be freed ...: lost until the volume is checked (fsck.fat)`, and again when
-the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`). A
-truncate cut short can also leave a file whose size runs past its clusters. But:
+the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`); the
+card is then left marked as not cleanly unmounted (since 2026-10-17), so the next mount, and
+the Mac, say it should be checked. A truncate cut short can also leave a file whose size runs
+past its clusters. But:
 
 * the file being written comes out either whole or not at all only if it is new: a file being
   overwritten (`write` over it, `cp` onto it) can be left empty, and one being appended to keeps
