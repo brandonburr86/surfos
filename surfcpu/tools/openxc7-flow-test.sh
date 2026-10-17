@@ -48,7 +48,7 @@ expect_in() {   # expect_in <what> <text> <pattern>...
 }
 o=$(dry --board arty_a7_35t)
 expect_in "build: the 35T is placed with the 50T die's database and checked as a 35T" "$o" \
-  "--device xc7a35tcsg324-1 --chipdb /opt/openxc7/share/chipdb/chipdb-xc7a50t.bin" \
+  "--device xc7a35tcsg324-1 --chipdb build/openxc7/chipdb/2026-10-15/chipdb-xc7a50t.bin" \
   "--expect-device xc7a35t" "--part_file /opt/openxc7/share/prjxray-db/artix7/xc7a35tcsg324-1/part.yaml" \
   "tileverilog --fasm build/openxc7/t-arty_a7_35t/t.fasm" "--device xc7a50t" "read_verilog a.v b.v" \
   "cmtcheck.py --json build/openxc7/t-arty_a7_35t/t.json" \
@@ -56,15 +56,19 @@ expect_in "build: the 35T is placed with the 50T die's database and checked as a
   "fasm2netlist --fasm build/openxc7/t-arty_a7_35t/t.decoded.fasm" "bramcheck.py --netlist"
 o=$(dry --board arty_a7_100t)
 expect_in "build: the 100T uses its own database" "$o" \
-  "--device xc7a100tcsg324-1 --chipdb /opt/openxc7/share/chipdb/chipdb-xc7a100t.bin" \
+  "--device xc7a100tcsg324-1 --chipdb build/openxc7/chipdb/2026-10-15/chipdb-xc7a100t.bin" \
   "--expect-device xc7a100t" "--device xc7a100t"
+expect_in "build: the chip database is the image's generator's without BUFGCTRL route-throughs, and the clock check reads the FASM for nets on the clock network" "$o" \
+  "chipdb-gen.py --xray /opt/openxc7/share/prjxray-db/artix7 --device xc7a100t" \
+  "bbasm -l /tmp/chipdb-xc7a100t.bba build/openxc7/chipdb/2026-10-15/chipdb-xc7a100t.bin" \
+  "gclkcheck.py --fasm build/openxc7/t-arty_a7_100t/t.fasm"
 o=$(dry --part xc7a50tcsg324-1 -D FOO=1 -DBAR -I inc --seed 7 --out build/x)
 expect_in "build: part, defines, includes, seed and output directory" "$o" \
   "read_verilog -DFOO=1 -DBAR -Iinc a.v b.v" "--seed 7" "--expect-device xc7a50t" "build/x/t.bit"
 o=$(dry --board arty_a7_35t --no-lvs)
 if printf '%s\n' "$o" | grep -q lvs_equiv; then bad "build: --no-lvs still runs LVS"; else ok "build: --no-lvs"; fi
 o=$(dry --board arty_a7_35t --no-check)
-if printf '%s\n' "$o" | grep -qE 'bitinfo|fasmcheck|lvs_equiv|cmtcheck|synthcheck|bramcheck'; then bad "build: --no-check still checks"; else ok "build: --no-check"; fi
+if printf '%s\n' "$o" | grep -qE 'bitinfo|fasmcheck|lvs_equiv|cmtcheck|gclkcheck|synthcheck|bramcheck'; then bad "build: --no-check still checks"; else ok "build: --no-check"; fi
 o=$(dry --board arty_a7_35t --dsp none)
 if printf '%s\n' "$o" | grep -q 'synth_xilinx .*-nodsp' && ! printf '%s\n' "$o" | grep -q multonly
 then ok "build: --dsp none synthesizes with -nodsp"; else bad "build: --dsp none"; fi

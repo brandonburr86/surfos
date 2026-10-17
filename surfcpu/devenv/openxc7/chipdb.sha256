@@ -1,0 +1,9 @@
+# SurfCPU open flow: the SHA-256 of the chip databases tools/openxc7-build.sh places and routes with:
+# the image's own nextpnr generator run by devenv/openxc7/chipdb-gen.py, without the 32 BUFGCTRL
+# route-through pips (docs/OPEN-FLOW.md 6.8). One line per database and image tag: the build
+# refuses a database whose SHA-256 is not listed here for its image, so a change of image or
+# generator shows up as a change to this file. (The image's own chipdb-xc7a100t.bin, which the
+# same script writes byte for byte with --keep-bufg-rt, is b4098ce6982235f4d1cf4295708751b0a73241cb22ca57d9183b9d5f6d4c57d9,
+# its chipdb-xc7a50t.bin ec876fe0eb87f977a4d5781c5ae9dc03fadc3072f83bd89d31346485b78bc760.)
+f9c21c6cfdfc24d140d4732fdecfb02c87af8308abe6921ae0d2a6678c9bee2f  chipdb-xc7a100t.bin  2026-10-15
+675f4833276ee263d7c4ee17692eee7a9a62cfbdd0c80a0115147c49f471a727  chipdb-xc7a50t.bin  2026-10-15
