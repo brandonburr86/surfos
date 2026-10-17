@@ -345,7 +345,9 @@ SMOKE = [
     ('@kcmd-echo', []),
     # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
     ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
-    ('selftest', ['SELFTEST PASS']),
+    # 10/17/26 (one stick): test_boot_volume must run here (bootvol= and rd1), not print its skip line
+    ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
+                  'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
     # error; $? in the ring-0 shell; 127 for no such command; a program's exit status through run

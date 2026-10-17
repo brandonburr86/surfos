@@ -391,7 +391,7 @@ static void test_boot_volume(void) {
     char v[16];
     u32 serial;
     u8 *save, *b;
-    int r1, r2, r3, rc;
+    int r1, r2, r3, r4, rc;
     if(!bootinfo_arg(&bootinfo, "bootvol=", v, sizeof(v)) || !part_parse_serial(v, &serial)) {
         printf("  skip boot volume check (no bootvol= on the command line)\n");
         return;
@@ -430,9 +430,14 @@ static void test_boot_volume(void) {
     p = bdev_find("rd1p1");
     check(rc == 0 && r2 == 1 && p && p->protect == bdev_boot_drive && bdev_mount_readonly(p),
           "with the label SURFOSUSB as well it is the image, only read");
-    rc = bdev_write(rd, 0, 1, save) | bdev_write(rd, 2048, 1, save + 512);
+    memcpy(b + 71, "DATASTICK  ", 11);                  /* no partition table: the volume is the disk itself */
+    rc = bdev_write(rd, 2048, 1, save + 512) | bdev_write(rd, 0, 1, b);
     r3 = bdev_rescan(rd);
-    check(rc == 0 && r3 >= 0 && !rd->protect && (!p || p->gone), "put back: not the boot drive; the old rd1p1 is gone");
+    check(rc == 0 && r3 == 0 && rd->protect == bdev_boot_volume && !bdev_mount_readonly(rd) &&
+          bdev_may_format(rd, NULL, 0) != 0, "with no partition table the disk itself is that volume: read-write, never formatted");
+    rc = bdev_write(rd, 0, 1, save);
+    r4 = bdev_rescan(rd);
+    check(rc == 0 && r4 >= 0 && !rd->protect && (!p || p->gone), "put back: not the boot drive; the old rd1p1 is gone");
     kfree(save);
     kfree(b);
 }

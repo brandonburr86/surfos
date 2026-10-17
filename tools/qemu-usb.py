@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test runs sixteen scenarios, each from a cold boot with fresh firmware variables:
+--test runs seventeen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -71,8 +71,13 @@ comes out of the framebuffer.
              GRUB's first entry boots the development build on that same stick, bootvol= names its
              volume; SurfOS calls it the boot drive (fdisk and mkfs refuse it) but mounts it
              read-write; devloop deploy writes onto it and the reboot runs that build; the menu's
-             "SurfOS" entry boots its build in boot/. Afterwards the boot files and the owner's
-             files are as they were, and fsck_msdos and fsck.fat find no error
+             "SurfOS" entry boots its build in boot/. The stick is laid out by tools/stick.py's own
+             install and update. Afterwards the boot files and the owner's files are as they were,
+             and fsck_msdos and fsck.fat find no error
+  twosticks  (10/17/26) two sticks at once, where GRUB's order and devloop.py's must agree: a
+             stick laid out as the flashed image (SURFOSUSB, no boot/ONE-STICK.txt) with a stale
+             surfos-dev beside a data stick boots the data stick's build; a stick made with
+             tools/stick.py beside a data stick boots its own, and devloop.py chooses it
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -1677,6 +1682,37 @@ ONE_NOTES = b'My notes, kept on the same stick as SurfOS.\n'
 ONE_WRITTEN = 'Written by SurfOS on the stick it was started from'
 
 
+def stick_folder(image):
+    """10/17/26: the stick folder beside the image (make usb-image and devenv/build-usb.sh write it), or None"""
+    kit = os.path.join(os.path.dirname(os.path.abspath(image)), 'stick')
+    return kit if os.path.isdir(kit) else None
+
+
+def written_by_stick_tool(kit, dev=None, skip=()):
+    """10/17/26: {path: bytes} of what tools/stick.py install writes from the stick folder onto an empty stick (here a
+    directory), then, with dev ({path: bytes} of surfos-dev/), what tools/stick.py update writes; paths in skip are
+    left out afterwards (a stick set up some other way)"""
+    import contextlib
+    import io
+    st = load_tool('stick', 'stick.py')
+    tmp = tempfile.mkdtemp(prefix='surfos-stickdir-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            st.write(tmp, st.load_kit(kit), st.INSTALL)
+            if dev:
+                st.write(tmp, dev, st.DEV)
+        out = {}
+        for top, _, names in os.walk(tmp):
+            for n in names:
+                rel = os.path.relpath(os.path.join(top, n), tmp).replace(os.sep, '/')
+                if rel not in skip:
+                    with open(os.path.join(top, n), 'rb') as f:
+                        out[rel] = f.read()
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def scenario_onestick(args, image, firmware, outdir):
     """10/17/26 (one stick, docs/USB-BOOT.md section 14): the owner's data stick with the boot files copied onto it
     (MBR, one FAT32 partition, 16 KB clusters, a label of its own, the owner's files), the only stick, beside a USB
@@ -1689,22 +1725,31 @@ def scenario_onestick(args, image, firmware, outdir):
     mk, dl, mi, qr = load_mkusb(), load_tool('devloop', 'devloop.py'), load_tool('mkimage', 'mkimage.py'), load_smoke_harness()
     with open(image, 'rb') as f:
         fat = mk.Fat32(f, mk.read_gpt(f, os.path.getsize(image) // 512)['first_lba'] * 512)
-        files = {rel: fat.read(img) for rel, img in mk.STICK_FILES.items()}
-    kit = os.path.join(os.path.dirname(os.path.abspath(image)), 'stick')
-    if os.path.isdir(kit):                      # the folder tools/stick.py copies, when the build made one here
-        def kit_file(rel):
-            try:
-                with open(os.path.join(kit, *rel.split('/')), 'rb') as f:
-                    return f.read()
-            except OSError:
-                return None
-        results.append(('the stick folder beside the image holds exactly the image\'s files',
-                        all(kit_file(rel) == data for rel, data in files.items())))
-    boot_id = dl.build_id_of(files['boot/initrd.tar'])
+        image_files = {rel: fat.read(img) for rel, img in mk.STICK_FILES.items()}
+    kit = stick_folder(image)                   # what tools/stick.py copies onto a stick
+    results.append(('the stick folder is beside the image (make usb-image writes it)', kit is not None))
+    if not kit:
+        return results
+
+    def kit_file(rel):
+        try:
+            with open(os.path.join(kit, *rel.split('/')), 'rb') as f:
+                return f.read()
+        except OSError:
+            return None
+    results.append(('the stick folder holds the image\'s files, and ' + mk.STICK_MARKER,
+                    all(kit_file(rel) == data for rel, data in image_files.items())
+                    and kit_file(mk.STICK_MARKER) == mk.STICK_NOTE.encode()))
+    boot_id = dl.build_id_of(image_files['boot/initrd.tar'])
     stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     dev_id, pushed_id = 'onestick-dev ' + stamp, 'onestick-push ' + stamp
-    files['surfos-dev/initrd.tar'] = with_build_id(files['surfos-dev/initrd.tar'], dev_id)
-    kernel, pushed = files['surfos-dev/surfos.bin'], with_build_id(files['surfos-dev/initrd.tar'], pushed_id)
+    kernel = image_files['surfos-dev/surfos.bin']
+    dev_initrd = with_build_id(image_files['surfos-dev/initrd.tar'], dev_id)
+    pushed = with_build_id(dev_initrd, pushed_id)
+    # the stick as tools/stick.py leaves it: install from the stick folder, then update with a development build
+    files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': dev_initrd, 'surfos-dev/surfos.bin': kernel})
+    results.append(('tools/stick.py install and update write the stick folder\'s files and the development build',
+                    sorted(files) == sorted(mk.stick_paths()) and files['surfos-dev/initrd.tar'] == dev_initrd))
     mine = {'My Files/notes.txt': ONE_NOTES, 'My Files/photo.raw': os.urandom(300000)}
     tmpd = tempfile.mkdtemp(prefix='surfos-onestick-', dir='/tmp' if os.path.isdir('/tmp') else None)
     stick = os.path.join(tmpd, 'onestick.img')
@@ -1818,6 +1863,94 @@ def scenario_onestick(args, image, firmware, outdir):
     return results
 
 
+def scenario_twosticks(args, image, firmware, outdir):
+    """10/17/26 (one stick): two sticks at once, where GRUB's order and tools/devloop.py's must agree. (1) A stick laid
+    out as the flashed image is (label SURFOSUSB, no boot/ONE-STICK.txt) with a stale surfos-dev of its own, beside a
+    data stick: GRUB starts the data stick's build, SurfOS only reads the image, devloop.py would deploy to the data
+    stick. (2) A stick made with tools/stick.py beside a data stick: GRUB starts the stick's own build, its volume is
+    the writable boot drive, devloop.py deploys there and refuses --stick naming the data stick"""
+    results = []
+    mk, dl, mi = load_mkusb(), load_tool('devloop', 'devloop.py'), load_tool('mkimage', 'mkimage.py')
+    kit = stick_folder(image)
+    results.append(('the stick folder is beside the image (make usb-image writes it)', kit is not None))
+    if not kit:
+        return results
+    with open(image, 'rb') as f:
+        fat = mk.Fat32(f, mk.read_gpt(f, os.path.getsize(image) // 512)['first_lba'] * 512)
+        kernel, initrd = fat.read('/boot/surfos.bin'), fat.read('/boot/initrd.tar')
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    ids = {k: f'twosticks-{k} {stamp}' for k in ('stale', 'data', 'own')}
+    tmpd = tempfile.mkdtemp(prefix='surfos-twosticks-', dir='/tmp' if os.path.isdir('/tmp') else None)
+
+    def choice(vm):
+        """what lsblk shows and what devloop.py makes of it: (rows, the chosen disk and device, or the error)"""
+        ok, out = run_cmd(vm, 'lsblk', ['NAME'])
+        rows = dl.parse_lsblk(dl.clean(out.encode())) if ok else []
+        try:
+            return rows, dl.data_stick(rows), None
+        except dl.DevloopError as e:
+            return rows, None, str(e)
+
+    try:
+        data = os.path.join(tmpd, 'data.img')
+        mi.make_devstick(data, kernel, with_build_id(initrd, ids['data']))
+        # (1) the flashed image's label and files, without the marker, and a surfos-dev nothing will ever update
+        flashed = os.path.join(tmpd, 'flashed.img')
+        files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': with_build_id(initrd, ids['stale']),
+                                            'surfos-dev/surfos.bin': kernel}, skip=(mk.STICK_MARKER,))
+        mi.make_fat32(flashed, files, size_mb=600, label='SURFOSUSB')
+        vm = Vm('twosticks-image', args, flashed, firmware, mem='512', serial=True,
+                outdir=outdir and os.path.join(outdir, 'image'), extra=data_stick_args(data), copy_image=False)
+        if outdir:
+            os.makedirs(os.path.join(outdir, 'image'), exist_ok=True)
+        try:
+            ok = vm.expect('*' + DEV_TITLE, args.boot_timeout) and vm.expect(PROMPT, args.boot_timeout)
+            results.append(('beside the flashed image, GRUB starts the data stick\'s build, never the image\'s own '
+                            'surfos-dev', ok and ONE_TITLE not in vm.text()))
+            if ok:
+                results.append(('that build runs', run_cmd(vm, 'cat /initrd/etc/build-id', [ids['data']])[0]))
+                rows, chosen, err = choice(vm)
+                image_rows = [r for r in rows if r['bus'] == 'usb' and r['status'] == 'boot drive: protected']
+                results.append(('the image is the read-only boot drive, its disk and its partition', len(image_rows) == 2))
+                results.append(('devloop.py would deploy to the data stick', chosen is not None
+                                and 'boot drive' not in chosen[0]['status'] and chosen[1]['type'].startswith('part mbr FAT')))
+            check_bad(vm, results, vm.text())
+        finally:
+            vm.close()
+        # (2) a stick made with tools/stick.py, with its own development build, beside the same data stick
+        own = os.path.join(tmpd, 'own.img')
+        files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': with_build_id(initrd, ids['own']),
+                                            'surfos-dev/surfos.bin': kernel})
+        mi.make_fat32(own, files, size_mb=1100, label='DATASTICK', cluster_bytes=16384)
+        vm = Vm('twosticks-one', args, own, firmware, mem='512', serial=True,
+                outdir=outdir and os.path.join(outdir, 'one'), extra=data_stick_args(data), copy_image=False)
+        if outdir:
+            os.makedirs(os.path.join(outdir, 'one'), exist_ok=True)
+        try:
+            ok = vm.expect('*' + ONE_TITLE, args.boot_timeout) and vm.expect(PROMPT, args.boot_timeout)
+            results.append(('beside a data stick, GRUB starts the build on the stick it was started from',
+                            ok and DEV_TITLE not in vm.text()))
+            if ok:
+                results.append(('that build runs', run_cmd(vm, 'cat /initrd/etc/build-id', [ids['own']])[0]))
+                rows, chosen, err = choice(vm)
+                results.append(('devloop.py would deploy to that stick\'s volume (boot drive: writable)',
+                                chosen is not None and chosen[1]['status'] == 'boot drive: writable'))
+                others = [r['name'] for r in rows if not r['part'] and r['bus'] == 'usb'
+                          and chosen and r['name'] != chosen[0]['name']]
+                try:
+                    dl.data_stick(rows, others[0] if others else 'none')
+                    refused = ''
+                except dl.DevloopError as e:
+                    refused = str(e)
+                results.append(('and refuses --stick naming the data stick', bool(others) and 'without --stick' in refused))
+            check_bad(vm, results, vm.text())
+        finally:
+            vm.close()
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 def scenario_missing(args, image, firmware, outdir, path, message):
     """a stick that lost a file must stop with a message saying so, not a blank screen or a hang"""
     results = []
@@ -1847,7 +1980,7 @@ SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd':
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
-             'devloop': scenario_devloop, 'onestick': scenario_onestick,
+             'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -1951,7 +2084,7 @@ def main():
                'scenarios': {}}
     failed = 0
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
-                               'usbdisk', 'storage', 'devloop', 'onestick', 'no-initrd', 'no-kernel']:
+                               'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)

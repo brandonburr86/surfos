@@ -20,7 +20,8 @@ The image is a whole disk, written to a USB drive with a raw-image writer:
 10/17/26 (one stick, docs/USB-BOOT.md section 14): with --stick-dir the same files are also
 written as a folder, to copy onto a FAT32 stick instead of writing the image (tools/stick.py
 does it, or Finder): the six files above at their paths, plus /surfos-dev/surfos.bin and
-/surfos-dev/initrd.tar, the development build GRUB's first entry boots, here the same build.
+/surfos-dev/initrd.tar, the development build GRUB's first entry boots, here the same build,
+and /boot/ONE-STICK.txt, without which GRUB does not look for that build on its own partition.
 The folder is replaced as a whole; an existing one that holds anything else (except Finder's
 .DS_Store) or is a mounted volume is refused, so a wrong path never empties a stick.
 
@@ -75,6 +76,19 @@ STICK_FILES = {'EFI/BOOT/BOOTX64.EFI': '/EFI/BOOT/BOOTX64.EFI',
                'boot/BUILD-INFO.txt': '/boot/BUILD-INFO.txt',
                'surfos-dev/surfos.bin': '/boot/surfos.bin',
                'surfos-dev/initrd.tar': '/boot/initrd.tar'}
+# and one file the image does not have: GRUB's menu looks for a development build on its own partition only when this
+# is there (boot/grub-usb.cfg), so a surfos-dev folder on the flashed image, which SurfOS only reads, is never booted
+STICK_MARKER = 'boot/ONE-STICK.txt'
+STICK_NOTE = ('This stick starts SurfOS and keeps your own files too (docs/USB-BOOT.md section 14).\n'
+              'GRUB\'s first entry starts the development build in /surfos-dev, the entry "SurfOS" the build in /boot.\n'
+              'SurfOS may change files on it, but fdisk and mkfs leave it alone.\n'
+              'Written by tools/mkusb.py; tools/stick.py puts new builds here. Keep this file: without it GRUB does\n'
+              'not look in /surfos-dev here.\n')
+
+
+def stick_paths():
+    """every file of a stick folder"""
+    return list(STICK_FILES) + [STICK_MARKER]
 
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK='1', MTOOLSRC='/dev/null')
 
@@ -405,7 +419,7 @@ def assemble(args, tmp_image, staging):
 def stick_dirs():
     """the folders a stick folder has: EFI, EFI/BOOT, boot, boot/grub, ..."""
     out = set()
-    for rel in STICK_FILES:
+    for rel in stick_paths():
         d = os.path.dirname(rel)
         while d:
             out.add(d)
@@ -437,7 +451,7 @@ def check_stick_dir(path):
                 raise BuildError(f'refusing to replace {path}: it holds {(rel + "/" + name).lstrip("/")}/, which a '
                                  f'stick folder does not; remove that folder yourself if it is not wanted')
         for name in names:
-            if (rel + '/' + name).lstrip('/') not in STICK_FILES and name != '.DS_Store':
+            if (rel + '/' + name).lstrip('/') not in stick_paths() and name != '.DS_Store':
                 raise BuildError(f'refusing to replace {path}: it holds {(rel + "/" + name).lstrip("/")}, which a '
                                  f'stick folder does not; remove that folder yourself if it is not wanted')
 
@@ -516,9 +530,16 @@ def build(args):
             staged = {'/EFI/BOOT/BOOTX64.EFI': efi, '/boot/grub/grub.cfg': args.grub_cfg,
                       '/boot/grub/x86_64-efi/fs.lst': os.path.join(staging, 'fs.lst'), '/boot/surfos.bin': args.kernel,
                       '/boot/initrd.tar': args.initrd, '/boot/BUILD-INFO.txt': os.path.join(staging, 'BUILD-INFO.txt')}
-            stick_tmp = write_stick_dir(os.path.dirname(os.path.abspath(args.stick_dir)),
-                                        {rel: staged[img] for rel, img in STICK_FILES.items()},
-                                        {rel: files[img]['sha256'] for rel, img in STICK_FILES.items()})
+            note = os.path.join(staging, 'ONE-STICK.txt')
+            with open(note, 'w') as f:
+                f.write(STICK_NOTE)
+            stick_files = {rel: {'bytes': files[img]['bytes'], 'sha256': files[img]['sha256']}
+                           for rel, img in STICK_FILES.items()}
+            stick_files[STICK_MARKER] = {'bytes': os.path.getsize(note), 'sha256': sha256_file(note)}
+            sources = {rel: staged[img] for rel, img in STICK_FILES.items()}
+            sources[STICK_MARKER] = note
+            stick_tmp = write_stick_dir(os.path.dirname(os.path.abspath(args.stick_dir)), sources,
+                                        {rel: v['sha256'] for rel, v in stick_files.items()})
         os.replace(tmp_image, args.output)
         if stick_tmp:
             replace_dir(stick_tmp, args.stick_dir)
@@ -570,15 +591,16 @@ def build(args):
     if args.stick_dir:
         manifest['stick'] = {'folder': os.path.relpath(os.path.abspath(args.stick_dir), outdir),
                              'note': 'the same files, to copy onto a FAT32 stick (tools/stick.py, docs/USB-BOOT.md '
-                                     'section 14); /surfos-dev holds this build too',
-                             'files': {rel: files[img] for rel, img in STICK_FILES.items()}}
+                                     'section 14); /surfos-dev holds this build too, and ' + STICK_MARKER +
+                                     ' tells GRUB to look there',
+                             'files': stick_files}
     write_atomic(manifest_path, json.dumps(manifest, indent=2) + '\n')
     print(f'{args.output}: {manifest["image_bytes"] // (1024 * 1024)} MB GPT disk image, FAT32 system partition '
           f'{LABEL} at 1 MB, {len(files)} files, {args.optimization}')
     print(f'sha256 {image_sha}  ({checksum})')
     print(f'manifest {manifest_path}')
     if args.stick_dir:
-        print(f'stick folder {args.stick_dir}: {len(STICK_FILES)} files to copy onto a FAT32 stick (tools/stick.py)')
+        print(f'stick folder {args.stick_dir}: {len(stick_files)} files to copy onto a FAT32 stick (tools/stick.py)')
     return 0
 
 

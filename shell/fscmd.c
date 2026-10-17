@@ -206,8 +206,10 @@ int cmd_mount(int argc, char **argv) {
     if(bdev_mount_readonly(d)) {                            /* the SurfOS boot drive is only ever read */
         printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
         flags |= MNT_RDONLY;
-    } else if(d->protect == bdev_boot_volume)               /* 10/17/26: but for the volume of a stick made bootable */
+    } else if(d->protect == bdev_boot_volume && !(flags & MNT_RDONLY) && !d->readonly && !bdev_disk(d)->readonly) {
+        /* 10/17/26: the volume of a stick made bootable by copying files onto it, mounted to be written */
         printf("    %s: %s: its files may be changed; fdisk and mkfs leave it alone\n", d->name, d->protect);
+    }
     r = vfs_mount_flags(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags);
     if(r == -EINVAL && argc <= i + 2) printf("    mount: %s: no file system found (mkfs makes one)\n", d->name);
     else if(r == -EBUSY) printf("    mount: %s: something is mounted there already\n", path);

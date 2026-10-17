@@ -438,7 +438,8 @@ static void test_fat_serial(void) {
     bs[66] = 0x28;
     check(part_fat_serial(bs, &s) && s == 0x01020304, "the older signature 0x28 has a serial number (and no label)");
     bs[66] = 0x00;
-    check(!part_fat_serial(bs, &s), "no extended boot signature: no serial number");
+    check(part_fat_serial(bs, &s) && s == 0x01020304,
+          "no extended boot signature: read there all the same, as GRUB reads it for bootvol=");
     fat_boot_sector(bs, true, "DATASTICK  ");
     bs[510] = 0;
     check(!part_fat_serial(bs, &s), "no 55 AA: not a FAT boot sector");

@@ -228,9 +228,11 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   `reboot` comes back to the boot stick's GRUB by itself. 10/17/26 (one stick, docs/USB-BOOT.md section 14):
   the owner's plan is to make the data stick itself bootable (`tools/stick.py install`) and use it alone; then
   lsblk shows its volume `boot drive: writable` (or `mounted (boot drive)`), GRUB's development entry ("from
-  this stick") looks there first and devloop.py deploys there first. Test it with `tools/qemu-usb.py --test
-  --scenario onestick`. `tools/stick.py` writes only its own files on a mounted external FAT volume; never
-  point it at a stick the owner has not named.
+  this stick") looks there first when the stick has `boot/ONE-STICK.txt`, and devloop.py deploys there first
+  (it refuses `--stick` naming another disk, and a boot stick without the marker). Test it with
+  `tools/qemu-usb.py --test --scenario onestick --scenario twosticks`. `tools/stick.py` writes only its own
+  files on a mounted external FAT volume, never onto the flashed SURFOSUSB stick or over another system's boot
+  files; never point it at a stick the owner has not named.
 * Wi-Fi (docs/superpowers/plans/2026-10-09-wifi.md): `wifi up | down | scan | join <ssid> [bssid] | status |
   leave` (shell/wifi.c); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
   the PMK at once. The kernel word `wlansim` gives a simulated card with six access points (SurfSim, SurfSimWPA

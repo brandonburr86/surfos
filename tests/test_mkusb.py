@@ -122,7 +122,9 @@ class MkusbTests(unittest.TestCase):
                                     'bootvol=$surfos_bootvol\n'), 2)
         self.assertEqual(body.count('module2 ($surfos_devbuild)/surfos-dev/initrd.tar initrd.tar\n'), 2)
         self.assertEqual(code.count('autonet'), 2)
+        marker = code.index('if [ -f "($root)/' + mkusb.STICK_MARKER + '" ]; then')   # only a stick made for it
         own = code.index('if [ -f "($root)/surfos-dev/surfos.bin" ]; then')            # its own partition first
+        self.assertLess(marker, own)
         self.assertLess(own, code.index('if [ -f "($root)/surfos-dev/initrd.tar" ]; then'))
         self.assertLess(own, code.index('for surfos_disk in'))
         self.assertIn('if [ "$surfos_disk" != "$surfos_boot_disk" ]', code)            # its other partitions never
@@ -154,7 +156,7 @@ class MkusbTests(unittest.TestCase):
         a link, a file, a device or a folder with anything else in it"""
         kit = self.dir / 'stick'
         mkusb.check_stick_dir(str(kit))                                         # nothing there yet
-        for rel in mkusb.STICK_FILES:
+        for rel in mkusb.stick_paths():
             (kit / rel).parent.mkdir(parents=True, exist_ok=True)
             (kit / rel).write_bytes(b'old')
         (kit / '.DS_Store').write_bytes(b'finder')
@@ -191,21 +193,25 @@ class MkusbTests(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_MTOOLS, 'mtools is not installed (run in the Docker toolchain)')
     def test_stick_folder(self):
-        """the folder holds the image's six files at their paths and the same kernel and initrd again in
-        surfos-dev/, nothing else; the manifest lists them; a rebuild replaces it whole"""
+        """the folder holds the image's six files at their paths, the same kernel and initrd again in surfos-dev/
+        and the marker GRUB looks for (which the image has not), nothing else; the manifest lists them; a rebuild
+        replaces it whole"""
         kit = self.dir / 'out' / 'stick'
         self.assertEqual(self.build('--stick-dir', str(kit)), 0)
         got = sorted(str(p.relative_to(kit)) for p in kit.rglob('*') if p.is_file())
-        self.assertEqual(got, sorted(mkusb.STICK_FILES))
+        self.assertEqual(got, sorted(mkusb.stick_paths()))
         with open(self.out, 'rb') as f:
             fat = mkusb.Fat32(f, 2048 * 512)
             for rel, img in mkusb.STICK_FILES.items():
                 self.assertEqual((kit / rel).read_bytes(), fat.read(img), rel)
+            with self.assertRaises(mkusb.BuildError):
+                fat.read('/' + mkusb.STICK_MARKER)                          # never on the flashed image
+        self.assertEqual((kit / mkusb.STICK_MARKER).read_text(), mkusb.STICK_NOTE)
         self.assertEqual((kit / 'surfos-dev/surfos.bin').read_bytes(), self.kernel.read_bytes())
         self.assertEqual((kit / 'surfos-dev/initrd.tar').read_bytes(), self.initrd.read_bytes())
         manifest = json.loads((self.out.parent / 'build-manifest.json').read_text())
         self.assertEqual(manifest['stick']['folder'], 'stick')
-        for rel in mkusb.STICK_FILES:
+        for rel in mkusb.stick_paths():
             self.assertEqual(manifest['stick']['files'][rel]['sha256'],
                              hashlib.sha256((kit / rel).read_bytes()).hexdigest(), rel)
         (kit / '.DS_Store').write_bytes(b'finder')

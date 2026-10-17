@@ -165,10 +165,11 @@ bool part_fat_label(const u8 *bs, char *label) {
     return true;
 }
 
-/* 10/17/26 (one stick): the serial number follows the signature; 0x28, the older signature, has it without the label */
+/* 10/17/26 (one stick): the serial number follows the signature. GRUB reads it there whatever the signature says
+   (grub-core/fs/fat.c), so this does too: the kernel must recognise every volume GRUB names in bootvol= */
 bool part_fat_serial(const u8 *bs, u32 *serial) {
     const u8 *ext = fat_ext_bpb(bs);
-    if(!ext || (ext[2] != 0x29 && ext[2] != 0x28)) return false;
+    if(!ext) return false;
     *serial = get32(ext + 3);
     return true;
 }

@@ -31,7 +31,7 @@ The USB image for UEFI PCs (`docs/USB-BOOT.md`):
 ```sh
 ./devenv/build-usb.sh         # build/usb/surfos-ideapad-15iil05.img (+ .sha256, build-manifest.json, stick/), O=2
 O=0 ./devenv/build-usb.sh     # the same with the debug build
-./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from emulated USB sticks: 16 scenarios
+./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from emulated USB sticks: 17 scenarios
 ./devenv/test-usb.sh --screen # just boot it without a serial port and print the screen
 ./devenv/run-usb.sh           # boot a copy of it in a QEMU window to try it by hand
 ```

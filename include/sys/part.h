@@ -92,9 +92,10 @@ u32 part_crc32(u32 crc, const void *buf, size_t len);
 
 /* a FAT boot sector: true, and its 11-character volume label (FAT32: offset 71, FAT12/16: 43) */
 bool part_fat_label(const u8 *sector, char *label);         /* label: 12 bytes */
-/* 10/17/26 (one stick): a FAT boot sector's volume serial number (FAT32: offset 67, FAT12/16: 39), which GRUB's
-   probe --fs-uuid prints as "5D0F-0901" and boot/grub-usb.cfg passes to the kernel as bootvol=; part_parse_serial()
-   reads that form (either case, exactly 4 + 4 hex digits) */
+/* 10/17/26 (one stick): a FAT boot sector's volume serial number (FAT32: offset 67, FAT12/16: 39, read whatever the
+   extended boot signature says, as GRUB reads it), which GRUB's probe --fs-uuid prints as "5D0F-0901" and
+   boot/grub-usb.cfg passes to the kernel as bootvol=; part_parse_serial() reads that form (either case, exactly
+   4 + 4 hex digits) */
 bool part_fat_serial(const u8 *sector, u32 *serial);
 bool part_parse_serial(const char *s, u32 *serial);
 

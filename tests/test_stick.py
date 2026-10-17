@@ -66,11 +66,15 @@ class Base(unittest.TestCase):
         self.make_kit('build one')
 
     def make_kit(self, bid):
-        """a stick folder as tools/mkusb.py writes one, with its manifest beside it"""
-        self.files = {'EFI/BOOT/BOOTX64.EFI': b'MZ loader ' + bid.encode(), 'boot/grub/grub.cfg': b'menu ' + bid.encode(),
+        """a stick folder as tools/mkusb.py writes one, with its manifest beside it; its loader, menu and build
+        information carry what SurfOS's own do (a GRUB with SurfOS's bootstrap embedded, the menu's first line)"""
+        self.files = {'EFI/BOOT/BOOTX64.EFI': b'MZ GRUB, # SurfOS USB bootstrap: built in, ' + bid.encode(),
+                      'boot/grub/grub.cfg': b'# SurfOS USB image: the GRUB menu, ' + bid.encode(),
                       'boot/grub/x86_64-efi/fs.lst': b'', 'boot/surfos.bin': fake_kernel(bid.encode()),
-                      'boot/initrd.tar': initrd_with(bid), 'boot/BUILD-INFO.txt': b'info ' + bid.encode(),
+                      'boot/initrd.tar': initrd_with(bid), 'boot/BUILD-INFO.txt': b'SurfOS USB boot image, ' + bid.encode(),
+                      'boot/ONE-STICK.txt': mkusb.STICK_NOTE.encode(),
                       'surfos-dev/surfos.bin': fake_kernel(bid.encode()), 'surfos-dev/initrd.tar': initrd_with(bid)}
+        self.assertEqual(sorted(self.files), sorted(mkusb.stick_paths()))          # what mkusb.py writes
         for rel, data in self.files.items():
             (self.kit / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.kit / rel).write_bytes(data)
@@ -89,7 +93,10 @@ class Base(unittest.TestCase):
         return (self.vol / rel).read_bytes()
 
     def leftovers(self):
-        return [str(p) for p in self.vol.rglob('*.new')]
+        return [str(p) for p in self.vol.rglob('*' + stick.NEW)]
+
+    def tree(self):
+        return sorted(str(p.relative_to(self.vol)) for p in self.vol.rglob('*'))
 
 
 class InstallUpdateTests(Base):
@@ -100,18 +107,35 @@ class InstallUpdateTests(Base):
             self.assertEqual(self.on_stick(rel), data, rel)
         self.assertEqual(self.on_stick('My Files/notes.txt'), b'mine, never touched')
         self.assertEqual(self.leftovers(), [])
-        self.assertIn('the stick starts SurfOS', out)
-        self.assertIn('build build one', out)
+        self.assertIn('surfos-dev/ holds build build one', out)
+        self.assertIn('boot/ holds the same build', out)
+        self.assertNotIn('note:', out)
         ej.assert_not_called()
 
-    def test_install_again_brings_everything_up_to_date(self):
+    def test_install_again_keeps_the_fallback_unless_asked(self):
+        """a second install brings the loader, the menu and the development build up to date and leaves boot/ (the
+        known-good build) as it is; --fallback makes the new build the fallback too"""
         self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
+        first = {rel: self.files[rel] for rel in stick.FALLBACK + [stick.INFO]}
         self.make_kit('build two')
         rc, out, err, ej = self.main('install', self.vol, '--kit', self.kit, '--eject')
         self.assertEqual(rc, 0, err)
         for rel, data in self.files.items():
-            self.assertEqual(self.on_stick(rel), data, rel)
+            self.assertEqual(self.on_stick(rel), first.get(rel, data), rel)
+        self.assertIn('boot/ keeps its build', out)
         ej.assert_called_once_with(os.path.realpath(self.vol))
+        rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit, '--fallback')
+        self.assertEqual(rc, 0, err)
+        for rel, data in self.files.items():
+            self.assertEqual(self.on_stick(rel), data, rel)
+
+    def test_an_incomplete_fallback_is_written(self):
+        self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
+        (self.vol / 'boot/initrd.tar').unlink()
+        self.make_kit('build two')
+        self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
+        self.assertEqual(self.on_stick('boot/initrd.tar'), self.files['boot/initrd.tar'])
+        self.assertEqual(self.on_stick('boot/surfos.bin'), self.files['boot/surfos.bin'])
 
     def test_update_writes_surfos_dev_only(self):
         self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
@@ -125,6 +149,7 @@ class InstallUpdateTests(Base):
         for rel, (data, mtime) in before.items():
             self.assertEqual((self.on_stick(rel), (self.vol / rel).stat().st_mtime_ns), (data, mtime), rel)
         self.assertIn('surfos-dev/ holds build build two', out)
+        self.assertNotIn('note:', out)
 
     def test_update_from_a_kernel_and_its_initrd(self):
         kernel, initrd = self.dir / 'surfos.bin', self.dir / 'initrd.tar'
@@ -134,7 +159,7 @@ class InstallUpdateTests(Base):
         self.assertEqual(rc, 0, err)
         self.assertEqual(self.on_stick('surfos-dev/surfos.bin'), kernel.read_bytes())
         self.assertFalse((self.vol / 'boot').exists())
-        self.assertIn('EFI/BOOT/BOOTX64.EFI is missing', out)                 # not bootable yet: said so
+        self.assertIn('EFI/BOOT/BOOTX64.EFI, boot/grub/grub.cfg, boot/ONE-STICK.txt', out)   # not bootable yet: said so
         rc, _, err, _ = self.main('update', self.vol, '--kernel', kernel)
         self.assertEqual(rc, 1)
         self.assertIn('go together', err)
@@ -148,16 +173,52 @@ class InstallUpdateTests(Base):
         self.assertEqual(rc, 1)
         self.assertEqual(self.leftovers(), [])
 
-    def test_the_flashed_image_is_written_with_a_note(self):
-        rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit, label='SURFOSUSB  ')
+    def test_an_older_surfos_stick_is_brought_up_to_date(self):
+        """a stick SurfOS's own older files are on (its loader with the bootstrap, its menu) is not another system's"""
+        for rel, data in (('EFI/BOOT/BOOTX64.EFI', b'MZ older GRUB # SurfOS USB bootstrap: older'),
+                          ('boot/grub/grub.cfg', b'# SurfOS USB image: an older menu'),
+                          ('boot/BUILD-INFO.txt', b'SurfOS USB boot image, older')):
+            (self.vol / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.vol / rel).write_bytes(data)
+        rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
         self.assertEqual(rc, 0, err)
-        self.assertIn('flashed image (SURFOSUSB)', out)
+        self.assertEqual(self.on_stick(stick.LOADER), self.files[stick.LOADER])
 
 
 class RefusalTests(Base):
-    def assert_untouched(self):
-        self.assertEqual(sorted(str(p.relative_to(self.vol)) for p in self.vol.rglob('*')),
-                         ['My Files', 'My Files/notes.txt'])
+    def assert_untouched(self, extra=()):
+        self.assertEqual(self.tree(), sorted(['My Files', 'My Files/notes.txt'] + list(extra)))
+
+    def test_the_flashed_image_is_never_written(self):
+        """SurfOS only reads it, so a build there could never be updated over the network, and it is the rescue
+        stick"""
+        for cmd in ('install', 'update'):
+            rc, _, err, _ = self.main(cmd, self.vol, '--kit', self.kit, label='SURFOSUSB  ')
+            self.assertEqual(rc, 1, cmd)
+            self.assertIn('the flashed SurfOS image (SURFOSUSB)', err)
+            self.assert_untouched()
+        rc, out, err, _ = self.main('check', self.vol, '--kit', self.kit, label='SURFOSUSB')
+        self.assertEqual(rc, 0, err)                                                 # it may be looked at
+
+    def test_another_systems_boot_files_are_never_replaced(self):
+        """a Windows installer's loader, another GRUB's menu or module list at SurfOS's paths (FAT ignores case):
+        nothing is written, and the message names them"""
+        cases = {'efi/boot/bootx64.efi': b'MZ the Windows installer\'s boot loader',
+                 'boot/grub/grub.cfg': b'menuentry "Ubuntu" {\n linux /casper/vmlinuz\n}\n',
+                 'boot/grub/x86_64-efi/fs.lst': b'ext2\nfat\niso9660\n'}
+        for rel, data in cases.items():
+            with self.subTest(rel):
+                (self.vol / rel).parent.mkdir(parents=True, exist_ok=True)
+                (self.vol / rel).write_bytes(data)
+                before = self.tree()
+                rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
+                self.assertEqual(rc, 1)
+                self.assertIn('another system\'s boot files', err)
+                self.assertEqual(self.tree(), before)
+                self.assertEqual((self.vol / rel).read_bytes(), data)
+                rc, out, _, _ = self.main('check', self.vol, '--kit', self.kit)
+                self.assertIn('Another system\'s boot files are at SurfOS\'s paths', out)
+                (self.vol / rel).unlink()
 
     def test_a_folder_that_is_not_what_the_build_made(self):
         (self.kit / 'boot/surfos.bin').write_bytes(fake_kernel(b'changed after the build'))
@@ -187,21 +248,31 @@ class RefusalTests(Base):
         self.assert_untouched()
 
     def test_a_file_that_does_not_read_back(self):
-        """nothing is renamed into place, the old files stay, the .new files go"""
+        """nothing is renamed into place, the old files stay, the new ones go"""
         self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
         old = {rel: self.on_stick(rel) for rel in self.files}
         self.make_kit('build two')
         real = stick.read_back
-        with mock.patch.object(stick, 'read_back', side_effect=lambda p: real(p) + (b'x' if p.endswith('.tar.new') else b'')):
-            rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
+        with mock.patch.object(stick, 'read_back', side_effect=lambda p: real(p) + (b'x' if p.endswith('.tar' + stick.NEW)
+                                                                                    else b'')):
+            rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit, '--fallback')
         self.assertEqual(rc, 1)
         self.assertIn('does not read back the same; nothing was renamed', err)
         self.assertEqual({rel: self.on_stick(rel) for rel in self.files}, old)
         self.assertEqual(self.leftovers(), [])
 
+    def test_a_first_install_that_fails_leaves_nothing(self):
+        """the folders made for the new files go again when they stay empty"""
+        real = stick.read_back
+        with mock.patch.object(stick, 'read_back', side_effect=lambda p: real(p) + (b'x' if p.endswith('BOOTX64.EFI' + stick.NEW)
+                                                                                    else b'')):
+            rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
+        self.assertEqual(rc, 1)
+        self.assert_untouched()
+
     def test_order_and_a_stick_pulled_halfway(self):
         """the renames come in install order, the boot loader last; when the stick goes before that, the files
-        renamed already stay, the loader is not there, no .new file is left, and the message says what to do"""
+        renamed already stay, the loader is not there, no new file is left, and the message says what to do"""
         renamed = []
         real = os.replace
 
@@ -217,6 +288,7 @@ class RefusalTests(Base):
         self.assertEqual(renamed, stick.INSTALL[:-1])
         self.assertEqual(stick.INSTALL[-1], stick.LOADER)
         self.assertLess(stick.INSTALL.index('surfos-dev/initrd.tar'), stick.INSTALL.index('surfos-dev/surfos.bin'))
+        self.assertLess(stick.INSTALL.index(stick.MARKER), stick.INSTALL.index(stick.LOADER))
         self.assertFalse((self.vol / stick.LOADER).exists())
         self.assertEqual(self.leftovers(), [])
         self.assertIn('run the same command again', err)
@@ -238,12 +310,17 @@ class CheckTests(Base):
         (self.vol / 'surfos-dev/surfos.bin').unlink()
         rc, out, _, _ = self.main('check', self.vol, '--kit', self.kit)
         self.assertIn('incomplete: surfos-dev/surfos.bin missing', out)
-        self.assertIn('SurfOS starts from this stick\n', out)
+        self.assertIn('SurfOS starts from this stick, the build in boot/', out)
+        self.make_kit('build one')
+        self.assertEqual(self.main('update', self.vol, '--kit', self.kit)[0], 0)
+        (self.vol / stick.MARKER).unlink()                                         # GRUB would not look in surfos-dev
+        rc, out, _, _ = self.main('check', self.vol, '--kit', self.kit)
+        self.assertIn('the build in boot/ (no development build in surfos-dev/, or no boot/ONE-STICK.txt)', out)
 
     def test_kit(self):
         rc, out, err, _ = self.main('kit', '--kit', self.kit)
         self.assertEqual(rc, 0, err)
-        self.assertIn('8 files as the manifest lists them; build build one', out)
+        self.assertIn('9 files as the manifest lists them; build build one', out)
 
 
 class VolumeTests(unittest.TestCase):
@@ -281,13 +358,15 @@ class VolumeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sys_root, dev_root = os.path.join(tmp, 'sys'), os.path.join(tmp, 'dev')
             self.sysfs(sys_root, 'sdb1', 'pci0000:00/0000:00:14.0/usb1/1-2/host6/block/sdb', '1')
-            self.sysfs(sys_root, 'nvme0n1p1', 'pci0000:00/0000:00:1d.0/nvme/nvme0/nvme0n1', '0')
+            self.sysfs(sys_root, 'nvme0n1p2', 'pci0000:00/0000:00:1d.0/nvme/nvme0/nvme0n1', '0')
             self.sysfs(sys_root, 'sdc1', 'pci0000:00/0000:00:17.0/ata2/host1/block/sdc', '0')
             os.makedirs(os.path.join(dev_root, 'disk', 'by-label'))
             sdb1 = os.path.join(dev_root, 'sdb1')
             Path(sdb1).write_text('')
             mounts = (f'{sdb1} /media/me/DATA\\040STICK vfat rw,nosuid,nodev 0 0\n'
                       f'/dev/nvme0n1p1 /boot/efi vfat rw 0 0\n'
+                      f'/dev/mmcblk0p1 /boot/firmware vfat rw 0 0\n'
+                      f'/dev/nvme0n1p2 /mnt/windows vfat rw 0 0\n'
                       f'/dev/sdc1 /mnt/old vfat rw 0 0\n'
                       f'/dev/sdd1 /media/me/NTFS ntfs3 rw 0 0\n'
                       f'/dev/sde1 /media/me/RO vfat ro 0 0\n')
@@ -295,7 +374,10 @@ class VolumeTests(unittest.TestCase):
             self.assertEqual(label, '')
             os.symlink(sdb1, os.path.join(dev_root, 'disk', 'by-label', 'SURFOSUSB'))
             self.assertEqual(stick.check_linux('/media/me/DATA STICK', mounts, sys_root, dev_root)[1], 'SURFOSUSB')
-            for path, why in (('/boot/efi', 'own system or boot partition'), ('/mnt/old', 'not on a removable'),
+            for path, why in (('/boot/efi', 'own system or boot partition'),
+                              ('/boot/firmware', 'own system or boot partition'),
+                              ('/mnt/windows', 'not on a removable'),               # an internal NVMe disk
+                              ('/mnt/old', 'not on a removable'),                    # an internal SATA disk
                               ('/media/me/NTFS', 'not FAT'), ('/media/me/RO', 'read-only'),
                               ('/media/me/NONE', 'not in /proc/self/mounts')):
                 with self.assertRaisesRegex(stick.StickError, why):

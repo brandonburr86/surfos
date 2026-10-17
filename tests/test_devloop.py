@@ -166,11 +166,12 @@ class OneStickTests(unittest.TestCase):
 
     def test_before_a_data_stick(self):
         """GRUB's development entry looks at its own partition first, so the build goes there too, whichever of
-        the two is usb0; --stick can still name the other one"""
+        the two is usb0; --stick naming the other one is refused, since GRUB would not start a build there"""
         one, data = ONE.format(n=0, status='boot drive: writable'), DATA.format(n=1)
         self.assertEqual(self.pick(HEAD + one + data), ('usb0', 'usb0p1'))
         self.assertEqual(self.pick(HEAD + data.replace('usb1', 'usb0') + one.replace('usb0', 'usb1')), ('usb1', 'usb1p1'))
-        self.assertEqual(self.pick(HEAD + one + data, 'usb1'), ('usb1', 'usb1p1'))
+        with self.assertRaisesRegex(devloop.DevloopError, r'started from \(usb0\).*usb1 would not run.*without --stick'):
+            self.pick(HEAD + one + data, 'usb1')
 
     def test_the_image_is_never_written(self):
         """the flashed image (SURFOSUSB) is only read: with it, the data stick, as before; alone, nothing"""
@@ -196,6 +197,36 @@ class OneStickTests(unittest.TestCase):
         text = HEAD + ONE.format(n=0, status='boot drive: writable') + ONE.format(n=1, status='mounted (boot drive)')
         with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1'):
             self.pick(text)
+
+    def test_deploy_needs_the_marker(self):
+        """GRUB looks in the surfos-dev of the stick it was started from only beside boot/ONE-STICK.txt
+        (tools/stick.py install writes it): without it nothing is pushed, and the stick is ejected as it was"""
+        class Session:                          # the telnet session, as deploy uses it
+            host = '127.0.0.1'
+
+            def __init__(self, marker):
+                self.marker, self.commands = marker, []
+
+            def check(self, cmd, timeout=60, ok=None):
+                self.commands.append(cmd)
+                return {'lsblk': HEAD + ONE.format(n=0, status='boot drive: writable'),
+                        'mount': '    rd0    on /initrd       type tarfs (ro)\n'}.get(cmd, '')
+
+            def run(self, cmd, timeout=60):
+                self.commands.append(cmd)
+                if cmd.startswith('mount usb0p1 '):
+                    return 0, '    usb0p1 on /surfos-dev-stick: fat32, label DATASTICK, 29 GB, 29 GB free, read-write\n'
+                if cmd.startswith('cat '):
+                    return (0, mkusb.STICK_NOTE) if self.marker else (1, '    cat: no such file\n')
+                return 0, '    usb0: safe to remove\n' if cmd.startswith('eject ') else ''
+        s = Session(marker=False)
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the stick SurfOS was started from, has no '
+                                                          'boot/ONE-STICK.txt.*tools/stick.py install'):
+            devloop.deploy(s, b'kernel', b'initrd', 'a build')
+        self.assertIn('cat /surfos-dev-stick/boot/ONE-STICK.txt', s.commands)
+        self.assertEqual(s.commands[-1], 'eject usb0')
+        self.assertFalse([c for c in s.commands if c.startswith(('mkdir', 'rx ', 'mv '))])
+        self.assertEqual(devloop.MARKER, mkusb.STICK_MARKER)
 
 
 class BuildTests(unittest.TestCase):

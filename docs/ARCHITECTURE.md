@@ -930,10 +930,16 @@ shell/                lsblk, fdisk, mkfs, mount, umount, eject, df, mv (main.c, 
   itself `protect = bdev_boot_volume` ("the volume SurfOS was started from"), which
   `bdev_mount_readonly()` lets `mount` write (lsblk: `boot drive: writable`, or
   `mounted (boot drive)`). SURFOSUSB wins when a volume has both: the flashed image stays
-  read-only. The menu looks for `/surfos-dev/` on its own partition before the other disks,
-  and `tools/devloop.py deploy` writes there first in the same order, so one stick serves
-  as boot stick and data stick. The smoke test passes a `bootvol=` and the self test
-  writes a boot sector with it onto the scratch ramdisk (`test_boot_volume`).
+  read-only. `part_fat_serial()` reads the serial number whatever the extended boot
+  signature says, as GRUB does, so the two never disagree about a volume. On a stick that
+  holds `boot/ONE-STICK.txt` (the stick folder has it, the flashed image never) the menu
+  looks for `/surfos-dev/` on its own partition before the other disks, and
+  `tools/devloop.py deploy` writes there first in the same order, refusing a `--stick`
+  that names another disk and a boot stick without the marker; so one stick serves as
+  boot stick and data stick. `tools/stick.py` refuses the flashed image and any stick whose
+  boot loader or menu is another system's. The smoke test passes a `bootvol=` and the self
+  test writes boot sectors with it onto the scratch ramdisk, partitioned and whole
+  (`test_boot_volume`).
 * **Files and programs** are in sections 9 and 10: FAT writes what macOS, Windows and
   Linux expect (FSInfo, the clean-shutdown bit, UTF-8 long names), `mkfs` lays volumes out
   as Windows does, and the editor and the file programs sit on `libsurf`.
