@@ -75,7 +75,10 @@ void mutex_unlock(mutex_t *m) { if(m->locked) m->locked--; }
 bool mutex_trylock(mutex_t *m) { if(m->locked) return false; m->locked = 1; return true; }
 void wait_prepare(wait_queue_t *q) { (void)q; }
 void wake_up_all(wait_queue_t *q) { (void)q; }
-void yield(void) {}
+/* 10/16/26 (round fs-fix-4, B33): what another task does while this one sleeps in the cache (yield() is reached
+   only when curTask is set: a scenario that sets it); nothing otherwise */
+static void (*yield_hook)(void);
+void yield(void) { if(yield_hook) yield_hook(); }
 /* 10/16/26 (B18): the clock moves 50 ms each time it is read, so a wait for a holder that never lets go
    ends (bcache's sleeps only let go of its lock: there is no other task); its timers are never armed */
 static u_long clock_ms;
@@ -2726,6 +2729,109 @@ static void b32(void) {
     check(r == 0 && used == 0 && reached == 0, "B32: sync; nothing lost");
 }
 
+/**** B33: a sync writes a directory block from a copy (B12: another task keeps changing it and what it needs); a
+      block the copy needs written first is held by that task, which then lets go of it and sets it aside (its rm's
+      order point, B28), and that order point waits for the copy to end (it owes the directory block). The copy
+      waited for the block set aside as for a hold (B26), each waited for the other, and after 10 s the copy was
+      given up: the sync failed, "set aside for 10 s by an operation that does not end" ****/
+
+#define B33_DATA 3
+static struct ram *b33_x;
+static struct buf *b33_y;                            /* the directory block's buffer (dirty throughout: it stays) */
+static u32 b33_d[B33_DATA], b33_ylba;
+static int b33_state;                                /* 0 the sync's rounds, 1 the other task holds a block the copy
+                                                        needs, 2 it set it aside, 3 its operation ended */
+static struct buf *b33_hold;
+static surf_task b33_w1, b33_w2;
+static void b33_touch(u32 lba, u8 order, u32 v) {
+    struct buf *b = bread(&b33_x->bd, lba);
+    if(!b) die("B33: read");
+    b->data[0] = (u8)v;
+    bdirty_order(b, order);
+    brelse(b);
+}
+static int b33_in(u32 blk, u32 lba, u32 count) { return lba <= blk && blk < lba + count; }
+static int b33_dirty(u32 lba) {
+    struct buf *b = bpeek(&b33_x->bd, lba);
+    int d = b && b->dirty;
+    if(b) brelse(b);
+    return d;
+}
+static void b33_hook(struct ram *r, u32 lba, u32 count) {   /* after each write the disk stores: the other task runs */
+    surf_task *was = curTask;
+    int i;
+    (void)r;
+    if(b33_in(b33_ylba, lba, count)) {               /* (the directory block itself being written) */
+        if(b33_state == 2 && !b33_y->copying) goto end;
+        return;
+    }
+    curTask = &b33_w2;
+    if(b33_state == 0 && !b33_y->copying) {          /* it changes the data blocks the sync is not writing, then the
+                                                        directory block (which then needs them) */
+        for(i = 0; i < B33_DATA; i++) if(!b33_in(b33_d[i], lba, count)) b33_touch(b33_d[i], BORDER_DATA, lba + i);
+        b33_touch(b33_ylba, BORDER_DIR, lba);
+    } else if(b33_state == 0) {                      /* the copy writes the first block it needs: the other task takes
+                                                        hold of another (dirty: one the copy needs too) */
+        for(i = 0; i < B33_DATA; i++) if(!b33_in(b33_d[i], lba, count) && b33_dirty(b33_d[i])) break;
+        if(i < B33_DATA) { b33_hold = bread(&b33_x->bd, b33_d[i]); b33_state = 1; }
+    }
+    curTask = was;
+    return;
+end:
+    curTask = &b33_w2;                               /* its order point: the copy let go of the block, its operation */
+    for(i = 0; i < B33_DATA; i++) bdiscard(&b33_x->bd, b33_d[i]);   /* ends (the block set aside is dropped) */
+    b33_state = 3;
+    curTask = was;
+}
+static void b33_yield(void) {                        /* the sync sleeps in the cache: the other task runs */
+    surf_task *was = curTask;
+    int i;
+    curTask = &b33_w2;
+    if(b33_state == 1) {                             /* it lets go of the block and sets it aside (its rm, B28) */
+        u32 lba = b33_hold->lba;
+        brelse(b33_hold);
+        baside(&b33_x->bd, lba, true);
+        b33_state = 2;
+    } else if(b33_state == 2 && !b33_y->copying) {   /* its order point waits for the copy to end; then it ends */
+        for(i = 0; i < B33_DATA; i++) bdiscard(&b33_x->bd, b33_d[i]);
+        b33_state = 3;
+    }
+    curTask = was;
+}
+
+static void b33(void) {
+    struct ram *x = ram_new("b33", 2048);
+    int r, i, said_end;
+    fresh("B33: a sync writes a block from a copy; another task sets aside a block the copy needs, and waits for the copy");
+    b33_x = x;
+    for(i = 0; i < B33_DATA; i++) b33_d[i] = 100 + 200 * i;   /* data blocks apart (never in one request), and the */
+    b33_ylba = 900;                                  /* directory block that needs them (order: data, then entries) */
+    for(i = 0; i < B33_DATA; i++) b33_touch(b33_d[i], BORDER_DATA, 1);
+    b33_touch(b33_ylba, BORDER_DIR, 1);
+    b33_y = bpeek(&x->bd, b33_ylba);
+    if(!b33_y) die("B33: the directory block");
+    brelse(b33_y);
+    b33_state = 0;
+    x->hook = b33_hook;
+    yield_hook = b33_yield;
+    curTask = &b33_w1;                               /* (a task: the cache's sleeps reach yield()) */
+    r = bsync(&x->bd);
+    curTask = NULL;
+    yield_hook = NULL;
+    x->hook = NULL;
+    said_end = said("by an operation that does not end");
+    if(verbose) printf("      the sync %d; the other task: %s; \"does not end\" said %d\n", r,
+                       b33_state == 3 ? "its operation ended" : b33_state == 2 ? "still waits for the copy" :
+                       b33_state == 1 ? "never set the block aside" : "never held a block the copy needs", said_end);
+    check(b33_state >= 2, "B33: the scenario took place (the copy needed a block the other task set aside)");
+    check(r == 0 && b33_state == 3 && !said_end,
+          "B33: the copy lets the block go: the other task's operation ends, and the sync says 0 at once");
+    curTask = &b33_w2;                               /* (what is left: the other task's blocks dropped, then a sync) */
+    for(i = 0; i < B33_DATA; i++) bdiscard(&x->bd, b33_d[i]);
+    curTask = NULL;
+    bsync(&x->bd);
+}
+
 /**** B22b (R6): a clean copy a reader holds while a straight write over it is refused after the card stored it all:
       it leaves the table at once (a new read gets the card's bytes) and is dropped when let go; a dirty copy in the
       same request keeps its bytes and is written by the next sync (B22 holds: the review's check) ****/
@@ -2832,6 +2938,7 @@ int main(int argc, char **argv) {
     RUN("b31b", b31b());
     RUN("b32", b32());
     RUN("b22b", b22b());
+    RUN("b33", b33());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
