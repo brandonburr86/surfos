@@ -227,23 +227,32 @@ writes again the next command works, without a `sync` first. A write the card re
 the file's size as it was (also one past the end of a file: the gap of zeros comes with the
 bytes or not at all). A command that writes less than it was given changed what it says it
 wrote and, where it wrote over the file's existing bytes, possibly some of the next 64 KiB as
-well: a card may store the first blocks of a request before it refuses one (SurfOS then shows
-the file as the card holds it, before and after it makes room in its cache). An `mv` or `rm`
-the card refuses changes nothing (the file keeps its one name and its bytes), so the same
-command later is safe. While blocks of one file refuse, an `rm` of that file works (its
-unwritten bytes go with it, however many), but an `mv` onto that file, and `rm`, `mv`, `mkdir`
-and truncations of other files on the card, fail with `I/O error` until the card takes those
-blocks: they must not reach the card before bytes they might point at (to replace such a file,
-`rm` it first). A `sync` waits about 10 seconds for a program that holds part of what it must
+well: a card may store the first blocks of a request before it refuses one (SurfOS then reads
+those blocks as the card holds them, before and after it makes room in its cache, except blocks
+with changes of its own still waiting to be written: those show the waiting changes, which the
+next sync writes over the card's). An `mv`, `rm` or `mkdir` the card refuses changes nothing
+(the file keeps its one name and its bytes; a folder not made leaves no name, and its space
+comes back once the card holds that), so the same command later is safe. While blocks of one
+file refuse, an `rm` of that file works (its unwritten bytes go with it, however many, refused
+before or not yet tried), but an `mv` onto that file, and `rm`, `mv`, `mkdir` and truncations
+of other files on the card, fail with `I/O error` until the card takes those blocks: they must
+not reach the card before bytes they might point at (to replace such a file, `rm` it first).
+Bytes nobody will read (past the end of a copy that stopped, a gap of zeros given up) are
+dropped, never written, and hold nothing back. The one exception: a block that another
+program's write or the cache was writing at that very moment is written like any other, so an
+`rm` whose file it belongs to can fail once with `I/O error` (nothing changed; the same `rm`
+then works). A `sync` waits about 10 seconds for a program that holds part of what it must
 write and does not let go (one killed in the middle of a write), then says `I/O error` for that
 part; later syncs say so at once.
 
-If a failed `mv` or `rm` cannot be undone (the card refuses to read a block back in the middle
-of putting things back), SurfOS says `+FAT32: sd0p1: a rename that failed could not be undone
-(...): read-only until unmounted`, refuses every further change on that volume (`Read-only file
-system`), and leaves it marked as not cleanly unmounted: unmount it, and check the card on the
-Mac (Disk Utility, First Aid) before writing to it again (the file may be under two names, and
-deleting either would free the other's bytes).
+If a failed `mv`, `rm`, `mkdir` or truncation cannot be undone (the card refuses to read back,
+in the middle of putting things back, a block the command had changed; a block it could not read
+in the first place it never changed, and there is nothing to put back), SurfOS says
+`+FAT32: sd0p1: a rename that failed could not be undone (...): read-only until unmounted`,
+refuses every further change on that volume (`Read-only file system`), and leaves it marked as
+not cleanly unmounted: unmount it, and check the card on the Mac (Disk Utility, First Aid) before
+writing to it again (the file may be under two names, and deleting either would free the other's
+bytes).
 
 **Before taking the card out or switching off**, type `eject sd0` and wait for
 `sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
@@ -284,8 +293,11 @@ refused, its last clusters freed before its new end was on the card; fixed, they
 once it is). One narrow case is left: FAT12's entries that straddle two sectors (FAT12 is for
 floppies, never a SurfOS card). A copy that stopped because the card began to refuse keeps
 its last clusters linked past its end until a sync works (pulled before that, they are space
-lost until a check frees it). A truncate cut short can also leave a file whose size runs past
-its clusters. But:
+lost until a check frees it). SurfOS keeps up to 64 such runs of clusters waiting to be freed;
+a 65th (65 copies cut short while the card keeps refusing) it cannot free, and says so:
+`... cannot wait to be freed ...: lost until the volume is checked (fsck.fat)`, and again when
+the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`). A
+truncate cut short can also leave a file whose size runs past its clusters. But:
 
 * the file being written comes out either whole or not at all only if it is new: a file being
   overwritten (`write` over it, `cp` onto it) can be left empty, and one being appended to keeps

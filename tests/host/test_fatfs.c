@@ -12,6 +12,8 @@
    scenarios R1-R9, written by that review, here under the audit item that fixes each: B12a-B17a)
    and of their fixes (B12b-B18). 10/16/26 (round fs-fix-3): and those of the review of B12-B19 (its
    scenarios S1-S6, under the audit item that fixes each: B20-B24) and of their fixes (B25, B26).
+   10/16/26 (round fs-fix-4): and those of the review of B20-B26 (its scenarios R1-R6, under the audit
+   item that fixes each: B27-B31, B22b) and of their fixes (B28c, B28d, B30b, B31b, B32).
    Built like the kernel objects (tests/host/pager_shim for the interrupt flag) and run by `make
    unittest`; surfcpu/docs/evidence/os/bcache-review.txt has what each scenario found before and
    after the fixes. */
@@ -73,7 +75,10 @@ void mutex_unlock(mutex_t *m) { if(m->locked) m->locked--; }
 bool mutex_trylock(mutex_t *m) { if(m->locked) return false; m->locked = 1; return true; }
 void wait_prepare(wait_queue_t *q) { (void)q; }
 void wake_up_all(wait_queue_t *q) { (void)q; }
-void yield(void) {}
+/* 10/16/26 (round fs-fix-4, B33): what another task does while this one sleeps in the cache (yield() is reached
+   only when curTask is set: a scenario that sets it); nothing otherwise */
+static void (*yield_hook)(void);
+void yield(void) { if(yield_hook) yield_hook(); }
 /* 10/16/26 (B18): the clock moves 50 ms each time it is read, so a wait for a holder that never lets go
    ends (bcache's sleeps only let go of its lock: there is no other task); its timers are never armed */
 static u_long clock_ms;
@@ -105,8 +110,20 @@ static int said(const char *what) {
     return n;
 }
 
-void *kalloc(size_t n) { return malloc(n); }
-void *kcalloc(size_t n, size_t m) { return calloc(n, m); }
+/* 10/16/26 (round fs-fix-4, B28d): while kalloc_fail is set, every kalloc() fails */
+static int kalloc_fail;
+void *kalloc(size_t n) { return kalloc_fail ? NULL : malloc(n); }
+/* 10/16/26 (round fs-fix-4, B30): the next kcalloc_fail calls fail (ENOMEM), each after kcalloc_hook ran */
+static int kcalloc_fail;
+static void (*kcalloc_hook)(void);
+void *kcalloc(size_t n, size_t m) {
+    if(kcalloc_fail) {
+        kcalloc_fail--;
+        if(kcalloc_hook) kcalloc_hook();
+        return NULL;
+    }
+    return calloc(n, m);
+}
 void kfree(void *p) { free(p); }
 void get_time(time_t *t) {
     memset(t, 0, sizeof(*t));
@@ -2152,9 +2169,12 @@ static void b25(void) {
     e = disk_entry(x, g.root_lba, g.root_secs * 16, "F          ");
     if(!e || g16(e + 26) != 200) die("B25: f's clusters");
     init_bcache();                                  /* (the volume is synced) the FAT sectors in the cache in this order: */
-    if(!(b = bread(&x->bd, g.fat_lba + 3))) die("B25: FAT"); brelse(b);   /* where f's next clusters go (1000-1023) */
-    if(!(b = bread(&x->bd, g.fat_lba + 4))) die("B25: FAT"); brelse(b);   /* (1024-1031) */
-    if(!(b = bread(&x->bd, g.fat_lba + 0))) die("B25: FAT"); brelse(b);   /* and the cut's (f ends at 231) */
+    if(!(b = bread(&x->bd, g.fat_lba + 3))) die("B25: FAT");   /* where f's next clusters go (1000-1023) */
+    brelse(b);
+    if(!(b = bread(&x->bd, g.fat_lba + 4))) die("B25: FAT");   /* (1024-1031) */
+    brelse(b);
+    if(!(b = bread(&x->bd, g.fat_lba + 0))) die("B25: FAT");   /* and the cut's (f ends at 231) */
+    brelse(b);
     b25_lo = clus_lba(&g, 1000);                    /* the card refuses f's next 64 KB, and every write after that */
     v = lookup(root, "f");
     fill(pat2, 65536, 131);
@@ -2271,6 +2291,591 @@ static void b26b(void) {
     vput(d);
 }
 
+/**** the review of B20-B26 (round fs-fix-4): its scenarios R1-R6 (fsrev4-tests/review4.c, ported here under the
+      audit item that fixes each: B27-B31, B22) and those of the fixes (B28c, B28d, B30b, B31b, B32) ****/
+
+static u32 free_clusters(struct superblock *sb) {
+    struct statfs st;
+    if(sb->ops->statfs(sb, &st)) die("statfs");
+    return st.free_units;
+}
+
+/**** B28a, B28b (R1a, R1b): a write past the end of a file on a full volume, one sector of its gap refusing. The gap
+      of zeros goes through the cache (dirty, never tried), the write then gets ENOSPC (nothing written), B23 takes
+      the size back and the chain is cut back; B25 dropped the failed blocks of the cut-off part before the order
+      point, and a gap block that failed IN it stayed, its chain pending: every later order point and sync owed it,
+      EIO for as long as it refused, and no rm could help (the block was in no file's chain). b: f empty, the whole
+      chain freed at once with its untried blocks, one of which then failed in the next sync. d (B28's own): a, with no
+      memory for the list of blocks to drop while the write runs (as for a block a task holds or writes then: not
+      dropped), so the refusing block stays dirty in the chain that waits: the next order point or sync drops it ****/
+
+static void b28(int variant) {
+    static const char *const name[] = { "b28a", "b28b", "b28d" }, *const what[] = {
+        "B28a (R1a): 1 byte past the end of a 512-byte file on a full volume; one sector of the gap refuses",
+        "B28b (R1b): 1 byte past the end of an empty file on a full volume; one sector of the gap refuses",
+        "B28d: B28a with no memory for the list of blocks to drop while the write runs" };
+    struct ram *x = ram_new(name[variant], 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    u32 nfree, size, off, badlba, used, reached;
+    int w, s1, rmf, rmfill, tr, s2, s3, rmf2, empty = variant == 1;
+    char m1[160], m2[160], m3[160];
+    fresh(what[variant]);
+    snprintf(m1, sizeof(m1), "%s: the write gets ENOSPC, the size as it was", variant == 2 ? "B28d" : empty ? "B28b" : "B28a");
+    snprintf(m2, sizeof(m2), "%s: the gap's blocks, nobody's, hold nothing back while their sector refuses: sync, rm, truncate",
+             variant == 2 ? "B28d (the waiting chain's)" : empty ? "B28b (R1b)" : "B28a (R1a)");
+    snprintf(m3, sizeof(m3), "%s: once the card works, nothing lost", variant == 2 ? "B28d" : empty ? "B28b" : "B28a");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 7);
+    if(put_file(root, "f", pat, empty ? 0 : 512)) die("B28: f");              /* f: cluster 2 (a, d) */
+    if(put_file(root, "h", pat, 8 * 512)) die("B28: h");                      /* h: the next 8 clusters */
+    nfree = free_clusters(sb);
+    if(big_file(root, "fill", pat, nfree * 512) || fsync_sb(sb)) die("B28: fill");   /* the rest of the volume */
+    if(root->ops->unlink(root, "h") || fsync_sb(sb)) die("B28: rm h");
+    badlba = clus_lba(&g, empty ? 5 : 6);                                     /* one block in the middle of them */
+    x->bad_lo = x->bad_hi = badlba;                                           /* refuses every write, from now on */
+    v = lookup(root, "f");
+    if(!v) die("B28: lookup");
+    off = (empty ? 0 : 512) + 8 * 512;                                        /* the gap takes all 8 free clusters */
+    kalloc_fail = variant == 2;
+    w = v->ops->write(v, off, (const u8 *)"x", 1);
+    kalloc_fail = 0;
+    size = v->size;
+    vput(v);
+    s1 = fsync_sb(sb);
+    rmf = root->ops->unlink(root, "f");
+    v = lookup(root, "fill");
+    tr = v ? v->ops->truncate(v, 512) : -99;
+    if(v) vput(v);
+    rmfill = root->ops->unlink(root, "fill");
+    s2 = fsync_sb(sb);
+    if(verbose) printf("      write of 1 byte at %u = %d, size %u; while block %u refuses: sync %d, rm f %d, truncate fill %d,"
+                       " rm fill %d, sync %d\n", off, w, size, badlba, s1, rmf, tr, rmfill, s2);
+    check(w == -ENOSPC && size == (empty ? 0 : 512), m1);
+    check(s1 == 0 && rmf == 0 && tr == 0 && rmfill == 0 && s2 == 0, m2);
+    x->bad_hi = 0;
+    s3 = fsync_sb(sb);
+    rmf2 = rmf == 0 ? 0 : root->ops->unlink(root, "f");
+    if(rmfill != 0) root->ops->unlink(root, "fill");
+    fsync_sb(sb);
+    census(x, &used, &reached);
+    check(s3 == 0 && rmf2 == 0 && used == reached && used == 0 && !x->violations, m3);
+}
+
+/**** B28c: rm of a file whose block, written and never tried, refuses: the order point that takes its entry away
+      wrote it (B16 set aside only blocks that had failed), it refused, and the rm said EIO once ****/
+
+static void b28c(void) {
+    struct ram *x = ram_new("b28c", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    u32 used, reached;
+    int r, s;
+    fresh("B28c: rm of a file whose block, never tried, refuses");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 1024, 8);
+    if(put_file(root, "keep", pat, 512) || put_file(root, "f", pat, 1024) || fsync_sb(sb)) die("B28c: setup");   /* f: 3-4 */
+    x->bad_lo = x->bad_hi = clus_lba(&g, 4);
+    v = lookup(root, "f");
+    fill(pat2, 512, 9);
+    if(!v || v->ops->write(v, 512, pat2, 512) != 512) die("B28c: write");    /* cluster 4's block dirty, never tried */
+    vput(v);
+    r = root->ops->unlink(root, "f");
+    s = fsync_sb(sb);
+    x->bad_hi = 0;
+    census(x, &used, &reached);
+    if(verbose) printf("      rm f %d; sync %d (the block refusing); clusters used %u reached %u\n", r, s, used, reached);
+    check(r == 0 && s == 0 && !lookup(root, "f") && used == reached && used == 1,
+          "B28c: the rm works at once: its order point neither writes nor waits for the file's own blocks");
+}
+
+/**** B29 (R2): a truncate to a smaller size whose update_entry() cannot read the directory block (evicted, then a
+      passing read error): update_entry() changed nothing, yet entry_put() of the undo failed to read as well, and
+      B24 made the volume read-only until unmounted for an undo that had nothing to undo ****/
+
+static struct ram *b29_y;
+static u32 b29_fat2, b29_dirlba, b29_armed, b29_done;
+static int b29_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    struct ram *r = (struct ram *)d->priv;
+    struct buf *b;
+    u32 i;
+    if(b29_armed && !b29_done && lba <= b29_fat2 && b29_fat2 < lba + count) {
+        b29_done = 1;                                /* fat_set() reads the second FAT: meanwhile another task's reads */
+        for(i = 0; i < 2100; i++) if((b = bread(&b29_y->bd, i)) != NULL) brelse(b);   /* make room (the root's block, */
+        r->rbad = b29_dirlba;                        /* clean, goes), and the card cannot read it for a moment */
+    }
+    return ram_read(d, lba, count, buf);
+}
+static const struct bdev_ops b29_ops = { b29_read, ram_write, NULL };
+
+static void b29(void) {
+    struct ram *x = ram_new("b29", 8192), *y = ram_new("b29y", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v, *nv = NULL;
+    struct geo g;
+    u8 *e;
+    int t, c, rm, s;
+    fresh("B29 (R2): truncate to a smaller size; update_entry() cannot read the directory block (a passing read error)");
+    mkfs(x);
+    x->bd.ops = &b29_ops;
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    b29_y = y;
+    fill(pat, 1536, 21);
+    if(put_file(root, "t", pat, 1536) || put_file(root, "u", pat, 512) || fsync_sb(sb)) die("B29: setup");
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "T          ");
+    if(!e || g16(e + 26) != 2) die("B29: t's clusters");
+    b29_dirlba = g.root_lba;
+    b29_fat2 = g.fat_lba + g.spf;                    /* the second FAT's first sector (clusters 0-255) */
+    init_bcache();                                   /* (synced) nothing cached */
+    v = lookup(root, "t");
+    if(!v) die("B29: lookup");
+    b29_done = 0;
+    b29_armed = 1;
+    t = v->ops->truncate(v, 600);                    /* cut after cluster 3 */
+    b29_armed = 0;
+    x->rbad = 0;                                     /* the read error passed */
+    vput(v);
+    c = root->ops->create(root, "n", VN_FILE, &nv);
+    if(c == 0) vput(nv);
+    rm = root->ops->unlink(root, "u");
+    s = fsync_sb(sb);
+    if(verbose) printf("      truncate %d; then create %d, rm u %d, sync %d; \"read-only\" said %d\n", t, c, rm, s,
+                       said("read-only until unmounted"));
+    check(t == -EIO && file_is(root, "t", pat, 1536), "B29: the truncate that failed changed nothing");
+    check(c == 0 && rm == 0 && s == 0 && !said("read-only until unmounted"),
+          "B29 (R2): and leaves the volume writable: there was no change to undo (update_entry() changed nothing)");
+}
+
+/**** B27 (R4): a truncate to a smaller, non-zero size whose entry_get() cannot read the directory block (one passing
+      read error): raw[] was never filled, and the undo's entry_put() wrote those 32 bytes of the stack over the
+      file's directory entry once the block read again (the file renamed to junk, its clusters lost; zeros there
+      made it the directory's end, and every name after it went) ****/
+
+static u32 b27_lba, b27_armed, b27_failed;
+static int b27_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    if(b27_armed && !b27_failed && lba <= b27_lba && b27_lba < lba + count) { b27_failed = 1; return BDEV_EIO; }   /* once */
+    return ram_read(d, lba, count, buf);
+}
+static const struct bdev_ops b27_ops = { b27_read, ram_write, NULL };
+
+/* what an earlier call left on the stack below this frame: here (paint >= 0) a byte the scenario chooses */
+static void __attribute__((noinline)) b27_paint(int paint) {
+    volatile u8 junk[16384];
+    u32 i;
+    for(i = 0; i < sizeof(junk); i++) junk[i] = (u8)paint;
+}
+
+static int __attribute__((noinline)) b27_truncate(struct vnode *v, u32 size, int paint) {
+    if(paint >= 0) b27_paint(paint);
+    return v->ops->truncate(v, size);
+}
+
+static void b27(int paint) {
+    struct ram *x = ram_new("b27", 8192), *y = ram_new("b27y", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    struct buf *b;
+    u8 before[32], *e;
+    char ls[256], title[160];
+    u32 i, used, reached, n0, n1;
+    int t, s;
+    snprintf(title, sizeof(title), "B27 (R4): truncate 1536 -> 600 bytes; the directory block cannot be read once (entry_get());"
+             " the stack %s", paint < 0 ? "as it is" : paint ? "painted 0x41" : "painted 0x00");
+    fresh(title);
+    mkfs(x);
+    x->bd.ops = &b27_ops;
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 1536, 41);
+    if(put_file(root, "t", pat, 1536) || put_file(root, "u", pat, 512) || put_file(root, "w", pat, 512) || fsync_sb(sb))
+        die("B27: setup");
+    n0 = names(root, ls, sizeof(ls));
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "T          ");
+    if(!e) die("B27: t");
+    memcpy(before, e, 32);
+    v = lookup(root, "t");
+    if(!v) die("B27: lookup");
+    for(i = 0; i < 2100; i++) if((b = bread(&y->bd, i)) != NULL) brelse(b);   /* another task's reads: the root's block goes */
+    b27_lba = g.root_lba;
+    b27_failed = 0;
+    b27_armed = 1;
+    t = b27_truncate(v, 600, paint);
+    b27_armed = 0;
+    vput(v);
+    s = fsync_sb(sb);
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "T          ");
+    n1 = names(root, ls, sizeof(ls));
+    census(x, &used, &reached);
+    if(verbose) printf("      truncate %d (the read error seen: %u), sync %d; t's entry on the card %s; the root lists %u"
+                       " names (was %u): '%s'; clusters used %u reached %u\n", t, b27_failed, s,
+                       e && !memcmp(e, before, 32) ? "as it was" : "CHANGED", n1, n0, ls, used, reached);
+    snprintf(title, sizeof(title), "B27 (R4, the stack %s): a truncate that failed at entry_get() leaves t's entry as it was",
+             paint < 0 ? "as it is" : paint ? "painted 0x41" : "painted 0x00");
+    check(t == -EIO && b27_failed && s == 0 && e && !memcmp(e, before, 32) && n1 == n0 && used == reached &&
+          file_is(root, "t", pat, 1536), title);
+}
+
+/**** B30 (R5): mkdir whose vnode cannot be made (ENOMEM) after its entry was written; meanwhile another task's sync
+      put that entry on the card. The undo put the slot back and freed the new directory's cluster with no order
+      point between: the next sync wrote the FAT (table order) before the directory block (entry order), and the
+      card named a free cluster in between ****/
+
+static struct ram *b30_x;
+static int b30_synced;
+static void b30_hook(void) {                        /* the creating task is preempted: another task syncs */
+    surf_task other, *was = curTask;
+    curTask = &other;
+    b30_synced = bsync(&b30_x->bd);
+    curTask = was;
+}
+
+static void b30(void) {
+    struct ram *x = ram_new("b30", 8192);
+    struct superblock *sb;
+    struct vnode *root, *d = NULL;
+    struct geo g;
+    u8 *e;
+    u32 used, reached;
+    int r, s, on_card;
+    fresh("B30 (R5): mkdir d fails with ENOMEM after its entry was written; another task's sync wrote that entry meanwhile");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 512, 51);
+    if(put_file(root, "f", pat, 512) || fsync_sb(sb)) die("B30: setup");
+    b30_x = x;
+    b30_synced = 99;
+    x->oracle = 1;
+    kcalloc_hook = b30_hook;
+    kcalloc_fail = 1;                                /* fat_vnode()'s node: ENOMEM, after the sync above */
+    r = root->ops->create(root, "d", VN_DIR, &d);
+    kcalloc_fail = 0;
+    kcalloc_hook = NULL;
+    on_card = disk_entry(x, g.root_lba, g.root_secs * 16, "D          ") != NULL;
+    s = fsync_sb(sb);
+    e = disk_entry(x, g.root_lba, g.root_secs * 16, "D          ");
+    census(x, &used, &reached);
+    if(verbose) printf("      mkdir d %d (the other task's sync %d; d on the card then: %d); sync %d; oracle: %s\n", r,
+                       b30_synced, on_card, s, x->violations ? x->violation : "nothing");
+    check(r == -ENOMEM && b30_synced == 0 && on_card, "B30: the mkdir says ENOMEM, the other task's sync having put d on the card");
+    check(s == 0 && !e && x->violations == 0 && used == reached && used == 1,
+          "B30 (R5): the next sync takes d off the card before its cluster is freed (no name on the card for a free cluster)");
+    x->oracle = 0;
+}
+
+/**** B30b: a mkdir that fails before anything of its name was written (the root directory is full) gives the new
+      directory's cluster back at once, as before B30: nothing on the card can name it ****/
+
+static void b30b(void) {
+    struct ram *x = ram_new("b30b", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v, *d = NULL;
+    u32 i, free0, free1, used, reached;
+    int r = 0, s;
+    char nm[16];
+    fresh("B30b: mkdir d in a full root directory (ENOSPC before any of its name is written)");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    for(i = 0; i < 4096 && r == 0; i++) {                /* the root directory fills up (FAT16: a fixed size) */
+        snprintf(nm, sizeof(nm), "F%u", i);
+        if((r = root->ops->create(root, nm, VN_FILE, &v)) == 0) vput(v);
+    }
+    if(r != -ENOSPC || fsync_sb(sb)) die("B30b: filling the root directory");
+    free0 = free_clusters(sb);
+    r = root->ops->create(root, "D", VN_DIR, &d);
+    free1 = free_clusters(sb);
+    s = fsync_sb(sb);
+    census(x, &used, &reached);
+    if(verbose) printf("      %u files; mkdir D %d; free clusters %u before, %u right after; sync %d; used %u reached %u\n",
+                       i - 1, r, free0, free1, s, used, reached);
+    check(r == -ENOSPC && free1 == free0 && s == 0 && used == reached && used == 0,
+          "B30b: a mkdir that wrote nothing of its name gives its cluster back at once");
+}
+
+/**** B31a (R3): nine write cut-backs while the card refuses every write: B25 kept eight chains to free later and lost
+      the ninth (its clusters allocated with nothing pointing at them) without a word ****/
+
+static void b31a(void) {
+    struct ram *x = ram_new("b31a", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    u32 used, reached, i, free0, free1;
+    int w, s, bad = 0;
+    fresh("B31a (R3): nine 8 KB appends refused while the card refuses (each cut back while the order point is refused)");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    fill(pat, 65536, 31);
+    if(put_file(root, "f", pat, 512) || fsync_sb(sb)) die("B31a: setup");
+    free0 = free_clusters(sb);
+    v = lookup(root, "f");
+    x->fail_all = 1;
+    for(i = 0; i < 9; i++) if((w = v->ops->write(v, 512, pat, 8192)) != -EIO) bad++;   /* 16 clusters each, refused */
+    x->fail_all = 0;
+    vput(v);
+    s = fsync_sb(sb);
+    free1 = free_clusters(sb);
+    census(x, &used, &reached);
+    if(verbose) printf("      sync once the card works %d; free clusters %u before, %u after; on the card used %u, reached %u\n",
+                       s, free0, free1, used, reached);
+    check(!bad && s == 0 && free1 == free0 && used == reached && x->violations == 0,
+          "B31a (R3): every chain cut back while the card refused is freed once it works (nine of them)");
+}
+
+/**** B31b: more chains cut back than can wait (PENDING_MAX): the one with no place stays allocated with nothing
+      pointing at it until the volume is checked, and the console says so, then and at unmount ****/
+
+static void b31b(void) {
+    struct ram *x = ram_new("b31b", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v, *d = NULL;
+    struct geo g;
+    u32 used, reached, i;
+    int s, said1;
+    fresh("B31b: 65 write cut-backs while a directory block refuses (only order points fail: the table points work)");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 32);
+    if(put_file(root, "f", pat, 512) || root->ops->create(root, "d", VN_DIR, &d) || fsync_sb(sb)) die("B31b: setup");
+    x->bad_lo = clus_lba(&g, 3);                     /* d's block (cluster 3) and every cluster after it refuse */
+    x->bad_hi = g.data_lba + g.nclusters - 1;
+    if(put_file(d, "g", NULL, 0)) die("B31b: a file in d");   /* d's block dirty: every full sync owes it, refused */
+    vput(d);
+    if(fsync_sb(sb) != -EIO) die("B31b: the refused sync");
+    v = lookup(root, "f");
+    for(i = 0; i < 65; i++) if(v->ops->write(v, 512, pat, 8192) != -EIO) die("B31b: an append not refused");
+    vput(v);
+    said1 = said("cannot wait to be freed");
+    x->bad_hi = 0;                                   /* the card works again */
+    s = fsync_sb(sb);
+    census(x, &used, &reached);
+    if(verbose) printf("      said when it happened: %d; sync once the card works %d; on the card used %u, reached %u\n",
+                       said1, s, used, reached);
+    check(said1 == 1 && s == 0 && used - reached == 16 && x->violations == 0,
+          "B31b: of 65 chains given back while the card refused, the one with no place left is said lost (16 clusters), the rest freed");
+    sb->ops->unmount(sb);
+    check(said("stay allocated with nothing pointing at them") == 1, "B31b: and the unmount says so again");
+}
+
+/**** B32: the blocks an rm sets aside stay so only for its order point. B16 kept them set aside until the chain was
+      freed; another task's sync owes them (B26) and waits for them, 10 s at most: a long chain's free outlasts it ****/
+
+static struct ram *b32_x;
+static u32 b32_lba, b32_armed;
+static int b32_other;
+static int b32_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    if(b32_armed && lba <= b32_lba && b32_lba < lba + count) {   /* the free reaches the second FAT's ninth sector: */
+        surf_task other, *was = curTask;             /* another task syncs meanwhile */
+        b32_armed = 0;
+        curTask = &other;
+        b32_other = bsync(&b32_x->bd);
+        curTask = was;
+    }
+    return ram_read(d, lba, count, buf);
+}
+static const struct bdev_ops b32_ops = { b32_read, ram_write, NULL };
+
+static void b32(void) {
+    struct ram *x = ram_new("b32", 8192), *y = ram_new("b32y", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    struct geo g;
+    struct buf *b;
+    u32 i, used, reached;
+    int r;
+    fresh("B32: another task's sync while an rm frees a long chain whose last block refuses");
+    mkfs(x);
+    x->bd.ops = &b32_ops;
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 61);
+    if(big_file(root, "f", pat, 2100 * 512) || fsync_sb(sb)) die("B32: setup");  /* f: clusters 2-2101 (nine FAT sectors) */
+    x->bad_lo = x->bad_hi = clus_lba(&g, 2101);      /* f's last block refuses */
+    v = lookup(root, "f");
+    fill(pat2, 512, 62);
+    if(!v || v->ops->write(v, 2099 * 512, pat2, 512) != 512) die("B32: write");
+    vput(v);
+    if(fsync_sb(sb) != -EIO) die("B32: the refused sync");
+    for(i = 0; i < 2100; i++) if((b = bread(&y->bd, i)) != NULL) brelse(b);   /* the FAT goes from the cache */
+    b32_x = x;
+    b32_lba = g.fat_lba + g.spf + 8;                 /* (only the free reads the second FAT: fat_set()) */
+    b32_other = 99;
+    b32_armed = 1;
+    r = root->ops->unlink(root, "f");
+    b32_armed = 0;
+    x->bad_hi = 0;
+    if(verbose) printf("      rm f %d; the other task's sync, during the free %d\n", r, b32_other);
+    check(r == 0 && b32_other == 0 && !said("by an operation that does not end"),
+          "B32: another task's sync during the free does not wait for the rm's blocks (set aside for its order point only)");
+    r = fsync_sb(sb);
+    census(x, &used, &reached);
+    check(r == 0 && used == 0 && reached == 0, "B32: sync; nothing lost");
+}
+
+/**** B33: a sync writes a directory block from a copy (B12: another task keeps changing it and what it needs); a
+      block the copy needs written first is held by that task, which then lets go of it and sets it aside (its rm's
+      order point, B28), and that order point waits for the copy to end (it owes the directory block). The copy
+      waited for the block set aside as for a hold (B26), each waited for the other, and after 10 s the copy was
+      given up: the sync failed, "set aside for 10 s by an operation that does not end" ****/
+
+#define B33_DATA 3
+static struct ram *b33_x;
+static struct buf *b33_y;                            /* the directory block's buffer (dirty throughout: it stays) */
+static u32 b33_d[B33_DATA], b33_ylba;
+static int b33_state;                                /* 0 the sync's rounds, 1 the other task holds a block the copy
+                                                        needs, 2 it set it aside, 3 its operation ended */
+static struct buf *b33_hold;
+static surf_task b33_w1, b33_w2;
+static void b33_touch(u32 lba, u8 order, u32 v) {
+    struct buf *b = bread(&b33_x->bd, lba);
+    if(!b) die("B33: read");
+    b->data[0] = (u8)v;
+    bdirty_order(b, order);
+    brelse(b);
+}
+static int b33_in(u32 blk, u32 lba, u32 count) { return lba <= blk && blk < lba + count; }
+static int b33_dirty(u32 lba) {
+    struct buf *b = bpeek(&b33_x->bd, lba);
+    int d = b && b->dirty;
+    if(b) brelse(b);
+    return d;
+}
+static void b33_hook(struct ram *r, u32 lba, u32 count) {   /* after each write the disk stores: the other task runs */
+    surf_task *was = curTask;
+    int i;
+    (void)r;
+    if(b33_in(b33_ylba, lba, count)) {               /* (the directory block itself being written) */
+        if(b33_state == 2 && !b33_y->copying) goto end;
+        return;
+    }
+    curTask = &b33_w2;
+    if(b33_state == 0 && !b33_y->copying) {          /* it changes the data blocks the sync is not writing, then the
+                                                        directory block (which then needs them) */
+        for(i = 0; i < B33_DATA; i++) if(!b33_in(b33_d[i], lba, count)) b33_touch(b33_d[i], BORDER_DATA, lba + i);
+        b33_touch(b33_ylba, BORDER_DIR, lba);
+    } else if(b33_state == 0) {                      /* the copy writes the first block it needs: the other task takes
+                                                        hold of another (dirty: one the copy needs too) */
+        for(i = 0; i < B33_DATA; i++) if(!b33_in(b33_d[i], lba, count) && b33_dirty(b33_d[i])) break;
+        if(i < B33_DATA) { b33_hold = bread(&b33_x->bd, b33_d[i]); b33_state = 1; }
+    }
+    curTask = was;
+    return;
+end:
+    curTask = &b33_w2;                               /* its order point: the copy let go of the block, its operation */
+    for(i = 0; i < B33_DATA; i++) bdiscard(&b33_x->bd, b33_d[i]);   /* ends (the block set aside is dropped) */
+    b33_state = 3;
+    curTask = was;
+}
+static void b33_yield(void) {                        /* the sync sleeps in the cache: the other task runs */
+    surf_task *was = curTask;
+    int i;
+    curTask = &b33_w2;
+    if(b33_state == 1) {                             /* it lets go of the block and sets it aside (its rm, B28) */
+        u32 lba = b33_hold->lba;
+        brelse(b33_hold);
+        baside(&b33_x->bd, lba, true);
+        b33_state = 2;
+    } else if(b33_state == 2 && !b33_y->copying) {   /* its order point waits for the copy to end; then it ends */
+        for(i = 0; i < B33_DATA; i++) bdiscard(&b33_x->bd, b33_d[i]);
+        b33_state = 3;
+    }
+    curTask = was;
+}
+
+static void b33(void) {
+    struct ram *x = ram_new("b33", 2048);
+    int r, i, said_end;
+    fresh("B33: a sync writes a block from a copy; another task sets aside a block the copy needs, and waits for the copy");
+    b33_x = x;
+    for(i = 0; i < B33_DATA; i++) b33_d[i] = 100 + 200 * i;   /* data blocks apart (never in one request), and the */
+    b33_ylba = 900;                                  /* directory block that needs them (order: data, then entries) */
+    for(i = 0; i < B33_DATA; i++) b33_touch(b33_d[i], BORDER_DATA, 1);
+    b33_touch(b33_ylba, BORDER_DIR, 1);
+    b33_y = bpeek(&x->bd, b33_ylba);
+    if(!b33_y) die("B33: the directory block");
+    brelse(b33_y);
+    b33_state = 0;
+    x->hook = b33_hook;
+    yield_hook = b33_yield;
+    curTask = &b33_w1;                               /* (a task: the cache's sleeps reach yield()) */
+    r = bsync(&x->bd);
+    curTask = NULL;
+    yield_hook = NULL;
+    x->hook = NULL;
+    said_end = said("by an operation that does not end");
+    if(verbose) printf("      the sync %d; the other task: %s; \"does not end\" said %d\n", r,
+                       b33_state == 3 ? "its operation ended" : b33_state == 2 ? "still waits for the copy" :
+                       b33_state == 1 ? "never set the block aside" : "never held a block the copy needs", said_end);
+    check(b33_state >= 2, "B33: the scenario took place (the copy needed a block the other task set aside)");
+    check(r == 0 && b33_state == 3 && !said_end,
+          "B33: the copy lets the block go: the other task's operation ends, and the sync says 0 at once");
+    curTask = &b33_w2;                               /* (what is left: the other task's blocks dropped, then a sync) */
+    for(i = 0; i < B33_DATA; i++) bdiscard(&x->bd, b33_d[i]);
+    curTask = NULL;
+    bsync(&x->bd);
+}
+
+/**** B22b (R6): a clean copy a reader holds while a straight write over it is refused after the card stored it all:
+      it leaves the table at once (a new read gets the card's bytes) and is dropped when let go; a dirty copy in the
+      same request keeps its bytes and is written by the next sync (B22 holds: the review's check) ****/
+
+static int b22b_store_fail;
+static int b22b_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
+    struct ram *r = (struct ram *)d->priv;
+    if(b22b_store_fail) { memcpy(r->mem + lba * 512, buf, count * 512); r->failed++; return BDEV_EIO; }   /* stored, refused */
+    return ram_write(d, lba, count, buf);
+}
+static const struct bdev_ops b22b_ops = { ram_read, b22b_write, NULL };
+
+static void b22b(void) {
+    struct ram *x = ram_new("b22b", 2048);
+    struct buf *held, *again, *dirty;
+    static u8 newb[16 * 512];
+    int w, s, held_valid_after, again_new, dirty_kept, dirty_on_card;
+    fresh("B22b (R6): a held clean copy and a dirty copy under a refused straight write that the card stored");
+    x->bd.ops = &b22b_ops;
+    memset(x->mem + 100 * 512, 'A', 512);
+    memset(x->mem + 101 * 512, 'B', 512);
+    if(!(held = bread(&x->bd, 100))) die("B22b: read");          /* a reader holds block 100 (clean, 'A') */
+    if(!(dirty = bread(&x->bd, 101))) die("B22b: read 2");
+    memset(dirty->data, 'D', 512);                               /* block 101: dirty 'D' in the cache */
+    bdirty(dirty);
+    brelse(dirty);
+    memset(newb, 'N', sizeof(newb));
+    b22b_store_fail = 1;
+    w = bwrite_blocks(&x->bd, 100, 16, newb);
+    b22b_store_fail = 0;
+    again = bread(&x->bd, 100);
+    again_new = again && again != held && again->data[0] == 'N';
+    brelse(held);
+    held_valid_after = held->valid;
+    if(again) brelse(again);
+    dirty = bpeek(&x->bd, 101);
+    dirty_kept = dirty && dirty->dirty && dirty->data[0] == 'D';
+    if(dirty) brelse(dirty);
+    s = bsync(&x->bd);
+    dirty_on_card = x->mem[101 * 512] == 'D';
+    check(w != 0 && again_new && !held_valid_after && dirty_kept && s == 0 && dirty_on_card,
+          "B22b (R6): the held clean copy leaves the table and goes when let go; the dirty copy keeps its bytes");
+}
+
 int main(int argc, char **argv) {
     const char *only = argc > 1 ? argv[1] : NULL;
     verbose = getenv("FATFS_VERBOSE") != NULL;
@@ -2321,6 +2926,19 @@ int main(int argc, char **argv) {
     RUN("b25", b25());
     RUN("b26a", b26a());
     RUN("b26b", b26b());
+    RUN("b27", b27(-1); b27(0); b27(0x41));
+    RUN("b28a", b28(0));
+    RUN("b28b", b28(1));
+    RUN("b28c", b28c());
+    RUN("b28d", b28(2));
+    RUN("b29", b29());
+    RUN("b30", b30());
+    RUN("b30b", b30b());
+    RUN("b31a", b31a());
+    RUN("b31b", b31b());
+    RUN("b32", b32());
+    RUN("b22b", b22b());
+    RUN("b33", b33());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

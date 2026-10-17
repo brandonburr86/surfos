@@ -385,3 +385,182 @@ writes sector by sector. B22 is in the cache, so it holds for all three.
   eject +18 to +24 %, a sync command +10 %): B26 had made owed() too large for gcc -O2 to inline, and each sync asks it
   of all 1024 buffers twice (owed_open() and the last loop), a call each on a CPU that fetches every instruction from
   DDR; 70bb002 makes owed() and aside_other() inline (the object then has no owed: riscv64-unknown-elf-nm).
+
+======================================================================================================================
+Round fs-fix-4 (10/16/26): an independent review of B20-B26 (15f0f3c), and its fixes (audit B27-B33)
+date:   2026-10-16 (local)
+review: by another agent, read-only, on 15f0f3c: six scenarios (fsrev4-tests/review4.c, R1-R6) against 15f0f3c's
+        fs/bcache.c, fs/fat.c and fs/fat_mkfs.c with tests/host/test_fatfs.c's stand-ins, the randomized and threaded
+        tests with a census of lost clusters at each clean point (fuzz4.c, conc4.c), 1.4 million operations clean under
+        AddressSanitizer and UndefinedBehaviorSanitizer. It confirmed B20-B24, B25's frees and B26 free of deadlock. Its
+        findings (critical 1, major 2, minor 3-6, plausible 6 and the cosmetic ones) are docs/CODE-AUDIT.md's B27-B32;
+        B33 came from this round's own runs (section 21).
+before: 15f0f3c's fs/, include/, lib/ and tests/host (git archive), built with this round's tests/host/test_fatfs.c
+        (its stand-ins; the scenarios call nothing 15f0f3c lacks)
+after:  sc/fs-fix-4 (from surfcpu 15f0f3c): 607421b fat (B27, B29), 8a3b3a2 bcache (bdirty_blocks(), B22's wording,
+        TALLY_DEVS noted), cb670f4 fat (B28, B30-B32), e0d9c32 tests, be6f335 docs; then B33, found while looking into
+        a watchdog of the threaded campaign (section 21): 2a3f0bb bcache, c2ac1e2 its test, 3e06f88 docs; two for
+        B28's cost (sections 22, 24): 7cf2cb1 (bdirty_blocks() from the device's lists) and b1f90e1 (an operation's
+        own directory blocks never set aside nor walked for); 98fc14b (CARD.md wrapped); then the costs in
+        PORTING-RISCV.md and this evidence. The host results below are of the final code (b1f90e1) unless a line
+        says otherwise
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32, tests/host/pager_shim), and the
+        same with -fsanitize=address,undefined; the devenv container (gcc -m32) through make unittest (section 23)
+
+== 18. Before and after, scenario by scenario (tests/host/test_fatfs.c: 254 checks; those of the earlier rounds pass on
+       both)
+scenario  audit review what                                             before (15f0f3c)                                after
+B27       B27   R4     truncate 1536 -> 600 bytes; the directory block  FAIL, each time: t's entry on the card changed:  pass: EIO, t's entry as it was, the names
+                       cannot be read once (entry_get()); three stack   stack as it is: renamed 'P]', clusters lost (5   and clusters all there (5 used, 5 reached)
+                       paints (as it is, 0x00, 0x41)                    used, 2 reached); 0x00: the root lists no name
+                                                                        (the entry ends the directory: 5 used, 0
+                                                                        reached); 0x41: renamed AAAAAAAA.AAA
+B28a      B28   R1a    1 byte past the end of a 512-byte file on a full FAIL: ENOSPC, size 512; then while the sector   pass: sync 0, rm f 0, truncate fill 0, rm
+                       volume (h's 8 clusters freed), one sector of the refuses: sync EIO, rm f EIO, truncate fill EIO,  fill 0, sync 0, the sector never written
+                       gap refusing                                     rm fill EIO, sync EIO (the gap block that failed  (dropped before the order point); nothing
+                                                                        in the cut's order point stayed owed)            lost once the card works
+B28b      B28   R1b    the same past the end of an empty file           FAIL: rm f 0, but sync, truncate, rm fill EIO    pass: all 0
+                                                                        (the chain freed at once kept its untried
+                                                                        blocks; one failed in the next sync)
+B28c      B28   -      rm of a file whose block, written and never      FAIL: rm EIO, the sync EIO (B16 set aside only   pass: rm 0 at once, sync 0, the block never
+                       tried, refuses                                   blocks that had failed: the order point wrote    written
+                                                                        it)
+B28d      B28   -      B28a with no memory for the drop lists while the FAIL: sync, rm, truncate EIO (no list: nothing   pass: all 0 (the next order point or sync
+                       write runs (as for a block another task is       dropped, the block owed while its chain waits)   drops the waiting chain's blocks)
+                       writing then)
+B29       B29   R2     truncate to a smaller size; update_entry()       FAIL: EIO, then "read-only until unmounted":     pass: EIO, nothing changed; create 0, rm 0,
+                       cannot read the directory block (evicted, then   create and rm EROFS (nothing had changed)        no "read-only"
+                       a passing read error)
+B30       B30   R5     mkdir d fails with ENOMEM after its entry was    FAIL: the oracle, at the next sync: "entry 'D'   pass: ENOMEM; the next sync takes D off the
+                       written; another task's sync wrote the entry     -> cluster 3 (step 0 of its chain) is free"      card, then frees cluster 3 (oracle nothing)
+                       meanwhile
+B30b      B30   -      mkdir D in a full root directory (ENOSPC before  pass (frees at once)                             pass: ENOSPC, the free count back at once
+                       any of its name is written)                                                                       (it guards the fix: one that wrote nothing
+                                                                                                                         frees its cluster at once, as before)
+B31a      B31   R3     nine 8 KB appends refused while the card refuses FAIL: once the card works, 16 clusters lost     pass: every chain freed (8094 free before
+                       every write (each cut back while its order       (used 17, reached 1): the ninth chain, without   and after; used 1, reached 1)
+                       point is refused)                                a word
+B31b      B31   -      65 cut-backs while only order points fail (a     FAIL: 912 clusters lost (57 chains), nothing     pass: the 65th said lost at once ("cannot
+                       directory block refuses; the table points work)  said                                             wait to be freed"), 16 clusters left so,
+                                                                                                                         the 64 others freed; the unmount says it
+                                                                                                                         again
+B32       B32   -      rm of a 2100-cluster file whose last block       FAIL: rm 0, but the other task's sync -1: "set   pass: rm 0, the other sync 0 (the block was
+                       refuses; another task syncs while the free walks aside for 10 s by an operation that does not    dropped after the order point), nothing lost
+                       the FAT                                          end: not written"
+B22b      B22   R6     a held clean copy and a dirty copy under a       pass                                             pass (B22 held; its wording is now exact:
+                       refused straight write the card stored                                                            the dirty copy keeps the cache's bytes)
+B33       B33   -      a sync writes a directory block from a copy;     FAIL: "block 300 set aside for 10 s by an        pass: the copy lets the directory block go
+                       another task holds a data block the copy needs,  operation that does not end: not written", the  and looks again (it needs the block no
+                       lets go of it and sets it aside (its rm's order  sync -1, the other task still waiting           more): the other task's operation ends, the
+                       point), then waits for the copy to end                                                            sync says 0
+(each)    B9           the cache's account of each disk matches its      pass                                             pass
+                       blocks
+Every new scenario fails on 15f0f3c (11 of 13 scenarios, 14 of their checks: 254 checks there, 14 failing) but B30b
+and B22b, which pass on both (B30b guards a choice of the fix, B22b the review's R6 check of B22); B33 fails as well on
+cb670f4's code (B27-B32 without B33); B28d and B30b failed on a draft of B28 and B30 without drop_pending() and with
+every failed mkdir's cluster waiting (what made those two choices); every scenario of the earlier rounds passes on
+both. The review's own file (review4.c, unchanged, with 15f0f3c's harness head and this code): 23 checks, 1 failure,
+by design: R3's "(documented) the ninth chain is lost until fsck, the first eight freed" (B31: nothing is lost there
+now); on 15f0f3c the review recorded 8 of the 23 failing (R1 three, R2, R4 three, R5), R3's passing.
+The undo paths against B27 (the finding asked for all of them): the slot undos (dir_write_entries(),
+dir_delete_entries(), slots_restore()) record a slot only after changing it; entry_get()/entry_put() serve
+fat_truncate() alone (both paths now zero raw[] and put it back only when update_entry() changed the entry);
+set_dotdot() says whether it changed ".." and rename puts it back only then; fat_alloc()'s best-effort free on a failed
+table write loses at most a cluster (nothing saved, nothing put back).
+
+== 19. AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the
+       kernel files and the tests alike)
+  after:   test_fatfs 254 checks, 0 failures, no report; test_fatfuzz's set, 4 runs, 0 failures, no report; test_fatconc
+           in make unittest's four settings, each exit 0, no report; the review's review4.c (all six scenarios): no
+           report; the review's conc4.c in its campaign's six settings (seeds 81, 82, 6 s each): 12 runs, exit 0 each,
+           218,521 operations, census 0 lost, no report
+
+== 20. The randomized test (tests/host/test_fatfuzz.c, make unittest's set; the review's fuzz4.c by hand)
+  after:   make unittest's set: 4 runs, 0 with failures. The review's campaign (fuzz_campaign4.sh: seeds 800-829 with
+           4000 operations on 8192 blocks, 900-905 with 1500 on 40000, 950-953 with 1000 on FAT32, refused writes and
+           reads at random): 40 runs, 133,000 operations, 28,319 of them while the disk refused, 9,411 refusal episodes,
+           7,654 clean points: the oracle, B5, the cache's account, the image against the model, the syncs and the short
+           writes that changed more, 0 in every run; its census of lost clusters at every clean point: 0 in every run.
+
+== 21. The threaded test (tests/host/test_fatconc.c, make unittest's four settings; the review's conc4.c by hand)
+  after:   make unittest's four settings, 3 s each: exit 0 each (and under the sanitizers, section 19). The review's
+           campaign (conc_campaign4.sh's six settings, seeds 71-74, 10 s each, each thread a task of its own to the
+           cache): 24 runs, exit 0 each, 1,178,377 operations (16,599 of them failed by the refusing disk, as they may),
+           1,001,935 disk writes stored and 120,230 refused, 22,132 closes whose write-back said 0 checked on the disk:
+           no watchdog, the final syncs 0, no dirty block left, oracle 0, both accounts right, B5 0, the models and the
+           end comparison right, no stale close; the census found no lost cluster in any run. And 48 runs more of the six
+           settings (seeds 75-82, with make test-all and unittest running in the container): exit 0 each, 2,130,666
+           operations, 44,982 closes checked, none stale, census 0 lost. (The same campaigns gave the same results on
+           c2ac1e2 and 7cf2cb1.)
+  The watchdog. On cb670f4's code (B27-B32 with drop_pending(), before B33) the same campaign ran 23 of
+  its 24 runs clean (872,584 operations, 17,019 closes checked on the disk, census 0 lost); one, seed 74 in the setting
+  "3 1 50 0 0 1 1 40000 0" (three writers, chaos, 50 us a request, no syncer thread, 40,000 blocks), ended with the
+  harness's watchdog, "no operation finished for 30 s: a wait that never ends" (exit 3). The campaign script keeps only
+  the lines it greps, so the watchdog's dump (where each worker was) is lost. It ran while make test-all ran in the
+  devenv container and other agents' FPGA builds ran, with the Mac's swap at 11.6 of 12 GB. The same code again,
+  nothing: that setting 40 times (seeds 74-79 and 174-179, three times each, two at a time), the campaign's six
+  settings 48 times (seeds 71-78), 24 times with a build counting the waits below, and 144 times with a build whose
+  watchdog prints where every thread waits in the cache and for which mutex (seeds 101-112 and 201-212, two streams,
+  while make unittest ran in the container): 256 runs, exit 0 each. Not reproduced, not explained. The harness has no
+  timers (its timed waits end when another thread wakes them), so a wait the kernel ends after 10 s (B18, B26) can last
+  for ever there once the other threads have stopped, at the end of a run. Reading those wait paths found B33 (a copy
+  that waited for a block another task set aside, while that task's order point waited for the copy): its scenario
+  (section 18) shows it deterministically, but the counting build saw its precondition (a wait for another task's
+  set-aside block while a copy is under way) in none of 24 runs, so it is not shown to be what stopped that run.
+
+== 22. Costs (round fs-fix-2's program, section 8, with two rows more: an rm of a 4 MiB file (8192 clusters) in a
+       folder after a sync, and right after it was written; device write requests, blocks, host CPU time, least of 20
+       runs, before and after interleaved, while the devenv container ran)
+                                                    15f0f3c                   after (b1f90e1)
+  unlink of 200 files, a sync after each            600 (  600)   0.91 ms    600 (  600)   0.94 ms
+  mv of 200 files in one directory                  400 (  400)   3.68 ms    400 (  400)   3.74 ms
+  200 x open O_TRUNC, write 512 bytes, close       1000 ( 1000)   1.75 ms   1000 ( 1000)   1.78 ms
+  4 MiB in 4 KiB pieces, FAT16, 512-byte clusters   115 ( 8291)   5.41 ms    115 ( 8291)   5.45 ms
+  4 MiB in 4 KiB pieces, FAT32 64 MiB (512 B cl.)   197 ( 8580)   6.22 ms    197 ( 8580)   6.29 ms
+  4 MiB in 64 KiB pieces, FAT32 64 MiB              196 ( 8580)   3.29 ms    196 ( 8580)   3.31 ms
+  4 MiB in 4 KiB pieces, FAT32 1 GiB                105 ( 8244)   5.16 ms    105 ( 8244)   5.18 ms
+  4 MiB in 64 KiB pieces, FAT32 1 GiB                84 ( 8244)   2.42 ms     84 ( 8244)   2.46 ms
+  rm of a 4 MiB file in a folder, synced (FAT16)      3 (   35)   0.15 ms      3 (   35)   0.16 ms
+  rm of a 4 MiB file right after writing it           6 (   47)   0.16 ms      5 (   39)   0.20 ms
+  The same requests and blocks on every row but the last: that rm no longer writes the file's 8 last dirty blocks
+  (B28: set aside for its order point, then dropped), and walks the file's chain to find them (+0.04 ms for 8192
+  clusters). The host's CPU time on the other rows: within 0.07 ms (the Mac was loaded; between runs of one binary the
+  rows varied by up to 0.3 ms). Two intermediate states were measured the same way: at c2ac1e2 each rm, truncate and
+  mv over a file looked over the cache's 1024 buffers twice (unlink of 200 files 0.94 -> 1.10 ms, the O_TRUNC row
+  1.76 -> 2.09 ms: +0.8 and +1.6 us an operation), which 7cf2cb1 took back by walking the device's lists of dirty
+  blocks; at 7cf2cb1 an rm in a folder still walked its file's whole chain for the folder's own dirty block (in the
+  data area: 0.15 -> 0.20 ms here, +0.5 million cycles on SurfCPU, section 24), which b1f90e1 took back. Memory:
+  struct fat_fs 452 bytes larger (the 64 pending chains, B31, and the count of clusters lost); a list of the device's
+  dirty blocks (5 bytes each) is kalloc'd while an rm, truncate, mv over a file, cut-back or failed mkdir runs and
+  the device has dirty blocks; an rm, truncate or mv over a file keeps the blocks of its own slots on its stack (260
+  bytes at most).
+
+== 23. make unittest in the devenv container (gcc -m32)
+  O0 (volume surfos-sc-fs4, 22:31-22:37 at 98fc14b, b1f90e1's code; 21:12-21:19 at 7cf2cb1; 20:36-20:44 at
+  be6f335): "FATFS: 254 checks, 0 failures" (251 at be6f335), "FATFUZZ: 4 runs, 0 with failures", "CONC: ok" for each
+  of the four settings; every other unit test passing (surfcpu/docs/evidence/os/x86.txt, round fs-fix-4). O2 (volume
+  surfos-sc-fs4-o2, 22:42-22:48 at 98fc14b; 21:25-21:32 at 7cf2cb1): the same; the run's exit 2 is
+  tests/test_devenv.py with O=2 in its environment, as in rounds fs-fix-2 and fs-fix-3 (x86.txt).
+
+== 24. Where the same code runs under the riscv32 kernel (make -C surfcpu check, 22:53-23:17, sc/fs-fix-4 at 98fc14b,
+       b1f90e1's code; it had passed at 7cf2cb1 too, 21:39-22:09)
+  "check: all automated SurfCPU checks passed". Among them: boards/qemu_virt/test_os.py 132 of 132 at -O2 and at -O0;
+  test-os-surfemu 18 of 18; on the RTL system (surfsim, with the io track's card model) test-os-persist 17 of 17,
+  test-os-faults 25 of 25, test-os-kit 21 of 21, test-soc-system-boot 21 of 21.
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against 15f0f3c's (its tree from git archive,
+  built the same way, with the same surfsim and SurfBoot ROM: this round changes neither; 22:10-22:15):
+                                         15f0f3c              7cf2cb1                after (b1f90e1)
+    test-os-persist, the write run          277,038,592       277,345,603  +0.11 %   277,447,800  +0.15 %
+    test-os-persist, the reboot run         223,795,397       224,053,491  +0.12 %   224,178,707  +0.17 %
+    test-os-faults, the refusing card       312,267,512       312,287,758  +0.01 %   318,392,141  +1.96 %
+    test-os-faults, the full card           201,721,260       202,519,793  +0.40 %   202,197,185  +0.24 %
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 3.2 KB larger
+  (392,404 -> 395,620 bytes: +0.38 million cycles); each command after that within -0.4 % and +0.4 % of 15f0f3c's,
+  but for three pairs of lines in another order (cd and mkdir, cd and ls, df's prompt and cp: one 1.9 million cycles
+  sooner and the next as much later, as in rounds fs-fix-2 and fs-fix-3) and, in the refusing card's run, the card
+  taken out and put back (+4.7 and +1.0 million cycles): the kernel sees a removal at its card-detect task's next look,
+  200 ms (5 million cycles) apart, and this run met it one look later (at 7cf2cb1 the same two steps were 6,700 and
+  252,000 cycles shorter than 15f0f3c's); without them that run is 0.12 % longer. At 7cf2cb1 the full card's rm took
+  506,000 cycles more (+9.7 %): aside_collect() walked the removed copy's whole chain for the root directory's dirty
+  block (FAT32: in the data area); b1f90e1 marks the operation's own directory blocks first, and that rm is now
+  +14,800 cycles (+0.3 %), the write run's rm +7,700 (+0.2 %).

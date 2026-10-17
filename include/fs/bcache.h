@@ -46,8 +46,10 @@ goes only after the lower-order changes older than its own last change. B16: a f
 system may set the failed blocks of clusters it is freeing aside (baside(), bdiscard()).
 B18: a block a sync owes is given up on (not written) once syncs have waited 10 s for its hold.
 B22: a refused bwrite_blocks() may have changed some of its blocks on the device: the cache drops
-its clean copies of them. B26: a block set aside is still the debt of other tasks' syncs (they
-wait for it as for a hold); each sync counts its own requests (B13).
+its clean copies of them (a dirty one keeps its bytes, the next sync's to write over the device's).
+B26: a block set aside is still the debt of other tasks' syncs (they wait for it as for a hold);
+each sync counts its own requests (B13). B28: bdirty_blocks() lists a device's dirty blocks.
+B33: a block written from a copy is let go when another task sets aside a block the copy needs.
 */
 
 #ifndef _FS_BCACHE_H
@@ -120,6 +122,7 @@ u_int bdirty_count(struct bdev *dev);                /* 10/16/26 (B10): dev's di
    dependency, no debt of the setting task's syncs while aside: B26, other tasks' syncs wait for it), and one
    dropped once its cluster is free (its bytes will never be read) */
 u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max);
+u_int bdirty_blocks(struct bdev *dev, u32 *lbas, u_int max);  /* 10/16/26 (B28): every dirty block of dev, the same way */
 void baside(struct bdev *dev, u32 lba, bool on);
 void bdiscard(struct bdev *dev, u32 lba);
 int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
