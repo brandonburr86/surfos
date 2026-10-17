@@ -470,13 +470,15 @@ class Kit:
                 'design = "surfcpu_arty_a7_ddr_bramdiag"\nbuild_id = "0bcadbcf"\nsource_dirty = false\n'
                 'board = "arty_a7_100t"\nresult = "pass"\n')
         return [
-            # m3 on the DDR diagnostics: the bitstream line's DDR status is hexadecimal, and 1c (TIMEOUT set)
-            # once failed board-test.py's decimal parse ("the bitstream line: not seen")
+            # m3 asked for the DDR diagnostics: the bitstream line's DDR status is hexadecimal, and 1c (TIMEOUT
+            # set) once failed board-test.py's decimal parse ("the bitstream line: not seen"); the step names
+            # the design asked for
             ('m3-ddr-status-hex', lambda: self.fake(
                 'm3-ddr-status-hex', 'm3', 'bramdiag', ['--board', 'arty_a7_100t', '--design',
                                                         'surfcpu_arty_a7_ddr_bramdiag'], manifest=diag,
                 within=30, ddr_status='1c',
-                must=[r'ok\s+board id 0x100 is arty_a7_100t\'s', r'ok\s+the bitstream\'s build id 0bcadbcf is the '
+                must=[r'program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_bramdiag\n',
+                      r'ok\s+board id 0x100 is arty_a7_100t\'s', r'ok\s+the bitstream\'s build id 0bcadbcf is the '
                       r'manifest\'s', r'ok\s+its dirty flag \(0\) matches', r'ok\s+the system clock is 25,000,000 Hz',
                       r'ok\s+DDR initialization: ok', r'ok\s+code running from DDR: ok',
                       r'ok\s+BRAMDIAG: PASS \(572 checks\)', r'ok\s+the UART both ways',
@@ -700,7 +702,8 @@ class Kit:
                       r'bitstream build [0-9a-f]{8}, flags \d+.*\(SIMULATION\)', r'skip\s+not observed: Are LD4'])),
             ('m7', 'check', lambda: self.rtl(
                 'm7', 'm7', boot, os_card, within=600, extra=['--ps2-send', r'\nkbd-ready\r?\n=echo ps2-ok\n'],
-                must=[r'ok\s+SurfOS booted from the card to the shell', r'ok\s+SurfOS 1\.0\.0 on the card is',
+                must=[r'program-volatile BOARD=\S+ DESIGN=surfcpu_arty_a7_ddr\)',   # the design: SurfBoot with DDR
+                      r'ok\s+SurfOS booted from the card to the shell', r'ok\s+SurfOS 1\.0\.0 on the card is',
                       r'ok\s+bootinfo: the kernel reads the bitstream\'s identity',
                       r'ok\s+two kernel tasks make progress, sleep and wake \(run 2', r'ok\s+the uptime advances',
                       r'ok\s+the PS/2 keyboard types into the shell', r'skip\s+not observed: Does the VGA monitor'])),

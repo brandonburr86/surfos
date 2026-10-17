@@ -8,21 +8,25 @@ File: board-test.py Date: 10/16/26 (SurfCPU, the os track)
 
 PORT defaults to auto: the only Arty UART plugged in (uart.py list).
 
-MILESTONE (AGENT-INSTRUCTIONS.md section 10, the exit evidence the serial port can show):
+MILESTONE (AGENT-INSTRUCTIONS.md section 10, the exit evidence the serial port can show), and the
+design it asks the owner to load (--design names another):
 
-  m1  the baseline design: N lines of its 1 Hz line, their form, count, timing and fields;
+  m1  arty_a7_baseline: N lines of its 1 Hz line, their form, count, timing and fields;
       a byte typed comes back as rx; the switches, a button and RESET as the owner works them
-  m3  the BRAM diagnostics: every section to BRAMDIAG: PASS, the timer's progress, the
-      deliberate faults recovered, typed bytes echoed with their codes
-  m5  SurfBoot from the card: a missing and an invalid image diagnosed in the monitor, the
-      DDR diagnostic booted from the card to DDRDIAG: PASS, a missing card diagnosed and
-      the boot retried when it is put back
-  m7  SurfOS from the card to the shell: the boot, the two-task test, the uptime advancing,
-      the PS/2 keyboard typing into the shell
-  m8  OWNER-GUIDE.md section 8's CRC procedure: a Mac file read on the board, files made and
-      changed, the same CRCs after a power cycle, on the Mac and after a kernel update
-  m9  N cold boots, each one checked (--boots, default 10), and a soak (--minutes, default
-      60) of shell, task and storage commands with CRC checks
+  m3  surfcpu_arty_a7_bramdiag, the BRAM diagnostics: every section to BRAMDIAG: PASS, the
+      timer's progress, the deliberate faults recovered, typed bytes echoed with their codes
+      (--design surfcpu_arty_a7_ddr_bramdiag: the same with the DDR3L's sections)
+  m5  surfcpu_arty_a7_ddr, SurfBoot from the card: a missing and an invalid image diagnosed in
+      the monitor, the DDR diagnostic booted from the card to DDRDIAG: PASS, a missing card
+      diagnosed and the boot retried when it is put back
+  m7  surfcpu_arty_a7_ddr, SurfOS from the card to the shell: the boot, the two-task test, the
+      uptime advancing, the PS/2 keyboard typing into the shell
+  m8  surfcpu_arty_a7_ddr, OWNER-GUIDE.md section 8's CRC procedure: a Mac file read on the
+      board, files made and changed, the same CRCs after a power cycle, on the Mac and after
+      a kernel update
+  m9  surfcpu_arty_a7_ddr in the configuration flash: N cold boots, each one checked (--boots,
+      default 10), and a soak (--minutes, default 60) of shell, task and storage commands
+      with CRC checks
 
 Each procedure opens the port first, so nothing the board prints afterwards is missed (a
 thread reads it all the time, also while a question waits for the owner), then asks the
@@ -523,8 +527,8 @@ def m3(r):
     a = r.a
     r.open()
     r.do('program', 'Load the CPU with its diagnostics, in another Terminal window:\n'
-                    '  make -C surfcpu program-volatile BOARD=%s DESIGN=surfcpu_arty_a7_bramdiag\n'
-                    'and press Enter here once it says done.' % a.board, power=True)
+                    '  make -C surfcpu program-volatile BOARD=%s DESIGN=%s\n'
+                    'and press Enter here once it says done.' % (a.board, r.design), power=True)
     banner = r'SurfCPU BRAM diagnostics (\S+) \(build ([0-9a-f]{8})(, dirty tree)?\)\n'
     m, _ = r.link.wait(banner, r.pos, r.t(10))
     if not m:                               # the port came back after the first run: Ctrl-R runs it again
@@ -976,14 +980,18 @@ def soak(r, minutes):
 
 
 # ============================================================================== main
+# each procedure's design: the one the owner is asked to load, and whose build manifest the bitstream is compared
+# with (--design names another: m3 with surfcpu_arty_a7_ddr_bramdiag runs the DDR diagnostics too). m5-m9 need
+# SurfBoot with DDR: surfcpu_arty_a7_top, SurfBoot without DDR, stops at DDR_ABSENT
 PROCEDURES = {
     'm1': (m1, 'the baseline design (milestone 1): LEDs, clocks, reset and the UART', 'arty_a7_baseline'),
     'm3': (m3, 'the CPU on the board (milestone 3): the BRAM diagnostics', 'surfcpu_arty_a7_bramdiag'),
     'm5': (m5, 'SurfBoot and the card (milestone 5): the DDR diagnostic from the card, missing and invalid images',
-           None),
-    'm7': (m7, 'SurfOS from the card (milestone 7): the shell, two kernel tasks, the uptime, the keyboard', None),
-    'm8': (m8, 'persistent files (milestone 8): OWNER-GUIDE.md section 8\'s CRC procedure', None),
-    'm9': (m9, 'the standalone release (milestone 9): cold boots and a soak', None),
+           'surfcpu_arty_a7_ddr'),
+    'm7': (m7, 'SurfOS from the card (milestone 7): the shell, two kernel tasks, the uptime, the keyboard',
+           'surfcpu_arty_a7_ddr'),
+    'm8': (m8, 'persistent files (milestone 8): OWNER-GUIDE.md section 8\'s CRC procedure', 'surfcpu_arty_a7_ddr'),
+    'm9': (m9, 'the standalone release (milestone 9): cold boots and a soak', 'surfcpu_arty_a7_ddr'),
 }
 
 
@@ -993,8 +1001,9 @@ def main(argv=None):
     ap.add_argument('--port', default='auto', help='the Arty\'s UART: /dev/cu.usbserial-<serial>1 (uart.py list); '
                                                   'auto (the default): the only such port plugged in')
     ap.add_argument('--board', default=os.environ.get('BOARD', 'arty_a7_100t'), choices=sorted(BOARD_IDS))
-    ap.add_argument('--design', help='the design whose build manifest the bitstream is compared with (m5-m9: '
-                                     'surfcpu_arty_a7_top)')
+    ap.add_argument('--design', help='the design to load, whose build manifest the bitstream is compared with '
+                                     '(m1: arty_a7_baseline; m3: surfcpu_arty_a7_bramdiag, or surfcpu_arty_a7_ddr_bramdiag '
+                                     'for the DDR diagnostics; m5-m9: surfcpu_arty_a7_ddr)')
     ap.add_argument('--manifest', help='the build manifest (default build/fpga/BOARD/DESIGN/manifest.txt)')
     ap.add_argument('--kernel', default=str(REPO / 'build/riscv32/arty_a7/SURFOS.BIN'), help='the SURFOS.BIN installed')
     ap.add_argument('--ddrdiag', default=str(SURFCPU / 'build/fw/DDRDIAG.BIN'), help='the DDRDIAG.BIN on the card')
@@ -1015,7 +1024,7 @@ def main(argv=None):
         if not a.port:
             ap.error('--port auto: %s' % why)
     fn, title, design = PROCEDURES[a.milestone]
-    design = a.design or design or 'surfcpu_arty_a7_top'
+    design = a.design or design
     r = Run(a, a.milestone, title, design)
     print('board-test %s: %s' % (a.milestone, title))
     interrupted = False
