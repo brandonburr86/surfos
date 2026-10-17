@@ -21,6 +21,7 @@ OCEAN = bytes.fromhex('245a67')
 SHEET = bytes.fromhex('fffdf5')      # Notepad's text and the Files list
 BAND = bytes.fromhex('e7e2d2')       # status bars
 TEAL = bytes.fromhex('197d83')
+MUTED = bytes.fromhex('6c888c')
 CURSOR = (
     'X', 'XX', 'X.X', 'X..X', 'X...X', 'X....X', 'X.....X',
     'X......X', 'X.......X', 'X........X', 'X.....XXXXX',
@@ -162,6 +163,11 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
     def notepad_status(text):
         return lambda s: _text(s, font, NOTEPAD[0] + 10, NOTEPAD[1] + NOTEPAD[3] - 23 + 3, text, INK, BAND)
 
+    def notepad_ends(text):
+        """the right of Notepad's status bar: the size and the line ends (CRLF only when the conversion happened)"""
+        return lambda s: _text(s, font, NOTEPAD[0] + NOTEPAD[2] - 24 - len(text) * 8, NOTEPAD[1] + NOTEPAD[3] - 23 + 3,
+                               text, MUTED, BAND)
+
     def files_status(text):
         return lambda s: _text(s, font, FILES[0] + 10, FILES[1] + FILES[3] - 23 + 3, text, INK, BAND)
 
@@ -187,14 +193,16 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
             button(False)
         visible('a double-click opens the file in Notepad, its CRLF line ends seen as lines',
                 lambda s: notepad_title('notes.txt')(s) and
-                _text(s, font, NOTEPAD[0] + 44 + 8, NOTEPAD[1] + 60, 'ello from the Mac', INK, SHEET) and
-                _text(s, font, NOTEPAD[0] + 44, NOTEPAD[1] + 76, 'Second line', INK, SHEET),
+                _text(s, font, NOTEPAD[0] + 44 + 8, NOTEPAD[1] + 60, 'ello from the Mac  ', INK, SHEET) and
+                _text(s, font, NOTEPAD[0] + 44, NOTEPAD[1] + 76, 'Second line', INK, SHEET) and
+                notepad_ends('31 bytes  CRLF')(s),
                 'gui-notepad-open.png')
         vm.keys('SurfOS was here. ')
         key('ctrl-s')
         visible('typing and Ctrl+S save the file (CRLF again: 50 bytes)',
                 lambda s: notepad_status('Ln 1, Col 18  Saved notes.txt (50 bytes)')(s) and
-                _text(s, font, NOTEPAD[0] + 44, NOTEPAD[1] + 60, 'SurfOS was here.', INK, SHEET),
+                _text(s, font, NOTEPAD[0] + 44, NOTEPAD[1] + 60, 'SurfOS was here.', INK, SHEET) and
+                notepad_ends('48 bytes  CRLF')(s),
                 'gui-notepad-saved.png')
         for chord in ('ctrl-g', 'right', 'down', 'down', 'down', 'ret'):
             key(chord)

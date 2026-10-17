@@ -52,7 +52,7 @@ shell/guifs.c implements it on the VFS, the host test in memory.
 struct gui_entry { char name[GUI_NAME_MAX]; int type; u32 size, mtime; };
 /* a USB volume with a file system: the device, its file system and size; path is where
    it is mounted, "" when it is not; readonly: it is mounted read-only, or would be */
-struct gui_volume { char dev[16], fs[8], size[16], path[GUI_PATH_MAX]; bool readonly, boot; };
+struct gui_volume { char dev[16], disk[16], fs[8], size[16], path[GUI_PATH_MAX]; bool readonly, boot, gone; };   /* gone: unplugged, still mounted */
 /* Every call returns 0 (list and volumes: how many there are) or a negative errno. */
 struct gui_fs {
     void *ctx;
@@ -78,18 +78,17 @@ struct gui_field { char text[GUI_PATH_MAX]; u32 len, cursor; bool all; };
    start of a character); top and left are the first line and column shown; goal is the column
    Up and Down keep (-1: the cursor's). An undo step is len bytes at pos that were inserted or
    deleted, kept at text in undo_text; steps of one group are undone together. */
-struct gui_undo { u32 pos, len, text; u8 insert; u16 group; };
+struct gui_undo { u32 pos, len, text, group; bool insert; };
 struct gui_note {
     char path[GUI_PATH_MAX];            /* "" until it is saved */
-    u32 len, cursor, anchor;
+    u32 len, lf, cursor, anchor;        /* lf: the line ends in the text */
     int top, left, goal;
     bool modified, crlf, readonly, selecting, finding, typing;
     u32 click_ms, click_at;             /* the last click, for a double-click */
     struct gui_field find;
     char status[GUI_STATUS];
     int nundo, undo_at, saved_at;       /* steps kept; steps in force (redo is above); in force when saved (-1: gone) */
-    u32 undo_used;
-    u16 group;
+    u32 undo_used, group;
     struct gui_undo undo[GUI_UNDO_STEPS];
     char undo_text[GUI_UNDO_TEXT];
     char text[GUI_NOTE_MAX];
@@ -146,8 +145,8 @@ struct gui_state {
     u32 now;                            /* milliseconds, from the shell (double-clicks) */
     char clock[8];                      /* "14:05" from the shell, "" for none */
     int resize, scroll, scroll_at;      /* a window being resized; one whose scroll bar is held, and where */
-    u32 title_ms;                       /* the last click on a title bar, for a double-click */
-    int title_id, help_top;
+    u32 title_ms;                       /* the last press on a title bar, for a double-click: when, which, where */
+    int title_id, title_x, title_y, help_top;
     int pending;                        /* what to do once Notepad's changes are saved or dropped */
     char pending_path[GUI_PATH_MAX];
     struct gui_dialog dialog;

@@ -4,14 +4,16 @@ SurfOS Desktop Notepad
 File: guinote.c Date: 10/17/26
 --------------------
 One document in memory, at most GUI_NOTE_MAX bytes, edited as bytes. The cursor
-and the selection always sit at the start of a UTF-8 character; a character is
-drawn as its code page 437 glyph ('?' when 437 has none, a byte that is not UTF-8
-as the 437 character it is, as on the console), a tab reaches the next multiple
-of 8 columns, and lines do not wrap: the view scrolls sideways to the cursor.
-Every change goes through replace(), which keeps the undo steps (typing in a row
-is one step). A file whose every line ends in CRLF is edited with LF and saved
-with CRLF again; any other file keeps its bytes as they are. A file with a NUL
-byte is binary and is not opened.
+and the selection always sit at the start of a character: a UTF-8 sequence by the
+console's rules, or one byte (gd_char_len()). A character is drawn as its code
+page 437 glyph ('?' when 437 has none, a byte that is not UTF-8 as the 437
+character it is, as on the console), a tab reaches the next multiple of 8
+columns, and lines do not wrap: the view scrolls sideways to the cursor. Every
+change goes through replace(), which keeps the undo steps (typing in a row is one
+step; a change too big to keep clears the history, never half of it). A file whose
+every line ends in CRLF is edited with LF and saved with CRLF again, counted with
+its CRs against the limit, so whatever Notepad saves it can open again; any other
+file keeps its bytes as they are. A file with a NUL byte is binary and is not opened.
 */
 #include "guipriv.h"
 #include <string.h>
@@ -26,15 +28,27 @@ static const struct gui_tool tools[] = {
 /**** characters and lines ****/
 
 static bool cont(u8 c) { return (c & 0xC0) == 0x80; }
-static u32 wanted(u8 c) { return c < 0xC0 || c >= 0xF8 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4; }
 
-/* the bytes of the character at off: a lead byte and the continuation bytes it calls for that are there */
 static u32 char_len(const struct gui_note *n, u32 off) {
-    u32 want, k;
-    if(off >= n->len) return 0;
-    want = wanted((u8)n->text[off]);
-    for(k = 1; k < want && off + k < n->len && cont((u8)n->text[off + k]); k++) ;
-    return k;
+    return off < n->len ? gd_char_len(n->text + off, n->len - off) : 0;
+}
+
+/* off, or the end of the character it falls inside: an edit can join bytes into one character */
+static u32 settle(const struct gui_note *n, u32 off) {
+    u32 k, start, len;
+    for(k = 1; k <= 3 && k <= off; k++) {
+        start = off - k;
+        if(cont((u8)n->text[start])) continue;
+        len = char_len(n, start);
+        return start + len > off ? start + len : off;
+    }
+    return off;
+}
+
+static u32 count_lf(const char *s, u32 len) {
+    u32 i, lf = 0;
+    for(i = 0; i < len; i++) if(s[i] == '\n') lf++;
+    return lf;
 }
 
 static u32 next_char(const struct gui_note *n, u32 off) {
@@ -79,7 +93,7 @@ int note_line_of(const struct gui_note *n, u32 off) {
 }
 
 int note_lines(const struct gui_note *n) {
-    return note_line_of(n, n->len) + 1;
+    return n->lf + 1;
 }
 
 u32 note_line_start(const struct gui_note *n, int line) {
@@ -126,6 +140,10 @@ void note_status(struct gui_state *g, const char *msg) {
     g->dirty = true;
 }
 
+int note_min_width(void) {
+    return tool_span(tools, TOOLS);
+}
+
 void note_title(const struct gui_state *g, char *out, size_t n) {
     const struct gui_note *note = &g->note;
     snprintf(out, n, "%s%s - Notepad", note->modified ? "*" : "", note->path[0] ? gui_basename(note->path) : "Untitled");
@@ -148,6 +166,14 @@ void note_layout(const struct gui_state *g, struct note_layout *l) {
     l->bar_x = w->w - 2 - SCROLL_W;
     l->cols = (l->bar_x - l->tx - 2) / 8;
     if(l->cols < 1) l->cols = 1;
+}
+
+/* the last useful first line: the view ends with the text */
+static int top_max(const struct gui_state *g) {
+    struct note_layout l;
+    int lines = note_lines(&g->note);
+    note_layout(g, &l);
+    return lines > l.rows ? lines - l.rows : 0;
 }
 
 /* scroll so that the cursor is in view */
@@ -181,29 +207,36 @@ static void undo_drop_oldest(struct gui_note *n) {
     n->saved_at = n->saved_at >= k ? n->saved_at - k : -1;
 }
 
-/* a change of len bytes at pos, inserted or deleted (s: the bytes), as an undo step */
-static void undo_record(struct gui_note *n, bool insert, u32 pos, const char *s, u32 len) {
-    struct gui_undo *u;
-    if(!len) return;
+/* before a change of bytes in all (its deletion and its insertion): what was undone goes, then the
+   oldest groups until both of its steps fit. false: the change alone is too big to keep, and then
+   nothing before it can be undone either */
+static bool undo_room(struct gui_note *n, u32 bytes) {
     if(n->undo_at < n->nundo) {                         /* a change after undoing: what was undone goes */
         n->undo_used = n->undo_at ? n->undo[n->undo_at - 1].text + n->undo[n->undo_at - 1].len : 0;
         if(n->saved_at > n->undo_at) n->saved_at = -1;
         n->nundo = n->undo_at;
     }
-    if(len > GUI_UNDO_TEXT) {                           /* too big to keep: nothing before it can be undone */
+    if(bytes > GUI_UNDO_TEXT) {
         n->nundo = n->undo_at = 0;
         n->undo_used = 0;
         n->saved_at = -1;
-        return;
+        return false;
     }
-    u = n->nundo ? &n->undo[n->nundo - 1] : NULL;
-    if(u && insert && u->insert && u->group == n->group && u->pos + u->len == pos && n->undo_used + len <= GUI_UNDO_TEXT) {
-        memcpy(n->undo_text + n->undo_used, s, len);    /* typing goes on: the same step grows */
+    while(n->nundo && (n->nundo + 2 > GUI_UNDO_STEPS || n->undo_used + bytes > GUI_UNDO_TEXT)) undo_drop_oldest(n);
+    return true;
+}
+
+/* a change of len bytes at pos, inserted or deleted (s: the bytes), as an undo step; join: a key typed
+   after another, which makes the last step grow, unless that step is where the file was saved */
+static void undo_record(struct gui_note *n, bool insert, u32 pos, const char *s, u32 len, bool join) {
+    struct gui_undo *u = n->nundo ? &n->undo[n->nundo - 1] : NULL;
+    if(!len) return;
+    if(join && u && insert && u->insert && u->group == n->group && u->pos + u->len == pos && n->undo_at != n->saved_at) {
+        memcpy(n->undo_text + n->undo_used, s, len);
         n->undo_used += len;
         u->len += len;
         return;
     }
-    while(n->nundo && (n->nundo == GUI_UNDO_STEPS || n->undo_used + len > GUI_UNDO_TEXT)) undo_drop_oldest(n);
     u = &n->undo[n->nundo++];
     u->pos = pos;
     u->len = len;
@@ -218,6 +251,7 @@ static void undo_record(struct gui_note *n, bool insert, u32 pos, const char *s,
 /* the bytes from..to become s (len of them), with no undo step */
 static bool splice(struct gui_note *n, u32 from, u32 to, const char *s, u32 len) {
     if(n->len - (to - from) + len > GUI_NOTE_MAX) return false;
+    n->lf = n->lf - count_lf(n->text + from, to - from) + count_lf(s, len);
     memmove(n->text + from + len, n->text + to, n->len - to);
     if(len) memcpy(n->text + from, s, len);
     n->len = n->len - (to - from) + len;
@@ -228,16 +262,21 @@ static bool splice(struct gui_note *n, u32 from, u32 to, const char *s, u32 len)
    step of the keys typed before it */
 static bool replace(struct gui_state *g, u32 from, u32 to, const char *s, u32 len, bool typing) {
     struct gui_note *n = &g->note;
-    if(n->len - (to - from) + len > GUI_NOTE_MAX) {
+    bool join = typing && n->typing && from == to;
+    u32 size = n->len - (to - from) + len;
+    if(n->crlf) size += n->lf - count_lf(n->text + from, to - from) + count_lf(s, len);   /* the CRs it is saved with */
+    if(size > GUI_NOTE_MAX) {
         note_status(g, "Notepad holds 256 KB at most");
         return false;
     }
-    if(!typing || !n->typing) n->group++;
+    if(!join) n->group++;
     n->typing = typing;
-    if(to > from) undo_record(n, false, from, n->text + from, to - from);
-    if(len) undo_record(n, true, from, s, len);
+    if(undo_room(n, (to - from) + len)) {
+        undo_record(n, false, from, n->text + from, to - from, false);
+        undo_record(n, true, from, s, len, join);
+    }
     splice(n, from, to, s, len);
-    n->cursor = n->anchor = from + len;
+    n->cursor = n->anchor = settle(n, from + len);
     n->goal = -1;
     n->modified = n->saved_at != n->undo_at;
     g->dirty = true;
@@ -247,7 +286,7 @@ static bool replace(struct gui_state *g, u32 from, u32 to, const char *s, u32 le
 void note_undo(struct gui_state *g, bool redo) {
     struct gui_note *n = &g->note;
     struct gui_undo *u;
-    u16 group;
+    u32 group;
     if(redo ? n->undo_at >= n->nundo : n->undo_at <= 0) {
         note_status(g, redo ? "Nothing to redo" : "Nothing to undo");
         return;
@@ -265,6 +304,8 @@ void note_undo(struct gui_state *g, bool redo) {
             n->cursor = u->pos + u->len;
         }
     }
+    n->cursor = settle(n, n->cursor);
+    n->anchor = settle(n, n->anchor);
     n->typing = false;
     n->goal = -1;
     n->group++;
@@ -277,7 +318,7 @@ void note_undo(struct gui_state *g, bool redo) {
 
 void note_reset(struct gui_note *n) {
     n->path[0] = 0;
-    n->len = n->cursor = n->anchor = 0;
+    n->len = n->lf = n->cursor = n->anchor = 0;
     n->top = n->left = 0;
     n->goal = -1;
     n->modified = n->crlf = n->readonly = n->selecting = n->finding = n->typing = false;
@@ -337,6 +378,7 @@ int note_load(struct gui_state *g, const char *path) {
         len = j;
     }
     n->len = len;
+    n->lf = lf;
     strlcpy(n->path, path, sizeof(n->path));
     n->readonly = readonly;
     if(readonly) note_status(g, "Read-only volume: Save as keeps a copy elsewhere");
@@ -351,19 +393,20 @@ int note_load(struct gui_state *g, const char *path) {
 int note_save(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
     char line[80], why[64];
-    u32 bytes = n->len, i;
+    u32 bytes = n->len + (n->crlf ? n->lf : 0);
     int r;
     if(!g->fs) return -ENOSYS;
     r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf);
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
         strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
-                     r == -ENOSPC ? "The volume is full." : "", sizeof(why));
+                     r == -ENOSPC ? "The volume is full." :
+                     r == -EIO ? "The text may be in a .tmp file beside it." :
+                     r == -EEXIST ? "Move the .tmp files beside it out of the way." : "", sizeof(why));
         dialog_message(g, "Not saved", line, why);
         return r;
     }
     if(path != n->path) strlcpy(n->path, path, sizeof(n->path));
-    if(n->crlf) for(i = 0; i < n->len; i++) if(n->text[i] == '\n') bytes++;
     n->readonly = false;
     n->saved_at = n->undo_at;
     n->modified = false;
@@ -419,7 +462,7 @@ bool note_find(struct gui_state *g, const char *what) {
         u32 from = pass ? 0 : b, limit = pass ? b : n->len;      /* then the matches that start before it */
         for(i = from; i < limit && i + len <= n->len; i++) {
             for(k = 0; k < len && lower(n->text[i + k]) == lower(what[k]); k++) ;
-            if(k < len) continue;
+            if(k < len || settle(n, i) != i || settle(n, i + len) != i + len) continue;   /* whole characters only */
             n->anchor = i;
             n->cursor = i + len;
             n->typing = false;
@@ -451,7 +494,7 @@ static void vertical(struct gui_state *g, int delta, bool page) {
     int line = note_line_of(n, n->cursor), lines = note_lines(n), col, target;
     col = n->goal >= 0 ? n->goal : note_column(n, n->cursor);
     target = gui_clamp(line + delta, 0, lines - 1);
-    if(page) n->top = gui_clamp(n->top + delta, 0, lines - 1);
+    if(page) n->top = gui_clamp(n->top + delta, 0, top_max(g));
     if(target == line && page) n->cursor = delta < 0 ? 0 : n->len;
     else n->cursor = at_column(n, note_line_start(n, target), col, false);
     n->anchor = n->cursor;
@@ -519,6 +562,18 @@ void note_key(struct gui_state *g, int key) {
 
 /**** the pointer ****/
 
+/* a toolbar button can be used now */
+static bool tool_on(const struct gui_state *g, int act) {
+    const struct gui_note *n = &g->note;
+    switch(act) {
+    case ACT_OPEN: case ACT_SAVE: case ACT_SAVE_AS: return g->fs != NULL;
+    case ACT_UNDO: return n->undo_at > 0;
+    case ACT_COPY: return n->anchor != n->cursor;
+    case ACT_PASTE: return g->clip_len > 0;
+    }
+    return true;
+}
+
 static u32 offset_at(const struct gui_state *g, const struct note_layout *l, int x, int y) {
     const struct gui_note *n = &g->note;
     int row = y >= l->ty ? (y - l->ty) / 16 : -1;
@@ -539,7 +594,7 @@ void note_press(struct gui_state *g, int x, int y) {
     int i, top, size;
     note_layout(g, &l);
     i = tool_hit(tools, TOOLS, x, y);
-    if(i >= 0) { gui_act(g, tools[i].act); return; }
+    if(i >= 0) { if(tool_on(g, tools[i].act)) gui_act(g, tools[i].act); return; }
     if(n->finding && y >= l.find_y && y < l.status_y) {
         if(x >= w->w - 34) n->finding = false;
         else if(x >= w->w - 100) note_find(g, n->find.text);
@@ -547,15 +602,15 @@ void note_press(struct gui_state *g, int x, int y) {
         return;
     }
     if(y < l.ty - 2 || y >= l.find_y) return;
-    n->finding = false;                                 /* a click in the text: the keys are the text's again */
     if(x >= l.bar_x) {                                  /* the scroll bar: hold the thumb, or page */
         gd_thumb(l.find_y - l.ty + 2, n->top, l.rows, note_lines(n), &top, &size);
-        if(y - (l.ty - 2) < top) n->top = gui_clamp(n->top - l.rows, 0, note_lines(n) - 1);
-        else if(y - (l.ty - 2) >= top + size) n->top = gui_clamp(n->top + l.rows, 0, note_lines(n) - 1);
+        if(y - (l.ty - 2) < top) n->top = gui_clamp(n->top - l.rows, 0, top_max(g));
+        else if(y - (l.ty - 2) >= top + size) n->top = gui_clamp(n->top + l.rows, 0, top_max(g));
         else { g->scroll = GUI_NOTEPAD; g->scroll_at = y - (l.ty - 2) - top; }
         g->dirty = true;
         return;
     }
+    n->finding = false;                                 /* a click in the text: the keys are the text's again */
     off = offset_at(g, &l, x, y);
     n->typing = false;
     n->goal = -1;
@@ -588,13 +643,17 @@ void note_press(struct gui_state *g, int x, int y) {
 void note_drag(struct gui_state *g, int x, int y) {
     struct gui_note *n = &g->note;
     struct note_layout l;
-    int lines;
+    int col;
     if(!n->selecting) return;
     note_layout(g, &l);
-    lines = note_lines(n);
     if(y < l.ty && n->top > 0) n->top--;                /* past the edge: the text scrolls */
-    if(y >= l.ty + l.rows * 16 && n->top < lines - 1) n->top++;
+    if(y >= l.ty + l.rows * 16 && n->top < top_max(g)) n->top++;
+    if(x < l.tx && n->left > 0) n->left--;
+    if(x >= l.tx + l.cols * 8) n->left++;
     n->cursor = offset_at(g, &l, x, y);
+    col = note_column(n, n->cursor);                    /* sideways, the view follows the cursor */
+    if(col < n->left) n->left = col;
+    if(col > n->left + l.cols) n->left = col - l.cols;
     g->dirty = true;
 }
 
@@ -606,7 +665,7 @@ void note_scroll(struct gui_state *g, int y) {
 }
 
 void note_wheel(struct gui_state *g, int lines) {
-    g->note.top = gui_clamp(g->note.top + lines, 0, note_lines(&g->note) - 1);
+    g->note.top = gui_clamp(g->note.top + lines, 0, top_max(g));
     g->dirty = true;
 }
 
@@ -623,12 +682,7 @@ void note_render(const struct gui_state *g, const struct gui_draw *d) {
     u32 off, a, z, k, len = 0;
     note_layout(g, &l);
     selection(n, &a, &z);
-    for(i = 0; i < TOOLS; i++) on[i] = g->fs != NULL || (tools[i].act != ACT_OPEN && tools[i].act != ACT_SAVE && tools[i].act != ACT_SAVE_AS);
-    for(i = 0; i < TOOLS; i++) {
-        if(tools[i].act == ACT_UNDO) on[i] = n->undo_at > 0;
-        if(tools[i].act == ACT_COPY) on[i] = a != z;
-        if(tools[i].act == ACT_PASTE) on[i] = g->clip_len > 0;
-    }
+    for(i = 0; i < TOOLS; i++) on[i] = tool_on(g, tools[i].act);
     gd_rect(d, x0 + 1, y0 + TITLE_H, w->w - 2, BAR_H + 2, BAND);
     tool_render(d, x0, y0, tools, TOOLS, on);
     gd_rect(d, x0 + 1, y0 + TITLE_H + BAR_H + 2, w->w - 2, 1, LINE);

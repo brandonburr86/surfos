@@ -36,6 +36,10 @@ static void layout(const struct gui_state *g, struct files_layout *l) {
     l->size_x = (l->dates ? l->date_x : l->bar_x) - 16;
 }
 
+int files_min_width(void) {
+    return tool_span(tools, TOOLS);
+}
+
 int files_rows(const struct gui_state *g) {
     struct files_layout l;
     layout(g, &l);
@@ -71,18 +75,31 @@ int gui_list(const struct gui_fs *fs, const char *path, struct gui_entry *out, i
 
 /**** rows ****/
 
-void files_path(const struct gui_state *g, int row, char *out, size_t n) {
+/* the path of a row; false when it has none or it does not fit (then nothing may be done with it:
+   a cut path names something else) */
+bool files_path(const struct gui_state *g, int row, char *out, size_t n) {
     const struct gui_files *f = &g->files;
     int chain[64], depth = 0, i;
     out[0] = 0;
-    if(row < 0 || row >= f->count || f->node[row].type == GUI_NODE_DRIVE) return;
+    if(row < 0 || row >= f->count || f->node[row].type == GUI_NODE_DRIVE) return false;
     if(f->node[row].type == GUI_NODE_MORE) row = f->node[row].parent;
-    for(i = row; i > 0 && depth < 64; i = f->node[i].parent) chain[depth++] = i;
+    for(i = row; i > 0; i = f->node[i].parent) {
+        if(depth == 64) return false;                   /* deeper than any path that fits */
+        chain[depth++] = i;
+    }
     strlcpy(out, "/", n);
     while(depth--) {
-        if(strcmp(out, "/")) strlcat(out, "/", n);
-        strlcat(out, f->node[chain[depth]].name, n);
+        if((strcmp(out, "/") && strlcat(out, "/", n) >= n) || strlcat(out, f->node[chain[depth]].name, n) >= n) {
+            out[0] = 0;
+            return false;
+        }
     }
+    return true;
+}
+
+static void too_long(struct gui_state *g) {
+    strlcpy(g->files.status, "That path is too long for SurfOS (255 bytes at most)", sizeof(g->files.status));
+    g->dirty = true;
 }
 
 /* the USB volume a row is on, or -1 */
@@ -143,7 +160,7 @@ static void expand(struct gui_state *g, int i) {
     char path[GUI_PATH_MAX];
     int n, total, room, shown, extra, drives = 0, insert, j, k, v;
     if(i < 0 || i >= f->count || f->node[i].type != GUI_DIR || f->node[i].expanded || !g->fs) return;
-    files_path(g, i, path, sizeof(path));
+    if(!files_path(g, i, path, sizeof(path))) { too_long(g); return; }
     n = gui_list(g->fs, path, f->scratch, GUI_LIST_MAX, &total);
     if(n < 0) {
         snprintf(f->status, sizeof(f->status), "%s: %s", path, gui_error(g, n));
@@ -152,6 +169,11 @@ static void expand(struct gui_state *g, int i) {
     }
     if(i == 0) for(v = 0; v < f->volumes; v++) if(!f->vol[v].path[0]) drives++;
     room = GUI_NODES - f->count;
+    if(drives + total > 0 && room <= 0) {               /* nothing more fits: the folder stays closed */
+        strlcpy(f->status, "The list is full: close some folders first", sizeof(f->status));
+        g->dirty = true;
+        return;
+    }
     if(drives > room) drives = room;
     room -= drives;
     shown = n;
@@ -211,7 +233,7 @@ static void keep(struct gui_files *f, u32 *used, const char *s) {
 
 void files_refresh(struct gui_state *g) {
     struct gui_files *f = &g->files;
-    char path[GUI_PATH_MAX];
+    char path[GUI_PATH_MAX], want[GUI_PATH_MAX];
     u32 used = 0;
     int i, top = f->top;
     if(!g->fs) return;
@@ -221,8 +243,7 @@ void files_refresh(struct gui_state *g) {
     keep(f, &used, path);
     for(i = 1; i < f->count; i++) {
         if(f->node[i].type != GUI_DIR || !f->node[i].expanded) continue;
-        files_path(g, i, path, sizeof(path));
-        keep(f, &used, path);
+        if(files_path(g, i, path, sizeof(path))) keep(f, &used, path);
     }
     f->volumes = g->fs->volumes(g->fs->ctx, f->vol, GUI_VOLUMES);
     if(f->volumes < 0) f->volumes = 0;
@@ -233,16 +254,21 @@ void files_refresh(struct gui_state *g) {
     expand(g, 0);
     for(i = 1; i < f->count; i++) {
         if(f->node[i].type != GUI_DIR) continue;
-        files_path(g, i, path, sizeof(path));
-        if(kept(f, used, path)) expand(g, i);
+        if(files_path(g, i, path, sizeof(path)) && kept(f, used, path)) expand(g, i);
     }
-    for(i = 0; i < f->count; i++) {
-        if(f->node[i].type == GUI_NODE_DRIVE) { if(f->keep[0] == '#' && !strcmp(f->node[i].name, f->keep + 1)) break; continue; }
-        if(f->node[i].type == GUI_NODE_MORE || f->keep[0] != '/') continue;
-        files_path(g, i, path, sizeof(path));
-        if(!strcmp(path, f->keep)) break;
+    /* the selection again: the same row, or what is left of its path (a deleted file: its folder) */
+    if(f->keep[0] == '#') {
+        for(i = 1; i < f->count; i++) if(f->node[i].type == GUI_NODE_DRIVE && !strcmp(f->node[i].name, f->keep + 1)) f->selected = i;
+    } else if(f->keep[0] == '/') {
+        strlcpy(want, f->keep, sizeof(want));
+        for(;;) {
+            for(i = 0; i < f->count; i++)
+                if(f->node[i].type != GUI_NODE_DRIVE && f->node[i].type != GUI_NODE_MORE && files_path(g, i, path, sizeof(path)) && !strcmp(path, want)) break;
+            if(i < f->count) { f->selected = i; break; }
+            if(!strcmp(want, "/")) break;
+            gui_parent(want);
+        }
     }
-    f->selected = i < f->count ? i : 0;
     f->top = top;
     show_selected(g);
 }
@@ -288,6 +314,7 @@ bool files_can(const struct gui_state *g, int act) {
     s = &f->node[f->selected];
     switch(act) {
     case ACT_FILES_OPEN: return f->selected > 0 && s->type != GUI_NODE_MORE;
+    case ACT_FILES_COPY: return s->type != GUI_NODE_DRIVE && s->type != GUI_NODE_MORE;
     case ACT_FILES_NEW_FILE: case ACT_FILES_NEW_FOLDER:
         folder = folder_row(g);
         return s->type != GUI_NODE_DRIVE && folder > 0 && !row_readonly(g, folder);
@@ -310,7 +337,8 @@ void files_act(struct gui_state *g, int act) {
     struct gui_files *f = &g->files;
     struct gui_node *s;
     char path[GUI_PATH_MAX], name[GUI_NAME_MAX], msg[GUI_STATUS], line[80];
-    int v, r, row;
+    int v, r, row, k;
+    u32 len;
     if(!files_can(g, act)) return;
     s = &f->node[f->selected];
     f->status[0] = 0;
@@ -320,13 +348,21 @@ void files_act(struct gui_state *g, int act) {
         if(s->type == GUI_DIR) {
             if(s->expanded) collapse(g, f->selected);
             else expand(g, f->selected);
+            show_selected(g);
             break;
         }
-        files_path(g, f->selected, path, sizeof(path));
+        if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
         if(gui_guard(g, PEND_OPEN_PATH, path) && note_load(g, path) == 0) gui_open(g, GUI_NOTEPAD);
         return;
+    case ACT_FILES_COPY:                                /* the path, for Notepad or a dialog's box */
+        if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
+        len = strlen(path);
+        memcpy(g->clip, path, len);
+        g->clip_len = len;
+        snprintf(f->status, sizeof(f->status), "Copied %s", path);
+        break;
     case ACT_FILES_NEW_FILE: case ACT_FILES_NEW_FOLDER:
-        files_path(g, folder_row(g), path, sizeof(path));
+        if(!files_path(g, folder_row(g), path, sizeof(path))) { too_long(g); break; }
         snprintf(line, sizeof(line), "Name of the new %s in %s:", act == ACT_FILES_NEW_FILE ? "file" : "folder", gui_basename(path));
         dialog_input(g, act == ACT_FILES_NEW_FILE ? ACT_DLG_NEW_FILE : ACT_DLG_NEW_FOLDER,
                      act == ACT_FILES_NEW_FILE ? "New file" : "New folder", line,
@@ -334,13 +370,13 @@ void files_act(struct gui_state *g, int act) {
         strlcpy(g->dialog.target, path, sizeof(g->dialog.target));
         return;
     case ACT_FILES_RENAME:
-        files_path(g, f->selected, path, sizeof(path));
+        if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
         snprintf(line, sizeof(line), "New name for %s:", s->name);
         dialog_input(g, ACT_DLG_RENAME, "Rename", line, s->name);
         strlcpy(g->dialog.target, path, sizeof(g->dialog.target));
         return;
     case ACT_FILES_DELETE:
-        files_path(g, f->selected, path, sizeof(path));
+        if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
         snprintf(line, sizeof(line), "Delete %s?", s->name);
         dialog_confirm(g, ACT_DLG_DELETE, s->type == GUI_DIR ? "Delete folder" : "Delete file", line,
                        s->type == GUI_DIR ? "Only an empty folder can be deleted." : "It cannot be brought back.",
@@ -363,9 +399,12 @@ void files_act(struct gui_state *g, int act) {
         break;
     case ACT_FILES_EJECT:
         v = volume_of(g, f->selected);
-        strlcpy(path, f->vol[v].path, sizeof(path));
-        strlcat(path, "/", sizeof(path));
-        if(g->note.modified && !strncmp(g->note.path, path, strlen(path))) {
+        for(k = 0; k < f->volumes; k++) {               /* eject takes every volume of the disk along */
+            len = strlen(f->vol[k].path);
+            if(!len || strcmp(f->vol[k].disk, f->vol[v].disk) || !g->note.modified) continue;
+            if(!strncmp(g->note.path, f->vol[k].path, len) && g->note.path[len] == '/') break;
+        }
+        if(k < f->volumes) {
             dialog_message(g, "Not ejected", "Notepad has unsaved changes to a file there.", "Save or close it first.");
             break;
         }
@@ -409,9 +448,10 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
     if(act == ACT_DLG_RENAME) {
         strlcpy(dest, target, sizeof(dest));
         gui_parent(dest);
-        gui_join(dest, sizeof(dest), dest, text);
-        if(!strcmp(dest, target)) return;
-    } else gui_join(dest, sizeof(dest), target, text);
+        r = gui_join(dest, sizeof(dest), dest, text);
+        if(r && !strcmp(dest, target)) return;
+    } else r = gui_join(dest, sizeof(dest), target, text);
+    if(!r) { dialog_message(g, what, "That name makes the path too long for SurfOS.", ""); return; }
     /* FAT's names ignore case: a.txt may become A.txt */
     if(g->fs->stat(g->fs->ctx, dest, &e, &device, &readonly) == 0 && !(act == ACT_DLG_RENAME && !compare_names(dest, target))) {
         snprintf(line, sizeof(line), "%s is there already.", text);
@@ -428,8 +468,9 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
     len = strlen(target);
     if(act == ACT_DLG_RENAME && !strncmp(g->note.path, target, len) && (!g->note.path[len] || g->note.path[len] == '/')) {
         char moved[GUI_PATH_MAX];                       /* Notepad's file, or a folder it is in */
-        snprintf(moved, sizeof(moved), "%s%s", dest, g->note.path + len);
-        strlcpy(g->note.path, moved, sizeof(g->note.path));
+        if(snprintf(moved, sizeof(moved), "%s%s", dest, g->note.path + len) < (int)sizeof(moved))
+            strlcpy(g->note.path, moved, sizeof(g->note.path));
+        else g->note.path[0] = 0;                       /* too long now: Save asks for a name */
     }
     files_refresh(g);
     files_reveal(g, dest);
@@ -443,6 +484,10 @@ void files_key(struct gui_state *g, int key) {
     struct gui_files *f = &g->files;
     int rows = files_rows(g), s = f->selected;
     if(!f->count) return;
+    switch(key) {                                       /* moving: the status bar shows the selection again */
+    case GUI_UP: case GUI_DOWN: case GUI_PGUP: case GUI_PGDN: case GUI_HOME: case GUI_END: case GUI_RIGHT: case GUI_LEFT: case 8: case 127:
+        f->status[0] = 0;                               /* (what Right or Left does next may say something) */
+    }
     switch(key) {
     case GUI_UP: f->selected--; break;
     case GUI_DOWN: f->selected++; break;
@@ -502,7 +547,7 @@ void files_press(struct gui_state *g, int x, int y) {
     if(f->node[row].type == GUI_DIR && row > 0 && x >= ix - 2 && x < ix + 10) {   /* the triangle */
         if(f->node[row].expanded) collapse(g, row);
         else expand(g, row);
-        g->dirty = true;
+        show_selected(g);
         return;
     }
     f->selected = row;
@@ -568,7 +613,8 @@ void files_render(const struct gui_state *g, const struct gui_draw *d) {
             continue;
         }
         if(v >= 0) {
-            gd_text(&list, x, py + 1, f->vol[v].boot ? (f->vol[v].readonly ? " USB boot drive, read-only" : " USB boot drive") :
+            gd_text(&list, x, py + 1, f->vol[v].gone ? " USB, unplugged: eject it" :
+                                      f->vol[v].boot ? (f->vol[v].readonly ? " USB boot drive, read-only" : " USB boot drive") :
                                       f->vol[v].readonly ? " USB, read-only" : " USB", MUTED);
             gd_text(&list, x0 + l.size_x - (int)strlen(f->vol[v].size) * 8, py + 1, f->vol[v].size, MUTED);
         }
@@ -588,7 +634,7 @@ void files_render(const struct gui_state *g, const struct gui_draw *d) {
     else if(f->selected >= 0 && f->selected < f->count && f->node[f->selected].type == GUI_NODE_DRIVE)
         snprintf(b, sizeof(b), "%s: double-click or Mount to open it", f->node[f->selected].name);
     else {
-        files_path(g, f->selected, b, sizeof(b));
+        if(!files_path(g, f->selected, b, sizeof(b))) strlcpy(b, f->selected > 0 ? "(a path too long for SurfOS)" : "", sizeof(b));
         if(f->selected > 0 && f->node[f->selected].type == GUI_FILE) {
             snprintf(size, sizeof(size), "  %u bytes", f->node[f->selected].size);
             strlcat(b, size, sizeof(b));

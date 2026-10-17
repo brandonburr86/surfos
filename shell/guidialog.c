@@ -132,6 +132,12 @@ static void layout(const struct gui_state *g, struct dlg_layout *l) {
     if(l->rows < 1) l->rows = 1;
 }
 
+void dialog_box(const struct gui_state *g, int *x, int *y, int *w, int *h) {
+    struct dlg_layout l;
+    layout(g, &l);
+    *x = l.x; *y = l.y; *w = l.w; *h = l.h;
+}
+
 /* where button i is (the buttons with a label, at the right of the box); false: there is none */
 static bool button_place(const struct gui_dialog *dl, const struct dlg_layout *l, int i, int *bx, int *bw) {
     int k, x = l->x + l->w - 16, w;
@@ -223,6 +229,7 @@ static void navigate(struct gui_state *g, const char *to) {
     if(n < 0) dl->total = 0;
     dl->selected = dl->top = 0;
     dl->click_row = -1;
+    dl->list_focus = false;                             /* in a new folder, Enter is for the name again */
     g->dirty = true;
 }
 
@@ -264,6 +271,11 @@ static void picked(struct gui_state *g) {
         field_set(&dl->field, dl->list[i].name, false);
 }
 
+static void too_long(struct gui_state *g) {
+    strlcpy(g->dialog.text[0], "That path is too long for SurfOS.", sizeof(g->dialog.text[0]));
+    g->dirty = true;
+}
+
 /* Enter, a double-click or the Open/Save button */
 static void choose(struct gui_state *g) {
     struct gui_dialog *dl = &g->dialog;
@@ -273,7 +285,7 @@ static void choose(struct gui_state *g) {
         i = dl->selected - up;
         if(up && dl->selected == 0) { go_up(g); return; }
         if(i >= 0 && i < dl->count) {
-            gui_join(path, sizeof(path), dl->dir, dl->list[i].name);
+            if(!gui_join(path, sizeof(path), dl->dir, dl->list[i].name)) { too_long(g); return; }
             if(dl->list[i].type == GUI_DIR) { navigate(g, path); return; }
             if(dl->kind == GUI_DLG_OPEN) { answer(g, 0, path); return; }
             field_set(&dl->field, dl->list[i].name, false);
@@ -287,12 +299,12 @@ static void choose(struct gui_state *g) {
     }
     for(i = 0; i < dl->count; i++) {
         if(dl->list[i].type != GUI_DIR || strcmp(dl->list[i].name, dl->field.text)) continue;
-        gui_join(path, sizeof(path), dl->dir, dl->field.text);   /* a folder's name: into it */
+        if(!gui_join(path, sizeof(path), dl->dir, dl->field.text)) { too_long(g); return; }   /* a folder's name: into it */
         field_set(&dl->field, "", false);
         navigate(g, path);
         return;
     }
-    gui_join(path, sizeof(path), dl->dir, dl->field.text);
+    if(!gui_join(path, sizeof(path), dl->dir, dl->field.text)) { too_long(g); return; }
     answer(g, 0, path);
 }
 
@@ -354,7 +366,7 @@ void dialog_pointer(struct gui_state *g, int x, int y, bool press) {
     if(!gui_inside(x, y, l.x, l.y, l.w, l.h)) return;    /* the rest of the screen waits */
     for(i = 0; i < 3; i++) {
         if(!button_place(dl, &l, i, &bx, &bw) || !gui_inside(x, y, bx, l.y + l.buttons_y, bw, 28)) continue;
-        if(chooser(dl) && i == 0) choose(g);
+        if(chooser(dl) && i == 0) { if(dl->kind == GUI_DLG_SAVE) dl->list_focus = false; choose(g); }   /* Save: the name */
         else answer(g, i == 2 ? -1 : i, dl->kind == GUI_DLG_INPUT ? dl->field.text : "");
         return;
     }

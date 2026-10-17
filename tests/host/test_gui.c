@@ -7,18 +7,24 @@ static int checks, failed;
 static struct gui_state g;
 static u32 pixels[8 + 1280*800 + 8];
 
-/**** an in-memory file system: /, /dev, /initrd (read-only), /home, and a USB stick usb1p1 ****/
+/**** an in-memory file system: /, /dev, /initrd (read-only, with two folders of 300 files, many and
+      more), /home, a USB stick usb1 (partition usb1p1, and usb1p2 when two_parts), and usb2p1, a stick
+      pulled out while it was mounted (when pulled) ****/
 
 struct fake { char path[GUI_PATH_MAX]; int type; char data[600]; u32 len, size; bool used; };
 static struct fake nodes[96];
-static bool mounted;
-static int f_writes;
+static bool mounted, mounted2, two_parts, pulled;
+static int f_writes, fail_write;
 
-static bool on_stick(const char *p) { return !strncmp(p, "/usb1p1", 7) && (!p[7] || p[7] == '/'); }
-static bool readonly_path(const char *p) { return !strncmp(p, "/initrd", 7) || !strncmp(p, "/dev", 4); }
+static bool under(const char *p, const char *top) { u32 n = strlen(top); return !strncmp(p, top, n) && (!p[n] || p[n] == '/'); }
+static bool hidden(const char *p) {
+    return (under(p, "/usb1p1") && !mounted) || (under(p, "/usb1p2") && !mounted2) || under(p, "/usb2p1");
+}
+static bool big(const char *p) { u32 n = strlen(p); return n > 5 && (!strcmp(p + n - 5, "/many") || !strcmp(p + n - 5, "/more")); }
+static bool readonly_path(const char *p) { return under(p, "/initrd") || under(p, "/dev"); }
 static int find(const char *p) {
     int i;
-    if(on_stick(p) && !mounted) return -1;
+    if(hidden(p)) return -1;
     for(i = 0; i < (int)(sizeof(nodes) / sizeof(nodes[0])); i++) if(nodes[i].used && !strcmp(nodes[i].path, p)) return i;
     return -1;
 }
@@ -37,10 +43,20 @@ static int add(const char *p, int type, const char *data, u32 len) {
 static int f_list(void *ctx, const char *path, struct gui_entry *out, int max) {
     char parent[GUI_PATH_MAX];
     int i = find(path), n = 0;
+    if(under(path, "/usb2p1")) return -EIO;              /* its stick is gone */
     if(i < 0) return -ENOENT;
     if(nodes[i].type != GUI_DIR) return -ENOTDIR;
+    if(big(path)) {
+        for(n = 0; n < 300; n++) if(n < max) {
+            snprintf(out[n].name, sizeof(out[n].name), "f%03d", n);
+            out[n].type = GUI_FILE;
+            out[n].size = n;
+            out[n].mtime = 0;
+        }
+        return 300;
+    }
     for(i = 0; i < (int)(sizeof(nodes) / sizeof(nodes[0])); i++) {
-        if(!nodes[i].used || !strcmp(nodes[i].path, "/") || (on_stick(nodes[i].path) && !mounted)) continue;
+        if(!nodes[i].used || !strcmp(nodes[i].path, "/") || hidden(nodes[i].path)) continue;
         parent_of(nodes[i].path, parent);
         if(strcmp(parent, path)) continue;
         if(n < max) {
@@ -49,6 +65,10 @@ static int f_list(void *ctx, const char *path, struct gui_entry *out, int max) {
             out[n].size = nodes[i].size;
             out[n].mtime = 1792245780;
         }
+        n++;
+    }
+    if(!strcmp(path, "/") && pulled) {                 /* the rootfs still lists the mount point */
+        if(n < max) { memset(&out[n], 0, sizeof(out[n])); strlcpy(out[n].name, "usb2p1", sizeof(out[n].name)); out[n].type = GUI_DIR; }
         n++;
     }
     return n;
@@ -77,6 +97,7 @@ static int f_write(void *ctx, const char *path, const char *data, u32 len, bool 
     char parent[GUI_PATH_MAX], out[600];
     u32 n = 0, k;
     int p, i = find(path);
+    if(fail_write) return fail_write;
     parent_of(path, parent);
     p = find(parent);
     if(readonly_path(path)) return -EROFS;
@@ -129,29 +150,42 @@ static int f_rename(void *ctx, const char *from, const char *to) {
     }
     return 0;
 }
+static void volume(struct gui_volume *out, int *n, int max, const char *dev, const char *disk, const char *path, bool gone) {
+    if(*n < max) {
+        memset(&out[*n], 0, sizeof(out[*n]));
+        strlcpy(out[*n].dev, dev, sizeof(out[*n].dev));
+        strlcpy(out[*n].disk, disk, sizeof(out[*n].disk));
+        strlcpy(out[*n].fs, "FAT32", sizeof(out[*n].fs));
+        strlcpy(out[*n].size, "64M", sizeof(out[*n].size));
+        strlcpy(out[*n].path, path, sizeof(out[*n].path));
+        out[*n].readonly = out[*n].gone = gone;
+    }
+    (*n)++;
+}
 static int f_volumes(void *ctx, struct gui_volume *out, int max) {
-    memset(out, 0, sizeof(*out));
-    strlcpy(out->dev, "usb1p1", sizeof(out->dev));
-    strlcpy(out->fs, "FAT32", sizeof(out->fs));
-    strlcpy(out->size, "64M", sizeof(out->size));
-    if(mounted) strlcpy(out->path, "/usb1p1", sizeof(out->path));
-    return 1;
+    int n = 0;
+    volume(out, &n, max, "usb1p1", "usb1", mounted ? "/usb1p1" : "", false);
+    if(two_parts) volume(out, &n, max, "usb1p2", "usb1", mounted2 ? "/usb1p2" : "", false);
+    if(pulled) volume(out, &n, max, "usb2p1", "usb2", "/usb2p1", true);
+    return n;
 }
 static int f_mount(void *ctx, const char *dev, char *msg, size_t n) {
-    if(strcmp(dev, "usb1p1") || mounted) { strlcpy(msg, "mount: no", n); return -1; }
-    mounted = true;
-    strlcpy(msg, "usb1p1 on /usb1p1: fat32, label STICK, 64 MB, 63.9 MB free, read-write", n);
+    bool *m = !strcmp(dev, "usb1p1") ? &mounted : !strcmp(dev, "usb1p2") && two_parts ? &mounted2 : NULL;
+    if(!m || *m) { strlcpy(msg, "mount: no", n); return -1; }
+    *m = true;
+    snprintf(msg, n, "%s on /%s: fat32, label STICK, 64 MB, 63.9 MB free, read-write", dev, dev);
     return 0;
 }
 static int f_eject(void *ctx, const char *dev, char *msg, size_t n) {
-    if(strcmp(dev, "usb1p1") || !mounted) { strlcpy(msg, "eject: no", n); return -1; }
-    mounted = false;
+    if(!strcmp(dev, "usb2p1") && pulled) { pulled = false; strlcpy(msg, "usb2: unmounted (it was unplugged already)", n); return 0; }
+    if(strncmp(dev, "usb1", 4) || !(mounted || mounted2)) { strlcpy(msg, "eject: no", n); return -1; }
+    mounted = mounted2 = false;                         /* the whole disk */
     strlcpy(msg, "usb1: safe to remove", n);
     return 0;
 }
 static const char *f_error(int err) {
     return err == -ENOENT ? "No such file or directory" : err == -ENOTEMPTY ? "Directory not empty" :
-           err == -EROFS ? "Read-only file system" : "Error";
+           err == -EROFS ? "Read-only file system" : err == -EIO ? "I/O error" : "Error";
 }
 static const struct gui_fs fake_fs = { NULL, f_list, f_stat, f_read, f_write, f_mkdir, f_remove, f_rename,
                                        f_volumes, f_mount, f_eject, f_error };
@@ -162,12 +196,15 @@ static bool holds(const char *p, const char *data) {
 }
 static void populate(void) {
     memset(nodes, 0, sizeof(nodes));
-    mounted = false;
+    two_parts = pulled = false;
+    fail_write = 0;
     add("/", GUI_DIR, NULL, 0);
     add("/dev", GUI_DIR, NULL, 0);
     add("/dev/console", GUI_FILE, NULL, 0);
     add("/initrd", GUI_DIR, NULL, 0);
     add("/initrd/readme.txt", GUI_FILE, "hello from the initrd\n", 22);
+    add("/initrd/many", GUI_DIR, NULL, 0);
+    add("/initrd/more", GUI_DIR, NULL, 0);
     add("/home", GUI_DIR, NULL, 0);
     add("/home/dos.txt", GUI_FILE, "a\r\nb\r\n", 6);
     add("/home/mixed.txt", GUI_FILE, "a\r\nb\n", 5);
@@ -176,10 +213,12 @@ static void populate(void) {
     nodes[find("/home/big.txt")].size = 300 * 1024;
     add("/home/sub", GUI_DIR, NULL, 0);
     add("/home/sub/deep.txt", GUI_FILE, "deep\n", 5);
-    mounted = true;                                     /* the stick's files, seen only while it is mounted */
+    mounted = mounted2 = true;                          /* the sticks' files, seen only while mounted */
     add("/usb1p1", GUI_DIR, NULL, 0);
     add("/usb1p1/stick.txt", GUI_FILE, "on the stick\n", 13);
-    mounted = false;
+    add("/usb1p2", GUI_DIR, NULL, 0);
+    add("/usb1p2/todo.txt", GUI_FILE, "todo\n", 5);
+    mounted = mounted2 = false;
 }
 
 /**** driving the desktop ****/
@@ -246,6 +285,8 @@ static void rendering(int width, int height) {
     gui_act(&g,ACT_SAVE_AS); gui_render(&g,&screen); CHECK(guards(width,height) && g.dialog.kind==GUI_DLG_SAVE); key(27);
     gui_act(&g,ACT_GOTO); gui_render(&g,&screen); CHECK(guards(width,height) && g.dialog.kind==GUI_DLG_INPUT); key(27);
     key(17); gui_render(&g,&screen); CHECK(guards(width,height) && g.dialog.kind==GUI_DLG_CONFIRM); key(27);
+    dialog_message(&g,"A message","Its first line, which is long enough to be cut at the edge of the box","and its second");
+    gui_render(&g,&screen); CHECK(guards(width,height)); key(27);
     gui_act(&g,ACT_MAXIMIZE); gui_act(&g,ACT_FIND); gui_render(&g,&screen); CHECK(guards(width,height));
     for(i = 0; i < GUI_WINDOWS; i++) { g.win[i].x = width - 10; g.win[i].y = height - 10; }   /* hanging off the edge */
     gui_render(&g,&screen); CHECK(guards(width,height));
@@ -435,7 +476,7 @@ static void windows(void) {
     double_click(w->x+120,w->y+10); CHECK(!w->max && w->w==ww && w->h==wh);
     x=w->x; y=w->y;
     drag(x+w->w-4,y+w->h-4,x+w->w-104,y+w->h-54); CHECK(w->w==ww-100 && w->h==wh-50 && w->x==x);
-    drag(x+w->w-4,y+w->h-4,x+20,y+20); CHECK(w->w==360 && w->h==200);
+    drag(x+w->w-4,y+w->h-4,x+20,y+20); CHECK(w->w==note_min_width() && w->h==200);   /* no narrower than its toolbar */
     click(x+w->w-74+10,y+10); CHECK(w->min && g.focus!=GUI_NOTEPAD);
     key(5); CHECK(!w->min && g.focus==GUI_NOTEPAD);
     click(x+w->w-50+10,y+10); CHECK(w->max);
@@ -450,8 +491,8 @@ static void windows(void) {
     key(7); CHECK(g.menu==1); key(GUI_RIGHT); key(GUI_RIGHT); key(GUI_RIGHT); CHECK(g.menu==4);
     key(GUI_DOWN); key('\r'); CHECK(!g.menu && g.focus==GUI_FILES);
     key(7); key(GUI_LEFT); CHECK(g.menu==6); key('\r'); CHECK(g.focus==GUI_HELP);
-    key(7); key(GUI_RIGHT); key(GUI_RIGHT); CHECK(g.menu==3);
-    key('\r'); CHECK(!g.menu && g.note.undo_at==0);      /* Undo is off: Enter on a disabled item does nothing */
+    key(7); key(GUI_RIGHT); key(GUI_RIGHT); CHECK(g.menu==3 && !gui_menu_on(&g,3,ACT_UNDO));
+    key(27); CHECK(!g.menu);
     /* Tab: the next window, but a tab in Notepad */
     gui_open(&g,GUI_CALC); key(9); CHECK(g.focus!=GUI_CALC);
     CHECK(gui_wants_arrows(&g)==(g.focus==GUI_NOTEPAD || g.focus==GUI_FILES || g.focus==GUI_HELP));
@@ -459,6 +500,232 @@ static void windows(void) {
     key(7); CHECK(gui_wants_arrows(&g)); key(27);
     /* Ctrl+C elsewhere leaves, as before */
     key(3); CHECK(g.quit);
+}
+
+
+/* everything opens inside the screen: windows between the bars (also maximized), menus and dialogs */
+static bool in_desk(const struct gui_window *w) {
+    return w->x >= 0 && w->y >= MENU_H && w->x + w->w <= g.width && w->y + w->h <= g.height - TASK_H;
+}
+static void bounds(int width, int height) {
+    int i, m, x, y, w, h, focus;
+    static const int fronts[] = { GUI_NOTEPAD, GUI_FILES, GUI_CALC };
+    populate();
+    gui_init(&g,width,height); g.fs=&fake_fs;
+    CHECK(note_min_width() <= g.win[GUI_NOTEPAD].w && files_min_width() <= g.win[GUI_FILES].w);
+    for(i = 0; i < GUI_WINDOWS; i++) { gui_open(&g,i); CHECK(in_desk(&g.win[i])); }
+    for(i = 0; i < GUI_WINDOWS; i++) {
+        gui_open(&g,i); gui_act(&g,ACT_MAXIMIZE);
+        CHECK(in_desk(&g.win[i]));
+        if(g.win[i].max) { CHECK(g.win[i].w == width && g.win[i].h == height - MENU_H - TASK_H); gui_act(&g,ACT_MAXIMIZE); }
+    }
+    for(focus = 0; focus < 3; focus++) {
+        gui_open(&g,fronts[focus]);
+        for(m = 1; m <= 6; m++) { gui_menu_box(&g,m,&x,&y,&w,&h); CHECK(x >= 0 && y >= MENU_H && x + w <= width && y + h <= height); }
+    }
+    gui_open(&g,GUI_NOTEPAD);
+    dialog_message(&g,"t","a","b"); dialog_box(&g,&x,&y,&w,&h); CHECK(x >= 0 && y >= MENU_H && x + w <= width && y + h <= height - TASK_H); key(27);
+    gui_act(&g,ACT_GOTO); dialog_box(&g,&x,&y,&w,&h); CHECK(x >= 0 && y >= MENU_H && x + w <= width && y + h <= height - TASK_H); key(27);
+    gui_act(&g,ACT_OPEN); dialog_box(&g,&x,&y,&w,&h); CHECK(x >= 0 && y >= MENU_H && x + w <= width && y + h <= height - TASK_H); key(27);
+    gui_act(&g,ACT_SAVE_AS); dialog_box(&g,&x,&y,&w,&h); CHECK(x >= 0 && y >= MENU_H && x + w <= width && y + h <= height - TASK_H); key(27);
+}
+
+/* what the first review of Notepad found */
+static void notepad_review(void) {
+    struct gui_window *w;
+    struct note_layout l;
+    char b[32];
+    int i;
+    populate();
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    key(5);
+    /* a replacement is undone whole: its deletion is never dropped to make room for its insertion */
+    memset(g.clip,'a',40*1024); g.clip_len=40*1024; key(22);
+    g.note.anchor=0; g.note.cursor=20*1024;
+    memset(g.clip,'b',30*1024); g.clip_len=30*1024; key(22);
+    CHECK(g.note.len==50*1024);
+    key(26); CHECK(g.note.len==40*1024 && g.note.text[0]=='a' && g.note.text[20*1024]=='a');
+    key(26); CHECK(!strcmp(g.note.status,"Nothing to undo") && g.note.len==40*1024);
+    /* and one too big to keep clears the history rather than keeping half of it */
+    memset(g.clip,'c',100*1024); g.clip_len=100*1024; key(1); key(22); CHECK(g.note.len==100*1024);
+    key(1); type("x"); CHECK(text_is("x"));
+    key(26); CHECK(text_is("x") && !strcmp(g.note.status,"Nothing to undo") && g.note.modified);
+    /* typing after a save is a step of its own: the saved state is told apart */
+    key(1); key(8); type("a"); key(19); type("w.txt\n");
+    CHECK(holds("/home/w.txt","a") || holds("/w.txt","a") || g.dialog.kind);
+    if(g.dialog.kind) key(27);
+    gui_act(&g,ACT_SAVE_AS); field_set(&g.dialog.field,"w.txt",false); key('\r');
+    if(g.dialog.kind==GUI_DLG_CONFIRM) key('\r');
+    CHECK(!g.note.modified);
+    type("b"); CHECK(g.note.modified && text_is("ab"));
+    key(26); CHECK(text_is("a") && !g.note.modified);
+    /* the CRs a CRLF file is saved with count against 256 KB */
+    note_reset(&g.note); g.note.crlf=true;
+    memset(g.clip,'\n',GUI_CLIP_MAX); g.clip_len=GUI_CLIP_MAX; key(22);
+    CHECK(g.note.len==GUI_CLIP_MAX && g.note.lf==GUI_CLIP_MAX);
+    type("x"); CHECK(g.note.len==GUI_CLIP_MAX && !strcmp(g.note.status,"Notepad holds 256 KB at most"));
+    g.note.crlf=false; type("x"); CHECK(g.note.len==GUI_CLIP_MAX+1);
+    /* while the find bar has the keys, Ctrl+X, Ctrl+Z and Ctrl+Y leave the text alone */
+    note_reset(&g.note); type("hello"); key(1); key(6); CHECK(g.note.finding);
+    key(24); key(26); CHECK(text_is("hello") && g.note.anchor==0 && g.note.cursor==5);
+    key(27); CHECK(!g.note.finding);
+    /* bytes an edit joins into one character: the cursor goes after it */
+    note_reset(&g.note); type("\xC3" "A" "\xA9"); key(GUI_LEFT); CHECK(g.note.cursor==2);
+    key(8); CHECK(g.note.len==2 && g.note.cursor==2);
+    /* the console's UTF-8 rules */
+    CHECK(gd_char_len("\xC3\xA9",2)==2 && gd_char_len("\xC0\xAF",2)==1 && gd_char_len("\xE0\x80\xAF",3)==1);
+    CHECK(gd_char_len("\xED\xA0\x80",3)==1 && gd_char_len("\xF4\x90\x80\x80",4)==1 && gd_char_len("\xF0\x9F\x98\x80",4)==4);
+    CHECK(gd_char_len("\xE2\x82",2)==1 && gd_char_len("\xE2\x82\xAC",3)==3);
+    /* a path that does not fit is refused, not cut */
+    CHECK(!gui_join(b,16,"/aaaaaaaaaa","bbbbbbb") && gui_join(b,32,"/aaaaaaaaaa","bbbbbbb") && !strcmp(b,"/aaaaaaaaaa/bbbbbbb"));
+    /* Page Down in a short note keeps it in view */
+    note_reset(&g.note); type("1\n2\n3\n4\n5"); key(GUI_PGUP); key(GUI_PGDN); CHECK(g.note.top==0);
+    /* a greyed toolbar button does nothing (Copy with nothing selected) */
+    w=&g.win[GUI_NOTEPAD]; note_status(&g,"");
+    click(w->x+324+10,w->y+TITLE_H+4+5); CHECK(!g.note.status[0]);
+    /* the scroll bar's thumb drags the text */
+    note_reset(&g.note); for(i=0;i<200;i++) type("line\n");
+    note_layout(&g,&l); g.note.top=0;
+    drag(w->x+l.bar_x+5,w->y+l.ty,w->x+l.bar_x+5,w->y+w->h-30);
+    CHECK(g.note.top==note_lines(&g.note)-l.rows);
+}
+
+/* what the reviews of Files found */
+static void files_review(void) {
+    char b[GUI_PATH_MAX];
+    int i, j, many;
+    populate();
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    key(2); CHECK(g.focus==GUI_FILES && g.files.count==5);
+    /* a big folder: 256 rows and one that says how many more */
+    g.files.selected=row_named("initrd"); key(GUI_RIGHT);
+    many=row_named("many"); g.files.selected=many; key(GUI_RIGHT);
+    CHECK(g.files.node[many+257].type==GUI_NODE_MORE && g.files.node[many+257].size==44);
+    g.files.selected=row_named("more"); key(GUI_RIGHT); CHECK(g.files.count==GUI_NODES);
+    /* a full list: the folder stays closed and says why */
+    g.files.selected=row_named("home"); key(GUI_RIGHT);
+    CHECK(!g.files.node[row_named("home")].expanded && !strncmp(g.files.status,"The list is full",16));
+    /* closing a folder from far down keeps the list in view */
+    g.files.top=300; g.files.selected=row_named("more"); key('\r');
+    CHECK(!g.files.node[g.files.selected].expanded && g.files.top<=g.files.selected);
+    g.files.selected=many; key('\r');
+    /* a deleted file's folder takes the selection */
+    g.files.selected=row_named("home"); key(GUI_RIGHT);
+    g.files.selected=row_named("mixed.txt"); gui_act(&g,ACT_FILES_DELETE); key(GUI_LEFT); key('\r');
+    CHECK(!node("/home/mixed.txt") && !strcmp(g.files.node[g.files.selected].name,"home"));
+    /* Ctrl+R shows what changed elsewhere, and a stick plugged in meanwhile */
+    add("/home/new.txt",GUI_FILE,"n",1); two_parts=true; key(18);
+    CHECK(row_named("new.txt")>0 && row_named("usb1p2")>0);
+    /* Ctrl+C copies the path of the row, and the desktop stays */
+    g.files.selected=row_named("readme.txt"); key(3);
+    CHECK(!g.quit && g.clip_len==18 && !memcmp(g.clip,"/initrd/readme.txt",18) && !strncmp(g.files.status,"Copied",6));
+    /* a disk's partitions go together: an unsaved file on the other one keeps the stick in */
+    g.files.selected=row_named("usb1p1"); key('\r'); CHECK(mounted);
+    g.files.selected=row_named("usb1p2"); key('\r'); CHECK(mounted2);
+    CHECK(note_load(&g,"/usb1p2/todo.txt")==0); key(5); type("x"); key(2);
+    g.files.selected=row_named("usb1p1"); gui_act(&g,ACT_FILES_EJECT);
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && mounted && mounted2); key(27);
+    key(5); key(26); CHECK(!g.note.modified); key(2);
+    g.files.selected=row_named("usb1p1"); gui_act(&g,ACT_FILES_EJECT); CHECK(!mounted && !mounted2);
+    /* a stick pulled out while mounted: it can be ejected, and nothing written there */
+    pulled=true; key(18); i=row_named("usb2p1"); CHECK(i>0);
+    g.files.selected=i; CHECK(files_can(&g,ACT_FILES_EJECT) && !files_can(&g,ACT_FILES_NEW_FILE) && !files_can(&g,ACT_FILES_RENAME));
+    gui_act(&g,ACT_FILES_EJECT); CHECK(!pulled && row_named("usb2p1")<0);
+    /* a path that would not fit: nothing is done with it */
+    j=row_named("dos.txt"); CHECK(j>0);
+    memset(g.files.node[j].name,'x',250); g.files.node[j].name[250]=0;
+    CHECK(!files_path(&g,j,b,sizeof(b)));
+    g.files.selected=j; gui_act(&g,ACT_FILES_DELETE);
+    CHECK(!g.dialog.kind && !strncmp(g.files.status,"That path is too long",21) && node("/home/dos.txt"));
+}
+
+/* the unsaved-changes question along every way out */
+static void guard_paths(void) {
+    populate();
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    /* a file opened from Files: Save, then it opens */
+    CHECK(note_load(&g,"/home/dos.txt")==0); key(5); type("1"); key(2);
+    g.files.selected=row_named("home"); key(GUI_RIGHT);
+    g.files.selected=row_named("mixed.txt"); key('\r');
+    CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_GUARD);
+    key('\r'); CHECK(holds("/home/dos.txt","1a\r\nb\r\n") && !strcmp(g.note.path,"/home/mixed.txt"));
+    /* Save on a read-only volume: its question, Save as, then what waited (leaving) */
+    CHECK(note_load(&g,"/initrd/readme.txt")==0); key(5); type("2"); key(17);
+    key('\r'); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_READONLY);
+    key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/initrd"));
+    key(GUI_DOWN); key(GUI_UP); key('\r'); key(GUI_DOWN); key('\r'); CHECK(!strcmp(g.dialog.dir,"/home"));
+    key(1); type("ro-copy.txt\n"); CHECK(holds("/home/ro-copy.txt","2hello from the initrd\n") && g.quit);
+    g.quit=false;
+    /* Save, then Cancel in Save as: nothing waits, nothing leaves */
+    key(14); CHECK(!g.note.len); type("3"); key(17); key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE);
+    key(27); CHECK(!g.quit && g.pending==PEND_NONE && g.note.modified && !g.dialog.kind);
+    /* a save that fails: the note stays changed, nothing waits */
+    key(17); key('\r'); fail_write=-EIO; key(1); type("fail.txt\n");
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && g.pending==PEND_NONE && !g.quit && g.note.modified && !node("/home/fail.txt"));
+    key(27); fail_write=0;
+    /* Ctrl+C outside Notepad asks first too */
+    gui_open(&g,GUI_CALC); key(3); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_GUARD && !g.quit);
+    key(GUI_RIGHT); key('\r'); CHECK(g.quit);
+}
+
+/* what the review of the window manager found */
+static void windows_review(void) {
+    struct pointer_event e;
+    struct fb_surface screen;
+    struct gui_window *w;
+    int x, y, mx, my, mw, mh, dx, dy, dw, dh, bottom;
+    populate();
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    key(5); w=&g.win[GUI_NOTEPAD]; x=w->x; y=w->y;
+    /* two quick drags of a title bar are no double-click */
+    e.x=x+120; e.y=y+10; e.wheel=0; e.buttons=1; gui_pointer(&g,&e);
+    e.x-=60; e.y+=20; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e);
+    g.now+=100; e.buttons=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
+    CHECK(!w->max && w->x==x-60 && w->y==y+20);
+    /* a window as tall as the desk drags without shaking */
+    drag(w->x+w->w-4,w->y+w->h-4,959,539);
+    bottom=540-TASK_H-2-w->h; if(bottom<MENU_H+6) bottom=MENU_H+6;
+    drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==bottom);
+    drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==bottom);
+    drag(w->x+100,w->y+10,w->x+100,w->y-200); CHECK(w->y==MENU_H+6);
+    /* a maximized window's shadow stays off the taskbar */
+    gui_act(&g,ACT_MAXIMIZE); surface(&screen,960,540); gui_render(&g,&screen);
+    CHECK(at(960,900,540-TASK_H)==0x102E3B);
+    gui_act(&g,ACT_MAXIMIZE);
+    /* menus' items are on only where they apply */
+    CHECK(note_load(&g,"/home/dos.txt")==0);
+    gui_open(&g,GUI_CALC);
+    CHECK(!gui_menu_on(&g,2,ACT_REVEAL) && !gui_menu_on(&g,3,ACT_UNDO) && gui_menu_on(&g,2,ACT_NEW) && !gui_menu_on(&g,5,ACT_MAXIMIZE));
+    key(5); CHECK(gui_menu_on(&g,2,ACT_REVEAL) && gui_menu_on(&g,2,ACT_SAVE) && gui_menu_on(&g,5,ACT_MAXIMIZE));
+    type("q"); CHECK(gui_menu_on(&g,3,ACT_UNDO) && !gui_menu_on(&g,3,ACT_CUT));
+    key(1); CHECK(gui_menu_on(&g,3,ACT_CUT));
+    key(2); CHECK(gui_menu_on(&g,2,ACT_FILES_REFRESH) && !gui_menu_on(&g,2,ACT_SAVE) && !gui_menu_on(&g,3,ACT_UNDO));
+    /* a click on a disabled item does nothing; hovering chooses, a click runs */
+    gui_close(&g,GUI_FILES); gui_open(&g,GUI_CALC);
+    click(106,14); CHECK(g.menu==2);
+    gui_menu_box(&g,2,&mx,&my,&mw,&mh);
+    click(mx+30,MENU_H+4+4*24+9+10); CHECK(!g.menu && !g.win[GUI_FILES].open);
+    click(230,14); CHECK(g.menu==4);
+    e.x=240; e.y=MENU_H+4+24+10; e.buttons=0; gui_pointer(&g,&e); CHECK(g.selection==1);
+    e.buttons=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
+    CHECK(g.focus==GUI_FILES && !g.menu);
+    /* the Window menu, by the keyboard: past the disabled Maximize and the separator */
+    gui_open(&g,GUI_SKETCH);
+    key(7); while(g.menu!=5) key(GUI_RIGHT);
+    key(GUI_DOWN); key(GUI_DOWN); key(GUI_DOWN); key('\r'); CHECK(g.focus==GUI_CALC);
+    /* Esc with every window tucked away stays; with none open it leaves */
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    gui_act(&g,ACT_MINIMIZE); CHECK(g.focus<0); key(27); CHECK(!g.quit);
+    gui_act(&g,ACT_WINDOW+GUI_ABOUT); gui_close(&g,GUI_ABOUT); key(27); CHECK(g.quit);
+    /* the chooser by the mouse: Up, a double-click on a folder, the Save button */
+    populate();
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    CHECK(note_load(&g,"/home/dos.txt")==0); key(5);
+    gui_act(&g,ACT_SAVE_AS); dialog_box(&g,&dx,&dy,&dw,&dh); CHECK(!strcmp(g.dialog.dir,"/home"));
+    click(dx+dw-16-56+10,dy+40); CHECK(!strcmp(g.dialog.dir,"/"));
+    double_click(dx+100,dy+64+1*ROW_H+8); CHECK(!strcmp(g.dialog.dir,"/home"));
+    field_set(&g.dialog.field,"mouse.txt",false);
+    click(dx+dw-16-88-8-88+20,dy+dh-40+10); CHECK(!g.dialog.kind && holds("/home/mouse.txt","a\r\nb\r\n"));
 }
 
 int main(void) {
@@ -504,8 +771,13 @@ int main(void) {
     strlcpy(b,"/a/b",sizeof(b)); gui_parent(b); CHECK(!strcmp(b,"/a")); gui_parent(b); CHECK(!strcmp(b,"/")); gui_parent(b); CHECK(!strcmp(b,"/"));
     gui_join(b,sizeof(b),"/","x"); CHECK(!strcmp(b,"/x")); gui_join(b,sizeof(b),b,"y"); CHECK(!strcmp(b,"/x/y"));
     notepad();
+    notepad_review();
     files();
+    files_review();
+    guard_paths();
     windows();
+    windows_review();
+    bounds(640,400); bounds(960,540); bounds(1280,800);
     rendering(640,400); rendering(960,540); rendering(1280,800);
     printf("gui: %d checks, %d failures\n",checks,failed);
     return !!failed;

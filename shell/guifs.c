@@ -5,12 +5,17 @@ File: guifs.c Date: 10/17/26
 --------------------
 struct gui_fs (include/sys/gui.h) for the kernel: Notepad and Files reach the file
 systems through these, from the desktop's own task (cmd_gui), never while drawing.
-Saving is edit's: <file>.tmp is written and fsynced, then renamed over the file;
-only where a file system cannot rename is the file written in place. The volumes
-are the USB drives' FAT file systems. Mount and Eject run the shell's own mount and
-eject with their output kept (console_capture_begin()): the same rules
-(bdev_mount_readonly(), busy volumes, the flush before "safe to remove") and the
-same words, of which the last line is shown. Nothing here keeps any state.
+Saving is edit's: the text is written to a new file beside the file and fsynced,
+then renamed over it. The new file is <file>.tmp, or <file>.1.tmp and so on when
+the user has a file of that name (O_EXCL: theirs is never touched). It is deleted
+again only when the rename failed before it changed anything; after an I/O error
+the rename may have half happened, and the text stays in it. Only where a file
+system cannot rename, or no such name fits in a path, is the file written in
+place. The volumes are the USB drives' FAT file systems, and the mounts of sticks
+that were pulled out. Mount and Eject run the shell's own mount and eject with
+their output kept (console_capture_begin()): the same rules (bdev_mount_readonly(),
+busy volumes, the flush before "safe to remove") and the same words, of which the
+last line is shown. Nothing here keeps any state.
 */
 #include <stdio.h>
 #include <string.h>
@@ -84,12 +89,12 @@ static int write_all(struct file *f, const char *data, u32 len) {
     return 0;
 }
 
-/* the whole text, each \n as \r\n when crlf, then fsync */
-static int write_file(const char *path, const char *data, u32 len, bool crlf) {
+/* the whole text, each \n as \r\n when crlf, then fsync; flags: O_EXCL for a new file, or O_TRUNC */
+static int write_file(const char *path, int flags, const char *data, u32 len, bool crlf) {
     struct file *f;
     char chunk[512];
     u32 used = 0, i;
-    int r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f), e;
+    int r = vfs_open(path, O_WRONLY | O_CREAT | flags, &f), e;
     if(r) return r;
     if(!crlf) r = write_all(f, data, len);
     else {
@@ -105,16 +110,31 @@ static int write_file(const char *path, const char *data, u32 len, bool crlf) {
     return r ? r : e;
 }
 
+/* a rename that failed before it changed anything (fs/vfs.c, fs/fat.c): its new file may go */
+static bool nothing_changed(int r) {
+    return r == -ENOSYS || r == -EXDEV || r == -EROFS || r == -EBUSY || r == -EINVAL || r == -ENOENT ||
+           r == -ENOTDIR || r == -EISDIR || r == -ENOTEMPTY || r == -ENAMETOOLONG || r == -ENOSPC;
+}
+
 static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool crlf) {
     char tmp[VFS_PATH_MAX];
-    int r;
-    if(snprintf(tmp, sizeof(tmp), "%s.tmp", path) < (int)sizeof(tmp)) {
-        r = write_file(tmp, data, len, crlf);
-        if(!r && (r = vfs_rename(tmp, path)) == 0) return 0;
-        vfs_unlink(tmp);
-        if(r != -ENOSYS && r != -ENAMETOOLONG) return r;
+    int r = -ENAMETOOLONG, k;
+    for(k = 0; k < 10; k++) {
+        if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", path, k) >= (int)sizeof(tmp)) break;
+        r = write_file(tmp, O_EXCL, data, len, crlf);
+        if(r != -EEXIST) break;                         /* a file the user has under that name: the next name */
     }
-    return write_file(path, data, len, crlf);          /* no rename (or no room for .tmp): in place */
+    if(r == -EEXIST) return r;
+    if(r == 0) {
+        if((r = vfs_rename(tmp, path)) == 0) return 0;
+        if(!nothing_changed(r)) return r;               /* perhaps half done: the text stays in the new file */
+        vfs_unlink(tmp);
+        if(r != -ENOSYS) return r;
+    } else if(r != -ENAMETOOLONG) {
+        vfs_unlink(tmp);                                /* ours (O_EXCL): what of the text it got */
+        return r;
+    }
+    return write_file(path, O_TRUNC, data, len, crlf);  /* no rename here, or no room for such a name: in place */
 }
 
 static int fs_mkdir(void *ctx, const char *path) {
@@ -147,10 +167,25 @@ static int fs_volumes(void *ctx, struct gui_volume *out, int max) {
             strlcpy(out[n].fs, strcmp(type, "fat") ? type : !d->type_name ? "FAT" :      /* the partition type says which FAT */
                     strstr(d->type_name, "32") ? "FAT32" : strstr(d->type_name, "16") ? "FAT16" :
                     strstr(d->type_name, "12") ? "FAT12" : "FAT", sizeof(out[n].fs));
+            strlcpy(out[n].disk, bdev_disk(d)->name, sizeof(out[n].disk));
             part_fmt_size(d->nblocks, out[n].size, sizeof(out[n].size));
             out[n].readonly = bdev_mount_readonly(d) || d->readonly || bdev_disk(d)->readonly;
             out[n].boot = d->protect || bdev_disk(d)->protect;
             for(j = 0; j < nv; j++) if(v[j].dev == d) { strlcpy(out[n].path, v[j].path, sizeof(out[n].path)); out[n].readonly = v[j].readonly; break; }
+        }
+        n++;
+    }
+    for(j = 0; j < nv; j++) {                           /* pulled out while mounted: still to be ejected */
+        struct bdev *x = v[j].dev;
+        if(!x || !x->gone || bdev_disk(x)->bus != BDEV_BUS_USB) continue;
+        if(n < max) {
+            memset(&out[n], 0, sizeof(out[n]));
+            strlcpy(out[n].dev, x->name, sizeof(out[n].dev));
+            strlcpy(out[n].disk, bdev_disk(x)->name, sizeof(out[n].disk));
+            strlcpy(out[n].fs, "FAT", sizeof(out[n].fs));
+            part_fmt_size(x->nblocks, out[n].size, sizeof(out[n].size));
+            strlcpy(out[n].path, v[j].path, sizeof(out[n].path));
+            out[n].readonly = out[n].gone = true;
         }
         n++;
     }

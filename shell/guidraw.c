@@ -82,17 +82,31 @@ static int decode(const char *s, u8 *out, int max) {
     }
 }
 
-/* a character as Notepad draws it: a lead byte with the continuation bytes it calls for, or one
-   byte, drawn as the 437 character it is when it is not UTF-8 */
+/* The bytes of the character at s: a whole UTF-8 sequence by the console's rules (driver/cp437.c:
+   lead bytes C2-F4, no overlong forms, surrogates or values above U+10FFFF), or else one byte,
+   which is drawn as the 437 character it is, as on the console. Notepad steps through its text
+   with this and draws with gd_char(), so the two always agree. */
+u32 gd_char_len(const char *s, u32 avail) {
+    u8 c = (u8)s[0], lo = 0x80, hi = 0xBF;
+    u32 need = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 1, k;
+    if(need == 1 || avail < need) return 1;
+    if(c == 0xE0) lo = 0xA0;
+    if(c == 0xED) hi = 0x9F;
+    if(c == 0xF0) lo = 0x90;
+    if(c == 0xF4) hi = 0x8F;
+    if((u8)s[1] < lo || (u8)s[1] > hi) return 1;
+    for(k = 2; k < need; k++) if(((u8)s[k] & 0xC0) != 0x80) return 1;
+    return need;
+}
+
 u8 gd_char(const char *s, u32 avail, u32 *len) {
     u8 c = (u8)s[0];
-    u32 want = c < 0xC0 || c >= 0xF8 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4, k, u;
+    u32 k, u;
     int index;
-    for(k = 1; k < want && k < avail && ((u8)s[k] & 0xC0) == 0x80; k++) ;
-    *len = k;
-    if(want == 1 || k != want) return c;                /* ASCII, or not UTF-8: as on the console */
-    u = c & (want == 2 ? 0x1F : want == 3 ? 0x0F : 0x07);
-    for(k = 1; k < want; k++) u = u << 6 | ((u8)s[k] & 0x3F);
+    *len = gd_char_len(s, avail);
+    if(*len == 1) return c;
+    u = c & (0x7F >> *len);
+    for(k = 1; k < *len; k++) u = u << 6 | ((u8)s[k] & 0x3F);
     index = cp437_from_unicode(u);
     return index < 0 ? '?' : (u8)index;
 }

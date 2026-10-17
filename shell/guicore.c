@@ -22,7 +22,7 @@ static const int app_icons[] = { ICON_CALC, ICON_SKETCH, ICON_WAVE, ICON_GEAR, I
 static const char keys[] = "789/456*123-C0=+";
 static const char *const menu_names[] = { "\xF7 SurfOS", "File", "Edit", "Apps", "Window", "Help" };
 #define MENUS 6
-#define MENU_MAX 16
+#define MENU_MAX 20
 static const struct { const char *label; int app, icon; } tiles[] = {
     { "Notepad", GUI_NOTEPAD, ICON_NOTEPAD }, { "Files", GUI_FILES, ICON_FILES },
     { "Calculator", GUI_CALC, ICON_CALC }, { "Sketch", GUI_SKETCH, ICON_SKETCH },
@@ -35,17 +35,18 @@ static const char *const help[] = {
     "Ctrl+O opens a file in Notepad; Ctrl+W closes a window.",
     "Ctrl+G opens the menus: the arrows and Enter choose.",
     "Tab goes to the next window (in Notepad it is a tab).",
-    "Esc closes a menu, a dialog or a window.",
+    "Esc closes a menu, a dialog or a window (not Notepad);",
+    "with no window open at all it returns to the shell.",
     "Ctrl+Q returns to the shell, asking first about changes",
     "Notepad has not saved. F1-F4 switch consoles; the",
     "desktop waits on its own and comes back on it.",
     "",
     "#Windows",
-    "Drag a title bar to move a window. Double-click it, or",
-    "its middle button, to fill the screen. Drag the corner",
-    "of Notepad, Files or Help to resize it. The taskbar",
-    "shows each open window: click one to bring it up, or",
-    "to tuck it away when it is in front.",
+    "Drag a title bar to move a window. Notepad, Files and",
+    "Help also fill the screen (double-click the title bar,",
+    "or its middle button) and resize from their corner.",
+    "The taskbar shows each open window: click one to bring",
+    "it up, or to tuck it away when it is in front.",
     "",
     "#Notepad",
     "Ctrl+N new, Ctrl+O open, Ctrl+S save. Save as is in the",
@@ -59,23 +60,27 @@ static const char *const help[] = {
     "#Files",
     "The folders from / down. Double-click, or Enter, opens a",
     "folder, or a file in Notepad. Right and Left open and",
-    "close folders, Ctrl+R reads them again. A USB stick that",
-    "is not mounted is listed at the top with Mount; Eject it",
-    "before you pull it out. Delete asks first, and deletes a",
-    "file or an empty folder only.",
+    "close folders, Ctrl+R reads them again, Ctrl+C copies",
+    "the path. The File menu has all of Files' commands. A",
+    "USB stick that is not mounted is listed at the top with",
+    "Mount; Eject it before you pull it out. Delete asks",
+    "first, and deletes a file or an empty folder only.",
 };
 #define HELP_LINES (int)(sizeof(help) / sizeof(help[0]))
 
 int gui_clamp(int n, int a, int b) { return n < a ? a : n > b ? b : n; }
 bool gui_inside(int x, int y, int l, int t, int w, int h) { return x >= l && y >= t && x < l + w && y < t + h; }
 static bool resizable(int id) { return id == GUI_NOTEPAD || id == GUI_FILES || id == GUI_HELP; }
+/* a resizable window is never narrower than its toolbar */
+static int min_width(int id) { return id == GUI_NOTEPAD ? note_min_width() : id == GUI_FILES ? files_min_width() : 360; }
 
 /**** small things the desktop's files share ****/
 
-void gui_join(char *out, size_t n, const char *dir, const char *name) {
+/* false when the path is too long for out: what is there then must not be used */
+bool gui_join(char *out, size_t n, const char *dir, const char *name) {
     char d[GUI_PATH_MAX];
     strlcpy(d, dir, sizeof(d));                         /* out may be dir */
-    snprintf(out, n, "%s%s%s", d, d[0] && d[strlen(d) - 1] == '/' ? "" : "/", name);
+    return snprintf(out, n, "%s%s%s", d, d[0] && d[strlen(d) - 1] == '/' ? "" : "/", name) < (int)n;
 }
 
 const char *gui_basename(const char *path) {
@@ -120,6 +125,12 @@ const char *gui_error(const struct gui_state *g, int err) {
 
 /* a toolbar: left to right below the title bar */
 static int tool_width(const struct gui_tool *t) { return (int)strlen(t->label) * 8 + 14; }
+
+int tool_span(const struct gui_tool *t, int n) {
+    int i, at = 8;
+    for(i = 0; i < n; i++) at += tool_width(&t[i]) + 4;
+    return at + 4;
+}
 
 int tool_hit(const struct gui_tool *t, int n, int x, int y) {
     int i, at = 8;
@@ -216,12 +227,13 @@ static void maximize(struct gui_state *g, int id) {
 
 void gui_place(struct gui_state *g, int id) {
     struct gui_window *w = &g->win[id];
-    int room = g->height - MENU_H - TASK_H;
+    int room = g->height - MENU_H - TASK_H, top = MENU_H + 6, bottom;
     if(w->max) { w->x = 0; w->y = MENU_H; w->w = g->width; w->h = room; return; }
     if(w->w > g->width) w->w = g->width;
     if(w->h > room) w->h = room;
+    bottom = g->height - TASK_H - 2 - w->h;             /* as a drag leaves it */
     w->x = gui_clamp(w->x, 0, g->width - w->w);
-    w->y = gui_clamp(w->y, MENU_H, g->height - TASK_H - w->h);
+    w->y = gui_clamp(w->y, top, bottom > top ? bottom : top);
 }
 
 void gui_init(struct gui_state *g, int width, int height) {
@@ -266,12 +278,27 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Return to shell", "Ctrl+Q", ACT_QUIT, true);
         break;
     case 2:
+        if(g->focus == GUI_FILES) {                     /* Files in front: its commands, for the keyboard too */
+            ITEM("Open selected", "Enter", ACT_FILES_OPEN, files_can(g, ACT_FILES_OPEN));
+            ITEM("New file\xF9", "", ACT_FILES_NEW_FILE, files_can(g, ACT_FILES_NEW_FILE));
+            ITEM("New folder\xF9", "", ACT_FILES_NEW_FOLDER, files_can(g, ACT_FILES_NEW_FOLDER));
+            ITEM("Rename\xF9", "", ACT_FILES_RENAME, files_can(g, ACT_FILES_RENAME));
+            ITEM("Delete\xF9", "Del", ACT_FILES_DELETE, files_can(g, ACT_FILES_DELETE));
+            ITEM("Copy path", "Ctrl+C", ACT_FILES_COPY, files_can(g, ACT_FILES_COPY));
+            SEPARATOR();
+            ITEM("Mount", "", ACT_FILES_MOUNT, files_can(g, ACT_FILES_MOUNT));
+            ITEM("Eject", "", ACT_FILES_EJECT, files_can(g, ACT_FILES_EJECT));
+            ITEM("Refresh", "Ctrl+R", ACT_FILES_REFRESH, files_can(g, ACT_FILES_REFRESH));
+            SEPARATOR();
+        }
         ITEM("New note", "Ctrl+N", ACT_NEW, true);
         ITEM("Open\xF9", "Ctrl+O", ACT_OPEN, files);
-        ITEM("Save", "Ctrl+S", ACT_SAVE, note && files);
-        ITEM("Save as\xF9", "", ACT_SAVE_AS, note && files);
-        SEPARATOR();
-        ITEM("Show in Files", "", ACT_REVEAL, note && files && n->path[0]);
+        if(g->focus != GUI_FILES) {
+            ITEM("Save", "Ctrl+S", ACT_SAVE, note && files);
+            ITEM("Save as\xF9", "", ACT_SAVE_AS, note && files);
+            SEPARATOR();
+            ITEM("Show in Files", "", ACT_REVEAL, note && files && n->path[0]);
+        }
         SEPARATOR();
         ITEM("Close window", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
         break;
@@ -298,7 +325,7 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Clear sketch", "", ACT_CLEAR_SKETCH, true);
         break;
     case 5:
-        ITEM("Next window", "Tab", ACT_NEXT_WINDOW, any);
+        ITEM("Next window", note ? "" : "Tab", ACT_NEXT_WINDOW, any);   /* in Notepad, Tab is a tab */
         ITEM("Minimize", "", ACT_MINIMIZE, g->focus >= 0);
         ITEM(g->focus >= 0 && g->win[g->focus].max ? "Restore size" : "Maximize", "", ACT_MAXIMIZE, g->focus >= 0 && resizable(g->focus));
         ITEM("Close", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
@@ -351,6 +378,23 @@ static int menu_hit(const struct gui_state *g, int x, int y) {
     if(x < left || x >= left + menu_width(it, n)) return -1;
     for(i = 0; i < n; i++) if(it[i].label && y >= item_top(it, i) && y < item_top(it, i) + 24) return i;
     return -1;
+}
+
+/* for the host test: whether menu m has act and it is enabled now; where menu m opens */
+bool gui_menu_on(const struct gui_state *g, int m, int act) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, m, it), i;
+    for(i = 0; i < n; i++) if(it[i].label && it[i].act == act) return it[i].on;
+    return false;
+}
+
+void gui_menu_box(const struct gui_state *g, int m, int *x, int *y, int *w, int *h) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, m, it);
+    *x = menu_left(m) - 4;
+    *y = MENU_H;
+    *w = menu_width(it, n);
+    *h = item_top(it, n) - MENU_H + 4;
 }
 
 static int menu_step(const struct menu_item *it, int n, int from, int step) {
@@ -415,7 +459,7 @@ static void save_now(struct gui_state *g, const char *path) {
 
 static void save(struct gui_state *g) {
     char line[80];
-    if(!g->fs) return;
+    if(!g->fs) { g->pending = PEND_NONE; return; }
     if(!g->note.path[0]) save_as(g);
     else if(g->note.readonly) {
         snprintf(line, sizeof(line), "%s is on a volume that cannot be written.", gui_basename(g->note.path));
@@ -601,12 +645,27 @@ static void taskbar_press(struct gui_state *g) {
     }
 }
 
+/* Help's text rows, its last useful first row, and its scroll bar (above the resize grip) */
+static int help_rows(const struct gui_window *w) { return (w->h - TITLE_H - 12) / 18; }
+static int help_max(const struct gui_window *w) { return HELP_LINES > help_rows(w) ? HELP_LINES - help_rows(w) : 0; }
+static int help_bar(const struct gui_window *w) { return w->h - TITLE_H - 16; }
+
 static void title_press(struct gui_state *g, int id, int x, int y) {
     struct gui_window *w = &g->win[id];
+    int dx = x - g->title_x, dy = y - g->title_y;
     if(x >= w->w - 28) { gui_close(g, id); return; }
     if(resizable(id) && x >= w->w - 52) { maximize(g, id); return; }
     if(x >= w->w - (resizable(id) ? 76 : 52)) { minimize(g, id); return; }
-    if(resizable(id) && gui_double(&g->title_ms, &g->title_id, g->now, id)) { maximize(g, id); return; }
+    /* a double-click: a second press in the same place soon after, with no drag between them */
+    if(resizable(id) && id == g->title_id && g->now - g->title_ms <= DOUBLE_MS && dx >= -4 && dx <= 4 && dy >= -4 && dy <= 4) {
+        g->title_id = -1;
+        maximize(g, id);
+        return;
+    }
+    g->title_id = id;
+    g->title_ms = g->now;
+    g->title_x = x;
+    g->title_y = y;
     if(!w->max) { g->drag = id; g->drag_x = x; g->drag_y = y; }
 }
 
@@ -624,16 +683,21 @@ static void content_press(struct gui_state *g, int id, int x, int y) {
             g->drawing=true; g->last_x=x-16; g->last_y=y-70; stroke(g,x-16,y-70);
         }
     }
-    if(id==GUI_ABOUT && gui_inside(x,y,16,166,4*102-8,34) && (x-16)%102<94) gui_open(g,tiles[(x-16)/102].app);
+    if(id==GUI_ABOUT && gui_inside(x,y,16,166,4*102-8,34) && (x-16)%102<94)
+        gui_act(g,tiles[(x-16)/102].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[(x-16)/102].app);
     if(id==GUI_SETTINGS) {
         if(gui_inside(x,y,16,100,3*112,30)) g->speed=(x-16)/112+1;
         if(gui_inside(x,y,16,172,176,32)) g->night=!g->night;
     }
     if(id == GUI_NOTEPAD) note_press(g, x, y);
     if(id == GUI_FILES) files_press(g, x, y);
-    if(id == GUI_HELP && x >= w->w - 2 - SCROLL_W) {
-        rows = (w->h - TITLE_H - 12) / 18;
-        g->help_top = gui_clamp(g->help_top + (y < w->h / 2 ? -rows : rows), 0, HELP_LINES > rows ? HELP_LINES - rows : 0);
+    if(id == GUI_HELP && x >= w->w - 2 - SCROLL_W && y - TITLE_H < help_bar(w)) {   /* page, or hold the thumb */
+        int top, size;
+        rows = help_rows(w);
+        gd_thumb(help_bar(w), g->help_top, rows, HELP_LINES, &top, &size);
+        if(y - TITLE_H < top) g->help_top = gui_clamp(g->help_top - rows, 0, help_max(w));
+        else if(y - TITLE_H >= top + size) g->help_top = gui_clamp(g->help_top + rows, 0, help_max(w));
+        else { g->scroll = GUI_HELP; g->scroll_at = y - TITLE_H - top; }
     }
     g->dirty = true;
 }
@@ -648,7 +712,7 @@ static void wheel(struct gui_state *g, int dz) {
         if(!w->open || w->min || !gui_inside(g->x, g->y, w->x, w->y, w->w, w->h)) continue;
         if(id == GUI_NOTEPAD) note_wheel(g, lines);
         if(id == GUI_FILES) files_wheel(g, lines);
-        if(id == GUI_HELP) g->help_top = gui_clamp(g->help_top + lines, 0, HELP_LINES - 1);
+        if(id == GUI_HELP) g->help_top = gui_clamp(g->help_top + lines, 0, help_max(w));
         g->dirty = true;
         return;
     }
@@ -662,22 +726,27 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     if(e->wheel) wheel(g,e->wheel);
     if(!(e->buttons&POINTER_LEFT)) { g->drag=g->resize=g->scroll=-1; g->drawing=false; g->note.selecting=false; }
     if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
-    if(g->drag>=0) {
+    if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
+        int top=MENU_H+6, bottom, nx, ny;
         w=&g->win[g->drag];
-        w->x=gui_clamp(g->x-g->drag_x,0,g->width-w->w);
-        w->y=gui_clamp(g->y-g->drag_y,34,g->height-w->h-28);
-        g->dirty=true; return;
+        bottom=g->height-TASK_H-2-w->h;
+        nx=gui_clamp(g->x-g->drag_x,0,g->width-w->w);
+        ny=gui_clamp(g->y-g->drag_y,top,bottom>top?bottom:top);
+        if(nx!=w->x || ny!=w->y) { w->x=nx; w->y=ny; g->title_id=-1; g->dirty=true; }   /* a drag is no double-click */
+        return;
     }
-    if(g->resize>=0) {
+    if(g->resize>=0) {                                  /* never narrower than its toolbar */
         w=&g->win[g->resize];
-        w->w=gui_clamp(g->x-w->x+g->drag_x,360,g->width-w->x);
+        w->w=gui_clamp(g->x-w->x+g->drag_x,min_width(g->resize),g->width-w->x);
         w->h=gui_clamp(g->y-w->y+g->drag_y,200,g->height-TASK_H-w->y);
+        if(w->x+w->w>g->width) w->x=g->width-w->w>0?g->width-w->w:0;
         g->dirty=true; return;
     }
     if(g->scroll>=0) {
         w=&g->win[g->scroll];
         if(g->scroll==GUI_NOTEPAD) note_scroll(g,g->y-w->y);
         if(g->scroll==GUI_FILES) files_scroll(g,g->y-w->y);
+        if(g->scroll==GUI_HELP) { g->help_top=gd_scroll_to(help_bar(w),g->y-w->y-TITLE_H-g->scroll_at,help_rows(w),HELP_LINES); g->dirty=true; }
         return;
     }
     if(g->note.selecting) { w=&g->win[GUI_NOTEPAD]; note_drag(g,g->x-w->x,g->y-w->y); return; }
@@ -746,28 +815,36 @@ void gui_key(struct gui_state *g, int key) {
         switch(key) {
         case 19: gui_act(g,ACT_SAVE); return;                           /* Ctrl+S */
         case 3: gui_act(g,ACT_COPY); return;                            /* Ctrl+C copies here */
-        case 24: gui_act(g,ACT_CUT); return;
-        case 22: if(g->note.finding) break; gui_act(g,ACT_PASTE); return;
+        case 22: if(g->note.finding) break; gui_act(g,ACT_PASTE); return;   /* the find bar's own */
         case 1: if(g->note.finding) break; gui_act(g,ACT_SELECT_ALL); return;
-        case 26: gui_act(g,ACT_UNDO); return;
-        case 25: gui_act(g,ACT_REDO); return;
+        case 24: if(!g->note.finding) gui_act(g,ACT_CUT); return;     /* not under the find bar's keys */
+        case 26: if(!g->note.finding) gui_act(g,ACT_UNDO); return;
+        case 25: if(!g->note.finding) gui_act(g,ACT_REDO); return;
         case 6: gui_act(g,ACT_FIND); return;
         case 12: gui_act(g,ACT_GOTO); return;
         }
         note_key(g,key);
         return;
     }
+    if(key==3 && g->focus==GUI_FILES) { gui_act(g,ACT_FILES_COPY); return; }   /* Ctrl+C: the path */
     if(key==3) { gui_request_quit(g); return; }                         /* Ctrl+C elsewhere: back to the shell */
     if(key==9) { next_window(g); return; }
-    if(key==27) { if(g->focus<0) gui_request_quit(g); else gui_close(g,g->focus); return; }
+    if(key==27) {                                       /* with no window open at all, back to the shell */
+        if(g->focus>=0) gui_close(g,g->focus);
+        else {
+            for(rows=0;rows<GUI_WINDOWS && !g->win[rows].open;rows++) ;
+            if(rows==GUI_WINDOWS) gui_request_quit(g);
+        }
+        return;
+    }
     if(g->focus==GUI_FILES) { files_key(g,key); return; }
     if(g->focus==GUI_HELP) {
-        rows=(g->win[GUI_HELP].h-TITLE_H-12)/18;
+        rows=help_rows(&g->win[GUI_HELP]);
         if(key==GUI_UP || key==GUI_DOWN) g->help_top+=key==GUI_UP?-1:1;
         if(key==GUI_PGUP || key==GUI_PGDN) g->help_top+=key==GUI_PGUP?-rows:rows;
         if(key==GUI_HOME) g->help_top=0;
         if(key==GUI_END) g->help_top=HELP_LINES;
-        g->help_top=gui_clamp(g->help_top,0,HELP_LINES>rows?HELP_LINES-rows:0);
+        g->help_top=gui_clamp(g->help_top,0,help_max(&g->win[GUI_HELP]));
         g->dirty=true;
         return;
     }
@@ -790,7 +867,7 @@ static void title_button(const struct gui_draw *d, int x, int y, int kind, u32 b
 
 static void help_render(const struct gui_state *g, const struct gui_draw *d) {
     const struct gui_window *w = &g->win[GUI_HELP];
-    int rows = (w->h - TITLE_H - 12) / 18, i, line;
+    int rows = help_rows(w), i, line;
     for(i = 0; i < rows && g->help_top + i < HELP_LINES; i++) {
         line = g->help_top + i;
         if(help[line][0] == '#') {
@@ -798,7 +875,7 @@ static void help_render(const struct gui_state *g, const struct gui_draw *d) {
             gd_text(d, w->x + 30, w->y + TITLE_H + 8 + i * 18, help[line] + 1, TEAL);
         } else gd_name(d, w->x + 14, w->y + TITLE_H + 8 + i * 18, help[line], (w->w - 30 - SCROLL_W) / 8, INK);
     }
-    gd_scrollbar(d, w->x + w->w - 2 - SCROLL_W, w->y + TITLE_H, w->h - TITLE_H - 1, g->help_top, rows, HELP_LINES);
+    gd_scrollbar(d, w->x + w->w - 2 - SCROLL_W, w->y + TITLE_H, help_bar(w), g->help_top, rows, HELP_LINES);
 }
 
 static void window(const struct gui_state *g, const struct gui_draw *d, int id) {
@@ -883,7 +960,7 @@ static void menu_render(const struct gui_state *g, const struct gui_draw *d) {
 }
 
 void gui_render(const struct gui_state *g,const struct fb_surface *s) {
-    struct gui_draw d;
+    struct gui_draw d,desk;
     int i,x,n,w,ids[GUI_WINDOWS];
     u32 bg=g->night?0x142638:0x245A67;
     char b[96];
@@ -918,9 +995,10 @@ void gui_render(const struct gui_state *g,const struct fb_surface *s) {
     }
     if(!n) gd_text(&d,12,g->height-20,"Ctrl+E Notepad  Ctrl+B Files  Ctrl+K Calc  Ctrl+D Sketch  Ctrl+Q Shell",FOAM);
     if(g->clock[0]) gd_text(&d,g->width-10-(int)strlen(g->clock)*8,g->height-20,g->clock,FOAM);
+    desk=gd_clip(&d,0,MENU_H,g->width,g->height-MENU_H-TASK_H);   /* windows and their shadows stay off the bars */
     for(i=0;i<GUI_WINDOWS;i++) {
         const struct gui_window *win=&g->win[g->order[i]];
-        if(win->open && !win->min) window(g,&d,g->order[i]);
+        if(win->open && !win->min) window(g,&desk,g->order[i]);
     }
     if(g->menu) menu_render(g,&d);
     dialog_render(g,&d);

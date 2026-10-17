@@ -70,7 +70,8 @@ int gd_text(const struct gui_draw *d, int x, int y, const char *s, u32 c);     /
 int gd_text_scaled(const struct gui_draw *d, int x, int y, const char *s, u32 c, int scale);
 int gd_name(const struct gui_draw *d, int x, int y, const char *s, int cells, u32 c);   /* UTF-8, cut with … */
 int gd_cells(const char *s);                                                    /* cells a UTF-8 name takes */
-u8 gd_char(const char *s, u32 avail, u32 *len);       /* the glyph of the UTF-8 character at s, and its bytes */
+u32 gd_char_len(const char *s, u32 avail);            /* the bytes of the character at s (UTF-8 as the console has it) */
+u8 gd_char(const char *s, u32 avail, u32 *len);       /* its glyph, and its bytes */
 void gd_button(const struct gui_draw *d, int x, int y, int w, int h, const char *label, u32 bg, u32 fg);
 void gd_wave(const struct gui_draw *d, int x, int y, int w, int h, u32 c);
 void gd_scrollbar(const struct gui_draw *d, int x, int y, int h, int first, int shown, int total);
@@ -100,7 +101,7 @@ enum {
     ACT_UNDO, ACT_REDO, ACT_CUT, ACT_COPY, ACT_PASTE, ACT_DELETE, ACT_SELECT_ALL, ACT_FIND, ACT_FIND_NEXT, ACT_GOTO,
     ACT_NOTEPAD, ACT_FILES, ACT_CALC, ACT_SKETCH, ACT_CLEAR_SKETCH,
     ACT_NEXT_WINDOW, ACT_MINIMIZE, ACT_MAXIMIZE, ACT_HELP,
-    ACT_FILES_OPEN, ACT_FILES_NEW_FILE, ACT_FILES_NEW_FOLDER, ACT_FILES_RENAME, ACT_FILES_DELETE,
+    ACT_FILES_OPEN, ACT_FILES_NEW_FILE, ACT_FILES_NEW_FOLDER, ACT_FILES_RENAME, ACT_FILES_DELETE, ACT_FILES_COPY,
     ACT_FILES_REFRESH, ACT_FILES_MOUNT, ACT_FILES_EJECT,
     /* a dialog's answer */
     ACT_DLG_NEW_FILE, ACT_DLG_NEW_FOLDER, ACT_DLG_RENAME, ACT_DLG_DELETE, ACT_DLG_GOTO, ACT_DLG_OPEN,
@@ -113,6 +114,7 @@ enum { PEND_NONE, PEND_NEW, PEND_OPEN, PEND_OPEN_PATH, PEND_QUIT, PEND_CLOSE };
 /* a toolbar: buttons in a row below the title bar, each with its action */
 struct gui_tool { const char *label; int act; };
 int tool_hit(const struct gui_tool *t, int n, int x, int y);          /* window-relative; the button, or -1 */
+int tool_span(const struct gui_tool *t, int n);                      /* the width a window needs for them all */
 void tool_render(const struct gui_draw *d, int x, int y, const struct gui_tool *t, int n, const bool *on);
 
 /* guicore.c */
@@ -125,7 +127,7 @@ bool gui_guard(struct gui_state *g, int pending, const char *path);   /* true: g
 void gui_proceed(struct gui_state *g);                                /* run what was pending */
 void gui_place(struct gui_state *g, int id);                          /* keep a window on the screen */
 const char *gui_error(const struct gui_state *g, int err);
-void gui_join(char *out, size_t n, const char *dir, const char *name);
+bool gui_join(char *out, size_t n, const char *dir, const char *name);   /* false: too long, not usable */
 const char *gui_basename(const char *path);
 void gui_parent(char *path);
 void gui_date(u32 t, char *out, size_t n);                           /* "2026-10-17 14:03" */
@@ -133,6 +135,8 @@ void gui_bytes(u32 n, char *out, size_t size);                       /* "1,234 B
 bool gui_double(u32 *last_ms, int *last_row, u32 now, int row);      /* a second click on the same row in time */
 bool gui_inside(int x, int y, int l, int t, int w, int h);
 int gui_clamp(int n, int a, int b);
+bool gui_menu_on(const struct gui_state *g, int menu, int act);      /* for the host test */
+void gui_menu_box(const struct gui_state *g, int menu, int *x, int *y, int *w, int *h);
 
 /* guinote.c */
 struct note_layout { int tx, ty, cols, rows, gutter, bar_x, find_y, status_y; };
@@ -147,6 +151,7 @@ void note_wheel(struct gui_state *g, int lines);
 void note_scroll(struct gui_state *g, int y);                        /* the held thumb, window-relative */
 void note_render(const struct gui_state *g, const struct gui_draw *d);
 void note_title(const struct gui_state *g, char *out, size_t n);
+int note_min_width(void);                                            /* its toolbar's width */
 void note_insert(struct gui_state *g, const char *s, u32 len);       /* over the selection */
 void note_copy(struct gui_state *g, bool cut);
 void note_paste(struct gui_state *g);
@@ -173,7 +178,8 @@ void files_render(const struct gui_state *g, const struct gui_draw *d);
 void files_act(struct gui_state *g, int act);
 void files_answer(struct gui_state *g, int act, int button, const char *text, const char *target);
 bool files_can(const struct gui_state *g, int act);
-void files_path(const struct gui_state *g, int row, char *out, size_t n);
+bool files_path(const struct gui_state *g, int row, char *out, size_t n);   /* false: too long, not usable */
+int files_min_width(void);
 int files_rows(const struct gui_state *g);                           /* rows the window shows */
 int gui_list(const struct gui_fs *fs, const char *path, struct gui_entry *out, int max, int *total);  /* sorted */
 
@@ -188,6 +194,7 @@ void dialog_pointer(struct gui_state *g, int x, int y, bool press);
 void dialog_wheel(struct gui_state *g, int rows);
 void dialog_render(const struct gui_state *g, const struct gui_draw *d);
 void dialog_close(struct gui_state *g);
+void dialog_box(const struct gui_state *g, int *x, int *y, int *w, int *h);
 void field_set(struct gui_field *f, const char *text, bool all);
 bool field_key(struct gui_field *f, int key, const char *clip, u32 clip_len);   /* true: the key was the field's */
 void field_render(const struct gui_draw *d, const struct gui_field *f, int x, int y, int w, bool focused);
