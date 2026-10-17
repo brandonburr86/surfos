@@ -5,7 +5,7 @@ physical results are separate columns, so nothing claims more than happened.
 
 | Milestone | Simulation / host tests | Synthesis / bitstream | On the board | State |
 |---|---|---|---|---|
-| 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (the board answered most of the owner's hardware facts: INVENTORY.md sections 3 and 4; still open: the PCB revision, the adapters' revisions, a PS/2 keyboard the board can use) |
+| 0 Inventory and contracts | toolchain probes pass ([INVENTORY.md](INVENTORY.md)) | | | **done** (the board answered most of the owner's hardware facts: INVENTORY.md sections 3 and 4; still open: the adapters' revisions, a PS/2 keyboard the board can use) |
 | 1 Toolchain and board baseline | baseline design (LEDs, buttons, 1 Hz UART line, both clocks) passes in Verilator and Icarus ([evidence](evidence/board/)) | bitstreams for both boards from the open flow on the Mac, every flow check passed ([evidence](evidence/board/openxc7.txt)); no Vivado run | **A7-100T** (IDCODE 0x03631093), loaded over JTAG from the Mac: **m1 PASS** on 2026-10-16, 11 checks and the LEDs confirmed by the owner ([evidence](evidence/physical/m1-2026-10-16-2.txt); the first run's FAIL was a test-kit bug: [evidence](evidence/physical/m1-2026-10-16.txt)) | **passed on the board** with the open flow; open: the brief's Vivado post-route timing and DRC reports and the Mac → Vivado host loop (no Vivado host) |
 | 2 CPU correctness in simulation | directed tests, riscv-tests, riscv-arch-test, random programs and CSR probes compared with a contract-patched Spike instruction by instruction (8.2 M retirements on every `make check`, 19 M in the verif track's long runs), a bounded formal RVFI check on `make check`, riscv-formal 43 of 44 checks, the synthesized netlist at gate level ([cpu](evidence/cpu/), [verif](evidence/verif/)) | Yosys estimate (about 3,100 LUTs, 4 DSP48E1) | | **done in simulation** (independent review: no blocker; its findings fixed) |
 | 3 CPU on the board | the real core in `surfsim` runs `bramdiag` to PASS and starts SurfBoot ([evidence](evidence/soc/)); the bitstreams' own synthesized netlists do the same ([evidence](evidence/board/openxc7-soc.txt)) | open flow, both boards: `surfcpu_arty_a7_bramdiag` and `surfcpu_arty_a7_top` (SurfBoot), HAS_DDR=0, every flow check passed | **m3 PASS** on the A7-100T on 2026-10-16: the BRAM diagnostics' 203 checks (identity, ALU, M extension, branches, loads and stores, CSRs, 56 KiB March C-, 34 exceptions each recovered, timer interrupts and WFI at 1.02 ms a tick, FENCE.I), the UART both ways, the LEDs confirmed by the owner; bitstream d174d0f ([evidence](evidence/physical/m3-2026-10-16.txt)) | **done on the board** (open-flow bitstream; nextpnr's timing is an estimate, no Vivado sign-off) |
@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); after `deploy-sd` it lists `/BOOT` and `/SYSTEM` and reads the whole 388,724-byte `SURFOS.BIN` through its 8 fragments, every byte position matching the Mac's copy ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); SurfBoot 1.1.0 then loads SURFOS.BIN from the card into DDR (CRC checked in both) and starts it ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); the formal m5 test (DDRDIAG.BIN from the card, the card taken out) not run yet | software done on the host; RTL SoC done; on the board: card reads and the DDR boot shown, m5 pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: neither of the owner's keyboards answers. The first (a USB keyboard on a passive USB-to-PS/2 adapter) does not speak PS/2; the second, an MCSAITE PS/2 keyboard specified for 5 V, does not start on the adapter's 3.3 V ([evidence](evidence/physical/ps2-2026-10-17.txt)): it needs a level shifter with 5 V, or a keyboard that runs at 3.3 V | done in simulation; on the board: VGA done, the PS/2 keyboard pending (a level shifter for the owner's 5 V keyboard, or a keyboard that runs at 3.3 V) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the fifth storage review's findings, being fixed in fs-fix-5) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the sixth storage review's findings, being fixed in fs-fix-6) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); the DDR designs now build reproducibly and pass on the board; no release made with them yet | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done and reviewed (its findings fixed in rel-2); the pre-release must be made again |
 
 ## Log
@@ -717,3 +717,55 @@ ddr-3 built five candidates, every gate passing on each
   the parts are there, or a keyboard that runs at 3.3 V.
 * Before the first load that day, the SurfOS that had run since the evening before did not
   answer on the UART. Whether it had stopped was not determined; every load since runs normally.
+
+### 2026-10-17: storage round fs-fix-5 and the sixth review
+
+* fs-fix-5 was merged as 47fb4ec. It closes the fifth review's findings as audit B34-B38:
+  * B34: a copy is written only when nothing it needed has left the lists unwritten since it
+    was taken; it is taken again otherwise (16 looks at most).
+  * B35: a block that is busy when it should be dropped is dropped when it is let go or its
+    I/O ends.
+  * B36: a cluster given back drops its blocks, also when there is no memory for the list.
+  * B37: table points drop the waiting chains' blocks too.
+  * B38: a volume with lost clusters stays marked as not cleanly unmounted.
+
+  The host tests have 274 checks, 7 of them failing on 42a45d4, and the threaded and
+  randomized tests tag every data block with its file.
+* The integrator's runs at 47fb4ec all pass:
+  * x86 test-all at O0 and O2: smoke 311 and files 51 each;
+  * unittest: FATFS 274/0, FATFUZZ 4/0, CONC ok ×4;
+  * `make check` in 26 minutes.
+* A sixth independent review confirmed B34's checks, B35, B36, B37 and B38's count, with no
+  regression in 1.05 M threaded and 141 k randomized operations. It found:
+  * **Major, new in fs-fix-5:** B34's record of a copy lives on the copying task's stack. A
+    task killed while it waits inside a copy (Ctrl+C, then the 2-second escalation) never
+    unlinks it, and the next rm or truncate writes into freed memory. An older problem shows
+    in the same scenario: the copied block stays marked as being copied, and the next sync
+    that owes it never returns. Both were shown in a scenario test; no field trigger has been
+    seen.
+  * **Minor:**
+    * the tagged oracle misses most stale-data cases (an exact check finds them);
+    * umount's give-up does not spoil copies;
+    * dropping an already set-aside block retakes copies, which can make a sync fail on a
+      working card at the 16-look bound;
+    * SurfOS's own next mount and unmount clear an unclean mark;
+    * clusters lost by a free that fails midway are not counted.
+  * **Cosmetic:** FAT12's unmount message.
+
+  fs-fix-6 is fixing them. The card stays mounted read-only on the board until storage
+  settles: no writes, so no copies.
+
+### 2026-10-17: the flash part, and the standalone board
+
+* The owner asked for the board to start on its own (milestone 9), and the work toward that has
+  begun:
+  * a fresh release from a clean checkout, with every bitstream including the DDR designs;
+  * its DDR boot design loaded over JTAG on the board;
+  * then, with the owner's go-ahead, the configuration flash written and JP1 put on.
+* The flash part is known ([evidence](evidence/physical/flash-id-2026-10-17.txt)):
+  * JEDEC id 0x012018 on the owner's Rev. E board, read over JTAG by openFPGALoader
+    (`--detect -f`, which writes nothing);
+  * a Spansion/Infineon 128 Mbit part (openFPGALoader names it S25FL128S; the S25FL127S
+    shares the id);
+  * no block protection, and the QUAD bit set.
+* The PCB revision is Rev. E (the owner). INVENTORY.md G1 and G7 are answered.

@@ -209,9 +209,9 @@ design (section 4), which leaves JB, JC and JD unassigned so the FPGA drives non
 pins; only then load designs that drive them. The microSD card goes in only when SurfBoot is
 running (section 6).
 
-Still open: the PCB revision printed on the Arty and the adapters' revisions (INVENTORY.md
-section 4). Your keyboard is answered: it is a USB keyboard on a passive PS/2 adapter, and a
-real PS/2 keyboard is needed (section 10).
+Still open: the adapters' revisions (INVENTORY.md section 4). Your board is a Rev. E, and its
+configuration flash a Spansion/Infineon 128 Mbit part (INVENTORY.md G7). Your keyboard is
+answered: the MCSAITE PS/2 keyboard needs 5 V, so it waits for a level shifter (section 10).
 
 ## 4. First power-up: the baseline design (milestone 1) **passed on 2026-10-16**
 
@@ -692,5 +692,4 @@ FPGA reads its flash over one data line at about 3 MHz.
    needs an x86-64 Linux machine (a PC, or a cloud VM) with AMD's free Vivado, reached over ssh
    (`FLOW=vivado-ssh`). Vivado in a Linux container on this Mac also exists as an option,
    unsupported and tens of GB ([BUILD-HOST.md](BUILD-HOST.md)).
-5. **Still open:** the PCB revision printed on the Arty and the adapters' revisions (INVENTORY.md
-   section 4).
+5. **Still open:** the adapters' revisions (INVENTORY.md section 4).

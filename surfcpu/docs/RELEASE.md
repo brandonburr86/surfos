@@ -438,7 +438,8 @@ the same; its `MANIFEST` comparison names the new image ids.
 
 ## 10. What only the board can show
 
-All pending (INVENTORY.md gap G7, and G1's PCB revision; PHYSICAL-TESTS.md):
+All pending (PHYSICAL-TESTS.md). The flash part is known: on the owner's Rev. E board a Spansion/Infineon
+128 Mbit part (JEDEC id 0x012018) with no block protection (INVENTORY.md G7). Still to show:
 
 * that the flash part takes the image (`program-flash` with the real openFPGALoader, its JEDEC id,
   the erase, write and read-back);

@@ -1,0 +1,37 @@
+The Arty's configuration flash, identified over JTAG (read-only): the integrator's own run, 2026-10-17 19:14 UTC
+openFPGALoader 1.1.1 (Homebrew), -b arty_a7_100t --detect -f: it loads its SPI bridge (spiOverJtag_xc7a100tcsg324) into
+configuration RAM, reads the flash's JEDEC id and its status and configuration registers, and writes nothing. SurfOS
+(surfcpu_arty_a7_ddr, 0bcadbc) was loaded again afterwards (19:15:45 UTC, the shell after 10.0 s).
+
+  Jtag frequency : requested 10.00MHz   -> real 10.00MHz  
+  Detect flash:
+  Use: /opt/homebrew/Cellar/openfpgaloader/1.1.1/share/openFPGALoader/spiOverJtag_xc7a100tcsg324.bit.gz
+  load program
+  Done
+  Shift IR 35
+  ir: 1 isc_done 1 isc_ena 0 init 1 done 1
+  jtag_chain_len: 1
+  SOJ version: 2.000000
+  JEDEC ID: 0x012018
+  Detected: spansion S25FL128S 256 sectors size: 128Mb
+  RDSR : 0x00
+  WIP  : 0
+  WEL  : 0
+  BP   : 0
+  TB   : 0
+  SRWD : 0
+  Configuration Register
+  RDCR   : 02
+  FREEZE : 0
+  QUAD   : 1
+  TBPARM : 0
+  BPNV   : 0
+  TBPROT : 0
+  LC     : 0
+  Done
+
+Result: a Spansion/Infineon 128 Mbit (16 MiB) part with JEDEC id 0x012018. openFPGALoader names it S25FL128S; the
+S25FL127S that some Rev. E boards carry (under a sticker, INVENTORY.md G7) has the same id, and the sector count is
+openFPGALoader's table entry for that id, not read from the chip. Either part is one RELEASE.md section 6 allows for. The
+owner reads the board as Rev. E. No block protection (status register 0x00: BP 0, SRWD 0), so openFPGALoader can erase
+and write it without --unprotect-flash; the configuration register's QUAD bit is already set (0x02). Nothing was written.
