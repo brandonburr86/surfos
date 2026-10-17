@@ -1191,13 +1191,26 @@ u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max) {
 
 /* 10/16/26 (B28): every dirty block of dev, failed or not, set aside or not (up to max of them, into lbas): a
    file system that frees clusters, or cuts a chain off, drops or sets aside its own among them (their bytes are
-   nobody's any more). How many there are (at most BCACHE_BLOCKS); a look over the cache only when dev has some */
+   nobody's any more). How many there are (at most BCACHE_BLOCKS). From dev's lists of dirty blocks (B12), which
+   hold every one that is not set aside: a few blocks, where a look over the cache's 1024 buffers costs SurfCPU
+   about 0.1 million cycles (and an rm makes two); over the cache only while some of dev's are set aside */
 u_int bdirty_blocks(struct bdev *dev, u32 *lbas, u_int max) {
-    u_int n = 0;
+    u_int n = 0, k, guard = 0;
     int i;
+    u_long f;
     if(!dev) return 0;
     mutex_lock(&bcache_lock);
-    for(i = dirty_count(dev) ? 0 : BCACHE_BLOCKS; i < BCACHE_BLOCKS; i++) {
+    if(!dev->bc_aside) {
+        f = irq_save();                         /* (bdirty() adds to the lists with the interrupts off) */
+        for(k = 0; k <= BORDER_MAX; k++) {
+            struct buf *b;
+            for(b = dev->bc_head[k]; b && guard++ < BCACHE_BLOCKS; b = b->dnext) {
+                if(n < max) lbas[n] = b->lba;
+                n++;
+            }
+        }
+        irq_restore(f);
+    } else for(i = 0; i < BCACHE_BLOCKS; i++) {
         struct buf *b = &bufs[i];
         if(b->dev == dev && b->valid && b->dirty) {
             if(n < max) lbas[n] = b->lba;
