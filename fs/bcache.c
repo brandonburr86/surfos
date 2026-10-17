@@ -122,7 +122,7 @@ that write_singly() could not try (RUN_BLOCKED) counted as written, so a sync wh
 refused could return 0. Now a sync tries every block it may (blocks that never failed first),
 tries a failed run of several blocks again block by block in the same call, takes RUN_BLOCKED
 as "not written", and asks nothing more of a device only once it has refused DEAD_TRIES (4)
-requests in that call and taken none (bc_pass, bc_refused, bc_taken): it takes nothing.
+requests in that call and taken none (since B26 each call keeps that count: tally()): it takes nothing.
 
 10/16/26 (audit B14): a device that refused is asked again. room() said no to a device with a
 failed block that held BCACHE_HOLD dirty blocks, and never asked the device again: after a card
@@ -140,7 +140,7 @@ write was in the file as read back, reached the device with the next sync that w
 refusing device past its share (a 64 KB write over cached blocks: 379 dirty, BCACHE_HOLD 256). Now
 the copies are taken out of every other write while the device works (marked writing: getblk()
 waits for them), take the bytes once the device has them (clean), and keep what they had when it
-refuses. The share, exactly: file data never takes a device that refuses past BCACHE_HOLD dirty
+refuses (B22: the dirty ones; a refused request may have changed the device). The share, exactly: file data never takes a device that refuses past BCACHE_HOLD dirty
 blocks (each block through the cache asks room() first; the straight path dirties nothing); a file
 system operation that was let in still adds its own table, directory and FSInfo blocks, which are
 not counted (a few for each operation under way when the share filled).
@@ -150,9 +150,9 @@ order point that takes its entry off the disk must write the directory block, wh
 older data block, so rm said EIO as long as the block refused. A file system about to free clusters
 behind an order point may now set their failed blocks aside (baside()): not written, nobody's
 dependency and no sync's debt (a sync of another task does not wait for them either: their cluster
-is on its way out); it puts them back when the order point fails (nothing changed) and drops them
-once the clusters are free (bdiscard(): their bytes will never be read). bfailed_blocks() lists a
-device's failed blocks.
+is on its way out; B26: it does now); it puts them back when the order point fails (nothing changed)
+and drops them once the clusters are free (bdiscard(): their bytes will never be read).
+bfailed_blocks() lists a device's failed blocks (B21: and says how many there are, all of them).
 
 10/16/26 (audit B18): a holder that does not let go. bsync() waited for a held block for ever: a task
 killed while it held one (kernel/task.c's kill_escalate(): still in a call 2 s after a kill, killed at
@@ -164,6 +164,24 @@ that hold at once (stuck, until the block is let go).
 
 10/16/26 (audit B19): bpeek() hands out a block that is being written as well (its contents are
 what goes to the device): for readers only, as fs/bcache.h says now.
+
+10/16/26 (audit B22): a refused straight write may have changed the device. B15 kept the cached
+copies of a refused run as they were, as if a refused request stored nothing; but an SD card's
+multi-block write (CMD25) stores the blocks before the one it refuses, USB mass storage its 32 KB
+pieces and ATA its sectors one by one, so a clean copy could hold what the device no longer did: a
+file read one thing until the cache made room and then another, with no write between. Now the
+clean copies of a refused run are dropped (one a reader holds then is taken out of the table and
+dropped when let go): what is read afterwards is what the device holds. A dirty copy keeps its
+bytes (what the file system holds; the next sync writes them over whatever the device has).
+
+10/16/26 (audit B26): B13 and B16 under several tasks. B13's count of the requests a device refused
+was kept in the device for the sync call that counted last, so making room or another task's sync
+in between started it again, and a sync could ask a card that takes nothing for every block: each
+sync call keeps its own (struct tally; making room counts none, it asks once). B16's blocks set
+aside were no sync's debt, so another task's sync could return 0 while an rm's order point had one
+aside, and the rm then failed and put it back, not written: a block set aside is now the debt of
+every other task's sync (the device records whose operation set its blocks aside: one at a time,
+under the volume's lock), which waits for it as for a hold (B18: 10 s at most, then not written).
 */
 
 #include <surfos/types.h>
@@ -199,6 +217,12 @@ static u64 changes;                             /* 10/16/26 (B12): the number of
 static int evict_write(struct buf *b);
 static int room(struct bdev *dev);
 #define RUN_BLOCKED 1                           /* write_run(): nothing tried: the order or a holder forbids it now (B7) */
+#define TALLY_DEVS 8                            /* B26: the devices a sync call counts requests of (tally()) */
+struct tally {                                  /* 10/16/26 (B26): a sync call's requests of each device */
+    struct bdev *dev[TALLY_DEVS];
+    u16 refused[TALLY_DEVS], taken[TALLY_DEVS];
+    u_int n;
+};
 /* 10/16/26 (B9): a device's account (struct bdev's bc_dirty[] and lists) has a place for each write order */
 typedef char bc_orders_fit[(BORDER_MAX + 1) * sizeof(u_int) == sizeof(((struct bdev *)0)->bc_dirty) &&
                            (BORDER_MAX + 1) * sizeof(struct buf *) == sizeof(((struct bdev *)0)->bc_head) ? 1 : -1];
@@ -372,30 +396,42 @@ static void sleep_unlocked_ms(u_long ms) {
     mutex_lock(&bcache_lock);
 }
 
+/* (bcache_lock held) 10/16/26 (B26): is b set aside (B16) by an operation of another task than the caller
+   (a file system sets blocks of a device aside only within one operation, under its volume's lock: the
+   device records whose it is) */
+static inline bool aside_other(const struct buf *b) {
+    return b->aside && b->dev && b->dev->bc_aside_by != (const void *)curTask;
+}
+
 /* (bcache_lock held) 10/16/26 (B18): the holds of dev's blocks start their clocks now, every one that has
    none: a sync waits for one of them. Not when a hold begins (that is every read and write of a block,
    and a clock costs SurfCPU a few hundred cycles each time); a task killed with several blocks in hand
-   has them all stamped at the first wait, so the sync that meets them waits once */
+   has them all stamped at the first wait, so the sync that meets them waits once. 10/16/26 (B26): blocks
+   another task's operation set aside count as held */
 static void stamp_holds(struct bdev *dev, u_long now) {
     int i;
     for(i = 0; i < BCACHE_BLOCKS; i++) {
         struct buf *p = &bufs[i];
-        if(p->dev == dev && p->refs && !p->held_since) p->held_since = now;
+        if(p->dev == dev && (p->refs || aside_other(p)) && !p->held_since) p->held_since = now;
     }
 }
 
 /* (bcache_lock held) 10/16/26 (B18): wait until b, a dirty block a sync owes, is in nobody's hands and
    under no write. A write ends; a hold may not: once a sync has waited HOLD_WAIT_MS for it (stamp_holds())
    it is given up on: false, b stays dirty (not written), and later syncs give up on that hold at once
-   (b->stuck, until it is let go). true also when b was written or dropped meanwhile (look again) */
+   (b->stuck, until it is let go). true also when b was written or dropped meanwhile (look again).
+   10/16/26 (B26): a block another task's operation set aside is waited for in the same way, until it is
+   put back or dropped (an operation that never ends, a task killed in it, is given up on likewise) */
 static bool wait_for(struct buf *b) {
     struct bdev *dev = b->dev;
     u32 lba = b->lba;
     for(;;) {
         u_long held, now;
+        bool other;
         if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty) return true;
         if(b->writing || b->copying) { sleep_unlocked(); continue; }
-        if(!b->refs || dev->gone) return true;
+        other = aside_other(b);
+        if((!b->refs && !other) || dev->gone) return true;
         if(b->stuck) return false;
         now = uptime_ms();
         if(!now) now = 1;                       /* (0 stands for no clock yet) */
@@ -403,7 +439,8 @@ static bool wait_for(struct buf *b) {
         held = now - b->held_since;
         if(held >= HOLD_WAIT_MS) {
             b->stuck = true;
-            kprintf("bcache: %s block %lu held for %lu s by a task that does not let go of it: not written\n",
+            kprintf(other ? "bcache: %s block %lu set aside for %lu s by an operation that does not end: not written\n"
+                          : "bcache: %s block %lu held for %lu s by a task that does not let go of it: not written\n",
                     dev->name, (u_long)lba, held / 1000);
             return false;
         }
@@ -463,17 +500,28 @@ static u32 new_pass(void) {
     return sync_passes;
 }
 
-/* 10/16/26 (B13): a request of sync call `pass` to dev, counted; a device that refused DEAD_TRIES of
-   them and took none is asked nothing more in that call (dead()) */
-static void tally(struct bdev *dev, u32 pass, int r) {
-    if(!pass) return;
-    if(dev->bc_pass != pass) { dev->bc_pass = pass; dev->bc_refused = dev->bc_taken = 0; }
-    if(r == 0) dev->bc_taken++;
-    else dev->bc_refused++;
+/* 10/16/26 (B13): a request of a sync call to dev, counted in the call's tally (t; NULL: not counted); a
+   device that refused DEAD_TRIES of them and took none is asked nothing more in that call (dead()).
+   10/16/26 (B26): each call keeps its own tally (B13 kept one in each device, for the call that counted
+   last: a room() or another task's sync in between started it again), for its first TALLY_DEVS devices */
+static void tally(struct tally *t, struct bdev *dev, int r) {
+    u_int i;
+    if(!t) return;
+    for(i = 0; i < t->n && t->dev[i] != dev; i++) ;
+    if(i == t->n) {
+        if(t->n == TALLY_DEVS) return;
+        t->dev[t->n++] = dev;
+        t->refused[i] = t->taken[i] = 0;
+    }
+    if(r == 0) { if(t->taken[i] < 0xFFFF) t->taken[i]++; }
+    else if(t->refused[i] < 0xFFFF) t->refused[i]++;
 }
 
-static bool dead(const struct bdev *dev, u32 pass) {
-    return pass && dev->bc_pass == pass && !dev->bc_taken && dev->bc_refused >= DEAD_TRIES;
+static bool dead(const struct tally *t, const struct bdev *dev) {
+    u_int i;
+    if(!t) return false;
+    for(i = 0; i < t->n; i++) if(t->dev[i] == dev) return !t->taken[i] && t->refused[i] >= DEAD_TRIES;
+    return false;
 }
 
 /* the console's line after a request of dev (B1, B9): once when it refuses, and (B6) once when it takes
@@ -493,13 +541,14 @@ static void tell(struct bdev *dev, int r, u32 first, u32 n) {
 /* Write b and its dirty neighbours (up to max blocks, BCACHE_RUN at most, in one request; the run's
    first block and length in *pfirst, *pn when given). Drops the lock
    while the device works. A gone device's blocks are dropped instead, without a word. pass:
-   the bsync() call (0 from reuse()); a block that failed in it is not part of another run.
+   the bsync() call (0 from reuse()); a block that failed in it is not part of another run; t: its
+   tally of requests (B13, B26; NULL: not counted).
    A run is of one order (B3). 10/16/26 (B7): the order is kept here, for every caller: nothing
    is written while (B12) a dirty block of a lower order with an older change is on its device, nor
    a block someone holds (it may be in the middle of a change), one being copied (B12) or one set
    aside (B16); RUN_BLOCKED then, nothing tried. getblk() hands out no block while it is written, so
    what the device gets is what was checked. */
-static int write_run(struct buf *b, u32 pass, u32 max, u32 *pfirst, u32 *pn) {
+static int write_run(struct buf *b, u32 pass, struct tally *t, u32 max, u32 *pfirst, u32 *pn) {
     struct bdev *dev = b->dev;
     struct buf *run[BCACHE_RUN];
     u32 gen[BCACHE_RUN], first = b->lba, n = 0, i;
@@ -558,7 +607,7 @@ static int write_run(struct buf *b, u32 pass, u32 max, u32 *pfirst, u32 *pn) {
     irq_restore(f);
     for(i = 0; i < n; i++) if(dev->gone && !run[i]->refs) drop(run[i]);
     if(r == 0) { writes += n; io.written_blocks += n; }
-    tally(dev, pass, r);
+    tally(t, dev, r);
     tell(dev, r, first, n);
     wake_up_all(&bwait);
     return r;
@@ -775,13 +824,13 @@ static int evict_write(struct buf *b) {
         while((d = oldest_below(dev, k, last)) != NULL) {
             if(d->wfail) return -1;
             if(d->writing || d->copying || ++guard > BCACHE_BLOCKS) return RUN_BLOCKED;
-            r = write_run(d, 0, BCACHE_RUN, NULL, NULL);
+            r = write_run(d, 0, NULL, BCACHE_RUN, NULL, NULL);
             if(r != 0) return r;
             if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty || b->writing || b->order != order) return 0;
         }
     }
     if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty || b->writing || b->order != order) return 0;  /* look again */
-    return write_run(b, 0, BCACHE_RUN, NULL, NULL);
+    return write_run(b, 0, NULL, BCACHE_RUN, NULL, NULL);
 }
 
 void brelse(struct buf *b) {
@@ -790,7 +839,10 @@ void brelse(struct buf *b) {
     if(!b->refs) {
         b->stuck = false;                       /* 10/16/26 (B18): that hold is over */
         b->held_since = 0;
-        if(b->dev && b->dev->gone && !b->loading && !b->writing && !b->copying) drop(b);
+        /* a gone device's block; 10/16/26 (B22): a clean copy taken out of the table while it was held (it may
+           hold what its device no longer does: write_blocks()) */
+        if(b->dev && (b->dev->gone || (!b->hashed && b->valid && !b->dirty)) && !b->loading && !b->writing && !b->copying)
+            drop(b);
         wake_up_all(&bwait);                    /* someone may wait for a free buffer */
     }
     mutex_unlock(&bcache_lock);
@@ -832,13 +884,13 @@ static int room(struct bdev *dev) {
     pass = new_pass();
     if(dev->bc_failed) {
         struct buf *p = probe_block(dev);
-        if(!p || write_run(p, pass, 1, NULL, NULL) != 0) return -1;
+        if(!p || write_run(p, pass, NULL, 1, NULL, NULL) != 0) return -1;
     }
     for(order = 0; order <= BORDER_MAX && dirty_count(dev) > BCACHE_HOLD / 2; order++) {
         for(i = 0; i < BCACHE_BLOCKS && dirty_count(dev) > BCACHE_HOLD / 2; i++) {
             struct buf *b = &bufs[i];
             if(b->dev != dev || !b->valid || !b->dirty || b->writing || b->order != order || b->fail_pass == pass) continue;
-            if(write_run(b, pass, BCACHE_RUN, NULL, NULL) < 0) return -1;
+            if(write_run(b, pass, NULL, BCACHE_RUN, NULL, NULL) < 0) return -1;
         }
     }
     return 0;
@@ -856,30 +908,35 @@ int bcache_room(struct bdev *dev) {
    once: one block that refuses must not hold back its neighbours. 0 when every one is written now, -1 when
    one is not: it failed, or (10/16/26, B13) it could not be tried (RUN_BLOCKED is not written, nor is a
    block another task is writing), or its device takes nothing (dead()) */
-static int write_singly(struct bdev *dev, u32 first, u32 n, u8 order, u32 pass) {
+static int write_singly(struct bdev *dev, u32 first, u32 n, u8 order, u32 pass, struct tally *t) {
     u32 lba;
     int r = 0;
     for(lba = first; lba < first + n; lba++) {
         struct buf *p = find(dev, lba);
         if(!p || !p->valid || !p->dirty || p->order != order || p->fail_pass != pass) continue;   /* written meanwhile */
-        if(dead(dev, pass) || p->writing || write_run(p, pass, 1, NULL, NULL) != 0) r = -1;
+        if(dead(t, dev) || p->writing || write_run(p, pass, t, 1, NULL, NULL) != 0) r = -1;
     }
     return r;
 }
 
 /* (bcache_lock held) 10/16/26 (B12): does a sync of dev (NULL: every device) up to order top, begun at
-   change `start`, owe b: a change of it up to `start` is not on its device */
-static bool owed(const struct buf *b, const struct bdev *dev, u8 top, u64 start) {
-    return b->valid && b->dirty && !b->aside && b->order <= top && b->first_seq <= start && (!dev || b->dev == dev);
+   change `start`, owe b: a change of it up to `start` is not on its device. 10/16/26 (B26): a block set
+   aside (B16) is not the debt of the calling task's sync when that task set it aside (its order point must
+   not wait for it); it is the debt of every other task's (it may be put back, still not written). Inline:
+   each sync asks it of every buffer, twice (on SurfCPU, which fetches every instruction from DDR, a call
+   for each cost about 0.4 million cycles a sync) */
+static inline bool owed(const struct buf *b, const struct bdev *dev, u8 top, u64 start) {
+    return b->valid && b->dirty && b->order <= top && b->first_seq <= start && (!dev || b->dev == dev) &&
+           (!b->aside || aside_other(b));
 }
 
 /* (bcache_lock held) 10/16/26 (B12): an owed block that one more try could write: not failed in this call,
    not given up on (B18), on a device that is still asked (B13) */
-static bool owed_open(const struct bdev *dev, u8 top, u64 start, u32 pass) {
+static bool owed_open(const struct bdev *dev, u8 top, u64 start, u32 pass, const struct tally *t) {
     int i;
     for(i = 0; i < BCACHE_BLOCKS; i++) {
         struct buf *b = &bufs[i];
-        if(owed(b, dev, top, start) && b->fail_pass != pass && !b->stuck && !dead(b->dev, pass)) return true;
+        if(owed(b, dev, top, start) && b->fail_pass != pass && !b->stuck && !dead(t, b->dev)) return true;
     }
     return false;
 }
@@ -890,8 +947,9 @@ static bool owed_open(const struct bdev *dev, u8 top, u64 start, u32 pass) {
    cannot go as it is, one order down), then the copy. b stays open to changes meanwhile (b->copying: only
    other writes of it wait), and dirty afterwards with whatever came after the copy. The copy is a buffer of
    the cache (static memory, as every block a device reads or writes). 0, BDEV_EGONE, or -1: not written (a
-   write failed now or before in this call, a holder that does not let go, no buffer for the copy) */
-static int write_copy(struct buf *b, u32 pass, int depth) {
+   write failed now or before in this call, a holder that does not let go, no buffer for the copy). t: the
+   call's tally (B26) */
+static int write_copy(struct buf *b, u32 pass, struct tally *t, int depth) {
     struct bdev *dev = b->dev;
     struct buf *c;
     u32 lba = b->lba, gen, first, n, guard = 0;
@@ -903,10 +961,10 @@ static int write_copy(struct buf *b, u32 pass, int depth) {
 
     if(!wait_for(b)) return -1;
     if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty) return 0;   /* written meanwhile */
-    if(b->aside || b->fail_pass == pass || dead(dev, pass)) return -1;
+    if(b->aside || b->fail_pass == pass || dead(t, dev)) return -1;
     if(deps_out(b)) {                           /* it may go as it is after all */
-        w = write_run(b, pass, BCACHE_RUN, &first, &n);
-        if(w != 0 && w != RUN_BLOCKED && n > 1 && !dev->gone) w = write_singly(dev, first, n, b->order, pass);
+        w = write_run(b, pass, t, BCACHE_RUN, &first, &n);
+        if(w != 0 && w != RUN_BLOCKED && n > 1 && !dev->gone) w = write_singly(dev, first, n, b->order, pass, t);
         return w == RUN_BLOCKED ? -1 : w;
     }
     if(depth > BORDER_MAX || !(c = reuse())) return -1;   /* (reuse() may write another block: the lock goes) */
@@ -925,12 +983,12 @@ static int write_copy(struct buf *b, u32 pass, int depth) {
     for(k = 0; k < order && r == 0; k++) {
         struct buf *d;
         while(r == 0 && (d = oldest_below(dev, k, at)) != NULL) {
-            if(++guard > 4 * BCACHE_BLOCKS || d->fail_pass == pass || dead(dev, pass) || !wait_for(d)) { r = -1; break; }
+            if(++guard > 4 * BCACHE_BLOCKS || d->fail_pass == pass || dead(t, dev) || !wait_for(d)) { r = -1; break; }
             if(!d->valid || !d->dirty || d->dev != dev || d->order != k || d->aside) continue;   /* the head again */
-            if(d->order > 0 && !deps_out(d)) w = write_copy(d, pass, depth + 1);
+            if(d->order > 0 && !deps_out(d)) w = write_copy(d, pass, t, depth + 1);
             else {
-                w = write_run(d, pass, BCACHE_RUN, &first, &n);
-                if(w != 0 && w != RUN_BLOCKED && n > 1 && !dev->gone) write_singly(dev, first, n, k, pass);
+                w = write_run(d, pass, t, BCACHE_RUN, &first, &n);
+                if(w != 0 && w != RUN_BLOCKED && n > 1 && !dev->gone) write_singly(dev, first, n, k, pass, t);
             }
             if(w == BDEV_EGONE) r = w;
             else if(w == RUN_BLOCKED) sleep_unlocked();      /* (a hold that came back: look again) */
@@ -966,7 +1024,7 @@ static int write_copy(struct buf *b, u32 pass, int depth) {
     }
     if(tried) {
         if(r == 0) { writes++; io.written_blocks++; }
-        tally(dev, pass, r);
+        tally(t, dev, r);
         tell(dev, r, lba, 1);
     }
 done:
@@ -990,15 +1048,19 @@ int bsync(struct bdev *dev) {
    and whatever else of those orders may go, for SYNC_ROUNDS rounds (B13: blocks that never failed
    first in each order, a failed run again block by block), then the owed blocks other tasks kept from
    it as copies; 0 when every owed block reached its device (written by this call or another task),
-   -1 when one did not (a write failed, a device went away, a holder that does not let go: B18) */
+   -1 when one did not (a write failed, a device went away, a holder that does not let go: B18).
+   10/16/26 (B26): a block another task's operation set aside (B16) is owed as well: waited for as a hold
+   is (until it is put back, then written, or dropped), and not written while it is aside */
 int bsync_order(struct bdev *dev, u8 top) {
     int i, round;
     u32 pass, first, n;
     u64 start;
     u8 order, sweep;
     bool lost = false, left;
+    struct tally t;
     u_long f;
     if(top > BORDER_MAX) top = BORDER_MAX;
+    memset(&t, 0, sizeof(t));
     mutex_lock(&bcache_lock);
     pass = new_pass();
     f = irq_save();
@@ -1012,25 +1074,25 @@ int bsync_order(struct bdev *dev, u8 top) {
                 for(i = 0; i < BCACHE_BLOCKS; i++) {
                     struct buf *b = &bufs[i];
                     int w;
-                    if(!b->valid || !b->dirty || b->aside || b->order != order || (dev && b->dev != dev) ||
-                       b->fail_pass == pass || b->wfail != (sweep == 1) || dead(b->dev, pass)) continue;
-                    if(owed(b, dev, top, start) && !wait_for(b)) continue;      /* B18 */
+                    if(!b->valid || !b->dirty || (b->aside && !aside_other(b)) || b->order != order || (dev && b->dev != dev) ||
+                       b->fail_pass == pass || b->wfail != (sweep == 1) || dead(&t, b->dev)) continue;
+                    if(owed(b, dev, top, start) && !wait_for(b)) continue;      /* B18; B26 */
                     if(!b->valid || !b->dirty || b->aside || b->order != order || (dev && b->dev != dev) ||
                        b->fail_pass == pass || b->writing || b->copying) continue;
-                    w = write_run(b, pass, BCACHE_RUN, &first, &n);
+                    w = write_run(b, pass, &t, BCACHE_RUN, &first, &n);
                     if(w == BDEV_EGONE) lost = true;
-                    else if(w != 0 && w != RUN_BLOCKED && n > 1 && !b->dev->gone) write_singly(b->dev, first, n, order, pass);
+                    else if(w != 0 && w != RUN_BLOCKED && n > 1 && !b->dev->gone) write_singly(b->dev, first, n, order, pass, &t);
                 }
             }
         }
-        if(!owed_open(dev, top, start, pass)) break;
+        if(!owed_open(dev, top, start, pass, &t)) break;
     }
-    if(round == SYNC_ROUNDS && owed_open(dev, top, start, pass)) {
+    if(round == SYNC_ROUNDS && owed_open(dev, top, start, pass, &t)) {
         for(order = 1; order <= top; order++) {
             for(i = 0; i < BCACHE_BLOCKS; i++) {
                 struct buf *b = &bufs[i];
-                if(!owed(b, dev, top, start) || b->order != order || b->fail_pass == pass || b->stuck || dead(b->dev, pass)) continue;
-                if(write_copy(b, pass, 0) == BDEV_EGONE) lost = true;
+                if(!owed(b, dev, top, start) || b->order != order || b->fail_pass == pass || b->stuck || dead(&t, b->dev)) continue;
+                if(write_copy(b, pass, &t, 0) == BDEV_EGONE) lost = true;
             }
         }
     }
@@ -1070,24 +1132,30 @@ u_int bdirty_count(struct bdev *dev) {
 }
 
 /* 10/16/26 (B16): the blocks of dev whose last write failed (up to max of them, into lbas): a file system
-   about to free clusters looks for its own among them. How many */
+   about to free clusters looks for its own among them. How many there are (10/16/26, B21: all of them,
+   also past max: at most BCACHE_BLOCKS) */
 u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max) {
     u_int n = 0;
     int i;
     if(!dev) return 0;
     mutex_lock(&bcache_lock);
-    for(i = 0; i < BCACHE_BLOCKS && n < max && dev->bc_failed; i++) {
+    for(i = 0; i < BCACHE_BLOCKS && dev->bc_failed; i++) {
         struct buf *b = &bufs[i];
-        if(b->dev == dev && b->valid && b->dirty && b->wfail) lbas[n++] = b->lba;
+        if(b->dev == dev && b->valid && b->dirty && b->wfail) {
+            if(n < max) lbas[n] = b->lba;
+            n++;
+        }
     }
     mutex_unlock(&bcache_lock);
     return n;
 }
 
 /* 10/16/26 (B16): set the dirty block at lba aside (on) or put it back. Aside it is not written, nobody's
-   dependency and no sync's debt: its cluster is on its way out (the file system frees it behind an order
-   point that must not wait for it). Put back, it is all three again. A block in someone's hands or under
-   a write is not set aside */
+   dependency and no debt of the setting task's syncs: its cluster is on its way out (the file system frees
+   it behind an order point that must not wait for it). Put back, it is all three again. A block in someone's
+   hands or under a write is not set aside. 10/16/26 (B26): the syncs of other tasks owe it all the same
+   (it may be put back, not written): they wait for it as for a hold (wait_for()), so the device records the
+   task whose operation set it aside */
 void baside(struct bdev *dev, u32 lba, bool on) {
     struct buf *b;
     u_long f;
@@ -1099,12 +1167,15 @@ void baside(struct bdev *dev, u32 lba, bool on) {
             dlist_out(b);
             b->aside = true;
             dev->bc_aside++;
+            dev->bc_aside_by = (const void *)curTask;
         } else {
             b->aside = false;
             dev->bc_aside--;
             dlist_in(b);
         }
         irq_restore(f);
+        b->held_since = 0;                      /* B26: a wait for it (another task's sync) starts again */
+        b->stuck = false;
         wake_up_all(&bwait);
     }
     mutex_unlock(&bcache_lock);
@@ -1208,8 +1279,12 @@ int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst) {
 
 /* src NULL: zeros. 10/16/26 (B15): the cached copies of the run's blocks are out of every other write
    and reuse while the device works (marked writing: getblk() waits for them, bpeek()'s readers see what
-   they held), take the new contents once the device has them (clean then), and keep what they had, dirty
-   or not, when it refuses: a refused write changes nothing, here or on the device. */
+   they held), take the new contents once the device has them (clean then), and keep what they had when
+   it refuses. 10/16/26 (B22): a refused request may have changed some of its blocks on the device all the
+   same (an SD card's CMD25 stores the blocks before the one it refuses, USB mass storage its 32 KB pieces,
+   ATA its sectors one by one), so the clean copies go (the next read is the device's), and a dirty one keeps
+   its bytes (what the file system holds; the next sync writes them over whatever the device has): what is
+   read afterwards is what the device holds, and does not change when the cache makes room. */
 static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
     struct buf *copy[BCACHE_RUN];
     while(count) {
@@ -1252,6 +1327,10 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
                 mark_clean(p);
             }
             irq_restore(f);
+            if(r != 0 && !p->dirty) {           /* B22 */
+                if(!p->refs) drop(p);
+                else hash_out(p);               /* (a reader holds it: found no more, dropped when let go) */
+            }
         }
         wake_up_all(&bwait);
         mutex_unlock(&bcache_lock);

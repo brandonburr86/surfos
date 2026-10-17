@@ -26,8 +26,9 @@ get a 'p' (usb0p1).
 bc_ fields, kept by fs/bcache.c alone): its dirty cached blocks by write order,
 how many of them failed their last write, whether the console was told it
 refuses writes; since B12-B16 also the lists of its dirty blocks in the order of
-their first unwritten change, how many are set aside, and a sync's count of the
-requests it refused and took. It goes with the device: a disk put in again is a
+their first unwritten change, how many are set aside (10/16/26, B26: and by
+whose operation; a sync's count of the requests it refused and took, B13, is
+kept by each sync call now). It goes with the device: a disk put in again is a
 new struct bdev with a fresh account, and one that is gone has had its blocks
 dropped.
 */
@@ -92,8 +93,7 @@ struct bdev {
     struct buf *bc_head[4];     /* B12: its dirty blocks of each order, oldest first unwritten change first */
     struct buf *bc_tail[4];
     u_int bc_aside;             /* B16: of its dirty blocks, those a file system set aside */
-    u32 bc_pass;                /* B13: the sync call whose requests the next two count */
-    u_int bc_refused, bc_taken; /*      (a device that refused DEAD_TRIES and took none is asked no more in it) */
+    const void *bc_aside_by;    /* B26: the task whose operation set them aside (B13's tally moved into each sync) */
     struct bdev *next;
 };
 

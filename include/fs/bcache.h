@@ -45,6 +45,9 @@ began reached the device (other tasks' later changes are not waited for), and a 
 goes only after the lower-order changes older than its own last change. B16: a file
 system may set the failed blocks of clusters it is freeing aside (baside(), bdiscard()).
 B18: a block a sync owes is given up on (not written) once syncs have waited 10 s for its hold.
+B22: a refused bwrite_blocks() may have changed some of its blocks on the device: the cache drops
+its clean copies of them. B26: a block set aside is still the debt of other tasks' syncs (they
+wait for it as for a hold); each sync counts its own requests (B13).
 */
 
 #ifndef _FS_BCACHE_H
@@ -113,8 +116,9 @@ void binvalidate(struct bdev *dev);                  /* drop every block of dev 
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
 u_int bdirty_count(struct bdev *dev);                /* 10/16/26 (B10): dev's dirty blocks (umount says what it gives up) */
 /* 10/16/26 (B16): for a file system that frees clusters behind an order point: the failed blocks of dev (up to
-   max lbas; how many), one of them set aside (on) or back (not written, nobody's dependency, no sync's debt
-   while aside), and one dropped once its cluster is free (its bytes will never be read) */
+   max lbas; how many: B21, all of them, also past max), one of them set aside (on) or back (not written, nobody's
+   dependency, no debt of the setting task's syncs while aside: B26, other tasks' syncs wait for it), and one
+   dropped once its cluster is free (its bytes will never be read) */
 u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max);
 void baside(struct bdev *dev, u32 lba, bool on);
 void bdiscard(struct bdev *dev, u32 lba);
@@ -123,7 +127,8 @@ int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's acc
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache
    holds where it holds a block; a write updates the copies the cache holds (10/16/26, B15: once
-   the device has the bytes; a refused write leaves them as they were). 0 or BDEV_E*. */
+   the device has the bytes; a refused write leaves the dirty ones as they were, and B22 drops the
+   clean ones: the device may have stored part of the request). 0 or BDEV_E*. */
 int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst);
 int bwrite_blocks(struct bdev *dev, u32 lba, u32 count, const void *src);
 int bzero_blocks(struct bdev *dev, u32 lba, u32 count);
