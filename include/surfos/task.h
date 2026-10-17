@@ -55,6 +55,14 @@ typedef void (*kthread_fn)(void *arg);
     however long that takes, never killing at once what is inside one (a client going away
     must not leave a lock held); the kernel log says once that it waits. An explicit kill_task()
     afterwards brings back the KILL_WAIT_MS rule.
+    10/17/26 (audit B39): nor while the task is inside a file system or the block cache (fs_hold,
+    counted by fs/fat.c while it has a volume's lock and by fs/bcache.c inside each of its calls):
+    killed at once there it left the cache's records of copies under way on its dead stack, blocks
+    marked as copied, written or read for good, the blocks it held and the locks. Its long waits
+    there are cut short like the others, so the call unwinds; when the kill that waited comes and
+    the task is still inside (a device that takes its time), it comes as soon as the task leaves,
+    and the kernel log says once that it waits. A kernel thread outside any call that is killed
+    inside one is marked the same way and killed as soon as it leaves.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -62,6 +70,7 @@ typedef void (*kthread_fn)(void *arg);
 #define TI_KILL     0x1  /* intr: killed; it ends at the end of its call */
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
+#define TI_FSWAIT   0x8  /* 10/17/26, intr: the kill that waited found it inside a file system (said once) */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -133,7 +142,10 @@ typedef struct surf_task {
     u_char intr;                /* 10/6/26: TI_*: why its waits are cut short (task_interrupted()) */
     u_char wait_intr;           /* 10/6/26: the wait it is in may be cut short (wait_prepare_intr(), sleep_intr()) */
     struct ktimer kill_timer;   /* 10/6/26: the kill that waited comes at once when this fires */
-    struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies */
+    struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies
+                                   (10/17/26: fs/bcache.c's timed waits too) */
+    u_int fs_hold;              /* 10/17/26 (audit B39): inside a file system or the block cache (above): the kill
+                                   that waited comes once it is 0 */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
 } surf_task;
@@ -167,7 +179,8 @@ int task_wait(u_long pid, int *status);                            /* returns th
 int task_wait_opts(u_long pid, int *status, int options);   /* WNOHANG: 0 while children are left running */
 u_int task_child_count(void);
 int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
-void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
+void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once
+                                      (10/17/26: once it is out of a file system) */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
 void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the current task */
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */

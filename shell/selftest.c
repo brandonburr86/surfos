@@ -675,9 +675,11 @@ static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
 }
 
 static bool ram_refuse;                              /* 10/16/26 (B10): the test's RAM disks refuse every write */
+static u_long ram_slow_ms;                           /* 10/17/26 (B39): and take this long for each (a driver's delay) */
 
 static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     if(ram_refuse) return BDEV_EIO;
+    if(ram_slow_ms) sleep_ms(ram_slow_ms);
     memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
     return 0;
 }
@@ -761,6 +763,74 @@ static void test_fat_refused(void) {
     r = vfs_umount_lost("/selftest-refused", &lost);
     check(r == 0 && lost > 0, "refused writes: umount gives the blocks up and says how many");
     ram_refuse = false;
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/17/26 (audit B39): a task killed inside the block cache. A sync waiting for a block another task holds (B18: up
+   to 10 s) is cut short by the kill and gives up at once; a sync inside a device's write that takes its time is not
+   killed at once when the kill has waited KILL_WAIT_MS: it comes once the task is out of the cache. Killed at once
+   there, a task left the cache's records of its copies on its dead stack and blocks marked written or copied for good
+   (kernel/task.c's kill_escalate()). The syncing tasks start inside a call (TF_INCALL), as a system call is */
+static struct bdev *kc_dev;
+static volatile int kc_result, kc_done;
+
+static void kc_sync(void *arg) {
+    (void)arg;
+    kc_result = bsync(kc_dev);
+    kc_done = 1;
+    task_call_leave(TC_SYSCALL);                     /* the call ends: a kill that waited ends the task here */
+}
+
+/* a sync of the test's disk in a task of its own, killed after 200 ms: its status, and the milliseconds from the kill
+   to its end */
+static int kc_kill_sync(const char *name, u_long *ms) {
+    surf_task *t;
+    u_long pid, t0;
+    int status = 0;
+    kc_done = 0;
+    kc_result = 1;
+    t = kthread_create_on(name, curTask->con, kc_sync, NULL, PL_NORMAL, TF_INCALL);
+    if(!t) return 1;
+    pid = t->pid;
+    sleep_ms(200);
+    t0 = uptime_ms();
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    *ms = uptime_ms() - t0;
+    return status;
+}
+
+static void test_kill_in_cache(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    struct buf *b;
+    u_long ms;
+    int status;
+    bool written;
+    if(!d) { check(false, "kill in the cache: 4 MB of memory"); kfree(mem); return; }
+    strlcpy(d->name, "stick7", sizeof(d->name));
+    kc_dev = d;
+    b = bread(d, 10);                                /* this task holds a changed block */
+    if(!b) { check(false, "kill in the cache: a block"); kfree(d); kfree(mem); return; }
+    memset(b->data, 'A', 512);
+    bdirty(b);
+    status = kc_kill_sync("killsync", &ms);          /* its sync waits for the hold */
+    check(status == -1 && kc_done && kc_result == -1 && ms < 1000,
+          "a kill cuts short a sync's wait for a block another task holds (it gives up at once)");
+    brelse(b);
+    check(bsync(d) == 0 && mem[10 * 512] == 'A', "the block is written by the next sync");
+    b = bread(d, 20);                                /* a changed block nobody holds, and a device that takes 3 s */
+    if(b) { memset(b->data, 'B', 512); bdirty(b); brelse(b); }
+    ram_slow_ms = 3000;
+    status = kc_kill_sync("killsync2", &ms);         /* its sync is in the device's write when the kill comes */
+    ram_slow_ms = 0;
+    b = bpeek(d, 20);
+    written = mem[20 * 512] == 'B' && (!b || (!b->writing && !b->dirty));
+    if(b) brelse(b);
+    check(status == -1 && ms >= 2500 && written && bcache_audit(d) == 0,
+          "a kill that waited does not come at once inside the cache: the device's write ends first");
     binvalidate(d);
     kfree(d);
     kfree(mem);
@@ -1061,7 +1131,7 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_user, test_net, test_usb, test_tasks,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
