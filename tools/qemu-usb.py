@@ -1866,9 +1866,11 @@ def scenario_onestick(args, image, firmware, outdir):
 def scenario_twosticks(args, image, firmware, outdir):
     """10/17/26 (one stick): two sticks at once, where GRUB's order and tools/devloop.py's must agree. (1) A stick with
     the flashed image's label and files (SURFOSUSB, no boot/ONE-STICK.txt; MBR here, where the image is GPT, which
-    neither GRUB's menu nor the kernel looks at) and a stale surfos-dev of its own, beside a data stick: GRUB starts the data stick's build, SurfOS only reads the image, devloop.py would deploy to the data
-    stick. (2) A stick made with tools/stick.py beside a data stick: GRUB starts the stick's own build, its volume is
-    the writable boot drive, devloop.py deploys there and refuses --stick naming the data stick"""
+    neither GRUB's menu nor the kernel looks at) and a stale surfos-dev of its own, beside a data stick: GRUB starts
+    the data stick's build, SurfOS only reads the image, devloop.py would deploy to the data stick. (2) A stick made
+    with tools/stick.py beside a data stick: GRUB starts the stick's own build, its volume is the writable boot
+    drive, devloop.py deploys there and refuses --stick naming the data stick. Each stick has its own serial number
+    (two with one would both be taken for the boot volume, and devloop.py would refuse them)"""
     results = []
     mk, dl, mi = load_mkusb(), load_tool('devloop', 'devloop.py'), load_tool('mkimage', 'mkimage.py')
     kit = stick_folder(image)
@@ -1898,7 +1900,7 @@ def scenario_twosticks(args, image, firmware, outdir):
         flashed = os.path.join(tmpd, 'flashed.img')
         files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': with_build_id(initrd, ids['stale']),
                                             'surfos-dev/surfos.bin': kernel}, skip=(mk.STICK_MARKER,))
-        # (each stick its own serial number: GRUB names the boot volume by it, and the data stick has the default)
+        # each stick its own serial number (GRUB names the boot volume by it; make_devstick gives the data stick its own)
         mi.make_fat32(flashed, files, size_mb=600, label='SURFOSUSB', serial=0x1A2B3C4D)
         vm = Vm('twosticks-image', args, flashed, firmware, mem='512', serial=True,
                 outdir=outdir and os.path.join(outdir, 'image'), extra=data_stick_args(data), copy_image=False)

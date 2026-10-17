@@ -172,7 +172,8 @@ class OneStickTests(unittest.TestCase):
         one, data = ONE.format(n=0, status='boot drive: writable'), DATA.format(n=1)
         self.assertEqual(self.pick(HEAD + one + data), ('usb0', 'usb0p1'))
         self.assertEqual(self.pick(HEAD + data.replace('usb1', 'usb0') + one.replace('usb0', 'usb1')), ('usb1', 'usb1p1'))
-        with self.assertRaisesRegex(devloop.DevloopError, r'started from \(usb0\).*usb1 would not run.*without --stick'):
+        with self.assertRaisesRegex(devloop.DevloopError, r'usb1 is not the stick SurfOS was started from \(usb0\).*'
+                                                          r'ONE-STICK.txt.*deploy without --stick'):
             self.pick(HEAD + one + data, 'usb1')
 
     def test_the_image_is_never_written(self):
@@ -254,6 +255,16 @@ class OneStickTests(unittest.TestCase):
         with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the volume SurfOS was started from, is '
                                                           'write-protected: slide'):
             self.pick(HEAD + ONE.format(n=0, status='boot drive: read-only') + DATA.format(n=1))
+        with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1.*same FAT serial'):
+            self.pick(HEAD + ONE.format(n=0, status='boot drive: read-only') +   # two with one serial: that first
+                      ONE.format(n=1, status='boot drive: writable'))
+
+    def test_no_note_for_a_kernel_that_knows_the_stick(self):
+        s = self.Session(marker=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(devloop.DevloopError):
+            devloop.deploy(s, b'a kernel that reads bootvol=', b'initrd', 'a build')
+        self.assertNotIn('from before 10/17/26', out.getvalue())
 
 
 class BuildTests(unittest.TestCase):
@@ -352,6 +363,16 @@ class DataStickImageTests(unittest.TestCase):
             names = [n for n, _, _, _, _ in fat.entries(fat.root)]
             self.assertEqual(names, ['surfos-dev'])                                  # its long name, not SURFOS~1
         self.fsck(out, info['offset'])
+        # 10/17/26: the volume serial number, which GRUB passes as bootvol=: the data stick has its own, and any
+        # image can be given one (two sticks of one test must not share it)
+        with open(out, 'rb') as f:
+            f.seek(info['offset'] + 67)
+            self.assertEqual(struct.unpack('<I', f.read(4))[0], 0x0DA7A517)
+        other = str(self.dir / 'other.img')
+        mkimage.make_fat32(other, {'a.txt': b'a'}, 512, serial=0x12345678)
+        with open(other, 'rb') as f:
+            f.seek(info['offset'] + 67)
+            self.assertEqual(struct.unpack('<I', f.read(4))[0], 0x12345678)
 
     def test_names_folders_and_empty_files(self):
         files = {'README.TXT': b'plain 8.3\n', 'A name longer than twenty-six characters, with spaces.txt': b'long\n',

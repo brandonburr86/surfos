@@ -69,10 +69,14 @@ class Base(unittest.TestCase):
     def make_kit(self, bid):
         """a stick folder as tools/mkusb.py writes one, with its manifest beside it; its loader, menu and build
         information carry what SurfOS's own do (a GRUB with SurfOS's bootstrap embedded, the menu's first line)"""
+        kernel, initrd = fake_kernel(bid.encode()), initrd_with(bid)
+        info = (f'SurfOS USB boot image, {bid}\n'                    # as tools/mkusb.py writes it: both by SHA-256
+                f'Kernel /boot/surfos.bin sha256 {hashlib.sha256(kernel).hexdigest()}\n'
+                f'Initrd /boot/initrd.tar sha256 {hashlib.sha256(initrd).hexdigest()}\n').encode()
         self.files = {'EFI/BOOT/BOOTX64.EFI': b'MZ GRUB, # SurfOS USB bootstrap: built in, ' + bid.encode(),
                       'boot/grub/grub.cfg': b'# SurfOS USB image: the GRUB menu, ' + bid.encode(),
-                      'boot/grub/x86_64-efi/fs.lst': b'', 'boot/surfos.bin': fake_kernel(bid.encode()),
-                      'boot/initrd.tar': initrd_with(bid), 'boot/BUILD-INFO.txt': b'SurfOS USB boot image, ' + bid.encode(),
+                      'boot/grub/x86_64-efi/fs.lst': b'', 'boot/surfos.bin': kernel,
+                      'boot/initrd.tar': initrd, 'boot/BUILD-INFO.txt': info,
                       'boot/ONE-STICK.txt': mkusb.STICK_NOTE.encode(),
                       'surfos-dev/surfos.bin': fake_kernel(bid.encode()), 'surfos-dev/initrd.tar': initrd_with(bid)}
         self.assertEqual(sorted(self.files), sorted(mkusb.stick_paths()))          # what mkusb.py writes
@@ -129,6 +133,53 @@ class InstallUpdateTests(Base):
         self.assertEqual(rc, 0, err)
         for rel, data in self.files.items():
             self.assertEqual(self.on_stick(rel), data, rel)
+
+    def test_a_mixed_or_cut_fallback_is_replaced(self):
+        """a pair an interrupted copy mixed, or a kernel cut short, is not the build BUILD-INFO.txt names: replaced"""
+        for spoil in (lambda: (self.vol / 'boot/initrd.tar').write_bytes(initrd_with('another build')),
+                      lambda: (self.vol / 'boot/surfos.bin').write_bytes(self.on_stick('boot/surfos.bin')[:-100]),
+                      lambda: (self.vol / 'boot/surfos.bin').write_bytes(b'not an ELF file, bootvol='),
+                      lambda: (self.vol / 'boot/initrd.tar').write_bytes(b'no tar archive')):
+            self.make_kit('build one')
+            self.assertEqual(self.main('install', self.vol, '--kit', self.kit, '--fallback')[0], 0)
+            spoil()
+            self.make_kit('build two')
+            rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit)
+            self.assertEqual(rc, 0, err)
+            self.assertIn('replaced', out)
+            for rel in stick.FALLBACK + [stick.INFO]:
+                self.assertEqual(self.on_stick(rel), self.files[rel], rel)
+
+    def test_a_fallback_that_cannot_be_read(self):
+        """an unreadable fallback is not a good one (install replaces it), and --fallback never reads it at all"""
+        self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
+        self.make_kit('build two')
+        real, failed = stick.read_back, []
+
+        def read_back(path):
+            if path.endswith('initrd.tar') and '/boot/' in path.replace(os.sep, '/') and not failed:
+                failed.append(path)
+                raise OSError(5, 'Input/output error', path)
+            return real(path)
+        with mock.patch.object(stick, 'read_back', side_effect=read_back):
+            rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit)
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(failed)
+        self.assertIn('replaced', out)
+        self.assertEqual(self.on_stick('boot/initrd.tar'), self.files['boot/initrd.tar'])
+        with mock.patch.object(stick, 'good_fallback', side_effect=AssertionError('read')):
+            rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit, '--fallback')
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn('replaced', out)
+
+    def test_an_initrd_whose_build_id_is_a_folder(self):
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode='w', format=tarfile.USTAR_FORMAT) as t:
+            info = tarfile.TarInfo('etc/build-id')
+            info.type = tarfile.DIRTYPE
+            t.addfile(info)
+        with self.assertRaisesRegex(stick.StickError, 'no etc/build-id'):
+            stick.build_id(out.getvalue())
 
     def test_an_incomplete_fallback_is_written(self):
         self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
@@ -288,6 +339,27 @@ class RefusalTests(Base):
             rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
         self.assertEqual(rc, 1)
         self.assert_untouched()
+
+    def test_an_older_stick_pulled_at_the_menu_keeps_its_menu(self):
+        """bringing an older SurfOS stick up to date, the menu comes after the loader: pulled out between the two, the
+        stick holds the new loader with its old menu, which that loader starts as it is"""
+        old_menu = b'# SurfOS USB image: an older menu'
+        for rel, data in (('EFI/BOOT/BOOTX64.EFI', b'MZ older GRUB # SurfOS USB bootstrap: older'),
+                          ('boot/grub/grub.cfg', old_menu)):
+            (self.vol / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.vol / rel).write_bytes(data)
+        real = os.replace
+
+        def replace(src, dst):
+            if os.path.relpath(dst, os.path.realpath(self.vol)).replace(os.sep, '/') == stick.MENU:
+                raise OSError(5, 'Input/output error', dst)
+            real(src, dst)
+        with mock.patch.object(stick.os, 'replace', side_effect=replace):
+            rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.on_stick(stick.LOADER), self.files[stick.LOADER])
+        self.assertEqual(self.on_stick(stick.MENU), old_menu)
+        self.assertEqual(self.leftovers(), [])
 
     def test_order_and_a_stick_pulled_halfway(self):
         """the renames come in install order, the boot loader and then the menu last; when the stick goes before

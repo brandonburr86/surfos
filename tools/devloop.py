@@ -17,8 +17,11 @@ the newer of build/docker/build/O2 and O0, or build/O2 and O0 on Linux) and, in 
      FAT, the partition GRUB's development entry looks at (--stick names it when there are more); never a name or
      a size, since usb0 and usb1 change places between boots. 10/17/26 (one stick, docs/USB-BOOT.md section 14):
      but when the volume SurfOS was started from may be written ("boot drive: writable", a stick the boot files
-     were copied onto), the build goes there, where GRUB's development entry looks first. That partition is
-     mounted on /surfos-dev-stick (or used where it is mounted already), then mkdir /surfos-dev-stick/surfos-dev;
+     were copied onto), the build goes there, where GRUB's development entry looks first, once that stick holds
+     boot/ONE-STICK.txt (tools/stick.py install writes it; without it deploy stops with what to do, and so it does
+     for --stick naming another disk then, and for such a stick behind its write-protect switch, "boot drive:
+     read-only"). That partition is mounted on /surfos-dev-stick (or used where it is mounted already), then
+     mkdir /surfos-dev-stick/surfos-dev;
   2. each file: rx <rx-port> <dir>/<name>.new runs in the session, this computer connects and sends the file, and
      the CRC-32 that rx says must be this file's; then both files are renamed into place (mv), so the stick
      never holds half of a build;
@@ -389,20 +392,20 @@ def data_stick(rows, name=None):
     partition is FAT, the partition GRUB's development entry looks at next; or, when no such disk is there, the one
     USB disk with no partition table at all (mounting it says whether it is FAT). Never chosen by its name or size:
     usb0 and usb1 change places from one boot to the next."""
-    locked = [r for r in rows if r['bus'] == 'usb' and r['status'] == BOOT_READONLY]
-    if locked:
-        raise DevloopError(f'{locked[0]["name"]}, the volume SurfOS was started from, is write-protected: slide the '
-                           f'stick\'s switch to unlocked (GRUB would start its surfos-dev before any other stick\'s)')
-    vols = [r for r in rows if r['bus'] == 'usb' and r['status'] in BOOT_VOLUME]
+    vols = [r for r in rows if r['bus'] == 'usb' and r['status'] in BOOT_VOLUME + (BOOT_READONLY,)]
     if len(vols) > 1:
         raise DevloopError('more than one volume says SurfOS was started from it (%s): two sticks with the same FAT '
                            'serial number? Keep one plugged in' % ', '.join(r['name'] for r in vols))
+    if vols and vols[0]['status'] == BOOT_READONLY:
+        raise DevloopError(f'{vols[0]["name"]}, the volume SurfOS was started from, is write-protected: slide the '
+                           f'stick\'s switch to unlocked (GRUB starts the development build on that stick before '
+                           f'any other\'s once it holds {MARKER})')
     if vols:
         disk = disk_row(rows, vols[0])
         if name and name != disk['name']:
-            raise DevloopError(f'GRUB starts the development build on the stick SurfOS was started from ({disk["name"]}) '
-                               f'before any other, when that stick holds {MARKER}: a build on {name} would not run '
-                               f'then. Deploy without --stick')
+            raise DevloopError(f'{name} is not the stick SurfOS was started from ({disk["name"]}), whose development '
+                               f'build GRUB starts before any other\'s once it holds {MARKER} (tools/stick.py '
+                               f'install puts it there): deploy without --stick')
         return disk, vols[0]
     disks = [r for r in rows if not r['part'] and r['bus'] == 'usb' and 'protected' not in r['status']
              and 'read-only' not in r['status']]

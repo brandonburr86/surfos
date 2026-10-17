@@ -608,7 +608,8 @@ starts it by itself: section 13).
 | "Secure Boot Violation", "Verification failed", or a red security warning | Secure Boot is still on (step 5). |
 | GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). On a stick you copied the files onto, one is missing: `tools/stick.py check` says which, `tools/stick.py install` puts them back (section 14). |
 | A stick you copied the boot files onto is not offered at all | Check that `EFI/BOOT/BOOTX64.EFI` is on it (`tools/stick.py check`) and that it is FAT32, then choose it in the F12 menu; plug it straight into the laptop (section 14). |
-| On that stick, `lsblk` shows neither `boot drive: writable` nor `mounted (boot drive)` | GRUB did not name the volume (the stick has an older boot loader or menu), or the build running is older than 10/17/26 (`tools/stick.py check` marks such builds). `tools/stick.py install` brings the boot loader and the menu up to date and replaces such a fallback build in `boot/`; `tools/stick.py update` puts a new development build in. Until then `fdisk` and `mkfs` do not know it is the boot drive: leave them alone. |
+| On that stick, `lsblk` says `boot drive: read-only` | Its write-protect switch is on: slide it back and plug the stick in again. |
+| On that stick, `lsblk` shows none of `boot drive: writable`, `mounted (boot drive)` or `boot drive: read-only` | GRUB did not name the volume (the stick has an older boot loader or menu), or the build running is older than 10/17/26 (`tools/stick.py check` marks such builds). `tools/stick.py install` brings the boot loader and the menu up to date and replaces such a fallback build in `boot/`; `tools/stick.py update` puts a new development build in. Until then `fdisk` and `mkfs` do not know it is the boot drive: leave them alone. |
 | The menu has no "development build from this stick" entry, though `surfos-dev` holds a build | `boot/ONE-STICK.txt` is missing (GRUB looks in its own stick's `surfos-dev` only beside it): `tools/stick.py install` puts it back. |
 | GRUB's menu, then a blank screen | The kernel could not use the firmware's framebuffer. Photograph the GRUB screen and note the panel resolution; report it. |
 | The boot log stops, or ends with `SYSTEM HALTED` or a line starting `BOOT PROBLEM` | Photograph the screen and report it: those lines name what failed. |
@@ -747,7 +748,10 @@ tools/stick.py install /Volumes/DATASTICK --eject    # the files above onto it, 
 
 `install` checks each file of the folder against the build's manifest, writes it under a
 temporary name, reads it back and only then renames it into place, the boot loader and then
-the menu last, so a stick pulled out halfway never starts half a system. It never formats, partitions or
+the menu last: a stick pulled out halfway is never started with half a menu (a new stick
+shows GRUB's message that its menu is missing, one being brought up to date starts its old
+menu), and a build left half old, half new is noticed and written again by the next
+`install`. It never formats, partitions or
 deletes anything, and it refuses:
 
 * anything that is not a FAT volume of an external drive;
@@ -794,8 +798,10 @@ usb0      29G usb  1 disk mbr           VendorCo Product boot drive: protected
   usb0p1  29G usb  1 part mbr FAT32 LBA                  boot drive: writable
 ```
 
-`fdisk` and `mkfs` refuse the stick, as they refuse the flashed one. Its volume is
-mounted like any data stick (section 9): `mount usb0p1 /data` says `the volume SurfOS was
+`fdisk` and `mkfs` refuse the stick, as they refuse the flashed one. Behind a stick's
+write-protect switch, if it has one, the volume says `boot drive: read-only` and
+`tools/devloop.py` asks for the switch to be slid back. Its volume is mounted like any data
+stick (section 9): `mount usb0p1 /data` says `the volume SurfOS was
 started from: its files may be changed; fdisk and mkfs leave it alone`, `lsblk` then says
 `mounted (boot drive)`, and `eject usb0` comes before pulling it out. Only builds from
 10/17/26 on know their stick this way: an older build, in `surfos-dev` or in `boot/`, would

@@ -17,13 +17,16 @@ The files come from the stick folder devenv/build-usb.sh makes next to the image
 checked against the build's manifest (build-manifest.json beside the folder) before anything is written. Every file
 is written as NAME.surfos-new beside its place and read back through the file system, and only once all of them are
 there are they renamed over the old ones, in order: in surfos-dev/ the initrd before the kernel (as tools/devloop.py
-does), and when installing the boot loader and then the menu last, so a stick that is pulled out halfway does not
-start a half-written system (a new stick does not start at all, an older one starts its old menu). Nothing else on the stick is touched: it is never formatted or partitioned, nothing is deleted but this
-tool's own temporary files and the folders it made for them, and a boot loader or GRUB menu of another system at
-SurfOS's paths stops it before it writes anything.
+does), and when installing the boot loader and then the menu last. A stick pulled out halfway is not started with a
+half-written menu: a new one shows GRUB's message that the menu is missing, an older one starts its old menu. A pair
+mixed by such an interruption (one file new, one old) is seen by the next install, which writes it again. Nothing
+else on the stick is touched: it is never formatted or partitioned, nothing is deleted but this tool's own temporary
+files and the folders it made for them, and a boot loader or GRUB menu of another system at SurfOS's paths stops it
+before it writes anything.
 
-A fallback build in boot/ is kept only when it is a whole build whose kernel knows bootvol= (from 10/17/26 on): an
-older kernel would not know the stick as its boot drive, so under it fdisk and mkfs would be allowed on the stick.
+A fallback build in boot/ is kept only when its kernel and initrd are the ones boot/BUILD-INFO.txt names (by their
+SHA-256) and the kernel knows bootvol= (from 10/17/26 on): an older kernel would not know the stick as its boot drive,
+so under it fdisk and mkfs would be allowed on the stick.
 
 The path must be where a FAT volume of an external (USB) disk is mounted: diskutil says so on macOS, and
 /proc/self/mounts and sysfs on Linux. The computer's own disks, its EFI system partition included, are refused, and
@@ -38,6 +41,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -112,7 +116,8 @@ def volume_info(path):
 def check_mac(real, info):
     """the decision on diskutil's answer, info (a dict from diskutil info -plist)"""
     fs = info.get('FilesystemType')
-    where = f'{real} ({info.get("DeviceIdentifier", "?")}, {info.get("FilesystemName", fs)}, {info.get("BusProtocol", "?")})'
+    where = (f'{real} ({info.get("DeviceIdentifier", "?")}, {info.get("FilesystemName", fs)}, '
+             f'{info.get("BusProtocol", "?")})')
     if info.get('MountPoint') != real:
         raise StickError(f'{real} is not the mount point diskutil gives ({info.get("MountPoint")})')
     if info.get('Internal', True) or not info.get('RemovableMediaOrExternalDevice', False):
@@ -179,9 +184,11 @@ def build_id(initrd):
         with tarfile.open(fileobj=io.BytesIO(initrd)) as t:
             for name in ('etc/build-id', './etc/build-id'):
                 try:
-                    return t.extractfile(name).read().decode(errors='replace').strip()
+                    f = t.extractfile(name)
                 except KeyError:
                     continue
+                if f is not None:                       # None: not a file (a directory of that name)
+                    return f.read().decode(errors='replace').strip()
     except tarfile.TarError as e:
         raise StickError(f'the initrd is no tar archive ({e})')
     raise StickError('the initrd has no etc/build-id: it was not built by this tree')
@@ -264,16 +271,22 @@ def knows_stick(kernel):
 
 
 def good_fallback(volume):
-    """boot/ holds a whole build whose kernel knows the stick"""
-    kernel, initrd = actual(volume, FALLBACK[0]), actual(volume, FALLBACK[1])
-    if not (kernel and initrd):
+    """boot/ holds a build whose kernel knows the stick, the kernel and initrd that boot/BUILD-INFO.txt names by their
+    SHA-256 (tools/mkusb.py writes them there), so never a pair an interrupted copy mixed or a file cut short; one
+    that cannot be read is not good either"""
+    paths = [actual(volume, p) for p in FALLBACK + [INFO]]
+    if not all(paths):
         return False
     try:
-        build_id(read_back(initrd))
-    except StickError:
+        kernel, initrd, info = (read_back(p) for p in paths)
+        build_id(initrd)
+    except (OSError, StickError):
         return False
-    data = read_back(kernel)
-    return data[:4] == b'\x7fELF' and knows_stick(data)
+    text = info.decode('utf-8', 'replace')
+    want = [re.search(r'^%s sha256 ([0-9a-f]{64})$' % re.escape(line), text, re.M)
+            for line in ('Kernel /boot/surfos.bin', 'Initrd /boot/initrd.tar')]
+    return (all(want) and sha256(kernel) == want[0].group(1) and sha256(initrd) == want[1].group(1)
+            and kernel[:4] == b'\x7fELF' and knows_stick(kernel))
 
 
 def foreign(volume):
@@ -444,8 +457,8 @@ def main(argv=None):
                 raise StickError(f'{where} already holds another system\'s boot files where SurfOS\'s go: '
                                  f'{", ".join(other)}. Nothing was written; move them off the stick first if it '
                                  f'should start SurfOS instead')
-            kept = good_fallback(volume) and not a.fallback
-            old = not kept and not a.fallback and all(actual(volume, p) for p in FALLBACK)
+            kept = not a.fallback and good_fallback(volume)
+            old = not kept and not a.fallback and any(actual(volume, p) for p in FALLBACK + [INFO])
             order = [p for p in INSTALL if not (kept and p in FALLBACK + [INFO])]
         else:
             if bool(a.kernel) != bool(a.initrd):
@@ -462,13 +475,14 @@ def main(argv=None):
                 ('boot/ keeps its build, the menu\'s "SurfOS" entry (install --fallback replaces it too)' if kept else
                  f'boot/ holds the same build, the menu\'s "SurfOS" entry'))
             if old:
-                say('boot/ held a build that was not whole or was older than 10/17/26 (one that would not know this '
-                    'stick, so fdisk and mkfs would be allowed on it under that build): replaced')
+                say('boot/ held a build that was not whole, not the one its BUILD-INFO.txt names, or older than '
+                    '10/17/26 (one that would not know this stick, so fdisk and mkfs would be allowed on it under '
+                    'that build): replaced')
         else:
             say(f'surfos-dev/ holds build {bid}: the menu\'s first entry starts it')
-            if not knows_stick(files['surfos-dev/surfos.bin']):
-                say('note: that kernel is from before 10/17/26: it does not know this stick as its boot drive, so under '
-                    'it fdisk and mkfs would be allowed on the stick')
+            if starts and not knows_stick(files['surfos-dev/surfos.bin']):
+                say('note: that kernel is from before 10/17/26: it does not know this stick as its boot drive, so '
+                    'under it fdisk and mkfs would be allowed on the stick')
         if not dev:
             missing = [p for p in [LOADER, MENU, MARKER] + FALLBACK if not os.path.isfile(place(volume, p))]
             if missing:
