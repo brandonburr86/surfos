@@ -392,8 +392,9 @@ B14 the card is asked again at each such call, with one write of its oldest bloc
 takes writes, they work at once. What the share counts (B15): file data (each block through the
 cache asks first, and a write straight to the card changes no cached copy before the card has
 the bytes; B22: a refused request may still have stored its first blocks on the card, as
-`sd_write()`'s CMD25 does, so the cache drops its clean copies of it and a file reads what the
-card holds); an operation's own FAT, directory and FSInfo blocks come on top. A sync tries every
+`sd_write()`'s CMD25 does, so the cache drops its clean copies of it and a file reads those blocks
+as the card holds them, but for dirty copies, which keep their bytes for the next sync to write
+over the card's); an operation's own FAT, directory and FSInfo blocks come on top. A sync tries every
 block it may, in every sync (B13: blocks that never failed first, a refused run again block by
 block; a card that refused 4 requests in one sync and took none is asked nothing more in it,
 B26: counted by each sync for itself), so one bad block does not hold back its neighbours. A
@@ -406,14 +407,23 @@ order point (below) the card refuses puts back what it changed in the cache and 
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
 both names on one chain, and the next `mv` or `rm` freed the chain under the other name). Since
 B16 the refused blocks of the clusters such a command frees do not hold its order point back
-(`rm` of the file whose block refuses works, B21: however many refuse; other refused blocks
-still do: an operation that needs an order point fails while they refuse, and B20: so does a
-`mv` onto that file, whose first order point must not write the replaced entry ahead of them;
-B26: another task's sync waits for them while they are set aside), and since B17 a `mv` that
-fails at any step changes nothing, none failing once the replaced file is freed. Since B24 an
-undo that cannot be done (a block it needs cannot be read back) makes the volume refuse every
-change (EROFS) until it is unmounted, says so, and leaves it marked as not clean. A write that
-fails leaves the file's size as it was (B23: a gap of zeros past the end included).
+(`rm` of the file whose block refuses works, B21: however many refuse, B28: all its dirty blocks,
+refused or never tried, set aside for that order point only, B32; other refused blocks still do:
+an operation that needs an order point fails while they refuse, and B20: so does a `mv` onto
+that file, whose first order point must not write the replaced entry ahead of them; B26: another
+task's sync waits for them while they are set aside). Since B28 the bytes nobody will read (a
+part cut off past the end of a write that stopped, a gap of zeros given up) are dropped, never
+written, and hold no order point or sync back while their clusters wait to be freed (only a
+block another task was writing at that moment is written as any other; an `rm` it fails in can
+say EIO once). Since B17 a `mv` that fails at any step changes nothing, none failing once the
+replaced file is freed. Since B24 an undo that cannot be done (a block it changed cannot be read
+back) makes the volume refuse every change (EROFS) until it is unmounted, says so, and leaves it
+marked as not clean (B27, B29: an undo puts back only what it saved, and only a change that was
+made). A write that fails leaves the file's size as it was (B23: a gap of zeros past the end
+included). Clusters given back while the card refused (B25: a cut-back's; B30: a failed mkdir's
+new folder, once something of its name was written) wait to be freed until a sync that began
+after them works; 64 such chains can wait (B31), one more is said lost on the console and again
+at unmount (fsck.fat frees it).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
