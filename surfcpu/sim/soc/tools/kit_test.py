@@ -80,9 +80,51 @@ def relink(link, target):
 
 
 # ====================================================================================== fake boards
+# The DDR diagnostics (surfcpu_arty_a7_ddr_bramdiag) as the capture of the owner's A7-100T shows them, built at
+# 0bcadbc with the fixed open flow (docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt, which leaves out the 16
+# indented read-leveling scan lines; board-test.py reads no indented line), but for the build id and the DDR
+# status, which a fake board takes as arguments. bramdiag.c prints the bitstream line's flags and DDR status in
+# hexadecimal (%x): the board printed 14 (PRESENT and SWINIT); 1c (PRESENT, TIMEOUT and SWINIT) has a letter.
+BRAMDIAG_DDR = '''
+SurfCPU BRAM diagnostics 1.0.0 (build {build})
+board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+bitstream build {build} flags 0, features ff, DDR status {status} size 256 MiB
+identity                           ok (7 checks)
+ALU, immediates, x0                ok (33 checks)
+M extension                        ok (23 checks)
+branches and jumps                 ok (9 checks)
+loads and stores                   ok (8 checks)
+CSRs and counters                  ok (30 checks)
+scratch RAM (March C-)             (56 KiB) ok (49 checks)
+text RAM (cells 2400-4095)         ok (1 checks)
+exceptions, each recovered         ok (34 checks)
+interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+FENCE.I, code written to RAM       ok (2 checks)
+DDR initialization (DDR_STATUS.SWINIT), read leveling:
+  lane 0: bitslip 2, delay 16 (window +-8)
+  lane 1: bitslip 2, delay 16 (window +-8)
+  229 ms
+DDR initialization                 ok (3 checks)
+DDR calibration                    ok (1 checks)
+DDR data lines                     ok (192 checks)
+DDR byte lanes                     ok (9 checks)
+DDR address lines and aliases      ok (54 checks)
+DDR boundaries                     ok (98 checks)
+DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+DDR sustained copies               (4 x 256 KiB copied and checked, 720 KiB/s) ok (4 checks)
+code running from DDR              ok (6 checks)
+
+BRAMDIAG: PASS (572 checks)
+
+UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+'''
+
+
 class FakeBoard(threading.Thread):
     """a pseudo-terminal the procedures open as a board's port; state comes from a control file
-    the stand-in owner writes ({"sw": "0101", "btn_until": t, "reset": n})"""
+    the stand-in owner writes ({"sw": "0101", "btn_until": t, "reset": n, "program": n}). Modes: baseline
+    (the 1 Hz line), bramdiag (the DDR diagnostics, run when the owner loads the design and on Ctrl-R, then
+    each byte typed echoed with its code), echo, garbage, silent, skip, vanish"""
 
     def __init__(self, link, control, mode='baseline', **kw):
         super().__init__(daemon=True)
@@ -112,8 +154,34 @@ class FakeBoard(threading.Thread):
         except OSError:
             pass
 
+    def emit_all(self, data, limit=5.0):
+        """all of data, a part at a time as the reader makes room (the master does not block)"""
+        deadline = time.time() + limit
+        while data and time.time() < deadline and not self.stop:
+            try:
+                data = data[os.write(self.master, data):]
+            except BlockingIOError:
+                time.sleep(0.01)
+            except OSError:
+                return
+
+    def diag_run(self):
+        """the DDR diagnostics from the start, then the echo loop"""
+        text = BRAMDIAG_DDR.format(build=self.kw.get('build', '0bcadbcf'), status=self.kw.get('ddr_status', '14'))
+        self.emit_all(text.replace('\n', '\r\n').encode())
+        self.echoed = 0
+
+    def diag_input(self, data):
+        for b in data:
+            if b == 0x12:                                   # Ctrl-R: the diagnostics again
+                self.diag_run()
+            elif self.echoed is not None:
+                self.echoed += 1
+                self.emit_all(("echo %3d: '%c' 0x%02x\r\n" % (self.echoed, b, b)).encode())
+
     def run(self):
-        up, rx, resets, lines = 0, '--', 0, 0
+        up, rx, resets, lines, loads = 0, '--', 0, 0, 0
+        self.echoed = None                                  # the diagnostics' echo loop: bytes echoed so far
         next_t = time.time() + 1.0
         rnd = random.Random(7)
         while not self.stop:
@@ -127,6 +195,8 @@ class FakeBoard(threading.Thread):
                         rx = '%02x' % data[-1]
                         if self.mode == 'echo':
                             self.emit(data.replace(b'\r', b'\r\n'))
+                        elif self.mode == 'bramdiag':
+                            self.diag_input(data)
             except OSError:
                 pass
             if self.mode == 'garbage':
@@ -134,6 +204,12 @@ class FakeBoard(threading.Thread):
                 time.sleep(0.1)
                 continue
             if self.mode in ('silent', 'echo'):
+                continue
+            if self.mode == 'bramdiag':
+                st = self.state()
+                if st.get('program', 0) != loads:           # the owner loaded the design: a fresh run
+                    loads = st['program']
+                    self.diag_run()
                 continue
             st = self.state()
             if st.get('reset', 0) != resets:
@@ -264,6 +340,8 @@ def owner(state_path, step):
         elif step == 'reset':
             cs['reset'] = cs.get('reset', 0) + 1
             hold = max(hold, 0.5)
+        elif step == 'program':
+            cs['program'] = cs.get('program', 0) + 1            # the design loaded (the bramdiag board runs)
         tmp = c + '.tmp'
         json.dump(cs, open(tmp, 'w'))
         os.replace(tmp, c)
@@ -389,7 +467,23 @@ class Kit:
     def fake_jobs(self):
         good = ('# a fake board\'s build manifest\nbuild_id = "1a2b3c4d"\nbuild_time = 1760560000\n'
                 'source_dirty = false\nboard = "arty_a7_100t"\nresult = "pass"\n')
+        diag = ('# the DDR diagnostics build of the fixed flow, as a manifest for the fake board\n'
+                'design = "surfcpu_arty_a7_ddr_bramdiag"\nbuild_id = "0bcadbcf"\nsource_dirty = false\n'
+                'board = "arty_a7_100t"\nresult = "pass"\n')
         return [
+            # m3 asked for the DDR diagnostics: the bitstream line's DDR status is hexadecimal, and 1c (TIMEOUT
+            # set) once failed board-test.py's decimal parse ("the bitstream line: not seen"); the step names
+            # the design asked for
+            ('m3-ddr-status-hex', lambda: self.fake(
+                'm3-ddr-status-hex', 'm3', 'bramdiag', ['--board', 'arty_a7_100t', '--design',
+                                                        'surfcpu_arty_a7_ddr_bramdiag'], manifest=diag,
+                within=30, ddr_status='1c',
+                must=[r'program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_bramdiag\n',
+                      r'ok\s+board id 0x100 is arty_a7_100t\'s', r'ok\s+the bitstream\'s build id 0bcadbcf is the '
+                      r'manifest\'s', r'ok\s+its dirty flag \(0\) matches', r'ok\s+the system clock is 25,000,000 Hz',
+                      r'ok\s+DDR initialization: ok', r'ok\s+code running from DDR: ok',
+                      r'ok\s+BRAMDIAG: PASS \(572 checks\)', r'ok\s+the UART both ways',
+                      r'skip\s+not observed: Are LD4'])),
             ('m1-baseline', lambda: self.fake(
                 'm1-baseline', 'm1', 'baseline', ['--lines', '4'], manifest=good, within=40,
                 must=[r'ok\s+4 lines a second', r'ok\s+the seconds since reset count up by one',
@@ -609,7 +703,8 @@ class Kit:
                       r'bitstream build [0-9a-f]{8}, flags \d+.*\(SIMULATION\)', r'skip\s+not observed: Are LD4'])),
             ('m7', 'check', lambda: self.rtl(
                 'm7', 'm7', boot, os_card, within=600, extra=['--ps2-send', r'\nkbd-ready\r?\n=echo ps2-ok\n'],
-                must=[r'ok\s+SurfOS booted from the card to the shell', r'ok\s+SurfOS 1\.0\.0 on the card is',
+                must=[r'program-volatile BOARD=\S+ DESIGN=surfcpu_arty_a7_ddr\)',   # the design: SurfBoot with DDR
+                      r'ok\s+SurfOS booted from the card to the shell', r'ok\s+SurfOS 1\.0\.0 on the card is',
                       r'ok\s+bootinfo: the kernel reads the bitstream\'s identity',
                       r'ok\s+two kernel tasks make progress, sleep and wake \(run 2', r'ok\s+the uptime advances',
                       r'ok\s+the PS/2 keyboard types into the shell', r'skip\s+not observed: Does the VGA monitor'])),

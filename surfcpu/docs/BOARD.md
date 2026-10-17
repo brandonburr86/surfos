@@ -5,19 +5,24 @@ milestone 1 design, the top for the whole SoC, the Vivado and open-flow builds a
 programming wrapper.
 Pins and adapters are in [WIRING.md](WIRING.md); the build host in [BUILD-HOST.md](BUILD-HOST.md).
 
-**Status (2026-10-16, round ddr-3).** Built into bitstreams for both boards with the
+**Status (2026-10-17).** Built into bitstreams for both boards with the
 open-source flow (`make build-fpga FLOW=openxc7`), every check of that flow passing (section 8):
 the milestone 1 design; the whole SoC without DDR in two designs, with the BRAM diagnostics
 (milestone 3) or SurfBoot in its boot ROM; and **the two DDR designs (milestone 4, section 7)**:
 LiteDRAM without its calibration CPU, its controller at 80 MHz (100 MHz does not close in
 nextpnr), initialized and read-leveled by SurfCPU's firmware through the controller's
 registers. Their timing is nextpnr's estimate. The synthesized netlists, simulated from their
-pins, print the same characters as the RTL. **On the owner's Arty A7-100T** (2026-10-16,
-PHYSICAL-TESTS.md, `docs/evidence/physical/`) the baseline (m1) and the BRAM diagnostics (m3)
-passed, and SurfBoot without DDR ran to its monitor, read SurfOS's files from the owner's card
-and drove the VGA monitor, all loaded with `make program-volatile` from bitstreams of the earlier
-SoC (0.1.0). **The DDR designs have not been on a board yet**:
-section 12 has their first test, with what the serial port should show according to simulation.
+pins, print the same characters as the RTL. **On the owner's Arty A7-100T** (PHYSICAL-TESTS.md,
+`docs/evidence/physical/`), all loaded with `make program-volatile`: on 2026-10-16 the baseline
+(m1) and the BRAM diagnostics (m3) passed, and SurfBoot without DDR ran to its monitor, read
+SurfOS's files from the owner's card and drove the VGA monitor, from bitstreams of the earlier
+SoC (0.1.0); **the DDR designs**, built at 0bcadbc with the fixed flow, pass on the board
+(2026-10-17): the DDR diagnostics all 572 checks, and SurfBoot calibrates the DDR3L and boots
+SurfOS from the card to its shell (section 12). Two earlier placements of the DDR diagnostics
+failed on the board because nextpnr had routed ordinary nets through unused BUFGCTRL
+route-throughs; the flow now routes with a chip database without them, and its `gclkcheck`
+fails any build that has one (OPEN-FLOW.md section 6.8). Any open-flow bitstream built before
+that fix is suspect until it is rebuilt or checked by `gclkcheck`.
 **Nothing has been built with Vivado** (there is no Vivado host yet, gap G2). The first real run
 of `build.tcl` will also be the first time Vivado reads these constraints; section 8 lists what
 that run must confirm.
@@ -231,7 +236,8 @@ BTN3..BTN0); the last byte received on the RX pin in hex (`--` before the first 
 checks the FPGA's receive pin too. The UART runs at `sys_hz / round(sys_hz / 115200)` =
 115,207 baud (+0.006 %).
 
-**On the board (pending).** With `make build-fpga BOARD=arty_a7_100t DESIGN=arty_a7_baseline`
+**On the board (m1 passed on the owner's A7-100T on 2026-10-16, PHYSICAL-TESTS.md).** With
+`make build-fpga BOARD=arty_a7_100t DESIGN=arty_a7_baseline`
 and `make program-volatile BOARD=arty_a7_100t DESIGN=arty_a7_baseline`: LD0 and LD1 blink
 green together, once a second; `screen /dev/cu.usbserial-<serial> 115200` on the FT2232's
 UART channel (its second port; `make doctor` lists the ports) shows a line a second with the
@@ -429,9 +435,9 @@ build-host.conf.
 | Yosys LUTs, flip-flops | 303, 412 (0.5 %) | 293, 412 (1.4 %) |
 
 The SHA-256 of each file is in the evidence; it changes with every build, because the build
-identity and time are part of the banner (and so the LUT count moves by a few). Not loaded on a
-board: that is the owner's step (section 9), with the baseline as the first design because it
-drives no Pmod pin (WIRING.md U2).
+identity and time are part of the banner (and so the LUT count moves by a few). These builds
+were not loaded on a board; a rebuild at 2d1f32b passed m1 on the owner's A7-100T (section 12),
+the first design loaded because it drives no Pmod pin (WIRING.md U2).
 
 **The whole SoC, open flow** (evidence `openxc7-soc.txt`, 2026-10-16, source e3961772, clean;
 HAS_DDR = 0): `make build-rom`, then `make build-fpga FLOW=openxc7 BOARD=<board>
@@ -548,6 +554,13 @@ the other board. The SurfBoot design differs from the diagnostics design only in
 contents, so their builds differ only through nextpnr's placement. The first gated builds of
 the diagnostics design, at 0964f875, passed too, with seed 1 on both boards (`dram_clk` 90.62
 and 82.81 MHz).
+
+**On the board**, these 92a2b510 builds predate the route-through fix (OPEN-FLOW.md section
+6.8): the 100T diagnostics build had seven nets routed through unused BUFGCTRLs and faulted at
+its first printed character, while the 100T SurfBoot build, which `gclkcheck` later found
+clean, calibrated the DDR3L and booted SurfOS. The DDR builds the board runs now come from the
+fixed flow at 0bcadbc (`gclkcheck`: 7 global buffers configured and 0 route-throughs in each;
+evidence `../physical/ddr-fixed-flow-2026-10-17.txt`).
 
 nextpnr's critical paths: `dram_clk`'s is LiteDRAM's controller every time, from the ZQ
 calibration timer through the refresher and the command multiplexer into a bank machine, 14 to
@@ -674,8 +687,8 @@ S25FL127SABMFx00; gap G7). Tested with a fake openFPGALoader that answers like t
 the checks above), and the four SoC bitstreams of section 8 pass `make program-volatile BOARD=...
 DESIGN=...` against it, each refused on the other board (evidence `openxc7-soc.txt`). On
 2026-10-16 the owner's A7-100T took the baseline, the BRAM diagnostics and SurfBoot without DDR
-through `make program-volatile` (PHYSICAL-TESTS.md, `docs/evidence/physical/`); the DDR designs
-have not been loaded yet. The release (milestone 9) keeps a build record next to each bitstream,
+through `make program-volatile` (PHYSICAL-TESTS.md, `docs/evidence/physical/`), and on 2026-10-16
+and 17 both DDR designs. The release (milestone 9) keeps a build record next to each bitstream,
 so `program-flash` takes its bitstreams as they are; the flash image, the flash's address map,
 the configuration time and the recovery procedure are in [RELEASE.md](RELEASE.md) sections 6 and
 7.
@@ -731,8 +744,9 @@ flow builds them (section 8): about 7,600 LUTs and 5,214 flip-flops, 37 % of the
 
 ## 12. First power-up
 
-A checklist for the owner. WIRING.md has the reasons and the adapters' pin tables; of these rows
-only JP2's has been tried on the board so far (2026-10-16). Two jumpers are called JP1: **the Arty's JP1 is its MODE
+A checklist for the owner. WIRING.md has the reasons and the adapters' pin tables; the owner's
+board is set up this way since 2026-10-16 (JP1 and JP2 off, the three adapters, the Pmod PS2's
+JP1 on VB). Two jumpers are called JP1: **the Arty's JP1 is its MODE
 jumper**; the Pmod PS2 has its own JP1, the PS/2 supply selector. "JP1 off" in earlier reports
 meant the Arty's MODE jumper.
 
@@ -758,12 +772,12 @@ DESIGN=<design>` and loaded with `make program-volatile BOARD=<board> DESIGN=<de
 (configuration RAM only: a power cycle or PROG forgets it). The serial port is the FT2232's
 second port at 115200 8N1 (`make doctor` lists the ports; `screen /dev/cu.usbserial-<serial>
 115200`). The DDR designs need `make litedram-gen` once before their build (the generated core
-is a build product, checked against `ip/litedram/arty.sha256`). Steps 1 to 3 have run on the
-owner's A7-100T (2026-10-16: m1 and m3 passed, SurfBoot without DDR stopped in its monitor as
-expected and read the card's files; PHYSICAL-TESTS.md) with bitstreams of the earlier SoC 0.1.0,
-and the owner's card already holds SurfOS (`make deploy-sd`); the first DDR test
-repeats step 2 with this SoC (0.2.0, memory map 2: `tools/board-test.py m3`), then goes on to
-steps 4 and 5.
+is a build product, checked against `ip/litedram/arty.sha256`). All five steps have run on the
+owner's A7-100T: steps 1 to 3 on 2026-10-16 (m1 and m3 passed, SurfBoot without DDR stopped in
+its monitor as expected and read the card's files; PHYSICAL-TESTS.md) with bitstreams of the
+earlier SoC 0.1.0; step 2 again with this SoC (0.2.0, memory map 2: 203 checks); steps 4 and 5
+with the fixed flow's builds at 0bcadbc (2026-10-17), the owner's card holding SurfOS (`make
+deploy-sd`).
 
 1. **`arty_a7_baseline`, with no adapters plugged in.** It drives none of the Pmod pins. What
    it shows is in section 5: LD0 and LD1 blink green once a second, one serial line a second.
@@ -793,23 +807,31 @@ steps 4 and 5.
    check, the diagnostics write `init_error` and skip the DDR tests (`BRAMDIAG: FAIL`); the
    transcript of all 16 scan lines is what to send back either way. To record it, start
    `python3 tools/uart.py capture auto --until 'BRAMDIAG: (PASS|FAIL)' --out <file>` before the
-   load; or run `tools/board-test.py m3 --design surfcpu_arty_a7_ddr_bramdiag`, which checks
-   every section, the build identity against this design's manifest and the echo (it asks for
-   the design without DDR to be loaded: load this one instead).
+   load; or run `tools/board-test.py m3 --design surfcpu_arty_a7_ddr_bramdiag`, which asks for
+   this design and checks every section, the build identity against its manifest and the echo
+   (not yet run on the board). **On the owner's board** (0bcadbc, 2026-10-17): both lanes at
+   bitslip 2, delay 16 (window ±8), and `BRAMDIAG: PASS (572 checks)`
+   (`docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt`).
 5. **`surfcpu_arty_a7_ddr`** (SurfBoot), with a card that holds SurfOS (`make deploy-sd`).
    SurfBoot initializes and levels the DDR3L the same way, reports the lanes on one line
    (`ddr: initialized by SurfBoot, read leveling lane 0: ...; lane 1: ...`), tests the DDR3L
    briefly, loads `/BOOT/SURFOS.BIN` into it and starts SurfOS, which ends at its shell prompt.
    A failed leveling stops it in its monitor (`DDR initialization failed: ...`, `DDR_CALIB`, LED
    code 1); the monitor's `ddr` command initializes and tests again, and `info` shows the
-   status (`present, software init, calibrated`). `tools/board-test.py m5` and `m7` with
-   `--design surfcpu_arty_a7_ddr` are the acceptance tests of this step (PHYSICAL-TESTS.md).
+   status (`present, software init, calibrated`). `tools/board-test.py m5` and `m7`, which ask
+   for this design, are the acceptance tests of this step (PHYSICAL-TESTS.md; neither has run on
+   the board yet). **On the owner's board** (0bcadbc, 2026-10-17): SurfBoot 1.1.0 levels both
+   lanes at bitslip 2, delay 16 (window ±8), calibrates in 187 ms, loads SurfOS from the card and
+   SurfOS reaches its shell (`docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt`).
 
 On an A7-35T the open flow places the design on the whole xc7a50t die, possibly outside the
 region Vivado offers on a 35T, which AMD does not document as usable (OPEN-FLOW.md 6.3). If a
 35T misbehaves where the simulations pass, suspect that first; the 100T has no such question.
 
-**What the serial port should show, expected from simulation** (never observed on a board yet).
+**What the serial port should show, expected from simulation.** The owner's board printed the
+`surfcpu_arty_a7_bramdiag` lines below exactly, but for the build id, at SoC 0.2.0 (e3961772,
+`docs/evidence/physical/ddr-bramdiag-fault-2026-10-16.txt`); SurfBoot without DDR ran on it only
+at SoC 0.1.0 (SurfBoot 1.0.0, `surfboot-no-ddr-2026-10-16.txt`).
 These come from `make board-uart-expect BOARD=arty_a7_100t` (sim/board/uart_expect.sh): the soc
 track's surfsim with `surfcpu_soc` configured exactly as `surfcpu_arty_a7_top` configures it on
 that board, running the same ROM images; the full transcripts for both boards are in
@@ -879,8 +901,11 @@ fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 126976 cluster
 surfboot>
 ```
 
-**The DDR designs, expected from simulation** (never observed on a board; no DDR3 model exists
-here, so these come from LiteDRAM's controller with its behavioural DRAM model, from the exact
+**The DDR designs, expected from simulation** (the board's own output is in
+`docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt`: on the owner's A7-100T both lanes level
+at bitslip 2, delay 16, window ±8, the diagnostics end with `BRAMDIAG: PASS (572 checks)` and
+SurfBoot boots SurfOS to its shell; no DDR3 model exists here, so these come from LiteDRAM's
+controller with its behavioural DRAM model, from the exact
 generated core with nothing on its memory pins, from the firmware emulator with a model of
 LiteDRAM's registers whose lanes read back only inside a chosen window, and from the C++ DDR
 model; docs/DDR.md 10.4, evidence `docs/evidence/ddr/ddr-top-sim.txt`,
