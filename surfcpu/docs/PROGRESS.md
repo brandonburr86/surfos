@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); after `deploy-sd` it lists `/BOOT` and `/SYSTEM` and reads the whole 388,724-byte `SURFOS.BIN` through its 8 fragments, every byte position matching the Mac's copy ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); booting a DDR image pending (no DDR bitstream) | software done on the host; RTL SoC done; on the board: card reads done, the DDR boot pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: the owner's keyboard (a USB keyboard on a passive USB-to-PS/2 adapter) never answers a reset (TX_NAK, no clock pulses): it does not speak PS/2; a real PS/2 keyboard is needed | done in simulation; on the board: VGA done, the PS/2 keyboard pending (needs a real PS/2 keyboard) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the third storage review's findings, being fixed in fs-fix-3) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | pending: needs the DDR design | done in simulation (open: the fourth storage review's findings, being fixed in fs-fix-4) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); no DDR designs yet (LiteDRAM's generated core is not reproducible) | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done and reviewed (its findings fixed in rel-2); the pre-release must be made again |
 
 ## Log
@@ -577,4 +577,40 @@ ddr-3 built five candidates, every gate passing on each
 * ddr-3 is comparing the failing and passing placements for a cause the flow can remove, and a
   check that flags it. Until then a DDR bitstream is trusted only after it passes on the board;
   the release's reproducible bytes keep such a build.
+
+### 2026-10-16: storage round fs-fix-3 and the fourth review
+
+* fs-fix-3 was merged as 15f0f3c. It closes the third review's findings as audit B20-B26:
+  * B20: mv sets the replaced file's refused blocks aside only after its entry is deleted.
+  * B21: every failed block is considered and chain walks are bounded, which removes the stack
+    overflow on a looping chain.
+  * B22: a refused straight write drops the clean copies of its range, so the cache agrees with
+    the card after a partial CMD25.
+  * B23: the zero gap of a write past the end is all or nothing.
+  * B24: a failed undo makes the volume read-only until it is unmounted.
+  * B25: trim_chain frees nothing when its order point fails.
+  * B26: each sync keeps its own refusal count, and set-aside blocks are other syncs' debt.
+
+  The host tests have 213 checks, each new one failing on fd37406, and are clean under ASan and
+  UBSan.
+* The integrator's runs at 15f0f3c all pass:
+  * x86 test-all, twice at O0 and O2: smoke 311 and files 51 each, with no telnet failure;
+  * unittest: FATFS 213/0, FATFUZZ 4/0, CONC ok ×4;
+  * `make check` in 26 minutes.
+* A fourth independent review confirmed B20-B26 and ran 1.4 M operations clean under
+  ASan/UBSan. It found:
+  * **Critical, from before this round:** a shrinking truncate whose directory read fails undoes
+    with 32 uninitialized stack bytes. The next sync writes them over the file's entry: the
+    file is renamed to junk and its clusters are lost, or the directory ends early and its other
+    files vanish. Both outcomes were reproduced.
+  * **Major, a regression of B23 with B25:** a refusing block in a cut-off chain stays owed by
+    every sync while the chain is pending, so every order point and sync fails. rm of the file
+    cannot clear it, which breaks B16's guarantee.
+  * **Minor:**
+    * B24 also turns the volume read-only when nothing had been changed;
+    * a failed mkdir frees its cluster with no order point (from before this round);
+    * a 9th pending chain is lost without a word;
+    * a long set-aside window can make other syncs time out.
+
+  fs-fix-4 is fixing them, the reviewer's scenarios becoming tests.
 
