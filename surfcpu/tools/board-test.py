@@ -73,9 +73,10 @@ OS_FAILS = [r'Kernel [Pp]anic', r'Kernel Wipeout', r'SYSTEM HALTED', r'killed by
 BOARD_IDS = {'arty_a7_100t': 0x100, 'arty_a7_35t': 0x135}
 SIM_BOARD_ID = 0xf0
 # what a simulation prints and a board never does: SurfBoot's and SurfOS's "(simulation)", the BRAM
-# diagnostics' board line, the baseline's "sim" in place of clean or dirty
+# diagnostics' board line, the baseline's "sim" in place of clean or dirty, the diagnostics' build flags
+# (hexadecimal) with BUILD_FLAGS.SIM (bit 1) set
 SIM_MARKS = (r'(?m)\(simulation\)|^board simulation \(0xf0\)|^SurfCPU baseline \S+ 0x[0-9a-f]{8} build [0-9a-f]{8} sim '
-             r'|bitstream build [0-9a-f]{8} flags [2367],')
+             r'|bitstream build [0-9a-f]{8} flags [0-9a-f]*[2367abef],')
 PACKAGE = struct.Struct('<IHHIIIIIIIIII12sI')   # BOOT-ABI.md section 2: the 64-byte header
 
 
@@ -533,9 +534,10 @@ def m3(r):
     r.ident('BRAM diagnostics %s, ROM build %s%s' % (m.group(1), m.group(2), ' (a dirty tree)' if m.group(3) else ''))
     b = r.expect(r'board (.*) \((0x[0-9a-f]+)\), SoC (\S+), memory map (\d+), sys (\d+) Hz, timebase (\d+) Hz\n',
                  'the board line', 5)
-    s = r.expect(r'bitstream build ([0-9a-f]{8}) flags (\d+), features ([0-9a-f]+), DDR status (\d+) size (\d+) MiB\n',
-                 'the bitstream line', 5)
-    r.compare_bitstream(s.group(1), int(s.group(2)), int(b.group(2), 16))
+    # bramdiag.c prints flags, features and DDR status in hexadecimal (DDR status 14: PRESENT and SWINIT)
+    s = r.expect(r'bitstream build ([0-9a-f]{8}) flags ([0-9a-f]+), features ([0-9a-f]+), DDR status ([0-9a-f]+) '
+                 r'size (\d+) MiB\n', 'the bitstream line', 5)
+    r.compare_bitstream(s.group(1), int(s.group(2), 16), int(b.group(2), 16))
     r.check(int(b.group(5)) == 25000000, 'the system clock is 25,000,000 Hz (%s)' % b.group(5))
     start = r.pos
     end = r.expect(r'BRAMDIAG: (PASS|FAIL) \((\d+) checks?[^\n]*\n', 'BRAMDIAG\'s end', 60)
