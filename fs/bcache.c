@@ -197,6 +197,22 @@ copy was given up after 10 s and its sync failed ("set aside for 10 s by an oper
 B28, which sets every dirty block of a chain an rm takes away aside, not only failed ones, made it likelier.
 Such a block now ends the copy: the copied block is let go and looked at again (a block set aside is
 nobody's dependency: nothing in the cache names it any more).
+
+10/16/26 (audit B34): B33 held only for the block the copy was waiting for. A block the copy needed that
+was set aside, or dropped, while it wrote or waited for another left the dirty lists, the copy never looked
+for it again, and the copy, taken while the directory block still named the file, reached the disk while
+that block's older change never did: the card named the file over whatever the block held. B33's "a block
+set aside is nobody's dependency" is false for a copy taken before the block was set aside: the copy names
+it. Each copy under way is now recorded (struct copy_rec); setting aside or dropping a dirty block spoils
+every copy that needed it (a lower order, a change older than the copy), and under the lock, right before
+its write, a copy goes only when it is not spoiled and nothing it needs is dirty in the lists, else it is
+taken again: at most COPY_LOOKS looks, then -1 (the block stays dirty, the sync says so, the next sync tries
+again). A block set aside before the copy was taken is not its dependency. write_run's runs, write_singly()
+and bsync(NULL) check deps_out() under the lock right before writing the buffer itself.
+
+10/16/26 (audit B35): bdiscard() of a block in someone's hands or under I/O marks it, and it is dropped when
+let go or when its I/O ends, unless a change came after (the block has an owner again). B16 left it, and a
+write of it the device refused made every later sync owe a block of a cluster nothing names.
 */
 
 #include <surfos/types.h>

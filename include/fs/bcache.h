@@ -50,6 +50,8 @@ its clean copies of them (a dirty one keeps its bytes, the next sync's to write 
 B26: a block set aside is still the debt of other tasks' syncs (they wait for it as for a hold);
 each sync counts its own requests (B13). B28: bdirty_blocks() lists a device's dirty blocks.
 B33: a block written from a copy is let go when another task sets aside a block the copy needs.
+B34: a copy is written only when nothing it needed was set aside or dropped since it was taken.
+B35: a block bdiscard() could not drop then (held, under I/O) is dropped when let go or its I/O ends.
 */
 
 #ifndef _FS_BCACHE_H

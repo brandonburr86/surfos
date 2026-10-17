@@ -198,6 +198,23 @@ is said lost on the console, until the volume is checked, and the unmount says h
 first, set aside right before it, dropped or put back right after. B16 kept them aside until the chain was
 freed; another task's sync owes them (B26) and waits for them, 10 s at most, and a long chain's free outlasted
 that (the sync said "an operation that does not end").
+
+10/16/26 (audit B36): B28's "every dirty block of a part given back is dropped" did not cover fat_alloc(): a
+folder growing whose new cluster's table point was refused gave the cluster back and left its dirty, failed
+zero blocks, and every later order point and sync failed while that sector of a free cluster refused. They
+are dropped now; fat_free_chain() and drop_chain() drop each block of the chain when there is no memory for
+the list of the device's dirty blocks; a mkdir whose new cluster's block cannot be read frees the cluster. A
+block in a task's hands or under I/O then is dropped when let go or when its I/O ends (fs/bcache.c, B35), so
+B28's exception remains for an rm's, truncate's or mv's own order point only: a block of its chain that cannot
+be set aside then is owed by it (an rm it fails in says EIO, nothing changed, and the next rm works).
+
+10/16/26 (audit B37): a table point drops the waiting chains' blocks first, as order points and syncs do; it
+owed one that could not be dropped when given up, and a file crossing into another FAT sector, a folder
+growing and mkdir failed while it refused.
+
+10/16/26 (audit B38): the unmount counts the clusters given back that could not be freed before it marks the
+volume; with any, the volume stays marked as not cleanly unmounted (as a damaged one, B24), so that the next
+mount says so and the next computer checks it. B31 marked it clean right after saying "check the volume".
 */
 
 #include <surfos/types.h>
