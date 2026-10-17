@@ -235,9 +235,10 @@ def dir_entry(short, attr, cluster, size):
                        cluster & 0xFFFF, size)
 
 
-def make_fat32(out, files, size_mb=512, label='SURFDEV', cluster_bytes=4096):
+def make_fat32(out, files, size_mb=512, label='SURFDEV', cluster_bytes=4096, serial=0x5D0F0901):
     """a disk image: an MBR whose partition 1 (type 0c, from block PART_START to the end) holds a FAT32 volume
-    with files, {'dir/name': bytes}; the image is sparse and only what is used is written"""
+    with files, {'dir/name': bytes}; the image is sparse and only what is used is written. 10/17/26: serial is
+    the volume's serial number, which GRUB passes as bootvol= (two sticks of one test need different ones)"""
     sector = 512
     total = size_mb * 1024 * 1024 // sector
     part_sectors = total - PART_START
@@ -315,7 +316,7 @@ def make_fat32(out, files, size_mb=512, label='SURFDEV', cluster_bytes=4096):
                      part_sectors)
     struct.pack_into('<IHHIHH', bs, 36, fatsz, 0, 0, 2, 1, 6)
     bs[64], bs[66] = 0x80, 0x29
-    bs[67:71] = struct.pack('<I', 0x5D0F0901)
+    bs[67:71] = struct.pack('<I', serial)
     bs[71:82] = label.upper().encode()[:11].ljust(11)
     bs[82:90] = b'FAT32   '
     bs[510:512] = b'\x55\xaa'
@@ -348,8 +349,10 @@ def make_fat32(out, files, size_mb=512, label='SURFDEV', cluster_bytes=4096):
 
 
 def make_devstick(out, kernel, initrd, size_mb=512):
-    """10/9/26: a data stick holding a development build, as tools/devloop.py leaves one"""
-    info = make_fat32(out, {'surfos-dev/surfos.bin': kernel, 'surfos-dev/initrd.tar': initrd}, size_mb)
+    """10/9/26: a data stick holding a development build, as tools/devloop.py leaves one. 10/17/26: with a serial
+    number of its own, so it never shares one with a stick a test boots from (GRUB names that one by it)"""
+    info = make_fat32(out, {'surfos-dev/surfos.bin': kernel, 'surfos-dev/initrd.tar': initrd}, size_mb,
+                      serial=0x0DA7A517)
     print(f"{out}: {size_mb} MB, FAT32 'SURFDEV' at block {PART_START}, /surfos-dev/surfos.bin ({len(kernel)} bytes) "
           f"and /surfos-dev/initrd.tar ({len(initrd)} bytes)")
     return info

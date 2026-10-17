@@ -7,6 +7,7 @@ Nothing here connects anywhere: devloop.py's sessions, rx and the reboot are tes
 under QEMU by tools/qemu-usb.py's devloop scenario. These tests need only Python; where fsck.fat is installed (the
 Docker toolchain) it checks the FAT32 images as well.
 """
+import contextlib
 import importlib.util
 import io
 import os
@@ -19,6 +20,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -198,35 +200,60 @@ class OneStickTests(unittest.TestCase):
         with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1'):
             self.pick(text)
 
+    class Session:                              # the telnet session, as deploy uses it
+        host = '127.0.0.1'
+
+        def __init__(self, marker, status='boot drive: writable'):
+            self.marker, self.status, self.commands = marker, status, []
+
+        def check(self, cmd, timeout=60, ok=None):
+            self.commands.append(cmd)
+            return {'lsblk': HEAD + ONE.format(n=0, status=self.status),
+                    'mount': '    rd0    on /initrd       type tarfs (ro)\n'}.get(cmd, '')
+
+        def run(self, cmd, timeout=60):
+            self.commands.append(cmd)
+            if cmd.startswith('mount usb0p1 '):
+                return 0, '    usb0p1 on /surfos-dev-stick: fat32, label DATASTICK, 29 GB, 29 GB free, read-write\n'
+            if cmd.startswith('cat '):
+                return (0, mkusb.STICK_NOTE) if self.marker else (1, '    cat: no such file\n')
+            return 0, '    usb0: safe to remove\n' if cmd.startswith('eject ') else ''
+
     def test_deploy_needs_the_marker(self):
         """GRUB looks in the surfos-dev of the stick it was started from only beside boot/ONE-STICK.txt
         (tools/stick.py install writes it): without it nothing is pushed, and the stick is ejected as it was"""
-        class Session:                          # the telnet session, as deploy uses it
-            host = '127.0.0.1'
-
-            def __init__(self, marker):
-                self.marker, self.commands = marker, []
-
-            def check(self, cmd, timeout=60, ok=None):
-                self.commands.append(cmd)
-                return {'lsblk': HEAD + ONE.format(n=0, status='boot drive: writable'),
-                        'mount': '    rd0    on /initrd       type tarfs (ro)\n'}.get(cmd, '')
-
-            def run(self, cmd, timeout=60):
-                self.commands.append(cmd)
-                if cmd.startswith('mount usb0p1 '):
-                    return 0, '    usb0p1 on /surfos-dev-stick: fat32, label DATASTICK, 29 GB, 29 GB free, read-write\n'
-                if cmd.startswith('cat '):
-                    return (0, mkusb.STICK_NOTE) if self.marker else (1, '    cat: no such file\n')
-                return 0, '    usb0: safe to remove\n' if cmd.startswith('eject ') else ''
-        s = Session(marker=False)
+        s = self.Session(marker=False)
         with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the stick SurfOS was started from, has no '
                                                           'boot/ONE-STICK.txt.*tools/stick.py install'):
-            devloop.deploy(s, b'kernel', b'initrd', 'a build')
+            devloop.deploy(s, b'kernel bootvol=', b'initrd', 'a build')
         self.assertIn('cat /surfos-dev-stick/boot/ONE-STICK.txt', s.commands)
         self.assertEqual(s.commands[-1], 'eject usb0')
         self.assertFalse([c for c in s.commands if c.startswith(('mkdir', 'rx ', 'mv '))])
         self.assertEqual(devloop.MARKER, mkusb.STICK_MARKER)
+
+    def test_deploy_with_the_marker_pushes_there(self):
+        """with the marker, the build goes into that stick's surfos-dev: the folder is made and the initrd pushed
+        first (the push itself is tested against QEMU, tools/qemu-usb.py's onestick scenario)"""
+        class Pushed(Exception):
+            pass
+        s = self.Session(marker=True)
+        with mock.patch.object(devloop, 'push', side_effect=Pushed) as push:
+            with self.assertRaises(Pushed):
+                devloop.deploy(s, b'kernel bootvol=', b'initrd', 'a build')
+        self.assertIn('mkdir /surfos-dev-stick/surfos-dev', s.commands)
+        self.assertEqual(push.call_args[0][1:3], (b'initrd', '/surfos-dev-stick/surfos-dev/initrd.tar.new'))
+
+    def test_deploy_says_when_a_kernel_does_not_know_the_stick(self):
+        s = self.Session(marker=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(devloop.DevloopError):
+            devloop.deploy(s, b'an older kernel', b'initrd', 'a build')
+        self.assertIn('this kernel is from before 10/17/26', out.getvalue())
+
+    def test_a_write_protected_boot_stick(self):
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the volume SurfOS was started from, is '
+                                                          'write-protected: slide'):
+            self.pick(HEAD + ONE.format(n=0, status='boot drive: read-only') + DATA.format(n=1))
 
 
 class BuildTests(unittest.TestCase):

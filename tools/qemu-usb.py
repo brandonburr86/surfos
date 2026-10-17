@@ -75,7 +75,7 @@ comes out of the framebuffer.
              install and update. Afterwards the boot files and the owner's files are as they were,
              and fsck_msdos and fsck.fat find no error
   twosticks  (10/17/26) two sticks at once, where GRUB's order and devloop.py's must agree: a
-             stick laid out as the flashed image (SURFOSUSB, no boot/ONE-STICK.txt) with a stale
+             stick with the flashed image's label and files (no boot/ONE-STICK.txt) and a stale
              surfos-dev beside a data stick boots the data stick's build; a stick made with
              tools/stick.py beside a data stick boots its own, and devloop.py chooses it
   no-initrd, no-kernel
@@ -1864,9 +1864,9 @@ def scenario_onestick(args, image, firmware, outdir):
 
 
 def scenario_twosticks(args, image, firmware, outdir):
-    """10/17/26 (one stick): two sticks at once, where GRUB's order and tools/devloop.py's must agree. (1) A stick laid
-    out as the flashed image is (label SURFOSUSB, no boot/ONE-STICK.txt) with a stale surfos-dev of its own, beside a
-    data stick: GRUB starts the data stick's build, SurfOS only reads the image, devloop.py would deploy to the data
+    """10/17/26 (one stick): two sticks at once, where GRUB's order and tools/devloop.py's must agree. (1) A stick with
+    the flashed image's label and files (SURFOSUSB, no boot/ONE-STICK.txt; MBR here, where the image is GPT, which
+    neither GRUB's menu nor the kernel looks at) and a stale surfos-dev of its own, beside a data stick: GRUB starts the data stick's build, SurfOS only reads the image, devloop.py would deploy to the data
     stick. (2) A stick made with tools/stick.py beside a data stick: GRUB starts the stick's own build, its volume is
     the writable boot drive, devloop.py deploys there and refuses --stick naming the data stick"""
     results = []
@@ -1898,7 +1898,8 @@ def scenario_twosticks(args, image, firmware, outdir):
         flashed = os.path.join(tmpd, 'flashed.img')
         files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': with_build_id(initrd, ids['stale']),
                                             'surfos-dev/surfos.bin': kernel}, skip=(mk.STICK_MARKER,))
-        mi.make_fat32(flashed, files, size_mb=600, label='SURFOSUSB')
+        # (each stick its own serial number: GRUB names the boot volume by it, and the data stick has the default)
+        mi.make_fat32(flashed, files, size_mb=600, label='SURFOSUSB', serial=0x1A2B3C4D)
         vm = Vm('twosticks-image', args, flashed, firmware, mem='512', serial=True,
                 outdir=outdir and os.path.join(outdir, 'image'), extra=data_stick_args(data), copy_image=False)
         if outdir:
@@ -1921,7 +1922,7 @@ def scenario_twosticks(args, image, firmware, outdir):
         own = os.path.join(tmpd, 'own.img')
         files = written_by_stick_tool(kit, {'surfos-dev/initrd.tar': with_build_id(initrd, ids['own']),
                                             'surfos-dev/surfos.bin': kernel})
-        mi.make_fat32(own, files, size_mb=1100, label='DATASTICK', cluster_bytes=16384)
+        mi.make_fat32(own, files, size_mb=1100, label='DATASTICK', cluster_bytes=16384, serial=0x0E5D57C1)
         vm = Vm('twosticks-one', args, own, firmware, mem='512', serial=True,
                 outdir=outdir and os.path.join(outdir, 'one'), extra=data_stick_args(data), copy_image=False)
         if outdir:

@@ -122,11 +122,15 @@ class MkusbTests(unittest.TestCase):
                                     'bootvol=$surfos_bootvol\n'), 2)
         self.assertEqual(body.count('module2 ($surfos_devbuild)/surfos-dev/initrd.tar initrd.tar\n'), 2)
         self.assertEqual(code.count('autonet'), 2)
-        marker = code.index('if [ -f "($root)/' + mkusb.STICK_MARKER + '" ]; then')   # only a stick made for it
-        own = code.index('if [ -f "($root)/surfos-dev/surfos.bin" ]; then')            # its own partition first
-        self.assertLess(marker, own)
-        self.assertLess(own, code.index('if [ -f "($root)/surfos-dev/initrd.tar" ]; then'))
-        self.assertLess(own, code.index('for surfos_disk in'))
+        # its own partition first, and only on a stick made for it: the marker's test encloses the look there
+        block = re.search(r'^if \[ -f "\(\$root\)/' + re.escape(mkusb.STICK_MARKER) + r'" \]; then\n(.*?)^fi\n',
+                          code, re.S | re.M)
+        self.assertIsNotNone(block)
+        for line in ('if [ -f "($root)/surfos-dev/surfos.bin" ]; then', 'if [ -f "($root)/surfos-dev/initrd.tar" ]; then',
+                     'set surfos_devbuild="$root"'):
+            self.assertIn(line, block.group(1))
+            self.assertEqual(code.count(line), 1, line)                          # nowhere else
+        self.assertLess(block.end(), code.index('for surfos_disk in'))
         self.assertIn('if [ "$surfos_disk" != "$surfos_boot_disk" ]', code)            # its other partitions never
         self.assertIn('[ -f "($surfos_part)/surfos-dev/surfos.bin" ]', code)
         self.assertIn('[ -f "($surfos_part)/surfos-dev/initrd.tar" ]', code)

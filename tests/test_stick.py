@@ -33,15 +33,16 @@ stick = load('stick', 'stick.py')
 mkusb = load('mkusb', 'mkusb.py')
 
 
-def fake_kernel(extra=b''):
-    """a 32-bit x86 ELF header with a valid Multiboot 2 header at offset 0x1010 (as tests/test_mkusb.py makes one)"""
+def fake_kernel(extra=b'', knows_stick=True):
+    """a 32-bit x86 ELF header with a valid Multiboot 2 header at offset 0x1010 (as tests/test_mkusb.py makes one);
+    a kernel from 10/17/26 on has the word bootvol= in it (driver/part.c reads it), an older one does not"""
     data = bytearray(0x2000)
     data[0:4] = b'\x7fELF'
     data[4] = 1
     struct.pack_into('<H', data, 18, 3)
     magic, arch, length = 0xE85250D6, 0, 24
     struct.pack_into('<IIII', data, 0x1010, magic, arch, length, (-(magic + arch + length)) & 0xFFFFFFFF)
-    return bytes(data) + extra
+    return bytes(data) + extra + (b'\0bootvol=\0' if knows_stick else b'')
 
 
 def initrd_with(build_id):
@@ -174,15 +175,33 @@ class InstallUpdateTests(Base):
         self.assertEqual(self.leftovers(), [])
 
     def test_an_older_surfos_stick_is_brought_up_to_date(self):
-        """a stick SurfOS's own older files are on (its loader with the bootstrap, its menu) is not another system's"""
+        """a stick SurfOS's own older files are on (its loader with the bootstrap, its menu) is not another system's;
+        its fallback, whose kernel is from before 10/17/26 and so would not know the stick, is replaced, and said so"""
         for rel, data in (('EFI/BOOT/BOOTX64.EFI', b'MZ older GRUB # SurfOS USB bootstrap: older'),
                           ('boot/grub/grub.cfg', b'# SurfOS USB image: an older menu'),
-                          ('boot/BUILD-INFO.txt', b'SurfOS USB boot image, older')):
+                          ('boot/BUILD-INFO.txt', b'SurfOS USB boot image, older'),
+                          ('boot/surfos.bin', fake_kernel(b'older', knows_stick=False)),
+                          ('boot/initrd.tar', initrd_with('an older build'))):
             (self.vol / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.vol / rel).write_bytes(data)
-        rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
+        rc, out, err, _ = self.main('check', self.vol, '--kit', self.kit)
+        self.assertIn('build an older build, not the stick folder\'s build (from before 10/17/26: it does not know '
+                      'this stick', out)
+        rc, out, err, _ = self.main('install', self.vol, '--kit', self.kit)
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.on_stick(stick.LOADER), self.files[stick.LOADER])
+        for rel, data in self.files.items():
+            self.assertEqual(self.on_stick(rel), data, rel)
+        self.assertIn('older than 10/17/26', out)
+        self.assertIn('replaced', out)
+
+    def test_an_update_with_an_older_kernel_says_so(self):
+        self.assertEqual(self.main('install', self.vol, '--kit', self.kit)[0], 0)
+        kernel, initrd = self.dir / 'old.bin', self.dir / 'old.tar'
+        kernel.write_bytes(fake_kernel(b'old', knows_stick=False))
+        initrd.write_bytes(initrd_with('an old build'))
+        rc, out, err, _ = self.main('update', self.vol, '--kernel', kernel, '--initrd', initrd)
+        self.assertEqual(rc, 0, err)
+        self.assertIn('that kernel is from before 10/17/26', out)
 
 
 class RefusalTests(Base):
@@ -271,8 +290,9 @@ class RefusalTests(Base):
         self.assert_untouched()
 
     def test_order_and_a_stick_pulled_halfway(self):
-        """the renames come in install order, the boot loader last; when the stick goes before that, the files
-        renamed already stay, the loader is not there, no new file is left, and the message says what to do"""
+        """the renames come in install order, the boot loader and then the menu last; when the stick goes before
+        that, the files renamed already stay, the loader is not there, no new file is left, and the message says
+        what to do"""
         renamed = []
         real = os.replace
 
@@ -285,8 +305,9 @@ class RefusalTests(Base):
         with mock.patch.object(stick.os, 'replace', side_effect=replace):
             rc, _, err, _ = self.main('install', self.vol, '--kit', self.kit)
         self.assertEqual(rc, 1)
-        self.assertEqual(renamed, stick.INSTALL[:-1])
-        self.assertEqual(stick.INSTALL[-1], stick.LOADER)
+        self.assertEqual(renamed, stick.INSTALL[:stick.INSTALL.index(stick.LOADER)])
+        self.assertEqual(stick.INSTALL[-2:], [stick.LOADER, stick.MENU])          # an older loader keeps its menu
+        self.assertFalse((self.vol / stick.MENU).exists())
         self.assertLess(stick.INSTALL.index('surfos-dev/initrd.tar'), stick.INSTALL.index('surfos-dev/surfos.bin'))
         self.assertLess(stick.INSTALL.index(stick.MARKER), stick.INSTALL.index(stick.LOADER))
         self.assertFalse((self.vol / stick.LOADER).exists())
@@ -316,6 +337,13 @@ class CheckTests(Base):
         (self.vol / stick.MARKER).unlink()                                         # GRUB would not look in surfos-dev
         rc, out, _, _ = self.main('check', self.vol, '--kit', self.kit)
         self.assertIn('the build in boot/ (no development build in surfos-dev/, or no boot/ONE-STICK.txt)', out)
+
+    def test_the_marker_copied_onto_the_flashed_stick(self):
+        (self.vol / 'boot').mkdir()
+        (self.vol / stick.MARKER).write_bytes(mkusb.STICK_NOTE.encode())
+        rc, out, err, _ = self.main('check', self.vol, '--kit', self.kit, label='SURFOSUSB')
+        self.assertEqual(rc, 0, err)
+        self.assertIn('This is the flashed image, yet it holds boot/ONE-STICK.txt', out)
 
     def test_kit(self):
         rc, out, err, _ = self.main('kit', '--kit', self.kit)

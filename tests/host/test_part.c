@@ -445,6 +445,20 @@ static void test_fat_serial(void) {
     check(!part_fat_serial(bs, &s), "no 55 AA: not a FAT boot sector");
     memset(bs, 0, 512);
     check(!part_fat_serial(bs, &s), "zeros: not a FAT boot sector");
+    memset(bs, 0, 512);                                 /* NTFS: no reserved sectors, no FATs */
+    bs[0] = 0xEB; bs[1] = 0x52; bs[2] = 0x90;
+    memcpy(bs + 3, "NTFS    ", 8);
+    put16(bs + 11, 512);
+    bs[13] = 8;
+    put32(bs + 72, 0x5D0F0901);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    check(!part_fat_serial(bs, &s), "an NTFS boot sector has no FAT serial number");
+    memset(bs, 0, 512);                                 /* exFAT: the old BPB is all zeros */
+    bs[0] = 0xEB; bs[1] = 0x76; bs[2] = 0x90;
+    memcpy(bs + 3, "EXFAT   ", 8);
+    put32(bs + 100, 0x5D0F0901);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    check(!part_fat_serial(bs, &s), "nor does an exFAT one");
 
     check(part_parse_serial("5D0F-0901", &s) && s == 0x5D0F0901, "GRUB's form: the high half first");
     check(part_parse_serial("abcd-ef01", &s) && s == 0xABCDEF01, "lower case too");

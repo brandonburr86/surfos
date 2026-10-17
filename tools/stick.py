@@ -5,9 +5,9 @@ that keeps your own files, from this computer, with no image to write (10/17/26)
     tools/stick.py check   /Volumes/NAME             what the stick holds: the boot files, both builds, free space
     tools/stick.py install /Volumes/NAME [--eject]    makes the stick start SurfOS: the boot loader (EFI/BOOT), the
                                                      menu (boot/grub), boot/ONE-STICK.txt, the development build
-                                                     (surfos-dev/) and, when the stick has none yet, the fallback
-                                                     build (boot/); later again, to bring the loader and the menu up
-                                                     to date
+                                                     (surfos-dev/) and, unless the stick has a good one already, the
+                                                     fallback build (boot/); later again, to bring the loader and the
+                                                     menu up to date
                            [--fallback]              ... and make this build the fallback too
     tools/stick.py update  /Volumes/NAME [--eject]    a new development build into surfos-dev/, nothing else
                            [--kernel F --initrd F]   ... from these two files instead of the stick folder
@@ -17,10 +17,13 @@ The files come from the stick folder devenv/build-usb.sh makes next to the image
 checked against the build's manifest (build-manifest.json beside the folder) before anything is written. Every file
 is written as NAME.surfos-new beside its place and read back through the file system, and only once all of them are
 there are they renamed over the old ones, in order: in surfos-dev/ the initrd before the kernel (as tools/devloop.py
-does), and when installing the boot loader last, so a stick that is pulled out halfway does not start a half-written
-system. Nothing else on the stick is touched: it is never formatted or partitioned, nothing is deleted but this
+does), and when installing the boot loader and then the menu last, so a stick that is pulled out halfway does not
+start a half-written system (a new stick does not start at all, an older one starts its old menu). Nothing else on the stick is touched: it is never formatted or partitioned, nothing is deleted but this
 tool's own temporary files and the folders it made for them, and a boot loader or GRUB menu of another system at
 SurfOS's paths stops it before it writes anything.
+
+A fallback build in boot/ is kept only when it is a whole build whose kernel knows bootvol= (from 10/17/26 on): an
+older kernel would not know the stick as its boot drive, so under it fdisk and mkfs would be allowed on the stick.
 
 The path must be where a FAT volume of an external (USB) disk is mounted: diskutil says so on macOS, and
 /proc/self/mounts and sysfs on Linux. The computer's own disks, its EFI system partition included, are refused, and
@@ -50,8 +53,9 @@ MARKER = 'boot/ONE-STICK.txt'                   # without it GRUB's menu does no
 INFO = 'boot/BUILD-INFO.txt'                    # describes the build in boot/
 DEV = ['surfos-dev/initrd.tar', 'surfos-dev/surfos.bin']        # renamed in this order: the kernel last
 FALLBACK = ['boot/surfos.bin', 'boot/initrd.tar']
-# install: everything the loader starts is in place before the loader is
-INSTALL = FALLBACK + [INFO, 'boot/grub/x86_64-efi/fs.lst', MARKER, MENU] + DEV + [LOADER]
+# install: everything the loader starts is in place before the loader is, and the menu comes after the loader (an
+# older loader has no probe, which the menu uses)
+INSTALL = FALLBACK + [INFO, 'boot/grub/x86_64-efi/fs.lst', MARKER] + DEV + [LOADER, MENU]
 NEW = '.surfos-new'                             # a file being written
 SLACK = 1 << 20                                 # bytes left free on the stick after the new files
 
@@ -253,6 +257,25 @@ def actual(volume, rel):
     return path if os.path.isfile(path) else None
 
 
+def knows_stick(kernel):
+    """a kernel from 10/17/26 on reads bootvol= (driver/part.c), so it knows the stick it was started from as its boot
+    drive: fdisk and mkfs refuse that stick under it, and under an older one they would not"""
+    return b'bootvol=' in kernel
+
+
+def good_fallback(volume):
+    """boot/ holds a whole build whose kernel knows the stick"""
+    kernel, initrd = actual(volume, FALLBACK[0]), actual(volume, FALLBACK[1])
+    if not (kernel and initrd):
+        return False
+    try:
+        build_id(read_back(initrd))
+    except StickError:
+        return False
+    data = read_back(kernel)
+    return data[:4] == b'\x7fELF' and knows_stick(data)
+
+
 def foreign(volume):
     """the files at SurfOS's paths on the stick that another system put there (a boot loader, a GRUB menu)"""
     return [rel for rel, ours in OURS.items() if actual(volume, rel) and not ours(read_back(actual(volume, rel)))]
@@ -340,6 +363,8 @@ def state(volume, kit_files=None):
         if kit_files is not None and all(p in kit_files for p in paths):
             newer = ', as in the stick folder' if all(read_back(place(volume, p)) == kit_files[p] for p in paths) \
                     else ', not the stick folder\'s build'
+        if not knows_stick(read_back(place(volume, next(p for p in paths if p.endswith('surfos.bin'))))):
+            newer += ' (from before 10/17/26: it does not know this stick, so fdisk and mkfs would be allowed on it)'
         return f'build {bid}{newer}'
     rows = [('boot loader', LOADER, same(LOADER)), ('menu', MENU, same(MENU)), ('marker', MARKER, same(MARKER)),
             ('fallback build', 'boot/', build(FALLBACK)), ('development build', 'surfos-dev/', build(DEV))]
@@ -348,7 +373,7 @@ def state(volume, kit_files=None):
     return rows, starts, dev
 
 
-def check(volume, where, kit, manifest_path):
+def check(volume, where, kit, manifest_path, label=''):
     try:
         kit_files = load_kit(kit, manifest_path)
     except StickError:
@@ -367,6 +392,9 @@ def check(volume, where, kit, manifest_path):
     else:
         print('  SurfOS starts from this stick, the build in boot/ (no development build in surfos-dev/'
               + (', or no ' + MARKER if not os.path.isfile(place(volume, MARKER)) else '') + ')')
+    if label.strip().upper() == 'SURFOSUSB' and os.path.isfile(place(volume, MARKER)):
+        print(f'  This is the flashed image, yet it holds {MARKER} (copied by hand?): GRUB would start its own '
+              f'surfos-dev, which SurfOS never updates. Delete {MARKER} from it')
     if kit_files is None:
         print('  (no stick folder to compare with: devenv/build-usb.sh makes it)')
     return 0
@@ -403,12 +431,12 @@ def main(argv=None):
         where, label = volume_info(a.volume)
         volume = os.path.realpath(a.volume)
         if a.command == 'check':
-            return check(volume, where, a.kit, a.manifest)
+            return check(volume, where, a.kit, a.manifest, label)
         if label.strip().upper() == 'SURFOSUSB':
             raise StickError(f'{where} is the flashed SurfOS image (SURFOSUSB): SurfOS only reads it, so a build here '
                              f'would never be updated over the network, and it is the rescue stick. Nothing was '
                              f'written: use another FAT32 stick (or write a new image to this one, step 4)')
-        kept = False
+        kept = old = False
         if a.command == 'install':
             files = load_kit(a.kit, a.manifest)
             other = foreign(volume)
@@ -416,7 +444,8 @@ def main(argv=None):
                 raise StickError(f'{where} already holds another system\'s boot files where SurfOS\'s go: '
                                  f'{", ".join(other)}. Nothing was written; move them off the stick first if it '
                                  f'should start SurfOS instead')
-            kept = all(os.path.isfile(place(volume, p)) for p in FALLBACK) and not a.fallback
+            kept = good_fallback(volume) and not a.fallback
+            old = not kept and not a.fallback and all(actual(volume, p) for p in FALLBACK)
             order = [p for p in INSTALL if not (kept and p in FALLBACK + [INFO])]
         else:
             if bool(a.kernel) != bool(a.initrd):
@@ -432,8 +461,14 @@ def main(argv=None):
             say(f'surfos-dev/ holds build {bid}, the menu\'s first entry; ' +
                 ('boot/ keeps its build, the menu\'s "SurfOS" entry (install --fallback replaces it too)' if kept else
                  f'boot/ holds the same build, the menu\'s "SurfOS" entry'))
+            if old:
+                say('boot/ held a build that was not whole or was older than 10/17/26 (one that would not know this '
+                    'stick, so fdisk and mkfs would be allowed on it under that build): replaced')
         else:
             say(f'surfos-dev/ holds build {bid}: the menu\'s first entry starts it')
+            if not knows_stick(files['surfos-dev/surfos.bin']):
+                say('note: that kernel is from before 10/17/26: it does not know this stick as its boot drive, so under '
+                    'it fdisk and mkfs would be allowed on the stick')
         if not dev:
             missing = [p for p in [LOADER, MENU, MARKER] + FALLBACK if not os.path.isfile(place(volume, p))]
             if missing:

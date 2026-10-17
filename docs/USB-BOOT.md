@@ -608,7 +608,7 @@ starts it by itself: section 13).
 | "Secure Boot Violation", "Verification failed", or a red security warning | Secure Boot is still on (step 5). |
 | GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). On a stick you copied the files onto, one is missing: `tools/stick.py check` says which, `tools/stick.py install` puts them back (section 14). |
 | A stick you copied the boot files onto is not offered at all | Check that `EFI/BOOT/BOOTX64.EFI` is on it (`tools/stick.py check`) and that it is FAT32, then choose it in the F12 menu; plug it straight into the laptop (section 14). |
-| On that stick, `lsblk` shows neither `boot drive: writable` nor `mounted (boot drive)` | GRUB did not name the volume (the stick has an older boot loader or menu), or the build running is older than 10/17/26. `tools/stick.py install` brings the boot files up to date, `tools/stick.py update` the build. Until then `fdisk` and `mkfs` do not know it is the boot drive: leave them alone. |
+| On that stick, `lsblk` shows neither `boot drive: writable` nor `mounted (boot drive)` | GRUB did not name the volume (the stick has an older boot loader or menu), or the build running is older than 10/17/26 (`tools/stick.py check` marks such builds). `tools/stick.py install` brings the boot loader and the menu up to date and replaces such a fallback build in `boot/`; `tools/stick.py update` puts a new development build in. Until then `fdisk` and `mkfs` do not know it is the boot drive: leave them alone. |
 | The menu has no "development build from this stick" entry, though `surfos-dev` holds a build | `boot/ONE-STICK.txt` is missing (GRUB looks in its own stick's `surfos-dev` only beside it): `tools/stick.py install` puts it back. |
 | GRUB's menu, then a blank screen | The kernel could not use the firmware's framebuffer. Photograph the GRUB screen and note the panel resolution; report it. |
 | The boot log stops, or ends with `SYSTEM HALTED` or a line starting `BOOT PROBLEM` | Photograph the screen and report it: those lines name what failed. |
@@ -746,8 +746,8 @@ tools/stick.py install /Volumes/DATASTICK --eject    # the files above onto it, 
 ```
 
 `install` checks each file of the folder against the build's manifest, writes it under a
-temporary name, reads it back and only then renames it into place, the boot loader last,
-so a stick pulled out halfway never starts half a system. It never formats, partitions or
+temporary name, reads it back and only then renames it into place, the boot loader and then
+the menu last, so a stick pulled out halfway never starts half a system. It never formats, partitions or
 deletes anything, and it refuses:
 
 * anything that is not a FAT volume of an external drive;
@@ -757,11 +757,15 @@ deletes anything, and it refuses:
   you have moved them off the stick.
 
 Without the tool, drag the folders `EFI`, `boot` and `surfos-dev` from `build/usb/stick/`
-onto the stick in Finder, then eject it.
+onto the stick in Finder, then eject it. Finder checks nothing, and its *Replace* replaces
+whole folders: on a stick that already has an `EFI` or `boot` folder of its own, use the
+tool, which looks at them first.
 
 The stick must be FAT32 (or FAT16), with either partition table; the data stick already
 is. An exFAT or NTFS stick has to be erased as *MS-DOS (FAT)* first (section 9), which
-erases it. Do not name the stick SURFOSUSB: that name marks the flashed image.
+erases it. Do not name the stick SURFOSUSB: that name marks the flashed image. And never
+copy the stick folder onto the flashed stick (its volume is called SURFOSUSB on the Mac):
+GRUB would then start a `surfos-dev` there that SurfOS can never update.
 
 **On the laptop.** Plug in that stick alone and start the laptop. With USB first in the
 boot order (section 13) the firmware starts the stick's GRUB by itself. If it does not,
@@ -794,8 +798,10 @@ usb0      29G usb  1 disk mbr           VendorCo Product boot drive: protected
 mounted like any data stick (section 9): `mount usb0p1 /data` says `the volume SurfOS was
 started from: its files may be changed; fdisk and mkfs leave it alone`, `lsblk` then says
 `mounted (boot drive)`, and `eject usb0` comes before pulling it out. Only builds from
-10/17/26 on know their stick this way: an older build in `surfos-dev` would treat it as an
-ordinary data stick, which `fdisk` and `mkfs` may change.
+10/17/26 on know their stick this way: an older build, in `surfos-dev` or in `boot/`, would
+treat it as an ordinary data stick, which `fdisk` and `mkfs` may change. `tools/stick.py
+check` marks such a build, `install` replaces an older fallback, and `update` and `deploy`
+say so when the build they put there is older.
 
 **Each new build** is two files that belong together: `surfos.bin`, the kernel, and
 `initrd.tar`, the programs it runs (surfsh, the editor, the browser, the Wi-Fi firmware).
@@ -813,7 +819,8 @@ They go into `surfos-dev`, either way:
   Or drag `build/usb/stick/surfos-dev` onto the stick and choose *Replace*.
 
 `tools/stick.py install` again brings the boot loader, the menu and `surfos-dev` up to date
-and leaves the fallback in `boot/` as it is. Once a development build has proved itself,
+and leaves a good fallback in `boot/` as it is (one from before 10/17/26, which would not
+know the stick, is replaced). Once a development build has proved itself,
 `tools/stick.py install /Volumes/DATASTICK --fallback` makes it the fallback too.
 
 **Keep the flashed stick as a rescue stick.** Here SurfOS writes to the stick it boots

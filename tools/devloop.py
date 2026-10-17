@@ -368,6 +368,7 @@ FAT_PART = re.compile(r'^part (?:mbr|gpt) (?:FAT|EFI system|basic data)')
 # (driver/bdev.c): a stick the boot files were copied onto, whose partition GRUB's development entry looks at first,
 # when it holds MARKER (tools/stick.py install writes it; boot/grub-usb.cfg looks for it)
 BOOT_VOLUME = ('boot drive: writable', 'mounted (boot drive)')
+BOOT_READONLY = 'boot drive: read-only'         # the same behind its write-protect switch
 MARKER = 'boot/ONE-STICK.txt'
 
 
@@ -388,6 +389,10 @@ def data_stick(rows, name=None):
     partition is FAT, the partition GRUB's development entry looks at next; or, when no such disk is there, the one
     USB disk with no partition table at all (mounting it says whether it is FAT). Never chosen by its name or size:
     usb0 and usb1 change places from one boot to the next."""
+    locked = [r for r in rows if r['bus'] == 'usb' and r['status'] == BOOT_READONLY]
+    if locked:
+        raise DevloopError(f'{locked[0]["name"]}, the volume SurfOS was started from, is write-protected: slide the '
+                           f'stick\'s switch to unlocked (GRUB would start its surfos-dev before any other stick\'s)')
     vols = [r for r in rows if r['bus'] == 'usb' and r['status'] in BOOT_VOLUME]
     if len(vols) > 1:
         raise DevloopError('more than one volume says SurfOS was started from it (%s): two sticks with the same FAT '
@@ -396,7 +401,8 @@ def data_stick(rows, name=None):
         disk = disk_row(rows, vols[0])
         if name and name != disk['name']:
             raise DevloopError(f'GRUB starts the development build on the stick SurfOS was started from ({disk["name"]}) '
-                               f'before any other: a build on {name} would not run. Deploy without --stick')
+                               f'before any other, when that stick holds {MARKER}: a build on {name} would not run '
+                               f'then. Deploy without --stick')
         return disk, vols[0]
     disks = [r for r in rows if not r['part'] and r['bus'] == 'usb' and 'protected' not in r['status']
              and 'read-only' not in r['status']]
@@ -548,6 +554,9 @@ def deploy(s, kernel, initrd, build_id, port=TELNET_PORT, rx_port=RX_PORT, net=N
     """the build onto the data stick through session s, then the reboot into it: the new session"""
     row, dev = data_stick(parse_lsblk(s.check('lsblk')), stick)
     disk = row['name']
+    if dev['status'] in BOOT_VOLUME and b'bootvol=' not in kernel:
+        say('note: this kernel is from before 10/17/26: it does not know the stick it starts from, so under it fdisk '
+            'and mkfs would be allowed on that stick')
     say(('the stick SurfOS was started from' if dev['status'] in BOOT_VOLUME else 'data stick') +
         f': {disk} ({row["label"] or "no model"}, {row["size"]}), ' +
         (f'its partition {dev["name"]} ({dev["size"]})' if dev is not row else 'no partition table'))
