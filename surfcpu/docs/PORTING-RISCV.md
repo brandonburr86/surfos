@@ -587,6 +587,16 @@ over a file looked over the cache's 1024 buffers twice, and an rm walked its fil
 own directory block (in the data area on FAT32: +0.5 million cycles, 9.7 %, on the full card's rm of a
 few thousand clusters) (bcache-review.txt section 24).
 
+Since audit B34-B38 (counted the same way, before = 42a45d4): every workload above sends the same
+requests and blocks, and the host's CPU time is the same within the noise of a loaded Mac
+(bcache-review.txt section 29). A copy under way (B12) keeps a record on its writer's stack, and
+setting aside or dropping a block looks at those records (none most of the time); struct buf's new
+flag fits in its padding. On SurfCPU (42a45d4's kernel against this one, the same simulator and ROM):
+test-os-persist's write run 0.21 % more cycles, its reboot run 0.24 %, test-os-faults' full card
+0.20 % and its refusing card 0.37 % fewer (the card-detect task meeting the removal one 200 ms look
+sooner; 0.11 % more without those steps); SurfBoot loads a package 1.1 KB larger (+0.13 million
+cycles), and each command is within 0.2 % (bcache-review.txt section 31).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being

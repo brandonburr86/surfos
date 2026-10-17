@@ -139,7 +139,9 @@ with timed waits that end at their time, a census of lost clusters and a wait du
 B30, B31's bookkeeping, B32, `bdirty_blocks()` and B33 for the block the copy waits for, and found no cycle behind round
 fs-fix-4's watchdog) and fixed; every one is **verified** by `tests/host/test_fatfs.c` (P1-P3 under the IDs below, and
 scenarios of the fixes' own: B36b, B37), each failing on 42a45d4. The threaded and randomized tests also check, at every
-write the disk stores, that no named file shows another file's data (each data block carries its file's tag).
+write the disk stores, that no named file shows another file's data (each data block carries its file's tag): the
+threaded one catches B34 through a streamer's truncate in its third `make unittest` setting (3 of 16 runs on 42a45d4,
+3 of 16 with only B34's check disabled, none of 24 now).
 `surfcpu/docs/evidence/os/bcache-review.txt` section 25 has the numbers:
 
 | ID | Where | Problem | Fix |
