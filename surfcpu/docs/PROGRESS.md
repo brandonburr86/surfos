@@ -614,3 +614,34 @@ ddr-3 built five candidates, every gate passing on each
 
   fs-fix-4 is fixing them, the reviewer's scenarios becoming tests.
 
+### 2026-10-17: the cause of the board faults, fixed in the flow
+
+* ddr-3 found it by comparing every FASM feature of seven builds. nextpnr routed ordinary nets
+  through unused BUFGCTRL route-through pips (I0 → O), onto a global clock line and back into
+  logic.
+  * The chip database lists the path; Project X-Ray marks it "always".
+  * The FASM configures no buffer for it, so the round trip and LVS see a wire. On the silicon
+    the nets never arrived.
+* How that explains each failing build:
+  * **92a2b51 seed 1** had seven route-throughs into the EX stage: the branch-target adder, ALU
+    decode, and the `ex_insn`, `mem_tval` and `trap_epc` registers. Hence a trap no correct core
+    can raise.
+  * **69ee491 seed 3** had one, into the shifter's bits 20/21, and every symptom is a shift
+    through it: `%x` printing, the walking-one test, FENCE.I's mask, and lane 0's leveling
+    compare.
+* The fix: the flow now routes with a chip database without the 32 BUFGCTRL route-through pips.
+  * It is generated from the image's own generator. Run unchanged, the generator reproduces the
+    image's databases byte for byte, and the fixed databases' SHA-256 hashes are checked.
+  * `gclkcheck` fails any build that drives a global line from an unconfigured BUFGCTRL, or a
+    clock line into a data input. Its self-test is on `make test-flow`.
+  * Merged as the commit after 98d6460.
+* **On the board, both failing placements**, rebuilt with only the database changed (same
+  netlists, placements, ROMs and seeds), **pass all 572 checks**, DDR included
+  ([evidence](evidence/physical/ddr-routethrough-fix-2026-10-16.txt)).
+* Every open-flow bitstream built before this fix is suspect until rebuilt or checked by
+  gclkcheck. The board's SurfBoot DDR build (92a2b51) and the e396177 builds are clean. The
+  passing seed 1 at 69ee491 had one route-through, into the timer's MSIP flip-flop, which
+  happened to carry its signal.
+* This is a defect in the open toolchain's chip database that any openXC7 user can hit, and it
+  is worth reporting upstream (the owner's call).
+
