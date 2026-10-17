@@ -401,7 +401,10 @@ B26: counted by each sync for itself), so one bad block does not hold back its n
 sync returns 0 only when every block that was dirty when it began reached the card (B12; before,
 after 8 rounds of another task's writing it returned 0 with a directory block still dirty), and
 gives up on such a block once syncs have waited 10 s for its hold (B18: a task killed with
-buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
+buffers in hand left every later sync hanging; B39: a kill or Ctrl+C cuts a sync's long waits short,
+and a task inside the cache or holding a volume's lock is counted, `fs_hold`: the kill that waited
+2 s comes once it is out, never in the middle, where it left a copy's record on the dead task's stack
+and blocks marked as copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
@@ -413,7 +416,10 @@ an operation that needs an order point fails while they refuse, and B20: so does
 that file, whose first order point must not write the replaced entry ahead of them; B26: another
 task's sync waits for them while they are set aside, B33: but not one writing a block from a copy that
 needs one: it lets that block go and looks again; B34: and a copy is written only when nothing
-it needed was set aside or dropped since it was taken, else it is taken again). Since B28 the
+it needed was set aside or dropped since it was taken, else it is taken again; B41: spoiled only by a
+block not set aside before it was taken, and only when its own block changed since, taken again as
+long as it takes and ended when another task's write paid the sync's debt, so rm traffic alone no
+longer fails a sync; B40: also when umount gives a block up, `binvalidate()`). Since B28 the
 bytes nobody will read (a part cut off past the end of a write that stopped, a gap of zeros
 given up, B36: a folder's new cluster given back) are dropped, never written, and hold no order
 point, table point (B37) or sync back while their clusters wait to be freed (B35: one another
@@ -427,7 +433,10 @@ made). A write that fails leaves the file's size as it was (B23: a gap of zeros 
 included). Clusters given back while the card refused (B25: a cut-back's; B30: a failed mkdir's
 new folder, once something of its name was written) wait to be freed until a sync that began
 after them works; 64 such chains can wait (B31), one more is said lost on the console and again
-at unmount (fsck.fat frees it), and the volume stays marked as not cleanly unmounted (B38).
+at unmount (fsck.fat frees it), and the volume stays marked as not cleanly unmounted (B38; B42: also
+through SurfOS's own next mount and unmount, until a checker clears it; B43: clusters a free could
+not give back, the FAT unreadable in the middle of the chain, are counted and said likewise, and the
+rm whose name is off the card says 0; B44: FAT12 has no such mark, and its unmount says so).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
