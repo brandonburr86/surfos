@@ -1615,7 +1615,9 @@ static int block_rw(struct fat_fs *fs, struct vnode *v, u32 c, u32 s, u32 so, u8
    writes grow the chain. Runs of FAT_DIRECT whole blocks or more that lie next to each other
    on the disk move straight between the device and buf, up to 64 KB a request; the rest goes
    through the cache. Holds sb->lock. The bytes done, else < 0; 10/16/26 (B23): *why (when asked) is the
-   error that stopped it short, 0 when it did not stop short. */
+   error that stopped it short, 0 when it did not stop short. 10/17/26 (B39): a kill or, in a kernel command,
+   Ctrl+C stops it between two pieces (-EINTR in *why), as the device would: a task inside the volume's lock is
+   not killed at once (fat_lock()), and a large transfer in one call would put its kill off to its end */
 static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 len, int mode, int *why) {
     struct fat_node *n = (struct fat_node *)v->priv;
     bool grow = mode != RW_READ;
@@ -1625,6 +1627,7 @@ static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 l
     while(r == 0 && done < len) {
         u32 s = within / 512, so = within % 512, left = len - done, chunk = 512 - so, nb = 0;
         u8 *p = buf ? buf + done : NULL;
+        if(done && curTask && curTask->intr && !(curTask->in_call & TC_EXIT)) { r = -EINTR; break; }
         if(!so && left >= 512) {
             r = run_blocks(fs, c, s, left / 512 < BCACHE_RUN ? left / 512 : BCACHE_RUN, grow, &nb);
             if(r) break;

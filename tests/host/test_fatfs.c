@@ -3368,6 +3368,55 @@ static void b39b(int mode) {
     sb->ops->unmount(sb);
 }
 
+/* B39c: a large write in one call, its task killed after its first request: it stops there with a short count (a
+   task inside the volume's lock is not killed at once, so the kill would wait for the whole transfer otherwise);
+   the file is what it says, the volume consistent, the task out of the file system */
+static surf_task b39c_t;
+static int b39c_kill_at, b39c_writes;
+static void b39c_hook(struct ram *r, u32 lba, u32 count) {
+    (void)r; (void)lba; (void)count;
+    if(++b39c_writes == b39c_kill_at) { b39c_t.in_call = TC_SYSCALL; b39c_t.intr |= TI_KILL; }
+}
+static void b39c(void) {
+    struct ram *x = ram_new("b39c", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    static u8 big[262144];
+    u32 used, reached;
+    int w, ok_bytes;
+    fresh("B39c: a 256 KB write in one call, its task killed after its first request");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    fill(big, sizeof(big), 391);
+    if(root->ops->create(root, "big", VN_FILE, &v) || fsync_sb(sb)) die("B39c: setup");
+    memset(&b39c_t, 0, sizeof(b39c_t));
+    b39c_writes = 0;
+    b39c_kill_at = 1;
+    x->hook = b39c_hook;
+    curTask = &b39c_t;
+    w = v->ops->write(v, 0, big, sizeof(big));
+    curTask = NULL;
+    x->hook = NULL;
+    ok_bytes = w > 0 && v->size == (u32)w;
+    vput(v);
+    if(fsync_sb(sb)) die("B39c: sync");
+    census(x, &used, &reached);
+    if(verbose) printf("      the write said %d of %u (size %u); the task inside after it %u; clusters used %u, reached %u\n", w,
+                       (u32)sizeof(big), ok_bytes ? (u32)w : 0, FS_HOLD(&b39c_t), used, reached);
+    check(w > 0 && w < (int)sizeof(big) && ok_bytes && FS_HOLD(&b39c_t) == 0,
+          "B39c: a kill stops a large write between two requests (a short count, the size what it says)");
+    {
+        static u8 back[262144];
+        struct vnode *f = lookup(root, "big");
+        int same = f && w > 0 && f->size == (u32)w && f->ops->read(f, 0, back, (u32)w) == w && !memcmp(back, big, (u32)w);
+        if(f) vput(f);
+        check(same && used == reached, "B39c: the file holds what was written, nothing lost");
+    }
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
 /**** B40 (Q4): binvalidate() (umount giving up what could not be written: vfs_umount_lost(); a mount that failed; mkfs)
       dropped every idle block of the device, dirty ones included, without spoiling the copies under way (B34 spoiled in
       baside() and discard_now() only), and left the blocks in someone's hands or under I/O: another task's sync, writing
@@ -3800,6 +3849,7 @@ int main(int argc, char **argv) {
     RUN("b38", b38());
     RUN("b39", b39());
     RUN("b39b", b39b(0); b39b(1); b39b(2));
+    RUN("b39c", b39c());
     RUN("b40", b40());
     RUN("b41a", b41(0); b41(2));
     RUN("b41b", b41(1); b41(3));
