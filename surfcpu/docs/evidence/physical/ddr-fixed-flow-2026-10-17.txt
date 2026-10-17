@@ -1,0 +1,90 @@
+The standard DDR builds of the fixed open flow on the board (the integrator's own captures)
+Built in the main worktree at 0bcadbc (clean) with the chip database without BUFGCTRL route-throughs; every gate passed;
+surfcpu_arty_a7_ddr: gclkcheck: 7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+surfcpu_arty_a7_ddr_bramdiag: gclkcheck: 7 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
+Loaded with the standard commands: make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=<design>.
+
+== surfcpu_arty_a7_ddr_bramdiag (sha256 4fcb9be998afdf02...)
+  
+  SurfCPU BRAM diagnostics 1.0.0 (build 0bcadbcf)
+  board Arty A7-100T (0x100), SoC 0.2.0, memory map 2, sys 25000000 Hz, timebase 1000000 Hz
+  bitstream build 0bcadbcf flags 0, features ff, DDR status 14 size 256 MiB
+  identity                           ok (7 checks)
+  ALU, immediates, x0                ok (33 checks)
+  M extension                        ok (23 checks)
+  branches and jumps                 ok (9 checks)
+  loads and stores                   ok (8 checks)
+  CSRs and counters                  ok (30 checks)
+  scratch RAM (March C-)             (56 KiB) ok (49 checks)
+  text RAM (cells 2400-4095)         ok (1 checks)
+  exceptions, each recovered         ok (34 checks)
+  interrupts, timer and WFI          (10 timer ticks in 10186 us) ok (7 checks)
+  FENCE.I, code written to RAM       ok (2 checks)
+  DDR initialization (DDR_STATUS.SWINIT), read leveling:
+    lane 0: bitslip 2, delay 16 (window +-8)
+    lane 1: bitslip 2, delay 16 (window +-8)
+    229 ms
+  DDR initialization                 ok (3 checks)
+  DDR calibration                    ok (1 checks)
+  DDR data lines                     ok (192 checks)
+  DDR byte lanes                     ok (9 checks)
+  DDR address lines and aliases      ok (54 checks)
+  DDR boundaries                     ok (98 checks)
+  DDR patterns                       (1024 KiB in full, 4096 blocks sampled) ok (2 checks)
+  DDR sustained copies               (4 x 256 KiB copied and checked, 720 KiB/s) ok (4 checks)
+  code running from DDR              ok (6 checks)
+  
+  BRAMDIAG: PASS (572 checks)
+  
+  UART echo: type; each character comes back with its code. Ctrl-R runs the diagnostics again.
+
+== surfcpu_arty_a7_ddr, SurfBoot 1.1.0 (sha256 9b8fb500aa0e02e3...), the owner's card with SurfOS 22cbdc9a
+  
+  SurfBoot 1.1.0 (build 0bcadbcf), the SurfCPU boot ROM
+  soc: Arty A7-100T (0x100), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 0bcadbcf
+  ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  ddr: calibrated after 187 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  sd: SDHC/SDXC, 29.7 GiB; ready after 11 ms; SPI 6250 kHz, data CRC checked
+  fat32: partition 1 (type 0x0c) at sector 8192, 32768-byte clusters, 973584 clusters, label "SURFOS"
+  boot: /BOOT/SURFOS.BIN
+  boot: loading 379 KiB .....
+  boot: SurfOS 1.0.0 build 22cbdc9a: 388740 bytes in 2 fragments, read in 2054 ms
+  boot: load 0x80000000, entry 0x80000000, mem_size 1242768, ISA IM_Zicsr_Zifencei; payload CRC 0x2db948e5 matches (card and DDR)
+  boot: no /BOOT/CMDLINE.TXT; empty command line
+  boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  
+  SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  Memory: kernel 0x80000000-0x8012f68f, DMA heap 0x80130000-0x8022ffff, kernel heap 0x80230000-0x8effffff (237 MB)
+  Booting SurfOS Kernel.....
+  
+  
+  Interrupt Initialization
+  *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  *Interrupts Enabled
+  
+  Delays: spin on mtime at 1000000 Hz (no calibration)
+  
+  Serial Console
+  *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  *receive interrupt, source 0
+  *DONE
+  +GPIO: LEDs, switches 0x5, buttons; LD4 is the heartbeat
+  +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +SD: sd0: SDHC 29 GB, SD32G rev 8.5, manufacturer 0x03 'SD', serial 67375102, made 2026-06, CRC checked; read-only (sd=rw on the command line writes)
+  +PART: sd0p1: MBR partition 1, blocks 8192-62333951 (29G), type 0c FAT32 LBA
+  
+  Drivers: serial gpio ps2kbd sdcard
+  
+  File Systems
+  +FAT32: sd0p1: label SURFOS, 973584 clusters of 32768 bytes, 7607 FAT sectors x 2, data at block 16384; 973447 free (FSInfo)
+  +VFS: sd0p1 mounted on /sd0p1 (fat, read-only)
+  *DONE
+  
+  Timer
+  *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  
+  
+  Brandon Burr's SurfOS
+  Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  SURF ≋#> 

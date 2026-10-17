@@ -644,4 +644,13 @@ ddr-3 built five candidates, every gate passing on each
   happened to carry its signal.
 * This is a defect in the open toolchain's chip database that any openXC7 user can hit, and it
   is worth reporting upstream (the owner's call).
+* `make check` passes with the fix merged (0bcadbc, 26 minutes).
+* The standard 100T DDR builds, made in the main worktree with the fixed flow (0bcadbc), pass
+  every gate. gclkcheck reports 7 global buffers configured and 0 route-throughs in each.
+  * On the board, `surfcpu_arty_a7_ddr_bramdiag` passes all 572 checks.
+  * `surfcpu_arty_a7_ddr` (SurfBoot 1.1.0) calibrates the DDR3L and boots SurfOS from the
+    owner's card to its shell.
+  * Evidence: [evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt).
+* From now on the board runs these builds, loaded with the standard commands, and no longer
+  from a track's worktree.
 
