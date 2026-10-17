@@ -671,6 +671,19 @@ a regression through the real flow, and one gap is closed:
   fields; it now computes them as XAPP888 does, so LiteDRAM's 320 MHz clock at 90 degrees (the
   DQS strobes: DELAY_TIME 1, PHASE_MUX 2) is checked in every build, and a wrong phase fails.
 
+**On the board (round ddr-4):** of five placements of the DDR diagnostics, two failed although
+they passed every gate (92a2b51 seed 1: a trap no correct core can raise at the first printed
+character; 69ee491 seed 3: shifts through one ALU input wrong, so hexadecimal printed backwards,
+the walking one at bit 20, FENCE.I's patch and lane 0's leveling compare failed), while seeds 1
+and 2 at 69ee491 passed all 572 checks, DDR included. Both failing placements, and no working
+one but seed 1 (whose one such route fed a flip-flop the tests exercised without fault), had
+nextpnr route ordinary nets through unused global buffers onto the clock network: in the first
+into the CPU's EX stage, in the second into that ALU input. The DDR PHY was not involved (its
+199 cells sit at the same sites in every seed; lane 0's leveling compares one byte with a
+right shift by 16, lane 1's by 8 and 24). The flow now uses a chip database without those
+route-throughs and its clock check fails any trace of them; the two failing netlists rebuilt
+that way keep their placement (OPEN-FLOW.md 6.8, docs/evidence/flow/bufg-routethrough.txt).
+
 ### 10.4 Simulation of the DDR top
 
 `make board-ddr-sim BOARD=<board>` (`sim/board/ddr_top_sim.sh`, sim/board/tb_netlist.v from the

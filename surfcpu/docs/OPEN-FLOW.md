@@ -120,7 +120,7 @@ which a list absorbs. Only the DDR designs use one (section 6.7); a list never r
 | round trip (`bit2fasm`, `fasmcheck.py`) | the bitstream decoded back against the routed FASM, bit by bit | the assembly wrote exactly what nextpnr chose; every difference is a connection without bits, an all-clear default or the STEPDOWN that `fasm2frames` spreads to a bank as Vivado does | anything the database itself gets wrong (same database both ways) |
 | block RAM (`fasm2netlist`, `bramcheck.py`) | initial contents decoded from the bitstream against the netlist, block for block | SurfBoot's ROM would arrive intact (as far as prjxray-db's bit positions are right) | |
 | LVS (`tileverilog`, `bramwe.py`, `lvs_equiv`) | the routed FASM read into a fabric netlist by an independent tile model, each RAMB18E1 byte write enable read from the site pins the silicon reads it from (with every other pin it ties to that enable checked), proved equal to the synthesized netlist register by register | place, route and FASM writing kept the logic | MMCM/PLL (not modelled), block RAM and DSP internals (cut at their pins), the clock tree (assumed) |
-| clocks (`cmtcheck.py`) | every MMCM/PLL divider field and every output's phase fields (DELAY_TIME, PHASE_MUX, MX) in the FASM against AMD's XAPP888 algorithm, itself checked against register values Vivado produced; the parameters read as Yosys writes them (a constant as its bits, at any width) | the clock managers are configured as Vivado would | duty cycles other than 50 % and phases of fractional dividers (reported unchecked) |
+| clocks (`cmtcheck.py`, `gclkcheck.py`) | every MMCM/PLL divider field and every output's phase fields (DELAY_TIME, PHASE_MUX, MX) in the FASM against AMD's XAPP888 algorithm, itself checked against register values Vivado produced; the parameters read as Yosys writes them (a constant as its bits, at any width); and the routed FASM for any net on the global clock network: a clock line driven by an unconfigured BUFGCTRL, logic into one, a clock line into a data input (section 6.8) | the clock managers are configured as Vivado would; no ordinary net rides the clock network | duty cycles other than 50 % and phases of fractional dividers (reported unchecked) |
 | simulation (demo only) | the synthesized netlist with Yosys's `cells_sim.v` under the RTL testbench | synthesis kept the behaviour (the UART line, the reset) | |
 
 None of these can show whether Project X-Ray's database is right for this silicon, whether the
@@ -332,6 +332,52 @@ for 1.35 V DDR3L, although its XDC reader ignores `INTERNAL_VREF`. Whether LiteD
 (ISERDESE2, IDELAYE2 and IDELAYCTRL, IOBUFDS for DQS, termination, read leveling) builds and
 works is untested. Evidence: [evidence/flow/ddr-pins.txt](evidence/flow/ddr-pins.txt).
 
+### 6.8 Global buffers as route-throughs: ordinary nets on the clock network
+
+**Round ddr-4 (2026-10-16).** Two of five placements of `surfcpu_arty_a7_ddr_bramdiag` failed
+on the board while passing every check here, LVS included: 92a2b51 seed 1 trapped at its first
+printed character with a register dump no correct core can produce (mcause 0 with an odd mtval
+on a load), and 69ee491 seed 3 printed hexadecimal numbers backwards, failed the scratch RAM's
+walking one at bit 20, a patched instruction in FENCE.I and DDR read leveling on lane 0 only.
+Seeds 1 and 2 at 69ee491 passed all 572 checks; SurfBoot's DDR build and every build without
+DDR work. Comparing every FASM feature of the seven builds, tile coordinates removed, the two
+failing ones share nothing that the five working ones lack except one construct: **ordinary
+nets routed through unused global buffers onto the clock network**. The chip database lists
+each BUFGCTRL's I0 -> O as a route-through pseudo pip (Project X-Ray: "always"; the generator
+keeps it, `include_pip` filters only logic, CE and TFB route-throughs), so the router may take a
+net from the fabric into a free BUFGCTRL (`CLK_BUFG_BUFGCTRLn_I0 <- CLK_BUFG_IMUXk`, the input
+mux's all-clear state), onto a global line (`CLK_BUFG_CK_GCLKm <- BUFGCTRLn_O`), through the
+clock rows and back into logic through an interconnect GFAN wire (`GFANn <- GCLK_*`). The FASM
+then configures no buffer site (no `IN_USE`, CE0 and S0 left inverted), the round trip agrees
+(no bits to differ), and LVS reads the route-through with the same database as a wire.
+
+92a2b51 seed 1 had seven such routes (BUFGCTRL 4 and 10 to 15) into eight inputs of the core's
+EX stage: the branch-target adders (`ex_pc` + `ex_imm`, bits 10 and 12), ALU-operation decode,
+and the `ex_insn`, `mem_tval` and `trap_epc` registers, which is what an impossible trap needs.
+69ee491 seed 3 had one: BUFGCTRL13, GCLK29, into one input of the ALU shifter's first stage for
+bits 20 and 21. Every symptom of that board run is a shift through there: `fmt_vformat` decides
+whether a conversion is numeric with `0x121021 >> (c - 'd')`, a shift by 20 for `x` (so `%x` took
+the string path: digits in buffer order, spaces for zeros, `%u` fine); the walking one is
+`1 << 20`; FENCE.I's patch masks the instruction with `slli 12; srli 12`; read leveling compares
+lane 0's second byte with `t >> 16` and lane 1's with shifts by 8 and 24. Of the five working
+builds four have no such route; seed 1 at 69ee491 has one, into the timer's MSIP flip-flop,
+which the interrupt test set and cleared correctly, so a route-through can pass a signal. Which
+ones do was not determined: the flow makes none now.
+
+**The fix:** tools/openxc7-build.sh places and routes with a chip database regenerated by the
+image's own generator without these 32 pips (devenv/openxc7/chipdb-gen.py; with
+`--keep-bufg-rt` it writes the image's `chipdb-xc7a100t.bin` byte for byte), built on the first
+use and kept in `build/openxc7/chipdb/<image tag>/`, its SHA-256 checked against
+devenv/openxc7/chipdb.sha256. A real BUFG is a placed cell and routes through its own pins, so
+clocks are untouched. The two failing netlists rebuilt with it keep their placement exactly
+(`placement.json` identical), route the eight and the one net in the fabric, and pass every
+check. **The check:** `gclkcheck.py` in the clock check fails a build on any clock line driven
+by an unconfigured BUFGCTRL, logic into one, or a clock line into a data input; run on the
+seven builds it finds exactly the three with route-throughs. The chip database still has other
+site route-throughs: the clock rows' BUFHCE (every clock uses them), the I/O tiles' ILOGIC,
+OLOGIC, IDELAY and IOB pass-throughs (every pin uses them), PHASER_IN and BUFR; none was seen
+carrying an ordinary net. Evidence: [evidence/flow/bufg-routethrough.txt](evidence/flow/bufg-routethrough.txt).
+
 ## 7. Option B: Vivado in an x86-64 container on this Mac
 
 Tested without Vivado ([evidence/flow/amd64-rosetta.txt](evidence/flow/amd64-rosetta.txt)).
@@ -393,6 +439,8 @@ USB-UART at 115200 8N1:
 | `devenv/openxc7/cmtcheck.py` | MMCM/PLL divider and phase check, with `--self-test` and `--table` |
 | `devenv/openxc7/synthcheck.py` | synthesis-against-RTL check, with `--self-test` |
 | `devenv/openxc7/bramwe.py` | the RAMB18E1 write enables of the LVS proof, with `--self-test` |
+| `devenv/openxc7/chipdb-gen.py`, `chipdb.sha256` | the chip database without BUFGCTRL route-throughs and its SHA-256 (section 6.8) |
+| `devenv/openxc7/gclkcheck.py` | no ordinary net on the global clock network, with `--self-test` (section 6.8) |
 | `devenv/openxc7/report.py` | `timing.txt` and `utilization.txt` |
 | `devenv/openxc7/demo/` | flow_demo and flow_features (RTL, testbenches, XDC) |
 | `devenv/openxc7/test/` | the Yosys DSP reproducer, the DDR3 pin experiment, and the probes of the checker fixes (`bram_we_sdp.v`, `bram_we_tdp.v`, `bram_we_tdpb.v`, `pll_sized.v`, `lvs_bram_*`, `cmt_phase_inner.sh`) |
