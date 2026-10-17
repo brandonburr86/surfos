@@ -1,24 +1,24 @@
 SurfCPU flow evidence: the open flow's checks on the cases round ddr-3 found them misreading
 (tools/openxc7-checks-test.sh; devenv/openxc7/bramwe.py, synthcheck.py, cmtcheck.py; docs/OPEN-FLOW.md).
-Generated on 2026-10-16 at fd759e9f0ef0, image surfcpu-openxc7:2026-10-15.
+Generated on 2026-10-17 at 5793b4f97754, image surfcpu-openxc7:2026-10-15.
 Result: PASS
 
 == 1. LVS and block RAM write enables
 bram_we_sdp: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS, clocks none in the design
-  104 proved, 0 differ, 0 unknown   (0.00994525s)
+  104 proved, 0 differ, 0 unknown   (0.00860783s)
   re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[1] from pin 2 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE2), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE1 (SDP 36-bit write)
   re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[2] from pin 4 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE4), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE2 (SDP 36-bit write)
   re-read BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3] from pin 6 (BRAM_L_X6Y175_BRAM_RAMB18_WEBWE6), not BRAM_L_X6Y175_BRAM_RAMB18_WEBWE3 (SDP 36-bit write)
   bramwe: 1 block RAM(s), 3 enable(s) re-read, 0 difference(s)
 ok    bram_we_sdp: LVS passes
 bram_we_tdp: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, round trip PASS, block RAM PASS, LVS PASS, clocks none in the design
-  98 proved, 0 differ, 0 unknown   (0.00418475s)
+  98 proved, 0 differ, 0 unknown   (0.00381558s)
   re-read BRAM_L_X6Y175_RAMB18_Y1 WEA[1] from pin 2 (BRAM_L_X6Y175_BRAM_RAMB18_WEA2), not BRAM_L_X6Y175_BRAM_RAMB18_WEA1 (write A 18, write B <=9)
   bramwe: 1 block RAM(s), 1 enable(s) re-read, 0 difference(s)
 ok    bram_we_tdp: LVS passes
   raw: proof on the extractor's own netlist: exit 1
   raw:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
-  raw:   103 proved, 1 differ, 0 unknown   (0.00844479s)
+  raw:   103 proved, 1 differ, 0 unknown   (0.00889458s)
   pair: lvs_bram_mutate: WEBWE7 now routed from INT_L_X6Y177_FAN_L5 (WEBWE0's route)
   pair:   DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 7 (CLBLM_R_X3Y175_CLBLM_M_AMUX) is not pin 6's (INT_L_X6Y177_GND_WIRE): WEBWE[3] reaches the block on pins [6, 7] (SDP 36-bit write)
   pair:   bramwe: 1 block RAM(s), 3 enable(s) re-read, 1 difference(s)
@@ -26,7 +26,7 @@ ok    bram_we_tdp: LVS passes
   byte3:   bramwe: 1 block RAM(s), 3 enable(s) re-read, 0 difference(s)
   byte3: proof on the corrected netlist: exit 1
   byte3:     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
-  byte3:   103 proved, 1 differ, 0 unknown   (0.00920492s)
+  byte3:   103 proved, 1 differ, 0 unknown   (0.00853404s)
 ok    the extractor's own one-to-one reading fails the proof on WEBWE[3]
 ok    a pin pair that disagrees is a difference
 ok    byte 3 really enabled while the netlist ties it to 0 fails the proof
@@ -50,6 +50,8 @@ pll_sized: openxc7-build.sh exit 0; checks: synthesis PASS, bitstream PASS, roun
     CLKOUT2_DIVIDE 5: matches XAPP888
     CLKOUT3_DIVIDE 5, phase 90: matches XAPP888
   cmtcheck: 39 fields compared, 0 counters differ from XAPP888, 0 unchecked: PASS
+  
+  gclkcheck: 4 global buffer(s) configured, 0 route-through(s), 0 fabric input(s) into unconfigured buffers, 0 clock-to-data use(s)
 ok    LiteDRAM's PLL dividers read as 16, 8, 20 and 5 and match XAPP888
 ok    the 90-degree output's phase is checked and matches XAPP888 (DELAY_TIME 1, PHASE_MUX 2)
   phase-mux: cmtcheck exit 1; CLKOUT3_DIVIDE 5, phase 90: MISMATCH PHASE_MUX 3 (XAPP888: 2)
@@ -62,7 +64,7 @@ bram_we_tdpb: openxc7-build.sh exit 1; checks: synthesis PASS, bitstream PASS, r
     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[1]
     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[2]
     DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE[3]
-  117 proved, 3 differ, 0 unknown   (0.00526617s)
+  117 proved, 3 differ, 0 unknown   (0.00442542s)
   DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 1 (CLBLL_L_X4Y174_CLBLL_LL_AMUX) is not pin 0's (CLBLM_R_X3Y175_CLBLM_M_AQ): WEBWE[0] reaches the block on pins [0, 1] (write A 18, write B 18)
   DIFFER  BRAM_L_X6Y175_RAMB18_Y1 WEBWE pin 3 (CLBLL_L_X4Y174_CLBLL_LL_AMUX) is not pin 2's (CLBLM_R_X3Y175_CLBLM_M_AQ): WEBWE[1] reaches the block on pins [2, 3] (write A 18, write B 18)
   bramwe: 1 block RAM(s), 2 enable(s) re-read, 2 difference(s)
