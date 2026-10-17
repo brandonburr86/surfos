@@ -171,8 +171,9 @@ multi-block write (CMD25) stores the blocks before the one it refuses, USB mass 
 pieces and ATA its sectors one by one, so a clean copy could hold what the device no longer did: a
 file read one thing until the cache made room and then another, with no write between. Now the
 clean copies of a refused run are dropped (one a reader holds then is taken out of the table and
-dropped when let go): what is read afterwards is what the device holds. A dirty copy keeps its
-bytes (what the file system holds; the next sync writes them over whatever the device has).
+dropped when let go): what is read of them afterwards is what the device holds. A dirty copy keeps
+its bytes (what the file system holds, and what is read: the device may hold the refused request's
+bytes for that block until the next sync writes the cache's over them).
 
 10/16/26 (audit B26): B13 and B16 under several tasks. B13's count of the requests a device refused
 was kept in the device for the sync call that counted last, so making room or another task's sync
@@ -182,6 +183,12 @@ aside were no sync's debt, so another task's sync could return 0 while an rm's o
 aside, and the rm then failed and put it back, not written: a block set aside is now the debt of
 every other task's sync (the device records whose operation set its blocks aside: one at a time,
 under the volume's lock), which waits for it as for a hold (B18: 10 s at most, then not written).
+A sync of every device counts the requests of the first TALLY_DEVS (8) devices it meets; it asks the
+others with no early stop (each block at most twice in the call all the same).
+
+10/16/26 (audit B28): bdirty_blocks() lists a device's dirty blocks, failed or not: a file system drops
+or sets aside every dirty block of the clusters it frees or cuts off, not only those that failed
+(fs/fat.c); fs/fat.c's B32 keeps blocks set aside for one order point only.
 */
 
 #include <surfos/types.h>
@@ -217,7 +224,9 @@ static u64 changes;                             /* 10/16/26 (B12): the number of
 static int evict_write(struct buf *b);
 static int room(struct bdev *dev);
 #define RUN_BLOCKED 1                           /* write_run(): nothing tried: the order or a holder forbids it now (B7) */
-#define TALLY_DEVS 8                            /* B26: the devices a sync call counts requests of (tally()) */
+#define TALLY_DEVS 8                            /* B26: the devices a sync call counts requests of (tally()); a sync of every
+                                                   device that meets more asks the others without a count: no early stop
+                                                   for them, each block still asked at most twice in the call */
 struct tally {                                  /* 10/16/26 (B26): a sync call's requests of each device */
     struct bdev *dev[TALLY_DEVS];
     u16 refused[TALLY_DEVS], taken[TALLY_DEVS];
@@ -1142,6 +1151,25 @@ u_int bfailed_blocks(struct bdev *dev, u32 *lbas, u_int max) {
     for(i = 0; i < BCACHE_BLOCKS && dev->bc_failed; i++) {
         struct buf *b = &bufs[i];
         if(b->dev == dev && b->valid && b->dirty && b->wfail) {
+            if(n < max) lbas[n] = b->lba;
+            n++;
+        }
+    }
+    mutex_unlock(&bcache_lock);
+    return n;
+}
+
+/* 10/16/26 (B28): every dirty block of dev, failed or not, set aside or not (up to max of them, into lbas): a
+   file system that frees clusters, or cuts a chain off, drops or sets aside its own among them (their bytes are
+   nobody's any more). How many there are (at most BCACHE_BLOCKS); a look over the cache only when dev has some */
+u_int bdirty_blocks(struct bdev *dev, u32 *lbas, u_int max) {
+    u_int n = 0;
+    int i;
+    if(!dev) return 0;
+    mutex_lock(&bcache_lock);
+    for(i = dirty_count(dev) ? 0 : BCACHE_BLOCKS; i < BCACHE_BLOCKS; i++) {
+        struct buf *b = &bufs[i];
+        if(b->dev == dev && b->valid && b->dirty) {
             if(n < max) lbas[n] = b->lba;
             n++;
         }
