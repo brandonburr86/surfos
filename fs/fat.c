@@ -44,8 +44,9 @@ and written to the card by the next sync that worked). 10/16/26 (B22): not quite
 device may store the blocks of a refused request before the one it refused (an SD
 card's CMD25, USB mass storage's 32 KB pieces, ATA's sectors), so such a write may also
 have changed, on the device, bytes of the file in the request it stopped in (up to 64 KB
-past what it returned; the cache then shows what the device holds); the file's size grew
-by the bytes it returned only (B23). An overwrite in place (append, or a
+past what it returned: a block of them the cache held clean is read from the device
+afterwards; one it held dirty keeps the cache's bytes, which the next sync writes over
+the device's); the file's size grew by the bytes it returned only (B23). An overwrite in place (append, or a
 write into a file's existing bytes) can still leave old and new bytes mixed: FAT32
 has no journal (surfcpu/docs/CARD.md, "Writing from SurfOS"). It is an order, not
 atomicity: nothing here is power-fail atomic.
@@ -109,7 +110,7 @@ blocks of every cluster it frees. Other failed blocks still hold an order point 
 block refuses, an operation that needs one (rm, mv, truncate, mkdir, a file growing into another
 FAT sector) fails with EIO unless the refusing blocks are those it frees; writes of data go on,
 up to the device's share. (B20: a mv over that file fails while they refuse; B21: all of them,
-not the first 16.)
+not the first 16; B28: every dirty block of those clusters, failed or not.)
 
 10/16/26 (audit B17): no EIO from an operation that took place, nothing left by one that failed.
 rename pointed a moved directory's ".." last, after the old name was gone, and said EIO when that
@@ -156,8 +157,8 @@ again).
 order point between (B7's first narrow case): the cut and the frees went out in a later sync in the
 order of their FAT sectors, and a card pulled between them held a chain running into a freed cluster
 (the threaded test found it). They now wait for a sync begun after the cut that works (an order
-point, fat_sync(), unmount); their failed blocks are dropped first (past the end of the file). Of
-the two narrow cases above, FAT12's straddling entries are left.
+point, fat_sync(), unmount); their failed blocks are dropped first (past the end of the file; B28: all
+their dirty blocks). Of the two narrow cases above, FAT12's straddling entries are left.
 
 10/16/26 (audit B27): an undo puts back only what it saved. A truncate to a smaller size put the short
 entry back (B5) also when entry_get() had not read it: 32 bytes of the stack went over the file's
@@ -165,9 +166,38 @@ directory entry once the block read again (the file renamed to junk, its cluster
 the directory at it, and the names after it went). The saved entry starts zeroed, and goes back only when
 update_entry() changed the one in the cache; a rename puts ".." back only when set_dotdot() changed it.
 
+10/16/26 (audit B28): the bytes of a chain nobody will read again are never owed. B16 set aside only the
+failed blocks of a chain about to lose its last reference, and B25 dropped only the failed blocks of a part
+cut off before its order point: one of it that failed IN that order point stayed while its chain waited to
+be freed, and every later order point and sync owed it, EIO for as long as it refused, with no rm to help
+(it was in no file's chain any more); a gap of zeros given up (B23), dirty and never tried, fed it, and a
+chain freed at once (trim_chain(), a file that had none) left its untried blocks to fail later. Now, failed
+or not: the dirty blocks of a part cut off or given back (trim_chain(), a failed mkdir's cluster: B30) are
+dropped before its order point, again when that fails, and before each later order point and sync of the
+volume while the chain waits to be freed; those of a chain an rm, a truncate or a mv over a file takes away
+are set aside for its order point and dropped once it worked (the operation neither writes nor waits for
+them: one never tried that refused in it failed the rm once); fat_free_chain() drops those of every cluster
+it frees. Exactly: once the operation that gives a chain up has run, no sync owes a dirty block of it, but
+for one a task held or was writing at that moment (a reader, another task's sync, the cache making room):
+that one is written as any other, an order point that cannot write it fails (an rm then says EIO, nothing
+changed, and the next rm works), and one of a waiting chain is dropped by the next order point or sync.
+
 10/16/26 (audit B29): an undo that could not be done makes the volume read-only (B24) only when there was a
 change to undo: an update_entry() or set_dotdot() that could not read its block changed nothing, and the
 put-back, which would not read it either, is not tried.
+
+10/16/26 (audit B30): a mkdir that fails after something of its name was written frees the new directory's
+cluster once the slots put back are on the disk (a chain waiting as in B25, its blocks dropped: B28): another
+task's sync may have written the name, and a free reaching the disk first (tables go before entries) left the
+name pointing at a free cluster. One that wrote nothing of its name frees it at once, as before.
+
+10/16/26 (audit B31): 64 chains can wait to be freed (B25 had 8, and lost the ninth without a word); one more
+is said lost on the console, until the volume is checked, and the unmount says how many clusters are so.
+
+10/16/26 (audit B32): blocks set aside for an order point are aside for that order point only: collected
+first, set aside right before it, dropped or put back right after. B16 kept them aside until the chain was
+freed; another task's sync owes them (B26) and waits for them, 10 s at most, and a long chain's free outlasted
+that (the sync said "an operation that does not end").
 */
 
 #include <surfos/types.h>
@@ -205,7 +235,7 @@ put-back, which would not read it either, is not tried.
 #define FSINFO_TRAIL  0xAA550000
 #define FAT16_CLEAN 0x8000          /* FAT[1]: set = cleanly unmounted */
 #define FAT32_CLEAN 0x08000000
-#define PENDING_MAX 8               /* 10/16/26 (B25): chains cut off, freed once the cut is on the disk */
+#define PENDING_MAX 64              /* 10/16/26 (B25): chains cut off, freed once the cut is on the disk (B31: 8 before) */
 
 struct fat_node;
 struct fat_fs;
@@ -235,6 +265,7 @@ struct fat_fs {
     u32 pending[PENDING_MAX];       /* 10/16/26 (B25): the first clusters of chains trim_chain() cut off while */
     u32 pending_no[PENDING_MAX];    /*      the device refused, each with its number (pend_added then), freed */
     u32 npending, pend_added;       /*      once a sync begun after it worked (the cut is on the disk then) */
+    u32 lost_clusters;              /* 10/16/26 (B31): clusters no pending place was left for (unmount says so) */
 };
 
 struct fat_node {
@@ -519,11 +550,14 @@ found:
 }
 
 static bool free_pending(struct fat_fs *fs, u32 upto);
+static void drop_pending(struct fat_fs *fs);
 
 /* 10/16/26 (B3): what this operation changed so far is on the disk before what it changes next
    (the cache writes data, tables, entries in that order; taking away needs entries first).
-   10/16/26 (B25): once one works, the chains trim_chain() cut off while the device refused are freed */
+   10/16/26 (B25): once one works, the chains trim_chain() cut off while the device refused are freed;
+   10/16/26 (B28): it owes none of their blocks */
 static int fat_order_point(struct fat_fs *fs) {
+    if(fs->npending) drop_pending(fs);
     if(bsync(fs->dev)) return -EIO;
     free_pending(fs, fs->pend_added);
     return 0;
@@ -535,16 +569,16 @@ static int fat_table_point(struct fat_fs *fs) {
     return bsync_order(fs->dev, BORDER_TABLE) ? -EIO : 0;
 }
 
-/* 10/16/26 (B21): the device's failed blocks, sorted (kalloc'd, *n of them, and n bytes after them for
-   aside_failed()'s marks); NULL when it has none, or there is no memory for the list (then nothing is set
-   aside or dropped: an order point waits for them, EIO while they refuse, as before B16) */
-static u32 *failed_list(struct fat_fs *fs, u32 *n) {
-    u32 want = bfailed_blocks(fs->dev, NULL, 0), got, gap, i, j, v, *l;
+/* 10/16/26 (B21; B28): the device's dirty blocks, failed or not, sorted (kalloc'd, *n of them, and n bytes after
+   them for aside_collect()'s marks); NULL when it has none, or there is no memory for the list (then nothing is set
+   aside or dropped: an order point writes them and waits for them, EIO while one refuses, as before B16) */
+static u32 *dirty_list(struct fat_fs *fs, u32 *n) {
+    u32 want = bdirty_blocks(fs->dev, NULL, 0), got, gap, i, j, v, *l;
     *n = 0;
     while(want) {
         if(!(l = (u32 *)kalloc(want * (sizeof(u32) + 1)))) return NULL;
-        got = bfailed_blocks(fs->dev, l, want);
-        if(got > want) { kfree(l); want = got; continue; }  /* more failed meanwhile (another task's sync) */
+        got = bdirty_blocks(fs->dev, l, want);
+        if(got > want) { kfree(l); want = got; continue; }  /* more meanwhile (another task's writes) */
         if(!got) { kfree(l); return NULL; }
         for(gap = got / 2; gap; gap /= 2) {                  /* a shell sort: BCACHE_BLOCKS of them at most */
             for(i = gap; i < got; i++) {
@@ -569,30 +603,56 @@ static u32 first_at(const u32 *l, u32 n, u32 lo) {
     return a;
 }
 
-/* 10/16/26 (B16): a freed cluster's blocks that failed to write are dropped (their bytes will never be
-   read; kept, they would hold the device's later blocks back as a refusing one: bcache.c, B12-B14) */
-static void discard_failed(struct fat_fs *fs, u32 c, const u32 *failed, u32 nf) {
+/* 10/16/26 (B16; B28): the dirty blocks of cluster c (of the n in l) are dropped, failed or not: the cluster is
+   free, or nothing names it any more, so their bytes will never be read. Kept, a failed one would hold the
+   device's later blocks back as a refusing one (bcache.c, B12-B14), and one never tried would be written to a
+   cluster nobody has, and could fail there */
+static void drop_cluster(struct fat_fs *fs, u32 c, const u32 *l, u32 n) {
     u32 lo = clus_lba(fs, c), i;
-    for(i = first_at(failed, nf, lo); i < nf && failed[i] < lo + fs->spc; i++) bdiscard(fs->dev, failed[i]);
+    for(i = first_at(l, n, lo); i < n && l[i] < lo + fs->spc; i++) bdiscard(fs->dev, l[i]);
 }
 
 /* the clusters of the chain from c on are free. 10/16/26 (B21): a chain that runs back into itself (a
-   damaged volume) ends at the first cluster that is free already: each is counted once */
+   damaged volume) ends at the first cluster that is free already: each is counted once. 10/16/26 (B28): the
+   dirty blocks of every cluster it frees are dropped, failed or not (B16 dropped the failed ones only) */
 static int fat_free_chain(struct fat_fs *fs, u32 c) {
-    u32 n = 0, next, nf, *failed = failed_list(fs, &nf);
+    u32 n = 0, next, nl, *l = dirty_list(fs, &nl);
     int r = 0;
     while(!is_eoc(fs, c) && n++ < fs->nclusters) {
         if(fat_get(fs, c, &next) != 0) { r = -EIO; break; }
         if(!next) break;                                     /* free already */
         if(fat_set(fs, c, 0) != 0) { r = -EIO; break; }
-        if(nf) discard_failed(fs, c, failed, nf);
+        if(nl) drop_cluster(fs, c, l, nl);
         if(c < fs->next_free) fs->next_free = c;
         if(fs->free != FREE_UNKNOWN) fs->free++;
         fs->fsinfo_dirty = true;
         c = next;
     }
-    kfree(failed);
+    kfree(l);
     return r;
+}
+
+/* 10/16/26 (B28): the dirty blocks of the chain from c on are dropped: it is cut off past the end of its file
+   (or given up whole, as a gap of zeros that did not get its bytes: B23), so its bytes will never be read. The
+   walk ends once every dirty block of the device's data area was looked at, or after as many clusters as the
+   volume has */
+static void drop_chain(struct fat_fs *fs, u32 c) {
+    u32 nl, steps = 0, next, left, i, *l = dirty_list(fs, &nl);
+    u8 *done = l ? (u8 *)(l + nl) : NULL;
+    if(done) memset(done, 0, nl);
+    left = nl - first_at(l, nl, fs->data_lba);
+    while(left && c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
+        u32 lo = clus_lba(fs, c);
+        for(i = first_at(l, nl, lo); i < nl && l[i] < lo + fs->spc; i++) {
+            if(done[i]) continue;                            /* (a chain that runs back into itself) */
+            done[i] = 1;
+            left--;
+            bdiscard(fs->dev, l[i]);
+        }
+        if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) break;
+        c = next;
+    }
+    kfree(l);
 }
 
 /* 10/16/26 (B25): the chains trim_chain() cut off while the device refused its order point, those added
@@ -614,10 +674,50 @@ static bool free_pending(struct fat_fs *fs, u32 upto) {
     return freed;
 }
 
-/* 10/16/26 (B16; B21): the failed blocks of a chain set aside for an order point (aside_failed()) */
+/* 10/16/26 (B28): the dirty blocks of the chains waiting to be freed are dropped (their bytes are nobody's),
+   before each order point and sync of the volume. Those who give a chain up drop its blocks (drop_chain());
+   this takes one a task held or was writing then (a block under I/O stays: bdiscard()), which a sync would
+   owe, and a refusing device would fail every order point with it, the chain never freed (sb->lock) */
+static void drop_pending(struct fat_fs *fs) {
+    u32 i;
+    for(i = 0; i < fs->npending; i++) drop_chain(fs, fs->pending[i]);
+}
+
+/* how many clusters the chain from c on has (as far as the volume has clusters) */
+static u32 chain_length(struct fat_fs *fs, u32 c) {
+    u32 n = 0, next;
+    while(c >= 2 && c < fs->nclusters + 2 && n < fs->nclusters) {
+        n++;
+        if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) break;
+        c = next;
+    }
+    return n;
+}
+
+/* 10/16/26 (B25; B30, B31): the chain from c on, which nothing names in the cache any more, is freed once a sync
+   that begins after now has worked (what took its last reference away is on the disk then). Its dirty blocks
+   are the caller's to drop (drop_chain()). With PENDING_MAX chains waiting already, it stays allocated with
+   nothing pointing at it until the volume is checked: said on the console, and again at unmount (B25 lost the
+   ninth without a word) */
+static void pend_chain(struct fat_fs *fs, u32 c) {
+    u32 n;
+    if(fs->npending < PENDING_MAX) {
+        fs->pending[fs->npending] = c;
+        fs->pending_no[fs->npending++] = ++fs->pend_added;
+        return;
+    }
+    n = chain_length(fs, c);
+    fs->lost_clusters += n;
+    kprintf("+FAT%i: %s: %lu cluster%s given back while the card refused writes cannot wait to be freed (%u wait"
+            " already): lost until the volume is checked (fsck.fat)\n", fs->type, fs->dev->name, (u_long)n,
+            n == 1 ? "" : "s", PENDING_MAX);
+}
+
+/* 10/16/26 (B16; B21; B28, B32): the dirty blocks of a chain about to lose its last reference on the disk,
+   set aside for the order point that takes that reference away (aside_collect(), aside_begin(), aside_end()) */
 struct aside {
-    u32 *lba;                       /* the device's failed blocks, sorted (failed_list()); NULL: none */
-    u8 *set;                        /* (after them) 1 for each one the chain's walk set aside */
+    u32 *lba;                       /* the device's dirty blocks, sorted (dirty_list()); NULL: none */
+    u8 *set;                        /* (after them) 1 for each one of the chain's */
     u32 n;
 };
 
@@ -625,56 +725,54 @@ struct aside {
    deleted or emptied, a cut), the blocks of the chain from cluster c on whose writes failed are set aside:
    they are older than the entry or cut, so the order point would wait for them for as long as the device
    refuses them, and once the chain is free their bytes will never be read. aside_end() puts them back when
-   the order point fails (nothing changed) or drops them once the chain is free. Only when the device has
-   failed blocks: a walk of the chain then (sb->lock). 10/16/26 (B20): only once nothing in the cache names
-   them any more (the entry deleted, emptied or cut back): what the order point writes then covers none of
-   them. 10/16/26 (B21): every failed block of the device is looked at (B16 took the first 16: an rm of a file
-   with more said EIO), each is set aside once (a chain that ran back into itself, on a damaged volume, had
-   B16 write past its array of 16 blocks), and the walk ends after as many clusters as the volume has */
-static void aside_failed(struct fat_fs *fs, u32 c, struct aside *a) {
+   the order point fails (nothing changed) or drops them once the chain is free. 10/16/26 (B20): only once
+   nothing in the cache names them any more (the entry deleted, emptied or cut back): what the order point
+   writes then covers none of them. 10/16/26 (B21): every block of the device is looked at, each is set aside
+   once, and the walk ends after as many clusters as the volume has. 10/16/26 (B28): every dirty block of the
+   chain, failed or not: the order point neither waits for nor writes a byte of the chain it takes away (one
+   never tried that refused in it failed the operation, once). 10/16/26 (B32): collected here, with nothing set
+   aside yet; aside_begin() sets them aside right before the order point and aside_end() ends it right after
+   (B16 set them aside during the walk and kept them so until the chain was freed: another task's sync waits
+   for a block set aside, 10 s at most, and a long chain's walk and free could take longer). The walk only when
+   the device has dirty blocks, and only until each of its data area's is placed (sb->lock) */
+static void aside_collect(struct fat_fs *fs, u32 c, struct aside *a) {
     u32 steps = 0, left, next, i;
     a->set = NULL;
-    a->lba = failed_list(fs, &a->n);
+    a->lba = dirty_list(fs, &a->n);
     if(!a->lba) return;
     a->set = (u8 *)(a->lba + a->n);
     memset(a->set, 0, a->n);
-    left = a->n;
+    left = a->n - first_at(a->lba, a->n, fs->data_lba);
     while(left && c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
         u32 lo = clus_lba(fs, c);
         for(i = first_at(a->lba, a->n, lo); i < a->n && a->lba[i] < lo + fs->spc; i++) {
             if(a->set[i]) continue;
             a->set[i] = 1;
             left--;
-            baside(fs->dev, a->lba[i], true);
         }
         if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) break;
         c = next;
     }
 }
 
-static void aside_end(struct fat_fs *fs, struct aside *a, bool freed) {
+static void aside_begin(struct fat_fs *fs, struct aside *a) {
+    u32 i;
+    for(i = 0; i < a->n; i++) if(a->set[i]) baside(fs->dev, a->lba[i], true);
+}
+
+/* the order point is over: worked (done: nothing names the chain any more, its clusters are freed next) and
+   the blocks are dropped, or failed and they are put back */
+static void aside_end(struct fat_fs *fs, struct aside *a, bool done) {
     u32 i;
     for(i = 0; i < a->n; i++) {
         if(!a->set[i]) continue;
-        if(freed) bdiscard(fs->dev, a->lba[i]);
+        if(done) bdiscard(fs->dev, a->lba[i]);
         else baside(fs->dev, a->lba[i], false);
     }
     kfree(a->lba);
     a->lba = NULL;
     a->set = NULL;
     a->n = 0;
-}
-
-/* 10/16/26 (B25): the failed blocks of the chain from c on are dropped: it is cut off, past the end of its
-   file (their bytes will never be read) */
-static void drop_failed(struct fat_fs *fs, u32 c) {
-    u32 nf, steps = 0, next, *failed = failed_list(fs, &nf);
-    while(nf && c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
-        discard_failed(fs, c, failed, nf);
-        if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next)) break;
-        c = next;
-    }
-    kfree(failed);
 }
 
 /* the free clusters, counted in one pass over the first FAT, read 64 KB at a time */
@@ -1454,6 +1552,7 @@ static void trim_chain(struct fat_fs *fs, struct fat_node *n, u32 size, u32 firs
             /* 10/16/26 (B11): the file lets go of it once its head is free; a chain that could not be
                freed from its head stays the file's, for its next write (B19: also when the head's entry
                cannot be read: it lets go only of a head it sees free) */
+            drop_chain(fs, c);                               /* 10/16/26 (B28): its bytes are nobody's */
             if(fat_free_chain(fs, c) == 0 || (fat_get(fs, c, &v) == 0 && v == 0)) n->first = 0;
             return;
         }
@@ -1465,11 +1564,11 @@ static void trim_chain(struct fat_fs *fs, struct fat_node *n, u32 size, u32 firs
         c = next;
     }
     if(fat_get(fs, c, &next) != 0 || is_eoc(fs, next) || fat_set(fs, c, fs->eoc) != 0) return;
-    drop_failed(fs, next);
+    drop_chain(fs, next);                                    /* 10/16/26 (B28): past the end: nobody's bytes */
     if(fat_order_point(fs) == 0) fat_free_chain(fs, next);
-    else if(fs->npending < PENDING_MAX) {
-        fs->pending[fs->npending] = next;
-        fs->pending_no[fs->npending++] = ++fs->pend_added;
+    else {
+        drop_chain(fs, next);                                /* (one another task's sync was writing, refused) */
+        pend_chain(fs, next);
     }
 }
 
@@ -1552,18 +1651,16 @@ static int fat_truncate(struct vnode *v, u32 size) {
             r = update_entry(fs, n, 0, true);
             changed = r == 0;
             if(r == 0 && old) {
-                aside_failed(fs, old, &aside);               /* 10/16/26 (B16) */
+                aside_collect(fs, old, &aside);              /* 10/16/26 (B16, B28, B32) */
+                aside_begin(fs, &aside);
                 r = fat_order_point(fs);
-                if(r) aside_end(fs, &aside, false);
+                aside_end(fs, &aside, r == 0);
             }
             if(r) {                                          /* B5: it cannot go on: nothing changed */
                 n->first = old;
                 v->size = oldsize;
                 if(changed && entry_put(fs, n, raw) != 0) fat_damaged(fs, "a truncate that failed");   /* B24 */
-            } else if(old) {
-                r = fat_free_chain(fs, old);
-                aside_end(fs, &aside, true);
-            }
+            } else if(old) r = fat_free_chain(fs, old);
         }
     } else {
         u32 keep = (size + fs->cluster_bytes - 1) / fs->cluster_bytes, c = n->first, next, oldsize = v->size;
@@ -1584,19 +1681,17 @@ static int fat_truncate(struct vnode *v, u32 size) {
                 changed = r == 0;
             }
             if(!r) {
-                aside_failed(fs, next, &aside);              /* 10/16/26 (B16) */
+                aside_collect(fs, next, &aside);             /* 10/16/26 (B16, B28, B32) */
+                aside_begin(fs, &aside);
                 r = fat_order_point(fs);
-                if(r) aside_end(fs, &aside, false);
+                aside_end(fs, &aside, r == 0);
             }
             if(r) {
                 bool lost = cut && fat_set(fs, c, next) != 0;
                 v->size = oldsize;
                 if(changed && entry_put(fs, n, raw) != 0) lost = true;
                 if(lost) fat_damaged(fs, "a truncate that failed");   /* B24 */
-            } else {
-                r = fat_free_chain(fs, next);
-                aside_end(fs, &aside, true);
-            }
+            } else r = fat_free_chain(fs, next);
         } else if(!r) { v->size = size; r = update_entry(fs, n, size, true); }
     }
     mutex_unlock(&v->sb->lock);
@@ -1654,7 +1749,14 @@ static int fat_create(struct vnode *dir, const char *name, int type, struct vnod
     }
     if(r) {                                                  /* B5: what was written of the name goes again */
         if(slots_restore(fs, undo, nundo)) fat_damaged(fs, "a create that failed");   /* B24: (the new name may */
-        else if(first) fat_free_chain(fs, first);                                     /* name the cluster: kept) */
+        else if(first && !nundo) fat_free_chain(fs, first);                           /* name the cluster: kept) */
+        else if(first) {
+            /* 10/16/26 (B30): something of the name was written: the new directory's cluster is freed once the
+               slots put back are on the disk. Another task's sync may have written the new name, and a free now
+               would reach the disk first (tables go before entries), the name there pointing at a free cluster */
+            drop_chain(fs, first);
+            pend_chain(fs, first);
+        }
     }
 out:
     mutex_unlock(&dir->sb->lock);
@@ -1693,16 +1795,14 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
     r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx, undo, &nundo);
     if(r == 0 && e.first) {
-        aside_failed(fs, e.first, &aside);                   /* 10/16/26 (B16): its refused blocks hold nothing back */
+        aside_collect(fs, e.first, &aside);                  /* 10/16/26 (B16, B28, B32): its blocks hold nothing back */
+        aside_begin(fs, &aside);
         r = fat_order_point(fs);                             /* B3: the entry gone on the disk first */
-        if(r) aside_end(fs, &aside, false);
+        aside_end(fs, &aside, r == 0);
     }
     if(r) {                                                  /* 10/16/26 (B5): it cannot go on: the name is back */
         if(slots_restore(fs, undo, nundo)) fat_damaged(fs, "an rm that failed");   /* B24 */
-    } else if(e.first) {
-        r = fat_free_chain(fs, e.first);                     /* (a failure here loses clusters: fsck.fat finds them) */
-        aside_end(fs, &aside, true);
-    }
+    } else if(e.first) r = fat_free_chain(fs, e.first);     /* (a failure here loses clusters: fsck.fat finds them) */
 out:
     mutex_unlock(&dir->sb->lock);
     return r;
@@ -1796,11 +1896,12 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     if(r == 0) r = dir_delete_entries(fs, on, src.lfn_idx, src.idx, su, &nsu);
     if(r == 0 && replace) r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx, du, &ndu);
     if(r == 0 && replace && dst.first) {                     /* the replaced entry gone before its clusters */
-        aside_failed(fs, dst.first, &aside);                 /* 10/16/26 (B16, B20): only now */
+        aside_collect(fs, dst.first, &aside);                /* 10/16/26 (B16, B20, B28, B32): only now */
+        aside_begin(fs, &aside);
         r = fat_order_point(fs);
+        aside_end(fs, &aside, r == 0);
     }
     if(r) {                                                  /* 10/16/26 (B5): it cannot go on: both names as they were */
-        aside_end(fs, &aside, false);
         lost = slots_restore(fs, du, ndu);
         lost += slots_restore(fs, su, nsu);
         lost += slots_restore(fs, nu, nnu);
@@ -1808,10 +1909,8 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
         if(lost) fat_damaged(fs, "a rename that failed");    /* B24 */
         goto out;
     }
-    if(replace && dst.first) {                               /* nothing fails after this: the rename stands */
-        fat_free_chain(fs, dst.first);                       /* (a failure loses clusters: fsck.fat finds them) */
-        aside_end(fs, &aside, true);
-    }
+    if(replace && dst.first) fat_free_chain(fs, dst.first);   /* nothing fails after this: the rename stands (a */
+                                                              /* failure loses clusters: fsck.fat finds them) */
     for(x = fs->live; x; x = x->next) {                      /* an open file or directory follows its entry */
         if(x->dir_lba == src.lba && x->dir_off == src.off) { x->dir_lba = new_lba; x->dir_off = new_off; }
     }
@@ -1920,6 +2019,7 @@ static int fat_sync(struct superblock *sb) {
     if(fs->dev->gone) { bsync(sb->dev); return -EIO; }       /* drops what can no longer be written */
     if(!sb->readonly) {
         mutex_lock(&sb->lock);
+        if(fs->npending) drop_pending(fs);                   /* 10/16/26 (B28): it owes none of their blocks */
         r = write_fsinfo(fs);
         upto = fs->pend_added;
         mutex_unlock(&sb->lock);
@@ -1939,9 +2039,11 @@ static int fat_sync(struct superblock *sb) {
    (B24) a damaged volume stays marked as not cleanly unmounted */
 static int fat_unmount(struct superblock *sb) {
     struct fat_fs *fs = (struct fat_fs *)sb->priv;
+    u32 i, lost;
     if(fs->marked && !fs->dev->gone) {
         bool ok = !fs->damaged;
         if(ok && fs->npending) {
+            drop_pending(fs);                                /* 10/16/26 (B28) */
             ok = bsync(fs->dev) == 0;
             if(ok) free_pending(fs, fs->pend_added);
         }
@@ -1950,6 +2052,12 @@ static int fat_unmount(struct superblock *sb) {
         else kprintf("+FAT%i: %s: %s, the volume stays marked as not cleanly unmounted\n", fs->type, fs->dev->name,
                      fs->damaged ? "damaged (an undo failed)" : "write errors");
     }
+    /* 10/16/26 (B31): clusters given back that could not be freed: allocated, nothing pointing at them (those that
+       waited in vain may not have reached the card at all, or still hang off a file's chain there past its size) */
+    for(lost = fs->lost_clusters, i = 0; i < fs->npending && !fs->dev->gone; i++) lost += chain_length(fs, fs->pending[i]);
+    if(lost) kprintf("+FAT%i: %s: %lu cluster%s given back while the card refused writes may stay allocated with"
+                     " nothing pointing at them: check the volume (fsck.fat frees them)\n", fs->type, fs->dev->name,
+                     (u_long)lost, lost == 1 ? "" : "s");
     kfree(fs);
     return 0;
 }
