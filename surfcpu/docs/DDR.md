@@ -26,20 +26,26 @@ it through the 256 MiB window at `0x8000_0000` (MEMORY-MAP.md). Three pieces sit
   calibration CPU of its own, and SurfCPU initializes the DDR3L and levels its read path
   through the core's control registers (the SoC's `ddrc` window; section 10.1).
 
-## Status (2026-10-16)
+## Status (2026-10-17)
 
 | Part | Simulation | Synthesis, place and route | On the board |
 |---|---|---|---|
-| `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 387 flip-flops, no vendor primitives (an open-tool estimate); in the DDR designs, placed and routed by the open flow | **pending** |
-| MIG recipe (`ip/mig/`) | the bridge is tested against a behavioural model of the MIG's user interface, not the MIG | **pending**: needs Vivado (no build host, BUILD-HOST.md); recipe dry-run only | **pending** |
-| LiteDRAM core (`ip/litedram/`): no CPU, 80 MHz (round ddr-3) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter, and SurfCPU's firmware initializes it through its registers and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, PHY included, takes the firmware's initialization and fails the leveling cleanly with no memory on its pins (sections 10.2, 10.4) | generated reproducibly, its hashes, register map and PHY settings checked; **the DDR designs pass every check of the open flow on both boards at 80 MHz** (section 10.3, BOARD.md section 8); 100 MHz does not close in nextpnr | **pending** |
-| `surf_ddr_csr` (round ddr-3) | Icarus testbench, six runs at five clock pairs, 9 of 9 mutants caught; in the whole DDR top with both cores | in the DDR designs | **pending** |
-| `firmware/common/ddrinit.c` (round ddr-3) | host model and emulator (SurfBoot and the diagnostics, lane windows, failures), RTL with LiteDRAM's controller and with the board core | in SurfBoot 1.1.0 and the BRAM diagnostics | **pending** |
-| `surf_ddr_litedram_adapter` | tested against LiteDRAM's controller; 5 of 5 mutants caught | in the DDR designs | **pending** |
+| `surf_ddr_bridge`, `surf_ddr_mailbox` | all tests pass (section 8): MIG model, LiteDRAM's controller, Icarus, 7 clock pairs, mutation check; formal proofs of the mailbox and of the bridge's SurfBus obligations | Yosys `synth_xilinx`: 247 LUTs, 387 flip-flops, no vendor primitives (an open-tool estimate); in the DDR designs, placed and routed by the open flow | **works on the board** (the owner's A7-100T, with LiteDRAM): the diagnostics' DDR tests pass through it (data lines, byte lanes, address lines and aliases, boundaries, patterns, sustained copies at 720 KiB/s, code run from DDR), and SurfOS runs from DDR through it [evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt) |
+| MIG recipe (`ip/mig/`) | the bridge is tested against a behavioural model of the MIG's user interface, not the MIG | **pending**: needs Vivado (no build host, BUILD-HOST.md); recipe dry-run only | **pending** (needs Vivado) |
+| LiteDRAM core (`ip/litedram/`): no CPU, 80 MHz (round ddr-3) | its real controller, generated from the board's configuration, passes the bridge tests through the adapter, and SurfCPU's firmware initializes it through its registers and runs the BRAM diagnostics' DDR tests in the whole board top; the exact generated core, PHY included, takes the firmware's initialization and fails the leveling cleanly with no memory on its pins (sections 10.2, 10.4) | generated reproducibly, its hashes, register map and PHY settings checked; **the DDR designs pass every check of the open flow on both boards at 80 MHz** (section 10.3, BOARD.md section 8); 100 MHz does not close in nextpnr | **works on the board** at 80 MHz (the DDR3L at 640 MT/s): initialized and read-leveled by the firmware, both lanes at bitslip 2, delay 16 (window +-8); SurfBoot calibrates in 187 ms; 256 MiB pass the diagnostics' 572 checks [evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt) |
+| `surf_ddr_csr` (round ddr-3) | Icarus testbench, six runs at five clock pairs, 9 of 9 mutants caught; in the whole DDR top with both cores | in the DDR designs | **works on the board**: the firmware's initialization and read leveling go through it (the same evidence) |
+| `firmware/common/ddrinit.c` (round ddr-3) | host model and emulator (SurfBoot and the diagnostics, lane windows, failures), RTL with LiteDRAM's controller and with the board core | in SurfBoot 1.1.0 and the BRAM diagnostics | **works on the board**: the diagnostics initialize and level the DDR3L in 229 ms, SurfBoot calibrates it in 187 ms, both lanes bitslip 2, delay 16 (window +-8) [evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt) |
+| `surf_ddr_litedram_adapter` | tested against LiteDRAM's controller; 5 of 5 mutants caught | in the DDR designs | **works on the board** (in both DDR designs, the same evidence) |
 
-Nothing here has run on an FPGA. Milestone 4's physical evidence (initialization and read
-leveling, calibration, address and data patterns, byte lanes, boundaries and aliases, sustained
-transfers, code running from DDR) is all pending (sections 10.5 and 11).
+On the owner's Arty A7-100T (2026-10-16/17) milestone 4's physical tests pass: initialization
+and read leveling, calibration, data lines, byte lanes, address lines and aliases, boundaries,
+patterns, sustained copies and code running from DDR (`BRAMDIAG: PASS (572 checks)`), and
+SurfBoot loads SurfOS into the DDR3L and starts it ([evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt),
+[SurfOS](evidence/physical/surfos-boot-2026-10-16.txt)). Two placements of the diagnostics
+first failed on the silicon because nextpnr had routed ordinary nets through unused BUFGCTRL
+route-throughs; the flow no longer does, and with that fix both pass (section 10.3, OPEN-FLOW.md
+section 6.8, [evidence](evidence/physical/ddr-routethrough-fix-2026-10-16.txt)). Still open:
+the MIG and Vivado's sign-off (section 11).
 
 ## 1. The bridge's ports
 
@@ -738,7 +744,10 @@ Shown without a board:
   with every check passing (10.3);
 * the pins against Digilent's MIG projects, and that the pin options reach the bitstream.
 
-Only the board can show:
+Only the board can show (on the owner's A7-100T the first six have been shown working,
+2026-10-16/17, as far as passing tests show them: windows of +-8 taps on both lanes at bitslip
+2, the initialization in 229 ms, the DDR tests and `BRAMDIAG: PASS (572 checks)`, then SurfOS
+loaded and run from DDR; no margins were measured, and the 35T has not been tried):
 
 * that the DDR3L initializes and that read leveling finds a window on both byte lanes (the
   BRAM diagnostics print every lane's scan: a run of 1s in one bitslip line per lane; at 320 MHz
@@ -761,13 +770,14 @@ Only the board can show:
 ## 11. Pending, and what to check first on hardware
 
 * **MIG generation, synthesis, implementation and timing closure**: blocked on a Vivado host.
-* **Physical initialization and calibration** (LiteDRAM): load `surfcpu_arty_a7_ddr_bramdiag`
-  and read the leveling scans and each lane's choice on the UART (BOARD.md section 12, steps 4
-  and 5; the owner's A7-100T is connected and has passed m1 and m3 with the SoC without DDR): a
-  window on both lanes, then `DDR calibration ok`, the DDR tests and `BRAMDIAG: PASS (572
-  checks)`.
-* **Milestone 4's physical tests** (fw track's DDR diagnostic): address and data lines, every byte
-  lane, boundaries and aliases, sustained copies, code copied from BRAM into DDR and executed.
+* **Physical initialization and calibration** (LiteDRAM): done on the owner's A7-100T with
+  `surfcpu_arty_a7_ddr_bramdiag` built by the fixed flow (BOARD.md section 12, steps 4 and 5):
+  both lanes at bitslip 2, delay 16 (window +-8), `DDR calibration ok`, the DDR tests and
+  `BRAMDIAG: PASS (572 checks)` ([evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt)).
+* **Milestone 4's physical tests**: done on the board by the BRAM diagnostics' DDR sections
+  (address and data lines, every byte lane, boundaries and aliases, sustained copies, code copied
+  from BRAM into DDR and executed); the fw track's `DDRDIAG.BIN` from the card waits for
+  milestone 5's test (PHYSICAL-TESTS.md m5).
 * The DDR part and board revision (owner): Digilent's files are for revision E.0 and the
   MT41K128M16 family.
 * The open flow at 100 MHz: LiteDRAM's controller does not close nextpnr's estimate there
