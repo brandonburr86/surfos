@@ -713,13 +713,40 @@ static void pend_chain(struct fat_fs *fs, u32 c) {
             n == 1 ? "" : "s", PENDING_MAX);
 }
 
+/* 10/16/26 (B5): a directory slot's first byte before a change, to put back when the change cannot
+   go on (the first byte says whether a slot is in use: 0x00 or 0xE5 frees it again) */
+struct slot_undo {
+    u32 lba;
+    u16 off;
+    u8 first;
+};
+#define UNDO_MAX (LFN_MAX_ENTRIES + 1)
+
 /* 10/16/26 (B16; B21; B28, B32): the dirty blocks of a chain about to lose its last reference on the disk,
    set aside for the order point that takes that reference away (aside_collect(), aside_begin(), aside_end()) */
 struct aside {
     u32 *lba;                       /* the device's dirty blocks, sorted (dirty_list()); NULL: none */
-    u8 *set;                        /* (after them) 1 for each one of the chain's */
+    u8 *set;                        /* (after them) 1 for each one of the chain's, 2 for the operation's own */
     u32 n;
 };
+
+/* 10/16/26 (B28): the directory blocks the operation itself changed (the slots of its entries, a file's entry
+   updated): they carry what its order point must write, so none is set aside, and the walk does not look for
+   them along the chain. On a FAT32 root or in a folder they are in the data area, and every rm walked its file's
+   whole chain once more for them (SurfCPU: half a million cycles for a few thousand clusters) */
+struct keep {
+    u32 lba[3 * UNDO_MAX + 1];
+    u32 n;
+};
+
+static void keep_lba(struct keep *k, u32 lba) {
+    if(k->n < sizeof(k->lba) / sizeof(k->lba[0])) k->lba[k->n++] = lba;
+}
+
+static void keep_undo(struct keep *k, const struct slot_undo *u, u32 n) {
+    u32 i;
+    for(i = 0; i < n; i++) keep_lba(k, u[i].lba);
+}
 
 /* 10/16/26 (B16): before an order point that takes the last reference to a chain off the disk (an entry
    deleted or emptied, a cut), the blocks of the chain from cluster c on whose writes failed are set aside:
@@ -734,15 +761,22 @@ struct aside {
    aside yet; aside_begin() sets them aside right before the order point and aside_end() ends it right after
    (B16 set them aside during the walk and kept them so until the chain was freed: another task's sync waits
    for a block set aside, 10 s at most, and a long chain's walk and free could take longer). The walk only when
-   the device has dirty blocks, and only until each of its data area's is placed (sb->lock) */
-static void aside_collect(struct fat_fs *fs, u32 c, struct aside *a) {
-    u32 steps = 0, left, next, i;
+   the device has dirty blocks, and only until each of its data area's is placed, but for the operation's own
+   directory blocks (k: never set aside) (sb->lock) */
+static void aside_collect(struct fat_fs *fs, u32 c, struct aside *a, const struct keep *k) {
+    u32 steps = 0, left, next, i, j;
     a->set = NULL;
     a->lba = dirty_list(fs, &a->n);
     if(!a->lba) return;
     a->set = (u8 *)(a->lba + a->n);
     memset(a->set, 0, a->n);
     left = a->n - first_at(a->lba, a->n, fs->data_lba);
+    for(j = 0; k && j < k->n; j++) {
+        i = first_at(a->lba, a->n, k->lba[j]);
+        if(i == a->n || a->lba[i] != k->lba[j] || a->set[i]) continue;
+        a->set[i] = 2;
+        if(a->lba[i] >= fs->data_lba) left--;
+    }
     while(left && c >= 2 && c < fs->nclusters + 2 && steps++ < fs->nclusters) {
         u32 lo = clus_lba(fs, c);
         for(i = first_at(a->lba, a->n, lo); i < a->n && a->lba[i] < lo + fs->spc; i++) {
@@ -757,7 +791,7 @@ static void aside_collect(struct fat_fs *fs, u32 c, struct aside *a) {
 
 static void aside_begin(struct fat_fs *fs, struct aside *a) {
     u32 i;
-    for(i = 0; i < a->n; i++) if(a->set[i]) baside(fs->dev, a->lba[i], true);
+    for(i = 0; i < a->n; i++) if(a->set[i] == 1) baside(fs->dev, a->lba[i], true);
 }
 
 /* the order point is over: worked (done: nothing names the chain any more, its clusters are freed next) and
@@ -765,7 +799,7 @@ static void aside_begin(struct fat_fs *fs, struct aside *a) {
 static void aside_end(struct fat_fs *fs, struct aside *a, bool done) {
     u32 i;
     for(i = 0; i < a->n; i++) {
-        if(!a->set[i]) continue;
+        if(a->set[i] != 1) continue;
         if(done) bdiscard(fs->dev, a->lba[i]);
         else baside(fs->dev, a->lba[i], false);
     }
@@ -1015,15 +1049,6 @@ static int dir_find_free(struct fat_fs *fs, struct fat_node *dir, u32 need, stru
         if(r) return r;
     }
 }
-
-/* 10/16/26 (B5): a directory slot's first byte before a change, to put back when the change cannot
-   go on (the first byte says whether a slot is in use: 0x00 or 0xE5 frees it again) */
-struct slot_undo {
-    u32 lba;
-    u16 off;
-    u8 first;
-};
-#define UNDO_MAX (LFN_MAX_ENTRIES + 1)
 
 /* 10/16/26 (B24): an undo that could not be done (a block it needed could not be read back): the volume
    may now name one file twice (a rename's new name left with the old one: an rm of either would free the
@@ -1651,7 +1676,9 @@ static int fat_truncate(struct vnode *v, u32 size) {
             r = update_entry(fs, n, 0, true);
             changed = r == 0;
             if(r == 0 && old) {
-                aside_collect(fs, old, &aside);              /* 10/16/26 (B16, B28, B32) */
+                struct keep k = { { 0 }, 0 };
+                keep_lba(&k, n->dir_lba);                    /* (the entry's block: update_entry()) */
+                aside_collect(fs, old, &aside, &k);          /* 10/16/26 (B16, B28, B32) */
                 aside_begin(fs, &aside);
                 r = fat_order_point(fs);
                 aside_end(fs, &aside, r == 0);
@@ -1681,7 +1708,9 @@ static int fat_truncate(struct vnode *v, u32 size) {
                 changed = r == 0;
             }
             if(!r) {
-                aside_collect(fs, next, &aside);             /* 10/16/26 (B16, B28, B32) */
+                struct keep k = { { 0 }, 0 };
+                keep_lba(&k, n->dir_lba);
+                aside_collect(fs, next, &aside, &k);         /* 10/16/26 (B16, B28, B32) */
                 aside_begin(fs, &aside);
                 r = fat_order_point(fs);
                 aside_end(fs, &aside, r == 0);
@@ -1795,7 +1824,9 @@ static int fat_unlink(struct vnode *dir, const char *name) {
     if((e.raw[11] & ATTR_DIR) && (r = dir_empty(fs, e.first)) != 0) goto out;   /* only an empty directory goes */
     r = dir_delete_entries(fs, dn, e.lfn_idx, e.idx, undo, &nundo);
     if(r == 0 && e.first) {
-        aside_collect(fs, e.first, &aside);                  /* 10/16/26 (B16, B28, B32): its blocks hold nothing back */
+        struct keep k = { { 0 }, 0 };
+        keep_undo(&k, undo, nundo);                          /* (the deleted slots' blocks) */
+        aside_collect(fs, e.first, &aside, &k);              /* 10/16/26 (B16, B28, B32): its blocks hold nothing back */
         aside_begin(fs, &aside);
         r = fat_order_point(fs);                             /* B3: the entry gone on the disk first */
         aside_end(fs, &aside, r == 0);
@@ -1896,7 +1927,12 @@ static int fat_rename(struct vnode *odir, const char *oname, struct vnode *ndir,
     if(r == 0) r = dir_delete_entries(fs, on, src.lfn_idx, src.idx, su, &nsu);
     if(r == 0 && replace) r = dir_delete_entries(fs, nn, dst.lfn_idx, dst.idx, du, &ndu);
     if(r == 0 && replace && dst.first) {                     /* the replaced entry gone before its clusters */
-        aside_collect(fs, dst.first, &aside);                /* 10/16/26 (B16, B20, B28, B32): only now */
+        struct keep k = { { 0 }, 0 };
+        keep_undo(&k, nu, nnu);                              /* (the slots it wrote and deleted) */
+        keep_undo(&k, su, nsu);
+        keep_undo(&k, du, ndu);
+        if(dotdot) keep_lba(&k, clus_lba(fs, src.first));
+        aside_collect(fs, dst.first, &aside, &k);            /* 10/16/26 (B16, B20, B28, B32): only now */
         aside_begin(fs, &aside);
         r = fat_order_point(fs);
         aside_end(fs, &aside, r == 0);
