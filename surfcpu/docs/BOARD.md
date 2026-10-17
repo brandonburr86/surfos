@@ -359,9 +359,10 @@ list, so the two cannot disagree); without it the top is exactly the HAS_DDR = 0
 
 ```sh
 make build-fpga BOARD=arty_a7_100t DESIGN=arty_a7_baseline      # milestone 1
-make build-fpga BOARD=arty_a7_100t                              # the whole SoC (needs build/fw/surfboot.mem)
+make build-fpga BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top   # the whole SoC without DDR (the default; needs build/fw/surfboot.mem)
 tools/fpga-build.sh --dry-run --design arty_a7_baseline arty_a7_35t   # or: make build-fpga ... DRY_RUN=1
 make build-fpga FLOW=openxc7 BOARD=arty_a7_35t DESIGN=arty_a7_baseline   # the open flow, on this Mac
+make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr   # SurfBoot with DDR (make litedram-gen build-rom first)
 ```
 
 `tools/fpga-build.sh` takes `FLOW` from the environment (`make build-fpga FLOW=...`) or else
@@ -653,7 +654,7 @@ a memory), and `tools/program.sh`'s cable, IDCODE, header and manifest checks.
 make program-volatile BOARD=arty_a7_100t DESIGN=arty_a7_baseline     # configuration RAM only
 make program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag   # then the SoC (section 12)
 tools/program.sh detect arty_a7_100t
-make program-volatile BOARD=arty_a7_100t CABLE_SERIAL=210319A28C7F    # with two boards on USB
+make program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr CABLE_SERIAL=210319A28C7F   # with two boards on USB
 ```
 
 `tools/program.sh` needs openFPGALoader on the Mac (`brew install openfpgaloader`, gap G3; it

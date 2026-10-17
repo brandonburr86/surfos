@@ -1,165 +1,165 @@
-# test-os-kit (rtl): 3 of 3 checks passed in 180 s
-# 2026-10-16 12:40:56 UTC, kit_test.py --set rtl, Python 3.13.5 on Linux aarch64 (the RTL system: surfsim --uart-pty; fake boards: pseudo-terminals in kit_test.py; the owner's steps answered by kit_test.py owner)
-ok   m5: board-test m5 against the RTL system: PASS in 46 s (11 checks seen by this script passed)
-ok   m8: board-test m8 against the RTL system: PASS in 119 s (18 checks seen by this script passed)
-ok   m9: board-test m9 against the RTL system: PASS in 180 s (9 checks seen by this script passed)
+# test-os-kit (rtl): 3 of 3 checks passed in 183 s
+# 2026-10-17 03:57:56 UTC, kit_test.py --set rtl, Python 3.13.5 on Linux aarch64 (the RTL system: surfsim --uart-pty; fake boards: pseudo-terminals in kit_test.py; the owner's steps answered by kit_test.py owner)
+ok   m5: board-test m5 against the RTL system: PASS in 47 s (11 checks seen by this script passed)
+ok   m8: board-test m8 against the RTL system: PASS in 124 s (18 checks seen by this script passed)
+ok   m9: board-test m9 against the RTL system: PASS in 183 s (9 checks seen by this script passed)
 
-==== m5: board-test.py m5 against the RTL system, PASS in 46 s: its evidence, up to the transcript ====
+==== m5: board-test.py m5 against the RTL system, PASS in 47 s: its evidence, up to the transcript ====
 SurfCPU acceptance test m5: SurfBoot and the card (milestone 5): the DDR diagnostic from the card, missing and invalid images
 Verdict: PASS (11 checks seen by this script passed)
 Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit-rtl/m5/port)
 Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m5/state.json)
-Date: 2026-10-16 12:37:56 UTC, 46 s
+Date: 2026-10-17 03:54:53 UTC, 47 s
 Command: /work/surfcpu/tools/board-test.py m5 --port /work/surfcpu/build/os/kit-rtl/m5/port --evidence-dir /work/surfcpu/build/os/kit-rtl/m5/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m5/state.json' --ddrdiag /work/surfcpu/build/fw/DDRDIAG.BIN --slow 10 --manifest /work/surfcpu/build/os/kit-rtl/manifest-sim.txt
-Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
 
 Build identity read from the port, and what it was compared with:
-  SurfBoot 1.0.0, ROM build 2355dba2
-  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
-    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
-  DDRDIAG.BIN build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a
-    DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+  SurfBoot 1.1.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  DDRDIAG.BIN build 1e3a2e10, 14992 bytes, payload CRC 0x36719679
+    DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 1e3a2e10, 14992 bytes, payload CRC 0x36719679)
 
-Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
-  +     0.0  card           done
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  card           done, answered at +0.0
               | On the Mac, with the SurfOS card mounted (SurfOS installed with make deploy-sd, OWNER-GUIDE.md
               | section 7), copy the DDR diagnostic next to the kernel:
               |   cp surfcpu/build/fw/DDRDIAG.BIN /Volumes/<card>/BOOT/
               | then eject the card (diskutil eject /Volumes/<card>), put it in the Arty, and press Enter.
-  +     0.0  monitor        done
-              | Load the design if it is not loaded (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top).
+  +     0.0  monitor        done, answered at +0.0
+              | Load the design if it is not loaded (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr).
               | Then hold BTN1 down, press and release RESET, and keep holding BTN1 until surfboot> appears;
               | then press Enter.
-  +    42.9  card-out       done
+  +    43.6  card-out       done, answered at +43.8
               | Take the card out of the Pmod MicroSD, then press and release RESET (no button held), then
               | press Enter.
-  +    43.6  card-in        done
+  +    44.3  card-in        done, answered at +44.3
               | Put the card back in, then press Enter.
 
 Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
   note     port /work/surfcpu/build/os/kit-rtl/m5/port opened at 115200 8N1
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
   ok       info: DDR calibrated (the DDR bitstream): ddr: status 5 (present, calibrated), size 256 MiB
   ok       info: the card is present (card: present; buttons 2)
   ok       a missing image: boot /BOOT/NOSUCH.BIN is diagnosed (NOT_FOUND) and the monitor is back
   ok       an invalid image: check /SYSTEM/SURFCARD.TXT (not a package) is diagnosed (IMG_SHORT), the monitor is back
   ok       check /BOOT/DDRDIAG.BIN: every package check passes
-  ok       DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+  ok       DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 1e3a2e10, 14992 bytes, payload CRC 0x36719679)
   ok       the DDR diagnostic booted from the card: DDRDIAG: PASS (318 checks; 2 MiB from 0x80100000)
   ok       no card: SurfBoot stopped: no card (NO_CARD), in the monitor
   ok       the card back: "card inserted: booting", SurfBoot retries by itself
 
-==== m8: board-test.py m8 against the RTL system, PASS in 119 s: its evidence, up to the transcript ====
+==== m8: board-test.py m8 against the RTL system, PASS in 124 s: its evidence, up to the transcript ====
 SurfCPU acceptance test m8: persistent files (milestone 8): OWNER-GUIDE.md section 8's CRC procedure
 Verdict: PASS (18 checks seen by this script passed)
 Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit-rtl/m8/port)
 Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m8/state.json)
-Date: 2026-10-16 12:37:56 UTC, 119 s
+Date: 2026-10-17 03:54:53 UTC, 124 s
 Command: /work/surfcpu/tools/board-test.py m8 --port /work/surfcpu/build/os/kit-rtl/m8/port --evidence-dir /work/surfcpu/build/os/kit-rtl/m8/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m8/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit-rtl/manifest-sim.txt --mount /work/surfcpu/build/os/kit-rtl/m8/mount
-Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
 
 Build identity read from the port, and what it was compared with:
-  SurfBoot 1.0.0, ROM build 2355dba2
-  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
-    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  SurfBoot 1.1.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
   SurfBoot: ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
-  SurfOS 1.0.0 build 2355dba2, 376596 bytes, payload CRC 0x9794518d
-    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
-  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation)
+  SurfOS 1.0.0 build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d
+    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
+  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation)
 
-Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
-  +     0.0  mac-file       done
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  mac-file       done, answered at +0.0
               | On the Mac, with the SurfOS card mounted (written to by SurfOS: make -C surfcpu deploy-sd
               | MOUNT=/Volumes/<card> DEPLOY_ARGS="--cmdline sd=rw"), make a file on it:
               |   printf 'made on the Mac\n' > /Volumes/<card>/USERS/DOCUMENTS/MAC.TXT
               | and press Enter (before ejecting).
-  +     0.0  to-board       done
+  +     0.0  to-board       done, answered at +0.0
               | Eject the card (diskutil eject /Volumes/<card>), put it in the Arty, and press Enter.
-  +     0.0  boot           done
-              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top), or press and release
+  +     0.0  boot           done, answered at +0.0
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr), or press and release
               | RESET if it is loaded already; hold no button. Then press Enter.
-  +    49.3  power-cycle    done
+  +    50.4  power-cycle    done, answered at +50.6
               | Power-cycle the board: unplug its USB cable, wait 5 seconds, plug it back in; then load the
               | design again (the FPGA forgets it at power-off):
-              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr
               | (or, if the board starts from its flash, just wait for it). Hold no button. Then press Enter.
-  +    84.1  to-mac         done
+  +    87.1  to-mac         done, answered at +87.2
               | Take the card out of the Arty, put it in the Mac (it mounts at /work/surfcpu/build/os/kit-rtl/m8/mount), then press Enter.
-  +    84.2  kernel-update  done
+  +    87.2  kernel-update  done, answered at +87.3
               | Install the kernel again (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject the
               | card and put it back in the Arty. Power-cycle the board: unplug its USB cable, wait 5 seconds, plug it back in; then load the
               | design again (the FPGA forgets it at power-off):
-              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top
+              |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr
               | (or, if the board starts from its flash, just wait for it). Hold no button. Then press Enter.
 
 Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
   ok       on the Mac (/work/surfcpu/build/os/kit-rtl/m8/mount, read only): MAC.TXT has CRC b0cfa011, 16 bytes
   note     port /work/surfcpu/build/os/kit-rtl/m8/port opened at 115200 8N1
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
   ok       the card is mounted read-write (sd=rw in /BOOT/CMDLINE.TXT)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
   ok       a file made on the Mac, read on the board: MAC.TXT b0cfa011 (b0cfa011 on the Mac)
-  ok       write BOARD.TXT made on the board 2026-10-16T12:37:56Z: done without a word of error
+  ok       write BOARD.TXT made on the board 2026-10-17T03:54:53Z: done without a word of error
   ok       append BOARD.TXT a second line: done without a word of error
   ok       cp MAC.TXT COPY.TXT: done without a word of error (16 bytes copied)
   ok       write MAC.TXT changed on the board: done without a word of error
-  ok       create, edit, read: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       create, edit, read: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0: safe to remove
-  ok       after a power cycle the same CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       after a power cycle the same CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0 again: safe to remove
-  ok       on the Mac (read only, /work/surfcpu/build/os/kit-rtl/m8/mount) the same CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
-  ok       after a kernel update the files keep their CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       on the Mac (read only, /work/surfcpu/build/os/kit-rtl/m8/mount) the same CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       after a kernel update the files keep their CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0 at the end: safe to remove
 
 The files and the CRCs they must have:
   MAC.TXT made on the Mac: b0cfa011 (16 bytes); then changed on the board
-    BOARD.TXT  e1df0376  (53 bytes)
+    BOARD.TXT  b1ae8e92  (53 bytes)
     COPY.TXT  b0cfa011  (16 bytes)
     MAC.TXT  f60b6140  (21 bytes)
 
-==== m9: board-test.py m9 against the RTL system, PASS in 180 s: its evidence, up to the transcript ====
+==== m9: board-test.py m9 against the RTL system, PASS in 183 s: its evidence, up to the transcript ====
 SurfCPU acceptance test m9: the standalone release (milestone 9): cold boots and a soak
 Verdict: PASS (9 checks seen by this script passed)
 Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit-rtl/m9/port)
 Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m9/state.json)
-Date: 2026-10-16 12:37:56 UTC, 180 s
+Date: 2026-10-17 03:54:53 UTC, 183 s
 Command: /work/surfcpu/tools/board-test.py m9 --port /work/surfcpu/build/os/kit-rtl/m9/port --evidence-dir /work/surfcpu/build/os/kit-rtl/m9/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit-rtl/m9/state.json' --boots 2 --minutes 1.0 --slow 10 --manifest /work/surfcpu/build/os/kit-rtl/manifest-sim.txt
-Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
 
 Build identity read from the port, and what it was compared with:
-  SurfBoot 1.0.0, ROM build 2355dba2
-  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
-    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  SurfBoot 1.1.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
   SurfBoot: ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
-  SurfOS 1.0.0 build 2355dba2, 376596 bytes, payload CRC 0x9794518d
-    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
-  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation)
+  SurfOS 1.0.0 build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d
+    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
+  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation)
 
-Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
-  +     0.0  flash          done
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  flash          done, answered at +0.0
               | Make sure the board starts from its configuration flash by itself: programmed with make -C
               | surfcpu program-flash, the Arty's JP1 (MODE) jumper on, the SurfOS card (with sd=rw in
               | /BOOT/CMDLINE.TXT) in the Pmod MicroSD. Then press Enter.
-  +     0.0  power-cycle    done
+  +     0.0  power-cycle    done, answered at +0.0
               | Cold boot 1 of 2: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
               | programming, no button held), then press Enter.
-  +    37.0  power-cycle    done
+  +    38.9  power-cycle    done, answered at +39.0
               | Cold boot 2 of 2: unplug the Arty's USB cable, wait 5 seconds, plug it back in (no
               | programming, no button held), then press Enter.
 
 Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
   note     port /work/surfcpu/build/os/kit-rtl/m9/port opened at 115200 8N1
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit-rtl/manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
-  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.19 s, a fresh boot; bitstream 2355dba2
-  ok       cold boot 2: SurfBoot, the kernel and the shell; up 0.29 s, a fresh boot; bitstream 2355dba2
-  ok       2 cold boots in a row, each one checked, all from the bitstream 2355dba2
+  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
+  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.13 s, a fresh boot; bitstream 1e3a2e10
+  ok       cold boot 2: SurfBoot, the kernel and the shell; up 0.29 s, a fresh boot; bitstream 1e3a2e10
+  ok       2 cold boots in a row, each one checked, all from the bitstream 1e3a2e10
   ok       the soak: /sd0p1 is mounted read-write (sd=rw)
   ok       the soak: 3 rounds of uptime, ps, tasks, write, cp, crc32, rm and memstat in 1.4 minutes, every CRC right, the heap checked every round, no panic and no killed task
   note     the soak: 8 tasks at each uptime
-  note     the soak: the kernel heap's use went from 144304 to 144304 bytes (between 144304 and 144304)
+  note     the soak: the kernel heap's use went from 144512 to 144512 bytes (between 144512 and 144512)

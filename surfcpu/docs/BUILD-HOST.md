@@ -16,15 +16,16 @@ port, the card tools) does not depend on it.
 |---|---|---|---|---|
 | A | **Vivado on an x86-64 Linux machine** reached over SSH (a PC at home, or a cloud VM) | yes | the machine; Vivado ML Standard (free, covers the xc7a35t and xc7a100t) installed there; an SSH key on the Mac | The brief's recommended arrangement. `make build-fpga` copies the sources there, runs the non-project TCL flow, and brings back the bitstream, reports and manifest. No passwords in the repository. |
 | B | **Vivado in an x86-64 Linux container on this Mac**, run through Docker Desktop's Rosetta emulation | no (works for many people, unsupported) | the owner's AMD account to download the installer; tens of GB of disk (about 84 GiB is free); a slow first install | Same scripts as A, run locally. Must be proven on this Mac before it is relied on. |
-| C | **Open-source flow** in an arm64 Linux container: Yosys + nextpnr-xilinx + Project X-Ray (the openXC7 toolchain) | no | nothing from AMD; a toolchain container built from pinned sources | Runs natively and fast on the Mac. Experimental: its timing analysis is approximate and the DDR3 controller would be LiteDRAM, not AMD's MIG. Must be proven on the board. |
+| C | **Open-source flow** in an arm64 Linux container: Yosys + nextpnr-xilinx + Project X-Ray (the openXC7 toolchain) | no | nothing from AMD; a toolchain container built from pinned sources | Runs natively and fast on the Mac. Experimental: its timing analysis is approximate and the DDR3 controller would be LiteDRAM, not AMD's MIG. Its bitstreams run on the owner's A7-100T (2026-10-16/17). |
 
-Status, 2026-10-16: **C works for bitstreams; none has been on a board yet.**
+Status, 2026-10-17: **C works for bitstreams, and they run on the owner's A7-100T** (the
+baseline, the SoC and both DDR designs, BOARD.md section 12).
 `make openxc7-image` builds its image once (about 6 minutes), and `make build-fpga
 FLOW=openxc7 BOARD=... DESIGN=arty_a7_baseline` builds the milestone 1 design for either
 board with every check of the flow passing (docs/OPEN-FLOW.md, docs/BOARD.md section 8). What
 it does not give: Vivado's timing signoff (nextpnr's timing is an estimate), the constraints
 nextpnr cannot read (clock-crossing bounds, I/O delays, configuration options; each build
-lists them), AMD's MIG for the DDR3L (LiteDRAM instead), and any result from the board itself.
+lists them), and AMD's MIG for the DDR3L (LiteDRAM instead).
 A and B are not set up: the board track's Vivado scripts behind `make build-fpga` are tested
 only against stand-ins.
 

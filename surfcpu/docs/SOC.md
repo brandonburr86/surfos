@@ -7,12 +7,17 @@ core and the io blocks existed, the C++ UART and DDR models and the `surfsim` ha
 track's SD card, PS/2 keyboard and VGA capture models. Owned by the soc track
 ([plans/2026-10-15-tracks.md](plans/2026-10-15-tracks.md)).
 
-**Status (2026-10-16).** Simulation: everything below passes (section 8), and the whole system
+**Status (2026-10-17).** Simulation: everything below passes (section 8), and the whole system
 runs in `surfsim`: SurfBoot loads the Arty kernel from a card image, the kernel boots to its
 shell, answers commands on the UART and on the PS/2 keyboard and draws its console on the VGA
-output, and SurfBoot falls back to `BACKUP.BIN` (section 9.2). Synthesis: Yosys estimates only,
-and the synthesized netlists simulate like the RTL (section 10); no Vivado run has happened (no
-build host). Board: nothing has run on the Arty; all physical results are **pending**.
+output, and SurfBoot falls back to `BACKUP.BIN` (section 9.2). Synthesis: Yosys estimates here,
+and the synthesized netlists simulate like the RTL (section 10); the open flow builds the whole
+SoC into bitstreams (BOARD.md section 8); no Vivado run has happened (no build host). Board: on
+the owner's Arty A7-100T, with those bitstreams loaded over JTAG, the SoC runs the BRAM
+diagnostics to PASS (203 checks; 572 with the DDR3L), and SurfBoot reads the card, calibrates
+the DDR3L and boots SurfOS to its shell over the UART (BOARD.md section 12,
+[evidence/physical/](evidence/physical/)); the PS/2 keyboard and the kernel's VGA console are
+not yet shown there.
 
 ## 1. The system
 
@@ -294,8 +299,9 @@ of the 353 KiB package (23 s simulated, 584 million cycles, measured here) and t
 which `make test-soc-system-selftest` runs on its own: `SELFTEST PASS` (35 checks ok, the FAT
 write check skipped on the read-only card) after 1.73 billion cycles (69.4 s simulated, 64 s of
 them the self test) in 505 s ([record](evidence/soc/test-soc-system-selftest.txt)).
-The decoded screen and the transcripts are kept in `build/soc/system_boot/`, the record in
-[evidence/soc/test-soc-system-boot.txt](evidence/soc/test-soc-system-boot.txt).
+The decoded screen and the transcripts are kept in `build/soc/system_boot/`, with each run's
+summary (`summary.txt`); the record of the b4717a6 run these figures come from (SurfBoot 1.0.0,
+SoC 0.1.0) is [evidence/soc/test-soc-system-boot.txt](evidence/soc/test-soc-system-boot.txt).
 
 ## 10. Synthesis estimate and post-synthesis simulation
 
@@ -337,8 +343,9 @@ files laid over it, under the ignored `build/`, removed afterwards (`make test-s
 
 ## 12. Limits and pending
 
-* Physical: nothing has run on the board. Timing closure, Vivado's BRAM inference and the
-  bitstream are pending a build host.
+* Physical: the open flow's bitstreams of the whole SoC run on the owner's A7-100T (BOARD.md
+  section 12, `docs/evidence/physical/`). Vivado's timing closure and BRAM inference are pending a
+  build host.
 * The DDR arbiter loses one cycle per DDR access (section 2).
 * The system runs are simulation with models, not the board: the card, keyboard and DDR models
   answer as the io and soc tracks wrote them, and the DDR model is not the MIG.

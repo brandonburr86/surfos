@@ -2,133 +2,133 @@ SurfCPU acceptance test m7: SurfOS from the card (milestone 7): the shell, two k
 Verdict: PASS (10 checks seen by this script passed; 1 not done or not compared)
 Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/m7/port)
 Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m7/state.json)
-Date: 2026-10-16 12:37:00 UTC, 56 s
+Date: 2026-10-17 03:53:54 UTC, 59 s
 Command: /work/surfcpu/tools/board-test.py m7 --port /work/surfcpu/build/os/kit/m7/port --evidence-dir /work/surfcpu/build/os/kit/m7/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/m7/state.json' --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
-Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
 
 Build identity read from the port, and what it was compared with:
-  SurfBoot 1.0.0, ROM build 2355dba2
-  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
-    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  SurfBoot 1.1.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
   SurfBoot: ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
-  SurfOS 1.0.0 build 2355dba2, 376596 bytes, payload CRC 0x9794518d
-    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
-  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation)
+  SurfOS 1.0.0 build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d
+    SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
+  SurfOS bootinfo: sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation)
 
-Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
-  +     0.0  card           done
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  card           done, answered at +0.0
               | Install SurfOS on the card (make -C surfcpu deploy-sd MOUNT=/Volumes/<card>), eject it, put it in
               | the Arty, and press Enter.
-  +     0.0  boot           done
-              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top), or press and release
+  +     0.0  boot           done, answered at +0.0
+              | Load the design (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr), or press and release
               | RESET if it is loaded already; hold no button. Then press Enter.
-  +    55.5  keyboard       done
+  +    58.7  keyboard       done, answered at +58.7
               | On the PS/2 keyboard, type:  echo ps2-ok  and Enter, then press Enter here.
-  +    55.9  vga            skipped
+  +    59.1  vga            skipped, answered at +59.1
               | Does the VGA monitor show the same shell: the banner and the commands just run?
 
 Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
   note     port /work/surfcpu/build/os/kit/m7/port opened at 115200 8N1
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       SurfOS 1.0.0 on the card is /work/build/riscv32/arty_a7/SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
   ok       SurfOS booted from the card to the shell (SurfBoot, the kernel read and checked, the card mounted read-write)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
-  ok       two kernel tasks make progress, sleep and wake (run 1: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
+  ok       two kernel tasks make progress, sleep and wake (run 1: task A ran 4 rounds, task B 3, in 88 ticks; both ended (status 0, 0); their rounds interleaved: ABABAAB)
   ok       two kernel tasks make progress, sleep and wake (run 2: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
   ok       uptime twice
-  ok       the uptime advances: 3.09 s then 3.72 s, ticks 309 then 372, heartbeat 6 then 7
+  ok       the uptime advances: 3.16 s then 3.78 s, ticks 316 then 378, heartbeat 6 then 7
   note     the uptime's rate not checked against the clock: --slow 10
   ok       the PS/2 keyboard types into the shell: echo ps2-ok answered ps2-ok
   skip     not observed: Does the VGA monitor show the same shell: the banner and the commands just run?
 
-Transcript (seconds since the port was opened; escape sequences and CR removed; 4416 bytes received;
+Transcript (seconds since the port was opened; escape sequences and CR removed; 4410 bytes received;
 "*": the port going away and coming back):
-  +    0.116 | 
-  +    0.117 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
-  +    0.153 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
+  +    0.114 | 
+  +    0.114 | SurfBoot 1.1.0 (build 1e3a2e10), the SurfCPU boot ROM
+  +    0.151 | soc: simulation (0xf0), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 1e3a2e10 (simulation)
   +    0.255 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
   +    0.368 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
-  +    0.427 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
-  +    0.491 | boot: /BOOT/SURFOS.BIN
-  +    0.519 | boot: loading 367 KiB .....
-  +   13.840 | boot: SurfOS 1.0.0 build 2355dba2: 376596 bytes in 1 fragment, read in 1837 ms
-  +   13.892 | boot: load 0x80000000, entry 0x80000000, mem_size 1173280, ISA IM_Zicsr_Zifencei; payload CRC 0x9794518d matches (card and DDR)
-  +   14.009 | boot: command line "ascii sd=rw"
-  +   14.031 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
-  +   14.087 | 
-  +   16.954 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
-  +   17.087 | Memory: kernel 0x80000000-0x8011e71f, DMA heap 0x8011f000-0x8021efff, kernel heap 0x8021f000-0x8effffff (237 MB)
-  +   18.344 | Booting SurfOS Kernel.....
-  +   18.411 | 
-  +   18.415 | 
-  +   18.416 | Interrupt Initialization
-  +   18.488 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
-  +   18.652 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
-  +   18.826 | *Interrupts Enabled
-  +   20.249 | 
-  +   20.251 | Delays: spin on mtime at 1000000 Hz (no calibration)
-  +   20.497 | 
-  +   20.498 | Serial Console
-  +   20.560 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
-  +   20.777 | *receive interrupt, source 0
-  +   20.854 | *DONE
-  +   20.875 | +GPIO: LEDs, switches 0x0, buttons; LD4 is the heartbeat
-  +   21.038 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
-  +   21.422 | +SD: sd0: SDHC 36 MB, SURFC rev 1.0, manufacturer 0x5c 'SF', serial 0badf00d, made 2026-10, CRC checked; read-write (sd=rw on the command line writes)
-  +   21.919 | +PART: sd0p1: MBR partition 1, blocks 2048-73727 (35M), type 0c FAT32 LBA
-  +   22.247 | 
-  +   22.248 | Drivers: serial gpio ps2kbd sdcard
-  +   22.348 | 
-  +   22.349 | File Systems
-  +   24.576 | +FAT32: sd0p1: label SURFOS, 70528 clusters of 512 bytes, 560 FAT sectors x 2, data at block 1152; 69783 free (FSInfo)
-  +   25.199 | +VFS: sd0p1 mounted on /sd0p1 (fat)
-  +   25.591 | *DONE
-  +   25.904 | 
-  +   26.202 | Timer
-  +   26.528 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
-  +   27.281 | 
-  +   27.593 | 
-  +   27.895 | Brandon Burr's SurfOS
-  +   28.258 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
-  +   29.295 | SURF ~#> bootinfo
-  +   29.716 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
-  +   30.200 |   boot information: SurfBoot 1.0.0 (2355dba2), version 1, CRC 0x7ed5f161 ok
-  +   30.730 |   board id 0x00f0 (simulation), SoC 0.1.0, memory map 1, sys clock 25000000 Hz, timebase 1000000 Hz
-  +   31.620 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
-  +   32.122 |   image 0x80000000 + 1173280 bytes; boot device SD, FAT32 at LBA 2048
-  +   32.611 |   command line: 'ascii sd=rw'
-  +   33.017 |   sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation), features 0xff
-  +   33.942 |   DDR status 0x5, 256 MB; pixel clock 25173611 Hz
-  +   34.402 |   screen: surf_video text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 5691 cells written, 21 hardware scrolls
-  +   35.361 | SURF ~#> tasks
-  +   35.868 |     started task A (pid 8) and task B (pid 9)
-  +   36.324 |     task B: round 1 of 3, tick 127, sleeping 170 ms
-  +   36.774 |     task A: round 1 of 4, tick 122, sleeping 100 ms
-  +   37.842 |     task A: round 2 of 4, tick 149, sleeping 100 ms
-  +   38.297 |     task B: round 2 of 3, tick 151, sleeping 170 ms
-  +   38.985 |     task A: round 3 of 4, tick 165, sleeping 100 ms
-  +   39.890 |     task B: round 3 of 3, tick 178, sleeping 170 ms
-  +   40.346 |     task A: round 4 of 4, tick 182, sleeping 100 ms
-  +   41.616 |     task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0)
-  +   42.143 | SURF ~#> tasks
-  +   42.644 |     started task A (pid 10) and task B (pid 11)
-  +   43.129 |     task B: round 1 of 3, tick 221, sleeping 170 ms
-  +   43.587 |     task A: round 1 of 4, tick 217, sleeping 100 ms
-  +   44.706 |     task A: round 2 of 4, tick 244, sleeping 100 ms
-  +   45.162 |     task B: round 2 of 3, tick 248, sleeping 170 ms
-  +   45.864 |     task A: round 3 of 4, tick 260, sleeping 100 ms
-  +   46.780 |     task B: round 3 of 3, tick 273, sleeping 170 ms
-  +   47.237 |     task A: round 4 of 4, tick 276, sleeping 100 ms
-  +   48.451 |     task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0)
-  +   48.975 | SURF ~#> uptime
-  +   49.379 |     up 3.09 s (309 ticks at 100 Hz), 8 tasks, 1 timers pending
-  +   49.866 |     mtime 6866333 at 1000000 Hz; heartbeat 6
-  +   50.308 | SURF ~#> uptime
-  +   53.723 |     up 3.72 s (372 ticks at 100 Hz), 8 tasks, 1 timers pending
-  +   54.206 |     mtime 7497232 at 1000000 Hz; heartbeat 7
-  +   54.647 | SURF ~#> echo kbd-ready
-  +   55.091 | kbd-ready
-  +   55.497 | SURF ~#> echo ps2-ok
-  +   55.898 | ps2-ok
-  +   56.229 | SURF ~
+  +    0.430 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +    0.495 | boot: /BOOT/SURFOS.BIN
+  +    0.531 | boot: loading 383 KiB .....
+  +   14.738 | boot: SurfOS 1.0.0 build 1e3a2e10: 392404 bytes in 1 fragment, read in 1915 ms
+  +   14.790 | boot: load 0x80000000, entry 0x80000000, mem_size 1246432, ISA IM_Zicsr_Zifencei; payload CRC 0xbea3e98d matches (card and DDR)
+  +   14.911 | boot: command line "ascii sd=rw"
+  +   14.934 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   14.990 | 
+  +   18.145 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   18.282 | Memory: kernel 0x80000000-0x801304df, DMA heap 0x80131000-0x80230fff, kernel heap 0x80231000-0x8effffff (237 MB)
+  +   19.586 | Booting SurfOS Kernel.....
+  +   19.655 | 
+  +   19.659 | 
+  +   19.660 | Interrupt Initialization
+  +   19.734 | *mtvec 0x80000084 (direct mode), 16 exception causes handled
+  +   19.907 | *surf_intc at 0x10002000, 5 level sources, enabled 0x00, pending 0x00
+  +   20.087 | *Interrupts Enabled
+  +   21.563 | 
+  +   21.564 | Delays: spin on mtime at 1000000 Hz (no calibration)
+  +   21.816 | 
+  +   21.818 | Serial Console
+  +   21.880 | *surf_uart at 0x10000000, 115207 baud (divisor 217 at 25000000 Hz), intc source 0
+  +   22.105 | *receive interrupt, source 0
+  +   22.184 | *DONE
+  +   22.206 | +GPIO: LEDs, switches 0x0, buttons; LD4 is the heartbeat
+  +   22.375 | +PS2: surf_ps2 at 0x10005000, intc source 1: scan code set 2, translated to set 1 for the keyboard code
+  +   22.774 | +SD: sd0: SDHC 36 MB, SURFC rev 1.0, manufacturer 0x5c 'SF', serial 0badf00d, made 2026-10, CRC checked; read-write (sd=rw on the command line writes)
+  +   23.285 | +PART: sd0p1: MBR partition 1, blocks 2048-73727 (35M), type 0c FAT32 LBA
+  +   23.626 | 
+  +   23.628 | Drivers: serial gpio ps2kbd sdcard
+  +   23.730 | 
+  +   23.731 | File Systems
+  +   26.171 | +FAT32: sd0p1: label SURFOS, 70528 clusters of 512 bytes, 560 FAT sectors x 2, data at block 1152; 69752 free (FSInfo)
+  +   26.903 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +   27.361 | *DONE
+  +   27.711 | 
+  +   28.019 | Timer
+  +   28.358 | *machine timer at 1000000 Hz, 100 Hz tick (10000 units each)
+  +   29.141 | 
+  +   29.461 | 
+  +   29.775 | Brandon Burr's SurfOS
+  +   30.156 | Version 1.0 on a RISC-V (SurfCPU on the Arty A7), 2004-2026
+  +   30.665 | SURF ~#> bootinfo
+  +   31.102 |   board: arty_a7, handoff a0 0, a1 0x0001f000, a2 0x49465253
+  +   31.592 |   boot information: SurfBoot 1.1.0 (1e3a2e10), version 1, CRC 0x002ac811 ok
+  +   32.141 |   board id 0x00f0 (simulation), SoC 0.2.0, memory map 2, sys clock 25000000 Hz, timebase 1000000 Hz
+  +   33.061 |   RAM 0x80000000 + 256 MB (calibrated, SurfBoot's quick test passed)
+  +   33.582 |   image 0x80000000 + 1246432 bytes; boot device SD, FAT32 at LBA 2048
+  +   34.100 |   command line: 'ascii sd=rw'
+  +   34.517 |   sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation), features 0xff
+  +   36.048 |   DDR status 0x5, 256 MB; pixel clock 25173611 Hz
+  +   36.521 |   screen: surf_video text, 80x30 cells of 8x16, 640x480 at a 25173611 Hz pixel clock; 5691 cells written, 21 hardware scrolls
+  +   37.525 | SURF ~#> tasks
+  +   38.057 |     started task A (pid 8) and task B (pid 9)
+  +   38.508 |     task A: round 1 of 4, tick 122, sleeping 100 ms
+  +   38.977 |     task B: round 1 of 3, tick 126, sleeping 170 ms
+  +   39.698 |     task A: round 2 of 4, tick 144, sleeping 100 ms
+  +   40.639 |     task B: round 2 of 3, tick 157, sleeping 170 ms
+  +   41.114 |     task A: round 3 of 4, tick 161, sleeping 100 ms
+  +   42.255 |     task A: round 4 of 4, tick 179, sleeping 100 ms
+  +   42.727 |     task B: round 3 of 3, tick 182, sleeping 170 ms
+  +   44.408 |     task A ran 4 rounds, task B 3, in 88 ticks; both ended (status 0, 0)
+  +   44.945 | SURF ~#> tasks
+  +   45.467 |     started task A (pid 10) and task B (pid 11)
+  +   45.935 |     task B: round 1 of 3, tick 228, sleeping 170 ms
+  +   46.405 |     task A: round 1 of 4, tick 225, sleeping 100 ms
+  +   47.544 |     task A: round 2 of 4, tick 251, sleeping 100 ms
+  +   48.015 |     task B: round 2 of 3, tick 254, sleeping 170 ms
+  +   48.734 |     task A: round 3 of 4, tick 267, sleeping 100 ms
+  +   49.684 |     task B: round 3 of 3, tick 280, sleeping 170 ms
+  +   50.157 |     task A: round 4 of 4, tick 284, sleeping 100 ms
+  +   51.422 |     task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0)
+  +   51.960 | SURF ~#> uptime
+  +   52.374 |     up 3.16 s (316 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +   52.877 |     mtime 7065796 at 1000000 Hz; heartbeat 6
+  +   53.336 | SURF ~#> uptime
+  +   56.800 |     up 3.78 s (378 ticks at 100 Hz), 8 tasks, 1 timers pending
+  +   57.299 |     mtime 7686630 at 1000000 Hz; heartbeat 7
+  +   57.756 | SURF ~#> echo kbd-ready
+  +   58.221 | kbd-ready
+  +   58.645 | SURF ~#> echo ps2-ok
+  +   59.058 | ps2-ok
+  +   59.402 | S

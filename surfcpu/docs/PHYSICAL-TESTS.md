@@ -108,11 +108,11 @@ checks, from `make test-os-kit`:
 ```
   ok       4 lines a second, each of the baseline's form ("SurfCPU baseline arty_a7_100t 0x00000100 build 1a2b3c4d clean 1760560000 | up ...")
   ok       the seconds since reset count up by one a line (1, 2, 3, 4)
-  ok       a line every second by the Mac's clock (1.02, 0.98, 1.05 s)
+  ok       a line every second by the Mac's clock (1.01, 1.01, 0.96 s)
   ok       the pixel clock measured 25,173,611 +- 1 Hz (25173611)
   ok       the board arty_a7_100t and its id 0x100 agree
   ok       the design was built for arty_a7_100t, the board asked for (--board)
-  ok       the line's build 1a2b3c4d clean, time 1760560000 and board arty_a7_100t match the manifest's (...)
+  ok       the line's build 1a2b3c4d clean, time 1760560000 and board arty_a7_100t match the manifest's (1a2b3c4d, 1760560000, source_dirty false, arty_a7_100t; ...)
   ok       the FPGA's receive pin: the byte typed (S) shows as rx 53
   ok       the switches: a line shows sw 0101 as the owner set them
   ok       the buttons: a line shows BTN0 pressed (btn ...1)
@@ -142,7 +142,7 @@ On the RTL system (`surfsim` with bramdiag in its ROM; this SoC has the DDR mode
 sections run too), PASS in 20 s:
 
 ```
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, .../manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, .../manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
   ok       the system clock is 25,000,000 Hz (25000000)
   ok       identity: ok
@@ -194,17 +194,17 @@ inserted: booting` and read `/BOOT/SURFOS.BIN` by itself). The DDR diagnostic's 
 from `/BOOT/CMDLINE.TXT` (FIRMWARE.md; the default is its quick test of all of DDR).
 
 On the RTL system (the card image's command line `size=2M loops=1` keeps the diagnostic to
-2 MiB), PASS in 46 s; in the transcript, the RESET with the card out is a new surfsim run:
+2 MiB), PASS in 47 s; in the transcript, the RESET with the card out is a new surfsim run:
 
 ```
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, .../manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, .../manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
   ok       info: DDR calibrated (the DDR bitstream): ddr: status 5 (present, calibrated), size 256 MiB
   ok       info: the card is present (card: present; buttons 2)
   ok       a missing image: boot /BOOT/NOSUCH.BIN is diagnosed (NOT_FOUND) and the monitor is back
   ok       an invalid image: check /SYSTEM/SURFCARD.TXT (not a package) is diagnosed (IMG_SHORT), the monitor is back
   ok       check /BOOT/DDRDIAG.BIN: every package check passes
-  ok       DDRDIAG.BIN on the card is .../build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+  ok       DDRDIAG.BIN on the card is .../build/fw/DDRDIAG.BIN (build 1e3a2e10, 14992 bytes, payload CRC 0x36719679)
   ok       the DDR diagnostic booted from the card: DDRDIAG: PASS (318 checks; 2 MiB from 0x80100000)
   ok       no card: SurfBoot stopped: no card (NO_CARD), in the monitor
   ok       the card back: "card inserted: booting", SurfBoot retries by itself
@@ -226,18 +226,18 @@ clock within 25 %), then `echo kbd-ready` and you type `echo ps2-ok` on the PS/2
 port must show `ps2-ok`. You answer whether the VGA monitor shows the same shell.
 
 On the RTL system (the keyboard model types `echo ps2-ok` when `kbd-ready` appears), PASS in
-56 s:
+59 s:
 
 ```
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, .../manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, .../manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
   ok       SurfOS booted from the card to the shell (SurfBoot, the kernel read and checked, the card mounted read-write)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
-  ok       two kernel tasks make progress, sleep and wake (run 1: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
+  ok       two kernel tasks make progress, sleep and wake (run 1: task A ran 4 rounds, task B 3, in 88 ticks; both ended (status 0, 0); their rounds interleaved: ABABAAB)
   ok       two kernel tasks make progress, sleep and wake (run 2: task A ran 4 rounds, task B 3, in 82 ticks; both ended (status 0, 0); their rounds interleaved: BAABABA)
   ok       uptime twice
-  ok       the uptime advances: 3.09 s then 3.72 s, ticks 309 then 372, heartbeat 6 then 7
+  ok       the uptime advances: 3.16 s then 3.78 s, ticks 316 then 378, heartbeat 6 then 7
   note     the uptime's rate not checked against the clock: --slow 10
   ok       the PS/2 keyboard types into the shell: echo ps2-ok answered ps2-ok
   skip     not observed: Does the VGA monitor show the same shell: the banner and the commands just run?
@@ -246,23 +246,21 @@ On the RTL system (the keyboard model types `echo ps2-ok` when `kbd-ready` appea
 The transcript's boot, from the same run:
 
 ```
-  +    0.117 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
-  +    0.153 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
+  +    0.114 | SurfBoot 1.1.0 (build 1e3a2e10), the SurfCPU boot ROM
+  +    0.151 | soc: simulation (0xf0), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 1e3a2e10 (simulation)
   +    0.255 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
   +    0.368 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
-  +   13.840 | boot: SurfOS 1.0.0 build 2355dba2: 376596 bytes in 1 fragment, read in 1837 ms
-  +   14.031 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
-  +   16.954 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
-  +   25.199 | +VFS: sd0p1 mounted on /sd0p1 (fat)
-  +   27.895 | Brandon Burr's SurfOS
-  +   29.295 | SURF ~#> bootinfo
+  +   14.738 | boot: SurfOS 1.0.0 build 1e3a2e10: 392404 bytes in 1 fragment, read in 1915 ms
+  +   14.934 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +   18.145 | SurfOS: serial console on the arty_a7 UART (115200 8N1)
+  +   26.903 | +VFS: sd0p1 mounted on /sd0p1 (fat)
+  +   29.775 | Brandon Burr's SurfOS
+  +   30.665 | SURF ~#> bootinfo
 ```
 
-(The RTL system runs about seven times slower than the board: the kernel load's 1837 ms of
-simulated time took 13 s. Build 2355dba2 is from before the DDR round, hence SurfBoot 1.0.0,
-SoC 0.1.0 and memory map 1: today's firmware prints SurfBoot 1.1.0, SoC 0.2.0 and memory map 2,
-and the procedures read those fields as they come. The kit's card has `ascii` on its command
-line, hence `SURF ~#>`; the board, with no command line, printed `SURF ≋#>`.)
+(The RTL system runs about seven times slower than the board: the kernel load's 1915 ms of
+simulated time took 14 s. The kit's card has `ascii` on its command line, hence `SURF ~#>`; the
+board, with no command line, printed `SURF ≋#>`.)
 
 ### m8: persistent files (milestone 8)
 
@@ -283,22 +281,22 @@ power cycle a new surfsim run on the image the last one flushed), PASS in about 
 
 ```
   ok       on the Mac (.../mount, read only): MAC.TXT has CRC b0cfa011, 16 bytes
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, .../manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, .../manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
+  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
   ok       the card is mounted read-write (sd=rw in /BOOT/CMDLINE.TXT)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
   ok       a file made on the Mac, read on the board: MAC.TXT b0cfa011 (b0cfa011 on the Mac)
-  ok       write BOARD.TXT made on the board 2026-10-16T12:37:56Z: done without a word of error
+  ok       write BOARD.TXT made on the board 2026-10-17T03:54:53Z: done without a word of error
   ok       append BOARD.TXT a second line: done without a word of error
   ok       cp MAC.TXT COPY.TXT: done without a word of error (16 bytes copied)
   ok       write MAC.TXT changed on the board: done without a word of error
-  ok       create, edit, read: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       create, edit, read: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0: safe to remove
-  ok       after a power cycle the same CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       after a power cycle the same CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0 again: safe to remove
-  ok       on the Mac (read only, .../mount) the same CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
-  ok       after a kernel update the files keep their CRCs: BOARD.TXT e1df0376, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       on the Mac (read only, .../mount) the same CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
+  ok       after a kernel update the files keep their CRCs: BOARD.TXT b1ae8e92, COPY.TXT b0cfa011, MAC.TXT f60b6140
   ok       eject sd0 at the end: safe to remove
 ```
 
@@ -329,17 +327,17 @@ On the RTL system (two cold boots, each a new surfsim run, and a one-minute soak
 3 minutes:
 
 ```
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, .../manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, .../manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
-  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 2355dba2, 376596 bytes, payload CRC 0x9794518d)
-  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000100, map 1, sys clock 25000000 Hz, bitstream 2355dba2 (simulation))
-  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.19 s, a fresh boot; bitstream 2355dba2
-  ok       cold boot 2: SurfBoot, the kernel and the shell; up 0.29 s, a fresh boot; bitstream 2355dba2
-  ok       2 cold boots in a row, each one checked, all from the bitstream 2355dba2
+  ok       SurfOS 1.0.0 on the card is .../SURFOS.BIN (build 1e3a2e10, 392404 bytes, payload CRC 0xbea3e98d)
+  ok       bootinfo: the kernel reads the bitstream's identity (sysinfo: board 0x00f0, SoC 0x000200, map 2, sys clock 25000000 Hz, bitstream 1e3a2e10 (simulation))
+  ok       cold boot 1: SurfBoot, the kernel and the shell; up 1.13 s, a fresh boot; bitstream 1e3a2e10
+  ok       cold boot 2: SurfBoot, the kernel and the shell; up 0.29 s, a fresh boot; bitstream 1e3a2e10
+  ok       2 cold boots in a row, each one checked, all from the bitstream 1e3a2e10
   ok       the soak: /sd0p1 is mounted read-write (sd=rw)
   ok       the soak: 3 rounds of uptime, ps, tasks, write, cp, crc32, rm and memstat in 1.4 minutes, every CRC right, the heap checked every round, no panic and no killed task
   note     the soak: 8 tasks at each uptime
-  note     the soak: the kernel heap's use went from 144304 to 144304 bytes (between 144304 and 144304)
+  note     the soak: the kernel heap's use went from 144512 to 144512 bytes (between 144512 and 144512)
 ```
 
 ## 4. The evidence file
@@ -392,9 +390,8 @@ test-os-kit-rtl` (about 3 minutes, in `evidence-os`) run `sim/soc/tools/kit_test
 procedures exactly as the owner runs them, with a program answering for the owner. Results in
 `docs/evidence/os/test-os-kit.txt` and `test-os-kit-rtl.txt`, the RTL runs' whole evidence files
 (transcripts included) in `docs/evidence/os/kit/`, and the fake boards run on the Mac with its
-own Python 3.9 in `test-os-kit-mac.txt`. The excerpts above come from those files (build
-2355dba2, a clean tree, from before SoC 0.2.0); those summaries predate the scenario
-`m3-ddr-status-hex` below.
+own Python 3.9 in `test-os-kit-mac.txt`. The excerpts above come from those runs (build
+1e3a2e10, a clean tree, 2026-10-17: SurfBoot 1.1.0, SoC 0.2.0, memory map 2).
 
 | Scenario | Against | Must give |
 |---|---|---|

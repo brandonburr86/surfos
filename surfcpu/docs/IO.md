@@ -5,11 +5,19 @@ the simulation models that stand in for the card, the keyboard and the monitor, 
 tests. Registers are those of [MEMORY-MAP.md](MEMORY-MAP.md) (spi, ps2, video), ports and
 model interfaces those of [MODULES.md](MODULES.md) sections 3 and 7.
 
-**State (2026-10-15).** Simulation: all tests pass in Verilator 5.032 on five seeds, and the
+**State (2026-10-17).** Simulation: all tests pass in Verilator 5.032 on five seeds, and the
 three blocks also run in Icarus 12 ([evidence/io/tests.txt](evidence/io/tests.txt)).
-Synthesis: Yosys `synth_xilinx` estimates only ([evidence/io/synth.txt](evidence/io/synth.txt));
-no Vivado run, no bitstream. On the board: **pending** (no board, adapters, card, keyboard or
-monitor are connected; INVENTORY.md gaps G1, G4, G5, G6, G8).
+Synthesis: Yosys `synth_xilinx` estimates ([evidence/io/synth.txt](evidence/io/synth.txt)); no
+Vivado run; the three blocks are in the open flow's SoC bitstreams (BOARD.md section 8). On the
+owner's Arty A7-100T (2026-10-16): `surf_spi` reads the owner's 32 GB SDHC card through the Pmod
+MicroSD, for SurfBoot at 6.25 MHz and for SurfOS's driver, with every data CRC checked
+([evidence](evidence/physical/surfboot-card-2026-10-16.txt),
+[SurfOS](evidence/physical/surfos-boot-2026-10-16.txt)); `surf_video` drives the Pmod VGA:
+80x30 text, readable with nothing cut off, and the colour-bar test pattern exactly, the owner
+confirmed ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); `surf_ps2`: the
+owner's keyboard never acknowledged the port's reset command (TX_NAK), being a USB keyboard on
+a passive adapter that does not speak PS/2, so the keyboard side is **pending** a real PS/2
+keyboard (INVENTORY.md G5).
 
 | Path | What |
 |---|---|
