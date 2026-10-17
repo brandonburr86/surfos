@@ -142,6 +142,62 @@ class DataStickTests(unittest.TestCase):
             devloop.parse_lsblk('lsblk: something else\n')
 
 
+# 10/17/26 (one stick): the owner's data stick made bootable by copying the boot files onto it, as lsblk shows it
+# (driver/bdev.c): its disk protected, the volume SurfOS was started from writable
+HEAD = ('NAME     SIZE BUS RM TYPE                MODEL/LABEL      STATUS\n'
+        'rd0        2M ram  0 disk                initrd.tar       mounted\n')
+ONE = ('usb{n}      29G usb  1 disk mbr            VendorCo Product boot drive: protected\n'
+       '  usb{n}p1  29G usb  1 part mbr FAT32 LBA                   {status}\n')
+IMAGE = ('usb{n}     118G usb  1 disk gpt            General USB Flas boot drive: protected\n'
+         '  usb{n}p1 254M usb  1 part gpt EFI system SURFOSUSB        boot drive: protected\n')
+DATA = ('usb{n}      16G usb  1 disk mbr            Kingston\n'
+        '  usb{n}p1  16G usb  1 part mbr FAT32 LBA\n')
+
+
+class OneStickTests(unittest.TestCase):
+    def pick(self, text, name=None):
+        disk, dev = devloop.data_stick(devloop.parse_lsblk(text), name)
+        return disk['name'], dev['name']
+
+    def test_the_stick_it_was_started_from(self):
+        for status in devloop.BOOT_VOLUME:                       # mounted or not
+            self.assertEqual(self.pick(HEAD + ONE.format(n=0, status=status)), ('usb0', 'usb0p1'))
+            self.assertEqual(self.pick(HEAD + ONE.format(n=0, status=status), 'usb0'), ('usb0', 'usb0p1'))
+
+    def test_before_a_data_stick(self):
+        """GRUB's development entry looks at its own partition first, so the build goes there too, whichever of
+        the two is usb0; --stick can still name the other one"""
+        one, data = ONE.format(n=0, status='boot drive: writable'), DATA.format(n=1)
+        self.assertEqual(self.pick(HEAD + one + data), ('usb0', 'usb0p1'))
+        self.assertEqual(self.pick(HEAD + data.replace('usb1', 'usb0') + one.replace('usb0', 'usb1')), ('usb1', 'usb1p1'))
+        self.assertEqual(self.pick(HEAD + one + data, 'usb1'), ('usb1', 'usb1p1'))
+
+    def test_the_image_is_never_written(self):
+        """the flashed image (SURFOSUSB) is only read: with it, the data stick, as before; alone, nothing"""
+        self.assertEqual(self.pick(HEAD + IMAGE.format(n=0) + DATA.format(n=1)), ('usb1', 'usb1p1'))
+        with self.assertRaisesRegex(devloop.DevloopError, 'no data stick'):
+            self.pick(HEAD + IMAGE.format(n=0))
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0 is not a USB disk'):
+            self.pick(HEAD + IMAGE.format(n=0) + DATA.format(n=1), 'usb0')
+
+    def test_its_other_partitions_are_not_it(self):
+        """a stick the Mac made GPT has its EFI partition first; SurfOS was started from the second, which alone is
+        writable (the partition GRUB's menu looks at)"""
+        mac = ('usb0      29G usb  1 disk gpt            SanDisk          boot drive: protected\n'
+               '  usb0p1 200M usb  1 part gpt EFI system EFI              boot drive: protected\n'
+               '  usb0p2  29G usb  1 part gpt basic data DATASTICK        boot drive: writable\n')
+        self.assertEqual(self.pick(HEAD + mac), ('usb0', 'usb0p2'))
+
+    def test_a_stick_without_a_partition_table(self):
+        whole = 'usb0      29G usb  1 disk                VendorCo Product boot drive: writable\n'
+        self.assertEqual(self.pick(HEAD + whole), ('usb0', 'usb0'))
+
+    def test_two_that_say_so(self):
+        text = HEAD + ONE.format(n=0, status='boot drive: writable') + ONE.format(n=1, status='mounted (boot drive)')
+        with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1'):
+            self.pick(text)
+
+
 class BuildTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='surfos devloop ')

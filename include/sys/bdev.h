@@ -21,6 +21,11 @@ get a 'p' (usb0p1).
 10/5/26 (partitions): tables are MBR (with logical partitions) or GPT
 (driver/part.c, sys/part.h); the disk that holds the SurfOS boot volume
 (label SURFOSUSB) is protected; fdisk rescans a disk after changing it.
+
+10/17/26 (one stick): so is a disk holding the FAT volume GRUB was started
+from (its serial number is on the kernel command line, bootvol=); that volume
+alone may be mounted read-write (protect = bdev_boot_volume), because a stick
+made bootable by copying files onto it holds the owner's files too.
 */
 
 #ifndef _SYS_BDEV_H
@@ -101,6 +106,10 @@ int bdev_flush(struct bdev *d);             /* the disk's write cache to its med
    (a mount of the disk or of any of its partitions counts). */
 int bdev_may_format(struct bdev *d, char *why, size_t size);
 
+/* 10/17/26 (one stick): a mount of d is read-only because it is on the SurfOS boot drive (protect, of it or of its
+   disk), unless it is the volume SurfOS was started from on a stick made bootable by copying files onto it */
+bool bdev_mount_readonly(struct bdev *d);
+
 void bdev_print(void);                      /* lsblk */
 void bdev_print_io(void);                   /* lsblk -s: blocks read and written */
 const char *bdev_part_type_name(u8 type);
@@ -109,10 +118,13 @@ const char *bdev_part_type_name(u8 type);
    <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read.
    A disk with a FAT volume labelled SURFOSUSB gets protect = bdev_boot_drive, and so do its
    partitions. bdev_rescan() reads the table again after it was rewritten: the old partitions are
-   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted. */
+   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted.
+   10/17/26: so does a disk with the FAT volume whose serial number GRUB passed (bootvol=), but that
+   volume gets protect = bdev_boot_volume */
 int bdev_scan_partitions(struct bdev *disk);
 int bdev_rescan(struct bdev *disk);
 extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
+extern const char bdev_boot_volume[];       /* 10/17/26: "the volume SurfOS was started from" */
 
 /* drivers (driver table entries) */
 int init_ramdisk(void);

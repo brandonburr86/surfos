@@ -29,9 +29,9 @@ O=2 ./devenv/run.sh           # run the optimized kernel
 The USB image for UEFI PCs (`docs/USB-BOOT.md`):
 
 ```sh
-./devenv/build-usb.sh         # build/usb/surfos-ideapad-15iil05.img (+ .sha256, build-manifest.json), O=2
+./devenv/build-usb.sh         # build/usb/surfos-ideapad-15iil05.img (+ .sha256, build-manifest.json, stick/), O=2
 O=0 ./devenv/build-usb.sh     # the same with the debug build
-./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from emulated USB sticks: 14 scenarios
+./devenv/test-usb.sh          # boot that file under host QEMU + OVMF from emulated USB sticks: 16 scenarios
 ./devenv/test-usb.sh --screen # just boot it without a serial port and print the screen
 ./devenv/run-usb.sh           # boot a copy of it in a QEMU window to try it by hand
 ```
@@ -40,6 +40,9 @@ O=0 ./devenv/build-usb.sh     # the same with the debug build
 grub-mkstandalone and mtools are in the image) and copies the result to `build/usb/` with
 its checksum verified. The test and run scripts need `qemu-system-x86_64` and its EDK2
 firmware on the host (Homebrew's `qemu` ships both). None of them writes to a disk device.
+10/17/26: `build/usb/stick/` is the image's files as a folder, checked against the
+manifest; `tools/stick.py install` (or Finder) copies it onto a FAT32 stick that keeps its
+own files, with no image to write (`docs/USB-BOOT.md` section 14).
 
 Docker Desktop must be running, and the invoking process must have access to its
 socket. Host `run.sh` and `boottest.sh` require `qemu-system-i386` on PATH.

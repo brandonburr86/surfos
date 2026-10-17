@@ -423,6 +423,37 @@ static void test_fat_label(void) {
     check(!part_fat_label(bs, label), "zeros: not a FAT boot sector");
 }
 
+/* 10/17/26 (one stick): the volume serial number GRUB's probe --fs-uuid shows, and its printed form */
+static void test_fat_serial(void) {
+    u8 bs[512];
+    u32 s = 0;
+    fat_boot_sector(bs, true, "DATASTICK  ");
+    put32(bs + 67, 0x5D0F0901);
+    check(part_fat_serial(bs, &s) && s == 0x5D0F0901, "FAT32: the serial number at offset 67");
+    fat_boot_sector(bs, false, "DATA       ");
+    put32(bs + 39, 0x12AB34CD);
+    check(part_fat_serial(bs, &s) && s == 0x12AB34CD, "FAT16: the serial number at offset 39");
+    fat_boot_sector(bs, true, "DATASTICK  ");
+    put32(bs + 67, 0x01020304);
+    bs[66] = 0x28;
+    check(part_fat_serial(bs, &s) && s == 0x01020304, "the older signature 0x28 has a serial number (and no label)");
+    bs[66] = 0x00;
+    check(!part_fat_serial(bs, &s), "no extended boot signature: no serial number");
+    fat_boot_sector(bs, true, "DATASTICK  ");
+    bs[510] = 0;
+    check(!part_fat_serial(bs, &s), "no 55 AA: not a FAT boot sector");
+    memset(bs, 0, 512);
+    check(!part_fat_serial(bs, &s), "zeros: not a FAT boot sector");
+
+    check(part_parse_serial("5D0F-0901", &s) && s == 0x5D0F0901, "GRUB's form: the high half first");
+    check(part_parse_serial("abcd-ef01", &s) && s == 0xABCDEF01, "lower case too");
+    check(part_parse_serial("0000-0000", &s) && s == 0, "zero");
+    check(!part_parse_serial("", &s) && !part_parse_serial("5D0F0901", &s) && !part_parse_serial("5D0F-090", &s) &&
+          !part_parse_serial("5D0F-09012", &s) && !part_parse_serial("5D0G-0901", &s) && !part_parse_serial("5D0F_0901", &s) &&
+          !part_parse_serial(" 5D0F-0901", &s) && !part_parse_serial("5D0F-0901 ", &s) && !part_parse_serial("-5D0F-090", &s),
+          "nothing else: no other length, digit or separator");
+}
+
 /**** changes ****/
 
 static u8 planbuf[PART_PLAN_BUF];
@@ -775,6 +806,7 @@ int main(int argc, char **argv) {
     test_mbr_logical();
     test_gpt();
     test_fat_label();
+    test_fat_serial();
     test_words();
     test_new();
     test_mbr_changes();

@@ -18,6 +18,15 @@ tools/mkusb.py writes, gets protect = bdev_boot_drive, and so do its
 partitions; bdev_may_format() then refuses it to fdisk and mkfs. bdev_rescan()
 reads a table again after fdisk has written it.
 
+10/17/26 (one stick): GRUB also tells the kernel which FAT volume it was
+started from, by its serial number (bootvol=5D0F-0901, boot/grub-usb.cfg). A
+stick made bootable by copying the boot files onto it (tools/stick.py) is
+recognised by that, whatever its label: its disk and partitions get
+protect = bdev_boot_drive as well, so fdisk and mkfs refuse them, and only
+the volume SurfOS was started from gets bdev_boot_volume, which may be
+mounted read-write (bdev_mount_readonly()). SURFOSUSB is read-only as ever,
+also when its serial number is the one GRUB passed.
+
 fdisk's changes are planned by parttab.c and carried out by part_commit():
 through the block layer, flushed, read back and compared, the table read again
 and checked against the plan, and the disk rescanned.
@@ -26,6 +35,7 @@ and checked against the plan, and the disk rescanned.
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/cpu.h>
+#include <surfos/multiboot.h>
 #include <surfos/sync.h>
 #include <surfos/timer.h>
 #include <sys/bdev.h>
@@ -36,6 +46,7 @@ and checked against the plan, and the disk rescanned.
 #include <blibc_common.h>
 
 const char bdev_boot_drive[] = "the SurfOS boot drive";
+const char bdev_boot_volume[] = "the volume SurfOS was started from";
 
 static int disk_read(void *arg, u32 lba, u32 count, void *buf) {
     return bdev_read((struct bdev *)arg, lba, count, buf);
@@ -106,18 +117,45 @@ static struct bdev *add_partition(struct bdev *disk, const struct part_table *t,
     return p;
 }
 
-/* block 0 of d is a FAT boot sector with the boot drive's volume label */
-static bool boot_volume(struct bdev *d, u8 *sec) {
+/* what block 0 of d says: BOOT_IMAGE, a FAT volume labelled SURFOSUSB (the image tools/mkusb.py writes);
+   10/17/26 BOOT_VOLUME, a FAT volume whose serial number is the one GRUB was started from (have_serial,
+   serial); or BOOT_NONE */
+#define BOOT_NONE   0
+#define BOOT_VOLUME 1
+#define BOOT_IMAGE  2                               /* the larger wins: the image stays read-only */
+
+static int boot_kind(struct bdev *d, u8 *sec, bool have_serial, u32 serial) {
     char label[12];
-    return bdev_read(d, 0, 1, sec) == 0 && part_fat_label(sec, label) && !strcmp(label, PART_BOOT_LABEL);
+    u32 s;
+    if(bdev_read(d, 0, 1, sec) != 0) return BOOT_NONE;
+    if(part_fat_label(sec, label) && !strcmp(label, PART_BOOT_LABEL)) return BOOT_IMAGE;
+    if(have_serial && part_fat_serial(sec, &s) && s == serial) return BOOT_VOLUME;
+    return BOOT_NONE;
 }
 
-static void mark_boot_drive(struct bdev *disk, const char *where) {
+/* 10/17/26: the serial number of the FAT volume GRUB was started from, bootvol=5D0F-0901 (boot/grub-usb.cfg) */
+static bool boot_serial(u32 *serial) {
+    char v[16];
+    return bootinfo_arg(&bootinfo, "bootvol=", v, sizeof(v)) && part_parse_serial(v, serial);
+}
+
+/* fdisk and mkfs leave the disk and all of its partitions alone (bdev_may_format() asks the disk). The SURFOSUSB
+   image is only read; on a stick made bootable by copying files onto it, the volume SurfOS was started from (vol,
+   which is the disk itself when it has no partition table) may be written, and the rest of the disk is only read */
+static void mark_boot_drive(struct bdev *disk, struct bdev *vol, int kind, u32 serial) {
+    const char *where = vol == disk ? "the whole disk" : vol->name;
     struct bdev *p;
     disk->protect = bdev_boot_drive;
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) p->protect = bdev_boot_drive;
-    kprintf("+PART: %s is the SurfOS boot drive (%s holds the volume SURFOSUSB): protected from fdisk and mkfs\n",
-            disk->name, where);
+    if(kind == BOOT_IMAGE) {
+        kprintf("+PART: %s is the SurfOS boot drive (%s holds the volume SURFOSUSB): protected from fdisk and mkfs\n",
+                disk->name, where);
+        return;
+    }
+    vol->protect = bdev_boot_volume;
+    kprintf("+PART: %s is the SurfOS boot drive (%s holds the volume %04X-%04X, which GRUB was started from): "
+            "protected from fdisk and mkfs; %s may be mounted read-write\n", disk->name, where,
+            (u_int)(serial >> 16), (u_int)(serial & 0xFFFF), vol->name);
 }
 
 /* the partitions of a disk: how many were registered, or -1 when block 0 cannot be read */
@@ -125,9 +163,11 @@ int bdev_scan_partitions(struct bdev *disk) {
     struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
     u8 *sec = (u8 *)kalloc(PART_SECTOR);
     struct part_io io;
-    struct bdev *p;
+    struct bdev *p, *vol = NULL;
     u_int i;
-    int found = 0;
+    int found = 0, kind = BOOT_NONE, k;
+    u32 serial = 0;
+    bool have_serial = boot_serial(&serial);
 
     if(!t || !sec) { kfree(t); kfree(sec); return -1; }
     part_io_init(&io, disk, false);
@@ -142,12 +182,13 @@ int bdev_scan_partitions(struct bdev *disk) {
         if(add_partition(disk, t, &t->part[i])) found++;
     }
     if(found) {
-        for(p = bdev_first(); p; p = p->next) {
-            if(p->parent == disk && boot_volume(p, sec)) { mark_boot_drive(disk, p->name); break; }
+        for(p = bdev_first(); p && kind != BOOT_IMAGE; p = p->next) {
+            if(p->parent == disk && (k = boot_kind(p, sec, have_serial, serial)) > kind) { kind = k; vol = p; }
         }
-    } else if(boot_volume(disk, sec)) {
-        mark_boot_drive(disk, "the whole disk");
+    } else if((kind = boot_kind(disk, sec, have_serial, serial)) != BOOT_NONE) {
+        vol = disk;
     }
+    if(kind != BOOT_NONE) mark_boot_drive(disk, vol, kind, serial);
     kfree(sec);
     kfree(t);
     return found;
@@ -169,7 +210,8 @@ int bdev_rescan(struct bdev *disk) {
         bdev_unregister(p);
     }
     binvalidate(disk);
-    if(disk->protect == bdev_boot_drive) disk->protect = NULL;     /* found again below if it still is */
+    if(disk->protect == bdev_boot_drive || disk->protect == bdev_boot_volume)
+        disk->protect = NULL;                       /* found again below if it still is */
     disk->scheme = PART_SCHEME_NONE;
     return bdev_scan_partitions(disk);
 }

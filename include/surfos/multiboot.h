@@ -160,6 +160,7 @@ void mb_print(void);
 int mb2_parse(const void *data, u32 bytes, struct boot_info *out);  /* 0 or MB2_E_* */
 const char *mb2_strerror(int err);
 bool bootinfo_has_arg(const struct boot_info *bi, const char *arg); /* a word of the command line */
+bool bootinfo_arg(const struct boot_info *bi, const char *key, char *out, size_t size);  /* 10/17/26: key=value */
 const char *mb_region_type(u32 type);
 
 #endif /* !__ASSEMBLER__ */

@@ -919,6 +919,21 @@ shell/                lsblk, fdisk, mkfs, mount, umount, eject, df, mv (main.c, 
   boot drive"`, which `lsblk` shows. That drive is only ever mounted read-only. `init_fs()`
   mounts no USB drive, and with `profile=laptop` only the initrd. The commands show the
   device and the change and go ahead only when the device's name is typed back.
+* **One stick (10/17/26).** A FAT32 stick that the boot files were copied onto
+  (`tools/stick.py`, USB-BOOT.md section 14) boots the same way, and keeps the owner's
+  files. GRUB's menu asks for the serial number of the FAT volume it was started from
+  (`probe --fs-uuid`, so BOOTX64.EFI carries `probe`) and passes it to every entry as
+  `bootvol=5D0F-0901`; `bootinfo_arg()` reads it and `part_parse_serial()` /
+  `part_fat_serial()` compare it with each partition's boot sector. A disk holding that
+  volume is the boot drive whatever its label: it and all its partitions get
+  `protect = bdev_boot_drive`, which `fdisk` and `mkfs` refuse as before, and the volume
+  itself `protect = bdev_boot_volume` ("the volume SurfOS was started from"), which
+  `bdev_mount_readonly()` lets `mount` write (lsblk: `boot drive: writable`, or
+  `mounted (boot drive)`). SURFOSUSB wins when a volume has both: the flashed image stays
+  read-only. The menu looks for `/surfos-dev/` on its own partition before the other disks,
+  and `tools/devloop.py deploy` writes there first in the same order, so one stick serves
+  as boot stick and data stick. The smoke test passes a `bootvol=` and the self test
+  writes a boot sector with it onto the scratch ramdisk (`test_boot_volume`).
 * **Files and programs** are in sections 9 and 10: FAT writes what macOS, Windows and
   Linux expect (FSInfo, the clean-shutdown bit, UTF-8 long names), `mkfs` lays volumes out
   as Windows does, and the editor and the file programs sit on `libsurf`.

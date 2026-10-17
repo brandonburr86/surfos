@@ -194,8 +194,17 @@ static bool mounted(const struct bdev *d) {
     return vfs_dev_mounted(d);
 }
 
-/* the first of these that applies; bdev_may_format() is the rule, this only says it */
+/* 10/17/26 (one stick): the boot drive is mounted read-only, but for the volume SurfOS was started from on a stick
+   made bootable by copying files onto it (driver/part.c) */
+bool bdev_mount_readonly(struct bdev *d) {
+    if(d->protect == bdev_boot_volume) return false;
+    return d->protect || bdev_disk(d)->protect;
+}
+
+/* the first of these that applies; bdev_may_format() is the rule, this only says it. 10/17/26: the volume SurfOS
+   was started from says so also while it is mounted (tools/devloop.py looks for it) */
 static const char *status_of(struct bdev *d) {
+    if(d->protect == bdev_boot_volume) return mounted(d) ? "mounted (boot drive)" : "boot drive: writable";
     if(mounted(d)) return "mounted";
     if(d->protect == bdev_boot_drive) return "boot drive: protected";
     if(d->protect) return "protected";
