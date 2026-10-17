@@ -1,7 +1,12 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Seven rounds with x86 runs, newest first. Round fs-fix-3 (10/16/26) changes the x86 kernel on purpose: a review of B12-B19
+Eight rounds with x86 runs, newest first. Round fs-fix-4 (10/16/26) changes the x86 kernel on purpose: a review of
+B20-B26 and its fixes (audit B27-B33: an undo puts back only what it saved and changed, and makes the volume read-only
+only for a change made; every dirty block of a chain given up dropped or set aside for its order point only, never
+owed; a failed mkdir's cluster freed once its slot put back is on the disk; 64 chains wait to be freed, the 65th said;
+a copy lets go of its block when another task sets aside a block it needs).
+Round fs-fix-3 (10/16/26) changes the x86 kernel on purpose: a review of B12-B19
 and its fixes (audit B20-B26: a rename sets the replaced file's refused blocks aside only for its second order point;
 every failed block looked at, chain walks bounded; a refused straight write drops the clean cached copies; a gap of zeros
 all or nothing; an undo that cannot be done makes the volume read-only; a write's cut-back frees its clusters once the
@@ -16,6 +21,70 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-4, 10/16/26: the block cache and FAT after a review of B20-B26 (audit B27-B33)
+date: 2026-10-16 (local)
+tree: sc/fs-fix-4 (from surfcpu 15f0f3c): the code final at b1f90e1 (after it docs and this evidence); the "was" blobs
+      below are 15f0f3c's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-fs4 (O0) and surfos-sc-fs4-o2 (O2), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B27-B33):
+  fs/fat.c                 blob 14f69bbf (was fbc5d8d9)  B27 an undo puts back only what it saved; B28 every dirty block
+                                                         of a chain given up dropped or set aside (never the
+                                                         operation's own directory blocks), the waiting chains'
+                                                         dropped before each order point and sync; B29 read-only only
+                                                         for a change made; B30 a failed mkdir's cluster waits; B31 64
+                                                         chains, the 65th said; B32 aside for the order point only
+  fs/bcache.c              blob 3cb07c82 (was cf99414c)  B28 bdirty_blocks() (from the device's dirty lists); B33 a
+                                                         copy lets go of its block when another task sets aside a
+                                                         block it needs; B22's wording, TALLY_DEVS noted
+  include/fs/bcache.h      blob c6a67244 (was 1c66882b)  bdirty_blocks(); what B22, B28 and B33 change, said
+x86 only:
+  tests/host/test_fatfs.c  blob 958e82c1 (was a14b1251)  the review's R1-R6 (B27-B31, B22b) and B28c, B28d, B30b, B31b,
+                                                         B32, B33; kalloc()/kcalloc() that fail on request, a yield hook
+Every run below was of sc/fs-fix-4 with a clean worktree (the devenv streams it into its volume), at the commit it
+names: each suite on the final code (98fc14b, b1f90e1's code with CARD.md rewrapped), and before that at 7cf2cb1 (the
+same but for b1f90e1's change: an operation's own directory blocks not walked for, bcache-review.txt section 24).
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs4): exit 0 at 98fc14b (b1f90e1's code, 22:19-22:31)
+  O0  FILES TEST PASSED: 51 checks
+  O0  SMOKE TEST PASSED: 311 checks (selftest among them: the FAT checks, the concurrent writers, the RAM stick that
+                                     refuses writes)
+  O2  FILES TEST PASSED: 51 checks
+  O2  SMOKE TEST PASSED: 311 checks
+  Earlier runs, the same results: at be6f335 (B27-B32, ending 20:30), at c2ac1e2 (with B33, 20:50-21:01) and at
+  7cf2cb1 (21:01-21:12). The telnet check that failed 2 of 7 O2 runs in round fs-fix-3 ("a client that stops reading
+  holds back only its own session") passed in all four O2 runs here, each while the review's threaded campaigns ran
+  on the Mac.
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs4, 22:31-22:37 at 98fc14b; and at be6f335, 20:36-20:44, and 7cf2cb1, 21:12-21:19): exit 0,
+    no failures. FATFS 254 (251 at be6f335: the review's scenarios and the new ones, bcache-review.txt section 18),
+    FATFUZZ 4 runs, 0 with failures, CONC ok 4 times, PAGER 177, CRYPTO 129, WPA 118, IEEE80211 144, PS2 MOUSE 1574, USB MOUSE 99, ACPIDUMP
+    467, AML FIELD 5120, TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50, FRAMEBUFFER 143, USB 57, PARTITION 143,
+    PARTITION TOOL 33, LIBC 195, MKFS 115, PROMPT 55, CP437 69, TELNET 58, TELNETD SERVER 750 runs (0 bugs), PCIINFO 55,
+    IWLFW 16 (no firmware files in this volume), gui 45, hidpointer 127, i2cdw 59, i2chid 267, pointer 14, the
+    UNDERTOW tests (URL 382, UTIL 72, HTTP 835, HTML 672 twice, SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426)
+    (checks, 0 failures each); python unittest: Ran 19, 60, 28, 11, 5, 18, 5 tests: OK each.
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs4-o2, 22:42-22:48 at 98fc14b; 21:25-21:32 at 7cf2cb1): every
+    host test the same, FATFS 254, FATFUZZ 4 runs with no failure, CONC ok 4 times, IWLFW 38 (the firmware files are
+    in that volume); the run exits 2 because two of tests/test_devenv.py's tests fail with O=2 in their environment, as
+    in rounds fs-fix-2 and fs-fix-3 (`make O=2` hands O to them); this round changes neither tests/test_devenv.py nor
+    devenv/.
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs4, after test-all and unittest: its test images
+      there; devenv/build-usb.sh O=0: the image's manifest says source 98fc14b0b65e, not dirty; 22:37-22:42; and at
+      7cf2cb1, 21:19-21:24)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs4-o2, with devenv/build.sh O=2 images first for the
+      test disks the storage scenarios use; source 98fc14b0b65e, not dirty; 22:42-22:53; and at 7cf2cb1, 21:24-21:38)
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+eject, mkfs, fdisk, the smoke test's concurrent FAT writers, selftest's RAM stick that refuses writes); what it fixes
+is shown by the host tests (section 2, under the x86 build's own flags) and where the same files run under the riscv32
+kernel (surfcpu/docs/evidence/os/bcache-review.txt, sections 18-24).
 
 ======================================================================================================================
 Round fs-fix-3, 10/16/26: the block cache and FAT after a review of B12-B19 (audit B20-B26)
