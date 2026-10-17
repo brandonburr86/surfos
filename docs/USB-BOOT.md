@@ -711,7 +711,9 @@ entry is then called **SurfOS (development build from this stick)**.
 
 ## 14. One stick for everything
 
-*Added 10/17/26.* The boot stick and the data stick can be one and the same: any FAT32
+*Added 10/17/26.* The short version, step by step, is [ONE-STICK.md](ONE-STICK.md).
+
+The boot stick and the data stick can be one and the same: any FAT32
 USB stick, the 30 GB data stick for one, with SurfOS's boot files copied onto it as
 ordinary files. Nothing is flashed or formatted, and the files already on the stick stay
 where they are. SurfOS then starts from that stick and keeps your files on it, and each
