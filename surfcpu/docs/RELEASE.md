@@ -5,20 +5,25 @@ documentation and clean rebuild." This page is the procedure: making a release, 
 reproduces, rebuilding it from a fresh checkout, writing the configuration flash and recovering
 from a bad one. Evidence: [`evidence/release/`](evidence/release/).
 
-**Status (2026-10-16).** The tooling is written and tested without a board. The release of the
+**Status (2026-10-17).** The tooling is written and tested without a board. The release of the
 commit it was written at, `1.0.0-pre-bb066932` (18 artifacts), was made from a fresh checkout and
 reproduces byte for byte from a pristine copy ([evidence](evidence/release/)). It is a
-**pre-release**: the DDR designs do not build yet (their generated LiteDRAM core fails its own
-hash check on a fresh checkout, section 4, and past that they miss nextpnr's timing, BOARD.md
-section 8), so the release has no bitstream that boots SurfOS from the card, and so no flash image
-to boot from. The owner's A7-100T has run designs loaded over JTAG (milestones 1 and 3,
-PROGRESS.md), but **nothing has been written to its configuration flash and no release has been
-on it**: the board steps of section 10 are pending. A review of the tooling followed
-(`review-fixes.txt`): the release now builds in a directory of its own, ships only what it
-checked, and its checks and comparisons refuse damaged releases; a reduced release made with it,
-`1.0.0-pre-147fe813` (the baseline design on the 100T, 11 artifacts), reproduces byte for byte
-from a pristine copy too. A release made before that fails today's `release-check` on one point
-(its `MANIFEST` names a boot design it does not have): make it again.
+**pre-release**, because the DDR designs did not build then (their generated LiteDRAM core failed
+its own hash check on a fresh checkout, section 4, and past that they missed nextpnr's timing),
+so it has no bitstream that boots SurfOS from the card, and so no flash image to boot from. Both
+causes are gone: LiteDRAM's generated files are the same in every checkout since d6f3ef8
+(section 4), and both DDR designs pass every gate at 80 MHz (BOARD.md section 8). Built with the
+fixed open flow they pass on the owner's A7-100T, where SurfBoot boots SurfOS from the card
+(BOARD.md section 12); no release has been made with them yet. The owner's A7-100T has run
+designs loaded over JTAG (milestones 1, 3 and 4, and SurfOS from the card; PROGRESS.md), but
+**nothing has been written to its configuration flash and no release has been on it**: the board
+steps of section 10 are pending. A review of the tooling followed (`review-fixes.txt`): the
+release now builds in a directory of its own, ships only what it checked, and its checks and
+comparisons refuse damaged releases; a reduced release made with it, `1.0.0-pre-147fe813` (the
+baseline design on the 100T, 11 artifacts), reproduces byte for byte from a pristine copy too. A
+release made before that fails today's `release-check` on one point (its `MANIFEST` names a boot
+design it does not have), and its bitstreams predate the open flow's fix for BUFGCTRL
+route-throughs (OPEN-FLOW.md section 6.8): make it again.
 
 ## 1. What a release is
 
@@ -44,7 +49,7 @@ the first 8 hex digits, the build id every artifact carries:
 |---|---|---|---|
 | `arty_a7_baseline` | | | milestone 1: no CPU, the board's clocks, LEDs and UART |
 | `surfcpu_arty_a7_bramdiag` | | | milestone 3: the CPU and its BRAM diagnostics |
-| `surfcpu_arty_a7_top` | test | | SurfBoot without DDR: its flash image tries the flash path before the boot design exists (it stops in SurfBoot's monitor, DDR_ABSENT) |
+| `surfcpu_arty_a7_top` | test | | SurfBoot without DDR: its flash image tries the flash path on its own (it stops in SurfBoot's monitor, DDR_ABSENT) |
 | `surfcpu_arty_a7_ddr_bramdiag` | | DDR | milestone 4: the DDR3L diagnostics |
 | `surfcpu_arty_a7_ddr` | **boot** | DDR | the standalone design: SurfBoot loads SurfOS from the card into DDR |
 
@@ -69,9 +74,9 @@ design is in it only if `tools/fpga-build.sh` passed it as it is.
   simply not passed on: the builds get `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TERM`
   and Docker's own settings from your shell, and what the release sets.
 * About an hour for the six bitstreams without DDR (the SoC ones take 10 to 17 minutes each, most
-  of it the LVS proof), plus the DDR designs once they get as far as nextpnr (3 to 25 minutes each
-  to fail its timing so far), and about 1 GB of disk (the bitstream builds about 0.5 GB, LiteDRAM's
-  sources 200 MB, the release 27 MB).
+  of it the LVS proof), plus about 22 minutes for each of the four DDR builds (21 to 23 minutes at
+  92a2b510, BOARD.md section 8), and about 1 GB of disk (the bitstream builds about 0.5 GB,
+  LiteDRAM's sources 200 MB, the release 27 MB).
 * The machine to itself, ideally: a bitstream build waits while three or more `surfcpu-openxc7`
   containers run (other builds), and builds one design at a time. Other builds cannot get into the
   release (it builds in its own directory, step 2), but they slow it down. One release at a time
@@ -82,8 +87,8 @@ Nothing here touches the board or a card: they come in sections 6, 7 and 10.
 ## 3. Making the release
 
 ```sh
-make -C surfcpu release PRERELEASE=1      # while the DDR designs do not build
-make -C surfcpu release                   # once they do: a complete release, or nothing
+make -C surfcpu release                   # a complete release, or nothing
+make -C surfcpu release PRERELEASE=1      # or a pre-release, should a DDR design not build
 ```
 
 Variables: `PRERELEASE=1` allows a pre-release, a release without some designs (when every design
@@ -198,7 +203,7 @@ What made two builds of one commit differ, and what was done about it:
 | the bitstreams' build identity | `BUILD_TIME` is a generic of the tops (sysinfo's build time) | `tools/fpga-build.sh` already took `SOURCE_DATE_EPOCH`; the release sets it |
 | build paths | none found: the containers mount the tree at `/work` wherever it is, so the debug information and the `.bit` header's relative path are the same from any checkout (`-ffile-prefix-map` is not needed) | the verify runs build in other directories and compare the ELF files too |
 | file order | none found: GNU Make 4.4.1 in the image sorts `$(wildcard)`; `tools/fpga-build.sh` sorts its source lists, and the Mac's `en_US.UTF-8` order equals `C` order for every file there | the release runs the Mac-side scripts with `LC_ALL=C`; the images set no locale, so the containers use the POSIX locale (`MANIFEST` records it) |
-| the generated LiteDRAM core (DDR designs) | LiteX lists the core's instances in a block comment of `litedram_core.v` in an order that follows the Python interpreter's memory: a fresh checkout's first `make litedram-gen` wrote a file that fails its own check against `ip/litedram/arty.sha256`, while every line of Verilog outside that comment was the same in the five different files 16 runs produced | not fixed here (`ip/litedram` is the ddr track's): `run_gen.py` should drop or sort that comment before writing the file (evidence `determinism.txt` section 6). The release names the failed check as the DDR designs' reason |
+| the generated LiteDRAM core (DDR designs) | LiteX lists the core's instances in a block comment of `litedram_core.v` in an order that follows the Python interpreter's memory: a fresh checkout's first `make litedram-gen` wrote a file that failed its own check against `ip/litedram/arty.sha256`, while every line of Verilog outside that comment was the same in the five different files 16 runs produced (evidence `determinism.txt` section 6) | fixed by the ddr track (d6f3ef8): `ip/litedram/run_gen.py` replaces that comment with a fixed note after the generator has run, stopping unless it finds exactly one; `make litedram-repro` generated both cores in eight differently set-up Python processes and got one set of files, the locked one (evidence `../ddr/litedram.txt`) |
 | threads and seeds | none found: nextpnr runs with 4 threads (`OPENXC7_THREADS` inside the image; `devenv/run.sh` does not pass it, so the release always gets 4), placer seeds come from the design lists, and two SoC builds gave the same netlist, placement, FASM and frames | recorded in `MANIFEST` (`nextpnr_threads`) |
 
 Check a release with:
@@ -313,9 +318,10 @@ program: flash written and verified; set the MODE jumper (JP1) to boot from it
 ```
 
 Then put the Arty's JP1 (MODE) jumper on and power-cycle: the FPGA configures itself from the
-flash, the DONE LED lights, and SurfBoot's banner comes on the UART. Until the DDR designs build,
-the image to try this with is `surfcpu_arty_a7_top`'s (SurfBoot without DDR: it stops in its
-monitor with DDR_ABSENT, which still shows the board started from the flash by itself).
+flash, the DONE LED lights, and SurfBoot's banner comes on the UART. The boot image is
+`surfcpu_arty_a7_ddr`'s; the test image, `surfcpu_arty_a7_top`'s (SurfBoot without DDR: it stops
+in its monitor with DDR_ABSENT), shows the board started from the flash by itself without
+needing the DDR3L or the card.
 
 **How long the board takes to start.** The FPGA reads the stream at the configuration clock
 (CCLK) with the bus width the stream sets. `tools/bitfile.py info <bit>` reads them from the
@@ -333,8 +339,9 @@ initialization (the internal oscillator's tolerance, DS181 F_MCCKTOL, can stretc
 | x4 at 50 MHz (the Arty's limit for quad SPI, reference manual section 4.2) | 0.09 s | 0.15 s |
 
 So a 100T running the open flow's bitstream starts SurfBoot about 10 seconds after power-on
-(then about 1 s of DDR calibration and the kernel's load). That is slow but works; the board test
-of milestone 9 waits up to 60 s for the kernel load.
+(then, as seen on the board with the design loaded over JTAG, about 0.2 s of DDR calibration and
+2 s to load the kernel). That is slow but works; the board test of milestone 9 waits up to 60 s
+for the kernel load.
 
 **What the open flow cannot set.** Project X-Ray's `xc7frames2bit` has no options for the
 configuration (its only flags are the part, the frames and the output file), and nextpnr's XDC
@@ -431,13 +438,13 @@ the same; its `MANIFEST` comparison names the new image ids.
 
 ## 10. What only the board can show
 
-All pending (INVENTORY.md gaps G1, G3, G7; PHYSICAL-TESTS.md):
+All pending (INVENTORY.md gap G7, and G1's PCB revision; PHYSICAL-TESTS.md):
 
 * that the flash part takes the image (`program-flash` with the real openFPGALoader, its JEDEC id,
   the erase, write and read-back);
 * that the board starts by itself from the flash with JP1 on, and how long it really takes;
 * the recovery procedure of section 7 on the real board;
-* milestone 9's acceptance test, which needs the DDR boot design: `make -C surfcpu board-test M=m9
+* milestone 9's acceptance test, with a release's DDR boot design: `make -C surfcpu board-test M=m9
   ARGS="--manifest build/release/<name>/fpga/<board>/surfcpu_arty_a7_ddr/manifest.txt --kernel
   build/release/<name>/SURFOS.BIN"` with that design in the flash and the release's card files on
   the card: 10 cold boots from the flash and an hour's soak.

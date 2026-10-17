@@ -4,12 +4,13 @@
 #   board <name>                    a board of boards/arty_a7/boards.txt; every design is built for each
 #   design <name> <flash> <needs>   a design of boards/arty_a7/designs/<name>.files, in build order
 #       flash  boot: the standalone design, whose QSPI flash image the board starts from at power-on
-#              test: a flash image for trying the flash path before the boot design exists (it stops
-#                    in SurfBoot's monitor: no DDR)
+#              test: a flash image for trying the flash path on its own (it stops in SurfBoot's
+#                    monitor: no DDR)
 #              -:    no flash image (load it with make program-volatile)
-#       needs  ddr: a DDR3L design. While its build does not pass (2026-10-16: nextpnr's timing for
-#                   LiteDRAM's 100 MHz clock), a release without it is a pre-release (PRERELEASE=1),
-#                   never a complete one
+#       needs  ddr: a DDR3L design. If its build does not pass, a release without it is a
+#                   pre-release (PRERELEASE=1), never a complete one. (Both DDR designs pass every
+#                   gate since round ddr-3, LiteDRAM at 80 MHz, and LiteDRAM's generated files are
+#                   the same in every checkout since d6f3ef8; no release has been made with them yet)
 #              -:   always built; the release fails without it
 #   card-cmdline <text>             /BOOT/CMDLINE.TXT of the card (deploy-sd --cmdline): sd=rw lets
 #                                   SurfOS write the card (CARD.md section 8)
