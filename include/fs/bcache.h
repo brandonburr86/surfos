@@ -76,6 +76,7 @@ struct buf {
     bool copying;                       /* 10/16/26 (B12): a copy of it is being written: other writes of it wait */
     bool aside;                         /* 10/16/26 (B16): set aside (baside()): not written, nobody's dependency */
     bool stuck;                         /* 10/16/26 (B18): a sync gave up on its present hold */
+    bool discard;                       /* 10/16/26 (B35): nobody's bytes: dropped when let go or its I/O ends */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
