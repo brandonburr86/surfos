@@ -1,0 +1,30 @@
+board-test.py: the DDR diagnostics' hexadecimal DDR status, and the designs the procedures ask for (2026-10-17)
+Fake boards on pseudo-terminals and the RTL system only; nothing here ran on the board.
+
+The fault: bramdiag.c prints "bitstream build %08x flags %x, features %02x, DDR status %x size %u MiB", but m3
+read flags and DDR status with (\d+). The board's DDR designs print "DDR status 14" (PRESENT, SWINIT), which
+matched by luck; a status with a letter (1c: PRESENT, TIMEOUT, SWINIT) left the line unread. Also, m3's step
+always named surfcpu_arty_a7_bramdiag, and m5, m7, m8 and m9 fell back to surfcpu_arty_a7_top (SurfBoot without
+DDR, which stops at DDR_ABSENT) instead of surfcpu_arty_a7_ddr.
+
+The test: kit_test.py scenario m3-ddr-status-hex, m3 --design surfcpu_arty_a7_ddr_bramdiag against a fake board
+printing the DDR diagnostics as the owner's A7-100T printed them (physical/ddr-fixed-flow-2026-10-17.txt) but
+with "DDR status 1c".
+
+Before (tools/board-test.py of 288b984, kit_test.py --set fake --only m3-ddr-status-hex, Python 3.14.7 on the Mac):
+  Verdict: FAIL (0 checks seen by this script passed, 1 failed)
+  |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_bramdiag
+  FAIL     the bitstream line: not seen within 5 s (waiting for /bitstream build ([0-9a-f]{8}) flags (\d+), features ([0-9a-f]+), DDR status (\d+) size (\d+) MiB\n/).
+
+After (4a4ad56: the hexadecimal parse; 98b2b3c: the designs):
+  Verdict: PASS (27 checks seen by this script passed; 1 not done or not compared)
+  |   make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr_bramdiag
+  ok       BRAMDIAG: PASS (572 checks)
+
+The kit at 98b2b3c:
+  make -C surfcpu board-test-selftest (Python 3.14.7 on Darwin arm64): test-os-kit (fake): 18 of 18 checks passed in 15 s
+  /usr/bin/python3 (3.9.6) sim/soc/tools/kit_test.py --set fake: test-os-kit (fake): 18 of 18 checks passed in 15 s
+  make -C surfcpu test-os-kit (the container, Python 3.13.5 on Linux aarch64): test-os-kit (check): 22 of 22 checks passed in 66 s
+    ok   m3-ddr-status-hex: board-test m3 against a fake board (bramdiag): PASS in 1 s (27 checks seen by this script passed; 1 not done or not compared)
+    ok   m7: board-test m7 against the RTL system: PASS in 65 s (10 checks seen by this script passed; 1 not done or not compared)
+    (m7's step now names DESIGN=surfcpu_arty_a7_ddr; its RTL run printed SurfBoot 1.1.0, SoC 0.2.0, memory map 2)
