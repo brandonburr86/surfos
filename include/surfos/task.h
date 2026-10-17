@@ -56,9 +56,10 @@ typedef void (*kthread_fn)(void *arg);
     must not leave a lock held); the kernel log says once that it waits. An explicit kill_task()
     afterwards brings back the KILL_WAIT_MS rule.
     10/17/26 (audit B39): nor while the task is inside a file system or the block cache (fs_hold,
-    counted by fs/fat.c while it has a volume's lock and by fs/bcache.c inside each of its calls):
-    killed at once there it left the cache's records of copies under way on its dead stack, blocks
-    marked as copied, written or read for good, the blocks it held and the locks. Its long waits
+    counted by fs/fat.c in its calls and by fs/bcache.c around device requests and copies; and
+    while it holds the cache's lock, bcache_holds()): killed at once there it left the cache's
+    records of copies under way on its dead stack, blocks marked as copied, written or read for
+    good, the blocks it held and the locks. Its long waits
     there are cut short like the others, so the call unwinds; when the kill that waited comes and
     the task is still inside (a device that takes its time), it comes as soon as the task leaves,
     and the kernel log says once that it waits. A kernel thread outside any call that is killed

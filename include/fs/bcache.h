@@ -52,8 +52,9 @@ each sync counts its own requests (B13). B28: bdirty_blocks() lists a device's d
 B33: a block written from a copy is let go when another task sets aside a block the copy needs.
 B34: a copy is written only when nothing it needed was set aside or dropped since it was taken.
 B35: a block bdiscard() could not drop then (held, under I/O) is dropped when let go or its I/O ends.
-B39: a kill or, in a kernel command, Ctrl+C cuts a sync's long waits short (EIO); a task inside a call into the
-cache is counted (surf_task.fs_hold), and a kill that waited is put off until it is out (kernel/task.c).
+B39: a kill or, in a kernel command, Ctrl+C cuts a sync's long waits short (EIO); a kill that waited is put off while
+the task holds the cache's lock (bcache_holds()) or state of its own in it with the lock let go (surf_task.fs_hold,
+counted around device requests and copies; a file system counts its own calls: kernel/task.c).
 B40: binvalidate() drops as bdiscard() does. B41: a copy is spoiled only when its block changed since it was
 taken, and it is taken again as long as it takes (no bound: rm traffic alone no longer fails a sync).
 */
@@ -135,6 +136,9 @@ u_int bdirty_blocks(struct bdev *dev, u32 *lbas, u_int max);  /* 10/16/26 (B28):
 void baside(struct bdev *dev, u32 lba, bool on);
 void bdiscard(struct bdev *dev, u32 lba);
 int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's account against its blocks: 0, or how many counters are off */
+struct surf_task;
+bool bcache_holds(const struct surf_task *t);        /* 10/17/26 (B39): t has the cache's lock or its bounce buffer's (a kill
+                                                        that waited is put off meanwhile: kernel/task.c) */
 
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache

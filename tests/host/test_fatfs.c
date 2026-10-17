@@ -3287,9 +3287,10 @@ static void b39(void) {
 }
 
 /* B39b: the kill in a sync's wait for a hold outside a copy (bsync()'s first rounds, through the file system's sync), as
-   kill_task() makes it for a system call (TI_KILL) and Ctrl+C for a kernel command (TI_INT); the count inside the volume's
-   lock (an rm's order point: fs/fat.c's lock and the cache's); a task that ends by itself (TC_EXIT, killed before) is not
-   cut short: its files' close writes them out */
+   kill_task() makes it for a system call (TI_KILL) and Ctrl+C for a kernel command (TI_INT): that wait holds nothing of
+   the cache with its lock let go (not counted), and is cut short; the count during an rm's order point (fs/fat.c's lock,
+   and the cache's around its device request); a task that ends by itself (TC_EXIT, killed before) is not cut short: its
+   files' close writes them out */
 static struct buf *b39b_held;
 static int b39b_mode, b39b_seen, b39b_released, b39b_yields, b39b_rm_hold;
 static surf_task b39b_t;
@@ -3301,7 +3302,7 @@ static void b39b_yield(void) {
         return;
     }
     if(b39b_seen) return;
-    b39b_seen = FS_HOLD(curTask) ? FS_HOLD(curTask) : -1;
+    b39b_seen = 1 + FS_HOLD(curTask);               /* (1: none: the wait holds nothing of the cache, its lock let go) */
     if(b39b_mode == 0) { curTask->in_call = TC_SYSCALL; curTask->intr |= TI_KILL; }   /* kill_task() */
     else { curTask->in_call = TC_COMMAND; curTask->intr |= TI_INT; }                  /* Ctrl+C (task_interrupt_job()) */
 }
@@ -3345,17 +3346,16 @@ static void b39b(int mode) {
     r = fsync_sb(sb);                                /* vfs_fsync(): the file system's sync, then the device's blocks */
     yield_hook = NULL;
     gave_up = said("held for");
-    if(verbose) printf("      %s: the sync %d (yields %d); inside the cache in the wait %d, after %d; B18 gave up %d%s\n", what[mode], r,
-                       b39b_yields, b39b_seen, FS_HOLD(curTask), gave_up, mode == 0 ? "" : "");
+    if(verbose) printf("      %s: the sync %d (yields %d); counted inside the cache in the wait %d, after %d; B18 gave up %d\n",
+                       what[mode], r, b39b_yields, b39b_seen - 1, FS_HOLD(curTask), gave_up);
     if(mode == 0) {
-        if(verbose) printf("      the rm's order point ran inside %d (the volume's lock and the cache: 2)\n", b39b_rm_hold);
-        check(b39b_rm_hold >= 2, "B39b: an rm's order point runs inside the volume's lock and the cache (fs_hold 2)");
+        if(verbose) printf("      the rm's order point's device writes ran counted %d (the volume's lock and the request: 2)\n", b39b_rm_hold);
+        check(b39b_rm_hold >= 2, "B39b: an rm's order point's device writes run counted inside the file system (the volume's lock, the request)");
     }
     if(mode < 2) {
-        check(b39b_seen > 0 && FS_HOLD(curTask) == 0, mode ? "B39b: inside the cache in the wait, out after it (Ctrl+C)"
-                                                           : "B39b: inside the cache in the wait, out after it (a kill)");
-        check(r == -EIO && !gave_up && b39b_yields <= 2, mode ? "B39b: Ctrl+C in a kernel command cuts the sync's wait for a hold short"
-                                                              : "B39b: a kill cuts the sync's wait for a hold short (EIO at once)");
+        check(b39b_seen > 0 && FS_HOLD(curTask) == 0 && !gave_up && b39b_yields <= 2 && r == -EIO,
+              mode ? "B39b: Ctrl+C in a kernel command cuts the sync's wait for a hold short (EIO at once, nothing held after)"
+                   : "B39b: a kill cuts the sync's wait for a hold short (EIO at once, nothing held after)");
         curTask = NULL;
         brelse(b39b_held);
         r2 = fsync_sb(sb);

@@ -35,6 +35,7 @@ the block cache (fs_hold, task.h): kill_escalate(), kill_task(), kill_hangup().
 #include <surfos/klog.h>
 #include <sys/framebuffer.h>
 #include <fs/vfs.h>
+#include <fs/bcache.h>
 #include <mm/uvm.h>
 #include <surfos/proc.h>
 
@@ -188,6 +189,9 @@ static void kill_escalate(void *arg);
 static void kill_hangup(surf_task *t);
 #define FS_HOLD_RETRY_MS 20                     /* 10/17/26 (audit B39): a kill put off while the task is inside a file
                                                    system looks again this much later */
+/* 10/17/26 (audit B39): is t inside a file system or the block cache, where a kill at once would leave locks, blocks
+   and the cache's records behind: counted by fs/fat.c and fs/bcache.c (fs_hold), or holding the cache's lock */
+static bool in_fs(const surf_task *t) { return t->fs_hold || bcache_holds(t); }
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -365,7 +369,7 @@ void kill_task(surf_task *t) {
     flags = irq_save();
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) {
         /* gone already, or ending by itself (task_exit()) */
-    } else if(!t->in_call && !t->fs_hold) {
+    } else if(!t->in_call && !in_fs(t)) {
         become_zombie(t, -1);
     } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
         t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
@@ -387,7 +391,7 @@ static void kill_hangup(surf_task *t) {
        (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
         return;
     if(!t->in_call) {
-        if(t->fs_hold) {                        /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
+        if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
             t->intr |= TI_KILL;
             ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
             wake_intr(t);
@@ -417,7 +421,7 @@ static void kill_escalate(void *arg) {
         ktimer_start(&t->kill_timer, 10, false);
         return;
     }
-    if(t->fs_hold) {                                /* 10/17/26 (audit B39): inside a file system or the block cache */
+    if(in_fs(t)) {                                  /* 10/17/26 (audit B39): inside a file system or the block cache */
         if(t->in_call && !(t->intr & TI_FSWAIT)) {  /* (its waits there are cut short: it leaves soon; at once it would
                                                        leave the cache's records, marks, blocks and locks behind) */
             t->intr |= TI_FSWAIT;

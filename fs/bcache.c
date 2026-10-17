@@ -220,9 +220,10 @@ killed at once in write_copy() left its record on its dead stack in the list of 
 drop walked freed memory) and the copied block marked copying for good. Now the waits that can last (for a hold,
 a block set aside by another task, another task's copy or write under way, a hold that came back) are cut short
 by a kill or, in a kernel command, Ctrl+C (bsleep(), wait_prepare_intr()), and the call unwinds; a task ending
-by itself (TC_EXIT) waits on. Each call into the cache counts the task inside it (surf_task.fs_hold, lock()): a
-kill that waited is put off until it is out, so nothing it holds here stays behind (a device request it is in,
-a copy's record, its marks, the lock). A timed wait's timer is the task's wait_timer.
+by itself (TC_EXIT) waits on. A kill that waited is put off while the task holds the cache's lock or the bounce
+buffer's (bcache_holds(), kernel/task.c) and while it has let go of the lock with state of its own here (blocks it
+marked as read, written or copied, a copy's record and buffer: counted in surf_task.fs_hold around device requests
+and copies), so nothing it holds here stays behind. A timed wait's timer is the task's wait_timer.
 
 10/17/26 (audit B40): binvalidate() drops as bdiscard() does: a dirty block's drop spoils the copies that needed
 it (B34), and a block in someone's hands or under I/O goes when let go or when its I/O ends; a copy whose block
@@ -479,14 +480,20 @@ static bool cut_short(void) {
     return curTask && curTask != idle_task && curTask->intr && !(curTask->in_call & TC_EXIT);
 }
 
-/* 10/17/26 (B39): the calling task is inside the cache (surf_task.fs_hold): a kill that waited is not escalated
-   until it is out (kernel/task.c's kill_escalate()), since killed at once it would leave what it holds here behind
-   (the lock, a copy's record on its stack, blocks marked as copied, written or read). Counted before the lock is
-   taken and after it is let go: no moment has the lock held and the count at 0 */
+/* 10/17/26 (B39): what a kill at once (kernel/task.c's kill_escalate()) would leave behind here: the cache's lock or
+   the bounce buffer's while the task holds one (bcache_holds(): the kill is put off while it does), and, while it
+   has let go of the lock, the blocks it marked as read, written or copied, its copy's record and the copy's buffer:
+   the task is counted inside the cache then (surf_task.fs_hold, inside() before it lets go of the lock, outside()
+   once it has it again, so no moment is uncovered). Counted only around device requests and copies, never in the
+   calls made for each block (a count there cost SurfCPU about 1 % on its card's commands) */
 static inline void inside(void) { if(curTask) curTask->fs_hold++; }
 static inline void outside(void) { if(curTask && curTask->fs_hold) curTask->fs_hold--; }
-static void lock(void) { inside(); mutex_lock(&bcache_lock); }
-static void unlock(void) { mutex_unlock(&bcache_lock); outside(); }
+#define lock() mutex_lock(&bcache_lock)
+#define unlock() mutex_unlock(&bcache_lock)
+
+bool bcache_holds(const struct surf_task *t) {
+    return t && (bcache_lock.owner == t || bounce_lock.owner == t);
+}
 
 static void wake_waiters(void *arg) {
     (void)arg;
@@ -728,6 +735,7 @@ static int write_run(struct buf *b, u32 pass, struct tally *t, u32 max, u32 *pfi
         gen[i] = run[i]->gen;
     }
     inflight++;
+    inside();                                   /* 10/17/26 (B39): the run marked writing while the device works */
     mutex_unlock(&bcache_lock);
     if(n == 1) r = bdev_write(dev, first, 1, run[0]->data);
     else {
@@ -737,6 +745,7 @@ static int write_run(struct buf *b, u32 pass, struct tally *t, u32 max, u32 *pfi
         mutex_unlock(&bounce_lock);
     }
     mutex_lock(&bcache_lock);
+    outside();
     inflight--;
     io.writes++;
     f = irq_save();                             /* against a bdirty() between the test and the clearing */
@@ -855,6 +864,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
         ra[n++] = v;
     }
     inflight++;
+    inside();                                   /* 10/17/26 (B39): blocks marked loading while the device works */
     mutex_unlock(&bcache_lock);
     if(n == 1) r = bdev_read(dev, lba, 1, b->data);
     else {
@@ -875,6 +885,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
         io.reads++;
         if(r == 0) io.read_blocks++;
     }
+    outside();
     inflight--;
     for(i = 0; i < n; i++) {
         ra[i]->loading = false;
@@ -1153,6 +1164,7 @@ again:
     if(depth > BORDER_MAX || !(c = reuse())) return -1;   /* (reuse() may write another block: the lock goes) */
     c->refs = 1;                                /* unhashed and not valid: nobody finds it, nobody takes it */
     c->dev = NULL;
+    inside();                                   /* B39: the copy's buffer, b marked copying and the record, until done */
     if(!(w = wait_for(b, depth > 0)) || w == WAIT_ASIDE || b->dev != dev || b->lba != lba || !b->valid || !b->dirty ||
        b->aside) {
         r = w == WAIT_ASIDE ? COPY_ASIDE : b->dev == dev && b->lba == lba && b->valid && b->dirty ? -1 : 0;
@@ -1232,6 +1244,7 @@ again:
 done:
     c->refs = 0;
     drop(c);
+    outside();
     wake_up_all(&bwait);
     if(r == COPY_AGAIN) {                       /* B33, B34: let go above; look again (B41: as long as it takes) */
         r = 0;
@@ -1487,11 +1500,10 @@ void bcache_io_stats(struct bcache_io *out) {
 int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst) {
     u8 *d = (u8 *)dst;
     u32 have[BCACHE_RUN / 32];
-    inside();                                   /* 10/17/26 (B39): (the bounce buffer's lock, held while the device reads) */
     while(count) {
         u32 n = count < BCACHE_RUN ? count : BCACHE_RUN, i, cached = 0;
         int r;
-        if(dev->gone) { outside(); return BDEV_EGONE; }
+        if(dev->gone) return BDEV_EGONE;
         memset(have, 0, sizeof(have));
         mutex_lock(&bcache_lock);               /* the cached copies first: they are never older than the disk */
         for(i = 0; i < n; i++) {
@@ -1515,13 +1527,12 @@ int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst) {
             io.reads++;
             if(r == 0) io.read_blocks += n;
             mutex_unlock(&bcache_lock);
-            if(r) { outside(); return r; }
+            if(r) return r;
         }
         lba += n;
         d += n * 512;
         count -= n;
     }
-    outside();
     return 0;
 }
 
@@ -1535,19 +1546,17 @@ int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst) {
    read afterwards is what the device holds, and does not change when the cache makes room. */
 static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
     struct buf *copy[BCACHE_RUN];
-    inside();                                   /* 10/17/26 (B39): (the run's blocks marked writing meanwhile) */
     while(count) {
         u32 n = count < BCACHE_RUN ? count : BCACHE_RUN, i;
         u_long f;
         int r;
-        if(dev->gone) { outside(); return BDEV_EGONE; }
+        if(dev->gone) return BDEV_EGONE;
         mutex_lock(&bcache_lock);
         for(i = 0; i < n; i++) {                /* none of them in the middle of a read, a write or a copy */
             struct buf *p = find(dev, lba + i);
             if(p && (p->loading || p->writing || p->copying)) {
                 if(bsleep(0, true)) {           /* 10/17/26 (B39): (another task's copy may take long) cut short */
                     mutex_unlock(&bcache_lock);
-                    outside();
                     return BDEV_EIO;
                 }
                 i = (u32)-1;
@@ -1559,6 +1568,7 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
             if(copy[i]) copy[i]->writing = true;
         }
         inflight++;
+        inside();                               /* 10/17/26 (B39): the run's cached copies marked writing meanwhile */
         mutex_unlock(&bcache_lock);
         mutex_lock(&bounce_lock);
         if(src) memcpy(bounce, src, n * 512);
@@ -1566,6 +1576,7 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         r = bdev_write(dev, lba, n, bounce);
         mutex_unlock(&bounce_lock);
         mutex_lock(&bcache_lock);
+        outside();
         inflight--;
         io.writes++;
         if(r == 0) io.written_blocks += n;
@@ -1591,12 +1602,11 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         }
         wake_up_all(&bwait);
         mutex_unlock(&bcache_lock);
-        if(r) { outside(); return r; }
+        if(r) return r;
         lba += n;
         if(src) src += n * 512;
         count -= n;
     }
-    outside();
     return 0;
 }
 

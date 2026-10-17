@@ -218,7 +218,8 @@ mount says so and the next computer checks it. B31 marked it clean right after s
 
 10/17/26 (audit B39): a task holding a volume's lock is inside the file system (surf_task.fs_hold, fat_lock()):
 a kill that waited is put off until it lets go (kernel/task.c), since killed at once it left the lock, the
-blocks it held and the cache's state behind; the unmount counts itself the same way. The cache's waits a kill
+blocks it held and the cache's state behind; the mount, the unmount and the boot sector's probe and
+description count themselves the same way (fat_in()). The cache's waits a kill
 cuts short end the call along its error paths (fs/bcache.c), and a long read or write stops between two pieces
 (rw_locked(): a short count).
 
@@ -348,7 +349,7 @@ static bool name_eq(const char *a, const char *b) {
 
 /* 10/17/26 (audit B39): the volume's lock, and the calling task inside the file system while it holds it (surf_task.fs_hold):
    a kill that waited is not escalated before it lets go (kernel/task.c), so that the lock, the blocks it holds and the
-   cache's state are not left behind. Counted in a critical section (KCRIT_ENTER: no preemption, and a kill that waited
+   cache's state are not left behind (the cache counts none of its calls for each block: this count covers them). Counted in a critical section (KCRIT_ENTER: no preemption, and a kill that waited
    is put off a tick) so that no kill comes between taking the lock and counting it; a task still waiting for the lock
    holds nothing here and may be killed at once. Let go first, then counted out */
 static void fat_lock(struct superblock *sb) {
@@ -361,6 +362,10 @@ static void fat_unlock(struct superblock *sb) {
     mutex_unlock(&sb->lock);
     if(curTask && curTask->fs_hold) curTask->fs_hold--;
 }
+/* the same count for what runs without the volume's lock and holds blocks between the cache's calls (mount,
+   unmount, the boot sector's probe and description) */
+static void fat_in(void) { if(curTask) curTask->fs_hold++; }
+static void fat_out(void) { if(curTask && curTask->fs_hold) curTask->fs_hold--; }
 
 /**** UTF-8, UTF-16 and code page 437 ****/
 
@@ -2098,18 +2103,28 @@ static bool bpb_sane(const u8 *bs) {
 }
 
 static bool fat_probe(struct bdev *dev) {
-    struct buf *b = bread(dev, 0);
+    struct buf *b;
     bool ok;
-    if(!b) return false;
-    ok = bpb_sane(b->data);
-    brelse(b);
+    fat_in();                                                /* 10/17/26 (B39) */
+    b = bread(dev, 0);
+    ok = b && bpb_sane(b->data);
+    if(b) brelse(b);
+    fat_out();
     return ok;
 }
 
 static void copy_label(char *out, const u8 *raw);
 
 /* 10/5/26: what the boot sector says, for mkfs and mount: "FAT32, label TESTVOL" */
+static int describe(struct bdev *d, char *buf, size_t n);
 int fat_describe(struct bdev *d, char *buf, size_t n) {
+    int r;
+    fat_in();                                                /* 10/17/26 (B39) */
+    r = describe(d, buf, n);
+    fat_out();
+    return r;
+}
+static int describe(struct bdev *d, char *buf, size_t n) {
     struct buf *b = bread(d, 0);
     const u8 *bs;
     u32 total, spf, data, clusters;
@@ -2195,7 +2210,7 @@ static int fat_unmount(struct superblock *sb) {
     u32 i, lost = 0;
     bool ok = false;
     const char *why = NULL;
-    if(curTask) curTask->fs_hold++;
+    fat_in();
     if(fs->marked && !fs->dev->gone) {
         ok = !fs->damaged;
         if(ok && fs->npending) {
@@ -2225,7 +2240,7 @@ static int fat_unmount(struct superblock *sb) {
                      " pointing at them: check the volume (fsck.fat frees them)\n", fs->type, fs->dev->name,
                      fs->lost_unsure ? "at least " : "", (u_long)lost, lost == 1 ? "" : "s");
     kfree(fs);
-    if(curTask && curTask->fs_hold) curTask->fs_hold--;
+    fat_out();
     return 0;
 }
 
@@ -2246,7 +2261,15 @@ static int fat_statfs(struct superblock *sb, struct statfs *st) {
 
 static const struct superblock_ops fat_sops = { fat_sync, fat_unmount, fat_statfs };
 
+static int mount_volume(struct superblock *sb);
 static int fat_mount(struct superblock *sb) {
+    int r;
+    fat_in();                                                /* 10/17/26 (B39): a kill that waited lets it finish */
+    r = mount_volume(sb);
+    fat_out();
+    return r;
+}
+static int mount_volume(struct superblock *sb) {
     struct fat_fs *fs;
     struct fat_node *root;
     struct buf *b;
