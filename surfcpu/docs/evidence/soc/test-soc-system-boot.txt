@@ -1,3 +1,4 @@
+Note (2026-10-17): this is the b4717a6 transcript (SurfBoot 1.0.0, SoC 0.1.0, memory map 1); `make -C surfcpu test-soc-system-boot` (on make check) writes each current run's summary to build/soc/system_boot/summary.txt, and the board's own SurfBoot 1.1.0 boot is docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt.
 soc round 2 evidence: make test-soc-system-boot inside make check, 2026-10-16 00:18-00:20 CDT
 Branch sc/soc-2 at b4717a6 (clean tree: SurfBoot, the kernel package and the sysinfo build id all
 say b4717a6a); container surfcpu-toolchain:2026-10-15 (Verilator 5.032, -O3 --x-assign fast).
