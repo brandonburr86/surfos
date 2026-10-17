@@ -131,8 +131,8 @@ hexadecimal, as bramdiag prints them: the DDR design shows `DDR status 14`, PRES
 SWINIT), each section (identity, ALU, M extension, branches, loads
 and stores, CSRs, scratch RAM, exceptions each recovered, interrupts with timer and WFI,
 FENCE.I) `ok`, the timer's progress within 20 % of 1 ms a tick, any other section `ok` or
-`skipped` (the bramdiag bitstream has no DDR: `DDR ... skipped`; the DDR design's DDR sections
-must be `ok`), and `BRAMDIAG: PASS`. Then it
+`skipped` (the bramdiag bitstream has no DDR: `DDR ... skipped`; the DDR design runs its DDR
+sections, and a failed one makes the end `BRAMDIAG: FAIL`), and `BRAMDIAG: PASS`. Then it
 types `Arty7` and checks each character comes back with its code (`echo 1: 'A' 0x41` ...). If
 the first run came before the port was open, it types Ctrl-R to run the diagnostics again and
 says so. You answer whether LD4..LD6 are lit, LD7 blinks about once a second (the heartbeat of
