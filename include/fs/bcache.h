@@ -52,6 +52,10 @@ each sync counts its own requests (B13). B28: bdirty_blocks() lists a device's d
 B33: a block written from a copy is let go when another task sets aside a block the copy needs.
 B34: a copy is written only when nothing it needed was set aside or dropped since it was taken.
 B35: a block bdiscard() could not drop then (held, under I/O) is dropped when let go or its I/O ends.
+B39: a kill or, in a kernel command, Ctrl+C cuts a sync's long waits short (EIO); a task inside a call into the
+cache is counted (surf_task.fs_hold), and a kill that waited is put off until it is out (kernel/task.c).
+B40: binvalidate() drops as bdiscard() does. B41: a copy is spoiled only when its block changed since it was
+taken, and it is taken again as long as it takes (no bound: rm traffic alone no longer fails a sync).
 */
 
 #ifndef _FS_BCACHE_H
@@ -110,14 +114,16 @@ void brelse(struct buf *b);
 int bsync(struct bdev *dev);                         /* write dirty blocks of dev (NULL: of every device); -1 when one failed.
                                                         Never with a block of the device held (10/16/26, B7: it waits for holders;
                                                         B18: 10 s for a hold). 10/16/26 (B12): 0 when every block dirty
-                                                        at the call reached the device, else -1 */
+                                                        at the call reached the device, else -1. 10/17/26 (B39): a kill
+                                                        or Ctrl+C cuts its waits short: -1 */
 int bsync_order(struct bdev *dev, u8 top);           /* 10/16/26 (B7): bsync() of the orders 0 .. top only */
 /* 10/16/26 (B6): before a file system makes blocks of dev dirty: 0, or -1 when dev refuses writes and
    already holds BCACHE_HOLD dirty blocks (the write must fail: EIO; B14: one write of its oldest block
    tells first whether it takes writes again). A device that works and holds that many writes some
    out first. bget() asks the same. */
 int bcache_room(struct bdev *dev);
-void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount) */
+void binvalidate(struct bdev *dev);                  /* drop every block of dev (after bsync, at umount); 10/17/26 (B40):
+                                                        one held or under I/O when let go or when its I/O ends */
 void bcache_stats(u_long *hits, u_long *misses, u_long *writes);
 u_int bdirty_count(struct bdev *dev);                /* 10/16/26 (B10): dev's dirty blocks (umount says what it gives up) */
 /* 10/16/26 (B16): for a file system that frees clusters behind an order point: the failed blocks of dev (up to
