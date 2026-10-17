@@ -402,9 +402,10 @@ sync returns 0 only when every block that was dirty when it began reached the ca
 after 8 rounds of another task's writing it returned 0 with a directory block still dirty), and
 gives up on such a block once syncs have waited 10 s for its hold (B18: a task killed with
 buffers in hand left every later sync hanging; B39: a kill or Ctrl+C cuts a sync's long waits short,
-and a task inside the cache or holding a volume's lock is counted, `fs_hold`: the kill that waited
-2 s comes once it is out, never in the middle, where it left a copy's record on the dead task's stack
-and blocks marked as copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
+and a task inside a FAT call, holding the cache's lock, or with blocks of its own marked in the cache
+is not killed at once (`fs_hold`, `bcache_holds()`): the kill that waited 2 s comes once it is out,
+never in the middle, where it left a copy's record on the dead task's stack and blocks marked as
+copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
