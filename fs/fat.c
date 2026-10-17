@@ -219,7 +219,8 @@ mount says so and the next computer checks it. B31 marked it clean right after s
 10/17/26 (audit B39): a task holding a volume's lock is inside the file system (surf_task.fs_hold, fat_lock()):
 a kill that waited is put off until it lets go (kernel/task.c), since killed at once it left the lock, the
 blocks it held and the cache's state behind; the unmount counts itself the same way. The cache's waits a kill
-cuts short end the call along its error paths (fs/bcache.c).
+cuts short end the call along its error paths (fs/bcache.c), and a long read or write stops between two pieces
+(rw_locked(): a short count).
 
 10/17/26 (audit B42): a volume not marked cleanly unmounted when it was mounted stays so at unmount, which says
 so: SurfOS's own next mount warned once and its unmount marked the volume clean (B38's lost clusters, B24's
