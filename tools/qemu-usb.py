@@ -752,7 +752,9 @@ def scenario_keyboard(args, image, firmware, outdir):
 
 def scenario_gui(args, image, firmware, outdir):
     from gui_scenario import run
-    return run(Vm, PROMPT, args, image, firmware, outdir)
+    # 10/17/26: Notepad and Files work on a FAT32 data stick, made here and read back here afterwards
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
 
 
 def scenario_graphics(args, image, firmware, outdir):

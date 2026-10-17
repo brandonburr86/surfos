@@ -5,23 +5,136 @@ File: guicore.c Date: 10/10/26
 --------------------
 A small immediate-mode desktop, rendered to ordinary RAM by its owning task.
 All coordinates here are logical pixels. The shell handles input and presentation.
+10/17/26: a window manager (minimize, maximize, resize from the corner, a taskbar
+with a clock), the menus as tables (items are disabled where they do not apply),
+desktop tiles, Help, and the actions that menus, toolbars, keys and dialogs share
+(gui_act, gui_answer). Notepad (guinote.c), Files (guifiles.c), the dialogs
+(guidialog.c) and the drawing kit (guidraw.c) have files of their own.
 */
-#include <sys/gui.h>
+#include "guipriv.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-#define NAVY 0x102E3B
-#define INK 0x153D49
-#define TEAL 0x197D83
-#define FOAM 0xB8E9D9
-#define PAPER 0xF4F1E6
-#define MUTED 0x6C888C
-#define CORAL 0xEE906D
 static const u32 paints[] = { PAPER, INK, TEAL, CORAL, 0x659ECB, 0xD0B056 };
-static const char *titles[] = { "Calculator", "Sketch", "About SurfOS", "Pointer & desktop" };
+static const char *const titles[] = { "Calculator", "Sketch", "About SurfOS", "Pointer & desktop", "Notepad", "Files", "Help" };
+static const int app_icons[] = { ICON_CALC, ICON_SKETCH, ICON_WAVE, ICON_GEAR, ICON_NOTEPAD, ICON_FILES, ICON_HELP };
 static const char keys[] = "789/456*123-C0=+";
-static int clamp(int n, int a, int b) { return n < a ? a : n > b ? b : n; }
-static bool inside(int x,int y,int l,int t,int w,int h) { return x>=l && y>=t && x<l+w && y<t+h; }
+static const char *const menu_names[] = { "\xF7 SurfOS", "File", "Edit", "Apps", "Window", "Help" };
+#define MENUS 6
+#define MENU_MAX 16
+static const struct { const char *label; int app, icon; } tiles[] = {
+    { "Notepad", GUI_NOTEPAD, ICON_NOTEPAD }, { "Files", GUI_FILES, ICON_FILES },
+    { "Calculator", GUI_CALC, ICON_CALC }, { "Sketch", GUI_SKETCH, ICON_SKETCH },
+};
+#define TILES (int)(sizeof(tiles) / sizeof(tiles[0]))
+static const char *const help[] = {
+    "#The desktop",
+    "Ctrl+E Notepad      Ctrl+B Files      Ctrl+K Calculator",
+    "Ctrl+D Sketch       Ctrl+P Pointer & desktop",
+    "Ctrl+O opens a file in Notepad; Ctrl+W closes a window.",
+    "Ctrl+G opens the menus: the arrows and Enter choose.",
+    "Tab goes to the next window (in Notepad it is a tab).",
+    "Esc closes a menu, a dialog or a window.",
+    "Ctrl+Q returns to the shell, asking first about changes",
+    "Notepad has not saved. F1-F4 switch consoles; the",
+    "desktop waits on its own and comes back on it.",
+    "",
+    "#Windows",
+    "Drag a title bar to move a window. Double-click it, or",
+    "its middle button, to fill the screen. Drag the corner",
+    "of Notepad, Files or Help to resize it. The taskbar",
+    "shows each open window: click one to bring it up, or",
+    "to tuck it away when it is in front.",
+    "",
+    "#Notepad",
+    "Ctrl+N new, Ctrl+O open, Ctrl+S save. Save as is in the",
+    "File menu. Ctrl+Z undo, Ctrl+Y redo; Ctrl+X, Ctrl+C and",
+    "Ctrl+V cut, copy and paste; Ctrl+A selects everything.",
+    "Ctrl+F finds (Enter finds the next one), Ctrl+L goes to",
+    "a line. Drag to select; double-click selects a word.",
+    "Files of up to 256 KB. Their line ends stay as they are:",
+    "LF, or CRLF when every line has one.",
+    "",
+    "#Files",
+    "The folders from / down. Double-click, or Enter, opens a",
+    "folder, or a file in Notepad. Right and Left open and",
+    "close folders, Ctrl+R reads them again. A USB stick that",
+    "is not mounted is listed at the top with Mount; Eject it",
+    "before you pull it out. Delete asks first, and deletes a",
+    "file or an empty folder only.",
+};
+#define HELP_LINES (int)(sizeof(help) / sizeof(help[0]))
+
+int gui_clamp(int n, int a, int b) { return n < a ? a : n > b ? b : n; }
+bool gui_inside(int x, int y, int l, int t, int w, int h) { return x >= l && y >= t && x < l + w && y < t + h; }
+static bool resizable(int id) { return id == GUI_NOTEPAD || id == GUI_FILES || id == GUI_HELP; }
+
+/**** small things the desktop's files share ****/
+
+void gui_join(char *out, size_t n, const char *dir, const char *name) {
+    char d[GUI_PATH_MAX];
+    strlcpy(d, dir, sizeof(d));                         /* out may be dir */
+    snprintf(out, n, "%s%s%s", d, d[0] && d[strlen(d) - 1] == '/' ? "" : "/", name);
+}
+
+const char *gui_basename(const char *path) {
+    const char *s = strrchr(path, '/');
+    return s && s[1] ? s + 1 : path;
+}
+
+void gui_parent(char *path) {
+    char *s = strrchr(path, '/');
+    if(!s) return;
+    if(s == path) path[1] = 0;
+    else *s = 0;
+}
+
+/* seconds since 1970 as a date (the days to a civil date: H. Hinnant's method, in 32 bits) */
+void gui_date(u32 t, char *out, size_t n) {
+    u32 z = t / 86400 + 719468, era = z / 146097, doe = z - era * 146097;
+    u32 yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365, doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    u32 mp = (5 * doy + 2) / 153, day = doy - (153 * mp + 2) / 5 + 1, month = mp < 10 ? mp + 3 : mp - 9;
+    u32 year = yoe + era * 400 + (month <= 2), s = t % 86400;
+    snprintf(out, n, "%04u-%02u-%02u %02u:%02u", year, month, day, s / 3600, s / 60 % 60);
+}
+
+void gui_bytes(u32 n, char *out, size_t size) {
+    u32 tenths;
+    if(n < 1024) { snprintf(out, size, "%u byte%s", n, n == 1 ? "" : "s"); return; }
+    tenths = n < 1048576 ? n * 10 / 1024 : n / 1024 * 10 / 1024;
+    if(tenths < 100) snprintf(out, size, "%u.%u %s", tenths / 10, tenths % 10, n < 1048576 ? "KB" : "MB");
+    else snprintf(out, size, "%u %s", tenths / 10, n < 1048576 ? "KB" : "MB");
+}
+
+bool gui_double(u32 *last_ms, int *last_row, u32 now, int row) {
+    if(row == *last_row && now - *last_ms <= DOUBLE_MS) { *last_row = -1; return true; }
+    *last_ms = now;
+    *last_row = row;
+    return false;
+}
+
+const char *gui_error(const struct gui_state *g, int err) {
+    return g->fs && g->fs->error ? g->fs->error(err) : "failed";
+}
+
+/* a toolbar: left to right below the title bar */
+static int tool_width(const struct gui_tool *t) { return (int)strlen(t->label) * 8 + 14; }
+
+int tool_hit(const struct gui_tool *t, int n, int x, int y) {
+    int i, at = 8;
+    if(y < TITLE_H + 4 || y >= TITLE_H + 4 + 22) return -1;
+    for(i = 0; i < n; at += tool_width(&t[i]) + 4, i++) if(x >= at && x < at + tool_width(&t[i])) return i;
+    return -1;
+}
+
+void tool_render(const struct gui_draw *d, int x, int y, const struct gui_tool *t, int n, const bool *on) {
+    int i, at = x + 8;
+    for(i = 0; i < n; at += tool_width(&t[i]) + 4, i++)
+        gd_button(d, at, y + TITLE_H + 4, tool_width(&t[i]), 22, t[i].label, on[i] ? SHELL : BAND, on[i] ? INK : MUTED);
+}
+
+/**** the calculator ****/
 
 void gui_calc_key(struct gui_calc *c, int key) {
     i64 v;
@@ -49,142 +162,616 @@ void gui_calc_key(struct gui_calc *c, int key) {
     c->op=(key=='=' || key=='\r' || key=='\n') ? 0 : key;
 }
 
+/**** windows ****/
+
+static void refocus(struct gui_state *g) {
+    int i;
+    g->focus = -1;
+    for(i = GUI_WINDOWS - 1; i >= 0; i--) {
+        if(g->win[g->order[i]].open && !g->win[g->order[i]].min) { g->focus = g->order[i]; break; }
+    }
+    g->dirty = true;
+}
+
 void gui_open(struct gui_state *g, int app) {
     int i,j;
+    bool was;
     if(app<0 || app>=GUI_WINDOWS) return;
+    was = g->win[app].open;
     for(i=0;i<GUI_WINDOWS;i++) if(g->order[i]==app) {
         for(j=i;j<GUI_WINDOWS-1;j++) g->order[j]=g->order[j+1];
         g->order[GUI_WINDOWS-1]=app; break;
     }
-    g->win[app].open=true; g->focus=app; g->menu=0; g->dirty=true;
+    g->win[app].open=true; g->win[app].min=false; g->focus=app; g->menu=0; g->dirty=true;
+    if(!was && app == GUI_FILES) files_open(g);
 }
-static void close_window(struct gui_state *g) {
-    int i;
-    if(g->focus>=0) g->win[g->focus].open=false;
-    g->focus=-1;
-    for(i=GUI_WINDOWS-1;i>=0;i--) if(g->win[g->order[i]].open) { g->focus=g->order[i]; break; }
-    g->dirty=true;
+
+static void close_now(struct gui_state *g, int id) {
+    g->win[id].open = g->win[id].min = false;
+    if(id == GUI_NOTEPAD) note_reset(&g->note);
+    refocus(g);
 }
+
+/* Notepad's document goes with its window, after the question about its changes */
+void gui_close(struct gui_state *g, int id) {
+    if(id < 0 || id >= GUI_WINDOWS || !g->win[id].open) return;
+    if(id == GUI_NOTEPAD && !gui_guard(g, PEND_CLOSE, NULL)) return;
+    close_now(g, id);
+}
+
+static void minimize(struct gui_state *g, int id) {
+    if(id < 0 || !g->win[id].open) return;
+    g->win[id].min = true;
+    refocus(g);
+}
+
+static void maximize(struct gui_state *g, int id) {
+    struct gui_window *w = &g->win[id];
+    if(id < 0 || !resizable(id)) return;
+    if(w->max) { w->max = false; w->x = w->nx; w->y = w->ny; w->w = w->nw; w->h = w->nh; }
+    else { w->nx = w->x; w->ny = w->y; w->nw = w->w; w->nh = w->h; w->max = true; }
+    gui_place(g, id);
+    g->dirty = true;
+}
+
+void gui_place(struct gui_state *g, int id) {
+    struct gui_window *w = &g->win[id];
+    int room = g->height - MENU_H - TASK_H;
+    if(w->max) { w->x = 0; w->y = MENU_H; w->w = g->width; w->h = room; return; }
+    if(w->w > g->width) w->w = g->width;
+    if(w->h > room) w->h = room;
+    w->x = gui_clamp(w->x, 0, g->width - w->w);
+    w->y = gui_clamp(w->y, MENU_H, g->height - TASK_H - w->h);
+}
+
 void gui_init(struct gui_state *g, int width, int height) {
-    int i;
+    int i, room = height - MENU_H - TASK_H, w, h;
     memset(g,0,sizeof(*g)); g->width=width; g->height=height;
-    g->focus=g->drag=-1; g->brush=1; g->speed=1;
+    g->focus=g->drag=g->resize=g->scroll=-1; g->brush=1; g->speed=1;
+    g->title_id=g->files.click_row=g->dialog.click_row=-1;
     g->x=width/2; g->y=height/2;
     for(i=0;i<GUI_WINDOWS;i++) g->order[i]=i;
-    g->win[GUI_CALC]=(struct gui_window){width-272,50,248,300,false};
-    g->win[GUI_SKETCH]=(struct gui_window){(width-432)/2,64,432,294,false};
-    g->win[GUI_ABOUT]=(struct gui_window){(width-432)/2,(height-234)/2,432,234,false};
-    g->win[GUI_SETTINGS]=(struct gui_window){(width-400)/2,72,400,244,false};
+    g->win[GUI_CALC]=(struct gui_window){width-272,50,248,300};
+    g->win[GUI_SKETCH]=(struct gui_window){(width-432)/2,64,432,294};
+    g->win[GUI_ABOUT]=(struct gui_window){(width-432)/2,(height-234)/2,432,234};
+    g->win[GUI_SETTINGS]=(struct gui_window){(width-400)/2,72,400,244};
+    w = width - 48 < 640 ? width - 48 : 640; h = room - 20 < 420 ? room - 20 : 420;
+    g->win[GUI_NOTEPAD]=(struct gui_window){width-w-24,MENU_H+10,w,h};
+    w = width - 48 < 600 ? width - 48 : 600; h = room - 30 < 380 ? room - 30 : 380;
+    g->win[GUI_FILES]=(struct gui_window){24,MENU_H+20,w,h};
+    w = width - 48 < 540 ? width - 48 : 540; h = room - 20 < 380 ? room - 20 : 380;
+    g->win[GUI_HELP]=(struct gui_window){(width-w)/2,MENU_H+10,w,h};
+    for(i=0;i<GUI_WINDOWS;i++) gui_place(g,i);
+    note_reset(&g->note);
     gui_open(g,GUI_ABOUT);
 }
-static int menu_count(int menu) { return menu==2 ? 2 : 3; }
-static int menu_x(int menu) { return menu==1 ? 8 : menu==2 ? 120 : 192; }
-static void menu_action(struct gui_state *g, int item) {
-    int m=g->menu;
-    g->menu=0; g->dirty=true;
-    if(m==1) {
-        if(item==0) gui_open(g,GUI_ABOUT);
-        if(item==1) close_window(g);
-        if(item==2) g->quit=true;
-    } else if(m==2) gui_open(g,item==0 ? GUI_CALC : GUI_SKETCH);
-    else {
-        if(item==0) gui_open(g,GUI_SETTINGS);
-        if(item==1) g->night=!g->night;
-        if(item==2) { memset(g->canvas,0,sizeof(g->canvas)); gui_open(g,GUI_SKETCH); }
+
+/**** the menus ****/
+
+struct menu_item { const char *label, *keys; int act; bool on; };
+
+static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
+    const struct gui_note *n = &g->note;
+    bool note = g->focus == GUI_NOTEPAD, sel = note && note_has_selection(n), files = g->fs != NULL, any = false;
+    int count = 0, i, id;
+#define ITEM(l, k, a, e) do { it[count].label = (l); it[count].keys = (k); it[count].act = (a); it[count].on = (e); count++; } while(0)
+#define SEPARATOR() do { it[count].label = NULL; it[count].keys = ""; it[count].act = ACT_NONE; it[count].on = false; count++; } while(0)
+    for(i = 0; i < GUI_WINDOWS; i++) if(g->win[i].open) any = true;
+    switch(m) {
+    case 1:
+        ITEM("About SurfOS", "", ACT_ABOUT, true);
+        ITEM("Pointer & desktop", "Ctrl+P", ACT_SETTINGS, true);
+        ITEM("Ocean / dusk colors", "", ACT_THEME, true);
+        SEPARATOR();
+        ITEM("Return to shell", "Ctrl+Q", ACT_QUIT, true);
+        break;
+    case 2:
+        ITEM("New note", "Ctrl+N", ACT_NEW, true);
+        ITEM("Open\xF9", "Ctrl+O", ACT_OPEN, files);
+        ITEM("Save", "Ctrl+S", ACT_SAVE, note && files);
+        ITEM("Save as\xF9", "", ACT_SAVE_AS, note && files);
+        SEPARATOR();
+        ITEM("Show in Files", "", ACT_REVEAL, note && files && n->path[0]);
+        SEPARATOR();
+        ITEM("Close window", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
+        break;
+    case 3:
+        ITEM("Undo", "Ctrl+Z", ACT_UNDO, note && n->undo_at > 0);
+        ITEM("Redo", "Ctrl+Y", ACT_REDO, note && n->undo_at < n->nundo);
+        SEPARATOR();
+        ITEM("Cut", "Ctrl+X", ACT_CUT, sel);
+        ITEM("Copy", "Ctrl+C", ACT_COPY, sel);
+        ITEM("Paste", "Ctrl+V", ACT_PASTE, note && g->clip_len);
+        ITEM("Delete", "Del", ACT_DELETE, sel);
+        SEPARATOR();
+        ITEM("Select all", "Ctrl+A", ACT_SELECT_ALL, note);
+        ITEM("Find\xF9", "Ctrl+F", ACT_FIND, note);
+        ITEM("Find next", "", ACT_FIND_NEXT, note && n->find.len);
+        ITEM("Go to line\xF9", "Ctrl+L", ACT_GOTO, note);
+        break;
+    case 4:
+        ITEM("Notepad", "Ctrl+E", ACT_NOTEPAD, true);
+        ITEM("Files", "Ctrl+B", ACT_FILES, files);
+        ITEM("Calculator", "Ctrl+K", ACT_CALC, true);
+        ITEM("Sketch", "Ctrl+D", ACT_SKETCH, true);
+        SEPARATOR();
+        ITEM("Clear sketch", "", ACT_CLEAR_SKETCH, true);
+        break;
+    case 5:
+        ITEM("Next window", "Tab", ACT_NEXT_WINDOW, any);
+        ITEM("Minimize", "", ACT_MINIMIZE, g->focus >= 0);
+        ITEM(g->focus >= 0 && g->win[g->focus].max ? "Restore size" : "Maximize", "", ACT_MAXIMIZE, g->focus >= 0 && resizable(g->focus));
+        ITEM("Close", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
+        if(any) SEPARATOR();
+        for(id = 0; id < GUI_WINDOWS; id++)
+            if(g->win[id].open) ITEM(titles[id], g->focus == id ? "\x10" : g->win[id].min ? "hidden" : "", ACT_WINDOW + id, true);
+        break;
+    case 6:
+        ITEM("Keyboard and mouse", "", ACT_HELP, true);
+        ITEM("About SurfOS", "", ACT_ABOUT, true);
+        break;
+    }
+#undef ITEM
+#undef SEPARATOR
+    return count;
+}
+
+static int menu_left(int m) {
+    int x = 8, i;
+    for(i = 1; i < m; i++) x += (int)strlen(menu_names[i - 1]) * 8 + 24;
+    return x;
+}
+
+static int menu_at(int x) {
+    int m;
+    for(m = 1; m <= MENUS; m++) if(x >= menu_left(m) - 4 && x < menu_left(m + 1) - 4) return m;
+    return 0;
+}
+
+static int menu_width(const struct menu_item *it, int n) {
+    int w = 184, i, k;
+    for(i = 0; i < n; i++) {
+        if(!it[i].label) continue;
+        k = (int)(strlen(it[i].label) + strlen(it[i].keys)) * 8 + 64;
+        if(k > w) w = k;
+    }
+    return w;
+}
+
+static int item_top(const struct menu_item *it, int i) {
+    int y = MENU_H + 4, k;
+    for(k = 0; k < i; k++) y += it[k].label ? 24 : 9;
+    return y;
+}
+
+/* the item under x, y of the open menu: its number, or -1 */
+static int menu_hit(const struct gui_state *g, int x, int y) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, g->menu, it), left = menu_left(g->menu) - 4, i;
+    if(x < left || x >= left + menu_width(it, n)) return -1;
+    for(i = 0; i < n; i++) if(it[i].label && y >= item_top(it, i) && y < item_top(it, i) + 24) return i;
+    return -1;
+}
+
+static int menu_step(const struct menu_item *it, int n, int from, int step) {
+    int k, i = from;
+    for(k = 0; k < n; k++) {
+        i = (i + step + n) % n;
+        if(it[i].label && it[i].on) return i;
+    }
+    return from;
+}
+
+static void menu_open(struct gui_state *g, int m) {
+    struct menu_item it[MENU_MAX];
+    int n;
+    g->menu = m;
+    g->selection = 0;
+    if(m) {
+        n = menu_items(g, m, it);
+        g->selection = it[0].label && it[0].on ? 0 : menu_step(it, n, 0, 1);
+    }
+    g->dirty = true;
+}
+
+static void menu_run(struct gui_state *g, int i) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, g->menu, it);
+    g->menu = 0;
+    g->dirty = true;
+    if(i >= 0 && i < n && it[i].label && it[i].on) gui_act(g, it[i].act);
+}
+
+static void menu_key(struct gui_state *g, int key) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, g->menu, it);
+    if(key == 27) g->menu = 0;
+    else if(key == GUI_UP || key == GUI_DOWN) g->selection = menu_step(it, n, g->selection, key == GUI_UP ? -1 : 1);
+    else if(key == GUI_LEFT || key == GUI_RIGHT) menu_open(g, (g->menu + (key == GUI_RIGHT ? 0 : MENUS - 2)) % MENUS + 1);
+    else if(key == '\r' || key == '\n' || key == ' ') { menu_run(g, g->selection); return; }
+    g->dirty = true;
+}
+
+/**** what menus, toolbars, keys and dialogs do ****/
+
+static void chooser_dir(const struct gui_state *g, char *out, size_t n) {
+    if(g->note.path[0]) { strlcpy(out, g->note.path, n); gui_parent(out); }
+    else strlcpy(out, g->dialog.dir[0] ? g->dialog.dir : "/", n);
+}
+
+static void save_as(struct gui_state *g) {
+    char dir[GUI_PATH_MAX];
+    if(!g->fs) return;
+    chooser_dir(g, dir, sizeof(dir));
+    gui_open(g, GUI_NOTEPAD);
+    dialog_chooser(g, GUI_DLG_SAVE, ACT_DLG_SAVE_AS, dir, g->note.path[0] ? gui_basename(g->note.path) : "untitled.txt");
+}
+
+static void save_now(struct gui_state *g, const char *path) {
+    if(note_save(g, path) != 0) { g->pending = PEND_NONE; return; }
+    if(g->win[GUI_FILES].open) files_refresh(g);
+    if(g->pending) gui_proceed(g);
+}
+
+static void save(struct gui_state *g) {
+    char line[80];
+    if(!g->fs) return;
+    if(!g->note.path[0]) save_as(g);
+    else if(g->note.readonly) {
+        snprintf(line, sizeof(line), "%s is on a volume that cannot be written.", gui_basename(g->note.path));
+        dialog_confirm(g, ACT_DLG_READONLY, "Read-only volume", line, "Save a copy somewhere else?", "Save as\xF9", NULL, "Cancel");
+    } else save_now(g, g->note.path);
+}
+
+/* true: nothing is unsaved, go ahead; otherwise ask, and do pending once the answer allows */
+bool gui_guard(struct gui_state *g, int pending, const char *path) {
+    char line[80];
+    if(!g->note.modified) return true;
+    g->pending = pending;
+    strlcpy(g->pending_path, path ? path : "", sizeof(g->pending_path));
+    snprintf(line, sizeof(line), "Save the changes to %s?", g->note.path[0] ? gui_basename(g->note.path) : "Untitled");
+    gui_open(g, GUI_NOTEPAD);
+    dialog_confirm(g, ACT_DLG_GUARD, "Unsaved changes", line,
+                   pending == PEND_QUIT ? "If you don't, they are lost when the desktop closes." : "If you don't, they are lost.",
+                   "Save", "Don't save", "Cancel");
+    return false;
+}
+
+void gui_proceed(struct gui_state *g) {
+    char path[GUI_PATH_MAX];
+    int p = g->pending;
+    strlcpy(path, g->pending_path, sizeof(path));
+    g->pending = PEND_NONE;
+    switch(p) {
+    case PEND_NEW: note_reset(&g->note); gui_open(g, GUI_NOTEPAD); break;
+    case PEND_OPEN_PATH: if(note_load(g, path) == 0) gui_open(g, GUI_NOTEPAD); break;
+    case PEND_QUIT: g->quit = true; break;
+    case PEND_CLOSE: close_now(g, GUI_NOTEPAD); break;
+    }
+    g->dirty = true;
+}
+
+void gui_request_quit(struct gui_state *g) {
+    if(gui_guard(g, PEND_QUIT, NULL)) g->quit = true;
+}
+
+static void next_window(struct gui_state *g) {
+    int i, id;
+    for(i = 0; i < GUI_WINDOWS; i++) {                  /* the window at the back comes to the front */
+        id = g->order[i];
+        if(g->win[id].open && id != g->focus) { gui_open(g, id); return; }
     }
 }
+
+void gui_act(struct gui_state *g, int act) {
+    struct gui_note *n = &g->note;
+    char line[80], dir[GUI_PATH_MAX];
+    bool note = g->focus == GUI_NOTEPAD && g->win[GUI_NOTEPAD].open;
+    g->dirty = true;
+    if(act >= ACT_WINDOW && act < ACT_WINDOW + GUI_WINDOWS) { gui_open(g, act - ACT_WINDOW); return; }
+    if(act >= ACT_FILES_OPEN && act <= ACT_FILES_EJECT) { files_act(g, act); return; }
+    switch(act) {
+    case ACT_ABOUT: gui_open(g, GUI_ABOUT); break;
+    case ACT_SETTINGS: gui_open(g, GUI_SETTINGS); break;
+    case ACT_THEME: g->night = !g->night; break;
+    case ACT_QUIT: gui_request_quit(g); break;
+    case ACT_NEW: if(gui_guard(g, PEND_NEW, NULL)) { note_reset(n); gui_open(g, GUI_NOTEPAD); } break;
+    case ACT_OPEN:
+        if(g->fs) {
+            chooser_dir(g, dir, sizeof(dir));
+            dialog_chooser(g, GUI_DLG_OPEN, ACT_DLG_OPEN, dir, "");
+        }
+        break;
+    case ACT_SAVE: if(note) save(g); break;
+    case ACT_SAVE_AS: if(note) save_as(g); break;
+    case ACT_REVEAL: if(n->path[0] && g->fs) { gui_open(g, GUI_FILES); files_reveal(g, n->path); } break;
+    case ACT_CLOSE: gui_close(g, g->focus); break;
+    case ACT_UNDO: case ACT_REDO: if(note) note_undo(g, act == ACT_REDO); break;
+    case ACT_CUT: case ACT_COPY: if(note) note_copy(g, act == ACT_CUT); break;
+    case ACT_PASTE: if(note) note_paste(g); break;
+    case ACT_DELETE: if(note && note_has_selection(n)) note_insert(g, "", 0); break;
+    case ACT_SELECT_ALL: if(note) note_select_all(g); break;
+    case ACT_FIND:
+        if(!note) break;
+        if(note_has_selection(n)) {                     /* a short selection is what to look for */
+            u32 a = n->anchor < n->cursor ? n->anchor : n->cursor, b = n->anchor < n->cursor ? n->cursor : n->anchor;
+            if(b - a < sizeof(n->find.text) && !memchr(n->text + a, '\n', b - a)) {
+                memcpy(n->find.text, n->text + a, b - a);
+                n->find.text[b - a] = 0;
+            }
+        }
+        field_set(&n->find, n->find.text, true);
+        n->finding = true;
+        break;
+    case ACT_FIND_NEXT: if(note && n->find.len) note_find(g, n->find.text); break;
+    case ACT_GOTO:
+        if(!note) break;
+        snprintf(line, sizeof(line), "%d", note_line_of(n, n->cursor) + 1);
+        dialog_input(g, ACT_DLG_GOTO, "Go to line", "", line);
+        snprintf(g->dialog.text[0], sizeof(g->dialog.text[0]), "Line number, 1 to %d:", note_lines(n));
+        break;
+    case ACT_NOTEPAD: gui_open(g, GUI_NOTEPAD); break;
+    case ACT_FILES: if(g->fs) gui_open(g, GUI_FILES); break;
+    case ACT_CALC: gui_open(g, GUI_CALC); break;
+    case ACT_SKETCH: gui_open(g, GUI_SKETCH); break;
+    case ACT_CLEAR_SKETCH: memset(g->canvas, 0, sizeof(g->canvas)); gui_open(g, GUI_SKETCH); break;
+    case ACT_NEXT_WINDOW: next_window(g); break;
+    case ACT_MINIMIZE: minimize(g, g->focus); break;
+    case ACT_MAXIMIZE: maximize(g, g->focus); break;
+    case ACT_HELP: gui_open(g, GUI_HELP); break;
+    }
+}
+
+void gui_answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
+    struct gui_entry e;
+    bool device, readonly;
+    char line[80];
+    g->dirty = true;
+    switch(act) {
+    case ACT_DLG_GUARD:
+        if(button == 0) save(g);
+        else if(button == 1) gui_proceed(g);
+        else g->pending = PEND_NONE;
+        break;
+    case ACT_DLG_OPEN:
+        if(button == 0 && gui_guard(g, PEND_OPEN_PATH, text) && note_load(g, text) == 0) gui_open(g, GUI_NOTEPAD);
+        break;
+    case ACT_DLG_SAVE_AS:
+        if(button != 0 || !g->fs) { g->pending = PEND_NONE; break; }
+        if(strcmp(text, g->note.path) && g->fs->stat(g->fs->ctx, text, &e, &device, &readonly) == 0) {
+            snprintf(line, sizeof(line), "%s is there already.", gui_basename(text));
+            if(e.type == GUI_DIR || device) {
+                dialog_message(g, "Not saved", line, "It is not a file that can be replaced.");
+                g->pending = PEND_NONE;
+                break;
+            }
+            dialog_confirm(g, ACT_DLG_REPLACE, "Replace the file?", line, "Saving replaces what it holds.", "Replace", NULL, "Cancel");
+            strlcpy(g->dialog.target, text, sizeof(g->dialog.target));
+            break;
+        }
+        save_now(g, text);
+        break;
+    case ACT_DLG_REPLACE:
+        if(button == 0) save_now(g, target);
+        else g->pending = PEND_NONE;
+        break;
+    case ACT_DLG_READONLY:
+        if(button == 0) save_as(g);
+        else g->pending = PEND_NONE;
+        break;
+    case ACT_DLG_GOTO:
+        if(button == 0) note_goto(g, atoi(text));
+        break;
+    case ACT_DLG_NEW_FILE: case ACT_DLG_NEW_FOLDER: case ACT_DLG_RENAME: case ACT_DLG_DELETE:
+        files_answer(g, act, button, text, target);
+        break;
+    }
+}
+
+/**** the pointer ****/
+
 static void stroke(struct gui_state *g, int x, int y) {
     int dx=x-g->last_x, dy=y-g->last_y, n, i;
     int adx=dx<0?-dx:dx, ady=dy<0?-dy:dy;
     n=adx>ady?adx:ady;
     for(i=0;i<=n;i++) {
         int px=g->last_x+(n?dx*i/n:0), py=g->last_y+(n?dy*i/n:0);
-        if(inside(px,py,0,0,GUI_CANVAS_W,GUI_CANVAS_H)) g->canvas[py*GUI_CANVAS_W+px]=g->brush;
+        if(gui_inside(px,py,0,0,GUI_CANVAS_W,GUI_CANVAS_H)) g->canvas[py*GUI_CANVAS_W+px]=g->brush;
     }
     g->last_x=x; g->last_y=y; g->dirty=true;
 }
+
+/* the taskbar's buttons: the open windows, by number */
+static int task_buttons(const struct gui_state *g, int *ids, int *width) {
+    int n = 0, i;
+    for(i = 0; i < GUI_WINDOWS; i++) if(g->win[i].open) ids[n++] = i;
+    *width = n ? (g->width - 96) / n - 4 : 0;
+    if(*width > 156) *width = 156;
+    return n;
+}
+
+static void taskbar_press(struct gui_state *g) {
+    int ids[GUI_WINDOWS], n, w, i;
+    n = task_buttons(g, ids, &w);
+    for(i = 0; i < n; i++) {
+        if(!gui_inside(g->x, g->y, 6 + i * (w + 4), g->height - TASK_H + 3, w, TASK_H - 6)) continue;
+        if(g->focus == ids[i]) minimize(g, ids[i]);
+        else gui_open(g, ids[i]);
+        return;
+    }
+}
+
+static void title_press(struct gui_state *g, int id, int x, int y) {
+    struct gui_window *w = &g->win[id];
+    if(x >= w->w - 28) { gui_close(g, id); return; }
+    if(resizable(id) && x >= w->w - 52) { maximize(g, id); return; }
+    if(x >= w->w - (resizable(id) ? 76 : 52)) { minimize(g, id); return; }
+    if(resizable(id) && gui_double(&g->title_ms, &g->title_id, g->now, id)) { maximize(g, id); return; }
+    if(!w->max) { g->drag = id; g->drag_x = x; g->drag_y = y; }
+}
+
+static void content_press(struct gui_state *g, int id, int x, int y) {
+    struct gui_window *w = &g->win[id];
+    int rows;
+    if(id==GUI_CALC && gui_inside(x,y,16,104,216,160)) {
+        int col=(x-16)/54,row=(y-104)/40;
+        if((x-16)%54<48 && (y-104)%40<34) gui_calc_key(&g->calc,keys[row*4+col]);
+    }
+    if(id==GUI_SKETCH) {
+        if(gui_inside(x,y,16,38,6*32,24)) g->brush=(x-16)/32;
+        else if(gui_inside(x,y,336,38,80,24)) memset(g->canvas,0,sizeof(g->canvas));
+        else if(gui_inside(x,y,16,70,GUI_CANVAS_W,GUI_CANVAS_H)) {
+            g->drawing=true; g->last_x=x-16; g->last_y=y-70; stroke(g,x-16,y-70);
+        }
+    }
+    if(id==GUI_ABOUT && gui_inside(x,y,16,166,4*102-8,34) && (x-16)%102<94) gui_open(g,tiles[(x-16)/102].app);
+    if(id==GUI_SETTINGS) {
+        if(gui_inside(x,y,16,100,3*112,30)) g->speed=(x-16)/112+1;
+        if(gui_inside(x,y,16,172,176,32)) g->night=!g->night;
+    }
+    if(id == GUI_NOTEPAD) note_press(g, x, y);
+    if(id == GUI_FILES) files_press(g, x, y);
+    if(id == GUI_HELP && x >= w->w - 2 - SCROLL_W) {
+        rows = (w->h - TITLE_H - 12) / 18;
+        g->help_top = gui_clamp(g->help_top + (y < w->h / 2 ? -rows : rows), 0, HELP_LINES > rows ? HELP_LINES - rows : 0);
+    }
+    g->dirty = true;
+}
+
+static void wheel(struct gui_state *g, int dz) {
+    int i, id, lines = -dz * 3;                         /* the wheel turned away from the user: up */
+    struct gui_window *w;
+    if(g->dialog.kind) { dialog_wheel(g, lines); return; }
+    for(i = GUI_WINDOWS - 1; i >= 0; i--) {
+        id = g->order[i];
+        w = &g->win[id];
+        if(!w->open || w->min || !gui_inside(g->x, g->y, w->x, w->y, w->w, w->h)) continue;
+        if(id == GUI_NOTEPAD) note_wheel(g, lines);
+        if(id == GUI_FILES) files_wheel(g, lines);
+        if(id == GUI_HELP) g->help_top = gui_clamp(g->help_top + lines, 0, HELP_LINES - 1);
+        g->dirty = true;
+        return;
+    }
+}
+
 void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     bool press=(e->buttons&POINTER_LEFT) && !(g->buttons&POINTER_LEFT);
     int i,id,x,y;
     struct gui_window *w;
-    g->x=clamp(e->x,0,g->width-1); g->y=clamp(e->y,0,g->height-1); g->buttons=e->buttons;
-    if(!(e->buttons&POINTER_LEFT)) { g->drag=-1; g->drawing=false; }
+    g->x=gui_clamp(e->x,0,g->width-1); g->y=gui_clamp(e->y,0,g->height-1); g->buttons=e->buttons;
+    if(e->wheel) wheel(g,e->wheel);
+    if(!(e->buttons&POINTER_LEFT)) { g->drag=g->resize=g->scroll=-1; g->drawing=false; g->note.selecting=false; }
+    if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
     if(g->drag>=0) {
         w=&g->win[g->drag];
-        w->x=clamp(g->x-g->drag_x,0,g->width-w->w);
-        w->y=clamp(g->y-g->drag_y,34,g->height-w->h-28);
+        w->x=gui_clamp(g->x-g->drag_x,0,g->width-w->w);
+        w->y=gui_clamp(g->y-g->drag_y,34,g->height-w->h-28);
         g->dirty=true; return;
     }
+    if(g->resize>=0) {
+        w=&g->win[g->resize];
+        w->w=gui_clamp(g->x-w->x+g->drag_x,360,g->width-w->x);
+        w->h=gui_clamp(g->y-w->y+g->drag_y,200,g->height-TASK_H-w->y);
+        g->dirty=true; return;
+    }
+    if(g->scroll>=0) {
+        w=&g->win[g->scroll];
+        if(g->scroll==GUI_NOTEPAD) note_scroll(g,g->y-w->y);
+        if(g->scroll==GUI_FILES) files_scroll(g,g->y-w->y);
+        return;
+    }
+    if(g->note.selecting) { w=&g->win[GUI_NOTEPAD]; note_drag(g,g->x-w->x,g->y-w->y); return; }
     if(g->drawing && (e->buttons&POINTER_LEFT)) {
         w=&g->win[GUI_SKETCH]; x=g->x-w->x-16; y=g->y-w->y-70;
-        if(inside(x,y,0,0,GUI_CANVAS_W,GUI_CANVAS_H)) {
+        if(gui_inside(x,y,0,0,GUI_CANVAS_W,GUI_CANVAS_H)) {
             if(g->last_x<0) { g->last_x=x; g->last_y=y; }
             stroke(g,x,y);
         } else g->last_x=-1;
         return;
     }
-    if(!press) return;
-    if(g->y<28) {
-        id=g->x<120?1:g->x<192?2:g->x<296?3:0;
-        g->menu=g->menu==id?0:id; g->selection=0; g->dirty=true; return;
+    if(g->menu && !press) {                             /* the item under the pointer is the one chosen */
+        id=g->y<MENU_H?menu_at(g->x):0;
+        if(id && id!=g->menu) { menu_open(g,id); return; }
+        i=menu_hit(g,g->x,g->y);
+        if(i>=0 && i!=g->selection) { g->selection=i; g->dirty=true; }
+        return;
     }
+    if(!press) return;
+    if(g->y<MENU_H) { id=menu_at(g->x); menu_open(g,g->menu==id?0:id); return; }
     if(g->menu) {
-        x=menu_x(g->menu);
-        if(inside(g->x,g->y,x,30,216,28*menu_count(g->menu))) menu_action(g,(g->y-30)/28);
+        i=menu_hit(g,g->x,g->y);
+        if(i>=0) menu_run(g,i);
         else { g->menu=0; g->dirty=true; }
         return;
     }
+    if(g->y>=g->height-TASK_H) { taskbar_press(g); return; }
     for(i=GUI_WINDOWS-1;i>=0;i--) {
         id=g->order[i]; w=&g->win[id];
-        if(!w->open || !inside(g->x,g->y,w->x,w->y,w->w,w->h)) continue;
+        if(!w->open || w->min || !gui_inside(g->x,g->y,w->x,w->y,w->w,w->h)) continue;
         gui_open(g,id); x=g->x-w->x; y=g->y-w->y;
-        if(y<28) {
-            if(x>=w->w-28) close_window(g);
-            else { g->drag=id; g->drag_x=x; g->drag_y=y; }
-            return;
+        if(y<TITLE_H) { title_press(g,id,x,y); return; }
+        if(resizable(id) && !w->max && x>=w->w-14 && y>=w->h-14) {
+            g->resize=id; g->drag_x=w->w-x; g->drag_y=w->h-y; return;
         }
-        if(id==GUI_CALC && inside(x,y,16,104,216,160)) {
-            int col=(x-16)/54,row=(y-104)/40;
-            if((x-16)%54<48 && (y-104)%40<34) gui_calc_key(&g->calc,keys[row*4+col]);
-        }
-        if(id==GUI_SKETCH) {
-            if(inside(x,y,16,38,6*32,24)) g->brush=(x-16)/32;
-            else if(inside(x,y,336,38,80,24)) memset(g->canvas,0,sizeof(g->canvas));
-            else if(inside(x,y,16,70,GUI_CANVAS_W,GUI_CANVAS_H)) {
-                g->drawing=true; g->last_x=x-16; g->last_y=y-70; stroke(g,x-16,y-70);
-            }
-        }
-        if(id==GUI_ABOUT && inside(x,y,16,166,400,34)) gui_open(g,x<216 ? GUI_CALC : GUI_SKETCH);
-        if(id==GUI_SETTINGS) {
-            if(inside(x,y,16,100,3*112,30)) g->speed=(x-16)/112+1;
-            if(inside(x,y,16,172,176,32)) g->night=!g->night;
-        }
+        content_press(g,id,x,y);
         return;
     }
-    if(inside(g->x,g->y,24,120,144,44)) gui_open(g,GUI_CALC);
-    if(inside(g->x,g->y,24,180,144,44)) gui_open(g,GUI_SKETCH);
+    for(i=0;i<TILES;i++) if(gui_inside(g->x,g->y,24,120+i*52,144,44)) { gui_act(g,tiles[i].app==GUI_FILES?ACT_FILES:ACT_WINDOW+tiles[i].app); return; }
 }
+
+bool gui_wants_arrows(const struct gui_state *g) {
+    return g->dialog.kind || g->menu || (g->focus >= 0 && !g->win[g->focus].min &&
+           (g->focus == GUI_NOTEPAD || g->focus == GUI_FILES || g->focus == GUI_HELP));
+}
+
+/**** keys ****/
+
 void gui_key(struct gui_state *g, int key) {
-    int i;
-    if(key==3 || key==17) { g->quit=true; return; }
-    if(key==11) { gui_open(g,GUI_CALC); return; }
-    if(key==4) { gui_open(g,GUI_SKETCH); return; }
-    if(key==16) { gui_open(g,GUI_SETTINGS); return; }
-    if(key==9) {
-        for(i=0;i<GUI_WINDOWS;i++) if(g->win[g->order[i]].open) { gui_open(g,g->order[i]); return; }
+    int rows;
+    if(g->dialog.kind) { dialog_key(g,key); g->dirty=true; return; }
+    if(key==17) { gui_request_quit(g); return; }                        /* Ctrl+Q */
+    if(key==0 || key==7) { menu_open(g,g->menu?0:1); return; }         /* Ctrl+G (also terminal Ctrl+Space) */
+    if(g->menu) { menu_key(g,key); return; }
+    switch(key) {
+    case 11: gui_act(g,ACT_CALC); return;                               /* Ctrl+K */
+    case 4: gui_act(g,ACT_SKETCH); return;                              /* Ctrl+D */
+    case 16: gui_act(g,ACT_SETTINGS); return;                           /* Ctrl+P */
+    case 5: gui_act(g,ACT_NOTEPAD); return;                             /* Ctrl+E */
+    case 2: gui_act(g,ACT_FILES); return;                               /* Ctrl+B */
+    case 15: gui_act(g,ACT_OPEN); return;                               /* Ctrl+O */
+    case 23: gui_act(g,ACT_CLOSE); return;                              /* Ctrl+W */
+    case 14: gui_act(g,g->focus==GUI_SKETCH?ACT_CLEAR_SKETCH:ACT_NEW); return;   /* Ctrl+N */
     }
-    if(key==0 || key==7) { g->menu=g->menu?0:1; g->selection=0; g->dirty=true; return; } /* Ctrl+G (also terminal Ctrl+Space) */
-    if(g->menu) {
-        if(key==27) g->menu=0;
-        else if(key==GUI_UP) g->selection=(g->selection+menu_count(g->menu)-1)%menu_count(g->menu);
-        else if(key==GUI_DOWN) g->selection=(g->selection+1)%menu_count(g->menu);
-        else if(key==GUI_LEFT || key==GUI_RIGHT) { g->menu=(g->menu+(key==GUI_RIGHT?0:1))%3+1; g->selection=0; }
-        else if(key=='\r' || key=='\n') menu_action(g,g->selection);
-        g->dirty=true; return;
+    if(g->focus==GUI_NOTEPAD) {
+        switch(key) {
+        case 19: gui_act(g,ACT_SAVE); return;                           /* Ctrl+S */
+        case 3: gui_act(g,ACT_COPY); return;                            /* Ctrl+C copies here */
+        case 24: gui_act(g,ACT_CUT); return;
+        case 22: if(g->note.finding) break; gui_act(g,ACT_PASTE); return;
+        case 1: if(g->note.finding) break; gui_act(g,ACT_SELECT_ALL); return;
+        case 26: gui_act(g,ACT_UNDO); return;
+        case 25: gui_act(g,ACT_REDO); return;
+        case 6: gui_act(g,ACT_FIND); return;
+        case 12: gui_act(g,ACT_GOTO); return;
+        }
+        note_key(g,key);
+        return;
     }
-    if(key==27) { if(g->focus<0) g->quit=true; else close_window(g); return; }
+    if(key==3) { gui_request_quit(g); return; }                         /* Ctrl+C elsewhere: back to the shell */
+    if(key==9) { next_window(g); return; }
+    if(key==27) { if(g->focus<0) gui_request_quit(g); else gui_close(g,g->focus); return; }
+    if(g->focus==GUI_FILES) { files_key(g,key); return; }
+    if(g->focus==GUI_HELP) {
+        rows=(g->win[GUI_HELP].h-TITLE_H-12)/18;
+        if(key==GUI_UP || key==GUI_DOWN) g->help_top+=key==GUI_UP?-1:1;
+        if(key==GUI_PGUP || key==GUI_PGDN) g->help_top+=key==GUI_PGUP?-rows:rows;
+        if(key==GUI_HOME) g->help_top=0;
+        if(key==GUI_END) g->help_top=HELP_LINES;
+        g->help_top=gui_clamp(g->help_top,0,HELP_LINES>rows?HELP_LINES-rows:0);
+        g->dirty=true;
+        return;
+    }
     if(g->focus==GUI_CALC) { gui_calc_key(&g->calc,key); g->dirty=true; }
-    if(g->focus==GUI_SKETCH && key==14) { memset(g->canvas,0,sizeof(g->canvas)); g->dirty=true; }
     if(g->focus==GUI_SETTINGS) {
         if(key>='1' && key<='3') g->speed=key-'0';
         if(key=='t' || key=='T') g->night=!g->night;
@@ -192,108 +779,156 @@ void gui_key(struct gui_state *g, int key) {
     }
 }
 
-static void rect(const struct fb_surface *s,int x,int y,int w,int h,u32 c) {
-    if(w>0 && h>0) fb_rect_rgb(s,x,y,w,h,c);
+/**** drawing ****/
+
+static void title_button(const struct gui_draw *d, int x, int y, int kind, u32 bg) {
+    gd_rect(d, x, y, 20, 20, bg);
+    if(kind == 0) gd_glyph(d, x + 6, y + 2, 'x', PAPER, 1);
+    else if(kind == 1) gd_frame(d, x + 5, y + 5, 10, 10, PAPER);
+    else gd_rect(d, x + 5, y + 13, 10, 2, PAPER);
 }
-static void text(const struct fb_surface *s,int x,int y,const char *str,u32 c,int scale) {
-    int row,col;
-    while(*str) {
-        const u8 *glyph=font8x16[(u8)*str++];
-        for(row=0;row<16;row++) for(col=0;col<8;col++)
-            if(glyph[row]&(0x80>>col)) rect(s,x+col*scale,y+row*scale,scale,scale,c);
-        x+=8*scale;
+
+static void help_render(const struct gui_state *g, const struct gui_draw *d) {
+    const struct gui_window *w = &g->win[GUI_HELP];
+    int rows = (w->h - TITLE_H - 12) / 18, i, line;
+    for(i = 0; i < rows && g->help_top + i < HELP_LINES; i++) {
+        line = g->help_top + i;
+        if(help[line][0] == '#') {
+            gd_glyph(d, w->x + 14, w->y + TITLE_H + 8 + i * 18, 0xF7, TEAL, 1);
+            gd_text(d, w->x + 30, w->y + TITLE_H + 8 + i * 18, help[line] + 1, TEAL);
+        } else gd_name(d, w->x + 14, w->y + TITLE_H + 8 + i * 18, help[line], (w->w - 30 - SCROLL_W) / 8, INK);
     }
+    gd_scrollbar(d, w->x + w->w - 2 - SCROLL_W, w->y + TITLE_H, w->h - TITLE_H - 1, g->help_top, rows, HELP_LINES);
 }
-static void button(const struct fb_surface *s,int x,int y,int w,int h,const char *label,u32 bg,u32 fg) {
-    rect(s,x,y,w,h,bg); text(s,x+(w-(int)strlen(label)*8)/2,y+(h-16)/2,label,fg,1);
-}
-static void wave(const struct fb_surface *s,int x,int y,int w,int h,u32 c) {
-    int i;
-    for(i=0;i<w;i++) {
-        int t=i%80, py=(t<20?t:t<60?40-t:t-80)*h/40;
-        rect(s,x+i,y+py,1,3,c);
-    }
-}
-static void window(const struct gui_state *g,const struct fb_surface *s,int id) {
+
+static void window(const struct gui_state *g, const struct gui_draw *d, int id) {
     const struct gui_window *w=&g->win[id];
-    int x=w->x,y=w->y,i,j;
-    char b[48];
-    rect(s,x+5,y+6,w->w,w->h,0x0B2530);
-    rect(s,x,y,w->w,w->h,INK); rect(s,x+1,y+1,w->w-2,w->h-2,PAPER);
-    rect(s,x+1,y+1,w->w-2,27,g->focus==id?TEAL:MUTED);
-    text(s,x+12,y+6,titles[id],PAPER,1);
-    button(s,x+w->w-26,y+4,20,20,"x",g->focus==id?INK:MUTED,PAPER);
+    struct gui_draw in;
+    int x=w->x,y=w->y,i,j,buttons=resizable(id)?3:2;
+    bool focus=g->focus==id;
+    u32 bar=focus?TEAL:MUTED, knob=focus?INK:0x557378;
+    char b[96];
+    gd_rect(d,x+5,y+6,w->w,w->h,SHADOW);
+    gd_rect(d,x,y,w->w,w->h,INK); gd_rect(d,x+1,y+1,w->w-2,w->h-2,PAPER);
+    gd_rect(d,x+1,y+1,w->w-2,27,bar);
+    if(app_icons[id]==ICON_WAVE) gd_icon_tint(d,x+8,y+6,ICON_WAVE,1,FOAM);   /* teal on teal otherwise */
+    else gd_icon(d,x+8,y+6,app_icons[id],1);
+    if(id==GUI_NOTEPAD) note_title(g,b,sizeof(b));
+    else strlcpy(b,titles[id],sizeof(b));
+    gd_name(d,x+30,y+6,b,(w->w-38-buttons*24)/8,PAPER);
+    title_button(d,x+w->w-26,y+4,0,knob);
+    if(resizable(id)) title_button(d,x+w->w-50,y+4,1,knob);
+    title_button(d,x+w->w-(resizable(id)?74:50),y+4,2,knob);
+    in=gd_clip(d,x+1,y+TITLE_H,w->w-2,w->h-TITLE_H-1);
     if(id==GUI_CALC) {
-        rect(s,x+16,y+44,216,44,INK);
+        gd_rect(&in,x+16,y+44,216,44,INK);
         snprintf(b,sizeof(b),"%ld",(long)g->calc.value);
-        text(s,x+28,y+58,g->calc.error?"Error - press C":b,FOAM,1);
-        if(g->calc.op && !g->calc.error) { b[0]=g->calc.op; b[1]=0; text(s,x+212,y+58,b,CORAL,1); }
+        gd_text(&in,x+28,y+58,g->calc.error?"Error - press C":b,FOAM);
+        if(g->calc.op && !g->calc.error) { b[0]=g->calc.op; b[1]=0; gd_text(&in,x+212,y+58,b,CORAL); }
         for(i=0;i<16;i++) {
             b[0]=keys[i]; b[1]=0;
-            button(s,x+16+(i%4)*54,y+104+(i/4)*40,48,34,b,i%4==3?TEAL:i==14?CORAL:0xDEE3D8,INK);
+            gd_button(&in,x+16+(i%4)*54,y+104+(i/4)*40,48,34,b,i%4==3?TEAL:i==14?CORAL:SHELL,INK);
         }
-        text(s,x+16,y+278,"Integers | C clears",MUTED,1);
+        gd_text(&in,x+16,y+278,"Integers | C clears",MUTED);
     } else if(id==GUI_SKETCH) {
         for(i=0;i<6;i++) {
-            rect(s,x+16+i*32,y+38,26,24,i==g->brush?INK:MUTED);
-            rect(s,x+19+i*32,y+41,20,18,paints[i]);
+            gd_rect(&in,x+16+i*32,y+38,26,24,i==g->brush?INK:MUTED);
+            gd_rect(&in,x+19+i*32,y+41,20,18,paints[i]);
         }
-        button(s,x+336,y+38,80,24,"Clear",0xDEE3D8,INK);
-        rect(s,x+15,y+69,402,182,MUTED);
+        gd_button(&in,x+336,y+38,80,24,"Clear",SHELL,INK);
+        gd_rect(&in,x+15,y+69,402,182,MUTED);
         for(j=0;j<GUI_CANVAS_H;j++) {
             for(i=0;i<GUI_CANVAS_W;) {
                 int start=i, c=g->canvas[j*GUI_CANVAS_W+i];
                 while(i<GUI_CANVAS_W && g->canvas[j*GUI_CANVAS_W+i]==c) i++;
-                rect(s,x+16+start,y+70+j,i-start,1,paints[c%6]);
+                gd_rect(&in,x+16+start,y+70+j,i-start,1,paints[c%6]);
             }
         }
-        text(s,x+16,y+266,"Temporary. Drag/Space draws. Ctrl+N clears.",INK,1);
+        gd_text(&in,x+16,y+266,"Temporary. Drag/Space draws. Ctrl+N clears.",INK);
     } else if(id==GUI_ABOUT) {
-        text(s,x+16,y+44,"SurfOS",INK,3);
-        text(s,x+16,y+104,"A small desktop for catching ideas.",INK,1);
-        text(s,x+16,y+128,"Calculate, sketch, and return to the shell.",MUTED,1);
-        button(s,x+16,y+166,192,34,"Calculator",TEAL,PAPER);
-        button(s,x+224,y+166,192,34,"Sketch",TEAL,PAPER);
-        text(s,x+16,y+212,"Brandon Burr / 2004 - 2026",MUTED,1);
-    } else {
+        gd_text_scaled(&in,x+16,y+44,"SurfOS",INK,3);
+        gd_wave(&in,x+176,y+52,232,14,FOAM);
+        gd_text(&in,x+16,y+104,"A small desktop for catching ideas.",INK);
+        gd_text(&in,x+16,y+128,"Write notes, browse files, calculate, sketch.",MUTED);
+        for(i=0;i<TILES;i++) gd_button(&in,x+16+i*102,y+166,94,34,tiles[i].label,TEAL,PAPER);
+        gd_text(&in,x+16,y+212,"Brandon Burr / 2004 - 2026",MUTED);
+    } else if(id==GUI_SETTINGS) {
         snprintf(b,sizeof(b),"%u pointing device%s connected",g->devices,g->devices==1?"":"s");
-        text(s,x+16,y+44,b,INK,1);
-        text(s,x+16,y+76,"Pointer speed (keys 1, 2, 3)",INK,1);
-        for(i=0;i<3;i++) button(s,x+16+i*112,y+100,104,30,i==0?"1 / Slow":i==1?"2 / Medium":"3 / Fast",g->speed==i+1?TEAL:0xDEE3D8,g->speed==i+1?PAPER:INK);
-        text(s,x+16,y+148,"Desktop colors (T)",INK,1);
-        button(s,x+16,y+172,176,32,g->night?"Dusk / change":"Ocean / change",TEAL,PAPER);
-        text(s,x+16,y+220,"Changes last for this desktop session.",MUTED,1);
+        gd_text(&in,x+16,y+44,b,INK);
+        gd_text(&in,x+16,y+76,"Pointer speed (keys 1, 2, 3)",INK);
+        for(i=0;i<3;i++) gd_button(&in,x+16+i*112,y+100,104,30,i==0?"1 / Slow":i==1?"2 / Medium":"3 / Fast",g->speed==i+1?TEAL:SHELL,g->speed==i+1?PAPER:INK);
+        gd_text(&in,x+16,y+148,"Desktop colors (T)",INK);
+        gd_button(&in,x+16,y+172,176,32,g->night?"Dusk / change":"Ocean / change",TEAL,PAPER);
+        gd_text(&in,x+16,y+220,"Changes last for this desktop session.",MUTED);
+    } else if(id==GUI_NOTEPAD) note_render(g,&in);
+    else if(id==GUI_FILES) files_render(g,&in);
+    else help_render(g,&in);
+    if(resizable(id) && !w->max)                        /* the grip: a triangle of dots in the corner */
+        for(i=0;i<3;i++) for(j=0;j<=i;j++) gd_rect(d,x+w->w-6-j*4,y+w->h-14+i*4,2,2,MUTED);
+}
+
+static void menu_render(const struct gui_state *g, const struct gui_draw *d) {
+    struct menu_item it[MENU_MAX];
+    int n = menu_items(g, g->menu, it), x = menu_left(g->menu) - 4, w = menu_width(it, n), h = item_top(it, n) - MENU_H + 4, i, y;
+    gd_rect(d, x + 4, MENU_H + 4, w, h, NAVY);
+    gd_rect(d, x, MENU_H, w, h, INK);
+    gd_rect(d, x + 1, MENU_H, w - 2, h - 1, PAPER);
+    for(i = 0; i < n; i++) {
+        y = item_top(it, i);
+        if(!it[i].label) { gd_rect(d, x + 8, y + 4, w - 16, 1, LINE); continue; }
+        if(i == g->selection && it[i].on) gd_rect(d, x + 3, y, w - 6, 24, TEAL);
+        gd_text(d, x + 14, y + 4, it[i].label, !it[i].on ? 0xA3B4B3 : i == g->selection ? PAPER : INK);
+        gd_text(d, x + w - 12 - (int)strlen(it[i].keys) * 8, y + 4, it[i].keys, i == g->selection && it[i].on ? FOAM : MUTED);
     }
 }
+
 void gui_render(const struct gui_state *g,const struct fb_surface *s) {
-    int i,x,y;
+    struct gui_draw d;
+    int i,x,n,w,ids[GUI_WINDOWS];
     u32 bg=g->night?0x142638:0x245A67;
-    static const char *menus[3][3]={{"About SurfOS","Close window","Return to shell"},{"Calculator  Ctrl+K","Sketch      Ctrl+D",NULL},{"Pointer & desktop","Ocean / dusk colors","Clear sketch"}};
-    rect(s,0,0,g->width,g->height,bg);
+    char b[96];
+    gd_init(&d,s,g->width,g->height);
+    gd_rect(&d,0,0,g->width,g->height,bg);
     /* An oversized horizon and the recurring SurfOS wave mark. */
-    for(i=0;i<5;i++) wave(s,0,g->height-70+i*8,g->width,14,g->night?0x244454:0x3B7980);
-    text(s,24,54,"SurfOS",FOAM,3);
-    button(s,24,120,144,44,"Calculator",INK,FOAM);
-    button(s,24,180,144,44,"Sketch",INK,FOAM);
-    rect(s,0,0,g->width,28,PAPER);
-    text(s,16,6,"~ SurfOS",INK,1); text(s,128,6,"Apps",INK,1); text(s,200,6,"Options",INK,1);
-    text(s,g->width-128,6,"Ride the wave.",TEAL,1);
-    rect(s,0,g->height-26,g->width,26,NAVY);
-    text(s,12,g->height-20,"Ctrl+K Calc  Ctrl+D Sketch  Ctrl+P Options  Ctrl+Q Shell",FOAM,1);
-    for(i=0;i<GUI_WINDOWS;i++) if(g->win[g->order[i]].open) window(g,s,g->order[i]);
-    if(g->menu) {
-        x=menu_x(g->menu); y=30;
-        rect(s,x+4,y+4,216,28*menu_count(g->menu),NAVY);
-        rect(s,x,y,216,28*menu_count(g->menu),PAPER);
-        for(i=0;i<menu_count(g->menu);i++) {
-            if(i==g->selection) rect(s,x+2,y+i*28+2,212,24,TEAL);
-            text(s,x+12,y+i*28+6,menus[g->menu-1][i],i==g->selection?PAPER:INK,1);
-        }
+    for(i=0;i<5;i++) gd_wave(&d,0,g->height-70+i*8,g->width,14,g->night?0x244454:0x3B7980);
+    gd_text_scaled(&d,24,54,"SurfOS",FOAM,3);
+    for(i=0;i<TILES;i++) {
+        gd_rect(&d,24,120+i*52,144,44,INK);
+        gd_icon(&d,34,134+i*52,tiles[i].icon,1);
+        gd_text(&d,60,134+i*52,tiles[i].label,FOAM);
     }
+    gd_rect(&d,0,0,g->width,MENU_H,PAPER);
+    gd_rect(&d,0,MENU_H-1,g->width,1,LINE);
+    for(i=1;i<=MENUS;i++) {
+        x=menu_left(i);
+        if(g->menu==i) gd_rect(&d,x-4,2,(int)strlen(menu_names[i-1])*8+16,MENU_H-4,TEAL);
+        gd_text(&d,x+4,6,menu_names[i-1],g->menu==i?PAPER:INK);
+    }
+    gd_text(&d,g->width-128,6,"Ride the wave.",TEAL);
+    gd_rect(&d,0,g->height-TASK_H,g->width,TASK_H,NAVY);
+    n=task_buttons(g,ids,&w);
+    for(i=0;i<n;i++) {
+        const struct gui_window *win=&g->win[ids[i]];
+        x=6+i*(w+4);
+        gd_rect(&d,x,g->height-TASK_H+3,w,TASK_H-6,g->focus==ids[i]?TEAL:win->min?0x1A3B48:INK);
+        if(app_icons[ids[i]]==ICON_WAVE) gd_icon_tint(&d,x+4,g->height-TASK_H+4,ICON_WAVE,1,FOAM);
+        else gd_icon(&d,x+4,g->height-TASK_H+4,app_icons[ids[i]],1);
+        if(ids[i]==GUI_NOTEPAD) note_title(g,b,sizeof(b)); else strlcpy(b,titles[ids[i]],sizeof(b));
+        gd_name(&d,x+24,g->height-TASK_H+5,b,(w-28)/8,win->min?MUTED:FOAM);
+    }
+    if(!n) gd_text(&d,12,g->height-20,"Ctrl+E Notepad  Ctrl+B Files  Ctrl+K Calc  Ctrl+D Sketch  Ctrl+Q Shell",FOAM);
+    if(g->clock[0]) gd_text(&d,g->width-10-(int)strlen(g->clock)*8,g->height-20,g->clock,FOAM);
+    for(i=0;i<GUI_WINDOWS;i++) {
+        const struct gui_window *win=&g->win[g->order[i]];
+        if(win->open && !win->min) window(g,&d,g->order[i]);
+    }
+    if(g->menu) menu_render(g,&d);
+    dialog_render(g,&d);
 }
+
 void gui_cursor(const struct fb_surface *s,int x,int y,int scale) {
     int row,col;
     static const char *shape[]={"X           ","XX          ","X.X         ","X..X        ","X...X       ","X....X      ","X.....X     ","X......X    ","X.......X   ","X........X  ","X.....XXXXX ","X..X..X     ","X.X X..X    ","XX  X..X    ","X    XX     ",NULL};
     for(row=0;shape[row];row++) for(col=0;shape[row][col];col++)
-        if(shape[row][col]!=' ') rect(s,x+col*scale,y+row*scale,scale,scale,shape[row][col]=='X'?NAVY:PAPER);
+        if(shape[row][col]!=' ') fb_rect_rgb(s,x+col*scale,y+row*scale,scale,scale,shape[row][col]=='X'?NAVY:PAPER);
 }

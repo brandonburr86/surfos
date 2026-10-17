@@ -97,7 +97,9 @@ driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the 
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
-           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos
+           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos;
+           the desktop (docs/GUI.md): gui.c (the command, the session), guicore.c (windows, menus, the small apps), guinote.c
+           (Notepad), guifiles.c (Files), guidialog.c, guidraw.c (all host-tested: test_gui), guifs.c (files on the VFS)
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
