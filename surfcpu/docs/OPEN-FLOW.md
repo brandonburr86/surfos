@@ -7,7 +7,9 @@ Evidence: [`evidence/flow/`](evidence/flow/). Written 2026-10-16 by the flow tra
 placer seed lists, the three checker fixes and the clock check's phases of round ddr-3
 (sections 3, 4 and 6.5) by the ddr track the same day.
 
-**Nothing built here has been loaded on a board. Every physical result is pending.** A bitstream
+**Bitstreams built here run on the owner's Arty A7-100T** (the baseline, the SoC and both DDR
+designs, 2026-10-16/17, BOARD.md section 12). Two placements of the DDR diagnostics that passed
+every check here failed on the silicon until the route-through fix (section 6.8): a bitstream
 that was generated and checked is not a bitstream that works on the hardware.
 
 ## 1. Verdict
@@ -405,8 +407,9 @@ of long runs under Rosetta; memory for the full SoC. The configuration is not su
 
 ## 8. What remains to prove on the board
 
-All pending until the board is connected and openFPGALoader installed (INVENTORY.md gaps G1-G3).
-Load volatile only, with the board's own part
+The board is connected and openFPGALoader installed (2026-10-16), and item 6 is shown (below);
+the flow's own demos (items 1 to 3) and items 4 and 5 are still to do. Load volatile only, with
+the board's own part
 (`make program-volatile BIT=build/openxc7/<design>-<board>/<top>.bit BOARD=<board>` once the
 board track's `program.sh` exists, or `openFPGALoader -b arty_a7_100t <bit>`), and watch the
 USB-UART at 115200 8N1:
@@ -427,6 +430,9 @@ USB-UART at 115200 8N1:
 6. The DDR designs (BOARD.md section 12, steps 4 and 5): whether LiteDRAM's PHY as this flow
    placed and routed it, with its I/O timing unchecked here (section 6.7), reads the DDR3L back
    inside a window of read delays on both byte lanes, and the DDR tests pass at 640 MT/s.
+   **Shown on the owner's A7-100T** with the fixed flow (0bcadbc): both lanes at bitslip 2,
+   delay 16 (window +-8), `BRAMDIAG: PASS (572 checks)`
+   ([evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt)).
 
 ## 9. Files
 
