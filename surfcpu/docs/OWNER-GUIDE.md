@@ -188,7 +188,7 @@ Docker Desktop must be running (whale icon in the menu bar).
 |---|---|---|
 | Pmod MicroSD | JA (a 12-pin adapter: both rows) | component side up, pin 1 at JA pin 1; no card in it until SurfBoot runs (WIRING.md U8) |
 | Pmod VGA | JB + JC together | **component side up, the VGA socket pointing away from the board, the adapter's J1 in JB.** Upside down it shorts FPGA outputs together and to ground through the 0 Ω JB/JC ports, which can damage the FPGA (WIRING.md U2) |
-| Pmod PS2 | JD, **top row** | component side up, its pin 1 at JD pin 1; **its jumper JP1 on VB** (the Arty's 3.3 V). Never 5 V from outside: that would pull the lines above the FPGA's limits (WIRING.md section 4) |
+| Pmod PS2 | JD, **top row** (the upper row of sockets, farther from the board: pins 1-6) | component side up, its pin 1 at JD pin 1; **its jumper JP1 on VB** (the Arty's 3.3 V). Never 5 V from outside: that would pull the lines above the FPGA's limits (WIRING.md section 4) |
 
 Two different jumpers are both called JP1:
 
@@ -666,12 +666,20 @@ FPGA reads its flash over one data line at about 3 MHz.
 
 ## 10. What I need from you
 
-1. **A real PS/2 keyboard.** Yours (an Amazon Basics USB keyboard on a passive USB-to-PS/2
-   adapter) never answers the port's reset command: a USB-only keyboard does not speak PS/2
-   through a passive adapter. Milestone 6's keyboard part and milestone 7's shell on the
-   keyboard wait for one. Keep the Pmod PS2's JP1 on VB (3.3 V): many PS/2 keyboards work at
-   3.3 V, not all; one that does not would need a bidirectional level shifter (WIRING.md
-   section 4). Never feed 5 V into the Pmod PS2.
+1. **A PS/2 keyboard the board can use.** Your MCSAITE PS/2 keyboard is specified for 5 V and
+   does not start on the Pmod PS2's 3.3 V: its lights do not flash at power-up, it does not
+   answer the LED command, and nothing arrives from it
+   ([evidence](evidence/physical/ps2-2026-10-17.txt)). The Amazon Basics USB keyboard on a
+   passive adapter before it does not speak PS/2 at all. There are two ways forward:
+   * a 4-channel bidirectional logic level converter of the BSS138 type (pins already soldered)
+     and female-to-female jumper wires, which let that keyboard run on 5 V from the Arty's 5V
+     pin while the FPGA side stays at 3.3 V (WIRING.md section 4). The wiring is given, and
+     checked with you, once you have them;
+   * a PS/2 keyboard that runs at 3.3 V.
+
+   Milestone 6's keyboard part and milestone 7's shell on the keyboard wait for one. Until the
+   wiring is given, keep the Pmod PS2 in JD's top row with JP1 on VB, and connect no 5 V to it
+   or to JD.
 2. **Reporting the openXC7 defect upstream: your call.** The route-through defect of section 0
    is in the open toolchain's chip database, and any openXC7 user can hit it. Whether it is
    reported to the openXC7 project, and by whom, is your decision; it has not been reported from

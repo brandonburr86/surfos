@@ -1,0 +1,33 @@
+The owner's PS/2 keyboard on the board: the integrator's own captures (SurfOS's kbdinfo over the UART), not a board-test run
+2026-10-17. Design surfcpu_arty_a7_ddr built at 0bcadbc (fixed flow), loaded into configuration RAM each time; SurfOS
+1.0.0 build 22cbdc9a from the owner's card. The keyboard is an MCSAITE PS/2 keyboard, a true PS/2 keyboard with no
+adapter; its box gives a 5 V supply. The Pmod PS2 is in JD, its JP1 between VB and VCC (the Arty's 3.3 V), nothing on JP2.
+
+1. Adapter in the bottom row of JD (pins 7-12). The owner typed and nothing showed on the VGA console. Before the
+   design was loaded again, SurfOS (running since the evening before) did not answer on the UART either; whether it had
+   stopped is not known. After loading it (18:29:56 UTC, the shell after 8.6 s, "+PS2: surf_ps2 at 0x10005000, intc
+   source 1: scan code set 2, translated to set 1 for the keyboard code", "Drivers: serial gpio ps2kbd sdcard"):
+
+     kbdinfo
+         surf_ps2 at 0x10005000: 1 interrupts, 0 bytes: 0 keys, 0 replies, 0 unknown
+         line errors seen 0; counters: parity 0, framing 0, timeouts 0, lost 0
+         LEDs: Num on, Caps off, Scroll off; 0 updates, 1 without an answer; last reply 0x00 (none)
+
+   The LED command the driver sends at start (0xED, Num Lock) got no answer, and nothing arrived. The owner typed again
+   on this boot: nothing on the monitor. In the bottom row the adapter's DATA and CLK land on JD7 and JD9, which the
+   design leaves unassigned (WIRING.md U5); its supply pins still match.
+
+2. Adapter moved to the top row of JD by the owner, the board unplugged. Loaded again (18:43:19 UTC, the shell after
+   8.6 s): the same three lines from kbdinfo, read once after the boot and again later on that boot, and again after a
+   third load (18:47:45 UTC). The owner: the keyboard's lights do not flash when the board is powered (a PS/2 keyboard
+   usually flashes them during its power-on self-test).
+
+3. The design side, checked: in the build's placement ps2_data is at IOB_X1Y127 and ps2_clk at IOB_X1Y124, the sites of
+   package pins D4 and F4 (each an IBUF and an OBUFT, the open-drain IOBUF). surf_ps2 gives a device 15 ms to start
+   clocking a host-to-device byte (the PS/2 limit) and 2 ms for the frame, and when a send fails it lets go of both lines
+   and its receiver listens again.
+
+Result: the keyboard does not start on 3.3 V. It shows no self-test flash, answers no command, and puts nothing on
+either line, not even a frame or line error. Nothing on the board side is implicated. Milestone 6's keyboard part and
+milestone 7's keyboard step stay open. The way forward is a bidirectional level shifter with 5 V for the keyboard
+(WIRING.md section 4, question 3), or a keyboard that runs at 3.3 V.
