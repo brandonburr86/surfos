@@ -12,7 +12,7 @@ dependency, what replaces it, what is left out, and the plan.
 | Test | `make -C surfcpu test-os`: host tests of the Arty drivers' logic, then the qemu_virt kernel at -O2 and -O0 in `qemu-system-riscv32` (restricted to SurfCPU's ISA), driven over its serial console, booted as an ELF and through a SurfBoot stand-in (the handoff, FAT over the SD driver with injected write faults and the card taken out, and `SURFOS.BIN` and a `mkcard.py` card where the fw track's tools are present) (`boards/qemu_virt/test_os.py`); `make -C surfcpu test-os-persist`: files written on the RTL system in surfsim, ejected, and read back after a second boot; `make -C surfcpu test-os-faults`: write faults, the card taken out and put back, and a full card on the RTL system (section 6) |
 | ISA, ABI | `rv32im_zicsr_zifencei`, `ilp32`, machine mode only (ISA.md); every linked instruction checked (`arch/riscv32/isacheck.py`) |
 | Boards | `boards/qemu_virt/` (QEMU's virt machine, for tests now) and `boards/arty_a7/` (SurfCPU's SoC, MEMORY-MAP.md) |
-| State | boots to the kernel shell under QEMU, in the fw emulator and on the RTL system in simulation, and passes its tests; files written on the card persist across a reboot in the RTL simulation; **nothing has run on the FPGA** (no board connected): every Arty result is pending |
+| State | boots to the kernel shell under QEMU, in the fw emulator and on the RTL system in simulation, and passes its tests; files written on the card persist across a reboot in the RTL simulation; **on the owner's Arty A7-100T** SurfBoot boots it from the microSD card into DDR: its shell over the UART, `uptime`, `ps`, `memstat`, the two-task test, the card mounted read-only and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); its VGA console, the PS/2 keyboard and writing to a real card are not yet shown on the board |
 
 ## 1. The machine-mode model, and what it does not have
 
@@ -591,18 +591,25 @@ rm, an mv and an overwrite, and a full volume. Done and tested on the host: the
 Arty drivers' logic (display, keyboard, SD protocol and driver against a simulated card), and
 the SD driver against the io track's card model with surf_spi's timing.
 
-**Pending (needs the board, a bitstream build host, or integration):** everything on the Arty
-itself. The Arty HAL (`board.c`, `textcon.c`, `ps2kbd.c`, `sd.c`) compiles and links into
-`build/riscv32/arty_a7/surfos.elf` (and `SURFOS.BIN` with the fw track's packer, tested with a
-copy). Its register accesses have run in the fw track's instruction-level emulator (`make
-test-os-surfemu`) and in the soc track's RTL system simulation (`test-soc-system-boot`), with
-models of the card, the keyboard and the DDR: not on the FPGA (no board connected), so brief
-milestone 7's "real board boots SurfOS from microSD" and milestone 8 on a real card are open.
-The SD write path stays off by default (read-only, `sd=rw` to allow it) until it is tried on a
-real card. The board's acceptance tests are ready as one command each (10/16/26: `make -C surfcpu
-board-test M=m1|m3|m5|m7|m8|m9`, docs/PHYSICAL-TESTS.md), each writing its own evidence file;
-they have run against the RTL system through `surfsim --uart-pty` and against fake boards
-(`make test-os-kit`, `make test-os-kit-rtl`), never against the board.
+**On the board (the owner's Arty A7-100T, 2026-10-16/17):** the Arty HAL (`board.c`,
+`textcon.c`, `ps2kbd.c`, `sd.c`) runs on the FPGA and its drivers start (`Drivers: serial gpio
+ps2kbd sdcard`). SurfBoot 1.1.0 loads `SURFOS.BIN` from the owner's 32 GB card into DDR, and
+the kernel reaches its shell over the UART; `uptime`, `ps`,
+`memstat` (256 MiB) and the two-task test work. The SD driver identifies the card (SDHC 29 GB,
+CRC checked), mounts its FAT32 volume read-only, and `ls`, `cat` and `df` read it, since 22cbdc9
+sends the 8 clocks a real card needs between CMD55's response and ACMD41 (the first board run
+failed there, `+SD: out of range (ACMD41 failed)`)
+([evidence](evidence/physical/surfos-boot-2026-10-16.txt),
+[fixed flow](evidence/physical/ddr-fixed-flow-2026-10-17.txt)). So brief milestone 7's "real
+board boots SurfOS from microSD" is shown over the UART.
+
+**Pending:** the console on VGA and the PS/2 keyboard on the board (a real PS/2 keyboard is
+needed, INVENTORY.md G5), and milestone 8 on a real card: the SD write path stays off by default
+(read-only, `sd=rw` to allow it) until it is tried there. The board's acceptance tests are one
+command each (`make -C surfcpu board-test M=m1|m3|m5|m7|m8|m9`, docs/PHYSICAL-TESTS.md), each
+writing its own evidence file: m1 and m3 passed on the board; m5, m7, m8 and m9 have run against
+the RTL system through `surfsim --uart-pty` and against fake boards (`make test-os-kit`, `make
+test-os-kit-rtl`), not yet against the board.
 
 Later (brief section 11), each a design of its own: a user mode (U mode with PMP, or S mode
 with Sv32) and with it protected processes, the ELF loader for `EM_RISCV`, system calls by
