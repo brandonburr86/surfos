@@ -2,94 +2,94 @@ SurfCPU acceptance test m5: SurfBoot and the card (milestone 5): the DDR diagnos
 Verdict: FAIL (8 checks seen by this script passed, 1 failed)
 Source: SIMULATION, not the board: the SoC reports BUILD_FLAGS.SIM or the simulation board id (the RTL system in surfsim, through /work/surfcpu/build/os/kit/edge-rtl-unplugged/port)
 Owner: the steps were answered by a program, not by a person (--owner /usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-unplugged/state.json)
-Date: 2026-10-16 12:37:00 UTC, 32 s
+Date: 2026-10-17 03:53:54 UTC, 33 s
 Command: /work/surfcpu/tools/board-test.py m5 --port /work/surfcpu/build/os/kit/edge-rtl-unplugged/port --evidence-dir /work/surfcpu/build/os/kit/edge-rtl-unplugged/evidence --owner '/usr/bin/python3 /work/surfcpu/sim/soc/tools/kit_test.py owner /work/surfcpu/build/os/kit/edge-rtl-unplugged/state.json' --ddrdiag /work/surfcpu/build/fw/DDRDIAG.BIN --slow 10 --manifest /work/surfcpu/build/os/kit/manifest-sim.txt
-Tools: board-test.py sha256 1c353629e13c4e3d, uart.py sha256 c4f3b5b2bece6a0a (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
+Tools: board-test.py sha256 3d9bb57411c4a7a0, uart.py sha256 dd6dda3bf7893ce1 (commit unknown: git could not say); Python 3.13.5 on Linux aarch64
 
 Build identity read from the port, and what it was compared with:
-  SurfBoot 1.0.0, ROM build 2355dba2
-  bitstream build 2355dba2, flags 2 (SIMULATION), board id 0xf0
-    the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
-  DDRDIAG.BIN build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a
-    DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
+  SurfBoot 1.1.0, ROM build 1e3a2e10
+  bitstream build 1e3a2e10, flags 2 (SIMULATION), board id 0xf0
+    the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  DDRDIAG.BIN build 1e3a2e10, 14992 bytes, payload CRC 0x36719679
+    DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 1e3a2e10, 14992 bytes, payload CRC 0x36719679)
 
-Steps the owner was asked to do, and the answers (+ seconds since the port was opened):
-  +     0.0  card           done
+Steps the owner was asked to do, and the answers (+ seconds since the port was opened: when asked, and when answered):
+  +     0.0  card           done, answered at +0.0
               | On the Mac, with the SurfOS card mounted (SurfOS installed with make deploy-sd, OWNER-GUIDE.md
               | section 7), copy the DDR diagnostic next to the kernel:
               |   cp surfcpu/build/fw/DDRDIAG.BIN /Volumes/<card>/BOOT/
               | then eject the card (diskutil eject /Volumes/<card>), put it in the Arty, and press Enter.
-  +     0.0  monitor        done
-              | Load the design if it is not loaded (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_top).
+  +     0.0  monitor        done, answered at +0.0
+              | Load the design if it is not loaded (make -C surfcpu program-volatile BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_ddr).
               | Then hold BTN1 down, press and release RESET, and keep holding BTN1 until surfboot> appears;
               | then press Enter.
 
 Checks (ok and FAIL: seen by this script; owner: the owner's answer; skip: not done or not compared):
   note     port /work/surfcpu/build/os/kit/edge-rtl-unplugged/port opened at 115200 8N1
-  ok       the bitstream's build id 2355dba2 is the manifest's (2355dba2, /work/surfcpu/build/os/kit/manifest-sim.txt)
+  ok       the bitstream's build id 1e3a2e10 is the manifest's (1e3a2e10, /work/surfcpu/build/os/kit/manifest-sim.txt)
   ok       its dirty flag (0) matches the manifest's source_dirty = false
   ok       info: DDR calibrated (the DDR bitstream): ddr: status 5 (present, calibrated), size 256 MiB
   ok       info: the card is present (card: present; buttons 2)
   ok       a missing image: boot /BOOT/NOSUCH.BIN is diagnosed (NOT_FOUND) and the monitor is back
   ok       an invalid image: check /SYSTEM/SURFCARD.TXT (not a package) is diagnosed (IMG_SHORT), the monitor is back
   ok       check /BOOT/DDRDIAG.BIN: every package check passes
-  ok       DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 2355dba2, 14992 bytes, payload CRC 0x5d7eaf8a)
-  FAIL     DDRDIAG's end: the port went away at +31.7 s (/work/surfcpu/build/os/kit/edge-rtl-unplugged/port hung up): USB unplugged, or the board lost power?
+  ok       DDRDIAG.BIN on the card is /work/surfcpu/build/fw/DDRDIAG.BIN (build 1e3a2e10, 14992 bytes, payload CRC 0x36719679)
+  FAIL     DDRDIAG's end: the port went away at +32.7 s (/work/surfcpu/build/os/kit/edge-rtl-unplugged/port hung up): USB unplugged, or the board lost power?
 
 Transcript (seconds since the port was opened; escape sequences and CR removed; 3133 bytes received;
 "*": the port going away and coming back):
-  +    0.115 | 
-  +    0.116 | SurfBoot 1.0.0 (build 2355dba2), the SurfCPU boot ROM
-  +    0.152 | soc: simulation (0xf0), SoC 0.1.0, memory map 1, 25000000 Hz; bitstream 2355dba2 (simulation)
-  +    0.254 | BTN1 held: staying in the monitor
+  +    0.114 | 
+  +    0.114 | SurfBoot 1.1.0 (build 1e3a2e10), the SurfCPU boot ROM
+  +    0.150 | soc: simulation (0xf0), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream 1e3a2e10 (simulation)
+  +    0.255 | BTN1 held: staying in the monitor
   +    0.278 | 
-  +    0.278 | SurfBoot stopped: stopped by request (STOPPED)
-  +    0.309 | The LEDs LD4-LD7 show code 9. Type help for the monitor's commands; inserting a card retries the boot.
-  +    0.376 | surfboot> info
-  +    0.396 | SurfBoot 1.0.0 build 2355dba2
-  +    0.416 | sysinfo: magic 46525553, SoC 00000100, map 1, board 000000f0, bitstream build 2355dba2 flags 2, time 0
-  +    0.483 | clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features ff (uart timer irq gpio spi ps2 video ddr)
-  +    0.560 | ddr: status 5 (present, calibrated), size 256 MiB
-  +    0.592 | card: present; buttons 2
-  +    0.609 | last boot failure: STOPPED: BTN1 was held at power-on
-  +    0.644 | surfboot> boot /BOOT/NOSUCH.BIN
-  +    0.707 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
-  +    0.818 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
-  +    0.877 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
-  +    0.940 | boot: /BOOT/NOSUCH.BIN
-  +    0.968 | boot: /BOOT/NOSUCH.BIN: /BOOT/NOSUCH.BIN does not exist
-  +    1.004 | boot failed: file not found (NOT_FOUND)
-  +    1.031 | surfboot> ls /SYSTEM
-  +    1.085 |   d----  .                  <dir>  cluster 5
-  +    1.115 |   d----  ..                 <dir>  cluster 0
-  +    1.144 |   ----a  SURFCARD.TXT          13  cluster 775
-  +    1.175 |   1 file (13 bytes), 2 directories
-  +    1.198 | surfboot> check /SYSTEM/SURFCARD.TXT
-  +    1.298 | check: /SYSTEM/SURFCARD.TXT: the file is 13 bytes, shorter than the 64-byte header (IMG_SHORT)
-  +    1.360 | surfboot> check /BOOT/DDRDIAG.BIN
-  +    1.996 |   magic 474d4953 version 1 header 64, header CRC 53a0d3e1
-  +    2.034 |   name "DDRdiag" version 1.0.0 build 2355dba2 flags 00000000
-  +    2.074 |   isa 0000000f (IM_Zicsr_Zifencei) platform 1
-  +    2.104 |   load 80000000 payload 14928 mem 35456 entry 80000000 payload CRC 5d7eaf8a
-  +    2.153 | check: /BOOT/DDRDIAG.BIN: every check passed; CRC 5d7eaf8a from the card and from DDR, 1 fragment, 75 ms
-  +    2.222 | surfboot> boot /BOOT/DDRDIAG.BIN
-  +    2.345 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
-  +    2.404 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
-  +    2.467 | boot: /BOOT/DDRDIAG.BIN
-  +    3.044 | boot: DDRdiag 1.0.0 build 2355dba2: 14992 bytes in 1 fragment, read in 75 ms
-  +    3.094 | boot: load 0x80000000, entry 0x80000000, mem_size 35456, ISA IM_Zicsr_Zifencei; payload CRC 0x5d7eaf8a matches (card and DDR)
-  +    3.200 | boot: command line "size=2M loops=1"
-  +    3.225 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
-  +    3.279 | 
-  +    3.298 | 
-  +    3.299 | SurfCPU DDR diagnostic 1.0.0 (build 2355dba2), running from DDR at 0x80000000
-  +    3.351 | boot information                   ok (6 checks)
-  +    3.429 | started by SurfBoot 010000 build 2355dba2 from partition sector 2048, flags 0, command line "size=2M loops=1"
-  +    3.502 | testing DDR [0x80100000, 0x80300000) (2 MiB) of [0x80000000, 0x90000000); quick mode
-  +    3.557 | DDR data lines                     ok (192 checks)
-  +    3.610 | DDR byte lanes                     ok (9 checks)
-  +    3.643 | DDR address lines and aliases      (8 address lines skipped: outside the test area) ok (38 checks)
-  +    3.719 | DDR boundaries                     ok (64 checks)
-  +    3.754 | DDR patterns                       (2048 KiB in full, 32 blocks sampled) ok (2 checks)
-  +   16.051 | DDR sustained copies               
-  +   31.661 * the port went away (/work/surfcpu/build/os/kit/edge-rtl-unplugged/port hung up)
+  +    0.279 | SurfBoot stopped: stopped by request (STOPPED)
+  +    0.310 | The LEDs LD4-LD7 show code 9. Type help for the monitor's commands; inserting a card retries the boot.
+  +    0.378 | surfboot> info
+  +    0.397 | SurfBoot 1.1.0 build 1e3a2e10
+  +    0.417 | sysinfo: magic 46525553, SoC 00000200, map 2, board 000000f0, bitstream build 1e3a2e10 flags 2, time 0
+  +    0.486 | clocks: sys 25000000 Hz, timebase 1000000 Hz, pixel 25173611 Hz; features ff (uart timer irq gpio spi ps2 video ddr)
+  +    0.564 | ddr: status 5 (present, calibrated), size 256 MiB
+  +    0.597 | card: present; buttons 2
+  +    0.614 | last boot failure: STOPPED: BTN1 was held at power-on
+  +    0.650 | surfboot> boot /BOOT/NOSUCH.BIN
+  +    0.709 | ddr: calibrated after 0 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  +    0.821 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  +    0.882 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +    0.952 | boot: /BOOT/NOSUCH.BIN
+  +    0.981 | boot: /BOOT/NOSUCH.BIN: /BOOT/NOSUCH.BIN does not exist
+  +    1.020 | boot failed: file not found (NOT_FOUND)
+  +    1.047 | surfboot> ls /SYSTEM
+  +    1.101 |   d----  .                  <dir>  cluster 5
+  +    1.132 |   d----  ..                 <dir>  cluster 0
+  +    1.162 |   ----a  SURFCARD.TXT          13  cluster 806
+  +    1.195 |   1 file (13 bytes), 2 directories
+  +    1.219 | surfboot> check /SYSTEM/SURFCARD.TXT
+  +    1.311 | check: /SYSTEM/SURFCARD.TXT: the file is 13 bytes, shorter than the 64-byte header (IMG_SHORT)
+  +    1.374 | surfboot> check /BOOT/DDRDIAG.BIN
+  +    2.020 |   magic 474d4953 version 1 header 64, header CRC d186567f
+  +    2.058 |   name "DDRdiag" version 1.0.0 build 1e3a2e10 flags 00000000
+  +    2.099 |   isa 0000000f (IM_Zicsr_Zifencei) platform 1
+  +    2.130 |   load 80000000 payload 14928 mem 35456 entry 80000000 payload CRC 36719679
+  +    2.179 | check: /BOOT/DDRDIAG.BIN: every check passed; CRC 36719679 from the card and from DDR, 1 fragment, 75 ms
+  +    2.250 | surfboot> boot /BOOT/DDRDIAG.BIN
+  +    2.367 | sd: SDHC/SDXC, 36 MiB; ready after 5 ms; SPI 6250 kHz, data CRC checked
+  +    2.429 | fat32: partition 1 (type 0x0c) at sector 2048, 512-byte clusters, 70528 clusters, label "SURFOS"
+  +    2.494 | boot: /BOOT/DDRDIAG.BIN
+  +    3.086 | boot: DDRdiag 1.0.0 build 1e3a2e10: 14992 bytes in 1 fragment, read in 75 ms
+  +    3.138 | boot: load 0x80000000, entry 0x80000000, mem_size 35456, ISA IM_Zicsr_Zifencei; payload CRC 0x36719679 matches (card and DDR)
+  +    3.245 | boot: command line "size=2M loops=1"
+  +    3.271 | boot: starting the kernel at 0x80000000 (a0 = 0, a1 = 0x0001f000, a2 = 0x49465253)
+  +    3.327 | 
+  +    3.347 | 
+  +    3.347 | SurfCPU DDR diagnostic 1.0.0 (build 1e3a2e10), running from DDR at 0x80000000
+  +    3.401 | boot information                   ok (6 checks)
+  +    3.483 | started by SurfBoot 010100 build 1e3a2e10 from partition sector 2048, flags 0, command line "size=2M loops=1"
+  +    3.558 | testing DDR [0x80100000, 0x80300000) (2 MiB) of [0x80000000, 0x90000000); quick mode
+  +    3.615 | DDR data lines                     ok (192 checks)
+  +    3.670 | DDR byte lanes                     ok (9 checks)
+  +    3.703 | DDR address lines and aliases      (8 address lines skipped: outside the test area) ok (38 checks)
+  +    3.782 | DDR boundaries                     ok (64 checks)
+  +    3.818 | DDR patterns                       (2048 KiB in full, 32 blocks sampled) ok (2 checks)
+  +   16.458 | DDR sustained copies               
+  +   32.676 * the port went away (/work/surfcpu/build/os/kit/edge-rtl-unplugged/port hung up)
