@@ -8,7 +8,8 @@
    The review's campaigns ran it by hand: test_fatfuzz <seed> <ops> [rbad] [blocks] [32].)
    Checks, after every operation:
      - the oracle of tests/host/test_fatfs.c at every block the disk stores (no entry or FAT link on the
-       way reaches a cluster the first FAT says is free);
+       way reaches a cluster the first FAT says is free; since round fs-fix-5, no named file shows another
+       file's bytes: each block carries its file's tag);
      - bcache_audit() of both disks (B9);
      - an operation that failed with EIO (rename, unlink, truncate to a smaller size, create, mkdir)
        changed nothing that can be seen through the file system (B5);
@@ -34,7 +35,27 @@ static u32 rn(u32 n) { return n ? rnd() % n : 0; }
 #define MAXD 4
 #define MAXSZ 40000
 
-struct mfile { int used, isdir, dir; char name[100]; u8 *data; u32 size; };
+struct mfile { int used, isdir, dir; char name[100]; u8 *data; u32 size, id; };   /* id: round fs-fix-5's tag */
+static u32 file_ids;
+/* 10/16/26 (round fs-fix-5): stale data. Every 512-byte block of a file's bytes starts with the file's tag (8 bytes:
+   a mark and the file's number, the same whatever wrote it: a write that covers those bytes writes them), and after
+   every write the disk stores, each named file's range is looked at: every block in it whose tag lies within the size
+   and is whole carries the same one (the number twice, once inverted: a tag a later write or a gap's zeros cut into
+   is no tag; zeros carry none). Another file's tag there is a block the file never wrote: the
+   card names it over bytes it held before (B20's and B34's class). A file keeps its number through a rename */
+#define TAG_MARK0 0xA5
+#define TAG_MARK1 0x5A
+static u8 tag_byte(u32 id, u32 k) {
+    static const u8 mark[8] = { TAG_MARK0, TAG_MARK1, 0, 0, 0, 0, 'T', 'G' };
+    if(k == 2 || k == 3) return (u8)(id >> (8 * (k - 2)));
+    if(k == 4 || k == 5) return (u8)(~id >> (8 * (k - 4)));
+    return mark[k];
+}
+static void tag_fill(u8 *b, u32 off, u32 len, u32 id) {
+    u32 i;
+    for(i = 0; i < len; i++) if((off + i) % 512 < 8) b[i] = tag_byte(id, (off + i) % 512);
+}
+
 static struct mfile mf[MAXF];          /* dir: index of the parent directory entry in mf (-1: root) */
 static u32 g_viol;
 static char g_first[200];
@@ -221,6 +242,7 @@ static void op_create(int isdir) {
     note("%s '%s' in %d: %d", isdir ? "mkdir" : "create", name, dir, r);
     if(r == 0) {
         mf[m].used = 1; mf[m].isdir = isdir; mf[m].dir = dir; strlcpy(mf[m].name, name, sizeof(mf[m].name));
+        mf[m].id = 1 + file_ids++ % 65534;               /* (16 bits, never 0) */
         mf[m].data = NULL; mf[m].size = 0;
         vput(v);
     } else if(unchanged(dir, "failed create")) { b5_bad++; printf("    (op %d) a failed create changed the directory\n", op_no); dump_last(); }
@@ -248,6 +270,7 @@ static void op_write(void) {
     len = 1 + rn(rn(4) == 0 ? 20000 : 3000);
     if(off + len > MAXSZ) { vput(v); return; }
     for(i = 0; i < len; i++) buf1[i] = (u8)rnd();
+    tag_fill(buf1, off, len, mf[m].id);                 /* (round fs-fix-5: the file's tag where a block starts) */
     {
         static u8 oldb[MAXSZ + 1024];
         memcpy(oldb, mf[m].data ? mf[m].data : oldb, mf[m].size);
@@ -389,6 +412,31 @@ static int geoc(const struct ggeo *g, u32 v) { return g->type == 12 ? v >= 0xFF8
 static void gviol(struct ram *r, const char *m) {
     if(!g_viol++) snprintf(g_first, sizeof(g_first), "after the disk's write %u: %s", r->writes, m);
 }
+static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name) {
+    u32 size = gle32(p + 28), c = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0), steps = 0, off = 0, id = 0, s;
+    char m[160];
+    while(c >= 2 && c < g->nclusters + 2 && off < size && steps++ < g->nclusters) {
+        u32 v;
+        for(s = 0; s < g->spc && off < size; s++, off += 512) {
+            const u8 *d = r->mem + (g->data_lba + (c - 2) * g->spc + s) * 512;
+            u32 t;
+            if(off + 8 > size || d[0] != TAG_MARK0 || d[1] != TAG_MARK1 || d[6] != 'T' || d[7] != 'G' ||
+               (u8)(d[2] ^ d[4]) != 0xFF || (u8)(d[3] ^ d[5]) != 0xFF) continue;   /* (whole, and within the size: the
+                                                                                  bytes past the end are anybody's) */
+            t = gle16(d + 2);
+            if(!id) id = t;
+            else if(t != id) {
+                snprintf(m, sizeof(m), "entry '%s': its block at %u holds file %u's bytes, its others file %u's (stale data)",
+                         name, off, t, id);
+                gviol(r, m);
+                return;
+            }
+        }
+        v = gfat(r->mem, g, c);
+        if(!v || geoc(g, v)) break;
+        c = v;
+    }
+}
 static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth);
 static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth) {
     u32 c = first, steps = 0;
@@ -419,6 +467,7 @@ static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, in
             c = v;
         }
         if((p[11] & 0x10) && first) gdir(r, g, first, depth + 1);
+        else if(!(p[11] & 0x10)) gstale(r, g, p, name);
     }
 }
 static void goracle(struct ram *r, u32 lba, u32 count) {

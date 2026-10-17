@@ -11,7 +11,8 @@
      syncer    bsync(NULL) now and then (vfs_sync())
      chaos     the volume's disk refuses every write for a few milliseconds now and then
    The oracle looks at the image after every write the disk stores (no entry or link on the way reaching a
-   free cluster); at the end, with the disk working, a sync, the model against the file system and against
+   free cluster; since round fs-fix-5, no named file showing another file's bytes: each block carries its file's
+   tag); at the end, with the disk working, a sync, the model against the file system and against
    a fresh mount of a copy of the image, and bcache_audit() (B9).
    usage: conc <seed> <seconds> [workers] [chaos 0/1] [io_us]
    (10/16/26, round fs-fix-2: written by the independent review of B5-B11 as fsrev-tests/conc.c, with
@@ -272,6 +273,49 @@ static int geoc(const struct ggeo *g, u32 v) { return g->type == 12 ? v >= 0xFF8
 static void gviol(struct ram *r, const char *m) {
     if(!r->violations++) snprintf(r->violation, sizeof(r->violation), "after the disk's write %u: %s", r->writes, m);
 }
+/* 10/16/26 (round fs-fix-5): stale data. Every 512-byte block of a file's bytes starts with the file's tag (8 bytes:
+   a mark and the file's number, the same whatever wrote it: a write that covers those bytes writes them), and after
+   every write the disk stores, each named file's range is looked at: every block in it whose tag lies within the size
+   and is whole carries the same one (the number twice, once inverted: a tag a later write or a gap's zeros cut into
+   is no tag; zeros carry none). Another file's tag there is a block the file never wrote: the
+   card names it over bytes it held before (B20's and B34's class). A file keeps its number through a rename */
+#define TAG_MARK0 0xA5
+#define TAG_MARK1 0x5A
+static u8 tag_byte(u32 id, u32 k) {
+    static const u8 mark[8] = { TAG_MARK0, TAG_MARK1, 0, 0, 0, 0, 'T', 'G' };
+    if(k == 2 || k == 3) return (u8)(id >> (8 * (k - 2)));
+    if(k == 4 || k == 5) return (u8)(~id >> (8 * (k - 4)));
+    return mark[k];
+}
+static void tag_fill(u8 *b, u32 off, u32 len, u32 id) {
+    u32 i;
+    for(i = 0; i < len; i++) if((off + i) % 512 < 8) b[i] = tag_byte(id, (off + i) % 512);
+}
+static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name) {
+    u32 size = gle32(p + 28), c = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0), steps = 0, off = 0, id = 0, s;
+    char m[160];
+    while(c >= 2 && c < g->nclusters + 2 && off < size && steps++ < g->nclusters) {
+        u32 v;
+        for(s = 0; s < g->spc && off < size; s++, off += 512) {
+            const u8 *d = r->mem + (g->data_lba + (c - 2) * g->spc + s) * 512;
+            u32 t;
+            if(off + 8 > size || d[0] != TAG_MARK0 || d[1] != TAG_MARK1 || d[6] != 'T' || d[7] != 'G' ||
+               (u8)(d[2] ^ d[4]) != 0xFF || (u8)(d[3] ^ d[5]) != 0xFF) continue;   /* (whole, and within the size: the
+                                                                                  bytes past the end are anybody's) */
+            t = gle16(d + 2);
+            if(!id) id = t;
+            else if(t != id) {
+                snprintf(m, sizeof(m), "entry '%s': its block at %u holds file %u's bytes, its others file %u's (stale data)",
+                         name, off, t, id);
+                gviol(r, m);
+                return;
+            }
+        }
+        v = gfat(r->mem, g, c);
+        if(!v || geoc(g, v)) break;
+        c = v;
+    }
+}
 static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth);
 static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth) {
     u32 c = first, steps = 0;
@@ -302,6 +346,7 @@ static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, in
             c = v;
         }
         if((p[11] & 0x10) && first) gdir(r, g, first, depth + 1);
+        else if(!(p[11] & 0x10)) gstale(r, g, p, name);
     }
 }
 static void oracle_check(struct ram *r) {
@@ -345,7 +390,9 @@ static long disk_size(struct ram *r, const char *dir11, const char *n11) {
 #define NF 8
 #define MAXSZ 24000
 
-struct mfile { int used, plain; char name[64]; u8 *data; u32 size; };   /* plain: its short entry is its 8.3 name */
+struct mfile { int used, plain; char name[64]; u8 *data; u32 size, id; };   /* plain: its short entry is its 8.3 name;
+                                                                              id: its number (its tag's, round fs-fix-5) */
+static volatile u32 file_ids;
 struct worker {
     int id;
     u32 rng;
@@ -509,7 +556,11 @@ static void wop(struct worker *w) {
         w->where = "create";
         r = w->dir->ops->create(w->dir, name, VN_FILE, &v);
         snprintf(w->last, sizeof(w->last), "create %s: %d", name, r);
-        if(!r) { w->f[m].used = 1; w->f[m].plain = !strchr(name, ' '); strlcpy(w->f[m].name, name, sizeof(w->f[m].name)); w->f[m].size = 0; vput(v); }
+        if(!r) {
+            w->f[m].used = 1; w->f[m].plain = !strchr(name, ' '); strlcpy(w->f[m].name, name, sizeof(w->f[m].name)); w->f[m].size = 0;
+            w->f[m].id = 1 + (__sync_add_and_fetch(&file_ids, 1) - 1) % 65534;   /* (16 bits, never 0) */
+            vput(v);
+        }
         else { w->fails++; if(wcompare(w, "after a failed create")) w->b5_bad++; }
     } else if(what < 55) {                                 /* write, and sometimes close */
         u32 off, len, i;
@@ -523,6 +574,7 @@ static void wop(struct worker *w) {
         if(off + len > MAXSZ) { vput(v); return; }
         b = rbuf();
         for(i = 0; i < len; i++) b[i] = (u8)wrand(w);
+        tag_fill(b, off, len, w->f[m].id);              /* (round fs-fix-5: the file's tag where a block starts) */
         w->where = "write";
         r = v->ops->write(v, off, b, len);
         snprintf(w->last, sizeof(w->last), "write %s off %u len %u: %d", w->f[m].name, off, len, r);
