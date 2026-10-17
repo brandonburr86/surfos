@@ -569,6 +569,21 @@ million cycles). B26 had first made the check of what a sync owes too large for 
 and each command that syncs cost 0.78 million cycles more (3.4 % on the write run): it is inline
 again (bcache-review.txt section 17).
 
+Since audit B27-B33 (counted the same way, before = 15f0f3c): every workload above sends the same
+requests and blocks but an rm of a file right after it was written, which no longer writes the file's
+last dirty blocks (B28: a 4 MiB file, 5 requests and 39 blocks instead of 6 and 47; its chain is walked
+to find them); the host's CPU time is within the noise of a loaded Mac (bcache-review.txt section 22).
+Each mounted FAT volume is 452 bytes larger (64 chains can wait to be freed, B31), and an rm, truncate
+or mv over a file lists the device's dirty blocks (from the device's lists of them, a few blocks) into a
+small kalloc'd list. On SurfCPU (15f0f3c's kernel against this one, the same simulator and ROM):
+test-os-persist's write run 0.15 % more cycles, its reboot run 0.17 %, test-os-faults' full card
+0.24 % and its refusing card 1.96 %, all but 0.12 % of that the card-detect task meeting the card's
+removal one look (200 ms) later; SurfBoot loads a package 3.2 KB larger (+0.38 million cycles), and each
+command is within 0.4 % either way. Two drafts cost more and were taken back: each rm, truncate and mv
+over a file looked over the cache's 1024 buffers twice, and an rm walked its file's whole chain for its
+own directory block (in the data area on FAT32: +0.5 million cycles, 9.7 %, on the full card's rm of a
+few thousand clusters) (bcache-review.txt section 24).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
