@@ -103,6 +103,11 @@ TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'chu
 # 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
 RX_PORT = 5555
 
+# 10/17/26 (one stick): with the scratch ramdisk, the command line names a boot volume as GRUB would (bootvol=, the
+# serial number of the FAT volume it was started from); the self test writes a FAT32 boot sector with this serial
+# number onto rd1 (shell/selftest.c, test_boot_volume). No other disk of the smoke test has it.
+SELFTEST_BOOTVOL = '5E1F-7E57'
+
 # 10/9/26 (Wi-Fi, track S): in an '@boot' block, (name, CHECK) runs BOOT_CHECKS[name] on that boot's QEMU. The simulated
 # Wi-Fi network's passphrase (driver/wifi/wlansim.c's WLANSIM_PASSPHRASE: a test network's, never a real one), and a wrong one
 CHECK = object()
@@ -340,7 +345,9 @@ SMOKE = [
     ('@kcmd-echo', []),
     # `ascii` on the kernel command line: TTY_CAPS says colour only, and surfsh draws its prompt in ASCII
     ('@boot ascii', [re.compile(rb'SURF ~' + _SGR + rb'>')], [('pagetest caps', ['TTY_CAPS 2: colour'])], []),
-    ('selftest', ['SELFTEST PASS']),
+    # 10/17/26 (one stick): test_boot_volume must run here (bootvol= and rd1), not print its skip line
+    ('selftest', ['ok   the volume GRUB was started from (bootvol=)', 'ok   with no partition table the disk itself',
+                  'SELFTEST PASS']),
     ('cat /hda1/SELFTEST.TXT', ['SurfOS wrote this file']),
     # 10/6/26 (surfsh, track K): a kernel command's status, 0 success, 1 failure (a refusal too), 2 a usage
     # error; $? in the ring-0 shell; 127 for no such command; a program's exit status through run
@@ -748,6 +755,8 @@ class Qemu:
         if modules:
             boot += ['-initrd', ','.join(modules)]
         cmdline = append.split()
+        if scratch_mb and not iso:
+            cmdline.append('bootvol=' + SELFTEST_BOOTVOL)
         self.disk = None
         if disk:
             # the guest writes to the disk, so work on a copy unless asked not to

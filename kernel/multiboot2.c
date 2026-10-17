@@ -213,6 +213,25 @@ bool bootinfo_has_arg(const struct boot_info *bi, const char *arg) {
     return false;
 }
 
+/* 10/17/26 (one stick): the rest of the first word that starts with key ("bootvol=" in "profile=laptop
+   bootvol=5D0F-0901" gives "5D0F-0901"), cut to size - 1 characters; false when no word starts with key */
+bool bootinfo_arg(const struct boot_info *bi, const char *key, char *out, size_t size) {
+    const char *s = bi->cmdline;
+    size_t n = strlen(key), i;
+    while(*s) {
+        const char *w;
+        while(*s == ' ') s++;
+        w = s;
+        while(*s && *s != ' ') s++;
+        if(n && (size_t)(s - w) >= n && !strncmp(w, key, n)) {
+            for(i = 0, w += n; w < s && i + 1 < size; i++) out[i] = *w++;
+            if(size) out[i] = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
 const char *mb_region_type(u32 type) {
     switch(type) {
     case MB_MEMORY_AVAILABLE: return "available";

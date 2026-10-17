@@ -102,23 +102,142 @@ class MkusbTests(unittest.TestCase):
         self.assertIn('multiboot /boot/surfos.bin shell=kernel', iso)
 
     def test_development_entry(self):
-        """10/9/26 (the development loop): the data stick's entry is defined before every other one, only when a
-        disk other than the boot drive holds both files, and boots them with autonet (which no other entry has);
-        the disks are looked at with test -f, never search, which prints an error when it finds nothing"""
+        """10/9/26 (the development loop): the development entry is defined before every other one, only when a
+        partition holds both files, and boots them with autonet (which no other entry has); the disks are looked at
+        with test -f, never search, which prints an error when it finds nothing. 10/17/26 (one stick): the partition
+        the menu was started from first (a stick the boot files were copied onto), then the first partition of every
+        other disk (the data stick); the title says which"""
         cfg = self.cfg.read_text()
         code = '\n'.join(l for l in cfg.splitlines() if not l.lstrip().startswith('#'))
         dev = re.search(r'^if \[ -n "\$surfos_devbuild" \]; then\n(.*?)^fi\n', code, re.S | re.M)
         self.assertIsNotNone(dev)
         self.assertLess(dev.start(), code.index('menuentry "SurfOS" {'))
         body = dev.group(1)
-        self.assertIn('menuentry "SurfOS (development build from the data stick)" {', body)
-        self.assertIn('multiboot2 ($surfos_devbuild)/surfos-dev/surfos.bin profile=laptop autonet\n', body)
-        self.assertIn('module2 ($surfos_devbuild)/surfos-dev/initrd.tar initrd.tar\n', body)
-        self.assertEqual(code.count('autonet'), 1)
-        self.assertIn('if [ "$surfos_disk" != "$surfos_boot_disk" ]', code)            # never the boot drive
+        same = body.index('menuentry "SurfOS (development build from this stick)" {')
+        other = body.index('menuentry "SurfOS (development build from the data stick)" {')
+        self.assertLess(body.index('if [ "$surfos_devbuild" = "$root" ]; then'), same)
+        self.assertLess(same, body.index('    else\n'))
+        self.assertLess(body.index('    else\n'), other)
+        self.assertEqual(body.count('multiboot2 ($surfos_devbuild)/surfos-dev/surfos.bin profile=laptop autonet '
+                                    'bootvol=$surfos_bootvol\n'), 2)
+        self.assertEqual(body.count('module2 ($surfos_devbuild)/surfos-dev/initrd.tar initrd.tar\n'), 2)
+        self.assertEqual(code.count('autonet'), 2)
+        # its own partition first, and only on a stick made for it: the marker's test encloses the look there
+        block = re.search(r'^if \[ -f "\(\$root\)/' + re.escape(mkusb.STICK_MARKER) + r'" \]; then\n(.*?)^fi\n',
+                          code, re.S | re.M)
+        self.assertIsNotNone(block)
+        for line in ('if [ -f "($root)/surfos-dev/surfos.bin" ]; then', 'if [ -f "($root)/surfos-dev/initrd.tar" ]; then',
+                     'set surfos_devbuild="$root"'):
+            self.assertIn(line, block.group(1))
+            self.assertEqual(code.count(line), 1, line)                          # nowhere else
+        self.assertLess(block.end(), code.index('for surfos_disk in'))
+        self.assertIn('if [ "$surfos_disk" != "$surfos_boot_disk" ]', code)            # its other partitions never
         self.assertIn('[ -f "($surfos_part)/surfos-dev/surfos.bin" ]', code)
         self.assertIn('[ -f "($surfos_part)/surfos-dev/initrd.tar" ]', code)
         self.assertNotRegex(code, r'(^|\s)search\s')
+
+    def test_boot_volume_word(self):
+        """10/17/26 (one stick): the menu asks GRUB for the serial number of the volume it was started from, before
+        any entry, exports it, and every entry passes it to the kernel as bootvol=; BOOTX64.EFI has probe for it"""
+        cfg = self.cfg.read_text()
+        code = '\n'.join(l for l in cfg.splitlines() if not l.lstrip().startswith('#'))
+        probe = code.index('probe --set=surfos_bootvol --fs-uuid "($root)"\n')
+        self.assertLess(probe, code.index('export surfos_bootvol\n'))
+        self.assertLess(code.index('export surfos_bootvol\n'), code.index('menuentry'))
+        lines = [l.strip() for l in code.splitlines() if l.strip().startswith('multiboot2 ')]
+        self.assertEqual(len(lines), 6)
+        for line in lines:
+            self.assertTrue(line.endswith(' bootvol=$surfos_bootvol'), line)
+        self.assertIn('probe', mkusb.GRUB_MODULES)
+        boot = (REPO / 'boot' / 'grub-usb-bootstrap.cfg').read_text()
+        self.assertIn('SurfOS: /boot/surfos.bin and /boot/grub/grub.cfg were not found', boot)   # the no-kernel test
+        self.assertIn('build/usb/stick/', boot)
+
+    # ---- 10/17/26: the stick folder ----
+
+    def test_stick_folder_guard(self):
+        """an existing folder is replaced only when it holds a stick folder's files (and Finder's .DS_Store); never
+        a link, a file, a device or a folder with anything else in it"""
+        kit = self.dir / 'stick'
+        mkusb.check_stick_dir(str(kit))                                         # nothing there yet
+        for rel in mkusb.stick_paths():
+            (kit / rel).parent.mkdir(parents=True, exist_ok=True)
+            (kit / rel).write_bytes(b'old')
+        (kit / '.DS_Store').write_bytes(b'finder')
+        (kit / 'boot' / '.DS_Store').write_bytes(b'finder')
+        mkusb.check_stick_dir(str(kit))
+        self.assertEqual(mkusb.main(['--check-stick-dir', str(kit)]), 0)          # what devenv/build-usb.sh asks
+        (kit / 'mine.txt').write_bytes(b'mine')
+        self.assertEqual(mkusb.main(['--check-stick-dir', str(kit)]), 1)
+        (kit / 'mine.txt').unlink()
+        for extra in ('notes.txt', 'boot/grub/mine.cfg', 'My Files/a.txt'):
+            p = kit / extra
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b'mine')
+            with self.assertRaisesRegex(mkusb.BuildError, 'refusing to replace'):
+                mkusb.check_stick_dir(str(kit))
+            p.unlink()
+        (kit / 'My Files').rmdir()
+        (kit / 'surfos-dev' / 'old').mkdir()
+        with self.assertRaisesRegex(mkusb.BuildError, r'surfos-dev/old/'):
+            mkusb.check_stick_dir(str(kit))
+        (kit / 'surfos-dev' / 'old').rmdir()
+        link = self.dir / 'link'
+        link.symlink_to(kit)
+        with self.assertRaisesRegex(mkusb.BuildError, 'not a folder'):
+            mkusb.check_stick_dir(str(link))
+        with self.assertRaisesRegex(mkusb.BuildError, 'not a folder'):
+            mkusb.check_stick_dir(str(self.kernel))
+        with self.assertRaisesRegex(mkusb.BuildError, 'never writes devices'):
+            mkusb.check_stick_dir('/dev/disk4')
+        with self.assertRaisesRegex(mkusb.BuildError, 'mounted volume'):
+            mkusb.check_stick_dir('/')
+        with self.assertRaisesRegex(mkusb.BuildError, 'does not exist'):
+            mkusb.check_stick_dir(str(self.dir / 'no' / 'such' / 'stick'))
+
+    @unittest.skipUnless(HAVE_MTOOLS, 'mtools is not installed (run in the Docker toolchain)')
+    def test_stick_folder(self):
+        """the folder holds the image's six files at their paths, the same kernel and initrd again in surfos-dev/
+        and the marker GRUB looks for (which the image has not), nothing else; the manifest lists them; a rebuild
+        replaces it whole"""
+        kit = self.dir / 'out' / 'stick'
+        self.assertEqual(self.build('--stick-dir', str(kit)), 0)
+        got = sorted(str(p.relative_to(kit)) for p in kit.rglob('*') if p.is_file())
+        self.assertEqual(got, sorted(mkusb.stick_paths()))
+        with open(self.out, 'rb') as f:
+            fat = mkusb.Fat32(f, 2048 * 512)
+            for rel, img in mkusb.STICK_FILES.items():
+                self.assertEqual((kit / rel).read_bytes(), fat.read(img), rel)
+            with self.assertRaises(mkusb.BuildError):
+                fat.read('/' + mkusb.STICK_MARKER)                          # never on the flashed image
+        self.assertEqual((kit / mkusb.STICK_MARKER).read_text(), mkusb.STICK_NOTE)
+        self.assertEqual((kit / 'surfos-dev/surfos.bin').read_bytes(), self.kernel.read_bytes())
+        self.assertEqual((kit / 'surfos-dev/initrd.tar').read_bytes(), self.initrd.read_bytes())
+        manifest = json.loads((self.out.parent / 'build-manifest.json').read_text())
+        self.assertEqual(manifest['stick']['folder'], 'stick')
+        for rel in mkusb.stick_paths():
+            self.assertEqual(manifest['stick']['files'][rel]['sha256'],
+                             hashlib.sha256((kit / rel).read_bytes()).hexdigest(), rel)
+        (kit / '.DS_Store').write_bytes(b'finder')
+        self.kernel.write_bytes(fake_kernel(b'kernel two'))
+        self.assertEqual(self.build('--stick-dir', str(kit)), 0)
+        self.assertTrue((kit / 'surfos-dev/surfos.bin').read_bytes().endswith(b'kernel two'))
+        self.assertFalse((kit / '.DS_Store').exists())
+        self.assertEqual(sorted(p.name for p in self.out.parent.iterdir()),
+                         ['build-manifest.json', 'stick', 'surfos-ideapad-15iil05.img', 'surfos-ideapad-15iil05.img.sha256'])
+
+    @unittest.skipUnless(HAVE_MTOOLS, 'mtools is not installed (run in the Docker toolchain)')
+    def test_stick_folder_failure_keeps_both(self):
+        """a refused folder stops the build before anything is written; a failing build leaves the old folder and
+        the old image as they were"""
+        kit = self.dir / 'out' / 'stick'
+        self.assertEqual(self.build('--stick-dir', str(kit)), 0)
+        before = sorted((str(p), p.read_bytes()) for p in self.out.parent.rglob('*') if p.is_file())
+        (kit / 'mine.txt').write_bytes(b'mine')
+        self.assertEqual(self.build('--stick-dir', str(kit)), 1)
+        (kit / 'mine.txt').unlink()
+        self.assertEqual(self.build('--stick-dir', str(kit), '--mformat', 'false'), 1)
+        self.assertEqual(sorted((str(p), p.read_bytes()) for p in self.out.parent.rglob('*') if p.is_file()), before)
 
     def test_rejects_device_outputs(self):
         self.assertEqual(self.build(output='/dev/null'), 1)

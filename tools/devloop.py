@@ -15,8 +15,13 @@ deploy builds nothing. It takes surfos.bin and initrd.tar of a build (devenv/bui
 the newer of build/docker/build/O2 and O0, or build/O2 and O0 on Linux) and, in one telnet session:
   1. lsblk: the data stick is the USB disk that is not the boot drive ("protected") and whose first partition is
      FAT, the partition GRUB's development entry looks at (--stick names it when there are more); never a name or
-     a size, since usb0 and usb1 change places between boots. That partition is mounted on /surfos-dev-stick (or
-     used where it is mounted already), then mkdir /surfos-dev-stick/surfos-dev;
+     a size, since usb0 and usb1 change places between boots. 10/17/26 (one stick, docs/USB-BOOT.md section 14):
+     but when the volume SurfOS was started from may be written ("boot drive: writable", a stick the boot files
+     were copied onto), the build goes there, where GRUB's development entry looks first, once that stick holds
+     boot/ONE-STICK.txt (tools/stick.py install writes it; without it deploy stops with what to do, and so it does
+     for --stick naming another disk then, and for such a stick behind its write-protect switch, "boot drive:
+     read-only"). That partition is mounted on /surfos-dev-stick (or used where it is mounted already), then
+     mkdir /surfos-dev-stick/surfos-dev;
   2. each file: rx <rx-port> <dir>/<name>.new runs in the session, this computer connects and sends the file, and
      the CRC-32 that rx says must be this file's; then both files are renamed into place (mv), so the stick
      never holds half of a build;
@@ -362,12 +367,46 @@ def parse_lsblk(text):
 # a partition GRUB and SurfOS read as FAT: the MBR types of FAT12, 16 and 32, an EFI system partition, GPT's basic data
 FAT_PART = re.compile(r'^part (?:mbr|gpt) (?:FAT|EFI system|basic data)')
 
+# 10/17/26 (one stick): lsblk's status of the volume SurfOS was started from when it may be written, mounted or not
+# (driver/bdev.c): a stick the boot files were copied onto, whose partition GRUB's development entry looks at first,
+# when it holds MARKER (tools/stick.py install writes it; boot/grub-usb.cfg looks for it)
+BOOT_VOLUME = ('boot drive: writable', 'mounted (boot drive)')
+BOOT_READONLY = 'boot drive: read-only'         # the same behind its write-protect switch
+MARKER = 'boot/ONE-STICK.txt'
+
+
+def disk_row(rows, row):
+    """the disk row a partition row belongs to (a disk's row is its own)"""
+    if not row['part']:
+        return row
+    for r in rows:
+        if not r['part'] and re.fullmatch(re.escape(r['name']) + r'p\d+', row['name']):
+            return r
+    raise DevloopError(f'lsblk shows {row["name"]} without its disk')
+
 
 def data_stick(rows, name=None):
-    """(the disk, the device to mount), as lsblk's rows, of the data stick: the USB disk that is not the boot drive
-    (lsblk says "protected") and whose first partition is FAT, the partition GRUB's development entry looks at; or,
-    when no such disk is there, the one USB disk with no partition table at all (mounting it says whether it is
-    FAT). Never chosen by its name or size: usb0 and usb1 change places from one boot to the next."""
+    """(the disk, the device to mount), as lsblk's rows, of the stick that gets the build. 10/17/26: the volume SurfOS
+    was started from when it may be written (lsblk: "boot drive: writable"), which GRUB's development entry looks at
+    first. Else the data stick: the USB disk that is not the boot drive (lsblk says "protected") and whose first
+    partition is FAT, the partition GRUB's development entry looks at next; or, when no such disk is there, the one
+    USB disk with no partition table at all (mounting it says whether it is FAT). Never chosen by its name or size:
+    usb0 and usb1 change places from one boot to the next."""
+    vols = [r for r in rows if r['bus'] == 'usb' and r['status'] in BOOT_VOLUME + (BOOT_READONLY,)]
+    if len(vols) > 1:
+        raise DevloopError('more than one volume says SurfOS was started from it (%s): two sticks with the same FAT '
+                           'serial number? Keep one plugged in' % ', '.join(r['name'] for r in vols))
+    if vols and vols[0]['status'] == BOOT_READONLY:
+        raise DevloopError(f'{vols[0]["name"]}, the volume SurfOS was started from, is write-protected: slide the '
+                           f'stick\'s switch to unlocked (GRUB starts the development build on that stick before '
+                           f'any other\'s once it holds {MARKER})')
+    if vols:
+        disk = disk_row(rows, vols[0])
+        if name and name != disk['name']:
+            raise DevloopError(f'{name} is not the stick SurfOS was started from ({disk["name"]}), whose development '
+                               f'build GRUB starts before any other\'s once it holds {MARKER} (tools/stick.py '
+                               f'install puts it there): deploy without --stick')
+        return disk, vols[0]
     disks = [r for r in rows if not r['part'] and r['bus'] == 'usb' and 'protected' not in r['status']
              and 'read-only' not in r['status']]
     if name:
@@ -518,11 +557,21 @@ def deploy(s, kernel, initrd, build_id, port=TELNET_PORT, rx_port=RX_PORT, net=N
     """the build onto the data stick through session s, then the reboot into it: the new session"""
     row, dev = data_stick(parse_lsblk(s.check('lsblk')), stick)
     disk = row['name']
-    say(f'data stick: {disk} ({row["label"] or "no model"}, {row["size"]}), ' +
+    if dev['status'] in BOOT_VOLUME and b'bootvol=' not in kernel:
+        say('note: this kernel is from before 10/17/26: it does not know the stick it starts from, so under it fdisk '
+            'and mkfs would be allowed on that stick')
+    say(('the stick SurfOS was started from' if dev['status'] in BOOT_VOLUME else 'data stick') +
+        f': {disk} ({row["label"] or "no model"}, {row["size"]}), ' +
         (f'its partition {dev["name"]} ({dev["size"]})' if dev is not row else 'no partition table'))
     root = mount_stick(s, dev)
     folder = f'{root}/{DEV_DIR}'
     try:
+        if dev['status'] in BOOT_VOLUME:        # 10/17/26: GRUB looks in its own surfos-dev only beside the marker
+            status, _ = s.run(f'cat {root}/{MARKER}')
+            if status != 0:
+                raise DevloopError(f'{dev["name"]}, the stick SurfOS was started from, has no {MARKER}, so GRUB would '
+                                   f'not start a build from its {DEV_DIR} folder: run tools/stick.py install on the '
+                                   f'Mac (docs/USB-BOOT.md section 14)')
         s.check(f'mkdir {folder}', ok=lambda st, o: st == 0 or 'File exists' in o)
         for name, data in zip(FILES, (initrd, kernel)):
             push(s, data, f'{folder}/{name}.new', rx_port, connect_host)

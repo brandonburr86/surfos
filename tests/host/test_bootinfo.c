@@ -139,6 +139,22 @@ static void test_valid_block(void) {
     check(bootinfo_has_arg(&bi, "profile=laptop") && bootinfo_has_arg(&bi, "kbd=poll"), "command line words found");
     check(!bootinfo_has_arg(&bi, "profile=lap") && !bootinfo_has_arg(&bi, "laptop") && !bootinfo_has_arg(&bi, ""),
           "only whole words match");
+    {
+        /* 10/17/26 (one stick): a word's value, as bootvol=5D0F-0901 from boot/grub-usb.cfg */
+        struct boot_info c;
+        char v[16];
+        memset(&c, 0, sizeof(c));
+        strcpy(c.cmdline, "profile=laptop autonet  bootvol=5D0F-0901");
+        check(bootinfo_arg(&c, "bootvol=", v, sizeof(v)) && !strcmp(v, "5D0F-0901"), "a word's value after its key");
+        check(bootinfo_arg(&c, "profile=", v, sizeof(v)) && !strcmp(v, "laptop"), "the first word's value");
+        check(!bootinfo_arg(&c, "vol=", v, sizeof(v)) && !bootinfo_arg(&c, "kbd=", v, sizeof(v)) &&
+              !bootinfo_arg(&c, "", v, sizeof(v)), "only a word that starts with the key");
+        check(bootinfo_arg(&c, "bootvol=", v, 5) && !strcmp(v, "5D0F"), "a long value is cut to the buffer");
+        strcpy(c.cmdline, "bootvol= autonet");
+        check(bootinfo_arg(&c, "bootvol=", v, sizeof(v)) && !strcmp(v, ""), "an empty value (GRUB's probe failed)");
+        strcpy(c.cmdline, "bootvol=AAAA-AAAA bootvol=BBBB-BBBB");
+        check(bootinfo_arg(&c, "bootvol=", v, sizeof(v)) && !strcmp(v, "AAAA-AAAA"), "the first of two");
+    }
     check(bi.nmods == 1 && bi.mods[0].start == 0x2000000 && bi.mods[0].end == 0x2039800 && !strcmp(bi.mods[0].name, "initrd.tar"),
           "module start, end and name");
     check(bi.mem_lower_kb == 639 && bi.mem_upper_kb == 2096128, "basic memory information");

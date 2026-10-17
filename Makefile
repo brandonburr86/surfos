@@ -12,7 +12,8 @@
 #   make debug        boot paused with the gdb stub on :1234
 #   make iso          bootable ISO via grub-mkrescue (grub-pc-bin, xorriso, mtools)
 #   make images       build/images/test.img (MBR + FAT) and initrd.tar (rootfs/), used by run and test
-#   make usb-image    build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
+#   make usb-image    build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md), and
+#                     build/usb/stick/: the same files to copy onto a FAT32 stick instead (tools/stick.py)
 #   make test-usb     boot that exact image under QEMU + OVMF from an emulated USB stick and test it
 #   make test-devloop the development loop's host side: tools/devloop.py, the data stick image, the build id
 #   make clean
@@ -293,6 +294,8 @@ $(DISKIMG): $(DISK_FILES) tools/mkimage.py | $(IMAGES)
 USB_DIR      = build/usb
 USB_IMAGE    = $(USB_DIR)/surfos-ideapad-15iil05.img
 USB_INITRD   = $(BUILD)/initrd.tar
+# 10/17/26 (one stick): the image's files as a folder, to copy onto a FAT32 stick instead (tools/stick.py)
+USB_STICK    = $(USB_DIR)/stick
 USB_TESTDIR  = build/usb-test/O$(O)
 GRUB_FILE    = grub-file
 QEMU64       = qemu-system-x86_64
@@ -313,7 +316,7 @@ usb-image: $(KERNEL) $(USB_INITRD) boot/grub-usb.cfg boot/grub-usb-bootstrap.cfg
 	$(Q)$(GRUB_FILE) --is-x86-multiboot $(KERNEL) && $(GRUB_FILE) --is-x86-multiboot2 $(KERNEL) \
 		|| { echo "$(KERNEL): grub-file does not find both Multiboot headers"; exit 1; }
 	$(PYTHON) tools/mkusb.py --kernel $(KERNEL) --initrd $(USB_INITRD) --output $(USB_IMAGE) \
-		--optimization O$(O) --source-rev $(SURFOS_REV) --source-dirty $(SURFOS_DIRTY)
+		--optimization O$(O) --source-rev $(SURFOS_REV) --source-dirty $(SURFOS_DIRTY) --stick-dir $(USB_STICK)
 
 # boots the image file itself (no -kernel): OVMF with fresh variables, xHCI + usb-storage
 test-usb: usb-image
@@ -458,6 +461,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
+	$(PYTHON) -m unittest discover -s tests -p test_stick.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
 	$(PYTHON) -m unittest discover -s tests -p test_devenv.py
 

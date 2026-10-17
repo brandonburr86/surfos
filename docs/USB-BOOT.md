@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 14 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 17 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
@@ -19,6 +19,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | The SurfOS shell, surfsh: the breadcrumb prompt, Tab completion, a pager; SurfOS 1.0 | done under emulation; **pending on the laptop** | `make test` and `make test-usb`; [section 10](#10-the-shell) |
 | Telnet into the laptop from another computer: `telnetd`, surfsh over the network | done under emulation; **pending on the laptop** | `make test`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 11](#11-telnet-the-shell-from-another-computer) |
 | Development builds over the network: a data stick, GRUB's development entry, `autonet`, `rx`, `tools/devloop.py` | done under emulation; **pending on the laptop** | `make test`, `make test-usb` (scenario `devloop`), `make test-devloop`; [section 13](#13-development-builds-over-the-network) |
+| One stick for everything: the boot files copied onto a FAT32 stick that keeps your files (`tools/stick.py`), new builds copied into it | done under emulation; **pending on the laptop** | `make test-usb` (scenarios `onestick` and `twosticks`), `make unittest`, `make test-mkusb`; [section 14](#14-one-stick-for-everything) |
 
 ## What is on the drive
 
@@ -67,7 +68,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 14 scenarios, about four minutes
+devenv/test-usb.sh      # the automatic tests: 17 scenarios, several minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -249,11 +250,12 @@ in the way on the laptop.
 
 ## 9. Files on a USB stick
 
-SurfOS forgets everything at a restart: it never writes to its own drive (which it does
-not even mount unless asked, and then only read-only), and the ramdisk is unpacked
-afresh at every boot. Files that should last go on a **second USB
-stick**. SurfOS partitions it and formats it as **FAT32**, the format macOS, Windows and
-Linux all read and write, and it has a text editor and the usual file commands, so the
+SurfOS forgets everything at a restart: the ramdisk is unpacked afresh at every boot, and
+the flashed SurfOS drive is never written (it is not even mounted unless asked, and then
+only read-only). Files that should last go on a **second USB stick**, or on the boot
+stick itself when it is a FAT32 stick you copied the boot files onto (section 14), which
+SurfOS writes but never partitions or formats. A second stick SurfOS can partition and
+format as **FAT32**, the format macOS, Windows and Linux all read and write, and it has a text editor and the usual file commands, so the
 same stick carries files between SurfOS and the Mac. Nothing is mounted by itself: you
 mount the stick, and you eject it before pulling it out.
 
@@ -415,6 +417,9 @@ ramdisks, and refuse:
 
 * the SurfOS boot drive, recognised by its volume label SURFOSUSB whatever its number. It
   can be mounted, but only read-only;
+* the stick SurfOS was started from (GRUB names its volume, section 14), whatever its
+  label. That volume can be mounted read-write, since it holds your files too; any other
+  partition on that stick only read-only;
 * internal disks. SurfOS has no driver for the laptop's SSD, so it cannot even see it;
   an internal disk it does see (an IDE disk under QEMU) is marked `internal: never
   formatted`;
@@ -433,7 +438,8 @@ ramdisks, and refuse:
   you type them. A shell on another console (F2 to F4) that is still in `/data` does not
   stop them; its commands then find nothing there until it changes directory.
 * No USB hubs, so every drive needs a port of its own. The laptop's three ports take the
-  SurfOS drive, a data stick and the Ethernet adapter.
+  SurfOS drive, a data stick and the Ethernet adapter; with one stick for both (section
+  14), a port stays free.
 
 ## 10. The shell
 
@@ -600,7 +606,11 @@ starts it by itself: section 13).
 |---|---|
 | The USB drive is not in the F12 menu | Write the image again with one of the writers above; try the other USB ports; check that Secure Boot is off and that USB boot is enabled. |
 | "Secure Boot Violation", "Verification failed", or a red security warning | Secure Boot is still on (step 5). |
-| GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). |
+| GRUB says `file '/boot/…' not found`, or "SurfOS: /boot/surfos.bin … were not found" | The drive does not hold the image as written by a raw writer: write it again (step 4). On a stick you copied the files onto, one is missing: `tools/stick.py check` says which, `tools/stick.py install` puts them back (section 14). |
+| A stick you copied the boot files onto is not offered at all | Check that `EFI/BOOT/BOOTX64.EFI` is on it (`tools/stick.py check`) and that it is FAT32, then choose it in the F12 menu; plug it straight into the laptop (section 14). |
+| On that stick, `lsblk` says `boot drive: read-only` | Its write-protect switch is on: slide it back and plug the stick in again. |
+| On that stick, `lsblk` shows none of `boot drive: writable`, `mounted (boot drive)` or `boot drive: read-only` | GRUB did not name the volume (the stick has an older boot loader or menu), or the build running is older than 10/17/26 (`tools/stick.py check` marks such builds). `tools/stick.py install` brings the boot loader and the menu up to date and replaces such a fallback build in `boot/`; `tools/stick.py update` puts a new development build in. Until then `fdisk` and `mkfs` do not know it is the boot drive: leave them alone. |
+| The menu has no "development build from this stick" entry, though `surfos-dev` holds a build | `boot/ONE-STICK.txt` is missing (GRUB looks in its own stick's `surfos-dev` only beside it): `tools/stick.py install` puts it back. |
 | GRUB's menu, then a blank screen | The kernel could not use the firmware's framebuffer. Photograph the GRUB screen and note the panel resolution; report it. |
 | The boot log stops, or ends with `SYSTEM HALTED` or a line starting `BOOT PROBLEM` | Photograph the screen and report it: those lines name what failed. |
 | The prompt appears but keys do nothing | Restart and choose the troubleshooting entry. USB keyboards are not supported (the USB stack drives network adapters and storage only), so use the built-in keyboard. |
@@ -695,6 +705,137 @@ have arrived whole. Then it ejects the stick, restarts the laptop, waits up to t
 minutes for telnet, and checks that `/initrd/etc/build-id` is the pushed build's. A stick
 without a FAT file system stops it with what to do.
 
+With one stick for everything (section 14), the data stick *is* the boot stick: `deploy`
+writes into the `surfos-dev` folder of the stick SurfOS was started from, and GRUB's first
+entry is then called **SurfOS (development build from this stick)**.
+
+## 14. One stick for everything
+
+*Added 10/17/26.* The boot stick and the data stick can be one and the same: any FAT32
+USB stick, the 30 GB data stick for one, with SurfOS's boot files copied onto it as
+ordinary files. Nothing is flashed or formatted, and the files already on the stick stay
+where they are. SurfOS then starts from that stick and keeps your files on it, and each
+new build is two files copied into its `surfos-dev` folder, from the Mac or over the
+network. The flashed image of step 4 still works as before, and stays your rescue stick.
+
+**What goes on the stick.** `devenv/build-usb.sh` writes the folder `build/usb/stick/`
+next to the image, holding the image's files and one more:
+
+```text
+EFI/BOOT/BOOTX64.EFI          GRUB, the boot loader (the path firmware tries on removable drives)
+boot/grub/grub.cfg            the menu
+boot/grub/x86_64-efi/fs.lst   empty (section 13)
+boot/surfos.bin               the fallback build, which the menu's "SurfOS" entry starts
+boot/initrd.tar
+boot/BUILD-INFO.txt           what that build is, from what, when
+boot/ONE-STICK.txt            marks a stick made this way: keep it (below)
+surfos-dev/surfos.bin         the development build, which the menu's first entry starts
+surfos-dev/initrd.tar
+```
+
+Everything else on the stick is yours; SurfOS's files never go anywhere else. GRUB looks
+for a development build in the `surfos-dev` folder of its own stick only when
+`boot/ONE-STICK.txt` is there, which the flashed image never has.
+
+**The first time, on the Mac.** Plug the stick into the Mac. Its name is the one Finder
+shows (here `DATASTICK`):
+
+```sh
+devenv/build-usb.sh                                  # when build/usb/stick/ is not there yet
+tools/stick.py check   /Volumes/DATASTICK            # what the stick holds now
+tools/stick.py install /Volumes/DATASTICK --eject    # the files above onto it, then eject it
+```
+
+`install` checks each file of the folder against the build's manifest, writes it under a
+temporary name, reads it back and only then renames it into place, the boot loader and then
+the menu last: a stick pulled out halfway is never started with half a menu (a new stick
+shows GRUB's message that its menu is missing, one being brought up to date starts its old
+menu), and a build left half old, half new is noticed and written again by the next
+`install`. It never formats, partitions or
+deletes anything, and it refuses:
+
+* anything that is not a FAT volume of an external drive;
+* the flashed SURFOSUSB stick, which SurfOS only reads: keep it as it is, for rescue;
+* a stick that holds another system's boot loader or GRUB menu where SurfOS's go (a
+  Windows or Linux installer stick, say): it names those files, and writes nothing until
+  you have moved them off the stick.
+
+Without the tool, drag the folders `EFI`, `boot` and `surfos-dev` from `build/usb/stick/`
+onto the stick in Finder, then eject it. Finder checks nothing, and its *Replace* replaces
+whole folders: on a stick that already has an `EFI` or `boot` folder of its own, use the
+tool, which looks at them first.
+
+The stick must be FAT32 (or FAT16), with either partition table; the data stick already
+is. An exFAT or NTFS stick has to be erased as *MS-DOS (FAT)* first (section 9), which
+erases it. Do not name the stick SURFOSUSB: that name marks the flashed image. And never
+copy the stick folder onto the flashed stick (its volume is called SURFOSUSB on the Mac):
+GRUB would then start a `surfos-dev` there that SurfOS can never update.
+
+**On the laptop.** Plug in that stick alone and start the laptop. With USB first in the
+boot order (section 13) the firmware starts the stick's GRUB by itself. If it does not,
+tap **F12** at power-on and choose the stick (its entry names its maker, such as
+*USB Disk 2.0*). The menu is:
+
+```text
+SurfOS (development build from this stick)       the default, after 5 seconds
+SurfOS                                           the fallback build in boot/
+SurfOS (troubleshooting: local APIC timer, polled keyboard)
+...
+```
+
+The first entry starts the build in `surfos-dev`, with the network and the telnet server
+(section 13; no password, so on a network you do not trust choose **SurfOS**, which starts
+neither). **SurfOS** starts the build in `boot/`: choose it with the arrow keys when a
+development build misbehaves.
+
+GRUB tells SurfOS which volume it was started from, by the volume's serial number, so
+SurfOS knows its own stick whatever it is called:
+
+```text
+NAME     SIZE BUS RM TYPE               MODEL/LABEL      STATUS
+rd0        7M ram  0 disk               initrd.tar       mounted
+usb0      29G usb  1 disk mbr           VendorCo Product boot drive: protected
+  usb0p1  29G usb  1 part mbr FAT32 LBA                  boot drive: writable
+```
+
+`fdisk` and `mkfs` refuse the stick, as they refuse the flashed one. Behind a stick's
+write-protect switch, if it has one, the volume says `boot drive: read-only` and
+`tools/devloop.py` asks for the switch to be slid back. Its volume is mounted like any data
+stick (section 9): `mount usb0p1 /data` says `the volume SurfOS was
+started from: its files may be changed; fdisk and mkfs leave it alone`, `lsblk` then says
+`mounted (boot drive)`, and `eject usb0` comes before pulling it out. Only builds from
+10/17/26 on know their stick this way: an older build, in `surfos-dev` or in `boot/`, would
+treat it as an ordinary data stick, which `fdisk` and `mkfs` may change. `tools/stick.py
+check` marks such a build, `install` replaces an older fallback, and `update` and `deploy`
+say so when the build they put there is older.
+
+**Each new build** is two files that belong together: `surfos.bin`, the kernel, and
+`initrd.tar`, the programs it runs (surfsh, the editor, the browser, the Wi-Fi firmware).
+They go into `surfos-dev`, either way:
+
+* **Over the network, with the stick left in the laptop:** `devenv/build-usb.sh &&
+  tools/devloop.py deploy` (section 13). `deploy` finds the stick SurfOS was started
+  from (`boot drive: writable`), writes the build into its `surfos-dev`, ejects it and
+  restarts the laptop into that build. Nothing is plugged in or out. With the USB Ethernet
+  adapter the laptop comes back by itself; over Wi-Fi it needs `wifi join` again after
+  the restart. It refuses `--stick` naming another stick (GRUB would not start a build
+  there) and a stick without `boot/ONE-STICK.txt`.
+* **On the Mac:** `devenv/build-usb.sh`, the stick into the Mac, `tools/stick.py update
+  /Volumes/DATASTICK --eject` (only `surfos-dev` changes), the stick back into the laptop.
+  Or drag `build/usb/stick/surfos-dev` onto the stick and choose *Replace*.
+
+`tools/stick.py install` again brings the boot loader, the menu and `surfos-dev` up to date
+and leaves a good fallback in `boot/` as it is (one from before 10/17/26, which would not
+know the stick, is replaced). Once a development build has proved itself,
+`tools/stick.py install /Volumes/DATASTICK --fallback` makes it the fallback too.
+
+**Keep the flashed stick as a rescue stick.** Here SurfOS writes to the stick it boots
+from. It never formats or repartitions it, but a bug in a development kernel, or a crash
+while the stick is mounted and being written, could damage files on it, the boot files
+among them. The stick then no longer starts SurfOS until `tools/stick.py install` puts the
+files back, a minute on the Mac. The SURFOSUSB stick of step 4, which SurfOS only reads
+and `tools/stick.py` never writes, still starts SurfOS meanwhile.
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |
@@ -711,6 +852,7 @@ without a FAT file system stops it with what to do.
 | The shell, surfsh: the SurfOS prompt, Tab completion, history, a pager, quotes and redirection, the kernel's commands; UTF-8 on the screen | Pipes, variables, wildcards, job control |
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
+| One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |
 
 ## How it works
 
@@ -765,6 +907,18 @@ without a FAT file system stops it with what to do.
   thread that waits up to 90 seconds for a link, gets a DHCP lease (three tries) and runs
   `telnetd on` on F1. `rx` writes what one connection sends to `<path>.part`, then renames
   it. The Makefile writes `etc/build-id` into the initrd at every build.
+* **One stick** (`boot/grub-usb.cfg`, `driver/part.c`, `driver/bdev.c`, `tools/stick.py`).
+  The boot loader finds the partition it was started from through GRUB's `$cmdpath`, so it
+  runs from any FAT partition, the image's or a stick's. The menu asks GRUB for that
+  volume's serial number (`probe --fs-uuid`) and passes it to the kernel as
+  `bootvol=5D0F-0901`; SurfOS compares it with the boot sector of every partition it finds
+  (and of every disk without a partition table) and makes the disk that holds it the boot
+  drive, which `fdisk` and `mkfs` refuse, while that one volume may be mounted read-write.
+  On a stick that has `boot/ONE-STICK.txt` the menu looks for `surfos-dev` on its own
+  partition before the other disks, and `tools/devloop.py` writes there first too. `tools/mkusb.py
+  --stick-dir` writes the image's files as a folder, and `tools/stick.py` copies it onto
+  a mounted FAT volume of an external drive, checked against the manifest, each file
+  written under a temporary name and read back before it is renamed into place.
 * **Telnet** (`user/telnetd/`, `net/sock.c`, `kernel/pty.c`, `fs/poll.c`). Programs reach
   TCP through descriptors (listen, accept, connect) and wait on several at once with
   `poll()`. A pseudo-terminal is a terminal whose screen is a byte stream read by the
@@ -782,8 +936,8 @@ and, for development builds over the network, [superpowers/plans/2026-10-09-wifi
 ## Make targets
 
 ```sh
-make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 14 scenarios (tools/qemu-usb.py --test)
+make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json, and build/usb/stick/
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 17 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image

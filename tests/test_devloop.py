@@ -7,6 +7,7 @@ Nothing here connects anywhere: devloop.py's sessions, rx and the reboot are tes
 under QEMU by tools/qemu-usb.py's devloop scenario. These tests need only Python; where fsck.fat is installed (the
 Docker toolchain) it checks the FAT32 images as well.
 """
+import contextlib
 import importlib.util
 import io
 import os
@@ -19,6 +20,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -142,6 +144,129 @@ class DataStickTests(unittest.TestCase):
             devloop.parse_lsblk('lsblk: something else\n')
 
 
+# 10/17/26 (one stick): the owner's data stick made bootable by copying the boot files onto it, as lsblk shows it
+# (driver/bdev.c): its disk protected, the volume SurfOS was started from writable
+HEAD = ('NAME     SIZE BUS RM TYPE                MODEL/LABEL      STATUS\n'
+        'rd0        2M ram  0 disk                initrd.tar       mounted\n')
+ONE = ('usb{n}      29G usb  1 disk mbr            VendorCo Product boot drive: protected\n'
+       '  usb{n}p1  29G usb  1 part mbr FAT32 LBA                   {status}\n')
+IMAGE = ('usb{n}     118G usb  1 disk gpt            General USB Flas boot drive: protected\n'
+         '  usb{n}p1 254M usb  1 part gpt EFI system SURFOSUSB        boot drive: protected\n')
+DATA = ('usb{n}      16G usb  1 disk mbr            Kingston\n'
+        '  usb{n}p1  16G usb  1 part mbr FAT32 LBA\n')
+
+
+class OneStickTests(unittest.TestCase):
+    def pick(self, text, name=None):
+        disk, dev = devloop.data_stick(devloop.parse_lsblk(text), name)
+        return disk['name'], dev['name']
+
+    def test_the_stick_it_was_started_from(self):
+        for status in devloop.BOOT_VOLUME:                       # mounted or not
+            self.assertEqual(self.pick(HEAD + ONE.format(n=0, status=status)), ('usb0', 'usb0p1'))
+            self.assertEqual(self.pick(HEAD + ONE.format(n=0, status=status), 'usb0'), ('usb0', 'usb0p1'))
+
+    def test_before_a_data_stick(self):
+        """GRUB's development entry looks at its own partition first, so the build goes there too, whichever of
+        the two is usb0; --stick naming the other one is refused, since GRUB would not start a build there"""
+        one, data = ONE.format(n=0, status='boot drive: writable'), DATA.format(n=1)
+        self.assertEqual(self.pick(HEAD + one + data), ('usb0', 'usb0p1'))
+        self.assertEqual(self.pick(HEAD + data.replace('usb1', 'usb0') + one.replace('usb0', 'usb1')), ('usb1', 'usb1p1'))
+        with self.assertRaisesRegex(devloop.DevloopError, r'usb1 is not the stick SurfOS was started from \(usb0\).*'
+                                                          r'ONE-STICK.txt.*deploy without --stick'):
+            self.pick(HEAD + one + data, 'usb1')
+
+    def test_the_image_is_never_written(self):
+        """the flashed image (SURFOSUSB) is only read: with it, the data stick, as before; alone, nothing"""
+        self.assertEqual(self.pick(HEAD + IMAGE.format(n=0) + DATA.format(n=1)), ('usb1', 'usb1p1'))
+        with self.assertRaisesRegex(devloop.DevloopError, 'no data stick'):
+            self.pick(HEAD + IMAGE.format(n=0))
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0 is not a USB disk'):
+            self.pick(HEAD + IMAGE.format(n=0) + DATA.format(n=1), 'usb0')
+
+    def test_its_other_partitions_are_not_it(self):
+        """a stick the Mac made GPT has its EFI partition first; SurfOS was started from the second, which alone is
+        writable (the partition GRUB's menu looks at)"""
+        mac = ('usb0      29G usb  1 disk gpt            SanDisk          boot drive: protected\n'
+               '  usb0p1 200M usb  1 part gpt EFI system EFI              boot drive: protected\n'
+               '  usb0p2  29G usb  1 part gpt basic data DATASTICK        boot drive: writable\n')
+        self.assertEqual(self.pick(HEAD + mac), ('usb0', 'usb0p2'))
+
+    def test_a_stick_without_a_partition_table(self):
+        whole = 'usb0      29G usb  1 disk                VendorCo Product boot drive: writable\n'
+        self.assertEqual(self.pick(HEAD + whole), ('usb0', 'usb0'))
+
+    def test_two_that_say_so(self):
+        text = HEAD + ONE.format(n=0, status='boot drive: writable') + ONE.format(n=1, status='mounted (boot drive)')
+        with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1'):
+            self.pick(text)
+
+    class Session:                              # the telnet session, as deploy uses it
+        host = '127.0.0.1'
+
+        def __init__(self, marker, status='boot drive: writable'):
+            self.marker, self.status, self.commands = marker, status, []
+
+        def check(self, cmd, timeout=60, ok=None):
+            self.commands.append(cmd)
+            return {'lsblk': HEAD + ONE.format(n=0, status=self.status),
+                    'mount': '    rd0    on /initrd       type tarfs (ro)\n'}.get(cmd, '')
+
+        def run(self, cmd, timeout=60):
+            self.commands.append(cmd)
+            if cmd.startswith('mount usb0p1 '):
+                return 0, '    usb0p1 on /surfos-dev-stick: fat32, label DATASTICK, 29 GB, 29 GB free, read-write\n'
+            if cmd.startswith('cat '):
+                return (0, mkusb.STICK_NOTE) if self.marker else (1, '    cat: no such file\n')
+            return 0, '    usb0: safe to remove\n' if cmd.startswith('eject ') else ''
+
+    def test_deploy_needs_the_marker(self):
+        """GRUB looks in the surfos-dev of the stick it was started from only beside boot/ONE-STICK.txt
+        (tools/stick.py install writes it): without it nothing is pushed, and the stick is ejected as it was"""
+        s = self.Session(marker=False)
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the stick SurfOS was started from, has no '
+                                                          'boot/ONE-STICK.txt.*tools/stick.py install'):
+            devloop.deploy(s, b'kernel bootvol=', b'initrd', 'a build')
+        self.assertIn('cat /surfos-dev-stick/boot/ONE-STICK.txt', s.commands)
+        self.assertEqual(s.commands[-1], 'eject usb0')
+        self.assertFalse([c for c in s.commands if c.startswith(('mkdir', 'rx ', 'mv '))])
+        self.assertEqual(devloop.MARKER, mkusb.STICK_MARKER)
+
+    def test_deploy_with_the_marker_pushes_there(self):
+        """with the marker, the build goes into that stick's surfos-dev: the folder is made and the initrd pushed
+        first (the push itself is tested against QEMU, tools/qemu-usb.py's onestick scenario)"""
+        class Pushed(Exception):
+            pass
+        s = self.Session(marker=True)
+        with mock.patch.object(devloop, 'push', side_effect=Pushed) as push:
+            with self.assertRaises(Pushed):
+                devloop.deploy(s, b'kernel bootvol=', b'initrd', 'a build')
+        self.assertIn('mkdir /surfos-dev-stick/surfos-dev', s.commands)
+        self.assertEqual(push.call_args[0][1:3], (b'initrd', '/surfos-dev-stick/surfos-dev/initrd.tar.new'))
+
+    def test_deploy_says_when_a_kernel_does_not_know_the_stick(self):
+        s = self.Session(marker=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(devloop.DevloopError):
+            devloop.deploy(s, b'an older kernel', b'initrd', 'a build')
+        self.assertIn('this kernel is from before 10/17/26', out.getvalue())
+
+    def test_a_write_protected_boot_stick(self):
+        with self.assertRaisesRegex(devloop.DevloopError, 'usb0p1, the volume SurfOS was started from, is '
+                                                          'write-protected: slide'):
+            self.pick(HEAD + ONE.format(n=0, status='boot drive: read-only') + DATA.format(n=1))
+        with self.assertRaisesRegex(devloop.DevloopError, 'more than one volume.*usb0p1, usb1p1.*same FAT serial'):
+            self.pick(HEAD + ONE.format(n=0, status='boot drive: read-only') +   # two with one serial: that first
+                      ONE.format(n=1, status='boot drive: writable'))
+
+    def test_no_note_for_a_kernel_that_knows_the_stick(self):
+        s = self.Session(marker=False)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(devloop.DevloopError):
+            devloop.deploy(s, b'a kernel that reads bootvol=', b'initrd', 'a build')
+        self.assertNotIn('from before 10/17/26', out.getvalue())
+
+
 class BuildTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='surfos devloop ')
@@ -238,6 +363,16 @@ class DataStickImageTests(unittest.TestCase):
             names = [n for n, _, _, _, _ in fat.entries(fat.root)]
             self.assertEqual(names, ['surfos-dev'])                                  # its long name, not SURFOS~1
         self.fsck(out, info['offset'])
+        # 10/17/26: the volume serial number, which GRUB passes as bootvol=: the data stick has its own, and any
+        # image can be given one (two sticks of one test must not share it)
+        with open(out, 'rb') as f:
+            f.seek(info['offset'] + 67)
+            self.assertEqual(struct.unpack('<I', f.read(4))[0], 0x0DA7A517)
+        other = str(self.dir / 'other.img')
+        mkimage.make_fat32(other, {'a.txt': b'a'}, 512, serial=0x12345678)
+        with open(other, 'rb') as f:
+            f.seek(info['offset'] + 67)
+            self.assertEqual(struct.unpack('<I', f.read(4))[0], 0x12345678)
 
     def test_names_folders_and_empty_files(self):
         files = {'README.TXT': b'plain 8.3\n', 'A name longer than twenty-six characters, with spaces.txt': b'long\n',

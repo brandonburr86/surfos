@@ -383,6 +383,65 @@ static void test_boot_drive(void) {
     kfree(b);
 }
 
+/* 10/17/26 (one stick): the same, with a FAT32 volume of another label whose serial number is the one on the
+   kernel command line (bootvol=, which the smoke test passes as GRUB would): the disk is the boot drive, which
+   fdisk and mkfs refuse, but its volume alone mounts read-write; labelled SURFOSUSB as well, it is the image */
+static void test_boot_volume(void) {
+    struct bdev *rd = bdev_find("rd1"), *p;
+    char v[16];
+    u32 serial;
+    u8 *save, *b;
+    int r1, r2, r3, r4, rc;
+    if(!bootinfo_arg(&bootinfo, "bootvol=", v, sizeof(v)) || !part_parse_serial(v, &serial)) {
+        printf("  skip boot volume check (no bootvol= on the command line)\n");
+        return;
+    }
+    if(!rd || strcmp(rd->model, "scratch.img") || rd->nblocks < 4096 || bdev_may_format(rd, NULL, 0) != 0) {
+        printf("  skip boot volume check (no free scratch ramdisk rd1)\n");
+        return;
+    }
+    save = (u8 *)kalloc(1024);
+    b = (u8 *)kcalloc(1, 512);
+    if(!save || !b) { check(false, "boot volume test buffers"); kfree(save); kfree(b); return; }
+    rc = bdev_read(rd, 0, 1, save) | bdev_read(rd, 2048, 1, save + 512);
+    b[446 + 4] = 0x0C;                                  /* partition 1: FAT32 LBA, blocks 2048-4095 */
+    b[446 + 9] = 0x08;
+    b[446 + 13] = 0x08;
+    b[510] = 0x55; b[511] = 0xAA;
+    rc |= bdev_write(rd, 0, 1, b);
+    memset(b, 0, 512);                                  /* its boot sector: the BPB, the serial number, a label */
+    b[0] = 0xEB; b[1] = 0x58; b[2] = 0x90;
+    b[12] = 2; b[13] = 1; b[14] = 32; b[16] = 2;
+    b[66] = 0x29;
+    b[67] = (u8)serial; b[68] = (u8)(serial >> 8); b[69] = (u8)(serial >> 16); b[70] = (u8)(serial >> 24);
+    memcpy(b + 71, "DATASTICK  ", 11);
+    b[510] = 0x55; b[511] = 0xAA;
+    rc |= bdev_write(rd, 2048, 1, b);
+    r1 = bdev_rescan(rd);
+    p = bdev_find("rd1p1");
+    check(rc == 0 && r1 == 1 && p && p->parent == rd && rd->protect == bdev_boot_drive && p->protect == bdev_boot_volume,
+          "the volume GRUB was started from (bootvol=) makes its disk the boot drive, whatever its label");
+    check(bdev_may_format(rd, NULL, 0) != 0 && (!p || bdev_may_format(p, NULL, 0) != 0),
+          "fdisk and mkfs refuse that disk and its volume");
+    check(p && !bdev_mount_readonly(p) && bdev_mount_readonly(rd), "the volume mounts read-write, its disk only read-only");
+    memcpy(b + 71, "SURFOSUSB  ", 11);                  /* the image's label too: the image's rule wins */
+    rc = bdev_write(rd, 2048, 1, b);
+    r2 = bdev_rescan(rd);
+    p = bdev_find("rd1p1");
+    check(rc == 0 && r2 == 1 && p && p->protect == bdev_boot_drive && bdev_mount_readonly(p),
+          "with the label SURFOSUSB as well it is the image, only read");
+    memcpy(b + 71, "DATASTICK  ", 11);                  /* no partition table: the volume is the disk itself */
+    rc = bdev_write(rd, 2048, 1, save + 512) | bdev_write(rd, 0, 1, b);
+    r3 = bdev_rescan(rd);
+    check(rc == 0 && r3 == 0 && rd->protect == bdev_boot_volume && !bdev_mount_readonly(rd) &&
+          bdev_may_format(rd, NULL, 0) != 0, "with no partition table the disk itself is that volume: read-write, never formatted");
+    rc = bdev_write(rd, 0, 1, save);
+    r4 = bdev_rescan(rd);
+    check(rc == 0 && r4 >= 0 && !rd->protect && (!p || p->gone), "put back: not the boot drive; the old rd1p1 is gone");
+    kfree(save);
+    kfree(b);
+}
+
 /* 10/5/26: fdisk's writer asks the safety rule again, and writes nothing when the disk no longer
    reads as the table the change was planned from (plans are made, never carried out here) */
 static void test_part_commit(void) {
@@ -1026,7 +1085,7 @@ static void test_usb(void) {
 
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
-    test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
+    test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };

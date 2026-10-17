@@ -146,18 +146,51 @@ void part_fmt_size(u32 blocks, char *buf, size_t size) {
 
 /**** FAT boot sectors ****/
 
-bool part_fat_label(const u8 *bs, char *label) {
+/* the extended BPB of a FAT boot sector (drive number, signature, serial, label), or NULL when bs is not one */
+static const u8 *fat_ext_bpb(const u8 *bs) {
     u16 bps = get16(bs + 11), rsv = get16(bs + 14);
     u8 spc = bs[13], nfats = bs[16];
-    const u8 *ext;
-    if(bs[MBR_SIG_OFFSET] != 0x55 || bs[MBR_SIG_OFFSET + 1] != 0xAA) return false;
-    if(bs[0] != 0xEB && bs[0] != 0xE9) return false;                /* a jump to the boot code */
+    if(bs[MBR_SIG_OFFSET] != 0x55 || bs[MBR_SIG_OFFSET + 1] != 0xAA) return NULL;
+    if(bs[0] != 0xEB && bs[0] != 0xE9) return NULL;                 /* a jump to the boot code */
     if(bps < 512 || bps > 4096 || (bps & (bps - 1)) || !spc || (spc & (spc - 1)) || !rsv || !nfats || nfats > 2)
-        return false;
-    ext = get16(bs + 22) ? bs + 36 : bs + 64;     /* FAT12/16 extended BPB at 36; FAT32 (no 16-bit FAT size) at 64 */
-    if(ext[2] != 0x29) return false;              /* no extended boot signature: the label field is not there */
+        return NULL;
+    return get16(bs + 22) ? bs + 36 : bs + 64;    /* FAT12/16 extended BPB at 36; FAT32 (no 16-bit FAT size) at 64 */
+}
+
+bool part_fat_label(const u8 *bs, char *label) {
+    const u8 *ext = fat_ext_bpb(bs);
+    if(!ext || ext[2] != 0x29) return false;      /* no extended boot signature: the label field is not there */
     memcpy(label, ext + 7, 11);
     label[11] = 0;
+    return true;
+}
+
+/* 10/17/26 (one stick): the serial number follows the signature. GRUB reads it there whatever the signature says
+   (grub-core/fs/fat.c), so this does too: the kernel must recognise every volume GRUB names in bootvol= */
+bool part_fat_serial(const u8 *bs, u32 *serial) {
+    const u8 *ext = fat_ext_bpb(bs);
+    if(!ext) return false;
+    *serial = get32(ext + 3);
+    return true;
+}
+
+/* GRUB prints a FAT serial number as its two halves in hex, the high one first: 0x5D0F0901 is "5D0F-0901" */
+bool part_parse_serial(const char *s, u32 *serial) {
+    u32 v = 0;
+    int i;
+    for(i = 0; i < 9; i++) {
+        char c = s[i];
+        if(i == 4) {
+            if(c != '-') return false;
+            continue;
+        }
+        if(c >= '0' && c <= '9') v = v << 4 | (u32)(c - '0');
+        else if(c >= 'A' && c <= 'F') v = v << 4 | (u32)(c - 'A' + 10);
+        else if(c >= 'a' && c <= 'f') v = v << 4 | (u32)(c - 'a' + 10);
+        else return false;
+    }
+    if(s[9]) return false;
+    *serial = v;
     return true;
 }
 

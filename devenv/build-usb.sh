@@ -8,6 +8,10 @@
 # .sha256 file and build-manifest.json to build/usb/ in this tree, checking the checksum
 # on the way. It writes files only: flashing a USB drive is a separate, deliberate step
 # with a raw-image writer (see docs/USB-BOOT.md).
+#
+# 10/17/26 (one stick): also build/usb/stick/, the image's files as a folder to copy onto a
+# FAT32 stick instead (tools/stick.py, docs/USB-BOOT.md section 14), checked against the
+# manifest as it is copied and replaced as a whole.
 set -euo pipefail
 LEVEL="${O:-2}"
 export O="$LEVEL"
@@ -27,7 +31,7 @@ python3 "$ROOT/tools/fetch-webdeps.py" \
 
 SRC="$OUT/build/usb"
 DEST="$ROOT/build/usb"
-for f in "$NAME" "$NAME.sha256" build-manifest.json; do
+for f in "$NAME" "$NAME.sha256" build-manifest.json stick/EFI/BOOT/BOOTX64.EFI; do
     [ -s "$SRC/$f" ] || { echo "The build did not produce $SRC/$f" >&2; exit 1; }
 done
 mkdir -p "$DEST"
@@ -39,7 +43,15 @@ if command -v sha256sum > /dev/null; then
 else
     (cd "$STAGE" && shasum -a 256 -c "$NAME.sha256" > /dev/null)
 fi
+# no extended attributes on macOS, which Finder would carry onto a FAT stick as ._ files
+if [ "$(uname -s)" = Darwin ]; then cp -RX "$SRC/stick" "$STAGE/stick"; else cp -R "$SRC/stick" "$STAGE/stick"; fi
+python3 "$ROOT/tools/stick.py" kit --kit "$STAGE/stick" --manifest "$STAGE/build-manifest.json" > /dev/null
+# the old folder is replaced only when it holds nothing but a stick folder's files (and Finder's .DS_Store)
+python3 "$ROOT/tools/mkusb.py" --check-stick-dir "$DEST/stick" \
+    || { echo "build-usb: nothing was replaced; move those files out of $DEST/stick, then build again" >&2; exit 1; }
 mv -f "$STAGE/$NAME" "$STAGE/$NAME.sha256" "$STAGE/build-manifest.json" "$DEST/"
+if [ -d "$DEST/stick" ]; then mv "$DEST/stick" "$STAGE/stick.old"; fi
+mv "$STAGE/stick" "$DEST/stick"
 
 cat <<EOF
 
@@ -48,9 +60,14 @@ SurfOS USB image (O$LEVEL), checksum verified:
   $DEST/$NAME.sha256
   $DEST/build-manifest.json
   sha256 $(cut -d' ' -f1 "$DEST/$NAME.sha256")
+  $DEST/stick/   (the same files, to copy onto a FAT32 stick)
 
 Test it under QEMU first:  devenv/test-usb.sh
 Then write the whole .img to a USB drive with a raw-image writer (balenaEtcher,
 Raspberry Pi Imager, Rufus in DD mode, or dd to a device you have checked twice).
 Everything on that drive is replaced. Step by step: docs/USB-BOOT.md
+
+Or keep your own FAT32 stick and its files, with no image to write (section 14):
+  tools/stick.py install /Volumes/<the stick>    the first time
+  tools/stick.py update /Volumes/<the stick>     each new build after that
 EOF
