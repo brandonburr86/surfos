@@ -80,8 +80,9 @@ def relink(link, target):
 
 
 # ====================================================================================== fake boards
-# The DDR diagnostics (surfcpu_arty_a7_ddr_bramdiag) as the owner's A7-100T printed them, built at 0bcadbc with
-# the fixed open flow (docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt), but for the build id and the DDR
+# The DDR diagnostics (surfcpu_arty_a7_ddr_bramdiag) as the capture of the owner's A7-100T shows them, built at
+# 0bcadbc with the fixed open flow (docs/evidence/physical/ddr-fixed-flow-2026-10-17.txt, which leaves out the 16
+# indented read-leveling scan lines; board-test.py reads no indented line), but for the build id and the DDR
 # status, which a fake board takes as arguments. bramdiag.c prints the bitstream line's flags and DDR status in
 # hexadecimal (%x): the board printed 14 (PRESENT and SWINIT); 1c (PRESENT, TIMEOUT and SWINIT) has a letter.
 BRAMDIAG_DDR = '''

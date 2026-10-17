@@ -8,8 +8,8 @@ always named surfcpu_arty_a7_bramdiag, and m5, m7, m8 and m9 fell back to surfcp
 DDR, which stops at DDR_ABSENT) instead of surfcpu_arty_a7_ddr.
 
 The test: kit_test.py scenario m3-ddr-status-hex, m3 --design surfcpu_arty_a7_ddr_bramdiag against a fake board
-printing the DDR diagnostics as the owner's A7-100T printed them (physical/ddr-fixed-flow-2026-10-17.txt) but
-with "DDR status 1c".
+printing the DDR diagnostics' lines as the capture of the owner's A7-100T shows them
+(physical/ddr-fixed-flow-2026-10-17.txt, which leaves out the 16 read-leveling scan lines) but with "DDR status 1c".
 
 Before (tools/board-test.py of 288b984, kit_test.py --set fake --only m3-ddr-status-hex, Python 3.14.7 on the Mac):
   Verdict: FAIL (0 checks seen by this script passed, 1 failed)

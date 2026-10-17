@@ -175,8 +175,8 @@ On the board (2026-10-16) m3 passed with the bramdiag bitstream of SoC 0.1.0 (d1
 owner confirmed the LEDs ([evidence](evidence/physical/m3-2026-10-16.txt)). The DDR diagnostics
 printed `BRAMDIAG: PASS (572 checks)` on the board (2026-10-17, the integrator's own capture,
 [evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt)); m3 has not been run against them
-on the board yet. The kit's fake board `m3-ddr-status-hex` prints those lines with `DDR status
-1c` (section 6).
+on the board yet. The kit's fake board `m3-ddr-status-hex` prints those lines (less the
+read-leveling scan lines, which the capture leaves out) with `DDR status 1c` (section 6).
 
 ### m5: SurfBoot and the card (milestone 5)
 
@@ -400,7 +400,7 @@ own Python 3.9 in `test-os-kit-mac.txt`. The excerpts above come from those file
 |---|---|---|
 | m3, m5, m7, m8, m9 (2 boots, 1-minute soak) | the RTL system: surfsim `--uart-pty` with SurfBoot or bramdiag in the ROM, the DDR, card and keyboard models | PASS, labelled SIMULATION, every line read |
 | m1 | a fake board (the baseline's 1 Hz line, with switches, a button, RESET and the receive pin) | PASS |
-| m3 with `--design surfcpu_arty_a7_ddr_bramdiag` (`m3-ddr-status-hex`) | a fake board printing the DDR diagnostics' lines as the owner's board printed them, but with `DDR status 1c` (TIMEOUT set: a hexadecimal value with a letter) | PASS, the step naming the DDR design; before the parse was fixed (2026-10-17) it failed: "the bitstream line: not seen within 5 s" ([evidence](evidence/os/board-test-ddr-status.txt)) |
+| m3 with `--design surfcpu_arty_a7_ddr_bramdiag` (`m3-ddr-status-hex`) | a fake board printing the DDR diagnostics' lines as captured on the owner's board (the capture leaves out the read-leveling scan lines), but with `DDR status 1c` (TIMEOUT set: a hexadecimal value with a letter) | PASS, the step naming the DDR design; before the parse was fixed (2026-10-17) it failed: "the bitstream line: not seen within 5 s" ([evidence](evidence/os/board-test-ddr-status.txt)) |
 | a wrong build manifest | a fake board | FAIL: "do NOT match the manifest" |
 | a lost second | a fake board | FAIL on the count |
 | the port going away mid-run (USB unplugged) | a fake board; and surfsim ending in the middle of m5's DDR diagnostic | FAIL at once: "the port went away ... USB unplugged, or the board lost power?" |
