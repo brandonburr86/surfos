@@ -4,9 +4,9 @@
 # tools/openxc7-demo.sh) in the surfcpu-openxc7 image and are never part of `make check`.
 #
 #   make lint-flow        Verilator lint of the flow demo design
-#   make test-flow        the demos' RTL simulations, the self-tests of the bitstream inspector
-#                         and the MMCM/PLL divider check, and tests of the XDC and build
-#                         scripts (dry runs)
+#   make test-flow        the demos' RTL simulations, the self-tests of the bitstream inspector,
+#                         the MMCM/PLL divider check and the global clock network check, and
+#                         tests of the XDC and build scripts (dry runs)
 #   make flow-xdc-check   regenerate the demo's XDC from Digilent's master files (fetched,
 #                         SHA-256 checked) and compare; needs the network the first time
 
@@ -62,6 +62,7 @@ test-flow-tools:
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/cmtcheck.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/bramwe.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/synthcheck.py --self-test
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/gclkcheck.py --self-test
 	$(Q)sh tools/openxc7-flow-test.sh
 	@echo "test-flow-tools: PASS"
 

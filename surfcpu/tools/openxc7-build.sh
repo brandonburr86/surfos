@@ -34,6 +34,16 @@
 # Exit status 0 only if every step and every check passed. A bitstream made here has not been
 # on a board: its physical behaviour is pending until it has.
 #
+# The chip database nextpnr places and routes with is this image's own, regenerated once per
+# image and die without the global buffers' route-through pips (devenv/openxc7/chipdb-gen.py,
+# about a minute and 3 GB the first time; kept in build/openxc7/chipdb/<image tag>/ and checked
+# against devenv/openxc7/chipdb.sha256): through them nextpnr routed ordinary nets into unused
+# BUFGCTRLs and onto the clock network, which the bitstream does not configure and LVS cannot
+# see, and on the board those nets did not arrive (docs/OPEN-FLOW.md 6.8). The clock check also
+# fails on any trace of that (devenv/openxc7/gclkcheck.py). SURFCPU_CHIPDB_DIR, inside the
+# image, takes chipdb-<die>.bin from another directory as it is (the image's own ENV
+# OPENXC7_CHIPDB_DIR, its unfiltered database, is not used).
+#
 # On the Mac it runs itself in the surfcpu-openxc7 image (devenv/openxc7/build-image.sh)
 # with the repository at /work; paths must lie inside the repository. OPENXC7_THREADS
 # (default 4) limits nextpnr's threads.
@@ -138,10 +148,31 @@ fi
 # ------------------------------------------------------------------ the flow (in the image, or --dry-run)
 dbroot=${PRJXRAY_DB_DIR:-/opt/openxc7/share/prjxray-db}
 db=$dbroot/$family
-chipdb=${OPENXC7_CHIPDB_DIR:-/opt/openxc7/share/chipdb}/chipdb-$chipdie.bin
+if [ -n "${SURFCPU_CHIPDB_DIR:-}" ]; then
+  chipdb=$SURFCPU_CHIPDB_DIR/chipdb-$chipdie.bin
+  chipdb_from="SURFCPU_CHIPDB_DIR, as it is"
+else
+  chipdb=build/openxc7/chipdb/$IMAGE_TAG/chipdb-$chipdie.bin
+  chipdb_from="the image's generator without BUFGCTRL route-throughs, devenv/openxc7/chipdb-gen.py"
+fi
 threads=${OPENXC7_THREADS:-4}
 tools=devenv/openxc7
 cd "$here"
+
+make_chipdb() {   # the default chip database, once per image and die (docs/OPEN-FLOW.md 6.8)
+  if [ -f "$chipdb" ]; then echo "$chipdb: there"; return 0; fi
+  bba=/tmp/chipdb-$chipdie.$$.bba
+  mkdir -p "$(dirname "$chipdb")"
+  python3 $tools/chipdb-gen.py --xray "$db" --device "$chipdie" --bba "$bba" &&
+    bbasm -l "$bba" "$chipdb.$$.tmp" && rm -f "$bba" && mv -f "$chipdb.$$.tmp" "$chipdb"
+}
+
+check_chipdb() {  # its SHA-256 must be the one devenv/openxc7/chipdb.sha256 gives for this image
+  want=$(awk -v f="chipdb-$chipdie.bin" -v t="$IMAGE_TAG" '$2 == f && $3 == t { print $1 }' $tools/chipdb.sha256)
+  got=$(sha256sum "$chipdb" | cut -d' ' -f1)
+  echo "$chipdb sha256:$got (devenv/openxc7/chipdb.sha256 for image $IMAGE_TAG: ${want:-none})"
+  [ -n "$want" ] && [ "$want" = "$got" ]
+}
 
 decode_bitstream() {   # Project X-Ray's bit2fasm: the finished bitstream back to FASM
   PYTHONWARNINGS=ignore::RuntimeWarning bit2fasm --db-root "$db" --part "$part" \
@@ -165,7 +196,7 @@ run() {   # run <step> <log> <command...>: time it, keep its output, stop on fai
 
 if [ "$dry" = 0 ]; then
   command -v nextpnr-himbaechel >/dev/null || { echo "openxc7-build.sh: not in the openXC7 image" >&2; exit 2; }
-  [ -f "$chipdb" ] || { echo "openxc7-build.sh: no chip database $chipdb" >&2; exit 2; }
+  [ -z "${SURFCPU_CHIPDB_DIR:-}" ] || [ -f "$chipdb" ] || { echo "openxc7-build.sh: no chip database $chipdb" >&2; exit 2; }
   [ -z "$xdc" ] || [ -f "$xdc" ] || { echo "openxc7-build.sh: no such XDC: $xdc" >&2; exit 2; }
   for s in $srcs; do [ -f "$s" ] || { echo "openxc7-build.sh: no such source: $s" >&2; exit 2; }; done
   rm -rf "$out/lvs"
@@ -242,6 +273,14 @@ pnr_summary() {   # SEED STATUS: one line on that attempt, from nextpnr.log
             for (i = 0; i < n; i++) printf " %s%s", last[order[i]], i < n - 1 ? "," : ""
             printf "\n" }' "$out/nextpnr.log"
 }
+if [ -z "${SURFCPU_CHIPDB_DIR:-}" ] && [ "$dry" = 1 ]; then
+  echo "[chipdb] python3 $tools/chipdb-gen.py --xray $db --device $chipdie --bba /tmp/chipdb-$chipdie.bba;" \
+       "bbasm -l /tmp/chipdb-$chipdie.bba $chipdb (when it is not there yet; then its sha256 against $tools/chipdb.sha256)"
+elif [ -z "${SURFCPU_CHIPDB_DIR:-}" ]; then
+  run chipdb chipdb.log make_chipdb
+  run chipdb-sha chipdb-sha.txt check_chipdb ||
+    { echo "openxc7-build.sh: the chip database is not the one this image's generator makes (update devenv/openxc7/chipdb.sha256 only on purpose)" >&2; exit 1; }
+fi
 pnr_ok=0
 for seed in $seeds; do
   if run pnr nextpnr.out nextpnr-himbaechel --device "$part" --chipdb "$chipdb" --threads "$threads" \
@@ -280,6 +319,12 @@ if [ "$check" = 1 ]; then
   then
     if [ "$dry" = 0 ] && grep -q 'no MMCME2/PLLE2' "$out/check-clocks.txt"; then result_clk="none in the design"; else result_clk=PASS; fi
   else result_clk=FAIL; fail=1; fi
+  # No ordinary net on the global clock network: no net through an unconfigured BUFGCTRL, no
+  # clock line into a data input (docs/OPEN-FLOW.md 6.8). Its report goes into check-clocks.txt.
+  if run check-gclk check-gclk.txt python3 -I $tools/gclkcheck.py --fasm "$out/$top.fasm"
+  then :
+  else result_clk=FAIL; fail=1; fi
+  [ "$dry" = 1 ] || { echo; cat "$out/check-gclk.txt"; } >> "$out/check-clocks.txt"
   if run check-bit check-bitstream.txt python3 -I $tools/bitinfo.py --expect-device "$device" "$out/$top.bit"
   then result_bit=PASS; else result_bit=FAIL; fail=1; fi
   if run decode bit2fasm.log decode_bitstream &&
@@ -339,6 +384,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "# openXC7 build manifest (tools/openxc7-build.sh); physical behaviour: pending (never on a board)"
   echo "top                 $top"
   echo "part                $part (device $device, chip database chipdb-$chipdie.bin)"
+  echo "chip database       $chipdb sha256:$(sha "$chipdb") ($chipdb_from)"
   [ -n "$board" ] && echo "board               $board"
   echo "source revision     ${SURFCPU_BUILD_ID:-unknown} dirty=${SURFCPU_BUILD_DIRTY:-unknown}"
   echo "build host          ${SURFCPU_HOST:-unknown}, container $(uname -m)"
@@ -356,7 +402,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check block RAM     $result_bram (contents decoded from the bitstream: check-bram.txt)"
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
   echo "lvs timeout         $lvs_timeout s"
-  echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+  echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)"
   echo "## placement attempts"; cat "$out/seeds.txt"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
   echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"
