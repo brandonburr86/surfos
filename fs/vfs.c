@@ -193,6 +193,7 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     sb->type = type;
     sb->dev = dev;
     sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
+    sb->quiet = (flags & MNT_QUIET) != 0;           /* 10/17/26 */
     mutex_init(&sb->lock, type->name);
     r = type->mount(sb);
     if(r) { kfree(sb); kfree(m); return r; }

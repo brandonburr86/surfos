@@ -97,6 +97,11 @@ class MkusbTests(unittest.TestCase):
         usb_off = [t for t, body in entries if 'usb=off' in body]
         self.assertEqual(len(usb_off), 1)
         self.assertIn('no USB network adapter, no USB sticks', usb_off[0])
+        # 10/17/26 (the network manager): one entry reads no settings from the stick, after the USB-off one
+        no_settings = [t for t, body in entries if 'settings=off' in body]
+        self.assertEqual(len(no_settings), 1)
+        self.assertIn('without the settings on the stick', no_settings[0])
+        self.assertEqual(titles.index(no_settings[0]), titles.index(usb_off[0]) + 1)
         iso = (REPO / 'boot' / 'grub.cfg').read_text()               # the ISO's menu has the kernel shell too
         self.assertIn('menuentry "SurfOS (kernel shell)"', iso)
         self.assertIn('multiboot /boot/surfos.bin shell=kernel', iso)
@@ -145,7 +150,7 @@ class MkusbTests(unittest.TestCase):
         self.assertLess(probe, code.index('export surfos_bootvol\n'))
         self.assertLess(code.index('export surfos_bootvol\n'), code.index('menuentry'))
         lines = [l.strip() for l in code.splitlines() if l.strip().startswith('multiboot2 ')]
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(len(lines), 7)                 # 10/17/26: the entry without the settings is the seventh
         for line in lines:
             self.assertTrue(line.endswith(' bootvol=$surfos_bootvol'), line)
         self.assertIn('probe', mkusb.GRUB_MODULES)

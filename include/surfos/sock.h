@@ -28,7 +28,8 @@ SYS_connect (u32 ip, u32 port): a connection to ip:port, within 10 seconds: -ECO
             and closed, or reset it, at once: read() says so.
 SYS_netinfo (struct netinfo *ni): the default network interface (the first): name, MAC
             address, link, address, netmask, gateway, DNS server (0 when not set);
-            -ENODEV without an interface, -EFAULT.
+            -ENODEV without an interface, -EFAULT. 10/17/26: when it has no address, the
+            first interface that has one (Ethernet first) instead, if any.
 
 read() on a connection waits for data as long as it takes (-EINTR when a kill or Ctrl+C
 cuts the wait short) and returns what has arrived, at most len bytes; 0 once the other end

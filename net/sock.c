@@ -128,6 +128,14 @@ int sys_netinfo(struct netinfo *ni) {
     memset(&k, 0, sizeof(k));
     mutex_lock(&net_lock);                      /* dhcp and ifconfig change it under the lock */
     dev = netdev_default();
+    if(dev && !dev->ip) {
+        /* 10/17/26 (the network manager): none there, as on the laptop joined to a saved Wi-Fi network with the USB
+           adapter plugged in but no cable: the first interface that has an address, Ethernet first */
+        struct netdev *d;
+        for(d = netdev_first(); d && !(d->ip && !strncmp(d->name, "eth", 3)); d = d->next);
+        if(!d) for(d = netdev_first(); d && !d->ip; d = d->next);
+        if(d) dev = d;
+    }
     if(dev) {
         strlcpy(k.name, dev->name, sizeof(k.name));
         memcpy(k.mac, dev->mac, sizeof(k.mac));

@@ -22,6 +22,21 @@ A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in sta
 asks through shell_ask_secret(), and returns when it is cut short (the station layer
 cancels what it asked for; Ctrl+C at the password prompt joins nothing). 0, 1 or 2 as the
 other commands.
+
+10/17/26 (the network manager, kernel/netman.c): the saved networks, which SurfOS joins by
+itself at startup (the setting wifi), in surfos-config/networks.conf on the stick it was
+started from:
+
+    wifi save            the network wlan0 is joined to, with the key it joined with (the
+                         PMK the station keeps; the password is gone already), first in the list
+    wifi save <ssid>     one not joined now: its security from the last scan (asked when it was
+                         not heard), its password asked as join asks it and made into the key
+    wifi forget <ssid>   no longer joined by itself (wlan0 stays where it is)
+    wifi saved           the list, in the order they are tried, and which are in range
+    wifi connect         what the start does: the card up, the first saved network in range
+                         joined, its address (DHCP)
+
+Nothing here prints a key; wifi saved shows names and securities only.
 */
 
 #include <surfos/types.h>
@@ -35,6 +50,9 @@ other commands.
 #include <net/wlan_cmd.h>
 #include <net/wpa.h>
 #include <net/ieee80211.h>
+#include <net/netcfg.h>
+#include <net/netman.h>
+#include <sys/bdev.h>
 #include <blibc_common.h>
 #include "shell.h"
 
@@ -43,6 +61,10 @@ other commands.
 #define LIST_MAX   48
 #define SCAN_MS    10000
 #define PASS_MAX   72                       /* room for 63 characters and a few too many, to say so */
+#define USAGE      "usage: wifi up | down | scan | join <ssid> [bssid] | status | leave\n" \
+                   "           wifi save [ssid] | forget <ssid> | saved | connect"
+
+static bool is_saved(const u8 *ssid, u_int len);     /* 10/17/26: below, with the saved networks */
 
 /* not optimised away */
 static void wipe(void *p, size_t n) {
@@ -180,8 +202,11 @@ static int refuse(const char *name, int security) {
 /* the outcome of a join; ap: the BSSID asked for, as text, or NULL */
 static int joined(struct wlan_dev *w, const char *name, const char *ap, int r) {
     if(!r) {
+        struct wlan_station_info si;
         describe(w);
         printf("    joined %s: dhcp %s gets an address\n", name, w->name);
+        if(wlan_station(w, &si, false) == 0 && !is_saved(si.ssid, si.ssid_len))   /* 10/17/26 */
+            printf("    (wifi save keeps it: SurfOS then joins it by itself at startup)\n");
         return CMD_OK;
     }
     if(r == -EACCES) printf("    wifi: could not join %s: the 4-way handshake failed: the password may be wrong\n", name);
@@ -290,6 +315,255 @@ static int wifi_join(struct wlan_dev *w, int argc, char **argv) {
     return joined(w, name, ap, r);
 }
 
+/**** the saved networks (10/17/26) ****/
+
+/* the words argv[from..to] as an SSID, a space between them: 0 and *len, or -1 (said) when longer than 32 bytes */
+static int ssid_of_words(char **argv, int from, int to, u8 *ssid, u_int *len) {
+    u_int n = 0;
+    int i;
+    for(i = from; i <= to; i++) {
+        u_int l = strlen(argv[i]);
+        if(n + (i > from) + l > WLAN_SSID_MAX) {
+            printf("    wifi: an SSID is 32 bytes at most\n");
+            return -1;
+        }
+        if(i > from) ssid[n++] = ' ';
+        memcpy(ssid + n, argv[i], l);
+        n += l;
+    }
+    *len = n;
+    return 0;
+}
+
+static const char *sec_name(u8 security) {
+    return security == NETCFG_SEC_WPA2 ? "WPA2" : "open";
+}
+
+static const char *stick_name(void) {
+    struct bdev *v = bdev_boot_vol();
+    return v ? v->name : "the stick";
+}
+
+/* is the network named so saved? */
+static bool is_saved(const u8 *ssid, u_int len) {
+    struct netman_net *list = (struct netman_net *)kalloc(NETCFG_NETS_MAX * sizeof(*list));
+    int n, i;
+    bool found = false;
+    if(!list) return false;
+    n = netman_networks(list, NETCFG_NETS_MAX);
+    for(i = 0; i < n && !found; i++) found = list[i].ssid_len == len && !memcmp(list[i].ssid, ssid, len);
+    kfree(list);
+    return found;
+}
+
+/* net saved, and said so; checked: its password has been seen to work (or it has none) */
+static int saved_it(const struct netcfg_net *net, const char *name, bool checked) {
+    char why[200];
+    int had = -1, n, r = netman_save_network(net, &had, why, sizeof(why));
+    struct netman_net *list;
+    if(r) {
+        printf("    wifi: %s not saved: %s\n", name, why);
+        return CMD_FAIL;
+    }
+    list = (struct netman_net *)kalloc(NETCFG_NETS_MAX * sizeof(*list));
+    n = list ? netman_networks(list, NETCFG_NETS_MAX) : 1;
+    kfree(list);
+    printf("    saved %s (%s) on %s%s: SurfOS joins it by itself at startup, the first of %i saved network%s it tries\n",
+           name, sec_name(net->security), stick_name(), had >= 0 ? " again" : "", n, n == 1 ? "" : "s");
+    if(!checked) printf("    (its password is checked the first time SurfOS joins it)\n");
+    return CMD_OK;
+}
+
+static int wifi_save(struct wlan_dev *w, int argc, char **argv) {
+    struct netcfg_net net;
+    struct wlan_station_info si;
+    struct wlan_bss *list;
+    char name[4 * WLAN_SSID_MAX + 1], pass[PASS_MAX], question[4 * WLAN_SSID_MAX + 48];
+    u_int len;
+    int security, r;
+
+    memset(&net, 0, sizeof(net));
+    if(argc == 2) {                                     /* the network joined now, with the key it was joined with */
+        if(wlan_station(w, &si, true) || (si.state != WLAN_STA_UP && si.state != WLAN_STA_RECONNECTING) || !si.ssid_len) {
+            wipe(&si, sizeof(si));
+            printf("    wifi: %s is not joined to a network: wifi join <ssid> first, or wifi save <ssid>\n", w->name);
+            return CMD_FAIL;
+        }
+        memcpy(net.ssid, si.ssid, si.ssid_len);
+        net.ssid_len = si.ssid_len;
+        net.hidden = si.hidden;
+        ssid_str(net.ssid, net.ssid_len, name, sizeof(name));
+        if(si.security == WLAN_SEC_OPEN) {
+            net.security = NETCFG_SEC_OPEN;
+        } else if(si.has_key) {
+            net.security = NETCFG_SEC_WPA2;
+            memcpy(net.psk, si.key, WPA_PMK_LEN);
+            net.has_psk = true;
+        } else {
+            wipe(&si, sizeof(si));
+            printf("    wifi: the station keeps no key for %s: wifi join %s, then wifi save\n", name, name);
+            return CMD_FAIL;
+        }
+        wipe(&si, sizeof(si));
+        r = saved_it(&net, name, true);
+        wipe(&net, sizeof(net));
+        return r;
+    }
+
+    if(ssid_of_words(argv, 2, argc - 1, net.ssid, &len)) return CMD_USAGE;
+    net.ssid_len = (u8)len;
+    ssid_str(net.ssid, len, name, sizeof(name));
+    list = (struct wlan_bss *)kalloc(LIST_MAX * sizeof(*list));
+    if(!list) {
+        printf("    wifi: no memory for the list\n");
+        return CMD_FAIL;
+    }
+    security = lookup(w, list, net.ssid, len, NULL);    /* as the last scan heard it, if it did */
+    kfree(list);
+    if(security >= 0 && security != WLAN_SEC_OPEN && security != WLAN_SEC_WPA2_PSK && security != WLAN_SEC_WPA2_WPA3)
+        return refuse(name, security);
+    if(security == WLAN_SEC_OPEN) {
+        net.security = NETCFG_SEC_OPEN;
+        return saved_it(&net, name, true);
+    }
+    if(!wpa_passphrase_to_pmk) {
+        printf("    wifi: WPA2 needs the supplicant (net/wlan/wpa.c), which this kernel does not have\n");
+        return CMD_FAIL;
+    }
+    snprintf(question, sizeof(question), security < 0 ? "    Password for %s (nothing for an open network): " :
+             "    Password for %s: ", name);
+    shell_ask_secret(question, pass, sizeof(pass));
+    if(task_interrupted()) {                            /* Ctrl+C at the prompt: nothing is saved */
+        wipe(pass, sizeof(pass));
+        return fail("save", -EINTR);
+    }
+    if(!pass[0]) {
+        wipe(pass, sizeof(pass));
+        if(security >= 0) {
+            printf("    wifi: no password: not saved\n");
+            return CMD_FAIL;
+        }
+        net.security = NETCFG_SEC_OPEN;
+        return saved_it(&net, name, true);
+    }
+    r = wpa_passphrase_to_pmk(pass, net.ssid, len, net.psk);
+    wipe(pass, sizeof(pass));
+    if(r) {
+        wipe(&net, sizeof(net));
+        printf("    wifi: a WPA2 password is 8 to 63 characters (letters, digits, spaces and punctuation): not saved\n");
+        return CMD_FAIL;
+    }
+    net.security = NETCFG_SEC_WPA2;
+    net.has_psk = true;
+    r = saved_it(&net, name, false);
+    wipe(&net, sizeof(net));
+    return r;
+}
+
+static int wifi_forget(int argc, char **argv) {
+    u8 ssid[WLAN_SSID_MAX];
+    char name[4 * WLAN_SSID_MAX + 1], why[200];
+    struct netman_net *list;
+    u_int len;
+    int r, n;
+    if(ssid_of_words(argv, 2, argc - 1, ssid, &len)) return CMD_USAGE;
+    ssid_str(ssid, len, name, sizeof(name));
+    r = netman_forget_network(ssid, len, why, sizeof(why));
+    if(r == -ENOENT) {
+        printf("    wifi: %s is not a saved network (wifi saved lists them)\n", name);
+        return CMD_FAIL;
+    }
+    if(r) {
+        printf("    wifi: %s not forgotten: %s\n", name, why);
+        return CMD_FAIL;
+    }
+    list = (struct netman_net *)kalloc(NETCFG_NETS_MAX * sizeof(*list));
+    n = list ? netman_networks(list, NETCFG_NETS_MAX) : 0;
+    kfree(list);
+    printf("    forgot %s: SurfOS no longer joins it by itself (%i saved network%s left)\n", name, n, n == 1 ? "" : "s");
+    return CMD_OK;
+}
+
+static int wifi_saved(struct wlan_dev *w) {
+    struct netman_net *nets = (struct netman_net *)kalloc(NETCFG_NETS_MAX * sizeof(*nets));
+    struct wlan_bss *list = (struct wlan_bss *)kalloc(LIST_MAX * sizeof(*list));
+    struct wlan_station_info si;
+    struct netcfg_settings cfg;
+    char name[4 * WLAN_SSID_MAX + 1], state[64];
+    int n, nb, i, j;
+    if(!nets || !list) {
+        kfree(nets);
+        kfree(list);
+        printf("    wifi: no memory for the list\n");
+        return CMD_FAIL;
+    }
+    n = netman_networks(nets, NETCFG_NETS_MAX);
+    netman_settings(&cfg);
+    if(!n) {
+        printf("    no saved Wi-Fi networks (wifi save keeps the one %s is joined to)\n", w->name);
+    } else {
+        nb = (int)wlan_bss_list(w, list, LIST_MAX);
+        if(wlan_station(w, &si, false)) memset(&si, 0, sizeof(si));
+        printf("    saved Wi-Fi networks on %s (%s/%s), tried in this order%s:\n", stick_name(), NETCFG_DIR,
+               NETCFG_NETWORKS, cfg.wifi ? "" : " (not at startup: settings wifi is off)");
+        for(i = 0; i < n; i++) {
+            state[0] = 0;
+            if(si.state == WLAN_STA_UP && si.ssid_len == nets[i].ssid_len && !memcmp(si.ssid, nets[i].ssid, si.ssid_len))
+                strlcpy(state, "joined now", sizeof(state));
+            else if(nets[i].refused)
+                strlcpy(state, "its key was refused: wifi join it, then wifi save", sizeof(state));
+            for(j = 0; j < nb && !state[0]; j++) {
+                if(list[j].ssid_len == nets[i].ssid_len && !memcmp(list[j].ssid, nets[i].ssid, list[j].ssid_len))
+                    snprintf(state, sizeof(state), "in range, %d dBm", list[j].rssi);
+            }
+            if(!state[0] && nets[i].hidden) strlcpy(state, "hidden", sizeof(state));
+            if(state[0]) printf("    %2i  %-32s  %-4s  %s\n", i + 1, ssid_str(nets[i].ssid, nets[i].ssid_len, name,
+                                sizeof(name)), sec_name(nets[i].security), state);
+            else printf("    %2i  %-32s  %s\n", i + 1, ssid_str(nets[i].ssid, nets[i].ssid_len, name, sizeof(name)),
+                        sec_name(nets[i].security));
+        }
+    }
+    kfree(nets);
+    kfree(list);
+    return CMD_OK;
+}
+
+static int wifi_connect(struct wlan_dev *w) {
+    struct wlan_station_info si;
+    char name[4 * WLAN_SSID_MAX + 1];
+    int r;
+    if(wlan_station(w, &si, false) == 0) {
+        ssid_str(si.ssid, si.ssid_len, name, sizeof(name));
+        if(si.state == WLAN_STA_UP) {
+            printf("    %s is joined to %s already (wifi leave first, for a saved network instead)\n", w->name, name);
+            return CMD_OK;
+        }
+        if(si.state == WLAN_STA_JOINING || si.state == WLAN_STA_RECONNECTING) {
+            printf("    wifi: busy: %s is joining %s (wifi status says how it goes)\n", w->name, name);
+            return CMD_FAIL;
+        }
+    }
+    r = netman_wifi_connect(w);
+    if(r == -EBUSY) printf("    wifi: busy: the network manager or another wifi command has %s; try again in a moment\n",
+                           w->name);
+    else if(r == -EINTR) printf("    wifi: connect cut short\n");
+    return r ? CMD_FAIL : CMD_OK;
+}
+
+/**** wlansim (10/17/26): the tests' access points off and on ****/
+
+int cmd_wlansim(int argc, char **argv) {
+    int r;
+    if(argc != 3 || (strcmp(argv[1], "on") && strcmp(argv[1], "off"))) {
+        printf("    usage: wlansim on | off <ssid>   (the simulated Wi-Fi's access points: the kernel word wlansim)\n");
+        return CMD_USAGE;
+    }
+    r = wlansim_switch(argv[2], !strcmp(argv[1], "on"));
+    if(r == -ENODEV) printf("    wlansim: no simulated Wi-Fi chip (the kernel word wlansim)\n");
+    else if(r == -ENOENT) printf("    wlansim: no simulated access point named %s\n", argv[2]);
+    return r ? CMD_FAIL : CMD_OK;
+}
+
 /**** the command ****/
 
 int cmd_wifi(int argc, char **argv) {
@@ -298,16 +572,21 @@ int cmd_wifi(int argc, char **argv) {
     char a[16], b[16], c[16], m[18];
     int r;
     if(argc < 2) {
-        printf("    usage: wifi up | down | scan | join <ssid> [bssid] | status | leave\n");
+        printf("    " USAGE "\n");
         return CMD_USAGE;
     }
     if(strcmp(argv[1], "up") && strcmp(argv[1], "down") && strcmp(argv[1], "scan") && strcmp(argv[1], "join") &&
-       strcmp(argv[1], "status") && strcmp(argv[1], "leave")) {
-        printf("    usage: wifi up | down | scan | join <ssid> [bssid] | status | leave\n");
+       strcmp(argv[1], "status") && strcmp(argv[1], "leave") && strcmp(argv[1], "save") && strcmp(argv[1], "forget") &&
+       strcmp(argv[1], "saved") && strcmp(argv[1], "connect")) {
+        printf("    " USAGE "\n");
         return CMD_USAGE;
     }
-    if(strcmp(argv[1], "join") && argc > 2) {
+    if(strcmp(argv[1], "join") && strcmp(argv[1], "save") && strcmp(argv[1], "forget") && argc > 2) {
         printf("    usage: wifi %s   (no arguments)\n", argv[1]);
+        return CMD_USAGE;
+    }
+    if(!strcmp(argv[1], "forget") && argc < 3) {
+        printf("    usage: wifi forget <ssid>   (wifi saved lists them)\n");
         return CMD_USAGE;
     }
     w = device();
@@ -334,6 +613,10 @@ int cmd_wifi(int argc, char **argv) {
         return wifi_scan(w);
     }
     if(!strcmp(argv[1], "join")) return wifi_join(w, argc, argv);
+    if(!strcmp(argv[1], "save")) return wifi_save(w, argc, argv);
+    if(!strcmp(argv[1], "forget")) return wifi_forget(argc, argv);
+    if(!strcmp(argv[1], "saved")) return wifi_saved(w);
+    if(!strcmp(argv[1], "connect")) return wifi_connect(w);
     if(!strcmp(argv[1], "leave")) {
         r = wlan_leave_wait(w);
         if(r) return fail("leave", r);

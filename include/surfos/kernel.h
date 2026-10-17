@@ -17,6 +17,7 @@ void reboot(void);
 void init_console(void);
 void init_interrupt(void);
 void init_autonet(void);   /* 10/9/26: the kernel word autonet: network and telnetd at boot (kernel/autonet.c) */
+void init_netman(void);    /* 10/17/26: the settings on the stick and the network they ask for (kernel/netman.c) */
 /*********************/
 
 void do_banner(void);

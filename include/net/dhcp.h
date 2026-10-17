@@ -14,6 +14,16 @@ File: dhcp.h    Date: 10/3/26 (roadmap N2)
 int dhcp_configure(struct netdev *dev, u_long timeout_ms);
 u_long dhcp_lease_seconds(void);          /* of the last lease, 0 if none */
 
+/* 10/17/26 (the network manager): keep the lease dev has (dev->lease_s): a DHCPREQUEST for its address, to the
+   server that granted it (renewing), or to anyone (broadcast: rebinding, once the renewals got no answer). 0: renewed
+   (dev->lease_at, lease_s new), -1: no answer, -2: refused (NAK: the address must go; dhcp_drop()) */
+int dhcp_renew(struct netdev *dev, bool broadcast, u_long timeout_ms);
+/* the address dev's lease gave is given up (it expired, or was refused): address, netmask, gateway, DNS and lease */
+void dhcp_drop(struct netdev *dev, const char *why);
+/* the name requests carry (option 12), so the router can list SurfOS by it: letters, digits and '-', 1-32
+   characters; NULL or "" sends none */
+void dhcp_set_hostname(const char *name);
+
 /* Bounded A lookup: 0 or negative errno; output changes only on success. */
 int dns_lookup(const char *name, ipaddr_t *out, u_long timeout_ms);
 
