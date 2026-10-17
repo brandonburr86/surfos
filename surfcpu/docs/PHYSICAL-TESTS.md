@@ -5,11 +5,16 @@ brief (AGENT-INSTRUCTIONS.md section 10) is one command on the Mac. It opens the
 port first and reads it the whole time, asks you for each step, checks what the port shows,
 and writes the evidence file itself, transcript included: nobody copies text by hand.
 
-**Nothing here has run on the board yet.** The procedures have run against the RTL system
-(`surfsim --uart-pty`, the whole SoC in simulation) and against fake boards on
-pseudo-terminals (section 6). A run against the RTL system says SIMULATION in its evidence and
-never goes to the physical evidence folder; the brief's three kinds of result (simulation,
-programming, physical) stay apart.
+**On the board so far** (the owner's A7-100T): **m1 and m3 passed** on 2026-10-16
+([m1](evidence/physical/m1-2026-10-16-2.txt), [m3](evidence/physical/m3-2026-10-16.txt)).
+**m5, m7, m8 and m9 have not run on the board yet.** What the board has shown of their
+milestones (SurfBoot reading the card, the DDR diagnostics, SurfOS booting to its shell) comes
+from the integrator's own captures in `docs/evidence/physical/`, not from these procedures
+(OWNER-GUIDE.md section 0). Every procedure has also run against the RTL system (`surfsim
+--uart-pty`, the whole SoC in simulation) and against fake boards on pseudo-terminals (section
+6). A run against the RTL system says SIMULATION in its evidence and never goes to the physical
+evidence folder; the brief's three kinds of result (simulation, programming, physical) stay
+apart.
 
 ## 1. Before you start
 
@@ -36,20 +41,23 @@ programming, physical) stay apart.
 make -C surfcpu board-test M=m1 [PORT=/dev/cu.usbserial-<serial>1] [ARGS="..."]
 ```
 
-| M | Milestone | What you do when asked | Time on the board |
-|---|---|---|---|
-| m1 | the baseline design | load it; set the switches to 0101; hold BTN0 for 2 s; say whether the LEDs blink; press RESET | about a minute |
-| m3 | the CPU and its BRAM diagnostics | load the bramdiag design; say whether LD4..LD6 are lit, LD7 blinks and LD0 is green | under a minute |
-| m5 | SurfBoot and the card, the DDR diagnostic | copy `DDRDIAG.BIN` to the card; hold BTN1 and press RESET; later take the card out, press RESET, put it back | a few minutes |
-| m7 | SurfOS from the card | install SurfOS on the card; load the design; type `echo ps2-ok` on the PS/2 keyboard; say whether the VGA monitor shows the shell | a few minutes |
-| m8 | files that persist (OWNER-GUIDE.md section 8) | make a file on the Mac; move the card to the board and back; power-cycle; install the kernel again | 10 to 15 minutes |
-| m9 | the standalone release | program the flash once; power-cycle the board N times (`--boots`, default 10); then wait for the soak (`--minutes`, default 60) | about 1.5 hours |
+| M | Milestone | The design it asks you to load | What you do when asked | Time on the board |
+|---|---|---|---|---|
+| m1 | the baseline design | `arty_a7_baseline` | load it; set the switches to 0101; hold BTN0 for 2 s; say whether the LEDs blink; press RESET | about a minute |
+| m3 | the CPU and its BRAM diagnostics | `surfcpu_arty_a7_bramdiag`; with `ARGS="--design surfcpu_arty_a7_ddr_bramdiag"` the same diagnostics with the DDR3L's sections (milestone 4) | load the design; say whether LD4..LD6 are lit, LD7 blinks and LD0 is green | under a minute |
+| m5 | SurfBoot and the card, the DDR diagnostic | `surfcpu_arty_a7_ddr` | copy `DDRDIAG.BIN` to the card; hold BTN1 and press RESET; later take the card out, press RESET, put it back | a few minutes |
+| m7 | SurfOS from the card | `surfcpu_arty_a7_ddr` | install SurfOS on the card; load the design; type `echo ps2-ok` on the PS/2 keyboard (a real PS/2 keyboard: without one, answer `n` and the keyboard is listed as not done); say whether the VGA monitor shows the shell | a few minutes |
+| m8 | files that persist (OWNER-GUIDE.md section 8) | `surfcpu_arty_a7_ddr`, the card with `sd=rw` | make a file on the Mac; move the card to the board and back; power-cycle; install the kernel again | 10 to 15 minutes |
+| m9 | the standalone release | `surfcpu_arty_a7_ddr`, in the configuration flash | program the flash once (only with the owner's go-ahead); power-cycle the board N times (`--boots`, default 10); then wait for the soak (`--minutes`, default 60) | about 1.5 hours |
 
-Each run ends with one line, for example `board-test m3: PASS (25 checks seen by this script
-passed; 1 not done or not compared); evidence in .../docs/evidence/physical/m3-2026-10-20.txt`,
-and lists anything that failed. The exit status is 0 for PASS only.
+Each run ends with one line, its verdict and where the evidence went, and lists anything that
+failed. The board's m3 run ended `PASS (19 checks seen by this script passed; the owner
+confirmed 1)`, with its evidence in `docs/evidence/physical/m3-2026-10-16.txt`. The exit status
+is 0 for PASS only.
 
-Options (`ARGS="..."`): `--board arty_a7_35t`; `--manifest FILE` (another build manifest);
+Options (`ARGS="..."`): `--board arty_a7_35t`; `--design D` (the design to load, whose build
+manifest the bitstream is compared with: the table's, unless given); `--manifest FILE` (another
+build manifest);
 `--kernel FILE` and `--ddrdiag FILE` (the packages that were put on the card, default
 `../build/riscv32/arty_a7/SURFOS.BIN` and `build/fw/DDRDIAG.BIN`); `--lines N` (m1, default
 10); `--skip-no-card` (m5); `--mount /Volumes/SURFOS` (m8: the script reads the card's files on
@@ -114,12 +122,17 @@ checks, from `make test-os-kit`:
 
 ### m3: the CPU on the board (milestone 3)
 
-Asks you to load `surfcpu_arty_a7_bramdiag`, then reads the BRAM diagnostics to the end:
+Asks you to load `surfcpu_arty_a7_bramdiag` (with `--design surfcpu_arty_a7_ddr_bramdiag`,
+the DDR diagnostics: the same program in the DDR design, which also initializes and tests the
+DDR3L), then reads the BRAM diagnostics to the end:
 the identity lines (ROM build, board and id, the bitstream's build id and flags against the
-manifest, the 25 MHz system clock), each section (identity, ALU, M extension, branches, loads
+manifest, the 25 MHz system clock; the bitstream line's `flags` and `DDR status` are
+hexadecimal, as bramdiag prints them: the DDR design shows `DDR status 14`, PRESENT and
+SWINIT), each section (identity, ALU, M extension, branches, loads
 and stores, CSRs, scratch RAM, exceptions each recovered, interrupts with timer and WFI,
 FENCE.I) `ok`, the timer's progress within 20 % of 1 ms a tick, any other section `ok` or
-`skipped` (the bramdiag bitstream has no DDR: `DDR ... skipped`), and `BRAMDIAG: PASS`. Then it
+`skipped` (the bramdiag bitstream has no DDR: `DDR ... skipped`; the DDR design's DDR sections
+must be `ok`), and `BRAMDIAG: PASS`. Then it
 types `Arty7` and checks each character comes back with its code (`echo 1: 'A' 0x41` ...). If
 the first run came before the port was open, it types Ctrl-R to run the diagnostics again and
 says so. You answer whether LD4..LD6 are lit, LD7 blinks about once a second (the heartbeat of
@@ -157,13 +170,19 @@ sections run too), PASS in 20 s:
   skip     not observed: Are LD4..LD6 lit, LD7 blinking about once a second (its heartbeat while it echoes), and LD0 green (red would mean a failure)?
 ```
 
-On the board the bramdiag bitstream prints `BRAMDIAG: PASS (203 checks)` with the DDR section
-skipped (OWNER-GUIDE.md section 5).
+On the board (2026-10-16) m3 passed with the bramdiag bitstream of SoC 0.1.0 (d174d0f8):
+`BRAMDIAG: PASS (203 checks)`, the DDR section skipped, 19 checks of the script passed and the
+owner confirmed the LEDs ([evidence](evidence/physical/m3-2026-10-16.txt)). The DDR diagnostics
+printed `BRAMDIAG: PASS (572 checks)` on the board (2026-10-17, the integrator's own capture,
+[evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt)); m3 has not been run against them
+on the board yet. The kit's fake board `m3-ddr-status-hex` prints those lines with `DDR status
+1c` (section 6).
 
 ### m5: SurfBoot and the card (milestone 5)
 
-Needs the DDR design (`surfcpu_arty_a7_top`) and a SurfOS card with `DDRDIAG.BIN` copied to
-`/BOOT/`. You hold BTN1 and press RESET, so SurfBoot stays in its monitor. The script checks
+Needs the DDR design `surfcpu_arty_a7_ddr` (SurfBoot with DDR; `surfcpu_arty_a7_top`, SurfBoot
+without DDR, stops at `DDR_ABSENT`) and a SurfOS card with `DDRDIAG.BIN` copied to `/BOOT/`.
+You hold BTN1 and press RESET, so SurfBoot stays in its monitor. The script checks
 SurfBoot's identity against the manifest, then types monitor commands: `info` (DDR calibrated,
 the card present), `boot /BOOT/NOSUCH.BIN` (a missing image: diagnosed `NOT_FOUND`, the monitor
 back), `ls /SYSTEM` and `check /SYSTEM/SURFCARD.TXT` (an invalid image: SurfBoot's card marker
@@ -193,8 +212,10 @@ On the RTL system (the card image's command line `size=2M loops=1` keeps the dia
 
 ### m7: SurfOS from the card (milestone 7)
 
-Needs the DDR design and a card made with `make deploy-sd`. You load the design (or press
-RESET). The script follows the boot: SurfBoot's identity, `boot: SurfOS ... build ...` with the
+Needs the DDR design `surfcpu_arty_a7_ddr`, a card made with `make deploy-sd` and, for the
+keyboard step, a real PS/2 keyboard (OWNER-GUIDE.md section 10; without one, answer `n` at that
+step: the keyboard is then listed as not done). You load the design (or press RESET). The
+script follows the boot: SurfBoot's identity, `boot: SurfOS ... build ...` with the
 size and payload CRC compared with `--kernel`, the handoff, the kernel's lines, the card mounted,
 the banner and the prompt; any `SurfBoot stopped`, kernel panic, `SYSTEM HALTED`, `BOOT PROBLEM`
 or killed task ends it as a FAIL with the line printed. At the shell: `bootinfo` (the kernel
@@ -238,18 +259,21 @@ The transcript's boot, from the same run:
 ```
 
 (The RTL system runs about seven times slower than the board: the kernel load's 1837 ms of
-simulated time took 13 s.)
+simulated time took 13 s. Build 2355dba2 is from before the DDR round, hence SurfBoot 1.0.0,
+SoC 0.1.0 and memory map 1: today's firmware prints SurfBoot 1.1.0, SoC 0.2.0 and memory map 2,
+and the procedures read those fields as they come. The kit's card has `ascii` on its command
+line, hence `SURF ~#>`; the board, with no command line, printed `SURF ≋#>`.)
 
 ### m8: persistent files (milestone 8)
 
-OWNER-GUIDE.md section 8's CRC procedure, with sd=rw on the card. The Mac-side steps are
-prompts: you make `MAC.TXT` on the card on the Mac and move the card to the board. The script
-never writes or formats a disk; with `--mount /Volumes/SURFOS` it reads the card's files there
-itself (read only), otherwise it shows you the CRCs and asks. On the board it checks the card is
-mounted read-write, reads `MAC.TXT`'s CRC (a file made on the Mac, read on the board), types
-`write`, `append` and `cp` in `/sd0p1/USERS/DOCUMENTS`, and checks the CRCs of `BOARD.TXT`,
-`COPY.TXT` and `MAC.TXT` against the CRC-32 it computes itself, then `eject sd0` (`safe to
-remove`). You power-cycle the board (and load the design again: the FPGA forgets it at
+OWNER-GUIDE.md section 8's CRC procedure, on `surfcpu_arty_a7_ddr` with sd=rw on the card. The
+Mac-side steps are prompts: you make `MAC.TXT` on the card on the Mac and move the card to the
+board. The script never writes or formats a disk; with `--mount /Volumes/SURFOS` it reads the
+card's files there itself (read only), otherwise it shows you the CRCs and asks. On the board it
+checks the card is mounted read-write, reads `MAC.TXT`'s CRC (a file made on the Mac, read on
+the board), types `write`, `append` and `cp` in `/sd0p1/USERS/DOCUMENTS`, and checks the CRCs of
+`BOARD.TXT`, `COPY.TXT` and `MAC.TXT` against the CRC-32 it computes itself, then `eject sd0`
+(`safe to remove`). You power-cycle the board (and load the design again: the FPGA forgets it at
 power-off): after the boot the same CRCs. The card goes to the Mac: the same CRCs there. You
 install the kernel again with `deploy-sd` and power-cycle: the files keep their CRCs. The
 evidence ends with the list of files and the CRCs they must have.
@@ -282,17 +306,17 @@ power cycle a new surfsim run on the image the last one flushed), PASS in about 
 
 ### m9: the standalone release (milestone 9)
 
-Needs the bitstream in the board's flash (`program-flash`, JP1 MODE on) and a SurfOS card with
-sd=rw. For each of `--boots` cold boots you unplug the USB cable, wait, plug it back in, and
-press Enter; the script follows the boot from the flash to the prompt, runs `uptime` (a fresh
-boot) and checks that every boot ran the same bitstream (the first one also against the
-manifest and the kernel against `--kernel`). Then the soak: for `--minutes`, rounds of
-`uptime` (it must advance; the task count must not pile up), `ps`, `tasks` (both end with
-status 0), `write`, `cp`, `crc32` (both files' CRCs right), `rm` and `memstat` (`heap check:
-ok`), failing at once on a panic, a killed task, `SYSTEM HALTED` or a wrong CRC. The evidence
-notes the task count and the kernel heap's use over the soak. Over an hour the transcript is
-long: the evidence keeps its first and last 2000 lines and the whole of it goes to
-`build/board-test/`.
+Needs the bitstream (`surfcpu_arty_a7_ddr`) in the board's flash (`program-flash`, JP1 MODE on;
+written only with the owner's go-ahead, and not written yet) and a SurfOS card with sd=rw. For
+each of `--boots` cold boots you unplug the USB cable, wait, plug it back in, and press Enter;
+the script follows the boot from the flash to the prompt, runs `uptime` (a fresh boot) and
+checks that every boot ran the same bitstream (the first one also against the manifest and the
+kernel against `--kernel`). Then the soak: for `--minutes`, rounds of `uptime` (it must advance;
+the task count must not pile up), `ps`, `tasks` (both end with status 0), `write`, `cp`, `crc32`
+(both files' CRCs right), `rm` and `memstat` (`heap check: ok`), failing at once on a panic, a
+killed task, `SYSTEM HALTED` or a wrong CRC. The evidence notes the task count and the kernel
+heap's use over the soak. Over an hour the transcript is long: the evidence keeps its first and
+last 2000 lines and the whole of it goes to `build/board-test/`.
 
 With a release (RELEASE.md section 10): the release's `surfcpu_arty_a7_ddr` bitstream in the
 flash, its `card/BOOT` files on the card, and `ARGS="--manifest
@@ -369,12 +393,14 @@ procedures exactly as the owner runs them, with a program answering for the owne
 `docs/evidence/os/test-os-kit.txt` and `test-os-kit-rtl.txt`, the RTL runs' whole evidence files
 (transcripts included) in `docs/evidence/os/kit/`, and the fake boards run on the Mac with its
 own Python 3.9 in `test-os-kit-mac.txt`. The excerpts above come from those files (build
-2355dba2, a clean tree).
+2355dba2, a clean tree, from before SoC 0.2.0); those summaries predate the scenario
+`m3-ddr-status-hex` below.
 
 | Scenario | Against | Must give |
 |---|---|---|
 | m3, m5, m7, m8, m9 (2 boots, 1-minute soak) | the RTL system: surfsim `--uart-pty` with SurfBoot or bramdiag in the ROM, the DDR, card and keyboard models | PASS, labelled SIMULATION, every line read |
 | m1 | a fake board (the baseline's 1 Hz line, with switches, a button, RESET and the receive pin) | PASS |
+| m3 with `--design surfcpu_arty_a7_ddr_bramdiag` (`m3-ddr-status-hex`) | a fake board printing the DDR diagnostics' lines as the owner's board printed them, but with `DDR status 1c` (TIMEOUT set: a hexadecimal value with a letter) | PASS, the step naming the DDR design; before the parse was fixed (2026-10-17) it failed: "the bitstream line: not seen within 5 s" ([evidence](evidence/os/board-test-ddr-status.txt)) |
 | a wrong build manifest | a fake board | FAIL: "do NOT match the manifest" |
 | a lost second | a fake board | FAIL on the count |
 | the port going away mid-run (USB unplugged) | a fake board; and surfsim ending in the middle of m5's DDR diagnostic | FAIL at once: "the port went away ... USB unplugged, or the board lost power?" |
