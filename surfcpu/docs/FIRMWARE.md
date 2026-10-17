@@ -5,18 +5,25 @@ card over SPI, checks and loads `/BOOT/SURFOS.BIN` into DDR and hands over to th
 [BOOT-ABI.md](BOOT-ABI.md) says. Two diagnostic programs and five tools go with it. Owner's
 card guide: [CARD.md](CARD.md).
 
-**Status (2026-10-15).** Everything here is built and tested on the host: the portable
+**Status (2026-10-17).** Everything here is built and tested on the host: the portable
 SD/FAT/image code natively against card images, the RV32 ROM images in a firmware emulator,
-and the SD code against the io track's pin-level card model. Nothing has run on the RTL SoC
-(that comes at integration, in `surfsim`) or on the board. Physical results are **pending**.
+and the SD code against the io track's pin-level card model. Since integration it also runs on
+the RTL SoC in `surfsim` (SOC.md section 9) and on the owner's Arty A7-100T: the BRAM
+diagnostics pass (203 checks without DDR, 572 with it), and SurfBoot reads the owner's card and,
+in the DDR design, boots SurfOS from it (OWNER-GUIDE.md sections 5 to 8,
+[evidence/physical/](evidence/physical/)). Not yet on the board: `DDRDIAG.BIN` from the card
+(milestone 5's test), the BTN0 and BTN1 choices, and the fallback to `BACKUP.BIN`.
 
 **SurfBoot 1.1.0 (2026-10-16, round ddr-3).** The open flow's DDR designs build LiteDRAM
 without its own calibration CPU (DDR.md): their `sysinfo.DDR_STATUS.SWINIT` is 1, and SurfBoot
 and the BRAM diagnostics initialize the DDR3L and level its read path themselves, through the
 DDR controller's registers (the `ddrc` region), with `firmware/common/ddrinit.c`, LiteX's
 `sdram_init` and read leveling ported (section 5, step 3). Tested in the host model, in the
-emulator and in the RTL simulation of the DDR top against LiteDRAM's own controller; on the
-board, **pending**. With SWINIT 0 (the MIG, the simulation models) nothing changed.
+emulator and in the RTL simulation of the DDR top against LiteDRAM's own controller. On the
+board SurfBoot and the diagnostics both level lanes 0 and 1 at bitslip 2, delay 16 (window
++-8); SurfBoot calibrates in 187 ms and boots SurfOS, and the diagnostics pass all 572 checks
+([evidence](evidence/physical/ddr-fixed-flow-2026-10-17.txt)). With SWINIT 0 (the MIG, the
+simulation models) nothing changed.
 
 ## 1. Layout
 
@@ -340,12 +347,14 @@ coincidence). The ISA audit caught another: a CRC table placed among the ROM's c
 
 ## 9. Pending and known limits
 
-* **Pending (needs the integration or the board):** SurfBoot on the RTL SoC in `surfsim`
-  with the SD, UART and DDR models; every physical result (milestones 3-5: the BRAM
-  diagnostics' transcript, DDR tests, booting from a real card, timing of a real card at
-  6.25 and 12.5 MHz through the Pmod).
+* **Done since integration:** SurfBoot on the RTL SoC in `surfsim` with the SD, UART and DDR
+  models; on the board, the BRAM diagnostics' transcript (milestone 3), the DDR tests
+  (milestone 4), and booting SurfOS from the owner's card with SurfBoot reading it at 6.25 MHz
+  (`docs/evidence/physical/`). **Pending on the board:** milestone 5's test (`DDRDIAG.BIN` from
+  the card, the card taken out and put back), and SurfBoot at 12.5 MHz (`spi 0`).
 * Reads only, one sector per command (CMD17): about 0.25-0.6 MB/s at 6.25 MHz in the
-  emulator (fragmentation costs FAT lookups). A 12.5 MHz clock (`spi 0`) or CMD18 would be
+  emulator (fragmentation costs FAT lookups); on the board 388,740 bytes in two fragments took
+  2,054 ms. A 12.5 MHz clock (`spi 0`) or CMD18 would be
   faster; the round-trip margin at 12.5 MHz is a board question (docs/IO.md).
 * SDSC cards above 4 GiB, SDUC and MMC cards are not supported (MMC is refused by name).
 * The monitor takes input from the UART only (not the PS/2 keyboard).
