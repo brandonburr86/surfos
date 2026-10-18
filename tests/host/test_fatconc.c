@@ -229,6 +229,9 @@ int bdev_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
 int bdev_flush(struct bdev *d) { return d->gone ? BDEV_EGONE : 0; }
 struct bdev *bdev_disk(struct bdev *d) { while(d && d->parent) d = d->parent; return d; }
 int bdev_may_format(struct bdev *d, char *why, size_t size) { (void)d; if(why && size) why[0] = 0; return 0; }
+int vfs_bdev_change_begin(struct bdev *d, const char **why) { (void)d; if(why) *why = NULL; return 0; }   /* (B61) */
+void vfs_bdev_change_end(struct bdev *d) { (void)d; }
+const char *bdev_busy_words(const char *busy) { return busy ? busy : ""; }
 
 /**** the VFS, as much as fat.c needs ****/
 

@@ -428,6 +428,28 @@ def fsfault_boot(args, disk, check):
     return transcript
 
 
+def lockfault_boot(args, disk, check):
+    """10/18/26 (audit B62): a fault while the task holds a lock (crashlock: a mutex of its own) stops the system with a
+    wipeout that says so: the lock would stay with the dead task for good, as the card's lock in the card watch would"""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        mark = len(q.transcript)
+        q.cursor = mark
+        q.send('crashlock\r')
+        ok2 = all(q.expect(t, 20) for t in ['Kernel Wipeout: ', 'holding a lock (1 held)', 'SYSTEM HALTED'])
+        q.wait(1)
+        out = q.since(mark)
+        m = re.search(r'Kernel Wipeout: (.*)', out)
+        check(ok and ok2 and 'init: restarted the shell' not in out,
+              'crashlock: a store to address 0 holding a lock stops the system with a wipeout that says so (%s)'
+              % (m.group(1).strip() if m else 'none'))
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
 def package_boot(args, disk, check, work):
     """SURFOS.BIN, packed by the fw track's tools/surfimg.py: its verify, then copied to its load address"""
     hdr = package_header(args.package)
@@ -1173,6 +1195,7 @@ def main():
     try:
         transcript += scroll_boot(args, disk, check)
         transcript += fsfault_boot(args, disk, check)
+        transcript += lockfault_boot(args, disk, check)
         if args.stub:
             transcript += handoff_boots(args, disk, check, work)
             transcript += sdsim_boot(args, disk, check, work)

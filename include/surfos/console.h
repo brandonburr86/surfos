@@ -112,6 +112,8 @@ void init_console_grid(void);    /* a framebuffer's whole grid, after init_inter
    the cursor shown) when the task that changed them ends, and for a panic report. */
 void console_reset_ansi(surf_console *con);
 void console_task_gone(struct surf_task *task);   /* interrupts off */
+/* 10/18/26 (audit B62): does t hold the console lock (counted in its mutexes; given back when it dies, above) */
+bool console_holds(const struct surf_task *t);
 
 /* 10/6/26: a task's console output kept in memory instead of shown (the user shell's
    redirection of a kernel command, kernel/syscall.c). From console_capture_begin() until

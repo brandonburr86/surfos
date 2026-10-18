@@ -606,7 +606,10 @@ static int cmd_readbench(int argc, char **argv) {
     while(done < blocks && !task_interrupted()) {
         u_long n = blocks - done > 128 ? 128 : blocks - done;
         r = bdev_read(d, (u32)done, (u32)n, buf);
-        if(r) { printf("    read of block %lu failed (%i)\n", done, r); break; }
+        if(r) {                                         /* 10/18/26 (audit B61): BDEV_EBUSY: another task's mkfs or fdisk */
+            printf("    read of block %lu failed (%i%s)\n", done, r, r == BDEV_EBUSY ? ": mkfs or fdisk is changing it" : "");
+            break;
+        }
         done += n;
     }
     ms = (getticks() - t0) * (1000 / HZ);
@@ -651,7 +654,8 @@ static int cmd_hexdump(int argc, char **argv) {
     buf = (u8 *)kalloc(nblk * d->block_size);
     if(!buf) { printf("    out of memory\n"); return CMD_FAIL; }
     rc = bdev_read(d, lba, nblk, buf);
-    if(rc) printf("    read of %s block %lu failed (%i)\n", d->name, lba, rc);
+    if(rc) printf("    read of %s block %lu failed (%i%s)\n", d->name, lba, rc,
+                  rc == BDEV_EBUSY ? ": mkfs or fdisk is changing it" : "");   /* 10/18/26 (audit B61) */
     else for(i = 0; i < nblk * d->block_size; i += 16) {
         printf("%08lx  ", lba * d->block_size + i);
         for(j = 0; j < 16; j++) printf("%02x%s", buf[i + j], j == 7 ? "  " : " ");
@@ -692,6 +696,15 @@ static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return
 /* 10/18/26 (audit B56): the same store while this task counts as inside a file system (as in a device request): the
    system stops (arch/riscv32/trap.c), since nothing could give back what a task held there */
 static int cmd_crashfs(int argc, char **argv) { fs_enter(); *(volatile int *)0 = 1; fs_leave(); return CMD_FAIL; }
+/* 10/18/26 (audit B62): the same store while this task holds a lock (a mutex of its own): the system stops, since the
+   lock would stay with the dead task for good (the SD card's watch holds the card's lock outside any request) */
+static mutex_t crash_lock = MUTEX_INIT("crashlock");
+static int cmd_crashlock(int argc, char **argv) {
+    mutex_lock(&crash_lock);
+    *(volatile int *)0 = 1;
+    mutex_unlock(&crash_lock);
+    return CMD_FAIL;
+}
 
 /* EBREAK: reported and stepped over (as an unused vector on x86) */
 static int cmd_crashint(int argc, char **argv) {
@@ -752,6 +765,7 @@ static const struct command commands[] = {
     { "crashmis",  "",          "a misaligned word load in this shell", cmd_crashmis },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
     { "crashfs",   "",          "a NULL pointer inside a file system: the system stops", cmd_crashfs },
+    { "crashlock", "",          "a NULL pointer holding a lock: the system stops", cmd_crashlock },
     { "crashint",  "",          "a breakpoint (ebreak): reported and stepped over", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };

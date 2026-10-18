@@ -12,7 +12,9 @@ incomplete, not "short write". 10/18/26 (audit B60): an error a write returns is
 also with Ctrl+C pending (a full disk, a card that refuses); N counts every byte written, the
 first part of a write that came up short too; a copy whose last write took the Ctrl+C but went
 whole is complete (its status is its own, as umount's: B54); a close whose write-out Ctrl+C
-cut short says so, not "I/O error".
+cut short says so, not "I/O error". 10/18/26 (audit B65): told apart by what close returns
+(EINTR for a write-out cut short, EIO for one the card refused or a card taken out: fs/vfs.c),
+not by whether Ctrl+C is pending; and a read error is that error, Ctrl+C or not.
 */
 
 #include <surfos/types.h>
@@ -54,8 +56,8 @@ int cmd_cp(int argc, char **argv) {
         cut = 1;                                        /* (B53: stopped, not refused) */
         break;
     }
-    if(r < 0 && !err && !cut && !unexplained) {         /* the read failed, or was cut short */
-        if(r == -EINTR || task_interrupted()) cut = 1;
+    if(r < 0 && !err && !cut && !unexplained) {         /* the read failed, or was cut short in its wait */
+        if(r == -EINTR) cut = 1;                        /* (B65: any other error is that error, Ctrl+C or not) */
         else printf("    cp: read: %s\n", strerror(r));
     }
     if(err) printf("    cp: write: %s\n", strerror(err));
@@ -66,10 +68,11 @@ int cmd_cp(int argc, char **argv) {
     kfree(buf);
     vfs_close(in);
     c = vfs_close(out);                                 /* (its write-out: a Ctrl+C now cuts that short) */
-    if(c && complete && task_interrupted())
+    if(c == -EINTR && complete)                         /* (B65: EINTR only when nothing was refused: B49's way) */
         printf("    cp: %s: %lu bytes copied; interrupted while they were written out (sync writes the rest)\n",
                argv[2], total);
-    else if(c && !cut) printf("    cp: close: %s\n", strerror(c));   /* (B53: cut short, its write-out was cut too) */
+    else if(c && (!cut || c != -EINTR)) printf("    cp: close: %s\n", strerror(c));   /* (B53: its write-out cut short
+                                                           as well is said once; B65: a refusal is said always) */
     else if(complete) printf("    %lu bytes copied\n", total);
     return complete && !c ? CMD_OK : CMD_FAIL;
 }

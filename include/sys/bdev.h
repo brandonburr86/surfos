@@ -56,6 +56,8 @@ struct buf;                     /* fs/bcache.h */
 #define BDEV_EROFS  -2          /* read-only */
 #define BDEV_EIO    -3          /* the driver failed */
 #define BDEV_EGONE  -4          /* unplugged */
+#define BDEV_EBUSY  -6          /* 10/18/26 (audit B61): another task's mkfs or fdisk holds the device (-5 is the cache's
+                                   BCACHE_EINTR) */
 
 struct bdev_ops {
     int (*read)(struct bdev *d, u32 lba, u32 count, void *buf);         /* 0 ok, < 0 error */
@@ -100,8 +102,18 @@ struct bdev {
     u_int mounting;             /* 10/18/26 (audit B58): mounts of it under way (vfs_mount_flags(): busy the same way) */
     u_int requests;             /* 10/18/26 (audit B56): requests issued on it that have not ended (bdev_read(),
                                    bdev_write(), bdev_flush()): it, its disk and its partitions are busy meanwhile */
+    u_int changing;             /* 10/18/26 (audit B61): an mkfs or fdisk holds it (vfs_bdev_change_begin(), fs/vfs.c),
+                                   this many times (mkfs, then the fdisk that sets its partition's type) ... */
+    const void *changing_by;    /*      ... the task whose they are: another task's requests to it, its disk or its
+                                   partitions are refused meanwhile (BDEV_EBUSY), and it is busy for mount and eject */
     struct bdev *next;
 };
+
+extern u_int bdev_changes;                  /* 10/18/26 (audit B61): devices an mkfs or fdisk holds now */
+/* (interrupts off) 10/18/26 (audit B61): is d, its disk or one of its partitions held by another task's mkfs or fdisk */
+bool bdev_changed_by_other(const struct bdev *d);
+/* 10/18/26 (audit B61): a reason vfs_bdev_busy_why() gives, in the words fdisk and mkfs say it */
+const char *bdev_busy_words(const char *busy);
 
 /* registry */
 int bdev_register(struct bdev *d);          /* 0, or -1 when the name is taken */
@@ -134,9 +146,12 @@ const char *bdev_part_type_name(u8 type);
    <name>1, <name>2, ... (usb0p1 ...); the number registered, or -1 when block 0 cannot be read.
    A disk with a FAT volume labelled SURFOSUSB gets protect = bdev_boot_drive, and so do its
    partitions. bdev_rescan() reads the table again after it was rewritten: the old partitions are
-   unregistered, the new ones registered; -EBUSY while the disk or a partition is mounted. */
+   unregistered, the new ones registered; -EBUSY while the disk or a partition is busy (vfs_bdev_busy(): mounted, a
+   request under way, held by another task's mkfs or fdisk). 10/18/26 (audit B61): fdisk's commit and mkfs of a whole
+   disk call it holding the disk (vfs_bdev_change_begin()), so it is never busy for them, and say so when it fails. */
 int bdev_scan_partitions(struct bdev *disk);
 int bdev_rescan(struct bdev *disk);
+const char *bdev_rescan_words(int r);       /* 10/18/26 (audit B61): why bdev_rescan() returned r < 0, in words */
 extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
 
 /* drivers (driver table entries) */

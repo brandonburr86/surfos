@@ -688,9 +688,12 @@ static void ram_watch(void) {
         ram_watch_min = curTask->fs_hold;
 }
 
+static volatile int ram_read_fail0;                  /* 10/18/26 (round fs-fix-10): block 0 cannot be read (B61) */
+
 static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     if(ram_watch_task && curTask == ram_watch_task && curTask->fs_hold > ram_watch_hold) ram_watch_hold = curTask->fs_hold;
     ram_watch();
+    if(ram_read_fail0 && lba == 0) return BDEV_EIO;
     memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
     return 0;
 }
@@ -1903,6 +1906,450 @@ static void test_hangup_nocall(void) {
     check(status == -1 && kh_done, "a kernel thread hung up outside a call that enters one keeps the hangup's rule: its call's end awaited");
 }
 
+/**** round fs-fix-10 (audit B61-B65): the tenth review ****/
+
+/* 10/18/26 (audit B61): another task's raw request of a partition when fdisk's commit reads the disk again at its end
+   (the review's R1): the rescan asked whether the disk was busy, a request under way included (B56), so with another
+   task's request in flight it refused after the new table was on the disk ("could not be read again (-16)"), the old
+   partitions left registered and the new one never registered: a later mkfs formatted the old extent. Now the commit
+   holds the disk from its check to its end (vfs_bdev_change_begin()) and another task's request to it or to a partition
+   of it is refused at once meanwhile (BDEV_EBUSY), so the commit meets none, its rescan included. Here the commit adds a
+   second partition, and its flush starts another task's raw write of the first partition's last block (held in the
+   driver, should it get there), which first asks whether the partition is busy */
+static surf_task *volatile kr_fdisk;
+static struct bdev *volatile kr_p1;
+static volatile int kr_go, kr_done, kr_armed, kr_kicked, kr_wr;
+static const char *volatile kr_busy;
+
+static void kr_writer(void *arg) {
+    static u8 blk[512];
+    (void)arg;
+    while(!kr_go) sleep_ms(5);
+    kr_busy = vfs_bdev_busy_why(kr_p1);
+    memset(blk, 0x5a, sizeof(blk));
+    kr_wr = bdev_write(kr_p1, kr_p1->nblocks - 1, 1, blk);
+    kr_done = 1;
+}
+
+static void kr_flush(void) {
+    int waited;
+    if(!kr_armed || curTask != kr_fdisk || kr_kicked) return;
+    kr_kicked = 1;
+    kr_go = 1;                                       /* the other task's raw write begins now */
+    for(waited = 0; !ram_stuck_hit && !kr_done && waited < 2000; waited += 5) sleep_ms(5);
+}
+
+static void test_change_rescan(void) {
+    u8 *mem = (u8 *)kcalloc(1, KX_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL, *p2;
+    static const u32 counts[1] = { 6144 };
+    struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
+    struct part_plan plan;
+    struct part_io io;
+    struct part_kind k;
+    char err[256], n1[BDEV_NAME_LEN], n2[BDEV_NAME_LEN];
+    surf_task *tw = NULL;
+    int r = -9, st, entries = -1;
+    bool registered = false, stuck;
+    plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
+    err[0] = 0;
+    if(!d || !t || !plan.buf) { check(false, "fdisk's commit and another task's write: memory"); goto out; }
+    strlcpy(d->name, "stickR", sizeof(d->name));
+    d->nblocks = KX_BLOCKS;
+    registered = bdev_register(d) == 0;
+    if(!registered || kx_partition(d, counts, 1) != 0) {
+        check(false, "fdisk's commit and another task's write: a partitioned RAM disk");
+        goto out;
+    }
+    bdev_part_name(d, 1, n1, sizeof(n1));
+    bdev_part_name(d, 2, n2, sizeof(n2));
+    kr_p1 = bdev_find(n1);
+    if(!kr_p1) { check(false, "fdisk's commit and another task's write: the first partition"); goto out; }
+    kr_go = kr_done = kr_kicked = 0;
+    kr_wr = 1;
+    kr_busy = NULL;
+    ram_stuck_hit = 0;
+    ram_stuck_lba = 0;
+    tw = kthread_create_on("crwrite", curTask->con, kr_writer, NULL, PL_NORMAL, 0);
+    ram_stuck_task = tw;
+    kr_fdisk = curTask;
+    part_io_init(&io, d, false);
+    io.note = NULL;
+    if(tw && part_parse_type("fat16", &k) == 0 && part_read(&io, d->nblocks, t) == 0 &&
+       part_plan_add(&io, t, 0, &k, &plan, err, sizeof(err)) == 0) {
+        kr_armed = 1;
+        ram_flush_hook = kr_flush;
+        r = part_commit(d, t, &plan, err, sizeof(err));   /* fdisk's commit: a second partition, the rest of the disk */
+        ram_flush_hook = NULL;
+        kr_armed = 0;
+    }
+    stuck = ram_stuck_hit != 0;                      /* (the other task's write reached the driver) */
+    ram_stuck_task = NULL;                           /* (and ends now) */
+    kr_go = 1;
+    if(tw) task_wait(tw->pid, &st);
+    p2 = bdev_find(n2);
+    if(part_read(&io, d->nblocks, t) == 0) entries = (int)t->nparts;
+    printf("        (the commit: %d%s%s; the other task's write: %d%s, %s busy: %s; %s registered: %s; the table on the "
+           "disk: %d partitions)\n", r, err[0] ? ", " : "", err, kr_wr, stuck ? ", held in the driver" : "", n1,
+           kr_busy ? kr_busy : "no", n2, p2 ? "yes" : "NO", entries);
+    check(tw && r == 0 && p2 && entries == 2,
+          "fdisk's commit while another task writes to a partition: the disk is read again, the new partition registered");
+    check(tw && kr_kicked && kr_wr == BDEV_EBUSY && !stuck && kr_busy && !strcmp(kr_busy, VFS_BUSY_CHANGING),
+          "and that task's write is refused at once while the commit holds the disk (BDEV_EBUSY), the partition said to "
+          "be being changed");
+out:
+    if(registered) {
+        bdev_unregister(d);                          /* (it and its partitions gone, off the list) */
+        binvalidate(d);
+    }
+    kfree(plan.buf);
+    kfree(t);
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/18/26 (audit B61): the claim of mkfs and fdisk is one look and claim under the mount table's lock, the look at the
+   requests under way and the claim in one step no request comes between: a request under way refuses it and leaves
+   nothing counted (B56's rule); held, it refuses another task's requests to the device (BDEV_EBUSY) and its mount at
+   once, and lets the claiming task's own requests through; let go of, the others are let in again */
+static struct bdev *volatile kv_dev;
+static volatile int kv_go, kv_read, kv_mount, kv_done;
+static const char *volatile kv_busy;
+
+static void kv_other(void *arg) {
+    u8 *blk = (u8 *)kalloc(512);
+    (void)arg;
+    while(!kv_go) sleep_ms(5);
+    kv_busy = vfs_bdev_busy_why(kv_dev);
+    kv_read = blk ? bdev_read(kv_dev, 0, 1, blk) : -99;
+    kv_mount = vfs_mount_flags(kv_dev, "/selftest-cv", "fat", MNT_RDONLY);
+    if(kv_mount == 0) vfs_umount("/selftest-cv");
+    kfree(blk);
+    kv_done = 1;
+}
+
+/* kv_other in a task of its own, to its end */
+static void kv_run(void) {
+    surf_task *o;
+    int st;
+    kv_go = kv_done = 0;
+    kv_read = kv_mount = 1;
+    kv_busy = NULL;
+    o = kthread_create_on("cvother", curTask->con, kv_other, NULL, PL_NORMAL, 0);
+    if(!o) return;
+    kv_go = 1;
+    task_wait(o->pid, &st);
+}
+
+static void test_change_claim(void) {
+    u8 *mem, *blk = (u8 *)kalloc(512);
+    struct bdev *d = fx_stick("stickv", "/selftest-cv", &mem);
+    const char *why = NULL, *held_busy;
+    surf_task *t;
+    int r1 = 0, r2, own, held_read, held_mount, held_done, st, waited;
+    u_int hold = curTask->fs_hold, left;
+    if(!d || !blk) {
+        check(false, "the claim of mkfs and fdisk: a RAM stick");
+        kfree(blk);
+        if(d) fx_done(d, mem, "/selftest-cv");
+        return;
+    }
+    vfs_umount("/selftest-cv");                      /* nothing mounts it now */
+    kq_dev = d;
+    kq_done = 0;
+    kq_r = 1;
+    ram_stuck_hit = 0;
+    t = kthread_create_on("cvwrite", curTask->con, kq_write, NULL, PL_NORMAL, 0);
+    if(t) {
+        ram_stuck_task = t;
+        for(waited = 0; !ram_stuck_hit && waited < 2000; waited += 5) sleep_ms(5);
+        r1 = vfs_bdev_change_begin(d, &why);         /* another task's write is under way */
+        if(r1 == 0) vfs_bdev_change_end(d);          /* (the code before: taken) */
+        ram_stuck_task = NULL;                       /* the write ends */
+        task_wait(t->pid, &st);
+    }
+    left = curTask->fs_hold - hold;
+    r2 = vfs_bdev_change_begin(d, NULL);             /* nothing under way: taken */
+    kv_dev = d;
+    kv_run();                                        /* another task, while it is held */
+    held_read = kv_read;
+    held_mount = kv_mount;
+    held_busy = kv_busy;
+    held_done = kv_done;
+    own = bdev_read(d, 0, 1, blk);                   /* its own request */
+    if(r2 == 0) vfs_bdev_change_end(d);
+    kv_run();                                        /* and once it is let go of */
+    printf("        (with a write under way: %d, %s; held: another task's read %d, mount %d, busy: %s; its own read %d; "
+           "let go of: read %d, mount %d)\n", r1, why ? why : "-", held_read, held_mount, held_busy ? held_busy : "no",
+           own, kv_read, kv_mount);
+    check(t && ram_stuck_hit && kq_r == 0 && r1 == -EBUSY && why && !strcmp(why, VFS_BUSY_REQUEST) && left == 0,
+          "mkfs's and fdisk's claim of a device with a request under way is refused, saying why, and leaves nothing counted");
+    check(r2 == 0 && held_done && held_read == BDEV_EBUSY && held_mount == -EBUSY && held_busy &&
+          !strcmp(held_busy, VFS_BUSY_CHANGING) && own == 0,
+          "held, it refuses another task's requests and mount at once, saying why, and lets its own requests through");
+    check(kv_done && kv_read == 0 && kv_mount == 0 && curTask->fs_hold == hold, "let go of, the others are let in");
+    kfree(blk);
+    fx_done(d, mem, NULL);
+}
+
+/* 10/18/26 (audit B61): mkfs of a whole disk reads it again at its end (its old partitions go), and passed over the
+   rescan's result: when it failed, mkfs said nothing and returned 0. Now it says the disk could not be read again and
+   what to do, and fails. And an mkfs that failed after its first write (the old boot sector, block 0, zeroed) left the
+   old partitions registered over a disk with no table, for a later mkfs to format their stale extents: now the disk is
+   read again then too. Here an 8 MB RAM disk with one partition: first its block 0 cannot be read once mkfs has
+   flushed (the rescan reads it), then, partitioned again, it refuses every write after mkfs's first; the answer to
+   mkfs's question is typed ahead */
+static surf_task *volatile km_task;
+
+static void km_flush(void) {
+    if(km_task && curTask == km_task) ram_read_fail0 = 1;
+}
+
+static void km_first_write(u32 lba) {
+    (void)lba;
+    if(km_task && curTask == km_task) ram_refuse = true;   /* (this write is stored: the refusal is looked at before) */
+}
+
+/* mkfs of disk d in this task, the answer typed ahead, what it said in out; its status */
+static int km_mkfs(struct bdev *d, char *out, u_int size) {
+    char *argv[] = { "mkfs", d->name, NULL };
+    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    const char *c;
+    int r;
+    out[0] = 0;
+    if(!tty) return -1;
+    tty_flush(tty);
+    for(c = d->name; *c; c++) tty_input(tty, (u_char)*c);   /* the answer to its question, typed ahead */
+    tty_input(tty, '\n');
+    km_task = curTask;
+    r = fx_capture(out, size, 2, argv);
+    km_task = NULL;
+    tty_flush(tty);
+    return r;
+}
+
+/* the line of out that holds what, for the transcript, or "nothing" */
+static void km_said(int r, const char *out, const char *what) {
+    const char *said = strstr(out, what), *e;
+    if(said) { while(said > out && said[-1] != '\n') said--; }
+    e = said ? strchr(said, '\n') : NULL;
+    printf("        (mkfs returned %d: %.*s)\n", r, said ? (int)(e ? e - said : 200) : 7, said ? said : "nothing");
+}
+
+static void test_mkfs_rescan(void) {
+    u8 *mem = (u8 *)kcalloc(1, KX_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    static const u32 counts[1] = { 0 };
+    static char out[800];
+    char n1[BDEV_NAME_LEN];
+    bool registered = false, before = false, left = true;
+    int r = -1, r2 = -1;
+    if(!d) { check(false, "mkfs of a whole disk that cannot be read again: memory"); kfree(mem); return; }
+    strlcpy(d->name, "stickM", sizeof(d->name));
+    d->nblocks = KX_BLOCKS;
+    registered = bdev_register(d) == 0;
+    if(registered && kx_partition(d, counts, 1) == 0) {
+        bdev_part_name(d, 1, n1, sizeof(n1));
+        before = bdev_find(n1) != NULL;
+    }
+    if(!before) { check(false, "mkfs of a whole disk that cannot be read again: a partitioned RAM disk"); goto out; }
+    ram_flush_hook = km_flush;                       /* block 0 unreadable once mkfs has flushed */
+    r = km_mkfs(d, out, sizeof(out));
+    ram_flush_hook = NULL;
+    ram_read_fail0 = 0;
+    km_said(r, out, "read again");
+    check(r == CMD_FAIL && strstr(out, "could not be read again") && strstr(out, "plug it in again") &&
+          !strstr(out, "was read again"), "mkfs of a whole disk that cannot be read again at its end says so and what to "
+          "do, and fails");
+    if(kx_partition(d, counts, 1) == 0 && bdev_find(n1)) {
+        ram_hook = km_first_write;                   /* every write refused after mkfs's first (block 0 zeroed) */
+        r2 = km_mkfs(d, out, sizeof(out));
+        ram_hook = NULL;
+        ram_refuse = false;
+        left = bdev_find(n1) != NULL;
+        km_said(r2, out, "write failed");
+    }
+    check(r2 == CMD_FAIL && strstr(out, "write failed at sector") && strstr(out, "was read again: no partitions now") &&
+          !left, "an mkfs of a whole disk that fails after its first write reads the disk again: the old partition goes");
+out:
+    if(registered) {
+        bdev_unregister(d);
+        binvalidate(d);
+    }
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/18/26 (audit B62): a task holding a mutex is not killed at once, inside a file system or not: killed at once, it
+   left the lock with the dead task, and every task that wanted the lock waited for good (a driver's thread holds its
+   device's lock in its probes and polls outside any request, as the USB hub thread and the SD card's watch do: every
+   later request to the device). Here a kernel thread outside any call holds a lock of the test's own for 300 ms when it
+   is killed: the kill comes once it lets go, and the lock is free after */
+static mutex_t kl_lock = MUTEX_INIT("selftest-kill");
+static volatile int kl_held, kl_let_go;
+static volatile u_long kl_out;
+
+static void kl_thread(void *arg) {
+    (void)arg;
+    mutex_lock(&kl_lock);
+    kl_held = 1;
+    sleep_ms(300);                                   /* the kill comes meanwhile: put off */
+    kl_let_go = 1;
+    kl_out = uptime_ms();
+    mutex_unlock(&kl_lock);
+    sleep_ms(2000);                                  /* killed long before this ends */
+    kl_held = 2;
+}
+
+static void test_kill_holding_lock(void) {
+    surf_task *t;
+    u_long pid, end;
+    int status = 0, waited;
+    bool free_after;
+    kl_held = kl_let_go = 0;
+    kl_out = 0;
+    t = kthread_create_on("killlock", curTask->con, kl_thread, NULL, PL_NORMAL, 0);
+    if(!t) { check(false, "a kill of a task holding a lock: a thread"); return; }
+    pid = t->pid;
+    for(waited = 0; !kl_held && waited < 1000; waited += 5) sleep_ms(5);
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    end = uptime_ms();
+    free_after = mutex_trylock(&kl_lock);
+    if(free_after) mutex_unlock(&kl_lock);
+    printf("        (%s; it ended %lu ms after)\n", kl_let_go ? "it let go of its lock" : "killed holding its lock",
+           kl_let_go ? end - kl_out : 0UL);
+    check(status == -1 && kl_let_go && kl_held == 1 && free_after && end - kl_out < 250,
+          "a task holding a lock is not killed at once: the kill comes once it lets go, and the lock is free after");
+}
+
+/* 10/18/26 (audit B63): a mutex goes to its waiters in the order they came. mutex_unlock() only woke the first waiter,
+   and the task letting go could take the lock again before the waiter ran: a task taking a lock again and again kept a
+   waiter out for as long as it went on, so "each waits for those ahead of it" (B56) was no bound. Here the test holds a
+   lock of its own while another task queues for it, then lets go and takes it again 50 times, never yielding in
+   between, holding it 2 ms each time: the waiter has it at the first letting go */
+static mutex_t ko_lock = MUTEX_INIT("selftest-fifo");
+static volatile int ko_round, ko_got;
+
+static void ko_waiter(void *arg) {
+    (void)arg;
+    mutex_lock(&ko_lock);
+    ko_got = ko_round;
+    mutex_unlock(&ko_lock);
+}
+
+static void test_mutex_fifo(void) {
+    surf_task *t;
+    u_long until;
+    int st, waited;
+    ko_round = 0;
+    ko_got = -1;
+    mutex_lock(&ko_lock);
+    t = kthread_create_on("fifowait", curTask->con, ko_waiter, NULL, PL_NORMAL, 0);
+    if(!t) { mutex_unlock(&ko_lock); check(false, "a mutex's waiters in order: a thread"); return; }
+    for(waited = 0; !wq_count(&ko_lock.waiters) && waited < 1000; waited += 5) sleep_ms(5);   /* (it waits for the lock) */
+    for(ko_round = 1; ko_round <= 50; ko_round++) {
+        mutex_unlock(&ko_lock);
+        mutex_lock(&ko_lock);                        /* again at once */
+        for(until = uptime_ms() + 2; uptime_ms() < until; );
+    }
+    mutex_unlock(&ko_lock);
+    task_wait(t->pid, &st);
+    printf("        (the waiter had the lock at letting go number %d of 50)\n", ko_got);
+    check(ko_got == 1, "a mutex goes to its waiters in the order they came: a task taking it again and again keeps no "
+          "waiter out");
+}
+
+/* 10/18/26 (audit B65): a close whose write-out Ctrl+C cut short said EIO, as one whose write the device refused: cp
+   then said "interrupted while they were written out" when the card had refused them, and fsbench said "interrupted".
+   vfs_close() says EINTR now when the write-out was cut short with nothing refused and the device still there (what is
+   left is owed still: the next sync writes it), and EIO when the device refused a write or went away, Ctrl+C or not.
+   Here a file the stick refused at first is closed while another task's write of the root directory, which the close
+   owes, is held, and Ctrl+C reaches the close there; then a file the stick refuses is closed with Ctrl+C pending */
+static struct bdev *kz_dev;
+static volatile int kz_go, kz_ready, kz_go2, kz_close, kz_done;
+
+static void kz_sync(void *arg) {
+    (void)arg;
+    while(!kz_go) sleep_ms(5);
+    bsync(kz_dev);
+}
+
+static void kz_closer(void *arg) {
+    struct file *f = NULL;
+    task_call_enter(TC_COMMAND);
+    kz_close = 1;
+    if(vfs_open((const char *)arg, O_WRONLY | O_CREAT, &f) == 0) {
+        vfs_write(f, "closed after Ctrl+C", 19); /* (its write-out refused: ram_refuse) */
+        kz_ready = 1;
+        while(!kz_go2) sleep_ms(5);
+        kz_close = vfs_close(f);
+    }
+    kz_done = 1;
+    task_call_leave(TC_COMMAND);
+}
+
+static surf_task *kz_start(const char *name, const char *path) {
+    kz_ready = kz_go2 = kz_done = 0;
+    kz_close = 1;
+    return kthread_create_on(name, curTask->con, kz_closer, (void *)path, PL_NORMAL, 0);
+}
+
+static void test_close_cut_short(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stickz", "/selftest-cz", &mem);
+    surf_task *tc, *ts = NULL;
+    u_long f;
+    int st, waited, cut = 1, refused = 1;
+    bool early = false;
+    if(!d) { check(false, "a close cut short: a RAM stick"); return; }
+    kz_dev = d;
+    kz_go = 0;
+    ram_stuck_hit = 0;
+    ram_refuse = true;                               /* the file's blocks stay changed in the cache */
+    tc = kz_start("czclose", "/selftest-cz/c.txt");
+    for(waited = 0; tc && !kz_ready && !kz_done && waited < 2000; waited += 5) sleep_ms(5);
+    ram_refuse = false;
+    if(tc && kz_ready) {
+        ts = kthread_create_on("czsync", curTask->con, kz_sync, NULL, PL_NORMAL, 0);
+        ram_stuck_lba = (mem[14] | mem[15] << 8) + mem[16] * (mem[22] | mem[23] << 8);   /* the root directory */
+        ram_stuck_task = ts;                         /* another task's write of it is held */
+        kz_go = 1;
+        for(waited = 0; ts && !ram_stuck_hit && waited < 2000; waited += 5) sleep_ms(5);
+        kz_go2 = 1;                                  /* the close waits for that block */
+        sleep_ms(50);
+        f = irq_save();
+        task_interrupt_job(tc);                      /* Ctrl+C on its terminal */
+        irq_restore(f);
+        for(waited = 0; !kz_done && waited < 1500; waited += 10) sleep_ms(10);
+        early = kz_done != 0;                        /* (it returned while the write was still held) */
+    }
+    ram_stuck_task = NULL;                           /* the write ends */
+    kz_go = kz_go2 = 1;
+    if(tc) task_wait(tc->pid, &st);
+    if(ts) task_wait(ts->pid, &st);
+    ram_stuck_lba = 0;
+    cut = kz_close;
+    ram_refuse = true;                               /* then a close the stick refuses, Ctrl+C pending */
+    tc = kz_start("czrefuse", "/selftest-cz/d.txt");
+    for(waited = 0; tc && !kz_ready && !kz_done && waited < 2000; waited += 5) sleep_ms(5);
+    if(tc) {
+        f = irq_save();
+        task_interrupt_job(tc);
+        irq_restore(f);
+        kz_go2 = 1;
+        task_wait(tc->pid, &st);
+    }
+    ram_refuse = false;
+    refused = kz_close;
+    printf("        (cut short in its wait%s: %d; refused with Ctrl+C pending: %d)\n", early ? "" : " (NOT before the held "
+           "write ended)", cut, refused);
+    check(ram_stuck_hit && early && cut == -EINTR, "a close whose write-out Ctrl+C cut short says EINTR (the next sync "
+          "writes the rest), not EIO");
+    check(refused == -EIO, "and one the device refused says EIO, Ctrl+C or not");
+    fx_done(d, mem, "/selftest-cz");                 /* (its umount writes the rest) */
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -2201,7 +2648,9 @@ static void (*const tests[])(void) = {
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_kill_umount, test_eject_interrupted,
     test_kill_device, test_kill_outside_call, test_umount_waits, test_request_busy, test_unmounting_busy, test_eject_unmount_phase,
     test_eject_writeout_mount, test_kill_system,
-    test_fdisk_kill, test_cp_interrupted, test_hangup_nocall, test_user, test_net, test_usb, test_tasks,
+    test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
+    test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_close_cut_short,
+    test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 

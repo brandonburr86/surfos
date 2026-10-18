@@ -22,6 +22,11 @@ before fdisk says so, and the disk's partitions are registered again.
 10/6/26: the status (shell.h) is CMD_OK for a table shown or written, CMD_USAGE for
 what fdisk does not understand, and CMD_FAIL otherwise: a refused disk, a change
 that cannot be planned, a Cancelled question or a failed write.
+
+10/18/26 (audit B61): the commit holds the disk from its last check to the end of its
+rescan (driver/part.c): another task's requests to it are refused meanwhile, and a
+rescan that fails all the same makes fdisk fail and say to plug the disk in again.
+A disk another task's mkfs or fdisk holds is said to be so.
 */
 
 #include <blibc_common.h>
@@ -30,6 +35,7 @@ that cannot be planned, a Cancelled question or a failed write.
 #include <surfos/tty.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
+#include <fs/vfs.h>
 #include <mm/kalloc.h>
 #include "shell.h"
 
@@ -192,7 +198,7 @@ int cmd_fdisk(int argc, char **argv) {
     struct part_plan plan;
     struct part_io io;
     struct bdev *d;
-    char why[120];
+    char why[256];                  /* 10/18/26 (audit B61): a failed write, then a failed rescan */
     int status = CMD_FAIL;
 
     if(argc < 2) { usage(); return CMD_USAGE; }
@@ -207,7 +213,12 @@ int cmd_fdisk(int argc, char **argv) {
     plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
     if(!t || !plan.buf) { printf("    fdisk: out of memory\n"); goto out; }
     part_io_init(&io, d, true);
-    if(part_read(&io, d->nblocks, t) != 0) { printf("    fdisk: block 0 of %s cannot be read\n", d->name); goto out; }
+    if(part_read(&io, d->nblocks, t) != 0) {
+        const char *busy = vfs_bdev_busy_why(d);        /* 10/18/26 (audit B61): another task's mkfs or fdisk holds it */
+        if(busy && !strcmp(busy, VFS_BUSY_CHANGING)) printf("    fdisk: %s is %s: try again once that has finished\n", d->name, busy);
+        else printf("    fdisk: block 0 of %s cannot be read\n", d->name);
+        goto out;
+    }
     if(argc == 2) {
         show_disk(d);
         show_table(d, t);

@@ -122,6 +122,7 @@ SMOKE = [
     # 10/18/26 (audit B56): a program cannot fault inside a file system, and crashfs does not give it a way (it stops
     # the system: its own boot below, in the kernel shell)
     ('crashfs', ['crashfs stops the system: only in the kernel shell (shell=kernel), not from a program']),
+    ('crashlock', ['crashlock stops the system: only in the kernel shell (shell=kernel), not from a program']),
     ('heaptest', ['HEAPTEST PASS']),
     ('lspci',   ['Ethernet', '82540EM']),
     # 10/7/26 (the Wi-Fi report): the ids with the subsystem, command, interrupt; one device in full, with its bytes
@@ -460,6 +461,11 @@ SMOKE = [
     ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')],
      [('crashfs', ['Kernel Wipeout: Page Fault', 'inside a file system, the block cache or a device request',
                    re.compile(rb'SYSTEM HALTED')])],
+     ['init: restarted the shell'], 'halts'),
+    # 10/18/26 (audit B62): so does one while the task holds a lock (crashlock: a mutex of its own), which would stay
+    # with the dead task for good
+    ('@boot shell=kernel', [surf_prompt(b'SURF', b'#')],
+     [('crashlock', ['Kernel Wipeout: Page Fault', 'holding a lock (1 held)', re.compile(rb'SYSTEM HALTED')])],
      ['init: restarted the shell'], 'halts'),
     ('@boot no-initrd', ['init: /initrd/bin/surfsh: No such file or directory; recovery console', surf_prompt(b'SURF', b'?')],
      [('cd /dev', [surf_prompt(b'dev', b'?')]), ('ls /nothing', ['No such file']), ('echo status $?', ['status 1'])], []),

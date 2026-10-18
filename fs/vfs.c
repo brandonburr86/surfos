@@ -44,6 +44,14 @@ the list after the eject had listed the mounts it would unmount, or come in duri
 eject's write-out; the eject then took that volume's blocks and said "safe to remove".
 Both are counted inside (fs_enter()) while they hold such a count, so a kill waits for
 them to let go of it. vfs_bdev_busy_why() says what keeps a device busy.
+
+10/18/26 (audit B61): mkfs and fdisk take their device the same way for their whole run
+(vfs_bdev_change_begin()), refusing it when it is busy, a request under way included:
+before, a mount could come in between their checks and their writes, and another task's
+raw request in flight at the end refused the rescan after fdisk had written its table,
+leaving the old partitions registered over the new layout. While they hold it, another
+task's requests to it are refused at once (driver/bdev.c), and mount and eject say it is
+being changed.
 */
 
 #include <surfos/types.h>
@@ -85,6 +93,7 @@ static const char *busy_why(const struct bdev *d) {
     }
     if(claimed(d, true)) return VFS_BUSY_UNMOUNTING;
     if(claimed(d, false)) return VFS_BUSY_MOUNTING;
+    if(bdev_changed_by_other(d)) return VFS_BUSY_CHANGING;   /* 10/18/26 (audit B61): another task's mkfs or fdisk */
     if(counted(d, 2)) return VFS_BUSY_REQUEST;
     return NULL;
 }
@@ -419,17 +428,57 @@ bool vfs_bdev_unmounting(struct bdev *d) {
 
 /* 10/18/26 (audit B51): d is being unmounted until vfs_unmount_end() (counted: an eject of its disk and an umount of
    one of its partitions may overlap). (B58) For an eject, all of it: -EBUSY when d, its disk or one of its partitions
-   is being mounted or unmounted already, else taken under mount_lock in the same step as that look */
-int vfs_unmount_begin(struct bdev *d) {
+   is being mounted or unmounted already, else taken under mount_lock in the same step as that look. (B61) Or being
+   changed by another task's mkfs or fdisk */
+int vfs_unmount_begin(struct bdev *d, const char **why) {
+    const char *busy = NULL;
+    u_long f;
+    if(why) *why = NULL;
     if(!d) return 0;
     mutex_lock(&mount_lock);
-    if(claimed(d, true) || claimed(d, false)) {
-        mutex_unlock(&mount_lock);
-        return -EBUSY;
-    }
-    d->unmounting++;
+    f = irq_save();
+    busy = claimed(d, true) ? VFS_BUSY_UNMOUNTING : claimed(d, false) ? VFS_BUSY_MOUNTING
+         : bdev_changed_by_other(d) ? VFS_BUSY_CHANGING : NULL;
+    if(!busy) d->unmounting++;
+    irq_restore(f);
     mutex_unlock(&mount_lock);
-    return 0;
+    if(why) *why = busy;
+    return busy ? -EBUSY : 0;
+}
+
+/* 10/18/26 (audit B61): mkfs and fdisk take their device for their whole run, as an eject takes its disk and a mount
+   its device (B58): one look and claim under mount_lock, with interrupts off over the look at the requests under way
+   and the claim (driver/bdev.c counts a request and looks at the claims in one such step), counted inside until it is
+   let go of (a kill waits for that, so no claim is left behind). Busy as vfs_bdev_busy_why() says, a request under way
+   included: that one refuses the change (B56's rule: try again once it has ended), and the requests that come while it
+   is held are refused at once (BDEV_EBUSY), so the change meets none, its rescan at the end included. Claims of the
+   calling task's own (mkfs, then the fdisk that sets the partition's type) do not count against it */
+int vfs_bdev_change_begin(struct bdev *d, const char **why) {
+    const char *busy;
+    u_long f;
+    fs_enter();
+    mutex_lock(&mount_lock);
+    f = irq_save();
+    busy = busy_why(d);
+    if(!busy) {
+        if(!d->changing++) bdev_changes++;
+        d->changing_by = curTask;
+    }
+    irq_restore(f);
+    mutex_unlock(&mount_lock);
+    if(busy) fs_leave();
+    if(why) *why = busy;
+    return busy ? -EBUSY : 0;
+}
+
+void vfs_bdev_change_end(struct bdev *d) {
+    u_long f = irq_save();
+    if(d->changing && !--d->changing) {
+        d->changing_by = NULL;
+        if(bdev_changes) bdev_changes--;
+    }
+    irq_restore(f);
+    fs_leave();
 }
 
 void vfs_unmount_end(struct bdev *d) {
@@ -665,11 +714,15 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
 
 /* 10/16/26 (audit B10): a file system's state and its device's blocks out to the device; 0 when
    everything reached it by the end (a block refused by the first sync and written by the second
-   counts as written), else -EIO */
+   counts as written), else -EIO. 10/18/26 (audit B65): -EINTR when the sync was cut short (a kill or
+   Ctrl+C in one of its waits: fs_cut_short()) while the device refused nothing and is still there: what
+   is left is owed still, and the next sync writes it; a refusal or an unplugged device is -EIO, Ctrl+C
+   or not (as a straight write cut short in its wait says EINTR, B49) */
 static int write_back(struct superblock *sb) {
     int r = sb->ops && sb->ops->sync ? sb->ops->sync(sb) : 0;
     if(!sb->dev) return r ? -EIO : 0;
-    return bsync(sb->dev) != 0 || sb->dev->gone ? -EIO : 0;
+    if(bsync(sb->dev) == 0 && !sb->dev->gone) return 0;
+    return !sb->dev->gone && !sb->dev->bc_failed && fs_cut_short() ? -EINTR : -EIO;
 }
 
 int vfs_close(struct file *f) {
@@ -855,9 +908,10 @@ int vfs_ftruncate(struct file *f, u32 size) {
 
 int vfs_fsync(struct file *f) {
     struct superblock *sb;
+    int r;
     if(!f) return -EBADF;
     sb = f->v->sb;
-    if(write_back(sb) != 0) return -EIO;            /* 10/16/26 (B10): as close says it */
+    if((r = write_back(sb)) != 0) return r;         /* 10/16/26 (B10): as close says it (10/18/26, B65: EINTR too) */
     if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;
 }

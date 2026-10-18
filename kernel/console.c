@@ -578,6 +578,12 @@ void console_task_gone(struct surf_task *task) {
     }
 }
 
+/* 10/18/26 (audit B62): the one lock counted in a task's mutexes that its death gives back (above): a fault or a kill
+   at once while t holds it leaves nothing behind (kernel/task.c) */
+bool console_holds(const struct surf_task *t) {
+    return t && con_owner == t;
+}
+
 /* panic and wipeout (kernel/panic.c): the report is plain text, whatever was half printed */
 void console_panic(void) {
     int i;
