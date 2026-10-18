@@ -170,7 +170,7 @@ def monitor(d):
     d.key('delete')
     d.visible('End task asks about the shell on F2',
               lambda s: d.text(s, 261, 242, f'End surfsh (pid {old}) on F2?', INK, PAPER) and
-              d.text(s, 261, 264, 'It ends after its system call; init starts another.', MUTED, PAPER))
+              d.text(s, 261, 264, 'Ends now or after a system call; init starts another.', MUTED, PAPER))
     d.key('esc')
     d.visible('Esc answers Cancel: nothing ended', _status(d, MON, f'surfsh (pid {old}): a program on F2'))
     d.key('delete')
@@ -178,10 +178,15 @@ def monitor(d):
     d.key('ret')
     d.visible('End task ends the program: kill\'s words in the status bar (a shell waiting for a key ends with that call)',
               lambda s: _status(d, MON, f'ended surfsh (pid {old})')(s) or
-              _status(d, MON, f'surfsh (pid {old}) ends when its system call does')(s))
+              _status(d, MON, f'surfsh (pid {old}) ends when its system call does')(s) or
+              _status(d, MON, f'surfsh (pid {old}) has ended')(s))
     _wait_tasks(d, r, 'its pid is gone, and init has started a new shell on F2',
                 lambda rows: all(p != old for p, *_ in rows) and
                 any(n == 'surfsh' and c == 'F2' and p > old for p, n, _, c, _ in rows), 'guiapps-monitor-ended.png')
+    # 10/18/26: a kill that waited for the call: once the pid is gone from a reading, the status bar says it has ended
+    d.visible('once its pid is gone, the status bar says it has ended (or that kill ended it at once)',
+              lambda s: _status(d, MON, f'surfsh (pid {old}) has ended')(s) or
+              _status(d, MON, f'ended surfsh (pid {old})')(s))
 
     # Memory: three meters with plausible numbers for a 512 MB guest
     d.click(x + TABS['Memory'], y + TOOL_Y)

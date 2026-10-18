@@ -28,18 +28,21 @@ fails keeps what was read before, and the status bar says so.
     nothing is selected until you move: the status bar says that its pid is not in the list
     now, Down goes on from its row, and if it is listed again it is selected again. The
     wheel and the scroll bar move the list.
-  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then "It ends after its
-    system call; unsaved work is lost."), with Cancel as the default, so Enter alone ends
-    nothing. It ends programs only: for a kernel thread the button is greyed and Del says why
-    in the status bar (init and the idle task are kernel threads). A program running its own
-    code ends at once; one inside a system call or a kernel command ends when that call does,
-    however long it takes ("edit (pid 9) ends when its system call does"), so that nothing it
-    holds, such as a volume's lock, is left held. The kernel refuses this desktop's own task,
-    the shell that ran `gui` ("surfsh (pid 12) runs this desktop: Ctrl+Q leaves it"), and the
-    shells above it ("surfsh (pid 4) runs the shell this desktop runs in"): a new shell on
-    the desktop's console would take its keys. Any other console's shell may be ended: init
-    starts a new one on that console, with a new pid, as when the shell's `kill` ends it
-    (three such ends within 30 seconds leave that console with the recovery shell).
+  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then
+    "Ends now or after a system call; unsaved work is lost."), with Cancel as the default, so
+    Enter alone ends nothing. It ends programs only: for a kernel thread the button is greyed
+    and Del says why in the status bar (init and the idle task are kernel threads). A program
+    running its own code ends at once; one inside a system call or a kernel command ends when
+    that call does, however long it takes ("edit (pid 9) ends when its system call does"), so
+    that nothing it holds, such as a volume's lock, is left held; once it is gone from the
+    list, the status bar says so ("edit (pid 9) has ended"). A task whose system call never
+    ends is never ended by End task; the shell's `kill`, which kills at once after 2 seconds,
+    is the way out. The kernel refuses this desktop's own task, the shell that ran `gui`
+    ("surfsh (pid 12) runs this desktop: Ctrl+Q leaves it"), and the shells above it
+    ("surfsh (pid 4) runs the shell this desktop runs in"): a new shell on the desktop's
+    console would take its keys. Any other console's shell may be ended: init starts a new
+    one on that console, with a new pid, as when the shell's `kill` ends it (three such ends
+    within 30 seconds leave that console with the recovery shell).
   * The status bar describes the selected task, and counts the tasks at its right. Up to 128
     tasks are listed; with more, the newest 128, and the count says "the newest 128 of N".
 * **Memory** shows physical memory (the 4 KB pages SurfOS manages, the RAM the firmware
@@ -56,8 +59,9 @@ fails keeps what was read before, and the status bar says so.
 * **The Edit menu** is System Monitor's while it is in front: Copy (Ctrl+C) copies the
   selected task's line, or the Memory or System page as text (for Notepad, or a bug report;
   a page that could never be read copies nothing, and the status bar says so); Find (Ctrl+F)
-  selects the next task whose name holds what you type, in either case, going round past the
-  end, and Find next does it again; Go to pid (Ctrl+L) selects a task by its pid.
+  selects the next task whose name holds what you type, in either case, after the selected
+  one (or from the row of the one that ended), going round past the end, and Find next does
+  it again; Go to pid (Ctrl+L) selects a task by its pid.
 * Left and Right change the page. Esc closes the window.
 
 **Disks** shows the block devices as `lsblk` lists them: each disk with its partitions under
@@ -84,8 +88,9 @@ the list read before, and the status bar says so.
   it is open, shows a mount or an eject made in Disks at once.
 * **Refresh** (Ctrl+R) reads the devices again now. A stick pulled out while mounted stays in
   the list, `unplugged: eject it`, until Eject unmounts it. A device that is not in a
-  reading (pulled out) stays followed: nothing is selected, the status bar says it is not
-  there any more, Down goes on from its row, and if it comes back it is selected again.
+  reading (pulled out) stays followed: nothing is selected (M, E and Enter say so), the
+  status bar says it is not there any more, Down goes on from its row, and if it comes back
+  it is selected again.
 * Ctrl+C copies the selected device's line. A double-click on a row is Enter.
 
 Its limits: Mount and Eject are for USB volumes (the initrd and internal disks only show).
@@ -117,8 +122,11 @@ Keys, for the table in docs/GUI.md:
   explains in the status bar without asking; for every program the question is asked and
   struct gui_sys's `kill` decides. Its refusals that End task can meet are the desktop's own
   task and the shells above it, and the status bar shows them as the kernel words them. The
-  question says that the task ends after its system call, and whether init starts another
-  shell.
+  question says whether init starts another shell, and (10/18/26) that the task ends now or
+  after a system call: which of the two the kill meets the list cannot tell (a reading is up
+  to a second old, and a program waiting for a key is inside a call yet ends at once, its
+  wait cut short), so the question names both rather than struct gui_task getting an in-call
+  flag that would often say the wrong one.
 * **kill** (shell/guisys.c) finds and kills the task with interrupts off and copies its name
   first: the foundation's version read `t->name` after `kill_task()`, when the zombie may
   already have been collected and freed by its parent. 10/18/26 (the review): it also
@@ -132,7 +140,8 @@ Keys, for the table in docs/GUI.md:
   refusal says why ("runs this desktop: Ctrl+Q leaves it", "runs the shell this desktop runs
   in", "starts the consoles' shells: it is never ended", "is a kernel thread: the shell's
   kill command ends one"); a zombie is "had ended already"; a task in a call "ends when its
-  system call does" (or kernel command).
+  system call does" (or kernel command); a task already in task_exit() (TC_EXIT: its files
+  are closing) "is ending already".
 * **What a column sorts by.** State: running, ready, blocked, sleeping, zombie. Console: F1-F4,
   then the ptys, then none. Kind: programs first. Tasks that sort alike stay in ascending pid
   order, also when the order is reversed. The console shown is the one the kernel reports
@@ -154,7 +163,12 @@ Keys, for the table in docs/GUI.md:
   nothing is selected meanwhile (so End task can never ask about the task that took its row),
   the status bar says it is not in the list, Down goes on from its row (hint), and it is
   selected again if it comes back. The view follows the selection only when the user moves
-  it, and when Mount selects what it mounted.
+  it, and when Mount selects what it mounted. 10/18/26: when End task's kill waited for a call
+  (the task was still listed right after it), the first whole reading without the task puts
+  "has ended" in the status bar in place of kill's words, if the selection still follows it (a
+  reading cut to the newest 128 says nothing: the task may only be off it); Find next with
+  nothing selected starts at the row the followed task was on, as Down does; Disks' M, E and
+  Enter with nothing selected say so.
 * **Disks uses lsblk's own code.** `bdev_describe()` and `bdev_walk()` (driver/bdev.c,
   include/sys/bdev.h) are lsblk's row and order, made public; lsblk itself calls them and
   prints byte for byte what it printed before. guisys_disks() (shell/guisys_disk.c) adds the
@@ -187,10 +201,10 @@ Keys, for the table in docs/GUI.md:
 * **Shared code of the track** is shell/guimeter.c (sizes in KB for people, the share of a total
   in 32-bit arithmetic, the bar with coral from exactly 90%, a list's key moves), declared in
   shell/gui_sys.h and built for the host tests on the Makefile's GUI_SYS_OBJ line.
-* **State.** gui_state grows by 3,448 bytes (838,600 to 842,048 at -m32): GUI_TASK_MAX from 64
+* **State.** gui_state grows by 3,468 bytes (838,600 to 842,068 at -m32): GUI_TASK_MAX from 64
   to 128 (2,304), four fields at the end of struct gui_disk (lsblk's size string, a mounted
   volume's file system, label and statfs error) in Disks' 32 rows, and the two windows' own
-  fields (include/sys/gui_sysapps.h).
+  fields (include/sys/gui_sysapps.h; 10/18/26: the pid and name End task's kill waits for).
 
 ## Checks
 
@@ -213,18 +227,34 @@ Keys, for the table in docs/GUI.md:
   rest of the kernel (tests/host/guisys_host.c): kill's refusals and words, the patient kill
   only for what may be ended, the tasks' copy and its failure, Disks' rows with the unplugged
   ones in their order, statfs failures, the 32-row cap keeping the unplugged rows, and a
-  failure that leaves the rows alone.
+  failure that leaves the rows alone. 10/18/26: End task's kill that waits for a call, then
+  "has ended" (not after the user moved on, nor while the list is cut), Find next with the
+  followed task gone, Disks' M, E and Enter with nothing selected, kill of a task that is
+  ending already or was killed already (the stand-in kill_task_patient() has the kernel's
+  rule).
+* shell/selftest.c (`selftest`, which the smoke test runs) tries the kernel's side on the
+  target, with kernel threads, in about 2.7 s: kill_task_patient() of one in its own code (it
+  ends at once), of one in a kernel command whose wait a kill cuts short (sleep_intr(): it ends
+  at once, at its call's end), and of one in a call that does not look (a loop of sleep_ms()
+  past KILL_WAIT_MS: alive 2.25 s later, the kernel log's "... after it was asked to end:
+  waiting for its end", then it ends with its call); kill_task() 0.5 s after End task's kill
+  (killed at once 2 s after itself, not after End task's, and the log's "killed at once"); and
+  a hangup's kill (closing the master of a pseudo-terminal of its own, the thread alone on it)
+  followed by End task's: the hangup's rule and log line stand, and it ends with its call.
+  task_info_all() is checked against task_info() over the live list with interrupts off: the
+  whole list, the newest 3 in order, none.
 * tools/gui_apps_sys.py (qemu-usb.py's guiapps scenario) reads the windows back from the
   framebuffer, cell by cell against the console font, with the pointer parked away from them:
   the shells on F1-F4 and the kernel's threads, sorting by name and back, End task refused
   for the desktop's own shell and done for the shell on F2 (init starts a new one, with a new
-  pid), plausible memory for the 512 MB guest, the System page (QEMU's processor, UEFI,
-  laptop, 1920x1080x32, an uptime that goes on), lsblk's devices in Disks (its columns found
-  from its headings), Mount of the data stick (its label and a bar: the stick carries
-  zz-sys-fill.bin, 4 MB, for it, at its root where it sorts after every other track's file
-  and folder, so their lists keep their order) and Eject, after which the stick is read back
-  on the host and checked by fsck. The stick is left unmounted, also after a failure (found
-  by its name), and Esc is sent only to a menu or a dialog that is open.
+  pid, and the status bar says the old one has ended), plausible memory for the 512 MB guest,
+  the System page (QEMU's processor, UEFI, laptop, 1920x1080x32, an uptime that goes on),
+  lsblk's devices in Disks (its columns found from its headings), Mount of the data stick
+  (its label and a bar: the stick carries zz-sys-fill.bin, 4 MB, for it, at its root where it
+  sorts after every other track's file and folder, so their lists keep their order) and
+  Eject, after which the stick is read back on the host and checked by fsck. The stick is
+  left unmounted, also after a failure (found by its name), and Esc is sent only to a menu or
+  a dialog that is open.
 
 ## Open, or for later
 
@@ -235,5 +265,5 @@ Keys, for the table in docs/GUI.md:
 * vfs_statfs() takes the file system's lock: while another task holds it for a long write,
   Disks' reading (and the desktop's frame) waits for that write.
 * A task whose system call never ends is never ended by End task; the shell's `kill` command
-  (which kills at once after 2 s) still can.
+  (which kills at once after 2 s) still can. The guide says so.
 * The laptop has not run these windows; QEMU has.

@@ -17,7 +17,8 @@ docs/superpowers/plans/2026-10-17-gui-suite.md; the window manager reaches it th
 gui_app_disks (struct gui_app, shell/guipriv.h).
 10/18/26: the name followed stays followed until the user moves the selection, also through a
 reading without it (nothing is selected meanwhile); a reading that fails keeps the last one's
-rows; Eject refuses (it does not wait) while Notepad has unsaved changes there.
+rows; Eject refuses (it does not wait) while Notepad has unsaved changes there; M, E and Enter
+with nothing selected say so.
 */
 #include "gui_sys.h"
 #include <string.h>
@@ -181,6 +182,14 @@ static void choose(struct gui_state *g, int row) {
 
 /**** Mount, Eject, Show in Files ****/
 
+/* 10/18/26: M, E or Enter with no row selected: the status bar says so, and why when the device followed went */
+static void none_selected(struct gui_state *g, const char *what) {
+    struct gui_disks *k = &g->disks;
+    if(k->name[0])
+        snprintf(k->status, sizeof(k->status), "%s: nothing is selected (%s is not there any more)", what, k->name);
+    else snprintf(k->status, sizeof(k->status), "%s: nothing is selected", what);
+}
+
 static void mount(struct gui_state *g) {
     struct gui_disks *k = &g->disks;
     const struct gui_disk *d = selected(k);
@@ -189,7 +198,7 @@ static void mount(struct gui_state *g) {
     int v = mount_row(g), r;
     g->dirty = true;
     if(v < 0) {
-        if(!d) return;
+        if(!d) { none_selected(g, "Mount"); return; }
         if(!g->fs || !g->fs->mount) snprintf(k->status, sizeof(k->status), "Mount needs the file systems: none here");
         else if(!usb(d))
             snprintf(k->status, sizeof(k->status), "%s is not on a USB drive: Disks mounts USB volumes", d->name);
@@ -220,7 +229,7 @@ static void eject(struct gui_state *g) {
     int i, r;
     g->dirty = true;
     if(!disk) {
-        if(!d) return;
+        if(!d) { none_selected(g, "Eject"); return; }
         if(!g->fs || !g->fs->eject) snprintf(k->status, sizeof(k->status), "Eject needs the file systems: none here");
         else if(!usb(d))
             snprintf(k->status, sizeof(k->status), "%s is not on a USB drive: Disks ejects USB sticks", d->name);

@@ -7,7 +7,9 @@
    with stand-ins): kill's refusals and words, the tasks' copy, Disks' rows (unplugged ones, their order, the
    32-row cap, statfs failures); and readings that miss a row once or fail, the pages at the smallest height, the
    task count's "of", the meters' edges, ties when reversed, Find around the end, Notepad's file on a mount whose
-   name starts as another's or on an unplugged stick, and Mount scrolling to what it mounted. */
+   name starts as another's or on an unplugged stick, and Mount scrolling to what it mounted.
+   10/18/26 (round 2): End task's kill that waits for a call, then a reading without the task; Find with the followed
+   task gone; Disks' M, E and Enter with nothing selected; kill of a task that is ending already. */
 #include "guisys_host.c"                /* first: the kernel's headers before the desktop's */
 #include "gui_fake.h"
 #include "../../shell/gui_sys.h"
@@ -355,7 +357,7 @@ static void monitor_end(void) {
     key(GUI_DELETE);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == gui_app_act(GUI_MONITOR, 1) && g.dialog.choice == 2);
     CHECK(!strcmp(g.dialog.text[0], "End edit (pid 9) on F2?") &&
-          !strcmp(g.dialog.text[1], "It ends after its system call; unsaved work is lost."));
+          !strcmp(g.dialog.text[1], "Ends now or after a system call; unsaved work is lost."));
     fake_screen(&screen, 960, 540);
     gui_render(&g, &screen);
     CHECK(fake_guards(960, 540));
@@ -397,7 +399,7 @@ static void monitor_end(void) {
     key(GUI_DOWN);
     key(GUI_DELETE);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.text[0], "End surfsh (pid 5) on F1?") &&
-          !strcmp(g.dialog.text[1], "It ends after its system call; init starts another."));
+          !strcmp(g.dialog.text[1], "Ends now or after a system call; init starts another."));
     key(27);
     /* a task that ended while the question was open */
     key(GUI_DELETE);
@@ -765,6 +767,7 @@ static void kernel_kill(void) {
     ktask_add(10, "cat", TF_USER, f2, 0);
     ktask_add(11, "ls", TF_USER, f2, 0)->state = TS_DEAD;
     curTask = ktask_add(12, "surfsh", TF_USER, f1, TC_SYSCALL | TC_COMMAND);   /* the shell that ran gui */
+    ktask_add(13, "more", TF_USER, f2, TC_EXIT);                               /* in task_exit(): its files close */
     CHECK(sys->kill(sys->ctx, 0, msg, sizeof(msg)) == -EACCES &&
           !strcmp(msg, "Kernel Idle Task (pid 0) is the idle task: the kernel's own"));
     CHECK(sys->kill(sys->ctx, 1, msg, sizeof(msg)) == -EACCES &&
@@ -786,6 +789,13 @@ static void kernel_kill(void) {
     CHECK(sys->kill(sys->ctx, 5, msg, sizeof(msg)) == 0 && !strcmp(msg, "surfsh (pid 5) ends when its kernel command does"));
     CHECK(sys->kill(sys->ctx, 77, msg, sizeof(msg)) == -ENOENT && !strcmp(msg, "no task with pid 77 any more"));
     CHECK(patient_kills == 3);
+    CHECK(sys->kill(sys->ctx, 13, msg, sizeof(msg)) == 0 && !strcmp(msg, "more (pid 13) is ending already") &&
+          patient_kills == 3 && !task_find(13)->intr);
+    /* killed already (the shell's kill, say): that kill's rule stands, and the words are the call's */
+    t = task_find(9);
+    t->intr = TI_KILL;
+    CHECK(sys->kill(sys->ctx, 9, msg, sizeof(msg)) == 0 && !strcmp(msg, "edit (pid 9) ends when its system call does") &&
+          patient_kills == 4 && t->intr == TI_KILL);
     curTask = idle_task = init_task_ptr = NULL;
 }
 
@@ -1140,6 +1150,114 @@ static void disks_mount_view(void) {
     CHECK(!strcmp(mounted_dev, "usb3p1") && g.disks.selected == 4 && g.disks.top <= 4 && 4 < g.disks.top + rows);
 }
 
+/**** 10/18/26 (round 2 of the review) ****/
+
+/* a kill that waits for the call: the task stays in the list until the call ends */
+static struct gui_sys waiting_sys;
+static int waiting_kill(void *ctx, int pid, char *msg, size_t n) {
+    (void)ctx;
+    fake_killed = pid;
+    snprintf(msg, n, "edit (pid %d) ends when its system call does", pid);
+    return 0;
+}
+
+/* End task's kill waits: the status bar says so until a reading is without the task, then that it has ended; not if
+   the user has moved on, nor while the list is cut to the newest (the task may only be off it); a kill that ended the
+   task at once says so itself */
+static void monitor_ending(void) {
+    int pid;
+    desktop(960, 540);
+    waiting_sys = fake_sys;
+    waiting_sys.kill = waiting_kill;
+    g.sys = &waiting_sys;
+    gui_open(&g, GUI_MONITOR);
+    key(GUI_END);                                       /* edit, pid 9 */
+    key(GUI_DELETE); key(9); key('\r');
+    CHECK(fake_killed == 9 && selected_pid() == 9 && g.monitor.ending == 9 &&
+          !strcmp(g.monitor.status, "edit (pid 9) ends when its system call does"));
+    later(1000);                                        /* still in its call */
+    CHECK(g.monitor.ending == 9 && !strcmp(g.monitor.status, "edit (pid 9) ends when its system call does"));
+    drop_task(9);                                       /* the call ended */
+    later(1000);
+    CHECK(g.monitor.selected == -1 && g.monitor.pid == 9 && g.monitor.ending == -1 &&
+          !strcmp(g.monitor.status, "edit (pid 9) has ended"));
+    /* moved on before it ended: nothing is said */
+    add_task(9, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "edit");
+    later(1000);
+    CHECK(selected_pid() == 9);
+    key(GUI_DELETE); key(9); key('\r');
+    key(GUI_HOME);
+    drop_task(9);
+    later(1000);
+    CHECK(g.monitor.ending == -1 && selected_pid() == 0 && !g.monitor.status[0]);
+    /* the list cut to the newest: not yet; then the whole list without it */
+    add_task(9, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "edit");
+    later(1000);
+    key(GUI_END);
+    key(GUI_DELETE); key(9); key('\r');
+    CHECK(g.monitor.ending == 9);
+    drop_task(9);
+    for(pid = 100; fake_ntasks < GUI_TASK_MAX; pid++) add_task(pid, GUI_TASK_SLEEPING, -1, 0, "worker");
+    later(1000);
+    CHECK(g.monitor.ending == 9 && !strcmp(g.monitor.status, "edit (pid 9) ends when its system call does"));
+    drop_task(100);
+    later(1000);
+    CHECK(g.monitor.ending == -1 && !strcmp(g.monitor.status, "edit (pid 9) has ended"));
+    /* ended at once */
+    g.sys = &fake_sys;
+    fake_sys_reset();
+    gui_close(&g, GUI_MONITOR);
+    gui_open(&g, GUI_MONITOR);
+    key(GUI_END);
+    key(GUI_DELETE); key(9); key('\r');
+    CHECK(fake_killed == 9 && g.monitor.ending == -1 && !strcmp(g.monitor.status, "ended edit (pid 9)"));
+}
+
+/* Find next with the followed task gone: from the row it was on (the task there now first), as Down goes on */
+static void monitor_find_gone(void) {
+    desktop(960, 540);
+    add_task(20, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "edit");
+    gui_open(&g, GUI_MONITOR);
+    key(GUI_END); key(GUI_UP);                          /* edit, pid 9, row 4 */
+    CHECK(selected_pid() == 9 && g.monitor.selected == 4);
+    drop_task(9);
+    later(1000);
+    CHECK(g.monitor.selected == -1 && g.monitor.hint == 4);
+    key(6);                                             /* "e": idle (row 0) has one too */
+    fake_type(&g, "e\r");
+    CHECK(selected_pid() == 20 && !strcmp(g.monitor.status, "Found edit (pid 20)"));
+    /* gone from the last row: around to the top */
+    drop_task(20);
+    later(1000);
+    CHECK(g.monitor.selected == -1 && g.monitor.hint == 4 && g.monitor.ntasks == 4);
+    key(6);
+    fake_type(&g, "e\r");
+    CHECK(selected_pid() == 0 && !strcmp(g.monitor.status, "Found idle (pid 0)"));
+}
+
+/* Disks' M, E and Enter with nothing selected: the status bar says so (and why, when the device followed went) */
+static void disks_none(void) {
+    desktop(960, 540);
+    gui_open(&g, GUI_DISKS);
+    select_disk("usb1p1");
+    fake_ndisks = 3;                                    /* the stick pulled out */
+    later(2000);
+    CHECK(g.disks.selected == -1 && !strcmp(g.disks.name, "usb1p1"));
+    key('m');
+    CHECK(!mounted_dev[0] && !strcmp(g.disks.status, "Mount: nothing is selected (usb1p1 is not there any more)"));
+    g.disks.status[0] = 0;
+    key('e');
+    CHECK(!ejected_dev[0] && !strcmp(g.disks.status, "Eject: nothing is selected (usb1p1 is not there any more)"));
+    g.disks.status[0] = 0;
+    key('\r');
+    CHECK(!mounted_dev[0] && !strcmp(g.disks.status, "Mount: nothing is selected (usb1p1 is not there any more)"));
+    fake_ndisks = 0;                                    /* no device at all: none followed */
+    gui_close(&g, GUI_DISKS);
+    gui_open(&g, GUI_DISKS);
+    key('e');
+    CHECK(g.disks.selected == -1 && !strcmp(g.disks.status, "Eject: nothing is selected"));
+}
+
 int main(void) {
     windows(640, 400);
     windows(960, 540);
@@ -1162,5 +1280,8 @@ int main(void) {
     monitor_ties();
     disks_guard();
     disks_mount_view();
+    monitor_ending();
+    monitor_find_gone();
+    disks_none();
     return fake_done("test_guisys");
 }

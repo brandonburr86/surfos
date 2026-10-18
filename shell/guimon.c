@@ -17,7 +17,8 @@ the window manager reaches it through gui_app_monitor (struct gui_app, shell/gui
 10/18/26: the pid followed stays followed until the user moves the selection, also through a
 reading without it (a task that ended, or one a reading missed); a reading that fails keeps
 what the last one read; the Memory and System pages scroll in a short window; End task's kill
-waits for the end of the system call the task is in, and never ends the shells above the desktop.
+waits for the end of the system call the task is in, and never ends the shells above the desktop;
+once a task End task waited for is gone from a reading, the status bar says it has ended.
 */
 #include "gui_sys.h"
 #include <string.h>
@@ -179,6 +180,19 @@ static void choose(struct gui_state *g, int row) {
     show_selected(g);
 }
 
+/* 10/18/26: End task's kill waited for the end of a call (the task was still in the list after it): a reading without
+   the task (the whole list: not one cut to the newest) says it has ended, in the status bar while the selection still
+   follows it; once the user has moved on, nothing is said */
+static void ended(struct gui_state *g) {
+    struct gui_monitor *m = &g->monitor;
+    int i;
+    for(i = 0; i < m->ntasks && m->task[i].pid != m->ending; i++) ;
+    if(i < m->ntasks || m->ntasks == GUI_TASK_MAX) return;
+    if(m->pid == m->ending)
+        snprintf(m->status, sizeof(m->status), "%s (pid %d) has ended", m->ending_name, m->ending);
+    m->ending = -1;
+}
+
 /* everything again, from struct gui_sys (from the handlers and the tick only). 10/18/26: a reading that fails
    keeps what the last one read (tasks leaves the rows as they were when it fails: sys/gui_sys.h) */
 static void read_all(struct gui_state *g) {
@@ -199,6 +213,7 @@ static void read_all(struct gui_state *g) {
     if(n >= 0) {
         m->ntasks = n > GUI_TASK_MAX ? GUI_TASK_MAX : n;
         arrange(g);
+        if(m->ending >= 0) ended(g);
     }
     m->err_memory = g->sys->memory ? g->sys->memory(g->sys->ctx, &mem) : -ENOSYS;
     if(!m->err_memory) {
@@ -256,10 +271,11 @@ static void end_task(struct gui_state *g) {
     console_name(t->tty, where, sizeof(where));
     snprintf(line, sizeof(line), "End %s (pid %d)%s%s?", t->name, t->pid, t->tty >= 0 ? " on " : "",
              t->tty >= 0 ? where : "");
-    /* 10/18/26: the kill waits for the end of the system call the task is in (kill_task_patient()) */
+    /* 10/18/26: in its own code the task ends at once; inside a system call, when the call ends (kill_task_patient()).
+       Which of the two the kill meets, the list cannot tell (a reading is a second old): the question names both */
     dialog_confirm(g, gui_app_act(GUI_MONITOR, DLG_END), "End task", line,
-                   (t->flags & GUI_TASK_SHELL) ? "It ends after its system call; init starts another." :
-                   "It ends after its system call; unsaved work is lost.", "End task", NULL, "Cancel");
+                   (t->flags & GUI_TASK_SHELL) ? "Ends now or after a system call; init starts another." :
+                   "Ends now or after a system call; unsaved work is lost.", "End task", NULL, "Cancel");
     g->dialog.choice = 2;                               /* Enter alone ends nothing */
     snprintf(g->dialog.target, sizeof(g->dialog.target), "%d", t->pid);
 }
@@ -275,13 +291,15 @@ static bool has(const char *name, const char *what) {
     return false;
 }
 
-/* the next task after the selection whose name has m->find, around the end */
+/* the next task after the selection whose name has m->find, around the end. 10/18/26: with nothing selected, from
+   the row the followed task was on (hint: the task now there first), as Down goes on from there */
 static void find_next(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
-    int k, row;
+    int k, row, start;
     if(m->page != GUI_MON_PROCESSES) set_page(g, GUI_MON_PROCESSES);
-    for(k = 1; k <= m->ntasks; k++) {
-        row = ((m->selected < 0 ? -1 : m->selected) + k) % m->ntasks;
+    start = m->selected >= 0 ? m->selected + 1 : m->hint >= 0 ? gui_clamp(m->hint, 0, m->ntasks) : 0;
+    for(k = 0; k < m->ntasks; k++) {
+        row = (start + k) % m->ntasks;
         if(has(m->task[row].name, m->find)) {
             choose(g, row);
             snprintf(m->status, sizeof(m->status), "Found %s (pid %d)", m->task[row].name, m->task[row].pid);
@@ -378,16 +396,23 @@ static void edit(struct gui_state *g, int act) {
 static void answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
     struct gui_monitor *m = &g->monitor;
     char msg[GUI_STATUS];
-    int r;
+    int r, pid, row;
     g->dirty = true;
     if(button != 0) return;
     switch(act) {
     case DLG_END:
         if(!g->sys || !g->sys->kill) return;
         msg[0] = 0;
-        r = g->sys->kill(g->sys->ctx, atoi(target), msg, sizeof(msg));
+        pid = atoi(target);
+        r = g->sys->kill(g->sys->ctx, pid, msg, sizeof(msg));
         strlcpy(m->status, msg[0] ? msg : r ? "Not ended" : "Ended", sizeof(m->status));
+        m->ending = -1;
         read_all(g);                                    /* what is left, at once */
+        for(row = 0; !r && row < m->ntasks; row++) {    /* 10/18/26: still there: it ends when its call does (ended()) */
+            if(m->task[row].pid != pid) continue;
+            m->ending = pid;
+            strlcpy(m->ending_name, m->task[row].name, sizeof(m->ending_name));
+        }
         break;
     case DLG_FIND:
         strlcpy(m->find, text, sizeof(m->find));
@@ -538,6 +563,7 @@ static void opened(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
     m->status[0] = 0;                                   /* the page and the order stay as they were */
     m->selected = m->pid = m->hint = -1;                /* the first task, once read (arrange()) */
+    m->ending = -1;
     m->top = 0;
     m->thumb = false;
     read_all(g);

@@ -47,6 +47,8 @@ struct gui_monitor {
     struct gui_memory mem;
     struct gui_machine machine;
     char status[GUI_STATUS];
+    int ending;                         /* 10/18/26: the pid End task's kill waits for (still listed after it), -1 none */
+    char ending_name[GUI_TASK_NAME];    /* ... and its name, for "has ended" */
 };
 
 struct gui_disks {

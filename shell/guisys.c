@@ -109,11 +109,12 @@ static int machine(void *ctx, struct gui_machine *out) {
    10/18/26: nor the shells this desktop runs in (curTask's parents): init would start a new shell on the
    desktop's console, which would take the keys meant for the desktop. And the kill is the one that waits for
    the end of the call however long (kill_task_patient()): kill_task()'s, 2 s later, kills at once inside a
-   call, and a zombie holding a volume's lock would stop the desktop at Disks' next reading */
+   call, and a zombie holding a volume's lock would stop the desktop at Disks' next reading. A task in task_exit()
+   (TC_EXIT: its files are closing) is ending already, and says so */
 static int kill(void *ctx, int pid, char *msg, size_t n) {
     char name[TASK_NAME_LEN];
     const char *no = NULL, *call = NULL;
-    bool ended = false, above = false;
+    bool ended = false, ending = false, above = false;
     surf_task *t, *p;
     u_long flags;
     int depth;
@@ -130,6 +131,7 @@ static int kill(void *ctx, int pid, char *msg, size_t n) {
         else if(above) no = "runs the shell this desktop runs in";
         else if(!(t->flags & TF_USER)) no = "is a kernel thread: the shell's kill command ends one";
         else if(t->state == TS_DEAD) ended = true;
+        else if(t->in_call & TC_EXIT) ending = true;
         else {
             call = !t->in_call ? NULL : (t->in_call & TC_COMMAND) ? "kernel command" : "system call";
             if(!kill_task_patient(t)) call = NULL;      /* it ended at once */
@@ -145,6 +147,7 @@ static int kill(void *ctx, int pid, char *msg, size_t n) {
         return -EACCES;
     }
     if(ended) snprintf(msg, n, "%s (pid %d) had ended already", name, pid);
+    else if(ending) snprintf(msg, n, "%s (pid %d) is ending already", name, pid);
     else if(call) snprintf(msg, n, "%s (pid %d) ends when its %s does", name, pid, call);
     else snprintf(msg, n, "ended %s (pid %d)", name, pid);
     return 0;
