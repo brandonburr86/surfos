@@ -260,29 +260,41 @@ has one Terminal window.
 **System Monitor** shows what the machine is doing. Its toolbar has three tabs,
 Processes, Memory and System, and End task; Left and Right also change the page. It
 reads the system again every second while it is open. Tucked away in the taskbar it
-waits, and reads again as soon as it is back.
+waits, and reads again as soon as it is back. A reading that fails keeps what was read
+before, and the status bar says so.
 
 * **Processes** lists every task as `ps` does: its pid, name, state (running, ready,
   blocked, sleeping, zombie), console (F1-F4, `pty n` for a terminal's session, `-` for
-  none) and whether it is a program or a kernel thread. Kernel threads print on F1, so
-  their console is F1.
+  none) and whether it is a program or a kernel thread. A kernel thread's console is that
+  of the task that started it: the boot's threads are on F1, a `tcpecho` started from F2
+  is on F2, and one started from a terminal's session is on F1.
   * **Sorting.** Click a heading to sort by it, and again to reverse the order (a ▲ or ▼
     beside it says which). S sorts by the next column and R reverses it. Tasks that sort
-    alike stay in pid order.
+    alike stay in ascending pid order, also when the order is reversed.
   * **Selecting.** Click a task, or move with the arrows, Page Up, Page Down, Home and
-    End. The selection stays on its task while the list changes; when the task ends, it
-    stays on its row. The wheel and the scroll bar move the list.
-  * **End task** (or Del) asks first ("End edit (pid 9) on F2?"), with Cancel as the
-    default, so Enter alone ends nothing.
-    * It ends programs only: for a kernel thread the button is greyed, and Del says why in
-      the status bar.
-    * The kernel refuses init, the idle task, and this desktop's own task, the shell that
-      ran `gui` ("surfsh (pid 4) runs this desktop: Ctrl+Q leaves it"). The status bar
-      says so.
-    * A console's shell may be ended. init then starts a new one on that console, with a
-      new pid, as when the shell's `kill` ends it. Three such ends within 30 seconds leave
-      that console with the recovery shell.
-  * The status bar describes the selected task, and counts the tasks at its right.
+    End. The wheel and the scroll bar move the list. The selection follows its task while
+    the list changes. When the task is not in a reading (it ended), nothing is selected
+    until you move: the status bar says its pid is not in the list now, Down goes on from
+    its row, and if it is listed again it is selected again.
+  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then "It ends after its
+    system call; unsaved work is lost."), with Cancel as the default, so Enter alone ends
+    nothing.
+    * It ends programs only: for a kernel thread (init and the idle task are kernel
+      threads) the button is greyed, and Del says why in the status bar.
+    * A program running its own code ends at once. One inside a system call or a kernel
+      command ends when that call does, however long it takes ("edit (pid 9) ends when its
+      system call does"), so that nothing it holds, such as a volume's lock, is left held.
+      The shell's `kill` still ends a task whose call never returns.
+    * The kernel refuses this desktop's own task, the shell that ran `gui` ("surfsh (pid
+      12) runs this desktop: Ctrl+Q leaves it"), and the shells above it ("surfsh (pid 4)
+      runs the shell this desktop runs in"), since a new shell on the desktop's console
+      would take its keys. The status bar says so.
+    * Any other console's shell may be ended. init then starts a new one on that console,
+      with a new pid, as when the shell's `kill` ends it. Three such ends within 30
+      seconds leave that console with the recovery shell.
+  * The status bar describes the selected task, and counts the tasks at its right. Up to
+    128 tasks are listed; with more, the newest 128, and the count says "the newest 128
+    of N".
 * **Memory** shows physical memory, the kernel heap and the DMA heap, each with a bar of
   what is used (teal; coral from 90%) and its numbers.
   * Physical memory is the 4 KB pages SurfOS manages, the RAM the firmware reported, and
@@ -295,14 +307,17 @@ waits, and reads again as soon as it is back.
   * the display: the framebuffer's mode, and the desktop's size in its own pixels;
   * the build (/initrd/etc/build-id) and the uptime (h:mm:ss);
   * how many tasks and kernel timers there are.
+* **Short windows.** In a short window the Memory and System pages scroll: the arrows,
+  Page Up and Down, Home and End, the wheel, or their scroll bar.
 * **The Edit menu** is System Monitor's while it is in front.
   * Copy (Ctrl+C) copies the selected task's line, or the Memory or System page as text,
-    for Notepad or a bug report.
+    for Notepad or a bug report. A page that could never be read copies nothing, and the
+    status bar says so.
   * Find (Ctrl+F) selects the next task whose name holds what you type, in either case,
-    and Find next does it again.
+    going round past the end, and Find next does it again.
   * Go to pid (Ctrl+L) selects a task by its pid.
-* Limits: no processor time per task; at most 64 tasks are listed ("64 of N tasks");
-  names are cut at 15 characters.
+* Limits: no processor time per task; at most 128 tasks are listed, the newest; names
+  are cut at 15 characters.
 
 ### Disks
 
@@ -314,14 +329,16 @@ under it. For each it shows, in lsblk's own words:
 
 The columns are as wide as what they hold, and the model gives way first when the window
 is narrow, as in lsblk. Disks reads the devices again about every two seconds while it
-is open, so a stick that is plugged in appears by itself.
+is open, so a stick that is plugged in appears by itself. A reading that fails keeps the
+list read before, and the status bar says so.
 
 * **Details.** Below the list are the selected device's details: what it is (a USB disk
   and its model, or a partition of which table). For a mounted volume they add where it
   is mounted, its file system, read-only or read-write, its volume label, and a bar of
-  the space used, with the numbers.
+  the space used, with the numbers (or why its file system could not say).
 * **Mount** (M, or Enter) mounts the selected USB volume at `/<device>`. On a stick's own
-  row it mounts the stick's first partition that is not mounted.
+  row it mounts the stick's first partition that is not mounted, and selects it,
+  scrolling to it.
 * **Eject** (E) unmounts every volume of the selected stick and flushes it. The status
   bar then says `usb1: safe to remove`.
 * **The rules of `mount` and `eject`.** Mount and Eject are the shell's own commands, and
@@ -329,22 +346,28 @@ is open, so a stick that is plugged in appears by itself.
   * the SurfOS boot drive mounts read-only (the details say so beforehand);
   * a busy volume is not ejected;
   * nothing is mounted unless you ask;
-  * Eject also waits while Notepad has unsaved changes to a file on that stick, as in
-    Files.
+  * Eject also refuses, with a message in the status bar, while Notepad has unsaved
+    changes to a file on that stick, as Files does.
 * **Show in Files** (or Enter on a mounted volume) opens Files at the mount point. Files,
   when it is open, shows a mount or an eject made in Disks at once.
 * **Refresh** (Ctrl+R) reads the devices again now.
   * A stick pulled out while mounted stays in the list, `unplugged: eject it`, until
     Eject unmounts it.
-  * When a device is gone from the list, the selection stays on its row, and the status
-    bar says the device is not there any more.
+  * A device that is not in a reading (pulled out) stays followed: nothing is selected,
+    the status bar says it is not there any more, Down goes on from its row, and if it
+    comes back it is selected again.
 * Ctrl+C copies the selected device's line. A double-click on a row is Enter.
 * Limits: Mount and Eject are for USB volumes; the initrd and internal disks are only
   shown.
-  * An unmounted volume's own label is not shown. It is on the device, and reading it
-    would mean waiting for the stick; lsblk does not show it either.
+  * Disks reads nothing from a device itself, so an unmounted volume's own label is not
+    shown (lsblk does not show it either).
+  * How full a mounted volume is comes from its file system, which answers once another
+    task's write to that volume is done. So Disks can pause while a long copy to that
+    volume runs. FAT counts a read-only volume's free space once, when it is mounted or
+    first asked.
   * A file system that keeps no count of its space (the initrd's tarfs) has no bar.
-  * Up to 32 devices are listed.
+  * Up to 32 rows are listed. With more devices, the sticks pulled out while mounted are
+    kept, so that they can still be ejected.
 
 ### Log
 
@@ -473,7 +496,8 @@ toolbar's Open or press O: the chooser lists a folder as Notepad's does.
     keeping its proportions: 1920 x 1080 is kept at 1365 x 768, and the status bar says
     `kept at 1365 x 768`.
   * A picture is read a piece at a time, one piece in each frame the desktop draws (at
-    most 16 reads, and 256 KB plus one 64 KB chunk, a frame). So the desktop goes on
+    most 128 reads, and 256 KB plus one 64 KB chunk, a frame, and a single read when it
+    opens). So the desktop goes on
     answering while a big file is read. The window and the status bar count the percent
     (`Reading sea.bmp... 45%`), and Esc stops the reading.
   * When a file cannot be read to its end (it was cut short, or the stick was pulled
