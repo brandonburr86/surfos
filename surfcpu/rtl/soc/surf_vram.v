@@ -4,8 +4,12 @@ SurfCPU video memory
 File: surf_vram.v Date: 10/18/26 (SurfGPU)
 --------------------
 VRAM (docs/GPU.md section 2, the vram region of docs/MEMORY-MAP.md): BYTES (307,200) bytes of
-true dual-port block RAM in banks of 4,096 words (surf_vram_bank; the last bank holds what is
-left, 3,072 words), word address bits 16:12 choosing the bank.
+true dual-port block RAM in banks of 2**BANK_LOG2 words (surf_vram_bank; the last bank holds what
+is left), the word address's top bits choosing the bank. With 16,384-word banks (BANK_LOG2 14, the
+default) Yosys builds each bank from sixteen RAMB36 of 16Kx2, as it builds the scratch RAM, and the
+last (11,264 words) from twelve: 76 in all, and each port's bank multiplexer has 5 inputs per bit.
+(4,096-word banks took 75 RAMB36, but their 19-input multiplexers gathered 672 block RAM outputs
+per port in one place, and nextpnr could not route that in reasonable time: docs/GPU.md 12.2.)
 
 Port A (clk) has two users. The CPU's window is a SurfBus slave, always ready: its request
 takes the port in the cycle it is offered, and its answer comes in the next cycle; an offset
@@ -20,7 +24,8 @@ Port B (pix_clk) is the scan-out's: pix_data is the word at pix_addr two pix_clk
 there in the instant port A writes it may show either value for that one read.
 */
 module surf_vram #(
-    parameter integer BYTES = 307200
+    parameter integer BYTES     = 307200,
+    parameter integer BANK_LOG2 = 14
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -50,7 +55,7 @@ module surf_vram #(
     output wire [31:0] pix_data
 );
     localparam integer WORDS      = BYTES / 4;
-    localparam integer BANK_WORDS = 4096;
+    localparam integer BANK_WORDS = 1 << BANK_LOG2;
     localparam integer BANKS      = (WORDS + BANK_WORDS - 1) / BANK_WORDS;
     localparam integer LAST_WORDS = WORDS - (BANKS - 1) * BANK_WORDS;
     localparam [31:0]  BYTES_W    = BYTES;
@@ -68,23 +73,23 @@ module surf_vram #(
     wire        a_rd    = cpu ? (!s_req_write && cpu_ok) : (g_gnt && !g_we && g_ok);
     wire [3:0]  a_be    = cpu ? s_req_be : g_be;
     wire [31:0] a_wdata = cpu ? s_req_wdata : g_wdata;
-    wire [4:0]  a_bank  = a_addr[16:12];
+    wire [16-BANK_LOG2:0] a_bank = a_addr[16:BANK_LOG2];
 
     // ---------------------------------------------------------------- the banks
     wire [32*BANKS-1:0] a_q, b_q;
     genvar b;
     generate
         for (b = 0; b < BANKS; b = b + 1) begin : g_bank
-            surf_vram_bank #(.DEPTH(b == BANKS - 1 ? LAST_WORDS : BANK_WORDS)) u_bank (
+            surf_vram_bank #(.DEPTH(b == BANKS - 1 ? LAST_WORDS : BANK_WORDS), .AW(BANK_LOG2)) u_bank (
                 .clk(clk), .a_en((a_wr || a_rd) && a_bank == b), .a_we(a_wr), .a_be(a_be),
-                .a_addr(a_addr[11:0]), .a_wdata(a_wdata), .a_q(a_q[32*b +: 32]),
-                .pix_clk(pix_clk), .b_addr(pix_addr[11:0]), .b_q(b_q[32*b +: 32]));
+                .a_addr(a_addr[BANK_LOG2-1:0]), .a_wdata(a_wdata), .a_q(a_q[32*b +: 32]),
+                .pix_clk(pix_clk), .b_addr(pix_addr[BANK_LOG2-1:0]), .b_q(b_q[32*b +: 32]));
         end
     endgenerate
 
     // ---------------------------------------------------------------- port A: answers
     reg        rd_q      = 1'b0;      // the last cycle read a word (its bank's a_q holds it)
-    reg [4:0]  rd_bank_q = 5'd0;
+    reg [16-BANK_LOG2:0] rd_bank_q = 0;
     reg        rsp_v_q   = 1'b0, rsp_e_q = 1'b0, g_rv_q = 1'b0;
     always @(posedge clk) begin
         if (rst) begin
@@ -110,11 +115,11 @@ module surf_vram #(
     assign g_rdata     = a_word;
 
     // ---------------------------------------------------------------- port B
-    reg [4:0]  pb_bank = 5'd0;
+    reg [16-BANK_LOG2:0] pb_bank = 0;
     reg        pb_ok   = 1'b0;
     reg [31:0] pix_q   = 32'h0;
     always @(posedge pix_clk) begin
-        pb_bank <= pix_addr[16:12];
+        pb_bank <= pix_addr[16:BANK_LOG2];
         pb_ok   <= {15'd0, pix_addr} < WORDS_W;
         pix_q   <= pb_ok ? b_q[32*pb_bank +: 32] : 32'h0;
     end
