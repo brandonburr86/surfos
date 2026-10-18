@@ -728,7 +728,7 @@ static int cmd_cp(int argc, char **argv) {
     struct file *in, *out;
     char *buf;
     u_long total = 0;
-    int r, w;
+    int r, w, cut = 0;
     if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return CMD_USAGE; }
     r = vfs_open(argv[1], O_RDONLY, &in);
     if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
@@ -746,6 +746,7 @@ static int cmd_cp(int argc, char **argv) {
             if(w > 0) total += w;                       /* before its next piece), not refused: it said "short write" */
             printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
             r = -1;
+            cut = 1;
             break;
         }
         if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
@@ -753,6 +754,7 @@ static int cmd_cp(int argc, char **argv) {
         if(task_interrupted()) {                        /* 10/6/26: a kill, Ctrl+C */
             printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
             r = -1;
+            cut = 1;
             break;
         }
     }
@@ -760,7 +762,7 @@ static int cmd_cp(int argc, char **argv) {
     kfree(buf);
     vfs_close(in);
     w = vfs_close(out);
-    if(w) printf("    cp: close: %s\n", strerror(w));
+    if(w && !cut) printf("    cp: close: %s\n", strerror(w));   /* (B53: cut short, its write-back is cut too: said) */
     else if(r == 0) printf("    %lu bytes copied\n", total);
     return r || w ? CMD_FAIL : CMD_OK;
 }
