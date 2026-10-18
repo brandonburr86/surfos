@@ -30,16 +30,21 @@ void klog_write(const char *s) {
     irq_restore(flags);
 }
 
+/* 10/18/26: the head and whether the ring is full are read together (an interrupt between the two could make a log
+   longer than the ring) */
 u_long klog_length(void) {
-    return klog_full ? KLOG_SIZE : klog_head;
+    u_long flags = irq_save(), n = klog_full ? KLOG_SIZE : klog_head;
+    irq_restore(flags);
+    return n;
 }
 
 /* kputch() directly, not kprintf(): dumping the log must not add to it. 10/6/26: on the calling
    task's console, as kprintf() prints (dmesg on F2 while F1 shows, or run by the user shell into a
    file); before there are tasks, on the one that shows */
 void klog_dump(void) {
-    u_long n = klog_length(), start = klog_head - n, i;
     surf_console *con = (curTask && curTask->con && !in_interrupt()) ? curTask->con : conActive;
+    u_long flags = irq_save(), head = klog_head, n = klog_full ? KLOG_SIZE : head, start = head - n, i;
+    irq_restore(flags);
     for(i = 0; i < n; i++) kputch(con, KERN_TXT_COLOR, klog_buf[(start + i) % KLOG_SIZE]);
 }
 
