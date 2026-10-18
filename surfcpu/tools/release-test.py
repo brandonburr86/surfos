@@ -365,6 +365,26 @@ esac
 """
 
 
+class TestBoardRestriction(unittest.TestCase):
+    """a design list's board line (the GPU designs, 10/18/26): release.txt may not build it for another board"""
+    def test_restriction(self):
+        self.assertIsNone(release.design_boards("surfcpu_arty_a7_ddr"))
+        self.assertEqual(release.design_boards("surfcpu_arty_a7_gpudiag"), ["arty_a7_100t"])
+        self.assertEqual(release.design_boards("surfcpu_arty_a7_ddr_gpu"), ["arty_a7_100t"])
+        d = fresh("TestBoardRestriction")
+        both = d / "both.txt"
+        both.write_text("version 1.0.0\nboard arty_a7_100t\nboard arty_a7_35t\ndesign surfcpu_arty_a7_gpudiag - -\n")
+        with self.assertRaises(release.Refused) as e:
+            release.read_list(both)
+        self.assertIn("builds for arty_a7_100t only", str(e.exception))
+        one = d / "one.txt"
+        one.write_text("version 1.0.0\nboard arty_a7_100t\ndesign surfcpu_arty_a7_gpudiag - -\n")
+        self.assertEqual(release.read_list(one)["boards"], ["arty_a7_100t"])
+        real = release.read_list()                  # the real list: no GPU design, both boards
+        self.assertEqual(real["boards"], ["arty_a7_100t", "arty_a7_35t"])
+        self.assertNotIn("surfcpu_arty_a7_gpudiag", [x["name"] for x in real["designs"]])
+
+
 class ScratchRelease(unittest.TestCase):
     """a scratch git repository holding the release tooling, with stand-ins for devenv/run.sh (the software),
     tools/fpga-build.sh (one bitstream) and docker, which tools/release.py takes only with SURFCPU_RELEASE_TEST=1"""

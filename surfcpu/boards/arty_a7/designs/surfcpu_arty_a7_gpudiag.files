@@ -1,0 +1,37 @@
+# surfcpu_arty_a7_gpudiag: the whole SoC with the GPU (docs/GPU.md: VRAM, the graphics modes of the
+# video block, the drawing engine) and the GPU diagnostic (gpudiag) in its boot ROM, without DDR:
+# quick to build and to test on the board. For the A7-100T only: VRAM takes 75 of its 135 RAMB36,
+# the 35T has 50. The same as surfcpu_arty_a7_bramdiag.files plus the GPU lines (define, board) and
+# with gpudiag as its ROM (sim/board/tools/test_tools.sh compares them). Format: arty_a7_baseline.files.
+board    arty_a7_100t                     # the boards it builds for: VRAM does not fit the 35T
+define   ARTY_HAS_GPU                     # the top's GPU (HAS_GPU = 1)
+top      surfcpu_arty_a7_top
+require  rtl/soc/surfcpu_soc.v
+src      rtl/lib/*.v
+src      rtl/cpu/*.v
+src      rtl/soc/*.v
+src?     rtl/soc/ddr/*.v                  # the ddr track's bridge, when merged
+src      rtl/peripherals/*.v
+src      boards/arty_a7/rtl/arty_a7_clocks.v
+src      boards/arty_a7/rtl/surfcpu_arty_a7_top.v
+inc      rtl/generated
+inc      rtl/cpu
+inc      rtl/lib
+inc      rtl/soc
+inc      rtl/peripherals
+inc      boards/arty_a7/rtl
+mem      rtl/peripherals/*.mem
+xdc      boards/arty_a7/xdc/arty_a7_clocks.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_pins.xdc
+xdc      boards/arty_a7/xdc/arty_a7_base_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_pmod_timing.xdc
+xdc      boards/arty_a7/xdc/arty_a7_config.xdc
+cdc      surf_sync        boards/arty_a7/xdc/cdc/surf_sync.xdc
+cdc      surf_reset_sync  boards/arty_a7/xdc/cdc/surf_reset_sync.xdc
+cdc      surf_pulse_sync  boards/arty_a7/xdc/cdc/surf_pulse_sync.xdc
+cdc      surf_cdc_word    boards/arty_a7/xdc/cdc/surf_cdc_word.xdc
+generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME BOOTROM_INIT
+rom      build/fw/gpudiag.mem    u_soc.u_bootrom     # the GPU diagnostic (make build-rom)
+dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --dsp safe
+lvs-timeout 14400                                    # the SoC, VRAM's block RAMs and the engine

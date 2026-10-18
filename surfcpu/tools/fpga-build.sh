@@ -399,6 +399,19 @@ expand() {        # PATTERN: matching paths relative to surfcpu/, sorted
 set -f                                                  # patterns are expanded in expand() only
 top=$(items top)
 [ -n "$top" ] || die "$list has no top"
+# A "board" line restricts the design to the boards it names (the GPU designs: VRAM fills more
+# block RAM than the 35T has); without one the design builds for every board of boards.txt.
+for_boards=$(items board | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')
+if [ -n "$for_boards" ]; then
+    for b in $for_boards; do
+        awk -v b="$b" '!/^#/ && $1 == b { f = 1 } END { exit !f }' "$root/boards/arty_a7/boards.txt" ||
+            die "$design: its board line names $b, which is not in boards/arty_a7/boards.txt"
+    done
+    case " $for_boards " in
+        *" $board "*) ;;
+        *) die "$design builds for $(echo "$for_boards" | sed 's/ /, /g') only, not $board (its design list's board line)" ;;
+    esac
+fi
 for r in $(items require); do
     [ -f "$root/$r" ] || die "$design needs $r, which is not on this branch yet; refusing to build (the simulation stand-in sim/board/stubs/surfcpu_soc.v is never built into a bitstream)"
 done

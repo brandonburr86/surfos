@@ -403,7 +403,22 @@ def read_list(path: Path = LIST) -> dict:
     for d in cfg["designs"]:
         if not (ROOT / "boards/arty_a7/designs" / f"{d['name']}.files").is_file():
             raise Refused(f"{path}: unknown design {d['name']} (boards/arty_a7/designs/)")
+        allowed = design_boards(d["name"])
+        for b in cfg["boards"]:
+            if allowed is not None and b not in allowed:
+                raise Refused(f"{path}: design {d['name']} builds for {', '.join(allowed)} only (its design list's "
+                              f"board line), but every design is built for every board of the release, {b} too")
     return cfg
+
+
+def design_boards(design: str) -> list[str] | None:
+    """the boards a design's list restricts it to (its board line), or None: every board"""
+    boards = None
+    for line in (ROOT / "boards/arty_a7/designs" / f"{design}.files").read_text().splitlines():
+        f = line.split("#", 1)[0].split()
+        if f and f[0] == "board":
+            boards = (boards or []) + f[1:]
+    return boards
 
 
 def pick(given: str | None, allowed: list[str], what: str, where: str = "release/release.txt") -> list[str]:

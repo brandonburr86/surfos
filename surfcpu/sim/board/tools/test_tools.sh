@@ -499,6 +499,33 @@ check "ddr designs: surfcpu_arty_a7_ddr_bramdiag is surfcpu_arty_a7_ddr but for 
 check "ddr designs: both define ARTY_HAS_DDR and read their generated files through ip/litedram/arty.sha256" test \
     "$(grep -c -E '^define +ARTY_HAS_DDR|^generated +ip/litedram/arty.sha256' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files | awk -F: '{ s += $2 } END { print s }')" -eq 4
 
+# the GPU designs (docs/GPU.md; 10/18/26): bramdiag and the DDR boot design plus the GPU lines, for the
+# 100T only (a board line), gpudiag in the boot ROM of the first
+gpu_lines='^board |^define +ARTY_HAS_GPU|^rom |^lvs-timeout '
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files | grep -Ev "$gpu_lines" > "$t/gpudiag.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files | grep -Ev "$gpu_lines" > "$t/diag2.list"
+check "gpu designs: surfcpu_arty_a7_gpudiag is surfcpu_arty_a7_bramdiag plus the GPU lines" cmp -s "$t/gpudiag.list" "$t/diag2.list"
+check "gpu designs: ... with gpudiag as its boot ROM" test \
+    "$(awk '$1 == "rom" { print $2 }' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files)" = build/fw/gpudiag.mem
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr_gpu.files | grep -Ev '^board |^define +ARTY_HAS_GPU' > "$t/ddrgpu.list"
+grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_ddr.files > "$t/ddr3.list"
+check "gpu designs: surfcpu_arty_a7_ddr_gpu is surfcpu_arty_a7_ddr plus the GPU lines" cmp -s "$t/ddrgpu.list" "$t/ddr3.list"
+check "gpu designs: both build for the 100T only and define ARTY_HAS_GPU" test \
+    "$(grep -c -E '^board +arty_a7_100t +#|^define +ARTY_HAS_GPU' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files boards/arty_a7/designs/surfcpu_arty_a7_ddr_gpu.files | awk -F: '{ s += $2 } END { print s }')" -eq 4
+check "gpu designs: no other design has a board line" test \
+    "$(grep -l -E '^board ' boards/arty_a7/designs/*.files | wc -l | tr -d ' ')" -eq 2
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_gpudiag arty_a7_35t
+check "board line: the gpudiag design is refused for the 35T" test "$rc" -eq 1
+check "board line: ... saying why" has "builds for arty_a7_100t only, not arty_a7_35t"
+check "board line: ... before anything runs" nolog
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_ddr_gpu arty_a7_35t
+check "board line: the DDR+GPU design is refused for the 35T" has "builds for arty_a7_100t only, not arty_a7_35t"
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_gpudiag arty_a7_100t
+check "board line: ... and taken for the 100T (dry run)" is "$rc" 0
+check "board line: ... which defines ARTY_HAS_GPU for synthesis" has "-D ARTY_HAS_GPU"
+run env FLOW=openxc7 ROM="$t/diag.mem" tools/fpga-build.sh --dry-run --design surfcpu_arty_a7_bramdiag arty_a7_35t
+check "board line: a design without one still builds for the 35T (dry run)" is "$rc" 0
+
 # ------------------------------------------------------------------------------ generated files and defines
 # A scratch repository with what the DDR design reads, but stand-ins for the generated LiteDRAM
 # files (the real ones need the pinned generator, make litedram-gen) and a scratch copy of
