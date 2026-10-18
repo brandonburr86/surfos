@@ -664,7 +664,8 @@ did not change: the scenes and the model did not. The rebuilt gpudiag netlist ru
 `GPUDIAG: PASS (124 checks)` with every FRAME_CRC the model's ([evidence](evidence/gpu/g2-netlist-sim-r2.txt);
 1.42 s simulated in 48 minutes). `make check` passes at 72ba06c (31 minutes on the loaded Mac,
 the documents being edited: test-gpu with the Ctrl-R reruns, test-flow, board-tools 270 of 270,
-test-release 53 tests), and test-gpu-mutants catches 33 of 33 in 5 minutes; the same mutants
+test-release 53 tests) and again at 4adbbe9, this record's first commit, from a clean tree
+(29 minutes), and test-gpu-mutants catches 33 of 33 at both (5 minutes); the same mutants
 against 589223c's tests and gpudiag, and the flows of 589223c and of now side by side, are in the
 [evidence](evidence/gpu/review2-sim.txt).
 
@@ -719,7 +720,7 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
    to the same sha256 only from a clean checkout of 72ba06c (the build id is the commit's, the
    build time the epoch's), with the same images, on the same kind of host:
 
-       git checkout 72ba06c        # sc/gpu; no tracked file changed
+       git checkout 72ba06c        # sc/gpu; git status must show nothing (an untracked file marks the ROMs dirty)
        export SOURCE_DATE_EPOCH=1792346703 LC_ALL=C TZ=UTC   # git log -1 --format=%ct 72ba06c
        make -C surfcpu build-rom
        make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag

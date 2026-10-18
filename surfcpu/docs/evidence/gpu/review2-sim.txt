@@ -3,7 +3,10 @@ this round's tests run against 589223c's code, in the surfcpu-toolchain containe
 for the open flow), on 96198e6..72ba06c (sc/gpu). Nothing here ran on a board.
 
 make check at 72ba06c: PASS in 1880 s on the loaded Mac (the documents being edited, so its ROMs
-say "dirty tree"; the code is 72ba06c's). Excerpts:
+say "dirty tree"; the code is 72ba06c's). Again at 4adbbe9 (the record's commit; the same code)
+from a clean tree: PASS in 1755 s, the same totals (gpudiag 124, its rerun 123, bramdiag 569 twice,
+test_gpudiag_check 16, test_tools 270, test-flow and test-release 53 PASS), and test-gpu-mutants
+33 of 33 in 301 s. Excerpts of the first:
   test_video_gfx: PASS (75 checks, seed 1, 86 frames)
   test_video_gfx: PASS (75 checks, seed 2, 86 frames)
   test_video_gfx: PASS (75 checks, seed 3, 86 frames)
