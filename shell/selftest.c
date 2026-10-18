@@ -982,11 +982,13 @@ static void test_kill_device(void) {
     ram_slow_ms = 0;
     check(status == -1 && ms >= 2500 && mem[30 * 512] == 'D',
           "a kill that waited does not come at once inside a device request outside the cache: the request ends first");
+    printf("        (it ended %lu ms after its kill, sent 200 ms into a 3000 ms write)\n", ms);
     ram_slow_ms = 300;
     status = kd_kill("killmkfs", kd_mkfs, 100, &ms); /* in mkfs's first request */
     ram_slow_ms = 0;
     check(status == -1 && kd_done && kd_result == -EINTR && strstr(kd_msg, "interrupted at sector") && ms < 1500,
           "mkfs killed stops before its next request and says how far it got");
+    printf("        (it ended %lu ms after its kill: %s)\n", ms, kd_done ? kd_msg : "killed before mkfs returned");
     binvalidate(d);
     kfree(d);
     kfree(mem);
@@ -1021,14 +1023,17 @@ static void kn_leave(void *arg) {
     kn_flag = 1;
 }
 
-/* fn in a kernel thread of its own (no call), killed after 100 ms: its status; *end, when it ended */
-static int kn_kill(const char *name, kthread_fn fn, u_long *end) {
+/* fn in a kernel thread of its own (no call), killed after 100 ms: its status; *killed and *end, when it was killed
+   and when it ended */
+static int kn_kill(const char *name, kthread_fn fn, u_long *killed, u_long *end) {
     surf_task *t = kthread_create_on(name, curTask->con, fn, NULL, PL_NORMAL, 0);
     u_long pid;
     int status = 0;
+    *killed = *end = uptime_ms();
     if(!t) return 1;
     pid = t->pid;
     sleep_ms(100);
+    *killed = uptime_ms();
     kill_task(t);
     if(task_wait(pid, &status) != (int)pid) status = 1;
     *end = uptime_ms();
@@ -1036,16 +1041,18 @@ static int kn_kill(const char *name, kthread_fn fn, u_long *end) {
 }
 
 static void test_kill_outside_call(void) {
-    u_long end;
+    u_long killed, end;
     int status;
     kn_flag = 0;
-    status = kn_kill("killnc", kn_call, &end);
+    status = kn_kill("killnc", kn_call, &killed, &end);
     check(status == -1 && kn_flag, "a kernel thread killed inside a file system that enters a call before it dies gets the call's 2 s");
+    printf("        (it ended %lu ms after its kill, %s)\n", end - killed, kn_flag ? "its call done" : "killed in its call");
     kn_flag = 0;
     kn_out = 0;
-    status = kn_kill("killout", kn_leave, &end);
+    status = kn_kill("killout", kn_leave, &killed, &end);
     check(status == -1 && !kn_flag && kn_out && end - kn_out < 250,
           "a kill put off inside a file system comes within a few ticks of the thread leaving it");
+    printf("        (killed %lu ms after it left the file system)\n", kn_out ? end - kn_out : 0UL);
 }
 
 static void test_fat_rename(void) {
