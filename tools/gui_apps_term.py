@@ -88,7 +88,16 @@ def last_row(rows):
 
 
 def prompted(rows):
+    """the prompt on the last row that has anything"""
     return bool(PROMPT.search(last_row(rows)))
+
+
+def then_prompt(rows, text):
+    """the last row that holds text, and a prompt on the row after it (what is below may be older)"""
+    for i in range(len(rows) - 2, -1, -1):
+        if text in rows[i]:
+            return bool(PROMPT.search(rows[i + 1]))
+    return False
 
 
 def wait_rows(d, grid, test, timeout=20):
@@ -138,9 +147,11 @@ def close_terminal(d):
 def checks(d):
     grid = Grid()
     try:
+        d.move(900, 480)                            # the pointer off the Terminal's text, which is read back
         d.key('ctrl-t')
         d.visible('Ctrl+T opens the Terminal', d.title('Terminal'))
-        scr = wait_rows(d, grid, lambda rows: "Brandon Burr's SurfOS" in rows and prompted(rows), 30)
+        scr = wait_rows(d, grid, lambda rows: "Brandon Burr's SurfOS" in rows and
+                        then_prompt(rows, 'Version 1.0 on an x86, 2004-2026'), 30)
         d.require("the Terminal shows surfsh's banner and its prompt", scr is not None)
         if d.outdir:
             scr.png(os.path.join(d.outdir, 'guiapps-terminal.png'))
@@ -148,7 +159,7 @@ def checks(d):
                                                                        grid.y + grid.h - STATUS_H - 1 + 3, '77x21',
                                                                        MUTED, BAND))
         run(d, grid, "a typed command's output shows in the Terminal", 'echo hello-from-the-terminal',
-            lambda rows: 'hello-from-the-terminal' in rows and prompted(rows))
+            lambda rows: 'hello-from-the-terminal' in rows and then_prompt(rows, 'hello-from-the-terminal'))
         scr = run(d, grid, "the console's escape sequences: moves, erases, the corner without a scroll, the size",
                   'ansi', lambda rows: all(rows[r] == text for r, text in ANSI_ROWS.items()) and
                   rows[12] == 'ANSI-TEST done, 77x21' and rows[20].endswith('Z') and len(rows[20]) == 77,
@@ -156,7 +167,7 @@ def checks(d):
         d.check('inverse video and bright yellow on blue, in the Terminal\'s palette',
                 grid.cell(scr, 9, 2) == ('I', (NAVY, SHELL)) and grid.cell(scr, 9, 3) == ('Y', (YELLOW, BLUE)))
         run(d, grid, 'UTF-8 as the console draws it', 'pagetest utf8',
-            lambda rows: UTF8_SAMPLE in rows and prompted(rows))
+            lambda rows: UTF8_SAMPLE in rows and then_prompt(rows, UTF8_SAMPLE))
         scr = run(d, grid, "the pager's question on the last row", 'pagetest 40',
                   lambda rows: rows[-1].startswith('--More--') and 'pagetest line 020' in rows,
                   'guiapps-terminal-pager.png')
@@ -181,17 +192,17 @@ def checks(d):
         d.keys('sleep 30000\n')
         d.vm.pump(1.5)
         d.key('ctrl-c')
-        scr = wait_rows(d, grid, lambda rows: any('sleep cut short after' in r for r in rows) and prompted(rows), 10)
+        scr = wait_rows(d, grid, lambda rows: then_prompt(rows, 'sleep cut short after'), 10)
         d.require('Ctrl+C stops sleep 30000 in the Terminal', scr is not None)
         # maximized, the shell sees the new size
         d.click(grid.x + grid.w - 40, grid.y + 10)
         big = Grid(maximized=True)
         d.require('the Terminal maximizes', wait_rows(d, big, prompted, 10) is not None)
         run(d, big, 'after maximize the shell sees the new size', 'pagetest size',
-            lambda rows: 'TTY_GETSIZE 117x26' in rows and prompted(rows), 'guiapps-terminal-maximized.png')
+            lambda rows: then_prompt(rows, 'TTY_GETSIZE 117x26'), 'guiapps-terminal-maximized.png')
         d.click(big.x + big.w - 40, big.y + 10)
         run(d, grid, 'and the size it had again', 'pagetest size',
-            lambda rows: 'TTY_GETSIZE 77x21' in rows and prompted(rows))
+            lambda rows: then_prompt(rows, 'TTY_GETSIZE 77x21'))
         # exit: the window says so; Enter starts a new session
         d.keys('exit\n')
         scr = wait_rows(d, grid, lambda rows: ENDED in rows)
@@ -210,7 +221,7 @@ def checks(d):
         d.key('esc')
         d.require('Cancel keeps the window', d.vm.wait_screen(lambda s: not dialog_up(d, s, 'Close the window?') and
                                                               d.title('Terminal')(s), 10, interval=0.2) is not None)
-        run(d, grid, 'and the session goes on', 'echo still-here', lambda rows: 'still-here' in rows and prompted(rows))
+        run(d, grid, 'and the session goes on', 'echo still-here', lambda rows: then_prompt(rows, 'still-here'))
         # Close ends it, with the program it runs (cat, waiting for the terminal)
         d.keys('cat\n')
         d.vm.pump(1.0)
@@ -252,6 +263,9 @@ def checks(d):
         shells = [r for r in tasks.values() if task_name(r) == 'surfsh']
         d.check(f"ps in a new session: five surfsh, F1-F4's and the Terminal's ({len(shells)})", len(shells) == 5)
         d.click(big.x + big.w - 40, big.y + 10)
+    except AssertionError:
+        d.vm.screen('guiapps-terminal-failed.png')     # as it was, before the window is closed below
+        raise
     finally:
         try:
             scr = d.vm.screen()

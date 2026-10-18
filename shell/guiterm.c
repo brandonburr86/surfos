@@ -193,7 +193,7 @@ static void ended(struct gui_state *g, int err) {
     t->ended = true;
     t->pend_at = t->pend_len = 0;
     note(g, err == -EPIPE ? "[The session has ended. Enter starts a new one.]" : "[The session was lost. Enter starts a new one.]");
-    say(g, "The session has ended: Enter or New session starts another.");
+    say(g, "The session has ended. Enter starts a new one.");
 }
 
 /* bytes for the session behind those that wait; what does not fit is dropped: how many were */
