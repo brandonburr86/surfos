@@ -40,6 +40,10 @@ system call, however long it takes: a kernel command is never killed in the midd
 reads end, and the pty is free again once they are gone.
 
 This header uses no SurfOS types: user programs reach it through user/include/surfos/pty.h.
+10/17/26: but for the kernel's own calls at its end, which only a file that has the kernel's
+types (surfos/types.h, included first as everywhere in the kernel) sees: the same for a caller
+in the kernel (the desktop's Terminal, shell/guisys_term.c), with a master that is an open file
+of its own rather than a descriptor (kernel/pty.c).
 */
 
 #ifndef _SURFOS_PTY_H
@@ -49,5 +53,22 @@ This header uses no SurfOS types: user programs reach it through user/include/su
 
 #define PTY_SETSIZE 1               /* arg: (columns << 16) | rows */
 #define PTY_INDEX   2               /* returns the pty's number, 0 .. PTY_MAX - 1 */
+
+#ifdef _SURFOS_TYPES_H
+/* 10/17/26: a master for the kernel. pty_open: a free pty's master (-EAGAIN when every one is in use),
+   which pty_close closes: the hangup, as the last descriptor's close is. pty_spawn: a program on it as
+   SYS_spawnpty starts one (argv the kernel's, argc of them), its pid. pty_read: what the session
+   printed, never waiting: how many bytes, 0 while nothing is there, -EPIPE once the session has ended
+   and everything was read. pty_write: as write() on the master (how many it took, -EAGAIN), never
+   waiting. pty_resize: PTY_SETSIZE. pty_number: PTY_INDEX. Each: -EINVAL for a file that is no master. */
+struct file;
+int pty_open(struct file **master);
+int pty_spawn(struct file *master, const char *path, int argc, char *const argv[]);
+int pty_read(struct file *master, char *buf, u32 len);
+int pty_write(struct file *master, const char *buf, u32 len);
+int pty_resize(struct file *master, u32 cols, u32 rows);
+int pty_number(struct file *master);
+void pty_close(struct file *master);
+#endif
 
 #endif

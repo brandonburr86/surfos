@@ -839,7 +839,7 @@ GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guino
 # each track's own model files beyond its stubs ($(BUILD)/host/kernel/shell/<name>.o), on a line of its own so that
 # the tracks' merges are clean (the kernel takes every shell/*.c by itself)
 # TERM:
-GUI_TERM_OBJ =
+GUI_TERM_OBJ = $(BUILD)/host/kernel/shell/guivt.o
 # SYS:
 GUI_SYS_OBJ =
 # TOOLS:
