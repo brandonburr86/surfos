@@ -933,7 +933,7 @@ static void review_hex(void) {
     static u8 data[200000];
     static const char *const bad[] = { "0xZZ", "", "0xABC", "a pattern of 129 bytes" };
     char text[200];
-    u32 i, k;
+    u32 i;
     int b;
     /* a Find that is no pattern stops the search that runs: never "Found" a match of nothing */
     memset(text, 'A', 129); text[129] = 0;

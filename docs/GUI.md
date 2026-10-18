@@ -127,13 +127,16 @@ swatch erases. Clear, or Ctrl+N, erases everything.
   * It asks before it replaces a file that is there already, as Notepad's Save as
     does, except the file Sketch itself saved last.
   * Unsaved sketches are lost when the desktop exits.
-* **Open BMP.** File > Open BMP…, or the Open button, reads a BMP into the canvas.
+* **Open BMP.** File > Open BMP…, or the Open button, reads a BMP of up to 8 MB into the
+  canvas. A 1920 x 1080 screenshot is 6 MB; a larger file is refused, and the Image
+  Viewer shows it.
   * A picture larger than the canvas is shrunk to fit it, keeping its proportions;
     a smaller one is put in the middle.
   * Each colour becomes the nearest of Sketch's six.
   * It replaces the drawing, as Clear does. A picture that cannot be read leaves the
     drawing as it was.
-* The line under the canvas says what Save and Open did.
+* The line under the canvas says what Save and Open did, until the drawing changes (a
+  stroke, Clear, Ctrl+N).
 
 **Pointer & desktop** has three pointer speeds and two color themes. They last for
 this session.
@@ -453,8 +456,13 @@ toolbar's Open or press O: the chooser lists a folder as Notepad's does.
   * A picture of more than 1,048,576 pixels (1024 x 1024) is reduced while it is read,
     keeping its proportions: 1920 x 1080 is kept at 1365 x 768, and the status bar says
     `kept at 1365 x 768`.
-  * A big file is read a piece at a time, so the desktop never freezes. The window and the
-    status bar count the percent (`Reading sea.bmp... 45%`), and Esc stops the reading.
+  * A picture is read a piece at a time, one piece in each frame the desktop draws (at
+    most 16 reads, and 256 KB plus one 64 KB chunk, a frame). So the desktop goes on
+    answering while a big file is read. The window and the status bar count the percent
+    (`Reading sea.bmp... 45%`), and Esc stops the reading.
+  * When a file cannot be read to its end (it was cut short, or the stick was pulled
+    out), the window and its status bar say so. No message box interrupts what you are
+    doing meanwhile.
 * **The views.** Fit is the default: a picture larger than the window is shrunk to fit
   it, and a smaller one is enlarged by a whole number (2 times, 3 times, ...), as far as
   it fits, so that its pixels stay square.
@@ -462,10 +470,11 @@ toolbar's Open or press O: the chooser lists a folder as Notepad's does.
   * + and - (or Zoom in, Zoom out) zoom between 1/64 and 16 times. Zooming keeps the point
     in the middle of the window where it is.
   * F or 0 fits again. Fit follows the window as it is resized or maximized.
-  * A double-click in the picture switches between Fit and the actual size.
+  * A double-click anywhere in the picture area (the picture or the dark space around it)
+    switches between Fit and the actual size.
 * **Moving a zoomed picture.** Drag it with the mouse, or use:
   * the arrows (32 pixels a press);
-  * Page Up and Page Down (a window's height);
+  * Page Up and Page Down (the picture area's height less 32 pixels);
   * Home (the top left) and End (the bottom right);
   * the wheel: up and down, or sideways when the picture is no taller than the window.
 * **The status bar** shows the name, the picture's size and bits per pixel, and the zoom
@@ -495,14 +504,18 @@ refuse; Hex's own Open (or O) opens any file.
 * **Go to offset.** Ctrl+L (Edit > Go to offset…, or the toolbar's Go to) takes `0x1F00`
   in hexadecimal or `7936` in decimal, and the row goes to the top of the window. An
   offset past the end is refused.
-* **Find.** Ctrl+F (Edit > Find…, or the toolbar's Find) finds bytes from the cursor on.
-  * Type text as it is, or bytes in hexadecimal: pairs with spaces between them
-    (`DE AD BE EF`), or after `0x` (`0xDEADBEEF`).
+* **Find.** Ctrl+F (Edit > Find…, or the toolbar's Find) finds bytes from the start of the
+  selection on (the cursor's byte when only one is selected).
+  * Type text as it is, or bytes in hexadecimal: two or more pairs with spaces between
+    them (`DE AD BE EF`), or after `0x` (`0xDEADBEEF`).
+  * A single pair such as `FF` is text (the two characters F and F): one byte is written
+    `0xFF`.
   * Text in double quotes is always text: `"DE AD"` finds the five characters.
   * Up to 128 bytes, matched exactly (letters in their case). The match is selected.
   * N, Edit > Find next or the toolbar's Find next finds the next one. At the end of the
-    file the status bar says `Not found from 0x… to the end`; Home, then Find next,
-    searches from the start.
+    file the status bar says `Not found from 0x… to the end`, and says it again at the
+    next N; Home, then Find next, searches from the start. A Find whose text is not one
+    (`0xZZ`) stops a search that was running.
   * A long search runs a piece at a time (the status bar counts the percent), and Esc
     stops it.
 * **The status bar** shows the cursor's offset in hexadecimal and decimal, how many bytes
