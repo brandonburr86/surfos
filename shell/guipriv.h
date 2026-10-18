@@ -161,6 +161,11 @@ struct gui_app {
     void (*answer)(struct gui_state *g, int act, int button, const char *text, const char *target);   /* its dialogs */
     const char *const *help;            /* its lines in Help ("#" first: a heading), help_lines of them */
     int help_lines;
+    /* the Edit menu while it has the focus (ACT_UNDO .. ACT_GOTO, and their keys Ctrl+Z, Y, X, C, V, A, F, L when its
+       key hook leaves them): whether an item is on, and doing it. NULL: the Edit menu is Notepad's */
+    bool (*can_edit)(const struct gui_state *g, int act);
+    void (*edit)(struct gui_state *g, int act);
+    const char *goto_label;             /* the Edit menu's last item, "Go to offset\xF9"; NULL: "Go to line\xF9" */
 };
 extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gui_app_log, gui_app_clock,
                             gui_app_viewer, gui_app_hex, gui_app_charmap;

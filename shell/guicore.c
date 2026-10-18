@@ -331,6 +331,12 @@ void gui_init(struct gui_state *g, int width, int height) {
 
 struct menu_item { const char *label, *keys; int act; bool on; };
 
+/* 10/17/26: the focused application, when the Edit menu is its own */
+static const struct gui_app *edit_app(const struct gui_state *g) {
+    const struct gui_app *app = g->focus >= 0 && !g->win[g->focus].min ? gui_app_of(g->focus) : NULL;
+    return app && app->can_edit && app->edit ? app : NULL;
+}
+
 /* 10/17/26: room for one more item in a menu of count items above the taskbar (the separators: counted as items) */
 static bool item_room(const struct gui_state *g, int count) {
     return MENU_H + 4 + (count + 1) * 24 + 4 <= g->height - TASK_H && count < MENU_MAX;
@@ -377,6 +383,22 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
         ITEM("Close window", "Ctrl+W", ACT_CLOSE, g->focus >= 0);
         break;
     case 3:
+        if(edit_app(g)) {                               /* 10/17/26: the focused application's */
+            const struct gui_app *app = edit_app(g);
+            ITEM("Undo", "Ctrl+Z", ACT_UNDO, app->can_edit(g, ACT_UNDO));
+            ITEM("Redo", "Ctrl+Y", ACT_REDO, app->can_edit(g, ACT_REDO));
+            SEPARATOR();
+            ITEM("Cut", "Ctrl+X", ACT_CUT, app->can_edit(g, ACT_CUT));
+            ITEM("Copy", "Ctrl+C", ACT_COPY, app->can_edit(g, ACT_COPY));
+            ITEM("Paste", "Ctrl+V", ACT_PASTE, app->can_edit(g, ACT_PASTE));
+            ITEM("Delete", "Del", ACT_DELETE, app->can_edit(g, ACT_DELETE));
+            SEPARATOR();
+            ITEM("Select all", "Ctrl+A", ACT_SELECT_ALL, app->can_edit(g, ACT_SELECT_ALL));
+            ITEM("Find\xF9", "Ctrl+F", ACT_FIND, app->can_edit(g, ACT_FIND));
+            ITEM("Find next", "", ACT_FIND_NEXT, app->can_edit(g, ACT_FIND_NEXT));
+            ITEM(app->goto_label ? app->goto_label : "Go to line\xF9", "Ctrl+L", ACT_GOTO, app->can_edit(g, ACT_GOTO));
+            break;
+        }
         ITEM("Undo", "Ctrl+Z", ACT_UNDO, note && n->undo_at > 0);
         ITEM("Redo", "Ctrl+Y", ACT_REDO, note && n->undo_at < n->nundo);
         SEPARATOR();
@@ -614,6 +636,10 @@ void gui_act(struct gui_state *g, int act) {
     g->dirty = true;
     if(act >= ACT_WINDOW && act < ACT_WINDOW + GUI_WINDOWS) { gui_open(g, act - ACT_WINDOW); return; }
     if(act >= ACT_FILES_OPEN && act <= ACT_FILES_EJECT) { files_act(g, act); return; }
+    if(act >= ACT_UNDO && act <= ACT_GOTO && edit_app(g)) {    /* 10/17/26: the focused application's Edit menu */
+        if(edit_app(g)->can_edit(g, act)) edit_app(g)->edit(g, act);
+        return;
+    }
     switch(act) {
     case ACT_ABOUT: gui_open(g, GUI_ABOUT); break;
     case ACT_SETTINGS: gui_open(g, GUI_SETTINGS); break;
@@ -932,7 +958,7 @@ bool gui_wants_arrows(const struct gui_state *g) {
 
 void gui_key(struct gui_state *g, int key) {
     const struct gui_app *app = g->focus >= 0 && !g->win[g->focus].min ? gui_app_of(g->focus) : NULL;
-    int rows;
+    int rows, i;
     if(g->dialog.kind) { dialog_key(g,key); g->dirty=true; return; }
     if(app && app->keys && !g->menu && key!=0 && key!=7) {             /* 10/17/26: every key but Ctrl+G is its own */
         if(app->key) app->key(g,key);
@@ -954,6 +980,12 @@ void gui_key(struct gui_state *g, int key) {
     case 20: gui_act(g,ACT_WINDOW+GUI_TERMINAL); return;                /* Ctrl+T: 10/17/26, the Terminal */
     }
     if(app && app->key && app->key(g,key)) { g->dirty=true; return; }  /* 10/17/26: the suite's, after the shortcuts */
+    if(edit_app(g)) {                                   /* 10/17/26: and its Edit menu's keys (Ctrl+C copies, never leaves) */
+        static const int edit_keys[][2] = { {26,ACT_UNDO}, {25,ACT_REDO}, {24,ACT_CUT}, {3,ACT_COPY}, {22,ACT_PASTE},
+                                            {1,ACT_SELECT_ALL}, {6,ACT_FIND}, {12,ACT_GOTO} };
+        for(i=0;i<(int)(sizeof(edit_keys)/sizeof(edit_keys[0]));i++)
+            if(key==edit_keys[i][0]) { gui_act(g,edit_keys[i][1]); return; }
+    }
     if(g->focus==GUI_NOTEPAD) {
         switch(key) {
         case 19: gui_act(g,ACT_SAVE); return;                           /* Ctrl+S */
