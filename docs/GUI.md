@@ -231,7 +231,8 @@ has one Terminal window.
     selected.
   * A line that wrapped is copied as one, also after the window got wider or when it is
     in the scrollback. One that a narrower window cut on the screen is copied as it
-    shows.
+    shows. Of a line in the scrollback from when the window was wider, a copy of the
+    screen takes what shows, and a selection all of it.
   * A selection of nothing but blanks leaves the clipboard as it was, and the status bar
     says "Nothing copied".
   * Edit > Select all selects everything kept, the scrollback too.
