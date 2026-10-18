@@ -8,6 +8,15 @@ File: sync.c    Date: 10/3/26 (roadmap S2)
 lock is never kept while somebody reads a screenful. An event's timed wait may be cut
 short by a kill or Ctrl+C (wait_on_timeout()); a mutex, a semaphore and an untimed
 event wait are never cut short: their callers cannot do without what they wait for.
+
+10/18/26 (audit B63): a mutex is handed over in the order its waiters came. mutex_unlock()
+gives it to the first waiter, which holds it from that moment (and counts it) and finds it
+its own when it runs. Before, the waiter was only woken, and the task that let go could
+take the lock again before the waiter ran: a task taking a lock again and again (a long
+copy's requests, each through its driver's lock or the cache's bounce buffer) kept a
+waiter out for as long as it went on. Now a waiter waits for those queued ahead of it,
+each holding the lock once. A task holding a mutex, the one handed over too, is not killed
+at once (kernel/task.c), so a lock handed over is never left with a dead task.
 */
 
 #include <surfos/types.h>
@@ -30,15 +39,18 @@ void mutex_init(mutex_t *m, const char *name) {
 void mutex_lock(mutex_t *m) {
     u_long flags = irq_save();
     if(m->locked && m->owner == curTask) panic("mutex '%s': recursive lock by '%s'", m->name, curTask->name);
-    while(m->locked) {
-        wait_prepare(&m->waiters);
-        irq_restore(flags);
-        yield();
-        flags = irq_save();
+    if(!m->locked) {
+        m->locked = 1;
+        m->owner = curTask;
+        if(curTask) curTask->mutexes++;
+    } else {
+        while(m->owner != curTask) {            /* 10/18/26 (audit B63): in line; mutex_unlock() hands it over */
+            wait_prepare(&m->waiters);
+            irq_restore(flags);
+            yield();
+            flags = irq_save();
+        }
     }
-    m->locked = 1;
-    m->owner = curTask;
-    if(curTask) curTask->mutexes++;
     irq_restore(flags);
 }
 
@@ -57,11 +69,17 @@ bool mutex_trylock(mutex_t *m) {
 
 void mutex_unlock(mutex_t *m) {
     u_long flags = irq_save();
+    struct surf_task *next = m->waiters.first;
     if(!m->locked || m->owner != curTask) panic("mutex '%s': unlock by '%s' who does not hold it", m->name, curTask ? curTask->name : "?");
-    m->locked = 0;
-    m->owner = NULL;
     if(curTask && curTask->mutexes) curTask->mutexes--;
-    wake_up(&m->waiters);
+    if(next) {                                  /* 10/18/26 (audit B63): the first waiter holds it from now */
+        m->owner = next;
+        next->mutexes++;
+        wake_up(&m->waiters);                   /* (that one) */
+    } else {
+        m->locked = 0;
+        m->owner = NULL;
+    }
     irq_restore(flags);
 }
 
