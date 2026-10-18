@@ -115,7 +115,6 @@ static void ansi(int cols, int rows) {
 
 static void emulator(void) {
     int i;
-    char b[64];
     /* text, the VT100 wrap, line ends */
     vt_reset(&v, 10, 3);
     CHECK(v.count == 3 && v.x == 0 && v.y == 0 && !strcmp(row_of(&v, 0), ""));
@@ -136,8 +135,8 @@ static void emulator(void) {
     feed("a\nb\nc\nd");
     CHECK(v.count == 4 && !strcmp(line_of(&v, 0), "a") && !strcmp(row_of(&v, 0), "b") && !strcmp(row_of(&v, 2), "d"));
     for(i = 0; i < GUI_VT_LINES + 50; i++) feed("x\n");
-    CHECK(v.count == GUI_VT_LINES && v.dropped == 4 + 50 + 3 - 3 && v.y == 2);   /* the oldest go */
-    CHECK(v.dropped + (u32)v.count == 4u + GUI_VT_LINES + 50u);
+    CHECK(v.count == GUI_VT_LINES && v.y == 2);    /* 4 + 1,074 lines made, the oldest 54 gone */
+    CHECK(v.dropped == 54 && !strcmp(line_of(&v, 0), "x") && !strcmp(row_of(&v, 1), "x"));
     /* Backspace, Tab */
     vt_reset(&v, 20, 3);
     feed("ab\b\bX");
@@ -240,8 +239,6 @@ static void emulator(void) {
     vt_fresh(&v);
     vt_fresh(&v);
     CHECK(v.y == 2);                                /* once at a row's start, it stays */
-    snprintf(b, sizeof(b), "%d", v.y);
-    CHECK(b[0] == '2');
 }
 
 /* a new size, without reflow */
@@ -445,7 +442,10 @@ static void scrollback(void) {
     CHECK(!g.term.thumb);
     /* lines that leave the ring while the view shows them: the oldest kept */
     pointer(TX + 100, TY + 100, 0, 3);
-    for(i = 0; i < GUI_VT_LINES; i++) fake_term_feed("z\n", 2), i % 1000 == 999 ? tick() : (void)0;
+    for(i = 0; i < GUI_VT_LINES; i++) {
+        fake_term_feed("z\n", 2);
+        if(i % 1000 == 999) tick();
+    }
     tick();
     tick();
     CHECK(!g.term.follow && g.term.view < g.term.vt.dropped);
@@ -572,8 +572,10 @@ static void pasting(void) {
     fake_screen(&screen, 960, 540);
     gui_render(&g, &screen);
     CHECK(fake_guards(960, 540));
-    for(i = 0; i < 40; i++) { fake_term_in_len = 0; tick(); }
-    CHECK(g.term.pend_len == 0 || g.term.pend_len - g.term.pend_at == GUI_CLIP_MAX - 41 * sizeof(fake_term_in));
+    for(i = 0; i < 40 && g.term.pend_len; i++) { fake_term_in_len = 0; tick(); }   /* the queue takes 8 KB a frame */
+    CHECK(g.term.pend_len == 0 && i == GUI_CLIP_MAX / sizeof(fake_term_in));
+    CHECK(fake_term_in_len == sizeof(fake_term_in) &&
+          !memcmp(fake_term_in, g.clip + GUI_CLIP_MAX - sizeof(fake_term_in), sizeof(fake_term_in)));
     gui_act(&g, ACT_PASTE);                         /* more than there is room for behind it: the rest is dropped */
     gui_act(&g, ACT_PASTE);
     CHECK(g.term.pend_len - g.term.pend_at <= GUI_TERM_PEND && g.term.status[0]);

@@ -21,9 +21,9 @@ has one session, started when it opens; a desktop has one Terminal window.
   window is maximized or restored, or when its corner is let go; a program sees it when it asks
   (`pagetest size`; `edit` with Ctrl+L). Lines are not rewrapped: they are cut or padded.
 * **Scrolling back.** About 1,000 lines are kept above the screen. Use the scroll bar (click above
-  or below the thumb for a page, or drag it) or the wheel. While the view is scrolled back, new
-  output does not move it: the status bar says how many lines came below. Any key goes back to the
-  end (and to the program).
+  or below the thumb for a page, or drag it), or the wheel of a mouse that reports one (SurfOS's
+  mouse drivers report none yet). While the view is scrolled back, new output does not move it:
+  the status bar says how many lines came below. Any key goes back to the end (and to the program).
 * **Copy and paste.** Drag to select (past the top or bottom edge the text scrolls), or
   double-click a word. Edit > Copy copies the selection, or the whole screen as it shows when
   nothing is selected; Edit > Select all selects everything kept, the scrollback too. Edit > Paste
@@ -39,8 +39,8 @@ has one session, started when it opens; a desktop has one Terminal window.
   Close (or Leave) ends the session and every program it runs; Cancel keeps it. The session goes
   on while the window is tucked into the taskbar and while another console has the screen.
 
-Limits: no keyboard path to the scrollback (Shift+Page Up does not exist on this keyboard path:
-the console's keyboard sends no modified keys); Ctrl+G cannot be typed into a program (edit's
+Limits: no keyboard path to the scrollback (there is no Shift+Page Up to take for it: the keyboard
+driver sends the special keys without their modifiers); Ctrl+G cannot be typed into a program (edit's
 "go to line" needs another key there); no mouse reporting to programs, no bracketed paste, no
 bold font (bright colours instead, as on the console); a font of code page 437, so a character
 it lacks shows as `?`, as on the console.
@@ -62,8 +62,8 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   numbers (the console takes `38;5;31` as red; this does not). Erases use the colours in force,
   inverse included, as the console's ansi_blank() does. ESC[5n gets no answer, as on the console.
 * **Colours**: the console's VGA attributes, drawn in the desktop's palette: black is NAVY (the
-  window's background), light grey is SHELL (the text), the light ones FOAM, CORAL, SKY, MUTED,
-  and others chosen to read on navy. Inverse is navy on light grey. A block cursor when the window
+  window's background), light grey is SHELL (the text), light cyan FOAM, light red CORAL, light
+  blue SKY, dark grey MUTED, and the others chosen to read on navy. Inverse is navy on light grey. A block cursor when the window
   has the keys, an outline otherwise; ESC[?25l hides it.
 * **State**: the screen and its scrollback are 1,024 lines of 160 cells (2 bytes each: the
   character and the attribute) in a ring in gui_state, 320 KB; the widest window (1280 logical
@@ -94,7 +94,9 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G is
   gui_finish() at the desktop's end) the master's close hangs the pty up, the shell is collected
   if it is gone, and otherwise, being inside a call that ends at the hangup's kill, it is handed
   to init (task_detach()), which collects it: the desktop never waits, and leaves no zombie of its
-  own and no orphan that nobody collects (what the shell leaves is init's when it dies). Each call
+  own and no orphan that nobody collects (what the shell leaves is init's when it dies). Collecting
+  it on later frames instead cannot work everywhere: a closed window gets no tick, and gui_finish()
+  has no later frame at all; init is what collects telnetd's shells too once telnetd ends. Each call
   checks the session is the calling task's, so two desktops on two consoles keep theirs apart.
   The kernel log gets "gui: Terminal: surfsh (pid N) on ptyM" and "... the session on ptyM ended";
   nothing typed or shown is logged.
