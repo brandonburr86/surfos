@@ -197,6 +197,7 @@ static void kill_hangup(surf_task *t);
    10/17/26 (B46, B47): also a step that must finish (fs_finish: umount) and a device request (driver/bdev.c: a driver's
    lock and transfer) */
 static bool in_fs(const surf_task *t) { return t->fs_hold || bcache_holds(t); }
+bool task_in_fs(const surf_task *t) { return t && in_fs(t); }   /* 10/18/26 (audit B56: the fault policy) */
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));

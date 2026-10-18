@@ -877,6 +877,19 @@ static int cmd_crashint(int argc, char **argv) {
     return CMD_OK;
 }
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; } /* page 0 is unmapped */
+/* 10/18/26 (audit B56): the same fault while this task counts as inside a file system (as in a device request): the
+   system stops (kernel/panic.c), since nothing could give back what a task held there. Only in the kernel shell: a
+   program (the user shell's SYS_kcmd) cannot fault inside a file system, and this command does not give it a way */
+static int cmd_crashfs(int argc, char **argv) {
+    if(curTask->flags & TF_USER) {
+        printf("    crashfs stops the system: only in the kernel shell (shell=kernel), not from a program\n");
+        return CMD_FAIL;
+    }
+    fs_enter();
+    *(volatile int *)0 = 1;
+    fs_leave();
+    return CMD_FAIL;
+}
 
 static const struct command commands[] = {
     { "help",      "[command]", "this menu, or one command in detail", cmd_help },
@@ -953,6 +966,7 @@ static const struct command commands[] = {
     { "crashdiv",  "",          "divide by zero in this shell", cmd_crashdiv },
     { "crashgp",   "",          "general protection fault in this shell", cmd_crashgp },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
+    { "crashfs",   "",          "a NULL pointer inside a file system: the system stops (kernel shell only)", cmd_crashfs },
     { "crashint",  "",          "raise an unused vector", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };

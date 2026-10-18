@@ -728,6 +728,9 @@ static int cmd_crashmis(int argc, char **argv) {
 
 /* a store to address 0: the boot ROM on SurfCPU (not writable), nothing on QEMU virt */
 static int cmd_crashnull(int argc, char **argv) { *(volatile int *)0 = 1; return CMD_FAIL; }
+/* 10/18/26 (audit B56): the same store while this task counts as inside a file system (as in a device request): the
+   system stops (arch/riscv32/trap.c), since nothing could give back what a task held there */
+static int cmd_crashfs(int argc, char **argv) { fs_enter(); *(volatile int *)0 = 1; fs_leave(); return CMD_FAIL; }
 
 /* EBREAK: reported and stepped over (as an unused vector on x86) */
 static int cmd_crashint(int argc, char **argv) {
@@ -787,6 +790,7 @@ static const struct command commands[] = {
     { "crashill",  "",          "an illegal instruction in this shell", cmd_crashill },
     { "crashmis",  "",          "a misaligned word load in this shell", cmd_crashmis },
     { "crashnull", "",          "write through a NULL pointer", cmd_crashnull },
+    { "crashfs",   "",          "a NULL pointer inside a file system: the system stops", cmd_crashfs },
     { "crashint",  "",          "a breakpoint (ebreak): reported and stepped over", cmd_crashint },
     { "reboot",    "",          "reboot the machine", cmd_reboot },
 };

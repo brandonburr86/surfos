@@ -13,6 +13,16 @@ handler is a kernel wipeout.
 10/6/26: a kernel command run by the user shell keeps its output for a file while
 the shell's descriptor 1 is redirected (SYS_kcmd, console_capture_begin()); a fault
 report or a panic is never kept there, it goes to the screen.
+
+10/18/26 (audit B56): a fault in kernel mode while the task is inside a file system,
+the block cache or a device request (task_in_fs()) is a kernel wipeout too. Killed
+there, the task would leave behind what it held: a volume's lock, the cache's or its
+bounce buffer's, a driver's per-device lock (USB storage, ATA, the SD card hold theirs
+for the whole request), blocks marked as under a device's I/O, a copy's record on its
+stack; and the device may still carry out the request it was given. Nothing can give
+those back, and a later umount, mkfs or unplug would wait on them for good, or a late
+write would land on a volume mounted or made since. A program cannot get there: every
+pointer it passes is checked before the call reaches a file system (kernel/syscall.c).
 */
 
 #include <surfos/system.h>
@@ -53,15 +63,21 @@ void dump_trapframe(struct trapframe *tf) {
 u_long *trap_fatal(struct trapframe *tf, const char *fmt, ...) {
     char why[160];
     va_list ap;
+    bool inside;
 
     va_start(ap, fmt);
     vsnprintf(why, sizeof(why), fmt, ap);
     va_end(ap);
 
-    if(!curTask || curTask->pid == 0 || in_interrupt()) { //a kernel exception.. beadd
+    inside = curTask && !(tf->cs & 3) && task_in_fs(curTask);  /* 10/18/26 (audit B56): see the top of this file */
+    if(!curTask || curTask->pid == 0 || in_interrupt() || inside) { //a kernel exception.. beadd
         irq_disable();
         console_panic(); //whoever was drawing will not finish: the report must reach the screen, as plain text
         kprintf("\nKernel Wipeout: %s\n", why);
+        if(inside)
+            kprintf("in '%s' (pid %lu) inside a file system, the block cache or a device request: what it held there (a\n"
+                    "volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back\n",
+                    curTask->name, curTask->pid);
         dump_trapframe(tf);
         backtrace(tf->ebp, tf->eip);
         kprintf("\nSYSTEM HALTED\n");

@@ -404,6 +404,30 @@ def scroll_boot(args, disk, check):
     return transcript
 
 
+def fsfault_boot(args, disk, check):
+    """10/18/26 (audit B56): a fault while the task is inside a file system, the block cache or a device request
+    (crashfs: a store to address 0 between fs_enter() and fs_leave()) stops the system with a wipeout that says why:
+    nothing could give back what the task held there. crashnull, the same store outside, kills only the shell"""
+    q = Qemu(args.qemu, ['-bios', 'none', '-kernel', os.path.abspath(args.kernel)], disk, args.verbose)
+    try:
+        ok = q.expect("Brandon Burr's SurfOS", 60) and q.expect(PROMPT, 60)
+        mark = len(q.transcript)
+        q.cursor = mark
+        q.send('crashfs\r')
+        ok2 = all(q.expect(t, 20) for t in ['Kernel Wipeout: ', 'inside a file system, the block cache or a device request',
+                                             'SYSTEM HALTED'])
+        q.wait(1)
+        out = q.since(mark)
+        m = re.search(r'Kernel Wipeout: (.*)', out)
+        check(ok and ok2 and 'init: restarted the shell' not in out,
+              'crashfs: a store to address 0 inside a file system stops the system with a wipeout that says why (%s)'
+              % (m.group(1).strip() if m else 'none'))
+    finally:
+        transcript = q.transcript
+        q.close()
+    return transcript
+
+
 def package_boot(args, disk, check, work):
     """SURFOS.BIN, packed by the fw track's tools/surfimg.py: its verify, then copied to its load address"""
     hdr = package_header(args.package)
@@ -1140,6 +1164,7 @@ def main():
 
     try:
         transcript += scroll_boot(args, disk, check)
+        transcript += fsfault_boot(args, disk, check)
         if args.stub:
             transcript += handoff_boots(args, disk, check, work)
             transcript += sdsim_boot(args, disk, check, work)

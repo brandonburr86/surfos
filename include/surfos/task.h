@@ -211,6 +211,10 @@ static inline void fs_finish_leave(void) {
     if(curTask->fs_finish) curTask->fs_finish--;
     if(curTask->fs_hold) curTask->fs_hold--;
 }
+/* 10/18/26 (audit B56): is t inside a file system, the block cache or a device request (counted, or holding the cache's
+   lock or its bounce buffer's): a fault there stops the system (kernel/panic.c, arch/riscv32/trap.c), since what t
+   holds there (a volume's lock, the cache's, a driver's, blocks under a device's I/O) cannot be given back */
+bool task_in_fs(const surf_task *t);
 surf_task *task_find(u_long pid);
 u_int task_count(void);
 u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */
