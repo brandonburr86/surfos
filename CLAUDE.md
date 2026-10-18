@@ -23,7 +23,8 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
                   # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py),
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
-                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
+                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
+                  # httpd's HTTP protocol (test_httpd)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
 make test-usb     # boot that image under OVMF from emulated USB sticks: 15 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
@@ -39,6 +40,7 @@ python3 tools/qemu-run.py --kernel build/O0/surfos.bin --shell ps memstat     # 
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --disk build/images/test.img --initrd build/images/initrd.tar --shell lsblk
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --scratch 64 --shell 'fdisk rd1'  # a blank ramdisk rd1 to partition and format
 # the harness gives QEMU a user-mode network (gateway 10.0.2.2) with port forwards to guest ports 7 and 23 (telnet: q.ports['telnet']) and a host HTTP server (httpport= on the kernel command line)
+# 10/17/26: and to guest ports 80 and 8080 (httpd, the web server: q.ports['www'], q.ports['www2'])
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --screen --keys 'help\n'  # VGA text dump
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append shell=kernel --shell ps   # the ring-0 shell (≋#>)
 python3 tools/qemu-run.py --kernel build/O0/surfos.bin --initrd build/images/initrd.tar --append profile=laptop --shell drivers acpi
@@ -86,7 +88,8 @@ user/      user programs: user.ld, libsurf (crt0, a small C library: stdio, stdl
            pagetest, kcmdtest, nettest, ptytest, rx (one file from the network), ...), surfsh/ (the SurfOS shell: main,
            editor, complete, parse, run, builtins),
            undertow/ (HTTP/HTTPS text browser: URL, transport/TLS, HTTP, HTML, history, view, editor, commands; docs/UNDERTOW.md),
-           telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol)
+           telnetd/ (the telnet server: main the commands, server the poll loop, telnet the protocol),
+           httpd/ (the web server: main the commands, server the poll loop, http the protocol; docs/USB-BOOT.md section 15)
 lib/blibc/ the in-tree libc (printf, strings, getch, ctype, CMOS time)
 driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the kernel word wlansim (tests);
            iwl_fw.c: Intel's firmware files (the TLV container, include/sys/iwl_fw.h, host-tested); iwl.c: the
@@ -108,7 +111,7 @@ tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk ima
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
            protocol, telnetd's loop), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
-rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
+rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0; www/ is the sample site httpd serves
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
 docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (the IdeaPad record), superpowers/plans/ (the brief)
 ```
@@ -144,6 +147,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   so the rest of a paste never runs in pieces. `telnetd` has no login or encryption by the
   owner's choice: never start it by itself. The one exception is the kernel word `autonet`
   (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13).
+  `httpd` (10/17/26) only sends the files of the folder it was given, and never starts by
+  itself either.
   A listener's backlog is 4 unless its program asks for up to 8 (`SYS_listen`'s second
   argument, `tcp_listen_backlog()`, 10/17/26).
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
@@ -215,7 +220,13 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   the kernel command line shortens keepalive; `tools/qemu-tcp.py --scenario <name>` runs
   one TCP scenario (`--verbose` prints every segment); the harness's `Telnet` client
   (tools/qemu-run.py) reaches guest port 23 through `q.ports['telnet']`; `telnetd status`
-  and `dmesg` show the server's sessions and why each ended.
+  and `dmesg` show the server's sessions and why each ended. The web server: `httpd serve`
+  prints every request on its console (the background server logs only its start, stop and
+  errors to `dmesg`); the `@httpd-*` checks reach it from the host through `q.ports['www']`
+  (guest port 80) and `q.ports['www2']` (8080). QEMU's user network takes the connections to
+  a forwarded port one at a time: of two made in the same instant, one is reset on the host
+  before the guest sees it. Start test clients a little apart (a browser on the Mac pointed
+  at a forwarded port hits this too: reload when a first load fails).
 * The development loop (docs/USB-BOOT.md section 13): `tools/devloop.py` drives the laptop from the Mac over
   telnet. `find`; `run <cmd>...` (output with escapes stripped, `--More--` answered; it refuses `reboot`, `mkfs`,
   `fdisk` changes and `telnetd off`); `log` (dmesg); `deploy` (the newest `surfos.bin` and `initrd.tar` under

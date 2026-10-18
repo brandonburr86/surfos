@@ -1181,7 +1181,7 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   describes the default interface; libsurf has `tcp_listen`, `tcp_accept`, `tcp_connect`,
   `netinfo`, `ipstr` and `ipparse`. A listener's backlog holds 4 connections waiting for
   `accept()`; since 10/17/26 `SYS_listen`'s second argument asks for up to 8
-  (`tcp_listen_backlog()`, for a server that a browser opens several connections to at once).
+  (`tcp_listen_backlog()`; httpd asks for 6, as a browser opens six connections at once).
   There are 16 TCP sockets (8 before); programs and
   connections coming in leave the last free one to the kernel's own commands. `read()`
   waits as long as it takes (a kill or Ctrl+C ends the wait), `write()` queues what fits
@@ -1321,6 +1321,95 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   text. The window size follows NAWS, but no terminal type (TTYPE) is asked for: a session
   always speaks the console's ANSI subset. surfsh has no type-ahead (section 17), so a
   pasted block of several lines runs only its first line.
+
+## 19. httpd, the web server (October 2026)
+
+The owner asked (2026-10-17) for a simple web server that hosts websites off SurfOS, just
+basic HTML and CSS (`docs/USB-BOOT.md` section 15; the brief is
+`docs/superpowers/plans/2026-10-17-httpd.md`). It is a program on the sockets, `poll()`
+and process calls of section 18, with one small kernel change (a listener may ask for a
+longer backlog, section 18): `/initrd/bin/httpd`, from `user/httpd/`, laid out as `telnetd`
+is.
+
+```
+main.c     ring 3: the CLI. httpd on [folder] [port], httpd serve [folder] [port], httpd off, httpd [status]
+server.c   the server: one poll() loop over the listening socket and up to 6 connections
+http.c     the HTTP/1.1 protocol, no system calls: request heads, paths, header fields, pages; host-tested
+```
+
+* **Starting and stopping.** `httpd on` finds a running server by `procinfo` (a detached
+  user task named `httpd`), makes the folder absolute (`http_normalize()`, from the current
+  directory) and checks that it is one, takes the port with `SYS_listen` itself, then
+  starts the server as the same program with `--server <port> <folder>`, the listening
+  socket as its descriptor 0 and `/dev/null` as 1 and 2 (`spawnfd`). The server
+  `detach()`es, writes its start and its errors to `/dev/kmsg`, and `chdir("/")`s so that it
+  holds no volume through its current directory. `httpd off` kills it; the kill ends it at
+  the end of its `poll()`, and its descriptors close with it. `httpd serve` runs the same
+  loop in the foreground and prints each request on its console instead (never in the
+  kernel log, whose 16 KB a few hundred requests would fill). A server started in a telnet
+  session is on the session's pseudo-terminal and ends at its hangup; `httpd on` says so.
+* **The loop.** A connection reads its request head (`http_head_end()`; at most 4 KB, else
+  414 or 431), then sends the response: the header, then the body from the file, or from
+  memory for a folder's listing, a piece of up to 8 KB at a time, written as far as the
+  connection takes it at each `POLLOUT`. A connection that sends is not read, so a request
+  behind it (pipelining) waits in the kernel and is answered after it; HTTP/1.1 connections
+  then wait for the next request (keep-alive). A connection gets `REQUEST_MS` (10 s) to
+  begin a request and as long again from its first byte to finish it (then 408, or a plain
+  close when nothing came); a response the client takes nothing of for 30 s is given up. A
+  client that half-closes while its response is written makes `poll()` say `POLLHUP` at
+  once whenever its window is full; such a connection rests 20 ms before it is polled
+  again, so the loop never spins. Closing never loses a response: the kernel sends the FIN
+  behind the queued bytes and drops what the client still sends (section 18).
+* **Places.** Six connections: a connection and the file it sends take two of a process's
+  16 descriptors, which with 0, 1, 2 and the kernel log's makes all 16. When the places are
+  taken, a new connection takes the place of the one idle longest (waiting for a request
+  with nothing of it read); when none is idle, the listening socket is left out of
+  `poll()` and new connections wait in the kernel's backlog, which httpd asks to be 6 long
+  (section 18: with the default 4, a browser's six SYNs at once lost two to a full backlog
+  before the server could accept the first). The listener, 6 places and 6 waiting are 13
+  of the 15 sockets programs may have (16, one kept for the kernel), so `telnetd` still
+  gets its listener and a session under a full load.
+* **Requests** (`http.c`). The request line (origin and absolute forms; the query
+  ignored), `Host` (exactly one in HTTP/1.1), `Connection`, `Content-Length` and
+  `Transfer-Encoding` (a body is never read: the connection closes after the response) and
+  `If-None-Match`. The path is percent-decoded and cut into names: "." and empty names go,
+  ".." is refused (400: browsers resolve it before they send, so it only comes from a
+  request trying to leave the folder; encoded too), as are a NUL, controls and backslashes;
+  a name starting with a dot is hidden (404), which covers what macOS leaves on FAT sticks.
+  FAT lookups fold case but match only a long name, never its 8.3 alias, so a hidden file
+  cannot be reached as `SECRET~1`. Statuses: 200, 301, 304, 400, 404, 405 (with `Allow`),
+  408, 414, 431, 500, 505; every error but 404 closes the connection.
+* **Responses.** The file path is the folder and the request's path (414 when it is longer
+  than a path can be). A folder asked without its `/` is redirected to it (301), since its
+  page's relative links need it; its `index.html`, else `index.htm`, is its page, else it
+  is listed (`http_listing()`: names escaped, links percent-encoded, folders first, sizes
+  and times, at most 512 entries, dot names left out). A file is opened for each request
+  and read as it is sent, so edits show at once; its ETag is its size and time in hex,
+  `Cache-Control: no-cache` makes the browser ask every time, and an `If-None-Match` that
+  holds the ETag gets 304. There is no `Date` and no `Last-Modified`: the CMOS clock keeps
+  local time with no zone, which HTTP must not pass off as GMT. A file that ends before
+  the length its header gave (it shrank, its stick went) ends the connection.
+* **Tests.** `make unittest` adds `test_httpd` (`http.c` unchanged: heads in every prefix,
+  every parse rule and status, traversal plain and encoded, path limits, fields, header
+  bytes, types, ETags, encoding, listings, folder arguments). `make test` adds the
+  commands' refusals and the checks `@httpd-site` (the sample site byte for byte with its
+  types, HEAD, 304, 404s), `@httpd-protocol` (400s, 405, 414, 431, 505, the absolute form,
+  HTTP/1.0), `@httpd-keepalive` (a connection for several requests, three pipelined, a body
+  that closes), `@httpd-places` (idle connections making room, busy ones making a new one
+  wait, eight clients side by side), `@httpd-timeouts`, `@httpd-initrd` (the initrd's root
+  on port 8080: listings, a 301, a 188 KB file), `@httpd-serve` (a site made on the FAT
+  disk, the request lines on the console, a hidden file refused also through its 8.3 alias
+  `SECRET~1`, Ctrl+C) and `@httpd-slow` (a client that stops reading a 2.5 MB file on the
+  FAT disk while others are served, then reads it whole).
+  The smoke test forwards guest ports 80 and 8080 (`q.ports['www']`, `q.ports['www2']`).
+  QEMU's user network takes the connections to a forwarded port one at a time (of two made
+  in the same instant, one is reset on the host before the guest sees it); the checks make
+  every connection 50 ms after the one before (`www_connect()`), and `make test-tcp`'s `backlog` scenario (`nettest sleepsrv <port>
+  <ms> 8`) shows the guest holding eight whole connections and dropping a ninth SYN.
+  `make test-usb`'s `usbnet` scenario fetches the sample site over the USB Ethernet adapter.
+* **Limits.** GET and HEAD only: no forms, uploads, server-side programs or HTTPS; one
+  background server; the address `httpd on` prints is the default interface's (`netinfo`).
+  SurfOS has no loopback interface, so Undertow on the same machine cannot open the site.
 
 ## Undertow HTTP/HTTPS browser (2026-10-12)
 

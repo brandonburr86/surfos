@@ -12,6 +12,7 @@ go through the QEMU monitor (pmemsave / sendkey), so they keep working when the
 serial path itself is what is broken.
 """
 import argparse
+import http.client
 import http.server
 import io
 import threading
@@ -113,6 +114,10 @@ SELFTEST_BOOTVOL = '5E1F-7E57'
 CHECK = object()
 WLANSIM_PASSPHRASE = 'surfsim-wpa2-test-passphrase'
 WLANSIM_WRONG = 'not-the-surfsim-passphrase'
+
+# 10/17/26 (httpd): a file of 1.5 MB or more on the FAT disk, four copies of a program, for @httpd-slow (the program cat,
+# which copies bytes as they are; the kernel's cat prints)
+BIG_BIN = '/initrd/bin/cat ' + ' '.join(['/initrd/bin/undertow'] * 4) + ' > /hda1/BIG.BIN'
 
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
@@ -714,10 +719,54 @@ SMOKE = [
     ('dmesg', ['telnetd: listening on port 23', 'telnetd: session 1 from 10.0.2.2:', 'telnetd: session 1 ended (the shell',
                'telnetd: telnetd off stops the server (pid', ', 2 session shells)', 'refused: 4 sessions are open',
                'ended (the client left)', 'telnetd: telnetd off stops the server (pid', ', 1 session shell)']),
+    # 10/17/26: httpd, the web server (user/httpd/), from this host through the forwarded ports 80 and 8080 with
+    # http.client and raw sockets (the checks below). Not running at first; the commands' refusals (status 1 and 2);
+    # on: the sample site, /initrd/www; on again (running already); the site's files, HEAD, 304, 404s; what the
+    # protocol refuses; keep-alive and pipelining; six places; the timeouts; off. The initrd's root on port 8080:
+    # its listings, a 301, a large file. A site made on the FAT disk, served by httpd serve, which prints each
+    # request, until Ctrl+C; then the port is free again, and httpd on serves a 1.5 MB file to a client that stops
+    # reading while others are answered. The kernel's log.
+    ('httpd', ['httpd: not running (httpd on starts it)']),
+    ('run httpd on /initrd/nowhere', ['httpd: /initrd/nowhere: no such folder', 'exit status 1']),
+    ('run httpd on /initrd/README', ['httpd: /initrd/README is a file, not a folder', 'exit status 1']),
+    ('run httpd on 0', ['httpd: 0 is no port (1-65535)', 'exit status 2']),
+    ('run httpd on 80 81', ['usage: httpd [on [folder] [port]', 'exit status 2']),
+    ('run httpd on -p 80', ['httpd: no option -p', 'exit status 2']),
+    ('run httpd --server 80 /initrd/www', ['httpd: --server is how httpd on starts the server', 'exit status 2']),
+    ('run httpd off', ['httpd: not running', 'exit status 1']),
+    ('httpd on', ['httpd: serving /initrd/www at http://10.0.2.15/']),
+    ('run httpd on /initrd', ['httpd: running already (pid', 'exit status 1']),
+    ('httpd status', ['httpd: running (pid']),
+    ('run httpd serve 80', ['httpd: port 80 is in use (the server httpd on started, pid', 'exit status 1']),
+    ('@httpd-site', []),
+    ('@httpd-protocol', []),
+    ('@httpd-keepalive', []),
+    ('@httpd-places', []),
+    ('@httpd-timeouts', []),
+    ('httpd off', ['httpd: stopped']),
+    ('httpd', ['httpd: not running']),
+    ('cd /initrd/etc', []),
+    ('httpd on .. 8080', ['httpd: serving /initrd at http://10.0.2.15:8080/']),
+    ('cd /', []),
+    ('@httpd-initrd', []),
+    ('httpd off', ['httpd: stopped']),
+    ('mkdir /hda1/WWW', []),
+    ("echo '<h1>FAT site</h1>' > /hda1/WWW/INDEX.HTM", []),
+    ('echo a space > "/hda1/Hello World.txt"', []),
+    ('echo hidden > /hda1/.secret', []),
+    (BIG_BIN, []),
+    ('@httpd-serve', []),
+    ('httpd on /hda1', ['httpd: serving /hda1 at http://10.0.2.15/']),     # Ctrl+C freed the port
+    ('@httpd-slow', []),
+    ('httpd off', ['httpd: stopped']),
+    ('rm /hda1/WWW/INDEX.HTM "/hda1/Hello World.txt" /hda1/.secret /hda1/BIG.BIN', []),
+    ('rmdir /hda1/WWW', []),
+    ('dmesg', ['httpd: serving /initrd/www on port 80', 'httpd: httpd off stops the server (pid',
+               'httpd: serving /initrd on port 8080', 'httpd: serving /hda1 on port 80']),
     ('umount /hda1', []),                                   # marks it clean for fsck.fat on the host
 ]
 # steps that legitimately take longer than the 10 s default (by command, or by its first word)
-TIMEOUTS = {'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
+TIMEOUTS = {BIG_BIN: 60, 'selftest': 120, 'run fstest /hda1/FST': 60, 'fsbench': 60, 'run kcmdtest /hda1': 60,
             'run kcmdtest together /hda1': 60, 'run kcmdtest child-selftest /hda1/KSELF.TXT': 180,
             'run kcmdtest pings /hda1 10.0.2.2': 60, 'run kcmdtest kills /hda1 10.0.2.2': 180}
 # anything that means the kernel fell over
@@ -778,10 +827,14 @@ class Qemu:
             self.ports['http'] = free_port()
             self.ports['rx'] = free_port()
             self.ports['telnet_wlan'] = free_port()          # 10/9/26: port 23 of 10.0.2.16, the simulated wlan0's lease
+            self.ports['www'] = free_port()                  # 10/17/26: httpd, the web server, on port 80
+            self.ports['www2'] = free_port()                 # ... and on port 8080
             boot += ['-netdev', f"user,id=net0,hostfwd=tcp:127.0.0.1:{self.ports['echo']}-:7,"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['telnet']}-:23,"
                                 f"hostfwd=tcp:127.0.0.1:{self.ports['rx']}-:{RX_PORT},"
-                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23",
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['telnet_wlan']}-10.0.2.16:23,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['www']}-:80,"
+                                f"hostfwd=tcp:127.0.0.1:{self.ports['www2']}-:8080",
                      '-device', 'e1000,netdev=net0,mac=52:54:00:12:34:56']
             cmdline.append(f"httpport={self.ports['http']}")
             self.http = http.server.HTTPServer(('127.0.0.1', self.ports['http']), TestHandler)
@@ -2048,6 +2101,409 @@ CONSOLE_CHECKS.update({'@telnet-session': telnet_session_check, '@telnet-two': t
                        '@telnet-protocol': telnet_protocol_check,
                        '@telnet-binary': telnet_binary_check,
                        '@telnet-off-inside': telnet_off_inside_check, '@telnet-port-busy': telnet_port_busy_check})
+
+
+# 10/17/26: httpd, the web server (user/httpd/), from this host through the forwarded ports 80 (q.ports['www']) and
+# 8080 (q.ports['www2']). The files it should send are read from the very initrd this QEMU has.
+def initrd_file(q, name):
+    """the bytes of the initrd's file name (www/index.html), as the guest has them"""
+    with tarfile.open(os.path.join(q.workdir, 'initrd.tar')) as t:
+        return t.extractfile(name).read()
+
+
+_WWW_PACE = threading.Lock()
+_WWW_LAST = [0.0]
+
+
+def www_connect(port, timeout=10, rcvbuf=None):
+    """a connection to a forwarded guest port, at least 50 ms after the one before. QEMU's user network takes the
+    connections to a forwarded port one at a time: of two made in the same instant it resets one on this host
+    before the guest sees it (10/17/26: every time, whatever the guest's backlog), so every check connects here;
+    tools/qemu-tcp.py's backlog scenario tests the guest's own backlog"""
+    with _WWW_PACE:
+        wait = _WWW_LAST[0] + 0.05 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        s = socket.socket()
+        try:
+            if rcvbuf:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+            s.settimeout(timeout)
+            s.connect(('127.0.0.1', port))
+        except OSError:
+            s.close()
+            raise
+        finally:
+            _WWW_LAST[0] = time.time()
+        return s
+
+
+def www_get(port, path, method='GET', headers=None, timeout=10):
+    """one request on a connection of its own (http.client): status, header fields (names in lower case), body"""
+    c = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
+    try:
+        c.sock = www_connect(port, timeout)
+        c.request(method, path, headers=headers or {})
+        r = c.getresponse()
+        return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
+    finally:
+        c.close()
+
+
+def www_raw(port, data, timeout=5):
+    """data sent as it is on a connection of its own; what comes back until the server closes (None if it does not
+    close within timeout, with what came in www_raw.got)"""
+    s = www_connect(port, timeout)
+    got, deadline = b'', time.time() + timeout
+    try:
+        s.sendall(data)
+        while time.time() < deadline:
+            try:
+                d = s.recv(65536)
+            except socket.timeout:
+                break
+            if not d:
+                return got
+            got += d
+        www_raw.got = got
+        return None
+    finally:
+        s.close()
+
+
+def www_responses(data):
+    """the responses one behind the other in data: [(status, header fields, body)] (no HEAD: bodies by Content-Length)"""
+    out = []
+    while data:
+        head, sep, rest = data.partition(b'\r\n\r\n')
+        if not sep:
+            break
+        lines = head.decode('latin-1').split('\r\n')
+        fields = {}
+        for l in lines[1:]:
+            k, _, v = l.partition(':')
+            fields[k.strip().lower()] = v.strip()
+        n = int(fields.get('content-length', '0'))
+        out.append((int(lines[0].split()[1]), fields, rest[:n]))
+        data = rest[n:]
+    return out
+
+
+def www_recv(s, timeout):
+    """what comes on s within timeout, until it closes: (bytes, closed)"""
+    got, deadline = b'', time.time() + timeout
+    while time.time() < deadline:
+        s.settimeout(max(deadline - time.time(), 0.05))
+        try:
+            d = s.recv(65536)
+        except socket.timeout:
+            break
+        except OSError:
+            return got, True
+        if not d:
+            return got, True
+        got += d
+    return got, False
+
+
+def httpd_site_check(q):
+    """the sample site (httpd on: /initrd/www) from this host: the page, its style sheet and picture, byte for byte
+    with their types, the server's fields, the query ignored; HEAD; If-None-Match with the ETag (304); a name that
+    is not there (a 404 page; hidden names are @httpd-serve's, on the FAT disk)"""
+    port, results = q.ports['www'], []
+    try:
+        page, css, svg = (initrd_file(q, 'www/' + n) for n in ('index.html', 'style.css', 'wave.svg'))
+        st, h, body = www_get(port, '/')
+        results.append(st == 200 and body == page and h.get('content-type') == 'text/html; charset=utf-8' and
+                       h.get('server') == 'SurfOS-httpd/1.0' and h.get('cache-control') == 'no-cache' and
+                       h.get('connection') == 'keep-alive' and h.get('content-length') == str(len(page)) and
+                       b'This page came from SurfOS.' in body)
+        tag = h.get('etag', '')
+        st, h, body = www_get(port, '/style.css')
+        results.append(st == 200 and body == css and h.get('content-type') == 'text/css; charset=utf-8')
+        st, h, body = www_get(port, '/wave.svg')
+        results.append(st == 200 and body == svg and h.get('content-type') == 'image/svg+xml')
+        st, h, body = www_get(port, '/index.html?from=smoke#top')
+        results.append(st == 200 and body == page and h.get('etag') == tag)
+        st, h, body = www_get(port, '/', 'HEAD')
+        results.append(st == 200 and body == b'' and h.get('content-length') == str(len(page)) and h.get('etag') == tag)
+        st, h, body = www_get(port, '/', headers={'If-None-Match': tag})
+        results.append(re.fullmatch(r'"[0-9a-f]+-[0-9a-f]+"', tag) is not None and st == 304 and body == b'' and
+                       h.get('etag') == tag)
+        st, h, body = www_get(port, '/', headers={'If-None-Match': '"0-0"'})
+        results.append(st == 200 and body == page)
+        st, h, body = www_get(port, '/nothing-here.html')
+        results.append(st == 404 and b'404 Not Found' in body and h.get('content-type') == 'text/html; charset=utf-8')
+    except (OSError, http.client.HTTPException, KeyError) as e:
+        print(f'  httpd site: {e!r}')
+        results.append(False)
+    return ('httpd: the sample site: page, style sheet, picture, HEAD, 304, 404s (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+def httpd_protocol_check(q):
+    """what httpd refuses, each on a connection of its own that it then closes: no Host in HTTP/1.1, .. plain and
+    encoded, POST with a body (405 and Allow), HTTP/2.0 (505), a target too long (414), a header too large (431);
+    and what it takes: the absolute form, HTTP/1.0 (answered, then closed)"""
+    port, results = q.ports['www'], []
+
+    def refused(data, status, *needles):
+        got = www_raw(port, data)
+        r = www_responses(got or b'')
+        ok = got is not None and len(r) == 1 and r[0][0] == status and r[0][1].get('connection') == 'close' and \
+            all(n in got for n in needles)
+        if not ok:
+            print(f'  httpd protocol: {data[:40]!r}: {got[:200] if got else got!r}')
+        return ok
+    try:
+        results.append(refused(b'GET / HTTP/1.1\r\n\r\n', 400))
+        results.append(refused(b'GET /../etc/version HTTP/1.1\r\nHost: s\r\n\r\n', 400))
+        results.append(refused(b'GET /%2e%2e/%2e%2e/etc/version HTTP/1.1\r\nHost: s\r\n\r\n', 400))
+        results.append(refused(b'POST / HTTP/1.1\r\nHost: s\r\nContent-Length: 5\r\n\r\nhello', 405, b'Allow: GET, HEAD\r\n'))
+        results.append(refused(b'GET / HTTP/2.0\r\nHost: s\r\n\r\n', 505))
+        results.append(refused(b'GET /' + b'a' * 5000 + b' HTTP/1.1\r\nHost: s\r\n\r\n', 414))
+        results.append(refused(b'GET / HTTP/1.1\r\nHost: s\r\nX-Big: ' + b'b' * 5000 + b'\r\n\r\n', 431))
+        got = www_raw(port, b'GET http://anything/style.css HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n')
+        r = www_responses(got or b'')
+        results.append(len(r) == 1 and r[0][0] == 200 and r[0][2] == initrd_file(q, 'www/style.css'))
+        got = www_raw(port, b'GET / HTTP/1.0\r\n\r\n')
+        r = www_responses(got or b'')
+        results.append(got is not None and len(r) == 1 and r[0][0] == 200 and r[0][1].get('connection') == 'close')
+    except OSError as e:
+        print(f'  httpd protocol: {e!r}')
+        results.append(False)
+    return ('httpd: refusals (400 400 400 405 505 414 431), the absolute form, HTTP/1.0 (%d of %d)' %
+            (sum(results), len(results)), all(results))
+
+
+def httpd_keepalive_check(q):
+    """one connection for several requests (keep-alive), three requests sent at once (pipelining) answered in order,
+    a 404 that keeps the connection, Connection: close that ends it, and a request with a body: answered, then
+    closed, what came behind it never answered"""
+    port, results = q.ports['www'], []
+    try:
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+        c.sock = www_connect(port)
+        statuses, socks = [], set()
+        for path in ('/', '/style.css', '/nothing', '/wave.svg'):
+            c.request('GET', path)
+            r = c.getresponse()
+            r.read()
+            statuses.append(r.status)
+            socks.add(c.sock.getsockname() if c.sock else None)     # http.client drops a connection that closes
+        c.close()
+        results.append(statuses == [200, 200, 404, 200] and len(socks) == 1 and None not in socks)
+        s = www_connect(port)
+        try:
+            s.sendall(b'GET / HTTP/1.1\r\nHost: s\r\n\r\nGET /style.css HTTP/1.1\r\nHost: s\r\n\r\n'
+                      b'GET /missing HTTP/1.1\r\nHost: s\r\n\r\n')
+            got, closed = www_recv(s, 3)
+            r = www_responses(got)
+            results.append(not closed and [x[0] for x in r] == [200, 200, 404] and
+                           r[1][2] == initrd_file(q, 'www/style.css'))
+            s.sendall(b'GET /wave.svg HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n')
+            got, closed = www_recv(s, 5)
+            r = www_responses(got)
+            results.append(closed and [x[0] for x in r] == [200] and r[0][1].get('connection') == 'close')
+        finally:
+            s.close()
+        got = www_raw(port, b'GET /style.css HTTP/1.1\r\nHost: s\r\nContent-Length: 3\r\n\r\nabc'
+                            b'GET / HTTP/1.1\r\nHost: s\r\n\r\n')
+        r = www_responses(got or b'')
+        results.append(got is not None and [x[0] for x in r] == [200] and r[0][1].get('connection') == 'close')
+    except (OSError, http.client.HTTPException) as e:
+        print(f'  httpd keep-alive: {e!r}')
+        results.append(False)
+    return ('httpd: keep-alive, pipelining, close, a request with a body (%d of %d)' % (sum(results), len(results)),
+            all(results))
+
+
+def httpd_places_check(q):
+    """six idle connections fill every place: a seventh is served all the same (the one idle longest makes room);
+    six requests begun but not finished: a seventh waits until one of them is finished and answered; eight clients
+    side by side, three pages each on connections of their own, all answered whole (connections 50 ms apart at
+    least: www_connect())"""
+    port, results, socks = q.ports['www'], [], []
+    css = initrd_file(q, 'www/style.css')
+    try:
+        for _ in range(6):
+            socks.append(www_connect(port))
+            time.sleep(0.15)                # an order of idleness
+        time.sleep(0.5)
+        st, _, body = www_get(port, '/style.css')
+        results.append(st == 200 and body == css)
+        socks[0].settimeout(3)
+        try:
+            results.append(socks[0].recv(1) == b'')     # the one idle longest was closed for it
+        except OSError:
+            results.append(False)
+        for s in socks:
+            s.close()
+        socks = []
+        q.pump(0.5)
+        for _ in range(6):
+            s = www_connect(port)
+            s.sendall(b'GET /wave.svg HTTP/1.1\r\nHost: s\r\n')          # not finished: not idle
+            socks.append(s)
+        time.sleep(0.5)
+        late = www_connect(port)
+        socks.append(late)
+        late.sendall(b'GET /style.css HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n')
+        got, _ = www_recv(late, 1.5)
+        results.append(got == b'')                      # it waits: every place is taken
+        socks[2].sendall(b'\r\n')                       # one request finished: answered, then idle
+        got, _ = www_recv(socks[2], 2)
+        results.append([x[0] for x in www_responses(got)] == [200])
+        got, closed = www_recv(late, 5)
+        r = www_responses(got)
+        results.append(closed and len(r) == 1 and r[0][0] == 200 and r[0][2] == css)
+        for s in socks:
+            s.close()
+        socks = []
+        q.pump(0.5)
+        answers, files = [], {'/': initrd_file(q, 'www/index.html'), '/style.css': css,
+                              '/wave.svg': initrd_file(q, 'www/wave.svg')}
+
+        def client(n):
+            for path, want in files.items():
+                try:
+                    st, _, body = www_get(port, path, headers={'Connection': 'close'}, timeout=20)
+                    answers.append(st == 200 and body == want)
+                except (OSError, http.client.HTTPException) as e:
+                    print(f'  httpd places: client {n}, {path}: {e!r}')
+                    answers.append(False)
+        threads = [threading.Thread(target=client, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        results.append(len(answers) == 24 and all(answers))
+    except (OSError, http.client.HTTPException) as e:
+        print(f'  httpd places: {e!r}')
+        results.append(False)
+    finally:
+        for s in socks:
+            s.close()
+    if not all(results):
+        print(f'  httpd places: {results} (served, idle one closed, a new one waits, one finished, the new one, eight)')
+    return ('httpd: six places: idle ones make room, busy ones make new ones wait, eight clients (%d of %d)' %
+            (sum(results), len(results)), all(results))
+
+
+def httpd_timeouts_check(q):
+    """a connection that sends nothing is closed after 10 s; one whose request did not finish gets 408 and is closed"""
+    port, ok = q.ports['www'], False
+    idle = www_connect(port)
+    part = www_connect(port)
+    try:
+        part.sendall(b'GET / HTTP/1.1\r\nHost: s\r\n')
+        start = time.time()
+        got_idle, closed_idle = www_recv(idle, 16)
+        took = time.time() - start
+        got_part, closed_part = www_recv(part, 3)
+        r = www_responses(got_part)
+        ok = closed_idle and got_idle == b'' and 8 <= took <= 14 and closed_part and len(r) == 1 and r[0][0] == 408
+        if not ok:
+            print(f'  httpd timeouts: idle {closed_idle} {got_idle!r} after {took:.1f} s; part {closed_part} {got_part[:80]!r}')
+    except OSError as e:
+        print(f'  httpd timeouts: {e!r}')
+    finally:
+        idle.close()
+        part.close()
+    return ('httpd: an idle connection closed after 10 s, an unfinished request answered 408', ok)
+
+
+def httpd_initrd_check(q):
+    """httpd on /initrd 8080: the listing of the initrd's root (folders first), a folder asked without its slash
+    (301 to it), the sample site as a folder of it, the programs' folder, a large file (cert.pem, 188 KB) byte for
+    byte, HEAD of it"""
+    port, results = q.ports['www2'], []
+    try:
+        pem = initrd_file(q, 'etc/ssl/cert.pem')
+        st, h, body = www_get(port, '/')
+        text = body.decode('utf-8', 'replace')
+        results.append(st == 200 and '<title>Index of /</title>' in text and 'href="../"' not in text and
+                       0 <= text.find('href="bin/"') < text.find('href="etc/"') < text.find('href="www/"') <
+                       text.find('href="README"'))
+        st, h, body = www_get(port, '/www')
+        results.append(st == 301 and h.get('location') == '/www/' and body == b'')
+        st, h, body = www_get(port, '/www/')
+        results.append(st == 200 and body == initrd_file(q, 'www/index.html'))
+        st, h, body = www_get(port, '/bin/')
+        results.append(st == 200 and b'href="httpd">httpd</a>' in body and b'href="../"' in body)
+        st, h, body = www_get(port, '/etc/ssl/cert.pem', timeout=30)
+        results.append(st == 200 and body == pem and h.get('content-type') == 'application/octet-stream')
+        st, h, body = www_get(port, '/etc/ssl/cert.pem', 'HEAD')
+        results.append(st == 200 and h.get('content-length') == str(len(pem)) and body == b'')
+    except (OSError, http.client.HTTPException, KeyError) as e:
+        print(f'  httpd initrd: {e!r}')
+        results.append(False)
+    return ('httpd on /initrd 8080: listings, 301, a large file, HEAD (%d of %d)' % (sum(results), len(results)),
+            all(results))
+
+
+def httpd_serve_check(q):
+    """httpd serve /hda1 on this console (the FAT disk, a site made by the steps before): each request printed as it
+    comes; the folder's INDEX.HTM, a name with a space, a hidden name neither listed nor sent, nor reached through
+    its 8.3 alias (fs/fat.c makes SECRET~1 of .secret; a lookup matches only the long name); Ctrl+C ends it"""
+    port, results = q.ports['www'], []
+    q.send('httpd serve /hda1\n')
+    results.append(q.expect('httpd: serving /hda1 at http://10.0.2.15/', 10) and q.expect('Ctrl+C stops the server', 10))
+    try:
+        st, h, body = www_get(port, '/WWW/')
+        results.append(st == 200 and b'<h1>FAT site</h1>' in body and h.get('content-type') == 'text/html; charset=utf-8')
+        results.append(q.expect('10.0.2.2 GET /WWW/ 200 ', 10))
+        st, h, body = www_get(port, '/Hello%20World.txt')
+        results.append(st == 200 and body.startswith(b'a space') and h.get('content-type') == 'text/plain; charset=utf-8')
+        results.append(q.expect('10.0.2.2 GET /Hello%20World.txt 200 ', 10))
+        st, h, body = www_get(port, '/')
+        results.append(st == 200 and b'href="WWW/"' in body and b'href="Hello%20World.txt"' in body and
+                       b'href="README"' in body and b'secret' not in body.lower())
+        st, h, body = www_get(port, '/.secret')
+        results.append(st == 404 and q.expect('10.0.2.2 GET /.secret 404 ', 10))
+        st, h, body = www_get(port, '/SECRET~1')
+        results.append(st == 404 and q.expect('10.0.2.2 GET /SECRET~1 404 ', 10))
+    except (OSError, http.client.HTTPException) as e:
+        print(f'  httpd serve: {e!r}')
+        results.append(False)
+    q.ser.sendall(b'\x03')
+    results.append(q.expect(PROMPT, 10))
+    return ('httpd serve /hda1: a site on FAT, every request printed, Ctrl+C (%d of %d)' % (sum(results), len(results)),
+            all(results))
+
+
+def httpd_slow_check(q):
+    """httpd on /hda1: a client that asks for BIG.BIN (four copies of /initrd/bin/undertow, 1.5 MB or more) and reads
+    nothing, while three other requests are answered at once; then it reads it all, byte for byte. The file is far
+    larger than the guest, QEMU and this host can hold on the way, so the server's connection really waits for room"""
+    port, results = q.ports['www'], []
+    try:
+        big = initrd_file(q, 'bin/undertow') * 4
+        slow = www_connect(port, 60, rcvbuf=4096)
+        try:
+            slow.sendall(b'GET /BIG.BIN HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n')
+            time.sleep(2)
+            start = time.time()
+            served = all(www_get(port, '/README')[0] == 200 for _ in range(3))
+            results.append(served and time.time() - start < 5)
+            got, closed = www_recv(slow, 60)
+            r = www_responses(got)
+            results.append(len(big) > 1500000 and closed and len(r) == 1 and r[0][0] == 200 and r[0][2] == big)
+            if not results[-1]:
+                print(f'  httpd slow: {len(got)} bytes, closed {closed}, {[x[0] for x in r]}, file {len(big)}')
+        finally:
+            slow.close()
+    except (OSError, http.client.HTTPException, KeyError) as e:
+        print(f'  httpd slow: {e!r}')
+        results.append(False)
+    return ('httpd on /hda1: a client that stops reading a large file holds up no other (%d of %d)' %
+            (sum(results), len(results)), bool(results) and all(results))
+
+
+CONSOLE_CHECKS.update({'@httpd-site': httpd_site_check, '@httpd-protocol': httpd_protocol_check,
+                       '@httpd-keepalive': httpd_keepalive_check, '@httpd-places': httpd_places_check,
+                       '@httpd-timeouts': httpd_timeouts_check, '@httpd-initrd': httpd_initrd_check,
+                       '@httpd-serve': httpd_serve_check, '@httpd-slow': httpd_slow_check})
 
 
 # 10/10/26 (Undertow): a private DNS peer on a QEMU raw link. No public DNS,

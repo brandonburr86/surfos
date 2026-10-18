@@ -5,10 +5,10 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, and the telnet server with the sockets, pseudo-terminals and `poll()` it stands on |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, and the web server `httpd` |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, and reaching its shell from another computer over telnet |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, and hosting websites with `httpd` |
 | [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the menus and windows, mouse input and current touchpad limits |
@@ -18,6 +18,7 @@ as the restoration; new work happens here.
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
 | [superpowers/plans/…surfsh.md](superpowers/plans/2026-10-06-surfsh.md) | The brief for surfsh, the SurfOS shell: the prompt design, the pager, Tab completion, SurfOS 1.0 |
 | [superpowers/plans/…telnetd.md](superpowers/plans/2026-10-06-telnetd.md) | The brief for telnetd, the telnet server: network connections for programs, pseudo-terminals, `poll()` |
+| [superpowers/plans/…httpd.md](superpowers/plans/2026-10-17-httpd.md) | The brief for httpd, the web server: static websites from a folder, keep-alive, folder listings |
 
 ## Building and running
 
@@ -59,3 +60,5 @@ and redirection, with the kernel's commands reached through two system calls; th
 console draws UTF-8, and the banner says SurfOS 1.0. Since M11 (under emulation so far)
 programs have TCP connections, `poll()` and pseudo-terminals, and `telnetd on` lets
 another computer on the network telnet in to a surfsh of its own (`SURF ≋@>`).
+Since 10/17/26 (under emulation so far) `httpd on` serves a folder, such as a site on a
+USB stick, as a website that browsers on the network open at the laptop's address.

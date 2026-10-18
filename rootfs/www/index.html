@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SurfOS</title>
+<link rel="icon" href="wave.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="band">
+  <div class="wrap brand">
+    <img src="wave.svg" width="64" height="64" alt="">
+    <div>
+      <h1>SurfOS</h1>
+      <p>Brandon Burr's SurfOS &middot; Version 1.0 on an x86, 2004&ndash;2026</p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hello">
+    <h2>This page came from SurfOS.</h2>
+    <p>It was sent by <code>httpd</code>, the SurfOS web server, from the folder
+    <code>/initrd/www</code>: a hobby kernel written in 2004, restored from its printouts
+    in 2026, and now on the web.</p>
+  </section>
+
+  <section>
+    <h2>Host your own site</h2>
+    <ol class="steps">
+      <li><span>On your computer, put the site in a folder named <code>www</code> on a FAT32
+      USB stick: an <code>index.html</code>, a <code>style.css</code>, pictures.</span></li>
+      <li><span>Plug the stick into the SurfOS machine and mount it:
+      <code>mount usb1p1 /data</code> (<code>lsblk</code> lists the sticks).</span></li>
+      <li><span>Stop this sample and serve your folder: <code>httpd off</code>, then
+      <code>httpd on /data/www</code>.</span></li>
+      <li><span>Open the address it prints in a browser on the same network.</span></li>
+    </ol>
+    <p>Every folder inside is a site of its own: <code>/data/www/blog/</code> is at
+    <code>http://&hellip;/blog/</code>. A folder without an <code>index.html</code> is listed, so
+    the sites can be found. Edit a page and reload: the files are read fresh every time.</p>
+  </section>
+
+  <section class="cards">
+    <div class="card">
+      <h3>Commands</h3>
+      <dl>
+        <dt><code>httpd on [folder] [port]</code></dt>
+        <dd>serve a folder in the background</dd>
+        <dt><code>httpd serve [folder] [port]</code></dt>
+        <dd>the same on one console, every request printed</dd>
+        <dt><code>httpd off</code></dt>
+        <dd>stop the server</dd>
+        <dt><code>httpd</code></dt>
+        <dd>is it running?</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>What it sends</h3>
+      <p>Pages, style sheets, scripts, pictures (PNG, JPEG, GIF, SVG, WebP), fonts and PDFs,
+      just as they are in the folder. Nothing runs on the server and nothing is uploaded.</p>
+      <p>Names that start with a dot, such as the <code>._</code> files a Mac leaves on a
+      stick, are never shown.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p>&#8779; Served by SurfOS httpd 1.0</p>
+</footer>
+</body>
+</html>
