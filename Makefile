@@ -474,9 +474,11 @@ $(CRYPTO_HOST_OBJ) $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -fgnu89-inline
 # Only the host random object can replace individual hardware attempts.
 $(BUILD)/host/kernel/lib/crypto/random.o: HOSTKERN_FLAGS += -DCRYPTO_RANDOM_TEST
 $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -ffunction-sections -Wl,--gc-sections
+# 10/17/26: the test and the objects by name, as test_dns has them: its .d file lists kernel/websvc.c (the test
+# includes it), and $^ passed that to the compiler again at a rebuild (sys_resolve defined twice)
 $(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) tests/host/test_crypto.c $(filter %.o,$^) -o $@
 
 # the supplicant (net/wlan/wpa.c) against a simulated access point and a captured handshake; the test
 # has its own crypto_random() (scripted nonces), so random.o stays out
