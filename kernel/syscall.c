@@ -182,6 +182,7 @@ static int sys_wait(int pid, int *status, int options) {
 static int sys_kill(int pid) {
     surf_task *t = task_find((u_long)pid);
     if(!t || pid <= 1) return -EINVAL;
+    if(t->flags & TF_SYSTEM) return -EACCES; /* 10/18/26 (audit B59): one of the kernel's own threads (task.h) */
     kill_task(t);
     return 0;
 }

@@ -370,7 +370,7 @@ static void wake_intr(surf_task *t) {
    before the handler returns (irq_dispatch(), sched_tick()). */
 void kill_task(surf_task *t) {
     u_long flags;
-    if(!t) return;
+    if(!t || (t->flags & TF_SYSTEM)) return;   /* 10/18/26 (audit B59): the kernel's own threads (task.h): never */
     if(t == idle_task) panic("FATAL: Kernel Idle Task Killed");
     flags = irq_save();
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) {

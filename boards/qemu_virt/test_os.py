@@ -485,6 +485,14 @@ def sdsim_boot(args, disk, check, work):
               'sdsim: the RAM disk through the SD driver and a simulated card is sd0; its FAT32 partition mounted')
         ok, out = q.cmd('ls /sd0p1', ['entries'])
         check(ok and 'A long file name written elsewhere.txt' in out and 'BIG.BIN' in out, 'sdsim: ls /sd0p1 over the SD driver')
+        # 10/18/26 (audit B59): the card watch is one of the kernel's own threads: kill refuses it (killed at once, it
+        # left the driver's lock held, and every later request to the card waited for good)
+        ok, out = q.cmd('ps', ['sdwatch'])
+        m = re.search(r'^\s*(\d+)\s+\w+\s+\w+\s+.*sdwatch$', out, re.M)
+        ok2, out2 = q.cmd('kill %s' % (m.group(1) if m else '0'), ['not killed']) if m else (False, '')
+        ok3, out3 = q.cmd('ps', ['sdwatch'])
+        check(ok and m and ok2 and "is one of the kernel's own threads" in out2 and ok3,
+              'sdsim: kill refuses the card watch (one of the kernel\'s own threads), which lives on')
         ok, out = q.cmd('crc32 /sd0p1/BIG.BIN', ['BIG.BIN'], timeout=90)
         check(ok and re.search(r'%08x\s+1048576' % big_crc, out), 'sdsim: the 1 MB file read through the SD driver (CMD17/CMD18)')
         ok, out = q.cmd('cp /sd0p1/BIG.BIN /sd0p1/SDCOPY.BIN', ['1048576 bytes copied'], timeout=120)

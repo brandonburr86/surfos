@@ -195,6 +195,10 @@ static int cmd_kill(int argc, char **argv) {
     t = task_find(pid);
     if(!t) { printf("    no task with pid %lu\n", pid); return CMD_FAIL; }
     if(t == idle_task || t == init_task_ptr) { printf("    not that one\n"); return CMD_FAIL; }
+    if(t->flags & TF_SYSTEM) {          /* 10/18/26 (audit B59): killed, it left its driver's lock held for good */
+        printf("    '%s' (pid %lu) is one of the kernel's own threads (a driver needs it): not killed\n", t->name, pid);
+        return CMD_FAIL;
+    }
     printf("    killing '%s' (pid %lu)\n", t->name, pid);
     kill_task(t);
     return CMD_OK;

@@ -39,6 +39,10 @@ typedef void (*kthread_fn)(void *arg);
                               a program of the job in the foreground, which Ctrl+C reaches (tty.c) */
 #define TF_INCALL   0x40 /* 10/6/26, for kthread_create_on() only: the task starts inside a call (TC_SYSCALL
                             below), as a process does until its program is loaded (process.c) */
+#define TF_SYSTEM   0x80 /* 10/18/26 (audit B59): one of the kernel's own threads (a driver's, the network's): no kill
+                            reaches it (kill_task()). Killed at once outside any call, it left its driver's lock held
+                            (USB storage's in the hub thread's probe and poll, the SD card's in the card watch), and
+                            every later request to that device waited for good, an umount's too */
 
 /*
     10/6/26: a kill that waits for the end of a call. A task inside a system call or a kernel

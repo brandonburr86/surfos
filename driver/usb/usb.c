@@ -422,7 +422,7 @@ int init_usb(void) {
         for(p = 1; p <= hc->nports; p++) port_check(hc, p);
     }
     booting = false;
-    kthread_create("usb", usb_thread, NULL, PL_NORMAL, TF_KTHREAD | TF_DETACHED);
+    kthread_create("usb", usb_thread, NULL, PL_NORMAL, TF_KTHREAD | TF_DETACHED | TF_SYSTEM);   /* (B59) */
     return 0;
 }
 
