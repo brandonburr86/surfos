@@ -5,11 +5,12 @@ File: surf_interconnect.v Date: 10/16/26 (SurfCPU)
 --------------------
 docs/SURFBUS.md section 6 in one block: the I decoder (instruction port: boot ROM A, scratch
 A, DDR, error), the D decoder (data port: boot ROM B, scratch B, the eight MMIO windows, text
-RAM A, the DDR controller's registers when HAS_DDRC is 1, DDR, error), the DDR arbiter (data first, one request at a time) and the calibration
+RAM A, the gpu and vram windows when HAS_GPU is 1, the DDR controller's registers when
+HAS_DDRC is 1, DDR, error), the DDR arbiter (data first, one request at a time) and the calibration
 gate (with HAS_DDR = 1, DDR-window accesses get errors until ddr_calib_done; nothing reaches
 the bridge before). With HAS_DDR = 0 the DDR window is unmapped: both decoders send it to
 their error slaves and the DDR port stays idle. The other targets come out as two flattened
-buses, numbered as in surf_bus_targets.vh: it_* (2 targets) and dt_* (12 targets), with
+buses, numbered as in surf_bus_targets.vh: it_* (2 targets) and dt_* (14 targets), with
 shared request fields and one req_valid, req_ready, response per target; dt_* includes the
 ddrc target, which the SoC takes out to a port (it answers errors itself while HAS_DDRC is 0).
 */
@@ -17,7 +18,8 @@ ddrc target, which the SoC takes out to a port (it answers errors itself while H
 
 module surf_interconnect #(
     parameter integer HAS_DDR  = 1,
-    parameter integer HAS_DDRC = 0
+    parameter integer HAS_DDRC = 0,
+    parameter integer HAS_GPU  = 0
 ) (
     input  wire                       clk,
     input  wire                       rst,
@@ -118,7 +120,7 @@ module surf_interconnect #(
     wire             dwr, dfh;
     wire [3:0]       dbe;
 
-    surf_dbus_decoder #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC)) u_ddec (
+    surf_dbus_decoder #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC), .HAS_GPU(HAS_GPU)) u_ddec (
         .clk(clk), .rst(rst),
         .s_req_valid(d_req_valid), .s_req_ready(d_req_ready), .s_req_addr(d_req_addr),
         .s_req_write(d_req_write), .s_req_be(d_req_be), .s_req_wdata(d_req_wdata),

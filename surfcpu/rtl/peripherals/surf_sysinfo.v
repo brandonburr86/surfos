@@ -57,7 +57,8 @@ module surf_sysinfo #(
                                          SURF_SYSINFO_FEATURES_SPI_MASK |
                                          SURF_SYSINFO_FEATURES_PS2_MASK |
                                          SURF_SYSINFO_FEATURES_VIDEO_MASK |
-                                         SURF_SYSINFO_FEATURES_DDR_MASK;
+                                         SURF_SYSINFO_FEATURES_DDR_MASK |
+                                         SURF_SYSINFO_FEATURES_GPU_MASK;
     localparam [31:0] SYS_HZ_W  = SYS_HZ;
     localparam [31:0] PIX_HZ_W  = PIX_HZ;
     localparam [31:0] MAP_VER_W = SURF_MAP_VERSION;

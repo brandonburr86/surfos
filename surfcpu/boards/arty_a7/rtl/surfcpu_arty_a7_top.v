@@ -1,7 +1,7 @@
 /*
 SurfCPU on the Arty A7 (top level)
 --------------------
-File: surfcpu_arty_a7_top.v Date: 10/16/26 (SurfCPU)
+File: surfcpu_arty_a7_top.v Date: 10/16/26 (SurfCPU), 10/18/26 (SurfGPU: ARTY_HAS_GPU)
 --------------------
 The whole SoC on the board: arty_a7_clocks makes sys_clk and pix_clk and their resets, and
 surfcpu_soc (MODULES.md section 4) gets the board's pins. Every pin is in WIRING.md and in
@@ -34,6 +34,10 @@ init_error on a failure) there; those reach sysinfo.DDR_STATUS through the adapt
 (init_calib_complete = init_done and not init_error) and the bridge (calib_done, or calib_fail
 when calibration has not succeeded within DDR_CALIB_LIMIT sys_clk cycles of reset).
 sysinfo.DDR_STATUS.SWINIT (DDR_SWINIT = 1 here) tells the firmware to do so.
+
+GPU (docs/GPU.md). With ARTY_HAS_GPU (the GPU designs' "define" line; 10/18/26) HAS_GPU is 1: the
+SoC has VRAM (300 KiB of block RAM), the graphics modes of the video block and the drawing
+engine. They need no pins: the picture leaves on the same VGA pins. Without it nothing changes.
 
 Clocks: the oscillator pin has one input buffer (inserted by synthesis on clk100). It drives
 arty_a7_clocks' two tiles directly, as without DDR, and, through u_dram_clkbuf (a BUFG),
@@ -69,6 +73,12 @@ tiles in arty_a7_clocks): this file belongs under boards/ only.
 `define ARTY_HAS_DDR_VALUE 1
 `else
 `define ARTY_HAS_DDR_VALUE 0
+`endif
+// HAS_GPU likewise from ARTY_HAS_GPU (docs/GPU.md): VRAM, graphics scan-out, the drawing engine.
+`ifdef ARTY_HAS_GPU
+`define ARTY_HAS_GPU_VALUE 1
+`else
+`define ARTY_HAS_GPU_VALUE 0
 `endif
 module surfcpu_arty_a7_top #(
     parameter         BOARD        = `ARTY_BUILD_BOARD,    // spec/soc.toml [boards] name
@@ -127,6 +137,7 @@ module surfcpu_arty_a7_top #(
     `include "surfcpu_soc.vh"
 
     localparam integer HAS_DDR = `ARTY_HAS_DDR_VALUE;
+    localparam integer HAS_GPU = `ARTY_HAS_GPU_VALUE;
 
     // The waiver covers the string compare: BOARD and the names differ in length on purpose.
     /* verilator lint_off WIDTHEXPAND */
@@ -169,7 +180,8 @@ module surfcpu_arty_a7_top #(
         .BUILD_TIME   (BUILD_TIME),
         .HAS_DDR      (HAS_DDR),
         .DDR_SIZE     (SURF_DDR_SIZE),
-        .DDR_SWINIT   (HAS_DDR)          // LiteDRAM without a CPU: SurfCPU initializes it
+        .DDR_SWINIT   (HAS_DDR),         // LiteDRAM without a CPU: SurfCPU initializes it
+        .HAS_GPU      (HAS_GPU)
     ) u_soc (
         .clk(sys_clk), .rst(sys_rst), .pix_clk(pix_clk), .pix_rst(pix_rst),
         .uart_rx(uart_rx), .uart_tx(uart_tx),

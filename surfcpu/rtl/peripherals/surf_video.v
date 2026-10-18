@@ -33,9 +33,25 @@ The test pattern: a one-pixel white border round the picture (to check its edges
 monitor); above line 360 eight bars of 80 pixels (white, yellow, cyan, green, magenta,
 red, blue, black); below, four bands of 30 lines with 16 steps of 40 pixels of grey, red,
 green and blue (every level of each 4-bit channel).
+
+Graphics (HAS_GFX = 1, docs/GPU.md section 3; with 0 none of this exists, MODE 2 and 3 stay
+black and the registers below answer with errors). MODE 2 shows 8-bit VRAM pixels through the
+256-entry palette GPAL, MODE 3 the same with the text layer over it (a set glyph pixel or the
+cursor shows the text foreground, else a cell background other than 0 the text background,
+else the graphics pixel). GFX_BASE, GFX_STRIDE and GFX_SCALE cross in their own surf_cdc_word
+and are taken at the frame latch with CTRL. The graphics path runs from a second pair of
+counters one pixel clock ahead of hcnt and vcnt: G0 the VRAM byte address (a line address
+kept by adding the stride, plus x or x / 2), G1 vram_addr registered, G2 and G3 surf_vram's
+two pixel-port edges, then the byte lane addresses GPAL, whose registered output in G4 is
+the graphics colour of the pixel in S3. GPAL is a dual-clock block RAM (port A the bus, port
+B the scan-out), RGB332 at configuration and untouched by a reset. FRAME_CRC: every visible
+pixel's colour as chosen in S3 (what S4 puts on the pins) goes into zlib's CRC-32 as two
+bytes, low first, from pixel (0, 0) to (639, 479); the result and a frame count cross to the
+sys domain together, about 160 pixel clocks before the frame's vertical blanking starts.
 */
 module surf_video #(
-    parameter integer PIX_HZ = 25173611
+    parameter integer PIX_HZ  = 25173611,
+    parameter integer HAS_GFX = 0          // 1: graphics modes, GFX_ and FRAME_ registers, GPAL
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -56,6 +72,9 @@ module surf_video #(
     input  wire        pix_rst,
     output wire [11:0] text_addr,    // cell number row*80+col, to surf_textram's pixel port
     input  wire [31:0] text_data,    // the cell, one pix_clk edge after text_addr
+    output wire [16:0] vram_addr,    // a VRAM word, to surf_vram's pixel port (0 without HAS_GFX)
+    input  wire [31:0] vram_data,    // that word, two pix_clk edges after vram_addr
+    output wire        vblank,       // one clk pulse as each vertical blanking interval begins
     output wire [3:0]  vga_r,
     output wire [3:0]  vga_g,
     output wire [3:0]  vga_b,
@@ -93,7 +112,19 @@ module surf_video #(
                            (off[1:0] == 2'b00);
     wire [11:0] pal_off  = off - SURF_VIDEO_PALETTE[11:0];
     wire [3:0]  pal_idx  = pal_off[5:2];
-    wire        known    = hit_ctrl | hit_stat | hit_cur | hit_scr | hit_ie | hit_info | hit_pclk | hit_pal;
+    wire        gfx      = (HAS_GFX != 0);
+    wire        hit_gbas = gfx && (off == SURF_VIDEO_GFX_BASE[11:0]);
+    wire        hit_gstr = gfx && (off == SURF_VIDEO_GFX_STRIDE[11:0]);
+    wire        hit_gscl = gfx && (off == SURF_VIDEO_GFX_SCALE[11:0]);
+    wire        hit_crc  = gfx && (off == SURF_VIDEO_FRAME_CRC[11:0]);
+    wire        hit_fcnt = gfx && (off == SURF_VIDEO_FRAME_COUNT[11:0]);
+    wire        hit_gpal = gfx && (off >= SURF_VIDEO_GPAL[11:0]) &&
+                           (off < SURF_VIDEO_GPAL[11:0] + 12'd4 * SURF_VIDEO_GPAL_COUNT[11:0]) &&
+                           (off[1:0] == 2'b00);
+    wire [11:0] gpal_off = off - SURF_VIDEO_GPAL[11:0];
+    wire [7:0]  gpal_idx = gpal_off[9:2];
+    wire        known    = hit_ctrl | hit_stat | hit_cur | hit_scr | hit_ie | hit_info | hit_pclk | hit_pal |
+                           hit_gbas | hit_gstr | hit_gscl | hit_crc | hit_fcnt | hit_gpal;
     wire        legal    = known && (s_req_be == 4'b1111) && !s_req_fetch;
     wire        accept   = s_req_valid;                        // always ready: one-cycle answers
     wire        wr       = accept && legal && s_req_write;
@@ -306,9 +337,13 @@ module surf_video #(
     wire        on3   = font_row[3'd7 - px3] || cur3;
     wire [3:0]  idx3  = on3 ? fg3 : bg3;
     wire [11:0] txt3  = p_pal[idx3 * 12 +: 12];
+    wire [11:0] gfx3;                       // the graphics colour of this pixel (0 without HAS_GFX)
+    wire [11:0] over3 = (on3 || bg3 != 4'd0) ? txt3 : gfx3;
     wire [11:0] rgb3  = (!vis3 || !f_enable) ? 12'h000 :
                         (f_mode == 2'd0)     ? pat3 :
-                        (f_mode == 2'd1)     ? txt3 : 12'h000;
+                        (f_mode == 2'd1)     ? txt3 :
+                        (HAS_GFX == 0)       ? 12'h000 :
+                        (f_mode == 2'd2)     ? gfx3 : over3;
 
     always @(posedge pix_clk) begin
         if (pix_rst) begin
@@ -327,11 +362,178 @@ module surf_video #(
     end
 
     assign text_addr = addr1;
+    assign vblank    = vb_start;
     assign vga_r  = r4;
     assign vga_g  = g4;
     assign vga_b  = b4;
     assign vga_hs = hs4;
     assign vga_vs = vs4;
+
+    // ---------------------------------------------------------------- graphics (HAS_GFX)
+    localparam [16:0] GSTRIDE_RESET = 17'd160;                    // 640 bytes, in words
+    reg  [16:0] gbase_q   = 17'd0;          // GFX_BASE[18:2]
+    reg  [13:0] gstride_q = GSTRIDE_RESET[13:0];                  // GFX_STRIDE[15:2]
+    reg  [1:0]  gscale_q  = 2'd1;
+    wire [31:0] crc_sys;
+    wire [15:0] fcount_sys;
+    wire [11:0] gpal_rd;
+    always @(posedge clk) begin
+        if (rst) begin
+            gbase_q   <= 17'd0;
+            gstride_q <= GSTRIDE_RESET[13:0];
+            gscale_q  <= 2'd1;
+        end else begin
+            if (wr && hit_gbas) gbase_q   <= s_req_wdata[18:2];
+            if (wr && hit_gstr) gstride_q <= s_req_wdata[15:2];
+            if (wr && hit_gscl) gscale_q  <= s_req_wdata[SURF_VIDEO_GFX_SCALE_SCALE_LSB +: 2];
+        end
+    end
+
+    generate
+        if (HAS_GFX != 0) begin : g_gfx
+            // ---- GPAL: port A the bus (NO_CHANGE, as surf_textram), port B the scan-out
+            reg [11:0] gpal [0:255];
+            integer gi;
+            initial for (gi = 0; gi < 256; gi = gi + 1)               // RGB332, widened
+                gpal[gi] = {gi[7:5], gi[7], gi[4:2], gi[4], gi[1:0], gi[1:0]};
+            reg [11:0] gpal_a = 12'd0;
+            wire       gpal_en = accept && legal && hit_gpal;
+            always @(posedge clk) begin
+                if (gpal_en) begin
+                    if (s_req_write)
+                        gpal[gpal_idx] <= {s_req_wdata[SURF_VIDEO_GPAL_R_LSB +: 4],
+                                           s_req_wdata[SURF_VIDEO_GPAL_G_LSB +: 4],
+                                           s_req_wdata[SURF_VIDEO_GPAL_B_LSB +: 4]};
+                    else
+                        gpal_a <= gpal[gpal_idx];
+                end
+            end
+            assign gpal_rd = gpal_a;
+
+            // ---- the placement settings cross together; the scan-out takes them per frame
+            localparam [31:0] GCFG_RESET = {1'b0, GSTRIDE_RESET[13:0], 17'd0};
+            wire [31:0] gcfg_pix;
+            surf_cdc_word #(.WIDTH(32), .INIT(GCFG_RESET)) u_gcfg_cdc (
+                .src_clk(clk), .src_rst(rst), .src_data({gscale_q == 2'd2, gstride_q, gbase_q}),
+                .dst_clk(pix_clk), .dst_rst(pix_rst), .dst_data(gcfg_pix));
+
+            // ---- G counters: one pixel clock ahead of hcnt, vcnt
+            reg [9:0]  ghc = 10'd1, gvc = 10'd0;
+            always @(posedge pix_clk) begin
+                if (pix_rst) begin
+                    ghc <= 10'd1;
+                    gvc <= 10'd0;
+                end else if (ghc == H_TOT - 10'd1) begin
+                    ghc <= 10'd0;
+                    gvc <= (gvc == V_TOT - 10'd1) ? 10'd0 : gvc + 10'd1;
+                end else begin
+                    ghc <= ghc + 10'd1;
+                end
+            end
+
+            // ---- per frame: base, stride and scale; the line address, line by line
+            reg [16:0] f_gbase   = 17'd0;
+            reg [13:0] f_gstride = GSTRIDE_RESET[13:0];
+            reg        f_gdbl    = 1'b0;
+            reg [18:0] gline     = 19'd0;       // byte address of the VRAM line shown on line gvc
+            reg        godd      = 1'b0;        // doubled: the second screen line of a VRAM line
+            always @(posedge pix_clk) begin
+                if (pix_rst) begin
+                    f_gbase   <= 17'd0;
+                    f_gstride <= GSTRIDE_RESET[13:0];
+                    f_gdbl    <= 1'b0;
+                    gline     <= 19'd0;
+                    godd      <= 1'b0;
+                end else begin
+                    if (frame_latch) begin
+                        f_gbase   <= gcfg_pix[16:0];
+                        f_gstride <= gcfg_pix[30:17];
+                        f_gdbl    <= gcfg_pix[31];
+                    end
+                    if (ghc == H_TOT - 10'd1) begin
+                        if (gvc == V_TOT - 10'd1) begin         // line 0 of the next frame
+                            gline <= {f_gbase, 2'b00};
+                            godd  <= 1'b0;
+                        end else if (gvc < V_VIS) begin
+                            if (!f_gdbl || godd) gline <= gline + {3'd0, f_gstride, 2'b00};
+                            godd <= f_gdbl && !godd;
+                        end
+                    end
+                end
+            end
+
+            // ---- G0 -> G1: the address; G1..G3: surf_vram; G3 -> G4: GPAL
+            wire [18:0] gaddr0 = gline + {9'd0, f_gdbl ? {1'b0, ghc[9:1]} : ghc};
+            reg  [16:0] gword1 = 17'd0;
+            reg  [1:0]  glane1 = 2'd0, glane2 = 2'd0, glane3 = 2'd0;
+            always @(posedge pix_clk) begin
+                gword1 <= gaddr0[18:2];
+                glane1 <= gaddr0[1:0];
+                glane2 <= glane1;
+                glane3 <= glane2;
+            end
+            wire [7:0]  gpix3 = vram_data[8 * glane3 +: 8];
+            reg  [11:0] gpal_b = 12'd0;
+            always @(posedge pix_clk) gpal_b <= gpal[gpix3];
+            assign vram_addr = gword1;
+            assign gfx3      = gpal_b;
+
+            // ---- FRAME_CRC over what S3 chooses for the pins
+            reg first1 = 1'b0, first2 = 1'b0, first3 = 1'b0;
+            reg last1  = 1'b0, last2  = 1'b0, last3  = 1'b0;
+            reg [31:0] crc_run = 32'hFFFF_FFFF, crc_last = 32'd0;
+            reg [15:0] fcount  = 16'd0;
+            wire [31:0] crc_nxt = crc32_px(first3 ? 32'hFFFF_FFFF : crc_run, rgb3);
+            always @(posedge pix_clk) begin
+                if (pix_rst) begin
+                    first1 <= 1'b0; first2 <= 1'b0; first3 <= 1'b0;
+                    last1  <= 1'b0; last2  <= 1'b0; last3  <= 1'b0;
+                    crc_run  <= 32'hFFFF_FFFF;
+                    crc_last <= 32'd0;
+                    fcount   <= 16'd0;
+                end else begin
+                    first1 <= (hcnt == 10'd0) && (vcnt == 10'd0);
+                    last1  <= (hcnt == H_VIS - 10'd1) && (vcnt == V_VIS - 10'd1);
+                    first2 <= first1;  first3 <= first2;
+                    last2  <= last1;   last3  <= last2;
+                    if (vis3) begin
+                        crc_run <= crc_nxt;
+                        if (last3) begin
+                            crc_last <= ~crc_nxt;
+                            fcount   <= fcount + 16'd1;
+                        end
+                    end
+                end
+            end
+            wire [47:0] crc_cross;
+            surf_cdc_word #(.WIDTH(48), .INIT(48'd0)) u_crc_cdc (
+                .src_clk(pix_clk), .src_rst(pix_rst), .src_data({fcount, crc_last}),
+                .dst_clk(clk), .dst_rst(rst), .dst_data(crc_cross));
+            assign crc_sys    = crc_cross[31:0];
+            assign fcount_sys = crc_cross[47:32];
+        end else begin : g_nogfx
+            assign gpal_rd    = 12'd0;
+            assign vram_addr  = 17'd0;
+            assign gfx3       = 12'h000;
+            assign crc_sys    = 32'd0;
+            assign fcount_sys = 16'd0;
+            wire unused_gfx = &{1'b0, vram_data, gpal_idx, gbase_q, gstride_q, gscale_q};
+        end
+    endgenerate
+
+    // zlib's CRC-32 (reflected 0xEDB88320) of one pixel: {G, B}, then {0, R}, each LSB first
+    function [31:0] crc32_px(input [31:0] c, input [11:0] p);
+        reg [31:0] x;
+        reg [15:0] d;
+        integer i;
+        begin
+            x = c;
+            d = {4'd0, p};
+            for (i = 0; i < 16; i = i + 1)
+                x = (x[0] ^ d[i]) ? ((x >> 1) ^ 32'hEDB8_8320) : (x >> 1);
+            crc32_px = x;
+        end
+    endfunction
 
     // ---------------------------------------------------------------- pix -> sys
     surf_sync #(.STAGES(2), .INIT(1'b0)) u_vb_sync (
@@ -374,30 +576,38 @@ module surf_video #(
             rdata[SURF_VIDEO_PALETTE_G_LSB +: 4] = pal_q[pal_idx * 12 + 4 +: 4];
             rdata[SURF_VIDEO_PALETTE_B_LSB +: 4] = pal_q[pal_idx * 12 +: 4];
         end
+        if (hit_gbas) rdata[18:0] = {gbase_q, 2'b00};
+        if (hit_gstr) rdata[15:0] = {gstride_q, 2'b00};
+        if (hit_gscl) rdata[SURF_VIDEO_GFX_SCALE_SCALE_LSB +: 2] = gscale_q;
+        if (hit_crc)  rdata = crc_sys;
+        if (hit_fcnt) rdata[SURF_VIDEO_FRAME_COUNT_COUNT_LSB +: 16] = fcount_sys;
     end
 
     reg        rsp_valid_q = 1'b0;
     reg        rsp_err_q   = 1'b0;
     reg [31:0] rsp_rdata_q = 32'd0;
+    reg        gpal_rd_q   = 1'b0;          // the answer is GPAL's block RAM output
     always @(posedge clk) begin
         if (rst) begin
             rsp_valid_q <= 1'b0;
             rsp_err_q   <= 1'b0;
             rsp_rdata_q <= 32'd0;
+            gpal_rd_q   <= 1'b0;
         end else begin
             rsp_valid_q <= accept;
             rsp_err_q   <= accept && !legal;
             rsp_rdata_q <= (accept && legal && !s_req_write) ? rdata : 32'd0;
+            gpal_rd_q   <= accept && legal && !s_req_write && hit_gpal;
         end
     end
 
     assign s_rsp_valid = rsp_valid_q;
-    assign s_rsp_rdata = rsp_rdata_q;
+    assign s_rsp_rdata = gpal_rd_q ? {20'd0, gpal_rd} : rsp_rdata_q;
     assign s_rsp_err   = rsp_err_q;
     assign irq         = st_ev && ie_q;
 
     // unused: address bits above the window, write data above the fields, the reserved
     // half of each text cell, and the step counter's top bit (it passes 15 in the blanking)
-    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata[31:13], text_data[31:16],
-                       step[4], pal_off[11:6], pal_off[1:0], vcnt[9]};
+    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata[31:19], text_data[31:16],
+                       step[4], pal_off[11:6], pal_off[1:0], vcnt[9], gpal_off[11:10], gpal_off[1:0]};
 endmodule

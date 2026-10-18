@@ -85,7 +85,7 @@ module tb_sysinfo;
             bfm.read_check(B + SURF_SYSINFO_SYS_HZ, 4'hF, P_SYS, ALL);
             bfm.read_check(B + SURF_SYSINFO_BUILD_ID, 4'hF, P_BUILD, ALL);
             bfm.read_check(B + SURF_SYSINFO_BUILD_FLAGS, 4'hF, SURF_SYSINFO_BUILD_FLAGS_SIM_MASK, ALL);
-            bfm.read_check(B + SURF_SYSINFO_FEATURES, 4'hF, P_FEAT & 32'hFF, ALL);
+            bfm.read_check(B + SURF_SYSINFO_FEATURES, 4'hF, P_FEAT & 32'h1FF, ALL);   // bits 8:0 defined (GPU 8)
             bfm.read_check(B + SURF_SYSINFO_DDR_SIZE, 4'hF, P_DDRSIZE, ALL);
             bfm.read_check(B + SURF_SYSINFO_PIX_HZ, 4'hF, P_PIX, ALL);
             bfm.read_check(B + SURF_SYSINFO_BUILD_TIME, 4'hF, P_TIME, ALL);

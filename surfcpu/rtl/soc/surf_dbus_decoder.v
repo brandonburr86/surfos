@@ -8,14 +8,16 @@ docs/MEMORY-MAP.md. The boot ROM takes reads only (a write goes to the error sla
 changes nothing); MMIO windows and text RAM take no fetches (the data port never fetches,
 but a request marked as a fetch follows the fetch rules anyway); the reserved Ethernet
 window, the DDR window while HAS_DDR is 0, the DDR controller's registers (ddrc) unless
-HAS_DDRC is 1, and every unmapped address go to the decoder's own error slave. Target numbers are in surf_bus_targets.vh; the DDR target is the arbiter's
+HAS_DDRC is 1, the gpu and vram windows unless HAS_GPU is 1 (docs/GPU.md), and every unmapped
+address go to the decoder's own error slave. Target numbers are in surf_bus_targets.vh; the DDR target is the arbiter's
 data side, where the calibration gate answers with errors until DDR is usable.
 */
 `include "surf_bus_targets.vh"
 
 module surf_dbus_decoder #(
     parameter integer HAS_DDR  = 1,
-    parameter integer HAS_DDRC = 0     // the ddrc registers decode (a controller that needs software)
+    parameter integer HAS_DDRC = 0,    // the ddrc registers decode (a controller that needs software)
+    parameter integer HAS_GPU  = 0     // the gpu and vram windows decode (docs/GPU.md)
 ) (
     input  wire                         clk,
     input  wire                         rst,
@@ -62,6 +64,8 @@ module surf_dbus_decoder #(
     assign hit[`SURF_DT_VIDEO]   = ((a & ~SURF_VIDEO_MASK)   == SURF_VIDEO_BASE)   && nf;
     assign hit[`SURF_DT_SYSINFO] = ((a & ~SURF_SYSINFO_MASK) == SURF_SYSINFO_BASE) && nf;
     assign hit[`SURF_DT_TEXTRAM] = ((a & ~SURF_TEXTRAM_MASK) == SURF_TEXTRAM_BASE) && nf;
+    assign hit[`SURF_DT_GPU]     = (HAS_GPU != 0) && ((a & ~SURF_GPU_MASK) == SURF_GPU_BASE) && nf;
+    assign hit[`SURF_DT_VRAM]    = (HAS_GPU != 0) && ((a & ~SURF_VRAM_MASK) == SURF_VRAM_BASE) && nf;
     assign hit[`SURF_DT_DDRC]    = (HAS_DDRC != 0) && ((a & ~SURF_DDRC_MASK) == SURF_DDRC_BASE) && nf;
     assign hit[`SURF_DT_DDR]     = (HAS_DDR != 0) && ((a & ~SURF_DDR_MASK) == SURF_DDR_BASE);
     wire to_err = ~|hit;

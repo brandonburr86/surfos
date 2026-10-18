@@ -63,6 +63,8 @@ module tb_io_icarus;
     always @(posedge pix_clk) text_data <= tram[text_addr];
     wire [3:0] vr, vg, vb;
     wire       hs, vs, vid_irq;
+    wire [16:0] vram_addr;                  // no graphics here (HAS_GFX = 0)
+    wire        vid_vblank;
 `include "surfcpu_soc.vh"
     surf_video #(.PIX_HZ(SURF_PIX_HZ)) video (
         .clk(clk), .rst(rst),
@@ -70,6 +72,7 @@ module tb_io_icarus;
         .s_req_write(req_write), .s_req_be(req_be), .s_req_wdata(req_wdata), .s_req_fetch(req_fetch),
         .s_rsp_valid(vid_rv), .s_rsp_rdata(vid_rd), .s_rsp_err(vid_re), .irq(vid_irq),
         .pix_clk(pix_clk), .pix_rst(pix_rst), .text_addr(text_addr), .text_data(text_data),
+        .vram_addr(vram_addr), .vram_data(32'd0), .vblank(vid_vblank),
         .vga_r(vr), .vga_g(vg), .vga_b(vb), .vga_hs(hs), .vga_vs(vs));
 
     // ---------------------------------------------------------------- bus access

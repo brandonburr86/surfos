@@ -8,7 +8,7 @@ instruction and data ports; every target (boot ROM A/B, scratch A/B, the eight M
 text RAM, DDR) is a test slave with random ready stalls and random latency that returns its
 own number and the address it saw, and checks write data and which requests may reach it.
 A reference decoder written from the region table as address ranges (the RTL uses masks)
-predicts the target or the error of every access. Protocol monitors watch all 17 links.
+predicts the target or the error of every access. Protocol monitors watch every link.
 Phases: random accesses from each port alone and from both at once, biased to region
 boundaries, holes and permission cases (ROM writes, fetches from MMIO and text RAM, writes on
 the fetch port, data-port fetches), with per-target request counts checked; DDR before and
@@ -17,7 +17,10 @@ offered), errors from the DDR slave itself, and the arbiter: data first when bot
 same cycle, an already offered fetch not overtaken. The HAS_DDR parameter builds the variant
 without DDR, where the window is unmapped and the DDR port never moves; HAS_DDRC the one whose
 ddrc window (the DDR controller's registers, a controller initialized by software) reaches its
-target, unmapped otherwise. +seed=N. Prints PASS or stops with $fatal.
+target, unmapped otherwise; HAS_GPU (10/18/26, SurfGPU) the one whose gpu and vram windows reach
+theirs (no fetch), unmapped otherwise. Data-side targets answer with IDs 1..14 and the DDR slave
+with 15, so a request sent to the wrong one is seen in its data. +seed=N. Prints PASS or stops
+with $fatal.
 */
 `timescale 1ns/1ps
 `include "surf_bus_targets.vh"
@@ -26,11 +29,12 @@ module tb_interconnect;
 
     parameter integer HAS_DDR = 1;
     parameter integer HAS_DDRC = 0;
+    parameter integer HAS_GPU = 0;
     localparam integer KI = `SURF_IT_DDR;     // I targets outside the interconnect
     localparam integer KD = `SURF_DT_DDR;     // D targets outside the interconnect
     localparam integer T_DDR = 98;
     localparam integer T_ERR = 99;
-    localparam [3:0]   DDR_ID = 4'hE;
+    localparam [3:0]   DDR_ID = 4'hF;
 
     reg clk = 1'b0;
     always #20 clk = ~clk;
@@ -84,7 +88,7 @@ module tb_interconnect;
     wire [31:0]      ddr_req_addr, ddr_req_wdata, ddr_rsp_rdata;
     wire [3:0]       ddr_req_be;
 
-    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC)) dut (
+    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC), .HAS_GPU(HAS_GPU)) dut (
         .clk(clk), .rst(rst), .ddr_calib_done(calib),
         .i_req_valid(i_req_valid), .i_req_ready(i_req_ready), .i_req_addr(i_req_addr),
         .i_req_write(i_req_write), .i_req_be(i_req_be), .i_req_wdata(i_req_wdata),
@@ -133,7 +137,7 @@ module tb_interconnect;
         end
         for (g = 0; g < KD; g = g + 1) begin : g_dt
             // boot ROM: no writes; MMIO and text RAM: no fetches
-            surfbus_slave_model #(.NAME("dt"), .ID(3 + g),
+            surfbus_slave_model #(.NAME("dt"), .ID(1 + g),
                                   .ALLOW_FETCH(g == `SURF_DT_ROM || g == `SURF_DT_SCRATCH),
                                   .ALLOW_WRITE(g != `SURF_DT_ROM)) u (
                 .clk(clk), .rst(rst), .s_req_valid(dt_req_valid[g]), .s_req_ready(dt_req_ready[g]),
@@ -240,12 +244,14 @@ module tb_interconnect;
             else if (in_rgn(a, SURF_SYSINFO_BASE, SURF_SYSINFO_SIZE)) ref_d = `SURF_DT_SYSINFO;
             else if (in_rgn(a, SURF_DDRC_BASE, SURF_DDRC_SIZE))       ref_d = HAS_DDRC ? `SURF_DT_DDRC : T_ERR;
             else if (in_rgn(a, SURF_TEXTRAM_BASE, SURF_TEXTRAM_SIZE)) ref_d = `SURF_DT_TEXTRAM;
+            else if (in_rgn(a, SURF_GPU_BASE, SURF_GPU_SIZE))         ref_d = HAS_GPU ? `SURF_DT_GPU : T_ERR;
+            else if (in_rgn(a, SURF_VRAM_BASE, SURF_VRAM_SIZE))       ref_d = HAS_GPU ? `SURF_DT_VRAM : T_ERR;
         end
     endfunction
 
     // ---------------------------------------------------------------- address generator
-    reg [31:0] rbase [0:13];
-    reg [31:0] rsize [0:13];
+    reg [31:0] rbase [0:15];
+    reg [31:0] rsize [0:15];
     initial begin
         rbase[0]  = SURF_BOOTROM_BASE; rsize[0]  = SURF_BOOTROM_SIZE;
         rbase[1]  = SURF_SCRATCH_BASE; rsize[1]  = SURF_SCRATCH_SIZE;
@@ -261,6 +267,8 @@ module tb_interconnect;
         rbase[11] = SURF_TEXTRAM_BASE; rsize[11] = SURF_TEXTRAM_SIZE;
         rbase[12] = SURF_DDR_BASE;     rsize[12] = SURF_DDR_SIZE;
         rbase[13] = SURF_DDRC_BASE;    rsize[13] = SURF_DDRC_SIZE;
+        rbase[14] = SURF_GPU_BASE;     rsize[14] = SURF_GPU_SIZE;
+        rbase[15] = SURF_VRAM_BASE;    rsize[15] = SURF_VRAM_SIZE;
     end
 
     function [31:0] rand_addr;
@@ -269,7 +277,7 @@ module tb_interconnect;
         input integer r3;
         integer k;
         begin
-            k = {r2} % 14;
+            k = {r2} % 16;
             case ({r1} % 20)
                 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11:
                             case ({r3} % 4)
@@ -351,7 +359,7 @@ module tb_interconnect;
             t = ref_d(a, wr, fetch);
             slv_err = (t == T_DDR) ? u_ddr.inject_err : 1'b0;
             exp_err = (t == T_ERR) || (t == T_DDR && !calib) || slv_err;
-            exp_data = (t == T_DDR) ? exp_rdata(DDR_ID, a, fetch) : exp_rdata(3 + t, a, fetch);
+            exp_data = (t == T_DDR) ? exp_rdata(DDR_ID, a, fetch) : exp_rdata(1 + t, a, fetch);
             if (t == T_DDR && calib && fetch)  exp_ddr_f = exp_ddr_f + 1;   // counted by req_fetch
             if (t == T_DDR && calib && !fetch) exp_ddr_d = exp_ddr_d + 1;
             if (t != T_ERR && t != T_DDR) exp_d[t] = exp_d[t] + 1;
@@ -402,7 +410,7 @@ module tb_interconnect;
             g_it[1].u.lat_min = lo; g_it[1].u.lat_max = hi; g_it[1].u.ready_pct = pct;
             `define SETD(k) g_dt[k].u.lat_min = lo; g_dt[k].u.lat_max = hi; g_dt[k].u.ready_pct = pct;
             `SETD(0) `SETD(1) `SETD(2) `SETD(3) `SETD(4) `SETD(5) `SETD(6) `SETD(7) `SETD(8)
-            `SETD(9) `SETD(10)
+            `SETD(9) `SETD(10) `SETD(11) `SETD(12)
             u_ddr.lat_min = lo; u_ddr.lat_max = hi + 6; u_ddr.ready_pct = pct;
         end
     endtask
@@ -577,10 +585,16 @@ module tb_interconnect;
         if (imon.accepts != imon.responses || dmon.accepts != dmon.responses) begin
             $display("ERROR unanswered requests"); errors = errors + 1;
         end
+        if (HAS_GPU == 0 && (acc_d[`SURF_DT_GPU] != 0 || acc_d[`SURF_DT_VRAM] != 0)) begin
+            $display("ERROR the gpu or vram target was reached with HAS_GPU = 0"); errors = errors + 1;
+        end
+        if (HAS_GPU != 0 && (acc_d[`SURF_DT_GPU] == 0 || acc_d[`SURF_DT_VRAM] == 0)) begin
+            $display("ERROR the gpu or vram target was never reached with HAS_GPU = 1"); errors = errors + 1;
+        end
         if (errors) $fatal(1, "tb_interconnect: %0d errors", errors);
-        $display("tb_interconnect: PASS (HAS_DDR=%0d HAS_DDRC=%0d, %0d accesses: %0d answered by targets, %0d errors expected and seen, %0d DDR errors before calibration; DDR %0d fetches + %0d data; ddrc %0d; %0d+%0d back-to-back)",
-                 HAS_DDR, HAS_DDRC, n_ok + n_err, n_ok, n_err, n_ddr_err, acc_ddr_f, acc_ddr_d, acc_d[`SURF_DT_DDRC],
-                 ib.n_b2b, db.n_b2b);
+        $display("tb_interconnect: PASS (HAS_DDR=%0d HAS_DDRC=%0d HAS_GPU=%0d, %0d accesses: %0d answered by targets, %0d errors expected and seen, %0d DDR errors before calibration; DDR %0d fetches + %0d data; ddrc %0d; gpu %0d, vram %0d; %0d+%0d back-to-back)",
+                 HAS_DDR, HAS_DDRC, HAS_GPU, n_ok + n_err, n_ok, n_err, n_ddr_err, acc_ddr_f, acc_ddr_d, acc_d[`SURF_DT_DDRC],
+                 acc_d[`SURF_DT_GPU], acc_d[`SURF_DT_VRAM], ib.n_b2b, db.n_b2b);
         $finish;
     end
 endmodule

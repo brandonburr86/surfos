@@ -1,7 +1,7 @@
 /*
 SurfCPU SoC
 --------------------
-File: surfcpu_soc.v Date: 10/16/26 (SurfCPU)
+File: surfcpu_soc.v Date: 10/16/26 (SurfCPU), 10/18/26 (SurfGPU: HAS_GPU)
 --------------------
 The system around SurfCPU (docs/MODULES.md section 4, docs/SOC.md): the core, the SurfBus
 interconnect of docs/SURFBUS.md section 6, the boot ROM, scratch RAM and text RAM, and the
@@ -18,6 +18,10 @@ ddr_timeout come from the bridge, already in the clk domain. In simulation the b
 also be loaded with +bootrom=<file>.
 Interrupts: mip.MTIP and mip.MSIP from the timer, mip.MEIP from the interrupt controller,
 whose sources are numbered by spec/soc.toml [irqs].
+With HAS_GPU (docs/GPU.md section 7) the gpu and vram windows are surf_gpu and surf_vram: VRAM's
+port A serves the CPU's window first and the engine in the other cycles, its port B the video
+scan-out (surf_video with HAS_GFX); sysinfo.FEATURES has GPU. Without, both windows are the D
+decoder's errors and none of it is built.
 */
 `include "surf_bus_targets.vh"
 `include "surfcpu_rvfi.vh"
@@ -32,7 +36,8 @@ module surfcpu_soc #(
     parameter [31:0]  BUILD_TIME   = 32'h0,
     parameter integer HAS_DDR      = 1,
     parameter [31:0]  DDR_SIZE     = 32'h1000_0000,
-    parameter integer DDR_SWINIT   = 0             // 1: the DDR controller needs software init (ddrc)
+    parameter integer DDR_SWINIT   = 0,            // 1: the DDR controller needs software init (ddrc)
+    parameter integer HAS_GPU      = 0             // 1: VRAM, graphics scan-out and the drawing engine
 ) (
     input  wire        clk, rst, pix_clk, pix_rst,
     input  wire        uart_rx,  output wire uart_tx,
@@ -63,9 +68,13 @@ module surfcpu_soc #(
                                   SURF_SYSINFO_FEATURES_IRQ_MASK  | SURF_SYSINFO_FEATURES_GPIO_MASK |
                                   SURF_SYSINFO_FEATURES_SPI_MASK  | SURF_SYSINFO_FEATURES_PS2_MASK |
                                   SURF_SYSINFO_FEATURES_VIDEO_MASK |
-                                  ((HAS_DDR != 0) ? SURF_SYSINFO_FEATURES_DDR_MASK : 32'h0);
+                                  ((HAS_DDR != 0) ? SURF_SYSINFO_FEATURES_DDR_MASK : 32'h0) |
+                                  ((HAS_GPU != 0) ? SURF_SYSINFO_FEATURES_GPU_MASK : 32'h0);
     localparam [31:0] DDR_BYTES = (HAS_DDR != 0) ? DDR_SIZE : 32'h0;
     localparam integer HAS_DDRC = ((HAS_DDR != 0) && (DDR_SWINIT != 0)) ? 1 : 0;
+    // VRAM's size: 300 KiB of the 512 KiB vram window (docs/GPU.md section 2; for C,
+    // SURF_VRAM_BYTES in firmware/include/surfcpu/gpu.h, which the gpu tests compare)
+    localparam integer VRAM_BYTES = 307200;
 
     // ---------------------------------------------------------------- the core
     wire        ibus_req_valid, ibus_req_ready, ibus_req_write, ibus_req_fetch;
@@ -110,7 +119,7 @@ module surfcpu_soc #(
     wire [3:0]       dt_req_be;
     wire [32*KD-1:0] dt_rsp_rdata;
 
-    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC)) u_bus (
+    surf_interconnect #(.HAS_DDR(HAS_DDR), .HAS_DDRC(HAS_DDRC), .HAS_GPU(HAS_GPU)) u_bus (
         .clk(clk), .rst(rst), .ddr_calib_done(ddr_calib_done),
         .i_req_valid(ibus_req_valid), .i_req_ready(ibus_req_ready), .i_req_addr(ibus_req_addr),
         .i_req_write(ibus_req_write), .i_req_be(ibus_req_be), .i_req_wdata(ibus_req_wdata),
@@ -177,6 +186,38 @@ module surfcpu_soc #(
         .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_TEXTRAM),
         .pix_clk(pix_clk), .pix_addr(text_addr), .pix_data(text_data));
 
+    // ---------------------------------------------------------------- the GPU (HAS_GPU)
+    wire [16:0] vram_pix_addr;
+    wire [31:0] vram_pix_data;
+    wire        video_vblank;
+    generate
+        if (HAS_GPU != 0) begin : g_gpu
+            wire        g_gnt, g_rvalid;
+            wire [31:0] g_rdata;
+            surf_vram #(.BYTES(VRAM_BYTES)) u_vram (
+                .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_VRAM),
+                .g_req(1'b0), .g_we(1'b0), .g_be(4'h0), .g_addr(17'd0), .g_wdata(32'h0),
+                .g_gnt(g_gnt), .g_rvalid(g_rvalid), .g_rdata(g_rdata),
+                .pix_clk(pix_clk), .pix_addr(vram_pix_addr), .pix_data(vram_pix_data));
+            // the engine's registers: answered with errors until surf_gpu is in (G2)
+            surf_bus_err u_gpu (.clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_GPU));
+            wire unused_gpu = &{1'b0, video_vblank, g_gnt, g_rvalid, g_rdata};
+        end else begin : g_nogpu
+            // the decoder never selects these targets: they stay silent
+            assign dt_req_ready[`SURF_DT_GPU]           = 1'b0;
+            assign dt_rsp_valid[`SURF_DT_GPU]           = 1'b0;
+            assign dt_rsp_rdata[32*`SURF_DT_GPU +: 32]  = 32'h0;
+            assign dt_rsp_err[`SURF_DT_GPU]             = 1'b0;
+            assign dt_req_ready[`SURF_DT_VRAM]          = 1'b0;
+            assign dt_rsp_valid[`SURF_DT_VRAM]          = 1'b0;
+            assign dt_rsp_rdata[32*`SURF_DT_VRAM +: 32] = 32'h0;
+            assign dt_rsp_err[`SURF_DT_VRAM]            = 1'b0;
+            assign vram_pix_data                        = 32'h0;
+            wire unused_gpu = &{1'b0, dt_req_valid[`SURF_DT_GPU], dt_req_valid[`SURF_DT_VRAM],
+                                vram_pix_addr, video_vblank};
+        end
+    endgenerate
+
     // ---------------------------------------------------------------- peripherals
     wire uart_irq, gpio_irq, spi_irq, ps2_irq, video_irq;
 
@@ -216,10 +257,11 @@ module surfcpu_soc #(
         .irq(ps2_irq), .ps2_clk_i(ps2_clk_i), .ps2_data_i(ps2_data_i),
         .ps2_clk_oe(ps2_clk_oe), .ps2_data_oe(ps2_data_oe));
 
-    surf_video #(.PIX_HZ(PIX_HZ)) u_video (
+    surf_video #(.PIX_HZ(PIX_HZ), .HAS_GFX(HAS_GPU)) u_video (
         .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_VIDEO),
         .irq(video_irq), .pix_clk(pix_clk), .pix_rst(pix_rst),
         .text_addr(text_addr), .text_data(text_data),
+        .vram_addr(vram_pix_addr), .vram_data(vram_pix_data), .vblank(video_vblank),
         .vga_r(vga_r), .vga_g(vga_g), .vga_b(vga_b), .vga_hs(vga_hs), .vga_vs(vga_vs));
 
     surf_sysinfo #(

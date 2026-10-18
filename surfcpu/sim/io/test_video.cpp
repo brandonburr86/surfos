@@ -27,8 +27,12 @@ Checks:
     sys domain alone (registers back to reset values, the syncs undisturbed);
 all at the board's clocks (SURF_SYS_HZ / SURF_PIX_HZ) or, by seed, at other ratios for the
 clock crossings.
+--gfx (10/18/26, SurfGPU): the same tests on surf_video built with HAS_GFX = 1 (mk/area-gpu.mk),
+where offset 0x080 is GFX_BASE; nothing else changes: VRAM and text RAM start all zero (as the
+real ones do) and GPAL[0] is black, so modes 2 and 3 still show black at the point this test
+looks at them (sim/gpu/test_video_gfx.cpp tests the graphics).
 
-    Vtb_video --font driver/font8x16.c --out DIR [--seed N]
+    Vtb_video --font driver/font8x16.c --out DIR [--seed N] [--gfx]
 */
 #include "Vtb_video.h"
 #include "verilated.h"
@@ -110,6 +114,7 @@ struct Screen {                     // the harness's copy of text RAM cells 0..2
 
 static VgaFont g_font;
 static std::string g_out;
+static bool g_gfx = false;          // the block has HAS_GFX (offset 0x080 is a register there)
 
 static void tram_write(Tb &tb, Bus &bus, Screen &s, int idx, uint32_t v) {
     bus.idle(0);
@@ -182,8 +187,10 @@ static void test_registers(Tb &tb, Bus &bus) {
         if (bus.rd(B + SURF_VIDEO_PALETTE + 4 * i) != CGA[i]) pal_bad++;
     CHECK(pal_bad == 0, "%d palette entries differ from the CGA colours after reset", pal_bad);
     const uint32_t bad[] = {0x01C, 0x020, 0x03C, 0x080, 0x042, 0x07E, 0x100, 0xFFC};
-    for (uint32_t off : bad)
+    for (uint32_t off : bad) {
+        if (g_gfx && off == SURF_VIDEO_GFX_BASE) continue;
         CHECK(bus.read(B + off).err && bus.write(B + off, 0).err, "offset %03x not an error", off);
+    }
     CHECK(bus.write(B + SURF_VIDEO_CTRL, 0, 0x1).err && bus.read(B + SURF_VIDEO_STATUS, 0xE).err, "partial access");
     CHECK(bus.fetch(B + SURF_VIDEO_CTRL).err, "fetch not an error");
     CHECK(bus.rd(B + SURF_VIDEO_CTRL) == CTRL_EN, "a refused write changed CTRL");
@@ -650,6 +657,7 @@ int main(int argc, char **argv) {
         if (!std::strcmp(argv[i], "--seed") && i + 1 < argc) seed = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 0));
         else if (!std::strcmp(argv[i], "--font") && i + 1 < argc) font_path = argv[++i];
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) g_out = argv[++i];
+        else if (!std::strcmp(argv[i], "--gfx")) g_gfx = true;
     }
     if (font_path.empty() || g_out.empty() || !g_font.load_c(font_path)) {
         std::printf("usage: %s --font driver/font8x16.c --out DIR [--seed N] (font: %s)\n", argv[0], font_path.c_str());
@@ -668,6 +676,7 @@ int main(int argc, char **argv) {
     top->pix_rst = 1;
     top->s_req_valid = 0;
     top->tram_we = 0;
+    top->vram_we = 0;                       // tb_video's VRAM stand-in stays all zero
     top->eval();
     for (int i = 0; i < 8; i++) tb.posedge();
     top->rst = 0;

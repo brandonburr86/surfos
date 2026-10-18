@@ -10,9 +10,12 @@ exact port list of docs/MODULES.md section 3 and keeps the SurfBus rules of the 
 and fetches get an error) but shows nothing: CTRL reads its reset value (ENABLE, test
 pattern), INFO the text geometry, PIXCLK the pixel clock, everything else 0; writes are
 ignored; the picture is black with both syncs inactive (high) and text address 0.
+10/18/26 (SurfGPU): the version 3 ports (HAS_GFX, vram_addr, vram_data, vblank); it stands in
+for the block without graphics only (HAS_GFX 0: the graphics registers are errors there too).
 */
 module surf_video #(
-    parameter integer PIX_HZ = 25173611
+    parameter integer PIX_HZ  = 25173611,
+    parameter integer HAS_GFX = 0
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -31,6 +34,9 @@ module surf_video #(
     input  wire        pix_rst,
     output wire [11:0] text_addr,
     input  wire [31:0] text_data,
+    output wire [16:0] vram_addr,
+    input  wire [31:0] vram_data,
+    output wire        vblank,
     output wire [3:0]  vga_r,
     output wire [3:0]  vga_g,
     output wire [3:0]  vga_b,
@@ -85,11 +91,13 @@ module surf_video #(
     assign s_rsp_rdata = rsp_rdata_q;
     assign irq         = 1'b0;
     assign text_addr   = 12'h000;
+    assign vram_addr   = 17'h0;
+    assign vblank      = 1'b0;
     assign vga_r       = 4'h0;
     assign vga_g       = 4'h0;
     assign vga_b       = 4'h0;
     assign vga_hs      = 1'b1;
     assign vga_vs      = 1'b1;
 
-    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata, pix_clk, pix_rst, text_data};
+    wire unused_ok = &{1'b0, s_req_addr[31:12], s_req_wdata, pix_clk, pix_rst, text_data, vram_data, HAS_GFX[0]};
 endmodule

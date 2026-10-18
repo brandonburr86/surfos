@@ -1,7 +1,7 @@
 /*
 SurfCPU interconnect target numbers
 --------------------
-File: surf_bus_targets.vh Date: 10/16/26 (SurfCPU)
+File: surf_bus_targets.vh Date: 10/16/26 (SurfCPU), 10/18/26 (SurfGPU: gpu, vram)
 --------------------
 The slave ports of the I and D decoders (docs/SURFBUS.md section 6, docs/SOC.md), as macros so
 they can size port lists. `include it at the top of a file, outside the module. The DDR target
@@ -29,8 +29,10 @@ exposes the others. Each decoder also has its own error slave, which is not numb
 `define SURF_DT_VIDEO    8
 `define SURF_DT_SYSINFO  9
 `define SURF_DT_TEXTRAM  10
-`define SURF_DT_DDRC     11   // the DDR controller's registers, a port out of the SoC (DDR_SWINIT)
-`define SURF_DT_DDR      12
-`define SURF_DT_COUNT    13
+`define SURF_DT_GPU      11   // the GPU's registers (HAS_GPU, docs/GPU.md)
+`define SURF_DT_VRAM     12   // VRAM's CPU window (HAS_GPU)
+`define SURF_DT_DDRC     13   // the DDR controller's registers, a port out of the SoC (DDR_SWINIT)
+`define SURF_DT_DDR      14
+`define SURF_DT_COUNT    15
 
 `endif
