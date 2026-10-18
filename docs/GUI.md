@@ -742,3 +742,12 @@ The 2026-10-12 desktop validation passed the host suite, 286 smoke checks and
 working by the laptop owner. With the touchpad (2026-10-15) the host suite,
 297 smoke checks and 51 Files checks passed at O0 and O2, and 313 USB/UEFI
 checks at both levels; the owner then used the touchpad in the desktop.
+
+The applications (2026-10-18, gui/suite 3923ce1, from a clean tree) passed the whole
+host suite, the desktop's 3,249 checks among it (test_gui 545, test_guiterm 544,
+test_guisys 364, test_guitools 505, test_guimedia 1,086, test_guisuite 191,
+test_pointer 14); the image builder's 15 tests; 311 smoke checks and 51 Files checks
+at O0 and O2; and all 18 USB/UEFI scenarios at both levels, 570 checks each (the gui
+and guiapps scenarios among them). Each track was reviewed independently until a review
+found nothing more. These are emulator results only: the applications have not yet
+run on the laptop.
