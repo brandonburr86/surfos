@@ -192,9 +192,9 @@ static void mount(struct gui_state *g) {
     strlcpy(name, k->disk[v].name, sizeof(name));
     msg[0] = 0;
     r = g->fs->mount(g->fs->ctx, name, msg, sizeof(msg));
-    strlcpy(k->status, msg[0] ? msg : r ? "Not mounted" : "Mounted", sizeof(k->status));
     if(!r) strlcpy(k->name, name, sizeof(k->name));    /* the volume that was mounted */
     read_disks(g);
+    strlcpy(k->status, msg[0] ? msg : r ? "Not mounted" : "Mounted", sizeof(k->status));   /* what mount said, first */
     if(g->win[GUI_FILES].open) files_refresh(g);       /* Files shows it at once too */
 }
 
@@ -224,8 +224,8 @@ static void eject(struct gui_state *g) {
     }
     msg[0] = 0;
     r = g->fs->eject(g->fs->ctx, name, msg, sizeof(msg));
-    strlcpy(k->status, msg[0] ? msg : r ? "Not ejected" : "Ejected", sizeof(k->status));
-    read_disks(g);
+    read_disks(g);                                      /* an unplugged stick is gone from the list now */
+    strlcpy(k->status, msg[0] ? msg : r ? "Not ejected" : "Ejected", sizeof(k->status));   /* what eject said, first */
     if(g->win[GUI_FILES].open) files_refresh(g);
 }
 

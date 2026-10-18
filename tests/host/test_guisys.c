@@ -141,6 +141,7 @@ static int t_mount(void *ctx, const char *dev, char *msg, size_t n) {
 }
 
 static int t_eject(void *ctx, const char *dev, char *msg, size_t n) {
+    bool gone = false;
     int i;
     (void)ctx;
     strlcpy(ejected_dev, dev, sizeof(ejected_dev));
@@ -151,7 +152,15 @@ static int t_eject(void *ctx, const char *dev, char *msg, size_t n) {
         fake_disks[i].used_kb = fake_disks[i].free_kb = 0;
         fake_disks[i].status[0] = 0;
     }
-    snprintf(msg, n, "%s: safe to remove", dev);
+    for(i = 0; i < fake_ndisks; i++) {                 /* an unplugged stick leaves the list once nothing holds it */
+        if(strcmp(fake_disks[i].disk, dev) || !fake_disks[i].gone) continue;
+        memmove(&fake_disks[i], &fake_disks[i + 1], (fake_ndisks - i - 1) * sizeof(fake_disks[0]));
+        fake_ndisks--;
+        i--;
+        gone = true;
+    }
+    if(gone) snprintf(msg, n, "%s: unmounted (it was unplugged already)", dev);
+    else snprintf(msg, n, "%s: safe to remove", dev);
     return 0;
 }
 
@@ -661,9 +670,15 @@ static void disks_gone(void) {
     mounted_dev[0] = 0;
     key('m');
     CHECK(!mounted_dev[0] && !strcmp(g.disks.status, "usb1p1 was unplugged"));
-    key('e');
-    CHECK(!strcmp(ejected_dev, "usb1"));
-    /* then it is gone from the list: the selection stays where it was */
+    key('e');                                           /* then it is gone from the list: eject's words stay */
+    CHECK(!strcmp(ejected_dev, "usb1") && g.disks.count == 3 && g.disks.selected == 2 && !strcmp(g.disks.name, "usb0p1"));
+    CHECK(!strcmp(g.disks.status, "usb1: unmounted (it was unplugged already)"));
+    /* a stick that is pulled out (not mounted) leaves the list at the next reading: the selection stays on its row */
+    add_disk("usb1", "usb1", "usb", "disk mbr", "QEMU QEMU HARDDISK", "", "64M", 65536, false);
+    add_disk("usb1p1", "usb1", "usb", "part mbr FAT32 LBA", "", "", "63M", 64512, true);
+    later(2000);
+    select_disk("usb1p1");
+    CHECK(g.disks.count == 5 && g.disks.selected == 4);
     fake_ndisks = 3;
     later(2000);
     CHECK(g.disks.count == 3 && g.disks.selected == 2 && !strcmp(g.disks.name, "usb0p1"));
