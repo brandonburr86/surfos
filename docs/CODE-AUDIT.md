@@ -190,7 +190,7 @@ cache, mkfs killed, a kernel thread killed inside a file system that enters a ca
 comes once the thread is out), failing on 3fe29bf. The review's coverage notes: with B41's debt test or B45 taken out
 the threaded test's exact check caught nothing in 12 runs, with B34's check taken out 2 of 12, and the threaded test
 cannot reach B45's path; `tests/host/test_fatfs.c` fails on each of those trees every time (B34a, B34b, B41c, B41d; B41d;
-B45). `surfcpu/docs/evidence/os/bcache-review.txt` sections 40-46 have the numbers:
+B45). `surfcpu/docs/evidence/os/bcache-review.txt` sections 40-47 have the numbers:
 
 | ID | Where | Problem | Fix |
 |---|---|---|---|
