@@ -17,9 +17,10 @@ end, as it was found, also after a failure. readback() checks on the host that t
 import re
 
 import gui_scenario as base
-from gui_apps_scenario import window, PAPER, INK, TEAL, MUTED, BAND
+from gui_apps_scenario import window, PAPER, INK, TEAL, MUTED, BAND, FOAM
 
 SHEET = bytes.fromhex('fffdf5')                 # a list's background (shell/gui_sys.h SYS_SHEET)
+SHELL = bytes.fromhex('dee3d8')                 # a list's headings
 CORAL = bytes.fromhex('ee906d')                 # a bar from 90% used
 TITLE_H, BAR_H, ROW_H, STATUS_H = 28, 28, 18, 22
 HEAD_Y = TITLE_H + BAR_H + 3                    # a list's headings, window-relative
@@ -115,6 +116,7 @@ def monitor(d):
     x, y, w, h = window(MON)
     d.open_app(MON)
     d.visible('System Monitor opens from the Apps menu', d.title(MON), 'guiapps-system-monitor.png')
+    _park(d)                                                   # before any cell is read
     rows = _wait_tasks(d, r, 'System Monitor lists the consoles\' shells and the kernel\'s threads, in pid order',
                        lambda rows: [p for p, *_ in rows] == sorted(p for p, *_ in rows) and
                        {('surfsh', 'F1'), ('surfsh', 'F2'), ('surfsh', 'F3'), ('surfsh', 'F4')} <=
@@ -244,36 +246,45 @@ DEVICES = [('rd0', False, None, 'disk', 'initrd.tar', 'mounted'),
            ('usb1p1', True, '63M', 'part mbr FAT32 LBA', '', '')]
 
 
-def _columns(w):
-    """Disks' columns for DEVICES, as shell/guidisks.c's layout() makes them: each as wide as what it holds, the
-    model or label giving way in a narrow window"""
-    name = max(4, *(len(n) + (2 if part else 0) for n, part, *_ in DEVICES))
-    types = max(4, *(len(t) for _, _, _, t, _, _ in DEVICES))
-    labels = max(11, *(len(m) for _, _, _, _, m, _ in DEVICES))
-    status = max(6, *(len(s) for *_, s in DEVICES))
-    bar_x = w - 2 - 12
-    size_r = 28 + name * 8 + 8 + 4 * 8
-    bus_x = size_r + 8
-    type_x = bus_x + 3 * 8 + 8
-    label_x = type_x + types * 8 + 8
-    status_x = label_x + labels * 8 + 8
-    if status_x + status * 8 > bar_x - 6:
-        status_x = bar_x - 6 - status * 8
-    if (status_x - 8 - label_x) // 8 < 4:
-        status_x = label_x
-    return size_r, bus_x, type_x, status_x
+def _columns(d, s):
+    """where Disks' columns are on this screen, from its headings: the columns are as wide as what they hold
+    (shell/guidisks.c's layout(): the longest size string, type and so on), so they are found, not assumed;
+    (size_r, bus_x, type_x, status_x) window-relative, or None"""
+    x, y, w, _ = window(DISKS)
+    found = {}
+    for word in ('Size', 'Bus', 'Type', 'Status'):
+        for at in range(40, w - 40):
+            if d.text(s, x + at, y + HEAD_Y + 2, word, MUTED, SHELL):
+                found[word] = at
+                break
+        else:
+            return None
+    return found['Size'] + 32, found['Bus'], found['Type'], found['Status']
+
+
+def _row_named(d, s, name, part):
+    """the row of Disks' list that shows this device, or None"""
+    x, y, _, h = window(DISKS)
+    for i in range((h - STATUS_H - 1 - DETAIL_H - LIST_Y) // ROW_H):
+        if d.text(s, x + 28 + (16 if part else 0), y + LIST_Y + i * ROW_H + 1, name, INK):
+            return i
+    return None
 
 
 def disks(d, state):
     r = Reader(d)
     x, y, w, h = window(DISKS)
-    size_r, bus_x, type_x, status_x = _columns(w)
     detail_y = y + h - STATUS_H - 1 - DETAIL_H
+    cols = {}
 
     def row_y(i):
         return y + LIST_Y + i * ROW_H + 1
 
     def listed(s):
+        found = _columns(d, s)
+        if not found:
+            return False
+        size_r, bus_x, type_x, status_x = cols['at'] = found
         for i, (name, part, size, kind, _, status) in enumerate(DEVICES):
             if not d.text(s, x + 28 + (16 if part else 0), row_y(i), name, INK):
                 return False
@@ -287,8 +298,11 @@ def disks(d, state):
                 return False
         return True
     d.open_app(DISKS)
+    d.visible('Disks opens from the Apps menu', d.title(DISKS))
+    _park(d)                                                   # before any cell is read
     d.visible('Disks lists the devices as lsblk does: the initrd, the boot stick and the data stick, partitions under them',
               lambda s: d.title(DISKS)(s) and listed(s), 'guiapps-disks.png')
+    status_x = cols['at'][3]
     stick = next(i for i, dev in enumerate(DEVICES) if dev[0] == 'usb1p1')
     _select(d, stick)
     d.visible('the data stick\'s partition: its details, not mounted',
@@ -328,12 +342,45 @@ def disks(d, state):
 
 # ---- the track's checks ------------------------------------------------------------------------
 
+MENU_LEFT = (8, 96, 152, 208, 264, 336)       # where each menu's title starts (shell/guicore.c menu_left())
+
+
+def _menu_open(d, s):
+    """a menu of the menu bar is open: its title is drawn on teal"""
+    return any(base._pixel(s, left - 2, 4) == TEAL for left in MENU_LEFT)
+
+
+def _dialog_open(d, s):
+    """a dialog is in front: the desktop's dialog box (a message, a question, a line to type) has the wave in its
+    title bar, where shell/guidialog.c centres it on the 960x540 desktop"""
+    return any(d.text(s, 245 + 12, top + 6, '\xf7', FOAM, TEAL) for top in (198, 191))
+
+
 def _leave(d, name):
-    """the window closed, and a dialog of its own: Esc closes a dialog, or the window in front"""
-    d.key('esc')
-    d.vm.pump(0.3)
-    if d.vm.wait_screen(d.title(name), 2, interval=0.2) is not None:
+    """the window closed, and a menu or a dialog in front of it first. Esc is sent only to close a menu or a dialog
+    that is there: with nothing in front, Esc closes the window in front, and with no window open at all it would
+    leave the desktop"""
+    s = d.vm.screen()
+    if _menu_open(d, s) or _dialog_open(d, s):
+        d.key('esc')
+        d.vm.wait_screen(lambda s: not _menu_open(d, s) and not _dialog_open(d, s), 5, interval=0.2)
+    if d.vm.wait_screen(lambda s: d.title(name)(s) or d.title(name, False)(s), 2, interval=0.2) is not None:
         d.close(name)
+        d.vm.wait_screen(lambda s: not d.title(name)(s) and not d.title(name, False)(s), 5, interval=0.2)
+
+
+def _eject_stick(d):
+    """as the stick was found: not mounted. Disks in front, the data stick's partition found by its name, Eject"""
+    d.open_app(DISKS)
+    if d.vm.wait_screen(d.title(DISKS), 10, interval=0.2) is None:
+        return
+    _park(d)
+    s = d.vm.wait_screen(lambda s: _row_named(d, s, 'usb1p1', True) is not None, 10, interval=0.2)
+    if s is None:
+        return
+    _select(d, _row_named(d, s, 'usb1p1', True))
+    d.key('e')
+    d.vm.wait_screen(_status(d, DISKS, 'usb1: safe to remove'), 10, interval=0.2)
 
 
 def checks(d):
@@ -345,11 +392,8 @@ def checks(d):
     try:
         disks(d, state)
     finally:
-        if state['mounted']:                                  # as it was found: the stick not mounted
-            d.open_app(DISKS)
-            d.key('end')
-            d.key('e')
-            d.vm.wait_screen(_status(d, DISKS, 'usb1: safe to remove'), 10, interval=0.2)
+        if state['mounted']:
+            _eject_stick(d)
         _leave(d, DISKS)
 
 
