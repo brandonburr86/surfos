@@ -156,8 +156,9 @@ def task_name(row):
 
 
 def park(d):
-    """the pointer off the Terminal's text, as it opened or maximized: on the maximized window's scroll bar"""
-    d.move(950, 300)
+    """the pointer off the Terminal's text, as it opened or maximized: on the maximized window's scroll bar (its
+    text ends at x 944), with all of its 12 pixels on the screen (x 946 to 957), as the harness wants to see it"""
+    d.move(946, 300)
 
 
 def close_terminal(d):
@@ -336,8 +337,10 @@ def checks(d):
         d.check(f"ps in a new session: five surfsh, F1-F4's and the Terminal's ({len(shells)})", len(shells) == 5)
         d.click(big.x + big.w - 40, big.y + 10)
         park(d)
-    except AssertionError:
+    except AssertionError as e:
         d.vm.screen('guiapps-terminal-failed.png')     # as it was, before the window is closed below
+        if not d.results or d.results[-1][1]:          # a stop that recorded nothing (the pointer did not
+            d.check(f"the Terminal's checks went on: {e}", False)   # move, say) is a failure all the same
         raise
     finally:
         try:
