@@ -932,3 +932,195 @@ The audit asked for (major 1): every cache and FAT path a killable task can bloc
   the padded base (17:30-17:35), so 3b896c1 lets the cache lock's owner stand for its short sections (bcache_holds())
   and counts only around device requests and copies. The eject's 5 % was binvalidate() waking the waiters for each of
   the card's cached blocks it dropped (B40's change, via discard_now()); 4bd8e7d wakes them once.
+
+======================================================================================================================
+Round fs-fix-7 (10/17/26): an independent review of B39-B45 (0a9a5f2), and its fixes (audit B46-B49)
+date:   2026-10-17 (local)
+review: by another agent, read-only, on 0a9a5f2: scenario R1 (fsrev7-tests/review7.c: Ctrl+C or a kill during umount
+        while another task's one-block write of the card is in flight, a `sync` on another console or a reader of
+        another disk making room, with two controls) against 0a9a5f2's fs/ with tests/host/test_fatfs.c's stand-ins;
+        the threaded test with kills made as the kernel makes them (conc7.c: TI_KILL in a call, TI_INT in a kernel
+        command, the process's end with TC_EXIT and its close's write-back, kill_escalate() after a set time, put off
+        while fs_hold or bcache_holds() says so, else a longjmp out of the wait); trees with B34's check, B41's debt
+        test and B45 taken out (mut_nob34, mut_nodebt, mut_nob45). It confirmed that fs_hold balances on every path,
+        bcache_holds(), the debt test, that B45 cannot fire during its own order point and that a copy taken again
+        cannot starve: 92 threaded runs with 45,282 kills and 36,114 Ctrl+Cs clean, 20 randomized seeds clean. Its
+        findings (major 1, minor 2 and 3, cosmetic 4) are docs/CODE-AUDIT.md's B46-B49.
+before: 3fe29bf (0a9a5f2 merged; PROGRESS.md only since) fs/, include/, lib/, kernel/, driver/, shell/ and tests/host
+        (git archive), built with this round's tests (tests/host/test_fatfs.c, test_mkfs.c, test_fatconc.c; where they
+        use what 3fe29bf lacks, a step that must finish, they stand in for it with nothing: #ifndef TI_NOCALL). The
+        kernel's self test before: this round's shell/selftest.c in a whole 3fe29bf tree, fs_enter() and fs_leave()
+        given there as two lines on fs_hold (section 41)
+after:  sc/fs-fix-7 (from surfcpu 3fe29bf): 7d1c346 task (fs_finish, fs_cut_short(), fs_enter(), TI_NOCALL: B46-B48),
+        bb2f78d fs and eject (B46), 05d423b bdev and mkfs (B47), 9707727 bcache and fat (B49), 64d2ec0 tests, 964f3ed
+        the self test, 2617c29 docs, 4ca1790 eject (B46: a write it cut short is not said to be refused), then the self
+        test's umount steps made to reproduce R1 (eaa6af1, 0a89c3b, d326c66, f479d13: section 41) and its eject step
+        (1a270a7), docs (d811803, 616af5d, 0ff0304, f08f527, 4133649), then this evidence. The kernel's code is final at
+        4ca1790, the self test at 1a270a7; the host results below are of 964f3ed, whose host-built files (fs/,
+        include/, tests/host) are the final ones
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32, tests/host/pager_shim), and the
+        same with -fsanitize=address,undefined; tests/host/test_mkfs.c on the Mac with four stand-ins for the Linux
+        calls it declares by hand (open64() and its flags, ftruncate64(), pread64(), pwrite64()); the devenv container
+        (gcc -m32) through make unittest (section 46)
+
+== 40. Before and after, scenario by scenario (tests/host/test_fatfs.c: 343 checks, those of the earlier rounds passing
+       on both; test_fatconc's umount setting; tests/host/test_mkfs.c)
+scenario  audit review what                                             before (3fe29bf)                                after
+B46       B46   R1     vfs_umount_lost()'s steps once the mount is off  FAIL each way: the waits cut short at once (the  pass each way: the umount waits for the hold
+(modes          (one-  the list, interrupted while another task holds   umount never waited for the hold), fs sync -5,   (3 looks), fs sync 0, bsync 0, nothing given
+0-2)            task   one of the volume's changed blocks (let go at    bsync -1, 1 changed block given up (a's change   up, nothing said; the card's clean bit set,
+                form)  the umount's third look): Ctrl+C (TI_INT, a      lost), "write errors, the volume stays marked as a and b as written; the next mount warns
+                       kernel command), a kill (TI_KILL, a system       not cleanly unmounted", clean bit 0; the next    nothing; the task out of the file system
+                       call), a hangup (TI_KILL and TI_HANGUP)          mount warns
+(mode 3)  B46   R1     the control: no interrupt                        pass                                             pass
+(mode 4)  B46   R1     Ctrl+C in fat_unmount() alone, as the first      FAIL: not waited; "16 clusters given back could  pass: waits, writes, frees the chain; nothing
+                (part) step, with an append's chain waiting to be       not be freed", "write errors", 1 block given     lost or given up, the volume clean
+                       freed (B25: cut back while the card refused)     up, clean bit 0
+conc      B46   R1     R1 as the review wrote it, with threads: a sync  FAIL with Ctrl+C, a kill and a hangup: fs sync   pass each way: fs sync 0, bsync 0, nothing
+umount                 on another thread whose writes of the data area  -5, bsync -1, 5 changed blocks given up, two     given up or said, clean bit 1, a and b read
+                       take 0.1 s each; the umount, interrupted, while  lines saying so, clean bit 0, b missing at the   back; the control passes on both (25 runs
+                       that sync's write of b's block is in flight      next mount (10 runs of 10)                       of 25)
+B47       B47   (2)    mkfs (Ctrl+C in its kernel command) interrupted  FAIL both: it wrote on to its end (9 writes, a   pass: before it began -EINTR, no write,
+(test_                 before it began and in its third request, on a   whole new volume, 0), the flush included         "interrupted before it wrote anything: the
+mkfs)                  volume made whole first                                                                           device is as it was", the old boot sector
+                                                                                                                         there; in the third request -EINTR after 3
+                                                                                                                         writes, "interrupted at sector 33: the device
+                                                                                                                         holds no usable file system now", no flush,
+                                                                                                                         the cached blocks dropped, no boot sector;
+                                                                                                                         the task out of the file system both times
+B49       B49   (4)    a write of 2637 bytes at offset 678 by a task    346 (one block through the cache, then the       346: what the comments and CARD.md now say
+                       killed before it began                           stop; the claims said 64 KB)
+B49       B49   (4)    a killed task's 16 KB straight write over a      FAIL: -5 (EIO), as if the card had refused it    pass: -4 (EINTR); nothing of it written, the
+                       block another task's sync is writing                                                              file as the writes said, the sync 0
+(each)    B9           the cache's account of each disk matches its      pass                                             pass
+                       blocks
+Every new scenario that checks a fix fails on 3fe29bf (test_fatfs.c: 343 checks there, 9 failing, B46's eight and B49's
+EINTR; test_fatconc umount: its three interrupted cases; test_mkfs.c: its two new checks), and every scenario of the
+earlier rounds passes on both. The review's own file (review7.c, unchanged, with this tree's harness): its controls pass
+(modes 2 and 3); mode 0 stops with "a wait that never ends": the umount now waits for the other task's write, and in a
+harness with one task that write is the frame the umount runs in (the hook inside it), so it can never end there. R1
+with tasks that run is test_fatconc's umount setting above and the kernel's self test (section 41).
+B48 is in kernel/task.c, which no host test builds, and eject's part of B46 in shell/fscmd.c: the kernel's self test
+checks both (section 41).
+
+== 41. The kernel's self test (shell/selftest.c, `selftest` in the smoke test, x86), before and after
+  The steps this round adds (after test_kill_in_cache, B39's):
+    umount interrupted: a file written while the RAM stick refuses (its close says EIO, its blocks stay changed in the
+      cache); the stick takes writes again, 300 ms each but the umount task's own; another task's sync of the stick in
+      its first write; an umount begun with Ctrl+C (task_interrupt_job(), as tty.c sends it, to a task in a kernel
+      command) or a kill (kill_task(), a task in a system call) reaching it as its command begins. Then: the umount's
+      result and the blocks it gave up, FAT[1]'s clean bit, and a read-only mount reading both files back. The RAM
+      stick's writes (block, task, time) and the umount's times are printed
+    eject interrupted: a RAM stick registered as stick4 (eject finds disks by name), mounted, a file on it; `eject
+      stick4` (cmd_eject()) in a task in a kernel command, Ctrl+C reaching it as its command begins; then its status,
+      whether the file is still there, the mount still in place (and the stick unmounted and unregistered after)
+    a kill inside a device request outside the cache (bdev_write(), 3 s), sent after 200 ms; mkfs killed in its first
+      request (300 ms each); a kernel thread killed inside a file system (fs_enter(), not in a call) that enters a
+      kernel command and leaves the file system before the kill comes; one that leaves without entering a call
+  before: this round's self test (1a270a7, the final one) in a whole 3fe29bf tree (fs_enter() and fs_leave() given
+          there as two lines on fs_hold; volume surfos-sc-fs7-base), x86 at -O0, the transcript of `selftest` (23:36;
+          the umount and kill steps the same at 22:30, with f479d13's test): SELFTEST FAIL, 121 checks ok, 7 failing:
+    Ctrl+C in umount while another task's write is in flight: "+FAT16: stick6: write errors, the volume stays marked
+      as not cleanly unmounted"; the stick's writes: block 98 (the file's data) by the sync from 0 ms, blocks 33 and
+      1 (the two FATs) by the umount at 30 ms, nothing more: the umount ended at once (30 to 30 ms), its waits cut
+      short, and gave up the file's entry (block 65); the next mount: "was not unmounted cleanly"
+    a kill during umount: the same
+    and the volume holds both files: neither entry reached the stick (c.txt and k.txt missing)
+    Ctrl+C in eject before it unmounts: "/selftest-ej unmounted", "stick4: safe to remove" (it went on and unmounted
+      though its call was to end, its waits cut short as the umount's were above)
+    a kill inside a device request: it ended 2000 ms after its kill, killed at once in the driver's 3 s (its block
+      never written)
+    mkfs killed: it ended 2000 ms after its kill, killed before mkfs returned (it had written on)
+    a kernel thread killed inside a file system that enters a call: it ended 220 ms after its kill, killed in its call
+      20 ms after it entered it
+    and the last step passes there too (killed 20 ms after it left the file system: B39's rule)
+  after:  1a270a7, x86 at -O0 (volume surfos-sc-fs7, 23:36): SELFTEST PASS, 128 checks ok (and the USB step skipped,
+          no device for it, as always). The interrupted umounts wait for the sync's writes (blocks 98, 33, 1 and 65 by
+          the sync at 0, 300, 600 and 900 ms), then mark the volume clean (33 and 1 by the umount at 1200 ms: the
+          umount from 30 to 1200 ms); nothing given up, the clean bit set, both files read back; eject says "eject:
+          stick4: interrupted: it stays mounted (eject it again)", its file still there; the kill in a device
+          request ended 2800 ms after it (the write ended first, the block written); mkfs killed ended 200 ms after its
+          kill: "interrupted at sector 1: the device holds no usable file system now"; the thread that entered a call
+          ended 700 ms after its kill, its call done; the one that left was killed 20 ms after it left.
+          The same at -O0 and -O2 in test-all's final build (f08f527, 23:48): 128 checks ok each, the umount, eject and
+          kill lines as above word for word (but the device request's kill once 2810 ms instead of 2800, a tick).
+  The first version of the umount steps (964f3ed, in test-all's run of x86.txt round fs-fix-7) had no change waiting in
+  the cache: every VFS call that changes a volume syncs it before it returns (it made a folder: vfs_mkdir()), and a
+  volume a file or a command uses cannot be unmounted, so changes another task can be writing at an umount are those a
+  refusal or a sync cut short left behind. The other task's sync wrote nothing and the umount had nothing to wait for:
+  the steps passed on 3fe29bf as well. The trace (0a89c3b) showed it; d326c66 leaves the file's blocks changed by
+  refusing its close's write-back, and f479d13 keeps the sync's write under way past the umount's own writes, as the
+  review's R1 did by running the umount inside that write.
+
+== 42. AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the
+       kernel files and the tests alike)
+  after:   test_fatfs 343 checks, 0 failures, no report; test_fatfuzz's set, 4 runs, 0 failures, no report; test_fatconc
+           in make unittest's four settings and its umount setting, each exit 0, no report; test_mkfs 96 checks (no
+           fsck.fat or mtools on the Mac), 0 failures, no report; the review's conc7.c built against this tree in four
+           of its settings with kill modes 1 and 3 (seed 7521, 4 s each): 8 runs, exit 0 each, 60,726 operations, 4,232
+           kills and 690 Ctrl+Cs, 37.8 million exact tag checks, no violation, no report
+
+== 43. The threaded test (tests/host/test_fatconc.c, make unittest's settings; the review's conc7.c by hand) and the
+       review's coverage notes
+  after:   make unittest's four settings, 3 s each, and the umount setting: exit 0 each (and under the sanitizers,
+           section 42). The review's campaign (conc7.c with its conc7_host.c and conc7_shim/, built against this tree,
+           its seven settings by its kill modes 1-3, 5 s each, new seeds): plain (seeds 7501-7502) 42 runs, with its
+           escalation modelled at 20 ms (7511) 21, sanitized (7521, section 42) 8: 71 runs, exit 0 each, 994,661
+           operations, 35,465 kills and 27,265 Ctrl+Cs, every process ended by a kill closing its files with TC_EXIT;
+           650 million exact tag checks, no violation; the final syncs 0, no dirty block left, oracle 0, both accounts
+           right, B5 0, the models and the end comparison right, census 0 lost, no fs_hold or critical-section count
+           left over, no kill at once (12 put off), no watchdog, in every run. (The review's 92 runs on 0a9a5f2, summed
+           the same way: 45,282 kills, 36,114 Ctrl+Cs, clean.)
+  The review's coverage notes: with B41's debt test or B45 taken out, the threaded test's exact check caught nothing in
+  12 runs, with B34's check taken out 2 of 12, and the threaded test cannot reach B45's path (a reader holding a block an
+  rm set aside while the rm's order point drops it and the cluster's next owner writes it). tests/host/test_fatfs.c,
+  built against each of the review's trees (its fs/ on 3fe29bf), fails on every one at every run, the test being
+  deterministic: mut_nob34 B34a, B34b, B41c, B41d (and B41d's last check); mut_nodebt B41d (both of its checks);
+  mut_nob45 B45 (both of its checks); each also fails this round's B46 checks, 3fe29bf having no fix for them.
+  Those scenarios are the net for these paths; the threaded test is not.
+
+== 44. The randomized test (tests/host/test_fatfuzz.c, make unittest's set)
+  after:   make unittest's set: 4 runs, 0 with failures (seeds 100-400: no kill or Ctrl+C in it, the code it runs the
+           same as round fs-fix-6's but for the waits' test of fs_finish)
+
+== 45. Costs
+  This round adds no request and no block: a device request runs counted inside (two stores in bdev_read(),
+  bdev_write() and bdev_flush(), around the driver's call), a test of fs_finish where a cache wait begins and before
+  each piece of a long transfer, a test before each of mkfs's requests, and the kill rule's flag; the host tests do not
+  build driver/bdev.c, and their requests and blocks are those of round fs-fix-6 (sections 37 and 40: the same counts in
+  every earlier scenario). The cost is on SurfCPU, in section 47.
+
+== 46. make unittest in the devenv container (gcc -m32)
+  O0 (volume surfos-sc-fs7, made afresh, 21:54-22:01 at 964f3ed, whose host-built files are the final ones): exit 0.
+  "FATFS: 343 checks, 0 failures", "FATFUZZ: 4 runs, 0 with failures", "CONC: ok" for each of the four settings and
+  "CONC umount: ok" with each of its four cases ok (Ctrl+C, a kill, a hangup, the control: fs sync 0, bsync 0, nothing
+  given up, nothing said, the clean bit set, a and b read back), "MKFS UNIT TESTS PASSED: 117 checks, 0 failures" with
+  the two interrupted mkfs runs (-4 each: "interrupted before it wrote anything: the device is as it was", 0 writes;
+  "interrupted at sector 33: the device holds no usable file system now", 3 writes, 0 flushes, 1 invalidation); every
+  other unit test passing (surfcpu/docs/evidence/os/x86.txt, round fs-fix-7). O2 (volume surfos-sc-fs7-o2, made afresh,
+  22:37-22:44 at f479d13): the same; the run's exit 2 is tests/test_devenv.py with O=2 in its environment, as in the
+  rounds before (x86.txt).
+
+== 47. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost
+  make -C surfcpu check (23:04-23:31, sc/fs-fix-7 at f08f527: the kernel's code final, the docs after it changing
+  nothing it builds): "check: all automated SurfCPU checks passed". Among them: boards/qemu_virt/test_os.py 132 of 132
+  at -O2 and at -O0 (its eject, umount, pull and refused-write scenarios: eject's message for a refused write unchanged);
+  test-os-surfemu 18 of 18; on the RTL system (surfsim, with the io track's card model) test-os-persist 17 of 17,
+  test-os-faults 25 of 25, test-os-kit 22 of 22, test-soc-system-boot 21 of 21.
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against 0a9a5f2's (its tree from git archive,
+  its kernel built the same way, run with this check's surfsim and SurfBoot ROM: this round changes neither; the
+  persist and fault tests run by their scripts in the toolchain container, 23:31-23:35):
+                                         0a9a5f2        after (f08f527)
+    test-os-persist, the write run       278,707,454      278,833,906  +0.05 % (+0.02 % but for SurfBoot's load)
+    test-os-persist, the reboot run      225,147,474      225,279,910  +0.06 % (+0.02 %)
+    test-os-faults, the refusing card    314,097,129      318,682,245  +1.46 % (+0.04 % but for the card's removal)
+    test-os-faults, the full card        203,243,677      203,356,132  +0.06 % (+0.02 %)
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 880 bytes larger
+  (400,500 -> 401,380 bytes: +80,504 cycles); every command within -0.5 % and +0.5 % (cp +860 cycles; an eject +2,405
+  and -2,316 for its two lines; mkdir +8,224), but for the refusing card's removal and return (+3.94 and +0.51 million
+  cycles: the kernel sees a removal at its card-detect task's next look, 200 ms or 5 million cycles apart, and this
+  run met it one look later, as rounds before met it sooner or later). The device requests and blocks are the same; a
+  request costs two stores more (driver/bdev.c's count around the driver's call), and nothing else this round adds runs
+  on these paths but at a wait's start and before each piece of a transfer. 0a9a5f2's package is the size round
+  fs-fix-6's after was (400,500 bytes), and its runs within 7,400 cycles of that round's after (section 39), on this
+  round's surfsim and ROM.
