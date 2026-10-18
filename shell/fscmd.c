@@ -296,12 +296,14 @@ int cmd_eject(int argc, char **argv) {
         kfree(v);
     }
     if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
-    if(vfs_unmount_begin(disk) != 0) {                       /* 10/18/26 (audit B51, B58): the disk is this eject's from */
+    fs_enter();                                              /* (B58: counted inside while it holds its disk, */
+    if(vfs_unmount_begin(disk) != 0) {                       /* so a kill waits until it lets go of it) */
+        fs_leave();                                          /* 10/18/26 (audit B51, B58): the disk is this eject's from */
         printf("    eject: %s or a partition of it is being %s: try again once that has finished\n", disk->name,
                vfs_bdev_unmounting(disk) ? "unmounted" : "mounted");   /* here to its end: no mount of it comes in */
         return CMD_FAIL;
     }
-    if(!(v = mounts_now(&nv, &total))) { vfs_unmount_end(disk); return CMD_FAIL; }
+    if(!(v = mounts_now(&nv, &total))) { vfs_unmount_end(disk); fs_leave(); return CMD_FAIL; }
     for(j = 0; j < nv; j++) {                                /* (listed once the disk is taken: B58) */
         if(v[j].dev && bdev_disk(v[j].dev) == disk && n < 8) {
             ro[n] = v[j].readonly;
@@ -312,7 +314,7 @@ int cmd_eject(int argc, char **argv) {
     for(i = 0; i < n; i++) {
         if(vfs_busy(paths[i], why, sizeof(why)) == -EBUSY) {
             printf("    eject: %s: %s is busy: %s\n", disk->name, paths[i], why);
-            vfs_unmount_end(disk);
+            vfs_unmount_end(disk); fs_leave();
             return CMD_FAIL;
         }
     }
@@ -333,12 +335,12 @@ int cmd_eject(int argc, char **argv) {
     }
     if(task_interrupted()) {                                 /* 10/17/26 (B46): Ctrl+C, a kill: nothing unmounted yet */
         printf("    eject: %s: interrupted: it stays mounted (eject it again)\n", disk->name);
-        vfs_unmount_end(disk);
+        vfs_unmount_end(disk); fs_leave();
         return CMD_FAIL;
     }
     if(r) {
         printf("    eject: %s stays mounted: sync tries the writes again; umount gives them up\n", disk->name);
-        vfs_unmount_end(disk);
+        vfs_unmount_end(disk); fs_leave();
         return CMD_FAIL;
     }
     fs_finish_enter();                                       /* (B46: from here it finishes: no wait cut short) */
@@ -346,7 +348,7 @@ int cmd_eject(int argc, char **argv) {
         r = unmount("eject", paths[i], &lost);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
-    if(r) { vfs_unmount_end(disk); fs_finish_leave(); return CMD_FAIL; }
+    if(r) { vfs_unmount_end(disk); fs_leave(); fs_finish_leave(); return CMD_FAIL; }
     /* 10/16/26 (B10): what the disk's devices still had could not be written: given up, and said */
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); lost += bdirty_count(p); binvalidate(p); }
     bsync(disk);
@@ -366,7 +368,7 @@ int cmd_eject(int argc, char **argv) {
         printf("    %s: safe to remove\n", disk->name);
         r = CMD_OK;
     }
-    vfs_unmount_end(disk);
+    vfs_unmount_end(disk); fs_leave();
     fs_finish_leave();
     task_interrupt_absorbed();                               /* 10/18/26 (B54): it finished: its own status, not 130 */
     return r;

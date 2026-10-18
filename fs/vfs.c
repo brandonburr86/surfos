@@ -42,7 +42,8 @@ it looks whether it is busy, and an eject takes its disk the same way for its wh
 run (vfs_unmount_begin()): a mount could look, find the disk free, and append itself to
 the list after the eject had listed the mounts it would unmount, or come in during the
 eject's write-out; the eject then took that volume's blocks and said "safe to remove".
-vfs_bdev_busy_why() says what keeps a device busy.
+Both are counted inside (fs_enter()) while they hold such a count, so a kill waits for
+them to let go of it. vfs_bdev_busy_why() says what keeps a device busy.
 */
 
 #include <surfos/types.h>
@@ -238,10 +239,13 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     if(!type) return fstype ? -ENODEV : -EINVAL;
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
+    fs_enter();                                     /* 10/18/26 (audit B58): counted inside while it holds the device's
+                                                       count below, so a kill waits and never leaves it behind */
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) break;
     if(m || (dev && busy_why(dev))) {               /* 10/5/26: two mounts of one device would each think they own it */
         mutex_unlock(&mount_lock);
+        fs_leave();
         return -EBUSY;
     }
     if(dev) dev->mounting++;                        /* 10/18/26 (audit B58): taken in the same step: busy until below */
@@ -266,6 +270,7 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
             dev->mounting--;
             mutex_unlock(&mount_lock);
         }
+        fs_leave();
         return r;
     }
     if(dev) bdev_get(dev);                          /* held until umount, even if unplugged meanwhile */
@@ -277,6 +282,7 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     *pp = m;
     if(dev) dev->mounting--;                        /* (B58: on the list now, busy as a mount) */
     mutex_unlock(&mount_lock);
+    fs_leave();
     return 0;
 }
 
