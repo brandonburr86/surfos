@@ -49,10 +49,12 @@ surf_task *task_find(u_long pid) {
     return NULL;
 }
 
-/* as kernel/task.c's: in its own code a task ends at once; inside a call it is marked and ends with the call */
+/* as kernel/task.c's: gone, ending (TC_EXIT) or killed already, that stands; in its own code a task ends at once;
+   inside a call it is marked and ends with the call */
 int kill_task_patient(surf_task *t) {
     patient_kills++;
     patient_last = t;
+    if(t->state == TS_DEAD || (t->in_call & TC_EXIT) || (t->intr & TI_KILL)) return t->state != TS_DEAD && t->in_call;
     if(!t->in_call) {
         t->state = TS_DEAD;
         return 0;
