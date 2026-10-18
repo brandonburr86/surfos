@@ -841,7 +841,7 @@ GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guino
 # TERM:
 GUI_TERM_OBJ =
 # SYS:
-GUI_SYS_OBJ =
+GUI_SYS_OBJ = $(BUILD)/host/kernel/shell/guimeter.o
 # TOOLS:
 GUI_TOOLS_OBJ =
 # MEDIA:
