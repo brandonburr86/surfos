@@ -14,6 +14,10 @@ of it about once a second while the window is open and in view (tucked away, it 
 drawing uses only what was read. Its Edit menu copies a task's line (or a page), finds a
 task by name and goes to a pid. Track SYS of docs/superpowers/plans/2026-10-17-gui-suite.md;
 the window manager reaches it through gui_app_monitor (struct gui_app, shell/guipriv.h).
+10/18/26: the pid followed stays followed until the user moves the selection, also through a
+reading without it (a task that ended, or one a reading missed); a reading that fails keeps
+what the last one read; the Memory and System pages scroll in a short window; End task's kill
+waits for the end of the system call the task is in, and never ends the shells above the desktop.
 */
 #include "gui_sys.h"
 #include <string.h>
@@ -38,10 +42,12 @@ static const char *const help[] = {
     "Processes: click a heading to sort by it, again to",
     "reverse it; S sorts by the next column, R reverses.",
     "The arrows, Page Up and Down, Home and End select a",
-    "task. Del or End task ends a program, after asking;",
-    "kernel threads, init and this desktop's own shell are",
-    "never ended. Ctrl+C copies the task's line (or the",
-    "page), Ctrl+F finds a task by name, Ctrl+L a pid.",
+    "task. Del or End task ends a program, after asking: in",
+    "a system call, it ends when the call does. Kernel",
+    "threads and the shells this desktop runs in are never",
+    "ended. Ctrl+C copies the task's line (or the page),",
+    "Ctrl+F finds a task by name, Ctrl+L goes to a pid.",
+    "Memory and System scroll with the arrows when short.",
 };
 
 /* the Processes page's columns: where each starts (window-relative), and its heading; the pids are right-aligned */
@@ -49,6 +55,9 @@ static const int column_x[GUI_MON_COLUMNS] = { 0, 62, 196, 272, 344 };
 static const char *const headings[GUI_MON_COLUMNS] = { "PID", "Name", "State", "Console", "Kind" };
 #define PID_RIGHT 52                    /* where the pids end */
 #define NAME_CELLS 15                   /* a task's name: at most 15 characters (GUI_TASK_NAME) */
+#define LINE_H 24                       /* 10/18/26: the Memory and System pages scroll by lines this high */
+#define MEMORY_LINES 9                  /* three meters of three lines */
+#define SYSTEM_ROWS 8
 
 struct mon_layout { int head_y, list_y, rows, bar_x, status_y; };
 
@@ -127,8 +136,9 @@ static int compare(const struct gui_monitor *m, const struct gui_task *a, const 
     return r ? r : a->pid < b->pid ? -1 : a->pid > b->pid;
 }
 
-/* in order (few tasks: an insertion sort), then the selection where its pid is now: a pid that is gone leaves
-   the selection on the row it was at */
+/* in order (few tasks: an insertion sort), then the selection where its pid is now. 10/18/26: a pid that is not
+   in this reading (it ended, or the reading missed it) stays followed until the user moves the selection: nothing
+   is selected meanwhile, and hint keeps the row it was on (Down goes on from there) */
 static void arrange(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
     struct gui_task t;
@@ -139,11 +149,15 @@ static void arrange(struct gui_state *g) {
         for(j = i; j > 0 && compare(m, &t, &m->task[j - 1]) < 0; j--) m->task[j] = m->task[j - 1];
         m->task[j] = t;
     }
-    for(i = 0; i < m->ntasks && m->task[i].pid != m->pid; i++) ;
-    if(i < m->ntasks) m->selected = i;
-    else if(m->ntasks) m->selected = gui_clamp(m->selected, 0, m->ntasks - 1);
-    else m->selected = -1;
-    m->pid = m->selected >= 0 ? m->task[m->selected].pid : -1;
+    if(m->pid < 0) m->selected = m->ntasks ? 0 : -1;  /* nothing followed yet (the window opened): the first */
+    else {
+        for(i = 0; i < m->ntasks && m->task[i].pid != m->pid; i++) ;
+        m->selected = i < m->ntasks ? i : -1;
+    }
+    if(m->selected >= 0) {
+        m->pid = m->task[m->selected].pid;
+        m->hint = m->selected;
+    }
     layout(g, &l);
     m->top = gui_clamp(m->top, 0, m->ntasks > l.rows ? m->ntasks - l.rows : 0);
 }
@@ -159,32 +173,43 @@ static void show_selected(struct gui_state *g) {
 static void choose(struct gui_state *g, int row) {
     struct gui_monitor *m = &g->monitor;
     if(row < 0 || row >= m->ntasks) return;
-    m->selected = row;
+    m->selected = m->hint = row;
     m->pid = m->task[row].pid;
     m->status[0] = 0;
     show_selected(g);
 }
 
-/* everything again, from struct gui_sys (from the handlers and the tick only) */
+/* everything again, from struct gui_sys (from the handlers and the tick only). 10/18/26: a reading that fails
+   keeps what the last one read (tasks leaves the rows as they were when it fails: sys/gui_sys.h) */
 static void read_all(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
+    struct gui_memory mem;
+    struct gui_machine mc;
     int n;
     m->read_ms = g->now;
     m->read = true;
     g->dirty = true;
     if(!g->sys) {
         m->ntasks = 0;
-        m->selected = m->pid = -1;
+        m->selected = m->pid = m->hint = -1;
         return;
     }
     n = g->sys->tasks ? g->sys->tasks(g->sys->ctx, m->task, GUI_TASK_MAX) : -ENOSYS;
     m->err_tasks = n < 0 ? n : 0;
-    m->ntasks = n < 0 ? 0 : n > GUI_TASK_MAX ? GUI_TASK_MAX : n;
-    arrange(g);
-    m->err_memory = g->sys->memory ? g->sys->memory(g->sys->ctx, &m->mem) : -ENOSYS;
-    if(m->err_memory) memset(&m->mem, 0, sizeof(m->mem));
-    m->err_machine = g->sys->machine ? g->sys->machine(g->sys->ctx, &m->machine) : -ENOSYS;
-    if(m->err_machine) memset(&m->machine, 0, sizeof(m->machine));
+    if(n >= 0) {
+        m->ntasks = n > GUI_TASK_MAX ? GUI_TASK_MAX : n;
+        arrange(g);
+    }
+    m->err_memory = g->sys->memory ? g->sys->memory(g->sys->ctx, &mem) : -ENOSYS;
+    if(!m->err_memory) {
+        m->mem = mem;
+        m->have_memory = true;
+    }
+    m->err_machine = g->sys->machine ? g->sys->machine(g->sys->ctx, &mc) : -ENOSYS;
+    if(!m->err_machine) {
+        m->machine = mc;
+        m->have_machine = true;
+    }
 }
 
 static void sort_by(struct gui_state *g, int column) {
@@ -231,9 +256,10 @@ static void end_task(struct gui_state *g) {
     console_name(t->tty, where, sizeof(where));
     snprintf(line, sizeof(line), "End %s (pid %d)%s%s?", t->name, t->pid, t->tty >= 0 ? " on " : "",
              t->tty >= 0 ? where : "");
+    /* 10/18/26: the kill waits for the end of the system call the task is in (kill_task_patient()) */
     dialog_confirm(g, gui_app_act(GUI_MONITOR, DLG_END), "End task", line,
-                   (t->flags & GUI_TASK_SHELL) ? "A console's shell: init starts a new one there." :
-                   "Whatever it has not saved is lost.", "End task", NULL, "Cancel");
+                   (t->flags & GUI_TASK_SHELL) ? "It ends after its system call; init starts another." :
+                   "It ends after its system call; unsaved work is lost.", "End task", NULL, "Cancel");
     g->dialog.choice = 2;                               /* Enter alone ends nothing */
     snprintf(g->dialog.target, sizeof(g->dialog.target), "%d", t->pid);
 }
@@ -308,6 +334,11 @@ static void copy(struct gui_state *g) {
         snprintf(m->status, sizeof(m->status), "Copied the line of %s (pid %d)", t->name, t->pid);
         return;
     }
+    if(m->page == GUI_MON_MEMORY ? !m->have_memory : !m->have_machine) {   /* 10/18/26: never read: no zeros */
+        snprintf(m->status, sizeof(m->status), "Nothing copied: %s could not be read",
+                 m->page == GUI_MON_MEMORY ? "memory" : "the machine");
+        return;
+    }
     text[0] = 0;
     for(k = 0; page_line(g, k, line, sizeof(line)); k++) {
         snprintf(text + used, sizeof(text) - used, "%s\n", line);
@@ -368,19 +399,58 @@ static void answer(struct gui_state *g, int act, int button, const char *text, c
     }
 }
 
+/**** the Memory and System pages: lines that scroll in a short window (10/18/26) ****/
+
+static int page_lines(int page) { return page == GUI_MON_MEMORY ? MEMORY_LINES : SYSTEM_ROWS; }
+
+/* the lines the page's area shows, at least one */
+static int page_shown(const struct mon_layout *l) {
+    int n = (l->status_y - l->head_y - 10) / LINE_H;
+    return n > 1 ? n : 1;
+}
+
+static int page_max(const struct gui_monitor *m, const struct mon_layout *l) {
+    int n = page_lines(m->page) - page_shown(l);
+    return n > 0 ? n : 0;
+}
+
+/* the first line shown: as scrolled, within what the window's height allows now */
+static int page_first(const struct gui_monitor *m, const struct mon_layout *l) {
+    return gui_clamp(m->scroll[m->page], 0, page_max(m, l));
+}
+
+static void page_scroll(struct gui_state *g, int first) {
+    struct gui_monitor *m = &g->monitor;
+    struct mon_layout l;
+    layout(g, &l);
+    m->scroll[m->page] = gui_clamp(first, 0, page_max(m, &l));
+    g->dirty = true;
+}
+
 /**** keys and the pointer ****/
 
 static bool key(struct gui_state *g, int k) {
     struct gui_monitor *m = &g->monitor;
     struct mon_layout l;
-    int row;
+    int row, first;
     if(k == GUI_LEFT || k == GUI_RIGHT) {
         set_page(g, (m->page + (k == GUI_RIGHT ? 1 : GUI_MON_PAGES - 1)) % GUI_MON_PAGES);
         return true;
     }
-    if(m->page != GUI_MON_PROCESSES) return false;
     layout(g, &l);
-    row = sys_move(m->selected, m->ntasks, l.rows, k);
+    if(m->page != GUI_MON_PROCESSES) {                  /* 10/18/26: the page scrolls */
+        first = page_first(m, &l);
+        switch(k) {
+        case GUI_UP: page_scroll(g, first - 1); return true;
+        case GUI_DOWN: page_scroll(g, first + 1); return true;
+        case GUI_PGUP: page_scroll(g, first - page_shown(&l)); return true;
+        case GUI_PGDN: page_scroll(g, first + page_shown(&l)); return true;
+        case GUI_HOME: page_scroll(g, 0); return true;
+        case GUI_END: page_scroll(g, page_lines(m->page)); return true;
+        }
+        return false;
+    }
+    row = sys_move_from(m->selected, m->hint, m->ntasks, l.rows, k);
     if(row != -2) {
         if(row >= 0) choose(g, row);
         return true;
@@ -411,7 +481,15 @@ static void press(struct gui_state *g, int x, int y) {
         else set_page(g, tools[i].act);
         return;
     }
-    if(m->page != GUI_MON_PROCESSES) return;
+    if(m->page != GUI_MON_PROCESSES) {                  /* 10/18/26: a page's scroll bar: a page, or hold the thumb */
+        if(x < l.bar_x || y < l.head_y || y >= l.status_y || !page_max(m, &l)) return;
+        i = page_first(m, &l);
+        gd_thumb(l.status_y - l.head_y, i, page_shown(&l), page_lines(m->page), &top, &size);
+        if(y - l.head_y < top) page_scroll(g, i - page_shown(&l));
+        else if(y - l.head_y >= top + size) page_scroll(g, i + page_shown(&l));
+        else { m->thumb = true; m->scroll_at = y - l.head_y - top; }
+        return;
+    }
     if(y >= l.head_y && y < l.list_y) {                 /* a heading: sort by it */
         if((i = column_at(&l, x)) >= 0) sort_by(g, i);
         return;
@@ -435,7 +513,9 @@ static void drag(struct gui_state *g, int x, int y) {
     (void)x;
     if(!m->thumb) return;
     layout(g, &l);
-    m->top = gd_scroll_to(l.rows * ROW_H, y - l.list_y - m->scroll_at, l.rows, m->ntasks);
+    if(m->page != GUI_MON_PROCESSES)
+        page_scroll(g, gd_scroll_to(l.status_y - l.head_y, y - l.head_y - m->scroll_at, page_shown(&l), page_lines(m->page)));
+    else m->top = gd_scroll_to(l.rows * ROW_H, y - l.list_y - m->scroll_at, l.rows, m->ntasks);
     g->dirty = true;
 }
 
@@ -446,9 +526,9 @@ static void release(struct gui_state *g) {
 static void wheel(struct gui_state *g, int rows) {
     struct gui_monitor *m = &g->monitor;
     struct mon_layout l;
-    if(m->page != GUI_MON_PROCESSES) return;
     layout(g, &l);
-    m->top = gui_clamp(m->top + rows, 0, m->ntasks > l.rows ? m->ntasks - l.rows : 0);
+    if(m->page != GUI_MON_PROCESSES) page_scroll(g, page_first(m, &l) + rows);
+    else m->top = gui_clamp(m->top + rows, 0, m->ntasks > l.rows ? m->ntasks - l.rows : 0);
     g->dirty = true;
 }
 
@@ -457,8 +537,7 @@ static void wheel(struct gui_state *g, int rows) {
 static void opened(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
     m->status[0] = 0;                                   /* the page and the order stay as they were */
-    m->selected = 0;
-    m->pid = -1;
+    m->selected = m->pid = m->hint = -1;                /* the first task, once read (arrange()) */
     m->top = 0;
     m->thumb = false;
     read_all(g);
@@ -516,7 +595,6 @@ static void uptime(u32 s, char *out, size_t n) {
     snprintf(out, n, "%u:%02u:%02u", s / 3600, s / 60 % 60, s % 60);
 }
 
-#define SYSTEM_ROWS 8
 static bool system_row(const struct gui_state *g, int k, const char **label, char *value, size_t n) {
     const struct gui_machine *mc = &g->monitor.machine;
     static const char *const labels[SYSTEM_ROWS] = { "Processor", "Firmware", "Profile", "Display", "Build", "Uptime",
@@ -567,7 +645,7 @@ static void processes_render(const struct gui_state *g, const struct gui_draw *d
     }
     gd_rect(d, x0 + 1, y0 + l->list_y, l->bar_x - 1, l->status_y - l->list_y, SYS_SHEET);
     list = gd_clip(d, x0 + 1, y0 + l->list_y, l->bar_x - 1, l->rows * ROW_H);
-    if(!g->sys || m->err_tasks) {
+    if(!g->sys || (m->err_tasks && !m->ntasks)) {     /* 10/18/26: with rows read before, those stay */
         gd_text(&list, x0 + 16, y0 + l->list_y + 8, !g->sys ? "The system cannot be read here." :
                 "The tasks could not be read.", MUTED);
     }
@@ -588,37 +666,61 @@ static void processes_render(const struct gui_state *g, const struct gui_draw *d
     gd_scrollbar(d, x0 + l->bar_x, y0 + l->list_y, l->rows * ROW_H, m->top, l->rows, m->ntasks);
 }
 
+/* 10/18/26: a page's area, between the toolbar and the status bar, and its scroll bar when its lines do not fit
+   (then the content keeps clear of it); the content's top line is first */
+static struct gui_draw page_area(const struct gui_state *g, const struct gui_draw *d, const struct mon_layout *l,
+                                 int *right) {
+    const struct gui_window *w = &g->win[GUI_MONITOR];
+    const struct gui_monitor *m = &g->monitor;
+    *right = page_max(m, l) ? l->bar_x - 4 : w->w - 16;
+    if(page_max(m, l))
+        gd_scrollbar(d, w->x + l->bar_x, w->y + l->head_y, l->status_y - l->head_y, page_first(m, l), page_shown(l),
+                     page_lines(m->page));
+    return gd_clip(d, w->x + 1, w->y + l->head_y, (page_max(m, l) ? l->bar_x : w->w - 1) - 1, l->status_y - l->head_y);
+}
+
 static void memory_render(const struct gui_state *g, const struct gui_draw *d, const struct mon_layout *l) {
     const struct gui_window *w = &g->win[GUI_MONITOR];
+    struct gui_draw area;
     struct meter mt[3];
-    int x0 = w->x + 16, y = w->y + l->head_y + 10, width = w->w - 32, k, cells = (w->w - 32) / 8, room, len;
-    if(!g->sys || g->monitor.err_memory) {
-        gd_text(d, x0, y, !g->sys ? "The system cannot be read here." : "Memory could not be read.", MUTED);
+    int x0 = w->x + 16, right, width, cells, k, room, len;
+    int y = w->y + l->head_y + 10 - page_first(&g->monitor, l) * LINE_H;
+    area = page_area(g, d, l, &right);
+    width = right - 16;
+    cells = width / 8;
+    if(!g->sys || !g->monitor.have_memory) {
+        gd_text(&area, x0, w->y + l->head_y + 10, !g->sys ? "The system cannot be read here." : "Memory could not be read.",
+                MUTED);
         return;
     }
     meters(g, mt);
-    for(k = 0; k < 3; k++, y += 72) {
-        gd_text(d, x0, y, mt[k].title, TEAL);
+    for(k = 0; k < 3; k++, y += 3 * LINE_H) {
+        gd_text(&area, x0, y, mt[k].title, TEAL);
         room = cells - (int)strlen(mt[k].title) - 2;    /* what it holds, at the right: cut rather than over the title */
         len = (int)strlen(mt[k].right) < room ? (int)strlen(mt[k].right) : room;
-        gd_name(d, x0 + (cells - len) * 8, y, mt[k].right, room, MUTED);
-        sys_bar(d, x0, y + 22, width, 16, mt[k].used, mt[k].total);
-        gd_name(d, x0, y + 44, mt[k].line, cells, INK);
+        gd_name(&area, x0 + (cells - len) * 8, y, mt[k].right, room, MUTED);
+        sys_bar(&area, x0, y + 22, width, 16, mt[k].used, mt[k].total);
+        gd_name(&area, x0, y + 44, mt[k].line, cells, INK);
     }
 }
 
 static void system_render(const struct gui_state *g, const struct gui_draw *d, const struct mon_layout *l) {
     const struct gui_window *w = &g->win[GUI_MONITOR];
+    struct gui_draw area;
     const char *label;
     char value[96];
-    int x0 = w->x + 16, y = w->y + l->head_y + 10, k;
-    if(!g->sys || g->monitor.err_machine) {
-        gd_text(d, x0, y, !g->sys ? "The system cannot be read here." : "The machine could not be read.", MUTED);
+    int x0 = w->x + 16, right, k;
+    int y = w->y + l->head_y + 10 - page_first(&g->monitor, l) * LINE_H;
+    area = page_area(g, d, l, &right);
+    if(right == w->w - 16) right -= 8;                  /* clear of the resize grip, as before */
+    if(!g->sys || !g->monitor.have_machine) {
+        gd_text(&area, x0, w->y + l->head_y + 10, !g->sys ? "The system cannot be read here." :
+                "The machine could not be read.", MUTED);
         return;
     }
-    for(k = 0; system_row(g, k, &label, value, sizeof(value)); k++, y += 24) {
-        gd_text(d, x0, y, label, MUTED);
-        gd_name(d, x0 + 104, y, value, (w->w - 16 - 104 - 24) / 8, INK);
+    for(k = 0; system_row(g, k, &label, value, sizeof(value)); k++, y += LINE_H) {
+        gd_text(&area, x0, y, label, MUTED);
+        gd_name(&area, x0 + 104, y, value, (right - 16 - 104) / 8, INK);
     }
 }
 
@@ -647,14 +749,24 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     right[0] = 0;
     if(m->status[0]) strlcpy(b, m->status, sizeof(b));
     else if(!g->sys) strlcpy(b, "No system here: nothing to show", sizeof(b));
+    /* 10/18/26: a reading that failed keeps the last one's, and says so */
+    else if(m->page == GUI_MON_PROCESSES && m->err_tasks && m->ntasks)
+        strlcpy(b, "The tasks could not be read now: the list is the last one read", sizeof(b));
+    else if(m->page == GUI_MON_MEMORY && m->err_memory && m->have_memory)
+        strlcpy(b, "Memory could not be read now: the last numbers read", sizeof(b));
+    else if(m->page == GUI_MON_SYSTEM && m->err_machine && m->have_machine)
+        strlcpy(b, "The machine could not be read now: as last read", sizeof(b));
     else if(m->page == GUI_MON_PROCESSES && t) {
         console_name(t->tty, where, sizeof(where));
         snprintf(b, sizeof(b), "%s (pid %d): a %s%s%s%s", t->name, t->pid, kind_name(t), t->tty >= 0 ? " on " : "",
                  t->tty >= 0 ? where : "", (t->flags & GUI_TASK_SHELL) ? ", the console's shell" : "");
-    } else if(m->page == GUI_MON_SYSTEM) strlcpy(b, "Read every second", sizeof(b));
+    } else if(m->page == GUI_MON_PROCESSES && m->pid >= 0)   /* followed, but not in this reading */
+        snprintf(b, sizeof(b), "pid %d is not in the list now", m->pid);
+    else if(m->page == GUI_MON_SYSTEM) strlcpy(b, "Read every second", sizeof(b));
     else b[0] = 0;
-    if(m->page == GUI_MON_PROCESSES && g->sys) {
-        if(m->machine.tasks > (u32)m->ntasks) snprintf(right, sizeof(right), "%d of %u tasks", m->ntasks, m->machine.tasks);
+    if(m->page == GUI_MON_PROCESSES && g->sys) {         /* 10/18/26: "of" only when the list is cut (the newest) */
+        if(m->ntasks == GUI_TASK_MAX && m->machine.tasks > (u32)m->ntasks)
+            snprintf(right, sizeof(right), "the newest %d of %u", m->ntasks, m->machine.tasks);
         else snprintf(right, sizeof(right), "%d task%s", m->ntasks, m->ntasks == 1 ? "" : "s");
     }
     x = w->w - 24 - (int)strlen(right) * 8;             /* clear of the resize grip */

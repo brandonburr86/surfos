@@ -21,4 +21,7 @@ void sys_bar(const struct gui_draw *d, int x, int y, int w, int h, u32 used, u32
    a key that moves nothing; and the first row shown so that the selected one is in view */
 int sys_move(int selected, int count, int rows, int key);
 int sys_view(int selected, int top, int count, int rows);
+/* 10/18/26: as sys_move(), but when nothing is selected because the item followed is not in this reading, from the
+   row it was last on (hint): Down goes to that row (what came after it), Up to the one before */
+int sys_move_from(int selected, int hint, int count, int rows, int key);
 #endif

@@ -9,6 +9,9 @@ memory and the machine about once a second while its window is open and in view;
 Processes page is in the order of a column, and the selection follows a pid from one reading
 to the next. Disks reads the block devices about every two seconds, and its selection
 follows a device's name.
+10/18/26: the pid or name followed stays followed, until the user moves the selection, also
+through a reading without it (nothing is selected meanwhile; hint is the row it was on), and
+a reading that fails keeps what the last one read. The Memory and System pages scroll.
 */
 #ifndef _SYS_GUI_SYSAPPS_H
 #define _SYS_GUI_SYSAPPS_H
@@ -37,6 +40,9 @@ struct gui_monitor {
     int scroll_at;
     int err_tasks, err_memory, err_machine;   /* each reading's -errno, 0 */
     char find[GUI_TASK_NAME];           /* what Find looks for (Find next) */
+    int hint;                           /* 10/18/26: the row the followed task was last on (-1 none) */
+    bool have_memory, have_machine;     /* read once at least (else their pages say so, and Copy copies nothing) */
+    int scroll[GUI_MON_PAGES];          /* the Memory and System pages: lines of 24 pixels scrolled */
     struct gui_task task[GUI_TASK_MAX];
     struct gui_memory mem;
     struct gui_machine machine;
@@ -55,5 +61,6 @@ struct gui_disks {
     int click_row;
     struct gui_disk disk[GUI_DISK_MAX];
     char status[GUI_STATUS];
+    int hint;                           /* 10/18/26: the row the followed device was last on (-1 none) */
 };
 #endif
