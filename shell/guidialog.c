@@ -155,6 +155,9 @@ static bool button_place(const struct gui_dialog *dl, const struct dlg_layout *l
 
 static void begin(struct gui_state *g, int kind, int act, const char *title) {
     struct gui_dialog *dl = &g->dialog;
+    /* 10/18/26: Notepad's question replaced before it is answered (a message from an application's tick) takes
+       what waited on it along, so that a later save does not do it */
+    if(dl->kind && dl->act == ACT_DLG_GUARD) g->pending = PEND_NONE;
     dl->kind = kind;
     dl->act = act;
     dl->choice = 0;

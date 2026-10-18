@@ -93,7 +93,7 @@ static int fs_read_at(void *ctx, const char *path, u32 off, char *buf, u32 n, u3
     if(off >= st.size || !n) return 0;
     r = vfs_open(path, O_RDONLY, &f);
     if(r) return r;
-    if(off && vfs_lseek(f, (i32)off, SEEK_SET) != (int)off) r = -EIO;
+    f->pos = off;                                   /* 10/18/26: not vfs_lseek(), whose i32 stops at 2 GB */
     while(!r && *len < n && (r = vfs_read(f, buf + *len, n - *len)) > 0) {
         *len += r;
         r = 0;
