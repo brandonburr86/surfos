@@ -144,7 +144,9 @@ bool bcache_holds(const struct surf_task *t);        /* 10/17/26 (B39): t has th
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache
    holds where it holds a block; a write updates the copies the cache holds (10/16/26, B15: once
    the device has the bytes; a refused write leaves the dirty ones as they were, and B22 drops the
-   clean ones: the device may have stored part of the request). 0 or BDEV_E*. */
+   clean ones: the device may have stored part of the request). 0 or BDEV_E*. 10/17/26 (B49): or BCACHE_EINTR, a
+   write whose wait for a block under another task's I/O a kill or Ctrl+C cut short (B39): that piece was not sent */
+#define BCACHE_EINTR (-5)               /* (no driver's: the drivers return BDEV_E*) */
 int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst);
 int bwrite_blocks(struct bdev *dev, u32 lba, u32 count, const void *src);
 int bzero_blocks(struct bdev *dev, u32 lba, u32 count);

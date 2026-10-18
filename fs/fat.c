@@ -1631,7 +1631,9 @@ static int block_rw(struct fat_fs *fs, struct vnode *v, u32 c, u32 s, u32 so, u8
    through the cache. Holds sb->lock. The bytes done, else < 0; 10/16/26 (B23): *why (when asked) is the
    error that stopped it short, 0 when it did not stop short. 10/17/26 (B39): a kill or, in a kernel command,
    Ctrl+C stops it between two pieces (-EINTR in *why), as the device would: a task inside the volume's lock is
-   not killed at once (fat_lock()), and a large transfer in one call would put its kill off to its end */
+   not killed at once (fat_lock()), and a large transfer in one call would put its kill off to its end. A piece is a
+   block through the cache, up to 64 KB straight to or from the device (10/17/26, B49: an earlier comment said 64 KB
+   for both); the first piece always goes, and a straight one cut short in its wait says -EINTR, not -EIO */
 static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 len, int mode, int *why) {
     struct fat_node *n = (struct fat_node *)v->priv;
     bool grow = mode != RW_READ;
@@ -1650,7 +1652,7 @@ static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 l
             u32 lba = clus_lba(fs, c) + s;
             r = mode == RW_READ ? bread_blocks(fs->dev, lba, nb, p) : mode == RW_WRITE ? bwrite_blocks(fs->dev, lba, nb, p)
                                                                       : bzero_blocks(fs->dev, lba, nb);
-            if(r) { r = -EIO; break; }
+            if(r) { r = r == BCACHE_EINTR ? -EINTR : -EIO; break; }   /* (B49: cut short in its wait, not refused) */
             chunk = nb * 512;
         } else {
             if(chunk > left) chunk = left;

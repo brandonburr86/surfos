@@ -1567,7 +1567,7 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
             if(p && (p->loading || p->writing || p->copying)) {
                 if(bsleep(0, true)) {           /* 10/17/26 (B39): (another task's copy may take long) cut short */
                     mutex_unlock(&bcache_lock);
-                    return BDEV_EIO;
+                    return BCACHE_EINTR;        /* (B49: the caller says EINTR, not EIO: nothing was refused) */
                 }
                 i = (u32)-1;
             }
