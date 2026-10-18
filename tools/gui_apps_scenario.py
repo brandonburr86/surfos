@@ -170,7 +170,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                     results.append((f'{m.__name__}: the stick can be read back here ({e})', False))
         if results and all(ok for _, ok in results):
             try:
-                for what, ok, text in helpers['fat_checks'](stick, 'the guiapps stick'):
+                for what, ok, text in helpers['fat_checks'](stick, 'guiapps stick'):
                     results.append((what, ok))
                     if not ok:
                         print(text, flush=True)

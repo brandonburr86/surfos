@@ -266,10 +266,19 @@ static void close_now(struct gui_state *g, int id) {
     refocus(g);
 }
 
-/* Notepad's document goes with its window, after the question about its changes */
+/* Notepad's document goes with its window, after the question about its changes; 10/17/26: an application that is
+   busy (a Terminal's session) is asked about first */
 void gui_close(struct gui_state *g, int id) {
+    const struct gui_app *a;
+    char why[80];
     if(id < 0 || id >= GUI_WINDOWS || !g->win[id].open) return;
     if(id == GUI_NOTEPAD && !gui_guard(g, PEND_CLOSE, NULL)) return;
+    a = gui_app_of(id);
+    if(a && a->busy && a->busy(g, why, sizeof(why))) {
+        dialog_confirm(g, gui_app_act(id, GUI_APP_CLOSE), "Close the window?", why, "It ends when the window closes.",
+                       "Close", NULL, "Cancel");
+        return;
+    }
     close_now(g, id);
 }
 
@@ -699,7 +708,9 @@ void gui_answer(struct gui_state *g, int act, int button, const char *text, cons
     g->dirty = true;
     if(act >= ACT_APP_DIALOG && act < ACT_APP_DIALOG + 32 * SUITE) {   /* 10/17/26: an application's own dialog */
         const struct gui_app *a = suite[(act - ACT_APP_DIALOG) / 32];
-        if(a->answer) a->answer(g, (act - ACT_APP_DIALOG) % 32, button, text, target);
+        int id = GUI_FIRST_APP + (act - ACT_APP_DIALOG) / 32;
+        if((act - ACT_APP_DIALOG) % 32 == GUI_APP_CLOSE) { if(button == 0 && g->win[id].open) close_now(g, id); }
+        else if(a->answer) a->answer(g, (act - ACT_APP_DIALOG) % 32, button, text, target);
         return;
     }
     if(act == ACT_DLG_LEAVE) {

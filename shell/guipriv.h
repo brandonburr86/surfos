@@ -170,8 +170,9 @@ struct gui_app {
 extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gui_app_log, gui_app_clock,
                             gui_app_viewer, gui_app_hex, gui_app_charmap;
 const struct gui_app *gui_app_of(int id);       /* the table's, NULL for the desktop's own windows */
-/* a dialog of application id: its answer comes to its answer hook with act (0-31) */
+/* a dialog of application id: its answer comes to its answer hook with act (0-30) */
 static inline int gui_app_act(int id, int act) { return ACT_APP_DIALOG + 32 * (id - GUI_FIRST_APP) + act; }
+#define GUI_APP_CLOSE 31                /* the window manager's own: closing the window although it is busy */
 
 /* guicore.c */
 void gui_act(struct gui_state *g, int act);
