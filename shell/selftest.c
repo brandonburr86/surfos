@@ -836,6 +836,218 @@ static void test_kill_in_cache(void) {
     kfree(mem);
 }
 
+/* 10/17/26 (audit B46): umount interrupted while another task's write of the volume's device is in flight (the review's
+   R1: a `sync` on another console; here a sync of the test's disk, whose writes take 150 ms each). The umount's waits
+   were cut short (B39) and it went on: it gave up changes the disk would take and left the volume marked as not cleanly
+   unmounted. Now an umount that has begun finishes (fs_finish, surfos/task.h): Ctrl+C cuts the command after it, and
+   a kill comes after it */
+static struct bdev *ku_dev;
+static volatile int ku_umount_r, ku_done, ku_cut;
+static volatile u_int ku_lost;
+
+static void ku_sync(void *arg) {
+    (void)arg;
+    bsync(ku_dev);
+}
+
+static void ku_umount(void *arg) {
+    u_int lost = 99;
+    bool ctrl_c = arg != NULL;
+    if(ctrl_c) task_call_enter(TC_COMMAND);          /* as the ring-0 shell runs a command */
+    ku_umount_r = vfs_umount_lost("/selftest-um", &lost);
+    ku_lost = lost;
+    ku_done = 1;
+    if(ctrl_c) ku_cut = task_call_leave(TC_COMMAND);
+    else task_call_leave(TC_SYSCALL);                /* the kill that waited ends the task here */
+}
+
+/* /selftest-um mounted with a folder made and not yet written; a sync of the disk in its first write; an umount of
+   it interrupted (Ctrl+C, or a kill) as it waits for that write. The umount task's status */
+static int ku_run(const char *folder, bool ctrl_c) {
+    surf_task *ts, *tu;
+    u_long pid_s = 0, pid_u = 0, f;
+    int status = 1, st2;
+    if(vfs_mount_flags(ku_dev, "/selftest-um", "fat", 0) != 0) return 1;
+    if(vfs_mkdir(folder) != 0) { vfs_umount("/selftest-um"); return 1; }
+    ku_done = ku_cut = 0;
+    ku_umount_r = 1;
+    ku_lost = 99;
+    ram_slow_ms = 150;
+    ts = kthread_create_on("umsync", curTask->con, ku_sync, NULL, PL_NORMAL, 0);
+    if(ts) pid_s = ts->pid;
+    sleep_ms(30);                                    /* its first write is in flight */
+    tu = kthread_create_on("umount", curTask->con, ku_umount, ctrl_c ? (void *)1 : NULL, PL_NORMAL, ctrl_c ? 0 : TF_INCALL);
+    if(tu) {
+        pid_u = tu->pid;
+        sleep_ms(50);                                /* the umount waits for that write */
+        if(ctrl_c) {
+            f = irq_save();
+            task_interrupt_job(tu);                  /* Ctrl+C on its terminal, as tty.c sends it */
+            irq_restore(f);
+        } else kill_task(tu);
+        if(task_wait(pid_u, &status) != (int)pid_u) status = 1;
+    }
+    if(ts) task_wait(pid_s, &st2);
+    ram_slow_ms = 0;
+    return status;
+}
+
+static void test_kill_umount(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    struct stat st;
+    char msg[160];
+    int r, status;
+    bool clean;
+    if(!d) { check(false, "umount interrupted: 4 MB of memory"); kfree(mem); return; }
+    strlcpy(d->name, "stick6", sizeof(d->name));
+    ku_dev = d;
+    r = fat_mkfs(d, "UMOUNT", 0, msg, sizeof(msg));
+    if(r == 0) r = vfs_mount_flags(d, "/selftest-um", "fat", 0);
+    if(r == 0) { r = put_file("/selftest-um/a.txt", "written before"); vfs_umount("/selftest-um"); }
+    check(r == 0, "umount interrupted: mkfs, mount and a file on a RAM stick");
+    if(r) { binvalidate(d); kfree(d); kfree(mem); return; }
+    status = ku_run("/selftest-um/c", true);
+    clean = (mem[512 + 3] & 0x80) != 0;              /* FAT[1]'s clean bit */
+    check(status == 0 && ku_done && ku_cut && ku_umount_r == 0 && ku_lost == 0 && clean,
+          "Ctrl+C in umount while another task's write is in flight: it finishes, gives nothing up, the volume clean");
+    status = ku_run("/selftest-um/k", false);
+    clean = (mem[512 + 3] & 0x80) != 0;
+    check(status == -1 && ku_done && ku_umount_r == 0 && ku_lost == 0 && clean,
+          "a kill during umount while another task's write is in flight: it finishes, gives nothing up, then the kill");
+    r = vfs_mount_flags(d, "/selftest-um", "fat", MNT_RDONLY);
+    check(r == 0 && file_is("/selftest-um/a.txt", "written before") && vfs_stat("/selftest-um/c", &st) == 0 && st.type == VN_DIR &&
+          vfs_stat("/selftest-um/k", &st) == 0 && st.type == VN_DIR, "and the volume holds both folders the umounts wrote");
+    if(r == 0) vfs_umount("/selftest-um");
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+/* 10/17/26 (audit B47): a task killed inside a device request outside the cache (mkfs, fdisk, a dump of a disk). The
+   kill that waited came at once after 2 s inside the driver (here its 3 s delay; in a real driver its lock and its
+   transfer half done: the card hung); now it comes once the request is over. And mkfs, killed, stops before its next
+   request and says how far it got */
+static struct bdev *kd_dev;
+static u8 *kd_buf;
+static volatile int kd_result, kd_done;
+static char kd_msg[160];
+
+static void kd_write(void *arg) {
+    (void)arg;
+    kd_result = bdev_write(kd_dev, 30, 1, kd_buf);
+    kd_done = 1;
+    task_call_leave(TC_SYSCALL);
+}
+
+static void kd_mkfs(void *arg) {
+    (void)arg;
+    kd_result = fat_mkfs(kd_dev, "KILLED", 0, kd_msg, sizeof(kd_msg));
+    kd_done = 1;
+    task_call_leave(TC_SYSCALL);
+}
+
+/* fn in a task of its own inside a call, killed after `after` ms: its status, and the milliseconds from the kill to
+   its end */
+static int kd_kill(const char *name, kthread_fn fn, u_long after, u_long *ms) {
+    surf_task *t;
+    u_long pid, t0;
+    int status = 0;
+    kd_done = 0;
+    kd_result = 1;
+    t = kthread_create_on(name, curTask->con, fn, NULL, PL_NORMAL, TF_INCALL);
+    if(!t) return 1;
+    pid = t->pid;
+    sleep_ms(after);
+    t0 = uptime_ms();
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    *ms = uptime_ms() - t0;
+    return status;
+}
+
+static void test_kill_device(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    u8 *buf = (u8 *)kcalloc(1, 512);
+    u_long ms;
+    int status;
+    if(!d || !buf) { check(false, "kill in a device request: memory"); kfree(d); kfree(mem); kfree(buf); return; }
+    strlcpy(d->name, "stick5", sizeof(d->name));
+    kd_dev = d;
+    kd_buf = buf;
+    memset(buf, 'D', 512);
+    ram_slow_ms = 3000;
+    status = kd_kill("killdev", kd_write, 200, &ms); /* its write takes 3 s: the kill waits 2 s, then for the request */
+    ram_slow_ms = 0;
+    check(status == -1 && ms >= 2500 && mem[30 * 512] == 'D',
+          "a kill that waited does not come at once inside a device request outside the cache: the request ends first");
+    ram_slow_ms = 300;
+    status = kd_kill("killmkfs", kd_mkfs, 100, &ms); /* in mkfs's first request */
+    ram_slow_ms = 0;
+    check(status == -1 && kd_done && kd_result == -EINTR && strstr(kd_msg, "interrupted at sector") && ms < 1500,
+          "mkfs killed stops before its next request and says how far it got");
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+    kfree(buf);
+}
+
+/* 10/17/26 (audit B48): a kernel thread killed outside any call while it is inside a file system: the kill waits until
+   it leaves (looked at every 20 ms). One that enters a call meanwhile gets that call's 2 s, as any call does: it was
+   killed at once in the call 20 ms later, said not to have ended within 2000 ms, holding whatever the call held. One
+   that leaves without entering a call is killed within a few ticks of leaving (B39) */
+static volatile int kn_flag;
+static volatile u_long kn_out;
+
+static void kn_call(void *arg) {
+    (void)arg;
+    fs_enter();                                      /* inside a file system, outside any call */
+    sleep_ms(300);                                   /* the kill comes meanwhile: put off */
+    task_call_enter(TC_COMMAND);                     /* a kernel command begins, still inside */
+    fs_leave();
+    sleep_ms(500);                                   /* well within a call's 2 s */
+    kn_flag = 1;
+    task_call_leave(TC_COMMAND);                     /* the kill comes here */
+}
+
+static void kn_leave(void *arg) {
+    (void)arg;
+    fs_enter();
+    sleep_ms(300);
+    fs_leave();
+    kn_out = uptime_ms();
+    sleep_ms(2000);                                  /* killed long before this ends */
+    kn_flag = 1;
+}
+
+/* fn in a kernel thread of its own (no call), killed after 100 ms: its status; *end, when it ended */
+static int kn_kill(const char *name, kthread_fn fn, u_long *end) {
+    surf_task *t = kthread_create_on(name, curTask->con, fn, NULL, PL_NORMAL, 0);
+    u_long pid;
+    int status = 0;
+    if(!t) return 1;
+    pid = t->pid;
+    sleep_ms(100);
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    *end = uptime_ms();
+    return status;
+}
+
+static void test_kill_outside_call(void) {
+    u_long end;
+    int status;
+    kn_flag = 0;
+    status = kn_kill("killnc", kn_call, &end);
+    check(status == -1 && kn_flag, "a kernel thread killed inside a file system that enters a call before it dies gets the call's 2 s");
+    kn_flag = 0;
+    kn_out = 0;
+    status = kn_kill("killout", kn_leave, &end);
+    check(status == -1 && !kn_flag && kn_out && end - kn_out < 250,
+          "a kill put off inside a file system comes within a few ticks of the thread leaving it");
+}
+
 static void test_fat_rename(void) {
     struct stat st;
     struct file *f;
@@ -1131,7 +1343,8 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_user, test_net, test_usb, test_tasks,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_kill_umount, test_kill_device,
+    test_kill_outside_call, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
