@@ -7,7 +7,8 @@ The terminal emulator of the desktop's Terminal (shell/guivt.c; its state, struc
 sys/gui_term.h): what a session prints, drawn into a screen of cells as the console draws it, with
 the scrollback above. Pure code: tests/host/test_guiterm.c runs it on its own too.
 10/18/26 (the review): vt_take() feeds within a budget of cells written; a wrap mark is the width the
-line wrapped at, for vt_text() and vt_word(), which follow a wrap.
+line wrapped at, for vt_text() and vt_word(), which follow a wrap. 10/18/26 (the second review):
+vt_shown(), the text of lines as they show.
 */
 #ifndef _SHELL_GUIVT_H
 #define _SHELL_GUIVT_H
@@ -33,6 +34,9 @@ static inline int vt_screen(const struct gui_vt *vt) { return vt->count - vt->ro
    screen's width or beyond, is taken to its end: all of a line kept from a wider screen. Its length (0, and out
    untouched, when there are only blanks); *cut when it did not all fit in size. */
 u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, u32 size, bool *cut);
+/* 10/18/26: the same of lines l0 to l1 whole, as they show: each cut at the screen's width (a line kept from a
+   wider screen loses what does not show), joined to the next only where it wrapped within that width */
+u32 vt_shown(const struct gui_vt *vt, int l0, int l1, char *out, u32 size, bool *cut);
 /* the word at column col of line i, from boundary (*l0, *c0) to (*l1, *c1): 10/18/26 across the wraps of the lines
    it goes on in; a cell that is no word's is taken alone (outside the lines: nothing, l0 == l1 and c0 == c1) */
 void vt_word(const struct gui_vt *vt, int i, int col, int *l0, int *c0, int *l1, int *c1);

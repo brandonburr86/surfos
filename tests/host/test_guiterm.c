@@ -970,11 +970,11 @@ static void budget(void) {
     CHECK(g.term.carry_at < g.term.carry_len || fake_term_out_len);
     gui_act(&g, ACT_MAXIMIZE);
     tick();
-    CHECK(g.term.vt.cols == 77 && fake_term_cols == 77);   /* the size waits until it is drawn */
+    CHECK(g.term.vt.cols == 77 && fake_term_cols == 77);   /* the size waits until it is drawn (250 ms at most) */
     for(frames = 0; frames < 1000 && (fake_term_out_len || g.term.carry_at < g.term.carry_len); frames++) {
         w = g.term.vt.written;
         tick();
-        CHECK(g.term.vt.written - w < 32768 + 77 * 21);
+        CHECK(g.term.vt.written - w < 32768 + 117 * 26);   /* an erase of the screen at either size beyond it */
     }
     CHECK(frames > 50 && frames < 1000);
     tick();
@@ -1021,6 +1021,128 @@ static void gone_selection(void) {
     g.clip_len = 4;
     gui_act(&g, ACT_COPY);
     CHECK(clip_is("kept") && strstr(g.term.status, "left the scrollback") != NULL);
+    gui_finish(&g);
+}
+
+/**** 10/18/26 (the second review): its cases 7 to 10 ****/
+
+/* output that never pauses (a program in the background: 8 KB before every frame) and the window maximized: the
+   new size waits 250 ms at most, then goes the first frame after (case 9); text, a new line every two bytes (the
+   cells' budget, not the bytes', ends a frame), and erases. Of the text, what was read is drawn first. */
+static void flood_resize(void) {
+    static const char *const floods[] = { "line of output\n", "y\n", "\033[2J" };
+    u32 n, w, most = 0;
+    int f, frame, at;
+    bool drawn = false;
+    for(f = 0; f < 3; f++) {
+        terminal(960, 540);
+        n = (u32)strlen(floods[f]);
+        for(frame = 0, at = -1; frame < 60; frame++) {
+            while(fake_term_out_len + n <= sizeof(fake_term_out)) fake_term_feed(floods[f], n);
+            if(frame == 5) gui_act(&g, ACT_MAXIMIZE);
+            w = g.term.vt.written;
+            tick();
+            if(g.term.vt.written - w > most) most = g.term.vt.written - w;
+            if(at < 0 && fake_term_cols == 117) {
+                at = frame;
+                if(!f) drawn = g.term.carry_at == g.term.carry_len;
+            }
+        }
+        /* frame 4 is the last without it waiting; frame 17 the first 260 ms after it (frame 16: 240) */
+        CHECK(at == 17 && fake_term_rows == 26 && g.term.vt.cols == 117 && g.term.vt.rows == 26 && TERM->max);
+        fake_term_out_len = 0;                      /* it pauses: everything is drawn, at the new size */
+        drain();
+        CHECK(!fake_term_out_len && g.term.carry_at == g.term.carry_len && g.term.vt.cols == 117);
+        gui_finish(&g);
+    }
+    CHECK(drawn && most < 32768 + 117 * 26);        /* and a frame's work stays within its budget */
+}
+
+/* a row that wrapped at 77, the window wider (the row is whole: its mark stays), then written on past column 77
+   without an erase: its mark goes, so Copy takes the row as it shows, not joined to the next (case 8); a character
+   written before the wrap leaves the mark */
+static void past_wrap(void) {
+    char out[256];
+    bool cut;
+    u32 n;
+    int i;
+    vt_reset(&v, 77, 5);
+    for(i = 0; i < 80; i++) feed("x");
+    vt_resize(&v, 117, 5);
+    CHECK(vt_wrapped(&v, vt_screen(&v)) == 77);
+    feed("\033[1;10HQ");
+    CHECK(vt_wrapped(&v, vt_screen(&v)) == 77);
+    feed("\033[1;78HYYYY\033[2;1H\033[K\033[3;1Hnext");
+    CHECK(vt_wrapped(&v, vt_screen(&v)) == 0);
+    n = vt_text(&v, 0, 0, v.count - 1, v.cols, out, sizeof(out), &cut);
+    CHECK(n == 77 + 4 + 2 + 4 + 1 && out[9] == 'Q' && out[76] == 'x' && !memcmp(out + 77, "YYYY\n\nnext\n", 11));
+}
+
+/* a paste goes into the queue in chunks that end between characters: an e-acute across two chunks, the room ending
+   at the first, waits whole or not at all (case 7); and once a byte did not fit, nothing after it goes */
+static void paste_chars(void) {
+    u32 n;
+    terminal(960, 540);
+    fake_term_in_len = sizeof(fake_term_in);        /* the input queue is full: everything waits */
+    for(n = 0; n < GUI_CLIP_MAX; n++) g.clip[n] = 'q';
+    g.clip_len = GUI_CLIP_MAX;
+    gui_act(&g, ACT_PASTE);
+    g.clip_len = GUI_TERM_PEND - GUI_CLIP_MAX - 256;
+    gui_act(&g, ACT_PASTE);
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 256);  /* room for 256 bytes more */
+    for(n = 0; n < 255; n++) g.clip[n] = 'r';
+    memcpy(g.clip + 255, "\xC3\xA9s", 3);           /* its first byte would be the first chunk's last */
+    g.clip_len = 258;
+    gui_act(&g, ACT_PASTE);
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 1 && g.term.pend[GUI_TERM_PEND - 2] == 'r');
+    CHECK(strstr(g.term.status, "all but 3 bytes") != NULL);
+    memcpy(g.clip, "\xC3\xA9", 2);                  /* one byte of room: e-acute does not fit, the a's would */
+    for(n = 2; n < 300; n++) g.clip[n] = 'a';
+    g.clip_len = 300;
+    gui_act(&g, ACT_PASTE);
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 1 && strstr(g.term.status, "all but 300 bytes") != NULL);
+    gui_finish(&g);
+}
+
+/* Copy with nothing selected, scrolled back over lines printed when the window was wider: as they show, cut at 77
+   columns, and one that wrapped at 117 not joined (case 10); a selection still takes them whole */
+static void shown_copy(void) {
+    char text[160], want[400];
+    u32 n = 0;
+    int i;
+    terminal(960, 540);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    memset(text, 'w', 116);
+    memcpy(text + 116, "Z\r\n", 4);
+    session_says(text);                             /* 117 characters: the row is full, no wrap */
+    memset(text, 'v', 150);
+    memcpy(text + 150, "\r\n", 3);
+    session_says(text);                             /* 150: it wraps at 117 */
+    for(i = 0; i < 40; i++) session_says("filler\r\n");
+    gui_act(&g, ACT_MAXIMIZE);                      /* restored: 77 columns, those lines in the scrollback */
+    tick();
+    for(i = 0; i < 300; i++) pointer(TX + 100, TY + 100, 0, 1);
+    fake_click(&g, TX + 30, TY + 8);
+    CHECK(!g.term.selected && !g.term.follow && g.term.view == 0 && !g.term.vt.dropped);   /* the top */
+    gui_act(&g, ACT_COPY);
+    memset(want, 'w', 77);
+    want[77] = '\n';
+    memset(want + 78, 'v', 77);
+    want[155] = '\n';
+    memset(want + 156, 'v', 33);
+    want[189] = '\n';
+    for(n = 190, i = 0; i < 21 - 3; i++, n += 7) memcpy(want + n, "filler\n", 7);
+    n--;                                            /* the last row has text: no line end after it */
+    CHECK(g.clip_len == n && !memcmp(g.clip, want, n));
+    gui_act(&g, ACT_SELECT_ALL);
+    gui_act(&g, ACT_COPY);
+    memset(want, 'w', 116);                         /* the selection: 117 characters, and 150 joined */
+    want[116] = 'Z';
+    want[117] = '\n';
+    memset(want + 118, 'v', 150);
+    want[268] = '\n';
+    CHECK(g.clip_len > 269 && !memcmp(g.clip, want, 269) && !memcmp(g.clip + 269, "filler\n", 7));
     gui_finish(&g);
 }
 
@@ -1177,6 +1299,7 @@ static void fuzz_model(void) {
 #define TS_DEAD 4
 #define WNOHANG 1
 #define KT 32
+#define KF 16                           /* NR_OPEN */
 #include <surfos/pty.h>                 /* PTY_MAX, and the kernel's pty calls the stand-ins below give */
 typedef struct surf_task {
     u_long pid;
@@ -1184,12 +1307,12 @@ typedef struct surf_task {
     int state;                          /* 0, or TS_DEAD: it has ended, not collected yet */
     bool gone, late;                    /* collected; inside a call, it ends at the call's end (not at the hangup) */
     int pty;                            /* the pty it is on, -1 none */
-    struct file *files[4];              /* its descriptors */
+    struct file *files[KF];             /* its descriptors */
 } surf_task;
 struct file { int pty; };
 surf_task *curTask;
 static surf_task kt[KT], k_init;
-static int k_ntasks, k_spawn_err, k_hangups;
+static int k_ntasks, k_spawn_err, k_hangups, k_dangling, k_spawn_bare;
 static u_long k_pid = 100;
 static struct file k_master[PTY_MAX];
 static bool k_used[PTY_MAX];
@@ -1246,17 +1369,24 @@ static void k_hangup(struct file *f) {
     if(!left) k_used[f->pty] = false;
 }
 
+/* 10/18/26 (the second review): a master closed while a session's place still points at it */
+static void k_held(struct file *f) {
+    int i;
+    for(i = 0; i < SESSIONS; i++) if(sessions[i].master == f) k_dangling++;
+}
+
 int fd_install(struct file *f) {
     int i;
-    for(i = 0; i < 4; i++) if(!curTask->files[i]) { curTask->files[i] = f; return i; }
+    for(i = 0; i < KF; i++) if(!curTask->files[i]) { curTask->files[i] = f; return i; }
     return -EMFILE;
 }
 
-struct file *fd_get(int fd) { return fd >= 0 && fd < 4 ? curTask->files[fd] : NULL; }
+struct file *fd_get(int fd) { return fd >= 0 && fd < KF ? curTask->files[fd] : NULL; }
 
 int fd_close(int fd) {
     struct file *f = fd_get(fd);
     if(!f) return -1;
+    k_held(f);
     curTask->files[fd] = NULL;
     k_hangup(f);
     return 0;
@@ -1265,7 +1395,7 @@ int fd_close(int fd) {
 /* a task collected by its parent: reap()'s fd_close_all() */
 static void k_reaped(surf_task *t) {
     int i;
-    for(i = 0; i < 4; i++) if(t->files[i]) { k_hangup(t->files[i]); t->files[i] = NULL; }
+    for(i = 0; i < KF; i++) if(t->files[i]) { k_hangup(t->files[i]); t->files[i] = NULL; }
     t->gone = true;
 }
 
@@ -1284,6 +1414,9 @@ int pty_open(struct file **master) {
 
 int pty_spawn(struct file *master, const char *path, int argc, char *const argv[]) {
     surf_task *t;
+    int i;
+    for(i = 0; i < KF && curTask->files[i] != master; i++) ;
+    if(i == KF) k_spawn_bare++;                     /* 10/18/26: the master is a descriptor before the shell starts */
     if(k_spawn_err) return k_spawn_err;
     snprintf(k_argv, sizeof(k_argv), "%s %d %s %s", path, argc, argv[0], argv[1]);
     t = k_task(master->pty);
@@ -1307,12 +1440,14 @@ int pty_read(struct file *master, char *buf, u32 len) {
 int pty_write(struct file *master, const char *buf, u32 len) { (void)master; (void)buf; return (int)len; }
 int pty_resize(struct file *master, u32 cols, u32 rows) { k_cols[master->pty] = (int)cols; k_rows[master->pty] = (int)rows; return 0; }
 int pty_number(struct file *master) { return master->pty; }
-void pty_close(struct file *master) { k_hangup(master); }
+void pty_close(struct file *master) { k_held(master); k_hangup(master); }
 
 static void kernel_side(void) {
-    surf_task *a, *b, *shell, *job;
+    static struct file spare;
+    surf_task *a, *b, *c, *shell, *job;
+    struct file *f;
     char buf[16];
-    int h, i, k, hs[PTY_MAX];
+    int h, i, k, fd, hs[PTY_MAX];
     k_init.pid = 1;
     a = k_task(-1);                                 /* two desktops' tasks */
     b = k_task(-1);
@@ -1363,29 +1498,53 @@ static void kernel_side(void) {
     k_used[shell->pty] = false;
     /* a shell that cannot start: the pty and the place are free again */
     k_spawn_err = -ENOENT;
-    CHECK(guisys_term_open(NULL, 77, 21) == -ENOENT && k_hangups == 4);
+    CHECK(guisys_term_open(NULL, 77, 21) == -ENOENT && k_hangups == 4 && !a->files[0]);
     k_spawn_err = 0;
     for(i = k = 0; i < PTY_MAX; i++) k += sessions[i].used || k_used[i];
     CHECK(!k);
-    /* every pty in use: the next waits; a full descriptor table keeps the master here only */
+    /* every pty in use: the next waits; every master a descriptor of the desktop's task */
     for(i = 0; i < PTY_MAX; i++) hs[i] = guisys_term_open(NULL, 77, 21);
-    for(i = k = 0; i < PTY_MAX; i++) k += hs[i] == i && sessions[i].used && sessions[i].fd == (i < 4 ? i : -1);
+    for(i = k = 0; i < PTY_MAX; i++) k += hs[i] == i && sessions[i].used && sessions[i].fd == i && a->files[i] == &k_master[i];
     CHECK(k == PTY_MAX && guisys_term_open(NULL, 77, 21) == -EAGAIN);
     /* the desktop's task dies without closing them (killed at once, no gui_finish()): collected, its descriptors close
-       (four hangups); the next open, by another task, takes the places back and closes what only they held (four) */
+       (eight hangups); the next open, by another task, takes the places back and closes nothing */
     a->state = TS_DEAD;
     k_reaped(a);
-    CHECK(k_hangups == 8);
+    CHECK(k_hangups == 12);
     curTask = b;
     h = guisys_term_open(NULL, 77, 21);
     CHECK(h >= 0 && k_hangups == 12 && sessions[h].owner == b->pid);
     for(i = k = 0; i < PTY_MAX; i++) k += sessions[i].used;
     CHECK(k == 1);
     guisys_term_close(NULL, h);
-    h = guisys_term_open(NULL, 77, 21);             /* nothing is closed twice */
-    CHECK(h >= 0 && k_hangups == 13);
+    CHECK(k_hangups == 13);
+    /* 10/18/26 (the second review): a task killed at once inside an open or a close leaves its places claimed, the
+       master not in them (not there yet, or taken out to close) but in its descriptors: the next open takes the
+       places back and closes nothing; the task's end closes the master, once */
+    c = k_task(-1);
+    curTask = c;
+    sessions[1] = (struct session){ .used = true, .master = NULL, .fd = -1, .owner = c->pid };    /* before pty_open */
+    f = NULL;
+    CHECK(pty_open(&f) == 0 && f);
+    fd = f ? fd_install(f) : -1;
+    CHECK(fd == 0);
+    sessions[2] = (struct session){ .used = true, .master = NULL, .fd = fd, .owner = c->pid, .pty = f->pty };
+    c->state = TS_DEAD;
+    curTask = b;
+    h = guisys_term_open(NULL, 77, 21);
+    CHECK(h == 0 && !sessions[1].used && !sessions[2].used && k_hangups == 13 && k_used[f->pty]);
+    k_reaped(c);
+    CHECK(k_hangups == 14 && !k_used[f->pty]);
     guisys_term_close(NULL, h);
-    CHECK(k_hangups == 14);
+    CHECK(k_hangups == 15);
+    /* no free descriptor: no session (-EMFILE, as sys_openpty() answers), and the pty is free again */
+    for(i = 0; i < KF; i++) b->files[i] = &spare;
+    CHECK(guisys_term_open(NULL, 77, 21) == -EMFILE && k_hangups == 16);
+    for(i = k = 0; i < PTY_MAX; i++) k += sessions[i].used || k_used[i];
+    CHECK(!k);
+    for(i = 0; i < KF; i++) b->files[i] = NULL;
+    /* a master was never closed while a place pointed at it, and always a descriptor when its shell started */
+    CHECK(!k_dangling && !k_spawn_bare);
 }
 
 int main(void) {
@@ -1409,6 +1568,10 @@ int main(void) {
     budget();
     lost();
     gone_selection();
+    flood_resize();
+    past_wrap();
+    paste_chars();
+    shown_copy();
     fuzz_vt();
     fuzz_model();
     kernel_side();

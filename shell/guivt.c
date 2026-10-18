@@ -43,6 +43,9 @@ line. A new size keeps a mark only while its line is whole: a screen row that lo
 new width loses its mark, and so does the last line kept when the rows below the cursor go. The cells
 written are counted (written: put() one, an erase or a new line each cell it blanks), and vt_take()
 feeds bytes only while a budget of them lasts: a few bytes of erases can write a screenful each.
+10/18/26 (the second review): a character written at or past the column a row wrapped at (a wider
+screen's row, written on by a program that moved there) ends the mark: the row goes on in itself now.
+vt_shown() is the text as it shows, for a copy of the screen: each line cut at the screen's width.
 */
 #include "guivt.h"
 #include <string.h>
@@ -143,10 +146,13 @@ static void newline(struct gui_vt *vt) {
 /* a character at the cursor, the VT100 way (the console's put_char()) */
 static void put(struct gui_vt *vt, u8 ch) {
     struct gui_vt_cell *c;
+    int w;
     if(vt->wrap) {
         set_wrapped(vt, vt->y, vt->cols);
         newline(vt);
     }
+    w = vt->wrapped[place(vt, vt_screen(vt) + vt->y)];
+    if(w && vt->x >= w) set_wrapped(vt, vt->y, 0);     /* 10/18/26: written on past its wrap: it goes on in itself */
     c = &row(vt, vt->y)[vt->x];
     c->ch = ch;
     c->attr = attr(vt);
@@ -378,19 +384,22 @@ static int line_end(const struct gui_vt *vt, int i) {
     return n;
 }
 
-u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, u32 size, bool *cut) {
+/* vt_text() and vt_shown(): lines cut at width (GUI_VT_COLS: not at all) */
+static u32 text_of(const struct gui_vt *vt, int l0, int c0, int l1, int c1, int width, char *out, u32 size, bool *cut) {
     char ch[CP437_UTF8_MAX];
     u32 n = 0, owed = 0;                                /* owed: line ends, written before the next character */
-    int i, a, b, k, len;
+    int i, a, b, k, len, w;
     bool joined;
     *cut = false;
     if(l0 < 0) { l0 = 0; c0 = 0; }
     if(l1 >= vt->count) { l1 = vt->count - 1; c1 = vt->cols; }
     for(i = l0; i <= l1; i++) {
         const struct gui_vt_cell *c = vt_line(vt, i);
-        joined = i < l1 && vt_wrapped(vt, i);           /* it goes on in the next line: no line end, blanks kept */
+        w = vt_wrapped(vt, i);
+        joined = i < l1 && w && w <= width;             /* it goes on in the next line: no line end, blanks kept */
         a = i == l0 ? clamp(c0, 0, GUI_VT_COLS) : 0;
         b = i < l1 || c1 >= vt->cols ? line_end(vt, i) : clamp(c1, 0, GUI_VT_COLS);
+        if(b > width) b = width;
         if(!joined) while(b > a && blank_cell(&c[b - 1])) b--;
         for(k = a; k < b; k++) {
             for(; owed; owed--) {
@@ -409,6 +418,14 @@ u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, 
         else out[n++] = '\n';
     }
     return n;
+}
+
+u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, u32 size, bool *cut) {
+    return text_of(vt, l0, c0, l1, c1, GUI_VT_COLS, out, size, cut);
+}
+
+u32 vt_shown(const struct gui_vt *vt, int l0, int l1, char *out, u32 size, bool *cut) {
+    return text_of(vt, l0, 0, l1, vt->cols, vt->cols, out, size, cut);
 }
 
 static bool word_cell(u8 ch) {

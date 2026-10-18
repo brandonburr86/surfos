@@ -13,6 +13,7 @@ or pasted yet. 1,024 lines of 160 cells and the clipboard's worth of input: abou
 10/18/26 (the review): a line's wrap mark is the width it wrapped at, so copied text joins it there
 whatever the width is now; the cells written are counted, for a frame's budget of work (guiterm.c);
 what the session printed and was read, but not drawn yet within that budget, waits in carry.
+10/18/26 (the second review): since when a new size waits (size_ms), so that it waits a while at most.
 */
 #ifndef _SYS_GUI_TERM_H
 #define _SYS_GUI_TERM_H
@@ -65,6 +66,7 @@ struct gui_term {
     char pend[GUI_TERM_PEND];
     u32 carry_at, carry_len;            /* 10/18/26: carry[carry_at, carry_len): read, not drawn yet */
     char carry[1024];
+    u32 size_ms;                        /* 10/18/26: the last frame without a new size waiting (a wait's start) */
     struct gui_vt vt;
 };
 #endif
