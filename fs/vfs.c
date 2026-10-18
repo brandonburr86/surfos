@@ -239,30 +239,46 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
 }
 
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags) {
-    const struct fs_type *type = fstype ? find_type(fstype) : (dev ? probe_type(dev) : NULL);
+    return vfs_mount_why(dev, path, fstype, flags, NULL);
+}
+
+/* 10/18/26 (audit B68): the device is probed for its file system once it is this mount's (counted as being mounted):
+   before, the probe came first, and an mkfs or fdisk that took the device between the shell's look and the probe made
+   the probe's reads refused (BDEV_EBUSY: "no file system found (mkfs makes one)"), or one that took it after the probe
+   made the mount say EBUSY, which the shell said as "something is mounted there already". *why says which reason an
+   -EBUSY has: VFS_BUSY_PATH, or what keeps the device busy (vfs_bdev_busy_why()'s words) */
+int vfs_mount_why(struct bdev *dev, const char *path, const char *fstype, int flags, const char **why) {
+    const struct fs_type *type = fstype ? find_type(fstype) : NULL;
+    const char *busy;
     struct superblock *sb;
     struct mount *m, **pp;
     char abs[VFS_PATH_MAX];
     int r;
 
-    if(!type) return fstype ? -ENODEV : -EINVAL;
+    if(why) *why = NULL;
+    if(fstype && !type) return -ENODEV;
+    if(!fstype && !dev) return -EINVAL;
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
     fs_enter();                                     /* 10/18/26 (audit B58): counted inside while it holds the device's
                                                        count below, so a kill waits and never leaves it behind */
     mutex_lock(&mount_lock);
     for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) break;
-    if(m || (dev && busy_why(dev))) {               /* 10/5/26: two mounts of one device would each think they own it */
+    busy = m ? VFS_BUSY_PATH : dev ? busy_why(dev) : NULL;   /* 10/5/26: two mounts of one device would each think
+                                                                they own it */
+    if(busy) {
         mutex_unlock(&mount_lock);
         fs_leave();
+        if(why) *why = busy;
         return -EBUSY;
     }
     if(dev) dev->mounting++;                        /* 10/18/26 (audit B58): taken in the same step: busy until below */
     mutex_unlock(&mount_lock);
 
-    sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
-    m = (struct mount *)kcalloc(1, sizeof(struct mount));
-    r = !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
+    if(!type) type = probe_type(dev);               /* 10/18/26 (audit B68): the device this mount's meanwhile */
+    sb = type ? (struct superblock *)kcalloc(1, sizeof(struct superblock)) : NULL;
+    m = type ? (struct mount *)kcalloc(1, sizeof(struct mount)) : NULL;
+    r = !type ? -EINVAL : !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
     if(r == 0) {
         sb->type = type;
         sb->dev = dev;

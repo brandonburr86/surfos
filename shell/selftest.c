@@ -689,10 +689,12 @@ static void ram_watch(void) {
 }
 
 static volatile int ram_read_fail0;                  /* 10/18/26 (round fs-fix-10): block 0 cannot be read (B61) */
+static void (*volatile ram_read_hook)(u32 lba);      /* 10/18/26 (round fs-fix-11): sees each read (B68) */
 
 static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     if(ram_watch_task && curTask == ram_watch_task && curTask->fs_hold > ram_watch_hold) ram_watch_hold = curTask->fs_hold;
     ram_watch();
+    if(ram_read_hook) ram_read_hook(lba);
     if(ram_read_fail0 && lba == 0) return BDEV_EIO;
     memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
     return 0;
@@ -2334,6 +2336,92 @@ static void test_mutex_wake(void) {
           "with its waiter asleep in line)");
 }
 
+/* 10/18/26 (audit B68): mount probed the device for its file system before it took it (counted as being mounted): an
+   mkfs or fdisk that took the device in between made the probe's reads refused, and mount said "no file system found
+   (mkfs makes one)"; one that took it after the probe made the mount say EBUSY, which mount said as "something is
+   mounted there already". Here a RAM stick with a FAT volume: with another task's claim held, the mount is refused as
+   the device being changed (the probe's reads were refused before); then, while mount's probe reads the stick, another
+   task's claim is refused as the stick being mounted (it was refused only because a request was under way) */
+static struct bdev *volatile kp_dev;
+static surf_task *volatile kp_task;
+static volatile int kp_go, kp_fired, kp_claim, kp_tried, kp_release;
+static const char *volatile kp_why;
+
+static void kp_claimer(void *arg) {
+    const char *why = NULL;
+    (void)arg;
+    while(!kp_go) sleep_ms(5);
+    kp_claim = vfs_bdev_change_begin(kp_dev, &why);
+    kp_why = why;
+    kp_tried = 1;
+    if(kp_claim == 0) {
+        while(!kp_release) sleep_ms(5);
+        vfs_bdev_change_end(kp_dev);
+    }
+}
+
+static void kp_hook(u32 lba) {
+    int waited;
+    (void)lba;
+    if(!kp_task || curTask != kp_task || kp_fired) return;
+    kp_fired = 1;
+    kp_go = 1;                                       /* another task tries to take the stick now */
+    for(waited = 0; !kp_tried && waited < 1000; waited += 5) sleep_ms(5);
+}
+
+static surf_task *kp_start(int go) {
+    kp_go = go;
+    kp_fired = kp_tried = kp_release = 0;
+    kp_claim = 99;
+    kp_why = NULL;
+    return kthread_create_on("mountclaim", curTask->con, kp_claimer, NULL, PL_NORMAL, 0);
+}
+
+static void test_mount_probe(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stickp", "/selftest-mp", &mem);
+    static char out[400];
+    char *argv[] = { "mount", "stickp", "/selftest-mp", NULL };
+    const char *why = NULL, *why1, *why2;
+    surf_task *t;
+    int r1 = 99, r2 = 99, claim1, claim2, st, waited;
+    bool registered;
+    if(!d) { check(false, "mount's probe and a claim: a RAM stick"); return; }
+    vfs_umount("/selftest-mp");                      /* a FAT volume, nothing mounting it */
+    registered = bdev_register(d) == 0;              /* (mount finds devices by name) */
+    kp_dev = d;
+    t = kp_start(1);                                 /* another task's claim, held */
+    for(waited = 0; t && !kp_tried && waited < 1000; waited += 5) sleep_ms(5);
+    claim1 = kp_claim;
+    if(t) r1 = vfs_mount_why(d, "/selftest-mp", NULL, 0, &why);
+    why1 = why;
+    if(r1 == 0) vfs_umount("/selftest-mp");
+    kp_release = 1;
+    if(t) task_wait(t->pid, &st);
+    out[0] = 0;
+    t = kp_start(0);                                 /* a claim tried while mount's probe reads the stick */
+    kp_task = curTask;
+    ram_read_hook = kp_hook;
+    if(t && registered) r2 = fx_capture(out, sizeof(out), 3, argv);
+    ram_read_hook = NULL;
+    kp_task = NULL;
+    kp_go = kp_release = 1;
+    if(t) task_wait(t->pid, &st);
+    claim2 = kp_claim;
+    why2 = kp_why;
+    printf("        (with the stick taken: mount %d, %s; a claim during the probe: %d, %s; mount %d)\n", r1,
+           why1 ? why1 : "-", claim2, why2 ? why2 : "-", r2);
+    check(claim1 == 0 && r1 == -EBUSY && why1 && !strcmp(why1, VFS_BUSY_CHANGING),
+          "a mount of a device another task's mkfs or fdisk holds is refused as its being changed (its probe's reads "
+          "were refused before: \"no file system\")");
+    check(r2 == CMD_OK && kp_fired && claim2 == -EBUSY && why2 && !strcmp(why2, VFS_BUSY_MOUNTING),
+          "and mount probes the device once it holds it: a claim during the probe is refused as the device being mounted");
+    if(r2 != CMD_OK) printf("        (mount said: %s)\n", out);
+    vfs_umount("/selftest-mp");                      /* (mounted by the second part) */
+    if(registered) bdev_unregister(d);              /* (gone, off the list; nothing holds it now) */
+    fx_done(d, mem, NULL);
+}
+
 /* 10/18/26 (audit B69): a kill put off because its task holds a lock, or is inside a file system, was said in the
    kernel log once, KILL_WAIT_MS after the kill, only for a task in a call; one killed outside any call (a kernel thread)
    was waited for without a word. Here a kernel thread outside any call holds a lock of the test's own for 2.5 s when it
@@ -2743,7 +2831,7 @@ static void (*const tests[])(void) = {
     test_eject_writeout_mount, test_kill_system,
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
-    test_close_cut_short, test_kill_lock_logged,
+    test_close_cut_short, test_kill_lock_logged, test_mount_probe,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };

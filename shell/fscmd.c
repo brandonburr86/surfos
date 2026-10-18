@@ -276,9 +276,14 @@ int cmd_mount(int argc, char **argv) {
         printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
         flags |= MNT_RDONLY;
     }
-    r = vfs_mount_flags(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags);
+    r = vfs_mount_why(d, path, argc > i + 2 ? argv[i + 2] : NULL, flags, &busy);   /* 10/18/26 (audit B68): probed */
     if(r == -EINVAL && argc <= i + 2) printf("    mount: %s: no file system found (mkfs makes one)\n", d->name);
-    else if(r == -EBUSY) printf("    mount: %s: something is mounted there already\n", path);
+    else if(r == -EBUSY && busy && !strcmp(busy, VFS_BUSY_PATH))              /* as the mount took the device: */
+        printf("    mount: %s: something is mounted there already\n", path);
+    else if(r == -EBUSY && busy && !strcmp(busy, VFS_BUSY_MOUNTED))           /* (B68: the look above may be stale) */
+        printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name);
+    else if(r == -EBUSY && busy)
+        printf("    mount: %s, its disk or a partition of it is %s: try again once that has finished\n", d->name, busy);
     else if(r) printf("    mount: %s: %s\n", d->name, strerror(r));
     else describe_mount(path);
     return r ? CMD_FAIL : CMD_OK;

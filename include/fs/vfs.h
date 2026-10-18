@@ -195,6 +195,10 @@ void init_fs(void);                                  /* register the file system
 int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
+/* 10/18/26 (audit B68): the same, *why saying what an -EBUSY is: VFS_BUSY_PATH (a mount at path already), or what keeps
+   the device busy (VFS_BUSY_*); the device is probed (fstype NULL) once it counts as being mounted */
+int vfs_mount_why(struct bdev *dev, const char *path, const char *fstype, int flags, const char **why);
+#define VFS_BUSY_PATH       "a mount there already"
 int vfs_umount(const char *path);
 int vfs_umount_lost(const char *path, u_int *lost);  /* 10/16/26 (B10): and how many changed blocks it gave up */
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted, or being
