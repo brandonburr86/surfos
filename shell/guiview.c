@@ -5,8 +5,12 @@ File: guiview.c Date: 10/17/26
 --------------------
 BMP pictures (guibmp.c reads them), fitted to the window or zoomed. A picture is opened with the
 chooser (the toolbar's Open, or O) or by another file (viewer_show, shell/gui_media.h: Files). It
-is read a piece at a time in the tick, at most VIEW_TICK bytes a frame (Esc stops it), so a big
-file never freezes the desktop, and kept decoded in gui_state: at most GUI_VIEW_PIXELS pixels, a
+is read a piece at a time in the tick (Esc stops it), so a big file never freezes the desktop: a
+frame reads at most VIEW_TICK bytes, each read counting as VIEW_READ_MIN at least (a read is an
+open and a walk of the file's clusters), and one read takes as many rows next to each other in the
+file as a chunk holds, those a reduced picture skips too. The tick never opens a dialog: what goes
+wrong there is said in the window and its status bar, as a dialog would replace whatever question
+is in front. The picture is kept decoded in gui_state: at most GUI_VIEW_PIXELS pixels, a
 bigger picture being reduced as it is read (nearest neighbour; the status bar says so). Drawing
 scales the decoded pixels into the window, nearest neighbour again, clipped, without allocating:
 each row is stepped through exactly, with a quotient and a remainder, and written straight into
@@ -27,7 +31,8 @@ dialogs (Save as BMP and Open BMP, guibmp.c).
 #define ONE 65536                       /* the actual size, as a 16.16 zoom */
 #define ZOOM_MIN (ONE / 64)
 #define ZOOM_MAX (ONE * 16)
-#define VIEW_TICK (256 * 1024)          /* the most a frame reads of a picture */
+#define VIEW_TICK (256 * 1024)          /* the most a frame reads of a picture (and one chunk past it) */
+#define VIEW_READ_MIN (16 * 1024)       /* what a read counts for at least: 16 reads a frame at most */
 #define PAN_STEP 32                     /* the pixels an arrow moves a zoomed picture */
 
 /* the toolbar's buttons and the viewer's own dialogs (an Open chooser); Sketch's are gui_media.h's */
@@ -53,7 +58,7 @@ static const char *const help[] = {
     "bar says so). Esc stops a reading.",
     "Sketch: Ctrl+S, or File > Save as BMP\xF9, saves the",
     "drawing as a 24-bit BMP; File > Open BMP\xF9 reads one",
-    "in, fitted and in Sketch's six colours.",
+    "of up to 8 MB in, fitted, in Sketch's six colours.",
 };
 
 /**** where things are ****/
@@ -218,37 +223,44 @@ static void decode_row(struct gui_viewer *v, const u8 *row, u32 dy) {
     }
 }
 
-static void read_failed(struct gui_state *g, int err) {
+/* the picture could not be read to its end: said in the window and its status bar, and in a dialog only when the
+   user's own action asked for it (not from the tick) and no other dialog is in front, which it would replace (a
+   question about unsaved changes, a chooser half filled in) */
+static void read_failed(struct gui_state *g, int err, bool tick) {
     struct gui_viewer *v = &g->viewer;
     char name[GUI_NAME_MAX];
     strlcpy(name, gui_basename(v->path), sizeof(name));
     forget(v);
     snprintf(v->status, sizeof(v->status), "%s could not be read: %s", name,
              err == -EIO ? "it ended early, or the disk failed" : gui_error(g, err));
-    dialog_message(g, "Cannot show the picture", name,
-                   err == -EIO ? "It could not be read to its end." : gui_error(g, err));
+    if(!tick && !g->dialog.kind)
+        dialog_message(g, "Cannot show the picture", name, err == -EIO ? "It could not be read to its end." : gui_error(g, err));
 }
 
-/* some more rows: as many next to each other in the file as a chunk holds, a read each, up to VIEW_TICK bytes */
-static void read_some(struct gui_state *g) {
+/* some more rows. A read takes the file's rows from the next one needed as far as a chunk holds them (the rows
+   between that a reduced picture skips are read too, and passed over), and counts for its bytes, VIEW_READ_MIN at
+   least, against the frame's VIEW_TICK: so a frame makes 16 reads at most, and reads 256 KB and a chunk at most */
+static void read_some(struct gui_state *g, bool tick) {
     struct gui_viewer *v = &g->viewer;
-    u32 budget = VIEW_TICK, first, rows, len, size, i, k, bytes;
+    u32 budget = VIEW_TICK, first, rows, span, len, size, i, k, bytes;
     int r;
     while(v->loading && budget) {
         first = file_row(v, v->next);
-        for(rows = 1; v->next + rows < v->dh && (rows + 1) * v->bmp.stride <= GUI_VIEW_CHUNK &&
-                      file_row(v, v->next + rows) == first + rows; rows++) ;
-        bytes = rows * v->bmp.stride;
+        for(rows = 1; v->next + rows < v->dh && (file_row(v, v->next + rows) - first + 1) * v->bmp.stride <= GUI_VIEW_CHUNK;
+            rows++) ;
+        span = file_row(v, v->next + rows - 1) - first + 1;   /* the file's rows read, from first */
+        bytes = span * v->bmp.stride;
         len = size = 0;
         r = g->fs && g->fs->read_at ? g->fs->read_at(g->fs->ctx, v->path, v->bmp.offset + first * v->bmp.stride,
                                                       (char *)v->chunk, bytes, &len, &size) : -ENOSYS;
         if(!r && len < bytes) r = -EIO;                 /* the file is shorter now than its headers said */
-        if(r) { read_failed(g, r); return; }
+        if(r) { read_failed(g, r, tick); return; }
         for(i = 0; i < rows; i++) {
             k = v->next + i;
-            decode_row(v, v->chunk + i * v->bmp.stride, v->bmp.topdown ? k : v->dh - 1 - k);
+            decode_row(v, v->chunk + (file_row(v, k) - first) * v->bmp.stride, v->bmp.topdown ? k : v->dh - 1 - k);
         }
         v->next += rows;
+        bytes = bytes > VIEW_READ_MIN ? bytes : VIEW_READ_MIN;
         budget = bytes < budget ? budget - bytes : 0;
         if(v->next >= v->dh) {
             v->loading = false;
@@ -268,15 +280,16 @@ void viewer_show(struct gui_state *g, const char *path) {
     int r;
     gui_open(g, GUI_VIEWER);
     strlcpy(name, gui_basename(path), sizeof(name));
-    r = bmp_open(g, path, &b, v->palette, v->chunk, why, sizeof(why));
+    /* checked with a palette of its own: a picture being read or shown keeps its own until this one is good */
+    r = bmp_open(g, path, &b, v->scratch, v->chunk, why, sizeof(why));
     if(r) {
-        if(v->loading) forget(v);                       /* what was being read stops; a picture shown stays */
-        if(!v->ready) snprintf(v->status, sizeof(v->status), "%s: %s", name, why);
-        dialog_message(g, "Cannot show the picture", name, why);
+        if(!v->ready && !v->loading) snprintf(v->status, sizeof(v->status), "%s: %s", name, why);
+        if(!g->dialog.kind) dialog_message(g, "Cannot show the picture", name, why);
         return;
     }
     forget(v);
     strlcpy(v->path, path, sizeof(v->path));
+    memcpy(v->palette, v->scratch, sizeof(v->palette));
     v->bmp = b;
     v->w = b.width;
     v->h = b.height;
@@ -287,7 +300,7 @@ void viewer_show(struct gui_state *g, const char *path) {
     v->zoom = ONE;
     v->pan_x = v->pan_y = 0;
     v->click_ms = 0;
-    read_some(g);                                       /* the first piece now: a small picture is there at once */
+    read_some(g, false);                                /* the first piece now: a small picture is there at once */
 }
 
 /**** the window ****/
@@ -411,11 +424,14 @@ static void wheel(struct gui_state *g, int rows) {
 }
 
 static void tick(struct gui_state *g) {
-    if(g->viewer.loading) read_some(g);
+    if(g->viewer.loading) read_some(g, true);
 }
 
 static void answer(struct gui_state *g, int a, int button, const char *text, const char *target) {
-    if(a >= VIEW_SKETCH_SAVE) { sketch_answer(g, a, button, text, target); return; }   /* Sketch's (guibmp.c) */
+    if(a == VIEW_SKETCH_SAVE || a == VIEW_SKETCH_REPLACE || a == VIEW_SKETCH_OPEN) {   /* Sketch's (guibmp.c) */
+        sketch_answer(g, a, button, text, target);
+        return;
+    }
     if(a == VA_OPEN && button == 0) viewer_show(g, text);
 }
 
@@ -486,8 +502,7 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     struct gui_draw room;
     bool on[TOOLS];
     char left[GUI_STATUS + GUI_NAME_MAX], right[32];
-    const char *say = NULL;
-    int i, x;
+    int i, x, ty;
     u32 z;
     layout(g, &l);
     for(i = 0; i < TOOLS; i++) on[i] = tool_on(g, tools[i].act);
@@ -497,10 +512,15 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     room = gd_clip(d, w->x + l.x, w->y + l.y, l.w, l.h);
     gd_rect(&room, w->x + l.x, w->y + l.y, l.w, l.h, NAVY);
     if(v->ready) picture(g, &room, &l);
-    else if(!g->fs || !g->fs->read_at) say = "There are no files here to open.";
-    else if(v->loading) say = v->status;
-    else say = "Open a BMP picture: the toolbar's Open, or O.";
-    if(say) gd_name(&room, w->x + l.x + 16, w->y + l.y + 16, say, (l.w - 32) / 8, FOAM);
+    else {                                              /* the reading's progress, or what became of the last picture */
+        ty = w->y + l.y + 16;                           /* (the tick says it only here and in the status bar) */
+        if(v->status[0]) {
+            gd_name(&room, w->x + l.x + 16, ty, v->status, (l.w - 32) / 8, v->loading ? FOAM : CORAL);
+            ty += 22;
+        }
+        if(!v->loading) gd_name(&room, w->x + l.x + 16, ty, g->fs && g->fs->read_at ? "Open a BMP picture: the toolbar's "
+                                "Open, or O." : "There are no files here to open.", (l.w - 32) / 8, FOAM);
+    }
     gd_rect(d, w->x + 1, w->y + l.status_y, w->w - 2, STATUS_H, BAND);
     gd_rect(d, w->x + 1, w->y + l.status_y, w->w - 2, 1, LINE);
     right[0] = 0;
