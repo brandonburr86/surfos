@@ -19,7 +19,12 @@ check it. Before that: "rx: listening on port <port> for <path>", then the addre
 connection came from. A connection that stays silent for 120 seconds is given up.
 
 Exit status 0; 1 on any error, said with its reason (the partial file <path>.part is
-removed); 2 for a usage error. Nothing else: no shell, nothing is run, nothing is sent back.
+removed; 10/17/26: but for a rename that failed after it may have changed something, as
+edit's saving knows: then it is kept, and the message says to have the disk checked
+before either name is deleted or rx runs for them again, since the two may share their
+clusters); 2 for a usage error. A later rx does not start over such a .part, which has
+<path>'s size and time, and says why; one a killed rx left is cut and written again.
+Nothing else: no shell, nothing is run, nothing is sent back.
 */
 
 #include <stdarg.h>
@@ -93,6 +98,25 @@ static int fail(const char *fmt, ...) {
     return 1;
 }
 
+/* a rename that failed with one of these changed nothing (user/bin/edit.c says why the others count) */
+static int nothing_changed(int e) {
+    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT || e == EFAULT ||
+           e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
+}
+
+/* <path>.part from an earlier rx: 1 when it is <path>'s twin, of its size and time (fs/fat.c's rename copies the
+   entry): kept after a rename that may have half happened, so that cutting it to nothing would free the
+   clusters <path> holds. 0 for none, an empty one, or one a killed rx left: that is cut and written again.
+   With errno, when there is no telling: -1 for the .part, -2 for <path>. A guess, not proof, as
+   user/bin/edit.c's twin_beside() says. */
+static int part_in_the_way(const char *path, const char *part) {
+    struct stat p, b;
+    if(stat(part, &b) < 0) return errno == ENOENT || errno == ENOTDIR ? 0 : -1;   /* no such name: open says so */
+    if(!b.size) return 0;
+    if(stat(path, &p) < 0) return errno == ENOENT ? 0 : -2;
+    return p.size == b.size && p.mtime == b.mtime;
+}
+
 static int write_all(int fd, const char *p, long n) {
     while(n > 0) {
         long w = (long)write(fd, p, (size_t)n);
@@ -139,6 +163,9 @@ int main(int argc, char **argv) {
         return fail("%s: %s", path, strerror(errno));
     }
     snprintf(part, sizeof(part), "%s.part", path);
+    if((r = part_in_the_way(path, part)) < 0) return fail("%s: %s", r == -1 ? part : path, strerror(errno));
+    if(r) return fail("%s and %s may share their clusters (an earlier rx's rename may have failed half way): "
+                      "check the disk (fsck) before deleting either or running rx for them again", part, path);
     crc_init();
 
     /* the file first: a path that cannot be written is said before anything is sent */
@@ -187,6 +214,11 @@ int main(int argc, char **argv) {
     }
     if(rename(part, path) < 0) {
         r = errno;
+        if(!nothing_changed((int)r)) {          /* perhaps half done: both names may hold the same clusters */
+            if(stat(part, &st) < 0) return fail("%s -> %s: %s (check the disk)", part, path, strerror((int)r));
+            return fail("%s -> %s: %s (%s is kept: it and %s may share their clusters, so check the disk "
+                        "(fsck) before deleting either or running rx for them again)", part, path, strerror((int)r), part, path);
+        }
         unlink(part);
         errno = (int)r;
         return fail("%s -> %s: %s", part, path, strerror(errno));

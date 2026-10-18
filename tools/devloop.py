@@ -576,7 +576,13 @@ def deploy(s, kernel, initrd, build_id, port=TELNET_PORT, rx_port=RX_PORT, net=N
         for name, data in zip(FILES, (initrd, kernel)):
             push(s, data, f'{folder}/{name}.new', rx_port, connect_host)
         for name in FILES:
-            s.check(f'mv {folder}/{name}.new {folder}/{name}')
+            try:
+                s.check(f'mv {folder}/{name}.new {folder}/{name}')
+            except DevloopError as e:           # 10/17/26: a rename cut short by I/O may leave two names on one chain
+                if 'I/O error' not in str(e):
+                    raise
+                raise DevloopError(f'{e}: the rename may have half happened, so check the stick on another computer '
+                                   f'(fsck, First Aid on the Mac) before deploying again') from None
     except DevloopError:
         try:                                    # the stick left as SurfOS can find it again: unmounted, written out
             s.run(f'eject {disk}', 30)

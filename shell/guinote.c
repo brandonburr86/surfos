@@ -328,11 +328,87 @@ void note_reset(struct gui_note *n) {
     n->group++;
 }
 
+/* a file and a new file beside it that may share their clusters (gui_unsure()), once; past GUI_UNSURE
+   pairs none is kept, and the desktop then saves over, deletes and renames no file */
+static void remember(struct gui_state *g, const char *file, const char *kept) {
+    if(gui_remembered(g, file) && gui_remembered(g, kept)) return;
+    if(g->nunsure < GUI_UNSURE) {
+        strlcpy(g->unsure[g->nunsure], file, GUI_PATH_MAX);
+        strlcpy(g->kept[g->nunsure], kept, GUI_PATH_MAX);
+    }
+    g->nunsure++;
+}
+
+static bool ends_with(const char *s, size_t len, const char *end) {   /* ignoring ASCII case, as FAT does */
+    size_t n = strlen(end), k;
+    if(len <= n) return false;
+    for(k = 0; k < n; k++) {
+        char c = s[len - n + k];
+        if((c >= 'A' && c <= 'Z' ? c + 32 : c) != end[k]) return false;
+    }
+    return true;
+}
+
+static bool same_entry(struct gui_state *g, const struct gui_entry *f, const char *name) {
+    struct gui_entry e;
+    bool device, readonly;
+    return g->fs->stat(g->fs->ctx, name, &e, &device, &readonly) == 0 && e.type == GUI_FILE &&
+           e.size == f->size && e.mtime == f->mtime;
+}
+
+/* a name beside path with its size and time, into out: fs/fat.c's rename copies the entry, so after one
+   that may have half happened (a save of the desktop's or edit's, or rx's) the two hold the same clusters;
+   or the user made such a copy, and the care costs nothing. Beside a.txt: a.txt.tmp, a.txt.1.tmp to .9.tmp
+   and a.txt.part; beside one of those, a.txt (and a.txt.1 too beside a.txt.1.tmp). A guess, not proof: a
+   later write to either name, or a rename that left the old entry first in the directory, hides a pair. */
+static bool twin_of(struct gui_state *g, const char *path, const struct gui_entry *f, char *out, size_t n) {
+    static const char *const ends[] = { ".tmp", ".part" };
+    size_t len = strlen(path), e;
+    unsigned i;
+    int k, w;
+    if(!f->size) return false;                          /* an empty file holds no clusters */
+    for(k = 0; k <= 10; k++) {
+        if(k < 10) w = snprintf(out, n, k ? "%s.%d.tmp" : "%s.tmp", path, k);
+        else w = snprintf(out, n, "%s.part", path);
+        if(w < (int)n && same_entry(g, f, out)) return true;
+    }
+    for(i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {     /* path is <file>.tmp, <file>.N.tmp, <file>.part */
+        e = strlen(ends[i]);
+        if(len >= n || !ends_with(path, len, ends[i])) continue;
+        memcpy(out, path, len - e);
+        out[len - e] = 0;
+        if(same_entry(g, f, out)) return true;
+        if(i == 0 && len - e >= 3 && out[len - e - 2] == '.' && out[len - e - 1] >= '1' && out[len - e - 1] <= '9') {
+            out[len - e - 2] = 0;                       /* a.txt beside a.txt.1.tmp */
+            if(same_entry(g, f, out)) return true;
+        }
+    }
+    return false;
+}
+
+bool note_guarded(struct gui_state *g, const char *path) {
+    struct gui_entry e;
+    bool device, readonly;
+    char other[GUI_PATH_MAX];
+    if(gui_unsure(g, path)) return true;
+    if(!g->fs || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) != 0 || e.type != GUI_FILE) return false;
+    if(!twin_of(g, path, &e, other, sizeof(other))) return false;
+    remember(g, path, other);
+    return true;
+}
+
+bool note_refused(struct gui_state *g, const char *path) {
+    struct gui_entry e;
+    bool device, readonly;
+    if(!note_guarded(g, path)) return false;
+    return g->nunsure <= GUI_UNSURE || !g->fs || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) != -ENOENT;
+}
+
 int note_load(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
     struct gui_entry e;
     bool device = false, readonly = false;
-    char line[80];
+    char line[GUI_STATUS], other[GUI_PATH_MAX], a[GUI_PATH_MAX], b[GUI_PATH_MAX];
     const char *name = gui_basename(path);
     u32 len = 0, i, lf = 0, crlf = 0, j;
     int r;
@@ -382,7 +458,13 @@ int note_load(struct gui_state *g, const char *path) {
     strlcpy(n->path, path, sizeof(n->path));
     n->readonly = readonly;
     if(readonly) note_status(g, "Read-only volume: Save as keeps a copy elsewhere");
-    else {
+    else if(twin_of(g, path, &e, other, sizeof(other))) {   /* a save that failed half way, it may be */
+        remember(g, path, other);
+        gui_middle(name, a, sizeof(a), 26);
+        gui_middle(gui_basename(other), b, sizeof(b), 26);
+        snprintf(line, sizeof(line), "Check the disk: %s may share its data with %s", a, b);
+        note_status(g, line);
+    } else {
         snprintf(line, sizeof(line), "Opened %s", name);
         note_status(g, line);
     }
@@ -391,7 +473,7 @@ int note_load(struct gui_state *g, const char *path) {
 }
 
 /* a name in at most cells cells: a longer one loses its middle (… there), so that its end (.1.tmp) shows */
-static void middle(const char *name, char *out, size_t n, int cells) {
+void gui_middle(const char *name, char *out, size_t n, int cells) {
     u32 len = strlen(name), at = 0, o;
     int total = gd_cells(name), k;
     if(total <= cells) { strlcpy(out, name, n); return; }
@@ -408,14 +490,24 @@ int note_save(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
     char line[80], why[80], kept[GUI_PATH_MAX], name[GUI_PATH_MAX];
     u32 bytes = n->len + (n->crlf ? n->lf : 0);
+    struct gui_entry e;
+    bool device, readonly;
     int r;
     if(!g->fs) return -ENOSYS;
+    if(note_refused(g, path)) {                         /* it may share its clusters: never over it */
+        gui_unsure_line(g, path, line, sizeof(line));
+        dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
+        return -EBUSY;
+    }
     r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf, kept, sizeof(kept));
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
-        if(kept[0]) {                                   /* the dialog's 54 cells: "The text is in " and the name */
-            middle(gui_basename(kept), name, sizeof(name), 38);
-            snprintf(why, sizeof(why), "The text is in %s.", name);
+        if(kept[0]) {                                   /* its rename may have half happened */
+            remember(g, path, kept);
+            if(g->fs->stat(g->fs->ctx, kept, &e, &device, &readonly) == 0) {   /* the dialog's 54 cells: 31, the name */
+                gui_middle(gui_basename(kept), name, sizeof(name), 22);
+                snprintf(why, sizeof(why), "Check the disk: the text is in %s.", name);
+            } else strlcpy(why, "Have the disk checked first (fsck).", sizeof(why));
         }
         else strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
                           r == -ENOSPC ? "The volume is full." :

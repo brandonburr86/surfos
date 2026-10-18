@@ -502,7 +502,16 @@ sees only the asking task's current directory (it should look at every task's);
 `fdisk add` of logical partitions; one cache identity for a disk and its
 partitions (today a block reached both ways is cached twice); FAT12 in `mkfs`; exFAT,
 which larger sticks are sold with (deferred by the owner, October 2026); floating point in
-`printf`; and a 64-bit `time_t` before 2038.
+`printf`; and a 64-bit `time_t` before 2038. 10/17/26: a FAT rename that fails with an
+I/O error between writing the new name and removing the old one leaves two names on one
+cluster chain, and `fs/fat.c` frees the chain when either name is deleted, replaced or
+truncated, so the other is left on free clusters. `edit` and the desktop keep the new
+file, say to check the disk, and change neither name for the rest of their session or
+whenever they find a pair that looks so beside a file; `rx` does not start over a
+`.part` that looks so. Anything else still can (`rm`, `mv`, `cp`, a stick mounted
+again under another path): the driver should not free a chain that another entry of
+the directory still holds (the SurfCPU branch's FAT work, `sc/fs-fix-*`, changes the
+same functions).
 
 After that, in the order the laptop needs them (each its own milestone): USB hub
 support (docks and multi-port dongles), the controller's interrupt through MSI (lower

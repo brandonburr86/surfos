@@ -244,6 +244,22 @@ class OneStickTests(unittest.TestCase):
         self.assertIn('mkdir /surfos-dev-stick/surfos-dev', s.commands)
         self.assertEqual(push.call_args[0][1:3], (b'initrd', '/surfos-dev-stick/surfos-dev/initrd.tar.new'))
 
+    def test_deploy_says_to_check_the_stick_when_mv_fails_with_io(self):
+        """10/17/26: an mv into place cut short by an I/O error may leave both names on one cluster chain, so
+        deploy says to check the stick before deploying again; it still ejects the stick"""
+        class Failing(self.Session):
+            def check(self, cmd, timeout=60, ok=None):
+                if cmd.startswith('mv '):
+                    self.commands.append(cmd)
+                    raise devloop.DevloopError(f'{cmd}: mv: I/O error')
+                return super().check(cmd, timeout, ok)
+        s = Failing(marker=True)
+        with mock.patch.object(devloop, 'push'):
+            with self.assertRaisesRegex(devloop.DevloopError, 'I/O error: the rename may have half happened, so check '
+                                                              'the stick'):
+                devloop.deploy(s, b'kernel bootvol=', b'initrd', 'a build')
+        self.assertEqual(s.commands[-1], 'eject usb0')
+
     def test_deploy_says_when_a_kernel_does_not_know_the_stick(self):
         s = self.Session(marker=False)
         out = io.StringIO()

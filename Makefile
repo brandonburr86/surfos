@@ -428,6 +428,29 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
+# 10/17/26: edit's saving and rx's start, user/bin/edit.c and rx.c as they are, against the user headers with
+# the C library's and the system calls' names, on the in-memory file system of tests/host/sim_fs.c
+SIM_FLAGS = -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h \
+            -include tests/host/sim_names.h -MMD -MP
+$(BUILD)/host/sim/%.o: tests/host/%.c tests/host/sim_fs.h tests/host/sim_names.h tests/host/libsurf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(SIM_FLAGS) -c $< -o $@
+$(BUILD)/host/sim/edit_bridge.o: user/bin/edit.c tests/host/edit_sim.h
+$(BUILD)/host/sim/rx_bridge.o: user/bin/rx.c
+$(BUILD)/host/test_edit: tests/host/test_edit.c tests/host/edit_sim.h $(BUILD)/host/sim/edit_bridge.o $(BUILD)/host/sim/sim_fs.o \
+                         $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_edit.c $(filter %.o,$^) -o $@
+$(BUILD)/host/test_rx: tests/host/test_rx.c tests/host/sim_fs.h $(BUILD)/host/sim/rx_bridge.o $(BUILD)/host/sim/sim_fs.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_rx.c $(filter %.o,$^) -o $@
+test-edit: $(BUILD)/host/test_edit $(BUILD)/host/test_rx
+	$(BUILD)/host/test_edit
+	$(BUILD)/host/test_rx
+unittest: test-edit
+.PHONY: test-edit
+
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
 	@mkdir -p $(dir $@)
@@ -515,6 +538,7 @@ help:
 
 .PHONY: all run run-vga test test-all test-tcp unittest debug iso run-iso images user clean help usb-image test-usb test-mkusb
 -include $(DEPS) $(wildcard $(BUILD)/host/*.d $(BUILD)/host/kernel/*/*.d $(BUILD)/host/libsurf/*.d $(BUILD)/host/pager/*/*.d \
+                           $(BUILD)/host/sim/*.d \
                            $(BUILD)/host/pager/tests/host/*.d)
 
 # Undertow (10/10/26): bounded DNS packet decoding, constructed packets on the host.
