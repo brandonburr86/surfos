@@ -831,7 +831,10 @@ $(BUILD)/host/test_pointer: tests/host/test_pointer.c $(BUILD)/host/pointer.o $(
 unittest: unittest-gui
 unittest-gui: $(BUILD)/host/test_pointer
 .PHONY: unittest-gui
-$(BUILD)/host/test_gui: tests/host/test_gui.c $(BUILD)/host/kernel/shell/guicore.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o $(HOSTLIB_OBJ)
+# 10/17/26: the desktop's model is several files (shell/guipriv.h); Notepad and Files run against an in-memory file system
+GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog) \
+               $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
+$(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 unittest-gui: $(BUILD)/host/test_gui
 	$(BUILD)/host/test_pointer

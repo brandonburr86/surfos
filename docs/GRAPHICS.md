@@ -8,7 +8,7 @@ has Intel UHD graphics; the exact installed graphics PCI ID and current panel
 mode still need a fresh reading from the laptop.
 
 The [SurfOS desktop](GUI.md) uses this interface for a menu bar, movable windows,
-Calculator and Sketch. Launch it with `gui`.
+Notepad, Files, Calculator and Sketch. Launch it with `gui`.
 
 ## Try it
 
