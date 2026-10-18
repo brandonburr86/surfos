@@ -20,7 +20,8 @@ a file of a vnode that has no path (a network connection, net/sock.c).
 while a command may mount it too): a mount being made is noted, path and device,
 under mount_lock before the file system reads the volume (FAT may count its free
 clusters for seconds), so a second mount of the same device or path is refused
-then too, not only once the first is on the list. vfs_hold_mount() holds the
+then too, not only once the first is on the list; so is a device being unmounted,
+until its blocks are let go (binvalidate() would drop a new mount's). vfs_hold_mount() holds the
 mount of a device for a while, so it can neither go nor be swapped meanwhile.
 */
 
@@ -317,13 +318,20 @@ int vfs_umount(const char *path) {
     struct mount *m, **pp;
     struct superblock *sb;
     char abs[VFS_PATH_MAX];
-    int r = vfs_normalize("/", path, abs, sizeof(abs));
+    int r = vfs_normalize("/", path, abs, sizeof(abs)), i, slot = -1;
     if(r) return r;
     if(!strcmp(abs, "/")) return -EBUSY;
     mutex_lock(&mount_lock);
     for(pp = &mounts; (m = *pp) != NULL; pp = &m->next) if(!strcmp(m->path, abs)) break;
     if(!m) { mutex_unlock(&mount_lock); return -ENOENT; }
     if(in_use(m, NULL, 0)) { mutex_unlock(&mount_lock); return -EBUSY; }   /* open files, a cwd: vfs_busy says which */
+    if(m->sb->dev) {                                /* 10/17/26: the device stays noted until it is let go below, so */
+        for(i = 0; i < PENDING_MAX && slot < 0; i++) if(!pending[i].used) slot = i;   /* no mount of it comes between */
+        if(slot < 0) { mutex_unlock(&mount_lock); return -EBUSY; }
+        pending[slot].used = true;
+        pending[slot].dev = m->sb->dev;
+        pending[slot].path[0] = 0;
+    }
     *pp = m->next;
     mutex_unlock(&mount_lock);
     sb = m->sb;
@@ -337,6 +345,11 @@ int vfs_umount(const char *path) {
     if(sb->dev) {
         binvalidate(sb->dev);
         bdev_put(sb->dev);
+    }
+    if(slot >= 0) {
+        mutex_lock(&mount_lock);
+        unpend(slot);
+        mutex_unlock(&mount_lock);
     }
     kfree(sb);
     kfree(m);

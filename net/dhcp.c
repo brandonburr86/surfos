@@ -20,9 +20,13 @@ Ethernet link comes back, the manager has the address confirmed (DHCP_REBOOTING:
 asked for, RFC 2131 4.3.2), and a NAK drops it. Requests carry the host
 name of the settings (option 12), so a router can list SurfOS by name. The kernel word
 dhcplease=<seconds> shortens every lease to that, for the tests: a real lease is a day or more.
-An address set by hand (ifconfig) has no lease, and nothing renews it.
+An address set by hand (ifconfig) has no lease, and nothing renews it. A dhcp waiting for another
+one now waits up to 30 s and counts its own time limit from when it has port 68, so a request
+made while the manager asks in the background still gets all its tries; the manager's waits and
+failures are said in the log only.
 */
 
+#include <stdarg.h>
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/timer.h>
@@ -142,7 +146,7 @@ static int expect(struct udp_socket *s, u32 xid, u8 type, struct dhcp_msg *m, u_
         const u8 *t;
         u_int n, l;
         int r;
-        if(now >= deadline) return -1;
+        if((long)(now - deadline) >= 0) return -1;     /* 10/17/26: as ticks wrap */
         r = udp_recvfrom(s, m, sizeof(*m), NULL, NULL, (deadline - now) * (1000 / HZ));
         if(r < 0) return -1;
         n = (u_int)r;
@@ -155,15 +159,30 @@ static int expect(struct udp_socket *s, u32 xid, u8 type, struct dhcp_msg *m, u_
     }
 }
 
-/* 10/10/26: dhcp_lock for dev, waited for until the deadline or a Ctrl+C; 0, or -1 when not had */
-static int one_at_a_time(struct netdev *dev, u_long deadline) {
+/* a line on the screen and in the log, or (quiet: the network manager's background work) in the log only */
+static void say(bool quiet, const char *fmt, ...) {
+    char line[96];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if(quiet) klog_write(line);
+    else kprintf("%s", line);
+}
+
+/* 10/10/26: dhcp_lock for dev, waited for until the deadline or a Ctrl+C; 0, or -1 when not had. 10/17/26: the
+   callers wait up to LOCK_WAIT_MS for it and count their own time from when they have it, so a dhcp waiting for
+   another one (the network manager's in the background, say) still gets its tries */
+#define LOCK_WAIT_MS 30000
+static int one_at_a_time(struct netdev *dev, bool quiet) {
+    u_long deadline = getticks() + LOCK_WAIT_MS / (1000 / HZ);
     bool said = false;
     while(!mutex_trylock(&dhcp_lock)) {
         struct netdev *busy = dhcp_dev;
-        if(!said) kprintf("dhcp: %s: waiting for the dhcp on %s\n", dev->name, busy ? busy->name : "another interface");
+        if(!said) say(quiet, "dhcp: %s: waiting for the dhcp on %s\n", dev->name, busy ? busy->name : "another interface");
         said = true;
-        if(getticks() >= deadline || sleep_intr(50)) {
-            kprintf("dhcp: %s: not tried: another dhcp was still running\n", dev->name);
+        if((long)(getticks() - deadline) >= 0 || sleep_intr(50)) {
+            say(quiet, "dhcp: %s: not tried: another dhcp was still running\n", dev->name);
             return -1;
         }
     }
@@ -230,25 +249,26 @@ int dhcp_configure_quiet(struct netdev *dev, u_long timeout_ms, bool quiet) {
     struct udp_socket *s;
     struct dhcp_msg *m;
     u32 xid = (u32)getticks() * 2654435761UL ^ 0x5f0f1e2d, secs;
-    u_long deadline = getticks() + timeout_ms / (1000 / HZ);
+    u_long deadline;
     ipaddr_t offered = 0, server = 0;
     const u8 *o;
     u_int l, n;
     int attempt, r = -1;
     char a[16], b[16];
 
-    if(one_at_a_time(dev, deadline)) return -1;
+    if(one_at_a_time(dev, quiet)) return -1;
+    deadline = getticks() + timeout_ms / (1000 / HZ);
     s = udp_open(DHCP_CLIENT_PORT);
     if(!s) { done(); kprintf("dhcp: port 68 is busy\n"); return -1; }
     udp_bind_dev(s, dev);
     m = (struct dhcp_msg *)kalloc(sizeof(*m));
     if(!m) { udp_close(s); done(); return -1; }
-    for(attempt = 0; attempt < 3 && getticks() < deadline; attempt++) {
+    for(attempt = 0; attempt < 3 && (long)(getticks() - deadline) < 0; attempt++) {
         n = build(m, dev, xid, DHCP_DISCOVER, 0, 0, 0);
         if(udp_sendto(s, IP_BROADCAST, DHCP_SERVER_PORT, m, n) != 0) break;
         {
             u_long step = getticks() + 2 * HZ;
-            r = expect(s, xid, DHCP_OFFER, m, step < deadline ? step : deadline);
+            r = expect(s, xid, DHCP_OFFER, m, (long)(step - deadline) < 0 ? step : deadline);
         }
         if(r <= 0) continue;
         offered = m->yiaddr;
@@ -258,7 +278,7 @@ int dhcp_configure_quiet(struct netdev *dev, u_long timeout_ms, bool quiet) {
         if(udp_sendto(s, IP_BROADCAST, DHCP_SERVER_PORT, m, n) != 0) break;
         {
             u_long step = getticks() + 2 * HZ;
-            r = expect(s, xid, DHCP_ACK, m, step < deadline ? step : deadline);
+            r = expect(s, xid, DHCP_ACK, m, (long)(step - deadline) < 0 ? step : deadline);
         }
         if(r > 0) break;
     }
@@ -299,17 +319,18 @@ static void drop_if(struct netdev *dev, const char *why, ipaddr_t ip0, u_long at
 }
 
 /* 10/17/26 (dhcp.h): two tries, each waiting 2 s at most for the answer */
-int dhcp_renew(struct netdev *dev, int how, u_long timeout_ms, u_long lease_at) {
+int dhcp_renew(struct netdev *dev, int how, u_long timeout_ms, u_long lease_at, bool quiet) {
     struct udp_socket *s;
     struct dhcp_msg *m;
     u32 xid = (u32)getticks() * 2654435761UL ^ 0x7e1ea5ed, secs;
-    u_long deadline = getticks() + timeout_ms / (1000 / HZ), at;
+    u_long deadline, at;
     ipaddr_t ip, server;
     u_int n;
     int attempt, r = -1;
     char a[16];
 
-    if(one_at_a_time(dev, deadline)) return -1;
+    if(one_at_a_time(dev, quiet)) return -1;
+    deadline = getticks() + timeout_ms / (1000 / HZ);
     mutex_lock(&net_lock);                         /* the lease as it is once the lock is had: the one meant? */
     ip = dev->ip;
     server = dev->dhcp_server;
@@ -322,14 +343,14 @@ int dhcp_renew(struct netdev *dev, int how, u_long timeout_ms, u_long lease_at) 
     udp_bind_dev(s, dev);
     m = (struct dhcp_msg *)kalloc(sizeof(*m));
     if(!m) { udp_close(s); done(); return -1; }
-    for(attempt = 0; attempt < 2 && getticks() < deadline && r != -2; attempt++) {
+    for(attempt = 0; attempt < 2 && (long)(getticks() - deadline) < 0 && r != -2; attempt++) {
         /* renewing and rebinding: no requested address, no server, ciaddr says it; rebooting (a link back): the
            address asked for in option 50, ciaddr 0 (RFC 2131 4.3.2) */
         n = how == DHCP_REBOOTING ? build(m, dev, xid, DHCP_REQUEST, ip, 0, 0) : build(m, dev, xid, DHCP_REQUEST, 0, 0, ip);
         if(udp_sendto(s, how == DHCP_RENEWING ? server : IP_BROADCAST, DHCP_SERVER_PORT, m, n) != 0) break;
         {
             u_long step = getticks() + 2 * HZ;
-            r = expect(s, xid, DHCP_ACK, m, step < deadline ? step : deadline);
+            r = expect(s, xid, DHCP_ACK, m, (long)(step - deadline) < 0 ? step : deadline);
         }
         if(r > 0) break;
     }

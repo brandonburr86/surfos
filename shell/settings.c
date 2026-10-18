@@ -6,16 +6,18 @@ File: settings.c    Date: 10/17/26 (the network manager)
     settings                    every setting with its value, and where they are kept
     settings <key>              one: its value, the values it takes and what it does
     settings <key> <value>      change it (also "settings <key> = <value>", as the file has it):
-                                in force at once where that means anything, and saved in
-                                surfos-config/settings.conf on the stick SurfOS was started from,
-                                which every start reads (kernel/netman.c)
+                                saved in surfos-config/settings.conf on the stick SurfOS was started
+                                from, which every start reads (kernel/netman.c), and in force at
+                                once where that means anything: telnetd and telnetd.port act at a
+                                start, and under settings=off (the menu's entry without the
+                                settings) nothing changes before the next start
 
 The keys and their values are net/netcfg.c's: telnetd, telnetd.port, wifi, ethernet, hostname.
 The file is changed one line at a time, so what the owner wrote there on another computer stays.
 
 A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in statics, asks nothing.
 0, 1 or 2 as the other commands: a key or a value it does not know is a usage error (2); a change
-not saved on the stick is a failure (1), and says why.
+not saved on the stick is a failure (1), and says why (and whether it is in force meanwhile).
 */
 
 #include <surfos/types.h>
@@ -60,10 +62,11 @@ static void show(const struct netcfg_settings *s, int k, bool full) {
 }
 
 int cmd_settings(int argc, char **argv) {
-    struct netcfg_settings s;
+    struct netcfg_settings s, t;
     struct netman_net nets[NETCFG_NETS_MAX];
     char where[200], why[200], key[24], v[VALUE_MAX];
     const char *value = NULL, *eq;
+    bool off = netman_settings_off();
     int k, r, n;
 
     netman_settings(&s);
@@ -105,17 +108,22 @@ int cmd_settings(int argc, char **argv) {
         show(&s, k, true);
         return CMD_OK;
     }
+    t = s;                                              /* the new value, as the file writes it */
+    if(netcfg_set(&t, k, value, why, sizeof(why))) {
+        printf("    settings: %s\n", why);
+        return CMD_USAGE;
+    }
+    netcfg_value(&t, k, v, sizeof(v));
     r = netman_set(k, value, why, sizeof(why));
     if(r < 0) {
         printf("    settings: %s\n", why);
         return CMD_USAGE;
     }
-    netman_settings(&s);
-    netcfg_value(&s, k, v, sizeof(v));
-    if(r > 0 && (k == NETCFG_TELNETD || k == NETCFG_TELNETD_PORT)) {    /* read only at a start: nothing to do now */
-        printf("    settings: %s = %s not saved: %s; it would act at the next start only, so nothing changes%s\n",
-               netcfg_key_name(k), v, why, k == NETCFG_TELNETD ? (s.telnetd ? " (telnetd on starts the server now)" :
-                                                                  " (telnetd off stops the server now)") : "");
+    if(r > 0 && (off || k == NETCFG_TELNETD || k == NETCFG_TELNETD_PORT)) {     /* nothing in force: nothing changes */
+        printf("    settings: %s = %s not saved: %s; %s, so nothing changes%s\n", netcfg_key_name(k), v, why,
+               off ? "this start does not use the settings (settings=off)" : "it would act at the next start only",
+               k == NETCFG_TELNETD ? (t.telnetd ? " (telnetd on starts the server now)" :
+                                     " (telnetd off stops the server now)") : "");
         return CMD_FAIL;
     }
     if(r > 0) {
@@ -123,10 +131,12 @@ int cmd_settings(int argc, char **argv) {
         return CMD_FAIL;
     }
     printf("    %s = %s, saved on %s (%s/%s): %s\n", netcfg_key_name(k), v,
-           bdev_boot_vol() ? bdev_boot_vol()->name : "the stick", NETCFG_DIR, NETCFG_SETTINGS, when(k, &s));
-    if(k == NETCFG_TELNETD && s.telnetd)
+           bdev_boot_vol() ? bdev_boot_vol()->name : "the stick", NETCFG_DIR, NETCFG_SETTINGS,
+           off ? "from the next start (this one does not use the settings: settings=off)" : when(k, &t));
+    if(k == NETCFG_TELNETD && t.telnetd)
         printf("    telnetd has no password and no encryption: whoever reaches the laptop over a network SurfOS is on\n"
                "    gets a shell. It starts only once there is an address on Ethernet or a WPA2 network, and while it\n"
-               "    runs SurfOS joins no open Wi-Fi network by itself. Use it on your own networks only.\n");
+               "    runs SurfOS joins no open Wi-Fi network by itself. But SurfOS cannot tell whose network it is:\n"
+               "    a cafe's WPA2 network, whose password others know, counts too. Save only your own networks.\n");
     return CMD_OK;
 }

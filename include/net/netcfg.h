@@ -97,7 +97,10 @@ struct netcfg_net {
 #define NETCFG_SPANS_MAX     16
 struct netcfg_span {
     u_int start, end;
+    u_int line;                     /* the line it starts at, from 1 */
     bool loose;
+    bool password;                  /* a line of it is a password (or one commented out): SurfOS never writes one, so a
+                                       writer's caller must not write the file with this part in it */
 };
 
 /* the networks of a file of len bytes, in order, into nets (max); how many. A network with a problem (no name, a
@@ -115,6 +118,13 @@ int netcfg_write_networks(const struct netcfg_net *nets, int n, const char *old,
                           int nkept, char *out, u_int size);
 
 int netcfg_find_net(const struct netcfg_net *nets, int n, const u8 *ssid, u_int len);   /* its index, or -1 */
+
+/* does text (len bytes), read again, give exactly nets[0..n): the same names, securities, hidden marks and keys, in
+   that order, and no password? (A part kept as it was must not come back as a network: a name written twice by hand,
+   say, whose first was just forgotten.) scratch: NETCFG_NETS_MAX networks to read into, wiped afterwards; *kept (may
+   be NULL): the parts the text keeps */
+bool netcfg_reads_back(const char *text, u_int len, const struct netcfg_net *nets, int n, struct netcfg_net *scratch,
+                       int *kept);
 
 /* an SSID (len bytes) as the file writes it: in double quotes, printable ASCII as it is but \ and ", which get a
    backslash, every other byte \xHH. The length, or -1 when it does not fit */

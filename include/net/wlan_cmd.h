@@ -53,10 +53,12 @@ struct wlan_station_info {
 int wlan_station(struct wlan_dev *w, struct wlan_station_info *out, bool want_key);
 
 /* wlan_up() and wlan_join() (the strongest access point with that name) for the network manager: -ECANCELED, and
-   nothing done, when a wifi leave or wifi down was asked for after the snapshot whose stops is given. *join (may be
-   NULL): the number the join request got, what join_requests says while the association it makes lasts */
+   nothing done, when a wifi leave or wifi down was asked for after the snapshot whose stops is given. quiet: a join
+   tried again, whose failure goes to the kernel log only (dmesg), not the screen. *join (may be NULL): the number the
+   join request got, what join_requests says while the association it makes lasts */
 int wlan_up_unless(struct wlan_dev *w, u_int stops);
-int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, u_int *join);
+int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, bool quiet,
+                     u_int *join);
 
 /* 10/17/26: the simulated chip's access point named ssid off or on (driver/wifi/wlansim.c, the tests' wlansim
    command): 0, -ENOENT, -ENODEV without the kernel word wlansim */

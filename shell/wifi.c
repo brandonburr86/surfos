@@ -209,8 +209,13 @@ static int joined(struct wlan_dev *w, const char *name, const char *ap, int r) {
         struct wlan_station_info si;
         describe(w);
         printf("    joined %s: dhcp %s gets an address\n", name, w->name);
-        if(netman_can_save() && wlan_station(w, &si, false) == 0 && !is_saved(si.ssid, si.ssid_len))   /* 10/17/26 */
-            printf("    (wifi save keeps it on the stick, for SurfOS to join by itself at startup)\n");
+        if(wlan_station(w, &si, false) == 0) {          /* 10/17/26 */
+            if(si.security == WLAN_SEC_OPEN && netman_telnet_exposed())
+                printf("    (a telnet server runs or is to start, and it has no password: it answers on this open\n"
+                       "    network too; telnetd off stops it)\n");
+            if(netman_can_save() && !netman_settings_off() && !is_saved(si.ssid, si.ssid_len))
+                printf("    (wifi save keeps it on the stick, for SurfOS to join by itself at startup)\n");
+        }
         return CMD_OK;
     }
     if(r == -EACCES) printf("    wifi: could not join %s: the 4-way handshake failed: the password may be wrong\n", name);
@@ -411,7 +416,7 @@ static int heard_as(struct wlan_dev *w, const u8 *ssid, u_int len, bool *hidden)
 static int wifi_save(struct wlan_dev *w, int argc, char **argv) {
     struct netcfg_net net;
     struct wlan_station_info si;
-    char name[4 * WLAN_SSID_MAX + 1], pass[PASS_MAX], question[4 * WLAN_SSID_MAX + 48];
+    char name[4 * WLAN_SSID_MAX + 1], pass[PASS_MAX], question[4 * WLAN_SSID_MAX + 64];
     u_int len;
     int security, r;
 

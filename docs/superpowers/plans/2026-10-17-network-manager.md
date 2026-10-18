@@ -31,8 +31,9 @@ Telnet on by default", saved to the USB drive in use and loaded at boot.
   the only volume SurfOS may write that is surely the owner's own stick. A flashed SURFOSUSB stick
   is read (a folder put there on the Mac works) but never written. With no `bootvol=` (QEMU's
   `-kernel`, the ISO), or with `settings=off`, there are no settings: nothing is read or joined
-  and no host name is sent. The one change in every start: DHCP leases are renewed (RFC 2131),
-  and given up when they run out.
+  and no host name is sent (unless `settings hostname` is typed without `bootvol=`). The one
+  change in every start: DHCP leases are renewed (RFC 2131) and given up when they run out, and
+  an Ethernet address is confirmed when its link comes back (INIT-REBOOT).
 * **The Wi-Fi key, not the password.** The 2026-10-09 rule was that the password is never written
   to a file. A network that joins by itself at startup needs something stored, so `wifi save`
   stores the network's PSK (the 256-bit PMK, PBKDF2 of the password and the SSID, as
@@ -42,13 +43,15 @@ Telnet on by default", saved to the USB drive in use and loaded at boot.
   when it reads the file, and a later save writes the key in its place. Agents still never ask
   for, type or store the owner's password: tests use wlansim's test network.
 * **telnetd at startup** is the owner's choice now (`telnetd = on`), off by default; the kernel
-  word `autonet` (GRUB's development entry) still starts it whatever the file says. Either
-  starts it only once there is an address on Ethernet or a WPA2 network, never because of an
-  open one, and while a server runs or is to start the manager joins no open network by itself
-  (first review, 2026-10-17: saved networks must not open a passwordless shell to a café).
+  word `autonet` (GRUB's development entry) still starts it whatever the file says, for an
+  Ethernet link only, as before. The setting starts it only once there is an address on
+  Ethernet or a WPA2 network, never because of an open one, and while a server runs or is to
+  start the manager joins no open network by itself (first review, 2026-10-17: saved networks
+  must not open a passwordless shell to a café). SurfOS cannot tell whose WPA2 network it is:
+  the guide says to save only one's own networks with `telnetd = on` (second review).
 * **Defaults keep today's behaviour:** without a settings file, or with one that sets nothing,
   a start is what it was (no telnetd, no DHCP by itself, the card left alone until a network is
-  saved).
+  saved), but for DHCP requests carrying the host name `surfos` once the settings are read.
 * **Order:** the saved networks are tried in the file's order; `wifi save` puts the network it
   saves first ("the one I'm choosing").
 * **Manual commands win:** `wifi leave` and `wifi down` stop the automatic joining until
@@ -57,7 +60,9 @@ Telnet on by default", saved to the USB drive in use and loaded at boot.
   point gone), the manager looks for a saved one every 30 s, later every 2 minutes. A leave or
   down typed while the manager is at work calls off its next request (the station's `stops`).
 * **What SurfOS cannot read in networks.conf is kept**, as it was, and never taken for an open
-  network; a save never drops what was written by hand.
+  network; a save keeps the networks written by hand that SurfOS cannot read (not comments, nor
+  an unknown line in a network it uses), and refuses to write a file that would keep a password
+  or bring a left-out network back (second review).
 
 ## Pieces
 
@@ -65,12 +70,12 @@ Telnet on by default", saved to the USB drive in use and loaded at boot.
 |---|---|---|
 | The files' format | `net/netcfg.c`, `include/net/netcfg.h` | pure: parse and edit `settings.conf` keeping the owner's lines and comments, parse and write `networks.conf`, SSIDs quoted with escapes, the DHCP lease timers; host-tested (`tests/host/test_netcfg.c`) |
 | The manager | `kernel/netman.c`, `include/net/netman.h` | the settings in RAM, the boot volume read and written through a short mount (or the owner's own mount), the `netman` thread (settings at boot, Ethernet DHCP on link, lease renewals, telnetd at startup) and `wifiman` (the Wi-Fi keeper) |
-| autonet | `kernel/autonet.c` | unchanged lines for Ethernet; every Ethernet link in its 90 s gets a lease, a Wi-Fi address is the keeper's; telnetd only for a trusted address |
+| autonet | `kernel/autonet.c` | as before, for Ethernet only (a Wi-Fi address and telnetd for Wi-Fi are the manager's); `autonet_busy()` |
 | DHCP | `net/dhcp.c` | the lease per interface (server, time, obtained), renewal (`dhcp renew`), the host name (option 12); `dhcplease=` caps lease times for the tests |
 | The station | `net/wlan/wlan.c`, `include/net/wlan_cmd.h` | `wlan_station()`: state, SSID, security, hidden, why it is idle, a join counter, and the key for `wifi save` |
 | The boot volume | `driver/part.c`, `include/sys/bdev.h` | `bdev_boot_vol()`: the volume GRUB was started from, writable or not |
 | Commands | `shell/settings.c`, `shell/wifi.c`, `shell/main.c` | `settings`, `wifi save/forget/saved/connect`, `dhcp renew` |
-| The menu | `boot/grub-usb.cfg` | the entry without the settings, after the existing ones (the tests pick entries by position) |
+| The menu | `boot/grub-usb.cfg` | the entry without the settings, after the existing SurfOS entries and before UEFI setup, Restart and Power off (the tests pick entries by position) |
 | Tests | `tools/qemu-run.py`, `tools/qemu-usb.py` | smoke steps; boots with a settings disk that persist across reboots (wlansim: save, reboot, joined by itself, DHCP, telnetd); a USB scenario through GRUB on a one-stick |
 | Docs | `docs/USB-BOOT.md` section 15, `ARCHITECTURE.md` section 19, `CLAUDE.md`, `ONE-STICK.md` | the guide, the design, the rules |
 

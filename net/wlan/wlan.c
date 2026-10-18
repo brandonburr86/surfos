@@ -72,6 +72,7 @@ password.
 #include <surfos/sync.h>
 #include <surfos/irq.h>
 #include <surfos/timer.h>
+#include <surfos/klog.h>
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
@@ -175,6 +176,8 @@ struct wlan_state {
     volatile u_int stops;               /* 10/17/26: wifi leave and wifi down requests posted so far (under irq_save) */
     bool req_if;                        /* 10/17/26: the request is only carried out while stops is req_stops */
     u_int req_stops;
+    bool req_quiet;                     /* 10/17/26: the network manager trying again: its failure to the log only */
+    bool join_quiet;                    /* the join under way is such a one */
     bool hw_joined;                     /* join() was called: leave() undoes it */
     bool authed;                        /* the AP authenticated us: it is told when we go */
     bool user_join;                     /* a command waits for this join */
@@ -321,7 +324,7 @@ static void req_complete(struct wlan_state *st, int result) {
 /* a command asks the thread for op and waits for its result: -EBUSY when another command's request
    is pending, -EINTR when the command is cut short (the thread then cancels the request itself) */
 static int request_if(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, const u8 *bssid, const u8 *pmk,
-                      u_int timeout_ms, bool check, u_int stops, u_int *join) {
+                      u_int timeout_ms, bool check, u_int stops, bool quiet, u_int *join) {
     struct wlan_state *st = w->st;
     u_long flags = irq_save();
     u_int seq;
@@ -340,6 +343,7 @@ static int request_if(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len
     st->req_timeout_ms = timeout_ms;
     st->req_if = check;
     st->req_stops = stops;
+    st->req_quiet = quiet;
     flags = irq_save();
     st->req_cancel = false;
     st->req_abandoned = false;
@@ -565,7 +569,14 @@ static void join_fail(struct wlan_state *st, int err, u16 reason, const char *wh
     unjoin(st, reason);
     set_last(st, why);
     if(st->user_join) {
-        kprintf("%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s), why);
+        if(st->join_quiet) {                            /* 10/17/26: the network manager's try again: the log */
+            char line[WLAN_SSID_MAX + 160];
+            snprintf(line, sizeof(line), "%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s),
+                     why);
+            klog_write(line);
+        } else {
+            kprintf("%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s), why);
+        }
         st->idle_why = WLAN_IDLE_JOIN_FAILED;           /* 10/17/26: before the state, which wlan_station() reads first */
         st->state = ST_IDLE;
         forget(st);
@@ -1036,6 +1047,7 @@ static void req_start(struct wlan_state *st) {
         if(st->has_pin) memcpy(st->pin, st->req_bssid, WLAN_ADDR_LEN);
         wipe(st->req_pmk, sizeof(st->req_pmk));
         st->reconnects = 0;
+        st->join_quiet = st->req_quiet;                 /* 10/17/26 */
         join_start(st, true);
         break;
     default:
@@ -1278,7 +1290,7 @@ struct wlan_dev *wlan_find(const char *name) {
 /* a request as a command makes it (no condition) */
 static int request(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, const u8 *bssid, const u8 *pmk,
                    u_int timeout_ms) {
-    return request_if(w, op, ssid, ssid_len, bssid, pmk, timeout_ms, false, 0, NULL);
+    return request_if(w, op, ssid, ssid_len, bssid, pmk, timeout_ms, false, 0, false, NULL);
 }
 
 int wlan_up(struct wlan_dev *w) {
@@ -1290,13 +1302,14 @@ int wlan_up(struct wlan_dev *w) {
    asked for since its snapshot said stops */
 int wlan_up_unless(struct wlan_dev *w, u_int stops) {
     if(!w) return -ENODEV;
-    return request_if(w, REQ_UP, NULL, 0, NULL, NULL, 0, true, stops, NULL);
+    return request_if(w, REQ_UP, NULL, 0, NULL, NULL, 0, true, stops, false, NULL);
 }
 
-int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, u_int *join) {
+int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, bool quiet,
+                     u_int *join) {
     if(!w) return -ENODEV;
     if(!ssid || !ssid_len || ssid_len > WLAN_SSID_MAX) return -EINVAL;
-    return request_if(w, REQ_JOIN, ssid, ssid_len, NULL, pmk, 0, true, stops, join);
+    return request_if(w, REQ_JOIN, ssid, ssid_len, NULL, pmk, 0, true, stops, quiet, join);
 }
 
 int wlan_down_wait(struct wlan_dev *w) {

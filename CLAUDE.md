@@ -23,9 +23,10 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
                   # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py),
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
-                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
+                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
+                  # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 15 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 18 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -108,7 +109,7 @@ tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk ima
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
            hand-made segments), devloop.py (development builds onto the laptop over the network)
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
-           protocol, telnetd's loop), test_part_tools.py,
+           protocol, telnetd's loop, the network manager's files), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
@@ -152,10 +153,12 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   owner's choice: never start it by itself. The exceptions are the kernel word `autonet`
   (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13),
   and the owner's own setting `telnetd = on` in surfos-config/settings.conf on their stick
-  (kernel/netman.c, docs/USB-BOOT.md section 15), off unless they set it. Both start it only
-  for an address on Ethernet or a WPA2 Wi-Fi network (`netman_trusted()`), never for an open
-  network, and while a server runs or is to start the Wi-Fi keeper joins no open network by
-  itself (`netman_telnet_exposed()`): keep it so.
+  (kernel/netman.c, docs/USB-BOOT.md section 15), off unless they set it. autonet starts it
+  only for an Ethernet link, the setting only for an address on Ethernet or a WPA2 Wi-Fi
+  network (`netman_trusted()`), never for an open network, and while a server runs or is to
+  start the Wi-Fi keeper joins no open network by itself (`netman_telnet_exposed()`): keep it
+  so. networks.conf is never written with a password in it (a part kept as it was that has
+  one makes the change refused).
 * Wi-Fi passwords (2026-10-09, 2026-10-17): an agent never asks for, types, logs or stores
   the owner's password; tests use wlansim's test network. SurfOS keeps a saved network's key
   (the PMK) in networks.conf on the owner's stick, at the owner's request, never the password,
@@ -260,7 +263,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   files on a mounted external FAT volume, never onto the flashed SURFOSUSB stick or over another system's boot
   files; never point it at a stick the owner has not named.
 * Wi-Fi (docs/superpowers/plans/2026-10-09-wifi.md): `wifi up | down | scan | join <ssid> [bssid] | status |
-  leave` (shell/wifi.c); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
+  leave`, and since 10/17/26 `wifi save [ssid] | forget <ssid> | saved | connect` (shell/wifi.c, the network
+  manager); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
   the PMK at once. The kernel word `wlansim` gives a simulated card with six access points (SurfSim, SurfSimWPA
   with the test passphrase in tools/qemu-run.py, a hidden one, WEP, WPA3-only, a flaky one) bridged onto eth0, so
   `dhcp wlan0` works in QEMU; the smoke test's `@boot wlansim net` and `@boot wlansim usbnet-later` blocks drive

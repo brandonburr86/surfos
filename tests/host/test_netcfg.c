@@ -36,8 +36,13 @@ static void clear_notes(void) {
     nnotes = 0;
 }
 
+/* a note with text in it; text starting with a line number matches only at the start of a note ("6: ..." is not
+   "16: ...") */
 static bool has_note(const char *text) {
-    return strstr(notes, text) != NULL;
+    const char *p;
+    for(p = strstr(notes, text); p; p = strstr(p + 1, text))
+        if(text[0] < '0' || text[0] > '9' || p == notes || p[-1] == '\n') return true;
+    return false;
 }
 
 static struct netcfg_settings parse_len(const char *text, u_int len) {
@@ -193,6 +198,12 @@ static void test_edit(void) {
     check(n > 0 && !strcmp(out, "telnetd = on   # the default\n"), "a commented-out setting keeps its own comment");
     n = edit("wifi = on\rtelnetd = off\r", NETCFG_TELNETD, "on");
     check(n > 0 && !strcmp(out, "wifi = on\rtelnetd = on\r"), "CR alone stays CR alone");
+    n = edit("wifi = on\r\n", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "wifi = on\r\ntelnetd = on\r\n"), "a line added to a Windows file ends with CR LF");
+    n = edit("wifi = on\r", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "wifi = on\rtelnetd = on\r"), "and to an old Mac's with CR");
+    n = edit("wifi = on\r\ntelnetd = off", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "wifi = on\r\ntelnetd = on\r\n"), "a last line without its end gets the file's");
     n = edit("\xEF\xBB\xBFtelnetd = off\n", NETCFG_TELNETD, "on");
     check(n > 0 && !strcmp(out, "\xEF\xBB\xBFtelnetd = on\n"), "a byte order mark first stays first");
     n = netcfg_edit_settings("x\0y = 1\ntelnetd = off\n", 22, NETCFG_TELNETD, "on", out, sizeof(out));
@@ -402,7 +413,7 @@ static void test_networks(void) {
     check(n == 2 && back[0].ssid_len == 4 && !memcmp(back[0].ssid, "Good", 4) && back[1].ssid_len == 4 &&
           !memcmp(back[1].ssid, "Fine", 4), "of the bad networks none is taken; the good ones are, in order");
     check(has_note("1: a setting before the first network = line (kept as it is)") &&
-          has_note("2: its name is not 1 to 32 bytes in double quotes: the network on this line is left out (and kept") &&
+          has_note("2: its name is not 1 to 32 bytes in double quotes: the network of line 2 is left out (and kept") &&
           has_note("3: a WPA2 network needs its psk (or password): the network \"NoKey\" is left out (and kept") &&
           has_note("6: psk is 64 hexadecimal digits: the network \"ShortKey\" is left out") &&
           has_note("7: an open network has no key or password (security = wpa2?): the network \"OpenWithKey\"") &&
@@ -476,6 +487,67 @@ static void test_networks(void) {
         n = read_nets(many);
         check(n == NETCFG_SPANS_MAX && nkept == NETCFG_SPANS_MAX && has_note("49: too many networks SurfOS cannot read"),
               "more parts not understood than can be kept: the rest is told");
+    }
+    {
+        char many[4096] = "";
+        for(i = 0; i < NETCFG_SPANS_MAX + 1; i++) {     /* 17 lines not understood, a comment between each two */
+            size_t l = strlen(many);
+            snprintf(many + l, sizeof(many) - l, "junk%d\n# between\n", i);
+        }
+        n = read_nets(many);
+        check(nkept == NETCFG_SPANS_MAX && has_note("33: not key = value (not kept: the file has too many parts"),
+              "lines before the networks past what can be kept: said so, not called kept");
+    }
+    n = read_nets("network = \"Home\"\nsecurity = wpa\npassword = \"my real password\"\n");
+    check(n == 0 && nkept == 1 && kept[0].password && kept[0].line == 1 && !kept[0].loose,
+          "a password in a network left out: its part is marked (SurfOS never writes a password)");
+    n = read_nets("network = \"X\"\nsecurity = wep\n# password = \"secret12\"\n");
+    check(n == 0 && nkept == 1 && kept[0].password, "a password commented out in it counts too");
+    n = read_nets("password = \"loose-pass\"\nnetwork = \"A\"\n");
+    check(n == 1 && nkept == 1 && kept[0].loose && kept[0].password && kept[0].line == 1, "so does one before the networks");
+    n = read_nets("network = \"X\"\nsecurity = wep\nnetwork = \"A\"\npassword = \"12345678\"\n");
+    check(n == 1 && nkept == 1 && !kept[0].password, "a password in a network taken does not mark the part before it");
+    n = read_nets("network = \"E\"\npassword = \"a\\\"b\\\\c1234\"\n");
+    check(n == 1 && !strcmp(back[0].password, "a\"b\\c1234"), "a password with \\\" and \\\\ in it");
+    n = read_nets("network = \"H\"\nsecurity = wpa2\npassword = abcdefgh#ij\n");
+    check(n == 0 && has_note("3: a password with a # in it goes in double quotes"), "a bare password with a #: refused");
+    n = read_nets("network = \"H\"\nsecurity = wpa2\npassword = abcdefghij\n");
+    check(n == 1 && !strcmp(back[0].password, "abcdefghij") && !nnotes, "a bare password without one: taken");
+    {
+        static char cr[256], w1[16384], w2[16384];
+        int n1, n2;
+        strcpy(cr, "security = open\rnetwork = \"A\"\rsecurity = open\r");
+        n = read_nets(cr);
+        n1 = netcfg_write_networks(back, n, cr, kept, nkept, w1, sizeof(w1));
+        n = read_nets(w1);
+        n2 = netcfg_write_networks(back, n, w1, kept, nkept, w2, sizeof(w2));
+        check(n1 > 0 && n1 == n2 && !strcmp(w1, w2) && strstr(w1, "up to the first network = line"),
+              "a file with CR alone: written once, the same written again; the loose part's own header");
+    }
+    {
+        static char dup[512], w[16384];
+        struct netcfg_net scratch[NETCFG_NETS_MAX], keep;
+        int nk, k;
+        snprintf(dup, sizeof(dup), "network = \"Cafe\"\nsecurity = open\nnetwork = \"Cafe\"\nsecurity = wpa2\npsk = %s\n",
+                 "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        n = read_nets(dup);
+        nk = nkept;
+        check(n == 1 && nk == 1 && has_note("3: that network was named before"), "a name written twice: the second kept");
+        k = netcfg_write_networks(back, n, dup, kept, nk, w, sizeof(w));
+        check(k > 0 && netcfg_reads_back(w, (u_int)k, back, n, scratch, NULL), "written again as it was: it reads back");
+        keep = back[0];                                 /* forget Cafe: the one written second would come back */
+        k = netcfg_write_networks(back, 0, dup, kept, nk, w, sizeof(w));
+        check(k > 0 && !netcfg_reads_back(w, (u_int)k, back, 0, scratch, NULL),
+              "forgetting it would bring the second back: the check says no");
+        set_net(&back[0], "Cafe", NETCFG_SEC_WPA2, 0x40, false);   /* saving Cafe anew: first, the second still second */
+        k = netcfg_write_networks(back, 1, dup, kept, nk, w, sizeof(w));
+        check(k > 0 && netcfg_reads_back(w, (u_int)k, back, 1, scratch, &i) && i == 1, "saving it again: it reads back");
+        back[0] = keep;
+        n = read_nets("network = \"Home\"\nsecurity = wpa\npassword = \"my real password\"\n");
+        k = netcfg_write_networks(back, 0, "network = \"Home\"\nsecurity = wpa\npassword = \"my real password\"\n",
+                                  kept, nkept, w, sizeof(w));
+        check(k > 0 && !netcfg_reads_back(w, (u_int)k, back, 0, scratch, NULL),
+              "a file that would keep a password does not pass the check");
     }
     check(netcfg_write_networks(nets, 4, NULL, NULL, 0, text, 200) < 0, "a buffer too small: -1");
 }

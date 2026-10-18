@@ -35,8 +35,9 @@ Run the commands below from the `06-restoration` folder in Terminal. Where it sa
      network and the telnet server (no password: on a network you do not trust, choose
      **SurfOS (without the settings on the stick)**, further down, instead).
    * **SurfOS** starts the fallback build in `boot/`: choose it with the arrow keys when
-     a development build misbehaves. It reads the settings, so it starts the telnet
-     server too when they say `telnetd = on`.
+     a development build misbehaves. A build from 10/17/26 on there reads the settings, so
+     it starts the telnet server too when they say `telnetd = on` (an older one reads none:
+     `tools/stick.py install /Volumes/DATASTICK --fallback` puts the new build there too).
    * **SurfOS (without the settings on the stick: no Wi-Fi joined, no telnetd)** starts
      the fallback build without the settings: no network joined, no telnet server.
 3. Check that SurfOS knows its stick: `lsblk` should show the stick's partition with
@@ -57,8 +58,8 @@ A build is two files that belong together, `surfos.bin` (the kernel) and `initrd
 
   `deploy` writes the build onto the stick SurfOS started from, ejects it and restarts
   the laptop into it. With the USB Ethernet adapter the laptop comes back by itself, and
-  over Wi-Fi too once the network is saved on the stick (`wifi save`:
-  [USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
+  over Wi-Fi too once the network is saved on the stick (`wifi save`) and `telnetd = on`
+  is set ([USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
 
 * **On the Mac:**
 

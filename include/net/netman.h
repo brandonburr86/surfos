@@ -61,11 +61,11 @@ int netman_wifi_connect(struct wlan_dev *w);
 
 /**** telnetd ****/
 
-/* an address on a network telnetd may start for by itself (telnetd = on, autonet): Ethernet, or Wi-Fi joined to a
-   WPA2 network; never an open one, which anyone nearby may join */
+/* an address on a network the setting telnetd = on starts telnetd for: Ethernet, or Wi-Fi joined to a WPA2
+   network; never an open one, which anyone nearby may join (autonet starts it for Ethernet only) */
 bool netman_trusted(struct netdev *dev);
-/* a telnet server runs, or is to start by itself (telnetd = on until it has started, autonet until it is done):
-   the keeper then joins no open network by itself */
+/* a telnet server runs or is starting (any telnetd process), or is to start by itself (telnetd = on until it has
+   started, autonet until it is done): the keeper then joins no open network by itself */
 bool netman_telnet_exposed(void);
 /* autonet's telnetd on (port 0: its own, 23) as a process on F1, "+AUTONET:" when it fails: its status, -1 when it
    could not be started or waited for */

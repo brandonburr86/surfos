@@ -618,7 +618,7 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 * **DHCP and DNS** (`dhcp.c`, `dns.c`): DISCOVER/OFFER/REQUEST/ACK on port 68 applies
   address, netmask, router and DNS server (the lease is kept per interface and renewed
   since 10/17/26: section 19); one A query with name compression on the answer.
-* **Shell**: `ifconfig [if ip mask [gw] [dns]]`, `arp`, `ping <ip|name> [n]`, `dhcp`,
+* **Shell**: `ifconfig [if ip mask [gw] [dns]]`, `arp`, `ping <ip|name> [n]`, `dhcp [renew] [if]`,
   `nslookup`, `tcpecho [port]` (a server task), `httpget <host> <port> [path]`,
   `netstat`. Under QEMU's user network the gateway is 10.0.2.2, DHCP gives 10.0.2.15,
   DNS is 10.0.2.3; the harness forwards a host port to guest port 7 and runs an HTTP
@@ -1346,10 +1346,12 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   the path cannot come to name another device), and `stick_lock` keeps it to one at a time. A
   mount being made is noted under the mount table's lock before the file system reads the
   volume, so a command's `mount` of the same stick meanwhile is refused instead of making a
-  second superblock for one volume (`fs/vfs.c`). Without `bootvol=` (QEMU's `-kernel`, the
-  ISO) nothing is read, nothing joined and no host name sent; the kernel word `settings=off`
-  (the menu's entry "without the settings on the stick") skips the reading the same way, and a
-  change made then is saved for the next start without loading anything now.
+  second superblock for one volume; so is a mount of a device still being unmounted (it stays
+  noted until its blocks are let go, which would drop a new mount's) (`fs/vfs.c`). Without
+  `bootvol=` (QEMU's `-kernel`, the ISO) nothing is read, nothing joined and no host name sent
+  (unless `settings hostname` is typed); the kernel word `settings=off` (the menu's entry
+  "without the settings on the stick") skips the reading the same way, and a change made then
+  is saved for the next start without putting anything in force now.
 * **Writing.** Every change first reads the file from the stick, so nothing another
   computer added is lost: `settings.conf` is edited one line at a time (the line of the key
   changed in place with its indentation and comment, the comment moved to a line of its own
@@ -1359,8 +1361,11 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   not take is kept byte for byte (`struct netcfg_span`): the lines before the first network
   ahead of the networks, the blocks of networks it left out after them under a comment, so a
   name written twice stays the second. A change is refused rather than written when the file
-  has more such parts than can be kept (16, those that follow each other counting as one), or a
-  password that makes no key. The text goes to `<name>.new`, which is synced, renamed over the
+  has 16 such parts or more (those that follow each other counting as one), a part kept so with
+  a password line in it (SurfOS would be writing that password), a password that makes no key,
+  or when the text about to be written would not read back as exactly the networks meant
+  (`netcfg_reads_back()`: forgetting the first of a name written twice by hand would make the
+  second the network). The text goes to `<name>.new`, which is synced, renamed over the
   file and read back and compared (through the block cache: the check is of what the file
   system wrote); then the short mount goes (its unmount syncs the cache and the stick's own).
   FAT's rename over a file writes the new entry before it deletes the old: a stick pulled out
@@ -1368,11 +1373,14 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   the rename the old file is as it was.
 * **The files' text** (`net/netcfg.c`). Lines end with LF, CR LF or a CR alone; a UTF-8 byte
   order mark is skipped (and kept by an edit); a line longer than 255 bytes or with a NUL in it
-  is told and skipped; `#` starts a comment outside quotes, and TextEdit's curly quotes count as
-  quotes. In `networks.conf` a block with a problem (no name, a bad key or password, a security
-  SurfOS does not speak, a name seen before, a 17th network) is left out whole, its note naming
-  it; so is a block with a line SurfOS does not understand and no `security` line, which is
-  never taken as an open network (a mistyped `password` would make one).
+  is told, and skipped in `settings.conf`; `#` starts a comment outside quotes, and TextEdit's
+  curly quotes count as quotes. In `networks.conf` a block with a problem (no name, a bad key or
+  password, a bare password with a `#` in it, a security SurfOS does not speak, a name seen
+  before, a 17th network, a line too long, with a NUL or not `key = value`) is left out whole,
+  its note naming it; so is a block with a line SurfOS does not understand and no `security`
+  line, which is never taken as an open network (a mistyped `password` would make one). An
+  unknown key or an unreadable `hidden` value in a block with its `security` is only told: the
+  block is used, and written anew without that line.
 * **Keys, not passwords.** A saved WPA2 network holds its PSK, the PMK (PBKDF2 of the
   password and the SSID). `wifi save` takes the one the station joined with
   (`wlan_station(..., want_key)`: the station keeps it for its reconnects); `wifi save
@@ -1387,17 +1395,22 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   meanwhile (`cmd_set`); then the host name of DHCP requests (option 12). Every second after
   that: an Ethernet interface whose link comes up gets a lease when `ethernet = dhcp` (30 s,
   doubling to 5 minutes, between tries without one, the repeats in the log only; not while
-  autonet runs), and one whose link comes back while it has a lease has the address asked for
-  again (`DHCP_REBOOTING`: option 50, no ciaddr, RFC 2131 4.3.2; a NAK drops it); every lease
+  autonet runs), and one whose link comes back with the lease it had when the link went has the
+  address asked for again (`DHCP_REBOOTING`: option 50, no ciaddr, RFC 2131 4.3.2; a NAK drops
+  it; an interface's first sight is no edge); every lease
   is kept, in every start (`netcfg_lease_step()`: at half its time `dhcp_renew()` asks the
   server that granted it, ciaddr set and no server identifier, as RFC 2131 4.4.5 has it, at
   seven eighths any server, with half the time left between tries; a NAK or the end drops the
   address, `dhcp_drop()`). A renewal and a drop name the lease they are about (`lease_at`) and
-  do nothing when the interface has another by then or an address set by hand. `telnetd = on`
-  starts `telnetd on [port]` as a process on F1 once an interface has an address it may start
-  for (`netman_trusted()`: Ethernet, or Wi-Fi up on a WPA2 network; never an open one, which
-  anyone nearby may join), and collects it if it is slow. The kernel word `autonet` (GRUB's
-  development entry) starts telnetd itself, on 23, under the same rule.
+  do nothing when the interface has another by then or an address set by hand. A dhcp waits up
+  to 30 s for one running on another interface and counts its own time from when it has port
+  68; the manager's background ones say their waits and failures in the log only. `telnetd =
+  on`, as the file said at boot, starts `telnetd on [port]` as a process on F1 once an interface
+  has an address it may start for (`netman_trusted()`: Ethernet, or Wi-Fi up on a WPA2 network;
+  never an open one, which anyone nearby may join; but SurfOS cannot tell whose network it is),
+  unless a telnetd runs already, and collects it if it is slow. With the kernel word `autonet`
+  (GRUB's development entry) it waits until autonet is done, which starts one itself, on 23, for
+  an Ethernet address.
 * **The Wi-Fi keeper** (`wifiman`, when `wifi = on`, a network is saved and a Wi-Fi device
   exists). It brings the card up, scans, and joins the first saved network heard in that
   scan (the scan list keeps a network a minute: one gone silent must not be picked), then
@@ -1405,10 +1418,14 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   for as long as that association has none asks again (30 s, doubling to 5 minutes). The scan
   list marks a BSSID whose beacons carry no SSID (`hidden` in `struct wlan_bss`), which `wifi
   save` keeps. A key refused three times in a row (`-EACCES` from the 4-way handshake, which a
-  lost frame gives as well as a wrong key) is set aside for 10 minutes. While a telnet server
-  runs (a detached user task named telnetd) or is to start by itself (`telnetd = on` until it
-  has started, autonet until it is done), an open saved network is not joined by itself: it is
-  said, and `wifi join` joins it. Afterwards the keeper reads `wlan_station()` every second, a
+  lost frame gives as well as a wrong key) is set aside for 10 minutes, said on F1 the first
+  time. While a telnet server runs (any live user task named telnetd, the server or a `telnetd
+  on` at work, looked for three times as the list shifts) or is to start by itself (`telnetd =
+  on` until it has started, autonet until it is done), an open saved network is not joined by
+  itself, looked at again just before each: it is said, and `wifi join` joins it (saying the
+  server answers there too). The keeper's repeated tries pass `quiet` to the station
+  (`wlan_join_unless()`), whose failure to join then goes to the log only. Afterwards the keeper
+  reads `wlan_station()` every second, a
   snapshot that makes no request (so no `wifi` command is ever told the device is busy by it):
   while the station is up, joining or reconnecting it does nothing but get an address for an
   association of its own; after a `wifi leave` or `wifi down` (the station's `stops` count
@@ -1420,23 +1437,27 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   association is its own when the station's `join_requests` is the number its join request
   got (`wlan_join_unless(..., &join)`). `wifi connect` runs the same connect on the command's
   console, under the same `connect_lock`.
-* **autonet** keeps its lines and their order for Ethernet. In its 90 seconds it asks for the
-  address of each Ethernet link that comes up, until one has it (the routes prefer Ethernet,
-  and `tools/devloop.py` telnets to that address); a Wi-Fi address is the keeper's. It starts
-  telnetd once there is an address `netman_trusted()` accepts, Ethernet first; started for
-  Wi-Fi first, it still waits out the 90 seconds for Ethernet. While it runs, the manager
-  leaves Ethernet to it (`autonet_busy()`). `SYS_netinfo` gives the first interface that has
-  an address when the default one has none, so telnetd's line names the address that answers.
+* **autonet** is as it was, but for Ethernet only: it waits up to 90 seconds for an Ethernet
+  link (the routes prefer Ethernet, and `tools/devloop.py` telnets to that address), asks for
+  its address, and starts telnetd for it; a Wi-Fi address is the keeper's, and telnetd for Wi-Fi
+  the setting's. So the development entry opens telnet where it always did, never because of
+  a Wi-Fi network SurfOS joined by itself. While it runs, the manager leaves Ethernet to it
+  (`autonet_busy()`). `SYS_netinfo` gives the first interface that has an address when the
+  default one has none, so telnetd's line names the address that answers.
 * **Tests.** `tests/host/test_netcfg.c` (the files' text, every SSID byte through the
-  quoting, CR alone, a byte order mark, NUL bytes, curly quotes, a long line edited, the parts
-  not understood kept through a write and read back, the lease timers); in `make test`, boots
+  quoting, CR alone, a byte order mark, NUL bytes, curly quotes, a long line edited, the line
+  ends kept, the parts not understood kept through a write and read back, a password in one
+  marked, `netcfg_reads_back()` refusing a forgotten name written twice, the lease timers); in
+  `make test`, boots
   from a settings disk kept from boot to boot (the boot word `settingsdisk=`): the
   hand-written file read (its bad network told, left out and kept), joined and leased with
   nobody typing, saving, forgetting, a restart that joins the saved network and starts telnetd
   for its WPA2 address, `wifi leave` left alone, the access point switched off (`wlansim off`,
   a test command of the simulated chip) and SurfSim, open, not joined while telnetd runs, then
-  joined once it is off; `settings=off`; a hidden network saved by hand joined by a probe, with
-  no DHCP server on its island; leases of 8 s (`dhcplease=8`) renewed, and confirmed after the
+  joined once it is off; `settings=off`, a change and a network saved then for the next start
+  only; a hidden network saved by hand joined by a probe, with no DHCP server on its island, and
+  saves under `wifi = off`; an unsaved `telnetd` change that changes nothing; leases of 8 s
+  (`dhcplease=8`) renewed, and confirmed after the
   link went down and up (QEMU's `set_link`); the disk read on the host afterwards. `make
   test-usb`'s `settings` scenario does it through GRUB's menu on a one-stick, under the laptop
   profile, and boots the menu's entry without the settings.

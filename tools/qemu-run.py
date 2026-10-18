@@ -401,6 +401,10 @@ SMOKE = [
     ('settings hostname smoke-test', ['hostname = smoke-test in force until SurfOS restarts, but not saved: the stick '
                                       'SurfOS was started from is not there (lsblk)']),
     ('echo status $?', ['status 1']),
+    ('settings telnetd on', ['settings: telnetd = on not saved: the stick SurfOS was started from is not there (lsblk); it '
+                             'would act at the next start only, so nothing changes (telnetd on starts the server now)']),
+    ('echo status $?', ['status 1']),
+    ('settings telnetd', ['telnetd = off   (the default; it takes on | off)']),
     ('settings', ['hostname     = smoke-test']),
     ('settings frobnicate on', ['settings: no setting called frobnicate (settings lists them)']),
     ('echo status $?', ['status 2']),
@@ -684,7 +688,7 @@ SMOKE = [
       ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)']),
       ('wifi save', ['saved SurfSimWPA (WPA2) on hda1 again: SurfOS joins it by itself at startup, the first of 2 saved '
                      'networks it tries']),
-      ('wifi saved', [' 1  SurfSimWPA', 'WPA2  joined now', ' 2  SurfSim', 'open  in range, -45 dBm']),
+      ('wifi saved', [' 1  SurfSimWPA', 'WPA2  joined now', ' 2  SurfSim ', 'open  in range, -45 dBm']),
       ('dhcp renew wlan0', ['dhcp: wlan0: lease 10.0.2.15 renewed for 86400 s']),
       ('dhcp renew eth0', ['dhcp: eth0 has no lease to renew (dhcp eth0 gets one)']),
       ('cat /hda1/surfos-config/settings.conf', ['# SurfOS settings, read at every start', 'telnetd = on',
@@ -721,21 +725,32 @@ SMOKE = [
       ('telnetd off', ['telnetd: stopped']),
       ('keeper-joins-open', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'inet 10.0.2.15']),
-      ('wifi saved', [' 1  SurfSimWPA', ' 2  SurfSim', 'open  joined now']),
+      ('wifi saved', [' 1  SurfSimWPA', ' 2  SurfSim ', 'open  joined now']),
       ('wlansim on SurfSimWPA', ['wlansim: SurfSimWPA is on again'])],
      [WLANSIM_PASSPHRASE, 'not mounted', 'stays mounted']),
-    # 3: settings=off (the menu's entry without the settings): nothing read, nothing joined, no telnetd
+    # 3: settings=off (the menu's entry without the settings): nothing read, nothing joined, no telnetd. A change is
+    # saved for the next start and changes nothing now (set back afterwards); a network saved and forgotten so too
     ('@boot wlansim net settingsdisk=owner settings=off',
      ['+NET: settings=off: the settings on the stick are not read at this start', PROMPT],
      [('settings', ['settings: not read at this start (settings=off): the defaults until SurfOS restarts; a change is '
                     'saved on hda1 for the next start', 'telnetd      = off       (the default)', '0 saved Wi-Fi networks']),
       ('wifi saved', ['the saved Wi-Fi networks are not read at this start (settings=off)']),
       ('wifi status', ['wlan0: down (wifi up starts it)']),
-      ('telnetd', ['telnetd: not running'])],
+      ('telnetd', ['telnetd: not running']),
+      ('settings hostname offtest', ['hostname = offtest, saved on hda1 (surfos-config/settings.conf): from the next '
+                                     'start (this one does not use the settings: settings=off)']),
+      ('settings', ['hostname     = surfos    (the default)']),
+      ('settings hostname smoketest', ['hostname = smoketest, saved on hda1']),
+      ('wifi save SurfSimFlaky', [re.compile(rb'Password for SurfSimFlaky \(nothing for an open network\): ')]),
+      ('', ['saved SurfSimFlaky (open, hidden) on hda1, the first of 3 saved networks it tries: SurfOS joins it by '
+            'itself from the next start', 'the last scan did not hear SurfSimFlaky by its name']),
+      ('wifi saved', ['the saved Wi-Fi networks are not read at this start (settings=off)']),
+      ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)'])],
      ['+NET: wlan0', '+NET: settings from']),
     # 4: a hidden network saved by hand (hidden = yes, no security line: open): joined by a probe for its name; no DHCP
     # server answers on its island, so the keeper says it asks again later. wifi save of it keeps it hidden (the station
-    # heard its beacons without a name); a network the last scan did not hear by its name is saved as hidden
+    # heard its beacons without a name); with settings wifi off, a network the last scan did not hear by its name is
+    # saved as hidden, and the save says SurfOS joins none by itself
     ('@boot wlansim net settingsdisk=hidden',
      ['+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos; 1 saved Wi-Fi '
       'network', '+NET: wlan0: looking for the hidden network SurfSimHidden', 'wlan0: link up: "SurfSimHidden"',
@@ -744,9 +759,11 @@ SMOKE = [
       ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
       ('wifi save', ['saved SurfSimHidden (open, hidden) on hda1 again: SurfOS joins it by itself at startup, its only '
                      'saved network']),
+      ('settings wifi off', ['wifi = off, saved on hda1 (surfos-config/settings.conf): no saved network is joined by '
+                             'itself, from now on']),
       ('wifi save NotHereNet', [re.compile(rb'Password for NotHereNet \(nothing for an open network\): ')]),
-      ('', ['saved NotHereNet (open, hidden) on hda1: SurfOS joins it by itself at startup, the first of 2 saved '
-            'networks it tries', 'the last scan did not hear NotHereNet by its name']),
+      ('', ['saved NotHereNet (open, hidden) on hda1, the first of 2 saved networks it tries; SurfOS joins none by '
+            'itself while settings wifi is off', 'the last scan did not hear NotHereNet by its name']),
       ('wifi forget NotHereNet', ['forgot NotHereNet: SurfOS no longer joins it by itself (1 saved network left)']),
       ('cat /hda1/surfos-config/networks.conf', ['network = "SurfSimHidden"', 'security = open', 'hidden = yes'])],
      ['none of the', 'not in range']),
