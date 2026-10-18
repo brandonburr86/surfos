@@ -45,6 +45,12 @@ def _read(d, s, x, y, n, fg, scale=1, chars='0123456789:.'):
     return out
 
 
+def _glyph(d, s, x, y, ch, fg, bg, cols=8):
+    """one character's cell: its lit pixels fg and the others bg, in its first cols columns (a text cursor may follow)"""
+    return all(d.pixel(s, x + col, y + row) == (fg if bits & (0x80 >> col) else bg)
+               for row, bits in enumerate(d.font[ord(ch)]) for col in range(cols))
+
+
 def _taskbar(d, s, text, fg):
     """a taskbar button's title begins with text, wherever the button is"""
     for n in range(1, 16):
@@ -276,7 +282,7 @@ def charmap(d):
                   lambda s: d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, 'Untitled - Notepad', PAPER, TEAL))
         d.key('ctrl-v')
         d.visible('Character Map: Ctrl+V pastes ≋ in Notepad: one character (Col 2), three bytes',
-                  lambda s: d.text(s, NOTEPAD[0] + 44, NOTEPAD[1] + 60, '\xf7', INK, SHEET) and
+                  lambda s: _glyph(d, s, NOTEPAD[0] + 44, NOTEPAD[1] + 60, '\xf7', INK, SHEET, 7) and
                   d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, '*Untitled - Notepad', PAPER, TEAL) and
                   d.text(s, NOTEPAD[0] + 10, NOTEPAD[1] + NOTEPAD[3] - 23 + 3, 'Ln 1, Col 2', INK, BAND) and
                   d.text(s, NOTEPAD[0] + NOTEPAD[2] - 24 - 11 * 8, NOTEPAD[1] + NOTEPAD[3] - 23 + 3, '3 bytes  LF', MUTED, BAND),
