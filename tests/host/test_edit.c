@@ -125,7 +125,7 @@ static void failed_write(void) {
 static void failed_rename(void) {
     static const int none[] = { SIM_EXDEV, SIM_EROFS, SIM_EBUSY, SIM_EINVAL, SIM_ENOENT, SIM_EFAULT, SIM_ENOTDIR,
                                 SIM_EISDIR, SIM_ENOTEMPTY, SIM_ENAMETOOLONG, SIM_ENOSPC, SIM_ENOMEM };
-    static const int maybe[] = { SIM_EIO, SIM_EPERM };
+    static const int maybe[] = { SIM_EIO, SIM_EPERM };     /* EPERM: none in this kernel; one edit does not list */
     char what[80];
     unsigned i;
     for(i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
@@ -151,16 +151,24 @@ static void failed_rename(void) {
           "a half-done rename (EIO): the new file is kept, and the file's data is not freed under it");
     check(!has(sim_log(), "unlink"), "... nothing is deleted");
     check(!strcmp(ed_msg(), "Not saved: I/O error (rename). The text is in a.txt.tmp"), "... and the message names the new file");
+    check(!strcmp(ed_copied(), "a.txt.tmp") && ed_quit() == 1,
+          "... and with no edit since, ^Q ends edit without asking (it then says the text is in a.txt.tmp)");
     sim_clear_log();
     ed_type("Y");
     check(ed_save() == 1 && is("a.txt.1.tmp", "XYone\ntwo\n") && !has(sim_log(), "rename") && !has(sim_log(), "unlink") &&
           !has(sim_log(), "trunc") && ed_modified(), "the next save makes a copy beside the file, and renames nothing");
     check(!sim_corrupt("a.txt") && !sim_corrupt("a.txt.tmp") && is("a.txt.tmp", "Xone\ntwo\n"),
           "... so neither name's data is freed under the other");
-    check(!strcmp(ed_msg(), "Not saved over the file; a copy is in a.txt.1.tmp"), "... and says where the copy is");
+    check(!strcmp(ed_msg(), "Not saved over the file; a copy is in a.txt.1.tmp") && !strcmp(ed_copied(), "a.txt.1.tmp"),
+          "... and says where the copy is");
+    sim_clear_log();
+    check(ed_save() == 1 && !has(sim_log(), "open") && !strcmp(ed_msg(), "Not saved over the file; the text is in a.txt.1.tmp"),
+          "with no edit since the last copy, no other copy is made");
     ed_type("Z");
-    check(ed_save() == 1 && is("a.txt.2.tmp", "XYZone\ntwo\n") && is("a.txt.1.tmp", "XYone\ntwo\n") && !sim_corrupt("a.txt.tmp"),
-          "the one after that makes another copy, and leaves the first");
+    check(ed_quit() == 0 && ed_modified(), "an edit since the last copy: ^Q asks first (the input ends here: cancelled)");
+    check(ed_save() == 1 && is("a.txt.2.tmp", "XYZone\ntwo\n") && is("a.txt.1.tmp", "XYone\ntwo\n") && !sim_corrupt("a.txt.tmp") &&
+          !strcmp(ed_copied(), "a.txt.2.tmp"), "the one after that makes another copy, and leaves the first");
+    ed_type("W");
     sim_clear_log();
     sim_fail(SIM_OPEN, "a.txt.tmp", SIM_ENAMETOOLONG, 0);
     check(ed_save() < 0 && !has(sim_log(), "trunc") && !sim_corrupt("a.txt.tmp"), "... and none is ever written in place");
@@ -202,7 +210,7 @@ static void twins(void) {
     sim_put("a.txt.tmp", "one\n");
     sim_same_time("a.txt", "a.txt.tmp");
     ed_start("a.txt");
-    check(ed_unsure() && !strcmp(ed_msg(), "A save failed half way: a.txt.tmp may share this file's data"),
+    check(ed_unsure() && !strcmp(ed_msg(), "a.txt.tmp may share this file's data: check the disk"),
           "a .tmp beside the file of its size and time: said, and the same care");
     ed_type("X");
     check(ed_save() == 1 && is("a.txt.1.tmp", "Xone\n") && is("a.txt", "one\n") && !has(sim_log(), "rename"),
@@ -217,9 +225,45 @@ static void twins(void) {
 
     sim_reset();
     sim_put("a.txt", "one\n");
+    sim_put("a.txt.3.tmp", "one\n");
+    sim_same_time("a.txt", "a.txt.3.tmp");
+    ed_start("a.txt");
+    check(ed_unsure() && has(ed_msg(), "a.txt.3.tmp may share"), "... a.txt.3.tmp too");
+
+    sim_reset();
+    sim_put("x.new", "data\n");
+    sim_put("x.new.part", "data\n");
+    sim_same_time("x.new", "x.new.part");
+    ed_start("x.new");
+    check(ed_unsure() && has(ed_msg(), "x.new.part may share"), "... and rx's x.new.part");
+
+    sim_reset();
+    sim_put("log.1", "entry\n");
+    sim_put("log.1.tmp", "entry\n");
+    sim_same_time("log.1", "log.1.tmp");
+    ed_start("log.1.tmp");
+    check(ed_unsure() && has(ed_msg(), "log.1 may share"), "opening log.1.tmp: log.1 beside it is found, not only log");
+
+    sim_reset();
+    sim_put("a.txt", "one\n");
     sim_put("a.txt.tmp", "one\n");               /* a later time: not a twin */
     ed_start("a.txt");
     check(!ed_unsure(), "a .tmp of the same size but another time is not taken for one");
+    sim_reset();
+    sim_put("a.txt", "one\n");
+    sim_put("a.txt.tmp", "longer\n");
+    sim_same_time("a.txt", "a.txt.tmp");
+    ed_start("a.txt");
+    check(!ed_unsure(), "nor one of the same time but another size");
+
+    sim_reset();                                /* one made after the file was opened: found when saving */
+    sim_put("a.txt", "one\n");
+    ed_start("a.txt");
+    sim_put("a.txt.tmp", "one\n");
+    sim_same_time("a.txt", "a.txt.tmp");
+    ed_type("X");
+    check(ed_save() == 1 && ed_unsure() && is("a.txt", "one\n") && is("a.txt.1.tmp", "Xone\n") && is("a.txt.tmp", "one\n"),
+          "a twin that came after the file was opened is found when saving: a copy beside it");
 }
 
 static void in_place(void) {
@@ -230,7 +274,14 @@ static void in_place(void) {
           has(sim_log(), "open a.txt trunc\n"), "no rename here (ENOSYS): the new file goes, the file is written in place");
     sim_clear_log();
     ed_type("Y");
-    check(ed_save() == 0 && is("a.txt", "XYone\ntwo\n") && !has(sim_log(), ".tmp"), "... and from then on, with no new file");
+    check(ed_save() == 0 && is("a.txt", "XYone\ntwo\n") && !has(sim_log(), "open a.txt.tmp"), "... and from then on, with no new file");
+    sim_put("a.txt.tmp", "XYone\ntwo\n");
+    sim_same_time("a.txt", "a.txt.tmp");
+    ed_type("Z");
+    sim_clear_log();
+    check(ed_save() < 0 && !has(sim_log(), "trunc") && is("a.txt", "XYone\ntwo\n") &&
+          !strcmp(ed_msg(), "Not saved: the file may share its data with a copy beside it"),
+          "where there is no rename, a twin beside the file stops the writing in place");
 
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_ENOSYS, SIM_NONE);

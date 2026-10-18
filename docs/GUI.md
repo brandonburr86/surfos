@@ -61,12 +61,13 @@ time from the PC's clock. The tiles on the desktop open the four applications.
   two may then share their space on the disk, and deleting or saving over either can
   damage the other, so until the desktop closes Notepad saves over neither (Save
   offers Save as, under another name) and Files deletes and renames neither, nor the
-  folder they are in. Notepad takes the same care when it opens a file with a `.tmp`
-  beside it of its size and time, which is how such a pair looks. It remembers four
-  such pairs; after more, the desktop saves over and deletes no file at all until it
-  closes, and saves only under new names. Check the stick on another computer (First
-  Aid on the Mac, `fsck` elsewhere) before you change them, also with the shell's
-  `rm`, `mv` or `cp`, which take no such care. Only
+  folder they are in. The desktop takes the same care whenever it finds a `.tmp`,
+  `.N.tmp` or `.part` beside a file it opens, saves over, deletes or renames, of the
+  file's size and time, which is how such a pair usually looks. It remembers four such
+  pairs; after more, it saves over, deletes and renames no file at all until it closes,
+  and saves only under new names. Check the stick on another computer (First Aid on
+  the Mac, `fsck` elsewhere) before you change them, also with the shell's `rm`, `mv`
+  or `cp`, which take no such care. Only
   where a file system cannot rename, or a name is too long to take `.tmp`, is the file
   written in place. On a read-only volume (the initrd, or the flashed SURFOSUSB
   stick) Save says so and offers Save as.

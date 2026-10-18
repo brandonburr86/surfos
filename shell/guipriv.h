@@ -132,6 +132,7 @@ const char *gui_basename(const char *path);
 /* not to be saved over, deleted or renamed: one of g->unsure and g->kept, a folder one is in, or anything
    once more saves failed half way than the desktop keeps; and the dialog line that says why */
 bool gui_unsure(const struct gui_state *g, const char *path);
+bool gui_remembered(const struct gui_state *g, const char *path);  /* one of g->unsure and g->kept itself */
 void gui_unsure_line(const struct gui_state *g, const char *path, char *line, size_t n);
 void gui_parent(char *path);
 void gui_date(u32 t, char *out, size_t n);                           /* "2026-10-17 14:03" */
@@ -148,6 +149,10 @@ void note_layout(const struct gui_state *g, struct note_layout *l);
 void note_reset(struct gui_note *n);
 int note_load(struct gui_state *g, const char *path);                /* 0, or -errno after saying so */
 int note_save(struct gui_state *g, const char *path);
+/* path is not to be saved over, deleted or renamed: gui_unsure(), or a twin beside it found now (and then
+   remembered); and whether a save to path is refused (past GUI_UNSURE pairs only a new name may be saved) */
+bool note_guarded(struct gui_state *g, const char *path);
+bool note_refused(struct gui_state *g, const char *path);
 void note_key(struct gui_state *g, int key);
 void note_press(struct gui_state *g, int x, int y);                 /* window-relative */
 void note_drag(struct gui_state *g, int x, int y);

@@ -24,10 +24,11 @@ I/O error the rename may have half happened, the new name written and the old
 one not yet gone: the text stays in the new file (the status line names it),
 but the file and it may share their clusters, and deleting or replacing either
 would free the other's. So for the rest of the session nothing is renamed or
-written over the file: each save makes another new file beside it, the help
-line says to have the disk checked first, and edit says where the last copy is
-when it ends. The same holds from the start when the file is opened with such
-a name beside it, of its size and time (fs/fat.c's rename copies the entry).
+written over the file: each save makes another new file beside it (up to .9.tmp,
+and none when nothing changed since the last), the help line says to have the
+disk checked first, and edit says where the last copy is when it ends. The same
+holds whenever edit finds such a name beside the file, of its size and time
+(fs/fat.c's rename copies the entry), when it opens it and before each save.
 Only where the file system cannot rename (ENOSYS), or no such name fits in a
 path, is the file truncated and written in place.
 The file keeps its line ends (LF, or CRLF when its first line has one) and
@@ -74,7 +75,8 @@ static int crlf;                /* the file's line ends are CR LF */
 static int modified;
 static int no_rename;           /* rename said ENOSYS once: write in place from then on */
 static int unsure;              /* a rename may have half happened: the file and its .tmp may share their clusters */
-static char copied[PATH_MAX];   /* since then: the last copy saved beside the file */
+static char copied[PATH_MAX];   /* since then: the last copy of the text beside the file */
+static unsigned changes, copied_changes;    /* edits so far, and when that copy was made */
 
 static int cy, cx;              /* cursor: line, byte in the line */
 static int want_col = -1;       /* the screen column up and down aim for */
@@ -382,30 +384,45 @@ static int same_entry(const struct stat *a, const char *name) {
     return stat(name, &b) == 0 && S_ISREG(b.type) && b.size == a->size && b.mtime == a->mtime;
 }
 
-/* after loading: a name beside the file with its size and time. fs/fat.c's rename copies the entry, so
-   after one that may have half happened (in an earlier edit, or the desktop) the two hold the same
-   clusters; or the user made such a copy, and the care costs nothing. Beside a.txt: a.txt.tmp and
-   a.txt.1.tmp to .9.tmp; beside one of those, a.txt. Then this edit is as after such a rename. */
-static void find_twin(void) {
+/* a name beside the file with its size and time, into twin: fs/fat.c's rename copies the entry, so after one
+   that may have half happened (a save of edit's or the desktop's, or rx's) the two hold the same clusters; or
+   the user made such a copy, and the care costs nothing. Beside a.txt: a.txt.tmp, a.txt.1.tmp to .9.tmp and
+   a.txt.part; beside one of those, a.txt (and a.txt.1 too beside a.txt.1.tmp). A guess, not proof: a later
+   write to either name, or a rename that left the old entry first in the directory, hides such a pair. */
+static int twin_beside(char *twin, size_t size) {
+    static const char *const ends[] = { ".tmp", ".part" };
     struct stat st;
-    char name[PATH_MAX];
-    const char *base;
-    size_t n = strlen(filename);
-    int k;
-    if(stat(filename, &st) < 0 || !S_ISREG(st.type)) return;
-    for(k = 0; k < 10; k++) {
-        if(snprintf(name, sizeof(name), k ? "%s.%d.tmp" : "%s.tmp", filename, k) >= (int)sizeof(name)) break;
-        if(same_entry(&st, name)) goto found;
+    size_t n = strlen(filename), e;
+    unsigned i;
+    int k, w;
+    if(stat(filename, &st) < 0 || !S_ISREG(st.type)) return 0;
+    for(k = 0; k <= 10; k++) {
+        if(k < 10) w = snprintf(twin, size, k ? "%s.%d.tmp" : "%s.tmp", filename, k);
+        else w = snprintf(twin, size, "%s.part", filename);
+        if(w < (int)size && same_entry(&st, twin)) return 1;
     }
-    if(n < 5 || strcmp(filename + n - 4, ".tmp")) return;        /* the file is <name>.tmp or <name>.N.tmp */
-    snprintf(name, sizeof(name), "%s", filename);
-    name[n - 4] = 0;
-    if(n >= 7 && name[n - 6] == '.' && name[n - 5] >= '1' && name[n - 5] <= '9') name[n - 6] = 0;
-    if(!same_entry(&st, name)) return;
-found:
+    for(i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {     /* the file is <name>.tmp, <name>.N.tmp, <name>.part */
+        e = strlen(ends[i]);
+        if(n <= e || n >= size || strcmp(filename + n - e, ends[i])) continue;
+        memcpy(twin, filename, n - e);
+        twin[n - e] = 0;
+        if(same_entry(&st, twin)) return 1;
+        if(i == 0 && n - e >= 3 && twin[n - e - 2] == '.' && twin[n - e - 1] >= '1' && twin[n - e - 1] <= '9') {
+            twin[n - e - 2] = 0;                        /* a.txt beside a.txt.1.tmp */
+            if(same_entry(&st, twin)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* after loading: with such a name beside it, this edit is as after a rename that may have half happened */
+static void find_twin(void) {
+    char twin[PATH_MAX];
+    const char *base;
+    if(!twin_beside(twin, sizeof(twin))) return;
     unsure = 1;
-    base = strrchr(name, '/');
-    snprintf(msg, sizeof(msg), "A save failed half way: %s may share this file's data", base ? base + 1 : name);
+    base = strrchr(twin, '/');
+    snprintf(msg, sizeof(msg), "%s may share this file's data: check the disk", base ? base + 1 : twin);
 }
 
 static int save(void) {
@@ -413,6 +430,11 @@ static int save(void) {
     const char *what = filename, *base;
     struct stat st;
     int made = 0, kept = 0, k, e = ENAMETOOLONG;
+    if(!unsure && twin_beside(tmp, sizeof(tmp))) unsure = 1;    /* made since the file was opened, it may be */
+    if(unsure && copied[0] && changes == copied_changes) {      /* no edit since the last copy: no other copy */
+        snprintf(msg, sizeof(msg), "Not saved over the file; the text is in %s", copied);
+        return 1;
+    }
     if(!no_rename) {
         for(k = 0; k < 10; k++) {
             if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", filename, k) >= (int)sizeof(tmp)) break;
@@ -424,6 +446,7 @@ static int save(void) {
         base = strrchr(tmp, '/');
         if(e == 0 && unsure) {                  /* a copy beside the file, renamed over nothing */
             snprintf(copied, sizeof(copied), "%s", base ? base + 1 : tmp);
+            copied_changes = changes;
             snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", copied);
             return 1;
         }
@@ -434,6 +457,10 @@ static int save(void) {
             if(!nothing_changed(e)) {           /* perhaps half done: the text stays in the new file, if it is there */
                 kept = stat(tmp, &st) == 0;
                 unsure = 1;
+                if(kept) {                      /* the text as it is now, in the copy said at the end */
+                    snprintf(copied, sizeof(copied), "%s", base ? base + 1 : tmp);
+                    copied_changes = changes;
+                }
                 goto fail;
             }
             kept = unlink(tmp) < 0 && errno != ENOENT;  /* it would not go: the text is in it */
@@ -443,6 +470,10 @@ static int save(void) {
             unlink(tmp);                        /* made by this save: what of the text it got */
             goto fail;
         } else if(e != ENAMETOOLONG || unsure) goto fail;   /* nothing was made, nothing of the user's touched */
+    }
+    if(unsure) {                                /* in place would cut the file, and the clusters a twin holds */
+        snprintf(msg, sizeof(msg), "Not saved: the file may share its data with a copy beside it");
+        return -1;
     }
     what = filename;                            /* no rename here, or no room for such a name: truncate the file and write it */
     if(write_file(filename, O_TRUNC, NULL) < 0) { e = errno; goto fail; }
@@ -575,6 +606,7 @@ static void refresh(void) {
 
 static void set_modified(void) {
     modified = 1;
+    changes++;
 }
 
 static void insert_char(int c) {
@@ -748,7 +780,7 @@ static void go_to_line(void) {
 /* 1 when the editor should end */
 static int quit(void) {
     int a;
-    if(!modified) return 1;
+    if(!modified || (copied[0] && changes == copied_changes)) return 1;   /* nothing, or all in the last copy */
     a = ask_yes_no("Save changes? (y/n/^C) ");
     if(a == 'n') return 1;
     if(a == 'y') return save() >= 0;                 /* a copy beside the file will do: main says where */

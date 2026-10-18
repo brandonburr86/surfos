@@ -157,10 +157,10 @@ struct gui_state {
     u32 clip_len;
     char clip[GUI_CLIP_MAX];
     struct gui_note note;
-    /* saves whose rename may have half happened (or a file opened with such a pair beside it): such a file
+    /* saves whose rename may have half happened, and pairs found that look so (note_guarded()): such a file
        and the new file kept beside it may share their clusters until the volume is checked, so the desktop
        saves over, deletes and renames neither (gui_unsure()). The first GUI_UNSURE are kept; nunsure counts
-       them all, and past GUI_UNSURE the desktop changes no file */
+       them all, and past GUI_UNSURE the desktop saves over, deletes and renames no file (new names still) */
     char unsure[GUI_UNSURE][GUI_PATH_MAX], kept[GUI_UNSURE][GUI_PATH_MAX];
     int nunsure;
 };

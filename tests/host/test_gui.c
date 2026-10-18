@@ -605,9 +605,11 @@ static void notepad_review(void) {
     CHECK(!strcmp(g.dialog.text[1],"Have the disk checked first (fsck).") && gui_unsure(&g,"/home/gone.txt"));
     /* past four such pairs none is kept, and the desktop saves over no file, but still to a new name */
     key(27); note_save(&g,"/home/x1.txt"); key(27); note_save(&g,"/home/x2.txt"); key(27);
-    CHECK(g.nunsure==5 && !strcmp(g.unsure[3],"/home/x1.txt") && gui_unsure(&g,"/home/dos.txt") && gui_unsure(&g,"/home/w.txt"));
+    CHECK(g.nunsure==5 && !strcmp(g.unsure[0],"/home/w.txt") && !strcmp(g.unsure[3],"/home/x1.txt") &&   /* the first four kept */
+          gui_unsure(&g,"/home/dos.txt") && gui_unsure(&g,"/home/w.txt"));
     fail_write=0; i=f_writes;
-    CHECK(note_save(&g,"/home/dos.txt")==-EBUSY && !strcmp(g.dialog.text[0],"Several saves failed half way.") && f_writes==i);
+    CHECK(note_save(&g,"/home/dos.txt")==-EBUSY && !strcmp(g.dialog.text[0],"Saves may have failed half way: check the disk.") &&
+          f_writes==i);
     key(27); CHECK(note_save(&g,"/home/fresh.txt")==0 && holds("/home/fresh.txt","acd"));
     memset(g.unsure,0,sizeof(g.unsure)); memset(g.kept,0,sizeof(g.kept)); g.nunsure=0;
     /* the CRs a CRLF file is saved with count against 256 KB */
@@ -656,6 +658,7 @@ static void notepad_review(void) {
 /* a pair a half-done save left, in Files: Delete and Rename say no before they ask anything; and a .tmp beside
    a file Notepad opens, of its size and time, is taken for such a pair */
 static void unsure_pairs(void) {
+    int i;
     populate();
     add("/home/w.txt", GUI_FILE, "a", 1);
     add("/home/w.txt.tmp", GUI_FILE, "a", 1);
@@ -685,8 +688,34 @@ static void unsure_pairs(void) {
     add("/home/v.txt", GUI_FILE, "same", 4); add("/home/v.txt.3.tmp", GUI_FILE, "same", 4);
     nodes[find("/home/v.txt.3.tmp")].mtime = nodes[find("/home/v.txt")].mtime;
     CHECK(note_load(&g,"/home/v.txt.3.tmp")==0 && gui_unsure(&g,"/home/v.txt"));  /* the .tmp itself, opened */
+    CHECK(g.nunsure==2 && note_load(&g,"/home/t.txt.tmp")==0 && g.nunsure==2);   /* the same pair, seen from the other side */
     add("/home/u.txt", GUI_FILE, "same", 4); add("/home/u.txt.tmp", GUI_FILE, "same", 4);
     CHECK(note_load(&g,"/home/u.txt")==0 && !gui_unsure(&g,"/home/u.txt") && !strcmp(g.note.status,"Opened u.txt"));
+    add("/home/s.txt", GUI_FILE, "same", 4); add("/home/s.txt.tmp", GUI_FILE, "longer", 6);   /* the same time, another size */
+    nodes[find("/home/s.txt.tmp")].mtime = nodes[find("/home/s.txt")].mtime;
+    CHECK(note_load(&g,"/home/s.txt")==0 && !gui_unsure(&g,"/home/s.txt"));
+    add("/home/f.txt", GUI_FILE, "same", 4); add("/home/f.txt.3.tmp", GUI_FILE, "same", 4);
+    nodes[find("/home/f.txt.3.tmp")].mtime = nodes[find("/home/f.txt")].mtime;
+    CHECK(note_load(&g,"/home/f.txt")==0 && gui_unsure(&g,"/home/f.txt.3.tmp"));     /* a .3.tmp beside it */
+    /* pairs found before anything changes them, though no file of theirs was opened: Delete, Replace, Save */
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    add("/home/p.txt", GUI_FILE, "pair", 4); add("/home/p.txt.tmp", GUI_FILE, "pair", 4);
+    nodes[find("/home/p.txt.tmp")].mtime = nodes[find("/home/p.txt")].mtime;
+    gui_open(&g,GUI_FILES);
+    g.files.selected=row_named("home"); gui_act(&g,ACT_FILES_OPEN);
+    g.files.selected=row_named("p.txt.tmp"); gui_act(&g,ACT_FILES_DELETE);
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not deleted") && node("/home/p.txt.tmp") && gui_unsure(&g,"/home/p.txt"));
+    key(27); gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    key(5); type("new text"); gui_answer(&g,ACT_DLG_SAVE_AS,0,"/home/p.txt","");
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not saved") && holds("/home/p.txt","pair"));
+    key(27); gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    add("/home/r.txt", GUI_FILE, "r", 1);
+    CHECK(note_load(&g,"/home/r.txt")==0 && !gui_unsure(&g,"/home/r.txt"));
+    add("/home/r.txt.part", GUI_FILE, "r", 1);                                   /* rx's, made since */
+    nodes[find("/home/r.txt.part")].mtime = nodes[find("/home/r.txt")].mtime;
+    gui_open(&g,GUI_NOTEPAD); type("x"); i=f_writes; key(19);
+    CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_READONLY && f_writes==i && holds("/home/r.txt","r"));
+    key(27);
 }
 
 static void files_review(void) {

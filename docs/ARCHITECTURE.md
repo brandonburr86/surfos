@@ -592,17 +592,21 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   one, both holding the same clusters: the `.tmp` is kept and the status line names it,
   and since `fs/fat.c` frees a chain when any one name of it is deleted, replaced or
   truncated, nothing is renamed or written over that file again in that session: `edit`
-  saves later versions as further `.tmp` copies, warns on its help line and says where the
-  last copy is when it ends; the desktop (`gui_unsure()`, the last four such pairs, and
-  after more of them no file at all) saves over, deletes and renames neither of the two,
-  nor the folders they are in. Both take the same care when they open a file with a
-  `.tmp` beside it of its size and time (`fs/fat.c`'s rename copies the entry, so that is
-  how such a pair looks). `rx` keeps its `.part` file by the same rule, says to have the
-  disk checked, and does not start while a `.part` with data is there. Outside that care:
-  the shell's `rm`, `mv` and `cp`, a stick mounted again under another path, and a `.tmp`
-  of which only the 8.3 alias was left. The real fix is in `fs/fat.c` (not freeing a chain
-  that another entry still holds; ROADMAP.md section 7). `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file system
-  that fails on demand. The terminal is used only through `ttyctl()`,
+  saves later versions as further `.tmp` copies (to `.9.tmp`, and none when nothing
+  changed), warns on its help line and says where the last copy is when it ends; the
+  desktop (`gui_unsure()`: the first four such pairs, and after more of them any file)
+  saves over, deletes and renames neither of the two, nor the folders they are in. Both
+  also look for such a pair before they change a file, and when they open one: a
+  `.tmp`, `.N.tmp` or `.part` beside it of its size and time (`edit`'s `twin_beside()`,
+  `note_guarded()`; `fs/fat.c`'s rename copies the entry, so that is how such a pair
+  usually looks, though a later write to either name, or the old entry found first in
+  the directory, hides it). `rx` keeps its `.part` file by the same rule, says to have the
+  disk checked, and does not start over a `.part` that is its file's twin. Outside that
+  care: the shell's `rm`, `mv` and `cp`, `rx`'s rename over a file with a `.tmp` twin, a
+  stick mounted again under another path, and a `.tmp` of which only the 8.3 alias was
+  left. The real fix is in `fs/fat.c` (not freeing a chain that another entry still holds;
+  ROADMAP.md section 7). `tests/host/test_edit.c` and `test_rx.c` run `edit.c` and `rx.c`
+  as they are on an in-memory file system that fails on demand (`tests/host/sim_fs.c`). The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that
   changed.

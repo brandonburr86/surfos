@@ -328,11 +328,10 @@ void note_reset(struct gui_note *n) {
     n->group++;
 }
 
-/* a file and a new file beside it that may share their clusters (gui_unsure()); past GUI_UNSURE pairs
-   none is kept, and the desktop changes no file at all */
+/* a file and a new file beside it that may share their clusters (gui_unsure()), once; past GUI_UNSURE
+   pairs none is kept, and the desktop then saves over, deletes and renames no file */
 static void remember(struct gui_state *g, const char *file, const char *kept) {
-    int i;
-    for(i = 0; i < g->nunsure && i < GUI_UNSURE; i++) if(!strcmp(g->unsure[i], file) && !strcmp(g->kept[i], kept)) return;
+    if(gui_remembered(g, file) && gui_remembered(g, kept)) return;
     if(g->nunsure < GUI_UNSURE) {
         strlcpy(g->unsure[g->nunsure], file, GUI_PATH_MAX);
         strlcpy(g->kept[g->nunsure], kept, GUI_PATH_MAX);
@@ -340,27 +339,58 @@ static void remember(struct gui_state *g, const char *file, const char *kept) {
     g->nunsure++;
 }
 
-/* a name beside path with its size and time, into out: fs/fat.c's rename copies the entry, so after one
-   that may have half happened the two hold the same clusters (or the user made such a copy: then the care
-   costs nothing). Beside a.txt: a.txt.tmp and a.txt.1.tmp to .9.tmp; beside one of those, a.txt. */
-static bool twin_of(struct gui_state *g, const char *path, const struct gui_entry *f, char *out, size_t n) {
+static bool same_entry(struct gui_state *g, const struct gui_entry *f, const char *name) {
     struct gui_entry e;
     bool device, readonly;
-    size_t len = strlen(path);
-    int k;
+    return g->fs->stat(g->fs->ctx, name, &e, &device, &readonly) == 0 && e.type == GUI_FILE &&
+           e.size == f->size && e.mtime == f->mtime;
+}
+
+/* a name beside path with its size and time, into out: fs/fat.c's rename copies the entry, so after one
+   that may have half happened (a save of the desktop's or edit's, or rx's) the two hold the same clusters;
+   or the user made such a copy, and the care costs nothing. Beside a.txt: a.txt.tmp, a.txt.1.tmp to .9.tmp
+   and a.txt.part; beside one of those, a.txt (and a.txt.1 too beside a.txt.1.tmp). A guess, not proof: a
+   later write to either name, or a rename that left the old entry first in the directory, hides a pair. */
+static bool twin_of(struct gui_state *g, const char *path, const struct gui_entry *f, char *out, size_t n) {
+    static const char *const ends[] = { ".tmp", ".part" };
+    size_t len = strlen(path), e;
+    unsigned i;
+    int k, w;
     for(k = 0; k <= 10; k++) {
-        if(k < 10) {
-            if(snprintf(out, n, k ? "%s.%d.tmp" : "%s.tmp", path, k) >= (int)n) continue;
-        } else {                                        /* path is <file>.tmp or <file>.N.tmp */
-            if(len < 5 || strcmp(path + len - 4, ".tmp")) return false;
-            strlcpy(out, path, n);
-            out[len - 4] = 0;
-            if(len >= 7 && out[len - 6] == '.' && out[len - 5] >= '1' && out[len - 5] <= '9') out[len - 6] = 0;
+        if(k < 10) w = snprintf(out, n, k ? "%s.%d.tmp" : "%s.tmp", path, k);
+        else w = snprintf(out, n, "%s.part", path);
+        if(w < (int)n && same_entry(g, f, out)) return true;
+    }
+    for(i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {     /* path is <file>.tmp, <file>.N.tmp, <file>.part */
+        e = strlen(ends[i]);
+        if(len <= e || len >= n || strcmp(path + len - e, ends[i])) continue;
+        memcpy(out, path, len - e);
+        out[len - e] = 0;
+        if(same_entry(g, f, out)) return true;
+        if(i == 0 && len - e >= 3 && out[len - e - 2] == '.' && out[len - e - 1] >= '1' && out[len - e - 1] <= '9') {
+            out[len - e - 2] = 0;                       /* a.txt beside a.txt.1.tmp */
+            if(same_entry(g, f, out)) return true;
         }
-        if(g->fs->stat(g->fs->ctx, out, &e, &device, &readonly) == 0 && e.type == GUI_FILE &&
-           e.size == f->size && e.mtime == f->mtime) return true;
     }
     return false;
+}
+
+bool note_guarded(struct gui_state *g, const char *path) {
+    struct gui_entry e;
+    bool device, readonly;
+    char other[GUI_PATH_MAX];
+    if(gui_unsure(g, path)) return true;
+    if(!g->fs || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) != 0 || e.type != GUI_FILE) return false;
+    if(!twin_of(g, path, &e, other, sizeof(other))) return false;
+    remember(g, path, other);
+    return true;
+}
+
+bool note_refused(struct gui_state *g, const char *path) {
+    struct gui_entry e;
+    bool device, readonly;
+    if(!note_guarded(g, path)) return false;
+    return g->nunsure <= GUI_UNSURE || !g->fs || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) != -ENOENT;
 }
 
 int note_load(struct gui_state *g, const char *path) {
@@ -419,8 +449,8 @@ int note_load(struct gui_state *g, const char *path) {
     if(readonly) note_status(g, "Read-only volume: Save as keeps a copy elsewhere");
     else if(twin_of(g, path, &e, other, sizeof(other))) {   /* a save that failed half way, it may be */
         remember(g, path, other);
-        gui_middle(name, a, sizeof(a), 28);
-        gui_middle(gui_basename(other), b, sizeof(b), 28);
+        gui_middle(name, a, sizeof(a), 26);
+        gui_middle(gui_basename(other), b, sizeof(b), 26);
         snprintf(line, sizeof(line), "%s may share its data with %s: check the disk", a, b);
         note_status(g, line);
     } else {
@@ -453,8 +483,7 @@ int note_save(struct gui_state *g, const char *path) {
     bool device, readonly;
     int r;
     if(!g->fs) return -ENOSYS;
-    /* never over a file that may share its clusters; past GUI_UNSURE such saves only to a new name */
-    if(gui_unsure(g, path) && (g->nunsure <= GUI_UNSURE || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) == 0)) {
+    if(note_refused(g, path)) {                         /* it may share its clusters: never over it */
         gui_unsure_line(g, path, line, sizeof(line));
         dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
         return -EBUSY;

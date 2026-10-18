@@ -108,13 +108,17 @@ static int remembered(const struct gui_state *g, const char *path) {
 }
 
 bool gui_unsure(const struct gui_state *g, const char *path) {
-    return g->nunsure > GUI_UNSURE || remembered(g, path);     /* more than it keeps: it changes nothing */
+    return g->nunsure > GUI_UNSURE || remembered(g, path);     /* more than it keeps: anything */
+}
+
+bool gui_remembered(const struct gui_state *g, const char *path) {
+    return remembered(g, path) == 1;
 }
 
 void gui_unsure_line(const struct gui_state *g, const char *path, char *line, size_t n) {
     char name[GUI_PATH_MAX];
     int r = remembered(g, path);
-    if(!r) { strlcpy(line, "Several saves failed half way.", n); return; }
+    if(!r) { strlcpy(line, "Saves may have failed half way: check the disk.", n); return; }
     gui_middle(gui_basename(path), name, sizeof(name), r == 1 ? 32 : 23);      /* 54 cells in all */
     snprintf(line, n, r == 1 ? "%s may share its data." : "A file in %s may share its data.", name);
 }
@@ -495,7 +499,7 @@ static void save(struct gui_state *g) {
     else if(g->note.readonly) {
         snprintf(line, sizeof(line), "%s is on a volume that cannot be written.", gui_basename(g->note.path));
         dialog_confirm(g, ACT_DLG_READONLY, "Read-only volume", line, "Save a copy somewhere else?", "Save as\xF9", NULL, "Cancel");
-    } else if(gui_unsure(g, g->note.path)) {
+    } else if(note_refused(g, g->note.path)) {
         gui_unsure_line(g, g->note.path, line, sizeof(line));
         dialog_confirm(g, ACT_DLG_READONLY, "Check the disk", line, "Save a copy under another name?", "Save as\xF9", NULL, "Cancel");
     } else save_now(g, g->note.path);
@@ -623,7 +627,7 @@ void gui_answer(struct gui_state *g, int act, int button, const char *text, cons
                 g->pending = PEND_NONE;
                 break;
             }
-            if(gui_unsure(g, text)) {                   /* replacing it could free what another holds */
+            if(note_guarded(g, text)) {                 /* replacing it could free what another holds */
                 gui_unsure_line(g, text, line, sizeof(line));
                 dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
                 g->pending = PEND_NONE;
