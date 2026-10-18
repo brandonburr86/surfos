@@ -393,6 +393,8 @@ static int cmd_ifconfig(int argc, char **argv) {
     dev->netmask = mask;
     dev->gateway = gw;
     if(dns) dev->dns = dns;
+    dev->lease_s = 0;                                   /* 10/17/26: set by hand: no lease to renew */
+    dev->dhcp_server = 0;
     arp_announce(dev);
     mutex_unlock(&net_lock);
     netdev_print();
@@ -401,9 +403,21 @@ static int cmd_ifconfig(int argc, char **argv) {
 
 static int cmd_arp(int argc, char **argv) { arp_print(); return CMD_OK; }
 
+/* 10/17/26: dhcp renew [if]: the lease the interface has, kept (from the server that granted it, else from any) */
 static int cmd_dhcp(int argc, char **argv) {
-    struct netdev *dev = argc > 1 ? netdev_find(argv[1]) : netdev_default();
+    int renew = argc > 1 && !strcmp(argv[1], "renew"), r;
+    struct netdev *dev;
+    if(argc > 2 + renew) { printf("    usage: dhcp [renew] [interface]\n"); return CMD_USAGE; }
+    dev = argc > 1 + renew ? netdev_find(argv[1 + renew]) : netdev_default();
     if(!dev) { printf("    no interface\n"); return CMD_FAIL; }
+    if(renew) {
+        if(!dev->ip || !dev->lease_s) { printf("    dhcp: %s has no lease to renew (dhcp %s gets one)\n", dev->name, dev->name); return CMD_FAIL; }
+        r = dhcp_renew(dev, DHCP_RENEWING, 5000, 0, false);
+        if(r == -1) r = dhcp_renew(dev, DHCP_REBINDING, 5000, 0, false);
+        if(r == -2) return CMD_FAIL;                    /* the server said no: the address is given up */
+        if(r) { printf("    dhcp: %s: no DHCP server answered; the lease holds until it runs out\n", dev->name); return CMD_FAIL; }
+        return CMD_OK;
+    }
     if(dhcp_configure(dev, 8000) != 0) { printf("    dhcp: no lease\n"); return CMD_FAIL; }
     netdev_print();
     return CMD_OK;
@@ -882,7 +896,9 @@ static const struct command commands[] = {
     { "himem",     "",          "write and read RAM above 4 GB through a PSE-36 page", cmd_himem },
     { "lspci",     "[-v] [bus:dev.fn]", "PCI devices (-v: ids, power, interrupts, link)", cmd_lspci },
     { "wifiinfo",  "",          "the Wi-Fi card's ids, for a Wi-Fi driver", cmd_wifiinfo },
-    { "wifi",      "up|down|scan|join <ssid>|status|leave", "Wi-Fi: start the card, list networks, join one", cmd_wifi },
+    { "wifi",      "up|down|scan|join <ssid>|status|leave|save|saved|forget|connect", "Wi-Fi: start the card, list networks, join one, save it", cmd_wifi },
+    { "settings",  "[key [value]]", "the settings on the stick: telnetd at startup, wifi, ethernet, hostname", cmd_settings },
+    { "wlansim",   "on|off <ssid>", "the simulated Wi-Fi's access points (tests: the kernel word wlansim)", cmd_wlansim },
     { "lsusb",     "",          "USB controllers and what is plugged in", cmd_lsusb },
     { "drivers",   "",          "driver status, console, timer and keyboard", cmd_drivers },
     { "gui",       "",          "open the SurfOS desktop (UEFI local console)", cmd_gui, CMD_ASKS },
@@ -915,7 +931,7 @@ static const struct command commands[] = {
     { "fsbench",   "<dir> [MB]", "time writing and reading a file", cmd_fsbench },
     { "ifconfig",  "[if ip mask [gw] [dns]]", "show or set the network configuration", cmd_ifconfig },
     { "arp",       "",          "the ARP table", cmd_arp },
-    { "dhcp",      "[if]",      "get an address lease", cmd_dhcp },
+    { "dhcp",      "[renew] [if]", "get an address lease (renew: keep the one there is)", cmd_dhcp },
     { "nslookup",  "<name>",    "resolve a host name", cmd_nslookup },
     { "tcpecho",   "[port]",    "start a TCP echo server (port 7)", cmd_tcpecho },
     { "httpget",   "<host> <port> [path]", "fetch a page over TCP", cmd_httpget },

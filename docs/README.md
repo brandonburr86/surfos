@@ -5,11 +5,11 @@ as the restoration; new work happens here.
 
 | Document | What it is for |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, and the telnet server with the sockets, pseudo-terminals and `poll()` it stands on |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the kernel works today: boot sequence, memory map, scheduler, interrupts, drivers, shell, build system, the UEFI laptop boot, USB networking, USB storage and FAT32, surfsh, the telnet server with the sockets, pseudo-terminals and `poll()` it stands on, and the network manager with the settings on the stick |
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
-| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, and reaching its shell from another computer over telnet |
-| [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
+| [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, one stick for everything, and Wi-Fi with saved networks and the settings on the stick (section 15) |
+| [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card: the plan it was built from (the driver works on the laptop since 10/10/26; saved networks: USB-BOOT.md section 15) |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the Terminal, System Monitor, Disks, Log, Clock, Character Map, Image Viewer and Hex, the menus and windows, mouse input and current touchpad limits |
 | [UNDERTOW.md](UNDERTOW.md) | The HTTP/HTTPS text browser: commands, certificate checks, limits, testing and interoperability |
@@ -18,6 +18,7 @@ as the restoration; new work happens here.
 | [superpowers/plans/…storage….md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md) | The brief for USB storage, FAT32, the C library and the editor |
 | [superpowers/plans/…surfsh.md](superpowers/plans/2026-10-06-surfsh.md) | The brief for surfsh, the SurfOS shell: the prompt design, the pager, Tab completion, SurfOS 1.0 |
 | [superpowers/plans/…telnetd.md](superpowers/plans/2026-10-06-telnetd.md) | The brief for telnetd, the telnet server: network connections for programs, pseudo-terminals, `poll()` |
+| [superpowers/plans/…network-manager.md](superpowers/plans/2026-10-17-network-manager.md) | The brief for the network manager: saved Wi-Fi networks joined at every start, the settings on the stick |
 
 ## Building and running
 
@@ -27,7 +28,7 @@ make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quit
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
-make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (18 scenarios)
+make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (19 scenarios)
 make unittest     # host unit tests
 make test-web     # deterministic HTTP/HTTPS browser scenarios in QEMU
 make test-tcp     # TCP against hand-made segments (tools/qemu-tcp.py)
@@ -58,4 +59,8 @@ console: the SurfOS prompt (`initrd ▸ bin ≋>`), Tab completion, history, a p
 and redirection, with the kernel's commands reached through two system calls; the
 console draws UTF-8, and the banner says SurfOS 1.0. Since M11 (under emulation so far)
 programs have TCP connections, `poll()` and pseudo-terminals, and `telnetd on` lets
-another computer on the network telnet in to a surfsh of its own (`SURF ≋@>`).
+another computer on the network telnet in to a surfsh of its own (`SURF ≋@>`). Since
+10/10/26 the laptop's own Wi-Fi card works (open and WPA2 networks, joined on the laptop),
+and since 10/17/26 (under emulation so far) a network saved with `wifi save` is joined by
+itself at every start, with the settings (`settings`: telnet at startup, Ethernet's DHCP,
+a host name) kept on the stick SurfOS starts from.

@@ -15,6 +15,10 @@ the timer really ticks. The screen is the boot loader's framebuffer when there i
 10/9/26 (the development loop): the word autonet, which GRUB's development entry passes,
 starts a thread that waits for a network link, gets an address and starts telnetd
 (kernel/autonet.c).
+
+10/17/26 (the network manager): a thread reads the settings and the saved Wi-Fi networks
+from the stick SurfOS was started from and brings up the network they ask for
+(kernel/netman.c).
 */
 
 #include <surfos/console.h>
@@ -102,6 +106,7 @@ void kmain(u_long magic, u_long addr) {
     init_fs(); //mount the initrd and whatever the disks hold
     init_syscalls(); //int 0x80 for user programs
     init_autonet(); //10/9/26: with the word autonet, a thread brings up the network and telnetd (the development loop)
+    init_netman(); //10/17/26: the settings on the stick: a saved Wi-Fi network, DHCP, telnetd (kernel/netman.c)
 
     vmm_unmap(0); //the BIOS data area has been read; from here on a NULL dereference faults
 

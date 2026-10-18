@@ -68,6 +68,7 @@ struct wlan_bss {
     bool ht, vht;           /* HT and VHT capabilities elements present */
     u8 ht_cap[26];          /* the HT capabilities element's body when ht */
     u_long seen;            /* ticks, when last heard */
+    bool hidden;            /* 10/17/26: the station layer's (a driver leaves it): a beacon of it carried no SSID */
 };
 
 /* with a received frame */

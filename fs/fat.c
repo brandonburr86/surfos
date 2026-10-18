@@ -22,10 +22,14 @@ counted, and written back to FSInfo at sync and unmount; the clean-shutdown bit
 in FAT[1]: cleared while mounted read-write, set again at unmount, so macOS and
 Windows check a volume that was unplugged while mounted. A read-only mount
 writes nothing.
+
+10/17/26 (the network manager): a mount with MNT_QUIET (the settings on the stick,
+kernel/netman.c) leaves its line about the volume to the kernel log.
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
+#include <surfos/klog.h>
 #include <surfos/irq.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
@@ -1480,11 +1484,18 @@ static int fat_mount(struct superblock *sb) {
     sb->root = vnode_alloc(sb, &fat_vops, VN_DIR);
     if(!sb->root) { kfree(fs); kfree(root); sb->priv = NULL; return -ENOMEM; }
     sb->root->priv = root;
-    kprintf("+FAT%i: %s: %s%s%s%lu clusters of %lu bytes, %lu FAT sectors x %lu, data at block %lu; ", fs->type, fs->dev->name,
-            fs->label[0] ? "label " : "", fs->label, fs->label[0] ? ", " : "", (u_long)fs->nclusters, (u_long)fs->cluster_bytes,
-            (u_long)fs->spf, (u_long)fs->nfats, (u_long)fs->data_lba);
-    if(fs->free == FREE_UNKNOWN) kprintf("free space %s\n", from);
-    else kprintf("%lu free (%s)\n", (u_long)fs->free, from);
+    {
+        /* 10/17/26: one line, which a mount nobody typed (MNT_QUIET: the settings, kernel/netman.c) leaves to the log */
+        char line[200], tail[48];
+        if(fs->free == FREE_UNKNOWN) snprintf(tail, sizeof(tail), "free space %s", from);
+        else snprintf(tail, sizeof(tail), "%lu free (%s)", (u_long)fs->free, from);
+        snprintf(line, sizeof(line), "+FAT%i: %s: %s%s%s%lu clusters of %lu bytes, %lu FAT sectors x %lu, data at block %lu; "
+                 "%s\n", fs->type, fs->dev->name, fs->label[0] ? "label " : "", fs->label, fs->label[0] ? ", " : "",
+                 (u_long)fs->nclusters, (u_long)fs->cluster_bytes, (u_long)fs->spf, (u_long)fs->nfats,
+                 (u_long)fs->data_lba, tail);
+        if(sb->quiet) klog_write(line);
+        else kprintf("%s", line);
+    }
     return 0;
 }
 

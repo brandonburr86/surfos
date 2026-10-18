@@ -30,6 +30,10 @@ also when its serial number is the one GRUB passed.
 fdisk's changes are planned by parttab.c and carried out by part_commit():
 through the block layer, flushed, read back and compared, the table read again
 and checked against the plan, and the disk rescanned.
+
+10/17/26 (the settings): the volume found either way is kept (bdev_boot_vol()),
+for kernel/netman.c, which reads surfos-config/ there at boot and writes it
+when the volume may be written. Only with bootvol= on the command line.
 */
 
 #include <surfos/types.h>
@@ -47,6 +51,8 @@ and checked against the plan, and the disk rescanned.
 
 const char bdev_boot_drive[] = "the SurfOS boot drive";
 const char bdev_boot_volume[] = "the volume SurfOS was started from";
+
+static struct bdev *volatile boot_vol;     /* 10/17/26: bdev_boot_vol() */
 
 static int disk_read(void *arg, u32 lba, u32 count, void *buf) {
     return bdev_read((struct bdev *)arg, lba, count, buf);
@@ -141,12 +147,18 @@ static bool boot_serial(u32 *serial) {
 
 /* fdisk and mkfs leave the disk and all of its partitions alone (bdev_may_format() asks the disk). The SURFOSUSB
    image is only read; on a stick made bootable by copying files onto it, the volume SurfOS was started from (vol,
-   which is the disk itself when it has no partition table) may be written, and the rest of the disk is only read */
-static void mark_boot_drive(struct bdev *disk, struct bdev *vol, int kind, u32 serial) {
+   which is the disk itself when it has no partition table) may be written, and the rest of the disk is only read.
+   10/17/26 (the settings): the volume becomes bdev_boot_vol() when GRUB was started from it, by its serial number:
+   a SURFOSUSB image beside the stick SurfOS was started from is a boot drive too, but not where the settings are
+   (sec: room for its block 0) */
+static void mark_boot_drive(struct bdev *disk, struct bdev *vol, int kind, u32 serial, bool have_serial, u8 *sec) {
     const char *where = vol == disk ? "the whole disk" : vol->name;
     struct bdev *p;
+    u32 s;
     disk->protect = bdev_boot_drive;
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) p->protect = bdev_boot_drive;
+    if(kind == BOOT_VOLUME ||
+       (have_serial && bdev_read(vol, 0, 1, sec) == 0 && part_fat_serial(sec, &s) && s == serial)) boot_vol = vol;
     if(kind == BOOT_IMAGE) {
         kprintf("+PART: %s is the SurfOS boot drive (%s holds the volume SURFOSUSB): protected from fdisk and mkfs\n",
                 disk->name, where);
@@ -188,7 +200,7 @@ int bdev_scan_partitions(struct bdev *disk) {
     } else if((kind = boot_kind(disk, sec, have_serial, serial)) != BOOT_NONE) {
         vol = disk;
     }
-    if(kind != BOOT_NONE) mark_boot_drive(disk, vol, kind, serial);
+    if(kind != BOOT_NONE) mark_boot_drive(disk, vol, kind, serial, have_serial, sec);
     kfree(sec);
     kfree(t);
     return found;
@@ -212,8 +224,19 @@ int bdev_rescan(struct bdev *disk) {
     binvalidate(disk);
     if(disk->protect == bdev_boot_drive || disk->protect == bdev_boot_volume)
         disk->protect = NULL;                       /* found again below if it still is */
+    if(boot_vol && bdev_disk(boot_vol) == disk) boot_vol = NULL;   /* 10/17/26: so is the volume */
     disk->scheme = PART_SCHEME_NONE;
     return bdev_scan_partitions(disk);
+}
+
+/* 10/17/26 (bdev.h): the volume GRUB was started from, for the settings */
+struct bdev *bdev_boot_vol(void) {
+    return boot_vol;
+}
+
+bool bdev_boot_vol_named(void) {
+    u32 serial;
+    return boot_serial(&serial);
 }
 
 /**** fdisk's writes ****/

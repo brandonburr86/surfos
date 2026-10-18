@@ -530,6 +530,16 @@ unittest-wlan: $(WLAN_HOSTTESTS)
 -include $(wildcard $(BUILD)/host/kernel/net/wlan/*.d)
 .PHONY: unittest-wlan
 
+# 10/17/26 (the network manager): the text of the settings files on the stick (net/netcfg.c): settings.conf read and
+# edited in place, networks.conf written and read back, SSIDs quoted, the DHCP lease timers
+$(BUILD)/host/test_netcfg: tests/host/test_netcfg.c $(BUILD)/host/kernel/net/netcfg.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+unittest: unittest-netcfg
+unittest-netcfg: $(BUILD)/host/test_netcfg
+	$(BUILD)/host/test_netcfg
+.PHONY: unittest-netcfg
+
 clean:
 	rm -rf build
 

@@ -155,6 +155,11 @@ void netdev_print(void) {
     for(d = netdevs; d; d = d->next) {
         printf("    %s: %s, link %s, mtu %u\n", d->name, macfmt(d->mac, m), d->link_up ? "up" : "down", d->mtu);
         printf("        inet %s  netmask %s  gateway %s  dns %s\n", ipfmt(d->ip, a), ipfmt(d->netmask, b), ipfmt(d->gateway, c), ipfmt(d->dns, dn));
+        if(d->ip && d->lease_s) {                       /* 10/17/26: the lease, which the network manager renews */
+            u_long gone = (getticks() - d->lease_at) / HZ;
+            printf("        DHCP lease from %s: %lu s of %lu left\n", ipfmt(d->dhcp_server, a),
+                   gone < d->lease_s ? (u_long)d->lease_s - gone : 0UL, (u_long)d->lease_s);
+        }
         printf("        RX packets %lu bytes %lu dropped %lu   TX packets %lu bytes %lu errors %lu\n",
                d->rx_packets, d->rx_bytes, d->rx_dropped, d->tx_packets, d->tx_bytes, d->tx_errors);
     }

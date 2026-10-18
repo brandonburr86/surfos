@@ -17,7 +17,7 @@ using the same scale, grid and margins as driver/fbcore.c (1280x800: 80x25 at sc
 laptop) is driven: keys go in through the emulated PS/2 keyboard (monitor sendkey), text
 comes out of the framebuffer.
 
---test runs seventeen scenarios, each from a cold boot with fresh firmware variables:
+--test runs eighteen scenarios, each from a cold boot with fresh firmware variables:
   serial     512 MB: the portable checks over COM1, then the framebuffer must show the
              same boot messages and the prompt
   keyboard   4 GB, no serial port: typing (Shift, Backspace, history), raw mode, console
@@ -82,6 +82,15 @@ comes out of the framebuffer.
              stick with the flashed image's label and files (no boot/ONE-STICK.txt) and a stale
              surfos-dev beside a data stick boots the data stick's build; a stick made with
              tools/stick.py beside a data stick boots its own, and devloop.py chooses it
+  settings   (10/17/26) the settings on the stick (kernel/netman.c): a stick made with tools/stick.py holding
+             surfos-config/settings.conf (telnetd on, ethernet dhcp, a host name, the owner's comment) and
+             a networks.conf written by hand (the simulated Wi-Fi's test network and its password; the
+             menu's SurfOS entry is given the word wlansim for this). GRUB's SurfOS entry, no autonet: the
+             settings read from the stick it was started from, eth0's lease and the saved Wi-Fi network
+             joined with its own lease, telnetd started by the setting and a telnet session through it;
+             the stick unmounted all along; a setting changed and a network saved through a short mount;
+             then the menu's entry without the settings: nothing joined, no telnetd. Read here afterwards:
+             the owner's line and comment kept, the key and never the password, fsck_msdos and fsck.fat
   no-initrd, no-kernel
              a copy of the image with that file deleted: the boot must stop with a message
              naming it (a visible failure, not a blank screen) and SurfOS must not start
@@ -1993,12 +2002,160 @@ def scenario_missing(args, image, firmware, outdir, path, message):
     return results
 
 
+SET_TITLE = 'SurfOS (without the settings on the stick: no Wi-Fi joined, no telnetd)'
+SET_SETTINGS = (b'# mine: written on the Mac\ntelnetd = on\n\nethernet = dhcp   # the USB adapter\n'
+                b'hostname = ideapad\n')
+
+
+def scenario_settings(args, image, firmware, outdir):
+    """10/17/26 (the network manager, docs/USB-BOOT.md section 15): the owner's one stick with surfos-config/ on it,
+    through GRUB's own menu. The SurfOS entry (no development build, so no autonet) reads the settings from the
+    volume GRUB was started from and brings up what they ask for: eth0's lease, the saved Wi-Fi network joined (the
+    simulated chip: the entry gets the word wlansim in this test) and leased, telnetd started by the setting, a
+    telnet session; the stick is never left mounted; a change of a setting and a saved network go through a short
+    mount (an open one, with a word that SurfOS joins none by itself while telnetd runs). The menu's entry without the
+    settings (given wlansim too) then reads nothing: no Wi-Fi, no telnetd, nothing from the reboot on. Read here: the
+    files as SurfOS left them and fsck_msdos and fsck.fat on the stick"""
+    results = []
+    mk, mi, qr = load_mkusb(), load_tool('mkimage', 'mkimage.py'), load_smoke_harness()
+    kit = stick_folder(image)
+    results.append(('the stick folder is beside the image (make usb-image writes it)', kit is not None))
+    if not kit:
+        return results
+    files = written_by_stick_tool(kit, skip=('surfos-dev/surfos.bin', 'surfos-dev/initrd.tar'))   # no autonet
+    cfg = files.get('boot/grub/grub.cfg', b'')
+    plain = b'multiboot2 /boot/surfos.bin profile=laptop bootvol=$surfos_bootvol\n'
+    without = b'multiboot2 /boot/surfos.bin profile=laptop settings=off bootvol=$surfos_bootvol\n'
+    results.append(('the menu\'s SurfOS entry, and the one without the settings, are there to be given the simulated '
+                    'Wi-Fi', cfg.count(plain) == 1 and cfg.count(without) == 1 and SET_TITLE.encode() in cfg))
+    files['boot/grub/grub.cfg'] = cfg.replace(plain, b'multiboot2 /boot/surfos.bin profile=laptop wlansim '
+                                                     b'bootvol=$surfos_bootvol\n').replace(
+        without, b'multiboot2 /boot/surfos.bin profile=laptop settings=off wlansim bootvol=$surfos_bootvol\n')
+    mine = {'notes.txt': ONE_NOTES,
+            'surfos-config/settings.conf': SET_SETTINGS,
+            'surfos-config/networks.conf': b'network = "SurfSimWPA"\npassword = "' + qr.WLANSIM_PASSPHRASE.encode() +
+                                           b'"\n'}
+    tmpd = tempfile.mkdtemp(prefix='surfos-settings-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'settings.img')
+    mi.make_fat32(stick, dict(files, **mine), size_mb=1100, label='DATASTICK', cluster_bytes=16384, serial=0x5E77C0F7)
+    off, _ = mbr_partition(stick)
+    vol = fat_serial(stick, off)
+    tport = qr.free_port()
+    net = ['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{tport}-:23', '-device', USBNET_DEV]
+    vm = Vm('settings', args, stick, firmware, mem='512', serial=True, outdir=outdir, reboot=True, extra=net,
+            copy_image=False)
+    try:
+        ok = vm.expect('Booting `SurfOS\'', args.boot_timeout) and vm.expect(PROMPT, args.boot_timeout)
+        results.append(('GRUB\'s first entry is SurfOS (no development build on the stick), and it boots', ok))
+        if ok:
+            want = [f'+PART: usb0 is the SurfOS boot drive (usb0p1 holds the volume {vol}',
+                    '+NET: settings from usb0p1 (surfos-config/): telnetd on, wifi on, ethernet dhcp, hostname ideapad; '
+                    '1 saved Wi-Fi network']
+            results.append(('the settings and the saved network read from the stick GRUB was started from',
+                            in_order(vm, want, 60)))
+            results.append(('eth0: its link, asked for by the setting, and its lease', in_order(vm, [
+                '+NET: eth0: link up; asking for an address (DHCP)', 'dhcp: eth0: lease 10.0.2.'], 60)))
+            results.append(('Wi-Fi: the card started, the saved network joined with the key made from its password, '
+                            'its lease', in_order(vm, ['+NET: wlan0: starting the Wi-Fi card to join a saved network',
+                                                       '+NET: wlan0: SurfSimWPA is in range', 'wlan0: link up: "SurfSimWPA"',
+                                                       '+NET: wlan0: joined SurfSimWPA; asking for an address (DHCP)',
+                                                       'dhcp: wlan0: lease 10.0.2.'], 90)))
+            results.append(('telnetd started by the setting once an interface it may start for has an address',
+                            in_order(vm, ['; starting telnetd on F1 (the settings: telnetd = on)',
+                                          'telnetd: listening on 10.0.2.1'], 60)))
+            t = None
+            try:
+                t = qr.Telnet(tport, timeout=30)
+                tok = t.expect("Brandon Burr's SurfOS", 30) and t.expect(qr.TELNET_ROOT, 30)
+                if tok:
+                    t.send('exit\n')
+                    tok = t.wait_closed(30)
+            except OSError:
+                tok = False
+            finally:
+                if t:
+                    t.close()
+            results.append(('telnet: a session with nobody having typed telnetd on', tok))
+            steps = [('mount', [], 'the stick is not left mounted after the settings were read'),
+                     ('lsblk', ['usb0p1', 'boot drive: writable'], 'lsblk: the volume writable, not mounted'),
+                     ('settings', ['settings: surfos-config/settings.conf on usb0p1, the stick SurfOS was started from',
+                                   'telnetd      = on', 'ethernet     = dhcp', 'hostname     = ideapad'],
+                      'settings: those of the stick'),
+                     ('settings hostname laptop2', ['hostname = laptop2, saved on usb0p1 (surfos-config/settings.conf)'],
+                      'a setting changed and saved on the stick'),
+                     ('wifi scan', ['SurfSim ', 'open'], 'a scan hears the open network'),
+                     ('wifi save SurfSim', ['saved SurfSim (open) on usb0p1', 'a telnet server runs or is to start by '
+                                            'itself'], 'an open network saved on the stick, with telnetd\'s warning'),
+                     ('wifi saved', [' 1  SurfSim', ' 2  SurfSimWPA', 'joined now'], 'wifi saved: the two, in order'),
+                     ('mount', [], 'and the stick is not left mounted after either')]
+            for cmd, expects, what in steps:
+                good, out = run_cmd(vm, cmd, expects)
+                if cmd == 'mount':
+                    good = good and 'usb0p1' not in out and '/.netman' not in out
+                if cmd == 'lsblk':
+                    good = good and 'mounted (boot drive)' not in out
+                results.append((what, good))
+            # the menu's entry without the settings
+            vm.pump(0.5)
+            vm.cursor = len(vm.transcript)
+            mark = len(vm.text())
+            vm.send('reboot\n')
+            ok = vm.expect('Use the', args.boot_timeout)
+            if ok:
+                time.sleep(0.5)
+                for _ in range(4):                      # SurfOS, troubleshooting, kernel shell, USB off: the fifth
+                    vm.keys('<down>')
+                vm.keys('\n')
+                ok = vm.expect('Loading SurfOS with settings=off ...', 30) and vm.expect(PROMPT, args.boot_timeout)
+            results.append(('the menu\'s entry without the settings, chosen with the arrow keys, boots', ok))
+            if ok:
+                ok2, out = run_cmd(vm, 'bootinfo', ['cmdline "profile=laptop settings=off wlansim bootvol='])
+                results.append(('its command line has settings=off', ok2 and has_cmdline(
+                    out, f'profile=laptop settings=off wlansim bootvol={vol}')))
+                results.append(('nothing read: the defaults', run_cmd(vm, 'settings', [
+                    'settings: not read at this start (settings=off)', 'telnetd      = off       (the default)'])[0]))
+                results.append(('no telnetd', run_cmd(vm, 'telnetd', ['telnetd: not running'])[0]))
+                vm.pump(3)
+                results.append(('no Wi-Fi joined: the card was not even started',
+                                run_cmd(vm, 'wifi status', ['wlan0: down (wifi up starts it)'])[0]))
+                since = vm.text()[mark:]
+                results.append(('from the reboot on: no settings line, no Wi-Fi, no DHCP by itself',
+                                '+NET: settings from' not in since and '+NET: wlan0' not in since and
+                                'dhcp: eth0: lease' not in since and 'dhcp: wlan0' not in since))
+        check_bad(vm, results, vm.text())
+        results.append(('the passphrase never shows on the console', qr.WLANSIM_PASSPHRASE not in vm.text()))
+    finally:
+        vm.close()
+    try:
+        with open(stick, 'rb') as f:
+            fat = mk.Fat32(f, off)
+            settings = fat.read('surfos-config/settings.conf')
+            nets = fat.read('surfos-config/networks.conf')
+            note = fat.read('notes.txt')
+            boot = {rel: fat.read(rel) for rel in files}
+        results.append(('settings.conf: the owner\'s lines and comment kept, the one setting changed', settings ==
+                        SET_SETTINGS.replace(b'hostname = ideapad', b'hostname = laptop2')))
+        results.append(('networks.conf: both networks, the open one first, the key and never the password',
+                        b'network = "SurfSim"\nsecurity = open\n\nnetwork = "SurfSimWPA"\nsecurity = wpa2\npsk = ' +
+                        qr.SURFSIM_PSK.encode() + b'\n' in nets and qr.WLANSIM_PASSPHRASE.encode() not in nets))
+        results.append(('the owner\'s file and the boot files are as they were', note == ONE_NOTES and boot == files))
+        for what, good, text in fat_checks(stick, 'stick'):
+            results.append((what, good))
+            if not good:
+                print(text, flush=True)
+    except Exception as e:
+        results.append((f'the stick can be read back here ({e})', False))
+    shutil.rmtree(tmpd, ignore_errors=True)
+    return results
+
+
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
              'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
              'devloop': scenario_devloop, 'onestick': scenario_onestick, 'twosticks': scenario_twosticks,
+             'settings': scenario_settings,
              # GRUB's own error; without the kernel the bootstrap cannot recognise the stick and says that
              'no-initrd': lambda a, i, f, o: scenario_missing(a, i, f, o, '/boot/initrd.tar',
                                                              "file `/boot/initrd.tar' not found"),
@@ -2102,7 +2259,8 @@ def main():
                'scenarios': {}}
     failed = 0
     for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
-                               'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'no-initrd', 'no-kernel']:
+                               'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'settings', 'no-initrd',
+                               'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:
             os.makedirs(sdir, exist_ok=True)

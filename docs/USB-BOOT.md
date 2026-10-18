@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 18 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 19 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |
@@ -20,6 +20,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Telnet into the laptop from another computer: `telnetd`, surfsh over the network | done under emulation; **pending on the laptop** | `make test`, `make test-tcp` and `make test-usb` (scenario `usbnet`); [section 11](#11-telnet-the-shell-from-another-computer) |
 | Development builds over the network: a data stick, GRUB's development entry, `autonet`, `rx`, `tools/devloop.py` | done under emulation; **pending on the laptop** | `make test`, `make test-usb` (scenario `devloop`), `make test-devloop`; [section 13](#13-development-builds-over-the-network) |
 | One stick for everything: the boot files copied onto a FAT32 stick that keeps your files (`tools/stick.py`), new builds copied into it | done under emulation; **pending on the laptop** | `make test-usb` (scenarios `onestick` and `twosticks`), `make unittest`, `make test-mkusb`; [section 14](#14-one-stick-for-everything) |
+| Saved Wi-Fi networks joined by themselves at every start, and the settings on the stick (telnet at startup, Ethernet's DHCP, a host name) | done under emulation (a simulated Wi-Fi chip); **pending on the laptop** | `make test` (boots with a settings disk), `make test-usb` (scenario `settings`), `make unittest` (`test_netcfg`); [section 15](#15-wi-fi-saved-networks-and-the-settings-on-the-stick) |
 
 ## What is on the drive
 
@@ -68,7 +69,7 @@ written as a regular file: no build or test step writes to a disk device.
 
 ```sh
 devenv/run-usb.sh       # a QEMU window with UEFI firmware, booting a copy of the image from a virtual USB stick
-devenv/test-usb.sh      # the automatic tests: 17 scenarios, several minutes
+devenv/test-usb.sh      # the automatic tests: 19 scenarios, several minutes
 ```
 
 Both need `qemu-system-x86_64` with its EDK2 UEFI firmware (Homebrew's `qemu` has both).
@@ -153,13 +154,16 @@ drawn at twice the font's size, or 170x48 on a 1366x768 panel.
 The GRUB menu also has:
 
 * **SurfOS (development build from the data stick)**, first and chosen after 5 seconds, but
-  only when a second USB stick holds a development build (section 13).
+  only when a second USB stick holds a development build (section 13); on one stick for
+  everything, **SurfOS (development build from this stick)** (section 14).
 * **SurfOS (troubleshooting: local APIC timer, polled keyboard)**: the same kernel with
   `timer=lapic kbd=poll`, for when the normal entry boots but the clock or the keyboard
   does not respond.
 * **SurfOS (kernel shell)**: the kernel's own shell on every console instead of surfsh
   (section 10).
 * **SurfOS (USB controller off: no USB network adapter, no USB sticks)**: section 8.
+* **SurfOS (without the settings on the stick: no Wi-Fi joined, no telnetd)**: the build in
+  `boot/` without reading the settings and the saved networks (section 15).
 * **UEFI firmware setup**: restarts into the firmware's setup screens.
 * **Restart** and **Power off**.
 
@@ -187,7 +191,8 @@ Type at the prompt, `SURF ≋>`:
 | `heaptest`, `selftest` | `HEAPTEST PASS`, `SELFTEST PASS` (the disk tests are skipped, and the network tests without an adapter and a cable) |
 | `lsusb` | the USB controller and what is plugged in: the SurfOS drive itself, the webcam, Bluetooth |
 | `lspci -v`, `lspci 00:14.3` | every PCI device with its ids, subsystem, power state, interrupts and link; one in full, with its configuration space |
-| `wifiinfo` | the Wi-Fi card: its ids, what it probably is, and its Bluetooth half. SurfOS has no Wi-Fi driver yet: this is what one needs, so please send the whole output ([WIFI-PLANNING.md](WIFI-PLANNING.md)) |
+| `wifiinfo` | the Wi-Fi card: its ids, what it is, and its Bluetooth half |
+| `wifi up`, `wifi scan` | the Wi-Fi card started; the networks in range (joining and saving one: section 15) |
 | F1 to F4 | four consoles, each with its own shell |
 | `edit /initrd/etc/version` | the text editor, full screen; Ctrl+Q leaves it (the ramdisk is read-only: files to keep go on a second stick, section 9) |
 
@@ -199,8 +204,8 @@ questions. A telnet session from the Mac (section 11) is the easiest way to copy
 ## 8. Networking: a USB Ethernet adapter
 
 The IdeaPad 3 15IIL05 has no Ethernet socket (Lenovo's specification: "No onboard
-Ethernet"), and its only network hardware is the Wi-Fi card, which SurfOS has no driver
-for. SurfOS reaches a wired network through a **USB-to-Ethernet adapter** in one of the
+Ethernet"), and its only network hardware is the Wi-Fi card (which SurfOS drives since
+10/10/26: section 15). SurfOS reaches a wired network through a **USB-to-Ethernet adapter** in one of the
 laptop's USB ports. Its USB stack drives the laptop's USB 3 controller (xHCI) and any
 adapter that speaks one of the two standard USB networking classes, **CDC ECM** or **CDC
 NCM**.
@@ -242,7 +247,9 @@ gateway, DNS server).
 
 When the adapter is unplugged, `eth0` stays (with `link down`). Plugged back in, it
 is `eth0` again, and with the same adapter it keeps its address, so no new `dhcp` is
-needed. A different adapter also becomes `eth0`, but needs `dhcp` again.
+needed: SurfOS asks the network to confirm the address, and gives it up when the network
+says it is not its own (section 15). A different adapter also becomes `eth0`, but needs
+`dhcp` again.
 
 The GRUB menu has an entry **SurfOS (USB controller off: no USB network adapter, no USB
 sticks)**. It boots without touching the USB controller, in case the USB driver ever gets
@@ -251,13 +258,14 @@ in the way on the laptop.
 ## 9. Files on a USB stick
 
 SurfOS forgets everything at a restart: the ramdisk is unpacked afresh at every boot, and
-the flashed SurfOS drive is never written (it is not even mounted unless asked, and then
-only read-only). Files that should last go on a **second USB stick**, or on the boot
+the flashed SurfOS drive is never written (it is mounted, read-only, only when asked, or
+for the moment SurfOS reads its settings there at startup: section 15). Files that should last go on a **second USB stick**, or on the boot
 stick itself when it is a FAT32 stick you copied the boot files onto (section 14), which
 SurfOS writes but never partitions or formats. A second stick SurfOS can partition and
 format as **FAT32**, the format macOS, Windows and Linux all read and write, and it has a text editor and the usual file commands, so the
-same stick carries files between SurfOS and the Mac. Nothing is mounted by itself: you
-mount the stick, and you eject it before pulling it out.
+same stick carries files between SurfOS and the Mac. Nothing stays mounted by itself (the
+stick SurfOS was started from is mounted for a moment when its settings are read or saved,
+section 15): you mount the stick, and you eject it before pulling it out.
 
 **What to buy.** A plain USB-A flash drive from a known brand, 16 to 64 GB. Its size
 hardly matters to SurfOS, and a USB 3 stick is faster in the laptop's USB 3 ports.
@@ -554,13 +562,16 @@ the prompt, every command.
 > **There is no password and no encryption.** Anyone who can reach the laptop over the
 > network gets a shell with every kernel command (`fdisk`, `mkfs` and `reboot`
 > included), and everything typed crosses the network as plain text. Use it on your own
-> network only, and turn it off when you are done. It never starts by itself, except in
-> a development build from the data stick (section 13).
+> network only, and turn it off when you are done. It starts by itself only with the
+> setting `telnetd = on` (section 15) or in a development build (section 13), and then
+> only once SurfOS has an address on Ethernet or on a WPA2 Wi-Fi network, never because
+> of an open one. Once it runs it answers on **every** network the laptop is on, one you
+> join by hand later included.
 
 **Turn it on**, on one of the laptop's own consoles (F1 to F4):
 
-1. Get the laptop onto the network (section 8): the USB Ethernet adapter, the cable,
-   `dhcp`.
+1. Get the laptop onto the network: the USB Ethernet adapter, the cable and `dhcp`
+   (section 8), or Wi-Fi (section 15).
 2. `telnetd on` starts the server in the background and says where to connect:
    `telnetd: listening on 192.168.1.50 port 23`. The console is free again at once.
    `telnetd on 2323` uses another port. Without an address yet it says
@@ -612,8 +623,8 @@ cannot do yet. A few differences:
 | `telnetd off` | `telnetd: stopped (1 session shell ended)`: the server is gone and every session has ended. Typed inside a session, it ends that session too |
 | `dmesg` | who connected and when each session ended, and why: `telnetd: session 1 from 192.168.1.20:51234 (pty0, surfsh pid 13)` |
 
-After a reboot `telnetd on` has to be typed again (a development build from the data stick
-starts it by itself: section 13).
+After a reboot `telnetd on` has to be typed again, unless the setting `telnetd = on`
+starts it (section 15) or a development build does (section 13).
 
 ## 12. When something goes wrong
 
@@ -651,10 +662,16 @@ starts it by itself: section 13).
 | The prompt is `SURF ≋?>`, with a line about a *recovery console* above it | surfsh could not run on that console (missing, not loadable, or it ended abnormally three times within 30 seconds), so the kernel's own shell took over. Every command still works and `surfsh` starts the shell by hand; please report the line. |
 | `tick` does not change between runs | Choose the troubleshooting entry (it uses the local APIC timer). |
 | Windows asks for a BitLocker recovery key | Enter the key you saved (step 5). It happens once after Secure Boot settings change. |
-
 | The menu has no development entry, though the data stick holds a build | GRUB looks for a folder `surfos-dev` holding `surfos.bin` and `initrd.tar` at the top of the stick's first partition (FAT). Plug the stick straight into the laptop, or into another port: the firmware may not have shown it to GRUB (section 13). |
 | The development build does not start, or misbehaves | Restart (hold the power button if need be) and choose **SurfOS**, the second entry, within the 5 seconds: the build on the boot stick, which nothing changes (section 13). |
-| `+AUTONET: no network link within 90 s` | The Ethernet adapter or its cable is not plugged in, or the router is off. Type `dhcp` and `telnetd on` once the cable is in. |
+| `+AUTONET: no network link within 90 s` | No Ethernet link came: the adapter or its cable is not plugged in, or the router is off. (The development entry starts telnetd for Ethernet only; over Wi-Fi only the setting `telnetd = on` starts it, section 15.) Type `dhcp` and `telnetd on` once the cable is in. |
+| `+AUTONET: eth0: no DHCP lease after 3 tries` | The adapter's link came, but the router's DHCP did not answer: `dhcp`, then `telnetd on`. |
+| A saved Wi-Fi network is not joined at startup | `wifi scan` (after `wifi up`, if the card is down), then `wifi saved`, says whether it is in range; `settings` whether `wifi` is on and where the settings came from; `dmesg` has the `+NET:` lines (the later tries are written only there). Networks saved on the one stick are not on the flashed stick: started from the SURFOSUSB stick, the first line of `settings` ends with `(the flashed SURFOSUSB stick: only read)`; with an older menu it says `none: SurfOS was not started from a stick GRUB named`. The **SurfOS** entries need a build from 10/17/26 on in `boot/` (section 15). An open network is not joined by itself while a telnet server runs or is to start (`... is open and a telnet server runs ...`): `wifi join` it. A changed password (`... refused its saved key 3 times in a row ...`): `wifi join` it, then `wifi save`. A hidden network needs `hidden = yes` in the file (section 15). |
+| `+NET: networks.conf line 7: ...` or `+NET: settings.conf line 3: ...` at startup | That line was not understood (the message says why). In `settings.conf` it is skipped and stays in the file. In `networks.conf` the whole network it belongs to is left out (the message names it) and kept in the file as it was, after the others under a comment, until you correct it on the Mac: a save from SurfOS keeps it, it does not fix it. Two exceptions: a key SurfOS does not know, or a `hidden` value it cannot read, is only said: the network is used without it, and the next save drops that line. |
+| `wifi save` or `wifi forget` says `... a password in a part SurfOS does not understand ...` | A network SurfOS left out has a password in it. SurfOS would have to keep that password in the file, and it never writes one: correct that network (the line is named) or delete it on the Mac, then save again. |
+| `... it would bring back a network written by hand that SurfOS had left out (a name written twice, or a 17th network?)` | `networks.conf` names a network twice (or has more than 16); SurfOS used the first and kept the second (or the 17th) as it was, which forgetting one would make a network. Delete one of the two (or the extra ones) on the Mac. |
+| `... in force until SurfOS restarts, but not saved: ...` | The setting changed for now, but the stick could not be written (the reason follows): a flashed SURFOSUSB stick, a write-protect switch, the stick mounted read-only. For `telnetd` and `telnetd.port`, which act at the next start, and for any setting under the entry without the settings, it says `nothing changes` instead. |
+| Telnet is on at startup and should not be | Start with **SurfOS (without the settings on the stick)** in the GRUB menu, then `settings telnetd off` (saved for the next start). The development entry starts telnetd for an Ethernet link whatever the settings say: on a network you do not trust, choose the entry without the settings (renaming `surfos-dev` on the Mac takes the development entry away). |
 
 SurfOS has no ACPI power-off: `reboot` restarts the laptop; to switch it off, hold the
 power button.
@@ -689,7 +706,9 @@ and Claude does the rest. From then on:
   chooses it after 5 seconds. That build brings up the network and the telnet server by
   itself: the screen shows `+AUTONET:` lines and `telnetd: listening on … port 23`.
   Everything said about telnet in section 11 holds: no password, so keep the data stick
-  plugged in only on your own network.
+  plugged in only on your own network. It starts telnetd for the Ethernet adapter only. With
+  saved Wi-Fi networks (section 15) the build also joins the first one in range (no open one
+  while telnetd is to start), and telnetd, once running, answers there too.
 * **If a development build misbehaves**, restart (hold the power button if need be) and
   choose **SurfOS**, the second entry, with the arrow keys before the 5 seconds are up:
   the build on the boot stick, which nothing changes.
@@ -801,9 +820,12 @@ SurfOS (troubleshooting: local APIC timer, polled keyboard)
 ```
 
 The first entry starts the build in `surfos-dev`, with the network and the telnet server
-(section 13; no password, so on a network you do not trust choose **SurfOS**, which starts
-neither). **SurfOS** starts the build in `boot/`: choose it with the arrow keys when a
-development build misbehaves.
+(section 13; no password, so on a network you do not trust choose **SurfOS (without the
+settings on the stick)**, which starts neither and joins no network by itself). **SurfOS**
+starts the build in `boot/`: choose it with the arrow keys when a development build
+misbehaves. When that build has the network manager (from 10/17/26 on; `tools/stick.py
+install --fallback` puts one there) it reads the settings (section 15), so it starts
+telnetd too when they say `telnetd = on`.
 
 GRUB tells SurfOS which volume it was started from, by the volume's serial number, so
 SurfOS knows its own stick whatever it is called:
@@ -834,9 +856,9 @@ They go into `surfos-dev`, either way:
   tools/devloop.py deploy` (section 13). `deploy` finds the stick SurfOS was started
   from (`boot drive: writable`), writes the build into its `surfos-dev`, ejects it and
   restarts the laptop into that build. Nothing is plugged in or out. With the USB Ethernet
-  adapter the laptop comes back by itself; over Wi-Fi it needs `wifi join` again after
-  the restart. It refuses `--stick` naming another stick (GRUB would not start a build
-  there) and a stick without `boot/ONE-STICK.txt`.
+  adapter the laptop comes back by itself, and over Wi-Fi too once the network is saved
+  (`wifi save`) and `telnetd = on` is set (section 15). It refuses `--stick` naming another
+  stick (GRUB would not start a build there) and a stick without `boot/ONE-STICK.txt`.
 * **On the Mac:** `devenv/build-usb.sh`, the stick into the Mac, `tools/stick.py update
   /Volumes/DATASTICK --eject` (only `surfos-dev` changes), the stick back into the laptop.
   Or drag `build/usb/stick/surfos-dev` onto the stick and choose *Replace*.
@@ -853,6 +875,185 @@ among them. The stick then no longer starts SurfOS until `tools/stick.py install
 files back, a minute on the Mac. The SURFOSUSB stick of step 4, which SurfOS only reads
 and `tools/stick.py` never writes, still starts SurfOS meanwhile.
 
+## 15. Wi-Fi, saved networks and the settings on the stick
+
+*Added 10/17/26.* SurfOS drives the laptop's own Wi-Fi card, the Intel Wireless-AC 9560:
+open and WPA2-Personal networks on 2.4 and 5 GHz (not networks that offer only WPA3). A
+network you join can be **saved on the stick SurfOS starts from**, and SurfOS then joins it
+by itself at every start and gets an address, with nobody typing. A **settings file** on
+the same stick says what else to do at startup, such as starting the telnet server. Both
+are plain text files the Mac can read and change.
+
+This needs one stick for everything (section 14): the FAT32 stick you copied the boot files
+onto is the one SurfOS knows as its own and may write. The flashed SURFOSUSB stick of step 4
+is only read: settings put there on the Mac are used, but SurfOS saves nothing there. The
+builds must be from 10/17/26 on, in both places: `tools/stick.py update` puts a new one into
+`surfos-dev` (the development entry), and `tools/stick.py install /Volumes/DATASTICK
+--fallback` also into `boot/`, which the **SurfOS** entries start, with the menu entry
+without the settings. A stick set up before keeps its older build in `boot/`, which reads no
+settings.
+
+**Joining a network by hand:**
+
+| Command | What it does |
+|---|---|
+| `wifi up` | starts the card (its firmware comes from the stick) |
+| `wifi scan` | the networks in range, strongest first: name, channel, band, signal, security |
+| `wifi join HouseOfBurr` | joins it; for WPA2 it asks `Password for HouseOfBurr:` and shows nothing of what you type |
+| `dhcp wlan0` | an address on that network |
+| `wifi status`, `wifi leave`, `wifi down` | what the card is doing; leave the network; turn the card off |
+
+**Saving it.** While joined, type **`wifi save`**. SurfOS writes the network into
+`surfos-config/networks.conf` on its stick, and from the next start on it brings the card
+up, joins the network and asks for an address by itself. The screen shows `+NET:` lines:
+
+```text
++NET: settings from usb0p1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos; 1 saved Wi-Fi network
++NET: wlan0: starting the Wi-Fi card to join a saved network
++NET: wlan0: HouseOfBurr is in range (-52 dBm): joining it
+wlan0: link up: "HouseOfBurr" (42:75:c3:4b:21:09), channel 11, 2.4 GHz, -52 dBm, WPA2-Personal
++NET: wlan0: joined HouseOfBurr; asking for an address (DHCP)
+dhcp: wlan0: lease 10.0.0.164 for 86400 s from 10.0.0.1
+```
+
+| Command | What it does |
+|---|---|
+| `wifi save` | saves the network wlan0 is joined to, first in the list |
+| `wifi save <name>` | saves a network that is not joined now: it asks the password (nothing for an open network), checked the first time SurfOS joins it |
+| `wifi saved` | the saved networks in the order they are tried, and which are in range or joined now |
+| `wifi forget <name>` | SurfOS no longer joins it by itself (it stays joined now, if it is) |
+| `wifi connect` | does now what a start does: the card up, the first saved network in range joined, its address |
+
+Several saved networks are tried in their order, the one saved last first (16 at most).
+When none is in range, SurfOS looks again every 30 seconds (every 2 minutes after 20 tries,
+about 10 minutes), saying so once on the screen and the later tries only in the log
+(`dmesg`). When
+the network goes away while joined (the router restarts, the laptop is carried off), SurfOS
+first joins it again by itself, five tries in about a minute, then looks for any saved
+network. On a network whose DHCP server does not answer (yet), it asks for the address again
+in 30 seconds, then less often, up to every 5 minutes.
+
+What you do by hand wins: after `wifi leave` or `wifi down` SurfOS joins nothing by itself
+until `wifi connect` (which then hands the looking back to it), the next start, or until a
+network you joined by hand is lost for good; a network joined with `wifi join` is left as it
+is. A saved key the network refuses three times in a row (its password changed, or it was
+mistyped when saved) is set aside for 10 minutes, and `wifi saved` and the screen say so:
+`wifi join` it with the right password, then `wifi save`.
+
+**Open networks and telnet.** The telnet server has no password, so while one runs or is
+to start by itself (`telnetd = on`, the development entry), SurfOS joins **no open network
+by itself**, `wifi connect` included. It says so (`... is open and a telnet server runs or is
+to start: not joined by itself`), and `wifi join <name>` joins it by hand (and says that the
+server answers there too). Once telnetd runs, it answers on every network SurfOS is on: do
+not join a network you do not trust while it runs; `telnetd off` first.
+
+**Whose network?** SurfOS cannot tell: any Ethernet link and any WPA2 network count as
+safe for telnetd. A café's, a hotel's or an office's WPA2 network, whose password others
+know, is as open to all of them as an open network. So with `telnetd = on`, save only your
+own networks (`wifi forget` the others, or `settings telnetd off` before you go out), and
+while the development entry is the default (the one stick's, as long as `surfos-dev` holds a
+build) do not plug the Ethernet adapter into other people's networks. Away from home, start
+with the entry without the settings; renaming `surfos-dev` on the Mac takes the development
+entry away.
+
+**Hidden networks**, whose name is not broadcast: `wifi join <name>` finds one by asking for
+it by name, and `wifi save` then saves it with `hidden = yes`, so SurfOS asks for it by name
+at startup too. `wifi save <name>` saves a network that the last scan did not hear by its
+name as hidden as well (it says so); if it was merely out of range, `wifi scan` near it, then
+`wifi save <name>` again. A renamed network is a new one: `wifi forget` the old name, then join
+and save the new one.
+
+**What is saved.** The network's name, its security, whether it is hidden, and its **key**:
+the 256-bit value WPA2 makes from the password and the network's name (what
+`wpa_passphrase` prints on Linux). The password itself is not written anywhere, so it cannot
+be read back from the stick, but the key is enough to join that network: **whoever has the
+stick can join your Wi-Fi**, so keep it as safe as the password. While telnetd runs, whoever
+has a session can read the files too. `wifi forget` removes a network from the file. A file
+deleted in Finder goes to the stick's Trash until the Trash is emptied, and like any file
+system FAT does not wipe the old bytes, so treat a stick that once held keys as one that
+still may. (A password you type into the file on the Mac, below, stays readable there until
+SurfOS next writes the file, which any `wifi save` or `wifi forget` does.)
+
+**The settings.** `settings` lists them, `settings <key>` explains one, and
+`settings <key> <value>` changes one and saves it on the stick at once: `settings telnetd
+on` starts the telnet server at every start from then on, `settings telnetd off` no longer.
+
+| Key | Values | Default | What it does |
+|---|---|---|---|
+| `telnetd` | `on`, `off` | `off` | `on` starts the telnet server (section 11) at every start, once there is an address on Ethernet or a WPA2 Wi-Fi network (never for an open one), and the screen says where to connect. It has **no password**: use it on your own networks only. Meanwhile SurfOS joins no open network by itself (above) |
+| `telnetd.port` | 1 to 65535 | `23` | the telnet server's port |
+| `wifi` | `on`, `off` | `on` | `on` joins a saved network at startup and when one comes back (above); `off` leaves the card alone |
+| `ethernet` | `dhcp`, `off` | `off` | `dhcp` asks for an address whenever the USB Ethernet adapter's link comes up, also when it is plugged in later |
+| `hostname` | letters, digits and `-` (not first or last), 1 to 32 | `surfos` | the name SurfOS gives in its DHCP requests: the router's list of devices shows it, which helps to find the laptop's address |
+
+`telnetd` and `telnetd.port` act at the next start; `ethernet` and `hostname` at once;
+`wifi off` at once, `wifi on` from when a network is next lost (`wifi connect` joins one
+now). Whichever way an
+address came (at startup, `dhcp` by hand, in every start of SurfOS), its lease is renewed
+before it runs out; `ifconfig` shows how much of it is left, and `dhcp renew` renews it by
+hand. A lease that cannot be renewed is given up when it ends: `dhcp` then gets a new one,
+and so do `ethernet = dhcp` and, for a saved network it joined, SurfOS itself. When the USB
+adapter's link comes back while `eth0` has a lease, SurfOS first asks the network to confirm
+the address.
+
+**The files** are at the top of the stick, beside `boot` and `surfos-dev`:
+
+```text
+surfos-config/settings.conf   the settings, "key = value", each explained in the file
+surfos-config/networks.conf   the saved networks
+```
+
+On the Mac they open in TextEdit (*Open With* → *TextEdit*, as `.conf` files are not its
+own): keep them plain text (*Format* → *Make Plain Text*), and before typing turn off *Edit*
+→ *Substitutions* → *Smart Quotes* and *Smart Dashes*. SurfOS takes TextEdit's curly double
+quotes for quotes, but a curly apostrophe or a long dash in a password or a name is another
+character, which makes another key or names a network that is not there. A file made on the
+Mac needs these exact names, with no `.txt` at the end. Easier still: `wifi join` and `wifi
+save` on the laptop, which write the name exactly. In `settings.conf` a line like
+`#telnetd = off` shows a setting's default: take away the `#` and change the value to set
+it. SurfOS changes only the line of the setting it saves, so your comments stay. A network
+can be added to `networks.conf` on the Mac with its password (a `"` in the password is
+written `\"`, a `\` is written `\\`):
+
+```text
+network = "HouseOfBurr"
+security = wpa2
+password = "the password"
+```
+
+SurfOS makes the key from it at the next start, and the next time it writes the file (`wifi
+save`, `wifi forget`) the key takes the password's place. A password with a `#` in it must be
+in the double quotes. An open network is `security = open` with no key, a hidden one has
+`hidden = yes`. SurfOS writes `networks.conf` anew each time, so comments added there are not
+kept. A line SurfOS does not understand is shown at startup with its number; the network it
+belongs to is left out (a network with no `security` line and a line SurfOS does not
+understand is never taken for an open one) and kept in the file as it was, after the others
+under a comment (lines before the first network stay before them), until you correct it on
+the Mac. A key SurfOS does not know, or a `hidden` value it cannot read, in a network it can
+use is only said: the next save drops that line. `wifi saved` says how many parts the file
+keeps so. SurfOS refuses to change the file while such a part has a password in it, which it
+would have to keep there, and while a change would make a part kept so a network (a name
+written twice, the first forgotten): correct the file on the Mac first.
+
+SurfOS mounts the stick only for the moment it reads or writes these files (at startup, and
+when something is saved), and never leaves it mounted. If you have mounted it yourself
+(`mount usb0p1 /data`), the files are written there, and for that moment `umount` and `eject`
+say the mount is busy; if you mounted it read-only (`mount -r`), saving says so.
+
+**If a setting gets in the way** (telnet on where you do not want it, say), choose **SurfOS
+(without the settings on the stick: no Wi-Fi joined, no telnetd)** in the GRUB menu with the
+arrow keys: it starts the build in `boot/` without reading the files, joins no network and
+sends no host name. `settings` and `wifi save` still save on the stick then, for the next
+start; nothing else changes. Or change the file on the Mac.
+
+**The development build** (GRUB's first entry, section 13) reads the settings too and joins a
+saved network. Its `autonet` asks for the USB adapter's address within 90 seconds and starts
+telnetd on port 23 for it, whatever the settings say (meanwhile SurfOS joins no open network
+by itself). For Wi-Fi it starts none: there, once `autonet` is done, the setting `telnetd = on`
+starts one as in any start, for a WPA2 network. So with a saved WPA2 network and `telnetd =
+on`, the laptop comes back over Wi-Fi after `tools/devloop.py deploy`, at the address the
+router gives it (`tools/devloop.py find` looks for it), in about two minutes.
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |
@@ -861,7 +1062,7 @@ and `tools/stick.py` never writes, still starts SurfOS meanwhile.
 | Framebuffer console filling the screen (120x33 cells at 1920x1080), VGA colours, 4 consoles | USB keyboards and mice; USB hubs and docks |
 | Built-in keyboard through the 8042 (IRQ 1, and polled as a fallback) | Touchpad gestures such as two-finger scrolling (the touchpad works as a two-button mouse: [GUI](GUI.md)) |
 | PIT timer, or the local APIC timer when the PIT does not tick | The internal SSD or hard disk (no AHCI/NVMe driver: they are never touched) |
-| Delays calibrated on the PIT, the ACPI PM timer or the HPET | Wi-Fi, Bluetooth, sound, battery, suspend, ACPI power-off |
+| Delays calibrated on the PIT, the ACPI PM timer or the HPET | WPA3-only Wi-Fi networks, Bluetooth, sound, battery, suspend, ACPI power-off |
 | RAM accounting above 4 GB (the kernel itself uses the RAM below 4 GB) | More than one CPU core |
 | Ramdisk initrd, user programs and their C library, system calls, the CMOS clock, reboot | Network adapters that speak only a vendor protocol (ASIX, older Realtek modes) |
 | The USB 3 controller; wired networking through a USB Ethernet adapter (CDC ECM/NCM, RTL8153): DHCP, ping, DNS, TCP; unplugging and plugging back in | exFAT and NTFS; drives with 4096-byte sectors |
@@ -870,6 +1071,7 @@ and `tools/stick.py` never writes, still starts SurfOS meanwhile.
 | Telnet into the laptop (`telnetd`): surfsh in another computer's terminal, up to 4 sessions | Logins, passwords and encryption (no SSH): telnet is for a trusted network |
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |
+| Wi-Fi on the Intel 9560 (open and WPA2-Personal, joined on the laptop 10/10/26); saved networks joined by themselves at startup and the settings on the stick (under emulation) | |
 
 ## How it works
 
@@ -948,19 +1150,26 @@ and `tools/stick.py` never writes, still starts SurfOS meanwhile.
   program holding its other side. `telnetd` is one background process: it accepts
   connections, starts surfsh on a pseudo-terminal for each, and passes the bytes between
   the two in the telnet protocol (the window size, Ctrl+C, who echoes).
+* **Settings and saved networks** (`kernel/netman.c`, `net/netcfg.c`, `shell/settings.c`,
+  `shell/wifi.c`). A kernel thread reads `surfos-config/` on the volume GRUB named
+  (`bootvol=`) at startup, mounted read-only on `/.netman` for that moment; a keeper thread
+  joins the first saved network in range with its stored key (never the password) and asks
+  for its address; every DHCP lease is renewed at half its time, as RFC 2131 has it. A change
+  is written to a `.new` file, synced, renamed into place and read back.
 
-The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16, 17 and 18, and the original briefs in
+The design is in [ARCHITECTURE.md](ARCHITECTURE.md) sections 14, 16, 17, 18 and 19, and the original briefs in
 [superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md),
 [superpowers/plans/2026-10-05-usb-storage-fat32-libc.md](superpowers/plans/2026-10-05-usb-storage-fat32-libc.md),
 [superpowers/plans/2026-10-06-surfsh.md](superpowers/plans/2026-10-06-surfsh.md),
 [superpowers/plans/2026-10-06-telnetd.md](superpowers/plans/2026-10-06-telnetd.md)
-and, for development builds over the network, [superpowers/plans/2026-10-09-wifi.md](superpowers/plans/2026-10-09-wifi.md) (track D).
+for development builds over the network, [superpowers/plans/2026-10-09-wifi.md](superpowers/plans/2026-10-09-wifi.md) (track D),
+and, for the settings and saved networks, [superpowers/plans/2026-10-17-network-manager.md](superpowers/plans/2026-10-17-network-manager.md).
 
 ## Make targets
 
 ```sh
 make usb-image [O=2]     # build/usb/surfos-ideapad-15iil05.img + .sha256 + build-manifest.json, and build/usb/stick/
-make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 17 scenarios (tools/qemu-usb.py --test)
+make test-usb  [O=2]     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py --test)
 make test-mkusb          # the image builder's own tests (tools/mkusb.py)
 make test-devloop        # the development loop's host side: tools/devloop.py, the data stick image, the build id
 tools/mkusb.py --inspect build/usb/surfos-ideapad-15iil05.img   # list and check an image

@@ -51,6 +51,11 @@ key is the TK it derived; a frame to the station arrives decrypted only when the
 installed the matching pairwise or group key, else as a protected frame the "hardware" could
 not decrypt. A wrong password shows as an access point that never accepts message 2 and
 gives up after three tries (deauthentication, reason 15). Nothing here logs a key.
+
+10/17/26 (the network manager's tests): `wlansim off <ssid>` switches an access point off (no
+beacon, no answer, as if it had gone out of range; when the station is on it, the chip reports
+its beacons missed) and `wlansim on <ssid>` back on (wlansim_switch()), so the Wi-Fi keeper is
+seen to join another saved network once the station gives one up.
 */
 
 #include <surfos/types.h>
@@ -162,6 +167,7 @@ struct sim {
     /* SurfSimFlaky */
     u_int flaky_assocs;
     u_long flaky_deauth_at, flaky_lost_at, flaky_silent_until;
+    volatile u32 off;                   /* 10/17/26: bit i: aps[i] switched off (wlansim_switch()) */
     /* counters */
     u_long out, in, dropped, undecryptable;
     /* 10/9/26 (review M3): leave() or stop() came and no join() or start() since: wlan.h says no frame is handed
@@ -201,6 +207,7 @@ static bool have_crypto(void) {
 }
 
 static bool silent(struct sim *s, int ap) {
+    if((s->off >> ap) & 1) return true;                 /* 10/17/26: switched off */
     return aps[ap].flaky && (long)(getticks() - s->flaky_silent_until) < 0;
 }
 
@@ -885,6 +892,11 @@ static void sim_thread(void *arg) {
             s->flaky_deauth_at = 0;
             if(s->assoc >= 0 && aps[s->assoc].flaky) ap_deauth(s, s->assoc, WLAN_REASON_INACTIVITY);
         }
+        if(s->assoc >= 0 && ((s->off >> s->assoc) & 1)) {       /* 10/17/26: switched off under the station */
+            kprintf("wlansim: %s is off: the station misses its beacons\n", aps[s->assoc].ssid);
+            s->assoc = s->authed = -1;
+            wlan_link_lost(s->w);
+        }
         if(s->flaky_lost_at && (long)(now - s->flaky_lost_at) >= 0) {
             s->flaky_lost_at = 0;
             if(s->assoc >= 0 && aps[s->assoc].flaky) {
@@ -1036,6 +1048,21 @@ static const struct wlan_hw_ops sim_ops = {
     sim_start, sim_stop, sim_scan, sim_scan_abort, sim_join, sim_tx_mgmt, sim_associated, sim_set_key, sim_tx_data,
     sim_leave, sim_status
 };
+
+/* 10/17/26: the wlansim command (shell/wifi.c): an access point off or on; 0, -ENOENT (no access point of that name)
+   or -ENODEV (no simulated chip: the kernel word wlansim) */
+int wlansim_switch(const char *ssid, bool on) {
+    struct sim *s = the_sim;
+    int i;
+    if(!s) return -ENODEV;
+    for(i = 0; i < NAPS && strcmp(aps[i].ssid, ssid); i++);
+    if(i == NAPS) return -ENOENT;
+    if(on) s->off &= ~(1u << i);
+    else s->off |= 1u << i;
+    kprintf("wlansim: %s is %s\n", aps[i].ssid, on ? "on again" : "off");
+    event_set(&s->kick);
+    return 0;
+}
 
 /* from init_drivers() with `wlansim` on the kernel command line only */
 int init_wlansim(void) {

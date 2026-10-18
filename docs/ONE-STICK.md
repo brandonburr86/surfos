@@ -33,9 +33,13 @@ Run the commands below from the `06-restoration` folder in Terminal. Where it sa
 2. The menu:
    * **SurfOS (development build from this stick)** starts after 5 seconds, with the
      network and the telnet server (no password: on a network you do not trust, choose
-     the next entry instead).
+     **SurfOS (without the settings on the stick)**, further down, instead).
    * **SurfOS** starts the fallback build in `boot/`: choose it with the arrow keys when
-     a development build misbehaves.
+     a development build misbehaves. A build from 10/17/26 on there reads the settings, so
+     it starts the telnet server too when they say `telnetd = on` (an older one reads none:
+     `tools/stick.py install /Volumes/DATASTICK --fallback` puts the new build there too).
+   * **SurfOS (without the settings on the stick: no Wi-Fi joined, no telnetd)** starts
+     the fallback build without the settings: no network joined, no telnet server.
 3. Check that SurfOS knows its stick: `lsblk` should show the stick's partition with
    `boot drive: writable`. `fdisk` and `mkfs` refuse that stick; its files may be changed.
 4. To use your files: `mount usb0p1 /data` (use the name `lsblk` shows), and `eject usb0`
@@ -53,8 +57,9 @@ A build is two files that belong together, `surfos.bin` (the kernel) and `initrd
   ```
 
   `deploy` writes the build onto the stick SurfOS started from, ejects it and restarts
-  the laptop into it. With the USB Ethernet adapter the laptop comes back by itself; over
-  Wi-Fi it needs `wifi join` again after the restart.
+  the laptop into it. With the USB Ethernet adapter the laptop comes back by itself, and
+  over Wi-Fi too once the network is saved on the stick (`wifi save`) and `telnetd = on`
+  is set ([USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
 
 * **On the Mac:**
 
@@ -79,6 +84,10 @@ To make a development build that has proved itself the fallback too:
   SurfOS (`eject usb0`).
 * `tools/stick.py check /Volumes/<stick>` tells you what is on a stick, which builds
   they are, and whether SurfOS starts from it.
+* *Added 10/17/26:* the stick also keeps your settings and saved Wi-Fi networks, in its
+  `surfos-config` folder: `wifi save` while joined, `settings telnetd on` and the rest
+  ([USB-BOOT.md section 15](USB-BOOT.md#15-wi-fi-saved-networks-and-the-settings-on-the-stick)).
+  The saved network's key is in that folder: whoever has the stick can join your Wi-Fi.
 
 ## What to tell Claude after the first try on the laptop
 

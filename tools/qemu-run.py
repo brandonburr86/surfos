@@ -12,6 +12,7 @@ go through the QEMU monitor (pmemsave / sendkey), so they keep working when the
 serial path itself is what is broken.
 """
 import argparse
+import hashlib
 import http.server
 import io
 import threading
@@ -113,6 +114,31 @@ SELFTEST_BOOTVOL = '5E1F-7E57'
 CHECK = object()
 WLANSIM_PASSPHRASE = 'surfsim-wpa2-test-passphrase'
 WLANSIM_WRONG = 'not-the-surfsim-passphrase'
+
+# 10/17/26 (the network manager, kernel/netman.c): boots from a stick that keeps the owner's settings. The boot word
+# settingsdisk=<name> gives a boot a FAT32 disk (the IDE primary master, hda) whose serial number its command line
+# names as GRUB would (bootvol=), so SurfOS reads and writes surfos-config/ there. The disk is kept from one '@boot' to
+# the next of a run (each boot writes it in place), and '@settings-disk' reads it here afterwards. SETTINGS_FILES:
+# what a disk holds at first. SURFSIM_PSK: the key SurfOS must store for the test network (PBKDF2 of the passphrase
+# and the SSID, as wpa_supplicant's psk=), never the passphrase itself
+SETTINGS_SERIAL = 0x5E77C0F6
+SETTINGS_BOOTVOL = '5E77-C0F6'
+OWNER_NOTE = b"the owner's own file: SurfOS leaves it as it is\n"
+SETTINGS_FILES = {
+    # the owner's stick: a file of theirs, and a networks.conf written by hand on another computer: the test network
+    # with its password (line 3), and one whose key is no key (line 7)
+    'owner': {'notes.txt': OWNER_NOTE,
+              'surfos-config/networks.conf': b'# written by hand on the Mac\nnetwork = "SurfSimWPA"\npassword = "' +
+                                             WLANSIM_PASSPHRASE.encode() +
+                                             b'"\n\nnetwork = "Broken"\nsecurity = wpa2\npsk = 1234\n'},
+    # a stick that asks for DHCP on Ethernet and nothing else
+    'ether': {'surfos-config/settings.conf': b'ethernet = dhcp\n'},
+    # a hidden network saved by hand: no security line (and nothing else not understood), so open
+    'hidden': {'surfos-config/networks.conf': b'network = "SurfSimHidden"\nhidden = yes\n'},
+}
+SURFSIM_PSK = hashlib.pbkdf2_hmac('sha1', WLANSIM_PASSPHRASE.encode(), b'SurfSimWPA', 4096, 32).hex()
+SETTINGS_DISKS = {}                                         # name: its image file, made the first time a boot asks
+SETTINGS_DIR = []                                           # the directory they are in, once made
 
 # (command, strings that must appear, in order, before the next prompt)
 SMOKE = [
@@ -362,6 +388,35 @@ SMOKE = [
     ('echo status $?', ['status 127']),
     ('run hello', ['exit status 42']),
     ('echo status $?', ['status 42']),
+    # 10/17/26 (the network manager): the settings with no stick to keep them (the command line names a volume, rd1,
+    # which the self test has just put back as it was): the defaults; a key explained; a change in force but not
+    # saved, saying why (status 1); keys and values it does not take (status 2); the eth0 lease of the dhcp step
+    # renewed (QEMU's server answers), and ifconfig showing it; no Wi-Fi device, no simulated chip
+    ('settings', ['settings: none read: the stick SurfOS was started from was not found at startup',
+                  'telnetd      = off       (the default)', 'hostname     = surfos    (the default)',
+                  '0 saved Wi-Fi networks (wifi saved)']),
+    ('settings telnetd', ['telnetd = off   (the default; it takes on | off)',
+                          'the telnet server at startup, on Ethernet or a WPA2 network (no password: your own '
+                          'networks only)']),
+    ('settings hostname smoke-test', ['hostname = smoke-test in force until SurfOS restarts, but not saved: the stick '
+                                      'SurfOS was started from is not there (lsblk)']),
+    ('echo status $?', ['status 1']),
+    ('settings telnetd on', ['settings: telnetd = on not saved: the stick SurfOS was started from is not there (lsblk); it '
+                             'would act at the next start only, so nothing changes (telnetd on starts the server now)']),
+    ('echo status $?', ['status 1']),
+    ('settings telnetd', ['telnetd = off   (the default; it takes on | off)']),
+    ('settings', ['hostname     = smoke-test']),
+    ('settings frobnicate on', ['settings: no setting called frobnicate (settings lists them)']),
+    ('echo status $?', ['status 2']),
+    ('settings telnetd.port = 0', ['settings: telnetd.port is 1-65535, not 0']),
+    ('settings a b c d', ['usage: settings [key [value]]']),
+    ('settings hostname=surfos', ['hostname = surfos in force until SurfOS restarts, but not saved']),
+    ('dhcp renew', ['dhcp: eth0: lease 10.0.2.15 renewed for 86400 s']),
+    ('ifconfig', ['inet 10.0.2.15', 'DHCP lease from 10.0.2.2: ', ' of 86400 left']),
+    ('dhcp renew wlan7', ['no interface']),
+    ('dhcp renew eth0 extra', ['usage: dhcp [renew] [interface]']),
+    ('wifi saved', ['wifi: no Wi-Fi device']),
+    ('wlansim off SurfSim', ['wlansim: no simulated Wi-Fi chip (the kernel word wlansim)']),
     # the bridge (SYS_kcmd, SYS_kcmdinfo) from user space: statuses, errors, run, redirection, cut output, the table
     ('run kcmdtest /hda1', ['KCMDTEST PASS', 'exit status 0']),
     # one self test or heaptest at a time, since they share state: four heaptests at once from four processes;
@@ -593,6 +648,143 @@ SMOKE = [
       ('eth0-held-end', CHECK),
       ('dhcp-one-at-a-time', CHECK)],
      ['handed over after leave() or stop()', 'carries Ethernet padding']),
+    # 10/17/26 (the network manager): boots from the owner's stick (settingsdisk=owner: a FAT32 disk the command line
+    # names as GRUB would), kept from one boot to the next. 1: the networks.conf written by hand is read: the bad network
+    # told by its line, left out and kept in the file, the test network's password made into its key, the card started,
+    # the network joined and its address leased with nobody typing, and no telnetd (not asked for). settings.conf is
+    # made by the first change (the template, the line set), with telnetd's warning; after a scan, a network in range
+    # saved by its name (open: no question), one SurfOS cannot join refused; forget; wifi save of the network joined
+    # puts it first again; the lease renewed; the files as SurfOS wrote them (the key, never the password; the bad
+    # network kept as it was, after the others), nothing left half written
+    ('@boot wlansim net settingsdisk=owner',
+     ['+NET: networks.conf line 7: psk is 64 hexadecimal digits: the network "Broken" is left out (and kept in the '
+      'file as it is)',
+      '+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos; 1 saved Wi-Fi '
+      'network (some lines were not understood: above)',
+      '+NET: wlan0: starting the Wi-Fi card to join a saved network',
+      '+NET: wlan0: SurfSimWPA is in range (-52 dBm): joining it', 'wlan0: link up: "SurfSimWPA"',
+      '+NET: wlan0: joined SurfSimWPA; asking for an address (DHCP)', 'dhcp: wlan0: lease 10.0.2.15'],
+     [('settings', ['settings: surfos-config/settings.conf on hda1, the stick SurfOS was started from (no such file '
+                    'yet: the defaults)', 'telnetd      = off       (the default)', '1 saved Wi-Fi network (wifi saved)']),
+      ('wifi saved', ['saved Wi-Fi networks on hda1 (surfos-config/networks.conf), tried in this order:',
+                      ' 1  SurfSimWPA', 'WPA2  joined now', 'surfos-config/networks.conf also has 1 part SurfOS did '
+                      'not understand, kept there as it was']),
+      ('telnetd', ['telnetd: not running']),
+      ('settings telnetd on', ['telnetd = on, saved on hda1 (surfos-config/settings.conf): at the next start '
+                               '(telnetd on starts it now)', 'telnetd has no password and no encryption',
+                               'SurfOS joins no open Wi-Fi network by itself']),
+      ('settings hostname = smoketest', ['hostname = smoketest, saved on hda1 (surfos-config/settings.conf): in the '
+                                         'next DHCP request']),
+      ('settings wifi maybe', ['settings: wifi is on | off, not maybe']),
+      ('settings aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=1', ['settings: no setting called aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa '
+                                                     '(settings lists them)']),
+      ('wifi scan', ['SurfSimFlaky', 'SurfSimSAE']),
+      ('wifi save SurfSim', ['saved SurfSim (open) on hda1: SurfOS joins it by itself at startup, the first of 2 saved '
+                             'networks it tries']),
+      ('wifi save SurfSimSAE', ['SurfSimSAE is WPA3-Personal only (SAE): not supported yet']),
+      ('wifi forget NoSuchNet', ['wifi: NoSuchNet is not a saved network (wifi saved lists them)']),
+      ('wifi forget', ['usage: wifi forget <ssid>']),
+      ('wifi save SurfSimFlaky', ['saved SurfSimFlaky (open) on hda1', 'the first of 3 saved networks it tries']),
+      ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)']),
+      ('wifi save', ['saved SurfSimWPA (WPA2) on hda1 again: SurfOS joins it by itself at startup, the first of 2 saved '
+                     'networks it tries']),
+      ('wifi saved', [' 1  SurfSimWPA', 'WPA2  joined now', ' 2  SurfSim ', 'open  in range, -45 dBm']),
+      ('dhcp renew wlan0', ['dhcp: wlan0: lease 10.0.2.15 renewed for 86400 s']),
+      ('dhcp renew eth0', ['dhcp: eth0 has no lease to renew (dhcp eth0 gets one)']),
+      ('cat /hda1/surfos-config/settings.conf', ['# SurfOS settings, read at every start', 'telnetd = on',
+                                                 '#telnetd.port = 23', '#wifi = on', 'hostname = smoketest']),
+      ('cat /hda1/surfos-config/networks.conf', ['# Wi-Fi networks SurfOS joins by itself', 'network = "SurfSimWPA"',
+                                                 'security = wpa2', 'psk = ' + SURFSIM_PSK, 'network = "SurfSim"',
+                                                 'security = open', '# SurfOS did not understand the lines below',
+                                                 'network = "Broken"', 'security = wpa2', 'psk = 1234']),
+      ('ls /hda1/surfos-config', ['networks.conf', 'settings.conf', '2 entries']),
+      # 10/18/26: each of these boots ends with the stick unmounted, as the owner ejects it before pulling it out:
+      # mounted read-write (here at boot, as /hda1) a FAT volume is marked as not cleanly unmounted until then
+      # (fs/fat.c), and QEMU's quit is a pull, which fsck.fat on the host would report in @settings-disk
+      ('umount /hda1', [])],
+     [WLANSIM_PASSPHRASE, '.new', 'starting telnetd on F1 (the settings', 'umount: /hda1']),
+    # 2: the same stick again: the settings and both networks read (the bad one told again); the first saved network
+    # joined, its lease, telnetd started by the setting once there is an address on that WPA2 network (that address on
+    # its line), a telnet session through it. wifi leave is left alone by the keeper; wifi connect joins again. The
+    # access point switched off: the station gives up after its five tries, and the keeper does not join SurfSim by
+    # itself, an open network, while the telnet server runs; once it is stopped, the keeper's next look joins SurfSim
+    # and gets its address
+    ('@boot wlansim net settingsdisk=owner',
+     ['psk is 64 hexadecimal digits: the network "Broken" is left out (and kept in the file as it is)',
+      '+NET: settings from hda1 (surfos-config/): telnetd on, wifi on, ethernet off, hostname smoketest; 2 saved Wi-Fi '
+      'networks (some lines were not understood: above)', '+NET: wlan0: SurfSimWPA is in range (-52 dBm): joining it',
+      'wlan0: link up: "SurfSimWPA"', '+NET: wlan0: joined SurfSimWPA; asking for an address (DHCP)',
+      '+NET: wlan0: 10.0.2.15; starting telnetd on F1 (the settings: telnetd = on)',
+      'telnetd: listening on 10.0.2.15 port 23'],
+     [('wifi status', ['wlan0: associated with "SurfSimWPA"', 'inet 10.0.2.15']),
+      (autonet_telnet, ['autonet-telnet-ok']),
+      ('wifi leave', ['wlan0: left "SurfSimWPA" (wifi leave)', 'wlan0: not associated']),
+      ('@sleep 4', []),
+      ('wifi status', ['wlan0: up, not associated']),
+      ('wifi connect', ['wlan0: SurfSimWPA is in range (-52 dBm): joining it', 'wlan0: link up: "SurfSimWPA"',
+                        'wlan0: joined SurfSimWPA; asking for an address (DHCP)', 'dhcp: wlan0: lease 10.0.2.15']),
+      ('wifi connect', ['wlan0 is joined to SurfSimWPA already']),
+      ('wlansim off SurfSimWPA', ['wlansim: SurfSimWPA is off']),
+      ('keeper-skips-open', CHECK),
+      ('telnetd off', ['telnetd: stopped']),
+      ('keeper-joins-open', CHECK),
+      ('wifi status', ['wlan0: associated with "SurfSim"', 'inet 10.0.2.15']),
+      ('wifi saved', [' 1  SurfSimWPA', ' 2  SurfSim ', 'open  joined now']),
+      ('wlansim on SurfSimWPA', ['wlansim: SurfSimWPA is on again']),
+      ('umount /hda1', [])],
+     [WLANSIM_PASSPHRASE, 'not mounted', 'stays mounted', 'umount: /hda1']),
+    # 3: settings=off (the menu's entry without the settings): nothing read, nothing joined, no telnetd. A change is
+    # saved for the next start and changes nothing now (set back afterwards); a network saved and forgotten so too
+    ('@boot wlansim net settingsdisk=owner settings=off',
+     ['+NET: settings=off: the settings on the stick are not read at this start', PROMPT],
+     [('settings', ['settings: not read at this start (settings=off): the defaults until SurfOS restarts; a change is '
+                    'saved on hda1 for the next start', 'telnetd      = off       (the default)', '0 saved Wi-Fi networks']),
+      ('wifi saved', ['the saved Wi-Fi networks are not read at this start (settings=off)']),
+      ('wifi status', ['wlan0: down (wifi up starts it)']),
+      ('telnetd', ['telnetd: not running']),
+      ('settings hostname offtest', ['hostname = offtest, saved on hda1 (surfos-config/settings.conf): from the next '
+                                     'start (this one does not use the settings: settings=off)']),
+      ('settings', ['hostname     = surfos    (the default)']),
+      ('settings hostname smoketest', ['hostname = smoketest, saved on hda1']),
+      ('wifi save SurfSimFlaky', [re.compile(rb'Password for SurfSimFlaky \(nothing for an open network\): ')]),
+      ('', ['saved SurfSimFlaky (open, hidden) on hda1, the first of 3 saved networks it tries: SurfOS joins it by '
+            'itself from the next start', 'the last scan did not hear SurfSimFlaky by its name']),
+      ('wifi saved', ['the saved Wi-Fi networks are not read at this start (settings=off)']),
+      ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)']),
+      ('umount /hda1', [])],
+     ['+NET: wlan0', '+NET: settings from', 'umount: /hda1']),
+    # 4: a hidden network saved by hand (hidden = yes, no security line: open): joined by a probe for its name; no DHCP
+    # server answers on its island, so the keeper says it asks again later. wifi save of it keeps it hidden (the station
+    # heard its beacons without a name); with settings wifi off, a network the last scan did not hear by its name is
+    # saved as hidden, and the save says SurfOS joins none by itself
+    ('@boot wlansim net settingsdisk=hidden',
+     ['+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet off, hostname surfos; 1 saved Wi-Fi '
+      'network', '+NET: wlan0: looking for the hidden network SurfSimHidden', 'wlan0: link up: "SurfSimHidden"',
+      '+NET: wlan0: joined SurfSimHidden; asking for an address (DHCP)'],
+     [('hidden-no-address', CHECK),
+      ('wifi status', ['wlan0: associated with "SurfSimHidden"', 'inet 0.0.0.0']),
+      ('wifi save', ['saved SurfSimHidden (open, hidden) on hda1 again: SurfOS joins it by itself at startup, its only '
+                     'saved network']),
+      ('settings wifi off', ['wifi = off, saved on hda1 (surfos-config/settings.conf): no saved network is joined by '
+                             'itself, from now on']),
+      ('wifi save NotHereNet', [re.compile(rb'Password for NotHereNet \(nothing for an open network\): ')]),
+      ('', ['saved NotHereNet (open, hidden) on hda1, the first of 2 saved networks it tries; SurfOS joins none by '
+            'itself while settings wifi is off', 'the last scan did not hear NotHereNet by its name']),
+      ('wifi forget NotHereNet', ['forgot NotHereNet: SurfOS no longer joins it by itself (1 saved network left)']),
+      ('cat /hda1/surfos-config/networks.conf', ['network = "SurfSimHidden"', 'security = open', 'hidden = yes'])],
+     ['none of the', 'not in range']),
+    # 5: ethernet = dhcp, and every lease shortened to 8 s (dhcplease=): eth0 leased at boot, renewed at half the time
+    # by the server that granted it, again and again; its link down and up again: the address confirmed (INIT-REBOOT)
+    ('@boot net settingsdisk=ether dhcplease=8',
+     ['+NET: settings from hda1 (surfos-config/): telnetd off, wifi on, ethernet dhcp, hostname surfos; 0 saved Wi-Fi '
+      'networks', '+NET: eth0: link up; asking for an address (DHCP)', 'dhcp: eth0: lease 10.0.2.15 for 86400 s',
+      'dhcp: eth0: lease 10.0.2.15 renewed for 86400 s'],
+     [('ifconfig', ['DHCP lease from 10.0.2.2: ', ' of 8 left']),
+      ('renewed-again', CHECK),
+      ('link-bounce', CHECK)],
+     ['given up', 'no lease']),
+    # what those boots left on the owner's stick, read here
+    ('@settings-disk', []),
     # 10/5/26: the user C library and its programs. fstest checks the file API from user space;
     # sh redirects < > >> through spawnfd(); the file tools work on files with known content.
     ('run fstest /hda1/FST', ['FSTEST PASS', 'exit status 0']),
@@ -1300,6 +1492,56 @@ def kmsg_check(q):
 
 
 CONSOLE_CHECKS['@kmsg'] = kmsg_check
+
+
+def settings_disk(name):
+    """10/17/26: the settings disk of that name, made (SETTINGS_FILES) the first time a boot asks for it"""
+    if name not in SETTINGS_DISKS:
+        import mkimage
+        if not SETTINGS_DIR:
+            SETTINGS_DIR.append(tempfile.mkdtemp(prefix='surfos-settings-'))
+        path = os.path.join(SETTINGS_DIR[0], f'settings-{name}.img')
+        mkimage.make_fat32(path, SETTINGS_FILES[name], size_mb=40, label='OWNERSTICK', cluster_bytes=512,
+                           serial=SETTINGS_SERIAL)
+        SETTINGS_DISKS[name] = path
+    return SETTINGS_DISKS[name]
+
+
+def settings_disk_check(q):
+    """10/17/26: the owner's stick after the settings boots, read here with tools/mkusb.py's FAT32 reader: settings.conf
+    the template with the two lines set; networks.conf the two networks in their order, the test network's key (never
+    its password), the bad network kept as it was written, at the end; the owner's file as it was; no file left half
+    written; fsck.fat (if the host has it) finds no error"""
+    import mkusb
+    path = SETTINGS_DISKS.get('owner')
+    what = 'settings: the owner\'s stick holds what SurfOS saved, the key and never the password, and their own file'
+    if not path:
+        return (what, False)
+    try:
+        with open(path, 'rb') as f:
+            fat = mkusb.Fat32(f, 2048 * 512)
+            settings = fat.read('surfos-config/settings.conf')
+            nets = fat.read('surfos-config/networks.conf')
+            note = fat.read('notes.txt')
+            folder = next(first for name, is_dir, first, _, _ in fat.entries(fat.root) if is_dir and name == 'surfos-config')
+            names = sorted(name for name, _, _, _, _ in fat.entries(folder) if name not in ('.', '..'))
+    except Exception as e:
+        print(f'\n@settings-disk: {e}')
+        return (what, False)
+    blocks = [b for b in nets.decode().split('\n\n') if b.startswith('network = ')]
+    ok = (settings.startswith(b'# SurfOS settings') and b'\ntelnetd = on\n' in settings and
+          b'\nhostname = smoketest\n' in settings and b'\n#wifi = on\n' in settings and
+          blocks == ['network = "SurfSimWPA"\nsecurity = wpa2\npsk = ' + SURFSIM_PSK, 'network = "SurfSim"\nsecurity = open'] and
+          b'\n# SurfOS did not understand the lines below' in nets and
+          nets.endswith(b'\nnetwork = "Broken"\nsecurity = wpa2\npsk = 1234\n') and
+          WLANSIM_PASSPHRASE.encode() not in nets and note == OWNER_NOTE and names == ['networks.conf', 'settings.conf'])
+    if not ok:
+        print(f'\n@settings-disk: settings.conf {settings!r}\nnetworks.conf {nets!r}\nnotes.txt {note!r}\nfolder {names}')
+    fsck = fsck_check(path, 2048 * 512, (40 << 20) - 2048 * 512)
+    return (what, ok and all(r for _, r in fsck))
+
+
+CONSOLE_CHECKS['@settings-disk'] = settings_disk_check
 
 
 def pty_tcpecho_check(q):
@@ -2878,12 +3120,71 @@ def wlan_forgotten_check(q):
     return good
 
 
+def keeper_skips_open_check(q):
+    """10/17/26 (the network manager): the saved WPA2 network switched off (wlansim off): the station gives up after its
+    reconnects (about 50 s), the keeper looks for a saved network, and does not join SurfSim by itself, an open network,
+    while the telnet server runs (telnetd has no password)"""
+    ok = (q.expect('gave up reconnecting to "SurfSimWPA" after 5 tries', 90) and
+          q.expect('+NET: wlan0: SurfSimWPA is gone: looking for a saved network', 10) and
+          q.expect('+NET: wlan0: SurfSim is in range, but it is open and a telnet server runs or is to start: not joined '
+                   'by itself (wifi join SurfSim joins it)', 20) and
+          q.expect('+NET: wlan0: no saved network joined; looking again every 30 s', 10))
+    if not ok:
+        print('\nkeeper-skips-open: the keeper did not set the open network aside:\n' + tail(q.text(), 20))
+    return ok
+
+
+def keeper_joins_open_check(q):
+    """10/17/26: with telnetd stopped, the keeper's next look (30 s after the last at most) joins SurfSim and asks for
+    its address"""
+    ok = (q.expect('wlan0: link up: "SurfSim"', 45) and
+          q.expect('+NET: wlan0: joined SurfSim; asking for an address (DHCP)', 10) and
+          q.expect('dhcp: wlan0: lease 10.0.2.15', 30))
+    if not ok:
+        print('\nkeeper-joins-open: the keeper did not join SurfSim once telnetd was off:\n' + tail(q.text(), 20))
+    return ok
+
+
+def hidden_no_address_check(q):
+    """10/17/26: no DHCP server on SurfSimHidden's island: after its three tries (about 30 s) the keeper says it asks
+    again later"""
+    ok = q.expect('+NET: wlan0: no address on SurfSimHidden after 3 tries; asking again in 30 s, then less often (dhcp '
+                  'wlan0 asks now)', 45)
+    if not ok:
+        print('\nhidden-no-address: the keeper did not say it asks again:\n' + tail(q.text(), 20))
+    return ok
+
+
+def renewed_again_check(q):
+    """10/17/26: a lease of 8 s (dhcplease=8) renewed again and again, seen as it happens (two more renewals)"""
+    ok = (q.expect('dhcp: eth0: lease 10.0.2.15 renewed for 86400 s', 15) and
+          q.expect('dhcp: eth0: lease 10.0.2.15 renewed for 86400 s', 15))
+    if not ok:
+        print('\nrenewed-again: the lease was not renewed twice more:\n' + tail(q.text(), 20))
+    return ok
+
+
+def link_bounce_check(q):
+    """10/17/26: eth0's link down and up again (QEMU's set_link) while it has a lease: the network manager asks for the
+    same address again (DHCP INIT-REBOOT), and the server confirms it"""
+    q.monitor('set_link net0 off')
+    q.wait(3)
+    q.monitor('set_link net0 on')
+    ok = q.expect('dhcp: eth0: lease 10.0.2.15 still good for 86400 s', 20)
+    if not ok:
+        print('\nlink-bounce: the address was not confirmed after the link came back:\n' + tail(q.text(), 20))
+    return ok
+
+
 BOOT_CHECKS = {'wlansim-telnet': wlansim_telnet_check, 'wlansim-wpa': wlansim_wpa_check, 'usbnet-plug': usbnet_plug_check,
                'wlan-forgotten': wlan_forgotten_check, 'wlansim-tx-race': wlansim_tx_race_check,
                'wlan-no-drops': wlan_no_drops_check, 'wlansim-scan-abort': wlansim_scan_abort_check,
                'wlansim-ctrl-c': wlansim_ctrl_c_check, 'wlan-own-frames': wlan_own_frames_check,
                'eth0-held': eth0_held_check, 'eth0-held-end': eth0_held_end_check,
-               'dhcp-one-at-a-time': dhcp_one_at_a_time_check}
+               'dhcp-one-at-a-time': dhcp_one_at_a_time_check, 'keeper-skips-open': keeper_skips_open_check,
+               'keeper-joins-open': keeper_joins_open_check, 'renewed-again': renewed_again_check,
+               'hidden-no-address': hidden_no_address_check,
+               'link-bounce': link_bounce_check}
 
 
 def tail(text, n=40):
@@ -3033,13 +3334,16 @@ def main():
         """10/6/26: another boot of the same kernel for an '@boot' step: kernel command-line words, no-initrd, or
         surfsh=<program> (the initrd with that program, or with that file of it if the name has a /, as bin/surfsh).
         10/9/26: 'net' gives the boot QEMU's network (and its forwarded ports), and so does autonet, which needs one;
-        the others have none"""
-        initrd, append, net, usbnet = a.initrd, a.append.split(), False, False
+        the others have none. 10/17/26: settingsdisk=<name>, the owner's stick (settings_disk())"""
+        initrd, append, net, usbnet, disk = a.initrd, a.append.split(), False, False, None
         tmp = tempfile.mkdtemp(prefix='surfos-initrd-')
         try:
             for w in words:
                 if w == 'net':                               # 10/9/26: QEMU's user network, with its forwards
                     net = True
+                elif w.startswith('settingsdisk='):          # 10/17/26: the owner's stick, kept from boot to boot
+                    disk = settings_disk(w[len('settingsdisk='):])
+                    append.append('bootvol=' + SETTINGS_BOOTVOL)
                 elif w == 'usbnet-later':                    # 10/9/26: the laptop's order (usbnet_later_boot())
                     usbnet = True
                 elif w == 'no-initrd':
@@ -3055,8 +3359,8 @@ def main():
                     append.append(w)
             if usbnet:
                 return usbnet_later_boot(a.kernel, a.qemu, a.mem, a.extra.split(), initrd, append)
-            # 10/9/26: autonet needs a network to bring up
-            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, None, initrd, False,
+            # 10/9/26: autonet needs a network to bring up. 10/17/26: a settings disk is written in place
+            return Qemu(a.kernel, a.qemu, a.mem, a.extra.split(), None, None, disk, initrd, disk is not None,
                         net or 'autonet' in append, ' '.join(append), 0)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)       # Qemu() has copied the initrd
@@ -3114,6 +3418,8 @@ def main():
             return 0
     finally:
         q.close()
+        for d in SETTINGS_DIR:                               # 10/17/26: the settings disks
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == '__main__':

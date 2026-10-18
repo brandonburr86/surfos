@@ -56,6 +56,13 @@ frames too.
 The supplicant is track C's (net/wlan/wpa.c, include/net/wpa.h): its functions are weak
 references here, so this file links and runs before it lands; a WPA2 join is refused
 until it does. Nothing here logs a key, a PMK or a password.
+
+10/17/26 (the network manager, kernel/netman.c): wlan_station() says what the station is
+doing without a request (include/net/wlan_cmd.h): the state, the network, whether its
+beacons hide its name, why an idle station is idle (wifi leave or down, a failed join,
+reconnects run out) and how many links have come up; for wifi save also the PMK the
+station keeps for its reconnects, which is how a joined network is saved without its
+password.
 */
 
 #include <stdarg.h>
@@ -65,6 +72,7 @@ until it does. Nothing here logs a key, a PMK or a password.
 #include <surfos/sync.h>
 #include <surfos/irq.h>
 #include <surfos/timer.h>
+#include <surfos/klog.h>
 #include <mm/kalloc.h>
 #include <fs/vfs.h>
 #include <net/net.h>
@@ -107,6 +115,7 @@ enum { REQ_NONE, REQ_UP, REQ_DOWN, REQ_SCAN, REQ_JOIN, REQ_LEAVE };
 
 struct scan_entry {
     bool used, wmm;
+    bool hidden;                        /* 10/17/26: a beacon of this BSSID carried no SSID (a hidden network) */
     struct wlan_bss bss;
 };
 
@@ -160,6 +169,15 @@ struct wlan_state {
     u8 pmk[WPA_PMK_LEN];
     struct wlan_bss cur;
     bool cur_wmm;
+    bool cur_hidden;                    /* 10/17/26: its beacons carry no SSID (wlan_station()) */
+    int idle_why;                       /* 10/17/26: WLAN_IDLE_* */
+    u_int joins;                        /* 10/17/26: links up so far */
+    volatile u_int join_requests;       /* 10/17/26: wlan_join() requests posted so far (under irq_save) */
+    volatile u_int stops;               /* 10/17/26: wifi leave and wifi down requests posted so far (under irq_save) */
+    bool req_if;                        /* 10/17/26: the request is only carried out while stops is req_stops */
+    u_int req_stops;
+    bool req_quiet;                     /* 10/17/26: the network manager trying again: its failure to the log only */
+    bool join_quiet;                    /* the join under way is such a one */
     bool hw_joined;                     /* join() was called: leave() undoes it */
     bool authed;                        /* the AP authenticated us: it is told when we go */
     bool user_join;                     /* a command waits for this join */
@@ -305,8 +323,8 @@ static void req_complete(struct wlan_state *st, int result) {
 
 /* a command asks the thread for op and waits for its result: -EBUSY when another command's request
    is pending, -EINTR when the command is cut short (the thread then cancels the request itself) */
-static int request(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, const u8 *bssid, const u8 *pmk,
-                   u_int timeout_ms) {
+static int request_if(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, const u8 *bssid, const u8 *pmk,
+                      u_int timeout_ms, bool check, u_int stops, bool quiet, u_int *join) {
     struct wlan_state *st = w->st;
     u_long flags = irq_save();
     u_int seq;
@@ -323,12 +341,20 @@ static int request(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, c
     st->req_has_pmk = pmk != NULL;
     if(pmk) memcpy(st->req_pmk, pmk, WPA_PMK_LEN);
     st->req_timeout_ms = timeout_ms;
+    st->req_if = check;
+    st->req_stops = stops;
+    st->req_quiet = quiet;
     flags = irq_save();
     st->req_cancel = false;
     st->req_abandoned = false;
     st->req_started = false;
     seq = ++st->req_seq;
     st->req = op;
+    if(op == REQ_JOIN) {                                /* 10/17/26: wlan_station() */
+        st->join_requests++;
+        if(join) *join = st->join_requests;
+    }
+    if(op == REQ_LEAVE || op == REQ_DOWN) st->stops++;
     irq_restore(flags);
     event_set(&st->kick);
     for(;;) {
@@ -370,11 +396,14 @@ static void list_update(struct wlan_state *st, const struct wlan_bss *b, bool wm
         u8 ssid[WLAN_SSID_MAX];
         u_int ssid_len = e->bss.ssid_len;
         memcpy(ssid, e->bss.ssid, WLAN_SSID_MAX);
+        if(!e->used || memcmp(e->bss.bssid, b->bssid, WLAN_ADDR_LEN)) e->hidden = false;   /* a new entry */
+        if(!b->ssid_len) e->hidden = true;              /* 10/17/26: its name is not broadcast (wifi save keeps that) */
         e->bss = *b;
         if(keep) {                                      /* a hidden network's beacon: the SSID its probe response told */
             memcpy(e->bss.ssid, ssid, WLAN_SSID_MAX);
             e->bss.ssid_len = (u8)ssid_len;
         }
+        e->bss.hidden = e->hidden;                      /* 10/17/26: wlan_bss_list() tells it (wifi save) */
         e->wmm = wmm;
         e->used = true;
     }
@@ -398,7 +427,7 @@ static void list_clear(struct wlan_state *st) {
 
 /* the network to join: the pinned BSSID, else the strongest with the SSID and the security a PMK
    (WPA2) or none (open) means, heard since the tick since; false when there is none */
-static bool list_pick(struct wlan_state *st, u_long since, struct wlan_bss *out, bool *wmm) {
+static bool list_pick(struct wlan_state *st, u_long since, struct wlan_bss *out, bool *wmm, bool *hidden) {
     struct scan_entry *best = NULL;
     int i;
     mutex_lock(&st->list_lock);
@@ -413,6 +442,7 @@ static bool list_pick(struct wlan_state *st, u_long since, struct wlan_bss *out,
     if(best) {
         *out = best->bss;
         *wmm = best->wmm;
+        *hidden = best->hidden;
     }
     mutex_unlock(&st->list_lock);
     return best != NULL;
@@ -517,13 +547,17 @@ static void forget_address(struct wlan_state *st) {
     if(nd->ip) kprintf("%s: address %s forgotten (dhcp %s for one on the next network)\n", nd->name, ipfmt(nd->ip, a),
                        nd->name);
     nd->ip = nd->netmask = nd->gateway = nd->dns = 0;
+    nd->dhcp_server = 0;                                /* 10/17/26: and its lease, which nothing renews now */
+    nd->lease_s = 0;
     arp_flush(nd);
     mutex_unlock(&net_lock);
 }
 
 static void forget(struct wlan_state *st) {
+    u_long flags = irq_save();                          /* 10/17/26: never half wiped in wlan_station()'s copy */
     wipe(st->pmk, sizeof(st->pmk));
     st->has_pmk = false;
+    irq_restore(flags);
     st->user_join = false;
     st->reconnects = 0;
 }
@@ -535,7 +569,15 @@ static void join_fail(struct wlan_state *st, int err, u16 reason, const char *wh
     unjoin(st, reason);
     set_last(st, why);
     if(st->user_join) {
-        kprintf("%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s), why);
+        if(st->join_quiet) {                            /* 10/17/26: the network manager's try again: the log */
+            char line[WLAN_SSID_MAX + 160];
+            snprintf(line, sizeof(line), "%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s),
+                     why);
+            klog_write(line);
+        } else {
+            kprintf("%s: joining \"%s\" failed: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s), why);
+        }
+        st->idle_why = WLAN_IDLE_JOIN_FAILED;           /* 10/17/26: before the state, which wlan_station() reads first */
         st->state = ST_IDLE;
         forget(st);
         if(st->req == REQ_JOIN) req_complete(st, err);
@@ -544,6 +586,7 @@ static void join_fail(struct wlan_state *st, int err, u16 reason, const char *wh
     if(st->reconnects >= RECONNECT_TRIES || err == -EINTR) {
         kprintf("%s: gave up reconnecting to \"%s\" after %u tries: %s\n", w->name, ssid_text(st->ssid, st->ssid_len, s),
                 st->reconnects, why);
+        st->idle_why = WLAN_IDLE_GAVE_UP;
         st->state = ST_IDLE;
         forget(st);
         forget_address(st);
@@ -583,9 +626,10 @@ static void send_assoc(struct wlan_state *st) {
 }
 
 /* join the network picked: tune, then authenticate */
-static void join_bss(struct wlan_state *st, const struct wlan_bss *bss, bool wmm) {
+static void join_bss(struct wlan_state *st, const struct wlan_bss *bss, bool wmm, bool hidden) {
     struct wlan_dev *w = st->w;
     int r;
+    st->cur_hidden = hidden;                            /* 10/17/26: for wifi save */
     st->cur = *bss;
     memcpy(st->cur.ssid, st->ssid, st->ssid_len);       /* a hidden network's beacon has none */
     st->cur.ssid_len = (u8)st->ssid_len;
@@ -624,9 +668,9 @@ static void join_scan(struct wlan_state *st) {
 /* pick the network from the list, else scan for it first (once) */
 static void join_continue(struct wlan_state *st) {
     struct wlan_bss bss;
-    bool wmm;
-    if(list_pick(st, st->join_since, &bss, &wmm)) {
-        join_bss(st, &bss, wmm);
+    bool wmm, hidden = false;
+    if(list_pick(st, st->join_since, &bss, &wmm, &hidden)) {
+        join_bss(st, &bss, wmm, hidden);
         return;
     }
     if(st->join_scanned) {
@@ -650,6 +694,7 @@ static void link_up(struct wlan_state *st) {
     char s[WLAN_SSID_MAX + 1], m[18];
     struct wlan_dev *w = st->w;
     bool again = !st->user_join;
+    st->joins++;                                        /* 10/17/26: a new association (wlan_station()) */
     st->state = ST_UP;
     tx_context(st, true);
     st->nd->link_up = true;
@@ -723,7 +768,14 @@ static void wpa_finished(void *ctx, int status) {
     st->wpa_done = true;
 }
 
-static const struct wpa_ops supplicant_ops = { wpa_send, wpa_install, wpa_finished };
+/* 10/17/26: the supplicant's lines: in the log only during a join the network manager tries again (join_quiet) */
+static void wpa_say(void *ctx, const char *line) {
+    struct wlan_state *st = (struct wlan_state *)ctx;
+    if(st->user_join && st->join_quiet) klog_write(line);
+    else kprintf("%s", line);
+}
+
+static const struct wpa_ops supplicant_ops = { wpa_send, wpa_install, wpa_finished, wpa_say };
 
 /* after each call into the supplicant: what it said */
 static void wpa_check(struct wlan_state *st) {
@@ -928,6 +980,7 @@ static int do_up(struct wlan_state *st) {
     }
     w->up = true;
     memcpy(st->nd->mac, w->mac, ETH_ALEN);
+    st->idle_why = WLAN_IDLE_NEW;                       /* 10/17/26 */
     st->state = ST_IDLE;
     kprintf("%s: up, MAC %s\n", w->name, macfmt(w->mac, m));
     return 0;
@@ -954,16 +1007,22 @@ static void req_start(struct wlan_state *st) {
     struct wlan_dev *w = st->w;
     int r;
     st->req_started = true;
+    if(st->req_if && st->stops != st->req_stops) {      /* 10/17/26: a wifi leave or down came since it was asked */
+        req_complete(st, -ECANCELED);
+        return;
+    }
     switch(st->req) {
     case REQ_UP:
         req_complete(st, do_up(st));
         break;
     case REQ_DOWN:
+        st->idle_why = WLAN_IDLE_LEFT;                  /* 10/17/26: the Wi-Fi keeper stays out of it */
         do_down(st);
         req_complete(st, 0);
         break;
     case REQ_LEAVE:
         if(w->up) {
+            st->idle_why = WLAN_IDLE_LEFT;
             leave_now(st, "wifi leave");
             forget_address(st);
         }
@@ -982,14 +1041,20 @@ static void req_start(struct wlan_state *st) {
         scan_abort(st);
         if(st->ssid_len && (st->ssid_len != st->req_ssid_len || memcmp(st->ssid, st->req_ssid, st->ssid_len)))
             forget_address(st);                         /* another network than the last one: its address is no good */
-        memcpy(st->ssid, st->req_ssid, st->req_ssid_len);
-        st->ssid_len = st->req_ssid_len;
+        {
+            u_long flags = irq_save();                  /* 10/17/26: copied whole by wlan_station() */
+            memcpy(st->ssid, st->req_ssid, st->req_ssid_len);
+            st->ssid_len = st->req_ssid_len;
+            st->has_pmk = st->req_has_pmk;
+            if(st->has_pmk) memcpy(st->pmk, st->req_pmk, WPA_PMK_LEN);
+            st->cur_hidden = false;
+            irq_restore(flags);
+        }
         st->has_pin = st->req_has_bssid;
         if(st->has_pin) memcpy(st->pin, st->req_bssid, WLAN_ADDR_LEN);
-        st->has_pmk = st->req_has_pmk;
-        if(st->has_pmk) memcpy(st->pmk, st->req_pmk, WPA_PMK_LEN);
         wipe(st->req_pmk, sizeof(st->req_pmk));
         st->reconnects = 0;
+        st->join_quiet = st->req_quiet;                 /* 10/17/26 */
         join_start(st, true);
         break;
     default:
@@ -1229,9 +1294,29 @@ struct wlan_dev *wlan_find(const char *name) {
     return NULL;
 }
 
+/* a request as a command makes it (no condition) */
+static int request(struct wlan_dev *w, int op, const u8 *ssid, u_int ssid_len, const u8 *bssid, const u8 *pmk,
+                   u_int timeout_ms) {
+    return request_if(w, op, ssid, ssid_len, bssid, pmk, timeout_ms, false, 0, false, NULL);
+}
+
 int wlan_up(struct wlan_dev *w) {
     if(!w) return -ENODEV;
     return request(w, REQ_UP, NULL, 0, NULL, NULL, 0);
+}
+
+/* 10/17/26 (wlan_cmd.h): up and join for the network manager, refused (-ECANCELED) when a wifi leave or wifi down was
+   asked for since its snapshot said stops */
+int wlan_up_unless(struct wlan_dev *w, u_int stops) {
+    if(!w) return -ENODEV;
+    return request_if(w, REQ_UP, NULL, 0, NULL, NULL, 0, true, stops, false, NULL);
+}
+
+int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, bool quiet,
+                     u_int *join) {
+    if(!w) return -ENODEV;
+    if(!ssid || !ssid_len || ssid_len > WLAN_SSID_MAX) return -EINVAL;
+    return request_if(w, REQ_JOIN, ssid, ssid_len, NULL, pmk, 0, true, stops, quiet, join);
 }
 
 int wlan_down_wait(struct wlan_dev *w) {
@@ -1278,6 +1363,42 @@ int wlan_leave_wait(struct wlan_dev *w) {
 
 void wlan_leave(struct wlan_dev *w) {
     wlan_leave_wait(w);
+}
+
+/* 10/17/26 (wlan_cmd.h): a snapshot for the network manager, with no request (the keeper never makes a command busy).
+   The fields that come with a state are set before it (join_fail(): idle_why, then the state), and the network and
+   its key are written and wiped with interrupts off, as they are copied here */
+int wlan_station(struct wlan_dev *w, struct wlan_station_info *out, bool want_key) {
+    struct wlan_state *st;
+    u_long flags;
+    int state;
+    bool user;
+    memset(out, 0, sizeof(*out));
+    if(!w || !(st = w->st)) return -ENODEV;
+    flags = irq_save();
+    state = st->state;
+    user = st->user_join;
+    out->idle = st->idle_why;
+    out->ssid_len = (u8)(st->ssid_len <= WLAN_SSID_MAX ? st->ssid_len : WLAN_SSID_MAX);
+    memcpy(out->ssid, st->ssid, out->ssid_len);
+    out->security = st->cur.security;
+    out->hidden = st->cur_hidden;
+    out->joins = st->joins;
+    out->join_requests = st->join_requests;
+    out->stops = st->stops;
+    if(want_key && st->has_pmk) {
+        memcpy(out->key, st->pmk, WPA_PMK_LEN);
+        out->has_key = true;
+    }
+    irq_restore(flags);
+    switch(state) {
+    case ST_DOWN: out->state = WLAN_STA_DOWN; break;
+    case ST_IDLE: out->state = WLAN_STA_IDLE; break;
+    case ST_UP:   out->state = WLAN_STA_UP; break;
+    case ST_WAIT: out->state = WLAN_STA_RECONNECTING; break;
+    default:      out->state = user ? WLAN_STA_JOINING : WLAN_STA_RECONNECTING; break;
+    }
+    return 0;
 }
 
 /* 10/9/26 (review L3): text after what buf holds, cut at size; snprintf() answers the length it would have

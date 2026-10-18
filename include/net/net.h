@@ -85,6 +85,11 @@ struct netdev {
     void (*bridge_rx)(struct netdev *dev, const u8 *frame, u_int len);
     volatile u_int rx_inq;          /* 10/9/26: its frames in the receive queue (at most half of it: netbuf.c) */
     bool no_pad;                    /* 10/10/26: frames go out as long as they are (802.11 has no 60-byte minimum) */
+    /* 10/17/26 (the network manager): the DHCP lease the address came with (net/dhcp.c), under net_lock; lease_s 0:
+       none (no address, or one set by hand), and nothing renews it */
+    ipaddr_t dhcp_server;
+    u32 lease_s;                    /* its length in seconds (dhcplease= may shorten it, for the tests) */
+    u_long lease_at;                /* ticks: when it was granted or last renewed */
 };
 
 int netdev_register(struct netdev *dev);              /* names it ethN; 10/9/26: unless the driver named it (wlan0);

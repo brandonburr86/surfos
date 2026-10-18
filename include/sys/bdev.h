@@ -133,6 +133,13 @@ int bdev_rescan(struct bdev *disk);
 extern const char bdev_boot_drive[];        /* "the SurfOS boot drive" */
 extern const char bdev_boot_volume[];       /* 10/17/26: "the volume SurfOS was started from" */
 
+/* 10/17/26 (the settings, kernel/netman.c): the FAT volume SurfOS was started from, once its disk is found: the
+   stick's own (protect = bdev_boot_volume, writable) or a flashed SURFOSUSB image's (read-only); NULL before, and
+   without bootvol= on the command line. It may be gone (unplugged): a stick plugged in again is found again.
+   bdev_boot_vol_named(): bootvol= is on the command line, so such a volume is to be expected */
+struct bdev *bdev_boot_vol(void);
+bool bdev_boot_vol_named(void);
+
 /* drivers (driver table entries) */
 int init_ramdisk(void);
 int init_ata(void);

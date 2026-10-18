@@ -239,6 +239,14 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | A second telnet window at the same time; `telnetd status` on the laptop lists both | |
 | `exit` in one window, close the other; `dmesg` on the laptop: the session lines | |
 | `telnetd off`, then `telnet <address>` again: "Connection refused" | |
+| 10/17/26, on one stick: `wifi join HouseOfBurr` (the password), then `wifi save`: what it prints; `wifi saved` | |
+| A restart: the `+NET:` lines; joined and leased with nobody typing? How many seconds after the GRUB menu? `ifconfig` | |
+| `settings telnetd on`, a restart into **SurfOS** (its build in `boot/` from 10/17/26 on: `tools/stick.py install --fallback`; the development entry starts telnetd anyway for an Ethernet link): `+NET: …; starting telnetd on F1 (the settings: telnetd = on)`, `telnetd: listening on …`; `telnet` from the Mac | |
+| `tools/devloop.py deploy` with Wi-Fi only (no adapter), a saved WPA2 network and `telnetd = on`: back by itself? After how long? | |
+| The router's device list (the Xfinity app): is SurfOS listed as `surfos`? | |
+| On the Mac: `surfos-config/` on the stick with both files; do they open in TextEdit? | |
+| GRUB entry "SurfOS (without the settings on the stick)": no Wi-Fi joined, no telnetd | |
+| With `telnetd = on` and an open network saved (a phone's hotspot without a password): not joined by itself, the `+NET:` line says why. Then `telnetd off` (`telnetd status`: not running) before `wifi join` joins it, since a running server would answer on the hotspot too; give the hotspot its password back afterwards | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,

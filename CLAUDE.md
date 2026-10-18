@@ -23,9 +23,10 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # telnetd's protocol and its poll loop against a simulated kernel (test_telnet, test_telnetd),
                   # PCI configuration space as lspci -v reads it (test_pciinfo), the development loop's host side (test_devloop.py),
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
-                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
+                  # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them),
+                  # the network manager's files: settings.conf, networks.conf, the lease timers (test_netcfg)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 18 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 19 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -63,7 +64,10 @@ boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg f
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
            pty.c (pseudo-terminals: a tty with a stream console; pty_open() etc. for the desktop's Terminal), proc.c (procinfo, detach),
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile),
-           autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds)
+           autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds),
+           netman.c (the network manager: the settings and saved Wi-Fi networks in surfos-config/ on the stick SurfOS
+           was started from, read at boot and written when they change; the Wi-Fi keeper, Ethernet's DHCP, lease
+           renewals, telnetd at startup)
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
 driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for lspci -v and wifiinfo), driver table, block layer (bdev.c: buses, the format rule; ramdisk, ATA), partition tables
            (parttab.c: parsing and change plans, host-tested; part.c: registering, the boot drive, writing), e1000 NIC, parallel port, DMA, floppy, 3c905B NIC,
@@ -76,7 +80,8 @@ driver/    serial console, PCI (+ id tables; pciinfo.c: configuration space for 
            usbdesc.c (descriptor and NCM parsing, host-tested)
 fs/        VFS (mounts, paths, files, descriptors, rename, statfs), block cache, tarfs (initrd), FAT12/16/32 (fat.c), mkfs (fat_mkfs.c), devfs
            (/dev/kmsg too), poll.c (poll(): vnode_ops->poll, poll_wake())
-net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS resolver; sock.c (TCP connections as
+net/       the net thread and buffers, Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client (leases kept and renewed), DNS resolver;
+           netcfg.c (the text of the settings files and the lease timers: pure, host-tested); sock.c (TCP connections as
            programs' descriptors); routing over several interfaces (by source address, then subnet, Ethernet before Wi-Fi);
            wlan/: the 802.11 station layer (wlan.c: scan list, joining, wlan0; ieee80211.c: frames, host-tested) and the
            WPA2 supplicant (wpa.c); interfaces in include/net/wlan.h and include/net/wpa.h
@@ -97,7 +102,8 @@ driver/wifi/ wlansim.c: a simulated Wi-Fi chip and access points, only with the 
 firmware/  Intel's firmware for the laptop's card, fetched by tools/fetch-firmware.py (pinned, SHA-256 checked;
            devenv/build-usb.sh runs it); never committed; the USB image's initrd carries it in /lib/firmware/
 shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_run_command() for SYS_kcmd), prompt.c (the SurfOS
-           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos;
+           prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos,
+           settings.c (the settings command), wifi.c (wifi, with save, saved, forget, connect; wlansim on|off for the tests);
            the desktop (docs/GUI.md): gui.c (the command, the session) and guifs.c (files on the VFS) in the kernel; the
            model, host-tested by test_gui: guicore.c (windows, menus, the small apps), guinote.c (Notepad), guifiles.c
            (Files), guidialog.c, guidraw.c; 10/17/26 the suite (docs/superpowers/plans/2026-10-17-gui-suite.md):
@@ -110,7 +116,7 @@ tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk ima
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against
            hand-made segments), devloop.py (development builds onto the laptop over the network)
 tests/     host/ unit tests (blibc, boot information, framebuffer, USB parsing, partitions, mkfs, the C library, the telnet
-           protocol, telnetd's loop), test_part_tools.py,
+           protocol, telnetd's loop, the network manager's files), test_part_tools.py,
            test_mkusb.py, test_devenv.py, test_devloop.py
 rootfs/    contents of the initrd (build/images/initrd.tar), block device rd0
 devenv/    Docker toolchain and host QEMU wrappers: build.sh, run.sh, build-usb.sh, test-usb.sh, run-usb.sh
@@ -131,10 +137,15 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   volume label SURFOSUSB, or since 10/17/26 from the serial number GRUB passes as
   `bootvol=`), never anything read-only, gone or mounted. Anything new that
   writes a partition table or a file system goes through it, shows what it will change and
-  asks for the device's name. Nothing mounts a USB drive by itself. The boot drive mounts
-  read-only, except the volume SurfOS was started from on a stick made bootable by copying
-  files onto it (`bdev_boot_volume`, `bdev_mount_readonly()`; the owner approved writing it,
-  2026-10-17, docs/USB-BOOT.md section 14): every mount decision goes through that function.
+  asks for the device's name. Nothing mounts a USB drive by itself, with one exception
+  (below). The boot drive mounts read-only, except the volume SurfOS was started from on a
+  stick made bootable by copying files onto it (`bdev_boot_volume`, `bdev_mount_readonly()`;
+  the owner approved writing it, 2026-10-17, docs/USB-BOOT.md section 14): every mount
+  decision goes through that function. The exception (2026-10-17, the network manager):
+  kernel/netman.c mounts the volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman`
+  (read-only to read) for the moment it reads or writes `surfos-config/`, holds that mount
+  or the owner's (`vfs_hold_mount()`) meanwhile, and unmounts its own again; never another
+  device.
 * Network connections and terminals (milestone M11): a TCP connection or listening socket
   is a descriptor (`include/surfos/sock.h`, `net/sock.c`); a pseudo-terminal
   (`include/surfos/pty.h`, `kernel/pty.c`) is a tty whose console is a byte stream that
@@ -146,8 +157,19 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   always gets through (it ends an escape sequence and drops type-ahead); after type-ahead
   is dropped, the serial line and ptys skip input until it pauses for 200 ms (`TTY_SKIP`),
   so the rest of a paste never runs in pieces. `telnetd` has no login or encryption by the
-  owner's choice: never start it by itself. The one exception is the kernel word `autonet`
-  (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13).
+  owner's choice: never start it by itself. The exceptions are the kernel word `autonet`
+  (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13),
+  and the owner's own setting `telnetd = on` in surfos-config/settings.conf on their stick
+  (kernel/netman.c, docs/USB-BOOT.md section 15), off unless they set it. autonet starts it
+  only for an Ethernet link, the setting only for an address on Ethernet or a WPA2 Wi-Fi
+  network (`netman_trusted()`), never for an open network, and while a server runs or is to
+  start the Wi-Fi keeper joins no open network by itself (`netman_telnet_exposed()`): keep it
+  so. networks.conf is never written with a password in it (a part kept as it was that has
+  one makes the change refused).
+* Wi-Fi passwords (2026-10-09, 2026-10-17): an agent never asks for, types, logs or stores
+  the owner's password; tests use wlansim's test network. SurfOS keeps a saved network's key
+  (the PMK) in networks.conf on the owner's stick, at the owner's request, never the password,
+  and nothing prints or logs a key.
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's
@@ -192,9 +214,16 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   what the firmware handed over and which console, timer and keyboard path was chosen.
   `lspci -v` gives every PCI function's ids, subsystem, power state, MSI/MSI-X and PCI
   Express link, `lspci bb:dd.f` one with its 256 bytes, and `wifiinfo` the Wi-Fi card
-  for a future driver (docs/WIFI-PLANNING.md).
+  (its driver: driver/wifi/, docs/WIFI-PLANNING.md).
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
+* The network manager: `settings` says where the settings came from, `wifi saved` what is
+  saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
+  and after (the keeper's repeated tries are written only there). `settings=off` on the kernel
+  command line reads nothing (GRUB has an entry), and `dhcplease=<s>` shortens every lease
+  (tests). In the smoke test, the boot word `settingsdisk=<name>` gives a boot the owner's
+  stick, kept from boot to boot; `wlansim off|on <ssid>` switches a simulated access point,
+  and QEMU's monitor `set_link net0 off|on` bounces eth0's link.
 * USB: `lsusb` lists the controller and every device with what drives it; `+USB:` lines in
   `dmesg` record plugging and errors. Endpoint 0 transfers are synchronous and belong to
   the usb thread (or boot); bulk/interrupt `done` callbacks run in the timer interrupt.
@@ -241,7 +270,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   files on a mounted external FAT volume, never onto the flashed SURFOSUSB stick or over another system's boot
   files; never point it at a stick the owner has not named.
 * Wi-Fi (docs/superpowers/plans/2026-10-09-wifi.md): `wifi up | down | scan | join <ssid> [bssid] | status |
-  leave` (shell/wifi.c); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
+  leave`, and since 10/17/26 `wifi save [ssid] | forget <ssid> | saved | connect` (shell/wifi.c, the network
+  manager); a WPA2 password is asked with `shell_ask_secret()` (never echoed or kept) and turned into
   the PMK at once. The kernel word `wlansim` gives a simulated card with six access points (SurfSim, SurfSimWPA
   with the test passphrase in tools/qemu-run.py, a hidden one, WEP, WPA3-only, a flaky one) bridged onto eth0, so
   `dhcp wlan0` works in QEMU; the smoke test's `@boot wlansim net` and `@boot wlansim usbnet-later` blocks drive

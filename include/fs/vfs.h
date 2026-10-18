@@ -63,6 +63,7 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define ETIMEDOUT   110
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113
+#define ECANCELED   125         /* 10/17/26: a request called off (the network manager's, after a wifi leave) */
 #define ERANGE       34
 
 /* open flags (Linux values) */
@@ -105,6 +106,8 @@ struct stat {                   /* also the layout user programs see */
 };
 
 #define MNT_RDONLY 1            /* vfs_mount_flags(): no writes through this mount */
+#define MNT_QUIET  2            /* 10/17/26: the file system's line about the volume goes to the kernel log only (a mount
+                                   nobody typed: kernel/netman.c reading the settings) */
 
 struct statfs {                 /* also the layout user programs see (df) */
     u32 unit;                   /* bytes per allocation unit (a FAT cluster) */
@@ -160,6 +163,7 @@ struct superblock {
     bool readonly;
     mutex_t lock;               /* file systems serialize their metadata updates with this */
     u_int nvnodes;              /* 10/5/26: vnodes alive, the root included */
+    bool quiet;                 /* 10/17/26: MNT_QUIET */
 };
 
 struct fs_type {
@@ -196,6 +200,10 @@ int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
+/* 10/17/26: the mount of dev held (its root vnode: umount says it is busy) until vfs_release_mount(root): 0, its path
+   and whether it is read-only; -ENOENT when dev is not mounted */
+int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly);
+void vfs_release_mount(struct vnode *root);
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
