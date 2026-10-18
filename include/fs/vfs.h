@@ -198,11 +198,19 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
 int vfs_umount(const char *path);
 int vfs_umount_lost(const char *path, u_int *lost);  /* 10/16/26 (B10): and how many changed blocks it gave up */
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted, or being
-                                                        unmounted (10/18/26, audit B51) */
+                                                        unmounted (10/18/26, audit B51), or being mounted, or in the
+                                                        middle of a request (10/18/26, B56, B58) */
+const char *vfs_bdev_busy_why(struct bdev *d);       /* 10/18/26 (B56, B58): which of these, or NULL: */
+#define VFS_BUSY_MOUNTED    "mounted"
+#define VFS_BUSY_UNMOUNTING "being unmounted"
+#define VFS_BUSY_MOUNTING   "being mounted"
+#define VFS_BUSY_REQUEST    "in the middle of a request"
 bool vfs_bdev_unmounting(struct bdev *d);            /* 10/18/26 (B51): d, its disk or one of its partitions is being
                                                         unmounted (an umount's steps, eject's unmount: still writing) */
-void vfs_unmount_begin(struct bdev *d);              /* 10/18/26 (B51): d is being unmounted from now on (eject: its */
-void vfs_unmount_end(struct bdev *d);                /*      whole disk while it unmounts); ...until this */
+int vfs_unmount_begin(struct bdev *d);               /* 10/18/26 (B51): d is being unmounted from now on (B58: eject's
+                                                        whole disk, all of its run; -EBUSY when something of it is being
+                                                        mounted or unmounted already) ... */
+void vfs_unmount_end(struct bdev *d);                /*      ...until this */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */
 bool vfs_disk_name_mounted(const char *name);        /* a disk of that name (or a partition of it) is mounted */
