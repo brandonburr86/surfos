@@ -9,11 +9,17 @@ translates partition offsets. See include/sys/bdev.h.
 10/5/26 (USB storage): unregistering an unplugged disk, reference counts for
 mounts, partition names, flushing, and bdev_may_format(), the safety rule of
 the destructive tools.
+
+10/17/26 (audit B47): the calling task is inside a device request while the
+driver works (surf_task.fs_hold, surfos/task.h): a kill that waited comes after
+the request. Killed at once inside it (a mkfs run by SYS_kcmd), a task left the
+driver's lock held and its transfer half done, and the card hung.
 */
 
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/irq.h>
+#include <surfos/task.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -126,13 +132,17 @@ static struct bdev *resolve(struct bdev *d, u32 *lba, u32 count) {
     return NULL;
 }
 
+/* 10/17/26 (audit B47): every request runs inside (fs_enter(), above): the cache counts its own as well, and this
+   covers the raw ones (mkfs, fdisk, dumps, the self test) */
 int bdev_read(struct bdev *d, u32 lba, u32 count, void *buf) {
     struct bdev *disk = resolve(d, &lba, count);
     int r;
     if(d->gone || (disk && disk->gone)) return BDEV_EGONE;
     if(!disk || !disk->ops || !disk->ops->read) return BDEV_ERANGE;
     if(!count) return 0;
+    fs_enter();
     r = disk->ops->read(disk, lba, count, buf);
+    fs_leave();
     if(r == 0) { d->reads += count; if(disk != d) disk->reads += count; }
     return r;
 }
@@ -144,16 +154,22 @@ int bdev_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     if(!disk || !disk->ops || !disk->ops->write) return BDEV_ERANGE;
     if(d->readonly || disk->readonly) return BDEV_EROFS;
     if(!count) return 0;
+    fs_enter();
     r = disk->ops->write(disk, lba, count, buf);
+    fs_leave();
     if(r == 0) { d->writes += count; if(disk != d) disk->writes += count; }
     return r;
 }
 
 int bdev_flush(struct bdev *d) {
     struct bdev *disk = bdev_disk(d);
+    int r;
     if(!disk || disk->gone) return BDEV_EGONE;
     if(!disk->ops || !disk->ops->flush) return 0;
-    return disk->ops->flush(disk);
+    fs_enter();
+    r = disk->ops->flush(disk);
+    fs_leave();
+    return r;
 }
 
 /* the MBR type byte's name (driver/parttab.c keeps the table) */
