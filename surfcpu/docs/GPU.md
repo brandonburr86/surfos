@@ -378,8 +378,11 @@ the error above 300 KiB, no fetch), the video registers and GPAL, the engine's r
 errors, then draws a list of scenes (`firmware/diagnostics/gpuscenes.c`) and, for each, prints
 the FRAME_CRC of a frame that started after the scene was complete and compares it with the
 value the C model computed for that scene at build time (`build/fw/gen/gpuscenes_expect.h`). It
-ends with `GPUDIAG: PASS (n checks)` or `GPUDIAG: FAIL (...)`, then shows the last scene and
-echoes the UART. The scenes are written once and run in three places: on the CPU (writing the
+ends with `GPUDIAG: PASS (117 checks)` or `GPUDIAG: FAIL (...)`, then shows the last scene and
+echoes the UART. PASS means every check ran and passed: a missing FEATURES.GPU, a gpu window that
+traps or reads another ID than "GPU1", each engine scene that could not run, and a run with fewer
+checks than a complete one (GPUDIAG_CHECKS, 117) all fail it, and `sim/gpu/gpudiag_check.py`
+wants exactly that total from the last complete run of a capture (section 12.4). The scenes are written once and run in three places: on the CPU (writing the
 gpu, video and vram registers), in the host model (the expected CRCs), and in the RTL tests.
 
 ## 11. Milestones
@@ -557,7 +560,33 @@ flow's script): no design has an SRL either way, but every netlist differs, for 
 baseline 798 cells against 820 and the 100T DDR design 13,642 against 14,070 (more LUTs), so the
 flow's synthesis stays as it was and the reset of 95d0bd1 stays too.
 
-The designs rebuilt at these fixes are recorded here when their builds are done.
+**The designs rebuilt at these fixes**, at c217f27 (the RTL and ROM of d9cc652 plus this
+record; [gpudiag](evidence/gpu/synth-gpudiag-r1.txt), [DDR+GPU](evidence/gpu/synth-ddr-gpu-r1.txt)):
+
+| | surfcpu_arty_a7_gpudiag (seed 2) | surfcpu_arty_a7_ddr_gpu (seed 1) |
+|---|---|---|
+| gates | every gate PASS: check-srl, synthesis, bitstream, round trip, block RAM, LVS (14,034 proved, 0 differ), clocks, netlist, boot ROM | every gate PASS: the same, LVS 18,793 proved, 0 differ |
+| timing (nextpnr) | pix_clk 101.22 MHz (+29.845 ns), sys_clk 41.82 MHz (+16.086 ns) | clk100_g +8.991 ns, dram_clk 85.78 MHz (**+0.842 ns**), iodelay_clk +2.327 ns, pix_clk +30.385 ns, sys_clk 47.45 MHz (+18.927 ns) |
+| LUTs, flip-flops, RAMB36 | 7,933 (12.5 %), 3,983, 112.5 | 11,304 (17.8 %), 6,531, 112.5 |
+| build | 29 minutes | 40 minutes |
+
+The gpudiag build at d9cc652 with seed 1 never routed: router2's overused wires fell to 2,358 by
+iteration 11 and then grew, to 5,981 at iteration 61, when the build was stopped after four hours.
+Since 95d0bd1, whose seed 1 routed in 256 s, only the FRAME pair (about 40 cells), the ROM and
+the build id had changed; the placement came out different and router2 did not converge on it.
+router2 has no iteration limit and the flow no time limit on it, so the flow's seed list (which
+this design does not have anyway) would never have moved on. Seed 2 routed in 29 iterations
+(176 s). G1's VRAM failed the same way, so these designs sit near what router2 resolves: every
+VRAM address, data and enable net reaches block RAM all over the die. Two remedies are left for
+the integrator and G5: a time limit per seed in the flow, so that the next seed is tried, and
+copies of VRAM's port signals registered next to each bank. dram_clk met its constraint again,
+with less margin than the first DDR+GPU build (+0.84 against +1.24 ns; the DDR design on record
++1.14): one more sample. The CRCs of section 14.1 did not change (the scenes and the model did
+not).
+The rebuilt gpudiag netlist runs gpudiag to `GPUDIAG: PASS (117 checks)` with every FRAME_CRC
+the model's ([evidence](evidence/gpu/g2-netlist-sim-r1.txt); 45 minutes), and `make check`
+passes at these fixes (30 minutes on the loaded Mac), now with `test-gpu-noengine` on test-gpu
+and `test-gpu-system-boot` beside the soc track's system boot.
 
 ## 13. Risks
 
@@ -600,7 +629,10 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
 1. Build and load the diagnostic: `make -C surfcpu build-rom`, then on the Mac
    `make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag` and
    `make -C surfcpu program-volatile DESIGN=surfcpu_arty_a7_gpudiag` (volatile: the flash is not
-   touched).
+   touched). The bitstreams of section 12.4 (c217f27) are in the sc/gpu worktree's
+   `build/fpga/arty_a7_100t/<design>/`. A build at another commit may need another placer seed:
+   if nextpnr.log's overused wires are still in the thousands, and rising, by iteration 20 or so,
+   stop that build and run it again with `PLACER_SEEDS=2` (or 3, ...), as section 12.4 did.
 2. Watch the UART (`make -C surfcpu uart-console`) and press RESET (or type Ctrl-R): gpudiag prints
    its identity (board Arty A7-100T (0x100), SoC 0.3.0, features 17f: no DDR), its sections, one
    line per scene with its FRAME_CRC, and `GPUDIAG: PASS (117 checks)`, as the synthesized netlist
