@@ -852,7 +852,7 @@ $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 # 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c. The
 # test and gui_fake.c are objects of their own, so that each has its own dependency file (test_guitools.c includes
 # kernel/klog.c): compiled in one command, the last source's .d was the binary's only one
-GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia)
+GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia test_guisuite)
 $(GUI_SUITE_TESTS): $(BUILD)/host/%: $(BUILD)/host/kernel/tests/host/%.o $(BUILD)/host/kernel/tests/host/gui_fake.o \
                                      $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(filter %.o,$^) -o $@
@@ -864,6 +864,7 @@ unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 	$(BUILD)/host/test_guisys
 	$(BUILD)/host/test_guitools
 	$(BUILD)/host/test_guimedia
+	$(BUILD)/host/test_guisuite
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
