@@ -25,9 +25,9 @@ and checked against the plan, and the disk rescanned.
 10/18/26 (audit B52): part_commit() holds its lock (write_lock) across all of
 that, and B47 counted only each device request inside: a kill that waited 2 s
 could come at once between two of them and leave the lock held for good (every
-later fdisk, and mkfs of a whole disk, refused with "another fdisk is writing a
-partition table", the rescan skipped and the old partitions left registered over
-the new table). The commit counts its task inside the file system layer while it
+later fdisk, and mkfs where it sets a partition's type, refused with "another
+fdisk is writing a partition table", the rescan skipped and the old partitions
+left registered over the new table). The commit counts its task inside the file system layer while it
 holds the lock (surf_task.fs_hold): the kill comes once it has let go of it.
 */
 
