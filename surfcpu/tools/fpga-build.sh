@@ -245,6 +245,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
     [ -z "$pnr_timeout" ] || set -- "$@" --pnr-timeout "$pnr_timeout"
+    for w in $min_slack; do set -- "$@" --min-slack "$w"; done
     [ -z "$seed" ] || set -- "$@" --seed "$(echo "$seed" | tr ' ' ',')"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
@@ -285,13 +286,25 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         fi
         echo "dsp_mode = \"safe\""
         echo "exit_status = $1"
-        # the placer seed the bitstream comes from, and every placement attempt (seeds.txt)
+        # the placer seed the bitstream comes from (the flow's manifest says which: with every seed
+        # thin it is the best thin one), and every placement attempt (seeds.txt)
         if [ -f "$ox/seeds.txt" ]; then
-            seed_used=$(sed -n 's/^seed \([0-9]*\): pass,.*/\1/p' "$ox/seeds.txt" | tail -n 1)
+            seed_used=
+            [ -f "$om" ] && seed_used=$(sed -n 's/^seed  *\([0-9][0-9]*\).*/\1/p' "$om" | head -n 1)
+            [ -n "$seed_used" ] || seed_used=$(sed -n 's/^seed \([0-9]*\): pass,.*/\1/p' "$ox/seeds.txt" | tail -n 1)
             [ -z "$seed_used" ] || echo "placer_seed = $seed_used"
             printf 'placer_attempts = ['
             while IFS= read -r l; do printf '\n    %s,' "$(toml_str "$l")"; done < "$ox/seeds.txt"
             printf '\n]\n'
+        fi
+        # the slack rule (docs/OPEN-FLOW.md section 3): PASS, or THIN when every seed met timing with
+        # less slack than it wants; a THIN bitstream is kept (and make release refuses it without
+        # PRERELEASE=1)
+        if [ -f "$om" ]; then
+            v=$(awk 'substr($0, 1, 19) == "check slack margin " { print substr($0, 21); exit }' "$om")
+            echo "slack_margin = $(toml_str "${v%% *}")"
+            [ -z "$v" ] || echo "slack_margin_note = $(toml_str "$(echo "$v" | sed -n 's/^[A-Z]* (\(.*\))$/\1/p')")"
+            slack_state=${v%% *}
         fi
         for c in "SRL cells:check_srl" synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
                  "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
@@ -380,7 +393,8 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
         echo "result = \"pass\"" >> "$res"
         finish pass "" openxc7 "$res"
         echo "$me: PASS: ${base#"$root"/}/$design.bit (open flow: nextpnr's timing is an estimate; the $n_not constraints above are not checked)"
-        grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode|check_netlist|check_boot_rom) ' "$res" | sed "s/^/$me:   /"
+        grep -E '^(wns_ns|lut|ff|bram36|dsp|idcode|check_netlist|check_boot_rom|placer_seed|slack_margin) ' "$res" | sed "s/^/$me:   /"
+        [ "${slack_state:-}" != THIN ] || echo "$me: THIN: every placer seed met timing with less slack than the rule wants (slack_margin_note in the manifest); make release refuses it without PRERELEASE=1" >&2
         exit 0
     fi
     echo "result = \"fail\"" >> "$res"
@@ -471,7 +485,13 @@ for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_arg
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
 pnr_timeout=$(items pnr-timeout)   # each placer seed's limit (default: openxc7-build.sh's, 1800 s)
-case "$pnr_timeout" in 0|*[!0-9]*) die "$design: pnr-timeout must be a number of seconds" ;; esac
+case "$pnr_timeout" in *[!0-9]*) die "$design: pnr-timeout must be a number of seconds" ;; esac
+[ -z "$pnr_timeout" ] || [ "$pnr_timeout" -gt 0 ] 2>/dev/null ||
+    die "$design: pnr-timeout must be more than 0 seconds (timeout takes 0 as no limit)"
+# min-slack CLOCK NS: the least slack that clock may have, against the open flow's rule (each clock
+# at least max(0.5 ns, 4 % of its period)); a placement with less is thin and the next seed is tried
+min_slack=$(items min-slack | awk 'NF != 2 || $2 !~ /^[0-9]+(\.[0-9]+)?$/ { bad = 1 } { printf "%s=%s ", $1, $2 } END { exit bad }') ||
+    die "$design: a min-slack line wants a clock and a number of nanoseconds (min-slack dram_clk 0.5)"
 seed=$(items seed | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')   # the open flow's placer seeds (default 1),
 case "$seed" in *[!0-9\ ]*) die "$design: seed must be a number or numbers" ;; esac   # tried in turn
 # PLACER_SEEDS= replaces them for one build (a diagnostic build of chosen placements, with its

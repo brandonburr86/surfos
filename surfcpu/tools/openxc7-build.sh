@@ -17,6 +17,10 @@
 #   --pnr-timeout <s>  how long one seed's placement and routing may run before it is stopped and
 #                      counted as failed ("timeout" in seeds.txt), so the next seed is tried
 #                      (default 1800, or OPENXC7_PNR_TIMEOUT inside the image; tools/openxc7-steps.sh)
+#   --min-slack <clock>=<ns>  the least slack this clock may have (repeatable); every clock without
+#                      one wants max(0.5 ns, 4 % of its period). A placement with less is thin: the
+#                      next seed is tried, and if every seed is thin the best is kept and marked THIN
+#                      (devenv/openxc7/slackcheck.py, tools/openxc7-steps.sh)
 #   --dsp safe|full|none   multipliers: safe (default) maps them to DSP48E1 but lets Yosys pack
 #                      no registers or adders into the DSPs (scratchpad xilinx_dsp.multonly),
 #                      because its packing can delete logic (docs/OPEN-FLOW.md); full is
@@ -31,7 +35,8 @@
 #   --dry-run          print what would run, without the image
 #
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
-# utilization.txt, check-srl.txt (a netlist with SRL cells stops here), check-synthesis.txt,
+# utilization.txt, slack-seed<n>.txt (the slack rule on each routed attempt), check-srl.txt (a
+# netlist with SRL cells stops here), check-synthesis.txt,
 # check-bitstream.txt, check-roundtrip.txt,
 # check-bram.txt, check-lvs.txt, check-clocks.txt, the logs and manifest.txt, seeds.txt (each
 # placement attempt), and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation.
@@ -60,7 +65,7 @@ die_usage() { echo "openxc7-build.sh: $*" >&2; echo "usage: see the top of $0" >
 top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonly=0
 lvs_timeout=${OPENXC7_LVS_TIMEOUT:-1800}
 pnr_timeout=${OPENXC7_PNR_TIMEOUT:-1800}
-defs= incs= srcs= extras=
+defs= incs= srcs= extras= min_slack=
 while [ $# -gt 0 ]; do
   case "$1" in
     --top)   [ $# -ge 2 ] || die_usage "--top needs a value";   top=$2; shift 2 ;;
@@ -80,6 +85,7 @@ while [ $# -gt 0 ]; do
     --no-lvs)   lvs=0; shift ;;
     --lvs-timeout) [ $# -ge 2 ] || die_usage "--lvs-timeout needs a value"; lvs_timeout=$2; shift 2 ;;
     --pnr-timeout) [ $# -ge 2 ] || die_usage "--pnr-timeout needs a value"; pnr_timeout=$2; shift 2 ;;
+    --min-slack) [ $# -ge 2 ] || die_usage "--min-slack needs a value"; min_slack="$min_slack $2"; shift 2 ;;
     --no-check) check=0; shift ;;
     --dry-run)  dry=1; shift ;;
     -h|--help)  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -94,7 +100,15 @@ case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none
 case "$seed" in ''|*[!0-9,]*|,*|*,|*,,*) die_usage "--seed must be a number or a list of numbers (2,3,4)" ;; esac
 seeds=$(echo "$seed" | tr ',' ' ')
 case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
-case "$pnr_timeout" in ''|0|*[!0-9]*) die_usage "--pnr-timeout must be a number of seconds" ;; esac
+case "$pnr_timeout" in ''|*[!0-9]*) die_usage "--pnr-timeout must be a number of seconds" ;; esac
+[ "$pnr_timeout" -gt 0 ] 2>/dev/null || die_usage "--pnr-timeout must be more than 0 seconds (timeout takes 0 as no limit)"
+for w in $min_slack; do
+  case "$w" in
+    *=*=*|=*|*=) die_usage "--min-slack wants CLOCK=NS, not $w" ;;
+    *=*) case "${w#*=}" in *[!0-9.]*|.|*.*.*) die_usage "--min-slack $w: NS must be a number of nanoseconds" ;; esac ;;
+    *) die_usage "--min-slack wants CLOCK=NS, not $w" ;;
+  esac
+done
 
 if [ -z "$part" ]; then
   case "$board" in
@@ -139,6 +153,7 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
   for e in $extras; do set -- "$@" --manifest-include "$(rel "$e")"; done
   [ "$lvs" = 0 ] && set -- "$@" --no-lvs
   set -- "$@" --lvs-timeout "$lvs_timeout" --pnr-timeout "$pnr_timeout"
+  for w in $min_slack; do set -- "$@" --min-slack "$w"; done
   [ "$check" = 0 ] && set -- "$@" --no-check
   for s in $srcs; do set -- "$@" "$(rel "$s")"; done
   cd "$here"
@@ -378,8 +393,9 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "source revision     ${SURFCPU_BUILD_ID:-unknown} dirty=${SURFCPU_BUILD_DIRTY:-unknown}"
   echo "build host          ${SURFCPU_HOST:-unknown}, container $(uname -m)"
   echo "date (UTC)          $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "seed                $seed$( [ "$seed" = "$seeds" ] || echo " (of $seeds: $(grep -c . "$out/seeds.txt") tried, seeds.txt)")"
+  echo "seed                $seed_used$( [ "$seed_used" = "$seeds" ] || echo " (of $seeds: $(grep -c '^seed ' "$out/seeds.txt") tried, seeds.txt)")"
   echo "pnr timeout         $pnr_timeout s (each seed's placement and routing)"
+  echo "slack rule          each clock at least max(0.5 ns, 4 % of its period)${min_slack:+; the design list sets:$min_slack}"
   echo "DSP mode            $dsp (safe: multipliers in DSP48E1 without Yosys's register/adder packing)"
   echo "defines            ${defs:- (none)}"
   [ -n "$expect" ] && echo "expectations        $expect sha256:$(sha "$expect")"
@@ -394,6 +410,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "check LVS           $result_lvs (routed netlist equivalent to the synthesis: check-lvs.txt)"
   echo "lvs timeout         $lvs_timeout s"
   echo "check clocks        $result_clk (MMCM/PLL dividers against XAPP888, no net through a global buffer: check-clocks.txt)"
+  echo "check slack margin  $slack_state ($slack_note: slack-seed$seed_used.txt)"
   echo "## placement attempts"; cat "$out/seeds.txt"
   echo "## timing"; grep '^clock ' "$out/timing.txt" || true
   echo "## utilization"; sed -n '/documented capacity/,$p' "$out/utilization.txt"
@@ -403,6 +420,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 } > "$out/manifest.txt"
 
 grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /'
-echo "openxc7-build.sh: checks: SRL cells $result_srl, synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk"
+echo "openxc7-build.sh: checks: SRL cells $result_srl, synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk, slack margin $slack_state"
+[ "$slack_state" != THIN ] || echo "openxc7-build.sh: THIN: every placer seed met timing with less slack than the rule wants ($slack_note); make release refuses this bitstream without PRERELEASE=1" >&2
 echo "openxc7-build.sh: $out/$top.bit ($(wc -c < "$out/$top.bit" | tr -d ' ') bytes); manifest $out/manifest.txt"
 exit $fail

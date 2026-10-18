@@ -636,7 +636,32 @@ printf 'pnr-timeout 15m\n' >> "$tp"
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
 check "pnr-timeout: ... and a limit that is not seconds is refused" has "pnr-timeout must be a number of seconds"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'pnr-timeout 00\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: ... and so is 00, which timeout takes as no limit" has "pnr-timeout must be more than 0 seconds"
+# the slack rule (the third GPU review): a design's min-slack lines reach the open flow, nonsense is
+# refused; the seed the flow used and its slack verdict reach the manifest, THIN kept but said
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'min-slack dram_clk 0.5\nmin-slack sys_clk 2\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "min-slack: the design list's least slack for a clock reaches the open flow" logged "--min-slack dram_clk=0.5 --min-slack sys_clk=2"
+printf 'min-slack dram_clk 0.5ns\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "min-slack: ... and a line that is not a clock and nanoseconds is refused" has "a min-slack line wants a clock and a number of nanoseconds"
 rm -f "$tp"
+gl=$g/build/fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" FAKE_OX_THIN_SEEDS="1" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "slack: a thin placement is followed by the next seed, whose bitstream passes the rule" \
+    eval "test $rc -eq 0 && grep -q '^placer_seed = 2$' '$gl/manifest.txt' && grep -q '^slack_margin = \"PASS\"$' '$gl/manifest.txt' && grep -q '\"seed 1: thin, routed; ' '$gl/manifest.txt'"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    FAKE_OX_THIN_SEEDS="1 2 3 4 5 6 7 8" SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "slack: with every seed thin the bitstream is kept, its seed the one kept, its manifest THIN, and the build says so" \
+    eval "test $rc -eq 0 && test -f '$gl/surfcpu_arty_a7_ddr_bramdiag.bit' && grep -q '^placer_seed = 1$' '$gl/manifest.txt' && grep -q '^slack_margin = \"THIN\"$' '$gl/manifest.txt' && grep -q '^slack_margin_note = \"dram_clk +0.087 ns, wants 0.500; every seed of 1 2 3 4 5 6 7 8 thin or failed' '$gl/manifest.txt' && grep -q 'fpga-build: THIN: ' '$t/out.txt'"
 n_pnr=$(grep -c -- '--pnr-timeout' "$FAKE_LOG" || true)
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t

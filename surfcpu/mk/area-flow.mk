@@ -64,6 +64,7 @@ test-flow-tools:
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/synthcheck.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/gclkcheck.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/srlcheck.py --self-test
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/slackcheck.py --self-test
 	@# and on what Yosys makes of a shift chain: without a reset two SRL16E (refused), with one flip-flops
 	@mkdir -p $(FLOW_SIM)
 	$(Q)for m in srl_chain srl_chain_reset; do \

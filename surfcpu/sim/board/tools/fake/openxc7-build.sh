@@ -16,6 +16,9 @@
 #   FAKE_OX_FAIL_SEEDS  the seeds of --seed's list whose placement misses dram_clk (as pnr above);
 #                    the first other seed in the list passes; seeds.txt records each attempt as the
 #                    real script does, and with every seed failing the run stops as with pnr
+#   FAKE_OX_THIN_SEEDS  the seeds whose placement meets every clock with less slack than the rule
+#                    wants (thin): the next seed is tried; with every seed thin the first is kept
+#                    and the manifest's slack margin says THIN, as the real script does
 # It also writes pre.json and top.json, the elaborated RTL and the netlist as Yosys JSON, with
 # the full top's boot ROM and multiplier (or nothing, for other tops), and an empty cells_sim.v.
 echo "openxc7-build.sh $*" >> "$FAKE_LOG"
@@ -30,7 +33,10 @@ while [ $# -gt 0 ]; do
         --manifest-include) [ -f "$2" ] || { echo "fake openxc7: no $2" >&2; exit 2; }; shift 2 ;;
         -D) shift 2 ;;
         --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
-        --pnr-timeout) case "$2" in ''|0|*[!0-9]*) echo "fake openxc7: --pnr-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
+        --pnr-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --pnr-timeout $2" >&2; exit 2 ;; esac
+                       [ "$2" -gt 0 ] || { echo "fake openxc7: --pnr-timeout $2" >&2; exit 2; }; shift 2 ;;
+        --min-slack) case "$2" in *=*=*|=*|*=|*[!a-zA-Z0-9_.=]*) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; *=*) ;;
+                     *) echo "fake openxc7: --min-slack $2" >&2; exit 2 ;; esac; shift 2 ;;
         --seed) case "$2" in ''|*[!0-9,]*|,*|*,|*,,*) echo "fake openxc7: --seed $2" >&2; exit 2 ;; esac; seeds=$(echo "$2" | tr ',' ' '); shift 2 ;;
         -I) [ -d "$2" ] || { echo "fake openxc7: no include directory $2" >&2; exit 2; }; shift 2 ;;
         --dry-run) dry=1; shift ;;
@@ -60,19 +66,31 @@ missed() {         # SEED: the nextpnr.log of a placement that misses dram_clk
     echo "seed $1: fail (nextpnr exit 1), routed; 'dram_clk': $f MHz (FAIL at 80.00 MHz), 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)" >> "$out/seeds.txt"
 }
 stop=${FAKE_OX_STOP:-}
+slack="PASS (least margin dram_clk +1.513 ns, wants 0.500: slack-seed1.txt)"
 if [ -z "$stop" ]; then
-    passed=
+    passed= thin=
     for sd in $seeds; do
         case " ${FAKE_OX_FAIL_SEEDS:-} " in
-            *" $sd "*) missed "$sd" ;;
-            *) passed=$sd
-               { echo "Info: Max frequency for clock               'dram_clk': 91.02 MHz (PASS at 80.00 MHz)"
-                 echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
-                 echo "Info: Routing complete."; } > "$out/nextpnr.log"
-               echo "seed $sd: pass, routed; 'dram_clk': 91.02 MHz (PASS at 80.00 MHz), 'sys_clk': 65.24 MHz (PASS at 25.00 MHz)" >> "$out/seeds.txt"
-               break ;;
+            *" $sd "*) missed "$sd"; continue ;;
         esac
+        case " ${FAKE_OX_THIN_SEEDS:-} " in
+            *" $sd "*) echo "seed $sd: thin, routed; 'dram_clk': 80.56 MHz (PASS at 80.00 MHz), 'sys_clk': 65.24 MHz (PASS at 25.00 MHz); slack: dram_clk +0.087 ns, wants 0.500" >> "$out/seeds.txt"
+                       [ -n "$thin" ] || thin=$sd
+                       continue ;;
+        esac
+        passed=$sd
+        { echo "Info: Max frequency for clock               'dram_clk': 91.02 MHz (PASS at 80.00 MHz)"
+          echo "Info: Max frequency for clock                'sys_clk': 65.24 MHz (PASS at 25.00 MHz)"
+          echo "Info: Routing complete."; } > "$out/nextpnr.log"
+        echo "seed $sd: pass, routed; 'dram_clk': 91.02 MHz (PASS at 80.00 MHz), 'sys_clk': 65.24 MHz (PASS at 25.00 MHz); slack: least margin dram_clk +1.513 ns, wants 0.500" >> "$out/seeds.txt"
+        slack="PASS (least margin dram_clk +1.513 ns, wants 0.500: slack-seed$sd.txt)"
+        break
     done
+    if [ -z "$passed" ] && [ -n "$thin" ]; then
+        passed=$thin
+        echo "kept: seed $thin, the thin placement with the most margin (THIN)" >> "$out/seeds.txt"
+        slack="THIN (dram_clk +0.087 ns, wants 0.500; every seed of $seeds thin or failed: seed $thin kept, the most margin: slack-seed$thin.txt)"
+    fi
     [ -n "$passed" ] || stop=pnr
 elif [ "$stop" = pnr ]; then
     for sd in $seeds; do missed "$sd"; done
@@ -105,6 +123,7 @@ tim=${FAKE_OX_TIMING:-PASS}
   echo "top                 $top"
   echo "part                $part (device $dev, chip database chipdb-fake.bin)"
   echo "board               $board"
+  echo "seed                ${passed:-1} (of $seeds: $(grep -c '^seed ' "$out/seeds.txt" 2>/dev/null || echo 0) tried, seeds.txt)"
   echo "bitstream           $out/$top.bit sha256:$(shasum -a 256 "$out/$top.bit" | cut -d' ' -f1) 99 bytes"
   echo "check SRL cells     ${FAKE_OX_SRL:-PASS} (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
   echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
@@ -113,6 +132,7 @@ tim=${FAKE_OX_TIMING:-PASS}
   echo "check block RAM     none in the design (contents decoded from the bitstream: check-bram.txt)"
   echo "check LVS           ${FAKE_OX_LVS:-PASS} (routed netlist equivalent to the synthesis: check-lvs.txt)"
   echo "check clocks        ${FAKE_OX_CLOCKS:-PASS} (MMCM/PLL dividers against XAPP888: check-clocks.txt)"
+  echo "check slack margin  $slack"
   echo "## timing"
   grep '^clock ' "$out/timing.txt"
   echo "## tools (/etc/surfcpu-openxc7.txt)"
