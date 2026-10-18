@@ -98,13 +98,15 @@ static u32 stream_len;
 static int reads;
 static struct gui_sys sys;                      /* fake_sys, with this log */
 
+static u32 written_offset;                      /* added to `written`: as if the kernel had written that much before */
+
 static int ring_log(void *ctx, char *buf, u32 size, u32 *len, u32 *written) {
     u32 n = stream_len < GUI_LOG_MAX ? stream_len : GUI_LOG_MAX;
     (void)ctx;
     if(n > size) n = size;
     memcpy(buf, stream + stream_len - n, n);
     *len = n;
-    *written = stream_len;
+    *written = stream_len + written_offset;
     reads++;
     return 0;
 }
@@ -141,6 +143,7 @@ static u32 first_marker_line(u32 at, char *out, u32 n) {
 static void log_desktop(void) {
     desktop(960, 540);
     stream_len = 0;
+    written_offset = 0;
     reads = 0;
     sys = fake_sys;
     sys.log = ring_log;
@@ -159,7 +162,7 @@ static void tick_ms(u32 ms) { g.now += ms; gui_tick(&g); }
 
 /**** klog_copy() ****/
 
-static char kwritten[64 * 1024];               /* everything klog_write() was given, here */
+static char kwritten[1024 * 1024];             /* everything klog_write() was given, here */
 static u32 kwritten_len;
 
 static void klog_say(const char *s) {
@@ -990,6 +993,469 @@ static void charmap(void) {
     CHECK(!g.win[GUI_CHARMAP].open);
 }
 
+/**** what the review found (10/18/26) ****/
+
+/* klog_copy(): storms of every size before each chunk, buffers that are no multiple of 1024, a storm that leaves
+   nothing to copy (copied again from the new head), and the head passing 2^32 */
+static void klog_storms(void) {
+    static char buf[KLOG_SIZE + 64], text[1100], big[20001];
+    static const u32 sizes[] = { 1, 7, 1000, 1023, 1025, 5000, 16383, 16384 };
+    static const u32 storms[] = { 100, 9000, 15000, 16000, 20000 };
+    u_long n, w;
+    u32 i, j, k, before, fill;
+    int ok = 1, cut = 0, empty = 0, line = 0;
+    bool fired;
+    for(i = 0; i < 8; i++) for(j = 0; j < 5; j++) for(k = 2; k <= 6; k++) {
+        for(fill = 0; fill < 2; fill++, line++) {      /* lines of the log meanwhile */
+            snprintf(text, sizeof(text), "a line of the kernel log, number %d\n", line);
+            klog_say(text);
+        }
+        memset(big, 'A' + (i + j + k) % 26, storms[j]);
+        big[storms[j]] = 0;
+        before = kwritten_len;
+        saves = 0;
+        storm_at = (int)k;
+        storm = big;
+        n = klog_copy(buf, sizes[i], &w);
+        fired = !storm;
+        storm = NULL;
+        if(fired) {                                     /* (what the "interrupt" wrote, in the reference too) */
+            memcpy(kwritten + kwritten_len, big, storms[j]);
+            kwritten_len += storms[j];
+        }
+        if(!(w == before || (fired && w == before + storms[j])) || !n || n > sizes[i] || n > KLOG_SIZE ||
+           memcmp(buf, kwritten + w - n, n)) ok = 0;
+        if(n < sizes[i] && n < KLOG_SIZE) cut++;
+        if(!n) empty++;
+    }
+    CHECK(ok && !empty && cut > 0);
+    /* 16000 bytes before the first chunk: nothing of the end it read is left, so it reads the head again */
+    memset(big, 'R', 16000);
+    big[16000] = 0;
+    before = kwritten_len;
+    saves = 0;
+    storm_at = 2;
+    storm = big;
+    n = klog_copy(buf, sizeof(buf), &w);
+    CHECK(!storm && n == KLOG_SIZE && w == before + 16000);
+    memcpy(kwritten + kwritten_len, big, 16000);
+    kwritten_len += 16000;
+    CHECK(!memcmp(buf, kwritten + kwritten_len - KLOG_SIZE, KLOG_SIZE));
+    /* the head passing 2^32: the ring is still full (the same place in the ring, 32 KB before 2^32) */
+    klog_head = (0u - 2 * KLOG_SIZE) + klog_head % KLOG_SIZE;
+    for(i = 0; i < 40; i++) {
+        memset(text, 'a' + i % 26, 1023);
+        text[1023] = '\n';
+        text[1024] = 0;
+        klog_say(text);
+    }
+    n = klog_copy(buf, sizeof(buf), &w);
+    CHECK(klog_head < 2 * KLOG_SIZE && n == KLOG_SIZE && w == klog_head && klog_length() == KLOG_SIZE);
+    CHECK(!memcmp(buf, kwritten + kwritten_len - KLOG_SIZE, KLOG_SIZE));
+    n = klog_copy(buf, 5000, &w);
+    CHECK(n == 5000 && !memcmp(buf, kwritten + kwritten_len - 5000, 5000));
+}
+
+/* the Log: what the review found */
+static void log_review(void) {
+    const struct gui_window *w;
+    struct gui_logview *v = &g.logview;
+    int first, rows, total, ty, i, old;
+    char want[64];
+    u32 at;
+    /* a click in the strip below the last whole row shown selects nothing */
+    log_desktop();
+    lines(1, 100);
+    gui_open(&g, GUI_LOG);
+    w = &g.win[GUI_LOG];
+    ty = w->y + TITLE_H + BAR_H + 4;
+    key(GUI_HOME);
+    first_rows(&first, &rows, &total);
+    CHECK(ty + rows * 16 + 3 < w->y + w->h - STATUS_H - 1);
+    click(w->x + 50, ty + rows * 16 + 3);
+    key(3);
+    CHECK(!v->any && g.clip_len == 0);
+    /* Select all stops Follow: the view stays where it is as lines come */
+    key(GUI_END);
+    CHECK(v->follow);
+    key(1);
+    CHECK(v->any && !v->follow);
+    lines(101, 105);
+    tick_ms(500);
+    first_rows(&first, &rows, &total);
+    CHECK(first == total - rows - 5);
+    /* at the end with Follow off, scrolling down (the view does not move) starts it again */
+    key(GUI_END);
+    click(w->x + 8 + 10, w->y + TITLE_H + 4 + 10);      /* the toolbar's Follow: off, the view stays at the end */
+    CHECK(!v->follow);
+    key(GUI_DOWN);
+    CHECK(v->follow);
+    click(w->x + 8 + 10, w->y + TITLE_H + 4 + 10);
+    CHECK(!v->follow);
+    wheel_at(w->x + 100, w->y + 100, -1);
+    CHECK(v->follow);
+    click(w->x + 8 + 10, w->y + TITLE_H + 4 + 10);
+    key(GUI_PGDN);
+    CHECK(v->follow);
+    /* dragging past the top edge: a row a movement, and on while it is held there still (the tick), then no more */
+    log_desktop();
+    lines(1, 100);
+    gui_open(&g, GUI_LOG);
+    for(i = 0; i < 10; i++) key(GUI_UP);
+    first_rows(&old, &rows, &total);
+    CHECK(old == total - rows - 10);
+    button(w->x + 60, ty + 5 * 16 + 3, true);           /* line old + 6 */
+    button(w->x + 60, ty - 20, true);                   /* above the text: a row */
+    first_rows(&first, &rows, &total);
+    CHECK(first == old - 1);
+    for(i = 0; i < 10; i++) tick_ms(50);                /* held still there: a row every 50 ms */
+    first_rows(&first, &rows, &total);
+    CHECK(first == old - 11);
+    button(w->x + 60, ty - 20, false);
+    tick_ms(500);
+    first_rows(&first, &rows, &total);
+    CHECK(first == old - 11);
+    key(3);
+    snprintf(want, sizeof(want), "line %04d", old - 11 + 1);
+    CHECK(!memcmp(g.clip, want, 9) && g.clip_len == 16 * 34 + 37);   /* lines 62 to 78, line 70 a marker */
+    /* a selection whose first lines drop off keeps the lines it still has whole */
+    log_desktop();
+    lines(1, 480);                                      /* 80 bytes too many: the copy starts inside line 3 */
+    gui_open(&g, GUI_LOG);
+    key(GUI_HOME);
+    button(w->x + 60, ty + 2 * 16 + 3, true);           /* lines 5 to 13 */
+    button(w->x + 60, ty + 10 * 16 + 3, true);
+    button(w->x + 60, ty + 10 * 16 + 3, false);
+    key(3);
+    CHECK(!memcmp(g.clip, "line 0005", 9) && g.clip_len == 8 * 34 + 37);
+    lines(481, 486);                                    /* 204 bytes more: lines 1 to 8 go, line 9 is cut */
+    tick_ms(500);
+    key(3);
+    CHECK(v->any && !memcmp(g.clip, "line 0010 marker", 16) && g.clip_len == 37 + 3 * 34);
+    lines(487, 520);                                    /* and when none of them is left whole, it goes */
+    tick_ms(500);
+    CHECK(!v->any);
+    /* the mark on a wrapped row; Find next with the bar closed */
+    log_desktop();
+    say("first\n");
+    for(i = 0; i < 100; i++) say("x");
+    say("NEEDLE");
+    for(i = 0; i < 24; i++) say("y");
+    say("\nneedle two\n");
+    gui_open(&g, GUI_LOG);
+    gui_act(&g, ACT_FIND);
+    fake_type(&g, "needle");
+    key('\r');
+    draw();
+    /* column 100 of the second line: 71 cells in its first row, then 29 in its second, two cells in */
+    CHECK(fake_pixel(W, w->x + 8 + (2 + 29) * 8, ty + 2 * 16) == 0xE8D08A && glyph_at(w->x + 8 + (2 + 29) * 8, ty + 2 * 16, 'N', INK));
+    key(27);
+    CHECK(!v->finding && gui_menu_on(&g, 3, ACT_FIND_NEXT));
+    gui_act(&g, ACT_FIND_NEXT);
+    at = v->match - (v->written - v->len);
+    CHECK(v->match_len == 6 && !memcmp(v->text + at, "needle two", 10));
+    gui_act(&g, ACT_FIND_NEXT);
+    CHECK(!strcmp(v->status, "Found it again from the top") && !memcmp(v->text + (v->match - (v->written - v->len)), "NEEDLE", 6));
+    /* what is drawn: a copy that starts inside a UTF-8 sequence, escapes cut short, ESC alone, control bytes */
+    log_desktop();
+    say("\x89\x8B start\n");                             /* bytes that are not UTF-8: the 437 characters they are */
+    say("A\x1b[31\n");                                 /* an escape cut short at the line end: nothing after A */
+    say("B\x1b[\n");
+    say("C\x1b\n");
+    say("D\x1bXY\n");                                  /* ESC, not ESC [: no cell, then XY */
+    say("E\x1b[1;31mred\x1b[0m!\n");
+    say("G\xE2\x89\n");                                /* a sequence cut short: two 437 characters */
+    say("J\x01K\x7fL\n");
+    gui_open(&g, GUI_LOG);
+    draw();
+    CHECK(glyph_at(w->x + 8, ty, 0x89, INK) && glyph_at(w->x + 16, ty, 0x8B, INK) && shows(w->x + 8 + 3 * 8, ty, "start", INK, 1));
+    CHECK(shows(w->x + 8, ty + 16, "A", INK, 1) && !glyph_at(w->x + 16, ty + 16, '3', INK) && fake_pixel(W, w->x + 16 + 3, ty + 16 + 8) == 0xFFFDF5);
+    CHECK(shows(w->x + 8, ty + 32, "B", INK, 1) && shows(w->x + 8, ty + 48, "C", INK, 1) && shows(w->x + 8, ty + 64, "DXY", INK, 1));
+    CHECK(shows(w->x + 8, ty + 80, "Ered!", INK, 1) && shows(w->x + 8, ty + 96, "G\xE2\x89", INK, 1) && shows(w->x + 8, ty + 112, "JKL", INK, 1));
+    click(w->x + 50, ty + 3);                           /* the cut first line copies as it is */
+    key(3);
+    CHECK(g.clip_len == 9 && !memcmp(g.clip, "\x89\x8B start\n", 9));
+    /* `written` passing 2^32: places are counted modulo 2^32, the selection and the match stay on their text */
+    log_desktop();
+    written_offset = 0xFFFFFFFFu - 20000;
+    lines(1, 400);
+    gui_open(&g, GUI_LOG);
+    key(GUI_END);
+    first_rows(&first, &rows, &total);
+    click(w->x + 50, ty + (rows - 3) * 16 + 4);         /* line 398 */
+    gui_act(&g, ACT_FIND);
+    fake_type(&g, "marker");
+    key('\r');                                          /* from it: line 400's */
+    key(27);
+    key(3);
+    CHECK(!memcmp(g.clip, "line 0400 marker", 16));
+    memcpy(want, g.clip, 37);
+    first_rows(&old, &rows, &total);
+    lines(401, 700);                                    /* `written` passes 2^32 */
+    tick_ms(500);
+    CHECK(v->written == stream_len + written_offset && v->written < 30000 && v->len == GUI_LOG_MAX);
+    key(3);
+    CHECK(v->any && !memcmp(g.clip, want, 37));
+    CHECK(v->match_len == 6 && !memcmp(v->text + (v->match - (v->written - v->len)), "marker", 6));
+    first_rows(&first, &rows, &total);
+    CHECK(!v->follow && row_is(0, "line 0") && first > 0 && first < total - rows);
+    lines(701, 705);                                    /* and what comes after it is new: read, and drawn */
+    g.dirty = false;
+    tick_ms(500);
+    CHECK(g.dirty && !memcmp(v->text + v->len - 34, "line 0705", 9));
+    key(GUI_END);
+    CHECK(row_is(rows - 1, "line 0705"));
+}
+
+/* the Clock: what the review found */
+static void clock_review(void) {
+    const struct gui_window *w;
+    struct gui_clock *c = &g.clockapp;
+    char t[64];
+    int i, redraws;
+    /* Copy with no date that can be used: the clipboard is left alone, and Copy is off */
+    desktop(960, 540);
+    memcpy(g.clip, "hello", 5);
+    g.clip_len = 5;
+    gui_open(&g, GUI_CLOCK);
+    w = &g.win[GUI_CLOCK];
+    g.time.month = 165;
+    CHECK(!gui_menu_on(&g, 3, ACT_COPY));
+    key(3);
+    CHECK(!g.quit && g.clip_len == 5 && !memcmp(g.clip, "hello", 5));
+    g.time.month = 0;
+    key(3);
+    CHECK(g.clip_len == 5 && !memcmp(g.clip, "hello", 5));
+    g.time.month = 10;
+    CHECK(gui_menu_on(&g, 3, ACT_COPY));
+    key(3);
+    g.clip[g.clip_len] = 0;
+    CHECK(!strcmp(g.clip, "Saturday, October 17, 2026, 14:05:30\n") && !strcmp(c->status, "Copied"));
+    /* the stopwatch's Copy: its time and the eight laps kept */
+    key('3');
+    key(' ');
+    for(i = 0; i < 10; i++) { tick_ms(1000); key('l'); }
+    key(' ');
+    key(3);
+    g.clip[g.clip_len] = 0;
+    CHECK(!strncmp(g.clip, "00:10.0\nLap 3  00:03.0\n", 23) && !strcmp(g.clip + g.clip_len - 16, "Lap 10  00:10.0\n"));
+    key('r');
+    /* its tenths do not redraw the desktop while a window in front hides them: a maximized one, not a smaller one */
+    key(' ');
+    gui_open(&g, GUI_NOTEPAD);
+    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
+    CHECK(redraws >= 9);                                /* Notepad leaves some of the digits in sight */
+    gui_act(&g, ACT_MAXIMIZE);
+    tick_ms(10);
+    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
+    CHECK(redraws == 0);
+    gui_act(&g, ACT_MAXIMIZE);
+    gui_open(&g, GUI_CLOCK);
+    for(redraws = 0, i = 0; i < 100; i++) { g.dirty = false; tick_ms(10); if(g.dirty) redraws++; }
+    CHECK(redraws >= 9);
+    key(' ');
+    key('r');
+    gui_close(&g, GUI_NOTEPAD);
+    /* the alarm's message replaced by another dialog before it was answered: it comes back after that one */
+    gui_open(&g, GUI_CLOCK);
+    key('4');
+    key(GUI_HOME);
+    key(GUI_RIGHT);
+    key(' ');
+    tick_ms(1000);
+    CHECK(c->alarm && !strcmp(g.dialog.title, "Timer"));
+    dialog_message(&g, "Cannot show the picture", "x.bmp", "It could not be read to its end.");
+    tick_ms(100);
+    CHECK(!strcmp(g.dialog.title, "Cannot show the picture"));
+    key('\r');
+    tick_ms(100);
+    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.title, "Timer") && c->alarm);
+    key('\r');
+    CHECK(!g.dialog.kind && !c->alarm);
+    /* closed with the alarm pending (its message waiting for another dialog): it goes with the window */
+    key(' ');
+    dialog_message(&g, "Another", "asked first", "");
+    tick_ms(1000);
+    CHECK(c->alarm && !strcmp(g.dialog.title, "Another"));
+    gui_close(&g, GUI_CLOCK);
+    CHECK(!g.win[GUI_CLOCK].open && !c->alarm);
+    key('\r');
+    tick_ms(100);
+    CHECK(!g.dialog.kind);
+    /* and with its message up when the desktop closes: answering it then changes nothing */
+    gui_open(&g, GUI_CLOCK);
+    key('4');
+    key(' ');
+    tick_ms(1000);
+    CHECK(!strcmp(g.dialog.title, "Timer"));
+    gui_finish(&g);
+    CHECK(!c->alarm && !c->timer_on);
+    key('\r');
+    CHECK(!g.dialog.kind && !c->alarm);
+    gui_close(&g, GUI_CLOCK);
+    /* gui_state.now passing 2^32: the stopwatch and the timer count on */
+    gui_open(&g, GUI_CLOCK);
+    g.now = 0xFFFFFFFFu - 2000;
+    key('3');
+    key(' ');
+    tick_ms(5000);
+    CHECK(clock_watch(&g) == 5000);
+    key(' ');
+    key('r');
+    key('4');
+    key(GUI_HOME);
+    key(GUI_PGUP);                                      /* ten seconds */
+    g.now = 0xFFFFFFFFu - 3000;
+    key(' ');
+    tick_ms(2000);
+    key(' ');                                           /* paused with 8 s left, across 2^32 */
+    tick_ms(100000);
+    key(' ');
+    tick_ms(7000);
+    CHECK(clock_left(&g) == 1000 && !c->alarm);
+    gui_app_clock.title_of(&g, t, sizeof(t));
+    CHECK(!strcmp(t, "Clock - 00:01"));
+    tick_ms(1000);
+    CHECK(c->alarm && !strcmp(g.dialog.title, "Timer"));
+    key('\r');
+    (void)w;
+}
+
+/* the Character Map: what the review found */
+static void charmap_review(void) {
+    const struct gui_window *w;
+    struct gui_charmap *m = &g.charmap;
+    int sy;
+    desktop(960, 540);
+    gui_open(&g, GUI_CHARMAP);
+    w = &g.win[GUI_CHARMAP];
+    sy = w->y + w->h - STATUS_H - 1;
+    /* Go to code takes only what it says it takes */
+    static const struct { const char *text; int code; const char *status; } cases[] = {
+        { "4294967361", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },   /* 2^32 + 65 */
+        { "U+100000041", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "U+41zz", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "65 66", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "0x", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "0x123", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "U+", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "1000", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { " ", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "AB", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "\xE2\x82\xAC", -2, "U+20AC is not one of the console's characters" },       /* € */
+        { "\xF0\x9F\x98\x80", -2, "U+1F600 is not one of the console's characters" },  /* an emoji */
+        { "U+FFFF", -2, "U+FFFF is not one of the console's characters" },
+        { "007", 7, "" }, { " 0x41 ", 'A', "" }, { "u+2588", 0xDB, "" }, { "U+00e9", 0x82, "" },
+        { "\xC3\xA9", 0x82, "" }, { "9", 9, "" }, { "255", 255, "" }, { "0xff", 255, "" }, { "~", '~', "" },
+        { "U+0010FFFF", -1, "Not a code: 0-255, 0x00-0xFF, U+224B or a character" },
+        { "U+10FFFF", -2, "U+10FFFF is not one of the console's characters" },
+    };
+    int i, ok = 1;
+    for(i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        key('Z');
+        key(12);
+        CHECK(g.dialog.kind == GUI_DLG_INPUT);
+        fake_type(&g, cases[i].text);
+        key('\r');
+        if(m->selected != (cases[i].code >= 0 ? cases[i].code : 'Z') || strcmp(m->status, cases[i].status)) {
+            ok = 0;
+            printf("Go to code \"%s\": 0x%02X, \"%s\"\n", cases[i].text, m->selected, m->status);
+        }
+    }
+    CHECK(ok);
+    key('Z');
+    key(12);
+    key(8);                                             /* empty */
+    key('\r');
+    CHECK(m->selected == 'Z' && !strcmp(m->status, "Not a code: 0-255, 0x00-0xFF, U+224B or a character"));
+    draw();                                             /* the message whole in the status bar */
+    CHECK(shows(w->x + 10, sy + 3, "Not a code: 0-255, 0x00-0xFF, U+224B or a character", INK, 1) &&
+          !glyph_at(w->x + 10 + 51 * 8, sy + 3, 0xF9, INK));
+    /* 0x10 is one of SurfOS's own characters, as 0xF7 and 0xF9 */
+    key(GUI_HOME); key(GUI_PGUP); key(GUI_DOWN);
+    CHECK(m->selected == 0x10);
+    draw();
+    CHECK(shows(w->x + 312, w->y + 148 + 80, "One of SurfOS's", MUTED, 1));
+    key(GUI_UP); key(GUI_RIGHT);
+    draw();
+    CHECK(m->selected == 1 && shows(w->x + 312, w->y + 148 + 80, "^A", MUTED, 1) && shows(w->x + 312, w->y + 148 + 98, "copies the symbol", MUTED, 1));
+}
+
+/* every window at 640x400: what it shows above its status bar, nothing under it */
+static void small_screen(void) {
+    const struct gui_window *w;
+    int sy, gy = 45, ch = 16, i, ty, first, rows, total;
+    desktop(640, 400);
+    /* the Character Map, 326 pixels high there: its cells 16 high, the last row and the Copy button whole */
+    gui_open(&g, GUI_CHARMAP);
+    w = &g.win[GUI_CHARMAP];
+    CHECK(w->h == 400 - MENU_H - TASK_H - 20);
+    draw();
+    sy = w->y + w->h - STATUS_H - 1;
+    CHECK(w->y + gy + 16 * ch < sy && fake_pixel(W, w->x + 26 + 8, w->y + gy + 16 * ch) == LINE);   /* the grid's end, above */
+    CHECK(glyph_at(w->x + 26 + 7 * 17 + 5, w->y + gy + 15 * ch + 1, 0xF7, INK));        /* ≋ */
+    CHECK(glyph_at(w->x + 26 + 14 * 17 + 5, w->y + gy + 15 * ch + 1, 0xFE, INK));       /* ■ */
+    CHECK(fake_pixel(W, w->x + 26 + 15 * 17 + 8, w->y + gy + 15 * ch + 8) == 0xFFFDF5);  /* the 0xFF cell */
+    CHECK(shows(w->x + 26 - 16, w->y + gy + 15 * ch + 1, "F", MUTED, 1) && shows(w->x + 26 + 7 * 17 + 5, w->y + gy - 16, "7", MUTED, 1));
+    CHECK(shows(w->x + 312 + 32, sy - 34 + 5, "Copy", MUTED, 1) && sy - 34 + 26 <= sy);
+    CHECK(shows(w->x + 312 + 64, w->y + 148 + 54, "none", INK, 1) && shows(w->x + 312, w->y + 148 + 98, "nothing to copy", MUTED, 1));
+    click(w->x + 26 + 7 * 17 + 8, sy + 5);              /* the status bar chooses nothing */
+    CHECK(g.charmap.selected == 0);
+    click(w->x + 26 + 7 * 17 + 8, w->y + gy + 15 * ch + 8);
+    CHECK(g.charmap.selected == 0xF7);
+    click(w->x + 26 + 15 * 17 + 8, w->y + gy + 15 * ch + 14);
+    CHECK(g.charmap.selected == 0xFF);
+    click(w->x + 26 + 2 * 17 + 8, w->y + gy + 14 * ch + 15);    /* the last pixel row of row E */
+    CHECK(g.charmap.selected == 0xE2);
+    draw();
+    CHECK(glyph_at(w->x + 26 + 2 * 17 + 5, w->y + gy + 14 * ch + 1, 0xE2, PAPER) && shows(w->x + 312 + 32, sy - 34 + 5, "Copy", PAPER, 1));
+    click(w->x + 312 + 10, sy - 34 + 10);
+    CHECK(g.clip_len == 2 && !memcmp(g.clip, "\xCE\x93", 2));    /* Γ */
+    CHECK(fake_guards(W, H));
+    gui_close(&g, GUI_CHARMAP);
+    /* the Clock fits as it is: each page's last line above its status bar */
+    gui_open(&g, GUI_CLOCK);
+    w = &g.win[GUI_CLOCK];
+    sy = w->y + w->h - STATUS_H - 1;
+    CHECK(w->h == 300);
+    g.clockapp.year = 2026;                             /* August 2026 takes six weeks */
+    g.clockapp.month = 8;
+    key('2');
+    draw();
+    CHECK(shows(w->x + (w->w - 7 * 48) / 2 + 1 * 48 + 16, w->y + TITLE_H + BAR_H + 4 + 62 + 5 * 24 + 4, "31", INK, 1));
+    CHECK(w->y + TITLE_H + BAR_H + 4 + 62 + 6 * 24 <= sy);
+    key('3');
+    key(' ');
+    for(i = 0; i < 6; i++) { tick_ms(1000); key('l'); }
+    draw();
+    CHECK(shows(w->x + (w->w - 34 * 8) / 2, w->y + TITLE_H + BAR_H + 4 + 124 + 4 * 18, "Lap 2 ", MUTED, 1));
+    CHECK(w->y + TITLE_H + BAR_H + 4 + 124 + 5 * 18 <= sy);
+    key(' ');
+    key('4');
+    draw();
+    CHECK(shows(w->x + (w->w - 2 * 88 - 8) / 2 + 88 + 8 + (88 - 40) / 2, w->y + TITLE_H + BAR_H + 4 + 136 + 6, "Reset", MUTED, 1));
+    CHECK(fake_guards(W, H));
+    gui_close(&g, GUI_CLOCK);
+    /* the Log, 326 pixels high: its last row above the status bar, and with the find bar its buttons */
+    log_desktop();
+    desktop(640, 400);
+    g.sys = &sys;
+    lines(1, 100);
+    gui_open(&g, GUI_LOG);
+    w = &g.win[GUI_LOG];
+    sy = w->y + w->h - STATUS_H - 1;
+    ty = w->y + TITLE_H + BAR_H + 4;
+    draw();
+    first_rows(&first, &rows, &total);
+    CHECK(rows == 15 && ty + rows * 16 <= sy && shows(w->x + 8, ty + (rows - 1) * 16, "line 0100 marker", INK, 1));
+    gui_act(&g, ACT_FIND);
+    draw();
+    first_rows(&first, &rows, &total);
+    CHECK(ty + rows * 16 <= sy - 28 && shows(w->x + 8, ty + (rows - 1) * 16, "line 0100 marker", INK, 1));
+    CHECK(shows(w->x + w->w - 100 + 14, sy - 28 + 3 + 3, "Next", PAPER, 1) && shows(w->x + w->w - 34 + 8, sy - 28 + 3 + 3, "x", INK, 1));
+    CHECK(fake_guards(W, H));
+}
+
 /**** every window, inside the screen ****/
 
 /* each window opens, ticks, draws inside the screen (also maximized and hanging off the edge) and closes; the Clock's
@@ -1066,6 +1532,11 @@ int main(void) {
     charmap_codes();
     charmap();
     help();
+    klog_storms();
+    log_review();
+    clock_review();
+    charmap_review();
+    small_screen();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);
