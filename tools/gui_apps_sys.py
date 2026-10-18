@@ -11,7 +11,7 @@ laptop profile, the 1920x1080 framebuffer and an uptime that goes on.
 
 Disks: lsblk's devices (the initrd, the boot stick usb0 with its partition, the data stick usb1 with its FAT32
 partition, not mounted), Mount (the shell's mount) with its line in the status bar, the volume label and a bar of the
-space used (sys/fill.bin, 4 MB, is on the stick for it), then Eject: the stick is unmounted again when these checks
+space used (zz-sys-fill.bin, 4 MB, is on the stick for it), then Eject: the stick is unmounted again when these checks
 end, as it was found, also after a failure. readback() checks on the host that the stick's file is intact.
 """
 import re
@@ -33,7 +33,8 @@ TABS = {'Processes': 8 + 43, 'Memory': 98 + 31, 'System': 164 + 31}
 DETAIL_H = 66                                   # Disks' details, above its status bar (shell/guidisks.c)
 
 FILL = bytes(range(256)) * 16384                # 4 MB: Disks' bar of used space has something to show
-STICK = {'sys/fill.bin': FILL}
+FILL_NAME = 'zz-sys-fill.bin'                   # at the stick's root, after every other track's file and folder
+STICK = {FILL_NAME: FILL}
 
 
 # ---- reading the screen ---------------------------------------------------------------------
@@ -354,4 +355,4 @@ def checks(d):
 
 def readback(d, stick, helpers):
     d.check('the data stick\'s file is intact after Mount and Eject in Disks',
-            helpers['read_fat32'](stick, 'sys/fill.bin') == FILL)
+            helpers['read_fat32'](stick, FILL_NAME) == FILL)

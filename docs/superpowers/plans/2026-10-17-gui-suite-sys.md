@@ -158,8 +158,10 @@ Keys, for the table in docs/GUI.md:
   the shell on F2 (init starts a new one, with a new pid), plausible memory for the 512 MB
   guest, the System page (QEMU's processor, UEFI, laptop, 1920x1080x32, an uptime that goes
   on), lsblk's devices in Disks, Mount of the data stick (its label and a bar: the stick
-  carries sys/fill.bin, 4 MB, for it) and Eject, after which the stick is read back on the
-  host and checked by fsck. The stick is left unmounted, also after a failure.
+  carries zz-sys-fill.bin, 4 MB, for it, at its root where it sorts after every other
+  track's file and folder, so their lists keep their order) and Eject, after which the stick
+  is read back on the host and checked by fsck. The stick is left unmounted, also after a
+  failure.
 
 ## Open, or for later
 
