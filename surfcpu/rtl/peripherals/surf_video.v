@@ -465,12 +465,21 @@ module surf_video #(
             // ---- G0 -> G1: the address; G1..G3: surf_vram; G3 -> G4: GPAL
             wire [18:0] gaddr0 = gline + {9'd0, f_gdbl ? {1'b0, ghc[9:1]} : ghc};
             reg  [16:0] gword1 = 17'd0;
+            // The lane delay has a reset only so that it stays in flip-flops: Yosys makes a
+            // chain of three without one into SRL16E cells, which the open flow's LVS check
+            // could not match (docs/GPU.md section 12.2).
             reg  [1:0]  glane1 = 2'd0, glane2 = 2'd0, glane3 = 2'd0;
             always @(posedge pix_clk) begin
                 gword1 <= gaddr0[18:2];
-                glane1 <= gaddr0[1:0];
-                glane2 <= glane1;
-                glane3 <= glane2;
+                if (pix_rst) begin
+                    glane1 <= 2'd0;
+                    glane2 <= 2'd0;
+                    glane3 <= 2'd0;
+                end else begin
+                    glane1 <= gaddr0[1:0];
+                    glane2 <= glane1;
+                    glane3 <= glane2;
+                end
             end
             wire [7:0]  gpix3 = vram_data[8 * glane3 +: 8];
             reg  [11:0] gpal_b = 12'd0;
