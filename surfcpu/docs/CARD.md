@@ -250,8 +250,13 @@ own writing out, fail on a card that takes every write: it waits until they paus
 
 **Stopping a command.** Ctrl+C, or a `kill` of the program, while it waits on the card (for a block
 another program holds, or for another program's write) ends the wait at once: the command fails
-(`I/O error` from a `sync`, `Interrupted system call` from a write), and what it had not written
-stays in memory for the next `sync`. One reading or writing a large file stops before its next piece
+(`I/O error` from a `sync`, `Interrupted system call` from a write and from a file's closing, which
+writes the file out: since 2026-10-18, when it said `I/O error` there as a refusing card does), and
+what it had not written stays in memory for the next `sync`. A card that refused a write is said as
+`I/O error`, Ctrl+C or not (`cp: close: I/O error`: `cp` says `interrupted while they were written
+out (sync writes the rest)` only when the card refused nothing, and an error reading the file it
+copies as that error, since 2026-10-18).
+One reading or writing a large file stops before its next piece
 and says how much it did (it wrote what it says: `cp` says `cp: cut short after N bytes: <file> is
 incomplete`, and `fsbench` says `fsbench: interrupted`, since 2026-10-18; before, `cp` said `short
 write`, its message for a full card, and `fsbench` `I/O error`; and a full or refusing card is said
@@ -274,7 +279,12 @@ before a command and after each block it writes, so a 64 KiB write takes at most
 and a fault inside SurfOS while a program is in the middle of the card's file system or of a request
 to the card stops SurfOS (`Kernel Wipeout`, `inside a file system`) rather than leave the card
 locked (since 2026-10-18; earlier that day they gave such a write up after 30 seconds, and the write
-could then land on the card after it was formatted again). While a card is being unmounted, `mount`,
+could then land on the card after it was formatted again). So does a fault while a task holds one of
+SurfOS's locks, the card watch holding the card's while it starts a card or sees one taken out
+(`holding a lock`), and a `kill` of a program holding one waits until it lets go; programs waiting
+for the card take their turns in the order they came (both since later on 2026-10-18; before, one
+program's stream of requests could keep another waiting for as long as it went on).
+While a card is being unmounted, `mount`,
 `eject` and `sdmode` refuse it and say it `is being unmounted`: type the command again once the
 umount has finished (since 2026-10-18; before, they could take the card while the umount still wrote
 to it, and `eject` could say `safe to remove` too soon); `lsblk` shows it as `being unmounted`.

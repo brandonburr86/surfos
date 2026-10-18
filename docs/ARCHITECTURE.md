@@ -637,6 +637,7 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
 | `heaptest`, `selftest` | Heap churn; the kernel self test (tasks, sleep, timers, mutex, semaphore, event, formatter): prints `SELFTEST PASS` |
 | `crashdiv`, `crashgp`, `crashnull`, `crashint` | Real exceptions in the shell task (from surfsh: the surfsh process); the first three kill it and init restarts it, the last is reported and ignored |
 | `crashfs` | **ai-dev** (10/18/26, CODE-AUDIT B56): the same NULL store while the task counts as inside a file system: the system stops with a kernel wipeout that says why (in the kernel shell only; surfsh's `SYS_kcmd` is refused) |
+| `crashlock` | **ai-dev** (10/18/26, CODE-AUDIT B62): the same NULL store while the task holds a mutex of its own: the system stops with a kernel wipeout that says the task held a lock (in the kernel shell only; surfsh's `SYS_kcmd` is refused) |
 | `funky`, `beep`, `hanoi`, `demo` | The 2004 demos (`shell/demos.c`) |
 | `die` | Starts a ring-3 task; it faults at once until P1 adds user mode |
 | `reboot` | Pulses the keyboard controller reset line |
