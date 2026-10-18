@@ -850,11 +850,14 @@ static void test_kill_in_cache(void) {
 }
 
 /* 10/17/26 (audit B46): umount interrupted while another task's write of the volume's device is in flight (the review's
-   R1: a `sync` on another console; here a sync of the test's disk, whose writes take 300 ms each). The umount's waits
+   R1: a `sync` on another console; here a sync of the test's disk, whose writes take 150 ms each). The umount's waits
    were cut short (B39) and it went on: it gave up changes the disk would take and left the volume marked as not cleanly
    unmounted. Now an umount that has begun finishes (fs_finish, surfos/task.h): Ctrl+C cuts the command after it, and
-   a kill comes after it. The interrupt reaches the umount task once its command has begun, before its syncs (a test
-   that sent it a moment later, into the umount's wait, depended on whether the umount was in that wait yet) */
+   a kill comes after it. The volume's changes wait in the cache because the disk refused them for a while (a write's
+   close said EIO): every VFS call that changes a volume syncs it before it returns (mkdir, rm, mv, a written file's
+   close), and a volume a file or a command is using cannot be unmounted, so changes a sync of another task can be
+   writing at an umount are those a refusal (or a sync cut short) left behind. The interrupt reaches the umount task
+   once its command has begun, before its syncs */
 static struct bdev *ku_dev;
 static volatile int ku_umount_r, ku_done, ku_cut, ku_go;
 static volatile u_int ku_lost;
@@ -879,23 +882,31 @@ static void ku_umount(void *arg) {
     else task_call_leave(TC_SYSCALL);                /* the kill that waited ends the task here */
 }
 
-/* /selftest-um mounted with a folder made and not yet written (its entry's block); a sync of the disk in its write of
-   that block; an umount of it begun with Ctrl+C or a kill reaching it then. The umount task's status; the disk's
-   writes and the umount's times said */
-static int ku_run(const char *folder, bool ctrl_c) {
+/* /selftest-um mounted, a file written while the disk refused writes (its close says EIO: the file's blocks stay in
+   the cache, changed), the disk taking writes again, 150 ms each; a sync of the disk in its first write; an umount begun
+   with Ctrl+C or a kill reaching it then. The umount task's status; the disk's writes and the umount's times said */
+static int ku_run(const char *path, const char *text, bool ctrl_c) {
     surf_task *ts, *tu;
+    struct file *fl;
     u_long pid_s = 0, pid_u = 0, f;
     u_int begun, waited, i;
-    int status = 1, st2;
+    int status = 1, st2, r, c = 0;
     if(vfs_mount_flags(ku_dev, "/selftest-um", "fat", 0) != 0) return 1;
-    if(vfs_mkdir(folder) != 0) { vfs_umount("/selftest-um"); return 1; }
+    ram_refuse = true;
+    r = vfs_open(path, O_WRONLY | O_CREAT, &fl);
+    if(r == 0) {
+        r = vfs_write(fl, text, strlen(text)) == (int)strlen(text) ? 0 : -EIO;
+        c = vfs_close(fl);
+    }
+    ram_refuse = false;
+    if(r || c != -EIO || bdirty_count(ku_dev) == 0) { vfs_umount("/selftest-um"); return 1; }
     ku_done = ku_cut = ku_go = 0;
     ku_umount_r = 1;
     ku_lost = 99;
     ku_began = ku_ended = 0;
     ram_ntrace = 0;
     ram_trace_on = uptime_ms();
-    ram_slow_ms = 300;
+    ram_slow_ms = 150;
     begun = ram_writes_begun;
     ts = kthread_create_on("umsync", curTask->con, ku_sync, NULL, PL_NORMAL, 0);
     if(ts) pid_s = ts->pid;
@@ -924,7 +935,6 @@ static int ku_run(const char *folder, bool ctrl_c) {
 static void test_kill_umount(void) {
     u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
     struct bdev *d = mem ? ram_disk(mem) : NULL;
-    struct stat st;
     char msg[160];
     int r, status;
     bool clean;
@@ -936,17 +946,17 @@ static void test_kill_umount(void) {
     if(r == 0) { r = put_file("/selftest-um/a.txt", "written before"); vfs_umount("/selftest-um"); }
     check(r == 0, "umount interrupted: mkfs, mount and a file on a RAM stick");
     if(r) { binvalidate(d); kfree(d); kfree(mem); return; }
-    status = ku_run("/selftest-um/c", true);
+    status = ku_run("/selftest-um/c.txt", "refused, then synced: Ctrl+C", true);
     clean = (mem[512 + 3] & 0x80) != 0;              /* FAT[1]'s clean bit */
     check(status == 0 && ku_done && ku_cut && ku_umount_r == 0 && ku_lost == 0 && clean,
           "Ctrl+C in umount while another task's write is in flight: it finishes, gives nothing up, the volume clean");
-    status = ku_run("/selftest-um/k", false);
+    status = ku_run("/selftest-um/k.txt", "refused, then synced: a kill", false);
     clean = (mem[512 + 3] & 0x80) != 0;
     check(status == -1 && ku_done && ku_umount_r == 0 && ku_lost == 0 && clean,
           "a kill during umount while another task's write is in flight: it finishes, gives nothing up, then the kill");
     r = vfs_mount_flags(d, "/selftest-um", "fat", MNT_RDONLY);
-    check(r == 0 && file_is("/selftest-um/a.txt", "written before") && vfs_stat("/selftest-um/c", &st) == 0 && st.type == VN_DIR &&
-          vfs_stat("/selftest-um/k", &st) == 0 && st.type == VN_DIR, "and the volume holds both folders the umounts wrote");
+    check(r == 0 && file_is("/selftest-um/a.txt", "written before") && file_is("/selftest-um/c.txt", "refused, then synced: Ctrl+C") &&
+          file_is("/selftest-um/k.txt", "refused, then synced: a kill"), "and the volume holds both files the umounts wrote");
     if(r == 0) vfs_umount("/selftest-um");
     binvalidate(d);
     kfree(d);
