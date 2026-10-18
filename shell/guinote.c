@@ -339,6 +339,16 @@ static void remember(struct gui_state *g, const char *file, const char *kept) {
     g->nunsure++;
 }
 
+static bool ends_with(const char *s, size_t len, const char *end) {   /* ignoring ASCII case, as FAT does */
+    size_t n = strlen(end), k;
+    if(len <= n) return false;
+    for(k = 0; k < n; k++) {
+        char c = s[len - n + k];
+        if((c >= 'A' && c <= 'Z' ? c + 32 : c) != end[k]) return false;
+    }
+    return true;
+}
+
 static bool same_entry(struct gui_state *g, const struct gui_entry *f, const char *name) {
     struct gui_entry e;
     bool device, readonly;
@@ -356,6 +366,7 @@ static bool twin_of(struct gui_state *g, const char *path, const struct gui_entr
     size_t len = strlen(path), e;
     unsigned i;
     int k, w;
+    if(!f->size) return false;                          /* an empty file holds no clusters */
     for(k = 0; k <= 10; k++) {
         if(k < 10) w = snprintf(out, n, k ? "%s.%d.tmp" : "%s.tmp", path, k);
         else w = snprintf(out, n, "%s.part", path);
@@ -363,7 +374,7 @@ static bool twin_of(struct gui_state *g, const char *path, const struct gui_entr
     }
     for(i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {     /* path is <file>.tmp, <file>.N.tmp, <file>.part */
         e = strlen(ends[i]);
-        if(len <= e || len >= n || strcmp(path + len - e, ends[i])) continue;
+        if(len >= n || !ends_with(path, len, ends[i])) continue;
         memcpy(out, path, len - e);
         out[len - e] = 0;
         if(same_entry(g, f, out)) return true;
@@ -451,7 +462,7 @@ int note_load(struct gui_state *g, const char *path) {
         remember(g, path, other);
         gui_middle(name, a, sizeof(a), 26);
         gui_middle(gui_basename(other), b, sizeof(b), 26);
-        snprintf(line, sizeof(line), "%s may share its data with %s: check the disk", a, b);
+        snprintf(line, sizeof(line), "Check the disk: %s may share its data with %s", a, b);
         note_status(g, line);
     } else {
         snprintf(line, sizeof(line), "Opened %s", name);

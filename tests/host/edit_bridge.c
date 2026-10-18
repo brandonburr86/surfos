@@ -22,7 +22,7 @@ void ed_start(const char *name) {
         shadow_inv = calloc((size_t)rows, 1);
     }
     shadow_ok = 0;
-    if(load(name) == 0) find_twin();
+    if(load(name) == 0) look_beside();
     sim_clear_log();
 }
 

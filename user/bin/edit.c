@@ -53,7 +53,7 @@ serial line alike. Each refresh rewrites only the rows that changed.
 #define TAB        8
 #define CTRL(c)    ((c) & 0x1f)
 #define HELP       "^S Save  ^Q Quit  ^F Find  ^K Cut line  ^U Paste  ^G Go to line"
-#define UNSURE     "Disk error: check the disk (fsck) before changing this file or its .tmp files"
+#define UNSURE     "A file beside this one may share its data: check the disk (fsck) first"
 
 enum {
     KEY_NONE = 0x100, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
@@ -395,7 +395,7 @@ static int twin_beside(char *twin, size_t size) {
     size_t n = strlen(filename), e;
     unsigned i;
     int k, w;
-    if(stat(filename, &st) < 0 || !S_ISREG(st.type)) return 0;
+    if(stat(filename, &st) < 0 || !S_ISREG(st.type) || !st.size) return 0;   /* an empty file holds no clusters */
     for(k = 0; k <= 10; k++) {
         if(k < 10) w = snprintf(twin, size, k ? "%s.%d.tmp" : "%s.tmp", filename, k);
         else w = snprintf(twin, size, "%s.part", filename);
@@ -403,7 +403,7 @@ static int twin_beside(char *twin, size_t size) {
     }
     for(i = 0; i < sizeof(ends) / sizeof(ends[0]); i++) {     /* the file is <name>.tmp, <name>.N.tmp, <name>.part */
         e = strlen(ends[i]);
-        if(n <= e || n >= size || strcmp(filename + n - e, ends[i])) continue;
+        if(n <= e || n >= size || strcasecmp(filename + n - e, ends[i])) continue;   /* FAT's names ignore case */
         memcpy(twin, filename, n - e);
         twin[n - e] = 0;
         if(same_entry(&st, twin)) return 1;
@@ -415,27 +415,33 @@ static int twin_beside(char *twin, size_t size) {
     return 0;
 }
 
-/* after loading: with such a name beside it, this edit is as after a rename that may have half happened */
-static void find_twin(void) {
-    char twin[PATH_MAX];
+/* with such a name beside the file, this edit is as after a rename that may have half happened: 1, and the
+   name's last part in twin */
+static int find_twin(char *twin, size_t size) {
     const char *base;
-    if(!twin_beside(twin, sizeof(twin))) return;
+    if(!twin_beside(twin, size)) return 0;
     unsure = 1;
     base = strrchr(twin, '/');
-    snprintf(msg, sizeof(msg), "%s may share this file's data: check the disk", base ? base + 1 : twin);
+    if(base) memmove(twin, base + 1, strlen(base + 1) + 1);
+    return 1;
+}
+
+/* after loading: such a pair is said at once */
+static void look_beside(void) {
+    char twin[PATH_MAX];
+    if(find_twin(twin, sizeof(twin))) snprintf(msg, sizeof(msg), "%s may share this file's data: check the disk", twin);
 }
 
 static int save(void) {
-    char tmp[PATH_MAX];                         /* the kernel's limit: a longer path is refused (EFAULT) */
+    char tmp[PATH_MAX], twin[PATH_MAX];         /* the kernel's limit: a longer path is refused (EFAULT) */
     const char *what = filename, *base;
     struct stat st;
-    int made = 0, kept = 0, k, e = ENAMETOOLONG;
-    if(!unsure && twin_beside(tmp, sizeof(tmp))) unsure = 1;    /* made since the file was opened, it may be */
+    int made = 0, kept = 0, k, e = ENAMETOOLONG, found = !unsure && find_twin(twin, sizeof(twin));   /* since opening */
     if(unsure && copied[0] && changes == copied_changes) {      /* no edit since the last copy: no other copy */
         snprintf(msg, sizeof(msg), "Not saved over the file; the text is in %s", copied);
         return 1;
     }
-    if(!no_rename) {
+    if(!no_rename || unsure) {                  /* a copy beside the file needs no rename */
         for(k = 0; k < 10; k++) {
             if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", filename, k) >= (int)sizeof(tmp)) break;
             e = write_file(tmp, O_EXCL, &made) < 0 ? errno : 0;
@@ -447,7 +453,8 @@ static int save(void) {
         if(e == 0 && unsure) {                  /* a copy beside the file, renamed over nothing */
             snprintf(copied, sizeof(copied), "%s", base ? base + 1 : tmp);
             copied_changes = changes;
-            snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", copied);
+            if(found) snprintf(msg, sizeof(msg), "%s may share this file's data: a copy is in %s", twin, copied);
+            else snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", copied);
             return 1;
         }
         if(e == 0) {
@@ -470,10 +477,6 @@ static int save(void) {
             unlink(tmp);                        /* made by this save: what of the text it got */
             goto fail;
         } else if(e != ENAMETOOLONG || unsure) goto fail;   /* nothing was made, nothing of the user's touched */
-    }
-    if(unsure) {                                /* in place would cut the file, and the clusters a twin holds */
-        snprintf(msg, sizeof(msg), "Not saved: the file may share its data with a copy beside it");
-        return -1;
     }
     what = filename;                            /* no rename here, or no room for such a name: truncate the file and write it */
     if(write_file(filename, O_TRUNC, NULL) < 0) { e = errno; goto fail; }
@@ -849,7 +852,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "edit: %s: %s%s\n", filename, strerror(errno), errno == EFBIG ? " (the limit is 1 MB)" : "");
         return 1;
     }
-    find_twin();
+    look_beside();
     screen_size();
     r = ttyctl(TTY_RAW, 1);
     if(r < 0) {

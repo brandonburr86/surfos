@@ -1,7 +1,6 @@
 /* The bridge of tests/host/test_rx.c (10/17/26): user/bin/rx.c as it is, built for the host as edit.c is
-   (tests/host/edit_bridge.c), on the file system of tests/host/sim_fs.c. The test asks only whether rx
-   would start over an earlier rx's .part (part_in_the_way()), so the network calls below are never made;
-   they and the host's own printf and stdio are there for the link. */
+   (tests/host/edit_bridge.c), on the file system of tests/host/sim_fs.c. There is no network: listening
+   fails (ENOSYS), so a run ends there, after its start, which is what the test looks at. */
 #define main    rx_main
 #include "../../user/bin/rx.c"
 
@@ -14,4 +13,11 @@ int rx_part_check(const char *path) {
     char p[PATH_MAX];
     snprintf(p, sizeof(p), "%s.part", path);
     return part_in_the_way(path, p);
+}
+
+/* rx 5000 <path>, as from the shell: its exit status */
+int rx_run(const char *path) {
+    char *argv[] = { "rx", "5000", (char *)path, NULL };
+    file = conn = listener = -1;
+    return rx_main(3, argv);
 }

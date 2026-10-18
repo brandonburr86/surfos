@@ -403,13 +403,16 @@ is `<file>.tmp`, or `<file>.1.tmp` and so on when you have a file of that name, 
 text in it, and the status line names it. The file and the copy may then share their
 space on the disk, and deleting or saving over either can damage the other. For the rest
 of that `edit`, each later version is saved as another copy beside the file (up to
-`<file>.9.tmp`; then it says no name is left), the line of keys turns into a warning, and
-`edit` says where the last copy is when it ends. It takes the same care whenever it finds
-such a copy beside the file, of the same size and time, when it opens the file and before
-each save: that is how such a pair usually looks, though not always. Check the stick on
-another computer (First Aid on the Mac, `fsck` elsewhere) before you change either file,
-also with `rm`, `mv` or `cp`, which take no such care. Windows line ends (CR LF) stay as
-they were.
+`<file>.9.tmp`, then it says no name is left; none when nothing changed since the last),
+the line of keys turns into a warning, and `edit` says where the last copy is when it
+ends; Ctrl+Q ends it without asking when the text is all in that copy. It takes the same
+care whenever it finds a `.tmp`, `.N.tmp` or `.part` beside the file of the same size and
+time, when it opens the file and before each save: that is how such a pair usually
+looks, though not always. Check the stick on another computer (First Aid on the Mac,
+`fsck` elsewhere) before you change either file, also with `rm`, `mv` or `cp`, which take
+no such care. Once it is checked, delete the copy you no longer want with `rm` (or on the
+Mac): while the two look alike, `edit` and the desktop keep taking the care. Windows line
+ends (CR LF) stay as they were.
 
 **Taking the stick out.** Type `eject usb1` and wait for `usb1: safe to remove`. It
 unmounts every partition of the stick and writes everything still held in memory. When

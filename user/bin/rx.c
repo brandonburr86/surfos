@@ -110,7 +110,7 @@ static int nothing_changed(int e) {
    -1 with errno when there is no telling. A guess, not proof, as user/bin/edit.c's twin_beside() says. */
 static int part_in_the_way(const char *path, const char *part) {
     struct stat p, b;
-    if(stat(part, &b) < 0) return errno == ENOENT ? 0 : -1;
+    if(stat(part, &b) < 0) return errno == ENOENT || errno == ENOTDIR ? 0 : -1;   /* no such name: open says so */
     if(!b.size) return 0;
     if(stat(path, &p) < 0) return errno == ENOENT ? 0 : -1;
     return p.size == b.size && p.mtime == b.mtime;
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
         return fail("%s: %s", path, strerror(errno));
     }
     snprintf(part, sizeof(part), "%s.part", path);
-    if((r = part_in_the_way(path, part)) < 0) return fail("is %s %s's twin? %s", part, path, strerror(errno));
+    if((r = part_in_the_way(path, part)) < 0) return fail("%s: %s", part, strerror(errno));
     if(r) return fail("%s and %s may share their clusters (an earlier rx's rename may have failed half way): "
                       "check the disk (fsck) before deleting either or running rx for them again", part, path);
     crc_init();

@@ -67,7 +67,9 @@ time from the PC's clock. The tiles on the desktop open the four applications.
   pairs; after more, it saves over, deletes and renames no file at all until it closes,
   and saves only under new names. Check the stick on another computer (First Aid on
   the Mac, `fsck` elsewhere) before you change them, also with the shell's `rm`, `mv`
-  or `cp`, which take no such care. Only
+  or `cp`, which take no such care. Once it is checked, delete the copy you no longer
+  want with `rm` in the shell (or on the Mac); while the two look alike the desktop
+  keeps taking the care. Only
   where a file system cannot rename, or a name is too long to take `.tmp`, is the file
   written in place. On a read-only volume (the initrd, or the flashed SURFOSUSB
   stick) Save says so and offers Save as.

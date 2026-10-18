@@ -601,7 +601,8 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   `note_guarded()`; `fs/fat.c`'s rename copies the entry, so that is how such a pair
   usually looks, though a later write to either name, or the old entry found first in
   the directory, hides it). `rx` keeps its `.part` file by the same rule, says to have the
-  disk checked, and does not start over a `.part` that is its file's twin. Outside that
+  disk checked, and does not start over a `.part` that is its file's twin. The care lasts
+  while the two look alike: once the disk is checked, `rm` of one of them ends it. Outside that
   care: the shell's `rm`, `mv` and `cp`, `rx`'s rename over a file with a `.tmp` twin, a
   stick mounted again under another path, and a `.tmp` of which only the 8.3 alias was
   left. The real fix is in `fs/fat.c` (not freeing a chain that another entry still holds;

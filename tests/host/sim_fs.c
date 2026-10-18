@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <poll.h>
 #include <surf.h>
 #include "sim_fs.h"
 
@@ -35,7 +36,7 @@ static int long_paths;                                  /* calls given a path of
 static char arena[16 << 20];
 static size_t arena_used;
 int surf_errno;
-FILE *surf_stderr;
+FILE *surf_stderr, *surf_stdout;                       /* what goes to them is dropped */
 
 static void *need(void *p) {                            /* the test's own memory: never short */
     if(!p) for(;;) __builtin_trap();
@@ -258,7 +259,11 @@ int isatty(int fd) { (void)fd; return 1; }
 int ttyctl(int op, unsigned int arg) { (void)op; (void)arg; return 0; }
 unsigned int uptime(void) { return 0; }
 int fprintf(FILE *f, const char *fmt, ...) { (void)f; (void)fmt; return 0; }
+int vfprintf(FILE *f, const char *fmt, va_list ap) { (void)f; (void)fmt; (void)ap; return 0; }
+int fputs(const char *s, FILE *f) { (void)s; (void)f; return 0; }
+int fputc(int c, FILE *f) { (void)f; return c; }
 int fflush(FILE *f) { (void)f; return 0; }
+int poll(struct pollfd *fds, nfds_t n, int timeout_ms) { (void)fds; (void)n; (void)timeout_ms; errno = ENOSYS; return -1; }
 void _exit(int code) { (void)code; for(;;) __builtin_trap(); }
 
 void *sbrk(intptr_t incr) {

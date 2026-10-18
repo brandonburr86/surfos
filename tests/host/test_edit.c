@@ -262,8 +262,23 @@ static void twins(void) {
     sim_put("a.txt.tmp", "one\n");
     sim_same_time("a.txt", "a.txt.tmp");
     ed_type("X");
-    check(ed_save() == 1 && ed_unsure() && is("a.txt", "one\n") && is("a.txt.1.tmp", "Xone\n") && is("a.txt.tmp", "one\n"),
-          "a twin that came after the file was opened is found when saving: a copy beside it");
+    check(ed_save() == 1 && ed_unsure() && is("a.txt", "one\n") && is("a.txt.1.tmp", "Xone\n") && is("a.txt.tmp", "one\n") &&
+          !strcmp(ed_msg(), "a.txt.tmp may share this file's data: a copy is in a.txt.1.tmp"),
+          "a twin that came after the file was opened is found when saving: a copy beside it, and said why");
+
+    sim_reset();
+    sim_put("notes.txt", "one\n");
+    sim_put("notes.txt.tmp", "one\n");
+    sim_same_time("notes.txt", "notes.txt.tmp");
+    ed_start("NOTES.TXT.TMP");
+    check(ed_unsure() && has(ed_msg(), "NOTES.TXT may share"), "the name typed in capitals: the pair is found all the same");
+
+    sim_reset();
+    sim_put("e.txt", "");
+    sim_put("e.txt.tmp", "");
+    sim_same_time("e.txt", "e.txt.tmp");
+    ed_start("e.txt");
+    check(!ed_unsure(), "two empty files are no pair: they hold no clusters");
 }
 
 static void in_place(void) {
@@ -279,9 +294,9 @@ static void in_place(void) {
     sim_same_time("a.txt", "a.txt.tmp");
     ed_type("Z");
     sim_clear_log();
-    check(ed_save() < 0 && !has(sim_log(), "trunc") && is("a.txt", "XYone\ntwo\n") &&
-          !strcmp(ed_msg(), "Not saved: the file may share its data with a copy beside it"),
-          "where there is no rename, a twin beside the file stops the writing in place");
+    check(ed_save() == 1 && !has(sim_log(), "trunc") && is("a.txt", "XYone\ntwo\n") && is("a.txt.1.tmp", "XYZone\ntwo\n") &&
+          !strcmp(ed_msg(), "a.txt.tmp may share this file's data: a copy is in a.txt.1.tmp"),
+          "where there is no rename, a twin beside the file: a copy beside it, never in place");
 
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_ENOSYS, SIM_NONE);

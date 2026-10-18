@@ -684,7 +684,7 @@ static void unsure_pairs(void) {
     add("/home/t.txt", GUI_FILE, "same", 4); add("/home/t.txt.tmp", GUI_FILE, "same", 4);
     nodes[find("/home/t.txt.tmp")].mtime = nodes[find("/home/t.txt")].mtime;
     CHECK(note_load(&g,"/home/t.txt")==0 && gui_unsure(&g,"/home/t.txt.tmp") &&
-          !strcmp(g.note.status,"t.txt may share its data with t.txt.tmp: check the disk"));
+          !strcmp(g.note.status,"Check the disk: t.txt may share its data with t.txt.tmp"));
     add("/home/v.txt", GUI_FILE, "same", 4); add("/home/v.txt.3.tmp", GUI_FILE, "same", 4);
     nodes[find("/home/v.txt.3.tmp")].mtime = nodes[find("/home/v.txt")].mtime;
     CHECK(note_load(&g,"/home/v.txt.3.tmp")==0 && gui_unsure(&g,"/home/v.txt"));  /* the .tmp itself, opened */
@@ -697,6 +697,12 @@ static void unsure_pairs(void) {
     add("/home/f.txt", GUI_FILE, "same", 4); add("/home/f.txt.3.tmp", GUI_FILE, "same", 4);
     nodes[find("/home/f.txt.3.tmp")].mtime = nodes[find("/home/f.txt")].mtime;
     CHECK(note_load(&g,"/home/f.txt")==0 && gui_unsure(&g,"/home/f.txt.3.tmp"));     /* a .3.tmp beside it */
+    add("/home/K.TXT", GUI_FILE, "caps", 4); add("/home/K.TXT.TMP", GUI_FILE, "caps", 4);
+    nodes[find("/home/K.TXT.TMP")].mtime = nodes[find("/home/K.TXT")].mtime;
+    CHECK(note_load(&g,"/home/K.TXT.TMP")==0 && gui_unsure(&g,"/home/K.TXT"));        /* .TMP: FAT ignores case */
+    add("/home/z.txt", GUI_FILE, "", 0); add("/home/z.txt.tmp", GUI_FILE, "", 0);
+    nodes[find("/home/z.txt.tmp")].mtime = nodes[find("/home/z.txt")].mtime;
+    CHECK(note_load(&g,"/home/z.txt")==0 && !gui_unsure(&g,"/home/z.txt"));          /* empty: no clusters to share */
     /* pairs found before anything changes them, though no file of theirs was opened: Delete, Replace, Save */
     gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
     add("/home/p.txt", GUI_FILE, "pair", 4); add("/home/p.txt.tmp", GUI_FILE, "pair", 4);
