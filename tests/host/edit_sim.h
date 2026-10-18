@@ -12,6 +12,7 @@ enum { SIM_OPEN, SIM_WRITE, SIM_FSYNC, SIM_CLOSE, SIM_RENAME, SIM_UNLINK, SIM_OP
 enum { SIM_NONE, SIM_HALF, SIM_DONE };
 
 /* SurfOS's numbers (user/include/errno.h, Linux's), whatever the host's are; the bridge checks them */
+#define SIM_EPERM         1
 #define SIM_ENOENT        2
 #define SIM_EIO           5
 #define SIM_ENOMEM       12
@@ -29,13 +30,16 @@ enum { SIM_NONE, SIM_HALF, SIM_DONE };
 #define SIM_ENOTEMPTY    39
 
 /* Names are compared ignoring ASCII case, as FAT does, and a path of 256 bytes or more is refused with
-   EFAULT, as the kernel's system calls do (kernel/syscall.c, ARG_STR_MAX). */
+   EFAULT, as the kernel's system calls do (kernel/syscall.c, ARG_STR_MAX). Each change to a file is a
+   second later than the one before (its mtime); a rename keeps the time, as fs/fat.c copies the entry. */
 void sim_reset(void);                                   /* no names, no failures, an empty log */
 void sim_put(const char *name, const char *bytes);      /* a file */
 void sim_mkdir(const char *name);
 int sim_get(const char *name, char *buf, int size);     /* the file's bytes, terminated: their count; -1: none */
 int sim_names(void);                                    /* how many names there are */
 int sim_corrupt(const char *name);                      /* its data was freed under it, by its twin's deletion */
+void sim_same_time(const char *a, const char *b);       /* b gets a's mtime */
+int sim_long_paths(void);                               /* calls given a path of 256 bytes or more since the reset */
 /* the next op on name (a rename: its from) fails with err; for a rename, how is SIM_NONE, SIM_HALF or
    SIM_DONE; for a write, how writes to name succeed first, and err 0 makes it a short one instead */
 void sim_fail(int op, const char *name, int err, int how);

@@ -591,12 +591,17 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   above all) the FAT rename may have written the new name and not yet removed the old
   one, both holding the same clusters: the `.tmp` is kept and the status line names it,
   and since `fs/fat.c` frees a chain when any one name of it is deleted, replaced or
-  truncated, nothing is renamed or written over that file again: `edit` saves later
-  versions as further `.tmp` copies and warns on its help line, and the desktop
-  (`gui_unsure()`) saves over and deletes neither of the two for the rest of its session.
-  `rx` keeps its `.part` file by the same rule and says to have the disk checked. The real
-  fix is in `fs/fat.c` (not freeing a chain that another entry still holds; ROADMAP.md
-  section 7). `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file system
+  truncated, nothing is renamed or written over that file again in that session: `edit`
+  saves later versions as further `.tmp` copies, warns on its help line and says where the
+  last copy is when it ends; the desktop (`gui_unsure()`, the last four such pairs, and
+  after more of them no file at all) saves over, deletes and renames neither of the two,
+  nor the folders they are in. Both take the same care when they open a file with a
+  `.tmp` beside it of its size and time (`fs/fat.c`'s rename copies the entry, so that is
+  how such a pair looks). `rx` keeps its `.part` file by the same rule, says to have the
+  disk checked, and does not start while a `.part` with data is there. Outside that care:
+  the shell's `rm`, `mv` and `cp`, a stick mounted again under another path, and a `.tmp`
+  of which only the 8.3 alias was left. The real fix is in `fs/fat.c` (not freeing a chain
+  that another entry still holds; ROADMAP.md section 7). `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file system
   that fails on demand. The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that

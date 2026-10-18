@@ -22,7 +22,8 @@ Exit status 0; 1 on any error, said with its reason (the partial file <path>.par
 removed; 10/17/26: but for a rename that failed after it may have changed something, as
 edit's saving knows: then it is kept, and the message says to have the disk checked
 before either name is deleted or rx runs for them again, since the two may share their
-clusters); 2 for a usage error. Nothing else: no shell, nothing is run, nothing is sent
+clusters). So rx does not start while a <path>.part with data in it is there, and says
+why; 2 for a usage error. Nothing else: no shell, nothing is run, nothing is sent
 back.
 */
 
@@ -99,7 +100,7 @@ static int fail(const char *fmt, ...) {
 
 /* a rename that failed with one of these changed nothing (user/bin/edit.c says why the others count) */
 static int nothing_changed(int e) {
-    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT ||
+    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT || e == EFAULT ||
            e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
 }
 
@@ -149,6 +150,11 @@ int main(int argc, char **argv) {
         return fail("%s: %s", path, strerror(errno));
     }
     snprintf(part, sizeof(part), "%s.part", path);
+    /* an earlier rx's, with data: kept after a rename that may have half happened (cutting it to nothing would
+       free the clusters <path> may share with it), or left by an rx that was killed. Either way, not ours. */
+    if(stat(part, &st) == 0 && st.size > 0)
+        return fail("%s is there from an earlier rx: if that one said to check the disk, do that first (the two "
+                    "may share their clusters); otherwise delete it", part);
     crc_init();
 
     /* the file first: a path that cannot be written is said before anything is sent */

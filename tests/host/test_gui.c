@@ -11,11 +11,12 @@ static u32 pixels[8 + 1280*800 + 8];
       more), /home, a USB stick usb1 (partition usb1p1, and usb1p2 when two_parts), and usb2p1, a stick
       pulled out while it was mounted (when pulled) ****/
 
-struct fake { char path[GUI_PATH_MAX]; int type; char data[600]; u32 len, size; bool used; };
+struct fake { char path[GUI_PATH_MAX]; int type; char data[600]; u32 len, size, mtime; bool used; };
 static struct fake nodes[96];
 static bool mounted, mounted2, two_parts, pulled, ro_stick;   /* ro_stick: usb1p1 mounted read-only */
 static int f_writes, fail_write;
 static bool keep_tmp;                                   /* a write failing with EIO leaves <path>.tmp */
+static u32 fake_clock = 1792245780;                     /* each file made a second after the last */
 
 static bool under(const char *p, const char *top) { u32 n = strlen(top); return !strncmp(p, top, n) && (!p[n] || p[n] == '/'); }
 static bool hidden(const char *p) {
@@ -39,6 +40,7 @@ static int add(const char *p, int type, const char *data, u32 len) {
     nodes[i].type = type;
     if(data) memcpy(nodes[i].data, data, len);
     nodes[i].len = nodes[i].size = len;
+    nodes[i].mtime = ++fake_clock;
     return i;
 }
 static int f_list(void *ctx, const char *path, struct gui_entry *out, int max) {
@@ -81,6 +83,7 @@ static int f_stat(void *ctx, const char *path, struct gui_entry *out, bool *devi
     strlcpy(out->name, gui_basename(path), sizeof(out->name));
     out->type = nodes[i].type;
     out->size = nodes[i].size;
+    out->mtime = nodes[i].mtime;
     *device = !strncmp(path, "/dev/", 5);
     *readonly = readonly_path(path);
     return 0;
@@ -580,22 +583,32 @@ static void notepad_review(void) {
     key(27); fail_write=0; i=f_writes; key(19);
     CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_READONLY && !strcmp(g.dialog.title,"Check the disk") && f_writes==i);
     key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE);
-    key(1); type("w.txt.tmp\n"); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_REPLACE);
-    key('\r'); CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not saved") && f_writes==i && g.note.modified);
+    key(1); type("w.txt.tmp\n");                                                 /* not even asked to replace it */
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not saved") && !strcmp(g.dialog.text[0],"w.txt.tmp may share its data.") &&
+          f_writes==i && g.note.modified);
     key(27); CHECK(note_save(&g,"/home/W.TXT")==-EBUSY && f_writes==i);         /* FAT's names ignore case */
     key(27); gui_answer(&g,ACT_DLG_DELETE,0,"","/home/w.txt.tmp");
     CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not deleted") && holds("/home/w.txt.tmp","ac"));
+    key(27); gui_answer(&g,ACT_DLG_RENAME,0,"saved.txt","/home/w.txt.tmp");     /* its new name would be unguarded */
+    CHECK(!strcmp(g.dialog.title,"Not renamed") && holds("/home/w.txt.tmp","ac") && !node("/home/saved.txt"));
+    key(27); gui_answer(&g,ACT_DLG_RENAME,0,"docs","/home");                     /* nor the folder they are in */
+    CHECK(!strcmp(g.dialog.text[0],"A file in home may share its data.") && node("/home/w.txt") && !node("/docs"));
     key(27); key(19); key('\r'); key(1); type("w2.txt\n");                      /* Save as: another name */
     CHECK(holds("/home/w2.txt","ac") && !g.note.modified && !strcmp(g.note.path,"/home/w2.txt"));
     type("d"); key(19); CHECK(holds("/home/w2.txt","acd") && !g.note.modified);
-    /* a long name kept: its middle goes, its end shows */
+    /* a long name kept: its middle goes, its end shows (keep_tmp still: the new file is there to name) */
     fail_write=-EIO; note_save(&g,"/home/quarterly-report-final-version-two-for-everyone.txt");
     CHECK(!strcmp(g.dialog.text[1],"Check the disk: the text is in quarterly-\xF9one.txt.tmp.") && gd_cells(g.dialog.text[1])==54);
     CHECK(gui_unsure(&g,"/home/w.txt") && gui_unsure(&g,"/home/quarterly-report-final-version-two-for-everyone.txt.tmp"));
     /* the new file gone (the rename did finish, it may be): nothing to name, the same care */
     key(27); keep_tmp=false; note_save(&g,"/home/gone.txt");
     CHECK(!strcmp(g.dialog.text[1],"Have the disk checked first (fsck).") && gui_unsure(&g,"/home/gone.txt"));
-    key(27); fail_write=0;
+    /* past four such pairs none is kept, and the desktop saves over no file, but still to a new name */
+    key(27); note_save(&g,"/home/x1.txt"); key(27); note_save(&g,"/home/x2.txt"); key(27);
+    CHECK(g.nunsure==5 && !strcmp(g.unsure[3],"/home/x1.txt") && gui_unsure(&g,"/home/dos.txt") && gui_unsure(&g,"/home/w.txt"));
+    fail_write=0; i=f_writes;
+    CHECK(note_save(&g,"/home/dos.txt")==-EBUSY && !strcmp(g.dialog.text[0],"Several saves failed half way.") && f_writes==i);
+    key(27); CHECK(note_save(&g,"/home/fresh.txt")==0 && holds("/home/fresh.txt","acd"));
     memset(g.unsure,0,sizeof(g.unsure)); memset(g.kept,0,sizeof(g.kept)); g.nunsure=0;
     /* the CRs a CRLF file is saved with count against 256 KB */
     note_reset(&g.note); g.note.crlf=true;
@@ -640,6 +653,42 @@ static void notepad_review(void) {
 }
 
 /* what the reviews of Files found */
+/* a pair a half-done save left, in Files: Delete and Rename say no before they ask anything; and a .tmp beside
+   a file Notepad opens, of its size and time, is taken for such a pair */
+static void unsure_pairs(void) {
+    populate();
+    add("/home/w.txt", GUI_FILE, "a", 1);
+    add("/home/w.txt.tmp", GUI_FILE, "a", 1);
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    add("/home/sub/deep.txt.tmp", GUI_FILE, "deep\n", 5);
+    strlcpy(g.unsure[0],"/home/w.txt",GUI_PATH_MAX); strlcpy(g.kept[0],"/home/w.txt.tmp",GUI_PATH_MAX);
+    strlcpy(g.unsure[1],"/home/sub/deep.txt",GUI_PATH_MAX); strlcpy(g.kept[1],"/home/sub/deep.txt.tmp",GUI_PATH_MAX); g.nunsure=2;
+    gui_open(&g,GUI_FILES);
+    g.files.selected=row_named("home"); gui_act(&g,ACT_FILES_OPEN);
+    g.files.selected=row_named("w.txt.tmp"); gui_act(&g,ACT_FILES_DELETE);
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not deleted") && node("/home/w.txt.tmp"));
+    key(27); g.files.selected=row_named("w.txt"); gui_act(&g,ACT_FILES_RENAME);
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.title,"Not renamed") && !strcmp(g.dialog.text[0],"w.txt may share its data."));
+    key(27); g.files.selected=row_named("sub"); gui_act(&g,ACT_FILES_RENAME);   /* the folder a pair is in */
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.text[0],"A file in sub may share its data.") && node("/home/sub/deep.txt"));
+    key(27); g.files.selected=row_named("dos.txt"); gui_act(&g,ACT_FILES_RENAME);
+    CHECK(g.dialog.kind==GUI_DLG_INPUT);                                        /* any other file as before */
+    key(27); g.files.selected=row_named("dos.txt"); gui_act(&g,ACT_FILES_DELETE);
+    CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_DELETE);
+    key(27);
+    /* opening a file with a .tmp beside it of its size and time */
+    gui_init(&g,960,540); g.fs=&fake_fs; g.now=10000;
+    add("/home/t.txt", GUI_FILE, "same", 4); add("/home/t.txt.tmp", GUI_FILE, "same", 4);
+    nodes[find("/home/t.txt.tmp")].mtime = nodes[find("/home/t.txt")].mtime;
+    CHECK(note_load(&g,"/home/t.txt")==0 && gui_unsure(&g,"/home/t.txt.tmp") &&
+          !strcmp(g.note.status,"t.txt may share its data with t.txt.tmp: check the disk"));
+    add("/home/v.txt", GUI_FILE, "same", 4); add("/home/v.txt.3.tmp", GUI_FILE, "same", 4);
+    nodes[find("/home/v.txt.3.tmp")].mtime = nodes[find("/home/v.txt")].mtime;
+    CHECK(note_load(&g,"/home/v.txt.3.tmp")==0 && gui_unsure(&g,"/home/v.txt"));  /* the .tmp itself, opened */
+    add("/home/u.txt", GUI_FILE, "same", 4); add("/home/u.txt.tmp", GUI_FILE, "same", 4);
+    CHECK(note_load(&g,"/home/u.txt")==0 && !gui_unsure(&g,"/home/u.txt") && !strcmp(g.note.status,"Opened u.txt"));
+}
+
 static void files_review(void) {
     char b[GUI_PATH_MAX];
     int i, j, many;
@@ -844,6 +893,7 @@ int main(void) {
     notepad();
     notepad_review();
     files();
+    unsure_pairs();
     files_review();
     guard_paths();
     windows();

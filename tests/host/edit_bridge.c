@@ -19,7 +19,7 @@
 #include "../../user/bin/edit.c"
 #include "edit_sim.h"
 
-typedef char sim_errno_numbers[SIM_ENOENT == ENOENT && SIM_EIO == EIO && SIM_ENOMEM == ENOMEM && SIM_EFAULT == EFAULT &&
+typedef char sim_errno_numbers[SIM_EPERM == EPERM && SIM_ENOENT == ENOENT && SIM_EIO == EIO && SIM_ENOMEM == ENOMEM && SIM_EFAULT == EFAULT &&
                                SIM_EBUSY == EBUSY && SIM_EEXIST == EEXIST && SIM_EXDEV == EXDEV && SIM_ENOTDIR == ENOTDIR &&
                                SIM_EISDIR == EISDIR && SIM_EINVAL == EINVAL && SIM_ENOSPC == ENOSPC && SIM_EROFS == EROFS &&
                                SIM_ENAMETOOLONG == ENAMETOOLONG && SIM_ENOSYS == ENOSYS && SIM_ENOTEMPTY == ENOTEMPTY ? 1 : -1];
@@ -29,12 +29,14 @@ typedef char sim_errno_numbers[SIM_ENOENT == ENOENT && SIM_EIO == EIO && SIM_ENO
 #define NAMES 40
 #define FDS   8
 
-struct node { char name[300]; char *bytes; int len, cap, dir, used, twin, corrupt; };
+struct node { char name[300]; char *bytes; int len, cap, dir, used, twin, corrupt; unsigned mtime; };
 static struct node nodes[NAMES];
 static struct { int node, pos, used; } fds[FDS];        /* descriptor 3 + i */
 static struct { char name[300]; int on, err, how; } fails[SIM_OPS];
 static char log_buf[16384];
 static size_t log_len;
+static unsigned clock_now = 1000;                       /* each change is a second later */
+static int long_paths;                                  /* calls given a path of PATH_MAX bytes or more */
 static char arena[16 << 20];
 static size_t arena_used;
 int surf_errno;
@@ -78,6 +80,7 @@ static void set_bytes(int n, const char *bytes, int len) {
     free(nodes[n].bytes);
     nodes[n].bytes = p;
     nodes[n].len = nodes[n].cap = len;
+    nodes[n].mtime = ++clock_now;
 }
 
 /* n's data goes: a twin's is the same data, freed under it */
@@ -100,7 +103,7 @@ static int failing(int op, const char *name, int *how) {
     if(op == SIM_WRITE && fails[op].how > 0) { fails[op].how--; return 0; }
     if(how) *how = fails[op].how;
     fails[op].on = 0;
-    return fails[op].err ? fails[op].err : -1;
+    return fails[op].err ? fails[op].err : op == SIM_WRITE ? -1 : EIO;
 }
 
 static int fail_with(int e) {
@@ -109,7 +112,9 @@ static int fail_with(int e) {
 }
 
 static int too_long(const char *path) {                 /* the system calls' string check */
-    return strlen(path) >= PATH_MAX;
+    if(strlen(path) < PATH_MAX) return 0;
+    long_paths++;
+    return 1;
 }
 
 static int slot(int fd) {
@@ -118,9 +123,9 @@ static int slot(int fd) {
 
 int open(const char *path, int flags, ...) {
     int n, fd, e;
+    note("open %s%s%s\n", path, flags & O_EXCL ? " excl" : "", flags & O_TRUNC ? " trunc" : "");
     if(too_long(path)) return fail_with(EFAULT);
     n = lookup(path);
-    note("open %s%s%s\n", path, flags & O_EXCL ? " excl" : "", flags & O_TRUNC ? " trunc" : "");
     if((e = failing(SIM_OPEN, path, NULL))) return fail_with(e);
     if(n >= 0 && (flags & O_CREAT) && (flags & O_EXCL)) return fail_with(EEXIST);
     if(n >= 0 && nodes[n].dir && (flags & O_ACCMODE) != O_RDONLY) return fail_with(EISDIR);
@@ -129,9 +134,10 @@ int open(const char *path, int flags, ...) {
     if(n < 0) {
         if(!(flags & O_CREAT)) return fail_with(ENOENT);
         if((n = make(path)) < 0) return fail_with(ENOSPC);
-    } else if(flags & O_TRUNC) {                    /* fat_truncate frees the chain, a twin's too */
+    } else if((flags & O_TRUNC) && nodes[n].len) {  /* fat_truncate frees the chain, a twin's too */
         untwin(n);
         nodes[n].len = 0;
+        nodes[n].mtime = ++clock_now;
     }
     fds[fd].used = 1;
     fds[fd].node = n;
@@ -159,6 +165,7 @@ ssize_t write(int fd, const void *buf, size_t len) {
     memcpy(x->bytes + fds[s].pos, buf, len);
     fds[s].pos = end;
     if(end > x->len) x->len = end;
+    x->mtime = ++clock_now;
     return (ssize_t)len;
 }
 
@@ -196,6 +203,7 @@ static void fill(int n, struct stat *st) {
     memset(st, 0, sizeof(*st));
     st->type = nodes[n].dir ? S_IFDIR : S_IFREG;
     st->size = (unsigned)nodes[n].len;
+    st->mtime = nodes[n].mtime;
 }
 
 int fstat(int fd, struct stat *st) {
@@ -207,9 +215,9 @@ int fstat(int fd, struct stat *st) {
 
 int stat(const char *path, struct stat *st) {
     int n;
+    note("stat %s\n", path);
     if(too_long(path)) return fail_with(EFAULT);
     n = lookup(path);
-    note("stat %s\n", path);
     if(n < 0) return fail_with(ENOENT);
     fill(n, st);
     return 0;
@@ -217,10 +225,10 @@ int stat(const char *path, struct stat *st) {
 
 int rename(const char *from, const char *to) {
     int a, b, how = SIM_NONE, e;
-    if(too_long(from) || too_long(to)) return fail_with(EFAULT);
+    note("rename %s %s\n", from, to);
+    if(too_long(from) | too_long(to)) return fail_with(EFAULT);
     a = lookup(from);
     b = lookup(to);
-    note("rename %s %s\n", from, to);
     e = failing(SIM_RENAME, from, &how);
     if(a < 0) return fail_with(e ? e : ENOENT);
     if(e && (how == SIM_NONE || a == b)) return fail_with(e);
@@ -228,6 +236,7 @@ int rename(const char *from, const char *to) {
         if(b < 0 && (b = make(to)) < 0) return fail_with(ENOSPC);
         untwin(b);
         set_bytes(b, nodes[a].bytes ? nodes[a].bytes : "", nodes[a].len);
+        nodes[b].mtime = nodes[a].mtime;            /* the entry is copied, its time too */
         nodes[a].twin = b;
         nodes[b].twin = a;
         return fail_with(e);
@@ -239,9 +248,9 @@ int rename(const char *from, const char *to) {
 
 int unlink(const char *path) {
     int n, e;
+    note("unlink %s\n", path);
     if(too_long(path)) return fail_with(EFAULT);
     n = lookup(path);
-    note("unlink %s\n", path);
     if((e = failing(SIM_UNLINK, path, NULL))) return fail_with(e);
     if(n < 0) return fail_with(ENOENT);
     if(nodes[n].dir) return fail_with(EISDIR);
@@ -271,6 +280,7 @@ void sim_reset(void) {
     memset(nodes, 0, sizeof(nodes));
     memset(fds, 0, sizeof(fds));
     memset(fails, 0, sizeof(fails));
+    long_paths = 0;
     sim_clear_log();
 }
 
@@ -302,6 +312,16 @@ int sim_names(void) {
     return k;
 }
 
+void sim_same_time(const char *a, const char *b) {
+    int x = lookup(a), y = lookup(b);
+    if(x < 0 || y < 0) for(;;) __builtin_trap();
+    nodes[y].mtime = nodes[x].mtime;
+}
+
+int sim_long_paths(void) {
+    return long_paths;
+}
+
 int sim_corrupt(const char *name) {
     int n = lookup(name);
     return n >= 0 && nodes[n].corrupt;
@@ -331,7 +351,8 @@ void ed_start(const char *name) {
     crlf = modified = no_rename = unsure = 0;
     cy = cx = 0;
     msg[0] = 0;
-    load(name);
+    copied[0] = 0;
+    if(load(name) == 0) find_twin();
     sim_clear_log();
 }
 

@@ -328,11 +328,46 @@ void note_reset(struct gui_note *n) {
     n->group++;
 }
 
+/* a file and a new file beside it that may share their clusters (gui_unsure()); past GUI_UNSURE pairs
+   none is kept, and the desktop changes no file at all */
+static void remember(struct gui_state *g, const char *file, const char *kept) {
+    int i;
+    for(i = 0; i < g->nunsure && i < GUI_UNSURE; i++) if(!strcmp(g->unsure[i], file) && !strcmp(g->kept[i], kept)) return;
+    if(g->nunsure < GUI_UNSURE) {
+        strlcpy(g->unsure[g->nunsure], file, GUI_PATH_MAX);
+        strlcpy(g->kept[g->nunsure], kept, GUI_PATH_MAX);
+    }
+    g->nunsure++;
+}
+
+/* a name beside path with its size and time, into out: fs/fat.c's rename copies the entry, so after one
+   that may have half happened the two hold the same clusters (or the user made such a copy: then the care
+   costs nothing). Beside a.txt: a.txt.tmp and a.txt.1.tmp to .9.tmp; beside one of those, a.txt. */
+static bool twin_of(struct gui_state *g, const char *path, const struct gui_entry *f, char *out, size_t n) {
+    struct gui_entry e;
+    bool device, readonly;
+    size_t len = strlen(path);
+    int k;
+    for(k = 0; k <= 10; k++) {
+        if(k < 10) {
+            if(snprintf(out, n, k ? "%s.%d.tmp" : "%s.tmp", path, k) >= (int)n) continue;
+        } else {                                        /* path is <file>.tmp or <file>.N.tmp */
+            if(len < 5 || strcmp(path + len - 4, ".tmp")) return false;
+            strlcpy(out, path, n);
+            out[len - 4] = 0;
+            if(len >= 7 && out[len - 6] == '.' && out[len - 5] >= '1' && out[len - 5] <= '9') out[len - 6] = 0;
+        }
+        if(g->fs->stat(g->fs->ctx, out, &e, &device, &readonly) == 0 && e.type == GUI_FILE &&
+           e.size == f->size && e.mtime == f->mtime) return true;
+    }
+    return false;
+}
+
 int note_load(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
     struct gui_entry e;
     bool device = false, readonly = false;
-    char line[80];
+    char line[GUI_STATUS], other[GUI_PATH_MAX], a[GUI_PATH_MAX], b[GUI_PATH_MAX];
     const char *name = gui_basename(path);
     u32 len = 0, i, lf = 0, crlf = 0, j;
     int r;
@@ -382,7 +417,13 @@ int note_load(struct gui_state *g, const char *path) {
     strlcpy(n->path, path, sizeof(n->path));
     n->readonly = readonly;
     if(readonly) note_status(g, "Read-only volume: Save as keeps a copy elsewhere");
-    else {
+    else if(twin_of(g, path, &e, other, sizeof(other))) {   /* a save that failed half way, it may be */
+        remember(g, path, other);
+        gui_middle(name, a, sizeof(a), 28);
+        gui_middle(gui_basename(other), b, sizeof(b), 28);
+        snprintf(line, sizeof(line), "%s may share its data with %s: check the disk", a, b);
+        note_status(g, line);
+    } else {
         snprintf(line, sizeof(line), "Opened %s", name);
         note_status(g, line);
     }
@@ -391,7 +432,7 @@ int note_load(struct gui_state *g, const char *path) {
 }
 
 /* a name in at most cells cells: a longer one loses its middle (… there), so that its end (.1.tmp) shows */
-static void middle(const char *name, char *out, size_t n, int cells) {
+void gui_middle(const char *name, char *out, size_t n, int cells) {
     u32 len = strlen(name), at = 0, o;
     int total = gd_cells(name), k;
     if(total <= cells) { strlcpy(out, name, n); return; }
@@ -412,8 +453,9 @@ int note_save(struct gui_state *g, const char *path) {
     bool device, readonly;
     int r;
     if(!g->fs) return -ENOSYS;
-    if(gui_unsure(g, path)) {                           /* it may share its clusters with another file */
-        snprintf(line, sizeof(line), "%s may share its data with another file.", gui_basename(path));
+    /* never over a file that may share its clusters; past GUI_UNSURE such saves only to a new name */
+    if(gui_unsure(g, path) && (g->nunsure <= GUI_UNSURE || g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) == 0)) {
+        gui_unsure_line(g, path, line, sizeof(line));
         dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
         return -EBUSY;
     }
@@ -421,10 +463,9 @@ int note_save(struct gui_state *g, const char *path) {
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
         if(kept[0]) {                                   /* its rename may have half happened */
-            strlcpy(g->unsure[g->nunsure % GUI_UNSURE], path, GUI_PATH_MAX);
-            strlcpy(g->kept[g->nunsure++ % GUI_UNSURE], kept, GUI_PATH_MAX);
+            remember(g, path, kept);
             if(g->fs->stat(g->fs->ctx, kept, &e, &device, &readonly) == 0) {   /* the dialog's 54 cells: 31, the name */
-                middle(gui_basename(kept), name, sizeof(name), 22);
+                gui_middle(gui_basename(kept), name, sizeof(name), 22);
                 snprintf(why, sizeof(why), "Check the disk: the text is in %s.", name);
             } else strlcpy(why, "Have the disk checked first (fsck).", sizeof(why));
         }

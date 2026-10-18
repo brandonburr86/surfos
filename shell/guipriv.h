@@ -129,7 +129,10 @@ void gui_place(struct gui_state *g, int id);                          /* keep a 
 const char *gui_error(const struct gui_state *g, int err);
 bool gui_join(char *out, size_t n, const char *dir, const char *name);   /* false: too long, not usable */
 const char *gui_basename(const char *path);
-bool gui_unsure(const struct gui_state *g, const char *path);       /* g->unsure or g->kept: not to be changed */
+/* not to be saved over, deleted or renamed: one of g->unsure and g->kept, a folder one is in, or anything
+   once more saves failed half way than the desktop keeps; and the dialog line that says why */
+bool gui_unsure(const struct gui_state *g, const char *path);
+void gui_unsure_line(const struct gui_state *g, const char *path, char *line, size_t n);
 void gui_parent(char *path);
 void gui_date(u32 t, char *out, size_t n);                           /* "2026-10-17 14:03" */
 void gui_bytes(u32 n, char *out, size_t size);                       /* "1,234 B", "12.5 KB" */
@@ -162,6 +165,7 @@ bool note_find(struct gui_state *g, const char *what);              /* the next 
 void note_goto(struct gui_state *g, int line);
 bool note_has_selection(const struct gui_note *n);
 void note_status(struct gui_state *g, const char *msg);
+void gui_middle(const char *name, char *out, size_t n, int cells);   /* at most cells cells: its middle goes */
 int note_lines(const struct gui_note *n);
 int note_line_of(const struct gui_note *n, u32 off);
 u32 note_line_start(const struct gui_note *n, int line);

@@ -23,10 +23,13 @@ not write it, and when the rename failed before it changed anything. After an
 I/O error the rename may have half happened, the new name written and the old
 one not yet gone: the text stays in the new file (the status line names it),
 but the file and it may share their clusters, and deleting or replacing either
-would free the other's. So from then on nothing is renamed or written over the
-file: each save makes another new file beside it, and the help line says to
-have the disk checked first. Only where the file system cannot rename (ENOSYS),
-or no such name fits in a path, is the file truncated and written in place.
+would free the other's. So for the rest of the session nothing is renamed or
+written over the file: each save makes another new file beside it, the help
+line says to have the disk checked first, and edit says where the last copy is
+when it ends. The same holds from the start when the file is opened with such
+a name beside it, of its size and time (fs/fat.c's rename copies the entry).
+Only where the file system cannot rename (ENOSYS), or no such name fits in a
+path, is the file truncated and written in place.
 The file keeps its line ends (LF, or CRLF when its first line has one) and
 ends with a line end. The terminal is used only through ttyctl(TTY_RAW),
 ttyctl(TTY_GETSIZE), the key sequences of raw mode and the ANSI subset that
@@ -71,6 +74,7 @@ static int crlf;                /* the file's line ends are CR LF */
 static int modified;
 static int no_rename;           /* rename said ENOSYS once: write in place from then on */
 static int unsure;              /* a rename may have half happened: the file and its .tmp may share their clusters */
+static char copied[PATH_MAX];   /* since then: the last copy saved beside the file */
 
 static int cy, cx;              /* cursor: line, byte in the line */
 static int want_col = -1;       /* the screen column up and down aim for */
@@ -364,12 +368,44 @@ static int write_file(const char *path, int how, int *made) {
     return close(fd);
 }
 
-/* a rename that failed with one of these changed nothing (fs/vfs.c's checks, and fs/fat.c's before it
-   writes a name): its new file may go. After any other, EIO above all, the new name may be written and
-   the old one not yet gone, both holding the same clusters, and deleting the .tmp would free the file's. */
+/* a rename that failed with one of these changed nothing (the system call's check of its strings, fs/vfs.c's
+   checks, and fs/fat.c's before it writes a name): its new file may go. After any other, EIO above all, the
+   new name may be written and the old one not yet gone, both holding the same clusters, and deleting the
+   .tmp would free the file's. */
 static int nothing_changed(int e) {
-    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT ||
+    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT || e == EFAULT ||
            e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
+}
+
+static int same_entry(const struct stat *a, const char *name) {
+    struct stat b;
+    return stat(name, &b) == 0 && S_ISREG(b.type) && b.size == a->size && b.mtime == a->mtime;
+}
+
+/* after loading: a name beside the file with its size and time. fs/fat.c's rename copies the entry, so
+   after one that may have half happened (in an earlier edit, or the desktop) the two hold the same
+   clusters; or the user made such a copy, and the care costs nothing. Beside a.txt: a.txt.tmp and
+   a.txt.1.tmp to .9.tmp; beside one of those, a.txt. Then this edit is as after such a rename. */
+static void find_twin(void) {
+    struct stat st;
+    char name[PATH_MAX];
+    const char *base;
+    size_t n = strlen(filename);
+    int k;
+    if(stat(filename, &st) < 0 || !S_ISREG(st.type)) return;
+    for(k = 0; k < 10; k++) {
+        if(snprintf(name, sizeof(name), k ? "%s.%d.tmp" : "%s.tmp", filename, k) >= (int)sizeof(name)) break;
+        if(same_entry(&st, name)) goto found;
+    }
+    if(n < 5 || strcmp(filename + n - 4, ".tmp")) return;        /* the file is <name>.tmp or <name>.N.tmp */
+    snprintf(name, sizeof(name), "%s", filename);
+    name[n - 4] = 0;
+    if(n >= 7 && name[n - 6] == '.' && name[n - 5] >= '1' && name[n - 5] <= '9') name[n - 6] = 0;
+    if(!same_entry(&st, name)) return;
+found:
+    unsure = 1;
+    base = strrchr(name, '/');
+    snprintf(msg, sizeof(msg), "A save failed half way: %s may share this file's data", base ? base + 1 : name);
 }
 
 static int save(void) {
@@ -387,8 +423,9 @@ static int save(void) {
         what = tmp;
         base = strrchr(tmp, '/');
         if(e == 0 && unsure) {                  /* a copy beside the file, renamed over nothing */
-            snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", base ? base + 1 : tmp);
-            return -1;
+            snprintf(copied, sizeof(copied), "%s", base ? base + 1 : tmp);
+            snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", copied);
+            return 1;
         }
         if(e == 0) {
             if(rename(tmp, filename) == 0) goto done;
@@ -413,13 +450,15 @@ done:
     modified = 0;
     snprintf(msg, sizeof(msg), "Wrote %d line%s", text_lines(), text_lines() == 1 ? "" : "s");
     return 0;
-fail:
+fail:                                           /* the reason first: a long name is cut off at the right */
     if(kept) {                                  /* the new file, beside the file */
         base = strrchr(tmp, '/');
-        snprintf(msg, sizeof(msg), "Not saved: %s: %s. The text is in %s", what, strerror(e), base ? base + 1 : tmp);
-    } else if(e == EEXIST && what == tmp)       /* <file>.tmp, and the names after it, are the user's */
-        snprintf(msg, sizeof(msg), "Not saved: %s.tmp: %s (move it out of the way)", filename, strerror(e));
-    else snprintf(msg, sizeof(msg), "Not saved: %s: %s", what, strerror(e));
+        snprintf(msg, sizeof(msg), "Not saved: %s (%s). The text is in %s", strerror(e), what, base ? base + 1 : tmp);
+    } else if(e == EEXIST && what == tmp && unsure)     /* no name left for a copy: nothing to move, the disk to check */
+        snprintf(msg, sizeof(msg), "Not saved: no name is left for a copy beside the file");
+    else if(e == EEXIST && what == tmp)         /* <file>.tmp, and the names after it, are the user's */
+        snprintf(msg, sizeof(msg), "Not saved: %s (%s.tmp): move it out of the way", strerror(e), filename);
+    else snprintf(msg, sizeof(msg), "Not saved: %s (%s)", strerror(e), what);
     return -1;
 }
 
@@ -712,7 +751,7 @@ static int quit(void) {
     if(!modified) return 1;
     a = ask_yes_no("Save changes? (y/n/^C) ");
     if(a == 'n') return 1;
-    if(a == 'y') return save() == 0;
+    if(a == 'y') return save() >= 0;                 /* a copy beside the file will do: main says where */
     return 0;
 }
 
@@ -778,6 +817,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "edit: %s: %s%s\n", filename, strerror(errno), errno == EFBIG ? " (the limit is 1 MB)" : "");
         return 1;
     }
+    find_twin();
     screen_size();
     r = ttyctl(TTY_RAW, 1);
     if(r < 0) {
@@ -805,8 +845,10 @@ int main(int argc, char **argv) {
         r = handle(r);
         if(r) break;
     }
+    restore_terminal();
+    if(copied[0])                               /* the text went beside the file, not into it */
+        fprintf(stderr, "edit: %s was not saved over (check the disk); the last copy is in %s\n", filename, copied);
     if(r == 2) {
-        restore_terminal();
         fprintf(stderr, "edit: the input ended%s\n", modified ? "; the changes were not saved" : "");
         return 1;
     }

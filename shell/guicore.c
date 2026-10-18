@@ -90,17 +90,33 @@ const char *gui_basename(const char *path) {
 
 static char fold(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
-static bool same_path(const char *a, const char *b) {   /* FAT's names ignore case */
-    while(*a && fold(*a) == fold(*b)) { a++; b++; }
-    return fold(*a) == fold(*b);
+/* path is name, or a folder name is in (FAT's names ignore case) */
+static bool covers(const char *path, const char *name) {
+    const char *p = path;
+    while(*p && fold(*p) == fold(*name)) { p++; name++; }
+    return !*p && (!*name || *name == '/' || (p > path && p[-1] == '/'));
+}
+
+/* path is one of the pairs remembered (1), a folder one is in (2), or neither (0) */
+static int remembered(const struct gui_state *g, const char *path) {
+    int i, r = 0;
+    for(i = 0; i < GUI_UNSURE && i < g->nunsure; i++) {
+        if(covers(path, g->unsure[i]) || covers(path, g->kept[i])) r = 2;
+        if(covers(g->unsure[i], path) || covers(g->kept[i], path)) return 1;   /* both ways: the very name */
+    }
+    return r;
 }
 
 bool gui_unsure(const struct gui_state *g, const char *path) {
-    int i;
-    for(i = 0; i < GUI_UNSURE; i++) {
-        if(g->unsure[i][0] && (same_path(path, g->unsure[i]) || same_path(path, g->kept[i]))) return true;
-    }
-    return false;
+    return g->nunsure > GUI_UNSURE || remembered(g, path);     /* more than it keeps: it changes nothing */
+}
+
+void gui_unsure_line(const struct gui_state *g, const char *path, char *line, size_t n) {
+    char name[GUI_PATH_MAX];
+    int r = remembered(g, path);
+    if(!r) { strlcpy(line, "Several saves failed half way.", n); return; }
+    gui_middle(gui_basename(path), name, sizeof(name), r == 1 ? 32 : 23);      /* 54 cells in all */
+    snprintf(line, n, r == 1 ? "%s may share its data." : "A file in %s may share its data.", name);
 }
 
 void gui_parent(char *path) {
@@ -480,7 +496,7 @@ static void save(struct gui_state *g) {
         snprintf(line, sizeof(line), "%s is on a volume that cannot be written.", gui_basename(g->note.path));
         dialog_confirm(g, ACT_DLG_READONLY, "Read-only volume", line, "Save a copy somewhere else?", "Save as\xF9", NULL, "Cancel");
     } else if(gui_unsure(g, g->note.path)) {
-        snprintf(line, sizeof(line), "%s may share its data with another file.", gui_basename(g->note.path));
+        gui_unsure_line(g, g->note.path, line, sizeof(line));
         dialog_confirm(g, ACT_DLG_READONLY, "Check the disk", line, "Save a copy under another name?", "Save as\xF9", NULL, "Cancel");
     } else save_now(g, g->note.path);
 }
@@ -604,6 +620,12 @@ void gui_answer(struct gui_state *g, int act, int button, const char *text, cons
             snprintf(line, sizeof(line), "%s is there already.", gui_basename(text));
             if(e.type == GUI_DIR || device) {
                 dialog_message(g, "Not saved", line, "It is not a file that can be replaced.");
+                g->pending = PEND_NONE;
+                break;
+            }
+            if(gui_unsure(g, text)) {                   /* replacing it could free what another holds */
+                gui_unsure_line(g, text, line, sizeof(line));
+                dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
                 g->pending = PEND_NONE;
                 break;
             }
