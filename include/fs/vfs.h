@@ -246,7 +246,8 @@ const char *vfs_getcwd(void);
 /* files */
 int vfs_open(const char *path, int flags, struct file **out);
 int vfs_open_vnode(struct vnode *v, int flags, struct file **out);   /* 10/6/26: a vnode without a path (a socket) */
-int vfs_close(struct file *f);
+int vfs_close(struct file *f);                       /* a written file's volume written out: 0, -EIO (refused, or
+                                                        the device gone), 10/18/26 (B65): -EINTR (cut short) */
 int vfs_read(struct file *f, void *buf, u32 len);
 int vfs_write(struct file *f, const void *buf, u32 len);
 int vfs_lseek(struct file *f, i32 off, int whence);               /* new position, or < 0 */
@@ -257,7 +258,8 @@ int vfs_rmdir(const char *path);                                 /* an empty dir
 int vfs_rename(const char *from, const char *to);                /* one file system only (-EXDEV) */
 int vfs_statfs(const char *path, struct statfs *st);             /* the mount that holds path */
 int vfs_ftruncate(struct file *f, u32 size);
-int vfs_fsync(struct file *f);                                   /* its file system's dirty blocks to the device */
+int vfs_fsync(struct file *f);                                   /* its file system's dirty blocks to the device
+                                                                    (10/18/26, B65: errors as vfs_close()'s) */
 
 /* descriptors of the current task (the system call layer) */
 int fd_install(struct file *f);                                  /* fd, or -EMFILE */

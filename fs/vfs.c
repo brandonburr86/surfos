@@ -714,11 +714,15 @@ int vfs_open_vnode(struct vnode *v, int flags, struct file **out) {
 
 /* 10/16/26 (audit B10): a file system's state and its device's blocks out to the device; 0 when
    everything reached it by the end (a block refused by the first sync and written by the second
-   counts as written), else -EIO */
+   counts as written), else -EIO. 10/18/26 (audit B65): -EINTR when the sync was cut short (a kill or
+   Ctrl+C in one of its waits: fs_cut_short()) while the device refused nothing and is still there: what
+   is left is owed still, and the next sync writes it; a refusal or an unplugged device is -EIO, Ctrl+C
+   or not (as a straight write cut short in its wait says EINTR, B49) */
 static int write_back(struct superblock *sb) {
     int r = sb->ops && sb->ops->sync ? sb->ops->sync(sb) : 0;
     if(!sb->dev) return r ? -EIO : 0;
-    return bsync(sb->dev) != 0 || sb->dev->gone ? -EIO : 0;
+    if(bsync(sb->dev) == 0 && !sb->dev->gone) return 0;
+    return !sb->dev->gone && !sb->dev->bc_failed && fs_cut_short() ? -EINTR : -EIO;
 }
 
 int vfs_close(struct file *f) {
@@ -904,9 +908,10 @@ int vfs_ftruncate(struct file *f, u32 size) {
 
 int vfs_fsync(struct file *f) {
     struct superblock *sb;
+    int r;
     if(!f) return -EBADF;
     sb = f->v->sb;
-    if(write_back(sb) != 0) return -EIO;            /* 10/16/26 (B10): as close says it */
+    if((r = write_back(sb)) != 0) return r;         /* 10/16/26 (B10): as close says it (10/18/26, B65: EINTR too) */
     if(sb->dev && bdev_flush(sb->dev) != 0) return -EIO;
     return 0;
 }

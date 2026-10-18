@@ -357,7 +357,8 @@ int cmd_eject(int argc, char **argv) {
             w = vfs_fsync(f);
             vfs_close(f);
         }
-        if(w && task_interrupted()) break;                   /* (B46: cut short, not refused: said below) */
+        if(w == -EINTR) break;                               /* (B46: cut short, not refused: said below; B65: told
+                                                                apart by fsync's EINTR, a refusal said as one) */
         if(w) {
             printf("    eject: %s: %s could not be written: %s\n", disk->name, paths[i], strerror(w));
             r = w;
@@ -511,7 +512,7 @@ int cmd_fsbench(int argc, char **argv) {
         else if(task_interrupted()) r = -EINTR;              /* stopped is no I/O error) */
     }
     c = vfs_close(f);                                        /* close writes it out */
-    if(!r) r = c && task_interrupted() ? -EINTR : c;        /* (B60: its write-out cut short is no I/O error either) */
+    if(!r || (r == -EINTR && c && c != -EINTR)) r = c;      /* (B65: EINTR for a write-out cut short, else its error) */
     tw = (long)uptime_ms() - tw;
     if(r == -EINTR) printf("    fsbench: interrupted\n");
     else if(r) printf("    fsbench: %s: %s\n", path, strerror(r));

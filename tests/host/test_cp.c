@@ -1,4 +1,4 @@
-/* Host-side tests for shell/cp.c, cp for both kernels' shells (10/18/26, audit B53, B60): the real
+/* Host-side tests for shell/cp.c, cp for both kernels' shells (10/18/26, audit B53, B60, B65): the real
    cmd_cp() against a file layer this test scripts (what each vfs_read(), vfs_write() and vfs_close()
    returns, and when Ctrl+C arrives: TI_INT on the calling task), checking what cp says, its status,
    the bytes it says it wrote and whether it takes the Ctrl+C back. cp.c is built with its printf()
@@ -154,7 +154,7 @@ int main(void) {
       check(st == CMD_OK && has("4096 bytes copied") && !has("incomplete") && !(task.intr & TI_INT), what); }
 
     { int r[] = {WHOLE, WHOLE}, a[] = {0, 0};                   /* S4: Ctrl+C in the close, its write-out cut short */
-      st = run(8192, 2, r, a, -EIO, 1, 0, 0);
+      st = run(8192, 2, r, a, -EINTR, 1, 0, 0);                 /* (B65: such a close says EINTR, fs/vfs.c) */
       snprintf(what, sizeof(what), "S4: a close whose write-out Ctrl+C cut short says so, not an I/O error (said: %s)", said);
       check(st == CMD_FAIL && has("8192 bytes copied") && has("interrupted while they were written out") &&
             !has("close: I/O error"), what); }
@@ -185,6 +185,20 @@ int main(void) {
       st = run(8192, 1, r, a, 0, 0, 0, 0);
       check(st == CMD_FAIL && has("cut short after 4096 bytes") && has("is incomplete"),
             "S9: Ctrl+C in a whole write with more to copy: cut short after 4096 bytes, incomplete"); }
+
+    { int r[] = {WHOLE, WHOLE}, a[] = {0, 0};                   /* S10 (B65, the review's R10a): the card refuses */
+      st = run(8192, 2, r, a, -EIO, 1, 0, 0);                   /* the close's write-out, Ctrl+C in the close too */
+      snprintf(what, sizeof(what), "S10: a close the card refused is said as an I/O error, Ctrl+C or not (said: %s)", said);
+      check(st == CMD_FAIL && has("close: I/O error") && !has("interrupted while"), what); }
+
+    { int r[] = {WHOLE}, a[] = {0};                             /* S11 (B65, the review's R10b): the source cannot */
+      st = run(4096, 1, r, a, 0, 0, -EIO, 1);                   /* be read, Ctrl+C pending from the start */
+      snprintf(what, sizeof(what), "S11: a read error is said as that, Ctrl+C or not (said: %s)", said);
+      check(st == CMD_FAIL && has("read: I/O error") && !has("cut short"), what); }
+
+    { int r[] = {WHOLE}, a[] = {0};                             /* S12 (B65): a read cut short in its wait */
+      st = run(4096, 1, r, a, 0, 0, -EINTR, 1);
+      check(st == CMD_FAIL && has("cut short after 0 bytes"), "S12: a read cut short in its wait: cut short, incomplete"); }
 
     printf("CP: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
