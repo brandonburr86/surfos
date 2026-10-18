@@ -9,19 +9,27 @@ no device, no allocation, nothing kept between calls, so the tests run it on the
 (tests/host/test_netcfg.c).
 
 Both files are lines of "key = value"; # starts a comment, except inside double quotes. Blank
-lines and comments mean nothing. A line ends with LF or CR LF (a file from Windows); a line
-longer than LINE_MAX bytes is reported and skipped.
+lines and comments mean nothing. A line ends with LF, CR LF (a file from Windows) or a CR alone
+(an old Mac's); a UTF-8 byte order mark at the start is skipped. A line longer than LINE_MAX
+bytes, or one with a NUL byte in it, is reported and skipped. TextEdit's smart quotes (the
+curly “ and ” it makes of ") count as double quotes, so a file edited there still reads.
 
 settings.conf is the owner's as much as SurfOS's: an edit (netcfg_edit_settings()) changes the
-one line that sets the key and leaves every other byte as it was, comments and the keys this
-SurfOS does not know included. A new file is the template below, every key explained and
-commented out with its default.
+one line that sets the key, its indentation and its comment kept, and leaves every other byte
+as it was, comments and the keys this SurfOS does not know included; a line that would grow
+past LINE_MAX gets its comment on a line of its own above it. A new file is the template
+below, every key explained and commented out with its default.
 
 networks.conf is SurfOS's own: written anew each time (netcfg_write_networks()), its header
 saying so. A network is a "network = <SSID>" line, then its security (open or wpa2), its key
 (psk = 64 hex digits: the PMK, PBKDF2 of the password and the SSID) and whether it is hidden.
 The password itself is never written. One typed in by hand (password = "...") is read, for the
-reader to turn into the key (wpa_passphrase_to_pmk()); the next write keeps only the key.
+reader to turn into the key (wpa_passphrase_to_pmk()); the next write keeps only the key. A
+block the reader cannot take (a bad key, a security SurfOS does not speak, a name seen before,
+a line it does not understand where no security line says it is open) is told and left out of
+the networks, but kept: its bytes are handed back (struct netcfg_span) and the writer copies
+them, as they were, under a comment after the networks (a line before the first network goes
+before them), so a save never loses a network written by hand, even one SurfOS cannot read.
 
 An SSID is up to 32 bytes of anything, so the file quotes it: "..." with \" and \\, and \xHH
 for every byte that is not printable ASCII. A bare name typed by hand is taken as it is.
@@ -33,14 +41,22 @@ for every byte that is not printable ASCII. A bare name typed by hand is taken a
 
 #define LINE_MAX   255                              /* the longest line taken */
 #define VALUE_MAX  200                              /* the longest value: a quoted SSID is 130 at most */
+#define WHY_MAX    200
 
 /**** lines ****/
 
-/* the line at pos of text (len): its bytes [pos, *end) without the line end; the next line's position */
+/* a UTF-8 byte order mark, which some editors put first: skipped by the readers, kept by an edit */
+static u_int bom_len(const char *text, u_int len) {
+    return text && len >= 3 && (u8)text[0] == 0xEF && (u8)text[1] == 0xBB && (u8)text[2] == 0xBF ? 3 : 0;
+}
+
+/* the line at pos of text (len): its bytes [pos, *end) without the line end (LF, CR LF, or a CR alone); the next
+   line's position */
 static u_int line_at(const char *text, u_int len, u_int pos, u_int *end) {
     u_int e = pos;
-    while(e < len && text[e] != '\n') e++;
-    *end = (e > pos && text[e - 1] == '\r') ? e - 1 : e;
+    while(e < len && text[e] != '\n' && text[e] != '\r') e++;
+    *end = e;
+    if(e + 1 < len && text[e] == '\r' && text[e + 1] == '\n') return e + 2;
     return e < len ? e + 1 : e;
 }
 
@@ -48,22 +64,35 @@ static bool blank(char c) {
     return c == ' ' || c == '\t';
 }
 
-/* where a comment starts in line (n bytes): the first # outside double quotes (a backslash in quotes takes the
-   next byte with it), or n */
+/* a curly double quote at s (n bytes left): the opening U+201C or the closing U+201D, in UTF-8 */
+static bool curly(const char *s, u_int n, bool open) {
+    return n >= 3 && (u8)s[0] == 0xE2 && (u8)s[1] == 0x80 && (u8)s[2] == (open ? 0x9C : 0x9D);
+}
+
+/* where a comment starts in line (n bytes): the first # outside quotes ("...", or the curly “...”; a backslash in
+   quotes takes the next byte with it), or n */
 static u_int comment_at(const char *line, u_int n) {
-    bool quoted = false;
+    int q = 0;                                      /* 1: in "...", 2: in “...” */
     u_int i;
     for(i = 0; i < n; i++) {
-        if(quoted && line[i] == '\\' && i + 1 < n) i++;
-        else if(line[i] == '"') quoted = !quoted;
-        else if(line[i] == '#' && !quoted) return i;
+        if(q && line[i] == '\\' && i + 1 < n) i++;
+        else if(q == 0 && line[i] == '"') q = 1;
+        else if(q == 1 && line[i] == '"') q = 0;
+        else if(q == 0 && curly(line + i, n - i, true)) { q = 2; i += 2; }
+        else if(q == 2 && curly(line + i, n - i, false)) { q = 0; i += 2; }
+        else if(q == 0 && line[i] == '#') return i;
     }
     return n;
 }
 
 /* a line as key and value, both trimmed: 1; nothing on it but blanks and a comment: 0; -1 and *why otherwise */
 static int split(const char *line, u_int n, char *key, size_t ksize, char *value, size_t vsize, const char **why) {
-    u_int c = comment_at(line, n), a = 0, b, eq;
+    u_int c, a = 0, b, eq;
+    if(memchr(line, 0, n)) {
+        *why = "the line has a NUL byte in it";
+        return -1;
+    }
+    c = comment_at(line, n);
     while(a < c && blank(line[a])) a++;
     while(c > a && blank(line[c - 1])) c--;
     if(a == c) return 0;
@@ -98,12 +127,16 @@ static bool same_word(const char *a, const char *b) {
     return !*a && !*b;
 }
 
-/* a settings value without the double quotes around it, if it has them (nothing in them needs escaping) */
+/* a value without the double quotes (straight or curly) around it, if it has them; nothing in them needs escaping */
 static const char *bare(char *value) {
     size_t n = strlen(value);
     if(n >= 2 && value[0] == '"' && value[n - 1] == '"') {
         value[n - 1] = 0;
         return value + 1;
+    }
+    if(n >= 6 && curly(value, (u_int)n, true) && curly(value + n - 3, 3, false)) {
+        value[n - 3] = 0;
+        return value + 3;
     }
     return value;
 }
@@ -115,7 +148,8 @@ struct key_info {
 };
 
 static const struct key_info keys[NETCFG_NKEYS] = {
-    { "telnetd", "on | off", "the telnet server at startup (no password: your own network only)", "off" },
+    { "telnetd", "on | off", "the telnet server at startup, on Ethernet or a WPA2 network (no password: your own networks only)",
+      "off" },
     { "telnetd.port", "1-65535", "the port the telnet server listens on", "23" },
     { "wifi", "on | off", "at startup, join the first saved Wi-Fi network in range, and again when it comes back", "on" },
     { "ethernet", "dhcp | off", "dhcp: an address whenever an Ethernet link comes up; off: the dhcp command", "off" },
@@ -129,8 +163,10 @@ static const char template_text[] =
     "# comment, and a key that is not set has the value shown commented out.\n"
     "\n"
     "# telnetd: start the telnet server at startup, on or off. It has no password and no\n"
-    "# encryption: anyone who reaches the laptop over the network gets a shell, so use it on\n"
-    "# your own network only. (The development build from the stick starts it anyway.)\n"
+    "# encryption: whoever reaches the laptop over a network it is on gets a shell. It starts\n"
+    "# once SurfOS has an address on Ethernet or on a WPA2 Wi-Fi network (never because of an\n"
+    "# open one), and then answers on every network SurfOS is on; meanwhile SurfOS joins no\n"
+    "# open network by itself. The development build from the stick starts it anyway.\n"
     "#telnetd = off\n"
     "\n"
     "# telnetd.port: the port it listens on, 1 to 65535.\n"
@@ -146,7 +182,7 @@ static const char template_text[] =
     "#ethernet = off\n"
     "\n"
     "# hostname: the name SurfOS gives in its DHCP requests, which the router shows in its\n"
-    "# list of devices: letters, digits and -, up to 32.\n"
+    "# list of devices: letters, digits and - (not first or last), up to 32.\n"
     "#hostname = surfos\n";
 
 void netcfg_defaults(struct netcfg_settings *s) {
@@ -252,9 +288,9 @@ int netcfg_set(struct netcfg_settings *s, int k, const char *value, char *why, s
 }
 
 void netcfg_parse_settings(const char *text, u_int len, struct netcfg_settings *s, netcfg_note_fn note, void *arg) {
-    char key[40], value[VALUE_MAX], why[120];
+    char key[40], value[VALUE_MAX], why[WHY_MAX];
     const char *w;
-    u_int pos = 0, end, next, line = 0;
+    u_int pos = bom_len(text, len), end, next, line = 0;
     int r, k;
     netcfg_defaults(s);
     while(text && pos < len) {
@@ -276,23 +312,39 @@ void netcfg_parse_settings(const char *text, u_int len, struct netcfg_settings *
     }
 }
 
+/* where a line setting key k has its parts: the blanks it is indented by, and its comment (from the blanks before the
+   #) to the end of the line, n when it has none */
+struct found {
+    u_int indent, tail, n;
+};
+
 /* does line (n bytes) set key k: 1 as a setting, 2 commented out ("#key = value" with nothing before the # and a
-   value the key takes: "# telnetd = off is the default" is a comment that mentions it), 0 not */
-static int sets_key(const char *line, u_int n, int k) {
+   value the key takes: "# telnetd = off is the default" is a comment that mentions it), 0 not; where its parts are */
+static int sets_key(const char *line, u_int n, int k, struct found *f) {
     struct netcfg_settings scratch;
-    char key[40], value[VALUE_MAX], why[120];
+    char key[40], value[VALUE_MAX], why[WHY_MAX];
     const char *w;
-    u_int a = 0;
-    if(split(line, n, key, sizeof(key), value, sizeof(value), &w) > 0) return same_word(key, keys[k].name) ? 1 : 0;
+    u_int a = 0, start = 0, c, e;
+    int kind;
+    if(n > LINE_MAX) return 0;
     while(a < n && blank(line[a])) a++;
-    if(a < n && line[a] == '#') {
-        a++;
-        while(a < n && blank(line[a])) a++;
-        if(split(line + a, n - a, key, sizeof(key), value, sizeof(value), &w) > 0 && same_word(key, keys[k].name) &&
-           !netcfg_set(&scratch, k, bare(value), why, sizeof(why)))
-            return 2;
+    if(split(line, n, key, sizeof(key), value, sizeof(value), &w) > 0) {
+        if(!same_word(key, keys[k].name)) return 0;
+        kind = 1;
+    } else {
+        if(a >= n || line[a] != '#') return 0;
+        for(start = a + 1; start < n && blank(line[start]); start++);
+        if(split(line + start, n - start, key, sizeof(key), value, sizeof(value), &w) <= 0 ||
+           !same_word(key, keys[k].name) || netcfg_set(&scratch, k, bare(value), why, sizeof(why)))
+            return 0;
+        kind = 2;
     }
-    return 0;
+    f->indent = a;
+    f->n = n;
+    c = start + comment_at(line + start, n - start);   /* the comment of the setting itself */
+    for(e = c; e > start && blank(line[e - 1]); e--);
+    f->tail = c < n ? e : n;
+    return kind;
 }
 
 /* out (size) gets n more bytes at *at; false when they do not fit (with the NUL) */
@@ -304,21 +356,30 @@ static bool put(char *out, u_int size, u_int *at, const char *s, u_int n) {
     return true;
 }
 
-/* "key = value", the comment that ended the old line (from its #) after it */
-static bool put_setting(char *out, u_int size, u_int *at, int k, const char *value, const char *line, u_int n) {
-    u_int c = n ? comment_at(line, n) : 0;
-    if(!put(out, size, at, keys[k].name, strlen(keys[k].name)) || !put(out, size, at, " = ", 3) ||
-       !put(out, size, at, value, strlen(value)))
-        return false;
-    if(n && c < n && sets_key(line, n, k) == 1)
-        return put(out, size, at, "   ", 3) && put(out, size, at, line + c, n - c);
-    return true;
+/* indent, "key = value", then the comment that ended the old line (line, f: none when line is NULL); when that would
+   pass LINE_MAX, the comment goes on a line of its own above (eol after it) and the setting has neither */
+static bool put_setting(char *out, u_int size, u_int *at, int k, const char *value, const char *line,
+                        const struct found *f, const char *eol, u_int eol_len) {
+    u_int ind = line ? f->indent : 0, tail = line ? f->n - f->tail : 0;
+    u_int base = (u_int)(strlen(keys[k].name) + 3 + strlen(value));
+    if(ind + base + tail > LINE_MAX) {
+        if(tail) {
+            u_int c = f->tail;
+            while(c < f->n && blank(line[c])) c++;      /* from its # */
+            if(!put(out, size, at, line + c, f->n - c) || !put(out, size, at, eol, eol_len)) return false;
+        }
+        ind = tail = 0;
+    }
+    return put(out, size, at, line, ind) && put(out, size, at, keys[k].name, (u_int)strlen(keys[k].name)) &&
+           put(out, size, at, " = ", 3) && put(out, size, at, value, (u_int)strlen(value)) &&
+           (!tail || put(out, size, at, line + f->tail, tail));
 }
 
 int netcfg_edit_settings(const char *text, u_int len, int k, const char *given, char *out, u_int size) {
     struct netcfg_settings check;
-    char why[120], value[NETCFG_HOSTNAME_MAX + 8];
-    u_int pos, end, next, at = 0, active = 0, commented = 0, found_active = (u_int)-1, found_commented = (u_int)-1;
+    struct found f;
+    char why[WHY_MAX], value[NETCFG_HOSTNAME_MAX + 8];
+    u_int pos, end, next, at = 0, active = 0, commented = 0, found_active = (u_int)-1, found_commented = (u_int)-1, first;
     int r;
     if(!size) return -1;
     out[0] = 0;
@@ -336,20 +397,20 @@ int netcfg_edit_settings(const char *text, u_int len, int k, const char *given, 
         text = template_text;
         len = sizeof(template_text) - 1;
     }
-    for(pos = 0; pos < len; pos = next) {                 /* where the setting goes */
+    first = bom_len(text, len);
+    if(!put(out, size, &at, text, first)) return -1;
+    for(pos = first; pos < len; pos = next) {           /* where the setting goes */
         next = line_at(text, len, pos, &end);
-        if(end - pos > LINE_MAX) continue;
-        r = sets_key(text + pos, end - pos, k);
+        r = sets_key(text + pos, end - pos, k, &f);
         if(r == 1 && !active++) found_active = pos;
         if(r == 2 && !commented++) found_commented = pos;
     }
-    for(pos = 0; pos < len; pos = next) {
-        u_int n;
+    for(pos = first; pos < len; pos = next) {
         next = line_at(text, len, pos, &end);
-        n = end - pos;
-        r = n > LINE_MAX ? 0 : sets_key(text + pos, n, k);
+        r = sets_key(text + pos, end - pos, k, &f);
         if(pos == found_active || (!active && pos == found_commented)) {
-            if(!put_setting(out, size, &at, k, value, text + pos, n) || !put(out, size, &at, text + end, next - end))
+            if(!put_setting(out, size, &at, k, value, text + pos, &f, next > end ? text + end : "\n",
+                            next > end ? next - end : 1) || !put(out, size, &at, text + end, next - end))
                 return -1;
             if(next == end && !put(out, size, &at, "\n", 1)) return -1;     /* the last line had no line end */
             continue;
@@ -358,8 +419,8 @@ int netcfg_edit_settings(const char *text, u_int len, int k, const char *given, 
         if(!put(out, size, &at, text + pos, next - pos)) return -1;
     }
     if(!active && !commented) {
-        if(at && out[at - 1] != '\n' && !put(out, size, &at, "\n", 1)) return -1;
-        if(!put_setting(out, size, &at, k, value, NULL, 0) || !put(out, size, &at, "\n", 1)) return -1;
+        if(at > first && out[at - 1] != '\n' && out[at - 1] != '\r' && !put(out, size, &at, "\n", 1)) return -1;
+        if(!put_setting(out, size, &at, k, value, NULL, NULL, "\n", 1) || !put(out, size, &at, "\n", 1)) return -1;
     }
     return (int)at;
 }
@@ -380,7 +441,12 @@ static const char networks_header[] =
     "#   security = wpa2\n"
     "#   password = \"its password\"\n"
     "# SurfOS makes the key from it when it reads the file, and keeps only the key the next\n"
-    "# time it writes the file. An open network is security = open, with no key.\n";
+    "# time it writes the file. An open network is security = open, with no key; one whose\n"
+    "# beacons do not carry its name has hidden = yes.\n";
+
+static const char kept_header[] =
+    "\n# SurfOS did not understand the lines below (it says why at startup): they are\n"
+    "# kept as they were. Correct them, or delete them.\n";
 
 static int hexval(char c) {
     if(c >= '0' && c <= '9') return c - '0';
@@ -419,16 +485,17 @@ int netcfg_quote(const u8 *ssid, u_int len, char *out, size_t size) {
 
 int netcfg_unquote(const char *in, u8 *out, u_int max, u_int *len) {
     const char *p;
-    u_int n = 0;
-    if(in[0] != '"') {                                  /* bare, as typed by hand */
-        n = strlen(in);
-        if(n > max) return -1;
-        memcpy(out, in, n);
-        *len = n;
+    u_int n = 0, inlen = (u_int)strlen(in);
+    bool smart = curly(in, inlen, true);            /* “...”, as TextEdit's smart quotes write "..." */
+    if(in[0] != '"' && !smart) {                    /* bare, as typed by hand */
+        if(inlen > max) return -1;
+        memcpy(out, in, inlen);
+        *len = inlen;
         return 0;
     }
-    for(p = in + 1; *p && *p != '"'; p++) {
+    for(p = in + (smart ? 3 : 1); *p; p++) {
         int b = (unsigned char)*p;
+        if(smart ? curly(p, (u_int)strlen(p), false) : b == '"') break;
         if(b == '\\') {
             p++;
             if(*p == 'x' || *p == 'X') {
@@ -445,7 +512,7 @@ int netcfg_unquote(const char *in, u8 *out, u_int max, u_int *len) {
         if(n >= max) return -1;
         out[n++] = (u8)b;
     }
-    if(*p != '"' || p[1]) return -1;                    /* no closing quote, or something after it */
+    if(!*p || p[smart ? 3 : 1]) return -1;          /* no closing quote, or something after it */
     *len = n;
     return 0;
 }
@@ -459,141 +526,219 @@ int netcfg_find_net(const struct netcfg_net *nets, int n, const u8 *ssid, u_int 
 /* the state of the network being read: its line and what it said */
 struct reading {
     struct netcfg_net net;
-    u_int line;
-    bool open, bad, said_security;
+    u_int line, start;                  /* its network = line: the number, the byte it starts at */
+    bool open, bad, said_security, unknown;
+    char name[4 * NETCFG_SSID_MAX + 4]; /* its name quoted, for the notes */
 };
 
-static void wipe_net(struct netcfg_net *net) {
-    volatile u8 *p = (volatile u8 *)net;
-    size_t i;
-    for(i = 0; i < sizeof(*net); i++) p[i] = 0;
+static void wipe(void *p, size_t n) {
+    volatile u8 *q = (volatile u8 *)p;
+    while(n--) *q++ = 0;
 }
 
-/* the network read so far, checked: into nets[*n] */
-static void finish(struct reading *rd, struct netcfg_net *nets, int max, int *n, netcfg_note_fn note, void *arg) {
+/* a note about the network being read: why, and that it is left out (and kept as it was, when kept is asked for) */
+static void net_note(const struct reading *rd, u_int line, const char *why, bool keeping, netcfg_note_fn note, void *arg) {
+    char msg[WHY_MAX + 4 * NETCFG_SSID_MAX + 40];
+    if(!note) return;
+    snprintf(msg, sizeof(msg), "%s: the network %s is left out%s", why, rd->name[0] ? rd->name : "on this line",
+             keeping ? " (and kept in the file as it is)" : "");
+    note(arg, line, msg);
+}
+
+/* bytes [start, end) of the text go into kept[] (a block, or a loose line before the first network, the reader could
+   not take), one span with the last when they follow it; false when full */
+static bool keep_span(struct netcfg_span *kept, int *nkept, u_int start, u_int end, bool loose) {
+    if(!kept || start >= end) return true;
+    if(*nkept > 0 && kept[*nkept - 1].loose == loose && kept[*nkept - 1].end == start) {
+        kept[*nkept - 1].end = end;
+        return true;
+    }
+    if(*nkept >= NETCFG_SPANS_MAX) return false;
+    kept[*nkept].start = start;
+    kept[*nkept].end = end;
+    kept[*nkept].loose = loose;
+    (*nkept)++;
+    return true;
+}
+
+/* the network read so far, which ends at byte end, checked: into nets[*n], or its bytes into kept[] */
+static void finish(struct reading *rd, u_int end, struct netcfg_net *nets, int max, int *n, struct netcfg_span *kept,
+                   int *nkept, netcfg_note_fn note, void *arg) {
     struct netcfg_net *net = &rd->net;
     const char *why = NULL;
     if(!rd->open) return;
     rd->open = false;
-    if(!rd->said_security) net->security = (net->has_psk || net->has_password) ? NETCFG_SEC_WPA2 : NETCFG_SEC_OPEN;
-    if(rd->bad) why = NULL;                             /* said already, line by line */
-    else if(!net->ssid_len) why = "a network with no name: left out";
-    else if(net->security == NETCFG_SEC_WPA2 && !net->has_psk && !net->has_password)
-        why = "a WPA2 network needs its psk (or password): left out";
-    else if(net->security == NETCFG_SEC_OPEN && (net->has_psk || net->has_password))
-        why = "an open network has no key or password: left out (security = wpa2?)";
-    else if(netcfg_find_net(nets, *n, net->ssid, net->ssid_len) >= 0) why = "that network was named before: left out";
-    else if(*n >= max) why = "too many networks: left out";
+    if(!rd->said_security) {
+        if(rd->unknown && !net->has_psk && !net->has_password)  /* a typo where the key was: never a guess of open */
+            why = "a line SurfOS does not understand and no security line (it is not taken as an open network)";
+        net->security = (net->has_psk || net->has_password) ? NETCFG_SEC_WPA2 : NETCFG_SEC_OPEN;
+    }
+    if(!rd->bad && !why) {                          /* (a bad block was told about line by line already) */
+        if(!net->ssid_len) why = "it has no name";
+        else if(net->security == NETCFG_SEC_WPA2 && !net->has_psk && !net->has_password)
+            why = "a WPA2 network needs its psk (or password)";
+        else if(net->security == NETCFG_SEC_OPEN && (net->has_psk || net->has_password))
+            why = "an open network has no key or password (security = wpa2?)";
+        else if(netcfg_find_net(nets, *n, net->ssid, net->ssid_len) >= 0) why = "that network was named before";
+        else if(*n >= max) why = "there are too many networks";
+    }
     if(!rd->bad && !why) {
         if(net->has_psk) net->has_password = false;     /* the key wins: the password would only make it again */
         nets[(*n)++] = *net;
-    } else if(why && note) {
-        note(arg, rd->line, why);
+    } else {
+        bool keeping = kept != NULL;
+        if(keeping && !keep_span(kept, nkept, rd->start, end, false)) {
+            keeping = false;
+            if(note) note(arg, rd->line, "too many networks SurfOS cannot read: this one is not kept in the file");
+        }
+        if(why) net_note(rd, rd->line, why, keeping, note, arg);
     }
-    wipe_net(net);
+    wipe(net, sizeof(*net));
 }
 
-int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, int max, netcfg_note_fn note, void *arg) {
+int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, int max, struct netcfg_span *kept,
+                          int *nkept, netcfg_note_fn note, void *arg) {
     struct reading rd;
-    char key[40], value[VALUE_MAX];
+    char key[40], value[VALUE_MAX], *v;
     const char *w;
-    u_int pos = 0, end, next, line = 0, l, i;
-    int n = 0, r;
+    u_int pos = bom_len(text, len), end, next, line = 0, l, i;
+    int n = 0, r, dummy = 0;
+    if(!nkept) nkept = &dummy;
+    *nkept = 0;
     memset(&rd, 0, sizeof(rd));
     while(text && pos < len) {
+        u_int at = pos;
         next = line_at(text, len, pos, &end);
         line++;
-        if(end - pos > LINE_MAX) {
-            if(note) note(arg, line, "the line is too long");
-            if(rd.open) rd.bad = true;
-            pos = next;
+        pos = next;
+        if(end - at > LINE_MAX) {
+            if(rd.open) {
+                rd.bad = true;
+                net_note(&rd, line, "the line is too long", kept != NULL, note, arg);
+            } else {
+                if(note) note(arg, line, "the line is too long (kept as it is)");
+                keep_span(kept, nkept, at, next, true);
+            }
             continue;
         }
-        r = split(text + pos, end - pos, key, sizeof(key), value, sizeof(value), &w);
-        pos = next;
+        r = split(text + at, end - at, key, sizeof(key), value, sizeof(value), &w);
         if(r == 0) continue;
         if(r < 0) {
-            if(note) note(arg, line, w);
-            if(rd.open) rd.bad = true;
+            if(rd.open) {
+                rd.bad = true;
+                net_note(&rd, line, w, kept != NULL, note, arg);
+            } else {
+                char msg[WHY_MAX];
+                snprintf(msg, sizeof(msg), "%s (kept as it is)", w);
+                if(note) note(arg, line, msg);
+                keep_span(kept, nkept, at, next, true);
+            }
             continue;
         }
         if(same_word(key, "network")) {
-            finish(&rd, nets, max, &n, note, arg);
+            finish(&rd, at, nets, max, &n, kept, nkept, note, arg);
             memset(&rd, 0, sizeof(rd));
             rd.open = true;
             rd.line = line;
+            rd.start = at;
             if(netcfg_unquote(value, rd.net.ssid, NETCFG_SSID_MAX, &l) || !l) {
-                if(note) note(arg, line, "the network's name is not 1 to 32 bytes in double quotes: left out");
+                strlcpy(rd.name, "", sizeof(rd.name));
+                net_note(&rd, line, "its name is not 1 to 32 bytes in double quotes", kept != NULL, note, arg);
                 rd.bad = true;
             } else {
                 rd.net.ssid_len = (u8)l;
+                netcfg_quote(rd.net.ssid, l, rd.name, sizeof(rd.name));
             }
             continue;
         }
         if(!rd.open) {
-            if(note) note(arg, line, "a setting before the first network = line");
+            if(note) note(arg, line, "a setting before the first network = line (kept as it is)");
+            keep_span(kept, nkept, at, next, true);
             continue;
         }
+        v = same_word(key, "password") ? value : (char *)bare(value);  /* a password is unquoted below, escapes and all */
         if(same_word(key, "security")) {
             rd.said_security = true;
-            if(same_word(value, "wpa2")) rd.net.security = NETCFG_SEC_WPA2;
-            else if(same_word(value, "open")) rd.net.security = NETCFG_SEC_OPEN;
+            if(same_word(v, "wpa2")) rd.net.security = NETCFG_SEC_WPA2;
+            else if(same_word(v, "open")) rd.net.security = NETCFG_SEC_OPEN;
             else {
-                if(note) note(arg, line, "security is open or wpa2: the network is left out");
+                net_note(&rd, line, "security is open or wpa2", kept != NULL, note, arg);
                 rd.bad = true;
             }
         } else if(same_word(key, "psk")) {
-            bool ok = strlen(value) == 2 * NETCFG_KEY_LEN;
+            bool ok = strlen(v) == 2 * NETCFG_KEY_LEN;
             for(i = 0; ok && i < NETCFG_KEY_LEN; i++) {
-                int h = hexval(value[2 * i]), lo = hexval(value[2 * i + 1]);
+                int h = hexval(v[2 * i]), lo = hexval(v[2 * i + 1]);
                 if(h < 0 || lo < 0) ok = false;
                 else rd.net.psk[i] = (u8)(h * 16 + lo);
             }
             if(ok) rd.net.has_psk = true;
             else {
-                if(note) note(arg, line, "psk is 64 hexadecimal digits: the network is left out");
+                net_note(&rd, line, "psk is 64 hexadecimal digits", kept != NULL, note, arg);
                 rd.bad = true;
             }
         } else if(same_word(key, "password")) {
             u8 pw[64];
-            bool ok = !netcfg_unquote(value, pw, sizeof(pw) - 1, &l) && l >= 8 && l <= 63;
+            bool ok = !netcfg_unquote(v, pw, sizeof(pw) - 1, &l) && l >= 8 && l <= 63;
             for(i = 0; ok && i < l; i++) if(pw[i] < 0x20 || pw[i] > 0x7e) ok = false;
             if(ok) {
                 memcpy(rd.net.password, pw, l);
                 rd.net.password[l] = 0;
                 rd.net.has_password = true;
             } else {
-                if(note) note(arg, line, "a WPA2 password is 8 to 63 characters (letters, digits, spaces, punctuation), "
-                                         "in double quotes: the network is left out");
+                net_note(&rd, line, "a WPA2 password is 8 to 63 characters (letters, digits, spaces, punctuation; "
+                                    "\\\" for a \" in it, \\\\ for a \\), in double quotes", kept != NULL, note, arg);
                 rd.bad = true;
             }
-            for(i = 0; i < sizeof(pw); i++) ((volatile u8 *)pw)[i] = 0;
+            wipe(pw, sizeof(pw));
         } else if(same_word(key, "hidden")) {
             bool h;
-            if(on_off(value, &h) == 0) rd.net.hidden = h;
-            else if(note) note(arg, line, "hidden is yes or no");
-        } else if(note) {
-            note(arg, line, "no such network setting (left out)");
+            if(on_off(v, &h) == 0) rd.net.hidden = h;
+            else if(note) note(arg, line, "hidden is yes or no (taken as no)");
+        } else {
+            rd.unknown = true;
+            if(note) note(arg, line, "no such network setting (the line is left out)");
         }
     }
-    finish(&rd, nets, max, &n, note, arg);
-    for(i = 0; i < sizeof(value); i++) ((volatile char *)value)[i] = 0;   /* it held a key or a password */
+    finish(&rd, len, nets, max, &n, kept, nkept, note, arg);
+    wipe(value, sizeof(value));                    /* it held a key or a password */
     return n;
 }
 
-int netcfg_write_networks(const struct netcfg_net *nets, int n, char *out, u_int size) {
+/* the kept spans of old that are loose (or blocks), as they were, under kept_header; false when they do not fit */
+static bool put_kept(char *out, u_int size, u_int *at, const char *old, const struct netcfg_span *kept, int nkept,
+                     bool loose) {
+    bool any = false;
+    int i;
+    for(i = 0; old && i < nkept; i++) {
+        u_int a = kept[i].start, b = kept[i].end;
+        if(kept[i].loose != loose || b <= a) continue;
+        if(!any && !put(out, size, at, kept_header, sizeof(kept_header) - 1)) return false;
+        any = true;
+        if(!put(out, size, at, old + a, b - a)) return false;
+        if(old[b - 1] != '\n' && old[b - 1] != '\r' && !put(out, size, at, "\n", 1)) return false;
+    }
+    return true;
+}
+
+int netcfg_write_networks(const struct netcfg_net *nets, int n, const char *old, const struct netcfg_span *kept,
+                          int nkept, char *out, u_int size) {
     static const char hex[] = "0123456789abcdef";
     char q[4 * NETCFG_SSID_MAX + 4], psk[2 * NETCFG_KEY_LEN + 1];
     u_int at = 0;
     int i, j;
     if(!size) return -1;
     out[0] = 0;
-    if(!put(out, size, &at, networks_header, sizeof(networks_header) - 1)) return -1;
+    if(!put(out, size, &at, networks_header, sizeof(networks_header) - 1) ||
+       !put_kept(out, size, &at, old, kept, nkept, true))
+        return -1;
     for(i = 0; i < n; i++) {
         const struct netcfg_net *net = &nets[i];
-        if(!net->ssid_len || (net->security == NETCFG_SEC_WPA2 && !net->has_psk)) return -1;   /* never unreadable */
+        if(!net->ssid_len || net->ssid_len > NETCFG_SSID_MAX || (net->security == NETCFG_SEC_WPA2 && !net->has_psk))
+            return -1;                              /* never one the reader would not take back */
         if(netcfg_quote(net->ssid, net->ssid_len, q, sizeof(q)) < 0) return -1;
-        if(!put(out, size, &at, "\nnetwork = ", 11) || !put(out, size, &at, q, strlen(q)) || !put(out, size, &at, "\n", 1))
+        if(!put(out, size, &at, "\nnetwork = ", 11) || !put(out, size, &at, q, (u_int)strlen(q)) ||
+           !put(out, size, &at, "\n", 1))
             return -1;
         if(net->security == NETCFG_SEC_WPA2) {
             for(j = 0; j < NETCFG_KEY_LEN; j++) {
@@ -610,6 +755,7 @@ int netcfg_write_networks(const struct netcfg_net *nets, int n, char *out, u_int
         if(net->hidden && !put(out, size, &at, "hidden = yes\n", 13)) return -1;
     }
     for(j = 0; j < (int)sizeof(psk); j++) ((volatile char *)psk)[j] = 0;
+    if(!put_kept(out, size, &at, old, kept, nkept, false)) return -1;
     return (int)at;
 }
 

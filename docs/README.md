@@ -9,7 +9,7 @@ as the restoration; new work happens here.
 | [CODE-AUDIT.md](CODE-AUDIT.md) | Every bug and risk found in the source, with file:line references, and what was verified by booting under QEMU |
 | [ROADMAP.md](ROADMAP.md) | The plan: ground rules, the Phase 0 toolchain recipe, a catalog of kernel modules with acceptance tests, and a recommended milestone order |
 | [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, reaching its shell from another computer over telnet, one stick for everything, and Wi-Fi with saved networks and the settings on the stick (section 15) |
-| [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
+| [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card: the plan it was built from (the driver works on the laptop since 10/10/26; saved networks: USB-BOOT.md section 15) |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
 | [GUI.md](GUI.md) | SurfOS desktop, Calculator, Sketch, mouse input and current touchpad limits |
 | [UNDERTOW.md](UNDERTOW.md) | The HTTP/HTTPS text browser: commands, certificate checks, limits, testing and interoperability |

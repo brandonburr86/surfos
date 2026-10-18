@@ -412,9 +412,9 @@ static int cmd_dhcp(int argc, char **argv) {
     if(!dev) { printf("    no interface\n"); return CMD_FAIL; }
     if(renew) {
         if(!dev->ip || !dev->lease_s) { printf("    dhcp: %s has no lease to renew (dhcp %s gets one)\n", dev->name, dev->name); return CMD_FAIL; }
-        r = dhcp_renew(dev, false, 5000);
-        if(r == -1) r = dhcp_renew(dev, true, 5000);
-        if(r == -2) { dhcp_drop(dev, "the DHCP server would not renew it"); return CMD_FAIL; }
+        r = dhcp_renew(dev, DHCP_RENEWING, 5000, 0);
+        if(r == -1) r = dhcp_renew(dev, DHCP_REBINDING, 5000, 0);
+        if(r == -2) return CMD_FAIL;                    /* the server said no: the address is given up */
         if(r) { printf("    dhcp: %s: no DHCP server answered; the lease holds until it runs out\n", dev->name); return CMD_FAIL; }
         return CMD_OK;
     }

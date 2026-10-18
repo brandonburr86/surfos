@@ -246,6 +246,7 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | The router's device list (the Xfinity app): is SurfOS listed as `surfos`? | |
 | On the Mac: `surfos-config/` on the stick with both files; do they open in TextEdit? | |
 | GRUB entry "SurfOS (without the settings on the stick)": no Wi-Fi joined, no telnetd | |
+| With `telnetd = on` and an open network saved (a phone's hotspot without a password): not joined by itself, the `+NET:` line says why; `wifi join` joins it | |
 
 Ways to read the laptop's details outside SurfOS, if needed: on Windows, *System
 Information* (`msinfo32`) and *Device Manager*; from a Linux live USB, `lspci -nn`,

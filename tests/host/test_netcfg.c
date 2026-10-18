@@ -1,10 +1,12 @@
 /* Host-side unit tests for net/netcfg.c, the text of the settings files on the stick
    (surfos-config/settings.conf and networks.conf): the keys and their values, reading a
-   file (comments, CR LF, quotes, bad lines told and skipped), editing one in place (the
-   owner's lines and comments kept byte for byte, the new file's commented-out defaults),
-   quoting SSIDs (every byte value there and back), the saved networks written and read
-   back, a password written by hand, every kind of bad network, and the DHCP lease timers.
-   Built like the kernel objects and run by `make unittest`. */
+   file (comments, CR LF and CR alone, a byte order mark, NUL bytes, straight and curly
+   quotes, bad lines told and skipped), editing one in place (the owner's lines, comments
+   and indentation kept byte for byte, a line never grown past what is read back, the new
+   file's commented-out defaults), quoting SSIDs (every byte value there and back), the
+   saved networks written and read back, a password written by hand and never written
+   back, every kind of bad network told, left out and kept as it was, and the DHCP lease
+   timers. Built like the kernel objects and run by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include <net/netcfg.h>
@@ -38,11 +40,15 @@ static bool has_note(const char *text) {
     return strstr(notes, text) != NULL;
 }
 
-static struct netcfg_settings parse(const char *text) {
+static struct netcfg_settings parse_len(const char *text, u_int len) {
     struct netcfg_settings s;
     clear_notes();
-    netcfg_parse_settings(text, text ? strlen(text) : 0, &s, note, NULL);
+    netcfg_parse_settings(text, len, &s, note, NULL);
     return s;
+}
+
+static struct netcfg_settings parse(const char *text) {
+    return parse_len(text, text ? strlen(text) : 0);
 }
 
 /**** keys and values ****/
@@ -135,7 +141,16 @@ static void test_parse(void) {
               "a line of 300 bytes is told and skipped, the next one read");
     }
     s = parse("hostname = \"#notacomment\"\n");
-    check(nnotes == 1 && has_note("hostname is"), "a # inside quotes is no comment (and no host name either)");
+    check(nnotes == 1 && has_note("not #notacomment"), "a # inside quotes is no comment (and no host name either)");
+    s = parse("telnetd = on\rwifi = off\rhostname = mac\r");
+    check(s.telnetd && !s.wifi && !strcmp(s.hostname, "mac") && !nnotes, "CR alone ends a line (an old Mac's files)");
+    s = parse("\xEF\xBB\xBFtelnetd = on\n");
+    check(s.telnetd && !nnotes, "a byte order mark first is skipped");
+    s = parse_len("telnetd\0xyz = on\nwifi = off\n", 28);
+    check(!s.telnetd && !s.wifi && nnotes == 1 && has_note("1: the line has a NUL byte in it"),
+          "a line with a NUL byte in it is told and skipped");
+    s = parse("hostname = \xE2\x80\x9Claptop\xE2\x80\x9D   # smart quotes\n");
+    check(!strcmp(s.hostname, "laptop") && !nnotes, "TextEdit's curly quotes are quotes");
     s = parse("telnetd = on # \"quoted\" comment\n");
     check(s.telnetd && !nnotes, "a comment may hold quotes");
 }
@@ -172,6 +187,39 @@ static void test_edit(void) {
               "only that line changed length");
     }
 
+    n = edit("  telnetd = off\t# was on before\n", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "  telnetd = on\t# was on before\n"), "its indentation and the blanks before its comment stay");
+    n = edit("#telnetd = off   # the default\n", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "telnetd = on   # the default\n"), "a commented-out setting keeps its own comment");
+    n = edit("wifi = on\rtelnetd = off\r", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "wifi = on\rtelnetd = on\r"), "CR alone stays CR alone");
+    n = edit("\xEF\xBB\xBFtelnetd = off\n", NETCFG_TELNETD, "on");
+    check(n > 0 && !strcmp(out, "\xEF\xBB\xBFtelnetd = on\n"), "a byte order mark first stays first");
+    n = netcfg_edit_settings("x\0y = 1\ntelnetd = off\n", 22, NETCFG_TELNETD, "on", out, sizeof(out));
+    check(n == 21 && !memcmp(out, "x\0y = 1\ntelnetd = on\n", 21), "a line with a NUL byte in it stays as it was");
+    {
+        char text[400], want[400];
+        memset(text, 0, sizeof(text));
+        strcpy(text, "hostname = a   #");
+        memset(text + 16, 'c', 236);                /* a line of 252 bytes: readable */
+        strcpy(text + 252, "\nwifi = on\n");
+        n = edit(text, NETCFG_HOSTNAME, "abcdefghijklmnopqrstuvwxyz012345");
+        memset(want, 0, sizeof(want));
+        want[0] = '#';
+        memset(want + 1, 'c', 236);
+        strcpy(want + 237, "\nhostname = abcdefghijklmnopqrstuvwxyz012345\nwifi = on\n");
+        s = parse(out);
+        check(n > 0 && !strcmp(out, want) && !strcmp(s.hostname, "abcdefghijklmnopqrstuvwxyz012345") && !nnotes,
+              "a line that would grow past what is read: its comment goes on a line of its own above it");
+        memset(text, 0, sizeof(text));
+        strcpy(text, "telnetd = off   #");
+        memset(text + 17, 'c', 300);                /* too long to read: it sets nothing */
+        strcpy(text + 317, "\n");
+        n = edit(text, NETCFG_TELNETD, "on");
+        s = parse(out);
+        check(n > 0 && !strncmp(out, text, 318) && !strcmp(out + 318, "telnetd = on\n") && s.telnetd,
+              "a setting on a line too long to read is kept as it was, and the setting added");
+    }
     n = edit("# mine\ntelnetd = off   # was on before\nwifi = on\n", NETCFG_TELNETD, "yes");
     check(n > 0 && !strcmp(out, "# mine\ntelnetd = on   # was on before\nwifi = on\n"),
           "an owner's file: the line changed in place, its comment kept, the value written as on");
@@ -269,9 +317,22 @@ static void set_net(struct netcfg_net *n, const char *ssid, int security, int ke
     }
 }
 
+static struct netcfg_span kept[NETCFG_SPANS_MAX];
+static int nkept;
+
 static int read_nets(const char *t) {
     clear_notes();
-    return netcfg_parse_networks(t, strlen(t), back, NETCFG_NETS_MAX, note, NULL);
+    return netcfg_parse_networks(t, strlen(t), back, NETCFG_NETS_MAX, kept, &nkept, note, NULL);
+}
+
+/* the kept span i of t, as a string */
+static const char *span_text(const char *t, int i) {
+    static char buf[1024];
+    u_int n = kept[i].end - kept[i].start;
+    if(n >= sizeof(buf)) n = sizeof(buf) - 1;
+    memcpy(buf, t + kept[i].start, n);
+    buf[n] = 0;
+    return buf;
 }
 
 static void test_networks(void) {
@@ -284,7 +345,7 @@ static void test_networks(void) {
     memcpy(nets[3].ssid, odd, 5);
     nets[3].ssid_len = 5;
     nets[3].security = NETCFG_SEC_OPEN;
-    n = netcfg_write_networks(nets, 4, text, sizeof(text));
+    n = netcfg_write_networks(nets, 4, NULL, NULL, 0, text, sizeof(text));
     check(n > 0 && n == (int)strlen(text), "four networks written");
     check(strstr(text, "# Wi-Fi networks SurfOS joins by itself") && strstr(text, "keep the stick safe"),
           "the header explains the file and its keys");
@@ -292,9 +353,8 @@ static void test_networks(void) {
                        "202122232425262728292a2b2c2d2e2f\n") != NULL, "a WPA2 network: its name, security, its key in hex");
     check(strstr(text, "\nnetwork = \"xfinitywifi\"\nsecurity = open\n") && strstr(text, "hidden = yes\n") &&
           strstr(text, "network = \"a\\\"\\x00\\xe9#\"\n"), "an open one, a hidden one, an odd name quoted");
-    check(!strstr(text, "password = \"") || strstr(text, "#   password"), "no password is ever written");
     n = read_nets(text);
-    check(n == 4 && !nnotes, "they read back, with no note");
+    check(n == 4 && !nnotes && !nkept, "they read back, with no note and nothing kept");
     for(i = 0; i < 4 && i < n; i++) {
         check(back[i].ssid_len == nets[i].ssid_len && !memcmp(back[i].ssid, nets[i].ssid, nets[i].ssid_len) &&
               back[i].security == nets[i].security && back[i].hidden == nets[i].hidden &&
@@ -303,8 +363,16 @@ static void test_networks(void) {
     }
     check(netcfg_find_net(back, n, (const u8 *)"Hidden One", 10) == 2 && netcfg_find_net(back, n, odd, 5) == 3 &&
           netcfg_find_net(back, n, (const u8 *)"hidden one", 10) < 0, "found by name, exactly");
-    check(netcfg_write_networks(nets, 0, text, sizeof(text)) > 0 && read_nets(text) == 0 && !nnotes,
+    check(netcfg_write_networks(nets, 0, NULL, NULL, 0, text, sizeof(text)) > 0 && read_nets(text) == 0 && !nnotes,
           "no networks: the header alone, read as none");
+    nets[0].has_password = true;                    /* a key, and the password it was made from */
+    strcpy(nets[0].password, "leaked-password");
+    n = netcfg_write_networks(nets, 1, NULL, NULL, 0, text, sizeof(text));
+    check(n > 0 && !strstr(text, "leaked-password") && !strstr(text, "\npassword"), "no password is ever written");
+    nets[0].has_password = false;
+    nets[0].ssid_len = 33;
+    check(netcfg_write_networks(nets, 1, NULL, NULL, 0, text, sizeof(text)) < 0, "nor a name longer than 32 bytes");
+    nets[0].ssid_len = 11;
 
     n = read_nets("network = My Home\nsecurity = wpa2\npassword = \"correct horse #1\"   # by hand\n"
                   "network = \"Cafe\"\n");
@@ -312,7 +380,8 @@ static void test_networks(void) {
           back[0].has_password && !back[0].has_psk && !strcmp(back[0].password, "correct horse #1") &&
           back[1].security == NETCFG_SEC_OPEN && !nnotes,
           "by hand: a bare name, a password with a # inside its quotes, a comment after; an open one with no security");
-    check(netcfg_write_networks(back, 1, text, sizeof(text)) < 0, "a WPA2 network with only a password is never written");
+    check(netcfg_write_networks(back, 1, NULL, NULL, 0, text, sizeof(text)) < 0,
+          "a WPA2 network with only a password is never written");
     n = read_nets("network = \"A\"\npassword = \"12345678\"\n");
     check(n == 1 && back[0].security == NETCFG_SEC_WPA2, "a password alone means WPA2");
     n = read_nets("network = \"A\"\nsecurity = wpa2\npsk = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n"
@@ -331,15 +400,61 @@ static void test_networks(void) {
                   "network = \"Unclosed\n"
                   "network = \"Fine\"\n");
     check(n == 2 && back[0].ssid_len == 4 && !memcmp(back[0].ssid, "Good", 4) && back[1].ssid_len == 4 &&
-          !memcmp(back[1].ssid, "Fine", 4), "of the bad networks none is kept; the good ones are, in order");
-    check(has_note("1: a setting before the first network = line") &&
-          has_note("2: the network's name is not 1 to 32 bytes") &&
-          has_note("3: a WPA2 network needs its psk (or password): left out") &&
-          has_note("6: psk is 64 hexadecimal digits") && has_note("7: an open network has no key or password") &&
+          !memcmp(back[1].ssid, "Fine", 4), "of the bad networks none is taken; the good ones are, in order");
+    check(has_note("1: a setting before the first network = line (kept as it is)") &&
+          has_note("2: its name is not 1 to 32 bytes in double quotes: the network on this line is left out (and kept") &&
+          has_note("3: a WPA2 network needs its psk (or password): the network \"NoKey\" is left out (and kept") &&
+          has_note("6: psk is 64 hexadecimal digits: the network \"ShortKey\" is left out") &&
+          has_note("7: an open network has no key or password (security = wpa2?): the network \"OpenWithKey\"") &&
           has_note("11: a WPA2 password is 8 to 63 characters") && has_note("13: security is open or wpa2") &&
-          has_note("16: no such network setting (left out)") && has_note("17: hidden is yes or no") &&
-          has_note("18: that network was named before: left out") && has_note("20: the network's name is not"),
-          "each problem told at its line");
+          has_note("16: no such network setting (the line is left out)") && has_note("17: hidden is yes or no") &&
+          has_note("18: that network was named before: the network \"Good\" is left out") &&
+          has_note("20: its name is not 1 to 32 bytes"), "each problem told at its line, with the network's name");
+    {
+        static char bad[1024], again[16384];
+        int i, n2, nk = nkept;
+        strcpy(bad, "security = open\n"
+                    "network = \"\"\n"
+                    "network = \"NoKey\"\nsecurity = wpa2\n"
+                    "network = \"ShortKey\"\npsk = 0011\n"
+                    "network = \"OpenWithKey\"\nsecurity = open\npsk = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n"
+                    "network = \"ShortPass\"\npassword = \"1234567\"\n"
+                    "network = \"Weird\"\nsecurity = wep\n"
+                    "network = \"Good\"\nsecurity = open\nfrequency = 5\nhidden = perhaps\n"
+                    "network = \"Good\"\nsecurity = open\n"
+                    "network = \"Unclosed\n"
+                    "network = \"Fine\"\n");
+        check(nk == 3 && !strcmp(span_text(bad, 0), "security = open\n") && kept[0].loose && !kept[1].loose &&
+              !strncmp(span_text(bad, 1), "network = \"\"\nnetwork = \"NoKey\"\nsecurity = wpa2\n", 44) &&
+              strstr(span_text(bad, 1), "network = \"Weird\"\nsecurity = wep\n") &&
+              !strcmp(span_text(bad, 2), "network = \"Good\"\nsecurity = open\nnetwork = \"Unclosed\n"),
+              "what was not taken is handed back, the blocks that follow each other as one");
+        n = read_nets(bad);
+        n2 = netcfg_write_networks(back, n, bad, kept, nkept, again, sizeof(again));
+        check(n2 > 0 && strstr(again, "kept as they were") &&
+              strstr(again, "network = \"OpenWithKey\"\nsecurity = open\npsk = 0001") &&
+              strstr(again, "network = \"ShortPass\"\npassword = \"1234567\"\n"),
+              "a write keeps them as they were, under a comment");
+        check(strstr(again, "\nsecurity = open\n") < strstr(again, "network = \"Good\"") &&
+              strstr(again, "network = \"Good\"\nsecurity = open\n") < strstr(again, "network = \"Weird\""),
+              "the loose line before the networks, the blocks after them");
+        i = read_nets(again);
+        check(i == 2 && nkept == 2 && kept[0].loose && !memcmp(back[0].ssid, "Good", 4) &&
+              !strncmp(again + kept[1].start, "network = \"\"\n", 13) && again[kept[1].end - 1] == '\n' &&
+              kept[1].end == strlen(again), "and the next read takes the same networks and keeps the same bytes");
+    }
+    n = read_nets("network = \"Home\"\npasword = \"12345678\"\n");
+    check(n == 0 && nkept == 1 && has_note("a line SurfOS does not understand and no security line (it is not taken as an "
+                                           "open network): the network \"Home\" is left out"),
+          "a typo where the password was, with no security line: left out, never taken as an open network");
+    n = read_nets("network = \"Home\"\nsecurity = \"open\"\nhidden = \"yes\"\nmood = good\n");
+    check(n == 1 && back[0].security == NETCFG_SEC_OPEN && back[0].hidden && nkept == 0,
+          "with security said, an unknown line is only told; quoted values for security and hidden");
+    n = read_nets("network = \xE2\x80\x9C" "Caf\xC3\xA9\xE2\x80\x9D\npassword = \xE2\x80\x9C" "abc#1234\xE2\x80\x9D\n");
+    check(n == 1 && back[0].ssid_len == 5 && !memcmp(back[0].ssid, "Caf\xC3\xA9", 5) &&
+          !strcmp(back[0].password, "abc#1234") && !nnotes, "TextEdit's curly quotes: a name and a password with # in it");
+    n = read_nets("network = \"A\"\rsecurity = wpa2\rpassword = \"12345678\"\r");
+    check(n == 1 && back[0].has_password, "CR alone ends a line here too");
     {
         char many[4096] = "";
         for(i = 0; i < NETCFG_NETS_MAX + 2; i++) {
@@ -347,9 +462,22 @@ static void test_networks(void) {
             snprintf(many + l, sizeof(many) - l, "network = \"net%d\"\n", i);
         }
         n = read_nets(many);
-        check(n == NETCFG_NETS_MAX && nnotes == 2 && has_note("too many networks"), "16 networks at most, the rest told");
+        check(n == NETCFG_NETS_MAX && nnotes == 2 && has_note("too many networks") && nkept == 1,
+              "16 networks at most, the rest told and kept");
     }
-    check(netcfg_write_networks(nets, 4, text, 200) < 0, "a buffer too small: -1");
+    {
+        char many[4096] = "";
+        for(i = 0; i < NETCFG_SPANS_MAX + 1; i++) {     /* 17 bad ones, a good one between each two */
+            size_t l = strlen(many);
+            snprintf(many + l, sizeof(many) - l, "network = \"bad%d\"\npsk = 12\n", i);
+            l = strlen(many);
+            if(i < NETCFG_SPANS_MAX) snprintf(many + l, sizeof(many) - l, "network = \"ok%d\"\n", i);
+        }
+        n = read_nets(many);
+        check(n == NETCFG_SPANS_MAX && nkept == NETCFG_SPANS_MAX && has_note("49: too many networks SurfOS cannot read"),
+              "more parts not understood than can be kept: the rest is told");
+    }
+    check(netcfg_write_networks(nets, 4, NULL, NULL, 0, text, 200) < 0, "a buffer too small: -1");
 }
 
 /**** leases ****/
@@ -361,7 +489,7 @@ static void test_leases(void) {
     check(netcfg_lease_step(86400, t0, 0, t0 + 43199 * hz, hz) == NETCFG_LEASE_WAIT, "before half the time: wait");
     check(netcfg_lease_step(86400, t0, 0, t0 + 43200 * hz, hz) == NETCFG_LEASE_RENEW, "at half the time: renew");
     check(netcfg_lease_step(86400, t0, t0 + 43200 * hz, t0 + 43260 * hz, hz) == NETCFG_LEASE_WAIT,
-          "a minute after a try with 10.5 hours to the next stage: wait");
+          "a minute after a try with 9 hours to the next stage: wait");
     check(netcfg_lease_step(86400, t0, t0 + 43200 * hz, t0 + (43200 + 16200) * hz, hz) == NETCFG_LEASE_RENEW,
           "half the time left to the next stage after the try: renew again");
     check(netcfg_lease_step(86400, t0, t0 + 43200 * hz, t0 + 75600 * hz, hz) == NETCFG_LEASE_REBIND,
@@ -383,8 +511,15 @@ static void test_leases(void) {
           "a 20-second lease (dhcplease=20): renew at 10 s, again 4 s later, rebind at 18 s at once, gone at 20");
     check(netcfg_lease_step(86400, t0, t0 - 5, t0 + 43200 * hz, hz) == NETCFG_LEASE_RENEW,
           "a try from before the lease was granted does not count");
-    check(netcfg_lease_step(86400, 0xFFFFFF00UL, 0, 0xFFFFFF00UL + 43200UL * hz, hz) == NETCFG_LEASE_RENEW,
-          "the tick count wrapping around");
+    if(sizeof(u_long) == 4) {                       /* the kernel's ticks: 32 bits, wrapping after 497 days */
+        check(netcfg_lease_step(86400, 0xFFFFFF00UL, 0, 0xFFFFFF00UL + 43200UL * hz, hz) == NETCFG_LEASE_RENEW,
+              "the tick count wrapping around");
+        check(netcfg_lease_step(86400, 0xFFFFFF00UL, 0xFFFFFF00UL + 43200UL * hz, 0xFFFFFF00UL + 43260UL * hz, hz) ==
+              NETCFG_LEASE_WAIT, "a try across the wrap counts");
+    } else {
+        printf("  (the tick wrap is not tried: u_long is %u bytes on this host, the kernel's is 4)\n",
+               (u_int)sizeof(u_long));
+    }
     check(netcfg_lease_step(86400, t0, 0, t0 + 50000 * hz, 0) == NETCFG_LEASE_WAIT, "no clock rate: nothing");
 }
 

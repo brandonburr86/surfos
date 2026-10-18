@@ -63,6 +63,7 @@ umount refuses a mount that is in use and can say who uses it (vfs_busy).
 #define ETIMEDOUT   110
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113
+#define ECANCELED   125         /* 10/17/26: a request called off (the network manager's, after a wifi leave) */
 #define ERANGE       34
 
 /* open flags (Linux values) */
@@ -199,6 +200,10 @@ int vfs_register(const struct fs_type *type);
 int vfs_mount(struct bdev *dev, const char *path, const char *fstype);   /* fstype NULL: probe */
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags);   /* MNT_RDONLY */
 int vfs_umount(const char *path);
+/* 10/17/26: the mount of dev held (its root vnode: umount says it is busy) until vfs_release_mount(root): 0, its path
+   and whether it is read-only; -ENOENT when dev is not mounted */
+int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly);
+void vfs_release_mount(struct vnode *root);
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */

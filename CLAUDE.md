@@ -129,13 +129,15 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   volume label SURFOSUSB, or since 10/17/26 from the serial number GRUB passes as
   `bootvol=`), never anything read-only, gone or mounted. Anything new that
   writes a partition table or a file system goes through it, shows what it will change and
-  asks for the device's name. Nothing mounts a USB drive by itself. The boot drive mounts
-  read-only, except the volume SurfOS was started from on a stick made bootable by copying
-  files onto it (`bdev_boot_volume`, `bdev_mount_readonly()`; the owner approved writing it,
-  2026-10-17, docs/USB-BOOT.md section 14): every mount decision goes through that function.
-  The one mount nobody types (2026-10-17, the network manager): kernel/netman.c mounts the
-  volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman` for the moment it reads
-  or writes `surfos-config/`, and unmounts it again; never another device.
+  asks for the device's name. Nothing mounts a USB drive by itself, with one exception
+  (below). The boot drive mounts read-only, except the volume SurfOS was started from on a
+  stick made bootable by copying files onto it (`bdev_boot_volume`, `bdev_mount_readonly()`;
+  the owner approved writing it, 2026-10-17, docs/USB-BOOT.md section 14): every mount
+  decision goes through that function. The exception (2026-10-17, the network manager):
+  kernel/netman.c mounts the volume SurfOS was started from (`bdev_boot_vol()`) on `/.netman`
+  (read-only to read) for the moment it reads or writes `surfos-config/`, holds that mount
+  or the owner's (`vfs_hold_mount()`) meanwhile, and unmounts its own again; never another
+  device.
 * Network connections and terminals (milestone M11): a TCP connection or listening socket
   is a descriptor (`include/surfos/sock.h`, `net/sock.c`); a pseudo-terminal
   (`include/surfos/pty.h`, `kernel/pty.c`) is a tty whose console is a byte stream that
@@ -150,7 +152,10 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   owner's choice: never start it by itself. The exceptions are the kernel word `autonet`
   (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13),
   and the owner's own setting `telnetd = on` in surfos-config/settings.conf on their stick
-  (kernel/netman.c, docs/USB-BOOT.md section 15), off unless they set it.
+  (kernel/netman.c, docs/USB-BOOT.md section 15), off unless they set it. Both start it only
+  for an address on Ethernet or a WPA2 Wi-Fi network (`netman_trusted()`), never for an open
+  network, and while a server runs or is to start the Wi-Fi keeper joins no open network by
+  itself (`netman_telnet_exposed()`): keep it so.
 * Wi-Fi passwords (2026-10-09, 2026-10-17): an agent never asks for, types, logs or stores
   the owner's password; tests use wlansim's test network. SurfOS keeps a saved network's key
   (the PMK) in networks.conf on the owner's stick, at the owner's request, never the password,
@@ -199,14 +204,16 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   what the firmware handed over and which console, timer and keyboard path was chosen.
   `lspci -v` gives every PCI function's ids, subsystem, power state, MSI/MSI-X and PCI
   Express link, `lspci bb:dd.f` one with its 256 bytes, and `wifiinfo` the Wi-Fi card
-  for a future driver (docs/WIFI-PLANNING.md).
+  (its driver: driver/wifi/, docs/WIFI-PLANNING.md).
   Kernel command-line words for experiments: `timer=lapic`, `kbd=poll`, `kbd=irq`,
   `clock=pmtmr`, `clock=hpet`, `usb=off`. `tools/qemu-usb.py --extra '-machine pit=off'` removes the PIT.
 * The network manager: `settings` says where the settings came from, `wifi saved` what is
   saved and in range, `ifconfig` the leases; `+NET:` lines in `dmesg` tell what it did at boot
-  and after. `settings=off` on the kernel command line reads nothing (GRUB has an entry), and
-  `dhcplease=<s>` shortens every lease (tests). In the smoke test, the boot word
-  `settingsdisk=<name>` gives a boot the owner's stick, kept from boot to boot.
+  and after (the keeper's repeated tries are written only there). `settings=off` on the kernel
+  command line reads nothing (GRUB has an entry), and `dhcplease=<s>` shortens every lease
+  (tests). In the smoke test, the boot word `settingsdisk=<name>` gives a boot the owner's
+  stick, kept from boot to boot; `wlansim off|on <ssid>` switches a simulated access point,
+  and QEMU's monitor `set_link net0 off|on` bounces eth0's link.
 * USB: `lsusb` lists the controller and every device with what drives it; `+USB:` lines in
   `dmesg` record plugging and errors. Endpoint 0 transfers are synchronous and belong to
   the usb thread (or boot); bulk/interrupt `done` callbacks run in the timer interrupt.

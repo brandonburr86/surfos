@@ -44,12 +44,19 @@ struct wlan_station_info {
     bool hidden;                    /* its beacons carry no SSID */
     u_int joins;                    /* links up so far: a new association counts one more */
     u_int join_requests;            /* wlan_join() calls so far: whose join the association is */
+    u_int stops;                    /* wifi leave and wifi down requests so far: the owner took the card over */
     bool has_key;                   /* key holds its PMK (asked for, and the station keeps one: WPA2) */
     u8 key[32];
 };
 
 /* 0, or -ENODEV; with want_key the PMK too (the caller wipes it) */
 int wlan_station(struct wlan_dev *w, struct wlan_station_info *out, bool want_key);
+
+/* wlan_up() and wlan_join() (the strongest access point with that name) for the network manager: -ECANCELED, and
+   nothing done, when a wifi leave or wifi down was asked for after the snapshot whose stops is given. *join (may be
+   NULL): the number the join request got, what join_requests says while the association it makes lasts */
+int wlan_up_unless(struct wlan_dev *w, u_int stops);
+int wlan_join_unless(struct wlan_dev *w, const u8 *ssid, u_int ssid_len, const u8 *pmk, u_int stops, u_int *join);
 
 /* 10/17/26: the simulated chip's access point named ssid off or on (driver/wifi/wlansim.c, the tests' wlansim
    command): 0, -ENOENT, -ENODEV without the kernel word wlansim */

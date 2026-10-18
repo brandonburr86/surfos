@@ -1999,8 +1999,9 @@ def scenario_settings(args, image, firmware, outdir):
     volume GRUB was started from and brings up what they ask for: eth0's lease, the saved Wi-Fi network joined (the
     simulated chip: the entry gets the word wlansim in this test) and leased, telnetd started by the setting, a
     telnet session; the stick is never left mounted; a change of a setting and a saved network go through a short
-    mount. The menu's entry without the settings then reads nothing: no Wi-Fi, no telnetd. Read here: the files as
-    SurfOS left them and fsck_msdos and fsck.fat on the stick"""
+    mount (an open one, with a word that SurfOS joins none by itself while telnetd runs). The menu's entry without the
+    settings (given wlansim too) then reads nothing: no Wi-Fi, no telnetd, nothing from the reboot on. Read here: the
+    files as SurfOS left them and fsck_msdos and fsck.fat on the stick"""
     results = []
     mk, mi, qr = load_mkusb(), load_tool('mkimage', 'mkimage.py'), load_smoke_harness()
     kit = stick_folder(image)
@@ -2010,10 +2011,12 @@ def scenario_settings(args, image, firmware, outdir):
     files = written_by_stick_tool(kit, skip=('surfos-dev/surfos.bin', 'surfos-dev/initrd.tar'))   # no autonet
     cfg = files.get('boot/grub/grub.cfg', b'')
     plain = b'multiboot2 /boot/surfos.bin profile=laptop bootvol=$surfos_bootvol\n'
-    results.append(('the menu\'s SurfOS entry is there to be given the simulated Wi-Fi', cfg.count(plain) == 1 and
-                    SET_TITLE.encode() in cfg))
+    without = b'multiboot2 /boot/surfos.bin profile=laptop settings=off bootvol=$surfos_bootvol\n'
+    results.append(('the menu\'s SurfOS entry, and the one without the settings, are there to be given the simulated '
+                    'Wi-Fi', cfg.count(plain) == 1 and cfg.count(without) == 1 and SET_TITLE.encode() in cfg))
     files['boot/grub/grub.cfg'] = cfg.replace(plain, b'multiboot2 /boot/surfos.bin profile=laptop wlansim '
-                                                     b'bootvol=$surfos_bootvol\n')
+                                                     b'bootvol=$surfos_bootvol\n').replace(
+        without, b'multiboot2 /boot/surfos.bin profile=laptop settings=off wlansim bootvol=$surfos_bootvol\n')
     mine = {'notes.txt': ONE_NOTES,
             'surfos-config/settings.conf': SET_SETTINGS,
             'surfos-config/networks.conf': b'network = "SurfSimWPA"\npassword = "' + qr.WLANSIM_PASSPHRASE.encode() +
@@ -2043,8 +2046,8 @@ def scenario_settings(args, image, firmware, outdir):
                                                        '+NET: wlan0: SurfSimWPA is in range', 'wlan0: link up: "SurfSimWPA"',
                                                        '+NET: wlan0: joined SurfSimWPA; asking for an address (DHCP)',
                                                        'dhcp: wlan0: lease 10.0.2.'], 90)))
-            results.append(('telnetd started by the setting, on the address it says',
-                            in_order(vm, ['+NET: starting telnetd on F1 (the settings: telnetd = on)',
+            results.append(('telnetd started by the setting once an interface it may start for has an address',
+                            in_order(vm, ['; starting telnetd on F1 (the settings: telnetd = on)',
                                           'telnetd: listening on 10.0.2.1'], 60)))
             t = None
             try:
@@ -2067,7 +2070,8 @@ def scenario_settings(args, image, firmware, outdir):
                      ('settings hostname laptop2', ['hostname = laptop2, saved on usb0p1 (surfos-config/settings.conf)'],
                       'a setting changed and saved on the stick'),
                      ('wifi scan', ['SurfSim ', 'open'], 'a scan hears the open network'),
-                     ('wifi save SurfSim', ['saved SurfSim (open) on usb0p1'], 'a network saved on the stick'),
+                     ('wifi save SurfSim', ['saved SurfSim (open) on usb0p1', 'a telnet server runs or is to start by '
+                                            'itself'], 'an open network saved on the stick, with telnetd\'s warning'),
                      ('wifi saved', [' 1  SurfSim', ' 2  SurfSimWPA', 'joined now'], 'wifi saved: the two, in order'),
                      ('mount', [], 'and the stick is not left mounted after either')]
             for cmd, expects, what in steps:
@@ -2080,6 +2084,7 @@ def scenario_settings(args, image, firmware, outdir):
             # the menu's entry without the settings
             vm.pump(0.5)
             vm.cursor = len(vm.transcript)
+            mark = len(vm.text())
             vm.send('reboot\n')
             ok = vm.expect('Use the', args.boot_timeout)
             if ok:
@@ -2090,16 +2095,19 @@ def scenario_settings(args, image, firmware, outdir):
                 ok = vm.expect('Loading SurfOS with settings=off ...', 30) and vm.expect(PROMPT, args.boot_timeout)
             results.append(('the menu\'s entry without the settings, chosen with the arrow keys, boots', ok))
             if ok:
-                ok2, out = run_cmd(vm, 'bootinfo', ['cmdline "profile=laptop settings=off bootvol='])
+                ok2, out = run_cmd(vm, 'bootinfo', ['cmdline "profile=laptop settings=off wlansim bootvol='])
                 results.append(('its command line has settings=off', ok2 and has_cmdline(
-                    out, f'profile=laptop settings=off bootvol={vol}')))
+                    out, f'profile=laptop settings=off wlansim bootvol={vol}')))
                 results.append(('nothing read: the defaults', run_cmd(vm, 'settings', [
                     'settings: not read at this start (settings=off)', 'telnetd      = off       (the default)'])[0]))
                 results.append(('no telnetd', run_cmd(vm, 'telnetd', ['telnetd: not running'])[0]))
-                mark = len(vm.text())
                 vm.pump(3)
-                results.append(('no settings line, no Wi-Fi, no DHCP by itself', '+NET: settings from' not in
-                                vm.text()[mark:] and 'dhcp: eth0: lease' not in vm.text()[mark:]))
+                results.append(('no Wi-Fi joined: the card was not even started',
+                                run_cmd(vm, 'wifi status', ['wlan0: down (wifi up starts it)'])[0]))
+                since = vm.text()[mark:]
+                results.append(('from the reboot on: no settings line, no Wi-Fi, no DHCP by itself',
+                                '+NET: settings from' not in since and '+NET: wlan0' not in since and
+                                'dhcp: eth0: lease' not in since and 'dhcp: wlan0' not in since))
         check_bad(vm, results, vm.text())
         results.append(('the passphrase never shows on the console', qr.WLANSIM_PASSPHRASE not in vm.text()))
     finally:

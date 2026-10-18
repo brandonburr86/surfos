@@ -14,7 +14,10 @@ ends the wait; before, it failed at once ("port 68 is busy").
 the server, the length, when it was granted), and dhcp_renew() keeps the lease going: a
 DHCPREQUEST with the address in ciaddr, to the server that granted it (RENEWING) or to anyone
 (REBINDING), as RFC 2131 section 4.4.5 has it; a NAK gives the address up (dhcp_drop()). When to
-renew is the manager's business (netcfg_lease_step(), net/netcfg.c). Requests carry the host
+renew is the manager's business (netcfg_lease_step(), net/netcfg.c); a renewal and a drop touch only
+the lease they were asked about, never an address set by hand or a lease got meanwhile. When an
+Ethernet link comes back, the manager has the address confirmed (DHCP_REBOOTING: the address
+asked for, RFC 2131 4.3.2), and a NAK drops it. Requests carry the host
 name of the settings (option 12), so a router can list SurfOS by name. The kernel word
 dhcplease=<seconds> shortens every lease to that, for the tests: a real lease is a day or more.
 An address set by hand (ifconfig) has no lease, and nothing renews it.
@@ -27,6 +30,7 @@ An address set by hand (ifconfig) has no lease, and nothing renews it.
 #include <surfos/task.h>
 #include <surfos/irq.h>
 #include <surfos/multiboot.h>
+#include <surfos/klog.h>
 #include <mm/kalloc.h>
 #include <net/net.h>
 #include <net/eth.h>
@@ -184,8 +188,10 @@ static u32 lease_cap(void) {
 
 /* the ACK (n bytes) in m: its address, netmask, gateway, DNS server and lease onto dev; the lease's length is said
    in *secs. server: who granted it, when the ACK does not say; announce: a gratuitous ARP for the address (a new
-   lease; a renewal keeps the address it had) */
-static void take_lease(struct netdev *dev, const struct dhcp_msg *m, u_int n, ipaddr_t server, u32 *secs, bool announce) {
+   lease; a renewal keeps the address it had). 10/17/26: for a renewal (keep), only while dev still has the lease
+   at0 of address ip0 (an ifconfig, a forgotten address or a new lease meanwhile wins): false when it did not */
+static bool take_lease(struct netdev *dev, const struct dhcp_msg *m, u_int n, ipaddr_t server, u32 *secs, bool announce,
+                       bool keep, ipaddr_t ip0, u_long at0) {
     ipaddr_t mask = 0, gw = 0, dns = 0, id = 0;
     u32 lease = 0, cap = lease_cap();
     const u8 *o;
@@ -200,6 +206,10 @@ static void take_lease(struct netdev *dev, const struct dhcp_msg *m, u_int n, ip
     if(lease == 0xFFFFFFFF) lease = 0;              /* for ever: nothing to renew */
     if(cap && (!lease || lease > cap)) lease = cap;
     mutex_lock(&net_lock);
+    if(keep && (dev->ip != ip0 || dev->lease_at != at0 || !dev->lease_s)) {
+        mutex_unlock(&net_lock);
+        return false;
+    }
     dev->ip = m->yiaddr;
     dev->netmask = mask ? mask : IP4(255, 255, 255, 0);
     dev->gateway = gw;
@@ -209,9 +219,14 @@ static void take_lease(struct netdev *dev, const struct dhcp_msg *m, u_int n, ip
     dev->lease_at = getticks();
     if(announce) arp_announce(dev);
     mutex_unlock(&net_lock);
+    return true;
 }
 
 int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
+    return dhcp_configure_quiet(dev, timeout_ms, false);
+}
+
+int dhcp_configure_quiet(struct netdev *dev, u_long timeout_ms, bool quiet) {
     struct udp_socket *s;
     struct dhcp_msg *m;
     u32 xid = (u32)getticks() * 2654435761UL ^ 0x5f0f1e2d, secs;
@@ -248,11 +263,17 @@ int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
         if(r > 0) break;
     }
     if(r > 0) {
-        take_lease(dev, m, (u_int)r, server, &secs, true);
+        take_lease(dev, m, (u_int)r, server, &secs, true, false, 0, 0);
         kprintf("dhcp: %s: lease %s for %lu s from %s\n", dev->name, ipfmt(dev->ip, a), (u_long)secs, ipfmt(server, b));
         r = 0;
     } else {
-        kprintf("dhcp: %s: no %s\n", dev->name, offered ? "acknowledgement" : "offer");
+        if(quiet) {                                 /* 10/17/26 */
+            char line[64];
+            snprintf(line, sizeof(line), "dhcp: %s: no %s\n", dev->name, offered ? "acknowledgement" : "offer");
+            klog_write(line);
+        } else {
+            kprintf("dhcp: %s: no %s\n", dev->name, offered ? "acknowledgement" : "offer");
+        }
         r = -1;
     }
     kfree(m);
@@ -261,31 +282,51 @@ int dhcp_configure(struct netdev *dev, u_long timeout_ms) {
     return r;
 }
 
+/* 10/17/26: the address of the lease at0 goes, unless dev has another by now (0: whatever it has) */
+static void drop_if(struct netdev *dev, const char *why, ipaddr_t ip0, u_long at0, bool check) {
+    char a[16];
+    mutex_lock(&net_lock);
+    if(check && (dev->ip != ip0 || dev->lease_at != at0 || !dev->lease_s)) {
+        mutex_unlock(&net_lock);
+        return;
+    }
+    if(dev->ip) kprintf("dhcp: %s: address %s given up (%s)\n", dev->name, ipfmt(dev->ip, a), why);
+    dev->ip = dev->netmask = dev->gateway = dev->dns = 0;
+    dev->dhcp_server = 0;
+    dev->lease_s = 0;
+    arp_flush(dev);
+    mutex_unlock(&net_lock);
+}
+
 /* 10/17/26 (dhcp.h): two tries, each waiting 2 s at most for the answer */
-int dhcp_renew(struct netdev *dev, bool broadcast, u_long timeout_ms) {
+int dhcp_renew(struct netdev *dev, int how, u_long timeout_ms, u_long lease_at) {
     struct udp_socket *s;
     struct dhcp_msg *m;
     u32 xid = (u32)getticks() * 2654435761UL ^ 0x7e1ea5ed, secs;
-    u_long deadline = getticks() + timeout_ms / (1000 / HZ);
+    u_long deadline = getticks() + timeout_ms / (1000 / HZ), at;
     ipaddr_t ip, server;
     u_int n;
     int attempt, r = -1;
     char a[16];
 
     if(one_at_a_time(dev, deadline)) return -1;
-    mutex_lock(&net_lock);
+    mutex_lock(&net_lock);                         /* the lease as it is once the lock is had: the one meant? */
     ip = dev->ip;
     server = dev->dhcp_server;
+    at = dev->lease_at;
+    if(!dev->lease_s || (lease_at && at != lease_at)) ip = 0;
     mutex_unlock(&net_lock);
-    if(!ip || (!broadcast && !server)) { done(); return -1; }
+    if(!ip || (how == DHCP_RENEWING && !server)) { done(); return -1; }
     s = udp_open(DHCP_CLIENT_PORT);
     if(!s) { done(); kprintf("dhcp: port 68 is busy\n"); return -1; }
     udp_bind_dev(s, dev);
     m = (struct dhcp_msg *)kalloc(sizeof(*m));
     if(!m) { udp_close(s); done(); return -1; }
     for(attempt = 0; attempt < 2 && getticks() < deadline && r != -2; attempt++) {
-        n = build(m, dev, xid, DHCP_REQUEST, 0, 0, ip);  /* no requested address, no server: ciaddr says it */
-        if(udp_sendto(s, broadcast ? IP_BROADCAST : server, DHCP_SERVER_PORT, m, n) != 0) break;
+        /* renewing and rebinding: no requested address, no server, ciaddr says it; rebooting (a link back): the
+           address asked for in option 50, ciaddr 0 (RFC 2131 4.3.2) */
+        n = how == DHCP_REBOOTING ? build(m, dev, xid, DHCP_REQUEST, ip, 0, 0) : build(m, dev, xid, DHCP_REQUEST, 0, 0, ip);
+        if(udp_sendto(s, how == DHCP_RENEWING ? server : IP_BROADCAST, DHCP_SERVER_PORT, m, n) != 0) break;
         {
             u_long step = getticks() + 2 * HZ;
             r = expect(s, xid, DHCP_ACK, m, step < deadline ? step : deadline);
@@ -293,11 +334,14 @@ int dhcp_renew(struct netdev *dev, bool broadcast, u_long timeout_ms) {
         if(r > 0) break;
     }
     if(r > 0 && m->yiaddr == ip) {
-        take_lease(dev, m, (u_int)r, server, &secs, false);
-        kprintf("dhcp: %s: lease %s renewed for %lu s\n", dev->name, ipfmt(ip, a), (u_long)secs);
+        if(take_lease(dev, m, (u_int)r, server, &secs, false, true, ip, at))
+            kprintf("dhcp: %s: lease %s %s for %lu s\n", dev->name, ipfmt(ip, a),
+                    how == DHCP_REBOOTING ? "still good" : "renewed", (u_long)secs);
         r = 0;
     } else if(r > 0 || r == -2) {
-        kprintf("dhcp: %s: the server would not renew %s\n", dev->name, ipfmt(ip, a));
+        kprintf("dhcp: %s: the server would not %s %s\n", dev->name, how == DHCP_REBOOTING ? "confirm" : "renew",
+                ipfmt(ip, a));
+        drop_if(dev, how == DHCP_REBOOTING ? "not this network's" : "the DHCP server would not renew it", ip, at, true);
         r = -2;
     } else {
         r = -1;
@@ -308,13 +352,10 @@ int dhcp_renew(struct netdev *dev, bool broadcast, u_long timeout_ms) {
     return r;
 }
 
-void dhcp_drop(struct netdev *dev, const char *why) {
-    char a[16];
+void dhcp_drop(struct netdev *dev, const char *why, u_long lease_at) {
+    ipaddr_t ip;
     mutex_lock(&net_lock);
-    if(dev->ip) kprintf("dhcp: %s: address %s given up (%s)\n", dev->name, ipfmt(dev->ip, a), why);
-    dev->ip = dev->netmask = dev->gateway = dev->dns = 0;
-    dev->dhcp_server = 0;
-    dev->lease_s = 0;
-    arp_flush(dev);
+    ip = dev->ip;
     mutex_unlock(&net_lock);
+    drop_if(dev, why, ip, lease_at, lease_at != 0);
 }

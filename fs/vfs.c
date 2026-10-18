@@ -15,6 +15,13 @@ instead of freeing it under them; vfs_busy() says who.
 lookup, statfs, sync) holds its root vnode first, under the lock: umount then
 says the mount is busy instead of freeing it under them. vfs_open_vnode() makes
 a file of a vnode that has no path (a network connection, net/sock.c).
+
+10/17/26 (the network manager, which mounts the stick it reads its settings from
+while a command may mount it too): a mount being made is noted, path and device,
+under mount_lock before the file system reads the volume (FAT may count its free
+clusters for seconds), so a second mount of the same device or path is refused
+then too, not only once the first is on the list. vfs_hold_mount() holds the
+mount of a device for a while, so it can neither go nor be swapped meanwhile.
 */
 
 #include <surfos/types.h>
@@ -32,6 +39,9 @@ a file of a vnode that has no path (a network connection, net/sock.c).
 static const struct fs_type *fs_types;
 static struct mount *mounts;
 static mutex_t mount_lock = MUTEX_INIT("mounts");
+/* 10/17/26: mounts under way (their file system still reading the volume), under mount_lock */
+#define PENDING_MAX 4
+static struct { bool used; struct bdev *dev; char path[VFS_PATH_MAX]; } pending[PENDING_MAX];
 static struct file *open_files;             /* 10/5/26: every open file, for vfs_busy() */
 
 /**** vnodes ****/
@@ -173,31 +183,61 @@ int vfs_mount(struct bdev *dev, const char *path, const char *fstype) {
     return vfs_mount_flags(dev, path, fstype, 0);
 }
 
+static bool bdev_busy_locked(struct bdev *d);
+
+/* 10/17/26: the pending slot of a mount under way goes (under mount_lock) */
+static void unpend(int slot) {
+    pending[slot].used = false;
+    pending[slot].dev = NULL;
+}
+
 int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int flags) {
     const struct fs_type *type = fstype ? find_type(fstype) : (dev ? probe_type(dev) : NULL);
     struct superblock *sb;
     struct mount *m, **pp;
     char abs[VFS_PATH_MAX];
-    int r;
+    int r, i, slot = -1;
 
     if(!type) return fstype ? -ENODEV : -EINVAL;
     r = vfs_normalize("/", path, abs, sizeof(abs));
     if(r) return r;
-    for(m = mounts; m; m = m->next) if(!strcmp(m->path, abs)) return -EBUSY;
-    if(dev && vfs_bdev_busy(dev)) return -EBUSY;    /* 10/5/26: two mounts of one device would each think they own it */
+    mutex_lock(&mount_lock);                        /* 10/17/26: the checks and the note of this mount, at once */
+    for(m = mounts; m && strcmp(m->path, abs); m = m->next);
+    for(i = 0; i < PENDING_MAX && !m; i++) if(pending[i].used && !strcmp(pending[i].path, abs)) r = -EBUSY;
+    if(m || r || (dev && bdev_busy_locked(dev))) {  /* 10/5/26: two mounts of one device would each think they own it */
+        mutex_unlock(&mount_lock);
+        return -EBUSY;
+    }
+    for(i = 0; i < PENDING_MAX && slot < 0; i++) if(!pending[i].used) slot = i;
+    if(slot < 0) {
+        mutex_unlock(&mount_lock);
+        return -EBUSY;                              /* four mounts under way at once */
+    }
+    pending[slot].used = true;
+    pending[slot].dev = dev;
+    strlcpy(pending[slot].path, abs, sizeof(pending[slot].path));
+    mutex_unlock(&mount_lock);
 
     sb = (struct superblock *)kcalloc(1, sizeof(struct superblock));
     m = (struct mount *)kcalloc(1, sizeof(struct mount));
-    if(!sb || !m) { kfree(sb); kfree(m); return -ENOMEM; }
-    if(dev && dev->gone) { kfree(sb); kfree(m); return -ENODEV; }
-    sb->type = type;
-    sb->dev = dev;
-    sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
-    sb->quiet = (flags & MNT_QUIET) != 0;           /* 10/17/26 */
-    mutex_init(&sb->lock, type->name);
-    r = type->mount(sb);
-    if(r) { kfree(sb); kfree(m); return r; }
-    if(!sb->root) { kfree(sb); kfree(m); return -EIO; }
+    r = !sb || !m ? -ENOMEM : dev && dev->gone ? -ENODEV : 0;
+    if(!r) {
+        sb->type = type;
+        sb->dev = dev;
+        sb->readonly = (dev ? dev->readonly : false) || (flags & MNT_RDONLY);
+        sb->quiet = (flags & MNT_QUIET) != 0;       /* 10/17/26 */
+        mutex_init(&sb->lock, type->name);
+        r = type->mount(sb);
+        if(!r && !sb->root) r = -EIO;
+    }
+    if(r) {
+        kfree(sb);
+        kfree(m);
+        mutex_lock(&mount_lock);
+        unpend(slot);
+        mutex_unlock(&mount_lock);
+        return r;
+    }
     if(dev) bdev_get(dev);                          /* held until umount, even if unplugged meanwhile */
 
     strlcpy(m->path, abs, sizeof(m->path));
@@ -205,8 +245,30 @@ int vfs_mount_flags(struct bdev *dev, const char *path, const char *fstype, int 
     mutex_lock(&mount_lock);
     for(pp = &mounts; *pp; pp = &(*pp)->next);   /* append: the listing keeps mount order */
     *pp = m;
+    unpend(slot);
     mutex_unlock(&mount_lock);
     return 0;
+}
+
+/* 10/17/26 (vfs.h) */
+int vfs_hold_mount(const struct bdev *dev, char *path, size_t size, struct vnode **root, bool *readonly) {
+    struct mount *m;
+    int r = -ENOENT;
+    mutex_lock(&mount_lock);
+    for(m = mounts; m; m = m->next) {
+        if(m->sb->dev != dev) continue;
+        *root = vget(m->sb->root);
+        if(readonly) *readonly = m->sb->readonly;
+        strlcpy(path, m->path, size);
+        r = 0;
+        break;
+    }
+    mutex_unlock(&mount_lock);
+    return r;
+}
+
+void vfs_release_mount(struct vnode *root) {
+    vput(root);                                     /* never the last reference: the mount keeps one */
 }
 
 /* what keeps the mount m from going away (holds mount_lock): an open file (who opened it),
@@ -294,16 +356,25 @@ bool vfs_disk_name_mounted(const char *name) {
     return used;
 }
 
-/* is d, the disk it is on, or a partition of d mounted? */
-bool vfs_bdev_busy(struct bdev *d) {
+/* is d, the disk it is on, or a partition of d mounted? 10/17/26: or being mounted. Holds mount_lock */
+static bool bdev_busy_locked(struct bdev *d) {
     struct mount *m;
-    bool busy = false;
-    mutex_lock(&mount_lock);
-    for(m = mounts; m && !busy; m = m->next) {
+    int i;
+    for(m = mounts; m; m = m->next) {
         struct bdev *x = m->sb->dev;
-        if(!x) continue;
-        if(x == d || x->parent == d || d->parent == x) busy = true;     /* itself, a partition of it, its disk */
+        if(x && (x == d || x->parent == d || d->parent == x)) return true;  /* itself, a partition of it, its disk */
     }
+    for(i = 0; i < PENDING_MAX; i++) {
+        struct bdev *x = pending[i].used ? pending[i].dev : NULL;
+        if(x && (x == d || x->parent == d || d->parent == x)) return true;
+    }
+    return false;
+}
+
+bool vfs_bdev_busy(struct bdev *d) {
+    bool busy;
+    mutex_lock(&mount_lock);
+    busy = bdev_busy_locked(d);
     mutex_unlock(&mount_lock);
     return busy;
 }
@@ -794,6 +865,7 @@ const char *strerror(int err) {
     case ETIMEDOUT: return "Connection timed out";
     case ECONNREFUSED: return "Connection refused";
     case EHOSTUNREACH: return "No route to host";
+    case ECANCELED: return "Operation canceled";
     }
     return "Unknown error";
 }

@@ -15,7 +15,7 @@ The file is changed one line at a time, so what the owner wrote there on another
 
 A kernel command (CLAUDE.md): it prints on its own console, keeps nothing in statics, asks nothing.
 0, 1 or 2 as the other commands: a key or a value it does not know is a usage error (2); a change
-in force but not saved on the stick is a failure (1), and says why.
+not saved on the stick is a failure (1), and says why.
 */
 
 #include <surfos/types.h>
@@ -25,6 +25,8 @@ in force but not saved on the stick is a failure (1), and says why.
 #include <net/netman.h>
 #include <blibc_common.h>
 #include "shell.h"
+
+#define VALUE_MAX (NETCFG_HOSTNAME_MAX + 8)     /* a value as the file writes it, the longest a host name */
 
 /* when a change takes effect, after "saved" */
 static const char *when(int k, const struct netcfg_settings *s) {
@@ -43,7 +45,7 @@ static const char *when(int k, const struct netcfg_settings *s) {
 
 /* a key and its value; full: what it takes and does as well */
 static void show(const struct netcfg_settings *s, int k, bool full) {
-    char v[40], d[40];
+    char v[VALUE_MAX], d[VALUE_MAX];
     bool set = (s->set >> k) & 1;
     netcfg_value(s, k, v, sizeof(v));
     netcfg_default_value(k, d, sizeof(d));
@@ -60,7 +62,7 @@ static void show(const struct netcfg_settings *s, int k, bool full) {
 int cmd_settings(int argc, char **argv) {
     struct netcfg_settings s;
     struct netman_net nets[NETCFG_NETS_MAX];
-    char where[200], why[200], key[24];
+    char where[200], why[200], key[24], v[VALUE_MAX];
     const char *value = NULL, *eq;
     int k, r, n;
 
@@ -69,7 +71,7 @@ int cmd_settings(int argc, char **argv) {
         netman_where(where, sizeof(where));
         printf("    settings: %s\n", where);
         for(k = 0; k < NETCFG_NKEYS; k++) show(&s, k, false);
-        n = netman_networks(nets, NETCFG_NETS_MAX);
+        n = netman_networks(nets, NETCFG_NETS_MAX, NULL);
         printf("    settings <key> says what one does, settings <key> <value> changes it; %i saved Wi-Fi network%s "
                "(wifi saved)\n", n, n == 1 ? "" : "s");
         return CMD_OK;
@@ -77,8 +79,8 @@ int cmd_settings(int argc, char **argv) {
     /* settings key, settings key value, settings key = value, settings key=value */
     eq = strchr(argv[1], '=');
     if(eq && argc == 2) {
-        if((size_t)(eq - argv[1]) >= sizeof(key)) k = -1;
-        else {
+        k = -1;
+        if((size_t)(eq - argv[1]) < sizeof(key)) {
             memcpy(key, argv[1], (size_t)(eq - argv[1]));
             key[eq - argv[1]] = 0;
             k = netcfg_key_find(key);
@@ -94,7 +96,9 @@ int cmd_settings(int argc, char **argv) {
         }
     }
     if(k < 0) {
-        printf("    settings: no setting called %s (settings lists them)\n", eq && argc == 2 ? key : argv[1]);
+        if(eq && argc == 2) printf("    settings: no setting called %.*s (settings lists them)\n", (int)(eq - argv[1]),
+                                   argv[1]);
+        else printf("    settings: no setting called %s (settings lists them)\n", argv[1]);
         return CMD_USAGE;
     }
     if(!value) {
@@ -107,12 +111,22 @@ int cmd_settings(int argc, char **argv) {
         return CMD_USAGE;
     }
     netman_settings(&s);
-    netcfg_value(&s, k, key, sizeof(key));
-    if(r > 0) {
-        printf("    %s = %s in force until SurfOS restarts, but not saved: %s\n", netcfg_key_name(k), key, why);
+    netcfg_value(&s, k, v, sizeof(v));
+    if(r > 0 && (k == NETCFG_TELNETD || k == NETCFG_TELNETD_PORT)) {    /* read only at a start: nothing to do now */
+        printf("    settings: %s = %s not saved: %s; it would act at the next start only, so nothing changes%s\n",
+               netcfg_key_name(k), v, why, k == NETCFG_TELNETD ? (s.telnetd ? " (telnetd on starts the server now)" :
+                                                                  " (telnetd off stops the server now)") : "");
         return CMD_FAIL;
     }
-    printf("    %s = %s, saved on %s (%s/%s): %s\n", netcfg_key_name(k), key,
+    if(r > 0) {
+        printf("    settings: %s = %s in force until SurfOS restarts, but not saved: %s\n", netcfg_key_name(k), v, why);
+        return CMD_FAIL;
+    }
+    printf("    %s = %s, saved on %s (%s/%s): %s\n", netcfg_key_name(k), v,
            bdev_boot_vol() ? bdev_boot_vol()->name : "the stick", NETCFG_DIR, NETCFG_SETTINGS, when(k, &s));
+    if(k == NETCFG_TELNETD && s.telnetd)
+        printf("    telnetd has no password and no encryption: whoever reaches the laptop over a network SurfOS is on\n"
+               "    gets a shell. It starts only once there is an address on Ethernet or a WPA2 network, and while it\n"
+               "    runs SurfOS joins no open Wi-Fi network by itself. Use it on your own networks only.\n");
     return CMD_OK;
 }

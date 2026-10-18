@@ -67,9 +67,10 @@ void netcfg_parse_settings(const char *text, u_int len, struct netcfg_settings *
 
 /* the file with key k set to value (checked first: -2 and why in out when it is no value of k), into out (size
    bytes, NUL-terminated); its length, or -1 when it does not fit. The first line setting k gets the new value, its
-   comment kept; other lines setting k go; with none, a commented-out "#key = ..." line (as the new file has them)
-   becomes the setting, or it is added at the end. Everything else stays as it was, byte for byte. text NULL: no file
-   yet: a new one, every key explained and commented out with its default, k set */
+   indentation and comment kept (the comment on a line of its own above it when the line would be too long to
+   read); other lines setting k go; with none, a commented-out "#key = ..." line (as the new file has them) becomes
+   the setting, or it is added at the end. Everything else stays as it was, byte for byte. text NULL: no file yet: a
+   new one, every key explained and commented out with its default, k set */
 int netcfg_edit_settings(const char *text, u_int len, int k, const char *value, char *out, u_int size);
 
 /**** networks.conf ****/
@@ -89,21 +90,37 @@ struct netcfg_net {
     char password[64];
 };
 
-/* the networks of a file of len bytes, in order, into nets (max); how many. A network with a problem (no name, a
-   bad key, WPA2 without a key, a name seen before) is told to note and left out */
-int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, int max, netcfg_note_fn note, void *arg);
+/* what the reader could not take, kept as it was: bytes [start, end) of the text it read (parts that follow each other
+   are one). loose: lines before the first network, which the writer puts before the networks (so they stay before
+   them); else networks' blocks, which it puts after them (so a name seen before stays the second one). A text with
+   more parts than NETCFG_SPANS_MAX loses the rest, said by a note: a writer should not write it then */
+#define NETCFG_SPANS_MAX     16
+struct netcfg_span {
+    u_int start, end;
+    bool loose;
+};
 
-/* the file for nets[0..n): the header that explains it, then a block per network (psk, never a password); its
-   length, or -1 when it does not fit in size */
-int netcfg_write_networks(const struct netcfg_net *nets, int n, char *out, u_int size);
+/* the networks of a file of len bytes, in order, into nets (max); how many. A network with a problem (no name, a
+   bad key, WPA2 without a key, a line not understood with no security line, a name seen before) is told to note
+   and left out; with kept (NETCFG_SPANS_MAX), its bytes go there (*nkept of them), and those of a line before the
+   first network, for netcfg_write_networks() to keep */
+int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, int max, struct netcfg_span *kept,
+                          int *nkept, netcfg_note_fn note, void *arg);
+
+/* the file for nets[0..n): the header that explains it, then a block per network (psk, never a password), with the
+   kept bytes of old (the text the spans are of) as they were, under a comment: the loose lines before the networks,
+   the blocks after them; its length, or -1 when it does not fit in size (or a network could not be read back: no
+   name, more than 32 bytes, WPA2 without psk) */
+int netcfg_write_networks(const struct netcfg_net *nets, int n, const char *old, const struct netcfg_span *kept,
+                          int nkept, char *out, u_int size);
 
 int netcfg_find_net(const struct netcfg_net *nets, int n, const u8 *ssid, u_int len);   /* its index, or -1 */
 
 /* an SSID (len bytes) as the file writes it: in double quotes, printable ASCII as it is but \ and ", which get a
    backslash, every other byte \xHH. The length, or -1 when it does not fit */
 int netcfg_quote(const u8 *ssid, u_int len, char *out, size_t size);
-/* the other way: a quoted value, or a bare one (as typed by hand: its spaces inside kept), into out (max bytes);
-   0 and *len, or -1 */
+/* the other way: a quoted value ("..." or TextEdit's “...”), or a bare one (as typed by hand: its spaces inside
+   kept), into out (max bytes); 0 and *len, or -1 */
 int netcfg_unquote(const char *in, u8 *out, u_int max, u_int *len);
 
 /**** DHCP leases (net/dhcp.c keeps them; kernel/netman.c asks this when to act) ****/

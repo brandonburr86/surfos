@@ -27,6 +27,8 @@ void init_netman(void);                     /* the boot (kernel/main.c): the net
 void netman_settings(struct netcfg_settings *out);     /* a copy of those in force */
 /* where they are, a line for the settings command: the volume and what was read at boot */
 void netman_where(char *buf, size_t size);
+bool netman_settings_off(void);             /* the kernel word settings=off: nothing was read at this start */
+bool netman_can_save(void);                 /* the stick SurfOS was started from is there and may be written */
 /* key k = value, now and in settings.conf on the stick: 0 saved; 1 in force but not saved (why says why);
    -1 refused (why) */
 int netman_set(int k, const char *value, char *why, size_t size);
@@ -38,27 +40,36 @@ struct netman_net {                         /* as the commands see one: never it
     u8 ssid_len;
     u8 security;                            /* NETCFG_SEC_* */
     bool hidden;
-    bool refused;                           /* its key was refused at the last try (the password changed?) */
+    bool refused;                           /* its key was refused three times in a row: set aside for a while */
 };
 
-int netman_networks(struct netman_net *out, int max);  /* how many, in the order they are tried */
-/* net (with its key) saved first in networks.conf on the stick, replacing one of the same name: 0; *where the
-   position it had before (-1: new); -errno and why */
-int netman_save_network(const struct netcfg_net *net, int *had, char *why, size_t size);
-/* 0, -ENOENT (no such saved network), -errno and why */
-int netman_forget_network(const u8 *ssid, u_int len, char *why, size_t size);
+/* how many, in the order they are tried; *kept (may be NULL): the parts of networks.conf SurfOS did not understand,
+   kept there as they were */
+int netman_networks(struct netman_net *out, int max, int *kept);
+/* net (with its key) saved first in networks.conf on the stick, replacing one of the same name: 0; *had the
+   position it had before (-1: new), *count how many are saved now; -errno and why. Under settings=off the file
+   changes, for the next start, and nothing else */
+int netman_save_network(const struct netcfg_net *net, int *had, int *count, char *why, size_t size);
+/* 0 (*count: how many are left), -ENOENT (no such saved network), -errno and why */
+int netman_forget_network(const u8 *ssid, u_int len, int *count, char *why, size_t size);
 
 /* wifi connect: the card up, a scan, the first saved network in range joined, its address (DHCP); what happens is
-   said on the caller's console. 0 joined (an address or not), -ENOENT none in range, -EBUSY the keeper is at it,
+   said on the caller's console, and afterwards the keeper looks for saved networks by itself again. 0 joined (an
+   address or not), -ENOENT none in range, -EBUSY the keeper is at it, -ECANCELED a wifi leave or down meanwhile,
    other errors */
 int netman_wifi_connect(struct wlan_dev *w);
 
-/**** for autonet (kernel/autonet.c) ****/
+/**** telnetd ****/
 
-/* does the Wi-Fi keeper get dev its address (it joined dev's network itself)? autonet then waits for it */
-bool netman_wifi_owns(struct netdev *dev);
-/* telnetd on [port] as a process on F1 (port 0: its own, 23): its status, -1 when it could not be started or waited for */
+/* an address on a network telnetd may start for by itself (telnetd = on, autonet): Ethernet, or Wi-Fi joined to a
+   WPA2 network; never an open one, which anyone nearby may join */
+bool netman_trusted(struct netdev *dev);
+/* a telnet server runs, or is to start by itself (telnetd = on until it has started, autonet until it is done):
+   the keeper then joins no open network by itself */
+bool netman_telnet_exposed(void);
+/* autonet's telnetd on (port 0: its own, 23) as a process on F1, "+AUTONET:" when it fails: its status, -1 when it
+   could not be started or waited for */
 int netman_start_telnetd(u16 port);
-bool autonet_busy(void);                    /* kernel/autonet.c: its thread still runs */
+bool autonet_busy(void);                    /* kernel/autonet.c: its thread still runs (Ethernet's DHCP is its) */
 
 #endif

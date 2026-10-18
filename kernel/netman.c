@@ -10,43 +10,53 @@ docs/superpowers/plans/2026-10-17-network-manager.md).
 Where. GRUB names the FAT volume it was started from (bootvol=); driver/part.c finds it
 (bdev_boot_vol()). Its folder surfos-config/ holds settings.conf and networks.conf (the text:
 net/netcfg.c). The volume is mounted only for the moment a file is read or written, on
-/.netman, or used where the owner has mounted it; nothing stays mounted by itself. It is
-written only when it is the one-stick volume that may be written (bdev_boot_volume); a flashed
-SURFOSUSB stick is read, never written. Without bootvol=, or with the kernel word
-settings=off (GRUB's entry "without the settings on the stick"), nothing is read at boot.
+/.netman, or used where the owner has mounted it (that mount held meanwhile: it can neither go
+nor be swapped for another); nothing stays mounted by itself. It is written only when a mount
+of it may write (bdev_mount_readonly(): the one-stick volume); a flashed SURFOSUSB stick is
+read, never written. Without bootvol=, or with the kernel word settings=off (GRUB's entry
+"without the settings on the stick"), nothing is read at boot, nothing is joined and no host
+name is sent; under settings=off a change is still saved, for the next start.
 
-A write goes to <name>.new, which is synced, renamed over the file and read back; settings.conf
-is edited line by line (the owner's comments stay), networks.conf written anew. Every change
-reads the file from the stick first, so a change never loses what another computer added.
+A write goes to <name>.new, which is synced, renamed over the file and read back (through the
+block cache: the check is of what the file system wrote). settings.conf is edited line by line
+(the owner's lines and comments stay), networks.conf written anew, the blocks its reader could
+not take kept as they were. Every change reads the file from the stick first, so a change
+never loses what another computer added.
 
 At boot (the netman thread, on F1): the files are read once the volume is found (20 seconds
 at most), each line that is not understood said with its number; then
 * wifi = on with saved networks: the Wi-Fi keeper (the wifiman thread) brings the card up,
-  scans, joins the first saved network in range (a hidden one by a probe for its name, when
-  none is seen) with its key, and asks for an address. Afterwards it stays out of the way of
-  the wifi command: while wlan0 is joined, joining or reconnecting it does nothing; wifi leave
-  and wifi down are left alone; only when the station gives up a network (reconnects run out)
-  does it look for a saved one again, every 30 seconds, every 2 minutes after 20 tries. A key
-  the network refuses is not tried for 10 minutes. It asks for an address only for an
-  association of its own (the station's join_requests at its join), and wifi connect does
-  what the boot does on the command's console.
-* ethernet = dhcp: an Ethernet interface whose link comes up gets a lease (30 s, then longer,
-  between tries without one), unless autonet is still at it.
-* telnetd = on: telnetd on [port] on F1 once an interface has an address, or after 60
-  seconds without one; the kernel word autonet starts it itself (kernel/autonet.c).
-* Every lease (wherever it came from) is renewed: at half its time from the server that
-  granted it, at seven eighths from any server, given up when it runs out or is refused
-  (netcfg_lease_step(), dhcp_renew()).
-The setting hostname goes into every DHCP request (dhcp_set_hostname()).
+  scans, joins the first saved network in range (a hidden one by a probe for its name) with
+  its key, and asks for an address, and again (30 s, doubling to 5 minutes) for as long as
+  that association has none. Afterwards it stays out of the way of the wifi command: while
+  wlan0 is joined, joining or reconnecting it does nothing; after a wifi leave or wifi down
+  it waits until the station gives a network up (its reconnects run out) or wifi connect hands
+  the card back, then looks for a saved network every 30 seconds, every 2 minutes after 20
+  tries, the repeats in the log only. A key refused three times in a row is set aside for 10
+  minutes. While a telnet server runs or is to start by itself (telnetd = on until it has
+  started; autonet until it is done), it joins no open network: telnetd has no password.
+* ethernet = dhcp: an Ethernet interface whose link comes up gets a lease (30 s, doubling to
+  5 minutes, between tries without one), unless autonet is still at it.
+* telnetd = on: telnetd on [port] on F1 once there is an address on Ethernet or on a WPA2
+  Wi-Fi network (netman_trusted()), never because of an open network; with the kernel word
+  autonet, autonet starts it itself (kernel/autonet.c).
+* Every lease, wherever it came from and in every start, is renewed: at half its time from
+  the server that granted it, at seven eighths from any server, given up when it runs out or
+  is refused (netcfg_lease_step(), dhcp_renew()). An Ethernet link that comes back while its
+  interface has a lease has the address confirmed first (RFC 2131's INIT-REBOOT).
+The setting hostname goes into the DHCP requests (dhcp_set_hostname()) once the settings are
+read, or once the settings command sets it.
 
 Keys. A saved network's key is the PMK (wifi save takes the one the station joined with,
 wlan_station(); a password typed into networks.conf by hand is turned into it here). Keys are
 kept in RAM for the keeper and wiped when a network is forgotten; nothing logs one, and
 netman_networks() gives the commands everything but the key.
 
-Locks: nm_lock around the settings and the networks in RAM (never held across a wait),
-stick_lock around a mount of the stick (one at a time), connect_lock around a connect (the
-keeper's or wifi connect's).
+Locks: stick_lock around a mount of the stick and what is read and written under it, the change
+in RAM included (so the boot's read and a command's change never undo each other); nm_lock
+around the settings and the networks in RAM (never held across a wait); connect_lock around a
+connect (the keeper's or wifi connect's) and the keeper's DHCP for its association. stick_lock
+and connect_lock come before nm_lock, never after it.
 */
 
 #include <stdarg.h>
@@ -60,6 +70,7 @@ keeper's or wifi connect's).
 #include <surfos/klog.h>
 #include <surfos/multiboot.h>
 #include <surfos/process.h>
+#include <surfos/proc.h>
 #include <mm/kalloc.h>
 #include <sys/bdev.h>
 #include <fs/vfs.h>
@@ -74,24 +85,23 @@ keeper's or wifi connect's).
 #include <blibc_common.h>
 
 #define BOOTVOL_WAIT_MS  20000          /* how long the stick may take to be found at boot */
-#define TELNETD_WAIT_MS  60000          /* telnetd = on: once there is an address, or after this */
 #define TELNETD_PATH     "/initrd/bin/telnetd"
 #define TELNETD_DONE_MS  30000          /* telnetd on returns once its server runs (3 s at most) */
 #define NM_MOUNT         "/.netman"     /* the short mount of the stick */
-#define VIEWS            16
 #define WIFI_SCAN_MS     10000
 #define WIFI_RETRY_MS    30000          /* the keeper's next look when no saved network was joined */
 #define WIFI_RETRY_LATE  120000         /* after WIFI_LATE_TRIES of them */
 #define WIFI_LATE_TRIES  20
 #define WIFI_BUSY_MS     5000           /* a command had the card: soon again */
-#define WIFI_REFUSED_MS  600000         /* a saved key the network refused: not tried for so long */
+#define WIFI_REFUSALS    3              /* a saved key refused so many times in a row ... */
+#define WIFI_REFUSED_MS  600000         /* ... is not tried for so long */
 #define BSS_MAX          48
 #define DHCP_TRIES       3
 #define DHCP_MS          8000
 #define DHCP_PAUSE_MS    2000
+#define DHCP_RETRY_MS    30000          /* a link without a lease (Ethernet, the keeper's Wi-Fi): the next DHCP, */
+#define DHCP_RETRY_MAX   300000         /* doubling to this */
 #define RENEW_MS         5000
-#define ETH_RETRY_MS     30000          /* an Ethernet link without a lease: the next DHCP, doubling to ETH_RETRY_MAX */
-#define ETH_RETRY_MAX    300000
 #define MAX_IFS          8
 
 /* what was read at boot */
@@ -104,14 +114,16 @@ keeper's or wifi connect's).
 
 struct saved {
     struct netcfg_net net;              /* its key in net.psk */
-    u_long refused_until;               /* ticks: its key was refused; 0 */
+    u_long refused_until;               /* ticks: its key was refused WIFI_REFUSALS times; 0 */
+    u_int refusals;                     /* refused in a row so far */
 };
 
 static mutex_t nm_lock = MUTEX_INIT("netman");
 static struct netcfg_settings cfg;
-static struct saved *saved;             /* NETCFG_NETS_MAX of them */
-static int nsaved;
-static int where_state;
+static u32 cmd_set;                     /* bit k: the settings command set key k (the boot's read leaves it) */
+static struct saved saved[NETCFG_NETS_MAX];
+static int nsaved, nkept;               /* nkept: parts of networks.conf not understood, kept there as they were */
+static volatile int where_state;
 static char where_vol[BDEV_NAME_LEN], where_why[96];
 static bool had_settings, had_networks, where_readonly;
 static u_int boot_notes;
@@ -120,11 +132,14 @@ static mutex_t stick_lock = MUTEX_INIT("netman-stick");
 static mutex_t connect_lock = MUTEX_INIT("wifi-connect");
 static mutex_t keeper_lock = MUTEX_INIT("wifiman");    /* start_keeper(): one keeper */
 static surf_task *volatile wifiman;
-static struct wlan_dev *volatile keeper_dev;
-static volatile bool keeper_connecting, keeper_owns;
-static volatile u_int keeper_requests;  /* the station's join_requests after the keeper's (or wifi connect's) join */
-static volatile u_int keeper_dhcp_for;  /* the station's joins count whose address was last asked for */
+static volatile bool keeper_connecting; /* a connect (the keeper's or wifi connect's) runs */
+static volatile bool keeper_owns;       /* the association of the last connect is the manager's: */
+static volatile u_int keeper_join;      /* the station's number of its join request */
+static volatile u_long keeper_dhcp_next;    /* ticks: its next DHCP while it has no address (0: at once) */
+static volatile u_int keeper_dhcp_fails;
 static volatile bool keeper_at_boot;    /* the keeper joins at once (the boot's); else only once a network is lost */
+static volatile bool keeper_resume;     /* wifi connect hands the card back: the keeper looks by itself again */
+static volatile bool telnetd_due;       /* telnetd = on: the server starts once there is a trusted address */
 
 /* not optimised away */
 static void wipe(void *p, size_t n) {
@@ -132,24 +147,28 @@ static void wipe(void *p, size_t n) {
     while(n--) *q++ = 0;
 }
 
-/* a line for the kernel log only (dmesg), not the screen */
+/* a line for the kernel log only (dmesg), not the screen; one cut short still ends the line */
 static void klogf(const char *fmt, ...) {
-    char buf[200];
+    char buf[320];
     va_list ap;
+    int n;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+    if(n >= (int)sizeof(buf)) buf[sizeof(buf) - 2] = '\n';
     klog_write(buf);
 }
 
-/* what a connect does, on the command's console (cmd), else "+NET:" on F1 and in the log */
-static void say(bool cmd, const char *fmt, ...) {
-    char buf[200];
+/* what a connect does, on the command's console (cmd), else "+NET:" on F1 and in the log, or in the log only (quiet:
+   the keeper saying it again) */
+static void say(bool cmd, bool quiet, const char *fmt, ...) {
+    char buf[300];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     if(cmd) printf("    %s\n", buf);
+    else if(quiet) klogf("+NET: %s\n", buf);
     else kprintf("+NET: %s\n", buf);
 }
 
@@ -157,15 +176,51 @@ static const char *ssid_str(const u8 *ssid, u_int len, char *buf, size_t size) {
     return ieee80211_ssid_text(ssid, len, false, buf, size);
 }
 
+/* ticks from now, never 0 (0 means "none" below) */
+static u_long ticks_after(u_long ms) {
+    u_long t = getticks() + ms / (1000 / HZ);
+    return t ? t : 1;
+}
+
 /**** the stick ****/
 
-/* the volume the settings are on, mounted for a moment (or where the owner mounted it): its path into root, and
-   *ours when the mount is this one's. 0, or -errno and why */
-static int stick_open(bool write, char *root, size_t rsize, bool *ours, char *why, size_t wsize) {
+struct stick {
+    char root[VFS_PATH_MAX];            /* where the volume is mounted */
+    struct vnode *held;                 /* that mount's root, held while the files are worked on */
+    bool ours;                          /* the mount on /.netman is this one's: it goes again */
+};
+
+/* the mount goes again (a command that has a file open there for a moment is waited for); the owner's own mount
+   stays, its writes synced */
+static void stick_close(struct stick *st) {
+    int r = 0, tries;
+    if(st->held) {
+        vfs_release_mount(st->held);
+        st->held = NULL;
+    }
+    if(!st->ours) {
+        vfs_sync();
+        return;
+    }
+    st->ours = false;
+    for(tries = 0; tries < 40; tries++) {
+        r = vfs_umount(NM_MOUNT);
+        if(r != -EBUSY) break;
+        sleep_ms(50);
+    }
+    if(r && r != -ENOENT)                               /* ENOENT: gone already (an eject meanwhile) */
+        kprintf("+NET: the stick stays mounted on %s: %s (umount %s)\n", NM_MOUNT, strerror(r), NM_MOUNT);
+}
+
+/* the volume the settings are on, for a moment: where the owner mounted it, else on /.netman (read-only for a
+   read), the mount held until stick_close(). 0, or -errno and why */
+static int stick_open(bool write, struct stick *st, char *why, size_t wsize) {
     struct bdev *v = bdev_boot_vol();
-    struct vfs_mount_view *views;
-    int n, i, r;
-    *ours = false;
+    bool ro = false;
+    int r = -EBUSY, tries;
+    st->root[0] = 0;
+    st->held = NULL;
+    st->ours = false;
     if(!v) {
         snprintf(why, wsize, "%s", bdev_boot_vol_named() ? "the stick SurfOS was started from is not there (lsblk)" :
                  "SurfOS was not started from a stick GRUB named (no bootvol= on the kernel command line)");
@@ -175,7 +230,7 @@ static int stick_open(bool write, char *root, size_t rsize, bool *ours, char *wh
         snprintf(why, wsize, "%s, the stick SurfOS was started from, is unplugged", v->name);
         return -ENODEV;
     }
-    if(write && v->protect != bdev_boot_volume) {
+    if(write && bdev_mount_readonly(v)) {
         snprintf(why, wsize, "SurfOS was started from the flashed SURFOSUSB stick (%s), which it only reads", v->name);
         return -EROFS;
     }
@@ -183,50 +238,30 @@ static int stick_open(bool write, char *root, size_t rsize, bool *ours, char *wh
         snprintf(why, wsize, "%s is write-protected (its switch)", v->name);
         return -EROFS;
     }
-    views = (struct vfs_mount_view *)kalloc(VIEWS * sizeof(*views));
-    if(!views) {
-        snprintf(why, wsize, "no memory");
-        return -ENOMEM;
-    }
-    n = vfs_mount_views(views, VIEWS);
-    for(i = 0; i < n && i < VIEWS; i++) {
-        if(views[i].dev != v) continue;
-        if(write && views[i].readonly) {
-            snprintf(why, wsize, "%s is mounted read-only on %s: umount %s, then try again", v->name, views[i].path,
-                     views[i].path);
-            kfree(views);
+    for(tries = 0; tries < 2 && r == -EBUSY; tries++) { /* EBUSY: a command mounted it meanwhile: that mount, then */
+        if(vfs_hold_mount(v, st->root, sizeof(st->root), &st->held, &ro) == 0) {
+            if(!write || !ro) return 0;
+            snprintf(why, wsize, "%s is mounted read-only on %s: umount %s, then try again", v->name, st->root, st->root);
+            vfs_release_mount(st->held);
+            st->held = NULL;
             return -EROFS;
         }
-        strlcpy(root, views[i].path, rsize);
-        kfree(views);
-        return 0;
+        r = vfs_mount_flags(v, NM_MOUNT, NULL, MNT_QUIET | (write ? 0 : MNT_RDONLY));
+        if(r == 0) {
+            st->ours = true;
+            if(vfs_hold_mount(v, st->root, sizeof(st->root), &st->held, NULL) == 0) return 0;
+            stick_close(st);
+            snprintf(why, wsize, "%s went while it was being mounted", v->name);
+            return -ENODEV;
+        }
     }
-    kfree(views);
-    r = vfs_mount_flags(v, NM_MOUNT, NULL, MNT_QUIET | (write ? 0 : MNT_RDONLY));
-    if(r) {
-        snprintf(why, wsize, "%s could not be mounted: %s", v->name, strerror(r));
-        return r;
-    }
-    strlcpy(root, NM_MOUNT, rsize);
-    *ours = true;
-    return 0;
+    snprintf(why, wsize, "%s could not be mounted: %s", v->name, strerror(r));
+    return r;
 }
 
-/* the short mount goes again (a command that has a file open there for a moment is waited for); the owner's own
-   mount stays, its writes synced */
-static void stick_close(bool ours) {
-    int r = 0, tries;
-    if(!ours) {
-        vfs_sync();
-        return;
-    }
-    for(tries = 0; tries < 40; tries++) {
-        r = vfs_umount(NM_MOUNT);
-        if(r != -EBUSY) break;
-        sleep_ms(50);
-    }
-    if(r && r != -ENOENT)                               /* ENOENT: gone already (an eject meanwhile) */
-        kprintf("+NET: the stick stays mounted on %s: %s (umount %s)\n", NM_MOUNT, strerror(r), NM_MOUNT);
+/* root/surfos-config/name into out; false when that is longer than a path may be */
+static bool path_of(char *out, size_t size, const char *root, const char *name) {
+    return snprintf(out, size, "%s/%s/%s", root, NETCFG_DIR, name) < (int)size;
 }
 
 /* the file at path into buf (max bytes, then a NUL): 0 and *len; -ENOENT when there is none, -EFBIG when longer */
@@ -257,9 +292,12 @@ static int write_file(const char *root, const char *name, const char *data, u_in
     struct file *f;
     u_int done = 0, got;
     int r, n;
-    snprintf(dir, sizeof(dir), "%s/%s", root, NETCFG_DIR);
-    snprintf(path, sizeof(path), "%s/%s", dir, name);
-    snprintf(tmp, sizeof(tmp), "%s/%s.new", dir, name);
+    if(snprintf(dir, sizeof(dir), "%s/%s", root, NETCFG_DIR) >= (int)sizeof(dir) ||
+       snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path) ||
+       snprintf(tmp, sizeof(tmp), "%s/%s.new", dir, name) >= (int)sizeof(tmp)) {
+        snprintf(why, wsize, "%s/%s under %s would be a path too long", NETCFG_DIR, name, root);
+        return -ENAMETOOLONG;
+    }
     r = vfs_mkdir(dir);
     if(r && r != -EEXIST) {
         snprintf(why, wsize, "%s/ could not be made: %s", NETCFG_DIR, strerror(r));
@@ -296,17 +334,13 @@ static int write_file(const char *root, const char *name, const char *data, u_in
     return r;
 }
 
-static void path_of(char *out, size_t size, const char *root, const char *name) {
-    snprintf(out, size, "%s/%s/%s", root, NETCFG_DIR, name);
-}
-
 /**** the saved networks ****/
 
-/* networks written by hand with a password: its key made, the password wiped; one that cannot be is left out (said
-   through note) */
-static int make_keys(struct netcfg_net *list, int n, netcfg_note_fn note, void *arg) {
-    int i, j;
-    for(i = j = 0; i < n; i++) {
+/* networks written by hand with a password: its key made, the password wiped. 0, or -1 when a password made no key
+   (said through note; that network is left out of list) */
+static int make_keys(struct netcfg_net *list, int *n, netcfg_note_fn note, void *arg) {
+    int i, j, r = 0;
+    for(i = j = 0; i < *n; i++) {
         struct netcfg_net *net = &list[i];
         if(net->has_password && !net->has_psk) {
             if(wpa_passphrase_to_pmk(net->password, net->ssid, net->ssid_len, net->psk) == 0) net->has_psk = true;
@@ -316,6 +350,7 @@ static int make_keys(struct netcfg_net *list, int n, netcfg_note_fn note, void *
         net->has_password = false;
         if(net->security == NETCFG_SEC_WPA2 && !net->has_psk) {
             wipe(net, sizeof(*net));
+            r = -1;
             continue;
         }
         if(i != j) {
@@ -324,11 +359,13 @@ static int make_keys(struct netcfg_net *list, int n, netcfg_note_fn note, void *
         }
         j++;
     }
-    return j;
+    *n = j;
+    return r;
 }
 
-/* the networks in RAM become list (n), the refusals of those still there kept */
-static void set_saved(const struct netcfg_net *list, int n) {
+/* the networks in RAM become list (n; kept: the parts of the file not understood), the refusals of those still
+   there, with the same key, kept */
+static void set_saved(const struct netcfg_net *list, int n, int kept) {
     struct saved *old = (struct saved *)kcalloc(NETCFG_NETS_MAX, sizeof(struct saved));
     int i, k, nold;
     mutex_lock(&nm_lock);
@@ -337,14 +374,18 @@ static void set_saved(const struct netcfg_net *list, int n) {
     for(i = 0; i < n && i < NETCFG_NETS_MAX; i++) {
         saved[i].net = list[i];
         saved[i].refused_until = 0;
+        saved[i].refusals = 0;
         for(k = 0; old && k < nold; k++) {
             if(old[k].net.ssid_len == list[i].ssid_len && !memcmp(old[k].net.ssid, list[i].ssid, list[i].ssid_len) &&
-               !memcmp(old[k].net.psk, list[i].psk, NETCFG_KEY_LEN))
+               !memcmp(old[k].net.psk, list[i].psk, NETCFG_KEY_LEN)) {
                 saved[i].refused_until = old[k].refused_until;
+                saved[i].refusals = old[k].refusals;
+            }
         }
     }
     for(k = i; k < NETCFG_NETS_MAX; k++) wipe(&saved[k], sizeof(saved[k]));
     nsaved = i;
+    nkept = kept;
     mutex_unlock(&nm_lock);
     if(old) {
         wipe(old, NETCFG_NETS_MAX * sizeof(struct saved));
@@ -352,33 +393,42 @@ static void set_saved(const struct netcfg_net *list, int n) {
     }
 }
 
+/* what the reader of a change said, on the command's console */
 static void save_note(void *arg, u_int line, const char *why) {
-    if(line) kprintf("    networks.conf line %u: %s (not kept)\n", line, why);
-    else kprintf("    networks.conf: %s\n", why);
+    if(line) printf("    networks.conf line %u: %s\n", line, why);
+    else printf("    networks.conf: %s\n", why);
 }
 
 static void start_keeper(bool at_boot);
 
-/* change networks.conf on the stick: read it, change (the list as read, its count; 0, or -errno and why), write it,
-   and the networks in RAM become what was written */
+/* change networks.conf on the stick: read it, change (the list as read, its count; 0, or -errno and why), write it
+   (what was not understood kept as it was), and the networks in RAM become what was written (not under settings=off:
+   they are for the next start). *count: how many are saved now */
 static int change_networks(int (*change)(struct netcfg_net *list, int *n, void *arg, char *why, size_t wsize), void *arg,
-                           char *why, size_t wsize) {
+                           int *count, char *why, size_t wsize) {
     struct netcfg_net *list = (struct netcfg_net *)kcalloc(NETCFG_NETS_MAX + 1, sizeof(struct netcfg_net));
-    char *text = (char *)kalloc(NETCFG_NETWORKS_MAX + 1), root[VFS_PATH_MAX], path[VFS_PATH_MAX];
+    struct netcfg_span *kept = (struct netcfg_span *)kcalloc(NETCFG_SPANS_MAX, sizeof(struct netcfg_span));
+    char *text = (char *)kalloc(NETCFG_NETWORKS_MAX + 1), *out = (char *)kalloc(NETCFG_NETWORKS_MAX + 1);
+    char path[VFS_PATH_MAX];
+    struct stick st;
     u_int len = 0;
-    bool ours = false, opened = false;
-    int n = 0, r;
-    if(!list || !text) {
-        kfree(list);
-        kfree(text);
+    bool opened = false;
+    int n = 0, nk = 0, r;
+    if(count) *count = 0;
+    if(!list || !kept || !text || !out) {
         snprintf(why, wsize, "no memory");
-        return -ENOMEM;
+        r = -ENOMEM;
+        goto done;
     }
     mutex_lock(&stick_lock);
-    r = stick_open(true, root, sizeof(root), &ours, why, wsize);
+    r = stick_open(true, &st, why, wsize);
     if(r) goto out;
     opened = true;
-    path_of(path, sizeof(path), root, NETCFG_NETWORKS);
+    if(!path_of(path, sizeof(path), st.root, NETCFG_NETWORKS)) {
+        snprintf(why, wsize, "the path of %s/%s is too long", NETCFG_DIR, NETCFG_NETWORKS);
+        r = -ENAMETOOLONG;
+        goto out;
+    }
     r = read_file(path, text, NETCFG_NETWORKS_MAX, &len);
     if(r == -ENOENT) r = len = 0;
     if(r) {
@@ -386,25 +436,43 @@ static int change_networks(int (*change)(struct netcfg_net *list, int *n, void *
                  r == -EFBIG ? "it is longer than 16 KB" : strerror(r));
         goto out;
     }
-    n = netcfg_parse_networks(text, len, list, NETCFG_NETS_MAX, save_note, NULL);
-    n = make_keys(list, n, save_note, NULL);
+    n = netcfg_parse_networks(text, len, list, NETCFG_NETS_MAX, kept, &nk, save_note, NULL);
+    if(nk >= NETCFG_SPANS_MAX) {                        /* more than can be kept: a write could lose one */
+        snprintf(why, wsize, "%s/%s has too many parts SurfOS does not understand: correct or delete them first",
+                 NETCFG_DIR, NETCFG_NETWORKS);
+        r = -EINVAL;
+        goto out;
+    }
+    if(make_keys(list, &n, save_note, NULL)) {
+        snprintf(why, wsize, "a password in %s/%s makes no key: correct it first (the file is left as it is)",
+                 NETCFG_DIR, NETCFG_NETWORKS);
+        r = -EINVAL;
+        goto out;
+    }
     r = change(list, &n, arg, why, wsize);
     if(r) goto out;
-    r = netcfg_write_networks(list, n, text, NETCFG_NETWORKS_MAX + 1);
+    r = netcfg_write_networks(list, n, text, kept, nk, out, NETCFG_NETWORKS_MAX + 1);
     if(r < 0) {
         snprintf(why, wsize, "%s/%s would be longer than 16 KB", NETCFG_DIR, NETCFG_NETWORKS);
         r = -EFBIG;
         goto out;
     }
     len = (u_int)r;
-    r = write_file(root, NETCFG_NETWORKS, text, len, why, wsize);
-    if(!r) set_saved(list, n);
+    r = write_file(st.root, NETCFG_NETWORKS, out, len, why, wsize);
+    if(!r) {
+        if(where_state != WHERE_OFF) set_saved(list, n, nk);
+        if(count) *count = n;
+    }
 out:
-    if(opened) stick_close(ours);
+    if(opened) stick_close(&st);
     mutex_unlock(&stick_lock);
-    wipe(text, NETCFG_NETWORKS_MAX + 1);
-    wipe(list, (NETCFG_NETS_MAX + 1) * sizeof(struct netcfg_net));
+done:
+    if(text) wipe(text, NETCFG_NETWORKS_MAX + 1);
+    if(out) wipe(out, NETCFG_NETWORKS_MAX + 1);
+    if(list) wipe(list, (NETCFG_NETS_MAX + 1) * sizeof(struct netcfg_net));
     kfree(text);
+    kfree(out);
+    kfree(kept);
     kfree(list);
     return r;
 }
@@ -434,7 +502,7 @@ static int put_first(struct netcfg_net *list, int *n, void *arg, char *why, size
     return 0;
 }
 
-int netman_save_network(const struct netcfg_net *net, int *had, char *why, size_t size) {
+int netman_save_network(const struct netcfg_net *net, int *had, int *count, char *why, size_t size) {
     struct save_arg a;
     int r;
     a.net = net;
@@ -443,9 +511,9 @@ int netman_save_network(const struct netcfg_net *net, int *had, char *why, size_
         snprintf(why, size, "a network to save needs its name, and its key for WPA2");
         return -EINVAL;
     }
-    r = change_networks(put_first, &a, why, size);
+    r = change_networks(put_first, &a, count, why, size);
     if(had) *had = a.had;
-    if(!r) start_keeper(false);
+    if(!r && where_state != WHERE_OFF) start_keeper(false);
     return r;
 }
 
@@ -468,14 +536,14 @@ static int take_out(struct netcfg_net *list, int *n, void *arg, char *why, size_
     return 0;
 }
 
-int netman_forget_network(const u8 *ssid, u_int len, char *why, size_t size) {
+int netman_forget_network(const u8 *ssid, u_int len, int *count, char *why, size_t size) {
     struct forget_arg a;
     a.ssid = ssid;
     a.len = len;
-    return change_networks(take_out, &a, why, size);
+    return change_networks(take_out, &a, count, why, size);
 }
 
-int netman_networks(struct netman_net *out, int max) {
+int netman_networks(struct netman_net *out, int max, int *kept) {
     u_long now = getticks();
     int i;
     mutex_lock(&nm_lock);
@@ -486,6 +554,7 @@ int netman_networks(struct netman_net *out, int max) {
         out[i].hidden = saved[i].net.hidden;
         out[i].refused = saved[i].refused_until && (long)(saved[i].refused_until - now) > 0;
     }
+    if(kept) *kept = nkept;
     mutex_unlock(&nm_lock);
     return i;
 }
@@ -498,15 +567,22 @@ void netman_settings(struct netcfg_settings *out) {
     mutex_unlock(&nm_lock);
 }
 
+bool netman_settings_off(void) {
+    return where_state == WHERE_OFF;
+}
+
+bool netman_can_save(void) {
+    struct bdev *v = bdev_boot_vol();
+    return v && !v->gone && !bdev_mount_readonly(v) && !v->readonly && !bdev_disk(v)->readonly;
+}
+
 void netman_where(char *buf, size_t size) {
     struct bdev *v = bdev_boot_vol();
-    int state;
     mutex_lock(&nm_lock);
-    state = where_state;
-    switch(state) {
+    switch(where_state) {
     case WHERE_OFF:
         snprintf(buf, size, "not read at this start (settings=off): the defaults until SurfOS restarts; a change "
-                 "is saved on %s", v ? v->name : "the stick");
+                 "is saved on %s for the next start", v ? v->name : "the stick");
         break;
     case WHERE_NONE:
         snprintf(buf, size, "none: SurfOS was not started from a stick GRUB named (no bootvol=); nothing is saved");
@@ -530,65 +606,62 @@ void netman_where(char *buf, size_t size) {
     mutex_unlock(&nm_lock);
 }
 
+/* key k of from into to (with its "set" bit) */
+static void copy_key(struct netcfg_settings *to, const struct netcfg_settings *from, int k) {
+    switch(k) {
+    case NETCFG_TELNETD:      to->telnetd = from->telnetd; break;
+    case NETCFG_TELNETD_PORT: to->telnetd_port = from->telnetd_port; break;
+    case NETCFG_WIFI:         to->wifi = from->wifi; break;
+    case NETCFG_ETHERNET:     to->ethernet_dhcp = from->ethernet_dhcp; break;
+    case NETCFG_HOSTNAME:     strlcpy(to->hostname, from->hostname, sizeof(to->hostname)); break;
+    }
+    to->set = (to->set & ~(1u << k)) | (from->set & (1u << k));
+}
+
 int netman_set(int k, const char *value, char *why, size_t size) {
     struct netcfg_settings s;
-    char *text, *out, root[VFS_PATH_MAX], path[VFS_PATH_MAX];
+    struct stick st;
+    char *text = NULL, *out = NULL, path[VFS_PATH_MAX];
     u_int len = 0;
-    bool ours = false;
     int r, n;
     mutex_lock(&nm_lock);
     s = cfg;
     mutex_unlock(&nm_lock);
     if(netcfg_set(&s, k, value, why, size)) return -1;
-    mutex_lock(&nm_lock);
-    switch(k) {                                         /* only this key: another command may change another */
-    case NETCFG_TELNETD: cfg.telnetd = s.telnetd; break;
-    case NETCFG_TELNETD_PORT: cfg.telnetd_port = s.telnetd_port; break;
-    case NETCFG_WIFI: cfg.wifi = s.wifi; break;
-    case NETCFG_ETHERNET: cfg.ethernet_dhcp = s.ethernet_dhcp; break;
-    case NETCFG_HOSTNAME: strlcpy(cfg.hostname, s.hostname, sizeof(cfg.hostname)); break;
-    }
-    cfg.set |= 1u << k;
-    mutex_unlock(&nm_lock);
-    if(k == NETCFG_HOSTNAME) dhcp_set_hostname(s.hostname);
-    if(k == NETCFG_WIFI && s.wifi) start_keeper(false);
-
     text = (char *)kalloc(NETCFG_SETTINGS_MAX + 1);
     out = (char *)kalloc(NETCFG_SETTINGS_MAX + 1);
+    mutex_lock(&stick_lock);                            /* the boot's read, when it runs, first */
     if(!text || !out) {
-        kfree(text);
-        kfree(out);
         snprintf(why, size, "no memory");
-        return 1;
-    }
-    root[0] = 0;
-    mutex_lock(&stick_lock);
-    r = stick_open(true, root, sizeof(root), &ours, why, size);
-    if(!r) {
-        path_of(path, sizeof(path), root, NETCFG_SETTINGS);
-        r = read_file(path, text, NETCFG_SETTINGS_MAX, &len);
-        if(r && r != -ENOENT)
+        r = -ENOMEM;
+    } else if((r = stick_open(true, &st, why, size)) == 0) {
+        if(!path_of(path, sizeof(path), st.root, NETCFG_SETTINGS)) {
+            snprintf(why, size, "the path of %s/%s is too long", NETCFG_DIR, NETCFG_SETTINGS);
+            r = -ENAMETOOLONG;
+        } else if((r = read_file(path, text, NETCFG_SETTINGS_MAX, &len)) && r != -ENOENT) {
             snprintf(why, size, "%s/%s could not be read: %s", NETCFG_DIR, NETCFG_SETTINGS,
                      r == -EFBIG ? "it is longer than 8 KB" : strerror(r));
-        else {
+        } else {
             n = netcfg_edit_settings(r == -ENOENT ? NULL : text, len, k, value, out, NETCFG_SETTINGS_MAX + 1);
             if(n < 0) {
                 snprintf(why, size, "%s/%s would be longer than 8 KB", NETCFG_DIR, NETCFG_SETTINGS);
                 r = -EFBIG;
             } else {
-                r = write_file(root, NETCFG_SETTINGS, out, (u_int)n, why, size);
-                if(!r) {
-                    mutex_lock(&nm_lock);
-                    had_settings = true;
-                    mutex_unlock(&nm_lock);
-                }
+                r = write_file(st.root, NETCFG_SETTINGS, out, (u_int)n, why, size);
             }
         }
-        stick_close(ours);
+        stick_close(&st);
     }
+    mutex_lock(&nm_lock);                               /* in force, saved or not: only this key, another command */
+    copy_key(&cfg, &s, k);                              /* may change another meanwhile */
+    cmd_set |= 1u << k;
+    if(!r) had_settings = true;
+    mutex_unlock(&nm_lock);
     mutex_unlock(&stick_lock);
     kfree(text);
     kfree(out);
+    if(k == NETCFG_HOSTNAME) dhcp_set_hostname(s.hostname);
+    if(k == NETCFG_WIFI && s.wifi && where_state != WHERE_OFF) start_keeper(false);
     return r ? 1 : 0;
 }
 
@@ -603,11 +676,13 @@ static void boot_note(void *arg, u_int line, const char *why) {
 static void load_at_boot(void) {
     struct netcfg_settings s;
     struct netcfg_net *list = NULL;
+    struct netcfg_span *kept = NULL;
     struct bdev *v = NULL;
-    char *text = NULL, root[VFS_PATH_MAX], path[VFS_PATH_MAX], why[96], a[8], b[8];
+    struct stick st;
+    char *text = NULL, path[VFS_PATH_MAX], why[96], a[8], b[8];
     u_int waited, len = 0;
-    bool ours = false, have_s = false, have_n = false;
-    int n = 0, r;
+    bool have_s = false, have_n = false;
+    int n = 0, nk = 0, r, k;
 
     if(bootinfo_has_arg(&bootinfo, "settings=off")) {
         where_state = WHERE_OFF;
@@ -626,27 +701,29 @@ static void load_at_boot(void) {
               BOOTVOL_WAIT_MS / 1000);
         return;
     }
-    strlcpy(where_vol, v->name, sizeof(where_vol));
-    where_readonly = v->protect != bdev_boot_volume;
     text = (char *)kalloc(NETCFG_NETWORKS_MAX + 1);
     list = (struct netcfg_net *)kcalloc(NETCFG_NETS_MAX, sizeof(struct netcfg_net));
-    if(!text || !list) {
+    kept = (struct netcfg_span *)kcalloc(NETCFG_SPANS_MAX, sizeof(struct netcfg_span));
+    mutex_lock(&stick_lock);
+    strlcpy(where_vol, v->name, sizeof(where_vol));
+    where_readonly = bdev_mount_readonly(v);
+    if(!text || !list || !kept) {
         strlcpy(where_why, "no memory", sizeof(where_why));
         where_state = WHERE_FAILED;
+        mutex_unlock(&stick_lock);
         goto out;
     }
-    mutex_lock(&stick_lock);
-    r = stick_open(false, root, sizeof(root), &ours, why, sizeof(why));
+    r = stick_open(false, &st, why, sizeof(why));
     if(r) {
-        mutex_unlock(&stick_lock);
         strlcpy(where_why, why, sizeof(where_why));
         where_state = WHERE_FAILED;
+        mutex_unlock(&stick_lock);
         kprintf("+NET: the settings on %s were not read: %s\n", v->name, why);
         goto out;
     }
     netcfg_defaults(&s);
-    path_of(path, sizeof(path), root, NETCFG_SETTINGS);
-    r = read_file(path, text, NETCFG_SETTINGS_MAX, &len);
+    r = path_of(path, sizeof(path), st.root, NETCFG_SETTINGS) ? read_file(path, text, NETCFG_SETTINGS_MAX, &len) :
+        -ENAMETOOLONG;
     if(r == 0) {
         have_s = true;
         netcfg_parse_settings(text, len, &s, boot_note, (void *)"settings.conf");
@@ -654,26 +731,26 @@ static void load_at_boot(void) {
         kprintf("+NET: %s/%s on %s was not read: %s\n", NETCFG_DIR, NETCFG_SETTINGS, v->name,
                 r == -EFBIG ? "it is longer than 8 KB" : strerror(r));
     }
-    path_of(path, sizeof(path), root, NETCFG_NETWORKS);
-    r = read_file(path, text, NETCFG_NETWORKS_MAX, &len);
+    r = path_of(path, sizeof(path), st.root, NETCFG_NETWORKS) ? read_file(path, text, NETCFG_NETWORKS_MAX, &len) :
+        -ENAMETOOLONG;
     if(r == 0) {
         have_n = true;
-        n = netcfg_parse_networks(text, len, list, NETCFG_NETS_MAX, boot_note, (void *)"networks.conf");
-        n = make_keys(list, n, boot_note, (void *)"networks.conf");
+        n = netcfg_parse_networks(text, len, list, NETCFG_NETS_MAX, kept, &nk, boot_note, (void *)"networks.conf");
+        make_keys(list, &n, boot_note, (void *)"networks.conf");
     } else if(r != -ENOENT) {
         kprintf("+NET: %s/%s on %s was not read: %s\n", NETCFG_DIR, NETCFG_NETWORKS, v->name,
                 r == -EFBIG ? "it is longer than 16 KB" : strerror(r));
     }
-    stick_close(ours);
-    mutex_unlock(&stick_lock);
-
-    mutex_lock(&nm_lock);
-    cfg = s;
+    stick_close(&st);
+    mutex_lock(&nm_lock);                               /* what a command set meanwhile stays */
+    for(k = 0; k < NETCFG_NKEYS; k++) if(!((cmd_set >> k) & 1)) copy_key(&cfg, &s, k);
     had_settings = have_s;
     had_networks = have_n;
     where_state = WHERE_READ;
+    s = cfg;
     mutex_unlock(&nm_lock);
-    set_saved(list, n);
+    set_saved(list, n, nk);
+    mutex_unlock(&stick_lock);
     if(have_s || have_n)
         kprintf("+NET: settings from %s (%s/): telnetd %s%s%s, wifi %s, ethernet %s, hostname %s; %i saved Wi-Fi "
                 "network%s%s\n", v->name, NETCFG_DIR, s.telnetd ? "on" : "off",
@@ -692,11 +769,47 @@ out:
         wipe(list, NETCFG_NETS_MAX * sizeof(struct netcfg_net));
         kfree(list);
     }
+    kfree(kept);
 }
 
 /**** telnetd ****/
 
-int netman_start_telnetd(u16 port) {
+/* the running telnet server (a detached user task named telnetd, as telnetd itself finds it): its pid, or 0 */
+static int telnetd_running(void) {
+    struct procinfo pi;
+    int i;
+    for(i = 0; task_info(i, &pi) == 0; i++)
+        if((pi.flags & PROC_USER) && (pi.flags & PROC_DETACHED) && pi.state != PROC_DEAD && !strcmp(pi.name, "telnetd"))
+            return pi.pid;
+    return 0;
+}
+
+bool netman_telnet_exposed(void) {
+    return telnetd_due || autonet_busy() || telnetd_running() > 0;
+}
+
+bool netman_trusted(struct netdev *dev) {
+    struct wlan_station_info si;
+    struct wlan_dev *w;
+    if(!dev || !dev->ip || !dev->link_up) return false;
+    if(!strncmp(dev->name, "eth", 3)) return true;
+    w = wlan_find(dev->name);
+    if(!w || w->netdev != dev || wlan_station(w, &si, false)) return false;
+    return si.state == WLAN_STA_UP && (si.security == WLAN_SEC_WPA2_PSK || si.security == WLAN_SEC_WPA2_WPA3);
+}
+
+/* the first interface with an address telnetd may be started for: Ethernet first, as the routes prefer it */
+static struct netdev *trusted_address(void) {
+    struct netdev *d;
+    for(d = netdev_first(); d; d = d->next) if(!strncmp(d->name, "eth", 3) && netman_trusted(d)) return d;
+    for(d = netdev_first(); d; d = d->next) if(netman_trusted(d)) return d;
+    return NULL;
+}
+
+/* telnetd on [port] as a process on F1, its lines prefixed who: its status; -1 when it could not be started, or did
+   not finish in time (then *child its pid, for the caller to collect; with child NULL init collects it once the
+   caller's thread has ended) */
+static int start_telnetd(u16 port, const char *who, int *child) {
     char portword[8], *argv[] = { "telnetd", "on", portword, NULL };
     int argc = 2, pid, status = -1, waited, r;
     if(port && port != 23) {
@@ -705,7 +818,7 @@ int netman_start_telnetd(u16 port) {
     }
     pid = process_spawn(TELNETD_PATH, argc, argv, &conArray[0], 0);
     if(pid < 0) {
-        kprintf("+NET: %s: %s\n", TELNETD_PATH, strerror(pid));
+        kprintf("%s: %s: %s\n", who, TELNETD_PATH, strerror(pid));
         return -1;
     }
     for(waited = 0; waited < TELNETD_DONE_MS; waited += 100) {
@@ -714,21 +827,21 @@ int netman_start_telnetd(u16 port) {
         if(r < 0) break;
         sleep_ms(100);
     }
-    kprintf("+NET: telnetd on (pid %i) has not finished after %i s; not waiting for it\n", pid, TELNETD_DONE_MS / 1000);
-    return -1;                          /* it is init's when this thread ends */
+    kprintf("%s: telnetd on (pid %i) has not finished after %i s; not waiting for it\n", who, pid,
+            TELNETD_DONE_MS / 1000);
+    if(child) *child = pid;
+    return -1;
 }
 
-static bool an_address(void) {
-    struct netdev *d;
-    for(d = netdev_first(); d; d = d->next) if(d->ip && d->link_up) return true;
-    return false;
+int netman_start_telnetd(u16 port) {
+    return start_telnetd(port, "+AUTONET", NULL);       /* autonet's thread ends: init collects a slow one */
 }
 
 /**** Ethernet and the leases (the netman thread's own: nothing else touches ifs) ****/
 
 struct ifstate {
     struct netdev *dev;
-    bool was_up;
+    bool was_up, confirm;               /* confirm: its link came back with a lease: the address asked for again */
     u_long next_dhcp;                   /* ticks */
     u_int fails;
     u_long renew_try, renew_for;        /* the last renewal tried, for the lease granted at renew_for */
@@ -748,6 +861,12 @@ static struct ifstate *state_of(struct netdev *d) {
     return NULL;
 }
 
+/* the wait before DHCP try fails + 1: DHCP_RETRY_MS, doubling to DHCP_RETRY_MAX */
+static u_long retry_wait(u_int fails) {
+    u_long wait = DHCP_RETRY_MS << (fails > 5 ? 4 : fails ? fails - 1 : 0);
+    return wait > DHCP_RETRY_MAX ? DHCP_RETRY_MAX : wait;
+}
+
 static void ethernet_step(void) {
     struct netdev *d;
     bool on;
@@ -758,24 +877,35 @@ static void ethernet_step(void) {
     for(d = netdev_first(); d; d = d->next) {
         struct ifstate *st;
         bool up = d->link_up;
-        u_long wait;
+        int r;
         if(strncmp(d->name, "eth", 3) || !(st = state_of(d))) continue;
         if(up && !st->was_up) {                         /* a link came up: try at once */
             st->next_dhcp = now;
             st->fails = 0;
+            st->confirm = d->ip && d->lease_s;          /* with a lease: still this network's? */
         }
         st->was_up = up;
-        if(!on || !up || d->ip || autonet_busy() || (long)(now - st->next_dhcp) < 0) continue;
-        kprintf("+NET: %s: link up; asking for an address (DHCP)\n", d->name);
-        if(dhcp_configure(d, DHCP_MS) == 0) {
+        if(!up || autonet_busy()) continue;
+        if(st->confirm) {
+            st->confirm = false;
+            r = dhcp_renew(d, DHCP_REBOOTING, RENEW_MS, d->lease_at);
+            if(r == -1) klogf("+NET: %s: no answer to confirming its address; it is kept, and renewed as usual\n",
+                              d->name);
+            if(r == -2 && !on) kprintf("+NET: %s: its address was not this network's (dhcp %s gets one)\n", d->name,
+                                       d->name);
+        }
+        if(!on || d->ip || (long)(now - st->next_dhcp) < 0) continue;
+        if(st->fails) klogf("+NET: %s: asking for an address again (DHCP)\n", d->name);
+        else kprintf("+NET: %s: link up; asking for an address (DHCP)\n", d->name);
+        if(dhcp_configure_quiet(d, DHCP_MS, st->fails > 0) == 0) {
             st->fails = 0;
             continue;
         }
         st->fails++;
-        wait = ETH_RETRY_MS << (st->fails > 4 ? 4 : st->fails - 1);
-        if(wait > ETH_RETRY_MAX) wait = ETH_RETRY_MAX;
-        st->next_dhcp = getticks() + wait / (1000 / HZ);
-        kprintf("+NET: %s: no lease; the next try in %lu s\n", d->name, wait / 1000);
+        st->next_dhcp = ticks_after(retry_wait(st->fails));
+        if(st->fails == 1) kprintf("+NET: %s: no lease; asking again in %lu s, then less often\n", d->name,
+                                   retry_wait(1) / 1000);
+        else klogf("+NET: %s: still no lease; the next try in %lu s\n", d->name, retry_wait(st->fails) / 1000);
     }
 }
 
@@ -800,15 +930,14 @@ static void lease_step(void) {
         step = netcfg_lease_step(lease, at, st->renew_try, getticks(), HZ);
         if(step == NETCFG_LEASE_WAIT) continue;
         if(step == NETCFG_LEASE_EXPIRED) {
-            dhcp_drop(d, "its lease ran out");
+            dhcp_drop(d, "its lease ran out", at);
             continue;
         }
         if(!d->link_up) continue;                       /* nothing to ask through; when the link is back */
         st->renew_try = getticks() ? getticks() : 1;
-        r = dhcp_renew(d, step == NETCFG_LEASE_REBIND, RENEW_MS);
-        if(r == -2) dhcp_drop(d, "the DHCP server would not renew it");
-        else if(r) klogf("+NET: %s: no answer to renewing its lease (%s); tried again later\n", d->name,
-                         step == NETCFG_LEASE_REBIND ? "any server" : "the server that granted it");
+        r = dhcp_renew(d, step == NETCFG_LEASE_REBIND ? DHCP_REBINDING : DHCP_RENEWING, RENEW_MS, at);
+        if(r == -1) klogf("+NET: %s: no answer to renewing its lease (%s); tried again later\n", d->name,
+                          step == NETCFG_LEASE_REBIND ? "any server" : "the server that granted it");
     }
 }
 
@@ -823,120 +952,177 @@ static bool refused(const struct saved *s, u_long now) {
     return s->refused_until && (long)(s->refused_until - now) > 0;
 }
 
-/* the station refused the key of the network named so: not tried for a while */
-static void mark_refused(const u8 *ssid, u_int len) {
+/* the saved network named so: refused once more (true: WIFI_REFUSALS times in a row, so it is set aside for a while),
+   or joined (refused false: the count starts again) */
+static bool note_refusal(const u8 *ssid, u_int len, bool refused) {
+    bool aside = false;
     int i;
     mutex_lock(&nm_lock);
     for(i = 0; i < nsaved; i++) {
-        if(saved[i].net.ssid_len == len && !memcmp(saved[i].net.ssid, ssid, len)) {
-            saved[i].refused_until = getticks() + WIFI_REFUSED_MS / (1000 / HZ);
-            if(!saved[i].refused_until) saved[i].refused_until = 1;
+        struct saved *s = &saved[i];
+        if(s->net.ssid_len != len || memcmp(s->net.ssid, ssid, len)) continue;
+        if(!refused) {
+            s->refusals = 0;
+            continue;
+        }
+        if(++s->refusals >= WIFI_REFUSALS) {
+            s->refusals = 0;
+            s->refused_until = ticks_after(WIFI_REFUSED_MS);
+            aside = true;
         }
     }
     mutex_unlock(&nm_lock);
+    return aside;
 }
 
-static int join_saved(struct wlan_dev *w, const struct saved *s, bool cmd) {
+/* join the saved network s (cmd, quiet: say()), unless a wifi leave or down came since stops; its join request's
+   number into *join */
+static int join_saved(struct wlan_dev *w, const struct saved *s, bool cmd, bool quiet, u_int stops, u_int *join) {
     char name[4 * NETCFG_SSID_MAX + 1];
-    int r = wlan_join(w, s->net.ssid, s->net.ssid_len, NULL, s->net.security == NETCFG_SEC_WPA2 ? s->net.psk : NULL);
+    int r = wlan_join_unless(w, s->net.ssid, s->net.ssid_len, s->net.security == NETCFG_SEC_WPA2 ? s->net.psk : NULL,
+                             stops, join);
     ssid_str(s->net.ssid, s->net.ssid_len, name, sizeof(name));
     if(r == -EACCES) {
-        mark_refused(s->net.ssid, s->net.ssid_len);
-        say(cmd, "%s: %s refused its saved key: has its password changed? (wifi join %s, then wifi save; not tried "
-            "again for %u minutes)", w->name, name, name, WIFI_REFUSED_MS / 60000);
-    } else if(r && r != -ENOENT && r != -EINTR) {
-        say(cmd, "%s: joining %s failed: %s", w->name, name, r == -ETIMEDOUT ? "no answer" : strerror(r));
+        if(note_refusal(s->net.ssid, s->net.ssid_len, true))
+            say(cmd, false, "%s: %s refused its saved key %u times in a row: has its password changed, or was it "
+                "mistyped when it was saved? (wifi join %s, then wifi save; it is not tried again for %u minutes)",
+                w->name, name, WIFI_REFUSALS, name, WIFI_REFUSED_MS / 60000);
+        else
+            say(cmd, quiet, "%s: joining %s failed: its 4-way handshake did not finish (the key, or a frame lost)",
+                w->name, name);
+    } else if(r == 0) {
+        note_refusal(s->net.ssid, s->net.ssid_len, false);
+    } else if(r != -ENOENT && r != -EINTR && r != -EBUSY && r != -ECANCELED) {
+        say(cmd, quiet, "%s: joining %s failed: %s", w->name, name, r == -ETIMEDOUT ? "no answer" : strerror(r));
     }
     return r;
 }
 
-/* the address for the network just joined */
-static void get_address(struct wlan_dev *w, const char *name, bool cmd) {
+/* the address for the association just made (again: the keeper asking once more): 0 when there is one */
+static int get_address(struct wlan_dev *w, const char *name, bool cmd, bool again) {
     struct netdev *nd = w->netdev;
     int i;
-    say(cmd, "%s: joined %s; asking for an address (DHCP)", w->name, name);
+    if(again) say(cmd, true, "%s: asking for an address on %s again (DHCP)", w->name, name);
+    else say(cmd, false, "%s: joined %s; asking for an address (DHCP)", w->name, name);
     for(i = 0; i < DHCP_TRIES; i++) {
         if(i) sleep_ms(DHCP_PAUSE_MS);
-        if(cmd && task_interrupted()) return;
+        if(cmd && task_interrupted()) return -1;
         if(!nd->link_up) {
-            say(cmd, "%s: the link to %s went before an address came", w->name, name);
-            return;
+            say(cmd, again, "%s: the link to %s went before an address came", w->name, name);
+            return -1;
         }
-        if(dhcp_configure(nd, DHCP_MS) == 0) return;
+        if(nd->ip) return 0;                            /* a dhcp typed meanwhile got one */
+        if(dhcp_configure_quiet(nd, DHCP_MS, again) == 0) return 0;
     }
-    say(cmd, "%s: no address on %s after %u tries (dhcp %s asks again)", w->name, name, DHCP_TRIES, w->name);
+    return -1;
 }
 
-/* join the first saved network in range and get its address: 0, -ENOENT none in range, or why not */
-static int connect_saved(struct wlan_dev *w, bool cmd) {
+/* DHCP for the manager's association failed (once more): the next try later */
+static void address_later(struct wlan_dev *w, const char *name, bool cmd) {
+    u_int fails = ++keeper_dhcp_fails;
+    keeper_dhcp_next = ticks_after(retry_wait(fails));
+    if(fails == 1)
+        say(cmd, false, "%s: no address on %s after %u tries; asking again in %lu s, then less often (dhcp %s asks "
+            "now)", w->name, name, DHCP_TRIES, retry_wait(1) / 1000, w->name);
+    else
+        klogf("+NET: %s: still no address on %s; the next try in %lu s\n", w->name, name, retry_wait(fails) / 1000);
+}
+
+/* join the first saved network in range and get its address, said on the command's console (cmd) or by "+NET:" lines
+   (quiet: a keeper's repeat, in the log only). stops: the station's count of wifi leave and wifi down when the connect
+   began: one typed since calls it off (-ECANCELED). 0 joined (an address or not), -ENOENT none to join in range,
+   -EBUSY, -EINTR, or why not */
+static int connect_saved(struct wlan_dev *w, bool cmd, bool quiet, u_int stops) {
     struct saved *list = (struct saved *)kcalloc(NETCFG_NETS_MAX, sizeof(struct saved));
     struct wlan_bss *bss = (struct wlan_bss *)kalloc(BSS_MAX * sizeof(struct wlan_bss));
-    struct wlan_station_info si;
+    bool *heard = (bool *)kcalloc(NETCFG_NETS_MAX, sizeof(bool)), exposed;
     char name[4 * NETCFG_SSID_MAX + 1];
     u_long now, scanned;
-    int n, nb, i, j, r = -ENOMEM, pick = -1, tried = 0;
-    if(!list || !bss) goto out;
+    u_int join = 0;
+    int n, nb, i, j, r = -ENOMEM, pick = -1, tried = 0, skipped = 0;
+    if(!list || !bss || !heard) goto out;
     mutex_lock(&nm_lock);
     n = nsaved;
     memcpy(list, saved, n * sizeof(struct saved));
     mutex_unlock(&nm_lock);
     if(!n) {
-        say(cmd, "no saved Wi-Fi networks (wifi save keeps the one wlan0 is joined to)");
+        if(where_state == WHERE_OFF) say(cmd, quiet, "the saved Wi-Fi networks are not read at this start (settings=off)");
+        else say(cmd, quiet, "no saved Wi-Fi networks (wifi save keeps the one %s is joined to)", w->name);
         r = -ENOENT;
         goto out;
     }
     if(!w->up) {
-        say(cmd, "%s: starting the Wi-Fi card to join a saved network", w->name);
-        r = wlan_up(w);
+        say(cmd, quiet, "%s: starting the Wi-Fi card to join a saved network", w->name);
+        r = wlan_up_unless(w, stops);
         if(r) {
-            if(r != -EBUSY && r != -EINTR) say(cmd, "%s: the card did not start: %s", w->name, strerror(r));
+            if(r != -EBUSY && r != -EINTR && r != -ECANCELED) say(cmd, quiet, "%s: the card did not start: %s", w->name,
+                                                                  strerror(r));
             goto out;
         }
     }
     scanned = getticks();
     r = wlan_scan(w, WIFI_SCAN_MS);
     if(r && r != -ETIMEDOUT) {
-        if(r != -EBUSY && r != -EINTR) say(cmd, "%s: the scan failed: %s", w->name, strerror(r));
+        if(r != -EBUSY && r != -EINTR) say(cmd, quiet, "%s: the scan failed: %s", w->name, strerror(r));
         goto out;
     }
     nb = (int)wlan_bss_list(w, bss, BSS_MAX);
     now = getticks();
+    exposed = netman_telnet_exposed();
     for(i = 0; i < n && pick < 0; i++) {                /* the saved ones in their order, as heard */
-        if(refused(&list[i], now)) continue;
         for(j = 0; j < nb; j++) {                       /* heard in this scan: the list keeps a network for a minute */
             if(bss[j].ssid_len == list[i].net.ssid_len && !memcmp(bss[j].ssid, list[i].net.ssid, bss[j].ssid_len) &&
                sec_fits(list[i].net.security, bss[j].security) && (long)(bss[j].seen - scanned) >= 0)
                 break;
         }
         if(j == nb) continue;
+        heard[i] = true;
         ssid_str(list[i].net.ssid, list[i].net.ssid_len, name, sizeof(name));
-        say(cmd, "%s: %s is in range (%d dBm): joining it", w->name, name, bss[j].rssi);
+        if(refused(&list[i], now)) {
+            say(cmd, quiet, "%s: %s is in range, but its saved key was refused (not tried again for %lu more minutes; "
+                "wifi join %s, then wifi save)", w->name, name,
+                ((list[i].refused_until - now) / HZ + 59) / 60, name);
+            skipped++;
+            continue;
+        }
+        if(list[i].net.security == NETCFG_SEC_OPEN && exposed) {
+            say(cmd, quiet, "%s: %s is in range, but it is open and a telnet server runs or is to start: not joined "
+                "by itself (wifi join %s joins it)", w->name, name, name);
+            skipped++;
+            continue;
+        }
+        say(cmd, quiet, "%s: %s is in range (%d dBm): joining it", w->name, name, bss[j].rssi);
         tried++;
-        r = join_saved(w, &list[i], cmd);
+        r = join_saved(w, &list[i], cmd, quiet, stops, &join);
         if(r == 0) pick = i;
-        if(r == -EINTR || r == -EBUSY) goto out;
+        if(r == -EINTR || r == -EBUSY || r == -ECANCELED) goto out;
     }
-    for(i = 0; i < n && pick < 0; i++) {                /* then the hidden ones, by a probe for their names */
-        if(!list[i].net.hidden || refused(&list[i], now)) continue;
+    for(i = 0; i < n && pick < 0; i++) {                /* then the hidden ones not heard, by a probe for their names */
+        if(!list[i].net.hidden || heard[i] || refused(&list[i], now) ||
+           (list[i].net.security == NETCFG_SEC_OPEN && exposed))
+            continue;
         ssid_str(list[i].net.ssid, list[i].net.ssid_len, name, sizeof(name));
-        say(cmd, "%s: looking for the hidden network %s", w->name, name);
+        say(cmd, quiet, "%s: looking for the hidden network %s", w->name, name);
         tried++;
-        r = join_saved(w, &list[i], cmd);
+        r = join_saved(w, &list[i], cmd, quiet, stops, &join);
         if(r == 0) pick = i;
-        if(r == -EINTR || r == -EBUSY) goto out;
+        if(r == -EINTR || r == -EBUSY || r == -ECANCELED) goto out;
     }
     if(pick < 0) {
-        if(!tried) say(cmd, "%s: none of the %i saved network%s is in range", w->name, n, n == 1 ? "" : "s");
+        if(!tried && !skipped) {
+            if(n == 1) say(cmd, quiet, "%s: %s, the saved network, is not in range", w->name,
+                           ssid_str(list[0].net.ssid, list[0].net.ssid_len, name, sizeof(name)));
+            else say(cmd, quiet, "%s: none of the %i saved networks is in range", w->name, n);
+        }
         r = -ENOENT;
         goto out;
     }
-    if(wlan_station(w, &si, false) == 0) {              /* the association is the manager's: its address too */
-        keeper_requests = si.join_requests;
-        keeper_dhcp_for = si.joins;
-        keeper_owns = true;
-    }
+    keeper_join = join;                                 /* the association is the manager's: its address too */
+    keeper_owns = true;
+    keeper_dhcp_fails = 0;
+    keeper_dhcp_next = 0;
     ssid_str(list[pick].net.ssid, list[pick].net.ssid_len, name, sizeof(name));
-    get_address(w, name, cmd);
+    if(get_address(w, name, cmd, false)) address_later(w, name, cmd);
     r = 0;
 out:
     if(list) {
@@ -944,62 +1130,79 @@ out:
         kfree(list);
     }
     kfree(bss);
+    kfree(heard);
     return r;
 }
 
 int netman_wifi_connect(struct wlan_dev *w) {
+    struct wlan_station_info si;
     int r;
+    if(wlan_station(w, &si, false)) return -ENODEV;
     if(!mutex_trylock(&connect_lock)) return -EBUSY;
-    if(!keeper_dev) keeper_dev = w;                     /* autonet asks netman_wifi_owns() about it meanwhile */
     keeper_connecting = true;
-    r = connect_saved(w, true);
+    r = connect_saved(w, true, false, si.stops);
     keeper_connecting = false;
     mutex_unlock(&connect_lock);
+    if(r != -EINTR && r != -EBUSY && r != -ECANCELED && where_state != WHERE_OFF) {
+        keeper_resume = true;                           /* what the start does: the keeper looks by itself again */
+        start_keeper(false);
+    }
     return r;
 }
 
-bool netman_wifi_owns(struct netdev *dev) {
-    struct wlan_dev *w = keeper_dev;
-    struct wlan_station_info si;
-    if(!w || !dev || dev != w->netdev) return false;
-    if(keeper_connecting) return true;
-    return keeper_owns && wlan_station(w, &si, false) == 0 && si.state == WLAN_STA_UP &&
-           si.join_requests == keeper_requests;
+/* the manager's association, without an address: DHCP again when it is time (keeper_dhcp_next, 0: at once) */
+static void keep_address(struct wlan_dev *w, const struct wlan_station_info *si) {
+    char name[4 * NETCFG_SSID_MAX + 1];
+    u_long next = keeper_dhcp_next;
+    if(!keeper_owns || si->join_requests != keeper_join || keeper_connecting) return;
+    if(w->netdev->ip) {
+        keeper_dhcp_fails = 0;
+        keeper_dhcp_next = 0;
+        return;
+    }
+    if(next && (long)(getticks() - next) < 0) return;
+    if(!mutex_trylock(&connect_lock)) return;
+    ssid_str(si->ssid, si->ssid_len, name, sizeof(name));
+    if(get_address(w, name, false, true)) address_later(w, name, false);
+    else keeper_dhcp_fails = 0;
+    mutex_unlock(&connect_lock);
 }
 
 /* the keeper: the boot's join, then a saved network again whenever the station gives one up */
 static void wifiman_main(void *arg) {
     struct wlan_dev *w = (struct wlan_dev *)arg;
     struct wlan_station_info si;
-    u_long next = getticks();
-    u_int tries = 0, last_requests = 0;
-    int last_state = -1, last_idle = -1, r;
+    u_long next = getticks(), wait;
+    u_int tries = 0, last_requests, last_stops;
+    int last_state = -1, last_idle = -1, n, r;
     bool retrying = keeper_at_boot, on;                 /* a keeper started later (wifi save) waits for a loss */
+    if(wlan_station(w, &si, false)) goto gone;
+    last_requests = si.join_requests;
+    last_stops = si.stops;
     for(;;) {
-        int n;
         mutex_lock(&nm_lock);
         on = cfg.wifi;
         n = nsaved;
         mutex_unlock(&nm_lock);
         if(wlan_station(w, &si, false)) break;
-        if(!on || !n) retrying = false;
-        else if(si.state == WLAN_STA_UP) {
+        if(si.stops != last_stops) {                    /* wifi leave or wifi down: the owner's, until a loss */
+            retrying = false;
+            last_stops = si.stops;
+        }
+        if(keeper_resume) {                             /* wifi connect: the keeper's again */
+            keeper_resume = false;
+            if(si.state != WLAN_STA_UP && si.state != WLAN_STA_JOINING && si.state != WLAN_STA_RECONNECTING) {
+                retrying = true;
+                tries = 1;
+                next = ticks_after(WIFI_RETRY_MS);
+            }
+        }
+        if(!on || !n) {
+            retrying = false;
+        } else if(si.state == WLAN_STA_UP) {
             retrying = false;
             tries = 0;
-            /* an association of the manager's own whose address went (its lease ran out, say): asked for once
-               more; while it has one, a later loss is asked about again */
-            if(w->netdev->ip) keeper_dhcp_for = 0;
-            else if(keeper_owns && si.join_requests == keeper_requests && keeper_dhcp_for != si.joins &&
-                    !keeper_connecting) {
-                keeper_dhcp_for = si.joins;
-                if(mutex_trylock(&connect_lock)) {
-                    char name[4 * NETCFG_SSID_MAX + 1];
-                    get_address(w, ssid_str(si.ssid, si.ssid_len, name, sizeof(name)), false);
-                    mutex_unlock(&connect_lock);
-                }
-            }
-        } else if((si.state == WLAN_STA_IDLE || si.state == WLAN_STA_DOWN) && si.idle == WLAN_IDLE_LEFT) {
-            retrying = false;                           /* wifi leave or wifi down: the owner's */
+            keep_address(w, &si);
         } else if(si.state == WLAN_STA_IDLE && si.idle == WLAN_IDLE_GAVE_UP &&
                   (last_state != WLAN_STA_IDLE || last_idle != WLAN_IDLE_GAVE_UP || si.join_requests != last_requests)) {
             if(!retrying) {
@@ -1017,7 +1220,7 @@ static void wifiman_main(void *arg) {
         if(retrying && (long)(getticks() - next) >= 0) {
             if(mutex_trylock(&connect_lock)) {
                 keeper_connecting = true;
-                r = connect_saved(w, false);
+                r = connect_saved(w, false, tries > 0, si.stops);
                 keeper_connecting = false;
                 mutex_unlock(&connect_lock);
             } else {
@@ -1026,15 +1229,23 @@ static void wifiman_main(void *arg) {
             if(r == 0) {
                 retrying = false;
                 tries = 0;
+            } else if(r == -ECANCELED) {
+                retrying = false;                       /* the owner's wifi leave or down came meanwhile */
             } else {
-                u_long wait = r == -EBUSY ? WIFI_BUSY_MS : ++tries < WIFI_LATE_TRIES ? WIFI_RETRY_MS : WIFI_RETRY_LATE;
-                if(tries == 1 && r != -EBUSY) kprintf("+NET: %s: no saved network joined; looking again every %lu s\n",
-                                                      w->name, wait / 1000);
-                next = getticks() + wait / (1000 / HZ);
+                if(r != -EBUSY) tries++;
+                wait = r == -EBUSY ? WIFI_BUSY_MS : tries < WIFI_LATE_TRIES ? WIFI_RETRY_MS : WIFI_RETRY_LATE;
+                if(tries == 1 && r != -EBUSY)
+                    kprintf("+NET: %s: no saved network joined; looking again every %lu s (in the log: dmesg)\n",
+                            w->name, wait / 1000);
+                else if(tries == WIFI_LATE_TRIES && r != -EBUSY)
+                    klogf("+NET: %s: no saved network joined after %u tries; looking every %lu s from now on\n",
+                          w->name, WIFI_LATE_TRIES, WIFI_RETRY_LATE / 1000);
+                next = ticks_after(wait);
             }
         }
         sleep_ms(1000);
     }
+gone:
     kprintf("+NET: %s: the Wi-Fi keeper stops (the device is gone)\n", w->name);
     wifiman = NULL;
 }
@@ -1056,7 +1267,6 @@ static void start_keeper(bool at_boot) {
         if(!w) {
             klogf("+NET: no Wi-Fi device: the saved networks are not joined\n");
         } else {
-            keeper_dev = w;
             keeper_at_boot = at_boot;
             wifiman = kthread_create_on("wifiman", &conArray[0], wifiman_main, w, PL_NORMAL, TF_DETACHED);
             if(!wifiman) kprintf("+NET: no memory for the Wi-Fi keeper: wifi connect joins a saved network by hand\n");
@@ -1068,34 +1278,36 @@ static void start_keeper(bool at_boot) {
 /**** the thread ****/
 
 static void netman_main(void *arg) {
-    bool autonet = bootinfo_has_arg(&bootinfo, "autonet"), telnetd, started = false;
-    char host[NETCFG_HOSTNAME_MAX + 1];
-    u_long start = uptime_ms();
+    bool autonet = bootinfo_has_arg(&bootinfo, "autonet"), telnetd, read;
+    struct netdev *d;
+    char host[NETCFG_HOSTNAME_MAX + 1], a[16];
+    int child = 0, status;
     u16 port;
     load_at_boot();
     mutex_lock(&nm_lock);
-    telnetd = cfg.telnetd && !autonet;                  /* autonet starts it itself, on 23 */
+    read = where_state == WHERE_READ;
+    telnetd = read && cfg.telnetd && !autonet;          /* autonet starts it itself, on 23 */
     port = cfg.telnetd_port;
     strlcpy(host, cfg.hostname, sizeof(host));
     mutex_unlock(&nm_lock);
-    dhcp_set_hostname(host);
-    start_keeper(true);
+    if(read && !(cmd_set & (1u << NETCFG_HOSTNAME))) dhcp_set_hostname(host);
+    telnetd_due = telnetd;
+    if(where_state != WHERE_OFF) start_keeper(true);
     for(;;) {
         ethernet_step();
         lease_step();
-        if(telnetd && !started && (an_address() || uptime_ms() - start >= TELNETD_WAIT_MS)) {
-            started = true;
-            kprintf("+NET: starting telnetd on F1 (the settings: telnetd = on)\n");
-            netman_start_telnetd(port);
+        if(telnetd_due && (d = trusted_address())) {
+            telnetd_due = false;
+            kprintf("+NET: %s: %s; starting telnetd on F1 (the settings: telnetd = on)\n", d->name, ipfmt(d->ip, a));
+            start_telnetd(port, "+NET", &child);
         }
-        sleep_ms(telnetd && !started ? 250 : 1000);
+        if(child && task_wait_opts((u_long)child, &status, WNOHANG) != 0) child = 0;   /* a slow one, collected */
+        sleep_ms(telnetd_due ? 250 : 1000);
     }
 }
 
 void init_netman(void) {
     netcfg_defaults(&cfg);
-    dhcp_set_hostname(cfg.hostname);
-    saved = (struct saved *)kcalloc(NETCFG_NETS_MAX, sizeof(struct saved));
-    if(!saved || !kthread_create_on("netman", &conArray[0], netman_main, NULL, PL_NORMAL, TF_DETACHED))
+    if(!kthread_create_on("netman", &conArray[0], netman_main, NULL, PL_NORMAL, TF_DETACHED))
         kprintf("+NET: no memory for the network manager: no settings from the stick\n");
 }

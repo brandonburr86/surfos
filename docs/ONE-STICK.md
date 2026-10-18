@@ -33,9 +33,12 @@ Run the commands below from the `06-restoration` folder in Terminal. Where it sa
 2. The menu:
    * **SurfOS (development build from this stick)** starts after 5 seconds, with the
      network and the telnet server (no password: on a network you do not trust, choose
-     the next entry instead).
+     **SurfOS (without the settings on the stick)**, further down, instead).
    * **SurfOS** starts the fallback build in `boot/`: choose it with the arrow keys when
-     a development build misbehaves.
+     a development build misbehaves. It reads the settings, so it starts the telnet
+     server too when they say `telnetd = on`.
+   * **SurfOS (without the settings on the stick: no Wi-Fi joined, no telnetd)** starts
+     the fallback build without the settings: no network joined, no telnet server.
 3. Check that SurfOS knows its stick: `lsblk` should show the stick's partition with
    `boot drive: writable`. `fdisk` and `mkfs` refuse that stick; its files may be changed.
 4. To use your files: `mount usb0p1 /data` (use the name `lsblk` shows), and `eject usb0`
