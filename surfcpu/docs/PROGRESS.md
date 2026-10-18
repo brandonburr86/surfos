@@ -14,7 +14,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: neither of the owner's keyboards answers. The first (a USB keyboard on a passive USB-to-PS/2 adapter) does not speak PS/2; the second, an MCSAITE PS/2 keyboard specified for 5 V, does not start on the adapter's 3.3 V ([evidence](evidence/physical/ps2-2026-10-17.txt)): it needs a level shifter with 5 V, or a keyboard that runs at 3.3 V | done in simulation; on the board: VGA done, the PS/2 keyboard pending (a level shifter for the owner's 5 V keyboard, or a keyboard that runs at 3.3 V) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
 | 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the sixth storage review's findings, being fixed in fs-fix-6) |
-| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | a fresh checkout's pre-release 1.0.0-pre-bb066932: the six non-DDR bitstreams pass every gate, and `release-verify` rebuilt all 18 artifacts byte for byte ([evidence](evidence/release/)); the DDR designs now build reproducibly and pass on the board; no release made with them yet | pending: the flash not written (needs the owner's go-ahead), no DDR boot design | tooling done and reviewed (its findings fixed in rel-2); the pre-release must be made again |
+| 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
 
 ## Log
 
@@ -769,3 +769,25 @@ ddr-3 built five candidates, every gate passing on each
     shares the id);
   * no block protection, and the QUAD bit set.
 * The PCB revision is Rev. E (the owner). INVENTORY.md G1 and G7 are answered.
+
+### 2026-10-17: release 1.0.0-f791b8a1
+
+* The first complete release was made from a fresh checkout of f791b8a, without PRERELEASE
+  ([evidence](evidence/release/release-1.0.0-f791b8a1.txt)): 24 artifacts, all 10 bitstreams
+  passing every gate (the four DDR builds among them), in 141 minutes. `make release-verify`
+  rebuilt it in another clone, and all 24 artifacts came out byte for byte the same in 144
+  minutes ([evidence](evidence/release/verify-1.0.0-f791b8a1.txt)). It is kept in
+  `build/release/1.0.0-f791b8a1` of the worktree.
+* Its DDR boot design was loaded over JTAG on the owner's board twice
+  ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)). Each time,
+  SurfBoot (build f791b8a1) calibrated the DDR3L in 188 ms, loaded SurfOS 22cbdc9a from the
+  card and reached the shell 5.1 s after its banner. The card still has the 2026-10-16 kernel
+  and no CMDLINE.TXT, so it is mounted read-only.
+* The whole 16 MiB flash was read back before anything is written to it
+  ([evidence](evidence/physical/flash-backup-2026-10-17.txt)). It holds one compressed Vivado
+  stream of about 1 MB at address 0, set for quad-SPI reads: by all signs Digilent's factory
+  image. The copy is kept in `build/flash-backup/`, outside the repository.
+* Next: the owner's go-ahead for the flash write, then JP1 and the first standalone boot. m9's
+  board test needs the card with the release's files and sd=rw, so it waits for the storage
+  round (fs-fix-6 and its review); that release will probably be made again with the fixed
+  kernel, and the flash written again with its boot design.

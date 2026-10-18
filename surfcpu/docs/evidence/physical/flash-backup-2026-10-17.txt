@@ -1,0 +1,28 @@
+The configuration flash read back before SurfCPU writes it: the integrator's own run, not a board-test run
+2026-10-17, the owner's Arty A7-100T (Rev. E), JP1 off, cable 210319C129C6. Nothing was written to the flash.
+
+Command (openFPGALoader loads its spiOverJtag bridge into configuration RAM, then only reads):
+  openFPGALoader -b arty_a7_100t --dump-flash --file-size 16777216 \
+      build/flash-backup/arty_a7_100t-flash-2026-10-17-before-surfcpu.bin
+21:56:51 to 21:57:32 UTC (41 s); openFPGALoader ended with "Done". The release's boot design was loaded
+again over JTAG afterwards (release-1.0.0-f791b8a1-jtag-2026-10-17.txt, boot 2).
+
+The file: 16,777,216 bytes (the whole 128 Mbit part), sha256
+  064c2e4bb290cb26d92eab770b0824bac70b867377dc51741dd5ed2634a3280a
+kept in surfcpu/build/flash-backup/ of the integrator's worktree (git ignores build/, and make clean
+leaves that directory alone). It is not in the repository.
+
+What it holds (read with a short script):
+  0x000000-0x106F07  one configuration stream (1,077,000 bytes with its leading 0xFF padding): the bus-width pattern at 0x20, the
+                     sync word at 0x30, IDCODE 0x03631093 (XC7A100T). Before its frames it writes
+                     BSPI = 0x0000026B with a BSPI_READ command (quad-SPI reads), COR0 = 0x022A3FE5,
+                     CTL0 = 0x00000501.
+  0x106F08-0xFFFFFF  erased (every byte 0xFF).
+A stream that sets the SPI bus width and the configuration rate, and is far shorter than the
+3,825,788 bytes of an uncompressed 100T stream, comes from Vivado with compression on. By all signs
+it is the factory image Digilent ships (the out-of-box demo), though nothing in it names the design.
+
+Writing a SurfCPU bitstream to slot 0 (0x000000-0x3A607B, erased up to 0x3AFFFF, RELEASE.md
+section 6) replaces all of it. Putting it back is a JTAG write like any other, with JP1 off
+(RELEASE.md section 7). openFPGALoader has to be run by hand for that, because tools/program.sh
+takes only a .bit with its build record.

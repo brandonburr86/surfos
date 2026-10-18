@@ -261,6 +261,10 @@ The release `1.0.0-pre-bb066932` was made this way, with no reference yet
 (`tools/fresh-checkout.sh --commit bb06693 --keep -- PRERELEASE=1`, evidence `release.txt`): from
 the clone to the written release in 53 minutes, the images used as they were, nothing else set up.
 `make release-verify` then rebuilt it in another clone and compared it (section 4, `verify.txt`).
+The first complete release, `1.0.0-f791b8a1` with all ten bitstreams, was made the same way
+without `PRERELEASE` (`tools/fresh-checkout.sh --commit f791b8a --keep`, evidence
+`release-1.0.0-f791b8a1.txt`) in 141 minutes, and `make release-verify` rebuilt all 24 of its
+artifacts byte for byte in 144 minutes (`verify-1.0.0-f791b8a1.txt`).
 
 ## 6. The configuration flash
 
@@ -428,8 +432,10 @@ the same; its `MANIFEST` comparison names the new image ids.
 | | What |
 |---|---|
 | `make test-release` (on `make check`, about a minute), and `make release-selftest` (the same with the Mac's own Python) | `tools/release-test.py`: `tools/bitfile.py`'s self-test, flash image and header rule (shared with `tools/program.sh`); `tools/release.py`'s TOML subset, its comparison and the causes it names for planted differences (the `.bit` header's time, a frame, a kernel word with its symbol, a missing and an extra file); `make` in a scratch repository with stand-ins for the builds: a dirty tree (also one git's configuration hides), a foreign `SOURCE_DATE_EPOCH`, settings that would change the builds and missing designs without `PRERELEASE` refused; a complete release; a DDR design that fails gives a pre-release only with `PRERELEASE`; another design that fails stops it; two releases of one commit are the same bytes; other builds, a new commit or a changed staged file during the release; build records from another run or image; the builds' environment; a damaged, renamed, padded or cut release refused by `check` and `compare`; `verify` with names it does not know, and a partial one; the tools never deleting a directory they did not make; `tools/program.sh flash` on a release's bitstream with the board tests' fake openFPGALoader, and the host targets with paths that hold spaces |
-| `evidence/release/release.txt` | the release made from a fresh checkout (`tools/fresh-checkout.sh`): the output, `SHA256SUMS`, the gates of every bitstream, the missing DDR designs and why |
+| `evidence/release/release.txt` | the pre-release `1.0.0-pre-bb066932` made from a fresh checkout (`tools/fresh-checkout.sh`): the output, `SHA256SUMS`, the gates of every bitstream, the missing DDR designs and why |
 | `evidence/release/verify.txt` | `make release-verify` of it: every artifact, with what it found |
+| `evidence/release/release-1.0.0-f791b8a1.txt` | the first complete release, made from a fresh checkout: the output, `SHA256SUMS`, the gates of all ten bitstreams |
+| `evidence/release/verify-1.0.0-f791b8a1.txt` | `make release-verify` of it: all 24 artifacts byte for byte the same |
 | `evidence/release/tests.txt` | `make test-release` in the container and `make release-selftest` with both of the Mac's Pythons |
 | `evidence/release/review-fixes.txt` | the review's findings: each one's tests failing on the code it saw and passing after its fix, the reduced release `1.0.0-pre-147fe813` with its check and verify, and verify's refusals |
 | `evidence/release/determinism.txt` | the nondeterminism found (section 4), before and after, and the generated LiteDRAM core's |
@@ -439,7 +445,11 @@ the same; its `MANIFEST` comparison names the new image ids.
 ## 10. What only the board can show
 
 All pending (PHYSICAL-TESTS.md). The flash part is known: on the owner's Rev. E board a Spansion/Infineon
-128 Mbit part (JEDEC id 0x012018) with no block protection (INVENTORY.md G7). Still to show:
+128 Mbit part (JEDEC id 0x012018) with no block protection (INVENTORY.md G7). Its factory contents
+(Digilent's image, about 1 MB) are read back and kept off the repository
+(`evidence/physical/flash-backup-2026-10-17.txt`). Release `1.0.0-f791b8a1`'s DDR boot design,
+loaded over JTAG, booted SurfOS from the owner's card twice
+(`evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt`). Still to show:
 
 * that the flash part takes the image (`program-flash` with the real openFPGALoader, its JEDEC id,
   the erase, write and read-back);

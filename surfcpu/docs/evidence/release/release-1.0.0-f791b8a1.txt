@@ -1,0 +1,81 @@
+SurfCPU release 1.0.0-f791b8a1: made from a fresh checkout (milestone 9)
+2026-10-17, MacBook Pro M4 Max, Docker Desktop (14 CPUs, 7.7 GiB), the storage track's work running
+alongside (its own container at times).
+
+Command: tools/fresh-checkout.sh --commit f791b8a --keep --evidence <file>
+  (a git clone of the branch at f791b8a in a new directory, the images as they were, then
+  `make -C surfcpu release` there, without PRERELEASE; RELEASE.md sections 3 and 5)
+Result: a complete release (status "complete"), 24 artifacts. All 10 bitstreams passed every gate:
+the five designs for both boards, the four DDR builds among them. The generated LiteDRAM core
+matched its lock (ip/litedram/arty.sha256). From the clone to the written release took 140.8
+minutes: the SoC bitstreams without DDR 9 to 15 minutes each, the DDR ones 18 to 30.
+The release stays in the kept clone and is copied to build/release/1.0.0-f791b8a1 in the worktree,
+where `make release-check` passes on it (24 artifacts, every one listed, intact and consistent).
+Its rebuild: verify-1.0.0-f791b8a1.txt. Its boot design on the board over JTAG:
+../physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt.
+
+== the run (paths shortened: <clone> is the clone, <scratch> the work directory)
+fresh-checkout: 2026-10-17T19:33:24Z: commit f791b8a1de0f98f0879148ae52c21419529d99fc of <this worktree>, in <clone>
+fresh-checkout: cloned: f791b8a 2026-10-17 14:32:49 -0500 progress: fs-fix-5 merged and checked, the sixth review (fs-fix-6); the flash part and Rev. E (G1, G7) (1 s)
+fresh-checkout: image surfcpu-toolchain:2026-10-15 present: sha256:e4389c3c6d9349dd5270223947f4caf58aada608b7ba3e0fcf21b03ad85fef55
+fresh-checkout: image surfcpu-openxc7:2026-10-15 present: sha256:b802ed1bac370d991addab18ddf9529d16e4bcaa93c457eb1941c59cb236b2f0
+fresh-checkout: make -C surfcpu release 
+release: SurfCPU 1.0.0 at f791b8a1 (commit time 2026-10-17T19:32:49Z = SOURCE_DATE_EPOCH 1792265569), clean tree
+release: images: surfcpu-toolchain:2026-10-15 (sha256:e4389c3c6d93), surfcpu-openxc7:2026-10-15 (sha256:b802ed1bac37)
+release: plan: 10 bitstreams; built in <clone>/surfcpu/build/release-work, staged in <clone>/surfcpu/build/release/.1.0.0-f791b8a1.stage; logs in <clone>/surfcpu/build/release/1.0.0-f791b8a1.logs
+release: [1/11] the software (make build-rom, the kernel)
+release: software: SurfBoot, the BRAM diagnostics, DDRDIAG.BIN and SURFOS.BIN, build f791b8a1 (8 s)
+release: [2/11] arty_a7_baseline for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (63 s): wns 32.076 ns, sha256 fd6581499f1fcdee...
+release: [3/11] arty_a7_baseline for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (44 s): wns 32.922 ns, sha256 826759dbf2c741d2...
+release: [4/11] surfcpu_arty_a7_bramdiag for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (12.2 min): wns 24.367 ns, sha256 89bc019941e7a918...
+release: [5/11] surfcpu_arty_a7_bramdiag for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (9.1 min): wns 25.687 ns, sha256 4e76f92bdf1fe807...
+release: [6/11] surfcpu_arty_a7_top for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (10.6 min): wns 23.402 ns, sha256 c43cfc303310a60a...
+release: [7/11] surfcpu_arty_a7_top for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (15.2 min): wns 25.637 ns, sha256 2974a2ee9a9fff18...
+release: [8/11] surfcpu_arty_a7_ddr_bramdiag for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release: LiteDRAM core generated and checked against ip/litedram/arty.sha256 (24 s)
+release:     PASS (30.3 min): wns 1.602 ns, sha256 faedf46c0b25407e...
+release: [9/11] surfcpu_arty_a7_ddr_bramdiag for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (17.6 min): wns 1.281 ns, sha256 9dc79338b77f034a...
+release: [10/11] surfcpu_arty_a7_ddr for arty_a7_100t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (25.0 min): wns 1.13 ns, sha256 935b291a3855b47e...
+release: [11/11] surfcpu_arty_a7_ddr for arty_a7_35t (tools/fpga-build.sh, FLOW=openxc7)
+release:     PASS (18.9 min): wns 0.93 ns, sha256 6a05d81205cfaa4a...
+release: written <clone>/surfcpu/build/release/1.0.0-f791b8a1: complete release
+release: 24 artifacts in SHA256SUMS (check: cd <clone>/surfcpu/build/release/1.0.0-f791b8a1 && shasum -a 256 -c SHA256SUMS); 140.8 min in all
+fresh-checkout: make release: exit status 0 (8452 s)
+fresh-checkout: release: <clone>/surfcpu/build/release/1.0.0-f791b8a1
+fresh-checkout: done in 8452 s
+fresh-checkout: evidence in <scratch>/release-fresh-f791b8a.txt
+fresh-checkout: kept <this worktree>/surfcpu/build/fresh-checkout/run.PgU1jr
+
+== SHA256SUMS
+8f8ddbe306d120603da8a7cef4fc51797767160ece164b0eeea81e6e7048956b  DDRDIAG.BIN
+517298ff64d7a545cc99c8411f20cf318cb6f8b579f890fca3687d3a43e1901f  SURFOS.BIN
+b495040286e1ae28cabcf78b68430b36737dbfc64f3033ac26584c961f100253  card/BOOT/CMDLINE.TXT
+517298ff64d7a545cc99c8411f20cf318cb6f8b579f890fca3687d3a43e1901f  card/BOOT/SURFOS.BIN
+6eca586adcfde9ffee3cfff54945a06f721c889b0afd7986faaba0770ae19bf5  debug/bramdiag.elf
+2345cb2793749b4e330422a215bda5b18fb669c9f5dedb1d705ac08921021845  debug/ddrdiag.elf
+16478900bed8a1b782913e4ce7325da81ad6f33f07763551cd32d78c88d87695  debug/surfboot.elf
+c849a10a01fbf05540630c9705451a1f0872c6529ace97763dd739e40a63f0a0  debug/surfos.elf
+f8e5ef51d756420973b34e62042827924331dfac0e779ffd7b49c57395b3375f  flash/arty_a7_100t/surfcpu_arty_a7_ddr.bin
+40019f4a32766caaa61f22ff80ff388815cb2b9211fc9c0bb4a0b0c636a8e406  flash/arty_a7_100t/surfcpu_arty_a7_top.bin
+b1bf409113f0a7a0cc91831a4ec9948a363c992ecfe63008c066a80514d72a4d  flash/arty_a7_35t/surfcpu_arty_a7_ddr.bin
+c6ff974b0fa1f6759ab1ed3f3471242d49c235d69b261f6105106510cbd88119  flash/arty_a7_35t/surfcpu_arty_a7_top.bin
+fd6581499f1fcdee3a8808fea38923905a7d08cab1ad1d4055d0c511b3097dd2  fpga/arty_a7_100t/arty_a7_baseline/arty_a7_baseline.bit
+89bc019941e7a9185083d4c52583a861de14a4ba18b460ab1614850d743054b5  fpga/arty_a7_100t/surfcpu_arty_a7_bramdiag/surfcpu_arty_a7_bramdiag.bit
+935b291a3855b47edb9d153aef191296b828aac5ff59a5e9a43e99118c3bb7ae  fpga/arty_a7_100t/surfcpu_arty_a7_ddr/surfcpu_arty_a7_ddr.bit
+faedf46c0b25407ee6fd1d82eba90826e11a78ca119d0ee3632c836562d27395  fpga/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag/surfcpu_arty_a7_ddr_bramdiag.bit
+c43cfc303310a60ab5dbca69fbc3fefe34921e68132ef4ac6c449eeaa46a6888  fpga/arty_a7_100t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+826759dbf2c741d233519532e3f2d18f6b63da06c3f33daac664cd09a814831e  fpga/arty_a7_35t/arty_a7_baseline/arty_a7_baseline.bit
+4e76f92bdf1fe8072b68f1acfb879ecb582afe6aa5197a06e4639c6a9353fa97  fpga/arty_a7_35t/surfcpu_arty_a7_bramdiag/surfcpu_arty_a7_bramdiag.bit
+6a05d81205cfaa4ad84deb26e621119504ffaf53a2f159bdbe1ecc5e987fec36  fpga/arty_a7_35t/surfcpu_arty_a7_ddr/surfcpu_arty_a7_ddr.bit
+9dc79338b77f034aa6306e380268f7ea3a25700494371d91b3bb665b93666e4f  fpga/arty_a7_35t/surfcpu_arty_a7_ddr_bramdiag/surfcpu_arty_a7_ddr_bramdiag.bit
+2974a2ee9a9fff18be301ab34d52486472c4770e93ec379fcaad0ae331587a0b  fpga/arty_a7_35t/surfcpu_arty_a7_top/surfcpu_arty_a7_top.bit
+c1213bb8ddd7d260554c9255f560175d979b64bd624679c8fba46d619c9c8d5e  rom/bramdiag.mem
+ca71de6b529782a69c6df62052b1f1b042652c8d2b7cac1703c8b04280216fc2  rom/surfboot.mem

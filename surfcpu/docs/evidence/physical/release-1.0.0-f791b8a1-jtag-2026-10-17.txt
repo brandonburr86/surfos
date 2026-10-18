@@ -1,0 +1,32 @@
+Release 1.0.0-f791b8a1's boot design on the board over JTAG: the integrator's own captures, not a board-test run
+2026-10-17, the owner's Arty A7-100T (Rev. E), JP1 off; configuration RAM only, nothing written to the flash.
+The bitstream: <release>/fpga/arty_a7_100t/surfcpu_arty_a7_ddr/surfcpu_arty_a7_ddr.bit, sha256
+935b291a3855b47edb9d153aef191296b828aac5ff59a5e9a43e99118c3bb7ae (the release's SHA256SUMS), loaded with
+  make -C surfcpu program-volatile BOARD=arty_a7_100t BIT=<it>
+The card is the owner's: SurfOS 1.0.0 build 22cbdc9a and no /BOOT/CMDLINE.TXT (so mounted read-only). It
+does not have the release's card files.
+
+Boot 1: loaded 21:55:39-21:55:42 UTC. tools/uart.py capture auto --until '≋.*>' (49 lines), in part:
+  SurfBoot 1.1.0 (build f791b8a1), the SurfCPU boot ROM
+  soc: Arty A7-100T (0x100), SoC 0.2.0, memory map 2, 25000000 Hz; bitstream f791b8a1
+  ddr: initialized by SurfBoot, read leveling lane 0: bitslip 2, delay 16 (window +-8); lane 1: bitslip 2, delay 16 (window +-8)
+  ddr: calibrated after 188 ms, 256 MiB, quick test passed (data, address, byte lanes)
+  sd: SDHC/SDXC, 29.7 GiB; ready after 12 ms; SPI 6250 kHz, data CRC checked
+  boot: SurfOS 1.0.0 build 22cbdc9a: 388740 bytes in 2 fragments, read in 2054 ms
+  boot: load 0x80000000, entry 0x80000000, mem_size 1242768, ISA IM_Zicsr_Zifencei; payload CRC 0x2db948e5 matches (card and DDR)
+  boot: no /BOOT/CMDLINE.TXT; empty command line
+  +VFS: sd0p1 mounted on /sd0p1 (fat, read-only)
+  SURF ≋#>                      (5.1 s after SurfBoot's banner)
+Then, typed over the UART:
+  ls /sd0p1/BOOT     SURFOS.BIN 388740 and BACKUP.BIN 388724, both 2026-10-16 15:22:30
+  kbdinfo            1 interrupt, 0 bytes, the LED command unanswered: the keyboard on 3.3 V gives
+                     nothing, as in ps2-2026-10-17.txt
+
+Boot 2: after the flash read-back (flash-backup-2026-10-17.txt), loaded again 21:59:22-21:59:26 UTC.
+The same lines, the same read leveling on both lanes, calibration after 188 ms, the kernel read in
+2054 ms, the prompt 5.1 s after the banner.
+
+Result (programming and physical, over JTAG): the release's boot bitstream starts SurfBoot,
+calibrates the DDR3L, loads SurfOS from the card and reaches the shell, twice. Milestone 9 still
+needs this bitstream written to the flash (the owner's go-ahead), JP1 on, and its board test: cold
+boots from the flash and the soak, which writes to the card (sd=rw).
