@@ -6,7 +6,10 @@ full screen with the arrow keys; Ctrl+C stopping sleep; after maximize the size 
 exit and the ended state, then a new session; closing with a session running asks first (Cancel keeps it, Close
 ends it and the program it runs); and a new session's ps shows that nothing of the earlier ones is left. The window's
 text is read back from the screenshot, cell by cell, with the console's font; the checks leave the desktop as they
-found it (the Terminal closed), also when one fails."""
+found it (the Terminal closed), also when one fails.
+10/18/26 (the review): the pointer is moved off the text after every click on the window (its sprite would read as
+'?'); exit ends a session at once although a program it left in the background runs on (the hangup ends that too);
+the checks close the Terminal by its own title bar's x, as it opened or maximized, never by keys sent blind."""
 import os
 import re
 
@@ -92,6 +95,15 @@ def prompted(rows):
     return bool(PROMPT.search(last_row(rows)))
 
 
+def ended_after(rows, marker):
+    """below the last row that matches marker: exit typed, and the line that says the session has ended"""
+    for i in range(len(rows) - 1, -1, -1):
+        if re.fullmatch(marker, rows[i]):
+            rest = rows[i + 1:]
+            return any(r.endswith('> exit') and k + 1 < len(rest) and rest[k + 1] == ENDED for k, r in enumerate(rest))
+    return False
+
+
 def then_prompt(rows, text):
     """the last row that holds text, and a prompt on the row after it (what is below may be older)"""
     for i in range(len(rows) - 2, -1, -1):
@@ -143,16 +155,27 @@ def task_name(row):
     return row[:-len(' (ring 3)')].split()[-1] if row.endswith(' (ring 3)') else row.split()[-1]
 
 
+def park(d):
+    """the pointer off the Terminal's text, as it opened or maximized: on the maximized window's scroll bar"""
+    d.move(950, 300)
+
+
 def close_terminal(d):
-    """Window > Close by the keyboard (wherever the window is), Close in the question when a session runs"""
-    d.key('ctrl-g')
-    for _ in range(4):
-        d.key('right')
+    """the Terminal's own title bar x, where its title bar is (as it opened, or maximized), and Close in the question
+    when a session runs; a first click may only close a menu that was open, so a second try follows"""
+    x, y, w, _ = window('Terminal')
     for _ in range(3):
-        d.key('down')
-    d.key('ret')
-    if d.vm.wait_screen(lambda s: dialog_up(d, s, 'Close the window?'), 3, interval=0.2) is not None:
-        d.key('ret')
+        s = d.vm.screen()
+        for tx, ty, bx, by in ((x + 30, y + 6, x + w - 16, y + 14), (30, 28 + 6, 960 - 16, 28 + 14)):
+            if any(d.text(s, tx, ty, 'Terminal', PAPER, bar) for bar in (TEAL, MUTED)):
+                d.click(bx, by)
+                if d.vm.wait_screen(lambda s: dialog_up(d, s, 'Close the window?'), 3, interval=0.2) is not None:
+                    d.key('ret')
+                break
+        else:
+            return
+        if d.vm.wait_screen(lambda s: not shown(d, s), 5, interval=0.2) is not None:
+            return
 
 
 def checks(d):
@@ -229,11 +252,13 @@ def checks(d):
         d.require('Ctrl+C stops sleep 30000 in the Terminal', scr is not None)
         # maximized, the shell sees the new size
         d.click(grid.x + grid.w - 40, grid.y + 10)
+        park(d)
         big = Grid(maximized=True)
         d.require('the Terminal maximizes', wait_rows(d, big, prompted, 10) is not None)
         run(d, big, 'after maximize the shell sees the new size', 'pagetest size',
             lambda rows: then_prompt(rows, 'TTY_GETSIZE 117x26'), 'guiapps-terminal-maximized.png')
         d.click(big.x + big.w - 40, big.y + 10)
+        park(d)
         run(d, grid, 'and the size it had again', 'pagetest size',
             lambda rows: then_prompt(rows, 'TTY_GETSIZE 77x21'))
         # exit: the window says so; Enter starts a new session
@@ -247,6 +272,16 @@ def checks(d):
         d.key('ret')
         d.require('Enter starts a new session', wait_rows(d, grid, lambda rows: prompted(rows) and
                                                            ENDED in rows) is not None)
+        # a program the shell left running in the background does not keep the session: exit ends it at once,
+        # and the hangup ends the program (ps below finds no pagetest)
+        run(d, grid, 'a program runs in the background', 'pagetest hold 300000 &',
+            lambda rows: any(re.fullmatch(r'\[\d+\] started', r) for r in rows) and prompted(rows))
+        d.keys('exit\n')
+        d.require('exit ends the session at once, though that program would run on',
+                  wait_rows(d, grid, lambda rows: ended_after(rows, r'\[\d+\] started'), 15) is not None)
+        d.key('ret')
+        d.require('and Enter starts another', wait_rows(d, grid, lambda rows: prompted(rows) and
+                                                         ended_after(rows, r'\[\d+\] started')) is not None)
         # closing while a session runs asks first: Cancel keeps it
         d.close('Terminal')
         d.require('closing with a session running asks first',
@@ -271,6 +306,7 @@ def checks(d):
         d.visible('the Terminal opens again', d.title('Terminal'))
         d.require('with a new session', wait_rows(d, grid, prompted, 30) is not None)
         d.click(grid.x + grid.w - 40, grid.y + 10)
+        park(d)
         seen = []
 
         def listed(rows):
@@ -299,6 +335,7 @@ def checks(d):
         shells = [r for r in tasks.values() if task_name(r) == 'surfsh']
         d.check(f"ps in a new session: five surfsh, F1-F4's and the Terminal's ({len(shells)})", len(shells) == 5)
         d.click(big.x + big.w - 40, big.y + 10)
+        park(d)
     except AssertionError:
         d.vm.screen('guiapps-terminal-failed.png')     # as it was, before the window is closed below
         raise
@@ -307,8 +344,7 @@ def checks(d):
             scr = d.vm.screen()
             if dialog_up(d, scr, 'Close the window?') or dialog_up(d, scr, 'Leave the desktop?'):
                 d.key('esc')
-            if shown(d, d.vm.screen()):
-                close_terminal(d)
+            close_terminal(d)
             d.check('the Terminal is closed again', d.vm.wait_screen(lambda s: not shown(d, s), 10, interval=0.2)
                     is not None)
         except AssertionError:
