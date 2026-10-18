@@ -117,7 +117,9 @@ Rows for the Keys table:
   it moved or was there already, besides End and the button.
 * **A drag that selects lines keeps scrolling** a row every 50 ms while the pointer is held past
   the text's top or bottom edge (the tick does it, as the Terminal's selection does), besides a row
-  each time the pointer moves there.
+  each time the pointer moves there. It stops when the desktop ends the drag without the Log's
+  release (gui_state.app_drag is no longer the Log's: the screen back from another console) or the
+  window is tucked away, and it redraws only when the view or the selection changed.
 * **The Log reads twice a second only while its window shows**, and at once when it opens or comes
   back from the taskbar, as the hint asked; a read that brings nothing new does not redraw.
 * **klog_copy() was fixed** (its own commit): when a line written between two of its 1 KB chunks
@@ -125,7 +127,8 @@ Rows for the Keys table:
   the copy ended at the log's end. The chunks now go from the end backwards, and a copy cut short
   is still the end. 10/18/26: a storm that leaves nothing at all to copy makes it start again from
   the new head (three times at most); and whether the ring is full is a flag of its own, so that
-  once the head has passed 2^32 the log still has its 16 KB (klog_length and klog_dump use it too).
+  once the head has passed 2^32 the log still has its 16 KB (klog_length and klog_dump use it too,
+  reading it and the head together under irq_save).
 * **The calendar's weeks start on Sunday**, as on US calendars and as the CMOS clock numbers its
   weekdays (1 is Sunday). The weekday shown anywhere is worked out from the date (Sakamoto's
   method), not taken from the CMOS clock, which firmware does not always keep.
@@ -182,6 +185,11 @@ foundation's state (10/18/26: 8 more, where the Log's held selection was last an
 ## Limits and open points
 
 * The Log keeps only what the kernel log keeps (16 KB).
+* When the first lines of a selection drop off, it keeps the lines that are still whole: from the
+  line after its first when that one is still in the copy, else from the first line that starts in
+  the copy after its first byte. So when two or more of its lines go in one read and the copy then
+  starts exactly at a line's start, that first whole line is left out of the selection (whether the
+  copy's first byte starts a line cannot be told from the copy).
 * The Clock shows the CMOS clock as it is: there is no time zone (QEMU's clock is UTC; the laptop's
   is whatever its firmware keeps, usually local time under Windows).
 * tests/host/test_guitools.c includes kernel/klog.c. On gui/tools the shared rule's dependency

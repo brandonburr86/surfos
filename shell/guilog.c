@@ -262,10 +262,13 @@ static void follow(struct gui_state *g, bool on) {
 /* the log again: what came since the last read, and what dropped off the front meanwhile */
 static void read_log(struct gui_state *g) {
     struct gui_logview *v = &g->logview;
-    u32 len = 0, written = 0, old_len = v->len, old_written = v->written;
+    u32 len = 0, written = 0, old_len = v->len, old_written = v->written, after = 0;
     int r, old_error = v->error;
+    bool up = (i32)(v->anchor - v->cursor) <= 0;
     v->read_ms = g->now;
     if(!g->sys || !g->sys->log) return;
+    if(v->any && !dropped(v, up ? v->anchor : v->cursor))   /* 10/18/26: where the line after the selection's first */
+        after = place(v, next_line(v, index_of(v, up ? v->anchor : v->cursor)));   /* starts, before the copy changes */
     r = g->sys->log(g->sys->ctx, v->text, GUI_LOG_MAX, &len, &written);
     if(r < 0) { len = 0; written = old_written; }
     if(len > GUI_LOG_MAX) len = GUI_LOG_MAX;            /* 10/18/26: written is counted modulo 2^32, never clamped */
@@ -275,11 +278,11 @@ static void read_log(struct gui_state *g) {
     if(len == old_len && written == old_written && v->error == old_error) return;
     if(dropped(v, v->top)) { v->top = base(v); v->top_row = 0; }   /* nothing stale: the view, the match, the selection */
     if(v->match_len && dropped(v, v->match)) v->match_len = 0;
-    if(v->any) {                                        /* 10/18/26: it keeps the lines it still has whole */
-        bool up = (i32)(v->anchor - v->cursor) <= 0;
-        u32 lo = up ? v->anchor : v->cursor, hi = up ? v->cursor : v->anchor, whole = place(v, first_whole(v));
+    if(v->any) {                                        /* 10/18/26: it keeps the lines it still has whole: */
+        u32 lo = up ? v->anchor : v->cursor, hi = up ? v->cursor : v->anchor, whole;
         if(dropped(v, hi)) v->any = false;
-        else if(dropped(v, lo)) {
+        else if(dropped(v, lo)) {                       /* from the line after its first, when that is still there */
+            whole = after && !dropped(v, after) ? after : place(v, first_whole(v));
             lo = (i32)(whole - hi) <= 0 ? whole : hi;
             if(up) v->anchor = lo;
             else v->cursor = lo;
@@ -447,6 +450,8 @@ static void closed(struct gui_state *g) {
 static void tick(struct gui_state *g) {
     struct gui_logview *v = &g->logview;
     struct log_layout l;
+    if(g->app_drag != GUI_LOG || g->win[GUI_LOG].min) v->drag = 0;   /* 10/18/26: a drag the desktop ended (the screen
+                                                                        came back from another console) or tucked away */
     if(v->drag == DRAG_LINES && g->now - v->drag_ms >= DRAG_MS) {   /* 10/18/26: held past an edge, it scrolls on */
         layout(g, &l);
         if(v->drag_y < l.ty || v->drag_y >= l.ty + l.rows * 16) {
@@ -531,7 +536,8 @@ static void press(struct gui_state *g, int x, int y) {
 static void select_to(struct gui_state *g, int y) {
     struct gui_logview *v = &g->logview;
     struct log_layout l;
-    int first, total, row, sub, max;
+    u32 top = v->top, cursor = v->cursor;
+    int first, total, row, sub, max, top_row = v->top_row;
     layout(g, &l);
     first = first_row(g, &l, &total);
     max = total > l.rows ? total - l.rows : 0;
@@ -542,7 +548,7 @@ static void select_to(struct gui_state *g, int y) {
     row += first;
     if(row >= total) row = total - 1;
     if(row >= 0) v->cursor = place(v, row_line(v, l.cols, row, &sub));
-    g->dirty = true;
+    if(v->top != top || v->top_row != top_row || v->cursor != cursor) g->dirty = true;   /* 10/18/26: only a change */
 }
 
 static void drag(struct gui_state *g, int x, int y) {
@@ -634,7 +640,7 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     lines = lines_between(v, 0, v->len);
     if(v->status[0]) strlcpy(b, v->status, sizeof(b));
     else if(v->any) snprintf(b, sizeof(b), "%d line%s, %d selected", lines, lines == 1 ? "" : "s", lines_between(v, a, z));
-    else snprintf(b, sizeof(b), "%d line%s%s", lines, lines == 1 ? "" : "s", v->written > v->len ? ", the newest 16 KB" : "");
+    else snprintf(b, sizeof(b), "%d line%s%s", lines, lines == 1 ? "" : "s", v->written != v->len ? ", the newest 16 KB" : "");
     x = w->w - 24 - (int)strlen(right) * 8;             /* clear of the resize grip */
     gd_name(d, x0 + 10, y0 + l.status_y + 3, b, (x - 18) / 8, INK);
     gd_text(d, x0 + x, y0 + l.status_y + 3, right, v->follow ? TEAL : MUTED);
