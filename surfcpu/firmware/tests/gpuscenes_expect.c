@@ -185,8 +185,10 @@ int main(int argc, char **argv)
                 gpu_scene_count);
         for (unsigned n = 0; n < gpu_scene_count; n++)
             fprintf(f, "    0x%08xu,   /* %2u %s */\n", crc[n], n, gpu_scenes[n].name);
-        fprintf(f, "};\n/* the checks of a complete gpudiag run (gpuscenes.h) */\n#define GPUDIAG_CHECKS %uu\n",
-                GPUDIAG_SECTION_CHECKS + GPUDIAG_SCENE_CHECKS * gpu_scene_count);
+        fprintf(f, "};\n/* the checks of a complete gpudiag run, a first one and a rerun (gpuscenes.h) */\n"
+                   "#define GPUDIAG_CHECKS %uu\n#define GPUDIAG_RERUN_CHECKS %uu\n",
+                GPUDIAG_SECTION_CHECKS + GPUDIAG_SCENE_CHECKS * gpu_scene_count,
+                GPUDIAG_SECTION_CHECKS + GPUDIAG_SCENE_CHECKS * gpu_scene_count - GPUDIAG_FIRST_RUN_CHECKS);
         fclose(f);
     }
     return 0;

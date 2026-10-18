@@ -196,12 +196,20 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS)
 GPU_ENGINE_SCENES ?= 6
 test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem
 	@mkdir -p $(GPU_BUILD)/soc
-	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 600000000 \
+	@# gpudiag, then Ctrl-R (as GPU.md section 14 and tools/board-test.py's late port type it), then the
+	@# rerun: the first run alone must pass, and the whole capture, whose final run is the rerun
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 900000000 \
 	  --vga-crc $(GPU_BUILD)/soc/frames.txt --transcript $(GPU_BUILD)/soc/uart.txt \
-	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/surfsim.txt 2>&1; \
+	  --send 'Ctrl-R runs the diagnostic again\.\r\n=\x12' \
+	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/surfsim.txt 2>&1; \
 	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/surfsim.txt; tail -30 $(GPU_BUILD)/soc/uart.txt; exit 1; }
-	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
+	$(Q)awk '{ print } /GPUDIAG: / { exit }' $(GPU_BUILD)/soc/uart.txt > $(GPU_BUILD)/soc/uart-first.txt
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart-first.txt --frames $(GPU_BUILD)/soc/frames.txt \
 	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt --engine-scenes $(GPU_ENGINE_SCENES)
+	@printf '  [after Ctrl-R] '
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
+	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES)
+	$(Q)grep -q 'a rerun (Ctrl-R)' $(GPU_BUILD)/soc/uart.txt || { echo "test-gpu-soc: the rerun did not say it is one"; exit 1; }
 	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
 	@# and reports the GPU among the features (info: features 1ff)
 	$(Q)printf 'help\rinfo\r' > $(GPU_BUILD)/soc/help.txt
@@ -210,12 +218,14 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	  > $(GPU_BUILD)/soc/surfboot.txt 2>&1 || { tail -30 $(GPU_BUILD)/soc/surfboot.txt; exit 1; }
 	@echo "  [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): $$(grep -o 'output matched after [0-9]* cycles' $(GPU_BUILD)/soc/surfboot.txt)"
 	@# the BRAM diagnostics on the same SoC: their unmapped-address probes (spec/soc.toml's
-	@# unmapped_probe) still fault where VRAM now answers at 0x3000_0000
-	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/bramdiag.mem --quiet --max-cycles 400000000 \
-	  --transcript $(GPU_BUILD)/soc/bramdiag-uart.txt --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n' \
+	@# unmapped_probe) still fault where VRAM now answers at 0x3000_0000; and their rerun, the
+	@# Ctrl-R tools/board-test.py types when the port opened late, passes too
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/bramdiag.mem --quiet --max-cycles 800000000 \
+	  --transcript $(GPU_BUILD)/soc/bramdiag-uart.txt --send 'Ctrl-R runs the diagnostics again\.\r\n=\x12' \
+	  --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n' --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n' \
 	  > $(GPU_BUILD)/soc/bramdiag.txt 2>&1; \
-	  grep -q "BRAMDIAG: PASS" $(GPU_BUILD)/soc/bramdiag-uart.txt || { tail -30 $(GPU_BUILD)/soc/bramdiag-uart.txt; exit 1; }
-	@echo "  [bramdiag, HAS_GPU] $$(grep -o 'BRAMDIAG: PASS ([0-9]* checks)' $(GPU_BUILD)/soc/bramdiag-uart.txt)"
+	  [ "$$(grep -c 'BRAMDIAG: PASS' $(GPU_BUILD)/soc/bramdiag-uart.txt)" = 2 ] || { tail -30 $(GPU_BUILD)/soc/bramdiag-uart.txt; exit 1; }
+	@echo "  [bramdiag, HAS_GPU] $$(grep -o 'BRAMDIAG: PASS ([0-9]* checks)' $(GPU_BUILD)/soc/bramdiag-uart.txt | tr '\n' ' ')(the run, and its rerun after Ctrl-R)"
 
 # ---------------------------------------------------------------- SurfOS on the DDR+GPU SoC
 # The soc track's system boot test (sim/soc/tools/system_boot_test.py: SurfBoot loads the Arty
@@ -284,7 +294,7 @@ GPU_CHUNKS ?= 120
 test-gpu-engine: $(GPU_BUILD)/engine/Vtb_gpu
 	$(call gpu_run,engine/run,$< --chunks $(GPU_CHUNKS) +verilator+rand+reset+2)
 
-test-gpu-mutants:
+test-gpu-mutants: build-gpu-rom
 	$(Q)$(PYTHON) sim/gpu/mutants.py --work $(GPU_BUILD)/mutants
 
 # ---------------------------------------------------------------- the synthesized netlist

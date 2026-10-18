@@ -15,7 +15,9 @@ picture was complete has been shown (FRAME_COUNT two on), and compares FRAME_CRC
 the C model computed for that scene when the ROM was built (gpuscenes_expect.h), printing both.
 A design without the engine (no FEATURES.GPU, a gpu window that traps or a gpu.ID other than
 "GPU1") fails: every check that could not run counts as failed, and a run that made fewer checks
-than a complete one (GPUDIAG_CHECKS) fails too, so PASS means every check ran and passed.
+than a complete one (GPUDIAG_CHECKS) fails too, so PASS means every check ran and passed. The
+GFX_ values a reset leaves can only be seen by the first run after a reset: a rerun (Ctrl-R) says
+so in a line under its banner and is held to GPUDIAG_RERUN_CHECKS, one fewer.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)", the LEDs (LD0 green or red),
 the result in the top text row over the last picture, then echoes UART input; Ctrl-R runs it
 all again. The text console is not used (the scenes own the screen): everything goes to the UART.
@@ -147,7 +149,7 @@ static void video_registers(uint32_t unused)
 {
     (void)unused;
     diag_section("video graphics registers, GPAL");
-    if (first_run)
+    if (first_run)                                  /* a rerun finds the last run's values */
         diag_check(VREG(SURF_VIDEO_GFX_BASE) == 0 && VREG(SURF_VIDEO_GFX_STRIDE) == 640 &&
                    VREG(SURF_VIDEO_GFX_SCALE) == 1, "GFX_BASE/STRIDE/SCALE after reset: %x %x %x",
                    VREG(SURF_VIDEO_GFX_BASE), VREG(SURF_VIDEO_GFX_STRIDE), VREG(SURF_VIDEO_GFX_SCALE));
@@ -291,13 +293,35 @@ static void gpu_registers(uint32_t unused)
     /* an unknown opcode, a refused target: sticky, nothing else changes */
     GREG(SURF_GPU_CMD) = GPU_HDR(0x0Au, 0);
     GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
-    GREG(SURF_GPU_CMD) = 2;                                         /* not a multiple of 4 */
-    GREG(SURF_GPU_CMD) = 640;
-    GREG(SURF_GPU_CMD) = GPU_WH(640, 480);
+    GREG(SURF_GPU_CMD) = 4002;                                      /* not a multiple of 4 */
+    GREG(SURF_GPU_CMD) = 320;
+    GREG(SURF_GPU_CMD) = GPU_WH(320, 240);
     hw_sync();
     st = GREG(SURF_GPU_STATUS);
     diag_check((st & GPU_STICKY) == (SURF_GPU_STATUS_BAD_OPCODE_MASK | SURF_GPU_STATUS_BAD_PARAM_MASK),
                "unknown opcode and refused target: STATUS 0x%x", st);
+    /* the refused target was not taken: a fill at (0, 0) lands in the target a reset leaves (0, not
+     * byte 4002 or 4000, where the refused one would have put it) */
+    W(VRAM(0)) = 0;
+    W(VRAM(4)) = 0;
+    W(VRAM(4000)) = 0;
+    W(VRAM(4004)) = 0;
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FILL_RECT, 0xC3u);
+    GREG(SURF_GPU_CMD) = GPU_XY(0, 0);
+    GREG(SURF_GPU_CMD) = GPU_WH(4, 1);
+    hw_sync();
+    diag_check(W(VRAM(0)) == 0xC3C3C3C3u && W(VRAM(4)) == 0 && W(VRAM(4000)) == 0 && W(VRAM(4004)) == 0,
+               "after the refused target a fill at (0, 0) left VRAM words 0x%08x 0x%08x at 0, 0x%08x 0x%08x at 4000",
+               W(VRAM(0)), W(VRAM(4)), W(VRAM(4000)), W(VRAM(4004)));
+    /* the error interrupt, with the errors still sticky: only IE.ERR lets it through */
+    GREG(SURF_GPU_IE) = SURF_GPU_IE_ERR_MASK;
+    uint32_t p_err = REG(SURF_INTC_BASE, SURF_INTC_PENDING) & (1u << SURF_IRQ_GPU);
+    GREG(SURF_GPU_IE) = SURF_GPU_IE_FENCE_MASK;
+    uint32_t p_fence = REG(SURF_INTC_BASE, SURF_INTC_PENDING) & (1u << SURF_IRQ_GPU);
+    GREG(SURF_GPU_IE) = 0;
+    uint32_t p_none = REG(SURF_INTC_BASE, SURF_INTC_PENDING) & (1u << SURF_IRQ_GPU);
+    diag_check(p_err && !p_fence && !p_none, "errors sticky: the gpu interrupt %s with IE.ERR, %s with IE.FENCE "
+               "alone, %s with neither", p_err ? "on" : "off", p_fence ? "on" : "off", p_none ? "on" : "off");
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     /* a fence with its interrupt, through the interrupt controller */
     GREG(SURF_GPU_IE) = SURF_GPU_IE_FENCE_MASK;
@@ -311,6 +335,43 @@ static void gpu_registers(uint32_t unused)
     pend = REG(SURF_INTC_BASE, SURF_INTC_PENDING);
     diag_check(!(pend & (1u << SURF_IRQ_GPU)), "the gpu interrupt stays after FENCE_EV is cleared");
     GREG(SURF_GPU_IE) = 0;
+    /* ABORT empties the FIFO and stops the running command at once, and nothing queued runs later:
+     * just after a blanking starts a WAIT_VBLANK waits 16 ms, with a fill and a fence behind it */
+    W(VRAM(8)) = 0;
+    REG(SURF_VIDEO_BASE, SURF_VIDEO_STATUS) = SURF_VIDEO_STATUS_VBLANK_EV_MASK;
+    t0 = timer_now32();
+    while (!(REG(SURF_VIDEO_BASE, SURF_VIDEO_STATUS) & SURF_VIDEO_STATUS_VBLANK_EV_MASK) &&
+           (uint32_t)(timer_now32() - t0) < 100000u)
+        ;
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_WAIT_VBLANK, 0);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FILL_RECT, 0x99u);
+    GREG(SURF_GPU_CMD) = GPU_XY(8, 0);
+    GREG(SURF_GPU_CMD) = GPU_WH(4, 1);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FENCE, 0);
+    GREG(SURF_GPU_CMD) = 0xAB0u;
+    uint32_t queued = 64u - GREG(SURF_GPU_FIFO_FREE);
+    GREG(SURF_GPU_CTRL) = SURF_GPU_CTRL_ABORT_MASK;
+    uint32_t free_after = GREG(SURF_GPU_FIFO_FREE);
+    st = GREG(SURF_GPU_STATUS);
+    diag_check(queued >= 5 && free_after == 64 && !(st & SURF_GPU_STATUS_BUSY_MASK),
+               "ABORT behind a WAIT_VBLANK: %u words queued, then FIFO_FREE %u, STATUS 0x%x", queued, free_after, st);
+    timer_delay_us(40000);                                          /* two blankings */
+    diag_check(GREG(SURF_GPU_FENCE) != 0xAB0u && W(VRAM(8)) == 0,
+               "a command queued before the ABORT ran later: FENCE 0x%x, VRAM word 0x%08x", GREG(SURF_GPU_FENCE),
+               W(VRAM(8)));
+    /* BUSY until the last write: a WRITE_RECT of one group waits for its data word, busy */
+    W(VRAM(16)) = 0;
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_WRITE_RECT, 0);
+    GREG(SURF_GPU_CMD) = GPU_XY(16, 0);
+    GREG(SURF_GPU_CMD) = GPU_WH(4, 1);
+    timer_delay_us(100);
+    uint32_t st_wait = GREG(SURF_GPU_STATUS);
+    GREG(SURF_GPU_CMD) = 0x44332211u;
+    hw_sync();
+    st = GREG(SURF_GPU_STATUS);
+    diag_check((st_wait & SURF_GPU_STATUS_BUSY_MASK) && !(st & SURF_GPU_STATUS_BUSY_MASK) && W(VRAM(16)) == 0x44332211u,
+               "WRITE_RECT waiting for its last data word: STATUS 0x%x; with it 0x%x, VRAM word 0x%08x", st_wait, st,
+               W(VRAM(16)));
     diag_check(engine_timeouts == 0, "the engine did not finish in time");
     diag_section_end();
 }
@@ -336,11 +397,25 @@ static void scenes(uint32_t unused)
         if (gpu_scenes[n].engine)
             hw_sync();
         diag_check(engine_timeouts == 0, "the engine did not take or finish the commands in time");
+        if (n == 1) {
+            /* the FRAME pair (docs/GPU.md section 3): FRAME_COUNT was read on scene 0's picture, then
+             * scene 1 drawn; two frames of it later, with a STATUS read between, FRAME_CRC is still
+             * the counted frame's (scene 0's), and a FRAME_CRC read after that the newest */
+            timer_delay_us(50000);
+            (void)VREG(SURF_VIDEO_STATUS);
+            uint32_t c_pair = VREG(SURF_VIDEO_FRAME_CRC), c_new = VREG(SURF_VIDEO_FRAME_CRC);
+            diag_check(c_pair == gpu_scene_expect[0], "FRAME_COUNT read on scene 0, FRAME_CRC on scene 1: 0x%08x, "
+                       "scene 0's 0x%08x", c_pair, gpu_scene_expect[0]);
+            diag_check(c_new == gpu_scene_expect[1], "a lone FRAME_CRC read after the pair: 0x%08x, the newest "
+                       "frame's 0x%08x", c_new, gpu_scene_expect[1]);
+        }
         int still = wait_still();
         diag_check(still, "FRAME_COUNT did not move in 200 ms");
         uint32_t crc = VREG(SURF_VIDEO_FRAME_CRC);
         diag_check(crc == gpu_scene_expect[n], "FRAME_CRC 0x%08x, the model's 0x%08x", crc, gpu_scene_expect[n]);
         con_printf("crc %08x ", crc);
+        if (n == 0)
+            (void)VREG(SURF_VIDEO_FRAME_COUNT);         /* the first half of scene 1's FRAME pair */
         diag_section_end();
     }
 }
@@ -348,11 +423,11 @@ static void scenes(uint32_t unused)
 /* a run that made fewer (or more) checks than a complete one fails */
 static void completeness(void)
 {
-    uint32_t ran = diag_checks;
-    if (ran == GPUDIAG_CHECKS)
+    uint32_t ran = diag_checks, want = first_run ? GPUDIAG_CHECKS : GPUDIAG_RERUN_CHECKS;
+    if (ran == want)
         return;
     diag_section("completeness");
-    diag_check(0, "%u checks ran; a complete run makes %u", ran, GPUDIAG_CHECKS);
+    diag_check(0, "%u checks ran; a complete %s makes %u", ran, first_run ? "run" : "rerun", want);
     diag_section_end();
 }
 
@@ -396,6 +471,9 @@ int main(void)
         diag_checks = diag_failures = 0;
         con_printf("\nSurfGPU diagnostic %s (build %08x%s)\n", DIAG_VERSION, (unsigned)FW_BUILD_ID,
                    FW_BUILD_DIRTY ? ", dirty tree" : "");
+        if (!first_run)
+            con_printf("a rerun (Ctrl-R): the GFX_ values a reset leaves are checked by the first run after a "
+                       "reset only, so a complete rerun makes %u checks\n", GPUDIAG_RERUN_CHECKS);
         diag_guard(identity, 0);
         if (sysinfo(SURF_SYSINFO_FEATURES) & SURF_SYSINFO_FEATURES_GPU_MASK) {
             led_set(0x3, 0x004);
