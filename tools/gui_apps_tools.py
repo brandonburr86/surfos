@@ -82,19 +82,33 @@ def _answer(d):
             d.key(chord)
 
 
+def _shown(d, s, name):
+    """the window is open: its title where it opened (in front or not), or its button in the taskbar"""
+    if name == 'Notepad':
+        return d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, 'Untitled', PAPER) or \
+            d.text(s, NOTEPAD[0] + 30, NOTEPAD[1] + 6, '*Untitled', PAPER)
+    return d.title(name)(s) or d.title(name, focused=False)(s) or _taskbar(d, s, name, FOAM) or _taskbar(d, s, name, MUTED)
+
+
 def _shut(d, name):
-    """the window closed, however it was left: brought up by the Apps menu (or opened), then Ctrl+W"""
-    try:
-        _answer(d)
-        if name == 'Notepad':
-            d.key('ctrl-e')
-        else:
-            d.open_app(name)
-        d.vm.pump(0.5)
-        d.key('ctrl-w')
-        _answer(d)
-    except Exception:                       # the next part still runs; its own checks say what is wrong
-        pass
+    """the window closed, however it was left: any question answered, the window brought up by the Apps menu (or
+    opened), then Ctrl+W; again when a dialog came up meanwhile and took the keys (the timer's alarm, say)"""
+    for _ in range(3):
+        try:
+            _answer(d)
+            if name == 'Notepad':
+                d.key('ctrl-e')
+            else:
+                d.open_app(name)
+            d.vm.pump(0.5)
+            if _dialog(d, d.vm.screen()):
+                continue
+            d.key('ctrl-w')
+            _answer(d)
+            if not _shown(d, d.vm.screen(), name):
+                return
+        except Exception:                   # the next part still runs; its own checks say what is wrong
+            pass
 
 
 # ---- Log
@@ -107,6 +121,20 @@ def _log_rows(d, s, rows, text, bg=SHEET):
     return any(_log_row(d, s, r, text, bg) for r in rows)
 
 
+def _wrapped(d, s):
+    """the Log's status bar says that the kernel log has wrapped round: "<n> lines, the newest 16 KB" """
+    return any(d.text(s, LOG[0] + 10 + digits * 8, LOG[1] + LOG[3] - 23 + 3, ' lines, the newest 16 KB', INK, BAND)
+               for digits in range(1, 6))
+
+
+def _monitor(d, name, line):
+    """a QEMU monitor command, recorded as a check: HMP says Error when it fails"""
+    reply = d.vm.mon.cmd(line)
+    if 'rror' in reply:
+        print(f'{line}: {reply.strip()}', flush=True)
+    return d.check(name, 'rror' not in reply)
+
+
 def _usb_line(d, s, rows, after):
     """a USB mouse's +USB: line (any port) in those rows: plugged in (after ', ') or unplugged"""
     return any(_log_rows(d, s, rows, f'+USB: port {port}: 0627:0001 QEMU {after}') for port in range(1, 9))
@@ -117,30 +145,33 @@ def log(d):
     status_y = y + h - 23 + 3
     plugged = False
     try:
+        d.move(900, 470)                        # the pointer off the window, whose rows are read
         d.open_app('Log')
         d.visible('Log: opens from the Apps menu following the kernel log (Follow lit, "Follow on")',
                   lambda s: d.title('Log')(s) and d.text(s, x + 8 + 7, y + 28 + 7, 'Follow', PAPER, TEAL) and
                   d.text(s, x + w - 24 - 9 * 8, status_y, 'Follow on', TEAL, BAND), 'guiapps-log.png')
-        d.vm.mon.cmd('device_add usb-mouse,id=toolsmouse,bus=xhci.0')
-        plugged = True
+        plugged = _monitor(d, 'Log: QEMU plugs in a USB mouse (device_add)', 'device_add usb-mouse,id=toolsmouse,bus=xhci.0')
+        if not plugged:
+            raise AssertionError('device_add')
         d.visible('Log: a USB mouse plugged in, its +USB: line comes in at the end (Follow)',
                   lambda s: _usb_line(d, s, range(12, 18), 'QEMU USB Mouse, '), 'guiapps-log-follow.png', timeout=30)
-        d.vm.mon.cmd('device_del toolsmouse')
-        plugged = False
+        plugged = not _monitor(d, 'Log: QEMU unplugs it (device_del)', 'device_del toolsmouse')
         d.visible('Log: and unplugged, the next line comes in below it',
                   lambda s: _usb_line(d, s, range(15, 18), 'USB Mouse unplugged') and
                   _usb_line(d, s, range(12, 17), 'QEMU USB Mouse, '), timeout=30)
         d.key('home')
-        d.visible('Log: Home shows the kernel log from its first line, as dmesg does; Follow stops',
-                  lambda s: _log_row(d, s, 0, 'SurfOS: serial console on COM1 (115200 8N1)') and
-                  _log_row(d, s, 1, 'GDT Initialization') and
+        d.visible('Log: Home shows the kernel log from its first line, as dmesg does (or the newest 16 KB of it, when it '
+                  'has wrapped round); Follow stops',
+                  lambda s: (_wrapped(d, s) or _log_row(d, s, 0, 'SurfOS: serial console on COM1 (115200 8N1)') and
+                             _log_row(d, s, 1, 'GDT Initialization')) and
                   d.text(s, x + w - 24 - 15 * 8, status_y, 'Follow off: End', MUTED, BAND), 'guiapps-log-home.png')
         d.key('ctrl-f')
-        d.keys('calibration')
+        d.keys('unplugged')
         d.key('ret')
         d.visible('Log: Ctrl+F finds a word: its line comes into view, selected, the word marked',
-                  lambda s: any(d.text(s, x + 8, y + TOP + r * 16, 'Delay ', INK) and
-                                d.text(s, x + 8 + 6 * 8, y + TOP + r * 16, 'calibration', INK, MATCH) for r in range(16)),
+                  lambda s: any(d.text(s, x + 8, y + TOP + r * 16, f'+USB: port {port}: 0627:0001 QEMU USB Mouse ', INK) and
+                                d.text(s, x + 8 + 39 * 8, y + TOP + r * 16, 'unplugged', INK, MATCH)
+                                for r in range(16) for port in range(1, 9)),
                   'guiapps-log-find.png')
         d.key('esc')
         d.visible('Log: Esc closes the find bar', lambda s: d.title('Log')(s) and
@@ -223,22 +254,26 @@ def clock(d):
         d.visible('Clock: the timer, set to 05:00', lambda s: _big(d, s, x + _centred('05:00', 4), big_y, '05:00', INK, 4))
         d.key('home')
         d.key('pgup')
-        d.visible('Clock: Home and Page Up set it to ten seconds',
-                  lambda s: _big(d, s, x + _centred('00:10', 4), big_y, '00:10', INK, 4))
+        d.key('pgup')
+        d.visible('Clock: Home and Page Up set it to twenty seconds',
+                  lambda s: _big(d, s, x + _centred('00:20', 4), big_y, '00:20', INK, 4))
         d.key('spc')
+        d.visible('Clock: Space starts it: the title counts down',
+                  lambda s: d.text(s, x + 30, y + 6, 'Clock - 00:', PAPER, TEAL) and
+                  _read(d, s, x + _centred('00:20', 4), big_y, 5, TEAL, 4) not in (None, '00:20'))
         d.click(x + w - 40, y + 14)             # minimize: it keeps running, tucked away in the taskbar
         d.visible('Clock: the timer runs, the window tucked away: its taskbar button counts down',
                   lambda s: not d.title('Clock')(s) and _taskbar(d, s, 'Clock - 00:0', MUTED))
         d.visible('Clock: at zero the alarm shows, the window still tucked away: a message, and its taskbar button',
                   lambda s: _dialog(d, s) == 'Timer' and d.text(s, 245 + 16, 198 + 44, "Time's up!", INK) and
-                  d.text(s, 245 + 16, 198 + 66, 'The 00:10 timer has finished.', MUTED) and
-                  _taskbar(d, s, "Time's up!", MUTED), 'guiapps-clock-alarm.png', timeout=30)
+                  d.text(s, 245 + 16, 198 + 66, 'The 00:20 timer has finished.', MUTED) and
+                  _taskbar(d, s, "Time's up!", MUTED), 'guiapps-clock-alarm.png', timeout=60)
         d.key('ret')
         d.visible('Clock: OK answers it', lambda s: _dialog(d, s) is None and _taskbar(d, s, 'Clock', MUTED) and
                   not _taskbar(d, s, "Time's up!", MUTED))
         d.open_app('Clock')
         d.visible('Clock: the window comes back from the taskbar, the timer ready again',
-                  lambda s: d.title('Clock')(s) and _big(d, s, x + _centred('00:10', 4), big_y, '00:10', INK, 4))
+                  lambda s: d.title('Clock')(s) and _big(d, s, x + _centred('00:20', 4), big_y, '00:20', INK, 4))
         d.key('home')
         for _ in range(5):
             d.key('up')
@@ -269,10 +304,10 @@ def charmap(d):
         d.move(900, 470)                        # the pointer off the cell, which is read next (and off Notepad)
         d.visible('Character Map: a click chooses ≋ (0xF7, SurfOS\'s own): large, with its code, U+224B and its UTF-8',
                   lambda s: d.text(s, x + 26 + 7 * 17 + 5, y + 50 + 15 * 17 + 1, '\xf7', PAPER, TEAL) and
-                  d.text(s, x + 312 + 64, y + 154, '247', INK) and d.text(s, x + 312 + 64, y + 154 + 18, '0xF7', INK) and
-                  d.text(s, x + 312 + 64, y + 154 + 36, 'U+224B', INK) and
-                  d.text(s, x + 312 + 64, y + 154 + 54, 'E2 89 8B', INK) and
-                  _big(d, s, x + 312 + (138 - 66) // 2 + 9, y + 40 + 5, '\xf7', INK, 6), 'guiapps-charmap.png')
+                  d.text(s, x + 312 + 64, y + 148, '247', INK) and d.text(s, x + 312 + 64, y + 148 + 18, '0xF7', INK) and
+                  d.text(s, x + 312 + 64, y + 148 + 36, 'U+224B', INK) and
+                  d.text(s, x + 312 + 64, y + 148 + 54, 'E2 89 8B', INK) and
+                  _big(d, s, x + 312 + (138 - 66) // 2 + 9, y + 34 + 5, '\xf7', INK, 6), 'guiapps-charmap.png')
         d.key('ctrl-c')
         d.visible('Character Map: Ctrl+C copies it as UTF-8 (the status bar says so)',
                   lambda s: d.text(s, x + 10, status_y, 'Copied \xf7 (3 bytes of UTF-8): Ctrl+V pastes it', INK, BAND))
