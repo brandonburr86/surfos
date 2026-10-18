@@ -163,12 +163,13 @@ Keys, for the table in docs/GUI.md:
   nothing is selected meanwhile (so End task can never ask about the task that took its row),
   the status bar says it is not in the list, Down goes on from its row (hint), and it is
   selected again if it comes back. The view follows the selection only when the user moves
-  it, and when Mount selects what it mounted. 10/18/26: when End task's kill waited for a call
-  (the task was still listed right after it), the first whole reading without the task puts
-  "has ended" in the status bar in place of kill's words, if the selection still follows it (a
-  reading cut to the newest 128 says nothing: the task may only be off it); Find next with
-  nothing selected starts at the row the followed task was on, as Down does; Disks' M, E and
-  Enter with nothing selected say so.
+  it, and when Mount selects what it mounted. 10/18/26: after End task's kill, the first whole
+  reading without the task puts "has ended" in the status bar in place of kill's words, if the
+  selection still follows it: the reading right after the kill when the task is gone by then
+  (it ended at once, or its call ended and its parent collected it before that reading), or a
+  later one when its kill waits for its call (a reading cut to the newest 128 says nothing:
+  the task may only be off it); Find next with nothing selected starts at the row the
+  followed task was on, as Down does; Disks' M, E and Enter with nothing selected say so.
 * **Disks uses lsblk's own code.** `bdev_describe()` and `bdev_walk()` (driver/bdev.c,
   include/sys/bdev.h) are lsblk's row and order, made public; lsblk itself calls them and
   prints byte for byte what it printed before. guisys_disks() (shell/guisys_disk.c) adds the
@@ -228,10 +229,10 @@ Keys, for the table in docs/GUI.md:
   only for what may be ended, the tasks' copy and its failure, Disks' rows with the unplugged
   ones in their order, statfs failures, the 32-row cap keeping the unplugged rows, and a
   failure that leaves the rows alone. 10/18/26: End task's kill that waits for a call, then
-  "has ended" (not after the user moved on, nor while the list is cut), Find next with the
-  followed task gone, Disks' M, E and Enter with nothing selected, kill of a task that is
-  ending already or was killed already (the stand-in kill_task_patient() has the kernel's
-  rule).
+  "has ended" (not after the user moved on, nor while the list is cut), and at once for a task
+  gone by the reading right after the kill, Find next with the followed task gone, Disks' M, E
+  and Enter with nothing selected, kill of a task that is ending already or was killed
+  already (the stand-in kill_task_patient() has the kernel's rule).
 * shell/selftest.c (`selftest`, which the smoke test runs) tries the kernel's side on the
   target, with kernel threads, in about 2.7 s: kill_task_patient() of one in its own code (it
   ends at once), of one in a kernel command whose wait a kill cuts short (sleep_intr(): it ends
@@ -242,7 +243,11 @@ Keys, for the table in docs/GUI.md:
   a hangup's kill (closing the master of a pseudo-terminal of its own, the thread alone on it)
   followed by End task's: the hangup's rule and log line stand, and it ends with its call.
   task_info_all() is checked against task_info() over the live list with interrupts off: the
-  whole list, the newest 3 in order, none.
+  whole list, the newest 3 in order, none. A kill or Ctrl+C of the self test's task cuts
+  test_kills short as it does the other tests: every one of its waits looks at it, its helpers
+  end at once (about 20 ms) and are collected, nothing is checked ("skip End task's kill (cut
+  short ...)"), and the self test ends within KILL_WAIT_MS, lets go of its claim, and the next
+  one runs (the reviewer's probe_sys_kill_selftest.py: a kill 0.3 s into test_kills).
 * tools/gui_apps_sys.py (qemu-usb.py's guiapps scenario) reads the windows back from the
   framebuffer, cell by cell against the console font, with the pointer parked away from them:
   the shells on F1-F4 and the kernel's threads, sorting by name and back, End task refused
