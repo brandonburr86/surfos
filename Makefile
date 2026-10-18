@@ -832,13 +832,23 @@ unittest: unittest-gui
 unittest-gui: $(BUILD)/host/test_pointer
 .PHONY: unittest-gui
 # 10/17/26: the desktop's model is several files (shell/guipriv.h); Notepad and Files run against an in-memory file system
-GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog) \
+# 10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the applications in files of their own
+GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog \
+                 guiterm guimon guidisks guilog guiclock guiview guihex guichar) \
                $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
 $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
-unittest-gui: $(BUILD)/host/test_gui
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter %.c %.o,$^) -o $@
+# 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c
+GUI_SUITE_TESTS = $(patsubst %,$(BUILD)/host/%,test_guiterm test_guisys test_guitools test_guimedia)
+$(GUI_SUITE_TESTS): $(BUILD)/host/%: tests/host/%.c tests/host/gui_fake.c tests/host/gui_fake.h $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter %.c %.o,$^) -o $@
+unittest-gui: $(BUILD)/host/test_gui $(GUI_SUITE_TESTS)
 	$(BUILD)/host/test_pointer
 	$(BUILD)/host/test_gui
+	$(BUILD)/host/test_guiterm
+	$(BUILD)/host/test_guisys
+	$(BUILD)/host/test_guitools
+	$(BUILD)/host/test_guimedia
 
 $(BUILD)/host/test_ps2mouse: tests/host/test_ps2mouse.c $(BUILD)/host/kernel/driver/ps2mouse.o
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@

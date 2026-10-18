@@ -757,6 +757,13 @@ def scenario_gui(args, image, firmware, outdir):
     return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
 
 
+def scenario_guiapps(args, image, firmware, outdir):
+    """10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the desktop's applications on the screen,
+    each track's checks in a file of its own (tools/gui_apps_*.py)"""
+    from gui_apps_scenario import run
+    return run(Vm, PROMPT, args, image, firmware, outdir)
+
+
 def scenario_graphics(args, image, firmware, outdir):
     """Real framebuffer pixels and recovery from normal exit, Ctrl+C and F2."""
     results = []
@@ -1982,6 +1989,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
+             'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
@@ -2088,7 +2096,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

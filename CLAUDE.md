@@ -100,7 +100,10 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
            prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos;
            the desktop (docs/GUI.md): gui.c (the command, the session) and guifs.c (files on the VFS) in the kernel; the
            model, host-tested by test_gui: guicore.c (windows, menus, the small apps), guinote.c (Notepad), guifiles.c
-           (Files), guidialog.c, guidraw.c
+           (Files), guidialog.c, guidraw.c; 10/17/26 the suite (docs/superpowers/plans/2026-10-17-gui-suite.md):
+           applications in files of their own behind struct gui_app's table (guiterm.c, guimon.c, guidisks.c,
+           guilog.c, guiclock.c, guiview.c, guihex.c, guichar.c), the kernel's side struct gui_sys (guisys*.c),
+           host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against

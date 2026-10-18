@@ -16,5 +16,7 @@ Everything kprintf() prints also lands in a ring buffer; `dmesg` shows it.
 void klog_write(const char *s);
 void klog_dump(void);          /* print the whole buffer to the calling task's console (the active one at boot) */
 u_long klog_length(void);
+/* 10/17/26: the last bytes (up to size) into buf, no NUL: how many; *written (may be NULL): how many ever were */
+u_long klog_copy(char *buf, u_long size, u_long *written);
 
 #endif

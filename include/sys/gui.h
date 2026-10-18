@@ -8,6 +8,11 @@ Pure desktop model and renderer; no hardware, allocation or blocking calls.
 taskbar (docs/GUI.md). Files are reached only through struct gui_fs, which the
 model calls from gui_key() and gui_pointer(), never from gui_render():
 shell/guifs.c implements it on the VFS, the host test in memory.
+10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): Terminal,
+System Monitor, Disks, Log, Clock, Image Viewer, Hex and Character Map, each in a
+file of its own that the window manager reaches through a table (struct gui_app,
+shell/guipriv.h). What they need of the kernel is struct gui_sys (sys/gui_sys.h),
+which the model calls from its handlers and from gui_tick(), never from gui_render().
 */
 #ifndef _SYS_GUI_H
 #define _SYS_GUI_H
@@ -20,7 +25,17 @@ shell/guifs.c implements it on the VFS, the host test in memory.
 #define GUI_NOTEPAD 4
 #define GUI_FILES 5
 #define GUI_HELP 6
-#define GUI_WINDOWS 7
+/* 10/17/26 (the suite): windows from GUI_FIRST_APP on are those of struct gui_app's table (guicore.c) */
+#define GUI_TERMINAL 7
+#define GUI_MONITOR 8
+#define GUI_DISKS 9
+#define GUI_LOG 10
+#define GUI_CLOCK 11
+#define GUI_VIEWER 12
+#define GUI_HEX 13
+#define GUI_CHARMAP 14
+#define GUI_FIRST_APP GUI_TERMINAL
+#define GUI_WINDOWS 15
 #define GUI_CANVAS_W 400
 #define GUI_CANVAS_H 180
 /* keys that are not bytes: shell/gui.c turns the terminal's escape sequences into these */
@@ -69,6 +84,9 @@ struct gui_fs {
     int (*mount)(void *ctx, const char *dev, char *msg, size_t n);   /* the shell's mount and eject: 0 or -1, */
     int (*eject)(void *ctx, const char *dev, char *msg, size_t n);   /* and the last line they printed in msg */
     const char *(*error)(int err);
+    /* 10/17/26 (the suite): up to n bytes from offset off of a file (Hex, Image Viewer): 0 with *len (0 at its end)
+       and *size its whole size; NULL in a struct gui_fs that cannot */
+    int (*read_at)(void *ctx, const char *path, u32 off, char *buf, u32 n, u32 *len, u32 *size);
 };
 
 struct gui_window { int x,y,w,h; bool open, max, min; int nx,ny,nw,nh; };   /* n*: the place before maximizing */
@@ -133,6 +151,13 @@ struct gui_dialog {
     struct gui_entry list[GUI_LIST_MAX];
 };
 
+/* 10/17/26 (the suite): the applications' own state, each in its track's header */
+#include <sys/gui_sys.h>
+#include <sys/gui_term.h>
+#include <sys/gui_sysapps.h>
+#include <sys/gui_tools.h>
+#include <sys/gui_media.h>
+
 struct gui_state {
     int width, height, menu, selection, focus, drag, drag_x, drag_y;
     int x, y, last_x, last_y, brush, speed;
@@ -156,6 +181,18 @@ struct gui_state {
     u32 clip_len;
     char clip[GUI_CLIP_MAX];
     struct gui_note note;
+    /* 10/17/26 (the suite) */
+    const struct gui_sys *sys;          /* NULL: no system (the applications that need it say so) */
+    struct gui_time time;               /* the CMOS clock, from the shell (year 0: not known) */
+    int app_drag;                       /* a suite window whose content has the held button (its drag handler), -1 */
+    struct gui_term term;
+    struct gui_monitor monitor;
+    struct gui_disks disks;
+    struct gui_logview logview;
+    struct gui_clock clockapp;
+    struct gui_charmap charmap;
+    struct gui_viewer viewer;
+    struct gui_hex hex;
 };
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);
@@ -169,5 +206,9 @@ void gui_calc_key(struct gui_calc *c, int key);
 bool gui_wants_arrows(const struct gui_state *g);
 /* leave the desktop: at once, or after asking about Notepad's unsaved changes */
 void gui_request_quit(struct gui_state *g);
+/* 10/17/26 (the suite): the shell calls gui_tick() every frame (the applications read what is new: a terminal's output,
+   the task list), and gui_finish() before it frees the state (a terminal session hangs up) */
+void gui_tick(struct gui_state *g);
+void gui_finish(struct gui_state *g);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */
 #endif

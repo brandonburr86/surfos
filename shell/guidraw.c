@@ -231,6 +231,47 @@ static const char *const icons[][16] = {
         "..KTTTTTTTTTTK..", "...KTTTKKTTTK...", ".KKKTTKPPKTTKKK.", ".KTTTTKPPKTTTTK.",
         ".KTTTTKPPKTTTTK.", ".KKKTTKPPKTTKKK.", "...KTTTKKTTTK...", "..KTTTTTTTTTTK..",
         "..KTTKKTTKKTTK..", "...KK.KTTK.KK...", "......KKKK......", "................" },
+    /* 10/17/26: the suite's applications */
+    [ICON_TERMINAL] = {
+        "................", ".KKKKKKKKKKKKKK.", ".KNNNNNNNNNNNNK.", ".KNFNNNNNNNNNNK.",
+        ".KNNFNNNNNNNNNK.", ".KNNNFNNNNNNNNK.", ".KNNFNNNNNNNNNK.", ".KNFNNFFFFNNNNK.",
+        ".KNNNNNNNNNNNNK.", ".KNNNNNNNNNNNNK.", ".KKKKKKKKKKKKKK.", "......KKKK......",
+        "....KKKKKKKK....", "................", "................", "................" },
+    [ICON_MONITOR] = {
+        "................", ".KKKKKKKKKKKKKK.", ".KPPPPPPPPPPPPK.", ".KPPPPPPPPPPCPK.",
+        ".KPPPPPPPPPCPCK.", ".KPCPPPPPPCPPPK.", ".KPPCPPPPCPPPPK.", ".KPPPCPPCPPPPPK.",
+        ".KPPPPCCPPPPPPK.", ".KPTTPTTPTTPTTK.", ".KPTTPTTPTTPTTK.", ".KKKKKKKKKKKKKK.",
+        "................", "................", "................", "................" },
+    [ICON_DISKS] = {
+        "................", "..KKKKKKKKKKKK..", "..KMMMMMMMMMMK..", "..KMTTTTTTTCMK..",
+        "..KMMMMMMMMMMK..", "..KKKKKKKKKKKK..", "................", "..KKKKKKKKKKKK..",
+        "..KMMMMMMMMMMK..", "..KMTTTTTTTFMK..", "..KMMMMMMMMMMK..", "..KKKKKKKKKKKK..",
+        "................", "................", "................", "................" },
+    [ICON_LOG] = {
+        "................", "..KKKKKKKKKKK...", "..KPPPPPPPPPK...", "..KPSSSPTTTPK...",
+        "..KPPPPPPPPPK...", "..KPSSSPTTTTK...", "..KPPPPPPPPPK...", "..KPCCCPTTPPK...",
+        "..KPPPPPPPPPK...", "..KPSSSPTTTPK...", "..KPPPPPPPPPK...", "..KKKKKKKKKKK...",
+        "................", "................", "................", "................" },
+    [ICON_CLOCK] = {
+        "................", ".....KKKKKK.....", "...KKPPPPPPKK...", "..KPPPPKPPPPPK..",
+        ".KPPPPPKPPPPPPK.", ".KPPPPPKPPPPPPK.", "KPPPPPPKPPPPPPPK", "KPPPPPPKKKKPPPPK",
+        "KPPPPPPPPPPPPPPK", ".KPPPPPPPPPPPPK.", ".KPPPPPPPPPPPPK.", "..KPPPPPPPPPPK..",
+        "...KKPPPPPPKK...", ".....KKKKKK.....", "................", "................" },
+    [ICON_VIEWER] = {
+        "................", ".KKKKKKKKKKKKKK.", ".KBBBBBBBBBBBBK.", ".KBBBBBBBBSSBBK.",
+        ".KBBBBBBBBSSBBK.", ".KBBBBTBBBBBBBK.", ".KBBBTTTBBBBBBK.", ".KBBTTTTTBBTBBK.",
+        ".KBTTTTTTTTTTBK.", ".KTTTTTTTTTTTTK.", ".KTTTTTTTTTTTTK.", ".KKKKKKKKKKKKKK.",
+        "................", "................", "................", "................" },
+    [ICON_HEX] = {
+        "................", "...KKKKKKKK.....", "...KPPPPPPKK....", "...KPTPTPPKPK...",
+        "...KPPPPPPKKKK..", "...KPTPTPTPTPK..", "...KPPPPPPPPPK..", "...KPCPCPTPTPK..",
+        "...KPPPPPPPPPK..", "...KPTPTPCPCPK..", "...KPPPPPPPPPK..", "...KPTPTPTPTPK..",
+        "...KPPPPPPPPPK..", "...KKKKKKKKKKK..", "................", "................" },
+    [ICON_CHARMAP] = {
+        "................", ".KKKKKKKKKKKKKK.", ".KPPPKPPPKPPPPK.", ".KPTPKPCPKPPTPK.",
+        ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", ".KPPPKPPPKPPPPK.", ".KPCPKPTPKPPCPK.",
+        ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", ".KPPPKPPPKPPPPK.", ".KPTPKPPPKPPTPK.",
+        ".KPPPKPPPKPPPPK.", ".KKKKKKKKKKKKKK.", "................", "................" },
 };
 
 static u32 paint(char c) {

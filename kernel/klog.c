@@ -3,6 +3,7 @@ SurfOS Kernel Log Ring Buffer
 --------------------
 File: klog.c    Date: 10/3/26 (roadmap K3)
 --------------------
+10/17/26 (the desktop's Log): klog_copy() hands a copy of the log's end to a reader.
 */
 
 #include <surfos/types.h>
@@ -36,4 +37,32 @@ void klog_dump(void) {
     u_long i;
     surf_console *con = (curTask && curTask->con && !in_interrupt()) ? curTask->con : conActive;
     for(i = start; i < klog_head; i++) kputch(con, KERN_TXT_COLOR, klog_buf[i % KLOG_SIZE]);
+}
+
+/* 10/17/26: the log's last bytes, up to size of them, into buf (no NUL): how many; *written: how many were ever
+   written (what a reader has seen tells it what is new). Copied under irq_save, a chunk at a time, so an interrupt
+   that logs meanwhile never sees a torn ring; a line written between two chunks makes the copy start later */
+u_long klog_copy(char *buf, u_long size, u_long *written) {
+    u_long flags, head, start, n, at, k;
+    flags = irq_save();
+    head = klog_head;
+    irq_restore(flags);
+    n = head < KLOG_SIZE ? head : KLOG_SIZE;
+    if(n > size) n = size;
+    start = head - n;
+    for(at = 0; at < n; at += k) {
+        k = n - at < 1024 ? n - at : 1024;
+        flags = irq_save();
+        if(klog_head - (start + at) > KLOG_SIZE) {      /* overwritten meanwhile: what is left is still the end */
+            irq_restore(flags);
+            break;
+        }
+        {
+            u_long i;
+            for(i = 0; i < k; i++) buf[at + i] = klog_buf[(start + at + i) % KLOG_SIZE];
+        }
+        irq_restore(flags);
+    }
+    if(written) *written = head;
+    return at;
 }

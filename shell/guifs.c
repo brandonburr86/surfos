@@ -78,6 +78,30 @@ static int fs_read(void *ctx, const char *path, char *buf, u32 size, u32 *len) {
     return r < 0 ? r : 0;
 }
 
+/* 10/17/26 (the suite: Hex, Image Viewer): n bytes from offset off, and the file's size */
+static int fs_read_at(void *ctx, const char *path, u32 off, char *buf, u32 n, u32 *len, u32 *size) {
+    struct file *f;
+    struct stat st;
+    int r;
+    (void)ctx;
+    *len = 0;
+    *size = 0;
+    r = vfs_stat(path, &st);
+    if(r) return r;
+    if(st.type == VN_DIR) return -EISDIR;
+    *size = st.size;
+    if(off >= st.size || !n) return 0;
+    r = vfs_open(path, O_RDONLY, &f);
+    if(r) return r;
+    if(off && vfs_lseek(f, (i32)off, SEEK_SET) != (int)off) r = -EIO;
+    while(!r && *len < n && (r = vfs_read(f, buf + *len, n - *len)) > 0) {
+        *len += r;
+        r = 0;
+    }
+    vfs_close(f);
+    return r < 0 ? r : 0;
+}
+
 static int write_all(struct file *f, const char *data, u32 len) {
     int r;
     while(len) {
@@ -238,7 +262,8 @@ static int fs_eject(void *ctx, const char *dev, char *msg, size_t n) {
 }
 
 static const struct gui_fs vfs_ops = {
-    NULL, fs_list, fs_stat, fs_read, fs_write, fs_mkdir, fs_remove, fs_rename, fs_volumes, fs_mount, fs_eject, strerror
+    NULL, fs_list, fs_stat, fs_read, fs_write, fs_mkdir, fs_remove, fs_rename, fs_volumes, fs_mount, fs_eject, strerror,
+    fs_read_at,
 };
 
 const struct gui_fs *gui_kernel_fs(void) {
