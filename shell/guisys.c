@@ -13,6 +13,7 @@ each call copies what is there now.
 #include <string.h>
 #include <surfos/types.h>
 #include <surfos/task.h>
+#include <surfos/irq.h>
 #include <surfos/proc.h>
 #include <surfos/timer.h>
 #include <surfos/ktimer.h>
@@ -95,24 +96,37 @@ static int machine(void *ctx, struct gui_machine *out) {
 }
 
 /* as kill does, but only a program (a kernel thread is the kernel's: the kill command ends one), and never the
-   desktop's own task */
+   desktop's own task. 10/17/26 (System Monitor): the task is found and killed with interrupts off and its name
+   copied first, since a zombie may be collected (and freed) by its parent at any time; each refusal says why */
 static int kill(void *ctx, int pid, char *msg, size_t n) {
-    surf_task *t = task_find((u_long)pid);
+    char name[TASK_NAME_LEN];
+    const char *no = NULL;
+    bool ended = false;
+    surf_task *t;
+    u_long flags;
     (void)ctx;
+    flags = irq_save();
+    t = task_find((u_long)pid);
+    if(t) {
+        strlcpy(name, t->name, sizeof(name));
+        if(t == idle_task) no = "is the idle task: the kernel's own";
+        else if(t == init_task_ptr) no = "starts the consoles' shells: it is never ended";
+        else if(t == curTask) no = "runs this desktop: Ctrl+Q leaves it";
+        else if(!(t->flags & TF_USER)) no = "is a kernel thread: the shell's kill command ends one";
+        else if(t->state == TS_DEAD) ended = true;
+        else kill_task(t);                              /* inside a call it ends with the call (task.h) */
+    }
+    irq_restore(flags);
     if(!t) {
         snprintf(msg, n, "no task with pid %d any more", pid);
         return -ENOENT;
     }
-    if(t == idle_task || t == init_task_ptr || t == curTask) {
-        snprintf(msg, n, "%s (pid %d) is not one to end", t->name, pid);
+    if(no) {
+        snprintf(msg, n, "%s (pid %d) %s", name, pid, no);
         return -EACCES;
     }
-    if(!(t->flags & TF_USER)) {
-        snprintf(msg, n, "%s (pid %d) is a kernel thread: the shell's kill command ends one", t->name, pid);
-        return -EACCES;
-    }
-    kill_task(t);
-    snprintf(msg, n, "ended %s (pid %d)", t->name, pid);
+    if(ended) snprintf(msg, n, "%s (pid %d) had ended already", name, pid);
+    else snprintf(msg, n, "ended %s (pid %d)", name, pid);
     return 0;
 }
 
