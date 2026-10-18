@@ -5,7 +5,8 @@
    them): fsck.fat -n -v must find nothing to fix, minfo and mdir must read them. The images
    (16 MB, 64 MB forced FAT32, 600 MB, 1 GB with a partition, 8 GB and 40 GB, the large ones
    sparse) live in a temporary directory ($TMPDIR or /tmp) that is removed at the end, unless
-   SURFOS_KEEP_IMAGES is set. Built like the kernel objects and run by `make unittest`. */
+   SURFOS_KEEP_IMAGES is set. Built like the kernel objects and run by `make unittest`.
+   10/17/26 (round fs-fix-7, audit B47): and mkfs interrupted (Ctrl+C, a kill): interrupted(). */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -44,6 +45,11 @@ static void check(int ok, const char *what) {
 static u32 writes, written, first_lba, last_lba, flushes, invalidated, outside;
 static u32 allowed_end, tail_start;              /* writes must stay below allowed_end or in the last 33 sectors */
 static int fail_at = -1;                         /* fail the write that touches this sector */
+/* 10/17/26 (round fs-fix-7, audit B47): the formatting task (fat_mkfs.c asks whether its call is to end, and counts
+   itself inside a file system), and the write after which Ctrl+C reaches it (0: none) */
+surf_task *curTask;
+static surf_task mkfs_task;
+static u32 interrupt_after;
 
 void *kalloc(size_t n) { return malloc(n); }
 void kfree(void *p) { free(p); }
@@ -71,6 +77,7 @@ static int disk_io(struct bdev *d, u32 lba, u32 count, void *buf, int write) {
     last_lba = rel;
     writes++;
     written += count;
+    if(interrupt_after && writes == interrupt_after && curTask) { curTask->in_call = TC_COMMAND; curTask->intr |= TI_INT; }
     if(rel + count > allowed_end && rel < tail_start) outside++;
     return pwrite64((int)(long)disk->priv, buf, count * 512, off) == (int)(count * 512) ? 0 : BDEV_EIO;
 }
@@ -322,6 +329,43 @@ static void refusals(void) {
     close(im.fd);
 }
 
+/* 10/17/26 (round fs-fix-7, audit B47): mkfs interrupted, by Ctrl+C in the ring-0 shell or a kill of SYS_kcmd's command.
+   It wrote on to its end whatever happened (a kill then came at once after 2 s, inside a driver's request, and left the
+   driver's lock held: the card hung); now it stops before its next request, says how far it got, and lets go of
+   everything: its buffers, the device's cached blocks, the count of the task inside a file system */
+static void interrupted(void) {
+    struct image im;
+    char msg[200];
+    u8 s[512];
+    int r;
+    if(image(&im, "stopped.img", 16) != 0) return;
+    if(fat_mkfs(&im.disk, "WHOLE", 0, msg, sizeof(msg)) != 0) { check(0, "interrupted mkfs: a first, whole mkfs"); close(im.fd); return; }
+    memset(&mkfs_task, 0, sizeof(mkfs_task));
+    curTask = &mkfs_task;
+    mkfs_task.in_call = TC_COMMAND;
+    mkfs_task.intr = TI_INT;                                    /* Ctrl+C before it began */
+    writes = flushes = invalidated = 0;
+    r = fat_mkfs(&im.disk, "STOP", 0, msg, sizeof(msg));
+    sector(&im.disk, 0, s);
+    printf("    interrupted before it began: %d (%s), %u writes\n", r, msg, (u_int)writes);
+    check(r == -EINTR && writes == 0 && strstr(msg, "before it wrote anything") && s[510] == 0x55 && mkfs_task.fs_hold == 0,
+          "mkfs interrupted before it began writes nothing, says so, and the volume is as it was");
+    memset(&mkfs_task, 0, sizeof(mkfs_task));
+    mkfs_task.in_call = TC_COMMAND;
+    writes = flushes = invalidated = 0;
+    interrupt_after = 3;                                        /* Ctrl+C during its third request */
+    r = fat_mkfs(&im.disk, "STOP", 0, msg, sizeof(msg));
+    interrupt_after = 0;
+    sector(&im.disk, 0, s);
+    printf("    interrupted in its third request: %d (%s), %u writes, %u flushes, %u invalidations\n", r, msg, (u_int)writes,
+           (u_int)flushes, (u_int)invalidated);
+    check(r == -EINTR && writes == 3 && strstr(msg, "interrupted at sector") && strstr(msg, "no usable file system") && flushes == 0 &&
+          invalidated >= 1 && s[510] != 0x55 && mkfs_task.fs_hold == 0,
+          "mkfs interrupted stops before its next request, says where, leaves no boot sector, drops the cached blocks");
+    curTask = NULL;
+    close(im.fd);
+}
+
 int main(void) {
     struct image im;
     struct bdev *p;
@@ -336,6 +380,7 @@ int main(void) {
     if(!have_tools) printf("    (fsck.fat or mtools missing: the images are checked here only)\n");
 
     refusals();
+    interrupted();
     if(image(&im, "fat16-16m.img", 16) == 0) {
         format("16 MB", &im, &im.disk, 0, 16, 4, "TESTVOL");
         sector(&im.disk, 0, a);

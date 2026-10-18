@@ -22,7 +22,8 @@
    `make unittest` runs it for a few seconds with three fixed settings; the review's campaigns ran it for
    minutes: fsrev-tests/conc_campaign.sh, conc_campaign2.sh, recorded in bcache-review.txt. 10/16/26, round
    fs-fix-3: four settings; the fourth, six writers on a small volume, is the one with which the review of
-   B12-B19 found trim_chain()'s window (B25): 2 of its 9 runs on fd37406.) */
+   B12-B19 found trim_chain()'s window (B25): 2 of its 9 runs on fd37406. 10/17/26, round fs-fix-7: `conc umount`, the
+   review of B39-B45's R1 with threads: umount_main() below.) */
 #include <surfos/types.h>
 #include <surfos/console.h>
 #include <surfos/sync.h>
@@ -138,13 +139,16 @@ void wake_up_all(wait_queue_t *q) { (void)q; host_wake_all(); }
 void yield(void) { host_yield(); }
 
 static int quiet_kprintf;
+static volatile u32 said_unclean;   /* 10/17/26 (round fs-fix-7): what says a volume is left unclean or lost something */
 void kprintf(const char *fmt, ...) {
     char line[512];
     va_list ap;
-    if(quiet_kprintf) return;
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
+    if(strstr(line, "not cleanly unmounted") || strstr(line, "not unmounted cleanly") || strstr(line, "write errors") ||
+       strstr(line, "could not be freed") || strstr(line, "given up")) said_unclean++;
+    if(quiet_kprintf) return;
     host_out_lock();
     printf("      [kprintf %s] %s", host_name(), line);
     host_out_unlock();
@@ -162,6 +166,8 @@ struct ram {
     void *lock;
     volatile int fail_all;
     u32 io_us;
+    volatile u32 slow_from, slow_us;    /* 10/17/26 (round fs-fix-7): writes reaching past slow_from take slow_us more */
+    volatile int slow_seen;             /*      (0: none), and one has begun */
     int oracle;
     volatile u32 writes, failed, violations;
     char violation[240];
@@ -180,6 +186,7 @@ static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
 
 static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     struct ram *r = (struct ram *)d->priv;
+    if(r->slow_us && lba + count > r->slow_from) { r->slow_seen = 1; host_sleep_us(r->slow_us); }
     host_sleep_us(r->io_us);
     host_mutex_lock(r->lock);
     if(r->fail_all) { r->failed++; host_mutex_unlock(r->lock); return BDEV_EIO; }
@@ -801,12 +808,119 @@ static void dump(void) {
     printf("  syncs %u, reads %u\n", syncs_done, reads_done);
 }
 
+/**** 10/17/26 (round fs-fix-7, audit B46): the review of B39-B45's R1 as it wrote it, with threads: Ctrl+C, a kill or a
+      hangup during umount while another thread's write of the volume's device is in flight (a `sync` on another console,
+      vfs_sync()'s bsync(NULL); each write of the data area takes 0.1 s). The umount (fs/vfs.c's vfs_umount_lost() once
+      the mount is off the list) found its waits cut short: it gave the changes up and left a working card marked as not
+      cleanly unmounted. Now it is a step that must finish (fs_finish): it waits for that write, gives nothing up, marks
+      the volume clean, and the next mount reads every file. usage: conc umount ****/
+
+#ifdef TI_NOCALL
+#define UM_FINISH_ENTER(t) ((t)->fs_hold++, (t)->fs_finish++)
+#define UM_FINISH_LEAVE(t) ((t)->fs_hold--, (t)->fs_finish--)
+#else                                               /* (BEFORE builds against 3fe29bf: no step that must finish) */
+#define UM_FINISH_ENTER(t) ((void)(t))
+#define UM_FINISH_LEAVE(t) ((void)(t))
+#endif
+static volatile int um_sync_r;
+static void um_syncer(void *p) { (void)p; um_sync_r = bsync(NULL); }
+static struct superblock *um_mount(struct ram *r) {
+    struct superblock *s = (struct superblock *)calloc(1, sizeof(*s));
+    s->type = fat;
+    s->dev = &r->bd;
+    mutex_init(&s->lock, "fat");
+    return fat->mount(s) == 0 ? s : NULL;
+}
+static int um_file(struct vnode *dir, const char *name, const u8 *data, u32 len, int write) {   /* written, or as written */
+    static u8 back[8192];
+    struct vnode *v;
+    int ok;
+    if(write ? dir->ops->create(dir, name, VN_FILE, &v) : dir->ops->lookup(dir, name, &v)) return 0;
+    if(write) ok = v->ops->write(v, 0, data, len) == (int)len;
+    else ok = v->size == len && v->ops->read(v, 0, back, len) == (int)len && !memcmp(back, data, len);
+    vput(v);
+    return ok;
+}
+static int umount_case(int mode) {
+    static const char *what[] = { "Ctrl+C (TI_INT, a kernel command)", "a kill (TI_KILL, a system call)",
+                                  "a hangup (TI_KILL and TI_HANGUP, in a call)", "the control: no interrupt" };
+    struct ram *r = ram_new("cu", 8192, 0);
+    surf_task *t = *fatconc_task();                 /* this thread's task, as the file system sees it */
+    struct superblock *s, *s2;
+    struct ggeo g;
+    static u8 a[4096], b[2048];
+    char msg[256];
+    void *th;
+    int s1, s2r, a_ok, b_ok, clean, bad;
+    u_int gave_up;
+    u32 i, said0;
+    u_long f;
+    for(i = 0; i < sizeof(a); i++) a[i] = (u8)(i * 7 + mode);
+    for(i = 0; i < sizeof(b); i++) b[i] = (u8)(i * 13 + mode + 1);
+    if(fat_mkfs(&r->bd, "UMOUNT", 0, msg, sizeof(msg)) != 0 || !(s = um_mount(r))) { printf("umount %d: setup\n", mode); return 1; }
+    if(!um_file(s->root, "a", a, sizeof(a), 1) || s->ops->sync(s) || bsync(&r->bd)) { printf("umount %d: a\n", mode); return 1; }
+    if(!um_file(s->root, "b", b, sizeof(b), 1)) { printf("umount %d: b\n", mode); return 1; }   /* changed, not written */
+    ggeometry(r->mem, &g);
+    r->slow_from = g.data_lba;
+    r->slow_seen = 0;
+    r->slow_us = 100000;
+    um_sync_r = 1;
+    said0 = said_unclean;
+    th = host_thread(um_syncer, NULL, "sync");
+    while(!r->slow_seen) host_sleep_us(500);        /* its write of b's block is in flight */
+    f = irq_save();
+    if(mode == 0) { t->in_call = TC_COMMAND; t->intr = TI_INT; }                 /* task_interrupt_job() */
+    else if(mode == 1) { t->in_call = TC_SYSCALL; t->intr = TI_KILL; }           /* kill_task() */
+    else if(mode == 2) { t->in_call = TC_SYSCALL; t->intr = TI_KILL | TI_HANGUP; }   /* kill_hangup() */
+    else t->in_call = TC_COMMAND;
+    irq_restore(f);
+    UM_FINISH_ENTER(t);                             /* vfs_umount_lost(): the mount is off the list */
+    s1 = s->ops->sync(s);
+    s2r = bsync(&r->bd);
+    vput(s->root);
+    s->ops->unmount(s);
+    gave_up = bdirty_count(&r->bd);
+    binvalidate(&r->bd);
+    UM_FINISH_LEAVE(t);
+    f = irq_save();
+    t->in_call = 0;
+    t->intr = 0;
+    irq_restore(f);
+    host_join(th);
+    r->slow_us = 0;
+    host_progress++;
+    clean = (gfat(r->mem, &g, 1) & (g.type == 32 ? 0x08000000 : 0x8000)) != 0;
+    s2 = um_mount(r);
+    a_ok = s2 && um_file(s2->root, "a", a, sizeof(a), 0);
+    b_ok = s2 && um_file(s2->root, "b", b, sizeof(b), 0);
+    bad = gave_up != 0 || !clean || !a_ok || !b_ok || said_unclean != said0 || um_sync_r != 0;
+    printf("CONC umount, %s: the other thread's sync %d; umount: fs sync %d, bsync %d, %u changed blocks given up, %u lines said"
+           " the volume unclean or something lost; the card: clean bit %d, a %s, b %s: %s\n", what[mode], um_sync_r, s1, s2r, gave_up,
+           said_unclean - said0, clean, a_ok ? "ok" : "BAD", b_ok ? "ok" : "MISSING", bad ? "FAIL" : "ok");
+    if(s2) { vput(s2->root); s2->ops->unmount(s2); }
+    binvalidate(&r->bd);
+    return bad;
+}
+static int umount_main(void) {
+    int bad = 0, m;
+    host_init();
+    quiet_kprintf = 1;
+    fatfs_init();
+    init_bcache();
+    host_watchdog(30, NULL);
+    for(m = 0; m < 4; m++) bad += umount_case(m);
+    host_watchdog_stop();
+    printf("CONC umount: %s\n", bad ? "FAIL" : "ok");
+    return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     u32 seed = argc > 1 ? (u32)atoi(argv[1]) : 1, secs = argc > 2 ? (u32)atoi(argv[2]) : 10;
     int i, bad = 0, s1, s2;
     u32 io_us;
     void *th[16];
     char msg[256];
+    if(argc > 1 && !strcmp(argv[1], "umount")) return umount_main();   /* 10/17/26 (round fs-fix-7, B46) */
     nworkers = argc > 3 ? atoi(argv[3]) : 3;
     chaos_on = argc > 4 ? atoi(argv[4]) : 1;
     io_us = argc > 5 ? (u32)atoi(argv[5]) : 30;
