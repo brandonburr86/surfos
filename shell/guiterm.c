@@ -25,6 +25,11 @@ ends (exit), a line in the window and the status bar say so, and Enter or the Ne
 starts another below; while one runs, busy() makes closing the window and leaving the desktop ask
 first, and closing it hangs the session up. Nothing here keeps or reports what is typed or shown
 anywhere but in the window and the clipboard.
+10/18/26 (the second review): a new size waits for what was printed at the old one SIZE_WAIT_MS at
+most: while output pours in for longer, what was read is drawn, and the size goes without waiting for
+the pty to be empty. A copy of the screen takes it as it shows, also lines kept from a wider window
+(vt_shown()); a paste goes into the queue in chunks that end between characters, and once a byte did
+not fit, nothing after it does, so what the session gets is the clipboard's start.
 */
 #include "guipriv.h"
 #include "guivt.h"
@@ -38,6 +43,10 @@ static const u32 palette[16] = {
 };
 #define READ_MAX 8192                   /* bytes drawn in one frame at most (a pty's whole buffer), and */
 #define WORK_MAX 32768                  /* 10/18/26: cells written: a flood of erases never holds the desktop up */
+#define SIZE_WAIT_MS 250                /* 10/18/26: a new size waits this long at most for the output before it */
+#ifndef EMFILE
+#define EMFILE 24                       /* fs/vfs.h's: the desktop's task has no free descriptor */
+#endif
 #define EDGE_MS 50                      /* a drag past the edge scrolls a line this often */
 #define BUTTON_W 104                    /* New session, in the status bar */
 
@@ -148,6 +157,7 @@ static const char *why_none(int err) {
     case -ENOENT: return "/initrd/bin/surfsh is not there";
     case -ENOMEM: return "there is not enough memory";
     case -ENOSYS: return "this system has no sessions";
+    case -EMFILE: return "too many files are open";
     }
     return "it could not be started";
 }
@@ -261,13 +271,11 @@ static void copy(struct gui_state *g) {
         if(l1 < vt->dropped) { say(g, "The selection has left the scrollback: nothing copied."); return; }
         a = l0 < vt->dropped ? -1 : (int)(l0 - vt->dropped);   /* -1: from the oldest line kept */
         b = (int)(l1 - vt->dropped);
-    } else {                                            /* nothing selected: the screen as shown */
-        a = view_top(t);
+    } else {                                            /* nothing selected: the screen as shown (10/18/26: */
+        a = view_top(t);                                /* lines kept from a wider window too, cut at its width) */
         b = a + vt->rows - 1;
-        c0 = 0;
-        c1 = vt->cols;
     }
-    n = vt_text(vt, a, c0, b, c1, g->clip, GUI_CLIP_MAX, &cut);
+    n = sel ? vt_text(vt, a, c0, b, c1, g->clip, GUI_CLIP_MAX, &cut) : vt_shown(vt, a, b, g->clip, GUI_CLIP_MAX, &cut);
     if(!n) {                                            /* 10/18/26: only blanks: the clipboard keeps what it had */
         say(g, sel ? "Nothing copied: the selection is blank." : "Nothing copied: the screen is blank.");
         return;
@@ -279,7 +287,9 @@ static void copy(struct gui_state *g) {
     g->dirty = true;
 }
 
-/* the clipboard, typed: a line end goes as Enter (CR), as a terminal sends it */
+/* the clipboard, typed: a line end goes as Enter (CR), as a terminal sends it. 10/18/26 (the second review): in
+   chunks that end between characters (a UTF-8 character is 4 bytes at most), and once a byte did not fit behind
+   what waits, nothing after it goes either: the session gets the clipboard's start, never one with a hole */
 static void paste(struct gui_state *g) {
     struct gui_term *t = &g->term;
     char chunk[256], msg[GUI_STATUS];
@@ -288,10 +298,13 @@ static void paste(struct gui_state *g) {
     for(i = 0; i < g->clip_len; i++) {
         char c = g->clip[i];
         if(c == '\n' && i && g->clip[i - 1] == '\r') continue;     /* CR LF is one Enter */
+        if(n == sizeof(chunk) || (n > sizeof(chunk) - 4 && ((u8)c & 0xC0) != 0x80)) {    /* c starts a character */
+            lost += lost ? n : queue(t, chunk, n, false);
+            n = 0;
+        }
         chunk[n++] = c == '\n' ? '\r' : c;
-        if(n == sizeof(chunk)) { lost += queue(t, chunk, n, false); n = 0; }
     }
-    lost += queue(t, chunk, n, false);
+    lost += lost ? n : queue(t, chunk, n, false);
     flush(g);
     if(!t->follow) scroll_to(g, vt_screen(&t->vt));
     if(lost) {
@@ -335,6 +348,7 @@ static void reset(struct gui_state *g) {
     t->handle = -1;
     t->follow = true;
     t->click_line = (u32)-1;
+    t->size_ms = g->now;
     layout(g, &l);
     vt_reset(&t->vt, l.cols, l.rows);
 }
@@ -464,23 +478,31 @@ static void wheel(struct gui_state *g, int rows) {
 /* Every frame: what waits goes, what the session printed is read and drawn, a new size is passed on. 10/18/26:
    what is read waits in carry and is drawn as far as a frame's budget goes, READ_MAX bytes and WORK_MAX cells
    written (and the last byte's own: a screenful at most), so that a flood of erases costs a frame no more than
-   a screenful of text does; the rest waits for the next frame. */
+   a screenful of text does; the rest waits for the next frame. A new size waits until what the session printed
+   before it is drawn, at the old size; 10/18/26 (the second review): SIZE_WAIT_MS at most, as output that never
+   pauses (a program in the background, say) would hold it up for good. Then the frame reads nothing more, draws
+   what is left of what was read as far as its budget goes (all of it, but for a flood of erases), and the size
+   goes at its end, though more waits in the pty: that is drawn at the new size. */
 static void tick(struct gui_state *g) {
     struct gui_term *t = &g->term;
     struct term_layout l;
     u32 before, start, got = 0, k;
     int r = 0;
-    bool spent = false;
+    bool spent = false, sized, due;
     if(!g->sys) return;
     layout(g, &l);
     if(g->app_drag != GUI_TERMINAL) t->selecting = t->thumb = false;   /* the drag ended elsewhere (a console switch) */
     if(t->selecting) edge_scroll(g, &l);
+    sized = (l.cols != t->vt.cols || l.rows != t->vt.rows) && g->resize != GUI_TERMINAL;   /* a new size to pass on */
+    if(!sized) t->size_ms = g->now;                     /* so a new one waits from the frame it came in */
+    due = sized && g->now - t->size_ms >= SIZE_WAIT_MS;
     if(t->handle >= 0) {
         flush(g);
         before = t->vt.dropped + (u32)t->vt.count;
         start = t->vt.written;
         while(!(spent = got >= READ_MAX || t->vt.written - start >= WORK_MAX)) {
-            if(t->carry_at == t->carry_len) {           /* all of it drawn: read on */
+            if(t->carry_at == t->carry_len) {           /* all of it drawn: read on, unless the size is due */
+                if(due) break;
                 r = g->sys->term_read(g->sys->ctx, t->handle, t->carry, sizeof(t->carry));
                 if(r <= 0) break;
                 t->carry_at = 0;
@@ -495,9 +517,9 @@ static void tick(struct gui_state *g) {
             g->dirty = true;
         }
         if(r < 0) { ended(g, r); return; }
-        if(spent || t->carry_at < t->carry_len) return; /* more next frame: the size waits until it is drawn */
-    }
-    if((l.cols != t->vt.cols || l.rows != t->vt.rows) && g->resize != GUI_TERMINAL) {
+        if(!due && (spent || t->carry_at < t->carry_len)) return;  /* more next frame: the size waits until all is */
+    }                                                   /* drawn, unless it is due (what is left of carry follows) */
+    if(sized) {
         vt_resize(&t->vt, l.cols, l.rows);
         if(t->handle >= 0) g->sys->term_resize(g->sys->ctx, t->handle, t->vt.cols, t->vt.rows);
         g->dirty = true;

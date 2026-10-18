@@ -33,8 +33,13 @@ program too, as a terminal's window does when its shell exits. And a desktop who
 gui_finish() (killed at once: a fault, or a kill that waited too long) leaves nothing behind for good.
 The master is also a descriptor of that task (fd_install()), so the task's end closes it when the
 task is collected (fd_close_all()): the hangup, and the pty is free again. A session's place in the
-table is taken back by the next open once its desktop's task is gone; a master that could not be a
-descriptor (the task's table was full) is closed then, the hangup. Each place is thus freed once.
+table is taken back by the next open once its desktop's task is gone.
+10/18/26 (the second review): the master is a descriptor from the moment it is open, before the shell
+is started, and always: without a free descriptor the session does not start (-EMFILE, as
+sys_openpty() answers a program), so no master is ever held here only. Closing takes the master from
+its place (interrupts off) before the descriptor is closed. A task killed at once at any point of an
+open or a close thus leaves its master to its end (fd_close_all()), never in a place to be closed a
+second time, and the next open takes back every place of a task that is gone, whatever it was doing.
 */
 #include <stdio.h>
 #include <surfos/types.h>
@@ -49,9 +54,9 @@ descriptor (the task's table was full) is closed then, the hangup. Each place is
 #define SHELL_PATH "/initrd/bin/surfsh"
 
 struct session {
-    bool used;                          /* claimed (a session, or one being started) */
-    struct file *master;                /* its pty's master */
-    int fd;                             /* 10/18/26: the master's descriptor in the owner's table; -1: held here only */
+    bool used;                          /* claimed (a session, or one being started or closed) */
+    struct file *master;                /* its pty's master; NULL while it is being started or closed */
+    int fd;                             /* 10/18/26: the master's descriptor in the owner's table */
     u_long owner;                       /* the desktop's task, whose child the shell is */
     int pid;                            /* the shell; 0 once collected or handed to init */
     int pty;
@@ -71,29 +76,45 @@ static void collect(struct session *s) {
     if(s->pid > 0 && task_wait_opts((u_long)s->pid, &status, WNOHANG) != 0) s->pid = 0;  /* its pid, or -1: none */
 }
 
-/* 10/18/26: the places of desktops whose task is gone (or dead, not collected yet) without closing their sessions.
-   A master that is a descriptor of that task is closed with the task's other files when it is collected; one held
-   here only is closed now: the hangup, which ends what runs on the pty (init has the shell: its parent is gone). */
+/* 10/18/26: the places of desktops whose task is gone (or dead, not collected yet) without closing their sessions,
+   also one it was starting or closing when it died. Nothing is closed here: a master is a descriptor of that task
+   from the moment it is open, and closes with the task's other files (fd_close_all()), the hangup; init has the
+   shell, whose parent is gone. */
 static void reclaim(void) {
     struct session *s;
-    struct file *f;
     surf_task *t;
     u_long flags;
     int i;
     for(i = 0; i < SESSIONS; i++) {
         s = &sessions[i];
-        f = NULL;
         flags = irq_save();
-        if(s->used && s->master && (!(t = task_find(s->owner)) || t->state == TS_DEAD)) {
-            if(s->fd < 0) f = s->master;
+        if(s->used && (!(t = task_find(s->owner)) || t->state == TS_DEAD)) {
             s->master = NULL;
             s->owner = 0;
             s->pid = 0;
             s->used = false;
         }
         irq_restore(flags);
-        if(f) pty_close(f);
     }
+}
+
+/* 10/18/26: the session's master out of its place, then its descriptor closed: the hangup, what runs on the pty is
+   killed (kernel/pty.c). Killed at once in between, the task leaves it to its own end, as any descriptor. */
+static void drop(struct session *s) {
+    struct file *f;
+    u_long flags = irq_save();
+    f = s->master;
+    s->master = NULL;
+    irq_restore(flags);
+    if(f && fd_get(s->fd) == f) fd_close(s->fd);
+}
+
+static void unclaim(struct session *s) {
+    u_long flags = irq_save();
+    s->owner = 0;
+    s->pid = 0;
+    s->used = false;
+    irq_restore(flags);
 }
 
 int guisys_term_open(void *ctx, int cols, int rows) {
@@ -119,17 +140,31 @@ int guisys_term_open(void *ctx, int cols, int rows) {
     irq_restore(flags);
     if(!s) return -EAGAIN;
     r = pty_open(&f);
-    if(!r) pty_resize(f, (u32)cols, (u32)rows);         /* before the shell starts: it sees its size at once */
-    if(!r && (r = pty_spawn(f, SHELL_PATH, 2, argv)) < 0) pty_close(f);       /* a pty nobody used: free again */
+    if(r) {
+        unclaim(s);
+        return r;
+    }
+    flags = irq_save();
+    r = fd_install(f);                                  /* 10/18/26: at once, before the shell: it goes when the task */
+    if(r >= 0) {                                        /* goes; the shell has only 0, 1 and 2 (process_spawn_files()) */
+        s->fd = r;
+        s->master = f;
+    }
+    irq_restore(flags);
+    if(r < 0) {                                         /* no free descriptor: no session (sys_openpty()'s -EMFILE) */
+        pty_close(f);                                   /* a pty nobody used: free again */
+        unclaim(s);
+        return r;
+    }
+    pty_resize(f, (u32)cols, (u32)rows);                /* before the shell starts: it sees its size at once */
+    r = pty_spawn(f, SHELL_PATH, 2, argv);
     if(r < 0) {
-        s->used = false;
+        drop(s);                                        /* the same */
+        unclaim(s);
         return r;
     }
     s->pid = r;
     s->pty = pty_number(f);
-    s->fd = fd_install(f);                              /* 10/18/26: it goes when the task goes; the shell has */
-    if(s->fd < 0) s->fd = -1;                           /* only 0, 1 and 2 (process_spawn_files()), not this */
-    s->master = f;
     snprintf(line, sizeof(line), "gui: Terminal: surfsh (pid %d) on pty%d\n", s->pid, s->pty);
     klog_write(line);
     return (int)(s - sessions);
@@ -170,9 +205,7 @@ void guisys_term_close(void *ctx, int h) {
     u_long flags;
     (void)ctx;
     if(!s) return;
-    if(s->fd < 0) pty_close(s->master);                 /* the hangup: what runs on the pty is killed */
-    else if(fd_get(s->fd) == s->master) fd_close(s->fd);   /* the same, the descriptor with it */
-    s->master = NULL;
+    drop(s);                                            /* the hangup: what runs on the pty is killed */
     collect(s);
     snprintf(line, sizeof(line), "gui: Terminal: the session on pty%d ended%s\n", s->pty,
              s->pid > 0 ? "; init collects its shell" : "");
@@ -184,8 +217,5 @@ void guisys_term_close(void *ctx, int h) {
         s->pid = 0;
     }
     klog_write(line);
-    flags = irq_save();
-    s->owner = 0;
-    s->used = false;
-    irq_restore(flags);
+    unclaim(s);
 }
