@@ -534,6 +534,31 @@ region (G5) therefore needs a flow change: either a step that turns a region int
 after synthesis and lets those properties through, or a nextpnr with pblock support. Neither
 was done here (the brief: do not change the flow).
 
+### 12.4 The first review (2026-10-18)
+
+An independent review of 1bcfc96 found no critical defect (it ran the engine against the model
+with wider random tests, 880 random ABORTs among them) and eight findings. Each fix has a test
+that fails on 1bcfc96 and passes after, where a test is possible:
+
+| Finding | Fix | Test (on 1bcfc96 / after) |
+|---|---|---|
+| 1 major: gpudiag said PASS with the engine missing (a wrong gpu.ID: 90 checks, LD0 green) | a missing engine, each skipped engine scene and a run short of its 117 checks fail (f356769) | `test-gpu-noengine`: the HAS_GPU = 0 SoC and one with gpu.ID 0x31555048 must FAIL saying why (PASS 90 / FAIL 2 of 6 and 8 of 98) |
+| 2: ABORT's FIFO flush and the IE gating untested | test_gpu queues words behind a blocked WAIT_VBLANK and ABORTs; each interrupt with its enable off, the other on, its own on (5dc67ba) | the three mutants of the review (passed / caught; 21 of 21) |
+| 3: FRAME_CRC and FRAME_COUNT could pair two frames | a FRAME_COUNT read keeps its frame's CRC for the next FRAME_CRC read (31b8467) | test_video_gfx: FRAME_CRC two frames after FRAME_COUNT must be the counted frame's (newest / counted) |
+| 4: CTRL and GFX_ cross separately | documented, not changed: the exact rule in section 3 (31b8467) | test_video_gfx checks both halves of the rule (passes on both: nothing changed) |
+| 5: tests took 0x3000_0000 as unmapped; no SurfOS boot on the GPU SoC | soc.toml's `unmapped_probe` hole; bramdiag, SurfBoot's tests and the hello kernel probe it (01ee85b, 1e12818); `test-gpu-system-boot` on check | bramdiag on the GPU SoC (FAIL / PASS 569 checks); SurfOS boots from a card on it (21 of 21 checks, 89 s, as test-soc-system-boot) |
+| 6: two `board` lines refused every board in fpga-build.sh | they add up, as in release.py (74a9cc8) | test_tools.sh dry-runs a two-line design for both boards (refused / taken); release-test.py |
+| 7: SoC 0.2.0 left in docs, SURFBUS topology, "either value", a 512 KiB vram linker region | fixed (d9cc652); soc.toml `bytes` makes the region 300 KiB (01ee85b) | make check-generated |
+| 8: gpudiag_check.py could mix two runs | it judges the last complete run only, and wants the full check total (f356769) | test_gpudiag_check.py (4 of 11 fail / 11 of 11) |
+| SRL trap (the review found the cause) | the flow refuses SRL cells after synthesis (3422a76) | make test-flow: Yosys's SRLs for a chain without a reset refused, with one passed; openxc7-build.sh on that chain stops at check-srl (exit 1), passes with the reset |
+
+`-nosrl` was measured first, by Yosys synthesis of every design alone (with and without it, the
+flow's script): no design has an SRL either way, but every netlist differs, for example the
+baseline 798 cells against 820 and the 100T DDR design 13,642 against 14,070 (more LUTs), so the
+flow's synthesis stays as it was and the reset of 95d0bd1 stays too.
+
+The designs rebuilt at these fixes are recorded here when their builds are done.
+
 ## 13. Risks
 
 * **Block RAM 83 %.** VRAM's 76 RAMB36 spread over most of the 100T's block RAM columns, so its
@@ -541,11 +566,11 @@ was done here (the brief: do not change the flow).
   80 MHz dram_clk had +1.13 ns and placed in three tries of four, and the added block RAM and
   routing may cost it placements. The DDR+GPU design's first placement met it with +1.24 ns
   (section 12.2); that is one sample.
-* **0x3000_0000 was a "known unmapped" address** in older tests: bramdiag's "load from an
-  unmapped address" probe, SurfBoot's monitor test (`md 0x30000000`) and the hello test kernel use
-  it. On the GPU designs that address is VRAM, so those probes would see memory. They run on the
-  existing designs, where nothing changed; bramdiag on a GPU design would report that one check
-  (moving its probe to 0x4000_0000 is a change for the integrator to decide).
+* **0x3000_0000 was a "known unmapped" address** in older tests (bramdiag's probes, SurfBoot's
+  monitor test, the hello kernel). Since the first review they probe spec/soc.toml's
+  `unmapped_probe` hole at 0x4000_0000, which no SurfCPU SoC will decode, and bramdiag passes on
+  the GPU SoC (section 12.4). The ROM images built from this branch differ from the released ones
+  there, nowhere else.
 * **Pixel reads during writes.** A word the CPU or the engine writes at the instant the scan-out
   reads it is a block RAM collision: UG473 leaves the read data undefined, so those four pixels
   may show any colour in that frame (the NO_CHANGE mode keeps the memory itself right). For
@@ -560,11 +585,12 @@ was done here (the brief: do not change the flow).
 * **Open-flow sign-off.** As for every SurfCPU bitstream, nextpnr's timing is an estimate and the
   CDC constraints are Vivado's only (OPEN-FLOW.md).
 * **SRL cells and LVS.** In both failed G2 builds the open flow's LVS check reported every signal
-  fed by an SRL16E as different (section 12.2). Whether the bitstream implemented those SRLs
-  wrongly or the checker cannot pair them is not known; no SurfCPU build on record had SRL cells
-  before. The GPU designs now have none (the one chain that became an SRL has a reset); any
-  future change that makes Yosys infer one (three or more registers in a row without a reset)
-  should be expected to fail LVS the same way.
+  fed by an SRL16E as different (section 12.2). The first review found why: the LVS extractor's
+  tile model has no shift mode, and what it does not implement reads as 0. Whether those two
+  bitstreams were right was never established. The flow now refuses a netlist with SRL cells right
+  after synthesis (OPEN-FLOW.md 6.5; `-nosrl` would have changed every design's netlist), so a
+  future chain of three registers without a reset stops the build at check-srl with its name, not
+  an hour later in LVS. The GPU designs have none (the lane delay keeps its reset).
 
 ## 14. The physical tests (the integrator's, with the owner)
 

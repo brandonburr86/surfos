@@ -1,0 +1,77 @@
+SurfGPU, the first review's fixes (2026-10-18): simulation, host tests and the SRL question, in the
+surfcpu-toolchain container (and surfcpu-openxc7 for Yosys 0.69 and the open flow), on the tree that
+became 5dc67ba..d9cc652 (sc/gpu). Nothing here ran on a board.
+
+make test-gpu (excerpts):
+  check_gpu_h: PASS (10 opcodes, 3 header bits and the ID agree in gpu.h and surf_gpu.v; VRAM's size in soc.h, surf_gpu.v and surfcpu_soc.v)
+  test_video_gfx: PASS (69 checks, seed 1, 80 frames)
+  test_video_gfx: PASS (69 checks, seed 2, 80 frames)
+  test_video_gfx: PASS (69 checks, seed 3, 80 frames)
+  test_gpu: PASS (seed 1: 718 checks; 1975 commands, 30868 words, 822029 pixel writes in the model; VRAM compared 136 times (16 directed, 120 random chunks); engine 328095 grants, 8350 cycles waiting fo
+  test_gpu: PASS (seed 2: 718 checks; 2118 commands, 34776 words, 826886 pixel writes in the model; VRAM compared 136 times (16 directed, 120 random chunks); engine 323352 grants, 5855 cycles waiting fo
+  test_gpu: PASS (seed 3: 718 checks; 1952 commands, 28710 words, 780615 pixel writes in the model; VRAM compared 136 times (16 directed, 120 random chunks); engine 307545 grants, 6453 cycles waiting fo
+  gpudiag_check: PASS (117 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 77 frames captured, 29 distinct, 33041303 cycles)
+    [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3773790 cycles
+    [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks)
+  test_gpudiag_check: PASS (11 checks of gpudiag_check.py: the check total, skipped scenes, one run of several, --must-fail)
+    [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 14 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+    [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (8 of 98 checks failed), 8 problems found, 'no engine: gpu.ID reads 0x31555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete run makes' said)
+
+make test-gpu-mutants:
+  abort-keeps-fifo               gpu    caught: test_gpu: FAIL (21 of 193 checks, seed 1)
+  irq-ignores-ie-fence           gpu    caught: test_gpu: FAIL (2 of 418 checks, seed 1)
+  irq-ignores-ie-err             gpu    caught: test_gpu: FAIL (2 of 418 checks, seed 1)
+  test-gpu-mutants: 21 of 21 caught
+
+the other suites the round touched (one container, timed):
+  test-gpu-mutants: PASS after 93 s
+  test-flow: PASS after 13 s
+  board-tools: FAIL (2) after 13 s  [the new two-board test ran under FLOW=openxc7 in a scratch repository; fixed, then:]
+  test-release: PASS after 26 s
+  test-fw: PASS after 34 s
+  test-soc-boot: PASS after 20 s
+  test-gpu-system-boot: PASS after 89 s
+  board-tools: test_tools: 264 passed, 0 failed
+  test-flow: srlcheck self-test: PASS (4 cases)
+  test-flow: srlcheck: a shift chain without a reset refused (2 SRL cells), with one passed
+  test-gpu-system-boot: test-soc-system-boot: 21 of 21 checks passed in 88 s (boot 228976907 cycles = 9.159 s simulated in 87.7 s wall (2.61 M cycles/s); recovery 165333644 cycles = 6.613 s simulated in 61.6 s wall (2.69 M cycles/s); the RTL of surfcpu_soc wit
+
+the open flow on devenv/openxc7/test/srl_chain.v (tools/openxc7-build.sh --synth-only):
+  srl_chain (synthesis only): openxc7-build.sh exit 1
+      SRL16E $auto$ff.cc:337:slice$1521: drives s3[0]
+      SRL16E $auto$ff.cc:337:slice$1522: drives s3[1]
+    srlcheck: FAIL: 2 SRL cell(s) in a netlist of 8 cells. The open flow's LVS cannot check them (its extractor has no shift mode: every signal they feed would differ); give each chain a reset, or keep it in flip-flops otherwise (
+    |   SRL16E $auto$ff.cc:337:slice$1522: drives s3[1]
+    | srlcheck: FAIL: 2 SRL cell(s) in a netlist of 8 cells. The open flow's LVS cannot check them (its extractor has no shift mode: every signal they feed would differ); give each chain a reset, or keep it in flip-flops otherwise
+    | openxc7-build.sh: the synthesized netlist has SRL cells, which the open flow's LVS cannot check; give each chain a reset (check-srl.txt)
+  srl_chain_reset (synthesis only): openxc7-build.sh exit 0
+    srlcheck: PASS: no SRL cell among 13 cells
+    | openxc7-build.sh: outputs constant after synthesis but not in the RTL: 0
+    | openxc7-build.sh: synthcheck: PASS
+    | openxc7-build.sh: synthesis only (safe DSP mode): check synthesis PASS; build/flow/checks5/srl_chain_reset/srl_chain_reset.json
+
+-nosrl: every design's open-flow synthesis (Yosys 0.69, the flow's script) with and without it:
+  arty_a7_baseline srl: 3 s, SRL cells 0
+  arty_a7_baseline nosrl: 2 s, SRL cells 0
+  arty_a7_baseline: netlists DIFFER, json DIFFER (7549 lines; sha256 40d260ed2166998c / 779759515896ff87)
+  surfcpu_arty_a7_bramdiag srl: 17 s, SRL cells 0
+  surfcpu_arty_a7_bramdiag nosrl: 16 s, SRL cells 0
+  surfcpu_arty_a7_bramdiag: netlists DIFFER, json DIFFER (82164 lines; sha256 b5b93b004944a3b0 / 13b86a933d460832)
+  surfcpu_arty_a7_top srl: 17 s, SRL cells 0
+  surfcpu_arty_a7_top nosrl: 16 s, SRL cells 0
+  surfcpu_arty_a7_top: netlists DIFFER, json DIFFER (81295 lines; sha256 4606b24d45b5aa9e / 03055123903aeac7)
+  surfcpu_arty_a7_ddr srl: 24 s, SRL cells 0
+  surfcpu_arty_a7_ddr nosrl: 24 s, SRL cells 0
+  surfcpu_arty_a7_ddr: netlists DIFFER, json DIFFER (144929 lines; sha256 9be4d1fad483bcc3 / ed02ee8c2821310f)
+  surfcpu_arty_a7_ddr_bramdiag srl: 23 s, SRL cells 0
+  surfcpu_arty_a7_ddr_bramdiag nosrl: 22 s, SRL cells 0
+  surfcpu_arty_a7_ddr_bramdiag: netlists DIFFER, json DIFFER (145280 lines; sha256 3d9a809f6c0414cf / af065f3b444c534c)
+  surfcpu_arty_a7_gpudiag srl: 32 s, SRL cells 0
+  surfcpu_arty_a7_gpudiag nosrl: 31 s, SRL cells 0
+  surfcpu_arty_a7_gpudiag: netlists DIFFER, json DIFFER (150118 lines; sha256 7e7074ac201fcc1e / 1c4ab799bb215437)
+  surfcpu_arty_a7_ddr_gpu srl: 38 s, SRL cells 0
+  surfcpu_arty_a7_ddr_gpu nosrl: 40 s, SRL cells 0
+  surfcpu_arty_a7_ddr_gpu: netlists DIFFER, json DIFFER (212441 lines; sha256 780439b70049fc3c / 6b1ea8f9c9d9beab)
+  cell counts (with SRL mapping / with -nosrl):
+    arty_a7_baseline: 798 / 820 (LUT2 57/64, LUT3 22/35, LUT4 53/48, LUT5 82/85, LUT6 41/44, CARRY4 47/48)
+    surfcpu_arty_a7_ddr: 13,642 / 14,070 (LUT2 1,165/1,357, LUT3 1,296/1,008, LUT4 1,417/1,739, LUT5 2,202/2,315, LUT6 1,150/1,240, ...)
