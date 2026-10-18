@@ -260,9 +260,9 @@ answering times out), and one in the middle of changing a folder or the FAT fini
 first: stopped at once there, it left the card locked for every other program and SurfOS's records
 of its writes in a mess (since 2026-10-17). `mkfs` stopped says how far it got (`interrupted at
 sector ...`: the card holds no usable file system then, so make it again) or that it wrote nothing.
-`umount`, and `eject` once it unmounts, are not stopped: they finish, give up nothing the card takes
-and mark the volume clean (until 2026-10-17, Ctrl+C or a `kill` then gave changes up and left a
-working card marked as not cleanly unmounted). `eject` stopped while it still writes the card's
+`umount`, and `eject` once it unmounts, are not stopped: they finish as they would have and give up
+nothing the card takes (until 2026-10-17, Ctrl+C or a `kill` then gave changes up and left a working
+card marked as not cleanly unmounted). `eject` stopped while it still writes the card's
 files out unmounts nothing and says `interrupted: it stays mounted`: type it again. A program that
 is ending by itself still writes its files out.
 
