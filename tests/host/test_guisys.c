@@ -373,7 +373,7 @@ static void monitor_end(void) {
     CHECK(g.dialog.choice == 0);
     key('\r');
     CHECK(!g.dialog.kind && fake_killed == 9 && row_of(9) < 0);
-    CHECK(!strcmp(g.monitor.status, "ended edit (pid 9)"));
+    CHECK(!strcmp(g.monitor.status, "edit (pid 9) has ended"));      /* 10/18/26: the reading right after the kill */
     CHECK(g.monitor.selected == -1 && g.monitor.pid == 9);   /* 10/18/26: still followed, not listed */
     /* kill's refusal goes to the status bar (the fake's: init, pid 1, a program here) */
     fake_killed = 0;
@@ -1160,10 +1160,16 @@ static int waiting_kill(void *ctx, int pid, char *msg, size_t n) {
     snprintf(msg, n, "edit (pid %d) ends when its system call does", pid);
     return 0;
 }
+/* ... and one whose call ends, and whose task is collected, before the desktop reads the list again */
+static int quick_kill(void *ctx, int pid, char *msg, size_t n) {
+    waiting_kill(ctx, pid, msg, n);
+    drop_task(pid);
+    return 0;
+}
 
 /* End task's kill waits: the status bar says so until a reading is without the task, then that it has ended; not if
-   the user has moved on, nor while the list is cut to the newest (the task may only be off it); a kill that ended the
-   task at once says so itself */
+   the user has moved on, nor while the list is cut to the newest (the task may only be off it). A task gone by the
+   reading right after the kill (ended at once, or its call ended meanwhile) has ended at once; a refusal ends nothing */
 static void monitor_ending(void) {
     int pid;
     desktop(960, 540);
@@ -1203,14 +1209,26 @@ static void monitor_ending(void) {
     drop_task(100);
     later(1000);
     CHECK(g.monitor.ending == -1 && !strcmp(g.monitor.status, "edit (pid 9) has ended"));
-    /* ended at once */
+    /* gone by the reading right after the kill (its call ended meanwhile): it has ended, at once */
+    fake_sys_reset();
+    waiting_sys.kill = quick_kill;
+    gui_close(&g, GUI_MONITOR);
+    gui_open(&g, GUI_MONITOR);
+    key(GUI_END);
+    key(GUI_DELETE); key(9); key('\r');
+    CHECK(fake_killed == 9 && row_of(9) < 0 && g.monitor.ending == -1 && !strcmp(g.monitor.status, "edit (pid 9) has ended"));
+    /* ended at once (the fake's kill): the same */
     g.sys = &fake_sys;
     fake_sys_reset();
     gui_close(&g, GUI_MONITOR);
     gui_open(&g, GUI_MONITOR);
     key(GUI_END);
     key(GUI_DELETE); key(9); key('\r');
-    CHECK(fake_killed == 9 && g.monitor.ending == -1 && !strcmp(g.monitor.status, "ended edit (pid 9)"));
+    CHECK(fake_killed == 9 && g.monitor.ending == -1 && !strcmp(g.monitor.status, "edit (pid 9) has ended"));
+    /* a refusal says only that: nothing has ended */
+    key(GUI_HOME); key(GUI_DOWN);                       /* init, pid 1: the fake refuses it */
+    key(GUI_DELETE); key(9); key('\r');
+    CHECK(fake_killed == 1 && g.monitor.ending == -1 && !strcmp(g.monitor.status, "not one to end"));
 }
 
 /* Find next with the followed task gone: from the row it was on (the task there now first), as Down goes on */

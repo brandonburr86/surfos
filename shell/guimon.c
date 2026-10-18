@@ -18,7 +18,8 @@ the window manager reaches it through gui_app_monitor (struct gui_app, shell/gui
 reading without it (a task that ended, or one a reading missed); a reading that fails keeps
 what the last one read; the Memory and System pages scroll in a short window; End task's kill
 waits for the end of the system call the task is in, and never ends the shells above the desktop;
-once a task End task waited for is gone from a reading, the status bar says it has ended.
+once the task End task was for is gone from a reading (the one right after the kill too), the
+status bar says it has ended.
 */
 #include "gui_sys.h"
 #include <string.h>
@@ -180,16 +181,17 @@ static void choose(struct gui_state *g, int row) {
     show_selected(g);
 }
 
-/* 10/18/26: End task's kill waited for the end of a call (the task was still in the list after it): a reading without
-   the task (the whole list: not one cut to the newest) says it has ended, in the status bar while the selection still
-   follows it; once the user has moved on, nothing is said */
+/* 10/18/26: the task End task's kill was for: the first reading without it (the whole list: not one cut to the newest)
+   says it has ended, in the status bar while the selection still follows it, also the reading right after the kill
+   (it ended at once, or its call ended before that reading); once the user has moved on, nothing is said */
 static void ended(struct gui_state *g) {
     struct gui_monitor *m = &g->monitor;
     int i;
     for(i = 0; i < m->ntasks && m->task[i].pid != m->ending; i++) ;
     if(i < m->ntasks || m->ntasks == GUI_TASK_MAX) return;
-    if(m->pid == m->ending)
+    if(m->pid == m->ending && m->ending_name[0])
         snprintf(m->status, sizeof(m->status), "%s (pid %d) has ended", m->ending_name, m->ending);
+    else if(m->pid == m->ending) snprintf(m->status, sizeof(m->status), "pid %d has ended", m->ending);
     m->ending = -1;
 }
 
@@ -404,15 +406,14 @@ static void answer(struct gui_state *g, int act, int button, const char *text, c
         if(!g->sys || !g->sys->kill) return;
         msg[0] = 0;
         pid = atoi(target);
+        m->ending = -1;
+        m->ending_name[0] = 0;
+        for(row = 0; row < m->ntasks; row++)            /* its name, from the list the question was asked from */
+            if(m->task[row].pid == pid) strlcpy(m->ending_name, m->task[row].name, sizeof(m->ending_name));
         r = g->sys->kill(g->sys->ctx, pid, msg, sizeof(msg));
         strlcpy(m->status, msg[0] ? msg : r ? "Not ended" : "Ended", sizeof(m->status));
-        m->ending = -1;
-        read_all(g);                                    /* what is left, at once */
-        for(row = 0; !r && row < m->ntasks; row++) {    /* 10/18/26: still there: it ends when its call does (ended()) */
-            if(m->task[row].pid != pid) continue;
-            m->ending = pid;
-            strlcpy(m->ending_name, m->task[row].name, sizeof(m->ending_name));
-        }
+        if(!r) m->ending = pid;                         /* 10/18/26: "has ended" once a reading is without it */
+        read_all(g);                                    /* what is left, at once (and ended() with it) */
         break;
     case DLG_FIND:
         strlcpy(m->find, text, sizeof(m->find));
