@@ -397,8 +397,10 @@ title line, the text, a status line and a line of keys.
 
 It takes files up to 1 MB. Lines do not wrap: the line with the cursor scrolls sideways,
 and a `>` in the last column says a line goes on. Saving writes a new copy and then
-renames it over the old file, so a failed save leaves the old file as it was. Windows
-line ends (CR LF) stay as they were.
+renames it over the old file, so a failed save leaves the old file as it was. The copy
+is `<file>.tmp`, or `<file>.1.tmp` and so on when you have a file of that name, which
+`edit` never overwrites. If the disk fails during the rename, the copy is kept with your
+text in it, and the status line names it. Windows line ends (CR LF) stay as they were.
 
 **Taking the stick out.** Type `eject usb1` and wait for `usb1: safe to remove`. It
 unmounts every partition of the stick and writes everything still held in memory. When
@@ -908,7 +910,8 @@ and `tools/stick.py` never writes, still starts SurfOS meanwhile.
   which are not on the drive, for a disk that is not FAT. `autonet` starts a kernel
   thread that waits up to 90 seconds for a link, gets a DHCP lease (three tries) and runs
   `telnetd on` on F1. `rx` writes what one connection sends to `<path>.part`, then renames
-  it. The Makefile writes `etc/build-id` into the initrd at every build.
+  it; after a rename that failed with an I/O error the `.part` file is kept (the rename may
+  have half happened), and rx says so. The Makefile writes `etc/build-id` into the initrd at every build.
 * **One stick** (`boot/grub-usb.cfg`, `driver/part.c`, `driver/bdev.c`, `tools/stick.py`).
   The boot loader finds the partition it was started from through GRUB's `$cmdpath`, so it
   runs from any FAT partition, the image's or a stick's. The menu asks GRUB for that

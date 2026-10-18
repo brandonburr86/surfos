@@ -15,9 +15,14 @@ character, shown as spaces up to the next multiple of 8); ^S save, ^Q quit
 last search), ^K cut the line (several in a row go together), ^U paste them,
 ^G go to a line, ^C where the cursor is, ^L draw the screen again.
 
-Saving writes <file>.tmp, fsyncs it and renames it over the file; where the
-file system cannot rename (ENOSYS) the file is truncated and written in place.
-The file keeps its line ends (LF, or CRLF when its first line has one) and
+Saving writes the text to a new file beside the file, fsyncs it and renames it
+over the file. 10/17/26, as the desktop's Notepad saves (shell/guifs.c): the new
+file is <file>.tmp, or <file>.1.tmp and so on when the user has a file of that
+name (O_EXCL: theirs is never touched). It is deleted again only when the rename
+failed before it changed anything; after an I/O error the rename may have half
+happened, and the text stays in it (the status line names it). Only where the
+file system cannot rename (ENOSYS), or no such name fits in a path, is the file
+truncated and written in place. The file keeps its line ends (LF, or CRLF when its first line has one) and
 ends with a line end. The terminal is used only through ttyctl(TTY_RAW),
 ttyctl(TTY_GETSIZE), the key sequences of raw mode and the ANSI subset that
 include/surfos/tty.h lists, so the editor works on the screen and over the
@@ -337,8 +342,11 @@ static int write_text(int fd) {
     return used ? write_chunk(fd, chunk, used) : 0;
 }
 
-static int write_file(const char *path) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC), e;
+/* the text into path, then fsync; how: O_EXCL for a new file (*made: this call made it, so it is
+   ours to delete), or O_TRUNC for the file itself */
+static int write_file(const char *path, int how, int *made) {
+    int fd = open(path, O_WRONLY | O_CREAT | how), e;
+    if(made) *made = fd >= 0;
     if(fd < 0) return -1;
     if(write_text(fd) < 0 || fsync(fd) < 0) {
         e = errno ? errno : EIO;
@@ -349,27 +357,56 @@ static int write_file(const char *path) {
     return close(fd);
 }
 
+/* a rename that failed with one of these changed nothing (fs/vfs.c's checks, and fs/fat.c's before it
+   writes): its new file may go. After any other, EIO above all, the new name may be written and the old
+   one not yet gone, both holding the same clusters, and deleting the .tmp would free the file's. */
+static int nothing_changed(int e) {
+    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT ||
+           e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
+}
+
 static int save(void) {
     char tmp[PATH_MAX + 8];
-    const char *what = filename;
-    snprintf(tmp, sizeof(tmp), "%s.tmp", filename);
+    const char *what = filename, *base;
+    struct stat st;
+    int made = 0, kept = 0, k, e = ENAMETOOLONG;
     if(!no_rename) {
+        for(k = 0; k < 10; k++) {
+            if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", filename, k) >= (int)sizeof(tmp)) break;
+            e = write_file(tmp, O_EXCL, &made) < 0 ? errno : 0;
+            if(e != EEXIST) break;              /* a file the user has under that name: the next name */
+        }
+        if(e == ENAMETOOLONG && k > 0) e = EEXIST;      /* <file>.tmp is there, the next name is too long: not in place */
         what = tmp;
-        if(write_file(tmp) < 0) { int e = errno; unlink(tmp); errno = e; goto fail; }
-        if(rename(tmp, filename) == 0) goto done;
-        what = "rename";
-        if(errno != ENOSYS) { int e = errno; unlink(tmp); errno = e; goto fail; }
-        unlink(tmp);
-        no_rename = 1;
+        if(e == 0) {
+            if(rename(tmp, filename) == 0) goto done;
+            e = errno;
+            what = "rename";
+            if(!nothing_changed(e)) {           /* perhaps half done: the text stays in the new file, if it is there */
+                kept = stat(tmp, &st) == 0;
+                goto fail;
+            }
+            kept = unlink(tmp) < 0 && e != ENOSYS;      /* it would not go: the text is in it */
+            if(e != ENOSYS) goto fail;
+            no_rename = 1;
+        } else if(made) {
+            unlink(tmp);                        /* made by this save: what of the text it got */
+            goto fail;
+        } else if(e != ENAMETOOLONG) goto fail; /* nothing was made, and nothing of the user's touched */
     }
-    what = filename;                            /* no rename here: truncate the file and write it */
-    if(write_file(filename) < 0) goto fail;
+    what = filename;                            /* no rename here, or no room for such a name: truncate the file and write it */
+    if(write_file(filename, O_TRUNC, NULL) < 0) { e = errno; goto fail; }
 done:
     modified = 0;
     snprintf(msg, sizeof(msg), "Wrote %d line%s", text_lines(), text_lines() == 1 ? "" : "s");
     return 0;
 fail:
-    snprintf(msg, sizeof(msg), "Not saved: %s: %s", what, strerror(errno));
+    if(kept) {
+        base = strrchr(tmp, '/');
+        snprintf(msg, sizeof(msg), "Not saved: %s: %s. The text is in %s", what, strerror(e), base ? base + 1 : tmp);
+    } else if(e == EEXIST && what == tmp)       /* <file>.tmp, and the names after it, are the user's */
+        snprintf(msg, sizeof(msg), "Not saved: %s.tmp: %s (move it out of the way)", filename, strerror(e));
+    else snprintf(msg, sizeof(msg), "Not saved: %s: %s", what, strerror(e));
     return -1;
 }
 

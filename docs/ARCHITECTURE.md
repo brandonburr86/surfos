@@ -584,7 +584,14 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   changes), ^F find, ^K cut the line, ^U paste, ^G go to a line, ^C where the cursor is,
   ^L redraw. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
   writes in place where a file system cannot rename), keeping the file's line ends (LF,
-  or CR LF when its first line has one). The terminal is used only through `ttyctl()`,
+  or CR LF when its first line has one). Since 10/17/26 it saves as the desktop's Notepad
+  does (`shell/guifs.c`): the new file is made with `O_EXCL`, as `<file>.1.tmp` and so on
+  past the user's own files of those names, and it is deleted again only when the rename
+  failed before it changed anything. After another error (EIO above all) the FAT rename
+  may have written the new name and not yet removed the old one, both holding the same
+  clusters; the `.tmp` is kept and the status line names it. `rx` keeps its `.part` file
+  by the same rule. `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file
+  system that fails on demand. The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that
   changed.

@@ -19,7 +19,9 @@ check it. Before that: "rx: listening on port <port> for <path>", then the addre
 connection came from. A connection that stays silent for 120 seconds is given up.
 
 Exit status 0; 1 on any error, said with its reason (the partial file <path>.part is
-removed); 2 for a usage error. Nothing else: no shell, nothing is run, nothing is sent back.
+removed; 10/17/26: but for a rename that failed after it may have changed something, as
+edit's saving knows: then it is kept, and said); 2 for a usage error. Nothing else: no
+shell, nothing is run, nothing is sent back.
 */
 
 #include <stdarg.h>
@@ -91,6 +93,12 @@ static int fail(const char *fmt, ...) {
     }
     errno = e;
     return 1;
+}
+
+/* a rename that failed with one of these changed nothing (user/bin/edit.c says why the others count) */
+static int nothing_changed(int e) {
+    return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT ||
+           e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
 }
 
 static int write_all(int fd, const char *p, long n) {
@@ -187,6 +195,8 @@ int main(int argc, char **argv) {
     }
     if(rename(part, path) < 0) {
         r = errno;
+        if(!nothing_changed((int)r))            /* perhaps half done: both names may hold the same clusters */
+            return fail("%s -> %s: %s (%s is kept)", part, path, strerror((int)r), part);
         unlink(part);
         errno = (int)r;
         return fail("%s -> %s: %s", part, path, strerror(errno));

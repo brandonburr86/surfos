@@ -428,6 +428,19 @@ $(BUILD)/host/test_libc: tests/host/test_libc.c $(HOSTUSER_OBJ)
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $^ -o $@
 
+# 10/17/26: edit's saving, user/bin/edit.c as it is, on an in-memory file system (tests/host/edit_bridge.c)
+$(BUILD)/host/edit_bridge.o: tests/host/edit_bridge.c tests/host/edit_sim.h user/bin/edit.c tests/host/libsurf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $<"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) -ffreestanding -fno-builtin -nostdinc -Iuser/include -include tests/host/libsurf_names.h -MMD -MP -c $< -o $@
+$(BUILD)/host/test_edit: tests/host/test_edit.c tests/host/edit_sim.h $(BUILD)/host/edit_bridge.o $(HOSTUSER_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) tests/host/test_edit.c $(BUILD)/host/edit_bridge.o $(HOSTUSER_OBJ) -o $@
+test-edit: $(BUILD)/host/test_edit
+	$(BUILD)/host/test_edit
+unittest: test-edit
+.PHONY: test-edit
+
 # telnetd's telnet protocol (10/6/26): user/telnetd/telnet.c makes no calls, so it builds as it is
 $(BUILD)/host/test_telnet: tests/host/test_telnet.c user/telnetd/telnet.c user/telnetd/telnet.h
 	@mkdir -p $(dir $@)
