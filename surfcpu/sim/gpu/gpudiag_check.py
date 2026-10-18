@@ -7,13 +7,15 @@
 TRANSCRIPT is what gpudiag printed (surfsim --transcript, or a board's UART capture); FRAMES the
 CRC of every frame captured at the VGA pins (surfsim --vga-crc: "frame N crc XXXXXXXX"), or "-"
 for none (a board); gpuscenes_expect.h the CRCs the C model gave each scene at build time and the
-number of checks of a complete run (GPUDIAG_CHECKS). A capture may hold several runs (Ctrl-R, a
-reset): only the last complete one counts, from its banner to its GPUDIAG line.
+number of checks of a complete run (GPUDIAG_CHECKS, and GPUDIAG_RERUN_CHECKS for a rerun, which
+cannot see reset values and says so). A capture may hold several runs (Ctrl-R, a reset): the one
+judged is the last, from its banner to the last GPUDIAG line, and after that line only the UART
+echo may follow; anything else is a later run that did not end, which fails the capture.
 
-Passes when that run says PASS with exactly GPUDIAG_CHECKS checks (a run cut short, or one that
-skipped a section, cannot pass), skipped nothing, printed one CRC for every scene of the header,
-each equal to the model's, and, with FRAMES, each also the CRC of a frame captured at the pins (so
-FRAME_CRC is the picture that left the chip). --engine-scenes N also requires that N scenes
+Passes when that run says PASS with exactly its kind's number of checks (a run cut short, or one
+that skipped a section, cannot pass), skipped nothing, printed one CRC for every scene of the
+header, each equal to the model's, and, with FRAMES, each also the CRC of a frame captured at the
+pins (so FRAME_CRC is the picture that left the chip). --engine-scenes N also requires that N scenes
 needed the engine and passed. --must-fail REGEX turns it round, for the tests of a SoC that must
 fail gpudiag (sim/gpu, make test-gpu-noengine): it passes only when the run says FAIL, this check
 fails it too, and the run's text matches REGEX. Exit 0 = pass. Only the Python standard library.
@@ -23,18 +25,28 @@ import argparse
 import re
 import sys
 
-BANNER = re.compile(r"^SurfGPU diagnostic ", re.M)
+BANNER = re.compile(r"SurfGPU diagnostic ")         # anywhere in a line: a garbled start may precede it
 SUMMARY = re.compile(r"GPUDIAG: (PASS|FAIL) \(([^)]*)\)")
+ECHO = re.compile(r"(UART echo: .*|echo +\d+: .*)?")  # what gpudiag prints after its GPUDIAG line
+RERUN = "a rerun (Ctrl-R)"
 
 
-def last_run(text: str) -> str:
-    """the last run that reached its GPUDIAG line, from its banner (or the start) to that line"""
-    starts = [m.start() for m in BANNER.finditer(text)] or [0]
-    for s in reversed(starts):
-        m = SUMMARY.search(text, s)
-        if m:
-            return text[s:m.end()]
-    return text[starts[-1]:]
+def final_run(text: str) -> tuple[str, list[str]]:
+    """(the run that ends the capture, from its banner to the last GPUDIAG line; what is wrong with
+    the capture's end): after that line only the UART echo may follow, anything else is a later run
+    that never reached its own GPUDIAG line"""
+    sums = list(SUMMARY.finditer(text))
+    if not sums:
+        return text, []
+    last = sums[-1]
+    problems = []
+    for line in text[last.end():].split("\n")[1:]:
+        if not ECHO.fullmatch(line.strip()):
+            problems.append("a run after the last GPUDIAG line did not end (it printed %r)" % line.strip()[:60])
+            break
+    prev = sums[-2].end() if len(sums) > 1 else 0
+    starts = [m.start() for m in BANNER.finditer(text, prev, last.start())]
+    return text[starts[-1] if starts else prev:last.end()], problems
 
 
 def main() -> int:
@@ -47,14 +59,15 @@ def main() -> int:
     ap.add_argument("--must-fail", metavar="REGEX")
     a = ap.parse_args()
 
-    text = last_run(open(a.uart, errors="replace").read().replace("\r", ""))
+    text, problems = final_run(open(a.uart, errors="replace").read().replace("\r", ""))
+    rerun = RERUN in text
     expect = {}
     total = None
     if a.expect:
         header = open(a.expect).read()
         for m in re.finditer(r"0x([0-9a-f]{8})u,\s+/\*\s*(\d+) (.*?) \*/", header):
             expect[int(m.group(2))] = (int(m.group(1), 16), m.group(3))
-        m = re.search(r"#define GPUDIAG_CHECKS (\d+)u", header)
+        m = re.search(r"#define %s (\d+)u" % ("GPUDIAG_RERUN_CHECKS" if rerun else "GPUDIAG_CHECKS"), header)
         total = int(m.group(1)) if m else None
     frames = set()
     nframes = 0
@@ -65,7 +78,6 @@ def main() -> int:
                 frames.add(int(m.group(1), 16))
                 nframes += 1
 
-    problems = []
     summary = SUMMARY.search(text)
     if not summary:
         problems.append("no GPUDIAG summary line")
@@ -74,9 +86,10 @@ def main() -> int:
     elif total is not None:
         m = re.fullmatch(r"(\d+) checks", summary.group(2))
         if not m or int(m.group(1)) != total:
-            problems.append("gpudiag says PASS (%s), but a complete run makes %d checks" % (summary.group(2), total))
+            problems.append("gpudiag says PASS (%s), but a complete %s makes %d checks" % (
+                summary.group(2), "rerun" if rerun else "run", total))
     if a.expect and total is None:
-        problems.append("no GPUDIAG_CHECKS in %s" % a.expect)
+        problems.append("no %s in %s" % ("GPUDIAG_RERUN_CHECKS" if rerun else "GPUDIAG_CHECKS", a.expect))
     seen = {}
     for m in re.finditer(r"^scene +(\d+): (.*?) +crc ([0-9a-f]{8}) ok", text, re.M):
         seen[int(m.group(1))] = int(m.group(3), 16)
@@ -126,8 +139,9 @@ def main() -> int:
         for p in problems:
             print("gpudiag_check: FAIL: " + p)
         return 1
-    print("gpudiag_check: PASS (%s; %d scenes, every FRAME_CRC the model's%s; %d frames captured, %d distinct%s)"
-          % (summary.group(2), len(expect), " and a captured frame's" if frames else "", nframes, len(frames), cycles))
+    print("gpudiag_check: PASS (%s%s; %d scenes, every FRAME_CRC the model's%s; %d frames captured, %d distinct%s)"
+          % (summary.group(2), ", a rerun" if rerun else "", len(expect), " and a captured frame's" if frames else "",
+             nframes, len(frames), cycles))
     return 0
 
 
