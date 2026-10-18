@@ -656,6 +656,17 @@ saved in each call and an instruction more for each of the 1024 blocks in a sync
 card command cost 0.5-1.8 % more against that padded base; the waits are out of line now
 (bcache-review.txt section 55).
 
+Since audit B56-B60 (counted the same way, before = 3ce9600): every workload above sends the same
+requests and blocks. The cache's waits are b482ff1's again (B50's bound and its out-of-line waits
+gone); a device request counts itself on its device (an increment and a decrement with interrupts off,
+around the driver's call); a mount and an eject count themselves inside and take their device's count
+under mount_lock; kill looks at one more flag. On SurfCPU (3ce9600's kernel against this one, the same
+simulator and ROM): test-os-persist's write run 0.07 % fewer cycles, its reboot run 0.07 % fewer,
+test-os-faults' refusing card 0.06 % fewer and its full card 0.004 % fewer; SurfBoot loads a package
+1.4 KB larger (+0.18 million cycles), and each command is within -0.3 % and +0.4 % (cp 0.24 % fewer)
+but for the pairs of lines in another order and the card-detect task's looks seen in every round
+(bcache-review.txt section 63).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
