@@ -521,10 +521,10 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_telnetd
 	$(BUILD)/host/test_pciinfo
 	$(BUILD)/host/test_iwlfw
+	$(PYTHON) -m unittest discover -s tests -p test_qemu_ports.py
 	$(PYTHON) -m unittest discover -s tests -p test_devloop.py
 	$(PYTHON) -m unittest discover -s tests -p test_source_sync.py
 	$(PYTHON) -m unittest discover -s tests -p test_devenv.py
-	$(PYTHON) -m unittest discover -s tests -p test_qemu_ports.py
 
 # ---- Wi-Fi, track C (10/9/26): lib/crypto/ and the WPA2 supplicant, on the host ---------------
 # The kernel builds lib/crypto/ and net/wlan/ through SRC_C; here they are built against the SurfOS
