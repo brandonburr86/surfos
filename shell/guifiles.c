@@ -355,6 +355,13 @@ static void open_file(struct gui_state *g, const char *path) {
     if(gui_guard(g, PEND_OPEN_PATH, path) && note_load(g, path) == 0) gui_open(g, GUI_NOTEPAD);
 }
 
+/* a file or folder the desktop leaves alone (note_guarded()): said */
+static void refuse(struct gui_state *g, const char *title, const char *path) {
+    char line[80];
+    gui_unsure_line(g, path, line, sizeof(line));
+    dialog_message(g, title, line, "Have the disk checked first (fsck).");
+}
+
 void files_act(struct gui_state *g, int act) {
     struct gui_files *f = &g->files;
     struct gui_node *s;
@@ -393,12 +400,14 @@ void files_act(struct gui_state *g, int act) {
         return;
     case ACT_FILES_RENAME:
         if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
+        if(note_guarded(g, path)) { refuse(g, "Not renamed", path); return; }   /* its new name would be unguarded */
         snprintf(line, sizeof(line), "New name for %s:", s->name);
         dialog_input(g, ACT_DLG_RENAME, "Rename", line, s->name);
         strlcpy(g->dialog.target, path, sizeof(g->dialog.target));
         return;
     case ACT_FILES_DELETE:
         if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
+        if(note_guarded(g, path)) { refuse(g, "Not deleted", path); return; }
         snprintf(line, sizeof(line), "Delete %s?", s->name);
         dialog_confirm(g, ACT_DLG_DELETE, s->type == GUI_DIR ? "Delete folder" : "Delete file", line,
                        s->type == GUI_DIR ? "Only an empty folder can be deleted." : "It cannot be brought back.",
@@ -453,6 +462,7 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
     int r;
     if(button != 0 || !g->fs) return;
     if(act == ACT_DLG_DELETE) {
+        if(note_guarded(g, target)) { refuse(g, "Not deleted", target); return; }   /* it would free what another holds */
         r = g->fs->stat(g->fs->ctx, target, &e, &device, &readonly);
         if(!r) r = g->fs->remove(g->fs->ctx, target, e.type == GUI_DIR);
         if(r) {
@@ -468,6 +478,7 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
     what = act == ACT_DLG_NEW_FILE ? "Not created" : act == ACT_DLG_NEW_FOLDER ? "Not created" : "Not renamed";
     if(!usable(text)) { dialog_message(g, what, "A name cannot be empty, . or .., or have a /.", ""); return; }
     if(act == ACT_DLG_RENAME) {
+        if(note_guarded(g, target)) { refuse(g, what, target); return; }   /* its new name would be unguarded */
         strlcpy(dest, target, sizeof(dest));
         gui_parent(dest);
         r = gui_join(dest, sizeof(dest), dest, text);

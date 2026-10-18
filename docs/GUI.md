@@ -66,7 +66,19 @@ of the desktop's own first, then the others in the columns beside them.
 * **Saving.** Saving writes the text to a new file beside it, then renames that over
   the file, as `edit` does. The new file is `<file>.tmp`, or `<file>.1.tmp` and so on
   when you have a file of that name; Notepad never overwrites it. If the disk fails
-  during the rename, the text stays in that new file, and the message names it. Only
+  during the rename, the text stays in that new file, and the message names it. The
+  two may then share their space on the disk, and deleting or saving over either can
+  damage the other, so until the desktop closes Notepad saves over neither (Save
+  offers Save as, under another name) and Files deletes and renames neither, nor the
+  folder they are in. The desktop takes the same care whenever it finds a `.tmp`,
+  `.N.tmp` or `.part` beside a file it opens, saves over, deletes or renames, of the
+  file's size and time, which is how such a pair usually looks. It remembers four such
+  pairs; after more, it saves over, deletes and renames no file at all until it closes,
+  and saves only under new names. Check the stick on another computer (First Aid on
+  the Mac, `fsck` elsewhere) before you change them, also with the shell's `rm`, `mv`
+  or `cp`, which take no such care. Once it is checked, delete the copy you no longer
+  want with `rm` in the shell (or on the Mac), and start the desktop again: while the
+  two look alike, and until it closes, the desktop keeps taking the care. Only
   where a file system cannot rename, or a name is too long to take `.tmp`, is the file
   written in place. On a read-only volume (the initrd, or the flashed SURFOSUSB
   stick) Save says so and offers Save as.
@@ -126,6 +138,8 @@ swatch erases. Clear, or Ctrl+N, erases everything.
     picture Sketch saved or opened last, or else in the last chooser's.
   * It asks before it replaces a file that is there already, as Notepad's Save as
     does, except the file Sketch itself saved last.
+  * Like Notepad, it never saves over a file the desktop is taking care of (one that
+    may share its space with a `.tmp` beside it, see Notepad's Saving above).
   * Unsaved sketches are lost when the desktop exits.
 * **Open BMP.** File > Open BMP…, or the Open button, reads a BMP of up to 8 MB into the
   canvas. A 1920 x 1080 screenshot is 6 MB; a larger file is refused, and the Image

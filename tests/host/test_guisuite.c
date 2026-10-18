@@ -182,6 +182,23 @@ static void test_release(void) {
     hold(GUI_LOG, 0, 0, false);
 }
 
+/* 10/18/26 (with ai-dev's guarded saves): Sketch's Save as BMP never saves over a file that may share its clusters
+   with a new file kept beside it (note_refused()), as Notepad's save does not; elsewhere it saves */
+static void test_sketch_guarded(void) {
+    const char *d;
+    u32 len = 0;
+    fake_desktop(&g, 960, 540);
+    fake_file("/home/s.bmp", "picture", 7);
+    fake_file("/home/s.bmp.tmp", "picture", 7);         /* the same size and time: a pair a rename may have left */
+    CHECK(sketch_save(&g, "/home/s.bmp") == -EBUSY);
+    CHECK(g.dialog.kind == GUI_DLG_MESSAGE && !strcmp(g.dialog.title, "Not saved"));
+    d = fake_data("/home/s.bmp", &len);
+    CHECK(d && len == 7 && !memcmp(d, "picture", 7));
+    gui_key(&g, '\r');
+    CHECK(!g.dialog.kind && sketch_save(&g, "/home/other.bmp") == 0);
+    CHECK(fake_data("/home/other.bmp", &len) && len == GUI_SKETCH_FILE);
+}
+
 /* every window open at once, in front in turn, drawn inside the screen; then nothing is left running */
 static void test_all_windows(int width, int height) {
     int id, front;
@@ -206,6 +223,7 @@ int main(void) {
     test_charmap_paste();
     test_arrows();
     test_release();
+    test_sketch_guarded();
     test_all_windows(640, 400);
     test_all_windows(960, 540);
     test_all_windows(1280, 800);

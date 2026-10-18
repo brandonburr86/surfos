@@ -584,7 +584,34 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   changes), ^F find, ^K cut the line, ^U paste, ^G go to a line, ^C where the cursor is,
   ^L redraw. Saving writes `<file>.tmp`, fsyncs it and renames it over the file (or
   writes in place where a file system cannot rename), keeping the file's line ends (LF,
-  or CR LF when its first line has one). The terminal is used only through `ttyctl()`,
+  or CR LF when its first line has one). Since 10/17/26 it saves as the desktop's Notepad
+  does (`shell/guifs.c`): the new file is made with `O_EXCL`, as `<file>.1.tmp` and so on
+  past the user's own files of those names, and it is deleted again when this save could
+  not write it or the rename failed before it changed anything. After another error (EIO
+  above all) the FAT rename may have written the new name and not yet removed the old
+  one, both holding the same clusters: the `.tmp` is kept and the status line names it,
+  and since `fs/fat.c` frees a chain when any one name of it is deleted, replaced or
+  truncated, nothing is renamed or written over that file again in that session: `edit`
+  saves later versions as further `.tmp` copies (to `.9.tmp`, and none when nothing
+  changed), warns on its help line and says where the last copy is when it ends; the
+  desktop (`gui_unsure()`: the first four such pairs, and after more of them any file)
+  saves over, deletes and renames neither of the two, nor the folders they are in. Both
+  also look for such a pair before they change a file, and when they open one: a
+  `.tmp`, `.N.tmp` or `.part` beside it of its size and time (`edit`'s `twin_beside()`,
+  `note_guarded()`; `fs/fat.c`'s rename copies the entry, so that is how such a pair
+  usually looks, though a later write to either name, or the old entry found first in
+  the directory, hides it). `rx` keeps its `.part` file by the same rule, says to have the
+  disk checked, and does not start over a `.part` that is its file's twin. Two empty files
+  are no pair (no clusters). The care lasts while the two look alike, and for the rest of
+  a session that met them: once the disk is checked, `rm` of one and a new start end it.
+  `tools/devloop.py` says to check the stick when its `mv` into place fails with an I/O
+  error, but a deploy run again then would rename over the `.new` that may share its
+  file's clusters: nothing looks for that pair. Outside that
+  care: the shell's `rm`, `mv` and `cp`, `rx`'s rename over a file with a `.tmp` twin, a
+  stick mounted again under another path, and a `.tmp` of which only the 8.3 alias was
+  left. The real fix is in `fs/fat.c` (not freeing a chain that another entry still holds;
+  ROADMAP.md section 7). `tests/host/test_edit.c` and `test_rx.c` run `edit.c` and `rx.c`
+  as they are on an in-memory file system that fails on demand (`tests/host/sim_fs.c`). The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that
   changed.

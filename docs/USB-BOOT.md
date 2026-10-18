@@ -397,8 +397,23 @@ title line, the text, a status line and a line of keys.
 
 It takes files up to 1 MB. Lines do not wrap: the line with the cursor scrolls sideways,
 and a `>` in the last column says a line goes on. Saving writes a new copy and then
-renames it over the old file, so a failed save leaves the old file as it was. Windows
-line ends (CR LF) stay as they were.
+renames it over the old file, so a failed save leaves the old file as it was. The copy
+is `<file>.tmp`, or `<file>.1.tmp` and so on when you have a file of that name, which
+`edit` never overwrites. If the disk fails during the rename, the copy is kept with your
+text in it, and the status line names it. The file and the copy may then share their
+space on the disk, and deleting or saving over either can damage the other. For the rest
+of that `edit`, each later version is saved as another copy beside the file (up to
+`<file>.9.tmp`, then it says no name is left; none when nothing changed since the last),
+the line of keys turns into a warning, and `edit` says where the last copy is when it
+ends; Ctrl+Q ends it without asking when the text is all in that copy. It takes the same
+care whenever it finds a `.tmp`, `.N.tmp` or `.part` beside the file of the same size and
+time, when it opens the file and before each save: that is how such a pair usually
+looks, though not always. Check the stick on another computer (First Aid on the Mac,
+`fsck` elsewhere) before you change either file, also with `rm`, `mv` or `cp`, which take
+no such care. Once it is checked, delete the copy you no longer want with `rm` (or on the
+Mac), then start `edit` (or the desktop) again: while the two look alike, and for the rest
+of a session that met them, `edit` and the desktop keep taking the care. Windows line
+ends (CR LF) stay as they were.
 
 **Taking the stick out.** Type `eject usb1` and wait for `usb1: safe to remove`. It
 unmounts every partition of the stick and writes everything still held in memory. When
@@ -908,7 +923,13 @@ and `tools/stick.py` never writes, still starts SurfOS meanwhile.
   which are not on the drive, for a disk that is not FAT. `autonet` starts a kernel
   thread that waits up to 90 seconds for a link, gets a DHCP lease (three tries) and runs
   `telnetd on` on F1. `rx` writes what one connection sends to `<path>.part`, then renames
-  it. The Makefile writes `etc/build-id` into the initrd at every build.
+  it; after a rename that failed with an I/O error the `.part` file is kept (the rename may
+  have half happened, the two names sharing their clusters), and rx says to have the disk
+  checked before either is deleted or rx runs for them again. So a later rx does not start
+  over a `<path>.part` of `<path>`'s size and time, which is how that pair looks, and says
+  so; delete it once the disk is known to be sound. A `.part` that a killed rx left is
+  written again as before. The Makefile writes
+  `etc/build-id` into the initrd at every build.
 * **One stick** (`boot/grub-usb.cfg`, `driver/part.c`, `driver/bdev.c`, `tools/stick.py`).
   The boot loader finds the partition it was started from through GRUB's `$cmdpath`, so it
   runs from any FAT partition, the image's or a stick's. The menu asks GRUB for that

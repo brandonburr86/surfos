@@ -59,6 +59,7 @@ which the model calls from its handlers and from gui_tick(), never from gui_rend
 #define GUI_NODES 400                   /* rows of the Files tree */
 #define GUI_LIST_MAX 256                /* entries a chooser shows of one folder */
 #define GUI_VOLUMES 16
+#define GUI_UNSURE 4                    /* saves whose rename may have half happened, remembered */
 #define GUI_STATUS 96
 
 /* a folder entry, or what a file is (struct gui_fs) */
@@ -74,8 +75,8 @@ struct gui_fs {
     int (*list)(void *ctx, const char *path, struct gui_entry *out, int max);   /* not . and .., in no order */
     int (*stat)(void *ctx, const char *path, struct gui_entry *out, bool *device, bool *readonly);
     int (*read)(void *ctx, const char *path, char *buf, u32 size, u32 *len);    /* -EFBIG: more than size bytes */
-    /* crlf: each \n as \r\n. kept: where the text was left when the save failed halfway (a rename that may
-       have half happened), "" otherwise */
+    /* crlf: each \n as \r\n. kept: when the save's rename may have half happened, its new file, where the
+       text was left (gone, if the rename did finish), "" otherwise */
     int (*write)(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t n);
     int (*mkdir)(void *ctx, const char *path);
     int (*remove)(void *ctx, const char *path, bool dir);                       /* a file, or an empty folder */
@@ -193,6 +194,12 @@ struct gui_state {
     struct gui_charmap charmap;
     struct gui_viewer viewer;
     struct gui_hex hex;
+    /* saves whose rename may have half happened, and pairs found that look so (note_guarded()): such a file
+       and the new file kept beside it may share their clusters until the volume is checked, so the desktop
+       saves over, deletes and renames neither (gui_unsure()). The first GUI_UNSURE are kept; nunsure counts
+       them all, and past GUI_UNSURE the desktop saves over, deletes and renames no file (new names still) */
+    char unsure[GUI_UNSURE][GUI_PATH_MAX], kept[GUI_UNSURE][GUI_PATH_MAX];
+    int nunsure;
 };
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);

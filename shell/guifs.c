@@ -8,8 +8,10 @@ systems through these, from the desktop's own task (cmd_gui), never while drawin
 Saving is edit's: the text is written to a new file beside the file and fsynced,
 then renamed over it. The new file is <file>.tmp, or <file>.1.tmp and so on when
 the user has a file of that name (O_EXCL: theirs is never touched). It is deleted
-again only when the rename failed before it changed anything; after an I/O error
-the rename may have half happened, and the text stays in it. Only where a file
+again when this save could not write it, and when the rename failed before it
+changed anything; after an I/O error the rename may have half happened, and the
+text stays in it: write names it as kept, and the desktop then changes neither it
+nor the file, which may share their clusters (gui_unsure()). Only where a file
 system cannot rename, or no such name fits in a path, is the file written in
 place. The volumes are the USB drives' FAT file systems, and the mounts of sticks
 that were pulled out. Mount and Eject run the shell's own mount and eject with
@@ -175,7 +177,6 @@ static bool nothing_changed(int r) {
 
 static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t n) {
     char tmp[VFS_PATH_MAX];
-    struct stat st;
     bool made = false;
     int r = -ENAMETOOLONG, k;
     forget(ctx);                                    /* 10/18/26: read_at's file is not open while this changes things */
@@ -189,10 +190,10 @@ static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool
     if(r == 0) {
         if((r = vfs_rename(tmp, path)) == 0) return 0;
         if(!nothing_changed(r)) {                       /* perhaps half done: the text stays in the new file, if it is there */
-            if(kept && vfs_stat(tmp, &st) == 0) strlcpy(kept, tmp, n);
+            if(kept) strlcpy(kept, tmp, n);
             return r;
         }
-        if(vfs_unlink(tmp) != 0 && r != -ENOSYS && kept) strlcpy(kept, tmp, n);   /* it would not go: the text is in it */
+        vfs_unlink(tmp);                                /* it changed nothing: the new file goes, if it will */
         if(r != -ENOSYS) return r;
     } else if(made) {
         vfs_unlink(tmp);                                /* made by this call (O_EXCL): what of the text it got */

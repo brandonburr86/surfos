@@ -220,11 +220,16 @@ void sketch_answer(struct gui_state *g, int act, int button, const char *text, c
 
 int sketch_save(struct gui_state *g, const char *path) {
     struct gui_sketchbmp *s = &g->viewer.sketch;
-    char line[80], why[80], kept[GUI_PATH_MAX];
+    char line[80], why[80], kept[GUI_PATH_MAX], name[GUI_PATH_MAX];
     u32 stride, x, y, c;
     u8 *p;
     int r;
     if(!g->fs) return -ENOSYS;
+    if(note_refused(g, path)) {                         /* 10/18/26: it may share its clusters: never over it */
+        gui_unsure_line(g, path, line, sizeof(line));
+        dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
+        return -EBUSY;
+    }
     stride = bmp_header24(s->file, GUI_CANVAS_W, GUI_CANVAS_H);
     for(y = 0; y < GUI_CANVAS_H; y++) {
         p = s->file + 54 + (GUI_CANVAS_H - 1 - y) * stride;
@@ -240,7 +245,11 @@ int sketch_save(struct gui_state *g, const char *path) {
     r = g->fs->write(g->fs->ctx, path, (const char *)s->file, GUI_SKETCH_FILE, false, kept, sizeof(kept));
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
-        if(kept[0]) snprintf(why, sizeof(why), "The picture is in %s.", gui_basename(kept));
+        if(kept[0]) {                                   /* 10/18/26: its rename may have half happened */
+            note_remember(g, path, kept);                 /* the dialog's 54 cells: 34, then the name */
+            gui_middle(gui_basename(kept), name, sizeof(name), 19);
+            snprintf(why, sizeof(why), "Check the disk: the picture is in %s.", name);
+        }
         else strlcpy(why, r == -EROFS ? "That volume is read-only: choose another folder." :
                           r == -ENOSPC ? "The volume is full." :
                           r == -EEXIST ? "Move the .tmp files beside it out of the way." : "", sizeof(why));
