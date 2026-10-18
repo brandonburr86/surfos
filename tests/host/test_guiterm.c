@@ -46,6 +46,12 @@ static void session_says(const char *s) {
     tick();
 }
 
+/* frames until all the session printed is drawn (a frame draws a budget of it) */
+static void drain(void) {
+    int k;
+    for(k = 0; k < 2000 && (fake_term_out_len || g.term.carry_at < g.term.carry_len); k++) tick();
+}
+
 static bool typed(const char *want, u32 n) {
     return fake_term_in_len == n && !memcmp(fake_term_in, want, n);
 }
@@ -280,10 +286,10 @@ static void sizes(void) {
 
 /* copied text: blanks at the ends left out, a wrap joined again, UTF-8 */
 static void text(void) {
-    char out[256];
+    char out[256], want[200];
     bool cut;
     u32 n;
-    int a, b;
+    int a, b, c, d, i;
     vt_reset(&v, 10, 4);
     feed("hello  \r\n0123456789abc\r\ncaf\xC3\xA9 \xE2\x89\x8B");
     n = vt_text(&v, 0, 0, 3, 10, out, sizeof(out), &cut);
@@ -297,15 +303,68 @@ static void text(void) {
     CHECK(cut && n == 8 && !memcmp(out, "hello\n01", 8));
     n = vt_text(&v, -5, 3, 99, 0, out, sizeof(out), &cut);    /* outside the lines kept: what is there */
     CHECK(n > 20 && out[0] == 'h');
-    vt_word(&v, 0, 2, &a, &b);
-    CHECK(a == 0 && b == 5);
-    vt_word(&v, 0, 6, &a, &b);
-    CHECK(a == 6 && b == 7);
-    vt_word(&v, 1, 9, &a, &b);
-    CHECK(a == 0 && b == 10);
+    vt_word(&v, 0, 2, &a, &b, &c, &d);
+    CHECK(a == 0 && b == 0 && c == 0 && d == 5);
+    vt_word(&v, 0, 6, &a, &b, &c, &d);
+    CHECK(a == 0 && b == 6 && c == 0 && d == 7);    /* a blank: that cell */
+    vt_word(&v, 1, 9, &a, &b, &c, &d);
+    CHECK(a == 1 && b == 0 && c == 2 && d == 3);    /* 10/18/26: on across the wrap */
+    vt_word(&v, 2, 1, &a, &b, &c, &d);
+    CHECK(a == 1 && b == 0 && c == 2 && d == 3);    /* and back across it */
     feed("\r\n(a/b/c,d)");
-    vt_word(&v, vt_screen(&v) + 3, 3, &a, &b);
-    CHECK(a == 1 && b == 6);                        /* a path, without the brackets and the comma */
+    vt_word(&v, vt_screen(&v) + 3, 3, &a, &b, &c, &d);
+    CHECK(a == vt_screen(&v) + 3 && b == 1 && c == a && d == 6);  /* a path, without the brackets and the comma */
+    vt_word(&v, -1, 0, &a, &b, &c, &d);
+    CHECK(a == c && b == d);                        /* outside the lines: nothing */
+    vt_word(&v, 0, GUI_VT_COLS, &a, &b, &c, &d);
+    CHECK(a == c && b == d);
+    /* 10/18/26 (the review): a line that wrapped at another width is joined where it wrapped */
+    vt_reset(&v, 77, 5);
+    for(i = 0; i < 100; i++) want[i] = 'a';
+    want[100] = 0;
+    feed(want);
+    feed("\r\nnext\r\n");
+    vt_resize(&v, 117, 5);                          /* wider: no blanks come in where it wrapped */
+    n = vt_text(&v, 0, 0, v.count - 1, v.cols, out, sizeof(out), &cut);
+    CHECK(n == 106 && !memcmp(out, want, 100) && !memcmp(out + 100, "\nnext\n", 6));
+    vt_resize(&v, 50, 5);                           /* narrower than it wrapped: cut, and no more joined */
+    n = vt_text(&v, 0, 0, v.count - 1, v.cols, out, sizeof(out), &cut);
+    CHECK(n == 50 + 1 + 23 + 1 + 4 + 1 && !memcmp(out, want, 50) && out[50] == '\n' && !memcmp(out + 51, want, 23));
+    vt_reset(&v, 117, 4);                           /* the other way: printed at 117, then 77 */
+    for(i = 0; i < 117; i++) want[i] = 'b';
+    memcpy(want + 117, "ccc", 4);
+    feed(want);
+    feed("\r\n");
+    vt_resize(&v, 77, 4);                           /* on the screen: cut, the rest is gone, not fused */
+    n = vt_text(&v, 0, 0, v.count - 1, v.cols, out, sizeof(out), &cut);
+    CHECK(n == 77 + 1 + 3 + 1 && !memcmp(out, want, 77) && !memcmp(out + 77, "\nccc\n", 5));
+    vt_reset(&v, 117, 3);                           /* in the scrollback: whole, and joined, all of it */
+    feed(want);
+    feed("\r\n1\r\n2\r\n3\r\n4");
+    vt_resize(&v, 77, 3);
+    CHECK(v.count == 6 && !strcmp(row_of(&v, 0), "2") && vt_wrapped(&v, 0) == 117);
+    n = vt_text(&v, 0, 0, 1, 77, out, sizeof(out), &cut);
+    CHECK(n == 120 && !memcmp(out, want, 120));
+    vt_word(&v, 1, 1, &a, &b, &c, &d);              /* the word goes back across that wrap into the b's */
+    CHECK(a == 0 && b == 0 && c == 1 && d == 3);
+    /* the rows below the cursor dropped by a smaller screen take their wrap mark with them */
+    vt_reset(&v, 10, 5);
+    feed("0123456789AB\033[A");
+    CHECK(vt_wrapped(&v, 0) == 10 && v.y == 0);
+    vt_resize(&v, 10, 1);
+    CHECK(!vt_wrapped(&v, 0));
+    feed("\r\nXYZ");
+    n = vt_text(&v, 0, 0, v.count - 1, v.cols, out, sizeof(out), &cut);
+    CHECK(n == 14 && !memcmp(out, "0123456789\nXYZ", 14));
+    /* only blanks: nothing, and out as it was */
+    vt_reset(&v, 10, 4);
+    feed("x\r\n\r\n   \r\n");
+    memcpy(out, "kept", 4);
+    CHECK(vt_text(&v, 1, 0, 3, 10, out, sizeof(out), &cut) == 0 && !memcmp(out, "kept", 4) && !cut);
+    n = vt_text(&v, 0, 0, 3, 10, out, sizeof(out), &cut);
+    CHECK(n == 2 && !memcmp(out, "x\n", 2));        /* blank lines at the end: one line end */
+    n = vt_text(&v, 0, 0, 0, 0, out, sizeof(out), &cut);
+    CHECK(n == 0);
 }
 
 /**** the Terminal on the desktop ****/
@@ -406,10 +465,10 @@ static void scrollback(void) {
     terminal(960, 540);
     for(i = 0; i < 600; i++) {
         snprintf(b, sizeof(b), "line %03d\n", i);
+        if(fake_term_out_len + strlen(b) > sizeof(fake_term_out)) drain();
         fake_term_feed(b, (u32)strlen(b));
-        if(fake_term_out_len > 6000) tick();
     }
-    tick();
+    drain();
     CHECK(g.term.vt.count == 601 && g.term.follow && !strcmp(row_of(&g.term.vt, 0), "line 580"));
     pointer(TX + 100, TY + 100, 0, 1);              /* the wheel away from the user: up three lines */
     CHECK(!g.term.follow && !strcmp(line_of(&g.term.vt, 577), "line 577"));
@@ -445,10 +504,9 @@ static void scrollback(void) {
     pointer(TX + 100, TY + 100, 0, 3);
     for(i = 0; i < GUI_VT_LINES; i++) {
         fake_term_feed("z\n", 2);
-        if(i % 1000 == 999) tick();
+        if(i % 1000 == 999) drain();
     }
-    tick();
-    tick();
+    drain();
     CHECK(!g.term.follow && g.term.view < g.term.vt.dropped);
     gui_render(&g, &screen);
     CHECK(fake_guards(960, 540));
@@ -734,10 +792,10 @@ static void windows(int width, int height) {
         for(k = 0; k < 3; k++) { g.now += 1000; gui_tick(&g); }
         for(k = 0; k < 200; k++) {                  /* something on the screen, and in the scrollback */
             snprintf(b, sizeof(b), "\033[3%dmline %d \xE2\x89\x8B a long line that wraps around\033[0m\n", k % 8, k);
+            if(fake_term_out_len + strlen(b) > sizeof(fake_term_out)) drain();
             fake_term_feed(b, (u32)strlen(b));
-            if(k % 50 == 49) gui_tick(&g);
         }
-        gui_tick(&g);
+        drain();
         drag(TX + 8, TY + 8, TX + 200, TY + 64);
         gui_render(&g, &screen);
         CHECK(fake_guards(width, height));
@@ -773,6 +831,554 @@ static void windows(int width, int height) {
     }
 }
 
+/**** 10/18/26: what the review found ****/
+
+/* a line copied after the width changed: joined where it wrapped, cut where the screen cut it */
+static void widths(void) {
+    char text[200];
+    int i;
+    terminal(960, 540);
+    for(i = 0; i < 100; i++) text[i] = 'a';
+    text[100] = 0;
+    session_says(text);
+    session_says("\r\nnext\r\n");
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    CHECK(g.term.vt.cols == 117);
+    gui_act(&g, ACT_SELECT_ALL);
+    gui_act(&g, ACT_COPY);
+    CHECK(g.clip_len == 106 && !memcmp(g.clip, text, 100) && !memcmp(g.clip + 100, "\nnext\n", 6));
+    gui_act(&g, ACT_MAXIMIZE);                      /* back to 77 columns: the screen's copy */
+    tick();
+    fake_click(&g, TX + 30, TY + 5 * 16 + 8);
+    CHECK(!g.term.selected);
+    gui_act(&g, ACT_COPY);
+    CHECK(g.clip_len == 106 && !memcmp(g.clip, text, 100) && !memcmp(g.clip + 100, "\nnext\n", 6));
+    gui_finish(&g);
+    terminal(960, 540);                             /* printed at 117 columns, then 77: cut, not fused */
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    for(i = 0; i < 117; i++) text[i] = 'b';
+    memcpy(text + 117, "ccc\r\n", 6);
+    session_says(text);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    gui_act(&g, ACT_SELECT_ALL);
+    gui_act(&g, ACT_COPY);
+    CHECK(g.clip_len == 82 && !memcmp(g.clip, text, 77) && !memcmp(g.clip + 77, "\nccc\n", 5));
+    gui_finish(&g);
+}
+
+/* a key goes whole or not at all; a paste is cut where the room ends, never inside a UTF-8 character */
+static void whole_keys(void) {
+    u32 n;
+    terminal(960, 540);
+    fake_term_in_len = sizeof(fake_term_in);        /* the input queue is full */
+    for(n = 0; n < GUI_CLIP_MAX; n++) g.clip[n] = 'p';
+    g.clip_len = GUI_CLIP_MAX;
+    gui_act(&g, ACT_PASTE);
+    g.clip_len = GUI_TERM_PEND - GUI_CLIP_MAX - 1;  /* room for one byte more */
+    gui_act(&g, ACT_PASTE);
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 1);
+    g.term.status[0] = 0;
+    gui_key(&g, GUI_UP);                            /* three bytes: none of them */
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 1 && g.term.pend[GUI_TERM_PEND - 2] == 'p' &&
+          strstr(g.term.status, "dropped") != NULL);
+    gui_key(&g, 'k');                               /* one byte: it goes */
+    CHECK(g.term.pend_len == GUI_TERM_PEND && g.term.pend[GUI_TERM_PEND - 1] == 'k');
+    fake_term_in_len = 0;
+    for(n = 0; n < 40 && g.term.pend_len; n++) { fake_term_in_len = 0; tick(); }
+    CHECK(g.term.pend_len == 0);
+    fake_term_in_len = sizeof(fake_term_in);
+    g.clip_len = GUI_CLIP_MAX;
+    gui_act(&g, ACT_PASTE);
+    g.clip_len = GUI_TERM_PEND - GUI_CLIP_MAX - 3;  /* room for three bytes more */
+    gui_act(&g, ACT_PASTE);
+    memcpy(g.clip, "\xC3\xA9\xE2\x82\xAC", 5);      /* two bytes and three: the second does not fit */
+    g.clip_len = 5;
+    gui_act(&g, ACT_PASTE);
+    CHECK(g.term.pend_len == GUI_TERM_PEND - 1 && !memcmp(g.term.pend + GUI_TERM_PEND - 3, "\xC3\xA9", 2));
+    CHECK(strstr(g.term.status, "all but 3 bytes") != NULL);
+    gui_finish(&g);
+}
+
+/* nothing but blanks selected: Copy keeps the clipboard as it was */
+static void blank_copies(void) {
+    terminal(960, 540);
+    session_says("word\r\n");
+    strlcpy(g.clip, "precious", sizeof(g.clip));
+    g.clip_len = 8;
+    fake_click(&g, TX + 30 * 8 + 4, TY + 8);
+    g.now += 100;
+    fake_click(&g, TX + 30 * 8 + 4, TY + 8);        /* a double-click on a blank: that cell */
+    CHECK(g.term.selected);
+    gui_act(&g, ACT_COPY);
+    CHECK(clip_is("precious") && strstr(g.term.status, "Nothing copied") != NULL);
+    gui_finish(&g);
+    terminal(960, 540);                             /* a blank screen */
+    strlcpy(g.clip, "precious", sizeof(g.clip));
+    g.clip_len = 8;
+    gui_act(&g, ACT_COPY);
+    CHECK(clip_is("precious") && strstr(g.term.status, "screen is blank") != NULL);
+    gui_finish(&g);
+}
+
+/* a word the wrap broke: a double-click on either half takes all of it */
+static void broken_words(void) {
+    char text[100];
+    int i;
+    terminal(960, 540);
+    for(i = 0; i < 74; i++) text[i] = '.';
+    memcpy(text + 74, " /initrd/bin/surfsh", 20);
+    session_says(text);
+    session_says("\r\n");
+    fake_click(&g, TX + 76 * 8 + 4, TY + 8);
+    g.now += 100;
+    fake_click(&g, TX + 76 * 8 + 4, TY + 8);
+    gui_act(&g, ACT_COPY);
+    CHECK(clip_is("/initrd/bin/surfsh"));
+    g.now += 1000;
+    fake_click(&g, TX + 4 * 8 + 4, TY + 16 + 8);
+    g.now += 100;
+    fake_click(&g, TX + 4 * 8 + 4, TY + 16 + 8);
+    g.clip_len = 0;
+    gui_act(&g, ACT_COPY);
+    CHECK(clip_is("/initrd/bin/surfsh"));
+    gui_finish(&g);
+}
+
+/* a frame's work is bounded, in bytes and in cells written; the rest, and a new size, wait for later frames */
+static void budget(void) {
+    static char flood[8192];
+    u32 i, w;
+    int frames;
+    terminal(960, 540);
+    for(i = 0; i + 4 <= sizeof(flood); i += 4) memcpy(flood + i, "\033[2J", 4);
+    fake_term_feed(flood, sizeof(flood));           /* 2,048 erases of the whole screen: 3.3 million cells */
+    w = g.term.vt.written;
+    tick();
+    CHECK(g.term.vt.written - w >= 32768 && g.term.vt.written - w < 32768 + 77 * 21);   /* and one erase's own */
+    CHECK(g.term.carry_at < g.term.carry_len || fake_term_out_len);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    CHECK(g.term.vt.cols == 77 && fake_term_cols == 77);   /* the size waits until it is drawn */
+    for(frames = 0; frames < 1000 && (fake_term_out_len || g.term.carry_at < g.term.carry_len); frames++) {
+        w = g.term.vt.written;
+        tick();
+        CHECK(g.term.vt.written - w < 32768 + 77 * 21);
+    }
+    CHECK(frames > 50 && frames < 1000);
+    tick();
+    CHECK(g.term.vt.cols == 117 && fake_term_cols == 117);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    CHECK(g.term.vt.cols == 77 && fake_term_cols == 77);
+    for(i = 0; i < sizeof(flood); i++) flood[i] = 'x';
+    fake_term_feed(flood, sizeof(flood));           /* READ_MAX of text: all of it in a frame, which reaches */
+    gui_act(&g, ACT_MAXIMIZE);                      /* the limit, so the new size waits a frame more */
+    tick();
+    CHECK(!fake_term_out_len && g.term.carry_at == g.term.carry_len && g.term.vt.cols == 77 && fake_term_cols == 77);
+    tick();
+    CHECK(g.term.vt.cols == 117 && fake_term_cols == 117);
+    gui_finish(&g);
+}
+
+/* a read that fails otherwise than at the session's end: the session is lost, and the window says so */
+static void lost(void) {
+    int i;
+    terminal(960, 540);
+    g.term.handle = 4;                              /* a handle the system does not know */
+    tick();
+    CHECK(g.term.handle == -1 && g.term.ended && strstr(g.term.status, "ended") != NULL);
+    for(i = 0; i < g.term.vt.rows && !strstr(row_of(&g.term.vt, i), "The session was lost"); i++) ;
+    CHECK(i < g.term.vt.rows);
+    gui_finish(&g);
+}
+
+/* a selection whose lines have left the scrollback: Copy says so, and keeps the clipboard */
+static void gone_selection(void) {
+    int i;
+    terminal(960, 540);
+    session_says("old line\r\n");
+    drag(TX, TY + 8, TX + 3 * 8, TY + 8);
+    CHECK(g.term.selected);
+    for(i = 0; i < GUI_VT_LINES + 10; i++) {
+        fake_term_feed("x\n", 2);
+        if(i % 500 == 499) drain();
+    }
+    drain();
+    CHECK(g.term.end_line < g.term.vt.dropped);
+    strlcpy(g.clip, "kept", sizeof(g.clip));
+    g.clip_len = 4;
+    gui_act(&g, ACT_COPY);
+    CHECK(clip_is("kept") && strstr(g.term.status, "left the scrollback") != NULL);
+    gui_finish(&g);
+}
+
+/**** 10/18/26: the emulator and the Terminal against random input; their invariants hold ****/
+
+static u32 seed = 12345;
+static u32 rnd(void) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; }
+
+/* the screen's invariants (with cells: also nothing beyond the width, and no wrap mark wider than the screen) */
+static bool sane(const struct gui_vt *vt, bool cells) {
+    int x, y;
+    if(vt->cols < 1 || vt->cols > GUI_VT_COLS || vt->rows < 1 || vt->rows > GUI_VT_ROWS) return false;
+    if(vt->x < 0 || vt->x >= vt->cols || vt->y < 0 || vt->y >= vt->rows) return false;
+    if(vt->count < vt->rows || vt->count > GUI_VT_LINES || vt->first >= GUI_VT_LINES) return false;
+    if(vt->nparam < 0 || vt->nparam > GUI_VT_PARAMS || vt->utf.have > 3) return false;
+    for(y = 0; cells && y < vt->rows; y++) {
+        const struct gui_vt_cell *c = vt_line(vt, vt_screen(vt) + y);
+        if(vt_wrapped(vt, vt_screen(vt) + y) > vt->cols) return false;
+        for(x = vt->cols; x < GUI_VT_COLS; x++) if(c[x].ch != ' ' || c[x].attr != VT_PLAIN) return false;
+    }
+    return true;
+}
+
+static u8 hostile(void) {
+    static const char pool[] = "\033\033\033[[[;;:0123456789?HfABCDGJKmlh\n\r\b\t\a\x7f abcXYZ";
+    u32 k = rnd() % 10;
+    if(k < 7) return (u8)pool[rnd() % (sizeof(pool) - 1)];
+    if(k < 9) return (u8)(0x80 + rnd() % 128);
+    return (u8)rnd();
+}
+
+static void fuzz_vt(void) {
+    static const int colset[] = { -5, 0, 1, 2, 8, 77, 117, 157, 160, 161, 1000 };
+    static const int rowset[] = { -5, 0, 1, 2, 21, 26, 43, 64, 65, 1000 };
+    char out[256 + 16];
+    long it, bad = 0;
+    int i, k, l0, c0, l1, c1;
+    u32 size, got;
+    bool cut;
+    vt_reset(&v, 80, 24);
+    for(it = 0; it < 150000 && !bad; it++) {
+        u32 op = rnd() % 1000;
+        if(op < 930) {
+            u8 b[32];
+            k = 1 + (int)(rnd() % 32);
+            for(i = 0; i < k; i++) b[i] = hostile();
+            vt_feed(&v, (const char *)b, (u32)k);
+        } else if(op < 960) {
+            vt_resize(&v, rnd() & 1 ? colset[rnd() % 11] : (int)(rnd() % 200) - 10,
+                      rnd() & 1 ? rowset[rnd() % 10] : (int)(rnd() % 80) - 5);
+        } else if(op < 965) {
+            vt_fresh(&v);
+        } else if(op < 990) {                       /* copied text into a buffer of some size: never beyond it */
+            l0 = (int)(rnd() % (u32)(v.count + 20)) - 10;
+            l1 = (int)(rnd() % (u32)(v.count + 20)) - 10;
+            c0 = (int)(rnd() % (u32)(v.cols + 10)) - 5;
+            c1 = (int)(rnd() % (u32)(v.cols + 10)) - 5;
+            size = rnd() % 256;
+            memset(out, 0x5A, sizeof(out));
+            got = vt_text(&v, l0, c0, l1, c1, out, size, &cut);
+            if(got > size) bad++;
+            for(i = (int)size; i < (int)sizeof(out); i++) if((u8)out[i] != 0x5A) bad++;
+        } else if(op < 999) {
+            vt_word(&v, (int)(rnd() % (u32)(v.count + 20)) - 10, (int)(rnd() % (u32)(v.cols + 10)) - 5, &l0, &c0, &l1, &c1);
+            if(l0 > l1 || (l0 == l1 && c0 > c1) || c0 < 0 || c1 > GUI_VT_COLS) bad++;
+        } else {
+            vt_reset(&v, colset[rnd() % 11], rowset[rnd() % 10]);
+        }
+        if(!sane(&v, !(it & 63))) bad++;
+    }
+    CHECK(!bad && it == 150000);
+}
+
+static void fuzz_model(void) {
+    static const int sizes[][2] = { { 640, 400 }, { 960, 540 }, { 1280, 800 } };
+    static const int keyset[] = { 'a', ' ', '\r', 3, 4, 7, 0, 9, 8, 127, 27, 23, 17, 20, 22, GUI_UP, GUI_PGDN,
+                                  GUI_DELETE, 0xC3, 255, 256, -1 };
+    static const int acts[] = { ACT_COPY, ACT_PASTE, ACT_SELECT_ALL, ACT_MAXIMIZE, ACT_MINIMIZE, ACT_CLOSE,
+                                ACT_WINDOW + GUI_TERMINAL, ACT_QUIT, ACT_NEXT_WINDOW, ACT_UNDO, ACT_FIND };
+    struct fb_surface screen;
+    struct pointer_event e;
+    char b[300];
+    long step, bad = 0;
+    int r, i, n, width, height;
+    for(r = 0; r < 3; r++) {
+        width = sizes[r][0];
+        height = sizes[r][1];
+        fake_desktop(&g, width, height);
+        fake_screen(&screen, width, height);
+        gui_key(&g, 20);
+        memset(&e, 0, sizeof(e));
+        for(step = 0; step < 4000; step++) {
+            const struct gui_window *w = &g.win[GUI_TERMINAL];
+            u32 k = rnd() % 100;
+            if(k < 25) {
+                n = (int)(rnd() % sizeof(b));
+                for(i = 0; i < n; i++) b[i] = (char)hostile();
+                fake_term_feed(b, (u32)n);
+            } else if(k < 45) {
+                g.now += rnd() % 60;
+                gui_tick(&g);
+            } else if(k < 60) {
+                gui_key(&g, keyset[rnd() % (sizeof(keyset) / sizeof(keyset[0]))]);
+            } else if(k < 82) {                     /* the pointer, mostly on the Terminal and its edges */
+                e.x = rnd() % 3 ? w->x + (int)(rnd() % (u32)(w->w + 40)) - 20 : (int)(rnd() % (u32)width);
+                e.y = rnd() % 3 ? w->y + (int)(rnd() % (u32)(w->h + 40)) - 20 : (int)(rnd() % (u32)height);
+                if(rnd() % 3 == 0) e.buttons ^= POINTER_LEFT;
+                e.wheel = rnd() % 8 ? 0 : (int)(rnd() % 7) - 3;
+                gui_pointer(&g, &e);
+            } else if(k < 87) {
+                i = acts[rnd() % (sizeof(acts) / sizeof(acts[0]))];
+                if(i != ACT_MAXIMIZE || g.focus >= 0) gui_act(&g, i);
+            } else if(k < 90) {
+                n = (int)(rnd() % 300);
+                for(i = 0; i < n; i++) g.clip[i] = rnd() % 5 ? (char)('a' + rnd() % 26) : (char)"\r\n\t\x03\033"[rnd() % 5];
+                g.clip_len = (u32)n;
+            } else if(k < 94) {
+                fake_term_in_len = rnd() & 1 ? sizeof(fake_term_in) - rnd() % 4 : 0;
+            } else if(k < 95) {
+                fake_term_ended = true;
+            } else if(k < 99) {
+                gui_render(&g, &screen);
+                if(!fake_guards(width, height)) bad++;
+            } else gui_key(&g, rnd() & 1 ? '\r' : 27);
+            if(fake_term_ended && !fake_term_out_len && rnd() % 4 == 0) fake_term_ended = false;
+            if(g.term.pend_at > g.term.pend_len || g.term.pend_len > GUI_TERM_PEND || g.clip_len > GUI_CLIP_MAX) bad++;
+            if(g.term.carry_at > g.term.carry_len || g.term.carry_len > sizeof(g.term.carry)) bad++;
+            if(!sane(&g.term.vt, false)) bad++;
+            if(g.term.handle >= 0 && !fake_term_running) bad++;
+            if(!g.win[GUI_TERMINAL].open && fake_term_running) bad++;
+            if(g.quit) {                            /* the desktop leaves: gui_finish(), as shell/gui.c does */
+                gui_finish(&g);
+                if(fake_term_running) bad++;
+                fake_desktop(&g, width, height);
+                gui_key(&g, 20);
+            }
+        }
+        gui_finish(&g);
+        if(fake_term_running) bad++;
+    }
+    CHECK(!bad);
+}
+
+/**** 10/18/26: the kernel's side, shell/guisys_term.c, against stand-ins for the kernel's tasks, descriptors and
+   pseudo-terminals: kernel/pty.c's calls and fs/vfs.c's descriptors as small tables ****/
+
+#define _SURFOS_TASK_H                  /* the stand-ins below take the place of these headers */
+#define _SURFOS_IRQ_H
+#define _SURFOS_KLOG_H
+#define _FS_VFS_H
+#ifndef EMFILE
+#define EMFILE 24
+#endif
+#define TS_DEAD 4
+#define WNOHANG 1
+#define KT 32
+#include <surfos/pty.h>                 /* PTY_MAX, and the kernel's pty calls the stand-ins below give */
+typedef struct surf_task {
+    u_long pid;
+    struct surf_task *parent;
+    int state;                          /* 0, or TS_DEAD: it has ended, not collected yet */
+    bool gone, late;                    /* collected; inside a call, it ends at the call's end (not at the hangup) */
+    int pty;                            /* the pty it is on, -1 none */
+    struct file *files[4];              /* its descriptors */
+} surf_task;
+struct file { int pty; };
+surf_task *curTask;
+static surf_task kt[KT], k_init;
+static int k_ntasks, k_spawn_err, k_hangups;
+static u_long k_pid = 100;
+static struct file k_master[PTY_MAX];
+static bool k_used[PTY_MAX];
+static char k_out[PTY_MAX][16], k_log[160], k_argv[64];
+static int k_out_len[PTY_MAX], k_cols[PTY_MAX], k_rows[PTY_MAX];
+static u_long irq_save(void) { return 0; }
+static void irq_restore(u_long flags) { (void)flags; }
+void klog_write(const char *s);
+surf_task *task_find(u_long pid);
+int task_wait_opts(u_long pid, int *status, int options);
+int task_detach(surf_task *t);
+int fd_install(struct file *f);
+struct file *fd_get(int fd);
+int fd_close(int fd);
+#include "../../shell/guisys_term.c"
+
+void klog_write(const char *s) { strlcpy(k_log, s, sizeof(k_log)); }
+
+surf_task *task_find(u_long pid) {
+    int i;
+    for(i = 0; i < k_ntasks; i++) if(!kt[i].gone && kt[i].pid == pid) return &kt[i];
+    return NULL;
+}
+
+int task_wait_opts(u_long pid, int *status, int options) {
+    surf_task *t = task_find(pid);
+    (void)options;
+    if(!t || t->parent != curTask) return -1;
+    if(t->state != TS_DEAD) return 0;
+    t->gone = true;
+    *status = -1;
+    return (int)pid;
+}
+
+int task_detach(surf_task *t) { t->parent = &k_init; return 0; }
+
+static surf_task *k_task(int pty) {
+    surf_task *t = &kt[k_ntasks++];
+    memset(t, 0, sizeof(*t));
+    t->pid = k_pid++;
+    t->pty = pty;
+    return t;
+}
+
+/* the master's last close (kernel/pty.c's master_release()): what is on the pty ends, or at its call's end */
+static void k_hangup(struct file *f) {
+    int i, left = 0;
+    k_hangups++;
+    for(i = 0; i < k_ntasks; i++) {
+        if(kt[i].gone || kt[i].pty != f->pty || kt[i].state == TS_DEAD) continue;
+        if(kt[i].late) left++;
+        else kt[i].state = TS_DEAD;
+    }
+    if(!left) k_used[f->pty] = false;
+}
+
+int fd_install(struct file *f) {
+    int i;
+    for(i = 0; i < 4; i++) if(!curTask->files[i]) { curTask->files[i] = f; return i; }
+    return -EMFILE;
+}
+
+struct file *fd_get(int fd) { return fd >= 0 && fd < 4 ? curTask->files[fd] : NULL; }
+
+int fd_close(int fd) {
+    struct file *f = fd_get(fd);
+    if(!f) return -1;
+    curTask->files[fd] = NULL;
+    k_hangup(f);
+    return 0;
+}
+
+/* a task collected by its parent: reap()'s fd_close_all() */
+static void k_reaped(surf_task *t) {
+    int i;
+    for(i = 0; i < 4; i++) if(t->files[i]) { k_hangup(t->files[i]); t->files[i] = NULL; }
+    t->gone = true;
+}
+
+int pty_open(struct file **master) {
+    int i;
+    for(i = 0; i < PTY_MAX; i++) {
+        if(k_used[i]) continue;
+        k_used[i] = true;
+        k_master[i].pty = i;
+        k_out_len[i] = 0;
+        *master = &k_master[i];
+        return 0;
+    }
+    return -EAGAIN;
+}
+
+int pty_spawn(struct file *master, const char *path, int argc, char *const argv[]) {
+    surf_task *t;
+    if(k_spawn_err) return k_spawn_err;
+    snprintf(k_argv, sizeof(k_argv), "%s %d %s %s", path, argc, argv[0], argv[1]);
+    t = k_task(master->pty);
+    t->parent = curTask;
+    return (int)t->pid;
+}
+
+int pty_read(struct file *master, char *buf, u32 len) {
+    int i, n = k_out_len[master->pty];
+    if(n) {
+        if(n > (int)len) n = (int)len;
+        memcpy(buf, k_out[master->pty], (u32)n);
+        memmove(k_out[master->pty], k_out[master->pty] + n, (u32)(k_out_len[master->pty] - n));
+        k_out_len[master->pty] -= n;
+        return n;
+    }
+    for(i = 0; i < k_ntasks; i++) if(!kt[i].gone && kt[i].pty == master->pty && kt[i].state != TS_DEAD) return 0;
+    return -EPIPE;                                  /* nobody is on the pty: the session has ended */
+}
+
+int pty_write(struct file *master, const char *buf, u32 len) { (void)master; (void)buf; return (int)len; }
+int pty_resize(struct file *master, u32 cols, u32 rows) { k_cols[master->pty] = (int)cols; k_rows[master->pty] = (int)rows; return 0; }
+int pty_number(struct file *master) { return master->pty; }
+void pty_close(struct file *master) { k_hangup(master); }
+
+static void kernel_side(void) {
+    surf_task *a, *b, *shell, *job;
+    char buf[16];
+    int h, i, k, hs[PTY_MAX];
+    k_init.pid = 1;
+    a = k_task(-1);                                 /* two desktops' tasks */
+    b = k_task(-1);
+    curTask = a;
+    h = guisys_term_open(NULL, 77, 21);
+    shell = task_find((u_long)sessions[0].pid);
+    CHECK(h == 0 && sessions[0].fd == 0 && a->files[0] == &k_master[0] && k_cols[0] == 77 && k_rows[0] == 21);
+    CHECK(!strcmp(k_argv, "/initrd/bin/surfsh 2 surfsh -l") && strstr(k_log, "surfsh (pid") && strstr(k_log, "on pty0"));
+    CHECK(shell && shell->parent == a && shell->pty == 0);
+    memcpy(k_out[0], "hi", 2);
+    k_out_len[0] = 2;
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == 2 && !memcmp(buf, "hi", 2));
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == 0);
+    CHECK(guisys_term_write(NULL, h, "ls\r", 3) == 3 && guisys_term_resize(NULL, h, 117, 26) == 0 && k_cols[0] == 117);
+    curTask = b;                                    /* another desktop's task has none of it */
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == -EINVAL && guisys_term_write(NULL, h, "x", 1) == -EINVAL);
+    CHECK(guisys_term_resize(NULL, h, 80, 24) == -EINVAL && guisys_term_read(NULL, -1, buf, 1) == -EINVAL);
+    guisys_term_close(NULL, h);
+    CHECK(sessions[0].used && !k_hangups);
+    curTask = a;
+    /* the shell exits, a program it left on the pty goes on: what is left, then the end */
+    job = k_task(0);
+    job->parent = shell;
+    shell->state = TS_DEAD;
+    memcpy(k_out[0], "bye", 3);
+    k_out_len[0] = 3;
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == 3 && shell->gone && !sessions[0].pid);
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == -EPIPE);
+    guisys_term_close(NULL, h);                     /* the hangup ends that program, the descriptor goes */
+    CHECK(k_hangups == 1 && !a->files[0] && job->state == TS_DEAD && !sessions[0].used && !k_used[0]);
+    CHECK(strstr(k_log, "the session on pty0 ended") && !strstr(k_log, "init"));
+    /* a session whose shell ends by itself, no program left: the end without the shell's help too */
+    h = guisys_term_open(NULL, 77, 21);
+    shell = task_find((u_long)sessions[h].pid);
+    shell->state = TS_DEAD;
+    CHECK(guisys_term_read(NULL, h, buf, sizeof(buf)) == -EPIPE && shell->gone);
+    guisys_term_close(NULL, h);
+    CHECK(k_hangups == 2 && !sessions[h].used);
+    /* a shell inside a call when the session closes: init collects it */
+    h = guisys_term_open(NULL, 77, 21);
+    shell = task_find((u_long)sessions[h].pid);
+    shell->late = true;
+    guisys_term_close(NULL, h);
+    CHECK(shell->parent == &k_init && shell->state != TS_DEAD && strstr(k_log, "init collects its shell"));
+    CHECK(k_hangups == 3 && !sessions[h].used && !a->files[0]);
+    shell->state = TS_DEAD;                         /* it ends; init collects it */
+    shell->gone = true;
+    k_used[shell->pty] = false;
+    /* a shell that cannot start: the pty and the place are free again */
+    k_spawn_err = -ENOENT;
+    CHECK(guisys_term_open(NULL, 77, 21) == -ENOENT && k_hangups == 4);
+    k_spawn_err = 0;
+    for(i = k = 0; i < PTY_MAX; i++) k += sessions[i].used || k_used[i];
+    CHECK(!k);
+    /* every pty in use: the next waits; a full descriptor table keeps the master here only */
+    for(i = 0; i < PTY_MAX; i++) hs[i] = guisys_term_open(NULL, 77, 21);
+    for(i = k = 0; i < PTY_MAX; i++) k += hs[i] == i && sessions[i].used && sessions[i].fd == (i < 4 ? i : -1);
+    CHECK(k == PTY_MAX && guisys_term_open(NULL, 77, 21) == -EAGAIN);
+    /* the desktop's task dies without closing them (killed at once, no gui_finish()): collected, its descriptors close
+       (four hangups); the next open, by another task, takes the places back and closes what only they held (four) */
+    a->state = TS_DEAD;
+    k_reaped(a);
+    CHECK(k_hangups == 8);
+    curTask = b;
+    h = guisys_term_open(NULL, 77, 21);
+    CHECK(h >= 0 && k_hangups == 12 && sessions[h].owner == b->pid);
+    for(i = k = 0; i < PTY_MAX; i++) k += sessions[i].used;
+    CHECK(k == 1);
+    guisys_term_close(NULL, h);
+    h = guisys_term_open(NULL, 77, 21);             /* nothing is closed twice */
+    CHECK(h >= 0 && k_hangups == 13);
+    guisys_term_close(NULL, h);
+    CHECK(k_hangups == 14);
+}
+
 int main(void) {
     emulator();
     sizes();
@@ -787,6 +1393,16 @@ int main(void) {
     closing();
     no_system();
     drawing();
+    widths();
+    whole_keys();
+    blank_copies();
+    broken_words();
+    budget();
+    lost();
+    gone_selection();
+    fuzz_vt();
+    fuzz_model();
+    kernel_side();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);
