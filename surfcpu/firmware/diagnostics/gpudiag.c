@@ -13,6 +13,9 @@ source gpu), then draws gpudiag's scenes
 (gpuscenes.c) one after the other. For each it waits until a frame that began after the
 picture was complete has been shown (FRAME_COUNT two on), and compares FRAME_CRC with the CRC
 the C model computed for that scene when the ROM was built (gpuscenes_expect.h), printing both.
+A design without the engine (no FEATURES.GPU, a gpu window that traps or a gpu.ID other than
+"GPU1") fails: every check that could not run counts as failed, and a run that made fewer checks
+than a complete one (GPUDIAG_CHECKS) fails too, so PASS means every check ran and passed.
 It ends with "GPUDIAG: PASS (n checks)" or "GPUDIAG: FAIL (...)", the LEDs (LD0 green or red),
 the result in the top text row over the last picture, then echoes UART input; Ctrl-R runs it
 all again. The text console is not used (the scenes own the screen): everything goes to the UART.
@@ -222,12 +225,41 @@ static int wait_still(void)
 #define GPU_STICKY (SURF_GPU_STATUS_OVERFLOW_MASK | SURF_GPU_STATUS_BAD_OPCODE_MASK | \
                     SURF_GPU_STATUS_BAD_PARAM_MASK | SURF_GPU_STATUS_FENCE_EV_MASK)
 
+/* whether the gpu window answers with the engine's ID, probed once per run (a trap is expected
+ * where the window is unmapped) */
+static int engine, engine_trapped;
+static uint32_t engine_id, engine_cause;
+
+static void probe_engine(void)
+{
+    expect_trap(0);
+    engine_id = probe_load_word(SURF_GPU_BASE + SURF_GPU_ID, 0);
+    expecting = 0;
+    engine_trapped = got_count != 0;
+    engine_cause = got_cause;
+    engine = !engine_trapped && engine_id == GPU_ID_VALUE;
+}
+
+static void no_engine(void)
+{
+    if (engine_trapped)
+        diag_check(0, "no engine: a load of gpu.ID at 0x%08x traps (mcause 0x%08x)", SURF_GPU_BASE + SURF_GPU_ID,
+                   engine_cause);
+    else
+        diag_check(0, "no engine: gpu.ID reads 0x%08x, not 0x%08x (\"GPU1\")", engine_id, GPU_ID_VALUE);
+}
+
 /* the engine's registers and errors: overflow behind a WAIT_VBLANK, unknown opcodes, a refused
  * target, a fence with its interrupt (intc source gpu) */
 static void gpu_registers(uint32_t unused)
 {
     (void)unused;
     diag_section("gpu registers and errors");
+    if (!engine) {
+        no_engine();
+        diag_section_end();
+        return;
+    }
     GREG(SURF_GPU_CTRL) = SURF_GPU_CTRL_ABORT_MASK;
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     GREG(SURF_GPU_IE) = 0;
@@ -283,29 +315,21 @@ static void gpu_registers(uint32_t unused)
     diag_section_end();
 }
 
-static int engine_present(void)
-{
-    expect_trap(0);
-    uint32_t id = probe_load_word(SURF_GPU_BASE + SURF_GPU_ID, 0);
-    expecting = 0;
-    return got_count == 0 && id == GPU_ID_VALUE;
-}
-
 static void scenes(uint32_t unused)
 {
     (void)unused;
-    int engine = engine_present();
     diag_section("scenes");
     diag_check(gpu_scene_count == GPU_SCENE_COUNT, "%u scenes, %u expected CRCs", gpu_scene_count, GPU_SCENE_COUNT);
     con_printf("%u, engine %s\n", gpu_scene_count, engine ? "present" : "absent");
     for (unsigned n = 0; n < gpu_scene_count && n < GPU_SCENE_COUNT; n++) {
         char name[48];
         fmt_snprintf(name, sizeof name, "scene %2u: %s", n, gpu_scenes[n].name);
-        if (gpu_scenes[n].engine && !engine) {
-            con_printf("%-34s skipped: no engine\n", name);
+        diag_section(name);
+        if (gpu_scenes[n].engine && !engine) {         /* skipped, and failed */
+            diag_check(0, "skipped: no engine");
+            diag_section_end();
             continue;
         }
-        diag_section(name);
         engine_timeouts = 0;
         fifo_credit = 0;
         gpu_scenes[n].draw(&hw_sink);
@@ -319,6 +343,17 @@ static void scenes(uint32_t unused)
         con_printf("crc %08x ", crc);
         diag_section_end();
     }
+}
+
+/* a run that made fewer (or more) checks than a complete one fails */
+static void completeness(void)
+{
+    uint32_t ran = diag_checks;
+    if (ran == GPUDIAG_CHECKS)
+        return;
+    diag_section("completeness");
+    diag_check(0, "%u checks ran; a complete run makes %u", ran, GPUDIAG_CHECKS);
+    diag_section_end();
 }
 
 /* the result in the top text row, over the last picture (MODE 3: an opaque bar) */
@@ -367,10 +402,13 @@ int main(void)
             diag_guard(vram_window, 0);
             diag_guard(video_registers, 0);
             led_set(0x7, 0x004);
-            if (engine_present())
-                diag_guard(gpu_registers, 0);
+            probe_engine();
+            diag_guard(gpu_registers, 0);
             diag_guard(scenes, 0);
+            completeness();
             show_result();
+        } else {
+            completeness();                             /* identity has said why */
         }
         first_run = 0;
         diag_summary("GPUDIAG");

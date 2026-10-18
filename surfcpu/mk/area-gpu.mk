@@ -21,6 +21,8 @@
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
 #                          the pins (sim/gpu/gpudiag_check.py); SurfBoot's monitor reports features 1ff
+#   make test-gpu-noengine gpudiag must fail without the engine: on the HAS_GPU = 0 SoC, and on a
+#                          HAS_GPU = 1 SoC whose gpu.ID is not "GPU1"; gpudiag_check.py's own tests
 #   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
 #   make build-gpu-rom     build/fw/gpudiag.{elf,bin,mem} (on build-rom) and the scenes' expected CRCs
 #                          (build/fw/gen/gpuscenes_expect.h, from the C model); gpu-scenes writes
@@ -48,7 +50,7 @@ GVIDEO_RTL   = rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v rt
 
 .PHONY: lint-gpu test-gpu test-gpu-model test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-soc \
         build-gpu-rom gpu-scenes test-gpu-encodings test-gpu-engine test-gpu-mutants gpu-netlist-sim \
-        test-gpu-system-boot
+        test-gpu-noengine test-gpu-system-boot
 lint: lint-gpu
 build-rom: build-gpu-rom
 test-soc: test-gpu
@@ -72,7 +74,7 @@ lint-gpu:
 	@echo "lint-gpu: surf_vram, surf_gpu, surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles"
 
 test-gpu: test-gpu-model test-gpu-encodings test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-engine \
-          test-gpu-soc
+          test-gpu-soc test-gpu-noengine
 	@echo "test-gpu: PASS"
 
 # run one binary per seed, keep each log, stop with it on the first failure:
@@ -233,6 +235,39 @@ test-gpu-system-boot:
 	    --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN --work $(GPU_SYS_DIR) \
 	    --evidence $(GPU_SYS_DIR)/summary.txt; \
 	else echo "$@: skipped (needs the real core, SurfBoot, the riscv32 kernel, surfimg.py and mkcard.py)"; fi
+
+# ---------------------------------------------------------------- gpudiag without the engine
+# gpudiag must fail where the engine is missing (the first GPU review, finding 1): on the
+# HAS_GPU = 0 SoC (build/sim/surfsim: no FEATURES.GPU, no gpu or vram window) and on a HAS_GPU = 1
+# SoC whose engine answers gpu.ID 0x31555048 instead of "GPU1" (build/sim/surfsim_gpu_noengine,
+# from a copy of surf_gpu.v with that line changed by sim/gpu/noengine.py). Each run must end in
+# GPUDIAG: FAIL saying why, and gpudiag_check.py must fail it too (--must-fail).
+GPU_NOENG = $(GPU_BUILD)/noengine
+$(GPU_NOENG)/surf_gpu.v: rtl/peripherals/surf_gpu.v sim/gpu/noengine.py
+	@mkdir -p $(dir $@)
+	$(Q)$(PYTHON) sim/gpu/noengine.py $< $@
+
+$(BUILD)/sim/surfsim_gpu_noengine: $(GPU_SIM_DEPS) $(GPU_NOENG)/surf_gpu.v
+	@mkdir -p $(GPU_NOENG)/obj
+	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(GPU_NOENG)/obj -o surfsim \
+	  $(SOC_TOP_RTL) $(VRAM_RTL) $(GPU_NOENG)/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(GPU_NOENG)/build.txt 2>&1 \
+	  || { tail -40 $(GPU_NOENG)/build.txt; exit 1; }
+	$(Q)cp $(GPU_NOENG)/obj/surfsim $@ && rm -rf $(GPU_NOENG)/obj
+
+# $(call gpu_noeng,<surfsim>,<name>,<max cycles>,<what the run must say>)
+define gpu_noeng
+	$(Q)$(1) --rom $(FW)/gpudiag.mem --quiet --max-cycles $(3) --transcript $(GPU_NOENG)/$(2).txt \
+	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_NOENG)/$(2).log 2>&1 || { tail -20 $(GPU_NOENG)/$(2).log; exit 1; }
+	@printf '  [%s] ' '$(2)'
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_NOENG)/$(2).txt --frames - \
+	  --expect $(FW_GEN)/gpuscenes_expect.h --must-fail '$(4)'
+endef
+
+test-gpu-noengine: $(BUILD)/sim/surfsim $(BUILD)/sim/surfsim_gpu_noengine build-gpu-rom
+	$(Q)$(PYTHON) sim/gpu/test_gpudiag_check.py
+	@mkdir -p $(GPU_NOENG)
+	$(call gpu_noeng,$(BUILD)/sim/surfsim,no-gpu,100000000,FEATURES has no GPU[\s\S]*checks ran; a complete run makes)
+	$(call gpu_noeng,$(BUILD)/sim/surfsim_gpu_noengine,wrong-id,600000000,no engine: gpu.ID reads 0x31555048[\s\S]*skipped: no engine[\s\S]*checks ran; a complete run makes)
 
 # ---------------------------------------------------------------- the engine
 test-gpu-encodings:
