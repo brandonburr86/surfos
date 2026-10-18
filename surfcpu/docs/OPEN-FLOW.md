@@ -236,6 +236,14 @@ are for a reader to judge. Hold violations are fixed after routing (`-o hold-fix
   never set). openXC7's CI shows why: such features were once dropped silently.
 * LVS does not model clock managers or the clock tree. Block RAM and DSP are checked only at
   their pins, with block RAM contents checked separately.
+* LVS cannot check shift-register LUTs (SRL16E, SRLC32E): the extractor's tile model (the xcol
+  module of lvs/tile_model.v) has no shift mode, and the values it does not implement resolve to
+  0, so every signal an SRL feeds comes out different (two GPU builds failed so, docs/GPU.md
+  section 12.2). Yosys infers an SRL from three or more registers in a row without a reset.
+  Synthesizing with `-nosrl` would avoid them, but it changes every design's netlist, SRLs or
+  not (the baseline 798 cells against 820, the 100T DDR design 13,642 against 14,070, by Yosys
+  alone), so instead the flow refuses a netlist with SRL cells right after synthesis
+  (check-srl.txt, devenv/openxc7/srlcheck.py), before anything is placed: give the chain a reset.
 * Synthesis uses Yosys 0.69, the main image 0.52: resource estimates from the other tracks and
   open-flow builds differ slightly.
 * The full SoC (HAS_DDR = 0) went through the flow at integration, 2026-10-16 (board-3 round;

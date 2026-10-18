@@ -63,6 +63,17 @@ test-flow-tools:
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/bramwe.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/synthcheck.py --self-test
 	$(Q)$(PYTHON) -I $(FLOW_DIR)/gclkcheck.py --self-test
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/srlcheck.py --self-test
+	@# and on what Yosys makes of a shift chain: without a reset two SRL16E (refused), with one flip-flops
+	@mkdir -p $(FLOW_SIM)
+	$(Q)for m in srl_chain srl_chain_reset; do \
+	  $(YOSYS) -q -p "read_verilog $(FLOW_DIR)/test/srl_chain.v; synth_xilinx -top $$m; write_json $(FLOW_SIM)/$$m.json" \
+	    > $(FLOW_SIM)/$$m.yosys.txt 2>&1 || { cat $(FLOW_SIM)/$$m.yosys.txt; exit 1; }; done
+	$(Q)if $(PYTHON) -I $(FLOW_DIR)/srlcheck.py --json $(FLOW_SIM)/srl_chain.json --top srl_chain > $(FLOW_SIM)/srl_chain.txt; \
+	  then echo "srlcheck: an SRL16E chain was not refused"; exit 1; fi
+	$(Q)grep -q 'SRL16E' $(FLOW_SIM)/srl_chain.txt || { cat $(FLOW_SIM)/srl_chain.txt; exit 1; }
+	$(Q)$(PYTHON) -I $(FLOW_DIR)/srlcheck.py --json $(FLOW_SIM)/srl_chain_reset.json --top srl_chain_reset > /dev/null
+	@echo "srlcheck: a shift chain without a reset refused ($$(grep -c '^  SRL' $(FLOW_SIM)/srl_chain.txt) SRL cells), with one passed"
 	$(Q)sh tools/openxc7-flow-test.sh
 	@echo "test-flow-tools: PASS"
 

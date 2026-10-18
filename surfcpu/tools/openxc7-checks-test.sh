@@ -19,6 +19,8 @@
 #      whose two byte enables nextpnr 1.0.0 routes to the wrong site pins; LVS must refuse it, with
 #      bramwe.py naming both pin pairs. (Should a later nextpnr pair them as Vivado does, LVS
 #      passes and this case fails: then the case, the probe and OPEN-FLOW.md 6.5 change.)
+#   5. shift-register LUTs: devenv/openxc7/test/srl_chain.v synthesized alone: the chain without a
+#      reset (two SRL16E) must stop the flow at check-srl, saying why; with a reset it must pass.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$here"
@@ -86,6 +88,18 @@ echo "bram_we_tdpb: openxc7-build.sh exit $st; $(grep 'checks:' "$out/bram_we_td
 grep -E 'proved,|DIFFER|^bramwe:' "$out/bram_we_tdpb/check-lvs.txt" | sed 's/^/  /'
 ok "nextpnr's port-B pairing (we0, we1, we0, we1 on WEBWE0..3) is refused: LVS fails and bramwe names both pin pairs" \
    "[ $st != 0 ] && grep -q '^check LVS           FAIL' '$out/bram_we_tdpb/manifest.txt' && grep -q '^bramwe: 1 block RAM(s), 2 enable(s) re-read, 2 difference(s)$' '$out/bram_we_tdpb/check-lvs.txt'"
+echo
+echo "== 5. shift-register LUTs, which LVS cannot check"
+for d in srl_chain srl_chain_reset; do
+    if tools/openxc7-build.sh --top "$d" --part xc7a100tcsg324-1 --synth-only --out "$out/$d" \
+           devenv/openxc7/test/srl_chain.v > "$out/$d.log" 2>&1; then st=0; else st=$?; fi
+    echo "$d (synthesis only): openxc7-build.sh exit $st"
+    sed 's/^/  /' "$out/$d/check-srl.txt"
+    eval "st_$d=$st"
+done
+ok "a shift chain without a reset (two SRL16E) is refused right after synthesis, saying why" \
+   "[ $st_srl_chain != 0 ] && grep -q '^srlcheck: FAIL: 2 SRL cell' '$out/srl_chain/check-srl.txt' && grep -q 'give each chain a reset' '$out/srl_chain.log'"
+ok "the same chain with a reset passes" "[ $st_srl_chain_reset = 0 ] && grep -q '^srlcheck: PASS' '$out/srl_chain_reset/check-srl.txt'"
 } > "$out/report.txt" 2>&1 || true
 grep -q '^FAIL' "$out/report.txt" && rc=1
 {

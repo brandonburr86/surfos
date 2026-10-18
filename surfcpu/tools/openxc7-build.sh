@@ -28,7 +28,8 @@
 #   --dry-run          print what would run, without the image
 #
 # Outputs in <dir>: <top>.bit (the bitstream), <top>.fasm/.frames/.json, timing.txt,
-# utilization.txt, check-synthesis.txt, check-bitstream.txt, check-roundtrip.txt,
+# utilization.txt, check-srl.txt (a netlist with SRL cells stops here), check-synthesis.txt,
+# check-bitstream.txt, check-roundtrip.txt,
 # check-bram.txt, check-lvs.txt, check-clocks.txt, the logs and manifest.txt, seeds.txt (each
 # placement attempt), and <top>.netlist.v with Yosys's cells_sim.v for gate-level simulation.
 # Exit status 0 only if every step and every check passed. A bitstream made here has not been
@@ -241,6 +242,14 @@ write_json $out/$top.json
 write_verilog -noattr $out/$top.netlist.v"
 if [ "$dry" = 1 ]; then printf '[synth.ys]\n%s\n' "$ys"; else printf '%s\n' "$ys" > "$out/synth.ys"; fi
 run synth yosys.log yosys -q -l "$out/yosys.full.log" -s "$out/synth.ys"
+# Shift-register LUTs (SRL16E, SRLC32E): LVS cannot check them, its extractor having no shift mode
+# (devenv/openxc7/srlcheck.py, docs/OPEN-FLOW.md 6.5), so with the checks on a netlist with any is
+# refused here, before anything is placed, saying which chains to give a reset.
+if [ "$check" = 1 ] || [ "$synthonly" = 1 ]; then
+  run check-srl check-srl.txt python3 -I $tools/srlcheck.py --json "$out/$top.json" --top "$top" ||
+    { echo "openxc7-build.sh: the synthesized netlist has SRL cells, which the open flow's LVS cannot check;" \
+           "give each chain a reset (check-srl.txt)" >&2; exit 1; }
+fi
 # the primitive models of this Yosys, for simulating <top>.netlist.v elsewhere (Icarus)
 run models cells_sim.log cp /opt/openxc7/share/yosys/xilinx/cells_sim.v "$out/cells_sim.v"
 
