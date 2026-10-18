@@ -40,7 +40,7 @@ address (bits 11:10 = `11`) raises an illegal-instruction exception and changes 
 |---|---|---|---|---|
 | `mvendorid` | `0xF11` | 0 | read only | not a commercial implementation |
 | `marchid` | `0xF12` | 0 | read only | no registered architecture ID yet |
-| `mimpid` | `0xF13` | `SURF_SOC_VERSION` | read only | 0x00000200 = SoC 0.2.0 (memory map 2, since round ddr-3); 0x00000100 = SoC 0.1.0, which is also the core's own `MIMPID` default, used by its standalone tests and the Spike reference |
+| `mimpid` | `0xF13` | `SURF_SOC_VERSION` | read only | 0x00000300 = SoC 0.3.0 (memory map 2 with the GPU's registers, 2026-10-18; every design, with the GPU or not); 0x00000200 = SoC 0.2.0 (memory map 2, since round ddr-3); 0x00000100 = SoC 0.1.0, which is also the core's own `MIMPID` default, used by its standalone tests and the Spike reference |
 | `mhartid` | `0xF14` | 0 | read only | |
 | `mconfigptr` | `0xF15` | 0 | read only | no configuration structure |
 | `mstatus` | `0x300` | `0x00001800` | `MIE` (bit 3), `MPIE` (bit 7) | `MPP` (12:11) is fixed at `11` (M); every other bit is 0 |

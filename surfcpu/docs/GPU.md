@@ -70,9 +70,10 @@ of a line is in bits 8(x mod 4)+7 .. 8(x mod 4) of its word.
 address bits 16:14 choose the bank and 13:0 the word in it (`BANK_LOG2` = 14). Each bank is
 written like `surf_textram` (its proven dual-clock form): port A in sys_clk with byte write
 enables, reading only when it does not write (the block RAM's NO_CHANGE mode: READ_FIRST is
-unsafe with the other port on another clock, UG473), port B in pix_clk, read only. A pixel read
-at the instant the same word is written may show either value in that one frame; memory is never
-corrupted. Yosys maps each full bank to 16 RAMB36 of 16Kx2, as it maps the 64 KiB scratch RAM,
+unsafe with the other port on another clock, UG473), port B in pix_clk, read only. A pixel-port
+read of a word at the instant port A writes it is a collision, whose read data UG473 leaves
+undefined: those four pixels may show any colour in that one frame (not just the old or the new
+value); the word written is kept, memory is never corrupted. Yosys maps each full bank to 16 RAMB36 of 16Kx2, as it maps the 64 KiB scratch RAM,
 and the last to 12: 76 RAMB36, with a 5-input multiplexer per bit and port. (The first version,
 19 banks of 4,096 words, took 75 RAMB36 but had 19-input multiplexers that gathered 672 block RAM
 outputs per port in one place; nextpnr could not route that design in reasonable time, section
@@ -546,9 +547,13 @@ was done here (the brief: do not change the flow).
   existing designs, where nothing changed; bramdiag on a GPU design would report that one check
   (moving its probe to 0x4000_0000 is a change for the integrator to decide).
 * **Pixel reads during writes.** A word the CPU or the engine writes at the instant the scan-out
-  reads it may show either value for that frame (the NO_CHANGE mode keeps memory safe). FRAME_CRC
-  of a picture that changes while shown is therefore not reproducible; the diagnostic only takes
-  CRCs of still pictures (section 3).
+  reads it is a block RAM collision: UG473 leaves the read data undefined, so those four pixels
+  may show any colour in that frame (the NO_CHANGE mode keeps the memory itself right). For
+  FRAME_CRC this means a frame during which software draws into the visible page has a CRC no
+  model can predict, not even one that knows when each write landed: only frames shown while
+  nothing was written to what they show (still pictures, or drawing into a hidden page and
+  flipping GFX_BASE) have a reproducible CRC. The diagnostic takes CRCs of still pictures only
+  (section 3), and G4's frame-by-frame tearing check must draw into the hidden page.
 * **The engine's complexity** (COPY_RECT's alignment and overlap, EXPAND's stream) is covered by
   the randomized comparison with the model and by mutants; the model itself is checked by
   directed tests written from section 5, not from the RTL.

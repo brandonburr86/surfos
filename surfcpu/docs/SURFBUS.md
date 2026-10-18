@@ -106,7 +106,10 @@ an offset that has no register is an error.
  SurfCPU dbus ---------->| D decoder            |--> bootrom port B (reads; writes → error)
                          |                      |--> scratch port B
                          |                      |--> MMIO: uart timer intc gpio spi ps2 video sysinfo
+                         |                      |          gpu (with HAS_GPU)
                          |                      |--> textram port A (port B is the video scan-out)
+                         |                      |--> vram port A (with HAS_GPU; shared with the GPU
+                         |                      |    engine, the CPU first; port B is the scan-out)
                          |                      |--> DDR arbiter
                          |                      |--> error
                          +----------------------+
@@ -117,7 +120,8 @@ an offset that has no register is an error.
 The boot ROM and scratch RAM are true dual-port block RAMs, one port per master, so fetch
 and data accesses to them never wait for each other. The data port reaches everything; the
 fetch port only regions with *fetch*. Text RAM is dual-ported between the data port and the
-video clock domain.
+video clock domain; so is VRAM, whose data-port side the GPU's drawing engine also uses, behind the
+CPU (docs/GPU.md section 2): the engine is not a SurfBus master.
 
 ## 7. What the CPU guarantees
 
@@ -129,6 +133,10 @@ video clock domain.
   responses are dropped.
 
 ## 8. Clarifications (version 1 unchanged)
+
+* 2026-10-18: section 6 shows the GPU's two slaves, the gpu registers and the vram window
+  (docs/GPU.md), which exist only in SoCs built with HAS_GPU; they follow sections 1 to 5 like
+  every slave, and the bus itself is unchanged.
 
 * 2026-10-15: rule 7's SPI bound uses the DIV latched at the start of the transfer (a DIV
   write during a transfer applies to the next one), as `surf_spi` implements it.
