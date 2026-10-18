@@ -263,7 +263,7 @@ static void twins(void) {
     sim_same_time("a.txt", "a.txt.tmp");
     ed_type("X");
     check(ed_save() == 1 && ed_unsure() && is("a.txt", "one\n") && is("a.txt.1.tmp", "Xone\n") && is("a.txt.tmp", "one\n") &&
-          !strcmp(ed_msg(), "a.txt.tmp may share this file's data: a copy is in a.txt.1.tmp"),
+          !strcmp(ed_msg(), "Not saved over the file; a copy is in a.txt.1.tmp (a.txt.tmp may share its data)"),
           "a twin that came after the file was opened is found when saving: a copy beside it, and said why");
 
     sim_reset();
@@ -295,7 +295,7 @@ static void in_place(void) {
     ed_type("Z");
     sim_clear_log();
     check(ed_save() == 1 && !has(sim_log(), "trunc") && is("a.txt", "XYone\ntwo\n") && is("a.txt.1.tmp", "XYZone\ntwo\n") &&
-          !strcmp(ed_msg(), "a.txt.tmp may share this file's data: a copy is in a.txt.1.tmp"),
+          !strcmp(ed_msg(), "Not saved over the file; a copy is in a.txt.1.tmp (a.txt.tmp may share its data)"),
           "where there is no rename, a twin beside the file: a copy beside it, never in place");
 
     start();

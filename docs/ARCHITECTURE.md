@@ -601,8 +601,12 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   `note_guarded()`; `fs/fat.c`'s rename copies the entry, so that is how such a pair
   usually looks, though a later write to either name, or the old entry found first in
   the directory, hides it). `rx` keeps its `.part` file by the same rule, says to have the
-  disk checked, and does not start over a `.part` that is its file's twin. The care lasts
-  while the two look alike: once the disk is checked, `rm` of one of them ends it. Outside that
+  disk checked, and does not start over a `.part` that is its file's twin. Two empty files
+  are no pair (no clusters). The care lasts while the two look alike, and for the rest of
+  a session that met them: once the disk is checked, `rm` of one and a new start end it.
+  `tools/devloop.py` says to check the stick when its `mv` into place fails with an I/O
+  error, but a deploy run again then would rename over the `.new` that may share its
+  file's clusters: nothing looks for that pair. Outside that
   care: the shell's `rm`, `mv` and `cp`, `rx`'s rename over a file with a `.tmp` twin, a
   stick mounted again under another path, and a `.tmp` of which only the 8.3 alias was
   left. The real fix is in `fs/fat.c` (not freeing a chain that another entry still holds;

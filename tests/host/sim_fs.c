@@ -263,7 +263,7 @@ int vfprintf(FILE *f, const char *fmt, va_list ap) { (void)f; (void)fmt; (void)a
 int fputs(const char *s, FILE *f) { (void)s; (void)f; return 0; }
 int fputc(int c, FILE *f) { (void)f; return c; }
 int fflush(FILE *f) { (void)f; return 0; }
-int poll(struct pollfd *fds, nfds_t n, int timeout_ms) { (void)fds; (void)n; (void)timeout_ms; errno = ENOSYS; return -1; }
+int poll(struct pollfd *p, nfds_t n, int timeout_ms) { (void)p; (void)n; (void)timeout_ms; errno = ENOSYS; return -1; }
 void _exit(int code) { (void)code; for(;;) __builtin_trap(); }
 
 void *sbrk(intptr_t incr) {

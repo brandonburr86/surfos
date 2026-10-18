@@ -107,12 +107,13 @@ static int nothing_changed(int e) {
 /* <path>.part from an earlier rx: 1 when it is <path>'s twin, of its size and time (fs/fat.c's rename copies the
    entry): kept after a rename that may have half happened, so that cutting it to nothing would free the
    clusters <path> holds. 0 for none, an empty one, or one a killed rx left: that is cut and written again.
-   -1 with errno when there is no telling. A guess, not proof, as user/bin/edit.c's twin_beside() says. */
+   With errno, when there is no telling: -1 for the .part, -2 for <path>. A guess, not proof, as
+   user/bin/edit.c's twin_beside() says. */
 static int part_in_the_way(const char *path, const char *part) {
     struct stat p, b;
     if(stat(part, &b) < 0) return errno == ENOENT || errno == ENOTDIR ? 0 : -1;   /* no such name: open says so */
     if(!b.size) return 0;
-    if(stat(path, &p) < 0) return errno == ENOENT ? 0 : -1;
+    if(stat(path, &p) < 0) return errno == ENOENT ? 0 : -2;
     return p.size == b.size && p.mtime == b.mtime;
 }
 
@@ -162,7 +163,7 @@ int main(int argc, char **argv) {
         return fail("%s: %s", path, strerror(errno));
     }
     snprintf(part, sizeof(part), "%s.part", path);
-    if((r = part_in_the_way(path, part)) < 0) return fail("%s: %s", part, strerror(errno));
+    if((r = part_in_the_way(path, part)) < 0) return fail("%s: %s", r == -1 ? part : path, strerror(errno));
     if(r) return fail("%s and %s may share their clusters (an earlier rx's rename may have failed half way): "
                       "check the disk (fsck) before deleting either or running rx for them again", part, path);
     crc_init();

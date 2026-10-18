@@ -28,7 +28,8 @@ written over the file: each save makes another new file beside it (up to .9.tmp,
 and none when nothing changed since the last), the help line says to have the
 disk checked first, and edit says where the last copy is when it ends. The same
 holds whenever edit finds such a name beside the file, of its size and time
-(fs/fat.c's rename copies the entry), when it opens it and before each save.
+(fs/fat.c's rename copies the entry; two empty files hold no clusters, so are no
+pair), when it opens it and before each save.
 Only where the file system cannot rename (ENOSYS), or no such name fits in a
 path, is the file truncated and written in place.
 The file keeps its line ends (LF, or CRLF when its first line has one) and
@@ -453,7 +454,7 @@ static int save(void) {
         if(e == 0 && unsure) {                  /* a copy beside the file, renamed over nothing */
             snprintf(copied, sizeof(copied), "%s", base ? base + 1 : tmp);
             copied_changes = changes;
-            if(found) snprintf(msg, sizeof(msg), "%s may share this file's data: a copy is in %s", twin, copied);
+            if(found) snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s (%s may share its data)", copied, twin);
             else snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", copied);
             return 1;
         }

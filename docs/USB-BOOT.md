@@ -411,7 +411,8 @@ time, when it opens the file and before each save: that is how such a pair usual
 looks, though not always. Check the stick on another computer (First Aid on the Mac,
 `fsck` elsewhere) before you change either file, also with `rm`, `mv` or `cp`, which take
 no such care. Once it is checked, delete the copy you no longer want with `rm` (or on the
-Mac): while the two look alike, `edit` and the desktop keep taking the care. Windows line
+Mac), then start `edit` (or the desktop) again: while the two look alike, and for the rest
+of a session that met them, `edit` and the desktop keep taking the care. Windows line
 ends (CR LF) stay as they were.
 
 **Taking the stick out.** Type `eject usb1` and wait for `usb1: safe to remove`. It

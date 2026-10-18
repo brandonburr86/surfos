@@ -59,9 +59,11 @@ int main(void) {
     sim_reset();
     sim_put("/st/x.new.part", "data");
     sim_fail(SIM_STAT, "/st/x.new.part", SIM_EIO, 0);
-    check(rx_part_check("/st/x.new") < 0, "a .part that cannot be looked at: no telling, rx does not start");
+    check(rx_part_check("/st/x.new") == -1, "a .part that cannot be looked at: no telling, rx does not start");
     sim_fail(SIM_STAT, "/st/x.new", SIM_EIO, 0);
-    check(rx_part_check("/st/x.new") < 0, "... nor a file beside it that cannot be");
+    check(rx_part_check("/st/x.new") == -2, "... nor a file beside it that cannot be (said of the file)");
+    sim_fail(SIM_STAT, "/st/x.new.part", SIM_ENOTDIR, 0);
+    check(rx_part_check("/st/x.new") == 0, "a folder in the path that is not one: rx goes on, and its open says so");
 
     sim_reset();                                /* rx itself: over a twin it stops before it touches anything */
     sim_put("/st/x.new", "the whole file");
