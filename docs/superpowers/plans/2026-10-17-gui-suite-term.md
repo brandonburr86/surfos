@@ -151,9 +151,12 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G an
   descriptor (a task has 16) the session does not start, -EMFILE, as sys_openpty() answers a
   program ("No session: too many files are open."); so no master is held in the table alone. A close
   takes the master out of its place (interrupts off) before it closes the descriptor. A task
-  killed at once anywhere in an open or a close thus leaves the master to its own end and never in
-  a place to be closed again, and the next open takes back any place of a task that is gone,
-  also one it was starting or closing; the table closes nothing itself.
+  killed at once in an open or a close from the moment the master is one of its descriptors thus
+  leaves the master to its own end and never in a place to be closed again, and the next open
+  takes back any place of a task that is gone, also one it was starting or closing; the table
+  closes nothing itself. (Before that moment, inside pty_open, between a failed fd_install and
+  pty_close, and inside fd_close itself, a task killed at once leaves a master nobody holds: the
+  same few instructions as sys_openpty's and close's own, which this file cannot close.)
 * **kernel/pty.c**: the system calls share the new code (the spawn, the size, the read's copy and
   the master's lookup) and keep their behaviour; the kernel's calls are declared in
   include/surfos/pty.h behind `#ifdef _SURFOS_TYPES_H`, so user programs, which include it
