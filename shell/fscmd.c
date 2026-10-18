@@ -27,6 +27,11 @@ umount gives the changes up.
 they could not be written (written between eject's check and its unmount, or by the
 unmount itself, such as the clean-shutdown mark), and fail; eject then does not say
 "safe to remove".
+
+10/17/26 (audit B46): Ctrl+C, a kill or a hangup no longer makes them give anything up.
+An umount, once begun, finishes (fs/vfs.c). eject stops before it unmounts anything when
+its call is to end while it writes the mounts out, and says the disk stays mounted;
+once it unmounts, it finishes.
 */
 
 #include <blibc_common.h>
@@ -294,20 +299,26 @@ int cmd_eject(int argc, char **argv) {
             r = w;
         }
     }
+    if(task_interrupted()) {                                 /* 10/17/26 (B46): Ctrl+C, a kill: nothing unmounted yet */
+        printf("    eject: %s: interrupted: it stays mounted (eject it again)\n", disk->name);
+        return CMD_FAIL;
+    }
     if(r) {
         printf("    eject: %s stays mounted: sync tries the writes again; umount gives them up\n", disk->name);
         return CMD_FAIL;
     }
+    fs_finish_enter();                                       /* (B46: from here it finishes: no wait cut short) */
     for(i = 0; i < n && !r; i++) {
         r = unmount("eject", paths[i], &lost);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
-    if(r) return CMD_FAIL;
+    if(r) { fs_finish_leave(); return CMD_FAIL; }
     /* 10/16/26 (B10): what the disk's devices still had could not be written: given up, and said */
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); lost += bdirty_count(p); binvalidate(p); }
     bsync(disk);
     lost += bdirty_count(disk);
     binvalidate(disk);
+    fs_finish_leave();
     if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return CMD_OK; }
     if(lost) {                                               /* written after the check above, and refused */
         printf("    eject: %s: %u changed block%s could not be written: check the disk elsewhere before trusting it\n",

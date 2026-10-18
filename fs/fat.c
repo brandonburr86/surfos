@@ -234,6 +234,14 @@ clean. An rm or a truncate whose change is on the disk says 0 even then: it has 
 
 10/17/26 (audit B44): FAT12 has no clean-unmount mark: its unmount says so instead of claiming the volume stays
 marked.
+
+10/17/26 (audit B46): the unmount is a step that must finish (fs_finish, surfos/task.h; fs/vfs.c's umount is one as
+a whole): Ctrl+C, a kill or a hangup cut its syncs short (B39), and it left a working card marked as not cleanly
+unmounted ("write errors") and counted the chains waiting to be freed as lost.
+
+10/17/26 (audit B49): what B39 calls a piece: one block through the cache, up to 64 KB straight between the device
+and the caller (rw_locked()); the comments and the documents said 64 KB for both. A straight piece whose wait the
+kill cut short says EINTR (bcache's BCACHE_EINTR), not EIO: the device refused nothing.
 */
 
 #include <surfos/types.h>
@@ -1633,7 +1641,7 @@ static int rw_locked(struct fat_fs *fs, struct vnode *v, u32 off, u8 *buf, u32 l
     while(r == 0 && done < len) {
         u32 s = within / 512, so = within % 512, left = len - done, chunk = 512 - so, nb = 0;
         u8 *p = buf ? buf + done : NULL;
-        if(done && curTask && curTask->intr && !(curTask->in_call & TC_EXIT)) { r = -EINTR; break; }
+        if(done && fs_cut_short()) { r = -EINTR; break; }
         if(!so && left >= 512) {
             r = run_blocks(fs, c, s, left / 512 < BCACHE_RUN ? left / 512 : BCACHE_RUN, grow, &nb);
             if(r) break;
@@ -2204,13 +2212,15 @@ static int fat_sync(struct superblock *sb) {
    cleanly unmounted when it was mounted (fs->unclean): SurfOS's own next mount said so once and its unmount marked
    it clean, and the computer after it trusted a volume nobody had checked (B38's lost clusters, B24's damage). Only
    a checker clears the mark. (B44) FAT12 has no mark: its unmount says so instead. (B39) The calling task is inside
-   the file system meanwhile: a kill that waited lets the unmount finish */
+   the file system meanwhile: a kill that waited lets the unmount finish. (B46) Its syncs are not cut short either (a
+   step that must finish): cut short, they left the volume unclean ("write errors") on a card that took every write,
+   and counted the chains still waiting to be freed as lost */
 static int fat_unmount(struct superblock *sb) {
     struct fat_fs *fs = (struct fat_fs *)sb->priv;
     u32 i, lost = 0;
     bool ok = false;
     const char *why = NULL;
-    fat_in();
+    fs_finish_enter();
     if(fs->marked && !fs->dev->gone) {
         ok = !fs->damaged;
         if(ok && fs->npending) {
@@ -2240,7 +2250,7 @@ static int fat_unmount(struct superblock *sb) {
                      " pointing at them: check the volume (fsck.fat frees them)\n", fs->type, fs->dev->name,
                      fs->lost_unsure ? "at least " : "", (u_long)lost, lost == 1 ? "" : "s");
     kfree(fs);
-    fat_out();
+    fs_finish_leave();
     return 0;
 }
 
