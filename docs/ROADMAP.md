@@ -497,6 +497,12 @@ runs whole; a terminal type (TTYPE) for programs that draw; a host name for the 
 remote state (`≋@>`); and in TCP, random initial sequence numbers, challenge ACKs (RFC
 5961) and Nagle as an option for programs.
 
+The web server (`httpd`, 10/17/26, `docs/USB-BOOT.md` section 16) left these open: a
+loopback interface, so that Undertow on the laptop can open the laptop's own site; byte
+ranges (`Range`, which Safari needs to play video), `Last-Modified` once the clock knows its
+time zone; more than one background server (one per port); and starting it from the stick's
+`settings.conf` at boot, like telnetd's setting (branch `netman/main`).
+
 The storage work left these open, smallest first: the busy check of `umount` and `eject`
 sees only the asking task's current directory (it should look at every task's);
 `fdisk add` of logical partitions; one cache identity for a disk and its

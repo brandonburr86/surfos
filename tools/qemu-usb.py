@@ -47,7 +47,8 @@ comes out of the framebuffer.
   usbnet     a USB Ethernet adapter (QEMU's usb-net: CDC ECM, full speed) on the xHCI
              controller next to the stick: eth0 at boot, DHCP, ping, HTTP from a server on
              this host (a small page and 1 MB), the self test's network checks, a telnet
-             session (telnetd on; this host reaches port 23 through a forwarded port), then the
+             session (telnetd on; this host reaches port 23 through a forwarded port), the web
+             server's sample site (httpd on; port 80 forwarded, 10/17/26), then the
              adapter unplugged and plugged in again through the monitor, and finally a
              different adapter on another network (192.168.76.0/24) in its place
   usbdisk    a second emulated USB stick (a copy of the QEMU test disk: MBR + FAT16) next to the
@@ -99,6 +100,7 @@ screenshots as PNG, results.json) goes to --output-dir.
 """
 import argparse
 import collections
+import http.client
 import http.server
 import glob
 import hashlib
@@ -1118,6 +1120,33 @@ def telnet_session(vm, qr, port):
     return results
 
 
+def www_session(vm, qr, port):
+    """10/17/26: httpd over the adapter, as a browser on another computer of the laptop's network would reach it: this
+    host reaches guest port 80 through n0's forwarded port; the sample site's page and style sheet, then httpd off"""
+    ok, _ = run_cmd(vm, 'httpd on', ['httpd: serving /initrd/www at http://10.0.2.15/'])
+    if ok:
+        try:
+            with Draining(vm):
+                c = http.client.HTTPConnection('127.0.0.1', port, timeout=30)
+                try:
+                    c.request('GET', '/')
+                    r = c.getresponse()
+                    page = r.read()
+                    c.request('GET', '/style.css')
+                    r2 = c.getresponse()
+                    css = r2.read()
+                finally:
+                    c.close()
+            ok = (r.status == 200 and b'This page came from SurfOS.' in page and r2.status == 200 and
+                  r2.getheader('Content-Type') == 'text/css; charset=utf-8' and b'--navy' in css)
+        except (OSError, http.client.HTTPException) as e:
+            print(f'      httpd: {e!r}', flush=True)
+            ok = False
+    off, _ = run_cmd(vm, 'httpd off', ['httpd: stopped'])
+    return [('httpd: the sample site over the adapter (httpd on, a page and its style sheet on one connection)', ok),
+            ('httpd off', off)]
+
+
 def scenario_usbnet(args, image, firmware, outdir):
     results = []
     httpd = http.server.HTTPServer(('127.0.0.1', 0), HttpHandler)
@@ -1125,6 +1154,7 @@ def scenario_usbnet(args, image, firmware, outdir):
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     qr = load_smoke_harness()
     telnet_port = qr.free_port()
+    www_port = qr.free_port()
     # QEMU limits injected tables to 65535 bytes. Exercise a large export here;
     # host tests cover multi-chunk tables up to 1 MiB. Noop AML has no side effects.
     large_table = bytearray(b'SSDT' + struct.pack('<I', 60 * 1024 + 37) +
@@ -1136,7 +1166,7 @@ def scenario_usbnet(args, image, firmware, outdir):
     table_file.write(large_table)
     table_file.flush()
     vm = Vm('usbnet', args, image, firmware, mem='512', serial=True, outdir=outdir,
-            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23',
+            extra=['-netdev', f'user,id=n0,hostfwd=tcp:127.0.0.1:{telnet_port}-:23,hostfwd=tcp:127.0.0.1:{www_port}-:80',
                    '-netdev', 'user,id=n1,net=192.168.76.0/24', '-device', USBNET_DEV,
                    '-acpitable', 'file=' + table_file.name])
     try:
@@ -1174,6 +1204,7 @@ def scenario_usbnet(args, image, firmware, outdir):
             ok, _ = run_cmd(vm, 'selftest', ['ok   ping 10.0.2.2', 'ok   DHCP lease', 'SELFTEST PASS'], timeout=180)
             results.append(('selftest, with its network checks on the USB adapter', ok))
             results += telnet_session(vm, qr, telnet_port)
+            results += www_session(vm, qr, www_port)
             # unplugged: the port reports it, eth0 stays but has no link
             vm.mon.cmd('device_del usbnet0')
             ok = vm.expect('unplugged (eth0, cdc-ecm', 20)

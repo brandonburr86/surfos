@@ -80,12 +80,12 @@ static int sock_fd(struct tcp_socket *s) {
     return fd;
 }
 
-int sys_listen(u32 port) {
+int sys_listen(u32 port, u32 backlog) {
     struct tcp_socket *s;
     int r;
     if(!port || port > 65535) return -EINVAL;
     if(!fd_free()) return -EMFILE;
-    r = tcp_listen_on((u16)port, &s);
+    r = tcp_listen_on((u16)port, backlog > 255 ? 255 : (u_int)backlog, &s);    /* tcp.c keeps it to its limit */
     return r ? r : sock_fd(s);
 }
 

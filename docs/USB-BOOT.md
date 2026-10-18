@@ -21,6 +21,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Development builds over the network: a data stick, GRUB's development entry, `autonet`, `rx`, `tools/devloop.py` | done under emulation; **pending on the laptop** | `make test`, `make test-usb` (scenario `devloop`), `make test-devloop`; [section 13](#13-development-builds-over-the-network) |
 | One stick for everything: the boot files copied onto a FAT32 stick that keeps your files (`tools/stick.py`), new builds copied into it | done under emulation; **pending on the laptop** | `make test-usb` (scenarios `onestick` and `twosticks`), `make unittest`, `make test-mkusb`; [section 14](#14-one-stick-for-everything) |
 | Saved Wi-Fi networks joined by themselves at every start, and the settings on the stick (telnet at startup, Ethernet's DHCP, a host name) | done under emulation (a simulated Wi-Fi chip); **pending on the laptop** | `make test` (boots with a settings disk), `make test-usb` (scenario `settings`), `make unittest` (`test_netcfg`); [section 15](#15-wi-fi-saved-networks-and-the-settings-on-the-stick) |
+| A web server: websites from a folder of a stick, opened in a browser on another computer (`httpd`) | done under emulation; **pending on the laptop** | `make test`, `make unittest` and `make test-usb` (scenario `usbnet`); [section 16](#16-a-web-server-hosting-a-site) |
 
 ## What is on the drive
 
@@ -1054,6 +1055,84 @@ starts one as in any start, for a WPA2 network. So with a saved WPA2 network and
 on`, the laptop comes back over Wi-Fi after `tools/devloop.py deploy`, at the address the
 router gives it (`tools/devloop.py find` looks for it), in about two minutes.
 
+## 16. A web server: hosting a site
+
+`httpd` is a web server. While it runs, a browser on any computer of the same network (the
+Mac, a phone) opens the laptop's address and gets the pages of a folder, HTML, CSS,
+pictures and scripts, as a website. It only sends files: nothing runs on the server,
+nothing can be uploaded, and there are no logins. Like `telnetd` it never starts by itself.
+
+**Try it**, on one of the laptop's own consoles (F1 to F4), with the network up (section 8,
+or Wi-Fi):
+
+1. `httpd on` serves the sample site that is part of SurfOS (`/initrd/www`) and says where:
+   `httpd: serving /initrd/www at http://10.0.0.4/`. The console is free again at once.
+   Without an address yet it says `... but eth0 has no address yet: run dhcp first`; the
+   server listens all the same.
+2. Open that address in a browser on the Mac.
+
+**Your own site.** On the Mac, put the site in a folder of the data stick, say `www`, with
+an `index.html` as its front page and whatever it uses beside it (`style.css`, pictures).
+Then on SurfOS:
+
+```
+SURF ≋> mount usb1p1 /data
+SURF ≋> httpd off
+SURF ≋> httpd on /data/www
+httpd: serving /data/www at http://10.0.0.4/
+```
+
+* **Several sites:** every folder inside is a site of its own: `/data/www/blog/` is at
+  `http://10.0.0.4/blog/`. A folder without an `index.html` (or `index.htm`) is listed,
+  folders first, so the sites can be found from the top.
+* **Editing:** the files are read again at every request, so a page edited with `edit`,
+  with Notepad in `gui`, or on the Mac shows at the next reload. The browser asks every
+  time and is told "not modified" while the file stays the same.
+* **What it sends:** pages (`.html`, `.htm`), style sheets, scripts (`.js`), `.json`,
+  text, pictures (`.png`, `.jpg`, `.gif`, `.svg`, `.webp`, `.ico`), fonts (`.woff`,
+  `.woff2`, `.ttf`, `.otf`) and PDFs, each with its type; anything else comes as a
+  download.
+* **Hidden files:** names starting with a dot are never listed or sent, such as the `._`
+  and `.DS_Store` files the Mac leaves on a stick.
+* **Another port:** `httpd on /data/www 8080` is at `http://10.0.0.4:8080/`. The folder and
+  the port come in either order, and a folder without a leading `/` is taken from the
+  current directory.
+
+**Watch the requests.** `httpd serve [folder] [port]` runs the same server on this console
+instead of in the background, and prints each request as it comes: the browser's address,
+the method, the page, the status, and the bytes sent. Ctrl+C stops it.
+
+```
+SURF ≋> httpd serve
+httpd: serving /initrd/www at http://10.0.0.4/
+httpd: each request is printed here; Ctrl+C stops the server
+10.0.0.12 GET / 200 2722
+10.0.0.12 GET /style.css 200 2819
+10.0.0.12 GET /wave.svg 200 434
+10.0.0.12 GET /favicon.ico 404 567
+```
+
+**Check and turn off**, on the laptop or in a telnet session:
+
+| Command | What it says |
+|---|---|
+| `httpd` (or `httpd status`) | `httpd: running (pid 14)`, or `httpd: not running` |
+| `httpd off` | `httpd: stopped`: the background server is gone (`httpd serve` stops with Ctrl+C) |
+| `dmesg` | `httpd: serving /data/www on port 80` when it started, and who stopped it |
+
+Limits:
+
+* One background server at a time; more sites are folders inside the folder it serves.
+* Up to 6 connections at once (a browser opens up to 6). A connection that sends no request
+  for 10 seconds is closed, or sooner when a new connection needs its place; when all 6 are
+  busy, a new one waits a moment.
+* Started in a telnet session, the server belongs to that session and stops when it ends
+  (`httpd on` says so); start it on the laptop's own console to keep it running.
+* Only pages to read: no forms that post, no uploads, no server-side programs (PHP, CGI), no
+  HTTPS. Clients on the network see everything in the folder, so serve only what may be
+  seen.
+* A stick ejected while it is served: its pages are "not found" until it is mounted again.
+
 ## What works, what does not
 
 | Works on the laptop (verified under emulation) | Not supported yet |
@@ -1072,6 +1151,7 @@ router gives it (`tools/devloop.py find` looks for it), in about two minutes.
 | Development builds over the network onto a data stick, started by GRUB's first entry | |
 | One FAT32 stick for booting and for files, the boot files copied onto it (`tools/stick.py`) | |
 | Wi-Fi on the Intel 9560 (open and WPA2-Personal, joined on the laptop 10/10/26); saved networks joined by themselves at startup and the settings on the stick (under emulation) | |
+| A web server for static sites (`httpd`): HTML, CSS, pictures, folders listed | Forms, uploads, server-side programs, HTTPS |
 
 ## How it works
 

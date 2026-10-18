@@ -28,7 +28,8 @@ nettest reader <port>: one connection, read until it ends.
 nettest writer <port> <bytes> [chunk]: one connection gets <bytes> bytes of the pattern in
 writes of chunk bytes (4096), each written again from where a partial one stopped; how
 many writes there were, and how many partial.
-nettest sleepsrv <port> <ms>: listens, sleeps ms, then accepts one connection and reads it.
+nettest sleepsrv <port> <ms> [backlog]: listens (10/17/26: with room for backlog connections waiting,
+the default without it), sleeps ms, then accepts one connection and reads it.
 nettest recv <ip> <port>: a connection to ip:port, read until it ends (what came is shown).
 nettest churn <ip> <port> <n>: n connections to ip:port one after another, each closed at
 once; how many could not be made, and why.
@@ -158,10 +159,10 @@ static int send_bytes(int port, long count) {
 /**** for the tests with hand-made segments ****/
 
 /* one connection on port, the listener closed again: its descriptor, or -1 */
-static int accept_one(int port, int ms) {
+static int accept_one(int port, int ms, int backlog) {
     struct netaddr peer;
     char a[16];
-    int l = tcp_listen((unsigned short)port), c;
+    int l = backlog ? tcp_listen_backlog((unsigned short)port, backlog) : tcp_listen((unsigned short)port), c;
     if(l < 0) { printf("nettest: listen on port %d: %s\n", port, strerror(errno)); return -1; }
     printf("nettest: listening on port %d\n", port);
     fflush(stdout);
@@ -192,15 +193,15 @@ static int read_to_end(int c, int show) {
     return r < 0;
 }
 
-static int reader(int port, int ms) {
-    int c = accept_one(port, ms);
+static int reader(int port, int ms, int backlog) {
+    int c = accept_one(port, ms, backlog);
     return c < 0 ? 1 : read_to_end(c, 0);
 }
 
 static int writer(int port, long count, int chunk) {
     static char buf[16384];
     long done = 0, writes = 0, partial = 0;
-    int c = accept_one(port, 0), i, n;
+    int c = accept_one(port, 0, 0), i, n;
     if(c < 0) return 1;
     if(chunk < 1 || chunk > (int)sizeof(buf)) chunk = 4096;
     while(done < count) {
@@ -317,7 +318,7 @@ static int burst(int port, int bursts, int ms, int nsizes, char **sizes) {
     static char buf[16384];
     static unsigned int at[64];
     long done = 0, w;
-    int c = accept_one(port, 0), b, j, i, n;
+    int c = accept_one(port, 0, 0), b, j, i, n;
     if(c < 0) return 1;
     for(b = 0; b < bursts; b++) {
         if(b < 64) at[b] = uptime();
@@ -556,9 +557,10 @@ int main(int argc, char **argv) {
     if(argc == 4 && !strcmp(argv[1], "refuse")) return ip_arg(argv[2], &ip) ? 2 : connect_to(ip, atoi(argv[3]), 1);
     if(argc == 2 && !strcmp(argv[1], "limits")) return limits();
     if((argc == 3 || argc == 4) && !strcmp(argv[1], "hold")) return hold(atoi(argv[2]), argc == 4 ? atoi(argv[3]) : 0);
-    if(argc == 3 && !strcmp(argv[1], "reader")) return reader(atoi(argv[2]), 0);
+    if(argc == 3 && !strcmp(argv[1], "reader")) return reader(atoi(argv[2]), 0, 0);
     if((argc == 4 || argc == 5) && !strcmp(argv[1], "writer")) return writer(atoi(argv[2]), atol(argv[3]), argc == 5 ? atoi(argv[4]) : 4096);
-    if(argc == 4 && !strcmp(argv[1], "sleepsrv")) return reader(atoi(argv[2]), atoi(argv[3]));
+    if((argc == 4 || argc == 5) && !strcmp(argv[1], "sleepsrv"))
+        return reader(atoi(argv[2]), atoi(argv[3]), argc == 5 ? atoi(argv[4]) : 0);
     if(argc == 4 && !strcmp(argv[1], "recv")) return ip_arg(argv[2], &ip) ? 2 : recv_from(ip, atoi(argv[3]));
     if(argc == 5 && !strcmp(argv[1], "churn")) return ip_arg(argv[2], &ip) ? 2 : churn(ip, atoi(argv[3]), atoi(argv[4]));
     if(argc == 4 && !strcmp(argv[1], "pollsrv")) return pollsrv(atoi(argv[2]), atoi(argv[3]));
