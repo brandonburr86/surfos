@@ -15,7 +15,8 @@ kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 10/17/26 (audit B39): the kill that waited is put off while its task is inside a file system or
 the block cache (fs_hold, task.h): kill_escalate(), kill_task(), kill_hangup(). (B46, B47) Also
 while it is in an umount or a device request. (B48) A kernel thread killed outside any call that
-enters one before it dies gets that call's KILL_WAIT_MS.
+enters one before it dies gets that call's KILL_WAIT_MS. (B55) A hangup's kill of such a thread
+keeps the hangup's rule in that call: no escalation, the call's end awaited.
 */
 
 #include <surfos/types.h>
@@ -380,6 +381,7 @@ void kill_task(surf_task *t) {
         /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it
            (B48: TI_NOCALL, so that a call it enters meanwhile gets the call's KILL_WAIT_MS) */
         if(!t->in_call) t->intr |= TI_NOCALL;
+        else t->intr &= ~TI_NOCALL;             /* (B55: a hangup's mark of a task outside a call, which entered one since) */
         ktimer_start(&t->kill_timer, t->in_call ? KILL_WAIT_MS : FS_HOLD_RETRY_MS, false);
         wake_intr(t);
     }
@@ -398,7 +400,8 @@ static void kill_hangup(surf_task *t) {
         return;
     if(!t->in_call) {
         if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
-            t->intr |= TI_KILL | TI_NOCALL;     /* (B48) */
+            t->intr |= TI_KILL | TI_NOCALL | TI_HANGUP;   /* (B48; 10/18/26, B55: a call it enters keeps the hangup's
+                                                     rule, waited for to its end: kill_escalate()) */
             ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
             wake_intr(t);
         } else become_zombie(t, -1);
@@ -416,7 +419,18 @@ static void kill_escalate(void *arg) {
     surf_task *t = (surf_task *)arg;
     char line[160];
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) return;
-    if(t->intr & TI_HANGUP) {                       /* 10/6/26: a hangup's kill waits for the call, however long */
+    if((t->intr & TI_NOCALL) && t->in_call) {       /* 10/17/26 (audit B48): killed outside any call (put off inside a file
+                                                       system), it has entered a call since: that call's rule, KILL_WAIT_MS
+                                                       from now (before, it was killed at once in it 20 ms later, said
+                                                       to have overrun its 2 s, holding whatever the call held). 10/18/26
+                                                       (B55): a hangup's (TI_HANGUP too) then says so once and waits for
+                                                       the call's end, as kill_hangup() has it for a task in a call */
+        t->intr &= ~TI_NOCALL;
+        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+        return;
+    }
+    if((t->intr & TI_HANGUP) && !(t->intr & TI_NOCALL)) {   /* 10/6/26: a hangup's kill waits for the call, however long
+                                                       (B55: outside any call it comes as soon as the task is out) */
         snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still in its %s %u ms after its terminal hung up: "
                  "waiting for its end%s\n", t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call",
                  (u_int)KILL_WAIT_MS, t->mutexes ? ", holding a lock" : "");
@@ -425,14 +439,6 @@ static void kill_escalate(void *arg) {
     }
     if(t == curTask && t->crit) {                   /* inside KCRIT_ENTER (drawing): a tick later */
         ktimer_start(&t->kill_timer, 10, false);
-        return;
-    }
-    if((t->intr & TI_NOCALL) && t->in_call) {       /* 10/17/26 (audit B48): killed outside any call (put off inside a file
-                                                       system), it has entered a call since: that call's rule, KILL_WAIT_MS
-                                                       from now (before, it was killed at once in it 20 ms later, said
-                                                       to have overrun its 2 s, holding whatever the call held) */
-        t->intr &= ~TI_NOCALL;
-        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
         return;
     }
     if(in_fs(t)) {                                  /* 10/17/26 (audit B39): inside a file system or the block cache */
@@ -481,6 +487,17 @@ int task_call_leave(u_int what) {
     }
     irq_restore(flags);
     return cut;
+}
+
+/* 10/18/26 (audit B54): Ctrl+C reached the kernel command, which finished all the same (an umount, eject's unmount:
+   steps that must finish, B46): it is not cut short, so task_call_leave() does not say it was (status 130 under
+   "safe to remove"). A kill is no Ctrl+C: it stays */
+void task_interrupt_absorbed(void) {
+    u_long flags;
+    if(!curTask) return;
+    flags = irq_save();
+    curTask->intr &= ~TI_INT;
+    irq_restore(flags);
 }
 
 /* is t in owner's job: owner itself, or a program it started in the foreground, or one such a
