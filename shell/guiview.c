@@ -7,8 +7,9 @@ BMP pictures (guibmp.c reads them), fitted to the window or zoomed. A picture is
 chooser (the toolbar's Open, or O) or by another file (viewer_show, shell/gui_media.h: Files). It
 is read a piece at a time in the tick (Esc stops it), so a big file never freezes the desktop: a
 frame reads at most VIEW_TICK bytes, each read counting as VIEW_READ_MIN at least (a read is an
-open and a walk of the file's clusters), and one read takes as many rows next to each other in the
-file as a chunk holds, those a reduced picture skips too. The tick never opens a dialog: what goes
+open and a walk of the file's clusters), and the handler that opens a picture reads one piece. A
+read takes the rows a picture needs as they follow in the file, and the rows it skips between them
+only where reading them costs less than a read of its own. The tick never opens a dialog: what goes
 wrong there is said in the window and its status bar, as a dialog would replace whatever question
 is in front. The picture is kept decoded in gui_state: at most GUI_VIEW_PIXELS pixels, a
 bigger picture being reduced as it is read (nearest neighbour; the status bar says so). Drawing
@@ -32,7 +33,7 @@ dialogs (Save as BMP and Open BMP, guibmp.c).
 #define ZOOM_MIN (ONE / 64)
 #define ZOOM_MAX (ONE * 16)
 #define VIEW_TICK (256 * 1024)          /* the most a frame reads of a picture (and one chunk past it) */
-#define VIEW_READ_MIN (16 * 1024)       /* what a read counts for at least: 16 reads a frame at most */
+#define VIEW_READ_MIN (2 * 1024)        /* what a read counts for at least: 128 reads a frame at most */
 #define PAN_STEP 32                     /* the pixels an arrow moves a zoomed picture */
 
 /* the toolbar's buttons and the viewer's own dialogs (an Open chooser); Sketch's are gui_media.h's */
@@ -237,17 +238,24 @@ static void read_failed(struct gui_state *g, int err, bool tick) {
         dialog_message(g, "Cannot show the picture", name, err == -EIO ? "It could not be read to its end." : gui_error(g, err));
 }
 
-/* some more rows. A read takes the file's rows from the next one needed as far as a chunk holds them (the rows
-   between that a reduced picture skips are read too, and passed over), and counts for its bytes, VIEW_READ_MIN at
-   least, against the frame's VIEW_TICK: so a frame makes 16 reads at most, and reads 256 KB and a chunk at most */
+/* some more rows. A read counts for its bytes, VIEW_READ_MIN at least, against the budget: a frame's VIEW_TICK (so
+   it makes 128 reads at most, and reads 256 KB and a chunk at most), or one read in the handler that opens the
+   picture (tick false). A read takes the next row needed, and the needed rows after it as far as a chunk holds them,
+   while each costs no more than a read of its own would: a row next to the last one always, and one past rows that
+   a reduced picture skips only when those and it together come to VIEW_READ_MIN at most, the skipped rows read and
+   passed over. So rows of VIEW_READ_MIN or more are read as 0c245c0 read them (adjacent ones together), and short
+   rows (a narrow or 1-bit picture) in spans of many, not a read each. */
 static void read_some(struct gui_state *g, bool tick) {
     struct gui_viewer *v = &g->viewer;
-    u32 budget = VIEW_TICK, first, rows, span, len, size, i, k, bytes;
+    u32 budget = tick ? VIEW_TICK : VIEW_READ_MIN, first, rows, span, len, size, i, k, bytes, step;
     int r;
     while(v->loading && budget) {
         first = file_row(v, v->next);
-        for(rows = 1; v->next + rows < v->dh && (file_row(v, v->next + rows) - first + 1) * v->bmp.stride <= GUI_VIEW_CHUNK;
-            rows++) ;
+        for(rows = 1; v->next + rows < v->dh; rows++) {
+            step = (file_row(v, v->next + rows) - file_row(v, v->next + rows - 1)) * v->bmp.stride;   /* the skipped and it */
+            if((file_row(v, v->next + rows) - first + 1) * v->bmp.stride > GUI_VIEW_CHUNK) break;
+            if(step > (v->bmp.stride > VIEW_READ_MIN ? v->bmp.stride : VIEW_READ_MIN)) break;     /* a read of its own: cheaper */
+        }
         span = file_row(v, v->next + rows - 1) - first + 1;   /* the file's rows read, from first */
         bytes = span * v->bmp.stride;
         len = size = 0;

@@ -135,11 +135,30 @@ static u8 shot_byte(u32 off) {
     return off < 54 ? head_byte(off, SHOT_SIZE, SHOT_W, SHOT_H, 24) : 0x40;
 }
 
+/* a made picture: 54 bytes of headers, then its rows bottom-up, pixel x, y (from the top) pic(x, y) */
+static u32 pic(u32 x, u32 y) { return ((x * 2654435761u) ^ (y * 40503u)) >> 8 & 0xFFFFFF; }
+static u8 pic_byte(u32 off, u32 w, u32 h, u32 bpp) {
+    u32 stride = (w * bpp + 31) / 32 * 4, r, c;
+    if(off < 54) return head_byte(off, 54 + stride * h, w, h, bpp);
+    r = (off - 54) / stride;
+    c = (off - 54) % stride;
+    return c / (bpp / 8) < w ? (u8)(pic(c / (bpp / 8), h - 1 - r) >> (8 * (c % (bpp / 8)))) : 0;
+}
+#define PHOTO_SIZE (54u + 12000u * 3000)        /* 4000 x 3000 x 24 */
+#define TALL_SIZE (54u + 4096u * 16384)         /* 1024 x 16384 x 32 */
+static u8 photo_byte(u32 off) { return pic_byte(off, 4000, 3000, 24); }
+static u8 tall_byte(u32 off) { return pic_byte(off, 1024, 16384, 32); }
+static u32 edge_size;                           /* a 2048 x 1000 24-bit picture (6 MB), then bytes to make it edge_size */
+static u8 edge_byte(u32 off) { return off < 54 ? head_byte(off, edge_size, 2048, 1000, 24) : 0x40; }
+
 static bool made(const char *path, u32 *size, u8 (**byte)(u32)) {
     if(!strcmp(path, "/big.bin")) { *size = BIG_SIZE; *byte = big_byte; return true; }
     if(!strcmp(path, "/max.bin")) { *size = MAX_SIZE; *byte = big_byte; return true; }
     if(!strcmp(path, "/huge.bmp")) { *size = HUGE_SIZE; *byte = huge_byte; return true; }
     if(!strcmp(path, "/shot.bmp")) { *size = SHOT_SIZE; *byte = shot_byte; return true; }
+    if(!strcmp(path, "/photo.bmp")) { *size = PHOTO_SIZE; *byte = photo_byte; return true; }
+    if(!strcmp(path, "/tall.bmp")) { *size = TALL_SIZE; *byte = tall_byte; return true; }
+    if(!strcmp(path, "/edge.bmp")) { *size = edge_size; *byte = edge_byte; return true; }
     return false;
 }
 
@@ -478,7 +497,8 @@ static void viewer(void) {
     gui_render(&g, &screen);
     CHECK(shows(w->x + 17, w->y + 59 + 16, "big.bmp could not be read", CORAL) &&
           shows(w->x + 17, w->y + 59 + 38, "Open a BMP picture", FOAM));
-    /* a picture of 16384 x 16384 x 32 bits (1 GB): kept at 1024 x 1024, a frame reading at most 256 KB (four rows) */
+    /* a picture of 16384 x 16384 x 32 bits (1 GB): kept at 1024 x 1024, a frame reading at most 256 KB (four rows),
+       the opening handler one */
     viewer_show(&g, "/huge.bmp");
     CHECK(v->loading && v->dw == 1024 && v->dh == 1024);
     for(k = 0; k < 1000 && v->loading; k++) {
@@ -486,7 +506,7 @@ static void viewer(void) {
         ticks(1);
         if(big_bytes > 256 * 1024 + 65536) break;
     }
-    CHECK(v->ready && k == 255 && big_bytes <= 256 * 1024);
+    CHECK(v->ready && k == 256 && big_bytes <= 256 * 1024);
     for(i = 0; i < 1024; i += 61) {
         sx = (2 * (u32)i + 1) * 16384 / 2048;
         sy = (2 * (u32)(1023 - i) + 1) * 16384 / 2048;
@@ -789,13 +809,20 @@ static void sketch(void) {
     CHECK(g.canvas[85 * 400 + 185] == 3);
     /* 1 GB: refused (Open BMP reads in the dialog's answer), the Image Viewer named; 6 MB: read, a row at a time */
     CHECK(sketch_load(&g, "/huge.bmp") == -EFBIG && g.dialog.kind == GUI_DLG_MESSAGE &&
-          !strcmp(g.dialog.title, "Too large for Sketch") && strstr(g.dialog.text[0], "huge.bmp has 1024 MB") &&
+          !strcmp(g.dialog.title, "Too large for Sketch") &&
+          !strcmp(g.dialog.text[0], "huge.bmp has more than the 8 MB Sketch opens.") &&
           strstr(g.dialog.text[1], "Image Viewer"));
     key(27);
     CHECK(g.canvas[85 * 400 + 185] == 3);
     big_reads = 0;
     CHECK(sketch_load(&g, "/shot.bmp") == 0 && strstr(s->status, "shrunk") && big_reads == 181);
     CHECK(g.canvas[39] == 0 && g.canvas[40] == 1 && g.canvas[179 * 400 + 359] == 1 && g.canvas[360] == 0);   /* 320 x 180, ink */
+    edge_size = 8 * 1024 * 1024;                        /* 8 MB exactly: opened; a byte more: refused, saying "more than" */
+    CHECK(sketch_load(&g, "/edge.bmp") == 0 && !g.dialog.kind && g.canvas[200] == 1);
+    edge_size = 8 * 1024 * 1024 + 1;
+    CHECK(sketch_load(&g, "/edge.bmp") == -EFBIG && g.dialog.kind == GUI_DLG_MESSAGE &&
+          !strcmp(g.dialog.text[0], "edge.bmp has more than the 8 MB Sketch opens."));
+    key(27);
     /* the window's buttons: Open (212) and Save (272) */
     fake_click(&g, w->x + 230, w->y + 50); CHECK(g.dialog.kind == GUI_DLG_OPEN); key(27);
     fake_click(&g, w->x + 290, w->y + 50); CHECK(g.dialog.kind == GUI_DLG_SAVE); key(27);
@@ -933,7 +960,7 @@ static void review_hex(void) {
     static u8 data[200000];
     static const char *const bad[] = { "0xZZ", "", "0xABC", "a pattern of 129 bytes" };
     char text[200];
-    u32 i, k;
+    u32 i;
     int b;
     /* a Find that is no pattern stops the search that runs: never "Found" a match of nothing */
     memset(text, 'A', 129); text[129] = 0;
@@ -1050,6 +1077,45 @@ static void review_sketch(void) {
     CHECK(g.canvas[199] == 1 && g.canvas[179 * GUI_CANVAS_W + 199] == 1 && !g.canvas[198] && !g.canvas[200]);
 }
 
+/* the frames a big picture takes (the second review): a 12-megapixel photo and a tall, narrow picture, both reduced.
+   0c245c0 took 40 and 63 frames, reading only the rows they need; 2a75187 took 81 and 204, reading the rows they skip
+   too. They must take one frame more at most (the opening handler reads one piece, no more), read the rows they
+   need and no others, and keep a frame to 128 reads and 256 KB and a chunk, with every pixel right where looked at */
+static void review_frames(void) {
+    static const struct { const char *path; u32 w, h, frames, bytes; } pics[] = {
+        { "/photo.bmp", 4000, 3000, 41, 2048 + 887 * 12000 },
+        { "/tall.bmp", 1024, 16384, 64, 2048 + 4096 * 4096 },
+    };
+    struct gui_viewer *v = &g.viewer;
+    u32 i, j, frames, total, most_reads, most_bytes, dx, dy, c;
+    for(i = 0; i < 2; i++) {
+        desktop(960, 540);
+        big_reads = big_bytes = 0;
+        viewer_show(&g, pics[i].path);
+        CHECK(v->loading && big_reads == 2 && big_bytes <= 2048 + GUI_VIEW_CHUNK);   /* the headers, then one read */
+        total = big_bytes;
+        most_reads = most_bytes = 0;
+        for(frames = 0; v->loading && frames < 1000; frames++) {
+            big_reads = big_bytes = 0;
+            ticks(1);
+            total += big_bytes;
+            if(big_reads > most_reads) most_reads = big_reads;
+            if(big_bytes > most_bytes) most_bytes = big_bytes;
+        }
+        CHECK(v->ready && v->w == pics[i].w && v->h == pics[i].h);
+        CHECK(frames <= pics[i].frames && total == pics[i].bytes && most_reads <= 128 && most_bytes <= 256 * 1024 + GUI_VIEW_CHUNK);
+        if(frames > pics[i].frames || total != pics[i].bytes)
+            printf("  (%s: %u frames, %u bytes read)\n", pics[i].path, frames, total);
+        for(j = 0; j < 97; j++) {
+            dx = j * 389 % v->dw;
+            dy = j * 1291 % v->dh;
+            c = pic((2 * dx + 1) * v->w / (2 * v->dw), (2 * dy + 1) * v->h / (2 * v->dh));
+            CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 1] == (u8)(c >> 8) &&
+                  v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
+        }
+    }
+}
+
 /**** every window inside the screen ****/
 
 static void windows(int width, int height) {
@@ -1106,6 +1172,7 @@ int main(void) {
     review_viewer();
     review_hex();
     review_sketch();
+    review_frames();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);

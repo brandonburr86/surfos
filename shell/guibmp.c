@@ -273,7 +273,7 @@ int sketch_load(struct gui_state *g, const char *path) {
     struct gui_sketchbmp *s = &g->viewer.sketch;
     struct gui_bmp b;
     u8 *row = s->file, *canvas = s->file + GUI_VIEW_CHUNK;   /* a row of the file (64 KB at most), the new canvas */
-    char why[80], line[80], amount[24];
+    char why[80], line[80];
     u32 pw, ph, ox, oy, x, y, sy, sx, len = 0, size = 0;
     int r = bmp_open(g, path, &b, s->palette, s->file, why, sizeof(why));
     if(r) {
@@ -281,8 +281,7 @@ int sketch_load(struct gui_state *g, const char *path) {
         return r;
     }
     if(b.size > SKETCH_OPEN_MAX) {                      /* read here, in the answer: bounded */
-        gui_bytes(b.size, amount, sizeof(amount));
-        snprintf(line, sizeof(line), "%s has %s: Sketch opens up to 8 MB.", gui_basename(path), amount);
+        snprintf(line, sizeof(line), "%s has more than the 8 MB Sketch opens.", gui_basename(path));
         dialog_message(g, "Too large for Sketch", line, "The Image Viewer shows larger pictures.");
         return -EFBIG;
     }
