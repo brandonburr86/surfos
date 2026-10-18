@@ -316,6 +316,16 @@ static void log_reading(void) {
         first_rows(&first, &rows, &total);
         CHECK(first == total - rows && v->follow);
     }
+    gui_act(&g, ACT_MINIMIZE);                          /* tucked away: not read; read at once when it is back */
+    CHECK(g.win[GUI_LOG].min);
+    old = reads;
+    lines(136, 140);
+    tick_ms(3000);
+    CHECK(reads == old);
+    gui_open(&g, GUI_LOG);
+    tick_ms(10);
+    first_rows(&first, &rows, &total);
+    CHECK(reads == old + 1 && total == 140 && row_is(rows - 1, "line 0140"));
     gui_close(&g, GUI_LOG);
     CHECK(!g.win[GUI_LOG].open);
     old = reads;                                        /* not read while it is closed */
