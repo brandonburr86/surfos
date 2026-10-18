@@ -22,15 +22,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--uart", required=True)
     ap.add_argument("--frames", required=True)
-    ap.add_argument("--expect", required=True)
+    ap.add_argument("--expect", help="gpuscenes_expect.h; without it, gpudiag's own comparisons are taken")
     ap.add_argument("--log")
     ap.add_argument("--engine-scenes", type=int)
     a = ap.parse_args()
 
     text = open(a.uart, errors="replace").read().replace("\r", "")
     expect = {}
-    for m in re.finditer(r"0x([0-9a-f]{8})u,\s+/\*\s*(\d+) (.*?) \*/", open(a.expect).read()):
-        expect[int(m.group(2))] = (int(m.group(1), 16), m.group(3))
+    if a.expect:
+        for m in re.finditer(r"0x([0-9a-f]{8})u,\s+/\*\s*(\d+) (.*?) \*/", open(a.expect).read()):
+            expect[int(m.group(2))] = (int(m.group(1), 16), m.group(3))
     frames = set()
     nframes = 0
     if a.frames != "-":
@@ -60,8 +61,16 @@ def main() -> int:
             problems.append("scene %d (%s): FRAME_CRC %08x, the model's %08x" % (n, name, seen[n], crc))
         if frames and seen[n] not in frames:
             problems.append("scene %d (%s): no captured frame has CRC %08x" % (n, name, seen[n]))
-    if not expect:
+    if a.expect and not expect:
         problems.append("no expected CRCs in %s" % a.expect)
+    if not a.expect:
+        if not seen:
+            problems.append("no scene printed a CRC")
+        expect = {n: (crc, "scene %d" % n) for n, crc in seen.items()}
+    if a.engine_scenes is not None:
+        n_eng = len(re.findall(r"^scene +\d+: engine:.* crc [0-9a-f]{8} ok", text, re.M))
+        if n_eng != a.engine_scenes:
+            problems.append("%d engine scenes passed, %d expected" % (n_eng, a.engine_scenes))
     cycles = ""
     if a.log:
         m = re.search(r"after (\d+) cycles", open(a.log, errors="replace").read())

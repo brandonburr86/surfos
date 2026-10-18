@@ -7,7 +7,9 @@ A boot ROM image (build/fw/gpudiag.mem) for the GPU designs (sysinfo.FEATURES.GP
 section 10), like bramdiag: it needs only the CPU, block RAM, the UART, the timer, VRAM and the
 video block. It prints the build identity, then checks the VRAM window (walking ones, address
 lines, byte lanes, March C- and address-in-address over all 300 KiB, the error at 300 KiB for
-loads and stores, no fetch), the new video registers and GPAL, then draws gpudiag's scenes
+loads and stores, no fetch), the new video registers and GPAL, the engine's registers and errors
+(a full FIFO and OVERFLOW, an unknown opcode, a refused target, a fence and its interrupt at intc
+source gpu), then draws gpudiag's scenes
 (gpuscenes.c) one after the other. For each it waits until a frame that began after the
 picture was complete has been shown (FRAME_COUNT two on), and compares FRAME_CRC with the CRC
 the C model computed for that scene when the ROM was built (gpuscenes_expect.h), printing both.
@@ -171,16 +173,21 @@ static void video_registers(uint32_t unused)
 
 /* ---- the scenes, through the hardware ---- */
 
-static uint32_t engine_timeouts;
+static uint32_t engine_timeouts, fifo_credit;
 
+/* a CMD word: FIFO_FREE is read only when the words known to fit are used up (it only grows
+ * while nothing is written) */
 static void hw_cmd(uint32_t w)
 {
     uint32_t t0 = timer_now32();
-    while (REG(SURF_GPU_BASE, SURF_GPU_FIFO_FREE) == 0)
-        if ((uint32_t)(timer_now32() - t0) > 100000u) {
+    while (fifo_credit == 0) {
+        fifo_credit = REG(SURF_GPU_BASE, SURF_GPU_FIFO_FREE);
+        if (fifo_credit == 0 && (uint32_t)(timer_now32() - t0) > 100000u) {
             engine_timeouts++;
             return;
         }
+    }
+    fifo_credit--;
     REG(SURF_GPU_BASE, SURF_GPU_CMD) = w;
 }
 
@@ -211,6 +218,71 @@ static int wait_still(void)
     return 1;
 }
 
+#define GREG(off) REG(SURF_GPU_BASE, off)
+#define GPU_STICKY (SURF_GPU_STATUS_OVERFLOW_MASK | SURF_GPU_STATUS_BAD_OPCODE_MASK | \
+                    SURF_GPU_STATUS_BAD_PARAM_MASK | SURF_GPU_STATUS_FENCE_EV_MASK)
+
+/* the engine's registers and errors: overflow behind a WAIT_VBLANK, unknown opcodes, a refused
+ * target, a fence with its interrupt (intc source gpu) */
+static void gpu_registers(uint32_t unused)
+{
+    (void)unused;
+    diag_section("gpu registers and errors");
+    GREG(SURF_GPU_CTRL) = SURF_GPU_CTRL_ABORT_MASK;
+    GREG(SURF_GPU_STATUS) = GPU_STICKY;
+    GREG(SURF_GPU_IE) = 0;
+    fifo_credit = 0;
+    diag_check(GREG(SURF_GPU_ID) == GPU_ID_VALUE, "gpu.ID 0x%08x", GREG(SURF_GPU_ID));
+    diag_check(GREG(SURF_GPU_INFO) == (300u << SURF_GPU_INFO_VRAM_KIB_LSB | 64u), "gpu.INFO 0x%08x", GREG(SURF_GPU_INFO));
+    diag_check(GREG(SURF_GPU_FIFO_FREE) == 64 && GREG(SURF_GPU_STATUS) == 0, "idle: FIFO_FREE %u, STATUS 0x%x",
+               GREG(SURF_GPU_FIFO_FREE), GREG(SURF_GPU_STATUS));
+    /* a full FIFO: the engine waits for the next vertical blanking meanwhile */
+    REG(SURF_VIDEO_BASE, SURF_VIDEO_STATUS) = SURF_VIDEO_STATUS_VBLANK_EV_MASK;
+    uint32_t t0 = timer_now32();
+    while (!(REG(SURF_VIDEO_BASE, SURF_VIDEO_STATUS) & SURF_VIDEO_STATUS_VBLANK_EV_MASK) &&
+           (uint32_t)(timer_now32() - t0) < 100000u)
+        ;
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_WAIT_VBLANK, 0);
+    for (uint32_t i = 0; i < 32; i++) {
+        GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FENCE, 0);
+        GREG(SURF_GPU_CMD) = 0x500u + i;
+    }
+    uint32_t free_full = GREG(SURF_GPU_FIFO_FREE);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FENCE, 0);                  /* dropped */
+    uint32_t st = GREG(SURF_GPU_STATUS);
+    diag_check(free_full == 0 && (st & SURF_GPU_STATUS_OVERFLOW_MASK) && (st & SURF_GPU_STATUS_BUSY_MASK),
+               "a full FIFO: FIFO_FREE %u, STATUS 0x%x", free_full, st);
+    hw_sync();
+    diag_check(GREG(SURF_GPU_FENCE) == 0x51Fu && GREG(SURF_GPU_FIFO_FREE) == 64,
+               "after the vertical blanking: FENCE 0x%x, FIFO_FREE %u", GREG(SURF_GPU_FENCE), GREG(SURF_GPU_FIFO_FREE));
+    GREG(SURF_GPU_STATUS) = SURF_GPU_STATUS_OVERFLOW_MASK;
+    /* an unknown opcode, a refused target: sticky, nothing else changes */
+    GREG(SURF_GPU_CMD) = GPU_HDR(0x0Au, 0);
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
+    GREG(SURF_GPU_CMD) = 2;                                         /* not a multiple of 4 */
+    GREG(SURF_GPU_CMD) = 640;
+    GREG(SURF_GPU_CMD) = GPU_WH(640, 480);
+    hw_sync();
+    st = GREG(SURF_GPU_STATUS);
+    diag_check((st & GPU_STICKY) == (SURF_GPU_STATUS_BAD_OPCODE_MASK | SURF_GPU_STATUS_BAD_PARAM_MASK),
+               "unknown opcode and refused target: STATUS 0x%x", st);
+    GREG(SURF_GPU_STATUS) = GPU_STICKY;
+    /* a fence with its interrupt, through the interrupt controller */
+    GREG(SURF_GPU_IE) = SURF_GPU_IE_FENCE_MASK;
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_FENCE, GPU_FENCE_IRQ);
+    GREG(SURF_GPU_CMD) = 0xC0FFEEu;
+    hw_sync();
+    uint32_t pend = REG(SURF_INTC_BASE, SURF_INTC_PENDING);
+    diag_check(GREG(SURF_GPU_FENCE) == 0xC0FFEEu && (pend & (1u << SURF_IRQ_GPU)),
+               "FENCE with IRQ: FENCE 0x%x, intc.PENDING 0x%x", GREG(SURF_GPU_FENCE), pend);
+    GREG(SURF_GPU_STATUS) = SURF_GPU_STATUS_FENCE_EV_MASK;
+    pend = REG(SURF_INTC_BASE, SURF_INTC_PENDING);
+    diag_check(!(pend & (1u << SURF_IRQ_GPU)), "the gpu interrupt stays after FENCE_EV is cleared");
+    GREG(SURF_GPU_IE) = 0;
+    diag_check(engine_timeouts == 0, "the engine did not finish in time");
+    diag_section_end();
+}
+
 static int engine_present(void)
 {
     expect_trap(0);
@@ -235,6 +307,7 @@ static void scenes(uint32_t unused)
         }
         diag_section(name);
         engine_timeouts = 0;
+        fifo_credit = 0;
         gpu_scenes[n].draw(&hw_sink);
         if (gpu_scenes[n].engine)
             hw_sync();
@@ -294,6 +367,8 @@ int main(void)
             diag_guard(vram_window, 0);
             diag_guard(video_registers, 0);
             led_set(0x7, 0x004);
+            if (engine_present())
+                diag_guard(gpu_registers, 0);
             diag_guard(scenes, 0);
             show_result();
         }

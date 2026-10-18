@@ -272,7 +272,9 @@ are in VRAM); with IRQ it also sets STATUS.FENCE_EV.
 interval (the event that sets video STATUS.VBLANK_EV).
 
 Commands run in order, one at a time; a command's writes are in VRAM before the next command
-starts. ABORT stops the running command between two accesses.
+starts. ABORT stops the running command between two accesses. EXPAND and WRITE_RECT write a
+destination word (four pixels) only once they have every one of its pixels, so after an ABORT up
+to three pixels taken from the last data words may not have been drawn.
 
 ## 6. The engine (`rtl/peripherals/surf_gpu.v`)
 
@@ -420,3 +422,30 @@ flow can constrain a block to a region)
   directed tests written from section 5, not from the RTL.
 * **Open-flow sign-off.** As for every SurfCPU bitstream, nextpnr's timing is an estimate and the
   CDC constraints are Vivado's only (OPEN-FLOW.md).
+
+## 14. The physical tests (the integrator's, with the owner)
+
+Nothing here has run on a board. These are the steps for G1 and G2 on the owner's A7-100T, with
+the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is needed for gpudiag.
+
+1. Build and load the diagnostic: `make -C surfcpu build-rom`, then on the Mac
+   `make -C surfcpu build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=surfcpu_arty_a7_gpudiag` and
+   `make -C surfcpu program-volatile DESIGN=surfcpu_arty_a7_gpudiag` (volatile: the flash is not
+   touched).
+2. Watch the UART (`make -C surfcpu uart-console`) and press RESET (or type Ctrl-R): gpudiag prints
+   its identity (SoC 0.3.0, features 17f: no DDR), its sections, one line per scene
+   with its FRAME_CRC, and `GPUDIAG: PASS (n checks)`. Every scene's CRC must be the one in
+   section 14.1; `sim/gpu/gpudiag_check.py --uart <capture> --frames - --expect
+   build/fw/gen/gpuscenes_expect.h` checks a capture.
+3. The monitor: each scene shows for about a twentieth of a second while it is checked; the last
+   picture (the demo: colour bands, boxes, rays, "SURFGPU" in large letters, a yellow frame) stays,
+   with a green bar on the top text row saying `GPUDIAG: PASS (...)` (red with FAIL). The owner
+   confirms the picture: square corners, the frame on all four edges, nothing cut off.
+4. G2 also: the DDR+GPU design boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does
+   (`make build-fpga FLOW=openxc7 DESIGN=surfcpu_arty_a7_ddr_gpu`, then the m7 steps of
+   PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`); SurfBoot's banner shows features 1ff.
+
+### 14.1 Expected FRAME_CRCs
+
+(from `build/fw/gen/gpuscenes_expect.h`, the C model's values for gpudiag's scenes; filled in with
+G2)

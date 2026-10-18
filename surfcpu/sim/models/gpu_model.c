@@ -203,15 +203,35 @@ static void set_target(struct gpu_engine *g)
     g->cy1 = h;
 }
 
+static int64_t max64(int64_t a, int64_t b) { return a > b ? a : b; }
+static int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
+
+/* the effective clip [*x0, *x1) x [*y0, *y1) */
+static void eclip(const struct gpu_engine *g, int64_t *x0, int64_t *y0, int64_t *x1, int64_t *y1)
+{
+    *x0 = g->cx0;
+    *y0 = g->cy0;
+    *x1 = min64(g->cx1, g->tw);
+    *y1 = min64(g->cy1, g->th);
+}
+
+/* every pixel of the rectangle inside the clip: walk only the part that can be inside it (the
+ * rectangle may be 65535 x 65535) */
 static void fill_rect(struct gpu_engine *g)
 {
     int64_t x = sx(g->p[0]), y = sy(g->p[0]), w = ux(g->p[1]), h = uy(g->p[1]);
+    int64_t cx0, cy0, cx1, cy1;
+    eclip(g, &cx0, &cy0, &cx1, &cy1);
     uint8_t c = (uint8_t)g->hdr;
-    for (int64_t py = y; py < y + h; py++)
-        for (int64_t px = x; px < x + w; px++)
+    for (int64_t py = max64(y, cy0); py < min64(y + h, cy1); py++)
+        for (int64_t px = max64(x, cx0); px < min64(x + w, cx1); px++)
             put(g, px, py, c);
 }
 
+static uint8_t snapshot[GPU_VRAM_BYTES];
+
+/* destination pixel (px, py) is written when inside the clip and its source is inside the
+ * target, with the source's value as it was before the command (and not the key colour) */
 static void copy_rect(struct gpu_engine *g)
 {
     int64_t x0 = sx(g->p[0]), y0 = sy(g->p[0]), x1 = sx(g->p[1]), y1 = sy(g->p[1]);
@@ -220,28 +240,19 @@ static void copy_rect(struct gpu_engine *g)
     uint8_t keyc = (uint8_t)g->hdr;
     if (!w || !h)
         return;
-    /* the whole source as it was before anything is written */
-    uint8_t *src = (uint8_t *)malloc((size_t)(w * h));
-    uint8_t *ok = (uint8_t *)malloc((size_t)(w * h));
-    if (!src || !ok)
-        abort();
-    for (int64_t j = 0; j < h; j++)
-        for (int64_t i = 0; i < w; i++) {
-            int t = in_target(g, x0 + i, y0 + j);
-            ok[j * w + i] = (uint8_t)t;
-            src[j * w + i] = t ? g->vram[at(g, x0 + i, y0 + j)] : 0;
-        }
-    for (int64_t j = 0; j < h; j++)
-        for (int64_t i = 0; i < w; i++) {
-            if (!ok[j * w + i])
+    memcpy(snapshot, g->vram, GPU_VRAM_BYTES);
+    int64_t cx0, cy0, cx1, cy1;
+    eclip(g, &cx0, &cy0, &cx1, &cy1);
+    for (int64_t py = max64(y1, cy0); py < min64(y1 + h, cy1); py++)
+        for (int64_t px = max64(x1, cx0); px < min64(x1 + w, cx1); px++) {
+            int64_t qx = px - x1 + x0, qy = py - y1 + y0;      /* its source */
+            if (!in_target(g, qx, qy))
                 continue;
-            uint8_t v = src[j * w + i];
+            uint8_t v = snapshot[at(g, qx, qy)];
             if (key && v == keyc)
                 continue;
-            put(g, x1 + i, y1 + j, v);
+            put(g, px, py, v);
         }
-    free(src);
-    free(ok);
 }
 
 static void line(struct gpu_engine *g)

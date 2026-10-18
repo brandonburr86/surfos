@@ -190,18 +190,23 @@ module surfcpu_soc #(
     wire [16:0] vram_pix_addr;
     wire [31:0] vram_pix_data;
     wire        video_vblank;
+    wire        gpu_irq;
     generate
         if (HAS_GPU != 0) begin : g_gpu
-            wire        g_gnt, g_rvalid;
-            wire [31:0] g_rdata;
+            wire        g_req, g_we, g_gnt, g_rvalid;
+            wire [3:0]  g_be;
+            wire [16:0] g_addr;
+            wire [31:0] g_wdata, g_rdata;
             surf_vram #(.BYTES(VRAM_BYTES)) u_vram (
                 .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_VRAM),
-                .g_req(1'b0), .g_we(1'b0), .g_be(4'h0), .g_addr(17'd0), .g_wdata(32'h0),
+                .g_req(g_req), .g_we(g_we), .g_be(g_be), .g_addr(g_addr), .g_wdata(g_wdata),
                 .g_gnt(g_gnt), .g_rvalid(g_rvalid), .g_rdata(g_rdata),
                 .pix_clk(pix_clk), .pix_addr(vram_pix_addr), .pix_data(vram_pix_data));
-            // the engine's registers: answered with errors until surf_gpu is in (G2)
-            surf_bus_err u_gpu (.clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_GPU));
-            wire unused_gpu = &{1'b0, video_vblank, g_gnt, g_rvalid, g_rdata};
+            surf_gpu #(.VRAM_BYTES(VRAM_BYTES)) u_gpu (
+                .clk(clk), .rst(rst), `SURF_DT_S(`SURF_DT_GPU),
+                .irq(gpu_irq), .vblank(video_vblank),
+                .m_req(g_req), .m_we(g_we), .m_be(g_be), .m_addr(g_addr), .m_wdata(g_wdata),
+                .m_gnt(g_gnt), .m_rvalid(g_rvalid), .m_rdata(g_rdata));
         end else begin : g_nogpu
             // the decoder never selects these targets: they stay silent
             assign dt_req_ready[`SURF_DT_GPU]           = 1'b0;
@@ -213,6 +218,7 @@ module surfcpu_soc #(
             assign dt_rsp_rdata[32*`SURF_DT_VRAM +: 32] = 32'h0;
             assign dt_rsp_err[`SURF_DT_VRAM]            = 1'b0;
             assign vram_pix_data                        = 32'h0;
+            assign gpu_irq                              = 1'b0;
             wire unused_gpu = &{1'b0, dt_req_valid[`SURF_DT_GPU], dt_req_valid[`SURF_DT_VRAM],
                                 vram_pix_addr, video_vblank};
         end
@@ -237,6 +243,7 @@ module surfcpu_soc #(
         irq_sources[SURF_IRQ_GPIO]  = gpio_irq;
         irq_sources[SURF_IRQ_VIDEO] = video_irq;
         irq_sources[SURF_IRQ_SPI]   = spi_irq;
+        irq_sources[SURF_IRQ_GPU]   = gpu_irq;          // 0 without HAS_GPU
     end
 
     surf_intc u_intc (

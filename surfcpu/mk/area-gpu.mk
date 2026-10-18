@@ -10,6 +10,14 @@
 #                          modes captured from the pins and compared with the model, FRAME_CRC too
 #   make test-gpu-interconnect  the soc track's tb_interconnect with HAS_GPU = 1 (gpu and vram reach
 #                          their targets; the HAS_GPU = 0 runs are test-soc-units' own)
+#   make test-gpu-encodings  gpu.h and surf_gpu.v agree on every opcode, header bit, the ID and VRAM's size
+#   make test-gpu-engine   surf_gpu with surf_vram against the C model: directed tests of every command
+#                          and error, then randomized command streams, VRAM compared at every FENCE
+#   make test-gpu-mutants  one-line bugs planted in copies of surf_gpu, surf_vram and surf_video must
+#                          each fail their test (sim/gpu/mutants.py; not part of check)
+#   make gpu-netlist-sim   the synthesized netlist of an open-flow gpudiag build (make build-fpga
+#                          FLOW=openxc7 DESIGN=surfcpu_arty_a7_gpudiag) runs gpudiag from its pins to
+#                          GPUDIAG: PASS (sim/board/netlist_sim.sh; minutes; not part of check)
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
 #                          the pins (sim/gpu/gpudiag_check.py)
@@ -33,11 +41,12 @@ GPU_MODEL    = sim/models/gpu_model.c
 GPU_MODEL_H  = sim/models/gpu_model.h firmware/include/surfcpu/gpu.h
 
 VRAM_RTL     = rtl/soc/surf_vram.v rtl/soc/surf_vram_bank.v
+GPU_RTL      = rtl/peripherals/surf_gpu.v rtl/lib/surf_fifo.v
 GVIDEO_RTL   = rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v rtl/lib/surf_sync.v \
                rtl/lib/surf_pulse_sync.v rtl/lib/surf_cdc_word.v
 
 .PHONY: lint-gpu test-gpu test-gpu-model test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-soc \
-        build-gpu-rom gpu-scenes
+        build-gpu-rom gpu-scenes test-gpu-encodings test-gpu-engine test-gpu-mutants gpu-netlist-sim
 lint: lint-gpu
 build-rom: build-gpu-rom
 test-soc: test-gpu
@@ -49,6 +58,8 @@ GPU_SOC_RTL = rtl/soc/surfcpu_soc.v $(SOC_BUS_RTL) $(SOC_MEM_RTL) $(VRAM_RTL) $(
 
 lint-gpu:
 	$(Q)$(GPU_VLINT) --top-module surf_vram $(VRAM_RTL)
+	$(Q)$(GPU_VLINT) --top-module surf_gpu $(GPU_RTL)
+	$(Q)$(IVERILOG) -g2005 -Wall -Irtl/generated -Irtl/lib -o /dev/null $(GPU_RTL)
 	$(Q)for g in 0 1; do $(GPU_VLINT) --top-module surf_video -GHAS_GFX=$$g $(GVIDEO_RTL) || exit 1; done
 	$(Q)for g in 0 1; do $(GPU_VLINT) --top-module surfcpu_soc -GHAS_GPU=$$g $(GPU_SOC_RTL) || exit 1; done
 	$(Q)$(GPU_VLINT) --top-module surfcpu_soc -GHAS_GPU=1 -GHAS_DDR=0 $(GPU_SOC_RTL)
@@ -56,9 +67,10 @@ lint-gpu:
 	  -Psurfcpu_soc.HAS_GPU=1 -o /dev/null $(GPU_SOC_RTL)
 	$(Q)$(BOARD_VLINT) $(TOP_INCS) -DARTY_HAS_GPU --top-module surfcpu_arty_a7_top $(TOP_SRC) $(BOARD_PRIMS)
 	$(Q)$(BOARD_VLINT) $(TOP_INCS) -DARTY_HAS_GPU -DARTY_HAS_DDR --top-module surfcpu_arty_a7_top $(DDR_TOP_SRC) $(BOARD_PRIMS)
-	@echo "lint-gpu: surf_vram, surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles"
+	@echo "lint-gpu: surf_vram, surf_gpu, surf_video (HAS_GFX 0 and 1), surfcpu_soc (HAS_GPU 0 and 1), the board top with ARTY_HAS_GPU (with and without DDR): Verilator -Wall clean, Icarus -g2005 compiles"
 
-test-gpu: test-gpu-model test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-soc
+test-gpu: test-gpu-model test-gpu-encodings test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-engine \
+          test-gpu-soc
 	@echo "test-gpu: PASS"
 
 # run one binary per seed, keep each log, stop with it on the first failure:
@@ -173,15 +185,46 @@ GPU_SIM_DEPS = $(wildcard rtl/soc/*.v rtl/soc/*.vh rtl/peripherals/*.v rtl/cpu/*
 $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS)
 	@mkdir -p $(BUILD)/sim/obj_surfsim_gpu
 	$(Q)$(SOC_VERILATE) -GHAS_GPU=1 --Mdir $(BUILD)/sim/obj_surfsim_gpu -o surfsim \
-	  $(SOC_TOP_RTL) $(VRAM_RTL) $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim_gpu.txt 2>&1 \
+	  $(SOC_TOP_RTL) $(VRAM_RTL) rtl/peripherals/surf_gpu.v $(SOC_CORE_SRC) $(SOC_IO_SRC) $(SOC_SIM_CPP) > $(BUILD)/sim/obj_surfsim_gpu.txt 2>&1 \
 	  || { tail -40 $(BUILD)/sim/obj_surfsim_gpu.txt; exit 1; }
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
-test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom
+GPU_ENGINE_SCENES ?= 6
+test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem
 	@mkdir -p $(GPU_BUILD)/soc
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 600000000 \
 	  --vga-crc $(GPU_BUILD)/soc/frames.txt --transcript $(GPU_BUILD)/soc/uart.txt \
 	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/surfsim.txt 2>&1; \
 	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/surfsim.txt; tail -30 $(GPU_BUILD)/soc/uart.txt; exit 1; }
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
-	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt
+	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt --engine-scenes $(GPU_ENGINE_SCENES)
+	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
+	$(Q)printf 'help\r' > $(GPU_BUILD)/soc/help.txt
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/surfboot.mem --uart-in $(GPU_BUILD)/soc/help.txt --quiet \
+	  --max-cycles 100000000 --expect 'SurfBoot [0-9][\s\S]*monitor commands' \
+	  > $(GPU_BUILD)/soc/surfboot.txt 2>&1 || { tail -30 $(GPU_BUILD)/soc/surfboot.txt; exit 1; }
+	@echo "  [surfboot, HAS_GPU] the monitor answered help: $$(grep -o 'output matched after [0-9]* cycles' $(GPU_BUILD)/soc/surfboot.txt)"
+
+# ---------------------------------------------------------------- the engine
+test-gpu-encodings:
+	$(Q)$(PYTHON) sim/gpu/check_gpu_h.py
+
+$(GPU_BUILD)/engine/Vtb_gpu: $(GPU_RTL) $(VRAM_RTL) sim/gpu/tb_gpu.v sim/gpu/test_gpu.cpp sim/io/surfbus_master.h \
+                             $(GPU_MODEL) $(GPU_MODEL_H)
+	@mkdir -p $(dir $@)
+	$(Q)$(GPU_VERILATE) -O3 --top-module tb_gpu -Mdir $(GPU_BUILD)/engine/obj -o ../Vtb_gpu \
+	  sim/gpu/tb_gpu.v $(GPU_RTL) $(VRAM_RTL) $(CURDIR)/sim/gpu/test_gpu.cpp $(CURDIR)/$(GPU_MODEL) \
+	  > $(GPU_BUILD)/engine/build.txt 2>&1 || { tail -30 $(GPU_BUILD)/engine/build.txt; exit 1; }
+
+GPU_CHUNKS ?= 120
+test-gpu-engine: $(GPU_BUILD)/engine/Vtb_gpu
+	$(call gpu_run,engine/run,$< --chunks $(GPU_CHUNKS) +verilator+rand+reset+2)
+
+test-gpu-mutants:
+	$(Q)$(PYTHON) sim/gpu/mutants.py --work $(GPU_BUILD)/mutants
+
+# ---------------------------------------------------------------- the synthesized netlist
+GPU_NET_DIR = $(BUILD)/fpga/$(BOARD)/surfcpu_arty_a7_gpudiag/openxc7
+gpu-netlist-sim:
+	$(Q)NETLIST_MAX_MS=$(or $(NETLIST_MAX_MS),2500) sh sim/board/netlist_sim.sh $(GPU_NET_DIR) "GPUDIAG:" $(BOARD_NETLIST_SIM)
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart build/sim/board/netlist/$(BOARD)-surfcpu_arty_a7_gpudiag/uart.txt --frames -
