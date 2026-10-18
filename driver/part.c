@@ -21,6 +21,14 @@ reads a table again after fdisk has written it.
 fdisk's changes are planned by parttab.c and carried out by part_commit():
 through the block layer, flushed, read back and compared, the table read again
 and checked against the plan, and the disk rescanned.
+
+10/18/26 (audit B52): part_commit() holds its lock (write_lock) across all of
+that, and B47 counted only each device request inside: a kill that waited 2 s
+could come at once between two of them and leave the lock held for good (every
+later fdisk, and mkfs where it sets a partition's type, refused with "another
+fdisk is writing a partition table", the rescan skipped and the old partitions
+left registered over the new table). The commit counts its task inside the file system layer while it
+holds the lock (surf_task.fs_hold): the kill comes once it has let go of it.
 */
 
 #include <surfos/types.h>
@@ -28,6 +36,7 @@ and checked against the plan, and the disk rescanned.
 #include <surfos/cpu.h>
 #include <surfos/sync.h>
 #include <surfos/timer.h>
+#include <surfos/task.h>
 #include <sys/bdev.h>
 #include <sys/part.h>
 #include <fs/vfs.h>
@@ -211,10 +220,15 @@ int part_commit(struct bdev *disk, const struct part_table *before, const struct
     char why[100];
     u_int i;
     int r = -1, found;
+    bool got;
 
     msg[0] = 0;
     if(!t || !buf || !zero) { snprintf(msg, n, "out of memory"); goto out; }
-    if(!mutex_trylock(&write_lock)) { snprintf(msg, n, "another fdisk is writing a partition table; try again"); goto out; }
+    KCRIT_ENTER                                     /* 10/18/26 (B52): the lock and the count together: no kill between */
+    got = mutex_trylock(&write_lock);
+    if(got) fs_enter();
+    KCRIT_LEAVE
+    if(!got) { snprintf(msg, n, "another fdisk is writing a partition table; try again"); goto out; }
     if(bdev_may_format(disk, why, sizeof(why)) != 0) { snprintf(msg, n, "%s will not be changed: %s", disk->name, why); goto unlock; }
     part_io_init(&io, disk, false);
     io.note = NULL;
@@ -247,6 +261,7 @@ rescan:
     if(found < 0) r = -1;
 unlock:
     mutex_unlock(&write_lock);
+    fs_leave();                                     /* (B52: let go first, then counted out: the kill may come now) */
 out:
     kfree(t);
     kfree(buf);

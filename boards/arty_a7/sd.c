@@ -23,6 +23,8 @@ out or the board switched off.
 10/16/26 (milestone 8): the block device and card detect are boards/arty_a7/sdblk.c's, which
 QEMU's sdsim shares: a card taken out is noticed within half a second (surf_spi has no
 interrupt for card detect: a task looks), its disk goes, and a card put back is sd0 again.
+
+10/18/26 (audit B51): sdmode refuses the card while its umount still writes, and says so.
 */
 
 #include <surfos/types.h>
@@ -181,6 +183,10 @@ int arty_cmd_sdmode(int argc, char **argv) {
         printf("    %s is %s; usage: sdmode ro|rw   (while nothing on it is mounted: umount /%sp1 first)\n",
                d ? d->name : "the card", sd.readonly ? "read-only" : "read-write", d ? d->name : "sd0");
         return CMD_USAGE;
+    }
+    if(d && vfs_bdev_unmounting(d)) {           /* 10/18/26 (audit B51): its umount still writes */
+        printf("    %s or a partition of it is being unmounted: try again once that has finished\n", d->name);
+        return CMD_FAIL;
     }
     if(d && vfs_bdev_busy(d)) { printf("    %s or a partition of it is mounted: umount it first\n", d->name); return CMD_FAIL; }
     ro = !strcmp(argv[1], "ro");

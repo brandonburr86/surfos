@@ -195,6 +195,8 @@ void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the curre
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
+void task_interrupt_absorbed(void); /* 10/18/26 (audit B54): Ctrl+C reached a kernel command that finished all the same
+                                       (umount, eject): its status is its own, not 130 (task_call_leave()) */
 /* 10/17/26 (audit B39, B46): may the current task's waits in a file system be cut short: its call is to end (a kill,
    Ctrl+C in a kernel command), and it is neither ending by itself (TC_EXIT: its files close and are written out) nor
    in a step that must finish (fs_finish) */

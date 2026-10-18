@@ -43,6 +43,7 @@ says so; the self test lets go of its claim on the way out as always.
 #include <surfos/tty.h>
 #include <surfos/keyboard.h>
 #include <surfos/irq.h>
+#include <surfos/sysimpl.h>
 #include "shell.h"
 
 static int fails;
@@ -669,7 +670,20 @@ static void test_fat_concurrent(void) {
    registered, so nothing else can see it). */
 #define UNPLUG_BLOCKS 8192                           /* 4 MB: FAT16 with 512-byte clusters */
 
+/* 10/18/26 (round fs-fix-8): a write by ram_stuck_task does not end until the test clears it (a driver that never times
+   out, B50); ram_hook sees each write before it is stored (B46, B51: Ctrl+C at a chosen write); ram_flush_hook sees
+   each flush, which takes ram_flush_ms; and the highest count of ram_watch_task inside a file system seen in its reads
+   is kept (B52) */
+static surf_task *volatile ram_stuck_task;
+static volatile int ram_stuck_hit;
+static void (*volatile ram_hook)(u32 lba);
+static void (*volatile ram_flush_hook)(void);
+static u_long ram_flush_ms;
+static surf_task *volatile ram_watch_task;
+static volatile u_int ram_watch_hold;
+
 static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
+    if(ram_watch_task && curTask == ram_watch_task && curTask->fs_hold > ram_watch_hold) ram_watch_hold = curTask->fs_hold;
     memcpy(buf, (u8 *)d->priv + lba * 512, count * 512);
     return 0;
 }
@@ -693,12 +707,24 @@ static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
         ram_trace[k].at = uptime_ms() - ram_trace_on;
         strlcpy(ram_trace[k].who, curTask ? curTask->name : "?", sizeof(ram_trace[k].who));
     }
+    if(ram_hook) ram_hook(lba);
+    if(ram_stuck_task && curTask == ram_stuck_task) {
+        ram_stuck_hit = 1;
+        while(ram_stuck_task) sleep_ms(10);
+    }
     if(ram_slow_ms && curTask != ram_fast_task) sleep_ms(ram_slow_ms);
     memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
     return 0;
 }
 
-static const struct bdev_ops ram_ops = { ram_read, ram_write, NULL };
+static int ram_flush(struct bdev *d) {
+    (void)d;
+    if(ram_flush_hook) ram_flush_hook();
+    if(ram_flush_ms) sleep_ms(ram_flush_ms);
+    return 0;
+}
+
+static const struct bdev_ops ram_ops = { ram_read, ram_write, ram_flush };
 
 static struct bdev *ram_disk(u8 *mem) {
     struct bdev *d = (struct bdev *)kcalloc(1, sizeof(struct bdev));
@@ -873,10 +899,14 @@ static void ku_sync(void *arg) {
 static void ku_umount(void *arg) {
     u_int lost = 99;
     bool ctrl_c = arg != NULL;
+    char *argv[] = { "umount", "/selftest-um", NULL };
     if(ctrl_c) task_call_enter(TC_COMMAND);          /* as the ring-0 shell runs a command */
     while(!ku_go) sleep_ms(5);                       /* the interrupt is sent meanwhile (a driver's delay: not cut short) */
     ku_began = uptime_ms() - ram_trace_on;
-    ku_umount_r = vfs_umount_lost("/selftest-um", &lost);
+    if(ctrl_c) {                                     /* 10/18/26 (B54): the umount command: CMD_OK when nothing was lost */
+        ku_umount_r = shell_run_command(2, argv);
+        lost = 0;
+    } else ku_umount_r = vfs_umount_lost("/selftest-um", &lost);
     ku_ended = uptime_ms() - ram_trace_on;
     ku_lost = lost;
     ku_done = 1;
@@ -954,8 +984,9 @@ static void test_kill_umount(void) {
     if(r) { binvalidate(d); kfree(d); kfree(mem); return; }
     status = ku_run("/selftest-um/c.txt", "refused, then synced: Ctrl+C", true);
     clean = (mem[512 + 3] & 0x80) != 0;              /* FAT[1]'s clean bit */
-    check(status == 0 && ku_done && ku_cut && ku_umount_r == 0 && ku_lost == 0 && clean,
+    check(status == 0 && ku_done && ku_umount_r == CMD_OK && clean,
           "Ctrl+C in umount while another task's write is in flight: it finishes, gives nothing up, the volume clean");
+    check(ku_done && !ku_cut, "and the umount command, finished, has its own status (0), not Ctrl+C's 130");   /* (B54) */
     status = ku_run("/selftest-um/k.txt", "refused, then synced: a kill", false);
     clean = (mem[512 + 3] & 0x80) != 0;
     check(status == -1 && ku_done && ku_umount_r == 0 && ku_lost == 0 && clean,
@@ -1157,6 +1188,465 @@ static void test_kill_outside_call(void) {
     check(status == -1 && !kn_flag && kn_out && end - kn_out < 250,
           "a kill put off inside a file system comes within a few ticks of the thread leaving it");
     printf("        (killed %lu ms after it left the file system)\n", kn_out ? end - kn_out : 0UL);
+}
+
+/**** round fs-fix-8 (audit B50-B55): the review of B46-B49 ****/
+
+/* a RAM stick of the test's own, named name, with a FAT volume mounted at path and a.txt on it; NULL when there is no
+   memory or something fails (the caller says so) */
+static struct bdev *fx_stick(const char *name, const char *path, u8 **memp) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    char msg[160];
+    int r;
+    *memp = mem;
+    if(!d) { kfree(mem); return NULL; }
+    strlcpy(d->name, name, sizeof(d->name));
+    r = fat_mkfs(d, "ROUND8", 0, msg, sizeof(msg));
+    if(r == 0) r = vfs_mount_flags(d, path, "fat", 0);
+    if(r == 0) {
+        char file[VFS_PATH_MAX];
+        snprintf(file, sizeof(file), "%s/a.txt", path);
+        r = put_file(file, "written before");
+        if(r) vfs_umount(path);
+    }
+    if(r) { binvalidate(d); kfree(d); kfree(mem); *memp = NULL; return NULL; }
+    return d;
+}
+
+/* path/name written while the stick refuses writes: its close says EIO and its blocks stay changed in the cache (every
+   VFS call that changes a volume syncs it before it returns, B46's test: this leaves changes no call has written) */
+static int fx_refused(const char *path, const char *name, const char *text) {
+    char file[VFS_PATH_MAX];
+    struct file *f;
+    int r, c = 0;
+    snprintf(file, sizeof(file), "%s/%s", path, name);
+    ram_refuse = true;
+    r = vfs_open(file, O_WRONLY | O_CREAT, &f);
+    if(r == 0) {
+        r = vfs_write(f, text, strlen(text)) == (int)strlen(text) ? 0 : -EIO;
+        c = vfs_close(f);
+    }
+    ram_refuse = false;
+    return r ? r : c == -EIO ? 0 : -EIO;
+}
+
+/* the test's end with a stick: unmounted (when it still is), its blocks forgotten, freed */
+static void fx_done(struct bdev *d, u8 *mem, const char *path) {
+    struct stat st;
+    if(path && vfs_stat(path, &st) == 0) vfs_umount(path);
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
+/* a command run as the shell runs it (shell_run_command()), what it says kept in out; its status */
+static int fx_capture(char *out, u_int size, int argc, char **argv) {
+    struct kcapture cap, *outer = curTask->kcap;     /* (the self test's own output may be kept: SYS_kcmd) */
+    int r;
+    cap.buf = out;
+    cap.len = 0;
+    cap.size = size - 1;
+    cap.cut = 0;
+    console_capture_begin(&cap);
+    r = shell_run_command(argc, argv);
+    console_capture_end();
+    if(outer) console_capture_begin(outer);
+    out[cap.len] = 0;
+    return r;
+}
+
+/* 10/18/26 (audit B50): an umount (a step that must finish, B46) owes a block whose writer's device request never ends:
+   a task a fault killed at once inside the cache (kernel/panic.c) leaves its I/O so, and so does a driver that never
+   times out. Nothing ended that wait (Ctrl+C, a kill and a hangup are put off while the umount is inside). Now the
+   umount gives the block up after bcache_overdue_ms (30 s; 2 s here, lowered for the test), as for a device that stopped
+   answering. Here the writer's request returns only when the test lets it (ram_stuck_task); the code before still waits
+   after 15 s, and the test lets the writer go then */
+static struct bdev *ko_dev;
+static volatile int ko_go, ko_go2, ko_umount_r, ko_done;
+static volatile u_int ko_lost;
+
+static void ko_sync(void *arg) {
+    (void)arg;
+    while(!ko_go) sleep_ms(5);
+    bsync(ko_dev);
+}
+
+static void ko_umount(void *arg) {
+    u_int lost = 99;
+    (void)arg;
+    task_call_enter(TC_COMMAND);
+    while(!ko_go2) sleep_ms(5);                      /* (once the sync's write is under way) */
+    ko_umount_r = vfs_umount_lost("/selftest-od", &lost);
+    ko_lost = lost;
+    ko_done = 1;
+    task_call_leave(TC_COMMAND);
+}
+
+static void test_umount_overdue(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stick2", "/selftest-od", &mem);
+    surf_task *ts, *tu;
+    u_long pid_s, pid_u, t0, ms, f, bound = bcache_overdue_ms;
+    int st, waited;
+    bool clean;
+    if(!d) { check(false, "umount and a write that never ends: a RAM stick"); return; }
+    if(fx_refused("/selftest-od", "b.txt", "refused, then stuck") != 0) { check(false, "a file the stick refused"); fx_done(d, mem, "/selftest-od"); return; }
+    ko_dev = d;
+    ko_go = ko_go2 = ko_done = 0;
+    ko_umount_r = 1;
+    ko_lost = 0;
+    ram_stuck_hit = 0;
+    ts = kthread_create_on("odsync", curTask->con, ko_sync, NULL, PL_NORMAL, 0);
+    tu = ts ? kthread_create_on("odumount", curTask->con, ko_umount, NULL, PL_NORMAL, 0) : NULL;
+    if(!ts || !tu) {
+        check(false, "umount and a write that never ends: two tasks");
+        ko_go = ko_go2 = 1;
+        if(ts) task_wait(ts->pid, &st);
+        if(tu) task_wait(tu->pid, &st);
+        fx_done(d, mem, "/selftest-od");
+        return;
+    }
+    pid_s = ts->pid;
+    pid_u = tu->pid;
+    ram_stuck_task = ts;                             /* the sync's first write (b.txt's block) never ends */
+    ko_go = 1;
+    for(waited = 0; !ram_stuck_hit && waited < 2000; waited += 10) sleep_ms(10);
+    bcache_overdue_ms = 2000;
+    ko_go2 = 1;                                      /* the umount begins */
+    sleep_ms(20);                                    /* (in its syncs: the interrupt below) */
+    f = irq_save();
+    task_interrupt_job(tu);                          /* Ctrl+C on its terminal */
+    irq_restore(f);
+    t0 = uptime_ms();
+    for(waited = 0; !ko_done && waited < 15000; waited += 50) sleep_ms(50);
+    ms = uptime_ms() - t0;
+    bcache_overdue_ms = bound;
+    ram_stuck_task = NULL;                           /* the writer's request returns (the code before: then the umount does) */
+    task_wait(pid_u, &st);
+    task_wait(pid_s, &st);
+    clean = (mem[512 + 3] & 0x80) != 0;
+    printf("        (the umount ended %lu ms after Ctrl+C%s; %u changed blocks given up)\n", ms, ko_done ? "" : " NOT: still waiting",
+           ko_lost);
+    check(ram_stuck_hit && ko_done && ms < 15000, "an interrupted umount owing a block whose write never ends gives it up (2 s here, 30 s in use)");
+    check(ko_done && ko_umount_r == 0 && ko_lost > 0 && !clean,
+          "it gives the blocks up as for a device that stopped answering: counted, the volume left unclean");
+    fx_done(d, mem, "/selftest-od");
+}
+
+/* 10/18/26 (audit B51): mount, mkfs and fdisk of a device while its umount still writes (the review's M2 and M5): the
+   mount leaves the list before the umount's syncs, and vfs_bdev_busy() looked at the list only, so a second mount's file
+   went with the old umount's binvalidate(), the card was marked clean under a live mount, mkfs's FATs crossed the old
+   volume's writes. Now the device is busy until its umount has let go of it, and they say it is being unmounted. So
+   does eject, which found nothing mounted and said "safe to remove" while the umount still wrote */
+static struct bdev *kb_dev;
+static volatile int kb_done;
+
+static void kb_umount(void *arg) {
+    u_int lost = 0;
+    (void)arg;
+    vfs_umount_lost("/selftest-busy", &lost);
+    kb_done = 1;
+}
+
+static void test_unmounting_busy(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stick3", "/selftest-busy", &mem);
+    char msg[160], why[120], said[240];
+    char *ej_argv[] = { "eject", "stick3", NULL };
+    surf_task *tu;
+    u_int begun;
+    int rm = 1, rk = 1, rf = 0, re = CMD_OK, st, waited;
+    bool registered;
+    if(!d) { check(false, "a device being unmounted: a RAM stick"); return; }
+    if(fx_refused("/selftest-busy", "b.txt", "written while it is unmounted") != 0) { check(false, "a file the stick refused"); fx_done(d, mem, "/selftest-busy"); return; }
+    registered = bdev_register(d) == 0;              /* (eject finds disks by name) */
+    said[0] = 0;
+    kb_dev = d;
+    kb_done = 0;
+    msg[0] = why[0] = 0;
+    ram_slow_ms = 300;
+    begun = ram_writes_begun;
+    tu = kthread_create_on("bsyumount", curTask->con, kb_umount, NULL, PL_NORMAL, 0);
+    if(tu) {
+        for(waited = 0; ram_writes_begun == begun && waited < 2000; waited += 5) sleep_ms(5);   /* its syncs write */
+        rm = vfs_mount_flags(d, "/selftest-busy2", "fat", 0);
+        rk = fat_mkfs(d, "BUSY", 0, msg, sizeof(msg));
+        rf = bdev_may_format(d, why, sizeof(why));
+        if(registered) re = fx_capture(said, sizeof(said), 2, ej_argv);
+        task_wait(tu->pid, &st);
+    }
+    ram_slow_ms = 0;
+    if(rm == 0) vfs_umount("/selftest-busy2");      /* (the code before let it mount) */
+    printf("        (while it was unmounted: mount %d, mkfs %d \"%s\", fdisk's rule \"%s\")\n", rm, rk, msg, why);
+    check(tu && rm == -EBUSY && rk == -EACCES && strstr(msg, "being unmounted") && rf != 0 && strstr(why, "being unmounted"),
+          "a device whose umount still writes is busy: mount, mkfs and fdisk refuse it, saying it is being unmounted");
+    check(tu && registered && re == CMD_FAIL && strstr(said, "being unmounted") && !strstr(said, "safe to remove"),
+          "and eject refuses it, saying so (not \"safe to remove\" while the umount still writes)");
+    if(!(re == CMD_FAIL && strstr(said, "being unmounted"))) printf("        (eject said: %s)\n", said);
+    rm = vfs_mount_flags(d, "/selftest-busy", "fat", MNT_RDONLY);
+    check(rm == 0 && file_is("/selftest-busy/a.txt", "written before") && file_is("/selftest-busy/b.txt", "written while it is unmounted"),
+          "once its umount has finished, it mounts again with every file");
+    if(rm == 0) vfs_umount("/selftest-busy");
+    if(registered) bdev_unregister(d);              /* (gone, off the list; nothing holds it now) */
+    fx_done(d, mem, NULL);
+}
+
+/* 10/18/26 (the review's coverage note 7; audit B51, B54): eject interrupted in its unmount phase (a step that must finish,
+   B46) while another task writes one of the blocks it owes. As eject's write-out ends (its flush), a file on the stick is
+   written while the stick refuses (its blocks stay changed in the cache), a `sync` of the disk on another console,
+   looking every 5 ms, begins to write them (each write takes 300 ms), and that write is held until eject is in its
+   unmount phase, waiting for it: then Ctrl+C reaches eject. eject finishes, gives nothing up and says "safe to remove";
+   its status is its own (B54: it was 130); and the disk stays busy for fdisk and mkfs meanwhile (B51) */
+static struct bdev *ke2_dev;
+static surf_task *volatile ke2_syncer, *volatile ke2_eject;
+static volatile int ke2_go, ke2_stop, ke2_result, ke2_cut, ke2_hit, ke2_busy_said, ke2_flushing, ke2_armed, ke2_phase;
+
+/* the syncer's first write once the file is there: held until eject is in its unmount phase, then Ctrl+C for eject */
+static void ke2_hook(u32 lba) {
+    char why[120];
+    u_long f;
+    int waited;
+    (void)lba;
+    if(ke2_hit || !ke2_armed || curTask != ke2_syncer || !ke2_eject) return;
+    ke2_hit = 1;
+    for(waited = 0; !ke2_eject->fs_finish && waited < 3000; waited += 5) sleep_ms(5);
+    ke2_phase = ke2_eject->fs_finish != 0;
+    sleep_ms(50);                                    /* (its umount's sync waits for this write now) */
+    f = irq_save();
+    task_interrupt_job(ke2_eject);                   /* Ctrl+C on eject's terminal */
+    irq_restore(f);
+    ke2_busy_said = bdev_may_format(ke2_dev, why, sizeof(why)) != 0 && strstr(why, "being unmounted") != NULL;
+}
+
+/* eject's flush at the end of its write-out: held until the syncer's write has begun */
+static void ke2_flush(void) {
+    int waited;
+    if(curTask != ke2_eject || ke2_flushing) return;
+    ke2_flushing = 1;
+    for(waited = 0; !ke2_hit && waited < 3000; waited += 5) sleep_ms(5);
+}
+
+static void ke2_sync(void *arg) {
+    (void)arg;
+    while(!ke2_stop) { bsync(ke2_dev); sleep_ms(5); }
+}
+
+static void ke2_run(void *arg) {
+    char *argv[] = { "eject", NULL, NULL };
+    (void)arg;
+    argv[1] = ke2_dev->name;
+    task_call_enter(TC_COMMAND);
+    while(!ke2_go) sleep_ms(5);
+    ke2_result = cmd_eject(2, argv);
+    ke2_cut = task_call_leave(TC_COMMAND);
+}
+
+static void test_eject_unmount_phase(void) {
+    u8 *mem;
+    struct bdev *d = fx_stick("stick1", "/selftest-ej2", &mem);
+    surf_task *ts, *te;
+    int st, r, dirt = -1, waited;
+    bool clean, registered = false;
+    if(!d) { check(false, "eject's unmount phase: a RAM stick"); return; }
+    if(bdev_register(d) == 0) registered = true;     /* (eject finds disks by name) */
+    ke2_dev = d;
+    ke2_go = ke2_stop = ke2_hit = ke2_busy_said = ke2_flushing = ke2_armed = ke2_phase = 0;
+    ke2_result = -1;
+    ke2_cut = 1;
+    ke2_eject = NULL;
+    ram_slow_ms = 300;
+    ts = kthread_create_on("ejsync", curTask->con, ke2_sync, NULL, PL_NORMAL, 0);
+    te = registered && ts ? kthread_create_on("ejectphase", curTask->con, ke2_run, NULL, PL_NORMAL, 0) : NULL;
+    ke2_syncer = ts;
+    ke2_eject = te;
+    ram_hook = ke2_hook;
+    ram_flush_hook = ke2_flush;
+    if(te) {
+        ke2_go = 1;
+        for(waited = 0; !ke2_flushing && waited < 5000; waited += 5) sleep_ms(5);   /* eject's write-out ends */
+        if(ke2_flushing) dirt = fx_refused("/selftest-ej2", "b.txt", "written as eject wrote out");
+        ke2_armed = 1;
+        task_wait(te->pid, &st);
+    }
+    ram_hook = NULL;
+    ram_flush_hook = NULL;
+    ke2_stop = 1;
+    if(ts) task_wait(ts->pid, &st);
+    ram_slow_ms = 0;
+    ke2_eject = ke2_syncer = NULL;
+    clean = (mem[512 + 3] & 0x80) != 0;
+    r = vfs_mount_flags(d, "/selftest-ej2", "fat", MNT_RDONLY);
+    printf("        (the file written as eject wrote out: %d; Ctrl+C %s)\n", dirt,
+           !ke2_hit ? "not sent: no write of the syncer's" : ke2_phase ? "in eject's unmount phase" : "before eject's unmount phase");
+    check(te && dirt == 0 && ke2_hit && ke2_phase && ke2_result == CMD_OK && clean && r == 0 &&
+          file_is("/selftest-ej2/a.txt", "written before") && file_is("/selftest-ej2/b.txt", "written as eject wrote out"),
+          "eject interrupted in its unmount phase while another task writes a block it owes: it finishes, gives nothing up");
+    check(te && ke2_hit && ke2_phase && !ke2_cut, "and its status is its own (0, with \"safe to remove\"), not Ctrl+C's 130");
+    check(te && ke2_hit && ke2_phase && ke2_busy_said, "and its disk is busy meanwhile: fdisk and mkfs say it is being unmounted");
+    if(r == 0) vfs_umount("/selftest-ej2");
+    if(registered) bdev_unregister(d);              /* (gone, off the list; nothing holds it now) */
+    fx_done(d, mem, NULL);
+}
+
+/* 10/18/26 (audit B52): fdisk killed while its commit writes, flushes and reads back (part_commit(), driver/part.c, holds
+   its lock throughout): only each device request counted inside (B47), so a kill that waited 2 s could come at once
+   between two of them and leave the lock held for good (every later fdisk refused, the rescan skipped). Now the commit
+   counts itself inside while it holds the lock: its reads after the flush run counted twice (the commit, the request),
+   and the kill comes after it. Here the stick's flush takes 3 s and the kill is sent 200 ms in */
+static struct bdev *kf_dev;
+static struct part_table *kf_t;
+static struct part_plan kf_plan;
+static volatile int kf_r, kf_done;
+static char kf_msg[120];
+
+static void kf_commit(void *arg) {
+    (void)arg;
+    kf_r = part_commit(kf_dev, kf_t, &kf_plan, kf_msg, sizeof(kf_msg));
+    kf_done = 1;
+    task_call_leave(TC_SYSCALL);                     /* the kill that waited ends the task here */
+}
+
+static void test_fdisk_kill(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    struct part_table *t2 = (struct part_table *)kalloc(sizeof(struct part_table));
+    struct part_io io;
+    char err[120], err2[120];
+    surf_task *tk;
+    u_long t0, ms = 0;
+    int status = 1, r2 = 1;
+    kf_t = (struct part_table *)kalloc(sizeof(struct part_table));
+    kf_plan.buf = (u8 *)kalloc(PART_PLAN_BUF);
+    err2[0] = 0;
+    if(!d || !t2 || !kf_t || !kf_plan.buf) { check(false, "fdisk killed: memory"); goto out; }
+    strlcpy(d->name, "stickf", sizeof(d->name));
+    kf_dev = d;
+    part_io_init(&io, d, false);
+    io.note = NULL;
+    if(part_read(&io, d->nblocks, kf_t) != 0 || part_plan_new(&io, d->nblocks, PART_SCHEME_MBR, &kf_plan, err, sizeof(err)) != 0) {
+        check(false, "fdisk killed: a plan for a blank stick");
+        goto out;
+    }
+    kf_done = 0;
+    kf_r = 1;
+    ram_watch_hold = 0;
+    ram_flush_ms = 3000;
+    tk = kthread_create_on("killfdisk", curTask->con, kf_commit, NULL, PL_NORMAL, TF_INCALL);
+    if(tk) {
+        u_long pid = tk->pid;
+        ram_watch_task = tk;
+        sleep_ms(200);
+        t0 = uptime_ms();
+        kill_task(tk);
+        if(task_wait(pid, &status) != (int)pid) status = 1;
+        ms = uptime_ms() - t0;
+    }
+    ram_flush_ms = 0;
+    ram_watch_task = NULL;
+    part_io_init(&io, d, false);
+    io.note = NULL;
+    if(part_read(&io, d->nblocks, t2) == 0) r2 = part_commit(d, t2, &kf_plan, err2, sizeof(err2));   /* the next fdisk */
+    printf("        (it ended %lu ms after its kill; its reads after the flush ran counted %u deep; the next fdisk: %d%s%s)\n", ms,
+           ram_watch_hold, r2, err2[0] ? ", " : "", err2);
+    check(tk && status == -1 && mem[510] == 0x55 && mem[511] == 0xAA && ram_watch_hold >= 2,
+          "fdisk killed in its commit: the commit is counted inside throughout and finishes, the table written");
+    check(tk && r2 != 1 && !strstr(err2, "another fdisk"), "and it lets go of its lock: the next fdisk is not refused");
+out:
+    if(d) binvalidate(d);
+    kfree(d);
+    kfree(mem);
+    kfree(t2);
+    kfree(kf_t);
+    kfree(kf_plan.buf);
+}
+
+/* 10/18/26 (audit B53): cp and fsbench when Ctrl+C reaches them in a write: it stops after its first piece (B39), and cp
+   wrote once more to learn why and said "short write", its full-disk message; fsbench said "I/O error". cp's source is
+   on the initrd, read in one piece whatever comes: only the write is cut */
+static volatile int kp_go, kp_r1, kp_r2;
+static char kp_out1[400], kp_out2[400];
+
+static void kp_cmds(void *arg) {
+    char *cp_argv[] = { "cp", "/initrd/bin/hello", "/selftest-cp/hello", NULL };
+    char *fb_argv[] = { "fsbench", "/selftest-cp", "1", NULL };
+    (void)arg;
+    task_call_enter(TC_COMMAND);
+    while(!kp_go) sleep_ms(5);                       /* Ctrl+C is sent meanwhile: still there for both */
+    kp_r1 = fx_capture(kp_out1, sizeof(kp_out1), 3, cp_argv);
+    kp_r2 = fx_capture(kp_out2, sizeof(kp_out2), 3, fb_argv);
+    task_call_leave(TC_COMMAND);
+}
+
+static void test_cp_interrupted(void) {
+    u8 *mem;
+    struct bdev *d;
+    struct stat st;
+    surf_task *t;
+    u_long f;
+    int status;
+    if(vfs_stat("/initrd/bin/hello", &st) != 0 || st.size < 4096) { printf("  skip cp interrupted (no /initrd/bin/hello of 4 KB)\n"); return; }
+    d = fx_stick("stickc", "/selftest-cp", &mem);
+    if(!d) { check(false, "cp interrupted: a RAM stick"); return; }
+    kp_go = 0;
+    kp_out1[0] = kp_out2[0] = 0;
+    t = kthread_create_on("cpint", curTask->con, kp_cmds, NULL, PL_NORMAL, 0);
+    if(t) {
+        sleep_ms(20);
+        f = irq_save();
+        task_interrupt_job(t);
+        irq_restore(f);
+        kp_go = 1;
+        task_wait(t->pid, &status);
+    }
+    check(t && strstr(kp_out1, "cut short after") && strstr(kp_out1, "is incomplete") && !strstr(kp_out1, "short write"),
+          "cp interrupted in a write says it was cut short and the copy is incomplete (not \"short write\")");
+    check(t && strstr(kp_out2, "fsbench: interrupted") && !strstr(kp_out2, "I/O error"),
+          "fsbench interrupted in a write says so (not \"I/O error\")");
+    if(!(t && strstr(kp_out1, "is incomplete"))) printf("        (cp said: %s)\n", kp_out1);
+    if(!(t && strstr(kp_out2, "fsbench: interrupted"))) printf("        (fsbench said: %s)\n", kp_out2);
+    fx_done(d, mem, "/selftest-cp");
+}
+
+/* 10/18/26 (audit B55): a kernel thread outside any call, inside a file system, when its terminal hangs up: its kill comes
+   as soon as it leaves the file system (B39, B48); one that enters a call first keeps the hangup's rule there: no
+   escalation, the call's end awaited. It got a kill's 2 s and was killed at once in the call. No kernel thread is on a
+   pty today; here one is (TF_INCALL, on a pty this test opens and hangs up), outside its call inside a file system */
+static volatile int kh_ready, kh_hung, kh_done;
+
+static void kh_thread(void *arg) {
+    (void)arg;
+    fs_enter();                                      /* inside a file system ... */
+    task_call_leave(TC_SYSCALL);                     /* ... outside any call */
+    kh_ready = 1;
+    while(!kh_hung) sleep_ms(5);
+    task_call_enter(TC_COMMAND);                     /* a kernel command begins, still inside */
+    fs_leave();
+    sleep_ms(2500);                                  /* longer than a kill's KILL_WAIT_MS */
+    kh_done = 1;
+    task_call_leave(TC_COMMAND);                     /* the hangup's kill comes here */
+}
+
+static void test_hangup_nocall(void) {
+    surf_console *con;
+    surf_task *t;
+    u_long pid, t0, ms;
+    int fd, status = 1, waited;
+    fd = sys_openpty();
+    con = fd >= 0 ? pty_console_of(fd) : NULL;
+    if(!con) { if(fd >= 0) fd_close(fd); printf("  skip a hangup outside a call (no pty)\n"); return; }
+    kh_ready = kh_hung = kh_done = 0;
+    t = kthread_create_on("hupnocall", con, kh_thread, NULL, PL_NORMAL, TF_INCALL);
+    if(!t) { fd_close(fd); check(false, "a hangup outside a call: a task on the pty"); return; }
+    pid = t->pid;
+    for(waited = 0; !kh_ready && waited < 2000; waited += 5) sleep_ms(5);
+    fd_close(fd);                                    /* the master closed: the hangup (task_kill_tty()) */
+    kh_hung = 1;
+    t0 = uptime_ms();
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    ms = uptime_ms() - t0;
+    printf("        (it ended %lu ms after the hangup, %s)\n", ms, kh_done ? "its call done" : "killed in its call");
+    check(status == -1 && kh_done, "a kernel thread hung up outside a call that enters one keeps the hangup's rule: its call's end awaited");
 }
 
 static void test_fat_rename(void) {
@@ -1455,7 +1945,8 @@ static void test_usb(void) {
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
     test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_kill_umount, test_eject_interrupted,
-    test_kill_device, test_kill_outside_call, test_user, test_net, test_usb, test_tasks,
+    test_kill_device, test_kill_outside_call, test_umount_overdue, test_unmounting_busy, test_eject_unmount_phase,
+    test_fdisk_kill, test_cp_interrupted, test_hangup_nocall, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 

@@ -252,7 +252,9 @@ own writing out, fail on a card that takes every write: it waits until they paus
 another program holds, or for another program's write) ends the wait at once: the command fails
 (`I/O error` from a `sync`, `Interrupted system call` from a write), and what it had not written
 stays in memory for the next `sync`. One reading or writing a large file stops before its next
-piece and says how much it did (it wrote what it says): a piece is one 512-byte block where the
+piece and says how much it did (it wrote what it says: `cp` says `cp: cut short after N bytes:
+<file> is incomplete`, and `fsbench` says `fsbench: interrupted`, since 2026-10-18; before, `cp`
+said `short write`, its message for a full card, and `fsbench` `I/O error`): a piece is one 512-byte block where the
 bytes go through SurfOS's cache, up to 64 KiB where they go straight to the card (until 2026-10-17
 this said 64 KiB for both). One in the middle of a request to the card (a write of its own, or
 `mkfs` and `fdisk` writing the card directly) ends when that request does (a card that stops
@@ -262,7 +264,16 @@ of its writes in a mess (since 2026-10-17). `mkfs` stopped says how far it got (
 sector ...`: the card holds no usable file system then, so make it again) or that it wrote nothing.
 `umount`, and `eject` once it unmounts, are not stopped: they finish as they would have and give up
 nothing the card takes (until 2026-10-17, Ctrl+C or a `kill` then gave changes up and left a working
-card marked as not cleanly unmounted). `eject` stopped while it still writes the card's
+card marked as not cleanly unmounted), and their status is then their own: 0 after `safe to remove`
+(until 2026-10-18 it was 130, the status of a command Ctrl+C cut short). Only one thing makes them
+give a change up: another program's write to the card that has not ended after 30 seconds (that
+program died in a fault inside SurfOS, or the card's driver hangs). They then give its blocks up as
+for a card that stopped answering, say `write errors` and leave the card marked as not cleanly
+unmounted (since 2026-10-18; before, they waited for it for good). While a card is being unmounted,
+`mount`, `eject` and `sdmode` refuse it and say it `is being unmounted`: type the command again once
+the umount has finished (since 2026-10-18; before, they could take the card while the umount still
+wrote to it, and `eject` could say `safe to remove` too soon); `lsblk` shows it as `being
+unmounted`. `eject` stopped while it still writes the card's
 files out unmounts nothing and says `interrupted: it stays mounted`: type it again. A program that
 is ending by itself still writes its files out.
 
