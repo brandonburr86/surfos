@@ -25,6 +25,14 @@ gave up because they could not be written (vfs_umount_lost()).
 Ctrl+C, a kill or a hangup cut its syncs short (B39), and it went on to give up the
 changes the card would have taken and leave a working card marked as not cleanly
 unmounted. Its waits are not cut short now, and a kill that waited comes after it.
+
+10/18/26 (audit B51): the mount leaves the list before the umount's syncs (so that no
+path reaches it any more), and vfs_bdev_busy() looked at the list only: mount, mkfs and
+fdisk could take the device while its umount still wrote (a second mount's file given up
+by the old umount's binvalidate(), the card marked clean under a live mount, mkfs's new
+FATs crossed with the old volume's writes). The device is counted as being unmounted
+(struct bdev's unmounting) from the moment its mount leaves the list until the umount
+has let go of it, and vfs_bdev_busy() counts that too; vfs_bdev_unmounting() says so.
 */
 
 #include <surfos/types.h>
@@ -268,7 +276,8 @@ int vfs_umount(const char *path) {
    how many blocks that was: in *lost, or on the console when the caller does not ask. 10/17/26 (B46): once the
    mount is off the list it finishes (fs_finish_enter()): its syncs are not cut short by Ctrl+C, a kill or a
    hangup, which before made it give up changes a working card would take and leave the card unclean (B42 then
-   kept it so); a kill that waited comes after it (it counts as inside the file system) */
+   kept it so); a kill that waited comes after it (it counts as inside the file system). 10/18/26 (B51): and the
+   device stays busy meanwhile (unmounting): vfs_bdev_busy() refuses it to mount, mkfs and fdisk */
 int vfs_umount_lost(const char *path, u_int *lost) {
     struct mount *m, **pp;
     struct superblock *sb;
@@ -284,6 +293,7 @@ int vfs_umount_lost(const char *path, u_int *lost) {
     if(in_use(m, NULL, 0)) { mutex_unlock(&mount_lock); return -EBUSY; }   /* open files, a cwd: vfs_busy says which */
     fs_finish_enter();                              /* (before the mount leaves the list: no kill between) */
     *pp = m->next;
+    if(m->sb->dev) m->sb->dev->unmounting++;        /* 10/18/26 (B51): busy until it is let go of, below */
     mutex_unlock(&mount_lock);
     sb = m->sb;
     if(sb->ops && sb->ops->sync) sb->ops->sync(sb);
@@ -296,6 +306,7 @@ int vfs_umount_lost(const char *path, u_int *lost) {
     if(sb->dev) {
         gave_up = sb->dev->gone ? 0 : bdirty_count(sb->dev);
         binvalidate(sb->dev);
+        vfs_unmount_end(sb->dev);                   /* (B51: nothing of the volume is left in the cache) */
         bdev_put(sb->dev);
     }
     if(lost) *lost = gave_up;
@@ -331,7 +342,36 @@ bool vfs_bdev_busy(struct bdev *d) {
         if(x == d || x->parent == d || d->parent == x) busy = true;     /* itself, a partition of it, its disk */
     }
     mutex_unlock(&mount_lock);
+    return busy || vfs_bdev_unmounting(d);      /* 10/18/26 (B51): or being unmounted (its mount off the list) */
+}
+
+/* 10/18/26 (audit B51): is d, its disk or one of its partitions being unmounted (vfs_umount_lost()'s steps once the
+   mount is off the list, eject's unmount phase): still written, so taken by nobody else */
+bool vfs_bdev_unmounting(struct bdev *d) {
+    struct bdev *p;
+    bool busy;
+    if(!d) return false;
+    mutex_lock(&mount_lock);
+    busy = d->unmounting || (d->parent && d->parent->unmounting);
+    for(p = bdev_first(); p && !busy; p = p->next) if(p->parent == d && p->unmounting) busy = true;
+    mutex_unlock(&mount_lock);
     return busy;
+}
+
+/* 10/18/26 (audit B51): d is being unmounted until vfs_unmount_end() (counted: an eject of its disk and an umount of
+   one of its partitions may overlap) */
+void vfs_unmount_begin(struct bdev *d) {
+    if(!d) return;
+    mutex_lock(&mount_lock);
+    d->unmounting++;
+    mutex_unlock(&mount_lock);
+}
+
+void vfs_unmount_end(struct bdev *d) {
+    if(!d) return;
+    mutex_lock(&mount_lock);
+    if(d->unmounting) d->unmounting--;
+    mutex_unlock(&mount_lock);
 }
 
 const char *vfs_probe(struct bdev *dev) {

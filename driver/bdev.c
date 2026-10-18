@@ -98,6 +98,8 @@ int bdev_may_format(struct bdev *d, char *why, size_t size) {
     else if(d->readonly || disk->readonly) no = "it is read-only";
     else if(disk->bus != BDEV_BUS_USB && disk->bus != BDEV_BUS_RAM)
         no = "it is not a USB drive (internal disks are never repartitioned or formatted)";
+    else if(vfs_bdev_unmounting(d))             /* 10/18/26 (audit B51): its umount still writes */
+        no = "it, its disk or one of its partitions is being unmounted (try again once that has finished)";
     else if(vfs_bdev_busy(d)) no = "it, its disk or one of its partitions is mounted (umount or eject first)";
     if(no) {
         if(why && size) snprintf(why, size, "%s", no);
@@ -212,6 +214,7 @@ static bool mounted(const struct bdev *d) {
 
 /* the first of these that applies; bdev_may_format() is the rule, this only says it */
 static const char *status_of(struct bdev *d) {
+    if(d->unmounting || (d->parent && d->parent->unmounting)) return "being unmounted";   /* 10/18/26 (B51) */
     if(mounted(d)) return "mounted";
     if(d->protect == bdev_boot_drive) return "boot drive: protected";
     if(d->protect) return "protected";

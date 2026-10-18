@@ -32,6 +32,11 @@ unmount itself, such as the clean-shutdown mark), and fail; eject then does not 
 An umount, once begun, finishes (fs/vfs.c). eject stops before it unmounts anything when
 its call is to end while it writes the mounts out, and says the disk stays mounted;
 once it unmounts, it finishes.
+
+10/18/26 (audit B51): eject's disk and its partitions stay busy for mount, mkfs and fdisk
+from its unmount phase to its end (vfs_unmount_begin()), and mount says when a device is
+being unmounted. (B54) An umount or eject that Ctrl+C reached and that finished all the
+same returns its own status, not 130: "safe to remove" and status 0 agree.
 */
 
 #include <blibc_common.h>
@@ -217,6 +222,10 @@ int cmd_mount(int argc, char **argv) {
     if(!d) { printf("    mount: no block device '%s' (lsblk lists them)\n", argv[i]); return CMD_FAIL; }
     if(argc > i + 1) strlcpy(path, argv[i + 1], sizeof(path));
     else snprintf(path, sizeof(path), "/%s", d->name);
+    if(vfs_bdev_unmounting(d)) {                             /* 10/18/26 (audit B51): its umount still writes */
+        printf("    mount: %s, its disk or a partition of it is being unmounted: try again once that has finished\n", d->name);
+        return CMD_FAIL;
+    }
     if(vfs_bdev_busy(d)) { printf("    mount: %s is mounted already, or its disk or a partition of it is (mount lists them)\n", d->name); return CMD_FAIL; }
     if(d->protect || bdev_disk(d)->protect) {               /* the SurfOS boot drive is only ever read */
         printf("    %s: %s: mounted read-only\n", d->name, d->protect ? d->protect : bdev_disk(d)->protect);
@@ -247,10 +256,13 @@ static int unmount(const char *cmd, const char *path, u_int *lost) {
 int cmd_umount(int argc, char **argv) {
     char path[VFS_PATH_MAX];
     u_int lost = 0;
+    int r;
     if(argc != 2) { printf("    usage: umount <path|device>\n"); return CMD_USAGE; }
     if(argv[1][0] == '/' || !mount_of(argv[1], path, sizeof(path)))   /* a device name stands for its mount */
         strlcpy(path, argv[1], sizeof(path));
-    return unmount("umount", path, &lost) || lost ? CMD_FAIL : CMD_OK;
+    r = unmount("umount", path, &lost);
+    if(!r) task_interrupt_absorbed();                        /* 10/18/26 (B54): it finished: its own status, not 130 */
+    return r || lost ? CMD_FAIL : CMD_OK;
 }
 
 /* eject <disk>: every mount of the disk and its partitions goes (all of them, or none when one
@@ -309,29 +321,35 @@ int cmd_eject(int argc, char **argv) {
         return CMD_FAIL;
     }
     fs_finish_enter();                                       /* (B46: from here it finishes: no wait cut short) */
+    vfs_unmount_begin(disk);                                 /* (B51: the disk and its partitions busy until the end) */
     for(i = 0; i < n && !r; i++) {
         r = unmount("eject", paths[i], &lost);
         if(!r) printf("    %s unmounted\n", paths[i]);
     }
-    if(r) { fs_finish_leave(); return CMD_FAIL; }
+    if(r) { vfs_unmount_end(disk); fs_finish_leave(); return CMD_FAIL; }
     /* 10/16/26 (B10): what the disk's devices still had could not be written: given up, and said */
     for(p = bdev_first(); p; p = p->next) if(p->parent == disk) { bsync(p); lost += bdirty_count(p); binvalidate(p); }
     bsync(disk);
     lost += bdirty_count(disk);
     binvalidate(disk);
-    fs_finish_leave();
-    if(disk->gone) { printf("    %s: unmounted (it was unplugged already)\n", disk->name); return CMD_OK; }
-    if(lost) {                                               /* written after the check above, and refused */
+    if(disk->gone) {
+        printf("    %s: unmounted (it was unplugged already)\n", disk->name);
+        r = CMD_OK;
+    } else if(lost) {                                        /* written after the check above, and refused */
         printf("    eject: %s: %u changed block%s could not be written: check the disk elsewhere before trusting it\n",
                disk->name, lost, lost == 1 ? "" : "s");
-        return CMD_FAIL;
-    }
-    if(bdev_flush(disk) != 0) {
+        r = CMD_FAIL;
+    } else if(bdev_flush(disk) != 0) {
         printf("    eject: %s: the disk did not confirm that its cache was written (check it elsewhere)\n", disk->name);
-        return CMD_FAIL;
+        r = CMD_FAIL;
+    } else {
+        printf("    %s: safe to remove\n", disk->name);
+        r = CMD_OK;
     }
-    printf("    %s: safe to remove\n", disk->name);
-    return CMD_OK;
+    vfs_unmount_end(disk);
+    fs_finish_leave();
+    task_interrupt_absorbed();                               /* 10/18/26 (B54): it finished: its own status, not 130 */
+    return r;
 }
 
 /**** df, mv ****/

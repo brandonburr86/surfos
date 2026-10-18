@@ -94,6 +94,8 @@ struct bdev {
     struct buf *bc_tail[4];
     u_int bc_aside;             /* B16: of its dirty blocks, those a file system set aside */
     const void *bc_aside_by;    /* B26: the task whose operation set them aside (B13's tally moved into each sync) */
+    u_int unmounting;           /* 10/18/26 (audit B51): umounts of it (and ejects of its disk) under way: it, its disk
+                                   and its partitions are busy until they end (vfs_bdev_busy(), fs/vfs.c) */
     struct bdev *next;
 };
 
