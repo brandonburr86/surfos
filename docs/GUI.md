@@ -178,8 +178,9 @@ in the text gives the keys back.
 In Notepad, Files and Help the arrow keys, Home, End, Page Up, Page Down and Delete
 work as in any editor. In the applications they do what each one's section below
 says, and the Terminal sends them to the program. Elsewhere (Calculator, Sketch,
-About and Pointer & desktop) the arrow keys move the pointer, and in Sketch Space
-puts the pen down or lifts it, so drawing also works without a mouse.
+About and Pointer & desktop, the Image Viewer with no picture, Hex with no file) the
+arrow keys move the pointer, and in Sketch Space puts the pen down or lifts it, so
+drawing also works without a mouse.
 
 **Consoles.** F1-F4 switch consoles as before. Since 10/17/26 switching away no
 longer ends the desktop. It waits on its own console and draws itself again when

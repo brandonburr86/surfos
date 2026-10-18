@@ -386,7 +386,12 @@ static void notepad(void) {
     /* an untitled note: its guard's Save is a Save as */
     key(14); CHECK(g.note.len==0 && !g.note.path[0]);
     type("draft"); key(14); CHECK(g.dialog.kind==GUI_DLG_CONFIRM);
-    key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/home"));
+    key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/home") && g.pending==PEND_NEW);
+    /* 10/18/26: so does the chooser the question's Save leads to, replaced before it is answered */
+    dialog_message(&g,"Cannot show the picture","sea.bmp","The file is cut short.");
+    CHECK(g.pending==PEND_NONE);
+    key('\r'); CHECK(!g.dialog.kind && g.note.modified && text_is("draft"));
+    key(14); key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && g.pending==PEND_NEW);
     type("draft.txt"); key('\r'); CHECK(holds("/home/draft.txt","draft") && g.note.len==0 && !g.note.modified);
     /* closing Notepad asks too, and takes the document with it */
     type("z"); gui_act(&g,ACT_CLOSE); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.win[GUI_NOTEPAD].open);

@@ -155,9 +155,11 @@ static bool button_place(const struct gui_dialog *dl, const struct dlg_layout *l
 
 static void begin(struct gui_state *g, int kind, int act, const char *title) {
     struct gui_dialog *dl = &g->dialog;
-    /* 10/18/26: Notepad's question replaced before it is answered (a message from an application's tick) takes
-       what waited on it along, so that a later save does not do it */
-    if(dl->kind && dl->act == ACT_DLG_GUARD) g->pending = PEND_NONE;
+    /* 10/18/26: a dialog replaced before it is answered (a message from an application's tick) while what Notepad's
+       question held back waits takes that along: the question itself, or the chooser, the Replace or the read-only
+       question its Save led to. A later save then does not do it. (An answer closes its dialog before what it
+       leads to opens, so the question's own flow keeps it.) */
+    if(dl->kind && g->pending != PEND_NONE) g->pending = PEND_NONE;
     dl->kind = kind;
     dl->act = act;
     dl->choice = 0;
