@@ -105,6 +105,7 @@ tim=${FAKE_OX_TIMING:-PASS}
   echo "part                $part (device $dev, chip database chipdb-fake.bin)"
   echo "board               $board"
   echo "bitstream           $out/$top.bit sha256:$(shasum -a 256 "$out/$top.bit" | cut -d' ' -f1) 99 bytes"
+  echo "check SRL cells     ${FAKE_OX_SRL:-PASS} (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
   echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"

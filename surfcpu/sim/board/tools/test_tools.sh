@@ -363,6 +363,7 @@ oxmanifest() {   # BLOCK_RAM_RESULT: an openxc7-build.sh manifest for $ox/flow_d
       echo "top                 flow_demo"
       echo "part                xc7a35tcsg324-1 (device xc7a35t, chip database chipdb-xc7a50t.bin)"
       echo "bitstream           $ox/flow_demo.bit sha256:$(shasum -a 256 "$ox/flow_demo.bit" | cut -d' ' -f1) 99 bytes"
+      echo "check SRL cells     PASS (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
       echo "check synthesis     PASS (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
       echo "check bitstream     PASS (IDCODE, frames, commands, CRC: check-bitstream.txt)"
       echo "check round trip    PASS (bitstream decoded back to FASM: check-roundtrip.txt)"

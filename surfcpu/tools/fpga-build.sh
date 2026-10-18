@@ -292,7 +292,7 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
             while IFS= read -r l; do printf '\n    %s,' "$(toml_str "$l")"; done < "$ox/seeds.txt"
             printf '\n]\n'
         fi
-        for c in synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
+        for c in "SRL cells:check_srl" synthesis:check_synthesis bitstream:check_bitstream "round trip:check_round_trip" \
                  "block RAM:check_block_ram" LVS:check_lvs clocks:check_clocks; do
             name=${c%%:*}
             v=$(check "$name")

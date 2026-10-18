@@ -26,7 +26,9 @@ import argparse
 import json
 import sys
 
-SRL_TYPES = ("SRL16", "SRL16E", "SRLC16E", "SRLC32E")
+# every shift-register LUT of the 7 series (UG953): the SRL16 family and SRLC32E, and CFGLUT5, a
+# LUT whose contents shift in from a pin
+SRL_TYPES = ("SRL16", "SRL16E", "SRLC16", "SRLC16E", "SRLC32E", "CFGLUT5")
 
 
 def find(netlist: dict, top: str) -> list[tuple[str, str, str]]:
@@ -67,7 +69,7 @@ def self_test() -> int:
     cases = [("flip-flops and LUTs only: nothing found", net(["FDRE", "LUT6", "FDSE", "RAM64M"]), 0),
              ("an SRL16E (the GPU's lane delay) is found", net(["FDRE", "SRL16E", "LUT2"]), 1),
              ("... and named by the net it drives", None, "r1"),
-             ("every SRL kind is found", net(["SRL16", "SRLC16E", "SRLC32E", "FDRE"]), 3)]
+             ("every SRL kind is found", net(["SRL16", "SRLC16", "SRLC16E", "SRLC32E", "CFGLUT5", "FDRE"]), 5)]
     fails = 0
     for name, n, want in cases:
         if n is None:                               # the name of the previous case's SRL

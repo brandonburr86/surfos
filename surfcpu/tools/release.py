@@ -74,7 +74,7 @@ REPO = ROOT.parent                                  # the repository
 LIST = ROOT / "release" / "release.txt"
 ME = "release"
 CONTRACT_DOCS = ("SURFBUS.md", "ISA.md", "BOOT-ABI.md", "MODULES.md", "MEMORY-MAP.md")
-GATES = ("check_synthesis", "check_bitstream", "check_round_trip", "check_block_ram", "check_lvs",
+GATES = ("check_srl", "check_synthesis", "check_bitstream", "check_round_trip", "check_block_ram", "check_lvs",
          "check_clocks", "check_netlist", "check_boot_rom")
 # the build record keys that are inputs of a bitstream (compared when a rebuilt one differs)
 BIT_INPUTS = ("source_revision", "source_dirty", "build_id", "build_time", "placer_seed", "sources_sha256",

@@ -245,10 +245,20 @@ run synth yosys.log yosys -q -l "$out/yosys.full.log" -s "$out/synth.ys"
 # Shift-register LUTs (SRL16E, SRLC32E): LVS cannot check them, its extractor having no shift mode
 # (devenv/openxc7/srlcheck.py, docs/OPEN-FLOW.md 6.5), so with the checks on a netlist with any is
 # refused here, before anything is placed, saying which chains to give a reset.
+result_srl=skipped
 if [ "$check" = 1 ] || [ "$synthonly" = 1 ]; then
-  run check-srl check-srl.txt python3 -I $tools/srlcheck.py --json "$out/$top.json" --top "$top" ||
-    { echo "openxc7-build.sh: the synthesized netlist has SRL cells, which the open flow's LVS cannot check;" \
-           "give each chain a reset (check-srl.txt)" >&2; exit 1; }
+  if run check-srl check-srl.txt python3 -I $tools/srlcheck.py --json "$out/$top.json" --top "$top"; then
+    result_srl=PASS
+  else
+    st=$?
+    if [ "$st" = 1 ]; then
+      echo "openxc7-build.sh: the synthesized netlist has SRL cells, which the open flow's LVS cannot check;" \
+           "give each chain a reset (check-srl.txt)" >&2
+    else
+      echo "openxc7-build.sh: the SRL check could not read the synthesized netlist (exit $st; check-srl.txt)" >&2
+    fi
+    exit 1
+  fi
 fi
 # the primitive models of this Yosys, for simulating <top>.netlist.v elsewhere (Icarus)
 run models cells_sim.log cp /opt/openxc7/share/yosys/xilinx/cells_sim.v "$out/cells_sim.v"
@@ -405,6 +415,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "xdc                 $xdc sha256:$(sha "$xdc")"
   for s in $srcs; do echo "source              $s sha256:$(sha "$s")"; done
   echo "bitstream           $out/$top.bit sha256:$(sha "$out/$top.bit") $(wc -c < "$out/$top.bit" | tr -d ' ') bytes"
+  echo "check SRL cells     $result_srl (none in the synthesized netlist, which LVS could not check: check-srl.txt)"
   echo "check synthesis     $result_syn (netlist against the RTL: flip-flops, memories, outputs: check-synthesis.txt)"
   echo "check bitstream     $result_bit (IDCODE, frames, commands, CRC: check-bitstream.txt)"
   echo "check round trip    $result_rt (bitstream decoded back to FASM: check-roundtrip.txt)"
@@ -421,6 +432,6 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 } > "$out/manifest.txt"
 
 grep '^clock ' "$out/timing.txt" | sed 's/^/openxc7-build.sh: /'
-echo "openxc7-build.sh: checks: synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk"
+echo "openxc7-build.sh: checks: SRL cells $result_srl, synthesis $result_syn, bitstream $result_bit, round trip $result_rt, block RAM $result_bram, LVS $result_lvs, clocks $result_clk"
 echo "openxc7-build.sh: $out/$top.bit ($(wc -c < "$out/$top.bit" | tr -d ' ') bytes); manifest $out/manifest.txt"
 exit $fail
