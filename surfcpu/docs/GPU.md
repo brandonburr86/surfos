@@ -449,7 +449,32 @@ e3961772: 4,261 LUTs, 2,666 flip-flops, 36 RAMB36, sys_clk 62.16 MHz), that is r
 LUTs, 1,300 flip-flops and 76.5 RAMB36 more, and the engine now sets the sys_clk critical path
 (45.6 MHz, 1.8 times the 25 MHz clock).
 
-The DDR+GPU design's build follows the gpudiag design's (recorded here when it is done).
+The DDR+GPU design at 32bffc8 ([evidence](evidence/gpu/synth-ddr-gpu.txt)), 43 minutes on the
+Mac, beside the DDR design without the GPU on record (docs/evidence/board/openxc7-ddr.txt,
+surfcpu_arty_a7_ddr on the 100T at 92a2b510, seed 1). The LiteDRAM core's generated files came
+from the surfcpu worktree's `make litedram-gen` output, identical to ip/litedram/arty.sha256 (the
+build checks them):
+
+| | surfcpu_arty_a7_ddr_gpu | surfcpu_arty_a7_ddr (on record) |
+|---|---|---|
+| gates | **every gate PASS** (LVS 18,760 proved, 0 differ, in 32 minutes; netlist check, boot ROM check) | every gate PASS (LVS 10,878 proved) |
+| placement | seed 1 of 1 to 8 routed and met every clock | seed 1 |
+| dram_clk (80 MHz) | 88.79 MHz, **+1.237 ns** | 88.04 MHz, +1.141 ns |
+| sys_clk (25 MHz) | 53.98 MHz, +21.476 ns | 56.55 MHz, +22.318 ns |
+| pix_clk (25.17 MHz) | 104.45 MHz, +30.150 ns | 146.63 MHz, +32.904 ns |
+| u_dram.iodelay_clk (200 MHz) | 299.76 MHz, +1.664 ns | 346.14 MHz, +2.111 ns |
+| clk100_g (100 MHz) | 982.32 MHz, +8.982 ns | 990.10 MHz, +8.990 ns |
+| LUTs | 11,289 (17.8 %); 16,718 positions | 7,672 (12.1 %); 11,348 positions |
+| flip-flops | 6,498 (5.1 %) | 5,214 (4.1 %) |
+| block RAM | 112.5 of 135 RAMB36 (83.3 %) | 36 (26.7 %) |
+| DSP48E1 | 4 | 4 |
+
+dram_clk's margin did not shrink in this placement (+1.24 ns against +1.14 ns): its critical
+path stays inside LiteDRAM (its ZQ-calibration timer to a bank machine, 11.26 ns). One placement is one
+sample, and the DDR designs have met dram_clk in about three placements of four (DDR.md 10.3),
+which is why the design keeps its eight seeds. The sys_clk critical path is again the engine's
+(18.52 ns: its column group `cg` through the lane clip test and VRAM's bounds check into a block
+RAM's write enable).
 
 ### 12.3 Placement: "another part of the chip"
 
@@ -466,8 +491,14 @@ left, in X0Y3.
 | video (with the scan-out) | 1,002 LUT, 638 FF, GPAL's RAMB18, 2 RAMB36 | X0Y2, X0Y3 | x 10..108, y 21..103 |
 | CPU | 3,833 LUT, 937 FF | X0Y3 (4,370 cells), the rest scattered | x 10..128, y 1..166 |
 
-So the engine did not go to "another part of the chip": the placer put it in the CPU's own clock
-region, next to the CPU and the bus it talks to. VRAM's block RAM is wherever the block RAM
+In the DDR+GPU build (same report, [evidence](evidence/gpu/synth-ddr-gpu.txt)) the picture
+shifts: LiteDRAM takes the right half (X1Y1..X1Y2, next to the DDR3 bank), the CPU moves to the top
+(X1Y3 2,941 cells, X0Y3 1,568), and the engine lands below it in X0Y2 (3,962 of its cells; tiles
+x 51..80, y 20..115), with VRAM's block RAM again all over the die.
+
+So the engine did not go to "another part of the chip" by design: in the gpudiag build the placer
+put it in the CPU's own clock region, next to the CPU and the bus it talks to, and in the DDR
+build wherever the CPU and LiteDRAM left room. VRAM's block RAM is wherever the block RAM
 columns are: 76 of the 135 RAMB36 cannot help being spread over the die, which is what the long
 last hops of the sys_clk critical path show.
 
@@ -490,7 +521,8 @@ was done here (the brief: do not change the flow).
 * **Block RAM 83 %.** VRAM's 76 RAMB36 spread over most of the 100T's block RAM columns, so its
   multiplexers and the CPU's read path span the die. At 25 MHz there is room; the DDR design's
   80 MHz dram_clk had +1.13 ns and placed in three tries of four, and the added block RAM and
-  routing may cost it placements. The DDR+GPU design is built last and its margin recorded.
+  routing may cost it placements. The DDR+GPU design's first placement met it with +1.24 ns
+  (section 12.2); that is one sample.
 * **0x3000_0000 was a "known unmapped" address** in older tests: bramdiag's "load from an
   unmapped address" probe, SurfBoot's monitor test (`md 0x30000000`) and the hello test kernel use
   it. On the GPU designs that address is VRAM, so those probes would see memory. They run on the
@@ -522,8 +554,9 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
    `make -C surfcpu program-volatile DESIGN=surfcpu_arty_a7_gpudiag` (volatile: the flash is not
    touched).
 2. Watch the UART (`make -C surfcpu uart-console`) and press RESET (or type Ctrl-R): gpudiag prints
-   its identity (SoC 0.3.0, features 17f: no DDR), its sections, one line per scene
-   with its FRAME_CRC, and `GPUDIAG: PASS (n checks)`. Every scene's CRC must be the one in
+   its identity (board Arty A7-100T (0x100), SoC 0.3.0, features 17f: no DDR), its sections, one
+   line per scene with its FRAME_CRC, and `GPUDIAG: PASS (117 checks)`, as the synthesized netlist
+   did in simulation (evidence/gpu/g2-netlist-sim.txt). Every scene's CRC must be the one in
    section 14.1; `sim/gpu/gpudiag_check.py --uart <capture> --frames - --expect
    build/fw/gen/gpuscenes_expect.h` checks a capture.
 3. The monitor: each scene shows for about a twentieth of a second while it is checked; the last
@@ -532,7 +565,8 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
    confirms the picture: square corners, the frame on all four edges, nothing cut off.
 4. G2 also: the DDR+GPU design boots SurfOS from the card exactly as `surfcpu_arty_a7_ddr` does
    (`make build-fpga FLOW=openxc7 DESIGN=surfcpu_arty_a7_ddr_gpu`, then the m7 steps of
-   PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`); SurfBoot's banner shows features 1ff.
+   PHYSICAL-TESTS.md with `DESIGN=surfcpu_arty_a7_ddr_gpu`); SurfBoot's monitor command `info`
+   shows features 1ff (its label list predates the GPU bit).
 
 ### 14.1 Expected FRAME_CRCs
 
