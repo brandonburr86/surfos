@@ -243,7 +243,8 @@ int cmd_gui(int argc,char **argv) {
         if(!framebuffer_graphics_owned()) {
             /* 10/17/26: another console has the screen: wait for ours, then draw it all again */
             if(curTask->con==conActive && framebuffer_graphics_begin()==0 && pointer_begin(&d)) {
-                g->x=d.width/2; g->y=d.height/2; g->drag=g->resize=g->scroll=g->app_drag=-1;
+                g->x=d.width/2; g->y=d.height/2; g->buttons=0;  /* 10/18/26: no button held, so the next */
+                gui_release(g);                                 /* press is one; drags end as at a release */
                 d.first=d.full=true; g->dirty=true; esc=0; keys_down=0;
                 continue;
             }

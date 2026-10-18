@@ -7,6 +7,7 @@
    at once draws inside guard pixels at three sizes, and the desktop leaves no session behind. */
 #include "gui_fake.h"
 #include "../../shell/gui_media.h"
+#include "../../shell/gui_tools.h"
 
 static struct gui_state g;
 static struct fb_surface screen;
@@ -133,6 +134,54 @@ static void test_arrows(void) {
     CHECK(gui_wants_arrows(&g));
 }
 
+/* the left button held at (x, y) (window-relative to id's window), or let go of there */
+static void hold(int id, int x, int y, bool held) {
+    struct pointer_event e;
+    memset(&e, 0, sizeof(e));
+    e.x = g.win[id].x + x;
+    e.y = g.win[id].y + y;
+    e.buttons = held ? POINTER_LEFT : 0;
+    gui_pointer(&g, &e);
+}
+
+/* 10/18/26: a drag nobody holds any more ends as at a release (gui_release()): the desktop got the screen back with
+   no pointer event to say the button went up (shell/gui.c), or the window was minimized mid-drag. Before, the Log,
+   held past its top edge, went on scrolling by itself and redrawing the desktop 20 times a second */
+static void test_release(void) {
+    int i, n = 0, first, rows, total, now;
+    fake_desktop(&g, 960, 540);
+    for(i = 0; i < 300; i++) n += snprintf(fake_log + n, sizeof(fake_log) - (u32)n, "line %04d of the kernel log\n", i);
+    fake_log_written = (u32)n;
+    gui_open(&g, GUI_LOG);
+    ticks(30);
+    log_view(&g, &first, &rows, &total);
+    CHECK(total >= 300 && rows > 0);
+    hold(GUI_LOG, g.win[GUI_LOG].w / 2, g.win[GUI_LOG].h / 2, true);    /* a line chosen, then held past the top */
+    hold(GUI_LOG, g.win[GUI_LOG].w / 2, 4, true);
+    CHECK(g.app_drag == GUI_LOG && g.logview.drag);
+    ticks(10);
+    log_view(&g, &now, &rows, &total);
+    CHECK(now < first);                                 /* held there, it scrolls up */
+    g.buttons = 0;                                      /* the screen came back, as shell/gui.c has it */
+    gui_release(&g);
+    CHECK(g.app_drag == -1 && !g.logview.drag);
+    log_view(&g, &first, &rows, &total);
+    ticks(50);
+    log_view(&g, &now, &rows, &total);
+    CHECK(now == first);                                /* and stays put */
+    /* minimized mid-drag (from the keyboard, the button still held): the drag ends too */
+    hold(GUI_LOG, g.win[GUI_LOG].w / 2, g.win[GUI_LOG].h / 2, true);
+    hold(GUI_LOG, g.win[GUI_LOG].w / 2, 4, true);
+    CHECK(g.app_drag == GUI_LOG && g.logview.drag);
+    gui_act(&g, ACT_MINIMIZE);
+    CHECK(g.win[GUI_LOG].min && g.app_drag == -1 && !g.logview.drag);
+    log_view(&g, &first, &rows, &total);
+    ticks(50);
+    log_view(&g, &now, &rows, &total);
+    CHECK(now == first);
+    hold(GUI_LOG, 0, 0, false);
+}
+
 /* every window open at once, in front in turn, drawn inside the screen; then nothing is left running */
 static void test_all_windows(int width, int height) {
     int id, front;
@@ -156,6 +205,7 @@ int main(void) {
     test_files_open();
     test_charmap_paste();
     test_arrows();
+    test_release();
     test_all_windows(640, 400);
     test_all_windows(960, 540);
     test_all_windows(1280, 800);

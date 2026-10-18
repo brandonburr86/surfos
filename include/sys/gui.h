@@ -197,6 +197,7 @@ struct gui_state {
 void gui_init(struct gui_state *g, int width, int height);
 void gui_open(struct gui_state *g, int app);
 void gui_pointer(struct gui_state *g, const struct pointer_event *e);
+void gui_release(struct gui_state *g);      /* 10/18/26: the button let go of with no event (the screen came back) */
 void gui_key(struct gui_state *g, int key);
 void gui_render(const struct gui_state *g, const struct fb_surface *s);
 void gui_cursor(const struct fb_surface *s, int x, int y, int scale);

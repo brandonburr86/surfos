@@ -288,6 +288,7 @@ void gui_close(struct gui_state *g, int id) {
 
 static void minimize(struct gui_state *g, int id) {
     if(id < 0 || !g->win[id].open) return;
+    if(g->app_drag == id) gui_release(g);       /* 10/18/26: a drag in it ends with it out of sight */
     g->win[id].min = true;
     refocus(g);
 }
@@ -891,20 +892,26 @@ static void wheel(struct gui_state *g, int dz) {
     }
 }
 
+/* the left button is let go of: every drag ends, the suite's through its release hook. 10/18/26: also when no
+   pointer event says so (shell/gui.c, when the desktop gets the screen back; a window minimized mid-drag), so that
+   no application goes on with a drag nobody holds (the Log scrolled by itself) */
+void gui_release(struct gui_state *g) {
+    int id;
+    g->drag=g->resize=g->scroll=-1; g->drawing=false; g->note.selecting=false;
+    if(g->app_drag>=0) {                                /* 10/17/26: the suite's drag ends */
+        id=g->app_drag; g->app_drag=-1;
+        if(gui_app_of(id)->release) gui_app_of(id)->release(g);
+        g->dirty=true;
+    }
+}
+
 void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
     bool press=(e->buttons&POINTER_LEFT) && !(g->buttons&POINTER_LEFT);
     int i,id,x,y;
     struct gui_window *w;
     g->x=gui_clamp(e->x,0,g->width-1); g->y=gui_clamp(e->y,0,g->height-1); g->buttons=e->buttons;
     if(e->wheel) wheel(g,e->wheel);
-    if(!(e->buttons&POINTER_LEFT)) {
-        g->drag=g->resize=g->scroll=-1; g->drawing=false; g->note.selecting=false;
-        if(g->app_drag>=0) {                            /* 10/17/26: the suite's drag ends */
-            id=g->app_drag; g->app_drag=-1;
-            if(gui_app_of(id)->release) gui_app_of(id)->release(g);
-            g->dirty=true;
-        }
-    }
+    if(!(e->buttons&POINTER_LEFT)) gui_release(g);
     if(g->dialog.kind) { dialog_pointer(g,g->x,g->y,press); return; }
     if(g->drag>=0) {                                    /* below the menu bar, above the taskbar (as gui_place) */
         int top=MENU_H+6, bottom, nx, ny;
