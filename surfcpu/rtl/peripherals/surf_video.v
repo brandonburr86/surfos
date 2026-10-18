@@ -47,7 +47,8 @@ the graphics colour of the pixel in S3. GPAL is a dual-clock block RAM (port A t
 B the scan-out), RGB332 at configuration and untouched by a reset. FRAME_CRC: every visible
 pixel's colour as chosen in S3 (what S4 puts on the pins) goes into zlib's CRC-32 as two
 bytes, low first, from pixel (0, 0) to (639, 479); the result and a frame count cross to the
-sys domain together, about 160 pixel clocks before the frame's vertical blanking starts.
+sys domain together, about 160 pixel clocks before the frame's vertical blanking starts, and a
+FRAME_COUNT read keeps its frame's CRC for the next FRAME_CRC read.
 */
 module surf_video #(
     parameter integer PIX_HZ  = 25173611,
@@ -518,7 +519,24 @@ module surf_video #(
             surf_cdc_word #(.WIDTH(48), .INIT(48'd0)) u_crc_cdc (
                 .src_clk(pix_clk), .src_rst(pix_rst), .src_data({fcount, crc_last}),
                 .dst_clk(clk), .dst_rst(rst), .dst_data(crc_cross));
-            assign crc_sys    = crc_cross[31:0];
+            // The pair crosses together, but software reads it with two loads: a read of
+            // FRAME_COUNT keeps the CRC of the frame it counts, and the next read of FRAME_CRC
+            // returns that copy; a FRAME_CRC read without a FRAME_COUNT read since the last one
+            // returns the newest CRC (docs/GPU.md section 3)
+            reg  [31:0] crc_snap   = 32'd0;
+            reg         snap_valid = 1'b0;
+            wire        rd_ok      = accept && legal && !s_req_write;
+            always @(posedge clk) begin
+                if (rst) begin
+                    snap_valid <= 1'b0;
+                end else if (rd_ok && hit_fcnt) begin
+                    crc_snap   <= crc_cross[31:0];
+                    snap_valid <= 1'b1;
+                end else if (rd_ok && hit_crc) begin
+                    snap_valid <= 1'b0;
+                end
+            end
+            assign crc_sys    = snap_valid ? crc_snap : crc_cross[31:0];
             assign fcount_sys = crc_cross[47:32];
         end else begin : g_nogfx
             assign gpal_rd    = 12'd0;

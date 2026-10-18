@@ -51,7 +51,7 @@ section records the refinements and the deviations.
 | GFX_BASE, GFX_STRIDE | byte offset; stride | both must be multiples of 4 (bits 1:0 read 0) | the scan-out reads aligned words; an unaligned base would need a byte rotator for no use |
 | GFX_SCALE | 1 or 2 | 2 doubles; 0 and 3 act as 1 | every value has a defined meaning |
 | GPAL | 256 x RGB444 | block RAM (a RAMB18): RGB332 when the FPGA is configured, not changed by a reset | a 3,072-bit register file would cost about 3,000 flip-flops; the text palette keeps its reset |
-| FRAME_CRC | CRC-32 of the composited visible pixels | zlib's crc32 over each pixel as a little-endian 16-bit word, plus FRAME_COUNT (frames counted with the CRC, crossing with it) | FRAME_COUNT tells software which frame a CRC belongs to (section 4.4) |
+| FRAME_CRC | CRC-32 of the composited visible pixels | zlib's crc32 over each pixel as a little-endian 16-bit word, plus FRAME_COUNT (frames counted with the CRC, crossing with it) | FRAME_COUNT tells software which frame a CRC belongs to, and FRAME_COUNT then FRAME_CRC is a consistent pair (section 3) |
 | Commands | the nine of the brief | as decided, plus NOP (opcode 0) | a FIFO of zero words drains harmlessly |
 | Errors | overflow, unknown opcode, bad parameters | as decided, plus CTRL.ABORT | a command waiting for data words that never come could otherwise only be ended by a reset |
 | IRQ | gpu = 5 | as decided | |
@@ -112,11 +112,21 @@ keeps a line address that starts at GFX_BASE and adds GFX_STRIDE after every lin
 second line with S = 2), so no multiplier is needed.
 
 **Frame latch.** GFX_BASE, GFX_STRIDE and GFX_SCALE cross from sys_clk in their own
-`surf_cdc_word` and are taken at the same point as CTRL, CURSOR and SCROLL: the start of the last
-blanking line (line 524). A frame is drawn with one set of values, so software that writes
-GFX_BASE after STATUS.VBLANK_EV, or any time, flips pages without tearing: the new base shows
-from the next frame whose latch it reaches. VRAM itself is not latched: what is written while a
-frame is shown shows in that frame from that point down.
+`surf_cdc_word` and are taken at the same point as CTRL, CURSOR and SCROLL (which cross together
+in another): the start of the last blanking line (line 524). Each frame is drawn with one value of
+each register, so a page flip (GFX_BASE alone) never tears: the new base shows from the next frame
+whose latch it reaches. Values written by separate stores are separate values, though: each
+reaches the pixel domain on its own, within a microsecond of its store, and a frame takes what has
+arrived by its latch. The exact rule: **registers written one after the other change the same
+frame when their stores come between STATUS.VBLANK_EV (the start of blanking, line 480) and
+1.3 ms after it**; the latch comes 1.4 ms after VBLANK_EV (44 lines). Stores on either side of a
+latch split: that frame shows, say, the new mode with the old placement, and the next frame both.
+`test-gpu-video` checks both halves of the rule. This is documented rather than changed (the first
+GPU review's finding 4): one crossing for CTRL and the GFX_ registers would not make separate
+stores one either, since a crossing can start between two of them; only a commit register would
+(writes kept until software commits them, then taken at one latch), which G3 can add if the driver
+needs to change mode and placement mid-picture. VRAM itself is not latched: what is written while
+a frame is shown shows in that frame from that point down.
 
 **GPAL.** 256 entries of RGB444 at video offset 0x400 + 4n, in a dual-clock block RAM like the
 text RAM: port A for the bus (read and write), port B for the scan-out. Writes apply as they
@@ -151,12 +161,17 @@ value 0xFFFFFFFF, final XOR 0xFFFFFFFF), restarted at pixel (0, 0) and finished 
 At the finish FRAME_COUNT goes up by one, and both cross to sys_clk together in one
 `surf_cdc_word`. They change about 160 pixel clocks before the frame's vertical blanking starts
 (when STATUS.VBLANK_EV sets), so a FRAME_CRC read after VBLANK_EV belongs to the frame that just
-ended, and FRAME_COUNT says which one it was.
+ended. Software reads the two with two loads, and a frame can end between them, so a read of
+FRAME_COUNT keeps the CRC of the frame it counts, and the next read of FRAME_CRC returns that
+copy, however many frames have passed since; a FRAME_CRC read with no FRAME_COUNT read since the
+last FRAME_CRC read returns the newest CRC. **FRAME_COUNT, then FRAME_CRC, is a consistent pair**
+(the first GPU review's finding 3: without the copy, count N could come with CRC N+1, which G4's
+frame-by-frame tearing check could not live with).
 
 **Checking a still picture** (the diagnostic's method, section 10). After the last VRAM or
-register change, read c0 = FRAME_COUNT, then wait until FRAME_COUNT - c0 >= 2: the frame counted
-c0 + 2 started after the change, whatever moment within a frame it came at, so its CRC is that
-of the final picture. Two frames at 59.94 Hz: at most 33.4 ms.
+register change, read c0 = FRAME_COUNT, then wait until FRAME_COUNT - c0 >= 2 and read FRAME_CRC:
+the frame the last FRAME_COUNT read counted started after the change, whatever moment within a
+frame it came at, so its CRC is that of the final picture. Two frames at 59.94 Hz: at most 33.4 ms.
 
 ## 4. Registers
 
@@ -170,12 +185,14 @@ them.
 | 0x080 | GFX_BASE | VRAM byte offset of the top-left pixel; bits 18:2 (multiple of 4); reset 0 |
 | 0x084 | GFX_STRIDE | bytes per VRAM line; bits 15:2 (multiple of 4); reset 640 |
 | 0x088 | GFX_SCALE | 1 = 640x480, 2 = 320x240 doubled, 0 and 3 act as 1; reset 1 |
-| 0x08C | FRAME_CRC | CRC-32 of the last complete frame (section 3) |
-| 0x090 | FRAME_COUNT | frames whose CRC was taken since the pixel domain's reset (16 bits, wraps) |
+| 0x08C | FRAME_CRC | CRC-32 of the last complete frame; after a FRAME_COUNT read, of the frame it counted (section 3) |
+| 0x090 | FRAME_COUNT | frames whose CRC was taken since the pixel domain's reset (16 bits, wraps); a read keeps that frame's CRC for the next FRAME_CRC read |
 | 0x400..0x7FC | GPAL | graphics palette, RGB444 |
 
 CTRL.MODE 2 and 3 are the graphics modes. Reads of GPAL take the same single cycle as every other
-register (the block RAM's registered output is the answer).
+register (the block RAM's registered output is the answer). A mode change and its placement are
+written as separate registers: to have them change the same frame, write them after
+STATUS.VBLANK_EV and within 1.3 ms of it (section 3, the frame latch).
 
 ### 4.2 gpu at 0x1000_9000
 

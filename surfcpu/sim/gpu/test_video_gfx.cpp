@@ -16,6 +16,9 @@ C model (sim/models/gpu_model.c) for what they should show. Checks (docs/GPU.md 
   * GFX_BASE, GFX_STRIDE and GFX_SCALE written in mid-frame change the next frame wholly and
     never the current one; a GPAL write applies as it arrives;
   * FRAME_COUNT counts every frame, and a FRAME_CRC read after VBLANK_EV is that frame's;
+  * FRAME_COUNT then FRAME_CRC is a consistent pair even with frames shown between the two reads;
+  * CTRL.MODE and GFX_BASE written together in the vertical blanking change the same frame;
+    written on either side of the frame latch (line 524) they split for one frame (GPU.md 4.1);
   * a reset of the pixel domain alone: the count restarts, the settings come back over the
     crossing.
 At the board's clocks or, by seed, other ratios for the crossings.
@@ -164,7 +167,8 @@ static void check_crc(Tb &tb, Bus &bus, const char *what, uint32_t expect) {
     bus.wr(B + SURF_VIDEO_STATUS, SURF_VIDEO_STATUS_VBLANK_EV_MASK);
     const uint32_t c0 = bus.rd(B + SURF_VIDEO_FRAME_COUNT);
     while (!(bus.rd(B + SURF_VIDEO_STATUS) & SURF_VIDEO_STATUS_VBLANK_EV_MASK)) bus.idle(50);
-    const uint32_t crc = bus.rd(B + SURF_VIDEO_FRAME_CRC), c1 = bus.rd(B + SURF_VIDEO_FRAME_COUNT);
+    const uint32_t c1 = bus.rd(B + SURF_VIDEO_FRAME_COUNT);       // the pair: the count, then its CRC
+    const uint32_t crc = bus.rd(B + SURF_VIDEO_FRAME_CRC);
     const uint64_t f = tb.cap.frames();                  // the capture closes the frame at its vsync
     while (tb.cap.frames() == f) bus.idle(64);
     const uint32_t cap = captured_crc(tb);
@@ -347,6 +351,82 @@ static void test_latch(Tb &tb, Bus &bus) {
                 "once\n");
 }
 
+// FRAME_COUNT, then FRAME_CRC: the CRC is that of the frame counted, even when frames have passed
+// between the two reads (the first GPU review: two loads could pair a count with another frame's
+// CRC); a pair read back to back is the newest frame's
+static void test_pair(Tb &tb, Bus &bus) {
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_GFX);
+    g_d.mode = 2;
+    g_d.cursor = 0;
+    set_gfx(bus, 0, 640, 1);
+    wait_frames(tb, bus, 2);
+    for (int t = 0; t < 3; t++) {
+        wait_vblank_ev(bus);                              // frame c has ended and its CRC crossed
+        const uint32_t c = bus.rd(B + SURF_VIDEO_FRAME_COUNT);
+        const uint64_t f = tb.cap.frames();
+        while (tb.cap.frames() == f) bus.idle(64);        // the capture closes frame c at its vsync
+        const uint32_t crc_c = captured_crc(tb);
+        const uint8_t v = g_vram[0];                      // from the next frame on, another picture
+        const uint16_t col = (uint16_t)((g_d.gpal[v] + 0x111u * (unsigned)(t + 1)) & 0xFFF);
+        bus.wr(B + SURF_VIDEO_GPAL + 4 * v, col);
+        g_d.gpal[v] = col;
+        render();
+        const uint32_t model = gpu_frame_crc(g_frame.data());
+        wait_frames(tb, bus, 2);
+        const uint32_t crc = bus.rd(B + SURF_VIDEO_FRAME_CRC);
+        CHECK(crc == crc_c && crc_c != model, "FRAME_CRC two frames after FRAME_COUNT %u: %08x, frame %u's %08x "
+              "(the newer frames' %08x)", c, crc, c, crc_c, model);
+        const uint32_t c2 = bus.rd(B + SURF_VIDEO_FRAME_COUNT);
+        const uint32_t crc2 = bus.rd(B + SURF_VIDEO_FRAME_CRC);
+        CHECK(crc2 == model && ((c2 - c) & 0xFFFF) >= 2, "the next pair, back to back: count %u -> %u, FRAME_CRC "
+              "%08x, the newest frame's %08x", c, c2, crc2, model);
+    }
+    std::printf("pair: FRAME_COUNT then FRAME_CRC two frames later gives the counted frame's CRC, 3 times\n");
+}
+
+// CTRL.MODE and GFX_BASE written one after the other: in the vertical blanking, after VBLANK_EV
+// and well before the frame latch (line 524), they change the same frame (GPU.md section 4.1's
+// rule); written on either side of the latch they split for one frame, as the rule says
+static void test_mode_and_placement(Tb &tb, Bus &bus, std::mt19937 &rng) {
+    const uint64_t window = 1300000000ull / tb.sys_half / 2;      // 1.3 ms of the 1.4 ms to the latch
+    for (int t = 0; t < 4; t++) {
+        bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+        set_gfx(bus, 0, 640, 1);
+        g_d.mode = 1;
+        wait_frames(tb, bus, 2);
+        const uint32_t base = 4 * (1 + rng() % 20000);
+        wait_vblank_ev(bus);
+        bus.idle((int)(rng() % window));
+        bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_GFX);
+        bus.wr(B + SURF_VIDEO_GFX_BASE, base);
+        const uint64_t f0 = tb.cap.frames();
+        CHECK(tb.cap.line() >= 515 || tb.cap.line() < 33, "the writes left the vertical blanking (line %lld)",
+              (long long)tb.cap.line());
+        wait_frame_edge(tb, bus, tb.cap.line() >= 515 ? f0 + 2 : f0 + 1);  // the first frame after the latch
+        g_d.mode = 2;
+        g_d.gfx_base = base;
+        compare(tb, "MODE and GFX_BASE written in the blanking: the next frame has both");
+    }
+    // on either side of the latch: MODE at line 523, GFX_BASE at line 1 of the frame
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_TEXT);
+    set_gfx(bus, 0, 640, 1);
+    g_d.mode = 1;
+    wait_frames(tb, bus, 2);
+    sync_to_line(tb, bus, 33);                            // capture line 33 = vcnt 523
+    bus.wr(B + SURF_VIDEO_CTRL, CTRL_EN | MODE_GFX);
+    while (tb.cap.line() < 36) bus.idle(16);              // vcnt 1: past the latch
+    bus.wr(B + SURF_VIDEO_GFX_BASE, 6400);
+    const uint64_t f0 = tb.cap.frames();
+    wait_frame_edge(tb, bus, f0 + 1);
+    g_d.mode = 2;
+    compare(tb, "MODE before the latch, GFX_BASE after: that frame has the new mode and the old placement");
+    wait_frame_edge(tb, bus, f0 + 2);
+    g_d.gfx_base = 6400;
+    compare(tb, "... and the next frame both");
+    std::printf("mode and placement: written in the blanking, the same frame (4 times); across the latch, split for "
+                "one frame\n");
+}
+
 static void test_count_and_reset(Tb &tb, Bus &bus) {
     // FRAME_COUNT: one per frame over 5 frames
     const uint64_t f0 = tb.cap.frames();
@@ -409,6 +489,8 @@ int main(int argc, char **argv) {
     test_overlay(tb, bus, rng);
     tb.cap.write_ppm(g_out + "/overlay.ppm");
     test_latch(tb, bus);
+    test_pair(tb, bus);
+    test_mode_and_placement(tb, bus, rng);
     test_count_and_reset(tb, bus);
     CHECK(bus.problems.empty(), "SurfBus protocol: %s", bus.problems.empty() ? "" : bus.problems[0].c_str());
     top->final();
