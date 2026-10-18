@@ -1760,31 +1760,57 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
     not _intr), so a waiter leaves the queue only when it is handed the lock or dies: kill_task_now() takes it off its
     list (become_zombie()) in an interrupts-off step, so either it is still queued and taken off before a hand-over
     can pick it, or it was handed the lock and counts it, and B62 then keeps the kill until it lets go. A wake-up for
-    another reason (fs/poll.c's and the pager's wake_up_task() of a task that has gone on to wait for a mutex) puts
-    the waiter at the end of the queue again: a loss of place, never a lost lock
-  Every mutex on both kernels, how it nests, and whether anything depended on taking it back at once:
-    mounts (fs/vfs.c): taken alone; let go of around each volume's sync (vfs_sync()), nothing else held then
+    another reason (wake_up_task()) takes the waiter off the queue. This said it put the waiter at the end of the queue
+    again, "a loss of place, never a lost lock": not so (round fs-fix-11, B66, section 73). When its holder had let go
+    before it ran, mutex_unlock() had found nobody in line and left the mutex free, and the waiter went back in line
+    and slept on the free mutex until another task took it and let go. Now it takes the free mutex. Nor does any such
+    wake-up reach a mutex's waiter today, as this said fs/poll.c's and the pager's did: the timers of fs/poll.c and
+    wait_on_timeout() are cancelled before their task goes on, and the pager's call-off wakes only its asker, which
+    waits for a key or the console's lock, not a mutex
+  Every mutex on both kernels, how it nests, and whether anything depended on taking it back at once (completed in
+  round fs-fix-11, B67, section 74: seven nestings were missing, none reversing an order):
+    mounts (mount_lock, fs/vfs.c): innermost: none of its regions takes another lock or waits (they look at the
+      mounts, the devices' counts and the open files, with interrupts off at most); let go of around each volume's
+      sync (vfs_sync()), nothing else held then. Taken alone, or under USB storage's m->lock and the hub thread's
+      usb_lock (lun_probe() -> pick_name() -> vfs_disk_name_mounted(), driver/usb/msc.c: a new disk's name), under
+      fdisk's write_lock (part_commit(): bdev_may_format() and vfs_bdev_change_begin(), its looks at the busy rule;
+      bdev_rescan() -> vfs_bdev_busy()), and under a Wi-Fi station's hw_lock (iwl_start() reads its firmware file:
+      vfs_stat() and vfs_open(), each a walk() through find_mount())
     a volume's (sb->lock, fat_lock()): outermost of the file system's; the cache's, the bounce buffer's and a driver's
       under it
     the cache's (bcache_lock): under a volume's or alone; never with the bounce buffer's; let go of and taken again
       around its sleeps and device requests while a volume's may be held: no waiter for it holds or wants a volume's
-      (the cache never calls into a file system)
+      (the cache never calls into a file system); nothing is taken under it. Also under the hub thread's usb_lock (a
+      USB disk dropped: disk_drop() -> bdev_unregister() -> binvalidate(), in msc_service() with m->lock let go of
+      first and in msc_detach()), under fdisk's write_lock (bdev_rescan() -> bdev_unregister() and binvalidate()),
+      and under a Wi-Fi station's hw_lock (the firmware file's reads: /initrd is a tar file system read through the
+      cache)
     the bounce buffer's (bounce_lock): under a volume's or alone; a driver's under it (the request)
-    fdisk's (write_lock): mutex_trylock() only (another fdisk is refused); its requests take a driver's
+    fdisk's (write_lock): mutex_trylock() only (another fdisk is refused), never waited for, so nothing can wait in
+      a circle through it; its requests take a driver's, its looks at the busy rule mount_lock, its rescan mount_lock
+      and bcache_lock
     USB storage's (m->lock): under the hub thread's usb_lock (attach, poll) or alone (requests); ep0's and the xHCI
-      command lock under it; let go of and taken again around a new disk's partition scan in lun_probe() while the hub
-      thread holds usb_lock: a request waiting for it takes no usb_lock; mutex_trylock() in msc_service() skips a busy
-      device, as before
-    usb (usb_lock): outermost of USB; the hub thread's poll and usb_print()/usb_snapshot()/the stall test
+      command lock under it, and mount_lock (a new disk's name, pick_name()); let go of and taken again around a new
+      disk's partition scan in lun_probe() while the hub thread holds usb_lock: a request waiting for it takes no
+      usb_lock; mutex_trylock() in msc_service() skips a busy device, as before
+    usb (usb_lock): outermost of USB; the hub thread's poll and usb_print()/usb_snapshot()/the stall test; under it
+      USB storage's m->lock, ep0's and the command lock, and net_lock (an adapter's unit, unit_for()), mount_lock (a
+      new disk's name) and bcache_lock (a disk dropped)
     a USB device's ep0 (ep0_lock): under m->lock or usb_lock; the xHCI command lock under it
     the xHCI command lock (cmd_lock): innermost
     an ATA channel's (ch->lock): under the bounce buffer's or alone; nothing under it
     the SD card's (s->lock): under the bounce buffer's or alone (requests), or the card watch's; nothing under it
+      (the watch names a new card's disk, and drops a card taken out, with s->lock let go of)
     net (net_lock): alone, or under dhcp_lock or ping_lock (held across their exchanges; nothing waiting for net_lock
-      takes them)
+      takes them), or under the hub thread's usb_lock (unit_for(), driver/usb/usbnet.c: an adapter taking a unit's
+      name has the unit's addresses cleared under net_lock); no holder of net_lock takes usb_lock (a send through a
+      USB adapter, usbnet_send(), takes no mutex: interrupts off around usb_poll() and usb_submit())
     dhcp (dhcp_lock): mutex_trylock() and a 50 ms sleep (one at a time): never queued, unchanged
     ping (ping_lock): outer of net_lock
-    a Wi-Fi station's (hw_lock): outer of the iwl locks; mutex_trylock() in wlan_describe() says "busy", as before
+    a Wi-Fi station's (hw_lock): outer of the iwl locks, and of mount_lock and bcache_lock while iwl_start() reads
+      the firmware file (/initrd/lib/firmware/; with another file system mounted at /initrd, of what its reads take);
+      nothing in the file system, the cache or the drivers takes it; mutex_trylock() in wlan_describe() says "busy",
+      as before
     its scan list (list_lock): alone
     iwl commands (cmd_lock): outer of rx_lock, which iwl_cmd() lets go of and takes again around the command's wait
       while it holds cmd_lock: the waiter for rx_lock (iwl_poll() from the iwl thread) takes no cmd_lock under it
@@ -1792,13 +1818,20 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
       station layer through a queue (wlan_rx() copies them under irq_save()), so no lock of the station's is taken
       under it
     iwl transmit (tx_lock): innermost
-    random (random_lock): alone
+    random (random_lock): alone. crypto_random() is called holding no lock: dns_random16() (net/dns.c:44) at line
+      94, after dns_lookup() lets net_lock go at line 92, and at line 54 as udp_open()'s argument, worked out before
+      udp_open() takes net_lock (net/udp.c:45); the supplicant's message 1 (net/wlan/wpa.c:371) from the station
+      thread's rx_all(), holding none; the simulated access point's (driver/wifi/wlansim.c) from its thread, outside
+      its net_lock section. (The review of B61-B65 counted it under net_lock: it is not)
     and the self tests' (selftest, rvtest) and crashlock
   No order is reversed anywhere (no lock is taken under one that it is ever held over), so the hand-over adds no
   deadlock; the only change is who goes next
   The cost on SurfCPU: section 71
 
 == 68. B64: USB storage's worst cases, from driver/usb/msc.c
+  (Round fs-fix-11, B71, section 78: these are a healthy controller's figures, each xHCI command completed at once and
+  no second recovery of an endpoint under way; the worst the code allows, slower xHCI commands and those waits
+  counted, is there)
   usb_bounds.py (in this round's scratch space; its output below, run on 4f146b5's tree) takes the stages' timeouts from
   the code (CMD_TIMEOUT 20 s for READ, WRITE and SYNCHRONIZE CACHE's data and status; 5 s for every other command and
   REQUEST SENSE; the command block 5 s; usb_endpoint_recover() waits at most 5 s; a control transfer 1 s, so a BOT
@@ -1921,3 +1954,360 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
   more (bdev_changes, 0 unless an mkfs or fdisk holds a device), and nothing else this round adds runs in these
   workloads (the kill and fault rule, the claims, crashlock). The layout alone (6ed8fcb against the padded 6ed8fcb):
   +0.18 %, +0.21 %, +0.86 % and +0.28 %
+======================================================================================================================
+Round fs-fix-11 (10/18/26): an independent review of B61-B65 (d4050ed), and its fixes (audit B66-B72)
+date:   2026-10-18 (local)
+review: by another agent, read-only, on d4050ed: steps of the kernel's self test (r11_selftest.c.inc, r11_round2.c.inc:
+        R11a, a mutex and a nested one under heavy contention by six workers with kills; R11b, a mutex's waiter woken
+        another way just before the letting go: it slept on the free mutex, x86 at -O0 and -O2; R11c, mkfs of a
+        partition again and again while its sibling is mounted and written; R11d, kills and Ctrl+Cs at random points of
+        an mkfs that holds its device; R11e, an mkfs with its partition's retype, killed or interrupted at random times:
+        all but R11b clean) and the same for the riscv32 kernel's rvtest (rv11_selftest.c.inc: R11a and R11b, R11b
+        failing at -O2); round fs-fix-7's threaded campaign (camp/: conc7.c, 72 runs, clean); its own fix of R11b
+        (r11_sync_fix.diff: R11b passing with it); and a reading of section 67's survey, mount's busy rule, the kill's
+        log and B64's USB figures. With it, test-all's O0 smoke test once stopped on a forwarded port taken meanwhile.
+        Its findings (one minor and five cosmetic) and the harness's are docs/CODE-AUDIT.md's B66-B72.
+before: d4050ed (round fs-fix-10 merged): a git archive of it and a git worktree of it. The kernel's self test before:
+        this round's shell/selftest.c and arch/riscv32/rvtest.c in a whole d4050ed tree, with stand-ins for what d4050ed
+        lacks (vfs_mount_why() as d4050ed's vfs_mount_flags() saying no reason, VFS_BUSY_PATH), volume
+        surfos-sc-fs11-base; tests/test_qemu_ports.py against d4050ed's tools/; `test_fatconc mutex` with d4050ed's
+        shim (on the Mac)
+after:  sc/fs-fix-11 (from surfcpu d4050ed): ab0fe17 a mutex's waiter woken another way takes the free mutex (B66),
+        e647d74 the kill's log for a task outside any call (B69), aef58ba mount probes under its reservation and says
+        why it is busy (B68), eb17d48 the threaded test's mutex as the kernel's (B70), 3dfd49b QEMU started again with
+        fresh ports (B72), each with its self-test step or test, 524d041 the port test ahead of tests/test_devenv.py
+        in make unittest (which stops there with O=2), and 0062c33 B66's look in the wait loop only, the arrival as
+        before (ab0fe17 folded the two into one loop, which cost SurfCPU cycles on every lock: section 81); then docs
+        and this evidence. The code is final at 0062c33; every devenv run, make -C surfcpu check and the RTL runs are
+        of a clean checkout of it, and ran before at 3dfd49b too (make unittest at 524d041), all passing; the host
+        runs are of 3dfd49b's files, which 0062c33 changes only in kernel/sync.c and the Makefile's order
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32), and the same with
+        -fsanitize=address,undefined; QEMU on the Mac for the self test's transcripts (tools/qemu-run.py's boot, as
+        make test boots) and for tests/test_qemu_ports.py's check of QEMU's own messages (QEMU 11.1.1); the devenv
+        container (gcc -m32) for the builds, make test-all, make unittest and make test-usb; the SurfCPU toolchain
+        container for make -C surfcpu check and the RTL runs
+
+== 72. The review's own materials on this tree (the clean checkout of 0062c33, and of 3dfd49b before it)
+  r11_selftest.c.inc and r11_round2.c.inc, R11a-R11e (added to shell/selftest.c the review's way, its
+          patch_selftest.py: before tests[] and listed first, R11e too as in its tree11; volume surfos-sc-fs11-rev, its
+          run_selftest.py on the Mac, which boots with the network): at 0062c33 (18:33-18:38) at -O0 and at -O2
+          SELFTEST PASS, its 168 checks ok (this round's 159, the network's 4 and the review's 5), each of R11a-R11e
+          "ok": "(R11b: the waiter had the lock within 500 ms of the letting go; ...)" (its "the lock was FREE
+          meanwhile" is its trylock after the 500 ms, when the waiter has had the lock and let it go: it ran at once);
+          R11a at -O0 "7490 takes, 80 workers, 141 kills (84 waiting, 17 holding), 80 ended (74 killed), 0 hung; two
+          owners 0, wrong counts 0, a dead owner seen 0; locks free after: yes yes" (at -O2: 7143 takes, 140 kills);
+          R11c "mkfs of stickC2 198 ok, 0 refused, ...; writer: 12163 files, 0 errors; ... of stickC1 198 ok, 0 REFUSED,
+          0 failed"; R11d "14 mkfs runs killed or interrupted: ... 0 hung; ... claims left 0 times"; R11e "25 runs ...
+          16 killed, 8 interrupted; ended in stage 1-5: 0 0 0 0 25; 0 hung; claims left 0 times; partition missing 0
+          times". At 3dfd49b (16:21-16:27) the same, each "ok". On d4050ed (the review's runs): R11b FAIL at -O0 and
+          -O2, the others ok
+  rv11_selftest.c.inc, R11a-R11b in rvtest (its patch_rvtest.py; make -C surfcpu test-os-qemu, 18:36-18:38 at
+          0062c33, 16:25-16:27 at 3dfd49b): at -O2 and at -O0 "ok REVIEW11 R11b" and "ok REVIEW11 R11a", test_os.py 135
+          of 135 each. On d4050ed (the review's run): R11b FAIL at -O2 (134 of 135)
+  r11_sync_fix.diff: the review's fix of R11b, the look at a free mutex inside the wait loop's else branch: B66 is the
+          same look in the same place (0062c33; ab0fe17 had folded the arrival into the loop, one loop, which put a few
+          loads more on every lock: section 81)
+  camp/, the review's campaign chain as it ran it (camp11_chain.sh: conc7.c as it is, with round fs-fix-7's
+          wake-and-compete mutex; the plain set of 7 settings x 3 kill modes for seeds 11101 and 11102, PERTURB=5
+          KILL_US=700 ESC_MS=20 for 11131, and 3 settings under the sanitizers for 11121, two at a time, 4 s each),
+          built against 3dfd49b's fs/: 72 runs, each "CONC: ok", 702,709 operations, 27,485 kills and 42,208
+          Ctrl+Cs, 417.3 million exact tag checks with no violation, the sanitized 9 with no report (the review's on
+          d4050ed: 72 runs, clean). This round changes neither fs/fat.c nor fs/bcache.c. The same campaigns with the
+          kernel's mutex in the harness: section 77
+
+== 73. B66: a mutex's waiter woken another way takes the free mutex
+  The self test's step test_mutex_wake (both kernels: the test holds a mutex of its own; a thread queues for it; with
+  interrupts off the test wakes the thread with wake_up_task() and lets the mutex go, before the thread runs):
+    0062c33 (and 3dfd49b), x86 at -O0 (the transcripts) and at -O2 (the review's tree, section 72): "(the waiter had the
+      mutex within 500 ms of the letting go)": ok; riscv32 (test_os.py, -O2 and -O0): ok
+    d4050ed (the base harness, x86 -O0): "(the waiter did NOT have the mutex within 500 ms of the letting go; the mutex
+      was free meanwhile, its waiter asleep in line)": FAIL; riscv32 -O2 (test-os-qemu): the same step FAIL, 134 of 135
+      checks
+    The review's R11b on this tree: section 72
+  The change (kernel/sync.c, mutex_lock()): the wait loop looks at locked before each wait, and a free mutex is taken
+  there (locked, owner, the task's count), as on arrival, which is as before. d4050ed's loop waited until the task was
+  the owner, which only a hand-over makes it
+  Why it is right:
+    a free mutex has nobody in line: mutex_unlock() lets it go free only when its queue is empty, and a task finding it
+      free takes it rather than joining the queue, all with interrupts off; so a task taking it free passes nobody
+    the woken waiter is off the queue (wake_up_task() -> wake_locked() takes it off its list) when it looks: a later
+      mutex_unlock() cannot hand it the mutex as well, so it is never counted twice and never owns it twice
+    a waiter handed the mutex finds itself the owner and leaves the loop at once (counted by mutex_unlock()); one woken
+      while the mutex is held by another (handed to a waiter ahead of it, or taken by an arriving task) queues again at
+      the end: FIFO among those in line stands; the woken one loses its place, not the mutex
+    the count: incremented once on each path (taken free on arrival or in the loop, handed over by mutex_unlock(),
+      mutex_trylock()), decremented once by mutex_unlock(); a waiter killed while in line is taken off the queue by
+      become_zombie() in an interrupts-off step before any hand-over can pick it, so a dead task is never handed a
+      mutex (B62 keeps an owner from dying with one)
+  Who calls wake_up_task() today: fs/poll.c's and wait_on_timeout()'s timers (cancelled under irq_save() right after
+  their task's yield() returns, before it can go on to a mutex), the pager's call-off (console_page_call_off(): its
+  asker waits for a key, tty_getc_unless(), or the console's lock, con_lock(), which loops on its own condition), and
+  the self tests. None reaches a mutex's waiter: B66 was latent; the review made the wake-up itself (R11b)
+
+== 74. B67: section 67's list completed
+  Each nesting, found in the code and checked for the reverse order (section 67 has the list as it is now):
+    usb_lock -> net_lock: driver/usb/usbnet.c:228, unit_for(), from usbnet_attach() in the hub thread's poll (usb_lock
+      held): a unit taken by a new adapter has its addresses cleared under net_lock. Reverse: usb_lock is taken only by
+      usb_thread(), usb_print() (lsusb), usb_snapshot() (wifiinfo) and usb_stall_test() (the self test), none with
+      net_lock held; under net_lock a send through the adapter, usbnet_send(), takes no mutex (interrupts off around
+      usb_poll() and usb_submit()). netdev_register() takes no lock
+    m->lock, usb_lock -> mount_lock: driver/usb/msc.c:202, lun_probe() -> pick_name() -> vfs_disk_name_mounted(), with
+      m->lock held (lun_probe()'s callers, msc_attach() and msc_service(), take it) in the hub thread's poll (usb_lock).
+      The SD card's watch has the same pick_name() (boards/arty_a7/sdblk.c:91) with s->lock let go of: no nesting
+    write_lock -> mount_lock: driver/part.c's part_commit(), holding fdisk's write_lock: bdev_may_format() ->
+      vfs_bdev_busy_why(), vfs_bdev_change_begin(), and bdev_rescan() -> vfs_bdev_busy()
+    write_lock -> bcache_lock (found here): bdev_rescan() -> bdev_unregister() -> binvalidate() for each old partition,
+      and binvalidate() of the disk
+    usb_lock -> bcache_lock: driver/usb/msc.c:520, msc_service() lets m->lock go and then disk_drop() ->
+      bdev_unregister() -> binvalidate(); msc_detach() the same (port_disconnect() from the hub thread)
+    hw_lock -> mount_lock, bcache_lock (found here): net/wlan/wlan.c's do_up() holds the station's hw_lock around
+      w->ops->start(): iwl_start() -> read_firmware() -> vfs_stat(), vfs_open(), vfs_read() of
+      /initrd/lib/firmware/<file>: find_mount() (mount_lock), and tarfs reads through the cache (bcache_lock). Another
+      file system mounted at /initrd instead would add its own locks and its driver's under hw_lock
+    net_lock -> random_lock (the review's fifth): not a nesting. crypto_random()'s callers: net/dns.c's dns_random16()
+      at line 94 (dns_lookup() let net_lock go at line 92) and at line 54 (udp_open()'s argument, worked out before
+      udp_open() takes net_lock at net/udp.c:45; dns_socket() is called holding nothing), net/wlan/wpa.c:371 (message
+      1, from the station thread's rx_all(), which holds no lock), driver/wifi/wlansim.c:576, 578 and 631 (the
+      simulated access point's thread, outside its net_lock section at 782-795); dns_lookup()'s callers (shell/main.c's
+      nslookup, ping and httpget, kernel/websvc.c's sys_resolve) hold none
+  None reverses an order:
+    mount_lock is innermost: every region (fs/vfs.c: rootfs_lookup(), rootfs_readdir(), vfs_mount_views(),
+      vfs_dev_mounted(), vfs_mount_why(), vfs_busy(), vfs_umount_lost(), vfs_disk_name_mounted(), vfs_bdev_busy_why(),
+      vfs_bdev_unmounting(), vfs_unmount_begin(), vfs_bdev_change_begin(), vfs_unmount_end(), vfs_sync() (let go of
+      around each sync), find_mount(), vfs_statfs()) looks at lists and counts, calls bdev_first(),
+      bdev_changed_by_other(), in_use() and vfs_getcwd() (no lock), and vget()s or vput()s a root it does not free;
+      nothing in them takes a mutex or waits
+    the cache takes no lock while it holds bcache_lock: it lets it go before the bounce buffer's (fs/bcache.c: every
+      mutex_lock(&bounce_lock) follows a mutex_unlock(&bcache_lock)) and before each device request
+    fdisk's write_lock is only ever tried (part_commit(): mutex_trylock(), "another fdisk is writing a partition table")
+    hw_lock is taken only by net/wlan/wlan.c (its thread and its commands; mutex_trylock() in wlan_describe()); the file
+      system, the cache and the drivers never call into the station layer
+  So the conclusion stands: no order is reversed, and the hand-over adds no deadlock
+
+== 75. B68: mount probes the device once it holds it
+  The self test's step test_mount_probe (a RAM stick with a FAT volume, registered, nothing mounting it): first another
+  task takes the stick (vfs_bdev_change_begin(), as mkfs and fdisk do) and holds it while the test mounts it with no
+  type given; then the test runs `mount stickp /selftest-mp` as the shell does, and while mount's probe reads the stick
+  another task tries to take it:
+    0062c33 (and 3dfd49b), x86 at -O0 (the transcripts) and at -O2 (the review's tree, section 72): "(with the stick
+      taken: mount -16, being changed by mkfs or fdisk; a claim during the probe: -16, being mounted; mount 0)": both ok
+    d4050ed (the base harness): "(with the stick taken: mount -22, -; a claim during the probe: -16, in the middle of a
+      request; mount 0)": both FAIL: the probe ran before the busy rule and its reads were refused (BDEV_EBUSY), so the
+      mount said EINVAL ("no file system found (mkfs makes one)"); and a claim during the probe was refused only for
+      the probe's read under way: between two of the probe's reads it would have been taken, the probe's next read
+      refused and the mount said "no file system found", and after the probe, before the mount's look, the mount would
+      have said EBUSY, "something is mounted there already"
+  The change: vfs_mount_why() (fs/vfs.c) looks at the busy rule and counts the device as being mounted in one step
+  under mount_lock (B58), then probes it (probe_type()) when no type was given; an mkfs, fdisk or eject meanwhile is
+  refused as the device "being mounted", and none takes it between the look and the probe. It says what an EBUSY is:
+  VFS_BUSY_PATH (a mount at the path already) or busy_why()'s words; cmd_mount() says "something is mounted there
+  already" only for the path, "is mounted already ..." for a mount of the device, its disk or a partition, and the
+  device's reason otherwise ("..., its disk or a partition of it is being changed by mkfs or fdisk: try again once that
+  has finished"), as its own look before says them. vfs_mount_flags() is vfs_mount_why() without the reason; its other
+  callers (the boot's mounts, the self tests, kernel/pty.c and the riscv32 kernel's shell through shell/fscmd.c) see
+  the same results as before but for the order: a busy device is now refused before it is read
+
+== 76. B69: the kill's log line for a task outside any call
+  The self test's step test_kill_lock_logged (a kernel thread outside any call holds a mutex of the test's own for
+  2.5 s; the test kills it as soon as it holds it; the kernel log, klog_dump() captured, is searched for the line):
+    0062c33 (and 3dfd49b), x86 at -O0 (the transcripts) and at -O2 (the review's tree, section 72): "(the kernel log
+      says so once)", the thread ended (status -1) after it let go: ok
+    d4050ed (the base harness): "(the kernel log says nothing)": FAIL
+  The change: kill_task() and kill_hangup() keep the tick of the kill (surf_task.kill_at: a kill's first, or a
+  hangup's); kill_escalate() writes "kill: '<name>' (pid N) is still holding a lock <ms> ms after its kill: killed as
+  soon as it lets go" (or "inside a file system or a device request") once (TI_FSWAIT), for a task in a call at its
+  first look as before (KILL_WAIT_MS after the kill: now with the real time, not the constant), and for a task outside
+  any call, which it looks at every FS_HOLD_RETRY_MS (20 ms), once KILL_WAIT_MS has passed since the kill
+
+== 77. B70: the threaded test's mutex as the kernel's, the campaigns again; a finding (F1)
+  tests/host/test_fatconc.c's shim, as kernel/sync.c's mutex: taken at once when free, else in line (m->waiters, the
+  tasks linked as the kernel's wait queues link them) until mutex_unlock() hands it to the first in line, the owner the
+  calling thread's task (*fatconc_task(): curTask to fs/), counted in its mutexes; misuse (a recursive lock, an unlock
+  by a task that does not hold it) stops the test with "PANIC"; each thread's count must be 0 between its operations
+  (the workers, the reader, the syncer, the umount's syncer: "mutex counts left between operations 0")
+  `test_fatconc mutex`: the main thread holds a mutex while three threads queue for it, lets it go and takes it again
+  at once: "CONC mutex: taken back after 3 of the 3 waiters; their order 1 2 3; counts wrong 0: ok" (5 runs on the Mac,
+  the same each time, and in make unittest at -O0 and -O2). With d4050ed's shim in its place: "taken back after 0 of the
+  3 waiters; their order 1 2 3 (once 1 3 2); counts wrong 3: FAIL" (3 runs)
+  make unittest's settings with the new shim (the Mac, and the devenv: section 80): CONC ok four times, CONC umount ok
+  The review's harness, conc7.c, given the same mutex (its copy in this round's scratch space: the same shim, its
+  thread records kept, B62's rule in its escalation, a kill waiting while the task holds a mutex as kill_escalate()
+  does, and each count checked at a call's end, at a kill at once and between operations; "REV11" line), built against
+  3dfd49b's fs/, run by the review's campset7.sh and run7.sh, two at a time, 4 s each, kill modes 0 (none), 1 (kills),
+  2 (Ctrl+C) and 3 (both):
+    plain, seeds 11101 and 11102, 7 settings x 4 modes: 56 runs, each "CONC: ok"
+    ESC_MS=20 (a kill that waited escalates after 20 ms), seed 11141: 28 runs, each "CONC: ok"
+    PERTURB=5 KILL_US=700 ESC_MS=20, seeds 11131 and 11132: 56 runs, each "CONC: ok" (1,580 escalations put off)
+    under ASan and UBSan, ESC_MS=20, seed 11121, 3 settings x 4 modes: 12 runs, each "CONC: ok", no report
+    in all 152 runs, 1,501,354 operations, 40,903 kills (each ended at its call's end) and 67,096 Ctrl+Cs, 897.6
+      million exact tag checks with no violation, 13,127,100 hand-overs, no count left over, no watchdog
+  F1, found here and left as it is (not one of the review's items): the kernel kills at once a task waiting in a
+  mutex's line when it holds no lock and is counted inside nothing (kill_task() at once for a kernel thread outside
+  any call; kill_escalate() KILL_WAIT_MS after the kill for a task in a call), taking it off the queue
+  (become_zombie()). The review's harness never did (its mutex waited outside yield()). Made to, as the kernel does
+  (LINE_KILL=1: a worker in a mutex's line whose kill has escalated is taken out of the line and unwound), the
+  perturbed set (PERTURB=5 KILL_US=700 ESC_MS=20) failed: 3 of 28 runs (seed 11131, kill modes 0-3: 2,417 kills in a
+  line), 7 of 28 (seeds 11131 and 11132, kill modes 1 and 3: 4,821), and 8 of 28 with kills in a vnode's release left
+  out (LINE_KILL=2: 1,386); the plain set and the escalation set were clean (84 runs, 6 kills in a line). The failures:
+  files with the wrong size or bytes, the oracle's "entry ... -> cluster N is free" and "... holds file M's bytes, a
+  file that never had that name there". In six diagnostic runs (LINE_KILL=2) the five that failed each left vnodes
+  behind (6 to 9 at the end where 5 are expected), the one that passed none. The kills came in fat_lock()'s wait at the
+  start of an operation (fat_unlink(), fat_truncate(), fat_sync()), with the worker holding a vnode from its lookup a
+  step before: the unwinding left that reference, the node stayed live, and since the
+  harness's workers call the file system directly (no vfs_unlink() "open somewhere" check), a later rm of the file and
+  a new file in its slot of the directory reused the stale node. In the kernel the VFS's checks keep the corruption out
+  (remove_entry() refuses a file whose vnode has another reference; a rename onto it is refused), but the reference
+  stays: a task killed at once while it waits for a volume's lock leaves what its VFS call holds above the file system
+  (walk()'s reference to the volume's root, the file's vnode in vfs_open() or a rename, a vnode being released), and
+  the volume can no longer be unmounted ("a command or program is using it right now") until restart. A self-test
+  step shows it in the kernel (test_f1, in a scratch copy of 3dfd49b, listed first; not in this round's code, volume
+  surfos-sc-fs11-f1): a kernel thread overwriting a.txt on a RAM stick holds the volume's lock, its straight write
+  held in the driver; another opens a.txt and waits for the lock, its walk() holding the volume's root; that one is
+  killed (at once: outside any call, counted inside nothing); once the write ends: "(F1: the writer's write held:
+  yes; the opener killed while it waited (it never opened the file); then umount -16: a command or program is using
+  it right now)": FAIL, every other of the self test's 159 checks ok
+  What it would take is a decision beyond this round: count a task inside the file system while it waits for a volume's
+  lock (fat_lock(): fs_hold before mutex_lock()), so a kill waits for its call's end as for any task inside, which
+  covers fat_lock()'s waits but not the cache's (vfs_sync() holds a root across its sync); or count the VFS calls that
+  hold vnodes (walk(), vfs_open(), a rename) inside, which covers every wait under them
+
+== 78. B71: USB storage's worst cases with a slow controller
+  usb_bounds.py (this round's, in its scratch space: B64's, given xhci.c's command timeout and the two models; run on
+  3dfd49b's tree) adds, to B64's stages, what the xHCI driver does around them: a bulk stage that times out is taken
+  back by abort_xfer(): ep_stop() (Stop Endpoint, and Reset Endpoint when that is refused, or the reverse for a halted
+  endpoint: two commands at most) and set_dequeue() (Set TR Dequeue Pointer); a stall's recovery (xhci_recover() ->
+  recover_endpoint()) is ep_stop(), set_dequeue() and CLEAR_FEATURE(ENDPOINT_HALT), a control transfer that may stall or
+  time out at its 1 s and then recovers endpoint 0 the same way (ep_stop() and set_dequeue()); usb_endpoint_recover()
+  waits up to 5 s for another task's recovery and gives up then; reset_recovery() is the BOT reset (a control transfer)
+  and usb_endpoint_reset() of both endpoints, each xhci_endpoint_reset() (its claim, waiting up to 500 x 10 ms for
+  another task's recovery, ep_stop(), Configure Endpoint) and CLEAR_FEATURE. Each xHCI command is allowed CMD_TIMEOUT,
+  5 s (driver/usb/xhci.c); one that takes longer fails the controller (controller_failed()), after which every request
+  fails at once (USB_ENODEV), so the slowest case is each command just inside its 5 s. That makes a stage taken back
+  15 s, a stall's recovery 5 + 5 + 5 + (1 + 10 + 5) = 31 s, a reset (1 + 15) + 2 x (5 + 10 + 5 + 16) = 88 s. B64's
+  model (each command at once, no second recovery) is a stage taken back 0 s, a recovery up to the 5 s wait, a reset
+  3 s. bot_command()'s slowest failure is then a data stage and both status tries stalled, recovered, and the reset:
+  5 + 3 x (20 + 31) + 88 = 246 s (B64's 83 s); a stage that times out instead costs less (T + 15 against T + 31).
+  Its output:
+    a healthy controller (B64: each xHCI command at once, no second recovery):
+      a READ or WRITE (32 KiB), slowest success (two unit attentions, then status 0)        270 s (4.5 min)
+      a READ or WRITE, slowest failure (two unit attentions, then a failure)                313 s (5.2 min)
+      a READ or WRITE that fails without a unit attention                                   113 s (1.9 min)
+      one of the cache's requests (64 KiB: two commands, the second only after the first
+      succeeded)                                                                            583 s (9.7 min)
+      SYNCHRONIZE CACHE: slowest success, slowest failure                                   200 s, 238 s (4.0 min)
+      the hub thread's poll of a unit with a disk (one TEST UNIT READY), at most            148 s (2.5 min)
+      its probe of a unit without one, m->lock held: INQUIRY, 10 failing TEST UNIT READY, one
+      more, READ CAPACITY (10) and (16), MODE SENSE failing                                 2,174 s (36.2 min)
+      (a bulk stage taken back after its timeout 0 s more; a stalled stage's recovery up to 5 s; a reset up to 3 s)
+    the worst the code allows (B71: every xHCI command just inside CMD_TIMEOUT, a second recovery waited for):
+      a READ or WRITE (32 KiB), slowest success (two unit attentions, then status 0)        452 s (7.5 min)
+      a READ or WRITE, slowest failure (two unit attentions, then a failure)                684 s (11.4 min)
+      a READ or WRITE that fails without a unit attention                                   328 s (5.5 min)
+      one of the cache's requests (64 KiB: two commands, the second only after the first
+      succeeded)                                                                            1,136 s (18.9 min)
+      SYNCHRONIZE CACHE: slowest success, slowest failure                                   330 s, 531 s (8.8 min)
+      the hub thread's poll of a unit with a disk (one TEST UNIT READY), at most            441 s (7.3 min)
+      its probe of a unit without one, m->lock held: INQUIRY, 10 failing TEST UNIT READY, one
+      more, READ CAPACITY (10) and (16), MODE SENSE failing                                 6,151 s (102.5 min)
+      (a bulk stage taken back after its timeout 15 s more; a stalled stage's recovery up to 31 s; a reset up to
+      88 s)
+    (constants: CMD_TIMEOUT 20 s in msc.c, other commands and REQUEST SENSE 5 s, the command block 5 s, a control
+    transfer 1 s, an xHCI command 5 s, the waits for another recovery 5 s)
+  B64's figures are a healthy controller's: said in B64's row (a note) and in section 68 (a note at its head). Other
+  devices' commands queued ahead on the controller's command lock (cmd_lock, one command at a time; handed over in
+  order since B63) add theirs to each command's wait: not counted, as other devices' traffic is not
+  usb_bounds.py --check on this round's docs and evidence: "USB BOUNDS CHECK PASSED"; on d4050ed's: "USB BOUNDS CHECK
+  FAILED" (no B71 row, B64 not said to be a healthy controller's, 452 s, 684 s and 1,136 s quoted nowhere)
+
+== 79. B72: QEMU started again with fresh ports
+  tests/test_qemu_ports.py (make unittest; on the Mac, 3dfd49b): a stand-in for QEMU (a script that binds the
+  forwarded TCP ports and the datagram ports it is given, as QEMU does, serves the monitor and serial sockets, and
+  stops with QEMU's own message when it cannot bind one) and a port held for the whole test, which free_port() returns
+  at a chosen call: 8 tests, OK:
+    test_taken_port_is_picked_again: test-all's flake (the fourth port, telnet_wlan's, taken): two launches, the log
+      says "QEMU did not start: a port picked for it was taken by another program meanwhile (qemu-system-i386: -netdev
+      user,...: Could not set up host forwarding rule 'tcp:127.0.0.1:<port>-10.0.2.16:23'); starting it again with
+      fresh ports (try 2 of 5)", and Qemu.ports holds the ports QEMU was given (the HTTP server's its own)
+    test_taken_every_time_gives_up: 5 launches, 4 retry lines, then QEMU's failure as before (RuntimeError)
+    test_other_failure_is_fatal, test_fixed_port_is_not_retried (controls): one launch, no retry line
+    test_datagram_port (tools/rawnet.py's link, qemu-tcp and the @tcp-raw steps), test_dns_peer_port (the DNS peer):
+      QEMU's own UDP port taken ("Address already in use"): two launches, the link's peer told the port QEMU has
+    test_usb_vm (tools/qemu-usb.py's Vm, test-usb's usbnet and devloop scenarios): the same, and a failure that is not
+      a taken port fatal at once
+    test_qemu_says_so: QEMU's own words for a taken port, with a held TCP port and a held UDP one: "Could not set up
+      host forwarding rule 'tcp:127.0.0.1:<port>-:23'" and "can't bind ip=127.0.0.1 to socket: Address already in
+      use", both among the ones the harness looks for (QEMU 11.1.1 on the Mac; in the devenv, its QEMU)
+  With d4050ed's tools/: 6 of the 8 fail (no retry: "QEMU did not start ... Could not set up host forwarding rule"; the
+  HTTP server's port taken; one launch where two were wanted; no port_taken()), the two controls pass
+  The other harnesses: boards/qemu_virt/test_os.py starts QEMU with UNIX sockets only; surfcpu's tools start no QEMU
+  network; tools/qemu-files.py and tools/qemu-web.py start QEMU through Qemu (covered); tools/web-fixtures.py's port
+  where nothing listens and tests/test_webdeps.py's are ports that should refuse a connection, not QEMU's (another
+  program taking one would make a check see a connection, not stop QEMU): left as they are
+  In the suites (section 80): every QEMU of test-all at -O0 and -O2 (the smoke boots, the DNS peer's boot, the raw
+  TCP link's boot for its 21 scenarios, each with its port now picked by the launch: all passing) and of test-usb at
+  each level started at its first try: no port was taken meanwhile, and no retry line is in any log
+
+== 80. The kernel's self test before and after, the x86 suites, the sanitizers and the threaded test
+  The self test's transcripts (QEMU on the Mac, booted as make test boots, x86 at -O0): this round's code (0062c33,
+  volume surfos-sc-fs11-run2) SELFTEST PASS, 159 checks ok, and 3dfd49b's kernel (volume surfos-sc-fs11) the same;
+  d4050ed with this round's self test (the base harness, volume surfos-sc-fs11-base) SELFTEST FAIL, 155 checks ok and
+  the 4 new ones failing, those sections 73, 75 and 76 name, every check of the earlier rounds passing on both.
+  test-all's self tests at -O0 and -O2 and test-usb's three at each level say SELFTEST PASS (x86.txt round fs-fix-11,
+  sections 1 and 3); the review's R11a-R11e on this tree: section 72
+  make test-all, make unittest and make test-usb at 0062c33 (surfcpu/docs/evidence/os/x86.txt, round fs-fix-11): the
+  smoke test 315 of 315 at -O0 and -O2; make unittest exit 0 at -O0 (FATFS 347, FATFUZZ 4 runs, CONC ok 4 times, CONC
+  umount ok, CONC mutex ok, MKFS 126, CP 16, tests/test_qemu_ports.py 8 OK) and the same at -O2 (its exit 2 the two
+  tests/test_devenv.py tests that fail with O=2 in their environment, as in the rounds before); test-usb 315 of 315 at
+  -O0 and -O2, its three self tests passing at each level. The same at 3dfd49b (make unittest at -O2 stopping at
+  tests/test_devenv.py before the port test, which 524d041 moved ahead of it)
+  AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the kernel
+  files and the tests alike, on the Mac, against 3dfd49b's files; 0062c33 changes kernel/sync.c, which no host test
+  builds, and the Makefile's order): test_fatfs 347 checks, 0 failures; test_fatfuzz's set, 4 runs, 0 with failures;
+  test_cp 16 checks, 0 failures; test_mkfs 105 checks (no fsck.fat or mtools on the Mac), 0 failures; test_fatconc in
+  make unittest's four settings, its umount setting and its mutex setting, each "CONC: ok"; the review's threaded
+  harness with the kernel's mutex (section 77) and as it is (section 72), each under the sanitizers too: no report from
+  any
+  The threaded test: make unittest's settings (above, and in the devenv, x86.txt); the campaigns: sections 72 and 77
+  The randomized test: make unittest's set, 4 runs, 0 with failures (and under the sanitizers, above)
+
+== 81. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost
+  make -C surfcpu check (18:08-18:33, the clean checkout of 0062c33; and at 3dfd49b, 15:46-16:17): "check: all
+  automated SurfCPU checks passed". Among them: boards/qemu_virt/test_os.py 135 of 135 at -O2 and at -O0 (rvtest's
+  test_mutex_wake among its self test's checks: "(the waiter had the mutex within 500 ms of the letting go)", ok),
+  test_arty 204 of 204, test_sd_iomodel 164 of 164, test-os-surfemu 18 of 18; on the RTL system (surfsim, with the io
+  track's card model) test-os-persist 17 of 17, test-os-faults 25 of 25, test-os-kit 22 of 22, test-soc-system-boot 21
+  of 21. The riscv32 kernels build with the one warning of the rounds before (task_exit()), isacheck clean (arty_a7:
+  58,308 instructions, all rv32im_zicsr_zifencei)
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against d4050ed's (its tree a git worktree,
+  its kernel built the same way in the toolchain container, run with this check's surfsim and SurfBoot ROM: this round
+  changes neither; d4050ed's runs give 4f146b5's figures of section 71 to the cycle), and against d4050ed laid out as
+  this kernel is: each riscv32 object this round changed followed by as many nops, never run, as it grew once linked
+  (rvtest.o 652 bytes, sync.o 48, task.o 20, fscmd.o 100: the link relaxes calls, so these are the map's sizes, not the
+  objects'), the read-only data, data and small data of rvtest.o and vfs.o as large (412 and 24 bytes, 24, 4), and
+  struct surf_task a word larger, as kill_at makes it; the code, the data, the small data and the heap's tasks then lie
+  at this kernel's addresses (checked in the two link maps), the package 410,436 bytes as this one's:
+                                         d4050ed          padded d4050ed   after (0062c33)  against d4050ed  padded
+    test-os-persist, the write run       276,723,379      276,943,546      276,942,022      +0.079 %        -0.001 %
+    test-os-persist, the reboot run      224,992,731      225,170,255      225,166,181      +0.077 %        -0.002 %
+    test-os-faults, the refusing card    318,599,642      314,152,076      314,462,300      -1.299 %        +0.099 %
+    test-os-faults, the full card        202,680,780      202,880,679      202,880,229      +0.098 %        -0.000 %
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 1,264 bytes
+  larger (409,172 -> 410,436 bytes: +136,000 cycles; none against the padded base); against the padded base every
+  command is within -0.96 % (a prompt, 12,600 cycles) and +0.44 %, the persist runs' within 0.05 %; against d4050ed
+  within -0.62 % (a prompt) and +1.42 % (df on the full card, 51,000 cycles), cp +0.04 %; but for the pairs of lines in
+  another order seen in every round (the first prompt 1.9 million cycles sooner and the next line as much later) and,
+  in the refusing card's run, the card taken out and put back (-3.3 and -1.0 million cycles against d4050ed, +0.3
+  million against the padded base: the card-detect task looks every 200 ms, 5 million cycles, and met the removal at
+  another look). The layout alone (d4050ed against the padded d4050ed): +0.080 %, +0.079 %, -1.396 % and +0.099 %:
+  this round's cost is its layout's (rvtest.c's new step moves all the code after it) and the package's load; the
+  code that runs in these workloads costs nothing measurable. A lock taken free goes the way it went, B66's look being
+  in the wait loop, and nothing else this round adds runs there (the kill's log, mount's probe, the self test's step)
+  The first version of B66 (ab0fe17, at 3dfd49b: the arrival folded into the wait loop, one loop) cost more. Against
+  d4050ed laid out alike (struct surf_task as large too): +0.644 %, +0.313 %, +0.719 % and +0.473 %, and the commands
+  that move many blocks 1.3-1.6 % slower (cp 1.37 %, crc32 of the folder 0.80 %, crc32 and rm on the full card 1.35 %
+  and 1.51 %), where its other changes, the same, cost nothing: its loop loaded the volatile locked twice and owner once
+  more on every lock, a free one included, and SurfCPU fetches every instruction and every load from DDR (section 55:
+  an instruction more for each block cost 0.5-1.8 % in round fs-fix-8). 0062c33 puts the arrival back as it was
+  (padded runs of the same kernel built from 3dfd49b with 0062c33's mutex_lock(): +0.000 %, -0.002 %, +0.339 % and
+  +0.000 %, the 0.339 % the card-detect task's looks; that kernel and 0062c33's differ only in the build's two
+  constant words)
