@@ -604,6 +604,7 @@ static bool io_overdue(struct buf *b, u_long *since) {
         }
         kprintf("bcache: %s block %lu: under I/O for %lu s: given up, with the device's other blocks under I/O\n",
                 dev ? dev->name : "?", (u_long)b->lba, (now - *since) / 1000);
+        wake_up_all(&bwait);                    /* (whoever else waits for one of them gives it up now) */
         return true;
     }
     (void)bsleep(IO_LOOK_MS, false);
