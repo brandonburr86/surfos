@@ -293,8 +293,9 @@ static void minimize(struct gui_state *g, int id) {
 }
 
 static void maximize(struct gui_state *g, int id) {
-    struct gui_window *w = &g->win[id];
+    struct gui_window *w;
     if(id < 0 || !resizable(id)) return;
+    w = &g->win[id];                            /* 10/18/26: after the check (no window in front: id -1) */
     if(w->max) { w->max = false; w->x = w->nx; w->y = w->ny; w->w = w->nw; w->h = w->nh; }
     else { w->nx = w->x; w->ny = w->y; w->nw = w->w; w->nh = w->h; w->max = true; }
     gui_place(g, id);
