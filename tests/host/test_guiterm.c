@@ -455,6 +455,15 @@ static void resizing(void) {
     gui_act(&g, ACT_MAXIMIZE);
     tick();
     CHECK(g.term.vt.x < g.term.vt.cols && g.term.vt.y < g.term.vt.rows);
+    /* 10/18/26: the user guide's sizes on a desktop of 640x400 (a 1280x800 screen): 71x16, 77x18 maximized */
+    terminal(640, 400);
+    CHECK(g.term.vt.cols == 71 && g.term.vt.rows == 16 && fake_term_cols == 71 && fake_term_rows == 16);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    CHECK(g.term.vt.cols == 77 && g.term.vt.rows == 18 && fake_term_cols == 77 && fake_term_rows == 18);
+    gui_act(&g, ACT_MAXIMIZE);
+    tick();
+    CHECK(g.term.vt.cols == 71 && g.term.vt.rows == 16 && fake_term_cols == 71 && fake_term_rows == 16);
 }
 
 /* the scrollback: the wheel, the scroll bar, output while scrolled back, a key back to the end */

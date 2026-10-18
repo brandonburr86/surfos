@@ -17,9 +17,8 @@ has one session, started when it opens; a desktop has one Terminal window.
   Tab and Esc as the bytes they are. To reach the desktop with the Terminal in front: Ctrl+G and
   the menus (Return to shell is in the ≋ SurfOS menu), or the mouse.
 * **The size.** The window's size is the terminal's, and the status bar shows it. On a 1920x1080
-  screen it opens at 77 by 21 characters and is 117 by 26 maximized; on a 1280x800 screen (or any
-  screen less than 688 of the desktop's pixels wide) it opens at 71 by 16 and is 77 by 18
-  maximized. A new size reaches the shell when the window is maximized or restored, or when its
+  screen it opens at 77 by 21 characters and is 117 by 26 maximized; on a 1280x800 screen (a
+  desktop of 640 by 400 pixels) it opens at 71 by 16 and is 77 by 18 maximized. A new size reaches the shell when the window is maximized or restored, or when its
   corner is let go; a program sees it when it asks (`pagetest size`; `edit` with Ctrl+L). Lines are
   not rewrapped: they are cut or padded.
 * **Scrolling back.** About 1,000 lines are kept above the screen. Use the scroll bar (click above
@@ -151,7 +150,8 @@ A line for the Keys table: `Ctrl+T | The Terminal; in it every key but Ctrl+G an
   questions, no system, the pixels drawn, and every window inside guard pixels at 640x400,
   960x540 and 1280x800, maximized and hanging off the edge). 10/18/26: the review's cases (wraps
   across a width change, the shrink's wrap mark, keys whole, blank copies, a word across a wrap,
-  a frame's budget with the size waiting, a lost session, a selection gone from the ring), the
+  a frame's budget with the size waiting, a lost session, a selection gone from the ring, the
+  sizes at 640x400 that the user guide gives), the
   emulator and the Terminal against random input (150,000 steps, and 3 desktops of 4,000 events:
   their invariants), and the kernel's side, shell/guisys_term.c, against stand-ins for the tasks,
   descriptors and pseudo-terminals (spawn and its failure, PTY_MAX, the shell's end, a program it
