@@ -266,19 +266,16 @@ module surf_gpu #(
     assign m_wdata = q_wdata;
 
     // ---------------------------------------------------------------- the header's command
+    // (comparisons, not a case statement: Yosys would make a case of constants a ROM, and the
+    // board's netlist check wants every memory of the RTL in RAM cells)
     wire [7:0] h_op = fifo_q[31:24];
-    reg  [1:0] h_params;
-    reg        h_known;
-    always @(*) begin
-        h_known = 1'b1;
-        case (h_op)
-            OP_NOP, OP_WAIT_VBLANK: h_params = 2'd0;
-            OP_FENCE:               h_params = 2'd1;
-            OP_SET_CLIP, OP_FILL_RECT, OP_LINE, OP_EXPAND, OP_WRITE_RECT: h_params = 2'd2;
-            OP_SET_TARGET, OP_COPY_RECT: h_params = 2'd3;
-            default: begin h_params = 2'd0; h_known = 1'b0; end
-        endcase
-    end
+    wire       h_p0 = (h_op == OP_NOP) || (h_op == OP_WAIT_VBLANK);
+    wire       h_p1 = (h_op == OP_FENCE);
+    wire       h_p2 = (h_op == OP_SET_CLIP) || (h_op == OP_FILL_RECT) || (h_op == OP_LINE) ||
+                      (h_op == OP_EXPAND) || (h_op == OP_WRITE_RECT);
+    wire       h_p3 = (h_op == OP_SET_TARGET) || (h_op == OP_COPY_RECT);
+    wire       h_known = h_p0 || h_p1 || h_p2 || h_p3;
+    wire [1:0] h_params = h_p3 ? 2'd3 : h_p2 ? 2'd2 : h_p1 ? 2'd1 : 2'd0;
 
     // the FIFO word is taken: a header, a parameter, or a data word EXPAND or WRITE_RECT needs
     assign pop = !rst && !abort && !fifo_empty &&
