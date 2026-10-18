@@ -201,7 +201,7 @@ B45). `surfcpu/docs/evidence/os/bcache-review.txt` sections 40-47 have the numbe
 | B49 | `fs/fat.c` (`rw_locked()`), `fs/bcache.c` (`write_blocks()`), `include/fs/bcache.h` | Cosmetic: B39's claim that a long read or write stops between 64 KB pieces (CARD.md: "at the next 64 KiB"): through the cache a piece is one block (a killed write of 2637 bytes at offset 678 returned 346); and a straight write whose wait was cut short said EIO, as if the card had refused it | the comments and documents say what the code does: a piece is a block through the cache, up to 64 KiB straight, and the first always goes; a straight write cut short in its wait returns `BCACHE_EINTR`, and the write says EINTR (nothing of it was sent) (Corrected by the next review: the callers of the short count took it for something else, cp for a full disk ("short write") and fsbench for an I/O error, B53) |
 
 Found by a review of B46-B49 (October 18, 2026, round fs-fix-8: scenarios M1-M5 against b482ff1's `fs/` with
-`tests/host/test_fatfs.c`'s stand-ins, round fs-fix-7's threaded campaign on b482ff1 (71 runs, 59,698 kills and 44,256
+`tests/host/test_fatfs.c`'s stand-ins, round fs-fix-7's threaded campaign on b482ff1 (71 runs, 29,849 kills and 22,128
 Ctrl+Cs, clean), and reading; it confirmed that mkfs cut after any of its writes leaves nothing a mount takes for a
 volume and says which, M1) and fixed. B50 is **verified** by `tests/host/test_fatfs.c` (the review's M3 in a form one
 task can run), failing on b482ff1; B50-B55 by the kernel's self test (`selftest` under QEMU, x86 at -O0 and -O2: an
