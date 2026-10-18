@@ -38,6 +38,9 @@ struct wpa_ops {
     int (*install_key)(void *ctx, const struct wlan_key *key);   /* 0 ok */
     void (*done)(void *ctx, int status);    /* WPA_OK once the pairwise and group keys are in (the
                                                port opens), else why it failed; called once */
+    void (*say)(void *ctx, const char *line);   /* 10/17/26: a "+WPA:" line (never a secret in it), said
+                                               as the station wants: on the console, or in the kernel log
+                                               only (the network manager's repeated joins); NULL: kprintf */
 };
 
 struct wpa_sm;

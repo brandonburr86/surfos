@@ -1404,7 +1404,7 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   address, `dhcp_drop()`). A renewal and a drop name the lease they are about (`lease_at`) and
   do nothing when the interface has another by then or an address set by hand. A dhcp waits up
   to 30 s for one running on another interface and counts its own time from when it has port
-  68; the manager's background ones say their waits and failures in the log only. `telnetd =
+  68; the manager's repeated tries say their waits and failures in the log only. `telnetd =
   on`, as the file said at boot, starts `telnetd on [port]` as a process on F1 once an interface
   has an address it may start for (`netman_trusted()`: Ethernet, or Wi-Fi up on a WPA2 network;
   never an open one, which anyone nearby may join; but SurfOS cannot tell whose network it is),
@@ -1419,12 +1419,14 @@ what it stands on        driver/part.c bdev_boot_vol(); net/wlan/wlan.c wlan_sta
   list marks a BSSID whose beacons carry no SSID (`hidden` in `struct wlan_bss`), which `wifi
   save` keeps. A key refused three times in a row (`-EACCES` from the 4-way handshake, which a
   lost frame gives as well as a wrong key) is set aside for 10 minutes, said on F1 the first
-  time. While a telnet server runs (any live user task named telnetd, the server or a `telnetd
-  on` at work, looked for three times as the list shifts) or is to start by itself (`telnetd =
+  time. While a telnet server runs (any live user task named telnetd counts, a `telnetd
+  status` too, looked for three times as the list shifts; the setting's start waits for the
+  detached server itself) or is to start by itself (`telnetd =
   on` until it has started, autonet until it is done), an open saved network is not joined by
   itself, looked at again just before each: it is said, and `wifi join` joins it (saying the
   server answers there too). The keeper's repeated tries pass `quiet` to the station
-  (`wlan_join_unless()`), whose failure to join then goes to the log only. Afterwards the keeper
+  (`wlan_join_unless()`), whose failure to join, and the supplicant's `+WPA:` lines (`struct
+  wpa_ops` `say`), then go to the log only. Afterwards the keeper
   reads `wlan_station()` every second, a
   snapshot that makes no request (so no `wifi` command is ever told the device is busy by it):
   while the station is up, joining or reconnecting it does nothing but get an address for an

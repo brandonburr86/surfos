@@ -22,8 +22,8 @@ name of the settings (option 12), so a router can list SurfOS by name. The kerne
 dhcplease=<seconds> shortens every lease to that, for the tests: a real lease is a day or more.
 An address set by hand (ifconfig) has no lease, and nothing renews it. A dhcp waiting for another
 one now waits up to 30 s and counts its own time limit from when it has port 68, so a request
-made while the manager asks in the background still gets all its tries; the manager's waits and
-failures are said in the log only.
+made while the manager asks in the background still gets all its tries; the manager's repeated
+tries say their waits and failures in the log only.
 */
 
 #include <stdarg.h>

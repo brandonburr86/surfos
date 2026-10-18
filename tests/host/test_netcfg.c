@@ -499,7 +499,7 @@ static void test_networks(void) {
               "lines before the networks past what can be kept: said so, not called kept");
     }
     n = read_nets("network = \"Home\"\nsecurity = wpa\npassword = \"my real password\"\n");
-    check(n == 0 && nkept == 1 && kept[0].password && kept[0].line == 1 && !kept[0].loose,
+    check(n == 0 && nkept == 1 && kept[0].password && kept[0].line == 1 && kept[0].pw_line == 3 && !kept[0].loose,
           "a password in a network left out: its part is marked (SurfOS never writes a password)");
     n = read_nets("network = \"X\"\nsecurity = wep\n# password = \"secret12\"\n");
     check(n == 0 && nkept == 1 && kept[0].password, "a password commented out in it counts too");
@@ -513,6 +513,18 @@ static void test_networks(void) {
     check(n == 0 && has_note("3: a password with a # in it goes in double quotes"), "a bare password with a #: refused");
     n = read_nets("network = \"H\"\nsecurity = wpa2\npassword = abcdefghij\n");
     check(n == 1 && !strcmp(back[0].password, "abcdefghij") && !nnotes, "a bare password without one: taken");
+    n = read_nets("network = \"H\"\nsecurity = wpa2\npassword = hunter2222   # home\n");
+    check(n == 1 && !strcmp(back[0].password, "hunter2222") && !nnotes, "a bare password, then a comment: taken");
+    n = read_nets("network = \"Home\"\npsk = \"my real password\"\n");
+    check(n == 0 && nkept == 1 && kept[0].password && kept[0].pw_line == 2,
+          "wpa_supplicant's psk = \"passphrase\" in a network left out: marked as a password");
+    n = read_nets("network = \"Home\"\nsecurity = wep\npassphrase = \"my real password\"\n");
+    check(n == 0 && nkept == 1 && kept[0].password && kept[0].pw_line == 3, "so is passphrase = ...");
+    n = read_nets("network = \"Home\"\nsecurity = wep\npsk = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n");
+    check(n == 0 && nkept == 1 && !kept[0].password, "a psk that is a key is no password");
+    n = read_nets("network = \"A\"\nsecurity = wep\nnetwork = \"B\"\nsecurity = wep\npassword = \"12345678\"\n");
+    check(n == 0 && nkept == 1 && kept[0].line == 1 && kept[0].password && kept[0].pw_line == 5,
+          "parts that follow each other: one, the password's own line named");
     {
         static char cr[256], w1[16384], w2[16384];
         int n1, n2;

@@ -37,8 +37,9 @@ at most), each line that is not understood said with its number; then
   the card back, then looks for a saved network every 30 seconds, every 2 minutes after 20
   tries, the repeats (the station's failures to join included) in the log only. A key refused
   three times in a row is set aside for 10 minutes. While a telnet server runs (any telnetd
-  process) or is to start by itself (telnetd = on until it has started; autonet until it is
-  done), it joins no open network, and looks again just before each: telnetd has no password.
+  process counts) or is to start by itself (telnetd = on until it has started; autonet until
+  it is done), it joins no open network, and looks again just before each: telnetd has no
+  password.
 * ethernet = dhcp: an Ethernet interface whose link comes up gets a lease (30 s, doubling to
   5 minutes, between tries without one), unless autonet is still at it.
 * telnetd = on: telnetd on [port] on F1 once there is an address on Ethernet or on a WPA2
@@ -460,7 +461,7 @@ static int change_networks(int (*change)(struct netcfg_net *list, int *n, void *
         if(!kept[i].password) continue;                 /* SurfOS would be writing that password: no */
         snprintf(why, wsize, "%s/%s line %u: a password in a part SurfOS does not understand, which it would keep as it "
                  "is (and SurfOS never writes a password): correct or delete that part first", NETCFG_DIR,
-                 NETCFG_NETWORKS, kept[i].line);
+                 NETCFG_NETWORKS, kept[i].pw_line);
         r = -EINVAL;
         goto out;
     }
@@ -481,7 +482,7 @@ static int change_networks(int (*change)(struct netcfg_net *list, int *n, void *
     len = (u_int)r;
     if(!netcfg_reads_back(out, len, list, n, scratch, &nk)) {  /* a part kept as it was would come back as a network */
         snprintf(why, wsize, "it would bring back a network written by hand that SurfOS had left out (a name written "
-                 "twice?): correct %s/%s first", NETCFG_DIR, NETCFG_NETWORKS);
+                 "twice, or a 17th network?): correct %s/%s first", NETCFG_DIR, NETCFG_NETWORKS);
         r = -EINVAL;
         goto out;
     }
@@ -810,20 +811,23 @@ out:
 
 /**** telnetd ****/
 
-/* a telnet server running or starting: a user task named telnetd that is not dead, the server or a telnetd on still
-   at work (its pid), or 0. The list is read by index and a task collected meanwhile shifts the rest, so a search that
-   finds none looks twice more, as telnetd itself does */
-static int telnetd_running(void) {
+/* a user task named telnetd that is not dead (its pid), or 0: with server, the running server only (detached, as
+   telnetd itself finds it); else any, a telnetd on starting one or a telnetd status included. The list is read by
+   index and a task collected meanwhile shifts the rest, so a search that finds none looks twice more, as telnetd
+   does */
+static int telnetd_running(bool server) {
     struct procinfo pi;
     int i, k;
     for(k = 0; k < 3; k++)
         for(i = 0; task_info(i, &pi) == 0; i++)
-            if((pi.flags & PROC_USER) && pi.state != PROC_DEAD && !strcmp(pi.name, "telnetd")) return pi.pid;
+            if((pi.flags & PROC_USER) && pi.state != PROC_DEAD && !strcmp(pi.name, "telnetd") &&
+               (!server || (pi.flags & PROC_DETACHED)))
+                return pi.pid;
     return 0;
 }
 
 bool netman_telnet_exposed(void) {
-    return telnetd_due || autonet_busy() || telnetd_running() > 0;
+    return telnetd_due || autonet_busy() || telnetd_running(false) > 0;    /* any telnetd: the safe side */
 }
 
 bool netman_trusted(struct netdev *dev) {
@@ -1030,7 +1034,7 @@ static int join_saved(struct wlan_dev *w, const struct saved *s, bool cmd, bool 
     ssid_str(s->net.ssid, s->net.ssid_len, name, sizeof(name));
     if(r == -EACCES) {
         if((aside = note_refusal(s->net.ssid, s->net.ssid_len, true)) != 0)
-            say(cmd, aside == 1 && quiet, "%s: %s refused its saved key %u times in a row: has its password changed, or "
+            say(cmd, aside == 1, "%s: %s refused its saved key %u times in a row: has its password changed, or "
                 "was it mistyped when it was saved? (wifi join %s, then wifi save; it is not tried again for %u minutes)",
                 w->name, name, WIFI_REFUSALS, name, WIFI_REFUSED_MS / 60000);
         else
@@ -1363,8 +1367,10 @@ static void netman_main(void *arg) {
         ethernet_step();
         lease_step();
         if(telnetd_due && !autonet_busy()) {            /* autonet first: it starts one on 23 for Ethernet */
-            if(telnetd_running()) {
-                telnetd_due = false;                    /* running already (autonet's, or typed) */
+            if(telnetd_running(true)) {
+                telnetd_due = false;                    /* a server runs already (autonet's, or typed) */
+            } else if(telnetd_running(false)) {
+                ;                                       /* a telnetd command at work (on, status): look again */
             } else if((d = trusted_address()) != NULL) {
                 kprintf("+NET: %s: %s; starting telnetd on F1 (the settings: telnetd = on)\n", d->name, ipfmt(d->ip, a));
                 start_telnetd(port, "+NET", &child);

@@ -768,7 +768,14 @@ static void wpa_finished(void *ctx, int status) {
     st->wpa_done = true;
 }
 
-static const struct wpa_ops supplicant_ops = { wpa_send, wpa_install, wpa_finished };
+/* 10/17/26: the supplicant's lines: in the log only during a join the network manager tries again (join_quiet) */
+static void wpa_say(void *ctx, const char *line) {
+    struct wlan_state *st = (struct wlan_state *)ctx;
+    if(st->user_join && st->join_quiet) klog_write(line);
+    else kprintf("%s", line);
+}
+
+static const struct wpa_ops supplicant_ops = { wpa_send, wpa_install, wpa_finished, wpa_say };
 
 /* after each call into the supplicant: what it said */
 static void wpa_check(struct wlan_state *st) {

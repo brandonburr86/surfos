@@ -241,7 +241,7 @@ Please fill in a copy of this table for each boot (photos of the screen help mos
 | `telnetd off`, then `telnet <address>` again: "Connection refused" | |
 | 10/17/26, on one stick: `wifi join HouseOfBurr` (the password), then `wifi save`: what it prints; `wifi saved` | |
 | A restart: the `+NET:` lines; joined and leased with nobody typing? How many seconds after the GRUB menu? `ifconfig` | |
-| `settings telnetd on`, a restart into **SurfOS** (its build in `boot/` from 10/17/26 on: `tools/stick.py install --fallback`; the development entry starts telnetd anyway): `+NET: …; starting telnetd on F1 (the settings: telnetd = on)`, `telnetd: listening on …`; `telnet` from the Mac | |
+| `settings telnetd on`, a restart into **SurfOS** (its build in `boot/` from 10/17/26 on: `tools/stick.py install --fallback`; the development entry starts telnetd anyway for an Ethernet link): `+NET: …; starting telnetd on F1 (the settings: telnetd = on)`, `telnetd: listening on …`; `telnet` from the Mac | |
 | `tools/devloop.py deploy` with Wi-Fi only (no adapter), a saved WPA2 network and `telnetd = on`: back by itself? After how long? | |
 | The router's device list (the Xfinity app): is SurfOS listed as `surfos`? | |
 | On the Mac: `surfos-config/` on the stick with both files; do they open in TextEdit? | |

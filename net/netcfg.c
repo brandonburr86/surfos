@@ -171,7 +171,8 @@ static const char template_text[] =
     "# encryption: whoever reaches the laptop over a network it is on gets a shell. It starts\n"
     "# once SurfOS has an address on Ethernet or on a WPA2 Wi-Fi network (never because of an\n"
     "# open one), and then answers on every network SurfOS is on; meanwhile SurfOS joins no\n"
-    "# open network by itself. The development build from the stick starts it anyway.\n"
+    "# open network by itself. The development build's autonet starts it anyway, for an\n"
+    "# Ethernet link.\n"
     "#telnetd = off\n"
     "\n"
     "# telnetd.port: the port it listens on, 1 to 65535 (the development build's autonet\n"
@@ -551,35 +552,56 @@ int netcfg_find_net(const struct netcfg_net *nets, int n, const u8 *ssid, u_int 
     return -1;
 }
 
-/* the state of the network being read: its line and what it said */
-struct reading {
-    struct netcfg_net net;
-    u_int line, start;                  /* its network = line: the number, the byte it starts at */
-    bool open, bad, said_security, unknown;
-    bool password;                      /* a line of the block is a password, or one commented out */
-    char name[4 * NETCFG_SSID_MAX + 4]; /* its name quoted, for the notes */
-};
-
-/* is line (n bytes) a password line, or one commented out ("# password = ..."): the word password first, after blanks
-   and #s? */
-static bool mentions_password(const char *line, u_int n) {
-    static const char word[] = "password";
-    u_int i = 0, k;
-    while(i < n && (blank(line[i]) || line[i] == '#')) i++;
-    for(k = 0; word[k]; k++, i++) if(i >= n || lower((unsigned char)line[i]) != word[k]) return false;
-    return true;
-}
-
 static void wipe(void *p, size_t n) {
     volatile u8 *q = (volatile u8 *)p;
     while(n--) *q++ = 0;
 }
 
+/* the state of the network being read: its line and what it said */
+struct reading {
+    struct netcfg_net net;
+    u_int line, start;                  /* its network = line: the number, the byte it starts at */
+    bool open, bad, said_security, unknown;
+    u_int pw_line;                      /* the first line of the block that may hold a password; 0 */
+    char name[4 * NETCFG_SSID_MAX + 4]; /* its name quoted, for the notes */
+};
+
+static bool hex_key(const char *v) {
+    u_int i;
+    for(i = 0; i < 2 * NETCFG_KEY_LEN; i++) if(hexval(v[i]) < 0) return false;
+    return v[i] == 0;
+}
+
+/* may line (n bytes), commented out or not, hold a password: its key (the first word, after blanks and #s) one that
+   names one (password, passphrase, ...), or psk with a value that is no key (wpa_supplicant's psk = "passphrase")?
+   Such a line is never written back by SurfOS */
+static bool secret_line(const char *line, u_int n) {
+    static const char *const words[] = { "password", "passphrase", "passwd", "pass", "pwd", "pw", "secret", "key",
+                                         "wpa_passphrase", "psk", NULL };
+    char word[24], key[40], value[VALUE_MAX];
+    const char *w;
+    u_int i = 0, k = 0;
+    bool secret = false;
+    int r, j;
+    while(i < n && (blank(line[i]) || line[i] == '#')) i++;
+    while(i + k < n && k + 1 < sizeof(word) && (line[i + k] == '_' || (line[i + k] >= 'a' && line[i + k] <= 'z') ||
+          (line[i + k] >= 'A' && line[i + k] <= 'Z'))) {
+        word[k] = line[i + k];
+        k++;
+    }
+    word[k] = 0;
+    for(j = 0; words[j] && !same_word(word, words[j]); j++);
+    if(!words[j]) return false;
+    if(!same_word(word, "psk")) return true;
+    r = split(line + i, n - i, key, sizeof(key), value, sizeof(value), &w);     /* a psk: a key, or something else? */
+    secret = r <= 0 || !same_word(key, "psk") || !hex_key(bare(value));
+    wipe(value, sizeof(value));
+    return secret;
+}
+
 /* a note about the network being read: why, and that it is left out (and kept as it was, when kept is asked for) */
 static void net_note(const struct reading *rd, u_int line, const char *why, bool keeping, netcfg_note_fn note, void *arg) {
-    char msg[WHY_MAX + 4 * NETCFG_SSID_MAX + 40];
-    if(!note) return;
-    char where[24];
+    char msg[WHY_MAX + 4 * NETCFG_SSID_MAX + 40], where[24];
     if(!note) return;
     snprintf(where, sizeof(where), "of line %u", rd->line);
     snprintf(msg, sizeof(msg), "%s: the network %s is left out%s", why, rd->name[0] ? rd->name : where,
@@ -588,14 +610,16 @@ static void net_note(const struct reading *rd, u_int line, const char *why, bool
 }
 
 /* bytes [start, end) of the text, from line on, go into kept[] (a block, or a loose line before the first network, the
-   reader could not take; password: a line of it is a password), one span with the last when they follow it; false
-   when full */
+   reader could not take; pw_line: its first line that may hold a password, 0), one span with the last when they follow
+   it; false when full */
 static bool keep_span(struct netcfg_span *kept, int *nkept, u_int start, u_int end, bool loose, u_int line,
-                      bool password) {
+                      u_int pw_line) {
+    struct netcfg_span *last = kept && *nkept > 0 ? &kept[*nkept - 1] : NULL;
     if(!kept || start >= end) return true;
-    if(*nkept > 0 && kept[*nkept - 1].loose == loose && kept[*nkept - 1].end == start) {
-        kept[*nkept - 1].end = end;
-        kept[*nkept - 1].password |= password;
+    if(last && last->loose == loose && last->end == start) {
+        last->end = end;
+        if(pw_line && !last->pw_line) last->pw_line = pw_line;
+        last->password = last->pw_line != 0;
         return true;
     }
     if(*nkept >= NETCFG_SPANS_MAX) return false;
@@ -603,7 +627,8 @@ static bool keep_span(struct netcfg_span *kept, int *nkept, u_int start, u_int e
     kept[*nkept].end = end;
     kept[*nkept].line = line;
     kept[*nkept].loose = loose;
-    kept[*nkept].password = password;
+    kept[*nkept].pw_line = pw_line;
+    kept[*nkept].password = pw_line != 0;
     (*nkept)++;
     return true;
 }
@@ -612,7 +637,7 @@ static bool keep_span(struct netcfg_span *kept, int *nkept, u_int start, u_int e
 static void keep_loose(struct netcfg_span *kept, int *nkept, u_int start, u_int end, u_int line, bool password,
                        const char *why, netcfg_note_fn note, void *arg) {
     char msg[WHY_MAX + 80];
-    bool room = keep_span(kept, nkept, start, end, true, line, password);
+    bool room = keep_span(kept, nkept, start, end, true, line, password ? line : 0);
     snprintf(msg, sizeof(msg), "%s (%s)", why, !kept ? "left out" : room ? "kept as it is" :
              "not kept: the file has too many parts SurfOS does not understand");
     if(note) note(arg, line, msg);
@@ -644,7 +669,7 @@ static void finish(struct reading *rd, u_int end, struct netcfg_net *nets, int m
         nets[(*n)++] = *net;
     } else {
         bool keeping = kept != NULL;
-        if(keeping && !keep_span(kept, nkept, rd->start, end, false, rd->line, rd->password)) {
+        if(keeping && !keep_span(kept, nkept, rd->start, end, false, rd->line, rd->pw_line)) {
             keeping = false;
             if(note) note(arg, rd->line, "too many networks SurfOS cannot read: this one is not kept in the file");
         }
@@ -669,11 +694,11 @@ int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, 
         next = line_at(text, len, pos, &end);
         line++;
         pos = next;
-        pw = mentions_password(text + at, end - at);
+        pw = secret_line(text + at, end - at);
+        if(pw && rd.open && !rd.pw_line) rd.pw_line = line;   /* a line of the block: a comment, a bad line too */
         if(end - at > LINE_MAX) {
             if(rd.open) {
                 rd.bad = true;
-                rd.password |= pw;
                 net_note(&rd, line, "the line is too long", kept != NULL, note, arg);
             } else {
                 keep_loose(kept, nkept, at, next, line, pw, "the line is too long", note, arg);
@@ -681,7 +706,6 @@ int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, 
             continue;
         }
         r = split(text + at, end - at, key, sizeof(key), value, sizeof(value), &w);
-        if(r <= 0 || !same_word(key, "network")) rd.password |= rd.open && pw;     /* a block's line, comments too */
         if(r == 0) continue;
         if(r < 0) {
             if(rd.open) {
@@ -738,7 +762,8 @@ int netcfg_parse_networks(const char *text, u_int len, struct netcfg_net *nets, 
             bool quoted = v[0] == '"' || curly(v, (u_int)strlen(v), true);
             bool ok = !netcfg_unquote(v, pass, sizeof(pass) - 1, &l) && l >= 8 && l <= 63;
             for(i = 0; ok && i < l; i++) if(pass[i] < 0x20 || pass[i] > 0x7e) ok = false;
-            if(!quoted && comment_at(text + at, end - at) < end - at) {     /* a bare one is cut at a #: say so */
+            u_int c = comment_at(text + at, end - at);
+            if(!quoted && c < end - at && c > 0 && !blank(text[at + c - 1])) {     /* a # in a bare one: not a comment */
                 net_note(&rd, line, "a password with a # in it goes in double quotes (password = \"...\")",
                          kept != NULL, note, arg);
                 rd.bad = true;

@@ -99,8 +99,10 @@ struct netcfg_span {
     u_int start, end;
     u_int line;                     /* the line it starts at, from 1 */
     bool loose;
-    bool password;                  /* a line of it is a password (or one commented out): SurfOS never writes one, so a
-                                       writer's caller must not write the file with this part in it */
+    bool password;                  /* a line of it may hold a password (or one commented out): password, passphrase,
+                                       a psk that is no key, and the like. SurfOS never writes one, so a writer's caller
+                                       must not write the file with this part in it */
+    u_int pw_line;                  /* the first such line */
 };
 
 /* the networks of a file of len bytes, in order, into nets (max); how many. A network with a problem (no name, a

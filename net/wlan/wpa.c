@@ -150,15 +150,24 @@ static int replay_cmp(const u8 *a, const u8 *b) {
     return 0;
 }
 
+/* a "+WPA:" line, never with a secret in it, through the station's say() (10/17/26), else on the console and in the
+   log */
+static void say_line(struct wpa_sm *sm, const char *what, const char *more) {
+    char line[160];
+    snprintf(line, sizeof(line), "+WPA: %s%s\n", what, more);
+    if(sm->ops->say) sm->ops->say(sm->ctx, line);
+    else kprintf("%s", line);
+}
+
 /* a line in the kernel log, never with a secret in it; at most NOTES_MAX per association */
 static void note(struct wpa_sm *sm, const char *what, const char *more) {
-    if(sm->notes++ < NOTES_MAX) kprintf("+WPA: %s%s\n", what, more);
+    if(sm->notes++ < NOTES_MAX) say_line(sm, what, more);
 }
 
 /* the end of a handshake that failed; done() last */
 static void fail(struct wpa_sm *sm, int status, const char *why) {
     sm->state = WPA_FAILED;
-    kprintf("+WPA: %s\n", why);
+    say_line(sm, why, "");
     if(!sm->reported) {
         sm->reported = true;
         sm->ops->done(sm->ctx, status);
