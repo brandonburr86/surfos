@@ -57,8 +57,8 @@ the task holds the cache's lock (bcache_holds()) or state of its own in it with 
 counted around device requests and copies; a file system counts its own calls: kernel/task.c).
 B40: binvalidate() drops as bdiscard() does. B41: a copy is spoiled only when its block changed since it was
 taken, and it is taken again as long as it takes (no bound: rm traffic alone no longer fails a sync).
-B50: a step that must finish (umount) gives up on another task's I/O of a block after bcache_overdue_ms (30 s,
-longer than any driver's timeout): a fault kills a task at once even inside the cache, and its I/O never ends.
+B56: round fs-fix-8's bound on a step that must finish (B50) is gone: a wait for another task's I/O lasts until the
+request ends (the drivers' timeouts bound it), and a fault inside the cache or a device request stops the system.
 */
 
 #ifndef _FS_BCACHE_H
@@ -86,8 +86,6 @@ struct buf {
     bool aside;                         /* 10/16/26 (B16): set aside (baside()): not written, nobody's dependency */
     bool stuck;                         /* 10/16/26 (B18): a sync gave up on its present hold */
     bool discard;                       /* 10/16/26 (B35): nobody's bytes: dropped when let go or its I/O ends */
-    bool overdue;                       /* 10/18/26 (B50): its I/O was given up on (bcache_overdue_ms): nobody waits for it
-                                           any more; the next I/O of it clears this */
     u32 fail_pass;                      /* the bsync() call it failed in (each run is tried once per call) */
     u32 skip;                           /* 10/16/26 (B7): the reuse() call that found it cannot be written yet */
     u32 gen;                            /* bumped by bdirty(): a write-back only cleans what it wrote */
@@ -143,10 +141,6 @@ int bcache_audit(struct bdev *dev);                  /* 10/16/26 (B9): dev's acc
 struct surf_task;
 bool bcache_holds(const struct surf_task *t);        /* 10/17/26 (B39): t has the cache's lock or its bounce buffer's (a kill
                                                         that waited is put off meanwhile: kernel/task.c) */
-/* 10/18/26 (B50): how long a step that must finish (surf_task.fs_finish: umount, eject's unmount) waits for another
-   task's I/O of a block before it gives the block up, as for a device that stopped answering (30000: longer than any
-   driver's timeout, USB mass storage's 20 s a command; the kernel's self test lowers it for its run) */
-extern u_long bcache_overdue_ms;
 
 /* 10/5/26: count blocks from lba straight from or to the device, through the cache's 64 KB
    bounce buffer, so the device never sees the caller's memory. A read returns what the cache
