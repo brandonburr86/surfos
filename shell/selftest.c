@@ -969,6 +969,65 @@ static void test_kill_umount(void) {
     kfree(mem);
 }
 
+/* 10/17/26 (audit B46): eject with Ctrl+C reaching it as its command begins: it unmounts nothing and says the disk stays
+   mounted (it went on to unmount, and its waits were cut short where they met another task's write). eject finds a
+   disk by name, so the RAM stick is registered for this test (and unregistered after) */
+static struct bdev *ke_dev;
+static volatile int ke_result, ke_go, ke_cut;
+
+static void ke_eject(void *arg) {
+    char *argv[3];
+    (void)arg;
+    argv[0] = "eject";
+    argv[1] = ke_dev->name;
+    argv[2] = NULL;
+    task_call_enter(TC_COMMAND);                     /* as the ring-0 shell runs a command */
+    while(!ke_go) sleep_ms(5);                       /* Ctrl+C is sent meanwhile */
+    ke_result = cmd_eject(2, argv);
+    ke_cut = task_call_leave(TC_COMMAND);
+}
+
+static void test_eject_interrupted(void) {
+    u8 *mem = (u8 *)kcalloc(1, UNPLUG_BLOCKS * 512);
+    struct bdev *d = mem ? ram_disk(mem) : NULL;
+    struct stat st;
+    surf_task *t;
+    char msg[160];
+    u_long pid, f;
+    int r, status = 1;
+    bool registered = false;
+    if(!d) { check(false, "eject interrupted: 4 MB of memory"); kfree(mem); return; }
+    strlcpy(d->name, "stick4", sizeof(d->name));
+    r = fat_mkfs(d, "EJECT", 0, msg, sizeof(msg));
+    if(r == 0) r = bdev_register(d);
+    if(r == 0) registered = true;
+    if(r == 0) r = vfs_mount_flags(d, "/selftest-ej", "fat", 0);
+    if(r == 0) r = put_file("/selftest-ej/e.txt", "ejected later");
+    check(r == 0, "eject interrupted: a RAM stick registered as stick4, mounted, a file on it");
+    if(r == 0) {
+        ke_dev = d;
+        ke_go = ke_cut = 0;
+        ke_result = -1;
+        t = kthread_create_on("ejectint", curTask->con, ke_eject, NULL, PL_NORMAL, 0);
+        if(t) {
+            pid = t->pid;
+            sleep_ms(20);                            /* in its command, waiting to go */
+            f = irq_save();
+            task_interrupt_job(t);                   /* Ctrl+C on its terminal, as tty.c sends it */
+            irq_restore(f);
+            ke_go = 1;
+            if(task_wait(pid, &status) != (int)pid) status = 1;
+        }
+        check(t && status == 0 && ke_result == CMD_FAIL && ke_cut && file_is("/selftest-ej/e.txt", "ejected later") &&
+              vfs_stat("/selftest-ej", &st) == 0, "Ctrl+C in eject before it unmounts: it unmounts nothing and says the disk stays mounted");
+        vfs_umount("/selftest-ej");
+    }
+    if(registered) bdev_unregister(d);
+    binvalidate(d);
+    kfree(d);
+    kfree(mem);
+}
+
 /* 10/17/26 (audit B47): a task killed inside a device request outside the cache (mkfs, fdisk, a dump of a disk). The
    kill that waited came at once after 2 s inside the driver (here its 3 s delay; in a real driver its lock and its
    transfer half done: the card hung); now it comes once the request is over. And mkfs, killed, stops before its next
@@ -1395,8 +1454,8 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_kill_umount, test_kill_device,
-    test_kill_outside_call, test_user, test_net, test_usb, test_tasks,
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_fat_refused, test_kill_in_cache, test_kill_umount, test_eject_interrupted,
+    test_kill_device, test_kill_outside_call, test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
