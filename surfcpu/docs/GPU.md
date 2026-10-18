@@ -32,9 +32,10 @@ and the new video registers answer with errors, as before. In this version the G
 slave only (SURFBUS.md is unchanged).
 
 **Status (2026-10-18).** G0 (this document and the contract changes) is done. G1 (VRAM, the
-graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, gpudiag's CPU-drawn scenes) is
-done in simulation; its synthesis is in section 12.2. G2 (the engine) is in progress. Section 11
-has the milestones. Nothing has run on the board.
+graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, gpudiag's CPU-drawn scenes) and
+G2 (the engine) are done in simulation and in synthesis: the gpudiag design passes every gate of
+the open flow and its netlist runs gpudiag to PASS (section 12). Their physical tests (section 14)
+are open: nothing has run on a board. Section 11 has the milestones.
 
 ## 1. Decisions and where this deviates from the brief
 
@@ -326,10 +327,11 @@ the define `ARTY_HAS_GPU`, as it takes `HAS_DDR` from `ARTY_HAS_DDR`.
 | FRAME_CRC, FRAME_COUNT (48 bits) | pix -> sys | `surf_cdc_word` |
 | vertical blanking start (to the engine's WAIT_VBLANK) | pix -> sys | the existing `surf_pulse_sync` |
 
-Every new crossing uses rtl/lib blocks whose scoped constraints the designs already apply. The
-longest new paths are the CPU's VRAM read (block RAM, the 19-way bank multiplexer, the response
+Every new crossing uses rtl/lib blocks whose scoped constraints the designs already apply, or a
+dual-clock block RAM, which has no timing path between its ports (BOARD.md section 4). The
+longest new paths are the CPU's VRAM read (block RAM, the 5-way bank multiplexer, the response
 multiplexer, the core's load path, in one 40 ns sys_clk cycle) and the engine's address and mask
-arithmetic.
+arithmetic (section 12.2 has the critical paths).
 
 ## 9. Resources (estimates before synthesis; section 12 has the results)
 
@@ -399,6 +401,14 @@ G2 (2026-10-18; [evidence](evidence/gpu/g2-sim.txt)):
 | `test-gpu-engine`: surf_gpu with surf_vram against the C model | seeds 1-3, 699 checks each: the registers and their error rules; FILL_RECT at every x mod 4 and width 1-9, at each corner, from x = -32768 with w = 65535, zero sizes, the clip at each edge, an empty clip, a full screen (76,850 cycles: 4 pixels a cycle); SET_TARGET's seven refusals and its limits (the last 192 bytes, one line wider than its stride, an empty target); COPY_RECT overlapping in eight directions by 1 and 5 pixels at every source alignment, the key, sources outside the target, the clip, 65535 x 65535 from far out, a 639x400 unaligned overlapping copy (129,260 cycles: 2 a word); LINE in every octant with its endpoints, a point, clipped and far lines; EXPAND at every alignment, opaque and transparent, sizes crossing words, clipped; WRITE_RECT at every alignment, clipped; unknown opcodes; a full FIFO and OVERFLOW; the fence and error interrupts; ABORT inside a WRITE_RECT; WAIT_VBLANK. Then 120 random chunks per seed (about 1,900 commands, 30,000 words, 780,000 pixel writes) with VRAM compared byte for byte at 134 fences, the CPU reading VRAM and writing its spare top meanwhile (the engine waited 6,000 to 11,000 cycles for it) |
 | `test-gpu-soc`: gpudiag with the engine on the RTL SoC | `GPUDIAG: PASS (117 checks)`: the G1 sections, the engine's registers and errors (a full FIFO behind a WAIT_VBLANK, OVERFLOW, an unknown opcode, a refused target, a fence's interrupt at intc source 5), and 13 scenes (6 drawn by the engine) whose FRAME_CRCs equal the model's and those of frames captured at the pins; 33.0 million cycles. SurfBoot on the same SoC answers its monitor |
 
+| `test-gpu-mutants`: 18 one-line bugs in copies of surf_gpu, surf_vram and surf_video | 18 of 18 caught ([evidence](evidence/gpu/mutants.txt)): copies in the wrong direction, the clip's right edge inclusive, EXPAND's bits in the wrong order or its transparency ignored, WRITE_RECT's lanes misaligned, LINE's tie rule, the copy key ignored, the engine writing without its grant, OVERFLOW never set, SET_TARGET's bound off by one, COPY's window not shifted, VRAM giving the engine priority over the CPU or its bound inclusive, the overlay rule, FRAME_CRC's byte order, GFX_ settings not waiting for the frame latch, GFX_SCALE ignored; 83 s |
+| `gpu-netlist-sim`: the G2 gpudiag build's synthesized netlist (the one LVS proved the bitstream equal to) run from its pins | `GPUDIAG: PASS (117 checks)` as on the RTL SoC (identity "Arty A7-100T (0x100) ... features 17f"), every scene's FRAME_CRC the model's ([evidence](evidence/gpu/g2-netlist-sim.txt)); 1.32 s simulated in 44 minutes |
+
+`make check` passes with the GPU in it (32 minutes on the Mac, 2026-10-18, at 95d0bd1 with the
+documents being edited; other sessions were using the machine). `test-gpu` adds 1 minute 35
+seconds to it from a clean build directory and `lint-gpu` about 20 seconds; the mutants and the
+netlist simulation are not part of it.
+
 The existing suites pass unchanged with the GPU code in the tree (`HAS_GPU = 0`): lint-soc,
 lint-io, test-io-video (123 checks per seed), test-io-icarus, test-soc-units, test-soc-system,
 test-soc-surfsim, test-soc-boot (`BRAMDIAG: PASS (569 checks)`), board-tools (262 checks, the
@@ -406,16 +416,78 @@ board line among them), board-wiring (the GPU designs' pins too), test-release (
 
 ### 12.2 Synthesis
 
-(filled in as G1 and G2 land)
+The open flow (`make build-fpga FLOW=openxc7 BOARD=arty_a7_100t DESIGN=...`: Yosys 0.69,
+nextpnr-himbaechel 1.0.0, Project X-Ray, in surfcpu-openxc7:2026-10-15), seed 1 unless said.
+nextpnr's timing is an estimate, not Vivado's sign-off (OPEN-FLOW.md 6.4). Nothing below has
+been loaded on a board.
+
+How the gpudiag design got there:
+
+| Build | Result | What changed |
+|---|---|---|
+| G1 (VRAM in 19 banks of 4,096 words) | synthesis and placement fine (111 RAMB36 and 1 RAMB18; the placer's estimate 63 MHz sys_clk, 138 MHz pix_clk); the router did not converge: stopped after 45 minutes and 10 iterations with 1,117 wires still overused, no bitstream | the 19-input bank multiplexers gathered 672 block RAM outputs per port in one place: VRAM became 5 banks of 16,384 words (b434c49) |
+| G2 first (7451a24) | routed in 24 iterations (297 s); timing met (sys_clk 46.7 MHz, pix_clk 96.6 MHz); two gates failed: the netlist check (a 48-bit ROM Yosys made of the opcode decode's case statement has no RAM cell) and LVS (13,987 pins proved, 8 differ: port B address pins 4..11 of GPAL's RAMB18) | the decode became comparisons (c23f04a); GPAL was moved to distributed RAM (a07f185) to step around the RAMB18 |
+| G2 second (a07f185) | netlist check PASS; LVS 15,002 proved, 300 differ: the read addresses of GPAL's distributed RAM and the 12 registers after it. The same signals as before, and in both builds they are fed by the scan-out's byte-lane delay (glane1..3), which Yosys had made into two SRL16E cells, the only SRL cells in any SurfCPU build on record | GPAL went back to its RAMB18 (407bd26); the lane delay got a reset, so it stays in flip-flops (95d0bd1) |
+| G2 final (95d0bd1) | **every gate PASS**: synthesis, bitstream, round trip, block RAM, LVS (14,001 proved, 0 differ, in 23 minutes), clocks, the netlist check (every RTL memory in RAM cells, the multiplier in its 4 DSP48E1) and the boot ROM check; timing met on seed 1 | |
+
+The G2 gpudiag design ([evidence](evidence/gpu/synth-gpudiag.txt)), 31 minutes on the Mac:
+
+| | Result |
+|---|---|
+| timing (nextpnr) | pix_clk 82.67 MHz (+27.627 ns at 25.17 MHz), sys_clk 45.61 MHz (+18.075 ns at 25 MHz); no hold violations; cross-domain paths 1.13 and 1.88 ns (reported, checked against nothing) |
+| sys_clk critical path | 21.92 ns (4.48 logic, 17.44 routing): the engine's target height `t_h` through the clip comparisons and the engine's address into VRAM's bounds check (surf_vram.v:69) and the write enable of a block RAM of bank 1 on the far side of the die (the last two hops 5.6 ns) |
+| pix_clk critical path | 12.10 ns: S3's pixel to the FRAME_CRC update (surf_video.v:495) |
+| LUTs | 7,898 of 63,400 (12.5 %); 12,029 LUT positions |
+| flip-flops | 3,950 of 126,800 (3.1 %) |
+| CARRY4 | 620 of 15,850 (3.9 %) |
+| block RAM | 112.5 of 135 RAMB36 (83.3 %): VRAM 76, GPAL one RAMB18, and the SoC's 36 |
+| DSP48E1 | 4 of 240 (the multiplier; the engine uses none) |
+| memories (netlist check) | the 5 VRAM banks in 16, 16, 16, 16 and 12 RAMB36; GPAL in 1 RAMB18; the command FIFO in 11 RAM64M |
+
+Compared with the bramdiag build on record (docs/evidence/board/openxc7-soc.txt, SoC 0.2.0 at
+e3961772: 4,261 LUTs, 2,666 flip-flops, 36 RAMB36, sys_clk 62.16 MHz), that is roughly 3,600
+LUTs, 1,300 flip-flops and 76.5 RAMB36 more, and the engine now sets the sys_clk critical path
+(45.6 MHz, 1.8 times the 25 MHz clock).
+
+The DDR+GPU design's build follows the gpudiag design's (recorded here when it is done).
 
 ### 12.3 Placement: "another part of the chip"
 
-(filled in after the gpudiag build: where nextpnr put VRAM and the engine, and whether the open
-flow can constrain a block to a region)
+Where nextpnr put the GPU in the G2 gpudiag build (`sim/gpu/placement.py` over its netlist and
+placement.json, cells given to a part by their RTL file or, for cells abc made, by their
+neighbours; [evidence](evidence/gpu/synth-gpudiag.txt)). The 100T has eight clock regions,
+X0..X1 by Y0..Y3, Y3 at the top of the die (grid row 0); most of the CPU's cells are at the top
+left, in X0Y3.
+
+| Part | Cells | Clock regions | Tiles |
+|---|---|---|---|
+| engine (surf_gpu) | 3,606 LUT, 832 FF, 273 CARRY4 | X0Y3 (4,273 cells), X0Y2 (438) | x 10..55, y 1..68 |
+| VRAM (surf_vram) | 76 RAMB36, 424 LUT, 47 FF | all eight: X0Y2 362 cells, X0Y3 100, the others 7 to 37 | x 14..128, y 5..207 |
+| video (with the scan-out) | 1,002 LUT, 638 FF, GPAL's RAMB18, 2 RAMB36 | X0Y2, X0Y3 | x 10..108, y 21..103 |
+| CPU | 3,833 LUT, 937 FF | X0Y3 (4,370 cells), the rest scattered | x 10..128, y 1..166 |
+
+So the engine did not go to "another part of the chip": the placer put it in the CPU's own clock
+region, next to the CPU and the bus it talks to. VRAM's block RAM is wherever the block RAM
+columns are: 76 of the 135 RAMB36 cannot help being spread over the die, which is what the long
+last hops of the sys_clk critical path show.
+
+**Can the open flow keep a block in a region?** Not today. Probed on 2026-10-18 in
+surfcpu-openxc7:2026-10-15 (nextpnr-himbaechel 1.0.0, e860c9c): its XDC reader takes
+`set_property` on ports and cells (a cell's LOC or BEL fixes it to one site), `create_clock`,
+`set_false_path` and a setup form of `set_multicycle_path`; any other command is skipped with
+"ignoring unsupported XDC command", and the binary has no `create_pblock`, `add_cells_to_pblock`
+or `resize_pblock`. Region constraints exist inside nextpnr (it confines a regional clock
+buffer's loads to the buffer's clock region), but this build has no Python (no `--pre-place`
+script), so there is no way in from outside. A LOC on every GPU cell would work in principle,
+but the flow does not pass cell properties to nextpnr: boards/arty_a7/nextpnr-xdc.awk gives it
+only port properties and `create_clock` and lists the rest as not checked. Putting the GPU in a
+region (G5) therefore needs a flow change: either a step that turns a region into per-cell LOCs
+after synthesis and lets those properties through, or a nextpnr with pblock support. Neither
+was done here (the brief: do not change the flow).
 
 ## 13. Risks
 
-* **Block RAM 83 %.** VRAM's 75 RAMB36 spread over most of the 100T's block RAM columns, so its
+* **Block RAM 83 %.** VRAM's 76 RAMB36 spread over most of the 100T's block RAM columns, so its
   multiplexers and the CPU's read path span the die. At 25 MHz there is room; the DDR design's
   80 MHz dram_clk had +1.13 ns and placed in three tries of four, and the added block RAM and
   routing may cost it placements. The DDR+GPU design is built last and its margin recorded.
@@ -433,6 +505,12 @@ flow can constrain a block to a region)
   directed tests written from section 5, not from the RTL.
 * **Open-flow sign-off.** As for every SurfCPU bitstream, nextpnr's timing is an estimate and the
   CDC constraints are Vivado's only (OPEN-FLOW.md).
+* **SRL cells and LVS.** In both failed G2 builds the open flow's LVS check reported every signal
+  fed by an SRL16E as different (section 12.2). Whether the bitstream implemented those SRLs
+  wrongly or the checker cannot pair them is not known; no SurfCPU build on record had SRL cells
+  before. The GPU designs now have none (the one chain that became an SRL has a reset); any
+  future change that makes Yosys infer one (three or more registers in a row without a reset)
+  should be expected to fail LVS the same way.
 
 ## 14. The physical tests (the integrator's, with the owner)
 
