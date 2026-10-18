@@ -14,13 +14,16 @@ desktop tiles, Help, and the actions that menus, toolbars, keys and dialogs shar
 their own (struct gui_app, guipriv.h), reached through the table below: their menu
 items in Apps, their tiles, Help's lines, keys, the pointer, gui_tick() and
 gui_finish(). The desktop's own windows keep their code as it was.
+10/17/26 (the suite, track MEDIA): Sketch saves its canvas as a BMP and opens one
+(Save as BMP, Ctrl+S, and Open BMP in its File menu and its window; shell/guibmp.c).
 */
 #include "guipriv.h"
+#include "gui_media.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static const u32 paints[] = { PAPER, INK, TEAL, CORAL, 0x659ECB, 0xD0B056 };
+const u32 sketch_paints[SKETCH_PAINTS] = { PAPER, INK, TEAL, CORAL, 0x659ECB, 0xD0B056 };   /* 10/17/26: guibmp.c's too */
 static const char *const titles[] = { "Calculator", "Sketch", "About SurfOS", "Pointer & desktop", "Notepad", "Files", "Help" };
 static const int app_icons[] = { ICON_CALC, ICON_SKETCH, ICON_WAVE, ICON_GEAR, ICON_NOTEPAD, ICON_FILES, ICON_HELP };
 static const char keys[] = "789/456*123-C0=+";
@@ -380,9 +383,14 @@ static int menu_items(const struct gui_state *g, int m, struct menu_item *it) {
             ITEM("Refresh", "Ctrl+R", ACT_FILES_REFRESH, files_can(g, ACT_FILES_REFRESH));
             SEPARATOR();
         }
+        if(g->focus == GUI_SKETCH) {                    /* 10/17/26: Sketch in front: its pictures (guibmp.c) */
+            ITEM("Open BMP\xF9", "", ACT_SKETCH_OPEN, sketch_can_open(g));
+            ITEM("Save as BMP\xF9", "Ctrl+S", ACT_SKETCH_SAVE, files);
+            SEPARATOR();
+        }
         ITEM("New note", "Ctrl+N", ACT_NEW, true);
         ITEM("Open\xF9", "Ctrl+O", ACT_OPEN, files);
-        if(g->focus != GUI_FILES) {
+        if(g->focus != GUI_FILES && g->focus != GUI_SKETCH) {
             ITEM("Save", "Ctrl+S", ACT_SAVE, note && files);
             ITEM("Save as\xF9", "", ACT_SAVE_AS, note && files);
             SEPARATOR();
@@ -694,6 +702,8 @@ void gui_act(struct gui_state *g, int act) {
     case ACT_CALC: gui_open(g, GUI_CALC); break;
     case ACT_SKETCH: gui_open(g, GUI_SKETCH); break;
     case ACT_CLEAR_SKETCH: memset(g->canvas, 0, sizeof(g->canvas)); gui_open(g, GUI_SKETCH); break;
+    case ACT_SKETCH_SAVE: sketch_save_as(g); break;     /* 10/17/26: Sketch's pictures (guibmp.c) */
+    case ACT_SKETCH_OPEN: sketch_open(g); break;
     case ACT_NEXT_WINDOW: next_window(g); break;
     case ACT_MINIMIZE: minimize(g, g->focus); break;
     case ACT_MAXIMIZE: maximize(g, g->focus); break;
@@ -826,6 +836,8 @@ static void content_press(struct gui_state *g, int id, int x, int y) {
     }
     if(id==GUI_SKETCH) {
         if(gui_inside(x,y,16,38,6*32,24)) g->brush=(x-16)/32;
+        else if(gui_inside(x,y,212,38,56,24)) gui_act(g,ACT_SKETCH_OPEN);   /* 10/17/26: BMP files (guibmp.c) */
+        else if(gui_inside(x,y,272,38,56,24)) gui_act(g,ACT_SKETCH_SAVE);
         else if(gui_inside(x,y,336,38,80,24)) memset(g->canvas,0,sizeof(g->canvas));
         else if(gui_inside(x,y,16,70,GUI_CANVAS_W,GUI_CANVAS_H)) {
             g->drawing=true; g->last_x=x-16; g->last_y=y-70; stroke(g,x-16,y-70);
@@ -1012,6 +1024,7 @@ void gui_key(struct gui_state *g, int key) {
         note_key(g,key);
         return;
     }
+    if(key==19 && g->focus==GUI_SKETCH) { gui_act(g,ACT_SKETCH_SAVE); return; } /* 10/17/26: Ctrl+S, Sketch's Save as BMP */
     if(key==3 && g->focus==GUI_FILES) { gui_act(g,ACT_FILES_COPY); return; }   /* Ctrl+C: the path */
     if(key==3) { gui_request_quit(g); return; }                         /* Ctrl+C elsewhere: back to the shell */
     if(key==9) { next_window(g); return; }
@@ -1093,20 +1106,24 @@ static void window(const struct gui_state *g, const struct gui_draw *d, int id) 
         }
         gd_text(&in,x+16,y+278,"Integers | C clears",MUTED);
     } else if(id==GUI_SKETCH) {
+        bool open=sketch_can_open(g), save=g->fs!=NULL;  /* 10/17/26: Open and Save, as BMP files */
         for(i=0;i<6;i++) {
             gd_rect(&in,x+16+i*32,y+38,26,24,i==g->brush?INK:MUTED);
-            gd_rect(&in,x+19+i*32,y+41,20,18,paints[i]);
+            gd_rect(&in,x+19+i*32,y+41,20,18,sketch_paints[i]);
         }
+        gd_button(&in,x+212,y+38,56,24,"Open",open?SHELL:BAND,open?INK:MUTED);
+        gd_button(&in,x+272,y+38,56,24,"Save",save?SHELL:BAND,save?INK:MUTED);
         gd_button(&in,x+336,y+38,80,24,"Clear",SHELL,INK);
         gd_rect(&in,x+15,y+69,402,182,MUTED);
         for(j=0;j<GUI_CANVAS_H;j++) {
             for(i=0;i<GUI_CANVAS_W;) {
                 int start=i, c=g->canvas[j*GUI_CANVAS_W+i];
                 while(i<GUI_CANVAS_W && g->canvas[j*GUI_CANVAS_W+i]==c) i++;
-                gd_rect(&in,x+16+start,y+70+j,i-start,1,paints[c%6]);
+                gd_rect(&in,x+16+start,y+70+j,i-start,1,sketch_paints[c%SKETCH_PAINTS]);
             }
         }
-        gd_text(&in,x+16,y+266,"Temporary. Drag/Space draws. Ctrl+N clears.",INK);
+        gd_name(&in,x+16,y+266,g->viewer.sketch.status[0]?g->viewer.sketch.status:   /* 10/17/26: what Save and Open did */
+                "Drag/Space draws. Ctrl+N clears, Ctrl+S saves.",GUI_CANVAS_W/8,INK);
     } else if(id==GUI_ABOUT) {
         gd_text_scaled(&in,x+16,y+44,"SurfOS",INK,3);
         gd_wave(&in,x+176,y+52,232,14,FOAM);

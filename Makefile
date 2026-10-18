@@ -845,7 +845,7 @@ GUI_SYS_OBJ =
 # TOOLS:
 GUI_TOOLS_OBJ =
 # MEDIA:
-GUI_MEDIA_OBJ =
+GUI_MEDIA_OBJ = $(BUILD)/host/kernel/shell/guibmp.o
 GUI_HOST_OBJ += $(GUI_TERM_OBJ) $(GUI_SYS_OBJ) $(GUI_TOOLS_OBJ) $(GUI_MEDIA_OBJ)
 $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter %.c %.o,$^) -o $@
