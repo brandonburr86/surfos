@@ -120,6 +120,7 @@ static bool nothing_changed(int r) {
 
 static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t n) {
     char tmp[VFS_PATH_MAX];
+    struct stat st;
     bool made = false;
     int r = -ENAMETOOLONG, k;
     if(kept && n) kept[0] = 0;
@@ -128,13 +129,14 @@ static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool
         r = write_file(tmp, O_EXCL, data, len, crlf, &made);
         if(r != -EEXIST) break;                         /* a file the user has under that name: the next name */
     }
+    if(r == -ENAMETOOLONG && k > 0) r = -EEXIST;        /* <file>.tmp is there, the next name is too long: not in place */
     if(r == 0) {
         if((r = vfs_rename(tmp, path)) == 0) return 0;
-        if(!nothing_changed(r)) {                       /* perhaps half done: the text stays in the new file */
-            if(kept) strlcpy(kept, tmp, n);
+        if(!nothing_changed(r)) {                       /* perhaps half done: the text stays in the new file, if it is there */
+            if(kept && vfs_stat(tmp, &st) == 0) strlcpy(kept, tmp, n);
             return r;
         }
-        vfs_unlink(tmp);
+        if(vfs_unlink(tmp) != 0 && r != -ENOSYS && kept) strlcpy(kept, tmp, n);   /* it would not go: the text is in it */
         if(r != -ENOSYS) return r;
     } else if(made) {
         vfs_unlink(tmp);                                /* made by this call (O_EXCL): what of the text it got */

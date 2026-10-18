@@ -567,8 +567,12 @@ static void notepad_review(void) {
     key(26); CHECK(text_is("a") && !g.note.modified);
     /* a save that failed halfway says where the text is */
     type("c"); fail_write=-EIO; key(19);
-    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.text[1],"The text is in w.txt.tmp beside it.") && g.note.modified);
-    key(27); fail_write=-ENOSPC; key(19); CHECK(!strcmp(g.dialog.text[1],"The volume is full.")); key(27); fail_write=0;
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.text[1],"The text is in w.txt.tmp.") && g.note.modified);
+    key(27); fail_write=-ENOSPC; key(19); CHECK(!strcmp(g.dialog.text[1],"The volume is full.")); key(27);
+    /* a long name kept: its middle goes, its end shows */
+    fail_write=-EIO; note_save(&g,"/home/quarterly-report-final-version-two-for-everyone.txt");
+    CHECK(!strcmp(g.dialog.text[1],"The text is in quarterly-report-f\xF9or-everyone.txt.tmp.") && gd_cells(g.dialog.text[1])==54);
+    key(27); fail_write=0;
     /* the CRs a CRLF file is saved with count against 256 KB */
     note_reset(&g.note); g.note.crlf=true;
     memset(g.clip,'\n',GUI_CLIP_MAX); g.clip_len=GUI_CLIP_MAX; key(22);
@@ -598,7 +602,8 @@ static void notepad_review(void) {
     note_layout(&g,&l); g.note.top=0;
     drag(w->x+l.bar_x+5,w->y+l.ty,w->x+l.bar_x+5,w->y+w->h-30);
     CHECK(g.note.top==note_lines(&g.note)-l.rows);
-    for(i=0;i<20;i++) click(w->x+l.bar_x+5,w->y+l.find_y-4);
+    g.note.top=note_lines(&g.note)-l.rows-3;            /* the thumb just above the bar's end: a click there pages */
+    click(w->x+l.bar_x+5,w->y+l.find_y-4);
     CHECK(g.note.top==note_lines(&g.note)-l.rows);
     note_wheel(&g,1000); CHECK(g.note.top==note_lines(&g.note)-l.rows);
     /* a drag past the right edge scrolls sideways only as far as the line goes */
@@ -718,8 +723,12 @@ static void windows_review(void) {
     e.x=w->x+120; e.y=w->y+10; e.buttons=1; gui_pointer(&g,&e); e.x+=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e);
     g.now+=100; e.buttons=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
     CHECK(w->max); gui_act(&g,ACT_MAXIMIZE); CHECK(!w->max);
-    /* a window as tall as the desk drags without shaking, and resizing leaves the bottom a drag keeps */
-    drag(w->x+100,w->y+10,w->x+100,w->y-200); CHECK(w->y==MENU_H+6);
+    /* a window taller than the desk drags without shaking, and resizing leaves the bottom a drag keeps */
+    w->h=300; drag(w->x+100,w->y+10,w->x+100,100+10); CHECK(w->y==100);
+    w->h=540-MENU_H-TASK_H;
+    drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==MENU_H+6);
+    drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==MENU_H+6);
+    w->h=300; drag(w->x+100,w->y+10,w->x+100,100+10); CHECK(w->y==100);
     drag(w->x+w->w-4,w->y+w->h-4,959,539); CHECK(w->y+w->h==540-TASK_H-2);
     bottom=540-TASK_H-2-w->h; if(bottom<MENU_H+6) bottom=MENU_H+6;
     y=w->y; drag(w->x+100,w->y+10,w->x+90,w->y+10); CHECK(w->y==y);

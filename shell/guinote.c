@@ -390,16 +390,33 @@ int note_load(struct gui_state *g, const char *path) {
     return 0;
 }
 
+/* a name in at most cells cells: a longer one loses its middle (… there), so that its end (.1.tmp) shows */
+static void middle(const char *name, char *out, size_t n, int cells) {
+    u32 len = strlen(name), at = 0, o;
+    int total = gd_cells(name), k;
+    if(total <= cells) { strlcpy(out, name, n); return; }
+    for(k = 0; k < (cells - 1) / 2 && at < len; k++) at += gd_char_len(name + at, len - at);
+    o = at < n - 4 ? at : n - 4;
+    memcpy(out, name, o);
+    out[o++] = (char)0xF9;
+    for(k = 0; k < total - cells + 1 && at < len; k++) at += gd_char_len(name + at, len - at);
+    out[o] = 0;
+    strlcat(out, name + at, n);
+}
+
 int note_save(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
-    char line[80], why[80], kept[GUI_PATH_MAX];
+    char line[80], why[80], kept[GUI_PATH_MAX], name[GUI_PATH_MAX];
     u32 bytes = n->len + (n->crlf ? n->lf : 0);
     int r;
     if(!g->fs) return -ENOSYS;
     r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf, kept, sizeof(kept));
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
-        if(kept[0]) snprintf(why, sizeof(why), "The text is in %s beside it.", gui_basename(kept));
+        if(kept[0]) {                                   /* the dialog's 54 cells: "The text is in " and the name */
+            middle(gui_basename(kept), name, sizeof(name), 38);
+            snprintf(why, sizeof(why), "The text is in %s.", name);
+        }
         else strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
                           r == -ENOSPC ? "The volume is full." :
                           r == -EEXIST ? "Move the .tmp files beside it out of the way." : "", sizeof(why));
