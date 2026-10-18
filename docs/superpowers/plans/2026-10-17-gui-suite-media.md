@@ -18,8 +18,8 @@ as Notepad's does. (Once Files is wired to it: double-click a `.bmp` in Files.)
   picture is drawn opaque (its alpha, if any, is not used).
 * **Size.** Up to 16384 x 16384 pixels. A picture of more than 1,048,576 pixels (1024 x 1024) is reduced
   while it is read, keeping its proportions (1920 x 1080 is kept at 1365 x 768), and the status bar says
-  `kept at 1365 x 768`. A big file is read a piece at a time, so the desktop never
-  freezes: the status bar counts the percent, and Esc stops the reading.
+  `kept at 1365 x 768`. A big file is read a piece at a time, so the desktop never freezes: the window and
+  the status bar count the percent (`Reading sea.bmp... 45%`), and Esc stops the reading.
 * **The views.** Fit is the default: a picture larger than the window is shrunk to fit it; a smaller one is
   enlarged by a whole number (2 times, 3 times, ...), as far as it fits, so that its pixels stay square. Press 1
   (or the toolbar's Actual size) for the actual size, + and - (or Zoom in, Zoom out) to zoom between 1/64 and
@@ -67,9 +67,10 @@ Replace "Sketches are temporary: they are lost when the desktop exits, and Sketc
 
 * **Save as BMP** (Ctrl+S, File > Save as BMP… while Sketch is in front, or the Save button) saves the drawing
   as a 400 x 180 24-bit BMP (216,054 bytes), which the Image Viewer, Sketch itself and other computers can
-  open. It asks for the name and the folder (the chooser starts where the last picture
-  was), and before it replaces a file that is there already, as Notepad's Save as does, except the file
-  Sketch itself saved last. Unsaved sketches are still lost when the desktop exits.
+  open. It asks for the name and the folder (the chooser starts in the folder of the picture Sketch saved or
+  opened last, else in the last chooser's), and before it replaces a file that is there already, as Notepad's
+  Save as does, except the file Sketch itself saved last. Unsaved sketches are still lost when the desktop
+  exits.
 * **Open BMP** (File > Open BMP…, or the Open button) reads a BMP into the canvas: a picture larger than the
   canvas is shrunk to fit it (its proportions kept), and a smaller one is put in the middle; each colour
   becomes the nearest of Sketch's six. It replaces the drawing (as Clear does); a picture that cannot be read
@@ -108,8 +109,8 @@ if(gui_guard(g, PEND_OPEN_PATH, path)) {
 ```
 
 (note_load returns -EINVAL for a file with NUL bytes, and for a device, which hex_show refuses in its own
-words.) Once that is in, the Image Viewer's Help line "Open (or O) chooses one." can add "Files opens a .bmp
-here too.", and Hex's "Files opens here a file Notepad does not."
+words.) Once that is in, the Help lines (`help[]` in guiview.c and guihex.c, 57 characters at most) can say
+that Files opens a `.bmp` in the Image Viewer, and a file that Notepad does not open in Hex.
 
 Also there for tests and for anyone who needs to know where the picture is: `viewer_place()` (its place on
 the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketch_open()`, `sketch_save()`,
@@ -162,7 +163,22 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
     as it does with Files in front, so that Ctrl+S appears once.
 14. **Closing the Image Viewer or Hex forgets the picture or the file**, as closing Notepad forgets its text.
 
+## Open points
+
+* Files is not wired to the Image Viewer and Hex yet (the integrator's, above), and docs/GUI.md is not
+  updated (the integrator's, from this file).
+* gui_fs's read_at (shell/guifs.c, the foundation's) opens the file for each call, so on FAT the cluster chain
+  is walked from the file's start every time: a read far into a big file costs time in proportion to its
+  offset, in clusters. That is nothing for pictures and ordinary files, but searching hundreds of megabytes in
+  Hex (a read every 64 KB) or reading a huge picture's rows gets slow, still a frame's budget at a time and
+  stoppable with Esc. A position kept between calls in guifs.c (or the FAT vnode kept cached) would make it
+  linear; not changed here, as guifs.c is not the track's.
+* Everything here was checked on the host and in QEMU (OVMF, USB sticks), not yet on the laptop.
+
 ## Files
+
+Commits on gui/media: 81b9376 (the applications, Sketch's files and the host test), 65fce6b (the guiapps
+checks), and this file's.
 
 Added: shell/guibmp.c (BMP reading and writing, Sketch's Save as BMP and Open BMP), shell/gui_media.h (the
 private header above). Rewritten from the foundation's stubs: shell/guiview.c, shell/guihex.c,
