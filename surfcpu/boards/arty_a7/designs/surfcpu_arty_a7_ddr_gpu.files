@@ -1,6 +1,6 @@
 # surfcpu_arty_a7_ddr_gpu: the DDR boot design (surfcpu_arty_a7_ddr.files: the DDR3L and SurfBoot) plus
 # the GPU (docs/GPU.md: VRAM, the graphics modes of the video block, the drawing engine). For the
-# A7-100T only: VRAM takes 75 of its 135 RAMB36, the 35T has 50. The same as surfcpu_arty_a7_ddr.files
+# A7-100T only: VRAM takes 76 of its 135 RAMB36, the 35T has 50. The same as surfcpu_arty_a7_ddr.files
 # plus the GPU lines (define, board) (sim/board/tools/test_tools.sh compares them). Format:
 # arty_a7_baseline.files; the build/ files are generated (make litedram-gen) and checked against
 # ip/litedram/arty.sha256.

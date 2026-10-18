@@ -1,6 +1,6 @@
 # surfcpu_arty_a7_gpudiag: the whole SoC with the GPU (docs/GPU.md: VRAM, the graphics modes of the
 # video block, the drawing engine) and the GPU diagnostic (gpudiag) in its boot ROM, without DDR:
-# quick to build and to test on the board. For the A7-100T only: VRAM takes 75 of its 135 RAMB36,
+# quick to build and to test on the board. For the A7-100T only: VRAM takes 76 of its 135 RAMB36,
 # the 35T has 50. The same as surfcpu_arty_a7_bramdiag.files plus the GPU lines (define, board) and
 # with gpudiag as its ROM (sim/board/tools/test_tools.sh compares them). Format: arty_a7_baseline.files.
 board    arty_a7_100t                     # the boards it builds for: VRAM does not fit the 35T
