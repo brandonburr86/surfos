@@ -31,8 +31,10 @@ design is unchanged: without it the vram and gpu windows are unmapped, MODE 2 an
 and the new video registers answer with errors, as before. In this version the GPU is a SurfBus
 slave only (SURFBUS.md is unchanged).
 
-**Status (2026-10-18).** G0 (this document and the contract changes) is done; G1 and G2 are in
-progress. Section 12 has the record, section 11 the milestones. Nothing has run on the board.
+**Status (2026-10-18).** G0 (this document and the contract changes) is done. G1 (VRAM, the
+graphics scan-out, GPAL, FRAME_CRC, the CPU window, FEATURES.GPU, gpudiag's CPU-drawn scenes) is
+done in simulation; its synthesis is in section 12.2. G2 (the engine) is in progress. Section 11
+has the milestones. Nothing has run on the board.
 
 ## 1. Decisions and where this deviates from the brief
 
@@ -373,7 +375,21 @@ integrator's, run with the owner; a milestone is not done while its physical tes
 
 ### 12.1 Simulation and host tests
 
-(filled in as G1 and G2 land)
+G1 (2026-10-18, `make test-gpu`; [evidence](evidence/gpu/g1-sim.txt)):
+
+| Test | Result |
+|---|---|
+| `test-gpu-model`: the C model against GPU.md | 38 checks: GPAL's RGB332, CRC-32's check value, frame CRCs computed independently with Python's zlib (black, the test pattern 0x2077DB89, graphics at scale 1 and 2, past 300 KiB), the overlay rule, and the engine's commands traced by hand |
+| `test-gpu-vram`: CPU window, engine port and pixel port at once | seeds 1-3: about 2.67 million checks each: 290,000 CPU accesses (17,000 of them errors at or above 300 KiB or fetches), every one answered in the next cycle and none waiting; 132,000 engine grants, never in a cycle the CPU asked; 520,000 pixel-port reads; all 76,800 words read back |
+| `test-gpu-video`: the io track's video suite on the `HAS_GFX = 1` build | 122 checks per seed, seeds 1-3 (the test pattern, text, cursor, scroll, frame latch, resets: unchanged) |
+| `test-gpu-video`: the graphics tests | 53 checks per seed, seeds 1-3, 48 frames each: registers and GPAL, FRAME_CRC of the test pattern, of black, of text, of graphics and of the overlay equal to the model's and to the captured frame's; 8 placements (doubling, wrapping, stride 0, scale 0) pixel by pixel; mid-frame GFX_ writes change only the next frame, GPAL at once; FRAME_COUNT one per frame; a pixel-domain reset |
+| `test-gpu-interconnect`: tb_interconnect with `HAS_GPU = 1` | seeds 1-3, 24,932 accesses each, the gpu and vram targets reached (about 600 and 450 times), fetches to them refused; `HAS_GPU = 0` in test-soc-units as before |
+| `test-gpu-soc`: gpudiag on the RTL SoC (`build/sim/surfsim_gpu`) | `GPUDIAG: PASS (90 checks)`: identity, the VRAM window (March C- over 300 KiB, the errors), the registers, 7 scenes whose FRAME_CRCs equal the model's and the CRC of a frame captured at the VGA pins; 23.9 million cycles (0.96 s simulated) in 11 s |
+
+The existing suites pass unchanged with the GPU code in the tree (`HAS_GPU = 0`): lint-soc,
+lint-io, test-io-video (123 checks per seed), test-io-icarus, test-soc-units, test-soc-system,
+test-soc-surfsim, test-soc-boot (`BRAMDIAG: PASS (569 checks)`), board-tools (262 checks, the
+board line among them), board-wiring (the GPU designs' pins too), test-release (53 tests).
 
 ### 12.2 Synthesis
 

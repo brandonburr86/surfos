@@ -7,7 +7,9 @@ the owner's board) or `arty_a7_35t`; `DESIGN=` for the bitstream targets, one of
 `arty_a7_baseline` (the milestone 1 design), `surfcpu_arty_a7_bramdiag` (the SoC with the BRAM
 diagnostics, milestone 3), `surfcpu_arty_a7_top` (the SoC with SurfBoot, no DDR; the default),
 `surfcpu_arty_a7_ddr_bramdiag` (the BRAM diagnostics with the DDR3L, milestone 4) or
-`surfcpu_arty_a7_ddr` (SurfBoot with the DDR3L: the design that boots SurfOS). Give `DESIGN=`
+`surfcpu_arty_a7_ddr` (SurfBoot with the DDR3L: the design that boots SurfOS); for the A7-100T only,
+`surfcpu_arty_a7_gpudiag` (the SoC with the GPU and its diagnostic, no DDR) or `surfcpu_arty_a7_ddr_gpu`
+(the DDR design with the GPU; docs/GPU.md section 10). Give `DESIGN=`
 every time: without it `build-fpga` and `program-volatile` take `surfcpu_arty_a7_top`, which
 stops at DDR_ABSENT. `BIT=file.bit` programs a particular file;
 `CABLE_SERIAL=` the serial number of the board's USB cable when more than one FT2232H is
@@ -54,4 +56,5 @@ The states are as of 2026-10-17; the board results are on the owner's Arty A7-10
 | `make test-release` | container | the release tooling's tests (on `make check`, about a minute): `tools/bitfile.py`, `tools/release.py` with stand-ins for the builds, `tools/program.sh flash` with the fake openFPGALoader | works |
 | `make release-selftest` | Mac | the same tests with the Mac's own `python3`, where the release runs (its paths and Python differ from the container's) | works |
 | `tools/bitfile.py info\|flash\|stamp FILE.bit` | Mac or container | a bitstream's configuration options and its configuration time from the flash; its QSPI flash image; the header's date set to an epoch (the open flow runs it with `SOURCE_DATE_EPOCH`) | works |
+| `make test-gpu` | container | the GPU (docs/GPU.md): the C model against GPU.md, `surf_vram` with its three users at once, `surf_video`'s graphics modes captured at the pins against the model (FRAME_CRC too) and the old video tests on the graphics build, the interconnect with `HAS_GPU`, and `gpudiag` on the RTL SoC (`surfsim_gpu`) with every scene's FRAME_CRC the model's and a captured frame's (on `make check`) | works (simulation; 2026-10-18) |
 | `make check` | container | every automated pre-release check (about 25 minutes) | works |

@@ -152,7 +152,8 @@ clock; the clock itself is the board track's to verify.
 
 **Modes** (CTRL): MODE 0 the colour-bar test pattern (the reset mode, so a monitor shows a
 picture before any software runs), MODE 1 text, MODE 2 and 3 black; ENABLE = 0 black. The
-syncs always run.
+syncs always run. (Built with `HAS_GFX = 1`, in the GPU designs only, MODE 2 and 3 are the
+graphics modes of docs/GPU.md section 3; everything in this section is unchanged by it.)
 
 **The test pattern.** A one-pixel white border round the picture (to see its edges on a
 monitor); above line 360 eight 80-pixel bars, white, yellow, cyan, green, magenta, red, blue,
