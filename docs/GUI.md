@@ -57,9 +57,10 @@ time from the PC's clock. The tiles on the desktop open the four applications.
 * **Saving.** Saving writes the text to a new file beside it, then renames that over
   the file, as `edit` does. The new file is `<file>.tmp`, or `<file>.1.tmp` and so on
   when you have a file of that name; Notepad never overwrites it. If the disk fails
-  during the rename, the text stays in that new file, and the message says so. On a
-  read-only volume (the initrd, or the flashed SURFOSUSB stick) Save says so and
-  offers Save as.
+  during the rename, the text stays in that new file, and the message names it. Only
+  where a file system cannot rename, or a name is too long to take `.tmp`, is the file
+  written in place. On a read-only volume (the initrd, or the flashed SURFOSUSB
+  stick) Save says so and offers Save as.
 * **Unsaved changes.** Notepad asks first, with Save, Don't save and Cancel, before
   it closes, opens or starts another file, or leaves the desktop.
 
@@ -93,7 +94,7 @@ time from the PC's clock. The tiles on the desktop open the four applications.
   A last row says how many entries did not fit. When the list is full, a folder stays
   closed and the status bar says so.
 * **Long paths.** A path longer than SurfOS takes (255 bytes) is never cut short:
-  nothing is done with it, and the status bar says why.
+  nothing is done with it, and Files' status bar (or the chooser's own line) says why.
 
 **Calculator** does whole-number `+`, `-`, `*`, `/`. Click its buttons, or type the
 numbers and operators. Enter calculates, C clears, and Backspace removes a digit.
@@ -137,7 +138,8 @@ this session.
 | Ctrl+C elsewhere | Return to the shell, as before, but asking first about Notepad's unsaved changes |
 
 While Notepad's find bar has the keys, they are its own: Ctrl+V and Ctrl+A work in
-its box, and Ctrl+X, Ctrl+Z and Ctrl+Y do nothing until Esc closes it.
+its box, and Ctrl+X, Ctrl+Z and Ctrl+Y do nothing until Esc, the bar's x or a click
+in the text gives the keys back.
 
 In Notepad, Files and Help the arrow keys, Home, End, Page Up, Page Down and Delete
 work as in any editor. Elsewhere the arrow keys move the pointer, and in Sketch

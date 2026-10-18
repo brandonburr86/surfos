@@ -59,7 +59,9 @@ struct gui_fs {
     int (*list)(void *ctx, const char *path, struct gui_entry *out, int max);   /* not . and .., in no order */
     int (*stat)(void *ctx, const char *path, struct gui_entry *out, bool *device, bool *readonly);
     int (*read)(void *ctx, const char *path, char *buf, u32 size, u32 *len);    /* -EFBIG: more than size bytes */
-    int (*write)(void *ctx, const char *path, const char *data, u32 len, bool crlf);   /* crlf: each \n as \r\n */
+    /* crlf: each \n as \r\n. kept: where the text was left when the save failed halfway (a rename that may
+       have half happened), "" otherwise */
+    int (*write)(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t n);
     int (*mkdir)(void *ctx, const char *path);
     int (*remove)(void *ctx, const char *path, bool dir);                       /* a file, or an empty folder */
     int (*rename)(void *ctx, const char *from, const char *to);
@@ -146,7 +148,7 @@ struct gui_state {
     char clock[8];                      /* "14:05" from the shell, "" for none */
     int resize, scroll, scroll_at;      /* a window being resized; one whose scroll bar is held, and where */
     u32 title_ms;                       /* the last press on a title bar, for a double-click: when, which, where */
-    int title_id, title_x, title_y, help_top;
+    int title_id, title_x, title_y, press_x, press_y, help_top;   /* press_*: where the pointer was then */
     int pending;                        /* what to do once Notepad's changes are saved or dropped */
     char pending_path[GUI_PATH_MAX];
     struct gui_dialog dialog;

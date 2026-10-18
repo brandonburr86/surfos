@@ -89,12 +89,14 @@ static int write_all(struct file *f, const char *data, u32 len) {
     return 0;
 }
 
-/* the whole text, each \n as \r\n when crlf, then fsync; flags: O_EXCL for a new file, or O_TRUNC */
-static int write_file(const char *path, int flags, const char *data, u32 len, bool crlf) {
+/* the whole text, each \n as \r\n when crlf, then fsync; flags: O_EXCL for a new file, or O_TRUNC;
+   *made: the file was opened (with O_EXCL: this call made it, so it is ours to delete) */
+static int write_file(const char *path, int flags, const char *data, u32 len, bool crlf, bool *made) {
     struct file *f;
     char chunk[512];
     u32 used = 0, i;
     int r = vfs_open(path, O_WRONLY | O_CREAT | flags, &f), e;
+    if(made) *made = !r;
     if(r) return r;
     if(!crlf) r = write_all(f, data, len);
     else {
@@ -113,28 +115,32 @@ static int write_file(const char *path, int flags, const char *data, u32 len, bo
 /* a rename that failed before it changed anything (fs/vfs.c, fs/fat.c): its new file may go */
 static bool nothing_changed(int r) {
     return r == -ENOSYS || r == -EXDEV || r == -EROFS || r == -EBUSY || r == -EINVAL || r == -ENOENT ||
-           r == -ENOTDIR || r == -EISDIR || r == -ENOTEMPTY || r == -ENAMETOOLONG || r == -ENOSPC;
+           r == -ENOTDIR || r == -EISDIR || r == -ENOTEMPTY || r == -ENAMETOOLONG || r == -ENOSPC || r == -ENOMEM;
 }
 
-static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool crlf) {
+static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t n) {
     char tmp[VFS_PATH_MAX];
+    bool made = false;
     int r = -ENAMETOOLONG, k;
+    if(kept && n) kept[0] = 0;
     for(k = 0; k < 10; k++) {
         if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", path, k) >= (int)sizeof(tmp)) break;
-        r = write_file(tmp, O_EXCL, data, len, crlf);
+        r = write_file(tmp, O_EXCL, data, len, crlf, &made);
         if(r != -EEXIST) break;                         /* a file the user has under that name: the next name */
     }
-    if(r == -EEXIST) return r;
     if(r == 0) {
         if((r = vfs_rename(tmp, path)) == 0) return 0;
-        if(!nothing_changed(r)) return r;               /* perhaps half done: the text stays in the new file */
+        if(!nothing_changed(r)) {                       /* perhaps half done: the text stays in the new file */
+            if(kept) strlcpy(kept, tmp, n);
+            return r;
+        }
         vfs_unlink(tmp);
         if(r != -ENOSYS) return r;
-    } else if(r != -ENAMETOOLONG) {
-        vfs_unlink(tmp);                                /* ours (O_EXCL): what of the text it got */
+    } else if(made) {
+        vfs_unlink(tmp);                                /* made by this call (O_EXCL): what of the text it got */
         return r;
-    }
-    return write_file(path, O_TRUNC, data, len, crlf);  /* no rename here, or no room for such a name: in place */
+    } else if(r != -ENAMETOOLONG) return r;           /* nothing was made, and nothing of the user's touched */
+    return write_file(path, O_TRUNC, data, len, crlf, NULL);   /* no rename here, or no room for such a name: in place */
 }
 
 static int fs_mkdir(void *ctx, const char *path) {

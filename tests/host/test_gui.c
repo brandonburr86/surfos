@@ -13,7 +13,7 @@ static u32 pixels[8 + 1280*800 + 8];
 
 struct fake { char path[GUI_PATH_MAX]; int type; char data[600]; u32 len, size; bool used; };
 static struct fake nodes[96];
-static bool mounted, mounted2, two_parts, pulled;
+static bool mounted, mounted2, two_parts, pulled, ro_stick;   /* ro_stick: usb1p1 mounted read-only */
 static int f_writes, fail_write;
 
 static bool under(const char *p, const char *top) { u32 n = strlen(top); return !strncmp(p, top, n) && (!p[n] || p[n] == '/'); }
@@ -93,10 +93,12 @@ static int f_read(void *ctx, const char *path, char *buf, u32 size, u32 *len) {
     *len = nodes[i].len;
     return 0;
 }
-static int f_write(void *ctx, const char *path, const char *data, u32 len, bool crlf) {
+static int f_write(void *ctx, const char *path, const char *data, u32 len, bool crlf, char *kept, size_t size) {
     char parent[GUI_PATH_MAX], out[600];
     u32 n = 0, k;
     int p, i = find(path);
+    if(kept && size) kept[0] = 0;
+    if(fail_write == -EIO && kept) snprintf(kept, size, "%s.tmp", path);   /* as if a rename failed halfway */
     if(fail_write) return fail_write;
     parent_of(path, parent);
     p = find(parent);
@@ -165,6 +167,7 @@ static void volume(struct gui_volume *out, int *n, int max, const char *dev, con
 static int f_volumes(void *ctx, struct gui_volume *out, int max) {
     int n = 0;
     volume(out, &n, max, "usb1p1", "usb1", mounted ? "/usb1p1" : "", false);
+    if(ro_stick) out[0].readonly = true;
     if(two_parts) volume(out, &n, max, "usb1p2", "usb1", mounted2 ? "/usb1p2" : "", false);
     if(pulled) volume(out, &n, max, "usb2p1", "usb2", "/usb2p1", true);
     return n;
@@ -196,7 +199,7 @@ static bool holds(const char *p, const char *data) {
 }
 static void populate(void) {
     memset(nodes, 0, sizeof(nodes));
-    two_parts = pulled = false;
+    two_parts = pulled = ro_stick = false;
     fail_write = 0;
     add("/", GUI_DIR, NULL, 0);
     add("/dev", GUI_DIR, NULL, 0);
@@ -532,6 +535,7 @@ static void bounds(int width, int height) {
 
 /* what the first review of Notepad found */
 static void notepad_review(void) {
+    struct pointer_event e;
     struct gui_window *w;
     struct note_layout l;
     char b[32];
@@ -546,19 +550,25 @@ static void notepad_review(void) {
     CHECK(g.note.len==50*1024);
     key(26); CHECK(g.note.len==40*1024 && g.note.text[0]=='a' && g.note.text[20*1024]=='a');
     key(26); CHECK(!strcmp(g.note.status,"Nothing to undo") && g.note.len==40*1024);
+    /* a replacement whose parts fit but not both: never half of it (the deletion was dropped before) */
+    key(1); memset(g.clip,'a',60*1024); g.clip_len=60*1024; key(22); CHECK(g.note.len==60*1024);
+    g.note.anchor=0; g.note.cursor=40*1024;
+    memset(g.clip,'b',30*1024); g.clip_len=30*1024; key(22); CHECK(g.note.len==50*1024);
+    key(26); CHECK(g.note.len==50*1024 && g.note.text[0]=='b' && g.note.text[30*1024]=='a' && !strcmp(g.note.status,"Nothing to undo"));
     /* and one too big to keep clears the history rather than keeping half of it */
     memset(g.clip,'c',100*1024); g.clip_len=100*1024; key(1); key(22); CHECK(g.note.len==100*1024);
     key(1); type("x"); CHECK(text_is("x"));
     key(26); CHECK(text_is("x") && !strcmp(g.note.status,"Nothing to undo") && g.note.modified);
     /* typing after a save is a step of its own: the saved state is told apart */
-    key(1); key(8); type("a"); key(19); type("w.txt\n");
-    CHECK(holds("/home/w.txt","a") || holds("/w.txt","a") || g.dialog.kind);
-    if(g.dialog.kind) key(27);
-    gui_act(&g,ACT_SAVE_AS); field_set(&g.dialog.field,"w.txt",false); key('\r');
-    if(g.dialog.kind==GUI_DLG_CONFIRM) key('\r');
-    CHECK(!g.note.modified);
+    key(1); key(8); type("a"); key(19); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/"));
+    key(GUI_DOWN); key('\r'); CHECK(!strcmp(g.dialog.dir,"/home"));
+    key(1); type("w.txt\n"); CHECK(holds("/home/w.txt","a") && !g.note.modified);
     type("b"); CHECK(g.note.modified && text_is("ab"));
     key(26); CHECK(text_is("a") && !g.note.modified);
+    /* a save that failed halfway says where the text is */
+    type("c"); fail_write=-EIO; key(19);
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && !strcmp(g.dialog.text[1],"The text is in w.txt.tmp beside it.") && g.note.modified);
+    key(27); fail_write=-ENOSPC; key(19); CHECK(!strcmp(g.dialog.text[1],"The volume is full.")); key(27); fail_write=0;
     /* the CRs a CRLF file is saved with count against 256 KB */
     note_reset(&g.note); g.note.crlf=true;
     memset(g.clip,'\n',GUI_CLIP_MAX); g.clip_len=GUI_CLIP_MAX; key(22);
@@ -583,11 +593,21 @@ static void notepad_review(void) {
     /* a greyed toolbar button does nothing (Copy with nothing selected) */
     w=&g.win[GUI_NOTEPAD]; note_status(&g,"");
     click(w->x+324+10,w->y+TITLE_H+4+5); CHECK(!g.note.status[0]);
-    /* the scroll bar's thumb drags the text */
+    /* the scroll bar's thumb drags the text; paging and the wheel stop where the text ends */
     note_reset(&g.note); for(i=0;i<200;i++) type("line\n");
     note_layout(&g,&l); g.note.top=0;
     drag(w->x+l.bar_x+5,w->y+l.ty,w->x+l.bar_x+5,w->y+w->h-30);
     CHECK(g.note.top==note_lines(&g.note)-l.rows);
+    for(i=0;i<20;i++) click(w->x+l.bar_x+5,w->y+l.find_y-4);
+    CHECK(g.note.top==note_lines(&g.note)-l.rows);
+    note_wheel(&g,1000); CHECK(g.note.top==note_lines(&g.note)-l.rows);
+    /* a drag past the right edge scrolls sideways only as far as the line goes */
+    note_reset(&g.note); for(i=0;i<150;i++) type("x");
+    note_layout(&g,&l); g.note.left=0;
+    e.x=w->x+l.tx+8; e.y=w->y+l.ty+2; e.wheel=0; e.buttons=1; gui_pointer(&g,&e);
+    e.x=w->x+l.bar_x-1; for(i=0;i<400;i++) gui_pointer(&g,&e);
+    e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
+    CHECK(g.note.left==150-l.cols && g.note.cursor==150);
 }
 
 /* what the reviews of Files found */
@@ -605,6 +625,13 @@ static void files_review(void) {
     /* a full list: the folder stays closed and says why */
     g.files.selected=row_named("home"); key(GUI_RIGHT);
     CHECK(!g.files.node[row_named("home")].expanded && !strncmp(g.files.status,"The list is full",16));
+    /* a click on a triangle keeps the view where it is (it used to jump to the selection) */
+    g.files.selected=row_named("dev"); g.files.top=row_named("more")-2;
+    click(g.win[GUI_FILES].x+8+2*16+2,g.win[GUI_FILES].y+TITLE_H+BAR_H+3+20+(row_named("more")-g.files.top)*ROW_H+4);
+    CHECK(!g.files.node[row_named("more")].expanded && g.files.selected==row_named("dev") && g.files.top>row_named("dev")+files_rows(&g));
+    i=g.files.top;
+    click(g.win[GUI_FILES].x+8+2*16+2,g.win[GUI_FILES].y+TITLE_H+BAR_H+3+20+(row_named("more")-g.files.top)*ROW_H+4);
+    CHECK(g.files.node[row_named("more")].expanded && g.files.selected==row_named("dev") && g.files.top==i);
     /* closing a folder from far down keeps the list in view */
     g.files.top=300; g.files.selected=row_named("more"); key('\r');
     CHECK(!g.files.node[g.files.selected].expanded && g.files.top<=g.files.selected);
@@ -631,6 +658,11 @@ static void files_review(void) {
     pulled=true; key(18); i=row_named("usb2p1"); CHECK(i>0);
     g.files.selected=i; CHECK(files_can(&g,ACT_FILES_EJECT) && !files_can(&g,ACT_FILES_NEW_FILE) && !files_can(&g,ACT_FILES_RENAME));
     gui_act(&g,ACT_FILES_EJECT); CHECK(!pulled && row_named("usb2p1")<0);
+    /* a stick mounted read-only: nothing on it can be changed */
+    ro_stick=true; g.files.selected=1; gui_act(&g,ACT_FILES_MOUNT); CHECK(mounted);
+    i=row_named("stick.txt"); CHECK(i>0); g.files.selected=i;
+    CHECK(!files_can(&g,ACT_FILES_RENAME) && !files_can(&g,ACT_FILES_DELETE) && !files_can(&g,ACT_FILES_NEW_FILE) && files_can(&g,ACT_FILES_OPEN));
+    gui_act(&g,ACT_FILES_EJECT); CHECK(!mounted); ro_stick=false;
     /* a path that would not fit: nothing is done with it */
     j=row_named("dos.txt"); CHECK(j>0);
     memset(g.files.node[j].name,'x',250); g.files.node[j].name[250]=0;
@@ -682,9 +714,15 @@ static void windows_review(void) {
     e.x-=60; e.y+=20; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e);
     g.now+=100; e.buttons=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
     CHECK(!w->max && w->x==x-60 && w->y==y+20);
-    /* a window as tall as the desk drags without shaking */
-    drag(w->x+w->w-4,w->y+w->h-4,959,539);
+    /* but a pointer that wanders a pixel during a double-click (a touchpad's click) still makes one */
+    e.x=w->x+120; e.y=w->y+10; e.buttons=1; gui_pointer(&g,&e); e.x+=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e);
+    g.now+=100; e.buttons=1; gui_pointer(&g,&e); e.buttons=0; gui_pointer(&g,&e); g.now+=1000;
+    CHECK(w->max); gui_act(&g,ACT_MAXIMIZE); CHECK(!w->max);
+    /* a window as tall as the desk drags without shaking, and resizing leaves the bottom a drag keeps */
+    drag(w->x+100,w->y+10,w->x+100,w->y-200); CHECK(w->y==MENU_H+6);
+    drag(w->x+w->w-4,w->y+w->h-4,959,539); CHECK(w->y+w->h==540-TASK_H-2);
     bottom=540-TASK_H-2-w->h; if(bottom<MENU_H+6) bottom=MENU_H+6;
+    y=w->y; drag(w->x+100,w->y+10,w->x+90,w->y+10); CHECK(w->y==y);
     drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==bottom);
     drag(w->x+100,w->y+10,w->x+100,w->y+60); CHECK(w->y==bottom);
     drag(w->x+100,w->y+10,w->x+100,w->y-200); CHECK(w->y==MENU_H+6);

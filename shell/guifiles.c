@@ -79,12 +79,12 @@ int gui_list(const struct gui_fs *fs, const char *path, struct gui_entry *out, i
    a cut path names something else) */
 bool files_path(const struct gui_state *g, int row, char *out, size_t n) {
     const struct gui_files *f = &g->files;
-    int chain[64], depth = 0, i;
+    int chain[128], depth = 0, i;
     out[0] = 0;
     if(row < 0 || row >= f->count || f->node[row].type == GUI_NODE_DRIVE) return false;
     if(f->node[row].type == GUI_NODE_MORE) row = f->node[row].parent;
     for(i = row; i > 0; i = f->node[i].parent) {
-        if(depth == 64) return false;                   /* deeper than any path that fits */
+        if(depth == 128) return false;                  /* deeper than any path that fits */
         chain[depth++] = i;
     }
     strlcpy(out, "/", n);
@@ -458,7 +458,7 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
         dialog_message(g, what, line, "");
         return;
     }
-    r = act == ACT_DLG_NEW_FILE ? g->fs->write(g->fs->ctx, dest, "", 0, false) :
+    r = act == ACT_DLG_NEW_FILE ? g->fs->write(g->fs->ctx, dest, "", 0, false, NULL, 0) :
         act == ACT_DLG_NEW_FOLDER ? g->fs->mkdir(g->fs->ctx, dest) : g->fs->rename(g->fs->ctx, target, dest);
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", text, gui_error(g, r));
@@ -547,7 +547,8 @@ void files_press(struct gui_state *g, int x, int y) {
     if(f->node[row].type == GUI_DIR && row > 0 && x >= ix - 2 && x < ix + 10) {   /* the triangle */
         if(f->node[row].expanded) collapse(g, row);
         else expand(g, row);
-        show_selected(g);
+        f->top = gui_clamp(f->top, 0, f->count > l.rows ? f->count - l.rows : 0);   /* the view stays where it is */
+        g->dirty = true;
         return;
     }
     f->selected = row;
@@ -634,7 +635,7 @@ void files_render(const struct gui_state *g, const struct gui_draw *d) {
     else if(f->selected >= 0 && f->selected < f->count && f->node[f->selected].type == GUI_NODE_DRIVE)
         snprintf(b, sizeof(b), "%s: double-click or Mount to open it", f->node[f->selected].name);
     else {
-        if(!files_path(g, f->selected, b, sizeof(b))) strlcpy(b, f->selected > 0 ? "(a path too long for SurfOS)" : "", sizeof(b));
+        if(!files_path(g, f->selected, b, GUI_PATH_MAX)) strlcpy(b, f->selected > 0 ? "(a path too long for SurfOS)" : "", sizeof(b));
         if(f->selected > 0 && f->node[f->selected].type == GUI_FILE) {
             snprintf(size, sizeof(size), "  %u bytes", f->node[f->selected].size);
             strlcat(b, size, sizeof(b));

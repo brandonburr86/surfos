@@ -666,6 +666,8 @@ static void title_press(struct gui_state *g, int id, int x, int y) {
     g->title_ms = g->now;
     g->title_x = x;
     g->title_y = y;
+    g->press_x = g->x;
+    g->press_y = g->y;
     if(!w->max) { g->drag = id; g->drag_x = x; g->drag_y = y; }
 }
 
@@ -732,13 +734,14 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
         bottom=g->height-TASK_H-2-w->h;
         nx=gui_clamp(g->x-g->drag_x,0,g->width-w->w);
         ny=gui_clamp(g->y-g->drag_y,top,bottom>top?bottom:top);
-        if(nx!=w->x || ny!=w->y) { w->x=nx; w->y=ny; g->title_id=-1; g->dirty=true; }   /* a drag is no double-click */
+        if(nx!=w->x || ny!=w->y) { w->x=nx; w->y=ny; g->dirty=true; }
+        if(g->x-g->press_x>4 || g->press_x-g->x>4 || g->y-g->press_y>4 || g->press_y-g->y>4) g->title_id=-1;   /* a drag is no double-click */
         return;
     }
     if(g->resize>=0) {                                  /* never narrower than its toolbar */
         w=&g->win[g->resize];
         w->w=gui_clamp(g->x-w->x+g->drag_x,min_width(g->resize),g->width-w->x);
-        w->h=gui_clamp(g->y-w->y+g->drag_y,200,g->height-TASK_H-w->y);
+        w->h=gui_clamp(g->y-w->y+g->drag_y,200,g->height-TASK_H-2-w->y);   /* the bottom a drag keeps */
         if(w->x+w->w>g->width) w->x=g->width-w->w>0?g->width-w->w:0;
         g->dirty=true; return;
     }

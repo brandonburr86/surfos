@@ -392,17 +392,17 @@ int note_load(struct gui_state *g, const char *path) {
 
 int note_save(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
-    char line[80], why[64];
+    char line[80], why[80], kept[GUI_PATH_MAX];
     u32 bytes = n->len + (n->crlf ? n->lf : 0);
     int r;
     if(!g->fs) return -ENOSYS;
-    r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf);
+    r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf, kept, sizeof(kept));
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
-        strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
-                     r == -ENOSPC ? "The volume is full." :
-                     r == -EIO ? "The text may be in a .tmp file beside it." :
-                     r == -EEXIST ? "Move the .tmp files beside it out of the way." : "", sizeof(why));
+        if(kept[0]) snprintf(why, sizeof(why), "The text is in %s beside it.", gui_basename(kept));
+        else strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
+                          r == -ENOSPC ? "The volume is full." :
+                          r == -EEXIST ? "Move the .tmp files beside it out of the way." : "", sizeof(why));
         dialog_message(g, "Not saved", line, why);
         return r;
     }
@@ -648,10 +648,11 @@ void note_drag(struct gui_state *g, int x, int y) {
     note_layout(g, &l);
     if(y < l.ty && n->top > 0) n->top--;                /* past the edge: the text scrolls */
     if(y >= l.ty + l.rows * 16 && n->top < top_max(g)) n->top++;
-    if(x < l.tx && n->left > 0) n->left--;
-    if(x >= l.tx + l.cols * 8) n->left++;
     n->cursor = offset_at(g, &l, x, y);
-    col = note_column(n, n->cursor);                    /* sideways, the view follows the cursor */
+    if(x < l.tx && n->left > 0) n->left--;              /* sideways too, as far as the line goes */
+    if(x >= l.tx + l.cols * 8 && note_column(n, line_finish(n, n->cursor)) > n->left + l.cols) n->left++;
+    n->cursor = offset_at(g, &l, x, y);
+    col = note_column(n, n->cursor);
     if(col < n->left) n->left = col;
     if(col > n->left + l.cols) n->left = col - l.cols;
     g->dirty = true;
