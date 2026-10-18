@@ -170,14 +170,15 @@ def monitor(d):
     d.key('delete')
     d.visible('End task asks about the shell on F2',
               lambda s: d.text(s, 261, 242, f'End surfsh (pid {old}) on F2?', INK, PAPER) and
-              d.text(s, 261, 264, 'A console\'s shell: init starts a new one there.', MUTED, PAPER))
+              d.text(s, 261, 264, 'It ends after its system call; init starts another.', MUTED, PAPER))
     d.key('esc')
     d.visible('Esc answers Cancel: nothing ended', _status(d, MON, f'surfsh (pid {old}): a program on F2'))
     d.key('delete')
     d.key('tab')
     d.key('ret')
-    d.visible('End task ends the program: kill\'s words in the status bar',
-              _status(d, MON, f'ended surfsh (pid {old})'))
+    d.visible('End task ends the program: kill\'s words in the status bar (a shell waiting for a key ends with that call)',
+              lambda s: _status(d, MON, f'ended surfsh (pid {old})')(s) or
+              _status(d, MON, f'surfsh (pid {old}) ends when its system call does')(s))
     _wait_tasks(d, r, 'its pid is gone, and init has started a new shell on F2',
                 lambda rows: all(p != old for p, *_ in rows) and
                 any(n == 'surfsh' and c == 'F2' and p > old for p, n, _, c, _ in rows), 'guiapps-monitor-ended.png')
