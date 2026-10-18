@@ -12,25 +12,37 @@ types nothing beyond ASCII. Codes 1 to 31 and 127 are the graphic characters the
 console's empty cell, which copies nothing.
 Track TOOLS of docs/superpowers/plans/2026-10-17-gui-suite.md; the window manager reaches it
 through gui_app_charmap (struct gui_app, shell/guipriv.h).
+10/18/26: laid out for the height the window gets (on a 640x400 screen the status bar covered the last
+row); Go to code takes only what it says it takes.
 */
 #include "gui_tools.h"
 #include <sys/cp437.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #define SHEET 0xFFFDF5                  /* the grid's background, as Notepad's text */
-#define GX 26                           /* the grid: its left and top (window-relative), each cell's size */
-#define GY 50
+#define GX 26                           /* the grid's left (window-relative), and each cell's width */
 #define CW 17
-#define CH 17
 #define PX 312                          /* the panel of the chosen character, beside the grid */
 #define PW 138
-#define BOX_Y 40                        /* the chosen character, large */
+#define BOX_Y 34                        /* the chosen character, large */
 #define BIG 6
-#define INFO_Y 154                      /* its code, code point and bytes */
-#define COPY_Y 290                      /* the Copy button */
+#define INFO_Y 148                      /* its code, code point and bytes, and what is special about it */
 #define ANS_GOTO 1                      /* Go to code's answer (gui_app_act) */
+
+/* 10/18/26: the grid's top and its cells' height, the code's digits above it, the status bar, the Copy button: for the
+   window's height, 360 pixels, or 326 on a 640x400 screen (gui_init's room less 20), where the cells are a pixel lower
+   so that the status bar covers none of them */
+struct map_layout { int gy, ch, head_y, sy, copy_y; };
+
+static void layout(const struct gui_state *g, struct map_layout *l) {
+    const struct gui_window *w = &g->win[GUI_CHARMAP];
+    l->sy = w->h - STATUS_H - 1;
+    l->ch = l->sy >= 50 + 16 * 17 + 1 + 4 ? 17 : 16;
+    l->gy = l->ch == 17 ? 50 : 45;
+    l->head_y = l->gy - (l->ch == 17 ? 18 : 16);
+    l->copy_y = l->sy - 8 - 26;
+}
 
 static const char *const help[] = {
     "#Character Map",
@@ -74,36 +86,57 @@ static void copy(struct gui_state *g) {
     status(g, msg);
 }
 
-/* what Go to code was given: 247, 0xF7, U+224B, or one character */
+static bool blank(const char *s) {
+    while(*s == ' ') s++;
+    return !*s;
+}
+
+static int hexval(char c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* the code a text names: 247 (three digits at most), 0xF7 (two hex digits), U+224B (six at most), or one character
+   (not a digit or a space), with spaces around it: 0-255, -1 when it names none, -2 for a code point the console
+   lacks (*u: it) */
+static int parse_code(const char *s, u32 *u) {
+    u32 v = 0, len, k;
+    int n = 0, code;
+    while(*s == ' ') s++;
+    *u = 0;
+    if((s[0] == 'U' || s[0] == 'u') && s[1] == '+') {
+        for(s += 2; n < 7 && hexval(*s) >= 0; s++, n++) v = v * 16 + (u32)hexval(*s);
+        if(!n || n > 6 || !blank(s)) return -1;
+        *u = v;
+        code = v <= 0xFFFF ? cp437_from_unicode(v) : -1;
+        return code < 0 ? -2 : code;
+    }
+    if(s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        for(s += 2; n < 3 && hexval(*s) >= 0; s++, n++) v = v * 16 + (u32)hexval(*s);
+        return n && n <= 2 && blank(s) ? (int)v : -1;
+    }
+    if(*s >= '0' && *s <= '9') {
+        for(; n < 4 && *s >= '0' && *s <= '9'; s++, n++) v = v * 10 + (u32)(*s - '0');
+        return n <= 3 && v <= 255 && blank(s) ? (int)v : -1;
+    }
+    if(!*s) return -1;
+    len = gd_char_len(s, strlen(s));                    /* one character: where the console has it */
+    if(!blank(s + len)) return -1;
+    if(len == 1) return (u8)*s;                         /* ASCII, or a byte that is not UTF-8: the 437 character it is */
+    v = (u8)s[0] & (0x7F >> len);
+    for(k = 1; k < len; k++) v = v << 6 | ((u8)s[k] & 0x3F);
+    *u = v;
+    code = cp437_from_unicode(v);
+    return code < 0 ? -2 : code;
+}
+
 static void go_to(struct gui_state *g, const char *text) {
-    char msg[GUI_STATUS], *end;
-    unsigned long v;
-    int k;
-    u32 len;
-    while(*text == ' ') text++;
-    if((text[0] == 'U' || text[0] == 'u') && text[1] == '+') {
-        v = strtoul(text + 2, &end, 16);
-        k = end != text + 2 && v <= 0xFFFF ? cp437_from_unicode((u32)v) : -1;
-        if(k < 0) {
-            snprintf(msg, sizeof(msg), "U+%04lX is not one of the console's characters", v);
-            status(g, msg);
-            return;
-        }
-        choose(g, k);
-        return;
-    }
-    if(text[0] >= '0' && text[0] <= '9') {
-        v = strtoul(text, &end, text[0] == '0' && (text[1] == 'x' || text[1] == 'X') ? 16 : 10);
-        while(*end == ' ') end++;
-        if(*end || v > 255) { status(g, "A code is 0 to 255 (0x00 to 0xFF), or U+ and a code point"); return; }
-        choose(g, (int)v);
-        return;
-    }
-    if(text[0]) {                                       /* one character: where the console has it */
-        len = gd_char_len(text, strlen(text));
-        if(!text[len]) { choose(g, gd_char(text, len, &len)); return; }
-    }
-    status(g, "A code is 0 to 255 (0x00 to 0xFF), or U+ and a code point");
+    char msg[GUI_STATUS];
+    u32 u;
+    int code = parse_code(text, &u);
+    if(code >= 0) { choose(g, code); return; }
+    if(code == -2) snprintf(msg, sizeof(msg), "U+%04X is not one of the console's characters", u);
+    else strlcpy(msg, "Not a code: 0-255, 0x00-0xFF, U+224B or a character", sizeof(msg));
+    status(g, msg);
 }
 
 static bool can_edit(const struct gui_state *g, int act) {
@@ -151,10 +184,12 @@ static bool key(struct gui_state *g, int key) {
 
 static void press(struct gui_state *g, int x, int y) {
     struct gui_charmap *m = &g->charmap;
+    struct map_layout l;
     int code;
-    if(gui_inside(x, y, PX, COPY_Y, 96, 26)) { copy(g); return; }
-    if(x < GX || y < GY || x >= GX + 16 * CW || y >= GY + 16 * CH) return;
-    code = (y - GY) / CH * 16 + (x - GX) / CW;
+    layout(g, &l);
+    if(gui_inside(x, y, PX, l.copy_y, 96, 26)) { copy(g); return; }
+    if(x < GX || y < l.gy || x >= GX + 16 * CW || y >= l.gy + 16 * l.ch || y >= l.sy) return;
+    code = (y - l.gy) / l.ch * 16 + (x - GX) / CW;
     choose(g, code);
     if(gui_double(&m->click_ms, &m->click_code, g->now, code)) copy(g);
 }
@@ -166,11 +201,11 @@ static void notes(int code, const char **a, const char **b) {
                                          "^Z", "^[", "^\\", "^]", "^^", "^_" };
     *a = *b = "";
     if(code == 0) { *a = "The empty cell:"; *b = "nothing to copy"; }
+    else if(code == 0x10 || code == 0xF7 || code == 0xF9) { *a = "One of SurfOS's"; *b = "own characters"; }   /* 0x10 too */
     else if(code < 32) { *a = ascii[code]; *b = "copies the symbol"; }
     else if(code == 127) { *a = "DEL"; *b = "copies the symbol"; }
     else if(code == ' ') *a = "Space";
     else if(code == 0xFF) *a = "No-break space";
-    else if(code == 0x10 || code == 0xF7 || code == 0xF9) { *a = "One of SurfOS's"; *b = "own characters"; }
 }
 
 static void render(const struct gui_state *g, const struct gui_draw *d) {
@@ -179,17 +214,19 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     bool focused = g->focus == GUI_CHARMAP && !g->dialog.kind && !g->menu;
     char b[GUI_STATUS + 16], u[CP437_UTF8_MAX];
     const char *a, *z;
-    int x0 = w->x, y0 = w->y, sel = m->selected & 0xFF, i, x, y, n, sy = w->h - STATUS_H - 1;
+    struct map_layout l;
+    int x0 = w->x, y0 = w->y, sel = m->selected & 0xFF, i, x, y, n;
+    layout(g, &l);
     for(i = 0; i < 16; i++) {                           /* the code's low digit above, its high digit beside */
         snprintf(b, sizeof(b), "%X", i);
-        gd_text(d, x0 + GX + i * CW + 5, y0 + GY - 18, b, MUTED);
-        gd_text(d, x0 + GX - 16, y0 + GY + i * CH + 1, b, MUTED);
+        gd_text(d, x0 + GX + i * CW + 5, y0 + l.head_y, b, MUTED);
+        gd_text(d, x0 + GX - 16, y0 + l.gy + i * l.ch + 1, b, MUTED);
     }
-    gd_rect(d, x0 + GX, y0 + GY, 16 * CW + 1, 16 * CH + 1, LINE);
-    for(i = 0; i < 256; i++) {
+    gd_rect(d, x0 + GX, y0 + l.gy, 16 * CW + 1, 16 * l.ch + 1, LINE);
+    for(i = 0; i < 256; i++) {                          /* (cells of 16 rows: a glyph's last row is on the line below) */
         x = x0 + GX + i % 16 * CW;
-        y = y0 + GY + i / 16 * CH;
-        gd_rect(d, x + 1, y + 1, CW - 1, CH - 1, i == sel ? (focused ? TEAL : MUTED) : SHEET);
+        y = y0 + l.gy + i / 16 * l.ch;
+        gd_rect(d, x + 1, y + 1, CW - 1, l.ch - 1, i == sel ? (focused ? TEAL : MUTED) : SHEET);
         gd_glyph(d, x + 5, y + 1, (u8)i, i == sel ? PAPER : INK, 1);
     }
     x = x0 + PX + (PW - 66) / 2;                        /* the chosen one, large */
@@ -217,10 +254,10 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     notes(sel, &a, &z);
     gd_text(d, x, y + 80, a, MUTED);
     gd_text(d, x, y + 98, z, MUTED);
-    gd_button(d, x, y0 + COPY_Y, 96, 26, "Copy", sel ? TEAL : BAND, sel ? PAPER : MUTED);
-    gd_rect(d, x0 + 1, y0 + sy, w->w - 2, STATUS_H, BAND);
-    gd_rect(d, x0 + 1, y0 + sy, w->w - 2, 1, LINE);
-    gd_name(d, x0 + 10, y0 + sy + 3, m->status[0] ? m->status : "Enter, Ctrl+C or a double-click copies it", (w->w - 20) / 8, INK);
+    gd_button(d, x, y0 + l.copy_y, 96, 26, "Copy", sel ? TEAL : BAND, sel ? PAPER : MUTED);
+    gd_rect(d, x0 + 1, y0 + l.sy, w->w - 2, STATUS_H, BAND);
+    gd_rect(d, x0 + 1, y0 + l.sy, w->w - 2, 1, LINE);
+    gd_name(d, x0 + 10, y0 + l.sy + 3, m->status[0] ? m->status : "Enter, Ctrl+C or a double-click copies it", (w->w - 20) / 8, INK);
 }
 
 const struct gui_app gui_app_charmap = {

@@ -895,7 +895,7 @@ static void charmap(void) {
     w = &g.win[GUI_CHARMAP];
     draw();
     CHECK(m->selected == 0 && glyph_at(w->x + 26 + 7 * 17 + 5, w->y + 50 + 15 * 17 + 1, 0xF7, INK));   /* ≋ in its cell */
-    CHECK(shows(w->x + 312, w->y + 154, "Code", MUTED, 1) && shows(w->x + 312 + 64, w->y + 154 + 36, "U+0000", INK, 1));
+    CHECK(shows(w->x + 312, w->y + 148, "Code", MUTED, 1) && shows(w->x + 312 + 64, w->y + 148 + 36, "U+0000", INK, 1));
     CHECK(!gui_menu_on(&g, 3, ACT_COPY) && gui_menu_on(&g, 3, ACT_GOTO));
     /* the keys */
     key(GUI_RIGHT); key(GUI_RIGHT); key(GUI_DOWN);
@@ -919,7 +919,7 @@ static void charmap(void) {
     CHECK(m->selected == 0xF7 && !g.clip_len);
     draw();
     x = w->x + 312;
-    y = w->y + 154;
+    y = w->y + 148;
     CHECK(shows(x + 64, y, "247", INK, 1) && shows(x + 64, y + 18, "0xF7", INK, 1));
     CHECK(shows(x + 64, y + 36, "U+224B", INK, 1) && shows(x + 64, y + 54, "E2 89 8B", INK, 1));
     CHECK(shows(x, y + 80, "One of SurfOS's", MUTED, 1));
@@ -929,7 +929,7 @@ static void charmap(void) {
         int row, col, ok = 0;
         for(row = 0; row < 16 && !ok; row++) for(col = 0; col < 8 && !ok; col++)
             if(gl[row] & (0x80 >> col))
-                ok = fake_pixel(W, w->x + 312 + (138 - 66) / 2 + 9 + col * 6 + 3, w->y + 40 + 5 + row * 6 + 3) == INK;
+                ok = fake_pixel(W, w->x + 312 + (138 - 66) / 2 + 9 + col * 6 + 3, w->y + 34 + 5 + row * 6 + 3) == INK;
         CHECK(ok);
     }
     /* Copy (Ctrl+C), then Notepad: Ctrl+V pastes ≋ as UTF-8, and Notepad shows its glyph */
@@ -963,7 +963,7 @@ static void charmap(void) {
     key('\r');
     CHECK(g.clip_len == 3 && !strncmp(m->status, "0x00 is the console's empty cell", 32));
     key(' ');
-    click(w->x + 312 + 10, w->y + 290 + 10);            /* the Copy button */
+    click(w->x + 312 + 10, w->y + w->h - STATUS_H - 1 - 34 + 10);   /* the Copy button, above the status bar */
     CHECK(g.clip_len == 1 && g.clip[0] == ' ' && !strcmp(m->status, "Copied a space: Ctrl+V pastes it"));
     /* Go to code (Ctrl+L): 0x41, 247, U+2588; what is not a code says so */
     key(12);
@@ -977,7 +977,7 @@ static void charmap(void) {
     key(12); fake_type(&g, "u+00e9\r");
     CHECK(m->selected == 0x82);                         /* é */
     key(12); fake_type(&g, "300\r");
-    CHECK(m->selected == 0x82 && !strncmp(m->status, "A code is 0 to 255", 18));
+    CHECK(m->selected == 0x82 && !strcmp(m->status, "Not a code: 0-255, 0x00-0xFF, U+224B or a character"));
     key(12); fake_type(&g, "U+1234\r");
     CHECK(m->selected == 0x82 && !strcmp(m->status, "U+1234 is not one of the console's characters"));
     key(12); fake_type(&g, "Z\r");
