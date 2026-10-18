@@ -611,6 +611,32 @@ static bool io_overdue(struct buf *b, u_long *since) {
     return false;
 }
 
+#define IO_READ  1u                             /* (io_wait(): which of another task's I/O of a block to wait for) */
+#define IO_WRITE 2u
+#define IO_COPY  4u
+
+/* (bcache_lock held) 10/18/26 (audit B50): wait for another task's I/O of b to end (what: IO_READ, IO_WRITE, IO_COPY).
+   0: it has ended, or b holds another block now: look again; -1: the wait was cut short (intr: a kill, or Ctrl+C in
+   a kernel command, B39); 1: b is given up, as for a device that stopped answering (overdue already, or this step
+   must finish and has waited bcache_overdue_ms for it: io_overdue()). Out of line, with its bound's clock, so that
+   the callers' paths that wait for nothing run as they did (SurfCPU fetches every instruction from DDR) */
+static __attribute__((noinline)) int io_wait(struct buf *b, u32 what, bool intr) {
+    struct bdev *dev = b->dev;
+    u32 lba = b->lba;
+    u_long since = 0;
+    if(b->overdue) return 1;
+    if(!finishing()) {
+        if(intr) return bsleep(0, true) ? -1 : 0;
+        sleep_unlocked();
+        return 0;
+    }
+    while(!io_overdue(b, &since))
+        if(b->dev != dev || b->lba != lba ||
+           !(((what & IO_READ) && b->loading) || ((what & IO_WRITE) && b->writing) || ((what & IO_COPY) && b->copying)))
+            return 0;
+    return 1;
+}
+
 /* (bcache_lock held) 10/16/26 (B18): wait until b, a dirty block a sync owes, is in nobody's hands and
    under no write. A write ends; a hold may not: once a sync has waited HOLD_WAIT_MS for it (stamp_holds())
    it is given up on: false, b stays dirty (not written), and later syncs give up on that hold at once
@@ -623,20 +649,16 @@ static bool io_overdue(struct buf *b, u_long *since) {
    sync owes the copied block): each waited for the other, 10 s, and the copy was given up.
    10/17/26 (B39): a kill or Ctrl+C cuts the wait short (bsleep()): 0, given up on (nothing said, not stuck: the
    holder is not the one at fault). 10/18/26 (B50): a step that must finish gives the write or copy up after
-   bcache_overdue_ms (io_overdue()); an overdue one is given up at once by everyone */
+   bcache_overdue_ms (io_wait()); an overdue one is given up at once by everyone */
 static int wait_for(struct buf *b, bool dep) {
     struct bdev *dev = b->dev;
     u32 lba = b->lba;
-    u_long since = 0;
     for(;;) {
         u_long held, now;
         bool other;
         if(b->dev != dev || b->lba != lba || !b->valid || !b->dirty) return 1;
         if(b->writing || b->copying) {          /* (a copy of another task's may take long: it waits for holders too) */
-            if(b->overdue) return 0;
-            if(finishing()) {
-                if(io_overdue(b, &since)) return 0;
-            } else if(bsleep(0, true)) return 0;
+            if(io_wait(b, IO_WRITE | IO_COPY, true)) return 0;
             continue;
         }
         other = aside_other(b);
@@ -837,24 +859,33 @@ static bool free_now(const struct buf *b, u32 call) {
     return !b->dirty || !(b->wfail || b->dev->bc_failed || b->skip == call);
 }
 
+/* (bcache_lock held) 10/18/26 (audit B50): reuse() for a step that must finish found every buffer held or under I/O:
+   wait until one is free (false: reuse() looks again) or bcache_overdue_ms has passed with requests under way all the
+   while (true: none is coming back, a dead task's). Out of line, as io_wait() is */
+static __attribute__((noinline)) bool free_wait(u32 call) {
+    u_long since = uptime_ms();
+    struct buf *b;
+    for(;;) {
+        (void)bsleep(IO_LOOK_MS, false);
+        for(b = oldest; b; b = b->newer) if(free_now(b, call)) return false;
+        if(!inflight) return false;
+        if(uptime_ms() - since >= bcache_overdue_ms) return true;
+    }
+}
+
 /* a buffer nobody holds or moves, clean and forgotten; NULL when every one is held or waits
    for a sync after a failed write. May drop the lock (to write a dirty block out, or to wait
    for a request to finish). 10/16/26 (B6): no failed run is tried again here: a sync does
    that, and room() keeps a refusing device from filling the cache. */
 static struct buf *reuse(void) {
     u32 call = ++reuse_calls ? reuse_calls : ++reuse_calls;
-    u_long since = 0;
     for(;;) {
         struct buf *b;
         for(b = oldest; b; b = b->newer) if(free_now(b, call)) break;
         if(!b) {
             if(!inflight) return NULL;
             if(finishing()) {                   /* 10/18/26 (B50): a request that never ends (a dead task's) is not waited for */
-                u_long now = uptime_ms();       /* for good by a step that must finish */
-                if(!now) now = 1;
-                if(!since) since = now;
-                else if(now - since >= bcache_overdue_ms) return NULL;
-                (void)bsleep(IO_LOOK_MS, false);
+                if(free_wait(call)) return NULL;   /* for good by a step that must finish */
                 continue;
             }
             sleep_unlocked();
@@ -877,7 +908,6 @@ static struct buf *reuse(void) {
    was not), or (fill false) zeroed for the caller to overwrite */
 static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
     struct buf *b, *ra[BCACHE_RUN], *scan;
-    u_long since = 0;
     u32 n = 0, i;
     int r;
 
@@ -890,11 +920,10 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
     for(;;) {
         b = find(dev, lba);
         if(b && (b->loading || b->writing)) {   /* being read, or (B7) written: wait for it */
-            if(b->overdue || (finishing() && io_overdue(b, &since))) {   /* 10/18/26 (B50): given up: an I/O error */
+            if(io_wait(b, IO_READ | IO_WRITE, false) > 0) {   /* 10/18/26 (B50): given up: an I/O error */
                 unlock();
                 return NULL;
             }
-            if(!finishing()) sleep_unlocked();
             continue;
         }
         if(b) {
@@ -1352,7 +1381,6 @@ int bsync(struct bdev *dev) {
 int bsync_order(struct bdev *dev, u8 top) {
     int i, round;
     u32 pass, first, n;
-    u_long since = 0;
     u64 start;
     u8 order, sweep;
     bool lost = false, left;
@@ -1406,7 +1434,7 @@ int bsync_order(struct bdev *dev, u8 top) {
         }
         if(!busy) break;
         if(finishing()) {                       /* 10/18/26 (B50): a bound; given up, busy is overdue: look again */
-            (void)io_overdue(busy, &since);
+            (void)io_wait(busy, IO_WRITE | IO_COPY, false);
             continue;
         }
         if(bsleep(0, true)) {                   /* 10/17/26 (B39): (another task's copy may take long) cut short */
@@ -1632,7 +1660,6 @@ int bread_blocks(struct bdev *dev, u32 lba, u32 count, void *dst) {
    read afterwards is what the device holds, and does not change when the cache makes room. */
 static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
     struct buf *copy[BCACHE_RUN];
-    u_long since = 0;
     while(count) {
         u32 n = count < BCACHE_RUN ? count : BCACHE_RUN, i;
         u_long f;
@@ -1642,13 +1669,11 @@ static int write_blocks(struct bdev *dev, u32 lba, u32 count, const u8 *src) {
         for(i = 0; i < n; i++) {                /* none of them in the middle of a read, a write or a copy */
             struct buf *p = find(dev, lba + i);
             if(p && (p->loading || p->writing || p->copying)) {
-                if(p->overdue || (finishing() && io_overdue(p, &since))) {   /* 10/18/26 (B50): given up */
+                int w = io_wait(p, IO_READ | IO_WRITE | IO_COPY, true);   /* 10/17/26 (B39): (another task's copy may
+                                                                   take long) cut short; 10/18/26 (B50): or given up */
+                if(w) {
                     mutex_unlock(&bcache_lock);
-                    return BDEV_EIO;
-                }
-                if(!finishing() && bsleep(0, true)) {   /* 10/17/26 (B39): (another task's copy may take long) cut short */
-                    mutex_unlock(&bcache_lock);
-                    return BCACHE_EINTR;        /* (B49: the caller says EINTR, not EIO: nothing was refused) */
+                    return w > 0 ? BDEV_EIO : BCACHE_EINTR;   /* (B49: the caller says EINTR, not EIO: nothing was refused) */
                 }
                 i = (u32)-1;
             }
