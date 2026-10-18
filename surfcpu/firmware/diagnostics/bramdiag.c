@@ -235,8 +235,8 @@ static void exceptions(uint32_t unused)
     diag_check(W(ram) == 0x11223344u && W(ram + 4) == 0x55667788u, "a trapping store changed memory");
 
     expect_trap(0);
-    r = probe_load_word(0x30000000u, 0xAB);
-    trapped("load from an unmapped address", 5, 0x30000000u, A(probe_load_word));
+    r = probe_load_word(SURF_UNMAPPED_PROBE_BASE, 0xAB);     /* never mapped (spec/soc.toml) */
+    trapped("load from an unmapped address", 5, SURF_UNMAPPED_PROBE_BASE, A(probe_load_word));
     diag_check(r == 0xAB, "a faulting load wrote its destination");
     expect_trap(0);
     probe_load_word(SURF_UART_BASE + 0xFF0u, 0);
@@ -257,8 +257,8 @@ static void exceptions(uint32_t unused)
     trapped("halfword store to an MMIO register", 7, SURF_GPIO_BASE + SURF_GPIO_LED, A(probe_store_half));
 
     expect_trap(1);
-    probe_jump(0x30000000u);
-    trapped("fetch from an unmapped address", 1, 0x30000000u, 0x30000000u);
+    probe_jump(SURF_UNMAPPED_PROBE_BASE);
+    trapped("fetch from an unmapped address", 1, SURF_UNMAPPED_PROBE_BASE, SURF_UNMAPPED_PROBE_BASE);
     expect_trap(1);
     probe_jump(SURF_UART_BASE);
     trapped("fetch from MMIO", 1, SURF_UART_BASE, SURF_UART_BASE);

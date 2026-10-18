@@ -24,6 +24,7 @@ Images go to build/fw/cards/ (sparse files) and are deleted when their scenario 
 import argparse
 import concurrent.futures
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -38,6 +39,9 @@ import surfimg                                               # noqa: E402
 
 CARDS = ROOT / "build" / "fw" / "cards"
 DDR = 0x80000000
+# an address no SurfCPU SoC maps (spec/soc.toml's unmapped_probe), for the access-fault probes
+PROBE = int(re.search(r"#define SURF_UNMAPPED_PROBE_BASE 0x([0-9A-F]+)u",
+                      (ROOT / "firmware/include/surfcpu/soc.h").read_text()).group(1), 16)
 SCENARIOS = []
 
 
@@ -1057,12 +1061,12 @@ def _(p):
 @scenario("monitor_commands", commands=[
     "help", "info", "sd", "part", "fs", "ls /", "ls /BOOT", "ls /USERS/NOPE", "cat /BOOT/CMDLINE.TXT",
     "chain /BOOT/SURFOS.BIN", "check /BOOT/SURFOS.BIN", "check /BOOT/BROKEN.BIN", "check /BOOT/LONGNAME1.BIN",
-    "md 0x80000000 8", "mw 0x80000000 0xdeadbeef", "md 0x80000000 1", "md 0x30000000 1", "spi 3", "bogus",
+    "md 0x80000000 8", "mw 0x80000000 0xdeadbeef", "md 0x80000000 1", "md 0x%08x 1" % PROBE, "spi 3", "bogus",
     "boot"],
     logs=["boot [PATH]", "SurfBoot 1.1.0", "sd: SDHC/SDXC, sector addressing", "CID manufacturer",
           "0x0c FAT32 (LBA)", "fs: 126976 clusters", "SURFOS.BIN", "<dir>", "/USERS/NOPE does not exist",
           "hello monitor", "chain:", "fragments", "every check passed", "FAILED", "IMG_CRC",
-          "is not an 8.3 name", "80000000:", "deadbeef", "access fault at 0x30000000", "DIV 3",
+          "is not an 8.3 name", "80000000:", "deadbeef", "access fault at 0x%08x" % PROBE, "DIV 3",
           "unknown command"])
 def _(p):
     bad = bytearray(pkg(seed=4))

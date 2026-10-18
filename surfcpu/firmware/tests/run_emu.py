@@ -20,6 +20,7 @@ the RTL; physical results are pending the board.
 import argparse
 import concurrent.futures
 import os
+import re
 import subprocess
 import sys
 import time
@@ -34,6 +35,9 @@ FW = ROOT / "build" / "fw"
 OUT = FW / "emu"
 SURFEMU = FW / "host" / "surfemu"
 ROM = FW / "surfboot.mem"
+# an address no SurfCPU SoC maps (spec/soc.toml's unmapped_probe), for the access-fault probes
+PROBE = int(re.search(r"#define SURF_UNMAPPED_PROBE_BASE 0x([0-9A-F]+)u",
+                      (ROOT / "firmware/include/surfcpu/soc.h").read_text()).group(1), 16)
 SCENARIOS = []
 
 
@@ -79,7 +83,7 @@ def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello(), "/BOOT/CMDLINE.TXT": b"illegal\n"})
 
 
-@scenario("load_fault_after_handoff", expect=["HELLO: handoff OK", "mcause 00000005", "mtval 30000000"])
+@scenario("load_fault_after_handoff", expect=["HELLO: handoff OK", "mcause 00000005", "mtval %08x" % PROBE])
 def _(p):
     return card(p, {"/BOOT/SURFOS.BIN": hello(), "/BOOT/CMDLINE.TXT": b"load\n"})
 
@@ -162,10 +166,10 @@ def _(p):
 
 
 @scenario("monitor_on_a_bad_image",
-          args=send("surfboot> ", "check /BOOT/SURFOS.BIN\\r") + send("(IMG_CRC)\r\n", "md 0x30000000 1\\r") +
+          args=send("surfboot> ", "check /BOOT/SURFOS.BIN\\r") + send("(IMG_CRC)\r\n", "md 0x%08x 1\\r" % PROBE) +
           send("access fault", "mw 0x00000100 5\\r") + send("mw: access", "md 0x00000000 4\\r") +
           send("00000000:", "chain /BOOT/SURFOS.BIN\\r") + send("chain:", "reset\\r"),
-          expect=["(IMG_CRC)", "check: /BOOT/SURFOS.BIN: FAILED", "access fault at 0x30000000",
+          expect=["(IMG_CRC)", "check: /BOOT/SURFOS.BIN: FAILED", "access fault at 0x%08x" % PROBE,
                   "mw: access fault at 0x00000100", "00000000: 30401073", "fragment", "restarting", BANNER,
                   "(IMG_CRC)"])
 def _(p):

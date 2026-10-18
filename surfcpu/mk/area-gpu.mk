@@ -20,7 +20,8 @@
 #                          GPUDIAG: PASS (sim/board/netlist_sim.sh; minutes; not part of check)
 #   make test-gpu-soc      gpudiag (build/fw/gpudiag.mem) in surfsim built with HAS_GPU: GPUDIAG: PASS,
 #                          every scene's FRAME_CRC equal to the model's and to a frame captured at
-#                          the pins (sim/gpu/gpudiag_check.py)
+#                          the pins (sim/gpu/gpudiag_check.py); SurfBoot's monitor reports features 1ff
+#   make test-gpu-system-boot  SurfOS booting from a card on the DDR+GPU SoC (on check, not on test-gpu)
 #   make build-gpu-rom     build/fw/gpudiag.{elf,bin,mem} (on build-rom) and the scenes' expected CRCs
 #                          (build/fw/gen/gpuscenes_expect.h, from the C model); gpu-scenes writes
 #                          each scene's frame as build/fw/gpuscenes/scene-NN.ppm
@@ -46,7 +47,8 @@ GVIDEO_RTL   = rtl/peripherals/surf_video.v rtl/peripherals/surf_video_font.v rt
                rtl/lib/surf_pulse_sync.v rtl/lib/surf_cdc_word.v
 
 .PHONY: lint-gpu test-gpu test-gpu-model test-gpu-vram test-gpu-video test-gpu-interconnect test-gpu-soc \
-        build-gpu-rom gpu-scenes test-gpu-encodings test-gpu-engine test-gpu-mutants gpu-netlist-sim
+        build-gpu-rom gpu-scenes test-gpu-encodings test-gpu-engine test-gpu-mutants gpu-netlist-sim \
+        test-gpu-system-boot
 lint: lint-gpu
 build-rom: build-gpu-rom
 test-soc: test-gpu
@@ -190,7 +192,7 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS)
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
 GPU_ENGINE_SCENES ?= 6
-test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem
+test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem
 	@mkdir -p $(GPU_BUILD)/soc
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag.mem --quiet --max-cycles 600000000 \
 	  --vga-crc $(GPU_BUILD)/soc/frames.txt --transcript $(GPU_BUILD)/soc/uart.txt \
@@ -199,11 +201,38 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
 	  --expect $(FW_GEN)/gpuscenes_expect.h --log $(GPU_BUILD)/soc/surfsim.txt --engine-scenes $(GPU_ENGINE_SCENES)
 	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
-	$(Q)printf 'help\r' > $(GPU_BUILD)/soc/help.txt
+	@# and reports the GPU among the features (info: features 1ff)
+	$(Q)printf 'help\rinfo\r' > $(GPU_BUILD)/soc/help.txt
 	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/surfboot.mem --uart-in $(GPU_BUILD)/soc/help.txt --quiet \
-	  --max-cycles 100000000 --expect 'SurfBoot [0-9][\s\S]*monitor commands' \
+	  --max-cycles 150000000 --expect 'SurfBoot [0-9][\s\S]*monitor commands[\s\S]*features 1ff' \
 	  > $(GPU_BUILD)/soc/surfboot.txt 2>&1 || { tail -30 $(GPU_BUILD)/soc/surfboot.txt; exit 1; }
-	@echo "  [surfboot, HAS_GPU] the monitor answered help: $$(grep -o 'output matched after [0-9]* cycles' $(GPU_BUILD)/soc/surfboot.txt)"
+	@echo "  [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): $$(grep -o 'output matched after [0-9]* cycles' $(GPU_BUILD)/soc/surfboot.txt)"
+	@# the BRAM diagnostics on the same SoC: their unmapped-address probes (spec/soc.toml's
+	@# unmapped_probe) still fault where VRAM now answers at 0x3000_0000
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/bramdiag.mem --quiet --max-cycles 400000000 \
+	  --transcript $(GPU_BUILD)/soc/bramdiag-uart.txt --expect 'BRAMDIAG: (PASS|FAIL)[^\n]*\n' \
+	  > $(GPU_BUILD)/soc/bramdiag.txt 2>&1; \
+	  grep -q "BRAMDIAG: PASS" $(GPU_BUILD)/soc/bramdiag-uart.txt || { tail -30 $(GPU_BUILD)/soc/bramdiag-uart.txt; exit 1; }
+	@echo "  [bramdiag, HAS_GPU] $$(grep -o 'BRAMDIAG: PASS ([0-9]* checks)' $(GPU_BUILD)/soc/bramdiag-uart.txt)"
+
+# ---------------------------------------------------------------- SurfOS on the DDR+GPU SoC
+# The soc track's system boot test (sim/soc/tools/system_boot_test.py: SurfBoot loads the Arty
+# kernel package from a card image, the kernel boots to its prompt and runs commands, a damaged
+# package falls back to BACKUP.BIN) on build/sim/surfsim_gpu, the RTL SoC with HAS_GPU = 1 and
+# HAS_DDR = 1: the simulated counterpart of GPU.md section 14 step 4. It costs what
+# test-soc-system-boot costs, so it is on check (not on test-gpu). Skipped where the soc track's
+# own system test is (SOC_SYS_READY, area-soc.mk, read when the recipe runs).
+GPU_SYS_DIR = $(GPU_BUILD)/system_boot
+check: test-gpu-system-boot
+test-gpu-system-boot:
+	@mkdir -p $(GPU_BUILD)
+	$(Q)if [ -n "$(SOC_SYS_READY)" ]; then \
+	  $(MAKE) --no-print-directory build-kernel-os $(FW)/surfboot.mem $(BUILD)/sim/surfsim_gpu > $(GPU_BUILD)/system-build.txt 2>&1 \
+	    || { tail -20 $(GPU_BUILD)/system-build.txt; exit 1; }; \
+	  $(PYTHON) sim/soc/tools/system_boot_test.py --surfsim $(BUILD)/sim/surfsim_gpu --rom $(FW)/surfboot.mem \
+	    --mkcard tools/mkcard.py --package ../build/riscv32/arty_a7/SURFOS.BIN --work $(GPU_SYS_DIR) \
+	    --evidence $(GPU_SYS_DIR)/summary.txt; \
+	else echo "$@: skipped (needs the real core, SurfBoot, the riscv32 kernel, surfimg.py and mkcard.py)"; fi
 
 # ---------------------------------------------------------------- the engine
 test-gpu-encodings:

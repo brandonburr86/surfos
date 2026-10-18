@@ -110,7 +110,7 @@ int hello_main(const struct entry *e)
         hello_illegal();
     } else if (contains(bi.cmdline, "load")) {
         say("HELLO: a load from an unmapped address\n");
-        (void)*(volatile uint32_t *)0x30000000u;
+        (void)*(volatile uint32_t *)SURF_UNMAPPED_PROBE_BASE;   /* never mapped (spec/soc.toml) */
     }
     for (;;)
         __asm__ volatile ("wfi");
