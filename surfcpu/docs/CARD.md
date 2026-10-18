@@ -250,12 +250,21 @@ own writing out, fail on a card that takes every write: it waits until they paus
 
 **Stopping a command.** Ctrl+C, or a `kill` of the program, while it waits on the card (for a block
 another program holds, or for another program's write) ends the wait at once: the command fails
-with `I/O error`, and what it had not written stays in memory for the next `sync`; one writing or
-reading a large piece stops at the next 64 KiB (it wrote what it says). One in the middle of the
-card's own write ends when that write does (a card that stops answering times out), and one in the
-middle of changing a folder or the FAT finishes that change first: stopped at once there, it left the card
-locked for every other program and SurfOS's records of its writes in a mess (since 2026-10-17). A
-program that is ending by itself still writes its files out.
+(`I/O error` from a `sync`, `Interrupted system call` from a write), and what it had not written
+stays in memory for the next `sync`. One reading or writing a large file stops before its next
+piece and says how much it did (it wrote what it says): a piece is one 512-byte block where the
+bytes go through SurfOS's cache, up to 64 KiB where they go straight to the card (until 2026-10-17
+this said 64 KiB for both). One in the middle of a request to the card (a write of its own, or
+`mkfs` and `fdisk` writing the card directly) ends when that request does (a card that stops
+answering times out), and one in the middle of changing a folder or the FAT finishes that change
+first: stopped at once there, it left the card locked for every other program and SurfOS's records
+of its writes in a mess (since 2026-10-17). `mkfs` stopped says how far it got (`interrupted at
+sector ...`: the card holds no usable file system then, so make it again) or that it wrote nothing.
+`umount`, and `eject` once it unmounts, are not stopped: they finish, give up nothing the card takes
+and mark the volume clean (until 2026-10-17, Ctrl+C or a `kill` then gave changes up and left a
+working card marked as not cleanly unmounted). `eject` stopped while it still writes the card's
+files out unmounts nothing and says `interrupted: it stays mounted`: type it again. A program that
+is ending by itself still writes its files out.
 
 If a failed `mv`, `rm`, `mkdir` or truncation cannot be undone (the card refuses to read back,
 in the middle of putting things back, a block the command had changed; a block it could not read
