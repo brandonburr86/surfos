@@ -163,13 +163,26 @@ static int set_type(struct bdev *d, const struct part_kind *k) {
     return -1;
 }
 
+/* 10/18/26 (audit B61): a whole disk mkfs wrote to, or began to (its old boot sector, block 0, goes first): read again,
+   so that the partitions SurfOS knows are those on it, and said when that fails; 0, or -1 after saying why */
+static int reread(struct bdev *d, int parts) {
+    int found = bdev_rescan(d);
+    if(found < 0) {
+        printf("    mkfs: %s could not be read again (%s): unplug it and plug it in again before you use it\n", d->name,
+               bdev_rescan_words(found));
+        return -1;
+    }
+    if(parts && !found) printf("    %s was read again: no partitions now\n", d->name);
+    return 0;
+}
+
 int cmd_mkfs(int argc, char **argv) {
     struct fat_layout l;
     struct part_kind kind;
     struct bdev *d, *p;
     char why[128], size[16], msg[256], line[SHELL_LINE_LEN + 1], question[160];
     const char *label, *t;
-    int bits = 0, i = 1, parts = 0;
+    int bits = 0, i = 1, parts = 0, bad;
     bool retype;
 
     if(argc > 1 && !strcmp(argv[1], "-t")) {
@@ -210,6 +223,7 @@ int cmd_mkfs(int argc, char **argv) {
     }
     if(fat_mkfs(d, label, bits, msg, sizeof(msg)) != 0) {
         printf("    mkfs: %s: %s\n", d->name, msg);
+        if(!d->parent) reread(d, parts);                     /* (B61: its block 0 may be gone, its old partitions too) */
         vfs_bdev_change_end(d);
         return CMD_FAIL;
     }
@@ -219,18 +233,10 @@ int cmd_mkfs(int argc, char **argv) {
         vfs_bdev_change_end(d);
         return r ? CMD_FAIL : CMD_OK;
     }
-    if(!d->parent) {                                         /* a whole disk: read again (its old partitions go) */
-        int found = bdev_rescan(d);
-        if(found < 0) {                                      /* 10/18/26 (audit B61): said, not passed over */
-            printf("    mkfs: %s: the new volume is written, but %s could not be read again (%s): unplug it and plug it "
-                   "in again before you use it\n", d->name, d->name, bdev_rescan_words(found));
-            vfs_bdev_change_end(d);
-            return CMD_FAIL;
-        }
-        if(parts) printf("    %s was read again: no partitions now\n", d->name);
-    }
+    bad = d->parent ? 0 : reread(d, parts);                  /* a whole disk: read again (its old partitions go); 10/18/26
+                                                                (audit B61): a failure said, not passed over */
     vfs_bdev_change_end(d);
-    return CMD_OK;
+    return bad ? CMD_FAIL : CMD_OK;
 }
 
 /**** mount, umount, eject ****/
