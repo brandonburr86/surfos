@@ -761,7 +761,8 @@ def scenario_guiapps(args, image, firmware, outdir):
     """10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the desktop's applications on the screen,
     each track's checks in a file of its own (tools/gui_apps_*.py)"""
     from gui_apps_scenario import run
-    return run(Vm, PROMPT, args, image, firmware, outdir)
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
 
 
 def scenario_graphics(args, image, firmware, outdir):

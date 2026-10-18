@@ -4,10 +4,18 @@ guiapps scenario: one boot at 1920x1080 (960x540 logical pixels), the desktop, t
 file of its own (gui_apps_term.py, gui_apps_sys.py, gui_apps_tools.py, gui_apps_media.py), so the tracks never
 edit the same file. Each track's checks(d) gets a Driver: it drives the guest only through the keyboard and the
 mouse and reads the framebuffer's pixels, as gui_scenario.py does, and records results with d.require (which stops
-that track's checks at its first failure) or d.check (which does not).
+that track's checks at its first failure) or d.check (which does not). A track's checks leave the desktop as they
+found it, with its windows and dialogs closed, also when one fails (try/finally), so the next track's start clean.
+
+A FAT32 data stick (usb1, label APPSTICK, not mounted until a check mounts it) is attached when qemu-usb.py passes
+its helpers: its files are the tracks' own, each track module's optional STICK ({'path': bytes}, paths unique
+across the tracks). After the guest has stopped, each module's optional readback(d, stick, helpers) reads it on
+the host (helpers['read_fat32'](stick, 'path')), and, when every check passed, independent FAT checkers look it over.
 """
 import importlib
 import os
+import shutil
+import tempfile
 
 import gui_scenario as base
 
@@ -18,6 +26,8 @@ APPS = ['Terminal', 'System Monitor', 'Disks', 'Log', 'Clock', 'Image Viewer', '
 SIZES = {'Terminal': (640, 400), 'System Monitor': (540, 360), 'Disks': (580, 320), 'Log': (600, 380),
          'Clock': (380, 300), 'Image Viewer': (560, 400), 'Hex': (620, 380), 'Character Map': (460, 360)}
 MENU_H, TITLE_H = 28, 28
+TRACKS = ('gui_apps_term', 'gui_apps_sys', 'gui_apps_tools', 'gui_apps_media')
+STICK_LABEL, STICK_SERIAL = 'APPSTICK', 0x6A11A995      # a serial of its own: GRUB's bootvol= names the boot stick's
 
 
 def window(name):
@@ -106,8 +116,22 @@ class Driver:
 def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
     results = []
     font = base._font()
-    vm = Vm('guiapps', args, image, firmware, mem='512', serial=True, outdir=outdir,
-            extra=['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080'])
+    modules = [importlib.import_module(name) for name in TRACKS]
+    files = {}
+    for m in modules:
+        for path, data in getattr(m, 'STICK', {}).items():
+            if path in files:
+                raise ValueError(f'{m.__name__}: {path} is already on the stick')
+            files[path] = data
+    tmpd = tempfile.mkdtemp(prefix='surfos-guiapps-', dir='/tmp' if os.path.isdir('/tmp') else None)
+    stick = os.path.join(tmpd, 'stick.img')
+    extra = ['-global', 'VGA.xres=1920', '-global', 'VGA.yres=1080']
+    if helpers:
+        helpers['mkimage'].make_fat32(stick, files, size_mb=64, label=STICK_LABEL, cluster_bytes=512,
+                                      serial=STICK_SERIAL)
+        extra += ['-drive', f'if=none,id=appstick,format=raw,file={stick}',
+                  '-device', 'usb-storage,bus=xhci.0,drive=appstick,removable=on']
+    vm = Vm('guiapps', args, image, firmware, mem='512', serial=True, outdir=outdir, extra=extra)
     d = Driver(vm, font, results, outdir)
     try:
         ok = vm.expect(PROMPT, args.boot_timeout)
@@ -118,11 +142,11 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         d.require('the desktop draws its menu bar and the suite\'s tiles',
                   d.vm.wait_screen(lambda s: (s.w, s.h) == (1920, 1080) and d.pixel(s, 0, 0) == PAPER and
                                    d.text(s, 24 + 152 + 36, 120 + 14, 'Terminal', FOAM), 15, interval=0.1) is not None)
-        for name in ('gui_apps_term', 'gui_apps_sys', 'gui_apps_tools', 'gui_apps_media'):
+        for m in modules:
             try:
-                importlib.import_module(name).checks(d)
-            except AssertionError:
-                pass                                # recorded; the next track's checks still run
+                m.checks(d)
+            except AssertionError:                  # recorded; the next track's checks still run (each track's
+                vm.screen(f'guiapps-{m.__name__[len("gui_apps_"):]}-failed.png')   # leave the desktop as they found
         d.key('ctrl-g')
         d.key('ret')                                # SurfOS > About SurfOS, which takes the keys from any window
         vm.send('\x11')                             # Ctrl+Q
@@ -135,4 +159,22 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         pass
     finally:
         vm.close()
+    if helpers:
+        for m in modules:
+            if hasattr(m, 'readback'):
+                try:
+                    m.readback(d, stick, helpers)
+                except AssertionError:
+                    pass
+                except Exception as e:
+                    results.append((f'{m.__name__}: the stick can be read back here ({e})', False))
+        if results and all(ok for _, ok in results):
+            try:
+                for what, ok, text in helpers['fat_checks'](stick, 'the guiapps stick'):
+                    results.append((what, ok))
+                    if not ok:
+                        print(text, flush=True)
+            except Exception as e:
+                results.append((f'the guiapps stick can be checked here ({e})', False))
+    shutil.rmtree(tmpd, ignore_errors=True)
     return results
