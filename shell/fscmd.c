@@ -294,6 +294,7 @@ int cmd_eject(int argc, char **argv) {
             w = vfs_fsync(f);
             vfs_close(f);
         }
+        if(w && task_interrupted()) break;                   /* (B46: cut short, not refused: said below) */
         if(w) {
             printf("    eject: %s: %s could not be written: %s\n", disk->name, paths[i], strerror(w));
             r = w;
