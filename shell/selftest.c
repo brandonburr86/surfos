@@ -1389,6 +1389,7 @@ static void test_request_busy(void) {
     surf_task *t;
     char msg[160], why[120];
     int rm = 1, rk = 1, rf = 0, r2 = 1, st, waited;
+    u_int counts = 99;
     if(!d) { check(false, "a request under way: a RAM stick"); return; }
     vfs_umount("/selftest-rq");                     /* nothing mounts it now */
     kq_dev = d;
@@ -1409,10 +1410,12 @@ static void test_request_busy(void) {
     }
     if(rm == 0) vfs_umount("/selftest-rq");         /* (the code before: let in) */
     r2 = vfs_mount_flags(d, "/selftest-rq", "fat", MNT_RDONLY);
+    counts = d->requests + d->mounting;             /* (round fs-fix-9: let go of on every way out) */
     printf("        (while the write was under way: mount %d, mkfs %d \"%s\", fdisk's rule \"%s\")\n", rm, rk, msg, why);
     check(t && ram_stuck_hit && rm == -EBUSY && rk == -EACCES && strstr(msg, "has not ended") && rf != 0 &&
           strstr(why, "has not ended"), "a device with a request under way is busy: mount, mkfs and fdisk refuse it, saying why");
-    check(kq_done && kq_r == 0 && r2 == 0, "and once the request has ended, it mounts");
+    check(kq_done && kq_r == 0 && r2 == 0 && counts == 0,
+          "and once the request has ended, it mounts (no request or mount left counted on the stick)");
     fx_done(d, mem, "/selftest-rq");
 }
 
@@ -1581,11 +1584,13 @@ static void test_eject_unmount_phase(void) {
 static struct bdev *kx_disk;
 static surf_task *volatile kx_eject;
 static volatile int kx_go, kx_flushing, kx_tried, kx_result;
+static volatile u_int kx_hold;
 
 static void kx_flush(void) {
     int waited;
     if(curTask != kx_eject || kx_flushing) return;
     kx_flushing = 1;
+    kx_hold = curTask->fs_hold;                      /* (its own count and the flush request's) */
     for(waited = 0; !kx_tried && waited < 3000; waited += 5) sleep_ms(5);
 }
 
@@ -1663,6 +1668,7 @@ static void test_eject_writeout_mount(void) {
     }
     kx_disk = d;
     kx_go = kx_flushing = kx_tried = 0;
+    kx_hold = 0;
     kx_result = -1;
     te = kthread_create_on("ejwrite", curTask->con, kx_run, NULL, PL_NORMAL, 0);
     kx_eject = te;
@@ -1677,10 +1683,14 @@ static void test_eject_writeout_mount(void) {
     ram_flush_hook = NULL;
     kx_eject = NULL;
     still = rm == 0 && vfs_stat("/selftest-x2", &st2) == 0;
-    printf("        (a mount of %s during eject's write-out: %d; eject %d%s)\n", n2, rm, kx_result,
-           still ? ", the partition still mounted after it" : "");
+    printf("        (a mount of %s during eject's write-out: %d; eject %d%s; counted %u deep in its flush; the disk's "
+           "counts after it: unmounting %u, mounting %u, requests %u)\n", n2, rm, kx_result,
+           still ? ", the partition still mounted after it" : "", kx_hold, d->unmounting + p1->unmounting + p2->unmounting,
+           d->mounting + p1->mounting + p2->mounting, d->requests + p1->requests + p2->requests);
     check(te && kx_flushing && rm == -EBUSY && kx_result == CMD_OK && !still,
           "eject's disk is busy from its first step: a mount of another partition during its write-out is refused");
+    check(te && kx_flushing && kx_hold >= 2 && !d->unmounting && !p1->unmounting && !p2->unmounting && !p2->mounting,
+          "and eject is counted inside while it holds the disk (a kill waits until it lets go), and lets go at its end");
     if(still) vfs_umount("/selftest-x2");
     if(vfs_stat("/selftest-x1", &st2) == 0) vfs_umount("/selftest-x1");
     bdev_unregister(d);                              /* (it and its partitions gone, off the list) */
