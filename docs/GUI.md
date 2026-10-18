@@ -352,8 +352,9 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
 
 * **Follow.** When the window opens, Follow is on, and the newest lines stay in view as
   they come.
-  * Scrolling up, or selecting lines, stops it. End, Follow in the toolbar, or scrolling
-    back down to the end starts it again.
+  * Scrolling up, or selecting lines (a click, a drag or Select all), stops it.
+  * End, Follow in the toolbar, or scrolling down to the end starts it again: Down, Page
+    Down or the wheel, also when the view is there already.
   * Follow is lit in the toolbar while it is on, and the status bar says "Follow on" or
     "Follow off: End".
 * **Reading.** Up, Down, Page Up, Page Down, Home, End, the wheel, and the scroll bar
@@ -362,23 +363,28 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
     can be read whole. A wider window (maximize, or the corner) wraps less.
   * Characters are shown as on the console: UTF-8 as code page 437, and a tab to the next
     multiple of 8 columns. Other control characters and colour codes are not shown.
+  * While the find bar is open, Home, End, Left and Right move in its box; Up, Down, Page
+    Up and Page Down still scroll the log.
 * **Find.** Ctrl+F (or Edit > Find…) opens a find bar under the log, as in Notepad.
-  * Enter finds the next match, letters in either case. It starts after the last match
+  * Enter finds the next match, ASCII letters in either case. It starts after the last match
     (or from the selected lines, or the top of the view).
   * At the end it starts again from the top ("Found it again from the top").
   * The match's line is selected and the word marked in yellow. Edit > Find next finds
     the next one with the bar closed.
   * Esc closes the bar; the next Esc closes the window.
-* **Copy.** Click a line to select it, or drag over several (the log scrolls when you
-  pass its edge).
+* **Copy.** Click a line to select it, or drag over several. Past the log's top or bottom
+  edge the drag scrolls a row each time the pointer moves, and goes on while the pointer
+  is held there.
   * Ctrl+C, Copy in the toolbar or Edit > Copy puts the lines on the desktop's
-    clipboard, each with its line end, ready for Notepad or the Terminal.
+    clipboard, each with its line end, ready for Notepad or the Terminal. The newest
+    line, which the kernel may not have finished yet, is copied as it is, without one.
   * Ctrl+A (Select all) selects the whole log.
   * The status bar counts the lines and the selected ones.
 * **Limits.** The kernel log keeps its last 16 KB. When more has been written, the oldest
   lines are gone, and the status bar says "the newest 16 KB".
   * The first line shown may be the end of a line whose start has gone.
-  * A selection or a match on lines that went is dropped.
+  * A selection keeps the lines it still has whole, and goes when none is left. A match on
+    a line that went is dropped.
 
 ### Clock
 
@@ -396,7 +402,8 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
   * A click on a day names it in the status bar ("Thursday, October 1, 2026: day 274").
 * **Stopwatch.** Start and Stop (Space), Lap (L) and Reset (R).
   * It shows tenths of a second, and hours from the first hour on.
-  * The newest five laps are listed, each with its time since the lap before.
+  * The newest five laps are listed, each with its time since the lap before; eight are
+    kept.
 * **Timer.** Set 0:00 to 99:59 with the buttons (one minute, ten seconds) or the keys:
   Up and Down a minute, Page Up and Page Down ten seconds, Left and Right one, Home 0:00.
   * Start, Pause and Resume with Space or the button. Reset (R) sets it back to the time
@@ -405,14 +412,18 @@ its window shows; a window tucked into the taskbar reads it again when it comes 
   * At zero the title says "Time's up!", in the taskbar too. A message comes up in front
     of everything, even when the Clock is tucked away or behind another window.
   * If a question is open (Notepad's unsaved changes, say), the message waits until that
-    is answered.
+    is answered. If another dialog takes its place before it is answered, it comes back
+    afterwards.
   * OK (or Enter, or Esc) sets the timer back to its time.
 * **In the background.** The stopwatch and the timer keep running while the window is
-  minimized or behind another window, and the status bar of the other pages shows them.
+  minimized or behind another window, and the status bar of the other pages shows them
+  (the stopwatch in whole seconds there).
   Closing the window ends both. While one is running, closing it or leaving the desktop
   asks first.
 * **Copy.** Ctrl+C (Edit > Copy) copies what the page shows: the date and time, the month
-  as `cal` prints it, the stopwatch's time and laps, or the timer's time.
+  as `cal` prints it (its title centred over the weeks), the stopwatch's time and the laps
+  it keeps (up to eight), or the timer's time. On the clock's page with no date known,
+  Copy is off and the clipboard is left as it was.
 
 ### Character Map
 
@@ -424,8 +435,10 @@ first down the side.
   * Home and End go to the start and the end of the row, Page Up and Page Down to the top
     and the bottom of the column.
   * A key typed chooses its own character (A, say).
-  * Edit > Go to code… (Ctrl+L) takes a code (247 or 0xF7), a Unicode code point
-    (U+224B), or a character.
+  * Edit > Go to code… (Ctrl+L) takes a code (247, three digits at most, or 0xF7), a
+    Unicode code point (U+224B, six hexadecimal digits at most), or a character other
+    than a digit or a space (é, pasted, say). Anything else, and a character the console
+    does not have (€), is refused in the status bar.
 * **What it shows.** The chosen character large, with its code in decimal and hexadecimal,
   its Unicode code point and its UTF-8 bytes.
 * **Copy.** Enter, Ctrl+C, Edit > Copy, a double-click or the Copy button puts the
@@ -434,9 +447,11 @@ first down the side.
     pastes it in the Terminal.
   * The laptop's keyboard types nothing beyond ASCII, so this is how ≋, é, ½ or █ get
     into a note.
-* **Codes 0-31 and 127.** On the console these are symbols (☺ ♥ ♪ ▸ ← … and ⌂), not control
-  characters, and those symbols are what is copied (☺ is U+263A). 0 is the console's
-  empty cell, and copies nothing.
+* **Small screens.** On a 640x400 screen the window is shorter (326 pixels) and its cells
+  a pixel lower, so that the whole grid and the Copy button stay above the status bar.
+* **Codes 0-31 and 127.** On the console these are symbols (☺, ♥, ♪, ▸, ← and the like,
+  and ⌂), not control characters, and those symbols are what is copied (☺ is U+263A).
+  0 is the console's empty cell, and copies nothing.
 
 ### Image Viewer
 
