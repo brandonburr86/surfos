@@ -252,7 +252,7 @@ int cmd_gui(int argc,char **argv) {
                 d.first=d.full=true; g->dirty=true; esc=0; keys_down=0;
                 continue;
             }
-            gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while other tasks run */
+            gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while the desktop sleeps */
             if(sleep_intr(16)) break;
             continue;
         }

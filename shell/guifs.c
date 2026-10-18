@@ -21,9 +21,11 @@ keeps the file it read last open until its frame's reads are done
 (gui_kernel_fs_idle()): FAT remembers a file's place in its cluster chain only while
 the file is open, so each read deep into a big file from a fresh open walked the chain
 from its start, and a frame of the Image Viewer's or Hex's reads did that again and
-again. The file is closed before the desktop draws or sleeps, before anything it
-changes, mounts or ejects, and when it reads another file, so it is never open while
-other tasks run their commands (their eject would find the volume busy).
+again. The file is closed once the frame's tick and input are done, before the desktop
+draws or sleeps, before anything it changes, mounts or ejects, and when it reads another
+file. So it is open only while a frame's reads run: an eject on another console that
+comes in those few milliseconds (the desktop's task preempted mid-read) finds the volume
+busy, as it would during any single read.
 */
 #include <stdio.h>
 #include <string.h>
