@@ -6,7 +6,9 @@
    (16 MB, 64 MB forced FAT32, 600 MB, 1 GB with a partition, 8 GB and 40 GB, the large ones
    sparse) live in a temporary directory ($TMPDIR or /tmp) that is removed at the end, unless
    SURFOS_KEEP_IMAGES is set. Built like the kernel objects and run by `make unittest`.
-   10/17/26 (round fs-fix-7, audit B47): and mkfs interrupted (Ctrl+C, a kill): interrupted(). */
+   10/17/26 (round fs-fix-7, audit B47): and mkfs interrupted (Ctrl+C, a kill): interrupted().
+   10/18/26 (round fs-fix-10, audit B61): mkfs holds its device from its check to its end (vfs_bdev_change_begin()),
+   every write made while it does, let go of on every way out, and a device it cannot take is refused unwritten. */
 #include <stdio.h>
 #include <string.h>
 #include <surfos/types.h>
@@ -63,6 +65,20 @@ int bdev_may_format(struct bdev *d, char *why, size_t n) {
     if(d->protect) { snprintf(why, n, "%s", d->protect); return -1; }
     return 0;
 }
+/* 10/18/26 (audit B61): the device's claim (fs/vfs.c): how deep it is held now, the writes made while it was not, and
+   the reason a claim is refused with (NULL: taken) */
+static int held;
+static u32 unheld_writes;
+static const char *refuse_claim;
+int vfs_bdev_change_begin(struct bdev *d, const char **why) {
+    (void)d;
+    if(why) *why = refuse_claim;
+    if(refuse_claim) return -EBUSY;
+    held++;
+    return 0;
+}
+void vfs_bdev_change_end(struct bdev *d) { (void)d; held--; }
+const char *bdev_busy_words(const char *busy) { return busy ? "it is busy (the claim's words)" : ""; }
 
 static int disk_io(struct bdev *d, u32 lba, u32 count, void *buf, int write) {
     struct bdev *disk = d;
@@ -73,6 +89,7 @@ static int disk_io(struct bdev *d, u32 lba, u32 count, void *buf, int write) {
     off = (long long)lba * 512;
     if(!write) return pread64((int)(long)disk->priv, buf, count * 512, off) == (int)(count * 512) ? 0 : BDEV_EIO;
     if(fail_at >= 0 && (u32)fail_at >= rel && (u32)fail_at < rel + count) return BDEV_EIO;
+    if(!held) unheld_writes++;
     if(!writes) first_lba = rel;
     last_lba = rel;
     writes++;
@@ -277,7 +294,7 @@ static void format(const char *what, struct image *im, struct bdev *d, int bits_
     struct fat_layout l;
     char msg[300], text[400];
     int r;
-    writes = written = flushes = invalidated = outside = 0;
+    writes = written = flushes = invalidated = outside = unheld_writes = 0;
     if(fat_mkfs_plan(d, label, bits_wanted, &l, msg, sizeof(msg)) == 0) {
         allowed_end = l.data + (l.bits == 32 ? l.spc : 0);
         tail_start = d->parent ? d->nblocks : d->nblocks - 33;
@@ -293,6 +310,8 @@ static void format(const char *what, struct image *im, struct bdev *d, int bits_
     check(first_lba == 0 && last_lba == 0 && flushes == 1 && invalidated >= 1, text);
     snprintf(text, sizeof(text), "%s: only the reserved area, the FATs and the root are written, in large requests", what);
     check(outside == 0 && writes < 40 + written / 64, text);
+    snprintf(text, sizeof(text), "%s: every write made while mkfs holds the device, and let go of at its end", what);
+    check(unheld_writes == 0 && held == 0, text);
     verify(what, d, bits, spc, label);
     tools(what, im, d, label);
 }
@@ -312,6 +331,11 @@ static void refusals(void) {
     check(fat_mkfs(&im.disk, NULL, 32, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too small for FAT32") && writes == 0,
           "FAT32 on 16 MB is refused (too few clusters)");
     check(fat_mkfs(&im.disk, NULL, 12, msg, sizeof(msg)) == -EINVAL, "FAT12 is not offered");
+    check(held == 0, "and a refused mkfs lets go of the device it took");
+    refuse_claim = VFS_BUSY_REQUEST;                            /* 10/18/26 (audit B61): taken by nobody else meanwhile */
+    check(fat_mkfs(&im.disk, "BUSY", 0, msg, sizeof(msg)) == -EACCES && strstr(msg, "the claim's words") && writes == 0 &&
+          held == 0, "mkfs of a device it cannot take (busy) writes nothing and says why");
+    refuse_claim = NULL;
     im.disk.nblocks = 2048;                                     /* 1 MB */
     check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == -EINVAL && strstr(msg, "too small"), "1 MB is too small for anything");
     im.disk.nblocks = 8U * 2097152;                             /* 8 GB, never written */
@@ -324,7 +348,8 @@ static void refusals(void) {
     check(fat_mkfs_plan(&im.disk, NULL, 0, &l, msg, sizeof(msg)) == 0 && l.spc == 32, "just over 16 GB: 16 KB clusters");
     im.disk.nblocks = 32768;
     fail_at = 5;
-    check(fat_mkfs(&im.disk, NULL, 0, msg, sizeof(msg)) == -EIO && strstr(msg, "write failed at sector") != NULL, "a write error is reported");
+    check(fat_mkfs(&im.disk, NULL, 0, msg, sizeof(msg)) == -EIO && strstr(msg, "write failed at sector") != NULL && held == 0,
+          "a write error is reported (the device let go of)");
     fail_at = -1;
     close(im.fd);
 }
@@ -348,8 +373,8 @@ static void interrupted(void) {
     r = fat_mkfs(&im.disk, "STOP", 0, msg, sizeof(msg));
     sector(&im.disk, 0, s);
     printf("    interrupted before it began: %d (%s), %u writes\n", r, msg, (u_int)writes);
-    check(r == -EINTR && writes == 0 && strstr(msg, "before it wrote anything") && s[510] == 0x55 && mkfs_task.fs_hold == 0,
-          "mkfs interrupted before it began writes nothing, says so, and the volume is as it was");
+    check(r == -EINTR && writes == 0 && strstr(msg, "before it wrote anything") && s[510] == 0x55 && mkfs_task.fs_hold == 0 &&
+          held == 0, "mkfs interrupted before it began writes nothing, says so, and the volume is as it was");
     memset(&mkfs_task, 0, sizeof(mkfs_task));
     mkfs_task.in_call = TC_COMMAND;
     writes = flushes = invalidated = 0;
@@ -360,7 +385,7 @@ static void interrupted(void) {
     printf("    interrupted in its third request: %d (%s), %u writes, %u flushes, %u invalidations\n", r, msg, (u_int)writes,
            (u_int)flushes, (u_int)invalidated);
     check(r == -EINTR && writes == 3 && strstr(msg, "interrupted at sector") && strstr(msg, "no usable file system") && flushes == 0 &&
-          invalidated >= 1 && s[510] != 0x55 && mkfs_task.fs_hold == 0,
+          invalidated >= 1 && s[510] != 0x55 && mkfs_task.fs_hold == 0 && held == 0,
           "mkfs interrupted stops before its next request, says where, leaves no boot sector, drops the cached blocks");
     curTask = NULL;
     close(im.fd);

@@ -29,6 +29,16 @@ later fdisk, and mkfs where it sets a partition's type, refused with "another
 fdisk is writing a partition table", the rescan skipped and the old partitions
 left registered over the new table). The commit counts its task inside the file system layer while it
 holds the lock (surf_task.fs_hold): the kill comes once it has let go of it.
+
+10/18/26 (audit B61): the commit also holds the disk, from its second look at the safety rule to the
+end of its rescan (vfs_bdev_change_begin(), fs/vfs.c): before, another task's raw request in flight
+at the end made bdev_rescan() refuse (B56 counts it as busy) after the table was written, and the
+old partitions stayed registered over the new layout. Another task's requests to the disk or its
+partitions are refused meanwhile (BDEV_EBUSY, driver/bdev.c), so the rescan meets none; when it
+fails all the same (the disk unplugged, its block 0 unreadable) the commit fails, saying that the
+disk could not be read again and that it must be plugged in again before its partitions are used.
+It does not hold the disk while fdisk waits for the user's answer: nothing is written before it,
+and the commit reads the table again and refuses a disk that changed meanwhile.
 */
 
 #include <surfos/types.h>
@@ -183,6 +193,11 @@ int bdev_rescan(struct bdev *disk) {
     return bdev_scan_partitions(disk);
 }
 
+const char *bdev_rescan_words(int r) {
+    return r == -ENODEV ? "it was unplugged" : r == -EBUSY ? "it is busy" : r == -EINVAL ? "it is not a whole disk"
+         : "its first block cannot be read";
+}
+
 /**** fdisk's writes ****/
 
 #define CHUNK 32                                    /* blocks per write of zeros and per read back */
@@ -217,10 +232,11 @@ int part_commit(struct bdev *disk, const struct part_table *before, const struct
     struct part_table *t = (struct part_table *)kalloc(sizeof(struct part_table));
     u8 *buf = (u8 *)kalloc(CHUNK * PART_SECTOR), *zero = (u8 *)kcalloc(1, CHUNK * PART_SECTOR);
     struct part_io io;
+    const char *busy;
     char why[100];
     u_int i;
     int r = -1, found;
-    bool got;
+    bool got, held = false;
 
     msg[0] = 0;
     if(!t || !buf || !zero) { snprintf(msg, n, "out of memory"); goto out; }
@@ -230,6 +246,11 @@ int part_commit(struct bdev *disk, const struct part_table *before, const struct
     KCRIT_LEAVE
     if(!got) { snprintf(msg, n, "another fdisk is writing a partition table; try again"); goto out; }
     if(bdev_may_format(disk, why, sizeof(why)) != 0) { snprintf(msg, n, "%s will not be changed: %s", disk->name, why); goto unlock; }
+    if(vfs_bdev_change_begin(disk, &busy) != 0) {   /* 10/18/26 (audit B61): the disk is this commit's to its end */
+        snprintf(msg, n, "%s will not be changed: %s", disk->name, bdev_busy_words(busy));
+        goto unlock;
+    }
+    held = true;
     part_io_init(&io, disk, false);
     io.note = NULL;
     if(part_read(&io, disk->nblocks, t) != 0 || memcmp(t, before, sizeof(struct part_table))) {
@@ -257,9 +278,14 @@ int part_commit(struct bdev *disk, const struct part_table *before, const struct
     r = 0;
 rescan:
     found = bdev_rescan(disk);                      /* the cached blocks of the disk go with it */
-    if(found < 0 && !msg[0]) snprintf(msg, n, "%s could not be read again (%d)", disk->name, found);
-    if(found < 0) r = -1;
+    if(found < 0) {                                 /* 10/18/26 (audit B61): said, with what to do */
+        size_t l = strlen(msg);
+        snprintf(msg + l, n - l, "%s%s could not be read again (%s): unplug it and plug it in again before you use its "
+                 "partitions", l ? "; and " : "", disk->name, bdev_rescan_words(found));
+        r = -1;
+    }
 unlock:
+    if(held) vfs_bdev_change_end(disk);
     mutex_unlock(&write_lock);
     fs_leave();                                     /* (B52: let go first, then counted out: the kill may come now) */
 out:

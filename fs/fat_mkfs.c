@@ -21,6 +21,11 @@ mkfs has let go of its buffers and dropped the device's cached blocks; Ctrl+C
 or a kill stops it between two requests instead (-EINTR, and it says how far
 it got). Killed at once (SYS_kcmd's kill after its 2 s), it died inside a
 driver's request, its lock held, and the card hung.
+
+10/18/26 (audit B61): it holds the device from its check of the safety rule to
+its end (vfs_bdev_change_begin(), fs/vfs.c): no mount and no other task's request
+comes in between (a request under way refuses mkfs, B56's rule; one that comes
+later is refused); the shell's mkfs holds it longer, to the end of its rescan.
 */
 
 #include <surfos/types.h>
@@ -250,15 +255,26 @@ int fat_mkfs(struct bdev *d, const char *label, int fat_bits, char *msg, size_t 
     u32 serial, i, root, root_secs;
     u16 date, time;
     char why[96], name[12];
+    const char *busy;
     int r;
 
     if(bdev_may_format(d, why, sizeof(why)) != 0) { snprintf(msg, n, "%s", why); return -EACCES; }
+    if(vfs_bdev_change_begin(d, &busy) != 0) {      /* 10/18/26 (audit B61): the device is this mkfs's to its end */
+        snprintf(msg, n, "%s", bdev_busy_words(busy));
+        return -EACCES;
+    }
     r = fat_mkfs_plan(d, label, fat_bits, &l, msg, n);
-    if(r) return r;
+    if(r) { vfs_bdev_change_end(d); return r; }
     make_label(label, lab);
     zeros = (u8 *)kalloc(CHUNK * SECTOR);
     sec = (u8 *)kalloc(SECTOR);
-    if(!zeros || !sec) { kfree(zeros); kfree(sec); snprintf(msg, n, "out of memory"); return -ENOMEM; }
+    if(!zeros || !sec) {
+        kfree(zeros);
+        kfree(sec);
+        snprintf(msg, n, "out of memory");
+        vfs_bdev_change_end(d);
+        return -ENOMEM;
+    }
     memset(zeros, 0, CHUNK * SECTOR);
     j.d = d;
     j.zeros = zeros;
@@ -318,6 +334,7 @@ int fat_mkfs(struct bdev *d, const char *label, int fat_bits, char *msg, size_t 
     binvalidate(d);                                         /* nothing cached from before may be served */
     if(bdev_disk(d) != d) binvalidate(bdev_disk(d));
     fs_leave();
+    vfs_bdev_change_end(d);
     if(j.cut && !j.written) { snprintf(msg, n, "interrupted before it wrote anything: the device is as it was"); return r; }
     if(j.cut) { snprintf(msg, n, "interrupted at sector %lu: the device holds no usable file system now", (u_long)j.at); return r; }
     if(j.failed) { snprintf(msg, n, "write failed at sector %lu: the device holds no usable file system now", (u_long)j.at); return r; }

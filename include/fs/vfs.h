@@ -199,17 +199,25 @@ int vfs_umount(const char *path);
 int vfs_umount_lost(const char *path, u_int *lost);  /* 10/16/26 (B10): and how many changed blocks it gave up */
 bool vfs_bdev_busy(struct bdev *d);                  /* d, its disk or one of its partitions is mounted, or being
                                                         unmounted (10/18/26, audit B51), or being mounted, or in the
-                                                        middle of a request (10/18/26, B56, B58) */
+                                                        middle of a request (10/18/26, B56, B58), or held by another
+                                                        task's mkfs or fdisk (10/18/26, B61) */
 const char *vfs_bdev_busy_why(struct bdev *d);       /* 10/18/26 (B56, B58): which of these, or NULL: */
 #define VFS_BUSY_MOUNTED    "mounted"
 #define VFS_BUSY_UNMOUNTING "being unmounted"
 #define VFS_BUSY_MOUNTING   "being mounted"
+#define VFS_BUSY_CHANGING   "being changed by mkfs or fdisk"
 #define VFS_BUSY_REQUEST    "in the middle of a request"
+/* 10/18/26 (audit B61): mkfs and fdisk hold their device from here to vfs_bdev_change_end(), counted inside meanwhile
+   (a kill waits): 0, or -EBUSY when it is busy (*why: which reason). Another task's requests to it, its disk or its
+   partitions are refused meanwhile (BDEV_EBUSY), mounts and ejects of them too; the same task may take it again */
+int vfs_bdev_change_begin(struct bdev *d, const char **why);
+void vfs_bdev_change_end(struct bdev *d);
 bool vfs_bdev_unmounting(struct bdev *d);            /* 10/18/26 (B51): d, its disk or one of its partitions is being
                                                         unmounted (an umount's steps, eject's unmount: still writing) */
-int vfs_unmount_begin(struct bdev *d);               /* 10/18/26 (B51): d is being unmounted from now on (B58: eject's
-                                                        whole disk, all of its run; -EBUSY when something of it is being
-                                                        mounted or unmounted already) ... */
+int vfs_unmount_begin(struct bdev *d, const char **why);   /* 10/18/26 (B51): d is being unmounted from now on (B58:
+                                                        eject's whole disk, all of its run; -EBUSY when something of it is
+                                                        being mounted or unmounted already, B61: or changed by mkfs or
+                                                        fdisk; *why: which) ... */
 void vfs_unmount_end(struct bdev *d);                /*      ...until this */
 int vfs_busy(const char *path, char *why, size_t size);   /* the mount at path in use? -EBUSY and who, -ENOENT, 0 */
 const char *vfs_probe(struct bdev *dev);             /* the type of file system dev holds, or NULL */

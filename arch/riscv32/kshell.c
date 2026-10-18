@@ -606,7 +606,10 @@ static int cmd_readbench(int argc, char **argv) {
     while(done < blocks && !task_interrupted()) {
         u_long n = blocks - done > 128 ? 128 : blocks - done;
         r = bdev_read(d, (u32)done, (u32)n, buf);
-        if(r) { printf("    read of block %lu failed (%i)\n", done, r); break; }
+        if(r) {                                         /* 10/18/26 (audit B61): BDEV_EBUSY: another task's mkfs or fdisk */
+            printf("    read of block %lu failed (%i%s)\n", done, r, r == BDEV_EBUSY ? ": mkfs or fdisk is changing it" : "");
+            break;
+        }
         done += n;
     }
     ms = (getticks() - t0) * (1000 / HZ);
@@ -651,7 +654,8 @@ static int cmd_hexdump(int argc, char **argv) {
     buf = (u8 *)kalloc(nblk * d->block_size);
     if(!buf) { printf("    out of memory\n"); return CMD_FAIL; }
     rc = bdev_read(d, lba, nblk, buf);
-    if(rc) printf("    read of %s block %lu failed (%i)\n", d->name, lba, rc);
+    if(rc) printf("    read of %s block %lu failed (%i%s)\n", d->name, lba, rc,
+                  rc == BDEV_EBUSY ? ": mkfs or fdisk is changing it" : "");   /* 10/18/26 (audit B61) */
     else for(i = 0; i < nblk * d->block_size; i += 16) {
         printf("%08lx  ", lba * d->block_size + i);
         for(j = 0; j < 16; j++) printf("%02x%s", buf[i + j], j == 7 ? "  " : " ");
