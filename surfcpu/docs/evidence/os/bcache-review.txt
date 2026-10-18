@@ -1589,3 +1589,335 @@ host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_
   No padded base was needed: this round adds no code to the cache's paths (it takes B50's out) and nothing that runs
   per block; a device request does an increment and a decrement with interrupts off around the driver's call (the
   card's requests are each thousands of cycles of SPI)
+======================================================================================================================
+Round fs-fix-10 (10/18/26): an independent review of B56-B60 (6ed8fcb), and its fixes (audit B61-B65)
+date:   2026-10-18 (local)
+review: by another agent, read-only, on 6ed8fcb: a step of the kernel's self test (selftest-review10.patch, R1: fdisk's
+        commit adds a partition while another task's raw write of the first partition is held in the driver; the
+        commit failed after writing the table, "stickR could not be read again (-16)", the new partition never
+        registered); review 9's scenarios (rev10.c A-D: A, B and C clean, D waiting for a writer that never returns) and
+        its umount campaign (300 umounts, clean); round fs-fix-7's threaded campaign (conc7.c: 96 runs, clean, 12 of them
+        under the sanitizers); a damaged-volume fuzzer (dmgfuzz.c, ASan and UBSan: FAT16 and FAT32 volumes with BPB
+        fields, FAT chains, directory entries and FSInfo damaged, some reading flakily, mounted, walked, written and
+        unmounted; 147 seeds of 1,000 or 1,500 trials, no crash); cp against a scripted file layer (test_cp_r10.c: its 13
+        cases and R10a, a refused close with a Ctrl+C pending said as interrupted, and R10b, a read error said as cut
+        short); the riscv32 kernel's test-os under QEMU (134 of 134); and a reading of the locks the fault policy and
+        B56's bounds rest on (the hub thread's and the card watch's locks outside requests, mutexes not handed over in
+        order, USB storage's worst cases). Its findings (three minor, two cosmetic) are docs/CODE-AUDIT.md's B61-B65.
+before: 6ed8fcb (round fs-fix-9 merged): a git worktree of it. The kernel's self test before: this round's
+        shell/selftest.c in a whole 6ed8fcb tree, with stand-ins for what 6ed8fcb lacks (vfs_bdev_change_begin() taking
+        nothing and refusing nothing, vfs_bdev_change_end(), BDEV_EBUSY, VFS_BUSY_CHANGING), volume surfos-sc-fs10-base;
+        tests/host/test_mkfs.c against 6ed8fcb's fs/fat_mkfs.c (the same volume) and tests/host/test_cp.c against
+        6ed8fcb's shell/cp.c (on the Mac)
+after:  sc/fs-fix-10 (from surfcpu 6ed8fcb): 69367a0 mutexes handed over in order (B63), 02d00e2 the kill and fault rule
+        and locks, crashlock (B62), 57d2d0a mkfs and fdisk hold their device, a failed rescan said (B61), 715e377 close's
+        EINTR and EIO (B65), 7adebec the self test, 1d35f84 a whole disk read again after a failed mkfs too (B61) and
+        4f146b5 its self-test step; then docs and this evidence. The kernel's code is final at 4f146b5; the devenv runs
+        and the host runs are of a clean checkout of it (the x86 suites ran once at 7adebec too, all passing, before
+        1d35f84 was added)
+host:   the Mac (Apple clang, arm64), the review's build flags (-O1 -g -DSURFOS_RISCV32), and the same with
+        -fsanitize=address,undefined; tests/host/test_mkfs.c on the Mac with four stand-ins for the Linux calls it
+        declares by hand; QEMU on the Mac for the self test's transcripts (tools/qemu-run.py's boot, as make test
+        boots) and crashlock; the devenv container (gcc -m32) for the builds, make test-all, make unittest and
+        make test-usb; the SurfCPU toolchain container for make -C surfcpu check and the RTL runs
+
+== 64. The review's own materials on this tree (the clean checkout of 4f146b5, built as the review built them)
+  selftest-review10.patch, its step R1 (test_review10_rescan as the review wrote it, added to 4f146b5's
+          shell/selftest.c and listed first; volume surfos-sc-fs10-rv10, 12:46-12:48): "REVIEW10 R1: commit 0 ("");
+          the other task's write of stickR1 in flight at the rescan: 0 request(s) (held 0, its result -6); stickR2
+          registered after the commit: yes; the table on the disk now: 2 partitions", "ok REVIEW10 R1: fdisk's commit
+          while another task's raw write of a partition is in flight: the disk is read again", SELFTEST PASS (156
+          checks: this round's 155 and the review's): the other task's write is refused at once (BDEV_EBUSY) instead of
+          being held in the driver, and the rescan meets no request
+          On 6ed8fcb (the review's run, tree10-selftest.out): "REVIEW10 R1: commit -1 ("stickR could not be read again
+          (-16)"); the other task's write of stickR1 in flight at the rescan: 1 request(s) (held 1, its result 0);
+          stickR2 registered after the commit: NO; the table on the disk now: 2 partitions": FAIL
+  rev10.c A, B, C (fs/ of 4f146b5; the review's harness, its stand-ins plus three for what fs/fat_mkfs.c calls since
+          B61, which here take nothing): each "ok", plain and under the sanitizers: A, the umount returned once the
+          slow write had ended, nothing given up, and mkfs after it made a volume that names no old file; B, the fast
+          card's write waited for behind the other card's read, the next mount clean with a and b; C, no mount while the
+          write was under way, the next mount clean with a and b; no sanitizer report
+  rev10.c D: a writer that never comes back: the umount waits for it, and the harness's 60 s watchdog ends the run
+          ("WATCHDOG: no operation finished for 60 s: a wait that never ends", exit 3), as on 6ed8fcb (the review's
+          run): a request that never ends is one no task can leave behind (B56, B62); a request ends within its driver's
+          timeouts (B64's figures for USB storage)
+  rev10.c U, the umount campaign, the review's seeds: seed 10500 (150 umounts), 10600 with the slow request a one-block
+          one (USINGLE, 150), and 10700 under the sanitizers (60): 360 umounts, none gave anything up or said the volume
+          unclean, no write stored on the card after an umount returned, 33 with a request alive past the review's bound
+          under way at the umount (waited for), 0 BAD, no sanitizer report (the review's on 6ed8fcb: 300 umounts, the
+          same)
+  conc7.c, the review's campaign chain (camp10_chain.sh: the plain set of 7 settings x 3 kill modes for seeds 10101
+          and 10102, ESC_MS=20 for 10111, PERTURB=5 KILL_US=900 for 10131, and 4 settings under the sanitizers for
+          10121, two at a time, 4 s each): 96 runs, each "CONC: ok", 890,622 operations, 35,336 kills and 44,529
+          Ctrl+Cs, 545.8 million exact tag checks, no violation, the sanitized 12 with no report (the review's on
+          6ed8fcb: 96 runs, 1,115,633 operations, 36,413 kills, 45,630 Ctrl+Cs, 749.6 million tag checks, clean; a run
+          lasts 4 s, so the counts follow the Mac's load)
+  dmgfuzz.c under ASan and UBSan, the review's second campaign's seeds (FAT16 300-302, FAT32 310-311, 1,000 damaged
+          volumes each, with DMG_FLIP=16, one read in 16 of a damaged volume's flipping a bit): each exits 0, no
+          sanitizer report: FAT16 seed 300, 971 mounted and 29 refused, 64,171 files and 3,003 folders walked, 72 read
+          errors, 680 of 6,588 writes failed, 4,367 flaky reads; 301 and 302 alike (967 and 956 mounted, 4,281 and 4,300
+          flaky reads); FAT32 310 and 311, 958 and 975 mounted, 4,164 and 4,182 flaky reads; and the same seeds without
+          flaky reads, each exit 0 (the review's on 6ed8fcb: 147 seeds, no crash). This round changes neither fs/fat.c
+          nor fs/bcache.c
+  test_cp_r10.c (cpt/, the review's cp test, built by its build_cp.sh against 4f146b5's shell/cp.c): 12 of 13 as
+          written: its S4 stands in for a close whose write-out Ctrl+C cut short with a close that returns EIO, which is
+          what vfs_close() said before B65; with S4's close returning EINTR, as vfs_close() does now for that case
+          (B65, section 69), 13 of 13. Its R10a (a close the card refused, Ctrl+C in the close): "cp: close: I/O error"
+          (6ed8fcb's cp: "cp: /dst/X: 8192 bytes copied; interrupted while they were written out (sync writes the
+          rest)"); its R10b (the source cannot be read, Ctrl+C pending): "cp: read: I/O error" (6ed8fcb's: "cp: cut
+          short after 0 bytes: /dst/X is incomplete")
+  rv10_drive.py and logs/rv-qemu.log (the riscv32 kernel driven under QEMU by the review on 6ed8fcb): make -C surfcpu
+          check on this tree, section 71
+
+== 65. B61: mkfs and fdisk hold their device for their run
+  The self test's steps (QEMU on the Mac, booted as make test boots, x86 at -O0):
+    test_change_rescan (the review's R1 with a check more): "(the commit: 0; the other task's write: -6, stickR1
+      busy: being changed by mkfs or fdisk; stickR2 registered: yes; the table on the disk: 2 partitions)", both
+      checks ok. 6ed8fcb: "(the commit: -1, stickR could not be read again (-16); the other task's write: 0, held in
+      the driver, stickR1 busy: in the middle of a request; stickR2 registered: NO; the table on the disk: 2
+      partitions)": both FAIL
+    test_change_claim: "(with a write under way: -16, in the middle of a request; held: another task's read -6, mount
+      -16, busy: being changed by mkfs or fdisk; its own read 0; let go of: read 0, mount 0)": 3 ok. 6ed8fcb (the
+      claim stood in for, taking nothing): "(with a write under way: 0, -; held: another task's read 0, mount 0, busy:
+      no; its own read 0; let go of: read 0, mount 0)": the first two FAIL, the third (a control) ok
+    test_mkfs_rescan (an 8 MB RAM disk with one partition; the answer to mkfs's question typed ahead): first its block 0
+      unreadable once mkfs has flushed: "(mkfs returned 1: mkfs: stickM could not be read again (its first block cannot
+      be read): unplug it and plug it in again before you use it)": ok; 6ed8fcb: mkfs returned 0 and said nothing of it
+      (`if(!d->parent && bdev_rescan(d) >= 0 && parts) printf(...)`; the old partition gone without a word): FAIL. Then,
+      partitioned again, every write refused after mkfs's first (block 0 zeroed): "(mkfs returned 1: mkfs: stickM: write
+      failed at sector 1: the device holds no usable file system now)", "stickM was read again: no partitions now", and
+      stickM1 gone: ok; 6ed8fcb: "(mkfs returned 1: mkfs: stickM: write failed at sector 1: ...)" and stickM1 still
+      registered over a disk whose block 0 is zeros: FAIL
+  tests/host/test_mkfs.c (make unittest, devenv): MKFS 126 checks, 0 failures; the same test against 6ed8fcb's
+    fs/fat_mkfs.c (built in the devenv, volume surfos-sc-fs10-base): 126 checks, 8 failures: "mkfs of a device it cannot
+    take (busy) writes nothing and says why" and, for each of the 7 images, "every write made while mkfs holds the
+    device, and let go of at its end"
+  What is held, by whom and how long: cmd_mkfs() from the user's answer to its end (fat_mkfs(), whose own claim nests
+    inside it, then set_type()'s part_commit(), whose claim of the disk nests too, or a whole disk's rescan);
+    part_commit() from its second look at bdev_may_format() to the end of its rescan; fat_mkfs() called elsewhere (the
+    self test, the host tests) from its check to its end. A claim of a partition keeps out requests to it and to its
+    disk; a claim of a disk keeps out requests to it and to every partition of it; a sibling partition (another
+    volume mounted on the same disk) is not affected
+  The choice for the raw requests that keep arriving while it is held: refused at once (request_begin() returns
+    BDEV_EBUSY, -6, in the same interrupts-off step as the look; the request never reaches its driver), not made to
+    wait: waiting would need a wait queue and a wake-up at the claim's end, and would hold another task (a dump, a
+    benchmark, a second fdisk) for a whole mkfs; refusing is what the busy rule does everywhere else (mount, mkfs,
+    fdisk and sdmode refuse a busy device and say why). Who sees it: hexdump and readbench ("failed (-6: mkfs or fdisk
+    is changing it)"), fdisk showing a held disk ("is being changed by mkfs or fdisk: try again once that has
+    finished"), mount (the same words, before it reads), eject (refused in its first step), lsblk ("being changed").
+    The cache sends none: a device held has nothing mounted, being mounted or being unmounted, so no volume's blocks
+    are in flight to it; the USB hub thread's and the card watch's probes go to their drivers, not through the block
+    layer, and are not refused
+  Why the rescan can no longer be refused as busy: busy_why() for the disk at the rescan finds no mount (refused at the
+    claim, and a mount after it refused), no unmount or eject (refused at the claim, an eject after it refused), no
+    other task's claim (refused), and no request under way (one before the claim refused it; one after it refused at
+    once; the claimant's own have ended). What remains: the disk unplugged (-ENODEV) or its block 0 unreadable (-1),
+    and the commit or mkfs then fails saying so
+  Cost: request_begin() looks at one global count (bdev_changes, 0 unless an mkfs or fdisk holds a device) before
+    its increment, with interrupts off as before
+
+== 66. B62: a lock held is held to the end
+  The self test's step test_kill_holding_lock (a kernel thread outside any call holds a lock of the test's own for
+    300 ms, killed within 5 ms of taking it): "(it let go of its lock; it ended 10 ms after)": ok. 6ed8fcb: "(killed
+    holding its lock; it ended 0 ms after)", the lock left owned by the dead thread: FAIL
+  crashlock, x86 (the smoke test's boot of the kernel shell, shell=kernel, passing at -O0 and -O2; the lines below from
+    a run of the -O2 kernel by hand, crashlock_x86.py): "Kernel Wipeout: Page Fault at 0x00000000: access to unmapped
+    page, write", "in 'Shell 0' (pid 3) holding a lock (1 held): a lock a dead task holds is never let go of, and every
+    task that waits for it would wait for good (a driver's lock: every request to its device)", the registers, the
+    backtrace through cmd_crashlock, "SYSTEM HALTED". From the user shell: "crashlock stops the system: only in the
+    kernel shell (shell=kernel), not from a program". 6ed8fcb with the same command added to its shell (the base
+    harness): "Process ('Shell 0':3) killed by "Page Fault at 0x00000000: access to unmapped page, write"", "init:
+    restarted the shell", and the system went on with the lock marked as the dead shell's; crashlock once more, in the
+    new shell (pid 7, its task record in the dead one's memory): "Kernel panic: mutex 'crashlock': recursive lock by
+    'Shell 0'" (another task would have waited for it for good)
+  crashlock, riscv32 (boards/qemu_virt/test_os.py's lockfault boot, make -C surfcpu check, both builds): "Kernel
+    Wipeout: store access fault (mcause 7, mtval 0x0)", "in 'Shell 0' (pid 3) holding a lock (1 held): a lock a dead
+    task holds is never let go of, and every task that waits for it would wait for good (a driver's lock: every request
+    to its device)", the registers, the backtrace through cmd_crashlock, "SYSTEM HALTED", and init not restarting the
+    shell
+  The rule (kernel/task.c holds()): inside a file system, the cache or a request as before (B56), else holding a
+    mutex: surf_task.mutexes, less one while the task holds the console's lock (console_holds(): its holder's death
+    gives it back in console_task_gone(), so a fault in a printf() or a kill at once while printing leaves nothing
+    behind, as before). kernel/sync.c counts every mutex_lock(), mutex_trylock() and hand-over (B63) and every
+    mutex_unlock(); the count existed since 10/6/26 for the pager. Who holds a mutex outside a file system or a
+    request today, from the inventory in section 67: the USB hub thread (usb_lock around its poll; m->lock in
+    msc_service() and lun_probe(); ep0's and the xHCI command lock in its control transfers), the SD card's watch
+    (s->lock in attach() and sd_init(), taken_out()), the network's threads and commands (net_lock, dhcp_lock,
+    ping_lock), the Wi-Fi threads (hw_lock, list_lock, the iwl locks), crypto_random() (random_lock), fdisk's commit
+    (write_lock), the self test's own. A kill of a task in any of them now waits until it lets go (each bounded by its
+    own timeouts, or short); a fault in any of them stops the system with the wipeout that says so
+  The kernel log line of a kill that waits for a lock: "kill: '<name>' (pid N) is still holding a lock 2000 ms after
+    its kill: killed as soon as it lets go" (for a file system or a request, as before: "is still inside a file
+    system or a device request ..."); the line "killed at once, holding a lock" is gone with the case it described
+
+== 67. B63: mutexes handed over in order
+  The self test's step test_mutex_fifo (the test holds a lock of its own; another task queues for it; the test lets go
+    and takes it again 50 times, never yielding in between, holding it 2 ms each time): "(the waiter had the lock at
+    letting go number 1 of 50)": ok. 6ed8fcb: "number 51 of 50" (only after the loop): FAIL
+  The hand-over (kernel/sync.c): mutex_unlock() with a waiter queued makes the first waiter the owner, counts the lock
+    in its surf_task.mutexes and wakes it, all with interrupts off; mutex_lock() waits until it is the owner. Wait
+    queues are FIFO (task_list_append(), wake_up() wakes the first). A mutex wait is not cut short (wait_prepare(),
+    not _intr), so a waiter leaves the queue only when it is handed the lock or dies: kill_task_now() takes it off its
+    list (become_zombie()) in an interrupts-off step, so either it is still queued and taken off before a hand-over
+    can pick it, or it was handed the lock and counts it, and B62 then keeps the kill until it lets go. A wake-up for
+    another reason (fs/poll.c's and the pager's wake_up_task() of a task that has gone on to wait for a mutex) puts
+    the waiter at the end of the queue again: a loss of place, never a lost lock
+  Every mutex on both kernels, how it nests, and whether anything depended on taking it back at once:
+    mounts (fs/vfs.c): taken alone; let go of around each volume's sync (vfs_sync()), nothing else held then
+    a volume's (sb->lock, fat_lock()): outermost of the file system's; the cache's, the bounce buffer's and a driver's
+      under it
+    the cache's (bcache_lock): under a volume's or alone; never with the bounce buffer's; let go of and taken again
+      around its sleeps and device requests while a volume's may be held: no waiter for it holds or wants a volume's
+      (the cache never calls into a file system)
+    the bounce buffer's (bounce_lock): under a volume's or alone; a driver's under it (the request)
+    fdisk's (write_lock): mutex_trylock() only (another fdisk is refused); its requests take a driver's
+    USB storage's (m->lock): under the hub thread's usb_lock (attach, poll) or alone (requests); ep0's and the xHCI
+      command lock under it; let go of and taken again around a new disk's partition scan in lun_probe() while the hub
+      thread holds usb_lock: a request waiting for it takes no usb_lock; mutex_trylock() in msc_service() skips a busy
+      device, as before
+    usb (usb_lock): outermost of USB; the hub thread's poll and usb_print()/usb_snapshot()/the stall test
+    a USB device's ep0 (ep0_lock): under m->lock or usb_lock; the xHCI command lock under it
+    the xHCI command lock (cmd_lock): innermost
+    an ATA channel's (ch->lock): under the bounce buffer's or alone; nothing under it
+    the SD card's (s->lock): under the bounce buffer's or alone (requests), or the card watch's; nothing under it
+    net (net_lock): alone, or under dhcp_lock or ping_lock (held across their exchanges; nothing waiting for net_lock
+      takes them)
+    dhcp (dhcp_lock): mutex_trylock() and a 50 ms sleep (one at a time): never queued, unchanged
+    ping (ping_lock): outer of net_lock
+    a Wi-Fi station's (hw_lock): outer of the iwl locks; mutex_trylock() in wlan_describe() says "busy", as before
+    its scan list (list_lock): alone
+    iwl commands (cmd_lock): outer of rx_lock, which iwl_cmd() lets go of and takes again around the command's wait
+      while it holds cmd_lock: the waiter for rx_lock (iwl_poll() from the iwl thread) takes no cmd_lock under it
+    iwl receive (rx_lock): under cmd_lock or alone; tx_lock under it (a transmit done); received frames go to the
+      station layer through a queue (wlan_rx() copies them under irq_save()), so no lock of the station's is taken
+      under it
+    iwl transmit (tx_lock): innermost
+    random (random_lock): alone
+    and the self tests' (selftest, rvtest) and crashlock
+  No order is reversed anywhere (no lock is taken under one that it is ever held over), so the hand-over adds no
+  deadlock; the only change is who goes next
+  The cost on SurfCPU: section 71
+
+== 68. B64: USB storage's worst cases, from driver/usb/msc.c
+  usb_bounds.py (in this round's scratch space; its output below, run on 4f146b5's tree) takes the stages' timeouts from
+  the code (CMD_TIMEOUT 20 s for READ, WRITE and SYNCHRONIZE CACHE's data and status; 5 s for every other command and
+  REQUEST SENSE; the command block 5 s; usb_endpoint_recover() waits at most 5 s; a control transfer 1 s, so a BOT
+  reset recovery 3 s) and walks bot_command(), scsi() and msc_rw() for a device that answers every stage just inside
+  its timeout and stalls wherever a stall is allowed:
+    bot_command(): a success (status 0, every byte moved: the data stage cannot have stalled) is the command block, the
+      data, and the status with one stall and its recovery and a second try: 5 + 20 + (20 + 5 + 20) = 70 s; a BOT_CHECK
+      (status 1) may have stalled in the data stage too: 75 s; a transport failure has both status tries stall and
+      then the reset: 5 + 25 + 25 + 25 + 3 = 83 s. REQUEST SENSE (5 s stages): a usable sense (14 bytes or more, no data
+      stall) 25 s, an unusable one (or a failure) at most 38 s
+    scsi(): up to 3 tries while each answers a unit attention, each a BOT_CHECK and a usable sense (100 s); after two of
+      them a third that fails (a BOT_CHECK with a failing sense, 113 s, or a transport failure, 83 s): 313 s; or a
+      third that succeeds: 270 s. Without a unit attention a failure ends within 113 s
+    msc_rw(): one of the cache's requests (BCACHE_RUN, 64 KiB) is two 32 KiB commands, the second sent only once the
+      first succeeded: 270 + 313 = 583 s at most (a success both times: 540 s)
+    the hub thread (msc_service()) holds m->lock while it polls each unit with a disk (one TEST UNIT READY, 5 s stages:
+      148 s at most) and while it probes each unit without one (lun_probe(): INQUIRY, up to 11 TEST UNIT READY tries
+      100 ms apart, READ CAPACITY (10) and (16), MODE SENSE): 2,174 s at most, about 36 minutes, for each such unit in
+      turn (up to 4)
+  Its output:
+    a READ or WRITE (32 KiB), slowest success (two unit attentions, then status 0)              270 s (4.5 min)
+    a READ or WRITE, slowest failure (two unit attentions, then a failure)                       313 s (5.2 min)
+    a READ or WRITE that fails without a unit attention                                          113 s (1.9 min)
+    one of the cache's requests (64 KiB: two commands, the second only after the first
+      succeeded)                                                                                 583 s (9.7 min)
+    SYNCHRONIZE CACHE: slowest success, slowest failure                                          200 s, 238 s
+    the hub thread's poll of a unit with a disk (one TEST UNIT READY), at most                   148 s (2.5 min)
+    its probe of a unit without one, m->lock held: INQUIRY, 10 failing TEST UNIT READY, one
+      more, READ CAPACITY (10) and (16), MODE SENSE failing                                   2,174 s (36.2 min)
+  B56's figures, quoted in its row and in section 57 here: "about 5 1/4 minutes (315 s) a command whose device keeps
+  answering just inside its timeouts, 10 1/2 minutes the request; a failing command ends within about 80 s". The
+  315 s was three unit attentions of 105 s each (the success's data stage counted with a stall); the request counted
+  that twice; the 80 s was one try and a reset, leaving out the unit attentions before a failure. The hub thread's
+  probe was not counted. Corrected in B56's row (a note, as the audit keeps its rows) and here; section 57 keeps its
+  text, this section corrects it. CARD.md and PORTING-RISCV.md quote no USB figure (the card's are SD's: 500 ms of
+  busy before a command and after each block, about 68 s for a 64 KiB write, unchanged)
+  usb_bounds.py --check on 6ed8fcb's tree: "USB BOUNDS CHECK FAILED" (no B64 row; B56 says "within about 80 s"
+  uncorrected; 270 s and 583 s quoted nowhere); on this round's docs and evidence: "USB BOUNDS CHECK PASSED"
+
+== 69. B65: a close cut short says EINTR, one refused EIO
+  The self test's step test_close_cut_short (a file whose write-out the stick refused at first; its close waits for
+  another task's held write of the root directory, which the close owes, and Ctrl+C reaches it there; then a file the
+  stick refuses, closed with Ctrl+C pending): "(cut short in its wait: -4; refused with Ctrl+C pending: -5)": both ok
+  (EINTR is 4, EIO 5). 6ed8fcb: "(cut short in its wait: -5; refused with Ctrl+C pending: -5)": the first FAIL, the
+  second (a control) ok
+  tests/host/test_cp.c (make unittest; the real cmd_cp() against a scripted file layer): 16 cases, 0 failures (S4 now
+  with close returning EINTR for its write-out cut short; S10, a close refused with Ctrl+C pending: "close: I/O
+  error"; S11, a read error with Ctrl+C pending: "read: I/O error"; S12, a read cut short: "cut short after"). 6ed8fcb's
+  cp (shell/cp.c of 6ed8fcb against this test): 16 cases, 2 failures, S10 and S11
+  write_back() (fs/vfs.c): 0 when the volume's sync and bsync() of its device reached it; else EINTR when the device is
+  there, none of its blocks' last writes failed (bc_failed 0) and the call was cut short (fs_cut_short(): a kill or
+  Ctrl+C, not a task ending by itself, not a step that must finish); else EIO. The callers of vfs_close()'s result,
+  both kernels: cp (shell/cp.c: "interrupted while they were written out" for EINTR after a whole copy, "close: <error>"
+  otherwise, once when the write was cut short too), fsbench (EINTR is "interrupted", a refusal its error, also after
+  a write cut short), write and append (shell/main.c, arch/riscv32/kshell.c: "close: <strerror>": "Interrupted system
+  call" now where it said "I/O error"), fd_close() (SYS_close, a task's files at its exit: the programs see errno EINTR
+  or EIO: surfsh's redirections, rx, edit, touch, fstest report strerror(errno) or check for 0, as before). vfs_fsync()
+  says what close says (B10's "as close says it"): eject's write-out (shell/fscmd.c) told cut short from refused by
+  whether a Ctrl+C was pending, the same mistake; it goes by EINTR now, a refusal with a Ctrl+C pending said as
+  "could not be written: I/O error" before "interrupted: it stays mounted"; riscv32's after-command sync
+  (sync_mounts(), kshell.c) says "Interrupted system call" for a write-out cut short. vfs_sync() (the sync command,
+  SYS_sync) still says EIO for both: it syncs every device, and which refused is not known there (CODE-AUDIT B65)
+
+== 70. The kernel's self test before and after, the x86 suites, the sanitizers and the threaded test
+  The self test's transcripts (QEMU on the Mac, booted as make test boots, x86 at -O0): this round's code (4f146b5,
+  the R1 tree's run in section 64, the review's step on top) SELFTEST PASS, 155 checks ok; 6ed8fcb with this round's
+  self test (volume surfos-sc-fs10-base) SELFTEST FAIL, 146 checks ok and 9 failing, the ones sections 65-67 and 69
+  name (of the 11 new checks the other two are controls: a claim let go of lets the others in, a refused close says
+  EIO), every check of the earlier rounds passing on both. test-all's self tests at -O0 and -O2 and test-usb's three
+  at each level say SELFTEST PASS (x86.txt round fs-fix-10, sections 1 and 3)
+  make test-all, make unittest and make test-usb at 4f146b5 (surfcpu/docs/evidence/os/x86.txt, round fs-fix-10): the
+  smoke test 315 of 315 at -O0 and -O2 (its new steps: crashlock refused from the user shell, and crashlock in the
+  kernel shell's own boot stopping the system); make unittest exit 0 at -O0 (FATFS 347, FATFUZZ 4 runs, CONC ok 4
+  times, CONC umount ok, MKFS 126, CP 16) and the same at -O2 (its exit 2 the two tests/test_devenv.py tests that fail
+  with O=2 in their environment, as in the rounds before); test-usb 315 of 315 at -O0 and -O2, its three self tests
+  passing at each level. The same at 7adebec, before 1d35f84
+  AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined -fno-omit-frame-pointer, the kernel
+  files and the tests alike, on the Mac, against 7adebec's files, which 4f146b5 leaves as they are: it changes
+  shell/fscmd.c and the self test only): test_fatfs 347 checks, 0 failures; test_fatfuzz's set, 4 runs, 0 with
+  failures; test_cp 16 checks, 0 failures; test_mkfs 105 checks (no fsck.fat or mtools on the Mac), 0 failures;
+  test_fatconc in make unittest's four settings and its umount setting, each "CONC: ok"; the review's rev10.c A, B, C
+  and its umount campaign's seed 10700, conc7.c's sanitized set and dmgfuzz.c's campaign (section 64): no report from
+  any
+  The threaded test: make unittest's settings (above, and in the devenv, x86.txt); the review's campaign: section 64
+  The randomized test: make unittest's set, 4 runs, 0 with failures (and under the sanitizers, above)
+
+== 71. Where the same code runs under the riscv32 kernel (make -C surfcpu check), and its cost
+  make -C surfcpu check (12:12-12:42, the clean checkout of 4f146b5, its build tree new): "check: all automated SurfCPU
+  checks passed". Among them: boards/qemu_virt/test_os.py 135 of 135 at -O2 and at -O0 (134 before; the new one: the
+  lockfault boot, crashlock in the kernel shell, section 66; the fsfault boot, the sdsim boot's kill of the card watch,
+  the heartbeat still killed and collected, its eject, umount, pull and refused-write scenarios as they were),
+  test_arty 204 of 204, test_sd_iomodel 164 of 164, test-os-surfemu 18 of 18; on the RTL system (surfsim, with the io
+  track's card model) test-os-persist 17 of 17, test-os-faults 25 of 25, test-os-kit 22 of 22, test-soc-system-boot 21
+  of 21. The riscv32 kernels build with the one warning of the rounds before (task_exit()), isacheck clean (arty_a7:
+  58,103 instructions, all rv32im_zicsr_zifencei)
+  The cost on SurfCPU: the RTL runs' simulated cycles, this round's kernel against 6ed8fcb's (its tree a git worktree,
+  its kernel built the same way in the toolchain container, run with this check's surfsim and SurfBoot ROM: this round
+  changes neither; the persist and fault tests run by their scripts, 12:42-12:47), and against 6ed8fcb laid out as this
+  kernel is (each riscv32 object this round changed followed by as many nops, never run, as its code grew: kshell.c
+  100 bytes, trap.c 92, bdev.c 556, part.c 212, fat_mkfs.c 80, vfs.c 816, console.c 68, sync.c 72, task.c 324,
+  fdisk.c 60, fscmd.c 252; cp.c shrank by 8; and read-only data at the end so that the package is as large, 409,172
+  bytes: memcpy, memset, sd_read(), sd_write() and bread_blocks() then lie at this kernel's addresses; 12:52-12:58):
+                                         6ed8fcb          padded 6ed8fcb   after (4f146b5)  against 6ed8fcb  padded
+    test-os-persist, the write run       279,370,968      279,861,299      276,723,379      -0.948 %        -1.121 %
+    test-os-persist, the reboot run      225,780,754      226,253,564      224,992,731      -0.349 %        -0.557 %
+    test-os-faults, the refusing card    315,237,041      317,946,097      318,599,642      +1.067 %        +0.206 %
+    test-os-faults, the full card        203,937,027      204,505,303      202,680,780      -0.616 %        -0.892 %
+  Step by step (each expected line's cycle, from the runs' evidence files): SurfBoot loads a package 3,456 bytes
+  larger (405,716 -> 409,172 bytes: +428,600 cycles; none against the padded base); the commands that move many blocks
+  run fewer cycles, against 6ed8fcb (and against the padded base): cp 2.32 % fewer (2.32 %), cp to a full card 2.46 %
+  (6.32 %), crc32 of the large file 1.39 % (1.39 %) and on the full card 2.27 % (2.42 %), rm on the full card 2.60 %
+  (2.47 %); every other command within -1.4 % (df) and +1.0 % (a prompt), most within 0.5 %; but for the pairs of
+  lines in another order seen in every round (the first prompt 1.9 million cycles later and the next line as much
+  sooner) and, in the refusing card's run, the card taken out (+3.1 million cycles against 6ed8fcb, +0.87 million
+  against the padded base: the card-detect task looks every 200 ms, 5 million cycles, and met the removal at another
+  look). Why the block-moving commands are faster: 6ed8fcb's mutex_unlock() called wake_up(), with its own interrupt
+  save and restore, on every unlock, a waiter or not; B63's mutex_unlock() looks at its first waiter and calls
+  wake_up() only to hand the lock over, and those commands take the cache's lock, the bounce buffer's and the card's
+  for each block. What this round adds on the same paths costs less than that: a device request looks at one count
+  more (bdev_changes, 0 unless an mkfs or fdisk holds a device), and nothing else this round adds runs in these
+  workloads (the kill and fault rule, the claims, crashlock). The layout alone (6ed8fcb against the padded 6ed8fcb):
+  +0.18 %, +0.21 %, +0.86 % and +0.28 %

@@ -1,7 +1,12 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Thirteen rounds with x86 runs, newest first. Round fs-fix-9 (10/18/26) changes the x86 kernel on purpose: a review of
+Fourteen rounds with x86 runs, newest first. Round fs-fix-10 (10/18/26) changes the x86 kernel on purpose: a review
+of B56-B60 and its fixes (audit B61-B65: mkfs and fdisk's commit hold their device for their run, another task's
+requests to it refused meanwhile, and a failed rescan is said, a whole disk read again after a failed mkfs too; no kill
+at once and no fault survived while a task holds a mutex; a mutex goes to its waiters in the order they came; USB
+storage's worst cases corrected; a close cut short says EINTR, one refused EIO).
+Round fs-fix-9 (10/18/26) changes the x86 kernel on purpose: a review of
 B50-B55 and its fixes (audit B56-B60: round fs-fix-8's bound taken out again, an umount waiting for another task's
 write as long as the driver takes; a fault in kernel mode inside a file system, the block cache or a device request
 stops the system; a device with a request under way or a mount under way is busy, and eject takes its disk from its
@@ -44,6 +49,118 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-10, 10/18/26: mkfs and fdisk hold their device, the kill and fault rule and locks, mutexes in order, the
+USB worst cases and close's codes after a review of B56-B60 (audit B61-B65)
+date: 2026-10-18 (local)
+tree: sc/fs-fix-10 (from surfcpu 6ed8fcb): the kernel's code final at 4f146b5 (69367a0, 02d00e2, 57d2d0a, 715e377,
+      1d35f84; 7adebec and 4f146b5 the self test); after it docs and this evidence; the "was" blobs below are 6ed8fcb's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); a clean checkout of 4f146b5 (a git worktree in the session's scratch space, with
+      the ignored firmware/ and third_party/ fetches copied in) for every devenv run; volumes surfos-sc-fs10-run (O0),
+      surfos-sc-fs10-o2 (O2), surfos-sc-fs10 and surfos-sc-fs10-base (the self test's transcripts on this tree and on
+      6ed8fcb, and test_mkfs against 6ed8fcb's fs/fat_mkfs.c) and surfos-sc-fs10-rv10 (the review's self-test step on
+      this tree), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B61-B65):
+  kernel/sync.c            blob c89d963c (was bd51c409)  B63 mutex_unlock() hands the mutex to its first waiter
+  kernel/task.c            blob cd90b90a (was 33882147)  B62 holds(): a mutex held counts for the kill and fault rule;
+                                                         task_holds(); the kill's log line
+  include/surfos/task.h    blob 25d2d955 (was 82590081)  task_holds(), TASK_HOLDS_FS, TASK_HOLDS_LOCK
+  kernel/console.c         blob 7260349b (was 950419fe)  B62 console_holds()
+  include/surfos/console.h blob 98579fc4 (was aacced0c)  its declaration
+  driver/bdev.c            blob 7dd14de9 (was 3cdaa865)  B61 a request to a device another task's mkfs or fdisk holds is
+                                                         refused (BDEV_EBUSY) in the step it is counted;
+                                                         bdev_busy_words(); lsblk "being changed"
+  include/sys/bdev.h       blob a9cbfb59 (was 1997e8f6)  struct bdev's changing and changing_by, BDEV_EBUSY,
+                                                         bdev_rescan_words()
+  fs/vfs.c                 blob 932f1446 (was ffc6dd06)  B61 vfs_bdev_change_begin()/end(), the claim in busy_why() and
+                                                         vfs_unmount_begin() (which says why); B65 write_back()'s EINTR,
+                                                         vfs_fsync() as close
+  include/fs/vfs.h         blob 6d2ad791 (was 928b2918)  their declarations, VFS_BUSY_CHANGING
+  driver/part.c            blob 3da9b2ac (was bc59a078)  B61 part_commit() holds the disk to the end of its rescan, and
+                                                         says a failed rescan with what to do
+  fs/fat_mkfs.c            blob 46b0d084 (was 15689fc4)  B61 fat_mkfs() holds its device from its check to its end
+  include/fs/fat.h         blob 4b3f8440 (was 75f00153)  the note
+  shell/fscmd.c            blob 945dd800 (was c867ebb5)  B61 mkfs holds its device to its end and reads a whole disk
+                                                         again, succeeded or not, saying when that fails (reread());
+                                                         eject says why a disk is busy; B65 fsbench and eject go by EINTR
+  shell/fdisk.c            blob 622ea888 (was 3a43f9da)  B61 a disk another task's mkfs or fdisk holds is said so
+  shell/cp.c               blob 25803504 (was 3e5edd20)  B65 close's EINTR and EIO told apart; a read error is that error
+x86 only:
+  kernel/panic.c           blob 6de496d9 (was cf049534)  B62 a fault in kernel mode holding a mutex is a kernel wipeout
+                                                         that says so
+  shell/main.c             blob ab1df8f4 (was dc39d0f3)  B62 crashlock (kernel shell only); B61 readbench and hexdump say
+                                                         BDEV_EBUSY
+  shell/selftest.c         blob d40b10d1 (was ab363aaa)  the review's R1 and the claim's look (B61), mkfs of a whole disk
+                                                         whose rescan fails or that fails after its first write (B61), a
+                                                         kill of a thread holding a lock (B62), a mutex's waiters in
+                                                         order (B63), a close cut short (B65)
+  tests/host/test_mkfs.c   blob b5759a7c (was b3c4ec14)  B61 fat_mkfs()'s claim
+  tests/host/test_cp.c     blob a6c5a650 (was 3bbad07e)  B65 S4 as close says it, S10-S12
+  tests/host/test_fatfs.c  blob 683f860c (was 1ccf5f21)  stand-ins for the claim
+  tests/host/test_fatconc.c blob ed8521d1 (was 37cefb63) stand-ins for the claim
+  tools/qemu-run.py        blob e9f85c8c (was 880df0eb)  crashlock refused from the user shell; crashlock in the kernel
+                                                         shell's own boot, its wipeout expected ('halts')
+riscv32 only (surfcpu/docs/evidence/os/bcache-review.txt section 71):
+  arch/riscv32/trap.c      blob 62433628 (was 871ec046)  B62 the same fault policy
+  arch/riscv32/kshell.c    blob c608f2c5 (was 36223824)  B62 crashlock; B61 readbench and hexdump say BDEV_EBUSY
+  boards/qemu_virt/test_os.py blob ebb08c81 (was 6e8dcdfa)  the lockfault boot (crashlock)
+Every run below was of 4f146b5, a clean checkout (the devenv streams it into its volume).
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs10-run, made afresh)
+  at 4f146b5, the code final (11:26-11:42): exit 0 (and at 7adebec, before 1d35f84 was added, 10:35-10:51: the same)
+  O0  FILES TEST PASSED: 51 checks       O0  SMOKE TEST PASSED: 315 checks (selftest among them)
+  O2  FILES TEST PASSED: 51 checks       O2  SMOKE TEST PASSED: 315 checks
+  The smoke test's two new steps: crashlock from the user shell, refused ("crashlock stops the system: only in the
+  kernel shell (shell=kernel), not from a program"), and a boot of its own in the kernel shell (shell=kernel) where
+  crashlock stops the system with "Kernel Wipeout: Page Fault", "holding a lock (1 held)" and "SYSTEM HALTED" (the step
+  expects the halt: 'halts'); both pass at each level (313 checks before, 315 now). The self test (this round's six
+  steps among its checks), `run kcmdtest child-selftest`, `run kcmdtest kills` (kills of kernel commands at their
+  waits, and sleep -u killed at once after 2 s), crashgp, crashnull and crashfs, the eject, mkfs and fdisk steps and
+  the network's (dhcp, ping, tcp, the simulated Wi-Fi boots, with net_lock and the Wi-Fi locks handed over in order
+  now) pass as before. The compiler warnings from the files this round changes are those of the rounds before:
+  kernel/task.c's "'noreturn' function does return" at the end of task_exit(), whose lines this round leaves as they
+  were, and include/surfos/console.h's "inline function 'setpos' declared but never defined" in the host builds
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs10-run, made afresh for test-all, 11:49-11:56 at 4f146b5; and at 7adebec): exit 0, no
+    failures. FATFS 347, FATFUZZ 4 runs, 0 with failures, CONC ok 4 times and CONC umount ok (each of its cases:
+    nothing given up, the clean bit set, both files read back), MKFS 126 (this round's: fat_mkfs() holds its device,
+    bcache-review.txt section 65), CP 16 (this round's S10-S12, section 69), and every other host test passing: CRYPTO
+    129, WPA 118, IEEE80211 144, DNS 232, the Undertow suites (URL 382, UTIL 72, HTTP 835, HTML 672 and its UBSan
+    build 672, SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426), pointer 14, gui 45, PS2 MOUSE 1574, USB MOUSE 99,
+    ACPIDUMP 467, i2cdw 59, AML FIELD 5120, i2chid 267, hidpointer 127, TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50,
+    FRAMEBUFFER 143, USB 57, PARTITION 143 and its tool checks 33, LIBC 195, PROMPT 55, CP437 69, PAGER 177, TELNET
+    58, TELNETD SERVER 750 runs, 0 bugs, PCIINFO 55, IWLFW 38; python unittest OK each
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs10-o2, made afresh, 11:56-12:04 at 4f146b5; and at 7adebec):
+    every host test the same, FATFS 347, FATFUZZ 4 runs with no failure, CONC ok 4 times and CONC umount ok, MKFS 126,
+    CP 16, IWLFW 38; the run exits 2 because two of tests/test_devenv.py's tests fail with O=2 in their environment,
+    as in the rounds before (`make O=2` hands O to them); this round changes neither tests/test_devenv.py nor devenv/.
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs10-run, after test-all: its test images there;
+      devenv/build-usb.sh O=0: the image's manifest says source 4f146b56930e, not dirty; 11:42-11:49)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs10-o2, made afresh by unittest at O2, with
+      devenv/build.sh O=2 images first for the test disks the storage scenarios use; the image's manifest says source
+      4f146b56930e, not dirty; 12:04-12:12; at 7adebec the same at both levels, 7adebec140b7)
+  test-usb runs the self test three times (on the USB image's own devices, with its network checks on the USB adapter
+  and on a network that is not QEMU's default): SELFTEST PASS in each at each level, this round's steps among them
+  (the RAM sticks and disks being the self test's own; mkfs's question answered by the step itself). The storage
+  scenarios (usbdisk, storage, devloop: mount, write, eject, the stick pulled and put back, fsck_msdos and fsck.fat on
+  the sticks) pass as before; the stick is formatted, partitioned, mounted and ejected there under the claim of mkfs
+  and fdisk (B61), with USB storage's lock and the cache's handed over in order (B63).
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+eject, mkfs, fdisk, mount, the smoke test's concurrent FAT writers, kills inside kernel commands, the crash commands,
+the network's threads and commands with their mutexes handed over in order); what it fixes is shown by the kernel's
+self test (fdisk's commit while another task writes to a partition: the commit failed after writing the table on
+6ed8fcb; the claim's look and what it refuses; mkfs of a whole disk whose rescan fails: silent on 6ed8fcb, and one
+that fails after its first write: its old partition left registered on 6ed8fcb; a kill of a thread holding a lock:
+killed with it held on 6ed8fcb; a lock taken again and again: the waiter kept out for 50 rounds on 6ed8fcb; a close
+cut short: EIO on 6ed8fcb), by the smoke test's crashlock boot (the wipeout), by the host tests (section 2) and where
+the same files run under the riscv32 kernel (surfcpu/docs/evidence/os/bcache-review.txt, sections 64-71).
 
 ======================================================================================================================
 Round fs-fix-9, 10/18/26: the block cache's bound taken out, the fault policy, the busy rules, kill and cp after a
