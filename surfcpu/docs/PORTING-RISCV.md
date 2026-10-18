@@ -607,6 +607,20 @@ test-os-persist's write run 0.21 % more cycles, its reboot run 0.24 %, test-os-f
 sooner; 0.11 % more without those steps); SurfBoot loads a package 1.1 KB larger (+0.13 million
 cycles), and each command is within 0.2 % (bcache-review.txt section 31).
 
+Since audit B39-B45 (counted the same way, before = 47fb4ec): every workload above sends the same
+requests and blocks, and the host's CPU time is the same within the noise (bcache-review.txt section
+37). A FAT call counts its task inside the file system (two stores and a critical section's two
+calls), and the cache counts it only around a device request or a copy: the calls made for each block
+(bread, brelse, bpeek) count nothing, the cache lock's owner standing for their short sections. On
+SurfCPU (47fb4ec's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.25 % more cycles, its reboot run 0.19 %, test-os-faults' full card 0.32 % and its refusing card
+0.51 % fewer (the card-detect task meeting the removal sooner); against 47fb4ec padded with 4 KB of
+code that never runs, +0.08 %, +0.04 %, +0.04 % and -0.28 %: the rest is the package, 3.8 KB larger,
+that SurfBoot loads (+0.48 million cycles). Each command is within 0.3 %. Two drafts cost more and were
+taken back: a count in each of the cache's calls (+1.05 % on the write run against the padded base, cp
++1.9 %), and a wake-up of the cache's waiters for each block an eject's binvalidate() dropped (+5 % on
+the eject) (bcache-review.txt section 39).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
