@@ -15,6 +15,9 @@ about every two seconds while the window is open and in view, so a stick that is
 appears; the selection follows a device's name. Track SYS of
 docs/superpowers/plans/2026-10-17-gui-suite.md; the window manager reaches it through
 gui_app_disks (struct gui_app, shell/guipriv.h).
+10/18/26: the name followed stays followed until the user moves the selection, also through a
+reading without it (nothing is selected meanwhile); a reading that fails keeps the last one's
+rows; Eject refuses (it does not wait) while Notepad has unsaved changes there.
 */
 #include "gui_sys.h"
 #include <string.h>
@@ -136,8 +139,10 @@ static bool can_show(const struct gui_state *g) {
     return d && g->fs && d->mounted && !d->gone && d->mount[0];
 }
 
-/* everything again, from struct gui_sys (from the handlers and the tick only); the selection by its name, or where
-   it was when that device is gone */
+/* everything again, from struct gui_sys (from the handlers and the tick only); the selection by its name.
+   10/18/26: a name that is not in this reading (unplugged, or missed) stays followed until the user moves the
+   selection: nothing is selected meanwhile, and hint keeps the row it was on (Down goes on from there); a reading
+   that fails keeps the last one's rows (disks leaves them as they were: sys/gui_sys.h) */
 static void read_disks(struct gui_state *g) {
     struct gui_disks *k = &g->disks;
     struct disks_layout l;
@@ -147,14 +152,17 @@ static void read_disks(struct gui_state *g) {
     g->dirty = true;
     n = g->sys && g->sys->disks ? g->sys->disks(g->sys->ctx, k->disk, GUI_DISK_MAX) : -ENOSYS;
     k->err = n < 0 ? n : 0;
-    k->count = n < 0 ? 0 : n > GUI_DISK_MAX ? GUI_DISK_MAX : n;
-    for(i = 0; i < k->count && strcmp(k->disk[i].name, k->name); i++) ;
-    if(i < k->count) k->selected = i;
+    if(n < 0) return;
+    k->count = n > GUI_DISK_MAX ? GUI_DISK_MAX : n;
+    if(!k->name[0]) k->selected = k->count ? 0 : -1;    /* nothing followed yet (the window opened): the first */
     else {
-        if(k->name[0] && !k->err) snprintf(k->status, sizeof(k->status), "%s is not there any more", k->name);
-        k->selected = k->count ? gui_clamp(k->selected, 0, k->count - 1) : -1;
+        for(i = 0; i < k->count && strcmp(k->disk[i].name, k->name); i++) ;
+        k->selected = i < k->count ? i : -1;
     }
-    strlcpy(k->name, k->selected >= 0 ? k->disk[k->selected].name : "", sizeof(k->name));
+    if(k->selected >= 0) {
+        strlcpy(k->name, k->disk[k->selected].name, sizeof(k->name));
+        k->hint = k->selected;
+    }
     layout(g, &l);
     k->top = gui_clamp(k->top, 0, k->count > l.rows ? k->count - l.rows : 0);
 }
@@ -163,7 +171,7 @@ static void choose(struct gui_state *g, int row) {
     struct gui_disks *k = &g->disks;
     struct disks_layout l;
     if(row < 0 || row >= k->count) return;
-    k->selected = row;
+    k->selected = k->hint = row;
     strlcpy(k->name, k->disk[row].name, sizeof(k->name));
     k->status[0] = 0;
     layout(g, &l);
@@ -176,6 +184,7 @@ static void choose(struct gui_state *g, int row) {
 static void mount(struct gui_state *g) {
     struct gui_disks *k = &g->disks;
     const struct gui_disk *d = selected(k);
+    struct disks_layout l;
     char name[16], msg[GUI_STATUS];
     int v = mount_row(g), r;
     g->dirty = true;
@@ -194,6 +203,10 @@ static void mount(struct gui_state *g) {
     r = g->fs->mount(g->fs->ctx, name, msg, sizeof(msg));
     if(!r) strlcpy(k->name, name, sizeof(k->name));    /* the volume that was mounted */
     read_disks(g);
+    if(!r && k->selected >= 0) {                        /* 10/18/26: in view, also below the rows shown */
+        layout(g, &l);
+        k->top = sys_view(k->selected, k->top, k->count, l.rows);
+    }
     strlcpy(k->status, msg[0] ? msg : r ? "Not mounted" : "Mounted", sizeof(k->status));   /* what mount said, first */
     if(g->win[GUI_FILES].open) files_refresh(g);       /* Files shows it at once too */
 }
@@ -281,7 +294,7 @@ static bool key(struct gui_state *g, int k) {
     struct disks_layout l;
     int row;
     layout(g, &l);
-    row = sys_move(d->selected, d->count, l.rows, k);
+    row = sys_move_from(d->selected, d->hint, d->count, l.rows, k);
     if(row != -2) {
         if(row >= 0) choose(g, row);
         return true;
@@ -353,8 +366,8 @@ static void wheel(struct gui_state *g, int rows) {
 static void opened(struct gui_state *g) {
     struct gui_disks *k = &g->disks;
     k->status[0] = 0;
-    k->name[0] = 0;
-    k->selected = 0;
+    k->name[0] = 0;                                     /* the first device, once read (read_disks()) */
+    k->selected = k->hint = -1;
     k->top = 0;
     k->thumb = false;
     k->click_row = -1;
@@ -427,7 +440,9 @@ static void details(const struct gui_state *g, const struct gui_disk *d, char li
             snprintf(lines[2], sizeof(lines[2]), "%s used, %s free, of %s (%u%%)", used, free, total,
                      sys_part(d->used_kb, d->used_kb + d->free_kb, 100));
             *bar = true;
-        } else snprintf(lines[2], sizeof(lines[2]), "%s keeps no count of used and free space", d->fs[0] ? d->fs : "It");
+        } else if(d->statfs_err)                        /* 10/18/26: its file system could not tell */
+            snprintf(lines[2], sizeof(lines[2]), "How full it is could not be read: %s", gui_error(g, d->statfs_err));
+        else snprintf(lines[2], sizeof(lines[2]), "%s keeps no count of used and free space", d->fs[0] ? d->fs : "It");
         return;
     }
     if(volume(k, (int)(d - k->disk)) && usb(d))
@@ -455,7 +470,7 @@ static void list_render(const struct gui_state *g, const struct gui_draw *d, con
     gd_name(d, x0 + l->status_x, y0 + l->head_y + 2, "Status", l->status_cells, MUTED);
     gd_rect(d, x0 + 1, y0 + l->list_y, l->bar_x - 1, l->detail_y - l->list_y, SYS_SHEET);
     list = gd_clip(d, x0 + 1, y0 + l->list_y, l->bar_x - 1, l->rows * ROW_H);
-    if(!g->sys || k->err)
+    if(!g->sys || (k->err && !k->count))               /* 10/18/26: with rows read before, those stay */
         gd_text(&list, x0 + 16, y0 + l->list_y + 8, !g->sys ? "The block devices cannot be read here." :
                 "The block devices could not be read.", MUTED);
     else if(!k->count) gd_text(&list, x0 + 16, y0 + l->list_y + 8, "No block devices", MUTED);
@@ -515,6 +530,8 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     gd_rect(d, x0 + 1, y0 + l.status_y, w->w - 2, 1, LINE);
     if(k->status[0]) strlcpy(b, k->status, sizeof(b));
     else if(!g->sys) strlcpy(b, "No system here: no devices to show", sizeof(b));
+    else if(k->err && k->count) strlcpy(b, "The devices could not be read now: the list is the last one read", sizeof(b));
+    else if(!e && k->name[0]) snprintf(b, sizeof(b), "%s is not there any more", k->name);   /* 10/18/26: followed */
     else if(!g->fs && e) strlcpy(b, "No file systems here: Mount and Eject are off", sizeof(b));
     else if(e && e->gone) snprintf(b, sizeof(b), "%s was unplugged: Eject (E) unmounts it", e->name);
     else if(e && e->mounted && usb(e)) snprintf(b, sizeof(b), "Eject (E) %s before you pull it out", e->disk);

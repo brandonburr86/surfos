@@ -19,7 +19,7 @@ struct gui_time { u32 year, month, date, weekday, hour, minute, second; };   /* 
 
 /**** System Monitor ****/
 
-#define GUI_TASK_MAX 64
+#define GUI_TASK_MAX 128                /* 10/18/26: 64 before; tasks() keeps the newest when there are more */
 #define GUI_TASK_NAME 16
 /* a task as surfos/proc.h describes it: state GUI_TASK_*; tty 0-3 the consoles F1-F4, 16+n pty n, -1 none */
 #define GUI_TASK_READY 0
@@ -68,15 +68,18 @@ struct gui_disk {
     bool part, removable, readonly, gone, mounted;
     char size[8];                       /* 10/17/26: lsblk's SIZE, "254M" */
     char fs[8], volume[12];             /* mounted: the file system ("fat32") and its volume label, "" */
+    int statfs_err;                     /* 10/18/26: mounted, but its file system could not say how full: -errno */
 };
 
 struct gui_sys {
     void *ctx;
-    /* the machine (System Monitor) */
+    /* the machine (System Monitor). 10/18/26: tasks copies the list in one go, the newest max when there are more;
+       tasks and disks leave out as it was when they fail */
     int (*tasks)(void *ctx, struct gui_task *out, int max);
     int (*memory)(void *ctx, struct gui_memory *out);
     int (*machine)(void *ctx, struct gui_machine *out);
-    /* end a task: 0, or -errno with the reason in msg (never the idle task, init, or the desktop's own) */
+    /* end a task: 0, or -errno with the reason in msg (never the idle task, init, or the desktop's own). 10/18/26: nor
+       the shells the desktop runs in; a task inside a call ends when the call does, however long (msg says so) */
     int (*kill)(void *ctx, int pid, char *msg, size_t n);
     /* the block devices (Disks); mounting and ejecting go through struct gui_fs's mount and eject */
     int (*disks)(void *ctx, struct gui_disk *out, int max);

@@ -30,11 +30,12 @@ u32 sys_part(u32 part, u32 total, u32 scale) {
     return part * scale / total;
 }
 
+/* 10/18/26: coral from exactly 90% (used * 10 >= total * 9, in 64 bits: a product needs no division) */
 void sys_bar(const struct gui_draw *d, int x, int y, int w, int h, u32 used, u32 total) {
     int fill = w > 2 ? (int)sys_part(used, total, (u32)(w - 2)) : 0;
     gd_rect(d, x, y, w, h, LINE);
     gd_rect(d, x + 1, y + 1, w - 2, h - 2, SYS_SHEET);
-    if(fill > 0) gd_rect(d, x + 1, y + 1, fill, h - 2, sys_part(used, total, 100) >= 90 ? CORAL : TEAL);
+    if(fill > 0) gd_rect(d, x + 1, y + 1, fill, h - 2, (u64)used * 10 >= (u64)total * 9 ? CORAL : TEAL);
 }
 
 int sys_move(int selected, int count, int rows, int key) {
@@ -49,6 +50,14 @@ int sys_move(int selected, int count, int rows, int key) {
     default: return -2;
     }
     return count ? gui_clamp(selected, 0, count - 1) : -1;
+}
+
+int sys_move_from(int selected, int hint, int count, int rows, int key) {
+    if(selected >= 0 || hint < 0 || !count) return sys_move(selected, count, rows, key);
+    hint = gui_clamp(hint, 0, count);                   /* between rows hint - 1 and hint */
+    if(key == GUI_DOWN) return gui_clamp(hint, 0, count - 1);
+    if(key == GUI_UP) return gui_clamp(hint - 1, 0, count - 1);
+    return sys_move(gui_clamp(hint, 0, count - 1), count, rows, key);
 }
 
 int sys_view(int selected, int top, int count, int rows) {

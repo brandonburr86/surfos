@@ -12,6 +12,9 @@ reaches the job in the foreground (task_interrupt_job()).
 10/6/26: the tasks on a terminal, counted and killed, for the pseudo-terminals (kernel/pty.c);
 the task list as programs see it, and a process leaving its shell's job (kernel/proc.c). A
 kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
+10/18/26 (the desktop's System Monitor): End task's kill waits for the end of the call however
+long, as a hangup's does (kill_task_patient()), and the task list is copied in one go
+(task_info_all()).
 */
 
 #include <surfos/types.h>
@@ -179,6 +182,7 @@ static void task_stublet(void) {
 
 static void kill_escalate(void *arg);
 static void kill_hangup(surf_task *t);
+static void fill_info(surf_task *t, struct procinfo *pi);
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
     surf_task *t = (surf_task *)kcalloc(1, sizeof(surf_task));
@@ -358,8 +362,9 @@ void kill_task(surf_task *t) {
         /* gone already, or ending by itself (task_exit()) */
     } else if(!t->in_call) {
         become_zombie(t, -1);
-    } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
-        t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
+    } else if(!(t->intr & TI_KILL) || (t->intr & (TI_HANGUP | TI_PATIENT))) {
+        /* 10/6/26: after a hangup's kill too: this one's rule (10/18/26: and after End task's) */
+        t->intr = (t->intr | TI_KILL) & ~(TI_HANGUP | TI_PATIENT);
         ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
         wake_intr(t);
     }
@@ -370,8 +375,10 @@ void kill_task(surf_task *t) {
    code a process ends at once, as with kill_task(); inside a call it is marked and its waits that may
    be cut short are, but no escalation follows: it ends when the call does, however long that takes,
    so whatever the call holds (a file system's lock, a claim) is let go on the way out. The kernel log
-   says once, KILL_WAIT_MS later, that it is waited for (kill_escalate()). Interrupts off. */
-static void kill_hangup(surf_task *t) {
+   says once, KILL_WAIT_MS later, that it is waited for (kill_escalate()). Interrupts off.
+   10/18/26: the same rule for End task (kill_task_patient()), whose mark is TI_PATIENT instead of
+   TI_HANGUP, so that the kernel log does not speak of a terminal */
+static void kill_waiting(surf_task *t, u_int mark) {
     if(t->state == TS_DEAD ||                   /* who it spares, all here: gone already, */
        (t->in_call & TC_EXIT) ||                /* ending already (task_exit(): its files are closing), */
        (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
@@ -380,9 +387,27 @@ static void kill_hangup(surf_task *t) {
         become_zombie(t, -1);
         return;
     }
-    t->intr |= TI_KILL | TI_HANGUP;
+    t->intr |= TI_KILL | mark;
     ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
     wake_intr(t);
+}
+
+static void kill_hangup(surf_task *t) {
+    kill_waiting(t, TI_HANGUP);
+}
+
+/* 10/18/26 (the desktop's End task, shell/guisys.c): kill_waiting()'s rule, which never leaves a zombie holding
+   a lock: a task in its own code ends at once, one inside a call when the call ends, however long it takes.
+   1 when it is inside a call (it ends when the call does), 0 when it ended at once or had ended */
+int kill_task_patient(surf_task *t) {
+    u_long flags;
+    int waits;
+    if(!t || t == idle_task) return 0;
+    flags = irq_save();
+    kill_waiting(t, TI_PATIENT);
+    waits = t->state != TS_DEAD && t->in_call;
+    irq_restore(flags);
+    return waits;
 }
 
 /* 10/6/26: the kill waited KILL_WAIT_MS and the call has not ended: it is stuck where nothing
@@ -394,6 +419,13 @@ static void kill_escalate(void *arg) {
     if(t->state == TS_DEAD || (t->in_call & TC_EXIT)) return;
     if(t->intr & TI_HANGUP) {                       /* 10/6/26: a hangup's kill waits for the call, however long */
         snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still in its %s %u ms after its terminal hung up: "
+                 "waiting for its end%s\n", t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call",
+                 (u_int)KILL_WAIT_MS, t->mutexes ? ", holding a lock" : "");
+        klog_write(line);
+        return;
+    }
+    if(t->intr & TI_PATIENT) {                      /* 10/18/26: and End task's (kill_task_patient()) */
+        snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still in its %s %u ms after it was asked to end: "
                  "waiting for its end%s\n", t->name, t->pid, (t->in_call & TC_COMMAND) ? "kernel command" : "system call",
                  (u_int)KILL_WAIT_MS, t->mutexes ? ", holding a lock" : "");
         klog_write(line);
@@ -929,6 +961,31 @@ int task_info(int index, struct procinfo *pi) {
         irq_restore(flags);
         return -ENOENT;
     }
+    fill_info(t, pi);
+    irq_restore(flags);
+    return 0;
+}
+
+/* 10/18/26 (the desktop's System Monitor): the whole list at once, each task as task_info() tells it, with
+   interrupts off throughout, so that a task collected meanwhile cannot shift the rest; the newest max when
+   there are more. How many were copied */
+int task_info_all(struct procinfo *out, int max) {
+    surf_task *t;
+    u_long flags;
+    int n = 0, skip;
+    if(max <= 0) return 0;
+    flags = irq_save();
+    skip = (int)ntasks > max ? (int)ntasks - max : 0;   /* the list is in the order the tasks were made */
+    for(t = all_tasks; t && n < max; t = t->all_next) {
+        if(skip > 0) { skip--; continue; }
+        fill_info(t, &out[n++]);
+    }
+    irq_restore(flags);
+    return n;
+}
+
+/* a task as SYS_procinfo tells it; interrupts off */
+static void fill_info(surf_task *t, struct procinfo *pi) {
     memset(pi, 0, sizeof(*pi));
     pi->pid = (int)t->pid;
     pi->ppid = t->parent ? (int)t->parent->pid : -1;
@@ -943,8 +1000,6 @@ int task_info(int index, struct procinfo *pi) {
                 ((t->flags & TF_SHELL) ? PROC_SHELL : 0);
     pi->tty = (t->tty && t->state != TS_DEAD) ? tty_number(t->tty) : -1;
     strlcpy(pi->name, t->name, sizeof(pi->name));
-    irq_restore(flags);
-    return 0;
 }
 
 /* 10/6/26: SYS_detach (surfos/proc.h): a process leaves its parent and the job of the shell that

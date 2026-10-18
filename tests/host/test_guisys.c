@@ -2,8 +2,15 @@
    in-memory file system and system of tests/host/gui_fake.c. Built and run by `make unittest` (unittest-gui).
    10/17/26: the Processes page's order and its selection, End task's question, both answers and the refusals, the
    pages, the Edit menu, Disks' tree, Mount and Eject (the fake file system's, watched here), a disk that goes away,
-   a desktop without a system or files, and every window inside guard pixels at three sizes. */
+   a desktop without a system or files, and every window inside guard pixels at three sizes.
+   10/18/26 (the review): the kernel's side itself (tests/host/guisys_host.c builds shell/guisys.c and guisys_disk.c
+   with stand-ins): kill's refusals and words, the tasks' copy, Disks' rows (unplugged ones, their order, the
+   32-row cap, statfs failures); and readings that miss a row once or fail, the pages at the smallest height, the
+   task count's "of", the meters' edges, ties when reversed, Find around the end, Notepad's file on a mount whose
+   name starts as another's or on an unplugged stick, and Mount scrolling to what it mounted. */
+#include "guisys_host.c"                /* first: the kernel's headers before the desktop's */
 #include "gui_fake.h"
+#include "../../shell/gui_sys.h"
 
 static struct gui_state g;
 static const int ids[] = { GUI_MONITOR, GUI_DISKS };
@@ -298,12 +305,17 @@ static void monitor_order(void) {
     CHECK(g.monitor.ntasks == 5);                       /* not yet: about once a second */
     later(500);
     CHECK(g.monitor.ntasks == 7 && selected_pid() == 9 && g.monitor.selected == 5);
-    /* a pid that is gone leaves the selection on its row */
+    /* 10/18/26: a pid that is not in a reading stays followed: nothing is selected meanwhile, the status bar says
+       so, and Down goes on from its row */
     drop_task(9);
     later(1000);
-    CHECK(g.monitor.ntasks == 6 && g.monitor.selected == 5 && selected_pid() == 12);
+    CHECK(g.monitor.ntasks == 6 && g.monitor.selected == -1 && g.monitor.pid == 9 && g.monitor.hint == 5);
     gui_render(&g, &screen);
     CHECK(shows(960, g.win[GUI_MONITOR].x + 272 + 8, g.win[GUI_MONITOR].y + LIST_Y + 5 * 18 + 1, "pty 0", MUTED));
+    CHECK(shows(960, g.win[GUI_MONITOR].x + 10, g.win[GUI_MONITOR].y + 360 - STATUS_H - 1 + 3, "pid 9 is not in the list now",
+                INK));
+    key(GUI_DOWN);
+    CHECK(g.monitor.selected == 5 && selected_pid() == 12);
     /* the keys: Home, End, Page Up and Down */
     key(GUI_HOME); CHECK(g.monitor.selected == 0);
     key(GUI_END); CHECK(g.monitor.selected == 5);
@@ -342,7 +354,8 @@ static void monitor_end(void) {
     /* End task asks first, Cancel the default: Enter, Esc and Cancel end nothing */
     key(GUI_DELETE);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.dialog.act == gui_app_act(GUI_MONITOR, 1) && g.dialog.choice == 2);
-    CHECK(!strcmp(g.dialog.text[0], "End edit (pid 9) on F2?"));
+    CHECK(!strcmp(g.dialog.text[0], "End edit (pid 9) on F2?") &&
+          !strcmp(g.dialog.text[1], "It ends after its system call; unsaved work is lost."));
     fake_screen(&screen, 960, 540);
     gui_render(&g, &screen);
     CHECK(fake_guards(960, 540));
@@ -359,7 +372,7 @@ static void monitor_end(void) {
     key('\r');
     CHECK(!g.dialog.kind && fake_killed == 9 && row_of(9) < 0);
     CHECK(!strcmp(g.monitor.status, "ended edit (pid 9)"));
-    CHECK(g.monitor.selected >= 0);
+    CHECK(g.monitor.selected == -1 && g.monitor.pid == 9);   /* 10/18/26: still followed, not listed */
     /* kill's refusal goes to the status bar (the fake's: init, pid 1, a program here) */
     fake_killed = 0;
     key(GUI_HOME);
@@ -384,7 +397,7 @@ static void monitor_end(void) {
     key(GUI_DOWN);
     key(GUI_DELETE);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.text[0], "End surfsh (pid 5) on F1?") &&
-          !strcmp(g.dialog.text[1], "A console's shell: init starts a new one there."));
+          !strcmp(g.dialog.text[1], "It ends after its system call; init starts another."));
     key(27);
     /* a task that ended while the question was open */
     key(GUI_DELETE);
@@ -653,8 +666,10 @@ static void disks_mount_eject(void) {
 }
 
 static void disks_gone(void) {
+    struct fb_surface screen;
     struct gui_disk *d;
     desktop(960, 540);
+    fake_screen(&screen, 960, 540);
     gui_open(&g, GUI_DISKS);
     select_disk("usb1p1");
     key('m');
@@ -671,18 +686,24 @@ static void disks_gone(void) {
     key('m');
     CHECK(!mounted_dev[0] && !strcmp(g.disks.status, "usb1p1 was unplugged"));
     key('e');                                           /* then it is gone from the list: eject's words stay */
-    CHECK(!strcmp(ejected_dev, "usb1") && g.disks.count == 3 && g.disks.selected == 2 && !strcmp(g.disks.name, "usb0p1"));
+    CHECK(!strcmp(ejected_dev, "usb1") && g.disks.count == 3 && g.disks.selected == -1 && !strcmp(g.disks.name, "usb1p1"));
     CHECK(!strcmp(g.disks.status, "usb1: unmounted (it was unplugged already)"));
-    /* a stick that is pulled out (not mounted) leaves the list at the next reading: the selection stays on its row */
+    /* plugged in again: still followed, so selected again */
     add_disk("usb1", "usb1", "usb", "disk mbr", "QEMU QEMU HARDDISK", "", "64M", 65536, false);
     add_disk("usb1p1", "usb1", "usb", "part mbr FAT32 LBA", "", "", "63M", 64512, true);
     later(2000);
-    select_disk("usb1p1");
     CHECK(g.disks.count == 5 && g.disks.selected == 4);
+    /* pulled out (not mounted): it leaves the list at the next reading; still followed, nothing selected, and the
+       status bar says it is not there; Down goes on from its row */
+    g.disks.status[0] = 0;
     fake_ndisks = 3;
     later(2000);
-    CHECK(g.disks.count == 3 && g.disks.selected == 2 && !strcmp(g.disks.name, "usb0p1"));
-    CHECK(!strcmp(g.disks.status, "usb1p1 is not there any more"));
+    CHECK(g.disks.count == 3 && g.disks.selected == -1 && !strcmp(g.disks.name, "usb1p1") && !g.disks.status[0]);
+    gui_render(&g, &screen);
+    CHECK(shows(960, g.win[GUI_DISKS].x + 10, g.win[GUI_DISKS].y + 320 - STATUS_H - 1 + 3, "usb1p1 is not there any more",
+                INK));
+    key(GUI_DOWN);
+    CHECK(g.disks.selected == 2 && !strcmp(g.disks.name, "usb0p1"));
     /* every device gone */
     fake_ndisks = 0;
     later(2000);
@@ -725,6 +746,400 @@ static void nothing(void) {
                 MUTED));
 }
 
+/**** 10/18/26: the kernel's side (tests/host/guisys_host.c builds shell/guisys.c and guisys_disk.c) ****/
+
+/* kill's refusals and its words: idle, init, the desktop's own task and the shell above it, a kernel thread; a
+   zombie; a program in its own code, in a system call, in a kernel command; a pid that is not there */
+static void kernel_kill(void) {
+    const struct gui_sys *sys = gui_kernel_sys();
+    surf_task *init, *f1, *f2, *t;
+    char msg[GUI_STATUS];
+    nktasks = patient_kills = 0;
+    patient_last = NULL;
+    idle_task = ktask_add(0, "Kernel Idle Task", 0, NULL, 0);
+    init_task_ptr = init = ktask_add(1, "init", 0, NULL, 0);
+    ktask_add(2, "usb", 0, init, 0);
+    f1 = ktask_add(4, "surfsh", TF_USER | TF_SHELL, init, TC_SYSCALL);          /* F1's shell, which ran another */
+    f2 = ktask_add(5, "surfsh", TF_USER | TF_SHELL, init, TC_SYSCALL | TC_COMMAND);   /* F2's, in a kernel command */
+    ktask_add(9, "edit", TF_USER, f2, TC_SYSCALL);
+    ktask_add(10, "cat", TF_USER, f2, 0);
+    ktask_add(11, "ls", TF_USER, f2, 0)->state = TS_DEAD;
+    curTask = ktask_add(12, "surfsh", TF_USER, f1, TC_SYSCALL | TC_COMMAND);   /* the shell that ran gui */
+    CHECK(sys->kill(sys->ctx, 0, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "Kernel Idle Task (pid 0) is the idle task: the kernel's own"));
+    CHECK(sys->kill(sys->ctx, 1, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "init (pid 1) starts the consoles' shells: it is never ended"));
+    CHECK(sys->kill(sys->ctx, 12, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "surfsh (pid 12) runs this desktop: Ctrl+Q leaves it"));
+    CHECK(sys->kill(sys->ctx, 4, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "surfsh (pid 4) runs the shell this desktop runs in"));
+    CHECK(sys->kill(sys->ctx, 2, msg, sizeof(msg)) == -EACCES &&
+          !strcmp(msg, "usb (pid 2) is a kernel thread: the shell's kill command ends one"));
+    CHECK(patient_kills == 0);
+    CHECK(sys->kill(sys->ctx, 11, msg, sizeof(msg)) == 0 && !strcmp(msg, "ls (pid 11) had ended already") &&
+          patient_kills == 0);
+    CHECK(sys->kill(sys->ctx, 10, msg, sizeof(msg)) == 0 && !strcmp(msg, "ended cat (pid 10)") && patient_kills == 1 &&
+          patient_last->pid == 10 && patient_last->state == TS_DEAD);
+    CHECK(sys->kill(sys->ctx, 9, msg, sizeof(msg)) == 0 && !strcmp(msg, "edit (pid 9) ends when its system call does"));
+    t = task_find(9);
+    CHECK(patient_kills == 2 && patient_last == t && (t->intr & (TI_KILL | TI_PATIENT)) == (TI_KILL | TI_PATIENT));
+    CHECK(sys->kill(sys->ctx, 5, msg, sizeof(msg)) == 0 && !strcmp(msg, "surfsh (pid 5) ends when its kernel command does"));
+    CHECK(sys->kill(sys->ctx, 77, msg, sizeof(msg)) == -ENOENT && !strcmp(msg, "no task with pid 77 any more"));
+    CHECK(patient_kills == 3);
+    curTask = idle_task = init_task_ptr = NULL;
+}
+
+/* the tasks as struct gui_task, and a reading that cannot get its memory: it fails and leaves the rows alone */
+static void kernel_tasks(void) {
+    const struct gui_sys *sys = gui_kernel_sys();
+    static struct gui_task out[GUI_TASK_MAX];
+    surf_task *init;
+    nktasks = 0;
+    ktask_add(0, "Kernel Idle Task", 0, NULL, 0);
+    init = ktask_add(1, "init", 0, NULL, 0);
+    ktask_add(7, "surfsh", TF_USER, init, 0);
+    CHECK(sys->tasks(sys->ctx, out, GUI_TASK_MAX) == 3);
+    CHECK(out[2].pid == 7 && out[2].ppid == 1 && out[2].flags == GUI_TASK_USER && !strcmp(out[2].name, "surfsh") &&
+          out[0].ppid == -1 && !strcmp(out[0].name, "Kernel Idle Tas"));
+    out[0].pid = 1234;
+    kalloc_fails = 1;
+    CHECK(sys->tasks(sys->ctx, out, GUI_TASK_MAX) == -ENOMEM && out[0].pid == 1234);
+}
+
+static struct bdev kd[KDEVS];
+
+/* Disks' rows: lsblk's, then the unplugged ones (each disk, then its mounted volumes) in the order of the mounts; how
+   full a mounted one is, a statfs that fails, the 32-row cap (which keeps the rows that only Eject can end), and a
+   reading that cannot get its memory */
+static void kernel_disks(void) {
+    const struct gui_sys *sys = gui_kernel_sys();
+    static struct gui_disk out[GUI_DISK_MAX];
+    static const char *const order[] = { "rd0", "usb0", "usb0p1", "usb1", "usb1p1", "usb3", "usb2", "usb2p1" };
+    struct bdev *rd0, *usb0, *usb1, *usb1p1, *usb2;
+    char name[16];
+    int n, i;
+    nkdevs = nkviews = nkstats = 0;
+    rd0 = kdev_add(&kd[0], "rd0", 14940, NULL, BDEV_BUS_RAM, true);
+    strlcpy(rd0->model, "initrd.tar", sizeof(rd0->model));
+    usb0 = kdev_add(&kd[1], "usb0", 524288, NULL, BDEV_BUS_USB, true);
+    usb0->protect = "the SurfOS boot drive";
+    kdev_add(&kd[2], "usb0p1", 520192, usb0, 0, true)->protect = usb0->protect;
+    usb1 = kdev_add(&kd[3], "usb1", 131072, NULL, BDEV_BUS_USB, true);
+    usb1p1 = kdev_add(&kd[4], "usb1p1", 129024, usb1, 0, true);
+    usb2 = kdev_add(&kd[5], "usb2", 60817408, NULL, BDEV_BUS_USB, false);   /* unplugged while usb2p1 was mounted */
+    kdev_add(&kd[6], "usb2p1", 60815360, usb2, 0, false);
+    kdev_add(&kd[7], "usb3", 131072, NULL, BDEV_BUS_USB, false);           /* a volume without a table, unplugged */
+    kmount("/initrd", "tarfs", rd0, true);
+    kmount("/usb1p1", "fat", usb1p1, false);
+    kmount("/usb3", "fat", &kd[7], false);
+    kmount("/usb2p1", "fat", &kd[6], false);
+    kstatfs("/usb1p1", 0, 126992, 118800, "fat32", "APPSTICK");
+    n = sys->disks(sys->ctx, out, GUI_DISK_MAX);
+    CHECK(n == 8);
+    for(i = 0; i < n && i < 8; i++) CHECK(!strcmp(out[i].name, order[i]));
+    CHECK(out[0].mounted && out[0].readonly && !strcmp(out[0].mount, "/initrd") && !strcmp(out[0].fs, "tarfs") &&
+          !out[0].used_kb && !out[0].free_kb && !out[0].statfs_err && !out[0].gone);
+    CHECK(!strcmp(out[1].status, "boot drive: protected") && out[2].part && out[2].readonly && !strcmp(out[2].disk, "usb0"));
+    CHECK(out[4].mounted && !out[4].readonly && out[4].used_kb == 4096 && out[4].free_kb == 59400 &&
+          !strcmp(out[4].fs, "fat32") && !strcmp(out[4].volume, "APPSTICK") && !strcmp(out[4].status, "mounted"));
+    CHECK(out[5].gone && out[5].mounted && !strcmp(out[5].status, "unplugged: eject it") && !strcmp(out[5].mount, "/usb3") &&
+          !out[5].used_kb && !out[5].statfs_err);
+    CHECK(out[6].gone && !out[6].mounted && !strcmp(out[6].status, "unplugged") && !out[6].part);
+    CHECK(out[7].gone && out[7].mounted && out[7].part && !strcmp(out[7].status, "unplugged: eject it") &&
+          !strcmp(out[7].disk, "usb2"));
+    /* a statfs that fails: told, and no sizes */
+    kstat[0].err = -EIO;
+    n = sys->disks(sys->ctx, out, GUI_DISK_MAX);
+    CHECK(n == 8 && out[4].mounted && out[4].statfs_err == -EIO && !out[4].used_kb && !out[4].free_kb &&
+          !strcmp(out[4].fs, "fat") && !out[4].volume[0]);
+    /* more devices than rows: lsblk's are cut, the three that only Eject can end are kept, last */
+    for(i = 8; i < KDEVS; i++) {
+        snprintf(name, sizeof(name), "usb%d", i + 2);
+        kdev_add(&kd[i], name, 131072, NULL, BDEV_BUS_USB, true);
+    }
+    n = sys->disks(sys->ctx, out, GUI_DISK_MAX);
+    CHECK(n == GUI_DISK_MAX && !strcmp(out[0].name, "rd0") && !strcmp(out[GUI_DISK_MAX - 4].name, "usb33") &&
+          !strcmp(out[GUI_DISK_MAX - 3].name, "usb3") && !strcmp(out[GUI_DISK_MAX - 2].name, "usb2") &&
+          !strcmp(out[GUI_DISK_MAX - 1].name, "usb2p1") && out[GUI_DISK_MAX - 1].gone);
+    /* no memory for the mounts' list: it fails and leaves the rows alone */
+    out[0].size_kb = 4321;
+    kalloc_fails = 1;
+    CHECK(sys->disks(sys->ctx, out, GUI_DISK_MAX) == -ENOMEM && out[0].size_kb == 4321);
+}
+
+/**** 10/18/26: the review's cases, in the model ****/
+
+/* System Monitor at its smallest height: the Memory and System pages scroll, so all of each can be read */
+static void monitor_short(void) {
+    struct fb_surface screen;
+    struct pointer_event e;
+    struct gui_window *w;
+    int top, status, bar;
+    desktop(960, 540);
+    gui_open(&g, GUI_MONITOR);
+    w = &g.win[GUI_MONITOR];
+    w->h = 200;                                         /* as small as the corner grip makes it */
+    gui_place(&g, GUI_MONITOR);
+    fake_screen(&screen, 960, 540);
+    top = w->y + TITLE_H + BAR_H + 3 + 10;
+    status = w->y + w->h - STATUS_H - 1;
+    bar = w->x + w->w - 2 - SCROLL_W;
+    key(GUI_RIGHT);                                     /* Memory: nine lines of 24, four shown */
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top, "Physical memory", TEAL) && shows(960, w->x + 16, top + 44, "1.9 GB used", INK));
+    CHECK(fake_pixel(960, bar + 4, top + 4) == MUTED);  /* its scroll bar's thumb, at the top */
+    key(GUI_END);                                       /* lines 5 to 8: the DMA heap, whole */
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top + 24, "DMA heap", TEAL) && shows(960, w->x + 16, top + 68, "1.0 MB used, 3.0 MB free", INK));
+    CHECK(top + 68 + 16 <= status && fake_guards(960, 540));
+    key(GUI_UP);
+    key(GUI_UP);                                        /* lines 3 to 6: the kernel heap, whole */
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top, "Kernel heap", TEAL) && shows(960, w->x + 16, top + 44, "3.0 MB used, 1.0 MB free", INK));
+    CHECK(fake_pixel(960, w->x + 20, w->y + TITLE_H + BAR_H) == BAND);   /* nothing drawn over the toolbar */
+    key(GUI_HOME);
+    CHECK(g.monitor.scroll[GUI_MON_MEMORY] == 0);
+    key(GUI_RIGHT);                                     /* System: eight lines, four shown */
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top, "Processor", MUTED));
+    key(GUI_END);
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top, "Build", MUTED) && shows(960, w->x + 16, top + 72, "Timers", MUTED) &&
+          shows(960, w->x + 16 + 104, top + 72, "3", INK) && shows(960, w->x + 16 + 104, top + 24, "1:02:05", INK));
+    CHECK(top + 72 + 16 <= status);
+    memset(&e, 0, sizeof(e));                           /* the wheel, away from the user: three lines up */
+    e.x = w->x + 100; e.y = w->y + 120; e.wheel = 1;
+    gui_pointer(&g, &e);
+    CHECK(g.monitor.scroll[GUI_MON_SYSTEM] == 1);
+    click_in(GUI_MONITOR, w->w - 8, w->h - STATUS_H - 4);   /* the bar below its thumb: a page down */
+    CHECK(g.monitor.scroll[GUI_MON_SYSTEM] == 4);
+    w->h = 360;                                         /* taller again: all of it, nothing scrolled */
+    gui_place(&g, GUI_MONITOR);
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, top, "Processor", MUTED) && shows(960, w->x + 16, top + 7 * 24, "Timers", MUTED));
+}
+
+/* the task count says "of" only when the list is cut at GUI_TASK_MAX (the newest) */
+static void monitor_count(void) {
+    struct fb_surface screen;
+    struct gui_window *w;
+    desktop(960, 540);
+    fake_machine.tasks = 6;                             /* one started between tasks() and machine() */
+    gui_open(&g, GUI_MONITOR);
+    w = &g.win[GUI_MONITOR];
+    fake_screen(&screen, 960, 540);
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + w->w - 24 - 7 * 8, w->y + w->h - STATUS_H - 1 + 3, "5 tasks", MUTED));
+    while(fake_ntasks < GUI_TASK_MAX) add_task(100 + fake_ntasks, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "cat");
+    fake_machine.tasks = 140;
+    later(1000);
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + w->w - 24 - 21 * 8, w->y + w->h - STATUS_H - 1 + 3, "the newest 128 of 140", MUTED));
+}
+
+/* the readings: one that misses the selected task once, ones that fail; never read: nothing to copy */
+static int fail_tasks, fail_memory, fail_machine, fail_disks;
+static int t_tasks(void *ctx, struct gui_task *out, int max) {
+    return fail_tasks ? -ENOMEM : fake_sys.tasks(ctx, out, max);
+}
+static int t_memory(void *ctx, struct gui_memory *out) {
+    if(fail_memory) { memset(out, 0xEE, sizeof(*out)); return -EIO; }   /* what a failing call wrote is not used */
+    return fake_sys.memory(ctx, out);
+}
+static int t_machine(void *ctx, struct gui_machine *out) {
+    if(fail_machine) { memset(out, 0xEE, sizeof(*out)); return -EIO; }
+    return fake_sys.machine(ctx, out);
+}
+static int t_disks(void *ctx, struct gui_disk *out, int max) {
+    return fail_disks ? -ENOMEM : fake_sys.disks(ctx, out, max);
+}
+static struct gui_sys tsys;
+static void failing(void) {
+    desktop(960, 540);
+    tsys = fake_sys;
+    tsys.tasks = t_tasks; tsys.memory = t_memory; tsys.machine = t_machine; tsys.disks = t_disks;
+    g.sys = &tsys;
+    fail_tasks = fail_memory = fail_machine = fail_disks = 0;
+}
+static void readings(void) {
+    struct fb_surface screen;
+    struct gui_task kept;
+    struct gui_window *w;
+    failing();
+    fake_screen(&screen, 960, 540);
+    gui_open(&g, GUI_MONITOR);
+    w = &g.win[GUI_MONITOR];
+    key(GUI_HOME); key(GUI_DOWN); key(GUI_DOWN); key(GUI_DOWN);   /* surfsh, pid 5, row 3 */
+    CHECK(selected_pid() == 5);
+    kept = fake_tasks[3];                               /* a reading that misses it (a task collected meanwhile) */
+    memmove(&fake_tasks[3], &fake_tasks[4], sizeof(fake_tasks[0]));
+    fake_ntasks = 4;
+    later(1000);
+    CHECK(g.monitor.selected == -1 && g.monitor.pid == 5);
+    key(GUI_DELETE);
+    CHECK(!g.dialog.kind);                              /* nothing selected: no question about another task */
+    memmove(&fake_tasks[4], &fake_tasks[3], sizeof(fake_tasks[0]));
+    fake_tasks[3] = kept;
+    fake_ntasks = 5;
+    later(1000);
+    CHECK(g.monitor.selected == 3 && selected_pid() == 5);
+    key(GUI_DELETE);
+    CHECK(g.dialog.kind == GUI_DLG_CONFIRM && !strcmp(g.dialog.text[0], "End surfsh (pid 5) on F1?"));
+    key(27);
+    fail_tasks = 1;                                     /* a reading that fails: the rows stay, and the selection */
+    later(1000);
+    CHECK(g.monitor.err_tasks == -ENOMEM && g.monitor.ntasks == 5 && selected_pid() == 5);
+    g.monitor.status[0] = 0;
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "The tasks could not be read now", INK));
+    fail_tasks = 0;
+    later(1000);
+    CHECK(!g.monitor.err_tasks && selected_pid() == 5);
+    key(GUI_RIGHT);                                     /* Memory: a reading that fails keeps the last numbers */
+    fail_memory = 1;
+    later(1000);
+    CHECK(g.monitor.err_memory == -EIO && g.monitor.have_memory && g.monitor.mem.heap_used == 3u << 20);
+    key(3);
+    CHECK(clip_has("Kernel heap: 3.0 MB used, 1.0 MB free"));
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Copied the Memory page", INK));
+    g.monitor.status[0] = 0;
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Memory could not be read now", INK));
+    /* never read: the pages say so, and Copy copies nothing */
+    gui_close(&g, GUI_MONITOR);
+    g.monitor.have_memory = g.monitor.have_machine = false;
+    fail_machine = 1;
+    gui_open(&g, GUI_MONITOR);
+    g.clip_len = 0;
+    key(3);
+    CHECK(!g.clip_len && !strcmp(g.monitor.status, "Nothing copied: memory could not be read"));
+    gui_render(&g, &screen);
+    CHECK(shows(960, w->x + 16, w->y + TITLE_H + BAR_H + 3 + 10, "Memory could not be read.", MUTED));
+    key(GUI_RIGHT);
+    key(3);
+    CHECK(!g.clip_len && !strcmp(g.monitor.status, "Nothing copied: the machine could not be read"));
+    fail_memory = fail_machine = 0;
+    /* Disks: a reading that fails keeps the rows and the selection; one that misses the device, then has it again */
+    gui_open(&g, GUI_DISKS);
+    key(GUI_END);
+    CHECK(!strcmp(g.disks.name, "usb1p1") && g.disks.selected == 4);
+    fail_disks = 1;
+    later(2000);
+    CHECK(g.disks.err == -ENOMEM && g.disks.count == 5 && g.disks.selected == 4 && !strcmp(g.disks.name, "usb1p1"));
+    gui_render(&g, &screen);
+    CHECK(shows(960, g.win[GUI_DISKS].x + 10, g.win[GUI_DISKS].y + 320 - STATUS_H - 1 + 3,
+                "The devices could not be read now", INK));
+    fail_disks = 0;
+    later(2000);
+    CHECK(!g.disks.err && g.disks.selected == 4);
+    fake_ndisks = 4;                                    /* usb1p1 missed once */
+    later(2000);
+    CHECK(g.disks.count == 4 && g.disks.selected == -1 && !strcmp(g.disks.name, "usb1p1"));
+    fake_ndisks = 5;
+    later(2000);
+    CHECK(g.disks.selected == 4 && !strcmp(g.disks.name, "usb1p1") && !g.disks.status[0]);
+}
+
+/* the meters: sizes and shares at their edges, and coral from exactly 90% */
+static void meter_edges(void) {
+    static const u32 kbs[] = { 0, 1023, 1024, 10239, 10240, 1048575, 1048576, 10485759, 1073741823, 1073741824,
+                               0xFFFFFFFFu };
+    static const char *const words[] = { "0 KB", "1023 KB", "1.0 MB", "9.9 MB", "10 MB", "1023 MB", "1.0 GB", "9.9 GB",
+                                         "1023 GB", "1.0 TB", "3.9 TB" };
+    struct fb_surface screen;
+    struct gui_draw d;
+    char b[32];
+    u32 i, p;
+    for(i = 0; i < sizeof(kbs) / sizeof(kbs[0]); i++) {
+        sys_kb(kbs[i], b, sizeof(b));
+        CHECK(!strcmp(b, words[i]));
+    }
+    CHECK(sys_part(9, 10, 100) == 90 && sys_part(90, 100, 100) == 90 && sys_part(0xFFFFFFFFu, 0xFFFFFFFFu, 1000) == 1000);
+    CHECK(sys_part(5, 0, 100) == 0 && sys_part(7, 3, 100) == 100 && sys_part(0, 7, 100) == 0);
+    p = sys_part(262143, 262144, 65535);                /* big totals lose a little, never past the scale */
+    CHECK(p >= 65530 && p <= 65535);
+    fake_screen(&screen, 960, 540);
+    gd_init(&d, &screen, 960, 540);
+    sys_bar(&d, 10, 10, 102, 10, 9, 10);                /* 90% exactly */
+    CHECK(fake_pixel(960, 12, 14) == CORAL);
+    sys_bar(&d, 10, 10, 102, 10, 899, 1000);
+    CHECK(fake_pixel(960, 12, 14) == TEAL);
+    sys_bar(&d, 10, 10, 102, 10, 235930, 262144);       /* a hair over 90% of a big total */
+    CHECK(fake_pixel(960, 12, 14) == CORAL);
+    sys_bar(&d, 10, 10, 102, 10, 235929, 262144);       /* a hair under */
+    CHECK(fake_pixel(960, 12, 14) == TEAL);
+    sys_bar(&d, 10, 10, 102, 10, 0, 0);                 /* nothing at all: no fill */
+    CHECK(fake_pixel(960, 12, 14) == SYS_SHEET);
+}
+
+/* ties stay in pid order, also reversed; Find goes round past the end */
+static void monitor_ties(void) {
+    static const int by_name[] = { 9, 15, 20, 0, 1, 2, 5 }, reversed[] = { 5, 2, 1, 0, 9, 15, 20 };
+    desktop(960, 540);
+    add_task(20, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "edit");
+    add_task(15, GUI_TASK_SLEEPING, 1, GUI_TASK_USER, "edit");
+    gui_open(&g, GUI_MONITOR);
+    key('s');
+    CHECK(order_is(by_name, 7));
+    key('r');
+    CHECK(order_is(reversed, 7));
+    key(GUI_END);                                       /* edit, pid 20, the last row */
+    key(6);
+    fake_type(&g, "ED\r");
+    CHECK(selected_pid() == 9 && !strcmp(g.monitor.status, "Found edit (pid 9)"));
+}
+
+/* Eject and Notepad's unsaved file: on /usb1p10 it is not on /usb1p1's stick; on an unplugged stick's mount it is */
+static void disks_guard(void) {
+    struct gui_disk *d;
+    desktop(960, 540);
+    gui_open(&g, GUI_DISKS);
+    select_disk("usb1p1");
+    key('m');
+    g.note.modified = true;
+    strlcpy(g.note.path, "/usb1p10/notes.txt", sizeof(g.note.path));
+    ejected_dev[0] = 0;
+    key('e');
+    CHECK(!strcmp(ejected_dev, "usb1") && !strcmp(g.disks.status, "usb1: safe to remove"));
+    d = add_disk("usb2", "usb2", "usb", "disk mbr", "USB Disk 2.0", "unplugged", "29G", 30408704, false);
+    d->gone = true;
+    d = add_disk("usb2p1", "usb2", "usb", "part mbr FAT32 LBA", "", "unplugged: eject it", "29G", 30407680, true);
+    d->gone = d->mounted = true;
+    strlcpy(d->mount, "/usb2p1", sizeof(d->mount));
+    later(2000);
+    select_disk("usb2p1");
+    strlcpy(g.note.path, "/usb2p1/a.txt", sizeof(g.note.path));
+    ejected_dev[0] = 0;
+    key('e');
+    CHECK(!ejected_dev[0] && !strcmp(g.disks.status, "Not ejected: Notepad has unsaved changes to a file on usb2"));
+    g.note.modified = false;
+    g.note.path[0] = 0;
+}
+
+/* Mount from a disk's row selects the partition it mounted, and shows it, also when it was below the rows shown */
+static void disks_mount_view(void) {
+    char name[16];
+    int i, rows;
+    desktop(960, 540);
+    fake_ndisks = 0;
+    add_disk("rd0", "rd0", "ram", "disk", "initrd.tar", "", "7M", 7469, false);
+    for(i = 2; i < 6; i++) {
+        snprintf(name, sizeof(name), "usb%d", i);
+        add_disk(name, name, "usb", "disk mbr", "USB Disk 2.0", "", "29G", 30408704, false);
+        snprintf(name, sizeof(name), "usb%dp1", i);
+        add_disk(name, fake_disks[fake_ndisks - 1].name, "usb", "part mbr FAT32 LBA", "", "", "29G", 30407680, true);
+    }
+    gui_open(&g, GUI_DISKS);
+    g.win[GUI_DISKS].h = 200;
+    gui_place(&g, GUI_DISKS);
+    rows = (200 - STATUS_H - 1 - 66 - LIST_Y) / ROW_H;
+    select_disk("usb3");
+    CHECK(rows == 1 && g.disks.selected == 3 && g.disks.top == 3);
+    key('m');
+    CHECK(!strcmp(mounted_dev, "usb3p1") && g.disks.selected == 4 && g.disks.top <= 4 && 4 < g.disks.top + rows);
+}
+
 int main(void) {
     windows(640, 400);
     windows(960, 540);
@@ -737,5 +1152,15 @@ int main(void) {
     disks_mount_eject();
     disks_gone();
     nothing();
+    kernel_kill();
+    kernel_tasks();
+    kernel_disks();
+    monitor_short();
+    monitor_count();
+    readings();
+    meter_edges();
+    monitor_ties();
+    disks_guard();
+    disks_mount_view();
     return fake_done("test_guisys");
 }
