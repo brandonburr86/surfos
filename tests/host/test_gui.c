@@ -381,6 +381,11 @@ static void notepad(void) {
     key(27); CHECK(!g.quit && !g.dialog.kind && g.pending==PEND_NONE);
     key(17); key(GUI_RIGHT); key('\r'); CHECK(g.quit);
     g.quit=false;
+    /* 10/18/26: the question replaced before it is answered (a message from a tick) takes what waited along */
+    key(17); CHECK(g.dialog.act==ACT_DLG_GUARD && g.pending==PEND_QUIT);
+    dialog_message(&g,"Cannot show the picture","sea.bmp","The file is cut short.");
+    CHECK(g.dialog.kind==GUI_DLG_MESSAGE && g.pending==PEND_NONE);
+    key('\r'); CHECK(!g.dialog.kind && !g.quit && g.note.modified);
     /* Save, then what waited: another file opens */
     key(15); key(GUI_END); CHECK(!strcmp(g.dialog.list[g.dialog.selected-1].name,"notes.txt"));
     key('\r'); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.dialog.act==ACT_DLG_GUARD);
@@ -388,7 +393,12 @@ static void notepad(void) {
     /* an untitled note: its guard's Save is a Save as */
     key(14); CHECK(g.note.len==0 && !g.note.path[0]);
     type("draft"); key(14); CHECK(g.dialog.kind==GUI_DLG_CONFIRM);
-    key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/home"));
+    key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && !strcmp(g.dialog.dir,"/home") && g.pending==PEND_NEW);
+    /* 10/18/26: so does the chooser the question's Save leads to, replaced before it is answered */
+    dialog_message(&g,"Cannot show the picture","sea.bmp","The file is cut short.");
+    CHECK(g.pending==PEND_NONE);
+    key('\r'); CHECK(!g.dialog.kind && g.note.modified && text_is("draft"));
+    key(14); key('\r'); CHECK(g.dialog.kind==GUI_DLG_SAVE && g.pending==PEND_NEW);
     type("draft.txt"); key('\r'); CHECK(holds("/home/draft.txt","draft") && g.note.len==0 && !g.note.modified);
     /* closing Notepad asks too, and takes the document with it */
     type("z"); gui_act(&g,ACT_CLOSE); CHECK(g.dialog.kind==GUI_DLG_CONFIRM && g.win[GUI_NOTEPAD].open);

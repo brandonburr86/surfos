@@ -11,7 +11,7 @@ as the restoration; new work happens here.
 | [USB-BOOT.md](USB-BOOT.md) | Building the USB image, writing it to a drive, booting SurfOS on the Lenovo IdeaPad 3 15IIL05, networking it through a USB Ethernet adapter, keeping files on a second USB stick, and reaching its shell from another computer over telnet |
 | [WIFI-PLANNING.md](WIFI-PLANNING.md) | Wi-Fi through the laptop's internal card (tabled): what is needed before building it |
 | [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) | The laptop: known facts, unknowns, how the kernel copes with each, test evidence and the form for the hardware test |
-| [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the menus and windows, mouse input and current touchpad limits |
+| [GUI.md](GUI.md) | SurfOS desktop: Notepad, Files, Calculator, Sketch, the Terminal, System Monitor, Disks, Log, Clock, Character Map, Image Viewer and Hex, the menus and windows, mouse input and current touchpad limits |
 | [UNDERTOW.md](UNDERTOW.md) | The HTTP/HTTPS text browser: commands, certificate checks, limits, testing and interoperability |
 | [GRAPHICS.md](GRAPHICS.md) | Basic 2D framebuffer drawing, `gfxinfo`, `gfxtest`, the kernel interface and text-console recovery |
 | [superpowers/plans/…usb-boot.md](superpowers/plans/2026-10-05-lenovo-ideapad-3-15iil05-usb-boot.md) | The brief the laptop port was built from |
@@ -27,7 +27,7 @@ make run          # boot in QEMU on this terminal (serial console; Ctrl-A x quit
 make test-all     # headless smoke test over the serial console at -O0 and -O2
 make iso          # bootable GRUB ISO (needs grub-pc-bin, xorriso, mtools)
 make usb-image    # USB disk image for UEFI PCs (needs grub-efi-amd64-bin, grub-common, mtools)
-make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (17 scenarios)
+make test-usb     # boot that image under QEMU + OVMF from emulated USB sticks (18 scenarios)
 make unittest     # host unit tests
 make test-web     # deterministic HTTP/HTTPS browser scenarios in QEMU
 make test-tcp     # TCP against hand-made segments (tools/qemu-tcp.py)

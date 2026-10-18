@@ -11,7 +11,7 @@ drive out and restarting brings the laptop back to its normal operating system.
 | Stage | Status | Evidence |
 |---|---|---|
 | Image built | done | `make usb-image`, checked by `make test-mkusb` |
-| The same image tested under emulation | done | `make test-usb`: 17 scenarios under OVMF, at -O0 and -O2 |
+| The same image tested under emulation | done | `make test-usb`: 18 scenarios under OVMF, at -O0 and -O2 |
 | Basic 2D graphics: pixels, rectangles, lines and RGB images | done under emulation; **pending on the laptop** | `gfxinfo`, `gfxtest`; `make test-usb`, scenario `graphics`; [graphics driver](GRAPHICS.md) |
 | Boot on the physical IdeaPad | **reported working by the owner (2026-10-05)** | the details are still to be recorded in [hardware/ideapad-3-15iil05.md](hardware/ideapad-3-15iil05.md) |
 | Wired network through a USB Ethernet adapter | done under emulation; **reported working on the laptop by the owner (2026-10-05)** | `make test-usb`, scenario `usbnet`; [section 8](#8-networking-a-usb-ethernet-adapter) |

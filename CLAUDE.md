@@ -25,7 +25,7 @@ make unittest     # host tests: blibc, the Multiboot 2 parser + free-frame range
                   # Wi-Fi: crypto (test_crypto), the WPA2 supplicant against a simulated AP (test_wpa), 802.11 frames (test_ieee80211),
                   # Intel's firmware files (test_iwlfw: hand-made ones, and the real ones when firmware/ has them)
 make usb-image    # build/usb/surfos-ideapad-15iil05.img: GPT + FAT32 + GRUB for UEFI (docs/USB-BOOT.md)
-make test-usb     # boot that image under OVMF from emulated USB sticks: 15 scenarios (tools/qemu-usb.py)
+make test-usb     # boot that image under OVMF from emulated USB sticks: 18 scenarios (tools/qemu-usb.py)
 make test-mkusb   # tests of the image builder (tools/mkusb.py); the image tests need mtools
 make test-devloop # tools/devloop.py's logic, the data stick image (tools/mkimage.py devstick), the build id
 make test-web     # deterministic Undertow HTTP/HTTPS, certificates, console, Wi-Fi/USB Ethernet in QEMU
@@ -61,7 +61,7 @@ shell command or a kernel feature that the shell can exercise, and a check in
 ```
 boot/      Multiboot 1 + 2 entry (boot.S), grub.cfg for the ISO, grub-usb*.cfg for the USB image
 kernel/    gdt, interrupts + ISR stubs (traps.asm), scheduler (task.c), process.c (spawn, ELF), syscall.c, console, tty, keyboard, timer, panic,
-           pty.c (pseudo-terminals: a tty with a stream console), proc.c (procinfo, detach),
+           pty.c (pseudo-terminals: a tty with a stream console; pty_open() etc. for the desktop's Terminal), proc.c (procinfo, detach),
            multiboot.c + multiboot2.c (boot information), cpu.c (CPUID, CR0/CR4, PAT), acpi.c, apic.c (laptop profile),
            autonet.c (the kernel word autonet: a link, a lease and telnetd at boot, for development builds)
 mm/        physical page stack + reservations (pmm.c, memrange.c), paging (+ large/temporary mappings), kernel heap (kalloc), 1:1 DMA heap, uvm.c
@@ -100,7 +100,11 @@ shell/     the ring-0 shell and the kernel's commands (main.c: the table, shell_
            prompt, also built into libsurf), fdisk.c, fscmd.c (mkfs, mount, umount, eject, df, mv, fsbench), selftest.c, demos;
            the desktop (docs/GUI.md): gui.c (the command, the session) and guifs.c (files on the VFS) in the kernel; the
            model, host-tested by test_gui: guicore.c (windows, menus, the small apps), guinote.c (Notepad), guifiles.c
-           (Files), guidialog.c, guidraw.c
+           (Files), guidialog.c, guidraw.c; 10/17/26 the suite (docs/superpowers/plans/2026-10-17-gui-suite.md):
+           applications in files of their own behind struct gui_app's table (guiterm.c + guivt.c, guimon.c,
+           guidisks.c + guimeter.c, guilog.c, guiclock.c, guiview.c + guibmp.c, guihex.c, guichar.c), the kernel's
+           side struct gui_sys (guisys*.c),
+           host-tested by test_gui* against tests/host/gui_fake.c, on the screen by qemu-usb.py's guiapps scenario
 include/   surfos/ kernel headers, mm/, sys/ driver headers, fs/ (vfs.h, bcache.h), net/, libc headers
 tools/     qemu-run.py test harness (with a telnet client), mkimage.py (disk image, initrd with its build id, the data stick),
            mkusb.py (the USB image), qemu-usb.py (its UEFI boot tests), bdf2c.py, qemu-tcp.py + rawnet.py (TCP against

@@ -8,14 +8,16 @@ SELFTEST PASS. Every test prints one line; the summary prints the verdict.
 10/6/26: the user shell runs selftest and heaptest in its own task (SYS_kcmd), on any
 console and from any program, so two could run at once. They share this file's state
 (the counters, the ring and its semaphores, test_event, ansi_con, the files of fixed
-names on /hda1, /selftest-stick, the scratch ramdisk rd1), a second run would
-re-initialise a semaphore or an event the first one waits on, and two heaptests freed
-each other's blocks. So one runs at a time, and a second is refused (status 1).
+names on /hda1, /selftest-stick, the scratch ramdisk rd1; 10/18/26: the kill helpers),
+a second run would re-initialise a semaphore or an event the first one waits on, and two
+heaptests freed each other's blocks. So one runs at a time, and a second is refused (status 1).
 
 10/6/26: a kill of the task running it waits for the self test to end (surfos/task.h),
 and so does Ctrl+C: the test under way finishes, waiting for its helper tasks, its
 waits cut short (its checks may fail then), no other starts, and SELFTEST STOPPED
-says so; the self test lets go of its claim on the way out as always.
+says so; the self test lets go of its claim on the way out as always. 10/18/26:
+test_kills, whose helper tasks wait 2.6 s, looks at the kill in every wait: it ends
+them at once (about 20 ms) and checks nothing then.
 */
 
 #include <blibc_common.h>
@@ -43,6 +45,9 @@ says so; the self test lets go of its claim on the way out as always.
 #include <surfos/tty.h>
 #include <surfos/keyboard.h>
 #include <surfos/irq.h>
+#include <surfos/pty.h>
+#include <surfos/proc.h>
+#include <surfos/sysimpl.h>
 #include "shell.h"
 
 static int fails;
@@ -175,6 +180,239 @@ static void test_tasks(void) {
     }
     if(!others) check(task_wait(WAIT_ANY, &status) == -1, "task_wait with no children returns -1");
     else check(task_child_count() == others, "the caller's own children are left alone");
+}
+
+/**** kills and the task list (10/18/26: the desktop's End task and System Monitor, kernel/task.c) ****/
+
+/* A helper task for the kills: in its own code (call 0), inside a kernel command it enters (TC_COMMAND), or
+   inside the call it was started in (TC_SYSCALL: TF_INCALL, as a program being loaded is). It waits there with
+   sleep_intr(), which a kill cuts short (look), or in a loop of sleep_ms() that never looks at a kill, until the
+   test's deadline (until), 8 s at most whatever happens. Static, not on the self test's stack: a self test
+   killed at once is collected while they still run. */
+struct kill_helper {
+    u_int call;
+    bool look;
+    volatile bool in;                   /* it is where it waits */
+    volatile u_long until;              /* the loop's end (ticks); 0 until the test sets it */
+    volatile bool left;                 /* it came to the end of its wait (a kill at once never lets it) */
+};
+
+enum { KH_OWN, KH_LOOK, KH_WAIT, KH_MUST, KH_HUP, KH_N };
+static struct kill_helper kill_helpers[KH_N];
+
+static void kill_helper_fn(void *arg) {
+    struct kill_helper *h = (struct kill_helper *)arg;
+    u_long start = getticks();
+    if(h->call == TC_COMMAND) task_call_enter(TC_COMMAND);
+    h->in = true;
+    if(h->look) sleep_intr(3000);
+    else while((!h->until || (long)(getticks() - h->until) < 0) && getticks() - start < 8 * HZ) sleep_ms(10);
+    h->left = true;
+    if(h->call) task_call_leave(h->call);       /* a kill that waited for the call ends the task here: task_exit(-1) */
+    task_exit(0);
+}
+
+/* until the tick at; false, at once, when the self test's task is killed or interrupted (Ctrl+C) meanwhile */
+static bool sleep_until(u_long at) {
+    while((long)(getticks() - at) < 0) {
+        if(task_interrupted()) return false;
+        sleep_intr(10);
+    }
+    return !task_interrupted();
+}
+
+/* the child pid collected (*status) by the tick at at the latest; false when it has not ended by then, and at once
+   when the self test's task is killed or interrupted meanwhile: WNOHANG each tick, never a wait of its own */
+static bool collect_by(u_long pid, int *status, u_long at) {
+    int r;
+    for(;;) {
+        r = task_wait_opts(pid, status, WNOHANG);
+        if(r) return r == (int)pid;
+        if(task_interrupted() || (long)(getticks() - at) >= 0) return false;
+        sleep_intr(10);
+    }
+}
+
+#define KW_STR2(x) #x
+#define KW_STR(x) KW_STR2(x)
+#define KW_MS KW_STR(KILL_WAIT_MS)
+
+/* has the end of the kernel log (log) kill_escalate()'s line about this task? what: the rest of the line */
+static bool log_says(const char *log, const char *name, u_long pid, const char *what) {
+    char want[192];
+    snprintf(want, sizeof(want), "kill: '%s' (pid %lu) %s", name, pid, what);
+    return log && strstr(log, want) != NULL;
+}
+
+/* kill_task_patient(), the kill of End task, whose rule is the hangup's: a task in its own code ends at once, one
+   inside a call when the call ends, however long it takes; and how it meets kill_task() and a hangup's kill. The
+   helpers wait at the same time, so the whole test takes about 2.7 s (KILL_WAIT_MS and a bit). Nothing is printed
+   until they are all collected: the pager must not hold up the deadlines. Every wait of the test looks at a kill
+   or Ctrl+C of the self test's task (the header above): then the helpers end at once and nothing is checked. */
+static void test_kills(void) {
+    static const char *const names[KH_N] = { "killown", "killlook", "killwait", "killmust", "killhup" };
+    static const u_int calls[KH_N] = { 0, TC_COMMAND, TC_COMMAND, TC_COMMAND, TC_SYSCALL };
+    struct kill_helper *h = kill_helpers;
+    surf_task *t[KH_N] = { NULL };
+    u_long pid[KH_N] = { 0 }, flags, n, wait = KILL_WAIT_MS * HZ / 1000, t_kill = 0, t_must = 0, look_end = 0, must_end = 0;
+    int status[KH_N], ret[KH_N], i, k, fd, idx = -1, again = -9, left;
+    bool made, in = false, hup, own_dead = false, hup_rule = false, hup_kept = false, collected[KH_N], cut;
+    bool still_wait = false, still_must = false, still_hup = false;
+    char *log;
+
+    for(i = 0; i < KH_N; i++) {
+        memset(&h[i], 0, sizeof(h[i]));
+        h[i].call = calls[i];
+        h[i].look = i == KH_LOOK;
+        status[i] = 1;
+        ret[i] = -9;
+        collected[i] = false;
+    }
+    fd = sys_openpty();                 /* the hangup's case: a pseudo-terminal of its own, with the helper alone on it */
+    hup = fd >= 0;
+    if(hup) idx = sys_ptyctl(fd, PTY_INDEX, 0);
+    for(i = 0; i < KH_N; i++) {
+        if(i != KH_HUP) t[i] = kthread_create(names[i], kill_helper_fn, &h[i], PL_NORMAL, 0);
+        else if(hup && idx >= 0 && idx < PTY_MAX)
+            t[i] = kthread_create_on(names[i], &conArray[NUM_CONSOLES + idx], kill_helper_fn, &h[i], PL_NORMAL, TF_INCALL);
+        if(t[i]) pid[i] = t[i]->pid;
+    }
+    made = t[KH_OWN] && t[KH_LOOK] && t[KH_WAIT] && t[KH_MUST] && (!hup || t[KH_HUP]);
+    for(k = 0; made && k < 100 && !in && !task_interrupted(); k++) {      /* each where it waits */
+        for(i = 0; i < KH_N && (!t[i] || h[i].in); i++);
+        in = i == KH_N;
+        if(!in) sleep_intr(10);
+    }
+    if(made && in && !task_interrupted()) {
+        t_kill = getticks();
+        h[KH_WAIT].until = h[KH_HUP].until = t_kill + wait + 60;      /* past KILL_WAIT_MS */
+        h[KH_MUST].until = h[KH_OWN].until = t_kill + wait + 250;
+        ret[KH_OWN] = kill_task_patient(t[KH_OWN]);
+        own_dead = t[KH_OWN]->state == TS_DEAD;                        /* at once */
+        again = kill_task_patient(t[KH_OWN]);                         /* and a task that has ended */
+        ret[KH_LOOK] = kill_task_patient(t[KH_LOOK]);
+        ret[KH_WAIT] = kill_task_patient(t[KH_WAIT]);
+        ret[KH_MUST] = kill_task_patient(t[KH_MUST]);
+        if(t[KH_HUP]) {
+            fd_close(fd);                                             /* the hangup: kill_hangup() of the pty's tasks */
+            fd = -1;
+            flags = irq_save();
+            hup_rule = (t[KH_HUP]->intr & (TI_KILL | TI_HANGUP | TI_PATIENT)) == (TI_KILL | TI_HANGUP);
+            irq_restore(flags);
+            ret[KH_HUP] = kill_task_patient(t[KH_HUP]);
+            flags = irq_save();
+            hup_kept = (t[KH_HUP]->intr & (TI_KILL | TI_HANGUP | TI_PATIENT)) == (TI_KILL | TI_HANGUP);
+            irq_restore(flags);
+        }
+        collected[KH_LOOK] = collect_by(pid[KH_LOOK], &status[KH_LOOK], t_kill + 50);
+        look_end = getticks();
+        if(sleep_until(t_kill + 50)) {
+            t_must = getticks();
+            kill_task(t[KH_MUST]);              /* the kill that escalates, KILL_WAIT_MS from now: not from End task's */
+            if(sleep_until(t_kill + wait + 25)) {           /* End task's KILL_WAIT_MS are over, kill_task()'s are not */
+                flags = irq_save();
+                still_wait = t[KH_WAIT]->state != TS_DEAD && !h[KH_WAIT].left;
+                still_must = t[KH_MUST]->state != TS_DEAD && !h[KH_MUST].left;
+                still_hup = t[KH_HUP] && t[KH_HUP]->state != TS_DEAD && !h[KH_HUP].left;
+                irq_restore(flags);
+                collected[KH_MUST] = collect_by(pid[KH_MUST], &status[KH_MUST], t_must + wait + 150);
+                must_end = getticks();
+            }
+        }
+    }
+    /* the end: every helper collected. Those not under way end now (the one in sleep_intr() by a kill of its own, which
+       changes nothing when it had one), the others when their wait does; a kill or Ctrl+C of the self test's task, now
+       or while they are collected, ends them all now (about 20 ms), so that the self test ends within KILL_WAIT_MS and
+       lets go of its claim */
+    for(i = 0; i < KH_N; i++) if(!h[i].until) h[i].until = getticks();
+    if(pid[KH_LOOK] && !collected[KH_LOOK]) kill_task_patient(t[KH_LOOK]);
+    if(fd >= 0) fd_close(fd);                   /* its helper, if any, gets the hangup's kill */
+    for(cut = false, left = 1; left; ) {
+        if(!cut && task_interrupted()) {
+            cut = true;
+            for(i = 0; i < KH_N; i++) h[i].until = getticks();
+        }
+        for(i = 0, left = 0; i < KH_N; i++) {
+            if(!pid[i] || collected[i]) continue;
+            k = task_wait_opts(pid[i], &status[i], WNOHANG);
+            if(k == (int)pid[i]) collected[i] = true;
+            else if(k == 0) left++;
+            else pid[i] = 0;                    /* not a child: nothing to collect (never) */
+        }
+        if(left) {
+            if(cut) sleep_ms(10);               /* the kill is there: sleep_intr() would not sleep */
+            else sleep_intr(10);
+        }
+    }
+    if(cut) {
+        printf("  skip End task's kill (cut short by a kill or Ctrl+C)\n");
+        return;
+    }
+    log = (char *)kalloc(8193);
+    n = log ? klog_copy(log, 8192, NULL) : 0;
+    if(log) log[n] = 0;
+
+    check(made && in, "End task's kill: its helper tasks are made and where they wait");
+    check(ret[KH_OWN] == 0 && own_dead && again == 0 && collected[KH_OWN] && status[KH_OWN] == -1,
+          "End task's kill: a task in its own code ends at once");
+    check(ret[KH_LOOK] == 1 && collected[KH_LOOK] && status[KH_LOOK] == -1 && h[KH_LOOK].left && look_end - t_kill < 50,
+          "End task's kill: a wait it cuts short ends at once, and the task at its call's end");
+    check(ret[KH_WAIT] == 1 && still_wait && collected[KH_WAIT] && status[KH_WAIT] == -1 && h[KH_WAIT].left &&
+          log_says(log, names[KH_WAIT], pid[KH_WAIT], "is still in its kernel command " KW_MS " ms after it was asked to end: "
+                   "waiting for its end"),
+          "End task's kill: a call that does not look is waited for past 2 s, and the log says so");
+    check(ret[KH_MUST] == 1 && still_must && collected[KH_MUST] && status[KH_MUST] == -1 && !h[KH_MUST].left &&
+          must_end - t_must >= wait - 10 && must_end - t_must <= wait + 100 &&
+          log_says(log, names[KH_MUST], pid[KH_MUST], "did not end its kernel command within " KW_MS " ms: killed at once") &&
+          !log_says(log, names[KH_MUST], pid[KH_MUST], "is still in its"),
+          "kill_task() after End task's kill: killed at once 2 s after itself, and the log says so");
+    if(!hup) printf("  skip a hangup's kill, then End task's (no pseudo-terminal: %d)\n", fd);
+    else check(hup_rule && hup_kept && ret[KH_HUP] == 1 && still_hup && collected[KH_HUP] && status[KH_HUP] == -1 &&
+               h[KH_HUP].left &&
+               log_says(log, names[KH_HUP], pid[KH_HUP], "is still in its system call " KW_MS " ms after its terminal "
+                        "hung up: waiting for its end") &&
+               !log_says(log, names[KH_HUP], pid[KH_HUP], "is still in its system call " KW_MS " ms after it was asked"),
+               "a hangup's kill keeps its rule when End task's comes after it");
+    kfree(log);
+}
+
+static bool same_info(const struct procinfo *a, const struct procinfo *b) {
+    return a->pid == b->pid && a->ppid == b->ppid && a->state == b->state && a->flags == b->flags && a->tty == b->tty &&
+           !strcmp(a->name, b->name);
+}
+
+/* task_info_all(), the System Monitor's copy of the list: against task_info() over the live list, which stands
+   still meanwhile (interrupts off). Its helper task ends at once: it is listed (as a zombie) until it is collected */
+static void test_task_list(void) {
+    enum { ROOM = 200, FEW = 3 };
+    struct procinfo *all = (struct procinfo *)kcalloc(ROOM, sizeof(*all)), few[FEW], one;
+    surf_task *t = kthread_create("tasklist", exit_with_arg, NULL, PL_NORMAL, 0);
+    u_long pid = t ? t->pid : 0, flags;
+    int count = 0, n = -1, k = -1, none = -1, i, status, newest = 0;
+    bool whole = false, kept = false, mine = false, order = true;
+
+    if(all) {
+        flags = irq_save();
+        count = (int)task_count();
+        n = task_info_all(all, ROOM);
+        whole = n == (count < ROOM ? count : ROOM);
+        for(i = 0; i < n && whole; i++) whole = task_info(count - n + i, &one) == 0 && same_info(&one, &all[i]);
+        k = task_info_all(few, FEW);
+        kept = k == (count < FEW ? count : FEW);
+        for(i = 0; i < k && kept; i++) kept = task_info(count - k + i, &one) == 0 && same_info(&one, &few[i]);
+        none = task_info_all(&one, 0);
+        irq_restore(flags);
+        for(i = 0; i < n; i++) {
+            if(pid && (u_long)all[i].pid == pid) mine = true;
+            if(i && all[i].pid <= all[i - 1].pid) order = false;
+            if(all[i].pid > newest) newest = all[i].pid;
+        }
+    }
+    if(pid) task_wait(pid, &status);
+    check(whole && mine, "task_info_all copies the whole list at once, each task as task_info tells it");
+    check(kept && order && k > 0 && few[k - 1].pid == newest, "task_info_all with room for 3 keeps the newest 3, in order");
+    check(none == 0, "task_info_all with room for none copies none");
+    kfree(all);
 }
 
 /**** sleep and timers ****/
@@ -1086,8 +1324,8 @@ static void test_usb(void) {
 /* 10/6/26: in this order; a kill or Ctrl+C starts no other (each one waits for its helpers) */
 static void (*const tests[])(void) = {
     test_bdev, test_boot_drive, test_boot_volume, test_part_commit, test_fs, test_fat, test_fat_rename, test_fat_statfs,
-    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks,
-    test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
+    test_fat_utf8, test_fat_concurrent, test_fat_unplug, test_user, test_net, test_usb, test_tasks, test_kills,
+    test_task_list, test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
 
 int run_selftest(void) {

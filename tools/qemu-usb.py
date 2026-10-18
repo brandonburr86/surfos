@@ -31,6 +31,10 @@ comes out of the framebuffer.
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
+  guiapps    (10/17/26) the desktop's applications (Terminal, System Monitor, Disks, Log, Clock,
+             Character Map, Image Viewer, Hex) at 1920x1080, each track's checks in a file of its
+             own (tools/gui_apps_*.py), with a FAT32 data stick whose files are read back here and
+             checked by fsck_msdos and fsck.fat afterwards
   graphics   software 2D at 1920x1080: color bars and image pixels, text restoration
              after completion, Ctrl+C, console switching, and a full pager
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
@@ -753,6 +757,14 @@ def scenario_keyboard(args, image, firmware, outdir):
 def scenario_gui(args, image, firmware, outdir):
     from gui_scenario import run
     # 10/17/26: Notepad and Files work on a FAT32 data stick, made here and read back here afterwards
+    helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
+    return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
+
+
+def scenario_guiapps(args, image, firmware, outdir):
+    """10/17/26 (the suite, docs/superpowers/plans/2026-10-17-gui-suite.md): the desktop's applications on the screen,
+    each track's checks in a file of its own (tools/gui_apps_*.py)"""
+    from gui_apps_scenario import run
     helpers = {'mkimage': load_tool('mkimage', 'mkimage.py'), 'read_fat32': read_fat32, 'fat_checks': fat_checks}
     return run(Vm, PROMPT, args, image, firmware, outdir, helpers)
 
@@ -1982,6 +1994,7 @@ def scenario_missing(args, image, firmware, outdir, path, message):
 
 
 SCENARIOS = {'serial': scenario_serial, 'keyboard': scenario_keyboard, 'fullhd': scenario_fullhd, 'graphics': scenario_graphics, 'gui': scenario_gui,
+             'guiapps': scenario_guiapps,
              'highmem': scenario_highmem, 'fallback': scenario_fallback, 'kernel-shell': scenario_kernel_shell,
              'no-pit': scenario_nopit,
              'usbnet': scenario_usbnet, 'usbdisk': scenario_usbdisk, 'storage': scenario_storage,
@@ -2088,7 +2101,7 @@ def main():
                'ovmf_code': firmware[0], 'ovmf_code_sha256': sha256(firmware[0]), 'ovmf_vars': firmware[1],
                'scenarios': {}}
     failed = 0
-    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
+    for name in a.scenario or ['serial', 'keyboard', 'fullhd', 'graphics', 'gui', 'guiapps', 'highmem', 'fallback', 'kernel-shell', 'no-pit', 'usbnet',
                                'usbdisk', 'storage', 'devloop', 'onestick', 'twosticks', 'no-initrd', 'no-kernel']:
         sdir = os.path.join(outdir, name) if outdir else None
         if sdir:

@@ -386,6 +386,11 @@ static bool twin_of(struct gui_state *g, const char *path, const struct gui_entr
     return false;
 }
 
+/* 10/18/26 (the suite): for Sketch's Save as BMP (shell/guibmp.c), whose write may keep a new file too */
+void note_remember(struct gui_state *g, const char *file, const char *kept) {
+    remember(g, file, kept);
+}
+
 bool note_guarded(struct gui_state *g, const char *path) {
     struct gui_entry e;
     bool device, readonly;

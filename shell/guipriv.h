@@ -8,6 +8,9 @@ theme, the layout, the drawing kit (guidraw.c), the actions that menus, toolbars
 and dialogs run (guicore.c), Notepad (guinote.c), Files (guifiles.c) and the
 dialogs (guidialog.c). Drawing never changes the state and never calls the file
 system; the handlers do both.
+10/17/26 (the suite): struct gui_app, what the window manager asks of an application
+in a file of its own (Terminal, System Monitor, Disks, Log, Clock, Image Viewer, Hex,
+Character Map), and the table of them (guicore.c).
 */
 #ifndef _SHELL_GUIPRIV_H
 #define _SHELL_GUIPRIV_H
@@ -30,6 +33,10 @@ system; the handlers do both.
 #define ENAMETOOLONG 36
 #define ENOSYS 38
 #define ENOTEMPTY 39
+#endif
+#ifndef EPIPE                           /* 10/17/26 (the suite): the Terminal's session */
+#define EAGAIN 11
+#define EPIPE 32
 #endif
 
 /* the SurfOS palette */
@@ -87,6 +94,14 @@ void gd_scrollbar(const struct gui_draw *d, int x, int y, int h, int first, int 
 #define ICON_WAVE 9
 #define ICON_HELP 10
 #define ICON_GEAR 11
+#define ICON_TERMINAL 12                /* 10/17/26: the suite's */
+#define ICON_MONITOR 13
+#define ICON_DISKS 14
+#define ICON_LOG 15
+#define ICON_CLOCK 16
+#define ICON_VIEWER 17
+#define ICON_HEX 18
+#define ICON_CHARMAP 19
 void gd_icon(const struct gui_draw *d, int x, int y, int icon, int scale);
 void gd_icon_tint(const struct gui_draw *d, int x, int y, int icon, int scale, u32 tint);   /* one colour */
 /* the scroll bar's thumb, for drawing and for the pointer: its top and height in a bar of h pixels */
@@ -108,6 +123,10 @@ enum {
     ACT_DLG_SAVE_AS, ACT_DLG_REPLACE, ACT_DLG_GUARD, ACT_DLG_READONLY,
     ACT_WINDOW                          /* + a window's number: bring it to the front */
 };
+/* 10/17/26 (the suite): the answers to the suite's dialogs */
+#define ACT_DLG_LEAVE (ACT_WINDOW + GUI_WINDOWS)            /* leave the desktop although an application is busy */
+#define ACT_APP_DIALOG (ACT_WINDOW + GUI_WINDOWS + 1)       /* + 32 * (id - GUI_FIRST_APP) + the app's own number */
+
 /* what waits for Notepad's changes to be saved or dropped (gui_state.pending) */
 enum { PEND_NONE, PEND_NEW, PEND_OPEN, PEND_OPEN_PATH, PEND_QUIT, PEND_CLOSE };
 
@@ -116,6 +135,47 @@ struct gui_tool { const char *label; int act; };
 int tool_hit(const struct gui_tool *t, int n, int x, int y);          /* window-relative; the button, or -1 */
 int tool_span(const struct gui_tool *t, int n);                      /* the width a window needs for them all */
 void tool_render(const struct gui_draw *d, int x, int y, const struct gui_tool *t, int n, const bool *on);
+
+/* 10/17/26 (the suite): an application in a file of its own, as the window manager sees it. Every hook but render
+   may be NULL. The window's content is below its title bar: x and y are relative to the window, as for Notepad. */
+struct gui_app {
+    const char *title;
+    int icon;
+    const char *shortcut;               /* the Apps menu's column ("Ctrl+T"), "" for none */
+    int w, h;                           /* its size when it first opens (made to fit the screen) */
+    bool resizable;                     /* maximize, and the corner grip */
+    bool arrows;                        /* the arrow keys and Home, End, Page Up and Down are its own */
+    bool keys;                          /* every key but Ctrl+G is its own: none of the desktop's shortcuts */
+    int (*min_width)(void);             /* a resizable window's narrowest; NULL: 360 */
+    void (*opened)(struct gui_state *g);    /* the window opens, from closed */
+    void (*closed)(struct gui_state *g);    /* it closes, or the desktop does (gui_finish) */
+    void (*render)(const struct gui_state *g, const struct gui_draw *d);   /* d: clipped to the window, below its title */
+    bool (*key)(struct gui_state *g, int key);              /* true: the key was its own (else Esc closes, Tab moves on) */
+    void (*press)(struct gui_state *g, int x, int y);       /* the left button, in the content */
+    void (*drag)(struct gui_state *g, int x, int y);        /* the button held since that press (x, y may be outside) */
+    void (*release)(struct gui_state *g);
+    void (*wheel)(struct gui_state *g, int rows);
+    void (*tick)(struct gui_state *g);                      /* every frame while it is open (minimized too) */
+    void (*title_of)(const struct gui_state *g, char *out, size_t n);  /* NULL: title */
+    bool (*busy)(const struct gui_state *g, char *why, size_t n);     /* leaving the desktop would end something */
+    void (*answer)(struct gui_state *g, int act, int button, const char *text, const char *target);   /* its dialogs */
+    const char *const *help;            /* its lines in Help ("#" first: a heading), help_lines of them */
+    int help_lines;
+    /* the Edit menu while it has the focus (ACT_UNDO .. ACT_GOTO, and their keys Ctrl+Z, Y, X, C, V, A, F, L when its
+       key hook leaves them): whether an item is on, and doing it. NULL: the Edit menu is Notepad's */
+    bool (*can_edit)(const struct gui_state *g, int act);
+    void (*edit)(struct gui_state *g, int act);
+    const char *goto_label;             /* the Edit menu's last item, "Go to offset\xF9"; NULL: "Go to line\xF9" */
+    /* 10/18/26: whether the arrow keys are its own just now (with nothing to move they move the pointer, as in
+       Calculator); NULL: arrows says */
+    bool (*wants_arrows)(const struct gui_state *g);
+};
+extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gui_app_log, gui_app_clock,
+                            gui_app_viewer, gui_app_hex, gui_app_charmap;
+const struct gui_app *gui_app_of(int id);       /* the table's, NULL for the desktop's own windows */
+/* a dialog of application id: its answer comes to its answer hook with act (0-30) */
+static inline int gui_app_act(int id, int act) { return ACT_APP_DIALOG + 32 * (id - GUI_FIRST_APP) + act; }
+#define GUI_APP_CLOSE 31                /* the window manager's own: closing the window although it is busy */
 
 /* guicore.c */
 void gui_act(struct gui_state *g, int act);
@@ -153,6 +213,7 @@ int note_save(struct gui_state *g, const char *path);
    remembered); and whether a save to path is refused (past GUI_UNSURE pairs only a new name may be saved) */
 bool note_guarded(struct gui_state *g, const char *path);
 bool note_refused(struct gui_state *g, const char *path);
+void note_remember(struct gui_state *g, const char *file, const char *kept);   /* 10/18/26: a pair a write kept */
 void note_key(struct gui_state *g, int key);
 void note_press(struct gui_state *g, int x, int y);                 /* window-relative */
 void note_drag(struct gui_state *g, int x, int y);

@@ -57,8 +57,8 @@ void get_time(time_t *time) {
         time->year   = bcd2bin(time->year);
         century      = bcd2bin(century);
     }
-    if(!(status_b & 0x02) && (time->hour & 0x80)) { /* 12-hour clock with PM set */
-        time->hour = ((time->hour & 0x7F) + 12) % 24;
+    if(!(status_b & 0x02)) { /* a 12-hour clock: 12 AM is hour 0 and 12 PM hour 12 (10/18/26: they were swapped) */
+        time->hour = (time->hour & 0x7F) % 12 + ((time->hour & 0x80) ? 12 : 0);
     }
     time->year += (century >= 19 && century <= 21) ? century * 100 : 2000;
 }

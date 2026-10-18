@@ -54,7 +54,9 @@ typedef void (*kthread_fn)(void *arg);
     terminal's hangup (kernel/pty.c) is marked TI_HANGUP too: it waits for the end of the call
     however long that takes, never killing at once what is inside one (a client going away
     must not leave a lock held); the kernel log says once that it waits. An explicit kill_task()
-    afterwards brings back the KILL_WAIT_MS rule.
+    afterwards brings back the KILL_WAIT_MS rule. 10/18/26: so is the kill of the desktop's End
+    task (kill_task_patient(), TI_PATIENT), whose waiting the kernel log says without speaking of
+    a terminal.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -62,6 +64,7 @@ typedef void (*kthread_fn)(void *arg);
 #define TI_KILL     0x1  /* intr: killed; it ends at the end of its call */
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
+#define TI_PATIENT  0x8  /* 10/18/26, intr: with TI_KILL, End task's kill (kill_task_patient()): no escalation */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -169,6 +172,8 @@ u_int task_child_count(void);
 int task_wait_ex(u_long pid, int *status, u_int *flags, surf_console **con);
 void kill_task(surf_task *t);      /* 10/6/26: inside a call the kill waits for its end (above), otherwise at once */
 void kill_task_now(surf_task *t);  /* at once, wherever it is (a fault); the caller reschedules if it killed itself */
+int kill_task_patient(surf_task *t); /* 10/18/26: as a hangup's kill: inside a call it waits for its end, however long
+                                        (above); 1 when it does, 0 when the task ended at once or had ended */
 void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the current task */
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
@@ -179,6 +184,7 @@ u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose termin
 u_int task_kill_tty(struct tty *tty);    /* 10/6/26: kill_task() for each of them (a hangup); how many */
 struct procinfo;
 int task_info(int index, struct procinfo *pi);   /* 10/6/26: SYS_procinfo's task number index (surfos/proc.h) */
+int task_info_all(struct procinfo *out, int max); /* 10/18/26: the list in one go, the newest max; how many */
 int task_detach(surf_task *t);           /* 10/6/26: SYS_detach: init's child, out of its shell's job */
 
 void yield(void);

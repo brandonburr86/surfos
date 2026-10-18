@@ -11,6 +11,10 @@ the clock and the time (double-clicks); only the rows that changed since the
 last frame are presented (a copy of what the screen shows); and switching
 consoles no longer ends the desktop: it waits for its own console to come back
 and draws itself again, so Notepad's unsaved text is not lost.
+10/17/26 (the suite): the applications reach the kernel through shell/guisys.c
+(struct gui_sys); the model gets the whole date and time each second, gui_tick()
+every frame (also while another console has the screen, so a Terminal's session
+keeps being read) and gui_finish() before the state is freed.
 */
 #include <stdio.h>
 #include <string.h>
@@ -170,13 +174,16 @@ static int sequence(int number,int final) {
     }
     return 0;
 }
-/* 10/17/26: the taskbar's clock, from the CMOS clock */
+/* 10/17/26: the taskbar's clock, from the CMOS clock; and the whole date and time, for the suite's Clock */
 static void clock_tick(struct gui_state *g) {
     time_t t;
     char now[8];
     get_time(&t);
     snprintf(now,sizeof(now),"%02u:%02u",t.hour%24,t.minute%60);
     if(strcmp(now,g->clock)) { strlcpy(g->clock,now,sizeof(g->clock)); g->dirty=true; }
+    if(g->time.second!=t.second || g->time.minute!=t.minute || g->time.date!=t.date) g->dirty=true;
+    g->time.year=t.year; g->time.month=t.month; g->time.date=t.date; g->time.weekday=t.day;
+    g->time.hour=t.hour; g->time.minute=t.minute; g->time.second=t.second;
 }
 int cmd_pointerinfo(int argc,char **argv) {
     struct pointer_event e;
@@ -194,6 +201,7 @@ int cmd_gui(int argc,char **argv) {
     struct fb_mode mode;
     struct pointer_event e;
     struct gui_state *g;
+    struct gui_fs *own_fs;                              /* 10/18/26: this desktop's, keeping read_at's file in a frame */
     struct tty *tty=curTask->tty;
     int oldraw,result=CMD_OK,esc=0,number=0;
     u32 esc_at=0,clock_at;
@@ -220,9 +228,12 @@ int cmd_gui(int argc,char **argv) {
     mode.red_pos=16; mode.green_pos=8; mode.blue_pos=0;
     mode.red_size=mode.green_size=mode.blue_size=8;
     fb_setup(&ram,(u8*)d.pixels,&mode);
-    gui_init(g,d.width,d.height); g->devices=pointer_devices(); g->fs=gui_kernel_fs();
+    own_fs=gui_kernel_fs_begin();
+    gui_init(g,d.width,d.height); g->devices=pointer_devices(); g->sys=gui_kernel_sys();
+    g->fs=own_fs ? own_fs : gui_kernel_fs();
     clock_tick(g); clock_at=getticks();
     if(!pointer_begin(&d)) {
+        gui_kernel_fs_end(own_fs);
         if(d.shown) kfree(d.shown);
         kfree(d.pixels); kfree(g); framebuffer_graphics_end(); return CMD_OK;
     }
@@ -230,18 +241,21 @@ int cmd_gui(int argc,char **argv) {
     while(!g->quit && !curTask->intr) {
         int n,key,oldx=g->x,oldy=g->y,drawn;
         unsigned devices;
+        g->now=(u32)getticks()*(1000/HZ);
+        if((u32)(getticks()-clock_at)>=HZ) { clock_tick(g); clock_at=getticks(); }
+        gui_tick(g);                                    /* 10/17/26: the suite reads what is new, screen or not */
         if(!framebuffer_graphics_owned()) {
             /* 10/17/26: another console has the screen: wait for ours, then draw it all again */
             if(curTask->con==conActive && framebuffer_graphics_begin()==0 && pointer_begin(&d)) {
-                g->x=d.width/2; g->y=d.height/2; g->drag=g->resize=g->scroll=-1;
+                g->x=d.width/2; g->y=d.height/2; g->buttons=0;  /* 10/18/26: no button held, so the next */
+                gui_release(g);                                 /* press is one; drags end as at a release */
                 d.first=d.full=true; g->dirty=true; esc=0; keys_down=0;
                 continue;
             }
+            gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while the desktop sleeps */
             if(sleep_intr(16)) break;
             continue;
         }
-        g->now=(u32)getticks()*(1000/HZ);
-        if((u32)(getticks()-clock_at)>=HZ) { clock_tick(g); clock_at=getticks(); }
         for(n=0;n<POINTER_QUEUE && pointer_next(&e);n++) gui_pointer(g,&e);
         for(n=0;n<32 && framebuffer_graphics_owned() && (key=tty_trygetc(tty))>=0;n++) {
             if(esc==1 && (key=='[' || key=='O')) { esc=2; number=0; continue; }
@@ -256,6 +270,7 @@ int cmd_gui(int argc,char **argv) {
             if(key==27) { esc=1; esc_at=getticks(); } else input_key(g,key,&keys_down);
         }
         if(esc && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) gui_key(g,27); esc=0; }
+        gui_kernel_fs_idle(g->fs);                      /* 10/18/26: the frame's reads are done (the tick, the input) */
         if(g->quit) break;
         if(!framebuffer_graphics_owned()) continue;
         devices=pointer_devices();
@@ -272,6 +287,8 @@ int cmd_gui(int argc,char **argv) {
         }
         if(sleep_intr(16)) break;
     }
+    gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
+    gui_kernel_fs_end(own_fs);                          /* 10/18/26: read_at's file closed, if one is open */
     tty_ctl(tty,TTY_RAW,oldraw); pointer_speed_owned(1,true);
     framebuffer_graphics_end();
     if(d.shown) kfree(d.shown);

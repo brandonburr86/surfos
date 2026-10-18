@@ -80,6 +80,7 @@ struct fat_fs {
     u32 cluster_bytes, eoc, next_free;
     struct fat_node *live;          /* the objects that have a vnode now (not the root) */
     u32 free;                       /* free clusters; FREE_UNKNOWN until counted */
+    int count_err;                  /* 10/18/26: -EIO once counting them could not read the FAT: not tried again */
     u32 fsinfo;                     /* FAT32: the FSInfo sector, 0 when there is no valid one */
     bool fsinfo_dirty;              /* free or next_free changed since FSInfo was written */
     bool marked;                    /* this read-write mount cleared the clean bit */
@@ -1374,7 +1375,10 @@ static int fat_statfs(struct superblock *sb, struct statfs *st) {
     int r = 0;
     if(fs->dev->gone) return -EIO;
     mutex_lock(&sb->lock);
-    if(fs->free == FREE_UNKNOWN) r = count_free(fs);         /* a read-only mount counts when asked */
+    if(fs->free == FREE_UNKNOWN) {                           /* a read-only mount counts when asked, and */
+        r = fs->count_err ? fs->count_err : count_free(fs);  /* 10/18/26: a FAT it could not read is not read */
+        if(r == -EIO) fs->count_err = r;                     /* again at every statfs (the desktop's Disks) */
+    }
     st->unit = fs->cluster_bytes;
     st->units = fs->nclusters;
     st->free_units = fs->free == FREE_UNKNOWN ? 0 : fs->free;

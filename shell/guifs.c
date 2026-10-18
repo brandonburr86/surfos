@@ -17,7 +17,17 @@ place. The volumes are the USB drives' FAT file systems, and the mounts of stick
 that were pulled out. Mount and Eject run the shell's own mount and eject with
 their output kept (console_capture_begin()): the same rules (bdev_mount_readonly(),
 busy volumes, the flush before "safe to remove") and the same words, of which the
-last line is shown. Nothing here keeps any state.
+last line is shown. Nothing here keeps any state, but for a desktop's read_at below.
+10/18/26: each desktop has its own struct gui_fs (gui_kernel_fs_begin()), whose read_at
+keeps the file it read last open until its frame's reads are done
+(gui_kernel_fs_idle()): FAT remembers a file's place in its cluster chain only while
+the file is open, so each read deep into a big file from a fresh open walked the chain
+from its start, and a frame of the Image Viewer's or Hex's reads did that again and
+again. The file is closed once the frame's tick and input are done, before the desktop
+draws or sleeps, before anything it changes, mounts or ejects, and when it reads another
+file. So it is open only while a frame's reads run: an eject on another console that
+comes in those few milliseconds (the desktop's task preempted mid-read) finds the volume
+busy, as it would during any single read.
 */
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +39,21 @@ last line is shown. Nothing here keeps any state.
 #include <mm/kalloc.h>
 #include <sys/gui.h>
 #include "shell.h"
+
+struct guifs_session {
+    struct gui_fs fs;                       /* first: the desktop's struct gui_fs, whose ctx this is */
+    struct file *f;                         /* read_at's file, open; NULL */
+    char path[VFS_PATH_MAX];
+};
+
+/* the session's open file closed (a ctx of NULL: the shared struct gui_fs, which keeps none) */
+static void forget(void *ctx) {
+    struct guifs_session *s = (struct guifs_session *)ctx;
+    if(s && s->f) {
+        vfs_close(s->f);
+        s->f = NULL;
+    }
+}
 
 static int fs_list(void *ctx, const char *path, struct gui_entry *out, int max) {
     struct file *f;
@@ -80,6 +105,36 @@ static int fs_read(void *ctx, const char *path, char *buf, u32 size, u32 *len) {
     return r < 0 ? r : 0;
 }
 
+/* 10/17/26 (the suite: Hex, Image Viewer): n bytes from offset off, and the file's size */
+static int fs_read_at(void *ctx, const char *path, u32 off, char *buf, u32 n, u32 *len, u32 *size) {
+    struct guifs_session *s = (struct guifs_session *)ctx;
+    struct file *f;
+    struct stat st;
+    int r;
+    *len = 0;
+    *size = 0;
+    r = vfs_stat(path, &st);
+    if(r) { forget(s); return r; }
+    if(st.type == VN_DIR) return -EISDIR;
+    *size = st.size;
+    if(off >= st.size || !n) return 0;
+    if(s && s->f && !strcmp(s->path, path)) f = s->f;  /* 10/18/26: this frame's file: on from its place */
+    else {
+        forget(s);
+        r = vfs_open(path, O_RDONLY, &f);
+        if(r) return r;
+        if(s && strlcpy(s->path, path, sizeof(s->path)) < sizeof(s->path)) s->f = f;
+    }
+    f->pos = off;                                   /* 10/18/26: not vfs_lseek(), whose i32 stops at 2 GB */
+    while(!r && *len < n && (r = vfs_read(f, buf + *len, n - *len)) > 0) {
+        *len += r;
+        r = 0;
+    }
+    if(!s || s->f != f) vfs_close(f);
+    else if(r < 0) forget(s);
+    return r < 0 ? r : 0;
+}
+
 static int write_all(struct file *f, const char *data, u32 len) {
     int r;
     while(len) {
@@ -124,6 +179,7 @@ static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool
     char tmp[VFS_PATH_MAX];
     bool made = false;
     int r = -ENAMETOOLONG, k;
+    forget(ctx);                                    /* 10/18/26: read_at's file is not open while this changes things */
     if(kept && n) kept[0] = 0;
     for(k = 0; k < 10; k++) {
         if(snprintf(tmp, sizeof(tmp), k ? "%s.%d.tmp" : "%s.tmp", path, k) >= (int)sizeof(tmp)) break;
@@ -147,14 +203,17 @@ static int fs_write(void *ctx, const char *path, const char *data, u32 len, bool
 }
 
 static int fs_mkdir(void *ctx, const char *path) {
+    forget(ctx);
     return vfs_mkdir(path);
 }
 
 static int fs_remove(void *ctx, const char *path, bool dir) {
+    forget(ctx);
     return dir ? vfs_rmdir(path) : vfs_unlink(path);
 }
 
 static int fs_rename(void *ctx, const char *from, const char *to) {
+    forget(ctx);
     return vfs_rename(from, to);
 }
 
@@ -231,17 +290,42 @@ static int run(const char *command, const char *dev, char *msg, size_t n) {
 }
 
 static int fs_mount(void *ctx, const char *dev, char *msg, size_t n) {
+    forget(ctx);
     return run("mount", dev, msg, n);
 }
 
 static int fs_eject(void *ctx, const char *dev, char *msg, size_t n) {
+    forget(ctx);                                    /* else its own read_at's file would keep the volume busy */
     return run("eject", dev, msg, n);
 }
 
 static const struct gui_fs vfs_ops = {
-    NULL, fs_list, fs_stat, fs_read, fs_write, fs_mkdir, fs_remove, fs_rename, fs_volumes, fs_mount, fs_eject, strerror
+    NULL, fs_list, fs_stat, fs_read, fs_write, fs_mkdir, fs_remove, fs_rename, fs_volumes, fs_mount, fs_eject, strerror,
+    fs_read_at,
 };
 
 const struct gui_fs *gui_kernel_fs(void) {
     return &vfs_ops;
+}
+
+/* 10/18/26: a desktop's own, whose read_at keeps its file open between gui_kernel_fs_idle() calls; NULL without
+   memory (the shared one then serves, keeping nothing) */
+struct gui_fs *gui_kernel_fs_begin(void) {
+    struct guifs_session *s = (struct guifs_session *)kcalloc(1, sizeof(*s));
+    if(!s) return NULL;
+    s->fs = vfs_ops;
+    s->fs.ctx = s;
+    return &s->fs;
+}
+
+/* the frame's reads are done: read_at's file is closed */
+void gui_kernel_fs_idle(const struct gui_fs *fs) {
+    if(fs) forget(fs->ctx);
+}
+
+/* the desktop ends: its file closed, and its struct gui_fs freed (fs may be NULL, or the shared one) */
+void gui_kernel_fs_end(struct gui_fs *fs) {
+    if(!fs || !fs->ctx) return;
+    forget(fs->ctx);
+    kfree(fs->ctx);
 }

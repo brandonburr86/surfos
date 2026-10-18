@@ -10,6 +10,12 @@ maximized and resized. Together Files and Notepad let you open a file, edit it a
 save it, on a mounted disk or a USB stick. The initrd's files can be opened too, and
 kept elsewhere with Save as, since the initrd is read-only.
 
+*10/17/26, later:* eight more applications. The Terminal runs the shell in a window,
+and there are System Monitor, Disks, Log, Clock, Character Map, Image Viewer and Hex.
+Sketch saves its drawings as BMP pictures and opens them. Files opens a picture in the
+Image Viewer, and a file Notepad cannot open in Hex. See
+[The applications](#the-applications).
+
 ## The desktop
 
 The menu bar has six menus. Greyed-out items do not apply to the window in front,
@@ -18,19 +24,22 @@ and each item shows its shortcut.
 | Menu | Items |
 | --- | --- |
 | **≋ SurfOS** | About SurfOS, Pointer & desktop, Ocean / dusk colors, Return to shell |
-| **File** | New note, Open…, Save, Save as…, Show in Files, Close window. With Files in front: Open selected, New file…, New folder…, Rename…, Delete…, Copy path, Mount, Eject, Refresh, then New note, Open…, Close window |
-| **Edit** | Notepad's Undo, Redo, Cut, Copy, Paste, Delete, Select all, Find…, Find next, Go to line… |
-| **Apps** | Notepad, Files, Calculator, Sketch, Clear sketch |
+| **File** | New note, Open…, Save, Save as…, Show in Files, Close window. With Files in front: Open selected, New file…, New folder…, Rename…, Delete…, Copy path, Mount, Eject, Refresh, then New note, Open…, Close window. With Sketch in front: Open BMP…, Save as BMP…, then New note, Open…, Close window |
+| **Edit** | Notepad's Undo, Redo, Cut, Copy, Paste, Delete, Select all, Find…, Find next, Go to line…. Every application but the Image Viewer has its own while it is in front: the same items, those it does on and the rest greyed, the last one its own Go to (pid, code or offset) |
+| **Apps** | Notepad, Files, Calculator, Sketch, Clear sketch, then Terminal, System Monitor, Disks, Log, Clock, Image Viewer, Hex and Character Map |
 | **Window** | Next window, Minimize, Maximize (or Restore size), Close, then every open window |
 | **Help** | Keyboard and mouse (the Help window), About SurfOS |
 
-Drag a title bar to move a window. Notepad, Files and Help also fill the screen
-(double-click the title bar, or press its middle button) and resize from their dotted
-corner, never narrower than their toolbar. The `_` button tucks a window into the
-taskbar, and `x` closes it. The taskbar at the
+Drag a title bar to move a window. Notepad, Files, Help and the applications (all
+but Clock and Character Map) also fill the screen (double-click the title bar, or
+press its middle button) and resize from their dotted corner, never narrower than
+their toolbar. The `_` button tucks a window into the taskbar, and `x` closes it. A
+window whose application is busy (a Terminal session, a running timer) asks before it
+closes, as leaving the desktop does. The taskbar at the
 bottom has a button for each open window. Click a button to bring its window to
 the front, or click it again to tuck the window away. The taskbar also shows the
-time from the PC's clock. The tiles on the desktop open the four applications.
+time from the PC's clock. The tiles on the desktop open the applications: the four
+of the desktop's own first, then the others in the columns beside them.
 
 **Notepad** edits one text file at a time, of up to 256 KB.
 
@@ -82,7 +91,13 @@ time from the PC's clock. The tiles on the desktop open the four applications.
   disk or stick. Folders come first, then files, by name, with their sizes and the
   times the file system recorded.
 * **Keys and the mouse.** Double-click a folder, or press Enter or Right, to open it,
-  and Left to close it. Double-click a file, or press Enter, to open it in Notepad.
+  and Left to close it. Double-click a file, or press Enter, to open it:
+  * a picture (`.bmp`) opens in the Image Viewer;
+  * a file that Notepad would refuse (one of more than 256 KB, or with a NUL byte in its
+    first 512 bytes) opens in Hex;
+  * any other file opens in Notepad. Notepad asks about its own unsaved changes only
+    for a file it opens itself.
+
   Ctrl+R reads everything again, Del deletes, and Ctrl+C copies the selected row's
   path, for Notepad or a dialog's text box.
 * **The toolbar** has Open, New file, New folder, Rename, Delete, Refresh, Mount and
@@ -114,8 +129,28 @@ Division truncates toward zero. Division by zero and values outside ±999,999,99
 show an error, which C resets.
 
 **Sketch** draws with the left button held down. Choose a colour first; the first
-swatch erases. Clear, or Ctrl+N, erases everything. Sketches are temporary: they
-are lost when the desktop exits, and Sketch does not write files.
+swatch erases. Clear, or Ctrl+N, erases everything.
+
+* **Save as BMP.** Ctrl+S, File > Save as BMP… while Sketch is in front, or the Save
+  button saves the drawing as a 400 x 180, 24-bit BMP (216,054 bytes). The Image
+  Viewer, Sketch itself and other computers can open it.
+  * It asks for the name and the folder. The chooser starts in the folder of the
+    picture Sketch saved or opened last, or else in the last chooser's.
+  * It asks before it replaces a file that is there already, as Notepad's Save as
+    does, except the file Sketch itself saved last.
+  * Like Notepad, it never saves over a file the desktop is taking care of (one that
+    may share its space with a `.tmp` beside it, see Notepad's Saving above).
+  * Unsaved sketches are lost when the desktop exits.
+* **Open BMP.** File > Open BMP…, or the Open button, reads a BMP of up to 8 MB into the
+  canvas. A 1920 x 1080 screenshot is 6 MB; a larger file is refused, and the Image
+  Viewer shows it.
+  * A picture larger than the canvas is shrunk to fit it, keeping its proportions;
+    a smaller one is put in the middle.
+  * Each colour becomes the nearest of Sketch's six.
+  * It replaces the drawing, as Clear does. A picture that cannot be read leaves the
+    drawing as it was.
+* The line under the canvas says what Save and Open did, until the drawing changes (a
+  stroke, Clear, Ctrl+N).
 
 **Pointer & desktop** has three pointer speeds and two color themes. They last for
 this session.
@@ -138,29 +173,422 @@ this session.
 | Keys | Action |
 | --- | --- |
 | Ctrl+E, Ctrl+B, Ctrl+K, Ctrl+D, Ctrl+P | Notepad, Files, Calculator, Sketch, pointer and desktop settings |
-| Ctrl+N, Ctrl+O, Ctrl+S | New note, open a file, save it (Ctrl+N clears Sketch when Sketch is in front) |
-| Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+C, Ctrl+V, Ctrl+A | Undo, redo, cut, copy, paste, select all (in Notepad) |
-| Ctrl+F, Ctrl+L | Find, go to a line (in Notepad) |
+| Ctrl+T | The Terminal; in it every key but Ctrl+G and Ctrl+Space is the program's |
+| Ctrl+N, Ctrl+O, Ctrl+S | New note, open a file, save it (with Sketch in front, Ctrl+N clears it and Ctrl+S saves it as a BMP) |
+| Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+C, Ctrl+V, Ctrl+A | Undo, redo, cut, copy, paste, select all: Notepad's, or those of the application in front that has them |
+| Ctrl+F, Ctrl+L | Find, go to: a line in Notepad; a pid, a code or an offset in System Monitor, Character Map and Hex |
 | Ctrl+R, Del, Ctrl+C | Read the folders again, delete, copy the path (in Files) |
 | Ctrl+W | Close the window in front |
 | Ctrl+G | The menus (the arrows move, Enter chooses, Esc closes them) |
-| Tab | The next window (in Notepad: a tab) |
-| Esc | Close a menu or dialog; in Notepad, close the find bar or drop the selection; close any other window. With no window open at all (not merely tucked away), return to the shell |
-| Ctrl+Q | Return to the shell, asking first about unsaved changes (after a dialog in front is answered) |
-| Ctrl+C elsewhere | Return to the shell, as before, but asking first about Notepad's unsaved changes |
+| Tab | The next window (in Notepad: a tab; in the Terminal: the program's) |
+| Esc | Close a menu or dialog; in Notepad, close the find bar or drop the selection; in the Image Viewer and Hex, stop a reading or a search first; close any other window. With no window open at all (not merely tucked away), return to the shell. In the Terminal it is the program's |
+| Ctrl+Q | Return to the shell, asking first about unsaved changes and about busy applications (after a dialog in front is answered) |
+| Ctrl+C elsewhere | Copy, in an application with an Edit menu of its own (in the Terminal, the program's). Elsewhere it returns to the shell, as before, asking first about Notepad's unsaved changes |
 
 While Notepad's find bar has the keys, they are its own: Ctrl+V and Ctrl+A work in
 its box, and Ctrl+X, Ctrl+Z and Ctrl+Y do nothing until Esc, the bar's x or a click
 in the text gives the keys back.
 
 In Notepad, Files and Help the arrow keys, Home, End, Page Up, Page Down and Delete
-work as in any editor. Elsewhere the arrow keys move the pointer, and in Sketch
-Space puts the pen down or lifts it, so drawing also works without a mouse.
+work as in any editor. In the applications they do what each one's section below
+says, and the Terminal sends them to the program. Elsewhere (Calculator, Sketch,
+About and Pointer & desktop, the Image Viewer with no picture, Hex with no file) the
+arrow keys move the pointer, and in Sketch Space puts the pen down or lifts it, so
+drawing also works without a mouse.
 
 **Consoles.** F1-F4 switch consoles as before. Since 10/17/26 switching away no
 longer ends the desktop. It waits on its own console and draws itself again when
 you come back, with Notepad's text as it was. Another console can run a desktop of
 its own meanwhile. The shell's text is restored when the desktop exits.
+
+## The applications
+
+*10/17/26.* Each of these is in the Apps menu and has a tile on the desktop. Only the
+Terminal has a shortcut of its own (Ctrl+T). None of them takes the desktop's other
+shortcuts, except the Terminal, whose keys are the program's. Each has its own lines
+in Help. Every one fits a 640x400 screen.
+
+### Terminal
+
+The **Terminal** runs surfsh, the SurfOS shell, in a window, on a pseudo-terminal of
+its own. Every command works as on F1-F4. The prompt shows `≋@>`, as surfsh shows on
+any pseudo-terminal, a telnet session's too. Open it with Ctrl+T, its tile, or Apps >
+Terminal. Each Terminal window has one session, started when it opens, and a desktop
+has one Terminal window.
+
+* **Keys.** Every key is the shell's except Ctrl+G and Ctrl+Space, which open the menus.
+  * Ctrl+C stops the program that runs (`sleep 30000`, say).
+  * Ctrl+Q, Ctrl+W, Ctrl+T, Tab, Esc and the arrows are the program's too (`edit`
+    quits with Ctrl+Q).
+  * The arrows, Home, End, Page Up and Down, Delete and Insert reach the program as the
+    escape sequences a terminal sends. Enter, Backspace, Tab and Esc reach it as the
+    bytes they are.
+  * To reach the desktop with the Terminal in front, use Ctrl+G and the menus (Return
+    to shell is in the ≋ SurfOS menu), or the mouse.
+* **The size.** The window's size is the terminal's, and the status bar shows it. On a
+  1920x1080 screen it opens at 77 by 21 characters and is 117 by 26 maximized; on a
+  1280x800 screen (a desktop of 640 by 400 pixels) it opens at 71 by 16 and is 77 by 18
+  maximized.
+  * A new size reaches the shell when the window is maximized or restored, or when its
+    corner is let go.
+  * A program sees it when it asks (`pagetest size`; `edit` with Ctrl+L).
+  * Lines are not rewrapped: they are cut or padded.
+* **Scrolling back.** About 1,000 lines are kept above the screen.
+  * Use the scroll bar (click above or below the thumb for a page, or drag it), or the
+    wheel of a mouse that reports one (SurfOS's mouse drivers report none yet).
+  * While the view is scrolled back, new output does not move it, and the status bar
+    says how many lines came below.
+  * Any key goes back to the end, and to the program.
+* **Copy and paste.** Drag to select (past the top or bottom edge the text scrolls), or
+  double-click a word (also one that a line's end broke in two).
+  * Edit > Copy copies the selection, or the whole screen as it shows when nothing is
+    selected.
+  * A line that wrapped is copied as one, also after the window got wider or when it is
+    in the scrollback. One that a narrower window cut on the screen is copied as it
+    shows. Of a line in the scrollback from when the window was wider, a copy of the
+    screen takes what shows, and a selection all of it.
+  * A selection of nothing but blanks leaves the clipboard as it was, and the status bar
+    says "Nothing copied".
+  * Edit > Select all selects everything kept, the scrollback too.
+  * Edit > Paste types the clipboard into the session, each line end as Enter. What the
+    shell does not take at once follows a moment later.
+  * As on every SurfOS terminal, a pasted block of several lines runs its first line
+    only: the rest of a paste is skipped until the input pauses. A paste into `edit`
+    arrives whole.
+  * The clipboard is the desktop's, so text goes both ways with Notepad and the other
+    windows.
+  * Ctrl+C and Ctrl+V are the program's, so copy and paste are in the Edit menu (Ctrl+G,
+    Right, Right).
+* **The end of a session.** When the shell exits (`exit`, or Ctrl+D at an empty prompt),
+  the session ends at once, and a line in the window and the status bar say so. A
+  program the shell left running in the background (`pagetest hold 300000 &`, say) ends
+  with it, as when the window closes. Enter, or the New session button in the status
+  bar, starts a new session below; Esc or Ctrl+W then closes the window.
+* **Closing.** Closing the window while a session runs, or leaving the desktop, asks
+  first.
+  * Close (or Leave) ends the session and every program it runs; Cancel keeps it.
+  * The session goes on while the window is tucked into the taskbar, and while another
+    console has the screen.
+  * Nothing the Terminal shows or is typed in it is logged. The kernel log only says
+    when a session starts and ends.
+* **Limits.**
+  * There is no keyboard path to the scrollback: the keyboard driver sends the special
+    keys without their modifiers, so there is no Shift+Page Up to take for it.
+  * Ctrl+G and Ctrl+Space (NUL) cannot be typed into a program (edit's "go to line"
+    needs another key).
+  * There is no mouse reporting to programs, no bracketed paste, and no bold font
+    (bright colours instead, as on the console).
+  * The font is code page 437, as on the console, so a character it lacks shows as `?`.
+
+### System Monitor
+
+**System Monitor** shows what the machine is doing. Its toolbar has three tabs,
+Processes, Memory and System, and End task; Left and Right also change the page. It
+reads the system again every second while it is open. Tucked away in the taskbar it
+waits, and reads again as soon as it is back. A reading that fails keeps what was read
+before, and the status bar says so.
+
+* **Processes** lists every task as `ps` does: its pid, name, state (running, ready,
+  blocked, sleeping, zombie), console (F1-F4, `pty n` for a terminal's session, `-` for
+  none) and whether it is a program or a kernel thread. A kernel thread's console is that
+  of the task that started it: the boot's threads are on F1, a `tcpecho` started from F2
+  is on F2, and one started from a terminal's session is on F1.
+  * **Sorting.** Click a heading to sort by it, and again to reverse the order (a ▲ or ▼
+    beside it says which). S sorts by the next column and R reverses it. Tasks that sort
+    alike stay in ascending pid order, also when the order is reversed.
+  * **Selecting.** Click a task, or move with the arrows, Page Up, Page Down, Home and
+    End. The wheel and the scroll bar move the list. The selection follows its task while
+    the list changes. When the task is not in a reading (it ended), nothing is selected
+    until you move: the status bar says its pid is not in the list now, Down goes on from
+    its row, and if it is listed again it is selected again.
+  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then "Ends now or after
+    a system call; unsaved work is lost."), with Cancel as the default, so Enter alone
+    ends nothing.
+    * It ends programs only: for a kernel thread (init and the idle task are kernel
+      threads) the button is greyed, and Del says why in the status bar.
+    * A program running its own code ends at once. One inside a system call or a kernel
+      command ends when that call does, however long it takes ("edit (pid 9) ends when its
+      system call does"), so that nothing it holds, such as a volume's lock, is left held.
+      Once it is gone from the list, the status bar says so ("edit (pid 9) has ended").
+    * A task whose system call never ends is never ended by End task. The shell's `kill`,
+      which kills at once after 2 seconds, is the way out.
+    * The kernel refuses this desktop's own task, the shell that ran `gui` ("surfsh (pid
+      12) runs this desktop: Ctrl+Q leaves it"), and the shells above it ("surfsh (pid 4)
+      runs the shell this desktop runs in"), since a new shell on the desktop's console
+      would take its keys. The status bar says so.
+    * Any other console's shell may be ended. init then starts a new one on that console,
+      with a new pid, as when the shell's `kill` ends it. Three such ends within 30
+      seconds leave that console with the recovery shell.
+  * The status bar describes the selected task, and counts the tasks at its right. Up to
+    128 tasks are listed; with more, the newest 128, and the count says "the newest 128
+    of N".
+* **Memory** shows physical memory, the kernel heap and the DMA heap, each with a bar of
+  what is used (teal; coral from 90%) and its numbers.
+  * Physical memory is the 4 KB pages SurfOS manages, the RAM the firmware reported, and
+    any above 4 GB, which a 32-bit kernel leaves unused.
+  * A heap grows when it needs to, up to a limit: the kernel heap's 256 MB of address
+    space, and the DMA heap's fixed arena. Its bar is of that limit: "at most 256 MB".
+* **System** shows:
+  * the processor and the firmware (UEFI or BIOS);
+  * the profile (laptop or standard);
+  * the display: the framebuffer's mode, and the desktop's size in its own pixels;
+  * the build (/initrd/etc/build-id) and the uptime (h:mm:ss);
+  * how many tasks and kernel timers there are.
+* **Short windows.** In a short window the Memory and System pages scroll: the arrows,
+  Page Up and Down, Home and End, the wheel, or their scroll bar.
+* **The Edit menu** is System Monitor's while it is in front.
+  * Copy (Ctrl+C) copies the selected task's line, or the Memory or System page as text,
+    for Notepad or a bug report. A page that could never be read copies nothing, and the
+    status bar says so.
+  * Find (Ctrl+F) selects the next task whose name holds what you type, in either case,
+    after the selected one (or from the row of the one that ended), going round past the
+    end, and Find next does it again.
+  * Go to pid (Ctrl+L) selects a task by its pid.
+* Limits: no processor time per task; at most 128 tasks are listed, the newest; names
+  are cut at 15 characters.
+
+### Disks
+
+**Disks** shows the block devices as `lsblk` lists them, each disk with its partitions
+under it. For each it shows, in lsblk's own words:
+* its name, size and bus (usb, ata, ram);
+* its type (`disk gpt`, `part mbr FAT32 LBA`) and its model or partition name;
+* its status (`mounted`, `boot drive: protected`, ...).
+
+The columns are as wide as what they hold, and the model gives way first when the window
+is narrow, as in lsblk. Disks reads the devices again about every two seconds while it
+is open, so a stick that is plugged in appears by itself. A reading that fails keeps the
+list read before, and the status bar says so.
+
+* **Details.** Below the list are the selected device's details: what it is (a USB disk
+  and its model, or a partition of which table). For a mounted volume they add where it
+  is mounted, its file system, read-only or read-write, its volume label, and a bar of
+  the space used, with the numbers (or why its file system could not say).
+* **Mount** (M, or Enter) mounts the selected USB volume at `/<device>`. On a stick's own
+  row it mounts the stick's first partition that is not mounted, and selects it,
+  scrolling to it.
+* **Eject** (E) unmounts every volume of the selected stick and flushes it. The status
+  bar then says `usb1: safe to remove`.
+* **The rules of `mount` and `eject`.** Mount and Eject are the shell's own commands, and
+  what they say goes to the status bar. So their rules hold:
+  * the SurfOS boot drive mounts read-only (the details say so beforehand);
+  * a busy volume is not ejected;
+  * nothing is mounted unless you ask;
+  * Eject also refuses, with a message in the status bar, while Notepad has unsaved
+    changes to a file on that stick, as Files does.
+* **Show in Files** (or Enter on a mounted volume) opens Files at the mount point. Files,
+  when it is open, shows a mount or an eject made in Disks at once.
+* **Refresh** (Ctrl+R) reads the devices again now.
+  * A stick pulled out while mounted stays in the list, `unplugged: eject it`, until
+    Eject unmounts it.
+  * A device that is not in a reading (pulled out) stays followed: nothing is selected
+    (M, E and Enter say so), the status bar says it is not there any more, Down goes on
+    from its row, and if it comes back it is selected again.
+* Ctrl+C copies the selected device's line. A double-click on a row is Enter.
+* Limits: Mount and Eject are for USB volumes; the initrd and internal disks are only
+  shown.
+  * Disks reads nothing from a device itself, so an unmounted volume's own label is not
+    shown (lsblk does not show it either).
+  * How full a mounted volume is comes from its file system, which answers once another
+    task's write to that volume is done. So Disks can pause while a long copy to that
+    volume runs. FAT counts a read-only volume's free space once, when it is mounted or
+    first asked.
+  * A file system that keeps no count of its space (the initrd's tarfs) has no bar.
+  * Up to 32 rows are listed. With more devices, the sticks pulled out while mounted are
+    kept, so that they can still be ejected.
+
+### Log
+
+**Log** shows the kernel log, as `dmesg` does. It reads it again twice a second while
+its window shows; a window tucked into the taskbar reads it again when it comes back.
+
+* **Follow.** When the window opens, Follow is on, and the newest lines stay in view as
+  they come.
+  * Scrolling up, or selecting lines (a click, a drag or Select all), stops it.
+  * End, Follow in the toolbar, or scrolling down to the end starts it again: Down, Page
+    Down or the wheel, also when the view is there already.
+  * Follow is lit in the toolbar while it is on, and the status bar says "Follow on" or
+    "Follow off: End".
+* **Reading.** Up, Down, Page Up, Page Down, Home, End, the wheel, and the scroll bar
+  (click above or below its thumb to page, or drag the thumb).
+  * Long lines wrap at the window's edge, their later rows two cells in, so every line
+    can be read whole. A wider window (maximize, or the corner) wraps less.
+  * Characters are shown as on the console: UTF-8 as code page 437, and a tab to the next
+    multiple of 8 columns. Other control characters and colour codes are not shown.
+  * While the find bar is open, Home, End, Left and Right move in its box; Up, Down, Page
+    Up and Page Down still scroll the log.
+* **Find.** Ctrl+F (or Edit > Find…) opens a find bar under the log, as in Notepad.
+  * Enter finds the next match, ASCII letters in either case. It starts after the last match
+    (or from the selected lines, or the top of the view).
+  * At the end it starts again from the top ("Found it again from the top").
+  * The match's line is selected and the word marked in yellow. Edit > Find next finds
+    the next one with the bar closed.
+  * Esc closes the bar; the next Esc closes the window.
+* **Copy.** Click a line to select it, or drag over several. Past the log's top or bottom
+  edge the drag scrolls a row each time the pointer moves, and goes on while the pointer
+  is held there.
+  * Ctrl+C, Copy in the toolbar or Edit > Copy puts the lines on the desktop's
+    clipboard, each with its line end, ready for Notepad or the Terminal. The newest
+    line, which the kernel may not have finished yet, is copied as it is, without one.
+  * Ctrl+A (Select all) selects the whole log.
+  * The status bar counts the lines and the selected ones.
+* **Limits.** The kernel log keeps its last 16 KB. When more has been written, the oldest
+  lines are gone, and the status bar says "the newest 16 KB".
+  * The first line shown may be the end of a line whose start has gone.
+  * A selection keeps the lines it still has whole, and goes when none is left. A match on
+    a line that went is dropped.
+
+### Clock
+
+**Clock** has four pages, chosen in its toolbar or with the keys 1 to 4.
+
+* **Clock.** The time, large, from the PC's clock (the CMOS clock, as the taskbar's
+  clock), the weekday and the date ("Saturday", "October 17, 2026") and the day of the
+  year.
+  * The weekday is worked out from the date.
+  * There is no time zone: the clock is whatever the PC's clock keeps (under QEMU, UTC;
+    on a PC that also runs Windows, usually local time).
+* **Calendar.** A month, weeks from Sunday, today marked.
+  * `<` and `>` (or Left and Right, Page Up and Page Down) go a month back or on, and Up
+    and Down a year. Today (or Home) goes back to this month.
+  * A click on a day names it in the status bar ("Thursday, October 1, 2026: day 274").
+* **Stopwatch.** Start and Stop (Space), Lap (L) and Reset (R).
+  * It shows tenths of a second, and hours from the first hour on.
+  * The newest five laps are listed, each with its time since the lap before; eight are
+    kept.
+* **Timer.** Set 0:00 to 99:59 with the buttons (one minute, ten seconds) or the keys:
+  Up and Down a minute, Page Up and Page Down ten seconds, Left and Right one, Home 0:00.
+  * Start, Pause and Resume with Space or the button. Reset (R) sets it back to the time
+    set.
+  * While it runs, the title counts down ("Clock - 04:59"), in the taskbar too.
+  * At zero the title says "Time's up!", in the taskbar too. A message comes up in front
+    of everything, even when the Clock is tucked away or behind another window.
+  * If a question is open (Notepad's unsaved changes, say), the message waits until that
+    is answered. If another dialog takes its place before it is answered, it comes back
+    afterwards.
+  * OK (or Enter, or Esc) sets the timer back to its time.
+* **In the background.** The stopwatch and the timer keep running while the window is
+  minimized or behind another window, and the status bar of the other pages shows them
+  (the stopwatch in whole seconds there).
+  Closing the window ends both. While one is running, closing it or leaving the desktop
+  asks first.
+* **Copy.** Ctrl+C (Edit > Copy) copies what the page shows: the date and time, the month
+  as `cal` prints it (its title centred over the weeks), the stopwatch's time and the laps
+  it keeps (up to eight), or the timer's time. On the clock's page with no date known,
+  Copy is off and the clipboard is left as it was.
+
+### Character Map
+
+**Character Map** shows the console's 256 characters (code page 437, with SurfOS's ▸ ≋
+…) in a grid of 16 by 16. The code's last hexadecimal digit is along the top, and its
+first down the side.
+
+* **Choosing.** Click a character, or move with the arrows.
+  * Home and End go to the start and the end of the row, Page Up and Page Down to the top
+    and the bottom of the column.
+  * A key typed chooses its own character (A, say).
+  * Edit > Go to code… (Ctrl+L) takes a code (247, three digits at most, or 0xF7), a
+    Unicode code point (U+224B, six hexadecimal digits at most), or a character other
+    than a digit or a space (é, pasted, say). Anything else, and a character the console
+    does not have (€), is refused in the status bar.
+* **What it shows.** The chosen character large, with its code in decimal and hexadecimal,
+  its Unicode code point and its UTF-8 bytes.
+* **Copy.** Enter, Ctrl+C, Edit > Copy, a double-click or the Copy button puts the
+  character on the desktop's clipboard as UTF-8, and the status bar says so.
+  * Ctrl+V pastes it in Notepad: one character, saved as its UTF-8 bytes. Edit > Paste
+    pastes it in the Terminal.
+  * The laptop's keyboard types nothing beyond ASCII, so this is how ≋, é, ½ or █ get
+    into a note.
+* **Small screens.** On a 640x400 screen the window is shorter (326 pixels) and its cells
+  a pixel lower, so that the whole grid and the Copy button stay above the status bar.
+* **Codes 0-31 and 127.** On the console these are symbols (☺, ♥, ♪, ▸, ← and the like,
+  and ⌂), not control characters, and those symbols are what is copied (☺ is U+263A).
+  0 is the console's empty cell, and copies nothing.
+
+### Image Viewer
+
+**Image Viewer** shows BMP pictures. Double-click a `.bmp` in Files, or use the
+toolbar's Open or press O: the chooser lists a folder as Notepad's does.
+
+* **What it reads.** Uncompressed BMP files:
+  * of 1, 4 and 8 bits with a palette, and of 24 and 32 bits;
+  * stored bottom-up or top-down;
+  * with any of the usual headers: BITMAPINFOHEADER and its V2 to V5 versions, and 32-bit
+    BI_BITFIELDS with the usual masks.
+
+  Other files are refused, and the message says why: RLE compression, 16-bit pixels, OS/2
+  bitmaps, a PNG, JPEG or GIF (or a BMP with a PNG or JPEG inside), a file cut short. A
+  picture is drawn opaque: its alpha, if any, is not used.
+* **Size.** Pictures of up to 16384 x 16384 pixels are read.
+  * A picture of more than 1,048,576 pixels (1024 x 1024) is reduced while it is read,
+    keeping its proportions: 1920 x 1080 is kept at 1365 x 768, and the status bar says
+    `kept at 1365 x 768`.
+  * A picture is read a piece at a time, one piece in each frame the desktop draws (at
+    most 128 reads, and 256 KB plus one 64 KB chunk, a frame, and a single read when it
+    opens). So the desktop goes on
+    answering while a big file is read. The window and the status bar count the percent
+    (`Reading sea.bmp... 45%`), and Esc stops the reading.
+  * When a file cannot be read to its end (it was cut short, or the stick was pulled
+    out), the window and its status bar say so. No message box interrupts what you are
+    doing meanwhile.
+* **The views.** Fit is the default: a picture larger than the window is shrunk to fit
+  it, and a smaller one is enlarged by a whole number (2 times, 3 times, ...), as far as
+  it fits, so that its pixels stay square.
+  * Press 1 (or the toolbar's Actual size) for the actual size.
+  * + and - (or Zoom in, Zoom out) zoom between 1/64 and 16 times. Zooming keeps the point
+    in the middle of the window where it is.
+  * F or 0 fits again. Fit follows the window as it is resized or maximized.
+  * A double-click anywhere in the picture area (the picture or the dark space around it)
+    switches between Fit and the actual size.
+* **Moving a zoomed picture.** Drag it with the mouse, or use:
+  * the arrows (32 pixels a press);
+  * Page Up and Page Down (the picture area's height less 32 pixels);
+  * Home (the top left) and End (the bottom right);
+  * the wheel: up and down, or sideways when the picture is no taller than the window.
+* **The status bar** shows the name, the picture's size and bits per pixel, and the zoom
+  (`Fit 1000%`, `150%`). The title bar shows the file's name. Closing the window forgets
+  the picture.
+
+### Hex
+
+**Hex** shows any file's bytes, read-only. Files opens here a file that Notepad would
+refuse; Hex's own Open (or O) opens any file.
+
+* **A row** is the offset (8 hexadecimal digits), 16 bytes in hexadecimal, and the same
+  bytes as characters: printable ASCII as it is, and a grey dot for every other byte (a
+  real `.` is dark). A header row numbers the columns.
+* **Any size.** Only what the window shows is read, so a file of any size up to 4 GB
+  opens at once.
+* **Moving.** The arrows move the cursor a byte or a row, Page Up and Page Down a
+  window's rows, Home and End to the file's first and last byte.
+  * The wheel and the scroll bar (drag the thumb, or click above or below it) move the
+    view.
+  * Click a byte, in either column, to put the cursor there, or drag over several to
+    select them. The view scrolls when the pointer passes its edge.
+* **Copy.** Ctrl+C (Edit > Copy, or the toolbar's Copy) puts the selected bytes on the
+  clipboard in hexadecimal, `DE AD BE EF`, up to 43,690 bytes.
+  * Edit > Select all selects the whole file.
+  * The toolbar's Copy offset puts the cursor's offset there, `0x0000001F`.
+* **Go to offset.** Ctrl+L (Edit > Go to offset…, or the toolbar's Go to) takes `0x1F00`
+  in hexadecimal or `7936` in decimal, and the row goes to the top of the window. An
+  offset past the end is refused.
+* **Find.** Ctrl+F (Edit > Find…, or the toolbar's Find) finds bytes from the start of the
+  selection on (the cursor's byte when only one is selected).
+  * Type text as it is, or bytes in hexadecimal: two or more pairs with spaces between
+    them (`DE AD BE EF`), or after `0x` (`0xDEADBEEF`).
+  * A single pair such as `FF` is text (the two characters F and F): one byte is written
+    `0xFF`.
+  * Text in double quotes is always text: `"DE AD"` finds the five characters.
+  * Up to 128 bytes, matched exactly (letters in their case). The match is selected.
+  * N, Edit > Find next or the toolbar's Find next finds the next one. At the end of the
+    file the status bar says `Not found from 0x… to the end`, and says it again at the
+    next N; Home, then Find next, searches from the start. A Find whose text is not one
+    (`0xZZ`) stops a search that was running.
+  * A long search runs a piece at a time (the status bar counts the percent), and Esc
+    stops it.
+* **The status bar** shows the cursor's offset in hexadecimal and decimal, how many bytes
+  are selected, the last message, and the file's size. The title bar shows the file's
+  name. Hex opens files, not devices. Closing the window forgets the file.
 
 ## Mouse support
 
@@ -240,9 +668,29 @@ allocates). The model's files share `shell/guipriv.h`:
 * `shell/guinote.c` and `shell/guifiles.c`: Notepad and Files.
 * `shell/guidialog.c`: the dialogs, and the Open and Save as choosers.
 * `shell/guidraw.c`: the drawing kit, clipped to rectangles, with the icons.
+* The applications of 10/17/26 each fill an entry of the table `struct gui_app`
+  (`shell/guipriv.h`). The entry holds the title, icon, size and Help lines, and the
+  hooks that the window manager, the menus, the taskbar and the tick call: render, key,
+  pointer, tick, busy, dialog answers, and the Edit menu's items.
+  * `shell/guiterm.c` and `shell/guivt.c`: the Terminal and its terminal emulator.
+  * `shell/guimon.c`, `shell/guidisks.c` and `shell/guimeter.c`: System Monitor and
+    Disks.
+  * `shell/guilog.c`, `shell/guiclock.c` and `shell/guichar.c`: Log, Clock and Character
+    Map.
+  * `shell/guiview.c`, `shell/guihex.c` and `shell/guibmp.c`: the Image Viewer, Hex, and
+    the BMP reader and writer that the viewer and Sketch share.
 
-The model reaches files only through `struct gui_fs`, and only from its key and
-pointer handlers, never while drawing. `shell/guifs.c` implements it on the VFS: Mount
+  Their state is in `gui_state` too (fixed buffers: the viewer's picture of at most
+  3 MB, the Terminal's 1,024 lines), so the desktop needs about 4.6 MB of kernel heap.
+
+The model reaches files only through `struct gui_fs`, and the system only through
+`struct gui_sys`. It calls them only from its key and pointer handlers and the tick,
+never while drawing. `shell/guisys.c`, `guisys_disk.c` and `guisys_term.c` implement
+`struct gui_sys` in the kernel:
+* the tasks, memory and machine for System Monitor, and End task's kill;
+* the kernel log;
+* the block devices, as lsblk lists them (`bdev_walk()`, `bdev_describe()`);
+* the Terminal's sessions, on `kernel/pty.c`'s pseudo-terminals. The read never waits. `shell/guifs.c` implements it on the VFS: Mount
 and Eject run the shell's `mount` and `eject` with their output kept
 (`console_capture_begin()`), and show their last line.
 
@@ -267,9 +715,39 @@ a CRLF file in Notepad, Save and Save as write it, Eject flushes it, and the hos
 reads the files back and runs `fsck` on the stick. Emulator results do not establish
 laptop touchpad compatibility.
 
+The applications of 10/17/26 have host tests of their own, against the in-memory file
+system and system of `tests/host/gui_fake.c`: `test_guiterm.c`, `test_guisys.c`,
+`test_guitools.c` and `test_guimedia.c`. `test_guisuite.c` tests them together: Files'
+Open taking each kind of file to its application, a character copied into Notepad and
+the Terminal, and every window open at once inside guard pixels at three sizes.
+`tools/qemu-usb.py --test --scenario guiapps` runs each application on the screen of a
+USB-booted SurfOS, with a FAT32 data stick of the test's own (APPSTICK). The checks for
+each application are in `tools/gui_apps_<track>.py`. Among them:
+* the Terminal runs `ansi`, `edit`, the pager and Ctrl+C;
+* End task ends a console's shell;
+* Disks mounts and ejects the stick;
+* the Log follows a USB mouse plugged in and pulled out;
+* the timer rings;
+* the Image Viewer shows the stick's pictures;
+* Sketch saves one that the host reads back;
+* Files opens a picture in the Image Viewer and a file that is not text in Hex
+  (`tools/gui_apps_suite.py`, after the applications' own checks).
+
+Each part leaves the desktop as it found it, and the host runs `fsck` on the stick
+afterwards.
+
 The 2026-10-12 desktop validation passed the host suite, 286 smoke checks and
 51 Files checks at both O0 and O2, plus all 15 USB/UEFI scenarios at both levels
 (307 checks each, including 48 GUI checks). The deployed O0 desktop was confirmed
 working by the laptop owner. With the touchpad (2026-10-15) the host suite,
 297 smoke checks and 51 Files checks passed at O0 and O2, and 313 USB/UEFI
 checks at both levels; the owner then used the touchpad in the desktop.
+
+The applications (2026-10-18, gui/suite 3923ce1, from a clean tree) passed the whole
+host suite, the desktop's 3,249 checks among it (test_gui 545, test_guiterm 544,
+test_guisys 364, test_guitools 505, test_guimedia 1,086, test_guisuite 191,
+test_pointer 14); the image builder's 15 tests; 311 smoke checks and 51 Files checks
+at O0 and O2; and all 18 USB/UEFI scenarios at both levels, 570 checks each (the gui
+and guiapps scenarios among them). Each track was reviewed independently until a review
+found nothing more. These are emulator results only: the applications have not yet
+run on the laptop.

@@ -9,8 +9,11 @@ Mount; a mounted one can be ejected. Mount and Eject are the shell's own command
 (shell/guifs.c), so the rules for the boot drive and for busy volumes are theirs,
 and nothing is mounted unless the user asks. A refresh reads every open folder
 again and keeps the selection. Drawing uses only what was read before.
+10/17/26 (the suite): Open takes a picture to the Image Viewer and a file that
+Notepad would refuse to Hex (open_file).
 */
 #include "guipriv.h"
+#include "gui_media.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -333,6 +336,25 @@ static int top_row(const struct gui_state *g, const char *name) {
     return -1;
 }
 
+/* 10/17/26 (the suite): Open. A picture (*.bmp) goes to the Image Viewer, and a file that Notepad would refuse to
+   Hex: one of more than Notepad's 256 KB, or with a NUL byte in its first 512 (one further on is Notepad's to find).
+   Any other file goes to Notepad, as does what cannot be looked at here (a device, a file that is not there), so
+   that Notepad says why. */
+static void open_file(struct gui_state *g, const char *path) {
+    struct gui_entry e;
+    bool device = false, readonly = false;
+    char head[512];
+    u32 len = 0, size = 0;
+    if(viewer_takes(gui_basename(path))) { viewer_show(g, path); return; }
+    if(g->fs && g->fs->read_at && !g->fs->stat(g->fs->ctx, path, &e, &device, &readonly) && e.type != GUI_DIR &&
+       !device && (e.size > GUI_NOTE_MAX ||
+                   (!g->fs->read_at(g->fs->ctx, path, 0, head, sizeof(head), &len, &size) && memchr(head, 0, len)))) {
+        hex_show(g, path);
+        return;
+    }
+    if(gui_guard(g, PEND_OPEN_PATH, path) && note_load(g, path) == 0) gui_open(g, GUI_NOTEPAD);
+}
+
 /* a file or folder the desktop leaves alone (note_guarded()): said */
 static void refuse(struct gui_state *g, const char *title, const char *path) {
     char line[80];
@@ -359,7 +381,7 @@ void files_act(struct gui_state *g, int act) {
             break;
         }
         if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }
-        if(gui_guard(g, PEND_OPEN_PATH, path) && note_load(g, path) == 0) gui_open(g, GUI_NOTEPAD);
+        open_file(g, path);
         return;
     case ACT_FILES_COPY:                                /* the path, for Notepad or a dialog's box */
         if(!files_path(g, f->selected, path, sizeof(path))) { too_long(g); break; }

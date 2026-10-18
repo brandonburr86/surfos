@@ -25,6 +25,13 @@ holding a lock), and what they print goes nowhere; free again once the master is
 no task is left on it. Only processes are ever on a pty: a kernel thread started from a
 session is on F1 (task_alloc()).
 
+10/17/26: the same for a caller in the kernel (surfos/pty.h: the desktop's Terminal,
+shell/guisys_term.c): pty_open() gives a master as an open file of the caller's own, not a
+descriptor, and pty_spawn(), pty_read() (which never waits: what is there, 0 when nothing is,
+-EPIPE once the session has ended and everything was read), pty_write(), pty_resize() and
+pty_number() do what spawnpty, read, write and ptyctl do with a descriptor; pty_close() is the
+hangup when it is the last reference. The system calls share their code and keep their behaviour.
+
 Output: a writer that may wait (console.c says when) waits while the buffer is full, and
 gives up when its call is cut short (a kill, the hangup, Ctrl+C); the bytes of one that
 may not are dropped then, and counted. The last PTY_OUT_KEEP bytes of room are kept for
@@ -156,15 +163,14 @@ void pty_task_gone(struct surf_task *task) {
 
 /**** the master side ****/
 
-/* What the session printed, as it was printed: at least one byte (it waits for one), at most
-   what is there; 0 once the session has ended and everything was read; -EINTR when the reader's
-   call is cut short. A chunk at a time, copied out with interrupts on. */
-static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
-    struct pty *p = (struct pty *)v->priv;
+/* What the session printed, as it was printed: at least one byte, at most what is there; 0 once
+   the session has ended and everything was read. A chunk at a time, copied out with interrupts on.
+   With wait it waits for a byte (-EINTR when the reader's call is cut short); without, it answers
+   -EAGAIN when nothing is there (10/17/26: pty_read()). */
+static int read_out(struct pty *p, void *buf, u32 len, int wait) {
     char chunk[1024];
     u_int n, k;
     u_long flags;
-    (void)off;
     if(len > sizeof(chunk)) len = sizeof(chunk);
     for(;;) {
         flags = irq_save();
@@ -184,6 +190,10 @@ static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
             irq_restore(flags);
             return 0;
         }
+        if(!wait) {
+            irq_restore(flags);
+            return -EAGAIN;
+        }
         if(task_interrupted()) {
             irq_restore(flags);
             return -EINTR;
@@ -192,6 +202,12 @@ static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
         irq_restore(flags);
         yield();
     }
+}
+
+/* read() on the master: it waits for what the session prints */
+static int master_read(struct vnode *v, u32 off, void *buf, u32 len) {
+    (void)off;
+    return read_out((struct pty *)v->priv, buf, len, 1);
 }
 
 /* The bytes as typed keys, through the serial line's rules (tty_term_input(): in line mode CR is
@@ -290,51 +306,53 @@ static int open_master(struct vnode **out) {
 
 /**** the calls ****/
 
-/* the pty whose master descriptor fd is */
-static int master_of(int fd, struct pty **pp) {
-    struct file *f = fd_get(fd);
-    if(!f) return -EBADF;
-    if(f->v->ops != &master_ops) return -EINVAL;        /* not a pty's master */
+/* the pty whose master f is: -EINVAL for a file that is not a pty's master */
+static int pty_of(struct file *f, struct pty **pp) {
+    if(!f || f->v->ops != &master_ops) return -EINVAL;
     *pp = (struct pty *)f->v->priv;
     return 0;
 }
 
-int sys_openpty(void) {
+/* the pty whose master descriptor fd is */
+static int master_of(int fd, struct pty **pp) {
+    struct file *f = fd_get(fd);
+    if(!f) return -EBADF;
+    return pty_of(f, pp);
+}
+
+/* a free pty's master as an open file; -EAGAIN when every pty is in use */
+static int open_file(struct file **out) {
     struct vnode *v;
-    struct file *f;
     int r = open_master(&v);
     if(r) return r;
-    r = vfs_open_vnode(v, O_RDWR, &f);
-    if(r) {
-        vput(v);                                        /* the hangup of a pty nobody used: free again */
-        return r;
-    }
+    r = vfs_open_vnode(v, O_RDWR, out);
+    if(r) vput(v);                                      /* the hangup of a pty nobody used: free again */
+    return r;
+}
+
+int sys_openpty(void) {
+    struct file *f;
+    int r = open_file(&f);
+    if(r) return r;
     r = fd_install(f);
     if(r < 0) vfs_close(f);                             /* the same */
     return r;
 }
 
 /* the program's terminal is the pty: its console and tty, so its descriptors 0, 1 and 2
-   (/dev/console, which devfs resolves through the task) and the kernel's commands it runs */
-int sys_spawnpty(const char *path, char *const argv[], int masterfd) {
-    char *kargv[SPAWN_MAX_ARGS];
-    struct pty *p;
-    struct tty *t;
+   (/dev/console, which devfs resolves through the task) and the kernel's commands it runs;
+   argv is the kernel's copy (the strings may be the caller's, checked) */
+static int spawn_on(struct pty *p, const char *path, int argc, char *const argv[]) {
+    struct tty *t = pty_tty(p);
     u_long flags;
-    int argc, r;
-    r = master_of(masterfd, &p);
-    if(r) return r;
-    if(!user_str(path)) return -EFAULT;
-    argc = user_argv(path, argv, kargv);
-    if(argc < 0) return argc;
-    t = pty_tty(p);
+    int r;
     flags = irq_save();
     if(!task_count_tty(t)) {                            /* a new session on a pty nobody is on starts clean: */
         tty_flush(t);                                   /* keys written after the last one ended are not its */
         p->in_esc = 0;
     }
     irq_restore(flags);
-    r = process_spawn_files(path, argc, kargv, pty_con(p), 0, NULL);
+    r = process_spawn_files(path, argc, argv, pty_con(p), 0, NULL);
     /* It has begun now that its task exists, not before: the last task of an earlier session that
        ends meanwhile does not end this one. Begun or not, a pty nobody is on has ended (a program that
        could not be started, or one that is over already): the master reads 0, POLLHUP. */
@@ -352,17 +370,82 @@ int sys_spawnpty(const char *path, char *const argv[], int masterfd) {
     return r;
 }
 
+int sys_spawnpty(const char *path, char *const argv[], int masterfd) {
+    char *kargv[SPAWN_MAX_ARGS];
+    struct pty *p;
+    int argc, r;
+    r = master_of(masterfd, &p);
+    if(r) return r;
+    if(!user_str(path)) return -EFAULT;
+    argc = user_argv(path, argv, kargv);
+    if(argc < 0) return argc;
+    return spawn_on(p, path, argc, kargv);
+}
+
 /* PTY_SETSIZE: columns 8-1024, rows 2-1024. The cursor stays in the row; a question of the pager
-   that the new size has room for is called off, and its asker goes on counting rows at that size.
-   PTY_INDEX: the pty's number. */
+   that the new size has room for is called off, and its asker goes on counting rows at that size. */
+static int set_size(struct pty *p, u_int cols, u_int rows) {
+    if(cols < PTY_COLS_MIN || cols > PTY_COLS_MAX || rows < PTY_ROWS_MIN || rows > PTY_ROWS_MAX) return -EINVAL;
+    console_stream_resize(pty_con(p), cols, rows);
+    return 0;
+}
+
+/* PTY_SETSIZE (set_size()); PTY_INDEX: the pty's number */
 int sys_ptyctl(int masterfd, int op, u32 arg) {
     struct pty *p;
-    u_int cols = arg >> 16, rows = arg & 0xFFFF;
     int r = master_of(masterfd, &p);
     if(r) return r;
     if(op == PTY_INDEX) return (int)(p - ptys);
     if(op != PTY_SETSIZE) return -EINVAL;
-    if(cols < PTY_COLS_MIN || cols > PTY_COLS_MAX || rows < PTY_ROWS_MIN || rows > PTY_ROWS_MAX) return -EINVAL;
-    console_stream_resize(pty_con(p), cols, rows);
-    return 0;
+    return set_size(p, arg >> 16, arg & 0xFFFF);
+}
+
+/**** 10/17/26: the same for a caller in the kernel (surfos/pty.h) ****/
+
+int pty_open(struct file **master) {
+    return open_file(master);
+}
+
+int pty_spawn(struct file *master, const char *path, int argc, char *const argv[]) {
+    struct pty *p;
+    int r = pty_of(master, &p);
+    if(r) return r;
+    if(argc < 1 || argc > SPAWN_MAX_ARGS) return -EINVAL;
+    return spawn_on(p, path, argc, argv);
+}
+
+/* what the session printed, never waiting: n bytes, 0 when nothing is there yet, -EPIPE once the
+   session has ended and everything was read */
+int pty_read(struct file *master, char *buf, u32 len) {
+    struct pty *p;
+    int r = pty_of(master, &p);
+    if(r) return r;
+    if(!len) return 0;
+    r = read_out(p, buf, len, 0);
+    return r == 0 ? -EPIPE : r == -EAGAIN ? 0 : r;
+}
+
+int pty_write(struct file *master, const char *buf, u32 len) {
+    struct pty *p;
+    int r = pty_of(master, &p);
+    if(r) return r;
+    return master_write(master->v, 0, buf, len);
+}
+
+int pty_resize(struct file *master, u32 cols, u32 rows) {
+    struct pty *p;
+    int r = pty_of(master, &p);
+    if(r) return r;
+    return set_size(p, cols, rows);
+}
+
+int pty_number(struct file *master) {
+    struct pty *p;
+    int r = pty_of(master, &p);
+    return r ? r : (int)(p - ptys);
+}
+
+/* the master's last reference closed is the hangup (master_release()) */
+void pty_close(struct file *master) {
+    if(master) vfs_close(master);
 }
