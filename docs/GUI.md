@@ -286,15 +286,17 @@ before, and the status bar says so.
     the list changes. When the task is not in a reading (it ended), nothing is selected
     until you move: the status bar says its pid is not in the list now, Down goes on from
     its row, and if it is listed again it is selected again.
-  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then "It ends after its
-    system call; unsaved work is lost."), with Cancel as the default, so Enter alone ends
-    nothing.
+  * **End task** (or Del) asks first ("End edit (pid 9) on F2?", then "Ends now or after
+    a system call; unsaved work is lost."), with Cancel as the default, so Enter alone
+    ends nothing.
     * It ends programs only: for a kernel thread (init and the idle task are kernel
       threads) the button is greyed, and Del says why in the status bar.
     * A program running its own code ends at once. One inside a system call or a kernel
       command ends when that call does, however long it takes ("edit (pid 9) ends when its
       system call does"), so that nothing it holds, such as a volume's lock, is left held.
-      The shell's `kill` still ends a task whose call never returns.
+      Once it is gone from the list, the status bar says so ("edit (pid 9) has ended").
+    * A task whose system call never ends is never ended by End task. The shell's `kill`,
+      which kills at once after 2 seconds, is the way out.
     * The kernel refuses this desktop's own task, the shell that ran `gui` ("surfsh (pid
       12) runs this desktop: Ctrl+Q leaves it"), and the shells above it ("surfsh (pid 4)
       runs the shell this desktop runs in"), since a new shell on the desktop's console
@@ -324,7 +326,8 @@ before, and the status bar says so.
     for Notepad or a bug report. A page that could never be read copies nothing, and the
     status bar says so.
   * Find (Ctrl+F) selects the next task whose name holds what you type, in either case,
-    going round past the end, and Find next does it again.
+    after the selected one (or from the row of the one that ended), going round past the
+    end, and Find next does it again.
   * Go to pid (Ctrl+L) selects a task by its pid.
 * Limits: no processor time per task; at most 128 tasks are listed, the newest; names
   are cut at 15 characters.
@@ -363,9 +366,9 @@ list read before, and the status bar says so.
 * **Refresh** (Ctrl+R) reads the devices again now.
   * A stick pulled out while mounted stays in the list, `unplugged: eject it`, until
     Eject unmounts it.
-  * A device that is not in a reading (pulled out) stays followed: nothing is selected,
-    the status bar says it is not there any more, Down goes on from its row, and if it
-    comes back it is selected again.
+  * A device that is not in a reading (pulled out) stays followed: nothing is selected
+    (M, E and Enter say so), the status bar says it is not there any more, Down goes on
+    from its row, and if it comes back it is selected again.
 * Ctrl+C copies the selected device's line. A double-click on a row is Enter.
 * Limits: Mount and Eject are for USB volumes; the initrd and internal disks are only
   shown.
