@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); after `deploy-sd` it lists `/BOOT` and `/SYSTEM` and reads the whole 388,724-byte `SURFOS.BIN` through its 8 fragments, every byte position matching the Mac's copy ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); SurfBoot 1.1.0 then loads SURFOS.BIN from the card into DDR (CRC checked in both) and starts it ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); the formal m5 test (DDRDIAG.BIN from the card, the card taken out) not run yet | software done on the host; RTL SoC done; on the board: card reads and the DDR boot shown, m5 pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: neither of the owner's keyboards answers. The first (a USB keyboard on a passive USB-to-PS/2 adapter) does not speak PS/2; the second, an MCSAITE PS/2 keyboard specified for 5 V, does not start on the adapter's 3.3 V ([evidence](evidence/physical/ps2-2026-10-17.txt)): it needs a level shifter with 5 V, or a keyboard that runs at 3.3 V | done in simulation; on the board: VGA done, the PS/2 keyboard pending (a level shifter for the owner's 5 V keyboard, or a keyboard that runs at 3.3 V) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the seventh storage review's findings, being fixed in fs-fix-7) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the eighth storage review's findings, being fixed in fs-fix-8) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
 
 ## Log
@@ -799,7 +799,8 @@ ddr-3 built five candidates, every gate passing on each
     kernel command). The call unwinds its copy record and `copying` flag and returns EIO. A
     kill is put off while the task holds the cache's locks or is inside a file system call,
     and comes as soon as it is out. A closing task is never cut short, so close still writes
-    its files out. A long read or write stops between 64 KB pieces.
+    its files out. A long read or write stops between two pieces: a block through the cache,
+    up to 64 KB straight (B49 corrected "64 KB pieces").
   * B40: binvalidate() drops blocks the way bdiscard does; held or busy ones go when let go.
   * B41: only copies whose block changed are spoiled, a copy ends once another write has paid
     its debt, and the 16-look bound is gone: a sync under rm traffic waits instead of failing.
@@ -836,4 +837,47 @@ ddr-3 built five candidates, every gate passing on each
   * Coverage: no test can see B41's debt test or B45 reverted.
 
   fs-fix-7 is fixing them, on sc/fs-fix-7 from 3fe29bf. The file test on the owner's card (m8)
+  and milestone 9's board test wait for it.
+
+### 2026-10-18: storage round fs-fix-7 and the eighth review
+
+* fs-fix-7 was merged as b482ff1. It closes the seventh review's findings as audit B46-B49:
+  * B46 (the major one): an umount that has begun finishes. From the moment the mount leaves
+    the list, Ctrl+C, a kill or a hangup no longer cuts its waits short, and a kill that waited
+    comes after it. eject interrupted while it still writes the mounts out unmounts nothing and
+    says the disk stays mounted.
+  * B47: every request through the block layer counts as inside, so a kill comes only after
+    the request. An interrupted mkfs stops between two requests and says how far it got.
+  * B48: a kernel thread killed outside any call that then enters one gets that call's 2 s.
+  * B49: the documents say what a piece is, and a direct write cut short says EINTR.
+
+  Each finding has a test that fails on 3fe29bf and passes now. The host tests have 343 checks;
+  the threaded test has an umount setting (25 of 25 runs clean, against 5 blocks given up in
+  each of 10 runs before); the kernel's self test has seven new steps. Every command on the RTL
+  system costs within 0.5 % of before.
+* The integrator's runs at b482ff1, from a fresh build volume, all pass:
+  * x86 test-all at O0 and O2: smoke 311 and files 51 each (16 minutes);
+  * unittest: MKFS 117/0, FATFS 343/0, FATFUZZ 4/0, CONC ok x4, and the umount setting ok in
+    all four modes (7 minutes);
+  * `make check` in 27 minutes: test-os 132/132 at O2 and O0, persist 17/17, faults 25/25,
+    kit 22/22, system boot 21/21.
+* An eighth independent review found no critical or major defect. A must-finish umount waits
+  for the other task's write, gives nothing up and leaves the volume clean. mkfs cut after any
+  write (FAT16 and FAT32 over either, same and other geometry) leaves the old volume untouched
+  when nothing was written, and otherwise nothing mountable, as its message says. 71 threaded
+  runs (about 30 k kills and 20 k Ctrl+Cs injected) left nothing stale and lost nothing. It found:
+  * **Minor:**
+    * an umount's wait for a block another task marked as being written has no bound: if that
+      task died at a kernel fault with the mark set, the umount waits forever and cannot be
+      stopped (before fs-fix-7 it gave the block up);
+    * the device is free while its umount still writes (older than fs-fix-7, which makes the
+      window longer): mounting or formatting it again meanwhile can lose a file or mark the
+      card clean too early;
+    * fdisk holds its lock across its writes, so a kill escalated after 2 s could leave the
+      lock held (found by reading).
+  * **Cosmetic:** cp and fsbench call an interrupted write a full disk or an I/O error; an
+    umount that finished after Ctrl+C returns status 130; a hangup's kill could get the 2 s
+    escalation (not reachable today); and no test interrupts eject in its unmount phase.
+
+  fs-fix-8 is fixing them, on sc/fs-fix-8 from b482ff1. The file test on the owner's card (m8)
   and milestone 9's board test wait for it.
