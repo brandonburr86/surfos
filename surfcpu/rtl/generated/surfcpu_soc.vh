@@ -1,5 +1,5 @@
 // Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
-// SurfCPU memory map version 2, SoC version 0.2.0.
+// SurfCPU memory map version 2, SoC version 0.3.0.
 
 // `include this file once inside each module body that needs it (it holds localparams,
 // so it has no include guard). Addresses and masks are [31:0]; bit positions and counts
@@ -7,7 +7,7 @@
 
 /* verilator lint_off UNUSEDPARAM */
 localparam integer SURF_MAP_VERSION = 2;  // memory map version
-localparam [31:0] SURF_SOC_VERSION = 32'h0000_0200;  // SoC version 0.2.0
+localparam [31:0] SURF_SOC_VERSION = 32'h0000_0300;  // SoC version 0.3.0
 localparam [31:0] SURF_RESET_PC = 32'h0000_0000;  // reset vector
 localparam integer SURF_HART_ID = 0;  // mhartid
 localparam integer SURF_OSC_HZ = 100000000;  // Hz
@@ -51,12 +51,18 @@ localparam [31:0] SURF_SYSINFO_MASK = 32'h0000_0FFF;  // address bits inside the
 localparam [31:0] SURF_ETH_BASE = 32'h1000_8000;  // Reserved for a later Ethernet MAC (decodes as unmapped until then)
 localparam [31:0] SURF_ETH_SIZE = 32'h0000_1000;
 localparam [31:0] SURF_ETH_MASK = 32'h0000_0FFF;  // address bits inside the region
+localparam [31:0] SURF_GPU_BASE = 32'h1000_9000;  // GPU drawing engine: command FIFO, status, fences (docs/GPU.md); present only with sysinfo.FEATURES.GPU, else unmapped (every access an error)
+localparam [31:0] SURF_GPU_SIZE = 32'h0000_1000;
+localparam [31:0] SURF_GPU_MASK = 32'h0000_0FFF;  // address bits inside the region
 localparam [31:0] SURF_DDRC_BASE = 32'h1000_A000;  // DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0
 localparam [31:0] SURF_DDRC_SIZE = 32'h0000_2000;
 localparam [31:0] SURF_DDRC_MASK = 32'h0000_1FFF;  // address bits inside the region
 localparam [31:0] SURF_TEXTRAM_BASE = 32'h2000_0000;  // Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col)
 localparam [31:0] SURF_TEXTRAM_SIZE = 32'h0000_4000;
 localparam [31:0] SURF_TEXTRAM_MASK = 32'h0000_3FFF;  // address bits inside the region
+localparam [31:0] SURF_VRAM_BASE = 32'h3000_0000;  // Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error)
+localparam [31:0] SURF_VRAM_SIZE = 32'h0008_0000;
+localparam [31:0] SURF_VRAM_MASK = 32'h0007_FFFF;  // address bits inside the region
 localparam [31:0] SURF_DDR_BASE = 32'h8000_0000;  // 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS)
 localparam [31:0] SURF_DDR_SIZE = 32'h1000_0000;
 localparam [31:0] SURF_DDR_MASK = 32'h0FFF_FFFF;  // address bits inside the region
@@ -73,7 +79,8 @@ localparam integer SURF_IRQ_PS2 = 1;  // interrupt controller source
 localparam integer SURF_IRQ_GPIO = 2;  // interrupt controller source
 localparam integer SURF_IRQ_VIDEO = 3;  // interrupt controller source
 localparam integer SURF_IRQ_SPI = 4;  // interrupt controller source
-localparam integer SURF_IRQ_COUNT = 5;  // sources in use
+localparam integer SURF_IRQ_GPU = 5;  // interrupt controller source
+localparam integer SURF_IRQ_COUNT = 6;  // sources in use
 localparam [31:0] SURF_UART_TXDATA = 32'h0000_0000;  // rw: Write: bits 7:0 go into the TX FIFO (dropped, setting STATUS.TX_OVF, when it is full). Read: bit 31 = TX FIFO full.
 localparam integer SURF_UART_TXDATA_DATA_LSB = 0;  // byte to send (write)
 localparam integer SURF_UART_TXDATA_DATA_WIDTH = 8;
@@ -262,7 +269,7 @@ localparam [31:0] SURF_VIDEO_CTRL = 32'h0000_0000;  // rw: Display mode. Reset: 
 localparam integer SURF_VIDEO_CTRL_ENABLE_LSB = 0;  // 0 = black picture (syncs keep running)
 localparam integer SURF_VIDEO_CTRL_ENABLE_WIDTH = 1;
 localparam [31:0] SURF_VIDEO_CTRL_ENABLE_MASK = 32'h0000_0001;  // in place
-localparam integer SURF_VIDEO_CTRL_MODE_LSB = 1;  // 0 = color-bar test pattern, 1 = text, 2..3 reserved (black)
+localparam integer SURF_VIDEO_CTRL_MODE_LSB = 1;  // 0 = color-bar test pattern, 1 = text, 2 = graphics (VRAM pixels through GPAL), 3 = graphics with the text layer over it (a set glyph pixel or the cursor shows the text foreground, else a cell background index other than 0 shows the text background, else the graphics pixel); 2 and 3 show black without a GPU (sysinfo.FEATURES.GPU = 0)
 localparam integer SURF_VIDEO_CTRL_MODE_WIDTH = 2;
 localparam [31:0] SURF_VIDEO_CTRL_MODE_MASK = 32'h0000_0006;  // in place
 localparam integer SURF_VIDEO_CTRL_CURSOR_EN_LSB = 3;  // show the cursor
@@ -321,6 +328,34 @@ localparam [31:0] SURF_VIDEO_PALETTE_G_MASK = 32'h0000_00F0;  // in place
 localparam integer SURF_VIDEO_PALETTE_R_LSB = 8;  // red
 localparam integer SURF_VIDEO_PALETTE_R_WIDTH = 4;
 localparam [31:0] SURF_VIDEO_PALETTE_R_MASK = 32'h0000_0F00;  // in place
+localparam [31:0] SURF_VIDEO_GFX_BASE = 32'h0000_0080;  // rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU.
+localparam integer SURF_VIDEO_GFX_BASE_BASE_LSB = 0;  // byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0
+localparam integer SURF_VIDEO_GFX_BASE_BASE_WIDTH = 19;
+localparam [31:0] SURF_VIDEO_GFX_BASE_BASE_MASK = 32'h0007_FFFF;  // in place
+localparam [31:0] SURF_VIDEO_GFX_STRIDE = 32'h0000_0084;  // rw: Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU.
+localparam integer SURF_VIDEO_GFX_STRIDE_STRIDE_LSB = 0;  // line pitch in bytes (bits 1:0 are 0)
+localparam integer SURF_VIDEO_GFX_STRIDE_STRIDE_WIDTH = 16;
+localparam [31:0] SURF_VIDEO_GFX_STRIDE_STRIDE_MASK = 32'h0000_FFFF;  // in place
+localparam [31:0] SURF_VIDEO_GFX_SCALE = 32'h0000_0088;  // rw: Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU.
+localparam integer SURF_VIDEO_GFX_SCALE_SCALE_LSB = 0;  // 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1
+localparam integer SURF_VIDEO_GFX_SCALE_SCALE_WIDTH = 2;
+localparam [31:0] SURF_VIDEO_GFX_SCALE_SCALE_MASK = 32'h0000_0003;  // in place
+localparam [31:0] SURF_VIDEO_FRAME_CRC = 32'h0000_008C;  // ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU.
+localparam [31:0] SURF_VIDEO_FRAME_COUNT = 32'h0000_0090;  // ro: How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU.
+localparam integer SURF_VIDEO_FRAME_COUNT_COUNT_LSB = 0;  // frames (wraps)
+localparam integer SURF_VIDEO_FRAME_COUNT_COUNT_WIDTH = 16;
+localparam [31:0] SURF_VIDEO_FRAME_COUNT_COUNT_MASK = 32'h0000_FFFF;  // in place
+localparam [31:0] SURF_VIDEO_GPAL = 32'h0000_0400;  // rw: Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU.
+localparam integer SURF_VIDEO_GPAL_COUNT = 256;  // consecutive words
+localparam integer SURF_VIDEO_GPAL_B_LSB = 0;  // blue
+localparam integer SURF_VIDEO_GPAL_B_WIDTH = 4;
+localparam [31:0] SURF_VIDEO_GPAL_B_MASK = 32'h0000_000F;  // in place
+localparam integer SURF_VIDEO_GPAL_G_LSB = 4;  // green
+localparam integer SURF_VIDEO_GPAL_G_WIDTH = 4;
+localparam [31:0] SURF_VIDEO_GPAL_G_MASK = 32'h0000_00F0;  // in place
+localparam integer SURF_VIDEO_GPAL_R_LSB = 8;  // red
+localparam integer SURF_VIDEO_GPAL_R_WIDTH = 4;
+localparam [31:0] SURF_VIDEO_GPAL_R_MASK = 32'h0000_0F00;  // in place
 localparam [31:0] SURF_SYSINFO_MAGIC = 32'h0000_0000;  // ro: 0x46525553, the bytes "SURF" in memory order.
 localparam [31:0] SURF_SYSINFO_SOC_VERSION = 32'h0000_0004;  // ro: soc.soc_version as major << 16 | minor << 8 | patch.
 localparam [31:0] SURF_SYSINFO_MAP_VERSION = 32'h0000_0008;  // ro: soc.map_version: which version of this memory map the hardware implements.
@@ -359,6 +394,9 @@ localparam [31:0] SURF_SYSINFO_FEATURES_VIDEO_MASK = 32'h0000_0040;  // in place
 localparam integer SURF_SYSINFO_FEATURES_DDR_LSB = 7;
 localparam integer SURF_SYSINFO_FEATURES_DDR_WIDTH = 1;
 localparam [31:0] SURF_SYSINFO_FEATURES_DDR_MASK = 32'h0000_0080;  // in place
+localparam integer SURF_SYSINFO_FEATURES_GPU_LSB = 8;  // VRAM, the graphics modes of video and the gpu drawing engine (docs/GPU.md)
+localparam integer SURF_SYSINFO_FEATURES_GPU_WIDTH = 1;
+localparam [31:0] SURF_SYSINFO_FEATURES_GPU_MASK = 32'h0000_0100;  // in place
 localparam [31:0] SURF_SYSINFO_DDR_STATUS = 32'h0000_0020;  // ro: DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself.
 localparam integer SURF_SYSINFO_DDR_STATUS_CALIB_DONE_LSB = 0;  // calibration succeeded; DDR is usable
 localparam integer SURF_SYSINFO_DDR_STATUS_CALIB_DONE_WIDTH = 1;
@@ -379,6 +417,47 @@ localparam [31:0] SURF_SYSINFO_DDR_SIZE = 32'h0000_0024;  // ro: Bytes of DDR be
 localparam [31:0] SURF_SYSINFO_PIX_HZ = 32'h0000_0028;  // ro: Pixel clock in Hz (0 without video).
 localparam [31:0] SURF_SYSINFO_SCRATCH = 32'h0000_002C;  // rw: Free read/write word for bus tests (reset 0).
 localparam [31:0] SURF_SYSINFO_BUILD_TIME = 32'h0000_0030;  // ro: Build time, seconds since 1970-01-01 UTC (0 if unknown).
+localparam [31:0] SURF_GPU_ID = 32'h0000_0000;  // ro: 0x31555047, the bytes "GPU1" in memory order: the command set of docs/GPU.md version 1.
+localparam [31:0] SURF_GPU_STATUS = 32'h0000_0004;  // w1c: Engine state and sticky events; write 1 to clear a sticky bit.
+localparam integer SURF_GPU_STATUS_BUSY_LSB = 0;  // commands are queued or running; 0: every command written so far is done and its writes are in VRAM
+localparam integer SURF_GPU_STATUS_BUSY_WIDTH = 1;
+localparam [31:0] SURF_GPU_STATUS_BUSY_MASK = 32'h0000_0001;  // in place
+localparam integer SURF_GPU_STATUS_OVERFLOW_LSB = 1;  // sticky: a CMD write found the FIFO full and was dropped
+localparam integer SURF_GPU_STATUS_OVERFLOW_WIDTH = 1;
+localparam [31:0] SURF_GPU_STATUS_OVERFLOW_MASK = 32'h0000_0002;  // in place
+localparam integer SURF_GPU_STATUS_BAD_OPCODE_LSB = 2;  // sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command)
+localparam integer SURF_GPU_STATUS_BAD_OPCODE_WIDTH = 1;
+localparam [31:0] SURF_GPU_STATUS_BAD_OPCODE_MASK = 32'h0000_0004;  // in place
+localparam integer SURF_GPU_STATUS_BAD_PARAM_LSB = 3;  // sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large)
+localparam integer SURF_GPU_STATUS_BAD_PARAM_WIDTH = 1;
+localparam [31:0] SURF_GPU_STATUS_BAD_PARAM_MASK = 32'h0000_0008;  // in place
+localparam integer SURF_GPU_STATUS_FENCE_EV_LSB = 4;  // sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE)
+localparam integer SURF_GPU_STATUS_FENCE_EV_WIDTH = 1;
+localparam [31:0] SURF_GPU_STATUS_FENCE_EV_MASK = 32'h0000_0010;  // in place
+localparam [31:0] SURF_GPU_IE = 32'h0000_0008;  // rw: Interrupt enables.
+localparam integer SURF_GPU_IE_FENCE_LSB = 0;  // interrupt while STATUS.FENCE_EV
+localparam integer SURF_GPU_IE_FENCE_WIDTH = 1;
+localparam [31:0] SURF_GPU_IE_FENCE_MASK = 32'h0000_0001;  // in place
+localparam integer SURF_GPU_IE_ERR_LSB = 1;  // interrupt while STATUS.OVERFLOW, BAD_OPCODE or BAD_PARAM
+localparam integer SURF_GPU_IE_ERR_WIDTH = 1;
+localparam [31:0] SURF_GPU_IE_ERR_MASK = 32'h0000_0002;  // in place
+localparam [31:0] SURF_GPU_CTRL = 32'h0000_000C;  // wo: Engine control.
+localparam integer SURF_GPU_CTRL_ABORT_LSB = 0;  // write 1: empty the FIFO and stop the running command at once (its writes so far stay); target, clip, FENCE and the sticky bits are kept
+localparam integer SURF_GPU_CTRL_ABORT_WIDTH = 1;
+localparam [31:0] SURF_GPU_CTRL_ABORT_MASK = 32'h0000_0001;  // in place
+localparam [31:0] SURF_GPU_CMD = 32'h0000_0010;  // wo: Write: the next command word goes into the FIFO; dropped, setting STATUS.OVERFLOW, when the FIFO is full (never a bus stall). Check FIFO_FREE first.
+localparam [31:0] SURF_GPU_FIFO_FREE = 32'h0000_0014;  // ro: Free words in the command FIFO.
+localparam integer SURF_GPU_FIFO_FREE_FREE_LSB = 0;  // 0 .. INFO.FIFO_DEPTH
+localparam integer SURF_GPU_FIFO_FREE_FREE_WIDTH = 16;
+localparam [31:0] SURF_GPU_FIFO_FREE_FREE_MASK = 32'h0000_FFFF;  // in place
+localparam [31:0] SURF_GPU_FENCE = 32'h0000_0018;  // ro: The value of the last FENCE command that completed (reset 0): every command written before it is done.
+localparam [31:0] SURF_GPU_INFO = 32'h0000_001C;  // ro: Sizes.
+localparam integer SURF_GPU_INFO_FIFO_DEPTH_LSB = 0;  // command FIFO words
+localparam integer SURF_GPU_INFO_FIFO_DEPTH_WIDTH = 16;
+localparam [31:0] SURF_GPU_INFO_FIFO_DEPTH_MASK = 32'h0000_FFFF;  // in place
+localparam integer SURF_GPU_INFO_VRAM_KIB_LSB = 16;  // VRAM size in KiB (300)
+localparam integer SURF_GPU_INFO_VRAM_KIB_WIDTH = 16;
+localparam [31:0] SURF_GPU_INFO_VRAM_KIB_MASK = 32'hFFFF_0000;  // in place
 localparam [31:0] SURF_DDRC_INIT_DONE = 32'h0000_0000;  // rw: ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows.
 localparam integer SURF_DDRC_INIT_DONE_DONE_LSB = 0;  // initialization ended
 localparam integer SURF_DDRC_INIT_DONE_DONE_WIDTH = 1;

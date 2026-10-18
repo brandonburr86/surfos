@@ -2,7 +2,7 @@
 
 <!-- Generated from spec/soc.toml by tools/socspec.py gen -- do not edit. -->
 
-Memory map version **2**, SoC version **0.2.0**, ISA `rv32im_zicsr_zifencei`, ABI `ilp32`, reset PC `0x0000_0000`, one hart (mhartid 0). Little-endian. The source of truth is [`spec/soc.toml`](../spec/soc.toml); the Verilog, C and linker definitions are generated from it ([`rtl/generated/surfcpu_soc.vh`](../rtl/generated/surfcpu_soc.vh), [`firmware/include/surfcpu/soc.h`](../firmware/include/surfcpu/soc.h), [`firmware/ld/surfcpu_soc.ld`](../firmware/ld/surfcpu_soc.ld)).
+Memory map version **2**, SoC version **0.3.0**, ISA `rv32im_zicsr_zifencei`, ABI `ilp32`, reset PC `0x0000_0000`, one hart (mhartid 0). Little-endian. The source of truth is [`spec/soc.toml`](../spec/soc.toml); the Verilog, C and linker definitions are generated from it ([`rtl/generated/surfcpu_soc.vh`](../rtl/generated/surfcpu_soc.vh), [`firmware/include/surfcpu/soc.h`](../firmware/include/surfcpu/soc.h), [`firmware/ld/surfcpu_soc.ld`](../firmware/ld/surfcpu_soc.ld)).
 
 Unmapped addresses, fetches from regions without *fetch*, and stores to regions without *write* get a SurfBus error, which the CPU raises as an access fault ([SURFBUS.md](SURFBUS.md)). Inside an MMIO window, an offset with no register also answers with an error. Registers are 32-bit and are accessed as aligned words.
 
@@ -31,8 +31,10 @@ Unmapped addresses, fetches from regions without *fetch*, and stores to regions 
 | `0x1000_6000` | `0x1000_6FFF` | 4 KiB | `video` | mmio | no | yes | VGA text display control, cursor, palette |
 | `0x1000_7000` | `0x1000_7FFF` | 4 KiB | `sysinfo` | mmio | no | yes | Board and build identity, clocks, DDR status |
 | `0x1000_8000` | `0x1000_8FFF` | 4 KiB | `eth` | reserved | no | no | Reserved for a later Ethernet MAC (decodes as unmapped until then) |
+| `0x1000_9000` | `0x1000_9FFF` | 4 KiB | `gpu` | mmio | no | yes | GPU drawing engine: command FIFO, status, fences (docs/GPU.md); present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) |
 | `0x1000_A000` | `0x1000_BFFF` | 8 KiB | `ddrc` | mmio | no | yes | DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0 |
 | `0x2000_0000` | `0x2000_3FFF` | 16 KiB | `textram` | ram | no | yes | Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col) |
+| `0x3000_0000` | `0x3007_FFFF` | 512 KiB | `vram` | ram | no | yes | Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) |
 | `0x8000_0000` | `0x8FFF_FFFF` | 256 MiB | `ddr` | ddr | yes | yes | 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS) |
 
 ## Software reservations
@@ -57,6 +59,7 @@ Not decoded by hardware; SurfBoot and the kernel keep to them.
 | gpio | 2 |
 | video | 3 |
 | spi | 4 |
+| gpu | 5 |
 
 ## Boards
 
@@ -145,11 +148,11 @@ PS/2 port (keyboard). Receives device-to-host frames into a 16-byte FIFO, checki
 
 ### video at `0x1000_6000`
 
-VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. Interrupt source 3 (video).
+VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken with CTRL, once per frame, GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error). Interrupt source 3 (video).
 
 | Offset | Register | Access | Fields | Description |
 |---|---|---|---|---|
-| `0x000` | `CTRL` | rw | 0 `ENABLE` 0 = black picture (syncs keep running)<br>2:1 `MODE` 0 = color-bar test pattern, 1 = text, 2..3 reserved (black)<br>3 `CURSOR_EN` show the cursor<br>4 `CURSOR_BLINK` blink it (about 2 Hz) | Display mode. Reset: ENABLE=1, MODE=0 (test pattern), so a monitor shows bars before any software runs. |
+| `0x000` | `CTRL` | rw | 0 `ENABLE` 0 = black picture (syncs keep running)<br>2:1 `MODE` 0 = color-bar test pattern, 1 = text, 2 = graphics (VRAM pixels through GPAL), 3 = graphics with the text layer over it (a set glyph pixel or the cursor shows the text foreground, else a cell background index other than 0 shows the text background, else the graphics pixel); 2 and 3 show black without a GPU (sysinfo.FEATURES.GPU = 0)<br>3 `CURSOR_EN` show the cursor<br>4 `CURSOR_BLINK` blink it (about 2 Hz) | Display mode. Reset: ENABLE=1, MODE=0 (test pattern), so a monitor shows bars before any software runs. |
 | `0x004` | `STATUS` | w1c | 0 `VBLANK` in vertical blanking now<br>1 `VBLANK_EV` sticky: a vertical blanking interval began (interrupt source when IE.VBLANK)<br>31:16 `FRAME` frame counter (wraps); counts when vertical blanking begins | Frame state. |
 | `0x008` | `CURSOR` | rw | 6:0 `COL` column 0..79<br>12:8 `ROW` row 0..29 | Cursor position on the screen (display coordinates, after SCROLL). |
 | `0x00C` | `SCROLL` | rw | 4:0 `ROW` 0..29 (values 30..31 act as 0) | First text row shown at the top of the screen. |
@@ -157,6 +160,12 @@ VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode sh
 | `0x014` | `INFO` | ro | 7:0 `COLS` 80<br>15:8 `ROWS` 30<br>19:16 `GLYPH_W` 8<br>28:24 `GLYPH_H` 16 | Text geometry: 80 columns, 30 rows, 8x16 glyphs. |
 | `0x018` | `PIXCLK` | ro | 31:0 | Actual pixel clock in Hz (clocks.pix_hz). |
 | `0x040`..`0x07C` | `PALETTE` | rw | 3:0 `B` blue<br>7:4 `G` green<br>11:8 `R` red | Palette entry n at 0x40 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue. Reset: the 16 CGA colors. |
+| `0x080` | `GFX_BASE` | rw | 18:0 `BASE` byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0 | Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU. |
+| `0x084` | `GFX_STRIDE` | rw | 15:0 `STRIDE` line pitch in bytes (bits 1:0 are 0) | Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU. |
+| `0x088` | `GFX_SCALE` | rw | 1:0 `SCALE` 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1 | Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU. |
+| `0x08C` | `FRAME_CRC` | ro | 31:0 | CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU. |
+| `0x090` | `FRAME_COUNT` | ro | 15:0 `COUNT` frames (wraps) | How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU. |
+| `0x400`..`0x7FC` | `GPAL` | rw | 3:0 `B` blue<br>7:4 `G` green<br>11:8 `R` red | Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU. |
 
 ### sysinfo at `0x1000_7000`
 
@@ -171,12 +180,27 @@ Identity of the board and the build, clock rates and the DDR state. All read onl
 | `0x010` | `SYS_HZ` | ro | 31:0 | sys_clk frequency in Hz. |
 | `0x014` | `BUILD_ID` | ro | 31:0 | First 8 hex digits of the source commit the bitstream was built from. |
 | `0x018` | `BUILD_FLAGS` | ro | 0 `DIRTY` the source tree had uncommitted changes<br>1 `SIM` this is a simulation, not a bitstream | Build properties. |
-| `0x01C` | `FEATURES` | ro | 0 `UART`<br>1 `TIMER`<br>2 `IRQ`<br>3 `GPIO`<br>4 `SPI`<br>5 `PS2`<br>6 `VIDEO`<br>7 `DDR` | Which blocks were built in. |
+| `0x01C` | `FEATURES` | ro | 0 `UART`<br>1 `TIMER`<br>2 `IRQ`<br>3 `GPIO`<br>4 `SPI`<br>5 `PS2`<br>6 `VIDEO`<br>7 `DDR`<br>8 `GPU` VRAM, the graphics modes of video and the gpu drawing engine (docs/GPU.md) | Which blocks were built in. |
 | `0x020` | `DDR_STATUS` | ro | 0 `CALIB_DONE` calibration succeeded; DDR is usable<br>1 `CALIB_FAIL` sticky until reset: calibration had not succeeded within the bridge's limit (CALIB_TIMEOUT_CYCLES, counted from reset, software initialization included); CALIB_DONE then stays 0<br>2 `PRESENT` a DDR controller is built in<br>3 `TIMEOUT` sticky until reset: a DDR access was abandoned by the bridge's watchdog<br>4 `SWINIT` the controller waits for software to initialize and calibrate the DDR3L through the ddrc registers (LiteDRAM without its own CPU); 0: it does so by itself (MIG, the simulation model) | DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself. |
 | `0x024` | `DDR_SIZE` | ro | 31:0 | Bytes of DDR behind the window (0 when not present). |
 | `0x028` | `PIX_HZ` | ro | 31:0 | Pixel clock in Hz (0 without video). |
 | `0x02C` | `SCRATCH` | rw | 31:0 | Free read/write word for bus tests (reset 0). |
 | `0x030` | `BUILD_TIME` | ro | 31:0 | Build time, seconds since 1970-01-01 UTC (0 if unknown). |
+
+### gpu at `0x1000_9000`
+
+GPU drawing engine (docs/GPU.md): software writes commands, word by word, to CMD; the engine runs them in order on VRAM, four 8-bit pixels per access, with lower priority than the CPU's own VRAM accesses: SET_TARGET, SET_CLIP, FILL_RECT, COPY_RECT, LINE, EXPAND, WRITE_RECT, FENCE, WAIT_VBLANK (formats in docs/GPU.md and firmware/include/surfcpu/gpu.h). Nothing orders the CPU's VRAM accesses against queued commands: wait for a FENCE or for STATUS.BUSY = 0. Present only with sysinfo.FEATURES.GPU. Interrupt source 5 (gpu).
+
+| Offset | Register | Access | Fields | Description |
+|---|---|---|---|---|
+| `0x000` | `ID` | ro | 31:0 | 0x31555047, the bytes "GPU1" in memory order: the command set of docs/GPU.md version 1. |
+| `0x004` | `STATUS` | w1c | 0 `BUSY` commands are queued or running; 0: every command written so far is done and its writes are in VRAM<br>1 `OVERFLOW` sticky: a CMD write found the FIFO full and was dropped<br>2 `BAD_OPCODE` sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command)<br>3 `BAD_PARAM` sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large)<br>4 `FENCE_EV` sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE) | Engine state and sticky events; write 1 to clear a sticky bit. |
+| `0x008` | `IE` | rw | 0 `FENCE` interrupt while STATUS.FENCE_EV<br>1 `ERR` interrupt while STATUS.OVERFLOW, BAD_OPCODE or BAD_PARAM | Interrupt enables. |
+| `0x00C` | `CTRL` | wo | 0 `ABORT` write 1: empty the FIFO and stop the running command at once (its writes so far stay); target, clip, FENCE and the sticky bits are kept | Engine control. |
+| `0x010` | `CMD` | wo | 31:0 | Write: the next command word goes into the FIFO; dropped, setting STATUS.OVERFLOW, when the FIFO is full (never a bus stall). Check FIFO_FREE first. |
+| `0x014` | `FIFO_FREE` | ro | 15:0 `FREE` 0 .. INFO.FIFO_DEPTH | Free words in the command FIFO. |
+| `0x018` | `FENCE` | ro | 31:0 | The value of the last FENCE command that completed (reset 0): every command written before it is done. |
+| `0x01C` | `INFO` | ro | 15:0 `FIFO_DEPTH` command FIFO words<br>31:16 `VRAM_KIB` VRAM size in KiB (300) | Sizes. |
 
 ### ddrc at `0x1000_A000`
 

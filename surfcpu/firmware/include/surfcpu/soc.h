@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 2, SoC version 0.2.0.
+ * SurfCPU memory map version 2, SoC version 0.3.0.
  */
 
 #ifndef SURFCPU_SOC_H
@@ -10,7 +10,7 @@
 #define SURF_REG(base, off) (*(volatile unsigned int *)((base) + (off)))
 
 #define SURF_MAP_VERSION 2 /* memory map version */
-#define SURF_SOC_VERSION 0x00000200u /* SoC version 0.2.0 */
+#define SURF_SOC_VERSION 0x00000300u /* SoC version 0.3.0 */
 #define SURF_RESET_PC 0x00000000u /* reset vector */
 #define SURF_HART_ID 0 /* mhartid */
 #define SURF_OSC_HZ 100000000 /* Hz */
@@ -54,12 +54,18 @@
 #define SURF_ETH_BASE 0x10008000u /* Reserved for a later Ethernet MAC (decodes as unmapped until then) */
 #define SURF_ETH_SIZE 0x00001000u
 #define SURF_ETH_MASK 0x00000FFFu /* address bits inside the region */
+#define SURF_GPU_BASE 0x10009000u /* GPU drawing engine: command FIFO, status, fences (docs/GPU.md); present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) */
+#define SURF_GPU_SIZE 0x00001000u
+#define SURF_GPU_MASK 0x00000FFFu /* address bits inside the region */
 #define SURF_DDRC_BASE 0x1000A000u /* DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0 */
 #define SURF_DDRC_SIZE 0x00002000u
 #define SURF_DDRC_MASK 0x00001FFFu /* address bits inside the region */
 #define SURF_TEXTRAM_BASE 0x20000000u /* Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col) */
 #define SURF_TEXTRAM_SIZE 0x00004000u
 #define SURF_TEXTRAM_MASK 0x00003FFFu /* address bits inside the region */
+#define SURF_VRAM_BASE 0x30000000u /* Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) */
+#define SURF_VRAM_SIZE 0x00080000u
+#define SURF_VRAM_MASK 0x0007FFFFu /* address bits inside the region */
 #define SURF_DDR_BASE 0x80000000u /* 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS) */
 #define SURF_DDR_SIZE 0x10000000u
 #define SURF_DDR_MASK 0x0FFFFFFFu /* address bits inside the region */
@@ -76,7 +82,8 @@
 #define SURF_IRQ_GPIO 2 /* interrupt controller source */
 #define SURF_IRQ_VIDEO 3 /* interrupt controller source */
 #define SURF_IRQ_SPI 4 /* interrupt controller source */
-#define SURF_IRQ_COUNT 5 /* sources in use */
+#define SURF_IRQ_GPU 5 /* interrupt controller source */
+#define SURF_IRQ_COUNT 6 /* sources in use */
 #define SURF_UART_TXDATA 0x00000000u /* rw: Write: bits 7:0 go into the TX FIFO (dropped, setting STATUS.TX_OVF, when it is full). Read: bit 31 = TX FIFO full. */
 #define SURF_UART_TXDATA_DATA_LSB 0 /* byte to send (write) */
 #define SURF_UART_TXDATA_DATA_WIDTH 8
@@ -265,7 +272,7 @@
 #define SURF_VIDEO_CTRL_ENABLE_LSB 0 /* 0 = black picture (syncs keep running) */
 #define SURF_VIDEO_CTRL_ENABLE_WIDTH 1
 #define SURF_VIDEO_CTRL_ENABLE_MASK 0x00000001u /* in place */
-#define SURF_VIDEO_CTRL_MODE_LSB 1 /* 0 = color-bar test pattern, 1 = text, 2..3 reserved (black) */
+#define SURF_VIDEO_CTRL_MODE_LSB 1 /* 0 = color-bar test pattern, 1 = text, 2 = graphics (VRAM pixels through GPAL), 3 = graphics with the text layer over it (a set glyph pixel or the cursor shows the text foreground, else a cell background index other than 0 shows the text background, else the graphics pixel); 2 and 3 show black without a GPU (sysinfo.FEATURES.GPU = 0) */
 #define SURF_VIDEO_CTRL_MODE_WIDTH 2
 #define SURF_VIDEO_CTRL_MODE_MASK 0x00000006u /* in place */
 #define SURF_VIDEO_CTRL_CURSOR_EN_LSB 3 /* show the cursor */
@@ -324,6 +331,34 @@
 #define SURF_VIDEO_PALETTE_R_LSB 8 /* red */
 #define SURF_VIDEO_PALETTE_R_WIDTH 4
 #define SURF_VIDEO_PALETTE_R_MASK 0x00000F00u /* in place */
+#define SURF_VIDEO_GFX_BASE 0x00000080u /* rw: Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_GFX_BASE_BASE_LSB 0 /* byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0 */
+#define SURF_VIDEO_GFX_BASE_BASE_WIDTH 19
+#define SURF_VIDEO_GFX_BASE_BASE_MASK 0x0007FFFFu /* in place */
+#define SURF_VIDEO_GFX_STRIDE 0x00000084u /* rw: Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_GFX_STRIDE_STRIDE_LSB 0 /* line pitch in bytes (bits 1:0 are 0) */
+#define SURF_VIDEO_GFX_STRIDE_STRIDE_WIDTH 16
+#define SURF_VIDEO_GFX_STRIDE_STRIDE_MASK 0x0000FFFFu /* in place */
+#define SURF_VIDEO_GFX_SCALE 0x00000088u /* rw: Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_GFX_SCALE_SCALE_LSB 0 /* 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1 */
+#define SURF_VIDEO_GFX_SCALE_SCALE_WIDTH 2
+#define SURF_VIDEO_GFX_SCALE_SCALE_MASK 0x00000003u /* in place */
+#define SURF_VIDEO_FRAME_CRC 0x0000008Cu /* ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_FRAME_COUNT 0x00000090u /* ro: How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_FRAME_COUNT_COUNT_LSB 0 /* frames (wraps) */
+#define SURF_VIDEO_FRAME_COUNT_COUNT_WIDTH 16
+#define SURF_VIDEO_FRAME_COUNT_COUNT_MASK 0x0000FFFFu /* in place */
+#define SURF_VIDEO_GPAL 0x00000400u /* rw: Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_GPAL_COUNT 256 /* consecutive words */
+#define SURF_VIDEO_GPAL_B_LSB 0 /* blue */
+#define SURF_VIDEO_GPAL_B_WIDTH 4
+#define SURF_VIDEO_GPAL_B_MASK 0x0000000Fu /* in place */
+#define SURF_VIDEO_GPAL_G_LSB 4 /* green */
+#define SURF_VIDEO_GPAL_G_WIDTH 4
+#define SURF_VIDEO_GPAL_G_MASK 0x000000F0u /* in place */
+#define SURF_VIDEO_GPAL_R_LSB 8 /* red */
+#define SURF_VIDEO_GPAL_R_WIDTH 4
+#define SURF_VIDEO_GPAL_R_MASK 0x00000F00u /* in place */
 #define SURF_SYSINFO_MAGIC 0x00000000u /* ro: 0x46525553, the bytes "SURF" in memory order. */
 #define SURF_SYSINFO_SOC_VERSION 0x00000004u /* ro: soc.soc_version as major << 16 | minor << 8 | patch. */
 #define SURF_SYSINFO_MAP_VERSION 0x00000008u /* ro: soc.map_version: which version of this memory map the hardware implements. */
@@ -362,6 +397,9 @@
 #define SURF_SYSINFO_FEATURES_DDR_LSB 7
 #define SURF_SYSINFO_FEATURES_DDR_WIDTH 1
 #define SURF_SYSINFO_FEATURES_DDR_MASK 0x00000080u /* in place */
+#define SURF_SYSINFO_FEATURES_GPU_LSB 8 /* VRAM, the graphics modes of video and the gpu drawing engine (docs/GPU.md) */
+#define SURF_SYSINFO_FEATURES_GPU_WIDTH 1
+#define SURF_SYSINFO_FEATURES_GPU_MASK 0x00000100u /* in place */
 #define SURF_SYSINFO_DDR_STATUS 0x00000020u /* ro: DDR controller state. The DDR window answers with errors until CALIB_DONE. With SWINIT, the controller calibrates only when software initializes it through the ddrc registers (FIRMWARE.md); without, it calibrates by itself. */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_LSB 0 /* calibration succeeded; DDR is usable */
 #define SURF_SYSINFO_DDR_STATUS_CALIB_DONE_WIDTH 1
@@ -382,6 +420,47 @@
 #define SURF_SYSINFO_PIX_HZ 0x00000028u /* ro: Pixel clock in Hz (0 without video). */
 #define SURF_SYSINFO_SCRATCH 0x0000002Cu /* rw: Free read/write word for bus tests (reset 0). */
 #define SURF_SYSINFO_BUILD_TIME 0x00000030u /* ro: Build time, seconds since 1970-01-01 UTC (0 if unknown). */
+#define SURF_GPU_ID 0x00000000u /* ro: 0x31555047, the bytes "GPU1" in memory order: the command set of docs/GPU.md version 1. */
+#define SURF_GPU_STATUS 0x00000004u /* w1c: Engine state and sticky events; write 1 to clear a sticky bit. */
+#define SURF_GPU_STATUS_BUSY_LSB 0 /* commands are queued or running; 0: every command written so far is done and its writes are in VRAM */
+#define SURF_GPU_STATUS_BUSY_WIDTH 1
+#define SURF_GPU_STATUS_BUSY_MASK 0x00000001u /* in place */
+#define SURF_GPU_STATUS_OVERFLOW_LSB 1 /* sticky: a CMD write found the FIFO full and was dropped */
+#define SURF_GPU_STATUS_OVERFLOW_WIDTH 1
+#define SURF_GPU_STATUS_OVERFLOW_MASK 0x00000002u /* in place */
+#define SURF_GPU_STATUS_BAD_OPCODE_LSB 2 /* sticky: a command word had an unknown opcode (it was dropped; the next word is read as a command) */
+#define SURF_GPU_STATUS_BAD_OPCODE_WIDTH 1
+#define SURF_GPU_STATUS_BAD_OPCODE_MASK 0x00000004u /* in place */
+#define SURF_GPU_STATUS_BAD_PARAM_LSB 3 /* sticky: a command had invalid parameters and did nothing (SET_TARGET outside VRAM, unaligned or too large) */
+#define SURF_GPU_STATUS_BAD_PARAM_WIDTH 1
+#define SURF_GPU_STATUS_BAD_PARAM_MASK 0x00000008u /* in place */
+#define SURF_GPU_STATUS_FENCE_EV_LSB 4 /* sticky: a FENCE with its IRQ flag completed (interrupt source when IE.FENCE) */
+#define SURF_GPU_STATUS_FENCE_EV_WIDTH 1
+#define SURF_GPU_STATUS_FENCE_EV_MASK 0x00000010u /* in place */
+#define SURF_GPU_IE 0x00000008u /* rw: Interrupt enables. */
+#define SURF_GPU_IE_FENCE_LSB 0 /* interrupt while STATUS.FENCE_EV */
+#define SURF_GPU_IE_FENCE_WIDTH 1
+#define SURF_GPU_IE_FENCE_MASK 0x00000001u /* in place */
+#define SURF_GPU_IE_ERR_LSB 1 /* interrupt while STATUS.OVERFLOW, BAD_OPCODE or BAD_PARAM */
+#define SURF_GPU_IE_ERR_WIDTH 1
+#define SURF_GPU_IE_ERR_MASK 0x00000002u /* in place */
+#define SURF_GPU_CTRL 0x0000000Cu /* wo: Engine control. */
+#define SURF_GPU_CTRL_ABORT_LSB 0 /* write 1: empty the FIFO and stop the running command at once (its writes so far stay); target, clip, FENCE and the sticky bits are kept */
+#define SURF_GPU_CTRL_ABORT_WIDTH 1
+#define SURF_GPU_CTRL_ABORT_MASK 0x00000001u /* in place */
+#define SURF_GPU_CMD 0x00000010u /* wo: Write: the next command word goes into the FIFO; dropped, setting STATUS.OVERFLOW, when the FIFO is full (never a bus stall). Check FIFO_FREE first. */
+#define SURF_GPU_FIFO_FREE 0x00000014u /* ro: Free words in the command FIFO. */
+#define SURF_GPU_FIFO_FREE_FREE_LSB 0 /* 0 .. INFO.FIFO_DEPTH */
+#define SURF_GPU_FIFO_FREE_FREE_WIDTH 16
+#define SURF_GPU_FIFO_FREE_FREE_MASK 0x0000FFFFu /* in place */
+#define SURF_GPU_FENCE 0x00000018u /* ro: The value of the last FENCE command that completed (reset 0): every command written before it is done. */
+#define SURF_GPU_INFO 0x0000001Cu /* ro: Sizes. */
+#define SURF_GPU_INFO_FIFO_DEPTH_LSB 0 /* command FIFO words */
+#define SURF_GPU_INFO_FIFO_DEPTH_WIDTH 16
+#define SURF_GPU_INFO_FIFO_DEPTH_MASK 0x0000FFFFu /* in place */
+#define SURF_GPU_INFO_VRAM_KIB_LSB 16 /* VRAM size in KiB (300) */
+#define SURF_GPU_INFO_VRAM_KIB_WIDTH 16
+#define SURF_GPU_INFO_VRAM_KIB_MASK 0xFFFF0000u /* in place */
 #define SURF_DDRC_INIT_DONE 0x00000000u /* rw: ddrctrl.init_done: software writes 1 when initialization has ended; with INIT_ERROR 0 the controller's user port opens and DDR_STATUS.CALIB_DONE follows. */
 #define SURF_DDRC_INIT_DONE_DONE_LSB 0 /* initialization ended */
 #define SURF_DDRC_INIT_DONE_DONE_WIDTH 1

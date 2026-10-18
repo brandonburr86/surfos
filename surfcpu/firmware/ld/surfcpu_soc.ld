@@ -1,6 +1,6 @@
 /*
  * Generated from spec/soc.toml by tools/socspec.py gen -- do not edit.
- * SurfCPU memory map version 2, SoC version 0.2.0.
+ * SurfCPU memory map version 2, SoC version 0.3.0.
  */
 
 /* Symbols for every region and reservation; INCLUDE this before SECTIONS. */
@@ -26,10 +26,14 @@ SURF_SYSINFO_BASE = 0x10007000;
 SURF_SYSINFO_SIZE = 0x00001000;
 SURF_ETH_BASE = 0x10008000;
 SURF_ETH_SIZE = 0x00001000;
+SURF_GPU_BASE = 0x10009000;
+SURF_GPU_SIZE = 0x00001000;
 SURF_DDRC_BASE = 0x1000A000;
 SURF_DDRC_SIZE = 0x00002000;
 SURF_TEXTRAM_BASE = 0x20000000;
 SURF_TEXTRAM_SIZE = 0x00004000;
+SURF_VRAM_BASE = 0x30000000;
+SURF_VRAM_SIZE = 0x00080000;
 SURF_DDR_BASE = 0x80000000;
 SURF_DDR_SIZE = 0x10000000;
 SURF_SURFBOOT_DATA_BASE = 0x00010000;
@@ -46,5 +50,6 @@ MEMORY
   bootrom  (rx ) : ORIGIN = 0x00000000, LENGTH = 0x00010000
   scratch  (rwx) : ORIGIN = 0x00010000, LENGTH = 0x00010000
   textram  (rw ) : ORIGIN = 0x20000000, LENGTH = 0x00004000
+  vram     (rw ) : ORIGIN = 0x30000000, LENGTH = 0x00080000
   ddr      (rwx) : ORIGIN = 0x80000000, LENGTH = 0x10000000
 }

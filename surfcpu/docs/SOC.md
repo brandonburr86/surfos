@@ -56,7 +56,8 @@ cycle and has no other state. Targets are numbered in `surf_bus_targets.vh`.
 | data port marked as a fetch (the core never does it) to MMIO or text RAM | error |
 | data port, DDR | the arbiter's data side (error with HAS_DDR = 0) |
 | data port, ddrc window (the DDR controller's registers), not a fetch | the `ddrc_*` master port with HAS_DDR = 1 and DDR_SWINIT = 1 (HAS_DDRC in the interconnect), else error |
-| either port, eth window or unmapped | error |
+| data port, gpu window or vram window, not a fetch | `surf_gpu` / `surf_vram` port A with HAS_GPU = 1 (docs/GPU.md), else error; `surf_vram` itself answers an error above 300 KiB |
+| either port, eth window or unmapped; the instruction port, gpu or vram window | error |
 
 **Response routing** (`surf_bus_demux`). The request fields go to every target; only the
 selected one sees `req_valid`, and the master sees that target's `req_ready`. A register
@@ -129,7 +130,11 @@ without a CPU, whose registers the `ddrc_*` port reaches through `surf_ddr_csr`)
 eight blocks, DDR only with `HAS_DDR = 1`; DDR_SIZE is 0 without DDR. sysinfo sees the
 calibration inputs only with `HAS_DDR = 1`; DDR_STATUS.SWINIT is `DDR_SWINIT` with DDR. `rst` and `pix_rst`
 are expected from a `surf_reset_sync` per domain; `ddr_calib_*` and `ddr_timeout` already in
-the clk domain. Interrupt sources by spec/soc.toml [irqs]: uart 0, ps2 1, gpio 2, video 3, spi 4.
+the clk domain. Interrupt sources by spec/soc.toml [irqs]: uart 0, ps2 1, gpio 2, video 3, spi 4, and gpu 5
+with `HAS_GPU = 1`. `HAS_GPU` (default 0; the board top's `ARTY_HAS_GPU`) adds `surf_vram` (D
+target `SURF_DT_VRAM`, its pixel port to `surf_video`) and `surf_gpu` (`SURF_DT_GPU`, its master on
+VRAM's port A after the CPU), gives `surf_video` `HAS_GFX = 1` and FEATURES the GPU bit; with 0
+both windows go to the D decoder's error slave and none of it is built (docs/GPU.md section 7).
 `surf_ps2`'s `*_oe` outputs go straight to the ports (the board drives the lines only low).
 With `SURFCPU_RVFI` the core's RVFI outputs pass through.
 
