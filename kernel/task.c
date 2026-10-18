@@ -13,7 +13,9 @@ reaches the job in the foreground (task_interrupt_job()).
 the task list as programs see it, and a process leaving its shell's job (kernel/proc.c). A
 kernel thread started from a pseudo-terminal's session is on F1 (task_alloc()).
 10/17/26 (audit B39): the kill that waited is put off while its task is inside a file system or
-the block cache (fs_hold, task.h): kill_escalate(), kill_task(), kill_hangup().
+the block cache (fs_hold, task.h): kill_escalate(), kill_task(), kill_hangup(). (B46, B47) Also
+while it is in an umount or a device request. (B48) A kernel thread killed outside any call that
+enters one before it dies gets that call's KILL_WAIT_MS.
 */
 
 #include <surfos/types.h>
@@ -190,7 +192,9 @@ static void kill_hangup(surf_task *t);
 #define FS_HOLD_RETRY_MS 20                     /* 10/17/26 (audit B39): a kill put off while the task is inside a file
                                                    system looks again this much later */
 /* 10/17/26 (audit B39): is t inside a file system or the block cache, where a kill at once would leave locks, blocks
-   and the cache's records behind: counted by fs/fat.c and fs/bcache.c (fs_hold), or holding the cache's lock */
+   and the cache's records behind: counted by fs/fat.c and fs/bcache.c (fs_hold), or holding the cache's lock.
+   10/17/26 (B46, B47): also a step that must finish (fs_finish: umount) and a device request (driver/bdev.c: a driver's
+   lock and transfer) */
 static bool in_fs(const surf_task *t) { return t->fs_hold || bcache_holds(t); }
 
 static surf_task *task_alloc(const char *name, prio_level prio, u_int flags, surf_console *con, u_int ring) {
@@ -373,7 +377,9 @@ void kill_task(surf_task *t) {
         become_zombie(t, -1);
     } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
         t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
-        /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it */
+        /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it
+           (B48: TI_NOCALL, so that a call it enters meanwhile gets the call's KILL_WAIT_MS) */
+        if(!t->in_call) t->intr |= TI_NOCALL;
         ktimer_start(&t->kill_timer, t->in_call ? KILL_WAIT_MS : FS_HOLD_RETRY_MS, false);
         wake_intr(t);
     }
@@ -392,7 +398,7 @@ static void kill_hangup(surf_task *t) {
         return;
     if(!t->in_call) {
         if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
-            t->intr |= TI_KILL;
+            t->intr |= TI_KILL | TI_NOCALL;     /* (B48) */
             ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);
             wake_intr(t);
         } else become_zombie(t, -1);
@@ -421,12 +427,20 @@ static void kill_escalate(void *arg) {
         ktimer_start(&t->kill_timer, 10, false);
         return;
     }
+    if((t->intr & TI_NOCALL) && t->in_call) {       /* 10/17/26 (audit B48): killed outside any call (put off inside a file
+                                                       system), it has entered a call since: that call's rule, KILL_WAIT_MS
+                                                       from now (before, it was killed at once in it 20 ms later, said
+                                                       to have overrun its 2 s, holding whatever the call held) */
+        t->intr &= ~TI_NOCALL;
+        ktimer_start(&t->kill_timer, KILL_WAIT_MS, false);
+        return;
+    }
     if(in_fs(t)) {                                  /* 10/17/26 (audit B39): inside a file system or the block cache */
         if(t->in_call && !(t->intr & TI_FSWAIT)) {  /* (its waits there are cut short: it leaves soon; at once it would
                                                        leave the cache's records, marks, blocks and locks behind) */
             t->intr |= TI_FSWAIT;
-            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still inside a file system %u ms after its kill: "
-                     "killed as soon as it leaves\n", t->name, t->pid, (u_int)KILL_WAIT_MS);
+            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still inside a file system or a device request %u ms "
+                     "after its kill: killed as soon as it leaves\n", t->name, t->pid, (u_int)KILL_WAIT_MS);
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);

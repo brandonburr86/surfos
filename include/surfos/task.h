@@ -63,7 +63,12 @@ typedef void (*kthread_fn)(void *arg);
     there are cut short like the others, so the call unwinds; when the kill that waited comes and
     the task is still inside (a device that takes its time), it comes as soon as the task leaves,
     and the kernel log says once that it waits. A kernel thread outside any call that is killed
-    inside one is marked the same way and killed as soon as it leaves.
+    inside one is marked the same way and killed as soon as it leaves (10/17/26, audit B48: unless
+    it has entered a call meanwhile, which then gets KILL_WAIT_MS as any call does: TI_NOCALL).
+    10/17/26 (audit B46, B47): a device request counts as inside (driver/bdev.c: a driver's lock or
+    transfer is never left half done), and so does a file system step that must finish once begun
+    (fs_finish: umount, eject's unmount, fs/vfs.c), whose waits are not cut short either: cut short,
+    an umount gave up changes the card would have taken and left a working card unclean.
 */
 #define TC_SYSCALL  0x1  /* in_call: a system call (kernel/syscall.c), or a program being loaded */
 #define TC_COMMAND  0x2  /* in_call: a kernel command (the ring-0 shell's line, SYS_kcmd's command) */
@@ -72,6 +77,7 @@ typedef void (*kthread_fn)(void *arg);
 #define TI_INT      0x2  /* intr: Ctrl+C reached it */
 #define TI_HANGUP   0x4  /* 10/6/26, intr: with TI_KILL, its terminal hung up: no escalation (above) */
 #define TI_FSWAIT   0x8  /* 10/17/26, intr: the kill that waited found it inside a file system (said once) */
+#define TI_NOCALL   0x10 /* 10/17/26 (audit B48), intr: killed outside any call, put off inside a file system */
 #define KILL_WAIT_MS 2000
 
 typedef enum {
@@ -146,7 +152,9 @@ typedef struct surf_task {
     struct ktimer *wait_timer;  /* 10/6/26: wait_on_timeout()'s timer, on its stack: cancelled when it dies
                                    (10/17/26: fs/bcache.c's timed waits too) */
     u_int fs_hold;              /* 10/17/26 (audit B39): inside a file system or the block cache (above): the kill
-                                   that waited comes once it is 0 */
+                                   that waited comes once it is 0 (B47: or a device request) */
+    u_int fs_finish;            /* 10/17/26 (audit B46): inside a file system step that must finish (above): its
+                                   waits are not cut short */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
 } surf_task;
@@ -187,6 +195,20 @@ void task_call_enter(u_int what);  /* 10/6/26: a call (TC_*) begins in the curre
 int task_call_leave(u_int what);   /* it ends: a kill that waited comes now (no return); 1 when Ctrl+C cut it short */
 int task_interrupt_job(surf_task *owner); /* 10/6/26: Ctrl+C for owner's job (tty.c), interrupts off: 1 if it reached any */
 #define task_interrupted() (curTask && curTask->intr)   /* 10/6/26: is the current task's call to end? */
+/* 10/17/26 (audit B39, B46): may the current task's waits in a file system be cut short: its call is to end (a kill,
+   Ctrl+C in a kernel command), and it is neither ending by itself (TC_EXIT: its files close and are written out) nor
+   in a step that must finish (fs_finish) */
+#define fs_cut_short() (curTask && curTask->intr && !(curTask->in_call & TC_EXIT) && !curTask->fs_finish)
+/* 10/17/26 (audit B39, B46, B47): the current task inside a file system, the block cache or a device request (a kill
+   that waited comes once it is out: kernel/task.c), and inside a step that must finish (its waits not cut short too) */
+static inline void fs_enter(void) { if(curTask) curTask->fs_hold++; }
+static inline void fs_leave(void) { if(curTask && curTask->fs_hold) curTask->fs_hold--; }
+static inline void fs_finish_enter(void) { if(curTask) { curTask->fs_hold++; curTask->fs_finish++; } }
+static inline void fs_finish_leave(void) {
+    if(!curTask) return;
+    if(curTask->fs_finish) curTask->fs_finish--;
+    if(curTask->fs_hold) curTask->fs_hold--;
+}
 surf_task *task_find(u_long pid);
 u_int task_count(void);
 u_int task_count_tty(struct tty *tty);   /* 10/6/26: the live tasks whose terminal it is (kernel/pty.c) */
