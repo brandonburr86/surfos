@@ -387,6 +387,7 @@ void kill_task(surf_task *t) {
     } else if(!t->in_call && !in_fs(t)) {
         become_zombie(t, -1);
     } else if(!(t->intr & TI_KILL) || (t->intr & TI_HANGUP)) {
+        if(!(t->intr & TI_KILL)) t->kill_at = getticks();   /* 10/18/26 (audit B69): when, for the log's one line */
         t->intr = (t->intr | TI_KILL) & ~TI_HANGUP;  /* 10/6/26: after a hangup's kill too: this one's rule */
         /* 10/17/26 (audit B39): a kernel thread outside any call inside a file system: as soon as it leaves it
            (B48: TI_NOCALL, so that a call it enters meanwhile gets the call's KILL_WAIT_MS) */
@@ -408,6 +409,7 @@ static void kill_hangup(surf_task *t) {
        (t->in_call & TC_EXIT) ||                /* ending already (task_exit(): its files are closing), */
        (t->intr & TI_KILL))                     /* or killed already (that kill's rule stands) */
         return;
+    t->kill_at = getticks();                    /* 10/18/26 (audit B69) */
     if(!t->in_call) {
         if(in_fs(t)) {                          /* 10/17/26 (audit B39): inside a file system: as soon as it leaves it */
             t->intr |= TI_KILL | TI_NOCALL | TI_HANGUP;   /* (B48; 10/18/26, B55: a call it enters keeps the hangup's
@@ -452,12 +454,16 @@ static void kill_escalate(void *arg) {
         return;
     }
     if(in_fs(t)) {                                  /* 10/17/26 (audit B39): inside a file system or the block cache */
-        if(t->in_call && !(t->intr & TI_FSWAIT)) {  /* (its waits there are cut short: it leaves soon; at once it would
-                                                       leave the cache's records, marks, blocks and locks behind) */
+        u_long ms = (getticks() - t->kill_at) * (1000 / HZ);
+        /* (its waits there are cut short: it leaves soon; at once it would leave the cache's records, marks, blocks and
+           locks behind). Said once, KILL_WAIT_MS after the kill: for a task in a call this is its first look; 10/18/26
+           (audit B69): a task killed outside any call is looked at every FS_HOLD_RETRY_MS from its kill, and was waited
+           for without a word */
+        if(!(t->intr & TI_FSWAIT) && (t->in_call || ms >= KILL_WAIT_MS)) {
             t->intr |= TI_FSWAIT;
-            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %u ms after its kill: killed as soon as it "
+            snprintf(line, sizeof(line), "kill: '%s' (pid %lu) is still %s %lu ms after its kill: killed as soon as it "
                      "lets go\n", t->name, t->pid, holds(t) == TASK_HOLDS_LOCK ? "holding a lock"
-                     : "inside a file system or a device request", (u_int)KILL_WAIT_MS);
+                     : "inside a file system or a device request", ms);
             klog_write(line);
         }
         ktimer_start(&t->kill_timer, FS_HOLD_RETRY_MS, false);

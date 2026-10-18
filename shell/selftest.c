@@ -2334,6 +2334,60 @@ static void test_mutex_wake(void) {
           "with its waiter asleep in line)");
 }
 
+/* 10/18/26 (audit B69): a kill put off because its task holds a lock, or is inside a file system, was said in the
+   kernel log once, KILL_WAIT_MS after the kill, only for a task in a call; one killed outside any call (a kernel thread)
+   was waited for without a word. Here a kernel thread outside any call holds a lock of the test's own for 2.5 s when it
+   is killed: the log says once that the kill is put off */
+static char kg_log[KLOG_SIZE + 1];
+static mutex_t kg_lock = MUTEX_INIT("selftest-logged");
+static volatile int kg_held;
+
+/* how many times the kernel log holds what (klog_dump() into memory, as a redirected kernel command prints) */
+static int klog_count(const char *what) {
+    struct kcapture cap, *outer = curTask->kcap;
+    const char *p;
+    int n = 0;
+    cap.buf = kg_log;
+    cap.len = 0;
+    cap.size = KLOG_SIZE;
+    cap.cut = 0;
+    console_capture_begin(&cap);
+    klog_dump();
+    console_capture_end();
+    if(outer) console_capture_begin(outer);
+    kg_log[cap.len] = 0;
+    for(p = kg_log; (p = strstr(p, what)) != NULL; p++) n++;
+    return n;
+}
+
+static void kg_thread(void *arg) {
+    (void)arg;
+    mutex_lock(&kg_lock);
+    kg_held = 1;
+    sleep_ms(2500);                                  /* longer than a kill's KILL_WAIT_MS */
+    mutex_unlock(&kg_lock);
+    sleep_ms(2000);                                  /* killed long before this ends */
+}
+
+static void test_kill_lock_logged(void) {
+    char line[80];
+    surf_task *t;
+    u_long pid;
+    int status = 0, waited, said;
+    kg_held = 0;
+    t = kthread_create_on("killlong", curTask->con, kg_thread, NULL, PL_NORMAL, 0);
+    if(!t) { check(false, "a kill put off outside any call, in the kernel log: a thread"); return; }
+    pid = t->pid;
+    for(waited = 0; !kg_held && waited < 1000; waited += 5) sleep_ms(5);
+    kill_task(t);
+    if(task_wait(pid, &status) != (int)pid) status = 1;
+    snprintf(line, sizeof(line), "kill: 'killlong' (pid %lu) is still holding a lock", pid);
+    said = klog_count(line);
+    printf("        (the kernel log %s)\n", said == 1 ? "says so once" : said ? "says so more than once" : "says nothing");
+    check(status == -1 && said == 1, "a kernel thread killed outside any call that keeps its lock past KILL_WAIT_MS: the "
+          "kernel log says once that the kill is put off");
+}
+
 static void test_close_cut_short(void) {
     u8 *mem;
     struct bdev *d = fx_stick("stickz", "/selftest-cz", &mem);
@@ -2689,7 +2743,7 @@ static void (*const tests[])(void) = {
     test_eject_writeout_mount, test_kill_system,
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
     test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
-    test_close_cut_short,
+    test_close_cut_short, test_kill_lock_logged,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };

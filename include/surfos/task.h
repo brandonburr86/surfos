@@ -161,6 +161,8 @@ typedef struct surf_task {
                                    waits are not cut short */
     struct utf8_dec utf;        /* 10/6/26: a UTF-8 character it has half printed (kernel/console.c): its own,
                                    so other writers' bytes never mix with it, and it goes with the task */
+    u_long kill_at;             /* 10/18/26 (audit B69): the tick its kill came (TI_KILL set): the kernel log says once,
+                                   KILL_WAIT_MS after it, that a kill is put off (kill_escalate()) */
 } surf_task;
 
 extern surf_task *curTask;
