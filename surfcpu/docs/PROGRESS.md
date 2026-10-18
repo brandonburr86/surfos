@@ -13,7 +13,7 @@ physical results are separate columns, so nothing claims more than happened.
 | 5 Card reads and SurfBoot | SurfBoot: 137 card-image scenarios, 120 through the io SD card model, 29 runs of the ROM in a firmware emulator ([evidence](evidence/fw/)) | | SurfBoot runs on the A7-100T and stops in its monitor with the reason (DDR_ABSENT) ([evidence](evidence/physical/surfboot-no-ddr-2026-10-16.txt)); with the Pmod MicroSD it reads the owner's 32 GB SDHC card over SPI: identification, CSD/CID, the MBR, the FAT32 volume and its root ([evidence](evidence/physical/surfboot-card-2026-10-16.txt)); after `deploy-sd` it lists `/BOOT` and `/SYSTEM` and reads the whole 388,724-byte `SURFOS.BIN` through its 8 fragments, every byte position matching the Mac's copy ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)); SurfBoot 1.1.0 then loads SURFOS.BIN from the card into DDR (CRC checked in both) and starts it ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); the formal m5 test (DDRDIAG.BIN from the card, the card taken out) not run yet | software done on the host; RTL SoC done; on the board: card reads and the DDR boot shown, m5 pending |
 | 6 Standalone I/O | SPI + SD card model, PS/2 + keyboard model, VGA 640x480 text decoded from the pixels ([evidence](evidence/io/)) | in the full-SoC bitstreams (open flow, both boards) | VGA: the video block runs on the board (text mode, 80x30, 60 frames a second, pixel clock 25,173,611 Hz) the owner confirmed SurfBoot's text readable with nothing cut off, and the colour-bar test pattern exact (border, eight bars, every level of each 4-bit channel) ([evidence](evidence/physical/surfboot-card-files-2026-10-16.txt)). PS/2: neither of the owner's keyboards answers. The first (a USB keyboard on a passive USB-to-PS/2 adapter) does not speak PS/2; the second, an MCSAITE PS/2 keyboard specified for 5 V, does not start on the adapter's 3.3 V ([evidence](evidence/physical/ps2-2026-10-17.txt)): it needs a level shifter with 5 V, or a keyboard that runs at 3.3 V | done in simulation; on the board: VGA done, the PS/2 keyboard pending (a level shifter for the owner's 5 V keyboard, or a keyboard that runs at 3.3 V) |
 | 7 SurfOS kernel port | host tests, QEMU `virt`, the fw emulator, and on the RTL SoC: SurfBoot boots `SURFOS.BIN` from a card image to the shell, UART and PS/2 input, console decoded from the VGA pixels ([evidence](evidence/soc/test-soc-system-boot.txt)) | | SurfOS boots on the A7-100T from the microSD card into DDR: its shell over the UART, uptime, ps, memstat (256 MiB), the two-task test, and (after 22cbdc9) the card mounted and read ([evidence](evidence/physical/surfos-boot-2026-10-16.txt)); VGA console and PS/2 keyboard not yet shown (a real PS/2 keyboard is needed) | done in simulation; on the board: UART shell and tasks done, VGA and keyboard pending |
-| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the ninth storage review's findings, being fixed in fs-fix-9) |
+| 8 Persistent files | on the RTL system: files written, ejected, read back after a second boot by name, size and CRC, then checked on the host by `fsck.fat` and mtools (`test-os-persist`); write errors, the card taken out (after a sync and in the middle of a write) and a full card on the RTL system too (`test-os-faults`), both on `make check`; under QEMU with the same driver: the card taken out after each block, a full volume, with what `fsck.fat` finds ([evidence](evidence/os/test-os-persist.txt), [faults](evidence/os/test-os-faults.txt), [CARD.md](CARD.md) section 8) | | SurfOS mounts the card read-only on the board; writes (sd=rw) and the m8 test not run yet | done in simulation (open: the tenth storage review's findings, being fixed in fs-fix-10) |
 | 9 Reproducible standalone release | the release tooling's tests (16 in the container; the self-test with both of the Mac's Pythons) ([evidence](evidence/release/tests.txt)) | release 1.0.0-f791b8a1 from a fresh checkout: all 10 bitstreams (the DDR designs too) pass every gate, and `release-verify` rebuilt all 24 artifacts byte for byte ([release](evidence/release/release-1.0.0-f791b8a1.txt), [verify](evidence/release/verify-1.0.0-f791b8a1.txt)) | its DDR boot design, over JTAG, boots SurfOS from the owner's card ([evidence](evidence/physical/release-1.0.0-f791b8a1-jtag-2026-10-17.txt)); the flash read back and kept ([evidence](evidence/physical/flash-backup-2026-10-17.txt)); pending: the flash not written (waits for the owner's go-ahead), m9 not run | release made and verified; the board test outstanding |
 
 ## Log
@@ -927,3 +927,46 @@ ddr-3 built five candidates, every gate passing on each
   fs-fix-9 is fixing them, on sc/fs-fix-9 from 3ce9600: the time bound goes, live requests are
   waited for, and only a task that died inside a request makes its device count as failed. The
   file test on the owner's card (m8) and milestone 9's board test wait for it.
+
+### 2026-10-18: storage round fs-fix-9 and the tenth review
+
+* fs-fix-9 was merged as 6ed8fcb. It answers the ninth review's findings as audit B56-B60:
+  * B56: the 30 s bound is gone again. A wait for another task's I/O lasts until the request
+    ends, bounded by the drivers' own timeouts. The plan in the previous entry, a device counted
+    as failed when its writer died inside a request, was not taken: a kernel fault inside a file
+    system, the cache or a device request now stops the system and says why, and a device stays
+    busy for mount, mkfs, fdisk, a rescan and sdmode while a request on it has not ended;
+  * B57: nothing stays counted as unsaved after an umount;
+  * B58: eject claims its disk, and a mount its device, in one step, so neither slips in while
+    the other runs;
+  * B59: `kill` leaves the kernel's own driver and network threads alone;
+  * B60: one cp for both kernels, which says an error as that error and counts every byte.
+
+  Each finding has a test that fails on 3ce9600 and passes now: the kernel's self test has 146
+  checks, 6 of its 8 new ones failing on 3ce9600, and the new cp test fails 5 of its 13 cases on
+  the old cp. The runs on the RTL system take 0.004-0.07 % fewer cycles than before.
+* The integrator's runs at 6ed8fcb, from a fresh build volume, all pass:
+  * x86 test-all at O0 and O2: smoke 313 and files 51 each (16 minutes);
+  * unittest: MKFS 117/0, FATFS 347/0, FATFUZZ 4/0, CP 13/0, CONC ok x4, and the umount setting
+    ok (7 minutes);
+  * `make check` in 26 minutes: test-os 134/134 at O2 and O0, persist 17/17, faults 25/25,
+    kit 22/22, system boot 21/21.
+* A tenth independent review found nothing critical or major, as the eighth did. It found:
+  * **Minor:**
+    * new in fs-fix-9: the partition rescan after fdisk's commit is refused while another task
+      has a request in flight on the disk, so the kernel keeps the old partitions over the new
+      table (shown with a self-test step);
+    * a kernel fault in a driver thread that holds its driver's lock outside a request would
+      leave the lock held (not shown: it needs a kernel bug);
+    * the kernel's locks are not first-come first-served, so a queued request can be overtaken
+      again and again (from reading the code).
+  * **Cosmetic:** the audit's USB worst-case times, and cp's message when a Ctrl+C meets a card
+    error at the close.
+
+  It confirmed that the rest holds: the cache is the code from before the bound again, every
+  driver wait has a deadline, no program can reach a fault inside a file system, about 194 k
+  damaged-volume trials under ASan found no crash, and the request, mount and eject counts are
+  balanced. 96 threaded runs (about 73 k kills) and 300 umounts were clean.
+
+  fs-fix-10 is fixing them, on sc/fs-fix-10 from 6ed8fcb. The file test on the owner's card (m8)
+  and milestone 9's board test wait for it.
