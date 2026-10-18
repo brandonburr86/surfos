@@ -38,7 +38,8 @@ the default) or the instruction port (I); both ports run at the same time and me
 ADDR, V, M are expressions over numbers and names from spec/soc.toml: a region (`scratch`,
 its base) with .base .size .end .last; a register (`uart.STATUS`, its address) with .off; a
 field (`uart.STATUS.RX_AVAIL`, its mask in place) with .lsb; clocks.X, soc.map_version,
-soc.soc_version, boards.X, irqs.X, bootabi.X, reserves (`ddr_top`, like regions) and the
+soc.soc_version, boards.X, irqs.X, bootabi.X, reserves (`ddr_top`, like regions), holes
+(`unmapped_probe`, never mapped, like regions) and the
 --define names (where the memory map has no such name: `ddr` stays the region); with
 + - * << >> & | ^ ~ and parentheses. `auto` decides OK or error from the memory map rules (and
 the value from the model for memories); `expect mem` and `expect rom` take the value from the
@@ -83,7 +84,7 @@ class Obj:
 
 def build_names(spec) -> dict:
     names = {}
-    for r in list(spec.regions.values()) + list(spec.reserves.values()):
+    for r in list(spec.regions.values()) + list(spec.reserves.values()) + list(spec.holes.values()):
         names[r.name] = Obj(r.base, base=r.base, size=r.size, end=r.base + r.size,
                             last=r.base + r.size - 4)
     for p in spec.periphs.values():

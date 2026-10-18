@@ -92,7 +92,8 @@ I fetch   eth error
 D read    scratch.end error
 I fetch   scratch.end error
 D read    textram.end error
-D read    sysinfo.end+0x1000 error
+D read    unmapped_probe error
+D read    unmapped_probe.last error
 D read    textram-4 error
 I fetch   uart-4 error
 
