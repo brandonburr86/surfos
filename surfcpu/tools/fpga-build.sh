@@ -244,6 +244,7 @@ openxc7_build() {     # FLOW=openxc7: run tools/openxc7-build.sh on the design, 
     for d in $incdirs; do set -- "$@" -I "$d"; done
     write_head
     [ -z "$lvs_timeout" ] || set -- "$@" --lvs-timeout "$lvs_timeout"
+    [ -z "$pnr_timeout" ] || set -- "$@" --pnr-timeout "$pnr_timeout"
     [ -z "$seed" ] || set -- "$@" --seed "$(echo "$seed" | tr ' ' ',')"
     # shellcheck disable=SC2086
     set -- --top "$top" --board "$board" --xdc "${xdc_nx#"$root"/}" --out "${ox#"$root"/}" --dsp safe \
@@ -469,6 +470,8 @@ dsp_args=
 for d in $(items dsp | awk 'NF == 2 { print $1 "=" $2 }'); do dsp_args="$dsp_args --dsp $d"; done
 lvs_timeout=$(items lvs-timeout)
 case "$lvs_timeout" in *[!0-9]*) die "$design: lvs-timeout must be a number of seconds" ;; esac
+pnr_timeout=$(items pnr-timeout)   # each placer seed's limit (default: openxc7-build.sh's, 1800 s)
+case "$pnr_timeout" in 0|*[!0-9]*) die "$design: pnr-timeout must be a number of seconds" ;; esac
 seed=$(items seed | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')   # the open flow's placer seeds (default 1),
 case "$seed" in *[!0-9\ ]*) die "$design: seed must be a number or numbers" ;; esac   # tried in turn
 # PLACER_SEEDS= replaces them for one build (a diagnostic build of chosen placements, with its

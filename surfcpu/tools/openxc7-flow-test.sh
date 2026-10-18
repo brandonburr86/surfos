@@ -1,7 +1,8 @@
 #!/bin/sh
 # Tests of the open flow's scripts that need neither the openXC7 image nor the network
 # (part of `make test-flow`): tools/openxc7-xdc.sh on a fixture in the format of Digilent's
-# master XDC, tools/openxc7-build.sh's argument handling through --dry-run, and the synthesis
+# master XDC, tools/openxc7-build.sh's argument handling through --dry-run, its seed loop's time
+# limit with a stand-in nextpnr that hangs (tools/openxc7-steps.sh), and the synthesis
 # check (devenv/openxc7/synthcheck.py) on the Yosys DSP-packing reproducer with this image's
 # Yosys, which must fail with DSP packing and pass with the safe mode and without DSPs.
 set -eu
@@ -86,6 +87,15 @@ if sh tools/openxc7-build.sh --dry-run --xdc x.xdc --board arty_a7_35t a.v > /de
 then bad "build: accepted a missing --top"; else ok "build: refuses a missing --top"; fi
 o=$(dry --board arty_a7_35t --lvs-timeout 7200)
 expect_in "build: --lvs-timeout bounds the LVS proof" "$o" "timeout 7200 lvs_equiv"
+o=$(dry --board arty_a7_35t)
+expect_in "build: each seed's placement and routing runs under a time limit, 1800 s by default" "$o" \
+  "[pnr] timeout -k 60 1800 nextpnr-himbaechel --device xc7a35tcsg324-1"
+o=$(dry --board arty_a7_35t --pnr-timeout 600 --seed 3,4)
+expect_in "build: --pnr-timeout sets it" "$o" "timeout -k 60 600 nextpnr-himbaechel" "--seed 3 "
+for v in 0 2h ""; do
+  if dry --board arty_a7_35t --pnr-timeout "$v" > /dev/null 2>&1
+  then bad "build: accepted --pnr-timeout '$v'"; else ok "build: refuses --pnr-timeout '$v'"; fi
+done
 if dry --board arty_a7_35t --lvs-timeout 2h > /dev/null 2>&1
 then bad "build: accepted --lvs-timeout 2h"; else ok "build: refuses a --lvs-timeout that is not seconds"; fi
 
@@ -161,6 +171,44 @@ if command -v yosys > /dev/null 2>&1; then
      grep -Eq '^u_sub +32 +32 ' "$t/pr.txt"
   then ok "synthcheck: an instance's register that drives an output port counts in its instance, RTL and netlist"
   else bad "synthcheck: the output register's flip-flops"; cat "$t/pr.txt"; fi
+fi
+
+# ---------------------------------------------------------------- place_and_route: a seed that never ends
+# tools/openxc7-steps.sh's seed loop (what openxc7-build.sh runs) with a stand-in nextpnr: seed 1
+# hangs, as router2 did on a placement it could not route; at the time limit it must be stopped,
+# recorded as a timeout, and seed 2 tried, which routes. Then a run whose seeds all time out.
+if command -v timeout > /dev/null 2>&1; then
+  p=$t/pnr
+  mkdir -p "$p/bin" "$p/out"
+  cat > "$p/bin/nextpnr-himbaechel" <<'EOF'
+#!/bin/sh
+seed= log=
+while [ $# -gt 0 ]; do case "$1" in --seed) seed=$2; shift 2 ;; -l) log=$2; shift 2 ;; *) shift ;; esac; done
+if [ "$seed" != 2 ]; then
+  echo "Info:     iter=11 wires=427863 overused=2358 overuse=2373 archfail=NA" > "$log"
+  exec sleep 600
+fi
+{ echo "Info: Max frequency for clock 'sys_clk': 45.61 MHz (PASS at 25.00 MHz)"; echo "Info: Routing complete."; } > "$log"
+EOF
+  chmod +x "$p/bin/nextpnr-himbaechel"
+  pnr_try() {   # SEEDS...: place_and_route as openxc7-build.sh calls it, a 2 s limit, the stand-in first on PATH
+    rm -f "$p/out/seeds.txt" "$p/out/times.txt"
+    ( PATH="$p/bin:$PATH"; dry=0 out=$p/out top=t part=xc7a35tcsg324-1 chipdb=none threads=1 xdc=none pnr_timeout=2
+      . tools/openxc7-steps.sh; place_and_route "$@"; echo "pnr_ok=$pnr_ok" ) > "$p/run.txt" 2>&1
+  }
+  s0=$(date +%s); pnr_try 1 2; s1=$(date +%s)
+  if grep -q '^pnr_ok=1$' "$p/run.txt" && [ "$(grep -c . "$p/out/seeds.txt")" = 2 ] &&
+     grep -q '^seed 1: timeout (nextpnr stopped after 2 s, exit 124), not routed; router at iter=11, overused=2358$' "$p/out/seeds.txt" &&
+     grep -q "^seed 2: pass, routed; 'sys_clk': 45.61 MHz (PASS at 25.00 MHz)$" "$p/out/seeds.txt" &&
+     [ $((s1 - s0)) -lt 30 ] && [ -f "$p/out/nextpnr-seed1.log" ]
+  then ok "pnr: a seed whose nextpnr hangs is stopped at the limit ($((s1 - s0)) s), recorded as a timeout, and the next seed routes"
+  else bad "pnr: the hanging seed"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
+  pnr_try 1 3
+  if grep -q '^pnr_ok=0$' "$p/run.txt" && [ "$(grep -c '^seed [13]: timeout' "$p/out/seeds.txt")" = 2 ]
+  then ok "pnr: when every seed times out, none routed (pnr_ok 0) and each is recorded"
+  else bad "pnr: every seed timing out"; cat "$p/run.txt" "$p/out/seeds.txt" 2>/dev/null || true; fi
+else
+  bad "pnr: no timeout command here (coreutils)"
 fi
 
 [ "$fails" = 0 ] || { echo "openxc7-flow-test.sh: $fails failures"; exit 1; }

@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
         --manifest-include) [ -f "$2" ] || { echo "fake openxc7: no $2" >&2; exit 2; }; shift 2 ;;
         -D) shift 2 ;;
         --lvs-timeout) case "$2" in ''|*[!0-9]*) echo "fake openxc7: --lvs-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
+        --pnr-timeout) case "$2" in ''|0|*[!0-9]*) echo "fake openxc7: --pnr-timeout $2" >&2; exit 2 ;; esac; shift 2 ;;
         --seed) case "$2" in ''|*[!0-9,]*|,*|*,|*,,*) echo "fake openxc7: --seed $2" >&2; exit 2 ;; esac; seeds=$(echo "$2" | tr ',' ' '); shift 2 ;;
         -I) [ -d "$2" ] || { echo "fake openxc7: no include directory $2" >&2; exit 2; }; shift 2 ;;
         --dry-run) dry=1; shift ;;

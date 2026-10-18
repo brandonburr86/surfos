@@ -18,6 +18,8 @@
 #                             BOOTROM_INIT, and the ROM's instance in the netlist (romcheck.py)
 #   dsp <instance> <n>        exactly n DSP48E1 take operands from <instance> (netlist_check.py)
 #   lvs-timeout <seconds>     how long the open flow's LVS proof may run (default 1800)
+#   pnr-timeout <seconds>     how long one placer seed's placement and routing may run before the
+#                             next seed is tried (default 1800)
 #   seed <n>                  the open flow's placer seed (default 1); Vivado ignores it
 #   define <name>[=<value>]   a Verilog define for synthesis (Yosys -D, Vivado -verilog_define)
 #   generated <list>          a sha256sum-style list (with a "# generate: <command>" line) of

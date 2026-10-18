@@ -14,6 +14,9 @@
 #   --seed <n>[,<n>...]  placer seed (default 1); a list: placement and routing with each seed in
 #                      turn until one routes with every clock meeting its constraint (the gate is
 #                      the same for each; every attempt is recorded in seeds.txt and the manifest)
+#   --pnr-timeout <s>  how long one seed's placement and routing may run before it is stopped and
+#                      counted as failed ("timeout" in seeds.txt), so the next seed is tried
+#                      (default 1800, or OPENXC7_PNR_TIMEOUT inside the image; tools/openxc7-steps.sh)
 #   --dsp safe|full|none   multipliers: safe (default) maps them to DSP48E1 but lets Yosys pack
 #                      no registers or adders into the DSPs (scratchpad xilinx_dsp.multonly),
 #                      because its packing can delete logic (docs/OPEN-FLOW.md); full is
@@ -56,6 +59,7 @@ die_usage() { echo "openxc7-build.sh: $*" >&2; echo "usage: see the top of $0" >
 
 top= xdc= board= part= out= seed=1 lvs=1 check=1 dry=0 dsp=safe expect= synthonly=0
 lvs_timeout=${OPENXC7_LVS_TIMEOUT:-1800}
+pnr_timeout=${OPENXC7_PNR_TIMEOUT:-1800}
 defs= incs= srcs= extras=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -75,6 +79,7 @@ while [ $# -gt 0 ]; do
     --synth-only) synthonly=1; shift ;;
     --no-lvs)   lvs=0; shift ;;
     --lvs-timeout) [ $# -ge 2 ] || die_usage "--lvs-timeout needs a value"; lvs_timeout=$2; shift 2 ;;
+    --pnr-timeout) [ $# -ge 2 ] || die_usage "--pnr-timeout needs a value"; pnr_timeout=$2; shift 2 ;;
     --no-check) check=0; shift ;;
     --dry-run)  dry=1; shift ;;
     -h|--help)  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -89,6 +94,7 @@ case "$dsp" in safe|full|none) ;; *) die_usage "--dsp must be safe, full or none
 case "$seed" in ''|*[!0-9,]*|,*|*,|*,,*) die_usage "--seed must be a number or a list of numbers (2,3,4)" ;; esac
 seeds=$(echo "$seed" | tr ',' ' ')
 case "$lvs_timeout" in ''|*[!0-9]*) die_usage "--lvs-timeout must be a number of seconds" ;; esac
+case "$pnr_timeout" in ''|0|*[!0-9]*) die_usage "--pnr-timeout must be a number of seconds" ;; esac
 
 if [ -z "$part" ]; then
   case "$board" in
@@ -132,7 +138,7 @@ if [ "${SURFCPU_OPENXC7:-0}" != 1 ] && [ "$dry" = 0 ]; then
   for i in $incs; do set -- "$@" -I "$(rel "$i")"; done
   for e in $extras; do set -- "$@" --manifest-include "$(rel "$e")"; done
   [ "$lvs" = 0 ] && set -- "$@" --no-lvs
-  set -- "$@" --lvs-timeout "$lvs_timeout"
+  set -- "$@" --lvs-timeout "$lvs_timeout" --pnr-timeout "$pnr_timeout"
   [ "$check" = 0 ] && set -- "$@" --no-check
   for s in $srcs; do set -- "$@" "$(rel "$s")"; done
   cd "$here"
@@ -180,20 +186,8 @@ decode_bitstream() {   # Project X-Ray's bit2fasm: the finished bitstream back t
     --bitread "$(command -v bitread)" "$out/$top.bit" > "$out/$top.decoded.fasm"
 }
 
-run() {   # run <step> <log> <command...>: time it, keep its output, stop on failure
-  step=$1 log=$2; shift 2
-  if [ "$dry" = 1 ]; then echo "[$step] $*"; return 0; fi
-  t0=$(date +%s.%N)
-  if "$@" > "$out/$log" 2>&1; then status=0; else status=$?; fi
-  t1=$(date +%s.%N)
-  awk -v s="$step" -v a="$t0" -v b="$t1" -v r="$([ $status = 0 ] && echo ok || echo "FAILED ($status)")" \
-    'BEGIN { printf "%-12s %8.2f s  %s\n", s, b - a, r }' >> "$out/times.txt"
-  if [ $status != 0 ]; then
-    echo "openxc7-build.sh: $step failed (exit $status); the end of $out/$log:" >&2
-    tail -n 25 "$out/$log" >&2
-    return $status
-  fi
-}
+# run (each step, timed and logged), place_and_route (the placer seeds, each under pnr_timeout)
+. "$here/tools/openxc7-steps.sh"
 
 if [ "$dry" = 0 ]; then
   command -v nextpnr-himbaechel >/dev/null || { echo "openxc7-build.sh: not in the openXC7 image" >&2; exit 2; }
@@ -278,20 +272,7 @@ if [ "$synthonly" = 1 ]; then
   exit $?
 fi
 
-# Placement and routing: the settings openXC7/nextpnr's CI uses for hardware-tested designs.
-# With a list of seeds, each in turn until nextpnr succeeds: it fails when routing does not
-# converge or a clock misses its constraint after routing, the same gate for every seed. Each
-# attempt's log is kept (nextpnr-seed<n>.log) and summarized in seeds.txt; nextpnr.log is the
-# last attempt's, the one that succeeded if any did.
-pnr_summary() {   # SEED STATUS: one line on that attempt, from nextpnr.log
-  awk -v s="$1" -v st="$2" '/Max frequency for clock/ { c = $0; sub(/.*clock +/, "", c); sub(/:.*/, "", c)
-        l = $0; sub(/^(Info|ERROR|Warning): */, "", l); sub(/^Max frequency for clock +/, "", l); gsub(/ +/, " ", l)
-        last[c] = l; if (!(c in seen)) { seen[c] = 1; order[n++] = c } }
-      /Routing complete/ { routed = 1 }
-      END { printf "seed %s: %s, %s;", s, st == 0 ? "pass" : "fail (nextpnr exit " st ")", routed ? "routed" : "not routed"
-            for (i = 0; i < n; i++) printf " %s%s", last[order[i]], i < n - 1 ? "," : ""
-            printf "\n" }' "$out/nextpnr.log"
-}
+# Placement and routing (tools/openxc7-steps.sh): each seed in turn, each under pnr_timeout.
 if [ -z "${SURFCPU_CHIPDB_DIR:-}" ] && [ "$dry" = 1 ]; then
   echo "[chipdb] python3 $tools/chipdb-gen.py --xray $db --device $chipdie --bba /tmp/chipdb-$chipdie.bba;" \
        "bbasm -l /tmp/chipdb-$chipdie.bba $chipdb (when it is not there yet; then its sha256 against $tools/chipdb.sha256)"
@@ -300,18 +281,7 @@ elif [ -z "${SURFCPU_CHIPDB_DIR:-}" ]; then
   run chipdb-sha chipdb-sha.txt check_chipdb ||
     { echo "openxc7-build.sh: the chip database is not the one this image's generator makes (update devenv/openxc7/chipdb.sha256 only on purpose)" >&2; exit 1; }
 fi
-pnr_ok=0
-for seed in $seeds; do
-  if run pnr nextpnr.out nextpnr-himbaechel --device "$part" --chipdb "$chipdb" --threads "$threads" \
-       --json "$out/$top.json" -o xdc="$xdc" -o fasm="$out/$top.fasm" -o placement="$out/placement.json" \
-       --router router2 -o hold-fix --placer-heap-timingweight 60 --seed "$seed" \
-       --report "$out/report.json" --detailed-timing-report -l "$out/nextpnr.log"
-  then st=0; else st=$?; fi
-  [ "$dry" = 1 ] && { pnr_ok=1; break; }
-  cp "$out/nextpnr.log" "$out/nextpnr-seed$seed.log"
-  pnr_summary "$seed" "$st" | tee -a "$out/seeds.txt" | sed 's/^/openxc7-build.sh: placement and routing, /'
-  [ "$st" = 0 ] && { pnr_ok=1; break; }
-done
+place_and_route $seeds
 [ "$pnr_ok" = 1 ] || { echo "openxc7-build.sh: no placer seed of $seeds placed and routed within its constraints" >&2; exit 1; }
 
 # Bitstream: FASM -> frames -> .bit with Project X-Ray.
@@ -409,6 +379,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
   echo "build host          ${SURFCPU_HOST:-unknown}, container $(uname -m)"
   echo "date (UTC)          $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "seed                $seed$( [ "$seed" = "$seeds" ] || echo " (of $seeds: $(grep -c . "$out/seeds.txt") tried, seeds.txt)")"
+  echo "pnr timeout         $pnr_timeout s (each seed's placement and routing)"
   echo "DSP mode            $dsp (safe: multipliers in DSP48E1 without Yosys's register/adder packing)"
   echo "defines            ${defs:- (none)}"
   [ -n "$expect" ] && echo "expectations        $expect sha256:$(sha "$expect")"

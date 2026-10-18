@@ -502,7 +502,7 @@ check "ddr designs: both define ARTY_HAS_DDR and read their generated files thro
 
 # the GPU designs (docs/GPU.md; 10/18/26): bramdiag and the DDR boot design plus the GPU lines, for the
 # 100T only (a board line), gpudiag in the boot ROM of the first
-gpu_lines='^board |^define +ARTY_HAS_GPU|^rom |^lvs-timeout '
+gpu_lines='^board |^define +ARTY_HAS_GPU|^rom |^lvs-timeout |^seed '
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_gpudiag.files | grep -Ev "$gpu_lines" > "$t/gpudiag.list"
 grep -v -e '^#' boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files | grep -Ev "$gpu_lines" > "$t/diag2.list"
 check "gpu designs: surfcpu_arty_a7_gpudiag is surfcpu_arty_a7_bramdiag plus the GPU lines" cmp -s "$t/gpudiag.list" "$t/diag2.list"
@@ -624,6 +624,24 @@ check "seeds: PLACER_SEEDS replaces the design's list for one build, and the man
 run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" PLACER_SEEDS="2;x" \
     SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "seeds: ... and refuses a PLACER_SEEDS that is not numbers" test "$rc" -ne 0
+# each placer seed's time limit (the second GPU review): a design's pnr-timeout line reaches the
+# open flow, and one that is not seconds is refused; without a line the flow's default holds
+tp="$g/boards/arty_a7/designs/pnrlimit.files"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_ddr_bramdiag.files" "$tp"
+printf 'pnr-timeout 900\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: the design list's limit for each placer seed reaches the open flow" logged "--pnr-timeout 900"
+printf 'pnr-timeout 15m\n' >> "$tp"
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design pnrlimit arty_a7_100t
+check "pnr-timeout: ... and a limit that is not seconds is refused" has "pnr-timeout must be a number of seconds"
+rm -f "$tp"
+n_pnr=$(grep -c -- '--pnr-timeout' "$FAKE_LOG" || true)
+run env FLOW=openxc7 SURFCPU_OPENXC7_BUILD="$fake_ox" SURFCPU_ROMCHECK="$romfake" ROM="$t/diag.mem" \
+    SURFCPU_FPGA_OUT="$g/build/fpga" "$g/tools/fpga-build.sh" --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
+check "pnr-timeout: ... and a design without one leaves the flow its default" \
+    test "$(grep -c -- '--pnr-timeout' "$FAKE_LOG" || true)" = "$n_pnr"
 check "define: nextpnr is given the DDR3L pins with their slew and termination" \
     grep -q '^set_property -dict {PACKAGE_PIN K5 IOSTANDARD SSTL135 SLEW FAST IN_TERM UNTUNED_SPLIT_40} \[get_ports {ddr3_dq\[0\]}\]$' "$gd/nextpnr.xdc"
 check "define: ... and lists the bank's VREF and the DDR3L false paths as not checked" \

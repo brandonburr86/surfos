@@ -35,3 +35,7 @@ generic  BOARD BUILD_ID BUILD_FLAGS BUILD_TIME BOOTROM_INIT
 rom      build/fw/gpudiag.mem    u_soc.u_bootrom     # the GPU diagnostic (make build-rom)
 dsp      u_soc.u_core.muldiv     4                   # the RV32M multiplier, --dsp safe
 lvs-timeout 14400                                    # the SoC, VRAM's block RAMs and the engine
+# The open flow's placer seeds, tried in turn until a placement routes with every clock within its
+# constraint, each for at most the flow's pnr-timeout (1800 s): router2 did not converge on some
+# placements of this design (G1's, and seed 1 at d9cc652: docs/GPU.md section 12.4)
+seed     1 2 3 4 5 6 7 8
