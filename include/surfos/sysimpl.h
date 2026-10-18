@@ -31,7 +31,7 @@ int sys_resolve(const char *host, u32 *ip);
 int sys_getentropy(void *buf, size_t len);
 
 /* net/sock.c (10/6/26: a port as the caller passed it, -EINVAL above 65535) */
-int sys_listen(u32 port);
+int sys_listen(u32 port, u32 backlog);              /* 10/17/26: backlog 0: the default */
 int sys_accept(int fd, struct netaddr *peer);
 int sys_connect(u32 ip, u32 port);
 int sys_netinfo(struct netinfo *ni);

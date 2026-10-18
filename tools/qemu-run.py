@@ -98,7 +98,7 @@ def surf_prompt(crumbs, state):
 # 10/6/26 (track N): the scenarios of tools/qemu-tcp.py the smoke test runs, as '@tcp-raw <name>' steps, in a boot
 # of their own (tcp_raw_check() below); 'end' ends that boot
 TCP_RAW = ('scan', 'flood', 'reset', 'greet', 'window', 'fin', 'keepalive', 'churn', 'reserve', 'sws', 'linger', 'lost',
-           'latency', 'zwprobe', 'evict', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
+           'latency', 'zwprobe', 'evict', 'backlog', 'ackahead', 'orphans', 'shrink', 'pollscan', 'pollstall', 'end')
 
 # 10/9/26 (the development loop, track D): the guest port rx listens on in the smoke test (forwarded: q.ports['rx'])
 RX_PORT = 5555

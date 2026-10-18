@@ -88,6 +88,8 @@ int kcmdinfo(int index, struct kcmd_info *out); /* 0; -1 with errno ENOENT after
 /* 10/6/26: network connections (surfos/sock.h has the rules): descriptors for read, write, close */
 #include <surfos/sock.h>
 int tcp_listen(unsigned short port);                    /* a listening descriptor */
+int tcp_listen_backlog(unsigned short port, int backlog);   /* 10/17/26: with room for backlog connections waiting
+                                                               for accept() (0: the default, 4; 8 at most) */
 int tcp_accept(int fd, struct netaddr *peer);           /* the next connection (waits); peer may be NULL */
 int tcp_connect(unsigned int ip, unsigned short port);  /* ip in network byte order */
 /* Resolve a hostname within 5 seconds; output changes only on success. */

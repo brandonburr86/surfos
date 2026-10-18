@@ -143,6 +143,9 @@ int kcmdinfo(int index, struct kcmd_info *out) { return (int)ret(sc(SYS_kcmdinfo
 
 /* 10/6/26: network connections, poll, pseudo-terminals, processes (surfos/sock.h, poll.h, pty.h, proc.h) */
 int tcp_listen(unsigned short port) { return (int)ret(sc(SYS_listen, port, 0, 0)); }
+int tcp_listen_backlog(unsigned short port, int backlog) {
+    return (int)ret(sc(SYS_listen, port, backlog < 0 ? 0 : backlog, 0));
+}
 int tcp_accept(int fd, struct netaddr *peer) { return (int)ret(sc(SYS_accept, fd, (long)peer, 0)); }
 int tcp_connect(unsigned int ip, unsigned short port) { return (int)ret(sc(SYS_connect, (long)ip, port, 0)); }
 int getentropy(void *buf, size_t len) { return (int)ret(sc(SYS_getentropy, (long)buf, (long)len, 0)); }

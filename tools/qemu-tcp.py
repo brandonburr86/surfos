@@ -451,6 +451,27 @@ def sc_evict(rig):
     return ok
 
 
+def sc_backlog(rig):
+    """10/17/26 (httpd): a listener that asked for a backlog of 8 while its program does not accept: eight clients
+    finish their handshakes, a ninth SYN gets no answer (every place holds a whole connection), and once the
+    program accepts, the first is served"""
+    ok = rig.start('nettest sleepsrv 23 3000 8', 'listening on port 23')
+    conns = [Conn(rig.net, 3800 + i, 23) for i in range(8)]
+    whole = sum(c.connect() is not None for c in conns)
+    ninth = Conn(rig.net, 3808, 23)
+    late = ninth.syn(1.0)
+    first = conns[0]
+    first.ack(flags=ACK | PSH, data=b'hello\n')
+    first.ack(flags=ACK | FIN)
+    ok = rig.expect('nettest: connection from 10.0.2.2 port 3800') and rig.expect('nettest: read 6 bytes, then EOF') and \
+        whole == 8 and late is None and ok
+    rig.finish(first)
+    for c in conns[1:]:                             # the listener is closed: the rest were reset; nothing lingers
+        c.rst()
+    print('        (eight handshakes of eight finished; the ninth SYN: %s)' % ('no answer' if late is None else repr(late)))
+    return ok
+
+
 def sc_ackahead(rig):
     ok = rig.start('nettest burst 23 1 0 100', 'listening on port 23')
     c = Conn(rig.net, 3600, 23)
@@ -600,6 +621,7 @@ SCENARIOS = [
     ('latency', sc_latency, "small writes are not held for a client's delayed ACK"),
     ('zwprobe', sc_zwprobe, 'a byte probing a full receive buffer gets its ACK'),
     ('evict', sc_evict, 'a client whose half-open connection was given up gets a reset, not silence'),
+    ('backlog', sc_backlog, 'a listener that asked for a backlog of 8 keeps 8 whole connections waiting'),
     ('ackahead', sc_ackahead, 'a bare ACK ahead of the guest counts and gets no answer'),
     ('orphans', sc_orphans, 'a closed connection still finishing holds no buffers'),
     ('shrink', sc_shrink, 'a window shrunk under bytes in flight is probed, not flooded, and then served'),

@@ -8,11 +8,15 @@ socket is a file descriptor: read() and write() move data, close() ends it (a FI
 listening socket stops listening), dup2() and spawnfd() pass it on. Addresses are IPv4 in
 network byte order, ports in host order. The calls (surfos/syscall.h):
 
-SYS_listen  (u32 port): a descriptor listening on port (1-65535), on every interface.
-            -EINVAL for port 0 or above 65535, -EADDRINUSE when another socket listens on
-            the port (connections a server accepted there before do not count), -ENFILE
-            without a free socket, -EMFILE without a free descriptor, -ENOMEM (no memory
-            for the descriptor's file).
+SYS_listen  (u32 port, u32 backlog): a descriptor listening on port (1-65535), on every
+            interface. -EINVAL for port 0 or above 65535, -EADDRINUSE when another socket
+            listens on the port (connections a server accepted there before do not count),
+            -ENFILE without a free socket, -EMFILE without a free descriptor, -ENOMEM (no
+            memory for the descriptor's file). 10/17/26: backlog is how many connections
+            may wait for accept(), whole or still in their handshake: 0 for the default,
+            4, and 8 at most (more is taken as 8). A SYN that finds the backlog full takes
+            the place of the oldest half-open connection, or is dropped when every one is
+            whole (its client sends it again).
 SYS_accept  (int fd, struct netaddr *peer): the next connection on a listening
             descriptor. It waits as long as it takes; a kill or Ctrl+C cuts the wait short
             (-EINTR). After poll() says POLLIN on the listener it does not wait. peer, when

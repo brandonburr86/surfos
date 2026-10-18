@@ -144,6 +144,8 @@ docs/      ARCHITECTURE.md, CODE-AUDIT.md, ROADMAP.md, USB-BOOT.md, hardware/ (t
   so the rest of a paste never runs in pieces. `telnetd` has no login or encryption by the
   owner's choice: never start it by itself. The one exception is the kernel word `autonet`
   (kernel/autonet.c), which only GRUB's development entry passes (docs/USB-BOOT.md section 13).
+  A listener's backlog is 4 unless its program asks for up to 8 (`SYS_listen`'s second
+  argument, `tcp_listen_backlog()`, 10/17/26).
 * The shell (milestone M10): `init` starts `/initrd/bin/surfsh -l` on every console; the
   ring-0 shell is the recovery console (`≋?>`) and `shell=kernel` (`≋#>`). Kernel commands
   return CMD_OK, CMD_FAIL or CMD_USAGE (0, 1, 2) and also run inside a user process's

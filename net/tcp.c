@@ -85,6 +85,12 @@ address answers through eth0 while wlan0 is up on the same network, and one to w
 through wlan0. A segment finds its connection by the address it came to as well.
 10/10/26: only a segment to the address of the interface it came in on is taken (RFC 1122
 4.2.3.10): none to a broadcast or multicast address, none to an interface without one.
+
+10/17/26 (httpd, the web server): a program may ask for a longer backlog when it listens, up
+to TCP_BACKLOG_MAX (SYS_listen's second argument; 0 keeps TCP_BACKLOG). A browser opens six
+connections at once, and with four places the SYNs beyond them were dropped (or took a
+half-open one's place) before the server could accept the first: those clients waited a
+retransmission. The rules of a full backlog are the same at any length.
 */
 
 #include <surfos/types.h>
@@ -110,7 +116,8 @@ through wlan0. A segment finds its connection by the address it came to as well.
 #define TCP_MAX_RETRIES 8
 #define TCP_SYNACK_RETRIES 4            /* 10/6/26: a half-open connection gives up after about 10 s */
 #define TCP_TIME_WAIT (2 * HZ)
-#define TCP_BACKLOG 4
+#define TCP_BACKLOG 4                   /* a listener's backlog, unless its program asked for more */
+#define TCP_BACKLOG_MAX 8               /* 10/17/26: the most a program may ask for */
 #define TCP_ORPHAN_LIFE (30 * HZ)       /* 10/6/26: an orphan that made no progress this long is reset */
 #define TCP_PERSIST_MAX (60 * HZ)       /* 10/6/26: the longest pause between two probes of a shut window */
 #define TCP_KEEPIDLE (120 * HZ)         /* 10/6/26: keepalive: silent this long, the other end is asked */
@@ -156,8 +163,8 @@ struct tcp_socket {
     u_long rto_at, wait_until;
     u_int retries;
     /* listening */
-    struct tcp_socket *backlog[TCP_BACKLOG];
-    u_int backlog_n;
+    struct tcp_socket *backlog[TCP_BACKLOG_MAX];
+    u_int backlog_n, backlog_max;       /* 10/17/26: its length: TCP_BACKLOG or what its program asked for */
     event_t ev;
     int error;
     u_long rx_segs, tx_segs, retrans;
@@ -578,13 +585,13 @@ void tcp_input(struct netdev *dev, struct netbuf *nb, const struct ip_hdr *ip) {
         if(!(flags & TCP_SYN) || (flags & (TCP_ACK | TCP_RST))) { netbuf_free(nb); return; }
         /* 10/6/26: a full backlog makes room by dropping the oldest half-open connection: a real client
            finishes its handshake in a round trip, so only a scan or a flood loses its place */
-        for(i = 0; s->backlog_n >= TCP_BACKLOG && i < s->backlog_n; i++) {
+        for(i = 0; s->backlog_n >= s->backlog_max && i < s->backlog_n; i++) {
             if(s->backlog[i]->synced) continue;
             c = s->backlog[i];
             backlog_remove(c);
             sock_free(c);
         }
-        if(s->backlog_n >= TCP_BACKLOG) { netbuf_free(nb); return; }
+        if(s->backlog_n >= s->backlog_max) { netbuf_free(nb); return; }
         c = sock_alloc();
         if(!c) { netbuf_free(nb); return; }
         c->local_port = s->local_port;
@@ -857,7 +864,7 @@ struct tcp_socket *tcp_connect(ipaddr_t dst, u16 dport, u_long timeout_ms) {
 }
 
 /* 10/6/26: -EINVAL for port 0, -EADDRINUSE when another socket listens there, -ENFILE */
-static int listen_port(u16 port, bool reserved, struct tcp_socket **out) {
+static int listen_port(u16 port, bool reserved, u_int backlog, struct tcp_socket **out) {
     struct tcp_socket *s = NULL;
     int err = 0;
     *out = NULL;
@@ -865,19 +872,21 @@ static int listen_port(u16 port, bool reserved, struct tcp_socket **out) {
     mutex_lock(&net_lock);
     if(port_listened(port)) err = -EADDRINUSE;
     else s = sock_new(false, reserved, &err);
-    if(s) { s->local_port = port; s->state = LISTEN; }
+    if(s) { s->local_port = port; s->state = LISTEN; s->backlog_max = backlog; }
     mutex_unlock(&net_lock);
     *out = s;
     return s ? 0 : err;
 }
 
-int tcp_listen_on(u16 port, struct tcp_socket **out) {
-    return listen_port(port, false, out);
+/* 10/17/26: backlog 0 is TCP_BACKLOG; more than TCP_BACKLOG_MAX is TCP_BACKLOG_MAX */
+int tcp_listen_on(u16 port, u_int backlog, struct tcp_socket **out) {
+    if(!backlog) backlog = TCP_BACKLOG;
+    return listen_port(port, false, backlog < TCP_BACKLOG_MAX ? backlog : TCP_BACKLOG_MAX, out);
 }
 
 struct tcp_socket *tcp_listen(u16 port) {
     struct tcp_socket *s;
-    return listen_port(port, true, &s) ? NULL : s;
+    return listen_port(port, true, TCP_BACKLOG, &s) ? NULL : s;
 }
 
 /* the first connection in l's backlog that finished its handshake (it may have been closed or reset

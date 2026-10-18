@@ -48,7 +48,7 @@ ipaddr_t tcp_peer(struct tcp_socket *s, u16 *port);
    waits until it happens or the wait is cut short (-EINTR) */
 #define TCP_NO_LIMIT ((u_long)-1)
 int tcp_open(ipaddr_t dst, u16 dport, u_long timeout_ms, struct tcp_socket **out);
-int tcp_listen_on(u16 port, struct tcp_socket **out);
+int tcp_listen_on(u16 port, u_int backlog, struct tcp_socket **out);  /* 10/17/26: backlog 0: the default (4), 8 at most */
 int tcp_accept_next(struct tcp_socket *l, u_long timeout_ms, struct tcp_socket **out);
 int tcp_read(struct tcp_socket *s, void *buf, u_int len);     /* read(): bytes, 0 at the end; waits */
 int tcp_write(struct tcp_socket *s, const void *data, u_int len); /* write(): what fits now (waits while nothing does) */

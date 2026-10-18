@@ -1179,7 +1179,10 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   on a port on every interface, `SYS_accept` (35) takes the next connection with the
   peer's address, `SYS_connect` (36) makes one within 10 seconds, `SYS_netinfo` (37)
   describes the default interface; libsurf has `tcp_listen`, `tcp_accept`, `tcp_connect`,
-  `netinfo`, `ipstr` and `ipparse`. There are 16 TCP sockets (8 before); programs and
+  `netinfo`, `ipstr` and `ipparse`. A listener's backlog holds 4 connections waiting for
+  `accept()`; since 10/17/26 `SYS_listen`'s second argument asks for up to 8
+  (`tcp_listen_backlog()`, for a server that a browser opens several connections to at once).
+  There are 16 TCP sockets (8 before); programs and
   connections coming in leave the last free one to the kernel's own commands. `read()`
   waits as long as it takes (a kill or Ctrl+C ends the wait), `write()` queues what fits
   in the 8 KB send buffer and returns that count, waiting only while nothing fits, and
@@ -1188,8 +1191,8 @@ TCP                      net/tcp.c: partial writes, the persist timer, keepalive
   ENETUNREACH, EADDRINUSE, ...), with Linux's numbers.
 * **TCP** (`net/tcp.c`), reviewed twice and hardened for a server that must outlive bad
   clients. A handshake that dies leaves the listener's backlog at once, the SYN-ACK gives
-  up after 4 tries, a SYN that finds the backlog full replaces the oldest half-open entry,
-  and a stray ACK reaching a listener is answered with a reset (RFC 793), as is anything
+  up after 4 tries, a SYN that finds the backlog full replaces the oldest half-open entry
+  (or is dropped when every entry is a whole connection), and a stray ACK reaching a listener is answered with a reset (RFC 793), as is anything
   for a connection that failed. A receiver that stops reading shuts its window and is
   probed by the persist timer (1 s, doubling to 60 s, not counted as retries) until it
   reads again; a window shrunk to zero with bytes in flight is probed the same way rather
