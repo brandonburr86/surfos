@@ -260,6 +260,7 @@ def charmap(d):
                   lambda s: d.title('Character Map')(s) and d.text(s, x + 26 + 7 * 17 + 5, y + 50 + 15 * 17 + 1, '\xf7', INK) and
                   d.text(s, x + 26 + 1 * 17 + 5, y + 50 + 4 * 17 + 1, 'A', INK, SHEET))
         d.click(x + 26 + 7 * 17 + 8, y + 50 + 15 * 17 + 8)
+        d.move(900, 470)                        # the pointer off the cell, which is read next (and off Notepad)
         d.visible('Character Map: a click chooses ≋ (0xF7, SurfOS\'s own): large, with its code, U+224B and its UTF-8',
                   lambda s: d.text(s, x + 26 + 7 * 17 + 5, y + 50 + 15 * 17 + 1, '\xf7', PAPER, TEAL) and
                   d.text(s, x + 312 + 64, y + 154, '247', INK) and d.text(s, x + 312 + 64, y + 154 + 18, '0xF7', INK) and
