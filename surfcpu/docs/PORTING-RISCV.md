@@ -401,7 +401,11 @@ B26: counted by each sync for itself), so one bad block does not hold back its n
 sync returns 0 only when every block that was dirty when it began reached the card (B12; before,
 after 8 rounds of another task's writing it returned 0 with a directory block still dirty), and
 gives up on such a block once syncs have waited 10 s for its hold (B18: a task killed with
-buffers in hand left every later sync hanging). Nothing hangs (a 1 MB `cp` returns at once with
+buffers in hand left every later sync hanging; B39: a kill or Ctrl+C cuts a sync's long waits short,
+and a task inside a FAT call, holding the cache's lock, or with blocks of its own marked in the cache
+is not killed at once (`fs_hold`, `bcache_holds()`): the kill that waited 2 s comes once it is out,
+never in the middle, where it left a copy's record on the dead task's stack and blocks marked as
+copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
@@ -413,7 +417,10 @@ an operation that needs an order point fails while they refuse, and B20: so does
 that file, whose first order point must not write the replaced entry ahead of them; B26: another
 task's sync waits for them while they are set aside, B33: but not one writing a block from a copy that
 needs one: it lets that block go and looks again; B34: and a copy is written only when nothing
-it needed was set aside or dropped since it was taken, else it is taken again). Since B28 the
+it needed was set aside or dropped since it was taken, else it is taken again; B41: spoiled only by a
+block not set aside before it was taken, and only when its own block changed since, taken again as
+long as it takes and ended when another task's write paid the sync's debt, so rm traffic alone no
+longer fails a sync; B40: also when umount gives a block up, `binvalidate()`). Since B28 the
 bytes nobody will read (a part cut off past the end of a write that stopped, a gap of zeros
 given up, B36: a folder's new cluster given back) are dropped, never written, and hold no order
 point, table point (B37) or sync back while their clusters wait to be freed (B35: one another
@@ -427,7 +434,10 @@ made). A write that fails leaves the file's size as it was (B23: a gap of zeros 
 included). Clusters given back while the card refused (B25: a cut-back's; B30: a failed mkdir's
 new folder, once something of its name was written) wait to be freed until a sync that began
 after them works; 64 such chains can wait (B31), one more is said lost on the console and again
-at unmount (fsck.fat frees it), and the volume stays marked as not cleanly unmounted (B38).
+at unmount (fsck.fat frees it), and the volume stays marked as not cleanly unmounted (B38; B42: also
+through SurfOS's own next mount and unmount, until a checker clears it; B43: clusters a free could
+not give back, the FAT unreadable in the middle of the chain, are counted and said likewise, and the
+rm whose name is off the card says 0; B44: FAT12 has no such mark, and its unmount says so).
 
 **The card taken out** (`sdblk.c`): `sdcard.c` looks at card detect before every transfer and
 fails at once (`SD_ENOCARD`, no timeout); the watch task (two looks 200 ms apart agreeing, so a
@@ -596,6 +606,20 @@ test-os-persist's write run 0.21 % more cycles, its reboot run 0.24 %, test-os-f
 0.20 % and its refusing card 0.37 % fewer (the card-detect task meeting the removal one 200 ms look
 sooner; 0.11 % more without those steps); SurfBoot loads a package 1.1 KB larger (+0.13 million
 cycles), and each command is within 0.2 % (bcache-review.txt section 31).
+
+Since audit B39-B45 (counted the same way, before = 47fb4ec): every workload above sends the same
+requests and blocks, and the host's CPU time is the same within the noise (bcache-review.txt section
+37). A FAT call counts its task inside the file system (two stores and a critical section's two
+calls), and the cache counts it only around a device request or a copy: the calls made for each block
+(bread, brelse, bpeek) count nothing, the cache lock's owner standing for their short sections. On
+SurfCPU (47fb4ec's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.25 % more cycles, its reboot run 0.19 %, test-os-faults' full card 0.32 % and its refusing card
+0.51 % fewer (the card-detect task meeting the removal sooner); against 47fb4ec padded with 4 KB of
+code that never runs, +0.08 %, +0.04 %, +0.04 % and -0.28 %: the rest is the package, 3.8 KB larger,
+that SurfBoot loads (+0.48 million cycles). Each command is within 0.3 %. Two drafts cost more and were
+taken back: a count in each of the cache's calls (+1.05 % on the write run against the padded base, cp
++1.9 %), and a wake-up of the cache's waiters for each block an eject's binvalidate() dropped (+5 % on
+the eject) (bcache-review.txt section 39).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by

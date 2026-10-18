@@ -12,7 +12,8 @@
      chaos     the volume's disk refuses every write for a few milliseconds now and then
    The oracle looks at the image after every write the disk stores (no entry or link on the way reaching a
    free cluster; since round fs-fix-5, no named file showing another file's bytes: each block carries its file's
-   tag); at the end, with the disk working, a sync, the model against the file system and against
+   tag; since round fs-fix-6, exactly: no block of a file's range carries the tag of a file that never had that
+   name in that directory, the streamer's too); at the end, with the disk working, a sync, the model against the file system and against
    a fresh mount of a copy of the image, and bcache_audit() (B9).
    usage: conc <seed> <seconds> [workers] [chaos 0/1] [io_us]
    (10/16/26, round fs-fix-2: written by the independent review of B5-B11 as fsrev-tests/conc.c, with
@@ -45,6 +46,7 @@ void *calloc(unsigned long n, unsigned long m);
 void *realloc(void *p, unsigned long n);
 void free(void *p);
 int atoi(const char *s);
+char *getenv(const char *name);
 
 /* conc_host.c */
 void host_init(void);
@@ -123,6 +125,9 @@ void mutex_unlock(mutex_t *m) {
     host_tbl_unlock();
 }
 void wait_prepare(wait_queue_t *q) { (void)q; host_wait_prepare(); }
+void wait_prepare_intr(wait_queue_t *q) { (void)q; host_wait_prepare(); }   /* 10/17/26 (round fs-fix-6, B39) */
+void kcritical_enter(void) { }                                              /* (B39: fs/fat.c's lock) */
+void kcritical_leave(void) { }
 /* 10/16/26 (B18): bcache's timed waits: the host clock; its timers are not needed (a wait wakes within 1 s) */
 #include <surfos/ktimer.h>
 u_long uptime_ms(void) { return host_ms(); }
@@ -291,10 +296,36 @@ static void tag_fill(u8 *b, u32 off, u32 len, u32 id) {
     u32 i;
     for(i = 0; i < len; i++) if((off + i) % 512 < 8) b[i] = tag_byte(id, (off + i) % 512);
 }
-static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name) {
+/* 10/17/26 (round fs-fix-6): the exact check (the review of B34-B38). The check above only saw a range holding two
+   different files' tags: a file whose blocks all carry one other file's tag passed, and the streamer wrote zeros (no
+   tags). Now every name a file of worker k's directory ever had (created, or moved to) is recorded with the file's
+   number before the operation that could put that name on the disk (hist_add()), and a block within a named file's
+   range carrying the tag of a file that never had that name in that directory is a block the file never wrote: stale
+   (exact_viol). Names come from the long name when one precedes the short entry (its checksum checked), else from the
+   8.3 name. The two-tags check stays (mixed_viol); ONLY_MIXED=1 in the environment checks with it alone, as round
+   fs-fix-5 did (for the evidence) */
+static const char *names8[] = { "f0.dat", "f1.dat", "f2.dat", "f3.dat", "f4.dat", "f5.dat" };
+static u8 hist[8][10][65536 / 8];                  /* [worker's directory][name index][file number] */
+static volatile u32 exact_checked, exact_viol, mixed_viol;
+static int only_mixed;
+static int lname_eq(const char *a, const char *b);
+static int name_index(const char *name) {
+    int i;
+    for(i = 0; i < 6; i++) if(lname_eq(name, names8[i])) return i;
+    if(!strncmp(name, "a long name number ", 19) && name[19] >= '0' && name[19] <= '2' && name[20] == ' ') return 6 + name[19] - '0';
+    if(lname_eq(name, "s.dat")) return 9;
+    return -1;
+}
+static void hist_add(int wd, const char *name, u32 id) {
+    int ni = name_index(name);
+    if(wd < 0 || wd >= 8 || ni < 0 || !id) return;
+    __sync_fetch_and_or(&hist[wd][ni][id >> 3], (u8)(1 << (id & 7)));
+}
+static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name, int wd, int ni) {
     u32 size = gle32(p + 28), c = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0), steps = 0, off = 0, id = 0, s;
-    char m[160];
-    while(c >= 2 && c < g->nclusters + 2 && off < size && steps++ < g->nclusters) {
+    int ex = 0, mx = 0;
+    char m[200];
+    while(c >= 2 && c < g->nclusters + 2 && off < size && steps++ < g->nclusters && !(ex && mx)) {
         u32 v;
         for(s = 0; s < g->spc && off < size; s++, off += 512) {
             const u8 *d = r->mem + (g->data_lba + (c - 2) * g->spc + s) * 512;
@@ -303,12 +334,25 @@ static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char 
                (u8)(d[2] ^ d[4]) != 0xFF || (u8)(d[3] ^ d[5]) != 0xFF) continue;   /* (whole, and within the size: the
                                                                                   bytes past the end are anybody's) */
             t = gle16(d + 2);
-            if(!id) id = t;
-            else if(t != id) {
-                snprintf(m, sizeof(m), "entry '%s': its block at %u holds file %u's bytes, its others file %u's (stale data)",
-                         name, off, t, id);
-                gviol(r, m);
-                return;
+            if(wd >= 0 && ni >= 0 && !only_mixed && !ex) {   /* the exact check */
+                exact_checked++;
+                if(!(hist[wd][ni][t >> 3] & (1 << (t & 7)))) {
+                    ex = 1;
+                    if(!exact_viol++) {
+                        snprintf(m, sizeof(m), "entry '%s' in t%d: its block at %u (cluster %u) holds file %u's bytes, a file that never had"
+                                 " that name there (stale data, exact check)", name, wd, off, c, t);
+                        gviol(r, m);
+                    } else r->violations++;
+                }
+            }
+            if(!id) id = t;                          /* round fs-fix-5's check: two numbers in one range */
+            else if(t != id && !mx) {
+                mx = 1;
+                if(!mixed_viol++) {
+                    snprintf(m, sizeof(m), "entry '%s': its block at %u holds file %u's bytes, its others file %u's (stale data)",
+                             name, off, t, id);
+                    gviol(r, m);
+                } else r->violations++;
             }
         }
         v = gfat(r->mem, g, c);
@@ -316,28 +360,58 @@ static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char 
         c = v;
     }
 }
-static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth);
-static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth) {
+static u8 lfn_sum(const u8 *n11) {
+    u8 sum = 0;
+    int i;
+    for(i = 0; i < 11; i++) sum = (u8)(((sum & 1) << 7) + (sum >> 1) + n11[i]);
+    return sum;
+}
+static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth, int wd);
+static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth, int wd) {
     u32 c = first, steps = 0;
     if(depth > 4) return;
     while(c >= 2 && c < g->nclusters + 2 && steps++ < 65536) {
         u32 next = gfat(r->mem, g, c);
         char m[120];
         if(!next) { snprintf(m, sizeof(m), "a directory's chain reaches cluster %u, which is free", c); gviol(r, m); return; }
-        gentries(r, g, r->mem + (g->data_lba + (c - 2) * g->spc) * 512, g->spc * 16, depth);
+        gentries(r, g, r->mem + (g->data_lba + (c - 2) * g->spc) * 512, g->spc * 16, depth, wd);
         if(geoc(g, next)) return;
         c = next;
     }
 }
-static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth) {
+static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth, int wd) {
     u32 i;
+    char lfn[300];
+    int lfn_max = 0, lfn_ok = 0;
+    u8 lfn_ck = 0;
     for(i = 0; i < n; i++, p += 32) {
         u32 first, c, steps = 0;
-        char m[120], name[12];
+        char m[120], name[12], full[300];
+        int ni = -1;
         if(p[0] == 0) return;
-        if(p[0] == 0xE5 || p[11] == 0x0F || (p[11] & 0x08)) continue;
-        if(p[0] == '.' && (p[1] == ' ' || p[1] == '.')) continue;
+        if(p[0] == 0xE5) { lfn_ok = 0; continue; }
+        if(p[11] == 0x0F) {                          /* a long name's part: 13 UTF-16 characters (ASCII here) */
+            static const int at[13] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+            int seq = p[0] & 0x1F, k;
+            if(p[0] & 0x40) { lfn_ok = 1; lfn_max = seq * 13; lfn_ck = p[13]; memset(lfn, 0, sizeof(lfn)); }
+            if(!lfn_ok || seq < 1 || seq * 13 > (int)sizeof(lfn) - 1 || p[13] != lfn_ck) { lfn_ok = 0; continue; }
+            for(k = 0; k < 13; k++) {
+                u16 ch = (u16)(p[at[k]] | (p[at[k] + 1] << 8));
+                lfn[(seq - 1) * 13 + k] = ch == 0xFFFF ? 0 : (char)ch;
+            }
+            continue;
+        }
+        if(p[11] & 0x08) { lfn_ok = 0; continue; }
+        if(p[0] == '.' && (p[1] == ' ' || p[1] == '.')) { lfn_ok = 0; continue; }
         memcpy(name, p, 11); name[11] = 0;
+        if(lfn_ok && lfn_ck == lfn_sum(p)) { lfn[lfn_max < (int)sizeof(lfn) ? lfn_max : (int)sizeof(lfn) - 1] = 0; strlcpy(full, lfn, sizeof(full)); }
+        else {                                       /* "F3      DAT" -> "f3.dat" */
+            int k, j = 0;
+            for(k = 0; k < 8 && p[k] != ' '; k++) full[j++] = (char)(p[k] >= 'A' && p[k] <= 'Z' ? p[k] + 32 : p[k]);
+            if(p[8] != ' ') { full[j++] = '.'; for(k = 8; k < 11 && p[k] != ' '; k++) full[j++] = (char)(p[k] >= 'A' && p[k] <= 'Z' ? p[k] + 32 : p[k]); }
+            full[j] = 0;
+        }
+        lfn_ok = 0;
         first = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0);
         for(c = first; c >= 2 && c < g->nclusters + 2 && steps++ < 1000000; ) {
             u32 v = gfat(r->mem, g, c);
@@ -345,15 +419,18 @@ static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, in
             if((p[11] & 0x10) || geoc(g, v)) break;
             c = v;
         }
-        if((p[11] & 0x10) && first) gdir(r, g, first, depth + 1);
-        else if(!(p[11] & 0x10)) gstale(r, g, p, name);
+        if((p[11] & 0x10) && first) gdir(r, g, first, depth + 1, depth == 0 && full[0] == 't' && full[1] >= '0' && full[1] <= '7' && !full[2] ? full[1] - '0' : -1);
+        else if(!(p[11] & 0x10)) {
+            if(wd >= 0) ni = name_index(full);
+            gstale(r, g, p, full, wd, ni);
+        }
     }
 }
 static void oracle_check(struct ram *r) {
     struct ggeo g;
     ggeometry(r->mem, &g);
-    if(g.type == 32) gdir(r, &g, g.root_cluster, 0);
-    else gentries(r, &g, r->mem + g.root_lba * 512, g.root_secs * 16, 0);
+    if(g.type == 32) gdir(r, &g, g.root_cluster, 0, -1);
+    else gentries(r, &g, r->mem + g.root_lba * 512, g.root_secs * 16, 0, -1);
 }
 
 /* the size field of entry n11 (8.3) in directory dir11 of the root, on the disk now; -1 when not found */
@@ -434,7 +511,6 @@ static int wfind(struct worker *w, const char *name) {
     for(i = 0; i < NF; i++) if(w->f[i].used && lname_eq(w->f[i].name, name)) return i;
     return -1;
 }
-static const char *names8[] = { "f0.dat", "f1.dat", "f2.dat", "f3.dat", "f4.dat", "f5.dat" };
 static void wname(struct worker *w, char *out, size_t n) {
     if(wrn(w, 4)) strlcpy(out, names8[wrn(w, 6)], n);
     else snprintf(out, n, "a long name number %u of worker %d", (unsigned)wrn(w, 3), w->id);
@@ -522,21 +598,29 @@ static void debug_dir(struct worker *w, const char *n11) {
     host_mutex_unlock(x->lock);
 }
 
-static int write_heavy, streamers, no_syncer, stream_mode;
-/* a streamer: appends 2 KB to its one file, again and again (a background cp), never closing it */
+static int write_heavy, streamers, no_syncer, stream_mode, stream_tags = 1;
+/* a streamer: appends 2 KB to its one file, again and again (a background cp), never closing it. 10/17/26 (round
+   fs-fix-6): with its file's tag where a block starts (it wrote zeros, which carry none: the oracle saw nothing of
+   it); NO_STREAM_TAGS=1 in the environment writes zeros again (for the evidence) */
 static volatile u32 stream_fail, stream_ok;
 static void stream_op(struct worker *w) {
     struct vnode *v;
-    static u8 chunk[2048];
+    u8 chunk[2048];
+    u32 off;
     if(!w->f[0].used) {
+        u32 id = 1 + (__sync_add_and_fetch(&file_ids, 1) - 1) % 65534;
+        hist_add(w->id, "s.dat", id);                /* (before the name can reach the disk) */
         if(w->dir->ops->create(w->dir, "s.dat", VN_FILE, &v)) return;
         vput(v);
-        w->f[0].used = 1; w->f[0].plain = 1; strlcpy(w->f[0].name, "s.dat", sizeof(w->f[0].name));
+        w->f[0].used = 1; w->f[0].plain = 1; strlcpy(w->f[0].name, "s.dat", sizeof(w->f[0].name)); w->f[0].id = id;
     }
     if(w->dir->ops->lookup(w->dir, "s.dat", &v)) return;
     if(v->size > 200000) { v->ops->truncate(v, 0); w->f[0].size = 0; }
     w->where = "stream";
-    if(v->ops->write(v, stream_mode == 2 ? 0 : v->size, chunk, sizeof(chunk)) == (int)sizeof(chunk)) stream_ok++;   /* 2: rewrites its first 2 KB (a log kept short) */
+    off = stream_mode == 2 ? 0 : v->size;           /* 2: rewrites its first 2 KB (a log kept short) */
+    memset(chunk, 0, sizeof(chunk));
+    if(stream_tags) tag_fill(chunk, off, sizeof(chunk), w->f[0].id);
+    if(v->ops->write(v, off, chunk, sizeof(chunk)) == (int)sizeof(chunk)) stream_ok++;
     else stream_fail++;
     w->f[0].size = v->size;
     w->where = "between";
@@ -554,14 +638,18 @@ static void wop(struct worker *w) {
         for(m = 0; m < NF && w->f[m].used; m++) ;
         if(m == NF) return;
         w->where = "create";
-        r = w->dir->ops->create(w->dir, name, VN_FILE, &v);
-        snprintf(w->last, sizeof(w->last), "create %s: %d", name, r);
-        if(!r) {
-            w->f[m].used = 1; w->f[m].plain = !strchr(name, ' '); strlcpy(w->f[m].name, name, sizeof(w->f[m].name)); w->f[m].size = 0;
-            w->f[m].id = 1 + (__sync_add_and_fetch(&file_ids, 1) - 1) % 65534;   /* (16 bits, never 0) */
-            vput(v);
+        {
+            u32 id = 1 + (__sync_add_and_fetch(&file_ids, 1) - 1) % 65534;   /* (16 bits, never 0) */
+            hist_add(w->id, name, id);                 /* (round fs-fix-6: before the name can reach the disk) */
+            r = w->dir->ops->create(w->dir, name, VN_FILE, &v);
+            snprintf(w->last, sizeof(w->last), "create %s: %d", name, r);
+            if(!r) {
+                w->f[m].used = 1; w->f[m].plain = !strchr(name, ' '); strlcpy(w->f[m].name, name, sizeof(w->f[m].name)); w->f[m].size = 0;
+                w->f[m].id = id;
+                vput(v);
+            }
+            else { w->fails++; if(wcompare(w, "after a failed create")) w->b5_bad++; }
         }
-        else { w->fails++; if(wcompare(w, "after a failed create")) w->b5_bad++; }
     } else if(what < 55) {                                 /* write, and sometimes close */
         u32 off, len, i;
         u8 *b;
@@ -641,6 +729,7 @@ static void wop(struct worker *w) {
         d = wfind(w, name);
         if(d == m) return;
         w->where = "mv";
+        hist_add(w->id, name, w->f[m].id);             /* (round fs-fix-6: before the new name can reach the disk) */
         r = w->dir->ops->rename(w->dir, w->f[m].name, w->dir, name);
         snprintf(w->last, sizeof(w->last), "mv %s %s%s: %d", w->f[m].name, name, d >= 0 ? " (replacing)" : "", r);
         if(!r) {
@@ -735,6 +824,8 @@ int main(int argc, char **argv) {
         x = ram_new("cx", blocks, io_us);
     }
     y = ram_new("cy", 8192, io_us);
+    if(getenv("ONLY_MIXED")) only_mixed = 1;        /* 10/17/26 (round fs-fix-6): round fs-fix-5's oracle alone */
+    if(getenv("NO_STREAM_TAGS")) stream_tags = 0;   /*      and its untagged streamer (for the evidence) */
     if(fat_mkfs(&x->bd, "CONC", argc > 11 ? atoi(argv[11]) : 0, msg, sizeof(msg)) != 0) { printf("mkfs: %s\n", msg); return 2; }
     sb = (struct superblock *)calloc(1, sizeof(*sb));
     sb->type = fat; sb->dev = &x->bd;
@@ -786,6 +877,8 @@ int main(int argc, char **argv) {
     printf("; syncs %u (%u failed), reads %u; disk writes %u, refused %u, zero-length %u\n", syncs_done, syncs_failed, reads_done,
            x->writes, x->failed, zero_writes);
     if(streamers) printf("     streamers: %u appends written, %u failed\n", stream_ok, stream_fail);
+    printf("     stale data: tags checked exactly %u, exact violations %u, two files' tags in one range %u%s%s\n", exact_checked,
+           exact_viol, mixed_viol, only_mixed ? " (ONLY_MIXED: no exact check)" : "", stream_tags ? "" : " (NO_STREAM_TAGS)");
     printf("     final syncs %d %d, dirty left %u; oracle %u%s%s; audit %d %d; B5", s1, s2, bdirty_count(&x->bd), x->violations,
            x->violations ? ": " : "", x->violations ? x->violation : "", bcache_audit(&x->bd), bcache_audit(&y->bd));
     for(i = 0; i < nworkers; i++) printf(" %u", workers[i].b5_bad);

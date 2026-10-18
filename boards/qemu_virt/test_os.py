@@ -693,7 +693,7 @@ def fault_boot(args, disk, check, work):
 def pull_boot(args, disk, check, work):
     """milestone 8, under QEMU (sdsim): the card taken out while mounted read-write (card detect off). The kernel says
     so, refuses further writes, keeps the mount until umount; fsck.fat then finds only the dirty bit. Put back, it is
-    sd0 again, mounts with a warning, and its files are there"""
+    sd0 again, mounts with a warning, and its files are there; ejected, it keeps the mark (10/17/26, audit B42)"""
     q, _, _ = stub_boot(args, disk, work, 'sdsim')
     try:
         ok = q.expect('+SDSIM: sd0 is the RAM disk through the SD driver', 30) and q.expect(PROMPT, 30)
@@ -723,13 +723,16 @@ def pull_boot(args, disk, check, work):
         ok6, out6 = q.cmd('ls /sd0p1', ['entries'])
         check(ok and ok2 and ok3 and ok4 and ok5 and ok6 and 'AFTER.TXT' not in out6,
               'pull: umount, put back: sd0 again, mounted with "not unmounted cleanly", KEEP.TXT there, AFTER.TXT not')
-        ok, _ = q.cmd('eject sd0', ['sd0: safe to remove'])
+        ok, out = q.cmd('eject sd0', ['sd0: safe to remove'])
         dump = sdsim_card(q, disk) if ok else None
         if dump:
+            # 10/17/26 (audit B42): a card that was not cleanly unmounted when mounted stays marked so at its unmount
+            # (the eject says so): only a checker clears the mark. Before, this eject cleared it
             clean, report = fsck_partition(q, dump, PART_OFFSET)
-            check(clean, 'pull: after eject the card is clean again (fsck.fat -n)')
-            if not clean:
-                print(report)
+            harmless, other = fsck_findings(report)
+            check(not other and any(h.startswith('Dirty bit is set') for h in harmless) and 'only a check clears that' in out,
+                  'pull: after eject the card stays marked as not cleanly unmounted (the eject says so), and fsck.fat -n '
+                  'finds nothing else: %s' % short(harmless + other))
         check(q.poweroff() == 0, 'pull: poweroff')
     finally:
         transcript = q.transcript

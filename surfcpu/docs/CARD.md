@@ -243,8 +243,19 @@ that another program or the cache was writing at that very moment is dropped onc
 ends (since 2026-10-17). The one exception: an `rm` of a file whose block another program or
 the cache was writing at that very moment can fail once with `I/O error` (nothing changed; the
 same `rm` then works). A `sync` waits about 10 seconds for a program that holds part of what it must
-write and does not let go (one killed in the middle of a write), then says `I/O error` for that
-part; later syncs say so at once.
+write and does not let go, then says `I/O error` for that part; later syncs say so at once. Other
+programs deleting, cutting or moving files at the same time do not make a `sync`, or a command's
+own writing out, fail on a card that takes every write: it waits until they pause (since
+2026-10-17; before, enough of them could make it say `I/O error`).
+
+**Stopping a command.** Ctrl+C, or a `kill` of the program, while it waits on the card (for a block
+another program holds, or for another program's write) ends the wait at once: the command fails
+with `I/O error`, and what it had not written stays in memory for the next `sync`; one writing or
+reading a large piece stops at the next 64 KiB (it wrote what it says). One in the middle of the
+card's own write ends when that write does (a card that stops answering times out), and one in the
+middle of changing a folder or the FAT finishes that change first: stopped at once there, it left the card
+locked for every other program and SurfOS's records of its writes in a mess (since 2026-10-17). A
+program that is ending by itself still writes its files out.
 
 If a failed `mv`, `rm`, `mkdir` or truncation cannot be undone (the card refuses to read back,
 in the middle of putting things back, a block the command had changed; a block it could not read
@@ -257,13 +268,16 @@ bytes).
 
 **Before taking the card out or switching off**, type `eject sd0` and wait for
 `sd0: safe to remove`. If the card refuses the last writes, eject says `sd0 stays mounted`:
-type `sync` to try again, or `umount /sd0p1` to give those changes up.
+type `sync` to try again, or `umount /sd0p1` to give those changes up (nothing of them is written
+after that, also when another program's `sync` was writing then: since 2026-10-17).
 
 **Taken out while mounted** (or the board switched off): SurfOS says so within half a second
 (`+SD: sd0: the card was taken out`, and for a read-write mount that what was not yet written
 is lost), refuses every further read and write (`I/O error`), and keeps `/sd0p1` until you
 type `umount /sd0p1`. Put the card back and type `mount sd0p1`: it says `was not unmounted
-cleanly`. A card taken out and put back in less than half a second is not noticed: it lost its
+cleanly`, and does so at every mount until the card has been checked on the Mac (Disk Utility,
+First Aid): SurfOS's own unmount leaves that mark (and says so), since only a check can tell that
+nothing was lost (since 2026-10-17; before, the next unmount cleared it). A card taken out and put back in less than half a second is not noticed: it lost its
 power and answers nothing, so every read and write fails until it has been out for a moment.
 
 **What FAT32 cannot make safe.** FAT32 keeps no journal, so a card that comes out in the
@@ -292,9 +306,11 @@ real threads (`tests/host/test_fatconc.c`; since 2026-10-16 also with six writer
 card, the setting in which a review found one such moment: a copy cut back while the card
 refused, its last clusters freed before its new end was on the card; fixed, they are freed
 once it is). Since 2026-10-17 the last two also check, after every block written, that no file
-shows another file's bytes; a review had found, by a targeted test, a moment when a folder
-block could reach the card naming a file just deleted by another program over a block that
-file never wrote (fixed). One narrow case is left: FAT12's entries that straddle two sectors (FAT12 is for
+shows bytes it never wrote: each block written carries a mark naming its file, and a block in a
+file with the mark of a file that never had that name there is reported; a review had found, by
+a targeted test, a moment when a folder block could reach the card naming a file just deleted
+by another program over a block that file never wrote (fixed; with the fix taken out, the threaded
+test reports it in 7 of 16 runs of its streaming setting). One narrow case is left: FAT12's entries that straddle two sectors (FAT12 is for
 floppies, never a SurfOS card). A copy that stopped because the card began to refuse keeps
 its last clusters linked past its end until a sync works (pulled before that, they are space
 lost until a check frees it). SurfOS keeps up to 64 such runs of clusters waiting to be freed;
@@ -302,7 +318,12 @@ a 65th (65 copies cut short while the card keeps refusing) it cannot free, and s
 `... cannot wait to be freed ...: lost until the volume is checked (fsck.fat)`, and again when
 the card is unmounted or ejected (`... may stay allocated with nothing pointing at them`); the
 card is then left marked as not cleanly unmounted (since 2026-10-17), so the next mount, and
-the Mac, say it should be checked. A truncate cut short can also leave a file whose size runs
+the Mac, say it should be checked, and SurfOS's later unmounts leave it so until it is. Clusters
+an `rm` or a truncation could not give back because the card refused to read or write part of the
+FAT are counted and said the same way (`... could not be freed (the FAT could not be read or
+written there): lost until the volume is checked`, "at least" when the FAT could not be read to the
+chain's end), and the `rm` itself works: the file is gone (since 2026-10-17; before, it said `I/O
+error` with the file gone, and nothing counted those clusters). A truncate cut short can also leave a file whose size runs
 past its clusters. But:
 
 * the file being written comes out either whole or not at all only if it is new: a file being

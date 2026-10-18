@@ -9,7 +9,8 @@
    Checks, after every operation:
      - the oracle of tests/host/test_fatfs.c at every block the disk stores (no entry or FAT link on the
        way reaches a cluster the first FAT says is free; since round fs-fix-5, no named file shows another
-       file's bytes: each block carries its file's tag);
+       file's bytes: each block carries its file's tag; since round fs-fix-6 exactly: no block of a named
+       file's range carries the tag of a file that never had that name in that directory);
      - bcache_audit() of both disks (B9);
      - an operation that failed with EIO (rename, unlink, truncate to a smaller size, create, mkdir)
        changed nothing that can be seen through the file system (B5);
@@ -90,6 +91,48 @@ static void rand_name(char *out, size_t size) {
 static int lname_eq(const char *a, const char *b) {
     while(*a && *b) { int x = *a, y = *b; if(x >= 'A' && x <= 'Z') x += 32; if(y >= 'A' && y <= 'Z') y += 32; if(x != y) return 0; a++; b++; }
     return *a == *b;
+}
+
+/* 10/17/26 (round fs-fix-6): the exact check (the review of B34-B38). Round fs-fix-5's check only saw a range holding
+   two different files' tags: a file whose blocks all carry one other file's tag passed. Now every name a file or a
+   directory ever had (created, or moved to), with the directory it was in (0: the root, else that directory's own
+   number), is recorded before the operation that could put that name on the disk, and a block within a named file's
+   range carrying the tag of a file that never had that name in that directory (a directory of the root that ever
+   had the name the image shows) is a block the file never wrote: stale */
+static int name_index(const char *name) {
+    int i;
+    for(i = 0; i < 9; i++) if(lname_eq(name, short_names[i])) return i;
+    if(!strncmp(name, "a long file name ", 17) && name[17] >= '0' && name[17] <= '3' && name[18] == ' ') return 9 + name[17] - '0';
+    return -1;
+}
+struct hnode { u32 dir; int ni, next; };
+static struct hnode *hpool;
+static int hn, hcap, hhead[65536];
+static u32 exact_checked, exact_viol;
+static void hist_reset(void) { memset(hhead, 0xFF, sizeof(hhead)); hn = 0; exact_checked = exact_viol = 0; }
+static void hist_add(u32 id, u32 dir, const char *name) {
+    int ni = name_index(name);
+    if(ni < 0 || !id) return;
+    if(hn == hcap) {
+        hcap = hcap ? 2 * hcap : 4096;
+        hpool = (struct hnode *)realloc(hpool, hcap * sizeof(*hpool));
+        if(!hpool) die("out of memory");
+    }
+    hpool[hn].dir = dir;
+    hpool[hn].ni = ni;
+    hpool[hn].next = hhead[id & 0xFFFF];
+    hhead[id & 0xFFFF] = hn++;
+}
+static int hist_had(u32 id, u32 dir, int ni) {          /* did file id ever have name ni in directory dir */
+    int k;
+    for(k = hhead[id & 0xFFFF]; k >= 0; k = hpool[k].next) if(hpool[k].ni == ni && hpool[k].dir == dir) return 1;
+    return 0;
+}
+static int hist_had_in(u32 id, int ni, int dni) {       /* name ni in a directory of the root that ever had name dni */
+    int k;
+    for(k = hhead[id & 0xFFFF]; k >= 0; k = hpool[k].next)
+        if(hpool[k].ni == ni && hpool[k].dir && hist_had(hpool[k].dir, 0, dni)) return 1;
+    return 0;
 }
 
 static int find_in(int dir, const char *name) {
@@ -230,6 +273,7 @@ static int unchanged(int dir, const char *what) {
 
 static void op_create(int isdir) {
     int dir = rn(3) ? -1 : (int)rn(MAXD) - 1, m, r;
+    u32 id;
     char name[100];
     struct vnode *dv, *v;
     if(dir >= 0 && (!mf[dir].used || !mf[dir].isdir)) dir = -1;
@@ -238,11 +282,13 @@ static void op_create(int isdir) {
     if(find_in(dir, name) >= 0 || (m = free_slot()) < 0) return;
     dv = dir_vnode(dir);
     if(!dv) return;
+    id = 1 + file_ids++ % 65534;                        /* (16 bits, never 0) */
+    hist_add(id, dir < 0 ? 0 : mf[dir].id, name);       /* (round fs-fix-6: before the name can reach the disk) */
     r = ARMED(dv->ops->create(dv, name, isdir ? VN_DIR : VN_FILE, &v));
     note("%s '%s' in %d: %d", isdir ? "mkdir" : "create", name, dir, r);
     if(r == 0) {
         mf[m].used = 1; mf[m].isdir = isdir; mf[m].dir = dir; strlcpy(mf[m].name, name, sizeof(mf[m].name));
-        mf[m].id = 1 + file_ids++ % 65534;               /* (16 bits, never 0) */
+        mf[m].id = id;
         mf[m].data = NULL; mf[m].size = 0;
         vput(v);
     } else if(unchanged(dir, "failed create")) { b5_bad++; printf("    (op %d) a failed create changed the directory\n", op_no); dump_last(); }
@@ -370,6 +416,7 @@ static void op_rename(void) {
     odv = dir_vnode(mf[m].dir);
     ndv = dir_vnode(nd);
     if(!odv || !ndv) { if(odv) vput(odv); if(ndv) vput(ndv); return; }
+    hist_add(mf[m].id, nd < 0 ? 0 : mf[nd].id, name);  /* (round fs-fix-6: before the new name can reach the disk) */
     r = ARMED(odv->ops->rename(odv, mf[m].name, ndv, name));
     note("mv '%s' (%d) -> '%s' (%d)%s: %d", mf[m].name, mf[m].dir, name, nd, d >= 0 ? " replacing" : "", r);
     if(r == 0) {
@@ -412,9 +459,9 @@ static int geoc(const struct ggeo *g, u32 v) { return g->type == 12 ? v >= 0xFF8
 static void gviol(struct ram *r, const char *m) {
     if(!g_viol++) snprintf(g_first, sizeof(g_first), "after the disk's write %u: %s", r->writes, m);
 }
-static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name) {
+static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char *name, int ni, int dni) {
     u32 size = gle32(p + 28), c = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0), steps = 0, off = 0, id = 0, s;
-    char m[160];
+    char m[200];
     while(c >= 2 && c < g->nclusters + 2 && off < size && steps++ < g->nclusters) {
         u32 v;
         for(s = 0; s < g->spc && off < size; s++, off += 512) {
@@ -424,6 +471,16 @@ static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char 
                (u8)(d[2] ^ d[4]) != 0xFF || (u8)(d[3] ^ d[5]) != 0xFF) continue;   /* (whole, and within the size: the
                                                                                   bytes past the end are anybody's) */
             t = gle16(d + 2);
+            if(ni >= 0 && dni != -2) {                  /* round fs-fix-6: the exact check */
+                exact_checked++;
+                if(dni < 0 ? !hist_had(t, 0, ni) : !hist_had_in(t, ni, dni)) {
+                    exact_viol++;
+                    snprintf(m, sizeof(m), "entry '%s': its block at %u (cluster %u) holds file %u's bytes, a file that never had"
+                             " that name there (stale data, exact check)", name, off, c, t);
+                    gviol(r, m);
+                    return;
+                }
+            }
             if(!id) id = t;
             else if(t != id) {
                 snprintf(m, sizeof(m), "entry '%s': its block at %u holds file %u's bytes, its others file %u's (stale data)",
@@ -437,28 +494,58 @@ static void gstale(struct ram *r, const struct ggeo *g, const u8 *p, const char 
         c = v;
     }
 }
-static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth);
-static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth) {
+static u8 lfn_sum(const u8 *n11) {
+    u8 sum = 0;
+    int i;
+    for(i = 0; i < 11; i++) sum = (u8)(((sum & 1) << 7) + (sum >> 1) + n11[i]);
+    return sum;
+}
+/* dni: the name index of the directory of the root the entries are in (-1: the root itself; -2: a name not known) */
+static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth, int dni);
+static void gdir(struct ram *r, const struct ggeo *g, u32 first, int depth, int dni) {
     u32 c = first, steps = 0;
     if(depth > 4) return;
     while(c >= 2 && c < g->nclusters + 2 && steps++ < 65536) {
         u32 next = gfat(r->mem, g, c);
         char m[120];
         if(!next) { snprintf(m, sizeof(m), "a directory's chain reaches cluster %u, which is free", c); gviol(r, m); return; }
-        gentries(r, g, r->mem + (g->data_lba + (c - 2) * g->spc) * 512, g->spc * 16, depth);
+        gentries(r, g, r->mem + (g->data_lba + (c - 2) * g->spc) * 512, g->spc * 16, depth, dni);
         if(geoc(g, next)) return;
         c = next;
     }
 }
-static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth) {
+static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, int depth, int dni) {
     u32 i;
+    char lfn[300];
+    int lfn_max = 0, lfn_ok = 0;
+    u8 lfn_ck = 0;
     for(i = 0; i < n; i++, p += 32) {
         u32 first, c, steps = 0;
-        char m[120], name[12];
+        char m[120], name[12], full[300];
         if(p[0] == 0) return;
-        if(p[0] == 0xE5 || p[11] == 0x0F || (p[11] & 0x08)) continue;
-        if(p[0] == '.' && (p[1] == ' ' || p[1] == '.')) continue;
+        if(p[0] == 0xE5) { lfn_ok = 0; continue; }
+        if(p[11] == 0x0F) {                          /* a long name's part: 13 UTF-16 characters (ASCII here) */
+            static const int at[13] = { 1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30 };
+            int seq = p[0] & 0x1F, k;
+            if(p[0] & 0x40) { lfn_ok = 1; lfn_max = seq * 13; lfn_ck = p[13]; memset(lfn, 0, sizeof(lfn)); }
+            if(!lfn_ok || seq < 1 || seq * 13 > (int)sizeof(lfn) - 1 || p[13] != lfn_ck) { lfn_ok = 0; continue; }
+            for(k = 0; k < 13; k++) {
+                u16 ch = (u16)(p[at[k]] | (p[at[k] + 1] << 8));
+                lfn[(seq - 1) * 13 + k] = ch == 0xFFFF ? 0 : (char)ch;
+            }
+            continue;
+        }
+        if(p[11] & 0x08) { lfn_ok = 0; continue; }
+        if(p[0] == '.' && (p[1] == ' ' || p[1] == '.')) { lfn_ok = 0; continue; }
         memcpy(name, p, 11); name[11] = 0;
+        if(lfn_ok && lfn_ck == lfn_sum(p)) { lfn[lfn_max < (int)sizeof(lfn) ? lfn_max : (int)sizeof(lfn) - 1] = 0; strlcpy(full, lfn, sizeof(full)); }
+        else {                                       /* "F       TXT" -> "f.txt" */
+            int k, j = 0;
+            for(k = 0; k < 8 && p[k] != ' '; k++) full[j++] = (char)(p[k] >= 'A' && p[k] <= 'Z' ? p[k] + 32 : p[k]);
+            if(p[8] != ' ') { full[j++] = '.'; for(k = 8; k < 11 && p[k] != ' '; k++) full[j++] = (char)(p[k] >= 'A' && p[k] <= 'Z' ? p[k] + 32 : p[k]); }
+            full[j] = 0;
+        }
+        lfn_ok = 0;
         first = gle16(p + 26) | (g->type == 32 ? gle16(p + 20) << 16 : 0);
         for(c = first; c >= 2 && c < g->nclusters + 2 && steps++ < 1000000; ) {
             u32 v = gfat(r->mem, g, c);
@@ -466,16 +553,18 @@ static void gentries(struct ram *r, const struct ggeo *g, const u8 *p, u32 n, in
             if((p[11] & 0x10) || geoc(g, v)) break;
             c = v;
         }
-        if((p[11] & 0x10) && first) gdir(r, g, first, depth + 1);
-        else if(!(p[11] & 0x10)) gstale(r, g, p, name);
+        if((p[11] & 0x10) && first) {
+            int sub = name_index(full);
+            gdir(r, g, first, depth + 1, depth == 0 && sub >= 0 ? sub : -2);
+        } else if(!(p[11] & 0x10)) gstale(r, g, p, full, name_index(full), dni);
     }
 }
 static void goracle(struct ram *r, u32 lba, u32 count) {
     struct ggeo g;
     (void)lba; (void)count;
     ggeometry(r->mem, &g);
-    if(g.type == 32) gdir(r, &g, g.root_cluster, 0);
-    else gentries(r, &g, r->mem + g.root_lba * 512, g.root_secs * 16, 0);
+    if(g.type == 32) gdir(r, &g, g.root_cluster, 0, -1);
+    else gentries(r, &g, r->mem + g.root_lba * 512, g.root_secs * 16, 0, -1);
 }
 
 static void pressure(void) {
@@ -490,6 +579,7 @@ static int fuzz_one(u32 seed, u32 ops, int use_rbad, u32 blocks, int fat32) {
     u32 clean_points = 0, refused_ops = 0;
     for(i = 0; i < MAXF; i++) { free(mf[i].data); memset(&mf[i], 0, sizeof(mf[i])); }
     g_viol = 0; g_first[0] = 0;
+    hist_reset();                                /* (round fs-fix-6) */
     op_no = failures_seen = oracle_reported = b5_bad = audit_bad = img_bad = sync_bad = wextra = 0;
     nlast = 0;
     arm_rbad = 0;
@@ -544,8 +634,9 @@ static int fuzz_one(u32 seed, u32 ops, int use_rbad, u32 blocks, int fat32) {
             else { image_check("image"); clean_points++; }
         }
     }
-    printf("FUZZ seed %u: %u ops (%u while refusing), %d refusal episodes, %u clean points: oracle %u, B5 %d, audit %d, image %d, sync %d; short writes that changed more: %d\n",
-           seed, ops, refused_ops, failures_seen, clean_points, g_viol, b5_bad, audit_bad, img_bad, sync_bad, wextra);
+    printf("FUZZ seed %u: %u ops (%u while refusing), %d refusal episodes, %u clean points: oracle %u, B5 %d, audit %d, image %d, sync %d; short writes that changed more: %d; tags checked exactly %u (stale %u)\n",
+           seed, ops, refused_ops, failures_seen, clean_points, g_viol, b5_bad, audit_bad, img_bad, sync_bad, wextra,
+           exact_checked, exact_viol);
     x->hook = NULL;
     return (g_viol || b5_bad || audit_bad || img_bad || sync_bad || wextra) ? 1 : 0;
 }

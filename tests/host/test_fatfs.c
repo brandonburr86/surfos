@@ -14,6 +14,9 @@
    scenarios S1-S6, under the audit item that fixes each: B20-B24) and of their fixes (B25, B26).
    10/16/26 (round fs-fix-4): and those of the review of B20-B26 (its scenarios R1-R6, under the audit
    item that fixes each: B27-B31, B22b) and of their fixes (B28c, B28d, B30b, B31b, B32).
+   10/17/26 (round fs-fix-6): and those of the review of B34-B38 (its scenarios Q1-Q6, under the audit item
+   that fixes each: B39-B45; a kill is made as kill_task() makes it, TI_KILL in a call, and BEFORE builds
+   them against 47fb4ec, which has no fs_hold).
    Built like the kernel objects (tests/host/pager_shim for the interrupt flag) and run by `make
    unittest`; surfcpu/docs/evidence/os/bcache-review.txt has what each scenario found before and
    after the fixes. */
@@ -74,7 +77,10 @@ void mutex_lock(mutex_t *m) {
 void mutex_unlock(mutex_t *m) { if(m->locked) m->locked--; }
 bool mutex_trylock(mutex_t *m) { if(m->locked) return false; m->locked = 1; return true; }
 void wait_prepare(wait_queue_t *q) { (void)q; }
+void wait_prepare_intr(wait_queue_t *q) { (void)q; }   /* 10/17/26 (round fs-fix-6, B39): a wait a kill cuts short */
 void wake_up_all(wait_queue_t *q) { (void)q; }
+void kcritical_enter(void) { if(curTask) curTask->crit++; }   /* (B39: fs/fat.c's lock) */
+void kcritical_leave(void) { if(curTask && curTask->crit) curTask->crit--; }
 /* 10/16/26 (round fs-fix-4, B33): what another task does while this one sleeps in the cache (yield() is reached
    only when curTask is set: a scenario that sets it); nothing otherwise */
 static void (*yield_hook)(void);
@@ -2960,7 +2966,7 @@ static void b34(int mode) {
 static void b36(void) {
     struct ram *x = ram_new("b36", 8192);
     struct superblock *sb;
-    struct vnode *root, *d, *v;
+    struct vnode *root, *d;
     struct geo g;
     u8 *e;
     u32 dfirst, ext, i, per, used, reached;
@@ -3188,6 +3194,590 @@ static void b22b(void) {
           "B22b (R6): the held clean copy leaves the table and goes when let go; the dirty copy keeps its bytes");
 }
 
+/**** round fs-fix-6: the review of B34-B38 (its scenarios Q1-Q6, here under the audit item that fixes each: B39-B45) ****/
+
+#ifdef BEFORE
+#define FS_HOLD(t) 0                                  /* (47fb4ec has no such count) */
+#else
+#define FS_HOLD(t) ((t)->fs_hold)
+#endif
+
+/**** B39 (Q5, Q5b): a task killed while its sync waits in the cache. kill_task() marks a task inside a call (TI_KILL) and
+      wakes the wait it is in if that wait may be cut short; KILL_WAIT_MS (2 s) later a task still in its call was killed
+      at once (kill_escalate() -> become_zombie()). The cache's waits were none of those that are cut short, and B18's
+      hold waits last 10 s: a sync waiting in write_copy() for a block another task held was killed at once there, its
+      struct copy_rec left in the cache's list of copies on its dead stack (the next block set aside or dropped walked
+      freed memory: the review's Q5, a longjmp() out of the wait, crashed in spoil_copies()), and the copied block marked
+      copying for good (Q5b: the next sync that owed it never returned). Now the wait is cut short and the sync unwinds
+      (the record unlinked, the block let go, -1), and the kill at once never comes while the task is inside the cache
+      or a volume's lock (surf_task.fs_hold; kernel/task.c's kill_escalate(), which the kernel's self test checks:
+      shell/selftest.c). Here: the kill as kill_task() makes it (TI_KILL inside a call) while the copy waits, the count
+      at that moment, and the cache's state after ****/
+
+#define B39_T 50
+#define B39_H 300
+#define B39_Y 900
+static struct ram *b39_x;
+static struct buf *b39_y, *b39_h;
+static int b39_state, b39_hold_seen, b39_yields;
+static surf_task b39_w1, b39_w2;
+static void b39_hook(struct ram *r, u32 lba, u32 count) {   /* the sync's first write: the other task holds H, changes Y */
+    surf_task *was = curTask;
+    if(b39_state || !(lba <= B39_T && B39_T < lba + count)) return;
+    b39_state = 1;
+    curTask = &b39_w2;
+    b39_h = bread(&r->bd, B39_H);
+    if(!b39_h) die("B39: read H");
+    b39_h->data[0] = 'H';
+    bdirty(b39_h);                                   /* held by its writer */
+    { struct buf *b = bread(&r->bd, B39_Y); if(!b) die("B39: read Y"); b->data[0] = 'E'; bdirty_order(b, BORDER_DIR); brelse(b); }
+    curTask = was;
+}
+static void b39_yield(void) {                        /* the copy waits for H: the sync's task is killed (kill_task()) */
+    b39_yields++;
+    if(b39_state != 1 || !b39_y->copying) return;
+    b39_hold_seen = FS_HOLD(curTask);                /* where kill_escalate() would find it, KILL_WAIT_MS later */
+    curTask->in_call = TC_SYSCALL;
+    curTask->intr |= TI_KILL;
+    b39_state = 2;
+}
+static void __attribute__((noinline)) b39_reuse_stack(void) {   /* (Q5: another task's frames where the sync's were) */
+    volatile u8 junk[32768];
+    u32 i;
+    for(i = 0; i < sizeof(junk); i++) junk[i] = 0xA7;
+    (void)junk[100];
+}
+static void b39(void) {
+    struct ram *x = ram_new("b39", 2048);
+    struct buf *b;
+    int r, r2, copying_after, hold_after, gave_up;
+    fresh("B39 (Q5, Q5b): a task killed while its sync's copy waits for a block another task holds");
+    b39_x = x;
+    b39_state = b39_hold_seen = b39_yields = 0;
+    memset(&b39_w1, 0, sizeof(b39_w1));
+    b = bread(&x->bd, B39_T); b->data[0] = 'T'; bdirty(b); brelse(b);
+    b = bread(&x->bd, B39_Y); b->data[0] = 'e'; bdirty_order(b, BORDER_DIR); brelse(b);
+    b39_y = bpeek(&x->bd, B39_Y);
+    brelse(b39_y);
+    x->hook = b39_hook;
+    yield_hook = b39_yield;
+    curTask = &b39_w1;
+    r = bsync(&x->bd);                               /* a close's write-back (no volume lock held) */
+    hold_after = FS_HOLD(curTask);
+    curTask = NULL;
+    yield_hook = NULL;
+    x->hook = NULL;
+    copying_after = b39_y->copying;
+    gave_up = said("held for");                      /* B18's give-up after 10 s: the wait was not cut short */
+    b39_reuse_stack();
+    curTask = &b39_w2;                               /* Q5: another task's rm drops a dirty block (walks the copies) */
+    b = bread(&x->bd, 400); b->data[0] = 'Z'; bdirty(b); brelse(b);
+    bdiscard(&x->bd, 400);
+    brelse(b39_h);                                   /* Q5b: H let go; the next sync owes Y */
+    r2 = bsync(&x->bd);
+    curTask = NULL;
+    if(verbose) printf("      the killed sync %d (yields %d); inside the cache when killed %d, after %d; Y copying after %d; B18's 10 s"
+                       " give-up said %d; the next sync %d, Y on the card '%c'\n", r, b39_yields, b39_hold_seen, hold_after,
+                       copying_after, gave_up, r2, x->mem[B39_Y * 512]);
+    check(b39_state == 2, "B39: the scenario took place (the sync's task killed while its copy waited for a held block)");
+    check(b39_hold_seen > 0, "B39 (Q5): the killed task is inside the cache while its copy waits (fs_hold: no kill at once there)");
+    check(r == -1 && !gave_up && b39_yields <= 3, "B39 (Q5): the kill cuts the copy's wait short: the sync gives up at once (-1)");
+    check(!copying_after && hold_after == 0, "B39 (Q5b): the killed sync leaves nothing behind (its copy's block let go, out of the cache)");
+    check(r2 == 0 && x->mem[B39_Y * 512] == 'E', "B39 (Q5b): the next sync writes the block (it returns, 0)");
+}
+
+/* B39b: the kill in a sync's wait for a hold outside a copy (bsync()'s first rounds, through the file system's sync), as
+   kill_task() makes it for a system call (TI_KILL) and Ctrl+C for a kernel command (TI_INT): that wait holds nothing of
+   the cache with its lock let go (not counted), and is cut short; the count during an rm's order point (fs/fat.c's lock,
+   and the cache's around its device request); a task that ends by itself (TC_EXIT, killed before) is not cut short: its
+   files' close writes them out */
+static struct buf *b39b_held;
+static int b39b_mode, b39b_seen, b39b_released, b39b_yields, b39b_rm_hold;
+static surf_task b39b_t;
+static void b39b_yield(void) {
+    b39b_yields++;
+    if(!b39b_held) return;
+    if(b39b_mode == 2) {                             /* TC_EXIT: the holder lets go after a few looks */
+        if(b39b_yields >= 3) { brelse(b39b_held); b39b_held = NULL; b39b_released = 1; }
+        return;
+    }
+    if(b39b_seen) return;
+    b39b_seen = 1 + FS_HOLD(curTask);               /* (1: none: the wait holds nothing of the cache, its lock let go) */
+    if(b39b_mode == 0) { curTask->in_call = TC_SYSCALL; curTask->intr |= TI_KILL; }   /* kill_task() */
+    else { curTask->in_call = TC_COMMAND; curTask->intr |= TI_INT; }                  /* Ctrl+C (task_interrupt_job()) */
+}
+static void b39b_hook(struct ram *r, u32 lba, u32 count) {   /* an rm's order point: inside the lock and the cache */
+    (void)r; (void)lba; (void)count;
+    if(curTask == &b39b_t && FS_HOLD(curTask) > b39b_rm_hold) b39b_rm_hold = FS_HOLD(curTask);
+}
+static void b39b(int mode) {
+    static const char *what[] = { "a kill (TI_KILL, a system call)", "Ctrl+C (TI_INT, a kernel command)",
+                                  "a task ending by itself (TC_EXIT, killed before)" };
+    struct ram *x = ram_new("b39b", 8192);
+    struct superblock *sb;
+    struct vnode *root;
+    struct geo g;
+    int r, r2, gave_up;
+    fresh("B39b: a sync of the file system waits for a block another task holds, and its task is killed");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 39);
+    if(put_file(root, "f", pat, 4096) || put_file(root, "g", pat, 512) || fsync_sb(sb)) die("B39b: setup");
+    memset(&b39b_t, 0, sizeof(b39b_t));
+    b39b_rm_hold = 0;
+    if(mode == 0) {                                  /* the count inside an rm (the volume's lock, then the cache) */
+        x->hook = b39b_hook;
+        curTask = &b39b_t;
+        if(root->ops->unlink(root, "g")) die("B39b: rm");
+        curTask = NULL;
+        x->hook = NULL;
+    }
+    b39b_mode = mode;
+    b39b_seen = b39b_released = b39b_yields = 0;
+    b39b_held = bread(&x->bd, clus_lba(&g, 2));      /* another task holds f's first block, changed */
+    if(!b39b_held) die("B39b: read");
+    b39b_held->data[0] ^= 1;
+    bdirty(b39b_held);
+    if(mode == 2) { b39b_t.in_call = TC_EXIT; b39b_t.intr = TI_KILL; }
+    yield_hook = b39b_yield;
+    curTask = &b39b_t;
+    r = fsync_sb(sb);                                /* vfs_fsync(): the file system's sync, then the device's blocks */
+    yield_hook = NULL;
+    gave_up = said("held for");
+    if(verbose) printf("      %s: the sync %d (yields %d); counted inside the cache in the wait %d, after %d; B18 gave up %d\n",
+                       what[mode], r, b39b_yields, b39b_seen - 1, FS_HOLD(curTask), gave_up);
+    if(mode == 0) {
+        if(verbose) printf("      the rm's order point's device writes ran counted %d (the volume's lock and the request: 2)\n", b39b_rm_hold);
+        check(b39b_rm_hold >= 2, "B39b: an rm's order point's device writes run counted inside the file system (the volume's lock, the request)");
+    }
+    if(mode < 2) {
+        check(b39b_seen > 0 && FS_HOLD(curTask) == 0 && !gave_up && b39b_yields <= 2 && r == -EIO,
+              mode ? "B39b: Ctrl+C in a kernel command cuts the sync's wait for a hold short (EIO at once, nothing held after)"
+                   : "B39b: a kill cuts the sync's wait for a hold short (EIO at once, nothing held after)");
+        curTask = NULL;
+        brelse(b39b_held);
+        r2 = fsync_sb(sb);
+        check(r2 == 0, "B39b: the next sync writes the block");
+    } else {
+        curTask = NULL;
+        check(r == 0 && b39b_released && !gave_up, "B39b: a task ending by itself (TC_EXIT) waits on: its close writes its files out");
+    }
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
+/* B39c: a large write in one call, its task killed after its first request: it stops there with a short count (a
+   task inside the volume's lock is not killed at once, so the kill would wait for the whole transfer otherwise);
+   the file is what it says, the volume consistent, the task out of the file system */
+static surf_task b39c_t;
+static int b39c_kill_at, b39c_writes;
+static void b39c_hook(struct ram *r, u32 lba, u32 count) {
+    (void)r; (void)lba; (void)count;
+    if(++b39c_writes == b39c_kill_at) { b39c_t.in_call = TC_SYSCALL; b39c_t.intr |= TI_KILL; }
+}
+static void b39c(void) {
+    struct ram *x = ram_new("b39c", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v;
+    static u8 big[262144];
+    u32 used, reached;
+    int w, ok_bytes;
+    fresh("B39c: a 256 KB write in one call, its task killed after its first request");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    fill(big, sizeof(big), 391);
+    if(root->ops->create(root, "big", VN_FILE, &v) || fsync_sb(sb)) die("B39c: setup");
+    memset(&b39c_t, 0, sizeof(b39c_t));
+    b39c_writes = 0;
+    b39c_kill_at = 1;
+    x->hook = b39c_hook;
+    curTask = &b39c_t;
+    w = v->ops->write(v, 0, big, sizeof(big));
+    curTask = NULL;
+    x->hook = NULL;
+    ok_bytes = w > 0 && v->size == (u32)w;
+    vput(v);
+    if(fsync_sb(sb)) die("B39c: sync");
+    census(x, &used, &reached);
+    if(verbose) printf("      the write said %d of %u (size %u); the task inside after it %u; clusters used %u, reached %u\n", w,
+                       (u32)sizeof(big), ok_bytes ? (u32)w : 0, FS_HOLD(&b39c_t), used, reached);
+    check(w > 0 && w < (int)sizeof(big) && ok_bytes && FS_HOLD(&b39c_t) == 0,
+          "B39c: a kill stops a large write between two requests (a short count, the size what it says)");
+    {
+        static u8 back[262144];
+        struct vnode *f = lookup(root, "big");
+        int same = f && w > 0 && f->size == (u32)w && f->ops->read(f, 0, back, (u32)w) == w && !memcmp(back, big, (u32)w);
+        if(f) vput(f);
+        check(same && used == reached, "B39c: the file holds what was written, nothing lost");
+    }
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
+/**** B40 (Q4): binvalidate() (umount giving up what could not be written: vfs_umount_lost(); a mount that failed; mkfs)
+      dropped every idle block of the device, dirty ones included, without spoiling the copies under way (B34 spoiled in
+      baside() and discard_now() only), and left the blocks in someone's hands or under I/O: another task's sync, writing
+      directory block Y from a copy that waited for a block, wrote the copy, which names F, after F's data block X was
+      given up unwritten. Now binvalidate() drops as bdiscard() does, and marks what it cannot drop yet (Y's copy: not
+      written; Y dropped when let go) ****/
+
+#define B40_T 50
+#define B40_X 100
+#define B40_H 300
+#define B40_Y 900
+static struct ram *b40_x;
+static struct buf *b40_y, *b40_hx, *b40_hh;
+static int b40_state, b40_named_stale;
+static surf_task b40_w1, b40_w2;
+static void b40_hook(struct ram *r, u32 lba, u32 count) {
+    surf_task *was = curTask;
+    if(lba <= B40_Y && B40_Y < lba + count) {        /* Y on the card: does it name F over a block F never wrote? */
+        if(r->mem[B40_Y * 512] == 'E' && r->mem[B40_X * 512] != 'X') b40_named_stale++;
+        return;
+    }
+    if(b40_state || !(lba <= B40_T && B40_T < lba + count)) return;
+    b40_state = 1;
+    curTask = &b40_w2;                               /* F's writer: X (F's block), then H (another's), then F's entry */
+    b40_hx = bread(&r->bd, B40_X); b40_hx->data[0] = 'X'; bdirty(b40_hx);
+    b40_hh = bread(&r->bd, B40_H); b40_hh->data[0] = 'H'; bdirty(b40_hh);
+    { struct buf *b = bread(&r->bd, B40_Y); b->data[0] = 'E'; bdirty_order(b, BORDER_DIR); brelse(b); }
+    curTask = was;
+}
+static void b40_yield(void) {
+    surf_task *was = curTask;
+    if(b40_state != 1 || !b40_y->copying) return;
+    curTask = &b40_w2;
+    if(b40_hx) {                                     /* the copy waits for X: X let go, then umount gives up */
+        brelse(b40_hx); b40_hx = NULL;
+        binvalidate(&b40_x->bd);
+    } else if(b40_hh) { brelse(b40_hh); b40_hh = NULL; b40_state = 2; }
+    curTask = was;
+}
+static void b40(void) {
+    struct ram *x = ram_new("b40", 2048);
+    struct buf *b, *left;
+    int r;
+    fresh("B40 (Q4): binvalidate() while a sync's copy waits");
+    b40_x = x;
+    b40_state = b40_named_stale = 0;
+    b = bread(&x->bd, B40_T); b->data[0] = 'T'; bdirty(b); brelse(b);
+    b = bread(&x->bd, B40_Y); b->data[0] = 'e'; bdirty_order(b, BORDER_DIR); brelse(b);
+    b40_y = bpeek(&x->bd, B40_Y); brelse(b40_y);
+    x->hook = b40_hook;
+    yield_hook = b40_yield;
+    curTask = &b40_w1;
+    r = bsync(NULL);                                 /* vfs_sync(): every device */
+    curTask = NULL; yield_hook = NULL; x->hook = NULL;
+    left = bpeek(&x->bd, B40_Y);
+    if(verbose) printf("      the sync %d; scenario state %d; Y on the card '%c', X on the card %#x: Y named F over a block F never"
+                       " wrote %d times; Y still cached %d\n", r, b40_state, x->mem[B40_Y * 512] ? x->mem[B40_Y * 512] : '0',
+                       x->mem[B40_X * 512], b40_named_stale, left != NULL);
+    if(left) brelse(left);
+    check(b40_state == 2, "B40: the scenario took place (X dropped by binvalidate() while Y's copy waited for it)");
+    check(b40_named_stale == 0, "B40 (Q4): no copy reaches the card after a block it needs left the lists unwritten (binvalidate())");
+    check(!left, "B40: nothing of the device stays cached after binvalidate() (Y, under a copy then, went when let go)");
+}
+
+/**** B41 (Q1, Q1b): a sync writes directory block Y from a copy (B12) under sustained rm/truncate traffic: each look of
+      the copy waits for a block another task holds (H_k), and meanwhile that task drops (bdiscard(): an rm's free, B28)
+      another block the copy needs (V_k), or one it had set aside before the copy was taken (X_k: aside_end()), and
+      writes on (a new H, V, Y changed again). Every look was spoiled; after COPY_LOOKS (16) the sync said -1 though the
+      card took every write. Now a spoil takes only copies of blocks that changed since they were taken, by blocks not set
+      aside before, and spoiled looks are taken as long as it takes (c, below), ending when the call's debt is paid by
+      another task's write (d) ****/
+
+#define B41_T  50
+#define B41_Y  900
+#define B41_MAXK 40
+static struct ram *b41_x;
+static struct buf *b41_y, *b41_h, *b41_v, *b41_yheld;
+static int b41_mode, b41_k, b41_looks, b41_drops, b41_ready, b41_vheld, b41_paid;
+static surf_task b41_w1, b41_w2;
+static u32 b41_H(int k) { return 100 + 4 * (u32)k; }
+static u32 b41_V(int k) { return 300 + 4 * (u32)k; }
+static u32 b41_X(int k) { return 500 + 4 * (u32)k; }
+static struct buf *b41_dirty(u32 lba, u8 order, u8 v) {   /* read, change, mark dirty; kept in hand */
+    struct buf *b = bread(&b41_x->bd, lba);
+    if(!b) die("B41: read");
+    b->data[0] = v;
+    b->data[1]++;
+    bdirty_order(b, order);
+    return b;
+}
+static void b41_touch(u32 lba, u8 order, u8 v) { brelse(b41_dirty(lba, order, v)); }
+static void b41_setup(int k) {                       /* the other task's next round: what look k needs, then Y */
+    if(b41_mode != 1 && b41_mode != 3) { b41_v = b41_dirty(b41_V(k), BORDER_DATA, 0x77); b41_vheld = 1; }
+    b41_h = b41_dirty(b41_H(k), BORDER_DATA, 0x66);
+    if(b41_mode == 1 || b41_mode == 3) {             /* an rm's aside_begin(): set aside before the copy is taken */
+        b41_touch(b41_X(k), BORDER_DATA, 0x88);
+        baside(&b41_x->bd, b41_X(k), true);
+    }
+    b41_touch(B41_Y, BORDER_DIR, 'E');               /* Y needs them now */
+}
+static void b41_hook(struct ram *r, u32 lba, u32 count) {   /* the sync's first write: the other task starts */
+    surf_task *was = curTask;
+    (void)r;
+    if(b41_ready || !(lba <= B41_T && B41_T < lba + count)) return;
+    b41_ready = 1;
+    curTask = &b41_w2;
+    b41_k = 1;
+    b41_setup(1);
+    curTask = was;
+}
+static void b41_yield(void) {                        /* the copy waits for a held block: the other task runs */
+    surf_task *was = curTask;
+    if(b41_yheld) {                                  /* (d) the copy let go, Y in the other task's hands: it writes Y */
+        static u8 yb[512];
+        curTask = &b41_w2;
+        memcpy(yb, b41_yheld->data, 512);
+        yb[0] = 'W';
+        if(bwrite_blocks(&b41_x->bd, B41_Y, 1, yb) == 0) b41_paid = 1;
+        b41_yheld->data[0] = 'W';
+        b41_yheld->data[1]++;
+        bdirty_order(b41_yheld, BORDER_DIR);         /* and changes it again: dirty with a change after the sync began */
+        brelse(b41_yheld);
+        b41_yheld = NULL;
+        curTask = was;
+        return;
+    }
+    if(!b41_ready || !b41_y->copying) return;
+    curTask = &b41_w2;
+    if(b41_vheld) {                                  /* the copy waits for V_k: V_k let go; dropped (modes 0, 4, 5) */
+        if(b41_mode >= 4) b41_touch(B41_Y, BORDER_DIR, 'E');   /* (c, d) first Y changes: the copy may name V_k now */
+        brelse(b41_v);
+        b41_vheld = 0;
+        if(b41_mode == 0 || b41_mode >= 4) { bdiscard(&b41_x->bd, b41_V(b41_k)); b41_drops++; }
+        curTask = was;
+        return;
+    }
+    if(b41_mode == 1) { bdiscard(&b41_x->bd, b41_X(b41_k)); b41_drops++; }   /* aside_end(): the order point worked */
+    b41_looks++;                                     /* it waits for H_k: the next round, then H_k let go */
+    if(b41_mode == 5 && b41_looks == 5) b41_yheld = bread(&b41_x->bd, B41_Y);   /* (d) it takes Y meanwhile */
+    if(b41_k < B41_MAXK) { struct buf *old = b41_h; b41_k++; b41_setup(b41_k); brelse(old); }
+    else { brelse(b41_h); b41_h = NULL; }
+    curTask = was;
+}
+static void b41(int mode) {
+    struct ram *x = ram_new("b41", 2048);
+    int r, r2, i;
+    u32 failed0;
+    static const char *what[] = { "a needed block dropped during each look", "a block set aside before the copy, dropped during each look",
+                                  "control of mode 0 (let go, not dropped)", "control of mode 1 (set aside before, never dropped)",
+                                  "Y changed and a needed block dropped during each look, 40 rounds",
+                                  "as mode 4, and another task writes Y at the fifth look" };
+    fresh("B41 (Q1): a sync's copy under sustained rm/truncate traffic");
+    b41_x = x;
+    b41_mode = mode;
+    b41_k = b41_looks = b41_drops = b41_ready = b41_vheld = b41_paid = 0;
+    b41_h = b41_v = b41_yheld = NULL;
+    b41_touch(B41_T, BORDER_DATA, 0x55);             /* owed: written first; its write lets the other task in */
+    b41_touch(B41_Y, BORDER_DIR, 'E');               /* owed */
+    b41_y = bpeek(&x->bd, B41_Y);
+    if(!b41_y) die("B41: Y");
+    brelse(b41_y);
+    failed0 = x->failed;
+    x->hook = b41_hook;
+    yield_hook = b41_yield;
+    curTask = &b41_w1;
+    r = bsync(&x->bd);                               /* a close's write-back or an fsync: no volume lock held */
+    curTask = NULL;
+    yield_hook = NULL;
+    x->hook = NULL;
+    if(verbose) printf("      mode %d (%s): the sync %d; looks %d, needed blocks dropped %d; writes the card refused %u; Y on the card"
+                       " '%c'%s\n", mode, what[mode], r, b41_looks, b41_drops, x->failed - failed0, x->mem[B41_Y * 512],
+                       mode == 5 ? (b41_paid ? " (written by the other task)" : " (the other task's write failed)") : "");
+    if(mode == 0) check(r == 0, "B41a (Q1): a sync whose card took every write says 0 though rm traffic dropped a needed block each look");
+    if(mode == 1) check(r == 0, "B41b (Q1b): blocks set aside before the copy was taken, then dropped, spoil nothing (0)");
+    if(mode == 2 || mode == 3) check(r == 0, "B41: control: without the drops the copy goes at once");
+    if(mode == 4) check(r == 0 && b41_looks > 16 && x->failed == failed0,
+                        "B41c: every look spoiled for 40 rounds (more than B34's 16): the copy is taken again until it goes (0)");
+    if(mode == 5) check(r == 0 && b41_paid && b41_looks <= 6,
+                        "B41d: the copy ends once another task's write paid the sync's debt (0, at once)");
+    curTask = &b41_w2;                               /* the other task ends: everything let go, its blocks dropped */
+    if(b41_vheld) brelse(b41_v);
+    if(b41_h) brelse(b41_h);
+    if(b41_yheld) brelse(b41_yheld);
+    for(i = 1; i <= B41_MAXK; i++) if(mode == 1 || mode == 3) bdiscard(&x->bd, b41_X(i));
+    curTask = NULL;
+    r2 = bsync(&x->bd);
+    check(r2 == 0 && x->mem[B41_Y * 512] == (mode == 5 ? 'W' : 'E'), "B41: once the traffic stops the next sync writes Y");
+}
+
+/**** B42 (Q2): B38's volume with lost clusters stays marked as not cleanly unmounted, and the next mount says so; if that
+      next mount is SurfOS's own (a reboot), it said so once, then marked the volume clean at its unmount: the clusters
+      still lost, and the computer after it told not to check. Now a volume not marked cleanly unmounted when it was
+      mounted stays so at unmount (only a checker clears it) ****/
+
+static void b42(void) {
+    struct ram *x = ram_new("b42", 8192);
+    struct superblock *sb;
+    struct vnode *root, *v, *d = NULL;
+    struct geo g;
+    u32 used, reached, used2, reached2, i, fat1a, fat1b;
+    int s, warn2, warn3, said_stays;
+    fresh("B42 (Q2): B38's unclean volume through SurfOS's own next mount and unmount");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 32);
+    if(put_file(root, "f", pat, 512) || root->ops->create(root, "d", VN_DIR, &d) || fsync_sb(sb)) die("B42: setup");
+    x->bad_lo = clus_lba(&g, 3);
+    x->bad_hi = g.data_lba + g.nclusters - 1;
+    if(put_file(d, "g", NULL, 0)) die("B42: a file in d");
+    vput(d);
+    if(fsync_sb(sb) != -EIO) die("B42: the refused sync");
+    v = lookup(root, "f");
+    for(i = 0; i < 65; i++) if(v->ops->write(v, 512, pat, 8192) != -EIO) die("B42: an append not refused");
+    vput(v);
+    x->bad_hi = 0;
+    s = fsync_sb(sb);
+    vput(sb->root);
+    sb->ops->unmount(sb);                            /* 1st unmount: 16 clusters lost: stays unclean (B38) */
+    census(x, &used, &reached);
+    fat1a = fat1(x, &g, 1);
+    klog_len = 0; klog[0] = 0;
+    sb = mount(x);                                   /* SurfOS mounts it again (a reboot) */
+    warn2 = said("was not unmounted cleanly");
+    if(fsync_sb(sb)) die("B42: sync after the 2nd mount");
+    vput(sb->root);
+    sb->ops->unmount(sb);                            /* and unmounts it, nothing done in between */
+    said_stays = said("only a check clears that, the volume stays marked as not cleanly unmounted");
+    census(x, &used2, &reached2);
+    fat1b = fat1(x, &g, 1);
+    klog_len = 0; klog[0] = 0;
+    sb = mount(x);
+    warn3 = said("was not unmounted cleanly");
+    if(verbose) printf("      sync %d; after the 1st unmount: lost %u, FAT[1] %#x; the 2nd mount warns %d; after its unmount (said so %d):"
+                       " lost %u, FAT[1] %#x; the 3rd mount warns %d\n", s, used - reached, fat1a, warn2, said_stays,
+                       used2 - reached2, fat1b, warn3);
+    check(warn2 == 1 && used2 > reached2 && !(fat1b & 0x8000) && warn3 == 1 && said_stays == 1,
+          "B42 (Q2): a volume unclean when mounted stays marked so at SurfOS's next unmount, which says so; the mount after warns");
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
+/**** B43 (Q3): clusters an rm gives back that could not be freed: fat_free_chain() meets an unreadable FAT sector in the
+      middle of the chain, after the rm's order point took the name off the card. The rm said EIO with the name gone (the
+      next rm: ENOENT), the rest of the chain stayed allocated with nothing pointing at it, uncounted and unsaid, and the
+      unmount marked the volume cleanly unmounted. Now they are counted (as far as the FAT can be read: "at least") and
+      said, the volume stays unclean, and the rm says 0: it has happened ****/
+
+static void b43(void) {
+    struct ram *x = ram_new("b43", 8192), *y = ram_new("b43y", 4096);
+    struct superblock *sb;
+    struct vnode *root;
+    struct geo g;
+    u32 used, reached, lba, fat1v;
+    int rm, rm2, warn, said_rm, said_um;
+    fresh("B43 (Q3): an rm whose free meets an unreadable FAT sector; then unmount");
+    mkfs(x);
+    sb = mount(x);
+    root = sb->root;
+    geometry(x, &g);
+    fill(pat, 65536, 33);
+    if(big_file(root, "big", pat, 600 * 512) || fsync_sb(sb)) die("B43: setup");   /* clusters 2..601: 3 FAT sectors */
+    for(lba = 0; lba < 2000; lba++) { struct buf *b = bread(&y->bd, lba); if(b) brelse(b); }   /* the FAT leaves the cache */
+    x->rbad = g.fat_lba + 1;                         /* the first FAT's second sector (clusters 256..511) unreadable */
+    rm = root->ops->unlink(root, "big");
+    said_rm = said("given back could not be freed (the FAT could not be read or written there)");
+    x->rbad = 0;
+    rm2 = root->ops->unlink(root, "big");
+    fsync_sb(sb);
+    vput(sb->root);
+    sb->ops->unmount(sb);
+    said_um = said("at least 1 cluster given back could not be freed and may stay allocated");
+    census(x, &used, &reached);
+    fat1v = fat1(x, &g, 1);
+    klog_len = 0; klog[0] = 0;
+    sb = mount(x);
+    warn = said("was not unmounted cleanly");
+    if(verbose) printf("      rm %d (said so %d), again %d; after unmount (said so %d): used %u reached %u (lost %u), FAT[1] %#x; the next"
+                       " mount warns %d\n", rm, said_rm, rm2, said_um, used, reached, used - reached, fat1v, warn);
+    check(rm == 0 && rm2 == -ENOENT, "B43 (Q3): an rm whose name is off the card says 0 though its free failed (the next one ENOENT)");
+    check(said_rm == 1 && said_um == 1, "B43 (Q3): the clusters it could not free are counted and said (at least, as far as the FAT reads)");
+    check(used > reached && !(fat1v & 0x8000) && warn == 1,
+          "B43 (Q3): clusters given back that could not be freed keep the volume marked as not cleanly unmounted");
+    vput(sb->root);
+    sb->ops->unmount(sb);
+}
+
+/**** B44 (cosmetic): FAT12 has no clean-unmount mark (fat_mark() does nothing), yet an unmount with write errors, lost
+      clusters or damage said "the volume stays marked as not cleanly unmounted". A FAT12 volume made here by hand (SurfOS's
+      mkfs makes FAT16 and FAT32 only): 2048 sectors of one sector a cluster ****/
+
+static void b44(void) {
+    struct ram *x = ram_new("b44", 2048);
+    struct superblock *sb;
+    u8 *bs = x->mem;
+    int i, said12, said_marked;
+    fresh("B44: the unmount of a FAT12 volume with write errors");
+    bs[0] = 0xEB; bs[1] = 0x3C; bs[2] = 0x90;
+    memcpy(bs + 3, "SURFTEST", 8);
+    bs[11] = 0x00; bs[12] = 0x02;                    /* 512 bytes a sector */
+    bs[13] = 1;                                      /* a sector a cluster */
+    bs[14] = 1; bs[15] = 0;                          /* one reserved sector */
+    bs[16] = 2;                                      /* two FATs */
+    bs[17] = 224; bs[18] = 0;                        /* 224 root entries: 14 sectors */
+    bs[19] = 0x00; bs[20] = 0x08;                    /* 2048 sectors */
+    bs[21] = 0xF8;
+    bs[22] = 6; bs[23] = 0;                          /* 6 sectors a FAT: 2021 clusters, FAT12 */
+    bs[38] = 0x29;
+    memcpy(bs + 43, "TWELVE     ", 11);
+    memcpy(bs + 54, "FAT12   ", 8);
+    bs[510] = 0x55; bs[511] = 0xAA;
+    for(i = 0; i < 2; i++) { u8 *f = x->mem + (1 + i * 6) * 512; f[0] = 0xF8; f[1] = 0xFF; f[2] = 0xFF; }
+    sb = mount(x);
+    if(put_file(sb->root, "a", pat, 1000)) die("B44: a file");
+    x->fail_all = 1;                                 /* the card refuses from now on */
+    vput(sb->root);
+    sb->ops->unmount(sb);
+    x->fail_all = 0;
+    said12 = said("+FAT12: b44: write errors; FAT12 keeps no mark of a clean unmount");
+    said_marked = said("stays marked as not cleanly unmounted");
+    if(verbose) printf("      the unmount said the FAT12 line %d, the line about the mark %d\n", said12, said_marked);
+    check(said12 == 1 && !said_marked, "B44: a FAT12 unmount that fails says FAT12 keeps no mark (not that the volume stays marked)");
+    binvalidate(&x->bd);                             /* (what could not be written goes, as umount gives it up) */
+}
+
+/**** B45 (Q6): an rm's aside_end(done) drops (bdiscard()) a block of its chain that a reader took while it was set aside:
+      the drop waits for the reader (B35). The cluster goes to a new file, which writes the block through the cache before
+      the reader lets go: "a change came after", so the drop was called off (the block has an owner again), but the block
+      stayed set aside: no sync wrote it (the new owner's own syncs did not even owe it), another task's sync gave up on it
+      after 10 s. Now such a change starts the block's dirt again, set aside no more ****/
+
+static void b45(void) {
+    struct ram *x = ram_new("b45", 2048);
+    struct buf *b, *reader;
+    static surf_task ta, tr;
+    int r1, r2, aside_after, dirty_after;
+    fresh("B45 (Q6): a set-aside block read meanwhile, dropped, then written by its cluster's next owner");
+    curTask = &ta;
+    b = bread(&x->bd, 300); b->data[0] = 'F'; bdirty(b); brelse(b);        /* F's dirty block */
+    baside(&x->bd, 300, true);                                             /* task A's rm: aside_begin() */
+    curTask = &tr;
+    reader = bpeek(&x->bd, 300);                                           /* a reader takes it meanwhile */
+    curTask = &ta;
+    bdiscard(&x->bd, 300);                                                 /* aside_end(): order point worked: drop (waits) */
+    b = bread(&x->bd, 300); b->data[0] = 'B'; bdirty(b); brelse(b);        /* the next owner (task A again) writes it */
+    curTask = &tr;
+    brelse(reader);                                                        /* the reader lets go */
+    curTask = &ta;
+    b = bpeek(&x->bd, 300);
+    aside_after = b ? b->aside : -1; dirty_after = b ? b->dirty : -1;
+    if(b) brelse(b);
+    r1 = bsync(&x->bd);                                                    /* the new owner's close: its write-back */
+    curTask = NULL;
+    r2 = bsync(&x->bd);
+    if(verbose) printf("      after the reader let go the block is dirty %d, set aside %d; the owner's sync %d, another sync %d; the card"
+                       " has '%c' (the owner wrote 'B')\n", dirty_after, aside_after, r1, r2, x->mem[300 * 512] ? x->mem[300 * 512] : '0');
+    check(!(r1 == 0 && x->mem[300 * 512] != 'B'), "B45 (Q6): a sync that says 0 wrote the new owner's block (it is not left set aside)");
+    check(x->mem[300 * 512] == 'B' && r2 == 0, "B45 (Q6): the block written by its cluster's next owner reaches the card");
+}
+
 int main(int argc, char **argv) {
     const char *only = argc > 1 ? argv[1] : NULL;
     verbose = getenv("FATFS_VERBOSE") != NULL;
@@ -3257,6 +3847,18 @@ int main(int argc, char **argv) {
     RUN("b36b", b36b());
     RUN("b37", b37());
     RUN("b38", b38());
+    RUN("b39", b39());
+    RUN("b39b", b39b(0); b39b(1); b39b(2));
+    RUN("b39c", b39c());
+    RUN("b40", b40());
+    RUN("b41a", b41(0); b41(2));
+    RUN("b41b", b41(1); b41(3));
+    RUN("b41c", b41(4));
+    RUN("b41d", b41(5));
+    RUN("b42", b42());
+    RUN("b43", b43());
+    RUN("b44", b44());
+    RUN("b45", b45());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

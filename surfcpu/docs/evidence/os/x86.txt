@@ -1,7 +1,12 @@
 SurfOS os track: the x86 kernel and the shared files the riscv32 port changes
 Round 5 (10/16/26, sc/os-5: the physical test kit) changes no shared file, only files under surfcpu/ (its tools,
 surfsim's test harness, make files, docs), so the x86 suites were not run again for it.
-Nine rounds with x86 runs, newest first. Round fs-fix-5 (10/17/26) changes the x86 kernel on purpose: a review of
+Ten rounds with x86 runs, newest first. Round fs-fix-6 (10/17/26) changes the x86 kernel on purpose: a review of
+B34-B38 and its fixes (audit B39-B45: a kill or Ctrl+C cuts the cache's long waits short, and the kill that waited is put
+off while its task is inside a file system or the cache; binvalidate() drops as bdiscard() does; a copy is spoiled only
+when it needs to be, and rm traffic no longer fails a sync; a volume unclean at mount stays unclean; clusters a failed
+free left are counted, and the rm says 0; FAT12's unmount message; a dropped block's next owner).
+Round fs-fix-5 (10/17/26) changes the x86 kernel on purpose: a review of
 B27-B33 and its fixes (audit B34-B38: a copy is written only when nothing it needed was set aside or dropped since it
 was taken; a block that cannot be dropped then is dropped when let go or when its I/O ends; a cluster fat_alloc()
 gives back leaves no block owed; table points drop the waiting chains' blocks; lost clusters keep the volume unclean).
@@ -25,6 +30,88 @@ close and umount report what was not written). Round 4 (10/16/26) changes the x8
 stops early gives its clusters back (audit B4), and cp says why a write came up short.
 Round 3 (10/16/26) changes the x86 kernel on purpose: the block cache keeps a failed
 write and writes in order, FAT gives its blocks that order, eject keeps a disk it could not write (audit B1-B3).
+
+======================================================================================================================
+Round fs-fix-6, 10/17/26: the block cache and FAT after a review of B34-B38 (audit B39-B45)
+date: 2026-10-17 (local)
+tree: sc/fs-fix-6 (from surfcpu 47fb4ec): the code final at 4bd8e7d (3e0cedf, fc7780a, 4ba85bf, d236931, 3b896c1,
+      4bd8e7d; between them tests, a comment and docs; after it this evidence); the "was" blobs below are 47fb4ec's
+host: the Mac, devenv/ container for the builds, the smoke tests and the unit tests; QEMU + OVMF on the Mac for the
+      USB image (devenv/test-usb.sh); volumes surfos-sc-fs6 (O0) and surfos-sc-fs6-o2 (O2), deleted afterwards
+
+Shared files changed for both kernels (docs/CODE-AUDIT.md B39-B45):
+  fs/bcache.c              blob a9746bee (was c50f8995)  B39 the long waits cut short by a kill or Ctrl+C, the task
+                                                         counted around device requests and copies (fs_hold), the lock's
+                                                         owner seen (bcache_holds()), the timed wait's timer the task's
+                                                         wait_timer; B40 binvalidate() drops as bdiscard() does;
+                                                         B41 spoils only by blocks not set aside before and only of
+                                                         changed copies, the debt check, no bound on looks; B45 a
+                                                         dropped block's new owner
+  include/fs/bcache.h      blob 7170ef6b (was 1a5be655)  bcache_holds(); what B39-B41 change, said
+  fs/fat.c                 blob b8495068 (was 93b9aeee)  B39 the volume's lock counted (fat_lock()), mount, unmount,
+                                                         probe and description too, a long transfer stops between
+                                                         pieces; B42 unclean at mount stays unclean;
+                                                         B43 clusters a failed free left counted, rm 0 once its name
+                                                         is gone; B44 FAT12's message
+  include/surfos/task.h    blob 726052a3 (was 847c668f)  surf_task.fs_hold, TI_FSWAIT; the kill rule says so
+  kernel/task.c            blob d7148ee4 (was 5391da74)  kill_escalate(), kill_task(), kill_hangup(): the kill that
+                                                         waited put off while the task is inside a file system or holds
+                                                         the cache's lock
+x86 only:
+  shell/selftest.c         blob 27a56dca (was 4e7aa16d)  a task killed inside the cache: a wait cut short, a device
+                                                         write the kill waits for
+  tests/host/test_fatfs.c  blob b3c588c4 (was d55d022f)  the review's Q1-Q6 (B39-B45) and B39b, B39c, B41c, B41d, B44
+  tests/host/test_fatconc.c blob 4a21e014 (was 86650f1a) the exact stale-data check, a streamer that writes its tags
+  tests/host/test_fatfuzz.c blob 0733c602 (was 46bf94ad) the exact stale-data check
+Every run below was of sc/fs-fix-6 with a clean worktree (the devenv streams it into its volume), at the commit it
+names, but test-all's first run (below).
+
+== 1. make test-all (devenv/build.sh test-all, volume surfos-sc-fs6, made afresh)
+  at 4bd8e7d, the final code (18:33-18:48): exit 0
+  O0  FILES TEST PASSED: 51 checks       O0  SMOKE TEST PASSED: 311 checks (selftest among them)
+  O2  FILES TEST PASSED: 51 checks       O2  SMOKE TEST PASSED: 311 checks
+  Earlier runs, the same results: at 13d7cb7 (17:41-17:53, before 4bd8e7d's binvalidate() change), at 2238f1f (16:14-16:25,
+  before 3b896c1's counting), at 834f0ea (15:36-15:47) and before any commit (15:19-15:33). The smoke test's selftest
+  runs this round's kill test (a task killed while its sync waits for a block the self test holds ends at once; one
+  inside a 3 s device write ends after the write, the block written, the cache's account right), and `run kcmdtest
+  kills` (kills inside kernel commands, the volume of a file held open unmounted afterwards) passes as before.
+
+== 2. make unittest (devenv/build.sh unittest)
+  O0 (volume surfos-sc-fs6, 18:48-18:55 at 4bd8e7d): exit 0, no failures. FATFS 325 (the review's scenarios and the new
+    ones, bcache-review.txt section 32), FATFUZZ 4 runs, 0 with failures, CONC ok 4 times (with the exact stale-data
+    check: 383,719, 985,895, 1,382,635 and 491,987 tag checks, no violation; sections 34-36), and every other host test
+    passing: CRYPTO 129, WPA 118, IEEE80211 144, the Undertow suites (URL 382, UTIL 72, HTTP 835, HTML 672 and its UBSan
+    build 672, SESSION 78, VIEW 127, COMMAND 94, TRANSPORT 426), pointer 14, gui 45, PS2 MOUSE 1574, USB MOUSE 99,
+    ACPIDUMP 467, i2cdw 59, AML FIELD 5120, i2chid 267, hidpointer 127, TOUCHPAD PLATFORM 454, BLIBC 45, BOOTINFO 50,
+    FRAMEBUFFER 143, USB 57, PARTITION 143 and its tool checks 33, LIBC 195, MKFS 115, PROMPT 55, CP437 69, PAGER 177,
+    TELNET 58, TELNETD SERVER 750 runs, 0 bugs, PCIINFO 55, IWLFW 38; python unittest OK each. The compiler warning a
+    test file gave (test_fatfs.c's B36, an unused vnode, since round fs-fix-5) is gone (2238f1f).
+  O2 (devenv/build.sh O=2 unittest, volume surfos-sc-fs6-o2, made afresh, 19:01-19:08 at 4bd8e7d): every host test the
+    same, FATFS 325, FATFUZZ 4 runs with no failure, CONC ok 4 times, IWLFW 38; the run exits 2 because two of
+    tests/test_devenv.py's tests fail with O=2 in their environment, as in the rounds before (`make O=2` hands O to
+    them); this round changes neither tests/test_devenv.py nor devenv/.
+  Earlier runs: at 38a320e, O0 exit 0 and O2 the same (15:47-15:54, 16:00-16:07: FATFS 327 then). At 13d7cb7 both
+    stopped at linking test_crypto, in volumes that had built it once already: make reads the dependency file the
+    first link wrote (HOSTKERN_FLAGS' -MMD on a link that compiles tests/host/test_crypto.c), which names
+    kernel/websvc.c (test_crypto.c includes it), and links it a second time ("multiple definition of sys_resolve").
+    Only a relink shows it (a header random.c includes changed: include/surfos/task.h); the volumes were made afresh
+    for the runs above. Not this round's to change (the root Makefile); said here for whoever meets it.
+
+== 3. make test-usb (devenv/build-usb.sh then devenv/test-usb.sh), the USB/UEFI image under QEMU + OVMF
+  O0  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs6, after test-all and unittest: its test images
+      there; devenv/build-usb.sh O=0: the image's manifest says source 4bd8e7dbd08f, not dirty; 18:55-19:00)
+  O2  USB/UEFI TEST PASSED: 315 of 315 checks (volume surfos-sc-fs6-o2, with devenv/build.sh O=2 images first for the
+      test disks the storage scenarios use; source 4bd8e7dbd08f, not dirty; 19:08-19:14)
+  Earlier runs, the same results: at 38a320e (15:54-15:59, 16:07-16:13) and 13d7cb7 (17:53-17:59, 17:59-18:05). The data
+  stick unplugged while mounted and plugged in again (usbdisk) now stays marked as not cleanly unmounted after its next
+  mount and umount (B42); the scenario checks its file, not its mark, and fsck_msdos and fsck.fat find no error on the
+  sticks they check (storage, devloop), as before.
+
+What the x86 suites show is that the change does no harm (FAT on the RAM disks, the ATA disk and the USB sticks,
+eject, mkfs, fdisk, the smoke test's concurrent FAT writers, selftest's RAM stick that refuses writes, kills inside
+kernel commands), and that a kill inside the cache now waits for the task to leave it (selftest); what it fixes is
+shown by the host tests (section 2, under the x86 build's own flags) and where the same files run under the riscv32
+kernel (surfcpu/docs/evidence/os/bcache-review.txt, sections 32-39).
 
 ======================================================================================================================
 Round fs-fix-5, 10/17/26: the block cache and FAT after a review of B27-B33 (audit B34-B38)
