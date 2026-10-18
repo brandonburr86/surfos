@@ -71,7 +71,10 @@ frame), DIR/screen.txt (the measured timing and the 80x30 text decoded from the 
 the font of --vga-font, default rtl/peripherals/surf_video_font.v, and the cursor's cell: when
 the last frame is in the cursor's dark blink phase, the cell where --settle's frames last
 showed it) and, with --vga-frames N, every Nth frame as DIR/frame_NNNNNN.ppm. --vga-after REGEX starts the capture only once REGEX
-has matched the UART output.
+has matched the UART output. --vga-crc FILE (10/18/26, the gpu track) writes a line "frame N crc
+XXXXXXXX" to FILE for every whole frame captured: zlib's CRC-32 of its 640x480 pixels, each as a
+little-endian 16-bit RGB444 value, which is how surf_video's FRAME_CRC is defined (docs/GPU.md
+section 3); it needs no --vga-dir.
 
 DDR: the C++ DDR model, calibrated after --ddr-calib cycles (default 3000) with random ready
 and latency from --seed; tb_soc's plusargs +ddr_calib= +ddr_lat_min= +ddr_lat_max= +ddr_ready=
@@ -136,6 +139,7 @@ struct Trigger {
 struct Options {
     std::string rom, sd, uart_in, ps2_keys, vga_dir, trace, transcript;
     std::string vga_font = "rtl/peripherals/surf_video_font.v", vga_after;
+    std::string vga_crc;                // every whole frame's CRC to this file (10/18/26)
     std::vector<Trigger> expects, sends, ps2_sends, fail_ons;
     uint64_t max_cycles = 0;            // 0 = no limit
     uint64_t seed = 1;
@@ -161,7 +165,7 @@ struct Options {
                  "               [--send REGEX=TEXT]... [--ps2-send REGEX=TEXT]... [--fail-on REGEX]...\n"
                  "               [--seed N] [--quiet] [--transcript FILE] [--progress N] [--settle N]\n"
                  "               [--uart-loopback] [--gpio-loopback] [--sw N] [--btn N] [--sd-flush]\n"
-                 "               [--vga-font FILE] [--vga-frames N] [--vga-after REGEX]\n"
+                 "               [--vga-font FILE] [--vga-frames N] [--vga-after REGEX] [--vga-crc FILE]\n"
                  "               [--ddr-calib N] [--ddr-fail] [--ddr-latency MIN:MAX] [--ddr-ready PCT]\n"
                  "               [--ddr-stall ADDR] [--ddr-swinit] [--sd-fault KIND=N@REGEX]... [--sd-remove [N@]REGEX]...\n"
                  "               [--sd-insert REGEX]... [--uart-pty] [+plusarg ...]\n");
@@ -317,6 +321,7 @@ Options parse(int argc, char **argv) {
         else if (a == "--vga-dir") o.vga_dir = next();
         else if (a == "--vga-font") o.vga_font = next();
         else if (a == "--vga-frames") o.vga_frames = unsigned(number(next(), "--vga-frames"));
+        else if (a == "--vga-crc") o.vga_crc = next();
         else if (a == "--vga-after") { o.vga_after = next(); (void)compile(o.vga_after, a.c_str()); }
         else if (a == "--trace") o.trace = next();
         else if (a == "--transcript") o.transcript = next();
@@ -478,7 +483,12 @@ int main(int argc, char **argv) {
 
     Ps2KeyboardModel kbd(SURF_SYS_HZ);
 
-    const bool vga_on = !opt.vga_dir.empty();
+    const bool vga_on = !opt.vga_dir.empty() || !opt.vga_crc.empty();
+    std::FILE *vga_crc = nullptr;
+    if (!opt.vga_crc.empty() && !(vga_crc = std::fopen(opt.vga_crc.c_str(), "w"))) {
+        std::fprintf(stderr, "surfsim: --vga-crc %s: cannot write\n", opt.vga_crc.c_str());
+        return 1;
+    }
     bool vga_capturing = vga_on && opt.vga_after.empty();
     std::regex vga_after_re;
     if (!opt.vga_after.empty()) vga_after_re = std::regex(opt.vga_after);
@@ -798,6 +808,15 @@ int main(int argc, char **argv) {
                 cap.tick(top->vga_r, top->vga_g, top->vga_b, top->vga_hs, top->vga_vs);
                 if (cap.frames() != vga_last_frame) {
                     vga_last_frame = cap.frames();
+                    if (vga_crc) {
+                        uint32_t crc = 0xFFFFFFFFu;
+                        for (uint16_t px : cap.frame())
+                            for (int byte = 0; byte < 2; byte++) {
+                                crc ^= (px >> (8 * byte)) & 0xFFu;
+                                for (int k = 0; k < 8; k++) crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+                            }
+                        std::fprintf(vga_crc, "frame %" PRIu64 " crc %08x\n", vga_last_frame, ~crc);
+                    }
                     if (opt.vga_frames && vga_last_frame % opt.vga_frames == 0) {
                         char name[64];
                         std::snprintf(name, sizeof name, "/frame_%06" PRIu64 ".ppm", vga_last_frame);
@@ -833,7 +852,8 @@ int main(int argc, char **argv) {
     if (transcript) std::fclose(transcript);
 
     // ---------------------------------------------------------------- results
-    if (vga_on) {
+    if (vga_crc) std::fclose(vga_crc);
+    if (!opt.vga_dir.empty()) {
         if (cap.frames() == 0) {
             std::fprintf(stderr, "surfsim: VGA: no whole frame captured\n");
         } else {

@@ -198,6 +198,12 @@ puts it back. They are entries of the `--send` list, in order with the sends, bu
 does not move the list's search point, so the entry after it may match the same text. Each is
 logged with its cycle; without them surfsim behaves as before.
 
+Frame CRCs (2026-10-18, added by the gpu track): `--vga-crc FILE` writes `frame N crc XXXXXXXX`
+for every whole frame the VGA capture takes: zlib's CRC-32 of its 640x480 pixels, each a
+little-endian 16-bit RGB444 value, which is how surf_video's FRAME_CRC is defined (docs/GPU.md
+section 3), so a test can compare the register with the picture at the pins. Without it surfsim
+behaves as before.
+
 The UART on a pseudo-terminal (2026-10-16, added by the os track for its physical test kit,
 docs/PHYSICAL-TESTS.md): `--uart-pty` also connects the UART to a pseudo-terminal whose path
 surfsim prints on stderr (`surfsim: --uart-pty /dev/pts/N`), so `tools/uart.py` and
