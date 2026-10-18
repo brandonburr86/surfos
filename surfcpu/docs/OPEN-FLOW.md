@@ -56,7 +56,7 @@ into its manifest. Details: [evidence/flow/image.txt](evidence/flow/image.txt).
 
 ```sh
 surfcpu/tools/openxc7-build.sh --top <module> --board arty_a7_35t|arty_a7_100t --xdc <file> \
-    [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--dsp safe|full|none] [--expect file] \
+    [-D NAME[=VALUE]] [-I dir] [--seed N[,N...]] [--pnr-timeout s] [--dsp safe|full|none] [--expect file] \
     [--manifest-include file] [--out dir] [--lvs-timeout s] [--no-lvs] [--no-check] [--synth-only] \
     [--dry-run] <source.v>...
 ```
@@ -83,7 +83,22 @@ flow then runs on that placement. Every attempt is kept (`nextpnr-seed<n>.log`) 
 in `seeds.txt`, the flow's manifest and `tools/fpga-build.sh`'s (`placer_seeds`, `placer_seed`:
 the one used, `placer_attempts`). nextpnr is deterministic, so a seed's result depends on the
 whole netlist, the build ID included: one seed that passes at one commit can miss at the next,
-which a list absorbs. Only the DDR designs use one (section 6.7); a list never relaxes a check.
+which a list absorbs. The DDR designs (section 6.7) and the GPU designs (docs/GPU.md section 12.5)
+use one; a list never relaxes a check.
+
+**A time limit for each seed** (`--pnr-timeout <s>`, default 1800; a design list's `pnr-timeout`
+line): nextpnr's router2 has no iteration limit, and on a placement it cannot route it can run for
+hours with its overuse growing (the gpudiag design at d9cc652, seed 1: four hours, 61 iterations,
+5,981 wires overused and rising), so without a limit a seed list never got past such a seed. Each
+attempt now runs under `timeout -k 60`; one stopped there is recorded as `seed N: timeout (nextpnr
+stopped after S s, exit 124), not routed; router at iter=I, overused=O` and the next seed is tried
+(tools/openxc7-steps.sh, tested with a stand-in nextpnr that hangs in tools/openxc7-flow-test.sh).
+The 14 place and route runs on record took 4.6 to 337 s (median 69 s; the slowest the DDR+GPU
+design), and steps ran up to 1.8 times slower on the loaded Mac, so 1800 s is 5.3 times the slowest
+good run and 3 times that slowed. Within the limit the command and its outputs are what they were:
+the same inputs and seed through the flow before the limit and after it gave byte-identical
+bitstreams, FASM, placements, netlists and reports for the baseline and the bramdiag SoC design
+(evidence/gpu/review2-sim.txt).
 
 * `tools/openxc7-demo.sh` is the proof run behind this page (both parts, the demo, the feature
   probe, the expected failures, gate-level simulation, a determinism rebuild; about 7 minutes).

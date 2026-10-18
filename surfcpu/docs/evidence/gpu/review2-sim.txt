@@ -1,0 +1,122 @@
+SurfGPU, the second review's fixes (2026-10-18): simulation, host tests, the flow's time limit, and
+this round's tests run against 589223c's code, in the surfcpu-toolchain container (surfcpu-openxc7
+for the open flow), on 96198e6..72ba06c (sc/gpu). Nothing here ran on a board.
+
+make check at 72ba06c: PASS in 1880 s on the loaded Mac (the documents being edited, so its ROMs
+say "dirty tree"; the code is 72ba06c's). Excerpts:
+  test_video_gfx: PASS (75 checks, seed 1, 86 frames)
+  test_video_gfx: PASS (75 checks, seed 2, 86 frames)
+  test_video_gfx: PASS (75 checks, seed 3, 86 frames)
+  test_gpu: PASS (seed 1: 724 checks; 1779 commands, 24425 words, 795523 pixel writes in the model; VRAM compared 137 times (17 directed, 120 random chu ...
+  test_gpu: PASS (seed 2: 724 checks; 1980 commands, 33845 words, 768123 pixel writes in the model; VRAM compared 137 times (17 directed, 120 random chu ...
+  test_gpu: PASS (seed 3: 724 checks; 1968 commands, 30879 words, 790088 pixel writes in the model; VRAM compared 137 times (17 directed, 120 random chu ...
+  gpudiag_check: PASS (124 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 45 distinct, 71831933 cycles)
+    [after Ctrl-R] gpudiag_check: PASS (123 checks, a rerun; 13 scenes, every FRAME_CRC the model's and a captured frame's; 170 frames captured, 45 distinct)
+    [surfboot, HAS_GPU] the monitor answered help and info (features 1ff): output matched after 3773790 cycles
+    [bramdiag, HAS_GPU] BRAMDIAG: PASS (569 checks) BRAMDIAG: PASS (569 checks) (the run, and its rerun after Ctrl-R)
+  test_gpudiag_check: PASS (16 checks of gpudiag_check.py: the check totals of a run and a rerun, skipped scenes, the capture's final run, --must-fail)
+    [no-gpu] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (2 of 6 checks failed), 14 problems found, 'FEATURES has no GPU[\\s\\S]*checks ran; a complete run makes' said)
+    [wrong-id] gpudiag_check: PASS (--must-fail: GPUDIAG: FAIL (8 of 100 checks failed), 8 problems found, 'no engine: gpu.ID reads 0x31555048[\\s\\S]*skipped: no engine[\\s\\S]*checks ran; a complete run makes' said)
+  test-gpu: PASS
+  [surfsim_soc_regions seed 1] SCRIPT PASS (354 data + 24 fetch transfers, 72 + 28 operations, 3121 cycles)
+  [netlist soc_regions] SCRIPT PASS (354 data + 24 fetch transfers, 72 + 28 operations, 3124 cycles)
+  test_tools: 270 passed, 0 failed
+  ok   every SRL kind is found (5 found)
+  srlcheck self-test: PASS (5 cases)
+  ok    build: --pnr-timeout sets it
+  ok    build: refuses --pnr-timeout '0'
+  ok    build: refuses --pnr-timeout '2h'
+  ok    build: refuses --pnr-timeout ''
+  ok    pnr: a seed whose nextpnr hangs is stopped at the limit (2 s), recorded as a timeout, and the next seed routes
+  ok    pnr: when every seed times out, none routed (pnr_ok 0) and each is recorded
+  openxc7-flow-test.sh: PASS
+  test-flow: PASS
+  test-release: Ran 53 tests in 36.876s OK 
+  check: all automated SurfCPU checks passed
+
+make test-gpu-mutants at 72ba06c: 33 of 33 caught in 300 s; the twelve new ones:
+  busy-early-last-group          gpu    caught: test_gpu: FAIL (1 of 424 checks, seed 1)
+  target-refusal-applies         gpu    caught: test_gpu: FAIL (21 of 159 checks, seed 1)
+  pair-reverted                  video  caught: test_video_gfx: FAIL (6 of 75 checks failed, seed 1)
+  pair-never-cleared             video  caught: test_video_gfx: FAIL (3 of 75 checks failed, seed 1)
+  pair-cleared-by-any-read       video  caught: test_video_gfx: FAIL (3 of 75 checks failed, seed 1)
+  soc-abort-ignored              soc    caught: gpudiag: GPUDIAG: FAIL (2 of 124 checks failed) (FAIL ABORT behind a WAIT_VBLANK: 5 words queued, then FIFO_FREE 59, STATUS 0x1); gpudiag_check board FAIL, simulation FAIL
+  soc-irq-err-never              soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL errors sticky: the gpu interrupt off with IE.ERR, off with IE.FENCE alone, off with n); gpudiag_check board FAIL, simulation FAIL
+  soc-target-refusal-applies     soc    caught: gpudiag: GPUDIAG: FAIL (2 of 124 checks failed) (FAIL after the refused target a fill at (0, 0) left VRAM words 0x00000000 0x00000000 at 0,); gpudiag_check board FAIL, simulation FAIL
+  soc-busy-early-last-group      soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL WRITE_RECT waiting for its last data word: STATUS 0x0; with it 0x0, VRAM word 0x44332); gpudiag_check board FAIL, simulation FAIL
+  soc-pair-reverted              soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL FRAME_COUNT read on scene 0, FRAME_CRC on scene 1: 0x50e89802, scene 0's 0x2077db89); gpudiag_check board FAIL, simulation FAIL
+  soc-pair-never-cleared         soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL a lone FRAME_CRC read after the pair: 0x2077db89, the newest frame's 0x50e89802); gpudiag_check board FAIL, simulation FAIL
+  soc-pair-cleared-by-any-read   soc    caught: gpudiag: GPUDIAG: FAIL (1 of 124 checks failed) (FAIL FRAME_COUNT read on scene 0, FRAME_CRC on scene 1: 0x50e89802, scene 0's 0x2077db89); gpudiag_check board FAIL, simulation FAIL
+
+the same 33 mutants judged by 589223c's tests, gpudiag and gpudiag_check (a git archive of 589223c
+with this round's sim/gpu/mutants.py, ROM build 589223c6): 23 of 33 caught; not caught:
+  busy-early-last-group          gpu    NOT CAUGHT: test_gpu: PASS (seed 1: 418 checks; 1212 commands, 15945 words, 719736 pixel writes in the model; VRAM compared 76 times (16 directed, 60 random chunk
+  pair-never-cleared             video  NOT CAUGHT: test_video_gfx: PASS (69 checks, seed 1, 80 frames)
+  pair-cleared-by-any-read       video  NOT CAUGHT: test_video_gfx: PASS (69 checks, seed 1, 80 frames)
+  soc-abort-ignored              soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-irq-err-never              soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-target-refusal-applies     soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-busy-early-last-group      soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-pair-reverted              soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-pair-never-cleared         soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+  soc-pair-cleared-by-any-read   soc    NOT CAUGHT: gpudiag: GPUDIAG: PASS (117 checks); gpudiag_check board PASS, simulation PASS
+
+the second review's findings, each test on 589223c and now:
+  1  the rerun after Ctrl-R, judged by gpudiag_check (test-gpu-soc now does it): the review's run
+     of the same commands on 589223c (gpurev2-tests/ctrlr): "FAIL 116 checks ran; a complete run
+     makes 117", GPUDIAG: FAIL (1 of 117 checks failed), gpudiag_check FAIL in both forms /
+     PASS (123 checks, a rerun); bramdiag's rerun on the GPU SoC: PASS (569 checks) twice
+  2  test_gpudiag_check.py with 589223c's gpudiag_check.py: FAIL (5 of 16 checks):
+       a good run, then one that never ended (after a wrong CRC): passed, wanted fail
+       a good run, then one that never ended at once: passed, wanted fail
+       a good run, then a failing one whose banner follows a NUL on the echo line: passed, wanted fail
+       a rerun, with its line and its total: failed, wanted pass
+       the first run's total with the rerun line: passed, wanted fail
+     now 16 of 16. The review's captures, with 589223c's expected CRCs and its total (117):
+       a_hung_last_run: 589223c's checker PASS (117 checks); now FAIL: a run after the last
+         GPUDIAG line did not end (it printed 'SurfGPU diagnostic 1.0.0 (build 589223c6)')
+       b_garbled_banner: 589223c's checker PASS (117 checks); now FAIL: gpudiag says FAIL (1 of 117 checks failed)
+  3  pair-never-cleared, pair-cleared-by-any-read: test_video_gfx PASS (69 checks) on 589223c /
+     FAIL (3 of 75) each
+  4  the seven soc mutants: GPUDIAG: PASS (117 checks), gpudiag_check PASS in both forms on
+     589223c / GPUDIAG: FAIL each, gpudiag_check FAIL in both forms (above)
+  5  see "the flow's time limit" below; test_tools.sh's two pnr-timeout checks fail on 589223c's
+     fpga-build.sh (it passes no limit) and pass now
+  6  c217f27's gpudiag bitstream: .bit header 2026/10/18 14:01:22, manifest build_time 1792331833
+     (13:57:13Z); 72ba06c's: header 2026/10/18 18:05:03, build_time 1792346703, the epoch
+  7  none fails on 589223c (the region scripts run on HAS_GPU = 0, where 0x1000_9000 is unmapped);
+     now soc_regions.sbs reads unmapped_probe and unmapped_probe.last, and passes (above)
+  9  make check-generated passes on both (a documentation fix)
+  10 a netlist with one cell of each kind (SRL16 SRLC16 SRLC16E SRLC32E CFGLUT5): 589223c's
+     srlcheck.py finds 3 (SRL16, SRLC16E, SRLC32E) / 5; srlcheck exits 2 on an unreadable or
+     missing netlist ("srlcheck: cannot read ..."), which openxc7-build.sh now reports as "the SRL
+     check could not read the synthesized netlist" (589223c: "has SRL cells"); no automated test
+     runs the flow on such a netlist
+  11 release-test.py TestBoardRestriction with 589223c's release.py: FAIL (Refused not raised for
+     a board line naming no board) / OK; this round's test_tools.sh with 589223c's fpga-build.sh:
+     265 passed, 5 failed (589223c's release.py took the CRLF line and made the bare one a list
+     of no boards; its fpga-build.sh did the opposite: CRLF refused, the bare line no limit):
+       FAIL board line: a design list with CRLF line ends: its board taken (dry run)
+       FAIL board line: ... and the other refused
+       FAIL board line: a board line naming no board is refused
+       FAIL pnr-timeout: the design list's limit for each placer seed reaches the open flow
+       FAIL pnr-timeout: ... and a limit that is not seconds is refused
+     ("its board line names arty_a7_100t", with the CR kept, "which is not in boards.txt"); now
+     270 passed, 0 failed
+
+the flow's time limit (finding 5): dry runs of the baseline design with 589223c's and with now's
+tools/openxc7-build.sh differ in one line, the [pnr] line's "timeout -k 60 1800" prefix. Then the
+same inputs through both flows (surfcpu-openxc7, one container; build/sim/flowid/run.sh: the same
+seed 1, 4 threads, chip database, SOURCE_DATE_EPOCH 1792346703 and relative --out; --no-lvs
+--no-check), every output compared, for two designs of the 100T: base = arty_a7_baseline, diag =
+surfcpu_arty_a7_bramdiag (the SoC with bramdiag, 72ba06c's sources and ROM):
+  base: the flow of 589223c: exit 0, 9 s
+  base: the flow of now:      exit 0, 9 s
+  base:   arty_a7_baseline.bit: same (old 762d75c975c081a3a4049ea2361d13eaa3e7b8b7c36d10d24eb105692643b81e, new 762d75c975c081a3a4049ea2361d13eaa3e7b8b7c36d10d24eb105692643b81e)
+  base: 9 the same, 0 different
+  diag: the flow of 589223c: exit 0, 85 s
+  diag: the flow of now:      exit 0, 91 s
+  diag:   surfcpu_arty_a7_top.bit: same (old 10336571fe4d92bd1b662ecfd1ecfc70b2b2170adf57b72adb475d5b0d1bedfc, new 10336571fe4d92bd1b662ecfd1ecfc70b2b2170adf57b72adb475d5b0d1bedfc)
+  diag: 9 the same, 0 different
+  (and in both designs the synthesized .json and .netlist.v, .fasm, placement.json, .frames,
+  timing.txt, utilization.txt and report.json: 9 of 9 the same)
