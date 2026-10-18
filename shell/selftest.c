@@ -676,9 +676,22 @@ static int ram_read(struct bdev *d, u32 lba, u32 count, void *buf) {
 
 static bool ram_refuse;                              /* 10/16/26 (B10): the test's RAM disks refuse every write */
 static u_long ram_slow_ms;                           /* 10/17/26 (B39): and take this long for each (a driver's delay) */
+/* 10/17/26 (B46): the writes they have begun, and while ram_ntrace is below RAM_TRACE, which block each was, which task
+   wrote it and when it began (ram_trace_on: from then on) */
+#define RAM_TRACE 8
+static volatile u_int ram_writes_begun, ram_ntrace;
+static u_long ram_trace_on;
+static struct { u32 lba; u_long at; char who[8]; } ram_trace[RAM_TRACE];
 
 static int ram_write(struct bdev *d, u32 lba, u32 count, const void *buf) {
     if(ram_refuse) return BDEV_EIO;
+    ram_writes_begun++;
+    if(ram_trace_on && ram_ntrace < RAM_TRACE) {
+        u_int k = ram_ntrace++;
+        ram_trace[k].lba = lba;
+        ram_trace[k].at = uptime_ms() - ram_trace_on;
+        strlcpy(ram_trace[k].who, curTask ? curTask->name : "?", sizeof(ram_trace[k].who));
+    }
     if(ram_slow_ms) sleep_ms(ram_slow_ms);
     memcpy((u8 *)d->priv + lba * 512, buf, count * 512);
     return 0;
@@ -837,13 +850,15 @@ static void test_kill_in_cache(void) {
 }
 
 /* 10/17/26 (audit B46): umount interrupted while another task's write of the volume's device is in flight (the review's
-   R1: a `sync` on another console; here a sync of the test's disk, whose writes take 150 ms each). The umount's waits
+   R1: a `sync` on another console; here a sync of the test's disk, whose writes take 300 ms each). The umount's waits
    were cut short (B39) and it went on: it gave up changes the disk would take and left the volume marked as not cleanly
    unmounted. Now an umount that has begun finishes (fs_finish, surfos/task.h): Ctrl+C cuts the command after it, and
-   a kill comes after it */
+   a kill comes after it. The interrupt reaches the umount task once its command has begun, before its syncs (a test
+   that sent it a moment later, into the umount's wait, depended on whether the umount was in that wait yet) */
 static struct bdev *ku_dev;
-static volatile int ku_umount_r, ku_done, ku_cut;
+static volatile int ku_umount_r, ku_done, ku_cut, ku_go;
 static volatile u_int ku_lost;
+static volatile u_long ku_began, ku_ended;
 
 static void ku_sync(void *arg) {
     (void)arg;
@@ -854,41 +869,55 @@ static void ku_umount(void *arg) {
     u_int lost = 99;
     bool ctrl_c = arg != NULL;
     if(ctrl_c) task_call_enter(TC_COMMAND);          /* as the ring-0 shell runs a command */
+    while(!ku_go) sleep_ms(5);                       /* the interrupt is sent meanwhile (a driver's delay: not cut short) */
+    ku_began = uptime_ms() - ram_trace_on;
     ku_umount_r = vfs_umount_lost("/selftest-um", &lost);
+    ku_ended = uptime_ms() - ram_trace_on;
     ku_lost = lost;
     ku_done = 1;
     if(ctrl_c) ku_cut = task_call_leave(TC_COMMAND);
     else task_call_leave(TC_SYSCALL);                /* the kill that waited ends the task here */
 }
 
-/* /selftest-um mounted with a folder made and not yet written; a sync of the disk in its first write; an umount of
-   it interrupted (Ctrl+C, or a kill) as it waits for that write. The umount task's status */
+/* /selftest-um mounted with a folder made and not yet written (its entry's block); a sync of the disk in its write of
+   that block; an umount of it begun with Ctrl+C or a kill reaching it then. The umount task's status; the disk's
+   writes and the umount's times said */
 static int ku_run(const char *folder, bool ctrl_c) {
     surf_task *ts, *tu;
     u_long pid_s = 0, pid_u = 0, f;
+    u_int begun, waited, i;
     int status = 1, st2;
     if(vfs_mount_flags(ku_dev, "/selftest-um", "fat", 0) != 0) return 1;
     if(vfs_mkdir(folder) != 0) { vfs_umount("/selftest-um"); return 1; }
-    ku_done = ku_cut = 0;
+    ku_done = ku_cut = ku_go = 0;
     ku_umount_r = 1;
     ku_lost = 99;
-    ram_slow_ms = 150;
+    ku_began = ku_ended = 0;
+    ram_ntrace = 0;
+    ram_trace_on = uptime_ms();
+    ram_slow_ms = 300;
+    begun = ram_writes_begun;
     ts = kthread_create_on("umsync", curTask->con, ku_sync, NULL, PL_NORMAL, 0);
     if(ts) pid_s = ts->pid;
-    sleep_ms(30);                                    /* its first write is in flight */
+    for(waited = 0; ram_writes_begun == begun && waited < 1000; waited += 5) sleep_ms(5);   /* its write is in flight */
     tu = kthread_create_on("umount", curTask->con, ku_umount, ctrl_c ? (void *)1 : NULL, PL_NORMAL, ctrl_c ? 0 : TF_INCALL);
     if(tu) {
         pid_u = tu->pid;
-        sleep_ms(50);                                /* the umount waits for that write */
+        sleep_ms(20);                                /* the umount task is in its call, its command begun */
         if(ctrl_c) {
             f = irq_save();
             task_interrupt_job(tu);                  /* Ctrl+C on its terminal, as tty.c sends it */
             irq_restore(f);
         } else kill_task(tu);
+        ku_go = 1;
         if(task_wait(pid_u, &status) != (int)pid_u) status = 1;
     }
     if(ts) task_wait(pid_s, &st2);
     ram_slow_ms = 0;
+    ram_trace_on = 0;
+    printf("        (the disk's writes:");
+    for(i = 0; i < ram_ntrace && i < RAM_TRACE; i++) printf(" block %lu by %s at %lu ms;", (u_long)ram_trace[i].lba, ram_trace[i].who, ram_trace[i].at);
+    printf(" the umount from %lu to %lu ms)\n", ku_began, ku_ended);
     return status;
 }
 
