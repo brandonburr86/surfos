@@ -152,8 +152,10 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                 continue
             try:
                 m.checks(d)
-            except AssertionError:                  # recorded; the next track's checks still run (each track's
+            except AssertionError as e:             # recorded; the next track's checks still run (each track's
                 vm.screen(f'guiapps-{m.__name__[len("gui_apps_"):]}-failed.png')   # leave the desktop as they found
+                if not results or results[-1][1]:   # 10/18/26: stopped with no failed check (a move that gave up):
+                    results.append((f'{m.__name__}: its checks stopped early ({e})', False))   # one now
         d.key('ctrl-g')
         d.key('ret')                                # SurfOS > About SurfOS, which takes the keys from any window
         vm.send('\x11')                             # Ctrl+Q

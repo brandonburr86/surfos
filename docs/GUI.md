@@ -159,7 +159,7 @@ this session.
 | Keys | Action |
 | --- | --- |
 | Ctrl+E, Ctrl+B, Ctrl+K, Ctrl+D, Ctrl+P | Notepad, Files, Calculator, Sketch, pointer and desktop settings |
-| Ctrl+T | The Terminal; in it every key but Ctrl+G is the program's |
+| Ctrl+T | The Terminal; in it every key but Ctrl+G and Ctrl+Space is the program's |
 | Ctrl+N, Ctrl+O, Ctrl+S | New note, open a file, save it (with Sketch in front, Ctrl+N clears it and Ctrl+S saves it as a BMP) |
 | Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+C, Ctrl+V, Ctrl+A | Undo, redo, cut, copy, paste, select all: Notepad's, or those of the application in front that has them |
 | Ctrl+F, Ctrl+L | Find, go to: a line in Notepad; a pid, a code or an offset in System Monitor, Character Map and Hex |
@@ -202,7 +202,7 @@ any pseudo-terminal, a telnet session's too. Open it with Ctrl+T, its tile, or A
 Terminal. Each Terminal window has one session, started when it opens, and a desktop
 has one Terminal window.
 
-* **Keys.** Every key is the shell's except Ctrl+G, which opens the menus.
+* **Keys.** Every key is the shell's except Ctrl+G and Ctrl+Space, which open the menus.
   * Ctrl+C stops the program that runs (`sleep 30000`, say).
   * Ctrl+Q, Ctrl+W, Ctrl+T, Tab, Esc and the arrows are the program's too (`edit`
     quits with Ctrl+Q).
@@ -211,8 +211,10 @@ has one Terminal window.
     bytes they are.
   * To reach the desktop with the Terminal in front, use Ctrl+G and the menus (Return
     to shell is in the ≋ SurfOS menu), or the mouse.
-* **The size.** The window's size is the terminal's: 77 by 21 characters when it opens,
-  117 by 26 maximized on a 1920x1080 screen. The status bar shows it.
+* **The size.** The window's size is the terminal's, and the status bar shows it. On a
+  1920x1080 screen it opens at 77 by 21 characters and is 117 by 26 maximized; on a
+  1280x800 screen (a desktop of 640 by 400 pixels) it opens at 71 by 16 and is 77 by 18
+  maximized.
   * A new size reaches the shell when the window is maximized or restored, or when its
     corner is let go.
   * A program sees it when it asks (`pagetest size`; `edit` with Ctrl+L).
@@ -224,9 +226,14 @@ has one Terminal window.
     says how many lines came below.
   * Any key goes back to the end, and to the program.
 * **Copy and paste.** Drag to select (past the top or bottom edge the text scrolls), or
-  double-click a word.
+  double-click a word (also one that a line's end broke in two).
   * Edit > Copy copies the selection, or the whole screen as it shows when nothing is
     selected.
+  * A line that wrapped is copied as one, also after the window got wider or when it is
+    in the scrollback. One that a narrower window cut on the screen is copied as it
+    shows.
+  * A selection of nothing but blanks leaves the clipboard as it was, and the status bar
+    says "Nothing copied".
   * Edit > Select all selects everything kept, the scrollback too.
   * Edit > Paste types the clipboard into the session, each line end as Enter. What the
     shell does not take at once follows a moment later.
@@ -238,8 +245,10 @@ has one Terminal window.
   * Ctrl+C and Ctrl+V are the program's, so copy and paste are in the Edit menu (Ctrl+G,
     Right, Right).
 * **The end of a session.** When the shell exits (`exit`, or Ctrl+D at an empty prompt),
-  a line in the window and the status bar say so. Enter, or the New session button in
-  the status bar, starts a new session below; Esc or Ctrl+W then closes the window.
+  the session ends at once, and a line in the window and the status bar say so. A
+  program the shell left running in the background (`pagetest hold 300000 &`, say) ends
+  with it, as when the window closes. Enter, or the New session button in the status
+  bar, starts a new session below; Esc or Ctrl+W then closes the window.
 * **Closing.** Closing the window while a session runs, or leaving the desktop, asks
   first.
   * Close (or Leave) ends the session and every program it runs; Cancel keeps it.
@@ -250,7 +259,8 @@ has one Terminal window.
 * **Limits.**
   * There is no keyboard path to the scrollback: the keyboard driver sends the special
     keys without their modifiers, so there is no Shift+Page Up to take for it.
-  * Ctrl+G cannot be typed into a program (edit's "go to line" needs another key).
+  * Ctrl+G and Ctrl+Space (NUL) cannot be typed into a program (edit's "go to line"
+    needs another key).
   * There is no mouse reporting to programs, no bracketed paste, and no bold font
     (bright colours instead, as on the console).
   * The font is code page 437, as on the console, so a character it lacks shows as `?`.
