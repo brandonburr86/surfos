@@ -8,6 +8,8 @@ memory as memstat counts it, the machine, ending a task as kill does (but only a
 never the desktop's own task), and a copy of the kernel log. Disks' block devices are in
 guisys_disk.c and the Terminal's sessions in guisys_term.c (shell/guisys.h). Nothing here waits:
 each call copies what is there now.
+10/18/26: the tasks are copied in one go; End task never ends the shells the desktop runs in,
+and its kill waits for the end of the call however long (kill_task_patient()).
 */
 #include <stdio.h>
 #include <string.h>
@@ -26,19 +28,25 @@ each call copies what is there now.
 #include <fs/vfs.h>
 #include "guisys.h"
 
+/* 10/18/26: copied in one go (task_info_all()), so that a task collected meanwhile cannot shift another out of a
+   reading; the newest max when there are more */
 static int tasks(void *ctx, struct gui_task *out, int max) {
-    struct procinfo pi;
-    int i, n = 0;
+    struct procinfo *pi;
+    int i, n;
     (void)ctx;
-    for(i = 0; n < max && task_info(i, &pi) == 0; i++) {
-        out[n].pid = pi.pid;
-        out[n].ppid = pi.ppid;
-        out[n].state = pi.state;
-        out[n].tty = pi.tty;
-        out[n].flags = pi.flags;
-        strlcpy(out[n].name, pi.name, sizeof(out[n].name));
-        n++;
+    if(max <= 0) return 0;
+    pi = (struct procinfo *)kalloc(max * sizeof(*pi));
+    if(!pi) return -ENOMEM;
+    n = task_info_all(pi, max);
+    for(i = 0; i < n; i++) {
+        out[i].pid = pi[i].pid;
+        out[i].ppid = pi[i].ppid;
+        out[i].state = pi[i].state;
+        out[i].tty = pi[i].tty;
+        out[i].flags = pi[i].flags;
+        strlcpy(out[i].name, pi[i].name, sizeof(out[i].name));
     }
+    kfree(pi);
     return n;
 }
 
@@ -97,24 +105,35 @@ static int machine(void *ctx, struct gui_machine *out) {
 
 /* as kill does, but only a program (a kernel thread is the kernel's: the kill command ends one), and never the
    desktop's own task. 10/17/26 (System Monitor): the task is found and killed with interrupts off and its name
-   copied first, since a zombie may be collected (and freed) by its parent at any time; each refusal says why */
+   copied first, since a zombie may be collected (and freed) by its parent at any time; each refusal says why.
+   10/18/26: nor the shells this desktop runs in (curTask's parents): init would start a new shell on the
+   desktop's console, which would take the keys meant for the desktop. And the kill is the one that waits for
+   the end of the call however long (kill_task_patient()): kill_task()'s, 2 s later, kills at once inside a
+   call, and a zombie holding a volume's lock would stop the desktop at Disks' next reading */
 static int kill(void *ctx, int pid, char *msg, size_t n) {
     char name[TASK_NAME_LEN];
-    const char *no = NULL;
-    bool ended = false;
-    surf_task *t;
+    const char *no = NULL, *call = NULL;
+    bool ended = false, above = false;
+    surf_task *t, *p;
     u_long flags;
+    int depth;
     (void)ctx;
     flags = irq_save();
     t = task_find((u_long)pid);
     if(t) {
         strlcpy(name, t->name, sizeof(name));
+        for(p = curTask ? curTask->parent : NULL, depth = 0; p && depth < 64; p = p->parent, depth++)
+            if(p == t) above = true;
         if(t == idle_task) no = "is the idle task: the kernel's own";
         else if(t == init_task_ptr) no = "starts the consoles' shells: it is never ended";
         else if(t == curTask) no = "runs this desktop: Ctrl+Q leaves it";
+        else if(above) no = "runs the shell this desktop runs in";
         else if(!(t->flags & TF_USER)) no = "is a kernel thread: the shell's kill command ends one";
         else if(t->state == TS_DEAD) ended = true;
-        else kill_task(t);                              /* inside a call it ends with the call (task.h) */
+        else {
+            call = !t->in_call ? NULL : (t->in_call & TC_COMMAND) ? "kernel command" : "system call";
+            if(!kill_task_patient(t)) call = NULL;      /* it ended at once */
+        }
     }
     irq_restore(flags);
     if(!t) {
@@ -126,6 +145,7 @@ static int kill(void *ctx, int pid, char *msg, size_t n) {
         return -EACCES;
     }
     if(ended) snprintf(msg, n, "%s (pid %d) had ended already", name, pid);
+    else if(call) snprintf(msg, n, "%s (pid %d) ends when its %s does", name, pid, call);
     else snprintf(msg, n, "ended %s (pid %d)", name, pid);
     return 0;
 }
