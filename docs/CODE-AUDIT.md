@@ -165,7 +165,7 @@ operation that can put it on the disk, and a block of a named file's range with 
 name there is stale (the exact check, in the threaded and the randomized test), and the streamer writes its own tags:
 with B34's check disabled on 47fb4ec, the streamer setting fails 7 of 16 and 9 of 24 runs (round fs-fix-5's check: 0
 and 1), 47fb4ec itself and this round none of 80. B38's: SurfOS's own next unmount cleared the mark (B42), and clusters a
-failed free left allocated were not counted (B43). `surfcpu/docs/evidence/os/bcache-review.txt` sections 32-38 have the
+failed free left allocated were not counted (B43). `surfcpu/docs/evidence/os/bcache-review.txt` sections 32-39 have the
 numbers:
 
 | ID | Where | Problem | Fix |
