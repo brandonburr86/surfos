@@ -18,7 +18,12 @@ typedef struct surf_console surf_console;
 static struct { surf_console *con; } *curTask;
 static surf_console *conActive;
 #define KERN_TXT_COLOR 0
-static void kputch(surf_console *con, int color, char c) { (void)con; (void)color; (void)c; }
+static char dumped[2 * 16384];                  /* what klog_dump() printed */
+static u32 dumped_len;
+static void kputch(surf_console *con, int color, char c) {
+    (void)con; (void)color;
+    if(dumped_len < sizeof(dumped)) dumped[dumped_len++] = c;
+}
 static bool in_interrupt(void) { return false; }
 void klog_write(const char *s);
 static int saves, storm_at;
@@ -1456,6 +1461,131 @@ static void small_screen(void) {
     CHECK(fake_guards(W, H));
 }
 
+/**** what the second review found (10/18/26) ****/
+
+/* klog_length() and klog_dump(): the head and the ring's fullness read together, a log never longer than the ring;
+   from empty, across the first fill (with something logged inside the call), and past 2^32 */
+static void klog_lengths(void) {
+    static char text[1100], big[1001];
+    u32 i;
+    klog_head = 0;                                      /* a fresh log */
+    klog_full = false;
+    kwritten_len = 0;
+    dumped_len = 0;
+    klog_dump();
+    CHECK(klog_length() == 0 && dumped_len == 0);
+    for(i = 0; i < 16; i++) {                           /* 16000 bytes: not full yet */
+        memset(text, 'a' + i % 26, 999);
+        text[999] = '\n';
+        text[1000] = 0;
+        klog_say(text);
+    }
+    dumped_len = 0;
+    klog_dump();
+    CHECK(klog_length() == 16000 && dumped_len == 16000 && !memcmp(dumped, kwritten, 16000));
+    memset(big, 'S', 1000);                             /* 1000 bytes logged inside the call fill the ring */
+    big[1000] = 0;
+    saves = 0;
+    storm_at = 1;
+    storm = big;
+    CHECK(klog_length() == KLOG_SIZE && !storm && klog_full);
+    memcpy(kwritten + kwritten_len, big, 1000);
+    kwritten_len += 1000;
+    dumped_len = 0;
+    klog_dump();
+    CHECK(dumped_len == KLOG_SIZE && !memcmp(dumped, kwritten + kwritten_len - KLOG_SIZE, KLOG_SIZE));
+    saves = 0;                                          /* and inside the dump */
+    storm_at = 1;
+    storm = big;
+    dumped_len = 0;
+    klog_dump();
+    memcpy(kwritten + kwritten_len, big, 1000);
+    kwritten_len += 1000;
+    CHECK(!storm && dumped_len == KLOG_SIZE && !memcmp(dumped, kwritten + kwritten_len - KLOG_SIZE, KLOG_SIZE));
+    klog_head = (0u - KLOG_SIZE) + klog_head % KLOG_SIZE;   /* past 2^32 (the same place in the ring) */
+    for(i = 0; i < 450; i++) klog_say("a line written as the head passes 2^32\n");   /* 17550 bytes: past it */
+    dumped_len = 0;
+    klog_dump();
+    CHECK(klog_head < KLOG_SIZE && klog_length() == KLOG_SIZE && dumped_len == KLOG_SIZE &&
+          !memcmp(dumped, kwritten + kwritten_len - KLOG_SIZE, KLOG_SIZE));
+}
+
+/* the Log: what the second review found */
+static void log_round3(void) {
+    const struct gui_window *w;
+    struct gui_logview *v = &g.logview;
+    int first, rows, total, ty, i, redraws, before, lines_n;
+    u32 d;
+    char b[64];
+    /* a drag the desktop ended without the Log's release (shell/gui.c, the screen back from another console): the tick
+       scrolls no more, and does not redraw */
+    log_desktop();
+    lines(1, 200);
+    gui_open(&g, GUI_LOG);
+    w = &g.win[GUI_LOG];
+    ty = w->y + TITLE_H + BAR_H + 4;
+    for(i = 0; i < 20; i++) key(GUI_UP);
+    first_rows(&before, &rows, &total);
+    button(w->x + 60, ty + 5 * 16 + 3, true);
+    button(w->x + 60, ty - 20, true);                   /* past the top edge: a row */
+    g.drag = g.resize = g.scroll = g.app_drag = -1;
+    for(redraws = 0, i = 0; i < 40; i++) { g.dirty = false; tick_ms(50); if(g.dirty) redraws++; }
+    first_rows(&first, &rows, &total);
+    CHECK(!v->drag && first == before - 1 && redraws == 0);
+    button(w->x + 60, ty - 20, false);
+    /* tucked away from the keyboard with the button held past the edge: the same */
+    button(w->x + 60, ty + 5 * 16 + 3, true);
+    button(w->x + 60, ty - 20, true);
+    first_rows(&before, &rows, &total);
+    gui_act(&g, ACT_MINIMIZE);
+    CHECK(g.win[GUI_LOG].min);
+    for(redraws = 0, i = 0; i < 40; i++) { g.dirty = false; tick_ms(50); if(g.dirty) redraws++; }
+    gui_open(&g, GUI_LOG);
+    first_rows(&first, &rows, &total);
+    CHECK(!v->drag && first == before && redraws == 0);
+    button(w->x + 60, ty - 20, false);
+    /* held past the edge with nothing left to scroll: no redraws either */
+    key(GUI_HOME);
+    button(w->x + 60, ty + 3 * 16 + 3, true);
+    button(w->x + 60, ty - 20, true);
+    for(redraws = 0, i = 0; i < 40; i++) { g.dirty = false; tick_ms(50); if(g.dirty) redraws++; }
+    first_rows(&first, &rows, &total);
+    CHECK(v->drag && first == 0 && redraws == 0);
+    button(w->x + 60, ty - 20, false);
+    CHECK(!v->drag);
+    /* a wrap exactly at a line's start: the selection keeps that whole line */
+    log_desktop();
+    lines(1, 500);                                      /* the copy starts inside line 23 */
+    gui_open(&g, GUI_LOG);
+    key(GUI_HOME);
+    for(d = 0; d < v->len && v->text[d] != '\n'; d++) ;
+    d++;                                                /* the partial first line's bytes: 22 */
+    button(w->x + 60, ty + 3, true);                    /* rows 0 to 4: the partial line, lines 24 to 27 */
+    button(w->x + 60, ty + 4 * 16 + 3, true);
+    button(w->x + 60, ty + 4 * 16 + 3, false);
+    memset(b, '-', d - 1);
+    b[d - 1] = '\n';
+    b[d] = 0;
+    say(b);                                             /* exactly that many more: the copy starts at line 24's start */
+    tick_ms(500);
+    CHECK(d == 22 && !memcmp(v->text, "line 0024", 9));
+    key(3);
+    CHECK(!memcmp(g.clip, "line 0024", 9) && g.clip_len == 4 * 34);
+    lines(501, 501);                                    /* 34 more: line 24 goes, 25 to 27 stay */
+    tick_ms(500);
+    key(3);
+    CHECK(v->any && !memcmp(g.clip, "line 0025", 9) && g.clip_len == 3 * 34);
+    /* the status bar's note once `written` has passed 2^32 */
+    log_desktop();
+    written_offset = 0xFFFFFFFFu - 20000;
+    lines(1, 700);                                      /* written is about 4000 past 2^32, the copy full */
+    gui_open(&g, GUI_LOG);
+    draw();
+    for(lines_n = 0, i = 0; i < (int)v->len; i++) if(v->text[i] == '\n') lines_n++;
+    snprintf(b, sizeof(b), "%d lines, the newest 16 KB", lines_n);
+    CHECK(v->written < v->len && shows(w->x + 10, w->y + w->h - STATUS_H - 1 + 3, b, INK, 1));
+}
+
 /**** every window, inside the screen ****/
 
 /* each window opens, ticks, draws inside the screen (also maximized and hanging off the edge) and closes; the Clock's
@@ -1537,6 +1667,8 @@ int main(void) {
     clock_review();
     charmap_review();
     small_screen();
+    klog_lengths();
+    log_round3();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);
