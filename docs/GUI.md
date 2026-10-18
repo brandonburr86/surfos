@@ -648,7 +648,9 @@ each application are in `tools/gui_apps_<track>.py`. Among them:
 * the Log follows a USB mouse plugged in and pulled out;
 * the timer rings;
 * the Image Viewer shows the stick's pictures;
-* Sketch saves one that the host reads back.
+* Sketch saves one that the host reads back;
+* Files opens a picture in the Image Viewer and a file that is not text in Hex
+  (`tools/gui_apps_suite.py`, after the applications' own checks).
 
 Each part leaves the desktop as it found it, and the host runs `fsck` on the stick
 afterwards.

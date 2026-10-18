@@ -11,6 +11,10 @@ A FAT32 data stick (usb1, label APPSTICK, not mounted until a check mounts it) i
 its helpers: its files are the tracks' own, each track module's optional STICK ({'path': bytes}, paths unique
 across the tracks). After the guest has stopped, each module's optional readback(d, stick, helpers) reads it on
 the host (helpers['read_fat32'](stick, 'path')), and, when every check passed, independent FAT checkers look it over.
+
+10/17/26 (the integration): gui_apps_suite.py's checks come last: Files opening a picture in the Image Viewer and a
+binary file in Hex, with track MEDIA's files. For development, GUIAPPS_ONLY=gui_apps_suite (module names, by commas)
+runs only those modules' checks and readbacks; the stick still holds every module's files.
 """
 import importlib
 import os
@@ -26,7 +30,7 @@ APPS = ['Terminal', 'System Monitor', 'Disks', 'Log', 'Clock', 'Image Viewer', '
 SIZES = {'Terminal': (640, 400), 'System Monitor': (540, 360), 'Disks': (580, 320), 'Log': (600, 380),
          'Clock': (380, 300), 'Image Viewer': (560, 400), 'Hex': (620, 380), 'Character Map': (460, 360)}
 MENU_H, TITLE_H = 28, 28
-TRACKS = ('gui_apps_term', 'gui_apps_sys', 'gui_apps_tools', 'gui_apps_media')
+TRACKS = ('gui_apps_term', 'gui_apps_sys', 'gui_apps_tools', 'gui_apps_media', 'gui_apps_suite')
 STICK_LABEL, STICK_SERIAL = 'APPSTICK', 0x6A11A995      # a serial of its own: GRUB's bootvol= names the boot stick's
 
 
@@ -117,6 +121,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
     results = []
     font = base._font()
     modules = [importlib.import_module(name) for name in TRACKS]
+    only = [name for name in os.environ.get('GUIAPPS_ONLY', '').split(',') if name]
     files = {}
     for m in modules:
         for path, data in getattr(m, 'STICK', {}).items():
@@ -143,6 +148,8 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
                   d.vm.wait_screen(lambda s: (s.w, s.h) == (1920, 1080) and d.pixel(s, 0, 0) == PAPER and
                                    d.text(s, 24 + 152 + 36, 120 + 14, 'Terminal', FOAM), 15, interval=0.1) is not None)
         for m in modules:
+            if only and m.__name__ not in only:
+                continue
             try:
                 m.checks(d)
             except AssertionError:                  # recorded; the next track's checks still run (each track's
@@ -161,7 +168,7 @@ def run(Vm, PROMPT, args, image, firmware, outdir, helpers=None):
         vm.close()
     if helpers:
         for m in modules:
-            if hasattr(m, 'readback'):
+            if hasattr(m, 'readback') and not (only and m.__name__ not in only):
                 try:
                     m.readback(d, stick, helpers)
                 except AssertionError:
