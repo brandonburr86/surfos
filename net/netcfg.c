@@ -566,35 +566,44 @@ struct reading {
     char name[4 * NETCFG_SSID_MAX + 4]; /* its name quoted, for the notes */
 };
 
-static bool hex_key(const char *v) {
-    u_int i;
-    for(i = 0; i < 2 * NETCFG_KEY_LEN; i++) if(hexval(v[i]) < 0) return false;
-    return v[i] == 0;
+/* a value of hex digits only (a key, or one mistyped: never a password) */
+static bool all_hex(const char *v) {
+    if(!*v) return false;
+    for(; *v; v++) if(hexval(*v) < 0) return false;
+    return true;
 }
 
-/* may line (n bytes), commented out or not, hold a password: its key (the first word, after blanks and #s) one that
-   names one (password, passphrase, ...), or psk with a value that is no key (wpa_supplicant's psk = "passphrase")?
-   Such a line is never written back by SurfOS */
+/* may line (n bytes) hold a password: a setting, commented out or not ("# password = ..."), whose key (the first word,
+   after blanks and #s) names one (password, passphrase, ...), or a psk that is a passphrase (wpa_supplicant's psk =
+   "..." in quotes, or other characters than hex digits: psk = 1234 is a key mistyped)? A line that is no setting counts
+   too unless it is a comment (prose: "# the key to the office"). SurfOS never writes such a line back */
 static bool secret_line(const char *line, u_int n) {
     static const char *const words[] = { "password", "passphrase", "passwd", "pass", "pwd", "pw", "secret", "key",
                                          "wpa_passphrase", "psk", NULL };
     char word[24], key[40], value[VALUE_MAX];
-    const char *w;
-    u_int i = 0, k = 0;
-    bool secret = false;
-    int r, j;
-    while(i < n && (blank(line[i]) || line[i] == '#')) i++;
+    const char *w, *v;
+    u_int i = 0, k = 0, j;
+    bool commented = false, setting, secret;
+    int r, m;
+    while(i < n && (blank(line[i]) || line[i] == '#')) {
+        if(line[i] == '#') commented = true;
+        i++;
+    }
     while(i + k < n && k + 1 < sizeof(word) && (line[i + k] == '_' || (line[i + k] >= 'a' && line[i + k] <= 'z') ||
           (line[i + k] >= 'A' && line[i + k] <= 'Z'))) {
         word[k] = line[i + k];
         k++;
     }
     word[k] = 0;
-    for(j = 0; words[j] && !same_word(word, words[j]); j++);
-    if(!words[j]) return false;
+    for(m = 0; words[m] && !same_word(word, words[m]); m++);
+    if(!words[m]) return false;
+    for(j = i + k; j < n && blank(line[j]); j++);
+    setting = j < n && line[j] == '=';
+    if(!setting) return !commented;                     /* "password hunter22" counts; prose in a comment does not */
     if(!same_word(word, "psk")) return true;
-    r = split(line + i, n - i, key, sizeof(key), value, sizeof(value), &w);     /* a psk: a key, or something else? */
-    secret = r <= 0 || !same_word(key, "psk") || !hex_key(bare(value));
+    r = split(line + i, n - i, key, sizeof(key), value, sizeof(value), &w);
+    v = value;
+    secret = r <= 0 || v[0] == '"' || curly(v, (u_int)strlen(v), true) || !all_hex(v);
     wipe(value, sizeof(value));
     return secret;
 }

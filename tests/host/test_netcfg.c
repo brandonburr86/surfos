@@ -522,6 +522,12 @@ static void test_networks(void) {
     check(n == 0 && nkept == 1 && kept[0].password && kept[0].pw_line == 3, "so is passphrase = ...");
     n = read_nets("network = \"Home\"\nsecurity = wep\npsk = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n");
     check(n == 0 && nkept == 1 && !kept[0].password, "a psk that is a key is no password");
+    n = read_nets("network = \"Broken\"\nsecurity = wpa2\npsk = 1234\n");
+    check(n == 0 && nkept == 1 && !kept[0].password, "nor one mistyped (hex digits only)");
+    n = read_nets("network = \"Home\"\npsk = my real password\n");
+    check(n == 0 && nkept == 1 && kept[0].password && kept[0].pw_line == 2, "but other characters, unquoted, are one");
+    n = read_nets("network = \"X\"\nsecurity = wep\n# the key to the office\n");
+    check(n == 0 && nkept == 1 && !kept[0].password, "a comment that only mentions a key is none");
     n = read_nets("network = \"A\"\nsecurity = wep\nnetwork = \"B\"\nsecurity = wep\npassword = \"12345678\"\n");
     check(n == 0 && nkept == 1 && kept[0].line == 1 && kept[0].password && kept[0].pw_line == 5,
           "parts that follow each other: one, the password's own line named");
