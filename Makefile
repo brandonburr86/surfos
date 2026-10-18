@@ -512,6 +512,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_fatconc 21 3 3 1 100 1 1 1 1 16384 0
 	$(BUILD)/host/test_fatconc 33 3 6 1 0 1 0 0 1 8192 0
 	$(BUILD)/host/test_fatconc umount
+	$(BUILD)/host/test_fatconc mutex
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp
 	$(BUILD)/host/test_cp437

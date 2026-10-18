@@ -102,28 +102,77 @@ surf_task **fatconc_task(void) {
     return &thread_cur;
 }
 
-void mutex_init(mutex_t *m, const char *name) { m->locked = 0; m->owner = NULL; m->name = name; }
+/* 10/18/26 (round fs-fix-11, audit B70): the kernel's mutex (kernel/sync.c, B63), where this was wake-and-compete (the
+   one that let go could take it again before a woken waiter ran): a free mutex is taken at once; a busy one puts its
+   caller at the end of its line (m->waiters, linked through the tasks as the kernel's wait queues are), and
+   mutex_unlock() makes the first in line the owner, counted in its surf_task.mutexes, before it runs again. The owner
+   is the calling thread's own task (*fatconc_task(), curTask to fs/), so bcache_holds() answers as in the kernel (it
+   never did here: the owner was the thread's name). Misuse stops the test as the kernel's panic stops the system. A
+   thread's count must be 0 between its operations (count_left, in main()'s verdict). Under the table lock; a waiter
+   sleeps on the table's condition until it is the owner. */
+static volatile u32 count_left;
+static void mutex_misuse(mutex_t *m, const char *what) {
+    printf("PANIC: mutex '%s': %s by '%s'\n", m->name, what, host_name());
+    exit(3);
+}
+void mutex_init(mutex_t *m, const char *name) {
+    m->locked = 0;
+    m->owner = NULL;
+    m->name = name;
+    m->waiters.first = m->waiters.last = NULL;
+    m->waiters.count = 0;
+}
 void mutex_lock(mutex_t *m) {
+    surf_task *me = *fatconc_task();
     host_tbl_lock();
-    while(m->locked) host_tbl_wait();
-    m->locked = 1;
-    m->owner = (struct surf_task *)host_name();
+    if(m->locked && m->owner == me) mutex_misuse(m, "recursive lock");
+    if(!m->locked) {
+        m->locked = 1;
+        m->owner = me;
+        me->mutexes++;
+    } else {                                        /* in line (task_list_append()) until mutex_unlock() hands it over */
+        me->next = NULL;
+        me->prev = m->waiters.last;
+        if(m->waiters.last) m->waiters.last->next = me;
+        else m->waiters.first = me;
+        m->waiters.last = me;
+        m->waiters.count++;
+        while(m->owner != me) host_tbl_wait();
+    }
     host_tbl_unlock();
 }
 bool mutex_trylock(mutex_t *m) {
+    surf_task *me = *fatconc_task();
     bool ok;
     host_tbl_lock();
     ok = !m->locked;
-    if(ok) { m->locked = 1; m->owner = (struct surf_task *)host_name(); }
+    if(ok) { m->locked = 1; m->owner = me; me->mutexes++; }
     host_tbl_unlock();
     return ok;
 }
 void mutex_unlock(mutex_t *m) {
+    surf_task *me = *fatconc_task(), *next;
     host_tbl_lock();
-    m->locked = 0;
-    m->owner = NULL;
-    host_tbl_broadcast();
+    if(!m->locked || m->owner != me) mutex_misuse(m, "unlock by a task that does not hold it");
+    if(me->mutexes) me->mutexes--;
+    next = m->waiters.first;
+    if(next) {                                      /* the first in line holds it from now (wake_up(): out of the line) */
+        m->waiters.first = next->next;
+        if(m->waiters.first) m->waiters.first->prev = NULL;
+        else m->waiters.last = NULL;
+        m->waiters.count--;
+        next->next = next->prev = NULL;
+        m->owner = next;
+        next->mutexes++;
+        host_tbl_broadcast();
+    } else {
+        m->locked = 0;
+        m->owner = NULL;
+    }
     host_tbl_unlock();
+}
+static void count_check(void) {                     /* between a thread's operations it holds no mutex */
+    if((*fatconc_task())->mutexes) count_left++;
 }
 void wait_prepare(wait_queue_t *q) { (void)q; host_wait_prepare(); }
 void wait_prepare_intr(wait_queue_t *q) { (void)q; host_wait_prepare(); }   /* 10/17/26 (round fs-fix-6, B39) */
@@ -759,6 +808,7 @@ static void worker_main(void *p) {
     while(running) {
         if(w->id >= nworkers - streamers) stream_op(w);
         else wop(w);
+        count_check();
         w->ops++;
         host_progress++;
     }
@@ -775,6 +825,7 @@ static void reader_main(void *p) {
             struct buf *b = (rng & 0x100) ? breada(&y->bd, base + i, 8) : bread(&y->bd, base + i);
             if(b) brelse(b);
         }
+        count_check();
         reads_done++;
         host_progress++;
     }
@@ -786,6 +837,7 @@ static void syncer_main(void *p) {
         host_sleep_us(3000);
         if(no_syncer) continue;
         if(bsync(NULL) != 0) syncs_failed++;
+        count_check();
         syncs_done++;
         host_progress++;
     }
@@ -826,7 +878,7 @@ static void dump(void) {
 #define UM_FINISH_LEAVE(t) ((void)(t))
 #endif
 static volatile int um_sync_r;
-static void um_syncer(void *p) { (void)p; um_sync_r = bsync(NULL); }
+static void um_syncer(void *p) { (void)p; um_sync_r = bsync(NULL); count_check(); }
 static struct superblock *um_mount(struct ram *r) {
     struct superblock *s = (struct superblock *)calloc(1, sizeof(*s));
     s->type = fat;
@@ -913,7 +965,51 @@ static int umount_main(void) {
     host_watchdog(30, NULL);
     for(m = 0; m < 4; m++) bad += umount_case(m);
     host_watchdog_stop();
+    count_check();                                  /* 10/18/26 (B70): the counts, this thread's and the syncers' */
+    if(count_left) { printf("CONC umount: mutex counts left after a step: %u\n", count_left); bad++; }
     printf("CONC umount: %s\n", bad ? "FAIL" : "ok");
+    return bad ? 1 : 0;
+}
+
+/**** 10/18/26 (round fs-fix-11, audit B70): the shim's mutex against the kernel's rules (kernel/sync.c since B63): three
+      threads queue for a mutex this one holds; let go and taken again at once, it comes back to this one only after
+      each of them has had it, in the order they came; each counts it while it holds it and not after; a trylock
+      fails while it is held. (The shim before was wake-and-compete: this thread took it straight back.) usage: conc
+      mutex ****/
+static mutex_t mx;
+static volatile int mx_order[3], mx_n, mx_bad;
+static void mx_waiter(void *p) {
+    surf_task *me = *fatconc_task();
+    mutex_lock(&mx);
+    mx_order[mx_n++] = (int)(long)p;
+    if(me->mutexes != 1) mx_bad++;
+    host_sleep_us(2000);
+    mutex_unlock(&mx);
+    if(me->mutexes != 0) mx_bad++;
+}
+static int mutex_main(void) {
+    static const char *names[3] = { "q1", "q2", "q3" };
+    surf_task *me = *fatconc_task();
+    void *th[3];
+    int i, waited, back_after, bad;
+    host_init();
+    mutex_init(&mx, "conc-mutex");
+    mutex_lock(&mx);
+    for(i = 0; i < 3; i++) {                        /* each in line before the next comes */
+        th[i] = host_thread(mx_waiter, (void *)(long)(i + 1), names[i]);
+        for(waited = 0; (int)mx.waiters.count < i + 1 && waited < 1000; waited++) host_sleep_us(1000);
+        host_sleep_us(20000);
+    }
+    bad = me->mutexes != 1 || mutex_trylock(&mx);   /* held: one counted, a trylock refused */
+    mutex_unlock(&mx);
+    mutex_lock(&mx);                                /* at once: behind the three */
+    back_after = mx_n;
+    if(me->mutexes != 1) bad++;
+    mutex_unlock(&mx);
+    for(i = 0; i < 3; i++) host_join(th[i]);
+    bad += mx_bad + (me->mutexes != 0) + (back_after != 3) + (mx_order[0] != 1 || mx_order[1] != 2 || mx_order[2] != 3);
+    printf("CONC mutex: taken back after %d of the 3 waiters; their order %d %d %d; counts wrong %d: %s\n", back_after,
+           mx_order[0], mx_order[1], mx_order[2], mx_bad, bad ? "FAIL" : "ok");
     return bad ? 1 : 0;
 }
 
@@ -924,6 +1020,7 @@ int main(int argc, char **argv) {
     void *th[16];
     char msg[256];
     if(argc > 1 && !strcmp(argv[1], "umount")) return umount_main();   /* 10/17/26 (round fs-fix-7, B46) */
+    if(argc > 1 && !strcmp(argv[1], "mutex")) return mutex_main();     /* 10/18/26 (round fs-fix-11, B70) */
     nworkers = argc > 3 ? atoi(argv[3]) : 3;
     chaos_on = argc > 4 ? atoi(argv[4]) : 1;
     io_us = argc > 5 ? (u32)atoi(argv[5]) : 30;
@@ -1003,12 +1100,13 @@ int main(int argc, char **argv) {
     for(i = 0; i < nworkers; i++) printf(" %u", workers[i].model_bad);
     printf("; close checks");
     for(i = 0; i < nworkers; i++) printf(" %u/%u stale", workers[i].close_stale, workers[i].close_checks);
-    printf("; end compare bad %d\n", bad);
+    printf("; end compare bad %d; mutex counts left between operations %u\n", bad, count_left);
     {   /* 10/16/26: what the review read off these lines, as the exit code */
         u32 b5 = 0, model = 0, stale = 0;
         for(i = 0; i < nworkers; i++) { b5 += workers[i].b5_bad; model += workers[i].model_bad; stale += workers[i].close_stale; }
         bad += (s1 != 0) + (s2 != 0) + (bdirty_count(&x->bd) != 0) + (x->violations != 0) + (zero_writes != 0) +
-               (bcache_audit(&x->bd) != 0) + (bcache_audit(&y->bd) != 0) + (b5 != 0) + (model != 0) + (stale != 0);
+               (bcache_audit(&x->bd) != 0) + (bcache_audit(&y->bd) != 0) + (b5 != 0) + (model != 0) + (stale != 0) +
+               (count_left != 0);
     }
     printf("CONC: %s\n", bad ? "FAIL" : "ok");
     return bad ? 1 : 0;
