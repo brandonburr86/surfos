@@ -36,7 +36,8 @@ static const u32 palette[16] = {
     NAVY, 0x3C6EB4, 0x4C9F5C, 0x2B9E9C, 0xC2534B, 0x9B5FA7, 0xC08A3E, SHELL,
     MUTED, SKY, 0x7ED48C, FOAM, CORAL, 0xD891D8, 0xF0D27A, 0xFFFDF5,
 };
-#define READ_MAX 16384                  /* bytes read in one frame at most: a flood never holds the desktop up */
+#define READ_MAX 8192                   /* bytes drawn in one frame at most (a pty's whole buffer), and */
+#define WORK_MAX 32768                  /* 10/18/26: cells written: a flood of erases never holds the desktop up */
 #define EDGE_MS 50                      /* a drag past the edge scrolls a line this often */
 #define BUTTON_W 104                    /* New session, in the status bar */
 
@@ -44,16 +45,17 @@ static const char *const help[] = {
     "#Terminal",
     "surfsh, the SurfOS shell, on a pseudo-terminal: every",
     "command works as on F1-F4. Every key is the shell's,",
-    "Ctrl+C, Ctrl+Q, Ctrl+W, Tab and Esc too, but Ctrl+G:",
-    "the menus, whose Edit menu copies (the selection, or",
-    "the screen), pastes and selects everything. Drag to",
-    "select; double-click selects a word. The wheel and the",
-    "scroll bar go back about 1,000 lines. Output leaves a",
-    "view that was scrolled back where it is; a key returns",
-    "to the end. The window's size is the terminal's. After",
-    "exit, Enter or New session starts another, and Esc or",
-    "Ctrl+W closes the window. Closing it while a session",
-    "runs ends the session, asking first.",
+    "Ctrl+C, Ctrl+Q, Ctrl+W, Tab and Esc too, but Ctrl+G",
+    "and Ctrl+Space: the menus, whose Edit menu copies (the",
+    "selection, or the screen), pastes and selects it all.",
+    "Drag to select; double-click selects a word. The wheel",
+    "and the scroll bar go back about 1,000 lines. Output",
+    "leaves a view that was scrolled back where it is; a",
+    "key returns to the end. The window's size is the",
+    "terminal's. When the shell exits, its session ends",
+    "with what it left running; Enter or New session starts",
+    "another, and Esc or Ctrl+W closes the window. Closing",
+    "it while a session runs ends the session, asking first.",
 };
 
 /**** layout ****/
@@ -169,7 +171,7 @@ static void start(struct gui_state *g) {
     layout(g, &l);
     if(l.cols != t->vt.cols || l.rows != t->vt.rows) vt_resize(&t->vt, l.cols, l.rows);
     vt_fresh(&t->vt);
-    t->pend_at = t->pend_len = 0;
+    t->pend_at = t->pend_len = t->carry_at = t->carry_len = 0;
     h = g->sys->term_open(g->sys->ctx, t->vt.cols, t->vt.rows);
     if(h < 0) {
         t->error = h;
@@ -191,13 +193,15 @@ static void ended(struct gui_state *g, int err) {
     g->sys->term_close(g->sys->ctx, t->handle);
     t->handle = -1;
     t->ended = true;
-    t->pend_at = t->pend_len = 0;
+    t->pend_at = t->pend_len = t->carry_at = t->carry_len = 0;
     note(g, err == -EPIPE ? "[The session has ended. Enter starts a new one.]" : "[The session was lost. Enter starts a new one.]");
     say(g, "The session has ended. Enter starts a new one.");
 }
 
-/* bytes for the session behind those that wait; what does not fit is dropped: how many were */
-static u32 queue(struct gui_term *t, const char *s, u32 n) {
+/* bytes for the session behind those that wait; what does not fit is dropped: how many were. A key goes whole
+   or not at all (10/18/26: never half an escape sequence); a paste as far as there is room, but not half a
+   UTF-8 character. */
+static u32 queue(struct gui_term *t, const char *s, u32 n, bool whole) {
     u32 room;
     if(t->pend_at && t->pend_len + n > GUI_TERM_PEND) {    /* what was taken makes room */
         memmove(t->pend, t->pend + t->pend_at, t->pend_len - t->pend_at);
@@ -206,6 +210,8 @@ static u32 queue(struct gui_term *t, const char *s, u32 n) {
     }
     room = GUI_TERM_PEND - t->pend_len;
     if(n > room) {
+        if(whole) return n;
+        while(room && ((u8)s[room] & 0xC0) == 0x80) room--;
         memcpy(t->pend + t->pend_len, s, room);
         t->pend_len += room;
         return n - room;
@@ -262,6 +268,10 @@ static void copy(struct gui_state *g) {
         c1 = vt->cols;
     }
     n = vt_text(vt, a, c0, b, c1, g->clip, GUI_CLIP_MAX, &cut);
+    if(!n) {                                            /* 10/18/26: only blanks: the clipboard keeps what it had */
+        say(g, sel ? "Nothing copied: the selection is blank." : "Nothing copied: the screen is blank.");
+        return;
+    }
     g->clip_len = n;
     gui_bytes(n, size, sizeof(size));
     snprintf(t->status, sizeof(t->status), "%s %s%s", sel ? "Copied" : "Copied the screen,", size,
@@ -279,9 +289,9 @@ static void paste(struct gui_state *g) {
         char c = g->clip[i];
         if(c == '\n' && i && g->clip[i - 1] == '\r') continue;     /* CR LF is one Enter */
         chunk[n++] = c == '\n' ? '\r' : c;
-        if(n == sizeof(chunk)) { lost += queue(t, chunk, n); n = 0; }
+        if(n == sizeof(chunk)) { lost += queue(t, chunk, n, false); n = 0; }
     }
-    lost += queue(t, chunk, n);
+    lost += queue(t, chunk, n, false);
     flush(g);
     if(!t->follow) scroll_to(g, vt_screen(&t->vt));
     if(lost) {
@@ -341,7 +351,7 @@ static void closed(struct gui_state *g) {
     t->handle = -1;
     t->ended = false;
     t->selecting = t->thumb = false;
-    t->pend_at = t->pend_len = 0;
+    t->pend_at = t->pend_len = t->carry_at = t->carry_len = 0;
 }
 
 static bool key(struct gui_state *g, int key) {
@@ -359,7 +369,7 @@ static bool key(struct gui_state *g, int key) {
     if(!n) return true;
     if(key == 3) t->pend_at = t->pend_len = 0;          /* Ctrl+C: what waited is dropped, and it goes first */
     t->status[0] = 0;
-    if(queue(t, b, n)) say(g, "A key was dropped: the session takes nothing now.");
+    if(queue(t, b, n, true)) say(g, "A key was dropped: the session takes nothing now.");
     flush(g);
     if(!t->follow) scroll_to(g, vt_screen(&t->vt));     /* a key brings the view back to the screen */
     g->dirty = true;
@@ -382,7 +392,7 @@ static void edge_scroll(struct gui_state *g, const struct term_layout *l) {
 static void press(struct gui_state *g, int x, int y) {
     struct gui_term *t = &g->term;
     struct term_layout l;
-    int line, col, top, size, from, to, first;
+    int line, col, top, size, l0, c0, l1, c1, first;
     layout(g, &l);
     t->selecting = t->thumb = false;
     g->dirty = true;
@@ -400,11 +410,12 @@ static void press(struct gui_state *g, int x, int y) {
     }
     point(g, &l, x, y, &line, &col, false);
     if(t->vt.dropped + (u32)line == t->click_line && col == t->click_col && g->now - t->click_ms <= DOUBLE_MS) {
-        vt_word(&t->vt, line, col, &from, &to);         /* a double-click: the word */
-        t->selected = from < to;
-        t->sel_line = t->end_line = t->vt.dropped + (u32)line;
-        t->sel_col = from;
-        t->end_col = to;
+        vt_word(&t->vt, line, col, &l0, &c0, &l1, &c1); /* a double-click: the word, across a wrap too */
+        t->selected = l0 != l1 || c0 != c1;
+        t->sel_line = t->vt.dropped + (u32)l0;
+        t->sel_col = c0;
+        t->end_line = t->vt.dropped + (u32)l1;
+        t->end_col = c1;
         t->click_ms = g->now - DOUBLE_MS - 1;
         return;
     }
@@ -450,13 +461,16 @@ static void wheel(struct gui_state *g, int rows) {
     scroll_to(g, view_top(&g->term) + rows);
 }
 
-/* every frame: what waits goes, what the session printed is read and drawn, a new size is passed on */
+/* Every frame: what waits goes, what the session printed is read and drawn, a new size is passed on. 10/18/26:
+   what is read waits in carry and is drawn as far as a frame's budget goes, READ_MAX bytes and WORK_MAX cells
+   written (and the last byte's own: a screenful at most), so that a flood of erases costs a frame no more than
+   a screenful of text does; the rest waits for the next frame. */
 static void tick(struct gui_state *g) {
     struct gui_term *t = &g->term;
     struct term_layout l;
-    char buf[1024];
-    u32 before, got = 0;
+    u32 before, start, got = 0, k;
     int r = 0;
+    bool spent = false;
     if(!g->sys) return;
     layout(g, &l);
     if(g->app_drag != GUI_TERMINAL) t->selecting = t->thumb = false;   /* the drag ended elsewhere (a console switch) */
@@ -464,18 +478,24 @@ static void tick(struct gui_state *g) {
     if(t->handle >= 0) {
         flush(g);
         before = t->vt.dropped + (u32)t->vt.count;
-        while(got < READ_MAX) {
-            r = g->sys->term_read(g->sys->ctx, t->handle, buf, sizeof(buf));
-            if(r <= 0) break;
-            vt_feed(&t->vt, buf, (u32)r);
-            got += (u32)r;
+        start = t->vt.written;
+        while(!(spent = got >= READ_MAX || t->vt.written - start >= WORK_MAX)) {
+            if(t->carry_at == t->carry_len) {           /* all of it drawn: read on */
+                r = g->sys->term_read(g->sys->ctx, t->handle, t->carry, sizeof(t->carry));
+                if(r <= 0) break;
+                t->carry_at = 0;
+                t->carry_len = (u32)r;
+            }
+            k = vt_take(&t->vt, t->carry + t->carry_at, t->carry_len - t->carry_at, WORK_MAX - (t->vt.written - start));
+            t->carry_at += k;
+            got += k;
         }
         if(got) {
             if(!t->follow) t->news += t->vt.dropped + (u32)t->vt.count - before;
             g->dirty = true;
         }
         if(r < 0) { ended(g, r); return; }
-        if(r > 0) return;                               /* more next frame: the size waits until it is read */
+        if(spent || t->carry_at < t->carry_len) return; /* more next frame: the size waits until it is drawn */
     }
     if((l.cols != t->vt.cols || l.rows != t->vt.rows) && g->resize != GUI_TERMINAL) {
         vt_resize(&t->vt, l.cols, l.rows);

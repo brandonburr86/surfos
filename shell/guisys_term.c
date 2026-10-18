@@ -25,6 +25,16 @@ or at the desktop's end (gui_finish()) alike, as telnetd's sessions end when tel
 
 The kernel log gets a line when a session starts and when it ends; nothing typed or printed in one
 is logged anywhere.
+
+10/18/26 (the review): a session ends when its shell does. Once the shell has been collected the
+read gives what is left, then -EPIPE, though a program the shell left in the background still holds
+the pty: the Terminal says the session has ended and closes it, which hangs the pty up and ends that
+program too, as a terminal's window does when its shell exits. And a desktop whose task dies without
+gui_finish() (killed at once: a fault, or a kill that waited too long) leaves nothing behind for good.
+The master is also a descriptor of that task (fd_install()), so the task's end closes it when the
+task is collected (fd_close_all()): the hangup, and the pty is free again. A session's place in the
+table is taken back by the next open once its desktop's task is gone; a master that could not be a
+descriptor (the task's table was full) is closed then, the hangup. Each place is thus freed once.
 */
 #include <stdio.h>
 #include <surfos/types.h>
@@ -41,6 +51,7 @@ is logged anywhere.
 struct session {
     bool used;                          /* claimed (a session, or one being started) */
     struct file *master;                /* its pty's master */
+    int fd;                             /* 10/18/26: the master's descriptor in the owner's table; -1: held here only */
     u_long owner;                       /* the desktop's task, whose child the shell is */
     int pid;                            /* the shell; 0 once collected or handed to init */
     int pty;
@@ -60,6 +71,31 @@ static void collect(struct session *s) {
     if(s->pid > 0 && task_wait_opts((u_long)s->pid, &status, WNOHANG) != 0) s->pid = 0;  /* its pid, or -1: none */
 }
 
+/* 10/18/26: the places of desktops whose task is gone (or dead, not collected yet) without closing their sessions.
+   A master that is a descriptor of that task is closed with the task's other files when it is collected; one held
+   here only is closed now: the hangup, which ends what runs on the pty (init has the shell: its parent is gone). */
+static void reclaim(void) {
+    struct session *s;
+    struct file *f;
+    surf_task *t;
+    u_long flags;
+    int i;
+    for(i = 0; i < SESSIONS; i++) {
+        s = &sessions[i];
+        f = NULL;
+        flags = irq_save();
+        if(s->used && s->master && (!(t = task_find(s->owner)) || t->state == TS_DEAD)) {
+            if(s->fd < 0) f = s->master;
+            s->master = NULL;
+            s->owner = 0;
+            s->pid = 0;
+            s->used = false;
+        }
+        irq_restore(flags);
+        if(f) pty_close(f);
+    }
+}
+
 int guisys_term_open(void *ctx, int cols, int rows) {
     char *argv[] = { "surfsh", "-l", NULL };
     char line[96];
@@ -69,12 +105,14 @@ int guisys_term_open(void *ctx, int cols, int rows) {
     int i, r;
     (void)ctx;
     if(!curTask) return -EINVAL;
+    reclaim();
     flags = irq_save();
     for(i = 0; i < SESSIONS && !s; i++) {
         if(sessions[i].used) continue;
         s = &sessions[i];
         s->used = true;
         s->master = NULL;
+        s->fd = -1;
         s->owner = curTask->pid;
         s->pid = 0;
     }
@@ -89,18 +127,24 @@ int guisys_term_open(void *ctx, int cols, int rows) {
     }
     s->pid = r;
     s->pty = pty_number(f);
+    s->fd = fd_install(f);                              /* 10/18/26: it goes when the task goes; the shell has */
+    if(s->fd < 0) s->fd = -1;                           /* only 0, 1 and 2 (process_spawn_files()), not this */
     s->master = f;
     snprintf(line, sizeof(line), "gui: Terminal: surfsh (pid %d) on pty%d\n", s->pid, s->pty);
     klog_write(line);
     return (int)(s - sessions);
 }
 
+/* What the session printed. 10/18/26: once the shell has ended, what is left and then -EPIPE, whatever else
+   still holds the pty (the Terminal closes the session then: the hangup ends it). */
 int guisys_term_read(void *ctx, int h, char *buf, u32 n) {
     struct session *s = own(h);
+    int r;
     (void)ctx;
     if(!s) return -EINVAL;
     collect(s);
-    return pty_read(s->master, buf, n);
+    r = pty_read(s->master, buf, n);
+    return r == 0 && !s->pid ? -EPIPE : r;
 }
 
 int guisys_term_write(void *ctx, int h, const char *buf, u32 n) {
@@ -126,7 +170,8 @@ void guisys_term_close(void *ctx, int h) {
     u_long flags;
     (void)ctx;
     if(!s) return;
-    pty_close(s->master);                               /* the hangup: what runs on the pty is killed */
+    if(s->fd < 0) pty_close(s->master);                 /* the hangup: what runs on the pty is killed */
+    else if(fd_get(s->fd) == s->master) fd_close(s->fd);   /* the same, the descriptor with it */
     s->master = NULL;
     collect(s);
     snprintf(line, sizeof(line), "gui: Terminal: the session on pty%d ended%s\n", s->pty,

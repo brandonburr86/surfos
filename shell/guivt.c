@@ -37,6 +37,12 @@ them again. A new size does not reflow: lines are cut or padded. A screen that l
 those below the cursor first, then its top ones go into the scrollback; one that gains rows takes
 lines back from the scrollback first, then adds blank ones; so the cursor's line stays on the
 screen and the text at its bottom.
+10/18/26 (the review): a line's wrap mark is the width it wrapped at, so copied text (vt_text()) joins
+it there whatever the width is later, and a double-click's word (vt_word()) follows it into the next
+line. A new size keeps a mark only while its line is whole: a screen row that loses cells beyond the
+new width loses its mark, and so does the last line kept when the rows below the cursor go. The cells
+written are counted (written: put() one, an erase or a new line each cell it blanks), and vt_take()
+feeds bytes only while a budget of them lasts: a few bytes of erases can write a screenful each.
 */
 #include "guivt.h"
 #include <string.h>
@@ -59,8 +65,8 @@ const struct gui_vt_cell *vt_line(const struct gui_vt *vt, int i) {
     return vt->cell[place(vt, i)];
 }
 
-bool vt_wrapped(const struct gui_vt *vt, int i) {
-    return vt->wrapped[place(vt, i)] != 0;
+int vt_wrapped(const struct gui_vt *vt, int i) {
+    return vt->wrapped[place(vt, i)];
 }
 
 /* the screen's row y */
@@ -68,8 +74,9 @@ static struct gui_vt_cell *row(struct gui_vt *vt, int y) {
     return vt->cell[place(vt, vt_screen(vt) + y)];
 }
 
-static void set_wrapped(struct gui_vt *vt, int y, bool on) {
-    vt->wrapped[place(vt, vt_screen(vt) + y)] = on ? 1 : 0;
+/* the screen's row y goes on in the next row from column width (0: it does not) */
+static void set_wrapped(struct gui_vt *vt, int y, int width) {
+    vt->wrapped[place(vt, vt_screen(vt) + y)] = (u8)width;
 }
 
 static void blank(struct gui_vt_cell *c, int from, int to, u8 attr) {
@@ -90,6 +97,7 @@ static void push_line(struct gui_vt *vt) {
     }
     blank(vt->cell[place(vt, i)], 0, GUI_VT_COLS, VT_PLAIN);
     vt->wrapped[place(vt, i)] = 0;
+    vt->written += GUI_VT_COLS;
 }
 
 void vt_reset(struct gui_vt *vt, int cols, int rows) {
@@ -136,12 +144,13 @@ static void newline(struct gui_vt *vt) {
 static void put(struct gui_vt *vt, u8 ch) {
     struct gui_vt_cell *c;
     if(vt->wrap) {
-        set_wrapped(vt, vt->y, true);
+        set_wrapped(vt, vt->y, vt->cols);
         newline(vt);
     }
     c = &row(vt, vt->y)[vt->x];
     c->ch = ch;
     c->attr = attr(vt);
+    vt->written++;
     if(vt->x + 1 < vt->cols) vt->x++;
     else vt->wrap = true;
 }
@@ -154,7 +163,8 @@ static void erase(struct gui_vt *vt, int from, int to) {
         x0 = from > y * vt->cols ? from - y * vt->cols : 0;
         x1 = to < (y + 1) * vt->cols ? to - y * vt->cols : vt->cols;
         blank(row(vt, y), x0, x1, a);
-        if(x1 == vt->cols) set_wrapped(vt, y, false);      /* its end is blank: it goes on no more */
+        vt->written += (u32)(x1 - x0);
+        if(x1 == vt->cols) set_wrapped(vt, y, 0);          /* its end is blank: it goes on no more */
     }
 }
 
@@ -312,6 +322,12 @@ void vt_feed(struct gui_vt *vt, const char *s, u32 n) {
     for(i = 0; i < n; i++) byte(vt, (u8)s[i]);
 }
 
+u32 vt_take(struct gui_vt *vt, const char *s, u32 n, u32 budget) {
+    u32 start = vt->written, i;
+    for(i = 0; i < n && vt->written - start < budget; i++) byte(vt, (u8)s[i]);
+    return i;
+}
+
 void vt_fresh(struct gui_vt *vt) {
     vt->esc = VT_NONE;
     memset(&vt->utf, 0, sizeof(vt->utf));
@@ -328,6 +344,7 @@ void vt_resize(struct gui_vt *vt, int cols, int rows) {
         int cut = vt->rows - rows, below = vt->rows - 1 - vt->y, drop = cut < below ? cut : below;
         vt->count -= drop;                              /* the rows below the cursor go first, */
         vt->y -= cut - drop;                            /* then the top ones into the scrollback */
+        if(drop) vt->wrapped[place(vt, vt->count - 1)] = 0;    /* 10/18/26: what it went on in is gone */
     } else if(rows > vt->rows) {
         int more = rows - vt->rows, back = vt->count - vt->rows, pull = more < back ? more : back;
         vt->y += pull;                                  /* lines come back from the scrollback first */
@@ -335,7 +352,10 @@ void vt_resize(struct gui_vt *vt, int cols, int rows) {
     }
     vt->rows = rows;
     if(cols < keep) keep = cols;
-    for(y = 0; y < rows; y++) blank(row(vt, y), keep, GUI_VT_COLS, VT_PLAIN);   /* nothing beyond the width shows */
+    for(y = 0; y < rows; y++) {                         /* nothing beyond the width shows */
+        blank(row(vt, y), keep, GUI_VT_COLS, VT_PLAIN);
+        if(vt->wrapped[place(vt, vt_screen(vt) + y)] > keep) set_wrapped(vt, y, 0);   /* 10/18/26: cut, not whole */
+    }
     vt->cols = cols;
     if(vt->x >= cols) {                                 /* as the stream console has it (console_stream_resize()) */
         vt->x = cols - 1;
@@ -348,9 +368,19 @@ void vt_resize(struct gui_vt *vt, int cols, int rows) {
 
 static bool blank_cell(const struct gui_vt_cell *c) { return c->ch == ' ' || c->ch == 0; }
 
+/* where line i's text ends: at the column it wrapped at, or after its last character, the cells beyond the
+   screen's width counted (a line kept from a wider screen has them) */
+static int line_end(const struct gui_vt *vt, int i) {
+    const struct gui_vt_cell *c = vt_line(vt, i);
+    int n = vt_wrapped(vt, i);
+    if(n) return n;
+    for(n = GUI_VT_COLS; n > 0 && blank_cell(&c[n - 1]); n--) ;
+    return n;
+}
+
 u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, u32 size, bool *cut) {
     char ch[CP437_UTF8_MAX];
-    u32 n = 0;
+    u32 n = 0, owed = 0;                                /* owed: line ends, written before the next character */
     int i, a, b, k, len;
     bool joined;
     *cut = false;
@@ -358,22 +388,26 @@ u32 vt_text(const struct gui_vt *vt, int l0, int c0, int l1, int c1, char *out, 
     if(l1 >= vt->count) { l1 = vt->count - 1; c1 = vt->cols; }
     for(i = l0; i <= l1; i++) {
         const struct gui_vt_cell *c = vt_line(vt, i);
-        a = i == l0 ? clamp(c0, 0, vt->cols) : 0;
-        b = i == l1 ? clamp(c1, 0, vt->cols) : vt->cols;
         joined = i < l1 && vt_wrapped(vt, i);           /* it goes on in the next line: no line end, blanks kept */
+        a = i == l0 ? clamp(c0, 0, GUI_VT_COLS) : 0;
+        b = i < l1 || c1 >= vt->cols ? line_end(vt, i) : clamp(c1, 0, GUI_VT_COLS);
         if(!joined) while(b > a && blank_cell(&c[b - 1])) b--;
         for(k = a; k < b; k++) {
+            for(; owed; owed--) {
+                if(n + 1 > size) { *cut = true; return n; }
+                out[n++] = '\n';
+            }
             len = cp437_utf8(c[k].ch, ch);
             if(n + (u32)len > size) { *cut = true; return n; }
             memcpy(out + n, ch, len);
             n += len;
         }
-        if(i < l1 && !joined) {
-            if(n + 1 > size) { *cut = true; return n; }
-            out[n++] = '\n';
-        }
+        if(i < l1 && !joined) owed++;
     }
-    while(n >= 2 && out[n - 1] == '\n' && out[n - 2] == '\n') n--;   /* blank lines at the end: one line end */
+    if(n && owed) {                                     /* blank lines at the end: one line end; nothing but */
+        if(n + 1 > size) *cut = true;                   /* blanks: nothing at all (10/18/26) */
+        else out[n++] = '\n';
+    }
     return n;
 }
 
@@ -381,12 +415,27 @@ static bool word_cell(u8 ch) {
     return ch != ' ' && ch != 0 && !strchr("\"'`()<>[]{},;|", ch);
 }
 
-void vt_word(const struct gui_vt *vt, int i, int col, int *from, int *to) {
-    const struct gui_vt_cell *c;
-    *from = *to = col;
-    if(i < 0 || i >= vt->count || col < 0 || col >= vt->cols) return;
-    c = vt_line(vt, i);
-    if(!word_cell(c[col].ch)) { *to = col + 1; return; }
-    while(*from > 0 && word_cell(c[*from - 1].ch)) (*from)--;
-    while(*to < vt->cols && word_cell(c[*to].ch)) (*to)++;
+void vt_word(const struct gui_vt *vt, int i, int col, int *l0, int *c0, int *l1, int *c1) {
+    int l, x, w;
+    *l0 = *l1 = i;
+    *c0 = *c1 = clamp(col, 0, GUI_VT_COLS);
+    if(i < 0 || i >= vt->count || col < 0 || col >= GUI_VT_COLS) return;
+    if(!word_cell(vt_line(vt, i)[col].ch)) { *c1 = col + 1; return; }
+    for(l = i, x = col;;) {                             /* to its start, back across the wraps before it */
+        while(x > 0 && word_cell(vt_line(vt, l)[x - 1].ch)) x--;
+        if(x > 0 || l == 0 || !(w = vt_wrapped(vt, l - 1)) || !word_cell(vt_line(vt, l - 1)[w - 1].ch)) break;
+        l--;
+        x = w - 1;
+    }
+    *l0 = l;
+    *c0 = x;
+    for(l = i, x = col + 1;;) {                         /* to its end, on across the wraps after it */
+        w = vt_wrapped(vt, l);
+        while(x < (w ? w : GUI_VT_COLS) && word_cell(vt_line(vt, l)[x].ch)) x++;
+        if(x < w || !w || l + 1 >= vt->count || !word_cell(vt_line(vt, l + 1)[0].ch)) break;
+        l++;
+        x = 0;
+    }
+    *l1 = l;
+    *c1 = x;
 }

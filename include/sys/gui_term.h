@@ -10,6 +10,9 @@ Terminal (track TERM of docs/superpowers/plans/2026-10-17-gui-suite.md).
 page 437 character and a VGA attribute), GUI_VT_LINES lines in a ring, the last rows of which
 are the screen and the rest its scrollback; and what the session has not taken of what was typed
 or pasted yet. 1,024 lines of 160 cells and the clipboard's worth of input: about 460 KB.
+10/18/26 (the review): a line's wrap mark is the width it wrapped at, so copied text joins it there
+whatever the width is now; the cells written are counted, for a frame's budget of work (guiterm.c);
+what the session printed and was read, but not drawn yet within that budget, waits in carry.
 */
 #ifndef _SYS_GUI_TERM_H
 #define _SYS_GUI_TERM_H
@@ -38,7 +41,9 @@ struct gui_vt {
     int nparam;
     u16 param[GUI_VT_PARAMS];
     struct utf8_dec utf;                /* a UTF-8 character half read (driver/cp437.c) */
-    u8 wrapped[GUI_VT_LINES];           /* by place in the ring: the line went on in the next (a wrap) */
+    u32 written;                        /* 10/18/26: cells written ever (blanks too): the work done */
+    u8 wrapped[GUI_VT_LINES];           /* by place in the ring: the width at which the line went on in the next
+                                           (a wrap), 0 when it did not */
     struct gui_vt_cell cell[GUI_VT_LINES][GUI_VT_COLS];
 };
 
@@ -58,6 +63,8 @@ struct gui_term {
     int click_col;
     u32 pend_at, pend_len;              /* pend[pend_at, pend_len): for the session, once it takes them */
     char pend[GUI_TERM_PEND];
+    u32 carry_at, carry_len;            /* 10/18/26: carry[carry_at, carry_len): read, not drawn yet */
+    char carry[1024];
     struct gui_vt vt;
 };
 #endif
