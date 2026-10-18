@@ -297,7 +297,10 @@ FAKE_FPGA = r"""#!/usr/bin/env python3
 # $FAKE_FPGA_FAIL=d1,d2 fails those designs; $FAKE_FPGA_HOOK (a shell command) runs first, $FAKE_FPGA_HOOK_ON=
 # design/board limits it to one build; $FAKE_FPGA_NOOP=1 builds nothing and exits 0 (as DRY_RUN=1 does);
 # $FAKE_OX_IMAGE records another image (as SURFCPU_OPENXC7_IMAGE would);
-# $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id.
+# $FAKE_FPGA_ENV appends the environment's names to that file; $FAKE_RUN_ID_TIME puts another time in run_id;
+# the placer seed recorded ([openxc7] placer_seed, as fpga-build.sh writes it) is $PLACER_SEEDS's first, else
+# $FAKE_FPGA_SEEDS's for design/board (board/design=seed,...), else 1; $FAKE_FPGA_SEEDLOG gets a line
+# "board/design PLACER_SEEDS" per build; $FAKE_FPGA_THIN=d1,d2 records those designs' slack margin THIN.
 import hashlib, os, re, subprocess, sys, time
 from pathlib import Path
 design, board = sys.argv[2], sys.argv[3]
@@ -336,7 +339,13 @@ when = os.environ.get("FAKE_RUN_ID_TIME") or time.strftime("%Y%m%dT%H%M%SZ", tim
 head = [f'run_id = "{design}-{board}-{commit[:8]}-{when}"', f'design = "{design}"', f'board = "{board}"',
         f'part = "{part}"', f'source_revision = "{commit}"', "source_dirty = false",
         f'build_time = {os.environ["SOURCE_DATE_EPOCH"]}', "generated_files_match = true",
-        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', f'kernel_sha256 = "{kernel_sha}"', "placer_seed = 1"]
+        f'rom_image = "{rom_image}"', f'rom_sha256 = "{rom_sha}"', f'kernel_sha256 = "{kernel_sha}"']
+if os.environ.get("FAKE_FPGA_SEEDLOG"):
+    with open(os.environ["FAKE_FPGA_SEEDLOG"], "a") as f:
+        f.write(f"{board}/{design} {os.environ.get('PLACER_SEEDS', '-')}\n")
+seeds = dict(x.split("=", 1) for x in os.environ.get("FAKE_FPGA_SEEDS", "").split(",") if "=" in x)
+seed = int((os.environ.get("PLACER_SEEDS") or seeds.get(f"{board}/{design}") or "1").split()[0])
+thin = design in os.environ.get("FAKE_FPGA_THIN", "").split(",")
 if fail:
     head += ['result = "fail"', 'reason = "timing not met (nextpnr: dram_clk 63.5 MHz of 100 MHz)"']
 else:
@@ -344,7 +353,9 @@ else:
     (base / f"{design}.bit").write_bytes(data)
     head += ['result = "pass"', f'bitstream_sha256 = "{hashlib.sha256(data).hexdigest()}"']
 head += ["", "[openxc7]", f'image = "{os.environ.get("FAKE_OX_IMAGE") or "surfcpu-openxc7:" + tag}"', 'check_synthesis = "PASS"', 'check_lvs = "PASS"',
-         'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5"]
+         'timing = ["clock sys_clk: PASS", ]', "wns_ns = 10.5", f"placer_seed = {seed}",
+         f'slack_margin = "{"THIN" if thin else "PASS"}"',
+         f'slack_margin_note = "{"dram_clk +0.087 ns, wants 0.500; every seed of 1 2 thin or failed: seed 1 kept, the most margin" if thin else "least margin sys_clk +30.000 ns, wants 1.600"}"']
 (base / "manifest.txt").write_text("# SurfCPU bitstream build manifest (docs/BUILD-HOST.md), written by "
                                    "tools/fpga-build.sh\n" + "\n".join(head) + "\n")
 sys.exit(1 if fail else 0)
@@ -792,6 +803,84 @@ class TestEnvironment(ScratchRelease):
         r = self.make("--prerelease", "--skip-ddr", SURFCPU_RELEASE_TEST=None)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("SURFCPU_RELEASE_TEST", r.stderr)
+
+
+class TestSeedAndSlack(ScratchRelease):
+    """the third GPU review, M5 and M4: the release records the placer seed each bitstream was placed with (its
+    build record's [openxc7] placer_seed, not a key fpga-build.sh never writes at the top), release-verify rebuilds
+    each with exactly that seed, and a bitstream every seed of whose design list was thin (THIN) is refused without
+    --prerelease"""
+
+    def test_seed_recorded_and_pinned_by_verify(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_SEEDS="arty_a7_35t/top=3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        man = release.parse_toml((rel / "MANIFEST").read_text())
+        self.assertEqual(man["manifest_format"], 2)
+        seeds = {(d["board"], d["name"]): d.get("placer_seed") for d in man["design"] if d["status"] == "built"}
+        self.assertEqual(seeds[("arty_a7_35t", "top")], 3)
+        self.assertEqual(seeds[("arty_a7_100t", "top")], 1)
+        self.assertEqual({d.get("slack_margin") for d in man["design"] if d["status"] == "built"}, {"PASS"})
+        self.assertEqual(self.tool("check", rel).returncode, 0)
+        log = self.dir / "seeds.txt"
+        r = self.tool("verify", rel, FAKE_FPGA_SEEDLOG=str(log))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(r.stdout.strip().splitlines()[-1].startswith("PASS:"), r.stdout)
+        got = dict(line.split() for line in log.read_text().splitlines())
+        self.assertEqual(got["arty_a7_35t/top"], "3")
+        self.assertEqual(got["arty_a7_100t/top"], "1")
+        self.assertEqual(got["arty_a7_35t/base"], "1")
+        # a MANIFEST that names another seed than its build record fails release-check
+        doctored = self.dir / "doctored" / rel.name
+        shutil.copytree(rel, doctored)
+        text = (doctored / "MANIFEST").read_text()
+        (doctored / "MANIFEST").write_text(text.replace("placer_seed = 3", "placer_seed = 1", 1))
+        r = self.tool("check", doctored)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("says placer seed 3, MANIFEST 1", r.stdout)
+        # two records placed with other seeds: compare_records names the seed
+        ra, rb = self.dir / "ra.toml", self.dir / "rb.toml"
+        ra.write_text("[openxc7]\nplacer_seed = 1\n")
+        rb.write_text("[openxc7]\nplacer_seed = 3\n")
+        self.assertIn("openxc7.placer_seed 1 against 3", release.compare_records(ra, rb))
+
+    def test_older_manifest_rebuilt_with_the_design_lists_seeds(self):
+        r = self.make("--prerelease", "--skip-ddr", FAKE_FPGA_SEEDS="arty_a7_35t/top=3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        text = (rel / "MANIFEST").read_text()
+        self.assertIn("manifest_format = 2\n", text)
+        # as releases before format 2 were written: no format, every seed 1, no slack margin
+        old = text.replace("manifest_format = 2\n", "").replace("placer_seed = 3", "placer_seed = 1")
+        (rel / "MANIFEST").write_text(old)
+        self.assertEqual(self.tool("check", rel).returncode, 0)
+        log = self.dir / "seeds.txt"
+        r = self.tool("verify", rel, FAKE_FPGA_SEEDLOG=str(log))
+        got = dict(line.split() for line in log.read_text().splitlines())
+        self.assertEqual(set(got.values()), {"-"}, got)
+        self.assertIn("predates format 2", r.stdout)
+
+    def test_thin_needs_a_prerelease(self):
+        r = self.make("--skip-ddr", "--prerelease", "--designs", "base,top", FAKE_FPGA_THIN="top")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rel = self.rel_dir(True)
+        man = release.parse_toml((rel / "MANIFEST").read_text())
+        self.assertEqual(len(man["thin"]), 2, man["thin"])
+        self.assertEqual({d["slack_margin"] for d in man["design"] if d["name"] == "top"}, {"THIN"})
+        self.assertEqual(self.tool("check", rel).returncode, 0)
+        lost = self.dir / "lost" / rel.name
+        shutil.copytree(rel, lost)
+        text = (lost / "MANIFEST").read_text()
+        (lost / "MANIFEST").write_text(text.replace("thin = [", "thin_was = [", 1))
+        r = self.tool("check", lost)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("2 built THIN and 0 listed as THIN", r.stdout)
+        # every design built, one THIN: without --prerelease nothing is written
+        r = self.make("--out", self.dir / "complete", FAKE_FPGA_THIN="top")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("THIN", r.stderr)
+        self.assertIn("PRERELEASE=1", r.stderr)
+        self.assertFalse(any((self.dir / "complete").glob("*/MANIFEST")))
 
 
 class TestCleanTree(ScratchRelease):

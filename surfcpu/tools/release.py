@@ -77,9 +77,13 @@ CONTRACT_DOCS = ("SURFBUS.md", "ISA.md", "BOOT-ABI.md", "MODULES.md", "MEMORY-MA
 GATES = ("check_srl", "check_synthesis", "check_bitstream", "check_round_trip", "check_block_ram", "check_lvs",
          "check_clocks", "check_netlist", "check_boot_rom")
 # the build record keys that are inputs of a bitstream (compared when a rebuilt one differs)
-BIT_INPUTS = ("source_revision", "source_dirty", "build_id", "build_time", "placer_seed", "sources_sha256",
+BIT_INPUTS = ("source_revision", "source_dirty", "build_id", "build_time", "sources_sha256",
               "defines", "generated_files_match", "constraints_sha256", "rom_sha256", "part")
-FLOW_INPUTS = ("image", "yosys", "nextpnr", "dsp_mode")
+# ... and in its [openxc7] table, the placer seed among them (tools/fpga-build.sh writes it there)
+FLOW_INPUTS = ("image", "yosys", "nextpnr", "dsp_mode", "placer_seed")
+# MANIFEST's format: 2 since the third GPU review (each design's placer_seed is the seed its bitstream was placed
+# with, from its build record's [openxc7] table; before, every design said 1; and slack_margin, THIN or PASS)
+MANIFEST_FORMAT = 2
 # the tests' stand-ins for devenv/run.sh, tools/fpga-build.sh and docker: honoured only with SURFCPU_RELEASE_TEST=1
 TEST_MODE = os.environ.get("SURFCPU_RELEASE_TEST") == "1"
 HOOKS = ("SURFCPU_RELEASE_RUN", "SURFCPU_RELEASE_FPGA", "SURFCPU_RELEASE_DOCKER")
@@ -908,9 +912,13 @@ def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str
         if x.get("status") not in ("built", "missing") or (x.get("status") == "missing" and not x.get("reason")):
             problems.append(f"MANIFEST: {key[1]} for {key[0]}: status {x.get('status')!r} without a reason")
     missing = [x for x in designs if x.get("status") != "built"]
-    if complete == bool(missing) or len(man.get("missing", [])) != len(missing):
+    thin = [x for x in built.values() if x.get("slack_margin") == "THIN"]
+    if complete == bool(missing or thin) or len(man.get("missing", [])) != len(missing) \
+            or len(man.get("thin", [])) != len(thin):
         problems.append(f"MANIFEST: a {status} release, with {len(missing)} designs missing and "
-                        f"{len(man.get('missing', []))} listed as missing")
+                        f"{len(man.get('missing', []))} listed as missing, {len(thin)} built THIN and "
+                        f"{len(man.get('thin', []))} listed as THIN")
+    new_format = isinstance(man.get("manifest_format"), int) and man["manifest_format"] >= 2
     for (b, n), x in sorted(built.items()):
         bit, rec, flash = f"fpga/{b}/{n}/{n}.bit", f"fpga/{b}/{n}/manifest.txt", f"flash/{b}/{n}.bin"
         has_flash = x.get("flash", "-") != "-"
@@ -934,6 +942,11 @@ def check_release(d: Path, name: str | None = None) -> tuple[list[str], list[str
                 problems.append(f"{rec}: {k} = {m.get(k)!r}, not {v!r}")
         if m.get("rom_sha256", "") != x.get("rom_sha256", ""):
             problems.append(f"{rec} and MANIFEST give {n} for {b} different boot ROMs")
+        ox = m.get("openxc7", {})
+        if new_format and (not isinstance(ox.get("placer_seed"), int) or ox.get("placer_seed") != x.get("placer_seed")):
+            problems.append(f"{rec} says placer seed {ox.get('placer_seed')!r}, MANIFEST {x.get('placer_seed')!r}")
+        if new_format and ox.get("slack_margin", "") != x.get("slack_margin", ""):
+            problems.append(f"{rec} says slack margin {ox.get('slack_margin')!r}, MANIFEST {x.get('slack_margin')!r}")
         if m.get("rom_sha256"):
             rom = f"rom/{Path(str(m.get('rom_image', ''))).name}"
             if sums.get(rom) != m.get("rom_sha256"):
@@ -1099,6 +1112,7 @@ class Release:
         self.cfg = read_list()
         self.t0 = time.time()
         self.shipped: dict = {}         # artifact: the SHA-256 of the bytes that were checked and staged
+        self.thin: list = []            # (board, design, note): built, but THIN (the open flow's slack rule)
         self.records: dict = {}         # a bitstream's build record (next to it; not an artifact): its SHA-256
 
     # ---------------------------------------------------------------- preflight
@@ -1129,6 +1143,14 @@ class Release:
             for b, n in self.only:
                 if b not in cfg["boards"] or n not in names:
                     raise Refused(f"--only {b}/{n}: no such board and design in release/release.txt")
+        self.pins = {}
+        for x in a.seed or []:                         # release-verify: each bitstream's recorded placer seed
+            mm = re.fullmatch(r"([\w.-]+)/([\w.-]+)=(\d+)", x)
+            if not mm:
+                raise Refused(f"--seed {x}: not BOARD/DESIGN=SEED")
+            if mm.group(1) not in cfg["boards"] or mm.group(2) not in names:
+                raise Refused(f"--seed {x}: no such board and design in release/release.txt")
+            self.pins[(mm.group(1), mm.group(2))] = int(mm.group(3))
         self.plan, self.missing = [], []
         for d in sorted(cfg["designs"], key=lambda d: d["ddr"]):          # the DDR designs last
             for board in cfg["boards"]:
@@ -1255,6 +1277,8 @@ class Release:
                        SURFCPU_KERNEL=str(self.work / SOFTWARE["SURFOS.BIN"]))
         if rom:
             env["ROM"] = str(self.work / "fw" / rom)
+        if (board, design) in self.pins:               # release-verify: the seed the release's bitstream was placed with
+            env["PLACER_SEEDS"] = str(self.pins[(board, design)])
         self.wait_slot()
         started = time.time()
         rc = run_logged([fpga, "--design", design, board], log, env)
@@ -1283,6 +1307,14 @@ class Release:
                 problems.append(f"build record run_id {rid!r}: not from this build (started {utc(int(started))})")
             if m.get("openxc7", {}).get("image") != self.ox_image:
                 problems.append(f"built in the image {m.get('openxc7', {}).get('image')!r}, not {self.ox_image}")
+            seed = m.get("openxc7", {}).get("placer_seed")
+            if not isinstance(seed, int):
+                problems.append("its build record names no placer seed ([openxc7] placer_seed)")
+            elif (board, design) in self.pins and seed != self.pins[(board, design)]:
+                problems.append(f"placed with seed {seed}, not the seed {self.pins[(board, design)]} it was given")
+            if m.get("openxc7", {}).get("slack_margin") not in ("PASS", "THIN"):
+                problems.append(f"its build record's slack margin is {m.get('openxc7', {}).get('slack_margin')!r}, "
+                                "not PASS or THIN (tools/openxc7-build.sh's slack rule)")
             if bit is None or hashlib.sha256(bit).hexdigest() != m.get("bitstream_sha256"):
                 problems.append("the bitstream is not the one its build record describes")
             changed = generated_changed(m)
@@ -1434,8 +1466,11 @@ class Release:
                 ok, m, why = self.bitstream(board, d)
             if ok:
                 built.append((board, d, m))
-                say(f"    PASS ({minutes(time.time() - t)}): wns {m.get('openxc7', {}).get('wns_ns')} ns, "
-                    f"sha256 {m.get('bitstream_sha256', '')[:16]}...")
+                ox = m.get("openxc7", {})
+                say(f"    PASS ({minutes(time.time() - t)}): seed {ox.get('placer_seed')}, wns {ox.get('wns_ns')} ns, "
+                    f"slack margin {ox.get('slack_margin')}, sha256 {m.get('bitstream_sha256', '')[:16]}...")
+                if ox.get("slack_margin") == "THIN":
+                    self.thin.append((board, d, ox.get("slack_margin_note", "")))
                 continue
             say(f"    FAIL ({minutes(time.time() - t)}): {why}")
             if not d["ddr"]:
@@ -1447,7 +1482,13 @@ class Release:
             raise Refused("the release was not written: these DDR designs did not build:\n" + "\n".join(
                 f"    {d['name']} for {b}: {why}" for b, d, why in failed)
                 + "\nmake release PRERELEASE=1 writes it as a pre-release without them")
-        prerelease = bool(self.missing)
+        if self.thin and not a.prerelease:
+            raise Refused("the release was not written: these bitstreams met timing with less slack than the open "
+                          "flow's rule wants (THIN: every placer seed of their design lists was thin):\n" + "\n".join(
+                              f"    {d['name']} for {b}: {note}" for b, d, note in self.thin)
+                          + "\nmake release PRERELEASE=1 writes it as a pre-release with them (docs/OPEN-FLOW.md "
+                            "section 3)")
+        prerelease = bool(self.missing or self.thin)
         if prerelease != a.prerelease:                 # every design built: a complete release
             name = self.name(prerelease)
             out = out_root / name
@@ -1462,7 +1503,8 @@ class Release:
                 "bitstream": rel, "flash_image": f"flash/{board}/{d['name']}.bin" if d["flash"] else "",
                 "build_record": f"fpga/{board}/{d['name']}/manifest.txt",
                 "part": m.get("part", ""), "idcode": ox.get("idcode", ""), "rom_sha256": m.get("rom_sha256", ""),
-                "placer_seed": m.get("placer_seed", 1),
+                "placer_seed": ox.get("placer_seed"),
+                "slack_margin": ox.get("slack_margin", ""), "slack_margin_note": ox.get("slack_margin_note", ""),
                 "gates": [f"{g[6:]} {ox.get(g)}" for g in GATES if g in ox],
                 "timing": ox.get("timing", []), "wns_ns": ox.get("wns_ns", ""),
                 "use": [f"{k} {ox.get(k)}" for k in ("lut", "ff", "bram36", "dsp") if k in ox],
@@ -1488,7 +1530,8 @@ class Release:
             shutil.rmtree(out)
         os.rename(self.stage, out)
         say(f"written {out}: " + ("PRE-RELEASE, without:" if prerelease else "complete release") +
-            "".join(f"\n    {d['name']} for {b}: {why}" for b, d, why in self.missing))
+            "".join(f"\n    {d['name']} for {b}: {why}" for b, d, why in self.missing) +
+            "".join(f"\n    {d['name']} for {b}: THIN ({note})" for b, d, note in self.thin))
         say(f"{len(sums)} artifacts in SHA256SUMS (check: cd {out} && shasum -a 256 -c SHA256SUMS); "
             f"{minutes(time.time() - self.t0)} in all")
         return 0
@@ -1498,6 +1541,7 @@ class Release:
             "release": name, "version": self.version, "status": "prerelease" if prerelease else "complete",
             "complete": not prerelease,
             "missing": [f"{d['name']} for {b}: {why}" for b, d, why in self.missing],
+            "thin": [f"{d['name']} for {b}: {note}" for b, d, note in self.thin], "manifest_format": MANIFEST_FORMAT,
             "commit": self.commit, "commit_short": self.short, "source_date_epoch": self.epoch,
             "commit_time_utc": utc(self.epoch), "tree_clean": True,
             # the designs whose flash image this release holds (for some board): none when it was not built
@@ -1595,6 +1639,16 @@ def cmd_verify(a) -> int:
     cmd = [sys.executable, str(src / "surfcpu" / "tools" / "release.py"), "make", "--prerelease", "--out",
            str(rebuild), "--logs", str(work / "logs")]
     cmd += ["--only", ",".join(f"{b}/{n}" for b, n in sorted(rebuilt))]
+    seed_note = None
+    if isinstance(man.get("manifest_format"), int) and man["manifest_format"] >= 2:
+        for d in entries:                               # the seed each bitstream was placed with, and only that one
+            if d.get("status") == "built" and (d.get("board"), d.get("name")) in rebuilt:
+                cmd += ["--seed", f"{d['board']}/{d['name']}={d['placer_seed']}"]
+    else:
+        seed_note = ("this MANIFEST predates format 2: its placer_seed fields say 1 for every design whatever seed "
+                     "was used (tools/release.py read a key fpga-build.sh does not write at the top of a build "
+                     "record), so the rebuild takes each design list's seeds, as the release did; 1.0.0-f791b8a1's "
+                     "arty_a7_100t surfcpu_arty_a7_ddr_bramdiag was placed with seed 3")
     say(f"rebuilding there: {len(rebuilt)} of the release's {len(built)} bitstreams and every other artifact")
     rc = subprocess.run(cmd, cwd=str(src / "surfcpu"), env=clean_env()).returncode
     say(f"the rebuild ended with exit status {rc} after {minutes(time.time() - t0)}")
@@ -1602,6 +1656,7 @@ def cmd_verify(a) -> int:
     if len(outs) == 1:
         out = outs[0]
         rows, notes = compare(ref, out, {(b, n) for b, n in rebuilt})
+        notes = notes + ([seed_note] if seed_note else [])
         problems = [f"the rebuild: {p}" for p in check_release(out)[0]]
     else:
         rows, notes = [(rel, "MISSING", "the rebuild wrote no release") for rel in sorted(read_sums(ref / "SHA256SUMS"))], []
@@ -1672,6 +1727,9 @@ def main(argv=None) -> int:
                                   "directory, or one this tool made before")
     p.add_argument("--force", action="store_true", help="replace an existing release directory (only a release)")
     p.add_argument("--only", help="exactly these BOARD/DESIGN pairs (comma-separated; release-verify uses it)")
+    p.add_argument("--seed", action="append", metavar="BOARD/DESIGN=SEED",
+                   help="place that bitstream with this seed only (repeatable; release-verify gives each the seed "
+                        "its release recorded)")
     p.add_argument("--max-flow-containers", type=int, default=3,
                    help="start a bitstream build only while fewer surfcpu-openxc7 containers run (0: no limit)")
     p = sub.add_parser("verify", help="rebuild a release from a pristine copy and compare")
