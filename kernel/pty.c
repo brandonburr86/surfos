@@ -299,6 +299,13 @@ static int master_of(int fd, struct pty **pp) {
     return 0;
 }
 
+/* 10/18/26 (audit B55): the console of the pty whose master is descriptor fd, NULL for none: the kernel's self test
+   starts a kernel thread on it inside a call (TF_INCALL), as SYS_kcmd starts a process's kernel command */
+surf_console *pty_console_of(int fd) {
+    struct pty *p;
+    return master_of(fd, &p) ? NULL : pty_con(p);
+}
+
 int sys_openpty(void) {
     struct vnode *v;
     struct file *f;
