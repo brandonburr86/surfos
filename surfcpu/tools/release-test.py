@@ -383,9 +383,15 @@ class TestBoardRestriction(unittest.TestCase):
         two = d / "designs"                         # several board lines add up, as in fpga-build.sh
         (two / "boards/arty_a7/designs").mkdir(parents=True)
         (two / "boards/arty_a7/designs/x.files").write_text("board arty_a7_100t  # one\nboard arty_a7_35t\ntop x\n")
+        (two / "boards/arty_a7/designs/crlf.files").write_bytes(b"board arty_a7_100t\r\ntop x\r\n")
+        (two / "boards/arty_a7/designs/bare.files").write_text("board   # no board named\ntop x\n")
         root, release.ROOT = release.ROOT, two
         try:
             self.assertEqual(release.design_boards("x"), ["arty_a7_100t", "arty_a7_35t"])
+            self.assertEqual(release.design_boards("crlf"), ["arty_a7_100t"])       # as fpga-build.sh reads it
+            with self.assertRaises(release.Refused) as e:                           # as fpga-build.sh refuses it
+                release.design_boards("bare")
+            self.assertIn("names no board", str(e.exception))
         finally:
             release.ROOT = root
         real = release.read_list()                  # the real list: no GPU design, both boards

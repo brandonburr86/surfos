@@ -412,11 +412,14 @@ def read_list(path: Path = LIST) -> dict:
 
 
 def design_boards(design: str) -> list[str] | None:
-    """the boards a design's list restricts it to (its board line), or None: every board"""
+    """the boards a design's list restricts it to (its board lines, which add up), or None: every board;
+    as tools/fpga-build.sh reads them (CRLF line ends taken, a board line naming no board refused)"""
     boards = None
     for line in (ROOT / "boards/arty_a7/designs" / f"{design}.files").read_text().splitlines():
         f = line.split("#", 1)[0].split()
         if f and f[0] == "board":
+            if len(f) == 1:
+                raise Refused(f"{design}: a board line in its design list names no board")
             boards = (boards or []) + f[1:]
     return boards
 

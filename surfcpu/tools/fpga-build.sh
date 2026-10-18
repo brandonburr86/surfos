@@ -390,8 +390,8 @@ openxc7_results() {   # STATUS: gate on tools/openxc7-build.sh's results, write 
 }
 
 # ------------------------------------------------------------------------------ the design's files
-items() {         # KIND: the lines of that kind, without the kind word
-    awk -v k="$1" '{ sub(/#.*/, "") } $1 == k { $1 = ""; sub(/^ +/, ""); print }' "$list"
+items() {         # KIND: the lines of that kind, without the kind word (CRLF line ends are taken)
+    awk -v k="$1" '{ sub(/\r$/, ""); sub(/#.*/, "") } $1 == k { $1 = ""; sub(/^ +/, ""); print }' "$list"
 }
 expand() {        # PATTERN: matching paths relative to surfcpu/, sorted
     ( cd "$root" && for f in $1; do [ -e "$f" ] && echo "$f"; done ) | sort
@@ -403,6 +403,7 @@ top=$(items top)
 # block RAM than the 35T has); several lines add up, as in tools/release.py; without one the
 # design builds for every board of boards.txt.
 for_boards=$(items board | tr '\n\t' '  ' | tr -s ' ' | sed 's/^ //; s/ $//')
+[ "$(items board | awk 'NF == 0 { n++ } END { print n + 0 }')" = 0 ] || die "$design: a board line in its design list names no board"
 if [ -n "$for_boards" ]; then
     for b in $for_boards; do
         awk -v b="$b" '!/^#/ && $1 == b { f = 1 } END { exit !f }' "$root/boards/arty_a7/boards.txt" ||

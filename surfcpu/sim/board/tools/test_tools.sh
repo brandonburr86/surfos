@@ -558,6 +558,18 @@ run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards 
 check "board line: two board lines add up: the second's 35T is taken (dry run)" is "$rc" 0
 run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
 check "board line: ... and the first's 100T" is "$rc" 0
+# CRLF line ends are read as release.py reads them, and a board line naming no board is refused
+# by both (the second review)
+tr -d '\r' < "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" | sed 's/$/\r/' > "$tb2"
+printf 'board arty_a7_100t\r\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: a design list with CRLF line ends: its board taken (dry run)" is "$rc" 0
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_35t
+check "board line: ... and the other refused" has "builds for arty_a7_100t only, not arty_a7_35t"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" "$tb2"
+printf 'board   # names none\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: a board line naming no board is refused" has "a board line in its design list names no board"
 rm -f "$tb2"
 gb=$base/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
 run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
