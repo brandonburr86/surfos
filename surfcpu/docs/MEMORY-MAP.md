@@ -79,7 +79,7 @@ Address ranges no SurfCPU SoC decodes, in any design or later memory map: every 
 
 ## Registers
 
-Access: ro read only, rw read/write, wo write only (reads 0), w1c write 1 to clear, rc reading has a side effect (pops a FIFO). Bits not listed read 0 and ignore writes.
+Access: ro read only, rw read/write, wo write only (reads 0), w1c write 1 to clear, rc reading has a side effect, which the register's description gives (it pops a FIFO, or keeps or drops a copy). Bits not listed read 0 and ignore writes.
 
 ### uart at `0x1000_0000`
 
@@ -171,7 +171,7 @@ VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode sh
 | `0x080` | `GFX_BASE` | rw | 18:0 `BASE` byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0 | Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU. |
 | `0x084` | `GFX_STRIDE` | rw | 15:0 `STRIDE` line pitch in bytes (bits 1:0 are 0) | Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU. |
 | `0x088` | `GFX_SCALE` | rw | 1:0 `SCALE` 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1 | Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU. |
-| `0x08C` | `FRAME_CRC` | ro | 31:0 | CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU. |
+| `0x08C` | `FRAME_CRC` | rc | 31:0 | CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since) and drops that copy; otherwise the newest. Only with sysinfo.FEATURES.GPU. |
 | `0x090` | `FRAME_COUNT` | rc | 15:0 `COUNT` frames (wraps) | How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU. |
 | `0x400`..`0x7FC` | `GPAL` | rw | 3:0 `B` blue<br>7:4 `G` green<br>11:8 `R` red | Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU. |
 

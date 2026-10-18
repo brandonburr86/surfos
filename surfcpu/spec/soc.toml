@@ -14,7 +14,8 @@
 # says otherwise (SURFBUS.md section 5). Bits not listed read as 0 and are ignored on write.
 #
 # access: ro = read only (writes ignored), rw = read/write, wo = write only (reads 0),
-#         w1c = read; writing 1 clears the bit, rc = reading has a side effect (pops a FIFO).
+#         w1c = read; writing 1 clears the bit, rc = reading has a side effect, which the register's
+#         description gives (it pops a FIFO, or keeps or drops a copy).
 
 [soc]
 name = "SurfCPU SoC"
@@ -666,8 +667,8 @@ fields = [
 [[periph.reg]]
 name = "FRAME_CRC"
 offset = 0x8C
-access = "ro"
-desc = "CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU."
+access = "rc"
+desc = "CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since) and drops that copy; otherwise the newest. Only with sysinfo.FEATURES.GPU."
 
 [[periph.reg]]
 name = "FRAME_COUNT"

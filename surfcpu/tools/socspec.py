@@ -436,7 +436,8 @@ def gen_doc(spec: Spec) -> str:
         out.append(f"| {k} | {_hex(v)} |")
     out += ["", "## Registers", "",
             "Access: ro read only, rw read/write, wo write only (reads 0), w1c write 1 to clear, "
-            "rc reading has a side effect (pops a FIFO). Bits not listed read 0 and ignore writes.", ""]
+            "rc reading has a side effect, which the register's description gives (it pops a FIFO, or keeps or drops "
+            "a copy). Bits not listed read 0 and ignore writes.", ""]
     for p in s.periphs.values():
         r0 = s.regions[p.name]
         irq = f" Interrupt source {s.irqs[p.irq]} ({p.irq})." if p.irq else ""
