@@ -78,7 +78,7 @@ SHARED_C    = kernel/task.c kernel/wait.c kernel/sync.c kernel/ktimer.c kernel/k
               lib/blibc/stdlib.c lib/blibc/string.c lib/blibc/strings.c lib/blibc/vsnprintf.c \
               fs/vfs.c fs/bcache.c fs/fat.c fs/fat_mkfs.c fs/devfs.c fs/poll.c fs/tarfs.c \
               driver/bdev.c driver/part.c driver/parttab.c driver/cp437.c \
-              shell/prompt.c shell/fscmd.c shell/fdisk.c
+              shell/prompt.c shell/fscmd.c shell/fdisk.c shell/cp.c
 ARCH_C      = $(wildcard arch/riscv32/*.c)
 ARCH_S      = $(wildcard arch/riscv32/*.S)
 BOARD_C     = $(wildcard boards/$(KBOARD)/*.c)

@@ -20,7 +20,8 @@ Ctrl+C cuts it short (status 130). What waits for the user (a question, a key, a
 a ping) gives up when that happens (task_interrupted()), along its usual way out.
 
 10/16/26 (SurfCPU, milestone 8): cp says why a write came up short ("No space left on
-device" on a full disk) instead of "short write".
+device" on a full disk) instead of "short write". 10/18/26 (audit B60): cp is shell/cp.c now,
+the one both kernels' shells use.
 */
 
 #include <blibc_common.h>
@@ -726,49 +727,6 @@ static int cmd_write(int argc, char **argv) {
     c = vfs_close(f);
     if(c) printf("    write: close: %s\n", strerror(c));
     return r < 0 || c ? CMD_FAIL : CMD_OK;
-}
-
-static int cmd_cp(int argc, char **argv) {
-    struct file *in, *out;
-    char *buf;
-    u_long total = 0;
-    int r, w, cut = 0;
-    if(argc < 3) { printf("    usage: cp <source> <destination>\n"); return CMD_USAGE; }
-    r = vfs_open(argv[1], O_RDONLY, &in);
-    if(r) { printf("    cp: %s: %s\n", argv[1], strerror(r)); return CMD_FAIL; }
-    r = vfs_open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, &out);
-    if(r) { printf("    cp: %s: %s\n", argv[2], strerror(r)); vfs_close(in); return CMD_FAIL; }
-    buf = (char *)kalloc(4096);
-    if(!buf) { printf("    cp: out of memory\n"); vfs_close(in); vfs_close(out); return CMD_FAIL; }
-    while((r = vfs_read(in, buf, 4096)) > 0) {
-        w = vfs_write(out, buf, r);
-        if(w >= 0 && w < r && !task_interrupted()) {    /* 10/16/26: short (a full disk): the rest, for why */
-            int w2 = vfs_write(out, buf + w, r - w);
-            w = w2 < 0 ? w2 : w + w2;
-        }
-        if(w != r && (w == -EINTR || task_interrupted())) {   /* 10/18/26 (audit B53): stopped by Ctrl+C or a kill (B39: */
-            if(w > 0) total += w;                       /* before its next piece), not refused: it said "short write" */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-        if(w != r) { printf("    cp: write: %s\n", w < 0 ? strerror(w) : "short write"); r = -1; break; }
-        total += r;
-        if(task_interrupted()) {                        /* 10/6/26: a kill, Ctrl+C */
-            printf("    cp: cut short after %lu bytes: %s is incomplete\n", total, argv[2]);
-            r = -1;
-            cut = 1;
-            break;
-        }
-    }
-    if(r < 0 && r != -1) printf("    cp: read: %s\n", strerror(r));
-    kfree(buf);
-    vfs_close(in);
-    w = vfs_close(out);
-    if(w && !cut) printf("    cp: close: %s\n", strerror(w));   /* (B53: cut short, its write-back is cut too: said) */
-    else if(r == 0) printf("    %lu bytes copied\n", total);
-    return r || w ? CMD_FAIL : CMD_OK;
 }
 
 /* 10/5/26: how fast a disk reads (nothing is written): 64 KB requests through the block layer */

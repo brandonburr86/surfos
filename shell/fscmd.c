@@ -474,11 +474,12 @@ int cmd_fsbench(int argc, char **argv) {
         int w;
         pattern(buf, off, 4096);
         w = vfs_write(f, buf, 4096);
-        if(w != 4096) r = w == -EINTR || task_interrupted() ? -EINTR : w < 0 ? w : -EIO;   /* 10/18/26 (audit B53): a */
-        else if(task_interrupted()) r = -EINTR;              /* write Ctrl+C or a kill stopped is no I/O error */
+        if(w != 4096) r = w < 0 && w != -EINTR ? w                /* 10/18/26 (audit B60): an error is that error */
+                        : w == -EINTR || task_interrupted() ? -EINTR : -EIO;   /* (B53: a write Ctrl+C or a kill */
+        else if(task_interrupted()) r = -EINTR;              /* stopped is no I/O error) */
     }
     c = vfs_close(f);                                        /* close writes it out */
-    if(!r) r = c;
+    if(!r) r = c && task_interrupted() ? -EINTR : c;        /* (B60: its write-out cut short is no I/O error either) */
     tw = (long)uptime_ms() - tw;
     if(r == -EINTR) printf("    fsbench: interrupted\n");
     else if(r) printf("    fsbench: %s: %s\n", path, strerror(r));

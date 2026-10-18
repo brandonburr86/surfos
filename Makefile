@@ -385,6 +385,17 @@ $(BUILD)/host/test_prompt: tests/host/test_prompt.c $(BUILD)/host/kernel/shell/p
 	@echo "HOSTLD $@"
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
 
+# 10/18/26 (audit B60): cp (shell/cp.c, both kernels' shells) against a file layer the test scripts; its printf() and
+# strerror() renamed so that the test keeps the host's
+$(BUILD)/host/kernel/shell/cp_test.o: shell/cp.c tests/host/surf_names.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $< (cp test)"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) -Dprintf=cp_printf -Dstrerror=cp_strerror -c $< -o $@
+
+$(BUILD)/host/test_cp: tests/host/test_cp.c $(BUILD)/host/kernel/shell/cp_test.o $(HOSTLIB_OBJ)
+	@echo "HOSTLD $@"
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+
 # the console's character set (10/6/26): code page 437, the UTF-8 decoder, the font in the same order
 $(BUILD)/host/test_cp437: tests/host/test_cp437.c $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/font8x16.o \
                           $(HOSTLIB_OBJ)
@@ -482,7 +493,7 @@ $(BUILD)/host/test_telnetd: tests/host/test_telnetd.c tests/host/telnetd/surf.h 
 	$(Q)$(HOSTCC) $(HOSTFLAGS) -Itests/host/telnetd -Iuser/telnetd tests/host/test_telnetd.c user/telnetd/telnet.c -o $@
 
 unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/test_framebuffer $(BUILD)/host/test_usb \
-          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt \
+          $(BUILD)/host/test_part $(BUILD)/host/test_libc $(BUILD)/host/test_mkfs $(BUILD)/host/test_prompt $(BUILD)/host/test_cp \
           $(BUILD)/host/test_cp437 $(BUILD)/host/test_pager $(BUILD)/host/test_telnet $(BUILD)/host/test_telnetd \
           $(BUILD)/host/test_pciinfo $(BUILD)/host/test_iwlfw $(BUILD)/host/test_fatfs $(BUILD)/host/test_fatfuzz \
           $(BUILD)/host/test_fatconc
@@ -502,6 +513,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_fatconc 33 3 6 1 0 1 0 0 1 8192 0
 	$(BUILD)/host/test_fatconc umount
 	$(BUILD)/host/test_prompt
+	$(BUILD)/host/test_cp
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager
 	$(BUILD)/host/test_telnet
