@@ -459,6 +459,45 @@ static void test_mutex_fn(void) {
     check(a && b && shared_counter == 4000, "two tasks under a mutex count to exactly 4000");
 }
 
+/* 10/18/26 (audit B66): a mutex's waiter woken another way (wake_up_task()) just before its holder lets go is out of
+   the line: mutex_unlock() found nobody in line and left the mutex free, and the waiter went back in line and slept on
+   the free mutex until somebody else took it and let go (the review's R11b). Now it takes the free mutex when it runs */
+static mutex_t kw_lock = MUTEX_INIT("selftest-wake");
+static volatile int kw_got;
+
+static void kw_waiter(void *arg) {
+    (void)arg;
+    mutex_lock(&kw_lock);
+    kw_got = 1;
+    mutex_unlock(&kw_lock);
+}
+
+static void test_mutex_wake(void) {
+    surf_task *w;
+    u_long pid, f;
+    int st, waited;
+    bool got, freed;
+    kw_got = 0;
+    mutex_lock(&kw_lock);
+    w = kthread_create("mutexwake", kw_waiter, NULL, PL_NORMAL, 0);
+    if(!w) { mutex_unlock(&kw_lock); check(false, "a mutex's waiter woken another way: a thread"); return; }
+    pid = w->pid;
+    for(waited = 0; !wq_count(&kw_lock.waiters) && waited < 1000; waited += 5) sleep_ms(5);   /* (it waits in line) */
+    f = irq_save();
+    wake_up_task(w);                                 /* woken another way ... */
+    mutex_unlock(&kw_lock);                          /* ... and the mutex let go of before it runs: nobody in line */
+    irq_restore(f);
+    for(waited = 0; !kw_got && waited < 500; waited += 10) sleep_ms(10);
+    got = kw_got != 0;
+    freed = mutex_trylock(&kw_lock);                 /* (the code before: free, its waiter asleep in line) */
+    if(freed) mutex_unlock(&kw_lock);                /* (which hands it to that waiter) */
+    if(task_wait(pid, &st) != (int)pid) printf("        (the waiter did not end)\n");
+    printf("        (the waiter %s within 500 ms of the letting go%s)\n", got ? "had the mutex" : "did NOT have the mutex",
+           !got && freed ? "; the mutex was free meanwhile, its waiter asleep in line" : "");
+    check(got, "a mutex's waiter woken another way just before the letting go takes the free mutex (no mutex left free "
+          "with its waiter asleep in line)");
+}
+
 #define RING 8
 static u_int ring[RING], ring_head, ring_tail;
 static semaphore_t items, slots;
@@ -555,7 +594,7 @@ static void test_fat(void) {
 
 static void (*const tests[])(void) = {
     test_abi, test_registers, test_stack, test_math, test_memory, test_crc, test_time, test_timers, test_tasks,
-    test_mutex_fn, test_semaphore, test_event_fn, test_fat
+    test_mutex_fn, test_mutex_wake, test_semaphore, test_event_fn, test_fat
 };
 
 int rv_selftest(void) {

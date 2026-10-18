@@ -2295,6 +2295,45 @@ static surf_task *kz_start(const char *name, const char *path) {
     return kthread_create_on(name, curTask->con, kz_closer, (void *)path, PL_NORMAL, 0);
 }
 
+/* 10/18/26 (audit B66): a mutex's waiter woken another way (wake_up_task()) just before its holder lets go is out of
+   the line: mutex_unlock() found nobody in line and left the mutex free, and the waiter went back in line and slept on
+   the free mutex until somebody else took it and let go (the review's R11b). Now it takes the free mutex when it runs */
+static mutex_t kw_lock = MUTEX_INIT("selftest-wake");
+static volatile int kw_got;
+
+static void kw_waiter(void *arg) {
+    (void)arg;
+    mutex_lock(&kw_lock);
+    kw_got = 1;
+    mutex_unlock(&kw_lock);
+}
+
+static void test_mutex_wake(void) {
+    surf_task *w;
+    u_long pid, f;
+    int st, waited;
+    bool got, freed;
+    kw_got = 0;
+    mutex_lock(&kw_lock);
+    w = kthread_create_on("mutexwake", curTask->con, kw_waiter, NULL, PL_NORMAL, 0);
+    if(!w) { mutex_unlock(&kw_lock); check(false, "a mutex's waiter woken another way: a thread"); return; }
+    pid = w->pid;
+    for(waited = 0; !wq_count(&kw_lock.waiters) && waited < 1000; waited += 5) sleep_ms(5);   /* (it waits in line) */
+    f = irq_save();
+    wake_up_task(w);                                 /* woken another way ... */
+    mutex_unlock(&kw_lock);                          /* ... and the mutex let go of before it runs: nobody in line */
+    irq_restore(f);
+    for(waited = 0; !kw_got && waited < 500; waited += 10) sleep_ms(10);
+    got = kw_got != 0;
+    freed = mutex_trylock(&kw_lock);                 /* (the code before: free, its waiter asleep in line) */
+    if(freed) mutex_unlock(&kw_lock);                /* (which hands it to that waiter) */
+    if(task_wait(pid, &st) != (int)pid) printf("        (the waiter did not end)\n");
+    printf("        (the waiter %s within 500 ms of the letting go%s)\n", got ? "had the mutex" : "did NOT have the mutex",
+           !got && freed ? "; the mutex was free meanwhile, its waiter asleep in line" : "");
+    check(got, "a mutex's waiter woken another way just before the letting go takes the free mutex (no mutex left free "
+          "with its waiter asleep in line)");
+}
+
 static void test_close_cut_short(void) {
     u8 *mem;
     struct bdev *d = fx_stick("stickz", "/selftest-cz", &mem);
@@ -2649,7 +2688,8 @@ static void (*const tests[])(void) = {
     test_kill_device, test_kill_outside_call, test_umount_waits, test_request_busy, test_unmounting_busy, test_eject_unmount_phase,
     test_eject_writeout_mount, test_kill_system,
     test_fdisk_kill, test_cp_interrupted, test_hangup_nocall,
-    test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_close_cut_short,
+    test_change_rescan, test_change_claim, test_mkfs_rescan, test_kill_holding_lock, test_mutex_fifo, test_mutex_wake,
+    test_close_cut_short,
     test_user, test_net, test_usb, test_tasks,
     test_sleep, test_timers, test_mutex_fn, test_semaphore, test_event_fn, test_libc, test_tty
 };
