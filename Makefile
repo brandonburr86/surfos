@@ -836,6 +836,17 @@ unittest-gui: $(BUILD)/host/test_pointer
 GUI_HOST_OBJ = $(patsubst %,$(BUILD)/host/kernel/shell/%.o,guicore guidraw guinote guifiles guidialog \
                  guiterm guimon guidisks guilog guiclock guiview guihex guichar) \
                $(BUILD)/host/kernel/driver/cp437.o $(BUILD)/host/kernel/driver/fbcore.o $(BUILD)/host/kernel/driver/font8x16.o
+# each track's own model files beyond its stubs ($(BUILD)/host/kernel/shell/<name>.o), on a line of its own so that
+# the tracks' merges are clean (the kernel takes every shell/*.c by itself)
+# TERM:
+GUI_TERM_OBJ =
+# SYS:
+GUI_SYS_OBJ =
+# TOOLS:
+GUI_TOOLS_OBJ =
+# MEDIA:
+GUI_MEDIA_OBJ =
+GUI_HOST_OBJ += $(GUI_TERM_OBJ) $(GUI_SYS_OBJ) $(GUI_TOOLS_OBJ) $(GUI_MEDIA_OBJ)
 $(BUILD)/host/test_gui: tests/host/test_gui.c $(GUI_HOST_OBJ) $(HOSTLIB_OBJ)
 	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $(filter %.c %.o,$^) -o $@
 # 10/17/26: each track's applications against the in-memory file system and system of tests/host/gui_fake.c
