@@ -31,6 +31,10 @@ comes out of the framebuffer.
   highmem    6 GB: memory above 4 GB is counted, and `himem` writes RAM above 4 GB through a
              PSE-36 page; the monitor reads the same physical bytes back
   gui        SurfOS desktop, native mouse input, apps and console recovery
+  guiapps    (10/17/26) the desktop's applications (Terminal, System Monitor, Disks, Log, Clock,
+             Character Map, Image Viewer, Hex) at 1920x1080, each track's checks in a file of its
+             own (tools/gui_apps_*.py), with a FAT32 data stick whose files are read back here and
+             checked by fsck_msdos and fsck.fat afterwards
   graphics   software 2D at 1920x1080: color bars and image pixels, text restoration
              after completion, Ctrl+C, console switching, and a full pager
   fallback   the GRUB menu's troubleshooting entry (timer=lapic kbd=poll): the local APIC
