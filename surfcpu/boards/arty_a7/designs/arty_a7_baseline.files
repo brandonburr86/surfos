@@ -3,9 +3,9 @@
 # tools/fpga-build.sh (the Vivado build), mk/area-board.mk (lint, Yosys) and
 # tools/check-wiring.py. Kinds:
 #   top <module>              the top-level module
-#   board <name>...           the boards of boards.txt this design builds for (default: all);
-#                             tools/fpga-build.sh refuses the others, tools/release.py a release list
-#                             that builds it for another
+#   board <name>...           the boards of boards.txt this design builds for (default: all; several
+#                             lines add up); tools/fpga-build.sh refuses the others, tools/release.py
+#                             a release list that builds it for another
 #   require <file>            the build stops unless this file exists
 #   src <file>                Verilog source (synthesis); the build stops if a pattern matches nothing
 #   src? <file>               the same, but may match nothing (a later track's files)

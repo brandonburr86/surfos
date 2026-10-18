@@ -548,6 +548,16 @@ printf '/build/\n' > "$g/.gitignore"
 gitq() { git -C "$g" -c user.name=test -c user.email=test@example.invalid "$@" > /dev/null 2>&1; }
 gitq init -q && gitq add -A && gitq commit -q -m scratch
 printf 'FLOW=vivado-ssh\nHOST=builder\nREMOTE_DIR=surfcpu-build\nVIVADO=vivado\n' > "$conf"
+# two board lines add up (the first GPU review: fpga-build.sh refused every board, release.py
+# merged them); a scratch design, removed again
+tb2="$g/boards/arty_a7/designs/twoboards.files"
+cp "$g/boards/arty_a7/designs/surfcpu_arty_a7_bramdiag.files" "$tb2"
+printf 'board arty_a7_100t   # one line\nboard arty_a7_35t    # and another\n' >> "$tb2"
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_35t
+check "board line: two board lines add up: the second's 35T is taken (dry run)" is "$rc" 0
+run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design twoboards arty_a7_100t
+check "board line: ... and the first's 100T" is "$rc" 0
+rm -f "$tb2"
 gb=$base/arty_a7_100t/surfcpu_arty_a7_ddr_bramdiag
 run env ROM="$t/diag.mem" "$g/tools/fpga-build.sh" --dry-run --design surfcpu_arty_a7_ddr_bramdiag arty_a7_100t
 check "generated: generated files that match their list leave a clean commit clean" \

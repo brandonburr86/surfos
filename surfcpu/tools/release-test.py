@@ -380,6 +380,14 @@ class TestBoardRestriction(unittest.TestCase):
         one = d / "one.txt"
         one.write_text("version 1.0.0\nboard arty_a7_100t\ndesign surfcpu_arty_a7_gpudiag - -\n")
         self.assertEqual(release.read_list(one)["boards"], ["arty_a7_100t"])
+        two = d / "designs"                         # several board lines add up, as in fpga-build.sh
+        (two / "boards/arty_a7/designs").mkdir(parents=True)
+        (two / "boards/arty_a7/designs/x.files").write_text("board arty_a7_100t  # one\nboard arty_a7_35t\ntop x\n")
+        root, release.ROOT = release.ROOT, two
+        try:
+            self.assertEqual(release.design_boards("x"), ["arty_a7_100t", "arty_a7_35t"])
+        finally:
+            release.ROOT = root
         real = release.read_list()                  # the real list: no GPU design, both boards
         self.assertEqual(real["boards"], ["arty_a7_100t", "arty_a7_35t"])
         self.assertNotIn("surfcpu_arty_a7_gpudiag", [x["name"] for x in real["designs"]])
