@@ -112,6 +112,13 @@ bool bdev_mount_readonly(struct bdev *d);
 
 void bdev_print(void);                      /* lsblk */
 void bdev_print_io(void);                   /* lsblk -s: blocks read and written */
+/* 10/17/26 (the desktop's Disks, shell/guisys_disk.c): a device as lsblk describes it: its SIZE ("254M"), TYPE
+   ("disk gpt", "part mbr FAT32 LBA"), BUS ("usb", "ata", "ram", "-"), MODEL/LABEL (a disk's model, a GPT
+   partition's name) and STATUS ("mounted", "boot drive: protected", ... or ""); the strings stay valid as long
+   as the device does (never freed) */
+struct bdev_info { char size[8], type[48]; const char *bus, *label, *status; };
+void bdev_describe(struct bdev *d, struct bdev_info *out);
+void bdev_walk(void (*fn)(struct bdev *d, void *arg), void *arg);   /* lsblk's order: each disk, then its partitions */
 const char *bdev_part_type_name(u8 type);
 
 /* part.c: register the partitions of a disk (MBR with logical partitions from 5, or GPT) as

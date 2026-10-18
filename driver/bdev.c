@@ -9,6 +9,10 @@ translates partition offsets. See include/sys/bdev.h.
 10/5/26 (USB storage): unregistering an unplugged disk, reference counts for
 mounts, partition names, flushing, and bdev_may_format(), the safety rule of
 the destructive tools.
+
+10/17/26 (the desktop's Disks): what lsblk says of a device (bdev_describe())
+and the order it lists them in (bdev_walk()) are for shell/guisys_disk.c too,
+so both say the same; lsblk prints what it printed before.
 */
 
 #include <surfos/types.h>
@@ -167,8 +171,8 @@ const char *bdev_part_type_name(u8 type) {
 #define LSBLK_WIDTH 79                  /* the VGA console is 80 columns, and a full line wraps */
 
 struct lsblk_row {
-    char name[BDEV_NAME_LEN + 2], size[8], type[48];
-    const char *bus, *label, *status;
+    char name[BDEV_NAME_LEN + 2];
+    struct bdev_info i;                 /* 10/17/26: the rest of the line, as bdev_describe() says it */
 };
 
 struct lsblk_widths {
@@ -215,8 +219,8 @@ static const char *status_of(struct bdev *d) {
     return "";
 }
 
-static void lsblk_row(struct bdev *d, struct lsblk_row *r) {
-    snprintf(r->name, sizeof(r->name), "%s%s", d->parent ? "  " : "", d->name);
+/* 10/17/26 (the desktop's Disks, shell/guisys_disk.c): what lsblk says of a device, for both */
+void bdev_describe(struct bdev *d, struct bdev_info *r) {
     part_fmt_size(d->nblocks, r->size, sizeof(r->size));
     if(d->parent) snprintf(r->type, sizeof(r->type), "part %s %s", scheme_name(d->scheme), d->type_name ? d->type_name : "?");
     else snprintf(r->type, sizeof(r->type), "disk%s%s", d->scheme ? " " : "", scheme_name(d->scheme));
@@ -225,9 +229,14 @@ static void lsblk_row(struct bdev *d, struct lsblk_row *r) {
     r->status = status_of(d);
 }
 
+static void lsblk_row(struct bdev *d, struct lsblk_row *r) {
+    snprintf(r->name, sizeof(r->name), "%s%s", d->parent ? "  " : "", d->name);
+    bdev_describe(d, &r->i);
+}
+
 /* every disk, each followed by its partitions in order (a rescan appends new ones at the end of
-   the list) */
-static void lsblk_walk(void (*fn)(struct bdev *d, void *arg), void *arg) {
+   the list). 10/17/26: also Disks' order (bdev_walk) */
+void bdev_walk(void (*fn)(struct bdev *d, void *arg), void *arg) {
     struct bdev *d, *p, *next;
     u_int last;
     for(d = bdevs; d; d = d->next) {
@@ -248,10 +257,10 @@ static void lsblk_measure(struct bdev *d, void *arg) {
     struct lsblk_row r;
     lsblk_row(d, &r);
     if(strlen(r.name) > w->name) w->name = strlen(r.name);
-    if(strlen(r.size) > w->size) w->size = strlen(r.size);
-    if(strlen(r.type) > w->type) w->type = strlen(r.type);
-    if(strlen(r.label) > w->label) w->label = strlen(r.label);
-    if(strlen(r.status) > w->status) w->status = strlen(r.status);
+    if(strlen(r.i.size) > w->size) w->size = strlen(r.i.size);
+    if(strlen(r.i.type) > w->type) w->type = strlen(r.i.type);
+    if(strlen(r.i.label) > w->label) w->label = strlen(r.i.label);
+    if(strlen(r.i.status) > w->status) w->status = strlen(r.i.status);
 }
 
 static void lsblk_print(struct bdev *d, void *arg) {
@@ -260,8 +269,8 @@ static void lsblk_print(struct bdev *d, void *arg) {
     char line[160];
     int n;
     lsblk_row(d, &r);
-    n = snprintf(line, sizeof(line), "%-*s %*s %-3s %2s %-*s %-*.*s %s", w->name, r.name, w->size, r.size, r.bus,
-                 d->removable ? "1" : "0", w->type, r.type, w->label, w->label, r.label, r.status);
+    n = snprintf(line, sizeof(line), "%-*s %*s %-3s %2s %-*s %-*.*s %s", w->name, r.name, w->size, r.i.size, r.i.bus,
+                 d->removable ? "1" : "0", w->type, r.i.type, w->label, w->label, r.i.label, r.i.status);
     if(n > (int)sizeof(line) - 1) n = sizeof(line) - 1;
     while(n > 0 && line[n - 1] == ' ') line[--n] = 0;       /* no padding after the last column */
     printf("%s\n", line);
@@ -273,13 +282,13 @@ void bdev_print(void) {
     struct lsblk_widths w = { 4, 4, 4, 11, 0 };          /* the headings */
     u_int fixed;
     if(!bdevs) { printf("(no block devices)\n"); return; }
-    lsblk_walk(lsblk_measure, &w);
+    bdev_walk(lsblk_measure, &w);
     fixed = w.name + 1 + w.size + 1 + 3 + 1 + 2 + 1 + w.type + 1 + (w.status ? w.status + 1 : 0);
     if(fixed + w.label > LSBLK_WIDTH) w.label = fixed + 8 < LSBLK_WIDTH ? LSBLK_WIDTH - fixed : 8;
     printf("%-*s %*s BUS RM %-*s ", w.name, "NAME", w.size, "SIZE", w.type, "TYPE");
     if(w.status) printf("%-*.*s STATUS\n", w.label, w.label, "MODEL/LABEL");
     else printf("%.*s\n", w.label, "MODEL/LABEL");
-    lsblk_walk(lsblk_print, &w);
+    bdev_walk(lsblk_print, &w);
 }
 
 /* lsblk -s: the blocks each device has moved since boot */
