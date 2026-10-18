@@ -27,6 +27,7 @@ through gui_app_log (struct gui_app, shell/guipriv.h).
 #define READ_MS 500                     /* the log is read again twice a second */
 #define DRAG_LINES 1                    /* the held button selects lines */
 #define DRAG_THUMB 2                    /* or holds the scroll bar's thumb */
+#define DRAG_MS 50                      /* 10/18/26: held past the text's edge, the selection scrolls a row this often */
 
 enum { T_FOLLOW = 1, T_FIND, T_COPY, T_ALL };
 static const struct gui_tool tools[] = {
@@ -98,6 +99,15 @@ static u32 line_of(const struct gui_logview *v, u32 pos) {
     u32 i = index_of(v, pos);
     if(i >= v->len) i = v->len ? v->len - 1 : 0;
     return line_begin(v, i);
+}
+
+/* 10/18/26: the first line whose start is in the copy: once the log has wrapped round, its first bytes are usually what
+   is left of a line (the copy's end if no line starts in it) */
+static u32 first_whole(const struct gui_logview *v) {
+    u32 i;
+    if(v->written == v->len) return 0;
+    for(i = 0; i < v->len && v->text[i] != '\n'; i++) ;
+    return i < v->len ? i + 1 : v->len;
 }
 
 /* lines that start from index a up to index b (the copy's start counts as one) */
@@ -219,17 +229,18 @@ static void set_first(struct gui_state *g, const struct log_layout *l, int first
     v->top_row = sub;
 }
 
-/* the view to a first row: Follow stops when the view moves up, and starts again when it moves down to the end */
+/* the view to a first row: Follow stops when the view moves up, and starts again when it is scrolled down to the end
+   (10/18/26: also when it was there already) */
 static void scroll_to(struct gui_state *g, int first) {
     struct gui_logview *v = &g->logview;
     struct log_layout l;
-    int total, old, max;
+    int total, old, max, want = first;
     layout(g, &l);
     old = first_row(g, &l, &total);
     max = total > l.rows ? total - l.rows : 0;
     first = gui_clamp(first, 0, max);
     if(first < old) v->follow = false;
-    else if(first > old && first == max) v->follow = true;
+    else if(want > old && first == max) v->follow = true;
     set_first(g, &l, first);
     g->dirty = true;
 }
@@ -257,18 +268,22 @@ static void read_log(struct gui_state *g) {
     if(!g->sys || !g->sys->log) return;
     r = g->sys->log(g->sys->ctx, v->text, GUI_LOG_MAX, &len, &written);
     if(r < 0) { len = 0; written = old_written; }
-    if(len > GUI_LOG_MAX) len = GUI_LOG_MAX;
-    if(written < len) written = len;
+    if(len > GUI_LOG_MAX) len = GUI_LOG_MAX;            /* 10/18/26: written is counted modulo 2^32, never clamped */
     v->len = len;
     v->written = written;
     v->error = r < 0 ? r : 0;
     if(len == old_len && written == old_written && v->error == old_error) return;
     if(dropped(v, v->top)) { v->top = base(v); v->top_row = 0; }   /* nothing stale: the view, the match, the selection */
     if(v->match_len && dropped(v, v->match)) v->match_len = 0;
-    if(v->any) {
-        if(dropped(v, v->anchor) && dropped(v, v->cursor)) v->any = false;
-        if(dropped(v, v->anchor)) v->anchor = base(v);
-        if(dropped(v, v->cursor)) v->cursor = base(v);
+    if(v->any) {                                        /* 10/18/26: it keeps the lines it still has whole */
+        bool up = (i32)(v->anchor - v->cursor) <= 0;
+        u32 lo = up ? v->anchor : v->cursor, hi = up ? v->cursor : v->anchor, whole = place(v, first_whole(v));
+        if(dropped(v, hi)) v->any = false;
+        else if(dropped(v, lo)) {
+            lo = (i32)(whole - hi) <= 0 ? whole : hi;
+            if(up) v->anchor = lo;
+            else v->cursor = lo;
+        }
     }
     if(!g->win[GUI_LOG].min) g->dirty = true;
 }
@@ -296,6 +311,7 @@ static void copy(struct gui_state *g) {
 static void select_all(struct gui_state *g) {
     struct gui_logview *v = &g->logview;
     if(!v->len) return;
+    follow(g, false);                                   /* 10/18/26: as any selecting does */
     v->anchor = place(v, 0);
     v->cursor = place(v, line_begin(v, v->len - 1));
     v->any = true;
@@ -406,6 +422,8 @@ static void edit(struct gui_state *g, int act) {
 
 /**** the window ****/
 
+static void select_to(struct gui_state *g, int y);
+
 static void opened(struct gui_state *g) {
     struct gui_logview *v = &g->logview;
     v->len = v->written = 0;
@@ -427,8 +445,17 @@ static void closed(struct gui_state *g) {
 
 /* read again about twice a second while it shows (minimized, it is read again when it comes back) */
 static void tick(struct gui_state *g) {
+    struct gui_logview *v = &g->logview;
+    struct log_layout l;
+    if(v->drag == DRAG_LINES && g->now - v->drag_ms >= DRAG_MS) {   /* 10/18/26: held past an edge, it scrolls on */
+        layout(g, &l);
+        if(v->drag_y < l.ty || v->drag_y >= l.ty + l.rows * 16) {
+            v->drag_ms = g->now;
+            select_to(g, v->drag_y);
+        }
+    }
     if(g->win[GUI_LOG].min || !g->sys) return;
-    if(g->now - g->logview.read_ms >= READ_MS) read_log(g);
+    if(g->now - v->read_ms >= READ_MS) read_log(g);
 }
 
 static bool key(struct gui_state *g, int key) {
@@ -488,26 +515,25 @@ static void press(struct gui_state *g, int x, int y) {
     v->status[0] = 0;
     g->dirty = true;
     row = y >= l.ty ? (y - l.ty) / 16 : 0;
+    if(row >= l.rows) return;                           /* 10/18/26: the strip below the last whole row shown */
     if(first + row >= total) { v->any = false; return; }   /* below the last line: nothing is selected */
     v->follow = false;                                  /* the lines stay put while they are chosen */
     set_first(g, &l, first);
     v->anchor = v->cursor = place(v, row_line(v, l.cols, first + row, &sub));
     v->any = true;
     v->drag = DRAG_LINES;
+    v->drag_y = y;
+    v->drag_ms = g->now;
 }
 
-static void drag(struct gui_state *g, int x, int y) {
+/* the held button's lines reach the row at y (window-relative); past the text's top or bottom edge the view scrolls a
+   row first */
+static void select_to(struct gui_state *g, int y) {
     struct gui_logview *v = &g->logview;
     struct log_layout l;
     int first, total, row, sub, max;
-    (void)x;
-    if(!v->drag) return;
     layout(g, &l);
     first = first_row(g, &l, &total);
-    if(v->drag == DRAG_THUMB) {
-        scroll_to(g, gd_scroll_to(l.find_y - l.ty + 2, y - (l.ty - 2) - v->thumb_at, l.rows, total));
-        return;
-    }
     max = total > l.rows ? total - l.rows : 0;
     if(y < l.ty && first > 0) set_first(g, &l, --first);                         /* past the edge: the view scrolls */
     else if(y >= l.ty + l.rows * 16 && first < max) set_first(g, &l, ++first);
@@ -517,6 +543,23 @@ static void drag(struct gui_state *g, int x, int y) {
     if(row >= total) row = total - 1;
     if(row >= 0) v->cursor = place(v, row_line(v, l.cols, row, &sub));
     g->dirty = true;
+}
+
+static void drag(struct gui_state *g, int x, int y) {
+    struct gui_logview *v = &g->logview;
+    struct log_layout l;
+    int total;
+    (void)x;
+    if(v->drag == DRAG_THUMB) {
+        layout(g, &l);
+        first_row(g, &l, &total);
+        scroll_to(g, gd_scroll_to(l.find_y - l.ty + 2, y - (l.ty - 2) - v->thumb_at, l.rows, total));
+        return;
+    }
+    if(v->drag != DRAG_LINES) return;
+    v->drag_y = y;
+    v->drag_ms = g->now;
+    select_to(g, y);
 }
 
 static void release(struct gui_state *g) {

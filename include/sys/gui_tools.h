@@ -24,6 +24,8 @@ struct gui_logview {
     u32 anchor, cursor;
     u32 match, match_len;               /* the last match found (match_len 0: none) */
     int drag, thumb_at;                 /* what the held button does (selecting lines, the scroll bar's thumb) */
+    int drag_y;                         /* 10/18/26: where it was last (window-relative), and when it scrolled last */
+    u32 drag_ms;
     struct gui_field find;
     char text[GUI_LOG_MAX];
     char status[GUI_STATUS];
