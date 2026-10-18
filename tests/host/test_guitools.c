@@ -688,17 +688,24 @@ static void stopwatch(void) {
     gui_open(&g, GUI_CLOCK);
     key('1');
     draw();
-    CHECK(shows(w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Stopwatch: 01:02.3", INK, 1));
+    CHECK(shows(w->x + 10, w->y + w->h - STATUS_H - 1 + 3, "Stopwatch: 01:02", INK, 1) &&
+          !glyph_at(w->x + 10 + 16 * 8, w->y + w->h - STATUS_H - 1 + 3, '.', INK));
+    gui_tick(&g);
+    g.dirty = false;
+    tick_ms(500);
+    CHECK(!g.dirty);                                    /* its seconds, there */
+    tick_ms(200);
+    CHECK(g.dirty);
     key('3');
     key(' ');                                           /* stop */
     CHECK(!c->watch_on);
     tick_ms(5000);
-    CHECK(clock_watch(&g) == 62304);
+    CHECK(clock_watch(&g) == 63004);
     /* an hour on, the hours show */
     key(' ');
     tick_ms(3600000);
     draw();
-    CHECK(shows(w->x + (w->w - 9 * 32) / 2, y, "1:01:02.3", TEAL, 4));
+    CHECK(shows(w->x + (w->w - 9 * 32) / 2, y, "1:01:03.0", TEAL, 4));
     /* nine laps: the newest five shown, eight kept */
     for(c->laps = 0; c->laps < 9;) { tick_ms(100); key('l'); }
     CHECK(c->laps == 9 && c->lap[8 % GUI_LAPS] == clock_watch(&g));
@@ -708,7 +715,7 @@ static void stopwatch(void) {
     /* busy while it runs: closing asks first, and Cancel keeps it */
     gui_close(&g, GUI_CLOCK);
     CHECK(g.dialog.kind == GUI_DLG_CONFIRM && g.win[GUI_CLOCK].open && !strcmp(g.dialog.title, "Close the window?"));
-    CHECK(!strncmp(g.dialog.text[0], "The stopwatch is running: 1:01:03.2", 35));
+    CHECK(!strncmp(g.dialog.text[0], "The stopwatch is running: 1:01:03.9", 35));
     key(27);
     CHECK(!g.dialog.kind && g.win[GUI_CLOCK].open && c->watch_on);
     key('r');

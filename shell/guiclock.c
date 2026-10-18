@@ -398,8 +398,9 @@ static void tick(struct gui_state *g) {
     }
     v = c->timer_on ? left_seconds(g) : 0;
     if(v != c->shown_left) { c->shown_left = v; g->dirty = true; }
-    v = c->watch_on && !g->win[GUI_CLOCK].min ? clock_watch(g) / 100 : 0;
-    if(v != c->shown_watch) { c->shown_watch = v; if(c->page == GUI_STOPWATCH_PAGE) g->dirty = true; }
+    v = !c->watch_on || g->win[GUI_CLOCK].min ? 0 :     /* its page shows tenths, the others' status bar seconds */
+        c->page == GUI_STOPWATCH_PAGE ? clock_watch(g) / 100 : clock_watch(g) / 1000;
+    if(v != c->shown_watch) { c->shown_watch = v; g->dirty = true; }
 }
 
 static void answer(struct gui_state *g, int act, int button, const char *text, const char *target) {
@@ -588,6 +589,7 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
         snprintf(line, sizeof(line), c->alarm ? "Timer: time's up!" : c->timer_on ? "Timer: %s left" : "Timer: %s, paused", t);
     } else if(c->page != GUI_STOPWATCH_PAGE && c->watch_on) {
         watch_text(clock_watch(g), t, sizeof(t));
+        t[strlen(t) - 2] = 0;                           /* whole seconds here */
         snprintf(line, sizeof(line), "Stopwatch: %s", t);
     } else strlcpy(line, c->page == GUI_CLOCK_PAGE ? "The keys 1 to 4 choose a page" :
                          c->page == GUI_CALENDAR_PAGE ? "Arrows: month and year; Home: today" :
