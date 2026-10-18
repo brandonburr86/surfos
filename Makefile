@@ -476,7 +476,7 @@ $(BUILD)/host/kernel/lib/crypto/random.o: HOSTKERN_FLAGS += -DCRYPTO_RANDOM_TEST
 $(BUILD)/host/test_crypto: HOSTKERN_FLAGS += -ffunction-sections -Wl,--gc-sections
 $(BUILD)/host/test_crypto: tests/host/test_crypto.c $(CRYPTO_HOST_OBJ) $(HOSTLIB_OBJ)
 	@echo "HOSTLD $@"
-	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $^ -o $@
+	$(Q)$(HOSTCC) $(HOSTFLAGS) $(HOSTKERN_FLAGS) $< $(filter %.o,$^) -o $@   # 10/18/26: not what its .d adds
 
 # the supplicant (net/wlan/wpa.c) against a simulated access point and a captured handshake; the test
 # has its own crypto_random() (scripted nonces), so random.o stays out
