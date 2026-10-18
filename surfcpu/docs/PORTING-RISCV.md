@@ -626,6 +626,15 @@ taken back: a count in each of the cache's calls (+1.05 % on the write run again
 +1.9 %), and a wake-up of the cache's waiters for each block an eject's binvalidate() dropped (+5 % on
 the eject) (bcache-review.txt section 39).
 
+Since audit B46-B49 (counted the same way, before = 0a9a5f2): every workload above sends the same
+requests and blocks. A device request counts its task inside (two stores around the driver's call),
+a cache wait looks at one more flag where it begins, and mkfs at its call before each request. On
+SurfCPU (0a9a5f2's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.05 % more cycles, its reboot run 0.06 %, test-os-faults' full card 0.06 %, and its refusing card
+1.46 %, all but 0.04 % of that the card-detect task meeting the card's removal one look (200 ms)
+later; SurfBoot loads a package 880 bytes larger (+0.08 million cycles), and each command is within
+0.5 % (bcache-review.txt section 47).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
