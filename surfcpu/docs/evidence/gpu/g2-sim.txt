@@ -1,0 +1,55 @@
+SurfGPU G2: simulation and host tests (2026-10-18), make test-gpu in the surfcpu-toolchain container
+(Verilator 5.032, Icarus 12.0, gcc), at 7451a24 (sc/gpu).
+
+check_gpu_h: PASS (10 opcodes, 3 header bits, ID and VRAM size agree in gpu.h, surf_gpu.v, surfcpu_soc.v)
+test_gpu_model: PASS (38 checks against docs/GPU.md: display path, CRCs, every command)
+
+test_gpu (surf_gpu + surf_vram against the C model):
+fill: 640x480 in 76850 cycles
+copy: 639x400 (unaligned, overlapping) in 129260 cycles
+test_gpu: PASS (seed 1: 699 checks; 1899 commands, 29481 words, 772497 pixel writes in the model; VRAM compared
+  134 times (14 directed, 120 random chunks); engine 304919 grants, 6341 cycles waiting for the CPU
+  (20587 CPU accesses meanwhile); 10956492 cycles)
+test_gpu: PASS (seed 2: 699 checks; 1935 commands, 30774 words, 781619 pixel writes in the model; VRAM compared
+  134 times (14 directed, 120 random chunks); engine 313340 grants, 5862 cycles waiting for the CPU
+  (18567 CPU accesses meanwhile); 11010349 cycles)
+test_gpu: PASS (seed 3: 699 checks; 2026 commands, 32674 words, 818157 pixel writes in the model; VRAM compared
+  134 times (14 directed, 120 random chunks); engine 326150 grants, 10726 cycles waiting for the CPU
+  (46967 CPU accesses meanwhile); 11090106 cycles)
+
+Found on the way (fixed before the runs above): the test's backdoor read of VRAM was one edge late;
+the model walked a 65535 x 65535 FILL or COPY pixel by pixel (and the COPY's snapshot ran the
+container out of memory): it now clips first, as GPU.md says; after an ABORT inside a WRITE_RECT
+the engine had not drawn the last two streamed pixels, whose destination word lacked two more:
+GPU.md section 5 now says so (the engine writes whole destination words).
+
+gpudiag with the engine on build/sim/surfsim_gpu (HAS_GPU=1):
+  SurfGPU diagnostic 1.0.0 (build 74cde816, dirty tree)
+  board simulation (0xf0), SoC 0.3.0, memory map 2, sys 25000000 Hz, pixel clock 25173611 Hz
+  bitstream build 74cde816 flags 3, features 1ff
+  identity                           ok (5 checks)
+  VRAM window (March C-)             (300 KiB) ok (59 checks)
+  video graphics registers, GPAL     (3 frames in 50 ms) ok (4 checks)
+  gpu registers and errors           ok (9 checks)
+  scenes                             13, engine present
+  scene  0: colour bars (MODE 0)     crc 2077db89 ok (3 checks)
+  scene  1: text, 256 glyphs (MODE 1) crc 50e89802 ok (3 checks)
+  scene  2: VRAM 640x480, RGB332     crc 14ee83ce ok (3 checks)
+  scene  3: GPAL greys               crc a5b99e4d ok (3 checks)
+  scene  4: 320x240 page 2, doubled  crc 857895ee ok (3 checks)
+  scene  5: text over graphics (MODE 3) crc 6fb93532 ok (3 checks)
+  scene  6: ENABLE 0                 crc c656b350 ok (3 checks)
+  scene  7: engine: fills, alignments, clips crc 4218a69c ok (3 checks)
+  scene  8: engine: lines in every octant crc e590bd48 ok (3 checks)
+  scene  9: engine: overlapping copies, key crc eeef382e ok (3 checks)
+  scene 10: engine: EXPAND letters, sprites crc c957aa55 ok (3 checks)
+  scene 11: engine: 320x240 page, flipped crc 2eb6a588 ok (3 checks)
+  scene 12: engine: demo             crc f501eb46 ok (3 checks)
+  GPUDIAG: PASS (117 checks)
+gpudiag_check: PASS (117 checks; 13 scenes, every FRAME_CRC the model's and a captured frame's; 77 frames
+  captured, 29 distinct, 33041311 cycles)
+[surfboot, HAS_GPU] the monitor answered help: output matched after 1354240 cycles
+
+The rest of make test-gpu at the same commit: test_vram, test_video (the io suite, HAS_GFX=1),
+test_video_gfx and tb_interconnect (HAS_GPU=1) as in g1-sim.txt (VRAM now in 16K-word banks:
+the same results).

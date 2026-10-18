@@ -24,18 +24,19 @@ PARTS = [("vram", ("rtl/soc/surf_vram",), ("u_vram",)),
          ("video", ("rtl/peripherals/surf_video",), ("u_video",)),
          ("cpu", ("rtl/cpu/",), ("u_core",)),
          ("ddr", ("rtl/soc/ddr/", "litedram"), ("u_dram", "u_ddr")),
-         ("other", ("",), ())]
+         ("other", ("rtl/", "boards/"), ())]
 
 
-def part_of(src: str, name: str) -> str:
+def part_of(src: str, name: str) -> str | None:
+    """the part a cell's source file or name gives, or None (a cell that lost both: voted below)"""
     files = [p.split(":")[0] for p in (src or "").split("|")]
-    for part, prefixes, _ in PARTS[:-1]:
+    for part, prefixes, _ in PARTS:
         if any(f.startswith(px) or px in f for f in files for px in prefixes):
             return part
     for part, _, names in PARTS[:-1]:
-        if any("." + n + "." in "." + name + "." or name.startswith(n + ".") or ("." + n) in name for n in names):
+        if any(("." + n + ".") in ("." + name + ".") or name.startswith(n + ".") for n in names):
             return part
-    return "other"
+    return None
 
 
 def main() -> int:
@@ -50,6 +51,36 @@ def main() -> int:
     place = json.load(open(a.build + "/placement.json"))
     grid = json.load(open(a.tilegrid))
 
+    # every netlist cell's part: from its source or name, else by its neighbours' votes (the
+    # LUTs abc made lose their source), as the integrator's floorplan scripts do
+    label = {cn: part_of(c.get("attributes", {}).get("src", ""), cn) for cn, c in cells.items()}
+    drv, loads = {}, collections.defaultdict(list)
+    for cn, c in cells.items():
+        pd = c.get("port_directions", {})
+        for port, bits in c.get("connections", {}).items():
+            for b in bits:
+                if isinstance(b, int):
+                    (drv.__setitem__(b, cn) if pd.get(port) == "output" else loads[b].append(cn))
+    for _ in range(40):
+        changed = 0
+        for cn, c in cells.items():
+            if label[cn] is not None:
+                continue
+            votes = collections.Counter()
+            pd = c.get("port_directions", {})
+            for port, bits in c.get("connections", {}).items():
+                for b in bits:
+                    if not isinstance(b, int):
+                        continue
+                    near = loads.get(b, []) if pd.get(port) == "output" else [drv[b]] if b in drv else []
+                    for n in near:
+                        if label.get(n) not in (None, "other"):
+                            votes[label[n]] += 1
+            if votes:
+                label[cn] = votes.most_common(1)[0][0]
+                changed += 1
+        if not changed:
+            break
     kinds = collections.defaultdict(collections.Counter)      # part -> kind -> count
     regions = collections.defaultdict(collections.Counter)    # part -> clock region -> count
     boxes = {}
@@ -60,9 +91,8 @@ def main() -> int:
         if not t:
             continue
         base = pk.split("/")[0]
-        c = cells.get(base) or cells.get(re.sub(r"\$split\$.*$", "", base))
-        src = c.get("attributes", {}).get("src", "") if c else ""
-        part = part_of(src, base)
+        cn = base if base in cells else re.sub(r"\$split\$.*$", "", base)
+        part = label.get(cn) or part_of("", base) or "other"
         ty = v.get("type", "?")
         kind = ("RAMB36" if "RAMB36" in ty else "RAMB18" if "RAMB18" in ty else "LUT" if "LUT" in ty
                 else "FF" if "FF" in ty or ty.startswith("FD") else "CARRY" if "CARRY" in ty else

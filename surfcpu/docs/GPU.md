@@ -43,7 +43,7 @@ section records the refinements and the deviations.
 
 | Point | Decided | Done | Why |
 |---|---|---|---|
-| VRAM size, ports | 300 KiB TDP BRAM, A 32-bit sys (CPU first), B 32-bit read pix | as decided; 19 banks of 16 KiB (the last 12 KiB); CPU and engine answer one cycle after the access, the pixel port two pix_clk edges after the address | one-cycle answers keep SurfBus rule 7 ("block RAM answers in 1 cycle"); the pixel port has a register after the bank multiplexer, where timing is free |
+| VRAM size, ports | 300 KiB TDP BRAM, A 32-bit sys (CPU first), B 32-bit read pix; about 75 RAMB36 | as decided; 5 banks of 64 KiB (the last 44 KiB): 76 RAMB36; CPU and engine answer one cycle after the access, the pixel port two pix_clk edges after the address | one-cycle answers keep SurfBus rule 7 ("block RAM answers in 1 cycle"); the pixel port has a register after the bank multiplexer, where timing is free; 64 KiB banks (16Kx2 block RAMs) cost one RAMB36 more than 16 KiB ones but route: section 2 |
 | CPU window | 0x3000_0000, decodes 512 KiB, error above 300 KiB, byte enables, no fetch | as decided | |
 | Engine on port A | CPU priority, bounded short CPU latency | the CPU's request takes port A in the cycle it is offered; the engine waits that cycle | the CPU never waits, so its latency is exactly the scratch RAM's |
 | Graphics modes | MODE 2 graphics, MODE 3 graphics + text | as decided, with the proposed overlay rule | |
@@ -65,14 +65,17 @@ and GFX_STRIDE (two 320x240 pictures take 150 KiB, leaving 150 KiB for a later z
 sprites). Little-endian: the pixel at byte address a is byte a mod 4 of word a / 4, so pixel x
 of a line is in bits 8(x mod 4)+7 .. 8(x mod 4) of its word.
 
-**Banks.** Nineteen banks of 4,096 words (16 KiB), the last one 3,072 words (12 KiB); word
-address bits 16:12 choose the bank and 11:0 the word in it. Each bank is written like
-`surf_textram` (its proven dual-clock form): port A in sys_clk with byte write enables, reading
-only when it does not write (the block RAM's NO_CHANGE mode: READ_FIRST is unsafe with the
-other port on another clock, UG473), port B in pix_clk, read only. A pixel read at the instant
-the same word is written may show either value in that one frame; memory is never corrupted.
-The expected mapping is 4 RAMB36 per full bank (4Kx9, one byte lane each, as Yosys maps the text
-RAM) and 3 for the last: about 75 RAMB36.
+**Banks.** Five banks of 16,384 words (64 KiB), the last one 11,264 words (44 KiB); word
+address bits 16:14 choose the bank and 13:0 the word in it (`BANK_LOG2` = 14). Each bank is
+written like `surf_textram` (its proven dual-clock form): port A in sys_clk with byte write
+enables, reading only when it does not write (the block RAM's NO_CHANGE mode: READ_FIRST is
+unsafe with the other port on another clock, UG473), port B in pix_clk, read only. A pixel read
+at the instant the same word is written may show either value in that one frame; memory is never
+corrupted. Yosys maps each full bank to 16 RAMB36 of 16Kx2, as it maps the 64 KiB scratch RAM,
+and the last to 12: 76 RAMB36, with a 5-input multiplexer per bit and port. (The first version,
+19 banks of 4,096 words, took 75 RAMB36 but had 19-input multiplexers that gathered 672 block RAM
+outputs per port in one place; nextpnr could not route that design in reasonable time, section
+12.2.)
 
 **Port A** (sys_clk) has two users:
 
@@ -332,7 +335,7 @@ arithmetic.
 
 | Part | LUT | FF | RAMB36 | DSP |
 |---|---|---|---|---|
-| surf_vram | ~250 (bank multiplexers) | ~80 | 75 | 0 |
+| surf_vram | ~320 (bank multiplexers; Yosys) | ~80 | 76 | 0 |
 | graphics scan-out, GPAL, FRAME_CRC | ~400 | ~250 | 0.5 | 0 |
 | surf_gpu | ~2,500 | ~900 | 0 (FIFO in LUTRAM) | 0 |
 | total added | ~3,200 | ~1,250 | ~76 | 0 |
@@ -387,6 +390,14 @@ G1 (2026-10-18, `make test-gpu`; [evidence](evidence/gpu/g1-sim.txt)):
 | `test-gpu-video`: the graphics tests | 53 checks per seed, seeds 1-3, 48 frames each: registers and GPAL, FRAME_CRC of the test pattern, of black, of text, of graphics and of the overlay equal to the model's and to the captured frame's; 8 placements (doubling, wrapping, stride 0, scale 0) pixel by pixel; mid-frame GFX_ writes change only the next frame, GPAL at once; FRAME_COUNT one per frame; a pixel-domain reset |
 | `test-gpu-interconnect`: tb_interconnect with `HAS_GPU = 1` | seeds 1-3, 24,932 accesses each, the gpu and vram targets reached (about 600 and 450 times), fetches to them refused; `HAS_GPU = 0` in test-soc-units as before |
 | `test-gpu-soc`: gpudiag on the RTL SoC (`build/sim/surfsim_gpu`) | `GPUDIAG: PASS (90 checks)`: identity, the VRAM window (March C- over 300 KiB, the errors), the registers, 7 scenes whose FRAME_CRCs equal the model's and the CRC of a frame captured at the VGA pins; 23.9 million cycles (0.96 s simulated) in 11 s |
+
+G2 (2026-10-18; [evidence](evidence/gpu/g2-sim.txt)):
+
+| Test | Result |
+|---|---|
+| `test-gpu-encodings` | the 10 opcodes, 3 header bits, gpu.ID and VRAM's size agree in gpu.h, surf_gpu.v and surfcpu_soc.v |
+| `test-gpu-engine`: surf_gpu with surf_vram against the C model | seeds 1-3, 699 checks each: the registers and their error rules; FILL_RECT at every x mod 4 and width 1-9, at each corner, from x = -32768 with w = 65535, zero sizes, the clip at each edge, an empty clip, a full screen (76,850 cycles: 4 pixels a cycle); SET_TARGET's seven refusals and its limits (the last 192 bytes, one line wider than its stride, an empty target); COPY_RECT overlapping in eight directions by 1 and 5 pixels at every source alignment, the key, sources outside the target, the clip, 65535 x 65535 from far out, a 639x400 unaligned overlapping copy (129,260 cycles: 2 a word); LINE in every octant with its endpoints, a point, clipped and far lines; EXPAND at every alignment, opaque and transparent, sizes crossing words, clipped; WRITE_RECT at every alignment, clipped; unknown opcodes; a full FIFO and OVERFLOW; the fence and error interrupts; ABORT inside a WRITE_RECT; WAIT_VBLANK. Then 120 random chunks per seed (about 1,900 commands, 30,000 words, 780,000 pixel writes) with VRAM compared byte for byte at 134 fences, the CPU reading VRAM and writing its spare top meanwhile (the engine waited 6,000 to 11,000 cycles for it) |
+| `test-gpu-soc`: gpudiag with the engine on the RTL SoC | `GPUDIAG: PASS (117 checks)`: the G1 sections, the engine's registers and errors (a full FIFO behind a WAIT_VBLANK, OVERFLOW, an unknown opcode, a refused target, a fence's interrupt at intc source 5), and 13 scenes (6 drawn by the engine) whose FRAME_CRCs equal the model's and those of frames captured at the pins; 33.0 million cycles. SurfBoot on the same SoC answers its monitor |
 
 The existing suites pass unchanged with the GPU code in the tree (`HAS_GPU = 0`): lint-soc,
 lint-io, test-io-video (123 checks per seed), test-io-icarus, test-soc-units, test-soc-system,
@@ -447,5 +458,25 @@ the Pmod VGA on JB and JC and a monitor (WIRING.md); no card or keyboard is need
 
 ### 14.1 Expected FRAME_CRCs
 
-(from `build/fw/gen/gpuscenes_expect.h`, the C model's values for gpudiag's scenes; filled in with
-G2)
+The C model's values for gpudiag's scenes (`build/fw/gen/gpuscenes_expect.h`, written by `make
+build-rom`; `make gpu-scenes` writes each scene's frame as `build/fw/gpuscenes/scene-NN.ppm`). They
+do not depend on the build: the same numbers on every bitstream with this gpudiag.
+
+| Scene | What the monitor shows | FRAME_CRC |
+|---|---|---|
+| 0 | colour bars (MODE 0) | 2077db89 |
+| 1 | text, the 256 glyphs (MODE 1) | 50e89802 |
+| 2 | VRAM 640x480 through GPAL's RGB332 | 14ee83ce |
+| 3 | the same VRAM through 16 greys | a5b99e4d |
+| 4 | the 320x240 page at 150 KiB, doubled | 857895ee |
+| 5 | text over graphics (MODE 3), a blue box, the cursor | 6fb93532 |
+| 6 | ENABLE 0: black | c656b350 |
+| 7 | engine: fills at every alignment, the four edges, a clip | 4218a69c |
+| 8 | engine: lines in every octant, a frame, clipped lines | e590bd48 |
+| 9 | engine: overlapping copies in eight directions, the key | eeef382e |
+| 10 | engine: EXPAND letters (opaque, transparent, scaled), sprites | c957aa55 |
+| 11 | engine: the 320x240 page drawn, flipped to after WAIT_VBLANK | 2eb6a588 |
+| 12 | engine: the demo (stays on the screen with the result bar) | f501eb46 |
+
+In simulation (2026-10-18, `make test-gpu-soc`) every one of these was also the CRC of a frame the
+VGA capture took at the RTL SoC's pins.
