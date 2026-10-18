@@ -274,14 +274,16 @@ static int page_buttons(const struct gui_state *g, struct button *b) {
     return n;
 }
 
-/* the text that Copy puts on the clipboard: what the page shows */
+/* the text that Copy puts on the clipboard: what the page shows. 10/18/26: written into a buffer of its own and put
+   on the clipboard only when there is something (a date not known left a NUL there) */
+#define COPY_MAX 512                    /* the longest: the stopwatch with its eight laps, a month as cal prints it */
 static void copy(struct gui_state *g) {
     const struct gui_clock *c = &g->clockapp;
     const struct gui_time *t = &g->time;
-    char *out = g->clip, line[48];
+    char out[COPY_MAX], line[48];
     u32 n = 0, year, month;
     int i, cell, days;
-#define PUT(s) do { strlcpy(out + n, (s), GUI_CLIP_MAX - n); n += strlen(out + n); } while(0)
+#define PUT(s) do { strlcpy(out + n, (s), sizeof(out) - n); n += strlen(out + n); } while(0)
     out[0] = 0;
     switch(c->page) {
     case GUI_CLOCK_PAGE:
@@ -290,10 +292,12 @@ static void copy(struct gui_state *g) {
                  months[t->month - 1], t->date, t->year, t->hour % 24, t->minute % 60, t->second % 60);
         PUT(line);
         break;
-    case GUI_CALENDAR_PAGE:                             /* as cal prints it */
+    case GUI_CALENDAR_PAGE:                             /* as cal prints it: the title centred over the weeks */
         shown_month(g, &year, &month);
-        snprintf(line, sizeof(line), "%s %u\nSu Mo Tu We Th Fr Sa\n", months[month - 1], year);
+        snprintf(line, sizeof(line), "%s %u", months[month - 1], year);
+        for(i = 0; i < (20 - (int)strlen(line)) / 2; i++) PUT(" ");
         PUT(line);
+        PUT("\nSu Mo Tu We Th Fr Sa\n");
         days = clock_days(year, month);
         for(cell = 0; cell < clock_cell(year, month, 1); cell++) PUT("   ");
         for(i = 1; i <= days; i++, cell++) {
@@ -301,7 +305,7 @@ static void copy(struct gui_state *g) {
             PUT(line);
         }
         break;
-    case GUI_STOPWATCH_PAGE:
+    case GUI_STOPWATCH_PAGE:                            /* its time, and the laps kept (the page shows five) */
         watch_text(clock_watch(g), line, sizeof(line));
         PUT(line);
         PUT("\n");
@@ -319,13 +323,15 @@ static void copy(struct gui_state *g) {
         break;
     }
 #undef PUT
+    if(!n) return;
+    memcpy(g->clip, out, n);
     g->clip_len = n;
     status(g, "Copied");
 }
 
+/* 10/18/26: Copy only when the page has something to copy (the clock's page needs a date) */
 static bool can_edit(const struct gui_state *g, int act) {
-    (void)g;
-    return act == ACT_COPY;
+    return act == ACT_COPY && (g->clockapp.page != GUI_CLOCK_PAGE || known(g));
 }
 
 static void edit(struct gui_state *g, int act) {
@@ -378,6 +384,21 @@ static void title_of(const struct gui_state *g, char *out, size_t n) {
     } else strlcpy(out, "Clock", n);
 }
 
+/* 10/18/26: the stopwatch's digits are hidden: a window in front of the Clock covers them whole (a maximized one,
+   say), so its tenths need not redraw the desktop */
+static bool digits_hidden(const struct gui_state *g) {
+    const struct gui_window *w = &g->win[GUI_CLOCK], *o;
+    int i, x = w->x + 8, y = w->y + TOP + 8, wd = w->w - 16, h = 16 * BIG;
+    bool above = false;
+    for(i = 0; i < GUI_WINDOWS; i++) {                  /* g->order runs from the back to the front */
+        if(g->order[i] == GUI_CLOCK) { above = true; continue; }
+        o = &g->win[g->order[i]];
+        if(above && o->open && !o->min && o->x <= x && o->y <= y && o->x + o->w >= x + wd && o->y + o->h >= y + h)
+            return true;
+    }
+    return false;
+}
+
 /* every frame, minimized too: the timer reaching zero, and what counts drawn again when it shows a new value */
 static void tick(struct gui_state *g) {
     struct gui_clock *c = &g->clockapp;
@@ -390,6 +411,9 @@ static void tick(struct gui_state *g) {
         c->alarm_asked = false;
         g->dirty = true;                                /* the title, in the taskbar too */
     }
+    /* 10/18/26: the alarm's message put up, then replaced by another dialog before it was answered: ask again */
+    if(c->alarm && c->alarm_asked && (g->dialog.kind != GUI_DLG_CONFIRM || g->dialog.act != gui_app_act(GUI_CLOCK, ANS_ALARM)))
+        c->alarm_asked = false;
     if(c->alarm && !c->alarm_asked && !g->dialog.kind) {   /* never over a question that waits for its answer */
         c->alarm_asked = true;
         timer_text(c->timer_set, t, sizeof(t));
@@ -398,7 +422,8 @@ static void tick(struct gui_state *g) {
     }
     v = c->timer_on ? left_seconds(g) : 0;
     if(v != c->shown_left) { c->shown_left = v; g->dirty = true; }
-    v = !c->watch_on || g->win[GUI_CLOCK].min ? 0 :     /* its page shows tenths, the others' status bar seconds */
+    /* its page shows tenths, the others' status bar seconds; 10/18/26: nothing while the digits are hidden */
+    v = !c->watch_on || g->win[GUI_CLOCK].min || (c->page == GUI_STOPWATCH_PAGE && digits_hidden(g)) ? 0 :
         c->page == GUI_STOPWATCH_PAGE ? clock_watch(g) / 100 : clock_watch(g) / 1000;
     if(v != c->shown_watch) { c->shown_watch = v; g->dirty = true; }
 }

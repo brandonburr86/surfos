@@ -654,7 +654,7 @@ static void calendar(void) {
     CHECK(!g.quit && g.clip_len > 0);
     g.clip[g.clip_len] = 0;
     {
-        const char *cal = "October 2026\nSu Mo Tu We Th Fr Sa\n             1  2  3\n 4  5  6  7  8  9 10\n";
+        const char *cal = "    October 2026\nSu Mo Tu We Th Fr Sa\n             1  2  3\n 4  5  6  7  8  9 10\n";
         CHECK(!strncmp(g.clip, cal, strlen(cal)) && !strcmp(g.clip + g.clip_len - 9, "\n25 26 27 28 29 30 31\n" + 13));
     }
 }
