@@ -72,9 +72,9 @@ module surfcpu_soc #(
                                   ((HAS_GPU != 0) ? SURF_SYSINFO_FEATURES_GPU_MASK : 32'h0);
     localparam [31:0] DDR_BYTES = (HAS_DDR != 0) ? DDR_SIZE : 32'h0;
     localparam integer HAS_DDRC = ((HAS_DDR != 0) && (DDR_SWINIT != 0)) ? 1 : 0;
-    // VRAM's size: 300 KiB of the 512 KiB vram window (docs/GPU.md section 2; for C,
-    // SURF_VRAM_BYTES in firmware/include/surfcpu/gpu.h, which the gpu tests compare)
-    localparam integer VRAM_BYTES = 307200;
+    // VRAM's size: 300 KiB of the 512 KiB vram window (docs/GPU.md section 2; spec/soc.toml's
+    // vram bytes, generated for Verilog and C as SURF_VRAM_BYTES)
+    localparam integer VRAM_BYTES = SURF_VRAM_BYTES;
 
     // ---------------------------------------------------------------- the core
     wire        ibus_req_valid, ibus_req_ready, ibus_req_write, ibus_req_fetch;

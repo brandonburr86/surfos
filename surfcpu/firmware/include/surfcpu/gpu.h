@@ -3,7 +3,7 @@ SurfGPU command encodings
 --------------------
 File: gpu.h Date: 10/18/26 (SurfGPU)
 --------------------
-The gpu engine's command words (docs/GPU.md section 5) and VRAM's size, for C: the firmware,
+The gpu engine's command words (docs/GPU.md section 5), for C: the firmware,
 the C reference model (sim/models/gpu_model.c) and the tests. The registers themselves are in
 the generated surfcpu/soc.h (SURF_GPU_*, SURF_VIDEO_GFX_*, ...). rtl/peripherals/surf_gpu.v
 uses the same values; sim/gpu/check_gpu_h.py compares the two.
@@ -14,7 +14,7 @@ gpu.CMD: coordinates are GPU_XY(x, y) (signed 16-bit each), sizes GPU_WH(w, h).
 #ifndef SURFCPU_GPU_H
 #define SURFCPU_GPU_H
 
-#define SURF_VRAM_BYTES 307200u     /* VRAM: 300 KiB of the 512 KiB vram window */
+#include "surfcpu/soc.h"            /* SURF_VRAM_BYTES: 300 KiB of the 512 KiB vram window */
 
 /* opcodes (header bits 31:24) and their parameter words */
 #define GPU_OP_NOP          0x00u   /* -                                                  */

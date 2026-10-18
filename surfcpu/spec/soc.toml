@@ -39,7 +39,8 @@ arty_a7_35t = 0x0135  # Digilent Arty A7-35T  (xc7a35ticsg324-1L)
 arty_a7_100t = 0x0100 # Digilent Arty A7-100T (xc7a100tcsg324-1)
 
 # ---------------------------------------------------------------------------------------------
-# Address regions decoded by the SoC. fetch = instruction fetch allowed; write = stores allowed.
+# Address regions decoded by the SoC. fetch = instruction fetch allowed; write = stores allowed;
+# bytes = the memory present from the base when the window is larger (the rest: errors).
 # Anything not listed is unmapped: an access returns a SurfBus error (an access fault).
 
 [[region]]
@@ -172,6 +173,7 @@ desc = "Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell
 name = "vram"
 base = 0x3000_0000
 size = 0x8_0000
+bytes = 0x4_B000              # the memory in the window (the linker region's length)
 kind = "ram"
 fetch = false
 write = true
@@ -185,6 +187,17 @@ kind = "ddr"
 fetch = true
 write = true
 desc = "256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS)"
+
+# ---------------------------------------------------------------------------------------------
+# Never mapped: no SurfCPU SoC decodes these, in any design or later map version, so every access
+# is an error. Tests that need an access fault probe here (bramdiag, SurfBoot's monitor tests,
+# the hello kernel), never at an address a later peripheral might take.
+
+[[hole]]
+name = "unmapped_probe"
+base = 0x4000_0000
+size = 0x1000_0000
+desc = "Never decoded, in any design or memory map version: every access is an error (the tests' access-fault probe)"
 
 # ---------------------------------------------------------------------------------------------
 # Software reservations inside the regions (not decoded by hardware).
@@ -539,7 +552,7 @@ fields = [
 
 [[periph]]
 name = "video"
-desc = "VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken with CTRL, once per frame, GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error)."
+desc = "VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken once per frame, at the same point as CTRL (registers written one after the other change the same frame when written between STATUS.VBLANK_EV and 1.3 ms after it: docs/GPU.md section 4.1), GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error)."
 irq = "video"
 
 [[periph.reg]]
@@ -654,13 +667,13 @@ fields = [
 name = "FRAME_CRC"
 offset = 0x8C
 access = "ro"
-desc = "CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU."
+desc = "CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU."
 
 [[periph.reg]]
 name = "FRAME_COUNT"
 offset = 0x90
-access = "ro"
-desc = "How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU."
+access = "rc"
+desc = "How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU."
 fields = [
   { name = "COUNT", bits = "15:0", desc = "frames (wraps)" },
 ]

@@ -3,7 +3,7 @@
  * SurfCPU memory map version 2, SoC version 0.3.0.
  */
 
-/* Symbols for every region and reservation; INCLUDE this before SECTIONS. */
+/* Symbols for every region, reservation and hole; INCLUDE this before SECTIONS. */
 SURF_BOOTROM_BASE = 0x00000000;
 SURF_BOOTROM_SIZE = 0x00010000;
 SURF_SCRATCH_BASE = 0x00010000;
@@ -44,12 +44,15 @@ SURF_KERNEL_BASE = 0x80000000;
 SURF_KERNEL_SIZE = 0x0F000000;
 SURF_DDR_TOP_BASE = 0x8F000000;
 SURF_DDR_TOP_SIZE = 0x01000000;
+SURF_UNMAPPED_PROBE_BASE = 0x40000000;
+SURF_UNMAPPED_PROBE_SIZE = 0x10000000;
 
+/* a memory region is as long as the memory in it (bytes), not its decoded window */
 MEMORY
 {
   bootrom  (rx ) : ORIGIN = 0x00000000, LENGTH = 0x00010000
   scratch  (rwx) : ORIGIN = 0x00010000, LENGTH = 0x00010000
   textram  (rw ) : ORIGIN = 0x20000000, LENGTH = 0x00004000
-  vram     (rw ) : ORIGIN = 0x30000000, LENGTH = 0x00080000
+  vram     (rw ) : ORIGIN = 0x30000000, LENGTH = 0x0004B000
   ddr      (rwx) : ORIGIN = 0x80000000, LENGTH = 0x10000000
 }

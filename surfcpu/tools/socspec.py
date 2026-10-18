@@ -79,14 +79,27 @@ class Region:
     fetch: bool
     write: bool
     desc: str
+    bytes: int | None = None        # memory present from base (the rest of the window: errors)
 
     @property
     def end(self) -> int:
         return self.base + self.size
 
+    @property
+    def length(self) -> int:
+        return self.bytes if self.bytes is not None else self.size
+
 
 @dataclasses.dataclass
 class Reserve:
+    name: str
+    base: int
+    size: int
+    desc: str
+
+
+@dataclasses.dataclass
+class Hole:
     name: str
     base: int
     size: int
@@ -103,6 +116,7 @@ class Spec:
     irqs: dict[str, int]
     periphs: dict[str, Periph]
     bootabi: dict
+    holes: dict[str, Hole] = dataclasses.field(default_factory=dict)
 
     @property
     def soc_version_word(self) -> int:
@@ -138,10 +152,14 @@ def load(path: Path = SPEC) -> Spec:
     regions: dict[str, Region] = {}
     for r in raw.get("region", []):
         reg = Region(_name(r["name"], "region"), int(r["base"]), int(r["size"]), r["kind"],
-                     bool(r["fetch"]), bool(r["write"]), r.get("desc", ""))
+                     bool(r["fetch"]), bool(r["write"]), r.get("desc", ""),
+                     int(r["bytes"]) if "bytes" in r else None)
         w = f"region {reg.name}"
         if reg.name in regions:
             raise SpecError(f"{w}: defined twice")
+        if reg.bytes is not None and (reg.kind not in ("rom", "ram") or not 0 < reg.bytes <= reg.size
+                                      or reg.bytes % 4):
+            raise SpecError(f"{w}: bytes must be a whole number of words inside a rom or ram window")
         if reg.kind not in KINDS:
             raise SpecError(f"{w}: kind {reg.kind!r} not one of {sorted(KINDS)}")
         if not _pow2(reg.size) or reg.base % reg.size:
@@ -166,6 +184,19 @@ def load(path: Path = SPEC) -> Spec:
             if res.base < o.base + o.size and o.base < res.base + res.size:
                 raise SpecError(f"{w}: overlaps reserve {o.name}")
         reserves[res.name] = res
+
+    holes: dict[str, Hole] = {}
+    for h in raw.get("hole", []):
+        hole = Hole(_name(h["name"], "hole"), int(h["base"]), int(h["size"]), h.get("desc", ""))
+        w = f"hole {hole.name}"
+        if hole.name in holes or hole.name in regions or hole.name in reserves:
+            raise SpecError(f"{w}: name already used")
+        if hole.size <= 0 or hole.base + hole.size > 1 << 32:
+            raise SpecError(f"{w}: empty or past 4 GiB")
+        for o in list(regions.values()) + list(holes.values()):
+            if hole.base < o.base + o.size and o.base < hole.base + hole.size:
+                raise SpecError(f"{w}: overlaps {'region' if o.name in regions else 'hole'} {o.name}")
+        holes[hole.name] = hole
 
     irqs = {_name(k, "irqs"): int(v) for k, v in raw.get("irqs", {}).items()}
     if len(set(irqs.values())) != len(irqs) or any(not 0 <= v < 32 for v in irqs.values()):
@@ -214,7 +245,7 @@ def load(path: Path = SPEC) -> Spec:
         raise SpecError("clocks: sys_hz must be a whole multiple of timebase_hz")
     soc = dict(raw["soc"])
     boards = {_name(k, "boards"): int(v) for k, v in raw["boards"].items()}
-    spec = Spec(soc, clocks, boards, regions, reserves, irqs, periphs, dict(raw["bootabi"]))
+    spec = Spec(soc, clocks, boards, regions, reserves, irqs, periphs, dict(raw["bootabi"]), holes)
     spec.soc_version_word  # validates the version string
     return spec
 
@@ -251,10 +282,16 @@ def _consts(spec: Spec) -> list[tuple[str, int, str, str]]:
         out.append((f"SURF_{n}_BASE", r.base, "addr", r.desc))
         out.append((f"SURF_{n}_SIZE", r.size, "addr", ""))
         out.append((f"SURF_{n}_MASK", r.size - 1, "addr", "address bits inside the region"))
+        if r.bytes is not None:
+            out.append((f"SURF_{n}_BYTES", r.bytes, "addr", "bytes present from the base; above, errors"))
     for r in spec.reserves.values():
         n = r.name.upper()
         out.append((f"SURF_{n}_BASE", r.base, "addr", r.desc))
         out.append((f"SURF_{n}_SIZE", r.size, "addr", ""))
+    for h in spec.holes.values():
+        n = h.name.upper()
+        out.append((f"SURF_{n}_BASE", h.base, "addr", h.desc))
+        out.append((f"SURF_{n}_SIZE", h.size, "addr", "never mapped"))
     for k, v in spec.irqs.items():
         out.append((f"SURF_IRQ_{k.upper()}", v, "num", "interrupt controller source"))
     out.append(("SURF_IRQ_COUNT", max(spec.irqs.values()) + 1, "num", "sources in use"))
@@ -319,17 +356,18 @@ def gen_c(spec: Spec) -> str:
 
 def gen_ld(spec: Spec) -> str:
     lines = _hdr(spec, "/*", " * ", " */")
-    lines.append("/* Symbols for every region and reservation; INCLUDE this before SECTIONS. */")
-    for r in list(spec.regions.values()) + list(spec.reserves.values()):
+    lines.append("/* Symbols for every region, reservation and hole; INCLUDE this before SECTIONS. */")
+    for r in list(spec.regions.values()) + list(spec.reserves.values()) + list(spec.holes.values()):
         n = r.name.upper()
         lines.append(f"SURF_{n}_BASE = 0x{r.base:08X};")
         lines.append(f"SURF_{n}_SIZE = 0x{r.size:08X};")
-    lines += ["", "MEMORY", "{"]
+    lines += ["", "/* a memory region is as long as the memory in it (bytes), not its decoded window */",
+              "MEMORY", "{"]
     for r in spec.regions.values():
         if r.kind in ("mmio", "reserved"):
             continue
         attrs = "r" + ("w" if r.write else "") + ("x" if r.fetch else "")
-        lines.append(f"  {r.name:<8} ({attrs:<3}) : ORIGIN = 0x{r.base:08X}, LENGTH = 0x{r.size:08X}")
+        lines.append(f"  {r.name:<8} ({attrs:<3}) : ORIGIN = 0x{r.base:08X}, LENGTH = 0x{r.length:08X}")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
@@ -369,6 +407,8 @@ def gen_doc(spec: Spec) -> str:
             "|---|---|---|---|---|---|---|---|"]
     for r in sorted(s.regions.values(), key=lambda r: r.base):
         size = f"{r.size // 1024} KiB" if r.size < 1 << 20 else f"{r.size >> 20} MiB"
+        if r.bytes is not None:
+            size += f" ({r.bytes // 1024} KiB present)" if r.bytes % 1024 == 0 else f" ({r.bytes} bytes present)"
         out.append(f"| {_hex(r.base)} | {_hex(r.end - 1)} | {size} | `{r.name}` | {r.kind} | "
                    f"{'yes' if r.fetch else 'no'} | {'yes' if r.write else 'no'} | {r.desc} |")
     out += ["", "## Software reservations", "",
@@ -377,6 +417,14 @@ def gen_doc(spec: Spec) -> str:
     for r in sorted(s.reserves.values(), key=lambda r: r.base):
         size = f"{r.size // 1024} KiB" if r.size < 1 << 20 else f"{r.size >> 20} MiB"
         out.append(f"| {_hex(r.base)} | {size} | `{r.name}` | {r.desc} |")
+    if s.holes:
+        out += ["", "## Never mapped", "",
+                "Address ranges no SurfCPU SoC decodes, in any design or later memory map: every access "
+                "is an error, so tests probe them for access faults.", "",
+                "| Base | Size | Name | Purpose |", "|---|---|---|---|"]
+        for h in sorted(s.holes.values(), key=lambda h: h.base):
+            size = f"{h.size // 1024} KiB" if h.size < 1 << 20 else f"{h.size >> 20} MiB"
+            out.append(f"| {_hex(h.base)} | {size} | `{h.name}` | {h.desc} |")
     out += ["", "## Interrupts", "",
             "`mip.MTIP` comes from the timer (mtime >= mtimecmp), `mip.MSIP` from timer.MSIP, and "
             "`mip.MEIP` from the interrupt controller, which ORs these level sources:", "",

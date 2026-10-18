@@ -34,7 +34,7 @@ Unmapped addresses, fetches from regions without *fetch*, and stores to regions 
 | `0x1000_9000` | `0x1000_9FFF` | 4 KiB | `gpu` | mmio | no | yes | GPU drawing engine: command FIFO, status, fences (docs/GPU.md); present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) |
 | `0x1000_A000` | `0x1000_BFFF` | 8 KiB | `ddrc` | mmio | no | yes | DDR controller registers, through which software initializes and calibrates the DDR3L when sysinfo.DDR_STATUS.SWINIT is 1 (LiteDRAM without its own CPU); unmapped (every access an error) when SWINIT is 0 |
 | `0x2000_0000` | `0x2000_3FFF` | 16 KiB | `textram` | ram | no | yes | Text memory: 4096 32-bit cells; cells 0..2399 are the 80x30 screen (cell = row*80 + col) |
-| `0x3000_0000` | `0x3007_FFFF` | 512 KiB | `vram` | ram | no | yes | Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) |
+| `0x3000_0000` | `0x3007_FFFF` | 512 KiB (300 KiB present) | `vram` | ram | no | yes | Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) |
 | `0x8000_0000` | `0x8FFF_FFFF` | 256 MiB | `ddr` | ddr | yes | yes | 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS) |
 
 ## Software reservations
@@ -47,6 +47,14 @@ Not decoded by hardware; SurfBoot and the kernel keep to them.
 | `0x0001_F000` | 4 KiB | `bootinfo` | struct surf_boot_info from SurfBoot; preserved until the kernel has copied it |
 | `0x8000_0000` | 240 MiB | `kernel` | Where SURFOS.BIN payloads load by default (the image header decides); the kernel owns the rest of DDR |
 | `0x8F00_0000` | 16 MiB | `ddr_top` | Top 16 MiB of DDR: kept free by SurfBoot (later display buffers, loader staging, crash records) |
+
+## Never mapped
+
+Address ranges no SurfCPU SoC decodes, in any design or later memory map: every access is an error, so tests probe them for access faults.
+
+| Base | Size | Name | Purpose |
+|---|---|---|---|
+| `0x4000_0000` | 256 MiB | `unmapped_probe` | Never decoded, in any design or memory map version: every access is an error (the tests' access-fault probe) |
 
 ## Interrupts
 
@@ -148,7 +156,7 @@ PS/2 port (keyboard). Receives device-to-host frames into a 16-byte FIFO, checki
 
 ### video at `0x1000_6000`
 
-VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken with CTRL, once per frame, GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error). Interrupt source 3 (video).
+VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode shows 80x30 cells of 8x16 glyphs from text RAM; a cell is glyph 7:0, foreground 11:8, background 15:12 (palette indices), bits 31:16 reserved (stored, not shown). Display row r shows text row (r + SCROLL) mod 30. Writes to CTRL, CURSOR, SCROLL and PALETTE take effect together at the start of the next frame. With sysinfo.FEATURES.GPU, graphics modes show 8-bit pixels from VRAM through a 256-entry palette (docs/GPU.md); GFX_BASE, GFX_STRIDE and GFX_SCALE are taken once per frame, at the same point as CTRL (registers written one after the other change the same frame when written between STATUS.VBLANK_EV and 1.3 ms after it: docs/GPU.md section 4.1), GPAL writes apply as they arrive, and FRAME_CRC checks the picture; without, the GFX_, FRAME_ and GPAL registers are absent (an access is an error). Interrupt source 3 (video).
 
 | Offset | Register | Access | Fields | Description |
 |---|---|---|---|---|
@@ -163,8 +171,8 @@ VGA 640x480 at about 60 Hz (800x525 total, negative syncs), RGB444. Text mode sh
 | `0x080` | `GFX_BASE` | rw | 18:0 `BASE` byte offset into VRAM (bits 1:0 are 0); pixels at or above 307,200 (wrapping at 512 KiB) show palette entry 0 | Graphics modes: the VRAM byte offset of the picture's top-left pixel, taken once per frame with CTRL (so a page flip never tears). Bits 1:0 read 0: a multiple of 4. Reset 0. Only with sysinfo.FEATURES.GPU. |
 | `0x084` | `GFX_STRIDE` | rw | 15:0 `STRIDE` line pitch in bytes (bits 1:0 are 0) | Graphics modes: bytes from one VRAM line to the next, taken once per frame. Bits 1:0 read 0: a multiple of 4. Reset 640. Only with sysinfo.FEATURES.GPU. |
 | `0x088` | `GFX_SCALE` | rw | 1:0 `SCALE` 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1 | Graphics modes: pixel size, taken once per frame. Reset 1. Only with sysinfo.FEATURES.GPU. |
-| `0x08C` | `FRAME_CRC` | ro | 31:0 | CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU. |
-| `0x090` | `FRAME_COUNT` | ro | 15:0 `COUNT` frames (wraps) | How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU. |
+| `0x08C` | `FRAME_CRC` | ro | 31:0 | CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU. |
+| `0x090` | `FRAME_COUNT` | rc | 15:0 `COUNT` frames (wraps) | How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU. |
 | `0x400`..`0x7FC` | `GPAL` | rw | 3:0 `B` blue<br>7:4 `G` green<br>11:8 `R` red | Graphics palette entry n at 0x400 + 4n: RGB444 as bits 11:8 red, 7:4 green, 3:0 blue, for VRAM pixel value n. Writes apply as they arrive. Block RAM: it holds RGB332 when the FPGA is configured (n bits 7:5 red, 4:2 green, 1:0 blue, each widened to 4 bits by repeating its top bits) and a reset does not change it. Only with sysinfo.FEATURES.GPU. |
 
 ### sysinfo at `0x1000_7000`

@@ -63,6 +63,7 @@ localparam [31:0] SURF_TEXTRAM_MASK = 32'h0000_3FFF;  // address bits inside the
 localparam [31:0] SURF_VRAM_BASE = 32'h3000_0000;  // Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error)
 localparam [31:0] SURF_VRAM_SIZE = 32'h0008_0000;
 localparam [31:0] SURF_VRAM_MASK = 32'h0007_FFFF;  // address bits inside the region
+localparam [31:0] SURF_VRAM_BYTES = 32'h0004_B000;  // bytes present from the base; above, errors
 localparam [31:0] SURF_DDR_BASE = 32'h8000_0000;  // 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS)
 localparam [31:0] SURF_DDR_SIZE = 32'h1000_0000;
 localparam [31:0] SURF_DDR_MASK = 32'h0FFF_FFFF;  // address bits inside the region
@@ -74,6 +75,8 @@ localparam [31:0] SURF_KERNEL_BASE = 32'h8000_0000;  // Where SURFOS.BIN payload
 localparam [31:0] SURF_KERNEL_SIZE = 32'h0F00_0000;
 localparam [31:0] SURF_DDR_TOP_BASE = 32'h8F00_0000;  // Top 16 MiB of DDR: kept free by SurfBoot (later display buffers, loader staging, crash records)
 localparam [31:0] SURF_DDR_TOP_SIZE = 32'h0100_0000;
+localparam [31:0] SURF_UNMAPPED_PROBE_BASE = 32'h4000_0000;  // Never decoded, in any design or memory map version: every access is an error (the tests' access-fault probe)
+localparam [31:0] SURF_UNMAPPED_PROBE_SIZE = 32'h1000_0000;  // never mapped
 localparam integer SURF_IRQ_UART = 0;  // interrupt controller source
 localparam integer SURF_IRQ_PS2 = 1;  // interrupt controller source
 localparam integer SURF_IRQ_GPIO = 2;  // interrupt controller source
@@ -340,8 +343,8 @@ localparam [31:0] SURF_VIDEO_GFX_SCALE = 32'h0000_0088;  // rw: Graphics modes: 
 localparam integer SURF_VIDEO_GFX_SCALE_SCALE_LSB = 0;  // 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1
 localparam integer SURF_VIDEO_GFX_SCALE_SCALE_WIDTH = 2;
 localparam [31:0] SURF_VIDEO_GFX_SCALE_SCALE_MASK = 32'h0000_0003;  // in place
-localparam [31:0] SURF_VIDEO_FRAME_CRC = 32'h0000_008C;  // ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU.
-localparam [31:0] SURF_VIDEO_FRAME_COUNT = 32'h0000_0090;  // ro: How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU.
+localparam [31:0] SURF_VIDEO_FRAME_CRC = 32'h0000_008C;  // ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU.
+localparam [31:0] SURF_VIDEO_FRAME_COUNT = 32'h0000_0090;  // rc: How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU.
 localparam integer SURF_VIDEO_FRAME_COUNT_COUNT_LSB = 0;  // frames (wraps)
 localparam integer SURF_VIDEO_FRAME_COUNT_COUNT_WIDTH = 16;
 localparam [31:0] SURF_VIDEO_FRAME_COUNT_COUNT_MASK = 32'h0000_FFFF;  // in place

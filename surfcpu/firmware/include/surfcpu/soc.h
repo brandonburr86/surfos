@@ -66,6 +66,7 @@
 #define SURF_VRAM_BASE 0x30000000u /* Video memory: 300 KiB (307,200 bytes) of block RAM shared by the CPU, the GPU and the graphics scan-out (docs/GPU.md); bytes, halfwords and words; an access at or above 0x3004_B000 is an error; present only with sysinfo.FEATURES.GPU, else unmapped (every access an error) */
 #define SURF_VRAM_SIZE 0x00080000u
 #define SURF_VRAM_MASK 0x0007FFFFu /* address bits inside the region */
+#define SURF_VRAM_BYTES 0x0004B000u /* bytes present from the base; above, errors */
 #define SURF_DDR_BASE 0x80000000u /* 256 MiB DDR3L; every access is an error until calibration has succeeded (sysinfo.DDR_STATUS) */
 #define SURF_DDR_SIZE 0x10000000u
 #define SURF_DDR_MASK 0x0FFFFFFFu /* address bits inside the region */
@@ -77,6 +78,8 @@
 #define SURF_KERNEL_SIZE 0x0F000000u
 #define SURF_DDR_TOP_BASE 0x8F000000u /* Top 16 MiB of DDR: kept free by SurfBoot (later display buffers, loader staging, crash records) */
 #define SURF_DDR_TOP_SIZE 0x01000000u
+#define SURF_UNMAPPED_PROBE_BASE 0x40000000u /* Never decoded, in any design or memory map version: every access is an error (the tests' access-fault probe) */
+#define SURF_UNMAPPED_PROBE_SIZE 0x10000000u /* never mapped */
 #define SURF_IRQ_UART 0 /* interrupt controller source */
 #define SURF_IRQ_PS2 1 /* interrupt controller source */
 #define SURF_IRQ_GPIO 2 /* interrupt controller source */
@@ -343,8 +346,8 @@
 #define SURF_VIDEO_GFX_SCALE_SCALE_LSB 0 /* 1 = one VRAM pixel per screen pixel (640x480 from VRAM), 2 = each VRAM pixel 2x2 screen pixels (320x240); 0 and 3 act as 1 */
 #define SURF_VIDEO_GFX_SCALE_SCALE_WIDTH 2
 #define SURF_VIDEO_GFX_SCALE_SCALE_MASK 0x00000003u /* in place */
-#define SURF_VIDEO_FRAME_CRC 0x0000008Cu /* ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. Only with sysinfo.FEATURES.GPU. */
-#define SURF_VIDEO_FRAME_COUNT 0x00000090u /* ro: How many frames have had their CRC taken since the pixel clock domain was reset; FRAME_CRC is that of the last one (they cross together). Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_FRAME_CRC 0x0000008Cu /* ro: CRC-32 (zlib's crc32) of the last complete frame as it left the pins, in every mode: for each of the 640x480 visible pixels, top line first and left to right, its RGB444 value p = R << 8 | G << 4 | B as two bytes, low byte first (p & 0xFF, then p >> 8). Updated when the last visible pixel has been shown, before vertical blanking is seen in STATUS. After a read of FRAME_COUNT, the next read returns the CRC of the frame that read counted (however many frames came since); otherwise the newest. Only with sysinfo.FEATURES.GPU. */
+#define SURF_VIDEO_FRAME_COUNT 0x00000090u /* rc: How many frames have had their CRC taken since the pixel clock domain was reset (the count and the CRC cross together). A read keeps the CRC of the frame it counts for the next read of FRAME_CRC, so FRAME_COUNT then FRAME_CRC is a consistent pair. Only with sysinfo.FEATURES.GPU. */
 #define SURF_VIDEO_FRAME_COUNT_COUNT_LSB 0 /* frames (wraps) */
 #define SURF_VIDEO_FRAME_COUNT_COUNT_WIDTH 16
 #define SURF_VIDEO_FRAME_COUNT_COUNT_MASK 0x0000FFFFu /* in place */
