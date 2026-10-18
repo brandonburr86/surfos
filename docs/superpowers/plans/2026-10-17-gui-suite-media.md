@@ -18,17 +18,21 @@ as Notepad's does. (Once Files is wired to it: double-click a `.bmp` in Files.)
   picture is drawn opaque (its alpha, if any, is not used).
 * **Size.** Up to 16384 x 16384 pixels. A picture of more than 1,048,576 pixels (1024 x 1024) is reduced
   while it is read, keeping its proportions (1920 x 1080 is kept at 1365 x 768), and the status bar says
-  `kept at 1365 x 768`. A big file is read a piece at a time, so the desktop never freezes: the window and
-  the status bar count the percent (`Reading sea.bmp... 45%`), and Esc stops the reading.
+  `kept at 1365 x 768`. A picture is read a piece at a time, one piece in each frame the desktop draws (at most
+  16 reads and 256 KB plus one 64 KB chunk a frame), so the desktop goes on answering while a big file is read:
+  the window and the status bar count the percent (`Reading sea.bmp... 45%`), and Esc stops the reading. When
+  a file cannot be read to its end (it was cut short, or the stick was pulled out), the window and its status
+  bar say so; no message box interrupts what you are doing meanwhile.
 * **The views.** Fit is the default: a picture larger than the window is shrunk to fit it; a smaller one is
   enlarged by a whole number (2 times, 3 times, ...), as far as it fits, so that its pixels stay square. Press 1
   (or the toolbar's Actual size) for the actual size, + and - (or Zoom in, Zoom out) to zoom between 1/64 and
-  16 times, F or 0 to fit again; a double-click in the picture switches between Fit and the actual size.
+  16 times, F or 0 to fit again; a double-click anywhere in the picture area (the picture or the dark space
+  around it) switches between Fit and the actual size.
   Zooming keeps the point in the middle of the window where it is. Fit follows the window as it is resized
   or maximized.
 * **Moving a zoomed picture.** Drag it with the mouse, or use the arrows (32 pixels a press), Page Up and Page
-  Down (a window's height), Home (the top left) and End (the bottom right), or the wheel (up and down, or
-  sideways when the picture is no taller than the window).
+  Down (the picture area's height less 32 pixels), Home (the top left) and End (the bottom right), or the wheel
+  (up and down, or sideways when the picture is no taller than the window).
 * **The status bar** shows the name, the picture's size and bits per pixel, and the zoom (`Fit 1000%`,
   `150%`). The title bar shows the file's name.
 * Closing the window forgets the picture.
@@ -50,13 +54,15 @@ as Notepad's does. (Once Files is wired to it: double-click a `.bmp` in Files.)
   offset puts the cursor's offset there, `0x0000001F`.
 * **Go to offset.** Ctrl+L (Edit > Go to offset…, or the toolbar's Go to) takes `0x1F00` in hexadecimal or
   `7936` in decimal; the row goes to the top of the window. An offset past the end is refused.
-* **Find.** Ctrl+F (Edit > Find…, or the toolbar's Find) finds bytes from the cursor on: text as typed, or
-  bytes in hexadecimal written as pairs with spaces between them (`DE AD BE EF`) or after `0x` (`0xDEADBEEF`).
-  Text in double quotes is always text (`"DE AD"` finds the five characters). Up to 128 bytes, matched
-  exactly (letters in their case). The match is selected. N, Edit > Find next or the toolbar's Find next
-  finds the next one; at the end of the file the status bar says `Not found from 0x… to the end` (Home, then
-  Find next, searches from the start). A long search runs a piece at a time (the status bar counts the
-  percent), and Esc stops it.
+* **Find.** Ctrl+F (Edit > Find…, or the toolbar's Find) finds bytes from the start of the selection on (the
+  cursor's byte when only one is selected): text as typed, or bytes in hexadecimal written as two or more pairs
+  with spaces between them (`DE AD BE EF`) or after `0x` (`0xDEADBEEF`). A single pair such as `FF` is text
+  (the two characters F and F): one byte is written `0xFF`. Text in double quotes is always text (`"DE AD"`
+  finds the five characters). Up to 128 bytes, matched exactly (letters in their case). The match is selected.
+  N, Edit > Find next or the toolbar's Find next finds the next one; at the end of the file the status bar says
+  `Not found from 0x… to the end`, and says it again at the next N (Home, then Find next, searches from the
+  start). A Find whose text is not one (`0xZZ`) stops a search that was running. A long search runs a piece at
+  a time (the status bar counts the percent), and Esc stops it.
 * **The status bar** shows the cursor's offset in hexadecimal and decimal, how many bytes are selected, the
   last message, and the file's size. The title bar shows the file's name.
 * Hex opens files, not devices. Closing the window forgets the file.
@@ -71,11 +77,12 @@ Replace "Sketches are temporary: they are lost when the desktop exits, and Sketc
   opened last, else in the last chooser's), and before it replaces a file that is there already, as Notepad's
   Save as does, except the file Sketch itself saved last. Unsaved sketches are still lost when the desktop
   exits.
-* **Open BMP** (File > Open BMP…, or the Open button) reads a BMP into the canvas: a picture larger than the
+* **Open BMP** (File > Open BMP…, or the Open button) reads a BMP of up to 8 MB into the canvas (a 1920 x 1080
+  screenshot is 6 MB; a larger file is refused, and the Image Viewer shows it): a picture larger than the
   canvas is shrunk to fit it (its proportions kept), and a smaller one is put in the middle; each colour
   becomes the nearest of Sketch's six. It replaces the drawing (as Clear does); a picture that cannot be read
   leaves the drawing as it was.
-* The line under the canvas says what Save and Open did.
+* The line under the canvas says what Save and Open did, until the drawing changes (a stroke, Clear, Ctrl+N).
 
 ### The menus and keys tables
 
@@ -124,8 +131,14 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
    that fits, its proportions kept, each kept pixel the source pixel in the middle of what it stands for
    (nearest neighbour), and only the rows needed are read. The sanity limit is 16384 pixels a side (a row of
    16384 32-bit pixels is the 64 KB a read takes). Its status bar says `kept at W x H`.
-2. **Reading in the tick.** A picture is read in the tick, at most 256 KB a frame (the first piece at once, so
-   a small one is there with no frame's wait); Esc stops it. Hex's Find is the same, 256 KB a frame.
+2. **Reading in the tick, bounded in reads as well as bytes.** A picture is read in the tick (the first piece at
+   once, in the handler that opens it, so that a small one is there with no frame's wait); Esc stops it. A read
+   takes the file's rows from the next one needed as far as a 64 KB chunk holds them, those a reduced picture
+   skips included (read and passed over), and counts for its bytes, 16 KB at least, against the frame's 256 KB:
+   so a frame (and the first piece) makes 16 reads at most and reads 256 KB and one chunk at most. (Each
+   read_at is an open and a walk of the file's clusters on the kernel, so the reads count, not only the bytes:
+   a 256 x 16384 1-bit picture took 8,193 reads in one handler before, and takes 6 now.) Hex's Find reads
+   256 KB a frame.
 3. **Drawing.** The decoded pixels are scaled at render time, nearest neighbour, clipped to the window and the
    screen, with no allocation and no division in the loop (each row steps through the decoded pixels as a
    quotient and a remainder, exactly). On the desktop's own 32-bit 0x00RRGGBB frame the pixels are written
@@ -141,11 +154,14 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
    piece to the next, so a match across two pieces of 64 KB (or two frames) is found without rereading an
    overlap, and the worst case stays linear (a naive search with an overlap is quadratic on files like "AAAA").
    It searches from the selection's start (Find) or after the match selected (Find next), exact bytes, and
-   does not wrap round to the top.
+   does not wrap round to the top. The last match is kept until a new Find, so after "Not found" Find next
+   says "Not found" again instead of finding the last match once more. A Find whose text is no pattern stops a
+   search that runs, and the search itself stops at once with no pattern (never a match of nothing).
 8. **Hex's Find syntax**: two or more pairs of hexadecimal digits with single spaces, or 0x and digits, are
    bytes; anything else (and anything in double quotes) is text. A single byte is `0xDE`.
 9. **Copy** copies the selected bytes in hexadecimal (as `DE AD BE EF`, so a selection pastes into Hex's own
-   Find); Copy offset is a toolbar button (the Edit menu has no slot for it).
+   Find); Copy offset is a toolbar button (the Edit menu has no slot for it). The bytes are all read before the
+   clipboard is touched (43,690 at most, which fit a 64 KB piece), so a copy that fails changes nothing.
 10. **Sketch's Save as BMP always shows the chooser** (with the last name), Ctrl+S included: Sketch has no file
     of its own until it is saved, and the Save chooser's Enter is quick. The overwrite question is Notepad's,
     but not for the file Sketch saved last (as Notepad does not ask about its own file). A file Sketch opened
@@ -153,15 +169,29 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
 11. **Open BMP fits** the picture into the canvas (shrunk if larger, proportions kept, centred) rather than
     cropping it, so that any picture shows whole; Sketch's own 400 x 180 files come back pixel for pixel.
     Colours go to the nearest of the six by squared RGB distance. The new canvas is built aside and copied in
-    only when every row was read. It does not ask before it replaces the drawing, as Clear does not.
+    only when every row was read. It does not ask before it replaces the drawing, as Clear does not. It reads
+    in the dialog's answer, a row at a time (180 reads at most), so it takes files of up to 8 MB (a 1920 x
+    1080 screenshot is 6 MB): each read walks the file's clusters from its start, and a bigger file would keep
+    the desktop waiting (a 16384 x 16384 32-bit one took 181 reads and 11.8 MB in one handler). A larger file
+    is refused, with the Image Viewer named, which reads in the tick. (Reading it in a tick of Sketch's own
+    would need one: Sketch is not one of the suite's applications, and gui_tick() only calls theirs.)
 12. **Where Sketch's pieces live.** Its file code is in shell/guibmp.c; its dialogs' answers come through the
-    Image Viewer's answer hook (gui_app_act(GUI_VIEWER, 20 to 22)), so gui_answer() is unchanged; its two menu
+    Image Viewer's answer hook (gui_app_act(GUI_VIEWER, n), n exactly 20, 21 or 22), so gui_answer() is
+    unchanged; its two menu
     actions are numbers beyond the suite's dialog range (ACT_SKETCH_SAVE and ACT_SKETCH_OPEN in
     shell/gui_media.h) rather than new entries of guipriv.h's enum, which stays untouched; its palette is
     exported from guicore.c as sketch_paints[] (it was the static paints[]).
 13. **With Sketch in front the File menu hides Notepad's Save, Save as and Show in Files** (they were greyed),
     as it does with Files in front, so that Ctrl+S appears once.
 14. **Closing the Image Viewer or Hex forgets the picture or the file**, as closing Notepad forgets its text.
+15. **Sketch's line under the canvas** says what Save or Open did until the drawing changes (a stroke, Clear,
+    Ctrl+N), and then the hint again.
+16. **The tick never opens a dialog.** What goes wrong while a picture is read in the tick (a file cut short, a
+    stick pulled out) is said in the window and its status bar only: a dialog would replace the one in front,
+    such as Notepad's question about unsaved changes (whose answer would then never come, leaving the desktop
+    to quit at a later save) or a chooser with a name typed in it. The handlers' dialogs (a refused file, a
+    failed first piece) open only when no other dialog is in front. A file checked while another picture is read
+    is checked with a palette of its own, so a refused file does not stop that reading.
 
 ## Open points
 
@@ -173,12 +203,16 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
   Hex (a read every 64 KB) or reading a huge picture's rows gets slow, still a frame's budget at a time and
   stoppable with Esc. A position kept between calls in guifs.c (or the FAT vnode kept cached) would make it
   linear; not changed here, as guifs.c is not the track's.
+* The Image Viewer keeps the arrow keys when it shows no picture, so they do not move the pointer then:
+  struct gui_app's `arrows` is fixed for an application, and shell/gui.c decides with gui_wants_arrows()
+  (guicore.c's foundation code) before the key reaches the application. Letting them through would need a
+  hook in struct gui_app that gui_wants_arrows() asks; not done (foundation code).
 * Everything here was checked on the host and in QEMU (OVMF, USB sticks), not yet on the laptop.
 
 ## Files
 
 Commits on gui/media: 81b9376 (the applications, Sketch's files and the host test), 65fce6b (the guiapps
-checks), and this file's.
+checks), 3f1b836 and 0c245c0 (this file); then the first review's fixes.
 
 Added: shell/guibmp.c (BMP reading and writing, Sketch's Save as BMP and Open BMP), shell/gui_media.h (the
 private header above). Rewritten from the foundation's stubs: shell/guiview.c, shell/guihex.c,
@@ -189,11 +223,13 @@ Shared files touched, only where the track had to:
 * shell/guicore.c, Sketch's parts only: the header comment, `#include "gui_media.h"`, the palette's name
   (sketch_paints[], exported), Sketch's two File menu items and the one condition that hides Notepad's Save
   items while Sketch is in front, gui_act's two cases, the press on the Open and Save buttons, Ctrl+S while
-  Sketch has the focus, and the drawing of the two buttons and the line under the canvas.
+  Sketch has the focus, the drawing of the two buttons and the line under the canvas, and (the review) that
+  line cleared where the canvas changes: stroke(), the Clear button and ACT_CLEAR_SKETCH.
 * Makefile: `GUI_MEDIA_OBJ = $(BUILD)/host/kernel/shell/guibmp.o`, the track's own line.
 
-gui_state grows by 3,500,044 bytes (838,600 to 4,338,644 at -m32): 3 MB of picture, 64 KB of reading,
-216 KB for Sketch's file, 64 KB for Hex's searches and copies, 4 KB of Hex's page, and the rest small.
+gui_state grows by 3,501,068 bytes (838,600 to 4,339,668 at -m32): 3 MB of picture, 64 KB of reading,
+216 KB for Sketch's file, 64 KB for Hex's searches and copies, 4 KB of Hex's page, 1 KB for the palette of a
+file being checked (the review), and the rest small.
 
 ## Tests
 
@@ -214,8 +250,24 @@ gui_state grows by 3,500,044 bytes (838,600 to 4,338,644 at -m32): 3 MB of pictu
   pixel for pixel, the question before replacing, folders, a read-only volume, a failing disk, Open BMP of its
   own file, a larger, a smaller and a coloured picture, a refused one, the 1 GB one, its buttons; no file
   system at all; and every window (with a picture, a 4 GB file, Sketch's note) inside guard pixels at 640x400,
-  960x540 and 1280x800, also maximized, at its narrowest and hanging off the edge.
+  960x540 and 1280x800, also maximized, at its narrowest and hanging off the edge. After the first review:
+  a reading that fails in the tick under Notepad's question about unsaved changes (the question stays, Cancel
+  leaves nothing pending, a later Ctrl+S saves and stays) and under Sketch's Save chooser with a name typed (it
+  stays and saves), the failure in the window and the status bar; read_at calls and bytes in the opening
+  handler and in each frame for a 256 x 16384 1-bit picture (kept at 128 x 8192, spans of the file) and a
+  1024 x 1100 one; 4- and 1-bit pictures through the viewer on the screen; "kept at 1073 x 976" in the status
+  bar; a file refused while another is read (that reading goes on, its palette its own); viewer dialog
+  numbers that are not Sketch's; a Find that is no pattern ("0xZZ", "", "0xABC", 129 bytes) during a search;
+  a copy failing part-way (shorter file, read error) leaving the clipboard; Find next after "Not found";
+  the copy's limit of 43,690 bytes and the refusal of one more (nothing after the clipboard touched); a page
+  that cannot be read (said once, not read again every frame) and a search whose read fails; devices refused
+  by Hex, the Image Viewer and Sketch; a file of 0xFFFFFFFF bytes (End, Up, Go to 0xFFFFFF00, Down at the
+  end); Sketch's line cleared by a stroke, Clear and Ctrl+N; "shrunk to fit" for a 1 x 1000 picture; Sketch
+  refusing the 1 GB picture and reading a 1920 x 1080 one in 181 reads.
 * tools/gui_apps_media.py (qemu-usb.py's guiapps scenario): Files mounts the APPSTICK; Hex's first row of
   media/bytes.bin and a Find on the screen; the Image Viewer's 24-bit picture fitted and at its actual size and
   an 8-bit top-down one, colours read off the screen; Sketch draws, saves media/drawn.bmp, clears, opens it
-  again; Eject; and on the host, drawn.bmp read back and checked (a 24-bit 400 x 180 BMP with the line).
+  again; Eject; and on the host, drawn.bmp read back and checked (a 24-bit 400 x 180 BMP with the line). After
+  a failure it lets go of the mouse button, closes a dialog or a menu left open, closes what it opened, puts
+  Sketch's brush back to ink, and ejects the stick (Files and the stick are counted as opened from the moment
+  Ctrl+B and Enter are sent).
