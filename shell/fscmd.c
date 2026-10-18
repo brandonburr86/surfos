@@ -451,14 +451,18 @@ int cmd_fsbench(int argc, char **argv) {
     r = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC, &f);
     if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); kfree(buf); kfree(want); return CMD_FAIL; }
     for(off = 0; r == 0 && off < size; off += 4096) {
+        int w;
         pattern(buf, off, 4096);
-        if(vfs_write(f, buf, 4096) != 4096) r = -EIO;
-        else if(task_interrupted()) r = -EINTR;
+        w = vfs_write(f, buf, 4096);
+        if(w != 4096) r = w == -EINTR || task_interrupted() ? -EINTR : w < 0 ? w : -EIO;   /* 10/18/26 (audit B53): a */
+        else if(task_interrupted()) r = -EINTR;              /* write Ctrl+C or a kill stopped is no I/O error */
     }
     c = vfs_close(f);                                        /* close writes it out */
     if(!r) r = c;
     tw = (long)uptime_ms() - tw;
-    if(r) { printf("    fsbench: %s: %s\n", path, strerror(r)); vfs_unlink(path); kfree(buf); kfree(want); return CMD_FAIL; }
+    if(r == -EINTR) printf("    fsbench: interrupted\n");
+    else if(r) printf("    fsbench: %s: %s\n", path, strerror(r));
+    if(r) { vfs_unlink(path); kfree(buf); kfree(want); return CMD_FAIL; }
     tr4 = bench_read(path, buf, want, size, 4096);
     tr64 = bench_read(path, buf, want, size, 65536);
     bcache_io_stats(&b);
