@@ -404,10 +404,10 @@ G2 (2026-10-18; [evidence](evidence/gpu/g2-sim.txt)):
 | `test-gpu-mutants`: 18 one-line bugs in copies of surf_gpu, surf_vram and surf_video | 18 of 18 caught ([evidence](evidence/gpu/mutants.txt)): copies in the wrong direction, the clip's right edge inclusive, EXPAND's bits in the wrong order or its transparency ignored, WRITE_RECT's lanes misaligned, LINE's tie rule, the copy key ignored, the engine writing without its grant, OVERFLOW never set, SET_TARGET's bound off by one, COPY's window not shifted, VRAM giving the engine priority over the CPU or its bound inclusive, the overlay rule, FRAME_CRC's byte order, GFX_ settings not waiting for the frame latch, GFX_SCALE ignored; 83 s |
 | `gpu-netlist-sim`: the G2 gpudiag build's synthesized netlist (the one LVS proved the bitstream equal to) run from its pins | `GPUDIAG: PASS (117 checks)` as on the RTL SoC (identity "Arty A7-100T (0x100) ... features 17f"), every scene's FRAME_CRC the model's ([evidence](evidence/gpu/g2-netlist-sim.txt)); 1.32 s simulated in 44 minutes |
 
-`make check` passes with the GPU in it (32 minutes on the Mac, 2026-10-18, at 95d0bd1 with the
-documents being edited; other sessions were using the machine). `test-gpu` adds 1 minute 35
-seconds to it from a clean build directory and `lint-gpu` about 20 seconds; the mutants and the
-netlist simulation are not part of it.
+`make check` passes with the GPU in it: 32 minutes at 95d0bd1 (the documents being edited) and
+26 minutes at 6644f17, on the Mac on 2026-10-18 while other sessions were using it. `test-gpu`
+adds 1 minute 35 seconds to it from a clean build directory and `lint-gpu` about 20 seconds; the
+mutants and the netlist simulation are not part of it.
 
 The existing suites pass unchanged with the GPU code in the tree (`HAS_GPU = 0`): lint-soc,
 lint-io, test-io-video (123 checks per seed), test-io-icarus, test-soc-units, test-soc-system,
