@@ -358,7 +358,7 @@ static void keys(void) {
 
 /* the window's size is the terminal's, set once per change, and after the corner is let go */
 static void resizing(void) {
-    int w, h;
+    int w, h, i;
     terminal(960, 540);
     gui_act(&g, ACT_MAXIMIZE);
     CHECK(TERM->max);
@@ -386,11 +386,12 @@ static void resizing(void) {
     pointer(TERM->x + w - 4 - 160, TERM->y + h - 4 - 96, 0, 0);
     tick();
     CHECK(fake_term_cols == 57 && fake_term_rows == 15 && g.term.vt.cols == 57 && g.term.vt.rows == 15);
-    /* what was printed at the old size is read before the new one is set */
-    fake_term_feed("old size", 8);
+    /* what was printed at the old size is read, and wraps, at that size before the new one is set */
+    for(i = 0; i < 60; i++) fake_term_feed("x", 1);
     gui_act(&g, ACT_MAXIMIZE);
     tick();
-    CHECK(!strncmp(row_of(&g.term.vt, 0), "old size", 8) && fake_term_cols == 117);
+    CHECK(fake_term_cols == 117 && g.term.vt.cols == 117);
+    CHECK(strlen(row_of(&g.term.vt, 0)) == 57 && !strcmp(row_of(&g.term.vt, 1), "xxx"));
     /* the cursor stays on the screen */
     gui_act(&g, ACT_MAXIMIZE);
     tick();
@@ -492,7 +493,7 @@ static void selecting(void) {
     gui_act(&g, ACT_COPY);
     CHECK(g.clip_len > 100 && !memcmp(g.clip, "hello world\nsecond line\nxxxx", 28));
     CHECK(!memcmp(g.clip + g.clip_len - 5, "more\n", 5));
-    /* by the keyboard: the Edit menu (Ctrl+G, right twice, down to Copy) */
+    /* by the keyboard: the Edit menu (Ctrl+G, right twice; Copy is its first item that is on) */
     gui_key(&g, 7);
     gui_key(&g, GUI_RIGHT);
     gui_key(&g, GUI_RIGHT);
