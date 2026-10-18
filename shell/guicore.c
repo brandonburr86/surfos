@@ -702,7 +702,11 @@ void gui_act(struct gui_state *g, int act) {
     case ACT_FILES: if(g->fs) gui_open(g, GUI_FILES); break;
     case ACT_CALC: gui_open(g, GUI_CALC); break;
     case ACT_SKETCH: gui_open(g, GUI_SKETCH); break;
-    case ACT_CLEAR_SKETCH: memset(g->canvas, 0, sizeof(g->canvas)); gui_open(g, GUI_SKETCH); break;
+    case ACT_CLEAR_SKETCH:
+        memset(g->canvas, 0, sizeof(g->canvas));
+        g->viewer.sketch.status[0] = 0;                 /* 10/17/26: what Save or Open did is no longer the drawing */
+        gui_open(g, GUI_SKETCH);
+        break;
     case ACT_SKETCH_SAVE: sketch_save_as(g); break;     /* 10/17/26: Sketch's pictures (guibmp.c) */
     case ACT_SKETCH_OPEN: sketch_open(g); break;
     case ACT_NEXT_WINDOW: next_window(g); break;
@@ -779,6 +783,7 @@ static void stroke(struct gui_state *g, int x, int y) {
         int px=g->last_x+(n?dx*i/n:0), py=g->last_y+(n?dy*i/n:0);
         if(gui_inside(px,py,0,0,GUI_CANVAS_W,GUI_CANVAS_H)) g->canvas[py*GUI_CANVAS_W+px]=g->brush;
     }
+    g->viewer.sketch.status[0]=0;                       /* 10/17/26: the line under the canvas is the hint again */
     g->last_x=x; g->last_y=y; g->dirty=true;
 }
 
@@ -839,7 +844,7 @@ static void content_press(struct gui_state *g, int id, int x, int y) {
         if(gui_inside(x,y,16,38,6*32,24)) g->brush=(x-16)/32;
         else if(gui_inside(x,y,212,38,56,24)) gui_act(g,ACT_SKETCH_OPEN);   /* 10/17/26: BMP files (guibmp.c) */
         else if(gui_inside(x,y,272,38,56,24)) gui_act(g,ACT_SKETCH_SAVE);
-        else if(gui_inside(x,y,336,38,80,24)) memset(g->canvas,0,sizeof(g->canvas));
+        else if(gui_inside(x,y,336,38,80,24)) { memset(g->canvas,0,sizeof(g->canvas)); g->viewer.sketch.status[0]=0; }
         else if(gui_inside(x,y,16,70,GUI_CANVAS_W,GUI_CANVAS_H)) {
             g->drawing=true; g->last_x=x-16; g->last_y=y-70; stroke(g,x-16,y-70);
         }

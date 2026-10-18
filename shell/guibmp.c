@@ -16,6 +16,9 @@ Sketch saves its canvas as a 24-bit BMP through gui_fs's write, asking before it
 file, as Notepad's Save as does (but not a file it wrote itself). Open BMP fits the picture into
 the canvas: shrunk when it is larger (its proportions kept, nearest neighbour), centred, each
 colour as the nearest of Sketch's six. The canvas changes only once the whole picture was read.
+Open BMP reads in the dialog's answer, a row at a time (180 reads at most), so it takes files of
+up to SKETCH_OPEN_MAX: each read of a big file would walk its clusters from the start, and the
+desktop would wait. A larger one is refused, and the Image Viewer, which reads in the tick, named.
 */
 #include "gui_media.h"
 #include <string.h>
@@ -27,6 +30,7 @@ colour as the nearest of Sketch's six. The canvas changes only once the whole pi
 #define BI_BITFIELDS 3
 #define BI_JPEG 4
 #define BI_PNG 5
+#define SKETCH_OPEN_MAX (8 * 1024 * 1024)   /* the largest file Sketch's Open BMP reads (a 1920 x 1080 screenshot is 6 MB) */
 
 static u32 le16(const u8 *p) { return (u32)p[0] | (u32)p[1] << 8; }
 static u32 le32(const u8 *p) { return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24; }
@@ -269,12 +273,18 @@ int sketch_load(struct gui_state *g, const char *path) {
     struct gui_sketchbmp *s = &g->viewer.sketch;
     struct gui_bmp b;
     u8 *row = s->file, *canvas = s->file + GUI_VIEW_CHUNK;   /* a row of the file (64 KB at most), the new canvas */
-    char why[80];
+    char why[80], line[80], amount[24];
     u32 pw, ph, ox, oy, x, y, sy, sx, len = 0, size = 0;
     int r = bmp_open(g, path, &b, s->palette, s->file, why, sizeof(why));
     if(r) {
         dialog_message(g, "Cannot open the picture", gui_basename(path), why);
         return r;
+    }
+    if(b.size > SKETCH_OPEN_MAX) {                      /* read here, in the answer: bounded */
+        gui_bytes(b.size, amount, sizeof(amount));
+        snprintf(line, sizeof(line), "%s has %s: Sketch opens up to 8 MB.", gui_basename(path), amount);
+        dialog_message(g, "Too large for Sketch", line, "The Image Viewer shows larger pictures.");
+        return -EFBIG;
     }
     pw = b.width;
     ph = b.height;
@@ -305,7 +315,8 @@ int sketch_load(struct gui_state *g, const char *path) {
     memcpy(g->canvas, canvas, sizeof(g->canvas));
     strlcpy(s->path, path, sizeof(s->path));
     s->saved = false;
-    snprintf(s->status, sizeof(s->status), pw < b.width ? "Opened %s, shrunk to fit" : "Opened %s", gui_basename(path));
+    snprintf(s->status, sizeof(s->status), pw < b.width || ph < b.height ? "Opened %s, shrunk to fit" : "Opened %s",
+             gui_basename(path));
     gui_open(g, GUI_SKETCH);
     g->dirty = true;
     return 0;

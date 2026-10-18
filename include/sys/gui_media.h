@@ -55,6 +55,7 @@ struct gui_viewer {
     int click_x, click_y;
     u32 next;                           /* reading: the rows read so far, in the file's order */
     u32 palette[256];
+    u32 scratch[256];                   /* the palette of a file being checked: palette stays the picture's until it is good */
     u8 chunk[GUI_VIEW_CHUNK];
     u8 pixels[GUI_VIEW_PIXELS * 3];     /* dw x dh, the top row first, each pixel R, G, B */
     struct gui_sketchbmp sketch;

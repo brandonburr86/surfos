@@ -44,9 +44,10 @@ static const char *const help[] = {
     "Ctrl+C copies them in hexadecimal, Copy offset the",
     "cursor's offset. Ctrl+L goes to an offset (0x1F00 is",
     "hexadecimal, 7936 decimal). Ctrl+F finds bytes from the",
-    "cursor on: text, or hexadecimal as DE AD BE EF or",
-    "0xDEADBEEF (\"DE AD\" in quotes is text); N or Find next",
-    "finds the next one, Esc stops a search.",
+    "selection on: text, or hexadecimal as DE AD BE EF or",
+    "0xDEADBEEF; one byte is 0xFF (FF alone is text, and so is",
+    "\"DE AD\" in quotes). N or Find next finds the next one,",
+    "Esc stops a search.",
 };
 
 /**** where things are ****/
@@ -139,7 +140,7 @@ static void show_cursor(struct gui_state *g) {
     u32 row = h->cursor / 16 * 16;
     layout(g, &l);
     if(row < h->top) h->top = row;
-    if(row >= h->top + (u32)l.rows * 16) h->top = row - (u32)(l.rows - 1) * 16;
+    if(row - h->top >= (u32)l.rows * 16) h->top = row - (u32)(l.rows - 1) * 16;   /* (top + rows * 16 may pass 4 GB) */
     if(h->top > top_max(g)) h->top = top_max(g);
     fill(g);
     g->dirty = true;
@@ -257,6 +258,7 @@ static void search_some(struct gui_state *g) {
     struct gui_hex *h = &g->hex;
     u32 budget = HEX_TICK, n, len, size, i, q = h->matched;
     int r;
+    if(!h->plen) stop_search(h);                        /* nothing to look for: never a match of nothing */
     while(h->searching && budget) {
         n = budget < GUI_HEX_PIECE ? budget : GUI_HEX_PIECE;
         len = size = 0;
@@ -305,7 +307,6 @@ static void search_some(struct gui_state *g) {
 static void search(struct gui_state *g, u32 from) {
     struct gui_hex *h = &g->hex;
     h->searching = true;
-    h->found = false;
     h->from = h->scan = from;
     h->matched = 0;
     search_some(g);                                     /* the first piece at once: a small file is done */
@@ -314,7 +315,8 @@ static void search(struct gui_state *g, u32 from) {
 static u32 sel_start(const struct gui_hex *h) { return h->anchor < h->cursor ? h->anchor : h->cursor; }
 static u32 sel_end(const struct gui_hex *h) { return h->anchor < h->cursor ? h->cursor : h->anchor; }
 
-/* Find next: after the match that is selected, else from the cursor */
+/* Find next: after the match that is selected (also when the last search found nothing more), else from the
+   selection's start */
 static void find_next(struct gui_state *g) {
     struct gui_hex *h = &g->hex;
     if(!h->plen || !h->path[0]) return;
@@ -329,28 +331,27 @@ static void copy(struct gui_state *g) {
     u32 a = sel_start(h), n = sel_end(h) - a + 1, done = 0, len, size, i, o = 0;
     int r;
     if(!h->path[0] || !h->size) return;
-    if(n > GUI_CLIP_MAX / 3) {
+    if(n > GUI_CLIP_MAX / 3) {                          /* "XX " a byte, but the last: 43,690 bytes in 128 KB, within a piece */
         snprintf(h->status, sizeof(h->status), "Too much to copy: %u bytes at most", (u32)(GUI_CLIP_MAX / 3));
         g->dirty = true;
         return;
     }
-    while(done < n) {
+    while(done < n) {                                   /* all of it first (it fits a piece): a failure changes nothing */
         len = size = 0;
-        r = g->fs && g->fs->read_at ? g->fs->read_at(g->fs->ctx, h->path, a + done, (char *)h->piece,
-                                                      n - done < GUI_HEX_PIECE ? n - done : GUI_HEX_PIECE, &len, &size)
-                                    : -ENOSYS;
+        r = g->fs && g->fs->read_at ? g->fs->read_at(g->fs->ctx, h->path, a + done, (char *)h->piece + done, n - done,
+                                                      &len, &size) : -ENOSYS;
         if(!r && !len) r = -EIO;                        /* the file is shorter now */
         if(r) {
             snprintf(h->status, sizeof(h->status), "Not copied: %s", gui_error(g, r));
             g->dirty = true;
             return;
         }
-        for(i = 0; i < len; i++) {
-            if(o) g->clip[o++] = ' ';
-            g->clip[o++] = digits[h->piece[i] >> 4];
-            g->clip[o++] = digits[h->piece[i] & 15];
-        }
         done += len;
+    }
+    for(i = 0; i < n; i++) {
+        if(o) g->clip[o++] = ' ';
+        g->clip[o++] = digits[h->piece[i] >> 4];
+        g->clip[o++] = digits[h->piece[i] & 15];
     }
     g->clip_len = o;
     snprintf(h->status, sizeof(h->status), "Copied %u byte%s", n, n == 1 ? "" : "s");
@@ -474,16 +475,18 @@ static void answer(struct gui_state *g, int a, int button, const char *text, con
         if(!h->path[0]) break;
         strlcpy(h->find, text, sizeof(h->find));
         n = pattern(text, h->pattern, GUI_HEX_PATTERN);
+        stop_search(h);                                 /* a new Find: the last one's search and match go */
+        h->found = false;
         if(n <= 0) {
             if(n == -2) snprintf(h->status, sizeof(h->status), "Find takes %u bytes at most", GUI_HEX_PATTERN);
             else if(n < 0) strlcpy(h->status, "Hexadecimal bytes are pairs of digits", sizeof(h->status));
+            else h->status[0] = 0;
             h->plen = 0;
             g->dirty = true;
             break;
         }
         h->plen = (u32)n;
         kmp_table(h);
-        h->found = false;
         search(g, sel_start(h));
         break;
     }

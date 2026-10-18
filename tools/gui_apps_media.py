@@ -119,6 +119,11 @@ def dialog_open(d, s):
     return False
 
 
+def menu_open(d, s):
+    """a menu is open: its title's teal band in the menu bar (the bar is paper otherwise, left of "Ride the wave.")"""
+    return any(d.pixel(s, x, 4) == TEAL for x in range(0, 480, 2))
+
+
 def find_row(d, s, name):
     for k in range(13):
         x, y = chooser_row(k)
@@ -167,17 +172,17 @@ def choose(d, names, what):
 def mount(d, state):
     d.move(*PARK)
     d.key('ctrl-b')
+    state['files'] = True                               # from now on tidy() closes Files, whatever is checked next
     s = d.visible('media: Files opens, with the data stick usb1p1 not mounted',
                   lambda s: title_is(d, FILES[0], FILES[1], 'Files')(s) and
                   any(d.text(s, *base._files_row(r, 1), 'usb1p1', INK) for r in range(1, 8)))
-    state['files'] = True
     row = next(r for r in range(1, 8) if d.text(s, *base._files_row(r, 1), 'usb1p1', INK))
     for chord in ['home'] + ['down'] * row + ['ret']:
         d.key(chord)
+    state['mounted'] = True                             # perhaps: tidy() ejects it then (Eject does nothing otherwise)
     d.visible('media: Enter on the stick mounts it',
               lambda s: d.text(s, FILES[0] + 10, FILES[1] + FILES[3] - 23 + 3, 'usb1p1 on /usb1p1: fat32', INK, BAND),
               'guiapps-media-mounted.png')
-    state['mounted'] = True
 
 
 def hex_check(d):
@@ -297,9 +302,13 @@ def eject(d, state):
 
 
 def tidy(d, state):
-    """after a failure: what the checks opened is closed again, and the stick ejected"""
-    for _ in range(3):
-        if not dialog_open(d, d.vm.screen()):
+    """after a failure: what the checks opened is closed again, Sketch's brush is ink again, and the stick ejected.
+    A button held in a drag is let go first, and a dialog or a menu left open is closed (Esc), so that the Apps menu
+    (Ctrl+G, which would close an open menu instead) and the shortcuts reach the desktop."""
+    d.button(False)
+    for _ in range(4):
+        s = d.vm.screen()
+        if not dialog_open(d, s) and not menu_open(d, s):
             break
         d.key('esc')
         d.vm.pump(0.3)
@@ -307,7 +316,10 @@ def tidy(d, state):
         d.open_app(name)
         d.vm.pump(0.3)
         d.key('ctrl-w')
+    sx, sy = SKETCH
     d.key('ctrl-d')
+    d.vm.pump(0.3)
+    d.click(sx + 16 + 32 + 10, sy + 38 + 12)            # the ink swatch: the brush as the checks found it
     d.key('ctrl-n')
     d.vm.pump(0.3)
     d.key('ctrl-w')
