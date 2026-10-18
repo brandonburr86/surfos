@@ -2,9 +2,10 @@
    in-memory file system whose calls the test makes fail. Covered: the new file beside the file
    (<file>.tmp, or the next name past the user's own files of those names, which are never touched), what
    a failed write, fsync or rename leaves (what this save made goes, but never after a rename that may
-   have half happened: the text stays in the new file, the file's data is not freed, and the status line
-   names it), the file written in place where there is no rename or no room for such a name, and the
-   line ends. Run by `make unittest`. */
+   have half happened: the text stays in the new file, and from then on nothing is renamed or written
+   over the file, so neither name's data is freed under the other), the file written in place where there
+   is no rename or no room for such a name, the kernel's limit on a path's length, and the line ends. Run
+   by `make unittest`. */
 #include <stdio.h>
 #include <string.h>
 #include "edit_sim.h"
@@ -25,7 +26,7 @@ static int has(const char *s, const char *part) {
 
 /* name holds text */
 static int is(const char *name, const char *text) {
-    char buf[4096];
+    static char buf[16384];
     return sim_get(name, buf, sizeof(buf)) == (int)strlen(text) && !strcmp(buf, text);
 }
 
@@ -38,12 +39,14 @@ static void start(void) {
 }
 
 static void plain(void) {
+    const char *log;
     start();
     check(ed_save() == 0 && is("a.txt", "Xone\ntwo\n") && sim_names() == 1, "a save: a.txt.tmp renamed over the file");
-    check(has(sim_log(), "open a.txt.tmp excl\n") && has(sim_log(), "fsync a.txt.tmp\n") &&
-          strstr(sim_log(), "fsync a.txt.tmp\n") < strstr(sim_log(), "rename a.txt.tmp a.txt\n"),
+    log = sim_log();
+    check(has(log, "open a.txt.tmp excl\n") && has(log, "fsync a.txt.tmp\n") && has(log, "rename a.txt.tmp a.txt\n") &&
+          strstr(log, "fsync a.txt.tmp\n") < strstr(log, "rename a.txt.tmp a.txt\n"),
           "the new file is made with O_EXCL and fsynced before the rename");
-    check(!ed_modified() && !strcmp(ed_msg(), "Wrote 2 lines"), "then: not modified, and Wrote 2 lines");
+    check(!ed_modified() && !ed_unsure() && !strcmp(ed_msg(), "Wrote 2 lines"), "then: not modified, and Wrote 2 lines");
 }
 
 static void users_files(void) {
@@ -54,6 +57,11 @@ static void users_files(void) {
     check(ed_save() == 0 && is("a.txt", "Xone\ntwo\n") && is("a.txt.tmp", "mine") && sim_names() == 2,
           "the user's a.txt.tmp is not touched");
     check(has(sim_log(), "rename a.txt.1.tmp a.txt\n"), "a.txt.1.tmp is the new file then");
+
+    start();
+    sim_put("A.TXT.TMP", "mine");
+    check(ed_save() == 0 && is("A.TXT.TMP", "mine") && has(sim_log(), "rename a.txt.1.tmp a.txt\n"),
+          "nor is A.TXT.TMP: FAT's names ignore case");
 
     start();
     sim_mkdir("a.txt.tmp");
@@ -73,11 +81,28 @@ static void users_files(void) {
 }
 
 static void failed_write(void) {
+    char big[12000];
     start();
     sim_fail(SIM_WRITE, "a.txt.tmp", SIM_ENOSPC, 0);
     check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && sim_names() == 1 && ed_modified(),
           "a failed write: the file as it was, the new file gone");
     check(!strcmp(ed_msg(), "Not saved: a.txt.tmp: No space left on device"), "... and said");
+
+    start();
+    sim_fail(SIM_WRITE, "a.txt.tmp", 0, 0);
+    check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && sim_names() == 1 &&
+          !strcmp(ed_msg(), "Not saved: a.txt.tmp: No space left on device"), "a short write is a full disk");
+
+    sim_reset();                                /* more than one 8 KB piece */
+    memset(big, 'x', sizeof(big) - 2);
+    big[sizeof(big) - 2] = '\n';
+    big[sizeof(big) - 1] = 0;
+    sim_put("big.txt", big);
+    ed_start("big.txt");
+    ed_type("X");
+    sim_fail(SIM_WRITE, "big.txt.tmp", SIM_ENOSPC, 1);
+    check(ed_save() < 0 && is("big.txt", big) && sim_names() == 1 && has(sim_log(), "unlink big.txt.tmp\n"),
+          "a write that fails on the second piece: the file as it was, the new file gone");
 
     start();
     sim_fail(SIM_FSYNC, "a.txt.tmp", SIM_EIO, 0);
@@ -98,36 +123,53 @@ static void failed_write(void) {
 }
 
 static void failed_rename(void) {
+    static const int none[] = { SIM_EXDEV, SIM_EROFS, SIM_EBUSY, SIM_EINVAL, SIM_ENOENT, SIM_ENOTDIR, SIM_EISDIR,
+                                SIM_ENOTEMPTY, SIM_ENAMETOOLONG, SIM_ENOSPC, SIM_ENOMEM };
+    static const int maybe[] = { SIM_EIO, SIM_EFAULT };
+    char what[80];
+    unsigned i;
+    for(i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        start();
+        sim_fail(SIM_RENAME, "a.txt.tmp", none[i], SIM_NONE);
+        snprintf(what, sizeof(what), "a rename that failed with %d changed nothing: the new file goes", none[i]);
+        check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && sim_names() == 1 && ed_modified() && !ed_unsure(), what);
+    }
+    for(i = 0; i < sizeof(maybe) / sizeof(maybe[0]); i++) {
+        start();
+        sim_fail(SIM_RENAME, "a.txt.tmp", maybe[i], SIM_NONE);
+        snprintf(what, sizeof(what), "after a rename that failed with %d the new file is kept", maybe[i]);
+        check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && is("a.txt.tmp", "Xone\ntwo\n") && !has(sim_log(), "unlink") &&
+              ed_unsure(), what);
+    }
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EBUSY, SIM_NONE);
-    check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && sim_names() == 1 && ed_modified(),
-          "a rename that changed nothing (EBUSY): the new file goes");
-    check(!strcmp(ed_msg(), "Not saved: rename: Device or resource busy"), "... and said");
+    check(ed_save() < 0 && !strcmp(ed_msg(), "Not saved: rename: Device or resource busy"), "a rename that changed nothing is said");
 
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, SIM_HALF);
-    check(ed_save() < 0 && is("a.txt.tmp", "Xone\ntwo\n") && !sim_corrupt("a.txt") && ed_modified(),
+    check(ed_save() < 0 && is("a.txt.tmp", "Xone\ntwo\n") && !sim_corrupt("a.txt") && ed_modified() && ed_unsure(),
           "a half-done rename (EIO): the new file is kept, and the file's data is not freed under it");
     check(!has(sim_log(), "unlink"), "... nothing is deleted");
     check(!strcmp(ed_msg(), "Not saved: rename: I/O error. The text is in a.txt.tmp"), "... and the message names the new file");
     sim_clear_log();
-    check(ed_save() == 0 && is("a.txt", "Xone\ntwo\n") && has(sim_log(), "rename a.txt.1.tmp a.txt\n") && !ed_modified(),
-          "the next save goes by a.txt.1.tmp");
-
-    start();
-    sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, SIM_NONE);
-    check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && is("a.txt.tmp", "Xone\ntwo\n") && !has(sim_log(), "unlink"),
-          "EIO with nothing done is kept just the same (there is no telling)");
+    ed_type("Y");
+    check(ed_save() < 0 && is("a.txt.1.tmp", "XYone\ntwo\n") && !has(sim_log(), "rename") && !has(sim_log(), "unlink") &&
+          !has(sim_log(), "trunc") && ed_modified(), "the next save makes a copy beside the file, and renames nothing");
+    check(!sim_corrupt("a.txt") && !sim_corrupt("a.txt.tmp") && is("a.txt.tmp", "Xone\ntwo\n"),
+          "... so neither name's data is freed under the other");
+    check(!strcmp(ed_msg(), "Not saved over the file; a copy is in a.txt.1.tmp"), "... and says where the copy is");
+    sim_fail(SIM_OPEN, "a.txt.tmp", SIM_ENAMETOOLONG, 0);
+    check(ed_save() < 0 && !has(sim_log(), "trunc") && !sim_corrupt("a.txt.tmp"), "... and never writes in place");
 
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EIO, SIM_DONE);
-    check(ed_save() < 0 && is("a.txt", "Xone\ntwo\n") && sim_names() == 1 && !strcmp(ed_msg(), "Not saved: rename: I/O error"),
-          "a rename done all the same: no new file to name");
+    check(ed_save() < 0 && is("a.txt", "Xone\ntwo\n") && sim_names() == 1 && !strcmp(ed_msg(), "Not saved: rename: I/O error") &&
+          ed_unsure(), "a rename done all the same: no new file to name, the same care");
 
     start();
     sim_fail(SIM_RENAME, "a.txt.tmp", SIM_EXDEV, SIM_NONE);
     sim_fail(SIM_UNLINK, "a.txt.tmp", SIM_EIO, 0);
-    check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && is("a.txt.tmp", "Xone\ntwo\n") &&
+    check(ed_save() < 0 && is("a.txt", "one\ntwo\n") && is("a.txt.tmp", "Xone\ntwo\n") && !ed_unsure() &&
           !strcmp(ed_msg(), "Not saved: rename: Invalid cross-device link. The text is in a.txt.tmp"),
           "a new file that would not go is named");
 
@@ -151,6 +193,14 @@ static void in_place(void) {
     check(ed_save() == 0 && is("a.txt", "XYone\ntwo\n") && !has(sim_log(), ".tmp"), "... and from then on, with no new file");
 
     start();
+    sim_fail(SIM_RENAME, "a.txt.tmp", SIM_ENOSYS, SIM_NONE);
+    sim_fail(SIM_UNLINK, "a.txt.tmp", SIM_EIO, 0);
+    sim_fail(SIM_WRITE, "a.txt", SIM_ENOSPC, 0);
+    check(ed_save() < 0 && is("a.txt.tmp", "Xone\ntwo\n") &&
+          !strcmp(ed_msg(), "Not saved: a.txt: No space left on device. The text is in a.txt.tmp"),
+          "in place failing too, with a new file that would not go: the message names it");
+
+    start();
     sim_fail(SIM_OPEN, "a.txt.tmp", SIM_ENAMETOOLONG, 0);
     check(ed_save() == 0 && is("a.txt", "Xone\ntwo\n") && sim_names() == 1 && has(sim_log(), "open a.txt trunc\n"),
           "no room for the name a.txt.tmp: in place");
@@ -162,18 +212,39 @@ static void in_place(void) {
           !strcmp(ed_msg(), "Not saved: a.txt.tmp: File exists (move it out of the way)"),
           "a.txt.tmp taken and the next name too long: not in place, and said");
 
-    memset(name, 'n', 260);                     /* past edit's own buffer for the new file's name */
-    strcpy(name + 260, ".tm");                  /* <name>.tmp cut off to fit it */
+    /* the kernel takes paths of 255 bytes at most */
+    memset(name, 'n', 251);
+    name[251] = 0;
+    sim_reset();
+    sim_put(name, "one\n");
+    ed_start(name);
+    ed_type("X");
+    check(ed_save() == 0 && is(name, "Xone\n") && sim_names() == 1 && has(sim_log(), "excl"), "a 251-byte name: its .tmp fits");
+
+    memset(name, 'n', 252);
+    strcpy(name + 252, ".tm");                  /* <name>.tmp cut off to fit */
     sim_reset();
     sim_put(name, "mine");
-    name[260] = 0;
+    name[252] = 0;
     sim_put(name, "one\n");
     ed_start(name);
     ed_type("X");
     check(ed_save() == 0 && is(name, "Xone\n") && sim_names() == 2 && !has(sim_log(), "excl"),
-          "a name with no room for .tmp: in place");
-    strcpy(name + 260, ".tm");
+          "a 252-byte name has no room for .tmp: in place");
+    strcpy(name + 252, ".tm");
     check(is(name, "mine"), "... never by a cut-off name, which may be the user's");
+
+    memset(name, 'n', 250);
+    name[250] = 0;
+    sim_reset();
+    sim_put(name, "one\n");
+    strcpy(name + 250, ".tmp");
+    sim_put(name, "mine");
+    name[250] = 0;
+    ed_start(name);
+    ed_type("X");
+    check(ed_save() < 0 && is(name, "one\n") && !has(sim_log(), "trunc") && !strncmp(ed_msg(), "Not saved: ", 11),
+          "a 250-byte name with its .tmp taken has no room for .1.tmp: not in place, and said");
 }
 
 static void line_ends(void) {

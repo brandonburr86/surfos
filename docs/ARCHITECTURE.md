@@ -586,12 +586,18 @@ are attached by `make run`/`make test` (which also adds the blank 64 MB scratch 
   writes in place where a file system cannot rename), keeping the file's line ends (LF,
   or CR LF when its first line has one). Since 10/17/26 it saves as the desktop's Notepad
   does (`shell/guifs.c`): the new file is made with `O_EXCL`, as `<file>.1.tmp` and so on
-  past the user's own files of those names, and it is deleted again only when the rename
-  failed before it changed anything. After another error (EIO above all) the FAT rename
-  may have written the new name and not yet removed the old one, both holding the same
-  clusters; the `.tmp` is kept and the status line names it. `rx` keeps its `.part` file
-  by the same rule. `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file
-  system that fails on demand. The terminal is used only through `ttyctl()`,
+  past the user's own files of those names, and it is deleted again when this save could
+  not write it or the rename failed before it changed anything. After another error (EIO
+  above all) the FAT rename may have written the new name and not yet removed the old
+  one, both holding the same clusters: the `.tmp` is kept and the status line names it,
+  and since `fs/fat.c` frees a chain when any one name of it is deleted, replaced or
+  truncated, nothing is renamed or written over that file again: `edit` saves later
+  versions as further `.tmp` copies and warns on its help line, and the desktop
+  (`gui_unsure()`) saves over and deletes neither of the two for the rest of its session.
+  `rx` keeps its `.part` file by the same rule and says to have the disk checked. The real
+  fix is in `fs/fat.c` (not freeing a chain that another entry still holds; ROADMAP.md
+  section 7). `tests/host/test_edit.c` runs `edit.c` as it is on an in-memory file system
+  that fails on demand. The terminal is used only through `ttyctl()`,
   raw mode's key sequences and the ANSI subset of `tty.h`, so the editor works on the
   screen and over the serial line alike; each refresh rewrites only the rows that
   changed.

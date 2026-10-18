@@ -18,11 +18,16 @@ last search), ^K cut the line (several in a row go together), ^U paste them,
 Saving writes the text to a new file beside the file, fsyncs it and renames it
 over the file. 10/17/26, as the desktop's Notepad saves (shell/guifs.c): the new
 file is <file>.tmp, or <file>.1.tmp and so on when the user has a file of that
-name (O_EXCL: theirs is never touched). It is deleted again only when the rename
-failed before it changed anything; after an I/O error the rename may have half
-happened, and the text stays in it (the status line names it). Only where the
-file system cannot rename (ENOSYS), or no such name fits in a path, is the file
-truncated and written in place. The file keeps its line ends (LF, or CRLF when its first line has one) and
+name (O_EXCL: theirs is never touched). It is deleted again when this save could
+not write it, and when the rename failed before it changed anything. After an
+I/O error the rename may have half happened, the new name written and the old
+one not yet gone: the text stays in the new file (the status line names it),
+but the file and it may share their clusters, and deleting or replacing either
+would free the other's. So from then on nothing is renamed or written over the
+file: each save makes another new file beside it, and the help line says to
+have the disk checked first. Only where the file system cannot rename (ENOSYS),
+or no such name fits in a path, is the file truncated and written in place.
+The file keeps its line ends (LF, or CRLF when its first line has one) and
 ends with a line end. The terminal is used only through ttyctl(TTY_RAW),
 ttyctl(TTY_GETSIZE), the key sequences of raw mode and the ANSI subset that
 include/surfos/tty.h lists, so the editor works on the screen and over the
@@ -44,6 +49,7 @@ serial line alike. Each refresh rewrites only the rows that changed.
 #define TAB        8
 #define CTRL(c)    ((c) & 0x1f)
 #define HELP       "^S Save  ^Q Quit  ^F Find  ^K Cut line  ^U Paste  ^G Go to line"
+#define UNSURE     "Disk error: check the disk (fsck) before changing this file or its .tmp files"
 
 enum {
     KEY_NONE = 0x100, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
@@ -64,6 +70,7 @@ static const char *filename;
 static int crlf;                /* the file's line ends are CR LF */
 static int modified;
 static int no_rename;           /* rename said ENOSYS once: write in place from then on */
+static int unsure;              /* a rename may have half happened: the file and its .tmp may share their clusters */
 
 static int cy, cx;              /* cursor: line, byte in the line */
 static int want_col = -1;       /* the screen column up and down aim for */
@@ -358,15 +365,15 @@ static int write_file(const char *path, int how, int *made) {
 }
 
 /* a rename that failed with one of these changed nothing (fs/vfs.c's checks, and fs/fat.c's before it
-   writes): its new file may go. After any other, EIO above all, the new name may be written and the old
-   one not yet gone, both holding the same clusters, and deleting the .tmp would free the file's. */
+   writes a name): its new file may go. After any other, EIO above all, the new name may be written and
+   the old one not yet gone, both holding the same clusters, and deleting the .tmp would free the file's. */
 static int nothing_changed(int e) {
     return e == ENOSYS || e == EXDEV || e == EROFS || e == EBUSY || e == EINVAL || e == ENOENT ||
            e == ENOTDIR || e == EISDIR || e == ENOTEMPTY || e == ENAMETOOLONG || e == ENOSPC || e == ENOMEM;
 }
 
 static int save(void) {
-    char tmp[PATH_MAX + 8];
+    char tmp[PATH_MAX];                         /* the kernel's limit: a longer path is refused (EFAULT) */
     const char *what = filename, *base;
     struct stat st;
     int made = 0, kept = 0, k, e = ENAMETOOLONG;
@@ -378,21 +385,27 @@ static int save(void) {
         }
         if(e == ENAMETOOLONG && k > 0) e = EEXIST;      /* <file>.tmp is there, the next name is too long: not in place */
         what = tmp;
+        base = strrchr(tmp, '/');
+        if(e == 0 && unsure) {                  /* a copy beside the file, renamed over nothing */
+            snprintf(msg, sizeof(msg), "Not saved over the file; a copy is in %s", base ? base + 1 : tmp);
+            return -1;
+        }
         if(e == 0) {
             if(rename(tmp, filename) == 0) goto done;
             e = errno;
             what = "rename";
             if(!nothing_changed(e)) {           /* perhaps half done: the text stays in the new file, if it is there */
                 kept = stat(tmp, &st) == 0;
+                unsure = 1;
                 goto fail;
             }
-            kept = unlink(tmp) < 0 && e != ENOSYS;      /* it would not go: the text is in it */
+            kept = unlink(tmp) < 0 && errno != ENOENT;  /* it would not go: the text is in it */
             if(e != ENOSYS) goto fail;
             no_rename = 1;
         } else if(made) {
             unlink(tmp);                        /* made by this save: what of the text it got */
             goto fail;
-        } else if(e != ENAMETOOLONG) goto fail; /* nothing was made, and nothing of the user's touched */
+        } else if(e != ENAMETOOLONG || unsure) goto fail;   /* nothing was made, nothing of the user's touched */
     }
     what = filename;                            /* no rename here, or no room for such a name: truncate the file and write it */
     if(write_file(filename, O_TRUNC, NULL) < 0) { e = errno; goto fail; }
@@ -401,7 +414,7 @@ done:
     snprintf(msg, sizeof(msg), "Wrote %d line%s", text_lines(), text_lines() == 1 ? "" : "s");
     return 0;
 fail:
-    if(kept) {
+    if(kept) {                                  /* the new file, beside the file */
         base = strrchr(tmp, '/');
         snprintf(msg, sizeof(msg), "Not saved: %s: %s. The text is in %s", what, strerror(e), base ? base + 1 : tmp);
     } else if(e == EEXIST && what == tmp)       /* <file>.tmp, and the names after it, are the user's */
@@ -501,8 +514,8 @@ static void refresh(void) {
         }
         draw_row(rows - 2, row, 0);
     }
-    snprintf(row, (size_t)cols + 1, "%s", HELP);
-    draw_row(rows - 1, row, 0);
+    snprintf(row, (size_t)cols + 1, "%s", unsure ? UNSURE : HELP);
+    draw_row(rows - 1, row, unsure);
     shadow_ok = 1;
 
     if(prompt_label) {

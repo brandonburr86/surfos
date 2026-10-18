@@ -20,8 +20,10 @@ connection came from. A connection that stays silent for 120 seconds is given up
 
 Exit status 0; 1 on any error, said with its reason (the partial file <path>.part is
 removed; 10/17/26: but for a rename that failed after it may have changed something, as
-edit's saving knows: then it is kept, and said); 2 for a usage error. Nothing else: no
-shell, nothing is run, nothing is sent back.
+edit's saving knows: then it is kept, and the message says to have the disk checked
+before either name is deleted or rx runs for them again, since the two may share their
+clusters); 2 for a usage error. Nothing else: no shell, nothing is run, nothing is sent
+back.
 */
 
 #include <stdarg.h>
@@ -195,8 +197,11 @@ int main(int argc, char **argv) {
     }
     if(rename(part, path) < 0) {
         r = errno;
-        if(!nothing_changed((int)r))            /* perhaps half done: both names may hold the same clusters */
-            return fail("%s -> %s: %s (%s is kept)", part, path, strerror((int)r), part);
+        if(!nothing_changed((int)r)) {          /* perhaps half done: both names may hold the same clusters */
+            if(stat(part, &st) < 0) return fail("%s -> %s: %s (check the disk)", part, path, strerror((int)r));
+            return fail("%s -> %s: %s (%s is kept: it and %s may share their clusters, so check the disk "
+                        "(fsck) before deleting either or running rx for them again)", part, path, strerror((int)r), part, path);
+        }
         unlink(part);
         errno = (int)r;
         return fail("%s -> %s: %s", part, path, strerror(errno));

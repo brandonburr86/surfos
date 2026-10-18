@@ -129,6 +129,7 @@ void gui_place(struct gui_state *g, int id);                          /* keep a 
 const char *gui_error(const struct gui_state *g, int err);
 bool gui_join(char *out, size_t n, const char *dir, const char *name);   /* false: too long, not usable */
 const char *gui_basename(const char *path);
+bool gui_unsure(const struct gui_state *g, const char *path);       /* g->unsure or g->kept: not to be changed */
 void gui_parent(char *path);
 void gui_date(u32 t, char *out, size_t n);                           /* "2026-10-17 14:03" */
 void gui_bytes(u32 n, char *out, size_t size);                       /* "1,234 B", "12.5 KB" */

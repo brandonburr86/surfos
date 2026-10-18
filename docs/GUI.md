@@ -57,7 +57,11 @@ time from the PC's clock. The tiles on the desktop open the four applications.
 * **Saving.** Saving writes the text to a new file beside it, then renames that over
   the file, as `edit` does. The new file is `<file>.tmp`, or `<file>.1.tmp` and so on
   when you have a file of that name; Notepad never overwrites it. If the disk fails
-  during the rename, the text stays in that new file, and the message names it. Only
+  during the rename, the text stays in that new file, and the message names it. The
+  two may then share their space on the disk, and deleting or saving over either can
+  damage the other, so until the desktop closes Notepad saves over neither (Save
+  offers Save as) and Files deletes neither; check the stick on another computer
+  (First Aid on the Mac, `fsck` elsewhere) before you change them. Only
   where a file system cannot rename, or a name is too long to take `.tmp`, is the file
   written in place. On a read-only volume (the initrd, or the flashed SURFOSUSB
   stick) Save says so and offers Save as.

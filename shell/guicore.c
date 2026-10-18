@@ -88,6 +88,21 @@ const char *gui_basename(const char *path) {
     return s && s[1] ? s + 1 : path;
 }
 
+static char fold(char c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+static bool same_path(const char *a, const char *b) {   /* FAT's names ignore case */
+    while(*a && fold(*a) == fold(*b)) { a++; b++; }
+    return fold(*a) == fold(*b);
+}
+
+bool gui_unsure(const struct gui_state *g, const char *path) {
+    int i;
+    for(i = 0; i < GUI_UNSURE; i++) {
+        if(g->unsure[i][0] && (same_path(path, g->unsure[i]) || same_path(path, g->kept[i]))) return true;
+    }
+    return false;
+}
+
 void gui_parent(char *path) {
     char *s = strrchr(path, '/');
     if(!s) return;
@@ -464,6 +479,9 @@ static void save(struct gui_state *g) {
     else if(g->note.readonly) {
         snprintf(line, sizeof(line), "%s is on a volume that cannot be written.", gui_basename(g->note.path));
         dialog_confirm(g, ACT_DLG_READONLY, "Read-only volume", line, "Save a copy somewhere else?", "Save as\xF9", NULL, "Cancel");
+    } else if(gui_unsure(g, g->note.path)) {
+        snprintf(line, sizeof(line), "%s may share its data with another file.", gui_basename(g->note.path));
+        dialog_confirm(g, ACT_DLG_READONLY, "Check the disk", line, "Save a copy under another name?", "Save as\xF9", NULL, "Cancel");
     } else save_now(g, g->note.path);
 }
 

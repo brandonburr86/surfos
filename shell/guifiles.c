@@ -431,6 +431,11 @@ void files_answer(struct gui_state *g, int act, int button, const char *text, co
     int r;
     if(button != 0 || !g->fs) return;
     if(act == ACT_DLG_DELETE) {
+        if(gui_unsure(g, target)) {                     /* deleting it would free what the other one holds */
+            snprintf(line, sizeof(line), "%s may share its data with another file.", gui_basename(target));
+            dialog_message(g, "Not deleted", line, "Have the disk checked first (fsck).");
+            return;
+        }
         r = g->fs->stat(g->fs->ctx, target, &e, &device, &readonly);
         if(!r) r = g->fs->remove(g->fs->ctx, target, e.type == GUI_DIR);
         if(r) {

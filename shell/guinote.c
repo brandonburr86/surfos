@@ -408,14 +408,25 @@ int note_save(struct gui_state *g, const char *path) {
     struct gui_note *n = &g->note;
     char line[80], why[80], kept[GUI_PATH_MAX], name[GUI_PATH_MAX];
     u32 bytes = n->len + (n->crlf ? n->lf : 0);
+    struct gui_entry e;
+    bool device, readonly;
     int r;
     if(!g->fs) return -ENOSYS;
+    if(gui_unsure(g, path)) {                           /* it may share its clusters with another file */
+        snprintf(line, sizeof(line), "%s may share its data with another file.", gui_basename(path));
+        dialog_message(g, "Not saved", line, "Have the disk checked first (fsck).");
+        return -EBUSY;
+    }
     r = g->fs->write(g->fs->ctx, path, n->text, n->len, n->crlf, kept, sizeof(kept));
     if(r) {
         snprintf(line, sizeof(line), "%s: %s", gui_basename(path), gui_error(g, r));
-        if(kept[0]) {                                   /* the dialog's 54 cells: "The text is in " and the name */
-            middle(gui_basename(kept), name, sizeof(name), 38);
-            snprintf(why, sizeof(why), "The text is in %s.", name);
+        if(kept[0]) {                                   /* its rename may have half happened */
+            strlcpy(g->unsure[g->nunsure % GUI_UNSURE], path, GUI_PATH_MAX);
+            strlcpy(g->kept[g->nunsure++ % GUI_UNSURE], kept, GUI_PATH_MAX);
+            if(g->fs->stat(g->fs->ctx, kept, &e, &device, &readonly) == 0) {   /* the dialog's 54 cells: 31, the name */
+                middle(gui_basename(kept), name, sizeof(name), 22);
+                snprintf(why, sizeof(why), "Check the disk: the text is in %s.", name);
+            } else strlcpy(why, "Have the disk checked first (fsck).", sizeof(why));
         }
         else strlcpy(why, r == -EROFS ? "That volume is read-only: choose Save as." :
                           r == -ENOSPC ? "The volume is full." :

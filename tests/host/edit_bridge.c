@@ -19,9 +19,10 @@
 #include "../../user/bin/edit.c"
 #include "edit_sim.h"
 
-typedef char sim_errno_numbers[SIM_EIO == EIO && SIM_EBUSY == EBUSY && SIM_EEXIST == EEXIST && SIM_EXDEV == EXDEV &&
-                               SIM_ENOSPC == ENOSPC && SIM_EROFS == EROFS && SIM_ENAMETOOLONG == ENAMETOOLONG &&
-                               SIM_ENOSYS == ENOSYS ? 1 : -1];
+typedef char sim_errno_numbers[SIM_ENOENT == ENOENT && SIM_EIO == EIO && SIM_ENOMEM == ENOMEM && SIM_EFAULT == EFAULT &&
+                               SIM_EBUSY == EBUSY && SIM_EEXIST == EEXIST && SIM_EXDEV == EXDEV && SIM_ENOTDIR == ENOTDIR &&
+                               SIM_EISDIR == EISDIR && SIM_EINVAL == EINVAL && SIM_ENOSPC == ENOSPC && SIM_EROFS == EROFS &&
+                               SIM_ENAMETOOLONG == ENAMETOOLONG && SIM_ENOSYS == ENOSYS && SIM_ENOTEMPTY == ENOTEMPTY ? 1 : -1];
 
 /**** the file system: names and their bytes; after a half-done rename two names are twins, one file ****/
 
@@ -31,13 +32,18 @@ typedef char sim_errno_numbers[SIM_EIO == EIO && SIM_EBUSY == EBUSY && SIM_EEXIS
 struct node { char name[300]; char *bytes; int len, cap, dir, used, twin, corrupt; };
 static struct node nodes[NAMES];
 static struct { int node, pos, used; } fds[FDS];        /* descriptor 3 + i */
-static struct { char name[300]; int err, how; } fails[SIM_OPS];
+static struct { char name[300]; int on, err, how; } fails[SIM_OPS];
 static char log_buf[16384];
 static size_t log_len;
 static char arena[16 << 20];
 static size_t arena_used;
 int surf_errno;
 FILE *surf_stderr;
+
+static void *need(void *p) {                            /* the test's own memory: never short */
+    if(!p) for(;;) __builtin_trap();
+    return p;
+}
 
 static void note(const char *fmt, ...) {
     va_list ap;
@@ -49,7 +55,7 @@ static void note(const char *fmt, ...) {
 
 static int lookup(const char *name) {
     int i;
-    for(i = 0; i < NAMES; i++) if(nodes[i].used && !strcmp(nodes[i].name, name)) return i;
+    for(i = 0; i < NAMES; i++) if(nodes[i].used && !strcasecmp(nodes[i].name, name)) return i;
     return -1;
 }
 
@@ -67,29 +73,34 @@ static int make(const char *name) {
 }
 
 static void set_bytes(int n, const char *bytes, int len) {
+    char *p = need(malloc((size_t)len + 1));
+    memcpy(p, bytes, (size_t)len);
     free(nodes[n].bytes);
-    nodes[n].bytes = malloc((size_t)len + 1);
-    memcpy(nodes[n].bytes, bytes, (size_t)len);
+    nodes[n].bytes = p;
     nodes[n].len = nodes[n].cap = len;
 }
 
-/* a name goes, and its data: a twin's is the same data, freed under it */
+/* n's data goes: a twin's is the same data, freed under it */
+static void untwin(int n) {
+    if(nodes[n].twin < 0) return;
+    nodes[nodes[n].twin].corrupt = 1;
+    nodes[nodes[n].twin].twin = -1;
+    nodes[n].twin = -1;
+}
+
 static void drop(int n) {
-    if(nodes[n].twin >= 0) {
-        nodes[nodes[n].twin].corrupt = 1;
-        nodes[nodes[n].twin].twin = -1;
-    }
+    untwin(n);
     free(nodes[n].bytes);
     memset(&nodes[n], 0, sizeof(nodes[n]));
 }
 
-/* the failure set up for op on name, once: its errno (and how), or 0 */
+/* the failure set up for op on name, once: its errno (-1: a short write) and how, or 0 */
 static int failing(int op, const char *name, int *how) {
-    int e = fails[op].err;
-    if(!e || strcmp(fails[op].name, name)) return 0;
+    if(!fails[op].on || strcasecmp(fails[op].name, name)) return 0;
+    if(op == SIM_WRITE && fails[op].how > 0) { fails[op].how--; return 0; }
     if(how) *how = fails[op].how;
-    fails[op].err = 0;
-    return e;
+    fails[op].on = 0;
+    return fails[op].err ? fails[op].err : -1;
 }
 
 static int fail_with(int e) {
@@ -97,12 +108,18 @@ static int fail_with(int e) {
     return -1;
 }
 
+static int too_long(const char *path) {                 /* the system calls' string check */
+    return strlen(path) >= PATH_MAX;
+}
+
 static int slot(int fd) {
     return fd >= 3 && fd < 3 + FDS && fds[fd - 3].used ? fd - 3 : -1;
 }
 
 int open(const char *path, int flags, ...) {
-    int n = lookup(path), fd, e;
+    int n, fd, e;
+    if(too_long(path)) return fail_with(EFAULT);
+    n = lookup(path);
     note("open %s%s%s\n", path, flags & O_EXCL ? " excl" : "", flags & O_TRUNC ? " trunc" : "");
     if((e = failing(SIM_OPEN, path, NULL))) return fail_with(e);
     if(n >= 0 && (flags & O_CREAT) && (flags & O_EXCL)) return fail_with(EEXIST);
@@ -112,7 +129,10 @@ int open(const char *path, int flags, ...) {
     if(n < 0) {
         if(!(flags & O_CREAT)) return fail_with(ENOENT);
         if((n = make(path)) < 0) return fail_with(ENOSPC);
-    } else if(flags & O_TRUNC) nodes[n].len = 0;
+    } else if(flags & O_TRUNC) {                    /* fat_truncate frees the chain, a twin's too */
+        untwin(n);
+        nodes[n].len = 0;
+    }
     fds[fd].used = 1;
     fds[fd].node = n;
     fds[fd].pos = 0;
@@ -126,10 +146,11 @@ ssize_t write(int fd, const void *buf, size_t len) {
     if(s < 0) return fail_with(EBADF);
     x = &nodes[fds[s].node];
     note("write %s %u\n", x->name, (unsigned)len);
-    if((e = failing(SIM_WRITE, x->name, NULL))) return fail_with(e);
+    if((e = failing(SIM_WRITE, x->name, NULL)) > 0) return fail_with(e);
+    if(e < 0) len /= 2;                                 /* a short write: the disk is full */
     end = fds[s].pos + (int)len;
     if(end > x->cap) {
-        char *p = malloc((size_t)end * 2);
+        char *p = need(malloc((size_t)end * 2));
         if(x->len) memcpy(p, x->bytes, (size_t)x->len);
         free(x->bytes);
         x->bytes = p;
@@ -185,7 +206,9 @@ int fstat(int fd, struct stat *st) {
 }
 
 int stat(const char *path, struct stat *st) {
-    int n = lookup(path);
+    int n;
+    if(too_long(path)) return fail_with(EFAULT);
+    n = lookup(path);
     note("stat %s\n", path);
     if(n < 0) return fail_with(ENOENT);
     fill(n, st);
@@ -193,25 +216,31 @@ int stat(const char *path, struct stat *st) {
 }
 
 int rename(const char *from, const char *to) {
-    int a = lookup(from), b = lookup(to), how = SIM_NONE, e;
+    int a, b, how = SIM_NONE, e;
+    if(too_long(from) || too_long(to)) return fail_with(EFAULT);
+    a = lookup(from);
+    b = lookup(to);
     note("rename %s %s\n", from, to);
     e = failing(SIM_RENAME, from, &how);
     if(a < 0) return fail_with(e ? e : ENOENT);
-    if(e && how == SIM_NONE) return fail_with(e);
+    if(e && (how == SIM_NONE || a == b)) return fail_with(e);
     if(e && how == SIM_HALF) {                  /* the new name holds the data, and the old one still does */
         if(b < 0 && (b = make(to)) < 0) return fail_with(ENOSPC);
+        untwin(b);
         set_bytes(b, nodes[a].bytes ? nodes[a].bytes : "", nodes[a].len);
         nodes[a].twin = b;
         nodes[b].twin = a;
         return fail_with(e);
     }
-    if(b >= 0) drop(b);
+    if(b >= 0 && b != a) drop(b);
     strlcpy(nodes[a].name, to, sizeof(nodes[a].name));
     return e ? fail_with(e) : 0;                /* SIM_DONE: all done, and the error said anyway */
 }
 
 int unlink(const char *path) {
-    int n = lookup(path), e;
+    int n, e;
+    if(too_long(path)) return fail_with(EFAULT);
+    n = lookup(path);
     note("unlink %s\n", path);
     if((e = failing(SIM_UNLINK, path, NULL))) return fail_with(e);
     if(n < 0) return fail_with(ENOENT);
@@ -248,11 +277,14 @@ void sim_reset(void) {
 void sim_put(const char *name, const char *bytes) {
     int n = lookup(name);
     if(n < 0) n = make(name);
+    if(n < 0) for(;;) __builtin_trap();                 /* more names than the test has room for */
     set_bytes(n, bytes, (int)strlen(bytes));
 }
 
 void sim_mkdir(const char *name) {
-    nodes[make(name)].dir = 1;
+    int n = make(name);
+    if(n < 0) for(;;) __builtin_trap();
+    nodes[n].dir = 1;
 }
 
 int sim_get(const char *name, char *buf, int size) {
@@ -277,6 +309,7 @@ int sim_corrupt(const char *name) {
 
 void sim_fail(int op, const char *name, int err, int how) {
     strlcpy(fails[op].name, name, sizeof(fails[op].name));
+    fails[op].on = 1;
     fails[op].err = err;
     fails[op].how = how;
 }
@@ -295,7 +328,7 @@ void ed_start(const char *name) {
     for(i = 0; i < nlines; i++) free(lines[i].s);
     nlines = 0;
     filename = name;
-    crlf = modified = no_rename = 0;
+    crlf = modified = no_rename = unsure = 0;
     cy = cx = 0;
     msg[0] = 0;
     load(name);
@@ -319,4 +352,8 @@ const char *ed_msg(void) {
 
 int ed_modified(void) {
     return modified;
+}
+
+int ed_unsure(void) {
+    return unsure;
 }
