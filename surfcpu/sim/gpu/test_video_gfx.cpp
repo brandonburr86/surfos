@@ -380,8 +380,25 @@ static void test_pair(Tb &tb, Bus &bus) {
         const uint32_t crc2 = bus.rd(B + SURF_VIDEO_FRAME_CRC);
         CHECK(crc2 == model && ((c2 - c) & 0xFFFF) >= 2, "the next pair, back to back: count %u -> %u, FRAME_CRC "
               "%08x, the newest frame's %08x", c, c2, crc2, model);
+        // other reads between the two halves (a STATUS poll, a GFX_BASE read) keep the pair, and a
+        // FRAME_CRC read after the pair's is the newest again (the second review: both halves)
+        const uint32_t c3 = bus.rd(B + SURF_VIDEO_FRAME_COUNT);
+        const uint16_t col2 = (uint16_t)((g_d.gpal[v] + 0x222u) & 0xFFF);
+        bus.wr(B + SURF_VIDEO_GPAL + 4 * v, col2);
+        g_d.gpal[v] = col2;
+        render();
+        const uint32_t model2 = gpu_frame_crc(g_frame.data());
+        wait_frames(tb, bus, 2);
+        (void)bus.rd(B + SURF_VIDEO_STATUS);
+        (void)bus.rd(B + SURF_VIDEO_GFX_BASE);
+        const uint32_t crc3 = bus.rd(B + SURF_VIDEO_FRAME_CRC);
+        CHECK(crc3 == model && model != model2, "FRAME_COUNT %u, a STATUS and a GFX_BASE read, then FRAME_CRC: %08x, "
+              "the counted frame's %08x (the newest %08x)", c3, crc3, model, model2);
+        const uint32_t crc4 = bus.rd(B + SURF_VIDEO_FRAME_CRC);
+        CHECK(crc4 == model2, "a FRAME_CRC read after the pair's: %08x, the newest frame's %08x", crc4, model2);
     }
-    std::printf("pair: FRAME_COUNT then FRAME_CRC two frames later gives the counted frame's CRC, 3 times\n");
+    std::printf("pair: FRAME_COUNT then FRAME_CRC two frames later gives the counted frame's CRC, also with other "
+                "reads between; a later lone FRAME_CRC read the newest; 3 times\n");
 }
 
 // CTRL.MODE and GFX_BASE written one after the other: in the vertical blanking, after VBLANK_EV

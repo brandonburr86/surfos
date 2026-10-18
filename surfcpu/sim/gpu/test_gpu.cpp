@@ -453,6 +453,15 @@ static void test_errors_and_fences(Tb &tb, Bus &bus) {
     tb.vblank_every = 5000;
     tb.next_vblank = tb.cycles + 5000;
     fence_check(tb, bus, "ABORT with words queued");
+    // BUSY until the last write: a WRITE_RECT whose last group waits for its data word stays busy
+    // (the second review's mutant dropped BUSY in a rectangle's last group)
+    set_target(bus, 0, 640, 640, 480);
+    cmd(bus, {GPU_HDR(GPU_OP_WRITE_RECT, 0), xy(20, 420), wh(8, 1)});
+    push(bus, 0x0D0C0B0Au);                                // the first group's word; the last one's is missing
+    bus.idle(200);
+    CHECK(rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK, "WRITE_RECT waiting in its last group is not busy");
+    push(bus, 0x14131211u);
+    fence_check(tb, bus, "WRITE_RECT, its last data word late");
     // ABORT: a WRITE_RECT waits for data; the destination words it has every pixel of are drawn
     // (x 10..15), the rest never come. The model draws each data word as it arrives, so it also
     // drew x 16 and 17, whose destination word (x 16..19) the engine still waits to complete:

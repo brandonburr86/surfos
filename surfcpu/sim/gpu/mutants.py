@@ -9,11 +9,15 @@ bits in the wrong order, the engine taking the port without its grant, an ABORT 
 FIFO, an interrupt without its enable, the overlay rule wrong, FRAME_CRC's bytes swapped, a
 placement change not waiting for the frame latch...). The test
 that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with Verilator
-and run on seed 1; it must fail. Exit 0 when every mutant is caught. Run in the toolchain
-container from surfcpu/ (it needs verilator and g++).
+and run on seed 1; it must fail. A "soc" mutant is judged by gpudiag on the RTL SoC instead
+(surfsim built with HAS_GPU = 1 from the copy, running build/fw/gpudiag.mem): gpudiag must say
+FAIL, or gpudiag_check.py fail the capture in its board or its simulation form, since gpudiag is
+what runs on the board. Exit 0 when every mutant is caught. Run in the toolchain container from
+surfcpu/ (it needs verilator and g++, and make build-gpu-rom first).
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +56,10 @@ MUTANTS = [
      "assign irq = (fev_q) ||", "gpu"),
     ("irq-ignores-ie-err", GPU, "((ovf_q || badop_q || badpar_q) && ie_q[SURF_GPU_IE_ERR_LSB]);",
      "((ovf_q || badop_q || badpar_q));", "gpu"),
+    ("busy-early-last-group", GPU, "wire busy = !fifo_empty || st != S_IDLE;",
+     "wire busy = !fifo_empty || (st != S_IDLE && !(st == S_RECT && last_g && last_row));", "gpu"),
+    ("target-refusal-applies", GPU, "badpar_q <= 1'b1;\n                        else begin",
+     "badpar_q <= 1'b1;\n                        begin", "gpu"),
     ("vram-engine-over-cpu", VRAM, "assign g_gnt = g_req && !cpu;", "assign g_gnt = g_req;", "vram"),
     ("vram-bound-inclusive", VRAM, "wire        cpu_ok = !s_req_fetch && ({13'd0, off} < BYTES_W);",
      "wire        cpu_ok = !s_req_fetch && ({13'd0, off} <= BYTES_W);", "vram"),
@@ -62,6 +70,25 @@ MUTANTS = [
      "                    if (1'b1) begin\n                        f_gbase", "video"),
     ("gfx-scale-ignored", VIDEO, "wire [18:0] gaddr0 = gline + {9'd0, f_gdbl ? {1'b0, ghc[9:1]} : ghc};",
      "wire [18:0] gaddr0 = gline + {9'd0, ghc};", "video"),
+    ("pair-reverted", VIDEO, "assign crc_sys    = snap_valid ? crc_snap : crc_cross[31:0];",
+     "assign crc_sys    = crc_cross[31:0];", "video"),
+    ("pair-never-cleared", VIDEO, "end else if (rd_ok && hit_crc) begin\n                    snap_valid <= 1'b0;\n",
+     "end else if (1'b0) begin\n                    snap_valid <= 1'b0;\n", "video"),
+    ("pair-cleared-by-any-read", VIDEO, "end else if (rd_ok && hit_crc) begin", "end else if (rd_ok) begin", "video"),
+    # gpudiag on the RTL SoC must catch these (the second review: it ran them all to PASS)
+    ("soc-abort-ignored", GPU, "wire        abort    = wr && hit_ctrl && s_req_wdata[SURF_GPU_CTRL_ABORT_LSB];",
+     "wire        abort    = 1'b0;", "soc"),
+    ("soc-irq-err-never", GPU, "((ovf_q || badop_q || badpar_q) && ie_q[SURF_GPU_IE_ERR_LSB]);",
+     "((ovf_q || badop_q || badpar_q) && 1'b0);", "soc"),
+    ("soc-target-refusal-applies", GPU, "badpar_q <= 1'b1;\n                        else begin",
+     "badpar_q <= 1'b1;\n                        begin", "soc"),
+    ("soc-busy-early-last-group", GPU, "wire busy = !fifo_empty || st != S_IDLE;",
+     "wire busy = !fifo_empty || (st != S_IDLE && !(st == S_RECT && last_g && last_row));", "soc"),
+    ("soc-pair-reverted", VIDEO, "assign crc_sys    = snap_valid ? crc_snap : crc_cross[31:0];",
+     "assign crc_sys    = crc_cross[31:0];", "soc"),
+    ("soc-pair-never-cleared", VIDEO, "end else if (rd_ok && hit_crc) begin\n                    snap_valid <= 1'b0;\n",
+     "end else if (1'b0) begin\n                    snap_valid <= 1'b0;\n", "soc"),
+    ("soc-pair-cleared-by-any-read", VIDEO, "end else if (rd_ok && hit_crc) begin", "end else if (rd_ok) begin", "soc"),
 ]
 
 CFLAGS = "-std=c++17 -O1 -g -I{r}/sim/models -I{r}/sim/io -I{r}/sim/gpu -I{r}/firmware/include"
@@ -76,6 +103,52 @@ TESTS = {
 }
 
 
+SOC_CPP = ["sim/soc/surfsim/surfsim.cpp", "sim/models/uart_model.cpp", "sim/models/ddr_model.cpp",
+           "sim/models/sdcard_model.cpp", "sim/models/ps2_keyboard_model.cpp", "sim/models/vga_capture.cpp",
+           "sim/models/ddrc_model_glue.cpp"]
+
+
+def soc_const(name: str) -> int:
+    m = re.search(r"#define %s (\d+)" % name, (ROOT / "firmware/include/surfcpu/soc.h").read_text())
+    return int(m.group(1))
+
+
+def soc_one(w: Path, path: str, mutated: Path) -> tuple[bool, str]:
+    """gpudiag on the RTL SoC built from the mutated copy: (caught, what said so)"""
+    rtl = sorted(str(p.relative_to(ROOT)) for d in ("rtl/soc", "rtl/lib", "rtl/cpu", "rtl/peripherals")
+                 for p in (ROOT / d).glob("*.v"))
+    files = [str(mutated) if f == path else str(ROOT / f) for f in rtl]
+    cflags = "-std=c++17 -O2 -DSURFCPU_RVFI -I{r}/sim/models -I{r}/firmware/include".format(r=ROOT)
+    cmd = ["verilator", "--cc", "--exe", "--build", "-j", "2", "-O3", "--x-assign", "fast", "-Wno-fatal",
+           "--top-module", "surfcpu_soc", "+define+SURFCPU_RVFI"] + \
+          ["-I" + str(ROOT / d) for d in ("rtl/generated", "rtl/lib", "rtl/soc", "rtl/cpu", "rtl/peripherals")] + \
+          ["-GBUILD_ID=32'h00000000", "-GBUILD_FLAGS=32'h2", "-GSYS_HZ=%d" % soc_const("SURF_SYS_HZ"),
+           "-GPIX_HZ=%d" % soc_const("SURF_PIX_HZ"), "-GHAS_GPU=1", "-CFLAGS", cflags, "-Mdir", str(w / "obj"),
+           "-o", "../surfsim"] + files + [str(ROOT / c) for c in SOC_CPP]
+    b = subprocess.run(cmd, cwd=w, capture_output=True, text=True)
+    if b.returncode != 0:
+        return False, "the mutant did not build: " + b.stderr[-400:]
+    shutil.rmtree(w / "obj", ignore_errors=True)
+    uart, frames = w / "uart.txt", w / "frames.txt"
+    subprocess.run([str(w / "surfsim"), "--rom", "build/fw/gpudiag.mem", "--quiet", "--max-cycles", "700000000",
+                    "--vga-crc", str(frames), "--transcript", str(uart), "--expect", r"GPUDIAG: (PASS|FAIL)[^\n]*\n"],
+                   cwd=ROOT, capture_output=True, text=True, timeout=1800)
+    (w / "surfsim").unlink()
+    text = uart.read_text(errors="replace") if uart.exists() else ""
+    summary = re.findall(r"GPUDIAG: (?:PASS|FAIL)[^\n]*", text)
+    first_fail = next((l.strip() for l in text.splitlines() if l.strip().startswith("FAIL ")), "")
+    forms = []
+    for f in ("-", str(frames)):
+        c = subprocess.run([sys.executable, "sim/gpu/gpudiag_check.py", "--uart", str(uart), "--frames", f,
+                            "--expect", "build/fw/gen/gpuscenes_expect.h"], cwd=ROOT, capture_output=True, text=True)
+        forms.append(c.returncode != 0)
+    said = summary[-1] if summary else "no GPUDIAG line"
+    caught = not summary or "FAIL" in said or any(forms)
+    return caught, "gpudiag: %s%s; gpudiag_check board %s, simulation %s" % (
+        said, " (%s)" % first_fail[:90] if first_fail else "", "FAIL" if forms[0] else "PASS",
+        "FAIL" if forms[1] else "PASS")
+
+
 def run_one(name, path, old, new, test, work: Path) -> tuple[bool, str]:
     w = work / name
     if w.exists():
@@ -86,6 +159,8 @@ def run_one(name, path, old, new, test, work: Path) -> tuple[bool, str]:
         return False, "the line to mutate is not in %s exactly once" % path
     mutated = w / "rtl" / Path(path).name
     mutated.write_text(src.replace(old, new, 1))
+    if test == "soc":
+        return soc_one(w, path, mutated)
     t = TESTS[test]
     files = [str(mutated) if f == path else str(ROOT / f) for f in t["rtl"]]
     # the mutated copy first in the search path, so a module found by -y/-I comes from it
