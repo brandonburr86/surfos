@@ -4,7 +4,7 @@ output; the console's escape sequences (the kernel's ansi command: moves, erases
 without a scroll, and the size it sees), UTF-8 (pagetest utf8) and the pager's question (pagetest 40, q); edit's
 full screen with the arrow keys; Ctrl+C stopping sleep; after maximize the size the shell sees (pagetest size);
 exit and the ended state, then a new session; closing with a session running asks first (Cancel keeps it, Close
-ends it and its programs); and a new session's ps shows that nothing of the earlier ones is left. The window's
+ends it and the program it runs); and a new session's ps shows that nothing of the earlier ones is left. The window's
 text is read back from the screenshot, cell by cell, with the console's font; the checks leave the desktop as they
 found it (the Terminal closed), also when one fails."""
 import os
@@ -105,6 +105,17 @@ def wait_rows(d, grid, test, timeout=20):
     return d.vm.wait_screen(lambda s: test(grid.text(s)), timeout, interval=0.2)
 
 
+def running(d, grid, command, timeout=20):
+    """the screen once a command typed at the prompt runs: below its line, the cursor waits at a row's start"""
+    def test(s):
+        rows = grid.text(s)
+        for i in range(len(rows) - 2, -1, -1):
+            if rows[i].endswith('> ' + command):
+                return not rows[i + 1] and grid.cell(s, 0, i + 1)[1][1] == SHELL
+        return False
+    return d.vm.wait_screen(test, timeout, interval=0.2)
+
+
 def run(d, grid, name, command, test, save=None, timeout=20):
     """type a command, and require what it shows"""
     d.keys(command + '\n')
@@ -158,8 +169,29 @@ def checks(d):
         d.check('the Terminal says its size in the status bar', d.text(scr, grid.x + grid.w - 24 - 5 * 8,
                                                                        grid.y + grid.h - STATUS_H - 1 + 3, '77x21',
                                                                        MUTED, BAND))
-        run(d, grid, "a typed command's output shows in the Terminal", 'echo hello-from-the-terminal',
-            lambda rows: 'hello-from-the-terminal' in rows and then_prompt(rows, 'hello-from-the-terminal'))
+        scr = run(d, grid, "a typed command's output shows in the Terminal", 'echo hello-from-the-terminal',
+                  lambda rows: 'hello-from-the-terminal' in rows and then_prompt(rows, 'hello-from-the-terminal'))
+        # copy and paste: a double-click takes the word, Edit > Copy, then Edit > Paste into a new line
+        row = len(grid.text(scr)) - 1 - grid.text(scr)[::-1].index('hello-from-the-terminal')
+        x, y = grid.tx + 3 * 8 + 4, grid.ty + row * 16 + 8
+        d.click(x, y)
+        d.click(x, y)
+        d.move(900, 480)
+        d.key('ctrl-g')
+        d.key('right')
+        d.key('right')
+        d.key('ret')                                # Copy: the first item that is on
+        d.keys('echo ')
+        d.key('ctrl-g')
+        d.key('right')
+        d.key('right')
+        d.key('down')
+        d.key('ret')                                # Paste
+        scr = wait_rows(d, grid, lambda rows: sum(r.endswith('> echo hello-from-the-terminal') for r in rows) == 2)
+        d.require('a word selected with the mouse, copied and pasted through the Edit menu', scr is not None)
+        d.keys('\n')
+        d.require('and run', wait_rows(d, grid, lambda rows: rows.count('hello-from-the-terminal') == 2 and
+                                      then_prompt(rows, 'hello-from-the-terminal')) is not None)
         scr = run(d, grid, "the console's escape sequences: moves, erases, the corner without a scroll, the size",
                   'ansi', lambda rows: all(rows[r] == text for r, text in ANSI_ROWS.items()) and
                   rows[12] == 'ANSI-TEST done, 77x21' and rows[20].endswith('Z') and len(rows[20]) == 77,
@@ -190,7 +222,8 @@ def checks(d):
         d.require('edit ends and the prompt comes back', wait_rows(d, grid, prompted) is not None)
         # Ctrl+C reaches the program
         d.keys('sleep 30000\n')
-        d.vm.pump(1.5)
+        d.require('sleep 30000 runs', running(d, grid, 'sleep 30000') is not None)
+        d.vm.pump(1.0)
         d.key('ctrl-c')
         scr = wait_rows(d, grid, lambda rows: then_prompt(rows, 'sleep cut short after'), 10)
         d.require('Ctrl+C stops sleep 30000 in the Terminal', scr is not None)
@@ -222,9 +255,10 @@ def checks(d):
         d.require('Cancel keeps the window', d.vm.wait_screen(lambda s: not dialog_up(d, s, 'Close the window?') and
                                                               d.title('Terminal')(s), 10, interval=0.2) is not None)
         run(d, grid, 'and the session goes on', 'echo still-here', lambda rows: then_prompt(rows, 'still-here'))
-        # Close ends it, with the program it runs (cat, waiting for the terminal)
-        d.keys('cat\n')
-        d.vm.pump(1.0)
+        # Close ends it, with the program it runs (pagetest, waiting for an answer from the terminal)
+        d.keys('pagetest ask 1\n')
+        d.require('pagetest asks, waiting for the terminal', wait_rows(d, grid, lambda rows: last_row(rows) ==
+                                                                         'pagetest question:') is not None)
         d.close('Terminal')
         d.require('the question again', d.vm.wait_screen(lambda s: dialog_up(d, s, 'Close the window?'), 10,
                                                          interval=0.2) is not None)
@@ -232,7 +266,7 @@ def checks(d):
         d.require('Close closes the window', d.vm.wait_screen(lambda s: not d.title('Terminal')(s) and
                                                               not dialog_up(d, s, 'Close the window?'), 10,
                                                               interval=0.2) is not None)
-        # a new session: nothing of the earlier ones is left (no zombie, no cat, one surfsh more than F1-F4's)
+        # a new session: nothing of the earlier ones is left (no zombie, no pagetest, one surfsh more than F1-F4's)
         d.key('ctrl-t')
         d.visible('the Terminal opens again', d.title('Terminal'))
         d.require('with a new session', wait_rows(d, grid, prompted, 30) is not None)
@@ -249,6 +283,8 @@ def checks(d):
             d.require('ps lists the tasks', scr is not None)
             rows = big.text(scr)
             seen += rows
+            if d.outdir and not rows[-1].startswith('--More--'):
+                scr.png(os.path.join(d.outdir, 'guiapps-terminal-ps.png'))
             if not rows[-1].startswith('--More--'):
                 break
             d.keys(' ')
@@ -258,8 +294,8 @@ def checks(d):
                 tasks[r.split()[0]] = r                 # by pid: a row seen on two screens counts once
         d.check('ps in a new session: no zombie is left', tasks and
                 not any(r.split()[1] == 'zombie' for r in tasks.values()))
-        d.check("ps in a new session: the closed session's cat is gone", tasks and
-                not any(task_name(r) == 'cat' for r in tasks.values()))
+        d.check("ps in a new session: the closed session's pagetest is gone", tasks and
+                not any(task_name(r) == 'pagetest' for r in tasks.values()))
         shells = [r for r in tasks.values() if task_name(r) == 'surfsh']
         d.check(f"ps in a new session: five surfsh, F1-F4's and the Terminal's ({len(shells)})", len(shells) == 5)
         d.click(big.x + big.w - 40, big.y + 10)
