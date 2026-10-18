@@ -34,9 +34,10 @@ its call is to end while it writes the mounts out, and says the disk stays mount
 once it unmounts, it finishes.
 
 10/18/26 (audit B51): eject's disk and its partitions stay busy for mount, mkfs and fdisk
-from its unmount phase to its end (vfs_unmount_begin()), and mount says when a device is
-being unmounted. (B54) An umount or eject that Ctrl+C reached and that finished all the
-same returns its own status, not 130: "safe to remove" and status 0 agree.
+from its unmount phase to its end (vfs_unmount_begin()); mount, and eject itself, refuse
+a device that is being unmounted, and say so. (B54) An umount or eject that Ctrl+C
+reached and that finished all the same returns its own status, not 130: "safe to
+remove" and status 0 agree.
 */
 
 #include <blibc_common.h>
@@ -291,6 +292,10 @@ int cmd_eject(int argc, char **argv) {
     }
     kfree(v);
     if(!disk) { printf("    eject: no disk '%s' (lsblk lists them)\n", argv[1]); return CMD_FAIL; }
+    if(vfs_bdev_unmounting(disk)) {                          /* 10/18/26 (audit B51): another umount or eject still writes it */
+        printf("    eject: %s or a partition of it is being unmounted: try again once that has finished\n", disk->name);
+        return CMD_FAIL;
+    }
     for(i = 0; i < n; i++) {
         if(vfs_busy(paths[i], why, sizeof(why)) == -EBUSY) {
             printf("    eject: %s: %s is busy: %s\n", disk->name, paths[i], why);
