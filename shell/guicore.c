@@ -980,7 +980,8 @@ void gui_pointer(struct gui_state *g, const struct pointer_event *e) {
 bool gui_wants_arrows(const struct gui_state *g) {
     const struct gui_app *a = gui_app_of(g->focus);
     return g->dialog.kind || g->menu || (g->focus >= 0 && !g->win[g->focus].min &&
-           (g->focus == GUI_NOTEPAD || g->focus == GUI_FILES || g->focus == GUI_HELP || (a && (a->arrows || a->keys))));
+           (g->focus == GUI_NOTEPAD || g->focus == GUI_FILES || g->focus == GUI_HELP ||
+            (a && (a->keys || (a->wants_arrows ? a->wants_arrows(g) : a->arrows)))));
 }
 
 /**** keys ****/

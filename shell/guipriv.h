@@ -166,6 +166,9 @@ struct gui_app {
     bool (*can_edit)(const struct gui_state *g, int act);
     void (*edit)(struct gui_state *g, int act);
     const char *goto_label;             /* the Edit menu's last item, "Go to offset\xF9"; NULL: "Go to line\xF9" */
+    /* 10/18/26: whether the arrow keys are its own just now (with nothing to move they move the pointer, as in
+       Calculator); NULL: arrows says */
+    bool (*wants_arrows)(const struct gui_state *g);
 };
 extern const struct gui_app gui_app_terminal, gui_app_monitor, gui_app_disks, gui_app_log, gui_app_clock,
                             gui_app_viewer, gui_app_hex, gui_app_charmap;

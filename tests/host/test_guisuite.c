@@ -113,6 +113,26 @@ static void test_charmap_paste(void) {
     CHECK(!fake_term_running);
 }
 
+/* 10/18/26: the Image Viewer and Hex take the arrow keys only with something to move; otherwise the arrows move
+   the pointer (shell/gui.c asks gui_wants_arrows() before the keys reach the desktop) */
+static void test_arrows(void) {
+    fake_desktop(&g, 960, 540);
+    make_files();
+    gui_open(&g, GUI_VIEWER);
+    CHECK(g.focus == GUI_VIEWER && !gui_wants_arrows(&g));
+    viewer_show(&g, "/home/wave.bmp");
+    ticks(5);
+    CHECK(g.viewer.ready && gui_wants_arrows(&g));
+    gui_open(&g, GUI_HEX);
+    CHECK(g.focus == GUI_HEX && !gui_wants_arrows(&g));
+    hex_show(&g, "/home/prog.bin");
+    CHECK(gui_wants_arrows(&g));
+    gui_open(&g, GUI_CALC);                             /* as before: Calculator's arrows are the pointer's */
+    CHECK(!gui_wants_arrows(&g));
+    gui_open(&g, GUI_LOG);                              /* an application without the hook: its .arrows */
+    CHECK(gui_wants_arrows(&g));
+}
+
 /* every window open at once, in front in turn, drawn inside the screen; then nothing is left running */
 static void test_all_windows(int width, int height) {
     int id, front;
@@ -135,6 +155,7 @@ static void test_all_windows(int width, int height) {
 int main(void) {
     test_files_open();
     test_charmap_paste();
+    test_arrows();
     test_all_windows(640, 400);
     test_all_windows(960, 540);
     test_all_windows(1280, 800);

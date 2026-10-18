@@ -535,6 +535,9 @@ static void render(const struct gui_state *g, const struct gui_draw *d) {
     gd_text(d, w->x + x, w->y + l.status_y + 3, right, MUTED);
 }
 
+/* 10/18/26: the arrows move a picture; with none they move the pointer */
+static bool wants_arrows(const struct gui_state *g) { return g->viewer.ready; }
+
 const struct gui_app gui_app_viewer = {
     .title = "Image Viewer", .icon = ICON_VIEWER, .shortcut = "", .w = 560, .h = 400,
     .resizable = true, .arrows = true, .keys = false,
@@ -542,4 +545,5 @@ const struct gui_app gui_app_viewer = {
     .render = render, .key = key, .press = press, .drag = drag, .release = release, .wheel = wheel, .tick = tick,
     .title_of = title_of, .answer = answer,
     .help = help, .help_lines = (int)(sizeof(help) / sizeof(help[0])),
+    .wants_arrows = wants_arrows,
 };
