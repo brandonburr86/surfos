@@ -32,7 +32,8 @@ struct gui_time { u32 year, month, date, weekday, hour, minute, second; };   /* 
 #define GUI_TASK_SHELL 0x4
 struct gui_task { int pid, ppid, state, tty; u32 flags; char name[GUI_TASK_NAME]; };
 
-/* memory as memstat counts it */
+/* memory as memstat counts it. 10/17/26 (System Monitor): a heap's size is the most it may grow to (its room in the
+   address space, its arena); used and free are of what it has grown to */
 struct gui_memory {
     u32 ram_kb, high_kb;                /* physical RAM; above 4 GB (not used) */
     u32 free_pages, total_pages;        /* 4 KB frames */
@@ -53,16 +54,20 @@ struct gui_machine {
 /**** Disks ****/
 
 #define GUI_DISK_MAX 32
-/* a block device as lsblk lists it, and, mounted, where and how full */
+/* a block device as lsblk lists it, and, mounted, where and how full. 10/17/26 (Disks): lsblk's own words (size,
+   type, label, status); readonly: it is mounted read-only, or would be; gone: unplugged while mounted (the mount is
+   still there, for Eject) */
 struct gui_disk {
     char name[16], disk[16];            /* usb1p1, and the disk it is on (usb1); a disk: its own name */
     char bus[8];                        /* "usb", "ata", "ram" */
-    char type[32];                      /* "disk gpt", "part FAT32 LBA" */
+    char type[32];                      /* "disk gpt", "part mbr FAT32 LBA" */
     char label[48];                     /* the model, or the partition's label */
     char status[40];                    /* lsblk's STATUS: "mounted", "boot drive: protected", ... */
     char mount[256];                    /* where it is mounted, "" */
     u32 size_kb, used_kb, free_kb;      /* used/free: a mounted file system's, 0 otherwise */
     bool part, removable, readonly, gone, mounted;
+    char size[8];                       /* 10/17/26: lsblk's SIZE, "254M" */
+    char fs[8], volume[12];             /* mounted: the file system ("fat32") and its volume label, "" */
 };
 
 struct gui_sys {
