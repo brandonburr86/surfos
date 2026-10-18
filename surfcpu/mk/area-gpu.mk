@@ -175,6 +175,18 @@ $(FW)/gpudiag.elf: $(GPUDIAG_OBJ) firmware/diagnostics/gpudiag.ld $(FW_LD_DEPS)
 build-gpu-rom: $(FW)/gpudiag.mem $(FW)/gpudiag.bin
 	@$(RV_SIZE) $(FW)/gpudiag.elf | tail -n 1 | awk '{ printf "build-gpu-rom: gpudiag.elf ROM %u of 65536 bytes (%.1f%%)\n", $$1 + $$2, ($$1 + $$2) * 100 / 65536 }'
 
+# gpudiag with GPUDIAG_TEST_LEFTOVER, for test-gpu-soc only: each run ends by leaving a target and a
+# clip set, as a run abandoned inside an engine scene would (the third review, C4), for its rerun
+GPUDIAG_LEFT_OBJ := $(subst $(FW_OBJ)/diagnostics/gpudiag.c.o,$(FW_OBJ)/diagnostics/gpudiag-leftover.c.o,$(GPUDIAG_OBJ))
+$(FW_OBJ)/diagnostics/gpudiag-leftover.c.o: firmware/diagnostics/gpudiag.c $(FW_GEN)/gpuscenes_expect.h | $(FW_GEN)/fw_build.h
+	@mkdir -p $(dir $@)
+	$(Q)$(RV_CC) $(FW_CFLAGS) -DGPUDIAG_TEST_LEFTOVER -c $< -o $@
+
+$(FW)/gpudiag-leftover.elf: $(GPUDIAG_LEFT_OBJ) firmware/diagnostics/gpudiag.ld $(FW_LD_DEPS)
+	$(Q)$(RV_CC) $(FW_LDFLAGS) -T firmware/diagnostics/gpudiag.ld $(GPUDIAG_LEFT_OBJ) $(RV_LIBGCC) -o $@
+
+.SECONDARY: $(FW)/gpudiag-leftover.bin
+
 gpu-scenes: $(FW)/host/gpuscenes_expect
 	@mkdir -p $(FW)/gpuscenes
 	$(Q)$< --font $(GPU_FONT) --ppm $(FW)/gpuscenes --list
@@ -194,7 +206,7 @@ $(BUILD)/sim/surfsim_gpu: $(GPU_SIM_DEPS)
 	$(Q)cp $(BUILD)/sim/obj_surfsim_gpu/surfsim $@ && rm -rf $(BUILD)/sim/obj_surfsim_gpu
 
 GPU_ENGINE_SCENES ?= 6
-test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem
+test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/bramdiag.mem $(FW)/gpudiag-leftover.mem
 	@mkdir -p $(GPU_BUILD)/soc
 	@# gpudiag, then Ctrl-R (as GPU.md section 14 and tools/board-test.py's late port type it), then the
 	@# rerun: the first run alone must pass, and the whole capture, whose final run is the rerun
@@ -210,6 +222,15 @@ test-gpu-soc: $(BUILD)/sim/surfsim_gpu build-gpu-rom $(FW)/surfboot.mem $(FW)/br
 	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/uart.txt --frames $(GPU_BUILD)/soc/frames.txt \
 	  --expect $(FW_GEN)/gpuscenes_expect.h --engine-scenes $(GPU_ENGINE_SCENES)
 	$(Q)grep -q 'a rerun (Ctrl-R)' $(GPU_BUILD)/soc/uart.txt || { echo "test-gpu-soc: the rerun did not say it is one"; exit 1; }
+	@# a rerun after a run that left the engine's target and clip set (gpudiag-leftover.mem), as one
+	@# abandoned inside an engine scene would: the rerun sets its own, and passes (the third review, C4)
+	$(Q)$(BUILD)/sim/surfsim_gpu --rom $(FW)/gpudiag-leftover.mem --quiet --max-cycles 900000000 \
+	  --transcript $(GPU_BUILD)/soc/leftover-uart.txt --send 'Ctrl-R runs the diagnostic again\.\r\n=\x12' \
+	  --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' --expect 'GPUDIAG: (PASS|FAIL)[^\n]*\n' > $(GPU_BUILD)/soc/leftover.txt 2>&1; \
+	  st=$$?; [ $$st -eq 0 ] || { tail -30 $(GPU_BUILD)/soc/leftover.txt; tail -30 $(GPU_BUILD)/soc/leftover-uart.txt; exit 1; }
+	@printf '  [a rerun after a target and clip were left] '
+	$(Q)$(PYTHON) sim/gpu/gpudiag_check.py --uart $(GPU_BUILD)/soc/leftover-uart.txt --frames - \
+	  --expect $(FW_GEN)/gpuscenes_expect.h
 	@# SurfBoot, the DDR+GPU design's boot ROM, on the same SoC: to its monitor, which answers help
 	@# and reports the GPU among the features (info: features 1ff)
 	$(Q)printf 'help\rinfo\r' > $(GPU_BUILD)/soc/help.txt

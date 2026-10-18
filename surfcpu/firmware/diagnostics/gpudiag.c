@@ -266,6 +266,13 @@ static void gpu_registers(uint32_t unused)
     GREG(SURF_GPU_STATUS) = GPU_STICKY;
     GREG(SURF_GPU_IE) = 0;
     fifo_credit = 0;
+    /* the target and clip a reset leaves (SET_TARGET sets the clip too): ABORT keeps them, so a rerun
+     * after a run abandoned inside an engine scene would otherwise start with that scene's */
+    GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
+    GREG(SURF_GPU_CMD) = 0;
+    GREG(SURF_GPU_CMD) = 640;
+    GREG(SURF_GPU_CMD) = GPU_WH(640, 480);
+    hw_sync();
     diag_check(GREG(SURF_GPU_ID) == GPU_ID_VALUE, "gpu.ID 0x%08x", GREG(SURF_GPU_ID));
     diag_check(GREG(SURF_GPU_INFO) == (300u << SURF_GPU_INFO_VRAM_KIB_LSB | 64u), "gpu.INFO 0x%08x", GREG(SURF_GPU_INFO));
     diag_check(GREG(SURF_GPU_FIFO_FREE) == 64 && GREG(SURF_GPU_STATUS) == 0, "idle: FIFO_FREE %u, STATUS 0x%x",
@@ -490,6 +497,20 @@ int main(void)
         }
         first_run = 0;
         diag_summary("GPUDIAG");
+#ifdef GPUDIAG_TEST_LEFTOVER
+        /* make test-gpu-soc only (build/fw/gpudiag-leftover.mem): leave a target and a clip as a run
+         * abandoned inside an engine scene would, for the rerun to start with */
+        if (engine) {
+            GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_TARGET, 0);
+            GREG(SURF_GPU_CMD) = 0x10000u;
+            GREG(SURF_GPU_CMD) = 320;
+            GREG(SURF_GPU_CMD) = GPU_WH(320, 240);
+            GREG(SURF_GPU_CMD) = GPU_HDR(GPU_OP_SET_CLIP, 0);
+            GREG(SURF_GPU_CMD) = GPU_XY(40, 40);
+            GREG(SURF_GPU_CMD) = GPU_XY(280, 200);
+            hw_sync();
+        }
+#endif
         echo();
     }
 }
