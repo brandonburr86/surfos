@@ -49,7 +49,7 @@ section records the refinements and the deviations.
 | Graphics modes | MODE 2 graphics, MODE 3 graphics + text | as decided, with the proposed overlay rule | |
 | GFX_BASE, GFX_STRIDE | byte offset; stride | both must be multiples of 4 (bits 1:0 read 0) | the scan-out reads aligned words; an unaligned base would need a byte rotator for no use |
 | GFX_SCALE | 1 or 2 | 2 doubles; 0 and 3 act as 1 | every value has a defined meaning |
-| GPAL | 256 x RGB444 | distributed RAM in two copies written together, the scan-out's (16 RAM64M) and the bus's (12 RAM256X1S): RGB332 when the FPGA is configured, not changed by a reset | a 3,072-bit register file would cost about 3,000 flip-flops; the text palette keeps its reset. GPAL was a RAMB18 first, which failed the open flow's LVS check (section 12.2); one memory with both reads maps to RAM128X1D, a cell that check does not know |
+| GPAL | 256 x RGB444 | block RAM (a RAMB18): RGB332 when the FPGA is configured, not changed by a reset | a 3,072-bit register file would cost about 3,000 flip-flops; the text palette keeps its reset |
 | FRAME_CRC | CRC-32 of the composited visible pixels | zlib's crc32 over each pixel as a little-endian 16-bit word, plus FRAME_COUNT (frames counted with the CRC, crossing with it) | FRAME_COUNT tells software which frame a CRC belongs to (section 4.4) |
 | Commands | the nine of the brief | as decided, plus NOP (opcode 0) | a FIFO of zero words drains harmlessly |
 | Errors | overflow, unknown opcode, bad parameters | as decided, plus CTRL.ABORT | a command waiting for data words that never come could otherwise only be ended by a reset |
@@ -117,9 +117,9 @@ GFX_BASE after STATUS.VBLANK_EV, or any time, flips pages without tearing: the n
 from the next frame whose latch it reaches. VRAM itself is not latched: what is written while a
 frame is shown shows in that frame from that point down.
 
-**GPAL.** 256 entries of RGB444 at video offset 0x400 + 4n, in distributed RAM: two copies that
-the bus writes together in sys_clk, one read by the bus, the other by the scan-out, whose read is
-registered in pix_clk. Writes apply as they arrive (as the text palette does). Its initial contents (configuration, and simulation time 0)
+**GPAL.** 256 entries of RGB444 at video offset 0x400 + 4n, in a dual-clock block RAM like the
+text RAM: port A for the bus (read and write), port B for the scan-out. Writes apply as they
+arrive (as the text palette does). Its initial contents (configuration, and simulation time 0)
 are RGB332: R = n[7:5], G = n[4:2], B = n[1:0], widened to 4 bits by repeating their top bits
 (R4 = {R, R[2]}, G4 = {G, G[2]}, B4 = {B, B}); entry 0 is black. A reset does not change it.
 
@@ -132,7 +132,7 @@ path starts from a second pair of counters running one pixel clock ahead of hcnt
 | G1 (S0) | `vram_addr` registered (port B address) |
 | G2 (S1) | the block RAM reads |
 | G3 (S2) | `vram_data` (the bank multiplexer's register): byte lane -> GPAL address |
-| G4 (S3) | GPAL's entry, registered: the graphics colour, next to the text colour of S3 |
+| G4 (S3) | GPAL's registered output: the graphics colour, next to the text colour of S3 |
 
 so the composited colour is chosen in S3 and registered to the pins in S4 as before, and the
 syncs keep their four stages.
@@ -321,7 +321,7 @@ the define `ARTY_HAS_GPU`, as it takes `HAS_DDR` from `ARTY_HAS_DDR`.
 | Signal | Crossing | Block |
 |---|---|---|
 | VRAM | port A sys_clk, port B pix_clk | dual-clock block RAM (no logic crosses) |
-| GPAL (the scan-out's copy) | written in sys_clk, read in pix_clk | distributed RAM; its asynchronous read is registered in pix_clk. A pixel whose entry is written at that instant may take the old colour, the new one or (the register sampling it as it changes) a mix, in that frame only |
+| GPAL | port A sys_clk, port B pix_clk | dual-clock block RAM |
 | GFX_BASE, GFX_STRIDE, GFX_SCALE (32 bits) | sys -> pix | `surf_cdc_word` (its constraints: BOARD.md) |
 | FRAME_CRC, FRAME_COUNT (48 bits) | pix -> sys | `surf_cdc_word` |
 | vertical blanking start (to the engine's WAIT_VBLANK) | pix -> sys | the existing `surf_pulse_sync` |
@@ -336,7 +336,7 @@ arithmetic.
 | Part | LUT | FF | RAMB36 | DSP |
 |---|---|---|---|---|
 | surf_vram | ~320 (bank multiplexers; Yosys) | ~80 | 76 | 0 |
-| graphics scan-out, GPAL, FRAME_CRC | ~550 (GPAL's distributed RAM 112) | ~250 | 0 | 0 |
+| graphics scan-out, GPAL, FRAME_CRC | ~400 | ~250 | 0.5 | 0 |
 | surf_gpu | ~2,500 | ~900 | 0 (FIFO in LUTRAM) | 0 |
 | total added | ~3,200 | ~1,250 | ~76 | 0 |
 | the DDR design with it | ~10,900 / 63,400 | ~6,500 / 126,800 | ~112 / 135 | 4 / 240 |
