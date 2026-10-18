@@ -18,7 +18,8 @@
    that fixes each: B39-B45; a kill is made as kill_task() makes it, TI_KILL in a call, and BEFORE builds
    them against 47fb4ec, which has no fs_hold). 10/17/26 (round fs-fix-7): and the review of B39-B45's R1 (B46, in a
    form one task can run: its own form is test_fatconc's "umount" setting) and the fixes of its other findings (B49
-   here, B47 in test_mkfs.c); BEFORE builds of those use 3fe29bf.
+   here, B47 in test_mkfs.c); BEFORE builds of those use 3fe29bf. 10/18/26 (round fs-fix-8): and the review of
+   B46-B49's M3 (B50, an umount owing a block whose writer died inside the cache); BEFORE builds use b482ff1.
    Built like the kernel objects (tests/host/pager_shim for the interrupt flag) and run by `make
    unittest`; surfcpu/docs/evidence/os/bcache-review.txt has what each scenario found before and
    after the fixes. */
@@ -3960,6 +3961,102 @@ static void b49(void) {
     sb->ops->unmount(sb);
 }
 
+/**** round fs-fix-8: the review of B46-B49 (its scenarios M1-M5: M1 confirmed B47's messages at every cut; M2 and M5
+      are B51's, in fs/vfs.c, which the kernel's self test runs; M4 is B53's, in the shells, run there too) and M3,
+      here under the audit item that fixes it: B50 ****/
+
+/**** B50 (M3): an umount (a step that must finish, B46) owes a block whose writer died inside the cache. A fault kills a
+      task at once, even inside a call (kernel/panic.c's kill_task_now()); the block it was writing stays marked so, and
+      nothing ended the umount's wait for it: Ctrl+C, a kill and a hangup are all put off while the umount is inside.
+      Now the umount gives the block up after bcache_overdue_ms (30 s: 600 reads of the stand-ins' clock), as for a
+      device that stopped answering: "write errors", the volume left unclean, the block counted given up. The other
+      blocks of the device under I/O are given up with it, and a later read of the block does not wait for it.
+      The writer dies by a longjmp() out of its device write, as the review's M3 did; the umount is stopped the same way
+      after 20000 waits when nothing ends it (the old code: it waits for good) ****/
+
+/* the host's setjmp()/longjmp(), declared by hand (-nostdinc); a buffer larger than any host's jmp_buf */
+typedef long b50_jmp_buf[64];
+int setjmp(long *env) __attribute__((returns_twice));
+void longjmp(long *env, int v) __attribute__((noreturn));
+static b50_jmp_buf b50_die, b50_stuck;
+static surf_task b50_o, b50_u, b50_r;
+static int b50_died, b50_yields;
+static u32 b50_lba;
+static void b50_hook(struct ram *r, u32 lba, u32 count) {   /* the other task's write of b's block: a fault kills it there */
+    (void)r;
+    if(b50_died || !(lba <= b50_lba && b50_lba < lba + count)) return;
+    b50_died = 1;
+    longjmp(b50_die, 1);                             /* its stack is gone: the block stays marked as written */
+}
+static void b50_yield(void) { if(++b50_yields >= 20000) longjmp(b50_stuck, 1); }
+static void __attribute__((noinline)) b50_sync(void) {
+    if(!setjmp(b50_die)) bsync(NULL);
+}
+static int __attribute__((noinline)) b50_umount(struct superblock *sb, int *s1, int *s2, u_int *gave) {
+    if(setjmp(b50_stuck)) return 1;                  /* still waiting */
+    *gave = b46_umount(sb, s1, s2);
+    return 0;
+}
+static int __attribute__((noinline)) b50_read(struct ram *x) {
+    struct buf *b;
+    if(setjmp(b50_stuck)) return -2;                 /* still waiting */
+    b = bread(&x->bd, b50_lba);
+    if(!b) return -1;
+    brelse(b);
+    return 0;
+}
+static void b50(void) {
+    struct ram *x = ram_new("b50", 8192);
+    struct superblock *sb;
+    struct geo g;
+    int s1 = 0, s2 = 0, stuck, looks, clean, errors_said, read_r, read_looks;
+    u_int gave = 0;
+    fresh("B50 (M3): an interrupted umount owes a block whose writer died inside the cache");
+    mkfs(x);
+    sb = mount(x);
+    geometry(x, &g);
+    fill(pat, 65536, 50);
+    fill(pat2, 65536, 51);
+    if(put_file(sb->root, "a", pat, 4096) || fsync_sb(sb)) die("B50: setup");
+    if(put_file(sb->root, "b", pat2, 512)) die("B50: b");   /* changed, not written: b's block, its FAT entry, its entry */
+    b50_lba = clus_lba(&g, 2 + 8);                   /* b's block (a has clusters 2-9) */
+    b50_died = 0;
+    memset(&b50_o, 0, sizeof(b50_o));
+    b50_o.in_call = TC_SYSCALL;
+    x->hook = b50_hook;
+    curTask = &b50_o;
+    b50_sync();                                      /* `sync` on another console, which faults in its device write */
+    curTask = NULL;
+    x->hook = NULL;
+    if(!b50_died) die("B50: the other task's write");
+    memset(&b50_u, 0, sizeof(b50_u));
+    b50_u.in_call = TC_COMMAND;
+    b50_u.intr = TI_INT;                             /* Ctrl+C (a kill, a hangup: the same here) */
+    b50_yields = 0;
+    klog_len = 0; klog[0] = 0;
+    yield_hook = b50_yield;
+    curTask = &b50_u;
+    stuck = b50_umount(sb, &s1, &s2, &gave);
+    looks = b50_yields;
+    curTask = NULL;
+    errors_said = said("write errors, the volume stays marked as not cleanly unmounted");
+    clean = (fat1(x, &g, 1) & 0x8000) != 0;
+    memset(&b50_r, 0, sizeof(b50_r));                /* another task reads the block afterwards */
+    b50_yields = 0;
+    curTask = &b50_r;
+    read_r = stuck ? -3 : b50_read(x);
+    read_looks = b50_yields;
+    curTask = NULL;
+    yield_hook = NULL;
+    if(verbose) printf("      the umount %s after %d looks; fs sync %d, bsync %d, %u changed blocks given up; 'write errors' said %d;"
+                       " the card's clean bit %d; a read of the block afterwards: %d after %d looks\n",
+                       stuck ? "STILL WAITS" : "returned", looks, s1, s2, gave, errors_said, clean, read_r, read_looks);
+    check(!stuck && looks < 2000, "B50 (M3): an interrupted umount ends although a block it owes stays under the write of a task that died");
+    check(!stuck && (s1 || s2) && gave > 0 && errors_said == 1 && !clean,
+          "B50 (M3): it gives the block up as for a device that stopped answering: write errors, the volume unclean, the block counted");
+    check(read_r >= -1 && read_looks < 10, "B50: a read of the block afterwards does not wait for the dead task's write");
+}
+
 int main(int argc, char **argv) {
     const char *only = argc > 1 ? argv[1] : NULL;
     verbose = getenv("FATFS_VERBOSE") != NULL;
@@ -4043,6 +4140,7 @@ int main(int argc, char **argv) {
     RUN("b45", b45());
     RUN("b46", b46(0); b46(1); b46(2); b46(3); b46(4));
     RUN("b49", b49());
+    RUN("b50", b50());
     audit();
     printf("FATFS: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
