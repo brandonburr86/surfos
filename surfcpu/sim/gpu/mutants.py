@@ -5,8 +5,9 @@
 
 Each mutant is a one-line change to a copy of surf_gpu.v, surf_vram.v or surf_video.v: a bug
 of the kind the design could have (a copy in the wrong direction, a clip off by one, EXPAND's
-bits in the wrong order, the engine taking the port without its grant, the overlay rule wrong,
-FRAME_CRC's bytes swapped, a placement change not waiting for the frame latch...). The test
+bits in the wrong order, the engine taking the port without its grant, an ABORT that keeps the
+FIFO, an interrupt without its enable, the overlay rule wrong, FRAME_CRC's bytes swapped, a
+placement change not waiting for the frame latch...). The test
 that covers it (test_gpu, test_vram or test_video_gfx) is built against the copy with Verilator
 and run on seed 1; it must fail. Exit 0 when every mutant is caught. Run in the toolchain
 container from surfcpu/ (it needs verilator and g++).
@@ -45,6 +46,12 @@ MUTANTS = [
      "({4'd0, p0} + mul_acc + {20'd0, tg_w} >= VRAM_36)));", "gpu"),
     ("copy-window-not-shifted", GPU, "else     begin lo <= hi_n; cw_hi <= 1'b1; end",
      "else     begin cw_hi <= 1'b1; end", "gpu"),
+    ("abort-keeps-fifo", GPU, ".clk(clk), .rst(rst || abort), .wr_en(fifo_push)",
+     ".clk(clk), .rst(rst), .wr_en(fifo_push)", "gpu"),
+    ("irq-ignores-ie-fence", GPU, "assign irq = (fev_q && ie_q[SURF_GPU_IE_FENCE_LSB]) ||",
+     "assign irq = (fev_q) ||", "gpu"),
+    ("irq-ignores-ie-err", GPU, "((ovf_q || badop_q || badpar_q) && ie_q[SURF_GPU_IE_ERR_LSB]);",
+     "((ovf_q || badop_q || badpar_q));", "gpu"),
     ("vram-engine-over-cpu", VRAM, "assign g_gnt = g_req && !cpu;", "assign g_gnt = g_req;", "vram"),
     ("vram-bound-inclusive", VRAM, "wire        cpu_ok = !s_req_fetch && ({13'd0, off} < BYTES_W);",
      "wire        cpu_ok = !s_req_fetch && ({13'd0, off} <= BYTES_W);", "vram"),

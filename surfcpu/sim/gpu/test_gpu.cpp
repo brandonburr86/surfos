@@ -400,6 +400,59 @@ static void test_errors_and_fences(Tb &tb, Bus &bus) {
     wr(bus, SURF_GPU_STATUS, 0x1E);
     wr(bus, SURF_GPU_IE, 0);
     g_eng.sticky = 0;
+    // each interrupt needs its own enable: an event without it keeps irq low, the enable alone
+    // raises it (the first GPU review: IE was only ever set before the event)
+    cmd(bus, {GPU_HDR(GPU_OP_FENCE, GPU_FENCE_IRQ), 0xFE0});
+    wait_idle(bus);
+    bus.idle(1);
+    CHECK((rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_FENCE_EV_MASK) && !tb.t->irq, "FENCE_EV with IE 0: irq %d",
+          tb.t->irq);
+    wr(bus, SURF_GPU_IE, SURF_GPU_IE_ERR_MASK);
+    bus.idle(1);
+    CHECK(!tb.t->irq, "FENCE_EV with IE.ERR alone: irq");
+    wr(bus, SURF_GPU_IE, SURF_GPU_IE_FENCE_MASK);
+    bus.idle(1);
+    CHECK(tb.t->irq, "FENCE_EV, then IE.FENCE: no irq");
+    wr(bus, SURF_GPU_IE, 0);
+    wr(bus, SURF_GPU_STATUS, SURF_GPU_STATUS_FENCE_EV_MASK);
+    g_eng.sticky = 0;
+    push(bus, GPU_HDR(0x78, 0));                           // BAD_OPCODE
+    wait_idle(bus);
+    bus.idle(1);
+    CHECK((rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BAD_OPCODE_MASK) && !tb.t->irq, "BAD_OPCODE with IE 0: irq %d",
+          tb.t->irq);
+    wr(bus, SURF_GPU_IE, SURF_GPU_IE_FENCE_MASK);
+    bus.idle(1);
+    CHECK(!tb.t->irq, "BAD_OPCODE with IE.FENCE alone: irq");
+    wr(bus, SURF_GPU_IE, SURF_GPU_IE_ERR_MASK);
+    bus.idle(1);
+    CHECK(tb.t->irq, "BAD_OPCODE, then IE.ERR: no irq");
+    wr(bus, SURF_GPU_IE, 0);
+    wr(bus, SURF_GPU_STATUS, 0x1E);
+    g_eng.sticky = 0;
+    fence_check(tb, bus, "the interrupt enables");
+    // ABORT empties the FIFO: two fills and a fence queued behind a WAIT_VBLANK that waits for good
+    // are dropped and never run, even once the blanking comes (none of it is given to the model)
+    tb.vblank_every = 0;
+    wr(bus, SURF_GPU_CMD, GPU_HDR(GPU_OP_WAIT_VBLANK, 0));
+    for (uint32_t w : {GPU_HDR(GPU_OP_FILL_RECT, 0x5A), xy(0, 0), wh(640, 480), GPU_HDR(GPU_OP_FILL_RECT, 0xA5),
+                       xy(100, 100), wh(8, 8), GPU_HDR(GPU_OP_FENCE, GPU_FENCE_IRQ), 0xDEADu})
+        wr(bus, SURF_GPU_CMD, w);
+    bus.idle(20);
+    const uint32_t queued = 64 - rd(bus, SURF_GPU_FIFO_FREE);
+    CHECK((rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK) && queued == 8,
+          "WAIT_VBLANK with 8 words behind it: busy %u, %u words queued",
+          rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK, queued);
+    wr(bus, SURF_GPU_CTRL, SURF_GPU_CTRL_ABORT_MASK);
+    CHECK(!(rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_BUSY_MASK) && rd(bus, SURF_GPU_FIFO_FREE) == 64,
+          "ABORT with 8 words queued: busy, or FIFO_FREE %u", rd(bus, SURF_GPU_FIFO_FREE));
+    tb.pulse = true;                                       // the blanking the WAIT_VBLANK waited for
+    bus.idle(4000);
+    CHECK(rd(bus, SURF_GPU_FENCE) != 0xDEADu && !(rd(bus, SURF_GPU_STATUS) & SURF_GPU_STATUS_FENCE_EV_MASK),
+          "a FENCE queued before the ABORT ran: FENCE %08x", rd(bus, SURF_GPU_FENCE));
+    tb.vblank_every = 5000;
+    tb.next_vblank = tb.cycles + 5000;
+    fence_check(tb, bus, "ABORT with words queued");
     // ABORT: a WRITE_RECT waits for data; the destination words it has every pixel of are drawn
     // (x 10..15), the rest never come. The model draws each data word as it arrives, so it also
     // drew x 16 and 17, whose destination word (x 16..19) the engine still waits to complete:
