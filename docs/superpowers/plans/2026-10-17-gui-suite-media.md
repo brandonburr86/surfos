@@ -19,7 +19,8 @@ as Notepad's does. (Once Files is wired to it: double-click a `.bmp` in Files.)
 * **Size.** Up to 16384 x 16384 pixels. A picture of more than 1,048,576 pixels (1024 x 1024) is reduced
   while it is read, keeping its proportions (1920 x 1080 is kept at 1365 x 768), and the status bar says
   `kept at 1365 x 768`. A picture is read a piece at a time, one piece in each frame the desktop draws (at most
-  16 reads and 256 KB plus one 64 KB chunk a frame), so the desktop goes on answering while a big file is read:
+  128 reads and 256 KB plus one 64 KB chunk a frame, and a single read when it opens), so the desktop goes on
+  answering while a big file is read:
   the window and the status bar count the percent (`Reading sea.bmp... 45%`), and Esc stops the reading. When
   a file cannot be read to its end (it was cut short, or the stick was pulled out), the window and its status
   bar say so; no message box interrupts what you are doing meanwhile.
@@ -131,14 +132,28 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
    that fits, its proportions kept, each kept pixel the source pixel in the middle of what it stands for
    (nearest neighbour), and only the rows needed are read. The sanity limit is 16384 pixels a side (a row of
    16384 32-bit pixels is the 64 KB a read takes). Its status bar says `kept at W x H`.
-2. **Reading in the tick, bounded in reads as well as bytes.** A picture is read in the tick (the first piece at
-   once, in the handler that opens it, so that a small one is there with no frame's wait); Esc stops it. A read
-   takes the file's rows from the next one needed as far as a 64 KB chunk holds them, those a reduced picture
-   skips included (read and passed over), and counts for its bytes, 16 KB at least, against the frame's 256 KB:
-   so a frame (and the first piece) makes 16 reads at most and reads 256 KB and one chunk at most. (Each
-   read_at is an open and a walk of the file's clusters on the kernel, so the reads count, not only the bytes:
-   a 256 x 16384 1-bit picture took 8,193 reads in one handler before, and takes 6 now.) Hex's Find reads
-   256 KB a frame.
+2. **Reading in the tick, bounded in reads as well as bytes.** A picture is read in the tick, and one read at
+   once in the handler that opens it (a small picture is there with no frame's wait); Esc stops it. A read
+   counts for its bytes, 2 KB at least, against the frame's 256 KB: so a frame makes 128 reads at most and reads
+   256 KB and one 64 KB chunk at most. (Each read_at is an open and a walk of the file's clusters on the
+   kernel, so the reads count, not only the bytes.) A read takes the next row the picture needs, and the needed
+   rows after it as far as a chunk holds them while each costs no more than a read of its own would: a row next
+   to the last always, one past skipped rows only when those and it come to 2 KB at most (they are read and
+   passed over). So rows of 2 KB or more are read exactly as 0c245c0 read them, adjacent ones together and the
+   rows a reduced picture skips never, and short rows (narrow and 1-bit pictures) in spans of many instead of a
+   read each: a 256 x 16384 1-bit picture took 8,193 reads in one handler at 0c245c0, and takes 9 in all now
+   (the headers, then 8 spans of 64 KB; 2 of them in the handler). Big pictures take as many frames as at 0c245c0, and one more (the opening handler reads one piece, where
+   it read a frame's worth), reading the same bytes:
+
+   | Picture | Frames 0c245c0, 2a75187, now | Bytes read 0c245c0, 2a75187, now |
+   |---|---|---|
+   | 4000 x 3000 x 24 | 40, 81, 41 | 10.6, 23.3, 10.6 MB |
+   | 3000 x 2000 x 32 | 37, 54, 38 | 10.0, 16.1, 10.0 MB |
+   | 1920 x 1080 x 24 | 16, 19, 17 | 4.4, 6.1, 4.4 MB |
+   | 16384 x 16384 x 1 | 7, 63, 8 | 2.1, 17.8, 2.1 MB |
+   | 1024 x 16384 x 32 | 63, 204, 64 | 16.8, 54.5, 16.8 MB |
+
+   Hex's Find reads 256 KB a frame.
 3. **Drawing.** The decoded pixels are scaled at render time, nearest neighbour, clipped to the window and the
    screen, with no allocation and no division in the loop (each row steps through the decoded pixels as a
    quotient and a remainder, exactly). On the desktop's own 32-bit 0x00RRGGBB frame the pixels are written
@@ -203,10 +218,10 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
   Hex (a read every 64 KB) or reading a huge picture's rows gets slow, still a frame's budget at a time and
   stoppable with Esc. A position kept between calls in guifs.c (or the FAT vnode kept cached) would make it
   linear; not changed here, as guifs.c is not the track's.
-* The Image Viewer keeps the arrow keys when it shows no picture, so they do not move the pointer then:
-  struct gui_app's `arrows` is fixed for an application, and shell/gui.c decides with gui_wants_arrows()
-  (guicore.c's foundation code) before the key reaches the application. Letting them through would need a
-  hook in struct gui_app that gui_wants_arrows() asks; not done (foundation code).
+* The arrow keys move the pointer while the Image Viewer shows no picture and Hex shows no file: that was done
+  in the integration (gui/suite df2da45), where struct gui_app has an optional `wants_arrows` hook that
+  gui_wants_arrows() asks, and guiview.c and guihex.c set it (g->viewer.ready, g->hex.path[0] != 0). It is not on
+  this branch, so that the merge does not conflict.
 * Everything here was checked on the host and in QEMU (OVMF, USB sticks), not yet on the laptop.
 
 ## Files
@@ -263,7 +278,11 @@ file being checked (the review), and the rest small.
   that cannot be read (said once, not read again every frame) and a search whose read fails; devices refused
   by Hex, the Image Viewer and Sketch; a file of 0xFFFFFFFF bytes (End, Up, Go to 0xFFFFFF00, Down at the
   end); Sketch's line cleared by a stroke, Clear and Ctrl+N; "shrunk to fit" for a 1 x 1000 picture; Sketch
-  refusing the 1 GB picture and reading a 1920 x 1080 one in 181 reads.
+  refusing the 1 GB picture and reading a 1920 x 1080 one in 181 reads. After the second review: the frames
+  a 4000 x 3000 x 24 photo and a 1024 x 16384 x 32 picture take (41 and 64 at most, 0c245c0's and one more),
+  the bytes they read (the rows they need, no others), 128 reads and 256 KB and a chunk a frame at most, one
+  read in the opening handler, their pixels; Sketch opening a file of 8 MB exactly and refusing one a byte
+  longer ("more than the 8 MB Sketch opens").
 * tools/gui_apps_media.py (qemu-usb.py's guiapps scenario): Files mounts the APPSTICK; Hex's first row of
   media/bytes.bin and a Find on the screen; the Image Viewer's 24-bit picture fitted and at its actual size and
   an 8-bit top-down one, colours read off the screen; Sketch draws, saves media/drawn.bmp, clears, opens it
