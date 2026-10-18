@@ -638,6 +638,20 @@ SurfCPU (0a9a5f2's kernel against this one, the same simulator and ROM): test-os
 later; SurfBoot loads a package 880 bytes larger (+0.08 million cycles), and each command is within
 0.5 % (bcache-review.txt section 47).
 
+Since audit B50-B55 (counted the same way, before = b482ff1): every workload above sends the same
+requests and blocks. A new I/O of a block clears one flag (a store); the bounded waits, the count of
+a device being unmounted and fdisk's count run only where nothing ran before. On SurfCPU (b482ff1's
+kernel against this one, the same simulator and ROM): test-os-persist's write run 0.27 % more
+cycles, its reboot run 0.29 %, test-os-faults' full card 0.29 %, and its refusing card 1.37 % fewer
+(the card-detect task meeting the card's removal a look sooner); SurfBoot loads a package 2.9 KB
+larger (+0.36 million cycles), and each command is within 0.5 %. Against b482ff1 padded to this
+kernel's layout (each object this round changed followed by as much code that never runs as it grew,
+the package as large): +0.13 %, +0.09 %, +0.09 % and -0.08 %. A first version kept the bound's clock
+in the cache's calls themselves: SurfCPU fetches every instruction from DDR, and with more registers
+saved in each call and an instruction more for each of the 1024 blocks in a sync's last look, each
+card command cost 0.5-1.8 % more against that padded base; the waits are out of line now
+(bcache-review.txt section 55).
+
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by
 `fsck.fat` but not repaired by SurfOS (it mounts such a volume and warns). A file being
