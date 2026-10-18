@@ -697,8 +697,12 @@ SMOKE = [
                                                  'security = wpa2', 'psk = ' + SURFSIM_PSK, 'network = "SurfSim"',
                                                  'security = open', '# SurfOS did not understand the lines below',
                                                  'network = "Broken"', 'security = wpa2', 'psk = 1234']),
-      ('ls /hda1/surfos-config', ['networks.conf', 'settings.conf', '2 entries'])],
-     [WLANSIM_PASSPHRASE, '.new', 'starting telnetd on F1 (the settings']),
+      ('ls /hda1/surfos-config', ['networks.conf', 'settings.conf', '2 entries']),
+      # 10/18/26: each of these boots ends with the stick unmounted, as the owner ejects it before pulling it out:
+      # mounted read-write (here at boot, as /hda1) a FAT volume is marked as not cleanly unmounted until then
+      # (fs/fat.c), and QEMU's quit is a pull, which fsck.fat on the host would report in @settings-disk
+      ('umount /hda1', [])],
+     [WLANSIM_PASSPHRASE, '.new', 'starting telnetd on F1 (the settings', 'umount: /hda1']),
     # 2: the same stick again: the settings and both networks read (the bad one told again); the first saved network
     # joined, its lease, telnetd started by the setting once there is an address on that WPA2 network (that address on
     # its line), a telnet session through it. wifi leave is left alone by the keeper; wifi connect joins again. The
@@ -726,8 +730,9 @@ SMOKE = [
       ('keeper-joins-open', CHECK),
       ('wifi status', ['wlan0: associated with "SurfSim"', 'inet 10.0.2.15']),
       ('wifi saved', [' 1  SurfSimWPA', ' 2  SurfSim ', 'open  joined now']),
-      ('wlansim on SurfSimWPA', ['wlansim: SurfSimWPA is on again'])],
-     [WLANSIM_PASSPHRASE, 'not mounted', 'stays mounted']),
+      ('wlansim on SurfSimWPA', ['wlansim: SurfSimWPA is on again']),
+      ('umount /hda1', [])],
+     [WLANSIM_PASSPHRASE, 'not mounted', 'stays mounted', 'umount: /hda1']),
     # 3: settings=off (the menu's entry without the settings): nothing read, nothing joined, no telnetd. A change is
     # saved for the next start and changes nothing now (set back afterwards); a network saved and forgotten so too
     ('@boot wlansim net settingsdisk=owner settings=off',
@@ -745,8 +750,9 @@ SMOKE = [
       ('', ['saved SurfSimFlaky (open, hidden) on hda1, the first of 3 saved networks it tries: SurfOS joins it by '
             'itself from the next start', 'the last scan did not hear SurfSimFlaky by its name']),
       ('wifi saved', ['the saved Wi-Fi networks are not read at this start (settings=off)']),
-      ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)'])],
-     ['+NET: wlan0', '+NET: settings from']),
+      ('wifi forget SurfSimFlaky', ['forgot SurfSimFlaky: SurfOS no longer joins it by itself (2 saved networks left)']),
+      ('umount /hda1', [])],
+     ['+NET: wlan0', '+NET: settings from', 'umount: /hda1']),
     # 4: a hidden network saved by hand (hidden = yes, no security line: open): joined by a probe for its name; no DHCP
     # server answers on its island, so the keeper says it asks again later. wifi save of it keeps it hidden (the station
     # heard its beacons without a name); with settings wifi off, a network the last scan did not hear by its name is
