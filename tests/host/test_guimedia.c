@@ -98,6 +98,13 @@ static const char needle[] = "NEEDLE!!";
 #define SHOT_H 1080
 #define SHOT_SIZE (54u + SHOT_W * 3u * SHOT_H)  /* 6,220,854 bytes: a screenshot, under Sketch's 8 MB */
 static u32 big_reads, big_bytes;                /* read_at's calls and bytes, of every file */
+/* FAT's walk of a made file's cluster chain (4 KB clusters), as the kernel pays it since gui/suite 3f77dfe: the file
+   stays open through a frame's reads (walk_reset() is the frame's end), and a read goes on from where the last one left
+   off in the chain when it lies further on, from the start otherwise: where the walk is, the clusters walked, the
+   furthest reached */
+#define CLUSTER 4096
+static u32 walk_at, walk_steps, walk_far;
+static void walk_reset(void) { walk_at = walk_steps = walk_far = 0; }
 static int fail_after = -1;                     /* read_at fails (EIO) once this many more calls were made; -1: never */
 static const char *device = "";                 /* a path that stat says is a device */
 
@@ -145,9 +152,11 @@ static u8 pic_byte(u32 off, u32 w, u32 h, u32 bpp) {
     return c / (bpp / 8) < w ? (u8)(pic(c / (bpp / 8), h - 1 - r) >> (8 * (c % (bpp / 8)))) : 0;
 }
 #define PHOTO_SIZE (54u + 12000u * 3000)        /* 4000 x 3000 x 24 */
+#define NARROW_SIZE (54u + 2048u * 16384)       /* 682 x 16384 x 24: rows of 2,046 bytes and 2 of padding */
 #define TALL_SIZE (54u + 4096u * 16384)         /* 1024 x 16384 x 32 */
 static u8 photo_byte(u32 off) { return pic_byte(off, 4000, 3000, 24); }
 static u8 tall_byte(u32 off) { return pic_byte(off, 1024, 16384, 32); }
+static u8 narrow_byte(u32 off) { return pic_byte(off, 682, 16384, 24); }
 static u32 edge_size;                           /* a 2048 x 1000 24-bit picture (6 MB), then bytes to make it edge_size */
 static u8 edge_byte(u32 off) { return off < 54 ? head_byte(off, edge_size, 2048, 1000, 24) : 0x40; }
 
@@ -158,6 +167,7 @@ static bool made(const char *path, u32 *size, u8 (**byte)(u32)) {
     if(!strcmp(path, "/shot.bmp")) { *size = SHOT_SIZE; *byte = shot_byte; return true; }
     if(!strcmp(path, "/photo.bmp")) { *size = PHOTO_SIZE; *byte = photo_byte; return true; }
     if(!strcmp(path, "/tall.bmp")) { *size = TALL_SIZE; *byte = tall_byte; return true; }
+    if(!strcmp(path, "/narrow.bmp")) { *size = NARROW_SIZE; *byte = narrow_byte; return true; }
     if(!strcmp(path, "/edge.bmp")) { *size = edge_size; *byte = edge_byte; return true; }
     return false;
 }
@@ -198,6 +208,11 @@ static int big_read_at(void *ctx, const char *path, u32 off, char *buf, u32 n, u
     for(i = 0; i < n; i++) buf[i] = (char)byte(off + i);
     *len = n;
     big_bytes += n;
+    if(n) {                                             /* from the place remembered, or else from the start */
+        walk_steps += (off + n - 1) / CLUSTER - (walk_at <= off / CLUSTER ? walk_at : 0);
+        walk_at = (off + n - 1) / CLUSTER;
+        if(walk_at > walk_far) walk_far = walk_at;
+    }
     return 0;
 }
 
@@ -1097,10 +1112,12 @@ static void review_frames(void) {
         most_reads = most_bytes = 0;
         for(frames = 0; v->loading && frames < 1000; frames++) {
             big_reads = big_bytes = 0;
+            walk_reset();
             ticks(1);
             total += big_bytes;
             if(big_reads > most_reads) most_reads = big_reads;
             if(big_bytes > most_bytes) most_bytes = big_bytes;
+            CHECK(walk_steps == walk_far);              /* one walk a frame, to its furthest read: the reads go forward */
         }
         CHECK(v->ready && v->w == pics[i].w && v->h == pics[i].h);
         CHECK(frames <= pics[i].frames && total == pics[i].bytes && most_reads <= 128 && most_bytes <= 256 * 1024 + GUI_VIEW_CHUNK);
@@ -1113,6 +1130,42 @@ static void review_frames(void) {
             CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 1] == (u8)(c >> 8) &&
                   v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
         }
+    }
+}
+
+/* the third review: a tall picture with short rows, 682 x 16384 x 24 (rows of 2,048 bytes, which a read counts for at
+   least anyway), kept at a third or so of its rows: each row it needs is a read of its own (none is next to another),
+   so every frame makes 128 reads exactly, but the last; the bytes are those rows' and no others; the reads of a frame
+   go forward, so that on the kernel, which keeps the file open through a frame since gui/suite 3f77dfe, a frame walks
+   the cluster chain once, to its furthest read (8,193 clusters of 4 KB at most here, where a walk from the start for
+   each read cost up to a million); and the pixels are right where looked at */
+static void review_cap(void) {
+    struct gui_viewer *v = &g.viewer;
+    u32 frames, rows, total, worst = 0, j, dx, dy, c;
+    desktop(960, 540);
+    big_reads = big_bytes = 0;
+    walk_reset();
+    viewer_show(&g, "/narrow.bmp");
+    CHECK(v->loading && v->dh > 4096 && v->dh < 8192 && big_reads == 2 && big_bytes == 2048 + 2048 && walk_steps == walk_far);
+    total = big_bytes;
+    rows = v->dh - 1;                                   /* the rows still to read, each a read */
+    for(frames = 0; v->loading && frames < 1000; frames++) {
+        big_reads = big_bytes = 0;
+        walk_reset();
+        ticks(1);
+        total += big_bytes;
+        CHECK(big_reads == (rows < 128 ? rows : 128) && big_bytes == big_reads * 2048 && walk_steps == walk_far &&
+              walk_far <= NARROW_SIZE / CLUSTER);
+        rows -= big_reads <= rows ? big_reads : rows;
+        if(walk_steps > worst) worst = walk_steps;
+    }
+    CHECK(v->ready && !rows && frames == (v->dh - 1 + 127) / 128 && total == 2048 + v->dh * 2048 && worst > 4096);
+    for(j = 0; j < 97; j++) {
+        dx = j * 61 % v->dw;
+        dy = j * 1291 % v->dh;
+        c = pic((2 * dx + 1) * v->w / (2 * v->dw), (2 * dy + 1) * v->h / (2 * v->dh));
+        CHECK(v->pixels[(dy * v->dw + dx) * 3] == (u8)(c >> 16) && v->pixels[(dy * v->dw + dx) * 3 + 1] == (u8)(c >> 8) &&
+              v->pixels[(dy * v->dw + dx) * 3 + 2] == (u8)c);
     }
 }
 
@@ -1173,6 +1226,7 @@ int main(void) {
     review_hex();
     review_sketch();
     review_frames();
+    review_cap();
     windows(640, 400);
     windows(960, 540);
     windows(1280, 800);

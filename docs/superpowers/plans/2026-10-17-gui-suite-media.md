@@ -132,18 +132,19 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
    that fits, its proportions kept, each kept pixel the source pixel in the middle of what it stands for
    (nearest neighbour), and only the rows needed are read. The sanity limit is 16384 pixels a side (a row of
    16384 32-bit pixels is the 64 KB a read takes). Its status bar says `kept at W x H`.
-2. **Reading in the tick, bounded in reads as well as bytes.** A picture is read in the tick, and one read at
-   once in the handler that opens it (a small picture is there with no frame's wait); Esc stops it. A read
-   counts for its bytes, 2 KB at least, against the frame's 256 KB: so a frame makes 128 reads at most and reads
-   256 KB and one 64 KB chunk at most. (Each read_at is an open and a walk of the file's clusters on the
-   kernel, so the reads count, not only the bytes.) A read takes the next row the picture needs, and the needed
-   rows after it as far as a chunk holds them while each costs no more than a read of its own would: a row next
-   to the last always, one past skipped rows only when those and it come to 2 KB at most (they are read and
-   passed over). So rows of 2 KB or more are read exactly as 0c245c0 read them, adjacent ones together and the
-   rows a reduced picture skips never, and short rows (narrow and 1-bit pictures) in spans of many instead of a
-   read each: a 256 x 16384 1-bit picture took 8,193 reads in one handler at 0c245c0, and takes 9 in all now
-   (the headers, then 8 spans of 64 KB; 2 of them in the handler). Big pictures take as many frames as at 0c245c0, and one more (the opening handler reads one piece, where
-   it read a frame's worth), reading the same bytes:
+2. **Reading in the tick, bounded in reads as well as bytes.** A picture is read in the tick, and one read at once
+   in the handler that opens it (a small picture is there with no frame's wait); Esc stops it. A read counts for
+   its bytes, 2 KB at least, against the frame's 256 KB: so a frame makes 128 reads at most and reads 256 KB and
+   one 64 KB chunk at most. (Each read_at was an open and a walk of the file's clusters from its start on the
+   kernel, so the reads count, not only the bytes; since gui/suite 3f77dfe the file stays open through a frame, and
+   a frame's reads, which go forward, walk the chain once.) A read takes the next row the picture needs, and the
+   needed rows after it as far as a chunk holds them while each costs no more than a read of its own would: a row
+   next to the last always, one past skipped rows only when those and it come to 2 KB at most (they are read and
+   passed over). So rows of 2 KB or more are read exactly as 0c245c0 read them, adjacent ones together and the rows
+   a reduced picture skips never, and short rows (narrow and 1-bit pictures) in spans of many instead of a read
+   each: a 256 x 16384 1-bit picture took 8,193 reads in one handler at 0c245c0, and takes 9 in all now (the
+   headers, then 8 spans of 64 KB; 2 of them in the handler). Big pictures take as many frames as at 0c245c0, and
+   one more (the opening handler reads one piece, where it read a frame's worth), reading the same bytes:
 
    | Picture | Frames 0c245c0, 2a75187, now | Bytes read 0c245c0, 2a75187, now |
    |---|---|---|
@@ -212,12 +213,15 @@ the screen) and `viewer_zoom()` (16.16). Sketch's are `sketch_save_as()`, `sketc
 
 * Files is not wired to the Image Viewer and Hex yet (the integrator's, above), and docs/GUI.md is not
   updated (the integrator's, from this file).
-* gui_fs's read_at (shell/guifs.c, the foundation's) opens the file for each call, so on FAT the cluster chain
-  is walked from the file's start every time: a read far into a big file costs time in proportion to its
-  offset, in clusters. That is nothing for pictures and ordinary files, but searching hundreds of megabytes in
-  Hex (a read every 64 KB) or reading a huge picture's rows gets slow, still a frame's budget at a time and
-  stoppable with Esc. A position kept between calls in guifs.c (or the FAT vnode kept cached) would make it
-  linear; not changed here, as guifs.c is not the track's.
+* gui_fs's read_at (shell/guifs.c, the foundation's) opened the file for each call, so on FAT the cluster chain
+  was walked from the file's start for every read: a frame of 128 short reads deep into a tall picture with
+  short rows cost up to about a million cluster steps. Since gui/suite 3f77dfe it does so only once a frame:
+  each desktop has a struct gui_fs of its own (gui_kernel_fs_begin()) whose read_at keeps the last file open
+  through a frame's reads, which go on from FAT's remembered place in the chain; shell/gui.c closes it after
+  the frame's tick and input, before drawing or sleeping (gui_kernel_fs_idle()), and it is closed before any
+  write, remove, rename, mount or eject the desktop does, and when another file is read. The Image Viewer's and
+  Hex's reads within a frame go forward, so a frame's walk is about one read's (the host test checks it in
+  clusters of 4 KB). That is gui/suite's, not this branch's (guifs.c and gui.c are not the track's).
 * The arrow keys move the pointer while the Image Viewer shows no picture and Hex shows no file: that was done
   in the integration (gui/suite df2da45), where struct gui_app has an optional `wants_arrows` hook that
   gui_wants_arrows() asks, and guiview.c and guihex.c set it (g->viewer.ready, g->hex.path[0] != 0). It is not on
@@ -282,7 +286,11 @@ file being checked (the review), and the rest small.
   a 4000 x 3000 x 24 photo and a 1024 x 16384 x 32 picture take (41 and 64 at most, 0c245c0's and one more),
   the bytes they read (the rows they need, no others), 128 reads and 256 KB and a chunk a frame at most, one
   read in the opening handler, their pixels; Sketch opening a file of 8 MB exactly and refusing one a byte
-  longer ("more than the 8 MB Sketch opens").
+  longer ("more than the 8 MB Sketch opens"). After the third review: a 682 x 16384 x 24 picture (rows of
+  2,048 bytes, each needed row a read of its own) whose frames make 128 reads exactly, but the last, reading its
+  needed rows and no others, its pixels right; and in each frame of it, of the photo and of the tall picture,
+  one walk of the cluster chain (4 KB clusters) to the frame's furthest read, as the kernel pays it since
+  gui/suite 3f77dfe: the reads of a frame go forward.
 * tools/gui_apps_media.py (qemu-usb.py's guiapps scenario): Files mounts the APPSTICK; Hex's first row of
   media/bytes.bin and a Find on the screen; the Image Viewer's 24-bit picture fitted and at its actual size and
   an 8-bit top-down one, colours read off the screen; Sketch draws, saves media/drawn.bmp, clears, opens it
