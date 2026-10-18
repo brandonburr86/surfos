@@ -429,7 +429,8 @@ $(BUILD)/host/test_fatfuzz: tests/host/test_fatfuzz.c tests/host/test_fatfs.c $(
 # and its threaded one: the cache and FAT run by host threads at once with the kernel's waits made real
 # (tests/host/test_fatconc.c; its host side fatconc_host.c is built with the host's headers, fatconc_shim/ stands in
 # for the interrupt lock): four settings, 3 s each (10/16/26, round fs-fix-3: the fourth is the review of B12-B19's,
-# six writers on a small volume, which found trim_chain()'s window, B25)
+# six writers on a small volume, which found trim_chain()'s window, B25); 10/17/26 (round fs-fix-7, audit B46): and
+# `umount`, an umount interrupted while another thread's write is in flight (about 1 s)
 FATCONC_FLAGS = -Itests/host/fatconc_shim $(HOSTKERN_FLAGS) -fgnu89-inline
 # 10/16/26 (round fs-fix-3): in the cache and FAT, curTask stands for the calling thread's own task (fatconc_task(),
 # tests/host/test_fatconc.c): a block one thread's operation sets aside is the other threads' syncs' debt (audit B26)
@@ -499,6 +500,7 @@ unittest: $(BUILD)/host/test_blibc $(BUILD)/host/test_bootinfo $(BUILD)/host/tes
 	$(BUILD)/host/test_fatconc 12 3 4 1 0 1
 	$(BUILD)/host/test_fatconc 21 3 3 1 100 1 1 1 1 16384 0
 	$(BUILD)/host/test_fatconc 33 3 6 1 0 1 0 0 1 8192 0
+	$(BUILD)/host/test_fatconc umount
 	$(BUILD)/host/test_prompt
 	$(BUILD)/host/test_cp437
 	$(BUILD)/host/test_pager

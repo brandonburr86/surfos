@@ -405,7 +405,12 @@ buffers in hand left every later sync hanging; B39: a kill or Ctrl+C cuts a sync
 and a task inside a FAT call, holding the cache's lock, or with blocks of its own marked in the cache
 is not killed at once (`fs_hold`, `bcache_holds()`): the kill that waited 2 s comes once it is out,
 never in the middle, where it left a copy's record on the dead task's stack and blocks marked as
-copied, written or read for good). Nothing hangs (a 1 MB `cp` returns at once with
+copied, written or read for good; B47: nor inside a device request, also one outside the cache, where
+a killed `mkfs` left `sdblk.c`'s lock held and the card hung, and `mkfs` stops before its next request
+and says how far it got; B48: a kernel thread killed in there that enters a call gets the call's 2 s;
+B49: a long read or write stops before its next piece, a block through the cache, up to 64 KiB
+straight; B46: but `umount`, and eject's unmount, are not cut short at all: once begun they finish,
+and give nothing up that the card takes). Nothing hangs (a 1 MB `cp` returns at once with
 its error). `eject` keeps a volume it could not write. A `mv`, `rm` or truncate to zero whose
 order point (below) the card refuses puts back what it changed in the cache and fails with EIO
 (audit B5): nothing changed, and the same command later is safe (before, a refused `mv` left
@@ -620,6 +625,15 @@ that SurfBoot loads (+0.48 million cycles). Each command is within 0.3 %. Two dr
 taken back: a count in each of the cache's calls (+1.05 % on the write run against the padded base, cp
 +1.9 %), and a wake-up of the cache's waiters for each block an eject's binvalidate() dropped (+5 % on
 the eject) (bcache-review.txt section 39).
+
+Since audit B46-B49 (counted the same way, before = 0a9a5f2): every workload above sends the same
+requests and blocks. A device request counts its task inside (two stores around the driver's call),
+a cache wait looks at one more flag where it begins, and mkfs at its call before each request. On
+SurfCPU (0a9a5f2's kernel against this one, the same simulator and ROM): test-os-persist's write run
+0.05 % more cycles, its reboot run 0.06 %, test-os-faults' full card 0.06 %, and its refusing card
+1.46 %, all but 0.04 % of that the card-detect task meeting the card's removal one look (200 ms)
+later; SurfBoot loads a package 880 bytes larger (+0.08 million cycles), and each command is within
+0.5 % (bcache-review.txt section 47).
 
 **Not safe, and not claimed** (CARD.md section 8 says it for the owner): FAT32 has no journal,
 so a card that comes out in the middle of a write leaves the volume half-changed, repairable by

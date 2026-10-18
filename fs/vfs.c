@@ -20,6 +20,11 @@ a file of a vnode that has no path (a network connection, net/sock.c).
 error of its sync (it returned 0 whatever happened, so cp and edit said a file
 was saved that was only in the cache); umount says how many changed blocks it
 gave up because they could not be written (vfs_umount_lost()).
+
+10/17/26 (audit B46): an umount finishes once it has begun (fs_finish, surfos/task.h):
+Ctrl+C, a kill or a hangup cut its syncs short (B39), and it went on to give up the
+changes the card would have taken and leave a working card marked as not cleanly
+unmounted. Its waits are not cut short now, and a kill that waited comes after it.
 */
 
 #include <surfos/types.h>
@@ -260,7 +265,10 @@ int vfs_umount(const char *path) {
 }
 
 /* 10/16/26 (audit B10): umount gives up what could not be written (its blocks are dropped), and says
-   how many blocks that was: in *lost, or on the console when the caller does not ask */
+   how many blocks that was: in *lost, or on the console when the caller does not ask. 10/17/26 (B46): once the
+   mount is off the list it finishes (fs_finish_enter()): its syncs are not cut short by Ctrl+C, a kill or a
+   hangup, which before made it give up changes a working card would take and leave the card unclean (B42 then
+   kept it so); a kill that waited comes after it (it counts as inside the file system) */
 int vfs_umount_lost(const char *path, u_int *lost) {
     struct mount *m, **pp;
     struct superblock *sb;
@@ -274,6 +282,7 @@ int vfs_umount_lost(const char *path, u_int *lost) {
     for(pp = &mounts; (m = *pp) != NULL; pp = &m->next) if(!strcmp(m->path, abs)) break;
     if(!m) { mutex_unlock(&mount_lock); return -ENOENT; }
     if(in_use(m, NULL, 0)) { mutex_unlock(&mount_lock); return -EBUSY; }   /* open files, a cwd: vfs_busy says which */
+    fs_finish_enter();                              /* (before the mount leaves the list: no kill between) */
     *pp = m->next;
     mutex_unlock(&mount_lock);
     sb = m->sb;
@@ -294,6 +303,7 @@ int vfs_umount_lost(const char *path, u_int *lost) {
                              gave_up == 1 ? "" : "s", gave_up == 1 ? "was" : "were");
     kfree(sb);
     kfree(m);
+    fs_finish_leave();                              /* (a kill that waited may come now: nothing is left behind) */
     return 0;
 }
 
