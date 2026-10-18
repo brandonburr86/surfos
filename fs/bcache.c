@@ -920,7 +920,7 @@ static struct buf *getblk(struct bdev *dev, u32 lba, bool fill, u32 ahead) {
     for(;;) {
         b = find(dev, lba);
         if(b && (b->loading || b->writing)) {   /* being read, or (B7) written: wait for it */
-            if(io_wait(b, IO_READ | IO_WRITE, false) > 0) {   /* 10/18/26 (B50): given up: an I/O error */
+            if(io_wait(b, IO_READ | IO_WRITE, false)) {   /* 10/18/26 (B50): given up: an I/O error (no -1: not intr) */
                 unlock();
                 return NULL;
             }
@@ -1369,6 +1369,20 @@ int bsync(struct bdev *dev) {
     return bsync_order(dev, BORDER_MAX);
 }
 
+/* (bcache_lock held) 10/18/26 (audit B50): bsync_order()'s last look found an owed block under another task's write
+   or copy: wait for the first that is not given up (overdue) to end (io_wait(): cut short by a kill or Ctrl+C, B39,
+   or in a step that must finish ended by the bound). 0: look again; 1: the blocks under way are given up, or this
+   wait gave up: they stay unwritten; -1: cut short. Out of line, so that the look itself stays as it was */
+static __attribute__((noinline)) int owed_busy(const struct bdev *dev, u8 top, u64 start) {
+    int i;
+    for(i = 0; i < BCACHE_BLOCKS; i++) {
+        struct buf *b = &bufs[i];
+        if(owed(b, dev, top, start) && (b->writing || b->copying) && !b->overdue)
+            return io_wait(b, IO_WRITE | IO_COPY, true);
+    }
+    return 1;
+}
+
 /* 10/16/26 (B7): bsync() up to an order: the dirty blocks of orders 0 .. top (an order point that
    needs no more, such as a new cluster's FAT entry before the link to it, leaves the entries be).
    10/16/26 (B12): it owes the blocks of those orders that were dirty when it began; it writes them,
@@ -1424,20 +1438,17 @@ int bsync_order(struct bdev *dev, u8 top) {
         }
     }
     for(;;) {                                   /* what is owed and still dirty, once writes under way are done */
-        struct buf *busy = NULL;
+        bool busy = false;
         left = false;
         for(i = 0; i < BCACHE_BLOCKS && !busy; i++) {
             struct buf *b = &bufs[i];
             if(!owed(b, dev, top, start)) continue;
-            if((b->writing || b->copying) && !b->overdue) busy = b;   /* (B50: an overdue one is given up) */
+            if(b->writing || b->copying) busy = true;
             else left = true;
         }
         if(!busy) break;
-        if(finishing()) {                       /* 10/18/26 (B50): a bound; given up, busy is overdue: look again */
-            (void)io_wait(busy, IO_WRITE | IO_COPY, false);
-            continue;
-        }
-        if(bsleep(0, true)) {                   /* 10/17/26 (B39): (another task's copy may take long) cut short */
+        if(owed_busy(dev, top, start)) {        /* 10/17/26 (B39): (another task's copy may take long) cut short;
+                                                   10/18/26 (B50): or only blocks given up (overdue) are under way */
             left = true;
             break;
         }
