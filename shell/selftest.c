@@ -2094,12 +2094,46 @@ static void test_change_claim(void) {
 
 /* 10/18/26 (audit B61): mkfs of a whole disk reads it again at its end (its old partitions go), and passed over the
    rescan's result: when it failed, mkfs said nothing and returned 0. Now it says the disk could not be read again and
-   what to do, and fails. Here the disk's block 0 cannot be read once mkfs has flushed, and the rescan reads it; the
-   answer to mkfs's question is typed ahead */
+   what to do, and fails. And an mkfs that failed after its first write (the old boot sector, block 0, zeroed) left the
+   old partitions registered over a disk with no table, for a later mkfs to format their stale extents: now the disk is
+   read again then too. Here an 8 MB RAM disk with one partition: first its block 0 cannot be read once mkfs has
+   flushed (the rescan reads it), then, partitioned again, it refuses every write after mkfs's first; the answer to
+   mkfs's question is typed ahead */
 static surf_task *volatile km_task;
 
 static void km_flush(void) {
     if(km_task && curTask == km_task) ram_read_fail0 = 1;
+}
+
+static void km_first_write(u32 lba) {
+    (void)lba;
+    if(km_task && curTask == km_task) ram_refuse = true;   /* (this write is stored: the refusal is looked at before) */
+}
+
+/* mkfs of disk d in this task, the answer typed ahead, what it said in out; its status */
+static int km_mkfs(struct bdev *d, char *out, u_int size) {
+    char *argv[] = { "mkfs", d->name, NULL };
+    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
+    const char *c;
+    int r;
+    out[0] = 0;
+    if(!tty) return -1;
+    tty_flush(tty);
+    for(c = d->name; *c; c++) tty_input(tty, (u_char)*c);   /* the answer to its question, typed ahead */
+    tty_input(tty, '\n');
+    km_task = curTask;
+    r = fx_capture(out, size, 2, argv);
+    km_task = NULL;
+    tty_flush(tty);
+    return r;
+}
+
+/* the line of out that holds what, for the transcript, or "nothing" */
+static void km_said(int r, const char *out, const char *what) {
+    const char *said = strstr(out, what), *e;
+    if(said) { while(said > out && said[-1] != '\n') said--; }
+    e = said ? strchr(said, '\n') : NULL;
+    printf("        (mkfs returned %d: %.*s)\n", r, said ? (int)(e ? e - said : 200) : 7, said ? said : "nothing");
 }
 
 static void test_mkfs_rescan(void) {
@@ -2107,12 +2141,9 @@ static void test_mkfs_rescan(void) {
     struct bdev *d = mem ? ram_disk(mem) : NULL;
     static const u32 counts[1] = { 0 };
     static char out[800];
-    char *argv[] = { "mkfs", "stickM", NULL }, n1[BDEV_NAME_LEN];
-    struct tty *tty = curTask->tty ? curTask->tty : tty_active;
-    const char *answer = "stickM\n", *c, *said;
-    bool registered = false, before = false;
-    int r = -1;
-    out[0] = 0;
+    char n1[BDEV_NAME_LEN];
+    bool registered = false, before = false, left = true;
+    int r = -1, r2 = -1;
     if(!d) { check(false, "mkfs of a whole disk that cannot be read again: memory"); kfree(mem); return; }
     strlcpy(d->name, "stickM", sizeof(d->name));
     d->nblocks = KX_BLOCKS;
@@ -2121,26 +2152,25 @@ static void test_mkfs_rescan(void) {
         bdev_part_name(d, 1, n1, sizeof(n1));
         before = bdev_find(n1) != NULL;
     }
-    if(!before || !tty) {
-        check(false, "mkfs of a whole disk that cannot be read again: a partitioned RAM disk");
-        goto out;
-    }
-    tty_flush(tty);
-    for(c = answer; *c; c++) tty_input(tty, (u_char)*c);   /* the answer to its question, typed ahead */
-    km_task = curTask;
-    ram_flush_hook = km_flush;
-    r = fx_capture(out, sizeof(out), 2, argv);
+    if(!before) { check(false, "mkfs of a whole disk that cannot be read again: a partitioned RAM disk"); goto out; }
+    ram_flush_hook = km_flush;                       /* block 0 unreadable once mkfs has flushed */
+    r = km_mkfs(d, out, sizeof(out));
     ram_flush_hook = NULL;
-    km_task = NULL;
     ram_read_fail0 = 0;
-    tty_flush(tty);
-    said = strstr(out, "read again");
-    if(said) { while(said > out && said[-1] != '\n') said--; }
-    printf("        (mkfs returned %d: %.*s)\n", r, said ? (int)(strchr(said, '\n') ? strchr(said, '\n') - said : 200) : 7,
-           said ? said : "nothing");
+    km_said(r, out, "read again");
     check(r == CMD_FAIL && strstr(out, "could not be read again") && strstr(out, "plug it in again") &&
           !strstr(out, "was read again"), "mkfs of a whole disk that cannot be read again at its end says so and what to "
           "do, and fails");
+    if(kx_partition(d, counts, 1) == 0 && bdev_find(n1)) {
+        ram_hook = km_first_write;                   /* every write refused after mkfs's first (block 0 zeroed) */
+        r2 = km_mkfs(d, out, sizeof(out));
+        ram_hook = NULL;
+        ram_refuse = false;
+        left = bdev_find(n1) != NULL;
+        km_said(r2, out, "write failed");
+    }
+    check(r2 == CMD_FAIL && strstr(out, "write failed at sector") && strstr(out, "was read again: no partitions now") &&
+          !left, "an mkfs of a whole disk that fails after its first write reads the disk again: the old partition goes");
 out:
     if(registered) {
         bdev_unregister(d);
