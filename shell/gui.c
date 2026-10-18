@@ -201,6 +201,7 @@ int cmd_gui(int argc,char **argv) {
     struct fb_mode mode;
     struct pointer_event e;
     struct gui_state *g;
+    struct gui_fs *own_fs;                              /* 10/18/26: this desktop's, keeping read_at's file in a frame */
     struct tty *tty=curTask->tty;
     int oldraw,result=CMD_OK,esc=0,number=0;
     u32 esc_at=0,clock_at;
@@ -227,9 +228,12 @@ int cmd_gui(int argc,char **argv) {
     mode.red_pos=16; mode.green_pos=8; mode.blue_pos=0;
     mode.red_size=mode.green_size=mode.blue_size=8;
     fb_setup(&ram,(u8*)d.pixels,&mode);
-    gui_init(g,d.width,d.height); g->devices=pointer_devices(); g->fs=gui_kernel_fs(); g->sys=gui_kernel_sys();
+    own_fs=gui_kernel_fs_begin();
+    gui_init(g,d.width,d.height); g->devices=pointer_devices(); g->sys=gui_kernel_sys();
+    g->fs=own_fs ? own_fs : gui_kernel_fs();
     clock_tick(g); clock_at=getticks();
     if(!pointer_begin(&d)) {
+        gui_kernel_fs_end(own_fs);
         if(d.shown) kfree(d.shown);
         kfree(d.pixels); kfree(g); framebuffer_graphics_end(); return CMD_OK;
     }
@@ -248,6 +252,7 @@ int cmd_gui(int argc,char **argv) {
                 d.first=d.full=true; g->dirty=true; esc=0; keys_down=0;
                 continue;
             }
+            gui_kernel_fs_idle(g->fs);                  /* 10/18/26: no file open while other tasks run */
             if(sleep_intr(16)) break;
             continue;
         }
@@ -265,6 +270,7 @@ int cmd_gui(int argc,char **argv) {
             if(key==27) { esc=1; esc_at=getticks(); } else input_key(g,key,&keys_down);
         }
         if(esc && (u32)(getticks()-esc_at)>HZ/10) { if(esc==1) gui_key(g,27); esc=0; }
+        gui_kernel_fs_idle(g->fs);                      /* 10/18/26: the frame's reads are done (the tick, the input) */
         if(g->quit) break;
         if(!framebuffer_graphics_owned()) continue;
         devices=pointer_devices();
@@ -282,6 +288,7 @@ int cmd_gui(int argc,char **argv) {
         if(sleep_intr(16)) break;
     }
     gui_finish(g);                                      /* 10/17/26: a Terminal's session hangs up */
+    gui_kernel_fs_end(own_fs);                          /* 10/18/26: read_at's file closed, if one is open */
     tty_ctl(tty,TTY_RAW,oldraw); pointer_speed_owned(1,true);
     framebuffer_graphics_end();
     if(d.shown) kfree(d.shown);

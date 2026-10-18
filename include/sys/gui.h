@@ -212,4 +212,9 @@ void gui_request_quit(struct gui_state *g);
 void gui_tick(struct gui_state *g);
 void gui_finish(struct gui_state *g);
 const struct gui_fs *gui_kernel_fs(void);       /* shell/guifs.c: the VFS (the kernel only) */
+/* 10/18/26: a desktop's own struct gui_fs, whose read_at keeps the file it read last open until
+   gui_kernel_fs_idle() (each frame, before drawing or sleeping); gui_kernel_fs_end() closes and frees it */
+struct gui_fs *gui_kernel_fs_begin(void);
+void gui_kernel_fs_idle(const struct gui_fs *fs);
+void gui_kernel_fs_end(struct gui_fs *fs);
 #endif
